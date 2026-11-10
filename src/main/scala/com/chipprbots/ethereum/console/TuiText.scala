@@ -35,18 +35,6 @@ object TuiText:
 
   def formatCount(n: BigInt): String = formatCount(n.min(BigInt(Long.MaxValue)).toLong)
 
-  /** 12d 7h 0m, 2h 11m 0s, 4m 31s, 9s */
-  def formatDuration(seconds: Long): String =
-    val days = seconds / 86400
-    val hours = (seconds % 86400) / 3600
-    val minutes = (seconds % 3600) / 60
-    val secs = seconds % 60
-
-    if days > 0 then s"${days}d ${hours}h ${minutes}m"
-    else if hours > 0 then s"${hours}h ${minutes}m ${secs}s"
-    else if minutes > 0 then s"${minutes}m ${secs}s"
-    else s"${secs}s"
-
   /** The two largest units: 12d 7h, 1h 23m, 4m 12s, 31s. For uptimes, ages and ETAs, where seconds of a day are noise.
     */
   def formatShort(seconds: Long): String =

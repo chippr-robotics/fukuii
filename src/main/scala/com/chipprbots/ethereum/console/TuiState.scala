@@ -185,9 +185,10 @@ case class TuiState(
       case Some(true)  => zeroPeersSince.orElse(Some(status.now))
       case Some(false) => None
       case None        => zeroPeersSince
-    // A SNAP sample too old to show keeps the rows it last drew on screen, which then say how old they are (§2.3).
+    // A SNAP sample too old to show keeps the rows it last drew on screen, which then say how old they are (§2.3),
+    // while SNAP still counts as running; after that, or once another sync has taken over, the rows go.
     val snap = status.snapSync.orElse(
-      snapSyncState.filter(_ => status.sync.value.exists(s => s.snap.isEmpty && s.snapSampledAt.isDefined))
+      snapSyncState.filter(_ => status.sync.value.exists(s => s.snap.isEmpty && s.snapRunning))
     )
     val next = copy(now = status.now)
       .withPeerCount(status.peerCount, status.maxPeers)
@@ -241,6 +242,12 @@ case class TuiState(
   /** The view's name, as the header shows it. */
   def viewTitle: String = if helpOpen then "Help" else view.title
 
+  /** SNAP's pivot block, while SNAP's rows are on screen: the Block cell's target and the fork timeline's position
+    * then, since the sync controller reports no block target and the local best block is far behind (B-044).
+    */
+  def snapPivot: Option[Long] =
+    snapSyncState.flatMap(_ => snapshot.flatMap(_.local.snapPivot)).filter(_ > 0)
+
   /** How old the SNAP sample on screen is, if the probe said when it was taken. */
   def snapSampleAge: Option[Duration] =
     snapshot.flatMap(_.sync.value).flatMap(_.snapSampledAt).map(at => Duration.between(at, now))
@@ -257,13 +264,18 @@ case class SyncBaseline(block: Long, observedAt: Instant)
   * @param snapSampledAt
   *   when the SNAP monitor recorded its latest sample of a running phase (`SNAPSyncMetrics.latestSample`), at any age:
   *   the alert row warns when it is old (§2.3)
+  * @param snapRunning
+  *   SNAP is running: the latest sample is of a running phase and younger than
+  *   [[TuiStatusProbe.SnapRunningMaxAgeMillis]]. The one test of it the TUI makes: the SNAP rows stay on screen past
+  *   their sample's 90 s, and the alert row warns of the sample's age, only while it holds
   */
 final case class SyncSample(
     current: Long,
     best: Long,
     status: String,
     snap: Option[SnapSyncState] = None,
-    snapSampledAt: Option[Instant] = None
+    snapSampledAt: Option[Instant] = None,
+    snapRunning: Boolean = false
 )
 
 /** A point-in-time view of the running node, produced by a status source (see [[TuiStatusProbe]], polled by
@@ -369,13 +381,16 @@ final case class TuiPeer(id: String, address: String, incoming: Boolean, connect
   *   the best block header's timestamp, Unix seconds: where the ETH fork timeline stands
   * @param snapCounters
   *   SNAP's request counters (`SNAPSyncMetrics`)
+  * @param snapPivot
+  *   SNAP's pivot block (`SNAPSyncMetrics`), once one is chosen
   */
 final case class LocalSample(
     diskFree: Option[Long] = None,
     jvm: Option[JvmSample] = None,
     discovery: Option[DiscoverySample] = None,
     headTimestamp: Option[Long] = None,
-    snapCounters: Option[SnapCounters] = None
+    snapCounters: Option[SnapCounters] = None,
+    snapPivot: Option[Long] = None
 )
 
 /** The JVM's heap in bytes, and the share of wall time spent in GC between the last two polls (0 to 1). */

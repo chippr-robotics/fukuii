@@ -102,18 +102,23 @@ class TuiAnimationSpec extends AnyFlatSpec with Matchers with BeforeAndAfterAll 
   }
 
   // SC-008: under reduced motion and pause, nothing moves.
-  "Reduced motion and pause" should "draw identical frames for ticks 0–11" taggedAs (UnitTest) in {
+  "Reduced motion and pause" should "draw identical frames for ticks 0–11, on every view and in Help" taggedAs (
+    UnitTest
+  ) in {
     val states =
       TuiFixtures.all.map(_._2) :+ ((g: GlyphSet) => TuiState(glyphs = g).withConnectionStatus("Starting node..."))
+    val views: Seq[TuiState => TuiState] =
+      TuiView.values.toSeq.map(v => (s: TuiState) => s.withView(v)) :+ ((s: TuiState) => s.openHelp)
     for
-      fixture <- states; set <- GlyphSet.values; motion <- Seq(Motion.Reduced, Motion.Paused);
+      fixture <- states; view <- views; set <- GlyphSet.values; motion <- Seq(Motion.Reduced, Motion.Paused);
       (w, h) <- Seq(
         (80, 24),
         (160, 48)
       )
     do
-      val frames = ticks.map(t => renderer.render(fixture(set).copy(tick = t, motion = motion), w, h))
-      withClue(s"$set $motion ${w}x$h: ")(frames.distinct should have size 1)
+      val s = view(fixture(set))
+      val frames = ticks.map(t => renderer.render(s.copy(tick = t, motion = motion), w, h))
+      withClue(s"${s.viewTitle} $set $motion ${w}x$h: ")(frames.distinct should have size 1)
   }
 
   // ---- T032: the stall, measured on snapshot time ------------------------------------------------------------------
@@ -235,6 +240,23 @@ class TuiAnimationSpec extends AnyFlatSpec with Matchers with BeforeAndAfterAll 
     )
     for s <- moving; motion <- Seq(Motion.Reduced, Motion.Paused) do
       TuiConfig.default.paceMs(animated(s.copy(motion = motion))) shouldBe 1000L
+  }
+
+  // prism, slice 3 review: the pace follows what each view draws, not what the Overview would.
+  it should "follow the view on screen" taggedAs (UnitTest) in {
+    // SNAP's Accounts row pulses on the Sync view; its storage worm ripples.
+    animated(TuiFixtures.snapStorageMordor().withView(TuiView.Sync)) shouldBe true
+    // Regular sync ripples on the Overview and the Sync view, and nowhere else.
+    val regular = TuiFixtures.regularSyncEtc()
+    animated(regular) shouldBe true
+    animated(regular.withView(TuiView.Sync)) shouldBe true
+    animated(regular.withView(TuiView.Peers)) shouldBe false
+    animated(regular.withView(TuiView.Chain)) shouldBe false
+    animated(regular.openHelp) shouldBe false
+    // A spinner in the vitals row moves on every view.
+    val searching = TuiFixtures.syncedEtc().copy(connectionStatus = "Searching for peers")
+    for v <- TuiView.values do animated(searching.withView(v)) shouldBe true
+    animated(searching.openHelp) shouldBe true
   }
 
   it should "count only the rows on screen" taggedAs (UnitTest) in {

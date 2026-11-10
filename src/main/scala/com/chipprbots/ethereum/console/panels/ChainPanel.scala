@@ -3,7 +3,6 @@ package com.chipprbots.ethereum.console.panels
 import org.jline.utils.AttributedString
 
 import com.chipprbots.ethereum.console.*
-import com.chipprbots.ethereum.console.TuiText.fitToWidth
 import com.chipprbots.ethereum.console.panels.Rows.*
 
 /** The Chain view (spec 027 FR-017, research §2.1, §3.1): which rules the node runs and what comes next. The chain's
@@ -15,7 +14,7 @@ import com.chipprbots.ethereum.console.panels.Rows.*
 private[console] object ChainPanel:
 
   def panels(c: Ctx): Seq[Panel] =
-    val vitals = Panel(2, 2, 1, (w, _) => Seq(vitalsRow(c, w), syncSummaryRow(c, w)))
+    val vitals = vitalsPanel(c, withSummary = true)
     c.state.chain match
       case None =>
         Seq(
@@ -24,7 +23,7 @@ private[console] object ChainPanel:
             1,
             1,
             2,
-            (w, _) => Seq(fitToWidth(field("Chain", text("not read yet", c.t.muted), c.t), w)),
+            (w, _) => Seq(fit(field("Chain", text("not read yet", c.t.muted), c.t), w, c.g)),
             separated = true
           )
         )
@@ -39,7 +38,7 @@ private[console] object ChainPanel:
               1,
               3,
               (w, _) =>
-                fitToWidth(text(s" Forks (${chain.scheduleLabel})", c.t.healthy.bold()), w) +: ForkRows
+                fit(text(s" Forks (${chain.scheduleLabel})", c.t.healthy.bold()), w, c.g) +: ForkRows
                   .timeline(c, chain, w),
               separated = true,
               fill = true
@@ -55,4 +54,4 @@ private[console] object ChainPanel:
       chain.family.label,
       s"forks by ${chain.scheduleLabel}${if chain.schedule == ForkSchedule.ByBlock then " number" else ""}"
     )
-    fitToWidth(field("Chain", text(parts.mkString(s" $dot "), c.t.value), c.t), w)
+    fit(field("Chain", text(parts.mkString(s" $dot "), c.t.value), c.t), w, c.g)

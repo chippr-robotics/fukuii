@@ -35,3 +35,32 @@ class TuiRenderBenchmarkSpec extends AnyFlatSpec with Matchers:
     info(f"median render of a 160×48 frame: $medianMs%.3f ms (p90 ${nanos(89) / 1e6}%.3f ms), $verdict SC-003's 1 ms")
     medianMs should be < AssertedMs
   }
+
+  // prism, slice 3 review: the frame loop calls frame(), which renders the next tick too, to learn whether the frame
+  // moves (the pace, Q1). Timed on its own, on the busiest Overview, under full motion.
+  "A 160×48 frame and its pace" should "stay inside the render budget, median of 100" taggedAs (BenchmarkTest) in {
+    val states = (0L until 12L).map(t => TuiFixtures.snapStorageMordor().copy(tick = t, motion = Motion.Full))
+    (1 to 500).foreach(i => renderer.frame(states(i % states.size), 160, 48))
+    val nanos = (0 until 100).map { i =>
+      val started = System.nanoTime()
+      renderer.frame(states(i % states.size), 160, 48)
+      System.nanoTime() - started
+    }.sorted
+    val medianMs = nanos(nanos.size / 2) / 1e6
+    info(f"median frame() of a 160×48 Overview, full motion: $medianMs%.3f ms (p90 ${nanos(89) / 1e6}%.3f ms)")
+    medianMs should be < AssertedMs
+  }
+
+  it should "cost one render for an idle node at its head, which cannot move" taggedAs (BenchmarkTest) in {
+    val idle = TuiFixtures.syncedEtc().copy(motion = Motion.Full)
+    renderer.frame(idle, 160, 48).animated shouldBe false
+    (1 to 500).foreach(_ => renderer.frame(idle, 160, 48))
+    val nanos = (0 until 100).map { _ =>
+      val started = System.nanoTime()
+      renderer.frame(idle, 160, 48)
+      System.nanoTime() - started
+    }.sorted
+    val medianMs = nanos(nanos.size / 2) / 1e6
+    info(f"median frame() of a 160×48 Overview at the head, idle: $medianMs%.3f ms (p90 ${nanos(89) / 1e6}%.3f ms)")
+    medianMs should be < AssertedMs
+  }

@@ -3,7 +3,6 @@ package com.chipprbots.ethereum.console.panels
 import org.jline.utils.AttributedString
 
 import com.chipprbots.ethereum.console.*
-import com.chipprbots.ethereum.console.TuiText.fitToWidth
 import com.chipprbots.ethereum.console.TuiText.formatCount
 import com.chipprbots.ethereum.console.TuiText.formatNumber
 import com.chipprbots.ethereum.console.TuiText.formatShort
@@ -19,31 +18,12 @@ import com.chipprbots.ethereum.console.panels.Rows.*
 private[console] object SyncPanels:
 
   def panels(c: Ctx): Seq[Panel] =
-    val vitals = Panel(1, 1, 1, (w, _) => Seq(vitalsRow(c, w)))
-    val fill = Panel(0, 0, 9, (_, _) => Nil, fill = true)
+    val vitals = vitalsPanel(c, withSummary = false)
     c.state.snapSyncState match
-      case Some(snap) => Seq(vitals) ++ snapPanels(c, snap) :+ fill
-      case None       => Seq(vitals) ++ regularPanels(c) :+ fill
+      case Some(snap) => Seq(vitals) ++ snapPanels(c, snap) :+ fillPanel
+      case None       => Seq(vitals) ++ regularPanels(c) :+ fillPanel
 
   private def snapPanels(c: Ctx, snap: SnapSyncState): Seq[Panel] =
-    val dot = c.g.dot.text
-    def header(w: Int): Seq[AttributedString] =
-      val stale = staleSnapSample(c)
-      val right = text(
-        (Seq(
-          s"elapsed ${formatShort(snap.elapsedSeconds.toLong)}",
-          s"phase ${formatShort(snap.phaseElapsedSeconds.toLong)}",
-          eta(snap.etaSeconds)
-        ) ++ stale).mkString(s" $dot "),
-        if stale.isDefined then c.t.warn else c.t.value
-      )
-      Seq(leftRight(text(s" SNAP sync   ${snap.phaseDescription(c.g)}", c.t.healthy.bold()), right, w))
-    def worms(w: Int): Seq[AttributedString] =
-      val budget = wormBudget(c, c.tier.trackSlots, w)
-      SnapRows.of(snap, c.g).map(r => wormRow(c, r.label, r.progress, r.detail, budget, w)) ++
-        chainDownload(c, snap).map { d =>
-          fitToWidth(concat(text(s"   ${"Chain".padTo(WormLabelCols, ' ')}", c.t.label), text(d, c.t.value)), w)
-        }
     val detail = Option.when(c.tier != Tier.S)(
       Seq(
         Panel(2, 3, 4, (w, _) => stats(c, snap, w), separated = true),
@@ -51,8 +31,8 @@ private[console] object SyncPanels:
       )
     )
     Seq(
-      Panel(1, 1, 2, (w, _) => header(w), separated = true),
-      Panel(5, 6, 3, (w, _) => worms(w), separated = true)
+      Panel(1, 1, 2, (w, _) => Seq(snapHeader(c, snap, w, "SNAP sync  ", withPhaseTime = true)), separated = true),
+      Panel(5, 6, 3, (w, _) => snapWorms(c, snap, c.tier.trackSlots, w, withChain = true), separated = true)
     ) ++ detail.getOrElse(Nil)
 
   /** Rates (recent / overall), the request counters, the snap-capable peers. */
@@ -84,21 +64,17 @@ private[console] object SyncPanels:
       field("Rates (recent / overall)", text(rates, c.t.value), c.t, labelCols),
       field("Requests", text(requests, c.t.value), c.t, labelCols),
       field("Peers (snap-capable)", text(peers, c.t.value), c.t, labelCols)
-    ).map(fitToWidth(_, w))
+    ).map(fit(_, w, c.g))
 
-  private val PhaseNames: Seq[(String, String)] = Seq(
-    "AccountRangeSync" -> "AccountRange",
-    "ByteCodeAndStorageSync" -> "ByteCodeAndStorage",
-    "StateHealing" -> "StateHealing",
-    "StateValidation" -> "StateValidation",
-    "ChainDownloadCompletion" -> "ChainDownload"
-  )
+  /** SNAP's phases, as the timeline names them, in [[SnapSyncState.PhaseOrder]]'s order. */
+  private val PhaseNames: Seq[String] =
+    Seq("AccountRange", "ByteCodeAndStorage", "StateHealing", "StateValidation", "ChainDownload")
 
   /** `AccountRange ✓ ── ByteCodeAndStorage ● 1h 8m ── StateHealing · ── …`: done, current with its time, to come. */
   private def phases(c: Ctx, snap: SnapSyncState, w: Int): Seq[AttributedString] =
     val current = snap.phaseIndex
     val sep = text(s" ${c.g.separator.text * 2} ", c.t.muted)
-    val parts = PhaseNames.zipWithIndex.map { case ((_, name), i) =>
+    val parts = PhaseNames.zipWithIndex.map { (name, i) =>
       if current >= 0 && i < current then text(s"$name ${c.g.check.text}", c.t.healthy)
       else if i == current then
         text(s"$name ${c.g.bullet.text} ${formatShort(snap.phaseElapsedSeconds.toLong)}", c.t.value)
@@ -106,19 +82,18 @@ private[console] object SyncPanels:
     }
     val timeline = parts.zipWithIndex.flatMap((p, i) => if i == 0 then Seq(p) else Seq(sep, p))
     Seq(
-      fitToWidth(text(" Phase timeline", c.t.healthy.bold()), w),
-      fitToWidth(concat((text("   ", c.t.value) +: timeline)*), w)
+      fit(text(" Phase timeline", c.t.healthy.bold()), w, c.g),
+      fit(concat((text("   ", c.t.value) +: timeline)*), w, c.g)
     )
 
   private def regularPanels(c: Ctx): Seq[Panel] =
     val s = c.state
     def header(w: Int): Seq[AttributedString] =
       val row =
-        if s.isSynchronized then
-          fitToWidth(field("Sync", text(s"${c.g.check.text} at head", c.t.healthy.bold()), c.t), w)
+        if s.isSynchronized then fit(field("Sync", text(s"${c.g.check.text} at head", c.t.healthy.bold()), c.t), w, c.g)
         else if s.bestBlock > 0 then
-          leftRight(text(" Regular sync", c.t.healthy.bold()), text(rateAndEta(c), c.t.value), w)
-        else fitToWidth(field("Sync", text(s.syncStatus, c.t.value), c.t), w)
+          leftRight(text(" Regular sync", c.t.healthy.bold()), text(rateAndEta(c), c.t.value), w, c.g)
+        else fit(field("Sync", text(s.syncStatus, c.t.value), c.t), w, c.g)
       Seq(row)
     def blocks(w: Int): Seq[AttributedString] =
       val budget = wormBudget(c, c.tier.trackSlots, w)
@@ -135,5 +110,5 @@ private[console] object SyncPanels:
     }
     val lag = Option.when(s.blocksRemaining > 0)(s"${formatNumber(s.blocksRemaining)} blocks behind best known")
     def row(label: String, value: String) =
-      fitToWidth(concat(text(s"   ${label.padTo(WormLabelCols, ' ')}", c.t.label), text(value, c.t.value)), w)
+      fit(concat(text(s"   ${label.padTo(WormLabelCols, ' ')}", c.t.label), text(value, c.t.value)), w, c.g)
     imported.map(row("Session", _)).toSeq ++ lag.map(row("Lag", _))

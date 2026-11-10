@@ -137,14 +137,16 @@ object TuiFixtures:
       maxHeapGiB: Double = 8.0,
       gcShare: Double = 0.003,
       headTimestamp: Option[Long] = None,
-      snapCounters: Option[SnapCounters] = None
+      snapCounters: Option[SnapCounters] = None,
+      snapPivot: Option[Long] = None
   ): LocalSample =
     LocalSample(
       diskFree = Some((diskGiB * GiB).toLong),
       jvm = Some(JvmSample((heapGiB * GiB).toLong, (maxHeapGiB * GiB).toLong, Some(gcShare))),
       discovery = Some(DiscoverySample(known = 1_912L, pending = 14L, blacklisted = 3L)),
       headTimestamp = headTimestamp,
-      snapCounters = snapCounters
+      snapCounters = snapCounters,
+      snapPivot = snapPivot
     )
 
   /** `state` as the probe saw it at its `now`: both actors answered, `peers` handshaked, and `local` read. */
@@ -162,7 +164,8 @@ object TuiFixtures:
               state.bestBlock,
               state.syncStatus,
               state.snapSyncState,
-              state.snapSyncState.map(_ => state.now.minusSeconds(12L))
+              state.snapSyncState.map(_ => state.now.minusSeconds(12L)),
+              snapRunning = state.snapSyncState.isDefined
             ),
             state.now
           ),
@@ -211,7 +214,10 @@ object TuiFixtures:
     blacklisted = 2L
   )
 
-  /** Mordor in SNAP's bytecode-and-storage phase: accounts done, storage at 37 %, bytecodes at 68 %, healing queued. */
+  /** Mordor in SNAP's bytecode-and-storage phase, as production shows it: the sync controller reports no block target
+    * (B-044), the local best block is 0 on a fresh datadir, and the pivot is 9,118,000. Accounts done, storage at 37 %,
+    * 412K bytecodes found so far, healing queued.
+    */
   def snapStorageMordor(glyphs: GlyphSet = GlyphSet.Emoji): TuiState =
     polled(
       TuiState(
@@ -220,8 +226,8 @@ object TuiFixtures:
         peerCount = 11,
         maxPeers = 50,
         currentBlock = 0L,
-        bestBlock = 9_118_004L,
-        syncStatus = "Syncing",
+        bestBlock = 0L,
+        syncStatus = "Syncing (SNAP)",
         startTime = Now.minusSeconds(2 * 3_600L + 11 * 60L),
         nodeSettings = settings("mordor", "SNAP", 50, mining = false),
         snapSyncState = Some(
@@ -256,7 +262,13 @@ object TuiFixtures:
         chain = Some(chainMordor)
       ),
       peerList(11),
-      local(diskGiB = 412.0, heapGiB = 5.1, gcShare = 0.012, snapCounters = Some(snapCounters))
+      local(
+        diskGiB = 412.0,
+        heapGiB = 5.1,
+        gcShare = 0.012,
+        snapCounters = Some(snapCounters),
+        snapPivot = Some(9_118_000L)
+      )
     )
 
   /** ETC mainnet in regular sync, 28 % of the way, 101,220 blocks imported in the 549 s since the TUI first looked. */

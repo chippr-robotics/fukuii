@@ -5,7 +5,6 @@ import java.time.Duration
 import org.jline.utils.AttributedString
 import org.jline.utils.AttributedStringBuilder
 
-import com.chipprbots.ethereum.console.TuiText.fitToWidth
 import com.chipprbots.ethereum.console.TuiText.formatBytes
 import com.chipprbots.ethereum.console.TuiText.formatNumber
 import com.chipprbots.ethereum.console.TuiText.formatShort
@@ -71,8 +70,8 @@ object Alerts:
       )
     )
 
-    // While SNAP runs the sync controller reports no block target (B-044); with one, a sample is a finished run's.
-    val snapSample = snapshot.flatMap(_.sync.value).filter(_.best == 0L).flatMap(_.snapSampledAt).flatMap { at =>
+    // Only while SNAP counts as running (SyncSample.snapRunning): an aborted run's last sample is not a warning.
+    val snapSample = snapshot.flatMap(_.sync.value).filter(_.snapRunning).flatMap(_.snapSampledAt).flatMap { at =>
       val age = Duration.between(at, now)
       Option.when(age.compareTo(SnapSampleMaxAge) > 0)(
         Alert(Severity.Warn, s"SNAP sample is ${formatShort(age.getSeconds)} old (the monitor samples every 30s)")
@@ -114,4 +113,4 @@ object Alerts:
       val style = if errors > 0 then t.error else t.warn.bold()
       sb.append(s" $badge${" " * (BadgeCols - badgeCols).max(2)}", style)
       sb.append(alerts.take(MaxListed).map(_.text).mkString(s" ${g.dot.text} "), style)
-    fitToWidth(sb.toAttributedString, width)
+    panels.Rows.fit(sb.toAttributedString, width, g)

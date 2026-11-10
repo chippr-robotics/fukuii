@@ -44,11 +44,19 @@ class TuiRenderer(config: TuiConfig):
       case Some(rows) => Frame(handover(state, w, height, theme, rows), true)
       case None =>
         val lines = dashboard(state, w, height, theme)
-        val next = state.copy(tick = state.tick + 1)
-        Frame(lines, moving(state) && (state.catchup.isDefined || dashboard(next, w, height, theme) != lines))
+        def nextDiffers = dashboard(state.copy(tick = state.tick + 1), w, height, theme) != lines
+        Frame(lines, moving(state) && (state.catchup.isDefined || (mayMove(state) && nextDiffers)))
 
   /** Whether anything at all can move: only under full motion. */
   private def moving(state: TuiState): Boolean = state.motion == Motion.Full
+
+  /** Whether any row could move: SNAP's worm rows, a syncing Blocks worm, a spinner beside an in-flight status. A node
+    * with none of them (at its head, connected, idle) is not drawn a second time to find out, which halves the frame
+    * loop's render cost at the 1 s pace.
+    */
+  private def mayMove(state: TuiState): Boolean =
+    state.snapSyncState.isDefined || (state.bestBlock > 0 && !state.isSynchronized) ||
+      InFlight.contains(state.connectionStatus)
 
   private def handover(state: TuiState, w: Int, height: Int, theme: TuiTheme, rows: Int): Seq[AttributedString] =
     dashboard(state, w, height, theme).take(rows) ++ Splash.render(state, w, height, theme, config.showLogo).drop(rows)
@@ -117,8 +125,11 @@ class TuiRenderer(config: TuiConfig):
 final case class Frame(lines: Seq[AttributedString], animated: Boolean)
 
 object TuiRenderer:
-  /** Connection statuses that are waiting for something: a spinner turns beside them (§4.2). */
-  private[console] val InFlight: Set[String] = Set("Initializing", "Starting node...", "Searching for peers")
+  /** Connection statuses that are waiting for something, each with the word the Peers cell shows: a spinner turns
+    * beside it (§4.2).
+    */
+  private[console] val InFlight: Map[String, String] =
+    Map("Initializing" -> "initializing", "Starting node..." -> "starting", "Searching for peers" -> "searching")
 
   /** The header band's flash: the accent's colour as its background, in bold, so it reads in every palette. */
   private[console] def flashStyle(t: TuiTheme): AttributedStyle = t.healthy.bold().inverse()

@@ -68,17 +68,44 @@ class AlertsSpec extends AnyFlatSpec with Matchers:
   }
 
   "The SNAP sample alert" should "warn when the sample is older than 90 s while SNAP runs" taggedAs (UnitTest) in {
-    def sampledAgo(seconds: Long, best: Long = 0L): TuiState =
+    def sampledAgo(seconds: Long, running: Boolean = true): TuiState =
       val base = TuiFixtures.snapStorageMordor()
-      val sample = SyncSample(0L, best, "Syncing (no target yet)", None, Some(t0.minusSeconds(seconds)))
+      val sample = SyncSample(0L, 0L, "Syncing (no target yet)", None, Some(t0.minusSeconds(seconds)), running)
       base.copy(snapshot = base.snapshot.map(_.copy(sync = Sourced.Fresh(sample, t0))))
     // The fixture's 11 of 50 peers are a warning of their own; only the SNAP sample's is looked at here.
     def snapAlerts(s: TuiState) = Alerts.of(s).filter(_.text.startsWith("SNAP"))
     snapAlerts(sampledAgo(90)) shouldBe empty
     snapAlerts(sampledAgo(91)) shouldBe
       Seq(Alert(Severity.Warn, "SNAP sample is 1m 31s old (the monitor samples every 30s)"))
-    // A block target means regular sync: an old sample of a finished SNAP run is not a warning.
-    snapAlerts(sampledAgo(600, best = 9_118_004L)) shouldBe empty
+    // SNAP no longer running (SyncSample.snapRunning): an aborted run's last sample is not a warning.
+    snapAlerts(sampledAgo(600, running = false)) shouldBe empty
+  }
+
+  // prism, slice 3 review: after an in-process SNAP abort hands over to regular sync, the SNAP rows stayed on screen
+  // for good, marked "sample Nh old". The rows and the alert now share one test, SyncSample.snapRunning.
+  it should "go, with the SNAP rows, once SNAP stops running and regular sync takes over" taggedAs (UnitTest) in {
+    val snapping = TuiFixtures.snapStorageMordor()
+    snapping.snapSyncState should not be empty
+    def regular(sampleAgo: Long, running: Boolean) =
+      NodeStatusSnapshot(
+        now = t0,
+        maxPeers = 50,
+        localBest = 2_000L,
+        peers = Sourced.Fresh(TuiFixtures.peerList(11), t0),
+        sync = Sourced.Fresh(
+          SyncSample(2_000L, 9_118_004L, "Syncing", None, Some(t0.minusSeconds(sampleAgo)), snapRunning = running),
+          t0
+        )
+      )
+    // Still within SNAP's running window: the rows stay, marked with their age, and the alert row says so.
+    val within = snapping.withStatus(regular(120, running = true))
+    within.snapSyncState should not be empty
+    Alerts.of(within).map(_.text) should contain("SNAP sample is 2m 0s old (the monitor samples every 30s)")
+    // Past it: the rows and the warning go, and the regular sync's Blocks worm is what the Overview draws.
+    val after = within.withStatus(regular(301, running = false))
+    after.snapSyncState shouldBe None
+    Alerts.of(after).filter(_.text.startsWith("SNAP")) shouldBe empty
+    renderer.render(after, 80, 24).map(_.toString).exists(_.trim.startsWith("Blocks")) shouldBe true
   }
 
   "The disk alert" should "warn below 20G free and be an error below 5G" taggedAs (UnitTest) in {

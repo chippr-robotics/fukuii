@@ -295,7 +295,9 @@ class TuiRendererSpec extends AnyFlatSpec with Matchers:
         snap.map(_.trim.takeWhile(_ != ' ')) shouldBe snapLabels
         snap(1) should include(s"${g.worm.text}[COMPLETE ${g.check.text}]${g.brain.text}") // accounts are done
         snap(2) should include(s"${g.brain.text} 37%") // storage 119.6M of 323M slots
-        snap(3) should include(s"${g.brain.text} 68%") // bytecodes 412K of 600K
+        // Bytecodes found so far: their total is not known until all are found, so no percentage (B-044).
+        snap(3) should include(s"${g.worm.text}[ACTIVE]")
+        snap(3) should include("412.0K @ 310/s")
         snap(4) should include(s"${g.worm.text}[QUEUED]${g.brain.text}") // healing
       }
   }
@@ -377,4 +379,64 @@ class TuiRendererSpec extends AnyFlatSpec with Matchers:
     for (name, fixture) <- TuiFixtures.all; (w, h) <- Seq((80, 24), (120, 40), (160, 48)) do
       val text = rows(fixture(GlyphSet.Ascii), w, h).mkString("\n")
       withClue(s"$name at ${w}x$h:\n$text\n")(all(text.map(_.toInt)) should be < 0x7f)
+  }
+
+  // B-044: the running phase's row draws the monitor's phaseProgress, which never falls within a phase.
+  it should "draw the running phase's row from phaseProgress, not from the raw counts" taggedAs (UnitTest) in {
+    def row(snap: SnapSyncState, label: String) =
+      rows(TuiState.initial.withSnapSyncState(snap).copy(motion = Motion.Reduced), 120, 40)
+        .find(_.trim.startsWith(label))
+        .get
+    // 1.2M of an estimated 4.0M accounts is 30 %, but the monitor says 41: the row says 41.
+    val accounts = SnapSyncState(
+      phase = "AccountRangeSync",
+      accountsSynced = 1_200_000L,
+      estimatedTotalAccounts = 4_000_000L,
+      storageSlotsSynced = 5_000L,
+      estimatedTotalSlots = 50_000L,
+      phaseProgress = 41
+    )
+    row(accounts, "Accounts") should include("🧠 41%")
+    // Storage found during the account phase is a count so far: ACTIVE, no percentage.
+    row(accounts, "Storage") should include("[ACTIVE]")
+    (row(accounts, "Storage") should not).include("%")
+    val storage = accounts.copy(phase = "ByteCodeAndStorageSync", phaseProgress = 12)
+    row(storage, "Storage") should include("🧠 12%")
+  }
+
+  // prism, slice 3 review: the views say so when they have nothing to show yet.
+  it should "say what is not known yet on each view" taggedAs (UnitTest) in {
+    def text(s: TuiState, w: Int = 120, h: Int = 40) = rows(s, w, h).mkString("\n")
+    text(TuiState.initial.withView(TuiView.Peers)) should include("Peers   not polled yet")
+    val noPeers = TuiFixtures.withPeers(TuiFixtures.syncedEtc(), Sourced.Fresh(Nil, TuiFixtures.Now))
+    text(noPeers.withView(TuiView.Peers)) should include("no handshaked peer")
+    val silent = TuiFixtures.withPeers(TuiFixtures.syncedEtc(), Sourced.Unresponsive("no reply within 500ms"))
+    text(silent.withView(TuiView.Peers)) should include("peer manager Unresponsive (no reply within 500ms)")
+    text(TuiState.initial.withView(TuiView.Chain)) should include("Chain   not read yet")
+    val noHead = TuiFixtures.sepoliaNearHead()
+    val unread = noHead.copy(snapshot = noHead.snapshot.map(s => s.copy(local = s.local.copy(headTimestamp = None))))
+    text(unread) should include("Forks   head timestamp not read yet")
+    text(unread.withView(TuiView.Chain)) should include("head timestamp not read yet")
+  }
+
+  it should "say how many more peers there are when the Peers table runs out of rows" taggedAs (UnitTest) in {
+    val lines = rows(TuiFixtures.syncedEtc().withView(TuiView.Peers), 80, 24)
+    lines.exists(_.trim.matches("""\+ \d+ more""")) shouldBe true
+    rows(TuiFixtures.lowDiskEtc().withView(TuiView.Peers), 80, 24).exists(_.contains("more")) shouldBe false // 6 fit
+  }
+
+  // prism, slice 3 review: during SNAP the sync controller reports no target and the local best block is 0.
+  it should "show SNAP's pivot as the Block cell's target and the fork position while SNAP runs" taggedAs (UnitTest) in {
+    val snap = TuiFixtures.snapStorageMordor()
+    val text = rows(snap, 80, 24).mkString("\n")
+    text should include("Block  0 → 9,118,000 (pivot)")
+    // Mordor's Spiral is at 9,957,000, past the pivot: the timeline stands at the pivot, not at block 0.
+    text should include("Mystique ✓")
+    text should include("Spiral @ 9,957,000 (839.0K away)")
+  }
+
+  it should "say only Unresponsive in the Peers cell; the alert row names the source" taggedAs (UnitTest) in {
+    val row = rows(TuiFixtures.unresponsiveEtc(), 80, 24).find(_.trim.startsWith("Peers")).get
+    row should include("Peers   Unresponsive ")
+    (row should not).include("(peer")
   }

@@ -3,7 +3,6 @@ package com.chipprbots.ethereum.console.panels
 import org.jline.utils.AttributedString
 
 import com.chipprbots.ethereum.console.*
-import com.chipprbots.ethereum.console.TuiText.fitToWidth
 import com.chipprbots.ethereum.console.panels.Rows.*
 
 /** Help, over the current view (spec 027 research §2.1, §2.2): the keys, and the legend of the glyph set on screen, so
@@ -25,15 +24,15 @@ private[console] object HelpPanel:
 
   def panels(c: Ctx): Seq[Panel] =
     Seq(
-      Panel(2, 2, 1, (w, _) => Seq(vitalsRow(c, w), syncSummaryRow(c, w))),
+      vitalsPanel(c, withSummary = true),
       Panel(2, Keys.size + 1, 2, (w, _) => keys(c, w), separated = true),
       Panel(2, 4, 3, (w, _) => legend(c, w), separated = true),
-      Panel(0, 0, 9, (_, _) => Nil, fill = true)
+      fillPanel
     )
 
   private def keys(c: Ctx, w: Int): Seq[AttributedString] =
-    fitToWidth(text(" Keys", c.t.healthy.bold()), w) +: Keys.map { (key, what) =>
-      fitToWidth(concat(text(s"   ${key.padTo(10, ' ')}", c.t.label), text(what, c.t.value)), w)
+    fit(text(" Keys", c.t.healthy.bold()), w, c.g) +: Keys.map { (key, what) =>
+      fit(concat(text(s"   ${key.padTo(10, ' ')}", c.t.label), text(what, c.t.value)), w, c.g)
     }
 
   /** The glyphs the dashboard draws, in the set on screen, packed into rows. */
@@ -51,9 +50,10 @@ private[console] object HelpPanel:
       g.dot -> "to come",
       g.storage -> "SNAP phase"
     ).map((glyph, what) => s"${glyph.text} $what")
-    val title = fitToWidth(
+    val title = fit(
       text(s" Glyphs (${g.set.toString.toLowerCase(java.util.Locale.ROOT)}, g switches)", c.t.healthy.bold()),
-      w
+      w,
+      c.g
     )
     val gap = "   "
     val rows = items.foldLeft(Vector.empty[String]) { (rows, item) =>
@@ -62,4 +62,4 @@ private[console] object HelpPanel:
           rows.init :+ s"$last$gap$item"
         case _ => rows :+ item
     }
-    title +: rows.map(r => fitToWidth(text(s"   $r", c.t.value), w))
+    title +: rows.map(r => fit(text(s"   $r", c.t.value), w, c.g))

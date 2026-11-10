@@ -101,12 +101,28 @@ class TuiWidthPropertySpec extends AnyFlatSpec with Matchers with ScalaCheckProp
       discovery <- Gen.option(Gen.zip(count, count, count))
       head <- Gen.option(Gen.chooseNum(0L, 4_000_000_000L))
       counters <- Gen.option(count)
+      pivot <- Gen.option(count)
     yield LocalSample(
       diskFree = disk,
       jvm = heap.map((u, m, gc) => JvmSample(u, m, gc)),
       discovery = discovery.map((k, p, b) => DiscoverySample(k, p, b)),
       headTimestamp = head,
-      snapCounters = counters.map(n => SnapCounters(n, n, n, n, n, n, n, n, n, n, n))
+      snapCounters = counters.map(n =>
+        SnapCounters(
+          accountRequests = n,
+          accountFailures = n,
+          storageRequests = n,
+          storageFailures = n,
+          bytecodeRequests = n,
+          bytecodeFailures = n,
+          healingRequests = n,
+          healingFailures = n,
+          timeouts = n,
+          snapCapablePeers = n,
+          blacklisted = n
+        )
+      ),
+      snapPivot = pivot
     )
 
   /** A poll: each source fresh, stale or unresponsive, with awkward text in its reason and its peers. */
@@ -122,8 +138,9 @@ class TuiWidthPropertySpec extends AnyFlatSpec with Matchers with ScalaCheckProp
       peerSource <- sourced(Gen.const(list))
       sampledAgo <- Gen.option(Gen.chooseNum(0L, 1_000L))
       status <- text
+      running <- Gen.oneOf(true, false)
       syncSource <- sourced(
-        Gen.const(SyncSample(current, best, status, None, sampledAgo.map(TuiFixtures.Now.minusSeconds)))
+        Gen.const(SyncSample(current, best, status, None, sampledAgo.map(TuiFixtures.Now.minusSeconds), running))
       )
       l <- local
     yield NodeStatusSnapshot(TuiFixtures.Now, maxPeers, current, peerSource, syncSource, l)

@@ -44,25 +44,36 @@ private[console] object Rows:
   def field(label: String, value: AttributedString, t: TuiTheme, labelCols: Int = FieldLabelCols): AttributedString =
     concat(text(" " + label.padTo(labelCols, ' '), t.label), value)
 
-  /** Cells at fixed columns: each starts at its column and is cut one column before the next, so none collides. */
-  def strip(width: Int, cells: Seq[(Int, AttributedString)]): AttributedString =
+  /** Exactly `width` columns. A row too long for them is cut one column early and ends with the set's ellipsis, so the
+    * cut shows and the last column stays blank; a row that fits is padded, as [[TuiText.fitToWidth]] does.
+    */
+  def fit(line: AttributedString, width: Int, g: TuiGlyphs): AttributedString =
+    if line.columnLength() <= width - 1 || width <= g.ellipsis.cols + 1 then fitToWidth(line, width)
+    else fitToWidth(concat(fitToWidth(line, width - 1 - g.ellipsis.cols), new AttributedString(g.ellipsis.text)), width)
+
+  /** Cells at fixed columns: each starts at its column and is cut, with the ellipsis, before the next one, so none
+    * collides and a cut shows.
+    */
+  def strip(width: Int, cells: Seq[(Int, AttributedString)], g: TuiGlyphs): AttributedString =
     val placed = cells.filter((at, _) => at < width).sortBy(_._1)
     val sb = new AttributedStringBuilder()
     placed.zipWithIndex.foreach { case ((at, cell), i) =>
       val end = placed.lift(i + 1).fold(width)(_._1 - 1)
-      val used = sb.toAttributedString.columnLength()
+      val used = sb.columnLength()
       if used < at then sb.append(" " * (at - used))
-      sb.append(fitToWidth(cell, (end - at.max(used)).max(0)))
+      // Cut only what does not fit, and pad nothing: the row is padded once, at the end.
+      val room = (end - at.max(used)).max(0)
+      sb.append(if cell.columnLength() < room then cell else fit(cell, room, g))
     }
-    fitToWidth(sb.toAttributedString, width)
+    fit(sb.toAttributedString, width, g)
 
   /** `left`, then `right` ending one column before the edge; the right side is kept when the row is too narrow. */
-  def leftRight(left: AttributedString, right: AttributedString, width: Int): AttributedString =
+  def leftRight(left: AttributedString, right: AttributedString, width: Int, g: TuiGlyphs): AttributedString =
     val room = width - 1 - right.columnLength()
-    if right.columnLength() == 0 then fitToWidth(left, width)
+    if right.columnLength() == 0 then fit(left, width, g)
     else if room >= left.columnLength() + 2 then
       fitToWidth(concat(left, new AttributedString(" " * (room - left.columnLength())), right), width)
-    else fitToWidth(concat(fitToWidth(left, (room - 2).max(0)), new AttributedString("  "), right), width)
+    else fit(concat(fit(left, (room - 1).max(0), g), new AttributedString(" "), right), width, g)
 
   /** Text centred in `width`. */
   def centred(line: AttributedString, width: Int): AttributedString =
@@ -71,12 +82,8 @@ private[console] object Rows:
 
   // ---- fields -------------------------------------------------------------------------------------------------
 
-  /** The in-flight statuses in a word, so the S tier's Peers cell keeps them whole. */
-  private val InFlightWords: Map[String, String] =
-    Map("Initializing" -> "initializing", "Starting node..." -> "starting", "Searching for peers" -> "searching")
-
   /** `18/50 ◆◆◆◆◆◆◆◆◆◆`, the count yellow below half the maximum (C-2: the alert row's 25 % is separate); while
-    * connecting, the spinner and the status; or the peer manager Unresponsive.
+    * connecting, the spinner and the status in a word; or `Unresponsive`, whose source the alert row names.
     */
   def peersValue(c: Ctx): AttributedString =
     val s = c.state
@@ -85,20 +92,23 @@ private[console] object Rows:
       if s.peerCount == 0 then c.t.error
       else if s.peerCount < s.maxPeers / 2 then c.t.warn.bold()
       else c.t.healthy.bold()
-    if s.connectionStatus.startsWith("Unresponsive") then text(s.connectionStatus, c.t.error)
-    else if TuiRenderer.InFlight.contains(s.connectionStatus) then
-      concat(
-        text(count, style),
-        text(s" ${WormBar.spinner(s.tick, s.motion, c.g)} ${InFlightWords(s.connectionStatus)}", c.t.warn)
-      )
-    else concat(text(count, style), text(" " + c.g.diamond.text * s.peerCount.min(10).max(0), style))
+    if s.connectionStatus.startsWith("Unresponsive") then text("Unresponsive", c.t.error)
+    else
+      TuiRenderer.InFlight.get(s.connectionStatus) match
+        case Some(word) =>
+          concat(text(count, style), text(s" ${WormBar.spinner(s.tick, s.motion, c.g)} $word", c.t.warn))
+        case None => concat(text(count, style), text(" " + c.g.diamond.text * s.peerCount.min(10).max(0), style))
 
-  /** `15,234,567 → 15,234,890 (−323)`, `21,884,102 (at head)`, or the best block unknown. */
+  /** `15,234,567 → 15,234,890 (−323)`, `21,884,102 (at head)`, `0 → 9,118,000 (pivot)` while SNAP runs (the sync
+    * controller reports no target then), or the best block unknown.
+    */
   def blockValue(c: Ctx): AttributedString =
     val s = c.state
     val arrow = if c.g.set == GlyphSet.Ascii then "->" else "→"
     val minus = if c.g.set == GlyphSet.Ascii then "-" else "−"
     if s.isSynchronized then text(s"${formatNumber(s.currentBlock)} (at head)", c.t.value)
+    else if s.bestBlock <= 0 && s.snapPivot.isDefined then
+      text(s"${formatNumber(s.currentBlock)} $arrow ${formatNumber(s.snapPivot.getOrElse(0L))} (pivot)", c.t.value)
     else if s.bestBlock > 0 then
       text(
         s"${formatNumber(s.currentBlock)} $arrow ${formatNumber(s.bestBlock)} ($minus${formatNumber(s.blocksRemaining)})",
@@ -150,8 +160,8 @@ private[console] object Rows:
   /** The columns of the strip's cells at each tier (research §3.2–§3.4). */
   private def stops(tier: Tier): Seq[Int] = tier match
     case Tier.S => Seq(0, 33)
-    case Tier.M => Seq(0, 45, 90)
-    case Tier.L => Seq(0, 32, 70, 92, 122)
+    case Tier.M => Seq(0, 44, 92)
+    case Tier.L => Seq(0, 28, 76, 98, 124)
 
   /** Peers and blocks; at M the heap is on the next row, at L the disk, the heap and the GC share are on this one. */
   def vitalsRow(c: Ctx, width: Int): AttributedString =
@@ -168,7 +178,7 @@ private[console] object Rows:
           at(4) -> field("GC", gcValue(c), c.t, 4)
         )
       case _ => Seq(at(0) -> peers, at(1) -> block)
-    strip(width, cells)
+    strip(width, cells, c.g)
 
   /** The endpoints and the disk; at M the heap, at L the discovery table. */
   def resourcesRow(c: Ctx, width: Int): AttributedString =
@@ -177,9 +187,9 @@ private[console] object Rows:
     val cells = c.tier match
       case Tier.S => Seq(at(0) -> rpc, at(1) -> field("Disk", diskValue(c), c.t, 7))
       case Tier.M =>
-        Seq(at(0) -> rpc, at(1) -> field("Disk", diskValue(c), c.t, 8), at(2) -> field("JVM", heapValue(c), c.t))
+        Seq(at(0) -> rpc, at(1) -> field("Disk", diskValue(c), c.t, 7), at(2) -> field("JVM", heapValue(c), c.t))
       case Tier.L => Seq(at(0) -> rpc, at(2) -> field("Discovery", discoveryValue(c), c.t, 11))
-    strip(width, cells)
+    strip(width, cells, c.g)
 
   // ---- sync ---------------------------------------------------------------------------------------------------
 
@@ -216,7 +226,37 @@ private[console] object Rows:
         text(s"regular ${s.syncProgress.toInt}% $dot ${rateAndEta(c)}", style)
       case None => text(s.syncStatus, c.t.value)
 
-  def syncSummaryRow(c: Ctx, width: Int): AttributedString = fitToWidth(field("Sync", syncSummary(c), c.t), width)
+  def syncSummaryRow(c: Ctx, width: Int): AttributedString = fit(field("Sync", syncSummary(c), c.t), width, c.g)
+
+  /** The top of every view but the Overview: the vitals row, and the sync summary unless the view is the sync's own
+    * (SC-002).
+    */
+  def vitalsPanel(c: Ctx, withSummary: Boolean): Panel =
+    val rows = if withSummary then 2 else 1
+    Panel(rows, rows, 1, (w, _) => vitalsRow(c, w) +: (if withSummary then Seq(syncSummaryRow(c, w)) else Nil))
+
+  /** The rows nobody else wants: where slice 4's recent-log strip goes. */
+  val fillPanel: Panel = Panel(0, 0, 9, (_, _) => Nil, fill = true)
+
+  /** SNAP's phase row: the phase on the left; elapsed (and the time in the phase), ETA and a stale sample's age on the
+    * right.
+    */
+  def snapHeader(c: Ctx, snap: SnapSyncState, w: Int, title: String, withPhaseTime: Boolean): AttributedString =
+    val dot = c.g.dot.text
+    val stale = staleSnapSample(c)
+    val times = Seq(s"elapsed ${formatShort(snap.elapsedSeconds.toLong)}") ++
+      Option.when(withPhaseTime)(s"phase ${formatShort(snap.phaseElapsedSeconds.toLong)}") ++
+      Seq(eta(snap.etaSeconds)) ++ stale
+    val right = text(times.mkString(s" $dot "), if stale.isDefined then c.t.warn else c.t.value)
+    leftRight(text(s" $title ${snap.phaseDescription(c.g)}", c.t.healthy.bold()), right, w, c.g)
+
+  /** SNAP's five worm rows on a track of `slots`, then the chain download when `withChain` and it has a target. */
+  def snapWorms(c: Ctx, snap: SnapSyncState, slots: Int, w: Int, withChain: Boolean): Seq[AttributedString] =
+    val budget = wormBudget(c, slots, w)
+    val chain = Option.when(withChain)(chainDownload(c, snap)).flatten.map { d =>
+      fit(concat(text(s"   ${"Chain".padTo(WormLabelCols, ' ')}", c.t.label), text(d, c.t.value)), w, c.g)
+    }
+    SnapRows.of(snap, c.g).map(r => wormRow(c, r.label, r.progress, r.detail, budget, w)) ++ chain
 
   // ---- worm rows ----------------------------------------------------------------------------------------------
 
@@ -245,7 +285,7 @@ private[console] object Rows:
         case other                 => other.toString.toLowerCase(Locale.ROOT)
       sb.append(words, c.t.value)
     if detail.nonEmpty then sb.append(s"  $detail", c.t.value)
-    fitToWidth(sb.toAttributedString, width)
+    fit(sb.toAttributedString, width, c.g)
 
   /** The synced Blocks row during a catch-up: the worm's last crawl into the brain, frame by frame, or the one quiet
     * frame (research §3.8). Its bar is not held to the budget: the row is fitted to the width, like every row.
@@ -270,7 +310,7 @@ private[console] object Rows:
     sb.append(s"   ${"Blocks".padTo(WormLabelCols, ' ')}", c.t.label)
     sb.append(bar, c.t.healthy)
     sb.append(s"  $detail", c.t.value)
-    fitToWidth(sb.toAttributedString, width)
+    fit(sb.toAttributedString, width, c.g)
 
   /** The Blocks worm of a regular sync, or at the head (with a catch-up's frames), with its detail. */
   def blocksRow(c: Ctx, budget: Int, width: Int): Option[AttributedString] =

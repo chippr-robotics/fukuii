@@ -86,7 +86,9 @@ class TuiViewGoldenSpec extends AnyFlatSpec with Matchers with BeforeAndAfterAll
           if s.connectionStatus.startsWith("Unresponsive") then "Unresponsive" else s"${s.peerCount}/50"
         )
         top should include(formatNumber(s.currentBlock))
-        top should include(if s.isSynchronized then "at head" else formatNumber(s.bestBlock))
+        // While SNAP runs the target is its pivot: the sync controller reports none (B-044).
+        val target = s.snapPivot.filter(_ => s.bestBlock <= 0).getOrElse(s.bestBlock)
+        top should include(if s.isSynchronized then "at head" else formatNumber(target))
         if !s.isSynchronized then top should include("ETA")
         if s.snapSyncState.isDefined then top should include("SNAP")
         val alertRow = top.linesIterator.drop(2).next()
