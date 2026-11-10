@@ -222,7 +222,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     ASCII glyph set as ASCII only, in the same columns. A peer can no longer write to the operator's terminal through
     its client id. A failure's reason on the alert row goes through the same cleaning.
   - **Txpool.** The pending transactions, and how many carry a blob (`1,204 (3 blob)`), on the Overview at every
-    size and on the vitals row from 100×32.
+    size and on the vitals row from 100×32. At 140×45 the GC share moves to the second row, beside the discovery
+    table, so every cell fits down to 140 columns.
   - **Import time.** New gauge `regularsync.import.last.duration.seconds.gauge`: how long the last block import's
     consensus call took (one block or a batch), timed in regular sync's importer. The Sync view shows it for a
     regular sync (`Import   last 3 blocks in 61ms`).

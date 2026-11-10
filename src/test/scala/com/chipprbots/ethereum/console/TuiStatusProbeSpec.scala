@@ -502,12 +502,14 @@ class TuiStatusProbeSpec extends ScalaTestWithActorTestKit with AnyFlatSpecLike 
 
   /** The txpool, answering `GetPendingTransactionsReq` with `txs` transactions, `blobs` of them carrying a sidecar. */
   private def txPool(txs: Int, blobs: Int): Behavior[PendingTransactionsManager.Command] =
+    // Signed here, before the probe's wait starts: a first signing on a cold JVM can outlast the 300 ms wait.
+    val response = PendingTransactionsManager.PendingTransactionsResponse(
+      (0 until txs).map(pendingTx),
+      (0 until blobs).map(i => ByteString(s"h$i") -> ByteString(s"sidecar$i")).toMap
+    )
     Behaviors.receiveMessage {
       case PendingTransactionsManager.GetPendingTransactionsReq(replyTo) =>
-        replyTo ! PendingTransactionsManager.PendingTransactionsResponse(
-          (0 until txs).map(pendingTx),
-          (0 until blobs).map(i => ByteString(s"h$i") -> ByteString(s"sidecar$i")).toMap
-        )
+        replyTo ! response
         Behaviors.same
       case _ => Behaviors.same
     }
@@ -580,11 +582,14 @@ class TuiStatusProbeSpec extends ScalaTestWithActorTestKit with AnyFlatSpecLike 
     val published = PeerScoreSnapshot(takenAt, Map(PeerId("ab12") -> 0.912), ScoringStatistics.empty)
     TuiStatusProbe.peerScores(published) shouldBe Some(PeerScores(takenAt, Map("ab12" -> 0.912)))
 
+    // NetworkMetrics is process-wide: the empty snapshot goes back, whatever the assertions do.
     NetworkMetrics.publishPeerScores(published)
-    TuiStatusProbe.LocalSources.networkScores() shouldBe Some(PeerScores(takenAt, Map("ab12" -> 0.912)))
-    detailedProbe(local =
-      TuiStatusProbe.LocalSources(peerScores = TuiStatusProbe.LocalSources.networkScores)
-    )().local.peerScores shouldBe Some(PeerScores(takenAt, Map("ab12" -> 0.912)))
+    try
+      TuiStatusProbe.LocalSources.networkScores() shouldBe Some(PeerScores(takenAt, Map("ab12" -> 0.912)))
+      detailedProbe(local =
+        TuiStatusProbe.LocalSources(peerScores = TuiStatusProbe.LocalSources.networkScores)
+      )().local.peerScores shouldBe Some(PeerScores(takenAt, Map("ab12" -> 0.912)))
+    finally NetworkMetrics.publishPeerScores(PeerScoreSnapshot.empty)
   }
 
   it should "read the last import from RegularSyncMetrics" taggedAs (UnitTest) in {

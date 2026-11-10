@@ -89,8 +89,7 @@ object TuiText:
     * [[TuiGlyphs.toAscii]]).
     */
   private val AsciiPunctuation: Map[Int, String] = Map(
-    0x2013 -> "-", // en dash
-    0x2014 -> "-", // em dash
+    0x2013 -> "-", // en dash (the em dash is the `missing` glyph's)
     0x2018 -> "'",
     0x2019 -> "'",
     0x201c -> "\"",
