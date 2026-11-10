@@ -1,8 +1,11 @@
 package com.chipprbots.ethereum.blockchain.sync.regular
 
+import java.util.concurrent.atomic.AtomicReference
+
 import scala.concurrent.duration.NANOSECONDS
 
 import com.google.common.util.concurrent.AtomicDouble
+import io.micrometer.core.instrument.Gauge
 import io.micrometer.core.instrument.Timer
 
 import com.chipprbots.ethereum.metrics.MetricsContainer
@@ -47,6 +50,27 @@ object RegularSyncMetrics extends MetricsContainer:
   // #1705 (beacon): how long a starting importer has waited for the import lock so far; 0 while none waits.
   final private val ImportLockWaitSeconds = new AtomicDouble(0d)
   metrics.registry.gauge("regularsync.import.lock.wait.seconds.gauge", ImportLockWaitSeconds)
+
+  /** The last import that put blocks on the chain: how many, and how long the consensus call took. */
+  final case class LastImport(blocks: Int, nanos: Long)
+
+  // Spec 027 (C-7): the last import's duration, timed in BlockImporter around the consensus call (not in ConsensusImpl),
+  // for the TUI's Sync view and for /metrics. 0 until the first import.
+  final private val lastImportRef = new AtomicReference[Option[LastImport]](None)
+  Gauge
+    .builder(
+      "regularsync.import.last.duration.seconds.gauge",
+      lastImportRef,
+      (ref: AtomicReference[Option[LastImport]]) => ref.get().fold(0d)(_.nanos / 1e9)
+    )
+    .description("How long the last block import's consensus call took, for one block or a batch.")
+    .register(metrics.registry)
+
+  /** Called by BlockImporter after a consensus call that imported `blocks` blocks, taking `nanos`. */
+  def recordLastImport(blocks: Int, nanos: Long): Unit = lastImportRef.set(Some(LastImport(blocks, nanos)))
+
+  /** The last import BlockImporter timed, if any. Safe to read from any thread. */
+  def lastImport: Option[LastImport] = lastImportRef.get()
 
   def recordMinedBlockPropagationTimer(nanos: Long): Unit = MinedBlockPropagationTimer.record(nanos, NANOSECONDS)
   def recordImportNewBlockPropagationTimer(nanos: Long): Unit = NewBlockPropagationTimer.record(nanos, NANOSECONDS)

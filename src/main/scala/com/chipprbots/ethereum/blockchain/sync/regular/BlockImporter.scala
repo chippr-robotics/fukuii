@@ -1053,8 +1053,10 @@ final private class BlockImporterLogic(
         // `blockAccessListHash` (ETC, pre-Amsterdam) sends nothing and takes the plain call.
         val evaluated =
           balFetcher.fold(IO.pure(Map.empty[ByteString, BlockAccessList]))(_.fetch(nel.toList)).flatMap { accessLists =>
-            if accessLists.isEmpty then consensus.evaluateBranch(nel)
-            else consensus.evaluateBranchWithAccessLists(nel, accessLists)
+            timedImport(
+              if accessLists.isEmpty then consensus.evaluateBranch(nel)
+              else consensus.evaluateBranchWithAccessLists(nel, accessLists)
+            )
           }
         evaluated.flatMap {
           case BlockImportedToTop(blockImportData) =>
@@ -1173,6 +1175,19 @@ final private class BlockImporterLogic(
         .foreach(b => supervisor ! ProgressProtocol.ImportedBlock(b.number.value, internally = false))
     imported
 
+  /** The consensus call of an import, timed: when it put blocks on the chain, how many and how long it took go to
+    * `RegularSyncMetrics` (spec 027 C-7, the TUI's last-import duration). Timed here, around the call, so no consensus
+    * file changes; the result and any failure pass through unchanged.
+    */
+  private def timedImport(evaluate: IO[BlockImportResult]): IO[BlockImportResult] =
+    evaluate.timed.flatMap { (took, result) =>
+      val blocks = result match
+        case BlockImportedToTop(imported)      => imported.size
+        case ChainReorganised(_, newBranch, _) => newBranch.size
+        case _                                 => 0
+      IO(if blocks > 0 then RegularSyncMetrics.recordLastImport(blocks, took.toNanos)).as(result)
+    }
+
   private def importBlock(
       block: Block,
       importMessages: ImportMessages,
@@ -1184,7 +1199,7 @@ final private class BlockImporterLogic(
     def doLog(entry: ImportMessages.LogEntry): Unit = log.log(entry._1, entry._2)
     importWith(
       IO(doLog(importMessages.preImport()))
-        .flatMap(_ => consensus.evaluateBranchBlock(block))
+        .flatMap(_ => timedImport(consensus.evaluateBranchBlock(block)))
         .tap(importMessages.messageForImportResult.andThen(doLog))
         .tap {
           case BlockImportedToTop(importedBlocksData) =>
