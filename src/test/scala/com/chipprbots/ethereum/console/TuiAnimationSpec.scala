@@ -259,6 +259,24 @@ class TuiAnimationSpec extends AnyFlatSpec with Matchers with BeforeAndAfterAll 
     animated(searching.openHelp) shouldBe true
   }
 
+  // prism, slice 3 re-review: frame() skips its second render where nothing can move (mayMove). Whatever does move
+  // must still count, or a later panel that animates drops to 1 fps without a test noticing.
+  it should "count every frame that the next tick draws differently as moving" taggedAs (UnitTest) in {
+    val views: Seq[TuiState => TuiState] =
+      TuiView.values.toSeq.map(v => (s: TuiState) => s.withView(v)) :+ ((s: TuiState) => s.openHelp)
+    val fixtures = TuiFixtures.all.map(_._2) ++ TuiFixtures.alerts.map(_._2) :+
+      ((g: GlyphSet) => TuiState(glyphs = g).withConnectionStatus("Starting node..."))
+    for
+      fixture <- fixtures; view <- views; set <- GlyphSet.values; tick <- Seq(0L, 1L, 5L);
+      (w, h) <- Seq((80, 24), (120, 40), (160, 48))
+    do
+      val s = view(fixture(set)).copy(tick = tick, motion = Motion.Full)
+      val moves = renderer.render(s, w, h) != renderer.render(s.copy(tick = tick + 1), w, h)
+      withClue(s"${s.viewTitle} $set tick $tick ${w}x$h: ") {
+        if moves then renderer.frame(s, w, h, theme).animated shouldBe true
+      }
+  }
+
   it should "count only the rows on screen" taggedAs (UnitTest) in {
     // The Blocks worm is below the fold of a five-row terminal.
     animated(TuiFixtures.regularSyncEtc(), 80, 5) shouldBe false

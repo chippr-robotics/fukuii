@@ -89,11 +89,20 @@ private[console] object OverviewPanels:
       Seq(if n.miningEnabled then "mining on" else "mining off")
     val tail = rest.filter(_.nonEmpty).mkString(dot)
     val room = width - 1 - (1 + FieldLabelCols) - dot.length - new AttributedString(tail).columnLength()
-    val dir = n.dataDir
-    val shown =
-      if dir.isEmpty then ""
-      else if new AttributedString(dir).columnLength() <= room then dir
-      else if room > c.g.ellipsis.cols then c.g.ellipsis.text + dir.takeRight(room - c.g.ellipsis.cols)
-      else ""
+    val shown = shortPath(n.dataDir, room, c.g)
     val value = if shown.isEmpty then tail else shown + dot + tail
     fit(field("Node", text(value, c.t.value), c.t), width, c.g)
+
+  /** `path` in `room` columns: whole if it fits, else its last directories after a marker that cannot be read as a path
+    * (`…/fukuii/etc`, ASCII `.../fukuii/etc`; `../` would read as the parent), else nothing.
+    */
+  private[panels] def shortPath(path: String, room: Int, g: TuiGlyphs): String =
+    def cols(s: String) = new AttributedString(s).columnLength()
+    val marker = if g.set == GlyphSet.Ascii then ".../" else s"${g.ellipsis.text}/"
+    if path.isEmpty || cols(path) <= room then path
+    else
+      val parts = path.split('/').filter(_.nonEmpty).toSeq
+      (1 to parts.size).reverse.iterator
+        .map(k => marker + parts.takeRight(k).mkString("/"))
+        .find(cols(_) <= room)
+        .getOrElse("")

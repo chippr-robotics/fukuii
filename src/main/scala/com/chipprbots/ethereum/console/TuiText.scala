@@ -11,18 +11,38 @@ import org.jline.utils.AttributedStringBuilder
 object TuiText:
 
   /** Exactly `width` columns: cut, then padded with spaces. A wide glyph that would straddle the edge is dropped by the
-    * cut, which leaves the line one column short; the padding restores it.
+    * cut, which leaves the line one column short; the padding restores it. A line already `width` wide is returned as
+    * it is, measured once.
     */
   def fitToWidth(line: AttributedString, width: Int): AttributedString =
     val cols = width.max(0)
-    val cut = if line.columnLength() > cols then line.columnSubSequence(0, cols) else line
-    val short = cols - cut.columnLength()
-    if short <= 0 then cut
+    val length = line.columnLength()
+    if length == cols then line
+    else
+      val (cut, cutLength) =
+        if length > cols then
+          val c = line.columnSubSequence(0, cols)
+          (c, c.columnLength())
+        else (line, length)
+      if cutLength >= cols then cut
+      else
+        val sb = new AttributedStringBuilder()
+        sb.append(cut)
+        sb.append(" " * (cols - cutLength))
+        sb.toAttributedString
+
+  /** Exactly `width` columns, a cut shown: a line too long is cut and ends with the glyph set's ellipsis. A row keeps
+    * its last column blank (`reserveLast`), so a row of exactly `width` counts as too long; a cell whose gap column is
+    * already reserved by its caller may fill `width` exactly. A line that fits is padded, as [[fitToWidth]] does.
+    */
+  def fit(line: AttributedString, width: Int, g: TuiGlyphs, reserveLast: Boolean = true): AttributedString =
+    val room = if reserveLast then width - 1 else width
+    if line.columnLength() <= room || width <= g.ellipsis.cols + 1 then fitToWidth(line, width)
     else
       val sb = new AttributedStringBuilder()
-      sb.append(cut)
-      sb.append(" " * short)
-      sb.toAttributedString
+      sb.append(fitToWidth(line, room - g.ellipsis.cols))
+      sb.append(g.ellipsis.text)
+      fitToWidth(sb.toAttributedString, width)
 
   /** 21,884,102 */
   def formatNumber(n: Long): String = String.format(Locale.ROOT, "%,d", n)

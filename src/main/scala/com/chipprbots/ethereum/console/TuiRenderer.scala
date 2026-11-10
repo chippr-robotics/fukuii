@@ -77,7 +77,8 @@ class TuiRenderer(config: TuiConfig):
       else Nil
     val bodyRows = if height <= 0 then 0 else above - top.size
     val body = Layout.render(Views.panels(c, w), w, bodyRows, c.separator(w))
-    (top ++ body :+ footer).map(fitToWidth(_, w))
+    // Every row is already exactly `w` columns: Layout fits the body, and the fixed rows are fitted where they are made.
+    (top ++ body) :+ footer
 
   /** ` ◆ FUKUII etc (61) · PoW · up 1h 23m … Overview `; from tier M the head and the peers, at tier L the version
     * (§3.1). In the accent style; during the celebration's flash (frames 2–6, §3.8) in the flash style.

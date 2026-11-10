@@ -51,7 +51,7 @@ class TuiRenderBenchmarkSpec extends AnyFlatSpec with Matchers:
     medianMs should be < AssertedMs
   }
 
-  it should "cost one render for an idle node at its head, which cannot move" taggedAs (BenchmarkTest) in {
+  it should "time frame() for an idle node at its head, which cannot move" taggedAs (BenchmarkTest) in {
     val idle = TuiFixtures.syncedEtc().copy(motion = Motion.Full)
     renderer.frame(idle, 160, 48).animated shouldBe false
     (1 to 500).foreach(_ => renderer.frame(idle, 160, 48))

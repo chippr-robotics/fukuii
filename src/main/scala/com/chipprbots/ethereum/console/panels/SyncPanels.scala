@@ -31,7 +31,13 @@ private[console] object SyncPanels:
       )
     )
     Seq(
-      Panel(1, 1, 2, (w, _) => Seq(snapHeader(c, snap, w, "SNAP sync  ", withPhaseTime = true)), separated = true),
+      Panel(
+        1,
+        1,
+        2,
+        (w, _) => Seq(snapHeader(c, snap, w, "SNAP sync  ", withPhaseTime = c.tier != Tier.S)),
+        separated = true
+      ),
       Panel(5, 6, 3, (w, _) => snapWorms(c, snap, c.tier.trackSlots, w, withChain = true), separated = true)
     ) ++ detail.getOrElse(Nil)
 

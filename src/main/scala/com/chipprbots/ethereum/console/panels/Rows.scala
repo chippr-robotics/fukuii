@@ -44,12 +44,8 @@ private[console] object Rows:
   def field(label: String, value: AttributedString, t: TuiTheme, labelCols: Int = FieldLabelCols): AttributedString =
     concat(text(" " + label.padTo(labelCols, ' '), t.label), value)
 
-  /** Exactly `width` columns. A row too long for them is cut one column early and ends with the set's ellipsis, so the
-    * cut shows and the last column stays blank; a row that fits is padded, as [[TuiText.fitToWidth]] does.
-    */
-  def fit(line: AttributedString, width: Int, g: TuiGlyphs): AttributedString =
-    if line.columnLength() <= width - 1 || width <= g.ellipsis.cols + 1 then fitToWidth(line, width)
-    else fitToWidth(concat(fitToWidth(line, width - 1 - g.ellipsis.cols), new AttributedString(g.ellipsis.text)), width)
+  /** [[TuiText.fit]], for the panels: rows cut with the ellipsis. */
+  export TuiText.fit
 
   /** Cells at fixed columns: each starts at its column and is cut, with the ellipsis, before the next one, so none
     * collides and a cut shows.
@@ -57,15 +53,24 @@ private[console] object Rows:
   def strip(width: Int, cells: Seq[(Int, AttributedString)], g: TuiGlyphs): AttributedString =
     val placed = cells.filter((at, _) => at < width).sortBy(_._1)
     val sb = new AttributedStringBuilder()
+    var used = 0
     placed.zipWithIndex.foreach { case ((at, cell), i) =>
-      val end = placed.lift(i + 1).fold(width)(_._1 - 1)
-      val used = sb.columnLength()
-      if used < at then sb.append(" " * (at - used))
-      // Cut only what does not fit, and pad nothing: the row is padded once, at the end.
-      val room = (end - at.max(used)).max(0)
-      sb.append(if cell.columnLength() < room then cell else fit(cell, room, g))
+      // Each cell ends before the next one's gap column, the last before the row's last column: the gap is reserved
+      // here, so a cell may fill its room exactly.
+      val end = placed.lift(i + 1).fold(width - 1)(_._1 - 1)
+      if used < at then
+        sb.append(" " * (at - used))
+        used = at
+      val room = (end - used).max(0)
+      val length = cell.columnLength()
+      if length <= room then
+        sb.append(cell)
+        used += length
+      else
+        sb.append(fit(cell, room, g, reserveLast = false))
+        used += room
     }
-    fit(sb.toAttributedString, width, g)
+    fitToWidth(sb.toAttributedString, width)
 
   /** `left`, then `right` ending one column before the edge; the right side is kept when the row is too narrow. */
   def leftRight(left: AttributedString, right: AttributedString, width: Int, g: TuiGlyphs): AttributedString =
@@ -107,7 +112,7 @@ private[console] object Rows:
     val arrow = if c.g.set == GlyphSet.Ascii then "->" else "→"
     val minus = if c.g.set == GlyphSet.Ascii then "-" else "−"
     if s.isSynchronized then text(s"${formatNumber(s.currentBlock)} (at head)", c.t.value)
-    else if s.bestBlock <= 0 && s.snapPivot.isDefined then
+    else if s.snapPivot.isDefined then
       text(s"${formatNumber(s.currentBlock)} $arrow ${formatNumber(s.snapPivot.getOrElse(0L))} (pivot)", c.t.value)
     else if s.bestBlock > 0 then
       text(
@@ -256,7 +261,8 @@ private[console] object Rows:
     val chain = Option.when(withChain)(chainDownload(c, snap)).flatten.map { d =>
       fit(concat(text(s"   ${"Chain".padTo(WormLabelCols, ' ')}", c.t.label), text(d, c.t.value)), w, c.g)
     }
-    SnapRows.of(snap, c.g).map(r => wormRow(c, r.label, r.progress, r.detail, budget, w)) ++ chain
+    SnapRows.of(snap, c.g, compact = c.tier == Tier.S).map(r => wormRow(c, r.label, r.progress, r.detail, budget, w)) ++
+      chain
 
   // ---- worm rows ----------------------------------------------------------------------------------------------
 

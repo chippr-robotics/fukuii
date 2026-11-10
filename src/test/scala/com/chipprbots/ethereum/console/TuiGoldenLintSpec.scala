@@ -51,6 +51,14 @@ class TuiGoldenLintSpec extends AnyFlatSpec with Matchers:
       withClue(s"$name row $i: '$row'\n")(last shouldBe " ")
   }
 
+  it should "never cut a number: no ellipsis right after a digit or a comma" taggedAs (UnitTest) in {
+    // A peer's short id (0x3fa1…e2) is the one number the TUI shortens on purpose.
+    val shortId = "0x[0-9a-f]{4}(…|\\.\\.)[0-9a-f]{2}".r
+    val cutNumber = "[0-9,](…|\\.\\.)".r
+    for (name, rows) <- goldens; (row, i) <- rows.zipWithIndex do
+      withClue(s"$name row $i: '$row'\n")(cutNumber.findFirstIn(shortId.replaceAllIn(row, "")) shouldBe None)
+  }
+
   "The Node row" should "end with the mining flag at every width" taggedAs (UnitTest) in {
     val nodeRows = for (name, rows) <- goldens; row <- rows if row.startsWith(" Node    ") yield name -> row
     nodeRows should not be empty

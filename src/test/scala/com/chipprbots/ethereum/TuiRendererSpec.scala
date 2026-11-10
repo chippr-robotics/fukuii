@@ -329,8 +329,12 @@ class TuiRendererSpec extends AnyFlatSpec with Matchers:
 
   it should "keep each SNAP row's rate on an 80-column screen" taggedAs (UnitTest) in {
     val lines = rows(TuiFixtures.snapStorageMordor(), 80, 24)
-    lines.find(_.trim.startsWith("Storage")).get should include("119.6M slots @ 21.4K/s")
+    // Slice 3 review: at tier S the Storage row drops the word "slots", so its contract count fits whole.
+    lines.find(_.trim.startsWith("Storage")).get should include("119.6M @ 21.4K/s · 2,114/5,702 ")
     lines.find(_.trim.startsWith("Bytecode")).get should include("@ 310/s")
+    val sync = rows(TuiFixtures.snapStorageMordor().withView(TuiView.Sync), 80, 24)
+    sync.find(_.trim.startsWith("Storage")).get should include("2,114/5,702 ")
+    sync.find(_.contains("SNAP sync")).get should include("Downloading bytecodes & storage")
   }
 
   // Live run 2026-11-08: a restarted node's counters start at zero, and a finished storage row read "0 slots".
@@ -381,7 +385,7 @@ class TuiRendererSpec extends AnyFlatSpec with Matchers:
       withClue(s"$name at ${w}x$h:\n$text\n")(all(text.map(_.toInt)) should be < 0x7f)
   }
 
-  // B-044: the running phase's row draws the monitor's phaseProgress, which never falls within a phase.
+  // B-044: the running phase's row reads the monitor's phaseProgress, which the monitor holds per phase as of B-044.
   it should "draw the running phase's row from phaseProgress, not from the raw counts" taggedAs (UnitTest) in {
     def row(snap: SnapSyncState, label: String) =
       rows(TuiState.initial.withSnapSyncState(snap).copy(motion = Motion.Reduced), 120, 40)

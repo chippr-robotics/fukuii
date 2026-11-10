@@ -13,11 +13,15 @@ object SnapRows:
     * part whose phase is over shows COMPLETE, whatever its estimate says, and a finished row shows no zero count.
     *
     * The running phase's row (Accounts during `AccountRangeSync`, Storage during `ByteCodeAndStorageSync`) draws the
-    * monitor's own [[SnapSyncState.phaseProgress]], which never falls within a phase (B-044), not a division of the raw
-    * counts by an estimate that moves. A count found ahead of its phase, and the bytecodes, whose total is not known
-    * until they are all found, are ACTIVE with the count so far, without a percentage.
+    * monitor's own [[SnapSyncState.phaseProgress]] rather than dividing the raw counts by an estimate that moves; as of
+    * B-044 the monitor holds that progress per phase. A count found ahead of its phase, and the bytecodes, whose total
+    * is not known until they are all found, are ACTIVE with the count so far, without a percentage.
+    *
+    * @param compact
+    *   tier S: the Storage row drops the words "slots" and "contracts", so its rate and contract count fit whole in 80
+    *   columns
     */
-  def of(snap: SnapSyncState, g: TuiGlyphs): Seq[SnapRow] =
+  def of(snap: SnapSyncState, g: TuiGlyphs, compact: Boolean = false): Seq[SnapRow] =
     import WormProgress.*
     val phase = snap.phaseIndex
     val dot = g.dot.text
@@ -40,11 +44,12 @@ object SnapRows:
       val (n, est) = (snap.storageSlotsSynced, snap.estimatedTotalSlots)
       val contracts =
         if snap.storageContractsTotal > 0 then
-          s"${formatNumber(snap.storageContractsCompleted.toLong)}/${formatNumber(snap.storageContractsTotal.toLong)} contracts"
+          s"${formatNumber(snap.storageContractsCompleted.toLong)}/${formatNumber(snap.storageContractsTotal.toLong)}" +
+            (if compact then "" else " contracts")
         else ""
       def joined(parts: String*): String = parts.filter(_.nonEmpty).mkString(s" $dot ")
       // The rate before the contract count: when the row is cut at 80 columns, the rate says whether it moves.
-      val slots = s"${formatCount(n)} slots"
+      val slots = if compact then formatCount(n) else s"${formatCount(n)} slots"
       val moving = joined(s"$slots ${rate(snap.recentSlotsPerSec)}", contracts)
       if phase > 1 then SnapRow("Storage", Complete, joined(count(n, " slots"), contracts))
       else if phase == 1 && est > 0 then SnapRow("Storage", inPhase, moving)

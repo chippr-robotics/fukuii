@@ -113,4 +113,4 @@ object Alerts:
       val style = if errors > 0 then t.error else t.warn.bold()
       sb.append(s" $badge${" " * (BadgeCols - badgeCols).max(2)}", style)
       sb.append(alerts.take(MaxListed).map(_.text).mkString(s" ${g.dot.text} "), style)
-    panels.Rows.fit(sb.toAttributedString, width, g)
+    TuiText.fit(sb.toAttributedString, width, g)

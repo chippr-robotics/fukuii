@@ -246,7 +246,8 @@ case class TuiState(
     * then, since the sync controller reports no block target and the local best block is far behind (B-044).
     */
   def snapPivot: Option[Long] =
-    snapSyncState.flatMap(_ => snapshot.flatMap(_.local.snapPivot)).filter(_ > 0)
+    if bestBlock > 0 then None // a block target: another sync has taken over, its rows lingering or not
+    else snapSyncState.flatMap(_ => snapshot.flatMap(_.local.snapPivot)).filter(_ > 0)
 
   /** How old the SNAP sample on screen is, if the probe said when it was taken. */
   def snapSampleAge: Option[Duration] =
@@ -265,9 +266,9 @@ case class SyncBaseline(block: Long, observedAt: Instant)
   *   when the SNAP monitor recorded its latest sample of a running phase (`SNAPSyncMetrics.latestSample`), at any age:
   *   the alert row warns when it is old (§2.3)
   * @param snapRunning
-  *   SNAP is running: the latest sample is of a running phase and younger than
-  *   [[TuiStatusProbe.SnapRunningMaxAgeMillis]]. The one test of it the TUI makes: the SNAP rows stay on screen past
-  *   their sample's 90 s, and the alert row warns of the sample's age, only while it holds
+  *   SNAP counts as running: the latest sample is of a running phase and younger than
+  *   [[TuiStatusProbe.SnapRunningMaxAgeMillis]]. The SNAP rows stay on screen past their sample's 90 s, and the alert
+  *   row warns of the sample's age, only while it holds; "Syncing (SNAP)" has its own, shorter test
   */
 final case class SyncSample(
     current: Long,
