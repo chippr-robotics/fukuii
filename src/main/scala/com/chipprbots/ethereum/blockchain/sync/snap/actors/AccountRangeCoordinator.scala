@@ -901,10 +901,31 @@ private[actors] class AccountRangeCoordinatorImpl(
     * so `covered.toDouble / keyspaceSize.toDouble` always produces 0.0.
     */
   private def computeKeyspaceEstimate(): Option[Long] =
+    AccountRangeCoordinator.keyspaceEstimate(
+      accountsDownloaded,
+      pendingTasks.toSeq,
+      activeTasks.values.map(_._1),
+      storingTasks.values
+    )
+
+object AccountRangeCoordinator:
+
+  /** The account-count estimate from keyspace coverage: `accountsDownloaded * 2^256 / covered`, where `covered` is the
+    * keyspace not left in a range that still has work. Its three arguments are the three places a range can be while it
+    * has work: queued (`pending`), asked of a peer (`active`), or answered and being inserted (`storing`, whose `next`
+    * is already past the response). It is a function of its arguments so the call site's choice of ranges can be
+    * tested; see `AccountKeyspaceEstimateSpec`.
+    */
+  private[actors] def keyspaceEstimate(
+      accountsDownloaded: Long,
+      pending: Iterable[AccountTask],
+      active: Iterable[AccountTask],
+      @annotation.unused storing: Iterable[AccountTask]
+  ): Option[Long] =
     if accountsDownloaded < 10000 then None // too early for reliable estimate
     else
       val keyspaceSize = BigInt(2).pow(256)
-      val nonCompleteTasks = pendingTasks.toSeq ++ activeTasks.values.map(_._1)
+      val nonCompleteTasks = pending.toSeq ++ active
       val remaining =
         if nonCompleteTasks.isEmpty then BigInt(0)
         else
@@ -924,8 +945,6 @@ private[actors] class AccountRangeCoordinatorImpl(
         // ETC mainnet has ~600M addresses per blockscout; cap at 2B for safety margin
         if estimatedBig <= accountsDownloaded || estimatedBig > BigInt(2000000000L) then None
         else Some(estimatedBig.toLong)
-
-object AccountRangeCoordinator:
 
   /** An upper bound on one sync's unique code hashes, not an estimate. Sepolia's logs show 13.5M through the old filter
     * (3M entries at 1e-4), whose false-positive rate had reached about 0.53 by then, which implies about 16M. ETH
