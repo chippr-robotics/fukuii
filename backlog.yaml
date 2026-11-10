@@ -2139,3 +2139,14 @@ items:
     refs: ["prism review of B-044, 2026-11-10"]
     links: {}
     notes: SyncProgressMonitor reset() on restartSnapSync zeroes counters while resumed ranges keep cursors; percentage is right, ~total and ETA are since-restart. SnapResumePlanner.scala:541 startPhase(ByteCodeAndStorageSync) precedes the 4096-entry stream (StorageRangeCoordinator.scala:797).
+  - id: B-192
+    title: "TUI probe: read disk free on its own daemon thread so a hung statvfs or RocksDB read cannot raise false Unresponsive alerts"
+    priority: P3
+    status: open
+    area: tui
+    size: S
+    opened: 2026-11-10
+    refs: ["prism re-review of 027 slice 3, 2026-11-10"]
+    links:
+      spec: specs/027-tui-dashboard
+    notes: "Slice 3 overlaps local reads with the asks, which absorbs a slow read but not a hung one: TuiStatusProbe.apply blocks, no snapshot is published, agedAt flips both sources to Unresponsive and Alerts raise peer manager / sync controller Unresponsive."
