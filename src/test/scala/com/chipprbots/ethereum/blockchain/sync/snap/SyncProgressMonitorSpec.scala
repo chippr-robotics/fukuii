@@ -135,13 +135,14 @@ class SyncProgressMonitorSpec extends ScalaTestWithActorTestKit with AnyFlatSpec
       monitor.incrementAccountsSynced(100L)
       val after = monitor.currentProgress
 
-      after.phaseProgress should be <= 100
-      after.phaseProgress should be >= before.phaseProgress
+      after.phaseProgress shouldBe 100
       after.globalProgress should be >= before.globalProgress
     }
 
   it should "keep the storage percentage at completed / total while a large contract streams slots (no completions)" taggedAs
     UnitTest in {
+      import com.chipprbots.ethereum.blockchain.sync.WormToBrainBar
+
       val monitor = new SyncProgressMonitor(classicScheduler)
       monitor.startPhase(AccountRangeSync)
       monitor.startPhase(ByteCodeAndStorageSync)
@@ -153,7 +154,7 @@ class SyncProgressMonitorSpec extends ScalaTestWithActorTestKit with AnyFlatSpec
       a.phaseProgress shouldBe 1
 
       // One giant contract streams 5M slots; no contract completes, so no report arrives. Against the estimate in
-      // hand that is 5.1M / 10M = 51%, while 1% of the contracts are done.
+      // hand that would be 5.1M / 10M = 51%, while 1% of the contracts are done.
       monitor.incrementStorageSlotsSynced(5_000_000L)
       val b = monitor.currentProgress
 
@@ -167,32 +168,134 @@ class SyncProgressMonitorSpec extends ScalaTestWithActorTestKit with AnyFlatSpec
       )
       phaseProgressSeries(Seq(a, b, c)) shouldBe Seq(1, 1, 1)
       assertNonDecreasing("globalProgress", Seq(a, b, c).map(_.globalProgress))
+      // The Storage row of the log's worm draws that percentage, whatever the slot ratio says.
+      b.wormBlock.linesIterator.find(_.trim.startsWith("Storage")).get should include(WormToBrainBar.renderKnown(0.01))
     }
 
-  it should "start a new phase from what that phase's estimate says, and a reset from nothing" taggedAs UnitTest in {
+  it should "follow completed / total for the storage percentage, even before there is a slot estimate" taggedAs
+    UnitTest in {
+      val monitor = new SyncProgressMonitor(classicScheduler)
+      monitor.startPhase(AccountRangeSync)
+      monitor.startPhase(ByteCodeAndStorageSync)
+
+      monitor.updateStorageContracts(completed = 0, total = 1_000)
+      monitor.currentProgress.phaseProgress shouldBe 0
+
+      monitor.updateStorageContracts(completed = 250, total = 1_000)
+      val progress = monitor.currentProgress
+      progress.phaseProgress shouldBe 25
+      progress.estimatedTotalSlots shouldBe 0L
+    }
+
+  it should "leave the slot estimate as it was pushed, whatever the slot count does between pushes" taggedAs UnitTest in {
+    val monitor = new SyncProgressMonitor(classicScheduler)
+    monitor.startPhase(AccountRangeSync)
+    monitor.startPhase(ByteCodeAndStorageSync)
+    monitor.incrementStorageSlotsSynced(100_000L)
+    reportStorageContracts(monitor, completed = 1_000, total = 100_000)
+    val pushed = monitor.currentProgress.estimatedTotalSlots
+    pushed shouldBe 10_000_000L
+
+    monitor.incrementStorageSlotsSynced(5_000_000L)
+
+    // Other readers take this figure as the estimate of the total: the ETA, `eth_syncing` and the estimated-total gauge.
+    monitor.currentProgress.estimatedTotalSlots shouldBe pushed
+  }
+
+  it should "not let the storage ETA's remaining work grow with the slots in flight" taggedAs UnitTest in {
+    // The throughput window needs two timestamps a millisecond apart; spin to the next one rather than sleep.
+    def nextMillisecond(): Unit =
+      val start = System.currentTimeMillis()
+      while System.currentTimeMillis() == start do ()
+
+    val monitor = new SyncProgressMonitor(classicScheduler)
+    monitor.startPhase(AccountRangeSync)
+    monitor.startPhase(ByteCodeAndStorageSync)
+    // One contract of a billion done with 1,000 slots: the estimate is a trillion slots, so the ETA is far above the
+    // one-second step it is truncated to, whatever the clock does between the increments below.
+    monitor.incrementStorageSlotsSynced(1_000L)
+    reportStorageContracts(monitor, completed = 1, total = 1_000_000_000)
+    val pushed = monitor.currentProgress.estimatedTotalSlots
+    pushed shouldBe 1_000_000_000_000L
+
+    // A large contract streams slots with no contract completing: the work remaining is the pushed estimate less the
+    // slots so far, and it can only shrink.
+    nextMillisecond()
+    monitor.incrementStorageSlotsSynced(500L)
+    nextMillisecond()
+    monitor.incrementStorageSlotsSynced(500L)
+
+    val progress = monitor.currentProgress
+    val remaining = pushed - progress.storageSlotsSynced
+    remaining shouldBe 999_999_998_000L
+    progress.recentSlotsPerSec should be > 0.0
+    monitor.calculateETA shouldBe Some((remaining / progress.recentSlotsPerSec).toLong)
+  }
+
+  it should "start a new phase from that phase's own figures, not the previous phase's mark" taggedAs UnitTest in {
     val monitor = new SyncProgressMonitor(classicScheduler)
     monitor.startPhase(AccountRangeSync)
     monitor.incrementAccountsSynced(800L)
     monitor.updateEstimates(accounts = 1_000L)
     monitor.currentProgress.phaseProgress shouldBe 80
 
-    // The next phase is measured on its own: the accounts phase's 80% is not carried into it.
     monitor.startPhase(ByteCodeAndStorageSync)
     monitor.incrementStorageSlotsSynced(100L)
     reportStorageContracts(monitor, completed = 1, total = 10)
-    monitor.currentProgress.phaseProgress shouldBe 10
 
-    // A restart is a genuine restart: it starts from nothing, and does not hold the old percentage.
+    monitor.currentProgress.phaseProgress shouldBe 10
+  }
+
+  it should "start from nothing after a reset, and not hold the old percentage" taggedAs UnitTest in {
+    val monitor = new SyncProgressMonitor(classicScheduler)
+    monitor.startPhase(AccountRangeSync)
+    monitor.incrementAccountsSynced(800L)
+    monitor.updateEstimates(accounts = 1_000L)
+    monitor.currentProgress.phaseProgress shouldBe 80
+
     monitor.reset()
     val restarted = monitor.currentProgress
     restarted.phaseProgress shouldBe 0
     restarted.estimatedTotalAccounts shouldBe 0L
     restarted.estimatedTotalSlots shouldBe 0L
     restarted.globalProgress shouldBe 0.0
+
     monitor.startPhase(AccountRangeSync)
     monitor.incrementAccountsSynced(10L)
     monitor.updateEstimates(accounts = 1_000L)
     monitor.currentProgress.phaseProgress shouldBe 1
+  }
+
+  it should "say what a reset drops, with the percentage as it stands now" taggedAs UnitTest in {
+    val capture = new SnapLogCapture
+    try
+      val monitor = new SyncProgressMonitor(classicScheduler)
+      monitor.startPhase(AccountRangeSync)
+      monitor.incrementAccountsSynced(800L)
+      monitor.updateEstimates(accounts = 1_000L)
+      // Nothing has read the percentage since the counts moved, so a held mark would still say 0%.
+
+      monitor.reset()
+
+      val line = capture.lines.find(_.contains("SNAP progress reset")).get
+      line should include("accounts=800")
+      line should include("phase progress=80%")
+    finally capture.close()
+  }
+
+  it should "clear the held percentage when the run completes" taggedAs UnitTest in {
+    val monitor = new SyncProgressMonitor(classicScheduler)
+    monitor.startPhase(AccountRangeSync)
+    monitor.incrementAccountsSynced(800L)
+    monitor.updateEstimates(accounts = 1_000L)
+    monitor.currentProgress.phaseProgress shouldBe 80
+
+    monitor.complete()
+
+    val done = monitor.currentProgress
+    done.phase shouldBe Completed
+    done.phaseProgress shouldBe 0
+    done.globalProgress shouldBe 1.0
   }
 
   it should "report the Overall worm without a fall when a SyncProgress carries an out-of-range phase percentage" taggedAs
