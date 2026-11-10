@@ -87,3 +87,62 @@ class AccountKeyspaceEstimateSpec extends AnyFlatSpec with Matchers:
     AccountRangeCoordinator.keyspaceEstimate(Downloaded, fifteen) should not be empty
     AccountRangeCoordinator.keyspaceEstimate(Downloaded, fifteen ++ fifteen) shouldBe None
   }
+
+  it should "give no estimate, and not divide by zero, when nothing is covered exactly" taggedAs UnitTest in {
+    // A `last` of 2^256 (33 bytes) from `next` 0 leaves the whole keyspace: `covered` is exactly 0.
+    val wholeKeyspace = AccountTask(
+      next = hash(BigInt(0)),
+      last = ByteString(Array[Byte](1) ++ Array.fill[Byte](32)(0)),
+      rootHash = Root
+    )
+
+    AccountRangeCoordinator.keyspaceEstimate(Downloaded, Seq(wholeKeyspace)) shouldBe None
+  }
+
+  it should "start extrapolating at the named minimum of accounts, and not before" taggedAs UnitTest in {
+    val withWork = (8 until 15).map(range(_))
+    val minimum = AccountRangeCoordinator.KeyspaceEstimateMinAccounts
+
+    AccountRangeCoordinator.keyspaceEstimate(minimum - 1, withWork) shouldBe None
+    AccountRangeCoordinator.keyspaceEstimate(minimum, withWork) should not be empty
+  }
+
+  // The completion check, the resume snapshot and the estimate all read `tasksWithWork`. Dropping `storing` from it
+  // would make `AccountRangeSyncComplete` and the `NoMore*` signals fire while a response is still being inserted, and
+  // the estimate omit that range again (B-044). A coordinator is too much to build to hold a range mid-insert at the
+  // right moment, so the membership is pinned here.
+  "AccountRangeCoordinator.tasksWithWork" should "count a range being stored as work left" taggedAs UnitTest in {
+    val stored = range(3, doneOutOf16 = 2)
+
+    val withWork = AccountRangeCoordinator.tasksWithWork(Nil, Nil, Seq(stored)).toList
+
+    withClue("a coordinator with only a range being stored is not complete: ")(withWork shouldBe List(stored))
+  }
+
+  it should "hold every range queued, asked of a peer and being stored, and nothing else" taggedAs UnitTest in {
+    val queued = range(1)
+    val asked = range(2)
+    val stored = range(3, doneOutOf16 = 2)
+
+    AccountRangeCoordinator.tasksWithWork(Seq(queued), Seq(asked), Seq(stored)).toList should contain theSameElementsAs
+      List(queued, asked, stored)
+    AccountRangeCoordinator.tasksWithWork(Nil, Nil, Nil).isEmpty shouldBe true
+  }
+
+  it should "feed the estimate the range being stored, so completion and the estimate cannot disagree" taggedAs
+    UnitTest in {
+      val queued = (8 until 15).map(range(_))
+      val stored = range(7, doneOutOf16 = 4)
+
+      val estimate = AccountRangeCoordinator.keyspaceEstimate(
+        Downloaded,
+        AccountRangeCoordinator.tasksWithWork(queued, Nil, Seq(stored))
+      )
+      val requeued = AccountRangeCoordinator.keyspaceEstimate(
+        Downloaded,
+        AccountRangeCoordinator.tasksWithWork(queued :+ stored, Nil, Nil)
+      )
+
+      estimate should not be empty
+      estimate shouldBe requeued
+    }

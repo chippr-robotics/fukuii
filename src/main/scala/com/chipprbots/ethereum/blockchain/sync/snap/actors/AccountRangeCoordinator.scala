@@ -893,7 +893,7 @@ private[actors] class AccountRangeCoordinatorImpl(
     * which ranges are unfinished (B-044: the estimate left `storingTasks` out).
     */
   private def tasksWithWork: Iterator[AccountTask] =
-    pendingTasks.iterator ++ activeTasks.values.iterator.map(_._1) ++ storingTasks.values.iterator
+    AccountRangeCoordinator.tasksWithWork(pendingTasks, activeTasks.values.map(_._1), storingTasks.values)
 
   // Also wait for responses still being inserted (storingTasks) and for the carried contract work to be replayed —
   // completion sends NoMore{Storage,ByteCode}Tasks downstream, which must not overtake either.
@@ -908,19 +908,37 @@ private[actors] class AccountRangeCoordinatorImpl(
 
 object AccountRangeCoordinator:
 
+  /** The ranges that still have work, given the three places a range can be: queued, asked of a peer, and answered and
+    * being inserted (see `tasksWithWork` on the coordinator). The membership is the point of this function: it decides
+    * completion (`AccountRangeSyncComplete` and the `NoMore*` signals fire when it is empty), the resume snapshot and
+    * the keyspace estimate, and a coordinator is too much to build to test which sets it reads, so it is tested here
+    * (`AccountKeyspaceEstimateSpec`).
+    */
+  private[actors] def tasksWithWork(
+      pending: IterableOnce[AccountTask],
+      active: IterableOnce[AccountTask],
+      storing: IterableOnce[AccountTask]
+  ): Iterator[AccountTask] =
+    pending.iterator ++ active.iterator ++ storing.iterator
+
+  /** The fewest accounts downloaded for which the keyspace estimate extrapolates; before it, the density is too noisy.
+    * The progress monitor's reset log names it: it is when the accounts percentage returns after a restart.
+    */
+  private[snap] val KeyspaceEstimateMinAccounts: Long = 10_000L
+
   /** The account-count estimate from keyspace coverage: `accountsDownloaded * 2^256 / covered`, where `covered` is the
     * keyspace not left in a range with work (`tasksWithWork`: queued, asked of a peer, or being stored). Uses BigInt
     * throughout: 2^256 is far beyond a Double's 15-17 significant digits. A function of its arguments so it can be
     * tested; see `AccountKeyspaceEstimateSpec`.
     *
-    * None before 10,000 accounts (too early to extrapolate), when the ranges leave no keyspace covered (the same range
+    * None before `KeyspaceEstimateMinAccounts` accounts (too early to extrapolate), when the ranges leave no keyspace covered (the same range
     * counted twice, say), and for a result that is not above the count or is over 2 billion.
     */
   private[actors] def keyspaceEstimate(
       accountsDownloaded: Long,
       tasksWithWork: IterableOnce[AccountTask]
   ): Option[Long] =
-    if accountsDownloaded < 10000 then None // too early for reliable estimate
+    if accountsDownloaded < KeyspaceEstimateMinAccounts then None // too early for reliable estimate
     else
       val keyspaceSize = BigInt(2).pow(256)
       val remaining = tasksWithWork.iterator.foldLeft(BigInt(0)) { case (sum, task) =>
