@@ -68,7 +68,8 @@ private[console] object PeersPanel:
     c.state.snapshot.map(_.peers) match
       case None => Seq(fit(field("Peers", text("not polled yet", c.t.muted), c.t), w, c.g))
       case Some(Sourced.Unresponsive(reason)) =>
-        Seq(fit(field("Peers", text(s"peer manager Unresponsive ($reason)", c.t.error), c.t), w, c.g))
+        val why = TuiText.external(reason, c.g)
+        Seq(fit(field("Peers", text(s"peer manager Unresponsive ($why)", c.t.error), c.t), w, c.g))
       case Some(source) =>
         val peers = sorted(c, source.value.getOrElse(Nil))
         val room = (rows - 2).max(0)
@@ -85,8 +86,12 @@ private[console] object PeersPanel:
           case _                       => ""
         val details = detailsNote(c)
         val inbound = peers.count(_.incoming)
+        // "By score" only when every row listed has one: the top table lists the unscored after the scored.
+        val scored = peers.count(p => c.state.peerScore(p.id).isDefined)
         val heading =
-          if top then s" Peers (top $shown of ${peers.size} by score)$stale"
+          if top then
+            val by = if scored >= shown then " by score" else s", $scored scored"
+            s" Peers (top $shown of ${peers.size}$by)$stale"
           else
             s" Peers   ${peers.size} handshaked of ${c.state.maxPeers} max $dot $inbound in $dot " +
               s"${peers.size - inbound} out$stale$details"
@@ -98,9 +103,11 @@ private[console] object PeersPanel:
         if peers.isEmpty then Seq(title, fit(text("   no handshaked peer", c.t.muted), w, c.g))
         else Seq(title, heads) ++ body ++ more
 
-  /** Highest score first; the unscored last; then the longest connected. */
+  /** Highest score first, at the precision the column shows, so peers it draws alike go by age; the unscored last; then
+    * the longest connected.
+    */
   private def sorted(c: Ctx, peers: Seq[TuiPeer]): Seq[TuiPeer] =
-    peers.sortBy(p => (c.state.peerScore(p.id).fold(Double.MaxValue)(-_), p.connectedAt, p.id))
+    peers.sortBy(p => (c.state.peerScore(p.id).fold(Long.MaxValue)(s => -TuiState.scoreUnits(s)), p.connectedAt, p.id))
 
   /** Why the client and best block read `?` or may be old: the network peer manager (`GetHandshakedPeersCmd`) did not
     * answer, or missed the last polls.

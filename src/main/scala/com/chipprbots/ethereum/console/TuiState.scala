@@ -284,8 +284,7 @@ case class TuiState(
       now <- peerScore(peerId)
       before <- scores.previous.flatMap(_.scores.get(peerId))
     yield
-      val step = math.pow(10, ScoreDigits)
-      math.round(now * step).compareTo(math.round(before * step)) match
+      scoreUnits(now).compareTo(scoreUnits(before)) match
         case d if d > 0 => Trend.Up
         case d if d < 0 => Trend.Down
         case _          => Trend.Steady
@@ -600,8 +599,13 @@ object TuiState:
   /** The time of a state that has seen no snapshot and no start time: uptime and rates read 0. */
   val Origin: Instant = Instant.EPOCH
 
-  /** The score column's decimals, and the precision of the trend. */
+  /** The score column's decimals, and the precision of the trend and of the order of the peers. */
   val ScoreDigits: Int = 3
+
+  /** A score at the column's precision, in units of its last decimal: what two peers are compared by, so the order and
+    * the trend say what the column shows.
+    */
+  def scoreUnits(score: Double): Long = math.round(score * math.pow(10, ScoreDigits))
 
   /** Create an initial TUI state. */
   def initial: TuiState = TuiState()

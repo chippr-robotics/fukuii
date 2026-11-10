@@ -167,6 +167,17 @@ class PeersPanelSpec extends AnyFlatSpec with Matchers:
     rows(first) should include(panels.Rows.shortId(two(0).id, TuiGlyphs.Emoji)) // 0.500 and 0.500: the older first
   }
 
+  "A peer id that is not hex" should "be drawn through the sanitiser, and short, whatever the set" taggedAs (UnitTest) in {
+    val hostile = "peer\u001b[2J-ünïcode-中-with-a-long-name"
+    for set <- GlyphSet.values do
+      val shown = panels.Rows.shortId(hostile, TuiGlyphs.of(set))
+      shown.exists(Character.isISOControl(_)) shouldBe false
+      shown should startWith("peer-") // the escape sequence is gone, not the id
+      shown.length should be < hostile.length // and the id is cut
+      if set == GlyphSet.Ascii then all(shown.map(_.toInt)) should be < 0x7f
+    panels.Rows.shortId("0x" + "ab" * 32, TuiGlyphs.Emoji) shouldBe "0xabab…ab" // a hex id is as it was
+  }
+
   "The Overview's top table" should "not call a peer without a score one of the top by score" taggedAs (UnitTest) in {
     val s = few.copy(scores = ScoreHistory(None, Some(PeerScores(TuiFixtures.Now, Map(fewPeers(0).id -> 0.9)))))
     val title = frame(s, 160, 48).find(_.contains(" Peers (top ")).getOrElse(fail("no top table"))

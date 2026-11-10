@@ -372,8 +372,10 @@ private[console] object Rows:
     val hex = id.stripPrefix("0x")
     if hex.length > 8 && hex.forall(Character.digit(_, 16) >= 0) then
       s"0x${hex.take(4)}${g.ellipsis.text}${hex.takeRight(2)}"
-    else if id.length > 12 then id.take(11) + g.ellipsis.text
-    else id
+    else
+      // Not hex: whatever a peer manager made of the id, so it is outside text like any other (C-16).
+      val clean = TuiText.external(id, g)
+      if clean.length > 12 then clean.take(11) + g.ellipsis.text else clean
 
   /** How long ago `at` was, at the state's `now`. */
   def ago(c: Ctx, at: java.time.Instant): String = formatShort(Duration.between(at, c.state.now).getSeconds)
