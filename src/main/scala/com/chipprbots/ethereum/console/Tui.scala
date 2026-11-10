@@ -213,7 +213,9 @@ class Tui(
     if ring.appended == logsRead then None
     else
       val lines = ring.lines
-      // A line whose writer has its number but has not stored it yet is read on the next frame.
+      // A line whose writer has its number but has not stored it yet is missing from this read. If it is the newest,
+      // `appended` is ahead of `logsRead` and the next frame reads again; if a newer one was stored, the gap is picked up
+      // on the next append.
       logsRead = lines.lastOption.fold(0L)(_.seq + 1)
       Some(lines)
 

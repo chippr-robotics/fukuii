@@ -242,3 +242,12 @@ class TuiConfigSpec extends AnyFlatSpec with Matchers:
       the[ConfigException.BadValue] thrownBy TuiSettings.fromConfig(ConfigFactory.parseString("log-ring-size = 0"))
     size.getMessage should include("fukuii.tui.log-ring-size")
   }
+
+  it should "take a ring of up to 10,000 lines, and refuse a larger one" taggedAs (UnitTest) in {
+    TuiConfig.MaxLogRingSize shouldBe 10_000
+    TuiSettings.fromConfig(ConfigFactory.parseString("log-ring-size = 10000")).logRingSize shouldBe 10_000
+    val tooMany =
+      the[ConfigException.BadValue] thrownBy TuiSettings.fromConfig(ConfigFactory.parseString("log-ring-size = 10001"))
+    tooMany.getMessage should include("fukuii.tui.log-ring-size")
+    tooMany.getMessage should include("10001")
+  }

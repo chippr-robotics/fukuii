@@ -123,6 +123,25 @@ class SanitizeSpec extends AnyFlatSpec with Matchers with ScalaCheckPropertyChec
     within(5)((1 to 200).foreach(_ => Sanitize.line(huge)))
   }
 
+  it should "return printable ASCII that needs no change as it is, and trim a blank at either end" taggedAs (UnitTest) in {
+    val plain = "CoreGeth/v1.12.19-stable-c2b6d2a5/linux-amd64/go1.21.5 [x]"
+    Sanitize.line(plain) should be theSameInstanceAs plain
+    Sanitize.line("") shouldBe ""
+    Sanitize.line(" a b ") shouldBe "a b"
+    Sanitize.line("a\tb") shouldBe "a b" // a tab is not printable ASCII: the slow path
+    Sanitize.line("a\u007fb") shouldBe "ab" // DEL neither
+    Sanitize.line("x" * 513) shouldBe "x" * 511 + "…"
+  }
+
+  it should "read `InputFactor` times `maxChars` code points, whatever the cap it is given" taggedAs (UnitTest) in {
+    // A cap of 10 reads 40 code points. `ab` and nine whole `ESC [ 0 m` are 38 of them: nothing is cut.
+    val sgr = "\u001b[0m"
+    Sanitize.InputFactor shouldBe 4
+    Sanitize.line("ab" + sgr * 9, maxChars = 10) shouldBe "ab"
+    // The tenth makes 42: the cut is past the bound, and shows as the ellipsis though only escape sequences were cut.
+    Sanitize.line("ab" + sgr * 10, maxChars = 10) shouldBe "ab…"
+  }
+
   it should "mark text cut at the input bound with the ellipsis, and stay idempotent" taggedAs (UnitTest) in {
     // Past the bound only escape sequences remain: what is kept is short, and the cut still shows.
     val text = "id " + "\u001b[0m" * 10_000 + " tail"

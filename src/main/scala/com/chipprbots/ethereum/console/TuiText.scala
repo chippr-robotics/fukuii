@@ -119,12 +119,17 @@ object TuiText:
       }
       sb.toString
 
+  /** `-stable`, `-unstable`, and either with its commit: the end of a client's version. */
+  private val StableSuffix = "-(un)?stable(-[0-9a-fA-F]+)?$".r
+
+  /** `+<commit>`: a build's commit, the end of a client's version. */
+  private val BuildSuffix = "\\+[0-9a-fA-F]{6,}$".r
+
   /** A client id as the Peers view names it: its name and version, the first two of its `/`-separated parts, without a
     * `-stable-<commit>` or `+<commit>` build suffix. `CoreGeth/v1.12.19-stable-c2b6d2a5/linux-amd64/go1.21.5` is
     * `CoreGeth/v1.12.19`. Sanitised first: a peer chooses its client id (C-16).
     */
   def clientName(clientId: String): String =
     val parts = Sanitize.line(clientId).split('/').toSeq
-    val version =
-      parts.lift(1).map(_.replaceAll("-(un)?stable(-[0-9a-fA-F]+)?$", "").replaceAll("\\+[0-9a-fA-F]{6,}$", ""))
+    val version = parts.lift(1).map(v => BuildSuffix.replaceFirstIn(StableSuffix.replaceFirstIn(v, ""), ""))
     (parts.headOption.toSeq ++ version).filter(_.nonEmpty).mkString("/")

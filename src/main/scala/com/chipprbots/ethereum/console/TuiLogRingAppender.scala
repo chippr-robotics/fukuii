@@ -89,8 +89,8 @@ class TuiLogRingAppender(capacity: Int, threshold: Level, zone: ZoneId = ZoneId.
 
   /** Off the root logger, and stopped: it keeps nothing more. */
   def detach(): Unit =
-    TuiLogRingAppender.rootLogger().detachAppender(this)
-    stop()
+    try TuiLogRingAppender.rootLogger().detachAppender(this)
+    finally stop()
 
 object TuiLogRingAppender:
   /** The appender's name on the root logger. */

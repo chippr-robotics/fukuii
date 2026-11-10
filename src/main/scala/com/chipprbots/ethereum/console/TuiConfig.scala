@@ -89,8 +89,10 @@ object TuiConfig:
   /** The levels `fukuii.tui.log-level` accepts. */
   val LogLevels: Seq[Level] = Seq(Level.TRACE, Level.DEBUG, Level.INFO, Level.WARN, Level.ERROR)
 
-  /** The largest ring `fukuii.tui.log-ring-size` may ask for: a line is at most 512 characters (FR-020). */
-  val MaxLogRingSize: Int = 100_000
+  /** The largest ring `fukuii.tui.log-ring-size` may ask for: a line is at most 512 characters (FR-020), so 10,000 are
+    * at most 5 MiB of text, and a frame that reads the ring copies no more than that many references.
+    */
+  val MaxLogRingSize: Int = 10_000
 
   /** The reduced-motion splash: drawn at the TUI's start, and by the loop's first frame, which then waits one pace. */
   private val ReducedSplashTicks: Long = 2

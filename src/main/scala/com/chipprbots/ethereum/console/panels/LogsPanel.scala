@@ -72,7 +72,8 @@ private[console] object LogsPanel:
 
   private def strip(c: Ctx, title: String, keep: LogLine => Boolean, w: Int, rows: Int): Seq[AttributedString] =
     val head = fit(text(s" $title", c.t.healthy.bold()), w, c.g)
-    val lines = c.state.logs.filter(keep).takeRight((rows - 1).max(0))
+    // From the newest, so a ring of 10,000 lines is not filtered whole for the handful on screen.
+    val lines = c.state.logs.reverseIterator.filter(keep).take((rows - 1).max(0)).toVector.reverse
     if lines.isEmpty then Seq(head, fit(text("   no log line yet", c.t.muted), w, c.g))
     else head +: lines.map(row(c, _, w))
 
