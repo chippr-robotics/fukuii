@@ -2180,3 +2180,13 @@ items:
     refs: ["prism review of 027 slice 4, 2026-11-10"]
     links: {}
     notes: network/PeerScore.scala recency term drifts idle scores; the TUI compares at 3 decimals. If drift per publish exceeds 0.001 every idle peer shows a down trend. herald owns; check in the B-189 UAT.
+  - id: B-196
+    title: "PendingTransactionsManager: a pool-size query message for the TUI (GetPendingTransactionsReq copies the whole pool per poll)"
+    priority: P3
+    status: open
+    area: txpool
+    size: S
+    opened: 2026-11-10
+    refs: ["prism review of 027 slice 4, 2026-11-10"]
+    links: {}
+    notes: PendingTransactionsManager.scala:811-816 runs cleanUp() and copies the pool to answer the TUI's once-a-second size read.
