@@ -270,7 +270,10 @@ case class TuiState(
     * the oldest, whose first line is the ring's oldest.
     */
   def scrollLogs(lines: Int, page: Int): TuiState =
-    copy(logScroll = (logScroll + lines).max(0).min((logs.size - page.max(1)).max(0)))
+    // A scroll the arrival of new lines carried past the bound counts as the bound: the first `+` moves a page from the
+    // oldest page, not from a place no key reaches (prism, slice 4 review).
+    val bound = (logs.size - page.max(1)).max(0)
+    copy(logScroll = (logScroll.min(bound) + lines).max(0).min(bound))
 
   /** A peer's score in the latest published snapshot; none for a peer it does not have, never zero (Q5). */
   def peerScore(peerId: String): Option[Double] = scores.current.flatMap(_.scores.get(peerId))
