@@ -286,11 +286,10 @@ case class TuiState(
     for
       now <- peerScore(peerId)
       before <- scores.previous.flatMap(_.scores.get(peerId))
-    yield
-      scoreUnits(now).compareTo(scoreUnits(before)) match
-        case d if d > 0 => Trend.Up
-        case d if d < 0 => Trend.Down
-        case _          => Trend.Steady
+    yield scoreUnits(now).compareTo(scoreUnits(before)) match
+      case d if d > 0 => Trend.Up
+      case d if d < 0 => Trend.Down
+      case _          => Trend.Steady
 
   /** The view's name, as the header shows it. */
   def viewTitle: String = if helpOpen then "Help" else view.title

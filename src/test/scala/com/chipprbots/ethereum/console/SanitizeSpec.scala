@@ -125,7 +125,7 @@ class SanitizeSpec extends AnyFlatSpec with Matchers with ScalaCheckPropertyChec
 
   it should "return printable ASCII that needs no change as it is, and trim a blank at either end" taggedAs (UnitTest) in {
     val plain = "CoreGeth/v1.12.19-stable-c2b6d2a5/linux-amd64/go1.21.5 [x]"
-    Sanitize.line(plain) should be theSameInstanceAs plain
+    (Sanitize.line(plain) should be).theSameInstanceAs(plain)
     Sanitize.line("") shouldBe ""
     Sanitize.line(" a b ") shouldBe "a b"
     Sanitize.line("a\tb") shouldBe "a b" // a tab is not printable ASCII: the slow path

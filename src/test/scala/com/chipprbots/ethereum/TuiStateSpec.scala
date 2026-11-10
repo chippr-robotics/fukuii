@@ -273,7 +273,8 @@ class TuiStateSpec extends AnyFlatSpec with Matchers:
   it should "move a whole page on the first + after new lines anchored a view past the oldest page" taggedAs (
     UnitTest
   ) in {
-    def lines(from: Int, to: Int) = (from to to).map(i => LogLine(i.toLong, "12:00:00", "INFO", "x", s"line $i")).toVector
+    def lines(from: Int, to: Int) =
+      (from to to).map(i => LogLine(i.toLong, "12:00:00", "INFO", "x", s"line $i")).toVector
     // Scrolled to the oldest page (80 of 100 with a page of 20), then 15 newer lines keep the same lines on screen: the
     // scroll passes the bound the next key works against.
     val anchored = TuiState.initial.withLogs(lines(0, 99)).scrollLogs(80, page = 20).withLogs(lines(15, 114))

@@ -161,7 +161,9 @@ class PeersPanelSpec extends AnyFlatSpec with Matchers:
     val two = TuiFixtures.peerList(2) // the first connected longest ago
     val s = TuiFixtures
       .polled(TuiFixtures.syncedEtc().copy(peerCount = 2), two, TuiFixtures.local())
-      .copy(scores = ScoreHistory(None, Some(PeerScores(TuiFixtures.Now, Map(two(0).id -> 0.5001, two(1).id -> 0.5004)))))
+      .copy(scores =
+        ScoreHistory(None, Some(PeerScores(TuiFixtures.Now, Map(two(0).id -> 0.5001, two(1).id -> 0.5004))))
+      )
     val rows = peersView(s, 120, 40)
     val first = rows.indexWhere(_.trim.startsWith("id ")) + 1
     rows(first) should include(panels.Rows.shortId(two(0).id, TuiGlyphs.Emoji)) // 0.500 and 0.500: the older first
@@ -181,6 +183,6 @@ class PeersPanelSpec extends AnyFlatSpec with Matchers:
   "The Overview's top table" should "not call a peer without a score one of the top by score" taggedAs (UnitTest) in {
     val s = few.copy(scores = ScoreHistory(None, Some(PeerScores(TuiFixtures.Now, Map(fewPeers(0).id -> 0.9)))))
     val title = frame(s, 160, 48).find(_.contains(" Peers (top ")).getOrElse(fail("no top table"))
-    title should not include "by score"
+    (title should not).include("by score")
     title should include("1 scored")
   }

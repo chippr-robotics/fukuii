@@ -34,8 +34,8 @@ class TuiRenderer(config: TuiConfig):
     * Drawing it from the home position never scrolls or wraps the terminal. When the content is taller than the
     * terminal, the panels that matter least give up their rows first, and the footer with the keys stays on the last
     * line. While the splash is on screen its rows replace the dashboard's, all of them, or all but the top `k` during
-    * the hand-over (§3.7). A dashboard frame moves when one of the next [[Lookahead]] ticks draws it differently: only rows on
-    * screen count, and the celebration counts while it runs.
+    * the hand-over (§3.7). A dashboard frame moves when one of the next [[Lookahead]] ticks draws it differently: only
+    * rows on screen count, and the celebration counts while it runs.
     */
   def frame(state: TuiState, width: Int, height: Int, theme: TuiTheme = TuiTheme.Ansi16): Frame =
     val w = Math.max(width, 1)
