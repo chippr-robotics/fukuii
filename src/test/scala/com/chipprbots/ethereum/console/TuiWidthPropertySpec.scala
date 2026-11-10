@@ -100,6 +100,12 @@ class TuiWidthPropertySpec extends AnyFlatSpec with Matchers with ScalaCheckProp
       snapState <- Gen.option(snap)
       glyphs <- Gen.oneOf(GlyphSet.Emoji, GlyphSet.Ascii)
       baselineAgo <- Gen.option(Gen.chooseNum(0L, 100_000L))
+      tick <- Gen.chooseNum(0L, 200L)
+      motion <- Gen.oneOf(Motion.values.toSeq)
+      splashUntil <- Gen.option(Gen.chooseNum(0L, 40L))
+      celebrationAt <- Gen.option(Gen.chooseNum(0L, 200L))
+      backAtHead <- Gen.option(Gen.chooseNum(0L, 200L))
+      advancedAgo <- Gen.option(Gen.chooseNum(0L, 1_000L))
     yield TuiState(
       networkName = network,
       connectionStatus = connection,
@@ -113,7 +119,13 @@ class TuiWidthPropertySpec extends AnyFlatSpec with Matchers with ScalaCheckProp
       snapSyncState = snapState,
       syncBaseline = baselineAgo.map(ago => SyncBaseline(current / 2, TuiFixtures.Now.minusSeconds(ago))),
       glyphs = glyphs,
-      clock = TuiFixtures.clock
+      now = TuiFixtures.Now,
+      tick = tick,
+      motion = motion,
+      splashUntilTick = splashUntil,
+      celebrationStartedTick = celebrationAt,
+      backAtHeadTick = backAtHead,
+      lastAdvanceAt = advancedAgo.map(TuiFixtures.Now.minusSeconds)
     )
 
   private val size: Gen[(Int, Int)] = Gen.frequency(
@@ -140,10 +152,10 @@ class TuiWidthPropertySpec extends AnyFlatSpec with Matchers with ScalaCheckProp
       assertExact(fixture(set), 1, 1, r, TuiTheme.Ansi16)
   }
 
-  it should "draw the startup banner exactly as wide as the terminal" taggedAs (UnitTest) in {
-    forAll(Gen.chooseNum(1, 200), Gen.chooseNum(1, 80), minSuccessful(200)) { (w, h) =>
-      val banner = TuiRenderer(TuiConfig.default).renderStartupBanner(w, h)
-      banner.size should be <= h
-      all(banner.map(_.columnLength())) shouldBe w
+  it should "draw the splash and its hand-over exactly, at every size" taggedAs (UnitTest) in {
+    val cases = Gen.zip(Gen.chooseNum(1, 200), Gen.chooseNum(1, 80), Gen.chooseNum(0L, 40L), Gen.oneOf(renderers))
+    forAll(cases, minSuccessful(300)) { case (w, h, tick, r) =>
+      assertExact(TuiFixtures.splash(GlyphSet.Emoji, tick), w, h, r, TuiTheme.Ansi16)
+      assertExact(TuiFixtures.splash(GlyphSet.Ascii, tick), w, h, r, TuiTheme.Mono)
     }
   }

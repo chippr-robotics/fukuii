@@ -37,38 +37,6 @@ class TuiRendererSpec extends AnyFlatSpec with Matchers:
     lines.length should be >= height - 1
   }
 
-  it should "render startup banner" taggedAs (UnitTest) in {
-    val width = 80
-    val bannerLines = renderer.renderStartupBanner(width)
-
-    bannerLines should not be empty
-    // Banner should contain Fukuii branding
-    val bannerText = bannerLines.map(_.toString).mkString("\n")
-    bannerText should include("FUKUII")
-    // ... in the new wordmark, which spells FUKUII (the old figlet spelled FOOO).
-    TuiRenderer.Wordmark.foreach(row => bannerText should include(row.trim))
-    (bannerText should not).include("""/_/    \____/\____/\____/""")
-  }
-
-  it should "spell FUKUII in the wordmark (FR-013, C-8)" taggedAs (UnitTest) in {
-    val letters = "FUKUII".map(TuiRenderer.WordmarkLetters)
-    TuiRenderer.Wordmark shouldBe letters.transpose.map(_.mkString(" "))
-    TuiRenderer.Wordmark should have size TuiRenderer.WordmarkLetters('F').size
-    TuiRenderer.Wordmark.map(_.length).distinct should have size 1
-  }
-
-  it should "show the 12-line logo above the wordmark on the splash from tier M, and the wordmark alone at S" taggedAs (
-    UnitTest
-  ) in {
-    def banner(width: Int, height: Int) = renderer.renderStartupBanner(width, height).map(_.toString).mkString("\n")
-    banner(80, 24) should include(TuiRenderer.Wordmark.head.trim)
-    (banner(80, 24) should not).include("=+#+.")
-    banner(120, 40) should include("=+#+.")
-    banner(120, 40) should include(TuiRenderer.Wordmark.head.trim)
-    renderer.renderStartupBanner(120, 40).size should be <= 40
-    renderer.renderStartupBanner(80, 6).size should be <= 6
-  }
-
   it should "include network information" taggedAs (UnitTest) in {
     val state = TuiState.initial.withNetworkName("ethereum-classic")
     val width = 100
@@ -300,10 +268,6 @@ class TuiRendererSpec extends AnyFlatSpec with Matchers:
   it should "keep styles as attributes rather than embedded escape codes" taggedAs (UnitTest) in {
     val lines = renderer.render(TuiState.initial.withPeerCount(3, 10), 100, 40)
     (all(lines.map(_.toString)) should not).include("\u001b")
-  }
-
-  it should "fit the startup banner to a narrow terminal" taggedAs (UnitTest) in {
-    all(renderer.renderStartupBanner(12).map(_.columnLength())) shouldBe 12
   }
 
   // Spec 027 FR-008: "⏸️  Idle" carried U+FE0F, which JLine counts as 0 columns and many terminals draw as 2.

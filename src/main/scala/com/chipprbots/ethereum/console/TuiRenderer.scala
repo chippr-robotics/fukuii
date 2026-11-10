@@ -18,32 +18,52 @@ import com.chipprbots.ethereum.console.TuiText.formatNumber
   * This class handles all the visual rendering of the TUI, including formatting of text, progress bars, status
   * indicators, and the overall layout.
   *
-  * The renderer is a function of (state, width, height, theme): the glyph set is the state's, every style is the
-  * theme's, and the size picks the [[Tier]] (spec 027 FR-003, FR-004).
+  * The renderer is a function of (state, width, height, theme): the glyph set and the frame counter `tick` are the
+  * state's, every style is the theme's, and the size picks the [[Tier]] (spec 027 FR-003, FR-004). It reads no clock
+  * and no random source, so one state always draws one frame.
   */
 class TuiRenderer(config: TuiConfig):
 
   import TuiRenderer.*
 
-  /** Build the complete display content.
-    *
-    * The result is exactly `height` lines (for `height > 0`), each exactly `width` columns, so that drawing it from the
-    * home position never scrolls or wraps the terminal. When the content is taller than the terminal, the body is
-    * truncated and the footer with the keyboard commands is kept on the last line.
-    */
+  /** Build the complete display content: [[frame]]'s lines. */
   def render(state: TuiState, width: Int, height: Int, theme: TuiTheme = TuiTheme.Ansi16): Seq[AttributedString] =
+    frame(state, width, height, theme).lines
+
+  /** The frame, and whether it moves with `tick`: the frame loop paces itself by it (Q1).
+    *
+    * The lines are exactly `height` (for `height > 0`), each exactly `width` columns, so that drawing them from the
+    * home position never scrolls or wraps the terminal. When the content is taller than the terminal, the body is
+    * truncated and the footer with the keyboard commands is kept on the last line. While the splash is on screen its
+    * rows replace the dashboard's, all of them, or all but the top `k` during the hand-over (§3.7).
+    */
+  def frame(state: TuiState, width: Int, height: Int, theme: TuiTheme = TuiTheme.Ansi16): Frame =
     val w = Math.max(width, 1)
+    state.splashCover(height) match
+      case Some(0) => Frame(Splash.render(state, w, height, theme, config.showLogo), moving(state))
+      case Some(rows) =>
+        val dashboard = dashboardFrame(state, w, height, theme)
+        Frame(dashboard.lines.take(rows) ++ Splash.render(state, w, height, theme, config.showLogo).drop(rows), true)
+      case None => dashboardFrame(state, w, height, theme)
+
+  /** Whether anything at all can move: only under full motion. */
+  private def moving(state: TuiState): Boolean = state.motion == Motion.Full
+
+  private def dashboardFrame(state: TuiState, w: Int, height: Int, theme: TuiTheme): Frame =
     val tier = Tier.of(w, height)
     val g = TuiGlyphs.of(state.glyphs)
-    val header = Seq(createHeader(w, g, theme), createSeparator(w, g, theme))
+    val header = Seq(createHeader(w, g, theme, state.headerFlash), createSeparator(w, g, theme))
     val footer = createFooter(w, theme)
 
     // §3.1: the dashboard draws the logo only at tier L, in a right-hand column. That column leaves the body fewer
     // columns than a tier-M screen has, so the body takes M's worm track there and each row keeps its count and rate.
-    val body =
+    val (body, firstMoving) =
       if config.showLogo && tier.logo.inDashboard then
-        withLogoColumn(renderBody(state, w - LogoColumnCols - 1, Tier.M.trackSlots, g, theme), w, g, theme)
-      else renderBody(state, w, tier.trackSlots, g, theme)
+        val b = renderBody(state, w - LogoColumnCols - 1, Tier.M.trackSlots, g, theme)
+        (withLogoColumn(b.rows, w, g, theme), b.firstMoving)
+      else
+        val b = renderBody(state, w, tier.trackSlots, g, theme)
+        (b.rows, b.firstMoving)
 
     val content = header ++ body
     val lines =
@@ -53,7 +73,10 @@ class TuiRenderer(config: TuiConfig):
         val padding = Seq.fill(height - 1 - fitted.size)(new AttributedString(" " * w))
         (fitted ++ padding) :+ footer
 
-    lines.map(fitToWidth(_, w))
+    // A row that moves counts only if it is on screen; the celebration counts while it runs.
+    val bodyOnScreen = if height <= 0 then body.size else (height - 1 - header.size).max(0)
+    val animated = moving(state) && (firstMoving.exists(_ < bodyOnScreen) || state.catchup.isDefined)
+    Frame(lines.map(fitToWidth(_, w)), animated)
 
   /** Concatenate styled fragments, keeping styles as attributes (not embedded escape codes). */
   private def concat(parts: AttributedString*): AttributedString =
@@ -61,22 +84,31 @@ class TuiRenderer(config: TuiConfig):
     parts.foreach(p => sb.append(p))
     sb.toAttributedString
 
+  /** The body's rows, and the first of them that moves with `tick`. */
+  final private case class Body(rows: Seq[AttributedString], firstMoving: Option[Int])
+
   private def renderBody(
       state: TuiState,
       width: Int,
       trackSlots: Int,
       g: TuiGlyphs,
       t: TuiTheme
-  ): Seq[AttributedString] =
+  ): Body =
     val lines = ArrayBuffer[AttributedString]()
+    var firstMoving: Option[Int] = None
+    def moves(row: AttributedString): AttributedString =
+      if firstMoving.isEmpty then firstMoving = Some(lines.size)
+      row
     val budget = WormBar.budgetFor(trackSlots, g).min(width - RowIndentCols).max(0)
-    def worm(label: String, progress: WormProgress, detail: String): AttributedString =
-      wormRow(label, progress, detail, budget, width, g, t)
+    def worm(label: String, progress: WormProgress, detail: String, stalled: Boolean = false): AttributedString =
+      val row = wormRow(label, progress, detail, budget, width, state, g, t, stalled)
+      if WormBar.animates(budget, progress, g, state.motion, stalled) && config.showProgressBar then moves(row) else row
 
     // Network & Connection section
     lines += createSectionHeader("NETWORK & CONNECTION", width, g, t)
     lines += createInfoLine("Network", state.networkName.toUpperCase(Locale.ROOT), width, t)
-    lines += createStatusLine("Connection", state.connectionStatus, width, g, t)
+    val connection = createStatusLine("Connection", state.connectionStatus, width, state, g, t)
+    lines += (if InFlight.contains(state.connectionStatus) && moving(state) then moves(connection) else connection)
     lines += createPeerStatusLine(state.peerCount, state.maxPeers, width, g, t)
     lines += createSeparator(width, g, t)
 
@@ -96,7 +128,8 @@ class TuiRenderer(config: TuiConfig):
         lines += worm(
           "Blocks",
           WormProgress.Known(state.syncProgress / 100.0),
-          s"${formatNumber(state.currentBlock)} / ${formatNumber(state.bestBlock)}"
+          s"${formatNumber(state.currentBlock)} / ${formatNumber(state.bestBlock)}",
+          stalled = state.stalled
         )
       lines += createInfoLine("Blocks Remaining", formatNumber(state.blocksRemaining), width, t)
 
@@ -107,7 +140,11 @@ class TuiRenderer(config: TuiConfig):
         lines += createInfoLine("Sync Speed", String.format(Locale.ROOT, "%.2f blocks/sec", speed), width, t)
       }
     else if state.isSynchronized then
-      if config.showProgressBar then lines += worm("Blocks", WormProgress.Complete, formatNumber(state.currentBlock))
+      if config.showProgressBar then
+        val detail = formatNumber(state.currentBlock)
+        lines += state.catchup.fold(worm("Blocks", WormProgress.Complete, detail)) { c =>
+          catchupRow(c, detail, budget, width, g, t)
+        }
       lines += createInfoLine("Status", s"${g.check.text} SYNCHRONIZED", width, t)
 
     lines += createSeparator(width, g, t)
@@ -154,7 +191,7 @@ class TuiRenderer(config: TuiConfig):
     lines += createInfoLine("Uptime", formatDuration(state.uptimeSeconds), width, t)
     lines += createSeparator(width, g, t)
 
-    lines.toSeq
+    Body(lines.toSeq, firstMoving)
 
   /** ` Label [===🪱....]🧠 52% detail`: a 12-column label, the bar in `budget` columns, then the detail. Without the
     * progress bar the row keeps its label and says in words what the bar would show.
@@ -165,18 +202,51 @@ class TuiRenderer(config: TuiConfig):
       detail: String,
       budget: Int,
       width: Int,
+      state: TuiState,
       g: TuiGlyphs,
-      t: TuiTheme
+      t: TuiTheme,
+      stalled: Boolean
   ): AttributedString =
     val sb = new AttributedStringBuilder()
     sb.append(s"   ${label.padTo(WormLabelCols, ' ')}", t.label)
-    if config.showProgressBar then sb.append(WormBar.render(budget, progress, 0L, g, t))
+    if config.showProgressBar then sb.append(WormBar.render(budget, progress, state.tick, g, t, state.motion, stalled))
     else
       val words = progress match
         case WormProgress.Known(f) => s"${(f.max(0.0).min(1.0) * 100).toInt}%"
         case other                 => other.toString.toLowerCase(Locale.ROOT)
       sb.append(words, t.value)
     if detail.nonEmpty then sb.append(s"  $detail", t.value)
+    fitToWidth(sb.toAttributedString, width)
+
+  /** The synced Blocks row during a catch-up: the worm's last crawl into the brain, frame by frame, or the one quiet
+    * frame (research §3.8). Its bar is not held to the budget: the row is fitted to the width, like every row.
+    */
+  private def catchupRow(
+      catchup: Catchup,
+      detail: String,
+      budget: Int,
+      width: Int,
+      g: TuiGlyphs,
+      t: TuiTheme
+  ): AttributedString =
+    val slots = WormBar.slotsFor(budget, g).max(2)
+    val complete = s"${g.worm.text}[COMPLETE ${g.check.text}]${g.brain.text}"
+    val sparkle = g.celebration.text
+    val bar = catchup match
+      case Catchup.Celebrating(frame) =>
+        frame / 2 match
+          case 0 => s"[${"=" * (slots - 2)}${g.worm.text}.]${g.brain.text} 99%"
+          case 1 => s"[${"=" * (slots - 1)}${g.worm.text}]${g.brain.text} 100%"
+          case 2 => s"[${"=" * slots}]${g.worm.text}${g.brain.text} 100%"
+          case 3 => s"[${"=" * slots}]$sparkle${g.brain.text}$sparkle synced"
+          case 4 => s"$complete $sparkle synced"
+          case _ => s"$complete ${" " * g.celebration.cols} synced"
+      case Catchup.Celebrated => s"$complete $sparkle synced"
+      case Catchup.BackAtHead => s"$complete ${g.check.text} back at head"
+    val sb = new AttributedStringBuilder()
+    sb.append(s"   ${"Blocks".padTo(WormLabelCols, ' ')}", t.label)
+    sb.append(bar, t.healthy)
+    sb.append(s"  $detail", t.value)
     fitToWidth(sb.toAttributedString, width)
 
   /** The body on the left, a divider, and the 12-line logo centred in a column on the right (tier L, §3.4). */
@@ -198,29 +268,18 @@ class TuiRenderer(config: TuiConfig):
       )
     }
 
-  /** Render the startup banner: the FUKUII wordmark, and from tier M the 12-line logo above it (§3.1). */
-  def renderStartupBanner(
-      width: Int,
-      height: Int = Tui.FallbackSize._2,
-      theme: TuiTheme = TuiTheme.Ansi16
-  ): Seq[AttributedString] =
-    val w = Math.max(width, 1)
-    val logo =
-      if config.showLogo && Tier.of(w, height).logo != TierLogo.WordmarkOnSplash then SmallLogo :+ "" else Seq.empty
-    val banner = Seq("") ++ logo ++ Wordmark ++ Seq("", "FUKUII EVM CLIENT", "", "Initializing...", "")
-    val lines = banner.map(line => centred(line, w, theme.healthy.bold()))
-    if height > 0 then lines.take(height) else lines
-
   private def centred(text: String, width: Int, style: AttributedStyle): AttributedString =
     val line = new AttributedString(text, style)
     val left = Math.max(0, (width - line.columnLength()) / 2)
     fitToWidth(concat(new AttributedString(" " * left), line), width)
 
-  private def createHeader(width: Int, g: TuiGlyphs, t: TuiTheme): AttributedString =
-    val title = new AttributedString(s" ${g.diamond.text} FUKUII ETHEREUM CLIENT ${g.diamond.text} ", t.accent)
+  /** The header band, in the accent style; during the celebration's flash (frames 2–6, §3.8) in the flash style. */
+  private def createHeader(width: Int, g: TuiGlyphs, t: TuiTheme, flash: Boolean): AttributedString =
+    val style = if flash then flashStyle(t) else t.accent
+    val title = new AttributedString(s" ${g.diamond.text} FUKUII ETHEREUM CLIENT ${g.diamond.text} ", style)
     val left = Math.max(0, (width - title.columnLength()) / 2)
     val right = Math.max(0, width - left - title.columnLength())
-    concat(new AttributedString(" " * left, t.accent), title, new AttributedString(" " * right, t.accent))
+    concat(new AttributedString(" " * left, style), title, new AttributedString(" " * right, style))
 
   private def createSectionHeader(title: String, width: Int, g: TuiGlyphs, t: TuiTheme): AttributedString =
     fitToWidth(new AttributedString(s" ${g.bullet.text} $title", t.healthy.bold()), width)
@@ -233,7 +292,16 @@ class TuiRenderer(config: TuiConfig):
     val padding = " " * Math.max(0, width - combinedLength)
     concat(labelPart, valuePart, new AttributedString(padding))
 
-  private def createStatusLine(label: String, status: String, width: Int, g: TuiGlyphs, t: TuiTheme): AttributedString =
+  /** `Label: ● status`; an in-flight status turns a spinner where the bullet is (§4.2), so the row's width holds. */
+  private def createStatusLine(
+      label: String,
+      status: String,
+      width: Int,
+      state: TuiState,
+      g: TuiGlyphs,
+      t: TuiTheme
+  ): AttributedString =
+    val marker = if InFlight.contains(status) then WormBar.spinner(state.tick, state.motion, g) else g.bullet.text
     val statusStyle = status.toLowerCase(Locale.ROOT) match
       case s if s.contains("connected") || s.contains("running")     => t.healthy.bold()
       case s if s.contains("starting") || s.contains("initializing") => t.warn.bold()
@@ -241,7 +309,7 @@ class TuiRenderer(config: TuiConfig):
       case _                                                         => t.value
 
     val labelPart = new AttributedString(s"   $label: ", t.label)
-    val statusPart = new AttributedString(s"${g.bullet.text} $status", statusStyle)
+    val statusPart = new AttributedString(s"$marker $status", statusStyle)
 
     val combinedLength = labelPart.columnLength() + statusPart.columnLength()
     val padding = " " * Math.max(0, width - combinedLength)
@@ -272,7 +340,16 @@ class TuiRenderer(config: TuiConfig):
   private def createFooter(width: Int, t: TuiTheme): AttributedString =
     new AttributedString(Footer + " " * Math.max(0, width - Footer.length), t.accent)
 
+/** A rendered frame, and whether it moves with `tick` (the frame loop's pace, Q1). */
+final case class Frame(lines: Seq[AttributedString], animated: Boolean)
+
 object TuiRenderer:
+  /** Connection statuses that are waiting for something: a spinner turns beside them (§4.2). */
+  private[console] val InFlight: Set[String] = Set("Initializing", "Starting node...", "Searching for peers")
+
+  /** The header band's flash: the accent's colour as its background, in bold, so it reads in every palette. */
+  private[console] def flashStyle(t: TuiTheme): AttributedStyle = t.healthy.bold().inverse()
+
   /** Create a renderer with default configuration. */
   def default: TuiRenderer = new TuiRenderer(TuiConfig.default)
 
@@ -304,14 +381,3 @@ object TuiRenderer:
     "   .:+++++++++++++*############:   ",
     "   -++++++++++++++*#############=  "
   )
-
-  /** The letters of the wordmark, figlet's "standard" font: five rows each, every row of a letter the same width. */
-  val WordmarkLetters: Map[Char, Seq[String]] = Map(
-    'F' -> Seq(" _____ ", "|  ___|", "| |_   ", "|  _|  ", "|_|    "),
-    'U' -> Seq(" _   _ ", "| | | |", "| | | |", "| |_| |", " \\___/ "),
-    'K' -> Seq(" _  __", "| |/ /", "| ' / ", "| . \\ ", "|_|\\_\\"),
-    'I' -> Seq(" ___ ", "|_ _|", " | | ", " | | ", "|___|")
-  )
-
-  /** FUKUII, five rows of 42 columns (spec 027 FR-013; the figlet it replaces spelled FOOO, research §3.7). */
-  val Wordmark: Seq[String] = "FUKUII".map(WordmarkLetters).transpose.map(_.mkString(" "))

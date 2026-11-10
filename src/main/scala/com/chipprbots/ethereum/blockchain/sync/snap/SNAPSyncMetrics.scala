@@ -433,6 +433,11 @@ object SNAPSyncMetrics extends MetricsContainer:
   def latestProgress(maxAgeMillis: Long): Option[SyncProgress] =
     latest.collect { case (p, at) if System.currentTimeMillis() - at <= maxAgeMillis => p }
 
+  /** The most recent progress passed to [[measure]] and when it was recorded, in epoch milliseconds, from one read: the
+    * TUI ages the sample against its own clock (spec 027 research §6).
+    */
+  def latestSample: Option[(SyncProgress, Long)] = latest
+
   /** Record full sync progress from SyncProgress object */
   def measure(progress: SyncProgress): Unit =
     latest = Some((progress, System.currentTimeMillis()))

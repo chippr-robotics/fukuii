@@ -72,9 +72,9 @@ class TuiThemeSpec extends AnyFlatSpec with Matchers with BeforeAndAfterAll:
 
   // NO_COLOR removes colour only: reduced motion is its own switch (FR-009, §4.5).
   "NO_COLOR" should "change nothing but the colour" taggedAs (UnitTest) in {
-    val config = TuiConfig.default
+    val settings = TuiSettings()
     val env = TuiEnv.from(Map("NO_COLOR" -> "1", "LANG" -> "en_US.UTF-8"), Map.empty)
     val plain = TuiEnv.from(Map("LANG" -> "en_US.UTF-8"), Map.empty)
-    env.applyTo(config) shouldBe plain.applyTo(config).copy(noColor = true)
-    env.applyTo(config).updateIntervalMs shouldBe config.updateIntervalMs
+    env.applyTo(settings) shouldBe plain.applyTo(settings).copy(noColor = true)
+    env.applyTo(settings).updateIntervalMs shouldBe TuiConfig.default.updateIntervalMs
   }

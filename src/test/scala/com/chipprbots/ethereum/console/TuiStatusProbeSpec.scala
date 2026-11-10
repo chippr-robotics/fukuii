@@ -71,13 +71,21 @@ class TuiStatusProbeSpec extends ScalaTestWithActorTestKit with AnyFlatSpecLike 
     phaseStartTime = 0
   )
 
+  private val now = java.time.Instant.parse("2026-11-07T12:00:00Z")
+  private val clock = java.time.Clock.fixed(now, java.time.ZoneOffset.UTC)
+
+  /** A probe at `now`, whose SNAP sample, if any, was recorded `snapAgeSeconds` before it. */
   private def probe(
       pm: Behavior[PeerManagerActor.Command],
       sc: Behavior[SyncController.Command],
       best: BigInt = 42,
-      snap: Option[SyncProgress] = None
+      snap: Option[SyncProgress] = None,
+      snapAgeSeconds: Long = 5
   ) =
-    new TuiStatusProbe(spawn(pm), spawn(sc), () => best, 50, () => snap, 300.millis)(using system.scheduler)
+    val sampledAt = now.minusSeconds(snapAgeSeconds).toEpochMilli
+    new TuiStatusProbe(spawn(pm), spawn(sc), () => best, 50, () => snap.map(_ -> sampledAt), 300.millis, clock)(using
+      system.scheduler
+    )
 
   "TuiStatusProbe" should "count only handshaked peers" taggedAs (UnitTest) in {
     import PeerActor.Status.*
@@ -118,6 +126,49 @@ class TuiStatusProbeSpec extends ScalaTestWithActorTestKit with AnyFlatSpecLike 
     s.connectionStatus shouldBe "Unresponsive (peer manager)"
     s.syncStatus shouldBe "Unresponsive (sync controller)"
     s.currentBlock shouldBe 5
+    // Spec 027 FR-011: each source carries its own freshness.
+    s.peers shouldBe Sourced.Unresponsive("no reply within 100ms")
+    s.sync shouldBe Sourced.Unresponsive("no reply within 100ms")
+  }
+
+  it should "stamp each snapshot with its clock, and each answer Fresh at that time" taggedAs (UnitTest) in {
+    val s = new TuiStatusProbe(
+      spawn(peerManager(PeerActor.Status.Handshaked)),
+      spawn(syncController(SyncProtocol.Status.SyncDone)),
+      () => 9,
+      50,
+      () => None,
+      300.millis,
+      clock = clock
+    )(using system.scheduler)()
+    s.now shouldBe now
+    s.peers shouldBe Sourced.Fresh(1, now)
+    s.sync shouldBe Sourced.Fresh(SyncSample(9, 9, "Synced"), now)
+  }
+
+  // Spec 027 T050: the sample's own time, for the SNAP sample-age alert (research §6).
+  it should "carry the time the SNAP sample was recorded" taggedAs (UnitTest) in {
+    val syncing = SyncProtocol.Status.Syncing(0, Progress(0, 100), None)
+    val s = probe(peerManager(), syncController(syncing), snap = Some(snapSample), snapAgeSeconds = 12)()
+    s.sync.value.flatMap(_.snapSampledAt) shouldBe Some(now.minusSeconds(12))
+  }
+
+  it should "hide a SNAP sample older than 90 s" taggedAs (UnitTest) in {
+    val syncing = SyncProtocol.Status.Syncing(0, Progress(0, 100), None)
+    probe(peerManager(), syncController(syncing), snap = Some(snapSample), snapAgeSeconds = 91)().snapSync shouldBe None
+    probe(peerManager(), syncController(syncing), snap = Some(snapSample), snapAgeSeconds = 90)().snapSync should not be
+      empty
+  }
+
+  // prism, slice 2 review (B-044): "Syncing (SNAP)" only on a sample from the SNAP monitor's last two 30 s rounds; an
+  // older one still shows its rows until it is 90 s old, but no longer says SNAP is running.
+  it should "say SNAP is running only on a sample younger than 60 s" taggedAs (UnitTest) in {
+    val status = SyncProtocol.Status.Syncing(0, Progress(5, 0), None)
+    def described(ageSeconds: Long) =
+      probe(peerManager(), syncController(status), best = 5, snap = Some(snapSample), snapAgeSeconds = ageSeconds)()
+    described(60).syncStatus shouldBe "Syncing (SNAP)"
+    described(61).syncStatus shouldBe "Syncing (no target yet)"
+    described(61).snapSync should not be empty
   }
 
   it should "show SNAP progress only while syncing" taggedAs (UnitTest) in {
@@ -176,13 +227,24 @@ class TuiStatusProbeSpec extends ScalaTestWithActorTestKit with AnyFlatSpecLike 
       val s = TuiStatusProbe.toSnapSyncState(p)
       withClue(s"$phase at $phaseProgress%: ") {
         s.overall shouldBe p.globalProgress
-        val frame = renderer.render(TuiState.initial.withSnapSyncState(s), 80, 24).map(_.toString)
+        // Without motion: the log's bar has no ripple.
+        val state = TuiState.initial.withSnapSyncState(s).copy(motion = Motion.Reduced)
+        val frame = renderer.render(state, 80, 24).map(_.toString)
         val overallRow = frame.find(_.startsWith("   Overall")).get
         overallRow.drop(12).trim shouldBe WormToBrainBar.renderKnown(p.globalProgress)
       }
     // Chain download is 4 of 5 stages done, not 0 %.
     val chainDownload = snapSample.copy(phase = SyncPhase.ChainDownloadCompletion, phaseProgress = 0)
     TuiStatusProbe.toSnapSyncState(chainDownload).overall shouldBe 0.8 +- 1e-9
+  }
+
+  // B-044 (live check 2026-11-07): while SNAP runs the sync controller answers GetStatus with a 0 block target
+  // (SyncController.scala:874-881, runningSnapSync), and the TUI read that as "no target yet" for the whole run.
+  it should "not say 'no target yet' while a SNAP sample shows SNAP running" taggedAs (UnitTest) in {
+    val status = SyncProtocol.Status.Syncing(0, Progress(5, 0), None)
+    val s = probe(peerManager(), syncController(status), best = 5, snap = Some(snapSample))()
+    s.syncStatus shouldBe "Syncing (SNAP)"
+    s.snapSync.map(_.phase) shouldBe Some("AccountRangeSync")
   }
 
   it should "say so when syncing has no target yet (no peers to pick a pivot from)" taggedAs (UnitTest) in {

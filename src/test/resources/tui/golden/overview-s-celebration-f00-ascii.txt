@@ -1,0 +1,24 @@
+                           # FUKUII ETHEREUM CLIENT #                           
+--------------------------------------------------------------------------------
+ * NETWORK & CONNECTION                                                         
+   Network: ETC                                                                 
+   Connection: * Connected                                                      
+   Peers: 41 / 50 # # # # # # # # # #                                           
+--------------------------------------------------------------------------------
+ * BLOCKCHAIN                                                                   
+   Current Block: 21,884,102                                                    
+   Best Block: 21,884,102                                                       
+   Sync Status: Synced                                                          
+   Blocks   [==================~o.]@@ 99%  21,884,102                           
+   Status: + SYNCHRONIZED                                                       
+--------------------------------------------------------------------------------
+ * NODE SETTINGS                                                                
+   Data Dir: /var/lib/fukuii/etc                                                
+   Sync Mode: SNAP                                                              
+   Pruning: archive                                                             
+   Max Peers: 50                                                                
+   JSON-RPC: Enabled (port 8545)                                                
+   Mining: Enabled                                                              
+--------------------------------------------------------------------------------
+ * RUNTIME                                                                      
+ r Redraw  d Detach  q Quit                                                     

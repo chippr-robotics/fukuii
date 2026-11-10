@@ -1,22 +1,21 @@
 package com.chipprbots.ethereum.console
 
-import java.time.Clock
 import java.time.Instant
-import java.time.ZoneOffset
 import java.util.Locale
 
 /** Named [[TuiState]] fixtures shared by the golden and property tests (spec 027 T004).
   *
-  * Every fixture reads time from one fixed clock, so a fixture renders the same frame on every run. The data is
-  * illustrative (research C-10): it fixes layout and widths, not what a real node reported. Later slices add their own
-  * fixtures here.
+  * Every fixture is at one fixed `now`, so a fixture renders the same frame on every run. The data is illustrative
+  * (research C-10): it fixes layout and widths, not what a real node reported. Later slices add their own fixtures
+  * here.
   */
 object TuiFixtures:
 
   /** The fixtures' "now". */
   val Now: Instant = Instant.parse("2026-11-07T12:00:00Z")
 
-  val clock: Clock = Clock.fixed(Now, ZoneOffset.UTC)
+  /** A clock stopped at [[Now]]: where a test TUI reads its snapshots ([[TuiTestTerminal.tui]]). */
+  val clock: java.time.Clock = java.time.Clock.fixed(Now, java.time.ZoneOffset.UTC)
 
   /** The locale that breaks default case conversion: there "I".toLowerCase is "ı" and "i".toUpperCase is "İ". */
   val Turkish: Locale = Locale.forLanguageTag("tr-TR")
@@ -53,7 +52,7 @@ object TuiFixtures:
       startTime = Now.minusSeconds(12 * 86_400L + 7 * 3_600L),
       nodeSettings = settings("etc", "SNAP", 50, mining = true),
       glyphs = glyphs,
-      clock = clock
+      now = Now
     )
 
   /** Mordor in SNAP's bytecode-and-storage phase: accounts done, storage at 37 %, bytecodes at 68 %, healing queued. */
@@ -96,7 +95,7 @@ object TuiFixtures:
         )
       ),
       glyphs = glyphs,
-      clock = clock
+      now = Now
     )
 
   /** ETC mainnet in regular sync, 28 % of the way, 101,220 blocks imported in the 549 s since the TUI first looked. */
@@ -113,7 +112,7 @@ object TuiFixtures:
       nodeSettings = settings("etc", "Full", 50, mining = false),
       syncBaseline = Some(SyncBaseline(18_300_893L, Now.minusSeconds(549L))),
       glyphs = glyphs,
-      clock = clock
+      now = Now
     )
 
   /** Sepolia two blocks behind the head. */
@@ -130,7 +129,7 @@ object TuiFixtures:
       nodeSettings = settings("sepolia", "SNAP", 50, mining = false),
       syncBaseline = Some(SyncBaseline(7_411_997L, Now.minusSeconds(144L))),
       glyphs = glyphs,
-      clock = clock
+      now = Now
     )
 
   /** Every fixture by name. */
@@ -140,3 +139,41 @@ object TuiFixtures:
     "regular" -> (g => regularSyncEtc(g)),
     "sepolia-near-head" -> (g => sepoliaNearHead(g))
   )
+
+  /** A poll at `now` that both actors answered: `peers` of 50, the sync controller at `current` of `best`. */
+  def snapshot(current: Long, best: Long, now: Instant = Now, peers: Int = 23): NodeStatusSnapshot =
+    NodeStatusSnapshot(
+      now = now,
+      maxPeers = 50,
+      localBest = current,
+      peers = Sourced.Fresh(peers, now),
+      sync = Sourced.Fresh(SyncSample(current, best, if current >= best then "Synced" else "Syncing"), now)
+    )
+
+  /** [[regularSyncEtc]] whose head has not moved for 3m 10s (research §3.9). */
+  def stalledEtc(glyphs: GlyphSet = GlyphSet.Emoji): TuiState =
+    regularSyncEtc(glyphs).copy(lastAdvanceAt = Some(Now.minusSeconds(190L)))
+
+  /** [[syncedEtc]] at `frame` of the celebration that started at tick 0 (research §3.8). */
+  def celebration(glyphs: GlyphSet = GlyphSet.Emoji, frame: Int): TuiState =
+    syncedEtc(glyphs).copy(tick = frame.toLong, celebrationStartedTick = Some(0L), celebrated = true)
+
+  /** The splash at `tick` of 12, on an ETC node that is starting (research §3.7). */
+  def splash(glyphs: GlyphSet = GlyphSet.Emoji, tick: Long): TuiState =
+    TuiState(
+      networkName = "etc",
+      connectionStatus = "Starting node...",
+      startTime = Now,
+      now = Now,
+      glyphs = glyphs,
+      tick = tick,
+      splashUntilTick = Some(12L)
+    )
+
+  /** A clock the test moves. */
+  final class TestClock(start: Instant) extends java.time.Clock:
+    @volatile private var current: Instant = start
+    def advance(seconds: Long): Unit = current = current.plusSeconds(seconds)
+    override def instant(): Instant = current
+    override def getZone: java.time.ZoneId = java.time.ZoneOffset.UTC
+    override def withZone(zone: java.time.ZoneId): java.time.Clock = this

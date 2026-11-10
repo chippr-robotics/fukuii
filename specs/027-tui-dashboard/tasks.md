@@ -142,67 +142,67 @@ by hand.
 
 ### Tests for slice 2 (write first, must fail)
 
-- [ ] T031 [P] [US1] `console tests/TuiAnimationSpec.scala`: rendering one state twice gives equal frames; for ticks 0–11
+- [x] T031 [P] [US1] `console tests/TuiAnimationSpec.scala`: rendering one state twice gives equal frames; for ticks 0–11
       the ripple is at `wormAt − 1 − (tick mod 3)`, absent when `wormAt < 2`, stalled or reduced; the `[ACTIVE…]` pulse
       is always 11 columns; the spinner frame is `tick mod 4`, a static `·` under reduced motion; reduced and paused
       frames are identical across ticks (SC-008)
-- [ ] T032 [P] [US3] Stall cases in `console tests/TuiAnimationSpec.scala`: progress unchanged for 120 s of
+- [x] T032 [P] [US3] Stall cases in `console tests/TuiAnimationSpec.scala`: progress unchanged for 120 s of
       `snapshot.now` (not a tick count, plan "Architecture") shows `💤` / `z` and the warn style; the next advance clears
       it; a lower `currentBlock` resets the baseline as `TuiState.scala:69-72` does today
-- [ ] T033 [P] [US1] `console tests/CelebrationSpec.scala`: runs once per process on the first false → true; 12 frames;
+- [x] T033 [P] [US1] `console tests/CelebrationSpec.scala`: runs once per process on the first false → true; 12 frames;
       header accent on frames 2–6; `p` or a view change cancels; reduced motion shows one frame; a second false → true
       shows one "✓ back at head" frame with no header flash (Q8); goldens at 80×24 for frames 0/2/4/6/8/10 in both sets
-- [ ] T034 [P] [US1] `console tests/SplashSpec.scala`: the splash is a view for `splashMs / animationIntervalMs` ticks;
+- [x] T034 [P] [US1] `console tests/SplashSpec.scala`: the splash is a view for `splashMs / animationIntervalMs` ticks;
       any key skips it; `FUKUII_TUI_NO_SPLASH` disables it; whole logo, cropped creature (Q2), 12-line logo or wordmark
       by size, with the thresholds derived from the trimmed `printBanner` block (C-8); the hand-over replaces the top
       `4 × ticksSinceSplashEnd` rows; golden of the S-tier splash at tick 3
-- [ ] T035 [P] [US2] Pacing cases in `console tests/TuiAnimationSpec.scala`: the pace is 250 ms while a worm ripples,
+- [x] T035 [P] [US2] Pacing cases in `console tests/TuiAnimationSpec.scala`: the pace is 250 ms while a worm ripples,
       a pulse or spinner shows, the splash or the celebration runs, and 1000 ms otherwise; reduced motion and pause give
       1000 ms (Q1)
-- [ ] T036 [P] [US2] `console tests/TuiSpec.scala`: an unchanged frame is not written again; a changed value is written
+- [x] T036 [P] [US2] `console tests/TuiSpec.scala`: an unchanged frame is not written again; a changed value is written
       (count writes on `TuiTestTerminal`)
-- [ ] T037 [P] [US3] `console tests/SourcedSpec.scala` and `console tests/TuiProbeThreadSpec.scala`: Fresh → Stale →
+- [x] T037 [P] [US3] `console tests/SourcedSpec.scala` and `console tests/TuiProbeThreadSpec.scala`: Fresh → Stale →
       Unresponsive transitions; all asks start together and share one 500 ms wait; with a peer manager that never
       replies, peers become `Unresponsive` within 1.5 s while sync stays `Fresh` (SC-005); blocking stubs wait on a
       latch released in `finally`
-- [ ] T038 [US2] `console tests/TuiUpdaterSpec.scala`: with a blocking probe, frames advance at least 8 times in 2.5 s at
+- [x] T038 [US2] `console tests/TuiUpdaterSpec.scala`: with a blocking probe, frames advance at least 8 times in 2.5 s at
       the 250 ms pace (`eventually`); at the 1000 ms pace `q` is dispatched within 500 ms (SC-004); `p` toggles pause
-- [ ] T039 [P] `root tests/TuiStateSpec.scala`: rewritten with explicit `now` values (no wall clock): uptime, speed,
+- [x] T039 [P] `root tests/TuiStateSpec.scala`: rewritten with explicit `now` values (no wall clock): uptime, speed,
       ETA, baseline reset (C-3)
-- [ ] T040 [P] `src/test/scala/com/chipprbots/ethereum/blockchain/sync/snap/SNAPSyncMetricsSpec.scala`:
+- [x] T040 [P] `src/test/scala/com/chipprbots/ethereum/blockchain/sync/snap/SNAPSyncMetricsSpec.scala`:
       `latestProgressAt` returns the time `measure` recorded; `latestProgress` is unchanged
-- [ ] T041 `sbt "testOnly com.chipprbots.ethereum.console.* *Tui* *SNAPSyncMetrics*"` → T031–T040 fail; record which
+- [x] T041 `sbt "testOnly com.chipprbots.ethereum.console.* *Tui* *SNAPSyncMetrics*"` → T031–T040 fail; record which
 
 ### Implementation for slice 2
 
-- [ ] T042 [US1] `console/TuiState.scala`: `tick`, `motion`, `splashUntilTick`, `celebrationStartedTick`, `celebrated`,
+- [x] T042 [US1] `console/TuiState.scala`: `tick`, `motion`, `splashUntilTick`, `celebrationStartedTick`, `celebrated`,
       `lastAdvanceAt`; no `Instant.now()` left (`:21`, `:45`, `:57`, `:71`, C-3)
-- [ ] T043 [US3] `console/Sourced.scala`; `NodeStatusSnapshot` (`console/TuiState.scala:96-104`) gains `now` and
+- [x] T043 [US3] `console/Sourced.scala`; `NodeStatusSnapshot` (`console/TuiState.scala:96-104`) gains `now` and
       per-source `Sourced` fields; `connectionStatus` and `syncStatus` become derived
-- [ ] T044 [US3] `console/TuiStatusProbe.scala` starts its asks in parallel with one bounded wait and returns `Sourced`
+- [x] T044 [US3] `console/TuiStatusProbe.scala` starts its asks in parallel with one bounded wait and returns `Sourced`
       values; new `console/TuiProbeThread.scala` polls at `statusPollIntervalMs` and publishes to an `AtomicReference`
-- [ ] T045 [US2] `console/TuiUpdater.scala`: the frame loop (`tick + 1`, read the snapshot, render, wait for a key at the
+- [x] T045 [US2] `console/TuiUpdater.scala`: the frame loop (`tick + 1`, read the snapshot, render, wait for a key at the
       adaptive pace) replaces poll → render → wait (`:65-81`); `p` handled
-- [ ] T046 [US2] `console/Tui.scala`: `render` skips a frame equal to the last; `showStartupBanner` and its
+- [x] T046 [US2] `console/Tui.scala`: `render` skips a frame equal to the last; `showStartupBanner` and its
       `Thread.sleep` (`:199-205`) are removed
-- [ ] T047 [US1] `console/WormBar.scala`: ripple, pulse, stalled glyph and style; the spinner
-- [ ] T048 [US1] `console/Splash.scala`: the splash view; the `printBanner` literal (`Fukuii.scala:194-264`) moves to one
+- [x] T047 [US1] `console/WormBar.scala`: ripple, pulse, stalled glyph and style; the spinner
+- [x] T048 [US1] `console/Splash.scala`: the splash view; the `printBanner` literal (`Fukuii.scala:194-264`) moves to one
       shared object that both `Fukuii.printBanner` and the splash read; the FUKUII wordmark
-- [ ] T049 [US1] Celebration and "back at head" in `console/TuiState.scala` and the renderer
-- [ ] T050 `src/main/scala/com/chipprbots/ethereum/blockchain/sync/snap/SNAPSyncMetrics.scala`: add `latestProgressAt`
+- [x] T049 [US1] Celebration and "back at head" in `console/TuiState.scala` and the renderer
+- [x] T050 `src/main/scala/com/chipprbots/ethereum/blockchain/sync/snap/SNAPSyncMetrics.scala`: add `latestProgressAt`
       beside `latest` (`:417-427`), additive only
-- [ ] T051 [US2] `console/TuiConfig.scala`, `console/TuiEnv.scala`, `conf/base/tui.conf`: `animation-interval-ms = 250`,
+- [x] T051 [US2] `console/TuiConfig.scala`, `console/TuiEnv.scala`, `conf/base/tui.conf`: `animation-interval-ms = 250`,
       `status-poll-interval-ms = 1000`, `reduced-motion = false`, `splash-ms = 3000`; `FUKUII_TUI_MOTION`,
       `FUKUII_TUI_NO_SPLASH`
-- [ ] T052 `nodebuilder/StdNode.scala`: start the probe thread in `startTuiUpdater` (`:288-303`) and stop it in
+- [x] T052 `nodebuilder/StdNode.scala`: start the probe thread in `startTuiUpdater` (`:288-303`) and stop it in
       `shutdown` (`:319-325`)
-- [ ] T053 Generate the celebration, splash and stalled goldens; check them against research §3.7–§3.9; commit
+- [x] T053 Generate the celebration, splash and stalled goldens; check them against research §3.7–§3.9; commit
 
 ### Gate and exit for slice 2
 
-- [ ] T054 `sbt compile-all`; `sbt "testOnly com.chipprbots.ethereum.console.* *Tui* *SNAPSyncMetrics*"` → PASS
-- [ ] T055 `sbt scalafmtAll`; `sbt formatCheck` → clean
-- [ ] T056 `scripts/snap-split/verify.sh --branch feat/027-s2-motion origin/staging` → OK (`SNAPSyncMetrics.scala` is a
+- [x] T054 `sbt compile-all`; `sbt "testOnly com.chipprbots.ethereum.console.* *Tui* *SNAPSyncMetrics*"` → PASS
+- [x] T055 `sbt scalafmtAll`; `sbt formatCheck` → clean
+- [x] T056 `scripts/snap-split/verify.sh --branch feat/027-s2-motion origin/staging` → OK (`SNAPSyncMetrics.scala` is a
       top-level `snap/` file, not a module file; rebase onto spec 022's latest first)
 - [ ] T057 [US2] Manual, no sbt running: T029's runs plus `FUKUII_TUI_MOTION=reduced`; `pidstat -t -p <pid> 1 60` with
       the TUI animating at 160×48 (< 2 % of a core) and idle at head (< 0.5 %); median render time of a 160×48 frame

@@ -10,7 +10,7 @@ class TuiEnvSpec extends AnyFlatSpec with Matchers:
 
   private val utf8 = Map("LANG" -> "en_US.UTF-8")
   private def env(vars: (String, String)*): TuiEnv = TuiEnv.from(vars.toMap, Map.empty)
-  private def resolved(e: TuiEnv, config: TuiConfig = TuiConfig.default): GlyphSet = e.applyTo(config).glyphSet
+  private def resolved(e: TuiEnv, settings: TuiSettings = TuiSettings()): GlyphSet = e.applyTo(settings).glyphs
 
   "TuiEnv" should "read FUKUII_TUI_GLYPHS = ascii, emoji or auto, in any case" taggedAs (UnitTest) in {
     env("FUKUII_TUI_GLYPHS" -> "ascii").glyphs shouldBe Some(GlyphChoice.Ascii)
@@ -23,7 +23,7 @@ class TuiEnvSpec extends AnyFlatSpec with Matchers:
   }
 
   it should "let FUKUII_TUI_GLYPHS override fukuii.tui.glyphs" taggedAs (UnitTest) in {
-    val ascii = TuiConfig.default.copy(glyphs = GlyphChoice.Ascii)
+    val ascii = TuiSettings(glyphs = GlyphChoice.Ascii)
     resolved(TuiEnv.from(utf8 + ("FUKUII_TUI_GLYPHS" -> "emoji"), Map.empty), ascii) shouldBe GlyphSet.Emoji
     resolved(TuiEnv.from(utf8 + ("FUKUII_TUI_GLYPHS" -> "ascii"), Map.empty)) shouldBe GlyphSet.Ascii
     resolved(TuiEnv.from(utf8, Map.empty), ascii) shouldBe GlyphSet.Ascii
@@ -68,7 +68,7 @@ class TuiEnvSpec extends AnyFlatSpec with Matchers:
     w should include("fukuii.tui.glyphs")
     // ... and falls back to the configured value.
     resolved(e) shouldBe GlyphSet.Emoji
-    resolved(e, TuiConfig.default.copy(glyphs = GlyphChoice.Ascii)) shouldBe GlyphSet.Ascii
+    resolved(e, TuiSettings(glyphs = GlyphChoice.Ascii)) shouldBe GlyphSet.Ascii
   }
 
   // no-color.org: NO_COLOR counts when it is present and not empty, whatever the value.
@@ -78,9 +78,9 @@ class TuiEnvSpec extends AnyFlatSpec with Matchers:
     env("NO_COLOR" -> " ").noColor shouldBe true
     env("NO_COLOR" -> "").noColor shouldBe false
     env().noColor shouldBe false
-    env("NO_COLOR" -> "1").applyTo(TuiConfig.default).noColor shouldBe true
-    env("NO_COLOR" -> "").applyTo(TuiConfig.default).noColor shouldBe false
-    env().applyTo(TuiConfig.default).noColor shouldBe false
+    env("NO_COLOR" -> "1").applyTo(TuiSettings()).noColor shouldBe true
+    env("NO_COLOR" -> "").applyTo(TuiSettings()).noColor shouldBe false
+    env().applyTo(TuiSettings()).noColor shouldBe false
   }
 
   it should "parse FUKUII_TUI_GLYPHS and the locale the same under a Turkish default locale" taggedAs (UnitTest) in {
@@ -94,4 +94,37 @@ class TuiEnvSpec extends AnyFlatSpec with Matchers:
 
   it should "read the process environment and system properties" taggedAs (UnitTest) in {
     noException should be thrownBy TuiEnv.system()
+  }
+
+  // Spec 027 T051, FR-012, FR-013: FUKUII_TUI_MOTION and FUKUII_TUI_NO_SPLASH.
+  it should "read FUKUII_TUI_MOTION = reduced or full, overriding fukuii.tui.reduced-motion" taggedAs (UnitTest) in {
+    env("FUKUII_TUI_MOTION" -> "reduced").reducedMotion shouldBe Some(true)
+    env("FUKUII_TUI_MOTION" -> " FULL ").reducedMotion shouldBe Some(false)
+    env().reducedMotion shouldBe None
+    env("FUKUII_TUI_MOTION" -> "").reducedMotion shouldBe None
+    env("FUKUII_TUI_MOTION" -> "reduced").applyTo(TuiSettings()).reducedMotion shouldBe true
+    env("FUKUII_TUI_MOTION" -> "full").applyTo(TuiSettings(reducedMotion = true)).reducedMotion shouldBe false
+    env().applyTo(TuiSettings(reducedMotion = true)).reducedMotion shouldBe true
+  }
+
+  it should "warn about an invalid FUKUII_TUI_MOTION, naming the variable and the accepted values" taggedAs (UnitTest) in {
+    val e = env("FUKUII_TUI_MOTION" -> "slow")
+    e.reducedMotion shouldBe None
+    e.warnings should have size 1
+    e.warnings.head should include("FUKUII_TUI_MOTION")
+    e.warnings.head should include("slow")
+    e.warnings.head should include("full, reduced")
+    e.warnings.head should include("fukuii.tui.reduced-motion")
+  }
+
+  it should "turn the splash off when FUKUII_TUI_NO_SPLASH is set to a non-empty value" taggedAs (UnitTest) in {
+    env("FUKUII_TUI_NO_SPLASH" -> "1").noSplash shouldBe true
+    env("FUKUII_TUI_NO_SPLASH" -> "").noSplash shouldBe false
+    env().noSplash shouldBe false
+    env("FUKUII_TUI_NO_SPLASH" -> "1").applyTo(TuiSettings()).splashMs shouldBe 0L
+    env().applyTo(TuiSettings()).splashMs shouldBe TuiConfig.default.splashMs
+  }
+
+  it should "leave motion alone under NO_COLOR (§4.5)" taggedAs (UnitTest) in {
+    env("NO_COLOR" -> "1").applyTo(TuiSettings()).reducedMotion shouldBe false
   }

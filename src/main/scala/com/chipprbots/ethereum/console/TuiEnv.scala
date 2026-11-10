@@ -14,6 +14,10 @@ import java.util.Locale
   *   a valid `FUKUII_TUI_GLYPHS`, overriding `fukuii.tui.glyphs`
   * @param utf8Locale
   *   the locale's character encoding is UTF-8; `auto` draws ASCII when it is not (Q3)
+  * @param reducedMotion
+  *   a valid `FUKUII_TUI_MOTION`: `reduced` (true) or `full` (false), overriding `fukuii.tui.reduced-motion`
+  * @param noSplash
+  *   `FUKUII_TUI_NO_SPLASH` is set to a non-empty value: no startup splash
   * @param warnings
   *   one per invalid variable, for the caller to log
   */
@@ -21,20 +25,35 @@ final case class TuiEnv(
     noColor: Boolean,
     glyphs: Option[GlyphChoice],
     utf8Locale: Boolean,
-    warnings: List[String]
+    warnings: List[String],
+    reducedMotion: Option[Boolean] = None,
+    noSplash: Boolean = false
 ):
-  /** `config` with these overrides applied, and `auto` resolved against the locale. The result's `glyphs` is never
-    * `Auto`.
+  /** The configuration the TUI runs with: `settings` (`fukuii.tui`) with these overrides applied, and `auto` resolved
+    * against the locale into a [[GlyphSet]] (B-124). Every other field keeps [[TuiConfig.default]]'s value.
     */
-  def applyTo(config: TuiConfig): TuiConfig =
-    val glyphChoice = glyphs.getOrElse(config.glyphs) match
-      case GlyphChoice.Auto => if utf8Locale then GlyphChoice.Emoji else GlyphChoice.Ascii
-      case chosen           => chosen
-    config.copy(glyphs = glyphChoice, noColor = config.noColor || noColor)
+  def applyTo(settings: TuiSettings): TuiConfig =
+    val glyphSet = glyphs.getOrElse(settings.glyphs) match
+      case GlyphChoice.Emoji => GlyphSet.Emoji
+      case GlyphChoice.Ascii => GlyphSet.Ascii
+      case GlyphChoice.Auto  => if utf8Locale then GlyphSet.Emoji else GlyphSet.Ascii
+    TuiConfig.default.copy(
+      glyphs = glyphSet,
+      noColor = noColor,
+      reducedMotion = reducedMotion.getOrElse(settings.reducedMotion),
+      animationIntervalMs = settings.animationIntervalMs,
+      statusPollIntervalMs = settings.statusPollIntervalMs,
+      splashMs = if noSplash then 0L else settings.splashMs
+    )
 
 object TuiEnv:
   val NoColorVar: String = "NO_COLOR"
   val GlyphsVar: String = "FUKUII_TUI_GLYPHS"
+  val MotionVar: String = "FUKUII_TUI_MOTION"
+  val NoSplashVar: String = "FUKUII_TUI_NO_SPLASH"
+
+  /** The accepted `FUKUII_TUI_MOTION` values. */
+  val MotionAccepted: String = "full, reduced"
 
   /** Where the locale's encoding is read, first set wins (POSIX precedence). */
   val LocaleVars: Seq[String] = Seq("LC_ALL", "LC_CTYPE", "LANG")
@@ -45,14 +64,26 @@ object TuiEnv:
   def from(env: Map[String, String], props: Map[String, String]): TuiEnv =
     val glyphsValue = env.get(GlyphsVar).map(_.trim).filter(_.nonEmpty)
     val glyphs = glyphsValue.flatMap(GlyphChoice.parse)
-    val warnings = glyphsValue.filter(_ => glyphs.isEmpty).toList.map { v =>
+    val glyphWarnings = glyphsValue.filter(_ => glyphs.isEmpty).toList.map { v =>
       s"Ignoring $GlyphsVar='$v': expected one of ${GlyphChoice.Accepted}; fukuii.tui.glyphs applies (default auto)"
+    }
+    val motionValue = env.get(MotionVar).map(_.trim).filter(_.nonEmpty)
+    val reducedMotion = motionValue.flatMap(v =>
+      v.toLowerCase(Locale.ROOT) match
+        case "reduced" => Some(true)
+        case "full"    => Some(false)
+        case _         => None
+    )
+    val motionWarnings = motionValue.filter(_ => reducedMotion.isEmpty).toList.map { v =>
+      s"Ignoring $MotionVar='$v': expected one of $MotionAccepted; fukuii.tui.reduced-motion applies (default false)"
     }
     TuiEnv(
       noColor = env.get(NoColorVar).exists(_.nonEmpty),
       glyphs = glyphs,
       utf8Locale = localeIsUtf8(env, props),
-      warnings = warnings
+      warnings = glyphWarnings ++ motionWarnings,
+      reducedMotion = reducedMotion,
+      noSplash = env.get(NoSplashVar).exists(_.nonEmpty)
     )
 
   /** The running process's environment and system properties. */
