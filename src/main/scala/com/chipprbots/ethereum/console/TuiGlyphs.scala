@@ -37,8 +37,8 @@ final case class Glyph(text: String, cols: Int)
   *
   * Widths are equal in both sets except the ellipsis (C-15) and the SNAP phase glyphs, which the renderer pads to
   * [[TuiGlyphs.PhaseCols]] in both sets ([[TuiGlyphs.VariableWidth]]). No glyph carries U+FE0F, and the glyphs whose
-  * East Asian width is ambiguous (`◆ ● ⚠ ▶ ─ …`) are pinned to one column. `timelineTrack` is the fork timeline's track
-  * (§5.2 "track done"); the worm bar always draws `=` and `.`, as the log's bar does.
+  * East Asian width is ambiguous (`◆ ● ⚠ ▶ ─ … —`) are pinned to one column. `timelineTrack` is the fork timeline's
+  * track (§5.2 "track done"); the worm bar always draws `=` and `.`, as the log's bar does.
   */
 final case class TuiGlyphs(
     set: GlyphSet,
@@ -66,7 +66,8 @@ final case class TuiGlyphs(
     ellipsis: Glyph,
     up: Glyph,
     down: Glyph,
-    steady: Glyph
+    steady: Glyph,
+    missing: Glyph
 ):
   /** Every glyph by field name, in declaration order. */
   def all: Seq[(String, Glyph)] =
@@ -106,7 +107,8 @@ object TuiGlyphs:
     ellipsis = Glyph("…", 1),
     up = Glyph("↑", 1),
     down = Glyph("↓", 1),
-    steady = Glyph("→", 1)
+    steady = Glyph("→", 1),
+    missing = Glyph("—", 1)
   )
 
   val Ascii: TuiGlyphs = TuiGlyphs(
@@ -135,7 +137,8 @@ object TuiGlyphs:
     ellipsis = Glyph("..", 2),
     up = Glyph("^", 1),
     down = Glyph("v", 1),
-    steady = Glyph("-", 1)
+    steady = Glyph("-", 1),
+    missing = Glyph("-", 1)
   )
 
   def of(set: GlyphSet): TuiGlyphs = set match

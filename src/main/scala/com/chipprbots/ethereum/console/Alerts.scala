@@ -112,5 +112,6 @@ object Alerts:
       val badgeCols = new AttributedString(badge).columnLength()
       val style = if errors > 0 then t.error else t.warn.bold()
       sb.append(s" $badge${" " * (BadgeCols - badgeCols).max(2)}", style)
-      sb.append(alerts.take(MaxListed).map(_.text).mkString(s" ${g.dot.text} "), style)
+      // A reason can quote an exception's message: drawn as text from outside the node (FR-020).
+      sb.append(alerts.take(MaxListed).map(a => TuiText.external(a.text, g)).mkString(s" ${g.dot.text} "), style)
     TuiText.fit(sb.toAttributedString, width, g)
