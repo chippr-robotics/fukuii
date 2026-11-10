@@ -920,12 +920,15 @@ object AccountRangeCoordinator:
       accountsDownloaded: Long,
       pending: Iterable[AccountTask],
       active: Iterable[AccountTask],
-      @annotation.unused storing: Iterable[AccountTask]
+      storing: Iterable[AccountTask]
   ): Option[Long] =
     if accountsDownloaded < 10000 then None // too early for reliable estimate
     else
       val keyspaceSize = BigInt(2).pow(256)
-      val nonCompleteTasks = pending.toSeq ++ active
+      // A range being stored (`storingTasks`) has work left too: its `next` is past the response, not past its end.
+      // Left out, the rest of it counted as covered and the estimate, hence the percentage, jumped ahead while any
+      // range was in that state (B-044). #1487 added `storingTasks`; `isComplete` already counts it, this did not.
+      val nonCompleteTasks = pending.toSeq ++ active ++ storing
       val remaining =
         if nonCompleteTasks.isEmpty then BigInt(0)
         else
