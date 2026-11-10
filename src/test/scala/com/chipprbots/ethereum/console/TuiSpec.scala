@@ -11,6 +11,7 @@ import scala.jdk.CollectionConverters.*
 import ch.qos.logback.classic.Level
 import ch.qos.logback.classic.Logger as LogbackLogger
 import ch.qos.logback.classic.spi.ILoggingEvent
+import ch.qos.logback.core.ConsoleAppender
 import ch.qos.logback.core.read.ListAppender
 import org.jline.terminal.Attributes.LocalFlag
 import org.scalatest.flatspec.AnyFlatSpec
@@ -487,4 +488,117 @@ class TuiSpec extends AnyFlatSpec with Matchers:
       tui.nextFrame(Some(polled))
       tui.getState.connectionStatus shouldBe "Unresponsive (peer manager)"
     finally tt.close()
+  }
+
+  // ---- The log ring (spec 027 T085, C-11, SC-009) ------------------------------------------------------------------
+
+  private def rootLogger: LogbackLogger =
+    LoggerFactory.getLogger(org.slf4j.Logger.ROOT_LOGGER_NAME).asInstanceOf[LogbackLogger]
+  private def rootAppenders: Set[String] = rootLogger.iteratorForAppenders().asScala.map(_.getName).toSet
+  private def consoleOnRoot: Boolean =
+    rootLogger.iteratorForAppenders().asScala.exists(_.isInstanceOf[ConsoleAppender[?]])
+
+  /** A ring that notes whether a console appender was on the root logger when it was attached and when it was
+    * detached, and can fail either step.
+    */
+  private class WatchedRing(failAttach: Boolean = false, failDetach: Boolean = false)
+      extends TuiLogRingAppender(100, Level.INFO, java.time.ZoneOffset.UTC):
+    @volatile var consoleAtAttach: Option[Boolean] = None
+    @volatile var consoleAtDetach: Option[Boolean] = None
+    override def attach(): Unit =
+      consoleAtAttach = Some(consoleOnRoot)
+      if failAttach then throw new IllegalStateException("simulated attach failure")
+      super.attach()
+    override def detach(): Unit =
+      consoleAtDetach = Some(consoleOnRoot)
+      if failDetach then throw new IllegalStateException("simulated detach failure")
+      super.detach()
+
+  /** A TUI that suppresses the console, as a node's does, with `ring` as its log tail. */
+  private def suppressingTui(tt: TuiTestTerminal, ring: TuiLogRingAppender): Tui =
+    new Tui(
+      TuiTestTerminal.config.copy(suppressConsoleLogs = true),
+      () => tt.terminal,
+      _ => Some(tt.processOutput),
+      TuiFixtures.clock,
+      ring
+    )
+
+  "The log ring" should "attach after the console is suppressed and detach before it is restored (C-11)" taggedAs (
+    UnitTest
+  ) in {
+    val tt = new TuiTestTerminal()
+    val ring = new WatchedRing()
+    val tui = suppressingTui(tt, ring)
+    try
+      consoleOnRoot shouldBe true // the test configuration's STDOUT
+      tui.initialize() shouldBe true
+      ring.consoleAtAttach shouldBe Some(false)
+      rootAppenders should contain(TuiLogRingAppender.Name)
+      consoleOnRoot shouldBe false
+      tui.shutdown()
+      ring.consoleAtDetach shouldBe Some(false)
+      consoleOnRoot shouldBe true
+    finally
+      tui.shutdown()
+      tt.close()
+  }
+
+  it should "leave the root logger's appenders as they were (SC-009)" taggedAs (UnitTest) in {
+    val before = rootAppenders
+    val tt = new TuiTestTerminal()
+    val tui = suppressingTui(tt, new WatchedRing())
+    try
+      tui.initialize() shouldBe true
+      tui.shutdown()
+      rootAppenders shouldBe before
+    finally tt.close()
+  }
+
+  it should "give back the terminal and the console logs when it fails to attach (C-11)" taggedAs (UnitTest) in {
+    val before = rootAppenders
+    val tt = new TuiTestTerminal()
+    val tui = suppressingTui(tt, new WatchedRing(failAttach = true))
+    try
+      tui.initialize() shouldBe false
+      tui.isEnabled shouldBe false
+      rootAppenders shouldBe before
+      consoleOnRoot shouldBe true
+      tt.output should include(Tui.ExitAltScreen)
+      tt.lastSetAttributes.map(_.getLocalFlag(LocalFlag.ICANON)) shouldBe Some(true)
+    finally tt.close()
+  }
+
+  it should "still restore the console and the terminal when it fails to detach" taggedAs (UnitTest) in {
+    val tt = new TuiTestTerminal()
+    val ring = new WatchedRing(failDetach = true)
+    val tui = suppressingTui(tt, ring)
+    try
+      tui.initialize() shouldBe true
+      tui.shutdown()
+      consoleOnRoot shouldBe true
+      tui.isEnabled shouldBe false
+      tt.lastSetAttributes.map(_.getLocalFlag(LocalFlag.ICANON)) shouldBe Some(true)
+    finally
+      rootLogger.detachAppender(ring)
+      tt.close()
+  }
+
+  it should "bring the node's log lines to the Logs view" taggedAs (UnitTest) in {
+    val tt = new TuiTestTerminal(100, 30)
+    val logger = LoggerFactory.getLogger("com.chipprbots.ethereum.console.TuiSpec.ring").asInstanceOf[LogbackLogger]
+    val tui = tt.tui()
+    val previous = logger.getLevel
+    try
+      tui.initialize() shouldBe true
+      logger.setLevel(Level.INFO) // the test configuration's root is at ERROR
+      logger.info("hello from the node")
+      tui.nextFrame(None)
+      tui.handleCommand('5')
+      tui.render()
+      TuiTestTerminal.visible(tt.lastFrame) should include("hello from the node")
+    finally
+      logger.setLevel(previous)
+      tui.shutdown()
+      tt.close()
   }

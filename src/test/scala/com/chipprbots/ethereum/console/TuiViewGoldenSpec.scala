@@ -8,9 +8,9 @@ import org.scalatest.matchers.should.Matchers
 import com.chipprbots.ethereum.console.TuiText.formatNumber
 import com.chipprbots.ethereum.testing.Tags.*
 
-/** Golden frames of the Sync, Peers, Chain and Help views and of the Overview's alert fixtures, at 80×24, 120×40 and
-  * 160×48 in both glyph sets (spec 027 T066, research §3.5, §3.6, §3.9); and the five-second rule on every view
-  * (SC-002).
+/** Golden frames of the Sync, Peers, Chain, Logs and Help views and of the Overview's alert fixtures, at 80×24, 120×40
+  * and 160×48 in both glyph sets (spec 027 T066, T091, research §3.5, §3.6, §3.9); and the five-second rule on every
+  * view (SC-002).
   *
   * Like the Overview goldens, they are drawn without motion: they pin the layout. [[TuiGoldenFiles]] says how to
   * regenerate them.
@@ -34,17 +34,18 @@ class TuiViewGoldenSpec extends AnyFlatSpec with Matchers with BeforeAndAfterAll
     ("peers", "synced", in(TuiView.Peers)(g => TuiFixtures.syncedEtc(g))),
     ("chain", "etc", in(TuiView.Chain)(g => TuiFixtures.syncedEtc(g))),
     ("chain", "sepolia", in(TuiView.Chain)(g => TuiFixtures.sepoliaNearHead(g))),
-    ("help", "synced", help(g => TuiFixtures.syncedEtc(g)))
+    ("help", "synced", help(g => TuiFixtures.syncedEtc(g))),
+    ("logs", "synced", in(TuiView.Logs)(g => TuiFixtures.syncedEtc(g)))
   ) ++ TuiFixtures.alerts.map((name, fixture) => ("overview", s"alert-$name", fixture))
 
   private def fileName(prefix: String, width: Int, height: Int, state: String, set: GlyphSet): String =
     s"$prefix-${Tier.of(width, height).toString.toLowerCase}-$state-${set.toString.toLowerCase}.txt"
 
-  "The view goldens" should "cover six views and four alert fixtures, three tiers, two glyph sets: 60 files" taggedAs (
+  "The view goldens" should "cover seven views and four alert fixtures, three tiers, two glyph sets: 66 files" taggedAs (
     UnitTest
   ) in {
     val names = for (p, s, _) <- goldens; (w, h) <- sizes; set <- GlyphSet.values.toSeq yield fileName(p, w, h, s, set)
-    names.distinct should have size 60
+    names.distinct should have size 66
   }
 
   for (prefix, stateName, fixture) <- goldens; (width, height) <- sizes; set <- GlyphSet.values do

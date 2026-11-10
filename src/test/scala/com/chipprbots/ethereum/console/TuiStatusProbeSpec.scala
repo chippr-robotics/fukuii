@@ -5,6 +5,7 @@ import java.net.InetSocketAddress
 import org.apache.pekko.actor.testkit.typed.scaladsl.ScalaTestWithActorTestKit
 import org.apache.pekko.actor.typed.Behavior
 import org.apache.pekko.actor.typed.scaladsl.Behaviors
+import org.apache.pekko.util.ByteString
 
 import scala.concurrent.duration.*
 
@@ -17,10 +18,26 @@ import com.chipprbots.ethereum.blockchain.sync.SyncProtocol.Status.Progress
 import com.chipprbots.ethereum.blockchain.sync.WormToBrainBar
 import com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncController.SyncPhase
 import com.chipprbots.ethereum.blockchain.sync.snap.SyncProgress
+import com.chipprbots.ethereum.crypto.generateKeyPair
+import com.chipprbots.ethereum.domain.Address
+import com.chipprbots.ethereum.domain.ChainWeight
+import com.chipprbots.ethereum.domain.GasAmount
+import com.chipprbots.ethereum.domain.GasPrice
+import com.chipprbots.ethereum.domain.LegacyTransaction
+import com.chipprbots.ethereum.domain.SignedTransaction
+import com.chipprbots.ethereum.domain.SignedTransactionWithSender
+import com.chipprbots.ethereum.network.NetworkMetrics
+import com.chipprbots.ethereum.network.NetworkPeerManagerActor
+import com.chipprbots.ethereum.network.NetworkPeerManagerActor.PeerInfo
+import com.chipprbots.ethereum.network.NetworkPeerManagerActor.RemoteStatus
 import com.chipprbots.ethereum.network.Peer
 import com.chipprbots.ethereum.network.PeerActor
 import com.chipprbots.ethereum.network.PeerId
 import com.chipprbots.ethereum.network.PeerManagerActor
+import com.chipprbots.ethereum.network.PeerScoreSnapshot
+import com.chipprbots.ethereum.network.ScoringStatistics
+import com.chipprbots.ethereum.network.p2p.messages.Capability
+import com.chipprbots.ethereum.transactions.PendingTransactionsManager
 import com.chipprbots.ethereum.testing.Tags.*
 
 /** [[TuiStatusProbe]] answers from the same actor queries as `net_peerCount` and `eth_syncing`. */
@@ -404,10 +421,11 @@ class TuiStatusProbeSpec extends ScalaTestWithActorTestKit with AnyFlatSpecLike 
   it should "clean a failure's reason before it reaches the screen: one line, no control character, capped" taggedAs (
     UnitTest
   ) in {
-    TuiStatusProbe.reason(new RuntimeException("bad\u001b[31m peer\nreply")) shouldBe "bad [31m peer reply"
+    // Slice 4: the one sanitiser (FR-020) removes the escape sequence whole and keeps the first line.
+    TuiStatusProbe.reason(new RuntimeException("bad\u001b[31m peer\nreply")) shouldBe "bad peer…"
     val long = TuiStatusProbe.reason(new RuntimeException("x" * 500))
-    long.length shouldBe TuiStatusProbe.MaxReasonChars
-    long should endWith("...")
+    long.codePointCount(0, long.length) shouldBe TuiStatusProbe.MaxReasonChars
+    long should endWith("…")
     TuiStatusProbe.reason(new IllegalStateException()) shouldBe "IllegalStateException"
     // An emoji (a surrogate pair) across the cut is dropped whole, not split.
     val emoji = TuiStatusProbe.reason(new RuntimeException("x" * (TuiStatusProbe.MaxReasonChars - 4) + "🪱" * 10))
@@ -450,4 +468,128 @@ class TuiStatusProbeSpec extends ScalaTestWithActorTestKit with AnyFlatSpecLike 
       syncController(snapStatus),
       snap = Some(snapSample.copy(phase = SyncPhase.Completed))
     )().sync.value.map(_.snapRunning) shouldBe Some(false)
+  }
+
+  // ---- Spec 027 slice 4 (T089, T097): the peers' details, the txpool, the scores, the last import -------------------
+
+  private def remote(clientId: String) = RemoteStatus(
+    Capability.ETH68,
+    1L,
+    ChainWeight.totalDifficultyOnly(1),
+    ByteString("best"),
+    ByteString("genesis"),
+    remoteClientId = clientId
+  )
+
+  /** The network peer manager, answering `GetHandshakedPeersCmd` with `p0`… and their client ids and best blocks. */
+  private def networkPeerManager(peers: (String, BigInt)*): Behavior[NetworkPeerManagerActor.Command] =
+    Behaviors.receiveMessage {
+      case NetworkPeerManagerActor.GetHandshakedPeersCmd(replyTo) =>
+        replyTo ! NetworkPeerManagerActor.HandshakedPeers(peers.zipWithIndex.map { case ((client, best), i) =>
+          peer(s"p$i") -> PeerInfo(remote(client), ChainWeight.totalDifficultyOnly(1), true, best, ByteString("best"))
+        }.toMap)
+        Behaviors.same
+      case _ => Behaviors.same
+    }
+
+  private val keyPair = generateKeyPair(new java.security.SecureRandom())
+
+  private def pendingTx(nonce: Int) =
+    val tx = LegacyTransaction(nonce, GasPrice(1), GasAmount(21_000), Address("0x1234"), 0, ByteString())
+    PendingTransactionsManager.PendingTransaction(
+      SignedTransactionWithSender(SignedTransaction.sign(tx, keyPair, None), Address(keyPair)),
+      0L
+    )
+
+  /** The txpool, answering `GetPendingTransactionsReq` with `txs` transactions, `blobs` of them carrying a sidecar. */
+  private def txPool(txs: Int, blobs: Int): Behavior[PendingTransactionsManager.Command] =
+    Behaviors.receiveMessage {
+      case PendingTransactionsManager.GetPendingTransactionsReq(replyTo) =>
+        replyTo ! PendingTransactionsManager.PendingTransactionsResponse(
+          (0 until txs).map(pendingTx),
+          (0 until blobs).map(i => ByteString(s"h$i") -> ByteString(s"sidecar$i")).toMap
+        )
+        Behaviors.same
+      case _ => Behaviors.same
+    }
+
+  private def detailedProbe(
+      details: Option[Behavior[NetworkPeerManagerActor.Command]] = None,
+      pool: Option[Behavior[PendingTransactionsManager.Command]] = None,
+      local: TuiStatusProbe.LocalSources = TuiStatusProbe.LocalSources()
+  ) =
+    new TuiStatusProbe(
+      spawn(peerManager(PeerActor.Status.Handshaked)),
+      spawn(syncController(SyncProtocol.Status.SyncDone)),
+      () => 42,
+      50,
+      () => None,
+      300.millis,
+      clock,
+      local,
+      networkPeerManager = details.map(spawn(_)),
+      txPool = pool.map(spawn(_))
+    )(using system.scheduler)
+
+  it should "carry the txpool's size and its blob count from PendingTransactionsResponse (T089)" taggedAs (UnitTest) in {
+    detailedProbe(pool = Some(txPool(txs = 3, blobs = 1)))().txpool shouldBe
+      Some(Sourced.Fresh(TxpoolSample(size = 3, blobs = 1), now))
+  }
+
+  it should "say the txpool is Unresponsive when it does not answer, and leave it unasked when not wired" taggedAs (
+    UnitTest
+  ) in {
+    detailedProbe(pool = Some(silent.narrow[PendingTransactionsManager.Command]))().txpool shouldBe Some(Sourced.Unresponsive("no reply within 300ms"))
+    detailedProbe()().txpool shouldBe None
+  }
+
+  it should "carry each handshaked peer's client id and best block from GetHandshakedPeersCmd, by peer id" taggedAs (
+    UnitTest
+  ) in {
+    val s = detailedProbe(details = Some(networkPeerManager("CoreGeth/v1.12.20" -> BigInt(21_884_102))))()
+    s.details shouldBe Some(Sourced.Fresh(Map("p0" -> PeerDetails("CoreGeth/v1.12.20", 21_884_102L)), now))
+  }
+
+  it should "sanitise a peer's client id as it reads it (C-16)" taggedAs (UnitTest) in {
+    val s = detailedProbe(details = Some(networkPeerManager("Geth\u001b[2J/v1.13\nmore" -> BigInt(1))))()
+    s.details.flatMap(_.value).flatMap(_.get("p0")).map(_.clientId) shouldBe Some("Geth/v1.13…")
+  }
+
+  it should "say the peers' details are Unresponsive when the network peer manager does not answer" taggedAs (
+    UnitTest
+  ) in {
+    val s = detailedProbe(details = Some(silent.narrow[NetworkPeerManagerActor.Command]))()
+    s.details shouldBe Some(Sourced.Unresponsive("no reply within 300ms"))
+    s.peers.value.map(_.size) shouldBe Some(1) // GetPeersCmd's own answer is unaffected
+  }
+
+  it should "age the details and the txpool with the rest of a late snapshot" taggedAs (UnitTest) in {
+    val s = detailedProbe(
+      details = Some(networkPeerManager("x" -> BigInt(1))),
+      pool = Some(txPool(txs = 1, blobs = 0))
+    )()
+    val late = s.agedAt(now.plusSeconds(3), java.time.Duration.ofSeconds(2))
+    late.details.map(_.isInstanceOf[Sourced.Stale[?]]) shouldBe Some(true)
+    late.txpool.map(_.isInstanceOf[Sourced.Stale[?]]) shouldBe Some(true)
+  }
+
+  it should "read the peer scores slice 4a publishes to NetworkMetrics, keyed by peer id (Q5, D-1)" taggedAs (UnitTest) in {
+    val takenAt = now.minusSeconds(4)
+    TuiStatusProbe.peerScores(PeerScoreSnapshot.empty) shouldBe None // nothing published yet
+    val published = PeerScoreSnapshot(takenAt, Map(PeerId("ab12") -> 0.912), ScoringStatistics.empty)
+    TuiStatusProbe.peerScores(published) shouldBe Some(PeerScores(takenAt, Map("ab12" -> 0.912)))
+
+    NetworkMetrics.publishPeerScores(published)
+    TuiStatusProbe.LocalSources.networkScores() shouldBe Some(PeerScores(takenAt, Map("ab12" -> 0.912)))
+    detailedProbe(local = TuiStatusProbe.LocalSources(peerScores = TuiStatusProbe.LocalSources.networkScores))()
+      .local
+      .peerScores shouldBe Some(PeerScores(takenAt, Map("ab12" -> 0.912)))
+  }
+
+  it should "read the last import from RegularSyncMetrics" taggedAs (UnitTest) in {
+    com.chipprbots.ethereum.blockchain.sync.regular.RegularSyncMetrics.recordLastImport(blocks = 3, nanos = 61_000_000L)
+    TuiStatusProbe.LocalSources.regularSyncImport() shouldBe Some(ImportSample(3, java.time.Duration.ofMillis(61)))
+    detailedProbe(local = TuiStatusProbe.LocalSources(lastImport = () => Some(ImportSample(1, java.time.Duration.ZERO))))()
+      .local
+      .lastImport shouldBe Some(ImportSample(1, java.time.Duration.ZERO))
   }

@@ -1,5 +1,6 @@
 package com.chipprbots.ethereum
 
+import ch.qos.logback.classic.Level
 import com.typesafe.config.ConfigException
 import com.typesafe.config.ConfigFactory
 import org.scalatest.flatspec.AnyFlatSpec
@@ -210,4 +211,32 @@ class TuiConfigSpec extends AnyFlatSpec with Matchers:
       ConfigFactory.parseString("animation-interval-ms = 50, status-poll-interval-ms = 100")
     ) shouldBe
       TuiSettings(animationIntervalMs = 50, statusPollIntervalMs = 100)
+  }
+
+  // ---- Spec 027 slice 4 (T100): the log ring's size and level (Q4, C-13) ----------------------------------------------
+
+  it should "ship log-ring-size = 1000 and log-level = INFO in conf/base/tui.conf" taggedAs (UnitTest) in {
+    val shipped = ConfigFactory.load().getConfig("fukuii.tui")
+    shipped.getInt("log-ring-size") shouldBe 1000
+    shipped.getString("log-level") shouldBe "INFO"
+    val c = TuiSettings.fromConfig(shipped)
+    (c.logRingSize, c.logLevel) shouldBe ((1000, Level.INFO))
+    TuiConfig.default.logRingSize shouldBe 1000
+    TuiConfig.default.logLevel shouldBe Level.INFO
+  }
+
+  it should "read the log ring's size and level, and carry them into the running config" taggedAs (UnitTest) in {
+    val c = TuiSettings.fromConfig(ConfigFactory.parseString("log-ring-size = 200\nlog-level = debug"))
+    (c.logRingSize, c.logLevel) shouldBe ((200, Level.DEBUG))
+    val env = TuiEnv.from(Map.empty, Map.empty)
+    val running = env.applyTo(c)
+    (running.logRingSize, running.logLevel) shouldBe ((200, Level.DEBUG))
+  }
+
+  it should "fail with an error naming the key on an invalid log level or ring size" taggedAs (UnitTest) in {
+    val level = the[ConfigException.BadValue] thrownBy TuiSettings.fromConfig(ConfigFactory.parseString("log-level = LOUD"))
+    level.getMessage should include("fukuii.tui.log-level")
+    level.getMessage should include("LOUD")
+    val size = the[ConfigException.BadValue] thrownBy TuiSettings.fromConfig(ConfigFactory.parseString("log-ring-size = 0"))
+    size.getMessage should include("fukuii.tui.log-ring-size")
   }

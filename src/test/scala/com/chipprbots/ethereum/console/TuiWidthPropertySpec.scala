@@ -86,6 +86,23 @@ class TuiWidthPropertySpec extends AnyFlatSpec with Matchers with ScalaCheckProp
       phaseElapsedSeconds = elapsed / 2
     )
 
+  /** A client id as a hostile peer might send it: awkward text, with escape sequences and line breaks. */
+  private val clientId: Gen[String] = Gen.oneOf(
+    text,
+    Gen.zip(text, text).map((a, b) => s"$a\u001b[2J$b"),
+    Gen.zip(text, text).map((a, b) => s"$a\u001b]0;$b\u0007\n$b")
+  )
+
+  /** Log lines with awkward text (emoji, CJK) and the odd control character, from sync and other loggers. */
+  private val logs: Gen[Vector[LogLine]] =
+    for
+      n <- Gen.chooseNum(0, 120)
+      lines <- Gen.listOfN(n, Gen.zip(clientId, Gen.oneOf("INFO", "WARN", "ERROR", "DEBUG"), Gen.oneOf(true, false)))
+    yield lines.zipWithIndex.map { case ((t, level, sync), i) =>
+      val logger = if sync then "com.chipprbots.ethereum.blockchain.sync.regular.RegularSync" else "x.Y"
+      LogLine(i.toLong, "12:00:00", level, logger, t)
+    }.toVector
+
   private val peer: Gen[TuiPeer] =
     for
       id <- text
@@ -102,6 +119,7 @@ class TuiWidthPropertySpec extends AnyFlatSpec with Matchers with ScalaCheckProp
       head <- Gen.option(Gen.chooseNum(0L, 4_000_000_000L))
       counters <- Gen.option(count)
       pivot <- Gen.option(count)
+      imported <- Gen.option(Gen.zip(Gen.chooseNum(0, 10_000), Gen.chooseNum(0L, Long.MaxValue / 4)))
     yield LocalSample(
       diskFree = disk,
       jvm = heap.map((u, m, gc) => JvmSample(u, m, gc)),
@@ -122,7 +140,8 @@ class TuiWidthPropertySpec extends AnyFlatSpec with Matchers with ScalaCheckProp
           blacklisted = n
         )
       ),
-      snapPivot = pivot
+      snapPivot = pivot,
+      lastImport = imported.map((n, nanos) => ImportSample(n, Duration.ofNanos(nanos)))
     )
 
   /** A poll: each source fresh, stale or unresponsive, with awkward text in its reason and its peers. */
@@ -143,7 +162,24 @@ class TuiWidthPropertySpec extends AnyFlatSpec with Matchers with ScalaCheckProp
         Gen.const(SyncSample(current, best, status, None, sampledAgo.map(TuiFixtures.Now.minusSeconds), running))
       )
       l <- local
-    yield NodeStatusSnapshot(TuiFixtures.Now, maxPeers, current, peerSource, syncSource, l)
+      // Slice 4: each peer's client id (peer-chosen text, escape sequences included) and best block, and the txpool.
+      details <- Gen.option(sourced(Gen.sequence[List[(String, PeerDetails)], (String, PeerDetails)](list.map { p =>
+        Gen.zip(clientId, count).map((c, b) => p.id -> PeerDetails(c, b))
+      }).map(_.toMap)))
+      pool <- Gen.option(sourced(Gen.zip(Gen.chooseNum(0, 1_000_000), Gen.chooseNum(0, 10_000)).map(TxpoolSample(_, _))))
+      scores <- Gen.option(Gen.sequence[List[(String, Double)], (String, Double)](list.map { p =>
+        Gen.chooseNum(-1.0, 2.0).map(p.id -> _)
+      }).map(s => PeerScores(TuiFixtures.Now, s.toMap)))
+    yield NodeStatusSnapshot(
+      TuiFixtures.Now,
+      maxPeers,
+      current,
+      peerSource,
+      syncSource,
+      l.copy(peerScores = scores),
+      details,
+      pool
+    )
 
   private val state: Gen[TuiState] =
     for
@@ -170,6 +206,8 @@ class TuiWidthPropertySpec extends AnyFlatSpec with Matchers with ScalaCheckProp
       chain <- Gen.option(Gen.oneOf(TuiFixtures.chainEtc, TuiFixtures.chainMordor, TuiFixtures.chainSepolia))
       polled <- Gen.option(snapshot(peers, maxPeers, current, best))
       zeroSince <- Gen.option(Gen.chooseNum(0L, 100_000L))
+      tail <- logs
+      scroll <- Gen.chooseNum(0, 200)
     yield TuiState(
       networkName = network,
       connectionStatus = connection,
@@ -194,7 +232,10 @@ class TuiWidthPropertySpec extends AnyFlatSpec with Matchers with ScalaCheckProp
       helpOpen = helpOpen,
       chain = chain,
       snapshot = polled,
-      zeroPeersSince = zeroSince.map(TuiFixtures.Now.minusSeconds)
+      zeroPeersSince = zeroSince.map(TuiFixtures.Now.minusSeconds),
+      logs = tail,
+      logScroll = scroll,
+      scores = ScoreHistory(None, polled.flatMap(_.local.peerScores))
     )
 
   private val size: Gen[(Int, Int)] = Gen.frequency(
