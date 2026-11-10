@@ -3,11 +3,11 @@
  ⚠ 1 warn    peers 11/50 below 25%                                              
  Peers   11/50 ◆◆◆◆◆◆◆◆◆◆         Block  0 → 9,118,000 (pivot)                  
 ────────────────────────────────────────────────────────────────────────────────
- SNAP sync   💾   Downloading bytec…  elapsed 2h 11m · phase 1h 8m · ETA 1h 58m 
+ SNAP sync   💾   Downloading bytecodes & storage   elapsed 2h 11m · ETA 1h 58m 
 ────────────────────────────────────────────────────────────────────────────────
    Overall  [=====🪱..............]🧠 27%                                       
    Accounts 🪱[COMPLETE ✓]🧠                34.1M                               
-   Storage  [=======🪱............]🧠 37%   119.6M slots @ 21.4K/s · 2,114/5,7… 
+   Storage  [=======🪱............]🧠 37%   119.6M @ 21.4K/s · 2,114/5,702      
    Bytecode 🪱[ACTIVE]   🧠                 412.0K @ 310/s                      
    Healing  🪱[QUEUED]🧠                                                        
    Chain    headers 4.2M / 9.1M · bodies 0 · receipts 0                         

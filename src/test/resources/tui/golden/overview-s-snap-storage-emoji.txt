@@ -7,13 +7,13 @@
  SNAP 💾   Downloading bytecodes & storage          elapsed 2h 11m · ETA 1h 58m 
    Overall  [=====🪱..............]🧠 27%                                       
    Accounts 🪱[COMPLETE ✓]🧠                34.1M                               
-   Storage  [=======🪱............]🧠 37%   119.6M slots @ 21.4K/s · 2,114/5,7… 
+   Storage  [=======🪱............]🧠 37%   119.6M @ 21.4K/s · 2,114/5,702      
    Bytecode 🪱[ACTIVE]   🧠                 412.0K @ 310/s                      
    Healing  🪱[QUEUED]🧠                                                        
 ────────────────────────────────────────────────────────────────────────────────
  Forks   Mystique ✓ ═════════════════════════▶ Spiral @ 9,957,000 (839.0K away) 
 ────────────────────────────────────────────────────────────────────────────────
- Node    …kuii/mordor · SNAP sync · archive pruning · 50 peers max · mining off 
+ Node    …/mordor · SNAP sync · archive pruning · 50 peers max · mining off     
                                                                                 
                                                                                 
                                                                                 

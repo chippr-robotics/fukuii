@@ -9,7 +9,7 @@
 ────────────────────────────────────────────────────────────────────────────────
  Forks   Spiral ✓ ══════════════════════════════════════▶ Olympia not scheduled 
 ────────────────────────────────────────────────────────────────────────────────
- Node    …b/fukuii/etc · SNAP sync · archive pruning · 50 peers max · mining on 
+ Node    …/fukuii/etc · SNAP sync · archive pruning · 50 peers max · mining on  
                                                                                 
                                                                                 
                                                                                 
