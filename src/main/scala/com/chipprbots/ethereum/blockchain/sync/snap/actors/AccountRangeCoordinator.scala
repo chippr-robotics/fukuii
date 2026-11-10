@@ -893,7 +893,11 @@ private[actors] class AccountRangeCoordinatorImpl(
     * which ranges are unfinished (B-044: the estimate left `storingTasks` out).
     */
   private def tasksWithWork: Iterator[AccountTask] =
-    AccountRangeCoordinator.tasksWithWork(pendingTasks, activeTasks.values.map(_._1), storingTasks.values)
+    AccountRangeCoordinator.tasksWithWork(
+      pending = pendingTasks,
+      active = activeTasks.valuesIterator.map(_._1),
+      storing = storingTasks.valuesIterator
+    )
 
   // Also wait for responses still being inserted (storingTasks) and for the carried contract work to be replayed —
   // completion sends NoMore{Storage,ByteCode}Tasks downstream, which must not overtake either.
@@ -927,21 +931,21 @@ object AccountRangeCoordinator:
   private[snap] val KeyspaceEstimateMinAccounts: Long = 10_000L
 
   /** The account-count estimate from keyspace coverage: `accountsDownloaded * 2^256 / covered`, where `covered` is the
-    * keyspace not left in a range with work (`tasksWithWork`: queued, asked of a peer, or being stored). Uses BigInt
-    * throughout: 2^256 is far beyond a Double's 15-17 significant digits. A function of its arguments so it can be
-    * tested; see `AccountKeyspaceEstimateSpec`.
+    * keyspace not left in a range with work (`unfinished`, from `tasksWithWork`: queued, asked of a peer, or being
+    * stored). Uses BigInt throughout: 2^256 is far beyond a Double's 15-17 significant digits. A function of its
+    * arguments so it can be tested; see `AccountKeyspaceEstimateSpec`.
     *
     * None before `KeyspaceEstimateMinAccounts` accounts (too early to extrapolate), when the ranges leave no keyspace
     * covered (the same range counted twice, say), and for a result that is not above the count or is over 2 billion.
     */
   private[actors] def keyspaceEstimate(
       accountsDownloaded: Long,
-      tasksWithWork: IterableOnce[AccountTask]
+      unfinished: IterableOnce[AccountTask]
   ): Option[Long] =
     if accountsDownloaded < KeyspaceEstimateMinAccounts then None // too early for reliable estimate
     else
       val keyspaceSize = BigInt(2).pow(256)
-      val remaining = tasksWithWork.iterator.foldLeft(BigInt(0)) { case (sum, task) =>
+      val remaining = unfinished.iterator.foldLeft(BigInt(0)) { case (sum, task) =>
         val taskEnd = BigInt(1, task.last.toArray)
         val taskPos = BigInt(1, task.next.toArray)
         sum + (taskEnd - taskPos).max(0)
