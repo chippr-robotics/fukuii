@@ -510,17 +510,18 @@ items:
     opened: 2026-11-07
     refs: [027 live check 2026-11-07]
     links:
+      prs: [1783]
       spec: specs/027-tui-dashboard
     claim:
       by: dev-node
       agent: general-purpose
       since: 2026-11-09T18:55:29Z
-      heartbeat: 2026-11-09T23:56:09Z
+      heartbeat: 2026-11-10T00:20:03Z
       branch: feat/027-s2-motion
     notes: |-
-      Fold into slice 1 or 2, or a fix PR.
       2026-11-09 in-progress: Slice 2 fixes 'no target yet' (SNAP); duplicated lines fixed by #1752. Progress going backwards is in SyncProgressMonitor.scala:147-151/:222-227 and reset() :82 (SyncLifecycle.scala:366): separate fix PR.
       2026-11-09 in-progress: TUI part in #1783; SyncProgressMonitor part still open (separate fix).
+      2026-11-10 in-progress: TUI part merged in #1783 (b971c9dae); SyncProgressMonitor part in progress on fix/b044-snap-progress.
   - id: B-045
     title: "TUI lifecycle defects: ERROR loop after Ctrl-C, checkInput swallows errors, banner holds the lock, StdNode makes a Tui"
     priority: P2
