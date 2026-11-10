@@ -178,7 +178,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **The `--tui` dashboard has views, a layout that fits every size, and an alert row (spec 027 slice 3).**
   - **Views.** `1` Overview, `2` Sync, `3` Peers, `4` Chain; `Tab` cycles them; `?` or `h` opens Help over the view
     (the keys and the legend of the glyph set on screen), and any key but `q`, `r` and `d` closes it. `g` switches
-    between the emoji and ASCII glyph sets without moving a column. The header names the network, chain id, PoW or
+    between the emoji and ASCII glyph sets without moving a column. Arrow, Home, Insert, Delete and function keys
+    are ignored (their escape sequences used to be read as `d`, `h` and view keys). The header names the network, chain id, PoW or
     PoS, the uptime and the view; from 100×32 also the head and the peers, from 140×45 the version. The footer lists
     the keys.
   - **Alert row.** The row under the header, on every view, reads `✓ no alerts` or lists up to three conditions,
@@ -186,7 +187,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     a stalled sync (2 minutes without a new block while blocks remain), a SNAP progress sample older than 90 s while
     SNAP runs, disk below 20G free on the datadir (below 5G an error), and fewer peers than a quarter of the maximum.
     It never moves. The peer count's own colour still turns yellow below half the maximum.
-  - **Overview.** Peers and blocks, the endpoints, disk free, the JVM heap (and at 140×45 the GC share and the
+  - **Overview.** Peers and blocks (while SNAP runs, the pivot is the target), the endpoints, disk free, the JVM heap (and at 140×45 the GC share and the
     discovery table), the SNAP worm rows or the Blocks worm with its rate and ETA, the forks (the last active and the
     next, with its distance), and at 140×45 the longest-connected peers beside the logo.
   - **Sync view.** The worm rows on a 20-, 40- or 60-cell track by size; for SNAP, from 100×32, the recent and overall
