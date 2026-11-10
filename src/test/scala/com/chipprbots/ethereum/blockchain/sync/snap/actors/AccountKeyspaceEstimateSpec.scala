@@ -16,6 +16,9 @@ import com.chipprbots.ethereum.testing.Tags.*
   * chunk by chunk sits in `storingTasks`, in neither `pendingTasks` nor `activeTasks` (#1487), with its `next` already
   * past the response; leaving it out counted the rest of its range as covered, and the percentage jumped ahead by up to
   * a range (6% of the keyspace with 16 ranges) for as long as any range was in that state.
+  *
+  * The coordinator's `tasksWithWork` is the one set of unfinished ranges behind `isComplete`, the resume snapshot and
+  * this estimate, so the estimate cannot leave a set out again; what is tested here is the arithmetic over the set.
   */
 class AccountKeyspaceEstimateSpec extends AnyFlatSpec with Matchers:
 
@@ -37,47 +40,50 @@ class AccountKeyspaceEstimateSpec extends AnyFlatSpec with Matchers:
   private val Downloaded = 1_000_000L
 
   "AccountRangeCoordinator.keyspaceEstimate" should
-    "give the same estimate whether a range is being stored or queued again" taggedAs UnitTest in {
-      // 8 ranges done; 7 untouched and queued; range 7 answered a quarter of the way in (4/16 of it).
-      val queued = (8 until 15).map(range(_))
-      val answered = range(7, doneOutOf16 = 4)
+    "count the rest of a range answered part-way as keyspace still to do" taggedAs UnitTest in {
+      // Remaining work: 7 whole ranges and the 12/16 of range 7 that the answer did not cover: 7.75 of 16, so 8.25 of 16
+      // is covered and the estimate is 16 / 8.25 times the accounts so far.
+      val withWork = (8 until 15).map(range(_)) :+ range(7, doneOutOf16 = 4)
+      val expected = BigInt(Downloaded) * 16 * 4 / 33 // 16 / 8.25 = 64 / 33
 
-      val whileStoring = AccountRangeCoordinator.keyspaceEstimate(Downloaded, queued, Nil, Seq(answered))
-      val afterRequeue = AccountRangeCoordinator.keyspaceEstimate(Downloaded, queued :+ answered, Nil, Nil)
+      val estimate = AccountRangeCoordinator.keyspaceEstimate(Downloaded, withWork)
 
-      withClue("the same ranges have the same work left, whichever set holds the answered one: ") {
-        whileStoring shouldBe afterRequeue
-      }
+      estimate.map(BigInt(_)).get should ((be >= expected - 1).and(be <= expected + 1))
     }
 
-  it should "count the rest of a range being stored as keyspace still to do" taggedAs UnitTest in {
-    // Remaining work: 7 whole ranges and the 12/16 of range 7 that the answer did not cover: 7.75 of 16, so 8.25 of 16
-    // is covered and the estimate is 16 / 8.25 times the accounts so far.
-    val queued = (8 until 15).map(range(_))
-    val answered = range(7, doneOutOf16 = 4)
-    val expected = BigInt(Downloaded) * 16 * 4 / 33 // 16 / 8.25 = 64 / 33
-
-    val estimate = AccountRangeCoordinator.keyspaceEstimate(Downloaded, queued, Nil, Seq(answered))
-
-    estimate.map(BigInt(_)).get should ((be >= expected - 1).and(be <= expected + 1))
-  }
-
-  it should "not move when a range goes from queued, to asked of a peer, to being stored" taggedAs UnitTest in {
-    val others = (8 until 15).map(range(_))
-    val partly = range(15, doneOutOf16 = 8)
-
-    val queued = AccountRangeCoordinator.keyspaceEstimate(Downloaded, others :+ partly, Nil, Nil)
-    val asked = AccountRangeCoordinator.keyspaceEstimate(Downloaded, others, Seq(partly), Nil)
-    val storing = AccountRangeCoordinator.keyspaceEstimate(Downloaded, others, Nil, Seq(partly))
-
-    queued should not be empty
-    asked shouldBe queued
-    storing shouldBe queued
-  }
-
   it should "give no estimate before 10,000 accounts, or when no range has work left" taggedAs UnitTest in {
-    val queued = (0 until Ranges).map(range(_))
+    val withWork = (0 until Ranges).map(range(_))
 
-    AccountRangeCoordinator.keyspaceEstimate(9_999L, queued, Nil, Nil) shouldBe None
-    AccountRangeCoordinator.keyspaceEstimate(Downloaded, Nil, Nil, Nil) shouldBe None
+    AccountRangeCoordinator.keyspaceEstimate(9_999L, withWork) shouldBe None
+    AccountRangeCoordinator.keyspaceEstimate(Downloaded, Nil) shouldBe None
+  }
+
+  it should "count nothing for a range whose cursor is at or past its end" taggedAs UnitTest in {
+    val withWork = (8 until 15).map(range(_))
+    val atEnd = range(15).copy(next = range(15).last)
+    val pastEnd = range(7).copy(next = hash(Keyspace - 1))
+
+    val expected = AccountRangeCoordinator.keyspaceEstimate(Downloaded, withWork)
+
+    expected should not be empty
+    AccountRangeCoordinator.keyspaceEstimate(Downloaded, withWork :+ atEnd :+ pastEnd) shouldBe expected
+  }
+
+  it should "count nothing, and not fail, for a range with an empty `last`" taggedAs UnitTest in {
+    val withWork = (8 until 15).map(range(_))
+    val unbounded = AccountTask(next = hash(RangeSize * 7), last = ByteString.empty, rootHash = Root)
+
+    val expected = AccountRangeCoordinator.keyspaceEstimate(Downloaded, withWork)
+
+    expected should not be empty
+    AccountRangeCoordinator.keyspaceEstimate(Downloaded, withWork :+ unbounded) shouldBe expected
+  }
+
+  it should "give no estimate when the same ranges are counted twice" taggedAs UnitTest in {
+    // Fifteen ranges leave 15/16 of the keyspace to do; twice that is more than there is, and a negative `covered`
+    // must not become an estimate.
+    val fifteen = (1 until Ranges).map(range(_))
+
+    AccountRangeCoordinator.keyspaceEstimate(Downloaded, fifteen) should not be empty
+    AccountRangeCoordinator.keyspaceEstimate(Downloaded, fifteen ++ fifteen) shouldBe None
   }
