@@ -37,8 +37,8 @@ import com.chipprbots.ethereum.network.PeerManagerActor
 import com.chipprbots.ethereum.network.PeerScoreSnapshot
 import com.chipprbots.ethereum.network.ScoringStatistics
 import com.chipprbots.ethereum.network.p2p.messages.Capability
-import com.chipprbots.ethereum.transactions.PendingTransactionsManager
 import com.chipprbots.ethereum.testing.Tags.*
+import com.chipprbots.ethereum.transactions.PendingTransactionsManager
 
 /** [[TuiStatusProbe]] answers from the same actor queries as `net_peerCount` and `eth_syncing`. */
 class TuiStatusProbeSpec extends ScalaTestWithActorTestKit with AnyFlatSpecLike with Matchers:
@@ -427,10 +427,9 @@ class TuiStatusProbeSpec extends ScalaTestWithActorTestKit with AnyFlatSpecLike 
     long.codePointCount(0, long.length) shouldBe TuiStatusProbe.MaxReasonChars
     long should endWith("…")
     TuiStatusProbe.reason(new IllegalStateException()) shouldBe "IllegalStateException"
-    // An emoji (a surrogate pair) across the cut is dropped whole, not split.
+    // The cap counts code points: an emoji (a surrogate pair) across the cut is kept whole or not at all, never split.
     val emoji = TuiStatusProbe.reason(new RuntimeException("x" * (TuiStatusProbe.MaxReasonChars - 4) + "🪱" * 10))
-    emoji shouldBe "x" * (TuiStatusProbe.MaxReasonChars - 4) + "..."
-    emoji.exists(Character.isSurrogate) shouldBe false
+    emoji shouldBe "x" * (TuiStatusProbe.MaxReasonChars - 4) + "🪱" * 3 + "…"
   }
 
   it should "take the local readings even when both asks miss their wait" taggedAs (UnitTest) in {
@@ -539,7 +538,9 @@ class TuiStatusProbeSpec extends ScalaTestWithActorTestKit with AnyFlatSpecLike 
   it should "say the txpool is Unresponsive when it does not answer, and leave it unasked when not wired" taggedAs (
     UnitTest
   ) in {
-    detailedProbe(pool = Some(silent.narrow[PendingTransactionsManager.Command]))().txpool shouldBe Some(Sourced.Unresponsive("no reply within 300ms"))
+    detailedProbe(pool = Some(silent.narrow[PendingTransactionsManager.Command]))().txpool shouldBe Some(
+      Sourced.Unresponsive("no reply within 300ms")
+    )
     detailedProbe()().txpool shouldBe None
   }
 
@@ -581,15 +582,15 @@ class TuiStatusProbeSpec extends ScalaTestWithActorTestKit with AnyFlatSpecLike 
 
     NetworkMetrics.publishPeerScores(published)
     TuiStatusProbe.LocalSources.networkScores() shouldBe Some(PeerScores(takenAt, Map("ab12" -> 0.912)))
-    detailedProbe(local = TuiStatusProbe.LocalSources(peerScores = TuiStatusProbe.LocalSources.networkScores))()
-      .local
-      .peerScores shouldBe Some(PeerScores(takenAt, Map("ab12" -> 0.912)))
+    detailedProbe(local =
+      TuiStatusProbe.LocalSources(peerScores = TuiStatusProbe.LocalSources.networkScores)
+    )().local.peerScores shouldBe Some(PeerScores(takenAt, Map("ab12" -> 0.912)))
   }
 
   it should "read the last import from RegularSyncMetrics" taggedAs (UnitTest) in {
     com.chipprbots.ethereum.blockchain.sync.regular.RegularSyncMetrics.recordLastImport(blocks = 3, nanos = 61_000_000L)
     TuiStatusProbe.LocalSources.regularSyncImport() shouldBe Some(ImportSample(3, java.time.Duration.ofMillis(61)))
-    detailedProbe(local = TuiStatusProbe.LocalSources(lastImport = () => Some(ImportSample(1, java.time.Duration.ZERO))))()
-      .local
-      .lastImport shouldBe Some(ImportSample(1, java.time.Duration.ZERO))
+    detailedProbe(local =
+      TuiStatusProbe.LocalSources(lastImport = () => Some(ImportSample(1, java.time.Duration.ZERO)))
+    )().local.lastImport shouldBe Some(ImportSample(1, java.time.Duration.ZERO))
   }

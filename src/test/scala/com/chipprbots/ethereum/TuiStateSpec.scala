@@ -294,7 +294,8 @@ class NodeSettingsSpec extends AnyFlatSpec with Matchers:
   "TuiState's log tail" should "follow the newest lines, and keep a scrolled view on the same lines as new ones arrive" taggedAs (
     UnitTest
   ) in {
-    def lines(from: Int, to: Int) = (from to to).map(i => LogLine(i.toLong, "12:00:00", "INFO", "x", s"line $i")).toVector
+    def lines(from: Int, to: Int) =
+      (from to to).map(i => LogLine(i.toLong, "12:00:00", "INFO", "x", s"line $i")).toVector
     val s = TuiState.initial.withLogs(lines(0, 99))
     s.logScroll shouldBe 0
     val back = s.scrollLogs(30, page = 20)

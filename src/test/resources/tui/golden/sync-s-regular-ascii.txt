@@ -7,18 +7,18 @@
    Blocks   [===============~o....]@@ 84%   18,402,113 / 21,884,102             
    Session  imported 101,220 blocks since 18,300,893 (9m 9s ago)                
    Lag      3,481,989 blocks behind best known                                  
+--------------------------------------------------------------------------------
+ Import     last 3 blocks in 61ms                                               
+--------------------------------------------------------------------------------
+ Recent (sync)                                                                  
+ 11:59:04 INFO  Imported block 21,884,099 0x7ab2..d4c7 with 6 txs in 14ms       
+ 11:59:17 INFO  Imported block 21,884,100 0x3301..2e9d with 21 txs in 31ms      
+ 11:59:25 INFO  [====================~o]@@ 100% - RegularSync                   
+ 11:59:34 INFO  Imported block 21,884,101 0x9b0c..ff31 with 9 txs in 17ms       
+ 11:59:47 INFO  Imported block 21,884,102 0x6d21..1a0e with 14 txs in 22ms      
+ 12:00:00 INFO  RegularSync: at head, block 21884102                            
                                                                                 
                                                                                 
                                                                                 
                                                                                 
-                                                                                
-                                                                                
-                                                                                
-                                                                                
-                                                                                
-                                                                                
-                                                                                
-                                                                                
-                                                                                
-                                                                                
- 1 Over 2 Sync 3 Peers 4 Chain | p Pause ? Help r Redraw d Detach q Quit        
+ 1 Over 2 Sync 3 Peers 4 Chain 5 Logs | p Pause ? Help r Redraw d Detach q Quit 

@@ -181,7 +181,8 @@ object TuiFixtures:
   def peerScores(peers: Seq[TuiPeer]): PeerScores =
     PeerScores(Now.minusSeconds(4), scoredPeers(peers).map((p, i) => p.id -> scoreOf(i)).toMap)
 
-  /** The snapshot before, 10 s earlier: by peer, a third of the scores lower (now up), a third equal, a third higher. */
+  /** The snapshot before, 10 s earlier: by peer, a third of the scores lower (now up), a third equal, a third higher.
+    */
   def previousScores(peers: Seq[TuiPeer]): PeerScores =
     PeerScores(
       Now.minusSeconds(14),
@@ -189,7 +190,8 @@ object TuiFixtures:
         p.id -> (i % 3 match
           case 0 => scoreOf(i) - 0.012
           case 1 => scoreOf(i)
-          case _ => scoreOf(i) + 0.009)
+          case _ => scoreOf(i) + 0.009
+        )
       }.toMap
     )
 
@@ -197,10 +199,13 @@ object TuiFixtures:
   def trends(peers: Seq[TuiPeer]): Seq[(TuiPeer, Trend)] =
     scoredPeers(peers)
       .sortBy((_, i) => -scoreOf(i))
-      .map((p, i) => p -> (i % 3 match
-        case 0 => Trend.Up
-        case 1 => Trend.Steady
-        case _ => Trend.Down))
+      .map((p, i) =>
+        p -> (i % 3 match
+          case 0 => Trend.Up
+          case 1 => Trend.Steady
+          case _ => Trend.Down
+        )
+      )
 
   /** A logging event at `at`, for a test that feeds a ring directly (the test root logger is at ERROR). */
   def logEvent(

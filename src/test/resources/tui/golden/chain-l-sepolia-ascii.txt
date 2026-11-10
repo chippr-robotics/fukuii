@@ -1,7 +1,7 @@
  # FUKUII  sepolia (11155111) . PoS . head 7,412,009 . 23/50 peers . up 3d 4h . v0.11.0                                                                   Chain 
 ----------------------------------------------------------------------------------------------------------------------------------------------------------------
  + no alerts                                                                                                                                                    
- Peers   23/50 ##########    Block  7,412,009 -> 7,412,011 (-2)              Disk  1.2T free       JVM  2.1G / 8.0G heap     GC  0.3%                           
+ Peers   23/50 ##########  Block  7,412,009 -> 7,412,011 (-2)             Txpool  1,204 (3 blob)  Disk  1.2T free     JVM  2.1G / 8.0G heap                     
  Sync    regular 99% . rate 0.08 blk/s . ETA 24s                                                                                                                
 ----------------------------------------------------------------------------------------------------------------------------------------------------------------
  Chain   sepolia . chain id 11155111 . PoS . forks by timestamp                                                                                                 
@@ -45,4 +45,4 @@
                                                                                                                                                                 
                                                                                                                                                                 
                                                                                                                                                                 
- 1 Overview  2 Sync  3 Peers  4 Chain | p Pause  ? Help  r Redraw  d Detach  q Quit                                                                             
+ 1 Overview  2 Sync  3 Peers  4 Chain  5 Logs | p Pause  ? Help  r Redraw  d Detach  q Quit                                                                     

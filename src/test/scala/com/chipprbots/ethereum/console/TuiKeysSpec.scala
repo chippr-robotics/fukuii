@@ -8,8 +8,8 @@ import org.scalatest.matchers.should.Matchers
 
 import com.chipprbots.ethereum.testing.Tags.*
 
-/** The view keys (spec 027 FR-015, research §2.1–§2.2, T061), and the Logs view's `5`, `l`, `+` and `-` with the
-  * Recent strips (slice 4, T086).
+/** The view keys (spec 027 FR-015, research §2.1–§2.2, T061), and the Logs view's `5`, `l`, `+` and `-` with the Recent
+  * strips (slice 4, T086).
   */
 class TuiKeysSpec extends AnyFlatSpec with Matchers:
 
@@ -25,8 +25,7 @@ class TuiKeysSpec extends AnyFlatSpec with Matchers:
 
   "The number keys" should "open Overview, Sync, Peers, Chain and Logs" taggedAs (UnitTest) in withTui { (tui, _) =>
     tui.getState.view shouldBe TuiView.Overview
-    for
-      (key, view) <- Seq(
+    for (key, view) <- Seq(
         '2' -> TuiView.Sync,
         '3' -> TuiView.Peers,
         '4' -> TuiView.Chain,
@@ -71,7 +70,8 @@ class TuiKeysSpec extends AnyFlatSpec with Matchers:
     tui.render()
     val frame = TuiTestTerminal.visible(tt.lastFrame)
     frame.linesIterator.next().trim should endWith("Help")
-    for key <- Seq("1 Overview", "5 Logs", "Tab", "l ", "+ -", "g ", "p ", "q ", "d ", "r ") do frame should include(key)
+    for key <- Seq("1 Overview", "5 Logs", "Tab", "l ", "+ -", "g ", "p ", "q ", "d ", "r ") do
+      frame should include(key)
   }
 
   it should "still quit on q and detach on d" taggedAs (UnitTest) in {
@@ -271,14 +271,14 @@ class TuiKeysSpec extends AnyFlatSpec with Matchers:
     tui.getState.logScroll shouldBe 0 // already at the newest line
     tui.handleCommand('-') shouldBe TuiCommand.Continue
     tui.getState.logScroll should be > 0
-    shown() should not include "line 0200"
+    (shown() should not).include("line 0200")
     (1 to 50).foreach(_ => tui.handleCommand('-'))
     val top = tui.getState.logScroll
     tui.handleCommand('-')
     tui.getState.logScroll shouldBe top // the oldest line is on screen: no further
     val oldest = shown()
     oldest should include("line 0001")
-    oldest should not include "line 0200"
+    (oldest should not).include("line 0200")
     (1 to 50).foreach(_ => tui.handleCommand('+'))
     tui.getState.logScroll shouldBe 0
     shown() should include("line 0200")

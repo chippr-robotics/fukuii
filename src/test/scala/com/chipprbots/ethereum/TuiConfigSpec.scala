@@ -234,9 +234,11 @@ class TuiConfigSpec extends AnyFlatSpec with Matchers:
   }
 
   it should "fail with an error naming the key on an invalid log level or ring size" taggedAs (UnitTest) in {
-    val level = the[ConfigException.BadValue] thrownBy TuiSettings.fromConfig(ConfigFactory.parseString("log-level = LOUD"))
+    val level =
+      the[ConfigException.BadValue] thrownBy TuiSettings.fromConfig(ConfigFactory.parseString("log-level = LOUD"))
     level.getMessage should include("fukuii.tui.log-level")
     level.getMessage should include("LOUD")
-    val size = the[ConfigException.BadValue] thrownBy TuiSettings.fromConfig(ConfigFactory.parseString("log-ring-size = 0"))
+    val size =
+      the[ConfigException.BadValue] thrownBy TuiSettings.fromConfig(ConfigFactory.parseString("log-ring-size = 0"))
     size.getMessage should include("fukuii.tui.log-ring-size")
   }

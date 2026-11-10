@@ -163,13 +163,25 @@ class TuiWidthPropertySpec extends AnyFlatSpec with Matchers with ScalaCheckProp
       )
       l <- local
       // Slice 4: each peer's client id (peer-chosen text, escape sequences included) and best block, and the txpool.
-      details <- Gen.option(sourced(Gen.sequence[List[(String, PeerDetails)], (String, PeerDetails)](list.map { p =>
-        Gen.zip(clientId, count).map((c, b) => p.id -> PeerDetails(c, b))
-      }).map(_.toMap)))
-      pool <- Gen.option(sourced(Gen.zip(Gen.chooseNum(0, 1_000_000), Gen.chooseNum(0, 10_000)).map(TxpoolSample(_, _))))
-      scores <- Gen.option(Gen.sequence[List[(String, Double)], (String, Double)](list.map { p =>
-        Gen.chooseNum(-1.0, 2.0).map(p.id -> _)
-      }).map(s => PeerScores(TuiFixtures.Now, s.toMap)))
+      details <- Gen.option(
+        sourced(
+          Gen
+            .sequence[List[(String, PeerDetails)], (String, PeerDetails)](list.map { p =>
+              Gen.zip(clientId, count).map((c, b) => p.id -> PeerDetails(c, b))
+            })
+            .map(_.toMap)
+        )
+      )
+      pool <- Gen.option(
+        sourced(Gen.zip(Gen.chooseNum(0, 1_000_000), Gen.chooseNum(0, 10_000)).map(TxpoolSample(_, _)))
+      )
+      scores <- Gen.option(
+        Gen
+          .sequence[List[(String, Double)], (String, Double)](list.map { p =>
+            Gen.chooseNum(-1.0, 2.0).map(p.id -> _)
+          })
+          .map(s => PeerScores(TuiFixtures.Now, s.toMap))
+      )
     yield NodeStatusSnapshot(
       TuiFixtures.Now,
       maxPeers,

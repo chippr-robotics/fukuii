@@ -1,7 +1,7 @@
  # FUKUII  etc (61) . PoW . head 21,884,102 . 41/50 peers . up 12d 7h                                             Chain 
 ------------------------------------------------------------------------------------------------------------------------
  + no alerts                                                                                                            
- Peers   41/50 ##########                    Block  21,884,102 (at head)                                                
+ Peers   41/50 ##########                    Block  21,884,102 (at head)                     Txpool  142                
  Sync    + at head                                                                                                      
 ------------------------------------------------------------------------------------------------------------------------
  Chain   etc . chain id 61 . PoW . forks by block number                                                                
@@ -37,4 +37,4 @@
                                                                                                                         
                                                                                                                         
                                                                                                                         
- 1 Overview  2 Sync  3 Peers  4 Chain | p Pause  ? Help  r Redraw  d Detach  q Quit                                     
+ 1 Overview  2 Sync  3 Peers  4 Chain  5 Logs | p Pause  ? Help  r Redraw  d Detach  q Quit                             

@@ -17,8 +17,8 @@ import com.chipprbots.ethereum.testing.Tags.*
 
 /** The log tail's ring (spec 027 FR-021, SC-009, Q4): a separate appender that keeps the newest lines, sanitised.
   *
-  * Events are handed to the appender directly: the test logback configuration's root is at ERROR, so a real logger would
-  * never pass it an INFO line.
+  * Events are handed to the appender directly: the test logback configuration's root is at ERROR, so a real logger
+  * would never pass it an INFO line.
   */
 class TuiLogRingAppenderSpec extends AnyFlatSpec with Matchers with LoneElement:
 
@@ -37,7 +37,8 @@ class TuiLogRingAppenderSpec extends AnyFlatSpec with Matchers with LoneElement:
       logger: String = "com.chipprbots.ethereum.Fukuii",
       args: Array[AnyRef] = null
   ): LoggingEvent =
-    val e = new LoggingEvent(classOf[TuiLogRingAppenderSpec].getName, context.getLogger(logger), level, message, null, args)
+    val e =
+      new LoggingEvent(classOf[TuiLogRingAppenderSpec].getName, context.getLogger(logger), level, message, null, args)
     e.setTimeStamp(at.toEpochMilli)
     e
 
