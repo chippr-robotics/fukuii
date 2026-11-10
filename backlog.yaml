@@ -479,7 +479,7 @@ items:
   - id: B-042
     title: "Spec 027 slice 4: logs and rich peers"
     priority: P2
-    status: open
+    status: claimed
     area: tui
     size: M
     opened: 2026-11-07
@@ -488,6 +488,12 @@ items:
       spec: specs/027-tui-dashboard
       branch: feat/027-s4-logs-peers
     depends_on: [B-040, B-041]
+    claim:
+      by: dev-node
+      agent: general-purpose
+      since: 2026-11-10T00:59:39Z
+      heartbeat: 2026-11-10T00:59:39Z
+      branch: feat/027-s4-logs-peers
   - id: B-043
     title: "Spec 027 slice 5: per-chain panels (ETH CL and Engine API; ETC mining)"
     priority: P2
