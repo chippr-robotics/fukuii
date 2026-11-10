@@ -524,24 +524,19 @@ items:
   - id: B-045
     title: "TUI lifecycle defects: ERROR loop after Ctrl-C, checkInput swallows errors, banner holds the lock, StdNode makes a Tui"
     priority: P2
-    status: review
+    status: done
     area: tui
     size: S
     opened: 2026-11-07
+    closed: 2026-11-10
     refs: ["#1744 follow-up"]
     links:
       prs: [1783]
       spec: specs/027-tui-dashboard
-    claim:
-      by: dev-node
-      agent: general-purpose
-      since: 2026-11-09T18:55:32Z
-      heartbeat: 2026-11-09T23:56:03Z
-      branch: feat/027-s2-motion
     notes: |-
-      StdNode shutdown calls Tui.getInstance(), which creates a TUI in non-TUI runs.
       2026-11-09 in-progress: Code done on feat/027-s2-motion (2026-11-09); prism review, then PR.
       2026-11-09 review: PR #1783: prism (3 rounds) + eye passed.
+      2026-11-10 done: Merged as b971c9dae. Manual gates (T057) move to the UAT item B-189.
   - id: B-046
     title: "Spec 021 T004-T005 (P-6): ETC node follow, datadir copy at a planned stop, export H+1..H+5000"
     priority: P2
