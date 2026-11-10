@@ -187,6 +187,24 @@ class SyncProgressMonitorSpec extends ScalaTestWithActorTestKit with AnyFlatSpec
       progress.estimatedTotalSlots shouldBe 0L
     }
 
+  it should "draw the Storage row of the log's worm from phase entry, before any slot estimate" taggedAs UnitTest in {
+    import com.chipprbots.ethereum.blockchain.sync.WormToBrainBar
+
+    val monitor = new SyncProgressMonitor(classicScheduler)
+    monitor.startPhase(AccountRangeSync)
+    monitor.startPhase(ByteCodeAndStorageSync)
+    monitor.updateStorageContracts(completed = 250, total = 1_000)
+
+    val progress = monitor.currentProgress
+
+    progress.estimatedTotalSlots shouldBe 0L
+    progress.phaseProgress shouldBe 25
+    // The line says 25% from the first report, so the worm must not wait for a slot estimate to say so.
+    progress.wormBlock.linesIterator.find(_.trim.startsWith("Storage")).get should include(
+      WormToBrainBar.renderKnown(0.25)
+    )
+  }
+
   it should "leave the slot estimate as it was pushed, whatever the slot count does between pushes" taggedAs UnitTest in {
     val monitor = new SyncProgressMonitor(classicScheduler)
     monitor.startPhase(AccountRangeSync)
@@ -280,6 +298,8 @@ class SyncProgressMonitorSpec extends ScalaTestWithActorTestKit with AnyFlatSpec
       val line = capture.lines.find(_.contains("SNAP progress reset")).get
       line should include("accounts=800")
       line should include("phase progress=80%")
+      // It names the coordinator's threshold, so the number cannot go stale.
+      line should include(s"${actors.AccountRangeCoordinator.KeyspaceEstimateMinAccounts} accounts")
     finally capture.close()
   }
 
