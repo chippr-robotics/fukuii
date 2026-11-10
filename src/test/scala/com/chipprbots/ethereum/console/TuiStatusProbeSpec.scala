@@ -292,14 +292,26 @@ class TuiStatusProbeSpec extends ScalaTestWithActorTestKit with AnyFlatSpecLike 
   }
 
   it should "read the discovery counts from NetworkMetrics" taggedAs (UnitTest) in {
-    com.chipprbots.ethereum.network.NetworkMetrics.DiscoveredPeersSize.set(1_912L)
-    com.chipprbots.ethereum.network.NetworkMetrics.PendingPeersSize.set(14L)
-    com.chipprbots.ethereum.network.NetworkMetrics.BlacklistedPeersSize.set(3L)
-    TuiStatusProbe.LocalSources.networkDiscovery() shouldBe Some(DiscoverySample(1_912L, 14L, 3L))
-    localProbe(
-      TuiStatusProbe.LocalSources(discovery = TuiStatusProbe.LocalSources.networkDiscovery)
-    )().local.discovery shouldBe
-      Some(DiscoverySample(1_912L, 14L, 3L))
+    import com.chipprbots.ethereum.network.NetworkMetrics
+    val saved = (
+      NetworkMetrics.DiscoveredPeersSize.get,
+      NetworkMetrics.PendingPeersSize.get,
+      NetworkMetrics.BlacklistedPeersSize.get
+    )
+    try
+      NetworkMetrics.DiscoveredPeersSize.set(1_912L)
+      NetworkMetrics.PendingPeersSize.set(14L)
+      NetworkMetrics.BlacklistedPeersSize.set(3L)
+      TuiStatusProbe.LocalSources.networkDiscovery() shouldBe Some(DiscoverySample(1_912L, 14L, 3L))
+      localProbe(
+        TuiStatusProbe.LocalSources(discovery = TuiStatusProbe.LocalSources.networkDiscovery)
+      )().local.discovery shouldBe
+        Some(DiscoverySample(1_912L, 14L, 3L))
+    finally
+      // The gauges are process-wide; the next spec finds them as they were.
+      NetworkMetrics.DiscoveredPeersSize.set(saved._1)
+      NetworkMetrics.PendingPeersSize.set(saved._2)
+      NetworkMetrics.BlacklistedPeersSize.set(saved._3)
   }
 
   it should "read the best header's timestamp" taggedAs (UnitTest) in {
@@ -356,4 +368,78 @@ class TuiStatusProbeSpec extends ScalaTestWithActorTestKit with AnyFlatSpecLike 
     val s = probe(peerManager(), syncController(syncing), snap = Some(snapSample), snapAgeSeconds = 91)()
     s.snapSync shouldBe None
     s.sync.value.flatMap(_.snapSampledAt) shouldBe Some(now.minusSeconds(91))
+  }
+
+  // ---- prism, slice 3 review -------------------------------------------------------------------------------------
+
+  it should "read the real JVM's heap and GC time" taggedAs (UnitTest) in {
+    val (used, max) = TuiStatusProbe.LocalSources.jvmHeap().get
+    used should be >= 0L
+    max should be >= 0L
+    TuiStatusProbe.LocalSources.jvmGcMillis().get should be >= 0L
+  }
+
+  it should "count only the collectors that pause: not G1's concurrent cycles" taggedAs (UnitTest) in {
+    val beans = Seq(
+      "G1 Young Generation" -> 120L,
+      "G1 Old Generation" -> 30L,
+      "G1 Concurrent GC" -> 9_000L,
+      "ZGC Major Cycles" -> 5_000L,
+      "ZGC Major Pauses" -> 4L,
+      "Unknown" -> -1L
+    )
+    TuiStatusProbe.LocalSources.pausingGcMillis(beans) shouldBe 154L
+  }
+
+  it should "read SNAP's pivot block" taggedAs (UnitTest) in {
+    com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncMetrics.setPivotBlockNumber(BigInt(9_118_000))
+    TuiStatusProbe.LocalSources.snapPivotBlock() shouldBe Some(9_118_000L)
+    localProbe(TuiStatusProbe.LocalSources(snapPivot = () => Some(42L)))().local.snapPivot shouldBe Some(42L)
+  }
+
+  it should "clean a failure's reason before it reaches the screen: one line, no control character, capped" taggedAs (
+    UnitTest
+  ) in {
+    TuiStatusProbe.reason(new RuntimeException("bad\u001b[31m peer\nreply")) shouldBe "bad [31m peer reply"
+    val long = TuiStatusProbe.reason(new RuntimeException("x" * 500))
+    long.length shouldBe TuiStatusProbe.MaxReasonChars
+    long should endWith("...")
+    TuiStatusProbe.reason(new IllegalStateException()) shouldBe "IllegalStateException"
+  }
+
+  it should "take the local readings while the asks are in flight" taggedAs (UnitTest) in {
+    val s = new TuiStatusProbe(
+      spawn(silent),
+      spawn(silent),
+      () => 5,
+      50,
+      () => None,
+      100.millis,
+      clock,
+      TuiStatusProbe.LocalSources(heap = () => Some((1L, 2L)))
+    )(using system.scheduler)()
+    s.peers should matchPattern { case Sourced.Unresponsive(_) => }
+    s.local.jvm.map(_.heapUsed) shouldBe Some(1L)
+  }
+
+  // prism, slice 3 review: one test of "SNAP is running", from the sample alone, not from the controller's target.
+  it should "say SNAP is running while its latest sample is younger than 5 minutes, whatever the target" taggedAs (
+    UnitTest
+  ) in {
+    val snapStatus = SyncProtocol.Status.Syncing(0, Progress(5, 0), None)
+    val regularStatus = SyncProtocol.Status.Syncing(0, Progress(2_000, 9_000), None)
+    def running(status: SyncProtocol.Status, ageSeconds: Long) =
+      probe(peerManager(), syncController(status), snap = Some(snapSample), snapAgeSeconds = ageSeconds)().sync.value
+        .map(_.snapRunning)
+    running(snapStatus, 91) shouldBe Some(true)
+    running(snapStatus, 300) shouldBe Some(true)
+    running(snapStatus, 301) shouldBe Some(false)
+    // Regular sync after an in-process SNAP abort: the run's last sample ages out of "running" the same way.
+    running(regularStatus, 301) shouldBe Some(false)
+    // A finished run's Completed sample is not a running phase.
+    probe(
+      peerManager(),
+      syncController(snapStatus),
+      snap = Some(snapSample.copy(phase = SyncPhase.Completed))
+    )().sync.value.map(_.snapRunning) shouldBe Some(false)
   }

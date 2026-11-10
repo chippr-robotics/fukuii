@@ -41,6 +41,7 @@ import com.chipprbots.ethereum.nodebuilder.tooling.StorageConsistencyChecker
 import com.chipprbots.ethereum.utils.BuildInfo
 import com.chipprbots.ethereum.utils.Config
 import com.chipprbots.ethereum.utils.Hex
+import com.chipprbots.ethereum.utils.NetworkType
 
 /** A standard node is everything Ethereum prescribes except the mining algorithm, which is plugged in dynamically.
   *
@@ -340,7 +341,11 @@ abstract class BaseNode extends Node:
       tui.updateChain(ChainFacts.from(blockchainConfig, BuildInfo.version))
       val local = TuiStatusProbe.LocalSources.node(
         dataDir = Option(settings.dataDir).filter(_.nonEmpty).map(new java.io.File(_)),
-        headTimestamp = () => blockchainReader.getBestBlockHeader.map(_.unixTimestamp.toLong)
+        // Only ETH's fork timeline stands on a timestamp; ETC's stands on the block number, so no header is read.
+        headTimestamp =
+          if blockchainConfig.networkType == NetworkType.ETH then
+            () => blockchainReader.getBestBlockHeader.map(_.unixTimestamp.toLong)
+          else () => None
       )
       val probe = new TuiStatusProbe(
         peerManager,

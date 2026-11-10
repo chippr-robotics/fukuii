@@ -28,6 +28,7 @@ import com.chipprbots.ethereum.blockchain.sync.snap.SyncProgress
 import com.chipprbots.ethereum.network.NetworkMetrics
 import com.chipprbots.ethereum.network.Peer
 import com.chipprbots.ethereum.network.PeerManagerActor
+import com.chipprbots.ethereum.utils.Logger
 
 /** Polls the running node for the TUI: handshaked peers from the peer manager, sync status from the sync controller
   * (the same query `net_peerCount` and `eth_syncing` answer), the local best block, and the latest SNAP progress.
@@ -58,7 +59,8 @@ class TuiStatusProbe(
     clock: Clock = Clock.systemUTC(),
     local: TuiStatusProbe.LocalSources = TuiStatusProbe.LocalSources()
 )(using scheduler: Scheduler)
-    extends (() => NodeStatusSnapshot):
+    extends (() => NodeStatusSnapshot)
+    with Logger:
 
   import TuiStatusProbe.*
 
@@ -70,13 +72,18 @@ class TuiStatusProbe(
   /** The cumulative GC time at the previous poll, and when: the GC share is the difference over the interval. */
   private var previousGc: Option[(Long, Instant)] = None
 
+  /** The local readings that have failed since they last succeeded: each failure is logged once, at DEBUG. */
+  private var failingReads: Set[String] = Set.empty
+
   def apply(): NodeStatusSnapshot =
     val peersAsk = settled(peerManager.ask[PeerManagerActor.Peers](PeerManagerActor.GetPeersCmd(_)))
     val syncAsk = settled(
       syncController.ask[SyncProtocol.Status](r => SyncController.WrappedSyncProtocol(SyncProtocol.GetStatus(r)))
     )
     // One wait for both: the asks run concurrently, and whatever has not answered by the deadline missed this poll.
+    // The node-local readings are taken meanwhile, so they add nothing to the poll unless they outlast the wait.
     val deadline = wait.fromNow
+    val localSample = readLocal(clock.instant())
     Seq(peersAsk, syncAsk).foreach(ask => Try(Await.ready(ask, deadline.timeLeft.max(Duration.Zero))))
 
     val now = clock.instant()
@@ -84,27 +91,39 @@ class TuiStatusProbe(
     val missed = s"no reply within ${wait.toMillis}ms"
     val peers = Sourced.next(previous.map(_.peers), poll(peersAsk)(_.handshaked.map(tuiPeer)), now, missed)
     val sync = Sourced.next(previous.map(_.sync), poll(syncAsk)(sample(_, localBest, now)), now, missed)
-    val snapshot = NodeStatusSnapshot(now, maxPeers, localBest, peers, sync, readLocal(now))
+    val snapshot = NodeStatusSnapshot(now, maxPeers, localBest, peers, sync, localSample)
     previous = Some(snapshot)
     snapshot
 
-  /** The node-local readings (research §6): each one that fails is left empty; none fails the poll. */
-  private def readLocal(now: Instant): LocalSample =
-    def read[A](f: => Option[A]): Option[A] = Try(f).toOption.flatten
-    val gcMillis = read(local.gcMillis())
+  /** The node-local readings (research §6): each one that fails is left empty, and logged at DEBUG the first time; none
+    * fails the poll.
+    */
+  private def readLocal(at: Instant): LocalSample =
+    def read[A](name: String)(f: => Option[A]): Option[A] =
+      Try(f) match
+        case Success(value) =>
+          failingReads -= name
+          value
+        case Failure(e) =>
+          if !failingReads.contains(name) then
+            log.debug("TUI could not read {}: {}", name, Option(e.getMessage).getOrElse(e.toString))
+          failingReads += name
+          None
+    val gcMillis = read("the GC time")(local.gcMillis())
     val gcShare = for
       total <- gcMillis
-      (before, at) <- previousGc
-      wall = java.time.Duration.between(at, now).toMillis
+      (before, previousAt) <- previousGc
+      wall = java.time.Duration.between(previousAt, at).toMillis
       if wall > 0
     yield ((total - before).max(0L).toDouble / wall).min(1.0)
-    previousGc = gcMillis.map(_ -> now)
+    previousGc = gcMillis.map(_ -> at)
     LocalSample(
-      diskFree = read(local.dataDir.map(local.usableSpace)),
-      jvm = read(local.heap()).map((used, max) => JvmSample(used, max, gcShare)),
-      discovery = read(local.discovery()),
-      headTimestamp = read(local.headTimestamp()),
-      snapCounters = read(local.snapCounters())
+      diskFree = read("the disk free")(local.dataDir.map(local.usableSpace)),
+      jvm = read("the heap")(local.heap()).map((used, max) => JvmSample(used, max, gcShare)),
+      discovery = read("the discovery counts")(local.discovery()),
+      headTimestamp = read("the head timestamp")(local.headTimestamp()),
+      snapCounters = read("the SNAP counters")(local.snapCounters()),
+      snapPivot = read("the SNAP pivot")(local.snapPivot())
     )
 
   /** The sync status as the TUI reads it, with the SNAP progress while SNAP is running: a sample of an active phase,
@@ -121,7 +140,14 @@ class TuiStatusProbe(
     val snap = latest.filter((_, at) => ageMillis(at, now) <= SnapProgressMaxAgeMillis)
     val running = snap.exists((_, at) => ageMillis(at, now) <= SnapStatusMaxAgeMillis)
     val (current, best, description) = describe(status, localBest, snapRunning = running)
-    SyncSample(current, best, description, snap.map((p, _) => toSnapSyncState(p)), latest.map(_._2))
+    SyncSample(
+      current,
+      best,
+      description,
+      snap.map((p, _) => toSnapSyncState(p)),
+      latest.map(_._2),
+      snapRunning = latest.exists((_, at) => ageMillis(at, now) <= SnapRunningMaxAgeMillis)
+    )
 
   private def ageMillis(at: Instant, now: Instant): Long = java.time.Duration.between(at, now).toMillis
 
@@ -130,6 +156,15 @@ object TuiStatusProbe:
 
   /** How long a SNAP progress sample stays displayable. SyncProgressMonitor samples every 30 s. */
   val SnapProgressMaxAgeMillis: Long = 90_000L
+
+  /** How long SNAP counts as running after its latest sample of a running phase: ten of the monitor's 30 s rounds.
+    *
+    * The monitor samples every 30 s while SNAP runs and publishes a final `Completed` sample when it finishes, so a
+    * sample that stops arriving means SNAP stopped without one, as an in-process abort does before regular sync takes
+    * over. Between 90 s and this age the SNAP rows stay on screen, marked with their age, and the alert row warns;
+    * after it, both go. The sync controller's block target is not consulted.
+    */
+  val SnapRunningMaxAgeMillis: Long = 300_000L
 
   /** How young a SNAP sample must be to call the sync "Syncing (SNAP)": the monitor's last two rounds of 30 s
     * (`SyncProgressMonitor.startPeriodicLogging`). Two poll intervals would be shorter than one round.
@@ -165,13 +200,14 @@ object TuiStatusProbe:
       gcMillis: () => Option[Long] = () => None,
       discovery: () => Option[DiscoverySample] = () => None,
       headTimestamp: () => Option[Long] = () => None,
-      snapCounters: () => Option[SnapCounters] = () => None
+      snapCounters: () => Option[SnapCounters] = () => None,
+      snapPivot: () => Option[Long] = () => None
   )
 
   object LocalSources:
 
-    /** The running node's readings: the datadir's disk, this JVM, `NetworkMetrics`, `SNAPSyncMetrics`, and the best
-      * header's timestamp through `headTimestamp`.
+    /** The running node's readings: the datadir's disk, this JVM, `NetworkMetrics`, `SNAPSyncMetrics` (counters and
+      * pivot), and the best header's timestamp through `headTimestamp`.
       */
     def node(dataDir: Option[File], headTimestamp: () => Option[Long]): LocalSources =
       LocalSources(
@@ -180,16 +216,32 @@ object TuiStatusProbe:
         gcMillis = jvmGcMillis,
         discovery = networkDiscovery,
         headTimestamp = headTimestamp,
-        snapCounters = snapMetrics
+        snapCounters = snapMetrics,
+        snapPivot = snapPivotBlock
       )
+
+    /** The SNAP pivot's block number, once SNAP has chosen one. */
+    def snapPivotBlock(): Option[Long] = Some(SNAPSyncMetrics.pivotBlockNumber).filter(_ > 0)
 
     def jvmHeap(): Option[(Long, Long)] =
       val heap = ManagementFactory.getMemoryMXBean.getHeapMemoryUsage
       Some((heap.getUsed, if heap.getMax > 0 then heap.getMax else Runtime.getRuntime.maxMemory))
 
-    /** The collectors' total time; a collector that cannot tell (-1) adds nothing. */
+    /** The pausing collectors' total time; a collector that cannot tell (-1) adds nothing. */
     def jvmGcMillis(): Option[Long] =
-      Some(ManagementFactory.getGarbageCollectorMXBeans.asScala.map(_.getCollectionTime.max(0L)).sum)
+      Some(
+        pausingGcMillis(
+          ManagementFactory.getGarbageCollectorMXBeans.asScala.toSeq.map(b => b.getName -> b.getCollectionTime)
+        )
+      )
+
+    /** The collection time of the collectors that pause the application. G1's `G1 Concurrent GC` (and ZGC's and
+      * Shenandoah's `… Cycles` beans) count the wall time of work that runs beside it, which is not a pause.
+      */
+    private[console] def pausingGcMillis(collectors: Seq[(String, Long)]): Long =
+      collectors.collect {
+        case (name, millis) if !name.contains("Concurrent") && !name.contains("Cycles") => millis.max(0L)
+      }.sum
 
     def networkDiscovery(): Option[DiscoverySample] =
       Some(
@@ -226,12 +278,23 @@ object TuiStatusProbe:
   /** An ask as a future that never fails: its outcome is the value. */
   private def settled[A](ask: Future[A]): Future[Try[A]] = ask.transform(Success(_))(using ExecutionContext.parasitic)
 
+  /** The longest failure reason the TUI shows. */
+  val MaxReasonChars: Int = 120
+
+  /** A failure as the alert row shows it: its message (or its class), one line, with no control character (an exception
+    * message can carry anything, peer data included), at most [[MaxReasonChars]] characters.
+    */
+  private[console] def reason(e: Throwable): String =
+    val raw = Option(e.getMessage).filter(_.nonEmpty).getOrElse(e.getClass.getSimpleName)
+    val clean = raw.map(ch => if Character.isISOControl(ch) then ' ' else ch).trim
+    if clean.length <= MaxReasonChars then clean else clean.take(MaxReasonChars - 3) + "..."
+
   /** What one ask got by the end of the shared wait. An ask timeout is a miss, not a failure. */
   private[console] def poll[A, B](ask: Future[Try[A]])(f: A => B): Sourced.Poll[B] =
     ask.value.flatMap(_.toOption) match
       case Some(Success(a))                          => Sourced.Poll.Answered(f(a))
       case None | Some(Failure(_: TimeoutException)) => Sourced.Poll.Missed
-      case Some(Failure(e)) => Sourced.Poll.Failed(Option(e.getMessage).getOrElse(e.getClass.getSimpleName))
+      case Some(Failure(e))                          => Sourced.Poll.Failed(reason(e))
 
   /** Map a sync status to (current block, best known block or 0 if unknown, description).
     *
