@@ -18,8 +18,8 @@ object MilestoneLog extends Logger:
     if active.isEmpty then "[]"
     else active.map { case (name, block) => s"$name:$block" }.mkString("[", ", ", "]")
 
-  /** Every block-number fork by name, in activation order on ETC, unscheduled ones (`Long.MaxValue`) included. The
-    * TUI's Chain view reads it for display (spec 027 FR-017).
+  /** Every block-number fork by name, in declaration order, unscheduled ones (`Long.MaxValue`) included. The TUI's
+    * Chain view reads it for display (spec 027 FR-017).
     */
   private[ethereum] def namedMilestones(f: ForkBlockNumbers): Seq[(String, BigInt)] = Seq(
     "Frontier" -> f.frontierBlockNumber,
