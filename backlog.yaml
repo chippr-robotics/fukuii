@@ -2160,3 +2160,13 @@ items:
     refs: ["beacon pre-flight, 027 slice 5, 2026-11-10"]
     links: {}
     notes: EngineApiMetrics.scala:61 case _ folds ACCEPTED (EngineApiService.scala:747) into INVALID; no caller passes SYNCING; newPayload returns at :385/:411/:448 record nothing; FCU INVALID also covers -38002/-38003. Additive fix only; beacon owns.
+  - id: B-194
+    title: "Protocol: a metrics object initialiser on an IO path is fatal to every IORuntime in the JVM if it throws"
+    priority: P3
+    status: open
+    area: docs
+    size: S
+    opened: 2026-11-10
+    refs: ["beacon/forge pre-flights, 027 slice 5, 2026-11-10"]
+    links: {}
+    notes: cats-effect onFatalFailure shuts down all IORuntimes on a LinkageError (e.g. ExceptionInInitializerError from a metrics object). Initialise metrics objects off the hot IO paths (EngineApiMetrics, PoWMiningMetrics); add a rule to .claude/agent-protocols/.
