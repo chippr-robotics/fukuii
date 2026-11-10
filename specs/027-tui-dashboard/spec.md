@@ -327,8 +327,9 @@ Each requirement names the research.md section it comes from.
 - **FR-018** The Overview MUST show the §6 fields for its tier: network, chain id, family, uptime and view (all); head and
   peers inline (M+); version (L); peers and blocks; RPC, WS, IPC and Engine ports; disk free; txpool size with blob count;
   JVM heap and GC share (M+); discovery known/pending/blacklisted (L) (§3.1–§3.4, §6).
-- **FR-019** The Peers view MUST show id, address, direction and age (`GetPeersCmd`), and client id and best block
-  (`GetHandshakedPeersCmd`). Peer scores and their ↑↓→ trend MUST reach the TUI through the `NetworkMetrics` export, never
+- **FR-019** The Peers view MUST show id, direction and age (`GetPeersCmd`), and client id and best block
+  (`GetHandshakedPeersCmd`), and from tier M the address (`GetPeersCmd`): at S (80 columns) the address gives way to the
+  client and best block, which tell an operator more about a peer than where it connects from (slice 4, decision 5). Peer scores and their ↑↓→ trend MUST reach the TUI through the `NetworkMetrics` export, never
   by handing a scoring manager to the probe (Q5), and come from the production `PeerScoringManager` (D-1, FR-026). The
   score column is on; a peer with no published score yet shows `—`, never zero (§6).
 - **FR-020** Every string from outside the node that reaches a frame (peer client ids, log text) MUST be sanitised: ESC,

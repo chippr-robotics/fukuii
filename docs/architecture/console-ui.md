@@ -108,7 +108,7 @@ conditions, errors first. It is never animated and every view has it.
 ### Log tail and Recent strips
 
 The Logs view and the Recent strips read an appender of the TUI's own, `TUI-LOG-RING`, on the root logger: a
-lock-free ring of the newest `fukuii.tui.log-ring-size` lines (1000) at `fukuii.tui.log-level` and above (`INFO`). A
+lock-free ring of the newest `fukuii.tui.log-ring-size` lines (1000, at most 10,000) at `fukuii.tui.log-level` and above (`INFO`). A
 logger's own level in `logback.xml` applies first, so `DEBUG` shows only what the loggers already log at DEBUG. The
 ring is attached after the console appenders are suppressed and detached before they are restored, through the same
 teardown ladder that gives the terminal back, so the console and the log file get what they got before; if it cannot
@@ -218,7 +218,7 @@ All TUI code lives in `com.chipprbots.ethereum.console`:
 | `Splash` | The startup splash, a view of the same renderer: the FUKUII logo by terminal size (`FukuiiBanner`, the literal the startup log prints), skipped by any key. |
 | `TuiLogSuppressor` | Detaches the console appender while the TUI is active (file logging continues). |
 | `TuiLogRingAppender` | The log tail: an appender of its own on the root logger, a lock-free ring of the newest lines, sanitised on capture. Attached after the console is suppressed and detached before it is restored, through `Tui`'s teardown ladder. |
-| `Sanitize`, `TuiText.external` | Text from outside the node (client ids, log lines, failure reasons): no escape sequence or control character, one line, capped; ASCII only under the ASCII glyph set. |
+| `Sanitize`, `TuiText.external` | Text from outside the node (client ids, log lines, failure reasons): no escape sequence or control character, one line, capped at 512 characters; at most four times that is read, whatever the text's length, so a peer's 16 MiB client id costs no more than a short one; ASCII only under the ASCII glyph set. |
 | `TuiView` | The views and their keys; Help is a flag over the current view (`TuiState.helpOpen`). |
 | `Layout`, `Panel` | Each view is a list of panels with minimum rows, preferred rows and a priority. `Layout.allocate` gives minimums in priority order (a panel whose minimum no longer fits is not drawn), then preferred rows, then the fill panel takes the rest; `Layout.columns` puts two row lists side by side, measured by columns. |
 | `panels/` | The panels of each view: `OverviewPanels`, `SyncPanels`, `PeersPanel`, `ChainPanel`, `LogsPanel` (with the Recent strips), `HelpPanel`, with shared rows (`Rows`, `ForkRows`). |

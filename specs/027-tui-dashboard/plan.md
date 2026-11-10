@@ -26,7 +26,7 @@ sbt 1.13.0 (constitution "Technology & Architecture Constraints"; `CLAUDE.md`).
 **Primary Dependencies**: JLine 3.30.13 (`org.jline:jline`, `project/Dependencies.scala:157`): `Terminal`,
 `AttributedString`/`AttributedStyle`, `WCWidth`, `NonBlockingReader`. Pekko Typed: the probe asks
 `PeerManagerActor`, `SyncController`, `NetworkPeerManagerActor` and `PendingTransactionsManager` with `AskPattern` from
-its own thread, never from a dispatcher. Logback 1.5.34 (`AppenderBase[ILoggingEvent]`, `PatternLayout`) for the ring.
+its own thread, never from a dispatcher. Logback 1.5.34 (`UnsynchronizedAppenderBase[ILoggingEvent]`, no layout) for the ring.
 Micrometer through `MetricsContainer` objects (`SNAPSyncMetrics`, `NetworkMetrics`, `RegularSyncMetrics`,
 `EngineApiMetrics`, `PoWMiningMetrics`). Typesafe Config for `fukuii.tui`. **No new dependency.**
 

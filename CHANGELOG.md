@@ -208,7 +208,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     page back to older lines and `+` a page forward (they do nothing on the other views). A view scrolled back keeps
     its lines on screen as new ones arrive. The lines come from an appender of the TUI's own on the root logger,
     attached once the console appenders are suppressed and detached before they are restored, so the console and the
-    log file see what they saw before. New in `fukuii.tui`: `log-ring-size` (1000) and `log-level` (`INFO`; a logger's
+    log file see what they saw before. New in `fukuii.tui`: `log-ring-size` (1000, at most 10,000) and `log-level` (`INFO`; a logger's
     own level in `logback.xml` applies first). An invalid value stops the node with an error naming the key.
   - **Recent strips.** The Overview ends with the newest log lines (6 at 80×24, 10 from 100×32, the rest of the
     screen from 140×45); the Sync view with "Recent (sync)", the lines of the loggers under `blockchain.sync`.
@@ -224,8 +224,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - **Txpool.** The pending transactions, and how many carry a blob (`1,204 (3 blob)`), on the Overview at every
     size and on the vitals row from 100×32. At 140×45 the GC share moves to the second row, beside the discovery
     table, so every cell fits down to 140 columns.
-  - **Import time.** New gauge `regularsync.import.last.duration.seconds.gauge`: how long the last block import's
-    consensus call took (one block or a batch), timed in regular sync's importer. The Sync view shows it for a
+  - **Import time.** New gauges `regularsync.import.last.duration.seconds.gauge` and
+    `regularsync.import.last.blocks.gauge`: how long the last block import's consensus call took (one block or a
+    batch), and how many blocks it put on the chain, timed in regular sync's importer. The Sync view shows them for a
     regular sync (`Import   last 3 blocks in 61ms`).
   - **Motion.** A frame counts as moving when either of the next two ticks draws it differently: a worm near the start
     of its track drew two ticks alike, and the dashboard dropped to one frame a second for a beat.
