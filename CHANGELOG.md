@@ -328,6 +328,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   changes, so a client that does not select them sees the same output.
 
 ### Fixed
+- **SNAP progress no longer goes backwards in the log and on the `--tui` dashboard (B-044).** The accounts percentage
+  fell and climbed because the account-count estimate left out a range whose response was still being inserted (it
+  counted the rest of that range as done); the storage percentage swung because the slot estimate was refreshed only
+  when a contract completed while the slot count rose with every response (51% against 1% of contracts done, then back
+  down); and the Overall worm dropped to its stage floor when a percentage passed 100. The percentage is now held at
+  its highest value within a phase, never past 100, and the slot estimate follows the slot count. A restart still
+  starts from zero, and now logs what it dropped. The Bytecode row, and the Storage row while the account phase is
+  still finding contracts, show a running total of work found so far and can still fall.
 - **A PoW block mined by fukuii is built on the state block import computes for it (B-167).** fukuii's PoW miner
   (internal, or `eth_getWork` / `eth_submitWork`) now runs import's steps before the first transaction
   (`BlockExecution.applyBlockPreamble`, moved there unchanged: the DAO fork block's drain, EIP-4788, EIP-2935), and pays
