@@ -225,52 +225,52 @@ alert row.
 
 ### Tests for slice 3 (write first, must fail)
 
-- [ ] T059 [P] [US4] `console tests/LayoutSpec.scala`: minimum rows in priority order, then preferred rows; the
+- [x] T059 [P] [US4] `console tests/LayoutSpec.scala`: minimum rows in priority order, then preferred rows; the
       recent-log panel absorbs the rest; `Columns` pads the shorter side per cell by `columnLength`; frames exact
-- [ ] T060 [P] [US3] `console tests/AlertsSpec.scala`: one case per §2.3 row this slice can see (0 peers > 30 s,
+- [x] T060 [P] [US3] `console tests/AlertsSpec.scala`: one case per §2.3 row this slice can see (0 peers > 30 s,
       peer manager or sync controller unresponsive, stall > 120 s, SNAP sample > 90 s, disk < 20 GB and < 5 GB,
       peers < 25 % of max), each at its boundary (30 s does not fire, 31 s does); at most three listed with the count and
       badge; `✓ no alerts`; identical across ticks; first body row on every view; the peer-count colour keeps the 50 %
       threshold (C-2)
-- [ ] T061 [P] [US4] `console tests/TuiKeysSpec.scala`: `1`–`4` open Overview, Sync, Peers, Chain; `Tab` cycles and
+- [x] T061 [P] [US4] `console tests/TuiKeysSpec.scala`: `1`–`4` open Overview, Sync, Peers, Chain; `Tab` cycles and
       wraps; `?` and `h` open Help, any key returns; `g` switches the glyph set with no layout shift; unknown keys
       continue; `q`, `r`, `d` unchanged. (`5`, `l`, `+`, `-` arrive with the Logs view in slice 4)
-- [ ] T062 [P] [US4] `console tests/ChainFactsSpec.scala`: ETC timeline from `MilestoneLog` names, active forks only,
+- [x] T062 [P] [US4] `console tests/ChainFactsSpec.scala`: ETC timeline from `MilestoneLog` names, active forks only,
       `Long.MaxValue` → "not scheduled"; ETH timeline from `ForkTimestamps` sorted by time, including Amsterdam, BPO1 and
       BPO2 (C-5); family from `networkType` (C-4); the next fork with its distance (blocks on ETC, time on ETH; Sepolia's
       `1791294816` renders `2026-10-06T13:53:36Z`)
-- [ ] T063 [P] `root tests/MilestoneLogSpec.scala`: `namedMilestones` readable from `com.chipprbots.ethereum`, same
+- [x] T063 [P] `root tests/MilestoneLogSpec.scala`: `namedMilestones` readable from `com.chipprbots.ethereum`, same
       order and content
-- [ ] T064 [P] `.../blockchain/sync/snap/SNAPSyncMetricsSpec.scala`: the new counter accessors (account, bytecode,
+- [x] T064 [P] `.../blockchain/sync/snap/SNAPSyncMetricsSpec.scala`: the new counter accessors (account, bytecode,
       storage and healing requests and failures, timeouts, snap-capable peers) return the registry values
-- [ ] T065 [P] [US1] `console tests/TuiStatusProbeSpec.scala`: disk free from an injected `File => Long`, JVM heap and
+- [x] T065 [P] [US1] `console tests/TuiStatusProbeSpec.scala`: disk free from an injected `File => Long`, JVM heap and
       GC share from injected values, discovery counts from `NetworkMetrics`, the head timestamp from the best header
-- [ ] T066 [US4] Goldens, 3 tiers × 2 glyph sets each: Sync view (SNAP, as research §3.5; regular, as §3.6), Peers
+- [x] T066 [US4] Goldens, 3 tiers × 2 glyph sets each: Sync view (SNAP, as research §3.5; regular, as §3.6), Peers
       (`GetPeersCmd` fields), Chain (ETC and ETH), Help (with the active glyph legend), and the alert fixtures (0 peers,
       unresponsive, stalled, low disk)
-- [ ] T067 `sbt "testOnly com.chipprbots.ethereum.console.* *Tui* *MilestoneLog* *SNAPSyncMetrics*"` → T059–T066 fail; record which
+- [x] T067 `sbt "testOnly com.chipprbots.ethereum.console.* *Tui* *MilestoneLog* *SNAPSyncMetrics*"` → T059–T066 fail; record which
 
 ### Implementation for slice 3
 
-- [ ] T068 [US4] `console/Layout.scala`: `Panel`, `Columns`, `Layout.allocate`
-- [ ] T069 [US4] `console/TuiView.scala` and `console/Tui.scala` `handleCommand` (`:158-173`): views and keys of T061
-- [ ] T070 [US4] `console/panels/`: Overview (research §3.2–§3.4 by tier), Sync (§3.5, §3.6), Peers (basic), Chain, Help
-- [ ] T071 [US3] `console/Alerts.scala` and the alert row
-- [ ] T072 [US4] `console/ChainFacts.scala`
-- [ ] T073 `src/main/scala/com/chipprbots/ethereum/MilestoneLog.scala`: `namedMilestones` (`:21`) → `private[ethereum]`
-- [ ] T074 `.../blockchain/sync/snap/SNAPSyncMetrics.scala`: read-only accessors for the counters at `:110-115`,
+- [x] T068 [US4] `console/Layout.scala`: `Panel`, `Columns`, `Layout.allocate`
+- [x] T069 [US4] `console/TuiView.scala` and `console/Tui.scala` `handleCommand` (`:158-173`): views and keys of T061
+- [x] T070 [US4] `console/panels/`: Overview (research §3.2–§3.4 by tier), Sync (§3.5, §3.6), Peers (basic), Chain, Help
+- [x] T071 [US3] `console/Alerts.scala` and the alert row
+- [x] T072 [US4] `console/ChainFacts.scala`
+- [x] T073 `src/main/scala/com/chipprbots/ethereum/MilestoneLog.scala`: `namedMilestones` (`:21`) → `private[ethereum]`
+- [x] T074 `.../blockchain/sync/snap/SNAPSyncMetrics.scala`: read-only accessors for the counters at `:110-115`,
       `:140-145`, `:170-175`, `:196-200`, `:291-301`, additive only
-- [ ] T075 [US1] `console/TuiStatusProbe.scala` and `nodebuilder/StdNode.scala`: disk free (the datadir), JVM heap and GC,
+- [x] T075 [US1] `console/TuiStatusProbe.scala` and `nodebuilder/StdNode.scala`: disk free (the datadir), JVM heap and GC,
       discovery counts, the best header's timestamp, `Peer` fields from `GetPeersCmd`
-- [ ] T076 [US4] `console/TuiRenderer.scala` becomes the compositor: header, alert row, `Layout`, footer, `fitToWidth`
+- [x] T076 [US4] `console/TuiRenderer.scala` becomes the compositor: header, alert row, `Layout`, footer, `fitToWidth`
       (`:52-60`); `renderBody` (`:62-166`) is removed
-- [ ] T077 Generate the T066 goldens; check them against research §3; commit
+- [x] T077 Generate the T066 goldens; check them against research §3; commit
 
 ### Gate and exit for slice 3
 
-- [ ] T078 `sbt compile-all`; `sbt "testOnly com.chipprbots.ethereum.console.* *Tui* *MilestoneLog* *SNAPSyncMetrics*"` → PASS
-- [ ] T079 `sbt scalafmtAll`; `sbt formatCheck` → clean
-- [ ] T080 `scripts/snap-split/verify.sh --branch feat/027-s3-views origin/staging` → OK
+- [x] T078 `sbt compile-all`; `sbt "testOnly com.chipprbots.ethereum.console.* *Tui* *MilestoneLog* *SNAPSyncMetrics*"` → PASS
+- [x] T079 `sbt scalafmtAll`; `sbt formatCheck` → clean
+- [x] T080 `scripts/snap-split/verify.sh --branch feat/027-s3-views origin/staging` → OK
 - [ ] T081 [US4] Manual, no sbt running: every view at 80×24 and 160×48; resize across the S/M/L boundaries; `g`; an
       induced alert (stop the network, watch "0 peers")
 - [ ] T082 Exit slice 3: `prism` and `eye`; `sbt pp` alone; PR `feat(tui): views, layout and the alert row (spec 027

@@ -167,6 +167,9 @@ class Tui(
 
   def updateNodeSettings(settings: NodeSettings): Unit = modify(_.withNodeSettings(settings))
 
+  /** The chain's identity and fork timeline, once the node has read its configuration (spec 027 FR-017). */
+  def updateChain(chain: ChainFacts): Unit = modify(_.copy(chain = Some(chain)))
+
   private[console] def updateStatus(status: NodeStatusSnapshot): Unit = modify(_.withStatus(status))
 
   /** A snapshot no newer poll has replaced for two poll intervals and one ask wait is stale: the probe is late.
@@ -234,8 +237,14 @@ class Tui(
     term.flatMap { t =>
       try
         // NonBlockingReader treats a timeout of 0 as "wait forever" — never pass it through.
-        val c = t.reader().read(Math.max(1L, timeoutMs))
-        if c >= 0 then Some(c.toChar.toLower)
+        val reader = t.reader()
+        val c = reader.read(Math.max(1L, timeoutMs))
+        // An arrow, Home, Insert, Delete or a function key is an escape sequence. Its tail must not be read as keys
+        // (Left arrow ends in `D`: Detach; Home in `H`: Help), so the whole sequence is consumed and dropped (§2.2).
+        if c == Tui.Esc then
+          Tui.drainEscape(reader)
+          None
+        else if c >= 0 then Some(c.toChar.toLower)
         else
           // End of input: nothing can be typed again, and every later read would return at once.
           if c == NonBlockingReader.EOF then
@@ -261,15 +270,38 @@ class Tui(
           None
     }
 
-  /** Handle keyboard commands. While the splash is on screen any key skips it, and does nothing else (FR-013). */
+  /** Handle keyboard commands (FR-015, research §2.2). While the splash is on screen any key skips it, and does nothing
+    * else (FR-013). While Help is open, `q`, `r` and `d` keep their meaning and any other key returns to the view under
+    * it.
+    */
   def handleCommand(command: Char): TuiCommand =
     val height = synchronized(lastSize._2)
-    if state.get.splashCover(height).isDefined then
+    val current = state.get
+    if current.splashCover(height).isDefined then
       modify(_.skipSplash)
+      TuiCommand.Continue
+    else if current.helpOpen && !Tui.KeysInHelp.contains(command) then
+      modify(_.closeHelp)
       TuiCommand.Continue
     else dispatch(command)
 
-  private def dispatch(command: Char): TuiCommand = command match
+  private def dispatch(command: Char): TuiCommand = TuiView.forKey(command) match
+    case Some(view) =>
+      modify(_.withView(view))
+      TuiCommand.Continue
+    case None => dispatchKey(command)
+
+  private def dispatchKey(command: Char): TuiCommand = command match
+    case '\t' =>
+      modify(_.nextView)
+      TuiCommand.Continue
+    case '?' | 'h' =>
+      modify(_.openHelp)
+      TuiCommand.Continue
+    case 'g' =>
+      // §3.10: the other glyph set, with the same column budgets.
+      modify(_.toggleGlyphs)
+      TuiCommand.Continue
     case 'q' =>
       log.info("Quit command received")
       TuiCommand.Quit
@@ -381,6 +413,42 @@ object Tui:
 
   /** Leaves the TUI's screen: attributes reset, cursor shown, back to the normal buffer and the user's scrollback. */
   private[console] val RestoreScreen = ResetColors + ShowCursor + ExitAltScreen
+
+  private[console] val Esc: Int = 0x1b
+
+  /** How long the rest of an escape sequence may take to arrive: a terminal sends it in one write. */
+  private[console] val EscapeTailMillis: Long = 50L
+
+  /** The longest CSI sequence drained: parameters and intermediates, then the final byte. */
+  private[console] val EscapeMaxBytes: Int = 32
+
+  /** Reads and drops the rest of an escape sequence whose ESC was just read: a CSI sequence (`ESC [` parameters, then a
+    * final byte in `@`–`~`), an SS3 one (`ESC O` and one byte, F1–F4), or ESC and one more byte (Alt and a key). A lone
+    * ESC drops nothing more.
+    *
+    * The wait is bounded twice: by [[EscapeTailMillis]] in all, and by [[EscapeMaxBytes]] for a CSI sequence. Every
+    * byte is read with at least a 1 ms wait, even once the time is up, so a tail already buffered behind a stall (a GC
+    * pause on a loaded host) is still read here and never dispatched as keys (`D` would detach, `H` open Help).
+    *
+    * @param nanoTime
+    *   the clock the deadline is measured on; tests move it
+    */
+  private[console] def drainEscape(reader: NonBlockingReader, nanoTime: () => Long = () => System.nanoTime()): Unit =
+    val deadline = nanoTime() + EscapeTailMillis * 1_000_000L
+    def next(): Int = reader.read(((deadline - nanoTime()) / 1_000_000L).max(1L))
+    def isFinal(b: Int): Boolean = b >= '@'.toInt && b <= '~'.toInt
+    val introducer = next()
+    if introducer == '['.toInt then
+      var b = next()
+      var read = 1
+      while b >= 0 && !isFinal(b) && read < EscapeMaxBytes do
+        b = next()
+        read += 1
+    else if introducer == 'O'.toInt then
+      val _ = next()
+
+  /** The keys that keep their meaning while Help is open; any other key closes it. */
+  private[console] val KeysInHelp: Set[Char] = Set('q', 'r', 'd')
 
   /** Size used when the terminal cannot report one (some PTYs report 0x0). */
   private[console] val FallbackSize: (Int, Int) = (80, 24)

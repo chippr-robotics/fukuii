@@ -1,0 +1,24 @@
+ # FUKUII  mordor (63) . PoW . up 2h 11m                                   Sync 
+--------------------------------------------------------------------------------
+ ! 1 warn    peers 11/50 below 25%                                              
+ Peers   11/50 ##########         Block  0 -> 9,118,000 (pivot)                 
+--------------------------------------------------------------------------------
+ SNAP sync   [S]  Downloading bytecodes & storage   elapsed 2h 11m . ETA 1h 58m 
+--------------------------------------------------------------------------------
+   Overall  [=====~o..............]@@ 27%                                       
+   Accounts ~o[COMPLETE +]@@                34.1M                               
+   Storage  [=======~o............]@@ 37%   119.6M @ 21.4K/s . 2,114/5,702      
+   Bytecode ~o[ACTIVE]   @@                 412.0K @ 310/s                      
+   Healing  ~o[QUEUED]@@                                                        
+   Chain    headers 4.2M / 9.1M . bodies 0 . receipts 0                         
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+ 1 Over 2 Sync 3 Peers 4 Chain | p Pause ? Help r Redraw d Detach q Quit        

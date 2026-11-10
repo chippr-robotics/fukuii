@@ -175,6 +175,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - **Keys and settings.** `p` pauses and resumes the motion. New in `fukuii.tui`: `animation-interval-ms` (250),
     `status-poll-interval-ms` (1000), `reduced-motion` (false) and `splash-ms` (3000). `FUKUII_TUI_MOTION=reduced`
     (or `full`) and `FUKUII_TUI_NO_SPLASH` override them; under reduced motion only the worm moves, with progress.
+- **The `--tui` dashboard has views, a layout that fits every size, and an alert row (spec 027 slice 3).**
+  - **Views.** `1` Overview, `2` Sync, `3` Peers, `4` Chain; `Tab` cycles them; `?` or `h` opens Help over the view
+    (the keys and the legend of the glyph set on screen), and any key but `q`, `r` and `d` closes it. `g` switches
+    between the emoji and ASCII glyph sets without moving a column. Arrow, Home, Insert, Delete and function keys
+    are ignored (their escape sequences used to be read as `d`, `h` and view keys). The header names the network, chain id, PoW or
+    PoS, the uptime and the view; from 100×32 also the head and the peers, from 140×45 the version. The footer lists
+    the keys.
+  - **Alert row.** The row under the header, on every view, reads `✓ no alerts` or lists up to three conditions,
+    errors first, with a count: no peer for more than 30 s, the peer manager or sync controller not answering (error),
+    a stalled sync (2 minutes without a new block while blocks remain), a SNAP progress sample older than 90 s while
+    SNAP runs, disk below 20G free on the datadir (below 5G an error), and fewer peers than a quarter of the maximum.
+    It never moves. The peer count's own colour still turns yellow below half the maximum.
+  - **Overview.** Peers and blocks (while SNAP runs, the pivot is the target), the endpoints, disk free, the JVM heap (and at 140×45 the GC share and the
+    discovery table), the SNAP worm rows or the Blocks worm with its rate and ETA, the forks (the last active and the
+    next, with its distance), and at 140×45 the longest-connected peers beside the logo.
+  - **Sync view.** The worm rows on a 20-, 40- or 60-cell track by size; for SNAP, from 100×32, the recent and overall
+    rates, the request, failure and timeout counters, the snap-capable peers and the phase timeline; for a regular
+    sync, the session's imported blocks and the lag.
+  - **Peers view.** Each handshaked peer's id, direction, address and how long it has been connected. Client, best
+    block and score come with slice 4.
+  - **Chain view.** Chain id, PoW or PoS and the fork timeline: on ETC by block number, from the fork names the
+    startup log prints, with Olympia "not scheduled"; on ETH by timestamp, in activation order with the BPO forks and
+    Amsterdam, against the head block's timestamp, each with its UTC time. Read for display only: no fork
+    configuration changes.
+  - **New readings, off the frame loop.** The status probe also reads disk free on the datadir, the JVM heap and GC
+    time, the discovery counts, the best header's timestamp and SNAP's request counters (new read-only
+    `SNAPSyncMetrics` accessors), each failure leaving only its own field empty.
 - **SNAP sync on ETC and Mordor now ends with the exact pivot total difficulty (#1654).**
   `fukuii.sync.snap-sync.defer-chain-backfill-until-state-complete` is now `true` for every chain; before, only the
   Ethereum, Sepolia, Platåberget and Ephemery configs set it. With it off, ETC and Mordor finished SNAP before the

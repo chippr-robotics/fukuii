@@ -1,24 +1,24 @@
-                           # FUKUII ETHEREUM CLIENT #                           
+ # FUKUII  mordor (63) . PoW . up 2h 11m                               Overview 
 --------------------------------------------------------------------------------
- * NETWORK & CONNECTION                                                         
-   Network: MORDOR                                                              
-   Connection: * Connected                                                      
-   Peers: 11 / 50 # # # # # # # # # #                                           
+ ! 1 warn    peers 11/50 below 25%                                              
+ Peers   11/50 ##########         Block  0 -> 9,118,000 (pivot)                 
+ RPC     :8545 on                 Disk   412G free                              
 --------------------------------------------------------------------------------
- * BLOCKCHAIN                                                                   
-   Current Block: 0                                                             
-   Best Block: 9,118,004                                                        
-   Sync Status: Syncing                                                         
-   Blocks   [~o...................]@@ 0%    0 / 9,118,004                       
-   Blocks Remaining: 9,118,004                                                  
---------------------------------------------------------------------------------
- * SNAP SYNC                                                                    
-   Phase: [S]  Downloading bytecodes & storage                                  
-   Overall  [=====~o..............]@@ 27%   ETA 1h 58m 0s                       
+ SNAP [S]  Downloading bytecodes & storage          elapsed 2h 11m . ETA 1h 58m 
+   Overall  [=====~o..............]@@ 27%                                       
    Accounts ~o[COMPLETE +]@@                34.1M                               
-   Storage  [=======~o............]@@ 37%   119.6M slots @ 21.4K/s . 2,114/5,702
-   Bytecode [=============~o......]@@ 68%   412.0K / ~600.0K @ 310/s            
+   Storage  [=======~o............]@@ 37%   119.6M @ 21.4K/s . 2,114/5,702      
+   Bytecode ~o[ACTIVE]   @@                 412.0K @ 310/s                      
    Healing  ~o[QUEUED]@@                                                        
-   Chain: headers 4.2M / 9.1M . bodies 0 . receipts 0                           
-   Elapsed: 2h 11m 0s (phase 1h 8m 0s)                                          
- r Redraw  d Detach  q Quit                                                     
+--------------------------------------------------------------------------------
+ Forks   Mystique + =========================> Spiral @ 9,957,000 (839.0K away) 
+--------------------------------------------------------------------------------
+ Node    .../mordor . SNAP sync . archive pruning . 50 peers max . mining off   
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+ 1 Over 2 Sync 3 Peers 4 Chain | p Pause ? Help r Redraw d Detach q Quit        

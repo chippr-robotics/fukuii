@@ -48,6 +48,16 @@ enum Catchup:
   *   the celebration has started once in this process (Q8)
   * @param lastAdvanceAt
   *   when the current block last moved; a bar unchanged for [[TuiState.StallAfter]] is stalled
+  * @param view
+  *   the view on screen (`1`–`4`, `Tab`)
+  * @param helpOpen
+  *   Help is open over [[view]] (`?`, `h`); any key but `q`, `r` and `d` closes it
+  * @param chain
+  *   the chain's identity and fork timeline, once the node has read its configuration
+  * @param snapshot
+  *   the latest status snapshot applied: each source's freshness, the peers, and what the probe read on the node
+  * @param zeroPeersSince
+  *   when the peer count, known, was last seen to become 0: the alert row's "0 peers for …" (§2.3)
   */
 case class TuiState(
     networkName: String = "unknown",
@@ -69,7 +79,12 @@ case class TuiState(
     celebrationStartedTick: Option[Long] = None,
     backAtHeadTick: Option[Long] = None,
     celebrated: Boolean = false,
-    lastAdvanceAt: Option[Instant] = None
+    lastAdvanceAt: Option[Instant] = None,
+    view: TuiView = TuiView.Overview,
+    helpOpen: Boolean = false,
+    chain: Option[ChainFacts] = None,
+    snapshot: Option[NodeStatusSnapshot] = None,
+    zeroPeersSince: Option[Instant] = None
 ):
 
   import TuiState.*
@@ -165,12 +180,22 @@ case class TuiState(
     * While paused, a catch-up shows nothing: `p` cancels a celebration (FR-014).
     */
   def withStatus(status: NodeStatusSnapshot): TuiState =
+    // A known peer count of 0 starts the 0-peers clock; a known count above 0 stops it; an unknown one leaves it.
+    val zeroSince = status.peers.value.map(_.isEmpty) match
+      case Some(true)  => zeroPeersSince.orElse(Some(status.now))
+      case Some(false) => None
+      case None        => zeroPeersSince
+    // A SNAP sample too old to show keeps the rows it last drew on screen, which then say how old they are (§2.3),
+    // while SNAP still counts as running; after that, or once another sync has taken over, the rows go.
+    val snap = status.snapSync.orElse(
+      snapSyncState.filter(_ => status.sync.value.exists(s => s.snap.isEmpty && s.snapRunning))
+    )
     val next = copy(now = status.now)
       .withPeerCount(status.peerCount, status.maxPeers)
       .withBlockInfo(status.currentBlock, status.bestBlock)
       .withSyncStatus(status.syncStatus)
       .withConnectionStatus(status.connectionStatus)
-      .copy(snapSyncState = status.snapSync)
+      .copy(snapSyncState = snap, snapshot = Some(status), zeroPeersSince = zeroSince)
     val caughtUp = bestBlock > 0 && !isSynchronized && next.isSynchronized
     if !caughtUp then next
     else if motion == Motion.Paused then next.copy(celebrated = true)
@@ -190,6 +215,44 @@ case class TuiState(
   /** Any key on the splash: the dashboard, at once. */
   def skipSplash: TuiState = copy(splashUntilTick = None)
 
+  /** `1`–`4`: the view, with Help closed. A change of view cancels a catch-up on screen (FR-014). */
+  def withView(next: TuiView): TuiState =
+    if next == view && !helpOpen then this
+    else if next == view then copy(helpOpen = false)
+    else copy(view = next, helpOpen = false).cancelCatchup
+
+  /** `Tab`: the next view, wrapping. */
+  def nextView: TuiState = withView(view.next)
+
+  /** `?`, `h`: Help over the current view; it cancels a catch-up on screen, as a view change does. */
+  def openHelp: TuiState = copy(helpOpen = true).cancelCatchup
+
+  /** Any key in Help but `q`, `r` and `d`: back to the view under it. */
+  def closeHelp: TuiState = copy(helpOpen = false)
+
+  /** `g`: the other glyph set, with the same column budgets (§3.10). */
+  def toggleGlyphs: TuiState =
+    val other = glyphs match
+      case GlyphSet.Emoji => GlyphSet.Ascii
+      case GlyphSet.Ascii => GlyphSet.Emoji
+    copy(glyphs = other)
+
+  private def cancelCatchup: TuiState = copy(celebrationStartedTick = None, backAtHeadTick = None)
+
+  /** The view's name, as the header shows it. */
+  def viewTitle: String = if helpOpen then "Help" else view.title
+
+  /** SNAP's pivot block, while SNAP's rows are on screen: the Block cell's target and the fork timeline's position
+    * then, since the sync controller reports no block target and the local best block is far behind (B-044).
+    */
+  def snapPivot: Option[Long] =
+    if bestBlock > 0 then None // a block target: another sync has taken over, its rows lingering or not
+    else snapSyncState.flatMap(_ => snapshot.flatMap(_.local.snapPivot)).filter(_ > 0)
+
+  /** How old the SNAP sample on screen is, if the probe said when it was taken. */
+  def snapSampleAge: Option[Duration] =
+    snapshot.flatMap(_.sync.value).flatMap(_.snapSampledAt).map(at => Duration.between(at, now))
+
 /** First block observed by the TUI and when — the reference point for sync-speed estimates. */
 case class SyncBaseline(block: Long, observedAt: Instant)
 
@@ -197,15 +260,23 @@ case class SyncBaseline(block: Long, observedAt: Instant)
   *
   * @param best
   *   highest known block of the network, or 0 when unknown (e.g. the sync controller reports NotSyncing)
+  * @param snap
+  *   the SNAP progress, while its sample is young enough to show
   * @param snapSampledAt
-  *   when the SNAP monitor recorded [[snap]] (`SNAPSyncMetrics.latestSample`)
+  *   when the SNAP monitor recorded its latest sample of a running phase (`SNAPSyncMetrics.latestSample`), at any age:
+  *   the alert row warns when it is old (§2.3)
+  * @param snapRunning
+  *   SNAP counts as running: the latest sample is of a running phase and younger than
+  *   [[TuiStatusProbe.SnapRunningMaxAgeMillis]]. The SNAP rows stay on screen past their sample's 90 s, and the alert
+  *   row warns of the sample's age, only while it holds; "Syncing (SNAP)" has its own, shorter test
   */
 final case class SyncSample(
     current: Long,
     best: Long,
     status: String,
     snap: Option[SnapSyncState] = None,
-    snapSampledAt: Option[Instant] = None
+    snapSampledAt: Option[Instant] = None,
+    snapRunning: Boolean = false
 )
 
 /** A point-in-time view of the running node, produced by a status source (see [[TuiStatusProbe]], polled by
@@ -222,15 +293,18 @@ final case class SyncSample(
   *   handshaked peers, from the peer manager
   * @param sync
   *   the sync status, from the sync controller
+  * @param local
+  *   what the probe read on the node itself, at `now`: no actor, so always as fresh as the snapshot
   */
 final case class NodeStatusSnapshot(
     now: Instant,
     maxPeers: Int,
     localBest: Long,
-    peers: Sourced[Int],
-    sync: Sourced[SyncSample]
+    peers: Sourced[Seq[TuiPeer]],
+    sync: Sourced[SyncSample],
+    local: LocalSample = LocalSample()
 ):
-  def peerCount: Int = peers.value.getOrElse(0)
+  def peerCount: Int = peers.value.fold(0)(_.size)
 
   def connectionStatus: String = peers match
     case Sourced.Unresponsive(_) => "Unresponsive (peer manager)"
@@ -274,7 +348,71 @@ case class NodeSettings(
     maxPeers: Int = 0,
     rpcEnabled: Boolean = false,
     rpcPort: Int = 0,
-    miningEnabled: Boolean = false
+    miningEnabled: Boolean = false,
+    wsEnabled: Boolean = false,
+    wsPort: Int = 0,
+    ipcEnabled: Boolean = false,
+    engineEnabled: Boolean = false,
+    enginePort: Int = 0
+)
+
+/** A handshaked peer, as the peer manager's `GetPeersCmd` reports it (`network/Peer.scala`).
+  *
+  * @param id
+  *   the peer id: the remote node id in hex, for a handshaked peer
+  * @param address
+  *   the remote address, `host:port`
+  * @param incoming
+  *   the peer dialled us
+  * @param connectedAt
+  *   when the connection was made
+  */
+final case class TuiPeer(id: String, address: String, incoming: Boolean, connectedAt: Instant)
+
+/** What the probe reads on the node itself, without an actor (spec 027 research §6, FR-025): each `None` when the read
+  * is not wired or failed.
+  *
+  * @param diskFree
+  *   usable bytes on the datadir's file system
+  * @param jvm
+  *   the heap and the share of time in GC
+  * @param discovery
+  *   the discovery table (`NetworkMetrics`)
+  * @param headTimestamp
+  *   the best block header's timestamp, Unix seconds: where the ETH fork timeline stands
+  * @param snapCounters
+  *   SNAP's request counters (`SNAPSyncMetrics`)
+  * @param snapPivot
+  *   SNAP's pivot block (`SNAPSyncMetrics`), once one is chosen
+  */
+final case class LocalSample(
+    diskFree: Option[Long] = None,
+    jvm: Option[JvmSample] = None,
+    discovery: Option[DiscoverySample] = None,
+    headTimestamp: Option[Long] = None,
+    snapCounters: Option[SnapCounters] = None,
+    snapPivot: Option[Long] = None
+)
+
+/** The JVM's heap in bytes, and the share of wall time spent in GC between the last two polls (0 to 1). */
+final case class JvmSample(heapUsed: Long, heapMax: Long, gcShare: Option[Double])
+
+/** The discovery table: nodes known, pending connections, blacklisted. */
+final case class DiscoverySample(known: Long, pending: Long, blacklisted: Long)
+
+/** SNAP's request counters for this run (`SNAPSyncMetrics`), and the snap-capable peers now. */
+final case class SnapCounters(
+    accountRequests: Long,
+    accountFailures: Long,
+    storageRequests: Long,
+    storageFailures: Long,
+    bytecodeRequests: Long,
+    bytecodeFailures: Long,
+    healingRequests: Long,
+    healingFailures: Long,
+    timeouts: Long,
+    snapCapablePeers: Long,
+    blacklisted: Long
 )
 
 /** SNAP sync state displayed in the TUI: the fields of the monitor's `SyncProgress` that the worm rows draw.

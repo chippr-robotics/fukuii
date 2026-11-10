@@ -1,28 +1,17 @@
-                                               # FUKUII ETHEREUM CLIENT #                                               
+ # FUKUII  etc (61) . PoW . head 21,884,102 . 41/50 peers . up 12d 7h                                          Overview 
 ------------------------------------------------------------------------------------------------------------------------
- * NETWORK & CONNECTION                                                                                                 
-   Network: ETC                                                                                                         
-   Connection: * Connected                                                                                              
-   Peers: 41 / 50 # # # # # # # # # #                                                                                   
+ + no alerts                                                                                                            
+ Peers   41/50 ##########                    Block  21,884,102 (at head)                                                
+ RPC     :8545 on                            Disk   388G free                                JVM     3.4G / 8.0G heap   
 ------------------------------------------------------------------------------------------------------------------------
- * BLOCKCHAIN                                                                                                           
-   Current Block: 21,884,102                                                                                            
-   Best Block: 21,884,102                                                                                               
-   Sync Status: Synced                                                                                                  
+ Sync    + at head                                                                                                      
    Blocks   ~o[COMPLETE +]@@                                    21,884,102                                              
-   Status: + SYNCHRONIZED                                                                                               
 ------------------------------------------------------------------------------------------------------------------------
- * NODE SETTINGS                                                                                                        
-   Data Dir: /var/lib/fukuii/etc                                                                                        
-   Sync Mode: SNAP                                                                                                      
-   Pruning: archive                                                                                                     
-   Max Peers: 50                                                                                                        
-   JSON-RPC: Enabled (port 8545)                                                                                        
-   Mining: Enabled                                                                                                      
+ Forks (block)                                                                                                          
+   Atlantis + - Agharta + - Phoenix + - ECIP-1099 + - Magneto + - Mystique + - Spiral + ========> Olympia not scheduled 
+   block 21,884,102 . Spiral since 19,250,000 . Olympia not scheduled on this network                                   
 ------------------------------------------------------------------------------------------------------------------------
- * RUNTIME                                                                                                              
-   Uptime: 12d 7h 0m                                                                                                    
-------------------------------------------------------------------------------------------------------------------------
+ Node    /var/lib/fukuii/etc . SNAP sync . archive pruning . 50 peers max . mining on                                   
                                                                                                                         
                                                                                                                         
                                                                                                                         
@@ -37,4 +26,15 @@
                                                                                                                         
                                                                                                                         
                                                                                                                         
- r Redraw  d Detach  q Quit                                                                                             
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+ 1 Overview  2 Sync  3 Peers  4 Chain | p Pause  ? Help  r Redraw  d Detach  q Quit                                     

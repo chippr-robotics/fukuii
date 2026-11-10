@@ -77,16 +77,6 @@ object WormBar:
   private def clamp(fraction: Double): Double =
     if fraction.isNaN then 0.0 else fraction.max(0.0).min(1.0)
 
-  /** Whether the bar moves from one tick to the next: a rippling known total, or a pulsing `[ACTIVE]`. */
-  def animates(budget: Int, progress: WormProgress, glyphs: TuiGlyphs, motion: Motion, stalled: Boolean): Boolean =
-    motion == Motion.Full && (progress match
-      case WormProgress.Known(f) if clamp(f) < 1.0 =>
-        val slots = slotsFor(budget, glyphs)
-        !stalled && slots >= 2 && wormAt(clamp(f), slots) >= 2
-      case WormProgress.Active => true
-      case _                   => false
-    )
-
   def render(
       budget: Int,
       progress: WormProgress,

@@ -102,7 +102,7 @@ class TuiSpec extends AnyFlatSpec with Matchers:
     val frame = tt.lastFrame
     frame.split("\r\n", -1).length shouldBe 30
     (frame should not).endWith("\n")
-    TuiTestTerminal.visible(frame) should include("MORDOR")
+    TuiTestTerminal.visible(frame) should include("mordor")
     TuiTestTerminal.visible(frame) should include("q Quit")
   }
 
@@ -115,7 +115,7 @@ class TuiSpec extends AnyFlatSpec with Matchers:
       tui.updateStatus(TuiFixtures.snapshot(current = 1200, best = 1500, peers = 7))
       tui.render()
       TuiTestTerminal.colourCodes(tt.lastFrame) shouldBe empty
-      TuiTestTerminal.visible(tt.lastFrame) should include("7 / 50")
+      TuiTestTerminal.visible(tt.lastFrame) should include("7/50")
     finally
       tui.shutdown()
       tt.close()
@@ -163,10 +163,10 @@ class TuiSpec extends AnyFlatSpec with Matchers:
     tui.updateStatus(TuiFixtures.snapshot(current = 1200, best = 1500, peers = 7))
     tui.render()
     val text = TuiTestTerminal.visible(tt.lastFrame)
-    text should include("7 / 50")
+    text should include("7/50")
     text should include("1,200")
     text should include("1,500")
-    text should include("Syncing")
+    text should include("regular") // slice 3: the sync panel names the sync
   }
 
   it should "keep running on 'q' — quitting the node is the caller's job" taggedAs (UnitTest) in withTui() { (tui, _) =>

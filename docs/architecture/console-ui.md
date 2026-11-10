@@ -43,43 +43,82 @@ The console UI is useful when:
 
 ## Display Layout
 
+Every view has the same frame: the header band (network, chain id, PoW or PoS, uptime and the view's name; from
+100×32 also the head block and the peers, from 140×45 the version), a separator, the **alert row**, the view's panels,
+and the footer with the keys. The Overview at 80×24, regular sync (from the golden file
+`src/test/resources/tui/golden/overview-s-regular-emoji.txt`):
+
 ```
-┌────────────────────────────────────────────────────────────────┐
-│             ◆ FUKUII ETHEREUM CLIENT ◆                         │
-├────────────────────────────────────────────────────────────────┤
-│                    [Ethereum Classic Logo]                     │
-├────────────────────────────────────────────────────────────────┤
-│ ● NETWORK & CONNECTION                                         │
-│   Network: ETHEREUM CLASSIC                                    │
-│   Connection: ● Connected                                      │
-│   Peers: 25 / 50 ◆◆◆◆◆◆◆◆◆◆                                   │
-├────────────────────────────────────────────────────────────────┤
-│ ● BLOCKCHAIN                                                   │
-│   Current Block: 15,234,567                                    │
-│   Best Block: 15,234,890                                       │
-│   Sync Status: Syncing                                         │
-│   Sync Progress: [████████████████░░░░░░] 98.45%              │
-│   Blocks Remaining: 323                                        │
-│   Est. Sync Time: 2m 15s                                       │
-│   Sync Speed: 2.35 blocks/sec                                  │
-├────────────────────────────────────────────────────────────────┤
-│ ● RUNTIME                                                      │
-│   Uptime: 1h 23m 45s                                           │
-├────────────────────────────────────────────────────────────────┤
-│ Commands: [Q]uit | [R]efresh | [D]isable UI                   │
-└────────────────────────────────────────────────────────────────┘
+ ◆ FUKUII  etc (61) · PoW · up 9m 0s                                   Overview
+────────────────────────────────────────────────────────────────────────────────
+ ✓ no alerts
+ Peers   23/50 ◆◆◆◆◆◆◆◆◆◆         Block  18,402,113 → 21,884,102 (−3,481,989)
+ RPC     :8545 on                 Disk   1.2T free
+────────────────────────────────────────────────────────────────────────────────
+ Sync    regular                                 rate 184.37 blk/s · ETA 5h 14m
+   Blocks   [===============🪱....]🧠 84%   18,402,113 / 21,884,102
+────────────────────────────────────────────────────────────────────────────────
+ Forks   Mystique ✓ ════════════════════════▶ Spiral @ 19,250,000 (847.9K away)
+────────────────────────────────────────────────────────────────────────────────
+ Node    …/fukuii/etc · Full sync · archive pruning · 50 peers max · mining off
+
+
+
+
+
+
+
+
+
+
+
+ 1 Over 2 Sync 3 Peers 4 Chain │ p Pause ? Help r Redraw d Detach q Quit
 ```
+
+The blank rows at the bottom are where spec 027 slice 4 puts the recent-log strip. Sizes: below 100 columns or 32
+rows is tier S, from 100×32 tier M, from 140×45 tier L; each view fills its tier (at L the Overview draws the logo in a
+right-hand column). A panel that does not fit gives up its rows to the ones that matter more; the header, the alert
+row and the footer always stay.
+
+### Views
+
+| Key | View | What it shows |
+|-----|------|---------------|
+| `1` | Overview | Peers and blocks, endpoints, disk and heap (GC and discovery at L), the sync (SNAP's five worm rows or the Blocks worm, with ETA), the forks, the node's settings; at L the longest-connected peers |
+| `2` | Sync | The worm rows on a 20-, 40- or 60-cell track; SNAP's rates, request counters, snap-capable peers and phase timeline (M and L); a regular sync's session and lag |
+| `3` | Peers | Each handshaked peer: id, direction, address, time connected |
+| `4` | Chain | Chain id, PoW or PoS, the fork timeline: by block number on ETC, by timestamp on ETH, the next fork with its distance |
+| `?` `H` | Help | The keys and the legend of the glyph set on screen |
+
+### Alert row
+
+The row under the header reads `✓ no alerts`, or a badge with the count (`✗ 2 errors`, `⚠ 1 warn`) and up to three
+conditions, errors first. It is never animated and every view has it.
+
+| Condition | Severity |
+|-----------|----------|
+| No handshaked peer for more than 30 s | error |
+| The peer manager or the sync controller does not answer | error |
+| The current block has not moved for 2 minutes while blocks remain | warning |
+| The SNAP progress sample is older than 90 s while SNAP runs | warning |
+| Disk free on the datadir below 20G (below 5G: error) | warning / error |
+| Fewer peers than a quarter of the maximum (the peer count itself turns yellow below half) | warning |
 
 ## Keyboard Commands
 
 | Key | Action |
 |-----|--------|
-| `Q` | Quit the application |
-| `R` | Refresh/redraw the display |
-| `D` | Disable the console UI (switch to standard logging) |
+| `1` `2` `3` `4` | Overview, Sync, Peers, Chain |
+| `Tab` | The next view (wraps) |
+| `?` or `H` | Help over the current view: the keys and the glyph legend; any key but `Q`, `R` and `D` returns |
+| `G` | Switch the glyph set (emoji / ASCII); no column moves |
 | `P` | Pause or resume the motion (the frame counter stops; polling continues) |
+| `R` | Redraw the display |
+| `D` | Detach: the TUI closes and standard logging returns; the node keeps running |
+| `Q` | Quit: stops the node |
 
-Any key skips the startup splash, and does nothing else.
+Any key skips the startup splash, and does nothing else. A change of view cancels the catch-up celebration. The Logs
+view (`5`, `L`, `+`, `-`) arrives with spec 027 slice 4.
 
 Commands are case-insensitive (both `q` and `Q` work).
 
@@ -136,14 +175,19 @@ All TUI code lives in `com.chipprbots.ethereum.console`:
 | Component | Role |
 |-----------|------|
 | `Tui` | Owns the terminal: raw mode, alternate screen, frame drawing, key input, teardown. Refuses dumb/non-TTY terminals so escape codes never land in a log stream. |
-| `TuiRenderer` | Pure function `TuiState × width × height → lines`. Every frame is exactly `height` rows of exactly `width` columns, so drawing it never scrolls or wraps; the command footer always stays on the bottom row. |
+| `TuiRenderer` | The compositor, a pure function `TuiState × width × height → lines`: header band, separator, alert row, the view's panels through `Layout`, footer. Every frame is exactly `height` rows of exactly `width` columns, so drawing it never scrolls or wraps; the footer always stays on the bottom row. |
 | `TuiState` | Immutable view model. Sync speed/ETA are measured from the first block the TUI observed (not from genesis). |
-| `TuiStatusProbe` | One poll of the node: handshaked peers (`PeerManagerActor.GetPeersCmd`, same as `net_peerCount`), sync status (`SyncProtocol.GetStatus`, same as `eth_syncing`), local best block, and the latest SNAP progress sample. Both asks start together and share one 500 ms wait. |
+| `TuiStatusProbe` | One poll of the node: handshaked peers with their id, address, direction and connection time (`PeerManagerActor.GetPeersCmd`, same as `net_peerCount`), sync status (`SyncProtocol.GetStatus`, same as `eth_syncing`), local best block, and the latest SNAP progress sample. Both asks start together and share one 500 ms wait. It also reads, without an actor (`LocalSources`): disk free on the datadir, the JVM heap and GC time, `NetworkMetrics`' discovery counts, the best header's timestamp and `SNAPSyncMetrics`' request counters; a failed reading leaves only its own field empty. |
 | `Sourced` | Each polled source's freshness: `Fresh`, `Stale` (it missed a wait; its last answer is kept), `Unresponsive` (it never answered, failed, or has been silent for 5 s). A slow actor degrades its own line only. |
 | `TuiProbeThread` | Daemon thread running the probe every `status-poll-interval-ms` and publishing the snapshot; it stops with the TUI. |
 | `TuiUpdater` | Daemon frame loop: count a frame (`tick`), take the latest snapshot, render, then wait for a key at the frame's pace: `animation-interval-ms` (250 ms) while anything on screen moves, 1 s otherwise. The key wait is the pacing, so a key is handled as it arrives. A frame equal to the last is not written. |
 | `Splash` | The startup splash, a view of the same renderer: the FUKUII logo by terminal size (`FukuiiBanner`, the literal the startup log prints), skipped by any key. |
 | `TuiLogSuppressor` | Detaches the console appender while the TUI is active (file logging continues). |
+| `TuiView` | The views and their keys; Help is a flag over the current view (`TuiState.helpOpen`). |
+| `Layout`, `Panel` | Each view is a list of panels with minimum rows, preferred rows and a priority. `Layout.allocate` gives minimums in priority order (a panel whose minimum no longer fits is not drawn), then preferred rows, then the fill panel takes the rest; `Layout.columns` puts two row lists side by side, measured by columns. |
+| `panels/` | The panels of each view: `OverviewPanels`, `SyncPanels`, `PeersPanel`, `ChainPanel`, `HelpPanel`, with shared rows (`Rows`, `ForkRows`). |
+| `Alerts` | The alert row's conditions, thresholds and severities (spec 027 research §2.3), measured on the snapshot's clock. |
+| `ChainFacts` | Chain id, PoW/PoS (from `networkType`) and the fork timeline (ETC: `MilestoneLog` names by block; ETH: `ForkTimestamps` by time), read for display only. |
 
 ### Lifecycle
 
@@ -161,8 +205,7 @@ Motion (the worm's ripple, the `[ACTIVE]` pulse, spinners, the splash and the fi
 
 Potential improvements for future releases:
 
-- **Additional Views**: Toggle between different information panels (logs, peers, transactions)
-- **Detailed Peer Info**: Show individual peer details
+- **Logs view and richer peers** (spec 027 slice 4): the recent-log strip, client ids, best blocks and peer scores
 - **Transaction Pool**: Display pending transaction count and details
 - **Mining Status**: Show mining statistics when enabled
 - **Configuration**: Terminal settings and color schemes

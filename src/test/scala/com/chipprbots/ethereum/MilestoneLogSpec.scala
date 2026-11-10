@@ -188,4 +188,41 @@ class MilestoneLogSpec extends AnyFlatSpec with Matchers:
     (result should not).include("Olympia") // not activated
     (result should not).include("Muir Glacier") // not activated
   }
+
+  // Spec 027 T063: the TUI's Chain view reads the names (ChainFacts); the visibility widens, the list does not change.
+  "MilestoneLog.namedMilestones" should "be readable from com.chipprbots.ethereum, in order, with every name" taggedAs UnitTest in {
+    val forks = ForkBlockNumbers.Empty.copy(homesteadBlockNumber = BigInt(1_150_000), spiralBlockNumber = BigInt(7))
+    val named = MilestoneLog.namedMilestones(forks)
+    named.map(_._1) shouldBe Seq(
+      "Frontier",
+      "Homestead",
+      "EIP-106",
+      "EIP-150",
+      "EIP-155",
+      "EIP-160",
+      "EIP-161",
+      "DiffBomb-Pause",
+      "DiffBomb-Continue",
+      "DiffBomb-Removal",
+      "Byzantium",
+      "Constantinople",
+      "Istanbul",
+      "Atlantis",
+      "Agharta",
+      "Phoenix",
+      "Petersburg",
+      "ECIP-1099",
+      "Muir Glacier",
+      "Magneto",
+      "Berlin",
+      "Mystique",
+      "Spiral",
+      "Olympia"
+    )
+    named.toMap.apply("Homestead") shouldBe BigInt(1_150_000)
+    named.toMap.apply("Spiral") shouldBe BigInt(7)
+    named.toMap.apply("Olympia") shouldBe BigInt(Long.MaxValue)
+    // formatMilestones is the same list, filtered.
+    MilestoneLog.formatMilestones(forks) shouldBe "[Frontier:0, Homestead:1150000, Spiral:7]"
+  }
 // scalastyle:on magic.number

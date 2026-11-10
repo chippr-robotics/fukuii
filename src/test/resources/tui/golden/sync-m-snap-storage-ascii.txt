@@ -1,0 +1,40 @@
+ # FUKUII  mordor (63) . PoW . head 0 . 11/50 peers . up 2h 11m                                                    Sync 
+------------------------------------------------------------------------------------------------------------------------
+ ! 1 warn    peers 11/50 below 25%                                                                                      
+ Peers   11/50 ##########                    Block  0 -> 9,118,000 (pivot)                                              
+------------------------------------------------------------------------------------------------------------------------
+ SNAP sync   [S]  Downloading bytecodes & storage                             elapsed 2h 11m . phase 1h 8m . ETA 1h 58m 
+------------------------------------------------------------------------------------------------------------------------
+   Overall  [==========~o.............................]@@ 27%                                                           
+   Accounts ~o[COMPLETE +]@@                                    34.1M                                                   
+   Storage  [==============~o.........................]@@ 37%   119.6M slots @ 21.4K/s . 2,114/5,702 contracts          
+   Bytecode ~o[ACTIVE]   @@                                     412.0K @ 310/s                                          
+   Healing  ~o[QUEUED]@@                                                                                                
+   Chain    headers 4.2M / 9.1M . bodies 0 . receipts 0                                                                 
+------------------------------------------------------------------------------------------------------------------------
+ Rates (recent / overall)  accounts 0/4.8K  .  slots 21.4K/18.9K  .  bytecodes 310/288  .  nodes 0/0                    
+ Requests                  account 48,112 + 31 x  storage 210,004 + 402 x  bytecode 9,331 + 12 x  healing 0 + 0 x       
+ Peers (snap-capable)      9 of 11 . blacklisted this run 2 . request timeouts 118                                      
+------------------------------------------------------------------------------------------------------------------------
+ Phase timeline                                                                                                         
+   AccountRange + -- ByteCodeAndStorage * 1h 8m -- StateHealing . -- StateValidation . -- ChainDownload .               
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+ 1 Overview  2 Sync  3 Peers  4 Chain | p Pause  ? Help  r Redraw  d Detach  q Quit                                     

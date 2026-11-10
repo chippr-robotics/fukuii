@@ -1,5 +1,7 @@
 package com.chipprbots.ethereum.console
 
+import java.io.File
+import java.lang.management.ManagementFactory
 import java.time.Clock
 import java.time.Instant
 import java.util.concurrent.TimeoutException
@@ -13,6 +15,7 @@ import scala.concurrent.Await
 import scala.concurrent.ExecutionContext
 import scala.concurrent.Future
 import scala.concurrent.duration.*
+import scala.jdk.CollectionConverters.*
 import scala.util.Failure
 import scala.util.Success
 import scala.util.Try
@@ -20,8 +23,12 @@ import scala.util.Try
 import com.chipprbots.ethereum.blockchain.sync.SyncController
 import com.chipprbots.ethereum.blockchain.sync.SyncProtocol
 import com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncController.SyncPhase
+import com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncMetrics
 import com.chipprbots.ethereum.blockchain.sync.snap.SyncProgress
+import com.chipprbots.ethereum.network.NetworkMetrics
+import com.chipprbots.ethereum.network.Peer
 import com.chipprbots.ethereum.network.PeerManagerActor
+import com.chipprbots.ethereum.utils.Logger
 
 /** Polls the running node for the TUI: handshaked peers from the peer manager, sync status from the sync controller
   * (the same query `net_peerCount` and `eth_syncing` answer), the local best block, and the latest SNAP progress.
@@ -39,6 +46,8 @@ import com.chipprbots.ethereum.network.PeerManagerActor
   * @param clock
   *   the time of each snapshot. The TUI ages snapshots against its own clock (`Tui`'s `clock`), so the two must agree:
   *   both default to the system UTC clock
+  * @param local
+  *   what to read on the node itself, without an actor: disk, JVM, discovery table, head timestamp, SNAP counters
   */
 class TuiStatusProbe(
     peerManager: ActorRef[PeerManagerActor.Command],
@@ -47,9 +56,11 @@ class TuiStatusProbe(
     maxPeers: Int,
     snapSample: () => Option[(SyncProgress, Long)],
     wait: FiniteDuration = TuiStatusProbe.DefaultAskTimeout,
-    clock: Clock = Clock.systemUTC()
+    clock: Clock = Clock.systemUTC(),
+    local: TuiStatusProbe.LocalSources = TuiStatusProbe.LocalSources()
 )(using scheduler: Scheduler)
-    extends (() => NodeStatusSnapshot):
+    extends (() => NodeStatusSnapshot)
+    with Logger:
 
   import TuiStatusProbe.*
 
@@ -58,38 +69,85 @@ class TuiStatusProbe(
 
   private var previous: Option[NodeStatusSnapshot] = None
 
+  /** The cumulative GC time at the previous poll, and when: the GC share is the difference over the interval. */
+  private var previousGc: Option[(Long, Instant)] = None
+
+  /** The local readings that have failed since they last succeeded: each failure is logged once, at DEBUG. */
+  private var failingReads: Set[String] = Set.empty
+
   def apply(): NodeStatusSnapshot =
     val peersAsk = settled(peerManager.ask[PeerManagerActor.Peers](PeerManagerActor.GetPeersCmd(_)))
     val syncAsk = settled(
       syncController.ask[SyncProtocol.Status](r => SyncController.WrappedSyncProtocol(SyncProtocol.GetStatus(r)))
     )
     // One wait for both: the asks run concurrently, and whatever has not answered by the deadline missed this poll.
+    // The node-local readings are taken meanwhile, so they add nothing to the poll unless they outlast the wait.
     val deadline = wait.fromNow
+    val localSample = readLocal(clock.instant())
     Seq(peersAsk, syncAsk).foreach(ask => Try(Await.ready(ask, deadline.timeLeft.max(Duration.Zero))))
 
     val now = clock.instant()
     val localBest = Try(bestBlockNumber().toLong).getOrElse(0L)
     val missed = s"no reply within ${wait.toMillis}ms"
-    val peers = Sourced.next(previous.map(_.peers), poll(peersAsk)(_.handshaked.size), now, missed)
+    val peers = Sourced.next(previous.map(_.peers), poll(peersAsk)(_.handshaked.map(tuiPeer)), now, missed)
     val sync = Sourced.next(previous.map(_.sync), poll(syncAsk)(sample(_, localBest, now)), now, missed)
-    val snapshot = NodeStatusSnapshot(now, maxPeers, localBest, peers, sync)
+    val snapshot = NodeStatusSnapshot(now, maxPeers, localBest, peers, sync, localSample)
     previous = Some(snapshot)
     snapshot
 
+  /** The node-local readings (research §6): each one that fails is left empty, and logged at DEBUG the first time; none
+    * fails the poll.
+    */
+  private def readLocal(at: Instant): LocalSample =
+    def read[A](name: String)(f: => Option[A]): Option[A] =
+      Try(f) match
+        case Success(value) =>
+          failingReads -= name
+          value
+        case Failure(e) =>
+          if !failingReads.contains(name) then
+            log.debug("TUI could not read {}: {}", name, Option(e.getMessage).getOrElse(e.toString))
+          failingReads += name
+          None
+    val gcMillis = read("the GC time")(local.gcMillis())
+    val gcShare = for
+      total <- gcMillis
+      (before, previousAt) <- previousGc
+      wall = java.time.Duration.between(previousAt, at).toMillis
+      if wall > 0
+    yield ((total - before).max(0L).toDouble / wall).min(1.0)
+    previousGc = gcMillis.map(_ -> at)
+    LocalSample(
+      diskFree = read("the disk free")(local.dataDir.map(local.usableSpace)),
+      jvm = read("the heap")(local.heap()).map((used, max) => JvmSample(used, max, gcShare)),
+      discovery = read("the discovery counts")(local.discovery()),
+      headTimestamp = read("the head timestamp")(local.headTimestamp()),
+      snapCounters = read("the SNAP counters")(local.snapCounters()),
+      snapPivot = read("the SNAP pivot")(local.snapPivot())
+    )
+
   /** The sync status as the TUI reads it, with the SNAP progress while SNAP is running: a sample of an active phase,
-    * young enough to show. "Syncing (SNAP)" needs a sample from the monitor's last two rounds.
+    * young enough to show. "Syncing (SNAP)" needs a sample from the monitor's last two rounds. The sample's time is
+    * kept at any age: the alert row warns when it is too old to show (§2.3), so the time outlives the sample. One read
+    * of the sample, so its progress and its time agree.
     */
   private def sample(status: SyncProtocol.Status, localBest: Long, now: Instant): SyncSample =
-    val snap = Option
+    val latest = Option
       .when(status.syncing)(Try(snapSample()).toOption.flatten)
       .flatten
       .map((progress, at) => (progress, Instant.ofEpochMilli(at)))
-      .filter((progress, at) =>
-        ActiveSnapPhases.contains(progress.phase) && ageMillis(at, now) <= SnapProgressMaxAgeMillis
-      )
-    val running = snap.exists((_, at) => ageMillis(at, now) <= SnapStatusMaxAgeMillis)
-    val (current, best, description) = describe(status, localBest, snapRunning = running)
-    SyncSample(current, best, description, snap.map((p, _) => toSnapSyncState(p)), snap.map(_._2))
+      .filter((progress, _) => ActiveSnapPhases.contains(progress.phase))
+    val snap = latest.filter((_, at) => ageMillis(at, now) <= SnapProgressMaxAgeMillis)
+    val fresh = snap.exists((_, at) => ageMillis(at, now) <= SnapStatusMaxAgeMillis)
+    val (current, best, description) = describe(status, localBest, snapSampleFresh = fresh)
+    SyncSample(
+      current,
+      best,
+      description,
+      snap.map((p, _) => toSnapSyncState(p)),
+      latest.map(_._2),
+      snapRunning = latest.exists((_, at) => ageMillis(at, now) <= SnapRunningMaxAgeMillis)
+    )
 
   private def ageMillis(at: Instant, now: Instant): Long = java.time.Duration.between(at, now).toMillis
 
@@ -98,6 +156,15 @@ object TuiStatusProbe:
 
   /** How long a SNAP progress sample stays displayable. SyncProgressMonitor samples every 30 s. */
   val SnapProgressMaxAgeMillis: Long = 90_000L
+
+  /** How long SNAP counts as running after its latest sample of a running phase: ten of the monitor's 30 s rounds.
+    *
+    * The monitor samples every 30 s while SNAP runs and publishes a final `Completed` sample when it finishes, so a
+    * sample that stops arriving means SNAP stopped without one, as an in-process abort does before regular sync takes
+    * over. Between 90 s and this age the SNAP rows stay on screen, marked with their age, and the alert row warns;
+    * after it, both go. The sync controller's block target is not consulted.
+    */
+  val SnapRunningMaxAgeMillis: Long = 300_000L
 
   /** How young a SNAP sample must be to call the sync "Syncing (SNAP)": the monitor's last two rounds of 30 s
     * (`SyncProgressMonitor.startPeriodicLogging`). Two poll intervals would be shorter than one round.
@@ -112,15 +179,127 @@ object TuiStatusProbe:
     SyncPhase.ChainDownloadCompletion
   )
 
+  /** What the probe reads on the node itself, each read injectable for tests (spec 027 T065). The defaults read
+    * nothing; [[LocalSources.node]] reads the running node.
+    *
+    * @param dataDir
+    *   the datadir, whose file system's free space the disk reading is
+    * @param usableSpace
+    *   bytes usable on a directory's file system
+    * @param heap
+    *   the JVM's (used, max) heap bytes
+    * @param gcMillis
+    *   the JVM's cumulative GC time, all collectors
+    * @param headTimestamp
+    *   the best block header's timestamp, Unix seconds
+    */
+  final case class LocalSources(
+      dataDir: Option[File] = None,
+      usableSpace: File => Long = _.getUsableSpace,
+      heap: () => Option[(Long, Long)] = () => None,
+      gcMillis: () => Option[Long] = () => None,
+      discovery: () => Option[DiscoverySample] = () => None,
+      headTimestamp: () => Option[Long] = () => None,
+      snapCounters: () => Option[SnapCounters] = () => None,
+      snapPivot: () => Option[Long] = () => None
+  )
+
+  object LocalSources:
+
+    /** The running node's readings: the datadir's disk, this JVM, `NetworkMetrics`, `SNAPSyncMetrics` (counters and
+      * pivot), and the best header's timestamp through `headTimestamp`.
+      */
+    def node(dataDir: Option[File], headTimestamp: () => Option[Long]): LocalSources =
+      LocalSources(
+        dataDir = dataDir,
+        heap = jvmHeap,
+        gcMillis = jvmGcMillis,
+        discovery = networkDiscovery,
+        headTimestamp = headTimestamp,
+        snapCounters = snapMetrics,
+        snapPivot = snapPivotBlock
+      )
+
+    /** The SNAP pivot's block number, once SNAP has chosen one. */
+    def snapPivotBlock(): Option[Long] = Some(SNAPSyncMetrics.pivotBlockNumber).filter(_ > 0)
+
+    def jvmHeap(): Option[(Long, Long)] =
+      val heap = ManagementFactory.getMemoryMXBean.getHeapMemoryUsage
+      Some((heap.getUsed, if heap.getMax > 0 then heap.getMax else Runtime.getRuntime.maxMemory))
+
+    /** The pausing collectors' total time; a collector that cannot tell (-1) adds nothing. */
+    def jvmGcMillis(): Option[Long] =
+      Some(
+        pausingGcMillis(
+          ManagementFactory.getGarbageCollectorMXBeans.asScala.toSeq.map(b => b.getName -> b.getCollectionTime)
+        )
+      )
+
+    /** The collection time of the collectors that pause the application. G1's `G1 Concurrent GC` (and ZGC's and
+      * Shenandoah's `… Cycles` beans) count the wall time of work that runs beside it, which is not a pause.
+      */
+    private[console] def pausingGcMillis(collectors: Seq[(String, Long)]): Long =
+      collectors.collect {
+        case (name, millis) if !name.contains("Concurrent") && !name.contains("Cycles") => millis.max(0L)
+      }.sum
+
+    def networkDiscovery(): Option[DiscoverySample] =
+      Some(
+        DiscoverySample(
+          NetworkMetrics.DiscoveredPeersSize.get,
+          NetworkMetrics.PendingPeersSize.get,
+          NetworkMetrics.BlacklistedPeersSize.get
+        )
+      )
+
+    def snapMetrics(): Option[SnapCounters] =
+      Some(
+        SnapCounters(
+          accountRequests = SNAPSyncMetrics.accountRangeRequests,
+          accountFailures = SNAPSyncMetrics.accountRangeFailures,
+          storageRequests = SNAPSyncMetrics.storageRangeRequests,
+          storageFailures = SNAPSyncMetrics.storageRangeFailures,
+          bytecodeRequests = SNAPSyncMetrics.bytecodeRequests,
+          bytecodeFailures = SNAPSyncMetrics.bytecodeFailures,
+          healingRequests = SNAPSyncMetrics.healingRequests,
+          healingFailures = SNAPSyncMetrics.healingFailures,
+          timeouts = SNAPSyncMetrics.requestTimeouts,
+          snapCapablePeers = SNAPSyncMetrics.snapCapablePeers,
+          blacklisted = SNAPSyncMetrics.peersBlacklisted
+        )
+      )
+
+  /** A handshaked peer as the TUI shows it: `GetPeersCmd`'s id, address, direction and connection time. */
+  private[console] def tuiPeer(p: Peer): TuiPeer =
+    val address = p.remoteAddress
+    val host = Option(address.getAddress).fold(address.getHostString)(_.getHostAddress)
+    TuiPeer(p.id.value, s"$host:${address.getPort}", p.incomingConnection, Instant.ofEpochMilli(p.createTimeMillis))
+
   /** An ask as a future that never fails: its outcome is the value. */
   private def settled[A](ask: Future[A]): Future[Try[A]] = ask.transform(Success(_))(using ExecutionContext.parasitic)
+
+  /** The longest failure reason the TUI shows. */
+  val MaxReasonChars: Int = 120
+
+  /** A failure as the alert row shows it: its message (or its class), one line, with no control character (an exception
+    * message can carry anything, peer data included), at most [[MaxReasonChars]] characters.
+    */
+  private[console] def reason(e: Throwable): String =
+    val raw = Option(e.getMessage).filter(_.nonEmpty).getOrElse(e.getClass.getSimpleName)
+    val clean = raw.map(ch => if Character.isISOControl(ch) then ' ' else ch).trim
+    if clean.length <= MaxReasonChars then clean
+    else
+      // Never cut between the two halves of a surrogate pair (an emoji in a peer's message).
+      val keep = MaxReasonChars - 3
+      val end = if Character.isHighSurrogate(clean.charAt(keep - 1)) then keep - 1 else keep
+      clean.take(end) + "..."
 
   /** What one ask got by the end of the shared wait. An ask timeout is a miss, not a failure. */
   private[console] def poll[A, B](ask: Future[Try[A]])(f: A => B): Sourced.Poll[B] =
     ask.value.flatMap(_.toOption) match
       case Some(Success(a))                          => Sourced.Poll.Answered(f(a))
       case None | Some(Failure(_: TimeoutException)) => Sourced.Poll.Missed
-      case Some(Failure(e)) => Sourced.Poll.Failed(Option(e.getMessage).getOrElse(e.getClass.getSimpleName))
+      case Some(Failure(e))                          => Sourced.Poll.Failed(reason(e))
 
   /** Map a sync status to (current block, best known block or 0 if unknown, description).
     *
@@ -128,13 +307,14 @@ object TuiStatusProbe:
     * `runningSnapSync`, with a target of 0), so a 0 target with a SNAP sample in hand is SNAP at work, not a sync
     * waiting for its target (B-044).
     *
-    * @param snapRunning
-    *   the SNAP monitor has a recent sample of an active phase
+    * @param snapSampleFresh
+    *   the SNAP monitor has a sample of an active phase from its last two rounds ([[SnapStatusMaxAgeMillis]]): enough
+    *   to say "Syncing (SNAP)". Not [[SyncSample.snapRunning]], whose window is longer
     */
   private[console] def describe(
       status: SyncProtocol.Status,
       localBest: Long,
-      snapRunning: Boolean
+      snapSampleFresh: Boolean
   ): (Long, Long, String) = status match
     case SyncProtocol.Status.Syncing(_, blocks, stateNodes) =>
       val target = blocks.target.toLong
@@ -142,7 +322,7 @@ object TuiStatusProbe:
       val state = stateNodes.filter(_.nonEmpty).map(p => f" (state ${p.current}%,d / ${p.target}%,d)").getOrElse("")
       val description =
         if target > 0 then s"Syncing$state"
-        else if snapRunning then "Syncing (SNAP)"
+        else if snapSampleFresh then "Syncing (SNAP)"
         else "Syncing (no target yet)"
       (current, target, description)
     case SyncProtocol.Status.SyncDone   => (localBest, localBest, "Synced")

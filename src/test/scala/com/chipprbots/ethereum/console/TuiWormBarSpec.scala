@@ -101,6 +101,10 @@ class TuiWormBarSpec extends AnyFlatSpec with Matchers:
   it should "move with the tick under full motion only where it ripples or pulses" taggedAs (UnitTest) in {
     for g <- sets; p <- states do
       val frames = (0L to 11L).map(t => WormBar.render(50, p, t, g, theme, Motion.Full))
-      val moves = WormBar.animates(50, p, g, Motion.Full, stalled = false)
+      // A known total ripples once the worm is two cells in; an unknown one pulses while active.
+      val moves = p match
+        case WormProgress.Known(f) if f < 1.0 => WormBar.wormAt(f, WormBar.slotsFor(50, g)) >= 2
+        case WormProgress.Active              => true
+        case _                                => false
       withClue(s"${g.set} $p: ")(frames.distinct.size > 1 shouldBe moves)
   }

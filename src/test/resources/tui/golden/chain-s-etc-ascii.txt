@@ -1,0 +1,24 @@
+ # FUKUII  etc (61) . PoW . up 12d 7h                                     Chain 
+--------------------------------------------------------------------------------
+ + no alerts                                                                    
+ Peers   41/50 ##########         Block  21,884,102 (at head)                   
+ Sync    + at head                                                              
+--------------------------------------------------------------------------------
+ Chain   etc . chain id 61 . PoW . forks by block number                        
+--------------------------------------------------------------------------------
+ Last    Spiral + since 19,250,000                                              
+ Next    Olympia not scheduled                                                  
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+ 1 Over 2 Sync 3 Peers 4 Chain | p Pause ? Help r Redraw d Detach q Quit        

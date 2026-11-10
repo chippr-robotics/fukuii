@@ -43,10 +43,9 @@ class TuiRendererSpec extends AnyFlatSpec with Matchers:
     val height = 40
 
     val lines = renderer.render(state, width, height)
-    val output = lines.map(_.toString).mkString("\n").toUpperCase
 
-    output should include("NETWORK")
-    output should include("ETHEREUM-CLASSIC")
+    // Slice 3: the network is in the header band, on every view (FR-018).
+    lines.head.toString should include("ethereum-classic")
   }
 
   it should "include peer status" taggedAs (UnitTest) in {
@@ -70,8 +69,8 @@ class TuiRendererSpec extends AnyFlatSpec with Matchers:
     val lines = renderer.render(state, width, height)
     val output = lines.map(_.toString).mkString("\n")
 
-    output should include("Current Block")
-    output should include("Best Block")
+    // Slice 3: the vitals strip's Block cell, current → best (research §3.2).
+    output should include("Block  12,345 → 100,000 (−87,655)")
   }
 
   it should "show synchronized status when synced" taggedAs (UnitTest) in {
@@ -82,7 +81,7 @@ class TuiRendererSpec extends AnyFlatSpec with Matchers:
     val lines = renderer.render(state, width, height)
     val output = lines.map(_.toString).mkString("\n")
 
-    output should include("SYNCHRONIZED")
+    output should include("at head")
     // US1 scenario 2: the worm has reached the brain.
     output should include("🪱[COMPLETE ✓]🧠")
   }
@@ -99,7 +98,7 @@ class TuiRendererSpec extends AnyFlatSpec with Matchers:
 
     output should include("Blocks")
     output should include("🧠 50%")
-    output should include("Blocks Remaining")
+    output should include("(−50,000)") // the blocks remaining, in the Block cell
     (output should not).include("Sync Progress")
   }
 
@@ -115,7 +114,7 @@ class TuiRendererSpec extends AnyFlatSpec with Matchers:
 
     (output should not).include("Sync Progress")
     (output should not).include(TuiGlyphs.Emoji.brain.text)
-    output should include("Blocks Remaining")
+    output should include("(−50,000)")
   }
 
   it should "include runtime section with uptime" taggedAs (UnitTest) in {
@@ -124,10 +123,9 @@ class TuiRendererSpec extends AnyFlatSpec with Matchers:
     val height = 40
 
     val lines = renderer.render(state, width, height)
-    val output = lines.map(_.toString).mkString("\n")
 
-    output should include("RUNTIME")
-    output should include("Uptime")
+    // Slice 3: the uptime is in the header band (research §3.1).
+    lines.head.toString should include("up 0s")
   }
 
   it should "include footer with keyboard commands, labelling d Detach (Q7)" taggedAs (UnitTest) in {
@@ -164,10 +162,11 @@ class TuiRendererSpec extends AnyFlatSpec with Matchers:
     val lines = rendererWithSettings.render(state, width, height)
     val output = lines.map(_.toString).mkString("\n")
 
-    output should include("NODE SETTINGS")
-    output should include("Data Dir")
-    output should include("Sync Mode")
-    output should include("Pruning")
+    // Slice 3: one Node row on the Overview.
+    output should include("Node")
+    output should include("/data/fukuii")
+    output should include("fast sync")
+    output should include("archive pruning")
   }
 
   it should "not show node settings when disabled" taggedAs (UnitTest) in {
@@ -190,7 +189,7 @@ class TuiRendererSpec extends AnyFlatSpec with Matchers:
     val lines = rendererNoSettings.render(state, width, height)
     val output = lines.map(_.toString).mkString("\n")
 
-    (output should not).include("NODE SETTINGS")
+    (output should not).include("/data/fukuii")
   }
 
   it should "create renderer with default config" taggedAs (UnitTest) in {
@@ -262,7 +261,7 @@ class TuiRendererSpec extends AnyFlatSpec with Matchers:
 
   it should "show an unknown network head as 'unknown', not 0" taggedAs (UnitTest) in {
     val output = renderer.render(TuiState.initial.withBlockInfo(5, 0), 100, 40).map(_.toString).mkString("\n")
-    output should include("Best Block: unknown")
+    output should include("Block  5 → unknown")
   }
 
   it should "keep styles as attributes rather than embedded escape codes" taggedAs (UnitTest) in {
@@ -296,7 +295,9 @@ class TuiRendererSpec extends AnyFlatSpec with Matchers:
         snap.map(_.trim.takeWhile(_ != ' ')) shouldBe snapLabels
         snap(1) should include(s"${g.worm.text}[COMPLETE ${g.check.text}]${g.brain.text}") // accounts are done
         snap(2) should include(s"${g.brain.text} 37%") // storage 119.6M of 323M slots
-        snap(3) should include(s"${g.brain.text} 68%") // bytecodes 412K of 600K
+        // Bytecodes found so far: their total is not known until all are found, so no percentage (B-044).
+        snap(3) should include(s"${g.worm.text}[ACTIVE]")
+        snap(3) should include("412.0K @ 310/s")
         snap(4) should include(s"${g.worm.text}[QUEUED]${g.brain.text}") // healing
       }
   }
@@ -306,7 +307,8 @@ class TuiRendererSpec extends AnyFlatSpec with Matchers:
     // At tier L the logo column narrows the body; the row still keeps its rate and its contract count.
     text should include("119.6M slots @ 21.4K/s · 2,114/5,702 contracts")
     text should include("headers 4.2M / 9.1M")
-    text should include("phase 1h 8m 0s")
+    // Slice 3: the time in the phase is on the Sync view's phase row.
+    rows(TuiFixtures.snapStorageMordor().withView(TuiView.Sync), 160, 48).mkString("\n") should include("phase 1h 8m")
   }
 
   // Slice 1 review W4: at the tier L minimum the logo column leaves the body 93 columns. The rate survives; the contract
@@ -321,13 +323,18 @@ class TuiRendererSpec extends AnyFlatSpec with Matchers:
 
   it should "draw the network name the same under a Turkish default locale" taggedAs (UnitTest) in {
     val text = TuiFixtures.withDefaultLocale(TuiFixtures.Turkish)(rows(TuiFixtures.sepoliaNearHead(), 100, 40).mkString)
-    text should include("Network: SEPOLIA")
+    text should include("sepolia (11155111)")
+    text should include("7,412,009 → 7,412,011")
   }
 
   it should "keep each SNAP row's rate on an 80-column screen" taggedAs (UnitTest) in {
     val lines = rows(TuiFixtures.snapStorageMordor(), 80, 24)
-    lines.find(_.trim.startsWith("Storage")).get should include("119.6M slots @ 21.4K/s")
+    // Slice 3 review: at tier S the Storage row drops the word "slots", so its contract count fits whole.
+    lines.find(_.trim.startsWith("Storage")).get should include("119.6M @ 21.4K/s · 2,114/5,702 ")
     lines.find(_.trim.startsWith("Bytecode")).get should include("@ 310/s")
+    val sync = rows(TuiFixtures.snapStorageMordor().withView(TuiView.Sync), 80, 24)
+    sync.find(_.trim.startsWith("Storage")).get should include("2,114/5,702 ")
+    sync.find(_.contains("SNAP sync")).get should include("Downloading bytecodes & storage")
   }
 
   // Live run 2026-11-08: a restarted node's counters start at zero, and a finished storage row read "0 slots".
@@ -376,4 +383,64 @@ class TuiRendererSpec extends AnyFlatSpec with Matchers:
     for (name, fixture) <- TuiFixtures.all; (w, h) <- Seq((80, 24), (120, 40), (160, 48)) do
       val text = rows(fixture(GlyphSet.Ascii), w, h).mkString("\n")
       withClue(s"$name at ${w}x$h:\n$text\n")(all(text.map(_.toInt)) should be < 0x7f)
+  }
+
+  // B-044: the running phase's row reads the monitor's phaseProgress, which the monitor holds per phase as of B-044.
+  it should "draw the running phase's row from phaseProgress, not from the raw counts" taggedAs (UnitTest) in {
+    def row(snap: SnapSyncState, label: String) =
+      rows(TuiState.initial.withSnapSyncState(snap).copy(motion = Motion.Reduced), 120, 40)
+        .find(_.trim.startsWith(label))
+        .get
+    // 1.2M of an estimated 4.0M accounts is 30 %, but the monitor says 41: the row says 41.
+    val accounts = SnapSyncState(
+      phase = "AccountRangeSync",
+      accountsSynced = 1_200_000L,
+      estimatedTotalAccounts = 4_000_000L,
+      storageSlotsSynced = 5_000L,
+      estimatedTotalSlots = 50_000L,
+      phaseProgress = 41
+    )
+    row(accounts, "Accounts") should include("🧠 41%")
+    // Storage found during the account phase is a count so far: ACTIVE, no percentage.
+    row(accounts, "Storage") should include("[ACTIVE]")
+    (row(accounts, "Storage") should not).include("%")
+    val storage = accounts.copy(phase = "ByteCodeAndStorageSync", phaseProgress = 12)
+    row(storage, "Storage") should include("🧠 12%")
+  }
+
+  // prism, slice 3 review: the views say so when they have nothing to show yet.
+  it should "say what is not known yet on each view" taggedAs (UnitTest) in {
+    def text(s: TuiState, w: Int = 120, h: Int = 40) = rows(s, w, h).mkString("\n")
+    text(TuiState.initial.withView(TuiView.Peers)) should include("Peers   not polled yet")
+    val noPeers = TuiFixtures.withPeers(TuiFixtures.syncedEtc(), Sourced.Fresh(Nil, TuiFixtures.Now))
+    text(noPeers.withView(TuiView.Peers)) should include("no handshaked peer")
+    val silent = TuiFixtures.withPeers(TuiFixtures.syncedEtc(), Sourced.Unresponsive("no reply within 500ms"))
+    text(silent.withView(TuiView.Peers)) should include("peer manager Unresponsive (no reply within 500ms)")
+    text(TuiState.initial.withView(TuiView.Chain)) should include("Chain   not read yet")
+    val noHead = TuiFixtures.sepoliaNearHead()
+    val unread = noHead.copy(snapshot = noHead.snapshot.map(s => s.copy(local = s.local.copy(headTimestamp = None))))
+    text(unread) should include("Forks   head timestamp not read yet")
+    text(unread.withView(TuiView.Chain)) should include("head timestamp not read yet")
+  }
+
+  it should "say how many more peers there are when the Peers table runs out of rows" taggedAs (UnitTest) in {
+    val lines = rows(TuiFixtures.syncedEtc().withView(TuiView.Peers), 80, 24)
+    lines.exists(_.trim.matches("""\+ \d+ more""")) shouldBe true
+    rows(TuiFixtures.lowDiskEtc().withView(TuiView.Peers), 80, 24).exists(_.contains("more")) shouldBe false // 6 fit
+  }
+
+  // prism, slice 3 review: during SNAP the sync controller reports no target and the local best block is 0.
+  it should "show SNAP's pivot as the Block cell's target and the fork position while SNAP runs" taggedAs (UnitTest) in {
+    val snap = TuiFixtures.snapStorageMordor()
+    val text = rows(snap, 80, 24).mkString("\n")
+    text should include("Block  0 → 9,118,000 (pivot)")
+    // Mordor's Spiral is at 9,957,000, past the pivot: the timeline stands at the pivot, not at block 0.
+    text should include("Mystique ✓")
+    text should include("Spiral @ 9,957,000 (839.0K away)")
+  }
+
+  it should "say only Unresponsive in the Peers cell; the alert row names the source" taggedAs (UnitTest) in {
+    val row = rows(TuiFixtures.unresponsiveEtc(), 80, 24).find(_.trim.startsWith("Peers")).get
+    row should include("Peers   Unresponsive ")
+    (row should not).include("(peer")
   }
