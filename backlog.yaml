@@ -2123,3 +2123,13 @@ items:
     refs: ["prism review of B-044, 2026-11-10"]
     links: {}
     notes: AccountTrieAssembly.scala:287-291 catch branch in handleStoreAccountChunk. If next was advanced before the store failed, the unstored tail may be skipped until healing. Unverified; vault/forge to confirm (trie assembly).
+  - id: B-191
+    title: "SNAP progress after a restart: ETA reads short (counters restart at 0); recovery path starts the storage phase before its tasks finish streaming"
+    priority: P3
+    status: open
+    area: snap
+    size: S
+    opened: 2026-11-10
+    refs: ["prism review of B-044, 2026-11-10"]
+    links: {}
+    notes: SyncProgressMonitor reset() on restartSnapSync zeroes counters while resumed ranges keep cursors; percentage is right, ~total and ETA are since-restart. SnapResumePlanner.scala:541 startPhase(ByteCodeAndStorageSync) precedes the 4096-entry stream (StorageRangeCoordinator.scala:797).
