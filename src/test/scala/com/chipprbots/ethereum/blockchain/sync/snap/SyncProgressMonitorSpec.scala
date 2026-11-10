@@ -162,7 +162,9 @@ class SyncProgressMonitorSpec extends ScalaTestWithActorTestKit with AnyFlatSpec
       reportStorageContracts(monitor, completed = 1_001, total = 100_000)
       val c = monitor.currentProgress
 
-      withClue("the slots of an unfinished contract are not progress through the contracts: ")(b.phaseProgress shouldBe 1)
+      withClue("the slots of an unfinished contract are not progress through the contracts: ")(
+        b.phaseProgress shouldBe 1
+      )
       phaseProgressSeries(Seq(a, b, c)) shouldBe Seq(1, 1, 1)
       assertNonDecreasing("globalProgress", Seq(a, b, c).map(_.globalProgress))
     }

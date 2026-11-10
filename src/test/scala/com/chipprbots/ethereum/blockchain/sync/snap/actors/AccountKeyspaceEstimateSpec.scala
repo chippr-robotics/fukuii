@@ -59,7 +59,7 @@ class AccountKeyspaceEstimateSpec extends AnyFlatSpec with Matchers:
 
     val estimate = AccountRangeCoordinator.keyspaceEstimate(Downloaded, queued, Nil, Seq(answered))
 
-    estimate.map(BigInt(_)).get should (be >= expected - 1 and be <= expected + 1)
+    estimate.map(BigInt(_)).get should ((be >= expected - 1).and(be <= expected + 1))
   }
 
   it should "not move when a range goes from queued, to asked of a peer, to being stored" taggedAs UnitTest in {
