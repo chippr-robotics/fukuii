@@ -9,7 +9,7 @@
 --------------------------------------------------------------------------------
  Forks   Mystique + ========================> Spiral @ 19,250,000 (847.9K away) 
 --------------------------------------------------------------------------------
- Node    /var/lib/fukuii/etc . Full sync . archive pruning . 50 peers max . mini
+ Node    ..fukuii/etc . Full sync . archive pruning . 50 peers max . mining off 
                                                                                 
                                                                                 
                                                                                 

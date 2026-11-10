@@ -9,7 +9,7 @@
 --------------------------------------------------------------------------------
  Forks   Spiral + ======================================> Olympia not scheduled 
 --------------------------------------------------------------------------------
- Node    /var/lib/fukuii/etc . SNAP sync . archive pruning . 50 peers max . mini
+ Node    ../fukuii/etc . SNAP sync . archive pruning . 50 peers max . mining on 
                                                                                 
                                                                                 
                                                                                 

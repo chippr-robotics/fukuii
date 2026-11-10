@@ -20,5 +20,5 @@
    0xcc62…3c     out  203.0.113.21:30303        3h 8m                           
    0x6a99…ed     in   203.0.113.22:30303        3h 2m                           
    0x08d1…9e     out  203.0.113.23:30303        2h 56m                          
-   0xa708…4f     out  203.0.113.24:30303        2h 51m                          
+   + 27 more                                                                    
  1 Over 2 Sync 3 Peers 4 Chain │ p Pause ? Help r Redraw d Detach q Quit        

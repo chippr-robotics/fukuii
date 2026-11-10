@@ -1,8 +1,8 @@
  # FUKUII  etc (61) . PoW . head 21,884,102 . 0/50 peers . up 12d 7h . v0.11.0                                                                         Overview 
 ----------------------------------------------------------------------------------------------------------------------------------------------------------------
  x 1 error   0 peers for 4m 12s                                                                                                                                 
- Peers   0/50 . searching        Block  21,884,102 (at head)           Disk  388G free       JVM  3.4G / 8.0G heap         GC  0.3%                             
- RPC     :8545 on                                                      Discovery  1,912 known . 14 pending . 3 blacklisted                                      
+ Peers   0/50 . searching    Block  21,884,102 (at head)                     Disk  388G free       JVM  3.4G / 8.0G heap     GC  0.3%                           
+ RPC     :8545 on                                                            Discovery  1,912 known . 14 pending . 3 blacklisted                                
 ----------------------------------------------------------------------------------------------------------------------------------------------------------------
  Sync    + at head                                                                                               |                      --                      
    Blocks   ~o[COMPLETE +]@@                                    21,884,102                                       |                    .=+#+.                    

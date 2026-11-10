@@ -1,20 +1,20 @@
  # FUKUII  mordor (63) . PoW . head 0 . 11/50 peers . up 2h 11m                                                Overview 
 ------------------------------------------------------------------------------------------------------------------------
  ! 1 warn    peers 11/50 below 25%                                                                                      
- Peers   11/50 ##########                     Block  0 -> 9,118,004 (-9,118,004)                                        
- RPC     :8545 on                             Disk    412G free                            JVM     5.1G / 8.0G heap     
+ Peers   11/50 ##########                    Block  0 -> 9,118,000 (pivot)                                              
+ RPC     :8545 on                            Disk   412G free                                JVM     5.1G / 8.0G heap   
 ------------------------------------------------------------------------------------------------------------------------
  SNAP [S]  Downloading bytecodes & storage                                                  elapsed 2h 11m . ETA 1h 58m 
    Overall  [==========~o.............................]@@ 27%                                                           
    Accounts ~o[COMPLETE +]@@                                    34.1M                                                   
    Storage  [==============~o.........................]@@ 37%   119.6M slots @ 21.4K/s . 2,114/5,702 contracts          
-   Bytecode [==========================~o.............]@@ 68%   412.0K / ~600.0K @ 310/s                                
+   Bytecode ~o[ACTIVE]   @@                                     412.0K @ 310/s                                          
    Healing  ~o[QUEUED]@@                                                                                                
    Chain    headers 4.2M / 9.1M . bodies 0 . receipts 0                                                                 
 ------------------------------------------------------------------------------------------------------------------------
  Forks (block)                                                                                                          
-   DiffBomb-Pause + - DiffBomb-Continue + - DiffBomb-Removal + - Atlantis + ========> Agharta @ 301,243 (301.2K away)   
-   block 0 . Atlantis since 0                                                                                           
+   Atlantis + - Agharta + - Phoenix + - ECIP-1099 + - Magneto + - Mystique + ========> Spiral @ 9,957,000 (839.0K away) 
+   block 9,118,000 . Mystique since 5,520,000                                                                           
 ------------------------------------------------------------------------------------------------------------------------
  Node    /var/lib/fukuii/mordor . SNAP sync . archive pruning . 50 peers max . mining off                               
                                                                                                                         

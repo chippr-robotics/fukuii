@@ -1,7 +1,7 @@
  ◆ FUKUII  etc (61) · PoW · up 9m 0s                                   Overview 
 ────────────────────────────────────────────────────────────────────────────────
  ✗ 1 error   peer manager Unresponsive (no reply within 500ms)                  
- Peers   Unresponsive (peer mana  Block  18,402,113 → 21,884,102 (−3,481,989)   
+ Peers   Unresponsive             Block  18,402,113 → 21,884,102 (−3,481,989)   
  RPC     :8545 on                 Disk   1.2T free                              
 ────────────────────────────────────────────────────────────────────────────────
  Sync    regular                                 rate 184.37 blk/s · ETA 5h 14m 
@@ -9,7 +9,7 @@
 ────────────────────────────────────────────────────────────────────────────────
  Forks   Mystique ✓ ════════════════════════▶ Spiral @ 19,250,000 (847.9K away) 
 ────────────────────────────────────────────────────────────────────────────────
- Node    /var/lib/fukuii/etc · Full sync · archive pruning · 50 peers max · mini
+ Node    …/fukuii/etc · Full sync · archive pruning · 50 peers max · mining off 
                                                                                 
                                                                                 
                                                                                 
