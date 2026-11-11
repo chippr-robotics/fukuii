@@ -2,6 +2,8 @@ package com.chipprbots.ethereum.db.storage.pathstate
 
 import org.apache.pekko.util.ByteString
 
+import scala.util.control.NonFatal
+
 import com.chipprbots.ethereum.db.dataSource.DataSource
 import com.chipprbots.ethereum.db.dataSource.DataSourceBatchUpdate
 import com.chipprbots.ethereum.db.dataSource.DataUpdate
@@ -10,6 +12,7 @@ import com.chipprbots.ethereum.db.storage.DecodedNodeCache
 import com.chipprbots.ethereum.db.storage.MptStorage
 import com.chipprbots.ethereum.db.storage.PathNodeStorage
 import com.chipprbots.ethereum.db.storage.PrefetchNodeReader
+import com.chipprbots.ethereum.utils.LazyLogger
 
 /** The state of the unified layout (spec 018 Track C): the position-keyed rows of CF `t` and CF `u`, the anchor that
   * says which block's state they hold, and the views a reader takes of them.
@@ -36,7 +39,7 @@ final class PathStateStorage(
     appState: AppStateStorage,
     maxViewAgeMoves: Int = 8,
     settings: PathStateStorage.CommitSettings = PathStateStorage.CommitSettings()
-):
+) extends LazyLogger:
   import PathStateStorage.*
 
   private val dataSource: DataSource = rows.dataSource
@@ -107,7 +110,10 @@ final class PathStateStorage(
     *
     *   - '''The block is the anchor already''': the state half is dropped and `extra` alone is written. This is the
     *     only case a caller with nothing staged can be in: one that found the block executed and applied, and has only
-    *     the block's own records to write. Whether it is still applied is decided here, under the lock.
+    *     the block's own records to write. Whether it is still applied is decided here, under the lock. The block, its
+    *     receipts and its weight went to the disk with the batch that moved the anchor, so all `extra` can add here is
+    *     '''a best-block pointer, and it is written''': a caller that is not entitled to move the head (a payload sent
+    *     again, on a chain whose head is the consensus client's to choose) must hand an `extra` without one (beacon).
     *   - '''There is no anchor''', or the anchor is not the block `staged` was built on: refused, with nothing written.
     *     Until the overlay (C4a) a block is committed in place or not at all.
     *
@@ -127,7 +133,13 @@ final class PathStateStorage(
     extra.foreach(other =>
       require(other.dataSource eq dataSource, "a block and its state are written in one batch, to one data source")
     )
-    lock.locked(s"canonical commit of block ${block.show}", settings.observer.lockWaited) {
+    // Read before the lock is asked for: nothing runs under it but this class and the data source (vault), and what
+    // names the finalized block is not this class's.
+    val finalized = settings.finalized()
+    val outcome = lock.locked(
+      s"canonical commit of block ${block.show}",
+      nanos => told("the wait for the state lock")(settings.observer.lockWaited(nanos))
+    ) {
       // Every in-place writer holds this lock, so the clock is at rest and the anchor is the disk's.
       clock.anchor match
         case None =>
@@ -139,7 +151,7 @@ final class PathStateStorage(
           CommitOutcome.AlreadyApplied
         case Some(held) =>
           staged match
-            case Some(executed) if executed.parent == held => commitInPlace(executed, held, block, extra)
+            case Some(executed) if executed.parent == held => commitInPlace(executed, held, block, extra, finalized)
             case Some(executed) =>
               throw new StateUnavailable(
                 s"block ${block.show} was executed on the state of ${executed.parent.show}, " +
@@ -151,22 +163,32 @@ final class PathStateStorage(
                   s"which is ${held.show}"
               )
     }
+    // Told once the lock is free. The block is committed whatever its observer makes of it.
+    outcome match
+      case CommitOutcome.Applied(commit) =>
+        told(s"the commit of block ${block.show}")(settings.observer.committed(commit))
+      case CommitOutcome.AlreadyApplied => ()
+    outcome
+
+  /** `tell`, whose failure is the observer's own: it is logged, and changes nothing of the commit it was told of. */
+  private def told(what: String)(tell: => Unit): Unit =
+    try tell
+    catch case NonFatal(e) => log.warn(s"The observer of the state's commits failed on $what: $e")
 
   private def commitInPlace(
       staged: PathStagedState,
       parent: BlockRef,
       block: BlockRef,
-      extra: Option[DataSourceBatchUpdate]
+      extra: Option[DataSourceBatchUpdate],
+      finalized: Option[BigInt]
   )(using StateLockHeld): CommitOutcome =
     require(block.number == parent.number + 1, s"block ${block.show} does not follow ${parent.show}")
 
     // The rows of each storage trie the block replaced, as the disk holds them: the parent's (data-model 3.6). Scanned
-    // here, under the lock, so that they are the rows this batch is written over.
-    val scanLimit = settings.maxEntriesPerOwnerDelete.min(Int.MaxValue - 1L).toInt
-    val finalised = staged.changes.finalise { owner =>
-      val scanned = rows.storageRows(owner, scanLimit + 1)
-      Option.when(scanned.sizeIs <= scanLimit)(scanned.map((position, node) => position -> ByteString(node)))
-    }
+    // here, under the lock, so that they are the rows this batch is written over; and bounded in rows and in bytes,
+    // since they are held in memory and the lock is held meanwhile.
+    val maxRows = settings.maxEntriesPerOwnerDelete.min(Int.MaxValue.toLong).toInt
+    val finalised = staged.changes.finalise(owner => rows.storageRows(owner, maxRows, settings.maxOwnerScanBytes))
 
     val diff = BlockDiff(block.hash, block.number, parent.hash, parent.stateRoot, block.stateRoot, finalised.changes)
     // The account trie's root row is held to the two state roots: a layer that is not this block's final world, or not
@@ -186,6 +208,11 @@ final class PathStateStorage(
 
     // What the batch leaves at each position it writes, and what a reader of the parent's state must go on seeing
     // there. For a trie whose old rows were not listed, the second is read: one point read for each row written.
+    //
+    // Elsewhere the second is the entry's prior, which is the row, with one exception that does no harm. Where an
+    // unlisted trie left a row behind, a later block's first write records no prior, and the row is there. No reader
+    // of the parent's state comes to that position: a read descends from a root through hashes, and no node of the
+    // parent's state names a child there.
     val unrecorded = finalised.unrecorded
     val written: Map[PositionKey, Option[ByteString]] =
       diff.changes.view.mapValues(_.next).toMap ++ unrecorded.view.mapValues(Some(_))
@@ -194,7 +221,7 @@ final class PathStateStorage(
         unrecorded.keysIterator.map(position => position -> rows.read(position).map(ByteString(_)))
 
     val (changesetUpdates, prunedHeights, prunedTo) = changesetIndexed(block) {
-      val pruned = pruning(block)
+      val pruned = pruning(block, finalized)
       // The deletes come before the record: a batch applies its updates in order, and no delete may follow the write
       // of a key it names.
       val moved = pruned.movedTo.toSeq.flatMap(appState.putChangesetPrunedTo(_).updates)
@@ -210,40 +237,41 @@ final class PathStateStorage(
     // wait for this thread.
     clock.inFlight(StateMove(block, before))(dataSource.update(updates))
 
-    val commit = Commit(
-      block = block,
-      positions = written.size,
-      stateBytes = written.iterator.map((position, node) => position.rowKey.length.toLong + node.fold(0)(_.length)).sum,
-      recordBytes = BlockDiffCodec.encodedLength(record),
-      tombstone = tombstone,
-      unlistedOwners = finalised.unlisted,
-      prunedHeights = prunedHeights,
-      prunedTo = prunedTo,
-      nanos = System.nanoTime() - started
+    CommitOutcome.Applied(
+      Commit(
+        block = block,
+        positions = written.size,
+        stateBytes =
+          written.iterator.map((position, node) => position.rowKey.length.toLong + node.fold(0)(_.length)).sum,
+        recordBytes = BlockDiffCodec.encodedLength(record),
+        tombstone = tombstone,
+        unlistedOwners = finalised.unlisted,
+        prunedHeights = prunedHeights,
+        prunedTo = prunedTo,
+        nanos = System.nanoTime() - started
+      )
     )
-    settings.observer.committed(commit)
-    CommitOutcome.Applied(commit)
 
   /** What retention does in this block's batch. The first block committed on a datadir starts the count at itself: no
     * height below it has a record.
     */
-  private def pruning(block: BlockRef)(using StateLockHeld): Pruning =
+  private def pruning(block: BlockRef, finalized: Option[BigInt])(using StateLockHeld): Pruning =
     appState.getChangesetPrunedTo() match
       case None => Pruning(Nil, movedTo = Some(block.number), reached = block.number, heights = 0)
       case Some(from) =>
-        settings.retention.floor(block.number, settings.finalized()) match
+        settings.retention.floor(block.number, finalized) match
           case Some(floor) if floor > from =>
             val (deletes, next) = changesets.pruneUpdates(from, floor, settings.retention.heightsPerBatch(floor - from))
             Pruning(deletes, Option.when(next > from)(next), reached = next, heights = (next - from).toInt)
           case _ => Pruning(Nil, movedTo = None, reached = from, heights = 0)
 
   /** `build`, which reads the index of changeset records. An index that cannot be read is this datadir's corruption,
-    * and is said as that: it is no fault of the block.
+    * and is said as that, with the block that met it: it is no fault of the block.
     */
   private def changesetIndexed[A](block: BlockRef)(build: => A): A =
     try build
     catch
-      case e: IllegalArgumentException =>
+      case e: ChangesetStorage.CorruptIndex =>
         throw new IllegalStateException(
           s"The index of changeset records is corrupt; block ${block.show} was not committed: ${e.getMessage}",
           e
@@ -265,14 +293,19 @@ object PathStateStorage:
     * @param maxRecordBytes
     *   a changeset record above this is written as a tombstone (`state.changeset.max-record-bytes`)
     * @param finalized
-    *   the number of the finalized block, where a consensus client names one
+    *   the number of the finalized block, where a consensus client names one. Asked once for each commit, before the
+    *   state lock is taken: it must answer from what it holds, and not wait
+    * @param maxOwnerScanBytes
+    *   a replaced storage trie whose rows hold more than this keeps them too: the rows are read into memory under the
+    *   state lock, and a count of rows alone does not bound that
     */
   final case class CommitSettings(
       maxEntriesPerOwnerDelete: Long = 1000000L,
       maxRecordBytes: Long = 256L * 1024 * 1024,
       retention: RetentionPolicy = RetentionPolicy.KeepAll,
       finalized: () => Option[BigInt] = () => None,
-      observer: CommitObserver = CommitObserver.Silent
+      observer: CommitObserver = CommitObserver.Silent,
+      maxOwnerScanBytes: Long = 64L * 1024 * 1024
   )
 
   object CommitSettings:
@@ -287,7 +320,7 @@ object PathStateStorage:
 
   /** Why a block's record is a tombstone: it has no entries, and no head move may cross it (data-model 3.6). */
   enum TombstoneCause:
-    /** A storage trie it replaced has more rows than may be listed; they were left in place. */
+    /** A storage trie it replaced has more rows, or more bytes of them, than may be listed; they were left in place. */
     case OwnerDeleteBound
 
     /** Its record would be larger than a record may be. Its rows were all written. */
@@ -321,7 +354,9 @@ object PathStateStorage:
     /** The block was the anchor already: the caller's own updates were written and nothing else. */
     case AlreadyApplied
 
-  /** What is told of the commits: for metrics, which this package does not know. */
+  /** What is told of the commits: for metrics, which this package does not know. What an observer throws is logged and
+    * goes no further.
+    */
   trait CommitObserver:
     /** A writer waited `nanos` for the state lock. */
     def lockWaited(nanos: Long): Unit = ()

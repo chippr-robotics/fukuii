@@ -294,6 +294,79 @@ class CanonicalCommitSpec extends AnyFlatSpec with Matchers:
         }
       }
 
+    // vault: the rows are read into memory under the state lock, and a count of rows does not bound that.
+    it should "leave the rows of a replaced trie that holds too many bytes, as it does one with too many rows" taggedAs
+      UnitTest in {
+        onDataSource { source =>
+          val reference = new Chain(EphemDataSource())
+          val alices = reference.disk._2.filter((key, _) => key.startsWith(owner(alice)))
+          val bytes = alices.map((key, node) => key.length.toLong + node.length).sum
+
+          val over = new Chain(source, CommitSettings(maxOwnerScanBytes = bytes - 1))
+          val commit = over.advance(delete(alice), account(dave, 1, 1))
+          commit.tombstone shouldBe Some(TombstoneCause.OwnerDeleteBound)
+          commit.unlistedOwners shouldBe Seq(owner(alice))
+          over.disk._2.filter((key, _) => key.startsWith(owner(alice))) shouldBe alices
+          over.readable(over.head)
+
+          val at = new Chain(EphemDataSource(), CommitSettings(maxOwnerScanBytes = bytes))
+          at.advance(delete(alice), account(dave, 1, 1)).tombstone shouldBe None
+          at.disk shouldBe at.rowsOf(at.head.stateRoot)
+        }
+      }
+
+    // beacon: Amsterdam clears the storage of an account that destroyed itself and keeps the account, when it still
+    // holds a balance.
+    it should "delete the rows of an account whose storage is cleared while the account stays" taggedAs UnitTest in {
+      onDataSource { source =>
+        val chain = new Chain(source)
+        val parentState = chain.disk
+        val cleared: Tx = world =>
+          val kept = world.getAccount(carol).get
+          world.deleteAccount(carol).saveAccount(carol, Account(nonce = kept.nonce, balance = kept.balance))
+        val executed = chain.execute(slots(carol, 3 -> 7), cleared, account(dave, 1, 1))
+        executed.onPositions.getAccount(carol).map(_.storageRoot) shouldBe Some(Account.EmptyStorageRootHash)
+        executed.commit() shouldBe a[CommitOutcome.Applied]
+        chain.head = executed.ref
+        chain.disk shouldBe chain.rowsOf(executed.root)
+        chain.disk._2.keys.exists(_.startsWith(owner(carol))) shouldBe false
+        parentState._2.keys.count(_.startsWith(owner(carol))) should be > 1
+        chain.reverse(chain.head)
+        chain.disk shouldBe parentState
+      }
+    }
+
+    // A storage trie small enough that its root is under 32 bytes has a row all the same (rule 7). The world cannot
+    // make one, its keys being hashes: the trie is written straight onto the layer.
+    it should "write and delete the root row of a storage trie whose root is under 32 bytes" taggedAs UnitTest in {
+      onDataSource { source =>
+        import com.chipprbots.ethereum.mpt.MerklePatriciaTrie
+        import com.chipprbots.ethereum.mpt.byteStringSerializer
+        val chain = new Chain(source)
+        val tiny = owner(eve)
+        val root = PositionKey(Some(tiny), PositionKey.AccountRoot.hp)
+        val before = chain.disk
+
+        val created = chain.state.stage(chain.head)
+        MerklePatriciaTrie[ByteString, ByteString](created.storage.forOwner(Some(tiny)))
+          .put(ByteString(0x12.toByte), ByteString(1.toByte))
+        val second = BlockRef(ByteString(kec256("small-2".getBytes)), 2, chain.head.stateRoot)
+        chain.state.commitCanonical(Some(created), second, None) shouldBe a[CommitOutcome.Applied]
+        val row = chain.disk._2(ByteString(root.rowKey))
+        row.length should be < BlockDiff.StoredNodeLength
+        chain.disk shouldBe (before._1, before._2 + (ByteString(root.rowKey) -> row))
+        chain.record(second).changes shouldBe Map(root -> Change(None, Some(row)))
+
+        val emptied = chain.state.stage(second)
+        MerklePatriciaTrie[ByteString, ByteString](kec256(row.toArray), emptied.storage.forOwner(Some(tiny)))
+          .remove(ByteString(0x12.toByte))
+        val third = BlockRef(ByteString(kec256("small-3".getBytes)), 3, chain.head.stateRoot)
+        chain.state.commitCanonical(Some(emptied), third, None) shouldBe a[CommitOutcome.Applied]
+        chain.disk shouldBe before
+        chain.record(third).changes shouldBe Map(root -> Change(Some(row), None))
+      }
+    }
+
     it should "list a replaced trie that has exactly as many rows as may be listed" taggedAs UnitTest in {
       onDataSource { source =>
         val reference = new Chain(EphemDataSource())
@@ -446,6 +519,7 @@ class CanonicalCommitSpec extends AnyFlatSpec with Matchers:
     val chain = new Chain(EphemDataSource())
     val executed = chain.execute(account(dave, 1, 1), slots(alice, 1 -> 1))
     val again = chain.execute(account(dave, 1, 1), slots(alice, 1 -> 1))
+    val different = chain.execute(delete(carol), slots(bob, 9 -> 9))
     executed.commit() shouldBe a[CommitOutcome.Applied]
     val rows = chain.disk
     val epoch = chain.state.clock.epoch
@@ -457,6 +531,15 @@ class CanonicalCommitSpec extends AnyFlatSpec with Matchers:
     chain.disk shouldBe rows
     chain.state.clock.epoch shouldBe epoch
     chain.records.hashesAt(2) shouldBe Seq(executed.ref.hash)
+
+    // a layer that holds something else is dropped like any other: none of it is written
+    chain.state.commitCanonical(Some(different.staged), executed.ref, chain.pointer(executed.ref)) shouldBe
+      CommitOutcome.AlreadyApplied
+    chain.disk shouldBe rows
+    chain.disk shouldBe chain.rowsOf(executed.root)
+    chain.records.get(executed.ref.hash).map(_.map(_.changes.size)) shouldBe Some(
+      Right(executed.staged.positionsTouched)
+    )
 
     // and with nothing staged at all: the caller that found the block executed already
     chain.appState.putBestBlockInfo(BlockInfo(chain.first.hash, chain.first.number)).commit()
@@ -592,6 +675,81 @@ class CanonicalCommitSpec extends AnyFlatSpec with Matchers:
       chain.state.clock.epoch shouldBe 0L
     }
 
+  // vault: nothing runs under the state lock but the commit and the data source.
+  "What a commit asks and tells outside itself" should "be asked before the lock is taken and told after it is free" taggedAs
+    UnitTest in {
+      var heldWhenAsked, heldWhenTold = Option.empty[Boolean]
+      var told = Seq.empty[Commit]
+      lazy val chain: Chain = new Chain(
+        EphemDataSource(),
+        CommitSettings(
+          retention = new RetentionPolicy(
+            StateConfig.Mode.Basic,
+            (_, finalized) => if finalized.contains(BigInt(1)) then 2 else 9
+          ),
+          finalized = () =>
+            heldWhenAsked = Some(chain.state.lock.holder.isDefined)
+            Some(BigInt(1))
+          ,
+          observer = new CommitObserver:
+            override def committed(commit: Commit): Unit =
+              heldWhenTold = Some(chain.state.lock.holder.isDefined)
+              told :+= commit
+        )
+      )
+      val commits = (1 to 4).map(i => chain.advance(account(dave, i, i)))
+      heldWhenAsked shouldBe Some(false)
+      heldWhenTold shouldBe Some(false)
+      told shouldBe commits
+      // and what was asked is what retention went by: two blocks keep their record
+      chain.appState.getChangesetPrunedTo() shouldBe Some(chain.head.number - 1)
+    }
+
+  it should "commit the block whatever its observer does with the news" taggedAs UnitTest in {
+    val chain = new Chain(
+      EphemDataSource(),
+      CommitSettings(observer = new CommitObserver:
+        override def lockWaited(nanos: Long): Unit = throw new IllegalStateException("a metric failed")
+        override def committed(commit: Commit): Unit = throw new IllegalStateException("another metric failed")
+      )
+    )
+    chain.advance(account(dave, 1, 1), slots(alice, 1 -> 1))
+    chain.disk shouldBe chain.rowsOf(chain.head.stateRoot)
+    chain.state.anchor shouldBe Some(chain.head)
+    chain.state.lock.holder shouldBe None
+  }
+
+  it should "write nothing when the finalized block cannot be named" taggedAs UnitTest in {
+    val chain = new Chain(EphemDataSource(), CommitSettings(finalized = () => throw new IllegalStateException("no")))
+    val executed = chain.execute(account(dave, 1, 1))
+    untouched(chain)(an[IllegalStateException] should be thrownBy executed.commit())
+    chain.state.clock.epoch shouldBe 0L
+    chain.state.lock.holder shouldBe None
+  }
+
+  // vault: the clock is in memory and the batch is one write, so a restart finds what the last commit left.
+  "A datadir that is closed and opened again" should "hold the last committed block's state, and go on from it" taggedAs
+    UnitTest in {
+      onRocksDbReopened { source =>
+        val chain = new Chain(source)
+        threeBlocks.take(2).foreach(transactions => chain.advance(transactions*))
+        (chain.hashed, chain.head, chain.disk)
+      } { case (source, (hashed, head, rows)) =>
+        val chain = new Chain(source, seeded = Some(hashed))
+        chain.head = head
+        chain.state.anchor shouldBe Some(head)
+        chain.state.clock.epoch shouldBe 0L
+        chain.disk shouldBe rows
+        chain.disk shouldBe chain.rowsOf(head.stateRoot)
+        chain.appState.getBestBlockInfo() shouldBe BlockInfo(head.hash, head.number)
+        chain.record(head).postStateRoot shouldBe head.stateRoot
+        chain.advance(threeBlocks(2)*)
+        chain.disk shouldBe chain.rowsOf(chain.head.stateRoot)
+        chain.reverse(chain.head)
+        chain.disk shouldBe rows
+      }
+    }
+
   // ─── Readers across a commit ───────────────────────────────────────────────────────────────────────────────────────
 
   "A view made before a commit" should "go on reading the state it was made of, also where the block wrote" taggedAs
@@ -671,8 +829,19 @@ class CanonicalCommitSpec extends AnyFlatSpec with Matchers:
       // the first writer is inside its write: from here no batch but its own may reach the disk
       watched.beforeUpdate = _ => ()
       val two = Future(Try(second))
-      val reader = Future(Try(chain.state.view(chain.first)))
-      while chain.state.lock.waiting == 0 do Thread.onSpinWait()
+      val readerThread = new java.util.concurrent.atomic.AtomicReference[Thread]()
+      val reader = Future {
+        readerThread.set(Thread.currentThread)
+        Try(chain.state.view(chain.first))
+      }
+      // Both are known to be waiting before the first writer is let go: the second writer in the lock's queue, the
+      // reader parked on the clock. Without that a reader that started late would find the move over, and pass.
+      val deadline = System.nanoTime() + 30.seconds.toNanos
+      def parked = Option(readerThread.get).exists(_.getState == Thread.State.WAITING)
+      while (chain.state.lock.waiting == 0 || !parked) && System.nanoTime() < deadline && !two.isCompleted do
+        Thread.onSpinWait()
+      chain.state.lock.waiting shouldBe 1
+      parked shouldBe true
       two.isCompleted shouldBe false
       reader.isCompleted shouldBe false
       release.countDown()

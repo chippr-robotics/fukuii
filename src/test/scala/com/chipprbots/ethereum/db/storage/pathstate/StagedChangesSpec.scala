@@ -248,6 +248,38 @@ class StagedChangesSpec extends AnyFlatSpec with Matchers:
       unlisted.unrecorded should not be empty
     }
 
+  // beacon: the two state roots would still check, and the rows under the root would be a mix of both worlds.
+  "A world that does not follow the last one persisted" should "be refused by the layer it is persisted on" taggedAs
+    UnitTest in {
+      val hashed = new HashedState
+      val anchor = block(1, hashed.root)
+      val source = EphemDataSource()
+      seed(source, hashed, anchor)
+      val staged = new PathStateStorage(new PathNodeStorage(source), new AppStateStorage(source)).stage(anchor)
+      val start = worldOver(staged.storage, hashed.root, hashed.codes)
+
+      val first = InMemoryWorldStateProxy.persistState(account(dave, 1, 1)(start))
+      // a second world from the same start: a retry on a layer that was not dropped
+      val refused = the[IllegalStateException] thrownBy InMemoryWorldStateProxy.persistState(account(dave, 2, 2)(start))
+      refused.getMessage should (include("does not follow").and(include("the account trie")))
+      // in a storage trie as well: alice's, changed twice from one start
+      val one = InMemoryWorldStateProxy.persistState(slots(alice, 1 -> 5)(first))
+      an[IllegalStateException] should be thrownBy InMemoryWorldStateProxy.persistState(slots(alice, 1 -> 6)(first))
+      // the line itself goes on
+      InMemoryWorldStateProxy.persistState(slots(alice, 1 -> 7).andThen(account(dave, 3, 3))(one)).stateRootHash should
+        not be one.stateRootHash
+
+      // A storage trie on its own, with no account trie to refuse first: two tries from one empty start.
+      import com.chipprbots.ethereum.mpt.MerklePatriciaTrie
+      import com.chipprbots.ethereum.mpt.byteStringSerializer
+      val empty = MerklePatriciaTrie[ByteString, ByteString](staged.storage.forOwner(Some(owner(eve))))
+      val grown = empty.put(ByteString(1), ByteString(1))
+      val again = the[IllegalStateException] thrownBy empty.put(ByteString(2), ByteString(2))
+      again.getMessage should (include("does not follow").and(include("the storage trie of")))
+      // from where the first one left it, it is the same line
+      grown.put(ByteString(2), ByteString(2)).get(ByteString(1)) shouldBe Some(ByteString(1))
+    }
+
   // ─── One trie, with keys that are chosen ──────────────────────────────────────────────────────────────────────
   //
   // Keys that are hashes give a bushy trie whose nodes are all stored. Two rules need other shapes (rule 4): a node

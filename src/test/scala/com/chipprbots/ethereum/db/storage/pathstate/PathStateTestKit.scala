@@ -38,24 +38,42 @@ object PathStateTestKit:
     "RocksDB" -> ((test: DataSource => Unit) => onRocksDb(test))
   )
 
+  private def rocksDbAt(directory: File): RocksDbDataSource =
+    val config = new RocksDbConfig:
+      override val createIfMissing: Boolean = true
+      override val paranoidChecks: Boolean = true
+      override val path: String = directory.getAbsolutePath
+      override val maxThreads: Int = 1
+      override val maxOpenFiles: Int = 32
+      override val verifyChecksums: Boolean = true
+      override val levelCompaction: Boolean = true
+      override val blockSize: Long = 16384
+      override val blockCacheSize: Long = 33554432
+    RocksDbDataSource(config, Namespaces.nsSeq)
+
   private def onRocksDb(test: DataSource => Unit): Unit =
     val directory = Files.createTempDirectory("pathstate-rocksdb").toFile
     // The directory goes whatever happens to the database: an open that throws, a test that fails, a destroy that
     // throws.
     try
-      val config = new RocksDbConfig:
-        override val createIfMissing: Boolean = true
-        override val paranoidChecks: Boolean = true
-        override val path: String = directory.getAbsolutePath
-        override val maxThreads: Int = 1
-        override val maxOpenFiles: Int = 32
-        override val verifyChecksums: Boolean = true
-        override val levelCompaction: Boolean = true
-        override val blockSize: Long = 16384
-        override val blockCacheSize: Long = 33554432
-      val dataSource = RocksDbDataSource(config, Namespaces.nsSeq)
+      val dataSource = rocksDbAt(directory)
       try test(dataSource)
       finally dataSource.destroy()
+    finally deleteRecursively(directory)
+
+  /** One RocksDB datadir, opened, closed and opened again: what a node's restart is to its storage. `first` runs on the
+    * first opening and what it returns is handed to `second`, which runs on the second.
+    */
+  def onRocksDbReopened[A](first: DataSource => A)(second: (DataSource, A) => Unit): Unit =
+    val directory = Files.createTempDirectory("pathstate-rocksdb-reopened").toFile
+    try
+      val opened = rocksDbAt(directory)
+      val carried =
+        try first(opened)
+        finally opened.close()
+      val reopened = rocksDbAt(directory)
+      try second(reopened, carried)
+      finally reopened.destroy()
     finally deleteRecursively(directory)
 
   private def deleteRecursively(f: File): Unit =

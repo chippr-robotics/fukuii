@@ -45,7 +45,7 @@ store-handed 2 src/main/scala/com/chipprbots/ethereum/db/storage/MptStorage.scal
 store-handed 3 src/main/scala/com/chipprbots/ethereum/db/storage/MptStorageDecorator.scala the decorator's own members: what it wraps, how it rewraps, and forOwner (kept)
 store-handed 1 src/main/scala/com/chipprbots/ethereum/db/storage/DecodedNodeCache.scala a decorator's rewrap of an owner's view (kept)
 store-handed 1 src/main/scala/com/chipprbots/ethereum/db/storage/PrefetchNodeReader.scala a decorator's rewrap of an owner's view (kept)
-store-handed 3 src/main/scala/com/chipprbots/ethereum/db/storage/pathstate/PathMptStorage.scala the position store's forOwner and its two factories, readOnly and throwaway (kept)
+store-handed 4 src/main/scala/com/chipprbots/ethereum/db/storage/pathstate/PathMptStorage.scala the position store's forOwner and its three factories: readOnly, throwaway, and staged for a block that commits (C3b) (kept)
 store-handed 2 src/main/scala/com/chipprbots/ethereum/db/storage/pathstate/PathStateStorage.scala the position store's two doors, each over the view of a block: what the seam of C2b hands out (kept)
 store-handed 4 src/main/scala/com/chipprbots/ethereum/domain/Blockchain.scala the two accessors, declared and defined; deleted with the Hash scheme (C8b)
 trie-of 7 src/main/scala/com/chipprbots/ethereum/mpt/MerklePatriciaTrie.scala the trie's own constructors, and the copies its updates return (kept)

@@ -4,6 +4,7 @@ import org.apache.pekko.util.ByteString
 
 import scala.collection.mutable
 
+import com.chipprbots.ethereum.crypto.kec256
 import com.chipprbots.ethereum.mpt.MptNode
 import com.chipprbots.ethereum.mpt.NibblePath
 
@@ -36,6 +37,18 @@ final private[pathstate] class StagedChanges:
   private val changes = mutable.HashMap.empty[PositionKey, Change]
   private val resets = mutable.LinkedHashSet.empty[ByteString]
 
+  // The positions of `changes`, by storage trie. A reset and the commit each ask for one owner's positions, and a
+  // block can replace many storage tries (some 1,600 SELFDESTRUCTs fit an 8M-gas ETC block): looking through every
+  // change for each of them, the second time under the state lock, is a cost a block's sender chooses (forge).
+  private val ofOwner = mutable.HashMap.empty[ByteString, mutable.HashSet[PositionKey]]
+
+  private def put(position: PositionKey, change: Change): Unit =
+    if !changes.contains(position) then
+      position.owner.foreach(owner => ofOwner.getOrElseUpdate(owner, mutable.HashSet.empty) += position)
+    changes.update(position, change)
+
+  private def positionsOf(owner: ByteString): Iterable[PositionKey] = ofOwner.getOrElse(owner, Nil)
+
   /** One change of the trie of `trie` (no owner: the account trie): `olds` are the nodes it names as replaced or
     * absorbed, each at its position, and `created` the stored nodes it now has, as `MptTraversals.collapseTrieAt`
     * returns them.
@@ -45,31 +58,57 @@ final private[pathstate] class StagedChanges:
       olds: Seq[(NibblePath, MptNode)],
       created: Seq[(NibblePath, ByteString, Array[Byte])]
   ): Unit =
+    linear(trie, olds, created)
     // Olds first: a position that is both named as old and written anew in one change ends on the new node.
     olds.foreach { (path, node) =>
       val encoded = node.encode
       if StagedChanges.isStored(path, encoded.length) then
         val position = PositionKey.at(trie, path)
         changes.get(position) match
-          case None        => changes.update(position, Change(prior = Some(ByteString(encoded)), next = None))
-          case Some(known) => changes.update(position, known.copy(next = None))
+          case None        => put(position, Change(prior = Some(ByteString(encoded)), next = None))
+          case Some(known) => put(position, known.copy(next = None))
     }
     created.foreach { (path, _, encoded) =>
       val position = PositionKey.at(trie, path)
       val next = Some(ByteString(encoded))
       changes.get(position) match
-        case None        => changes.update(position, Change(prior = None, next = next))
-        case Some(known) => changes.update(position, known.copy(next = next))
+        case None        => put(position, Change(prior = None, next = next))
+        case Some(known) => put(position, known.copy(next = next))
+    }
+
+  /** Holds a change to follow the last one this block made to the same trie (beacon): the root it replaces is the root
+    * the block last left there.
+    *
+    * A block's worlds are one line, each persisted from the one before. Two worlds that branch from one and are both
+    * persisted here (a retry on a layer that was not dropped, a builder's world on an importer's layer) would each
+    * write its own nodes below a root, and the last root written would decide the state root while the rows under it
+    * were a mix of both. The two state roots would still check, the batch would be written, and the first read to meet
+    * a row of the other world would call the datadir corrupt. So the second branch is refused here, where it is still a
+    * defect of the caller and nothing has been written.
+    */
+  private def linear(
+      trie: Option[ByteString],
+      olds: Seq[(NibblePath, MptNode)],
+      created: Seq[(NibblePath, ByteString, Array[Byte])]
+  ): Unit =
+    val root = PositionKey.at(trie, NibblePath.Empty)
+    changes.get(root).foreach { known =>
+      val replaced = olds.collectFirst { case (path, node) if path.length == 0 => ByteString(node.encode) }
+      val writesRoot = created.exists((path, _, _) => path.length == 0)
+      // a change that neither names a root nor writes one says nothing of the root, and is not a change of this trie
+      if (replaced.isDefined || writesRoot) && replaced != known.next then
+        throw new IllegalStateException(
+          s"A change to ${root.show} does not follow the last one this block made there: it replaces " +
+            s"${StagedChanges.shown(replaced)}, and the block last left ${StagedChanges.shown(known.next)}. " +
+            "Two worlds were persisted on one staged layer."
+        )
     }
 
   /** The storage trie of `owner` is replaced whole. Whatever this block had written for it is gone; the priors stand.
     */
   def reset(owner: ByteString): Unit =
     resets += owner
-    val ofOwner = Some(owner)
-    changes.keysIterator.filter(_.owner == ofOwner).toList.foreach { position =>
-      changes.update(position, changes(position).copy(next = None))
-    }
+    positionsOf(owner).foreach(position => put(position, changes(position).copy(next = None)))
 
   /** The owners whose storage trie this block replaced whole, in the order it did. */
   def resetOwners: Seq[ByteString] = resets.toSeq
@@ -90,8 +129,7 @@ final private[pathstate] class StagedChanges:
     val unrecorded = Map.newBuilder[PositionKey, ByteString]
     val unlisted = Seq.newBuilder[ByteString]
     resets.foreach { owner =>
-      val ofOwner = Some(owner)
-      val written = out.keysIterator.filter(_.owner == ofOwner).toSet
+      val written = positionsOf(owner).toSet
       parentRows(owner) match
         case Some(scanned) =>
           val rows = scanned.toMap
@@ -135,6 +173,9 @@ private[pathstate] object StagedChanges:
       unrecorded: Map[PositionKey, ByteString],
       unlisted: Seq[ByteString]
   )
+
+  private def shown(root: Option[ByteString]): String =
+    root.fold("no root")(node => s"the root ${org.bouncycastle.util.encoders.Hex.toHexString(kec256(node.toArray))}")
 
   /** Whether a node of `encodedLength` bytes of RLP at `path` of its trie has a row of its own. */
   def isStored(path: NibblePath, encodedLength: Int): Boolean =

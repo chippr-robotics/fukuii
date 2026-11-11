@@ -41,32 +41,60 @@ class OwnerRowsSpec extends AnyFlatSpec with Matchers:
         rows.writeAccountNode(Array[Byte](1, 2), node)
 
         owners.foreach { o =>
-          val listed = rows.storageRows(o, Int.MaxValue)
+          val listed = rows.storageRows(o, Int.MaxValue).get
           withClue(s"owner ${o.takeRight(2)}: ") {
             listed.map(_._1.owner).toSet shouldBe Set(Some(o))
             listed.map(_._1.hp).toSet shouldBe paths
               .map(path => ByteString(HexPrefix.encode(path, isLeaf = false)))
               .toSet
             listed.map(_._1.path.length).toSet shouldBe paths.map(_.length).toSet
-            all(listed.map(row => ByteString(row._2))) shouldBe ByteString(node) ++ o.takeRight(1)
+            all(listed.map(_._2)) shouldBe ByteString(node) ++ o.takeRight(1)
             // unsigned order of the row keys, on either data source
             val keys = listed.map(row => ByteString(row._1.rowKey))
             keys shouldBe keys.sortWith((a, b) => java.util.Arrays.compareUnsigned(a.toArray, b.toArray) < 0)
           }
         }
-        rows.storageRows(ownerOf(0x11, 0x11), 10) shouldBe empty
+        rows.storageRows(ownerOf(0x11, 0x11), 10) shouldBe Some(Nil)
+        rows.storageRows(ownerOf(0x11, 0x11), 0) shouldBe Some(Nil)
       }
     }
 
-    it should "stop at the limit it is given" taggedAs UnitTest in {
+    // The scan is made a chunk at a time, so that the data source's read lock is let go in between.
+    it should "be the same rows whatever the size of the chunks they are read in" taggedAs UnitTest in {
+      onDataSource { source =>
+        val rows = new PathNodeStorage(source)
+        val (owner, neighbour) = (ownerOf(1), ownerOf(2))
+        paths.foreach { path =>
+          rows.writeStorageNode(owner, path, node)
+          rows.writeStorageNode(neighbour, path, node)
+        }
+        val whole = rows.storageRows(owner, Int.MaxValue).get
+        whole should have size paths.size
+        // 1: every row is the last of its chunk; a size that divides the count: the last chunk is full, and one more
+        // read finds nothing; sizes around the count
+        Seq(1, 2, 3, 5, 7, paths.size / 2, paths.size - 1, paths.size, paths.size + 1).foreach { chunk =>
+          withClue(s"chunks of $chunk: ")(rows.storageRows(owner, Int.MaxValue, chunkRows = chunk) shouldBe Some(whole))
+        }
+        an[IllegalArgumentException] should be thrownBy rows.storageRows(owner, 10, chunkRows = 0)
+      }
+    }
+
+    it should "not be listed when there are more rows, or more bytes of them, than it is told may be" taggedAs UnitTest in {
       onDataSource { source =>
         val rows = new PathNodeStorage(source)
         val owner = ownerOf(1)
         paths.foreach(path => rows.writeStorageNode(owner, path, node))
-        rows.storageRows(owner, 5) should have size 5
-        rows.storageRows(owner, paths.size) should have size paths.size
-        rows.storageRows(owner, paths.size + 1) should have size paths.size
-        rows.storageRows(owner, 5).map(_._1) shouldBe rows.storageRows(owner, Int.MaxValue).take(5).map(_._1)
+        val whole = rows.storageRows(owner, Int.MaxValue).get
+        val bytes = whole.map((position, row) => position.rowKey.length.toLong + row.length).sum
+        Seq(1, 4, PathNodeStorage.StorageRowsChunk).foreach { chunk =>
+          withClue(s"chunks of $chunk: ") {
+            rows.storageRows(owner, paths.size, chunkRows = chunk) shouldBe Some(whole)
+            rows.storageRows(owner, paths.size - 1, chunkRows = chunk) shouldBe None
+            rows.storageRows(owner, 0, chunkRows = chunk) shouldBe None
+            rows.storageRows(owner, Int.MaxValue, maxBytes = bytes, chunkRows = chunk) shouldBe Some(whole)
+            rows.storageRows(owner, Int.MaxValue, maxBytes = bytes - 1, chunkRows = chunk) shouldBe None
+          }
+        }
       }
     }
   }
