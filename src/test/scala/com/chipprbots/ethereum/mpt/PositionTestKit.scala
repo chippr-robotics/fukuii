@@ -11,6 +11,8 @@ import com.chipprbots.ethereum.crypto.kec256
 import com.chipprbots.ethereum.db.dataSource.EphemDataSource
 import com.chipprbots.ethereum.db.storage.ArchiveNodeStorage
 import com.chipprbots.ethereum.db.storage.MptStorage
+import com.chipprbots.ethereum.db.storage.MptStorageDecorator
+import com.chipprbots.ethereum.db.storage.MptStorageDecorator.Removals
 import com.chipprbots.ethereum.db.storage.NodeStorage
 import com.chipprbots.ethereum.db.storage.SerializingMptStorage
 import com.chipprbots.ethereum.mpt.MerklePatriciaTrie.MissingNodeException
@@ -59,8 +61,12 @@ object PositionTestKit:
     *   - a node named by hash alone is never found (`get`), and an update without positions is refused;
     *   - a node reported as replaced or absorbed must be the row at the position it is reported at;
     *   - a row is overwritten only when the node it held was reported.
+    *
+    * `upsertOnly` lifts the last rule, for a writer that reports nothing as replaced and relies on each new node
+    * overwriting the row it takes the place of: the genesis build (`AppendOnlyMptStorage`). Its rows are then right
+    * only if the build never empties a position, which is what a test over such a store shows.
     */
-  final class PositionStore extends MptStorage:
+  final class PositionStore(upsertOnly: Boolean = false) extends MptStorage:
     private val rowsByKey = mutable.HashMap.empty[RowKey, Array[Byte]]
     private val readPositions = mutable.ArrayBuffer.empty[RowKey]
     private val reported = mutable.ArrayBuffer.empty[Call]
@@ -76,6 +82,9 @@ object PositionTestKit:
     def reads: Seq[RowKey] = readPositions.toSeq
 
     def clearReads(): Unit = readPositions.clear()
+
+    /** Drops every row: the whole trie is being replaced. */
+    def dropRows(): Unit = rowsByKey.clear()
 
     override def get(nodeId: Array[Byte]): MptNode =
       throw new IllegalStateException("the trie read a node by hash alone: a position store cannot find it")
@@ -129,7 +138,7 @@ object PositionTestKit:
           throw new IllegalStateException(s"the collapse returned a wrong hash at [${path.show}]")
         if newStored.put(path.key, encoded).isDefined then
           throw new IllegalStateException(s"the collapse returned position [${path.show}] twice")
-        if rowsByKey.contains(path.key) && !oldStored.contains(path.key) then
+        if !upsertOnly && rowsByKey.contains(path.key) && !oldStored.contains(path.key) then
           throw new IllegalStateException(s"a node was written at [${path.show}] over a row that was not reported")
       }
 
@@ -143,6 +152,50 @@ object PositionTestKit:
       )
       collapsed
 
+    override def persist(): Unit = ()
+
+  /** The position-keyed rows of a whole state: the account trie under no owner, and each account's storage trie under
+    * its owner, `keccak256(address)`, as CF `t` and CF `u` hold them (spec 018 data-model 2).
+    *
+    * A trie's paths start at its own root, so this store cannot serve a trie that does not say which one it is: every
+    * read and update made on the store itself is refused, and a trie must be built over [[forOwner]]. Each owner's view
+    * is a [[PositionStore]], with its strict rules.
+    */
+  final class OwnerPositionStore(upsertOnly: Boolean = false) extends MptStorage:
+    private val tries = mutable.LinkedHashMap.empty[Option[ByteString], PositionStore]
+    private val resetOwners = mutable.ArrayBuffer.empty[ByteString]
+
+    def trie(owner: Option[ByteString]): PositionStore = tries.getOrElseUpdate(owner, new PositionStore(upsertOnly))
+
+    /** The tries that hold at least one row. */
+    def owners: Set[Option[ByteString]] = tries.collect { case (owner, trie) if trie.rows.nonEmpty => owner }.toSet
+
+    def rowsOf(owner: Option[ByteString]): Rows = tries.get(owner).fold[Rows](Map.empty)(_.rows)
+
+    /** Every owner [[resetOwner]] was called for, in order. */
+    def resets: Seq[ByteString] = resetOwners.toSeq
+
+    override def forOwner(owner: Option[ByteString]): MptStorage = trie(owner)
+
+    /** A replaced storage trie loses its rows (data-model 3 rule 6). */
+    override def resetOwner(owner: ByteString): Unit =
+      resetOwners += owner
+      tries.get(Some(owner)).foreach(_.dropRows())
+
+    private def unscoped(what: String): Nothing =
+      throw new IllegalStateException(
+        s"$what on a state's storage with no owner: the trie did not say which trie it is"
+      )
+
+    override def get(nodeId: Array[Byte]): MptNode = unscoped("a read by hash")
+    override def getAt(path: NibblePath, hash: Array[Byte]): MptNode = unscoped(s"a read at [${path.show}]")
+    override def updateNodesInStorage(newRoot: Option[MptNode], toRemove: Seq[MptNode]): Option[MptNode] =
+      unscoped("an update")
+    override def updateNodesAt(
+        newRoot: Option[MptNode],
+        replaced: Seq[(NibblePath, MptNode)],
+        absorbed: Seq[(NibblePath, MptNode)]
+    ): Option[MptNode] = unscoped("an update")
     override def persist(): Unit = ()
 
   /** A block's change set, built from the calls of the updates in it by the rules of spec 018 data-model 3:
@@ -199,6 +252,36 @@ object PositionTestKit:
     def contains(rootHash: Array[Byte], key: Array[Byte], load: Array[Byte] => Array[Byte]): Boolean =
       if Arrays.equals(rootHash, MerklePatriciaTrie.EmptyRootHash) then false
       else holds(rlp.rawDecode(load(rootHash)), HexPrefix.bytesToNibbles(key), load)
+
+    /** Every key the trie holds, as its nibbles, with its value. */
+    def leaves(rootHash: Array[Byte], load: Array[Byte] => Array[Byte]): Seq[(Array[Byte], Array[Byte])] =
+      if Arrays.equals(rootHash, MerklePatriciaTrie.EmptyRootHash) then Nil
+      else
+        val out = Seq.newBuilder[(Array[Byte], Array[Byte])]
+        collectLeaves(rlp.rawDecode(load(rootHash)), Array.emptyByteArray, load, out)
+        out.result()
+
+    private def collectLeaves(
+        node: RLPEncodeable,
+        nibbles: Array[Byte],
+        load: Array[Byte] => Array[Byte],
+        out: mutable.Builder[(Array[Byte], Array[Byte]), Seq[(Array[Byte], Array[Byte])]]
+    ): Unit = node match
+      case RLPList(items*) if items.size == 17 =>
+        (0 until 16).foreach { i =>
+          resolve(items(i), load).foreach(collectLeaves(_, nibbles :+ i.toByte, load, out))
+        }
+        items(16) match
+          case RLPValue(value) if value.nonEmpty => out += nibbles -> value
+          case _                                 => ()
+      case RLPList(RLPValue(compactKey), next) =>
+        val (keyNibbles, isLeaf) = HexPrefix.decode(compactKey)
+        if isLeaf then
+          next match
+            case RLPValue(value) => out += (nibbles ++ keyNibbles) -> value
+            case other           => throw new IllegalStateException(s"not a leaf value: $other")
+        else resolve(next, load).foreach(collectLeaves(_, nibbles ++ keyNibbles, load, out))
+      case other => throw new IllegalStateException(s"not a trie node: $other")
 
     private def walkStored(
         encoded: Array[Byte],
@@ -267,6 +350,192 @@ object PositionTestKit:
           if isLeaf then keyNibbles.sameElements(key)
           else key.startsWith(keyNibbles) && resolve(next, load).exists(holds(_, key.drop(keyNibbles.length), load))
         case other => throw new IllegalStateException(s"not a trie node: $other")
+
+  /** The positions of a whole state, kept beside the hash-keyed store that real block execution runs on: every change
+    * the tries report is applied here, and every read they make is checked against it (spec 018 Track C, T026).
+    *
+    * It follows the staged layer of data-model 6.2 for one unit of changes (a block, or the genesis load). A read at
+    * `(owner, path)` for `hash` is right when
+    *   1. the unit under way wrote a node with that hash at that owner and that position (the access-list builder reads
+    *      an older world of the block after a newer one was persisted, so every version the block wrote there counts),
+    *      or
+    *   1. the row at that owner and position when the unit began hashes to it.
+    *
+    * Anything else is a violation: a position store would not have found that node there. A hash the block wrote
+    * somewhere else does not count, and neither does the row as it is now when it is neither of the two above.
+    *
+    * A unit's changes are kept only when it is accepted ([[ended]]). Violations are collected, not thrown: a throw
+    * inside block execution would read as the block's own failure. Not thread-safe: for a replay on one thread.
+    */
+  final class PositionMirror:
+    private type Position = (Option[ByteString], RowKey)
+
+    /** The rows of the state after the last accepted unit. */
+    private var committed = Map.empty[Position, ByteString]
+
+    /** The rows as the unit under way has them so far. */
+    private var working = Map.empty[Position, ByteString]
+    private val written = mutable.HashSet.empty[(Option[ByteString], RowKey, ByteString)]
+    private var upsertOnly = false
+    private val problems = mutable.ArrayBuffer.empty[String]
+
+    private val resetInUnit = mutable.HashSet.empty[ByteString]
+
+    /** Reads answered by rule 2, reads answered by rule 1, updates applied, and storage tries reset. */
+    var readsOfStartRows = 0L
+    var readsOfOwnWrites = 0L
+    var updates = 0L
+    var resets = 0L
+
+    /** Storage tries reset while they held rows: the resets that had something to drop. */
+    var resetsOfStoredTries = 0L
+
+    /** Reads answered by rule 2 for a storage trie the unit had already reset: a read of the trie as it was before the
+      * account was removed. The access-list builder of an Amsterdam block makes them (it reads the world before each
+      * transaction after the world following it was persisted). Nothing else does, so before Amsterdam any such read is
+      * a trie that outlived its account (forge, C2a review).
+      */
+    var readsOfResetTries = 0L
+
+    def violations: Seq[String] = problems.toSeq
+
+    private def violation(what: String): Unit = if problems.size < 40 then problems += what
+
+    /** A unit of changes begins. `insertsOnly` for the genesis load, which reports no node as replaced and relies on
+      * each new node taking the row of the one it replaces.
+      */
+    def starting(insertsOnly: Boolean = false): Unit =
+      working = committed
+      written.clear()
+      resetInUnit.clear()
+      upsertOnly = insertsOnly
+
+    /** `committed` is then the state of the last accepted unit, which the next unit is taken to build on: a replay of
+      * one chain. A unit on a side branch would be checked against the wrong parent, and say so loudly.
+      */
+    def ended(accepted: Boolean): Unit =
+      if accepted then committed = working
+      working = committed
+      written.clear()
+      resetInUnit.clear()
+      upsertOnly = false
+
+    def rowsOf(owner: Option[ByteString]): Rows = committed.collect { case ((`owner`, key), row) => key -> row }
+
+    def owners: Set[Option[ByteString]] = committed.keysIterator.map(_._1).toSet
+
+    /** The storage a world is built over: this mirror in front of `storage`. */
+    def over(storage: MptStorage): MptStorage = new View(storage, None)
+
+    /** What a walk of the state at `stateRoot` says the rows should be, against what they are: the account trie, the
+      * storage trie of every account that has one, and no rows for anything else. Empty when they agree.
+      */
+    def divergencesFrom(stateRoot: ByteString, load: Array[Byte] => Array[Byte]): Seq[String] =
+      val out = Seq.newBuilder[String]
+      def compare(owner: Option[ByteString], root: Array[Byte]): Unit =
+        val expected = RawTrieWalk.storedPositions(root, load)
+        val actual = rowsOf(owner)
+        if expected != actual then
+          val missing = expected.keySet -- actual.keySet
+          val stale = actual.keySet -- expected.keySet
+          val other = expected.keySet.intersect(actual.keySet).filter(key => expected(key) != actual(key))
+          out += s"the trie of ${describe(owner)}: ${missing.size} positions missing, ${stale.size} stale, " +
+            s"${other.size} holding another node"
+      compare(None, stateRoot.toArray)
+      val withStorage = RawTrieWalk.leaves(stateRoot.toArray, load).flatMap { case (nibbles, account) =>
+        rlp.rawDecode(account) match
+          case RLPList(_, _, RLPValue(storageRoot), _) =>
+            Option.when(!Arrays.equals(storageRoot, MerklePatriciaTrie.EmptyRootHash))(
+              ByteString(HexPrefix.nibblesToBytes(nibbles)) -> storageRoot
+            )
+          case other => throw new IllegalStateException(s"not an account: $other")
+      }
+      withStorage.foreach((owner, root) => compare(Some(owner), root))
+      val expectedOwners = withStorage.map((owner, _) => Option(owner)).toSet + None
+      (owners -- expectedOwners).foreach(owner => out += s"rows are kept for ${describe(owner)}, which has no trie")
+      out.result()
+
+    private def describe(owner: Option[ByteString]): String = owner.fold("the accounts")(o => s"account ${hex(o)}")
+
+    private def checkRead(owner: Option[ByteString], path: NibblePath, hash: ByteString): Unit =
+      if written.contains((owner, path.key, hash)) then readsOfOwnWrites += 1
+      else
+        val atStart = committed.get((owner, path.key))
+        if atStart.exists(row => ByteString(kec256(row.toArray)) == hash) then
+          readsOfStartRows += 1
+          if owner.exists(resetInUnit.contains) then readsOfResetTries += 1
+        else
+          val there = atStart.fold("no row was there")(_ => "another node was there")
+          violation(
+            s"a read at [${path.show}] in the trie of ${describe(owner)} for ${hex(hash)}: $there when the unit " +
+              "began, and the unit wrote no such node there"
+          )
+
+    private def applyUpdate(
+        owner: Option[ByteString],
+        newRoot: Option[MptNode],
+        replaced: Seq[(NibblePath, MptNode)],
+        absorbed: Seq[(NibblePath, MptNode)]
+    ): Unit =
+      val where = s"in the trie of ${describe(owner)}"
+      val gone = mutable.HashSet.empty[RowKey]
+      (replaced ++ absorbed).foreach { case (path, node) =>
+        val encoded = node.encode
+        if isStored(encoded, path) then
+          working.get((owner, path.key)) match
+            case None => violation(s"a node was reported at [${path.show}] $where, where no row is")
+            case Some(row) if row != ByteString(encoded) =>
+              violation(s"the node reported at [${path.show}] $where is not the node stored there")
+            case _ => ()
+          if !gone.add(path.key) then violation(s"position [${path.show}] $where was reported twice in one update")
+      }
+      val created = newRoot.fold(Seq.empty[(NibblePath, ByteString, Array[Byte])])(root =>
+        MptTraversals.collapseTrieAt(root, NibblePath.Empty)._2
+      )
+      created.foreach { case (path, _, _) =>
+        if !upsertOnly && working.contains((owner, path.key)) && !gone.contains(path.key) then
+          violation(s"a node was written at [${path.show}] $where over a row that was not reported")
+      }
+      working = working -- gone.iterator.map(key => (owner, key))
+      created.foreach { case (path, hash, encoded) =>
+        working = working.updated((owner, path.key), ByteString(encoded))
+        written += ((owner, path.key, hash))
+      }
+
+    /** `scope` is `None` until a trie says which trie it is, then that trie's owner. */
+    final private class View(protected val underlying: MptStorage, scope: Option[Option[ByteString]])
+        extends MptStorageDecorator:
+
+      override protected def decorate(scoped: MptStorage): MptStorage = new View(scoped, scope)
+
+      // A hash-keyed store answers `forOwner` with itself, and the base would then keep this view as it is.
+      override def forOwner(owner: Option[ByteString]): MptStorage = new View(underlying.forOwner(owner), Some(owner))
+
+      /** The storage trie loses its rows as the unit has them. What it held when the unit began stays readable. */
+      override def resetOwner(owner: ByteString): Unit =
+        resets += 1
+        resetInUnit += owner
+        val kept = working.filterNot { case ((rowOwner, _), _) => rowOwner.contains(owner) }
+        if kept.size != working.size then resetsOfStoredTries += 1
+        working = kept
+        underlying.resetOwner(owner)
+
+      override protected def read(hash: Array[Byte], path: NibblePath | Null): MptNode =
+        scope match
+          case None => violation("a read on the state's storage with no owner")
+          case Some(owner) =>
+            if path == null then violation(s"a read by hash alone in the trie of ${describe(owner)}")
+            else checkRead(owner, path.nn, ByteString(hash))
+        super.read(hash, path)
+
+      override protected def update(newRoot: Option[MptNode], removals: Removals): Option[MptNode] =
+        updates += 1
+        (scope, removals) match
+          case (None, _) => violation("an update on the state's storage with no owner")
+          case (Some(owner), _: Removals.Unpositioned) =>
+            violation(s"an update without positions in the trie of ${describe(owner)}")
+          case (Some(owner), Removals.Positioned(replaced, absorbed)) => applyUpdate(owner, newRoot, replaced, absorbed)
+        super.update(newRoot, removals)
 
   type Trie = MerklePatriciaTrie[Array[Byte], Array[Byte]]
 
@@ -368,6 +637,36 @@ object PositionTestKit:
     val wrapped = changes(MerklePatriciaTrie[Array[Byte], Array[Byte]](wrap(store)))
     val plain = changes(MerklePatriciaTrie[Array[Byte], Array[Byte]](new ReferenceStore))
     (store.removed, ByteString(wrapped.getRootHash), ByteString(plain.getRootHash))
+
+  /** How many nodes each update names as replaced or absorbed when it reaches a storage that keeps tries apart, for a
+    * trie built over `wrap(storage).forOwner(...)`: one count per update, over insertions, a new value for a key, and a
+    * removal that makes a branch collapse.
+    */
+  def removalsSeenThroughOwnerView(wrap: MptStorage => MptStorage): Seq[Int] =
+    val seen = mutable.ArrayBuffer.empty[Int]
+    // A hash-keyed store underneath, behind a view per owner that counts what each update names.
+    final class Scoping(nodes: ReferenceStore) extends MptStorage:
+      override def get(nodeId: Array[Byte]): MptNode = nodes.get(nodeId)
+      override def updateNodesInStorage(newRoot: Option[MptNode], toRemove: Seq[MptNode]): Option[MptNode] =
+        seen += toRemove.size
+        nodes.updateNodesInStorage(newRoot, Nil)
+      override def updateNodesAt(
+          newRoot: Option[MptNode],
+          replaced: Seq[(NibblePath, MptNode)],
+          absorbed: Seq[(NibblePath, MptNode)]
+      ): Option[MptNode] =
+        seen += replaced.size + absorbed.size
+        nodes.updateNodesInStorage(newRoot, Nil)
+      override def persist(): Unit = ()
+      override def forOwner(owner: Option[ByteString]): MptStorage = new Scoping(nodes)
+    val view = wrap(new Scoping(new ReferenceStore)).forOwner(Some(ByteString(Array.fill[Byte](32)(1))))
+    val value = Array.fill[Byte](40)(7)
+    MerklePatriciaTrie[Array[Byte], Array[Byte]](view)
+      .put(Array[Byte](0x00), value)
+      .put(Array[Byte](0x10), value)
+      .put(Array[Byte](0x00), Array.fill[Byte](40)(9))
+      .remove(Array[Byte](0x10))
+    seen.toSeq
 
   def hex(bytes: Array[Byte]): String = bytes.map(b => f"${b & 0xff}%02x").mkString
 
