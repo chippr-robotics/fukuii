@@ -2,6 +2,7 @@ package com.chipprbots.ethereum.db.storage
 
 import org.apache.pekko.util.ByteString
 
+import scala.annotation.unused
 import scala.util.control.NonFatal
 
 import com.chipprbots.ethereum.db.dataSource.RocksDbDataSource.RocksDbDataSourceClosedException
@@ -12,6 +13,7 @@ import com.chipprbots.ethereum.mpt.MerklePatriciaTrie.MissingNodeException
 import com.chipprbots.ethereum.mpt.MerklePatriciaTrie.MissingRootNodeException
 import com.chipprbots.ethereum.mpt.MptNode
 import com.chipprbots.ethereum.mpt.MptTraversals
+import com.chipprbots.ethereum.mpt.NibblePath
 import com.chipprbots.ethereum.mpt.NodesKeyValueStorage
 import com.chipprbots.ethereum.utils.Logger
 
@@ -50,6 +52,42 @@ trait MptStorage:
     */
   def storeRawNodes(nodes: Seq[(ByteString, Array[Byte])]): Unit =
     throw new UnsupportedOperationException("Raw node storage not supported by this implementation")
+
+  // The members below let a trie tell its storage WHERE a node sits (spec 018, Track C). A hash-keyed storage has no
+  // use for that and inherits the defaults, which are the calls it has always received. A position-keyed storage
+  // overrides them.
+
+  /** The node `hash` names, which sits at `path` in the trie being read. The trie reads every node this way. */
+  def getAt(@unused path: NibblePath, hash: Array[Byte]): MptNode = get(hash)
+
+  /** This storage for the one trie `owner` names: `None` for the account trie, `Some(keccak256(address))` for that
+    * account's storage trie. A trie's paths start at its own root, so a position-keyed storage needs the owner to tell
+    * two tries apart. A hash-keyed storage does not.
+    */
+  def forOwner(@unused owner: Option[ByteString]): MptStorage = this
+
+  /** The storage trie of `owner` is being replaced whole: its account was removed, or its storage cleared. */
+  def resetOwner(@unused owner: ByteString): Unit = ()
+
+  /** [[updateNodesInStorage]] with positions.
+    *
+    * `replaced` names every node of the trie as it was that lay on the path of the change: the list
+    * [[updateNodesInStorage]] takes, in the same order, each node with its position.
+    *
+    * `absorbed` names the nodes a removal merged into their parent (an extension or a leaf whose last sibling went).
+    * They no longer exist at their position, and they are not in `replaced`: the trie has never reported them. A
+    * hash-keyed storage counts references by the removals it is told of, so the default passes on `replaced` alone, and
+    * such a storage is told exactly what it was told before positions existed.
+    */
+  def updateNodesAt(
+      newRoot: Option[MptNode],
+      replaced: Seq[(NibblePath, MptNode)],
+      @unused absorbed: Seq[(NibblePath, MptNode)]
+  ): Option[MptNode] =
+    updateNodesInStorage(newRoot, replaced.map(_._2))
+
+  /** [[rawNodes]] for nodes named by position and hash. */
+  def rawNodesAt(requests: Seq[(NibblePath, ByteString)]): Seq[RawNodeRead] = rawNodes(requests.map(_._2))
 
 class SerializingMptStorage(storage: NodesKeyValueStorage, val executionCache: Option[DecodedNodeCache] = None)
     extends MptStorage:

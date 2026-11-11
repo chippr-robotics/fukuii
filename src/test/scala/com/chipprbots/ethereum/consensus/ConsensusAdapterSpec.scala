@@ -138,7 +138,7 @@ class ConsensusAdapterSpec extends AnyFlatSpec with Matchers with ScalaFutures w
     blockchainReader.getBlockHeaderByHash.expects(*).anyNumberOfTimes().returning(Some(block.header))
     blockchainReader.getBlockHeaderByNumber.expects(*).anyNumberOfTimes().returning(Some(block.header))
     blockchain.stageBlockState.expects(*).returning(StagedBlockState.direct(mptStorage))
-    mptStorage.get.expects(*).returning(mptNode)
+    mptStorage.getAt.expects(*, *).returning(mptNode)
 
     blockQueue.removeSubtree.expects(*)
 
