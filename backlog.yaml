@@ -495,12 +495,13 @@ items:
   - id: B-043
     title: "Spec 027 slice 5: per-chain panels (ETH CL and Engine API; ETC mining)"
     priority: P2
-    status: claimed
+    status: review
     area: tui
     size: M
     opened: 2026-11-07
     refs: []
     links:
+      prs: [1789]
       spec: specs/027-tui-dashboard
       branch: feat/027-s5-chain-panels
     depends_on: [B-042]
@@ -508,9 +509,11 @@ items:
       by: dev-node
       agent: general-purpose
       since: 2026-11-10T02:07:11Z
-      heartbeat: 2026-11-10T02:07:11Z
+      heartbeat: 2026-11-11T01:52:55Z
       branch: feat/027-s5-chain-panels
-    notes: beacon (ETH half) and forge (ETC half) review.
+    notes: |-
+      beacon (ETH half) and forge (ETC half) review.
+      2026-11-11 review: PR #1789: beacon + forge (no consensus change, on sonnet: opus weekly limit), prism, eye 1035/0 x2.
   - id: B-044
     title: "TUI display defects: SNAP progress goes backwards, \"no target yet\" during SNAP, duplicated Accounts/rate lines"
     priority: P2
