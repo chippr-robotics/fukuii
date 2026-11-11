@@ -690,7 +690,7 @@ items:
   - id: B-058
     title: "Spec 018 Track C C3b: the staged commit, the state lock and the canonical in-place commit (item 6b)"
     priority: P2
-    status: open
+    status: claimed
     area: storage
     size: L
     opened: 2026-11-07
@@ -698,6 +698,11 @@ items:
     links:
       spec: specs/018-storage-engine-consolidation
     depends_on: [B-057]
+    claim:
+      by: cloud-dc960fdc
+      agent: main
+      since: 2026-11-11T17:17:23Z
+      heartbeat: 2026-11-11T17:17:23Z
   - id: B-059
     title: "Spec 018 Track C C3c: proposer view, bypass writers, genesis commit and the ported harnesses (item 6b')"
     priority: P2
