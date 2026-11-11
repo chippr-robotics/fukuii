@@ -218,6 +218,36 @@ class StagedChangesSpec extends AnyFlatSpec with Matchers:
       manySlots.foreach((k, v) => parent.getStorage(alice).load(BigInt(k)) shouldBe BigInt(v))
     }
 
+  // Rule 6's bound: a dead trie with too many rows to list. Nothing can be said of what the block changed under that
+  // owner, and what it leaves there is still known.
+  "A replaced trie whose rows are not listed" should "have no entry in the block's changes, and its new rows apart" taggedAs
+    UnitTest in {
+      val run = new Run(
+        Seq(
+          slots(alice, 1 -> 5, 2 -> 6),
+          delete(alice),
+          account(alice, 0, 1).andThen(slots(alice, 1 -> 2, 2 -> 3, 77 -> 7)),
+          slots(carol, 3 -> 3).andThen(delete(crowd(5)))
+        )
+      )
+      def rowsOf(o: ByteString) = run.parentRows.filter((position, _) => position.owner.contains(o))
+      // an account removed with no storage is a replaced trie too, with no row to list
+      run.changes.resetOwners shouldBe Seq(owner(alice), owner(crowd(5)))
+      val listed = run.changes.finalise(o => Some(rowsOf(o)))
+      listed.unlisted shouldBe empty
+      listed.unrecorded shouldBe empty
+      listed.changes shouldBe run.diff
+
+      val unlisted = run.changes.finalise(o => Option.when(o != owner(alice))(rowsOf(o)))
+      unlisted.unlisted shouldBe Seq(owner(alice))
+      unlisted.changes.keys.exists(_.owner.contains(owner(alice))) shouldBe false
+      // every other trie's entries are what they were
+      unlisted.changes shouldBe run.diff.filterNot((position, _) => position.owner.contains(owner(alice)))
+      // and what the block leaves under the owner is the trie created again, whole
+      unlisted.unrecorded shouldBe run.after.filter((position, _) => position.owner.contains(owner(alice)))
+      unlisted.unrecorded should not be empty
+    }
+
   // ─── One trie, with keys that are chosen ──────────────────────────────────────────────────────────────────────
   //
   // Keys that are hashes give a bushy trie whose nodes are all stored. Two rules need other shapes (rule 4): a node

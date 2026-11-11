@@ -300,6 +300,61 @@ object PathStateTestKit:
       seedPositions(source, kept, anchor)
       new PathStateStorage(new PathNodeStorage(source), new AppStateStorage(source)).readOnly(anchor)
 
+  /** `under`, watched: every call is noted in order, each batch is kept, and a write can be made to fail or to wait. It
+    * is not the in-memory data source to anything that asks, so rows are dumped ([[allRows]]) through `under`.
+    */
+  final class Watched(val under: DataSource) extends DataSource:
+    import cats.effect.IO
+    import fs2.Stream
+    import com.chipprbots.ethereum.db.dataSource.DataSource.*
+    import com.chipprbots.ethereum.db.dataSource.DataUpdate
+    import com.chipprbots.ethereum.db.dataSource.RocksDbDataSource.IterationError
+
+    val calls = new java.util.concurrent.ConcurrentLinkedQueue[String]()
+    val batches = new java.util.concurrent.ConcurrentLinkedQueue[Seq[DataUpdate]]()
+
+    /** Runs on the writer's thread before each batch reaches `under`; what it throws, the write throws. */
+    @volatile var beforeUpdate: Seq[DataUpdate] => Unit = _ => ()
+
+    def callsMade: Seq[String] = calls.toArray(Array.empty[String]).toSeq
+    def batchesWritten: Seq[Seq[DataUpdate]] = batches.toArray(Array.empty[Seq[DataUpdate]]).toSeq
+
+    override def get(namespace: Namespace, key: Key): Option[Value] =
+      calls.add("read")
+      under.get(namespace, key)
+    override def getOptimized(namespace: Namespace, key: Array[Byte]): Option[Array[Byte]] =
+      calls.add("read")
+      under.getOptimized(namespace, key)
+    override def scanRange(
+        namespace: Namespace,
+        fromKey: Array[Byte],
+        toKeyExclusive: Array[Byte]
+    ): Iterator[(Array[Byte], Array[Byte])] =
+      calls.add("scan")
+      under.scanRange(namespace, fromKey, toKeyExclusive)
+    override def scanRangeLimit(
+        namespace: Namespace,
+        fromKey: Array[Byte],
+        toKeyExclusive: Array[Byte],
+        limit: Int
+    ): Iterator[(Array[Byte], Array[Byte])] =
+      calls.add("scan")
+      under.scanRangeLimit(namespace, fromKey, toKeyExclusive, limit)
+    override def deleteRange(namespace: Namespace, fromKey: Array[Byte], toKeyExclusive: Array[Byte]): Unit =
+      calls.add("deleteRange")
+      under.deleteRange(namespace, fromKey, toKeyExclusive)
+    override def update(dataSourceUpdates: Seq[DataUpdate]): Unit =
+      calls.add("update")
+      beforeUpdate(dataSourceUpdates)
+      batches.add(dataSourceUpdates)
+      under.update(dataSourceUpdates)
+    override def clear(): Unit = under.clear()
+    override def close(): Unit = under.close()
+    override def destroy(): Unit = under.destroy()
+    override def iterate(): Stream[IO, Either[IterationError, (Array[Byte], Array[Byte])]] = under.iterate()
+    override def iterate(namespace: Namespace): Stream[IO, Either[IterationError, (Array[Byte], Array[Byte])]] =
+      under.iterate(namespace)
+
   /** Every row of CF `t` and CF `u`, by its key in its column family. */
   def allRows(rows: PathNodeStorage): (Map[ByteString, ByteString], Map[ByteString, ByteString]) =
     val accounts = Map.newBuilder[ByteString, ByteString]

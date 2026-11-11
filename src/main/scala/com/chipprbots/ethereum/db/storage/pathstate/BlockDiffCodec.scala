@@ -122,6 +122,25 @@ object BlockDiffCodec:
     record(body.length + 3) = crc.toByte
     record
 
+  /** How many bytes [[encode]] makes of `diff`, without making them: what a writer holds against its bound on a
+    * record's size before it decides to write the record at all.
+    */
+  def encodedLength(diff: BlockDiff): Long =
+    def side(node: Option[ByteString]): Long = node.fold(1L)(rlp => 1L + varintLength(rlp.length.toLong) + rlp.length)
+    diff.changes.foldLeft(HeaderLength.toLong + varintLength(diff.changes.size.toLong) + CrcLength) {
+      case (total, (position, change)) =>
+        val keyLength = position.owner.fold(0)(_.length) + position.hp.length
+        total + 1 + varintLength(keyLength.toLong) + keyLength + side(change.prior) + side(change.next)
+    }
+
+  private def varintLength(value: Long): Int =
+    var rest = value
+    var bytes = 1
+    while (rest & ~0x7fL) != 0 do
+      bytes += 1
+      rest >>>= 7
+    bytes
+
   private def writeLong(out: ByteArrayOutputStream, value: Long): Unit =
     var shift = 56
     while shift >= 0 do

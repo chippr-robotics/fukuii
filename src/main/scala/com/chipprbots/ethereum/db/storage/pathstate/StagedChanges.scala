@@ -75,7 +75,7 @@ final private[pathstate] class StagedChanges:
   def resetOwners: Seq[ByteString] = resets.toSeq
 
   /** The block's changes, given the rows the parent's state holds for each owner it reset (`parentRows`, a scan of that
-    * owner's rows; rule 6).
+    * owner's rows; rule 6). `None` for an owner whose rows are too many to list: see [[StagedChanges.Final]].
     *
     * For a reset owner the prior of every position is the parent's row there, or none where the scan returned none,
     * whatever the first event said: a trie created again starts empty, so its first write at a position the dead trie
@@ -84,25 +84,57 @@ final private[pathstate] class StagedChanges:
     *
     * An entry that says nothing is left out (rule 2).
     */
-  def diff(parentRows: ByteString => Iterator[(PositionKey, ByteString)]): Map[PositionKey, Change] =
+  def finalise(parentRows: ByteString => Option[Iterable[(PositionKey, ByteString)]]): StagedChanges.Final =
     val out = mutable.HashMap.empty[PositionKey, Change]
     out ++= changes
+    val unrecorded = Map.newBuilder[PositionKey, ByteString]
+    val unlisted = Seq.newBuilder[ByteString]
     resets.foreach { owner =>
-      val rows = parentRows(owner).toMap
       val ofOwner = Some(owner)
       val written = out.keysIterator.filter(_.owner == ofOwner).toSet
-      // one rule for every position of the owner, written or only scanned: the prior is the parent's row, or none
-      (rows.keySet ++ written).foreach { position =>
-        out.update(position, Change(prior = rows.get(position), next = out.get(position).flatMap(_.next)))
-      }
+      parentRows(owner) match
+        case Some(scanned) =>
+          val rows = scanned.toMap
+          // one rule for every position of the owner, written or only scanned: the prior is the parent's row, or none
+          (rows.keySet ++ written).foreach { position =>
+            out.update(position, Change(prior = rows.get(position), next = out.get(position).flatMap(_.next)))
+          }
+        case None =>
+          // What the parent held for this owner is not known, so nothing can be said of what the block changed there.
+          // What the block leaves there is known, and is all a forward write needs.
+          unlisted += owner
+          written.foreach { position =>
+            out.remove(position).flatMap(_.next).foreach(node => unrecorded += position -> node)
+          }
     }
     out.filterInPlace((_, change) => change.prior != change.next)
-    out.toMap
+    StagedChanges.Final(out.toMap, unrecorded.result(), unlisted.result())
+
+  /** [[finalise]] where every reset owner's rows are listed. */
+  def diff(parentRows: ByteString => Iterator[(PositionKey, ByteString)]): Map[PositionKey, Change] =
+    finalise(owner => Some(parentRows(owner).toSeq)).changes
 
   /** How many positions the block has touched so far: for a metric. */
   def size: Int = changes.size
 
 private[pathstate] object StagedChanges:
+
+  /** What a block did to the state, as it is when the block commits.
+    *
+    * @param changes
+    *   one entry for each position the block changed, of every trie but those of `unlisted`
+    * @param unrecorded
+    *   the nodes the block leaves in the storage tries of `unlisted`, by position: rows to write, of which no prior is
+    *   known
+    * @param unlisted
+    *   the owners whose storage trie the block replaced and whose rows in the parent's state were too many to list.
+    *   Their old rows are not deleted, and a block that has one cannot be recorded (data-model 3.6).
+    */
+  final case class Final(
+      changes: Map[PositionKey, Change],
+      unrecorded: Map[PositionKey, ByteString],
+      unlisted: Seq[ByteString]
+  )
 
   /** Whether a node of `encodedLength` bytes of RLP at `path` of its trie has a row of its own. */
   def isStored(path: NibblePath, encodedLength: Int): Boolean =

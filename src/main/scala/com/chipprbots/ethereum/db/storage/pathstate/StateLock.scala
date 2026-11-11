@@ -53,5 +53,10 @@ final class StateLock:
   /** Who holds the lock right now, if anyone: for a log line or a metric, not for a decision. */
   def holder: Option[String] = held
 
+  /** How many writers are waiting for the lock right now: an estimate, for a metric or a test that must know someone is
+    * waiting.
+    */
+  def waiting: Int = lock.getQueueLength
+
   /** Whether the calling thread holds the lock: for an assertion that something runs under it, or does not. */
   def isHeldByCurrentThread: Boolean = lock.isHeldByCurrentThread
