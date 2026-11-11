@@ -63,16 +63,24 @@ object RegularSyncMetrics extends MetricsContainer:
       lastImportRef,
       (ref: AtomicReference[Option[LastImport]]) => ref.get().fold(0d)(_.nanos / 1e9)
     )
-    .description("How long the last block import's consensus call took, for one block or a batch.")
+    .description(
+      "How long the last block import's consensus call took, for one block or a batch. Read separately from " +
+        "regularsync.import.last.blocks.gauge at scrape time, so the two can briefly pair adjacent imports."
+    )
     .register(metrics.registry)
   // The duration is for the whole call, so it needs the block count beside it: 61 ms for one block and for 128 differ.
+  // The two gauges read the same value at different instants of a scrape, so an import between the reads pairs the
+  // count of one import with the duration of the next; the TUI reads both from one `LastImport` and has no such pair.
   Gauge
     .builder(
       "regularsync.import.last.blocks.gauge",
       lastImportRef,
       (ref: AtomicReference[Option[LastImport]]) => ref.get().fold(0d)(_.blocks.toDouble)
     )
-    .description("How many blocks the last block import's consensus call put on the chain.")
+    .description(
+      "How many blocks the last block import's consensus call put on the chain. Read separately from " +
+        "regularsync.import.last.duration.seconds.gauge at scrape time, so the two can briefly pair adjacent imports."
+    )
     .register(metrics.registry)
 
   /** Called by BlockImporter after a consensus call that imported `blocks` blocks, taking `nanos`. */
