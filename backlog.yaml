@@ -2354,3 +2354,14 @@ items:
       spec: 018
     depends_on: [B-058]
     notes: beacon, review of C2b PR B (2026-11-11). SerializingMptStorage treats such a value as corrupt (mpt/MerklePatriciaTrie.scala:39-41); PathMptStorage.decoded does not look. A row like that which passed keccak would be re-resolved by the traversal and fail there, so it cannot reach a proof today. Align decoded with NodeFault when the staged commit lands.
+  - id: B-210
+    title: "RPC: a block imported by newPayload and not yet the head is above best, so account reads answer 'no account' though its state is held"
+    priority: P3
+    status: open
+    area: rpc
+    size: S
+    opened: 2026-11-11
+    refs: []
+    links:
+      spec: 018
+    notes: "beacon and conduit, review of C2b PR B (2026-11-11). Old behaviour (the tip check of getAccount(BestBranch, address, n)), kept on purpose by BlockchainReader.accountIn / accountProofIn so that C2b changes no RPC answer. It is also what answers the pending block with the empty account. Better: answer from the held state, or with an error. Decide with conduit; hive rpc-compat does not exercise it."
