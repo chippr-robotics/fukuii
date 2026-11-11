@@ -2430,3 +2430,13 @@ items:
     links:
       spec: specs/018-storage-engine-consolidation
     notes: "C2b made StateValidator answer Left('State fault, not a hole: ...') when a view goes stale or a state is not held, so a node that is there is never queued for healing. StateValidationModule still treats that Left as it treats a corrupt node: back to the healing phase. Unreachable until the validator is handed a view (it reads SNAP's own store today); decide the reaction (retry the validation on a fresh view) with C5a's hand-off. beacon, C2b consult."
+  - id: B-217
+    title: "Legacy recovery scans stop at the first hole and settle the flag on a partial walk: align with the combined scan, or retire them"
+    priority: P3
+    status: open
+    area: sync
+    size: S
+    opened: 2026-11-11
+    refs: []
+    links: {}
+    notes: "parallel-recovery-scan = false. StorageRecoveryActor.scanForMissingStorage and BytecodeRecoveryActor.scanForMissingBytecodes catch an MPTException mid-walk, return the partial list, and recovery is then marked done. The combined scan counts a hole and goes on over its siblings (spec 022 T050a; user decision 2026-10-31: a pass that ran settles the flags, holes or not). Options: the same onHole counter for the legacy walks; a stopped walk is a failure (beacon, C2b); retire the legacy path. Spec 018 C2b fixed only a scan that could not run at all being taken as 'nothing missing'."
