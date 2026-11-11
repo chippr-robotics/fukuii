@@ -5,7 +5,8 @@ tracked file and not a continuation under `.local/docs/continuations/`. **To** t
 
 ## Status
 
-C1 (B-054, "the trie reports positions") is in PR #1788 against staging. The next slice in merge order is **C2a**
+C1 (B-054, "the trie reports positions") merged to staging as #1788 on 2026-11-11, with CI green (Test and Build on
+JDK 25, EEST Amsterdam, the hive runs, the SNAP ratchet). The next slice in merge order is **C2a**
 (B-055), and **C3a** (B-057) can be drafted beside it: C3a needs only `NibblePath` from C1.
 
 C0 (B-053) is still open on fukuii-fc: the pinned jar, the fixed ranges and their recorded roots (T002 to T004) do not
