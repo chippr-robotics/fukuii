@@ -872,6 +872,82 @@ unused-symbol ratchet refuses a parameter or an import left unused) and were run
 | `eth_getStorageAt` reads the account by block number again | 1 |
 | `eth_simulateV1` takes a reader's state | 1 |
 
+### C2b SNAP serving record (2026-11-11)
+
+C2b's third PR is SNAP serving (T052, T058). The walkers (T055, T059 to T061) are a fourth PR: serving is wire
+behaviour and herald's review, walking is recovery and beacon's.
+
+**Every read says where it is.** A SNAP server reaches each node by a descent from a root, so it always knows the trie
+and the path: the account trie under no owner, a storage trie under its account's hash, the path counted through the
+range walk and the three descents (`proofFor`, `resolveLeafAccount`, `collectNodeAtPath`). A store keyed by hash ignores
+both. The handler of `GetStorageRanges` had its own copy of the account lookup, by hash; it is `SnapServer.storageRootOf`
+now, the server's own descent.
+
+**The state is asked for by the request's root, for each request**: `BlockchainReader.stateForRoot(root)`. Guard off it
+is the read-only store whatever the root, and the serve finds the root's node there or answers with nothing, as it
+always has. Guard on it is the anchor's view when the root is the anchor's and the anchor is within 128 blocks of the
+best block. No other state is held until the overlay, so no other root is served; C4a widens it to every block the
+overlay can give a view of, with the window `min(128, the retention floor)` (noted on T130).
+
+**A defect the conversion would have carried in.** The server took every read that failed as "no node here". For a node
+that is missing that is how it has always answered. A view of the position store can fail another way: the disk moves
+under it, and the read says the view is stale. Taken as an absent node that is a hole in the middle of a range (the
+accounts under that node left out) sent with proofs that cannot close over it, to a peer that finds the response invalid
+and drops this node. The handler's lookup did the same one level up: a stale read became "no such account", which is
+sent as an account with no storage. Each node that was read is still a node of the root asked about, since each is
+checked against the hash its parent holds, but a part of a range is not a range. **A serve that meets a `StateFault`
+answers with the empty response**, wherever in the serve the move falls. `SnapServePositionStoreSpec` moves the disk
+after every read count of a serve, from none to all of them, and holds the answer to the empty response each time.
+
+**`snap/1` under the guard** (user decision, this file, "Decisions of 2026-11-11"). `InstanceConfig` leaves `snap/1`
+and `snap/2` out of the capabilities while `state.path-live` is on, and says so at start. The capability is mutual: a
+node that does not offer it is not offered it, so such a node does not sync by SNAP either. Nothing can import a block
+with the guard on before C3b, so nothing is lost by it today; C4a advertises it again.
+
+**`GetNodeData`.** Every decoder this node has, eth/68 to eth/72, rejects codes `0x0d` and `0x0e` (EIP-4938). The
+handler in `BlockchainHostActor` could not be reached, and it read a node by hash alone, which this layout cannot do. It
+is deleted with its subscription and its two tests; one test pins that the host does not subscribe to the code.
+
+**The spec passed when first run, so the code was broken one rule at a time.** 38 mutations, all caught:
+
+| Rule broken | Mutations | Caught by |
+| --- | --- | --- |
+| a state fault is an absent node, or escapes one of the three serves | 4 | the stale-view cases |
+| a node, or a root, is looked for at the wrong position | 2 | both states |
+| the account trie under an owner; a storage trie under none, or under another account | 6 | both states (`alice` and `bob` hold the same trie) |
+| an extension counted as one nibble, in each of the three descents | 3 | **the chosen-key state alone** |
+| a descent, or the range walk, looks at the root, one nibble short or one long | 6 | both states |
+| a handler asks for another root's state, looks storage roots up in it, takes a fault in the lookup as no account, or finds its state outside its `try` | 6 | `SnapServingActorSpec` |
+| the window ignored or one block short; any root served; nothing served with the guard off | 4 | `BlockchainReaderSeamSpec` |
+| snap advertised when it is not served; the guard does not withdraw it | 3 | `NetworkProtocolConfigSpec` |
+| the host subscribes to `GetNodeData` again | 1 | `BlockchainHostActorSpec` |
+| SNAP sync may start under the guard, for the node or for an instance; the node's storages read the process-wide guard | 3 | `ConfigValidatorSpec`, `StorageBuilderStateGuardSpec` |
+
+The three extension mutations are why the second state exists. The state the production world builds has keys that are
+hashes, so its tries are bushy: counting an extension as one nibble passes every case on it, and every case of the two
+older specs of the server. The second state's keys are chosen: extensions of 4 and 62 nibbles in the account trie and in
+a storage trie held by two accounts, and requests from keys that part from the trie inside, before and after each.
+
+**Review (herald: SIGN WITH CHANGES, no blocker; all taken).** With the guard off it found no response that differs,
+and no path on which a state fault is still turned into a part of a response.
+
+| Finding | Change |
+| --- | --- |
+| The guard was read in two places: the storages from the process-wide configuration, the capabilities from the instance's. In a multi-instance run a node could hold the position store and offer SNAP, or the reverse | `StorageBuilder` takes the guard from its instance's configuration (`InstanceConfig.statePathLive`); `StorageBuilderStateGuardSpec` builds the production storages of an instance whose guard differs from the process's |
+| With the guard on and `do-snap-sync = true` the node waits for a snap-capable peer for ever: nobody offers SNAP to a node that does not offer it, and SNAP sync has no way back to importing blocks | refused at start, for the node and for an instance (`ConfigValidator.stateGuardErrors`): it names both keys and says to set `do-snap-sync = false`. It goes with the capability rule in C4a |
+| The handler's warning for a failed load of the root went with its copy of the lookup | `orAbsent` says at debug when a node is there and cannot be read; a missing node stays silent |
+| `GetStorageRanges` found its state outside its `try`, where the other two find it inside | the same shape for all three; a spec has the state fail to be handed out, and the actor answers and stays up |
+| The window compares block numbers, `isStateRootFresh` (`GetAccountRange` only) looks the root up among canonical headers: for a block that is not canonical the two would disagree | harmless while the one root served is the anchor's; for C4a, with the window (T130) |
+| `hive.conf` sets `snap2 = true`: with the guard on the hive devp2p snap tests see no snap | by design until C4a; the guard and those runs do not go together |
+| The requesting side of `GetNodeData` is dead too (`StateNodeFetcher`'s fallback, `PeersClient`'s node-data peers, the message classes) | B-214 |
+
+**Not covered here, and said so.** The half of T052 against the pinned jar waits for C0 (B-212): this compares two
+stores through one server, and would not show a change of the server itself that both stores share; `SnapServerSpec` and
+`SnapServerLimitsSpec`, unchanged, are what holds that. A node that cannot be read for any other reason (missing,
+corrupt) is still served as a hole where go-ethereum answers with nothing (B-213, old behaviour).
+
+**The ratchet** went from 136 lines and 268 uses to 133 and 263.
+
 ### Destructive change (C8a and C8b): the vault protocol blocks
 
 ```
