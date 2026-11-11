@@ -122,6 +122,63 @@ Lighthouse datadir (it holds the old chain's state), and start again. fukuii's d
 genesis is refused at startup ("Genesis data present in the database does not match"). Delete old
 `OUT/ephemery-N/` directories when done with them.
 
+## 5. Run a validator on fukuii
+
+fukuii can be the execution client of a validator: the Lighthouse beacon node from section 3 drives it over the
+Engine API, and a Lighthouse validator client signs. This was run end to end on `ephemery-165` (#1655 part 2,
+2026-11-05 to 2026-11-10). Every step that put a request or a withdrawal on chain was compared field by field with
+geth v1.17.9 at its inclusion block. All matched: hash, stateRoot, receiptsRoot, withdrawalsRoot, requestsHash, the
+block access list hash and the receipt.
+
+| Step | What it needs | Seen on `ephemery-165` |
+|---|---|---|
+| Keys | `lighthouse validator-manager create` with `--compounding` (0x02 credentials), `--eth1-withdrawal-address <addr>` and `--deposit-gwei`; then `validator-manager import` into the running validator client over its HTTP API | one validator, 335 ETH, then a 500 ETH top-up |
+| Deposit (EIP-6110) | a transaction to the deposit contract from a funded account, carrying the `deposits.json` fields and its `deposit_data_root` | block 90654; 260,654 gas |
+| Activation | wait for the deposit to be processed and the activation epoch | about 1 h: deposit at 22:26Z, active from epoch 3191 at 23:32Z (short queue) |
+| Partial withdrawal (EIP-7002) | a transaction from the withdrawal address to `0x00000961Ef480Eb55e80D19ad83579A64c007002` | requested in block 102304, paid in block 109778 |
+| Exit (EIP-7002, amount 0) | the same call with amount 0, once no partial is pending | requested in block 115065; exit epoch 4050 |
+| Full-balance sweep | wait for the withdrawable epoch (exit epoch + 256, about 27 h) | 834.07 ETH paid at the first slot of epoch 4306, block 122552 |
+
+The validator client, with the fee recipient set to an address you control:
+
+```bash
+docker run -d --name ephemery-vc --network host \
+  -v "$TESTNET_DIR":/network:ro -v "$VALIDATOR_DIR":/v \
+  sigp/lighthouse:v8.3.0-rc.0 \
+  lighthouse --testnet-dir /network vc --datadir /v/vc \
+    --beacon-nodes http://127.0.0.1:5062 \
+    --suggested-fee-recipient <addr> --graffiti <text> \
+    --http --http-port 5072 --init-slashing-protection
+```
+
+The graffiti can be changed later without a restart through the keymanager API
+(`POST /eth/v1/validator/{pubkey}/graffiti`). The API token is in the validator client's datadir, so keep it out of logs.
+
+### EIP-7002 requests
+
+A request is a transaction from the validator's withdrawal address to the request contract:
+- **Calldata:** the 48-byte validator pubkey followed by the amount in gwei as an 8-byte big-endian integer. Amount 0
+  asks for a full exit.
+- **Value:** the current fee. An `eth_call` to the contract with empty calldata returns it as a uint256. It was 1 wei
+  on `ephemery-165`.
+- **Gas:** the request cost 575,581 gas on `ephemery-165`, because Amsterdam's state-creation gas applies. geth
+  estimated 581,316, so send it with a 1,000,000 gas limit.
+- **Exits:** under EIP-7251, the consensus layer ignores an exit while a partial withdrawal for the same validator is
+  still pending. Wait until the partial is paid (`withdrawal_done` for it in the beacon API, or the withdrawal in an
+  execution block) before you send the exit.
+
+Before 0.11.0, fukuii's `eth_call` reported an out-of-gas as success ("0x"), so a dry run with too little gas looked
+fine on fukuii and failed on geth. Fixed in #1725.
+
+### Watching it
+
+- **Beacon node:** `GET /eth/v1/beacon/states/head/validators/<index>` shows the status, balance, exit epoch and
+  withdrawable epoch.
+- **Payouts:** from Gloas (`ephemery-165`) the beacon block body has no execution payload. Find a payout in the
+  execution blocks instead: the `withdrawals` list of `eth_getBlockByNumber`, matched on `validatorIndex`.
+- **Proposals:** the expected interval scales with the network's total stake. With ~30.7M ETH staked on `ephemery-165`,
+  835 ETH proposes about once every 122 h, so a short run may see no proposal at all. None was seen in this run.
+
 ## Blob schedule
 
 Ephemery's blob parameters differ from mainnet's at the BPO forks. `fetch-genesis.sh` copies
