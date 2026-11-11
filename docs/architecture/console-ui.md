@@ -105,7 +105,7 @@ conditions, errors first. It is never animated and every view has it.
 | Disk free on the datadir below 20G (below 5G: error) | warning / error |
 | Fewer peers than a quarter of the maximum (the peer count itself turns yellow below half) | warning |
 | ETH: no `engine_forkchoiceUpdated` for more than 60 s, after one has been heard | error |
-| ETH: no `engine_forkchoiceUpdated` yet, 60 s after the node started | warning |
+| ETH: no `engine_forkchoiceUpdated` yet, 60 s after the node started (with the count of failed JWT checks, if any) | warning |
 | ETH: no `engine_newPayload` for more than 5 minutes while a peer, or the sync's target, is ahead of the node's head | warning |
 | ETC: mining on, the DAG loaded, and a reported hashrate of 0 for more than 10 minutes | warning |
 
@@ -126,15 +126,24 @@ authentication failures when there are any; and the payload counts.
 ```
 
 At 80×24 it is one row, `CL      connected · forkchoice 4s (VALID) · payload 4s (VALID)`. The link is `waiting` (for
-the consensus layer's first `forkchoiceUpdated`) until that call comes, `connected` while the last is no more than 60 s
-old, and `DISCONNECTED` after that, with the age of the last call of each method. The golden files
-`cl-{s,m,l}-{connected,waiting,disconnected}-{emoji,ascii}.txt` have all three. The counts are the node's own and labelled by what is counted: `engine_newpayload_invalid`
+its first `forkchoiceUpdated`) until that call comes, `connected` while the last is no more than 60 s old, and
+`DISCONNECTED` after that, with the age of the last call of each method. At the narrowest tier M, 100 columns, a
+`DISCONNECTED` row would be cut in the middle of a status, so it drops "ago". A panel with no second row (waiting, or
+at 80×24) says its failed JWT checks on the first (`· 3 auth failures`): a secret that does not match leaves the
+consensus layer waiting for ever, and the warning's text says how many (`no CL yet: no forkchoiceUpdated in 1m 5s (3
+JWT failures)`). The golden files `cl-{s,m,l}-{connected,waiting,disconnected}-{emoji,ascii}.txt` and
+`cl-m-100x32-disconnected-{emoji,ascii}.txt` have the states. The counts are the node's own and labelled by what is counted: `engine_newpayload_invalid`
 has always counted an ACCEPTED payload (stored, not executed) with the INVALID ones, so the panel reads the separate
 `engine_newpayload_accepted` and shows both, and shows SYNCING only when something counted it (no caller records one).
 A payload the node already held is answered VALID without being recorded, so "last newPayload" does not move for it,
-which is why the newPayload alert needs a peer ahead of the node's head.
+which is why the newPayload alert needs a peer ahead of the node's head. With none recorded at all it counts from when
+the consensus layer was first seen, or from the node's start if that is later, so a consensus layer that attaches to a
+node that has been up for an hour is not measured against the hour.
 
-**Mining (ETC).** With mining off, one row: `Mining  off`. With mining on, at 80×24 one row (hashrate and DAG); from
+**Mining (ETC).** With the internal miner off, one row: `Mining  off`. `mining-enabled` gates the internal CPU miner
+only: `eth_getWork` and `eth_submitHashrate` still serve ethminer and pools, so a node that is being asked for work
+reads `Mining  off (internal) · external: 48.2 MH/s · getWork 1,204 (20/min)` (`none reported` when work is asked for
+and no hashrate has been submitted). With mining on, at 80×24 one row (hashrate and DAG); from
 100×32 two: the coinbase and the DAG, then the hashrate, blocks mined (and when the last was), stale shares and the
 `eth_getWork` count with its rate over the last minute.
 

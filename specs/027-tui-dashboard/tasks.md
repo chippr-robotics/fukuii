@@ -477,15 +477,13 @@ shows a score for every handshaked peer.
 
 - [x] T113 [US5] E1 and E3: `consensus/engine/EngineApiMetrics.scala` records last call times and statuses in
       `recordNewPayload` (`:54-61`) and `recordForkchoiceUpdated` (`:74-79`) and counts auth failures;
-      `consensus/engine/EngineApiHttpServer.scala` counts on the auth-failure path (`:100`) without changing the response
-      (beacon's pre-flight: `:100` is the success continuation; the count is in `JwtAuthenticator`'s two 401 branches,
-      `:48` and `:52`, and `EngineApiHttpServer` is not edited)
-- [x] T114 [US5] E2: pass `forkChoiceManager` (`nodebuilder/NodeBuilder.scala:964`) to the probe from `StdNode`;
-      safe and finalized numbers from a header lookup on the probe thread
-      (the manager is `NodeBuilder.scala:986`; `StdNode` hands the probe a thunk over `getState`, not the manager, whose
-      `setListener` is the SNAP pivot's feed)
+      `consensus/engine/JwtAuthenticator.scala` counts in its two 401 branches (`:48`, `:52`) without changing the
+      response (beacon's pre-flight: `EngineApiHttpServer.scala:100` is the success continuation, and is not edited)
+- [x] T114 [US5] E2: hand the probe a thunk over `forkChoiceManager.getState` (the manager is
+      `nodebuilder/NodeBuilder.scala:986`; the manager itself stays out of `console/`, as its `setListener` is the SNAP
+      pivot's feed) from `StdNode`; safe and finalized numbers from a header lookup on the probe thread
 - [x] T115 [US5] M2: `consensus/pow/PoWMiningMetrics.scala` DAG gauges, updated in
-      `consensus/pow/miners/EthashDAGManager.scala` where it logs progress (`:75`, `:98`) and sets the epoch (`:46`)
+      `consensus/pow/miners/EthashDAGManager.scala` where it logs progress (`:80`, `:105`) and sets the epoch (`:35`, `:51`)
 - [x] T116 [US5] M1 and coinbase: read the `PoWMiningMetrics` gauges (`:24-40`, C-6); pass the `CoinbaseProvider`
       (`consensus/mining/MiningBuilder.scala:32`) to the probe
 - [x] T117 [US5] The CL and mining panels in `console/panels/`, and their rows in `console/Alerts.scala`: CL only on

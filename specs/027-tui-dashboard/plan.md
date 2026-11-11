@@ -55,7 +55,7 @@ machine**, so sbt runs and the manual node runs are serialized (see "Sequencing"
 
 **Scale/Scope**: about 2,250 lines of main code and 950 of tests over the five TUI slices (research §9: 350/450/600/450/400 and
 150/200/250/200/150); roughly 20 new files in `console/`, edits to the seven existing `console/` files, `Fukuii.scala`,
-`StdNode.scala`, five metrics objects, `MilestoneLog.scala`, `EthashDAGManager.scala`, `EngineApiHttpServer.scala`,
+`StdNode.scala`, five metrics objects, `MilestoneLog.scala`, `EthashDAGManager.scala`, `JwtAuthenticator.scala`,
 `BlockImporter.scala`, `conf/base/fukuii.conf` and a new `conf/base/tui.conf`. Slice 4a adds about 250 lines of main code
 and 300 of tests in `network/` (`PeerScoringManager`, `PeerScore`, `NetworkMetrics`, `PeerManagerActor`, `PeerActor`),
 `blockchain/sync/` (`PeersClient`, `Blacklist`, `snap/SNAPRequestTracker`) and `nodebuilder/NodeBuilder.scala`.
@@ -66,7 +66,7 @@ and 300 of tests in `network/` (`PeerScoringManager`, `PeerScore`, `NetworkMetri
 
 | Principle | Engaged? | Status / justification |
 | --- | --- | --- |
-| **I. Consensus determinism** | Only by proximity, in slice 5: E1/E3 add state to `EngineApiMetrics` and a counter at `EngineApiHttpServer.scala:100`; M2 adds gauges at `EthashDAGManager.scala:75,98`. | **PASS.** Each is a write to a metrics object at an existing call site; no return value, branch, status, timing or DAG byte changes. `beacon` (ETH half) and `forge` (ETC half) review slice 5 before merge, reporting only. The import-duration gauge is set in `blockchain/sync/regular/BlockImporter.scala`, not in `consensus/ConsensusImpl.scala` (C-7). ETC and ETH code paths are untouched. Slice 4a touches `network/` and `blockchain/sync/` only, in one code path for both chains; its scores feed no dial, selection or blacklist decision. |
+| **I. Consensus determinism** | Only by proximity, in slice 5: E1/E3 add state to `EngineApiMetrics` and a counter in `JwtAuthenticator.scala`'s two 401 branches (`:48`, `:52`; `EngineApiHttpServer.scala:100` is the success continuation and is not edited); M2 adds gauge writes at `EthashDAGManager.scala:35,51,80,105`. | **PASS.** Each is a write to a metrics object at an existing call site; no return value, branch, status, timing or DAG byte changes. `beacon` (ETH half) and `forge` (ETC half) review slice 5 before merge, reporting only. The import-duration gauge is set in `blockchain/sync/regular/BlockImporter.scala`, not in `consensus/ConsensusImpl.scala` (C-7). ETC and ETH code paths are untouched. Slice 4a touches `network/` and `blockchain/sync/` only, in one code path for both chains; its scores feed no dial, selection or blacklist decision. |
 | **II. Spec-driven** | Yes | PASS. spec.md (clarified 2026-11-07), research.md (design record), this plan, tasks.md. |
 | **III. Tests & coverage** | Yes | PASS. Tests first in every slice; goldens for 3 tiers × 2 glyph sets from slice 1; a ScalaCheck width property; latches and `eventually`, never `Thread.sleep` (research §8.5); the renderer is pure, so most new code is unit-testable and coverage rises (≥ 70 %). |
 | **IV. Idiomatic Scala 3** | Yes | PASS. `enum` for `TuiView`, `Tier`, `Motion`, `GlyphSet`, `Severity` and `Sourced`; explicit result types; extension methods, not implicit classes (spec 020 P3b); no `return`; `scalafmtAll` before each commit; `formatCheck` per slice. |
@@ -132,9 +132,9 @@ src/main/scala/com/chipprbots/ethereum/
 ├── blockchain/sync/snap/SNAPRequestTracker.scala  # EDIT S4a SNAP response and timeout (top-level snap/ file)
 ├── nodebuilder/NodeBuilder.scala                  # EDIT S4a construct the scorer beside `blacklist` (`:269`); pass it
 ├── consensus/engine/EngineApiMetrics.scala        # EDIT S5 E1 last-call times/statuses, E3 auth-failure count
-├── consensus/engine/EngineApiHttpServer.scala     # EDIT S5 E3 count on the auth-failure path (`:100`)
+├── consensus/engine/JwtAuthenticator.scala        # EDIT S5 E3 count in the two 401 branches (`:48`, `:52`)
 ├── consensus/pow/PoWMiningMetrics.scala           # EDIT S5 M2 DAG epoch/progress/loaded gauges
-└── consensus/pow/miners/EthashDAGManager.scala    # EDIT S5 M2 gauge updates at `:75`, `:98`
+└── consensus/pow/miners/EthashDAGManager.scala    # EDIT S5 M2 gauge writes at `:35`, `:51`, `:80`, `:105`
 
 src/main/resources/conf/base/
 ├── tui.conf      # S1 NEW  fukuii.tui { glyphs }, grown in S2 and S4
