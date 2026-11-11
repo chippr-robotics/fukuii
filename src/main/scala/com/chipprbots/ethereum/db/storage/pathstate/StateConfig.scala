@@ -24,14 +24,18 @@ final case class StateConfig(
     reorgMaxDepth: StateConfig.ReorgDepth
 ):
 
-  /** How many blocks below the anchor keep their changeset record (data-model 4.5): the history, raised to cover the
-    * distance to the consensus client's finalized block with a margin, and never above the bound. A chain with no
-    * finalized block keeps the history.
+  /** How many blocks below the anchor keep their changeset record (data-model 4.5), never fewer than the history and
+    * never more than the bound.
+    *
+    * With a finalized block it is the distance to it, with a margin: the consensus client may reorganise down to its
+    * finalized block and no further. With none it is `retention.without-finality`: a proof-of-work chain has no such
+    * block, and nor has a node whose consensus client has not reported one yet. The history alone (64) is far less than
+    * ETC has been reorganised by, and a reorganisation deeper than what is kept is refused and the state synced again
+    * (user decision, 2026-11-11).
     */
   def retained(anchorNumber: BigInt, finalized: Option[BigInt]): Int =
-    val toFinality = finalized.fold(BigInt(0))(f => anchorNumber - f + retention.finalityMargin)
-    val wanted = toFinality.max(pruning.history).min(retention.maxBlocks)
-    wanted.toInt.max(pruning.history)
+    val wanted = finalized.fold(BigInt(retention.withoutFinality))(f => anchorNumber - f + retention.finalityMargin)
+    wanted.max(pruning.history).min(retention.maxBlocks).toInt.max(pruning.history)
 
   /** How far below the head a fork point may lie for a move to be attempted: the retention floor, or a configured depth
     * below it. A configured depth above the floor cannot be honoured, since no record reaches that far.
@@ -54,7 +58,7 @@ object StateConfig:
 
   final case class Pruning(mode: Mode, history: Int)
   final case class Changeset(maxEntriesPerOwnerDelete: Long, maxRecordBytes: Long)
-  final case class Retention(finalityMargin: Int, maxBlocks: Int)
+  final case class Retention(finalityMargin: Int, maxBlocks: Int, withoutFinality: Int)
   final case class Overlay(
       maxBytes: Long,
       pinnedMaxBytes: Long,
@@ -79,6 +83,10 @@ object StateConfig:
       state.getInt("retention.max-blocks") >= fukuii.getInt("pruning.history"),
       "state.retention.max-blocks is below pruning.history: the history is the least that is kept"
     )
+    require(
+      state.getInt("retention.without-finality") <= state.getInt("retention.max-blocks"),
+      "state.retention.without-finality is above state.retention.max-blocks, which bounds everything that is kept"
+    )
     StateConfig(
       pathLive = state.getBoolean("path-live"),
       pruning = Pruning(pruningMode(fukuii.getString("pruning.mode")), fukuii.getInt("pruning.history")),
@@ -88,7 +96,8 @@ object StateConfig:
       ),
       retention = Retention(
         finalityMargin = state.getInt("retention.finality-margin"),
-        maxBlocks = state.getInt("retention.max-blocks")
+        maxBlocks = state.getInt("retention.max-blocks"),
+        withoutFinality = state.getInt("retention.without-finality")
       ),
       overlay = Overlay(
         maxBytes = state.getLong("overlay.max-bytes"),

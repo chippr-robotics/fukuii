@@ -14,18 +14,17 @@ C1 (B-054) merged as #1788. **C2a (B-055) merged as two PRs**, #1791 and #1792.
 - **Part 2**: the read side of the position store, `db/storage/pathstate`, behind `fukuii.state.path-live` (T035 to
   T038, T042 to T044, T047, T048; T045 in part).
 
-**C3a (B-057)** is built on part 2: the changeset record and its codec, `ChangesetStorage` on the new column family `v`,
+**C3a (B-057) merged as #1793**: the changeset record and its codec, `ChangesetStorage` on the new column family `v`,
 and `StateConfig`. forge and beacon signed the record's bytes. Nothing reads or writes it yet.
 
-Next in merge order: **C2b** (B-056, every reader can be handed the position store) and **C3b** (B-058, the staged
-commit), which needs C3a and C2a and not C2b.
+**C2b (B-056) is in flight** in this session, in three PRs: the ratchet, the RPC readers, serving and walking. Its
+pre-code record, with what conduit, herald and beacon changed, is in plan.md.
 
-**Two decisions are with the user before C3b** (plan.md, "C3a record"): how many blocks of changesets a proof-of-work chain
-keeps (64 by the design; forge asks for at least 512), and whether every column family C3b needs lands in the release
-that adds `v`, so that operators meet one downgrade barrier.
+Next after it: **C3b** (B-058, the staged commit), which needs C3a and C2a and not C2b.
 
-C0 (B-053) is still open on fukuii-fc. What waits on its pinned jar and ranges: T025, T033, T034 (B-203), T049 (M4),
-T050's DC-14 figures, and the ethereum/tests half of T026 with its baseline (B-207).
+**The user decided four things on 2026-11-11** (plan.md, "Decisions of 2026-11-11"): C3a merges; 512 blocks of
+changesets where there is no finalized block; one downgrade barrier; no `snap1` advertisement under the guard until the
+overlay.
 
 ## Files modified
 

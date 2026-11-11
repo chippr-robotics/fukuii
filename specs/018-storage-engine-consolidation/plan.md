@@ -665,7 +665,8 @@ basic would point-read every height from 0, about 22 million on ETC mainnet); a 
 storage corruption, never as a fault of the block (T091); `pruning.mode = "inmemory"` starts failing at start when C3b
 builds `StateConfig`, which the release notes must say (T093).
 
-**Two decisions for the user before C3b** (neither changes this slice):
+**Decided by the user on 2026-11-11** (see "Decisions of 2026-11-11" below): 512 blocks where there is no finalized block,
+and one downgrade barrier. The two questions as they were put:
 
 1. **ETC keeps 64 blocks of changesets** by this design, because a proof-of-work chain has no finalized block and the floor
    is then `pruning.history`. A reorganisation deeper than that is refused and the node re-syncs its state. ETC was
@@ -675,6 +676,49 @@ builds `StateConfig`, which the release notes must say (T093).
 2. **The downgrade barrier.** After this slice a build older than it cannot open a datadir (RocksDB must open every column
    family a database has). forge asks that every column family C3b needs land in the same release, so operators meet one
    barrier and not two, and that the release note say a rollback means a re-sync.
+
+### Decisions of 2026-11-11 (user)
+
+Four questions were put to the user after C3a was built, and answered in one message.
+
+| Question | Decision | Where it lands |
+| --- | --- | --- |
+| Merge C3a, which adds column family `v` to every datadir, after which an older build cannot open it? | **Merge.** | #1793 |
+| How many blocks of changesets where there is no finalized block (ETC, Mordor)? 64 by the design, at least 512 by forge | **512.** | `state.retention.without-finality = 512`; `StateConfig.retained`; data-model 4.5 and 10 |
+| One downgrade barrier or two? | **One: everything lands in the same release.** | below |
+| With the guard on a node can serve SNAP for the anchor's root only, until the overlay (C4a). Accept empty answers, or stop advertising? | **Stop advertising `snap1`, so that peers are not lost.** | T058 |
+
+**One downgrade barrier.** The release that first ships column family `v` also ships every other change of this track after
+which an older build cannot open a datadir. Today the track adds no column family but `v` (data-model 2: `t` and `u` exist,
+`n` stays as an empty family), so the rule binds two things: a later slice that finds it needs another family lands it before
+that release is cut; and the release note says, once, that a datadir started by this release cannot be opened by an older
+one. The `state.layout` marker (5.2) is a different barrier with its own message, and it stays behind the in-development
+guard until the track's last slice.
+
+**`snap1` under the guard.** With `fukuii.state.path-live` on and until the overlay can serve the window of recent roots,
+the node does not advertise `snap1`. A node in that state does not need SNAP as a client either: its hand-off (C5a) comes
+after the overlay (C4a) in merge order. With the guard off nothing changes. It is part of C2b's serving PR.
+
+### C2b pre-code record (2026-11-11)
+
+C2b (every reader can be handed the position store) touches 44 call sites of the four state accessors in 27 files. `conduit`
+(RPC), `herald` (SNAP serving) and `beacon` (the seam, the walkers) read the design before code. Each signs with changes; none
+blocks. **It lands as three PRs:** the ratchet; the RPC readers; serving and walking.
+
+| Finding | By | Change to the plan |
+| --- | --- | --- |
+| Only RPC readers move onto the seam in this slice. With the guard on there is no writer before C3b, so the anchor stands still while import moves the head: the proposer's nonce read (`EngineApiService:1191`), the importer's missing-node lookup (`BlockImporter:835-838`) and the chain importer's presence check (`ChainImporter:362`) would break | beacon | they stay on a root-keyed hash accessor, allow-listed, until C3b and C5b |
+| With the guard off the seam hands every reader `getReadOnlyStorage`: reads are the same as the backing storage in each pruning mode, and a reader that persists by accident then writes into a buffer | beacon | a differential test on basic and in-memory that a converted reader's answers are unchanged |
+| Account reads by block number resolve the number through the canonical index, so a request for a side block by hash reads the canonical block's state **today** (`BlockchainReader.scala:190-194,330-337`). Ten call sites hold the header and pass the number | conduit, beacon | the readers pass the header; an existing bug fixed on the way |
+| `StxLedger.advanceWorldToTx` needs the parent's state and the header in hand is the traced block's | conduit | it takes the parent header |
+| `eth_simulateV1` makes one storage and threads the world through every simulated block: block N+1 reads the root N persisted, which is no header's | conduit | one scratch state per request, shared |
+| Nothing in the RPC layer catches a `StateFault`: it would leave as `-32603`, or a 500 from GraphQL | conduit | a retry helper that re-runs the whole read up to 3 times, and a backstop that maps a `StateFault` to the existing `NodeNotFound` error |
+| Every caller of the root-only storage reads has the address | conduit | the root-only overloads are deleted |
+| Only `walkRangeVisit` carries a prefix in the SNAP server; `resolve`, `proofFor`, `collectNodeAtPath` and `resolveLeafAccount` do not, and two raw reads sit in `NetworkPeerManagerActor` (:1159, :1171) | herald | the prefix is threaded through all of them |
+| Only GetAccountRange checks the served-root window today; storage ranges and trie nodes serve any root the hash store holds | herald | with the guard on they are limited to the window too; with it off nothing changes |
+| `GetNodeData` is unreachable: every decoder from eth/68 to eth/72 rejects its codes. (The note said "eth/68 and eth/69 only"; eth/70 to 72 are opt-in per network) | herald | the handler is deleted or allow-listed, not converted |
+| Three walkers see only a hash (`LeafWalkVisitor`, `MptConstructionVisitor`, `ShardEnumerator`), and every read of a storage root by hash fails on a position store (`StorageRecoveryActor:452,497`, `StateValidator:79,287`) | beacon | positioned visitors for the three; the storage-root reads take the account hash they already hold |
+| The four accessors are not all the doors in | beacon | the ratchet also covers `getBulkLoadStorage`, `stageBlock`, `prefetchReader`, `getNode`/`getMptNodeByHash`, `storageMpt(`, trie constructions, `def visitHash`, and stores built outside `db/storage` |
 
 ### Destructive change (C8a and C8b): the vault protocol blocks
 
