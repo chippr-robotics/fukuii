@@ -2266,7 +2266,7 @@ items:
   - id: B-203
     title: "Spec 018 C1 gates that wait for C0's pinned jar: M7 on the Mordor range (T033), roots against the jar (T025), DC-14 figures (T034)"
     priority: P2
-    status: in-progress
+    status: review
     area: storage
     size: S
     opened: 2026-11-11
@@ -2279,11 +2279,12 @@ items:
       by: dev-node
       agent: main
       since: 2026-11-11T02:56:30Z
-      heartbeat: 2026-11-11T02:56:34Z
+      heartbeat: 2026-11-11T09:32:08Z
       branch: none
     notes: |-
       C1 (#1788) records a stand-in for M7 only: bytes allocated per trie op, within 1% of the parent (baselines/m7-c1.md). The gate itself needs T002-T004.
       2026-11-11 in-progress: dev-node: Mordor full sync from genesis on v0.11.47 (C1), export 0..~1.1M, strict import with v0.11.46 vs v0.11.47 (M7 stand-in on real blocks). Oracle jar choice (T002) stays the user's.
+      2026-11-11 review: Live Mordor check passed: v0.11.47 synced to 1,110,015, 0 errors; strict import 0-1.1M passes on 0.11.46 (7413s) and 0.11.47 (7440s). Write-up in baselines/m7-c1.md. T033 gate still needs pinned jar + IMPORT-TIMING/JFR.
   - id: B-204
     title: "MerklePatriciaTrie.getFromHash decodes every node twice: about 50 KB allocated per get on a 50k-key trie"
     priority: P3
