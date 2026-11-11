@@ -240,7 +240,6 @@ object TuiFixtures:
     ("11:59:25", "INFO", s"$Sync.regular.RegularSync", "[====================🪱]🧠 100% — RegularSync"),
     ("11:59:30", "ERROR", s"$Net.rlpx.RLPxConnectionHandler", "Cannot decode a message from 203.0.113.40:30303"),
     ("11:59:34", "INFO", s"$Sync.regular.BlockImporter", "Imported block 21,884,101 0x9b0c…ff31 with 9 txs in 17ms"),
-    ("11:59:41", "INFO", "com.chipprbots.ethereum.consensus.pow.miners.EthashDAGManager", "DAG epoch 731 loaded"),
     ("11:59:47", "INFO", s"$Sync.regular.BlockImporter", "Imported block 21,884,102 0x6d21…1a0e with 14 txs in 22ms"),
     ("11:59:52", "INFO", s"$Net.PeerManagerActor", "Peers: 41 handshaked · 14 in · 27 out"),
     ("12:00:00", "INFO", s"$Sync.regular.RegularSync", "RegularSync: at head, block 21884102")
