@@ -63,9 +63,9 @@ and the footer with the keys. The Overview at 80×24, regular sync (from the gol
  Node    …/fukuii/etc · Full sync · archive pruning · 50 peers max · mining off
 ────────────────────────────────────────────────────────────────────────────────
  Recent
+ 11:59:25 INFO  [====================🪱]🧠 100% — RegularSync
  11:59:30 ERROR Cannot decode a message from 203.0.113.40:30303
  11:59:34 INFO  Imported block 21,884,101 0x9b0c…ff31 with 9 txs in 17ms
- 11:59:41 INFO  DAG epoch 731 loaded
  11:59:47 INFO  Imported block 21,884,102 0x6d21…1a0e with 14 txs in 22ms
  11:59:52 INFO  Peers: 41 handshaked · 14 in · 27 out
  12:00:00 INFO  RegularSync: at head, block 21884102
@@ -84,7 +84,7 @@ footer always stay.
 
 | Key | View | What it shows |
 |-----|------|---------------|
-| `1` | Overview | Peers and blocks, the txpool, endpoints, disk and heap (GC and discovery at L), the sync (SNAP's five worm rows or the Blocks worm, with ETA), the forks, the node's settings; at L the top 8 peers by score; the Recent strip of the newest log lines |
+| `1` | Overview | Peers and blocks, the txpool, endpoints, disk and heap (GC and discovery at L), the sync (SNAP's five worm rows or the Blocks worm, with ETA), the consensus layer (ETH) or the mining (ETC), the forks, the node's settings; at L the top 8 peers by score; the Recent strip of the newest log lines |
 | `2` | Sync | The worm rows on a 20-, 40- or 60-cell track; SNAP's rates, request counters, snap-capable peers and phase timeline (M and L); a regular sync's session, lag and last import; the Recent (sync) strip |
 | `3` | Peers | Each handshaked peer, highest score first: id, direction, client, best block, age; from M the address and the score, at L the score's trend |
 | `4` | Chain | Chain id, PoW or PoS, the fork timeline: by block number on ETC, by timestamp on ETH, the next fork with its distance |
@@ -104,6 +104,59 @@ conditions, errors first. It is never animated and every view has it.
 | The SNAP progress sample is older than 90 s while SNAP runs | warning |
 | Disk free on the datadir below 20G (below 5G: error) | warning / error |
 | Fewer peers than a quarter of the maximum (the peer count itself turns yellow below half) | warning |
+| ETH: no `engine_forkchoiceUpdated` for more than 60 s, after one has been heard | error |
+| ETH: no `engine_forkchoiceUpdated` yet, 60 s after the node started | warning |
+| ETH: no `engine_newPayload` for more than 5 minutes while a peer, or the sync's target, is ahead of the node's head | warning |
+| ETC: mining on, the DAG loaded, and a reported hashrate of 0 for more than 10 minutes | warning |
+
+### Consensus layer and mining
+
+Two rows of the Overview exist for one chain family each, and each only where the status probe read its source:
+
+**Consensus layer (ETH, with the Engine API on a post-merge chain).** At 80×24 one row: the link and the last
+`forkchoiceUpdated` and `newPayload`, each with its age and the status the node answered. From 100×32 three rows: the
+same with the full method names; the head hash (first and last four digits), the safe and the finalized block numbers
+(`—` while the consensus layer has named none, or the node does not have the block's header yet), and the JWT
+authentication failures when there are any; and the payload counts.
+
+```
+ Consensus layer 🔗 connected · forkchoiceUpdated 4s ago (VALID) · newPayload 4s ago (VALID)
+   head 0x7b3e…a91c   safe 7,411,977   finalized 7,411,945
+   payloads 184,203 (VALID 184,199 · ACCEPTED 4 · INVALID 0)
+```
+
+At 80×24 it is one row, `CL      connected · forkchoice 4s (VALID) · payload 4s (VALID)`. The link is `waiting` (for
+the consensus layer's first `forkchoiceUpdated`) until that call comes, `connected` while the last is no more than 60 s
+old, and `DISCONNECTED` after that, with the age of the last call of each method. The golden files
+`cl-{s,m,l}-{connected,waiting,disconnected}-{emoji,ascii}.txt` have all three. The counts are the node's own and labelled by what is counted: `engine_newpayload_invalid`
+has always counted an ACCEPTED payload (stored, not executed) with the INVALID ones, so the panel reads the separate
+`engine_newpayload_accepted` and shows both, and shows SYNCING only when something counted it (no caller records one).
+A payload the node already held is answered VALID without being recorded, so "last newPayload" does not move for it,
+which is why the newPayload alert needs a peer ahead of the node's head.
+
+**Mining (ETC).** With mining off, one row: `Mining  off`. With mining on, at 80×24 one row (hashrate and DAG); from
+100×32 two: the coinbase and the DAG, then the hashrate, blocks mined (and when the last was), stale shares and the
+`eth_getWork` count with its rate over the last minute.
+
+```
+ Mining  on · coinbase 0x4f2a0b9c…c91e · DAG epoch 364 ✓ loaded
+   Hashrate 48.2 MH/s · blocks mined 3 (last 2h 14m ago) · stale 0 · getWork 1,204 (20/min)
+```
+
+At 80×24 it is `Mining  on · 48.2 MH/s · DAG epoch 364 ✓ loaded`. The golden files
+`mining-{s,m,l}-{on,dag,off,no-hashrate}-{emoji,ascii}.txt` have the DAG being generated, mining off, and the warning.
+
+The DAG's epoch is the ECIP-1099 epoch (block number over 60,000 after Thanos): 364 at block 21.9M, where tools that
+count 30,000-block epochs say 731. A DAG that is being built shows its phase (`preparing` while the cache is made,
+`loading` from its file, `generating`), its percent and a spinner, the one thing in either panel that moves; under
+reduced motion or pause the spinner is a still dot. The hashrate is the last one submitted (`eth_submitHashrate`, or
+the internal miner); it never falls when a miner goes quiet, and a miner that never submits one shows `none reported`.
+The hashrate alert starts counting only once the DAG is loaded, as nothing is submitted while it is built. The panel
+has nothing of Olympia, a treasury or a base fee: Olympia is deferred on every chain.
+
+New series, read by the panel and exported on `/metrics` beside the ones that were there: `app_engine_newpayload_accepted`,
+`app_engine_auth_failures`, and `app_pow_dag_epoch` (`-1` before the first build), `app_pow_dag_phase` (0 not yet known,
+1 loading, 2 generating), `app_pow_dag_progress` and `app_pow_dag_loaded`. None of them has a tag.
 
 ### Log tail and Recent strips
 
