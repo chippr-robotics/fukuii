@@ -2330,11 +2330,16 @@ items:
   - id: B-208
     title: "Spec 018: record the user's decisions of 2026-11-11; changeset retention without a finalized block is 512; the C2b pre-code record"
     priority: P2
-    status: open
+    status: claimed
     area: storage
     size: S
     opened: 2026-11-11
     refs: []
     links:
       spec: specs/018-storage-engine-consolidation
+    claim:
+      by: cloud-dc960fdc
+      agent: main
+      since: 2026-11-11T11:11:26Z
+      heartbeat: 2026-11-11T11:11:26Z
     notes: "Decisions: merge C3a; 512 blocks of changesets where there is no finalized block (ETC); every new column family of the track in the release that first ships v; snap1 not advertised with the guard on until the overlay serves the window."
