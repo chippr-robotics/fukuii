@@ -36,7 +36,14 @@ final case class LogLine(seq: Long, time: String, level: String, logger: String,
   * The ring is lock-free: a writer takes the next sequence number and stores its line in that number's slot, a reader
   * collects the slots of the last `capacity` numbers and keeps those whose line carries the number it expects. A line
   * whose writer has its number but has not stored it yet is missing from that read, never out of order or duplicated.
-  * Lines are sanitised on capture (FR-020), so nothing a peer sent reaches a frame from a log line.
+  *
+  * The store is monotone: a slot keeps the line with the highest sequence number ever offered to it ([[store]]). A
+  * writer that took its number and was descheduled while others went a whole lap round the ring stores a line the ring
+  * has already replaced; that line is dropped, and does not overwrite the newer one. So once every writer has stored,
+  * the ring holds exactly the newest `capacity` lines, whatever the scheduling. While writers are in flight, a read
+  * may miss a line that is not stored yet, or one whose slot a lap newer line took while the read ran: it never shows
+  * a line out of order or twice. Lines are sanitised on capture (FR-020), so nothing a peer sent reaches a frame from a
+  * log line.
   *
   * `UnsynchronizedAppenderBase`, not `AppenderBase`: every logging thread passes through `doAppend`, and the ring needs
   * no lock, so it takes none.
@@ -78,8 +85,16 @@ class TuiLogRingAppender(capacity: Int, threshold: Level, zone: ZoneId = ZoneId.
       val seq = next.getAndIncrement()
       store(LogLine(seq, time, event.getLevel.toString, event.getLoggerName, text))
 
-  /** Puts `line` in its slot. Open to the tests, which make a writer late deterministically. */
-  private[console] def store(line: LogLine): Unit = slots.set(slot(line.seq), line)
+  /** Keeps `line` in its slot unless the slot holds a newer one: a writer that was descheduled for a lap of the ring
+    * must not overwrite what the lap wrote there (the lost-write race eye found in the slice 4 gate). Open to the
+    * tests, which make that writer late deterministically.
+    */
+  private[console] def store(line: LogLine): Unit =
+    slots.accumulateAndGet(
+      slot(line.seq),
+      line,
+      (held, offered) => if held != null && held.seq > offered.seq then held else offered
+    )
 
   private def slot(seq: Long): Int = (seq % capacity).toInt
 
