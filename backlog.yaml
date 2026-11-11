@@ -2112,19 +2112,16 @@ items:
   - id: B-189
     title: "Spec 027 UAT across all slices: the deferred manual gates (T029, T057, T081, T149 and slice 4/5 runs) on Mordor and a live TUI"
     priority: P2
-    status: claimed
+    status: open
     area: tui
     size: M
     opened: 2026-11-09
     refs: [user 2026-11-09]
     links:
       spec: specs/027-tui-dashboard
-    claim:
-      by: dev-node
-      agent: main
-      since: 2026-11-09T23:42:15Z
-      heartbeat: 2026-11-09T23:42:15Z
-    notes: "User 2026-11-09: merge each slice PR once green; one UAT across all slices when they are code complete. Includes SC-003 pidstat (<2% animating, <0.5% idle) and the <1 ms render median."
+    notes: |-
+      User 2026-11-09: merge each slice PR once green; one UAT across all slices when they are code complete. Includes SC-003 pidstat (<2% animating, <0.5% idle) and the <1 ms render median.
+      2026-11-11 released by dev-node: The user runs the manual UAT across all slices (2026-11-10).
   - id: B-190
     title: "Check AccountTrieAssembly's failed-store requeue: the task re-queues with next already advanced past the response"
     priority: P2
