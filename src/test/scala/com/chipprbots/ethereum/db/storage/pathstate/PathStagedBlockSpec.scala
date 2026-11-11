@@ -5,6 +5,7 @@ import org.apache.pekko.util.ByteString
 import org.scalatest.flatspec.AnyFlatSpec
 import org.scalatest.matchers.should.Matchers
 
+import com.chipprbots.ethereum.db.dataSource.DataSourceBatchUpdate
 import com.chipprbots.ethereum.db.dataSource.EphemDataSource
 import com.chipprbots.ethereum.db.storage.AppStateStorage
 import com.chipprbots.ethereum.db.storage.PathNodeStorage
@@ -18,7 +19,7 @@ class PathStagedBlockSpec extends AnyFlatSpec with Matchers:
   import PathStateTestKit.*
 
   final private class Fixture:
-    val source = EphemDataSource()
+    val source: EphemDataSource = EphemDataSource()
     val hashed = new HashedState
     val parent: BlockRef = block(1, hashed.root)
     seed(source, hashed, parent)
@@ -34,7 +35,9 @@ class PathStagedBlockSpec extends AnyFlatSpec with Matchers:
       new PathStagedBlock(state, of, parentOf)
     def execute(staged: PathStagedBlock): Unit =
       InMemoryWorldStateProxy.persistState(changed(worldOver(staged.storage, hashed.root, hashed.codes)))
-    def pointer(ref: BlockRef) = Some(appState.putBestBlockInfo(BlockInfo(ref.hash, ref.number)))
+    def pointer(ref: BlockRef): Some[DataSourceBatchUpdate] = Some(
+      appState.putBestBlockInfo(BlockInfo(ref.hash, ref.number))
+    )
 
   "A block staged on the unified layout" should "be committed in place, with its own records, in one batch" taggedAs
     UnitTest in {

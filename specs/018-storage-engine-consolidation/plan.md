@@ -1158,6 +1158,89 @@ drives this layout (C4d).
 store.
 
 
+### C3b wiring record (2026-11-11)
+
+C3b's second PR: block execution stages and commits a block on the unified layout (T093, T084, T094 in part), and the
+differential over real blocks that stands in for T075.
+
+**The adapter** (`PathStagedBlock`). Execution stages a block before it asks whether the block was executed already,
+and a layer can only be made over the state the disk holds. For a block that is applied that state is the block's
+own, so the layer is made when the execution first asks for the storage, and never for such a block: it reaches the
+commit with nothing staged, where its own records are written if it is still the anchor. A block is staged by its
+**header** (`stageBlockState(header)`): the parent is found by hash, and the staged changes are held to the state
+root the header carries, not to the world's (beacon).
+
+**In place or not at all, made true for the callers.** The commit of part 1 refuses a block that does not extend the
+anchor. This PR refuses the callers that could not commit in place **before the block runs**, each with
+`StateUnavailable`, a condition of this node's state and never a verdict on the block:
+
+| Caller | On the unified layout |
+| --- | --- |
+| `executeAndCommit` with the block adopted (the import of a block onto the head, a chain file) | the canonical commit, with the block and the best pointer in its batch |
+| `executeAndCommit` with the block not adopted (a side branch, the blocks of a reorganisation) | refused |
+| `executeAndValidateBlockFull` (`newPayload`: the state committed apart from the block) | refused; `newPayload`'s existing arm answers ACCEPTED, with no INVALID, no `markInvalidRecursive`, no deletion (beacon traced it) |
+| an execution with nothing staged (`getBackingMptStorage`) | `IllegalStateException` (dm 7.6): the chain file imported at start, test mode, a proposer's `executeBlock` |
+| `forkchoiceUpdated` to a head that is not the anchor, or asking for a payload | SYNCING, with no payload id; nothing moved, published or marked |
+
+And the node itself: it does not start network sync on the guard (ERROR at start), and the guard is refused at start
+with SNAP sync, with mining, with `import-chain-file` and with test mode, each of which would fail later or never
+finish. So no ETC, Mordor or ETH node follows a network on the guard before C4 (forge's condition). What it can do:
+take blocks from a chain file through the strict importer, and answer from the state it holds.
+
+**The differential (T075's substitute).** C0's pinned jar and ranges do not exist (B-203), so the same chains are
+imported in process on both layouts, through `BlockExecution.executeAndValidateBlocks`, the path a synced block and a
+chain file take. Every block validates against its header on each, so state root, receipts root, gas used, logs
+bloom, requests hash and access-list hash agree by construction. What is held beyond that is the disk.
+
+| Chain | Blocks | What is held |
+| --- | --- | --- |
+| the execution-apis chain (`ImportOnPositionsSpec`): proof of work, the merge, every fork to Amsterdam | 60 | after each block the rows of `t` and `u` are that block's state as a hash-store reference holds it, the anchor and best block are that block, receipts and access list are the reference's; the records take the disk back to genesis; a block with a wrong state root leaves everything; the hash store holds what the genesis load left and no node more; the same path with the guard off imports to the same head and writes nothing of the unified layout |
+| Mordor's first blocks (`MordorImportOnPositionsSpec`, forge): the shipped Mordor configuration, the proof-of-work validators, real Ethash seals | 256 | the same, against Mordor's own state roots: the ECIP-1017 reward of era 0; a forged seal refused with nothing touched |
+| execution-spec-tests, vendored (`EestImportOnPositionsSpec`): the regression vectors and `selfdestruct-stored-storage.json` | 47 kept, 5 rejected | after each block the disk is exactly the block's state, each node found among the rows by its hash; the record takes the rows back; a rejected block leaves rows, anchor and best block |
+| the Paris and Shanghai corpus (`EEST_IMPORT_POSITIONS`), frontier to shanghai | 11,262 kept, 596 rejected, in 8,835 fixtures | the same; 336 storage tries removed whole, 3,262 of their rows deleted and put back by the reverse; no tombstone |
+| the Amsterdam corpus (`tests@v21.0.0`), frontier to amsterdam | 27,352 kept, 5,715 rejected, in 26,503 fixtures | the same; 848 storage tries removed whole; no tombstone |
+
+The fixture oracle has no second store for a block's new state: it walks the state from the header's root, which
+validation has checked, finds each node among the disk's rows by its hash, and requires the disk to be those rows at
+those positions and no other. Both reviewers read it as sound for the rows, a replaced storage trie included. It
+does not look at contract code, which this track does not move.
+
+**The access-list prefetch** (from T045) reads the parent's rows through a view of its own. The chain's Amsterdam
+blocks are imported a second time with their lists supplied, as a peer serves them: each prefetch is handed a reader,
+and the disk ends the same.
+
+**Reviews of the code (beacon, forge: each SIGN WITH CHANGES, no critical finding; both confirmed nothing changes
+with the guard off).**
+
+| Finding | By | Change |
+| --- | --- | --- |
+| With the head at the anchor and a payload asked for, `forkchoiceUpdated` started a build over the hash store, which fails; the failure was swallowed, the answer was VALID with a payload id, and `getPayload` then had nothing | beacon | SYNCING with no payload id, said at ERROR |
+| The chain file imported at start executes with nothing staged: the node aborted while starting, after a notice that said it imports chain files | forge | refused at start with the guard, naming the `import` command and `admin_importChain`; the notice says the same. Test mode too |
+| The strict importer decides that a block is present by finding the head's state root in the hash store, which holds nothing on the unified layout: a file that overlapped the local chain was refused as a fork | forge | `BlockchainReader.holdsStateOf(header)`: the anchor on the unified layout, the root's node on the hash store |
+| The 35 proof-of-work blocks of the test chain run under an ETH configuration with their headers trusted: no ETC rule is tested | forge | `MordorImportOnPositionsSpec` |
+| Nothing showed that the hash store is left alone | beacon, forge | held in all three differentials |
+| Only Paris and Shanghai fixtures had run | beacon | the Amsterdam corpus, through the same case |
+| A state fault at `newPayload` was logged as an unnamed error | beacon | its own arm, at INFO |
+
+**Not taken, with the reason.** beacon: the gate of `forkchoiceUpdated` sits before the branch for a head that is a
+canonical ancestor, so such a head gets SYNCING where the specification expects VALID with nothing moved. Harmless
+while the guard is in development, and that branch reads the canonical index, which the head move of C4b replaces.
+beacon: check that the code of every account the walk meets is present; code is written by the world as it always
+was, to the same storage on both layouts. `saveLastBlock` still writes the best pointer after a batch (dm 7.1 has it
+write nothing): with no degraded commit the last imported block is the anchor, which both reviewers traced; the rule
+returns with the overlay commit.
+
+**Broken on purpose.** 16 rules of the wiring, one at a time: a commit without the block's records, a block
+committed as another, a discarded layer kept, an applied block not known to be, each of the refusals, the header's
+state root, the prefetch's reader, the gate of `forkchoiceUpdated` and its payload arm, the head's state looked for in
+the wrong store, each start-up refusal. Each is caught.
+
+**Not covered, and said so.** The node's own refusal to start sync on the guard is three lines of `StdNode.start`
+with no test. `eth_getWork` still builds over the hash store on the guard (forge; the proposer view, T111). A
+re-import of an older canonical block after a restart is refused as a state fault, with no message of its own for
+the operator (beacon). T075's recorded values, and T098 to T100, wait for C0.
+
+
 ### Destructive change (C8a and C8b): the vault protocol blocks
 
 ```

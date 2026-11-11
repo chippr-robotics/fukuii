@@ -95,7 +95,7 @@ trie-of 1 src/main/scala/com/chipprbots/ethereum/transactions/PendingTransaction
 # Serving and walking: what C2b left. Every walk reads by position now; the rows below are a store that is not the
 # state, the store a walk is handed (SNAP's own until C5a), and one check that C3c replaces.
 get-by-hash 1 src/main/scala/com/chipprbots/ethereum/network/snapserver/SnapServer.scala not the state: serveByteCodes reads the code store, named `storage` (kept)
-node-by-hash 2 src/main/scala/com/chipprbots/ethereum/domain/BlockchainReader.scala the definition of getMptNodeByHash and its call of getNode; its one caller left is ChainImporter's check that a state is held, which becomes stateAvailable (C3c, T116)
+node-by-hash 3 src/main/scala/com/chipprbots/ethereum/domain/BlockchainReader.scala the definition of getMptNodeByHash, its call of getNode, and holdsStateOf, which asks it on the hash store only (the unified layout asks the anchor, C3b); deleted with the Hash scheme (C8b)
 backing 1 src/main/scala/com/chipprbots/ethereum/blockchain/sync/BytecodeRecoveryActor.scala the store the bytecode recovery scan walks, by position since C2b: the store SNAP builds, before there is an anchor to take a view of; C5a
 backing 1 src/main/scala/com/chipprbots/ethereum/blockchain/sync/CombinedRecoveryScanActor.scala the store the combined recovery scan hands to each shard's walk, by position since C2b: the store SNAP builds, before there is an anchor; C5a
 backing 3 src/main/scala/com/chipprbots/ethereum/blockchain/sync/StorageRecoveryActor.scala two are the store the storage recovery scan and its closing check read, by position since C2b; the third is where recovered storage is written; all three are the store SNAP builds, C5a
@@ -112,7 +112,6 @@ backing-mpt 1 src/main/scala/com/chipprbots/ethereum/testmode/TestModeBlockExecu
 backing 1 src/main/scala/com/chipprbots/ethereum/jsonrpc/TestService.scala WRITER: the test_ RPC writes genesis storage tries over block 0's store; through the genesis commit in C3c (T108, T115)
 storage-mpt 1 src/main/scala/com/chipprbots/ethereum/jsonrpc/TestService.scala that write's storage trie, from the empty root with no owner; C3c (T108, T115)
 readonly 1 src/main/scala/com/chipprbots/ethereum/blockchain/data/GenesisDataLoader.scala WRITER: genesis builds its state in a buffer over the store; the genesis commit, C3c (T115)
-node-by-hash 1 src/main/scala/com/chipprbots/ethereum/blockchain/data/ChainImporter.scala asks whether a block's state is held by reading its root; stateAvailable in C3c (T116)
 
 # SNAP hand-off, the audit, repair and import: C5a, C5b and C5c.
 backing 1 src/main/scala/com/chipprbots/ethereum/blockchain/sync/snap/controller/StateIngest.scala WRITER: the store SNAP ingest and healing write the pivot's state to; the hand-off without a copy, C5a

@@ -1,4 +1,4 @@
-# Spec 018 Track C handoff: after C2b and the storage half of C3b (cloud session → whoever takes C3b part 2), 2026-11-11
+# Spec 018 Track C handoff: after C2b and C3b (cloud session → whoever takes C3c or C4a), 2026-11-11
 
 **From** `cloud-dc960fdc`, a cloud session whose container and `.local/` do not outlive it, which is why this is a
 tracked file and not a continuation under `.local/docs/continuations/`. **To** the session that claims B-056 (C2b) or
@@ -46,13 +46,24 @@ and `StateConfig`. forge and beacon signed the record's bytes. Nothing reads or 
   anchor to take a view of before the hand-off, so where their store comes from is C5a's.
 - The decisions follow-up merged as #1795, the ratchet as #1796.
 
-**C3b (B-058) is in flight**, in two PRs. **The storage half is written** (plan.md, "C3b storage record"): the world
-carries the storage tries it has replaced and tells its storage at `persistState`; `StateLock`; `StagedChanges` and
-the staged mode of `PathMptStorage` (one `Change(prior, next)` for each position a block touches);
-`PathStateStorage.stage(parent)` and `commitCanonical(staged, block, extra)`, one batch under the lock as a move of
-the clock; `RetentionPolicy` with the prune count in AppState; `StateMetrics`. **Nothing in block execution calls it
-yet.** The second PR is the wiring: T093, T094, T084, what the guard may be used for before C4, and the differential
-over real blocks.
+**C3b (B-058) is written**, in two PRs (plan.md, "C3b storage record" and "C3b wiring record").
+
+- **Storage** (#1800): the world carries the storage tries it has replaced and tells its storage at `persistState`;
+  `StateLock`; `StagedChanges` and the staged mode of `PathMptStorage` (one `Change(prior, next)` for each position a
+  block touches, one line of worlds to a layer); `PathStateStorage.stage(parent)` and
+  `commitCanonical(staged, block, extra)`, one batch under the lock as a move of the clock; `RetentionPolicy` with the
+  prune count in AppState; `StateMetrics`.
+- **Wiring**: `PathStagedBlock` (the `StagedBlockState` of the unified layout, its layer made at first use),
+  `stageBlockState(header)`, and what the guard is for until the overlay: **a block is committed in place or not at
+  all**. A block that is not adopted as it is executed, a payload's state committed apart from the block, an
+  execution with nothing staged and a `forkchoiceUpdated` to another head are each refused before anything runs; the
+  node does not start network sync on the guard, and the guard is refused at start with SNAP sync, mining,
+  `import-chain-file` and test mode.
+- **The differential** that stands in for T075: `ImportOnPositionsSpec` (the execution-apis chain),
+  `MordorImportOnPositionsSpec` (256 real Mordor blocks under the proof-of-work validators) and
+  `EestImportOnPositionsSpec` (fixtures; `EEST_IMPORT_POSITIONS=<dir>` runs a whole corpus:
+  `scripts/eest/fetch_fixtures.py` fetches one). Each imports through `executeAndValidateBlocks` and holds the disk to
+  each block's state.
 
 **The user decided four things on 2026-11-11** (plan.md, "Decisions of 2026-11-11"): C3a merges; 512 blocks of
 changesets where there is no finalized block; one downgrade barrier; no `snap1` advertisement under the guard until the
@@ -68,7 +79,8 @@ overlay.
 | `main/db/storage/PathNodeStorage.scala`, `AppStateStorage.scala`, `main/db/components/Storages.scala` | DONE | `read(PositionKey)`; `state.anchor`; `pathStateStorage` behind the guard |
 | `main/ledger/InMemoryWorldStateProxy.scala` | DONE (C3b) | `storageResets`, `initialiseAccount`, the reset at `persistState` |
 | `main/db/storage/pathstate/` (`StateLock`, `StagedChanges`, `PathStagedState`, `RetentionPolicy`, `StateMetrics`; `PathStateStorage`, `PathMptStorage`, `BlockDiffCodec`) | DONE (C3b part 1) | the staged layer and the canonical commit; `storageRows`, `rowUpdates` on `PathNodeStorage`; `state.changeset.pruned-to` |
-| `main/ledger/BlockExecution.scala`, `main/domain/Blockchain.scala`, `main/consensus/` | NOT STARTED (C3b part 2) | the wiring |
+| `main/db/storage/pathstate/PathStagedBlock.scala`, `main/domain/Blockchain.scala`, `main/ledger/BlockExecution.scala` | DONE (C3b part 2) | staging by header; the refusals of what cannot be committed in place |
+| `main/consensus/engine/EngineApiService.scala`, `main/nodebuilder/StdNode.scala`, `main/ConfigValidator.scala`, `main/blockchain/data/ChainImporter.scala` | DONE (C3b part 2) | the guard's scope: SYNCING for another head or a payload request, no network sync, the start-up refusals, `holdsStateOf` |
 | `test/mpt/PositionTestKit.scala`, `test/db/storage/pathstate/PathStateTestKit.scala` | DONE | `PositionMirror`, `OwnerPositionStore`, `RawTrieWalk.statePositions`; a state on both stores, on Ephem and RocksDB |
 
 ## Open compile errors
@@ -87,38 +99,25 @@ Read plan.md, "C2a part 1 record" and "C2a part 2 record", then:
   `test/blockchain/sync/RecoveryScannersPositionSpec.scala` (**freeze the hash-store answers before converting**, then
   hold both stores to them). `PathStateTestKit` has the pieces: `ChosenState`, `TwoWays` (the same nodes lost from both
   stores), `Lacking`, `StaleAfter`.
-- **C3b part 2, the wiring** (T093, T094, T084, T075's substitute):
-  - A `StagedBlockState` over `PathStateStorage`. **It must be lazy**: `BlockExecution` stages a block before it asks
-    whether the block was executed already (`BlockImportGate.alreadyExecuted`), and `stage(parent)` throws for a block
-    whose parent is not the anchor, which an already-applied block's is not. `commitCanonical(None, block, extra)` is
-    the door for a caller with nothing staged: it writes `extra` only when the block is the anchor, decided under the
-    lock. It needs the header (parent hash, state root), so `stageBlockState` takes a header, not a number.
-  - **One execution, one layer.** A retry after a missing node, a stale view or a payload sent twice starts from a
-    fresh `stage`: what an abandoned attempt wrote must not be in the block's changes.
-  - `executeBlock(staged = None)` throws on a path-live store (dm 7.6); `saveLastBlock` writes nothing there; the
-    single-block path (`executeAndValidateBlockFull`) commits state with no block data today, which a commit that
-    moves the anchor with the best pointer cannot do.
-  - **The guard's scope** (plan.md, the decision in the C3b storage record): linear import only. `newPayload`, a
-    `forkchoiceUpdated` to another block, a reorganisation and a side branch end in a local state fault, never INVALID,
-    never a peer penalty; the node does not start network sync on the guard (forge refuses to sign otherwise).
-    `ConsensusStateFault` is C4b's task (T148): what C3b needs is that nothing reaches it.
-  - **The differential**, in-process, since C0's pinned jar and ranges do not exist (B-203): the same chain imported
-    with the guard off and on, every state root, receipts root and gas used equal; `t` and `u` equal to a raw walk
-    after each block; a reverse from each record. It must include the Amsterdam access-list vectors on the real staged
-    layer, the Paris and Shanghai fixtures that SELFDESTRUCT an account with storage, a CREATE frame that reverts after
-    a collision with storage (forge), synthetic ETC-config chains (pre-Atlantis roots for each transaction, Atlantis
-    touch-deletion, SELFDESTRUCT then CREATE2 in one block), and a rejected block that leaves the anchor, `t`, `u` and
-    `v` as they were. A path-live datadir needs its genesis rows and anchor first (dm 5.4).
-  - `TestModeWorldStateProxy` has its own `deleteAccount` and no `initialiseAccount`: it needs the world's
-    `storageResets` in C3c (T108, forge).
-  - **From the reviews of the storage half** (plan.md has the table): only import may use `stage`, and the layer
-    refuses a world that does not follow the last one persisted on it; a decorator that drops the trie's removals
-    (`StxLedger`, `EthSimulateService`, `GenesisDataLoader`) must never wrap the staged storage; the block's
-    `BlockRef` takes its state root from the **header**; `newPayload`'s `extra` carries no best-block pointer, since
-    "already applied" writes whatever `extra` holds; a block that is the anchor already is never staged; the
-    `require` that a block follows its parent throws `IllegalArgumentException`, which the wiring must not take for a
-    verdict on the block; pin that the staged storage is never wrapped by the decoded-node cache.
-  - `finalized` is wired as none in `Storages`; C4d supplies the consensus client's.
+- **C3c** (T102 to T117) is what makes the guard usable beyond a strict import: the proposer view (`eth_getWork`,
+  the Engine API builder and the PoW generators still build over the hash store, which holds nothing on the unified
+  layout), the genesis commit (the differentials seed the genesis rows with `PathStateTestKit.seedPositions`), the
+  lenient chain import and test mode (both execute with nothing staged, and are refused at start with the guard
+  until then: lift each refusal in `ConfigValidator.stateGuardErrors` with the code that makes it safe), and the
+  ported harnesses. `TestModeWorldStateProxy` has its own `deleteAccount` and no `initialiseAccount`: it needs the
+  world's `storageResets` (T108, forge).
+- **C4a** brings back what C3b refuses: the overlay commit for a block that does not extend the anchor
+  (`buildExtra(adopted)`, `NotExtendingAnchor`, `saveLastBlock` writing nothing), `StateView.ownerRows` over layers,
+  `stateAvailable(hash)`, the served-root window, and SNAP advertised again. C4b: the head move, `ConsensusStateFault`
+  (T148), the refusal of a reverse across a tombstone. C4d: `newPayload` on a forward layer, `forkchoiceUpdated`
+  moving the head (its gate today sits before the canonical-ancestor branch: beacon), the consensus client's
+  finalized block for retention (`finalized` is wired as none in `Storages`).
+- **From the reviews, for whoever touches these**: only import may use `stage`, and a layer refuses a world that does
+  not follow the last one persisted on it; a decorator that drops the trie's removals (`StxLedger`,
+  `EthSimulateService`, `GenesisDataLoader`) must never wrap the staged storage; `newPayload`'s `extra` must carry no
+  best-block pointer, since "already applied" writes whatever `extra` holds; a reader that lists one owner's rows by
+  a scan must check each node against its hash, leftover rows being allowed there; on ETH non-finality has lasted
+  longer than 512 blocks, so a reorganisation past the floor must end in a state fault, never INVALID.
 
 Four things the task text does not say:
 
