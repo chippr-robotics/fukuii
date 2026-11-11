@@ -2419,3 +2419,14 @@ items:
     refs: []
     links: {}
     notes: "Failed once in a full testEssential run in a cloud container (TimeoutException: Future timed out after [5 seconds], SubscriptionManagerSpec.scala:216); passes 3 of 3 run alone. A timed wait on an actor delivery: against the constitution's rule that tests are deterministic. Seen during spec 018 C2b; not touched by it."
+  - id: B-216
+    title: "Spec 018 C5a: what the SNAP controller does when a validation walk ends in a state fault (StateValidationModule reopens healing for any Left but a missing root)"
+    priority: P3
+    status: open
+    area: storage
+    size: S
+    opened: 2026-11-11
+    refs: []
+    links:
+      spec: specs/018-storage-engine-consolidation
+    notes: "C2b made StateValidator answer Left('State fault, not a hole: ...') when a view goes stale or a state is not held, so a node that is there is never queued for healing. StateValidationModule still treats that Left as it treats a corrupt node: back to the healing phase. Unreachable until the validator is handed a view (it reads SNAP's own store today); decide the reaction (retry the validation on a fresh view) with C5a's hand-off. beacon, C2b consult."
