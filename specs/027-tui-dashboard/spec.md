@@ -4,9 +4,9 @@
 
 **Created**: 2026-11-07
 
-**Status**: Active (2026-11-10). Slice 1 (worms, glyphs, tiers) merged as #1752, slice 4a (peer scoring) as #1782, slice 2 (tick, motion, non-blocking loop) as #1783 and slice 3 (views, layout, alerts) as #1784; slices 4 and 5 follow, one PR each, from the plan and 150 tasks merged as #1742. The manual gate runs (T029, T057, T081, T149 and later) are one UAT across all slices once they are code complete (user, 2026-11-09).
+**Status**: Active (2026-11-10). Slice 1 (worms, glyphs, tiers) merged as #1752, slice 4a (peer scoring) as #1782, slice 2 (tick, motion, non-blocking loop) as #1783 slice 3 (views, layout, alerts) as #1784 and slice 4 (log tail, peer details) as #1787; slice 5 (consensus-layer and mining panels) is the last, one PR each, from the plan and 150 tasks merged as #1742. The manual gate runs (T029, T057, T081, T106, T123, T149) are one UAT across all slices once they are code complete (user, 2026-11-09; backlog B-189).
 
-**In flight**: `feat/027-s4-logs-peers` and `feat/027-s5-chain-panels` (`dev-node`, local session): slice 4 in PR; slice 5 in review, on top of slice 4
+**In flight**: `feat/027-s5-chain-panels` (`dev-node`, local session): slice 5 in PR; then the all-slices UAT (B-189) and Phase 7 closure
 
 **Input**: The design proposal #1490 carried as `docs/architecture/tui-design-proposal.md` ("the worm goes to the
 brain": five phased increments, views, tiers, animation, glyph and colour system, data inventory, architecture, testing,
