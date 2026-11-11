@@ -2365,3 +2365,15 @@ items:
     links:
       spec: 018
     notes: "beacon and conduit, review of C2b PR B (2026-11-11). Old behaviour (the tip check of getAccount(BestBranch, address, n)), kept on purpose by BlockchainReader.accountIn / accountProofIn so that C2b changes no RPC answer. It is also what answers the pending block with the empty account. Better: answer from the held state, or with an error. Decide with conduit; hive rpc-compat does not exercise it."
+  - id: B-211
+    title: "RPC: GraphQL call and estimateGas reach EthInfoService without the controller, so without the stale-view retry (StateRead.request)"
+    priority: P3
+    status: open
+    area: rpc
+    size: S
+    opened: 2026-11-11
+    refs: []
+    links:
+      spec: 018
+    depends_on: [B-058]
+    notes: "conduit and beacon, review of C2b PR B (2026-11-11). GraphQLSchema:813-814, :899-900 call callOutcome / estimateGas directly. With the guard on, a stale view there is an error of the field and not a retry. Matters only once C3b's in-place commit can make a view stale. Also: StxLedger.runSimulated and the estimate search still make a world from the header they are given when handed none; no production caller does, and the arms could be deleted with their test callers moved."
