@@ -1,9 +1,12 @@
 package com.chipprbots.ethereum.db.storage
 
+import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicLong
 
 import org.apache.pekko.util.ByteString
 
+import com.chipprbots.ethereum.db.storage.pathstate.StateFault
+import com.chipprbots.ethereum.mpt.MerklePatriciaTrie.MissingNodeException
 import com.chipprbots.ethereum.mpt.MptNode
 import com.chipprbots.ethereum.mpt.NibblePath
 
@@ -30,7 +33,8 @@ final class PrefetchNodeReader private (
     budgetBytes: Long,
     onLoaded: ByteString => Unit,
     spent: AtomicLong,
-    loaded: AtomicLong
+    loaded: AtomicLong,
+    faulted: Option[AtomicBoolean]
 ) extends MptStorageDecorator:
 
   def this(
@@ -38,16 +42,18 @@ final class PrefetchNodeReader private (
       cache: Option[DecodedNodeCache],
       budgetBytes: Long,
       onLoaded: ByteString => Unit = _ => ()
-  ) = this(underlying, cache, budgetBytes, onLoaded, new AtomicLong, new AtomicLong)
+  ) = this(underlying, cache, budgetBytes, onLoaded, new AtomicLong, new AtomicLong, None)
 
-  /** One trie's view of the parent state, on the SAME budget and the same counts: a block's prefetch is one budget,
-    * however many tries it reads.
+  /** One trie's view of the parent state, on the SAME budget, the same counts and the same stop: a block's prefetch is
+    * one budget, however many tries it reads, and a fault met in one trie ends it in all of them.
     */
   override protected def decorate(scoped: MptStorage): MptStorage =
-    new PrefetchNodeReader(scoped, cache, budgetBytes, onLoaded, spent, loaded)
+    new PrefetchNodeReader(scoped, cache, budgetBytes, onLoaded, spent, loaded, faulted)
 
-  /** True when the cache's share for this block's prefetch is used up. A reader with no cache never is. */
-  def exhausted: Boolean = cache.isDefined && spent.get >= budgetBytes
+  /** True when this block's prefetch should read no more: the cache's share for it is used up (a reader with no cache
+    * never uses it up), or, for a reader that stops on a fault, a read met one.
+    */
+  def exhausted: Boolean = faulted.exists(_.get) || (cache.isDefined && spent.get >= budgetBytes)
 
   /** Nodes this reader read from the database (cache hits are not counted). */
   def nodesLoaded: Long = loaded.get
@@ -57,7 +63,13 @@ final class PrefetchNodeReader private (
     val hit = cache.flatMap(c => Option(c.get(key)))
     hit.getOrElse {
       val generation = cache.fold(0L)(_.generation) // before the read: see DecodedNodeCache.putIfCurrent
-      val node = super.read(nodeId, path)
+      val node =
+        try super.read(nodeId, path)
+        catch
+          case fault: (MissingNodeException | StateFault) =>
+            // The fault is the caller's to count, as before. A reader that stops on one reads nothing after it.
+            faulted.foreach(_.set(true))
+            throw fault
       loaded.incrementAndGet()
       cache.foreach { c =>
         if spent.addAndGet(DecodedNodeCache.weigh(node)) <= budgetBytes then
@@ -78,3 +90,26 @@ final class PrefetchNodeReader private (
   override def storeRawNodes(nodes: Seq[(ByteString, Array[Byte])]): Unit = readOnly
 
   override def persist(): Unit = ()
+
+object PrefetchNodeReader:
+
+  /** A reader that ends its block's prefetch at the first node it cannot have: a missing or corrupt node, or a
+    * [[com.chipprbots.ethereum.db.storage.pathstate.StateFault]] of the storage it reads. For a parent state read
+    * through a view (spec 018 data-model 6.3): once a view is stale every further read of it is wasted, and a prefetch
+    * only warms caches. The node that faulted was never put in the cache: only a node its storage returned is.
+    */
+  def stoppingOnFault(
+      underlying: MptStorage,
+      cache: Option[DecodedNodeCache],
+      budgetBytes: Long,
+      onLoaded: ByteString => Unit
+  ): PrefetchNodeReader =
+    new PrefetchNodeReader(
+      underlying,
+      cache,
+      budgetBytes,
+      onLoaded,
+      new AtomicLong,
+      new AtomicLong,
+      Some(new AtomicBoolean)
+    )
