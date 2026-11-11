@@ -12,11 +12,10 @@ import org.scalatestplus.scalacheck.ScalaCheckPropertyChecks
 import com.chipprbots.ethereum.db.dataSource.EphemDataSource
 import com.chipprbots.ethereum.db.storage.*
 import com.chipprbots.ethereum.mpt.MerklePatriciaTrie.defaultByteArraySerializable
-import com.chipprbots.ethereum.mpt.MptVisitors.LeafWalkVisitor
 import com.chipprbots.ethereum.mpt.MptVisitors.PathTrackingLeafWalkVisitor
 import com.chipprbots.ethereum.testing.Tags.*
 
-/** Unit tests for LeafWalkVisitor and PathTrackingLeafWalkVisitor.
+/** Unit tests for PathTrackingLeafWalkVisitor, with and without the keys it tracks.
   *
   * Both visitors are used by the SNAP healing layer (BytecodeRecoveryActor and StorageRecoveryActor) to walk the state
   * trie and find missing nodes. They have zero existing tests despite being on the critical path for SNAP sync
@@ -35,14 +34,14 @@ class MptVisitorSpec extends AnyFunSuite with ScalaCheckPropertyChecks:
   private def freshTrie(storage: MptStorage): MerklePatriciaTrie[Array[Byte], Array[Byte]] =
     MerklePatriciaTrie[Array[Byte], Array[Byte]](storage)
 
-  // Walk a trie from its root hash using LeafWalkVisitor.
+  // Walk a trie from its root hash using PathTrackingLeafWalkVisitor.
   // Returns the values from all leaves in visit order.
   private def walkLeaves(rootHash: Array[Byte], storage: MptStorage): Seq[ByteString] =
     // EmptyRootHash is a sentinel for an empty trie — no node is ever stored under it.
     if java.util.Arrays.equals(rootHash, MerklePatriciaTrie.EmptyRootHash) then Seq.empty
     else
       val collected = mutable.ArrayBuffer.empty[ByteString]
-      val visitor = new LeafWalkVisitor(storage, leaf => collected += leaf.value)
+      val visitor = new PathTrackingLeafWalkVisitor(storage, ByteString.empty, (_, leaf) => collected += leaf.value)
       MptTraversals.dispatch(HashNode(rootHash), visitor)
       collected.toSeq
 
@@ -58,17 +57,17 @@ class MptVisitorSpec extends AnyFunSuite with ScalaCheckPropertyChecks:
       collected.toSeq
 
   // ---------------------------------------------------------------------------
-  // LeafWalkVisitor — leaf count and value correctness
+  // PathTrackingLeafWalkVisitor — leaf count and value correctness
   // ---------------------------------------------------------------------------
 
-  test("LeafWalkVisitor visits no leaves in an empty trie", UnitTest, MPTTest) {
+  test("PathTrackingLeafWalkVisitor visits no leaves in an empty trie", UnitTest, MPTTest) {
     val storage = freshStorage()
     val trie = freshTrie(storage)
     val leaves = walkLeaves(trie.getRootHash, storage)
     assert(leaves.isEmpty, s"Expected 0 leaves, got ${leaves.size}")
   }
 
-  test("LeafWalkVisitor visits exactly one leaf for a single key-value", UnitTest, MPTTest) {
+  test("PathTrackingLeafWalkVisitor visits exactly one leaf for a single key-value", UnitTest, MPTTest) {
     val storage = freshStorage()
     val value = Array[Byte](0x42)
     val trie = freshTrie(storage).put(Array[Byte](0x10), value)
@@ -77,7 +76,11 @@ class MptVisitorSpec extends AnyFunSuite with ScalaCheckPropertyChecks:
     assert(leaves.head.toArray.sameElements(value))
   }
 
-  test("LeafWalkVisitor visits all leaves for two keys with different first nibble (branch root)", UnitTest, MPTTest) {
+  test(
+    "PathTrackingLeafWalkVisitor visits all leaves for two keys with different first nibble (branch root)",
+    UnitTest,
+    MPTTest
+  ) {
     val storage = freshStorage()
     val k1 = Array[Byte](0x10)
     val k2 = Array[Byte](0xf0.toByte)
@@ -90,7 +93,11 @@ class MptVisitorSpec extends AnyFunSuite with ScalaCheckPropertyChecks:
     assert(valueSet == Set(v1.toSeq, v2.toSeq))
   }
 
-  test("LeafWalkVisitor visits all leaves for two keys with common prefix (extension root)", UnitTest, MPTTest) {
+  test(
+    "PathTrackingLeafWalkVisitor visits all leaves for two keys with common prefix (extension root)",
+    UnitTest,
+    MPTTest
+  ) {
     val storage = freshStorage()
     val k1 = Array[Byte](0x11, 0x11)
     val k2 = Array[Byte](0x11, 0x00)
@@ -99,7 +106,7 @@ class MptVisitorSpec extends AnyFunSuite with ScalaCheckPropertyChecks:
     assert(leaves.size == 2, s"Expected 2 leaves, got ${leaves.size}")
   }
 
-  test("LeafWalkVisitor visits all 16 leaves when keys span all branch nibbles", UnitTest, MPTTest) {
+  test("PathTrackingLeafWalkVisitor visits all 16 leaves when keys span all branch nibbles", UnitTest, MPTTest) {
     val storage = freshStorage()
     val entries = (0 until 16).map(i => (Array[Byte]((i << 4).toByte), Array[Byte](i.toByte)))
     val trie = entries.foldLeft(freshTrie(storage)) { case (t, (k, v)) => t.put(k, v) }
@@ -108,7 +115,7 @@ class MptVisitorSpec extends AnyFunSuite with ScalaCheckPropertyChecks:
   }
 
   test(
-    "LeafWalkVisitor visits no leaf twice (all visited values are distinct when values are unique)",
+    "PathTrackingLeafWalkVisitor visits no leaf twice (all visited values are distinct when values are unique)",
     UnitTest,
     MPTTest
   ) {
@@ -120,7 +127,7 @@ class MptVisitorSpec extends AnyFunSuite with ScalaCheckPropertyChecks:
     assert(unique.size == leaves.size, s"Duplicate leaves detected: ${leaves.size} visits, ${unique.size} unique")
   }
 
-  test("LeafWalkVisitor count matches insert count for random key-value sets", UnitTest, MPTTest) {
+  test("PathTrackingLeafWalkVisitor count matches insert count for random key-value sets", UnitTest, MPTTest) {
     val pairsGen: Gen[Map[Seq[Byte], Seq[Byte]]] = Gen.mapOf(
       for
         k <- Gen.listOfN(4, Arbitrary.arbitrary[Byte])

@@ -99,7 +99,6 @@ object CheckpointCli extends Logger:
     }
     val chainId = builder.blockchainConfig.chainId.value
     val exporter = new CheckpointExporter(
-      storages.stateStorage,
       storages.evmCodeStorage,
       reader,
       chainId

@@ -11,7 +11,11 @@ import com.chipprbots.ethereum.mpt.*
   * In the Ethereum state trie, the full path equals keccak256(address) in nibble form. Converting nibbles back to bytes
   * gives the 32-byte account hash needed by StorageTask.
   *
-  * Used by StorageRecoveryActor (Bug 20 hardening) to recover missing contract storage tries.
+  * Used by the recovery scans (Bug 20 hardening) to find missing contract storage tries and bytecodes.
+  *
+  * It reads each node at the path it has tracked to it (spec 018 Track C): `storage` is the storage of the ONE trie
+  * being walked (`forOwner`), and `pathPrefix` the nibbles from that trie's root, also when the walk starts at a
+  * subtree. A store keyed by hash ignores the path.
   *
   * @param onHole
   *   what to do with a node the store does not hold, given the nibble path to it. `None` rethrows, which ends the walk,
@@ -38,10 +42,12 @@ class PathTrackingLeafWalkVisitor(
     onLeaf(ByteString(bytes), leaf)
 
   override def visitHash(hashNode: HashNode): HashNodeResult[Unit] =
+    // the prefix is nibbles the trie itself gave: its array is this read's own, and is not checked again
+    def here = storage.getAt(NibblePath.wrap(pathPrefix.toArray), hashNode.hash)
     onHole match
-      case None => ResolveResult(storage.get(hashNode.hash))
+      case None => ResolveResult(here)
       case Some(report) =>
-        try ResolveResult(storage.get(hashNode.hash))
+        try ResolveResult(here)
         catch
           // A node that does not decode reads as a CorruptNodeException, a missing node for execution's sake. Here it
           // still ends the walk: only an absent node is a hole (spec 022 T062).

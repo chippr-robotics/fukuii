@@ -37,6 +37,13 @@ pre-code record, with what conduit, herald and beacon changed, is in plan.md.
   (`InstanceConfig.statePathLive`), not from `StateLayoutConfig`, which is left for storages built outside a node. **A reader that holds a storage across many reads and turns a failed read into "absent" has the same
   defect the server had**: look for `catch case _: Throwable` around a `get` in every walker of the fourth PR.
   `PathStateTestKit.StaleAfter` is a storage that goes stale after a given number of reads, for exactly that test.
+- **Walking is done** (T055, T059, T060, T061): the recovery scans, the state validator, the shard enumerator, the
+  leaf walk and the checkpoint export read every node at its position. plan.md, "C2b walkers record". What each walk
+  answers on a hash store was frozen before it was touched (`test/resources/spec018/walker-verdicts-hash-store.txt`).
+  **`MptStorage.nodesSharedAcrossTries`** is what a walk asks before it skips a storage trie for having seen its root:
+  false on the position store, where two accounts with one root hold two tries (spec 022 V3). The scans and the
+  validator are still HANDED SNAP's own store (`getBackingStorage(pivot)`, `getOrCreateMptStorage(pivot)`): there is no
+  anchor to take a view of before the hand-off, so where their store comes from is C5a's.
 - The decisions follow-up merged as #1795, the ratchet as #1796.
 
 Next after it: **C3b** (B-058, the staged commit), which needs C3a and C2a and not C2b.
@@ -63,12 +70,14 @@ overlay.
 
 Read plan.md, "C2a part 1 record" and "C2a part 2 record", then:
 
-- **C2b**: the fourth PR is walking (T055, T059 to T061): checkpoint export, the recovery scans, positioned visitors
-  for the three walkers that see only a hash. Its work list is what is left of the allow-list's section "Serving and
-  walking". Two models for a differential: `test/jsonrpc/conformance/RpcReadersOnPositionsSpec.scala` (one real chain,
-  its state copied into the position store of the same datadir with `PathStateTestKit.seedPositions`, two nodes, same
-  questions) and `test/network/snapserver/SnapServePositionStoreSpec.scala` (one state held two ways, and a second
-  state with chosen keys: **hashed keys give no long extension, and a path is miscounted through an extension**).
+- **C2b is complete once its four PRs have merged** (then `backlog.py done B-056`). Three models for a differential,
+  all in the tree: `test/jsonrpc/conformance/RpcReadersOnPositionsSpec.scala` (one real chain, its state copied into
+  the position store of the same datadir with `PathStateTestKit.seedPositions`, two nodes, same questions);
+  `test/network/snapserver/SnapServePositionStoreSpec.scala` (one state held two ways, and a second with chosen keys:
+  **hashed keys give no long extension, and a path is miscounted through an extension**); and
+  `test/blockchain/sync/RecoveryScannersPositionSpec.scala` (**freeze the hash-store answers before converting**, then
+  hold both stores to them). `PathStateTestKit` has the pieces: `ChosenState`, `TwoWays` (the same nodes lost from both
+  stores), `Lacking`, `StaleAfter`.
 - **C3b**: start at T087 (`StateLock`), which is what makes the `StateLockHeld` that `ChangesetStorage` asks for, then
   T088 to T091. The commit writes its batch inside `StateMoveLog.inFlight(move) { … }`, takes the anchor from
   `move.newAnchor`, and keeps a **persisted** prune cursor: `ChangesetStorage` never scans for heights (data-model 4.1).

@@ -88,7 +88,8 @@ final class CombinedRecoveryScanner(
     * failure, whichever shard's future the wait happens to see first.
     */
   def run(): RecoveryScanResult =
-    val shards = ShardEnumerator.enumShards(scanRoot, storageForShard(), shardDepth)
+    val enumerating = storageForShard()
+    val shards = ShardEnumerator.enumShards(scanRoot, enumerating, shardDepth)
     val shardCount = shards.length
 
     // An empty state trie has nothing to recover; never persist a checkpoint for it (invariant: shardCount >= 1).
@@ -100,7 +101,10 @@ final class CombinedRecoveryScanner(
       val accBytecodes = mutable.ArrayBuffer.from(resumed.map(_.missingBytecodes).getOrElse(Vector.empty))
       val accStorage = mutable.ArrayBuffer.from(resumed.map(_.missingStorageTries).getOrElse(Vector.empty))
       val seenCodeHashes = mutable.HashSet.from(accBytecodes)
-      val seenStorageRoots = mutable.HashSet.from(accStorage.map(_._2))
+      // by root on a hash store, by account and root where each account has a trie of its own (spec 018 Track C)
+      val shared = enumerating.nodesSharedAcrossTries
+      val seenStorageRoots =
+        mutable.HashSet.from(accStorage.map((acct, root) => CombinedRecoveryScan.storageTrieKey(shared, acct, root)))
 
       // Fast path: the checkpoint is already complete (e.g. the process died during the download phase). Skip the scan
       // and hand back the persisted gaps so download can resume without re-walking the trie.
@@ -129,7 +133,8 @@ final class CombinedRecoveryScanner(
         def mergeAndPersist(idx: Int, scan: CombinedRecoveryScan): Unit = lock.synchronized {
           scan.missingBytecodes.foreach(h => if seenCodeHashes.add(h) then accBytecodes += h)
           scan.missingStorageTries.foreach { case (acct, root) =>
-            if seenStorageRoots.add(root) then accStorage += ((acct, root))
+            if seenStorageRoots.add(CombinedRecoveryScan.storageTrieKey(shared, acct, root)) then
+              accStorage += ((acct, root))
           }
           missingStorageCount.set(accStorage.size.toLong)
           holes += scan.holes

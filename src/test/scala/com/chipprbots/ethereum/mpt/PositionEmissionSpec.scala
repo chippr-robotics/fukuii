@@ -150,7 +150,8 @@ class PositionEmissionSpec extends AnyFlatSpec with Matchers:
         (1 to 80).foreach(_ => applyOp(twin, source.next()))
         if twin.positions.rows.nonEmpty then
           // the whole trie in memory, so that the collapse walks all of it
-          val whole = MptTraversals.parseTrieIntoMemory(HashNode(twin.root), twin.reference)
+          val whole = com.chipprbots.ethereum.mpt.MptVisitors.MptConstructionVisitor
+            .parseTrieIntoMemory(HashNode(twin.root), twin.reference)
           val fresh = stripCachedEncodings(whole)
           val (plainRoot, plainNodes) = MptTraversals.collapseTrie(fresh)
           val (positionedRoot, positionedNodes) =
@@ -175,7 +176,8 @@ class PositionEmissionSpec extends AnyFlatSpec with Matchers:
     val twin = new TwinTrie
     val source = new OpSource(7L, Keys.Dense)
     (1 to 40).foreach(_ => applyOp(twin, source.nextInsert()))
-    val whole = MptTraversals.parseTrieIntoMemory(HashNode(twin.root), twin.reference)
+    val whole = com.chipprbots.ethereum.mpt.MptVisitors.MptConstructionVisitor
+      .parseTrieIntoMemory(HashNode(twin.root), twin.reference)
     val base = NibblePath(0x3, 0xc)
     val (_, fromRoot) = MptTraversals.collapseTrieAt(stripCachedEncodings(whole), NibblePath.Empty)
     val (_, fromBase) = MptTraversals.collapseTrieAt(stripCachedEncodings(whole), base)

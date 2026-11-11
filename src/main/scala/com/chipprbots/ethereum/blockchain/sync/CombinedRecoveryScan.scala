@@ -32,6 +32,10 @@ final class CombinedRecoveryScan(
     onAccount: Boolean => Unit = _ => ()
 ):
 
+  // The account trie, and whether a storage trie seen under one account stands for another's (spec 018 Track C).
+  private val accountTrie = mptStorage.forOwner(None)
+  private val shared = mptStorage.nodesSharedAcrossTries
+
   private val seenCodeHashes = mutable.HashSet.empty[ByteString]
   private val seenStorageRoots = mutable.HashSet.empty[ByteString]
   private val missingCode = mutable.ArrayBuffer.empty[ByteString]
@@ -49,9 +53,13 @@ final class CombinedRecoveryScan(
           if evmCodeStorage.get(account.codeHash.value).isEmpty then missingCode += account.codeHash.value
         // Storage: a contract whose storage-root node is referenced but absent from MptStorage.
         val isContract = account.storageRoot != Account.EmptyStorageRootHash
-        if isContract && seenStorageRoots.add(account.storageRoot.value) then
+        if isContract && seenStorageRoots.add(
+            CombinedRecoveryScan.storageTrieKey(shared, accountHash, account.storageRoot.value)
+          )
+        then
           try
-            val _ = mptStorage.get(account.storageRoot.toArray)
+            // the root of THIS account's storage trie
+            val _ = mptStorage.forOwner(Some(accountHash)).getAt(NibblePath.Empty, account.storageRoot.toArray)
           catch case _: MerklePatriciaTrie.MPTException => missingStorage += ((accountHash, account.storageRoot.value))
         onAccount(isContract)
       case _ => () // skip malformed account RLP, as both legacy scans do
@@ -60,7 +68,7 @@ final class CombinedRecoveryScan(
   def scanFrom(rootHash: ByteString): Unit =
     MptTraversals.dispatch(
       HashNode(rootHash.toArray),
-      new PathTrackingLeafWalkVisitor(mptStorage, ByteString.empty, onLeaf)
+      new PathTrackingLeafWalkVisitor(accountTrie, ByteString.empty, onLeaf)
     )
 
   /** Walk the subtree `root`, with `pathPrefix` the nibbles consumed to reach it (for sharding). An absent node is
@@ -70,7 +78,7 @@ final class CombinedRecoveryScan(
   def scanShard(root: MptNode, pathPrefix: ByteString): Unit =
     MptTraversals.dispatch(
       root,
-      new PathTrackingLeafWalkVisitor(mptStorage, pathPrefix, onLeaf, Some(_ => holeCount += 1))
+      new PathTrackingLeafWalkVisitor(accountTrie, pathPrefix, onLeaf, Some(_ => holeCount += 1))
     )
 
   def missingBytecodes: Seq[ByteString] = missingCode.toSeq
@@ -79,3 +87,15 @@ final class CombinedRecoveryScan(
 
   /** Subtrees [[scanShard]] could not read: nothing under each of them was looked at. */
   def holes: Long = holeCount
+
+object CombinedRecoveryScan:
+
+  /** What a scan tells a storage trie by, when it asks whether it has looked at this one already.
+    *
+    * Where a node is stored once whatever trie holds it (`shared`, a hash store), its root: the trie two accounts name
+    * is one trie, looked at once and fetched once. Where each account has a trie of its own (a position store), the
+    * account as well: the second account's trie can be missing while the first is whole (spec 022 V3), and a scan that
+    * skipped it for having seen its root would never find that.
+    */
+  def storageTrieKey(shared: Boolean, accountHash: ByteString, storageRoot: ByteString): ByteString =
+    if shared then storageRoot else accountHash ++ storageRoot

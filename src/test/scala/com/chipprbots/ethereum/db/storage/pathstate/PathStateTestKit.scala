@@ -175,6 +175,131 @@ object PathStateTestKit:
       throw new UnsupportedOperationException("a view that is only read")
     override def persist(): Unit = ()
 
+  /** A hash store that lost the nodes `missing` names: a read of one says the node is missing, as a store that never
+    * had it does.
+    */
+  final class Lacking(under: MptStorage, missing: Set[ByteString]) extends MptStorage:
+    override def get(nodeId: Array[Byte]): MptNode =
+      if missing(ByteString(nodeId)) then throw new MerklePatriciaTrie.MissingNodeException(ByteString(nodeId))
+      else under.get(nodeId)
+    override def updateNodesInStorage(newRoot: Option[MptNode], toRemove: Seq[MptNode]): Option[MptNode] =
+      throw new UnsupportedOperationException("a store that is only read")
+    override def persist(): Unit = ()
+
+  /** A state whose keys are chosen, so that its tries have what hashed keys almost never give (a path through either is
+    * where a position is miscounted):
+    *   - extensions many nibbles long, in the account trie (`3abcd…`, 4 nibbles; `1111 0…`, 62) and in the storage
+    *     tries;
+    *   - nodes embedded in their parent: `small` holds the slots `big` holds with one-byte values, so the two leaves
+    *     under `7777…` sit inside their branch, and that branch inside the extension above it.
+    *
+    * `holder` and `twin` hold the same storage trie. `holder`, `small` and `coded` have code; `twin` has `holder`'s.
+    */
+  final class ChosenState(
+      val nodes: MptStorage = new ReferenceStore,
+      val codes: EvmCodeStorage = new EvmCodeStorage(EphemDataSource())
+  ):
+    import com.chipprbots.ethereum.domain.CodeHash
+    import com.chipprbots.ethereum.domain.TrieRoot
+    import com.chipprbots.ethereum.mpt.byteStringSerializer
+
+    /** A node of the state as stored, by its hash. */
+    def load(hash: Array[Byte]): Array[Byte] = nodes.get(hash).encode
+
+    val slotKeys: Seq[ByteString] =
+      Seq(chosenKey("7777", 1), chosenKey("7777", 2), chosenKey("7778", 0), chosenKey("80", 0), chosenKey("8f", 0xff))
+
+    private def storageOf(value: Int => ByteString): TrieRoot =
+      val trie = slotKeys.zipWithIndex.foldLeft(MerklePatriciaTrie[ByteString, ByteString](nodes)) {
+        case (trie, (slot, i)) => trie.put(slot, value(i))
+      }
+      TrieRoot(ByteString(trie.getRootHash))
+
+    val bigStorage: TrieRoot = storageOf(i => ByteString(Array.fill[Byte](33)((i + 1).toByte)))
+    val smallStorage: TrieRoot = storageOf(i => ByteString((i + 1).toByte))
+
+    val holderCode: ByteString = ByteString("the holder's code")
+    val smallCode: ByteString = ByteString("the code of the account with small slots")
+    val codedCode: ByteString = ByteString("the code of an account with no storage")
+    private def stored(code: ByteString): CodeHash =
+      val hash = ByteString(kec256(code.toArray))
+      codes.put(hash, code).commit()
+      CodeHash(hash)
+
+    val holder: ByteString = chosenKey("c0ffee", 0)
+    val twin: ByteString = chosenKey("c0ffef", 0)
+    val small: ByteString = chosenKey("d00d", 0)
+    val coded: ByteString = chosenKey("26", 0)
+
+    val accounts: Seq[(ByteString, Account)] = Seq(
+      chosenKey("1111", 0) -> Account(nonce = 1, balance = 10),
+      chosenKey("1111", 1) -> Account(nonce = 2, balance = 20),
+      chosenKey("25", 0) -> Account(nonce = 3, balance = 30),
+      coded -> Account(nonce = 4, balance = 40, codeHash = stored(codedCode)),
+      chosenKey("3abcde", 0) -> Account(nonce = 5, balance = 50),
+      chosenKey("3abcdf", 0) -> Account(nonce = 6, balance = 60),
+      holder -> Account(nonce = 7, balance = 70, storageRoot = bigStorage, codeHash = stored(holderCode)),
+      twin -> Account(nonce = 8, balance = 80, storageRoot = bigStorage, codeHash = stored(holderCode)),
+      small -> Account(nonce = 9, balance = 90, storageRoot = smallStorage, codeHash = stored(smallCode))
+    )
+
+    val root: ByteString =
+      val state = accounts.foldLeft(MerklePatriciaTrie[ByteString, Account](nodes)) { case (trie, (key, account)) =>
+        trie.put(key, account)
+      }
+      nodes.persist()
+      ByteString(state.getRootHash)
+
+  /** A key of 32 bytes: `prefix` (hex), zeros, and `last`. */
+  def chosenKey(prefix: String, last: Int): ByteString =
+    val head = prefix.grouped(2).map(Integer.parseInt(_, 16).toByte).toArray
+    ByteString(head ++ new Array[Byte](31 - head.length) :+ last.toByte)
+
+  /** One state held two ways: on a hash store, and as the rows of a position store whose anchor it is. Either can be
+    * had with holes: the same nodes lost from both.
+    */
+  final class TwoWays(val root: ByteString, hashes: MptStorage, load: Array[Byte] => Array[Byte]):
+    val anchor: BlockRef = block(1, root)
+
+    /** Every stored position of the state, trie by trie, by the row's key (the path, hex-prefix encoded). */
+    val positions: Map[Option[ByteString], Rows] = RawTrieWalk.statePositions(root.toArray, load)
+
+    /** A position of a trie: the trie (no owner for the account trie) and the row's key. */
+    type Position = (Option[ByteString], ByteString)
+
+    def onHashes: MptStorage = hashes
+    def onPositions: MptStorage = positionsWithout()
+
+    /** The hash of the node stored at `position`. */
+    def hashAt(position: Position): ByteString = ByteString(kec256(positions(position._1)(position._2).toArray))
+
+    /** The nibbles of a row's key. */
+    def path(position: Position): Array[Byte] = HexPrefix.decode(position._2.toArray)._1
+
+    /** The stored positions of one trie, the root first, then by depth and path. */
+    def stored(trie: Option[ByteString]): Seq[Position] =
+      positions(trie).keys.toSeq
+        .sortBy(row => (HexPrefix.decode(row.toArray)._1.length, row.map("%02x".format(_)).mkString))
+        .map(trie -> _)
+
+    /** Every position that holds the node `position` holds: where two accounts have one storage trie, both of theirs.
+      * What a hash store loses when it loses that node.
+      */
+    def everywhere(position: Position): Seq[Position] =
+      val node = positions(position._1)(position._2)
+      positions.toSeq.flatMap((trie, rows) => rows.collect { case (row, `node`) => trie -> row })
+
+    /** The hash store without the nodes at `holes`. A node two tries hold is lost from both: a hash store has it once.
+      */
+    def hashesWithout(holes: Position*): MptStorage = new Lacking(hashes, holes.map(hashAt).toSet)
+
+    /** A position store of the state without the rows at `holes`, as a view of the anchor. */
+    def positionsWithout(holes: Position*): MptStorage =
+      val source = EphemDataSource()
+      val kept = positions.map((trie, rows) => trie -> rows.filterNot((row, _) => holes.contains(trie -> row)))
+      seedPositions(source, kept, anchor)
+      new PathStateStorage(new PathNodeStorage(source), new AppStateStorage(source)).readOnly(anchor)
+
   /** Every row of CF `t` and CF `u`, by its key in its column family. */
   def allRows(rows: PathNodeStorage): (Map[ByteString, ByteString], Map[ByteString, ByteString]) =
     val accounts = Map.newBuilder[ByteString, ByteString]

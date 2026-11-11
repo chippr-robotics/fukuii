@@ -2,7 +2,6 @@ package com.chipprbots.ethereum.mpt
 
 import org.apache.pekko.util.ByteString
 
-import com.chipprbots.ethereum.db.storage.MptStorage
 import com.chipprbots.ethereum.db.storage.NodeStorage.NodeEncoded
 import com.chipprbots.ethereum.mpt.MerklePatriciaTrie.MPTException
 import com.chipprbots.ethereum.mpt.MptVisitors.*
@@ -31,9 +30,6 @@ object MptTraversals:
     val nodeEncoded = com.chipprbots.ethereum.rlp.encode(dispatch(node, visitor))
     val rootHash = ByteString(Node.hashFn(nodeEncoded))
     (HashNode(rootHash.toArray[Byte]), (rootPath, rootHash, nodeEncoded) +: nodeCapper.getNodesToUpdateAt)
-
-  def parseTrieIntoMemory(rootNode: MptNode, source: MptStorage): MptNode =
-    dispatch(rootNode, new MptConstructionVisitor(source))
 
   def encodeNode(node: MptNode, nodeCapper: Option[NodeCapper] = None): Array[Byte] =
     val nodeEncoded = encode(node, nodeCapper)
