@@ -671,19 +671,20 @@ items:
   - id: B-057
     title: "Spec 018 Track C C3a: the changeset record and CF v (item 6a)"
     priority: P2
-    status: claimed
+    status: review
     area: storage
     size: M
     opened: 2026-11-07
     refs: [018 C3a]
     links:
+      prs: [1793]
       spec: specs/018-storage-engine-consolidation
     depends_on: [B-056]
     claim:
       by: cloud-dc960fdc
       agent: main
       since: 2026-11-11T06:14:58Z
-      heartbeat: 2026-11-11T06:14:58Z
+      heartbeat: 2026-11-11T07:19:22Z
   - id: B-058
     title: "Spec 018 Track C C3b: the staged commit, the state lock and the canonical in-place commit (item 6b)"
     priority: P2
