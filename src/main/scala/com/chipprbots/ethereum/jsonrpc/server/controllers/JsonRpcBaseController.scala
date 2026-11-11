@@ -15,6 +15,7 @@ import org.json4s.JNull
 import org.json4s.native
 import org.json4s.native.Serialization
 
+import com.chipprbots.ethereum.db.storage.pathstate.StateFault
 import com.chipprbots.ethereum.jsonrpc.JsonRpcControllerMetrics
 import com.chipprbots.ethereum.jsonrpc.JsonRpcError
 import com.chipprbots.ethereum.jsonrpc.JsonRpcError.InternalError
@@ -22,6 +23,7 @@ import com.chipprbots.ethereum.jsonrpc.JsonRpcError.MethodNotFound
 import com.chipprbots.ethereum.jsonrpc.JsonRpcRequest
 import com.chipprbots.ethereum.jsonrpc.JsonRpcResponse
 import com.chipprbots.ethereum.jsonrpc.NodeJsonRpcHealthChecker.JsonRpcHealthConfig
+import com.chipprbots.ethereum.jsonrpc.StateRead
 import com.chipprbots.ethereum.jsonrpc.serialization.JsonEncoder
 import com.chipprbots.ethereum.jsonrpc.serialization.JsonMethodDecoder
 import com.chipprbots.ethereum.jsonrpc.server.http.JsonRpcHttpServer.JsonRpcHttpServerConfig
@@ -88,6 +90,16 @@ trait JsonRpcBaseController:
         } *> IO.raiseError(t)
       }
 
+  /** [[handle]] for a method that executes on a block's state and changes nothing but its answer (`eth_call`, a
+    * simulation, a trace): when the state moves under it the whole request runs again, on a fresh state
+    * ([[StateRead.request]], spec 018 Track C). Never for a method with an effect, which would have it twice.
+    */
+  def handleRead[Req, Res](
+      fn: Req => IO[Either[JsonRpcError, Res]],
+      rpcReq: JsonRpcRequest
+  )(implicit dec: JsonMethodDecoder[Req], enc: JsonEncoder[Res]): IO[JsonRpcResponse] =
+    handle[Req, Res](req => StateRead.request(fn(req)), rpcReq)
+
   def handle[Req, Res](
       fn: Req => IO[Either[JsonRpcError, Res]],
       rpcReq: JsonRpcRequest
@@ -99,9 +111,13 @@ trait JsonRpcBaseController:
             case Right(success) => successResponse(rpcReq, success)
             case Left(error)    => errorResponse(rpcReq, error)
           }
-          .handleError { ex =>
-            log.error("Failed to handle RPC request", ex)
-            errorResponse(rpcReq, InternalError)
+          .handleError {
+            // A state that is not held, or that moved under the read once too often, where the method did not answer
+            // it itself (spec 018 Track C): the error a client already gets for a state node that does not exist.
+            case fault: StateFault => errorResponse(rpcReq, StateRead.unavailable(fault))
+            case ex =>
+              log.error("Failed to handle RPC request", ex)
+              errorResponse(rpcReq, InternalError)
           }
       case Left(error) =>
         IO.pure(errorResponse(rpcReq, error))

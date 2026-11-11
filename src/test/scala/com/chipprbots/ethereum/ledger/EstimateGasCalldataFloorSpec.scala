@@ -54,7 +54,6 @@ class EstimateGasCalldataFloorSpec extends AnyFlatSpec with Matchers with Amster
 
     lazy val ledger: StxLedger =
       new StxLedger(
-        blockchain,
         blockchainReader,
         storagesInstance.storages.evmCodeStorage,
         mining.blockPreparator,

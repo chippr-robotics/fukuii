@@ -167,7 +167,6 @@ class PrecompileOverridesSpec extends AnyFlatSpec with Matchers with EitherValue
 
     lazy val ledger: StxLedger =
       new StxLedger(
-        blockchain,
         blockchainReader,
         storagesInstance.storages.evmCodeStorage,
         mining.blockPreparator,

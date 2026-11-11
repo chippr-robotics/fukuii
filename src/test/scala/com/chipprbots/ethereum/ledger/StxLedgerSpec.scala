@@ -180,7 +180,7 @@ class StxLedgerSpec extends AnyFlatSpec with Matchers with Logger:
       fromAddress
     )
     val estimate: Either[StxLedger.CallEstimateFailure, BigInt] =
-      stxLedger.estimateCallGas(atCeiling, block32Header, None, StxLedger.CallOptions.Empty)
+      stxLedger.estimateCallGas(atCeiling, block32Header, stxLedger.worldAt(block32Header), StxLedger.CallOptions.Empty)
     estimate.left.toOption.collect { case StxLedger.CallEstimateFailure.Failed(error) =>
       com.chipprbots.ethereum.jsonrpc.CallErrors.vmErrorMessage(error)
     } shouldBe Some("contract creation code storage out of gas")
@@ -199,7 +199,10 @@ class StxLedgerSpec extends AnyFlatSpec with Matchers with Logger:
       fromAddress
     )
     val outcome: StxLedger.CallOutcome =
-      stxLedger.simulateCall(creation, block32Header, None, StxLedger.CallOptions.Empty, None).toOption.get
+      stxLedger
+        .simulateCall(creation, block32Header, stxLedger.worldAt(block32Header), StxLedger.CallOptions.Empty, None)
+        .toOption
+        .get
     outcome.codeDepositShortfall shouldBe true
     val viaTx: TxResult = stxLedger.simulateTransaction(creation, block32Header, None)
     (outcome.txResult.vmError, outcome.txResult.gasUsed, outcome.txResult.vmReturnData, outcome.txResult.logs) shouldBe
@@ -209,7 +212,7 @@ class StxLedgerSpec extends AnyFlatSpec with Matchers with Logger:
     val funded: SignedTransactionWithSender =
       creation.copy(tx = creation.tx.copy(tx = Transaction.withGasLimit(GasAmount(400000))(creation.tx.tx)))
     stxLedger
-      .simulateCall(funded, block32Header, None, StxLedger.CallOptions.Empty, None)
+      .simulateCall(funded, block32Header, stxLedger.worldAt(block32Header), StxLedger.CallOptions.Empty, None)
       .toOption
       .get
       .codeDepositShortfall shouldBe
@@ -375,7 +378,6 @@ trait ScenarioSetup extends EphemBlockchainTestSetup:
 
   override lazy val stxLedger =
     new StxLedger(
-      blockchain,
       blockchainReader,
       storagesInstance.storages.evmCodeStorage,
       mining.blockPreparator,

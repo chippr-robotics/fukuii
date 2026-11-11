@@ -10,6 +10,7 @@ import com.chipprbots.ethereum.db.dataSource.DataSource
 import com.chipprbots.ethereum.db.dataSource.EphemDataSource
 import com.chipprbots.ethereum.db.dataSource.RocksDbConfig
 import com.chipprbots.ethereum.db.dataSource.RocksDbDataSource
+import com.chipprbots.ethereum.db.storage.AppStateStorage
 import com.chipprbots.ethereum.db.storage.EvmCodeStorage
 import com.chipprbots.ethereum.db.storage.MptStorage
 import com.chipprbots.ethereum.db.storage.Namespaces
@@ -134,6 +135,19 @@ object PathStateTestKit:
         trie.fold(rows.writeAccountNode(nibbles, encoded.toArray))(rows.writeStorageNode(_, nibbles, encoded.toArray))
       }
     }
+
+  /** Makes `dataSource` a datadir whose position store holds `hashed`'s state as the state of `anchor`: the rows, and
+    * the anchor. For specs outside `db.storage`, which cannot write the anchor themselves; the storages have to be
+    * built over the data source AFTER this, since the path state storage takes its anchor when it is built.
+    */
+  def seed(dataSource: DataSource, hashed: HashedState, anchor: BlockRef): Unit =
+    seedPositions(dataSource, hashed.positions(), anchor)
+
+  /** The same for any state, given as its stored positions (`RawTrieWalk.statePositions` of a state on a hash store).
+    */
+  def seedPositions(dataSource: DataSource, positions: Map[Option[ByteString], Rows], anchor: BlockRef): Unit =
+    writeState(new PathNodeStorage(dataSource), positions)
+    new AppStateStorage(dataSource).putStateAnchor(anchor).commit()
 
   /** Every row of CF `t` and CF `u`, by its key in its column family. */
   def allRows(rows: PathNodeStorage): (Map[ByteString, ByteString], Map[ByteString, ByteString]) =

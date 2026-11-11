@@ -8,8 +8,11 @@ import com.chipprbots.ethereum.db.storage.BlockBodiesStorage
 import com.chipprbots.ethereum.db.storage.BlockHeadersStorage
 import com.chipprbots.ethereum.db.storage.BlockNumberMappingStorage
 import com.chipprbots.ethereum.db.storage.ChainWeightStorage
+import com.chipprbots.ethereum.db.storage.MptStorage
 import com.chipprbots.ethereum.db.storage.ReceiptStorage
 import com.chipprbots.ethereum.db.storage.StateStorage
+import com.chipprbots.ethereum.db.storage.pathstate.BlockRef
+import com.chipprbots.ethereum.db.storage.pathstate.PathStateStorage
 import com.chipprbots.ethereum.domain.branch.BestBranch
 import com.chipprbots.ethereum.domain.branch.Branch
 import com.chipprbots.ethereum.domain.branch.EmptyBranch
@@ -26,8 +29,64 @@ class BlockchainReader(
     receiptStorage: ReceiptStorage,
     appStateStorage: AppStateStorage,
     chainWeightStorage: ChainWeightStorage,
-    blockAccessListStorage: BlockAccessListStorage
+    blockAccessListStorage: BlockAccessListStorage,
+    pathState: Option[PathStateStorage] = None
 ) extends Logger:
+
+  // ─── The state of a block (spec 018 Track C, C2b) ────────────────────────────────────────────────────────────────
+  //
+  // A reader asks for the state of a BLOCK, by its header, and reads tries over what it is handed. It does not take a
+  // store and a root: on the unified layout there is one state on disk, a position says nothing about which block it
+  // belongs to, and only a view of a block can say whether what was read is that block's.
+
+  /** The state of `header`'s block, for a reader that writes nothing.
+    *
+    * With the in-development guard off, which is how the node ships, this is the read-only store every reader could
+    * already take: a buffer over the hash store, so that a reader that persists by accident writes nowhere. With it on,
+    * a view of the position store.
+    *
+    * @throws com.chipprbots.ethereum.db.storage.pathstate.StateUnavailable
+    *   with the guard on, when that block's state is not held
+    */
+  def stateAt(header: BlockHeader): MptStorage =
+    pathState.fold(stateStorage.getReadOnlyStorage)(_.readOnly(refOf(header)))
+
+  /** The same state, for an execution that commits nothing (`eth_call`, a simulation, a trace): what it persists is
+    * kept beside the state, read back by that execution, and dropped with the storage.
+    */
+  def scratchStateAt(header: BlockHeader): MptStorage =
+    pathState.fold(stateStorage.getReadOnlyStorage)(_.throwaway(refOf(header)))
+
+  private def refOf(header: BlockHeader): BlockRef =
+    BlockRef(header.hash.value, header.number.value, header.stateRoot.value)
+
+  /** The account trie of `header`'s block over `state`, which is that block's state. */
+  def accountsIn(state: MptStorage, header: BlockHeader): MerklePatriciaTrie[Address, Account] =
+    MerklePatriciaTrie[Address, Account](rootHash = header.stateRoot.value.toArray, source = state.forOwner(None))
+
+  /** The account at `address` in the state of `header`'s block; `None` when that state has no such account.
+    *
+    * By the header and not by a block number: a number is resolved through the canonical index, which names another
+    * block whenever the caller holds a side block, or one that is not canonical yet.
+    */
+  def accountAt(header: BlockHeader, address: Address): Option[Account] =
+    accountsIn(stateAt(header), header).get(address)
+
+  /** What a request about a block is answered with for the account at `address`: the account in `state`, the state of
+    * `header`'s block, and no account for a block above the best block. Such a block is the pending one, its state is
+    * not a state the node holds, and the read by block number that this replaces answered it so.
+    *
+    * It takes the state so that a reader that goes on to the account's storage, or to its proof, reads all of it from
+    * the one state.
+    */
+  def accountIn(state: MptStorage, header: BlockHeader, address: Address): Option[Account] =
+    if aboveBest(header) then None else accountsIn(state, header).get(address)
+
+  /** The proof of that account, under the same rule and from the same state. */
+  def accountProofIn(state: MptStorage, header: BlockHeader, address: Address): Option[Vector[MptNode]] =
+    if aboveBest(header) then None else accountsIn(state, header).getProof(address)
+
+  private def aboveBest(header: BlockHeader): Boolean = header.number.value > getBestBlockNumber
 
   /** Allows to query a blockHeader by block hash
     *
@@ -186,6 +245,10 @@ class BlockchainReader(
     *   address of the account
     * @param blockNumber
     *   the block that determines the state of the account
+    *
+    * Spec 018 Track C: the readers behind RPC moved to [[accountAt]] and [[accountIn]], by header (C2b). What is left
+    * on this form is the importer's read of a parent's account, on the execution side, which moves with the importer
+    * (C5b).
     */
   def getAccount(branch: Branch, address: Address, blockNumber: BigInt): Option[Account] = branch match
     case BestBranch(_, tipBlockNumber) =>
@@ -202,19 +265,16 @@ class BlockchainReader(
     *
     * `None` means the account does not exist in that state. A trie node missing from storage throws `MPTException`;
     * callers decide what "cannot judge" means for them.
+    *
+    * Spec 018 Track C: a reader that holds the header uses [[accountAt]] (C2b). What is left on this form is on the
+    * execution side: the proposer's nonce read, which moves with the proposer view (C3c), and the importer's placing of
+    * a storage hole (C5b).
     */
   def getAccountAtStateRoot(stateRoot: ByteString, address: Address): Option[Account] =
     MerklePatriciaTrie[Address, Account](
       rootHash = stateRoot.toArray,
       source = stateStorage.getReadOnlyStorage
     ).get(address)
-
-  def getAccountProof(branch: Branch, address: Address, blockNumber: BigInt): Option[Vector[MptNode]] =
-    branch match
-      case BestBranch(_, tipBlockNumber) =>
-        if blockNumber <= tipBlockNumber then getAccountMpt(blockNumber).flatMap(_.getProof(address))
-        else None
-      case EmptyBranch => None
 
   /** Looks up ChainWeight for a given chain
     * @param blockhash
@@ -348,5 +408,6 @@ object BlockchainReader:
     storages.receiptStorage,
     storages.appStateStorage,
     storages.chainWeightStorage,
-    storages.blockAccessListStorage
+    storages.blockAccessListStorage,
+    storages.pathStateStorage
   )

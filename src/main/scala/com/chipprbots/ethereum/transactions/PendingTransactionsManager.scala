@@ -495,7 +495,9 @@ object PendingTransactionsManager:
           val bestBlockOpt = blockchainReader.getBestBlock
           bestBlockOpt match
             case Some(bestBlock) =>
-              val mptStorage = stateStorage.getReadOnlyStorage
+              // The account trie of the best block, in that block's state (spec 018 Track C, C2b): any failure to read
+              // it, a state that is not held included, is the fallback below.
+              val mptStorage = blockchainReader.stateAt(bestBlock.header).forOwner(None)
               val stateTrie = MerklePatriciaTrie[Array[Byte], Account](bestBlock.header.stateRoot.toArray, mptStorage)(
                 using
                 defaultByteArraySerializable,

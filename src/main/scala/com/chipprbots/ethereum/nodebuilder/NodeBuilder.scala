@@ -1150,7 +1150,6 @@ trait StxLedgerBuilder:
 
   lazy val stxLedger: StxLedger =
     new StxLedger(
-      blockchain,
       blockchainReader,
       storagesInstance.storages.evmCodeStorage,
       mining.blockPreparator,

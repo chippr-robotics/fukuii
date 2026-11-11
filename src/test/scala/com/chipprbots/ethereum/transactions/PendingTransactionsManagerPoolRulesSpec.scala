@@ -100,7 +100,8 @@ class PendingTransactionsManagerPoolRulesSpec
         ) { case (trie, (address, account)) => trie.put(crypto.kec256(address.toArray), account) }
         .getRootHash
     private val best = Block(head.copy(stateRoot = TrieRoot(ByteString(stateRoot))), BlockBody.empty)
-    private val reader: BlockchainReader = new BlockchainReader(null, null, null, null, null, null, null, null):
+    // The reader holds the state: the pool reads the best block's accounts through it (`stateAt`).
+    private val reader: BlockchainReader = new BlockchainReader(null, null, null, stateStorage, null, null, null, null):
       override def getBestBlockHeader: Option[BlockHeader] = Some(best.header)
       override def getBestBlock: Option[Block] = Some(best)
 

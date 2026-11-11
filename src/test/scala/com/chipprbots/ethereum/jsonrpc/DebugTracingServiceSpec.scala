@@ -168,6 +168,8 @@ class DebugTracingServiceSpec
         saveAsBestBlock = true
       )
 
+      // The world of a call is taken from the block's own header, and handed to the call (spec 018 Track C)
+      (mockLedger.callWorld).expects(*, *).anyNumberOfTimes().returning(null)
       // The call path is StxLedger.simulateCall (#1629 S3), which carries the typed message and its pre-checks
       (mockLedger.simulateCall)
         .expects(*, *, *, *, *)

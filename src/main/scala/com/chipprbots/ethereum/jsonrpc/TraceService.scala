@@ -15,9 +15,11 @@ import com.chipprbots.ethereum.db.storage.TransactionMappingStorage.TransactionL
 import com.chipprbots.ethereum.domain.Address
 import com.chipprbots.ethereum.domain.Block
 import com.chipprbots.ethereum.domain.BlockHash
+import com.chipprbots.ethereum.domain.BlockHeader
 import com.chipprbots.ethereum.domain.Blockchain
 import com.chipprbots.ethereum.domain.BlockchainReader
 import com.chipprbots.ethereum.domain.SignedTransactionWithSender
+import com.chipprbots.ethereum.ledger.InMemoryWorldStateProxy
 import com.chipprbots.ethereum.ledger.StxLedger
 import com.chipprbots.ethereum.mpt.MerklePatriciaTrie.MissingNodeException
 import com.chipprbots.ethereum.utils.BlockchainConfig
@@ -142,7 +144,7 @@ class TraceService(
           JsonRpcError.InvalidParams(s"Transaction index $txIndex out of range")
         )
         targetStx = stxs(txIndex)
-        world = stxLedger.advanceWorldToTx(block.header, stxs, txIndex, parentHeader.stateRoot.value)
+        world = stxLedger.advanceWorldToTx(block.header, stxs, txIndex, parentHeader)
         tracer = new CallTracer(onlyTopCall = false)
         _ = stxLedger.replayTransaction(targetStx, block.header, world, Some(tracer))
         flat = flattenCallTree(
@@ -171,7 +173,7 @@ class TraceService(
         parentHeader <- blockchainReader
           .getBlockHeaderByHash(block.header.parentHash)
           .toRight(JsonRpcError.InvalidParams("Parent block not found"))
-        traces = traceAllTxsFlat(block, parentHeader.stateRoot.value)
+        traces = traceAllTxsFlat(block, parentHeader)
       yield TraceBlockResponse(traces)
     }.recover { case _: MissingNodeException =>
       Left(JsonRpcError.NodeNotFound)
@@ -205,7 +207,7 @@ class TraceService(
           JsonRpcError.InvalidParams(s"Transaction index $txIndex out of range")
         )
         targetStx = stxs(txIndex)
-        world = stxLedger.advanceWorldToTx(block.header, stxs, txIndex, parentHeader.stateRoot.value)
+        world = stxLedger.advanceWorldToTx(block.header, stxs, txIndex, parentHeader)
         result = buildReplayResult(block, req.txHash, txIndex, req.options)(tracer =>
           stxLedger.replayTransaction(targetStx, block.header, world, Some(tracer))
         )
@@ -232,7 +234,7 @@ class TraceService(
           .toRight(JsonRpcError.InvalidParams("Parent block not found"))
         stxs = SignedTransactionWithSender.getSignedTransactionsOfBlock(block.header, block.body.transactionList)
         results = stxs.zipWithIndex.map { case (stx, txIndex) =>
-          val world = stxLedger.advanceWorldToTx(block.header, stxs, txIndex, parentHeader.stateRoot.value)
+          val world = stxLedger.advanceWorldToTx(block.header, stxs, txIndex, parentHeader)
           buildReplayResult(block, stx.tx.hash.value, txIndex, req.options)(tracer =>
             stxLedger.replayTransaction(stx, block.header, world, Some(tracer))
           )
@@ -281,10 +283,10 @@ class TraceService(
   // ─── Helpers ──────────────────────────────────────────────────────────────────
 
   /** Traces all txs in a block and returns flat trace objects for all of them concatenated. */
-  private def traceAllTxsFlat(block: Block, parentStateRoot: ByteString): Seq[JValue] =
+  private def traceAllTxsFlat(block: Block, parentHeader: BlockHeader): Seq[JValue] =
     val stxs = SignedTransactionWithSender.getSignedTransactionsOfBlock(block.header, block.body.transactionList)
     stxs.zipWithIndex.flatMap { case (stx, txIndex) =>
-      val world = stxLedger.advanceWorldToTx(block.header, stxs, txIndex, parentStateRoot)
+      val world = stxLedger.advanceWorldToTx(block.header, stxs, txIndex, parentHeader)
       val tracer = new CallTracer(onlyTopCall = false)
       stxLedger.replayTransaction(stx, block.header, world, Some(tracer))
       flattenCallTree(tracer.getResult, stx.tx.hash.value, txIndex, block.header.hash.value, block.header.number.value)
@@ -442,7 +444,7 @@ class TraceService(
               .getBlockByNumber(branch, blockNum)
               .flatMap { block =>
                 blockchainReader.getBlockHeaderByHash(block.header.parentHash).map { parentHeader =>
-                  val flat = traceAllTxsFlat(block, parentHeader.stateRoot.value)
+                  val flat = traceAllTxsFlat(block, parentHeader)
                   applyAddressFilter(flat, req.fromAddress, req.toAddress)
                 }
               }
@@ -493,12 +495,18 @@ class TraceService(
       val json = buildReplayResult(resolved.block, ByteString.empty, 0, options)(tracer =>
         if failure.isEmpty then
           stxLedger
-            .simulateCall(msg.stx, msg.header, resolved.pendingState, msg.options, Some(tracer))
+            .simulateCall(msg.stx, msg.header, callWorld(resolved, msg), msg.options, Some(tracer))
             .left
             .foreach(e => failure = Some(JsonRpcError.LogicError(e.message)))
       )
       failure.toLeft(json)
     }
+
+  /** The world a call runs on: the pending block's, or the state of the resolved block, taken by that block's own
+    * header. The message's header, which the call runs under, is not the header of any block.
+    */
+  private def callWorld(resolved: ResolvedBlock, msg: CallTxBuilder.CallMessage): InMemoryWorldStateProxy =
+    resolved.pendingState.getOrElse(stxLedger.callWorld(stateOf = resolved.block.header, executing = msg.header))
 
   /** The message a trace call runs (go-ethereum `eth/tracers/api.go` `TraceCall`: `CallDefaults` with the RPC gas cap,
     * `ToMessage`, the base fee lowered to 0 for a zero-price message), built by the same [[CallTxBuilder]] as eth_call.

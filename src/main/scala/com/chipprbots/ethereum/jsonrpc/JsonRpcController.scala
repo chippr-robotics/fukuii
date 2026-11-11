@@ -291,9 +291,12 @@ case class JsonRpcController(
     case req @ JsonRpcRequest(_, "eth_fillTransaction", _, _) =>
       handle[FillTransactionRequest, FillTransactionResponse](personalService.fillTransaction, req)
     case req @ JsonRpcRequest(_, "eth_call", _, _) =>
-      handle[CallRequest, CallResponse](ethInfoService.call, req)(using eth_call, eth_call)
+      handleRead[CallRequest, CallResponse](ethInfoService.call, req)(using eth_call, eth_call)
     case req @ JsonRpcRequest(_, "eth_estimateGas", _, _) =>
-      handle[CallRequest, EstimateGasResponse](ethInfoService.estimateGas, req)(using eth_estimateGas, eth_estimateGas)
+      handleRead[CallRequest, EstimateGasResponse](ethInfoService.estimateGas, req)(using
+        eth_estimateGas,
+        eth_estimateGas
+      )
     case req @ JsonRpcRequest(_, "eth_getCode", _, _) =>
       handle[GetCodeRequest, GetCodeResponse](ethUserService.getCode, req)
     case req @ JsonRpcRequest(_, "eth_getUncleCountByBlockNumber", _, _) =>
@@ -372,9 +375,9 @@ case class JsonRpcController(
     case req @ JsonRpcRequest(_, "eth_capabilities", _, _) =>
       handle[CapabilitiesRequest, CapabilitiesResponse](ethBlocksService.capabilities, req)
     case req @ JsonRpcRequest(_, "eth_createAccessList", _, _) =>
-      handle[CreateAccessListRequest, CreateAccessListResponse](ethInfoService.createAccessList, req)
+      handleRead[CreateAccessListRequest, CreateAccessListResponse](ethInfoService.createAccessList, req)
     case req @ JsonRpcRequest(_, "eth_simulateV1", _, _) =>
-      handle[EthSimulateRequest, EthSimulateResponse](ethSimulateService.ethSimulate, req)(using
+      handleRead[EthSimulateRequest, EthSimulateResponse](ethSimulateService.ethSimulate, req)(using
         EthSimulateJsonMethodsImplicits.eth_simulateV1,
         EthSimulateJsonMethodsImplicits.eth_simulateV1
       )
@@ -422,19 +425,19 @@ case class JsonRpcController(
     }
     ({
       case req @ JsonRpcRequest(_, "debug_traceTransaction", _, _) =>
-        handle[DTxReq, DTxResp](debugTracingService.traceTransaction, req)(using dTx, dTx)
+        handleRead[DTxReq, DTxResp](debugTracingService.traceTransaction, req)(using dTx, dTx)
       case req @ JsonRpcRequest(_, "debug_traceCall", _, _) =>
-        handle[DCallReq, DCallResp](debugTracingService.traceCall, req)(using dCall, dCall)
+        handleRead[DCallReq, DCallResp](debugTracingService.traceCall, req)(using dCall, dCall)
       case req @ JsonRpcRequest(_, "debug_traceCallMany", _, _) =>
-        handle[DManyReq, DManyResp](debugTracingService.traceCallMany, req)(using dMany, dMany)
+        handleRead[DManyReq, DManyResp](debugTracingService.traceCallMany, req)(using dMany, dMany)
       case req @ JsonRpcRequest(_, "debug_traceBlockByHash", _, _) =>
-        handle[DBlkHashReq, DBlkHashResp](debugTracingService.traceBlockByHash, req)(using dHash, dHash)
+        handleRead[DBlkHashReq, DBlkHashResp](debugTracingService.traceBlockByHash, req)(using dHash, dHash)
       case req @ JsonRpcRequest(_, "debug_traceBlockByNumber", _, _) =>
-        handle[DBlkNumReq, DBlkNumResp](debugTracingService.traceBlockByNumber, req)(using dNum, dNum)
+        handleRead[DBlkNumReq, DBlkNumResp](debugTracingService.traceBlockByNumber, req)(using dNum, dNum)
       case req @ JsonRpcRequest(_, "debug_intermediateRoots", _, _) =>
-        handle[DRootsReq, DRootsResp](debugTracingService.intermediateRoots, req)(using dRoots, dRoots)
+        handleRead[DRootsReq, DRootsResp](debugTracingService.intermediateRoots, req)(using dRoots, dRoots)
       case req @ JsonRpcRequest(_, "debug_traceChain", _, _) =>
-        handle[DChainReq, Seq[DChainResult]](
+        handleRead[DChainReq, Seq[DChainResult]](
           r => debugTracingService.traceChainBlockRange(r.fromBlock, r.toBlock, r.config),
           req
         )(using dChain, dChain)
@@ -455,38 +458,41 @@ case class JsonRpcController(
 
     {
       case req @ JsonRpcRequest(_, "trace_transaction", _, _) =>
-        handle[TraceService.TraceTransactionRequest, TraceService.TraceTransactionResponse](
+        handleRead[TraceService.TraceTransactionRequest, TraceService.TraceTransactionResponse](
           traceService.traceTransaction,
           req
         )(using tTx, tTx)
       case req @ JsonRpcRequest(_, "trace_block", _, _) =>
-        handle[TraceService.TraceBlockRequest, TraceService.TraceBlockResponse](traceService.traceBlock, req)(using
+        handleRead[TraceService.TraceBlockRequest, TraceService.TraceBlockResponse](traceService.traceBlock, req)(using
           tBlock,
           tBlock
         )
       case req @ JsonRpcRequest(_, "trace_replayTransaction", _, _) =>
-        handle[TraceService.TraceReplayTransactionRequest, TraceService.TraceReplayTransactionResponse](
+        handleRead[TraceService.TraceReplayTransactionRequest, TraceService.TraceReplayTransactionResponse](
           traceService.replayTransaction,
           req
         )(using tReplay, tReplay)
       case req @ JsonRpcRequest(_, "trace_replayBlockTransactions", _, _) =>
-        handle[TraceService.TraceReplayBlockTransactionsRequest, TraceService.TraceReplayBlockTransactionsResponse](
+        handleRead[TraceService.TraceReplayBlockTransactionsRequest, TraceService.TraceReplayBlockTransactionsResponse](
           traceService.replayBlockTransactions,
           req
         )(using tReplBlk, tReplBlk)
       case req @ JsonRpcRequest(_, "trace_call", _, _) =>
-        handle[TraceService.TraceCallRequest, TraceService.TraceCallResponse](traceService.traceCall, req)(using
+        handleRead[TraceService.TraceCallRequest, TraceService.TraceCallResponse](traceService.traceCall, req)(using
           tCall,
           tCall
         )
       case req @ JsonRpcRequest(_, "trace_callMany", _, _) =>
-        handle[TraceService.TraceCallManyRequest, TraceService.TraceCallManyResponse](traceService.traceCallMany, req)(
-          using
+        handleRead[TraceService.TraceCallManyRequest, TraceService.TraceCallManyResponse](
+          traceService.traceCallMany,
+          req
+        )(using
           tCallMany,
           tCallMany
         )
       case req @ JsonRpcRequest(_, "trace_filter", _, _) =>
-        handle[TraceService.TraceFilterRequest, TraceService.TraceFilterResponse](traceService.traceFilter, req)(using
+        handleRead[TraceService.TraceFilterRequest, TraceService.TraceFilterResponse](traceService.traceFilter, req)(
+          using
           tFilter,
           tFilter
         )

@@ -512,7 +512,7 @@ class EthInfoService(
         // geth AccessList: no SkipExecutionGasCapCheck
         msg <- CallTxBuilder.build(withList, header, None, defaultFrom, gas, relocations, false)(using blockchainConfig)
         r <- stxLedger
-          .simulateCall(msg.stx, msg.header, Some(world), msg.options, Some(tracer))
+          .simulateCall(msg.stx, msg.header, world, msg.options, Some(tracer))
           .left
           .map(e => JsonRpcError.LogicError(s"failed to apply transaction: ${msg.stx.tx.hash.toHex} err: ${e.message}"))
       yield (msg, r)
@@ -550,14 +550,15 @@ class EthInfoService(
     val authorities = args.authorizationList.getOrElse(Nil).flatMap(stxLedger.recoverAuthority)
     Set(sender, recipient) ++ EthSimulateService.activePrecompiles(header)(using blockchainConfig) ++ authorities
 
-  /** Resolve the block, apply the overrides and build the message. The world is only built here when state overrides
-    * must be applied to it; otherwise the ledger builds its own (or uses the pending block's).
+  /** Resolve the block, apply the overrides and build the message, with the world the call runs on: the pending
+    * block's, or the resolved block's state with the state overrides applied. The world is taken from the resolved
+    * block's own header; the message's header, which the call runs under, is not the header of any block.
     */
   private def prepareCall(
       req: CallRequest,
       gas: BigInt,
       skipExecutionGasCap: Boolean
-  ): Either[JsonRpcError, (CallTxBuilder.CallMessage, Option[InMemoryWorldStateProxy])] =
+  ): Either[JsonRpcError, (CallTxBuilder.CallMessage, InMemoryWorldStateProxy)] =
     resolveBlock(req.block).flatMap(prepareCall(req, _, gas, skipExecutionGasCap))
 
   private def prepareCall(
@@ -565,7 +566,7 @@ class EthInfoService(
       resolved: ResolvedBlock,
       gas: BigInt,
       skipExecutionGasCap: Boolean
-  ): Either[JsonRpcError, (CallTxBuilder.CallMessage, Option[InMemoryWorldStateProxy])] =
+  ): Either[JsonRpcError, (CallTxBuilder.CallMessage, InMemoryWorldStateProxy)] =
     val header = resolved.block.header
     for
       // GraphQL builds TxArgs itself; the JSON-RPC decoder has already run this (decodeForCall)
@@ -593,7 +594,7 @@ class EthInfoService(
       )(using
         blockchainConfig
       )
-    yield (msg, world)
+    yield (msg, world.getOrElse(stxLedger.callWorld(stateOf = header, executing = msg.header)))
 
   /** `from` when the call names none: the node's first account, else the zero address (fukuii behaviour inherited from
     * Mantis; go-ethereum always uses the zero address).

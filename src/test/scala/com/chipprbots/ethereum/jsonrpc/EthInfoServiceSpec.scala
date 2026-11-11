@@ -253,6 +253,9 @@ class EthServiceSpec
     val appStateStorage: AppStateStorage = mock[AppStateStorage]
     val keyStore: KeyStore = mock[KeyStore]
     override lazy val stxLedger: StxLedger = mock[StxLedger]
+    // The world of a call is taken from the block's own header and handed to the call (spec 018 Track C). These cases
+    // are about what the service does with the call's outcome, so the mocked ledger hands out no world.
+    stxLedger.callWorld.expects(*, *).returning(null).anyNumberOfTimes()
 
     override lazy val mining: TestMining = buildTestMining().withBlockGenerator(blockGenerator)
     override lazy val miningConfig = MiningConfigs.miningConfig

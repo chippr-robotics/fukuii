@@ -402,6 +402,41 @@ class JsonRpcControllerEthSpec
 
     response should haveStringResult("0x617364")
 
+  // Spec 018 Track C, C2b: eth_call executes on a block's state and changes nothing, so when the state moves under it
+  // the request is run again. eth_getCode reads once through a retry of its own; a fault that escapes it is answered.
+  it should "run eth_call again when the state moved under it, and answer a state that is not held" taggedAs (
+    UnitTest,
+    RPCTest
+  ) in new JsonRpcControllerFixture:
+    import com.chipprbots.ethereum.db.storage.pathstate.BlockRef
+    import com.chipprbots.ethereum.db.storage.pathstate.StaleStateViewException
+    import com.chipprbots.ethereum.db.storage.pathstate.StateUnavailable
+    val mockEthInfoService: EthInfoService = mock[EthInfoService]
+    override val jsonRpcController: JsonRpcController =
+      super.jsonRpcController.copy(ethInfoService = mockEthInfoService)
+
+    val block: BlockRef = BlockRef(ByteString(Array.fill[Byte](32)(7)), 9, ByteString(Array.fill[Byte](32)(1)))
+    var runs = 0
+    mockEthInfoService.call
+      .expects(*)
+      .returning(IO {
+        runs += 1
+        if runs < 3 then throw new StaleStateViewException(block, 2, 6, "the disk moved on")
+        Right(CallResponse(ByteString("asd")))
+      })
+
+    val call: JsonRpcRequest = newJsonRpcRequest(
+      "eth_call",
+      List(JObject("to" -> "0xda714fe079751fa7a1ad80b76571ea6ec52a446c", "data" -> "0xFF44"), JString("latest"))
+    )
+    jsonRpcController.handleRequest(call).unsafeRunSync() should haveStringResult("0x617364")
+    runs shouldBe 3
+
+    mockEthInfoService.call
+      .expects(*)
+      .returning(IO.raiseError(new StateUnavailable("the state of block 9 is not held")))
+    jsonRpcController.handleRequest(call).unsafeRunSync() should haveError(JsonRpcError.NodeNotFound)
+
   it should "eth_estimateGas" taggedAs (UnitTest, RPCTest) in new JsonRpcControllerFixture:
     val mockEthInfoService: EthInfoService = mock[EthInfoService]
     override val jsonRpcController: JsonRpcController =

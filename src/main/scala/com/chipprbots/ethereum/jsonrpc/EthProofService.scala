@@ -6,6 +6,7 @@ import cats.effect.IO
 import cats.implicits.*
 
 import com.chipprbots.ethereum.consensus.blocks.BlockGenerator
+import com.chipprbots.ethereum.db.storage.MptStorage
 import com.chipprbots.ethereum.domain.Account
 import com.chipprbots.ethereum.domain.Address
 import com.chipprbots.ethereum.domain.Block
@@ -170,23 +171,31 @@ class EthProofService(
       storageKeys: Seq[StorageProofKey],
       block: BlockParam
   ): IO[Either[JsonRpcError, ProofAccount]] = IO {
-    for
-      blockNumber <- resolveBlock(block).map(_.block.number.value)
-      account <- Either.fromOption(
-        blockchainReader.getAccount(blockchainReader.getBestBranch, address, blockNumber),
-        noAccount(address, blockNumber)
-      )
-      accountProof <- Either.fromOption(
-        blockchainReader
-          .getAccountProof(blockchainReader.getBestBranch, address, blockNumber)
-          .map(_.map(asRlpSerializedNode)),
-        noAccountProof(address, blockNumber)
-      )
-      storageProof = getStorageProof(account, storageKeys)
-    yield ProofAccount(account, accountProof, storageProof, address)
+    resolveBlock(block).map(_.block.header).flatMap { header =>
+      val blockNumber = header.number.value
+      // The account, its proof and its storage proofs come from one state: a proof is of one block.
+      StateRead
+        .at(blockchainReader, header) { state =>
+          for
+            account <- Either.fromOption(
+              blockchainReader.accountIn(state, header, address),
+              noAccount(address, blockNumber)
+            )
+            accountProof <- Either.fromOption(
+              blockchainReader.accountProofIn(state, header, address).map(_.map(asRlpSerializedNode)),
+              noAccountProof(address, blockNumber)
+            )
+            storageProof = getStorageProof(state, address, account, storageKeys)
+          yield ProofAccount(account, accountProof, storageProof, address)
+        }
+        .flatten
+    }
   }
 
+  /** The proofs of `storageKeys` in the storage of `address`, whose account in `state` is `account`. */
   def getStorageProof(
+      state: MptStorage,
+      address: Address,
       account: Account,
       storageKeys: Seq[StorageProofKey]
   ): Seq[StorageProof] =
@@ -194,7 +203,9 @@ class EthProofService(
       .map { storageKey =>
         blockchain
           .getStorageProofAt(
-            rootHash = account.storageRoot.value,
+            state = state,
+            address = address,
+            storageRoot = account.storageRoot.value,
             position = storageKey.v,
             ethCompatibleStorage = ethCompatibleStorage
           )

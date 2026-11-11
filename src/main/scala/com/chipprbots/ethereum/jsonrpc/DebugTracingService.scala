@@ -15,6 +15,7 @@ import com.chipprbots.ethereum.domain.BlockHash
 import com.chipprbots.ethereum.domain.Blockchain
 import com.chipprbots.ethereum.domain.BlockchainReader
 import com.chipprbots.ethereum.domain.SignedTransactionWithSender
+import com.chipprbots.ethereum.ledger.InMemoryWorldStateProxy
 import com.chipprbots.ethereum.ledger.StxLedger
 import com.chipprbots.ethereum.ledger.TxResult
 import com.chipprbots.ethereum.mpt.MerklePatriciaTrie.MissingNodeException
@@ -156,7 +157,7 @@ class DebugTracingService(
           JsonRpcError.InvalidParams(s"Transaction index $txIndex out of range")
         )
         targetStx = stxs(txIndex)
-        world = stxLedger.advanceWorldToTx(block.header, stxs, txIndex, parentHeader.stateRoot.value)
+        world = stxLedger.advanceWorldToTx(block.header, stxs, txIndex, parentHeader)
         tracer = selectTracer(req.config, Some(world))
         _ = stxLedger.replayTransaction(targetStx, block.header, world, Some(tracer))
       yield TraceTransactionResponse(tracer.getResult)
@@ -260,7 +261,7 @@ class DebugTracingService(
         val stxs = SignedTransactionWithSender.getSignedTransactionsOfBlock(block.header, block.body.transactionList)
         if stxs.isEmpty then Seq.empty
         else
-          var currentWorld = stxLedger.advanceWorldToTx(block.header, stxs, 0, parentHeader.stateRoot.value)
+          var currentWorld = stxLedger.advanceWorldToTx(block.header, stxs, 0, parentHeader)
           val resultsBuf = scala.collection.mutable.ArrayBuffer[TxTraceResult]()
           stxs.foreach { stx =>
             val tracer = selectTracer(config, Some(currentWorld))
@@ -351,7 +352,7 @@ class DebugTracingService(
           else
             // Chain world states tx-by-tx and capture state root after each finalization.
             // On tx error: return partial result (same as core-geth — errors on canon blocks are rare).
-            var currentWorld = stxLedger.advanceWorldToTx(block.header, stxs, 0, parentHeader.stateRoot.value)
+            var currentWorld = stxLedger.advanceWorldToTx(block.header, stxs, 0, parentHeader)
             val rootBuf = scala.collection.mutable.ArrayBuffer[ByteString]()
             stxs.foreach { stx =>
               val txResult = stxLedger.replayTransaction(stx, block.header, currentWorld, tracer = None)
@@ -390,7 +391,7 @@ class DebugTracingService(
               val stxs =
                 SignedTransactionWithSender.getSignedTransactionsOfBlock(block.header, block.body.transactionList)
               val traces = stxs.zipWithIndex.map { case (stx, txIndex) =>
-                val world = stxLedger.advanceWorldToTx(block.header, stxs, txIndex, parentHeader.stateRoot.value)
+                val world = stxLedger.advanceWorldToTx(block.header, stxs, txIndex, parentHeader)
                 val tracer = selectTracer(config, Some(world))
                 stxLedger.replayTransaction(stx, block.header, world, Some(tracer))
                 tracer.getResult
@@ -403,6 +404,12 @@ class DebugTracingService(
     }.recover { case _: MissingNodeException =>
       Left(JsonRpcError.NodeNotFound)
     }
+
+  /** The world a call runs on: the pending block's, or the state of the resolved block, taken by that block's own
+    * header. The message's header, which the call runs under, is not the header of any block.
+    */
+  private def callWorld(resolved: ResolvedBlock, msg: CallTxBuilder.CallMessage): InMemoryWorldStateProxy =
+    resolved.pendingState.getOrElse(stxLedger.callWorld(stateOf = resolved.block.header, executing = msg.header))
 
   /** The message a trace call runs (go-ethereum `eth/tracers/api.go` `TraceCall`: `CallDefaults` with the RPC gas cap,
     * `ToMessage`, the base fee lowered to 0 for a zero-price message), built by the same [[CallTxBuilder]] as eth_call.
@@ -432,7 +439,7 @@ class DebugTracingService(
     for
       msg <- buildCallMessage(callTx, resolved.block)
       r <- stxLedger
-        .simulateCall(msg.stx, msg.header, resolved.pendingState, msg.options, Some(tracer))
+        .simulateCall(msg.stx, msg.header, callWorld(resolved, msg), msg.options, Some(tracer))
         .left
         .map(e => JsonRpcError.LogicError(e.message))
     yield r.txResult

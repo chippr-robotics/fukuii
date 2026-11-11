@@ -17,6 +17,7 @@ import com.chipprbots.ethereum.consensus.mining.Mining
 import com.chipprbots.ethereum.crypto.KzgCellProofs
 import com.chipprbots.ethereum.db.storage.TransactionMappingStorage
 import com.chipprbots.ethereum.db.storage.TransactionMappingStorage.TransactionLocation
+import com.chipprbots.ethereum.db.storage.pathstate.StateFault
 import com.chipprbots.ethereum.domain.Account
 import com.chipprbots.ethereum.domain.Address
 import com.chipprbots.ethereum.domain.Block
@@ -324,7 +325,7 @@ class EthTxService(
               stx,
               sidecar,
               head,
-              address => blockchainReader.getAccountAtStateRoot(head.stateRoot.value, address)
+              address => blockchainReader.accountAt(head, address)
             )
             .left
             .map {
@@ -336,7 +337,9 @@ class EthTxService(
             }
             .map { case (sender, account) => LocalAdmission(sender, account, head) }
         catch
-          case e: MissingNodeException =>
+          // a missing node, or (on the unified layout) a state that is not held or that moved under the read: either
+          // way the transaction cannot be judged against the head, and it is refused with the same answer
+          case e @ (_: MissingNodeException | _: StateFault) =>
             Left(
               JsonRpcError.LogicError(
                 s"cannot validate transaction: state at head ${head.number.value} is not available (${e.getMessage})"
@@ -454,10 +457,10 @@ class EthTxService(
   def pendingTransactionsFrom(accounts: Set[Address]): ServiceResponse[OwnPendingTransactionsResponse] =
     getTransactionsFromPool.map { resp =>
       val own = resp.pendingTransactions.filter(pt => accounts.contains(pt.stx.senderAddress))
-      val stateRoot = blockchainReader.getBestBlockHeader.map(_.stateRoot.value)
+      val head = blockchainReader.getBestBlockHeader
       def stateNonce(sender: Address): BigInt =
-        stateRoot
-          .flatMap(root => blockchainReader.getAccountAtStateRoot(root, sender))
+        head
+          .flatMap(header => blockchainReader.accountAt(header, sender))
           .map(_.nonce.toBigInt)
           .getOrElse(blockchainConfig.accountStartNonce.toBigInt)
       val executable: Map[Address, Set[BigInt]] = own
@@ -492,7 +495,7 @@ class EthTxService(
       )
       .map { resp =>
         val stateNonce = blockchainReader
-          .getAccountAtStateRoot(head.stateRoot.value, address)
+          .accountAt(head, address)
           .map(_.nonce.toBigInt)
           .getOrElse(blockchainConfig.accountStartNonce.toBigInt)
         EthTxService.nextPoolNonce(resp.pendingTransactions, address, stateNonce)

@@ -503,8 +503,8 @@ class EthTxServiceSpec
     private val reader: BlockchainReader =
       new BlockchainReader(null, null, null, null, null, null, null, null):
         override def getBestBlockHeader: Option[BlockHeader] = Some(head)
-        override def getAccountAtStateRoot(
-            @scala.annotation.unused stateRoot: ByteString,
+        override def accountAt(
+            @scala.annotation.unused header: BlockHeader,
             @scala.annotation.unused address: Address
         ): Option[Account] = Some(Account(nonce = UInt256(stateNonce)))
     override lazy val ethTxService: EthTxService = new EthTxService(
@@ -613,8 +613,8 @@ class EthTxServiceSpec
     private val readerWithFundedSender: BlockchainReader =
       new BlockchainReader(null, null, null, null, null, null, null, null):
         override def getBestBlockHeader: Option[BlockHeader] = Some(head)
-        override def getAccountAtStateRoot(
-            @scala.annotation.unused stateRoot: ByteString,
+        override def accountAt(
+            @scala.annotation.unused header: BlockHeader,
             @scala.annotation.unused address: Address
         ): Option[Account] =
           Some(Account(balance = UInt256(BigInt(10).pow(24))))

@@ -397,7 +397,9 @@ class EthSimulateService(
     val evmConfig = EvmConfig.forBlock(baseBlock.header.number.value, baseBlock.header.unixTimestamp, blockchainConfig)
     var world = InMemoryWorldStateProxy(
       evmCodeStorage = evmCodeStorage,
-      mptStorage = new RetainingMptStorage(blockchain.getReadOnlyMptStorage()),
+      // One scratch state of the base block for the whole request: each simulated block reads the root the one
+      // before it persisted, which is no header's root, so the blocks have to share the storage that holds it.
+      mptStorage = new RetainingMptStorage(blockchainReader.scratchStateAt(baseBlock.header)),
       getBlockHashByNumber =
         (n: BigInt) => simulatedBlockHashes.get(n).orElse(blockchainReader.getBlockHeaderByNumber(n).map(_.hash.value)),
       accountStartNonce = blockchainConfig.accountStartNonce,
