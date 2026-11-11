@@ -646,21 +646,17 @@ items:
   - id: B-055
     title: "Spec 018 Track C C2a: the position store's read side (item 8b)"
     priority: P2
-    status: review
+    status: done
     area: storage
     size: L
     opened: 2026-11-07
+    closed: 2026-11-11
     refs: [018 C2a]
     links:
       prs: [1791, 1792]
       spec: specs/018-storage-engine-consolidation
     depends_on: [B-054]
-    claim:
-      by: cloud-dc960fdc
-      agent: main
-      since: 2026-11-11T04:55:01Z
-      heartbeat: 2026-11-11T06:43:19Z
-      branch: ccr-dc960fdc-6a9h1c
+    notes: "2026-11-11 done: C2a merged in two PRs: #1791 (owner threading, wrappers on the decorator, position mirror) and #1792 (the pathstate read side behind the guard). T045's call-site switch moved to T093; T049 and T050's figures wait for C0 (B-203); T026's ethereum/tests half is B-207."
   - id: B-056
     title: "Spec 018 Track C C2b: every reader can be handed the position store (item 8c)"
     priority: P2
