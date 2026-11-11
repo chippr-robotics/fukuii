@@ -13,6 +13,7 @@ import com.chipprbots.ethereum.db.storage.ReceiptStorage
 import com.chipprbots.ethereum.db.storage.StateStorage
 import com.chipprbots.ethereum.db.storage.pathstate.BlockRef
 import com.chipprbots.ethereum.db.storage.pathstate.PathStateStorage
+import com.chipprbots.ethereum.db.storage.pathstate.StateUnavailable
 import com.chipprbots.ethereum.domain.branch.BestBranch
 import com.chipprbots.ethereum.domain.branch.Branch
 import com.chipprbots.ethereum.domain.branch.EmptyBranch
@@ -56,6 +57,26 @@ class BlockchainReader(
     */
   def scratchStateAt(header: BlockHeader): MptStorage =
     pathState.fold(stateStorage.getReadOnlyStorage)(_.throwaway(refOf(header)))
+
+  /** The state at `root`, for serving it to a peer (SNAP); `None` when it is not served.
+    *
+    * Guard off, the read-only store whatever the root: the serve finds the root's node there or answers with nothing,
+    * as it always has. Guard on, a view of the block whose state the position store holds, when `root` is that block's
+    * and the block is within [[BlockchainReader.ServedRootWindow]] of the best block. No other state is held until the
+    * overlay (C4a), so no other root is served.
+    */
+  def stateForRoot(root: ByteString): Option[MptStorage] = pathState match
+    case None => Some(stateStorage.getReadOnlyStorage)
+    case Some(state) =>
+      state.anchor
+        .filter { held =>
+          held.stateRoot == root && getBestBlockNumber - held.number <= BlockchainReader.ServedRootWindow
+        }
+        .flatMap { held =>
+          // the disk may move between the two lines: a state that is no longer held is not served
+          try Some(state.readOnly(held))
+          catch case _: StateUnavailable => None
+        }
 
   private def refOf(header: BlockHeader): BlockRef =
     BlockRef(header.hash.value, header.number.value, header.stateRoot.value)
@@ -397,6 +418,9 @@ class BlockchainReader(
     }
 
 object BlockchainReader:
+
+  /** How far behind the best block a state root may be and still be served to a peer: go-ethereum's 128 blocks. */
+  val ServedRootWindow: Int = 128
 
   def apply(
       storages: BlockchainStorages

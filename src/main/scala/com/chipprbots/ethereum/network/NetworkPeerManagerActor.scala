@@ -12,7 +12,6 @@ import org.apache.pekko.util.ByteString
 import scala.concurrent.duration.*
 
 import com.chipprbots.ethereum.db.storage.AppStateStorage
-import com.chipprbots.ethereum.domain.Account.*
 import com.chipprbots.ethereum.domain.ChainWeight
 import com.chipprbots.ethereum.network.PeerActor.DisconnectPeer
 import com.chipprbots.ethereum.network.PeerEventBusActor.PeerEvent
@@ -116,7 +115,7 @@ object NetworkPeerManagerActor:
       forkResolverOpt: Option[ForkResolver],
       initialSnapSyncControllerOpt: Option[ActorRef] = None,
       evmCodeStorageOpt: Option[com.chipprbots.ethereum.db.storage.EvmCodeStorage] = None,
-      mptStorageOpt: Option[com.chipprbots.ethereum.db.storage.MptStorage] = None,
+      stateForRoot: ByteString => Option[com.chipprbots.ethereum.db.storage.MptStorage] = _ => None,
       blockchainReader: Option[com.chipprbots.ethereum.domain.BlockchainReader] = None,
       isPoWChain: Boolean = false,
       genesisHeadEvictionGrace: FiniteDuration = 60.seconds
@@ -181,7 +180,7 @@ object NetworkPeerManagerActor:
           forkResolverOpt,
           initialSnapSyncControllerOpt,
           evmCodeStorageOpt,
-          mptStorageOpt,
+          stateForRoot,
           blockchainReader,
           isPoWChain,
           genesisHeadEvictionGrace
@@ -200,7 +199,9 @@ object NetworkPeerManagerActor:
       forkResolverOpt: Option[ForkResolver],
       initialSnapSyncControllerOpt: Option[ActorRef],
       evmCodeStorageOpt: Option[com.chipprbots.ethereum.db.storage.EvmCodeStorage],
-      mptStorageOpt: Option[com.chipprbots.ethereum.db.storage.MptStorage],
+      // The state SNAP serving reads for a root, or none when that root is not served (spec 018 Track C): asked for
+      // each request, since on the unified layout a state is a view of a block and the block it holds moves.
+      stateForRoot: ByteString => Option[com.chipprbots.ethereum.db.storage.MptStorage],
       blockchainReader: Option[com.chipprbots.ethereum.domain.BlockchainReader],
       isPoWChain: Boolean,
       genesisHeadEvictionGrace: FiniteDuration
@@ -1090,7 +1091,7 @@ object NetworkPeerManagerActor:
       )
       val response: AccountRange =
         try
-          mptStorageOpt match
+          stateForRoot(msg.rootHash) match
             case Some(storage) if isStateRootFresh(msg.rootHash) =>
               com.chipprbots.ethereum.network.snapserver.SnapServer.serveAccountRange(
                 requestId = msg.requestId,
@@ -1148,69 +1149,41 @@ object NetworkPeerManagerActor:
       log.debug(
         s"Received GetStorageRanges request from peer $peerId: requestId=${msg.requestId}, root=${msg.rootHash.take(4).toHex}, accounts=${msg.accountHashes.size}, start=${msg.startingHash.take(4).toHex}, limit=${msg.limitHash.take(4).toHex}, bytes=${msg.responseBytes}"
       )
-      val response = mptStorageOpt match
-        case Some(storage) =>
-          import com.chipprbots.ethereum.network.snapserver.SnapServer
-          import com.chipprbots.ethereum.mpt.{MerklePatriciaTrie, NullNode}
-          val stateRootNodeOpt: Option[com.chipprbots.ethereum.mpt.MptNode] =
-            try
-              if msg.rootHash.toArray.sameElements(MerklePatriciaTrie.EmptyRootHash) then None
-              else
-                val node = storage.get(msg.rootHash.toArray)
-                if node == NullNode then None else Some(node)
-            catch
-              case e: Throwable =>
-                log.warn("MPT traversal error in handleGetStorageRanges (state root load): {}", e.getMessage)
-                None
-          val accountRoot: ByteString => Option[ByteString] = accountHash =>
-            val nibbles = SnapServer.hashToNibbles(accountHash)
-            try
-              stateRootNodeOpt.flatMap { rootNode =>
-                def find(node: com.chipprbots.ethereum.mpt.MptNode, rem: Array[Byte]): Option[ByteString] =
-                  val resolved = node match
-                    case h: com.chipprbots.ethereum.mpt.HashNode => storage.get(h.hashNode)
-                    case other                                   => other
-                  resolved match
-                    case com.chipprbots.ethereum.mpt.LeafNode(key, value, _, _, _) =>
-                      if rem.sameElements(key.toArray) then
-                        val acct = value.toArray.toAccount
-                        Some(acct.storageRoot.value)
-                      else None
-                    case com.chipprbots.ethereum.mpt.ExtensionNode(sk, next, _, _, _) =>
-                      if rem.length >= sk.length && rem.take(sk.length).sameElements(sk.toArray) then
-                        find(next, rem.drop(sk.length))
-                      else None
-                    case com.chipprbots.ethereum.mpt.BranchNode(children, _, _, _, _) =>
-                      if rem.isEmpty then None
-                      else
-                        val ch = children(rem(0) & 0x0f)
-                        if ch == NullNode then None else find(ch, rem.drop(1))
-                    case _ => None
-                find(rootNode, nibbles)
-              }
-            catch
-              case e: Throwable =>
-                log.warn("MPT traversal error in handleGetStorageRanges: {}", e.getMessage)
-                None
-          try
-            SnapServer.serveStorageRanges(
-              requestId = msg.requestId,
-              rootHash = msg.rootHash,
-              accountHashes = msg.accountHashes,
-              startingHash = msg.startingHash,
-              limitHash = msg.limitHash,
-              responseBytes = msg.responseBytes,
-              storage = storage,
-              accountRoot = accountRoot
-            )
-          catch
-            case t: Throwable =>
-              log.error(
-                s"serveStorageRanges threw for peer $peerId (requestId=${msg.requestId}): ${t.getClass.getName}: ${t.getMessage}"
+      val response: StorageRanges =
+        try
+          stateForRoot(msg.rootHash) match
+            case Some(storage) =>
+              import com.chipprbots.ethereum.network.snapserver.SnapServer
+              // The account's storage root, by a descent of the account trie that says where it is (spec 018 Track
+              // C): the lookup this handler once repeated by hash is the server's own.
+              val accountRoot: ByteString => Option[ByteString] =
+                val lookup = SnapServer.storageRootOf(msg.rootHash, storage)
+                accountHash =>
+                  try lookup(accountHash)
+                  catch
+                    // not "no such account": the serve answers the whole request with nothing
+                    case fault: com.chipprbots.ethereum.db.storage.pathstate.StateFault => throw fault
+                    case e: Throwable =>
+                      log.warn("MPT traversal error in handleGetStorageRanges: {}", e.getMessage)
+                      None
+              SnapServer.serveStorageRanges(
+                requestId = msg.requestId,
+                rootHash = msg.rootHash,
+                accountHashes = msg.accountHashes,
+                startingHash = msg.startingHash,
+                limitHash = msg.limitHash,
+                responseBytes = msg.responseBytes,
+                storage = storage,
+                accountRoot = accountRoot
               )
+            case None =>
               StorageRanges(msg.requestId, Seq.empty, Seq.empty)
-        case None =>
-          StorageRanges(msg.requestId, Seq.empty, Seq.empty)
+        catch
+          case t: Throwable =>
+            log.error(
+              s"serveStorageRanges threw for peer $peerId (requestId=${msg.requestId}): ${t.getClass.getName}: ${t.getMessage}"
+            )
+            StorageRanges(msg.requestId, Seq.empty, Seq.empty)
       peerManagerActor ! PeerManagerActor.SendMessageCmd(response, peerId)
       log.debug(
         "SNAP-SERVE: GetStorageRanges peer={} slots={} proofs={}",
@@ -1233,7 +1206,7 @@ object NetworkPeerManagerActor:
       )
       val response: TrieNodes =
         try
-          mptStorageOpt match
+          stateForRoot(msg.rootHash) match
             case Some(storage) =>
               com.chipprbots.ethereum.network.snapserver.SnapServer.serveTrieNodes(
                 requestId = msg.requestId,

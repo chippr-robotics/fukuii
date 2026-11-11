@@ -154,6 +154,9 @@ trait StorageBuilder:
           with Storages.DefaultStorages
           with InstanceConfigProvider:
           override def instanceConfig: InstanceConfig = self.instanceConfig
+          // The guard as this instance's configuration has it, the value its capabilities are made from: the default
+          // reads the process-wide configuration, which another instance of a multi-instance run does not share.
+          override protected def statePathLive: Boolean = self.instanceConfig.statePathLive
 
 trait DiscoveryConfigBuilder extends BlockchainConfigBuilder with StorageBuilder:
   self: InstanceConfigProvider & ActorSystemBuilder =>
@@ -493,7 +496,7 @@ trait NetworkPeerManagerActorBuilder:
           storagesInstance.storages.appStateStorage,
           forkResolverOpt,
           evmCodeStorageOpt = Some(storagesInstance.storages.evmCodeStorage),
-          mptStorageOpt = Some(storagesInstance.storages.stateStorage.getReadOnlyStorage),
+          stateForRoot = blockchainReader.stateForRoot,
           blockchainReader = Some(blockchainReader),
           isPoWChain = blockchainConfig.terminalTotalDifficulty.isEmpty,
           genesisHeadEvictionGrace = com.chipprbots.ethereum.utils.Config.Network.peer.genesisHeadEvictionGrace
@@ -516,7 +519,6 @@ trait BlockchainHostBuilder:
       .supervise(
         BlockchainHostActor(
           blockchainReader,
-          storagesInstance.storages.evmCodeStorage,
           peerConfiguration,
           peerEventBus,
           networkPeerManager,

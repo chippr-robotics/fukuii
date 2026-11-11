@@ -171,3 +171,28 @@ class ConfigValidatorSpec extends AnyFlatSpec with Matchers:
     errors.length should be >= 2
   }
 // scalastyle:on magic.number
+
+  // ── The in-development guard of the unified state layout (spec 018 Track C) ──────────────────────────────────
+
+  // With the guard on SNAP is not advertised until the overlay can serve recent roots, and a capability is mutual: a
+  // SNAP sync would wait for a snap-capable peer for ever. A node that would start and never sync does not start.
+  it should "refuse state.path-live with SNAP sync on, and name both keys" taggedAs UnitTest in {
+    val errors = ConfigValidator.validate(cfg("state.path-live = true\nsync.do-snap-sync = true"))
+    errors should have size 1
+    errors.head should (include("fukuii.state.path-live").and(include("fukuii.sync.do-snap-sync = false")))
+  }
+
+  it should "accept the guard with SNAP sync off, and SNAP sync with the guard off or not set" taggedAs UnitTest in {
+    ConfigValidator.validate(cfg("state.path-live = true\nsync.do-snap-sync = false")) shouldBe empty
+    ConfigValidator.validate(cfg("state.path-live = false\nsync.do-snap-sync = true")) shouldBe empty
+    ConfigValidator.validate(cfg("sync.do-snap-sync = true")) shouldBe empty
+    // the configuration the node ships with
+    ConfigValidator.stateGuardErrors(ConfigFactory.load().getConfig("fukuii")) shouldBe empty
+  }
+
+  it should "refuse it for an instance of a multi-instance run too" taggedAs UnitTest in {
+    val instance = cfg("state.path-live = true\nsync.do-snap-sync = true")
+    val root = ConfigFactory.empty().withValue("fukuii-runtime.instances.guarded.fukuii", instance.root())
+    val refused = the[IllegalArgumentException] thrownBy com.chipprbots.ethereum.runtime.FukuiiRuntime.fromConfig(root)
+    refused.getMessage should (include("Instance guarded").and(include("fukuii.state.path-live")))
+  }

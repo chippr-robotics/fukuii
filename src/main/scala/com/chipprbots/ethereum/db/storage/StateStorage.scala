@@ -140,8 +140,8 @@ trait StateStorage:
 
   /** The node stored under `nodeHash`, read as every other trie read is (`SerializingMptStorage.get`: keccak first,
     * through this mode's own format): `None` when it is absent, or when what is stored is not that node, which is
-    * logged once as a corrupt node. For the chain reader's `getMptNodeByHash` and the GetNodeData server: one decoded
-    * the bytes itself, with no hash check (H3, CHASE row 45), and the other could serve another node's bytes to a peer.
+    * logged once as a corrupt node. For the chain reader's `getMptNodeByHash`, which once decoded the bytes itself,
+    * with no hash check (H3, CHASE row 45). The GetNodeData server, its other caller, is gone (spec 018 Track C, C2b).
     */
   def getNode(nodeHash: NodeHash): Option[MptNode] =
     try Some(getReadOnlyStorage.get(nodeHash.toArray))

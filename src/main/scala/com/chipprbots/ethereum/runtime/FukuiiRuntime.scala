@@ -75,6 +75,10 @@ object FukuiiRuntime extends Logger:
         // Each instance block wraps config in a `fukuii { ... }` section — extract it
         val instanceConf =
           if rawInstanceConf.hasPath("fukuii") then rawInstanceConf.getConfig("fukuii") else rawInstanceConf
+        // Fatal for the single-instance launcher, and so for an instance: it would start and never sync.
+        ConfigValidator.stateGuardErrors(instanceConf).headOption.foreach { error =>
+          throw new IllegalArgumentException(s"Instance $instanceId: $error")
+        }
         val ic = new InstanceConfig(instanceConf, instanceId)
         // ConfigValidator.validate only runs for the single-instance launcher; report removed keys here too.
         ConfigValidator.removedKeyWarnings(instanceConf).foreach(warning => log.warn(s"Instance $instanceId: $warning"))

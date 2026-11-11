@@ -17,7 +17,7 @@ C1 (B-054) merged as #1788. **C2a (B-055) merged as two PRs**, #1791 and #1792.
 **C3a (B-057) merged as #1793**: the changeset record and its codec, `ChangesetStorage` on the new column family `v`,
 and `StateConfig`. forge and beacon signed the record's bytes. Nothing reads or writes it yet.
 
-**C2b (B-056) is in flight** in this session, in three PRs: the ratchet, the RPC readers, serving and walking. Its
+**C2b (B-056) is in flight** in this session, in four PRs: the ratchet, the RPC readers, SNAP serving, walking. Its
 pre-code record, with what conduit, herald and beacon changed, is in plan.md.
 
 - **The ratchet is done** (T054, T062): `scripts/check-state-accessors.sh` with `scripts/state-accessor-allowlist.txt`,
@@ -29,6 +29,14 @@ pre-code record, with what conduit, herald and beacon changed, is in plan.md.
   plan.md, "C2b RPC readers record", has what an end-to-end run on the execution-apis chain found: **the header a call
   runs under is not its block's header**, so a state is always asked for by the block's own header
   (`StxLedger.callWorld(stateOf, executing)`). The same trap waits for anyone who hands an execution header to the seam.
+- **SNAP serving is done** (T052, T058): the server reads every node at its position, the handlers ask
+  `BlockchainReader.stateForRoot(root)` per request, a serve that meets a `StateFault` answers with the empty response,
+  `snap/1` is not advertised under the guard, and the unreachable `GetNodeData` handler is deleted. plan.md, "C2b SNAP
+  serving record". **With the guard on, set `sync.do-snap-sync = false`**: the node refuses to start otherwise, until
+  C4a advertises SNAP again. The node's storages now take the guard from the instance's configuration
+  (`InstanceConfig.statePathLive`), not from `StateLayoutConfig`, which is left for storages built outside a node. **A reader that holds a storage across many reads and turns a failed read into "absent" has the same
+  defect the server had**: look for `catch case _: Throwable` around a `get` in every walker of the fourth PR.
+  `PathStateTestKit.StaleAfter` is a storage that goes stale after a given number of reads, for exactly that test.
 - The decisions follow-up merged as #1795, the ratchet as #1796.
 
 Next after it: **C3b** (B-058, the staged commit), which needs C3a and C2a and not C2b.
@@ -55,12 +63,12 @@ overlay.
 
 Read plan.md, "C2a part 1 record" and "C2a part 2 record", then:
 
-- **C2b**: the third PR is serving and walking (T052, T055, T058 to T061): SNAP serving by root with the prefix
-  threaded and no `snap1` advertisement under the guard, checkpoint export, the recovery scans, positioned visitors for
-  the three walkers that see only a hash. Its work list is the allow-list's section "Serving and walking". Use
-  `test/jsonrpc/conformance/RpcReadersOnPositionsSpec.scala` as the model for a differential: one real chain, its
-  state copied into the position store of the same datadir (`PathStateTestKit.seedPositions`), two nodes, same
-  questions.
+- **C2b**: the fourth PR is walking (T055, T059 to T061): checkpoint export, the recovery scans, positioned visitors
+  for the three walkers that see only a hash. Its work list is what is left of the allow-list's section "Serving and
+  walking". Two models for a differential: `test/jsonrpc/conformance/RpcReadersOnPositionsSpec.scala` (one real chain,
+  its state copied into the position store of the same datadir with `PathStateTestKit.seedPositions`, two nodes, same
+  questions) and `test/network/snapserver/SnapServePositionStoreSpec.scala` (one state held two ways, and a second
+  state with chosen keys: **hashed keys give no long extension, and a path is miscounted through an extension**).
 - **C3b**: start at T087 (`StateLock`), which is what makes the `StateLockHeld` that `ChangesetStorage` asks for, then
   T088 to T091. The commit writes its batch inside `StateMoveLog.inFlight(move) { … }`, takes the anchor from
   `move.newAnchor`, and keeps a **persisted** prune cursor: `ChangesetStorage` never scans for heights (data-model 4.1).
