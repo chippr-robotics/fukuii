@@ -4,7 +4,7 @@
 
 **Created**: 2026-10-17
 
-**Status**: Active (2026-11-11). Track C (the copy removal and the unified path-live layout for both chains, items 8, 6 and 10) is under way: slice C1 (the trie reports positions) is its first code, C0's pinned jar and measurements are still open, and C2a to C8b follow in merge order; Tracks E, F, H and R are planned at plan level only. The Phase 0 evaluation is done ([research.md](./research.md)); the
+**Status**: Active (2026-11-11). Track C (the copy removal and the unified path-live layout for both chains, items 8, 6 and 10) is under way: slice C1 (the trie reports positions) merged as #1788, C0's pinned jar and measurements are still open, and C2a to C8b follow in merge order; Tracks E, F, H and R are planned at plan level only. The Phase 0 evaluation is done ([research.md](./research.md)); the
 plan ([plan.md](./plan.md)) is drafted to the point where `/speckit-tasks` can run once the gates below report. The
 Design constraints and Gates sections are binding on that later work. **Revised 2026-10-17 (same day)** after the user's
 direction: the hot-tier engine is **not fixed to libmdbx**; it is chosen by a measured bake-off (GT-1) against the
@@ -16,7 +16,7 @@ a read-serving track (Track R), the enterprise analytics user story (US-8), the 
 `dbLock` close-fence and the fixed-width `UInt256` pulled forward as named tasks (T-010, T-011), and Erigon and Reth
 added as comparators in the GT-1 harness (FR-028).
 
-**In flight**: `fukuii-fc` (local session), branch `docs/spec-018-c0`: Track C C0 in progress (baselines, ETC chain file exported); `cloud-dc960fdc` (cloud session), branch `ccr-dc960fdc-6a9h1c`: Track C C1 (B-054), in PR
+**In flight**: `fukuii-fc` (local session), branch `docs/spec-018-c0`: Track C C0 in progress (baselines, ETC chain file exported)
 
 **Sequence**: spec 016 (SNAP split, `StateIngest`) → spec 017 (`StateAccess`, witnesses) → **this spec** → spec 019
 (zkVM guest). **Implementation starts after spec 017 completes** (user decision, 2026-10-17). Phase 0 (measurement,
