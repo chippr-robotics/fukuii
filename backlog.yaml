@@ -2252,3 +2252,13 @@ items:
     links:
       spec: specs/027-tui-dashboard
     notes: "console/panels/ForkRows at 100x32: slice 5's 100-column CL goldens hold the panel rows only because the full frame fails TuiGoldenLintSpec on this row. Fix the row, then add a full-frame 100x32 golden."
+  - id: B-202
+    title: PeerScore can produce NaN (Math.max(0.0, NaN) stays NaN); find the source term
+    priority: P3
+    status: open
+    area: p2p
+    size: S
+    opened: 2026-11-11
+    refs: ["prism review of 027 slice 5, 2026-11-10"]
+    links: {}
+    notes: The TUI now filters non-finite scores (draws a dash, sorts last). The NaN source in network/PeerScore.scala is not fixed; herald owns.
