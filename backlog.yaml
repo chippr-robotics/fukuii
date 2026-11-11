@@ -2222,3 +2222,13 @@ items:
     refs: ["prism review of 027 slice 4, 2026-11-10"]
     links: {}
     notes: "WireProtocol.scala:50 decodes clientId unbounded; NodeClientType.recognize (NetworkPeerManagerActor.scala:748) lowercases it in full and Hello.toString quotes it. A cap at decode (geth: none; devp2p norm well under 1 KiB) removes the class for every consumer. herald owns."
+  - id: B-200
+    title: Grafana dashboards query *_total names the Prometheus exporter does not expose for gauges (e.g. app_engine_newpayload_total)
+    priority: P2
+    status: open
+    area: ops
+    size: S
+    opened: 2026-11-11
+    refs: ["beacon review of 027 slice 5, 2026-11-10"]
+    links: {}
+    notes: beacon's scrape (micrometer 1.16.6 + prometheus-metrics 1.4.3) exposes non-counter app_engine_newpayload_total as app_engine_newpayload; ops/grafana/Network/fukuii-network-overview.json:66,82,119,120 query the _total form. Verify on the pinned prometheus-metrics 1.3.10 with a live /metrics scrape, then fix names or dashboards.
