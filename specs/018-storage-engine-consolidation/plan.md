@@ -983,7 +983,7 @@ sync starts, and writes nothing: what the combined scan, the default, already do
 right after the sync, before there is an anchor to take a view of. Only the export has a block: it takes
 `BlockchainReader.stateAt(header)`. The rest is the hand-off's (C5a), and the allow-list rows say so.
 
-**Each spec passed when first run, so the code was broken one rule at a time.** 41 mutations, all caught:
+**Each spec passed when first run, so the code was broken one rule at a time.** 46 mutations, all caught:
 
 | Rule broken | Mutations | Caught by |
 | --- | --- | --- |
@@ -998,6 +998,7 @@ right after the sync, before there is an anchor to take a view of. Only the expo
 | the export: an owner, a path, an extension, a branch index, a pushed path or a leaf's key wrong | 6 | the frozen bytes, from the position store |
 | the export: a state fault is a missing node; a state not held is another error | 2 | `CheckpointExporterSpec` |
 | the position store says its nodes are shared; a wrapper answers for itself | 2 | the alias case; `MptStorageDecoratorSpec` |
+| after review: an account under a short key is a hole, or a leaf that does not decode, or is handed to the store by the export; a scan that could not run tells the controller it completed (storage, bytecode) | 5 | the short-key cases; the two actor specs |
 
 **Reviews (beacon and forge: SIGN WITH CHANGES, no blocker).** Both read the hash-store behaviour as unchanged: the
 same nodes, read in the same order.
@@ -1024,6 +1025,11 @@ pass that ran settles the flags, holes or not, because a rescan at every start b
 fix above, "a stopped walk is a failure" would be that rescan on any datadir with one hole. The consistent change is the
 combined scan's hole counter for the legacy walks, which is the user's to decide (B-217). What the SNAP controller does
 when a validation ends in a state fault is unreachable until the validator is handed a view (B-216).
+
+**Not covered here, and said so.** The controller's two new arms for `RecoveryNotRun` have no test of their own: the
+legacy path is chosen by the process-wide configuration, which the controller's spec cannot set for one case. The
+actors' message is pinned; the arms mirror the ones beside them. And one case of `SyncControllerSpec` fails when that
+spec is run alone, at #1797's head as well as here, though it passes in the full run (B-218).
 
 **The ratchet** went from 133 lines and 263 uses to 121 and 240. Nothing in main resolves a node of the state by hash
 alone in a walk any more: what is left of the list's walking section is the store each walk is handed.
