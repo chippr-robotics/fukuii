@@ -660,19 +660,17 @@ items:
   - id: B-056
     title: "Spec 018 Track C C2b: every reader can be handed the position store (item 8c)"
     priority: P2
-    status: claimed
+    status: done
     area: storage
     size: L
     opened: 2026-11-07
+    closed: 2026-11-11
     refs: [018 C2b]
     links:
+      prs: [1799]
       spec: specs/018-storage-engine-consolidation
     depends_on: [B-055]
-    claim:
-      by: cloud-dc960fdc
-      agent: main
-      since: 2026-11-11T07:52:46Z
-      heartbeat: 2026-11-11T17:13:48Z
+    notes: "2026-11-11 done: C2b complete: #1796 (ratchet), #1797 (RPC readers), #1798 (SNAP serving), #1799 (walkers). Pinned-jar halves wait for C0 (B-207, B-212)."
   - id: B-057
     title: "Spec 018 Track C C3a: the changeset record and CF v (item 6a)"
     priority: P2
