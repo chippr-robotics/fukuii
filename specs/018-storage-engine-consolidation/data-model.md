@@ -338,6 +338,13 @@ batch, which also absorbs a floor that moved). Because pruning is point deletes 
 `deleteRange` and is idempotent**: a crash before the batch leaves the records, and the next batch removes them. Tombstones
 (4.2) follow the same floor. `archive` keeps every record (4.6); `inmemory` is retired.
 
+*(User decision, 2026-11-11.)* **Where there is no finalized block the floor is `state.retention.without-finality`, 512 blocks,
+not `pruning.history`.** That is every ETC and Mordor node, and an ETH node whose consensus client has not reported a
+finalized block yet. The arithmetic above gave them 64. A proof-of-work chain can be reorganised to any depth its attackers
+pay for (ETC by 3,000 to 7,000 blocks in 2020; MESS returns only with Olympia), and a reorganisation deeper than the floor is
+refused and the state synced again. So: `retained = clamp(finalized ? anchor - finalized + finality-margin :
+without-finality, pruning.history, max-blocks)`. The cost is one record per block kept, 512 against 64.
+
 ### 4.6 The two pruning modes on the unified layout (both chains)
 
 `basic` and `archive`. **`pruning.mode = "inmemory"` is retired** (user decision, 2026-11-06, which reverses the earlier "keep all
@@ -1073,6 +1080,7 @@ fukuii.state {
   retention {
     finality-margin = 16                     # blocks kept above a consensus client's finalized block (4.5)
     max-blocks = 512                         # bound on the retention floor
+    without-finality = 512                   # blocks kept where there is no finalized block: a proof-of-work chain (user, 2026-11-11)
   }
   overlay {
     max-bytes = 268435456                    # forward layers + resident reverse diffs, excluding pinned layers (a guess until M1, M2)
