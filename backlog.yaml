@@ -633,19 +633,20 @@ items:
   - id: B-054
     title: "Spec 018 Track C C1: the trie reports positions (item 8a)"
     priority: P2
-    status: in-progress
+    status: review
     area: storage
     size: L
     opened: 2026-11-07
     refs: [018 C1]
     links:
+      prs: [1788]
       spec: specs/018-storage-engine-consolidation
     depends_on: [B-053]
     claim:
       by: cloud-dc960fdc
       agent: main
       since: 2026-11-11T00:53:44Z
-      heartbeat: 2026-11-11T00:53:52Z
+      heartbeat: 2026-11-11T01:48:53Z
       branch: ccr-dc960fdc-6a9h1c
     notes: "2026-11-11 in-progress: C1 starts on the frozen golden vectors and oracle list (tasks.md: C1 needs only T014/T015); T025/T026/T033 need the pinned jar and stay open."
   - id: B-055
