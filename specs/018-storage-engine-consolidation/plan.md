@@ -720,6 +720,77 @@ blocks. **It lands as three PRs:** the ratchet; the RPC readers; serving and wal
 | Three walkers see only a hash (`LeafWalkVisitor`, `MptConstructionVisitor`, `ShardEnumerator`), and every read of a storage root by hash fails on a position store (`StorageRecoveryActor:452,497`, `StateValidator:79,287`) | beacon | positioned visitors for the three; the storage-root reads take the account hash they already hold |
 | The four accessors are not all the doors in | beacon | the ratchet also covers `getBulkLoadStorage`, `stageBlock`, `prefetchReader`, `getNode`/`getMptNodeByHash`, `storageMpt(`, trie constructions, `def visitHash`, and stores built outside `db/storage` |
 
+### C2b ratchet record (2026-11-11)
+
+C2b's first PR freezes who may still enter the state by a root or a hash (T054, T062). No code of the node changes.
+
+`scripts/check-state-accessors.sh` counts every use of eighteen entry points under `src/main/scala` and compares the counts
+with `scripts/state-accessor-allowlist.txt`, where each line has its reason. More uses than a line allows fail, and so do
+fewer: the list only shrinks. It runs in the Test and Build job before the compile, and again from
+`StateAccessorRatchetSpec`.
+
+**What the tree holds: 142 lines, 279 uses, 69 files.** By what happens to them:
+
+| Group | Lines | Leaves in |
+| --- | --- | --- |
+| The stores and the trie themselves (definitions) | 41 | C8b, with the Hash scheme; some are kept |
+| Tries and decorators that name their owner | 11 | kept (C2a did these) |
+| Not the state: list tries over an ephemeral source | 11 | kept |
+| Readers behind RPC, and the transaction pool | 12 | C2b, second PR |
+| SNAP serving, checkpoint export, recovery scans, walkers | 22 | C2b, third PR |
+| Execution, block production and the writers beside them | 10 | C3b, C3c |
+| SNAP hand-off, the audit, repair, checkpoint import | 11 | C5a, C5b, C5c |
+| The copy to the hash store, and SNAP's Hash arm | 24 | C8a |
+
+18 lines are marked `WRITER`.
+
+**What the list showed that the design had not:**
+
+- The four accessors named in T054 are 57 of the 279 uses, their definitions included. Most hash-only readers never touch
+  an accessor: they are handed a store and call `get(hash)` on it. SNAP serving, `StateValidator` (9 reads), the recovery
+  scans and `ShardEnumerator` appear only under `get-by-hash`, which is why it was added.
+- `PendingTransactionsManager` (`:498`) reads senders' accounts at the best block from a root alone. No task named it. It
+  is not on the consensus path and falls back to the senders it knows on any failure (`:530-533`), so it moves with the
+  RPC readers (beacon agrees).
+- Scala 3 builds a class without `new`: a pattern on `new SerializingMptStorage(` misses half of the constructions.
+- `MerklePatriciaTrie.getProof` has an arm that resolves a hash node with no position (`:196`). It is **unreachable**:
+  `pathTraverse` resolves every hash node before the arm sees one (beacon, who had said so in the C1 review; a first
+  reading here took it for a fault in `eth_getProof` on a position store, which it is not). T051 deletes the arm.
+
+**beacon's review of the list (SIGN WITH CHANGES; all taken):**
+
+| Finding | Change |
+| --- | --- |
+| No pattern covered the writes by hash: `storeRawNodes` (13 uses in 9 files), `repairNode`, `deleteBadNode`, `saveNode`. They are the riskiest doors | entry point `raw-store` |
+| An accessor reached under another name escaped: `StateIngest.trieStore` returns `getBackingStorage(pivot)`, and `SnapResumePlanner.getOrCreateMptStorage` hands that on to nine call sites | entry point `snap-store`; and `store-handed`, every method whose result is a store, so that the next such name has to be listed when it is written |
+| Three reasons were wrong about the code: the `getProof` arm; `NodeBuilder:496` serves SNAP only, not GetNodeData; the two raw reads of `NetworkPeerManagerActor` belong to the storage-range answer | corrected |
+| A `get` on a map called `storage` trips `get-by-hash`, and that kind of noise is what gets a check switched off | `get-by-hash` looks only in files that name a store or a trie (three rows left the list); a failure prints the exact line to add or edit |
+| Exact counts in both directions | kept: it is what makes the list only shrink, and moving lines inside a file is free |
+
+**Its limits.** It is text, not types. `get-by-hash` knows a store by its name (`mptStorage`, `storage`, `source`,
+`hashStore`, `mpt`), so a store under another name gets past it. The proof that nothing reads by hash alone is C8b, which
+deletes the read; until then this trips on the shapes the code uses today.
+
+**Evidence.** The spec passed when first run, apart from one wording mismatch, and four of its assertions were then
+found to pass on the script's closing paragraph and not on its verdict; they now name the verdict. The script was then
+broken one rule at a time, 27 ways, and every one fails at least one case (46 cases in all):
+
+| Broken | Cases that fail |
+| --- | --- |
+| more than listed passes; fewer passes; a line whose file is gone passes | 1 each |
+| comment lines are counted; lines are counted and not uses | 2 each |
+| a line with no reason, a line given twice, an unknown entry point, a count that is no number: each accepted | 1 each |
+| `src/test` is scanned too | 2 |
+| an empty list is read as the tree (the `FNR == NR` trap in awk, which the first run of the script hit) | 33 |
+| a tree with no sources passes; a missing allow-list passes | 1 each |
+| a difference exits 0 | 39 |
+| the uses of an unlisted file are not shown; the line to add is not printed | 34; 1 |
+| `get-by-hash` looks in every file | 2 |
+| a pattern loosened or narrowed, ten ways: no word boundary; `visitHash(` without `def`; any receiver for `get(`; a type argument counted as a trie; `new` required for a store; `raw-store` without the delete, or without the batch write; `snap-store` without its second name; `store-handed` taking a function type, or missing a declaration | 1 to 3 each |
+
+On the first set of mutations two of the loosened patterns failed only the run on the repository; each now has a made-up
+case of its own.
+
 ### Destructive change (C8a and C8b): the vault protocol blocks
 
 ```

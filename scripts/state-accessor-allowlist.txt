@@ -1,0 +1,172 @@
+# Spec 018 Track C (T062): where the state's entry points may still be used, and why.
+#
+# Checked by scripts/check-state-accessors.sh, which says what each entry point is. Run it with --inventory to see
+# what the tree holds.
+#
+#   entry-point  count  file  reason
+#
+# The count is exact: more uses fail the check, and so do fewer. A slice that converts a caller lowers the count
+# or removes the line in the same change, so this list only gets shorter. A NEW line says that the position store
+# need not serve that caller yet, and is reviewed as that claim.
+#
+# In a reason: C2b, C3b and so on are the slice of specs/018-storage-engine-consolidation/tasks.md that converts
+# the use, with its task. WRITER marks a use that writes the state; a writer leaves only with the slice named.
+# (kept) marks a use that is no read of the state by hash alone, and stays.
+
+# The stores and the trie themselves: the definitions. A definition counts as a use.
+backing-mpt 2 src/main/scala/com/chipprbots/ethereum/domain/Blockchain.scala the definition, in the trait and in BlockchainImpl; deleted with the Hash scheme (C8b)
+readonly-mpt 2 src/main/scala/com/chipprbots/ethereum/domain/Blockchain.scala the definition, in the trait and in BlockchainImpl; deleted with the Hash scheme (C8b)
+readonly 1 src/main/scala/com/chipprbots/ethereum/domain/Blockchain.scala getReadOnlyMptStorage's body; deleted with the Hash scheme (C8b)
+backing 7 src/main/scala/com/chipprbots/ethereum/db/storage/StateStorage.scala the definition, its three pruning modes, and the defaults of bulk-load and stage-block that call it; deleted with the Hash scheme (C8b)
+readonly 6 src/main/scala/com/chipprbots/ethereum/db/storage/StateStorage.scala the definition, its three pruning modes, getNode's read, and the ephemeral form for list tries, which is kept (T280)
+bulk-load 2 src/main/scala/com/chipprbots/ethereum/db/storage/StateStorage.scala the definition and the reference-counted store's form; deleted with the publish plumbing (C8a, T271)
+stage-block 3 src/main/scala/com/chipprbots/ethereum/db/storage/StateStorage.scala the definition and two modes' forms; replaced by the staged commit (C3b, T093)
+prefetch-reader 3 src/main/scala/com/chipprbots/ethereum/db/storage/StateStorage.scala the staged block's definition and two modes' forms; the call site moves to the position store's in C3b (T093)
+prefetch-reader 1 src/main/scala/com/chipprbots/ethereum/db/storage/pathstate/PathStateStorage.scala the position store's own: it takes the parent block and reads its view (kept)
+node-by-hash 1 src/main/scala/com/chipprbots/ethereum/db/storage/StateStorage.scala the definition of getNode; it goes with its last caller, GetNodeData (C2b, T058)
+get-by-hash 1 src/main/scala/com/chipprbots/ethereum/db/storage/StateStorage.scala getNode's read of the buffer over the store; it goes with getNode
+store-built 14 src/main/scala/com/chipprbots/ethereum/db/storage/StateStorage.scala the hash stores themselves, in each pruning mode; deleted with the Hash scheme (C8b). The ephemeral form for list tries is kept (T280)
+multi-get 2 src/main/scala/com/chipprbots/ethereum/db/storage/MptStorage.scala the definition and the hash store's batch; the member goes with the Hash scheme (C8b)
+raw-nodes 4 src/main/scala/com/chipprbots/ethereum/db/storage/MptStorage.scala the definitions of rawNodes and rawNodesAt, and the hash store's batch
+get-by-hash 1 src/main/scala/com/chipprbots/ethereum/db/storage/MptStorage.scala not a trie read: the hash store reading its own key-value store, named `storage`
+store-built 1 src/main/scala/com/chipprbots/ethereum/db/storage/MptStorage.scala the definition of SerializingMptStorage
+multi-get 2 src/main/scala/com/chipprbots/ethereum/db/storage/MptStorageDecorator.scala the decorator forwards the batch to what it wraps (kept while the member is)
+raw-nodes 4 src/main/scala/com/chipprbots/ethereum/db/storage/MptStorageDecorator.scala the decorator forwards both batches to what it wraps (kept while the members are)
+multi-get 1 src/main/scala/com/chipprbots/ethereum/db/storage/pathstate/PathMptStorage.scala the position store refuses a batch by hash alone: it throws (kept while the member is)
+raw-nodes 2 src/main/scala/com/chipprbots/ethereum/db/storage/pathstate/PathMptStorage.scala rawNodesAt reads the view at each position, and rawNodes by hash alone throws (kept)
+store-built 1 src/main/scala/com/chipprbots/ethereum/db/storage/ReadOnlyNodeStorage.scala its own factory
+raw-store 10 src/main/scala/com/chipprbots/ethereum/db/storage/StateStorage.scala the definitions of saveNode, repairNode and deleteBadNode and each pruning mode's form; repairNodeAt and deleteBadNodeAt replace them (C5b, T216), and they go with the Hash scheme (C8b)
+raw-store 2 src/main/scala/com/chipprbots/ethereum/db/storage/MptStorage.scala the definition of storeRawNodes and the hash store's form; the member goes with the Hash scheme (C8b)
+raw-store 2 src/main/scala/com/chipprbots/ethereum/db/storage/MptStorageDecorator.scala the decorator forwards storeRawNodes to what it wraps (kept while the member is)
+raw-store 1 src/main/scala/com/chipprbots/ethereum/db/storage/PrefetchNodeReader.scala the prefetch reader refuses the write: it is read-only (kept while the member is)
+raw-store 1 src/main/scala/com/chipprbots/ethereum/db/storage/pathstate/PathMptStorage.scala the position store refuses a write by hash alone: it throws (kept while the member is)
+store-handed 14 src/main/scala/com/chipprbots/ethereum/db/storage/StateStorage.scala the accessors' definitions, each pruning mode's forms, and the staged block's store; deleted with the Hash scheme (C8b), but for the ephemeral form (kept)
+store-handed 2 src/main/scala/com/chipprbots/ethereum/db/storage/MptStorage.scala forOwner and cachedForExecution: a store hands out a view of itself (kept)
+store-handed 3 src/main/scala/com/chipprbots/ethereum/db/storage/MptStorageDecorator.scala the decorator's own members: what it wraps, how it rewraps, and forOwner (kept)
+store-handed 1 src/main/scala/com/chipprbots/ethereum/db/storage/DecodedNodeCache.scala a decorator's rewrap of an owner's view (kept)
+store-handed 1 src/main/scala/com/chipprbots/ethereum/db/storage/PrefetchNodeReader.scala a decorator's rewrap of an owner's view (kept)
+store-handed 3 src/main/scala/com/chipprbots/ethereum/db/storage/pathstate/PathMptStorage.scala the position store's forOwner and its two factories, readOnly and throwaway (kept)
+store-handed 2 src/main/scala/com/chipprbots/ethereum/db/storage/pathstate/PathStateStorage.scala the position store's two doors, each over the view of a block: what the seam of C2b hands out (kept)
+store-handed 4 src/main/scala/com/chipprbots/ethereum/domain/Blockchain.scala the two accessors, declared and defined; deleted with the Hash scheme (C8b)
+trie-of 7 src/main/scala/com/chipprbots/ethereum/mpt/MerklePatriciaTrie.scala the trie's own constructors, and the copies its updates return (kept)
+get-by-hash 1 src/main/scala/com/chipprbots/ethereum/mpt/MerklePatriciaTrie.scala an arm of getProof that nothing reaches (pathTraverse resolves every hash node before the arm sees one), and its unpositioned read; deleted in C2b (T051)
+visit-hash 1 src/main/scala/com/chipprbots/ethereum/mpt/MptVisitors/MptVisitor.scala the definition of the visitor's member
+visit-hash 1 src/main/scala/com/chipprbots/ethereum/mpt/MptVisitors/RlpEncVisitor.scala encodes a hash node as its hash and resolves nothing (kept)
+visit-hash 1 src/main/scala/com/chipprbots/ethereum/mpt/MptVisitors/RlpHashingVisitor.scala hands the hash node to the encoder and resolves nothing (kept)
+storage-mpt 2 src/main/scala/com/chipprbots/ethereum/domain/package.scala the definitions, one for each key encoding: they build over the store they are given, which names the owner (kept)
+trie-of 2 src/main/scala/com/chipprbots/ethereum/domain/package.scala the tries those two definitions build (kept)
+
+# Tries that name their owner (C2a): the account trie over forOwner(None), a storage trie over its account's hash.
+trie-of 1 src/main/scala/com/chipprbots/ethereum/ledger/InMemoryWorldStateProxy.scala a world's account trie, over forOwner(None) (C2a, kept)
+storage-mpt 2 src/main/scala/com/chipprbots/ethereum/ledger/InMemoryWorldStateProxy.scala a contract's storage trie, over forOwner(Some(keccak(address))), for each key encoding (C2a, kept)
+trie-of 1 src/main/scala/com/chipprbots/ethereum/ledger/BalPrefetcher.scala the prefetch's account trie, over forOwner(None) (C2a, kept)
+storage-mpt 2 src/main/scala/com/chipprbots/ethereum/ledger/BalPrefetcher.scala the prefetch's storage tries, each over its owner, for each key encoding (C2a, kept)
+trie-of 1 src/main/scala/com/chipprbots/ethereum/blockchain/data/GenesisDataLoader.scala the account trie of genesis, over forOwner(None) (C2a); the genesis commit is C3c (T115)
+storage-mpt 1 src/main/scala/com/chipprbots/ethereum/blockchain/data/GenesisDataLoader.scala a genesis account's storage trie, over its owner (C2a); the genesis commit is C3c (T115)
+store-handed 1 src/main/scala/com/chipprbots/ethereum/ledger/InMemoryWorldStateProxy.scala a decorator's rewrap of an owner's view: the world's storage nodes (C2a, kept)
+store-handed 1 src/main/scala/com/chipprbots/ethereum/ledger/StxLedger.scala a decorator's rewrap of an owner's view: the replay store (C2a, kept)
+store-handed 1 src/main/scala/com/chipprbots/ethereum/jsonrpc/EthSimulateService.scala a decorator's rewrap of an owner's view: the retaining store (C2a, kept)
+store-handed 1 src/main/scala/com/chipprbots/ethereum/blockchain/data/GenesisDataLoader.scala a decorator's rewrap of an owner's view: the append-only store (C2a, kept)
+trie-of 1 src/main/scala/com/chipprbots/ethereum/testmode/TestModeWorldStateProxy.scala test mode's world builds its account trie over the store it is handed, as execution's world does (kept)
+
+# Not the state: list tries. These stay.
+readonly 1 src/main/scala/com/chipprbots/ethereum/consensus/blocks/BlockGeneratorSkeleton.scala not the state: a list trie (a transactions, receipts or withdrawals root) over an ephemeral source (kept)
+trie-of 1 src/main/scala/com/chipprbots/ethereum/consensus/blocks/BlockGeneratorSkeleton.scala not the state: a list trie (a transactions, receipts or withdrawals root) over an ephemeral source (kept)
+readonly 2 src/main/scala/com/chipprbots/ethereum/consensus/engine/EngineApiService.scala not the state: a list trie (a transactions, receipts or withdrawals root) over an ephemeral source (kept)
+trie-of 3 src/main/scala/com/chipprbots/ethereum/consensus/engine/EngineApiService.scala not the state: a list trie (a transactions, receipts or withdrawals root) over an ephemeral source (kept)
+store-built 1 src/main/scala/com/chipprbots/ethereum/consensus/engine/EngineApiService.scala not the state: a list trie (a transactions, receipts or withdrawals root) over an ephemeral source (kept)
+readonly 1 src/main/scala/com/chipprbots/ethereum/consensus/validators/std/MptListValidator.scala not the state: a list trie (a transactions, receipts or withdrawals root) over an ephemeral source (kept)
+trie-of 1 src/main/scala/com/chipprbots/ethereum/consensus/validators/std/MptListValidator.scala not the state: a list trie (a transactions, receipts or withdrawals root) over an ephemeral source (kept)
+readonly 1 src/main/scala/com/chipprbots/ethereum/consensus/validators/std/StdBlockValidator.scala not the state: a list trie (a transactions, receipts or withdrawals root) over an ephemeral source (kept)
+trie-of 1 src/main/scala/com/chipprbots/ethereum/consensus/validators/std/StdBlockValidator.scala not the state: a list trie (a transactions, receipts or withdrawals root) over an ephemeral source (kept)
+readonly 2 src/main/scala/com/chipprbots/ethereum/jsonrpc/EthSimulateService.scala not the state: a list trie (a transactions, receipts or withdrawals root) over an ephemeral source (kept)
+trie-of 2 src/main/scala/com/chipprbots/ethereum/jsonrpc/EthSimulateService.scala not the state: a list trie (a transactions, receipts or withdrawals root) over an ephemeral source (kept)
+
+# Readers behind RPC, and the pool: C2b, the second pull request. They move to stateAt(header) and scratchStateAt(header).
+backing-mpt 1 src/main/scala/com/chipprbots/ethereum/jsonrpc/EthUserService.scala eth_getCode builds a world over the store of a block number; stateAt(header) in C2b (T056)
+backing-mpt 1 src/main/scala/com/chipprbots/ethereum/jsonrpc/graphql/GraphQLSchema.scala GraphQL's account fields build a world over the store of a block number; stateAt(header) in C2b (T056)
+readonly-mpt 5 src/main/scala/com/chipprbots/ethereum/ledger/StxLedger.scala eth_call, estimateGas, the access list and the two trace replays execute over a buffer; scratchStateAt(header) in C2b (T057)
+readonly-mpt 1 src/main/scala/com/chipprbots/ethereum/jsonrpc/EthSimulateService.scala eth_simulateV1's one state for all of its blocks; scratchStateAt(base header), once, in C2b (T057)
+backing 3 src/main/scala/com/chipprbots/ethereum/domain/Blockchain.scala eth_getStorageAt and eth_getProof read a storage trie from a root alone over block 0's store, replaced by forms that take the state and the address in C2b (T056); the third use is getBackingMptStorage's body
+storage-mpt 4 src/main/scala/com/chipprbots/ethereum/domain/Blockchain.scala the storage tries of those two reads, built from a root alone; under the account's owner in C2b (T056)
+get-by-hash 2 src/main/scala/com/chipprbots/ethereum/domain/Blockchain.scala not by hash: those two tries' own get of a slot, on a trie named `mpt`; they go with the two reads (C2b, T056)
+backing 1 src/main/scala/com/chipprbots/ethereum/domain/BlockchainReader.scala getAccountMpt takes the account trie of a block NUMBER through the canonical index; a header-taking read in C2b (T056)
+readonly 1 src/main/scala/com/chipprbots/ethereum/domain/BlockchainReader.scala getAccountAtStateRoot reads an account from a root alone; a header-taking form in C2b (T056); its callers in execution move with the proposer view (C3c, T111) and the importer's fetch (C5b)
+trie-of 2 src/main/scala/com/chipprbots/ethereum/domain/BlockchainReader.scala the account tries of getAccountMpt and getAccountAtStateRoot; C2b (T056)
+readonly 1 src/main/scala/com/chipprbots/ethereum/transactions/PendingTransactionsManager.scala the pool reads senders' accounts at the best block from its root alone; stateAt(header) in C2b, with the readers behind RPC
+trie-of 1 src/main/scala/com/chipprbots/ethereum/transactions/PendingTransactionsManager.scala the account trie of that read; C2b, with the readers behind RPC
+
+# Serving and walking: C2b, the third pull request. SNAP serving, checkpoint export, the recovery scans, the walkers.
+readonly 1 src/main/scala/com/chipprbots/ethereum/nodebuilder/NodeBuilder.scala the one store SNAP serving answers from (account ranges, storage ranges, trie nodes); stateForRoot(root) in C2b (T058)
+get-by-hash 3 src/main/scala/com/chipprbots/ethereum/network/snapserver/SnapServer.scala resolve and fetchRootNode read a node and a root by hash, by position in C2b (T058); the third use is the code store, named `storage`
+get-by-hash 2 src/main/scala/com/chipprbots/ethereum/network/NetworkPeerManagerActor.scala the two raw reads by hash of the storage-range answer; by position in C2b (T058)
+node-by-hash 1 src/main/scala/com/chipprbots/ethereum/blockchain/sync/BlockchainHostActor.scala GetNodeData's answer, which no peer on eth/68 or later can ask for; deleted, or kept by decision, in C2b (T058)
+node-by-hash 2 src/main/scala/com/chipprbots/ethereum/domain/BlockchainReader.scala the definition of getMptNodeByHash and its call of getNode; it goes with its two callers (C2b T058, C3c T116)
+readonly 1 src/main/scala/com/chipprbots/ethereum/blockchain/checkpoint/CheckpointExporter.scala checkpoint export walks the state over a buffer; from the seam in C2b (T059)
+get-by-hash 1 src/main/scala/com/chipprbots/ethereum/blockchain/checkpoint/CheckpointExporter.scala the export's walk resolves each node by hash; by position in C2b (T059)
+backing 1 src/main/scala/com/chipprbots/ethereum/blockchain/sync/BytecodeRecoveryActor.scala the bytecode recovery scan's store; from the seam in C2b (T060)
+get-by-hash 1 src/main/scala/com/chipprbots/ethereum/blockchain/sync/BytecodeRecoveryActor.scala the bytecode recovery scan reads the account root by hash; C2b (T060)
+backing 1 src/main/scala/com/chipprbots/ethereum/blockchain/sync/CombinedRecoveryScanActor.scala the store the combined recovery scan hands to each shard's walk; from the seam in C2b (T060)
+get-by-hash 1 src/main/scala/com/chipprbots/ethereum/blockchain/sync/CombinedRecoveryScan.scala probes a storage root by hash, which a position store answers only under the account's owner; C2b (T060)
+backing 3 src/main/scala/com/chipprbots/ethereum/blockchain/sync/StorageRecoveryActor.scala two are the storage recovery scan's store, from the seam in C2b (T060); the third is where recovered storage is written, C5a
+get-by-hash 3 src/main/scala/com/chipprbots/ethereum/blockchain/sync/StorageRecoveryActor.scala the account root and two storage roots read by hash; the storage roots under their owners in C2b (T060)
+get-by-hash 9 src/main/scala/com/chipprbots/ethereum/blockchain/sync/snap/StateValidator.scala the validation walks read roots and nodes by hash; by position, storage roots under their owners, in C2b (T060)
+snap-store 2 src/main/scala/com/chipprbots/ethereum/blockchain/sync/snap/controller/StateValidationModule.scala the pivot's hash store, handed to the two validation walks; from the seam with the walks, C2b (T060)
+visit-hash 1 src/main/scala/com/chipprbots/ethereum/mpt/MptVisitors/LeafWalkVisitor.scala resolves a hash node and is handed no position; a positioned visitor in C2b (T061)
+get-by-hash 1 src/main/scala/com/chipprbots/ethereum/mpt/MptVisitors/LeafWalkVisitor.scala that visitor's read by hash; C2b (T061)
+visit-hash 1 src/main/scala/com/chipprbots/ethereum/mpt/MptVisitors/PathTrackingLeafWalkVisitor.scala tracks the nibbles and still resolves by hash; by position in C2b (T061)
+get-by-hash 2 src/main/scala/com/chipprbots/ethereum/mpt/MptVisitors/PathTrackingLeafWalkVisitor.scala that visitor's two reads by hash; C2b (T061)
+visit-hash 1 src/main/scala/com/chipprbots/ethereum/mpt/MptVisitors/MptConstructionVisitor.scala resolves a hash node and is handed no position; a positioned visitor in C2b (T061)
+get-by-hash 1 src/main/scala/com/chipprbots/ethereum/mpt/MptVisitors/MptConstructionVisitor.scala that visitor's read by hash; C2b (T061)
+get-by-hash 1 src/main/scala/com/chipprbots/ethereum/mpt/ShardEnumerator.scala resolves by hash though it carries the prefix; by position in C2b (T061)
+
+# Execution, block production and the writers beside them: C3b and C3c.
+backing-mpt 1 src/main/scala/com/chipprbots/ethereum/ledger/BlockExecution.scala WRITER: the block's store when nothing is staged; the staged commit, C3b (T093)
+stage-block 2 src/main/scala/com/chipprbots/ethereum/ledger/BlockExecution.scala WRITER: where a block's staged state is opened; stageBlock(parent, number) in C3b (T093)
+stage-block 2 src/main/scala/com/chipprbots/ethereum/domain/Blockchain.scala the definition of stageBlockState and its call of the store's; C3b (T093)
+prefetch-reader 1 src/main/scala/com/chipprbots/ethereum/ledger/BlockExecution.scala the prefetch reader of the staged block; the position store's, by parent, in C3b (T093)
+readonly-mpt 1 src/main/scala/com/chipprbots/ethereum/ledger/BlockPreparator.scala block production executes over a buffer; the proposer view, C3c (T111)
+backing-mpt 1 src/main/scala/com/chipprbots/ethereum/testmode/TestModeBlockExecution.scala WRITER: test-mode execution writes with nothing staged; the staged commit, C3c (T116)
+backing 1 src/main/scala/com/chipprbots/ethereum/jsonrpc/TestService.scala WRITER: the test_ RPC writes genesis storage tries over block 0's store; through the genesis commit in C3c (T108, T115)
+storage-mpt 1 src/main/scala/com/chipprbots/ethereum/jsonrpc/TestService.scala that write's storage trie, from the empty root with no owner; C3c (T108, T115)
+readonly 1 src/main/scala/com/chipprbots/ethereum/blockchain/data/GenesisDataLoader.scala WRITER: genesis builds its state in a buffer over the store; the genesis commit, C3c (T115)
+node-by-hash 1 src/main/scala/com/chipprbots/ethereum/blockchain/data/ChainImporter.scala asks whether a block's state is held by reading its root; stateAvailable in C3c (T116)
+
+# SNAP hand-off, the audit, repair and import: C5a, C5b and C5c.
+backing 1 src/main/scala/com/chipprbots/ethereum/blockchain/sync/snap/controller/StateIngest.scala WRITER: the store SNAP ingest and healing write the pivot's state to; the hand-off without a copy, C5a
+backing 1 src/main/scala/com/chipprbots/ethereum/blockchain/sync/SyncController.scala asks whether a root is readable, to choose what a recovery scans; C5a
+readonly 1 src/main/scala/com/chipprbots/ethereum/blockchain/sync/SyncController.scala a log-only check that the SNAP root is in the store; C5a
+get-by-hash 1 src/main/scala/com/chipprbots/ethereum/blockchain/sync/SyncController.scala that check's read of the root by hash; C5a
+readonly 1 src/main/scala/com/chipprbots/ethereum/blockchain/sync/BackgroundAudit.scala WRITER: the audit walks the hash store, and repairs it; the anchor's tries by position in C5b (T217)
+raw-nodes 1 src/main/scala/com/chipprbots/ethereum/blockchain/sync/BackgroundAudit.scala the audit's batch read by hash; rows by position in C5b (T217)
+raw-store 2 src/main/scala/com/chipprbots/ethereum/blockchain/sync/BackgroundAudit.scala WRITER: the audit repairs a node, and deletes a bad one, by hash; repairNodeAt and deleteBadNodeAt in C5b (T216, T217)
+raw-store 3 src/main/scala/com/chipprbots/ethereum/blockchain/sync/regular/BlockImporter.scala WRITER: the importer repairs a fetched node twice and deletes a corrupt one, by hash; repairNodeAt and deleteBadNodeAt in C5b (T218)
+backing 1 src/main/scala/com/chipprbots/ethereum/blockchain/sync/regular/BlockImporter.scala looks a missing node up by hash, to place a storage hole; the fetch by position, C5b (T218)
+backing 1 src/main/scala/com/chipprbots/ethereum/blockchain/checkpoint/CheckpointImporter.scala WRITER: checkpoint import writes nodes by hash at the checkpoint's height; the importer that assigns positions, C5c (T230)
+raw-store 1 src/main/scala/com/chipprbots/ethereum/blockchain/checkpoint/CheckpointImporter.scala WRITER: that import's batch write by hash; C5c (T230)
+
+# The copy from the position store to the hash store, and SNAP's Hash arm: deleted in C8a.
+bulk-load 1 src/main/scala/com/chipprbots/ethereum/blockchain/sync/snap/controller/SnapFinalization.scala WRITER: the target of the publish from the position store to the hash store; deleted in C8a (T273)
+trie-of 3 src/main/scala/com/chipprbots/ethereum/blockchain/sync/snap/PathToHashExporter.scala the publish samples the hash store it wrote; deleted in C8a (T273)
+get-by-hash 2 src/main/scala/com/chipprbots/ethereum/blockchain/sync/snap/PathToHashExporter.scala the publish checks the roots it wrote, by hash; deleted in C8a (T273)
+get-by-hash 1 src/main/scala/com/chipprbots/ethereum/blockchain/sync/snap/controller/FinalizationPolicy.scala whether the hash store holds the pivot's root, asked for the publish; deleted in C8a (T273)
+raw-store 2 src/main/scala/com/chipprbots/ethereum/blockchain/sync/snap/PathToHashExporter.scala WRITER: the publish writes the hash store in batches; deleted in C8a (T273)
+snap-store 2 src/main/scala/com/chipprbots/ethereum/blockchain/sync/snap/controller/SnapFinalization.scala asks the pivot's hash store for the root, before the publish and after it; deleted in C8a (T273)
+snap-store 2 src/main/scala/com/chipprbots/ethereum/blockchain/sync/snap/controller/StateIngest.scala trieStore, declared and defined: getBackingStorage under SNAP's name; it goes with SNAP's hash store (C5a, C8a)
+store-handed 2 src/main/scala/com/chipprbots/ethereum/blockchain/sync/snap/controller/StateIngest.scala trieStore, declared and defined, hands out the pivot's hash store; it goes with SNAP's hash store (C5a, C8a)
+snap-store 4 src/main/scala/com/chipprbots/ethereum/blockchain/sync/snap/controller/SnapResumePlanner.scala getOrCreateMptStorage, declared and defined over trieStore, and the resume's use of it: the pivot's hash store, kept for the run; C8a (T275)
+store-handed 2 src/main/scala/com/chipprbots/ethereum/blockchain/sync/snap/controller/SnapResumePlanner.scala getOrCreateMptStorage, declared and defined, hands out the pivot's hash store; C8a (T275)
+snap-store 2 src/main/scala/com/chipprbots/ethereum/blockchain/sync/snap/controller/DownloadSupervisor.scala the pivot's hash store, handed to the account and storage coordinators; C8a (T275)
+snap-store 3 src/main/scala/com/chipprbots/ethereum/blockchain/sync/snap/controller/HealingOrchestrator.scala the pivot's hash store, handed to healing and to the check for the pivot root; C8a (T275)
+store-handed 1 src/main/scala/com/chipprbots/ethereum/blockchain/sync/snap/actors/account/AccountRangeEnv.scala the account coordinator's hash store, as its environment declares it; C8a (T275)
+store-handed 1 src/main/scala/com/chipprbots/ethereum/blockchain/sync/snap/actors/storage/StorageRangeEnv.scala the storage coordinator's hash store, as its environment declares it; C8a (T275)
+store-handed 1 src/main/scala/com/chipprbots/ethereum/blockchain/sync/snap/actors/healing/TrieNodeHealingEnv.scala healing's hash store, as its environment declares it; C8a (T275)
+raw-store 1 src/main/scala/com/chipprbots/ethereum/blockchain/sync/snap/actors/account/AccountTrieAssembly.scala WRITER: the account download's trie writes by hash under StorageScheme.Hash; that arm is deleted in C8a (T275)
+raw-store 1 src/main/scala/com/chipprbots/ethereum/blockchain/sync/snap/actors/storage/StorageOrderedApply.scala WRITER: the storage download's tries write by hash under StorageScheme.Hash; that arm is deleted in C8a (T275)
+raw-store 2 src/main/scala/com/chipprbots/ethereum/blockchain/sync/snap/actors/healing/FrontierPersistence.scala WRITER: healing flushes its buffer of healed nodes to the pivot's store by hash; SNAP's writes by hash end with the hand-off (C5a) and the Hash arm (C8a, T275)
+raw-store 1 src/main/scala/com/chipprbots/ethereum/blockchain/sync/snap/actors/TrieNodeHealingCoordinator.scala WRITER: healing deletes a bad node from the hash store, by hash; C8a (T275)
+get-by-hash 1 src/main/scala/com/chipprbots/ethereum/blockchain/sync/snap/actors/TrieNodeHealingCoordinator.scala SNAP's read of the hash store under StorageScheme.Hash; that arm is deleted in C8a (T275)
+get-by-hash 1 src/main/scala/com/chipprbots/ethereum/blockchain/sync/snap/actors/healing/HealResponseProcessing.scala SNAP's read of the hash store under StorageScheme.Hash; that arm is deleted in C8a (T275)
+raw-nodes 1 src/main/scala/com/chipprbots/ethereum/blockchain/sync/snap/actors/healing/HealResponseProcessing.scala SNAP's read of the hash store under StorageScheme.Hash; that arm is deleted in C8a (T275)
+raw-nodes 1 src/main/scala/com/chipprbots/ethereum/blockchain/sync/snap/actors/healing/FrontierRebuildBfs.scala SNAP's read of the hash store under StorageScheme.Hash; that arm is deleted in C8a (T275)
+raw-nodes 1 src/main/scala/com/chipprbots/ethereum/blockchain/sync/snap/actors/account/ContractWorkCarry.scala SNAP's read of the hash store under StorageScheme.Hash; that arm is deleted in C8a (T275)
