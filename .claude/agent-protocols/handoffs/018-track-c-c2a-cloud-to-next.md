@@ -1,12 +1,12 @@
-# Spec 018 Track C handoff: after C2a (cloud session → whoever takes C2b and C3a), 2026-11-11
+# Spec 018 Track C handoff: after C2a and C3a (cloud session → whoever takes C2b and C3b), 2026-11-11
 
 **From** `cloud-dc960fdc`, a cloud session whose container and `.local/` do not outlive it, which is why this is a
 tracked file and not a continuation under `.local/docs/continuations/`. **To** the session that claims B-056 (C2b) or
-B-057 (C3a). It replaces the handoff written after C1.
+B-058 (C3b). It replaces the handoff written after C1.
 
 ## Status
 
-C1 (B-054) merged as #1788. **C2a (B-055) is two PRs.**
+C1 (B-054) merged as #1788. **C2a (B-055) merged as two PRs**, #1791 and #1792.
 
 - **Part 1**: the six wrapping `MptStorage` implementors are on `MptStorageDecorator` (T041), every trie of the state
   names its owner (T046: execution, genesis, the BAL prefetch), and real blocks ran through a position mirror (T026,
@@ -14,8 +14,15 @@ C1 (B-054) merged as #1788. **C2a (B-055) is two PRs.**
 - **Part 2**: the read side of the position store, `db/storage/pathstate`, behind `fukuii.state.path-live` (T035 to
   T038, T042 to T044, T047, T048; T045 in part).
 
-Next in merge order: **C2b** (B-056, every reader can be handed the position store) and **C3a** (B-057, the changeset
-record), which do not depend on each other.
+**C3a (B-057)** is built on part 2: the changeset record and its codec, `ChangesetStorage` on the new column family `v`,
+and `StateConfig`. forge and beacon signed the record's bytes. Nothing reads or writes it yet.
+
+Next in merge order: **C2b** (B-056, every reader can be handed the position store) and **C3b** (B-058, the staged
+commit), which needs C3a and C2a and not C2b.
+
+**Two decisions are with the user before C3b** (plan.md, "C3a record"): how many blocks of changesets a proof-of-work chain
+keeps (64 by the design; forge asks for at least 512), and whether every column family C3b needs lands in the release
+that adds `v`, so that operators meet one downgrade barrier.
 
 C0 (B-053) is still open on fukuii-fc. What waits on its pinned jar and ranges: T025, T033, T034 (B-203), T049 (M4),
 T050's DC-14 figures, and the ethereum/tests half of T026 with its baseline (B-207).
@@ -42,7 +49,9 @@ Read plan.md, "C2a part 1 record" and "C2a part 2 record", then:
   `eth_simulateV1`) run on `PathStateStorage.throwaway(block)`; readers that only read use `readOnly(block)`. A view
   serves only the anchor until C4a, so anything else is `StateUnavailable`: decide per reader what that means with the
   guard on. The ratchet (T062) also lists the three batch reads (data-model 9).
-- **C3a**: `PositionKey` exists (`(owner, hp)`, equality by content). T070 adds `Change` and `BlockDiff` on it.
+- **C3b**: start at T087 (`StateLock`), which is what makes the `StateLockHeld` that `ChangesetStorage` asks for, then
+  T088 to T091. The commit writes its batch inside `StateMoveLog.inFlight(move) { … }`, takes the anchor from
+  `move.newAnchor`, and keeps a **persisted** prune cursor: `ChangesetStorage` never scans for heights (data-model 4.1).
 
 Four things the task text does not say:
 
