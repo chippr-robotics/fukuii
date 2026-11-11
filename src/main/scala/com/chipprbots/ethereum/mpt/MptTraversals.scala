@@ -19,6 +19,19 @@ object MptTraversals:
     val rootHash = ByteString(Node.hashFn(nodeEncoded))
     (HashNode(rootHash.toArray[Byte]), (rootHash, nodeEncoded) +: nodeCapper.getNodesToUpdate)
 
+  /** [[collapseTrie]] for a trie whose root sits at `rootPath`, naming where each node it returns sits. The traversal,
+    * the encodings and the hashes are [[collapseTrie]]'s: the same nodes come back in the same order, each with its
+    * position. A node is returned when it is stored at its position, that is when its encoding is at least 32 bytes;
+    * the root is returned at any size. A smaller node is embedded in its parent and has no position of its own. A
+    * subtree that did not change keeps its cached encoding and is not walked, so nothing in it is returned.
+    */
+  def collapseTrieAt(node: MptNode, rootPath: NibblePath): (HashNode, Seq[(NibblePath, ByteString, Array[Byte])]) =
+    val nodeCapper = new NodeCapper(withUpdates = true)
+    val visitor = new PositionedRlpHashingVisitor(new RlpEncVisitor, 0, nodeCapper, TriePosition.root(rootPath))
+    val nodeEncoded = com.chipprbots.ethereum.rlp.encode(dispatch(node, visitor))
+    val rootHash = ByteString(Node.hashFn(nodeEncoded))
+    (HashNode(rootHash.toArray[Byte]), (rootPath, rootHash, nodeEncoded) +: nodeCapper.getNodesToUpdateAt)
+
   def parseTrieIntoMemory(rootNode: MptNode, source: MptStorage): MptNode =
     dispatch(rootNode, new MptConstructionVisitor(source))
 

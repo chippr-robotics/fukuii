@@ -154,7 +154,7 @@ object EthSimulateService:
     * starting world must stay readable. Nodes are content-addressed: keeping them changes no root and no hash. Nothing
     * reaches the database either way; the wrapped store is the read-only one.
     */
-  final private class RetainingMptStorage(underlying: MptStorage) extends MptStorage:
+  final private[jsonrpc] class RetainingMptStorage(underlying: MptStorage) extends MptStorage:
     override def get(nodeId: Array[Byte]): com.chipprbots.ethereum.mpt.MptNode = underlying.get(nodeId)
     override def updateNodesInStorage(
         newRoot: Option[com.chipprbots.ethereum.mpt.MptNode],
