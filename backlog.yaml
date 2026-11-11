@@ -2260,3 +2260,16 @@ items:
     refs: ["prism review of 027 slice 5, 2026-11-10"]
     links: {}
     notes: The TUI now filters non-finite scores (draws a dash, sorts last). The NaN source in network/PeerScore.scala is not fixed; herald owns.
+  - id: B-203
+    title: "Spec 018 C1 gates that wait for C0's pinned jar: M7 on the Mordor range (T033), roots against the jar (T025), DC-14 figures (T034)"
+    priority: P2
+    status: open
+    area: storage
+    size: S
+    opened: 2026-11-11
+    refs: [018 C1]
+    links:
+      prs: [1788]
+      spec: specs/018-storage-engine-consolidation
+    depends_on: [B-053]
+    notes: "C1 (#1788) records a stand-in for M7 only: bytes allocated per trie op, within 1% of the parent (baselines/m7-c1.md). The gate itself needs T002-T004."
