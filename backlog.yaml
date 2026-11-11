@@ -660,7 +660,7 @@ items:
   - id: B-056
     title: "Spec 018 Track C C2b: every reader can be handed the position store (item 8c)"
     priority: P2
-    status: open
+    status: claimed
     area: storage
     size: L
     opened: 2026-11-07
@@ -668,6 +668,11 @@ items:
     links:
       spec: specs/018-storage-engine-consolidation
     depends_on: [B-055]
+    claim:
+      by: cloud-dc960fdc
+      agent: main
+      since: 2026-11-11T07:52:46Z
+      heartbeat: 2026-11-11T07:52:46Z
   - id: B-057
     title: "Spec 018 Track C C3a: the changeset record and CF v (item 6a)"
     priority: P2
