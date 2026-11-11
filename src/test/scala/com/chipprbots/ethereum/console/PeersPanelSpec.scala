@@ -180,6 +180,35 @@ class PeersPanelSpec extends AnyFlatSpec with Matchers:
     panels.Rows.shortId("0x" + "ab" * 32, TuiGlyphs.Emoji) shouldBe "0xabab…ab" // a hex id is as it was
   }
 
+  it should "be cut by code points, never inside a surrogate pair" taggedAs (UnitTest) in {
+    panels.Rows.shortId("🪱" * 14, TuiGlyphs.Emoji) shouldBe "🪱" * 11 + "…"
+    panels.Rows.shortId("🪱" * 12, TuiGlyphs.Emoji) shouldBe "🪱" * 12 // twelve fit
+  }
+
+  it should "not be taken for hex because of full-width digits" taggedAs (UnitTest) in {
+    val fullWidth = "\uff10\uff11\uff12\uff13\uff14\uff15\uff16\uff17\uff18\uff19" // Character.digit says 0 to 9
+    all(panels.Rows.shortId(fullWidth, TuiGlyphs.Ascii).map(_.toInt)) should be < 0x7f
+  }
+
+  "The score column" should "show the score at the units the order and the trend use, so the three agree" taggedAs (
+    UnitTest
+  ) in {
+    // 0.5005 times 1000 is 500.49999999999994 in binary: it is 500 units, and `%.3f` would have drawn 0.501 beside a
+    // peer at 0.5004 that it orders and trends as equal.
+    TuiState.scoreUnits(0.5005) shouldBe TuiState.scoreUnits(0.5004)
+    val two = TuiFixtures.peerList(2)
+    val s = TuiFixtures
+      .polled(TuiFixtures.syncedEtc().copy(peerCount = 2), two, TuiFixtures.local())
+      .copy(scores =
+        ScoreHistory(None, Some(PeerScores(TuiFixtures.Now, Map(two(0).id -> 0.5005, two(1).id -> 0.5004))))
+      )
+    val rows = peersView(s, 120, 40)
+    val first = rows.indexWhere(_.trim.startsWith("id ")) + 1
+    rows(first) should include(" 0.500 ")
+    rows(first + 1) should include(" 0.500 ")
+    (rows.mkString should not).include("0.501")
+  }
+
   "The Overview's top table" should "not call a peer without a score one of the top by score" taggedAs (UnitTest) in {
     val s = few.copy(scores = ScoreHistory(None, Some(PeerScores(TuiFixtures.Now, Map(fewPeers(0).id -> 0.9)))))
     val title = frame(s, 160, 48).find(_.contains(" Peers (top ")).getOrElse(fail("no top table"))

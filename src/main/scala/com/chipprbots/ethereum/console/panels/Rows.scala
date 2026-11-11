@@ -370,12 +370,16 @@ private[console] object Rows:
   /** `0x3fa1…e2` for a hex node id, else the id cut to 12 columns. */
   def shortId(id: String, g: TuiGlyphs): String =
     val hex = id.stripPrefix("0x")
-    if hex.length > 8 && hex.forall(Character.digit(_, 16) >= 0) then
+    // ASCII hex digits only: `Character.digit` also takes the full-width digits, which are not for an ASCII frame.
+    if hex.length > 8 && hex.forall(ch => ch < 0x80 && Character.digit(ch, 16) >= 0) then
       s"0x${hex.take(4)}${g.ellipsis.text}${hex.takeRight(2)}"
     else
       // Not hex: whatever a peer manager made of the id, so it is outside text like any other (C-16).
       val clean = TuiText.external(id, g)
-      if clean.length > 12 then clean.take(11) + g.ellipsis.text else clean
+      // By code points: a cut must not split a surrogate pair.
+      if clean.codePointCount(0, clean.length) > 12 then
+        clean.substring(0, clean.offsetByCodePoints(0, 11)) + g.ellipsis.text
+      else clean
 
   /** How long ago `at` was, at the state's `now`. */
   def ago(c: Ctx, at: java.time.Instant): String = formatShort(Duration.between(at, c.state.now).getSeconds)

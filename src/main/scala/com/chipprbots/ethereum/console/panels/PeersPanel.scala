@@ -1,7 +1,5 @@
 package com.chipprbots.ethereum.console.panels
 
-import java.util.Locale
-
 import org.jline.utils.AttributedString
 import org.jline.utils.AttributedStyle
 
@@ -107,7 +105,10 @@ private[console] object PeersPanel:
     * the longest connected.
     */
   private def sorted(c: Ctx, peers: Seq[TuiPeer]): Seq[TuiPeer] =
-    peers.sortBy(p => (c.state.peerScore(p.id).fold(Long.MaxValue)(s => -TuiState.scoreUnits(s)), p.connectedAt, p.id))
+    peers.sortBy { p =>
+      val units = c.state.peerScore(p.id).map(TuiState.scoreUnits)
+      (units.isEmpty, units.fold(0L)(-_), p.connectedAt, p.id)
+    }
 
   /** Why the client and best block read `?` or may be old: the network peer manager (`GetHandshakedPeersCmd`) did not
     * answer, or missed the last polls.
@@ -128,7 +129,14 @@ private[console] object PeersPanel:
       case Column.Client =>
         details.map(d => TuiText.external(TuiText.clientName(d.clientId), c.g)).filter(_.nonEmpty).getOrElse("?")
       case Column.Best  => details.map(_.bestBlock).filter(_ > 0).fold("?")(formatNumber)
-      case Column.Score => c.state.peerScore(p.id).fold(c.g.missing.text)(String.format(Locale.ROOT, "%.3f", _))
+      // From the same units the order and the trend use, so what is drawn, what is sorted on and what trends agree
+      // exactly: `%.3f` rounds half up on the binary value and can disagree with `scoreUnits` at a half-way tie.
+      case Column.Score =>
+        c.state
+          .peerScore(p.id)
+          .fold(c.g.missing.text)(s =>
+            java.math.BigDecimal.valueOf(TuiState.scoreUnits(s), TuiState.ScoreDigits).toPlainString
+          )
       case Column.Trend =>
         c.state.scoreTrend(p.id).fold("") {
           case Trend.Up     => c.g.up.text
