@@ -110,6 +110,11 @@ final class BlockDiff(
 )
 ```
 
+*(C1, 2026-11-11.)* `NibblePath` is an array underneath, so it compares by identity: `PositionKey` as written above would
+give two equal positions two different `Map` keys. C3a keys `changes` by the store key instead (`NibblePath.key`, the
+`HexPrefix` bytes as a `ByteString`, with the owner in front for a storage trie) or gives `PositionKey` equality by
+content. C1's test oracle keys its rows by `NibblePath.key`.
+
 Rules. A writer MUST enforce them. The codec (4.2) checks **structure only** (version, kind, flags, sort order, uniqueness,
 presence flags, CRC); rules 2, 4 and 5 are writer assertions, checked by the writer's own property tests and by a debug
 `BlockDiff.validate`, so a golden vector may legitimately hold any bytes the structure allows.
@@ -858,15 +863,30 @@ list-trie store):**
    `path :+ i`; an extension's next is `path ++ sharedKey`; a temporary node built when a leaf splits sits at the same `path`
    as the node it replaces. To avoid an array copy per level on the ETC hot path, the path is an immutable cons list that is
    materialised only when a position-store `getAt` needs the bytes (spec 007's allocation budget).
+   *(C1 as built, 2026-11-11; forge and beacon signed the deviation.)* `put`, `remove` and `fix` thread the nibble array
+   itself: at the depths a trie has, one array is the size of one list cell (24 bytes to depth 8, 32 to depth 16), and
+   these methods already copy the remaining key at every level. The lazy list is used where it does pay, in the
+   collapse: `TriePosition` gives each of a branch's sixteen children a position and builds the nibbles of the few
+   that are new and stored. Measured figures: `baselines/m7-c1.md`. A temporary node of a partial-prefix split sits at
+   `path ++ sharedPrefix`, below the extension that takes the old node's place, not at `path`.
 2. Every old node that is **replaced or absorbed** is reported as `(path, node)`: the nodes on the mutation path, and the child
    `fix` merges into its parent (the extension-into-extension case at `MerklePatriciaTrie.scala:595` and the extension-into-leaf
    case at `:597`). `fix` also *resolves* the child of an extension at `:591` when that child is a branch and stays: `:599`
    returns `node` with the `HashNode` intact. That live branch is **not** reported; reporting "every node resolved" would list
    it as vanished and the forward apply would delete it (S0 item 1b).
+   *(C1 as built, 2026-11-11; found by forge and beacon before code.)* **Absorbed nodes are reported apart from replaced
+   ones.** The hash-keyed store counts references by the removals it is told of, and the trie has never told it of an
+   absorbed node. Had the absorbed node joined the replaced list, the default of section 9 would have passed it to
+   `updateNodesInStorage` and basic pruning would have decremented, and in time deleted, a node it keeps today. So
+   `remove` returns two lists and `updateNodesAt` takes two (section 9). A node is reported as absorbed exactly when the
+   extension held its **hash**: an embedded child has no row, and a child built by this removal was never stored.
 3. `MptTraversals.collapseTrieAt(node, rootPath)`: the same traversal and the same `capNode` calls, so the same bytes and
    hashes, but each stored node is reported as `(path, hash, rlp)`. The root is always reported (as `collapseTrie` does today).
    Unchanged subtrees keep their cached encoding (`parsedRlp`) and are not visited, so they produce no writes.
-4. `MptStorage.updateNodesAt(newRoot, removedOld)` computes the block-local change set into the staged layer (6.1). For each
+   *(C1 as built.)* One code path: `NodeCapper.capNodeAt` is `capNode` with the position noted beside a stored node, and
+   the visitors of `collapseTrie` carry no position at all (no field, no allocation). A test holds the two collapses to
+   the same nodes in the same order.
+4. `MptStorage.updateNodesAt(newRoot, replaced, absorbed)` computes the block-local change set into the staged layer (6.1). For each
    position, `stored(rlp, path) = rlp.length >= 32 || path.isEmpty`. The prior is fixed at the **first event** that touches the
    position in the block (3, rule 1): the old stored node that event reports, or **None** if the first event is a write with no
    old node there; later old-node reports at that position are intermediates and are ignored. The next is the last new stored
@@ -927,14 +947,23 @@ trait MptStorage:
   def getAt(path: NibblePath, hash: Array[Byte]): MptNode = get(hash)                  // default: the hash-keyed store
   def forOwner(owner: Option[ByteString]): MptStorage = this
   def resetOwner(owner: ByteString): Unit = ()                                         // 3, rule 6: the staged layer records it
-  def updateNodesAt(newRoot: Option[MptNode], removedOld: Seq[(NibblePath, MptNode)]): Option[MptNode] =
-    updateNodesInStorage(newRoot, removedOld.map(_._2))
+  def updateNodesAt(newRoot: Option[MptNode],
+                    replaced: Seq[(NibblePath, MptNode)],          // the nodes on the path of the change: today's list, same order
+                    absorbed: Seq[(NibblePath, MptNode)]           // merged into their parent by `fix`; never passed to a hash-keyed store
+                   ): Option[MptNode] =
+    updateNodesInStorage(newRoot, replaced.map(_._2))              // C1, 2026-11-11: was one list, `removedOld` (section 8 item 2)
   def rawNodesAt(requests: Seq[(NibblePath, ByteString)]): Seq[RawNodeRead] = rawNodes(requests.map(_._2))
 ```
 
 - **A decorator sees every read** (user decision 6). Every read, position-addressed or not, goes through an `MptStorage` method
   that carries the hash (`get(hash)` or `getAt(path, hash)`), and a decorator that wraps `forOwner`'s result sees the scoped
-  reads too. To make a forgotten member impossible, the seven implementors (`SerializingMptStorage`, `PrefetchNodeReader`,
+  reads too. *(C1 as built, 2026-11-11.)* `MptStorageDecorator` makes `get` and `getAt` final over one hook, `read(hash, path)`,
+  and `updateNodesInStorage` and `updateNodesAt` final over another, `update(newRoot, removals)`: a wrapper that overrode `get`
+  alone would be bypassed by a trie that reads with `getAt`, and one that withheld removals in `updateNodesInStorage` alone
+  would hand them on through `updateNodesAt` (forge and beacon, C1 review). **C2a (T041):** `AppendOnlyMptStorage`,
+  `ReplayMptStorage` and `RetainingMptStorage` override `update` with `removals.none`; `CachingMptStorage`, `PrefetchNodeReader`
+  and the `contextStorage` wrapper override `read`; each gets a test that a positioned call goes through its override.
+  To make a forgotten member impossible, the seven implementors (`SerializingMptStorage`, `PrefetchNodeReader`,
   `CachingMptStorage`, `GenesisDataLoader.AppendOnlyMptStorage` at `:288`, the anonymous `contextStorage` in
   `InMemoryWorldStateProxy.scala:309`, `StxLedger.ReplayMptStorage` at `:703`, `EthSimulateService.RetainingMptStorage` at `:144`)
   that wrap another storage derive from a new `MptStorageDecorator` that forwards every member, including a wrapped `forOwner`

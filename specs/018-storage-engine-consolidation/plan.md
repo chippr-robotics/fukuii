@@ -515,6 +515,27 @@ forge routing line and in data-model C.1; open item 1 saying item 11 depended on
 (forge's three: PoW branches over 32 blocks, recovery deeper than the reach, ommer and BLOCKHASH ancestors after hand-off; beacon's
 R1 to R3) are reported covered by both reviewers, with the changes above (3b, loop guard and cool-down, 8a) as the remaining edges.
 
+### C1 pre-code record (2026-11-11)
+
+`forge` and `beacon` read the implementation design of C1 before code (the Consensus-Critical Change Protocol's step 2), both
+read-only. Both returned the same counterexample, and both signed with the changes below; all are applied in the C1 PR.
+
+| Finding | By | Change |
+| --- | --- | --- |
+| **Critical.** Reporting the node `fix` absorbs in the same list as the replaced ones is not neutral on the hash store: the data-model 9 default passes that list to `updateNodesInStorage`, and `ReferenceCountNodeStorage` decrements every hash in it. Example: keys `[1,2]` and `[3,4]`, remove `[1,2]`: today the store is told of the branch and the leaf at `[1]`; it would also have been told of the leaf at `[3]`, which the trie only re-keys. beacon withdrew its S0 sign-off of that default as written | forge, beacon | `updateNodesAt(newRoot, replaced, absorbed)`: two lists; the default passes `replaced` alone, in today's order. `TwinTrie` in the C1 tests holds every update of a hash-keyed store to the nodes on the path of the change, root first, so the neutrality is tested and not argued (data-model 8 item 2, 9) |
+| A node is reported as absorbed when "the extension held its hash", not by a flag for "the remaining child is old": the flag also named an embedded sibling, which has no row | beacon | applied; an embedded sibling is a test case |
+| A put of the value a key already holds reports the nodes on its path, each replaced by an identical node: rule 2 must drop them | forge | a test: such a put leaves an empty change set |
+| `ConsensusAdapterSpec` drives a trie over `mock[MptStorage]` and expected `get` | forge | the expectation is `getAt` |
+| The decorator base must not let `getAt` bypass a wrapper's `get`, nor `updateNodesAt` bypass a wrapper that drops removals (`AppendOnlyMptStorage`, `ReplayMptStorage`, `RetainingMptStorage`: genesis load, `eth_call` replay and `eth_simulateV1` would start deleting nodes) | forge, beacon | `get`/`getAt` final over one `read` hook, the two update members final over one `update` hook; T041 carries the per-wrapper tests |
+| The collapse test compares ordered sequences, not multisets; child positions are computed only for a node that is walked | beacon | applied (`TriePosition`, built lazily) |
+| The path threaded as an array, not the cons list of data-model 8 item 1 | forge, beacon: SIGN | recorded in data-model 8 item 1, with figures in `baselines/m7-c1.md` |
+| `PositionKey` over an opaque array has identity equality (data-model 3) | forge, beacon: agreed | noted in data-model 3 for C3a |
+
+Two task-list defects found while building C1, recorded in tasks.md: **T026** (fixtures through a recording sink) cannot run
+before C2a's owner threading (T046), because until then every storage trie and the account trie reach one storage with no
+owner, and their positions collide; **T031** said the implementors derive from the decorator in C1, and T041 says they move
+in C2a: C1 ships the base, C2a moves them.
+
 **Open after round 2.** Nothing blocks code on C1 to C3a. Two C0 deliverables stay open and neither is a design change: the
 **EIP-8246 text** (read from an EIPs clone; the storage design does not depend on it) and the **source of the ETC 0 to 5.1M blocks**
 (open item 1; it gates C7).
