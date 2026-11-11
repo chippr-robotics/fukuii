@@ -4,7 +4,7 @@
 
 **Created**: 2026-10-17
 
-**Status**: Active (2026-11-11). Track C (the copy removal and the unified path-live layout for both chains, items 8, 6 and 10) is under way: slice C1 (the trie reports positions) merged as #1788, C2a is in two parts with the first in review, C0's pinned jar and measurements are still open, and C2b to C8b follow in merge order; Tracks E, F, H and R are planned at plan level only. The Phase 0 evaluation is done ([research.md](./research.md)); the
+**Status**: Active (2026-11-11). Track C (the copy removal and the unified path-live layout for both chains, items 8, 6 and 10) is under way: slices C1 (the trie reports positions, #1788) and C2a (every trie names its owner, and the read side of the position store behind the guard, #1791 and #1792) are merged, C3a (the changeset record and column family `v`, #1793) is merged, C2b (every reader can be handed the position store) is in flight in three PRs, C0's pinned jar and measurements are still open, and C3b to C8b follow in merge order; Tracks E, F, H and R are planned at plan level only. The Phase 0 evaluation is done ([research.md](./research.md)); the
 plan ([plan.md](./plan.md)) is drafted to the point where `/speckit-tasks` can run once the gates below report. The
 Design constraints and Gates sections are binding on that later work. **Revised 2026-10-17 (same day)** after the user's
 direction: the hot-tier engine is **not fixed to libmdbx**; it is chosen by a measured bake-off (GT-1) against the
@@ -16,7 +16,7 @@ a read-serving track (Track R), the enterprise analytics user story (US-8), the 
 `dbLock` close-fence and the fixed-width `UInt256` pulled forward as named tasks (T-010, T-011), and Erigon and Reth
 added as comparators in the GT-1 harness (FR-028).
 
-**In flight**: `fukuii-fc` (local session), branch `docs/spec-018-c0`: Track C C0 in progress (baselines, ETC chain file exported); `cloud-dc960fdc` (cloud session), branch `ccr-dc960fdc-6a9h1c`: Track C C2a (B-055), in two PRs: part 1 (wrappers on the decorator, owner threading, the position mirror) and part 2 (the `pathstate` read side, behind the guard)
+**In flight**: `fukuii-fc` (local session), branch `docs/spec-018-c0`: Track C C0 in progress (baselines, ETC chain file exported); `cloud-dc960fdc` (cloud session), branch `ccr-dc960fdc-6a9h1c`: Track C C2b (B-056): the ratchet, then the RPC readers, then serving and walking
 
 **Sequence**: spec 016 (SNAP split, `StateIngest`) → spec 017 (`StateAccess`, witnesses) → **this spec** → spec 019
 (zkVM guest). **Implementation starts after spec 017 completes** (user decision, 2026-10-17). Phase 0 (measurement,

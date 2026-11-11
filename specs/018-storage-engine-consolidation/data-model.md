@@ -121,6 +121,12 @@ give two equal positions two different `Map` keys. C3a keys `changes` by the sto
 `HexPrefix` bytes as a `ByteString`, with the owner in front for a storage trie) or gives `PositionKey` equality by
 content. C1's test oracle keys its rows by `NibblePath.key`.
 
+*(C3a as built, 2026-11-11.)* `BlockDiff` is a case class whose `byHash` is derived (the keccak of each `next`), and
+`Change` holds `ByteString`s, so two diffs compare by content. `BlockDiff.validate` holds the writer's rules that can be
+read off a diff: rules 2 and 4, a tombstone with no entries, and one more that forge asked for, **the root rule**: the entry
+at the account trie's root has a prior that hashes to `preStateRoot` and a next that hashes to `postStateRoot` (an empty
+trie has no row), and it is there exactly when the two roots differ. Rule 5 cannot be read off a diff.
+
 Rules. A writer MUST enforce them. The codec (4.2) checks **structure only** (version, kind, flags, sort order, uniqueness,
 presence flags, CRC); rules 2, 4 and 5 are writer assertions, checked by the writer's own property tests and by a debug
 `BlockDiff.validate`, so a golden vector may legitimately hold any bytes the structure allows.
@@ -209,6 +215,14 @@ presence flags, CRC); rules 2, 4 and 5 are writer assertions, checked by the wri
 | `blockHash ++ kind` | 33 | The record. `kind = 0x01` is the local (trie-node undo) part. Kind `0x02` is reserved for the exportable semantic write set of amendment #2 / spec 025: it will be stored under `blockHash ++ 0x02`, so adding it rewrites nothing. "Keyed by block hash" (FR-010) holds: the hash is the 32-byte prefix, and siblings never collide. |
 | `0x00 ++ number(8, BE)` | 9 | Height index. The value is the concatenation of the 32-byte hashes that have a record at that height. The length differs from a record key, so the two never collide. Used only to prune (4.5). |
 
+*(C3a as built, 2026-11-11.)* **The two kinds of key are told apart by length on a point read, and not at all on a range
+scan.** A record key whose block hash begins with a zero byte sorts among the height keys or before them, and on a
+proof-of-work chain that is every block: an ETC mainnet hash begins with about six zero bytes, so every record key of ETC
+sorts before the height key of any height above 2^24. A scan "for the lowest height" would walk those records first, values
+included (`RocksDbDataSource.scanRange` materialises both). So `ChangesetStorage` has no scan: it prunes by point reads of the
+heights it is given, and its caller (the retention policy, C3b) keeps the height it has pruned up to. The keys themselves
+are unchanged.
+
 ### 4.2 Value layout, kind 1, version 1
 
 All integers are big-endian; `uvarint` is LEB128, at most 9 bytes.
@@ -244,6 +258,14 @@ byte; a `blockHash` that differs from the key; keys unsorted or repeated; an ent
 entries; trailing bytes; a CRC mismatch. It does **not** check the inline rule or `prior != next` (3, rules 2 and 4): those are
 writer assertions. A reader that meets a tombstone returns "incomplete" to its caller, who refuses the move (`ReorgTooDeep`,
 reason `incomplete`) or the view (`StateUnavailable`); it is never an error in itself.
+
+*(C3a as built, 2026-11-11.)* Four more refusals, each of something no writer produces, so that **a record the reader accepts
+re-encodes to the bytes it was read from**: a `uvarint` written in more bytes than its value needs (or in more than nine); a
+`present` byte other than 0 or 1; a tag other than 1 or 2; and a key that is no row key of its column family (no path at all,
+a storage key no longer than its 32-byte owner, or a path that is not a non-leaf hex-prefix path: a first nibble above 1, or
+an even-length flag with a non-zero pad nibble). A record that ends early is refused as truncated. None of them changes a
+byte of the three vectors. The order of the checks is: the version, alone (another version may lay out everything after it
+differently); the kind and the flags; the CRC; then the fields.
 
 ### 4.3 Golden vectors
 
@@ -315,6 +337,13 @@ below the current floor and every height index at or below it not yet deleted (a
 batch, which also absorbs a floor that moved). Because pruning is point deletes inside an atomic batch, **it needs no
 `deleteRange` and is idempotent**: a crash before the batch leaves the records, and the next batch removes them. Tombstones
 (4.2) follow the same floor. `archive` keeps every record (4.6); `inmemory` is retired.
+
+*(User decision, 2026-11-11.)* **Where there is no finalized block the floor is `state.retention.without-finality`, 512 blocks,
+not `pruning.history`.** That is every ETC and Mordor node, and an ETH node whose consensus client has not reported a
+finalized block yet. The arithmetic above gave them 64. A proof-of-work chain can be reorganised to any depth its attackers
+pay for (ETC by 3,000 to 7,000 blocks in 2020; MESS returns only with Olympia), and a reorganisation deeper than the floor is
+refused and the state synced again. So: `retained = clamp(finalized ? anchor - finalized + finality-margin :
+without-finality, pruning.history, max-blocks)`. The cost is one record per block kept, 512 against 64.
 
 ### 4.6 The two pruning modes on the unified layout (both chains)
 
@@ -1051,6 +1080,7 @@ fukuii.state {
   retention {
     finality-margin = 16                     # blocks kept above a consensus client's finalized block (4.5)
     max-blocks = 512                         # bound on the retention floor
+    without-finality = 512                   # blocks kept where there is no finalized block: a proof-of-work chain (user, 2026-11-11)
   }
   overlay {
     max-bytes = 268435456                    # forward layers + resident reverse diffs, excluding pinned layers (a guess until M1, M2)

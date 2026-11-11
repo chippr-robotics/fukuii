@@ -1,12 +1,12 @@
-# Spec 018 Track C handoff: after C2a (cloud session → whoever takes C2b and C3a), 2026-11-11
+# Spec 018 Track C handoff: after C2a and C3a (cloud session → whoever takes C2b and C3b), 2026-11-11
 
 **From** `cloud-dc960fdc`, a cloud session whose container and `.local/` do not outlive it, which is why this is a
 tracked file and not a continuation under `.local/docs/continuations/`. **To** the session that claims B-056 (C2b) or
-B-057 (C3a). It replaces the handoff written after C1.
+B-058 (C3b). It replaces the handoff written after C1.
 
 ## Status
 
-C1 (B-054) merged as #1788. **C2a (B-055) is two PRs.**
+C1 (B-054) merged as #1788. **C2a (B-055) merged as two PRs**, #1791 and #1792.
 
 - **Part 1**: the six wrapping `MptStorage` implementors are on `MptStorageDecorator` (T041), every trie of the state
   names its owner (T046: execution, genesis, the BAL prefetch), and real blocks ran through a position mirror (T026,
@@ -14,11 +14,23 @@ C1 (B-054) merged as #1788. **C2a (B-055) is two PRs.**
 - **Part 2**: the read side of the position store, `db/storage/pathstate`, behind `fukuii.state.path-live` (T035 to
   T038, T042 to T044, T047, T048; T045 in part).
 
-Next in merge order: **C2b** (B-056, every reader can be handed the position store) and **C3a** (B-057, the changeset
-record), which do not depend on each other.
+**C3a (B-057) merged as #1793**: the changeset record and its codec, `ChangesetStorage` on the new column family `v`,
+and `StateConfig`. forge and beacon signed the record's bytes. Nothing reads or writes it yet.
 
-C0 (B-053) is still open on fukuii-fc. What waits on its pinned jar and ranges: T025, T033, T034 (B-203), T049 (M4),
-T050's DC-14 figures, and the ethereum/tests half of T026 with its baseline (B-207).
+**C2b (B-056) is in flight** in this session, in three PRs: the ratchet, the RPC readers, serving and walking. Its
+pre-code record, with what conduit, herald and beacon changed, is in plan.md.
+
+- **The ratchet is done** (T054, T062): `scripts/check-state-accessors.sh` with `scripts/state-accessor-allowlist.txt`,
+  142 lines, each with its reason and the slice that removes it. **A slice that converts a caller lowers that line's
+  count or removes the line in the same change**, or the Test and Build job fails before it compiles. The allow-list's
+  sections are the work list of the next two PRs: "Readers behind RPC" and "Serving and walking".
+- The decisions follow-up merged as #1795.
+
+Next after it: **C3b** (B-058, the staged commit), which needs C3a and C2a and not C2b.
+
+**The user decided four things on 2026-11-11** (plan.md, "Decisions of 2026-11-11"): C3a merges; 512 blocks of
+changesets where there is no finalized block; one downgrade barrier; no `snap1` advertisement under the guard until the
+overlay.
 
 ## Files modified
 
@@ -38,11 +50,14 @@ T050's DC-14 figures, and the ethereum/tests half of T026 with its baseline (B-2
 
 Read plan.md, "C2a part 1 record" and "C2a part 2 record", then:
 
-- **C2b**: start at T054 (the allow-list ratchet test) and T057. The readers that execute (`eth_call`, estimate, trace,
+- **C2b**: the second PR is the RPC readers (plan.md, "C2b pre-code record"): the seam `stateAt` / `scratchStateAt` /
+  `stateAvailable` on `Blockchain`, T056, T057, T051, T053. The readers that execute (`eth_call`, estimate, trace,
   `eth_simulateV1`) run on `PathStateStorage.throwaway(block)`; readers that only read use `readOnly(block)`. A view
-  serves only the anchor until C4a, so anything else is `StateUnavailable`: decide per reader what that means with the
-  guard on. The ratchet (T062) also lists the three batch reads (data-model 9).
-- **C3a**: `PositionKey` exists (`(owner, hp)`, equality by content). T070 adds `Change` and `BlockDiff` on it.
+  serves only the anchor until C4a, so anything else is `StateUnavailable`. With the guard off the seam hands every
+  reader `getReadOnlyStorage`, and a differential test pins that nothing changed.
+- **C3b**: start at T087 (`StateLock`), which is what makes the `StateLockHeld` that `ChangesetStorage` asks for, then
+  T088 to T091. The commit writes its batch inside `StateMoveLog.inFlight(move) { … }`, takes the anchor from
+  `move.newAnchor`, and keeps a **persisted** prune cursor: `ChangesetStorage` never scans for heights (data-model 4.1).
 
 Four things the task text does not say:
 

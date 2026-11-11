@@ -630,6 +630,167 @@ prefetch (import and `newPayload`), and noted that a caller must ask `stateAvail
 its batch inside `inFlight`, under the state lock. T093 switches the prefetch's call site. T130 puts the forward chain and the
 reverse index behind the same `StateView.read`. T131's in-place commit evicts after it writes.
 
+### C3a record (2026-11-11)
+
+C3a is the changeset record (data-model 4), its storage in CF `v`, and the `fukuii.state` keys. Nothing reads or writes
+any of it until C3b. **The record's bytes are a one-way door**, so `forge` and `beacon` each re-derived the CRC32C of the three
+frozen vectors with an implementation of their own, and **both sign the vectors and the format**.
+
+What the frozen text left open, and how it was decided:
+
+| Decision | Signed by |
+| --- | --- |
+| The reader refuses four things more than data-model 4.2 lists (a length in more bytes than it needs, a presence byte other than 0 or 1, a tag other than 1 or 2, a key that is no row key), so that a record it accepts encodes back to its own bytes. No future writer needs any of them: new data is a new kind, and a new layout is a new version and a re-sync (4.4) | forge, beacon |
+| The version is checked first and alone, then the kind and flags, then the CRC, then the fields | forge, beacon |
+| `BlockDiff.byHash` is derived from the `next` nodes. The every-version map of an execution (`PathMptStorage.Layer`) is another structure and stays one | beacon |
+| The retention arithmetic: 64 with no finalized block, 106 at a 90-block finality lag, 512 when finality has stopped, 64 while the anchor is behind the finalized block | beacon |
+| No range scan in `ChangesetStorage`. An ETC mainnet block hash begins with about six zero bytes, so its record key sorts before every height key from 2^24 up; on Mordor, about four, they interleave. Pruning reads heights by their own keys | forge |
+| CF `v` joins `nsSeq`: a datadir this build has started cannot be opened by an older one | forge, with a release note |
+
+Changes asked for, and applied:
+
+| Finding | By | Change |
+| --- | --- | --- |
+| The index of a height is read, extended and written back. Outside the state lock two sibling commits lose one hash, and that record is never pruned | beacon | `recordUpdates` and `pruneUpdates` ask for a `StateLockHeld`, which only the lock of C3b can make; `put` and `prune` are private to the package |
+| `validate` can catch a diff built from the wrong world of a block (a persist inside a pre-Byzantium block, a world the miner threw away) | forge | the root rule: the account trie's root entry has a prior hashing to the pre-state root and a next hashing to the post-state root, and is there exactly when the two differ |
+| `retention.max-blocks` below `pruning.history` should not load | forge | refused when the configuration is read |
+| `recovery.escalation-refusals` is written in forkchoiceUpdated terms | forge | the conf says it does nothing on a proof-of-work node |
+
+Five rules were broken on purpose after the specs first passed (the writer sorts keys as signed bytes; no CRC check; a
+non-minimal length accepted; pruning takes the floor's height too; a second block at a height overwrites the index). Each
+was caught.
+
+**Carried to C3b, in its tasks:** a **persisted** prune cursor (T095: without one a restart or a switch from archive to
+basic would point-read every height from 0, about 22 million on ETC mainnet); a malformed height index fails the commit as
+storage corruption, never as a fault of the block (T091); `pruning.mode = "inmemory"` starts failing at start when C3b
+builds `StateConfig`, which the release notes must say (T093).
+
+**Decided by the user on 2026-11-11** (see "Decisions of 2026-11-11" below): 512 blocks where there is no finalized block,
+and one downgrade barrier. The two questions as they were put:
+
+1. **ETC keeps 64 blocks of changesets** by this design, because a proof-of-work chain has no finalized block and the floor
+   is then `pruning.history`. A reorganisation deeper than that is refused and the node re-syncs its state. ETC was
+   reorganised 3,000 to 7,000 blocks deep in 2020, and MESS returns only with Olympia; Besu keeps 512 trie logs by default.
+   forge asks for a proof-of-work default of at least 512 (`retention.max-blocks`). The cost is disk: one record per block
+   kept.
+2. **The downgrade barrier.** After this slice a build older than it cannot open a datadir (RocksDB must open every column
+   family a database has). forge asks that every column family C3b needs land in the same release, so operators meet one
+   barrier and not two, and that the release note say a rollback means a re-sync.
+
+### Decisions of 2026-11-11 (user)
+
+Four questions were put to the user after C3a was built, and answered in one message.
+
+| Question | Decision | Where it lands |
+| --- | --- | --- |
+| Merge C3a, which adds column family `v` to every datadir, after which an older build cannot open it? | **Merge.** | #1793 |
+| How many blocks of changesets where there is no finalized block (ETC, Mordor)? 64 by the design, at least 512 by forge | **512.** | `state.retention.without-finality = 512`; `StateConfig.retained`; data-model 4.5 and 10 |
+| One downgrade barrier or two? | **One: everything lands in the same release.** | below |
+| With the guard on a node can serve SNAP for the anchor's root only, until the overlay (C4a). Accept empty answers, or stop advertising? | **Stop advertising `snap1`, so that peers are not lost.** | T058 |
+
+**One downgrade barrier.** The release that first ships column family `v` also ships every other change of this track after
+which an older build cannot open a datadir. Today the track adds no column family but `v` (data-model 2: `t` and `u` exist,
+`n` stays as an empty family), so the rule binds two things: a later slice that finds it needs another family lands it before
+that release is cut; and the release note says, once, that a datadir started by this release cannot be opened by an older
+one. The `state.layout` marker (5.2) is a different barrier with its own message, and it stays behind the in-development
+guard until the track's last slice.
+
+**`snap1` under the guard.** With `fukuii.state.path-live` on and until the overlay can serve the window of recent roots,
+the node does not advertise `snap1`. A node in that state does not need SNAP as a client either: its hand-off (C5a) comes
+after the overlay (C4a) in merge order. With the guard off nothing changes. It is part of C2b's serving PR.
+
+### C2b pre-code record (2026-11-11)
+
+C2b (every reader can be handed the position store) touches 44 call sites of the four state accessors in 27 files. `conduit`
+(RPC), `herald` (SNAP serving) and `beacon` (the seam, the walkers) read the design before code. Each signs with changes; none
+blocks. **It lands as three PRs:** the ratchet; the RPC readers; serving and walking.
+
+| Finding | By | Change to the plan |
+| --- | --- | --- |
+| Only RPC readers move onto the seam in this slice. With the guard on there is no writer before C3b, so the anchor stands still while import moves the head: the proposer's nonce read (`EngineApiService:1191`), the importer's missing-node lookup (`BlockImporter:835-838`) and the chain importer's presence check (`ChainImporter:362`) would break | beacon | they stay on a root-keyed hash accessor, allow-listed, until C3b and C5b |
+| With the guard off the seam hands every reader `getReadOnlyStorage`: reads are the same as the backing storage in each pruning mode, and a reader that persists by accident then writes into a buffer | beacon | a differential test on basic and in-memory that a converted reader's answers are unchanged |
+| Account reads by block number resolve the number through the canonical index, so a request for a side block by hash reads the canonical block's state **today** (`BlockchainReader.scala:190-194,330-337`). Ten call sites hold the header and pass the number | conduit, beacon | the readers pass the header; an existing bug fixed on the way |
+| `StxLedger.advanceWorldToTx` needs the parent's state and the header in hand is the traced block's | conduit | it takes the parent header |
+| `eth_simulateV1` makes one storage and threads the world through every simulated block: block N+1 reads the root N persisted, which is no header's | conduit | one scratch state per request, shared |
+| Nothing in the RPC layer catches a `StateFault`: it would leave as `-32603`, or a 500 from GraphQL | conduit | a retry helper that re-runs the whole read up to 3 times, and a backstop that maps a `StateFault` to the existing `NodeNotFound` error |
+| Every caller of the root-only storage reads has the address | conduit | the root-only overloads are deleted |
+| Only `walkRangeVisit` carries a prefix in the SNAP server; `resolve`, `proofFor`, `collectNodeAtPath` and `resolveLeafAccount` do not, and two raw reads sit in `NetworkPeerManagerActor` (:1159, :1171) | herald | the prefix is threaded through all of them |
+| Only GetAccountRange checks the served-root window today; storage ranges and trie nodes serve any root the hash store holds | herald | with the guard on they are limited to the window too; with it off nothing changes |
+| `GetNodeData` is unreachable: every decoder from eth/68 to eth/72 rejects its codes. (The note said "eth/68 and eth/69 only"; eth/70 to 72 are opt-in per network) | herald | the handler is deleted or allow-listed, not converted |
+| Three walkers see only a hash (`LeafWalkVisitor`, `MptConstructionVisitor`, `ShardEnumerator`), and every read of a storage root by hash fails on a position store (`StorageRecoveryActor:452,497`, `StateValidator:79,287`) | beacon | positioned visitors for the three; the storage-root reads take the account hash they already hold |
+| The four accessors are not all the doors in | beacon | the ratchet also covers `getBulkLoadStorage`, `stageBlock`, `prefetchReader`, `getNode`/`getMptNodeByHash`, `storageMpt(`, trie constructions, `def visitHash`, and stores built outside `db/storage` |
+
+### C2b ratchet record (2026-11-11)
+
+C2b's first PR freezes who may still enter the state by a root or a hash (T054, T062). No code of the node changes.
+
+`scripts/check-state-accessors.sh` counts every use of eighteen entry points under `src/main/scala` and compares the counts
+with `scripts/state-accessor-allowlist.txt`, where each line has its reason. More uses than a line allows fail, and so do
+fewer: the list only shrinks. It runs in the Test and Build job before the compile, and again from
+`StateAccessorRatchetSpec`.
+
+**What the tree holds: 142 lines, 279 uses, 69 files.** By what happens to them:
+
+| Group | Lines | Leaves in |
+| --- | --- | --- |
+| The stores and the trie themselves (definitions) | 41 | C8b, with the Hash scheme; some are kept |
+| Tries and decorators that name their owner | 11 | kept (C2a did these) |
+| Not the state: list tries over an ephemeral source | 11 | kept |
+| Readers behind RPC, and the transaction pool | 12 | C2b, second PR |
+| SNAP serving, checkpoint export, recovery scans, walkers | 22 | C2b, third PR |
+| Execution, block production and the writers beside them | 10 | C3b, C3c |
+| SNAP hand-off, the audit, repair, checkpoint import | 11 | C5a, C5b, C5c |
+| The copy to the hash store, and SNAP's Hash arm | 24 | C8a |
+
+18 lines are marked `WRITER`.
+
+**What the list showed that the design had not:**
+
+- The four accessors named in T054 are 57 of the 279 uses, their definitions included. Most hash-only readers never touch
+  an accessor: they are handed a store and call `get(hash)` on it. SNAP serving, `StateValidator` (9 reads), the recovery
+  scans and `ShardEnumerator` appear only under `get-by-hash`, which is why it was added.
+- `PendingTransactionsManager` (`:498`) reads senders' accounts at the best block from a root alone. No task named it. It
+  is not on the consensus path and falls back to the senders it knows on any failure (`:530-533`), so it moves with the
+  RPC readers (beacon agrees).
+- Scala 3 builds a class without `new`: a pattern on `new SerializingMptStorage(` misses half of the constructions.
+- `MerklePatriciaTrie.getProof` has an arm that resolves a hash node with no position (`:196`). It is **unreachable**:
+  `pathTraverse` resolves every hash node before the arm sees one (beacon, who had said so in the C1 review; a first
+  reading here took it for a fault in `eth_getProof` on a position store, which it is not). T051 deletes the arm.
+
+**beacon's review of the list (SIGN WITH CHANGES; all taken):**
+
+| Finding | Change |
+| --- | --- |
+| No pattern covered the writes by hash: `storeRawNodes` (13 uses in 9 files), `repairNode`, `deleteBadNode`, `saveNode`. They are the riskiest doors | entry point `raw-store` |
+| An accessor reached under another name escaped: `StateIngest.trieStore` returns `getBackingStorage(pivot)`, and `SnapResumePlanner.getOrCreateMptStorage` hands that on to nine call sites | entry point `snap-store`; and `store-handed`, every method whose result is a store, so that the next such name has to be listed when it is written |
+| Three reasons were wrong about the code: the `getProof` arm; `NodeBuilder:496` serves SNAP only, not GetNodeData; the two raw reads of `NetworkPeerManagerActor` belong to the storage-range answer | corrected |
+| A `get` on a map called `storage` trips `get-by-hash`, and that kind of noise is what gets a check switched off | `get-by-hash` looks only in files that name a store or a trie (three rows left the list); a failure prints the exact line to add or edit |
+| Exact counts in both directions | kept: it is what makes the list only shrink, and moving lines inside a file is free |
+
+**Its limits.** It is text, not types. `get-by-hash` knows a store by its name (`mptStorage`, `storage`, `source`,
+`hashStore`, `mpt`), so a store under another name gets past it. The proof that nothing reads by hash alone is C8b, which
+deletes the read; until then this trips on the shapes the code uses today.
+
+**Evidence.** The spec passed when first run, apart from one wording mismatch, and four of its assertions were then
+found to pass on the script's closing paragraph and not on its verdict; they now name the verdict. The script was then
+broken one rule at a time, 27 ways, and every one fails at least one case (46 cases in all):
+
+| Broken | Cases that fail |
+| --- | --- |
+| more than listed passes; fewer passes; a line whose file is gone passes | 1 each |
+| comment lines are counted; lines are counted and not uses | 2 each |
+| a line with no reason, a line given twice, an unknown entry point, a count that is no number: each accepted | 1 each |
+| `src/test` is scanned too | 2 |
+| an empty list is read as the tree (the `FNR == NR` trap in awk, which the first run of the script hit) | 33 |
+| a tree with no sources passes; a missing allow-list passes | 1 each |
+| a difference exits 0 | 39 |
+| the uses of an unlisted file are not shown; the line to add is not printed | 34; 1 |
+| `get-by-hash` looks in every file | 2 |
+| a pattern loosened or narrowed, ten ways: no word boundary; `visitHash(` without `def`; any receiver for `get(`; a type argument counted as a trie; `new` required for a store; `raw-store` without the delete, or without the batch write; `snap-store` without its second name; `store-handed` taking a function type, or missing a declaration | 1 to 3 each |
+
+On the first set of mutations two of the loosened patterns failed only the run on the repository; each now has a made-up
+case of its own.
+
 ### Destructive change (C8a and C8b): the vault protocol blocks
 
 ```
