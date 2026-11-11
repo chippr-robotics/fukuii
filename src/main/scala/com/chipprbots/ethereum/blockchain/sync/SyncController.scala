@@ -505,8 +505,8 @@ object SyncController:
     // §8k-G3: per-child narrow typed adapters. Each wraps into WrappedExternal. Pekko's adapter
     // routing table is keyed by Class[T] per actor; multiple adapters on the same ActorContext
     // share the same mailbox. SyncController's unwrap() / WrappedExternal dispatch is UNCHANGED.
-    val bytecodeRecoveryAdapter: TypedActorRef[BytecodeRecoveryActor.RecoveryComplete.type] =
-      ctx.messageAdapter[BytecodeRecoveryActor.RecoveryComplete.type](WrappedExternal.apply)
+    val bytecodeRecoveryAdapter: TypedActorRef[BytecodeRecoveryActor.SyncControllerMsg] =
+      ctx.messageAdapter[BytecodeRecoveryActor.SyncControllerMsg](WrappedExternal.apply)
     val storageRecoveryAdapter: TypedActorRef[StorageRecoveryActor.SyncControllerMsg] =
       ctx.messageAdapter[StorageRecoveryActor.SyncControllerMsg](WrappedExternal.apply)
     val combinedScanAdapter: TypedActorRef[CombinedRecoveryScanActor.CombinedScanComplete] =
@@ -2783,8 +2783,23 @@ object SyncController:
         ctx.system.deadLetters[SNAPSyncController.Command]
       )
       appStateStorage.clearRecoveryProgress().commit()
-      log.info("All recovery complete. Transitioning to regular sync.")
+      if recoveryScanCouldNotRun then
+        log.warn(
+          "Recovery is over for this run, with a scan that could not run (logged above). Transitioning to regular sync."
+        )
+      else log.info("All recovery complete. Transitioning to regular sync.")
       startRegularSync()._2
+
+    /** A legacy scan (`parallel-recovery-scan = false`) could not run. Its phase is over for this run and settles
+      * nothing: its actor wrote no flag, and the cap on bulk bytecode recovery is not counted against a scan that never
+      * ran, as [[recoveryCouldNotRun]] has it for the combined scan.
+      */
+    private def legacyScanCouldNotRun(phase: String): Unit =
+      log.error(
+        s"[SNAP-RECOVERY] The $phase recovery scan could not run (logged above). Its flag is not written, so the next " +
+          "start scans again. Regular sync fetches what it reaches on demand."
+      )
+      recoveryScanCouldNotRun = true
 
     def runningRecovery(
         bytecodeActor: Option[TypedActorRef[BytecodeRecoveryActor.Command]],
@@ -2801,6 +2816,17 @@ object SyncController:
 
         case StorageRecoveryActor.RecoveryComplete =>
           log.info(s"[SNAP-RECOVERY] storage recovery complete (bytecode done: $bytecodeComplete)")
+          if bytecodeComplete then completeRecovery()
+          else runningRecovery(bytecodeActor, storageActor = None, bytecodeComplete, storageComplete = true)
+
+        // Over for this run, like a phase that completed, and said for what it is.
+        case BytecodeRecoveryActor.RecoveryNotRun =>
+          legacyScanCouldNotRun("bytecode")
+          if storageComplete then completeRecovery()
+          else runningRecovery(bytecodeActor = None, storageActor, bytecodeComplete = true, storageComplete)
+
+        case StorageRecoveryActor.RecoveryNotRun =>
+          legacyScanCouldNotRun("storage")
           if bytecodeComplete then completeRecovery()
           else runningRecovery(bytecodeActor, storageActor = None, bytecodeComplete, storageComplete = true)
 

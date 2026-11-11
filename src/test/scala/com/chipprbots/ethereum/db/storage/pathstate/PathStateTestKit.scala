@@ -188,19 +188,23 @@ object PathStateTestKit:
 
   /** A state whose keys are chosen, so that its tries have what hashed keys almost never give (a path through either is
     * where a position is miscounted):
-    *   - extensions many nibbles long, in the account trie (`3abcd…`, 4 nibbles; `1111 0…`, 62) and in the storage tries;
+    *   - extensions many nibbles long, in the account trie (`3abcd…`, 4 nibbles; `1111 0…`, 62) and in the storage
+    *     tries;
     *   - nodes embedded in their parent: `small` holds the slots `big` holds with one-byte values, so the two leaves
     *     under `7777…` sit inside their branch, and that branch inside the extension above it.
     *
     * `holder` and `twin` hold the same storage trie. `holder`, `small` and `coded` have code; `twin` has `holder`'s.
     */
-  final class ChosenState:
+  final class ChosenState(
+      val nodes: MptStorage = new ReferenceStore,
+      val codes: EvmCodeStorage = new EvmCodeStorage(EphemDataSource())
+  ):
     import com.chipprbots.ethereum.domain.CodeHash
     import com.chipprbots.ethereum.domain.TrieRoot
     import com.chipprbots.ethereum.mpt.byteStringSerializer
 
-    val nodes = new ReferenceStore
-    val codes = new EvmCodeStorage(EphemDataSource())
+    /** A node of the state as stored, by its hash. */
+    def load(hash: Array[Byte]): Array[Byte] = nodes.get(hash).encode
 
     val slotKeys: Seq[ByteString] =
       Seq(chosenKey("7777", 1), chosenKey("7777", 2), chosenKey("7778", 0), chosenKey("80", 0), chosenKey("8f", 0xff))
@@ -277,6 +281,13 @@ object PathStateTestKit:
       positions(trie).keys.toSeq
         .sortBy(row => (HexPrefix.decode(row.toArray)._1.length, row.map("%02x".format(_)).mkString))
         .map(trie -> _)
+
+    /** Every position that holds the node `position` holds: where two accounts have one storage trie, both of theirs.
+      * What a hash store loses when it loses that node.
+      */
+    def everywhere(position: Position): Seq[Position] =
+      val node = positions(position._1)(position._2)
+      positions.toSeq.flatMap((trie, rows) => rows.collect { case (row, `node`) => trie -> row })
 
     /** The hash store without the nodes at `holes`. A node two tries hold is lost from both: a hash store has it once.
       */

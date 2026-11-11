@@ -24,8 +24,8 @@ import com.chipprbots.ethereum.blockchain.sync.snap.StorageScheme
 import com.chipprbots.ethereum.blockchain.sync.snap.StorageTask
 import com.chipprbots.ethereum.blockchain.sync.snap.actors
 import com.chipprbots.ethereum.blockchain.sync.snap.controller.StateIngest
-import com.chipprbots.ethereum.db.storage.SnapSyncProgressStorage
 import com.chipprbots.ethereum.db.storage.MptStorage
+import com.chipprbots.ethereum.db.storage.SnapSyncProgressStorage
 import com.chipprbots.ethereum.db.storage.StateStorage
 import com.chipprbots.ethereum.domain.Account
 import com.chipprbots.ethereum.mpt.*
@@ -86,6 +86,9 @@ object StorageRecoveryActor:
 
   /** Sent to SyncController when recovery is complete (or skipped) */
   case object RecoveryComplete extends SyncControllerMsg
+
+  /** Sent in its place when the scan could not run: recovery is over for this run, and nothing is settled by it. */
+  case object RecoveryNotRun extends SyncControllerMsg
 
   /** Recovery → SyncController: the saved pivot root has aged out of every peer's snapshot serve window, so storage
     * downloads are returning empty. Please fetch a RECENT canonical header from a peer and reply with [[RecentRoot]] so
@@ -208,7 +211,7 @@ object StorageRecoveryActor:
               "is not written and the next start scans again."
           )
           RecoveryMetrics.setStoragePhase(RecoveryMetrics.PhaseIdle)
-          syncController ! RecoveryComplete
+          syncController ! RecoveryNotRun
           Behaviors.stopped
 
         case ScanResult(missing) =>
@@ -464,13 +467,24 @@ object StorageRecoveryActor:
       log: Logger
   ): Unit =
     val mptStorage = stateStorage.getBackingStorage(pivotBlockNumber)
-    val residual = missing.count { case (accountHash, storageRoot) =>
+    val residual =
       try
-        mptStorage.forOwner(Some(accountHash)).getAt(NibblePath.Empty, storageRoot.toArray)
-        false
-      catch case _: MerklePatriciaTrie.MPTException => true
-    }
-    if residual == 0 then log.info(s"Storage recovery: all ${missing.size} contract storage tries present on disk.")
+        missing.count { case (accountHash, storageRoot) =>
+          try
+            mptStorage.forOwner(Some(accountHash)).getAt(NibblePath.Empty, storageRoot.toArray)
+            false
+          catch case _: MerklePatriciaTrie.MPTException => true
+        }
+      catch
+        case fault: com.chipprbots.ethereum.db.storage.pathstate.StateFault =>
+          // a log only: the state moved under it, which is not a gap and not a reason to stop
+          log.warn(
+            s"Storage recovery: the closing check of what is still missing could not read the state: ${fault.getMessage}"
+          )
+          -1
+    if residual < 0 then ()
+    else if residual == 0 then
+      log.info(s"Storage recovery: all ${missing.size} contract storage tries present on disk.")
     else
       log.warn(
         s"Storage recovery finishing: ${missing.size - residual} of ${missing.size} storage gaps filled, " +

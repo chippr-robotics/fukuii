@@ -76,7 +76,11 @@ class MptVisitorSpec extends AnyFunSuite with ScalaCheckPropertyChecks:
     assert(leaves.head.toArray.sameElements(value))
   }
 
-  test("PathTrackingLeafWalkVisitor visits all leaves for two keys with different first nibble (branch root)", UnitTest, MPTTest) {
+  test(
+    "PathTrackingLeafWalkVisitor visits all leaves for two keys with different first nibble (branch root)",
+    UnitTest,
+    MPTTest
+  ) {
     val storage = freshStorage()
     val k1 = Array[Byte](0x10)
     val k2 = Array[Byte](0xf0.toByte)
@@ -89,7 +93,11 @@ class MptVisitorSpec extends AnyFunSuite with ScalaCheckPropertyChecks:
     assert(valueSet == Set(v1.toSeq, v2.toSeq))
   }
 
-  test("PathTrackingLeafWalkVisitor visits all leaves for two keys with common prefix (extension root)", UnitTest, MPTTest) {
+  test(
+    "PathTrackingLeafWalkVisitor visits all leaves for two keys with common prefix (extension root)",
+    UnitTest,
+    MPTTest
+  ) {
     val storage = freshStorage()
     val k1 = Array[Byte](0x11, 0x11)
     val k2 = Array[Byte](0x11, 0x00)

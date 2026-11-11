@@ -134,7 +134,7 @@ class StorageRecoveryActorSpec extends ScalaTestWithActorTestKit() with AnyFlatS
   // A scan that could not run (here: the state root is not in the store) was taken as a scan that found no storage
   // missing, and recovery was marked done for good on a state nobody had read. It still ends recovery for this run, so
   // that regular sync starts; it settles nothing (spec 018 Track C, C2b; the combined scan already behaves so).
-  "StorageRecoveryActor" should "end recovery for this run and not mark it done when its scan cannot run" taggedAs (
+  "StorageRecoveryActor" should "tell the controller its scan did not run, and not mark recovery done" taggedAs (
     UnitTest,
     SyncTest
   ) in {
@@ -153,7 +153,7 @@ class StorageRecoveryActorSpec extends ScalaTestWithActorTestKit() with AnyFlatS
       ),
       "storage-recovery-spec-scan-failed"
     )
-    syncController.expectMsg(8.seconds, StorageRecoveryActor.RecoveryComplete)
+    syncController.expectMsg(8.seconds, StorageRecoveryActor.RecoveryNotRun)
     appStateStorage.isStorageRecoveryDone() shouldBe false
     testKit.stop(actor)
   }

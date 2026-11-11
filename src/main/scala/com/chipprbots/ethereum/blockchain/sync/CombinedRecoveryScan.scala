@@ -53,7 +53,10 @@ final class CombinedRecoveryScan(
           if evmCodeStorage.get(account.codeHash.value).isEmpty then missingCode += account.codeHash.value
         // Storage: a contract whose storage-root node is referenced but absent from MptStorage.
         val isContract = account.storageRoot != Account.EmptyStorageRootHash
-        if isContract && seenStorageRoots.add(CombinedRecoveryScan.storageTrieKey(shared, accountHash, account.storageRoot.value)) then
+        if isContract && seenStorageRoots.add(
+            CombinedRecoveryScan.storageTrieKey(shared, accountHash, account.storageRoot.value)
+          )
+        then
           try
             // the root of THIS account's storage trie
             val _ = mptStorage.forOwner(Some(accountHash)).getAt(NibblePath.Empty, account.storageRoot.toArray)

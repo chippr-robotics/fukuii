@@ -948,6 +948,86 @@ corrupt) is still served as a hole where go-ethereum answers with nothing (B-213
 
 **The ratchet** went from 136 lines and 268 uses to 133 and 263.
 
+### C2b walkers record (2026-11-11)
+
+C2b's fourth and last PR: every walk of the state reads each node at its position (T055, T059, T060, T061). The walks
+are the combined recovery scan and the two legacy scans, the state validator, the shard enumerator, the leaf walk they
+share, and the checkpoint export.
+
+**Frozen first.** The risk in this PR is the hash store: these walks decide what a node heals and when it stops
+looking, on ETC and ETH, today. So before a walker was touched, what ten walks answer on a hash store was written down:
+three states (hashed keys; chosen keys with extensions 4 and 62 nibbles long and nodes inside their parents; one
+account, the one shape in which the heal walk reaches a storage trie), seven sets of holes, two code stores. 420 answers,
+in order, in `src/test/resources/spec018/walker-verdicts-hash-store.txt`, and the checkpoint archive's bytes for the
+chosen-key state. Every conversion after that was run against them.
+
+**What a position store changes for a walk, beyond where a read is.** Two accounts with one storage root share one trie
+on a hash store. On a position store each has rows of its own, and the second's can be missing while the first's are
+whole (spec 022 V3). Three walks skipped a storage trie for having seen its root. On a position store that skip hides
+exactly that hole, and nothing else would find it until a block read it. `MptStorage.nodesSharedAcrossTries` is what a
+walk asks first: true of a hash store (by root, as before: the result and the number of storage tasks do not change),
+false of the position store (by account and root). The validator's skip of a node it has seen is by hash only where a
+node is its hash; a walk of a tree comes to each position once.
+
+**A state fault is not a hole.** The defect the SNAP server had, in its other places: the validator took any failed
+read as a missing node, or flagged the storage trie for healing. A view the disk has moved away from would have had a
+node that is there fetched again. It ends the walk: the validator answers `Left("State fault, not a hole")`, a scan
+ends, the export answers `StateNotHeld`.
+
+**A defect found on the way (beacon), fixed.** A legacy scan that could not run at all (the state root not in the
+store, the store failing) was mapped to a scan that found nothing missing, and the recovery flag was written for good on
+a state nobody had read. A test pinned it, as "graceful resilience". It now ends recovery for the run, so that regular
+sync starts, and writes nothing: what the combined scan, the default, already does (`recoveryCouldNotRun`).
+
+**Where a walk's store comes from did not change.** The scans and the validator are handed SNAP's own store, during or
+right after the sync, before there is an anchor to take a view of. Only the export has a block: it takes
+`BlockchainReader.stateAt(header)`. The rest is the hand-off's (C5a), and the allow-list rows say so.
+
+**Each spec passed when first run, so the code was broken one rule at a time.** 41 mutations, all caught:
+
+| Rule broken | Mutations | Caught by |
+| --- | --- | --- |
+| the leaf walk reads at the root, or one nibble short | 2 | `WalkersPositionSpec`, the scanners spec |
+| the shards read under an owner, at the root, or a shard under an extension or a branch is read above it | 4 | both |
+| a scan walks the account trie under an owner, or probes a storage root under none (combined, legacy storage, legacy bytecode) | 5 | the scanners spec, on the position store |
+| a scan tells storage tries by root on a position store (combined, legacy, the parallel merge), or by account on a hash store | 4 | the alias case, the merge case; the frozen answers |
+| a scan that could not run marks recovery done (storage, bytecode) | 2 | the two actor specs |
+| the validator: an owner, a path, an extension, a branch index or a leaf's key wrong in each of its walks | 10 | the scanners spec, on the position store |
+| the validator: a state fault is a missing node, flags a trie for healing, or is a failed load in other words | 3 | the moving-state case |
+| the validator skips a node it has seen on a position store | 1 | the case of one subtree at two positions |
+| the export: an owner, a path, an extension, a branch index, a pushed path or a leaf's key wrong | 6 | the frozen bytes, from the position store |
+| the export: a state fault is a missing node; a state not held is another error | 2 | `CheckpointExporterSpec` |
+| the position store says its nodes are shared; a wrapper answers for itself | 2 | the alias case; `MptStorageDecoratorSpec` |
+
+**Reviews (beacon and forge: SIGN WITH CHANGES, no blocker).** Both read the hash-store behaviour as unchanged: the
+same nodes, read in the same order.
+
+| Finding | By | Change |
+| --- | --- | --- |
+| On a position store an account under a key that is not 32 bytes names no storage trie; the store throws, and the validator's catch-all would have flagged the storage root for healing: a corrupt account trie read as a hole | beacon | the validator answers `Left("Corrupt trie node, not a hole")`, the export `CorruptAccountKey`; on a hash store, where the name is not used, both walk on as before |
+| The controller was told `RecoveryComplete` whether or not the scan ran, and logged "complete". It also counts failures of a bulk bytecode recovery towards a cap, which a scan that never ran must not count against | forge | `RecoveryNotRun` from both legacy actors; the controller says so at ERROR and sets `recoveryScanCouldNotRun`, as the combined scan's path does |
+| The closing check of storage recovery (a log) caught trie exceptions only: a state fault there would have crashed the actor | beacon | it is logged and the check skipped |
+| The path was copied twice for every node read, on a walk of 90 M accounts | beacon | once (`NibblePath.wrap`, in the two walkers inside `mpt`) |
+| A v1 archive holds a storage trie that two accounts share once. An importer that places nodes by owner and path, with no lookup by hash, cannot rebuild the second account's trie from it | beacon | written into T230: v2 emits each owner's trie, or importing v1 keeps a lookup by hash |
+| How many accounts share a storage root on ETC mainnet, that is how many more storage tasks a position-store scan starts, is not measured; nothing in the storage download assumes one task per root | forge | the legacy scan already logs both counts (contracts, distinct roots); to be read off a Mordor and a mainnet run before C5a |
+
+**Not taken, with the reason.** forge: a pivot root that has been pruned makes a failed scan repeat at every start,
+so settle the flag once the best block is past the pivot by the pruning history. The scan does not read the pivot's
+root when it can read the best block's (`SyncController.recoveryScanRoot`): the pivot's is the fallback for a datadir
+whose best block has no readable state, and there the combined scan, the default, already repeats at every start, at
+the cost of one failed read. Whether either path should give up is one question for both, with B-217.
+
+**Left as it is, and why.** A legacy scan that meets a hole stops there, returns what it had, and the flag is settled
+on it (beacon: a walk that stopped must be a failure; forge: count the hole and go on, as the combined scan does, then
+retire the legacy path). The user decided on 2026-10-31, for the combined scan, that a
+pass that ran settles the flags, holes or not, because a rescan at every start blocks regular sync for hours. With the
+fix above, "a stopped walk is a failure" would be that rescan on any datadir with one hole. The consistent change is the
+combined scan's hole counter for the legacy walks, which is the user's to decide (B-217). What the SNAP controller does
+when a validation ends in a state fault is unreachable until the validator is handed a view (B-216).
+
+**The ratchet** went from 133 lines and 263 uses to 121 and 240. Nothing in main resolves a node of the state by hash
+alone in a walk any more: what is left of the list's walking section is the store each walk is handed.
+
 ### Destructive change (C8a and C8b): the vault protocol blocks
 
 ```

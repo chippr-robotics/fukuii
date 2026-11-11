@@ -42,7 +42,8 @@ class PathTrackingLeafWalkVisitor(
     onLeaf(ByteString(bytes), leaf)
 
   override def visitHash(hashNode: HashNode): HashNodeResult[Unit] =
-    def here = storage.getAt(NibblePath.fromNibbles(pathPrefix.toArray), hashNode.hash)
+    // the prefix is nibbles the trie itself gave: its array is this read's own, and is not checked again
+    def here = storage.getAt(NibblePath.wrap(pathPrefix.toArray), hashNode.hash)
     onHole match
       case None => ResolveResult(here)
       case Some(report) =>

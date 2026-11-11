@@ -161,7 +161,7 @@ class BytecodeRecoveryActorSpec extends ScalaTestWithActorTestKit() with AnyFlat
     }
 
   it should
-    "emit RecoveryComplete when the trie scan throws (trie root missing), and not mark recovery done" taggedAs (
+    "tell the controller the scan did not run when it throws (trie root missing), and not mark recovery done" taggedAs (
       UnitTest,
       SyncTest
     ) in {
@@ -186,8 +186,9 @@ class BytecodeRecoveryActorSpec extends ScalaTestWithActorTestKit() with AnyFlat
 
       // A scan that could not run still ends recovery for this run, so that regular sync starts. It settles nothing:
       // it was taken as a scan that found no code missing, and the flag was written on a state nobody had read (spec
-      // 018 Track C, C2b; the combined scan already leaves both flags unwritten when it cannot run).
-      syncController.expectMsg(8.seconds, BytecodeRecoveryActor.RecoveryComplete)
+      // 018 Track C, C2b; the combined scan already leaves both flags unwritten when it cannot run). The controller is
+      // told which it was: it does not count a scan that never ran against its cap on bulk recovery.
+      syncController.expectMsg(8.seconds, BytecodeRecoveryActor.RecoveryNotRun)
       appStateStorage.isBytecodeRecoveryDone() shouldBe false
 
       testKit.stop(actor)

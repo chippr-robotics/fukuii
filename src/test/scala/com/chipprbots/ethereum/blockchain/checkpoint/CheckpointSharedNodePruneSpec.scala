@@ -146,7 +146,6 @@ class CheckpointSharedNodePruneSpec extends AnyWordSpec with Matchers with Eithe
       val archive: Path = Files.createTempFile("checkpoint-shared-node", ".checkpoint")
       try
         val exporter = new CheckpointExporter(
-          sourceStorages.storages.stateStorage,
           sourceStorages.storages.evmCodeStorage,
           sourceReader,
           chainId = chainId

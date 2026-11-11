@@ -46,7 +46,7 @@ object ShardEnumerator:
       expand(ByteString.empty, resolve(HashNode(rootHash.toArray), accounts, ByteString.empty), accounts, depth)
 
   private def resolve(node: MptNode, storage: MptStorage, prefix: ByteString): MptNode = node match
-    case h: HashNode => storage.getAt(NibblePath.fromNibbles(prefix.toArray), h.hashNode)
+    case h: HashNode => storage.getAt(NibblePath.wrap(prefix.toArray), h.hashNode)
     case other       => other
 
   /** A node below the root. Absent, it stays the unresolved HashNode it is; a node that fails to decode still throws.

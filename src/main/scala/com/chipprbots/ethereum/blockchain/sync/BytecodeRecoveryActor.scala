@@ -65,14 +65,20 @@ object BytecodeRecoveryActor:
   // (no SNAPSyncController exists during recovery — SyncController acts as the routing relay).
   private[sync] case class ForwardByteCodesResponse(msg: ByteCodes) extends Command
 
+  /** What this actor tells SyncController when it is over. */
+  sealed trait SyncControllerMsg
+
   /** Sent to SyncController when recovery is complete (or skipped) */
-  case object RecoveryComplete
+  case object RecoveryComplete extends SyncControllerMsg
+
+  /** Sent in its place when the scan could not run: recovery is over for this run, and nothing is settled by it. */
+  case object RecoveryNotRun extends SyncControllerMsg
 
   def apply(
       stateRoot: ByteString,
       stateIngest: StateIngest,
       networkPeerManager: TypedActorRef[NetworkPeerManagerActor.Command],
-      syncController: TypedActorRef[RecoveryComplete.type],
+      syncController: TypedActorRef[SyncControllerMsg],
       pivotBlockNumber: BigInt,
       snapSyncConfig: SNAPSyncConfig
   ): Behavior[Command] = scanning(
@@ -93,7 +99,7 @@ object BytecodeRecoveryActor:
       stateRoot: ByteString,
       stateIngest: StateIngest,
       networkPeerManager: TypedActorRef[NetworkPeerManagerActor.Command],
-      syncController: TypedActorRef[RecoveryComplete.type],
+      syncController: TypedActorRef[SyncControllerMsg],
       pivotBlockNumber: BigInt,
       snapSyncConfig: SNAPSyncConfig,
       missing: Seq[ByteString]
@@ -113,7 +119,7 @@ object BytecodeRecoveryActor:
       stateRoot: ByteString,
       stateIngest: StateIngest,
       networkPeerManager: TypedActorRef[NetworkPeerManagerActor.Command],
-      syncController: TypedActorRef[RecoveryComplete.type],
+      syncController: TypedActorRef[SyncControllerMsg],
       pivotBlockNumber: BigInt,
       snapSyncConfig: SNAPSyncConfig,
       preloaded: Option[Seq[ByteString]] = None,
@@ -133,7 +139,7 @@ object BytecodeRecoveryActor:
       stateRoot: ByteString,
       stateIngest: StateIngest,
       networkPeerManager: TypedActorRef[NetworkPeerManagerActor.Command],
-      syncController: TypedActorRef[RecoveryComplete.type],
+      syncController: TypedActorRef[SyncControllerMsg],
       pivotBlockNumber: BigInt,
       snapSyncConfig: SNAPSyncConfig,
       preloaded: Option[Seq[ByteString]],
@@ -175,7 +181,7 @@ object BytecodeRecoveryActor:
               "flag is not written and the next start scans again."
           )
           RecoveryMetrics.setBytecodePhase(RecoveryMetrics.PhaseIdle)
-          syncController ! RecoveryComplete
+          syncController ! RecoveryNotRun
           Behaviors.stopped
 
         case ScanResult(missing) =>
@@ -234,7 +240,7 @@ object BytecodeRecoveryActor:
       ctx: ActorContext[Command],
       coordinator: org.apache.pekko.actor.typed.ActorRef[snap.actors.ByteCodeCoordinator.Command],
       expectedCount: Int,
-      syncController: TypedActorRef[RecoveryComplete.type],
+      syncController: TypedActorRef[SyncControllerMsg],
       stateIngest: StateIngest,
       snapSyncConfig: SNAPSyncConfig
   ): Behavior[Command] =
