@@ -2377,3 +2377,15 @@ items:
       spec: 018
     depends_on: [B-058]
     notes: "conduit and beacon, review of C2b PR B (2026-11-11). GraphQLSchema:813-814, :899-900 call callOutcome / estimateGas directly. With the guard on, a stale view there is an error of the field and not a retry. Matters only once C3b's in-place commit can make a view stale. Also: StxLedger.runSimulated and the estimate search still make a world from the header they are given when handed none; no production caller does, and the arms could be deleted with their test callers moved."
+  - id: B-212
+    title: "Spec 018 T052, the half that waits: SNAP responses served from the position store against the pinned jar's bytes for the same root"
+    priority: P2
+    status: open
+    area: storage
+    size: S
+    opened: 2026-11-11
+    refs: []
+    links:
+      spec: specs/018-storage-engine-consolidation
+    depends_on: [B-053]
+    notes: C2b's serving PR compares the position store with the hash store through the same server (SnapServePositionStoreSpec). Against the pre-track jar it would also show a change of the server itself. Needs C0's pinned jar (T002).
