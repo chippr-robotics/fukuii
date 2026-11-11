@@ -791,6 +791,87 @@ broken one rule at a time, 27 ways, and every one fails at least one case (46 ca
 On the first set of mutations two of the loosened patterns failed only the run on the repository; each now has a made-up
 case of its own.
 
+### C2b RPC readers record (2026-11-11)
+
+C2b's second PR moves the readers behind RPC, and the transaction pool, onto a seam that hands out the state of a
+**block** (T051, T053, T056, T057). With the guard off they read what they read before, with one exception that is a fix.
+
+**The seam** is on `BlockchainReader`: `stateAt(header)` for a reader that writes nothing, `scratchStateAt(header)` for an
+execution that commits nothing. Guard off, both are the read-only store. Guard on, a view of the position store: the
+anchor's state, and `StateUnavailable` for any other block until the overlay (C4a).
+
+| What moved | To |
+| --- | --- |
+| Account reads by block number (`getAccount(branch, address, n)`): ten call sites | `accountAt(header, address)`; `accountIn` / `accountProofIn(state, header, address)`, which keep "a block above the best block has no account" |
+| `eth_getStorageAt`, `eth_getProof`, `eth_getStorageValues`, GraphQL `storage`, the test RPC: a storage trie from a root alone, over block 0's store | `(state, address, storageRoot, position)`, under the account, from the state the account was read from; the root-only forms are deleted |
+| `eth_call`, `eth_estimateGas`, `eth_createAccessList`, the trace and debug replays, `eth_simulateV1` | `scratchStateAt`; a replay takes the **parent's** header; a simulation takes one scratch state for the whole request |
+| The pool's read of senders at the best block | `stateAt(best header)` |
+
+**The one RPC-visible change.** A read by block number goes through the canonical index, so a request **by hash** for a
+side block was answered from the canonical block at that height. It is read by the header now (EIP-1898).
+`EthUserServiceSpec` has the case; it fails on the old read (123, the canonical balance) and passes on the new (456).
+
+**A stale view is retried, an unavailable state is the existing error.** `StateRead.at` / `scratchAt` run a read again,
+all of it, on a fresh state, three times at most. A request that holds a world across many reads (`eth_call`, a
+simulation, a trace) is run again as a whole: 18 routes go through `handleRead`. A state that is not held is
+`NodeNotFound` (code 3), the error a client already gets for a missing state node, and the controller answers a
+`StateFault` that escapes a method the same way. A `MissingNodeException` keeps each method's own answer.
+
+**What an end-to-end run found that the design had not.** `RpcReadersOnPositionsSpec` imports the execution-apis test
+chain (the chain hive's rpc-compat serves its vectors from), copies its head's state into the position store of the same
+datadir, and asks a node on each store the same questions through the JSON-RPC controller: balance, nonce, code, storage,
+proofs, `eth_call` and `eth_estimateGas`, for all 34 genesis accounts. **Every plain `eth_call` failed on the position
+store.** A message call does not run under its block's header: `CallTxBuilder` zeroes the base fee for a call that names
+no gas price (`runHeader`), and block overrides replace what they name. The ledger built the call's world from the header
+it was given. That was right while a state was found by its root; a view is asked for by a block's hash, and the header a
+call runs under has another, which names no block. Conduit's review had named this trap for traces (the parent's header);
+it was there for calls too, and no unit test of either store alone could have shown it. `StxLedger.callWorld(stateOf,
+executing)` separates the two, and `simulateCall` / `estimateCallGas` take the world instead of making one.
+
+**Reviews (both SIGN WITH CHANGES; all taken).**
+
+| Finding | By | Change |
+| --- | --- | --- |
+| GraphQL caught a `StateFault` with the missing-node case and answered no account or the start nonce: a state that is not held would read as a zero balance | conduit | not caught: it surfaces as an error of the field, as it does for `code` |
+| On the send paths a `StateFault` reached the backstop (code 3) where a missing node is `-32000` | conduit | admission answers both the same |
+| A read given up as unavailable left no trace: a view that stays stale looks like a node that is not there | conduit | a debug log with the attempts |
+| GraphQL's `call` and `estimateGas` reach the services without the controller, so without the retry | conduit, beacon | B-211; until then a stale view there is an error of the field |
+| With the arm gone, `case _ => acc` would drop a hash node that ever reached a proof, and serve the proof short | beacon | that case throws |
+| A retry is only worth something if each run takes its own state | beacon | `RpcRetryFreshStateSpec` counts the scratch states taken across retries of three real methods |
+| `PathMptStorage.decoded` has no check for a stored value shaped like a bare hash, which the hash store has | beacon | for C3b (B-209) |
+| A block imported by `newPayload` and not yet the head is above best, and answers "no account" though its state is held (old behaviour, kept) | beacon | B-210 |
+
+**Not covered here, and said so.** GraphQL has no test with the guard on. The two worlds `StxLedger` still makes from
+the header it is given (`runSimulated`, the estimate search) are reached only with a world handed in; a comment says why
+they must not be reached otherwise. hive's rpc-compat and graphql runs are with the guard off: a regression fence, not a
+test of the position store.
+
+**The ratchet** went from 142 lines and 279 uses to 136 and 268.
+
+**Evidence.** The new specs passed on their first or second run, so the production code was then broken one rule at a
+time, 18 ways. Fifteen of the first runs failed a case. **Three did not, and each was a gap in the tests, which now has a
+case:** the trace replay before Amsterdam asking for the traced block's state (only the Amsterdam arm had a block), the
+pool's account trie naming no owner (a transaction sent over RPC is judged by the transaction service; the pool's own
+read is for a peer's), and `eth_simulateV1` taking a reader's state. Three more did not compile as first written (the
+unused-symbol ratchet refuses a parameter or an import left unused) and were run again in a form that does.
+
+| Broken | Cases that fail |
+| --- | --- |
+| a reader's state takes writes; an execution's state refuses them (guard on) | 1; 2 |
+| `accountIn`, `accountProofIn` forget the block above the best block | 2 each |
+| the account trie names no owner | 5 |
+| a storage trie is read under the wrong owner | 4 |
+| a stale read is not run again; a stale request is not run again | 2; 9 |
+| a state that is not held is retried | 1 |
+| the controller's backstop answers an internal error | 1 |
+| `handleRead` does not run a request again | 7 |
+| a call's state is asked for by the header it runs under | 1 |
+| a replay asks for the traced block's state: before Amsterdam; from Amsterdam | 1; 1 |
+| admission lets a state fault escape | 1 |
+| the pool's account trie names no owner | 1 |
+| `eth_getStorageAt` reads the account by block number again | 1 |
+| `eth_simulateV1` takes a reader's state | 1 |
+
 ### Destructive change (C8a and C8b): the vault protocol blocks
 
 ```

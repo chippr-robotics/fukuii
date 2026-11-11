@@ -24,7 +24,12 @@ pre-code record, with what conduit, herald and beacon changed, is in plan.md.
   142 lines, each with its reason and the slice that removes it. **A slice that converts a caller lowers that line's
   count or removes the line in the same change**, or the Test and Build job fails before it compiles. The allow-list's
   sections are the work list of the next two PRs: "Readers behind RPC" and "Serving and walking".
-- The decisions follow-up merged as #1795.
+- **The RPC readers are done** (T051, T053, T056, T057): the seam `BlockchainReader.stateAt(header)` /
+  `scratchStateAt(header)`, header-taking account reads, storage reads under the account, `StateRead` for the retry.
+  plan.md, "C2b RPC readers record", has what an end-to-end run on the execution-apis chain found: **the header a call
+  runs under is not its block's header**, so a state is always asked for by the block's own header
+  (`StxLedger.callWorld(stateOf, executing)`). The same trap waits for anyone who hands an execution header to the seam.
+- The decisions follow-up merged as #1795, the ratchet as #1796.
 
 Next after it: **C3b** (B-058, the staged commit), which needs C3a and C2a and not C2b.
 
@@ -50,11 +55,12 @@ overlay.
 
 Read plan.md, "C2a part 1 record" and "C2a part 2 record", then:
 
-- **C2b**: the second PR is the RPC readers (plan.md, "C2b pre-code record"): the seam `stateAt` / `scratchStateAt` /
-  `stateAvailable` on `Blockchain`, T056, T057, T051, T053. The readers that execute (`eth_call`, estimate, trace,
-  `eth_simulateV1`) run on `PathStateStorage.throwaway(block)`; readers that only read use `readOnly(block)`. A view
-  serves only the anchor until C4a, so anything else is `StateUnavailable`. With the guard off the seam hands every
-  reader `getReadOnlyStorage`, and a differential test pins that nothing changed.
+- **C2b**: the third PR is serving and walking (T052, T055, T058 to T061): SNAP serving by root with the prefix
+  threaded and no `snap1` advertisement under the guard, checkpoint export, the recovery scans, positioned visitors for
+  the three walkers that see only a hash. Its work list is the allow-list's section "Serving and walking". Use
+  `test/jsonrpc/conformance/RpcReadersOnPositionsSpec.scala` as the model for a differential: one real chain, its
+  state copied into the position store of the same datadir (`PathStateTestKit.seedPositions`), two nodes, same
+  questions.
 - **C3b**: start at T087 (`StateLock`), which is what makes the `StateLockHeld` that `ChangesetStorage` asks for, then
   T088 to T091. The commit writes its batch inside `StateMoveLog.inFlight(move) { … }`, takes the anchor from
   `move.newAnchor`, and keeps a **persisted** prune cursor: `ChangesetStorage` never scans for heights (data-model 4.1).
