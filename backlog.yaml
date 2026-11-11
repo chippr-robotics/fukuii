@@ -2212,3 +2212,13 @@ items:
     refs: [B-005]
     links: {}
     notes: "Sepolia gate 2026-11-10, Lighthouse v8.3.2: ERROR Error fetching or processing blobs from EL: invalid type: null, expected struct BlobAndProofV2. execution-apis Osaka getBlobsV2: all-or-nothing (null response if any blob is missing); per-element nulls are V1 (and V3) semantics. Lighthouse falls back to gossip, so not fatal. beacon/conduit."
+  - id: B-199
+    title: Cap Hello clientId length at decode (today bounded only by the 16 MiB message cap)
+    priority: P3
+    status: open
+    area: p2p
+    size: S
+    opened: 2026-11-11
+    refs: ["prism review of 027 slice 4, 2026-11-10"]
+    links: {}
+    notes: "WireProtocol.scala:50 decodes clientId unbounded; NodeClientType.recognize (NetworkPeerManagerActor.scala:748) lowercases it in full and Hello.toString quotes it. A cap at decode (geth: none; devp2p norm well under 1 KiB) removes the class for every consumer. herald owns."
