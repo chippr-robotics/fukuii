@@ -49,7 +49,11 @@ class EngineApiService(
       com.chipprbots.ethereum.consensus.ReorgStateHandler.NoOp,
     // Marked synced by every forkchoiceUpdated that sets the head, as go-ethereum calls SetSynced() there; that is what
     // lets the pool take transactions from peers. None for specs; the node passes its gate.
-    txGossipGate: Option[com.chipprbots.ethereum.transactions.TxGossipGate] = None
+    txGossipGate: Option[com.chipprbots.ethereum.transactions.TxGossipGate] = None,
+    // The unified state layout before its overlay (spec 018 C3b): the hash of the block whose state the disk holds,
+    // which is the only block the head can be. `None` on the hash store, and for specs; the node passes its path
+    // state storage's anchor.
+    stateHeldInPlace: Option[() => Option[ByteString]] = None
 )(implicit blockchainConfig: BlockchainConfig, typedScheduler: org.apache.pekko.actor.typed.Scheduler)
     extends Logger:
 
@@ -802,6 +806,18 @@ class EngineApiService(
           )
         )
       )
+    else if stateHeldInPlace.exists(held => !held().contains(forkChoiceState.headBlockHash)) then
+      // The state on disk is one block's, and the head moves with it, in the batch that commits a block. A move of
+      // the head to any other block needs that block's state: a forward layer, or a move back along the changeset
+      // records, which arrive with the overlay and the head move (spec 018 C4a, C4b). Until then this node cannot
+      // follow the head it is given, and says so: nothing is moved, published or marked.
+      log.warn(
+        "[ENGINE-API] forkchoiceUpdated: head {} is not the block whose state this node holds; the unified state " +
+          "layout cannot move its head yet (SYNCING)",
+        org.bouncycastle.util.encoders.Hex.toHexString(forkChoiceState.headBlockHash.toArray).take(16)
+      )
+      EngineApiMetrics.recordForkchoiceUpdated("SYNCING")
+      IO.pure(Right(ForkchoiceUpdatedResponse(payloadStatus = PayloadStatusV1(Syncing))))
     else
       // Check if the head block is fully stored (number→hash mapping exists).
       // Blocks stored via storeBlockByHashOnly (ACCEPTED) don't have this mapping.

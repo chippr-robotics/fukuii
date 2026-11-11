@@ -182,6 +182,19 @@ class ConfigValidatorSpec extends AnyFlatSpec with Matchers:
     errors.head should (include("fukuii.state.path-live").and(include("fukuii.sync.do-snap-sync = false")))
   }
 
+  // A block is built over a view of its parent's state, which the builders do not take before the proposer view.
+  it should "refuse state.path-live with mining on, and name both keys" taggedAs UnitTest in {
+    val errors = ConfigValidator.validate(cfg("state.path-live = true\nmining.mining-enabled = true"))
+    errors should have size 1
+    errors.head should (include("fukuii.state.path-live").and(include("fukuii.mining.mining-enabled = false")))
+    // each thing the guard cannot do yet is said
+    ConfigValidator.stateGuardErrors(
+      cfg("state.path-live = true\nmining.mining-enabled = true\nsync.do-snap-sync = true")
+    ) should have size 2
+    ConfigValidator.stateGuardErrors(cfg("state.path-live = false\nmining.mining-enabled = true")) shouldBe empty
+    ConfigValidator.stateGuardErrors(cfg("state.path-live = true\nmining.mining-enabled = false")) shouldBe empty
+  }
+
   it should "accept the guard with SNAP sync off, and SNAP sync with the guard off or not set" taggedAs UnitTest in {
     ConfigValidator.validate(cfg("state.path-live = true\nsync.do-snap-sync = false")) shouldBe empty
     ConfigValidator.validate(cfg("state.path-live = false\nsync.do-snap-sync = true")) shouldBe empty

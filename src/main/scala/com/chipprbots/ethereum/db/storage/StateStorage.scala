@@ -66,6 +66,12 @@ trait StagedBlockState:
       case (None, Some(other))        => other.commit()
       case (None, None)               => ()
 
+  /** Whether committing this block moves the state on disk to it, in place (the unified layout, before its overlay).
+    * Such a commit is only possible in the batch that makes the block the best block, so a block that is executed
+    * without being adopted cannot be staged this way: its caller asks, and refuses before the block runs.
+    */
+  def commitsInPlace: Boolean = false
+
   /** True when this block's state changes are committed and in force right now (committed, not undone). Only the mode
     * that keeps per-block undo records can say so; the others answer false, which makes callers execute.
     */

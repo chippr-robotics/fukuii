@@ -1001,7 +1001,8 @@ trait EngineApiBuilder extends Logger:
       // go-ethereum's --miner.gaslimit equivalent, as for the testing_* namespace: mining.gas-limit-target.
       builderGasCeil = mining.config.generic.gasLimitTarget,
       reorgState = blockchain,
-      txGossipGate = Some(txGossipGate)
+      txGossipGate = Some(txGossipGate),
+      stateHeldInPlace = storagesInstance.storages.pathStateStorage.map(state => () => state.anchor.map(_.hash))
     )(using blockchainConfig, typedScheduler)
 
   // The controller's fork gates read the same schedule its service executes with (not the process-global config, which

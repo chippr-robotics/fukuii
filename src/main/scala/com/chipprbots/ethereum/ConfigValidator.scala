@@ -63,16 +63,26 @@ object ConfigValidator extends Logger:
     *
     * With `state.path-live` on, SNAP is not advertised until the overlay can serve recent roots (C4a). A capability is
     * mutual, so no peer offers SNAP to such a node, and a SNAP sync would wait for a snap-capable peer for ever.
+    *
+    * And a block is built over a view of its parent's state, which the builders do not take yet (the proposer view,
+    * C3c): a miner on the guard would build on a store that is not this chain's state.
     */
   def stateGuardErrors(config: TypesafeConfig): List[String] =
     def on(key: String): Boolean = config.hasPath(key) && config.getBoolean(key)
-    if on("state.path-live") && on("sync.do-snap-sync") then
+    if !on("state.path-live") then Nil
+    else
       List(
-        "fukuii.state.path-live = true (the in-development guard of the unified state layout) cannot run with " +
-          "fukuii.sync.do-snap-sync = true: SNAP is not advertised while the guard is on, so no peer would offer it " +
-          "and the sync would never start. Set fukuii.sync.do-snap-sync = false."
-      )
-    else Nil
+        Option.when(on("sync.do-snap-sync"))(
+          "fukuii.state.path-live = true (the in-development guard of the unified state layout) cannot run with " +
+            "fukuii.sync.do-snap-sync = true: SNAP is not advertised while the guard is on, so no peer would offer " +
+            "it and the sync would never start. Set fukuii.sync.do-snap-sync = false."
+        ),
+        Option.when(on("mining.mining-enabled"))(
+          "fukuii.state.path-live = true (the in-development guard of the unified state layout) cannot run with " +
+            "fukuii.mining.mining-enabled = true: a block cannot be built on the unified layout until its builders " +
+            "take a view of the parent's state (spec 018 C3c). Set fukuii.mining.mining-enabled = false."
+        )
+      ).flatten
 
   /** One warning for each removed fast-sync key that `config` (a `fukuii` block) still sets. */
   def removedKeyWarnings(config: TypesafeConfig): List[String] =
