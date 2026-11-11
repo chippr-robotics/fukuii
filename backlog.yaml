@@ -2327,3 +2327,14 @@ items:
       Give it/ethtest/EthereumTestHelper.scala the StorageObserver of EestBlockchainReplay (pre-state world :82-125, BlockExecution :173,187) and run LegacyPreByzantiumBlockchainTestsSpec where ets/tests is checked out.
       The EEST half ran in C2a part 1: 26,503 Amsterdam and 8,835 Paris/Shanghai fixtures, no finding (baselines/t026-position-mirror.md).
       The baseline file ethtests-<date>.txt is T007, a C0 deliverable.
+  - id: B-208
+    title: "Spec 018: record the user's decisions of 2026-11-11; changeset retention without a finalized block is 512; the C2b pre-code record"
+    priority: P2
+    status: open
+    area: storage
+    size: S
+    opened: 2026-11-11
+    refs: []
+    links:
+      spec: specs/018-storage-engine-consolidation
+    notes: "Decisions: merge C3a; 512 blocks of changesets where there is no finalized block (ETC); every new column family of the track in the release that first ships v; snap1 not advertised with the guard on until the overlay serves the window."
