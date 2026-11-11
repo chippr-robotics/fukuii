@@ -1,0 +1,195 @@
+package com.chipprbots.ethereum.db.storage.pathstate
+
+import java.util.ArrayDeque
+
+import org.apache.pekko.util.ByteString
+
+import scala.jdk.CollectionConverters.*
+import scala.util.Try
+
+import org.bouncycastle.util.encoders.Hex
+
+import com.chipprbots.ethereum.db.storage.PathNodeStorage
+
+/** A block, named by what a view of its state needs: its hash, its number and its state root. */
+final case class BlockRef(hash: ByteString, number: BigInt, stateRoot: ByteString):
+  def show: String = s"$number (${Hex.toHexString(hash.toArray).take(16)})"
+
+/** The state anchor (spec 018 data-model 5.1): the one statement of which block's state the rows of CF `t` and CF `u`
+  * hold. It is the AppState string `v1:<blockHash hex>:<number decimal>:<stateRoot hex>`, written in the same batch as
+  * the rows it describes and never without them.
+  */
+object StateAnchor:
+  val Key: String = "state.anchor"
+
+  private val Version = "v1"
+  private val HashHexLength = 64
+
+  def encode(block: BlockRef): String =
+    s"$Version:${Hex.toHexString(block.hash.toArray)}:${block.number}:${Hex.toHexString(block.stateRoot.toArray)}"
+
+  /** The anchor a stored value names. A value this build cannot read is an error and not an absent anchor: with no
+    * anchor every in-place writer refuses, and a datadir whose anchor is unreadable must not look like one that has
+    * none.
+    */
+  def decode(value: String): BlockRef =
+    def malformed: Nothing = throw new IllegalStateException(s"$Key is not a $Version anchor: '$value'")
+    def hash(hex: String): ByteString =
+      if hex.length != HashHexLength then malformed
+      Try(ByteString(Hex.decode(hex))).getOrElse(malformed)
+    value.split(':') match
+      case Array(Version, blockHash, number, stateRoot) if number.nonEmpty && number.forall(_.isDigit) =>
+        BlockRef(hash(blockHash), BigInt(number), hash(stateRoot))
+      case _ => malformed
+
+/** One in-place change of the state on disk (data-model 6.3.1): the anchor it moves to, and for every position its
+  * batch writes, the value a reader of the state '''before''' the move must see there (`None`: no row).
+  */
+final case class StateMove(newAnchor: BlockRef, pre: Map[PositionKey, Option[ByteString]])
+
+/** The clock of in-place moves, as a reader sees it. The epoch is even while the disk is at rest and odd while a batch
+  * is being written.
+  */
+trait StateClock:
+  def epoch: Long
+
+  /** The block whose state the disk holds, as of the last even epoch. */
+  def anchor: Option[BlockRef]
+
+  /** The moves whose batch began after epoch `from` and no later than epoch `to`, oldest first; `None` when the log no
+    * longer reaches back to `from`.
+    */
+  def movesBetween(from: Long, to: Long): Option[Seq[StateMove]]
+
+/** The clock, with the log of the last `maxMoves` moves (data-model 6.3.1, 6.4).
+  *
+  * A writer keeps this order, under the state lock: [[publish]] the move, write the batch, then [[settled]]. `publish`
+  * puts the move in the log '''before''' it makes the epoch odd, and the batch is written after both, so a reader that
+  * sees changed bytes and then reads the epoch always finds the move that changed them. Each move is logged under the
+  * odd epoch it set: a reader that samples that odd epoch must find the move in flight.
+  *
+  * The in-place writers arrive with the staged commit (C3b). Until then nothing in the node calls [[publish]].
+  */
+final class StateMoveLog(maxMoves: Int, initialAnchor: Option[BlockRef]) extends StateClock:
+  require(maxMoves > 0, "the move log keeps at least one move")
+
+  @volatile private var current: Long = 0L
+  @volatile private var anchorNow: Option[BlockRef] = initialAnchor
+  private val log = new ArrayDeque[(Long, StateMove)]()
+
+  override def epoch: Long = current
+
+  override def anchor: Option[BlockRef] = anchorNow
+
+  /** The epoch and the anchor of a disk at rest, or `None` while a batch is being written. */
+  def atRest: Option[(Long, Option[BlockRef])] =
+    val before = current
+    if before % 2 != 0 then None
+    else
+      val held = anchorNow
+      Option.when(current == before)((before, held))
+
+  /** The epoch and the anchor of a disk at rest, waiting out a batch that is being written: one batch at most. */
+  def awaitRest(): (Long, Option[BlockRef]) = synchronized {
+    while current % 2 != 0 do wait()
+    (current, anchorNow)
+  }
+
+  /** A batch is about to be written. Only [[inFlight]] and tests of this package call it: a writer that published and
+    * did not settle would leave every later view waiting.
+    */
+  private[pathstate] def publish(move: StateMove): Unit = synchronized {
+    require(current % 2 == 0, "a state move is already being written")
+    log.addLast((current + 1, move))
+    while log.size > maxMoves do log.removeFirst()
+    current += 1
+  }
+
+  /** The batch [[publish]] announced has returned. `committed = false` when it failed and the disk is as it was: the
+    * move stays in the log, where its prior values are simply the values still on disk.
+    */
+  private[pathstate] def settled(committed: Boolean = true): Unit = synchronized {
+    require(current % 2 == 1, "no state move is being written")
+    if committed then anchorNow = Some(log.peekLast()._2.newAnchor)
+    current += 1
+    notifyAll()
+  }
+
+  /** `write`, as the batch of `move`: published before it, settled after it, also when it throws. This is how a writer
+    * makes a move; [[publish]] and [[settled]] are apart only so that a test can stand between them.
+    *
+    * A `write` that throws is taken not to have written anything, which holds for one `DataSource.update`: a RocksDB
+    * WriteBatch is applied whole or not at all. The move then stays in the log with the disk unchanged, the anchor is
+    * kept, and the epoch still advances, so a view made before it is no longer the view of what is on disk and a
+    * mismatch it meets is stale, never corrupt.
+    */
+  def inFlight[A](move: StateMove)(write: => A): A =
+    publish(move)
+    var committed = false
+    try
+      val result = write
+      committed = true
+      result
+    finally settled(committed)
+
+  override def movesBetween(from: Long, to: Long): Option[Seq[StateMove]] = synchronized {
+    if to <= from then Some(Nil)
+    else
+      // The moves are logged under consecutive odd epochs, so the first one after an even `from` is `from + 1`.
+      val firstNeeded = if from % 2 == 0 then from + 1 else from + 2
+      val oldest = Option(log.peekFirst()).map(_._1)
+      if firstNeeded <= to && !oldest.exists(_ <= firstNeeded) then None
+      else Some(log.iterator.asScala.collect { case (at, move) if at > from && at <= to => move }.toSeq)
+  }
+
+/** A view of the state of one block (data-model 6.1, 6.3), able to say what any position held in that state.
+  *
+  * This is the view of the '''anchor''': the block whose state is on disk when the view is made. A read is a point read
+  * of the row, corrected by the log of moves when the disk has moved since. Views of other blocks (forward layers, the
+  * reverse index) arrive with the overlay (C4a).
+  *
+  * @param createdAt
+  *   the even epoch at which the view was made
+  */
+final class StateView private[pathstate] (
+    val block: BlockRef,
+    val createdAt: Long,
+    clock: StateClock,
+    rows: PathNodeStorage
+):
+
+  /** What position `p` held in this view's state: the stored node's RLP, or `None` for no row.
+    *
+    * The row is read first and the epoch second. If the epoch is the one the view was made at, no batch began in
+    * between and the row is the view's. Otherwise the earliest move since then that wrote `p` knows what was there
+    * before it; if none wrote `p`, the row has not changed and stands, also while a batch is in flight.
+    *
+    * @throws StaleStateViewException
+    *   when the log no longer reaches back to the view
+    */
+  def read(p: PositionKey): Option[Array[Byte]] =
+    val onDisk = rows.read(p)
+    val now = clock.epoch
+    if now == createdAt then onDisk
+    else
+      clock.movesBetween(createdAt, now) match
+        case None =>
+          throw new StaleStateViewException(
+            block,
+            createdAt,
+            now,
+            "the log of state moves no longer reaches back to it"
+          )
+        case Some(moves) =>
+          moves.collectFirst { case move if move.pre.contains(p) => move.pre(p) } match
+            case Some(before) => before.map(_.toArray)
+            case None         => onDisk
+
+  /** Whether this is, right now, the view of what is on disk: nothing has moved since it was made and its block is the
+    * anchor. Decided when asked, never remembered: a mismatch found on such a view is the disk's own fault, while on
+    * any other view it only means the disk has moved on.
+    */
+  def isAnchorViewNow: Boolean = clock.epoch == createdAt && clock.anchor.contains(block)
+
+  /** The epoch right now, for a fault that reports how far the disk has moved on. */
+  def epochNow: Long = clock.epoch

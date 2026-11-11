@@ -110,6 +110,12 @@ final class BlockDiff(
 )
 ```
 
+*(C2a part 2 as built, 2026-11-11.)* `PositionKey` landed with the read side, ahead of the rest of this unit (C3a), as
+`PositionKey(owner: Option[ByteString], hp: ByteString)` in `pathstate/PositionKey.scala`: `hp` is `HP(path)`
+(`NibblePath.key`). Held encoded, two keys are equal when they name the same position, which the opaque array could not
+give (C1), and `rowKey` is the row's key in its column family with nothing encoded twice (`hp` in `t`, `owner ++ hp` in
+`u`). The record's byte layout (section 4) is unchanged: it never depended on the Scala type.
+
 *(C1, 2026-11-11.)* `NibblePath` is an array underneath, so it compares by identity: `PositionKey` as written above would
 give two equal positions two different `Map` keys. C3a keys `changes` by the store key instead (`NibblePath.key`, the
 `HexPrefix` bytes as a `ByteString`, with the owner in front for a storage trie) or gives `PositionKey` equality by
@@ -524,6 +530,13 @@ Today's `BufferedNodeStorage` is content-addressed, which is why these work now.
 execution and drops it at commit or discard; the forward layer that survives keeps only the `next` nodes' bytes (for `get(hash)`,
 section 9).
 
+*(C2a part 2 as built, 2026-11-11.)* The by-hash half of the layer exists from C2a, not C3b: `PathMptStorage.throwaway(view)`
+keeps what the tries of one execution write in `byHash` and asks it before the view. beacon found, before code, that the
+readers C2b converts cannot wait for C3b: every execution on a view persists after each transaction
+(`BlockPreparator.scala:656-660`, `StxLedger.scala:725-735`, `EthSimulateService.scala:311`) and reads the new root back.
+`PathMptStorage.readOnly(view)` has no layer and refuses every update. C3b adds `changes` and `resets` to the same layer for a
+block that commits; nothing here is torn out.
+
 The head's own view has no layers, so a read is one verified point read. A sibling of the head has `forwardChain = [S]` or
 empty, plus a one-block reverse index. The view for a root is found through `byRoot`: forward layers first, then the canonical
 window built from headers, the same set `NetworkPeerManagerActor.refreshFreshRootCache` builds (lines 1112-1123).
@@ -557,6 +570,14 @@ created, and the disk moved by another thread, before the view finishes.
   `max-view-age-moves` (default 8) throws `StaleStateViewException`.
 - **"The anchor view" is decided at read time:** `view.block == the current anchor` and the epoch is even and unchanged since
   the view was created. It is not "the view's anchor at creation".
+- *(C2a part 2 as built, 2026-11-11.)* The reader's half of this protocol is `StateClock` (`epoch`, `anchor`,
+  `movesBetween(from, to)`), and `StateMoveLog` is the clock with the log: `publish(move)` puts the move in the log and then
+  makes the epoch odd, `settled()` makes it even and moves the anchor. **A move is logged under the odd epoch it set**, so a
+  reader that samples that odd epoch finds the move in flight (beacon; pinned in `StateViewSpec`). A read that finds the epoch
+  odd and no logged move touching its position keeps the row it read. Whether a mismatching row is corrupt or stale is decided
+  **after** the row is read: decided before, a batch that commits in between has its new bytes called corrupt (pinned by a
+  test that fails when the order is swapped). A view is made by `awaitRest()`, which waits on the log's monitor for the one
+  batch in flight. Nothing in the node calls `publish` until C3b's commit, under the state lock (7.0).
 
 Classification when the bytes at `(owner, path)` do not match what the parent expects:
 
@@ -991,6 +1012,10 @@ trait MptStorage:
   cannot find an arbitrary node by hash. The only peers that ask for arbitrary hashes use `GetNodeData`, which eth/67 removed;
   fukuii negotiates eth/68 and eth/69, so `BlockchainHostActor.scala:137` answers the root and overlay nodes and nothing else,
   at no cost to either chain's peers.
+- **A batch of hashes is refused, not answered "absent"** (C2a part 2). The trait's defaults for `multiGetNodes` and `rawNodes`
+  loop over `get(hash)`, which on a position store would report nearly every node absent, and their callers read "absent" as
+  "fetch it" (healing) or "it is gone" (the audit). `PathMptStorage` throws on both. `rawNodesAt` answers by position, one
+  view read per request; its batched form without block-cache fill arrives with the audit's conversion (Part 2, E).
 - **Every hash-only reader is converted or shown not to read state, and a grep ratchet enforces it** (C2b). Beyond the SNAP serve
   walkers and `BlockImporter.scala:706`, `SyncController.scala:1985`, `SnapServer.scala:68-77`, the ratchet covers:
   `LeafWalkVisitor.scala:19`, `PathTrackingLeafWalkVisitor.scala:42-44`, `ShardEnumerator.scala:46`,
@@ -999,6 +1024,13 @@ trait MptStorage:
   is not a state reader (an ephemeral list trie, a test).
 - **No new import in the stateless closure.** `NibblePath` lives in `mpt/`; the new members have defaults; a witness-backed
   storage (017 FR-005) inherits them unchanged.
+- **`db.storage` and `db.storage.pathstate` know each other** (C2a part 2; beacon). `pathstate` is built on `db.storage`
+  (`MptStorage`, `PathNodeStorage`, `AppStateStorage`), and two files of `db.storage` name `pathstate` types:
+  `AppStateStorage` (`BlockRef`, for the anchor) and `PrefetchNodeReader` (`StateFault`, to stop on one). Neither is in the
+  stateless closure. The cycle ends with the Hash scheme (C8b), when the path state storage is the state storage.
+- **Whether a state is held is asked of `PathStateStorage.stateAvailable`, never of `get(root)`** (beacon, C2a part 2).
+  `get(hash)` answers "missing" for any hash that is not the view's own root, which is right, and which a caller probing with
+  a root would take for a state hole and report (6.3.2 forbids that for a storage condition). The ratchet of C2b covers it.
 
 ---
 

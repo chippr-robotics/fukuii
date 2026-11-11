@@ -4,8 +4,10 @@ import com.chipprbots.ethereum.db.cache.AppCaches
 import com.chipprbots.ethereum.db.cache.LruCache
 import com.chipprbots.ethereum.db.storage.*
 import com.chipprbots.ethereum.db.storage.NodeStorage.NodeHash
+import com.chipprbots.ethereum.db.storage.pathstate.PathStateStorage
 import com.chipprbots.ethereum.db.storage.pruning.PruningMode
 import com.chipprbots.ethereum.utils.Config
+import com.chipprbots.ethereum.utils.StateLayoutConfig
 
 object Storages:
 
@@ -15,6 +17,11 @@ object Storages:
   trait DefaultStorages extends StoragesComponent:
 
     dataSourcesComp: DataSourceComponent & PruningModeComponent =>
+
+    /** Whether the unified state layout's storage is built (spec 018 Track C, in-development guard). A def, read while
+      * `storages` is being built.
+      */
+    protected def statePathLive: Boolean = StateLayoutConfig.pathLive
 
     override val storages: Storages = new DefaultStorages(pruningMode)
 
@@ -64,3 +71,8 @@ object Storages:
           // effect on the next one (#1692). A datadir with no stamp deletes no trie node.
           () => RefCountTrust.nodesMayBeDeleted(appStateStorage)
         )
+
+      // After `appStateStorage`, which it reads the state anchor from. Built only with the guard on: with it off this
+      // object graph is what it was before the track.
+      override val pathStateStorage: Option[PathStateStorage] =
+        Option.when(statePathLive)(new PathStateStorage(new PathNodeStorage(dataSource), appStateStorage))

@@ -42,6 +42,19 @@ class AppStateStorage(val dataSource: DataSource) extends TransactionalKeyValueS
   def putBestBlockNumber(bestBlockNumber: BigInt): DataSourceBatchUpdate =
     put(Keys.BestBlockNumber, bestBlockNumber.toString)
 
+  /** The block whose state the position-keyed trie store holds (spec 018 data-model 5.1), or `None` when the datadir
+    * has no such anchor. A stored value this build cannot read throws: an unreadable anchor is not an absent one.
+    */
+  def getStateAnchor(): Option[pathstate.BlockRef] = get(Keys.StateAnchor).map(pathstate.StateAnchor.decode)
+
+  /** The update that sets the state anchor. It belongs in the same batch as the rows it describes, and that batch is
+    * written as a move of the state's clock (`pathstate.StateMoveLog.inFlight`), which is why only the path state
+    * storage may build it. An anchor written past the clock would leave views of a block the disk no longer holds
+    * looking current, and every row they then met would be called corrupt (`AppStateAnchorRatchetSpec`).
+    */
+  private[storage] def putStateAnchor(block: pathstate.BlockRef): DataSourceBatchUpdate =
+    put(Keys.StateAnchor, pathstate.StateAnchor.encode(block))
+
   /** Whether fast sync finished on this node. Fast sync was removed and nothing in the node sets this flag any more; a
     * database that fast sync completed earlier still carries it. `SyncController` reads it in two places: to tell a
     * stranded fast sync from a finished one, and, with SNAP on and not done, to send a node where fast sync finished
@@ -902,6 +915,7 @@ object AppStateStorage:
     val SnapAuditCleanAnchor = "snap.heal.auditCleanAnchor"
     val SnapAuditForcedOnce = "snap.heal.auditForcedOnce"
     val RefCountsExact = "state.refcounts.exact"
+    val StateAnchor = com.chipprbots.ethereum.db.storage.pathstate.StateAnchor.Key
     val ChainWeightInvariant = "chain.weight.invariant"
     val ChainWeightReconcileProgress = "chain.weight.reconcileProgress"
     val ChainWeightSnapPending = "chain.weight.snapPending"

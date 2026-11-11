@@ -261,6 +261,26 @@ object PositionTestKit:
         collectLeaves(rlp.rawDecode(load(rootHash)), Array.emptyByteArray, load, out)
         out.result()
 
+    /** The accounts of the state at `stateRoot` that have storage: each one's owner (its key in the account trie,
+      * `keccak256(address)`) with the root of its storage trie.
+      */
+    def storageRoots(stateRoot: Array[Byte], load: Array[Byte] => Array[Byte]): Seq[(ByteString, Array[Byte])] =
+      leaves(stateRoot, load).flatMap { case (nibbles, account) =>
+        rlp.rawDecode(account) match
+          case RLPList(_, _, RLPValue(storageRoot), _) =>
+            Option.when(!Arrays.equals(storageRoot, MerklePatriciaTrie.EmptyRootHash))(
+              ByteString(HexPrefix.nibblesToBytes(nibbles)) -> storageRoot
+            )
+          case other => throw new IllegalStateException(s"not an account: $other")
+      }
+
+    /** Every stored position of the state at `stateRoot`, trie by trie: the account trie under `None`, and each storage
+      * trie under its owner.
+      */
+    def statePositions(stateRoot: Array[Byte], load: Array[Byte] => Array[Byte]): Map[Option[ByteString], Rows] =
+      storageRoots(stateRoot, load).map((owner, root) => Option(owner) -> storedPositions(root, load)).toMap +
+        (None -> storedPositions(stateRoot, load))
+
     private def collectLeaves(
         node: RLPEncodeable,
         nibbles: Array[Byte],
@@ -442,14 +462,7 @@ object PositionTestKit:
           out += s"the trie of ${describe(owner)}: ${missing.size} positions missing, ${stale.size} stale, " +
             s"${other.size} holding another node"
       compare(None, stateRoot.toArray)
-      val withStorage = RawTrieWalk.leaves(stateRoot.toArray, load).flatMap { case (nibbles, account) =>
-        rlp.rawDecode(account) match
-          case RLPList(_, _, RLPValue(storageRoot), _) =>
-            Option.when(!Arrays.equals(storageRoot, MerklePatriciaTrie.EmptyRootHash))(
-              ByteString(HexPrefix.nibblesToBytes(nibbles)) -> storageRoot
-            )
-          case other => throw new IllegalStateException(s"not an account: $other")
-      }
+      val withStorage = RawTrieWalk.storageRoots(stateRoot.toArray, load)
       withStorage.foreach((owner, root) => compare(Some(owner), root))
       val expectedOwners = withStorage.map((owner, _) => Option(owner)).toSet + None
       (owners -- expectedOwners).foreach(owner => out += s"rows are kept for ${describe(owner)}, which has no trie")

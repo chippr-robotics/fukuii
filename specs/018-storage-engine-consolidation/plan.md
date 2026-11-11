@@ -574,6 +574,62 @@ hash store for import, `newPayload`, payload building, `eth_call`, `eth_simulate
 
 T026's figures and mutation runs: `baselines/t026-position-mirror.md`. Its ethereum/tests half is open (B-207).
 
+### C2a part 2 record (2026-11-11)
+
+Part 2 is the read side of the position store, in a new package `db/storage/pathstate`, behind `fukuii.state.path-live`
+(default false). `beacon` and `vault` read the design before code.
+
+| Finding | By | Change |
+| --- | --- | --- |
+| A storage whose writes throw cannot serve the readers C2b converts (`eth_call`, estimate, trace, simulate): each persists after every transaction and reads the new root back, and the access-list builder reads the older world. data-model 6.2 names them as throwaway layers, and the tasks put C2b before C3b | beacon | the by-hash layer lands here: `PathMptStorage.throwaway(view)`. C3b adds `changes` and `resets` to it |
+| Each move must be logged under the odd epoch it sets, or a reader that samples that epoch misses the move in flight | beacon | applied, and pinned by a test |
+| Add the interleaving of 6.3.3 now: the batch lands between the read of the row and the read of the epoch | beacon | `StateViewSpec`, three orders, driven by hand on one thread |
+| The stopped state of the prefetch reader must be shared by every trie's view, like its two counters: the prefetcher asks only the reader it holds | beacon | one flag, passed to each view |
+| `location` of a missing node stays the hex-prefix of the path alone, as today | beacon | applied |
+| `getOptimized` is the right read for execution (it fills the block cache; a closed database throws, and that must not be read as absent). The reader's key must be the bytes the SNAP writer wrote | vault | `PathNodeStorage.read(PositionKey)` uses the key as it is; a round-trip test; a closed-RocksDB test |
+| `EphemDataSource.get` is not synchronised with its `update`: a test that races a reader against a writer on it is unsound | vault | no such test: the clock is driven deterministically |
+| The conf include belongs in `conf/base/fukuii.conf`, and the accessor should not load the whole node configuration | vault | `state.conf`, `utils/StateLayoutConfig` |
+| `pathStateStorage` must be declared after `appStateStorage`; one `PathNodeStorage` per use is fine (it holds no state) | vault | applied |
+
+Two things in the code are not in the design note. `PathPrefetchReader` is not a second class: it is `PrefetchNodeReader`
+with a stop on the first fault, over a read-only view, so the hash store's reader and this one share one body. And
+`multiGetNodes` and `rawNodes` throw on a position store, where the trait's defaults would have answered "absent" for nearly
+every node (data-model 9).
+
+**The specs were shown to fail.** They passed on their first run but for one case, which was the test's own mistake (it
+took as "a wrong node" one the walk had read, rightly, at its own position). So nine rules were broken on purpose, one at a
+time, and the specs run again:
+
+| Rule broken | Tests that fail |
+| --- | --- |
+| a mismatching row is always called corrupt | stale once the disk has moved or is moving; decide after the read |
+| a view ignores the log of moves | 14, in `StateViewSpec`, `PathMptStorageSpec` and `PathPrefetchReaderSpec` |
+| a move is logged under the even epoch after it | 15, among them the one that pins the odd epoch |
+| the layer is not asked on a read | an execution that commits nothing persists its worlds and reads them back |
+| the prefetch reader does not stop on a fault | the three stop cases of `PathPrefetchReaderSpec` |
+| a row is not checked against the hash its parent holds | corrupt, stale, decide after the read, the throwaway execution, never cache a wrong row |
+| corrupt or stale is decided before the row is read | exactly the one test written for it |
+| the latest move answers, not the earliest | the earliest move wins; stale once the log no longer reaches back |
+| a throwaway update writes nothing | did not compile (the unused-binding ratchet); the fourth row covers the same layer |
+
+After code, `vault` found no blocker and asked for four things, all applied: a writer cannot forget to settle
+(`StateMoveLog.inFlight(move) { batch }` settles in a `finally`, as not committed when the batch throws); a test that a
+batch which failed still ends "the view of what is on disk" for earlier views, so that they report stale and never corrupt;
+the test kit's RocksDB directory is deleted whatever throws; and three rules for C3b's commit, written into T091.
+
+`beacon` signed after code with two changes, both applied. The first is the same pairing rule, taken one step further:
+`publish` and `settled` are private to the package, so a writer outside it has only `inFlight`. The second: an anchor written
+past the clock would leave views of a block the disk no longer holds looking current, and each row they met would be called
+corrupt, the one verdict that can end in a delete. So `AppStateStorage.putStateAnchor` is `private[storage]`, and a source
+ratchet (`AppStateAnchorRatchetSpec`) allows the path state storage as its only caller. beacon also named three cases with no
+test, now written: a view read through a batch that failed, `get(root)` on a view the disk has moved past, and a root under
+32 bytes found by hash in a throwaway layer. It confirmed the `PrefetchNodeReader` change neutral for today's hash-store
+prefetch (import and `newPayload`), and noted that a caller must ask `stateAvailable`, never `get(root)` (data-model 9, T056).
+
+**What later slices inherit.** T057 runs on `throwaway(block)`. T070 builds on the existing `PositionKey`. T091 writes
+its batch inside `inFlight`, under the state lock. T093 switches the prefetch's call site. T130 puts the forward chain and the
+reverse index behind the same `StateView.read`. T131's in-place commit evicts after it writes.
+
 ### Destructive change (C8a and C8b): the vault protocol blocks
 
 ```

@@ -199,6 +199,16 @@ class PathNodeStorage(val dataSource: DataSource):
       .drain
       .unsafeRunSync()
 
+  // ---- reads by position (spec 018 Track C) ----
+
+  /** The node stored at `position`, or `None` when no row is there. The key is used as it is, never encoded again: it
+    * holds the bytes [[writeAccountNode]] and [[writeStorageNode]] write (the hex-prefix path, after the owner for a
+    * storage trie). One point read that fills the block cache, as a read on the execution path should. A closed or
+    * failing database throws what it throws: neither is an absent row.
+    */
+  def read(position: com.chipprbots.ethereum.db.storage.pathstate.PositionKey): Option[Array[Byte]] =
+    dataSource.getOptimized(if position.owner.isEmpty then acctNs else storageNs, position.rowKey)
+
   // ---- internals ----
 
   private def encodePath(nibbles: Array[Byte]): Array[Byte] =
