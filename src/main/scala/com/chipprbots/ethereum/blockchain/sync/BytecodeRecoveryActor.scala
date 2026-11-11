@@ -21,7 +21,7 @@ import org.slf4j.LoggerFactory
 import com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncConfig
 import com.chipprbots.ethereum.blockchain.sync.snap.controller.StateIngest
 import com.chipprbots.ethereum.db.storage.EvmCodeStorage
-import com.chipprbots.ethereum.db.storage.StateStorage
+import com.chipprbots.ethereum.db.storage.MptStorage
 import com.chipprbots.ethereum.domain.Account
 import com.chipprbots.ethereum.domain.CodeHash
 import com.chipprbots.ethereum.mpt.*
@@ -150,9 +150,8 @@ object BytecodeRecoveryActor:
             Future(
               scanForMissingBytecodes(
                 stateRoot,
-                stateIngest.stateTries,
+                stateIngest.stateTries.getBackingStorage(pivotBlockNumber),
                 stateIngest.bytecode,
-                pivotBlockNumber,
                 ctx.log
               )
             )(using ctx.executionContext)
@@ -303,15 +302,13 @@ object BytecodeRecoveryActor:
       }
     }
 
-  private def scanForMissingBytecodes(
+  private[sync] def scanForMissingBytecodes(
       stateRoot: ByteString,
-      stateStorage: StateStorage,
+      mptStorage: MptStorage,
       evmCodeStorage: EvmCodeStorage,
-      pivotBlockNumber: BigInt,
       log: Logger
   ): Seq[ByteString] =
     RecoveryMetrics.setBytecodePhase(RecoveryMetrics.PhaseScanning)
-    val mptStorage = stateStorage.getBackingStorage(pivotBlockNumber)
     val rootNode = mptStorage.get(stateRoot.toArray)
 
     val missing = mutable.ArrayBuffer.empty[ByteString]

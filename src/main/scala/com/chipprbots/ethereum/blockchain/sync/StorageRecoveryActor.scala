@@ -25,6 +25,7 @@ import com.chipprbots.ethereum.blockchain.sync.snap.StorageTask
 import com.chipprbots.ethereum.blockchain.sync.snap.actors
 import com.chipprbots.ethereum.blockchain.sync.snap.controller.StateIngest
 import com.chipprbots.ethereum.db.storage.SnapSyncProgressStorage
+import com.chipprbots.ethereum.db.storage.MptStorage
 import com.chipprbots.ethereum.db.storage.StateStorage
 import com.chipprbots.ethereum.domain.Account
 import com.chipprbots.ethereum.mpt.*
@@ -184,9 +185,9 @@ object StorageRecoveryActor:
               s"(stateRoot=${stateRoot.take(4).toArray.map("%02x".format(_)).mkString}...)"
           )
           ctx.pipeToSelf(
-            Future(scanForMissingStorage(stateRoot, stateIngest.stateTries, pivotBlockNumber, ctx.log))(using
-              ctx.executionContext
-            )
+            Future(
+              scanForMissingStorage(stateRoot, stateIngest.stateTries.getBackingStorage(pivotBlockNumber), ctx.log)
+            )(using ctx.executionContext)
           ) {
             case Success(result) => ScanResult(result)
             case Failure(ex) =>
@@ -461,14 +462,12 @@ object StorageRecoveryActor:
           s"these on-demand via GetTrieNodes when block execution reaches them."
       )
 
-  private def scanForMissingStorage(
+  private[sync] def scanForMissingStorage(
       stateRoot: ByteString,
-      stateStorage: StateStorage,
-      pivotBlockNumber: BigInt,
+      mptStorage: MptStorage,
       log: Logger
   ): Seq[(ByteString, ByteString)] =
     RecoveryMetrics.setStoragePhase(RecoveryMetrics.PhaseScanning)
-    val mptStorage = stateStorage.getBackingStorage(pivotBlockNumber)
     val rootNode = mptStorage.get(stateRoot.toArray)
 
     val missing = mutable.ArrayBuffer.empty[(ByteString, ByteString)]
