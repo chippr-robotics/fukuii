@@ -15,7 +15,6 @@ import org.scalatest.matchers.should.Matchers
 import com.chipprbots.ethereum.BlockHelpers
 import com.chipprbots.ethereum.Fixtures
 import com.chipprbots.ethereum.Timeouts
-import com.chipprbots.ethereum.blockchain.sync.codec.MptNodeCodecs.*
 import com.chipprbots.ethereum.blockchain.sync.codec.ReceiptCodecs.*
 import com.chipprbots.ethereum.crypto
 import com.chipprbots.ethereum.domain.Address
@@ -33,10 +32,6 @@ import com.chipprbots.ethereum.domain.PlatabergetBalVectors.LiveAccessList
 import com.chipprbots.ethereum.domain.Receipt
 import com.chipprbots.ethereum.domain.SignedTransaction
 import com.chipprbots.ethereum.domain.TxLogEntry
-import com.chipprbots.ethereum.mpt.ExtensionNode
-import com.chipprbots.ethereum.mpt.HashNode
-import com.chipprbots.ethereum.mpt.HexPrefix
-import com.chipprbots.ethereum.mpt.MptNode
 import com.chipprbots.ethereum.network.NetworkPeerManagerActor
 import com.chipprbots.ethereum.network.NetworkPeerManagerActor.SendMessageCmd
 import com.chipprbots.ethereum.network.PeerEventBusActor.PeerEvent.MessageFromPeer
@@ -53,8 +48,6 @@ import com.chipprbots.ethereum.network.p2p.messages.ETHPackets
 import com.chipprbots.ethereum.network.p2p.messages.ETHPackets.BlockBodies
 import com.chipprbots.ethereum.network.p2p.messages.ETHPackets.BlockHeaders
 import com.chipprbots.ethereum.network.p2p.messages.ETHPackets.GetBlockHeaders
-import com.chipprbots.ethereum.network.p2p.messages.ETHPackets.GetNodeData
-import com.chipprbots.ethereum.network.p2p.messages.ETHPackets.NodeData
 import com.chipprbots.ethereum.network.rlpx.RLPxConnectionHandler.RLPxConfiguration
 import com.chipprbots.ethereum.rlp.RLPEncodeable
 import com.chipprbots.ethereum.rlp.RLPList
@@ -68,7 +61,6 @@ class BlockchainHostActorSpec extends AnyFlatSpec with Matchers:
     peerEventBus.expectMsgType[SubscribeCmd].to shouldBe MessageClassifier(
       Set(
         Codes.GetPooledTransactionsCode,
-        Codes.GetNodeDataCode,
         Codes.GetReceiptsCode,
         Codes.GetBlockBodiesCode,
         Codes.GetBlockHeadersCode,
@@ -723,38 +715,15 @@ class BlockchainHostActorSpec extends AnyFlatSpec with Matchers:
       )
     )
 
-  it should "return evm code for hash" taggedAs (UnitTest) in new TestSetup:
-    // given
-    val fakeEvmCode: ByteString = ByteString(Hex.decode("ffddaaffddaaffddaaffddaaffddaa"))
-    val evmCodeHash: ByteString = ByteString(crypto.kec256(fakeEvmCode.toArray[Byte]))
-
-    storagesInstance.storages.evmCodeStorage.put(evmCodeHash, fakeEvmCode).commit()
-
-    // when
-    blockchainHost ! BlockchainHostActor.PeerEventReceived(MessageFromPeer(GetNodeData(Seq(evmCodeHash)), peerId))
-
-    // then
-    networkPeerManager.expectMsg(NetworkPeerManagerActor.SendMessageCmd(NodeData(Seq(fakeEvmCode)), peerId))
-
-  it should "return mptNode for hash" taggedAs (UnitTest) in new TestSetup:
-    // given
-    val exampleNibbles: ByteString = ByteString(HexPrefix.bytesToNibbles(Hex.decode("ffddaa")))
-    val exampleHash: ByteString = ByteString(Hex.decode("ab" * 32))
-    val extensionNode: MptNode = ExtensionNode(exampleNibbles, HashNode(exampleHash.toArray[Byte]))
-
-    storagesInstance.storages.stateStorage.saveNode(
-      ByteString(extensionNode.hash),
-      extensionNode.toBytes: Array[Byte],
-      0
-    )
-
-    // when
-    blockchainHost ! BlockchainHostActor.PeerEventReceived(
-      MessageFromPeer(GetNodeData(Seq(ByteString(extensionNode.hash))), peerId)
-    )
-
-    // then
-    networkPeerManager.expectMsg(NetworkPeerManagerActor.SendMessageCmd(NodeData(Seq(extensionNode.toBytes)), peerId))
+  // EIP-4938 took GetNodeData out of eth/67, and every decoder this node has (eth/68 to eth/72) rejects its code, so
+  // the message cannot arrive from a peer. The host served it by node hash alone, which the unified state layout cannot
+  // do (spec 018 Track C); the handler is gone, and the host does not ask the event bus for the code.
+  it should "not subscribe to GetNodeData, which no eth version this node speaks carries" taggedAs (
+    UnitTest
+  ) in new TestSetup:
+    peerEventBus.expectMsgType[SubscribeCmd].to match
+      case MessageClassifier(codes, _) => codes should not contain Codes.GetNodeDataCode
+      case other                       => fail(s"not a message classifier: $other")
 
   trait TestSetup extends EphemBlockchainTestSetup:
     implicit override lazy val classicSystem: ActorSystem = ActorSystem("BlockchainHostActor_System")
@@ -805,7 +774,6 @@ class BlockchainHostActorSpec extends AnyFlatSpec with Matchers:
       classicSystem.spawn(
         BlockchainHostActor(
           blockchainReader,
-          storagesInstance.storages.evmCodeStorage,
           peerConf,
           peerEventBus.ref,
           networkPeerManager.ref,

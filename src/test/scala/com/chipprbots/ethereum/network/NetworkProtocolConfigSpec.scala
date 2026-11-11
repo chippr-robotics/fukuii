@@ -212,6 +212,28 @@ class NetworkProtocolConfigSpec extends AnyFlatSpec with Matchers with ParallelT
 
   // ── Helper ────────────────────────────────────────────────────────────────
 
+  // ── SNAP under the in-development guard of the unified state layout (spec 018 Track C) ──────────────────────────
+
+  // User decision, 2026-11-11: until the overlay can serve recent roots, a node with the guard on does not advertise
+  // SNAP. A syncing peer would get an empty answer for every root but one, and peers mark such a node as unusable.
+  "The capabilities of a node that cannot serve SNAP" should "leave snap/1 and snap/2 out and keep eth" taggedAs
+    UnitTest in {
+      val all = NetworkProtocolConfig(eth70 = true, snap2 = true)
+      all.capabilities() should contain.allOf(Capability.SNAP1, Capability.SNAP2)
+      all.capabilities(snapServed = false) shouldBe List(Capability.ETH68, Capability.ETH69, Capability.ETH70)
+      NetworkProtocolConfig.default.capabilities(snapServed = false) shouldBe List(Capability.ETH68, Capability.ETH69)
+      // with the flags off there is nothing to leave out
+      NetworkProtocolConfig(snap1 = false).capabilities() shouldBe List(Capability.ETH68, Capability.ETH69)
+    }
+
+  "InstanceConfig.supportedCapabilities" should "not advertise SNAP while state.path-live is on" taggedAs UnitTest in {
+    val guardOn = instanceWithOverride("state.path-live", true)
+    guardOn.supportedCapabilities shouldBe List(Capability.ETH68, Capability.ETH69)
+    // and the guard ships off: SNAP is advertised
+    instanceWithOverride("state.path-live", false).supportedCapabilities should contain(Capability.SNAP1)
+    Config.supportedCapabilities should contain(Capability.SNAP1)
+  }
+
   private def instanceWithOverride(path: String, value: Boolean): InstanceConfig =
     new InstanceConfig(
       ConfigFactory.load().getConfig("fukuii").withValue(path, ConfigValueFactory.fromAnyRef(value)),

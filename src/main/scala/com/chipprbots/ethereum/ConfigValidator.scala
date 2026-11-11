@@ -55,7 +55,24 @@ object ConfigValidator extends Logger:
 
     val errors = List.newBuilder[String]
     checkPortClash(config, errors)
+    errors ++= stateGuardErrors(config)
     errors.result()
+
+  /** What `config` (a `fukuii` block) asks for that the in-development guard of the unified state layout (spec 018
+    * Track C) cannot do yet. Fatal: the node would start and never sync.
+    *
+    * With `state.path-live` on, SNAP is not advertised until the overlay can serve recent roots (C4a). A capability is
+    * mutual, so no peer offers SNAP to such a node, and a SNAP sync would wait for a snap-capable peer for ever.
+    */
+  def stateGuardErrors(config: TypesafeConfig): List[String] =
+    def on(key: String): Boolean = config.hasPath(key) && config.getBoolean(key)
+    if on("state.path-live") && on("sync.do-snap-sync") then
+      List(
+        "fukuii.state.path-live = true (the in-development guard of the unified state layout) cannot run with " +
+          "fukuii.sync.do-snap-sync = true: SNAP is not advertised while the guard is on, so no peer would offer it " +
+          "and the sync would never start. Set fukuii.sync.do-snap-sync = false."
+      )
+    else Nil
 
   /** One warning for each removed fast-sync key that `config` (a `fukuii` block) still sets. */
   def removedKeyWarnings(config: TypesafeConfig): List[String] =

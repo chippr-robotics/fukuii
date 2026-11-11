@@ -243,3 +243,38 @@ class BlockchainReaderSeamSpec extends AnyFlatSpec with Matchers:
       worldOver(f.node.reader.stateAt(f.header), f.hashed.root, codes).saveAccount(Address(0x5c4a7c4), Account(1, 2))
     )
   }
+
+  // SNAP serves a state by its root. With the guard off the serve is handed the read-only store whatever the root, and
+  // finds the root's node there or answers with nothing. With it on there is one state, the anchor's.
+  "A state served to a peer by its root" should "be the read-only store, for any root, with the guard off" taggedAs
+    UnitTest in {
+      val node = new Node(EphemDataSource(), ArchivePruning, guard = false)
+      val root = writeThrough(node.storages.stateStorage.getBackingStorage(1), node)
+      val served = node.reader.stateForRoot(root)
+      served shouldBe defined
+      accountTrie(served.get, root).get(alice) shouldBe accountTrie(
+        node.storages.stateStorage.getBackingStorage(1),
+        root
+      ).get(alice)
+      node.reader.stateForRoot(ByteString(kec256("a root nobody holds".getBytes))) shouldBe defined
+    }
+
+  it should "be the anchor's state for the anchor's root and nothing for any other, with the guard on" taggedAs
+    UnitTest in {
+      val f = new OnPositions
+      val served = f.node.reader.stateForRoot(f.hashed.root)
+      served shouldBe defined
+      f.node.reader.accountsIn(served.get, f.header).get(alice) shouldBe f.reference.get(alice)
+      f.node.reader.stateForRoot(ByteString(kec256("a root nobody holds".getBytes))) shouldBe None
+      f.node.reader.stateForRoot(EmptyRoot) shouldBe None
+    }
+
+  it should "stop being served once the best block is more than the served window past it" taggedAs UnitTest in {
+    val f = new OnPositions
+    val appState = f.node.storages.appStateStorage
+    // the anchor is block 1
+    appState.putBestBlockNumber(1 + BlockchainReader.ServedRootWindow).commit()
+    f.node.reader.stateForRoot(f.hashed.root) shouldBe defined
+    appState.putBestBlockNumber(1 + BlockchainReader.ServedRootWindow + 1).commit()
+    f.node.reader.stateForRoot(f.hashed.root) shouldBe None
+  }

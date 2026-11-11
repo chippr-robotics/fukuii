@@ -2,6 +2,8 @@ package com.chipprbots.ethereum.network
 
 import com.typesafe.config.Config as TypesafeConfig
 
+import com.chipprbots.ethereum.network.p2p.messages.Capability
+
 /** Per-network protocol capability gating.
   *
   * Controls which devp2p protocol versions Fukuii advertises in the Hello handshake. The defaults are the conservative
@@ -28,7 +30,25 @@ final case class NetworkProtocolConfig(
     eth72: Boolean = false,
     snap1: Boolean = true,
     snap2: Boolean = false
-)
+):
+
+  /** The capabilities this configuration advertises in the Hello handshake.
+    *
+    * @param snapServed
+    *   false while the node cannot serve SNAP for the roots a syncing peer asks about. snap/1 and snap/2 are then left
+    *   out, whatever the flags say: a capability is an offer to serve, and a peer that keeps getting empty answers
+    *   marks this node's SNAP as unusable. It is mutual, so a node that does not offer snap cannot sync by it either.
+    */
+  def capabilities(snapServed: Boolean = true): List[Capability] =
+    List(
+      Option.when(eth68)(Capability.ETH68),
+      Option.when(eth69)(Capability.ETH69),
+      Option.when(eth70)(Capability.ETH70),
+      Option.when(eth71)(Capability.ETH71),
+      Option.when(eth72)(Capability.ETH72),
+      Option.when(snap1 && snapServed)(Capability.SNAP1),
+      Option.when(snap2 && snapServed)(Capability.SNAP2)
+    ).flatten
 
 object NetworkProtocolConfig:
 

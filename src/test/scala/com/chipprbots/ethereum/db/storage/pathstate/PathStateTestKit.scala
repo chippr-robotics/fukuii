@@ -21,6 +21,8 @@ import com.chipprbots.ethereum.domain.UInt256
 import com.chipprbots.ethereum.ledger.InMemoryWorldStateProxy
 import com.chipprbots.ethereum.mpt.HexPrefix
 import com.chipprbots.ethereum.mpt.MerklePatriciaTrie
+import com.chipprbots.ethereum.mpt.MptNode
+import com.chipprbots.ethereum.mpt.NibblePath
 import com.chipprbots.ethereum.mpt.PositionTestKit.RawTrieWalk
 import com.chipprbots.ethereum.mpt.PositionTestKit.ReferenceStore
 import com.chipprbots.ethereum.mpt.PositionTestKit.Rows
@@ -148,6 +150,30 @@ object PathStateTestKit:
   def seedPositions(dataSource: DataSource, positions: Map[Option[ByteString], Rows], anchor: BlockRef): Unit =
     writeState(new PathNodeStorage(dataSource), positions)
     new AppStateStorage(dataSource).putStateAnchor(anchor).commit()
+
+  /** `under`, as a view the disk moves away from: the first `healthy` reads are `under`'s, and every read after them
+    * says the view is stale. The count is one for the whole state, so it runs on across the tries of [[forOwner]]. What
+    * a reader that holds a storage across many reads (a SNAP serve, a walk) has to be shown.
+    */
+  final class StaleAfter(
+      under: MptStorage,
+      healthy: Int,
+      reads: java.util.concurrent.atomic.AtomicInteger = new java.util.concurrent.atomic.AtomicInteger
+  ) extends MptStorage:
+    /** How many reads were asked of the state, stale ones included. */
+    def readsAsked: Int = reads.get
+
+    private def read(node: => MptNode): MptNode =
+      if reads.incrementAndGet() > healthy then
+        throw new StaleStateViewException(block(1, EmptyRoot), 0L, 2L, s"the disk moved after $healthy reads")
+      else node
+
+    override def get(nodeId: Array[Byte]): MptNode = read(under.get(nodeId))
+    override def getAt(path: NibblePath, hash: Array[Byte]): MptNode = read(under.getAt(path, hash))
+    override def forOwner(owner: Option[ByteString]): MptStorage = new StaleAfter(under.forOwner(owner), healthy, reads)
+    override def updateNodesInStorage(newRoot: Option[MptNode], toRemove: Seq[MptNode]): Option[MptNode] =
+      throw new UnsupportedOperationException("a view that is only read")
+    override def persist(): Unit = ()
 
   /** Every row of CF `t` and CF `u`, by its key in its column family. */
   def allRows(rows: PathNodeStorage): (Map[ByteString, ByteString], Map[ByteString, ByteString]) =

@@ -48,17 +48,18 @@ class InstanceConfig(val config: TypesafeConfig, val instanceId: String = "defau
   val networkProtocols: NetworkProtocolConfig =
     NetworkProtocolConfig.fromConfig(config.getConfig("network.protocols"))
 
-  val supportedCapabilities: List[Capability] =
-    val p = networkProtocols
-    List(
-      Option.when(p.eth68)(Capability.ETH68),
-      Option.when(p.eth69)(Capability.ETH69),
-      Option.when(p.eth70)(Capability.ETH70),
-      Option.when(p.eth71)(Capability.ETH71),
-      Option.when(p.eth72)(Capability.ETH72),
-      Option.when(p.snap1)(Capability.SNAP1),
-      Option.when(p.snap2)(Capability.SNAP2)
-    ).flatten
+  /** `state.path-live`, the in-development guard of the unified state layout (spec 018 Track C), as this instance has
+    * it. The instance's storages are built from the same value (`StorageBuilder`), so what a node advertises follows
+    * what its storage can serve.
+    */
+  val statePathLive: Boolean = config.hasPath("state.path-live") && config.getBoolean("state.path-live")
+
+  /** With the guard on, the position store holds the state of one block until the overlay lands (C4a): a syncing peer
+    * would get an empty answer for every other root, and peers mark a node whose SNAP answers are empty as unusable. So
+    * SNAP is not advertised while the guard is on (user decision, 2026-11-11). The capability is mutual: such a node
+    * does not sync by SNAP either.
+    */
+  val supportedCapabilities: List[Capability] = networkProtocols.capabilities(snapServed = !statePathLive)
 
   // Startup validation — runs at construction; warns on misconfigured combinations but does not abort.
   locally {
@@ -70,6 +71,11 @@ class InstanceConfig(val config: TypesafeConfig, val instanceId: String = "defau
     if p.eth71 && !p.eth70 then log.warn("[InstanceConfig] eth71 requires eth70; both should be enabled")
     if p.eth72 && !p.eth71 then log.warn("[InstanceConfig] eth72 requires eth71; both should be enabled")
     if p.snap2 && !p.snap1 then log.warn("[InstanceConfig] snap2 requires snap1; both should be enabled")
+    if statePathLive && (p.snap1 || p.snap2) then
+      log.warn(
+        "[InstanceConfig] state.path-live is on (in-development guard): SNAP is not advertised, and this node " +
+          "neither serves nor syncs by SNAP, until the unified state layout can serve recent roots"
+      )
     val disabled = List(
       Option.unless(p.eth70)("eth70"),
       Option.unless(p.eth71)("eth71"),

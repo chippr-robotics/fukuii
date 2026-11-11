@@ -14,8 +14,6 @@ import scala.util.Failure
 import scala.util.Success
 import scala.util.Try
 
-import com.chipprbots.ethereum.blockchain.sync.codec.MptNodeCodecs.*
-import com.chipprbots.ethereum.db.storage.EvmCodeStorage
 import com.chipprbots.ethereum.domain.BlockBody
 import com.chipprbots.ethereum.domain.BlockHash
 import com.chipprbots.ethereum.domain.BlockHeader
@@ -33,8 +31,6 @@ import com.chipprbots.ethereum.network.p2p.Message
 import com.chipprbots.ethereum.network.p2p.MessageSerializable
 import com.chipprbots.ethereum.network.p2p.messages.Codes
 import com.chipprbots.ethereum.network.p2p.messages.ETHPackets
-import com.chipprbots.ethereum.network.p2p.messages.ETHPackets.GetNodeData
-import com.chipprbots.ethereum.network.p2p.messages.ETHPackets.NodeData
 import com.chipprbots.ethereum.rlp.RLPEncodeable
 import com.chipprbots.ethereum.rlp.RLPList
 import com.chipprbots.ethereum.rlp.RLPValue
@@ -54,7 +50,6 @@ object BlockchainHostActor:
 
   private val requestMsgsCodes =
     Set(
-      Codes.GetNodeDataCode,
       Codes.GetReceiptsCode,
       Codes.GetBlockBodiesCode,
       Codes.GetBlockHeadersCode,
@@ -78,7 +73,6 @@ object BlockchainHostActor:
 
   def apply(
       blockchainReader: BlockchainReader,
-      evmCodeStorage: EvmCodeStorage,
       peerConfiguration: PeerConfiguration,
       peerEventBusActor: typed.ActorRef[PeerEventBusCommand],
       networkPeerManagerActor: typed.ActorRef[NetworkPeerManagerActor.Command],
@@ -118,31 +112,6 @@ object BlockchainHostActor:
             case None => ETHPackets.PooledTransactions(0, matchingTxs) // requestId=0 for no-requestId case
           networkPeerManagerActor ! NetworkPeerManagerActor.SendMessageCmd(responseMsg, peerId)
         }
-
-    /** Handles requests for node data, which includes both mpt nodes and evm code (both requested by hash). Both types
-      * of node data are requested by the same GetNodeData message
-      *
-      * @param message
-      *   to be processed
-      * @return
-      *   message response if message is a request for node data or None if not
-      */
-    def handleEvmCodeMptFastDownload(message: Message): Option[MessageSerializable] = message match
-      case GetNodeData(mptElementsHashes) =>
-        val hashesRequested =
-          mptElementsHashes.take(peerConfiguration.fastSyncHostConfiguration.maxMptComponentsPerMessage)
-
-        val nodeData: Seq[ByteString] = hashesRequested.flatMap { hash =>
-          // Fetch mpt node by hash
-          val maybeMptNodeData = blockchainReader.getMptNodeByHash(hash).map(e => e.toBytes: ByteString)
-
-          // If no mpt node was found, fetch evm by hash
-          maybeMptNodeData.orElse(evmCodeStorage.get(hash))
-        }
-
-        Some(NodeData(nodeData))
-
-      case _ => None
 
     /** Receipts for the requested blocks, stopping at the first block we lack, as go-ethereum does (`if results == nil
       * { break }`). A reply is matched to the request by position, so skipping a block would shift every later block's
@@ -453,7 +422,7 @@ object BlockchainHostActor:
           case ETHPackets.GetPooledTransactions(requestId, txHashes) =>
             handleGetPooledTransactions(txHashes, Some(requestId), peerId)
           case _ =>
-            val responseOpt = handleBlockFastDownload(message).orElse(handleEvmCodeMptFastDownload(message))
+            val responseOpt = handleBlockFastDownload(message)
             responseOpt.foreach { response =>
               networkPeerManagerActor ! NetworkPeerManagerActor.SendMessageCmd(response, peerId)
               // BLOCK-SERVE: INFO log so we can see which peers are requesting our chain
