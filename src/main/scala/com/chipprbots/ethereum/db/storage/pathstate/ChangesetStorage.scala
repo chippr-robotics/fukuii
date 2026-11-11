@@ -61,7 +61,9 @@ final class ChangesetStorage(val dataSource: DataSource):
       ByteString(value).grouped(HashLength).toSeq
     }
 
-  /** Whether the column family holds nothing at all: no record and no index. One seek. */
+  /** Whether the column family holds nothing at all: no record and no index. One seek, run to its end on the calling
+    * thread: for a caller at start-up, as the genesis commit is, and not for one inside an `IO`.
+    */
   def isEmpty: Boolean =
     import cats.effect.unsafe.implicits.global
     dataSource.iterate(namespace).take(1).compile.last.unsafeRunSync().isEmpty

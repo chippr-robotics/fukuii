@@ -130,6 +130,12 @@ class GenesisDataLoader(
 
     log.debug(s"Prepared genesis header: $header")
 
+    // A genesis with a withdrawalsRoot (Shanghai at genesis: Ephemery, hive, devnets) has an EMPTY withdrawals
+    // list, `Some(Nil)`: `BlockBody(Nil, Nil)` left it `None`, so the stored genesis encoded as a 3-item body (615
+    // bytes on Ephemery where go-ethereum/Erigon serve 616). ETC genesis has no withdrawalsRoot: unchanged. One block
+    // for both layouts, so what they store cannot drift apart.
+    val block = Block(header, BlockBody(Nil, Nil, withdrawals = header.withdrawalsRoot.map(_ => Nil)))
+
     existing match
       case Some(existingGenesisHeader) if existingGenesisHeader.hash == header.hash =>
         log.debug("Genesis data already in the database")
@@ -144,28 +150,26 @@ class GenesisDataLoader(
       case None if genesisLayer.isDefined =>
         // One batch, synced: the genesis block, its weight and the best-block pointer, the rows of its state, the
         // marks of a datadir this build created, the layout stamp and the state anchor (spec 018 data-model 5.4).
-        val block = Block(header, BlockBody(Nil, Nil, withdrawals = header.withdrawalsRoot.map(_ => Nil)))
-        pathState.get.commitGenesis(
-          genesisLayer.get,
-          BlockRef(header.hash.value, header.number.value, header.stateRoot.value),
-          Some(
-            blockchainWriter.saveBatch(
-              block,
-              Nil,
-              ChainWeight.totalDifficultyOnly(header.difficulty.value),
-              saveAsBestBlock = true
+        // What the commit refuses, and a write that fails, are this load's failure like any other.
+        Try(
+          pathState.get.commitGenesis(
+            genesisLayer.get,
+            BlockRef(header.hash.value, header.number.value, header.stateRoot.value),
+            Some(
+              blockchainWriter.saveBatch(
+                block,
+                Nil,
+                ChainWeight.totalDifficultyOnly(header.difficulty.value),
+                saveAsBestBlock = true
+              )
             )
           )
         )
-        Success(())
       case None =>
         storage.persist()
         stateStorage.forcePersist(GenesisDataLoad)
-        // A genesis with a withdrawalsRoot (Shanghai at genesis: Ephemery, hive, devnets) has an EMPTY withdrawals
-        // list, `Some(Nil)`: `BlockBody(Nil, Nil)` left it `None`, so the stored genesis encoded as a 3-item body (615
-        // bytes on Ephemery where go-ethereum/Erigon serve 616). ETC genesis has no withdrawalsRoot: unchanged.
         blockchainWriter.save(
-          Block(header, BlockBody(Nil, Nil, withdrawals = header.withdrawalsRoot.map(_ => Nil))),
+          block,
           Nil,
           ChainWeight.totalDifficultyOnly(header.difficulty.value),
           saveAsBestBlock = true

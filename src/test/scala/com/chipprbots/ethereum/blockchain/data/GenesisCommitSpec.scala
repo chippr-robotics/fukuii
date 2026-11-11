@@ -58,6 +58,10 @@ class GenesisCommitSpec extends AnyFlatSpec with Matchers:
     def genesis: Option[BlockHeader] = blockchainReader.getBlockHeaderByNumber(0)
     def disk: Disk = PathStateTestKit.allRows(new PathNodeStorage(source))
 
+  /** What every client of the network has as the hash of its genesis: the two layouts agreeing is not enough. */
+  private def pinned(header: BlockHeader, hash: String): Unit =
+    org.bouncycastle.util.encoders.Hex.toHexString(header.hash.value.toArray) shouldBe hash
+
   private def refOf(header: BlockHeader): BlockRef =
     BlockRef(header.hash.value, header.number.value, header.stateRoot.value)
 
@@ -114,6 +118,7 @@ class GenesisCommitSpec extends AnyFlatSpec with Matchers:
       given BlockchainConfig = shipped("etc")
       val (onHashes, onPositions) = loadedBothWays(_.loadGenesisData())
       val header = committed(onHashes, onPositions)
+      pinned(header, "d4e56740f876aef8c010b86a40d5f56745a118d0906a34e69aec8c0db1cb8fa3")
       onPositions.disk._1.size should be > 8000
       onPositions.disk._2 shouldBe empty
       header.stateRoot.value should not be ByteString(MerklePatriciaTrie.EmptyRootHash)
@@ -124,17 +129,21 @@ class GenesisCommitSpec extends AnyFlatSpec with Matchers:
     given BlockchainConfig = shipped("mordor")
     val (onHashes, onPositions) = loadedBothWays(_.loadGenesisData())
     val header = committed(onHashes, onPositions)
+    pinned(header, "a68ebde7932eccb177d38d55dcc6461a019dd795a681e59b5a3e4f3a7259a3f1")
     header.stateRoot.value shouldBe ByteString(MerklePatriciaTrie.EmptyRootHash)
     onPositions.disk shouldBe (Map.empty, Map.empty)
   }
 
   // Contracts with code, with storage, and with nonces: the system contracts of an Ethereum genesis.
   it should "hold each contract's storage under its own account: Platåberget and Sepolia" taggedAs UnitTest in {
-    Seq("plataberget", "sepolia").foreach { chain =>
+    Seq(
+      "plataberget" -> "ee33ef92bbabcf07bcf44fea1d18a7925c5f7f9da8f81334ea19b0f3cb892b31",
+      "sepolia" -> "25a5cc106eea7138acab33231d7160d69cb777ee0c2c553fcddf5138993e6dd9"
+    ).foreach { (chain, hash) =>
       withClue(s"$chain: ") {
         given BlockchainConfig = shipped(chain)
         val (onHashes, onPositions) = loadedBothWays(_.loadGenesisData())
-        committed(onHashes, onPositions)
+        pinned(committed(onHashes, onPositions), hash)
         if chain == "plataberget" then onPositions.disk._2 should not be empty
       }
     }
@@ -247,6 +256,30 @@ class GenesisCommitSpec extends AnyFlatSpec with Matchers:
     Parts.storages.pathStateStorage.get.clock.epoch shouldBe 2L
   }
 
+  // Code is kept by its hash on both layouts, and written as the build meets it: before the batch, and not synced. The
+  // batch's sync is the one that makes it durable, and a build that is lost writes the same code again.
+  it should "follow the code of the genesis, which is written first and by its hash" taggedAs UnitTest in {
+    import PathStateTestKit.Watched
+    given BlockchainConfig = shipped("etc")
+    val watched = new Watched(EphemDataSource())
+    val Parts = new OnUnifiedLayout(watched)
+    val loader =
+      GenesisDataLoader.over(BlockchainReader(Parts.storages), BlockchainWriter(Parts.storages), Parts.storages)
+    val code = ByteString(Array[Byte](0x60, 0x00, 0x60, 0x00, 0xf3.toByte))
+    val before = watched.callsMade.size
+    loader.loadGenesisData(genesisOf(alice -> account(manySlots).copy(code = Some(code)), bob -> account())).get
+
+    watched.callsMade.drop(before).filter(_.startsWith("update")) shouldBe Seq("update", "updateSync")
+    val keysOf = (batch: Seq[com.chipprbots.ethereum.db.dataSource.DataUpdate]) =>
+      batch.collect { case DataSourceUpdate(_, _, upserts) =>
+        upserts.map((key, _) => new String(key.toArray, "UTF-8"))
+      }.flatten
+    val Seq(first, second) = watched.batchesWritten.takeRight(2): @unchecked
+    keysOf(first) should not contain StateAnchor.Key
+    keysOf(second) should contain(StateAnchor.Key)
+    Parts.storages.evmCodeStorage.get(ByteString(com.chipprbots.ethereum.crypto.kec256(code))) shouldBe Some(code)
+  }
+
   it should "leave nothing when its write fails: no block, no row, no stamp, no anchor" taggedAs UnitTest in {
     import PathStateTestKit.Watched
     given BlockchainConfig = shipped("etc")
@@ -257,7 +290,9 @@ class GenesisCommitSpec extends AnyFlatSpec with Matchers:
     val loader = GenesisDataLoader.over(reader, writer, Parts.storages)
     val genesis = genesisOf(alice -> account(manySlots))
     watched.beforeUpdate = _ => throw new java.io.IOException("the disk is full")
-    a[java.io.IOException] should be thrownBy loader.loadGenesisData(genesis)
+    loader.loadGenesisData(genesis) match
+      case Failure(failed) => failed shouldBe a[java.io.IOException]
+      case Success(_)      => fail("a write that failed was taken as a genesis")
     watched.beforeUpdate = _ => ()
 
     reader.getBlockHeaderByNumber(0) shouldBe None
@@ -333,6 +368,61 @@ class GenesisCommitSpec extends AnyFlatSpec with Matchers:
       include("rows of a state")
     node.storages.appStateStorage.getStateLayout() shouldBe None
     pathState.anchor shouldBe None
+  }
+
+  // Each of these is a trace of a state that was here: records of what blocks changed, a count of the records pruned,
+  // the stamp of a datadir this layout created. None of them comes with an anchor in a datadir that is whole.
+  it should "refuse a datadir that holds a trace of a state: records, a count of pruned ones, the stamp" taggedAs
+    UnitTest in {
+      import com.chipprbots.ethereum.db.storage.Namespaces
+      def text(value: String): IndexedSeq[Byte] = value.getBytes("UTF-8").toIndexedSeq
+      val traces = Seq(
+        "changeset records" -> DataSourceUpdate(
+          Namespaces.StateChangesetNamespace,
+          Seq.empty,
+          Seq(IndexedSeq.fill[Byte](32)(4) -> IndexedSeq[Byte](1, 2, 3))
+        ),
+        "a count of pruned changesets (5)" ->
+          DataSourceUpdate(
+            Namespaces.AppStateNamespace,
+            Seq.empty,
+            Seq(text("state.changeset.pruned-to") -> text("5"))
+          ),
+        "the layout stamp 'path-live-1'" ->
+          DataSourceUpdate(Namespaces.AppStateNamespace, Seq.empty, Seq(text(StateLayout.Key) -> text("path-live-1")))
+      )
+      traces.foreach { (named, trace) =>
+        withClue(s"$named: ") {
+          val source = EphemDataSource()
+          source.update(Seq(trace))
+          val node = new Node(source, guard = true)
+          val pathState = node.storages.pathStateStorage.get
+          pathState.anchor shouldBe None
+          val block = BlockRef(ByteString(Array.fill[Byte](32)(1)), 0, ByteString(MerklePatriciaTrie.EmptyRootHash))
+          (the[IllegalStateException] thrownBy pathState.commitGenesis(
+            pathState.genesisLayer(),
+            block,
+            None
+          )).getMessage should
+            (include("already holds").and(include(named)))
+          pathState.anchor shouldBe None
+          node.storages.appStateStorage.getStateAnchor() shouldBe None
+          node.disk shouldBe (Map.empty, Map.empty)
+        }
+      }
+    }
+
+  // Nothing of a genesis replaces a storage trie whole: there is no account before it to remove.
+  it should "refuse a build that replaced a storage trie whole" taggedAs UnitTest in {
+    val node = new Node(EphemDataSource(), guard = true)
+    val pathState = node.storages.pathStateStorage.get
+    val layer = pathState.genesisLayer()
+    layer.storage.resetOwner(owner(alice))
+    val block = BlockRef(ByteString(Array.fill[Byte](32)(1)), 0, ByteString(MerklePatriciaTrie.EmptyRootHash))
+    (the[IllegalStateException] thrownBy pathState.commitGenesis(layer, block, None)).getMessage should
+      include("replaced a storage trie whole")
+    pathState.anchor shouldBe None
+    node.storages.appStateStorage.getStateLayout() shouldBe None
   }
 
   it should "refuse a build that is not the state its block names" taggedAs UnitTest in {
