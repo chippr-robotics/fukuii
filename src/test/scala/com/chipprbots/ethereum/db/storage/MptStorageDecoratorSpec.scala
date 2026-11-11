@@ -6,6 +6,7 @@ import java.lang.reflect.Modifier
 import org.apache.pekko.util.ByteString
 
 import scala.collection.mutable
+import scala.collection.mutable.ArrayBuffer
 
 import org.scalatest.flatspec.AnyFlatSpec
 import org.scalatest.matchers.should.Matchers
@@ -15,7 +16,6 @@ import com.chipprbots.ethereum.mpt.LeafNode
 import com.chipprbots.ethereum.mpt.MptNode
 import com.chipprbots.ethereum.mpt.NibblePath
 import com.chipprbots.ethereum.testing.Tags.*
-import scala.collection.mutable.ArrayBuffer
 
 /** Spec 018 Track C, C1 (T024): [[MptStorageDecorator]] forwards every member of [[MptStorage]] (data-model 9), and no
   * read or update gets past a wrapper built on it.
