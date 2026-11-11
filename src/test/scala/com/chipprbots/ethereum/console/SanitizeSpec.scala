@@ -110,6 +110,20 @@ class SanitizeSpec extends AnyFlatSpec with Matchers with ScalaCheckPropertyChec
     out.codePointCount(0, out.length) should be <= Sanitize.MaxChars
   }
 
+  // With the default cap the input bound dominates (2,048 code points are read), so the two cases above cannot tell a
+  // scan that is remembered from one that is not. With a cap of a million the whole text is read: only the memo of the
+  // scan that found no terminator keeps it linear (a million introducers, each rescanning the rest, is 10^12 steps).
+
+  it should "clean a million unterminated OSC introducers in linear time when it reads them all" taggedAs (UnitTest) in {
+    within(5)(Sanitize.line("\u001b]" * 1_000_000, maxChars = 1_000_000)) shouldBe ""
+  }
+
+  it should "clean a million unterminated 8-bit OSC introducers in linear time when it reads them all" taggedAs (
+    UnitTest
+  ) in {
+    within(5)(Sanitize.line("\u009d" * 1_000_000, maxChars = 1_000_000)) shouldBe ""
+  }
+
   it should "clean a million 8-bit OSC introducers in linear time" taggedAs (UnitTest) in {
     val out = within(5)(Sanitize.line("\u009d" * 1_000_000))
     out.exists(Character.isISOControl(_)) shouldBe false

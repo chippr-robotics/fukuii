@@ -76,7 +76,10 @@ class TuiLogRingAppender(capacity: Int, threshold: Level, zone: ZoneId = ZoneId.
       val text = Sanitize.line(if event.getThrowableProxy != null then s"$message\n…" else message)
       val time = timeFormat.format(Instant.ofEpochMilli(event.getTimeStamp))
       val seq = next.getAndIncrement()
-      slots.set(slot(seq), LogLine(seq, time, event.getLevel.toString, event.getLoggerName, text))
+      store(LogLine(seq, time, event.getLevel.toString, event.getLoggerName, text))
+
+  /** Puts `line` in its slot. Open to the tests, which make a writer late deterministically. */
+  private[console] def store(line: LogLine): Unit = slots.set(slot(line.seq), line)
 
   private def slot(seq: Long): Int = (seq % capacity).toInt
 

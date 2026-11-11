@@ -109,6 +109,24 @@ class TuiLogRingAppenderSpec extends AnyFlatSpec with Matchers with LoneElement:
     r.lines shouldBe empty
   }
 
+  it should "drop a late writer's line for a slot the ring has lapped, and keep the newer line (lost-write race)" taggedAs (
+    UnitTest
+  ) in {
+    val r = ring(capacity = 4)
+    (0 until 8).foreach(i => r.doAppend(event(s"line $i"))) // numbers 0 to 7: the ring holds 4 to 7
+    r.lines.map(_.seq) shouldBe (4L until 8L)
+    // The writer of number 0 took it, was descheduled while the others went a lap round the ring, and stores only now:
+    // its slot holds number 4. The late line must not overwrite it (eye, slice 4 gate: 999 lines instead of 1,000).
+    r.store(LogLine(0L, "12:04:51", "INFO", "late", "line 0, a lap late"))
+    r.lines.map(_.seq) shouldBe (4L until 8L)
+    r.lines.map(_.text) shouldBe (4 until 8).map(i => s"line $i")
+    // The other order: number 8 is stored over 4 (its slot), and a late 4 does not bring 4 back. The window is then 4
+    // to 7 with number 8 not yet taken, so the read has 5 to 7.
+    r.store(LogLine(8L, "12:04:51", "INFO", "x", "line 8"))
+    r.store(LogLine(4L, "12:04:51", "INFO", "x", "line 4 again"))
+    r.lines.map(_.seq) shouldBe Vector(5L, 6L, 7L)
+  }
+
   it should "keep every line appended from four threads, each thread's lines in the order it logged them" taggedAs (
     UnitTest
   ) in {
