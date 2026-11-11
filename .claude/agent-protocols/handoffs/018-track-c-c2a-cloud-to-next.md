@@ -20,6 +20,12 @@ and `StateConfig`. forge and beacon signed the record's bytes. Nothing reads or 
 **C2b (B-056) is in flight** in this session, in three PRs: the ratchet, the RPC readers, serving and walking. Its
 pre-code record, with what conduit, herald and beacon changed, is in plan.md.
 
+- **The ratchet is done** (T054, T062): `scripts/check-state-accessors.sh` with `scripts/state-accessor-allowlist.txt`,
+  142 lines, each with its reason and the slice that removes it. **A slice that converts a caller lowers that line's
+  count or removes the line in the same change**, or the Test and Build job fails before it compiles. The allow-list's
+  sections are the work list of the next two PRs: "Readers behind RPC" and "Serving and walking".
+- The decisions follow-up merged as #1795.
+
 Next after it: **C3b** (B-058, the staged commit), which needs C3a and C2a and not C2b.
 
 **The user decided four things on 2026-11-11** (plan.md, "Decisions of 2026-11-11"): C3a merges; 512 blocks of
@@ -44,10 +50,11 @@ overlay.
 
 Read plan.md, "C2a part 1 record" and "C2a part 2 record", then:
 
-- **C2b**: start at T054 (the allow-list ratchet test) and T057. The readers that execute (`eth_call`, estimate, trace,
+- **C2b**: the second PR is the RPC readers (plan.md, "C2b pre-code record"): the seam `stateAt` / `scratchStateAt` /
+  `stateAvailable` on `Blockchain`, T056, T057, T051, T053. The readers that execute (`eth_call`, estimate, trace,
   `eth_simulateV1`) run on `PathStateStorage.throwaway(block)`; readers that only read use `readOnly(block)`. A view
-  serves only the anchor until C4a, so anything else is `StateUnavailable`: decide per reader what that means with the
-  guard on. The ratchet (T062) also lists the three batch reads (data-model 9).
+  serves only the anchor until C4a, so anything else is `StateUnavailable`. With the guard off the seam hands every
+  reader `getReadOnlyStorage`, and a differential test pins that nothing changed.
 - **C3b**: start at T087 (`StateLock`), which is what makes the `StateLockHeld` that `ChangesetStorage` asks for, then
   T088 to T091. The commit writes its batch inside `StateMoveLog.inFlight(move) { … }`, takes the anchor from
   `move.newAnchor`, and keeps a **persisted** prune cursor: `ChangesetStorage` never scans for heights (data-model 4.1).
