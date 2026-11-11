@@ -145,7 +145,9 @@ object TuiFixtures:
       headTimestamp: Option[Long] = None,
       snapCounters: Option[SnapCounters] = None,
       snapPivot: Option[Long] = None,
-      lastImport: Option[ImportSample] = None
+      lastImport: Option[ImportSample] = None,
+      cl: Option[ClSample] = None,
+      mining: Option[MiningSample] = None
   ): LocalSample =
     LocalSample(
       diskFree = Some((diskGiB * GiB).toLong),
@@ -154,7 +156,9 @@ object TuiFixtures:
       headTimestamp = headTimestamp,
       snapCounters = snapCounters,
       snapPivot = snapPivot,
-      lastImport = lastImport
+      lastImport = lastImport,
+      cl = cl,
+      mining = mining
     )
 
   // ---- Slice 4: the peers' details and scores, the txpool, the log tail ----------------------------------------------
@@ -425,16 +429,109 @@ object TuiFixtures:
         chain = Some(chainSepolia)
       ),
       peerList(23),
-      local(diskGiB = 1_230.0, heapGiB = 2.1, headTimestamp = Some(1_791_294_816L - (3 * 86_400L + 4 * 3_600L))),
+      local(
+        diskGiB = 1_230.0,
+        heapGiB = 2.1,
+        headTimestamp = Some(1_791_294_816L - (3 * 86_400L + 4 * 3_600L)),
+        cl = Some(clConnected)
+      ),
       TxpoolSample(1_204, 3)
     )
+
+  // ---- Slice 5: the consensus-layer and mining panels (spec 027 T108-T111, research §3.3, §3.4, §3.9) ---------------
+
+  /** An Engine API call `agoSeconds` before [[Now]]. */
+  def clCall(agoSeconds: Long, status: String = "VALID"): ClCall = ClCall(Now.minusSeconds(agoSeconds), status)
+
+  /** A block hash: `0x` and the first four hex digits, then zeros, then the last four. */
+  private def hash(first: String, last: String): String = "0x" + first + "0" * 56 + last
+
+  /** The consensus layer of research §3.3: both calls 4 s ago, VALID. The payloads are counted as the node counts them:
+    * nothing ever increments SYNCING, and an ACCEPTED payload has its own count, so this is VALID and ACCEPTED, not the
+    * mockup's "SYNCING 4".
+    */
+  val clConnected: ClSample = ClSample(
+    forkchoiceUpdated = Some(clCall(4)),
+    newPayload = Some(clCall(4)),
+    payloads = PayloadCounts(total = 184_203L, valid = 184_199L, syncing = 0L, accepted = 4L, invalid = 0L),
+    authFailures = 0L,
+    head = Some(hash("7b3e", "a91c")),
+    safe = Some(7_411_977L),
+    finalized = Some(7_411_945L)
+  )
+
+  /** Research §3.9: the last forkchoiceUpdated 6m 3s ago, the last newPayload 6m 5s ago. */
+  val clSilent: ClSample = clConnected.copy(forkchoiceUpdated = Some(clCall(363)), newPayload = Some(clCall(365)))
+
+  /** `state`, its probe having read `f` of what it read. */
+  def withLocal(state: TuiState, f: LocalSample => LocalSample): TuiState =
+    state.copy(snapshot = state.snapshot.map(s => s.copy(local = f(s.local))))
+
+  /** [[sepoliaNearHead]] whose consensus layer has not called for 6m 3s: DISCONNECTED (§3.9). */
+  def clDisconnectedSepolia(glyphs: GlyphSet = GlyphSet.Emoji): TuiState =
+    withLocal(sepoliaNearHead(glyphs), _.copy(cl = Some(clSilent)))
+
+  /** [[sepoliaNearHead]], 20 s after it started, with no call from a consensus layer yet. */
+  def clWaitingSepolia(glyphs: GlyphSet = GlyphSet.Emoji): TuiState =
+    withLocal(sepoliaNearHead(glyphs).copy(startTime = Now.minusSeconds(20L)), _.copy(cl = Some(ClSample())))
+
+  /** The mining of research §3.4: 48.2 MH/s, 3 blocks mined (the last 2h 14m ago), no stale share, 1,204 getWork
+    * requests, 20 a minute. The DAG is for epoch 364: the ECIP-1099 epoch (60,000 blocks) of block 21,884,102. The
+    * mockup's "731" is the 30,000-block number of the same block.
+    */
+  val miningOn: MiningSample = MiningSample(
+    coinbase = Some("0x4f2a0b9c" + "0" * 24 + "0000c91e"),
+    hashrate = 48_200_000L,
+    blocksMined = 3L,
+    lastMinedAt = Some(Now.minusSeconds(2 * 3_600L + 14 * 60L)),
+    staleShares = 0L,
+    getWork = 1_204L,
+    getWorkPerMinute = Some(20L),
+    dag = Some(DagSample(epoch = 364L, phase = DagPhase.Generating, progress = 100, loaded = true))
+  )
+
+  /** [[syncedEtc]] mining: the panel of research §3.4. */
+  def miningEtc(glyphs: GlyphSet = GlyphSet.Emoji): TuiState =
+    withLocal(syncedEtc(glyphs), _.copy(mining = Some(miningOn)))
+
+  /** [[miningEtc]] whose DAG is being generated: 37 %, nothing mined or submitted yet. */
+  def dagGeneratingEtc(glyphs: GlyphSet = GlyphSet.Emoji): TuiState =
+    withLocal(
+      syncedEtc(glyphs),
+      _.copy(mining =
+        Some(
+          MiningSample(
+            coinbase = miningOn.coinbase,
+            dag = Some(DagSample(epoch = 364L, phase = DagPhase.Generating, progress = 37, loaded = false))
+          )
+        )
+      )
+    )
+
+  /** [[miningEtc]] with the DAG loaded and no hashrate reported for 12 minutes: the warning. */
+  def noHashrateEtc(glyphs: GlyphSet = GlyphSet.Emoji): TuiState =
+    withLocal(
+      syncedEtc(glyphs).copy(hashrateZeroSince = Some(Now.minusSeconds(12 * 60L))),
+      _.copy(mining = Some(miningOn.copy(hashrate = 0L, blocksMined = 0L, lastMinedAt = None, getWorkPerMinute = None)))
+    )
+
+  /** An ETC node with mining off: the mining panel is one line. */
+  def miningOffEtc(glyphs: GlyphSet = GlyphSet.Emoji): TuiState =
+    val s = withLocal(syncedEtc(glyphs), _.copy(mining = Some(MiningSample())))
+    s.copy(nodeSettings = s.nodeSettings.copy(miningEnabled = false))
 
   /** Every fixture by name. */
   val all: Seq[(String, GlyphSet => TuiState)] = Seq(
     "synced" -> (g => syncedEtc(g)),
     "snap-storage" -> (g => snapStorageMordor(g)),
     "regular" -> (g => regularSyncEtc(g)),
-    "sepolia-near-head" -> (g => sepoliaNearHead(g))
+    "sepolia-near-head" -> (g => sepoliaNearHead(g)),
+    "cl-disconnected" -> (g => clDisconnectedSepolia(g)),
+    "cl-waiting" -> (g => clWaitingSepolia(g)),
+    "mining" -> (g => miningEtc(g)),
+    "dag-generating" -> (g => dagGeneratingEtc(g)),
+    "no-hashrate" -> (g => noHashrateEtc(g)),
+    "mining-off" -> (g => miningOffEtc(g))
   )
 
   /** A poll at `now` that both actors answered: `peers` of 50, the sync controller at `current` of `best`. */

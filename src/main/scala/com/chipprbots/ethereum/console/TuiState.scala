@@ -3,6 +3,8 @@ package com.chipprbots.ethereum.console
 import java.time.Duration
 import java.time.Instant
 
+import org.apache.pekko.util.ByteString
+
 /** How the TUI moves (spec 027 FR-012, research §4.5). */
 enum Motion:
   /** Ripple, pulse, spinner, splash and celebration, at 4 fps while anything moves. */
@@ -64,6 +66,9 @@ enum Catchup:
   *   how many lines the Logs view is scrolled back from the newest; 0 follows the tail
   * @param scores
   *   the last two peer-score snapshots slice 4a published: the score column and its trend (FR-019, D-1)
+  * @param hashrateZeroSince
+  *   when the node's reported hashrate, with its DAG loaded, was last seen to become 0: the alert row's "no hashrate
+  *   reported for …" (§2.3). It does not run while the DAG is being built, which submits nothing
   */
 case class TuiState(
     networkName: String = "unknown",
@@ -93,7 +98,8 @@ case class TuiState(
     zeroPeersSince: Option[Instant] = None,
     logs: Vector[LogLine] = Vector.empty,
     logScroll: Int = 0,
-    scores: ScoreHistory = ScoreHistory()
+    scores: ScoreHistory = ScoreHistory(),
+    hashrateZeroSince: Option[Instant] = None
 ):
 
   import TuiState.*
@@ -199,6 +205,13 @@ case class TuiState(
     val snap = status.snapSync.orElse(
       snapSyncState.filter(_ => status.sync.value.exists(s => s.snap.isEmpty && s.snapRunning))
     )
+    // A reported hashrate of 0 with the DAG loaded starts the clock; a hashrate, or a DAG that is building, stops it; a
+    // reading the probe could not take leaves it. The internal miner submits nothing while the DAG is built, so the
+    // clock does not count that time (forge, slice 5).
+    val zeroHashrateSince = status.local.mining match
+      case Some(m) if m.dag.exists(_.loaded) && m.hashrate == 0L => hashrateZeroSince.orElse(Some(status.now))
+      case Some(_)                                               => None
+      case None                                                  => hashrateZeroSince
     val next = copy(now = status.now)
       .withPeerCount(status.peerCount, status.maxPeers)
       .withBlockInfo(status.currentBlock, status.bestBlock)
@@ -208,7 +221,8 @@ case class TuiState(
         snapSyncState = snap,
         snapshot = Some(status),
         zeroPeersSince = zeroSince,
-        scores = scores.next(status.local.peerScores)
+        scores = scores.next(status.local.peerScores),
+        hashrateZeroSince = zeroHashrateSince
       )
     val caughtUp = bestBlock > 0 && !isSynchronized && next.isSynchronized
     if !caughtUp then next
@@ -474,6 +488,11 @@ final case class ImportSample(blocks: Int, duration: Duration)
   *   the peer scores slice 4a last published to `NetworkMetrics`, once it has
   * @param lastImport
   *   the last block import regular sync timed (`RegularSyncMetrics`), once there is one
+  * @param cl
+  *   the consensus layer as the Engine API saw it: only on a node whose probe has the Engine API on a proof-of-stake
+  *   chain, so its presence is what puts the consensus-layer panel on screen (E1-E3)
+  * @param mining
+  *   the node's mining metrics: only on an ETC node, so its presence is what puts the mining panel on screen (M1, M2)
   */
 final case class LocalSample(
     diskFree: Option[Long] = None,
@@ -483,7 +502,113 @@ final case class LocalSample(
     snapCounters: Option[SnapCounters] = None,
     snapPivot: Option[Long] = None,
     peerScores: Option[PeerScores] = None,
-    lastImport: Option[ImportSample] = None
+    lastImport: Option[ImportSample] = None,
+    cl: Option[ClSample] = None,
+    mining: Option[MiningSample] = None
+)
+
+/** The Engine API's last call of one method (`EngineApiMetrics`, E1): when, and the status it was answered with. */
+final case class ClCall(at: Instant, status: String)
+
+/** The node's count of `engine_newPayload` calls by status. `accepted` is counted apart, so `invalid` is the INVALID
+  * ones alone: `engine_newpayload_invalid` has always counted the ACCEPTED ones with them. `syncing` is whatever the
+  * node counted as SYNCING, which no caller records today.
+  */
+final case class PayloadCounts(total: Long, valid: Long, syncing: Long, accepted: Long, invalid: Long)
+
+/** The block hashes of the last fork choice the node executed, as the consensus layer sent them (E2). */
+final case class ForkChoiceHashes(head: ByteString, safe: ByteString, finalized: ByteString)
+
+/** Whether the consensus layer is calling the Engine API. */
+enum ClLink:
+  /** No `engine_forkchoiceUpdated` yet. */
+  case Waiting
+
+  /** The last one is no older than [[Alerts.ClSilentAfter]]. */
+  case Connected
+
+  /** The last one is older: the consensus layer was calling and has stopped. */
+  case Disconnected
+
+/** The consensus layer as the Engine API saw it (spec 027 FR-022): the last call of each method, the payload counts,
+  * the failed authentications, and the last executed fork choice.
+  *
+  * @param forkchoiceUpdated
+  *   the last `engine_forkchoiceUpdated` the node recorded
+  * @param newPayload
+  *   the last `engine_newPayload` the node recorded. A payload the node already held is answered without a record, so
+  *   it does not move this
+  * @param authFailures
+  *   requests the JWT check answered 401
+  * @param head
+  *   the head of the last fork choice the node executed, `0x` and its hex
+  * @param safe
+  *   the safe block's number, if the consensus layer named one and the node has its header
+  * @param finalized
+  *   the finalized block's number, likewise
+  */
+final case class ClSample(
+    forkchoiceUpdated: Option[ClCall] = None,
+    newPayload: Option[ClCall] = None,
+    payloads: PayloadCounts = PayloadCounts(0L, 0L, 0L, 0L, 0L),
+    authFailures: Long = 0L,
+    head: Option[String] = None,
+    safe: Option[Long] = None,
+    finalized: Option[Long] = None
+):
+
+  /** How long ago `call` was at `now`: never negative, whichever clock is ahead. */
+  def age(call: ClCall, now: Instant): Duration =
+    val gap = Duration.between(call.at, now)
+    if gap.isNegative then Duration.ZERO else gap
+
+  /** The link, at `now`. */
+  def link(now: Instant): ClLink = forkchoiceUpdated.map(age(_, now)) match
+    case None                                                       => ClLink.Waiting
+    case Some(silent) if silent.compareTo(Alerts.ClSilentAfter) > 0 => ClLink.Disconnected
+    case Some(_)                                                    => ClLink.Connected
+
+/** What a DAG build is doing (`pow_dag_phase`). */
+enum DagPhase:
+  /** The build has started and does not yet say which it is: the cache is being made. */
+  case Pending
+
+  /** Loading the DAG from its file. */
+  case Loading
+
+  /** Generating the DAG. */
+  case Generating
+
+/** The DAG the miner is building or has built (M2): the ECIP-1099 epoch (60,000 blocks), the build's phase and percent,
+  * and whether the DAG is in memory.
+  */
+final case class DagSample(epoch: Long, phase: DagPhase, progress: Int, loaded: Boolean)
+
+/** The node's mining metrics (`PoWMiningMetrics`, M1 and M2).
+  *
+  * @param coinbase
+  *   the address the miner pays, `0x` and its hex
+  * @param hashrate
+  *   the hashrate in hashes a second as last submitted (`eth_submitHashrate`, or the internal miner), 0 if none was. It
+  *   is only ever set by a submission, so it does not fall when a miner goes quiet
+  * @param lastMinedAt
+  *   when the node last mined a block, if it has
+  * @param getWork
+  *   `eth_getWork` requests answered since the node started
+  * @param getWorkPerMinute
+  *   those over the last minute, once the probe has two readings at least 5 s apart
+  * @param dag
+  *   the DAG, once a build has started
+  */
+final case class MiningSample(
+    coinbase: Option[String] = None,
+    hashrate: Long = 0L,
+    blocksMined: Long = 0L,
+    lastMinedAt: Option[Instant] = None,
+    staleShares: Long = 0L,
+    getWork: Long = 0L,
+    getWorkPerMinute: Option[Long] = None,
+    dag: Option[DagSample] = None
 )
 
 /** The JVM's heap in bytes, and the share of wall time spent in GC between the last two polls (0 to 1). */
