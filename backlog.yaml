@@ -2296,3 +2296,13 @@ items:
     refs: []
     links: {}
     notes: "Root can create the directory the test expects to be refused. Seen in a cloud container on staging 0.11.44 and on #1788 alike."
+  - id: B-206
+    title: "StackTrieSpec: two cases take 3.5 min of Tier 1 because TestMptStorage re-stores the whole trie on every put"
+    priority: P3
+    status: open
+    area: ci
+    size: S
+    opened: 2026-11-11
+    refs: []
+    links: {}
+    notes: "'10 000 random 32-byte keys' (2 min) and 'large random corpus' (1.2 min), the same on staging 0.11.44 and on #1788. Quadratic in the test double, not in the trie."
