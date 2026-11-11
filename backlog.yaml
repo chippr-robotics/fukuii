@@ -2241,3 +2241,14 @@ items:
     refs: ["beacon review of 027 slice 5, 2026-11-10"]
     links: {}
     notes: beacon's scrape (micrometer 1.16.6 + prometheus-metrics 1.4.3) exposes non-counter app_engine_newpayload_total as app_engine_newpayload; ops/grafana/Network/fukuii-network-overview.json:66,82,119,120 query the _total form. Verify on the pinned prometheus-metrics 1.3.10 with a live /metrics scrape, then fix names or dashboards.
+  - id: B-201
+    title: TUI Forks detail row is cut mid-timestamp at 100 columns on an ETH node (tier M minimum)
+    priority: P3
+    status: open
+    area: tui
+    size: S
+    opened: 2026-11-11
+    refs: ["prism review of 027 slice 5, 2026-11-10"]
+    links:
+      spec: specs/027-tui-dashboard
+    notes: "console/panels/ForkRows at 100x32: slice 5's 100-column CL goldens hold the panel rows only because the full frame fails TuiGoldenLintSpec on this row. Fix the row, then add a full-frame 100x32 golden."
