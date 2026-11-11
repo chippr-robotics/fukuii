@@ -27,7 +27,7 @@ class StateConfigSpec extends AnyFlatSpec with Matchers:
     config.pathLive shouldBe false
     config.pruning shouldBe StateConfig.Pruning(Mode.Basic, 64)
     config.changeset shouldBe StateConfig.Changeset(maxEntriesPerOwnerDelete = 1000000L, maxRecordBytes = 268435456L)
-    config.retention shouldBe StateConfig.Retention(finalityMargin = 16, maxBlocks = 512)
+    config.retention shouldBe StateConfig.Retention(finalityMargin = 16, maxBlocks = 512, withoutFinality = 512)
     config.overlay shouldBe StateConfig.Overlay(
       maxBytes = 268435456L,
       pinnedMaxBytes = 268435456L,
@@ -50,6 +50,7 @@ class StateConfigSpec extends AnyFlatSpec with Matchers:
       "changeset.max-record-bytes",
       "retention.finality-margin",
       "retention.max-blocks",
+      "retention.without-finality",
       "overlay.max-bytes",
       "overlay.pinned-max-bytes",
       "overlay.max-forward-layers",
@@ -73,9 +74,7 @@ class StateConfigSpec extends AnyFlatSpec with Matchers:
   it should "keep changesets for the history, raised to reach the finalized block with a margin, up to the bound" taggedAs
     UnitTest in {
       val config = StateConfig(fukuii())
-      // a chain with no finalized block (ETC) keeps the history
-      config.retained(anchorNumber = 1000, finalized = None) shouldBe 64
-      // a finalized block close behind: the history still
+      // a finalized block close behind: the history
       config.retained(1000, Some(BigInt(990))) shouldBe 64
       // the usual lag of a consensus client, 90 blocks: 90 + the margin of 16
       config.retained(1000, Some(BigInt(910))) shouldBe 106
@@ -87,9 +86,30 @@ class StateConfigSpec extends AnyFlatSpec with Matchers:
       an[IllegalArgumentException] should be thrownBy StateConfig(fukuii("fukuii.state.retention.max-blocks = 32"))
     }
 
+  // User decision, 2026-11-11. A proof-of-work chain has no finalized block to stretch the floor to, and 64 blocks is
+  // far less than ETC has been reorganised by: a deeper reorganisation would be refused and the state synced again.
+  it should "keep 512 blocks of changesets where there is no finalized block, as on a proof-of-work chain" taggedAs
+    UnitTest in {
+      val config = StateConfig(fukuii())
+      config.retained(anchorNumber = 25000000, finalized = None) shouldBe 512
+      config.maxReorgDepth(25000000, None) shouldBe 512
+      // the same for a node whose consensus client has not reported a finalized block yet
+      config.retained(1000, None) shouldBe 512
+
+      // it is a setting: never below the history, never above the bound
+      StateConfig(fukuii("fukuii.state.retention.without-finality = 200")).retained(1000, None) shouldBe 200
+      StateConfig(fukuii("fukuii.state.retention.without-finality = 10")).retained(1000, None) shouldBe 64
+      an[IllegalArgumentException] should be thrownBy StateConfig(
+        fukuii("fukuii.state.retention.without-finality = 1000")
+      )
+      // and it says nothing where there is a finalized block
+      StateConfig(fukuii("fukuii.state.retention.without-finality = 200"))
+        .retained(1000, Some(BigInt(910))) shouldBe 106
+    }
+
   it should "resolve the reorg depth to the retention floor, and honour a number only below it" taggedAs UnitTest in {
     val floor = StateConfig(fukuii())
-    floor.maxReorgDepth(1000, None) shouldBe 64
+    floor.maxReorgDepth(1000, None) shouldBe 512
     // a reorg at the finalized lag is inside the floor, where a bare history would refuse it
     floor.maxReorgDepth(1000, Some(BigInt(910))) shouldBe 106
 
@@ -98,7 +118,7 @@ class StateConfigSpec extends AnyFlatSpec with Matchers:
     shallow.maxReorgDepth(1000, Some(BigInt(910))) shouldBe 10
 
     // deeper than the records reach cannot be honoured
-    StateConfig(fukuii("fukuii.state.reorg.max-depth = 5000")).maxReorgDepth(1000, None) shouldBe 64
+    StateConfig(fukuii("fukuii.state.reorg.max-depth = 5000")).maxReorgDepth(1000, None) shouldBe 512
 
     an[IllegalArgumentException] should be thrownBy StateConfig(fukuii("fukuii.state.reorg.max-depth = deepest"))
     an[IllegalArgumentException] should be thrownBy StateConfig(fukuii("fukuii.state.reorg.max-depth = 0"))
