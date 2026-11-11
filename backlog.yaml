@@ -2273,3 +2273,13 @@ items:
       spec: specs/018-storage-engine-consolidation
     depends_on: [B-053]
     notes: "C1 (#1788) records a stand-in for M7 only: bytes allocated per trie op, within 1% of the parent (baselines/m7-c1.md). The gate itself needs T002-T004."
+  - id: B-204
+    title: "MerklePatriciaTrie.getFromHash decodes every node twice: about 50 KB allocated per get on a 50k-key trie"
+    priority: P3
+    status: open
+    area: storage
+    size: S
+    opened: 2026-11-11
+    refs: [018 C1]
+    links: {}
+    notes: "Found by TrieAllocationBenchmark (#1788). The storage returns a decoded node; getFromHash encodes and decodes it again. Shared trie code: forge and beacon before any change."
