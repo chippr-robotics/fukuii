@@ -49,7 +49,6 @@ store-handed 3 src/main/scala/com/chipprbots/ethereum/db/storage/pathstate/PathM
 store-handed 2 src/main/scala/com/chipprbots/ethereum/db/storage/pathstate/PathStateStorage.scala the position store's two doors, each over the view of a block: what the seam of C2b hands out (kept)
 store-handed 4 src/main/scala/com/chipprbots/ethereum/domain/Blockchain.scala the two accessors, declared and defined; deleted with the Hash scheme (C8b)
 trie-of 7 src/main/scala/com/chipprbots/ethereum/mpt/MerklePatriciaTrie.scala the trie's own constructors, and the copies its updates return (kept)
-get-by-hash 1 src/main/scala/com/chipprbots/ethereum/mpt/MerklePatriciaTrie.scala an arm of getProof that nothing reaches (pathTraverse resolves every hash node before the arm sees one), and its unpositioned read; deleted in C2b (T051)
 visit-hash 1 src/main/scala/com/chipprbots/ethereum/mpt/MptVisitors/MptVisitor.scala the definition of the visitor's member
 visit-hash 1 src/main/scala/com/chipprbots/ethereum/mpt/MptVisitors/RlpEncVisitor.scala encodes a hash node as its hash and resolves nothing (kept)
 visit-hash 1 src/main/scala/com/chipprbots/ethereum/mpt/MptVisitors/RlpHashingVisitor.scala hands the hash node to the encoder and resolves nothing (kept)

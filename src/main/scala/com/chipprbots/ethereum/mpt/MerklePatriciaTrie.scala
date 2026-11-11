@@ -190,10 +190,8 @@ class MerklePatriciaTrie[K, V] private (private[mpt] val rootNode: Option[MptNod
     */
   def getProof(key: K): Option[Vector[MptNode]] =
     val result = pathTraverse[Vector[MptNode]](Vector.empty, mkKeyNibbles(key), proofMode = true) { case (acc, node) =>
+      // The traversal resolves a hash node, at its position, before it hands a node over: none arrives here.
       node match
-        case Some(hash: HashNode) =>
-          // Resolve hash references to actual nodes for the proof
-          acc :+ getFromHash(hash.hashNode, nodeStorage)
         case Some(nextNode @ (_: BranchNode | _: ExtensionNode | _: LeafNode)) =>
           acc :+ nextNode
         case _ => acc
@@ -286,9 +284,6 @@ class MerklePatriciaTrie[K, V] private (private[mpt] val rootNode: Option[MptNod
         pathTraverse(acc, root, searchKey, NibblePath.Empty, op)
       case None =>
         None
-
-  private def getFromHash(nodeId: Array[Byte], source: MptStorage): MptNode =
-    decodedAgain(nodeId, source.get(nodeId))
 
   /** The node `nodeId` names, which sits at `path` in this trie. */
   private def getFromHash(nodeId: Array[Byte], path: NibblePath, source: MptStorage): MptNode =
