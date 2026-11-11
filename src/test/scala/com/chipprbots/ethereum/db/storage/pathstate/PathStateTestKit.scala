@@ -373,6 +373,22 @@ object PathStateTestKit:
     override def iterate(namespace: Namespace): Stream[IO, Either[IterationError, (Array[Byte], Array[Byte])]] =
       under.iterate(namespace)
 
+  /** Every row of the hash store's column family (`n`): what the unified layout must leave as it finds it, since a
+    * path-live store has one writer and it is not that one (data-model 7.6).
+    */
+  def hashStoreRows(dataSource: DataSource): Map[ByteString, ByteString] =
+    import cats.effect.unsafe.implicits.global
+    dataSource
+      .iterate(Namespaces.NodeNamespace)
+      .compile
+      .toList
+      .unsafeRunSync()
+      .map {
+        case Right((key, value)) => ByteString(key) -> ByteString(value)
+        case Left(error)         => throw new IllegalStateException("the hash store could not be read", error.ex)
+      }
+      .toMap
+
   /** Every row of CF `t` and CF `u`, by its key in its column family. */
   def allRows(rows: PathNodeStorage): (Map[ByteString, ByteString], Map[ByteString, ByteString]) =
     val accounts = Map.newBuilder[ByteString, ByteString]

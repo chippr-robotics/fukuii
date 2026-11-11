@@ -127,8 +127,13 @@ class ImportOnPositionsSpec extends ScalaTestWithActorTestKit with AnyFlatSpecLi
       refOf(header)
     )
     header
-  private lazy val onPositions: RpcCompatNode =
+
+  /** The hash store of the datadir as the genesis load left it: nothing may be added to it. */
+  private lazy val hashStoreAtGenesis: Map[ByteString, ByteString] =
     genesis
+    PathStateTestKit.hashStoreRows(source)
+  private lazy val onPositions: RpcCompatNode =
+    hashStoreAtGenesis
     nodeOver(source, guard = true)
   private lazy val execution = importPath(onPositions)
   private def pathState = onPositions.storagesInstance.storages.pathStateStorage.get
@@ -159,7 +164,9 @@ class ImportOnPositionsSpec extends ScalaTestWithActorTestKit with AnyFlatSpecLi
       val unadopted = the[StateUnavailable] thrownBy importOne(onPositions, execution, blocks.head, adopt = false)
       unadopted.reason should include("not adopted")
       // a payload ahead of the head: its state committed apart from the block
-      a[StateUnavailable] should be thrownBy execution.executeAndValidateBlock(blocks.head, alreadyValidated = true)
+      // refused before it runs, not when its state comes to be committed
+      val apart = the[StateUnavailable] thrownBy execution.executeAndValidateBlock(blocks.head, alreadyValidated = true)
+      apart.reason should include("committed apart from the block")
       disk shouldBe before
       pathState.anchor shouldBe Some(refOf(genesis))
       onPositions.blockchainReader.getBestBlockNumber shouldBe BigInt(0)
@@ -208,12 +215,18 @@ class ImportOnPositionsSpec extends ScalaTestWithActorTestKit with AnyFlatSpecLi
             (parent.hash.value, parent.stateRoot.value, header.stateRoot.value)
           tombstones += (if diff.incomplete then 1 else 0)
           positions += diff.changes.size
-          storageRowsDeleted += diff.changes.count((position, change) => position.owner.isDefined && change.next.isEmpty)
+          storageRowsDeleted += diff.changes.count((position, change) =>
+            position.owner.isDefined && change.next.isEmpty
+          )
         }
         parent = header
       }
       tombstones shouldBe 0
       parent.hash shouldBe referenceHead.header.hash
+      // one writer of the state, and it is not the hash store's (data-model 7.6): 60 blocks later it holds what the
+      // genesis load put there, and no node more
+      hashStoreAtGenesis should not be empty
+      PathStateTestKit.hashStoreRows(source) shouldBe hashStoreAtGenesis
       // every block changes the state: a reward, a fee, a system contract's slot
       positions should be >= blocks.size
       info(s"${blocks.size} blocks, $positions positions changed, $storageRowsDeleted rows of storage tries deleted")
@@ -271,14 +284,32 @@ class ImportOnPositionsSpec extends ScalaTestWithActorTestKit with AnyFlatSpecLi
       moved.map(_.payloadId) shouldBe Right(None)
       // a block it does not have
       val unknown = ByteString(Array.fill[Byte](32)(0x5a))
-      engine.forkchoiceUpdated(ForkChoiceState(unknown, zero, zero), None).unsafeRunSync().map(_.payloadStatus.status) shouldBe
+      engine
+        .forkchoiceUpdated(ForkChoiceState(unknown, zero, zero), None)
+        .unsafeRunSync()
+        .map(_.payloadStatus.status) shouldBe
         Right(PayloadStatus.Syncing)
       onPositions.blockchainReader.getBestBlockHeader.map(_.hash) shouldBe Some(head.hash)
       pathState.anchor shouldBe Some(refOf(head))
       disk shouldBe before
 
+      // a payload asked for on the block the disk holds: none can be built yet, and no id is handed out
+      import com.chipprbots.ethereum.consensus.engine.PayloadAttributes
+      import com.chipprbots.ethereum.domain.Address
+      val asked = engine
+        .forkchoiceUpdated(
+          ForkChoiceState(head.hash.value, zero, zero),
+          Some(PayloadAttributes(4102444800L, zero, Address(1)))
+        )
+        .unsafeRunSync()
+      asked.map(_.payloadStatus.status) shouldBe Right(PayloadStatus.Syncing)
+      asked.map(_.payloadId) shouldBe Right(None)
+
       // the block the disk holds is a head like any other
-      engine.forkchoiceUpdated(ForkChoiceState(head.hash.value, zero, zero), None).unsafeRunSync().map(_.payloadStatus.status) shouldBe
+      engine
+        .forkchoiceUpdated(ForkChoiceState(head.hash.value, zero, zero), None)
+        .unsafeRunSync()
+        .map(_.payloadStatus.status) shouldBe
         Right(PayloadStatus.Valid)
       onPositions.blockchainReader.getBestBlockHeader.map(_.hash) shouldBe Some(head.hash)
       pathState.anchor shouldBe Some(refOf(head))
@@ -307,7 +338,10 @@ class ImportOnPositionsSpec extends ScalaTestWithActorTestKit with AnyFlatSpecLi
       val node = new RpcCompatNode:
         override lazy val storagesInstance
             : EphemDataSourceComponent & LocalPruningConfigBuilder & Storages.DefaultStorages =
-          new Shared(other) with LocalPruningConfigBuilder with Storages.DefaultStorages with TestInstanceConfigProvider:
+          new Shared(other)
+            with LocalPruningConfigBuilder
+            with Storages.DefaultStorages
+            with TestInstanceConfigProvider:
             override protected def statePathLive: Boolean = true
         // the production staging, with the prefetch's request for a reader counted
         override lazy val blockchain: BlockchainImpl =
@@ -337,7 +371,10 @@ class ImportOnPositionsSpec extends ScalaTestWithActorTestKit with AnyFlatSpecLi
                 ): Unit = staged.commitWith(blockNumber, blockHash, extra)
                 override def isBlockApplied(blockHash: ByteString): Boolean = staged.isBlockApplied(blockHash)
                 override def discard(): Unit = staged.discard()
-                override def prefetchReader(budgetBytes: Long, onLoaded: ByteString => Unit): Option[PrefetchNodeReader] =
+                override def prefetchReader(
+                    budgetBytes: Long,
+                    onLoaded: ByteString => Unit
+                ): Option[PrefetchNodeReader] =
                   val reader = staged.prefetchReader(budgetBytes, onLoaded)
                   readersAsked += 1
                   if reader.isDefined then readersGiven += 1
@@ -348,7 +385,9 @@ class ImportOnPositionsSpec extends ScalaTestWithActorTestKit with AnyFlatSpecLi
       blocks.foreach { block =>
         val list = reference.blockchainReader
           .getBlockAccessListByHash(block.header.hash)
-          .map(bytes => BlockAccessList.decode(bytes).fold(e => fail(s"the reference's list does not decode: $e"), identity))
+          .map(bytes =>
+            BlockAccessList.decode(bytes).fold(e => fail(s"the reference's list does not decode: $e"), identity)
+          )
         supplied += list.size
         val weight = node.blockchainReader.getChainWeightByHash(block.header.parentHash).getOrElse(ChainWeight.zero)
         val (imported, error) = withLists.executeAndValidateBlocksWithAccessLists(

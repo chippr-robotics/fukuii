@@ -195,6 +195,24 @@ class ConfigValidatorSpec extends AnyFlatSpec with Matchers:
     ConfigValidator.stateGuardErrors(cfg("state.path-live = true\nmining.mining-enabled = false")) shouldBe empty
   }
 
+  // Both execute with nothing staged until the proposer view and the ported import (C3c): the node would fail while
+  // it starts.
+  it should "refuse state.path-live with a chain file imported at start, and with test mode" taggedAs UnitTest in {
+    val withFile =
+      ConfigValidator.stateGuardErrors(cfg("state.path-live = true\nimport-chain-file = \"/data/chain.rlp\""))
+    withFile should have size 1
+    withFile.head should (include("fukuii.import-chain-file").and(include("admin_importChain")))
+    ConfigValidator.stateGuardErrors(cfg("state.path-live = true\nimport-chain-file = \"\"")) shouldBe empty
+    ConfigValidator.stateGuardErrors(
+      cfg("state.path-live = false\nimport-chain-file = \"/data/chain.rlp\"")
+    ) shouldBe empty
+
+    val inTestMode = ConfigValidator.stateGuardErrors(cfg("state.path-live = true\ntestmode = true"))
+    inTestMode should have size 1
+    inTestMode.head should include("fukuii.testmode = false")
+    ConfigValidator.stateGuardErrors(cfg("state.path-live = false\ntestmode = true")) shouldBe empty
+  }
+
   it should "accept the guard with SNAP sync off, and SNAP sync with the guard off or not set" taggedAs UnitTest in {
     ConfigValidator.validate(cfg("state.path-live = true\nsync.do-snap-sync = false")) shouldBe empty
     ConfigValidator.validate(cfg("state.path-live = false\nsync.do-snap-sync = true")) shouldBe empty

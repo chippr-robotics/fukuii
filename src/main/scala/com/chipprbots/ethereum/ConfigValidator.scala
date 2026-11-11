@@ -65,10 +65,13 @@ object ConfigValidator extends Logger:
     * mutual, so no peer offers SNAP to such a node, and a SNAP sync would wait for a snap-capable peer for ever.
     *
     * And a block is built over a view of its parent's state, which the builders do not take yet (the proposer view,
-    * C3c): a miner on the guard would build on a store that is not this chain's state.
+    * C3c): a miner on the guard would build on a store that is not this chain's state. The chain file imported at start
+    * and the test mode both execute with nothing staged until the same slice, and the unified layout refuses that: the
+    * node would fail while it starts (forge).
     */
   def stateGuardErrors(config: TypesafeConfig): List[String] =
     def on(key: String): Boolean = config.hasPath(key) && config.getBoolean(key)
+    def named(key: String): Boolean = config.hasPath(key) && config.getString(key).trim.nonEmpty
     if !on("state.path-live") then Nil
     else
       List(
@@ -81,6 +84,17 @@ object ConfigValidator extends Logger:
           "fukuii.state.path-live = true (the in-development guard of the unified state layout) cannot run with " +
             "fukuii.mining.mining-enabled = true: a block cannot be built on the unified layout until its builders " +
             "take a view of the parent's state (spec 018 C3c). Set fukuii.mining.mining-enabled = false."
+        ),
+        Option.when(named("import-chain-file"))(
+          "fukuii.state.path-live = true (the in-development guard of the unified state layout) cannot run with " +
+            "fukuii.import-chain-file: the import at start executes its blocks with nothing staged until spec 018 " +
+            "C3c. Import the file with the `import` command or admin_importChain, which commit each block with " +
+            "its state, and start the node without the key."
+        ),
+        Option.when(on("testmode"))(
+          "fukuii.state.path-live = true (the in-development guard of the unified state layout) cannot run with " +
+            "fukuii.testmode = true: test mode executes with nothing staged until spec 018 C3c. Set " +
+            "fukuii.testmode = false."
         )
       ).flatten
 

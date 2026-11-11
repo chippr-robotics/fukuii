@@ -231,7 +231,8 @@ abstract class BaseNode extends Node:
       log.error(
         "[STATE-PATH-LIVE] fukuii.state.path-live is on: this node does NOT sync from the network. The unified " +
           "state layout holds the state of one block until its overlay lands (spec 018 C4), so it cannot follow a " +
-          "side branch or a reorganisation. It imports chain files and answers from the state it holds."
+          "side branch or a reorganisation. It takes blocks from a chain file (the `import` command, " +
+          "admin_importChain) and answers from the state it holds."
       )
     else syncController ! SyncController.WrappedSyncProtocol(SyncProtocol.Start)
 

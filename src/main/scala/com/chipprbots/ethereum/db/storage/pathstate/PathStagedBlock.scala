@@ -58,8 +58,8 @@ final class PathStagedBlock(state: PathStateStorage, block: BlockRef, parent: ()
   /** Commits the block as the block whose state the disk holds, with `extra` in the same batch.
     *
     * @throws StateUnavailable
-    *   when the block does not extend the state the disk holds, or `extra` is missing: a block's state is not
-    *   committed here without the block
+    *   when the block does not extend the state the disk holds, or `extra` is missing: a block's state is not committed
+    *   here without the block
     */
   override def commitWith(blockNumber: BigInt, blockHash: ByteString, extra: Option[DataSourceBatchUpdate]): Unit =
     require(

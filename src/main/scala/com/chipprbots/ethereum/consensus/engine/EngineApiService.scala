@@ -712,6 +712,11 @@ class EngineApiService(
                 stateHoles.report(payload.blockNumber, hole, parentHeader.map(_.stateRoot.value))
                 log.warn("[ENGINE-API] newPayload #{}: MPT error, not executed", payload.blockNumber)
                 None
+              case unavailable: com.chipprbots.ethereum.db.storage.pathstate.StateFault =>
+                // A condition of this node's own state, said as that: the payload is kept and answered ACCEPTED
+                // below, never INVALID (spec 018 data-model 6.3.2).
+                log.info("[ENGINE-API] newPayload #{}: not executed: {}", payload.blockNumber, unavailable.getMessage)
+                None
               case e: Exception =>
                 log.warn("[ENGINE-API] newPayload #{}: error={}, not executed", payload.blockNumber, e.getMessage)
                 None
@@ -815,6 +820,16 @@ class EngineApiService(
         "[ENGINE-API] forkchoiceUpdated: head {} is not the block whose state this node holds; the unified state " +
           "layout cannot move its head yet (SYNCING)",
         org.bouncycastle.util.encoders.Hex.toHexString(forkChoiceState.headBlockHash.toArray).take(16)
+      )
+      EngineApiMetrics.recordForkchoiceUpdated("SYNCING")
+      IO.pure(Right(ForkchoiceUpdatedResponse(payloadStatus = PayloadStatusV1(Syncing))))
+    else if stateHeldInPlace.isDefined && payloadAttributes.isDefined then
+      // A payload is built over its parent's state, which the builders do not read from the unified layout until
+      // they take a view of it (the proposer view, spec 018 C3c). Answered here, with no payload id, where a build
+      // that fails later would leave the consensus client holding an id that getPayload cannot serve (beacon).
+      log.error(
+        "[ENGINE-API] forkchoiceUpdated: a payload was asked for; a block cannot be built on the unified state " +
+          "layout yet (spec 018 C3c). Answering SYNCING with no payload id."
       )
       EngineApiMetrics.recordForkchoiceUpdated("SYNCING")
       IO.pure(Right(ForkchoiceUpdatedResponse(payloadStatus = PayloadStatusV1(Syncing))))

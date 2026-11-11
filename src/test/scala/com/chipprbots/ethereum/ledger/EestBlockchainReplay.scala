@@ -286,12 +286,12 @@ object EestBlockchainReplay:
     * `BlockExecution.executeAndValidateBlocks`, which stages each block over its parent's state and commits it in one
     * batch with the block.
     *
-    * The genesis is loaded as it is today and its state copied into the position store, with the anchor at the
-    * genesis block (the genesis commit is C3c's). After every block the fixture keeps, the rows of CF `t` and CF `u`
-    * must be exactly the block's state: a walk of the raw nodes from the header's state root, finding each node among
-    * the rows by its hash, says which row belongs at which position, and the disk must hold those rows and no other.
-    * Then the block's changeset record is held to take the rows back to what they were before it. A block the fixture
-    * rejects must leave rows, anchor and best block as they were.
+    * The genesis is loaded as it is today and its state copied into the position store, with the anchor at the genesis
+    * block (the genesis commit is C3c's). After every block the fixture keeps, the rows of CF `t` and CF `u` must be
+    * exactly the block's state: a walk of the raw nodes from the header's state root, finding each node among the rows
+    * by its hash, says which row belongs at which position, and the disk must hold those rows and no other. Then the
+    * block's changeset record is held to take the rows back to what they were before it. A block the fixture rejects
+    * must leave rows, anchor and best block as they were.
     */
   def replayOnPositions(t: JValue): OnPositions =
     import com.chipprbots.ethereum.crypto.kec256
@@ -332,6 +332,8 @@ object EestBlockchainReplay:
             refOf(gh)
           )
 
+          val hashStoreAfterGenesis = PathStateTestKit.hashStoreRows(source)
+
           // The node on the unified layout, over the datadir that now holds the genesis state as rows.
           val env = new EnvOver(source, guard = true)
           val pathState = env.storagesInstance.storages.pathStateStorage.get
@@ -350,16 +352,23 @@ object EestBlockchainReplay:
 
           /** What the disk must hold for the state at `root`, each node found among the rows by its hash. */
           def stateOnDisk(root: ByteString, held: Disk): Either[String, Disk] =
-            val byHash = (held._1.valuesIterator ++ held._2.valuesIterator).map(n => ByteString(kec256(n.toArray)) -> n).toMap
+            val byHash =
+              (held._1.valuesIterator ++ held._2.valuesIterator).map(n => ByteString(kec256(n.toArray)) -> n).toMap
             Try(
               RawTrieWalk.statePositions(
                 root.toArray,
-                hash => byHash.getOrElse(ByteString(hash), throw new NoSuchElementException("a node of the state has no row")).toArray
+                hash =>
+                  byHash
+                    .getOrElse(ByteString(hash), throw new NoSuchElementException("a node of the state has no row"))
+                    .toArray
               )
             ).toEither.left.map(e => s"the state cannot be walked from the rows: $e").map { positions =>
               (
                 positions.getOrElse(None, Map.empty),
-                positions.collect { case (Some(owner), trie) => trie.map((hp, node) => (owner ++ hp) -> node) }.flatten.toMap
+                positions
+                  .collect { case (Some(owner), trie) => trie.map((hp, node) => (owner ++ hp) -> node) }
+                  .flatten
+                  .toMap
               )
             }
 
@@ -372,9 +381,10 @@ object EestBlockchainReplay:
             val bestBefore = env.blockchainReader.getBestBlockHeader.map(_.hash)
             val outcome: Either[String, Block] =
               Try(hx(str(b \ "rlp")).toBlock).toEither.left.map(e => s"undecodable: $e").flatMap { block =>
-                val weight = env.blockchainReader.getChainWeightByHash(block.header.parentHash).getOrElse(ChainWeight.zero)
+                val weight =
+                  env.blockchainReader.getChainWeightByHash(block.header.parentHash).getOrElse(ChainWeight.zero)
                 blockExecution.executeAndValidateBlocks(List(block), weight, adoptEachBlock = true) match
-                  case (List(_), None) => Right(block)
+                  case (List(_), None)  => Right(block)
                   case (_, Some(error)) => Left(error.describe)
                   case (other, None)    => Left(s"imported ${other.size} blocks of one")
               }
@@ -387,7 +397,8 @@ object EestBlockchainReplay:
                 val reversed: Option[Disk] = record.map { diff =>
                   diff.changes.foldLeft(now) { case ((accounts, storage), (position, change)) =>
                     val key = ByteString(position.rowKey)
-                    if position.owner.isEmpty then (change.prior.fold(accounts - key)(n => accounts + (key -> n)), storage)
+                    if position.owner.isEmpty then
+                      (change.prior.fold(accounts - key)(n => accounts + (key -> n)), storage)
                     else (accounts, change.prior.fold(storage - key)(n => storage + (key -> n)))
                   }
                 }
@@ -395,33 +406,57 @@ object EestBlockchainReplay:
                   positionsChanged += diff.changes.size
                   tombstones += (if diff.incomplete then 1 else 0)
                   storageRowsDeleted += diff.changes.count((p, c) => p.owner.isDefined && c.next.isEmpty)
-                  storageTriesEmptied += diff.changes.count((p, c) => p.owner.isDefined && p.path.length == 0 && c.next.isEmpty)
+                  storageTriesEmptied += diff.changes.count((p, c) =>
+                    p.owner.isDefined && p.path.length == 0 && c.next.isEmpty
+                  )
                 }
                 Seq(
-                  stateOnDisk(header.stateRoot.value, now).fold(Some(_), state => Option.when(state != now)(
-                    s"the rows are not the block's state: ${(now._1.keySet ++ now._2.keySet).diff(state._1.keySet ++ state._2.keySet).size} rows too many, " +
-                      s"${(state._1.keySet ++ state._2.keySet).diff(now._1.keySet ++ now._2.keySet).size} missing"
-                  )),
-                  Option.when(!pathState.anchor.contains(refOf(header)))(s"the anchor is ${pathState.anchor.map(_.show)}"),
-                  Option.when(!env.blockchainReader.getBestBlockHeader.map(_.hash).contains(header.hash))("the best block is not the block"),
+                  stateOnDisk(header.stateRoot.value, now).fold(
+                    Some(_),
+                    state =>
+                      Option.when(state != now)(
+                        s"the rows are not the block's state: ${(now._1.keySet ++ now._2.keySet).diff(state._1.keySet ++ state._2.keySet).size} rows too many, " +
+                          s"${(state._1.keySet ++ state._2.keySet).diff(now._1.keySet ++ now._2.keySet).size} missing"
+                      )
+                  ),
+                  Option.when(!pathState.anchor.contains(refOf(header)))(
+                    s"the anchor is ${pathState.anchor.map(_.show)}"
+                  ),
+                  Option.when(!env.blockchainReader.getBestBlockHeader.map(_.hash).contains(header.hash))(
+                    "the best block is not the block"
+                  ),
                   Option.when(record.isEmpty)("no changeset record"),
-                  record.flatMap(diff => Option.when(diff.validate.nonEmpty)(s"the record: ${diff.validate.mkString("; ")}")),
-                  record.flatMap(diff => Option.when(!diff.incomplete && !reversed.contains(before))("the record does not take the rows back"))
+                  record.flatMap(diff =>
+                    Option.when(diff.validate.nonEmpty)(s"the record: ${diff.validate.mkString("; ")}")
+                  ),
+                  record.flatMap(diff =>
+                    Option.when(!diff.incomplete && !reversed.contains(before))(
+                      "the record does not take the rows back"
+                    )
+                  )
                 ).flatten.map(d => s"block[$i] (number ${header.number}): $d")
               case (Left(_), Some(_)) =>
                 rejected += 1
                 Seq(
                   Option.when(disk != before)("a rejected block changed the rows"),
                   Option.when(pathState.anchor != anchorBefore)("a rejected block moved the anchor"),
-                  Option.when(env.blockchainReader.getBestBlockHeader.map(_.hash) != bestBefore)("a rejected block moved the best block")
+                  Option.when(env.blockchainReader.getBestBlockHeader.map(_.hash) != bestBefore)(
+                    "a rejected block moved the best block"
+                  )
                 ).flatten.map(d => s"block[$i]: $d")
               case (Right(_), Some(ex)) => Seq(s"block[$i] accepted, fixture expects $ex")
               case (Left(err), None)    => Seq(s"block[$i] rejected: $err")
           }
           val head = env.blockchainReader.getBestBlock.map(b => "0x" + Hex.toHexString(b.header.hash.value.toArray))
           val expectedHead = str(t \ "lastblockhash")
+          // one writer of the state, and not the hash store's (data-model 7.6)
+          val hashStoreWritten =
+            Option.when(PathStateTestKit.hashStoreRows(source) != hashStoreAfterGenesis)(
+              "the hash store was written to"
+            )
           OnPositions(
-            divergences ++ (if head.contains(expectedHead) then Nil else Seq(s"head $head != $expectedHead")),
+            divergences ++ hashStoreWritten ++
+              (if head.contains(expectedHead) then Nil else Seq(s"head $head != $expectedHead")),
             kept,
             rejected,
             positionsChanged,

@@ -13,8 +13,8 @@ import com.chipprbots.ethereum.domain.Receipt
 import com.chipprbots.ethereum.utils.BlockchainConfig
 
 /** The import path's block execution, for a test chain whose headers cannot pass the check made before execution (the
-  * execution-apis chain's first blocks carry fake Ethash seals). Everything after that check is the production
-  * path's: execution, the checks made after it, the staging and the one commit.
+  * execution-apis chain's first blocks carry fake Ethash seals). Everything after that check is the production path's:
+  * execution, the checks made after it, the staging and the one commit.
   */
 class HeaderTrustingBlockExecution(
     blockchain: BlockchainImpl,
@@ -23,7 +23,14 @@ class HeaderTrustingBlockExecution(
     evmCodeStorage: EvmCodeStorage,
     blockPreparator: BlockPreparator,
     blockValidation: BlockValidation
-) extends BlockExecution(blockchain, blockchainReader, blockchainWriter, evmCodeStorage, blockPreparator, blockValidation):
+) extends BlockExecution(
+      blockchain,
+      blockchainReader,
+      blockchainWriter,
+      evmCodeStorage,
+      blockPreparator,
+      blockValidation
+    ):
 
   override protected[ledger] def executeAndValidateStaged(
       block: Block,

@@ -13,9 +13,9 @@ import com.chipprbots.ethereum.testing.Tags.*
   * unified state layout through the node's import path ([[EestBlockchainReplay.replayOnPositions]]).
   *
   * The vendored fixtures are the regression vectors and the one that removes contracts which hold storage
-  * (`selfdestruct-stored-storage.json`: SELFDESTRUCT before EIP-6780, on Paris and Shanghai), where a storage trie
-  * that is replaced must have every row deleted and put back by a reverse. `EEST_IMPORT_POSITIONS=<dir>` runs every
-  * fixture file under a directory the same way (the Amsterdam corpus, or `for_paris` and `for_shanghai` fetched with
+  * (`selfdestruct-stored-storage.json`: SELFDESTRUCT before EIP-6780, on Paris and Shanghai), where a storage trie that
+  * is replaced must have every row deleted and put back by a reverse. `EEST_IMPORT_POSITIONS=<dir>` runs every fixture
+  * file under a directory the same way (the Amsterdam corpus, or `for_paris` and `for_shanghai` fetched with
   * `scripts/eest/fetch_fixtures.py`).
   */
 class EestImportOnPositionsSpec extends AnyWordSpec with Matchers:
@@ -84,30 +84,63 @@ class EestImportOnPositionsSpec extends AnyWordSpec with Matchers:
     "do the same for every fixture under EEST_IMPORT_POSITIONS" taggedAs (VMTest, ConsensusTest) in {
       val dir = sys.env.get("EEST_IMPORT_POSITIONS").map(new File(_))
       assume(dir.exists(_.isDirectory), "EEST_IMPORT_POSITIONS is not set to a directory of fixtures")
+      // Cancun and later fixtures run the point-evaluation precompile.
+      com.chipprbots.ethereum.crypto.KzgTestSetup.ensureLoaded()
+      // fixture files: not what a release keeps beside them under a dot directory (its index)
       def files(f: File): Seq[File] =
-        if f.isDirectory then Option(f.listFiles()).toSeq.flatten.sortBy(_.getName).flatMap(files)
+        if f.getName.startsWith(".") then Nil
+        else if f.isDirectory then Option(f.listFiles()).toSeq.flatten.sortBy(_.getName).flatMap(files)
         else Seq(f).filter(_.getName.endsWith(".json"))
-      var fixtures = 0
-      var total = EestBlockchainReplay.OnPositions(Nil, 0, 0, 0, 0, 0, 0)
+      // As the corpus replay does: one file to a worker, on threads with the stack the node gives the EVM (a call
+      // 1024 deep overflows a pool thread's default one). An error of any kind is that file's divergence.
+      val counter = new java.util.concurrent.atomic.AtomicInteger(0)
+      val pool = java.util.concurrent.Executors.newFixedThreadPool(
+        Runtime.getRuntime.availableProcessors,
+        (r: Runnable) => new Thread(null, r, s"eest-import-${counter.incrementAndGet()}", 64L * 1024 * 1024)
+      )
+      val outcomes = new java.util.concurrent.ConcurrentLinkedQueue[(Int, EestBlockchainReplay.OnPositions)]()
       files(dir.get).foreach { file =>
-        val src = scala.io.Source.fromFile(file)
-        val named =
-          try tests(parse(src.mkString))
-          finally src.close()
-        val (count, seen) = run(named)
-        fixtures += count
-        total = EestBlockchainReplay.OnPositions(
-          total.divergences ++ seen.divergences.map(d => s"${file.getName}: $d"),
-          total.blocksKept + seen.blocksKept,
-          total.blocksRejected + seen.blocksRejected,
-          total.positionsChanged + seen.positionsChanged,
-          total.storageRowsDeleted + seen.storageRowsDeleted,
-          total.storageTriesEmptied + seen.storageTriesEmptied,
-          total.tombstones + seen.tombstones
-        )
+        pool.execute { () =>
+          val outcome =
+            try
+              val src = scala.io.Source.fromFile(file)
+              val named =
+                try tests(parse(src.mkString))
+                finally src.close()
+              val (count, seen) = run(named)
+              (count, seen.copy(divergences = seen.divergences.map(d => s"${file.getName}: $d")))
+            catch
+              case e: Throwable =>
+                (1, EestBlockchainReplay.OnPositions(Seq(s"${file.getName}: $e"), 0, 0, 0, 0, 0, 0))
+          outcomes.add(outcome)
+          ()
+        }
       }
+      pool.shutdown()
+      pool.awaitTermination(12, java.util.concurrent.TimeUnit.HOURS) shouldBe true
+      val (fixtures, total) =
+        outcomes
+          .toArray(Array.empty[(Int, EestBlockchainReplay.OnPositions)])
+          .foldLeft(
+            (0, EestBlockchainReplay.OnPositions(Nil, 0, 0, 0, 0, 0, 0))
+          ) { case ((count, sum), (n, seen)) =>
+            (
+              count + n,
+              EestBlockchainReplay.OnPositions(
+                sum.divergences ++ seen.divergences,
+                sum.blocksKept + seen.blocksKept,
+                sum.blocksRejected + seen.blocksRejected,
+                sum.positionsChanged + seen.positionsChanged,
+                sum.storageRowsDeleted + seen.storageRowsDeleted,
+                sum.storageTriesEmptied + seen.storageTriesEmptied,
+                sum.tombstones + seen.tombstones
+              )
+            )
+          }
       info(said(fixtures, total))
-      total.divergences.take(20) shouldBe empty
+      withClue(s"${total.divergences.size} divergences; the first of them: ")(
+        total.divergences.sorted.take(20) shouldBe empty
+      )
       total.tombstones shouldBe 0
     }
   }

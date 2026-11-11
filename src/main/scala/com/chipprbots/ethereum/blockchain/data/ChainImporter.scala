@@ -358,8 +358,7 @@ class ChainImporter(
     blockchainReader.getBlockHeaderByNumber(header.number.value).exists(_.hash == header.hash) &&
       blockchainReader.getBlockBodyByHash(header.hash).isDefined &&
       blockchainReader.getReceiptsByHash(header.hash).isDefined &&
-      (blockchainReader.getBestBlockNumber != header.number.value ||
-        blockchainReader.getMptNodeByHash(header.stateRoot.value).isDefined)
+      (blockchainReader.getBestBlockNumber != header.number.value || blockchainReader.holdsStateOf(header))
 
   private def importBlock(
       block: Block

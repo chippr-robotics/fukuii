@@ -148,11 +148,10 @@ class BlockchainImpl(
 
   def getReadOnlyMptStorage(): MptStorage = stateStorage.getReadOnlyStorage
 
-  /** State storage for executing the block of `header`, its writes held back until committed. See
-    * [[StagedBlockState]].
+  /** State storage for executing the block of `header`, its writes held back until committed. See [[StagedBlockState]].
     *
-    * By the header: the unified layout stages a block over its parent's state, which it finds by the parent's hash,
-    * and holds what the block wrote to the state root the header carries. The hash store needs the number alone.
+    * By the header: the unified layout stages a block over its parent's state, which it finds by the parent's hash, and
+    * holds what the block wrote to the state root the header carries. The hash store needs the number alone.
     */
   def stageBlockState(header: BlockHeader): StagedBlockState =
     pathState.fold(stateStorage.stageBlock(header.number.value)) { state =>
