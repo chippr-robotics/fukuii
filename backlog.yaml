@@ -702,7 +702,7 @@ items:
   - id: B-059
     title: "Spec 018 Track C C3c: proposer view, bypass writers, genesis commit and the ported harnesses (item 6b')"
     priority: P2
-    status: open
+    status: claimed
     area: storage
     size: L
     opened: 2026-11-07
@@ -710,6 +710,11 @@ items:
     links:
       spec: specs/018-storage-engine-consolidation
     depends_on: [B-058]
+    claim:
+      by: cloud-dc960fdc
+      agent: main
+      since: 2026-11-11T22:25:43Z
+      heartbeat: 2026-11-11T22:25:43Z
   - id: B-060
     title: "Spec 018 Track C C4a: the overlay (item 6c)"
     priority: P2
