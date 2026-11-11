@@ -12,6 +12,7 @@ checks that gate a merge are declared in
 | `ci/check_gate_integrity.py` | The **Gate Integrity** meta-check (required status check). Validates the gate matrix: undeclared checks, required-but-unfailable gates, expired or incomplete waivers, unmapped constitution principles, dead README badges, over-claiming docs, and a stale status document. Runs offline in seconds. |
 | `ci/generate_status.py` | Generates `docs/STATUS.md` from `.github/gates.yml`. Run it after editing the matrix and commit the result; Gate Integrity fails if it is stale. `--check` exits non-zero when out of date. |
 | `ci/test_gate_integrity.py` | Self-test for the meta-check — mutates a sandboxed copy of the repo and asserts the check goes red for each condition it advertises. |
+| `check-state-accessors.sh` | Spec 018 Track C: counts every use of the state's entry points (the accessors by root, the reads by hash alone, the tries and stores built by hand) under `src/main/scala` and compares the counts with `state-accessor-allowlist.txt`, where each line has its reason. More uses than listed fail, and so do fewer: the list only shrinks. Runs in the **Test and Build** job before the compile, and again from `StateAccessorRatchetSpec`. `--inventory` prints what the tree holds. |
 
 See `specs/008-ci-gate-integrity/` for the design and issues
 [#1402](https://github.com/chippr-robotics/fukuii/issues/1402),
