@@ -25,6 +25,9 @@ import com.chipprbots.ethereum.db.storage.MptStorage
 import com.chipprbots.ethereum.db.storage.MptStorageDecorator
 import com.chipprbots.ethereum.db.storage.StateStorage
 import com.chipprbots.ethereum.db.storage.StateStorage.GenesisDataLoad
+import com.chipprbots.ethereum.db.storage.pathstate.BlockRef
+import com.chipprbots.ethereum.db.storage.pathstate.PathStateStorage
+import com.chipprbots.ethereum.db.storage.pathstate.StateLayout
 import com.chipprbots.ethereum.domain.*
 import com.chipprbots.ethereum.jsonrpc.JsonMethodsImplicits
 import com.chipprbots.ethereum.mpt.MerklePatriciaTrie
@@ -33,9 +36,6 @@ import com.chipprbots.ethereum.rlp.RLPImplicits.given
 import com.chipprbots.ethereum.rlp.RLPList
 import com.chipprbots.ethereum.rlp.RLPValue
 import com.chipprbots.ethereum.utils.BlockchainConfig
-import com.chipprbots.ethereum.db.storage.pathstate.BlockRef
-import com.chipprbots.ethereum.db.storage.pathstate.PathStateStorage
-import com.chipprbots.ethereum.db.storage.pathstate.StateLayout
 import com.chipprbots.ethereum.utils.Logger
 
 class GenesisDataLoader(

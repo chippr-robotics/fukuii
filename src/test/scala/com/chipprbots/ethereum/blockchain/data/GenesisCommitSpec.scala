@@ -325,7 +325,11 @@ class GenesisCommitSpec extends AnyFlatSpec with Matchers:
     val pathState = node.storages.pathStateStorage.get
     pathState.anchor shouldBe None
     val named = BlockRef(ByteString(Array.fill[Byte](32)(1)), 0, ByteString(MerklePatriciaTrie.EmptyRootHash))
-    (the[IllegalStateException] thrownBy pathState.commitGenesis(pathState.genesisLayer(), named, None)).getMessage should
+    (the[IllegalStateException] thrownBy pathState.commitGenesis(
+      pathState.genesisLayer(),
+      named,
+      None
+    )).getMessage should
       include("rows of a state")
     node.storages.appStateStorage.getStateLayout() shouldBe None
     pathState.anchor shouldBe None

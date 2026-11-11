@@ -1306,7 +1306,8 @@ private[nodebuilder] object ShutdownHooks:
 trait GenesisDataLoaderBuilder:
   self: BlockchainBuilder & StorageBuilder =>
 
-  lazy val genesisDataLoader = GenesisDataLoader.over(blockchainReader, blockchainWriter, storagesInstance.storages)
+  lazy val genesisDataLoader: GenesisDataLoader =
+    GenesisDataLoader.over(blockchainReader, blockchainWriter, storagesInstance.storages)
 
 /** Provides the basic functionality of a Node, except the mining algorithm. The latter is loaded dynamically based on
   * configuration.
