@@ -329,9 +329,10 @@ Each requirement names the research.md section it comes from.
   JVM heap and GC share (M+); discovery known/pending/blacklisted (L) (§3.1–§3.4, §6).
 - **FR-019** The Peers view MUST show id, direction and age (`GetPeersCmd`), and client id and best block
   (`GetHandshakedPeersCmd`), and from tier M the address (`GetPeersCmd`): at S (80 columns) the address gives way to the
-  client and best block, which tell an operator more about a peer than where it connects from (slice 4, decision 5). Peer scores and their ↑↓→ trend MUST reach the TUI through the `NetworkMetrics` export, never
-  by handing a scoring manager to the probe (Q5), and come from the production `PeerScoringManager` (D-1, FR-026). The
-  score column is on; a peer with no published score yet shows `—`, never zero (§6).
+  client and best block, which tell an operator more about a peer than where it connects from (slice 4, decision 5).
+  Peer scores and their ↑↓→ trend MUST reach the TUI through the `NetworkMetrics` export, never by handing a scoring
+  manager to the probe (Q5), and come from the production `PeerScoringManager` (D-1, FR-026). The score column is on; a
+  peer with no published score yet shows `—`, never zero (§6).
 - **FR-020** Every string from outside the node that reaches a frame (peer client ids, log text) MUST be sanitised: ESC,
   C0 and C1 control characters removed, one line, length capped (C-16).
 - **FR-021** The log tail MUST come from a separate ring appender of 1,000 lines (configurable), INFO and above by

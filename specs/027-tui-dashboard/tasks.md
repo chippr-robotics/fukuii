@@ -414,8 +414,8 @@ shows a score for every handshaked peer.
 ### Implementation for slice 4
 
 - [x] T093 [US4] `console/Sanitize.scala`
-- [x] T094 [US4] `console/TuiLogRingAppender.scala`: `AppenderBase[ILoggingEvent]`, `PatternLayout`, a lock-free ring of
-      `LogLine(time, level, logger, text)`
+- [x] T094 [US4] `console/TuiLogRingAppender.scala`: `UnsynchronizedAppenderBase[ILoggingEvent]` (decision 1), no
+      layout, a lock-free ring of `LogLine(seq, time, level, logger, text)`
 - [x] T095 [US4] `console/Tui.scala`: lift `attempt` (`:189-191`) to a private method; attach the ring in `initialize`
       after suppression, detach it in `shutdown` before restore, both through the ladder
 - [x] T096 [US4] Logs view, Recent strips, keys `5`, `l`, `+`, `-`

@@ -208,8 +208,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     page back to older lines and `+` a page forward (they do nothing on the other views). A view scrolled back keeps
     its lines on screen as new ones arrive. The lines come from an appender of the TUI's own on the root logger,
     attached once the console appenders are suppressed and detached before they are restored, so the console and the
-    log file see what they saw before. New in `fukuii.tui`: `log-ring-size` (1000, at most 10,000) and `log-level` (`INFO`; a logger's
-    own level in `logback.xml` applies first). An invalid value stops the node with an error naming the key.
+    log file see what they saw before. New in `fukuii.tui`: `log-ring-size` (1000, at most 10,000) and `log-level`
+    (`INFO`; a logger's own level in `logback.xml` applies first). An invalid value stops the node with an error naming
+    the key.
   - **Recent strips.** The Overview ends with the newest log lines (6 at 80×24, 10 from 100×32, the rest of the
     screen from 140×45); the Sync view with "Recent (sync)", the lines of the loggers under `blockchain.sync`.
   - **Peers view.** Each peer's client (name and version from its Hello) and best block, from the network peer

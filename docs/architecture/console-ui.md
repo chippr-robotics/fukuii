@@ -108,8 +108,8 @@ conditions, errors first. It is never animated and every view has it.
 ### Log tail and Recent strips
 
 The Logs view and the Recent strips read an appender of the TUI's own, `TUI-LOG-RING`, on the root logger: a
-lock-free ring of the newest `fukuii.tui.log-ring-size` lines (1000, at most 10,000) at `fukuii.tui.log-level` and above (`INFO`). A
-logger's own level in `logback.xml` applies first, so `DEBUG` shows only what the loggers already log at DEBUG. The
+lock-free ring of the newest `fukuii.tui.log-ring-size` lines (1000, at most 10,000) at `fukuii.tui.log-level` and
+above (`INFO`). A logger's own level in `logback.xml` applies first, so `DEBUG` shows only what the loggers already log at DEBUG. The
 ring is attached after the console appenders are suppressed and detached before they are restored, through the same
 teardown ladder that gives the terminal back, so the console and the log file get what they got before; if it cannot
 be attached, the TUI does not start and standard logging stays.
