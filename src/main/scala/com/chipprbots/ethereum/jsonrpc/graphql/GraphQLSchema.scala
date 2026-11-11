@@ -22,6 +22,8 @@ import com.chipprbots.ethereum.consensus.engine.BlobGasUtils
 import com.chipprbots.ethereum.crypto.kec256
 import com.chipprbots.ethereum.domain.AccessListItem
 import com.chipprbots.ethereum.domain.Address
+import com.chipprbots.ethereum.db.storage.MptStorage
+import com.chipprbots.ethereum.db.storage.pathstate.StateFault
 import com.chipprbots.ethereum.domain.BlobTransaction
 import com.chipprbots.ethereum.domain.Block
 import com.chipprbots.ethereum.domain.BlockHash
@@ -186,7 +188,7 @@ object GraphQLSchema:
     ctx.blockchainReader.getBlockByNumber(ctx.blockchainReader.getBestBranch, blockNumber).map { b =>
       InMemoryWorldStateProxy(
         ctx.evmCodeStorage,
-        ctx.blockchain.getBackingMptStorage(b.header.number.value),
+        ctx.blockchainReader.stateAt(b.header),
         (n: BigInt) => ctx.blockchainReader.getBlockHeaderByNumber(n).map(_.hash.value),
         ctx.blockchainConfig.accountStartNonce,
         b.header.stateRoot.value,
@@ -435,9 +437,11 @@ object GraphQLSchema:
           resolve = c =>
             val slotBytes = c.arg(SlotArg)
             val slotBigInt = BigInt(1, slotBytes.toArray[Byte])
-            resolveAccount(c.ctx, c.value.address, c.value.blockNumber) match
-              case Some(acct) =>
+            resolveAccountIn(c.ctx, c.value.address, c.value.blockNumber) match
+              case Some((state, acct)) =>
                 val v = c.ctx.blockchain.getAccountStorageAt(
+                  state,
+                  Address(c.value.address),
                   acct.storageRoot.value,
                   slotBigInt,
                   c.ctx.blockchainConfig.ethCompatibleStorage
@@ -459,10 +463,24 @@ object GraphQLSchema:
       address: ByteString,
       blockNumber: BigInt
   ): Option[com.chipprbots.ethereum.domain.Account] =
+    resolveAccountIn(ctx, address, blockNumber).map(_._2)
+
+  /** The account at `address` in the state of the canonical block `blockNumber`, with that state: its storage is read
+    * from the state the account was read from. `None` when there is no such block, no such account, or the state cannot
+    * be read.
+    */
+  private def resolveAccountIn(
+      ctx: GraphQLContext,
+      address: ByteString,
+      blockNumber: BigInt
+  ): Option[(MptStorage, com.chipprbots.ethereum.domain.Account)] =
     try
-      ctx.blockchainReader
-        .getAccount(ctx.blockchainReader.getBestBranch, Address(address), blockNumber)
-    catch case _: MissingNodeException => None
+      for
+        header <- ctx.blockchainReader.getBlockHeaderByNumber(blockNumber)
+        state = ctx.blockchainReader.stateAt(header)
+        account <- ctx.blockchainReader.accountIn(state, header, Address(address))
+      yield (state, account)
+    catch case _: MissingNodeException | _: StateFault => None
 
   // ---------------------------------------------------------------------------
   // Log
@@ -1140,10 +1158,11 @@ object GraphQLSchema:
               val currentNonce =
                 try
                   reader
-                    .getAccount(reader.getBestBranch, sender, bestNum)
+                    .getBlockHeaderByNumber(bestNum)
+                    .flatMap(head => reader.accountAt(head, sender))
                     .map(_.nonce.toBigInt)
                     .getOrElse(c.ctx.blockchainConfig.accountStartNonce.toBigInt)
-                catch case _: MissingNodeException => c.ctx.blockchainConfig.accountStartNonce.toBigInt
+                catch case _: MissingNodeException | _: StateFault => c.ctx.blockchainConfig.accountStartNonce.toBigInt
 
               if stx.tx.nonce < currentNonce then throw GraphQLDataFetchingError.nonceTooLow("sendRawTransaction")
 

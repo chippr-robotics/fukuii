@@ -378,14 +378,11 @@ class TestService(
 
     if blockOpt.isEmpty then AccountsInRangeResponse(Map(), ByteString(0)).rightNow
     else
-      val blockNumber: BigInt = blockOpt.map(_.header.number.value).getOrElse(BigInt(0))
+      val header = blockOpt.get.header
+      val state = blockchainReader.stateAt(header)
       val accountBatch: Seq[(ByteString, Address)] = accountHashWithAdresses.view
         .dropWhile { case (hash, _) => UInt256(hash) < UInt256(request.parameters.addressHash) }
-        .filter { case (_, address) =>
-          blockchainReader
-            .getAccount(blockchainReader.getBestBranch, address, blockNumber)
-            .isDefined
-        }
+        .filter { case (_, address) => blockchainReader.accountIn(state, header, address).isDefined }
         .take(request.parameters.maxResults + 1)
         .to(Seq)
 
@@ -419,11 +416,9 @@ class TestService(
 
     (for
       block <- blockOpt.toRight(StorageRangeResponse(complete = false, Map.empty, None))
-      accountOpt = blockchainReader.getAccount(
-        blockchainReader.getBestBranch,
-        Address(request.parameters.address),
-        block.header.number.value
-      )
+      address = Address(request.parameters.address)
+      state = blockchainReader.stateAt(block.header)
+      accountOpt = blockchainReader.accountIn(state, block.header, address)
       account <- accountOpt.toRight(StorageRangeResponse(complete = false, Map.empty, None))
     yield
       // This implementation might be improved. It is working for most tests in ETS but might be
@@ -434,7 +429,11 @@ class TestService(
         .view
         .dropWhile { case (hash, _) => UInt256(hash) < request.parameters.begin }
         .map { case (keyHash, keyValue) =>
-          (keyHash.toArray, keyValue, blockchain.getAccountStorageAt(account.storageRoot.value, keyValue, true))
+          (
+            keyHash.toArray,
+            keyValue,
+            blockchain.getAccountStorageAt(state, address, account.storageRoot.value, keyValue, true)
+          )
         }
         .filterNot { case (_, _, storageValue) => storageValue == ByteString(0) }
         .take(request.parameters.maxResults + 1)

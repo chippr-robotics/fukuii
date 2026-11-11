@@ -98,8 +98,8 @@ class EthTxServiceAdmissionSpec
 
     private val reader: BlockchainReader = new BlockchainReader(null, null, null, null, null, null, null, null):
       override def getBestBlockHeader: Option[BlockHeader] = Option.unless(noHead)(head)
-      override def getAccountAtStateRoot(
-          @scala.annotation.unused stateRoot: ByteString,
+      override def accountAt(
+          @scala.annotation.unused header: BlockHeader,
           address: Address
       ): Option[Account] =
         if stateMissing then throw new MissingNodeException(ByteString(1, 2, 3))

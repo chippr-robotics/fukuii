@@ -324,7 +324,7 @@ class EthTxService(
               stx,
               sidecar,
               head,
-              address => blockchainReader.getAccountAtStateRoot(head.stateRoot.value, address)
+              address => blockchainReader.accountAt(head, address)
             )
             .left
             .map {
@@ -454,10 +454,10 @@ class EthTxService(
   def pendingTransactionsFrom(accounts: Set[Address]): ServiceResponse[OwnPendingTransactionsResponse] =
     getTransactionsFromPool.map { resp =>
       val own = resp.pendingTransactions.filter(pt => accounts.contains(pt.stx.senderAddress))
-      val stateRoot = blockchainReader.getBestBlockHeader.map(_.stateRoot.value)
+      val head = blockchainReader.getBestBlockHeader
       def stateNonce(sender: Address): BigInt =
-        stateRoot
-          .flatMap(root => blockchainReader.getAccountAtStateRoot(root, sender))
+        head
+          .flatMap(header => blockchainReader.accountAt(header, sender))
           .map(_.nonce.toBigInt)
           .getOrElse(blockchainConfig.accountStartNonce.toBigInt)
       val executable: Map[Address, Set[BigInt]] = own
@@ -492,7 +492,7 @@ class EthTxService(
       )
       .map { resp =>
         val stateNonce = blockchainReader
-          .getAccountAtStateRoot(head.stateRoot.value, address)
+          .accountAt(head, address)
           .map(_.nonce.toBigInt)
           .getOrElse(blockchainConfig.accountStartNonce.toBigInt)
         EthTxService.nextPoolNonce(resp.pendingTransactions, address, stateNonce)

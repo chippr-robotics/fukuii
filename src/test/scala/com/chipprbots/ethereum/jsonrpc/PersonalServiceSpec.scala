@@ -125,7 +125,7 @@ class PersonalServiceSpec
       .returning(Right(wallet))
 
     expectHead(1234)
-    blockchainReader.getAccount.expects(*, address, BigInt(1234)).returning(Some(Account(nonce, 2 * txValue)))
+    blockchainReader.accountAt.expects(headAt(1234), address).returning(Some(Account(nonce, 2 * txValue)))
 
     val req: SendTransactionWithPassphraseRequest = SendTransactionWithPassphraseRequest(tx, passphrase)
     val res: Future[Either[JsonRpcError, SendTransactionWithPassphraseResponse]] =
@@ -148,7 +148,7 @@ class PersonalServiceSpec
 
     expectHead(1234)
     // geth GetPoolNonce: the state nonce advanced over the sender's consecutive pooled txs
-    blockchainReader.getAccount.expects(*, address, BigInt(1234)).returning(Some(Account(nonce, 2 * txValue)))
+    blockchainReader.accountAt.expects(headAt(1234), address).returning(Some(Account(nonce, 2 * txValue)))
 
     val req: SendTransactionWithPassphraseRequest = SendTransactionWithPassphraseRequest(tx, passphrase)
     val res: Future[Either[JsonRpcError, SendTransactionWithPassphraseResponse]] =
@@ -170,7 +170,7 @@ class PersonalServiceSpec
       .returning(Right(wallet))
 
     expectHead(1234)
-    blockchainReader.getAccount.expects(*, address, BigInt(1234)).returning(Some(Account(nonce, 2 * txValue)))
+    blockchainReader.accountAt.expects(headAt(1234), address).returning(Some(Account(nonce, 2 * txValue)))
 
     val req: SendTransactionWithPassphraseRequest = SendTransactionWithPassphraseRequest(tx, passphrase)
     val res: Future[Either[JsonRpcError, SendTransactionWithPassphraseResponse]] =
@@ -203,7 +203,7 @@ class PersonalServiceSpec
     personal.unlockAccount(UnlockAccountRequest(address, passphrase, None)).unsafeRunSync()
 
     expectHead(1234)
-    blockchainReader.getAccount.expects(*, address, BigInt(1234)).returning(Some(Account(nonce, 2 * txValue)))
+    blockchainReader.accountAt.expects(headAt(1234), address).returning(Some(Account(nonce, 2 * txValue)))
 
     val req: SendTransactionRequest = SendTransactionRequest(tx)
     val res: Future[Either[JsonRpcError, SendTransactionResponse]] = personal.sendTransaction(req).unsafeToFuture()
@@ -357,7 +357,7 @@ class PersonalServiceSpec
       .returning(Right(wallet))
 
     expectHead(1234)
-    blockchainReader.getAccount.expects(*, address, BigInt(1234)).returning(Some(Account(nonce, 2 * txValue)))
+    blockchainReader.accountAt.expects(headAt(1234), address).returning(Some(Account(nonce, 2 * txValue)))
 
     val req: SendTransactionWithPassphraseRequest = SendTransactionWithPassphraseRequest(tx, passphrase)
     val res: Future[Either[JsonRpcError, SendTransactionWithPassphraseResponse]] =
@@ -374,8 +374,8 @@ class PersonalServiceSpec
       .returning(Right(wallet))
 
     expectHead(forkBlockNumbers.eip155BlockNumber)
-    blockchainReader.getAccount
-      .expects(*, address, forkBlockNumbers.eip155BlockNumber)
+    blockchainReader.accountAt
+      .expects(headAt(forkBlockNumbers.eip155BlockNumber), address)
       .returning(Some(Account(nonce, 2 * txValue)))
 
     val req: SendTransactionWithPassphraseRequest = SendTransactionWithPassphraseRequest(tx, passphrase)
@@ -396,8 +396,8 @@ class PersonalServiceSpec
       .returning(Right(wallet))
 
     expectHead(1234)
-    blockchainReader.getAccount
-      .expects(*, address, BigInt(1234))
+    blockchainReader.accountAt
+      .expects(headAt(1234), address)
       .throwing(new MissingNodeException(ByteString(new Array[Byte](32))))
 
     val req: SendTransactionWithPassphraseRequest = SendTransactionWithPassphraseRequest(tx, passphrase)
@@ -419,8 +419,8 @@ class PersonalServiceSpec
     personal.unlockAccount(UnlockAccountRequest(address, passphrase, None)).unsafeRunSync()
 
     expectHead(1234)
-    blockchainReader.getAccount
-      .expects(*, address, BigInt(1234))
+    blockchainReader.accountAt
+      .expects(headAt(1234), address)
       .throwing(new MissingNodeException(ByteString(new Array[Byte](32))))
 
     val req: SendTransactionRequest = SendTransactionRequest(tx)
@@ -585,6 +585,11 @@ class PersonalServiceSpec
         gasEstimator,
         system.scheduler
       )
+
+    /** The head at `number`, as an argument: the account is read at the block the service took as the head, by its
+      * header and not by its number.
+      */
+    def headAt(number: BigInt) = argThat[BlockHeader]((header: BlockHeader) => header.number.value == number)
 
     /** The chain head every send/sign/fill reads once: an ETC-style header (no base fee) at `number`. */
     def expectHead(number: BigInt): Unit =

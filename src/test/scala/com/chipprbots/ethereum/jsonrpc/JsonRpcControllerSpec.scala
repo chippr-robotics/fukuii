@@ -343,6 +343,22 @@ class JsonRpcControllerSpec
     base.forApis(Seq("eth", "miner")).handleRequest(setEtherbase).unsafeRunSync().error shouldBe None
     coinbase.handleRequest(newJsonRpcRequest("eth_coinbase")).unsafeRunSync() should haveStringResult(address)
 
+  // Spec 018 Track C, C2b: a state that is not held, where the method did not answer it itself, is the error a client
+  // already gets for a missing state node, and not an internal error.
+  it should "answer a state fault that escapes a method with the error for a missing state node" taggedAs (
+    UnitTest,
+    RPCTest
+  ) in new JsonRpcControllerFixture:
+    import com.chipprbots.ethereum.db.storage.pathstate.StateUnavailable
+    val net: JsonRpcController = jsonRpcController.forApis(Seq("net"))
+
+    netService.versionFn = _ => IO.raiseError(new StateUnavailable("the state of block 9 is not held"))
+    net.handleRequest(newJsonRpcRequest("net_version")).unsafeRunSync() should haveError(JsonRpcError.NodeNotFound)
+
+    // any other failure is still an internal error
+    netService.versionFn = _ => IO.raiseError(new IllegalStateException("not about the state"))
+    net.handleRequest(newJsonRpcRequest("net_version")).unsafeRunSync() should haveError(JsonRpcError.InternalError)
+
   it should "serve the non-standard net_ peer methods with admin, and keep only version, listening and peerCount in net" taggedAs (
     UnitTest,
     RPCTest

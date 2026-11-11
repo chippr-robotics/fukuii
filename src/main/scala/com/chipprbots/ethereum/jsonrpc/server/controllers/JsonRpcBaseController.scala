@@ -21,6 +21,8 @@ import com.chipprbots.ethereum.jsonrpc.JsonRpcError.InternalError
 import com.chipprbots.ethereum.jsonrpc.JsonRpcError.MethodNotFound
 import com.chipprbots.ethereum.jsonrpc.JsonRpcRequest
 import com.chipprbots.ethereum.jsonrpc.JsonRpcResponse
+import com.chipprbots.ethereum.jsonrpc.StateRead
+import com.chipprbots.ethereum.db.storage.pathstate.StateFault
 import com.chipprbots.ethereum.jsonrpc.NodeJsonRpcHealthChecker.JsonRpcHealthConfig
 import com.chipprbots.ethereum.jsonrpc.serialization.JsonEncoder
 import com.chipprbots.ethereum.jsonrpc.serialization.JsonMethodDecoder
@@ -99,9 +101,13 @@ trait JsonRpcBaseController:
             case Right(success) => successResponse(rpcReq, success)
             case Left(error)    => errorResponse(rpcReq, error)
           }
-          .handleError { ex =>
-            log.error("Failed to handle RPC request", ex)
-            errorResponse(rpcReq, InternalError)
+          .handleError {
+            // A state that is not held, or that moved under the read once too often, where the method did not answer
+            // it itself (spec 018 Track C): the error a client already gets for a state node that does not exist.
+            case fault: StateFault => errorResponse(rpcReq, StateRead.unavailable(fault))
+            case ex =>
+              log.error("Failed to handle RPC request", ex)
+              errorResponse(rpcReq, InternalError)
           }
       case Left(error) =>
         IO.pure(errorResponse(rpcReq, error))

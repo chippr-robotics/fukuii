@@ -326,7 +326,9 @@ object GetAccountTool:
       val addrBytes = org.bouncycastle.util.encoders.Hex.decode(addrStr.stripPrefix("0x"))
       val address = Address(org.apache.pekko.util.ByteString(addrBytes))
       val blockNum = deps.blockchainReader.getBestBlockNumber
-      val accountOpt = deps.blockchainReader.getAccount(deps.blockchainReader.getBestBranch, address, blockNum)
+      val accountOpt = deps.blockchainReader.getBlockHeaderByNumber(blockNum).flatMap { head =>
+        deps.blockchainReader.accountAt(head, address)
+      }
       accountOpt match
         case Some(account) =>
           val balanceEtc = BigDecimal(account.balance.toBigInt) / BigDecimal("1000000000000000000")
