@@ -2306,3 +2306,18 @@ items:
     refs: []
     links: {}
     notes: "'10 000 random 32-byte keys' (2 min) and 'large random corpus' (1.2 min), the same on staging 0.11.44 and on #1788. Quadratic in the test double, not in the trie."
+  - id: B-207
+    title: "Spec 018 T026, the half that waits: the position mirror on the ethereum/tests pre-Atlantis networks, and the comparison with C0's ethtests baseline"
+    priority: P2
+    status: open
+    area: storage
+    size: S
+    opened: 2026-11-11
+    refs: []
+    links:
+      spec: specs/018-storage-engine-consolidation
+    depends_on: [B-053]
+    notes: |-
+      Give it/ethtest/EthereumTestHelper.scala the StorageObserver of EestBlockchainReplay (pre-state world :82-125, BlockExecution :173,187) and run LegacyPreByzantiumBlockchainTestsSpec where ets/tests is checked out.
+      The EEST half ran in C2a part 1: 26,503 Amsterdam and 8,835 Paris/Shanghai fixtures, no finding (baselines/t026-position-mirror.md).
+      The baseline file ethtests-<date>.txt is T007, a C0 deliverable.
