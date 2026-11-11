@@ -20,6 +20,7 @@ import com.chipprbots.ethereum.blockchain.sync.SyncController
 import com.chipprbots.ethereum.blockchain.sync.SyncProtocol
 import com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncMetrics
 import com.chipprbots.ethereum.consensus.mining.StdMiningBuilder
+import com.chipprbots.ethereum.consensus.pow.PoWMiningMetrics
 import com.chipprbots.ethereum.console.ChainFacts
 import com.chipprbots.ethereum.console.NodeSettings
 import com.chipprbots.ethereum.console.NodeStatusSnapshot
@@ -226,7 +227,12 @@ abstract class BaseNode extends Node:
   private def startMining(): Unit =
     // A node that produces blocks takes transactions from peers: core-geth's StartMining calls
     // `enableSyncedFeatures()` for the same reason, or a miner held behind the gate would mine empty blocks.
-    if mining.config.generic.miningEnabled then txGossipGate.markSynced("block production is enabled")
+    if mining.config.generic.miningEnabled then
+      txGossipGate.markSynced("block production is enabled")
+      // The DAG gauges are written from the mining thread (EthashDAGManager), inside loops whose failure paths
+      // delete and regenerate the DAG file. Initialise the metrics object here, after startMetricsClient and before
+      // that thread exists, so that a failed initialiser surfaces at start-up and not on it (spec 027 slice 5, M2).
+      val _ = PoWMiningMetrics
     mining.startProtocol(this)
 
   private def startDiscoveryManager(): Unit = peerDiscoveryManagerTyped ! PeerDiscoveryManager.Start

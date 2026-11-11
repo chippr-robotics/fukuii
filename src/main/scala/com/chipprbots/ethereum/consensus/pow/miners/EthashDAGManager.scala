@@ -15,6 +15,7 @@ import org.bouncycastle.util.encoders.Hex
 
 import com.chipprbots.ethereum.consensus.pow.EthashUtils
 import com.chipprbots.ethereum.consensus.pow.PoWBlockCreator
+import com.chipprbots.ethereum.consensus.pow.PoWMiningMetrics
 import com.chipprbots.ethereum.consensus.pow.miners.EthashMiner.DagFilePrefix
 import com.chipprbots.ethereum.utils.BlockchainConfig
 import com.chipprbots.ethereum.utils.ByteUtils
@@ -31,6 +32,7 @@ class EthashDAGManager(blockCreator: PoWBlockCreator) extends Logger:
     (currentEpoch, currentEpochDag, currentEpochDagSize) match
       case (Some(`epoch`), Some(dag), Some(dagSize)) => (dag, dagSize)
       case _ =>
+        PoWMiningMetrics.recordDagStarted(epoch)
         val seed =
           EthashUtils.seed(blockNumber, blockchainConfig.forkBlockNumbers.ecip1099BlockNumber.toLong)
         val dagSize = EthashUtils.dagSize(epoch)
@@ -46,6 +48,7 @@ class EthashDAGManager(blockCreator: PoWBlockCreator) extends Logger:
         currentEpoch = Some(epoch)
         currentEpochDag = Some(dag)
         currentEpochDagSize = Some(dagSize)
+        PoWMiningMetrics.recordDagLoaded()
         (dag, dagSize)
 
   private def dagFile(seed: ByteString): File =
@@ -72,7 +75,9 @@ class EthashDAGManager(blockCreator: PoWBlockCreator) extends Logger:
         outputStream.write(ByteUtils.intsToBytes(item, bigEndian = false))
         res(i) = item
 
-        if i % 100000 == 0 then log.info(s"Generating DAG ${((i / dagNumHashes.toDouble) * 100).toInt}%")
+        if i % 100000 == 0 then
+          log.info(s"Generating DAG ${((i / dagNumHashes.toDouble) * 100).toInt}%")
+          PoWMiningMetrics.recordDagGenerating(((i / dagNumHashes.toDouble) * 100).toInt)
       }
     }
 
@@ -95,7 +100,9 @@ class EthashDAGManager(blockCreator: PoWBlockCreator) extends Logger:
         var index = 0
 
         while inputStream.read(buffer) > 0 do
-          if index % 100000 == 0 then log.info(s"Loading DAG from file ${((index / res.length.toDouble) * 100).toInt}%")
+          if index % 100000 == 0 then
+            log.info(s"Loading DAG from file ${((index / res.length.toDouble) * 100).toInt}%")
+            PoWMiningMetrics.recordDagLoading(((index / res.length.toDouble) * 100).toInt)
           res(index) = ByteUtils.bytesToInts(buffer, bigEndian = false)
           index += 1
 
