@@ -14,6 +14,12 @@ import com.chipprbots.ethereum.blockchain.sync.EphemBlockchainTestSetup
 import com.chipprbots.ethereum.consensus.mining.Protocol
 import com.chipprbots.ethereum.consensus.pow.validators.ValidatorsExecutor
 import com.chipprbots.ethereum.consensus.validators.Validators
+import com.chipprbots.ethereum.db.storage.MptStorage
+import com.chipprbots.ethereum.db.storage.NodeStorage.NodeEncoded
+import com.chipprbots.ethereum.db.storage.NodeStorage.NodeHash
+import com.chipprbots.ethereum.db.storage.SerializingMptStorage
+import com.chipprbots.ethereum.db.storage.StagedBlockState
+import com.chipprbots.ethereum.db.storage.StateStorage
 import com.chipprbots.ethereum.domain.*
 import com.chipprbots.ethereum.domain.Block.toBlock
 import com.chipprbots.ethereum.utils.BlobSchedule
@@ -190,8 +196,42 @@ object EestBlockchainReplay:
     override lazy val validators: Validators = ValidatorsExecutor(Protocol.EngineApi)
     override lazy val vm: VMImpl = new VMImpl
 
+  /** Sees the trie-node storage a replay runs on, and where each unit of state changes begins and ends: the genesis
+    * load, then each block. The default sees nothing and changes nothing.
+    */
+  trait StorageObserver:
+    /** The storage a world of the replay is built over, given the one it would have been built over. */
+    def wrap(storage: MptStorage): MptStorage = storage
+    def genesisStarting(): Unit = ()
+    def blockStarting(): Unit = ()
+
+    /** The unit that began last has ended. `stateRoot` is the state it left when it was accepted, and `None` when it
+      * was rejected. `load` finds a trie node of the replay's store by hash.
+      */
+    def ended(stateRoot: Option[ByteString], load: Array[Byte] => Array[Byte]): Unit = ()
+
+  private object Unobserved extends StorageObserver
+
+  /** `delegate`, with the storage the genesis load builds into seen by `observer`. */
+  final private class ObservedGenesisStorage(delegate: StateStorage, observer: StorageObserver) extends StateStorage:
+    override def getBackingStorage(bn: BigInt): MptStorage = delegate.getBackingStorage(bn)
+    override def getReadOnlyStorage: MptStorage = observer.wrap(delegate.getReadOnlyStorage)
+    override def onBlockSave(bn: BigInt, currentBestSavedBlock: BigInt)(updateBestBlocksData: () => Unit): Unit =
+      delegate.onBlockSave(bn, currentBestSavedBlock)(updateBestBlocksData)
+    override def onBlockRollback(bn: BigInt, currentBestSavedBlock: BigInt)(updateBestBlocksData: () => Unit): Unit =
+      delegate.onBlockRollback(bn, currentBestSavedBlock)(updateBestBlocksData)
+    override def saveNode(nodeHash: NodeHash, nodeEncoded: NodeEncoded, bn: BigInt): Unit =
+      delegate.saveNode(nodeHash, nodeEncoded, bn)
+    override def forcePersist(reason: StateStorage.FlushSituation): Boolean = delegate.forcePersist(reason)
+
   /** Replays one fixture and returns its divergences from the release; empty means the fixture passes. */
-  def replay(t: JValue): Seq[String] =
+  def replay(t: JValue): Seq[String] = replay(t, Unobserved)
+
+  /** [[replay]] with `observer` on the storage of the genesis load and of every block's execution. Each world is still
+    * built by the production code, over the storage it would have used with the observer's in front.
+    */
+  def replay(t: JValue, observer: StorageObserver): Seq[String] =
+    val observed = observer ne Unobserved
     val env = new Env
     import env.{blockQueue, blockchain, blockchainReader, blockchainWriter, mining, storagesInstance}
     val chainId = (t \ "config" \ "chainid").toOption.map(v => bi(str(v))).getOrElse(BigInt(1))
@@ -216,11 +256,14 @@ object EestBlockchainReplay:
           )
         }.toMap
         val gh = genesis.header
+        val stateStorage = storagesInstance.storages.stateStorage
+        def loadNode(hash: Array[Byte]): Array[Byte] = stateStorage.getReadOnlyStorage.get(hash).encode
+        observer.genesisStarting()
         new GenesisDataLoader(
           blockchainReader,
           blockchainWriter,
           storagesInstance.storages.evmCodeStorage,
-          storagesInstance.storages.stateStorage
+          if observed then new ObservedGenesisStorage(stateStorage, observer) else stateStorage
         ).loadGenesisData(
           GenesisData(
             nonce = gh.nonce,
@@ -237,6 +280,7 @@ object EestBlockchainReplay:
           )
         ).get
         val loadedRoot = blockchainReader.getBlockHeaderByNumber(0).map(_.stateRoot)
+        observer.ended(loadedRoot.filter(_ == gh.stateRoot).map(_.value), loadNode)
         if !loadedRoot.contains(gh.stateRoot) then Seq(s"genesis state root $loadedRoot != ${gh.stateRoot}")
         else
           // The loader's header omits fields the fixture's genesis carries (e.g. parentBeaconBlockRoot); the STATE is
@@ -244,17 +288,47 @@ object EestBlockchainReplay:
           blockchainWriter.save(genesis, Nil, ChainWeight.zero.increase(gh), saveAsBestBlock = true)
 
           val blockValidation = new BlockValidation(mining, blockchainReader, blockQueue)
-          val blockExecution = new BlockExecution(
-            blockchain,
-            blockchainReader,
-            blockchainWriter,
-            storagesInstance.storages.evmCodeStorage,
-            mining.blockPreparator,
-            blockValidation
-          )
+          val blockExecution =
+            if !observed then
+              new BlockExecution(
+                blockchain,
+                blockchainReader,
+                blockchainWriter,
+                storagesInstance.storages.evmCodeStorage,
+                mining.blockPreparator,
+                blockValidation
+              )
+            else
+              new BlockExecution(
+                blockchain,
+                blockchainReader,
+                blockchainWriter,
+                storagesInstance.storages.evmCodeStorage,
+                mining.blockPreparator,
+                blockValidation
+              ):
+                // The storage is the one the production method picks, decoded-node cache included, with the
+                // observer's in front of it. The world itself is built by the production method.
+                override protected def buildInitialWorld(
+                    block: Block,
+                    parentHeader: BlockHeader,
+                    isProposer: Boolean,
+                    staged: Option[StagedBlockState]
+                )(implicit blockchainConfig: BlockchainConfig): InMemoryWorldStateProxy =
+                  val storage =
+                    staged.fold(blockchain.getBackingMptStorage(block.header.number.value))(_.storage) match
+                      case serializing: SerializingMptStorage => serializing.cachedForExecution
+                      case other                              => other
+                  super.buildInitialWorld(
+                    block,
+                    parentHeader,
+                    isProposer,
+                    Some(StagedBlockState.direct(observer.wrap(storage)))
+                  )
           val JArray(blocks) = t \ "blocks": @unchecked
           val blockDivergences = blocks.zipWithIndex.flatMap { case (b, i) =>
             val expectException = (b \ "expectException").toOption.map(str)
+            observer.blockStarting()
             // An invalid block's RLP need not decode (INCORRECT_BLOCK_FORMAT): failing to decode is a rejection.
             val outcome: Either[String, (Block, Seq[Receipt])] =
               Try(hx(str(b \ "rlp")).toBlock).toEither.left.map(e => s"undecodable: $e").flatMap { block =>
@@ -276,6 +350,11 @@ object EestBlockchainReplay:
                   }
                 }
               }
+            // A block is kept exactly when it is accepted and the fixture expects that, the first case below.
+            observer.ended(
+              outcome.toOption.filter(_ => expectException.isEmpty).map((block, _) => block.header.stateRoot.value),
+              loadNode
+            )
             (outcome, expectException) match
               case (Right((block, receipts)), None) =>
                 val w = blockchainReader.getChainWeightByHash(block.header.parentHash).getOrElse(ChainWeight.zero)

@@ -19,3 +19,4 @@ kept beside the pinned jar, outside the tree, and its SHA-256 is recorded in the
 | `m1-diff-size.md` | T013 | an instrumented throwaway build | open |
 | `oracle-tests.md` | T015 | copied from data-model §8 | **Frozen 2026-11-07** |
 | `m7-c1.md` | T033 | `TrieAllocationBenchmark` on the parent commit and on C1 (cloud session, 2026-11-11) | **stand-in recorded** (bytes allocated per trie operation, within 1 % either way); the gate itself, the Mordor range with JFR against the pinned jar, is open (needs T002, T004) |
+| `t026-position-mirror.md` | T026 | `EestFixtureCorpusSpec` with `EEST_POSITIONS=1` and `EestPositionReplaySpec` (cloud session, 2026-11-11) | **EEST half recorded**: 26,503 Amsterdam and 8,835 Paris and Shanghai fixtures through a position mirror, no finding, and the mutation runs that show it fails. The ethereum/tests half and the comparison with `ethtests-<date>.txt` are open (B-207) |

@@ -9,6 +9,11 @@ name: EEST Amsterdam
 # Both read the same fetched corpus (EEST_FIXTURES) and both enforce EEST_MIN_TESTS: with it
 # set, a missing corpus FAILS rather than cancels, and a partial one fails its count.
 #
+# The corpus is then replayed a second time with EEST_POSITIONS=1 (spec 018 Track C, T026):
+# a position mirror on every fixture's storage, which fails a fixture whose tries read or
+# report a node where a position-keyed store would not hold it. It is a second run so that
+# the first stays the unobserved import path.
+#
 # The corpus is not vendored. scripts/eest/fetch_fixtures.py streams the ~1 GB release asset
 # and stops once past the wanted directories (~265 MB read), and the result is cached per
 # release tag.
@@ -98,10 +103,20 @@ jobs:
           EEST_BUILDER_REPORT: ${{ github.workspace }}/eest-builder-report.txt
           SBT_OPTS: -Xmx6g -Xss4M
 
+      - name: Replay the corpus with the position mirror
+        run: sbt "testOnly *EestFixtureCorpusSpec"
+        env:
+          FUKUII_DEV: true
+          EEST_FIXTURES: ${{ github.workspace }}/eest-fixtures/fixtures
+          EEST_REPORT: ${{ github.workspace }}/eest-positions-report.txt
+          EEST_POSITIONS: "1"
+          EEST_TRACE: "1"
+          SBT_OPTS: -Xmx6g -Xss4M
+
       - name: Summary
         if: always()
         run: |
-          for report in eest-report.txt eest-builder-report.txt; do
+          for report in eest-report.txt eest-builder-report.txt eest-positions-report.txt; do
             if [ -f "$report" ]; then
               {
                 echo '```'
@@ -122,4 +137,5 @@ jobs:
           path: |
             eest-report.txt
             eest-builder-report.txt
+            eest-positions-report.txt
           if-no-files-found: warn

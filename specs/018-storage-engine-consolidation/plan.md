@@ -540,6 +540,40 @@ in C2a: C1 ships the base, C2a moves them.
 **EIP-8246 text** (read from an EIPs clone; the storage design does not depend on it) and the **source of the ETC 0 to 5.1M blocks**
 (open item 1; it gates C7).
 
+### C2a part 1 record (2026-11-11)
+
+C2a lands as two PRs (tasks.md, Phase 3). Part 1 moves the six wrapping `MptStorage` implementors onto
+`MptStorageDecorator` (T041) and threads the owner through execution, genesis and the BAL prefetch (T046). Both chains run
+that code today, so `forge` and `beacon` read the design before code and the diff after it, read-only.
+
+| Finding | By | When | Change |
+| --- | --- | --- | --- |
+| `PrefetchNodeReader.forOwner` must not give each trie its own budget: a block's prefetch is one budget and one count | beacon | before code | a private constructor passes the same two counters to every owner view; a test |
+| `PrefetchNodeReader.resetOwner` must throw like its other writes, not forward | beacon | before code | applied |
+| The mirror's read rule accepted "the current row hashes to it", which passes a read no staged layer would answer | beacon | before code | two rules only: a node this block wrote at that owner and position, or the row there when the block began |
+| A hash the block wrote at another position must not satisfy a read | forge | before code | rule 1 is keyed by owner, position and hash, which is stricter than data-model 6.2's by-hash layer |
+| **Blocker.** Four specs build a world over `mock[MptStorage]`, and a world now asks its storage for `forOwner(None)`: 12 tests fail | beacon | after code | confirmed by running them; the mocks stub `forOwner` |
+| The Amsterdam corpus barely exercises resets (EIP-6780, EIP-7610): run pre-Cancun suites | beacon | after code | confirmed by mutation: with the reset removed, 26,503 of 26,503 Amsterdam fixtures still pass and 22 of 8,835 Paris and Shanghai fixtures fail. Seven of the 22 are vendored |
+| A read of a storage trie after its reset is legitimate only for the access-list builder; before Amsterdam it is a bug the mirror passed | forge | after code | counted apart, and a finding on a fork that builds no access list |
+| Keep the unobserved replay as the consensus gate; the mirror is an addition | beacon | after code | `eest-amsterdam.yml` runs the corpus a second time with the mirror |
+| The mirror's `committed` is the last accepted block, not the block's real parent | beacon | after code | documented on `PositionMirror.ended`; a side branch would be reported, not passed |
+
+Verdicts after code: forge signs D1 to D3 and D4 with the reset-read change above; beacon finds the main diff neutral on the
+hash store for import, `newPayload`, payload building, `eth_call`, `eth_simulateV1`, genesis and the prefetch.
+
+**What later slices inherit** (each is written into the task it binds):
+
+- **C3b (T089).** `deleteAccount` resets at once and on the world's storage, so the reset belongs to the layer of the
+  execution that made it and dies with a rejected block. It never drops `byHash`. A reset of an owner with no rows is the
+  normal case and must be free.
+- **C3c (T111) before C3b's reset acts.** The PoW miner, `eth_simulateV1` and the lenient builder issue resets on a storage
+  nobody commits. Each attempt needs its own throwaway layer.
+- **C2b (T062).** The three batch reads go on the ratchet (data-model 9, "A batch read is not an execution read").
+- **The reset path is covered on real blocks only before Cancun.** `selfdestruct-stored-storage.json` is the oracle; the
+  Amsterdam corpus cannot see a missing reset.
+
+T026's figures and mutation runs: `baselines/t026-position-mirror.md`. Its ethereum/tests half is open (B-207).
+
 ### Destructive change (C8a and C8b): the vault protocol blocks
 
 ```

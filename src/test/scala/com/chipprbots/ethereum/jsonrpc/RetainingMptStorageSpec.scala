@@ -22,3 +22,11 @@ class RetainingMptStorageSpec extends AnyFlatSpec with Matchers:
     all(removals) shouldBe empty
     root shouldBe plainRoot
   }
+
+  // Spec 018 C2a (T041): the view of one trie is wrapped the same way, so a trie built over `forOwner` keeps its
+  // replaced nodes too.
+  it should "withhold removals from the view of one trie as well" taggedAs (UnitTest, MPTTest) in {
+    val seen = PositionTestKit.removalsSeenThroughOwnerView(new EthSimulateService.RetainingMptStorage(_))
+    seen should not be empty
+    all(seen) shouldBe 0
+  }

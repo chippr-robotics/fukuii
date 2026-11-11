@@ -8,6 +8,7 @@ import com.chipprbots.ethereum.consensus.engine.BlobGasUtils
 import com.chipprbots.ethereum.crypto.kec256
 import com.chipprbots.ethereum.db.storage.EvmCodeStorage
 import com.chipprbots.ethereum.db.storage.MptStorage
+import com.chipprbots.ethereum.db.storage.MptStorageDecorator
 import com.chipprbots.ethereum.domain.Account
 import com.chipprbots.ethereum.domain.Address
 import com.chipprbots.ethereum.domain.BlobTransaction
@@ -733,14 +734,10 @@ object StxLedger:
     * the transaction again on the same pre-state. Keeping every node keeps every world of the replay readable. The
     * buffer is dropped with the request, and nothing is written to the database either way.
     */
-  final private[ledger] class ReplayMptStorage(underlying: MptStorage) extends MptStorage:
-    override def get(nodeId: Array[Byte]): MptNode = underlying.get(nodeId)
-    override def updateNodesInStorage(newRoot: Option[MptNode], toRemove: Seq[MptNode]): Option[MptNode] =
-      underlying.updateNodesInStorage(newRoot, Nil)
-    override def persist(): Unit = underlying.persist()
-    override def multiGetNodes(hashes: Seq[Array[Byte]]): Seq[Option[MptNode]] = underlying.multiGetNodes(hashes)
-    override def storeRawNodes(nodes: Seq[(org.apache.pekko.util.ByteString, Array[Byte])]): Unit =
-      underlying.storeRawNodes(nodes)
+  final private[ledger] class ReplayMptStorage(protected val underlying: MptStorage) extends MptStorageDecorator:
+    override protected def decorate(scoped: MptStorage): MptStorage = new ReplayMptStorage(scoped)
+    override protected def update(newRoot: Option[MptNode], removals: MptStorageDecorator.Removals): Option[MptNode] =
+      super.update(newRoot, removals.none)
 
   /** Why [[StxLedger.binarySearchGasEstimation]] rejected a candidate gas limit.
     *

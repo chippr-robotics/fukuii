@@ -138,6 +138,8 @@ class ConsensusAdapterSpec extends AnyFlatSpec with Matchers with ScalaFutures w
     blockchainReader.getBlockHeaderByHash.expects(*).anyNumberOfTimes().returning(Some(block.header))
     blockchainReader.getBlockHeaderByNumber.expects(*).anyNumberOfTimes().returning(Some(block.header))
     blockchain.stageBlockState.expects(*).returning(StagedBlockState.direct(mptStorage))
+    // The world asks for the account trie's view of the storage, which for a hash-keyed store is the store itself.
+    mptStorage.forOwner.expects(None).returning(mptStorage)
     mptStorage.getAt.expects(*, *).returning(mptNode)
 
     blockQueue.removeSubtree.expects(*)

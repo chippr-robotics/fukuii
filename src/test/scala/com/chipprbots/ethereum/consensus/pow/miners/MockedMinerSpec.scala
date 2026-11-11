@@ -236,7 +236,11 @@ class MockedMinerSpec
     override lazy val mockBlockGenerator: PoWBlockGenerator = mock[PoWBlockGenerator]
     override lazy val mockEthMiningService: EthMiningService = mock[EthMiningService]
     override lazy val mockEvmCodeStorage: EvmCodeStorage = mock[EvmCodeStorage]
-    override lazy val mockMptStorage: MptStorage = mock[MptStorage]
+    // A world asks its storage for the account trie's view of it: a hash-keyed store answers with itself.
+    override lazy val mockMptStorage: MptStorage =
+      val storage = mock[MptStorage]
+      storage.forOwner.expects(*).anyNumberOfTimes().returning(storage)
+      storage
 
     val miner: typed.ActorRef[MockedMiner.Command] =
       testKit.spawn(

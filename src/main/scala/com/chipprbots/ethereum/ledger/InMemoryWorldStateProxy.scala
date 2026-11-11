@@ -13,6 +13,7 @@ import com.chipprbots.ethereum.mpt.MerklePatriciaTrie.MissingCodeException
 import com.chipprbots.ethereum.mpt.MerklePatriciaTrie.MissingNodeException
 import com.chipprbots.ethereum.mpt.MerklePatriciaTrie.MissingStorageNodeException
 import com.chipprbots.ethereum.mpt.MptNode
+import com.chipprbots.ethereum.mpt.NibblePath
 import com.chipprbots.ethereum.rlp
 import com.chipprbots.ethereum.rlp.RLPImplicits.given
 import com.chipprbots.ethereum.vm.ImportProfile
@@ -55,7 +56,10 @@ object InMemoryWorldStateProxy:
       flatSlotStorage: Option[FlatSlotStorage]
   ): InMemoryWorldStateProxy =
     val readMemos = new WorldReadMemos
-    val accountsStateTrieProxy = createProxiedAccountsStateTrie(nodesKeyValueStorage, stateRootHash, readMemos)
+    // The world keeps the storage of the whole state; each trie is built over that trie's view of it. A hash-keyed
+    // storage is its own view of every trie (spec 018 data-model 8, "Owner threading").
+    val accountsStateTrieProxy =
+      createProxiedAccountsStateTrie(nodesKeyValueStorage.forOwner(None), stateRootHash, readMemos)
     new InMemoryWorldStateProxy(
       nodesKeyValueStorage,
       accountsStateTrieProxy,
@@ -70,6 +74,25 @@ object InMemoryWorldStateProxy:
       flatSlotStorage,
       readMemos
     )
+
+  /** The owner of an account's storage trie in a storage that keeps tries apart: `keccak256(address)`, the account's
+    * key in the account trie.
+    */
+  def storageOwner(address: Address): ByteString = kec256(address.bytes)
+
+  /** The nodes of one account's storage trie: that trie's view of the world's storage, with a node that is missing from
+    * it reported as that account's.
+    */
+  final private class AccountStorageNodes(protected val underlying: MptStorage, address: Address)
+      extends MptStorageDecorator:
+
+    override protected def decorate(scoped: MptStorage): MptStorage = new AccountStorageNodes(scoped, address)
+
+    override protected def read(nodeId: Array[Byte], path: NibblePath | Null): MptNode =
+      try super.read(nodeId, path)
+      catch
+        case _: MissingNodeException =>
+          throw new MissingStorageNodeException(ByteString(nodeId), address.bytes)
 
   /** Updates state trie with current changes but does not persist them into the storages. To do so it:
     *   - Commits code (to get account's code hashes)
@@ -216,7 +239,13 @@ class InMemoryWorldStateProxy(
   override def saveAccount(address: Address, account: Account): InMemoryWorldStateProxy =
     copyWith(accountsStateTrie = accountsStateTrie.put(address, account))
 
+  /** Also tells the storage that this account's storage trie is replaced as a whole, whatever becomes of the address
+    * afterwards (it may be created again in the same block): a storage that keeps a trie by position has that trie's
+    * nodes to drop, where one that keeps nodes by hash has nothing to do (spec 018 data-model 3 rule 6). Every caller
+    * deletes at the end of a transaction, never inside a call frame that can still revert.
+    */
   override def deleteAccount(address: Address): InMemoryWorldStateProxy =
+    stateStorage.resetOwner(InMemoryWorldStateProxy.storageOwner(address))
     copyWith(
       accountsStateTrie = accountsStateTrie.remove(address),
       contractStorages = contractStorages - address,
@@ -306,16 +335,10 @@ class InMemoryWorldStateProxy(
     val storageRoot = getAccount(address)
       .map(account => account.storageRoot)
       .getOrElse(Account.EmptyStorageRootHash)
-    val contextStorage = new MptStorage:
-      override def get(nodeId: Array[Byte]): MptNode =
-        try stateStorage.get(nodeId)
-        catch
-          case _: MissingNodeException =>
-            throw new MissingStorageNodeException(ByteString(nodeId), address.bytes)
-      override def updateNodesInStorage(newRoot: Option[MptNode], toRemove: Seq[MptNode]): Option[MptNode] =
-        stateStorage.updateNodesInStorage(newRoot, toRemove)
-      override def persist(): Unit = stateStorage.persist()
-      override def storeRawNodes(nodes: Seq[(ByteString, Array[Byte])]): Unit = stateStorage.storeRawNodes(nodes)
+    val contextStorage = new InMemoryWorldStateProxy.AccountStorageNodes(
+      stateStorage.forOwner(Some(InMemoryWorldStateProxy.storageOwner(address))),
+      address
+    )
     createProxiedContractStorageTrie(contextStorage, storageRoot.value)
 
   private def copyWith(
