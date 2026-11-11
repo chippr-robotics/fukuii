@@ -66,14 +66,12 @@ class ImportOnPositionsSpec extends ScalaTestWithActorTestKit with AnyFlatSpecLi
         new Shared(source) with LocalPruningConfigBuilder with Storages.DefaultStorages with TestInstanceConfigProvider:
           override protected def statePathLive: Boolean = guard
 
+  /** The genesis, loaded as the node loads it: onto the hash store, or committed to the unified layout. */
   private def loadGenesis(node: RpcCompatNode): BlockHeader =
     given BlockchainConfig = node.blockchainConfig
-    new GenesisDataLoader(
-      node.blockchainReader,
-      node.blockchainWriter,
-      node.storagesInstance.storages.evmCodeStorage,
-      node.storagesInstance.storages.stateStorage
-    ).loadGenesisData()
+    GenesisDataLoader
+      .over(node.blockchainReader, node.blockchainWriter, node.storagesInstance.storages)
+      .loadGenesisData()
     node.blockchainReader.getBlockHeaderByNumber(0).get
 
   private def refOf(header: BlockHeader): BlockRef =
@@ -116,25 +114,12 @@ class ImportOnPositionsSpec extends ScalaTestWithActorTestKit with AnyFlatSpecLi
     )
 
   // ─── The chain on the unified layout ───────────────────────────────────────────────────────────────────────────────
+  // The datadir starts empty, and its genesis is committed by the node on the unified layout (C3c).
   private lazy val source = EphemDataSource()
-  private lazy val genesis: BlockHeader =
-    referenceHead // the reference first: it says what the genesis state is
-    val header = loadGenesis(nodeOver(source, guard = false))
-    val nodes = new com.chipprbots.ethereum.db.storage.NodeStorage(source)
-    PathStateTestKit.seedPositions(
-      source,
-      RawTrieWalk.statePositions(header.stateRoot.value.toArray, hash => nodes.get(ByteString(hash)).get),
-      refOf(header)
-    )
-    header
-
-  /** The hash store of the datadir as the genesis load left it: nothing may be added to it. */
-  private lazy val hashStoreAtGenesis: Map[ByteString, ByteString] =
-    genesis
-    PathStateTestKit.hashStoreRows(source)
   private lazy val onPositions: RpcCompatNode =
-    hashStoreAtGenesis
+    referenceHead // the reference first: it says what each state is
     nodeOver(source, guard = true)
+  private lazy val genesis: BlockHeader = loadGenesis(onPositions)
   private lazy val execution = importPath(onPositions)
   private def pathState = onPositions.storagesInstance.storages.pathStateStorage.get
   private def disk: Disk = PathStateTestKit.allRows(new PathNodeStorage(source))
@@ -145,10 +130,11 @@ class ImportOnPositionsSpec extends ScalaTestWithActorTestKit with AnyFlatSpecLi
 
   private lazy val blocks: Seq[Block] = RpcCompatNode.blocks
 
-  "A chain imported onto the unified layout" should "start from a datadir that holds the genesis state as rows" taggedAs
+  "A chain imported onto the unified layout" should "start from a genesis committed as rows, with nothing in the hash store" taggedAs
     UnitTest in {
       blocks.size should be > 20
       referenceHead.header.hash shouldBe blocks.last.header.hash
+      genesis.hash shouldBe reference.blockchainReader.getBlockHeaderByNumber(0).get.hash
       pathState.anchor shouldBe Some(refOf(genesis))
       disk shouldBe stateOf(genesis)
       onPositions.blockchainReader.getBestBlockNumber shouldBe BigInt(0)
@@ -225,8 +211,7 @@ class ImportOnPositionsSpec extends ScalaTestWithActorTestKit with AnyFlatSpecLi
       parent.hash shouldBe referenceHead.header.hash
       // one writer of the state, and it is not the hash store's (data-model 7.6): 60 blocks later it holds what the
       // genesis load put there, and no node more
-      hashStoreAtGenesis should not be empty
-      PathStateTestKit.hashStoreRows(source) shouldBe hashStoreAtGenesis
+      PathStateTestKit.hashStoreRows(source) shouldBe empty
       // every block changes the state: a reward, a fee, a system contract's slot
       positions should be >= blocks.size
       info(s"${blocks.size} blocks, $positions positions changed, $storageRowsDeleted rows of storage tries deleted")
@@ -327,13 +312,6 @@ class ImportOnPositionsSpec extends ScalaTestWithActorTestKit with AnyFlatSpecLi
       import com.chipprbots.ethereum.domain.BlockAccessList
       import com.chipprbots.ethereum.domain.BlockchainImpl
       val other = EphemDataSource()
-      val header = loadGenesis(nodeOver(other, guard = false))
-      val nodes = new com.chipprbots.ethereum.db.storage.NodeStorage(other)
-      PathStateTestKit.seedPositions(
-        other,
-        RawTrieWalk.statePositions(header.stateRoot.value.toArray, hash => nodes.get(ByteString(hash)).get),
-        refOf(header)
-      )
       var readersAsked, readersGiven = 0
       val node = new RpcCompatNode:
         override lazy val storagesInstance
@@ -379,6 +357,7 @@ class ImportOnPositionsSpec extends ScalaTestWithActorTestKit with AnyFlatSpecLi
                   readersAsked += 1
                   if reader.isDefined then readersGiven += 1
                   reader
+      loadGenesis(node).hash shouldBe genesis.hash
       val withLists = importPath(node)
       given BlockchainConfig = node.blockchainConfig
       var supplied = 0

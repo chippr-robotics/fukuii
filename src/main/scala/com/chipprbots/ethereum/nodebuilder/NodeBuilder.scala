@@ -1306,16 +1306,7 @@ private[nodebuilder] object ShutdownHooks:
 trait GenesisDataLoaderBuilder:
   self: BlockchainBuilder & StorageBuilder =>
 
-  lazy val genesisDataLoader =
-    new GenesisDataLoader(
-      blockchainReader,
-      blockchainWriter,
-      storagesInstance.storages.evmCodeStorage,
-      storagesInstance.storages.stateStorage,
-      // Who created the datadir, and, when the genesis load counted every position (#1692), that its counts are exact:
-      // one synced write.
-      countsExact => storagesInstance.storages.appStateStorage.markDatadirCreated(countsExact).commitSync()
-    )
+  lazy val genesisDataLoader = GenesisDataLoader.over(blockchainReader, blockchainWriter, storagesInstance.storages)
 
 /** Provides the basic functionality of a Node, except the mining algorithm. The latter is loaded dynamically based on
   * configuration.

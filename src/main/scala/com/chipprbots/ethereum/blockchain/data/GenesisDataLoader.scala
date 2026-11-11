@@ -33,6 +33,9 @@ import com.chipprbots.ethereum.rlp.RLPImplicits.given
 import com.chipprbots.ethereum.rlp.RLPList
 import com.chipprbots.ethereum.rlp.RLPValue
 import com.chipprbots.ethereum.utils.BlockchainConfig
+import com.chipprbots.ethereum.db.storage.pathstate.BlockRef
+import com.chipprbots.ethereum.db.storage.pathstate.PathStateStorage
+import com.chipprbots.ethereum.db.storage.pathstate.StateLayout
 import com.chipprbots.ethereum.utils.Logger
 
 class GenesisDataLoader(
@@ -44,7 +47,12 @@ class GenesisDataLoader(
     // there (spec 022 D7, `HealInvariant.isEmpty`). Crash before it, and the datadir only counts as not empty: one walk.
     // Its argument is whether every reference count the load wrote is exact (#1692, `GenesisDataLoader.countsExact`):
     // only then may the datadir be stamped as such. A crash before the callback leaves it unstamped, which is safe.
-    onFirstStored: Boolean => Unit = _ => ()
+    onFirstStored: Boolean => Unit = _ => (),
+    // The unified state layout (spec 018 Track C), when this chain's state lives there: the genesis is then committed
+    // to it, in one batch with the genesis block, and `stateStorage` is used only to say what the header is.
+    pathState: Option[PathStateStorage] = None,
+    // The datadir's layout stamp (`AppStateStorage.getStateLayout`): what says which layout wrote it.
+    stateLayout: () => Option[String] = () => None
 ) extends Logger:
 
   private val bloomLength = 512
@@ -100,8 +108,21 @@ class GenesisDataLoader(
     yield ()
 
   def loadGenesisData(genesisData: GenesisData)(implicit blockchainConfig: BlockchainConfig): Try[Unit] =
+    val existing = blockchainReader.getBlockHeaderByNumber(0)
+    GenesisDataLoader
+      .layoutRefusal(pathLive = pathState.isDefined, stamp = stateLayout(), genesisStored = existing.isDefined)
+      .orElse(pathState.flatMap(_ => GenesisDataLoader.unifiedLayoutRefusal(genesisData, addressLength))) match
+      case Some(refusal) => Failure(new IllegalStateException(refusal))
+      case None          => loadOnLayout(genesisData, existing)
 
-    val storage = GenesisDataLoader.AppendOnlyMptStorage(stateStorage.getReadOnlyStorage)
+  private def loadOnLayout(genesisData: GenesisData, existing: Option[BlockHeader])(implicit
+      blockchainConfig: BlockchainConfig
+  ): Try[Unit] =
+    // On the unified layout the tries are built on a layer of their own, which the commit writes as rows. On the hash
+    // store they are built into a buffer over the store.
+    val genesisLayer = pathState.map(_.genesisLayer())
+    val storage: MptStorage =
+      genesisLayer.fold[MptStorage](GenesisDataLoader.AppendOnlyMptStorage(stateStorage.getReadOnlyStorage))(_.storage)
     val initalRootHash = MerklePatriciaTrie.EmptyRootHash
 
     val stateMptRootHash = getGenesisStateRoot(genesisData, initalRootHash, storage)
@@ -109,7 +130,7 @@ class GenesisDataLoader(
 
     log.debug(s"Prepared genesis header: $header")
 
-    blockchainReader.getBlockHeaderByNumber(0) match
+    existing match
       case Some(existingGenesisHeader) if existingGenesisHeader.hash == header.hash =>
         log.debug("Genesis data already in the database")
         Success(())
@@ -120,6 +141,23 @@ class GenesisDataLoader(
               " Use different directory for running private blockchains."
           )
         )
+      case None if genesisLayer.isDefined =>
+        // One batch, synced: the genesis block, its weight and the best-block pointer, the rows of its state, the
+        // marks of a datadir this build created, the layout stamp and the state anchor (spec 018 data-model 5.4).
+        val block = Block(header, BlockBody(Nil, Nil, withdrawals = header.withdrawalsRoot.map(_ => Nil)))
+        pathState.get.commitGenesis(
+          genesisLayer.get,
+          BlockRef(header.hash.value, header.number.value, header.stateRoot.value),
+          Some(
+            blockchainWriter.saveBatch(
+              block,
+              Nil,
+              ChainWeight.totalDifficultyOnly(header.difficulty.value),
+              saveAsBestBlock = true
+            )
+          )
+        )
+        Success(())
       case None =>
         storage.persist()
         stateStorage.forcePersist(GenesisDataLoad)
@@ -289,6 +327,82 @@ class GenesisDataLoader(
     ByteString(Hex.decode(List.fill(length)("0").mkString))
 
 object GenesisDataLoader:
+
+  /** The loader of a node's storages: on the hash store, or on the unified layout when the storages hold it. */
+  def over(
+      blockchainReader: BlockchainReader,
+      blockchainWriter: BlockchainWriter,
+      storages: com.chipprbots.ethereum.domain.BlockchainStorages
+  ): GenesisDataLoader =
+    new GenesisDataLoader(
+      blockchainReader,
+      blockchainWriter,
+      storages.evmCodeStorage,
+      storages.stateStorage,
+      // Who created the datadir, and, when the genesis load counted every position (#1692), that its counts are exact:
+      // one synced write. On the unified layout the same marks go in the genesis commit's own batch.
+      countsExact => storages.appStateStorage.markDatadirCreated(countsExact).commitSync(),
+      storages.pathStateStorage,
+      () => storages.appStateStorage.getStateLayout()
+    )
+
+  /** Why this build may not open the datadir, by its layout stamp (spec 018 data-model 5.3); `None` when it may.
+    *
+    * The stamp is written with the genesis of a datadir the unified layout creates, and by nothing else. So a datadir
+    * with a genesis and no stamp was written by the hash layout, and one with a stamp by the unified layout. Neither
+    * can be read as the other: there is no adoption and no migration. The check is here while the in-development guard
+    * exists, since this is the first thing that writes the stamp; the node's own guard at start is C5a's.
+    */
+  def layoutRefusal(pathLive: Boolean, stamp: Option[String], genesisStored: Boolean): Option[String] =
+    (pathLive, stamp) match
+      case (false, Some(found)) =>
+        Some(
+          s"This data directory holds its state in the unified layout (state.layout = '$found'), and " +
+            "fukuii.state.path-live is off: this build would read a state store that holds nothing of it. Turn " +
+            "fukuii.state.path-live on, or use another data directory."
+        )
+      case (true, Some(StateLayout.PathLive1)) => None
+      case (true, Some(other)) =>
+        Some(s"This data directory was written by a state layout this build does not know (state.layout = '$other').")
+      case (true, None) if genesisStored =>
+        Some(
+          "This data directory was written by an earlier storage layout and cannot be opened with " +
+            "fukuii.state.path-live on. Stop the node, move or delete the rocksdb directory under the data " +
+            "directory, and start again."
+        )
+      case _ => None
+
+  /** What a genesis may not have on the unified layout; `None` when it has none of it.
+    *
+    *   - '''One address twice.''' The allocation is keyed by the address as it is written, so `0xAB…` and `ab…` are two
+    *     entries for one account. On the hash store the second overwrites the first and the first's storage is left as
+    *     unreachable nodes. Here the first's storage would be rows under an owner whose account names none, which
+    *     nothing would ever delete, or a second trie built over the first.
+    *   - '''Storage on a chain whose storage keys are not hashed the Ethereum way.''' The genesis storage tries are
+    *     always built that way, and execution on such a chain builds them another, so the rows would be at positions
+    *     execution never looks at. No shipped chain is one.
+    */
+  def unifiedLayoutRefusal(genesisData: GenesisData, addressLength: Int)(implicit
+      blockchainConfig: BlockchainConfig
+  ): Option[String] =
+    def normalised(address: String): String =
+      val clean = if address.startsWith("0x") || address.startsWith("0X") then address.substring(2) else address
+      clean.reverse.padTo(addressLength, "0").reverse.mkString.toLowerCase
+    val twice = genesisData.alloc.keys.toSeq.groupBy(normalised).collectFirst {
+      case (address, written) if written.sizeIs > 1 => address
+    }
+    twice
+      .map(address =>
+        s"The genesis allocates the account 0x$address more than once (the same address written in different ways). " +
+          "Give each account one entry."
+      )
+      .orElse(
+        Option.when(!blockchainConfig.ethCompatibleStorage && genesisData.alloc.values.exists(hasStorage))(
+          "The genesis has accounts with storage, and this chain's storage is not Ethereum-compatible " +
+            "(eth-compatible-storage = false): genesis storage cannot be placed on the unified state layout for " +
+            "such a chain."
+        )
+      )
 
   /** Whether every reference count a genesis load writes is exact (#1692). The tries are built into one buffer that
     * keeps each distinct node once (see [[AppendOnlyMptStorage]]), and `persist()` writes each at one reference. That

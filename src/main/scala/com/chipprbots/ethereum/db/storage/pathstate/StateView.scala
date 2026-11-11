@@ -42,6 +42,14 @@ object StateAnchor:
         BlockRef(hash(blockHash), BigInt(number), hash(stateRoot))
       case _ => malformed
 
+/** The layout stamp (spec 018 data-model 5.2): the AppState key `state.layout`, and the one value there is. A datadir
+  * that has it holds its state in CF `t` and CF `u` under a [[StateAnchor]]. It is written in the batch that first
+  * gives a datadir an anchor, and there is no second marker of its kind.
+  */
+object StateLayout:
+  val Key: String = "state.layout"
+  val PathLive1: String = "path-live-1"
+
 /** One in-place change of the state on disk (data-model 6.3.1): the anchor it moves to, and for every position its
   * batch writes, the value a reader of the state '''before''' the move must see there (`None`: no row).
   */
@@ -193,3 +201,30 @@ final class StateView private[pathstate] (
 
   /** The epoch right now, for a fault that reports how far the disk has moved on. */
   def epochNow: Long = clock.epoch
+
+object StateView:
+
+  /** The block before any block: what a view of no state is a view of. */
+  private val BeforeGenesis: BlockRef =
+    BlockRef(
+      ByteString(new Array[Byte](32)),
+      BigInt(-1),
+      ByteString(com.chipprbots.ethereum.mpt.MerklePatriciaTrie.EmptyRootHash)
+    )
+
+  /** A clock that never moves, for a view that reads no disk. */
+  private object Still extends StateClock:
+    override def epoch: Long = 0L
+    override def anchor: Option[BlockRef] = None
+    override def movesBetween(from: Long, to: Long): Option[Seq[StateMove]] = Some(Nil)
+
+  /** A view of no state: there is no row at any position. What a genesis is built over, on a storage that then holds
+    * only what the build writes (it reads back nothing else).
+    */
+  private[pathstate] def ofNothing: StateView =
+    new StateView(
+      BeforeGenesis,
+      0L,
+      Still,
+      new PathNodeStorage(com.chipprbots.ethereum.db.dataSource.EphemDataSource())
+    )

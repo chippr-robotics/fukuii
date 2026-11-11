@@ -55,6 +55,17 @@ class AppStateStorage(val dataSource: DataSource) extends TransactionalKeyValueS
   private[storage] def putStateAnchor(block: pathstate.BlockRef): DataSourceBatchUpdate =
     put(Keys.StateAnchor, pathstate.StateAnchor.encode(block))
 
+  /** The layout stamp of this datadir (spec 018 data-model 5.2): present, with the one value this build knows, when its
+    * state lives in the position-keyed rows under a state anchor. A datadir of the hash layout has none.
+    */
+  def getStateLayout(): Option[String] = get(Keys.StateLayout)
+
+  /** The update that stamps the datadir as the unified layout's. It belongs in the batch that first gives the datadir a
+    * state anchor, which only the path state storage builds.
+    */
+  private[storage] def putStateLayout(): DataSourceBatchUpdate =
+    put(Keys.StateLayout, pathstate.StateLayout.PathLive1)
+
   /** The height the changeset records have been pruned up to (spec 018 data-model 4.5): every height below it has had
     * its records deleted, or never had one. `None` on a datadir no block has been committed to in place. The records
     * cannot be scanned for their lowest height (data-model 4.1), so this is the only thing that knows it.
@@ -929,6 +940,7 @@ object AppStateStorage:
     val RefCountsExact = "state.refcounts.exact"
     val StateAnchor = com.chipprbots.ethereum.db.storage.pathstate.StateAnchor.Key
     val StateChangesetPrunedTo = "state.changeset.pruned-to"
+    val StateLayout = com.chipprbots.ethereum.db.storage.pathstate.StateLayout.Key
     val ChainWeightInvariant = "chain.weight.invariant"
     val ChainWeightReconcileProgress = "chain.weight.reconcileProgress"
     val ChainWeightSnapPending = "chain.weight.snapPending"
