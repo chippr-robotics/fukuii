@@ -48,8 +48,10 @@ object WormBar:
   /** The two brackets around the track. */
   private val BracketCols = 2
 
-  /** The ripple's period in ticks. */
-  private val RipplePeriod = 3
+  /** The ripple's period in ticks: after this many ticks it draws the same cell again. The renderer's lookahead is one
+    * less: a frame that equals each of the next `RipplePeriod - 1` ticks' frames equals every later one.
+    */
+  private[console] val RipplePeriod = 3
 
   /** The column budget of a bar whose track has `slots` slots. */
   def budgetFor(slots: Int, glyphs: TuiGlyphs): Int =

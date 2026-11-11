@@ -353,7 +353,10 @@ abstract class BaseNode extends Node:
         () => blockchainReader.getBestBlockNumber,
         peerConfiguration.maxOutgoingPeers + peerConfiguration.maxIncomingPeers,
         () => SNAPSyncMetrics.latestSample,
-        local = local
+        local = local,
+        // Spec 027 slice 4: each peer's client id and best block, and the txpool; asked in the same bounded wait.
+        networkPeerManager = Some(networkPeerManager),
+        txPool = Some(pendingTransactionsManagerTyped)
       )(using system.scheduler)
       // Polling ends with the TUI: after `d`, a lost terminal or a failed key read, nothing reads the snapshots.
       val thread = new TuiProbeThread(probe, tui.config.statusPollIntervalMs, tuiSnapshots, () => tui.isEnabled)

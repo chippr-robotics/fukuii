@@ -1,7 +1,13 @@
 package com.chipprbots.ethereum.console
 
+import java.time.Duration
 import java.time.Instant
 import java.util.Locale
+
+import ch.qos.logback.classic.Level
+import ch.qos.logback.classic.LoggerContext
+import ch.qos.logback.classic.spi.LoggingEvent
+import org.slf4j.LoggerFactory
 
 import com.chipprbots.ethereum.utils.ForkBlockNumbers
 import com.chipprbots.ethereum.utils.ForkTimestamps
@@ -138,7 +144,8 @@ object TuiFixtures:
       gcShare: Double = 0.003,
       headTimestamp: Option[Long] = None,
       snapCounters: Option[SnapCounters] = None,
-      snapPivot: Option[Long] = None
+      snapPivot: Option[Long] = None,
+      lastImport: Option[ImportSample] = None
   ): LocalSample =
     LocalSample(
       diskFree = Some((diskGiB * GiB).toLong),
@@ -146,13 +153,108 @@ object TuiFixtures:
       discovery = Some(DiscoverySample(known = 1_912L, pending = 14L, blacklisted = 3L)),
       headTimestamp = headTimestamp,
       snapCounters = snapCounters,
-      snapPivot = snapPivot
+      snapPivot = snapPivot,
+      lastImport = lastImport
     )
 
-  /** `state` as the probe saw it at its `now`: both actors answered, `peers` handshaked, and `local` read. */
-  def polled(state: TuiState, peers: Seq[TuiPeer], local: LocalSample): TuiState =
-    state.copy(snapshot =
-      Some(
+  // ---- Slice 4: the peers' details and scores, the txpool, the log tail ----------------------------------------------
+
+  /** Client ids as peers send them in Hello: name, version, platform, runtime. */
+  private val clientIds: Vector[String] = Vector(
+    "CoreGeth/v1.12.19-stable-c2b6d2a5/linux-amd64/go1.21.5",
+    "besu/v24.1.2/linux-x86_64/openjdk-java-21",
+    "Geth/v1.13.5-stable-916d6a44/linux-amd64/go1.21.4",
+    "fukuii/v0.11.0/linux/java-25",
+    "Nethermind/v1.25.4+20b10b35/linux-x64/dotnet8.0.0"
+  )
+
+  /** Each peer's client id and best block (`GetHandshakedPeersCmd`): the best block at or just under `best`. */
+  def peerDetails(peers: Seq[TuiPeer], best: Long = 21_884_102L): Map[String, PeerDetails] =
+    peers.zipWithIndex.map((p, i) => p.id -> PeerDetails(clientIds(i % clientIds.size), best - i % 3)).toMap
+
+  /** Every seventh peer has no published score yet (a peer the scorer has not seen an event of). */
+  private def scoredPeers(peers: Seq[TuiPeer]): Seq[(TuiPeer, Int)] = peers.zipWithIndex.filter((_, i) => i % 7 != 6)
+
+  private def scoreOf(i: Int): Double = 0.95 - ((i * 37) % 60) / 100.0
+
+  /** The scores slice 4a published 4 s before [[Now]]. */
+  def peerScores(peers: Seq[TuiPeer]): PeerScores =
+    PeerScores(Now.minusSeconds(4), scoredPeers(peers).map((p, i) => p.id -> scoreOf(i)).toMap)
+
+  /** The snapshot before, 10 s earlier: by peer, a third of the scores lower (now up), a third equal, a third higher.
+    */
+  def previousScores(peers: Seq[TuiPeer]): PeerScores =
+    PeerScores(
+      Now.minusSeconds(14),
+      scoredPeers(peers).map { (p, i) =>
+        p.id -> (i % 3 match
+          case 0 => scoreOf(i) - 0.012
+          case 1 => scoreOf(i)
+          case _ => scoreOf(i) + 0.009
+        )
+      }.toMap
+    )
+
+  /** Each scored peer's trend between [[previousScores]] and [[peerScores]], the highest score first. */
+  def trends(peers: Seq[TuiPeer]): Seq[(TuiPeer, Trend)] =
+    scoredPeers(peers)
+      .sortBy((_, i) => -scoreOf(i))
+      .map((p, i) =>
+        p -> (i % 3 match
+          case 0 => Trend.Up
+          case 1 => Trend.Steady
+          case _ => Trend.Down
+        )
+      )
+
+  /** A logging event at `at`, for a test that feeds a ring directly (the test root logger is at ERROR). */
+  def logEvent(
+      text: String,
+      level: Level = Level.INFO,
+      logger: String = "com.chipprbots.ethereum.Fukuii",
+      at: Instant = Now
+  ): LoggingEvent =
+    val context = LoggerFactory.getILoggerFactory.asInstanceOf[LoggerContext]
+    val event = new LoggingEvent(getClass.getName, context.getLogger(logger), level, text, null, null)
+    event.setTimeStamp(at.toEpochMilli)
+    event
+
+  private val Sync = "com.chipprbots.ethereum.blockchain.sync"
+  private val Net = "com.chipprbots.ethereum.network"
+
+  /** The log ring's newest lines, oldest first, as a node at its head logs them (research §3.2–§3.6): sync and other
+    * loggers, a warning and an error, and the worm bar the log draws.
+    */
+  val recentLogs: Vector[LogLine] = Vector(
+    ("11:58:21", "INFO", s"$Net.PeerManagerActor", "Handshaked peer 0x3fa1…e2 CoreGeth/v1.12.19"),
+    ("11:58:34", "INFO", s"$Sync.regular.RegularSync", "RegularSync: current=21884097 best=21884102 lag=5"),
+    ("11:58:47", "INFO", s"$Sync.regular.BlockImporter", "Imported block 21,884,098 0x1f09…88a1 with 17 txs in 26ms"),
+    ("11:59:00", "WARN", s"$Net.PeerActor", "Peer 0x9c0d…77 timed out on GetBlockHeaders, retrying"),
+    ("11:59:04", "INFO", s"$Sync.regular.BlockImporter", "Imported block 21,884,099 0x7ab2…d4c7 with 6 txs in 14ms"),
+    ("11:59:12", "INFO", "com.chipprbots.ethereum.jsonrpc.EthMiningService", "eth_getWork served for block 21,884,100"),
+    ("11:59:17", "INFO", s"$Sync.regular.BlockImporter", "Imported block 21,884,100 0x3301…2e9d with 21 txs in 31ms"),
+    ("11:59:25", "INFO", s"$Sync.regular.RegularSync", "[====================🪱]🧠 100% — RegularSync"),
+    ("11:59:30", "ERROR", s"$Net.rlpx.RLPxConnectionHandler", "Cannot decode a message from 203.0.113.40:30303"),
+    ("11:59:34", "INFO", s"$Sync.regular.BlockImporter", "Imported block 21,884,101 0x9b0c…ff31 with 9 txs in 17ms"),
+    ("11:59:41", "INFO", "com.chipprbots.ethereum.consensus.pow.miners.EthashDAGManager", "DAG epoch 731 loaded"),
+    ("11:59:47", "INFO", s"$Sync.regular.BlockImporter", "Imported block 21,884,102 0x6d21…1a0e with 14 txs in 22ms"),
+    ("11:59:52", "INFO", s"$Net.PeerManagerActor", "Peers: 41 handshaked · 14 in · 27 out"),
+    ("12:00:00", "INFO", s"$Sync.regular.RegularSync", "RegularSync: at head, block 21884102")
+  ).zipWithIndex.map { case ((time, level, logger, text), i) => LogLine(9_000L + i, time, level, logger, text) }
+
+  /** `state` as the probe saw it at its `now`: every actor answered, `peers` handshaked with their details and scores,
+    * the txpool, and `local` read; and the log ring's [[recentLogs]].
+    */
+  def polled(
+      state: TuiState,
+      peers: Seq[TuiPeer],
+      local: LocalSample,
+      txpool: TxpoolSample = TxpoolSample(142, 0)
+  ): TuiState =
+    val best = Seq(state.bestBlock, state.currentBlock, local.snapPivot.getOrElse(0L)).max
+    val scores = peerScores(peers)
+    state.copy(
+      snapshot = Some(
         NodeStatusSnapshot(
           now = state.now,
           maxPeers = state.maxPeers,
@@ -169,9 +271,13 @@ object TuiFixtures:
             ),
             state.now
           ),
-          local = local
+          local = local.copy(peerScores = Some(scores)),
+          details = Some(Sourced.Fresh(peerDetails(peers, best), state.now)),
+          txpool = Some(Sourced.Fresh(txpool, state.now))
         )
-      )
+      ),
+      scores = ScoreHistory(Some(previousScores(peers)), Some(scores)),
+      logs = recentLogs
     )
 
   /** `state` with its peer source replaced. */
@@ -290,8 +396,15 @@ object TuiFixtures:
         chain = Some(chainEtc)
       ),
       peerList(23),
-      local(diskGiB = 1_240.0, heapGiB = 2.1)
+      local(diskGiB = 1_240.0, heapGiB = 2.1, lastImport = Some(ImportSample(3, Duration.ofMillis(61))))
     )
+
+  /** [[regularSyncEtc]] early on, at 11 %: on the S track (20 slots) its worm is at cell 2, where the ripple draws
+    * ticks 1 and 2 (mod 3) alike (prism, on slice 3).
+    */
+  def earlyRegularEtc(glyphs: GlyphSet = GlyphSet.Emoji): TuiState =
+    val s = regularSyncEtc(glyphs)
+    s.copy(currentBlock = 2_407_251L, syncBaseline = Some(SyncBaseline(2_306_031L, Now.minusSeconds(549L))))
 
   /** Sepolia two blocks behind the head, its head 3 days and 4 hours before Amsterdam. */
   def sepoliaNearHead(glyphs: GlyphSet = GlyphSet.Emoji): TuiState =
@@ -312,7 +425,8 @@ object TuiFixtures:
         chain = Some(chainSepolia)
       ),
       peerList(23),
-      local(diskGiB = 1_230.0, heapGiB = 2.1, headTimestamp = Some(1_791_294_816L - (3 * 86_400L + 4 * 3_600L)))
+      local(diskGiB = 1_230.0, heapGiB = 2.1, headTimestamp = Some(1_791_294_816L - (3 * 86_400L + 4 * 3_600L))),
+      TxpoolSample(1_204, 3)
     )
 
   /** Every fixture by name. */

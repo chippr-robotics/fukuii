@@ -4,9 +4,9 @@
 
 **Created**: 2026-11-07
 
-**Status**: Active (2026-11-10). Slice 1 (worms, glyphs, tiers) merged as #1752, slice 4a (peer scoring) as #1782 and slice 2 (tick, motion, non-blocking loop) as #1783; slices 3, 4 and 5 follow, one PR each, from the plan and 150 tasks merged as #1742. The manual gate runs (T029, T057, T081, T149 and later) are one UAT across all slices once they are code complete (user, 2026-11-09).
+**Status**: Active (2026-11-10). Slice 1 (worms, glyphs, tiers) merged as #1752, slice 4a (peer scoring) as #1782, slice 2 (tick, motion, non-blocking loop) as #1783 and slice 3 (views, layout, alerts) as #1784; slices 4 and 5 follow, one PR each, from the plan and 150 tasks merged as #1742. The manual gate runs (T029, T057, T081, T149 and later) are one UAT across all slices once they are code complete (user, 2026-11-09).
 
-**In flight**: `feat/027-s3-views` and `feat/027-s4-logs-peers` (`dev-node`, local session): slice 3 in PR; slice 4 in progress, on top of slice 3
+**In flight**: `feat/027-s4-logs-peers` and `feat/027-s5-chain-panels` (`dev-node`, local session): slice 4 in PR; slice 5 in review, on top of slice 4
 
 **Input**: The design proposal #1490 carried as `docs/architecture/tui-design-proposal.md` ("the worm goes to the
 brain": five phased increments, views, tiers, animation, glyph and colour system, data inventory, architecture, testing,
@@ -327,10 +327,12 @@ Each requirement names the research.md section it comes from.
 - **FR-018** The Overview MUST show the §6 fields for its tier: network, chain id, family, uptime and view (all); head and
   peers inline (M+); version (L); peers and blocks; RPC, WS, IPC and Engine ports; disk free; txpool size with blob count;
   JVM heap and GC share (M+); discovery known/pending/blacklisted (L) (§3.1–§3.4, §6).
-- **FR-019** The Peers view MUST show id, address, direction and age (`GetPeersCmd`), and client id and best block
-  (`GetHandshakedPeersCmd`). Peer scores and their ↑↓→ trend MUST reach the TUI through the `NetworkMetrics` export, never
-  by handing a scoring manager to the probe (Q5), and come from the production `PeerScoringManager` (D-1, FR-026). The
-  score column is on; a peer with no published score yet shows `—`, never zero (§6).
+- **FR-019** The Peers view MUST show id, direction and age (`GetPeersCmd`), and client id and best block
+  (`GetHandshakedPeersCmd`), and from tier M the address (`GetPeersCmd`): at S (80 columns) the address gives way to the
+  client and best block, which tell an operator more about a peer than where it connects from (slice 4, decision 5).
+  Peer scores and their ↑↓→ trend MUST reach the TUI through the `NetworkMetrics` export, never by handing a scoring
+  manager to the probe (Q5), and come from the production `PeerScoringManager` (D-1, FR-026). The score column is on; a
+  peer with no published score yet shows `—`, never zero (§6).
 - **FR-020** Every string from outside the node that reaches a frame (peer client ids, log text) MUST be sanitised: ESC,
   C0 and C1 control characters removed, one line, length capped (C-16).
 - **FR-021** The log tail MUST come from a separate ring appender of 1,000 lines (configurable), INFO and above by

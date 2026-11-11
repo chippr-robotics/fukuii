@@ -1,12 +1,14 @@
  # FUKUII  etc (61) . PoW . head 21,884,102 . 41/50 peers . up 12d 7h                                              Help 
 ------------------------------------------------------------------------------------------------------------------------
  + no alerts                                                                                                            
- Peers   41/50 ##########                    Block  21,884,102 (at head)                                                
+ Peers   41/50 ##########                    Block  21,884,102 (at head)                     Txpool  142                
  Sync    + at head                                                                                                      
 ------------------------------------------------------------------------------------------------------------------------
  Keys                                                                                                                   
-   1 2 3 4   1 Overview  2 Sync  3 Peers  4 Chain                                                                       
+   1-5       1 Overview  2 Sync  3 Peers  4 Chain  5 Logs                                                               
    Tab       the next view (wraps)                                                                                      
+   l         the Logs view                                                                                              
+   + -       Logs: + newer lines, - older lines, a page at a time                                                       
    ? h       this help; any key but q, r and d returns                                                                  
    p         pause or resume the motion (polling continues)                                                             
    g         switch the glyph set: emoji / ascii                                                                        
@@ -16,7 +18,7 @@
 ------------------------------------------------------------------------------------------------------------------------
  Glyphs (ascii, g switches)                                                                                             
    ~o worm (progress)   @@ brain (done)   z  stalled   + done / active   # peer   ! warning   x error   > next fork     
-   . to come   [S] SNAP phase                                                                                           
+   . to come   [S] SNAP phase   ^ v - score trend   - no score yet                                                      
                                                                                                                         
                                                                                                                         
                                                                                                                         
@@ -35,6 +37,4 @@
                                                                                                                         
                                                                                                                         
                                                                                                                         
-                                                                                                                        
-                                                                                                                        
- 1 Overview  2 Sync  3 Peers  4 Chain | p Pause  ? Help  r Redraw  d Detach  q Quit                                     
+ 1 Overview  2 Sync  3 Peers  4 Chain  5 Logs | p Pause  ? Help  r Redraw  d Detach  q Quit                             

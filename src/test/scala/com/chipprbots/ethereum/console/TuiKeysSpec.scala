@@ -8,8 +8,8 @@ import org.scalatest.matchers.should.Matchers
 
 import com.chipprbots.ethereum.testing.Tags.*
 
-/** The view keys (spec 027 FR-015, research §2.1–§2.2, T061). `5`, `l`, `+` and `-` arrive with the Logs view in slice
-  * 4, so here they are unknown keys.
+/** The view keys (spec 027 FR-015, research §2.1–§2.2, T061), and the Logs view's `5`, `l`, `+` and `-` with the Recent
+  * strips (slice 4, T086).
   */
 class TuiKeysSpec extends AnyFlatSpec with Matchers:
 
@@ -23,15 +23,22 @@ class TuiKeysSpec extends AnyFlatSpec with Matchers:
       tui.shutdown()
       tt.close()
 
-  "The number keys" should "open Overview, Sync, Peers and Chain" taggedAs (UnitTest) in withTui { (tui, _) =>
+  "The number keys" should "open Overview, Sync, Peers, Chain and Logs" taggedAs (UnitTest) in withTui { (tui, _) =>
     tui.getState.view shouldBe TuiView.Overview
-    for (key, view) <- Seq('2' -> TuiView.Sync, '3' -> TuiView.Peers, '4' -> TuiView.Chain, '1' -> TuiView.Overview) do
+    for (key, view) <- Seq(
+        '2' -> TuiView.Sync,
+        '3' -> TuiView.Peers,
+        '4' -> TuiView.Chain,
+        '5' -> TuiView.Logs,
+        '1' -> TuiView.Overview
+      )
+    do
       tui.handleCommand(key) shouldBe TuiCommand.Continue
       tui.getState.view shouldBe view
   }
 
   they should "name the view in the header" taggedAs (UnitTest) in withTui { (tui, tt) =>
-    for key <- "1234" do
+    for key <- "12345" do
       tui.handleCommand(key)
       tui.render()
       val header = TuiTestTerminal.visible(tt.lastFrame).linesIterator.next()
@@ -40,11 +47,11 @@ class TuiKeysSpec extends AnyFlatSpec with Matchers:
 
   "Tab" should "cycle the views and wrap" taggedAs (UnitTest) in withTui { (tui, _) =>
     '\t'.toLower shouldBe '\t' // checkInput lower-cases every key
-    val seen = (1 to 5).map { _ =>
+    val seen = (1 to 6).map { _ =>
       tui.handleCommand('\t') shouldBe TuiCommand.Continue
       tui.getState.view
     }
-    seen shouldBe Seq(TuiView.Sync, TuiView.Peers, TuiView.Chain, TuiView.Overview, TuiView.Sync)
+    seen shouldBe Seq(TuiView.Sync, TuiView.Peers, TuiView.Chain, TuiView.Logs, TuiView.Overview, TuiView.Sync)
   }
 
   "? and h" should "open Help over the current view, and any key return to it" taggedAs (UnitTest) in withTui {
@@ -63,7 +70,8 @@ class TuiKeysSpec extends AnyFlatSpec with Matchers:
     tui.render()
     val frame = TuiTestTerminal.visible(tt.lastFrame)
     frame.linesIterator.next().trim should endWith("Help")
-    for key <- Seq("1 Overview", "Tab", "g ", "p ", "q ", "d ", "r ") do frame should include(key)
+    for key <- Seq("1 Overview", "5 Logs", "Tab", "l ", "+ -", "g ", "p ", "q ", "d ", "r ") do
+      frame should include(key)
   }
 
   it should "still quit on q and detach on d" taggedAs (UnitTest) in {
@@ -120,7 +128,7 @@ class TuiKeysSpec extends AnyFlatSpec with Matchers:
 
   "Unknown keys" should "continue and change nothing" taggedAs (UnitTest) in withTui { (tui, _) =>
     val before = tui.getState
-    for key <- Seq('x', '5', 'l', '+', '-', '[', '0') do
+    for key <- Seq('x', '6', '[', '0') do
       tui.handleCommand(key) shouldBe TuiCommand.Continue
       tui.getState shouldBe before
   }
@@ -146,10 +154,10 @@ class TuiKeysSpec extends AnyFlatSpec with Matchers:
     val renderer = TuiRenderer(TuiConfig.default)
     val s = TuiFixtures.syncedEtc()
     renderer.render(s, 80, 24).last.toString.trim shouldBe
-      "1 Over 2 Sync 3 Peers 4 Chain │ p Pause ? Help r Redraw d Detach q Quit"
+      "1 Over 2 Sync 3 Peers 4 Chain 5 Logs │ p Pause ? Help r Redraw d Detach q Quit"
     renderer.render(s, 120, 40).last.toString.trim shouldBe
-      "1 Overview  2 Sync  3 Peers  4 Chain │ p Pause  ? Help  r Redraw  d Detach  q Quit"
-    renderer.render(s.copy(glyphs = GlyphSet.Ascii), 80, 24).last.toString should include("4 Chain | p Pause")
+      "1 Overview  2 Sync  3 Peers  4 Chain  5 Logs │ p Pause  ? Help  r Redraw  d Detach  q Quit"
+    renderer.render(s.copy(glyphs = GlyphSet.Ascii), 80, 24).last.toString should include("5 Logs | p Pause")
   }
 
   // prism, slice 3 review: an arrow, Home, Insert, Delete or a function key is an escape sequence, and its tail was
@@ -225,4 +233,106 @@ class TuiKeysSpec extends AnyFlatSpec with Matchers:
     val endless = new Buffered("[" + "1;" * 40)
     Tui.drainEscape(endless, () => 0L)
     endless.waits.size shouldBe 1 + Tui.EscapeMaxBytes // the introducer, then at most 32 bytes
+  }
+
+  // ---- The Logs view and the Recent strips (spec 027 slice 4, T086) -------------------------------------------------
+
+  /** A TUI whose log ring holds `lines` INFO lines, `line 0001` the oldest, already read by a frame. */
+  private def withLogs(lines: Int, width: Int = 100, height: Int = 40)(test: (Tui, TuiTestTerminal) => Unit): Unit =
+    val tt = new TuiTestTerminal(width, height)
+    val ring = new TuiLogRingAppender(1000, ch.qos.logback.classic.Level.INFO, java.time.ZoneOffset.UTC)
+    val tui = tt.tui(logRing = Some(ring))
+    try
+      tui.initialize() shouldBe true
+      (1 to lines).foreach(i => ring.doAppend(TuiFixtures.logEvent(f"line $i%04d")))
+      tui.nextFrame(None)
+      test(tui, tt)
+    finally
+      tui.shutdown()
+      tt.close()
+
+  "5 and l" should "open the Logs view" taggedAs (UnitTest) in withTui { (tui, _) =>
+    tui.handleCommand('5') shouldBe TuiCommand.Continue
+    tui.getState.view shouldBe TuiView.Logs
+    tui.handleCommand('1')
+    tui.handleCommand('l') shouldBe TuiCommand.Continue
+    tui.getState.view shouldBe TuiView.Logs
+  }
+
+  "+ and -" should "scroll the Logs view: - to older lines, + back to newer, never past either end" taggedAs (
+    UnitTest
+  ) in withLogs(200) { (tui, tt) =>
+    def shown(): String =
+      tui.render()
+      TuiTestTerminal.visible(tt.lastFrame)
+    tui.handleCommand('5')
+    shown() should include("line 0200")
+    tui.handleCommand('+') shouldBe TuiCommand.Continue
+    tui.getState.logScroll shouldBe 0 // already at the newest line
+    tui.handleCommand('-') shouldBe TuiCommand.Continue
+    tui.getState.logScroll should be > 0
+    (shown() should not).include("line 0200")
+    (1 to 50).foreach(_ => tui.handleCommand('-'))
+    val top = tui.getState.logScroll
+    tui.handleCommand('-')
+    tui.getState.logScroll shouldBe top // the oldest line is on screen: no further
+    val oldest = shown()
+    oldest should include("line 0001")
+    (oldest should not).include("line 0200")
+    (1 to 50).foreach(_ => tui.handleCommand('+'))
+    tui.getState.logScroll shouldBe 0
+    shown() should include("line 0200")
+  }
+
+  they should "do nothing in any other view" taggedAs (UnitTest) in withLogs(200) { (tui, _) =>
+    for key <- "1234" do
+      tui.handleCommand(key)
+      val before = tui.getState
+      tui.handleCommand('-') shouldBe TuiCommand.Continue
+      tui.handleCommand('+') shouldBe TuiCommand.Continue
+      tui.getState shouldBe before
+  }
+
+  "Opening the Logs view" should "show the newest lines, wherever it was left scrolled" taggedAs (UnitTest) in withLogs(
+    200
+  ) { (tui, _) =>
+    tui.handleCommand('5')
+    tui.handleCommand('-')
+    tui.getState.logScroll should be > 0
+    tui.handleCommand('1')
+    tui.handleCommand('l')
+    tui.getState.logScroll shouldBe 0
+  }
+
+  private val renderer = TuiRenderer(TuiConfig.default)
+
+  /** The log rows under a strip's title row: ` HH:mm:ss LEVEL text`. */
+  private def strip(s: TuiState, title: String, w: Int, h: Int): Seq[String] =
+    renderer
+      .render(s.copy(motion = Motion.Reduced), w, h)
+      .map(_.toString)
+      .dropWhile(row => !row.startsWith(s" $title"))
+      .drop(1)
+      .takeWhile(_.matches(" \\d\\d:\\d\\d:\\d\\d .*"))
+
+  "The Overview's Recent strip" should "show the newest 6 lines at S and 10 at M" taggedAs (UnitTest) in {
+    val s = TuiFixtures.syncedEtc()
+    TuiFixtures.recentLogs.size should be > 10
+    val small = strip(s, "Recent", 80, 24)
+    small should have size 6
+    small.last should include(TuiFixtures.recentLogs.last.text.take(20))
+    strip(s, "Recent", 120, 40) should have size 10
+  }
+
+  "The Sync view's Recent (sync) strip" should "keep only lines whose logger is under blockchain.sync" taggedAs (
+    UnitTest
+  ) in {
+    val s = TuiFixtures.regularSyncEtc().withView(TuiView.Sync)
+    val (sync, other) =
+      TuiFixtures.recentLogs.partition(_.logger.startsWith("com.chipprbots.ethereum.blockchain.sync"))
+    sync should not be empty
+    other should not be empty
+    val rows = strip(s, "Recent (sync)", 160, 48)
+    rows should have size sync.size.toLong
+    rows.zip(sync).foreach((row, line) => row should include(line.text.take(30)))
   }

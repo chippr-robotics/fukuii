@@ -53,7 +53,7 @@ and the footer with the keys. The Overview at 80×24, regular sync (from the gol
 ────────────────────────────────────────────────────────────────────────────────
  ✓ no alerts
  Peers   23/50 ◆◆◆◆◆◆◆◆◆◆         Block  18,402,113 → 21,884,102 (−3,481,989)
- RPC     :8545 on                 Disk   1.2T free
+ RPC     :8545 on                 Disk   1.2T free       Txpool  142
 ────────────────────────────────────────────────────────────────────────────────
  Sync    regular                                 rate 184.37 blk/s · ETA 5h 14m
    Blocks   [===============🪱....]🧠 84%   18,402,113 / 21,884,102
@@ -61,33 +61,34 @@ and the footer with the keys. The Overview at 80×24, regular sync (from the gol
  Forks   Mystique ✓ ════════════════════════▶ Spiral @ 19,250,000 (847.9K away)
 ────────────────────────────────────────────────────────────────────────────────
  Node    …/fukuii/etc · Full sync · archive pruning · 50 peers max · mining off
+────────────────────────────────────────────────────────────────────────────────
+ Recent
+ 11:59:30 ERROR Cannot decode a message from 203.0.113.40:30303
+ 11:59:34 INFO  Imported block 21,884,101 0x9b0c…ff31 with 9 txs in 17ms
+ 11:59:41 INFO  DAG epoch 731 loaded
+ 11:59:47 INFO  Imported block 21,884,102 0x6d21…1a0e with 14 txs in 22ms
+ 11:59:52 INFO  Peers: 41 handshaked · 14 in · 27 out
+ 12:00:00 INFO  RegularSync: at head, block 21884102
 
 
 
-
-
-
-
-
-
-
-
- 1 Over 2 Sync 3 Peers 4 Chain │ p Pause ? Help r Redraw d Detach q Quit
+ 1 Over 2 Sync 3 Peers 4 Chain 5 Logs │ p Pause ? Help r Redraw d Detach q Quit
 ```
 
-The blank rows at the bottom are where spec 027 slice 4 puts the recent-log strip. Sizes: below 100 columns or 32
-rows is tier S, from 100×32 tier M, from 140×45 tier L; each view fills its tier (at L the Overview draws the logo in a
-right-hand column). A panel that does not fit gives up its rows to the ones that matter more; the header, the alert
-row and the footer always stay.
+The Recent strip at the bottom is the newest log lines (6 at tier S). Sizes: below 100 columns or 32 rows is tier S,
+from 100×32 tier M, from 140×45 tier L; each view fills its tier (at L the Overview draws the logo in a right-hand
+column). A panel that does not fit gives up its rows to the ones that matter more; the header, the alert row and the
+footer always stay.
 
 ### Views
 
 | Key | View | What it shows |
 |-----|------|---------------|
-| `1` | Overview | Peers and blocks, endpoints, disk and heap (GC and discovery at L), the sync (SNAP's five worm rows or the Blocks worm, with ETA), the forks, the node's settings; at L the longest-connected peers |
-| `2` | Sync | The worm rows on a 20-, 40- or 60-cell track; SNAP's rates, request counters, snap-capable peers and phase timeline (M and L); a regular sync's session and lag |
-| `3` | Peers | Each handshaked peer: id, direction, address, time connected |
+| `1` | Overview | Peers and blocks, the txpool, endpoints, disk and heap (GC and discovery at L), the sync (SNAP's five worm rows or the Blocks worm, with ETA), the forks, the node's settings; at L the top 8 peers by score; the Recent strip of the newest log lines |
+| `2` | Sync | The worm rows on a 20-, 40- or 60-cell track; SNAP's rates, request counters, snap-capable peers and phase timeline (M and L); a regular sync's session, lag and last import; the Recent (sync) strip |
+| `3` | Peers | Each handshaked peer, highest score first: id, direction, client, best block, age; from M the address and the score, at L the score's trend |
 | `4` | Chain | Chain id, PoW or PoS, the fork timeline: by block number on ETC, by timestamp on ETH, the next fork with its distance |
+| `5` `L` | Logs | The newest log lines (1,000 by default, INFO and above), with their time and level; `-` and `+` scroll a page |
 | `?` `H` | Help | The keys and the legend of the glyph set on screen |
 
 ### Alert row
@@ -104,11 +105,43 @@ conditions, errors first. It is never animated and every view has it.
 | Disk free on the datadir below 20G (below 5G: error) | warning / error |
 | Fewer peers than a quarter of the maximum (the peer count itself turns yellow below half) | warning |
 
+### Log tail and Recent strips
+
+The Logs view and the Recent strips read an appender of the TUI's own, `TUI-LOG-RING`, on the root logger: a
+lock-free ring of the newest `fukuii.tui.log-ring-size` lines (1000, at most 10,000) at `fukuii.tui.log-level` and
+above (`INFO`). A logger's own level in `logback.xml` applies first, so `DEBUG` shows only what the loggers already log at DEBUG. The
+ring is attached after the console appenders are suppressed and detached before they are restored, through the same
+teardown ladder that gives the terminal back, so the console and the log file get what they got before; if it cannot
+be attached, the TUI does not start and standard logging stays.
+
+The Overview's Recent strip shows the newest 6 lines at S, 10 at M and fills the rest of the screen at L. The Sync
+view's Recent (sync) strip keeps only the loggers under `com.chipprbots.ethereum.blockchain.sync`.
+
+### Peers columns
+
+| Tier | Columns |
+|------|---------|
+| S | id, direction, client, best block, age |
+| M | id, direction, address, client, best block, score, age |
+| L | id, direction, address, client, best block, score, trend, age (the Overview's top-8 table leaves out the address) |
+
+The client is the name and version from the peer's Hello (`CoreGeth/v1.12.19`), and the best block comes from the
+network peer manager (`GetHandshakedPeersCmd`). The score is the one `PeerScoringManager` last published to
+`NetworkMetrics` (three decimals); a peer with no score yet shows `—`, never 0. The trend compares it with the scores
+published before, at the same three decimals: `↑`, `↓` or `→`.
+
+Text that comes from outside the node (a client id, a log line, a failure's reason) is cleaned before it is drawn:
+escape sequences, control characters, zero-width and direction-override characters are removed, a multi-line text
+keeps its first line and an ellipsis, and the length is capped at 512 characters. With the ASCII glyph set it is drawn
+in ASCII only, in the same columns.
+
 ## Keyboard Commands
 
 | Key | Action |
 |-----|--------|
-| `1` `2` `3` `4` | Overview, Sync, Peers, Chain |
+| `1` `2` `3` `4` `5` | Overview, Sync, Peers, Chain, Logs |
+| `L` | Logs |
+| `-` `+` | Logs view: a page back to older lines, a page forward to newer ones (nothing on other views) |
 | `Tab` | The next view (wraps) |
 | `?` or `H` | Help over the current view: the keys and the glyph legend; any key but `Q`, `R` and `D` returns |
 | `G` | Switch the glyph set (emoji / ASCII); no column moves |
@@ -117,8 +150,9 @@ conditions, errors first. It is never animated and every view has it.
 | `D` | Detach: the TUI closes and standard logging returns; the node keeps running |
 | `Q` | Quit: stops the node |
 
-Any key skips the startup splash, and does nothing else. A change of view cancels the catch-up celebration. The Logs
-view (`5`, `L`, `+`, `-`) arrives with spec 027 slice 4.
+Any key skips the startup splash, and does nothing else. A change of view cancels the catch-up celebration. Opening
+the Logs view shows its newest lines; while it is scrolled back, new lines arriving keep the lines on screen where
+they are.
 
 Commands are case-insensitive (both `q` and `Q` work).
 
@@ -177,15 +211,17 @@ All TUI code lives in `com.chipprbots.ethereum.console`:
 | `Tui` | Owns the terminal: raw mode, alternate screen, frame drawing, key input, teardown. Refuses dumb/non-TTY terminals so escape codes never land in a log stream. |
 | `TuiRenderer` | The compositor, a pure function `TuiState × width × height → lines`: header band, separator, alert row, the view's panels through `Layout`, footer. Every frame is exactly `height` rows of exactly `width` columns, so drawing it never scrolls or wraps; the footer always stays on the bottom row. |
 | `TuiState` | Immutable view model. Sync speed/ETA are measured from the first block the TUI observed (not from genesis). |
-| `TuiStatusProbe` | One poll of the node: handshaked peers with their id, address, direction and connection time (`PeerManagerActor.GetPeersCmd`, same as `net_peerCount`), sync status (`SyncProtocol.GetStatus`, same as `eth_syncing`), local best block, and the latest SNAP progress sample. Both asks start together and share one 500 ms wait. It also reads, without an actor (`LocalSources`): disk free on the datadir, the JVM heap and GC time, `NetworkMetrics`' discovery counts, the best header's timestamp and `SNAPSyncMetrics`' request counters; a failed reading leaves only its own field empty. |
+| `TuiStatusProbe` | One poll of the node: handshaked peers with their id, address, direction and connection time (`PeerManagerActor.GetPeersCmd`, same as `net_peerCount`), sync status (`SyncProtocol.GetStatus`, same as `eth_syncing`), local best block, the latest SNAP progress sample, each peer's client id and best block (`NetworkPeerManagerActor.GetHandshakedPeersCmd`) and the txpool's size and blob count (`PendingTransactionsManager.GetPendingTransactionsReq`). All asks start together and share one 500 ms wait. It also reads, without an actor (`LocalSources`): disk free on the datadir, the JVM heap and GC time, `NetworkMetrics`' discovery counts and peer scores, the best header's timestamp, `SNAPSyncMetrics`' request counters and `RegularSyncMetrics`' last import; a failed reading leaves only its own field empty. |
 | `Sourced` | Each polled source's freshness: `Fresh`, `Stale` (it missed a wait; its last answer is kept), `Unresponsive` (it never answered, failed, or has been silent for 5 s). A slow actor degrades its own line only. |
 | `TuiProbeThread` | Daemon thread running the probe every `status-poll-interval-ms` and publishing the snapshot; it stops with the TUI. |
 | `TuiUpdater` | Daemon frame loop: count a frame (`tick`), take the latest snapshot, render, then wait for a key at the frame's pace: `animation-interval-ms` (250 ms) while anything on screen moves, 1 s otherwise. The key wait is the pacing, so a key is handled as it arrives. A frame equal to the last is not written. |
 | `Splash` | The startup splash, a view of the same renderer: the FUKUII logo by terminal size (`FukuiiBanner`, the literal the startup log prints), skipped by any key. |
 | `TuiLogSuppressor` | Detaches the console appender while the TUI is active (file logging continues). |
+| `TuiLogRingAppender` | The log tail: an appender of its own on the root logger, a lock-free ring of the newest lines, sanitised on capture. Attached after the console is suppressed and detached before it is restored, through `Tui`'s teardown ladder. |
+| `Sanitize`, `TuiText.external` | Text from outside the node (client ids, log lines, failure reasons): no escape sequence or control character, one line, capped at 512 characters; at most four times that is read, whatever the text's length, so a peer's 16 MiB client id costs no more than a short one; ASCII only under the ASCII glyph set. |
 | `TuiView` | The views and their keys; Help is a flag over the current view (`TuiState.helpOpen`). |
 | `Layout`, `Panel` | Each view is a list of panels with minimum rows, preferred rows and a priority. `Layout.allocate` gives minimums in priority order (a panel whose minimum no longer fits is not drawn), then preferred rows, then the fill panel takes the rest; `Layout.columns` puts two row lists side by side, measured by columns. |
-| `panels/` | The panels of each view: `OverviewPanels`, `SyncPanels`, `PeersPanel`, `ChainPanel`, `HelpPanel`, with shared rows (`Rows`, `ForkRows`). |
+| `panels/` | The panels of each view: `OverviewPanels`, `SyncPanels`, `PeersPanel`, `ChainPanel`, `LogsPanel` (with the Recent strips), `HelpPanel`, with shared rows (`Rows`, `ForkRows`). |
 | `Alerts` | The alert row's conditions, thresholds and severities (spec 027 research §2.3), measured on the snapshot's clock. |
 | `ChainFacts` | Chain id, PoW/PoS (from `networkType`) and the fork timeline (ETC: `MilestoneLog` names by block; ETH: `ForkTimestamps` by time), read for display only. |
 
@@ -195,7 +231,7 @@ All TUI code lives in `com.chipprbots.ethereum.console`:
 2. `StdNode.start()` starts the frame loop first (`startTuiFrames()`), so the splash moves while the node starts, then, once the actors it asks exist, the probe thread (`startTuiUpdater()`).
 3. `Q` restores the terminal, then exits the JVM; the node's shutdown hook stops the updater. `D` restores the terminal and console logging and the node keeps running. `Ctrl-C` behaves as without the TUI; the restore hook leaves the alternate screen even when JLine's own shutdown hook has closed the terminal first (JVM hooks run in no order), by writing the reset sequence to the process output.
 
-Motion (the worm's ripple, the `[ACTIVE]` pulse, spinners, the splash and the first catch-up's celebration) comes only from the frame counter; the renderer reads no clock. Settings under `fukuii.tui` (`conf/base/tui.conf`): `glyphs`, `animation-interval-ms`, `status-poll-interval-ms`, `reduced-motion` and `splash-ms`; the environment overrides are `NO_COLOR`, `FUKUII_TUI_GLYPHS`, `FUKUII_TUI_MOTION` (`full` or `reduced`) and `FUKUII_TUI_NO_SPLASH`. Spec 027's closing task rewrites this page for the full dashboard.
+Motion (the worm's ripple, the `[ACTIVE]` pulse, spinners, the splash and the first catch-up's celebration) comes only from the frame counter; the renderer reads no clock. Settings under `fukuii.tui` (`conf/base/tui.conf`): `glyphs`, `animation-interval-ms`, `status-poll-interval-ms`, `reduced-motion`, `splash-ms`, `log-ring-size` and `log-level`; the environment overrides are `NO_COLOR`, `FUKUII_TUI_GLYPHS`, `FUKUII_TUI_MOTION` (`full` or `reduced`) and `FUKUII_TUI_NO_SPLASH`. Spec 027's closing task rewrites this page for the full dashboard.
 
 ### Testing
 
@@ -205,8 +241,7 @@ Motion (the worm's ripple, the `[ACTIVE]` pulse, spinners, the splash and the fi
 
 Potential improvements for future releases:
 
-- **Logs view and richer peers** (spec 027 slice 4): the recent-log strip, client ids, best blocks and peer scores
-- **Transaction Pool**: Display pending transaction count and details
+- **Transaction Pool**: Details of the pending transactions (the count and blob count are on the Overview)
 - **Mining Status**: Show mining statistics when enabled
 - **Configuration**: Terminal settings and color schemes
 - **Log Viewer**: Browse recent log entries in the UI

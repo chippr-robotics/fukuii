@@ -26,8 +26,8 @@ sbt 1.13.0 (constitution "Technology & Architecture Constraints"; `CLAUDE.md`).
 **Primary Dependencies**: JLine 3.30.13 (`org.jline:jline`, `project/Dependencies.scala:157`): `Terminal`,
 `AttributedString`/`AttributedStyle`, `WCWidth`, `NonBlockingReader`. Pekko Typed: the probe asks
 `PeerManagerActor`, `SyncController`, `NetworkPeerManagerActor` and `PendingTransactionsManager` with `AskPattern` from
-its own thread, never from a dispatcher. Logback 1.5.34 (`AppenderBase[ILoggingEvent]`, `PatternLayout`) for the ring.
-Micrometer through `MetricsContainer` objects (`SNAPSyncMetrics`, `NetworkMetrics`, `RegularSyncMetrics`,
+its own thread, never from a dispatcher. Logback 1.5.34 (`UnsynchronizedAppenderBase[ILoggingEvent]`, no layout) for
+the ring. Micrometer through `MetricsContainer` objects (`SNAPSyncMetrics`, `NetworkMetrics`, `RegularSyncMetrics`,
 `EngineApiMetrics`, `PoWMiningMetrics`). Typesafe Config for `fukuii.tui`. **No new dependency.**
 
 **Storage**: N/A. The TUI reads no database except the best block header (already read today through
@@ -199,7 +199,7 @@ working at every intermediate commit.
 | 2 | **Tick, motion, non-blocking loop** | `tick`, `Motion`, `TuiProbeThread`, `Sourced`, adaptive pacing (Q1), diff-skip, ripple/spinner/pulse/stall, celebration and "back at head" (Q8), `p`, reduced motion, splash view with tiered and cropped logo (Q2), clock-free `TuiState` (C-3), `SNAPSyncMetrics.latestProgressAt`. | `feat/027-s2-motion` | prism; eye |
 | 3 | **Views, layout, alerts** | `Panel`/`Layout`, Overview/Sync/Peers (`GetPeersCmd` data only)/Chain/Help, keys `1-5 Tab ? h g`, alert row (§2.3 rows that need no slice 5 data), `ChainFacts` (C-4, C-5), `MilestoneLog` visibility, SNAP counter accessors, disk free, JVM heap/GC, discovery counts, head timestamp. | `feat/027-s3-views` | prism; eye |
 | 4a | **Peer scoring wired** (new; D-1 = (a)) | Construct one `PeerScoringManager`; fix what wiring exposes (injected clock, atomic updates, a bounded map, blacklist must not raise a score); feed it from the peer events in the table below; export a score snapshot and aggregate gauges through `NetworkMetrics`. Observational only. Needs only staging, not slices 1–3. | `feat/027-s4a-peer-scoring` | **herald** owns it; prism reviews; eye |
-| 4 | **Logs, rich peers** | `Sanitize`, `TuiLogRingAppender`, Logs view with `+`/`-`, `l`, Recent strips, `GetHandshakedPeersCmd` (client id, best block), the score and trend columns **on**, read from 4a's `NetworkMetrics` export, txpool ask, import-duration gauge, `fukuii.tui.log-level` (Q4). Depends on 4a. | `feat/027-s4-logs-peers` | prism; eye |
+| 4 | **Logs, rich peers** | `Sanitize`, `TuiLogRingAppender`, Logs view with `+`/`-`, `l`, Recent strips, `GetHandshakedPeersCmd` (client id, best block), the score and trend columns **on**, read from 4a's `NetworkMetrics` export, the Peers columns by tier (client and best block instead of the address at S, decision 5; the address and score from M; the trend at L), txpool ask, import-duration gauges, `fukuii.tui.log-level` (Q4). Depends on 4a. | `feat/027-s4-logs-peers` | prism; eye |
 | 5 | **Per-chain panels** | ETH: E1 (`EngineApiMetrics`, Q6), E2 (`ForkChoiceManager.getState` to the probe), E3 (auth-failure count), CL panel and its two alerts. ETC: M1 (reads), M2 (DAG gauges), coinbase, mining panel and its alert. | `feat/027-s5-chain-panels` (may split as `feat/027-s5a-eth-cl` and `feat/027-s5b-etc-mining`) | prism; **beacon** (ETH half, E1–E3), **forge** (ETC half, M1–M2), both reporting only; eye |
 
 Rollback per slice: each slice is one revert. Slice 1 also reverts `tui.conf` and its include; slice 2's probe thread

@@ -386,57 +386,57 @@ shows a score for every handshaked peer.
 
 ### Tests for slice 4 (write first, must fail)
 
-- [ ] T083 [P] [US4] `console tests/SanitizeSpec.scala`: ESC sequences, C0, C1 and DEL removed; a multi-line message
+- [x] T083 [P] [US4] `console tests/SanitizeSpec.scala`: ESC sequences, C0, C1 and DEL removed; a multi-line message
       keeps its first line plus `…`; capped at 512; emoji and CJK kept; idempotent (FR-020)
-- [ ] T084 [P] [US4] `console tests/TuiLogRingAppenderSpec.scala`: after 1,500 lines the newest 1,000 remain (SC-009);
+- [x] T084 [P] [US4] `console tests/TuiLogRingAppenderSpec.scala`: after 1,500 lines the newest 1,000 remain (SC-009);
       INFO and above by default, `log-level` overrides (Q4); the logger name is kept; appends from four threads keep
       sequence order (synchronised with latches)
-- [ ] T085 [P] [US4] `console tests/TuiSpec.scala` and `root tests/TuiLogSuppressorSpec.scala`: the ring attaches after
+- [x] T085 [P] [US4] `console tests/TuiSpec.scala` and `root tests/TuiLogSuppressorSpec.scala`: the ring attaches after
       suppression and detaches before restore; the root logger's appender names are identical before and after
       (SC-009); a failing attach still releases the terminal and restores console logging (C-11)
-- [ ] T086 [P] [US4] `console tests/TuiKeysSpec.scala` and Logs cases: `5` and `l` open Logs; `+` and `-` scroll within
+- [x] T086 [P] [US4] `console tests/TuiKeysSpec.scala` and Logs cases: `5` and `l` open Logs; `+` and `-` scroll within
       bounds and do nothing elsewhere; the Overview's Recent strip is 6 lines at S and 10 at M; "Recent (sync)" keeps
       only loggers under `com.chipprbots.ethereum.blockchain.sync`
-- [ ] T087 [P] [US4] `console tests/PeersPanelSpec.scala`: client id, best block, direction and age; top 8 at L; a client
+- [x] T087 [P] [US4] `console tests/PeersPanelSpec.scala`: client id, best block, direction and age; top 8 at L; a client
       id carrying `ESC[2J` renders without the escape and the frame stays exact (C-16); `Unresponsive` when
       `NetworkPeerManagerActor` does not answer
-- [ ] T088 [P] [US4] `console tests/PeersPanelSpec.scala` and `root tests/TuiStateSpec.scala`: the Peers view reads
+- [x] T088 [P] [US4] `console tests/PeersPanelSpec.scala` and `root tests/TuiStateSpec.scala`: the Peers view reads
       scores from slice 4a's `NetworkMetrics` snapshot; the trend is the sign of the change from the previous snapshot,
       computed in `TuiState`; a peer missing from the snapshot shows `—`, never zero (Q5, D-1)
-- [ ] T089 [P] [US1] `console tests/TuiStatusProbeSpec.scala`: txpool size and blob count from
+- [x] T089 [P] [US1] `console tests/TuiStatusProbeSpec.scala`: txpool size and blob count from
       `PendingTransactionsResponse`; `Unresponsive` arm
-- [ ] T090 [P] `src/test/scala/com/chipprbots/ethereum/blockchain/sync/regular/`: the last-import duration gauge is set
+- [x] T090 [P] `src/test/scala/com/chipprbots/ethereum/blockchain/sync/regular/`: the last-import duration gauge is set
       around the import in `BlockImporter` (extend the existing importer spec)
-- [ ] T091 [US4] Goldens, 3 tiers × 2 glyph sets: the Logs view, the Peers view with client and best block, the Overview
+- [x] T091 [US4] Goldens, 3 tiers × 2 glyph sets: the Logs view, the Peers view with client and best block, the Overview
       with the Recent strip and txpool
-- [ ] T092 `sbt "testOnly com.chipprbots.ethereum.console.* *Tui* *BlockImporter*"` → T083–T091 fail; record which
+- [x] T092 `sbt "testOnly com.chipprbots.ethereum.console.* *Tui* *BlockImporter*"` → T083–T091 fail; record which
 
 ### Implementation for slice 4
 
-- [ ] T093 [US4] `console/Sanitize.scala`
-- [ ] T094 [US4] `console/TuiLogRingAppender.scala`: `AppenderBase[ILoggingEvent]`, `PatternLayout`, a lock-free ring of
-      `LogLine(time, level, logger, text)`
-- [ ] T095 [US4] `console/Tui.scala`: lift `attempt` (`:189-191`) to a private method; attach the ring in `initialize`
+- [x] T093 [US4] `console/Sanitize.scala`
+- [x] T094 [US4] `console/TuiLogRingAppender.scala`: `UnsynchronizedAppenderBase[ILoggingEvent]` (decision 1), no
+      layout, a lock-free ring of `LogLine(seq, time, level, logger, text)`
+- [x] T095 [US4] `console/Tui.scala`: lift `attempt` (`:189-191`) to a private method; attach the ring in `initialize`
       after suppression, detach it in `shutdown` before restore, both through the ladder
-- [ ] T096 [US4] Logs view, Recent strips, keys `5`, `l`, `+`, `-`
-- [ ] T097 [US4] `console/TuiStatusProbe.scala` and `nodebuilder/StdNode.scala`: the `GetHandshakedPeersCmd` ask
+- [x] T096 [US4] Logs view, Recent strips, keys `5`, `l`, `+`, `-`
+- [x] T097 [US4] `console/TuiStatusProbe.scala` and `nodebuilder/StdNode.scala`: the `GetHandshakedPeersCmd` ask
       (`NetworkPeerManagerActor.scala:51`), the txpool ask (`PendingTransactionsManager.scala:115`), the score snapshot
       read from `NetworkMetrics` (slice 4a)
-- [ ] T098 [US4] The score and trend columns on: the Peers view shows the score from tier M and the trend at tier L
+- [x] T098 [US4] The score and trend columns on: the Peers view shows the score from tier M and the trend at tier L
       (research §3.1); `TuiState`'s bounded history keeps the previous snapshot for the trend
-- [ ] T099 `.../blockchain/sync/regular/RegularSyncMetrics.scala` and `BlockImporter.scala`: the last-import duration
+- [x] T099 `.../blockchain/sync/regular/RegularSyncMetrics.scala` and `BlockImporter.scala`: the last-import duration
       gauge, timed around the import call (not in `consensus/ConsensusImpl.scala`, C-7)
-- [ ] T100 [US4] `console/TuiConfig.scala`, `conf/base/tui.conf`: `log-ring-size = 1000`, `log-level = INFO`
-- [ ] T101 D-1 answered (a): slice 4 consumes slice 4a's `NetworkMetrics` export and ships with the score column on.
+- [x] T100 [US4] `console/TuiConfig.scala`, `conf/base/tui.conf`: `log-ring-size = 1000`, `log-level = INFO`
+- [x] T101 D-1 answered (a): slice 4 consumes slice 4a's `NetworkMetrics` export and ships with the score column on.
       Before starting, confirm 4a's PR is on `origin/staging`. No scorer code changes in this slice; a scoring defect
       found here goes back to `herald` as a `fix/027-*` on 4a's files
-- [ ] T102 Generate the T091 goldens; check them against research §3; commit
+- [x] T102 Generate the T091 goldens; check them against research §3; commit
 
 ### Gate and exit for slice 4
 
-- [ ] T103 `sbt compile-all`; `sbt "testOnly com.chipprbots.ethereum.console.* *Tui* *BlockImporter*"` → PASS
-- [ ] T104 `sbt scalafmtAll`; `sbt formatCheck` → clean
-- [ ] T105 `scripts/snap-split/verify.sh --branch feat/027-s4-logs-peers origin/staging` → OK
+- [x] T103 `sbt compile-all`; `sbt "testOnly com.chipprbots.ethereum.console.* *Tui* *BlockImporter*"` → PASS
+- [x] T104 `sbt scalafmtAll`; `sbt formatCheck` → clean
+- [x] T105 `scripts/snap-split/verify.sh --branch feat/027-s4-logs-peers origin/staging` → OK
 - [ ] T106 [US4] Manual, no sbt running: the Logs view scrolling at both sizes; the Peers view with live peers, every one
       with a score and, at 160×48, a trend; `LANG=C` with emoji in log lines (mapped, no width change)
 - [ ] T107 Exit slice 4: `prism` and `eye` review slice 4 (`herald` reviewed the network change in slice 4a, T150);

@@ -162,38 +162,57 @@ private[console] object Rows:
 
   // ---- the vitals strip: what the five-second rule needs, on every view -------------------------------------------
 
-  /** The columns of the strip's cells at each tier (research §3.2–§3.4). */
-  private def stops(tier: Tier): Seq[Int] = tier match
-    case Tier.S => Seq(0, 33)
-    case Tier.M => Seq(0, 44, 92)
-    case Tier.L => Seq(0, 28, 76, 98, 124)
+  /** `142`, `1,204 (3 blob)`: the pending transactions and the blob-carrying ones among them; `Unresponsive` when the
+    * txpool did not answer, `?` before it is asked.
+    */
+  def txpoolValue(c: Ctx): AttributedString =
+    c.state.snapshot.flatMap(_.txpool) match
+      case Some(Sourced.Unresponsive(_)) => text("Unresponsive", c.t.error)
+      case Some(source) =>
+        source.value.fold(text("?", c.t.muted)) { pool =>
+          val blobs = if pool.blobs > 0 then s" (${formatNumber(pool.blobs.toLong)} blob)" else ""
+          val style = source match
+            case Sourced.Stale(_, _) => c.t.warn
+            case _                   => c.t.value
+          text(s"${formatNumber(pool.size.toLong)}$blobs", style)
+        }
+      case None => text("?", c.t.muted)
 
-  /** Peers and blocks; at M the heap is on the next row, at L the disk, the heap and the GC share are on this one. */
+  private def txpool(c: Ctx): AttributedString = field("Txpool", txpoolValue(c), c.t)
+
+  /** Peers and blocks; from M the txpool; at L the disk and the heap too (research §3.2–§3.4). Each cell starts at a
+    * fixed column, so neither glyph set moves a label. At L the columns leave each cell its longest common value in
+    * both sets (a regular sync's block range with the ASCII arrow, `1,204 (3 blob)`, `14.2G free ⚠`) down to 140
+    * columns, so the GC share is on the next row.
+    */
   def vitalsRow(c: Ctx, width: Int): AttributedString =
-    val at = stops(c.tier)
     val peers = field("Peers", peersValue(c), c.t)
     val block = field("Block", blockValue(c), c.t, 7)
     val cells = c.tier match
+      case Tier.S => Seq(0 -> peers, 33 -> block)
+      case Tier.M => Seq(0 -> peers, 44 -> block, 92 -> txpool(c))
       case Tier.L =>
         Seq(
-          at(0) -> peers,
-          at(1) -> block,
-          at(2) -> field("Disk", diskValue(c), c.t, 6),
-          at(3) -> field("JVM", heapValue(c), c.t, 5),
-          at(4) -> field("GC", gcValue(c), c.t, 4)
+          0 -> peers,
+          26 -> block,
+          73 -> txpool(c),
+          97 -> field("Disk", diskValue(c), c.t, 6),
+          117 -> field("JVM", heapValue(c), c.t, 5)
         )
-      case _ => Seq(at(0) -> peers, at(1) -> block)
     strip(width, cells, c.g)
 
-  /** The endpoints and the disk; at M the heap, at L the discovery table. */
+  /** The endpoints and the disk, with the txpool at S and the heap at M; at L the discovery table and the GC share. */
   def resourcesRow(c: Ctx, width: Int): AttributedString =
-    val at = stops(c.tier)
     val rpc = field("RPC", endpointsValue(c), c.t)
     val cells = c.tier match
-      case Tier.S => Seq(at(0) -> rpc, at(1) -> field("Disk", diskValue(c), c.t, 7))
-      case Tier.M =>
-        Seq(at(0) -> rpc, at(1) -> field("Disk", diskValue(c), c.t, 7), at(2) -> field("JVM", heapValue(c), c.t))
-      case Tier.L => Seq(at(0) -> rpc, at(2) -> field("Discovery", discoveryValue(c), c.t, 11))
+      case Tier.S => Seq(0 -> rpc, 33 -> field("Disk", diskValue(c), c.t, 7), 56 -> txpool(c))
+      case Tier.M => Seq(0 -> rpc, 44 -> field("Disk", diskValue(c), c.t, 7), 92 -> field("JVM", heapValue(c), c.t))
+      case Tier.L =>
+        Seq(
+          0 -> rpc,
+          76 -> field("Discovery", discoveryValue(c), c.t, 11),
+          130 -> field("GC", gcValue(c), c.t, 4)
+        )
     strip(width, cells, c.g)
 
   // ---- sync ---------------------------------------------------------------------------------------------------
@@ -240,7 +259,7 @@ private[console] object Rows:
     val rows = if withSummary then 2 else 1
     Panel(rows, rows, 1, (w, _) => vitalsRow(c, w) +: (if withSummary then Seq(syncSummaryRow(c, w)) else Nil))
 
-  /** The rows nobody else wants: where slice 4's recent-log strip goes. */
+  /** The rows nobody else wants, left blank (Help). */
   val fillPanel: Panel = Panel(0, 0, 9, (_, _) => Nil, fill = true)
 
   /** SNAP's phase row: the phase on the left; elapsed (and the time in the phase), ETA and a stale sample's age on the
@@ -351,10 +370,16 @@ private[console] object Rows:
   /** `0x3fa1…e2` for a hex node id, else the id cut to 12 columns. */
   def shortId(id: String, g: TuiGlyphs): String =
     val hex = id.stripPrefix("0x")
-    if hex.length > 8 && hex.forall(Character.digit(_, 16) >= 0) then
+    // ASCII hex digits only: `Character.digit` also takes the full-width digits, which are not for an ASCII frame.
+    if hex.length > 8 && hex.forall(ch => ch < 0x80 && Character.digit(ch, 16) >= 0) then
       s"0x${hex.take(4)}${g.ellipsis.text}${hex.takeRight(2)}"
-    else if id.length > 12 then id.take(11) + g.ellipsis.text
-    else id
+    else
+      // Not hex: whatever a peer manager made of the id, so it is outside text like any other (C-16).
+      val clean = TuiText.external(id, g)
+      // By code points: a cut must not split a surrogate pair.
+      if clean.codePointCount(0, clean.length) > 12 then
+        clean.substring(0, clean.offsetByCodePoints(0, 11)) + g.ellipsis.text
+      else clean
 
   /** How long ago `at` was, at the state's `now`. */
   def ago(c: Ctx, at: java.time.Instant): String = formatShort(Duration.between(at, c.state.now).getSeconds)

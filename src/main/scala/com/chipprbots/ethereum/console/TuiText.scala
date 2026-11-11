@@ -4,9 +4,10 @@ import java.util.Locale
 
 import org.jline.utils.AttributedString
 import org.jline.utils.AttributedStringBuilder
+import org.jline.utils.WCWidth
 
-/** Text helpers every TUI row uses: the frame's width rule and the number formats. Slice 4's sanitiser for text from
-  * outside the node (FR-020) belongs here too.
+/** Text helpers every TUI row uses: the frame's width rule, the number formats, and text from outside the node
+  * ([[external]], over [[Sanitize]]).
   */
 object TuiText:
 
@@ -81,3 +82,54 @@ object TuiText:
 
   /** A share of 1 as a percentage with one decimal: 0.3%. */
   def formatPercent(share: Double): String = String.format(Locale.ROOT, "%.1f%%", share * 100)
+
+  // ---- Text from outside the node (spec 027 FR-020, C-16) ------------------------------------------------------------
+
+  /** Typography the ASCII set draws as ASCII of the same width; not glyphs of the TUI's own (those map through
+    * [[TuiGlyphs.toAscii]]).
+    */
+  private val AsciiPunctuation: Map[Int, String] = Map(
+    0x2013 -> "-", // en dash (the em dash is the `missing` glyph's)
+    0x2018 -> "'",
+    0x2019 -> "'",
+    0x201c -> "\"",
+    0x201d -> "\"",
+    0x2022 -> "*", // bullet
+    0x2190 -> "<",
+    0x00d7 -> "x"
+  )
+
+  /** Text from outside the node as a row draws it: sanitised ([[Sanitize.line]]: no escape sequence, no control
+    * character, one line, capped), and under the ASCII set printable ASCII only, in the same columns: the TUI's glyphs
+    * as the ASCII set has them (§3.10), common typography as its ASCII, and any other character as `?` once per column
+    * it takes. So a log line or a client id never widens a row, and `LANG=C` gets no byte it cannot draw.
+    */
+  def external(raw: String, g: TuiGlyphs): String =
+    val clean = Sanitize.line(raw)
+    if g.set != GlyphSet.Ascii then clean
+    else
+      val mapped = TuiGlyphs.toAscii(clean)
+      val sb = new java.lang.StringBuilder(mapped.length)
+      mapped.codePoints().forEach { cp =>
+        if cp >= 0x20 && cp < 0x7f then sb.appendCodePoint(cp)
+        else
+          AsciiPunctuation.get(cp) match
+            case Some(ascii) => sb.append(ascii)
+            case None        => sb.append("?" * WCWidth.wcwidth(cp).max(0))
+      }
+      sb.toString
+
+  /** `-stable`, `-unstable`, and either with its commit: the end of a client's version. */
+  private val StableSuffix = "-(un)?stable(-[0-9a-fA-F]+)?$".r
+
+  /** `+<commit>`: a build's commit, the end of a client's version. */
+  private val BuildSuffix = "\\+[0-9a-fA-F]{6,}$".r
+
+  /** A client id as the Peers view names it: its name and version, the first two of its `/`-separated parts, without a
+    * `-stable-<commit>` or `+<commit>` build suffix. `CoreGeth/v1.12.19-stable-c2b6d2a5/linux-amd64/go1.21.5` is
+    * `CoreGeth/v1.12.19`. Sanitised first: a peer chooses its client id (C-16).
+    */
+  def clientName(clientId: String): String =
+    val parts = Sanitize.line(clientId).split('/').toSeq
+    val version = parts.lift(1).map(v => BuildSuffix.replaceFirstIn(StableSuffix.replaceFirstIn(v, ""), ""))
+    (parts.headOption.toSeq ++ version).filter(_.nonEmpty).mkString("/")

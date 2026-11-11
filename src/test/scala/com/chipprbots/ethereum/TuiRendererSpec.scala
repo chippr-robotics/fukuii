@@ -21,8 +21,11 @@ class TuiRendererSpec extends AnyFlatSpec with Matchers:
 
   private def occurrences(text: String, of: String): Int = text.split(Pattern.quote(of), -1).length - 1
 
-  /** The rows of a frame that draw a worm bar, in order. */
-  private def wormRows(lines: Seq[String], g: TuiGlyphs): Seq[String] = lines.filter(_.contains(g.brain.text))
+  /** The rows of a frame that draw a worm bar, in order: not the log lines (slice 4's Recent strip), which can quote
+    * the log's own worm bar.
+    */
+  private def wormRows(lines: Seq[String], g: TuiGlyphs): Seq[String] =
+    lines.filter(row => row.contains(g.brain.text) && !row.matches(" \\d\\d:\\d\\d:\\d\\d .*"))
 
   private val snapLabels = Seq("Overall", "Accounts", "Storage", "Bytecode", "Healing")
 

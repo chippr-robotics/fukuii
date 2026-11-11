@@ -202,6 +202,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - **New readings, off the frame loop.** The status probe also reads disk free on the datadir, the JVM heap and GC
     time, the discovery counts, the best header's timestamp and SNAP's request counters (new read-only
     `SNAPSyncMetrics` accessors), each failure leaving only its own field empty.
+- **The `--tui` dashboard has a log tail, the peers' clients and scores, the txpool and the import time (spec 027
+  slice 4).**
+  - **Logs view.** `5` or `l` opens the newest log lines, INFO and above, with their time, level and text; `-` goes a
+    page back to older lines and `+` a page forward (they do nothing on the other views). A view scrolled back keeps
+    its lines on screen as new ones arrive. The lines come from an appender of the TUI's own on the root logger,
+    attached once the console appenders are suppressed and detached before they are restored, so the console and the
+    log file see what they saw before. New in `fukuii.tui`: `log-ring-size` (1000, at most 10,000) and `log-level`
+    (`INFO`; a logger's own level in `logback.xml` applies first). An invalid value stops the node with an error naming
+    the key.
+  - **Recent strips.** The Overview ends with the newest log lines (6 at 80×24, 10 from 100×32, the rest of the
+    screen from 140×45); the Sync view with "Recent (sync)", the lines of the loggers under `blockchain.sync`.
+  - **Peers view.** Each peer's client (name and version from its Hello) and best block, from the network peer
+    manager, beside its direction and age; from 100×32 its address and score, from 140×45 the score's trend (`↑`, `↓`,
+    `→` against the previous published scores, at the column's three decimals). Highest score first; a peer the
+    scorer has no score for yet shows `—`, never 0. When the network peer manager does not answer, the title says
+    so and the client and best block read `?`. The Overview's peers table at 140×45 lists the top 8 by score.
+  - **Text from peers and logs is cleaned.** A client id and a log line are drawn without escape sequences, control
+    characters, zero-width and direction-override characters, as one line of at most 512 characters, and in the
+    ASCII glyph set as ASCII only, in the same columns. A peer can no longer write to the operator's terminal through
+    its client id. A failure's reason on the alert row goes through the same cleaning.
+  - **Txpool.** The pending transactions, and how many carry a blob (`1,204 (3 blob)`), on the Overview at every
+    size and on the vitals row from 100×32. At 140×45 the GC share moves to the second row, beside the discovery
+    table, so every cell fits down to 140 columns.
+  - **Import time.** New gauges `regularsync.import.last.duration.seconds.gauge` and
+    `regularsync.import.last.blocks.gauge`: how long the last block import's consensus call took (one block or a
+    batch), and how many blocks it put on the chain, timed in regular sync's importer. The Sync view shows them for a
+    regular sync (`Import   last 3 blocks in 61ms`).
+  - **Motion.** A frame counts as moving when either of the next two ticks draws it differently: a worm near the start
+    of its track drew two ticks alike, and the dashboard dropped to one frame a second for a beat.
 - **SNAP sync on ETC and Mordor now ends with the exact pivot total difficulty (#1654).**
   `fukuii.sync.snap-sync.defer-chain-backfill-until-state-complete` is now `true` for every chain; before, only the
   Ethereum, Sepolia, Platåberget and Ephemery configs set it. With it off, ETC and Mordor finished SNAP before the

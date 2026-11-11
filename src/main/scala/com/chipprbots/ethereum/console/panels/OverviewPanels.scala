@@ -6,8 +6,8 @@ import com.chipprbots.ethereum.console.*
 import com.chipprbots.ethereum.console.panels.Rows.*
 
 /** The Overview, by tier (spec 027 research §3.2–§3.4): the vitals and resources strips; the sync panel (SNAP's five
-  * worm rows, or the Blocks worm); the forks; at tier L the longest-connected peers, beside the logo; the node's
-  * settings; and a fill panel where slice 4's recent-log strip goes.
+  * worm rows, or the Blocks worm); the forks; at tier L the top peers by score, beside the logo; the node's settings;
+  * and the Recent strip of the newest log lines.
   */
 private[console] object OverviewPanels:
 
@@ -22,7 +22,7 @@ private[console] object OverviewPanels:
     val middle =
       if c.config.showLogo && c.tier.logo.inDashboard then Seq(withLogo(c, width))
       else Seq(sync(c, c.tier.trackSlots)) ++ forks(c) ++ Option.when(c.tier == Tier.L)(peers(c)).flatten
-    Seq(strips) ++ middle ++ node :+ fillPanel
+    Seq(strips) ++ middle ++ node :+ LogsPanel.recent(c, "Recent", _ => true)
 
   /** The sync panel: SNAP's phase and five worm rows (and the chain download from tier M), or the Blocks worm. */
   def sync(c: Ctx, slots: Int, separated: Boolean = true): Panel =
@@ -50,7 +50,7 @@ private[console] object OverviewPanels:
       Panel(1, if oneLine then 1 else 3, 3, (w, _) => ForkRows.overview(c, chain, w, oneLine), separated = true)
     }
 
-  /** The longest-connected peers (tier L): slice 4 adds the client, best block and score, and sorts by score. */
+  /** The top peers by score (tier L, §3.4): client, best block, score and trend. */
   def peers(c: Ctx): Option[Panel] =
     Option.when(c.state.snapshot.isDefined)(
       Panel(3, 10, 4, (w, n) => PeersPanel.table(c, w, n, top = true), separated = true)

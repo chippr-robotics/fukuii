@@ -248,7 +248,7 @@ The mockups fix layout, column budgets and glyphs. Their data is illustrative (C
 | Logo | none in dashboard; wordmark on splash only | none in dashboard; 12-line logo on splash | 12-line logo (`TuiRenderer.scala:298-320`) in a right-hand column on Overview |
 | Overview body | peers/block strip, SNAP 5 worm rows, mining/CL one-liner, forks one-liner, 6-line recent-log strip | + per-row rates, fork timeline (3 rows), 10-line log strip, resources row | + peers mini-table (top 8), txpool, two-column layout |
 | Sync view | worm rows (track 20 cells) | track 40 cells + rates + ETA per row | track 60 cells + sparkline of recent rate (ASCII `▁▂▃▅▇`) |
-| Peers view | 1 line per peer, 18 peers max | + client id, best block, score | + direction, age, score trend |
+| Peers view | 1 line per peer, as many as fit: id, direction, client, best block, age (no address: the client and best block need the columns at 80) | + address, score | + score trend |
 | Chain view | next fork + last fork | full timeline, 1 row per fork | timeline + per-fork EIP list |
 
 Slice 1 note (C-18): while the Overview draws the logo column at tier L, its body is 93 to 113 columns, so the
@@ -840,11 +840,12 @@ render(state, w, h) =
 them on exit (`TuiLogSuppressor.scala:28-61,68-92`). The ring buffer is a
 *separate* appender, so neither path changes:
 
-- `TuiLogRingAppender extends AppenderBase[ILoggingEvent]` with a
-  `PatternLayout` (`%d{HH:mm:ss} %-5level %msg`), a lock-free ring of 1,000
-  formatted lines (`AtomicReferenceArray` + sequence counter), and a filter that
-  drops events below INFO unless `tui.log-level` says otherwise (decision 4, §10;
-  C-13).
+- `TuiLogRingAppender extends UnsynchronizedAppenderBase[ILoggingEvent]` (slice 4,
+  decision 1: `AppenderBase` would serialise every logging thread through the
+  TUI) with no layout: it keeps `LogLine(seq, time, level, logger, text)`, the
+  time (`HH:mm:ss`) formatted from the event's own timestamp, in a lock-free ring
+  of 1,000 lines (`AtomicReferenceArray` + sequence counter), and drops events
+  below INFO unless `tui.log-level` says otherwise (decision 4, §10; C-13).
 - Attached to the root logger by `Tui.initialize()` right after suppression
   succeeds; detached in `shutdown()` before `restoreConsoleLogs`. Both steps go
   through the same `attempt(step)` ladder as `releaseTerminal`

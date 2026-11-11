@@ -215,6 +215,74 @@ class TuiStateSpec extends AnyFlatSpec with Matchers:
     s.lastAdvanceAt shouldBe None
   }
 
+  // ---- Spec 027 slice 4 (T088): the score history and its trend, computed here; the log tail --------------------------
+
+  private def scored(takenAt: java.time.Instant, scores: (String, Double)*): NodeStatusSnapshot =
+    TuiFixtures
+      .snapshot(current = 10, best = 10)
+      .copy(local = LocalSample(peerScores = Some(PeerScores(takenAt, scores.toMap))))
+
+  private val t0 = TuiFixtures.Now.minusSeconds(20)
+  private val t1 = TuiFixtures.Now.minusSeconds(10)
+
+  "TuiState's score trend" should "be the sign of the change from the previous published snapshot (T088)" taggedAs (
+    UnitTest
+  ) in {
+    val s = TuiState.initial
+      .withStatus(scored(t0, "a" -> 0.500, "b" -> 0.600, "c" -> 0.700))
+      .withStatus(scored(t1, "a" -> 0.520, "b" -> 0.580, "c" -> 0.7001, "d" -> 0.400))
+    s.scoreTrend("a") shouldBe Some(Trend.Up)
+    s.scoreTrend("b") shouldBe Some(Trend.Down)
+    s.scoreTrend("c") shouldBe Some(Trend.Steady) // under the 0.001 the column shows
+    s.scoreTrend("d") shouldBe None // no earlier score to compare with
+    s.peerScore("a") shouldBe Some(0.520)
+  }
+
+  it should "move on only when the scorer publishes a new snapshot, not on every poll" taggedAs (UnitTest) in {
+    val s = TuiState.initial
+      .withStatus(scored(t0, "a" -> 0.500))
+      .withStatus(scored(t1, "a" -> 0.520))
+    // The probe reads the same published snapshot every second until the next one: the trend holds.
+    val again = s.withStatus(scored(t1, "a" -> 0.520)).withStatus(scored(t1, "a" -> 0.520))
+    again.scoreTrend("a") shouldBe Some(Trend.Up)
+    again.scores.previous.map(_.takenAt) shouldBe Some(t0)
+  }
+
+  it should "give no score for a peer missing from the snapshot, never zero (Q5)" taggedAs (UnitTest) in {
+    val s = TuiState.initial.withStatus(scored(t0, "a" -> 0.5))
+    s.peerScore("z") shouldBe None
+    s.scoreTrend("z") shouldBe None
+    TuiState.initial.peerScore("a") shouldBe None
+  }
+
+  "TuiState's log tail" should "follow the newest lines, and keep a scrolled view on the same lines as new ones arrive" taggedAs (
+    UnitTest
+  ) in {
+    def lines(from: Int, to: Int) =
+      (from to to).map(i => LogLine(i.toLong, "12:00:00", "INFO", "x", s"line $i")).toVector
+    val s = TuiState.initial.withLogs(lines(0, 99))
+    s.logScroll shouldBe 0
+    val back = s.scrollLogs(30, page = 20)
+    back.logScroll shouldBe 30
+    back.withLogs(lines(5, 104)).logScroll shouldBe 35 // five newer lines: the same lines stay on screen
+    back.scrollLogs(-50, page = 20).logScroll shouldBe 0
+    back.scrollLogs(500, page = 20).logScroll shouldBe 80 // the oldest page at the top, no further
+    TuiState.initial.scrollLogs(10, page = 20).logScroll shouldBe 0 // nothing to scroll
+  }
+
+  it should "move a whole page on the first + after new lines anchored a view past the oldest page" taggedAs (
+    UnitTest
+  ) in {
+    def lines(from: Int, to: Int) =
+      (from to to).map(i => LogLine(i.toLong, "12:00:00", "INFO", "x", s"line $i")).toVector
+    // Scrolled to the oldest page (80 of 100 with a page of 20), then 15 newer lines keep the same lines on screen: the
+    // scroll passes the bound the next key works against.
+    val anchored = TuiState.initial.withLogs(lines(0, 99)).scrollLogs(80, page = 20).withLogs(lines(15, 114))
+    anchored.logScroll shouldBe 95
+    // `+` is a page newer than what is on screen, the oldest page (bound 80): 60, not 75.
+    anchored.scrollLogs(-20, page = 20).logScroll shouldBe 60
+  }
+
 /** Tests for NodeSettings. */
 class NodeSettingsSpec extends AnyFlatSpec with Matchers:
 

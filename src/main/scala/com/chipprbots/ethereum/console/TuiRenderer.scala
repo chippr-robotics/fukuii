@@ -34,8 +34,8 @@ class TuiRenderer(config: TuiConfig):
     * Drawing it from the home position never scrolls or wraps the terminal. When the content is taller than the
     * terminal, the panels that matter least give up their rows first, and the footer with the keys stays on the last
     * line. While the splash is on screen its rows replace the dashboard's, all of them, or all but the top `k` during
-    * the hand-over (§3.7). A dashboard frame moves when the next tick draws it differently: only rows on screen count,
-    * and the celebration counts while it runs.
+    * the hand-over (§3.7). A dashboard frame moves when one of the next [[Lookahead]] ticks draws it differently: only
+    * rows on screen count, and the celebration counts while it runs.
     */
   def frame(state: TuiState, width: Int, height: Int, theme: TuiTheme = TuiTheme.Ansi16): Frame =
     val w = Math.max(width, 1)
@@ -44,8 +44,16 @@ class TuiRenderer(config: TuiConfig):
       case Some(rows) => Frame(handover(state, w, height, theme, rows), true)
       case None =>
         val lines = dashboard(state, w, height, theme)
-        def nextDiffers = dashboard(state.copy(tick = state.tick + 1), w, height, theme) != lines
+        // The next `Lookahead` ticks: a worm at cell 2 draws its ripple at cells 1, 0, 0, so ticks 1 and 2 (mod 3) draw
+        // alike and one tick's lookahead would drop the loop to 1 fps for a beat. The later renders run only then.
+        def differsAt(ahead: Long) = dashboard(state.copy(tick = state.tick + ahead), w, height, theme) != lines
+        def nextDiffers = (1L to Lookahead).exists(differsAt)
         Frame(lines, moving(state) && (state.catchup.isDefined || (mayMove(state) && nextDiffers)))
+
+  /** How many ticks ahead a frame is compared: the ripple's period less one, since the ripple is the one animation that
+    * draws the same frame at consecutive ticks (the pulse and the spinner change at every tick).
+    */
+  private val Lookahead: Long = (WormBar.RipplePeriod - 1).toLong
 
   /** Whether anything at all can move: only under full motion. */
   private def moving(state: TuiState): Boolean = state.motion == Motion.Full

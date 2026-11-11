@@ -116,8 +116,12 @@ final class TuiTestTerminal(width: Int = 100, height: Int = 40, termType: String
     * snapshots tests apply are stamped at [[TuiFixtures.Now]], and a TUI on the wall clock reads them as days old, so
     * Unresponsive.
     */
-  def tui(config: TuiConfig = TuiTestTerminal.config, clock: java.time.Clock = TuiFixtures.clock): Tui =
-    new Tui(config, () => terminal, _ => Some(processOutput), clock)
+  def tui(
+      config: TuiConfig = TuiTestTerminal.config,
+      clock: java.time.Clock = TuiFixtures.clock,
+      logRing: Option[TuiLogRingAppender] = None
+  ): Tui =
+    new Tui(config, () => terminal, _ => Some(processOutput), clock, logRing)
 
   /** Frames written so far: each frame starts at the home position (spec 027 T036 counts them). */
   def framesWritten: Int = output.split(java.util.regex.Pattern.quote(Tui.CursorHome), -1).length - 1

@@ -13,3 +13,4 @@ private[console] object Views:
         case TuiView.Sync     => SyncPanels.panels(c)
         case TuiView.Peers    => PeersPanel.panels(c)
         case TuiView.Chain    => ChainPanel.panels(c)
+        case TuiView.Logs     => LogsPanel.panels(c)

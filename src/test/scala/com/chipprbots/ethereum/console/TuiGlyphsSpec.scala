@@ -35,7 +35,20 @@ class TuiGlyphsSpec extends AnyFlatSpec with Matchers:
 
   it should "pin the ambiguous-width glyphs to one column" taggedAs (UnitTest) in {
     val e = TuiGlyphs.Emoji
-    Seq(e.diamond, e.bullet, e.warn, e.arrow, e.separator, e.timelineTrack, e.dot, e.ellipsis, e.up, e.down, e.steady)
+    Seq(
+      e.diamond,
+      e.bullet,
+      e.warn,
+      e.arrow,
+      e.separator,
+      e.timelineTrack,
+      e.dot,
+      e.ellipsis,
+      e.up,
+      e.down,
+      e.steady,
+      e.missing
+    )
       .foreach(g => withClue(g.text)(g.cols shouldBe 1))
     e.diamond.text shouldBe "◆"
     e.bullet.text shouldBe "●"
