@@ -969,6 +969,17 @@ trait MptStorage:
   that wrap another storage derive from a new `MptStorageDecorator` that forwards every member, including a wrapped `forOwner`
   and `resetOwner`. A forgotten `getAt` would fall back to `get(hash)` and throw on a position store (loud), and the decorator
   base makes it a compile-time fact.
+  *(C2a part 1 as built, 2026-11-11.)* Six of the seven derive from the base: `SerializingMptStorage` wraps a
+  `NodesKeyValueStorage`, not another `MptStorage`, and stays as it is. The `contextStorage` wrapper is the named class
+  `InMemoryWorldStateProxy.AccountStorageNodes`. `PrefetchNodeReader.forOwner` gives a reader on the **same** budget and the
+  same counts (a block's prefetch is one budget, however many tries it reads), and its `resetOwner` throws like its other
+  writes: it is a read-only view of the parent state (beacon).
+- **A batch read is not an execution read** (C2a, T041). `multiGetNodes`, `rawNodes` and `rawNodesAt` pass through a decorator
+  as they are and do not meet its `read` hook. Their only callers are SNAP (`ContractWorkCarry`), healing
+  (`FrontierRebuildBfs`, `HealResponseProcessing`) and the background audit (`BackgroundAudit`), each on the state storage's
+  own `SerializingMptStorage`; no world, replay or simulation reads a node through them. So a cache, a budget or a recorder
+  in front of execution misses nothing by not seeing them. The C2b ratchet (T062) lists the three members with these four
+  callers, so a new caller is a reviewed decision; the spec 017 recorder (parked) relies on this line.
 - **The spec 017 recorder, when it exists, is a decorator with three rules** (S0 item 9). (a) It sits **above**
   `CachingMptStorage` and `DecodedNodeCache`: a cache hit short-circuits `get` and `getAt`, so a recorder below the cache would
   miss reads. (b) It records **parent-state reads only**: nodes the block itself created (served from `StagedLayer.byHash`, 6.2),

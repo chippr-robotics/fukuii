@@ -1,27 +1,29 @@
-# Spec 018 Track C handoff: after C1 (cloud session → whoever takes C2a), 2026-11-11
+# Spec 018 Track C handoff: after C2a part 1 (cloud session → whoever takes C2a part 2), 2026-11-11
 
 **From** `cloud-dc960fdc`, a cloud session whose container and `.local/` do not outlive it, which is why this is a
-tracked file and not a continuation under `.local/docs/continuations/`. **To** the session that claims B-055 (C2a).
+tracked file and not a continuation under `.local/docs/continuations/`. **To** the session that holds B-055 next. It
+replaces the handoff written after C1.
 
 ## Status
 
-C1 (B-054, "the trie reports positions") merged to staging as #1788 on 2026-11-11, with CI green (Test and Build on
-JDK 25, EEST Amsterdam, the hive runs, the SNAP ratchet). The next slice in merge order is **C2a**
-(B-055), and **C3a** (B-057) can be drafted beside it: C3a needs only `NibblePath` from C1.
+C1 (B-054) merged as #1788. **C2a (B-055) lands as two PRs.** Part 1 is done: the six wrapping `MptStorage` implementors
+are on `MptStorageDecorator` (T041), every trie of the state names its owner (T046: execution, genesis, the BAL
+prefetch), and real blocks were run through a position mirror (T026, the EEST half). Part 2 is next: the `pathstate`
+package behind `fukuii.state.path-live` (T035 to T038, T042 to T045, T047 to T050).
 
-C0 (B-053) is still open on fukuii-fc: the pinned jar, the fixed ranges and their recorded roots (T002 to T004) do not
-exist. Three C1 tasks wait on them and are **not** done: T025 (roots against the jar), T033 (the M7 merge gate) and
-T034 (DC-14). They are B-203.
+C0 (B-053) is still open on fukuii-fc. What waits on its pinned jar: T025, T033, T034 (B-203), T049 (M4), T050's DC-14
+figures, and the baseline half of T026 (B-207).
 
 ## Files modified
 
 | File | Status | Last action |
 |------|--------|-------------|
-| `src/main/scala/com/chipprbots/ethereum/mpt/NibblePath.scala`, `TriePosition.scala` | DONE (new) | in #1788 |
-| `mpt/MerklePatriciaTrie.scala`, `MptTraversals.scala`, `MptVisitors/RlpHashingVisitor.scala` | DONE | positions threaded; `collapseTrieAt` |
-| `db/storage/MptStorage.scala`, `MptStorageDecorator.scala` (new) | DONE | five defaulted members; the decorator base |
-| `src/test/.../mpt/PositionTestKit.scala` and the `Position*Spec` files | DONE (new) | the C1 oracles; reusable by C2a and C3b |
-| The seven wrapping `MptStorage` implementors | NOT STARTED | they move onto the decorator in C2a (T041) |
+| `main/db/storage/DecodedNodeCache.scala`, `PrefetchNodeReader.scala` | DONE | on the decorator; `read` hook; the prefetch reader shares one budget across owner views |
+| `main/ledger/InMemoryWorldStateProxy.scala`, `BalPrefetcher.scala`, `StxLedger.scala` | DONE | owner threading; `storageOwner(address)`; `deleteAccount` calls `resetOwner` |
+| `main/blockchain/data/GenesisDataLoader.scala`, `main/jsonrpc/EthSimulateService.scala` | DONE | owner threading in genesis; the two wrappers that withhold removals |
+| `test/mpt/PositionTestKit.scala` | DONE | `OwnerPositionStore`, `PositionMirror`, `RawTrieWalk.leaves` |
+| `test/ledger/EestBlockchainReplay.scala`, `EestPositionMirror.scala`, `EestPositionReplaySpec.scala`, `EestFixtureCorpusSpec.scala` | DONE | a `StorageObserver` hook; `EEST_POSITIONS=1` |
+| `main/db/storage/pathstate/*` | NOT STARTED | part 2 |
 
 ## Open compile errors
 
@@ -29,31 +31,28 @@ T034 (DC-14). They are B-203.
 
 ## Next action (first thing to do)
 
-Read `specs/018-storage-engine-consolidation/plan.md`, "C1 pre-code record (2026-11-11)", then start C2a at T041 with
-these three things in hand, none of which the original task text says:
+Read plan.md, "C2a part 1 record (2026-11-11)", then start part 2 at T042 (`StateExceptions.scala`, the `StateFault`
+hierarchy of data-model 6.3.2, outside `MPTException`) and T036, its test. Then T043: the anchor-only `StateView` and
+`PathMptStorage` over `PathNodeStorage` (CF `t` and `u`, which SNAP already writes).
 
-1. **T041, per wrapper.** `MptStorageDecorator` makes `get`/`getAt` final over a `read(hash, path)` hook and the two
-   update members final over an `update(newRoot, removals)` hook. `CachingMptStorage`, `PrefetchNodeReader` and the
-   `contextStorage` wrapper in `InMemoryWorldStateProxy` override `read`. `AppendOnlyMptStorage`, `ReplayMptStorage`
-   and `RetainingMptStorage` override `update` with `removals.none`, or genesis load, `eth_call` replay and
-   `eth_simulateV1` start deleting nodes. `AppendOnlyMptStorageSpec`, `ReplayMptStorageSpec` and
-   `RetainingMptStorageSpec` pin today's behaviour and must stay green through the move.
-2. **Batch reads.** `multiGetNodes`, `rawNodes` and `rawNodesAt` do not go through the `read` hook. Before the spec 017
-   recorder lands, route them through a hook or record in data-model 9 that a batch read is never a parent-state read.
-3. **T026 is now a C2a task**, after T046: fixtures through a recording sink need the owner threaded, or the account
-   trie and every storage trie write their positions into one keyspace.
+Three things the task text does not say:
 
-For C3a: `PositionKey` as data-model 3 writes it (a case class over `NibblePath`) compares by identity. Key by
-`NibblePath.key` with the owner in front, or give it equality by content.
+1. **A world already asks its storage for `forOwner`.** `PathMptStorage.forOwner(owner)` is the only entry: a read or an
+   update on the unscoped storage is a bug, and `OwnerPositionStore` in the test kit refuses it the same way.
+2. **The reset does nothing yet, and must not start to before T111.** `deleteAccount` calls `resetOwner` on the world's
+   storage at once. The PoW miner, `eth_simulateV1` and the lenient builder run over a read-only store nobody commits
+   (forge). Part 2's read side must leave `resetOwner` a no-op; C3b gives it a layer.
+3. **Use the mirror.** `EEST_POSITIONS=1 EEST_FIXTURES=<dir> sbt "testOnly *EestFixtureCorpusSpec"` runs any
+   execution-specs fixture set through `PositionMirror`. The Amsterdam corpus cannot see a missing reset (EIP-6780,
+   EIP-7610); `for_paris` and `for_shanghai` can
+   (`scripts/eest/fetch_fixtures.py DIR --prefix fixtures/blockchain_tests/for_paris/ --prefix fixtures/blockchain_tests/for_shanghai/`).
 
 ## Test baseline
 
-On the C1 branch, rebased on staging `1e8ed47b2` (0.11.45): the ten new specs and `ConsensusAdapterSpec`, 70 tests,
-0 failed; the trie, ledger, pruning and miner suites, 693 tests, 0 failed. `testEssential`: 739 suites, 8,748 passed,
-1 failed, and that one is `KeyStoreImplSpec` "return an error when the keystore dir cannot be initialized", which fails
-the same way on the parent commit there: the container runs as root, and root can create the directory the test
-expects to be refused. Not run in the cloud container: the ethereum/tests job (no `ets/tests` submodule there) and
-`IntegrationTest / test`.
+On the part 1 branch, on staging `f75ffcf10`: see the PR body for the figures of the run that preceded it
+(`testEssential`, the position specs, the fixture corpora). Known in this container only: `KeyStoreImplSpec` "return an
+error when the keystore dir cannot be initialized" fails because the container runs as root (B-205). Not run here: the
+ethereum/tests job (no `ets/tests` checkout) and `IntegrationTest / test`.
 
 The build container reaches Maven Central only through a mirror: `repo1.maven.org` answers 429. sbt was run with
 `-Dsbt.override.build.repos=true` and a repositories file naming
