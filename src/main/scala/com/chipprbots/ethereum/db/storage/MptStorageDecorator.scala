@@ -71,6 +71,8 @@ trait MptStorageDecorator extends MptStorage:
 
   override def resetOwner(owner: ByteString): Unit = underlying.resetOwner(owner)
 
+  override def nodesSharedAcrossTries: Boolean = underlying.nodesSharedAcrossTries
+
   override def persist(): Unit = underlying.persist()
 
   override def multiGetNodes(hashes: Seq[Array[Byte]]): Seq[Option[MptNode]] = underlying.multiGetNodes(hashes)

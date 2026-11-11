@@ -161,7 +161,7 @@ class BytecodeRecoveryActorSpec extends ScalaTestWithActorTestKit() with AnyFlat
     }
 
   it should
-    "emit RecoveryComplete even when the trie scan Future throws (trie root missing)" taggedAs (
+    "emit RecoveryComplete when the trie scan throws (trie root missing), and not mark recovery done" taggedAs (
       UnitTest,
       SyncTest
     ) in {
@@ -184,9 +184,11 @@ class BytecodeRecoveryActorSpec extends ScalaTestWithActorTestKit() with AnyFlat
           "bytecode-recovery-spec-t3"
         )
 
-      // Future Failure → ScanResult(Seq.empty) → RecoveryComplete (graceful resilience)
+      // A scan that could not run still ends recovery for this run, so that regular sync starts. It settles nothing:
+      // it was taken as a scan that found no code missing, and the flag was written on a state nobody had read (spec
+      // 018 Track C, C2b; the combined scan already leaves both flags unwritten when it cannot run).
       syncController.expectMsg(8.seconds, BytecodeRecoveryActor.RecoveryComplete)
-      appStateStorage.isBytecodeRecoveryDone() shouldBe true
+      appStateStorage.isBytecodeRecoveryDone() shouldBe false
 
       testKit.stop(actor)
     }

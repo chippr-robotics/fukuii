@@ -69,6 +69,13 @@ trait MptStorage:
   /** The storage trie of `owner` is being replaced whole: its account was removed, or its storage cleared. */
   def resetOwner(@unused owner: ByteString): Unit = ()
 
+  /** Whether a node is stored once whatever trie holds it. True of a hash-keyed storage: two accounts with one storage
+    * root share that trie's nodes, so a trie found whole under one account is whole under the other. False of a
+    * position-keyed storage: each account has a trie of its own, and the second can be missing while the first is whole
+    * (spec 022 V3). A walk that skips a storage trie because it has seen its root must ask this first.
+    */
+  def nodesSharedAcrossTries: Boolean = true
+
   /** [[updateNodesInStorage]] with positions.
     *
     * `replaced` names every node of the trie as it was that lay on the path of the change: the list

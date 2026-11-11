@@ -55,6 +55,9 @@ object StorageRecoveryActor:
 
   sealed trait Command
   private case class ScanResult(missingStorage: Seq[(ByteString, ByteString)]) extends Command
+
+  /** The scan could not run (the root is not in the store, the store failed, the state moved under it). */
+  private case object ScanFailed extends Command
   // Delayed self-ping for Bug 30b abandon path. Carries the progress counter current at arm time;
   // if progressSeq still matches on fire, nothing moved and we give up.
   private[sync] case class CheckAbandon(progressAtSchedule: Long) extends Command
@@ -192,9 +195,22 @@ object StorageRecoveryActor:
             case Success(result) => ScanResult(result)
             case Failure(ex) =>
               asyncLog.error("Storage recovery scan failed", ex)
-              ScanResult(Seq.empty)
+              ScanFailed
           }
       Behaviors.receiveMessage {
+        case ScanFailed =>
+          // A scan that could not run has looked at nothing, so it settles nothing. It was taken as a scan that found
+          // nothing missing, and recovery was marked done for good on a state nobody had read. The flag is left
+          // unwritten: the next start scans again, and regular sync fetches what it reaches on demand, as after a
+          // combined scan that could not run (`SyncController.recoveryCouldNotRun`).
+          ctx.log.error(
+            "Storage recovery: the scan could not run (logged above), so nothing is settled by it. The recovery flag " +
+              "is not written and the next start scans again."
+          )
+          RecoveryMetrics.setStoragePhase(RecoveryMetrics.PhaseIdle)
+          syncController ! RecoveryComplete
+          Behaviors.stopped
+
         case ScanResult(missing) =>
           if missing.isEmpty then
             ctx.log.info("Storage recovery: all contract storage tries present. Marking recovery complete.")
@@ -448,9 +464,9 @@ object StorageRecoveryActor:
       log: Logger
   ): Unit =
     val mptStorage = stateStorage.getBackingStorage(pivotBlockNumber)
-    val residual = missing.count { case (_, storageRoot) =>
+    val residual = missing.count { case (accountHash, storageRoot) =>
       try
-        mptStorage.get(storageRoot.toArray)
+        mptStorage.forOwner(Some(accountHash)).getAt(NibblePath.Empty, storageRoot.toArray)
         false
       catch case _: MerklePatriciaTrie.MPTException => true
     }
@@ -468,7 +484,11 @@ object StorageRecoveryActor:
       log: Logger
   ): Seq[(ByteString, ByteString)] =
     RecoveryMetrics.setStoragePhase(RecoveryMetrics.PhaseScanning)
-    val rootNode = mptStorage.get(stateRoot.toArray)
+    // Every read says where it is (spec 018 Track C): the account trie under no owner, each storage root under its
+    // account. Whether a storage trie seen under one account stands for another's is the store's to say.
+    val accountTrie = mptStorage.forOwner(None)
+    val shared = mptStorage.nodesSharedAcrossTries
+    val rootNode = accountTrie.getAt(NibblePath.Empty, stateRoot.toArray)
 
     val missing = mutable.ArrayBuffer.empty[(ByteString, ByteString)]
     val seenRoots = mutable.HashSet.empty[ByteString]
@@ -490,16 +510,17 @@ object StorageRecoveryActor:
         case Success(account) =>
           if account.storageRoot != Account.EmptyStorageRootHash then
             contractCount += 1
-            if !seenRoots.contains(account.storageRoot.value) then
-              seenRoots += account.storageRoot.value
+            val trie = CombinedRecoveryScan.storageTrieKey(shared, accountHash, account.storageRoot.value)
+            if !seenRoots.contains(trie) then
+              seenRoots += trie
               checkedCount += 1
-              try mptStorage.get(account.storageRoot.toArray)
+              try mptStorage.forOwner(Some(accountHash)).getAt(NibblePath.Empty, account.storageRoot.toArray)
               catch
                 case _: MerklePatriciaTrie.MPTException =>
                   missing += ((accountHash, account.storageRoot.value))
         case Failure(_) => // Skip malformed account RLP
     try
-      val visitor = new PathTrackingLeafWalkVisitor(mptStorage, ByteString.empty, onLeaf)
+      val visitor = new PathTrackingLeafWalkVisitor(accountTrie, ByteString.empty, onLeaf)
       MptTraversals.dispatch(rootNode, visitor)
     catch
       case e: MerklePatriciaTrie.MPTException =>

@@ -69,6 +69,10 @@ class MptStorageDecoratorSpec extends AnyFlatSpec with Matchers:
       calls += "forOwner"
       scoped.getOrElseUpdate(forWhom, new Recording(forWhom))
     override def resetOwner(forWhom: ByteString): Unit = calls += "resetOwner"
+    // not the default: a wrapper that answered for itself would say true
+    override def nodesSharedAcrossTries: Boolean =
+      calls += "nodesSharedAcrossTries"
+      false
 
   /** A wrapper that adds nothing. */
   private class Plain(protected val underlying: MptStorage) extends MptStorageDecorator:
@@ -125,6 +129,7 @@ class MptStorageDecoratorSpec extends AnyFlatSpec with Matchers:
     plain.rawNodesAt(Seq(path -> ByteString(hash))) shouldBe Seq(RawNodeRead.Absent)
     plain.storeRawNodes(Seq(ByteString(hash) -> node.encode))
     plain.resetOwner(owner)
+    plain.nodesSharedAcrossTries shouldBe false
 
     wrapped.calls.toSeq shouldBe Seq(
       "get",
@@ -136,7 +141,8 @@ class MptStorageDecoratorSpec extends AnyFlatSpec with Matchers:
       "rawNodes",
       "rawNodesAt",
       "storeRawNodes",
-      "resetOwner"
+      "resetOwner",
+      "nodesSharedAcrossTries"
     )
   }
 
@@ -154,7 +160,8 @@ class MptStorageDecoratorSpec extends AnyFlatSpec with Matchers:
       "rawNodesAt",
       "storeRawNodes",
       "forOwner",
-      "resetOwner"
+      "resetOwner",
+      "nodesSharedAcrossTries"
     )
   }
 

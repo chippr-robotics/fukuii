@@ -131,7 +131,34 @@ class StorageRecoveryActorSpec extends ScalaTestWithActorTestKit() with AnyFlatS
     coordinator.expectMsgType[actors.StorageRangeCoordinator.AddStorageTasks](2.seconds)
     (actor, appStateStorage)
 
-  "StorageRecoveryActor" should
+  // A scan that could not run (here: the state root is not in the store) was taken as a scan that found no storage
+  // missing, and recovery was marked done for good on a state nobody had read. It still ends recovery for this run, so
+  // that regular sync starts; it settles nothing (spec 018 Track C, C2b; the combined scan already behaves so).
+  "StorageRecoveryActor" should "end recovery for this run and not mark it done when its scan cannot run" taggedAs (
+    UnitTest,
+    SyncTest
+  ) in {
+    val syncController = TestProbe("syncController_scan_failed")
+    val networkPeerManager = TestProbe("npm_scan_failed")
+    val (stateStorage, appStateStorage, flatSlots) = newStorages()
+    val actor = testKit.spawn(
+      StorageRecoveryActor.testApply(
+        stateRoot = fakeStateRoot,
+        stateIngest = recoveryIngest(stateStorage, appStateStorage, flatSlots),
+        networkPeerManager = networkPeerManager.ref,
+        syncController = syncController.ref.toTyped[Any],
+        pivotBlockNumber = BigInt(100),
+        snapSyncConfig = newConfig(1.minute, 8)
+        // no preloaded gaps: the actor scans, and the root is not there
+      ),
+      "storage-recovery-spec-scan-failed"
+    )
+    syncController.expectMsg(8.seconds, StorageRecoveryActor.RecoveryComplete)
+    appStateStorage.isStorageRecoveryDone() shouldBe false
+    testKit.stop(actor)
+  }
+
+  it should
     "abandon and commit recovery-done after PivotStateUnservable when no recent root is available" taggedAs (
       UnitTest,
       SyncTest

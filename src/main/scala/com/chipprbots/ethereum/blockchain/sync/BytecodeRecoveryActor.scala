@@ -49,6 +49,9 @@ object BytecodeRecoveryActor:
 
   sealed trait Command
   private case class ScanResult(missingCodeHashes: Seq[ByteString]) extends Command
+
+  /** The scan could not run (the root is not in the store, the store failed, the state moved under it). */
+  private case object ScanFailed extends Command
   private case class CheckAbandon(progressSeq: Long) extends Command
   private case object CoordinatorTerminated extends Command
   // SyncController forwards peer-available events here; BCA re-forwards to BCC
@@ -159,9 +162,22 @@ object BytecodeRecoveryActor:
             case Success(result) => ScanResult(result)
             case Failure(ex) =>
               asyncLog.error("Bytecode recovery scan failed", ex)
-              ScanResult(Seq.empty)
+              ScanFailed
           }
       Behaviors.receiveMessage {
+        case ScanFailed =>
+          // A scan that could not run has looked at nothing, so it settles nothing. It was taken as a scan that found
+          // nothing missing, and recovery was marked done for good on a state nobody had read. The flag is left
+          // unwritten: the next start scans again, and regular sync fetches what it reaches on demand, as after a
+          // combined scan that could not run (`SyncController.recoveryCouldNotRun`).
+          ctx.log.error(
+            "Bytecode recovery: the scan could not run (logged above), so nothing is settled by it. The recovery " +
+              "flag is not written and the next start scans again."
+          )
+          RecoveryMetrics.setBytecodePhase(RecoveryMetrics.PhaseIdle)
+          syncController ! RecoveryComplete
+          Behaviors.stopped
+
         case ScanResult(missing) =>
           if missing.isEmpty then
             ctx.log.info("Bytecode recovery: all contract bytecodes present. Marking recovery complete.")
@@ -309,7 +325,9 @@ object BytecodeRecoveryActor:
       log: Logger
   ): Seq[ByteString] =
     RecoveryMetrics.setBytecodePhase(RecoveryMetrics.PhaseScanning)
-    val rootNode = mptStorage.get(stateRoot.toArray)
+    // the account trie, each node read at the path that leads to it (spec 018 Track C)
+    val accountTrie = mptStorage.forOwner(None)
+    val rootNode = accountTrie.getAt(NibblePath.Empty, stateRoot.toArray)
 
     val missing = mutable.ArrayBuffer.empty[ByteString]
     val seen = mutable.HashSet.empty[ByteString]
@@ -333,7 +351,7 @@ object BytecodeRecoveryActor:
             if evmCodeStorage.get(account.codeHash.value).isEmpty then missing += account.codeHash.value
         case Failure(_) => // Skip malformed account RLP
     try
-      val visitor = new LeafWalkVisitor(mptStorage, onLeaf)
+      val visitor = new PathTrackingLeafWalkVisitor(accountTrie, ByteString.empty, (_, leaf) => onLeaf(leaf))
       MptTraversals.dispatch(rootNode, visitor)
     catch
       case e: MerklePatriciaTrie.MPTException =>

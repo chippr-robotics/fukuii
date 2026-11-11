@@ -49,6 +49,9 @@ final class PathMptStorage private (
 
   override def forOwner(owner: Option[ByteString]): MptStorage = new PathMptStorage(view, layer, Some(owner))
 
+  /** Each account has a storage trie of its own here: one found whole says nothing of another with the same root. */
+  override def nodesSharedAcrossTries: Boolean = false
+
   private def owner(what: String): Option[ByteString] =
     scope.getOrElse(
       throw new IllegalStateException(s"$what on the storage of the whole state: the trie did not say which trie it is")

@@ -95,21 +95,14 @@ get-by-hash 1 src/main/scala/com/chipprbots/ethereum/network/snapserver/SnapServ
 node-by-hash 2 src/main/scala/com/chipprbots/ethereum/domain/BlockchainReader.scala the definition of getMptNodeByHash and its call of getNode; its one caller left is ChainImporter's check that a state is held, which becomes stateAvailable (C3c, T116)
 readonly 1 src/main/scala/com/chipprbots/ethereum/blockchain/checkpoint/CheckpointExporter.scala checkpoint export walks the state over a buffer; from the seam in C2b (T059)
 get-by-hash 1 src/main/scala/com/chipprbots/ethereum/blockchain/checkpoint/CheckpointExporter.scala the export's walk resolves each node by hash; by position in C2b (T059)
-backing 1 src/main/scala/com/chipprbots/ethereum/blockchain/sync/BytecodeRecoveryActor.scala the bytecode recovery scan's store; from the seam in C2b (T060)
-get-by-hash 1 src/main/scala/com/chipprbots/ethereum/blockchain/sync/BytecodeRecoveryActor.scala the bytecode recovery scan reads the account root by hash; C2b (T060)
-backing 1 src/main/scala/com/chipprbots/ethereum/blockchain/sync/CombinedRecoveryScanActor.scala the store the combined recovery scan hands to each shard's walk; from the seam in C2b (T060)
-get-by-hash 1 src/main/scala/com/chipprbots/ethereum/blockchain/sync/CombinedRecoveryScan.scala probes a storage root by hash, which a position store answers only under the account's owner; C2b (T060)
-backing 3 src/main/scala/com/chipprbots/ethereum/blockchain/sync/StorageRecoveryActor.scala two are the storage recovery scan's store, from the seam in C2b (T060); the third is where recovered storage is written, C5a
-get-by-hash 3 src/main/scala/com/chipprbots/ethereum/blockchain/sync/StorageRecoveryActor.scala the account root and two storage roots read by hash; the storage roots under their owners in C2b (T060)
+backing 1 src/main/scala/com/chipprbots/ethereum/blockchain/sync/BytecodeRecoveryActor.scala the store the bytecode recovery scan walks, by position since C2b: the store SNAP builds, before there is an anchor to take a view of; C5a
+backing 1 src/main/scala/com/chipprbots/ethereum/blockchain/sync/CombinedRecoveryScanActor.scala the store the combined recovery scan hands to each shard's walk, by position since C2b: the store SNAP builds, before there is an anchor; C5a
+backing 3 src/main/scala/com/chipprbots/ethereum/blockchain/sync/StorageRecoveryActor.scala two are the store the storage recovery scan and its closing check read, by position since C2b; the third is where recovered storage is written; all three are the store SNAP builds, C5a
 get-by-hash 9 src/main/scala/com/chipprbots/ethereum/blockchain/sync/snap/StateValidator.scala the validation walks read roots and nodes by hash; by position, storage roots under their owners, in C2b (T060)
 snap-store 2 src/main/scala/com/chipprbots/ethereum/blockchain/sync/snap/controller/StateValidationModule.scala the pivot's hash store, handed to the two validation walks; from the seam with the walks, C2b (T060)
-visit-hash 1 src/main/scala/com/chipprbots/ethereum/mpt/MptVisitors/LeafWalkVisitor.scala resolves a hash node and is handed no position; a positioned visitor in C2b (T061)
-get-by-hash 1 src/main/scala/com/chipprbots/ethereum/mpt/MptVisitors/LeafWalkVisitor.scala that visitor's read by hash; C2b (T061)
-visit-hash 1 src/main/scala/com/chipprbots/ethereum/mpt/MptVisitors/PathTrackingLeafWalkVisitor.scala tracks the nibbles and still resolves by hash; by position in C2b (T061)
-get-by-hash 2 src/main/scala/com/chipprbots/ethereum/mpt/MptVisitors/PathTrackingLeafWalkVisitor.scala that visitor's two reads by hash; C2b (T061)
+visit-hash 1 src/main/scala/com/chipprbots/ethereum/mpt/MptVisitors/PathTrackingLeafWalkVisitor.scala the visitor interface hands visitHash no position; this visitor carries its own and reads each node at it (kept)
 visit-hash 1 src/main/scala/com/chipprbots/ethereum/mpt/MptVisitors/MptConstructionVisitor.scala resolves a hash node and is handed no position; a positioned visitor in C2b (T061)
 get-by-hash 1 src/main/scala/com/chipprbots/ethereum/mpt/MptVisitors/MptConstructionVisitor.scala that visitor's read by hash; C2b (T061)
-get-by-hash 1 src/main/scala/com/chipprbots/ethereum/mpt/ShardEnumerator.scala resolves by hash though it carries the prefix; by position in C2b (T061)
 
 # Execution, block production and the writers beside them: C3b and C3c.
 backing-mpt 1 src/main/scala/com/chipprbots/ethereum/ledger/BlockExecution.scala WRITER: the block's store when nothing is staged; the staged commit, C3b (T093)

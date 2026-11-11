@@ -40,18 +40,21 @@ object ShardEnumerator:
     */
   def enumShards(rootHash: ByteString, storage: MptStorage, depth: Int = 1): Vector[Shard] =
     if java.util.Arrays.equals(rootHash.toArray, MerklePatriciaTrie.EmptyRootHash) then Vector.empty
-    else expand(ByteString.empty, resolve(HashNode(rootHash.toArray), storage), storage, depth)
+    else
+      // the account trie, each node read at the prefix that leads to it (spec 018 Track C)
+      val accounts = storage.forOwner(None)
+      expand(ByteString.empty, resolve(HashNode(rootHash.toArray), accounts, ByteString.empty), accounts, depth)
 
-  private def resolve(node: MptNode, storage: MptStorage): MptNode = node match
-    case h: HashNode => storage.get(h.hashNode)
+  private def resolve(node: MptNode, storage: MptStorage, prefix: ByteString): MptNode = node match
+    case h: HashNode => storage.getAt(NibblePath.fromNibbles(prefix.toArray), h.hashNode)
     case other       => other
 
   /** A node below the root. Absent, it stays the unresolved HashNode it is; a node that fails to decode still throws.
     * The store reports such a node as a `CorruptNodeException`, a missing node for execution's sake, so it is let
     * through first: here it is a failure, not a hole (spec 022 T062).
     */
-  private def resolveBelowRoot(node: MptNode, storage: MptStorage): MptNode =
-    try resolve(node, storage)
+  private def resolveBelowRoot(node: MptNode, storage: MptStorage, prefix: ByteString): MptNode =
+    try resolve(node, storage, prefix)
     catch
       case e: MerklePatriciaTrie.CorruptNodeException => throw e
       case _: MerklePatriciaTrie.MissingNodeException => node
@@ -64,10 +67,13 @@ object ShardEnumerator:
       case _: HashNode        => Vector(Shard(prefix, node)) // absent from the store: nothing to split
       case ext: ExtensionNode =>
         // The extension consumes shared nibbles without branching, so it does NOT spend a shard level.
-        expand(prefix ++ ext.sharedKey, resolveBelowRoot(ext.next, storage), storage, depth)
+        val below = prefix ++ ext.sharedKey
+        expand(below, resolveBelowRoot(ext.next, storage, below), storage, depth)
       case br: BranchNode =>
         (0 until BranchNode.numberOfChildren).iterator.flatMap { i =>
           br.children(i) match
             case NullNode => Iterator.empty
-            case child => expand(prefix ++ ByteString(i.toByte), resolveBelowRoot(child, storage), storage, depth - 1)
+            case child =>
+              val below = prefix ++ ByteString(i.toByte)
+              expand(below, resolveBelowRoot(child, storage, below), storage, depth - 1)
         }.toVector
