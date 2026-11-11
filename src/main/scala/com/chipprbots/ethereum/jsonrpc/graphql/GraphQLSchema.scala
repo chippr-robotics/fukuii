@@ -20,10 +20,9 @@ import sangria.schema.fields
 
 import com.chipprbots.ethereum.consensus.engine.BlobGasUtils
 import com.chipprbots.ethereum.crypto.kec256
+import com.chipprbots.ethereum.db.storage.MptStorage
 import com.chipprbots.ethereum.domain.AccessListItem
 import com.chipprbots.ethereum.domain.Address
-import com.chipprbots.ethereum.db.storage.MptStorage
-import com.chipprbots.ethereum.db.storage.pathstate.StateFault
 import com.chipprbots.ethereum.domain.BlobTransaction
 import com.chipprbots.ethereum.domain.Block
 import com.chipprbots.ethereum.domain.BlockHash
@@ -480,7 +479,9 @@ object GraphQLSchema:
         state = ctx.blockchainReader.stateAt(header)
         account <- ctx.blockchainReader.accountIn(state, header, Address(address))
       yield (state, account)
-    catch case _: MissingNodeException | _: StateFault => None
+    // A state that is not held, or that moved under the read, is NOT caught here: answering it with no account would
+    // report a zero balance for an account that has one. It surfaces as an error of the field, as it does for `code`.
+    catch case _: MissingNodeException => None
 
   // ---------------------------------------------------------------------------
   // Log
@@ -1162,7 +1163,7 @@ object GraphQLSchema:
                     .flatMap(head => reader.accountAt(head, sender))
                     .map(_.nonce.toBigInt)
                     .getOrElse(c.ctx.blockchainConfig.accountStartNonce.toBigInt)
-                catch case _: MissingNodeException | _: StateFault => c.ctx.blockchainConfig.accountStartNonce.toBigInt
+                catch case _: MissingNodeException => c.ctx.blockchainConfig.accountStartNonce.toBigInt
 
               if stx.tx.nonce < currentNonce then throw GraphQLDataFetchingError.nonceTooLow("sendRawTransaction")
 

@@ -6,9 +6,9 @@ import cats.effect.IO
 import cats.implicits.*
 
 import com.chipprbots.ethereum.consensus.blocks.BlockGenerator
+import com.chipprbots.ethereum.db.storage.MptStorage
 import com.chipprbots.ethereum.domain.Account
 import com.chipprbots.ethereum.domain.Address
-import com.chipprbots.ethereum.db.storage.MptStorage
 import com.chipprbots.ethereum.domain.Block
 import com.chipprbots.ethereum.domain.BlockHash
 import com.chipprbots.ethereum.domain.Blockchain

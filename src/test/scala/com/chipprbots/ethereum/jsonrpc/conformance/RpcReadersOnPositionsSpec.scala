@@ -20,15 +20,23 @@ import com.chipprbots.ethereum.db.components.Storages
 import com.chipprbots.ethereum.db.dataSource.EphemDataSource
 import com.chipprbots.ethereum.db.storage.pathstate.BlockRef
 import com.chipprbots.ethereum.db.storage.pathstate.PathStateTestKit
+import com.chipprbots.ethereum.db.storage.pathstate.StateUnavailable
 import com.chipprbots.ethereum.domain.Address
+import com.chipprbots.ethereum.domain.Block
+import com.chipprbots.ethereum.domain.BlockHeader
+import com.chipprbots.ethereum.domain.SignedTransaction
+import com.chipprbots.ethereum.domain.SignedTransactionWithSender
 import com.chipprbots.ethereum.jsonrpc.BlockParam
 import com.chipprbots.ethereum.jsonrpc.EthProofService
+import com.chipprbots.ethereum.jsonrpc.EthSimulateJsonMethodsImplicits
+import com.chipprbots.ethereum.jsonrpc.EthSimulateService
 import com.chipprbots.ethereum.jsonrpc.JsonRpcError
 import com.chipprbots.ethereum.jsonrpc.JsonRpcRequest
 import com.chipprbots.ethereum.jsonrpc.ProofService.GetProofRequest
 import com.chipprbots.ethereum.jsonrpc.ProofService.StorageProofKey
 import com.chipprbots.ethereum.mpt.PositionTestKit.RawTrieWalk
 import com.chipprbots.ethereum.testing.Tags.*
+import com.chipprbots.ethereum.transactions.PendingTransactionsManager
 
 /** Spec 018 Track C, C2b: the readers behind RPC answer from the position store what they answer from the hash store,
   * on a real chain.
@@ -172,6 +180,153 @@ class RpcReadersOnPositionsSpec extends ScalaTestWithActorTestKit with AnyFlatSp
       bothAnswer("eth_estimateGas", call, latest)
     }
     executed should be > 0
+  }
+
+  // A trace replays a block's transactions from the state of its PARENT. So a datadir is read with the anchor one block
+  // back from a block that has transactions: the replay has to ask for the parent's state. The replay has two arms,
+  // before Amsterdam and from it, so there is one traced block of each kind.
+  private def withTransactions(amsterdam: Boolean): Option[Block] =
+    RpcCompatNode.blocks.filter { block =>
+      block.body.transactionList.nonEmpty &&
+      RpcCompatNode.chainConfig.isAmsterdamTimestamp(block.header.unixTimestamp) == amsterdam
+    }.lastOption
+
+  /** The chain on a hash store, and the same datadir read as the unified layout anchored at `traced`'s parent. */
+  private def anchoredAtParentOf(traced: Block): (RpcCompatNode, RpcCompatNode) =
+    anchoredAt(_.blockchainReader.getBlockHeaderByHash(traced.header.parentHash).get)
+
+  /** A fresh pair: the chain on a hash store, and the same datadir read as the unified layout anchored at the block
+    * `anchor` picks from it.
+    */
+  private def anchoredAt(anchor: RpcCompatNode => BlockHeader): (RpcCompatNode, RpcCompatNode) =
+    val hashes = new RpcCompatNode
+    hashes.importChain()
+    val parent = anchor(hashes)
+    val source = hashes.storagesInstance.dataSource
+    val nodes = hashes.storagesInstance.storages.nodeStorage
+    PathStateTestKit.seedPositions(
+      source,
+      RawTrieWalk.statePositions(
+        parent.stateRoot.value.toArray,
+        hash =>
+          nodes.get(ByteString(hash)).getOrElse(throw new IllegalStateException("the anchor's state is not whole"))
+      ),
+      BlockRef(parent.hash.value, parent.number.value, parent.stateRoot.value)
+    )
+    val positions = new RpcCompatNode:
+      override lazy val storagesInstance
+          : EphemDataSourceComponent & LocalPruningConfigBuilder & Storages.DefaultStorages =
+        new Shared(source) with LocalPruningConfigBuilder with Storages.DefaultStorages with TestInstanceConfigProvider:
+          override protected def statePathLive: Boolean = true
+    (hashes, positions)
+
+  Seq("before Amsterdam" -> false, "from Amsterdam" -> true).foreach { case (era, amsterdam) =>
+    it should s"replay a block's transactions from its parent's state, as the hash store does ($era)" taggedAs
+      UnitTest in {
+        val traced = withTransactions(amsterdam).getOrElse(fail(s"the chain has no block with transactions $era"))
+        val (replayOnHashes, replayOnPositions) = anchoredAtParentOf(traced)
+        val parent = replayOnHashes.blockchainReader.getBlockHeaderByHash(traced.header.parentHash).get
+        replayOnPositions.storagesInstance.storages.pathStateStorage.flatMap(_.anchor).map(_.hash) shouldBe
+          Some(parent.hash.value)
+        val stxs =
+          SignedTransactionWithSender.getSignedTransactionsOfBlock(traced.header, traced.body.transactionList)(using
+            RpcCompatNode.chainConfig
+          )
+        stxs should not be empty
+
+        (0 to stxs.size).foreach { upTo =>
+          withClue(s"before transaction $upTo of block ${traced.header.number.value}: ") {
+            val onPositions = replayOnPositions.stxLedger.advanceWorldToTx(traced.header, stxs, upTo, parent)
+            val onHashes = replayOnHashes.stxLedger.advanceWorldToTx(traced.header, stxs, upTo, parent)
+            onPositions.stateRootHash shouldBe onHashes.stateRootHash
+            stxs.map(_.senderAddress).distinct.foreach { sender =>
+              onPositions.getAccount(sender) shouldBe onHashes.getAccount(sender)
+            }
+          }
+        }
+        // the traced block's own state is not the one the position store holds: only its parent's is
+        a[StateUnavailable] should be thrownBy replayOnPositions.stxLedger.worldAt(traced.header)
+      }
+  }
+
+  // eth_simulateV1 persists each simulated block and reads the next from the root it left: two blocks, one state.
+  private def simulate(node: RpcCompatNode, payload: String): Either[JsonRpcError, JValue] =
+    val service = new EthSimulateService(
+      node.blockchain,
+      node.blockchainReader,
+      node.storagesInstance.storages.evmCodeStorage,
+      node.mining.blockPreparator,
+      node.mining,
+      node.blockchainConfig
+    )
+    for
+      request <- EthSimulateJsonMethodsImplicits.eth_simulateV1.decodeJson(
+        Some(JArray(List(parse(payload), JString("latest"))))
+      )
+      response <- service.ethSimulate(request).unsafeRunSync()
+    yield EthSimulateJsonMethodsImplicits.eth_simulateV1.encodeJson(response)
+
+  it should "simulate two blocks at the head, the second on what the first left, as the hash store does" taggedAs
+    UnitTest in {
+      val from = accounts.head
+      val to = accounts(1)
+      val transfer = s"""{"from":"$from","to":"$to","value":"0x1"}"""
+      val payload = s"""{"blockStateCalls":[{"calls":[$transfer]},{"calls":[$transfer,$transfer]}]}"""
+      val onPositionsAnswer = simulate(onPositions, payload)
+      onPositionsAnswer shouldBe simulate(onHashes, payload)
+      // two simulated blocks came back, with a call in the first and two in the second
+      val blocks = onPositionsAnswer.fold(error => fail(s"the simulation was refused: $error"), _.children)
+      blocks.map(block => (block \ "calls").children.size) shouldBe List(1, 2)
+    }
+
+  /** The raw transactions hive's rpc-compat sends: signed for this chain, by senders the chain funds. */
+  private lazy val sendRawRequests: Seq[JValue] =
+    val directory = new java.io.File(
+      getClass.getClassLoader.getResource(RpcCompatNode.Resources + "eth_sendRawTransaction").toURI
+    )
+    directory.list().filter(_.endsWith(".io")).sorted.toSeq.flatMap { file =>
+      RpcCompatVectors.read(RpcCompatNode.resource(s"eth_sendRawTransaction/$file")).exchanges.map(_._1)
+    }
+
+  private def pooled(node: RpcCompatNode): Set[JValue] =
+    (ask(node, "txpool_content") \ "result" \ "pending").children.flatMap(_.children).map(_ \ "hash").toSet
+
+  // A transaction that arrives from a peer is judged by the pool itself: it reads the sender's account at the best
+  // block, and with no state to read it keeps only senders it already knows. So the same transactions are handed to
+  // the pool of a node on each store, as a peer's, and the pools are compared.
+  it should "take a peer's transactions into the pool as the hash store does" taggedAs UnitTest in {
+    import com.chipprbots.ethereum.network.p2p.messages.ETHPackets.SignedTransactions.*
+    val (peerOnHashes, peerOnPositions) = anchoredAt(_.blockchainReader.getBestBlock.get.header)
+    val fromPeer: Seq[SignedTransaction] = sendRawRequests.flatMap { request =>
+      val raw = (request \ "params")(0).asInstanceOf[JString].s
+      val (stx, sidecar) = Hex.decode(raw.stripPrefix("0x")).toSignedTransactionWithSidecar
+      Option.when(sidecar.isEmpty)(stx) // a blob transaction travels with its sidecar, which this path does not carry
+    }
+    fromPeer.size should be >= 3
+    Seq(peerOnHashes, peerOnPositions).foreach { node =>
+      node.pendingTransactionsManager ! PendingTransactionsManager.AddUncheckedTransactions(fromPeer)
+    }
+    eventually {
+      pooled(peerOnHashes) should not be empty
+      pooled(peerOnPositions) shouldBe pooled(peerOnHashes)
+    }
+  }
+
+  // Sent over RPC, a transaction is admitted against the head's state by the transaction service, then pooled.
+  it should "admit the same transactions over RPC as the hash store does" taggedAs UnitTest in {
+    sendRawRequests should not be empty
+    var admitted = 0
+    sendRawRequests.foreach { request =>
+      val params = (request \ "params").asInstanceOf[JArray].arr
+      val answer = bothAnswer("eth_sendRawTransaction", params*)
+      if (answer \ "result") != JNothing then admitted += 1
+    }
+    admitted should be > 0
+
+    eventually {
+      pooled(onPositions) should have size admitted
+      pooled(onPositions) shouldBe pooled(onHashes)
+    }
   }
 
   // Until the overlay (C4a) the position store holds one block's state.

@@ -589,7 +589,8 @@ class PersonalServiceSpec
     /** The head at `number`, as an argument: the account is read at the block the service took as the head, by its
       * header and not by its number.
       */
-    def headAt(number: BigInt) = argThat[BlockHeader]((header: BlockHeader) => header.number.value == number)
+    def headAt(number: BigInt): MatcherBase =
+      argThat[BlockHeader]((header: BlockHeader) => header.number.value == number)
 
     /** The chain head every send/sign/fill reads once: an ETC-style header (no base fee) at `number`. */
     def expectHead(number: BigInt): Unit =

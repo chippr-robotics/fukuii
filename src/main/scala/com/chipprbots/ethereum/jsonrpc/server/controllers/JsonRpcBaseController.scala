@@ -15,15 +15,15 @@ import org.json4s.JNull
 import org.json4s.native
 import org.json4s.native.Serialization
 
+import com.chipprbots.ethereum.db.storage.pathstate.StateFault
 import com.chipprbots.ethereum.jsonrpc.JsonRpcControllerMetrics
 import com.chipprbots.ethereum.jsonrpc.JsonRpcError
 import com.chipprbots.ethereum.jsonrpc.JsonRpcError.InternalError
 import com.chipprbots.ethereum.jsonrpc.JsonRpcError.MethodNotFound
 import com.chipprbots.ethereum.jsonrpc.JsonRpcRequest
 import com.chipprbots.ethereum.jsonrpc.JsonRpcResponse
-import com.chipprbots.ethereum.jsonrpc.StateRead
-import com.chipprbots.ethereum.db.storage.pathstate.StateFault
 import com.chipprbots.ethereum.jsonrpc.NodeJsonRpcHealthChecker.JsonRpcHealthConfig
+import com.chipprbots.ethereum.jsonrpc.StateRead
 import com.chipprbots.ethereum.jsonrpc.serialization.JsonEncoder
 import com.chipprbots.ethereum.jsonrpc.serialization.JsonMethodDecoder
 import com.chipprbots.ethereum.jsonrpc.server.http.JsonRpcHttpServer.JsonRpcHttpServerConfig

@@ -190,10 +190,15 @@ class MerklePatriciaTrie[K, V] private (private[mpt] val rootNode: Option[MptNod
     */
   def getProof(key: K): Option[Vector[MptNode]] =
     val result = pathTraverse[Vector[MptNode]](Vector.empty, mkKeyNibbles(key), proofMode = true) { case (acc, node) =>
-      // The traversal resolves a hash node, at its position, before it hands a node over: none arrives here.
       node match
         case Some(nextNode @ (_: BranchNode | _: ExtensionNode | _: LeafNode)) =>
           acc :+ nextNode
+        // The traversal resolves a hash node, at its position, before it hands a node over. One that arrived here
+        // would be a proof with a node missing from it, served as the answer: it is refused, not dropped.
+        case Some(hash: HashNode) =>
+          throw new IllegalStateException(
+            s"A proof was handed an unresolved node (${Hex.toHexString(hash.hashNode)}): the traversal resolves them"
+          )
         case _ => acc
     }
     // Besu ProofVisitor.java:64 — root is always included in proof (proof of non-existence)
