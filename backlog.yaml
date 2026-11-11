@@ -2409,3 +2409,13 @@ items:
     refs: []
     links: {}
     notes: "EIP-4938 removed GetNodeData/NodeData; every decoder (eth/68..72) rejects 0x0d/0x0e, and spec 018 C2b deleted the serving handler. Still there and dead: StateNodeFetcher's fallback and handleNodeDataValues, PeersClient's BestNodeDataPeer / BestNodeDataPeerExcluding / RecordNodeDataFailure, the NodeData references in BlockImporter and BlockFetcher, the two codes in PeerStatisticsActor, and the message classes in ETHPackets (herald, C2b review). Apply dead-code-review.md first."
+  - id: B-215
+    title: SubscriptionManagerSpec 'push newHeads notification' times out under full-suite load (a 5 s Await on a pub/sub delivery)
+    priority: P3
+    status: open
+    area: ci
+    size: S
+    opened: 2026-11-11
+    refs: []
+    links: {}
+    notes: "Failed once in a full testEssential run in a cloud container (TimeoutException: Future timed out after [5 seconds], SubscriptionManagerSpec.scala:216); passes 3 of 3 run alone. A timed wait on an actor delivery: against the constitution's rule that tests are deterministic. Seen during spec 018 C2b; not touched by it."
