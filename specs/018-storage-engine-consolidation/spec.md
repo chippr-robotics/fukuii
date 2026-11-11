@@ -16,7 +16,7 @@ a read-serving track (Track R), the enterprise analytics user story (US-8), the 
 `dbLock` close-fence and the fixed-width `UInt256` pulled forward as named tasks (T-010, T-011), and Erigon and Reth
 added as comparators in the GT-1 harness (FR-028).
 
-**In flight**: `fukuii-fc` (local session), branch `docs/spec-018-c0`: Track C C0 in progress (baselines, ETC chain file exported); `cloud-dc960fdc` (cloud session), branch `ccr-dc960fdc-6a9h1c`: Track C C2a (B-055), part 1 (wrappers on the decorator, owner threading, the position mirror) in review, part 2 (the `pathstate` read side) next
+**In flight**: `fukuii-fc` (local session), branch `docs/spec-018-c0`: Track C C0 in progress (baselines, ETC chain file exported); `cloud-dc960fdc` (cloud session), branch `ccr-dc960fdc-6a9h1c`: Track C C2a (B-055), in two PRs: part 1 (wrappers on the decorator, owner threading, the position mirror) and part 2 (the `pathstate` read side, behind the guard)
 
 **Sequence**: spec 016 (SNAP split, `StateIngest`) → spec 017 (`StateAccess`, witnesses) → **this spec** → spec 019
 (zkVM guest). **Implementation starts after spec 017 completes** (user decision, 2026-10-17). Phase 0 (measurement,
