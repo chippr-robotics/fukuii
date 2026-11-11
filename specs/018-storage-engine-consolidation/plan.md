@@ -1290,12 +1290,42 @@ commit where they seeded rows by hand, so block 1 is imported onto a committed g
 on the first, none on the second. The fixture replay still seeds by hand: a fixture's genesis header carries fields
 the loader does not produce, so its hash is the fixture's and not the loader's (the harness port, T117).
 
-**Mutation run.** 21 mutants of the commit and of the loader's rules, each a rule dropped or weakened (a commit over
-an anchor or over rows with none, a block that is not block 0, a build not held to its root, the stamp or the marks
-left out, the anchor not last, the batch not synced or written before the move is announced, counts said to be exact,
-removals dropped, the genesis stored the hash store's way, no best block, the two refusals, the layout rule's three
-arms, the two halves of address normalisation, the withdrawals list of the body): 21 caught. Two were first written
-so that the unused-symbol ratchet refused them before any test ran, and were re-aimed.
+**Mutation run.** 25 mutants of the commit and of the loader's rules, each a rule dropped or weakened (a commit over
+an anchor, over rows with none, over changeset records, over a count of pruned ones, over a stamp; a block that is
+not block 0; a build that replaced a storage trie whole; a build not held to its root; the stamp or the marks left
+out; the anchor not last; the batch not synced or written before the move is announced; counts said to be exact;
+removals dropped; the genesis stored the hash store's way; no best block; the two refusals of the loader; the layout
+rule's three arms; the two halves of address normalisation; the withdrawals list of the body): 25 caught. Two were
+first written so that the unused-symbol ratchet refused them before any test ran, and were re-aimed. Four were added
+after forge's read found their rules had no test. One rule has no mutant: a change with a node before the genesis,
+which no build over a view of nothing can make; it is kept as a guard.
+
+**Two reads after code (forge: APPROVE WITH CHANGES; beacon: APPROVE), and what they changed.** Both traced the guard
+off to the code of `staging`: the same buffer, the same writes in the same order, one more read of AppState (the
+stamp, which no datadir of the hash layout has).
+
+| Finding | Change |
+| --- | --- |
+| forge: four refusals of the commit had no test and no mutant (changeset records, a count of pruned ones, a stamp with no anchor, a build that replaced a storage trie whole) | four cases, four mutants |
+| forge, beacon: the header's hash was held only to the hash layout's, so a state root wrong on both would pass | each shipped genesis is held to the hash every client of its network has: Ethereum Classic `d4e56740…`, Mordor `a68ebde7…`, Platåberget `ee33ef92…`, Sepolia `25a5cc10…` |
+| forge: the one-batch case had no code, so nothing showed where the code write falls | a case with code: one write that is not synced, then the batch, and the code is found by its hash |
+| beacon: the genesis block was built once in each arm | built once, before the arms |
+| beacon: the commit threw where the loader returns a `Try` | the commit's refusals and a failed write are the load's `Failure` |
+| forge: `ChangesetStorage.isEmpty` runs an effect to its end on the calling thread | said in its doc: for a caller at start-up |
+
+**Accepted, with the reason.** forge: on the hash layout the genesis nodes are written before the genesis block, so a
+crash between them leaves nodes and no block 0; such a datadir then opened with the guard on gets a genesis of the
+unified layout beside orphan nodes of the hash store. Nothing reads them, the window is one start wide and needs the
+guard to be turned on after it, and C5a's guard at start is where a datadir is judged whole. Left as it is.
+
+**For part 3, from beacon and forge (test mode).** `TestService.setChainParams` builds its loader by the constructor
+and not by `GenesisDataLoader.over`, so it has no position store and reads no stamp; it removes the genesis block and
+loads another, which on a datadir with an anchor the commit refuses (the anchor, the rows and the stamp are still
+there), so part 3 needs a reset of the state in one synced batch that also clears the clock's anchor; its
+`storeGenesisAccountCodes` and `storeGenesisAccountStorageData` write to the hash store; and it throws away the
+`Try` of the load. The start-up refusal of `testmode` with the guard on stands until then. An Amsterdam-at-genesis
+header on the unified layout (no shipped chain has one: Platåberget's genesis is before its Amsterdam) comes with the
+fixture replay of T117, whose Amsterdam fixtures start there.
 
 
 ### Destructive change (C8a and C8b): the vault protocol blocks

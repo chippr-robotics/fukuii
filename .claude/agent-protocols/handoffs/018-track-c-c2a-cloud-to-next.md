@@ -105,11 +105,14 @@ Read plan.md, "C2a part 1 record" and "C2a part 2 record", then:
   datadir starts from it, not from `seedPositions`, unless its genesis header is not the loader's (the fixture replay).
 - **C3c, what is left** (T102 to T106, T108 to T114, T116, T117) is what makes the guard usable beyond a strict import: the proposer view (`eth_getWork`,
   the Engine API builder and the PoW generators still build over the hash store, which holds nothing on the unified
-  layout), the genesis commit (the differentials seed the genesis rows with `PathStateTestKit.seedPositions`), the
-  lenient chain import and test mode (both execute with nothing staged, and are refused at start with the guard
-  until then: lift each refusal in `ConfigValidator.stateGuardErrors` with the code that makes it safe), and the
-  ported harnesses. `TestModeWorldStateProxy` has its own `deleteAccount` and no `initialiseAccount`: it needs the
-  world's `storageResets` (T108, forge).
+  layout), the lenient chain import and test mode (both execute with nothing staged, and are refused at start with
+  the guard until then: lift each refusal in `ConfigValidator.stateGuardErrors` with the code that makes it safe),
+  and the ported harnesses. `TestModeWorldStateProxy` has its own `deleteAccount` and no `initialiseAccount`: it
+  needs the world's `storageResets` (T108, forge). `TestService.setChainParams` loads a second genesis on a datadir
+  that has an anchor: it must build its loader with `GenesisDataLoader.over`, reset the state (rows, records, the
+  count, the anchor, the stamp, and the clock's anchor) in one synced batch before the load, stop writing codes and
+  storage to the hash store, and return the load's failure (plan.md, "For part 3", beacon and forge). The fixture
+  replay of T117 is also the first Amsterdam-at-genesis header on the unified layout.
 - **C4a** brings back what C3b refuses: the overlay commit for a block that does not extend the anchor
   (`buildExtra(adopted)`, `NotExtendingAnchor`, `saveLastBlock` writing nothing), `StateView.ownerRows` over layers,
   `stateAvailable(hash)`, the served-root window, and SNAP advertised again. C4b: the head move, `ConsensusStateFault`
