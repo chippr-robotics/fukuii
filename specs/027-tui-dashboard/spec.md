@@ -88,8 +88,8 @@ no default; the answer is the option the user chose. D-1 arose while writing thi
 
 - **No consensus code.** Nothing under `consensus/`, `vm/`, `ledger/` block execution, `mpt/`, `rlp/`, `crypto/` or
   `domain/` changes behaviour. The only `consensus/` files touched are the two metrics objects of FR-022 and FR-023
-  (`EngineApiMetrics`, `PoWMiningMetrics`) and two call sites that write to them (`EngineApiHttpServer`'s auth-failure
-  path, `EthashDAGManager`'s progress logs). The per-chain panels (phase 5) **only read metrics**: E1–E3 and M1–M2 add state to metrics
+  (`EngineApiMetrics`, `PoWMiningMetrics`) and the call sites that write to them (`JwtAuthenticator`'s two 401 branches,
+  `EthashDAGManager`'s progress logs). The per-chain panels (phase 5) **only read metrics**: E1–E3 and M1–M2 add state to metrics
   objects at existing call sites and change no response, status, timing or DAG content.
 - No new actor, no new wire-protocol message, no new RPC method, no change to `--tui`'s default (off) or to standard
   logging.
@@ -341,7 +341,7 @@ Each requirement names the research.md section it comes from.
   suppressor detaches and restores (§7.4, C-11, C-13).
 - **FR-022** On ETH, the consensus-layer panel MUST show the last `engine_forkchoiceUpdated` and `engine_newPayload` call
   times and statuses (E1, kept in `EngineApiMetrics`, Q6), head/safe/finalized (E2, from `ForkChoiceManager.getState`),
-  payload counts, and JWT authentication failures (E3, a counter at the existing auth site in `EngineApiHttpServer`)
+  payload counts, and JWT authentication failures (E3, a counter in `JwtAuthenticator`'s two 401 branches)
   (§6).
 - **FR-023** On ETC, the mining panel MUST show mining on/off, coinbase, hashrate, blocks mined, last mined, stale shares
   and getWork rate (M1, from `PoWMiningMetrics`), and the DAG epoch with generation or load progress (M2, gauges updated

@@ -434,6 +434,8 @@ object TuiStatusProbe:
 
     private def read(gauge: Gauge): Long = gauge.value().toLong
 
+    // The DAG gauges are read epoch first and loaded last, and that order is load-bearing: it pairs with
+    // `PoWMiningMetrics.recordDagStarted` writing the epoch last, so a poll never sees "epoch N+1, loaded".
     def apply(): Option[MiningSample] =
       val getWork = read(PoWMiningMetrics.workRequestsTotal)
       val minedAt = read(PoWMiningMetrics.lastBlockMinedAt)

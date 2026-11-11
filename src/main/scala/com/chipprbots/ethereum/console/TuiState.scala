@@ -68,7 +68,8 @@ enum Catchup:
   *   the last two peer-score snapshots slice 4a published: the score column and its trend (FR-019, D-1)
   * @param hashrateZeroSince
   *   when the node's reported hashrate, with its DAG loaded, was last seen to become 0: the alert row's "no hashrate
-  *   reported for …" (§2.3). It does not run while the DAG is being built, which submits nothing * @param clSeenSince
+  *   reported for …" (§2.3). It does not run while the DAG is being built, which submits nothing
+  * @param clSeenSince
   *   when the probe first read a forkchoiceUpdated from the consensus layer: a payload never recorded counts from then,
   *   or from the node's start if that is later, so a consensus layer that attaches to a node that has been up for an
   *   hour is not measured against the hour
