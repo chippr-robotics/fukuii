@@ -15,6 +15,7 @@ import com.chipprbots.ethereum.domain.BlockHash
 import com.chipprbots.ethereum.domain.Blockchain
 import com.chipprbots.ethereum.domain.BlockchainReader
 import com.chipprbots.ethereum.domain.SignedTransactionWithSender
+import com.chipprbots.ethereum.ledger.InMemoryWorldStateProxy
 import com.chipprbots.ethereum.ledger.StxLedger
 import com.chipprbots.ethereum.ledger.TxResult
 import com.chipprbots.ethereum.mpt.MerklePatriciaTrie.MissingNodeException
@@ -404,6 +405,12 @@ class DebugTracingService(
       Left(JsonRpcError.NodeNotFound)
     }
 
+  /** The world a call runs on: the pending block's, or the state of the resolved block, taken by that block's own
+    * header. The message's header, which the call runs under, is not the header of any block.
+    */
+  private def callWorld(resolved: ResolvedBlock, msg: CallTxBuilder.CallMessage): InMemoryWorldStateProxy =
+    resolved.pendingState.getOrElse(stxLedger.callWorld(stateOf = resolved.block.header, executing = msg.header))
+
   /** The message a trace call runs (go-ethereum `eth/tracers/api.go` `TraceCall`: `CallDefaults` with the RPC gas cap,
     * `ToMessage`, the base fee lowered to 0 for a zero-price message), built by the same [[CallTxBuilder]] as eth_call.
     * `from` defaults to the zero address, as in geth.
@@ -432,7 +439,7 @@ class DebugTracingService(
     for
       msg <- buildCallMessage(callTx, resolved.block)
       r <- stxLedger
-        .simulateCall(msg.stx, msg.header, resolved.pendingState, msg.options, Some(tracer))
+        .simulateCall(msg.stx, msg.header, callWorld(resolved, msg), msg.options, Some(tracer))
         .left
         .map(e => JsonRpcError.LogicError(e.message))
     yield r.txResult

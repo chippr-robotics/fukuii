@@ -173,14 +173,18 @@ class TypedCallPathSpec
 
     def call(args: TxArgs, overrides: Option[BlockOverrides] = None): Either[String, TxResult] =
       val m = message(args, overrides)
-      ledger.simulateCall(m.stx, m.header, None, m.options, None).left.map(_.message).map(_.txResult)
+      ledger
+        .simulateCall(m.stx, m.header, ledger.callWorld(head, m.header), m.options, None)
+        .left
+        .map(_.message)
+        .map(_.txResult)
 
     def output(args: TxArgs, overrides: Option[BlockOverrides] = None): ByteString =
       call(args, overrides).value.vmReturnData
 
     def estimate(args: TxArgs, gas: BigInt = 1_000_000): Either[StxLedger.CallEstimateFailure, BigInt] =
       val m = message(args.copy(gas = Some(GasAmount(gas))), skipExecutionGasCap = false)
-      ledger.estimateCallGas(m.stx, m.header, None, m.options)
+      ledger.estimateCallGas(m.stx, m.header, ledger.callWorld(head, m.header), m.options)
 
     // syncController / scheduler / keyStore are never reached by the call methods (every request names `from`)
     lazy val service = new EthInfoService(
@@ -210,7 +214,7 @@ class TypedCallPathSpec
       for gp <- List(BigInt(0), BigInt(9)) do
         val m = message(args(SlotReader, _.copy(gasPrice = Some(GasPrice(gp)))))
         m.stx.tx.tx shouldBe a[LegacyTransaction]
-        val outcome = ledger.simulateCall(m.stx, m.header, None, m.options, None).value
+        val outcome = ledger.simulateCall(m.stx, m.header, ledger.callWorld(head, m.header), m.options, None).value
         outcome.codeDepositShortfall shouldBe false
         val viaCall = outcome.txResult
         val viaTx = ledger.simulateTransaction(m.stx, m.header, None)
@@ -220,7 +224,7 @@ class TypedCallPathSpec
 
         val t1 = new CallTracer()
         val t2 = new CallTracer()
-        ledger.simulateCall(m.stx, m.header, None, m.options, Some(t1))
+        ledger.simulateCall(m.stx, m.header, ledger.callWorld(head, m.header), m.options, Some(t1))
         ledger.simulateTransactionWithTracer(m.stx, m.header, None, t2)
         t1.getResult shouldBe t2.getResult
     )
@@ -230,7 +234,7 @@ class TypedCallPathSpec
     RPCTest
   ) in new Node:
     val m: CallMessage = message(args(SlotReader, _.copy(gas = Some(GasAmount(1_000_000)))))
-    ledger.estimateCallGas(m.stx, m.header, None, m.options).value shouldBe
+    ledger.estimateCallGas(m.stx, m.header, ledger.callWorld(head, m.header), m.options).value shouldBe
       ledger.binarySearchGasEstimation(m.stx, m.header, None)
 
   // ── Fees (geth ToMessage) ──────────────────────────────────────────────────────────────────────────────────────
@@ -472,7 +476,7 @@ class TypedCallPathSpec
       ._1
     def est(to: Address): Either[CallEstimateFailure, BigInt] =
       val m = message(args(to, _.copy(gas = Some(GasAmount(100000)))), skipExecutionGasCap = false)
-      ledger.estimateCallGas(m.stx, m.header, Some(overridden), m.options)
+      ledger.estimateCallGas(m.stx, m.header, overridden, m.options)
     est(invalid).left.value shouldBe StxLedger.CallEstimateFailure.Failed(
       com.chipprbots.ethereum.vm.InvalidOpCode(0xfe.toByte)
     )
@@ -567,13 +571,13 @@ class TypedCallPathSpec
       val m = message(args(gasEcho, _.copy(gas = Some(GasAmount(20_000_000)))), skipExecutionGasCap = skip)
       BigInt(
         1,
-        ledger.simulateCall(m.stx, m.header, Some(overridden), m.options, None).value.txResult.vmReturnData.toArray
+        ledger.simulateCall(m.stx, m.header, overridden, m.options, None).value.txResult.vmReturnData.toArray
       )
     gasSeen(skip = true) should be > txMax
     gasSeen(skip = false) should be < txMax
     // a call that burns more than TX_MAX_GAS_LIMIT of execution gas succeeds
     val m: CallMessage = message(args(burner, _.copy(gas = Some(GasAmount(20_000_000)))), skipExecutionGasCap = true)
-    val burnt: TxResult = ledger.simulateCall(m.stx, m.header, Some(overridden), m.options, None).value.txResult
+    val burnt: TxResult = ledger.simulateCall(m.stx, m.header, overridden, m.options, None).value.txResult
     burnt.vmError shouldBe None
     burnt.gasUsed should be > txMax
 

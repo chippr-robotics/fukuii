@@ -130,6 +130,8 @@ class StxLedger(
   ): PR =
     val tx = stx.tx
 
+    // With no world given, the state is taken by `blockHeader`: right only when that is a block's own header. A
+    // message call's header is not (see [[callWorld]]), and every RPC path hands its world in.
     val world1 = world.getOrElse(
       InMemoryWorldStateProxy(
         evmCodeStorage = evmCodeStorage,
@@ -254,14 +256,23 @@ class StxLedger(
   /** A fresh world on `blockHeader`'s state: what [[simulateCall]] runs on when handed none. The RPC layer asks for one
     * only when it must change it first (state overrides) or read it (eth_createAccessList's creation address).
     */
-  def worldAt(blockHeader: BlockHeader): InMemoryWorldStateProxy =
+  def worldAt(blockHeader: BlockHeader): InMemoryWorldStateProxy = callWorld(blockHeader, blockHeader)
+
+  /** A fresh world on the state of `stateOf`'s block, for an execution that runs as `executing`.
+    *
+    * They are two headers. A message call does not run under its block's header: the base fee is zeroed for a call that
+    * names no gas price, and block overrides replace what they name. The state is still the block's, and it is asked
+    * for by the block's own header (spec 018 Track C): the header a call runs under has another hash, which names no
+    * block, and a view of the state is a view of a block.
+    */
+  def callWorld(stateOf: BlockHeader, executing: BlockHeader): InMemoryWorldStateProxy =
     InMemoryWorldStateProxy(
       evmCodeStorage = evmCodeStorage,
-      mptStorage = blockchainReader.scratchStateAt(blockHeader),
+      mptStorage = blockchainReader.scratchStateAt(stateOf),
       getBlockHashByNumber = (number: BigInt) => blockchainReader.getBlockHeaderByNumber(number).map(_.hash.value),
       accountStartNonce = blockchainConfig.accountStartNonce,
-      stateRootHash = blockHeader.stateRoot.value,
-      noEmptyAccounts = EvmConfig.forBlock(blockHeader.number.value, blockchainConfig).noEmptyAccounts,
+      stateRootHash = stateOf.stateRoot.value,
+      noEmptyAccounts = EvmConfig.forBlock(executing.number.value, blockchainConfig).noEmptyAccounts,
       ethCompatibleStorage = blockchainConfig.ethCompatibleStorage
     )
 
@@ -287,15 +298,20 @@ class StxLedger(
     *
     * The frame's [[TxResult]] comes with, beside it, whether a pre-Homestead creation could not pay its code deposit
     * ([[StxLedger.CallOutcome]]).
+    *
+    * @param blockHeader
+    *   the header the call runs under: the block's, with the call's adjustments (no base fee, block overrides)
+    * @param world1
+    *   the world it runs on, which the caller takes from the block's OWN header ([[callWorld]]): `blockHeader` cannot
+    *   say whose state that is
     */
   def simulateCall(
       stx: SignedTransactionWithSender,
       blockHeader: BlockHeader,
-      world: Option[InMemoryWorldStateProxy],
+      world1: InMemoryWorldStateProxy,
       options: StxLedger.CallOptions,
       tracer: Option[ExecutionTracer]
   ): Either[StxLedger.CallPreCheckError, StxLedger.CallOutcome] =
-    val world1 = world.getOrElse(worldAt(blockHeader))
     callPreCheck(stx, blockHeader, world1, options).map { _ =>
       val (result, authRefund) = runCallFrame(stx, blockHeader, world1, options, tracer)
       val gasUsed = callGasUsed(stx, blockHeader, result, authRefund)
@@ -320,11 +336,10 @@ class StxLedger(
   def estimateCallGas(
       stx: SignedTransactionWithSender,
       blockHeader: BlockHeader,
-      world: Option[InMemoryWorldStateProxy],
+      world1: InMemoryWorldStateProxy,
       options: StxLedger.CallOptions
   ): Either[StxLedger.CallEstimateFailure, BigInt] =
     import StxLedger.CallEstimateFailure.*
-    val world1 = world.getOrElse(worldAt(blockHeader))
     for
       hi <- affordableCeiling(stx, world1)
       stxHi = withGas(stx, hi)

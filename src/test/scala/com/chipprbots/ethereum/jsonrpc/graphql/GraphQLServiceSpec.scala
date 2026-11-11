@@ -156,6 +156,8 @@ class GraphQLServiceSpec
       status shouldBe 200
       body.hcursor.downField("data").downField("block").downField("call")
     def field(c: ACursor, name: String): String = c.downField(name).as[String].toOption.get
+    // the world of a call is taken from the block's own header, and handed to the call (spec 018 Track C)
+    stxLedger.callWorld.expects(*, *).returning(null).anyNumberOfTimes()
     stxLedger.estimateCallGas.expects(*, *, *, *).returning(Right(BigInt(21000))).anyNumberOfTimes()
 
     // geth graphql Call: status 0 from result.Failed(), data result.ReturnData, gasUsed result.UsedGas

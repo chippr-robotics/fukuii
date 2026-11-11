@@ -19,6 +19,7 @@ import com.chipprbots.ethereum.domain.BlockHeader
 import com.chipprbots.ethereum.domain.Blockchain
 import com.chipprbots.ethereum.domain.BlockchainReader
 import com.chipprbots.ethereum.domain.SignedTransactionWithSender
+import com.chipprbots.ethereum.ledger.InMemoryWorldStateProxy
 import com.chipprbots.ethereum.ledger.StxLedger
 import com.chipprbots.ethereum.mpt.MerklePatriciaTrie.MissingNodeException
 import com.chipprbots.ethereum.utils.BlockchainConfig
@@ -494,12 +495,18 @@ class TraceService(
       val json = buildReplayResult(resolved.block, ByteString.empty, 0, options)(tracer =>
         if failure.isEmpty then
           stxLedger
-            .simulateCall(msg.stx, msg.header, resolved.pendingState, msg.options, Some(tracer))
+            .simulateCall(msg.stx, msg.header, callWorld(resolved, msg), msg.options, Some(tracer))
             .left
             .foreach(e => failure = Some(JsonRpcError.LogicError(e.message)))
       )
       failure.toLeft(json)
     }
+
+  /** The world a call runs on: the pending block's, or the state of the resolved block, taken by that block's own
+    * header. The message's header, which the call runs under, is not the header of any block.
+    */
+  private def callWorld(resolved: ResolvedBlock, msg: CallTxBuilder.CallMessage): InMemoryWorldStateProxy =
+    resolved.pendingState.getOrElse(stxLedger.callWorld(stateOf = resolved.block.header, executing = msg.header))
 
   /** The message a trace call runs (go-ethereum `eth/tracers/api.go` `TraceCall`: `CallDefaults` with the RPC gas cap,
     * `ToMessage`, the base fee lowered to 0 for a zero-price message), built by the same [[CallTxBuilder]] as eth_call.
