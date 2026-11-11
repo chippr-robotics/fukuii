@@ -636,7 +636,7 @@ items:
   - id: B-054
     title: "Spec 018 Track C C1: the trie reports positions (item 8a)"
     priority: P2
-    status: open
+    status: claimed
     area: storage
     size: L
     opened: 2026-11-07
@@ -644,6 +644,12 @@ items:
     links:
       spec: specs/018-storage-engine-consolidation
     depends_on: [B-053]
+    claim:
+      by: cloud-dc960fdc
+      agent: main
+      since: 2026-11-11T00:53:44Z
+      heartbeat: 2026-11-11T00:53:44Z
+      branch: ccr-dc960fdc-6a9h1c
   - id: B-055
     title: "Spec 018 Track C C2a: the position store's read side (item 8b)"
     priority: P2
