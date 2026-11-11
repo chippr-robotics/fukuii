@@ -1034,6 +1034,130 @@ spec is run alone, at #1797's head as well as here, though it passes in the full
 **The ratchet** went from 133 lines and 263 uses to 121 and 240. Nothing in main resolves a node of the state by hash
 alone in a walk any more: what is left of the list's walking section is the store each walk is handed.
 
+### C3b storage record (2026-11-11)
+
+C3b is two PRs. **This is the first, the storage half**: what a block does to the state is recorded by position while
+it runs, and committed in one batch (T087 to T092, T095, T096, with their tests). Nothing in block execution calls it
+yet. The second PR is the wiring: `BlockExecution` and `Blockchain` (T093, T094, T084), what the guard may be used for
+before C4, and the differential over real blocks.
+
+**Three consults before code** (beacon, forge, vault), and what they changed.
+
+| Finding | By | Change |
+| --- | --- | --- |
+| A second place replaces a storage trie whole: `initialiseAccount` over an account that has storage (a create collision; reachable on ETC, where the collision check is nonce and code only). It runs inside a frame that can revert, so a reset applied at once to the block's shared layer cannot be undone | forge (BLOCK) | **the world carries the owners it has reset**, as a value that reverts with its frame, and tells its storage at `persistState`, before the contract storage is persisted. Neutral on a hash store. Its own commit, with `WorldStorageResetSpec` |
+| An in-place commit at `newPayload` moves the anchor to a payload the consensus client has not chosen, and a one-slot reorganisation cannot be executed before the overlay | beacon (BLOCK) | the scope decision below |
+| A view asked for between the move's announcement and its end waits for the writer, with no timeout: a commit that asked for one there would wait for itself | vault | everything is read and built before the announcement; inside it there is the one write. A test notes every call on the data source and holds the write to be the last |
+| The lock must be the innermost, and not reentrant | vault | `StateLock`: fair, refuses its own holder, nothing under it but the data source |
+| The scan of a replaced trie's rows, made outside the lock, can be stale by the time the batch is written | vault | it is made under the lock, after the anchor check (dm 7.0's last bullet has it outside, on a view: that returns with the overlay, when there are other views to scan) |
+| Records cannot be scanned for their lowest height, so a restart, or a switch from archive, would read every height from 0 | vault, forge | the height pruned up to is kept in AppState, started by the first commit at its own number, moved in the batch that deletes |
+
+**The decision taken, for the user to see: what the guard is for until C4.** dm 3.6 already says that on ETH every block
+is a forward layer first and is promoted at `forkchoiceUpdated`. That is the overlay's (C4a, C4d), and ETC's
+reorganisation is C4e's. So in C3b **the in-place commit serves linear import only**: a chain file, or an importer
+that extends the anchor block by block. A block that does not extend the anchor is refused with `StateUnavailable`
+and nothing written, where dm 7.1 has it degrade to an overlay commit. The second PR makes the rest of it true: with
+the guard on, `newPayload`, a `forkchoiceUpdated` to another block, a reorganisation and a side branch end in a local
+state fault (never INVALID, never a penalty for a peer), and the node does not start network sync, so that no ETC,
+Mordor or ETH node runs on the guard before C4. Not chosen: executing twice (at `newPayload` and again at
+`forkchoiceUpdated`), which is machinery C4a throws away.
+
+**What a block's changes are** (`StagedChanges`, dm 3). The trie tells its storage of each change as it makes it: the
+nodes on the path of the change, the nodes a removal merged into their parent, and the nodes it has there now. From
+those, one entry for each position: the prior is fixed by the first event there (an old node named first is the
+parent's; a node written where none was named has no prior, and every old node named there later is this block's
+own); the next is the last word. Only stored nodes count, and a root is stored at any size. A reset clears what the
+block had written under that owner, and at the commit every position of the owner takes the disk's row as its prior,
+whatever the first event said.
+
+**The commit** (`PathStateStorage.commitCanonical`, dm 7.0, 7.1), under the lock:
+
+1. the anchor is checked: none, refused; this block, only the caller's own updates are written; not the block the
+   layer was built on, refused;
+2. the rows of each replaced storage trie are scanned, a chunk at a time, until they are all read or are more than
+   may be listed;
+3. the diff is held to the header's two state roots (`BlockDiff.validate`): a layer that is not this block's final
+   world stops here;
+4. the record is the diff, or a tombstone;
+5. one batch: the caller's updates (the block, the best pointer), the rows, the deletes of retention, the record and
+   its height index, the prune count, the anchor last; written as a move of the clock, whose `pre` is the priors.
+
+**The bounds, and what each leaves.** A replaced trie with more rows than
+`max-entries-per-owner-delete`, or whose rows hold more than 64 MiB (a constant of the commit's settings, added on
+review: the rows are read into memory under the lock): its old rows stay, unreachable; the rows of whatever the block
+put in its place are written; nothing is recorded for the block. A record over `max-record-bytes`: every row is written and deleted as it
+should be, and only the record is a tombstone. The text of dm 3.6 reads as if the second skipped the deletion too; it
+has no reason to, since the rows are in hand. Neither fails a block. A later block that writes where a leftover row
+lies records no prior there, so a reverse across it would not put the leftover back: it is not state, and the
+tombstone below it stops any reverse first (forge's caveat for the audit, C6).
+
+**Reviews of the code (vault, forge, beacon: each SIGN WITH CHANGES, no consensus or correctness defect found).**
+
+| Finding | By | Change |
+| --- | --- | --- |
+| The scan of a replaced trie's rows was bounded by a count alone, a million rows by default: read in one pass under the data source's read lock, copied three or four times, with the state lock held. About a gigabyte for one owner, and every other reader of the data source held back behind a queued writer | vault | the scan is made **a chunk at a time** (8,192 rows, from the key after the last), and stops at the count or at **64 MiB of rows**, whichever comes first. A trie over either is not listed: its rows stay and the record is a tombstone, as before |
+| `finalized` was asked for under the state lock, and the observer told there too. Neither is this class's, and the first will one day be a consensus client's answer | vault | `finalized` is asked once, before the lock; the observer is told after the lock is free, and what it throws is logged and goes no further: a block that is committed stays committed |
+| Nothing held the layer to **one line of worlds**. Two worlds persisted from one start on one layer (a retry on a layer that was not dropped) would mix their rows under a root that still checks against the header; the batch would be written, and the next read would call the datadir corrupt | beacon, forge | a change to a trie must replace the root the block last left there, or it is refused where it is persisted (`StagedChanges.linear`), before anything is written |
+| A reset, and the commit, each looked through every change of the block for one owner's positions. A block can replace some 1,600 storage tries on ETC for the gas of their SELFDESTRUCTs: tens of millions of map operations, the second time under the lock | forge | the positions are kept by owner as they are recorded |
+| "Already applied" writes the caller's updates. The block, its receipts and its weight are on disk by then, so all those updates can add is a best-block pointer: on a chain whose head is the consensus client's to choose, a payload sent again must not move it | beacon | said in the commit's contract. The wiring must hand an `extra` with no pointer from `newPayload`, and never stage a block that is the anchor already |
+| The commit called any refusal from the record's writer "the index is corrupt" | vault, beacon | the index's own error (`ChangesetStorage.CorruptIndex`) is the one it reports so |
+| The race test let a reader that started late pass without having waited, and its spin had no deadline | vault | the reader is known to be parked on the clock, and the second writer in the lock's queue, before the first is let go; thirty seconds bound the wait |
+| A committed batch surviving a restart was not shown | vault | a RocksDB datadir is closed and opened again: anchor, rows, record and pointer are there, and the chain goes on |
+| Amsterdam clears the storage of an account it keeps; a storage root under 32 bytes has a row; a layer that is not the block's, handed with a block that is applied | beacon | each through a commit, and back |
+
+forge traced `MerklePatriciaTrie` for the question the whole record rests on: every node of the parent's state that a
+change replaces or absorbs is named, at its own position, and a first event that names a node names what the parent
+held there. forge re-signed the world's resets (F1).
+
+**Not taken.** vault's registry of path state storages by data source, to stop two of them over one data source
+having two clocks: vault accepted the reason on review. The node builds one, in `Storages`; a registry is
+process-wide mutable state, and a test that opens a datadir a second time wants exactly the second clock it would
+forbid. The class says one per data source. And forge's optional narrowing, a reset recorded only for an account
+whose storage root is not empty: with the positions kept by owner a reset of an account with no storage costs one
+seek at the commit, which forge found acceptable; it changes the world, which a hash store shares, and is better
+judged with M15's count of resets that find no row (T100).
+
+**For the wiring, from the reviews.** Only import may use `stage`: a builder and a retry use `throwaway` or a fresh
+layer. A decorator that drops the trie's removals (`StxLedger`, `EthSimulateService`, `GenesisDataLoader` each have
+one) must not wrap the staged storage: with no old node named, every prior comes out empty (forge). The block's
+`BlockRef` takes its state root from the header, not from the world, or the check of the roots checks the world
+against itself (beacon). A reader that lists one owner's rows by a scan must check each node against its hash:
+leftover rows are allowed there (forge). On ETH non-finality has lasted longer than 512 blocks, so a reorganisation
+past the floor must end in a state fault, never INVALID (beacon, C4d).
+
+**Tests.** A block is run twice from one parent state, on the staged storage and on a hash store, and the hash
+store's nodes, walked as raw RLP, say what the rows must be: forward (parent rows and every next are the new state's
+rows), reverse, each prior is the parent's row, and `validate`. At the commit the same, read off the disk: every row
+of `t` and `u`, on the in-memory data source and on RocksDB.
+
+| Spec | Cases | What |
+| --- | --- | --- |
+| `WorldStorageResetSpec` | 5 | the world's resets: removal, a create collision over storage, a frame that reverts, order at the persist |
+| `StateLockSpec` | 5 | one at a time, in order, free after a throw, its own holder refused |
+| `StagedChangesSpec` | 14 | hot rewrites, created then rewritten, vanished positions, a replaced trie, destroy and recreate, replaced twice, an older world's reads, an unlisted trie, a world that does not follow the last, nodes inside their parent, a root of any size, 40 seeded random blocks |
+| `CanonicalCommitSpec` | 46 | 15 on each data source: the rows, the anchor and the record after each block; forward and back from the records; replaced tries; a dead trie with a hole; an account cleared and kept; a storage root under 32 bytes; an empty block; the three bounds, at and over; retention, the switch from archive, the record of the block being committed. And 16 more: no anchor, the three refusals, a layer that is not the block's, another data source, one write under the lock as a move, a write that fails, a corrupt index, what is asked and told outside the lock, an observer that throws, a datadir closed and opened again, a view across a commit, a view across an unlisted trie, a view gone stale, two commits on one anchor in both orders, two commits of one block |
+| `OwnerRowsSpec`, `RetentionPolicySpec`, `StateMetricsSpec`, additions to `BlockDiffCodecSpec` | 18 | the scan's bounds (adjacent owners, the last owner, key order, chunks of every size, rows and bytes at and over, on both data sources), the floor's arithmetic, the metrics, the record's length without writing it |
+
+**Broken on purpose.** 8 rules of the world's resets, 2 of the lock, 13 of the staged layer and 34 of the commit, one
+at a time, and 13 more for what the reviews changed (the chunks and the two bounds of the scan, the line of worlds in
+the account trie and in a storage trie, the positions kept by owner, the observer, where `finalized` is asked): each
+is caught. One of those was missed at first: only the account trie's arm of the line of worlds had a test, since a
+world that branches in a storage trie branches in the account trie too; a storage trie written straight onto the
+layer pins the other arm. Two more are equivalent mutants and are said so in their drivers: a reset owner's position
+with no parent row keeping the first event's prior (a first event with a prior names a node read from the parent, so
+the row is there), and the record written before retention's deletes (the floor never reaches the block being
+committed, which its own mutant holds).
+
+**Not covered here, and said so.** No block has gone through the EVM onto this layer: that is the second PR's
+differential, with the Amsterdam access-list vectors and the SELFDESTRUCT fixtures. T075's recorded values and the
+measurements T098 to T100 need C0's pinned jar and ranges (B-203). A crash inside a RocksDB WriteBatch is RocksDB's
+contract and is not injected. `finalized` is wired as none: the floor is `without-finality` until a consensus client
+drives this layout (C4d).
+
+**The ratchet** went from 121 lines and 240 uses to 121 and 241: the staged factory of `PathMptStorage` hands out a
+store.
+
+
 ### Destructive change (C8a and C8b): the vault protocol blocks
 
 ```
