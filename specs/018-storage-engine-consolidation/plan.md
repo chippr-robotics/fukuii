@@ -1241,6 +1241,63 @@ re-import of an older canonical block after a restart is refused as a state faul
 the operator (beacon). T075's recorded values, and T098 to T100, wait for C0.
 
 
+### C3c genesis record (2026-11-11)
+
+C3c is three PRs: the genesis commit (this one: T107, T115), the proposer view (T102 to T106, T111 to T114), and the
+lenient chain import, test mode and the ported harnesses (T108 to T110, T116, T117). Each of the last two lifts the
+start-up refusals C3b put in `ConfigValidator.stateGuardErrors`, with the code that makes them safe.
+
+**What it is.** On the unified layout the genesis loader builds the genesis tries on a layer of their own
+(`GenesisLayer`, a staged layer over a view of nothing) and `PathStateStorage.commitGenesis` writes what they end
+with: one batch, synced, under the state lock, as a move of the clock, with the genesis block, its weight and the
+best-block pointer, the rows, the marks of a datadir this build created, the layout stamp `state.layout =
+path-live-1`, and the anchor last. A genesis has no changeset record, and the count of pruned records is left for
+the first block to start. The loader still runs at every start, to say what the genesis header is; on a datadir that
+has its genesis the layer is dropped unused.
+
+**One consult before code (forge: AGREE WITH CHANGES), and what it changed.**
+
+| Finding | Change |
+| --- | --- |
+| The data model has the genesis built through the buffer that drops the tries' removals (dm 5.4, "insert-only"). On the unified layout that would make every second change to a trie look like a second world, which a layer refuses since C3b | **removals are honoured** on the genesis layer. The buffer exists because two storage tries can share a node by its hash on the hash store; here each account has rows of its own. The rows come out the same: every prior is none, a node made and then replaced ends on its last form, and nothing vanishes. forge checked the shapes that could differ (a slot of zero, a storage of zeros, `accountStartNonce`, two accounts with one storage) |
+| One address written two ways (`0xAB…` and `ab…`, `0x1` and `0x01`) is two entries of the allocation for one account. On the hash store the second overwrites the first. Here the first's storage would be rows under an owner whose account names none, or a second trie built over the first | refused on the unified layout, before anything is built. No shipped genesis has one |
+| This is the first thing that writes the layout stamp, and nothing reads it until the guard of C5a: a build with the in-development guard off would open a stamped datadir and run the hash store's code over a store that holds none of the state; and with the guard on, a datadir of the hash layout would have its genesis found, the commit skipped, and the node run with no anchor | **the rule of dm 5.3 is in the loader now**, both ways (`GenesisDataLoader.layoutRefusal`); C5a moves it to the node's own guard at start |
+| The marks of a created datadir were a second synced write after the genesis, with a crash window between | they are in the genesis batch. That reference counts are exact is never said here: nothing on this layout has them |
+| `commitGenesis` should also refuse a datadir with changeset records or a count of pruned ones, and a build that replaced a storage trie whole | taken |
+| Genesis storage on a chain whose storage is not Ethereum-compatible is at positions execution never looks at (dm 5.4) | refused on the unified layout, when some account has a slot that is not zero. Every shipped chain is compatible |
+
+**Not taken, with the reason.** forge: refuse a duplicated address on the hash store too. It would change what a
+private chain's genesis does with the guard off, and nothing here needs it: the refusal is where the harm is. forge
+(a suggestion): walk the layer from the genesis root at the commit and require the positions reached to be the change
+set. The tests hold that property against an independent walk for every shipped genesis; at run time the commit holds
+the account trie's root to the header's state root.
+
+**Tests.** Each genesis is loaded twice by the production loader, onto the hash store of one datadir and onto the
+unified layout of another. The first says what the genesis state is, by a walk of its raw nodes; the second must
+hold exactly those nodes as rows, with nothing in its hash store.
+
+| Case | What is held |
+| --- | --- |
+| Ethereum Classic (8,893 accounts), Mordor (no allocation: no row, the empty root), Platåberget and Sepolia (system contracts with code, storage and nonces) | the rows, the header's hash, the anchor in memory and on disk, a view of it at once, the block and its body, the head, the weight, the stamp, the marks; no changeset record |
+| two accounts with one storage; a storage of zeros | each account's own rows; none |
+| one batch | one synced write, made under the lock while the clock says a move is in flight, the stamp inside, the anchor last; a write that fails leaves no block, row, stamp or anchor, and the next start commits |
+| a datadir that has something | a restart writes nothing; another genesis is refused as before; a commit over an anchor, over rows with no anchor, or as a block that is not block 0, is refused; a build that is not the state its block names |
+| what a genesis may not have, and which layout opens a datadir | an account allocated twice, in capitals and unpadded; storage on a chain that would not find it; the rule of dm 5.3, case by case and through two real datadirs |
+| the guard off | the load writes no stamp, no anchor and no row of the unified layout |
+
+The import differentials of C3b (`ImportOnPositionsSpec`, `MordorImportOnPositionsSpec`) now start from a genesis
+commit where they seeded rows by hand, so block 1 is imported onto a committed genesis: an allocation with contracts
+on the first, none on the second. The fixture replay still seeds by hand: a fixture's genesis header carries fields
+the loader does not produce, so its hash is the fixture's and not the loader's (the harness port, T117).
+
+**Mutation run.** 21 mutants of the commit and of the loader's rules, each a rule dropped or weakened (a commit over
+an anchor or over rows with none, a block that is not block 0, a build not held to its root, the stamp or the marks
+left out, the anchor not last, the batch not synced or written before the move is announced, counts said to be exact,
+removals dropped, the genesis stored the hash store's way, no best block, the two refusals, the layout rule's three
+arms, the two halves of address normalisation, the withdrawals list of the body): 21 caught. Two were first written
+so that the unused-symbol ratchet refused them before any test ran, and were re-aimed.
+
+
 ### Destructive change (C8a and C8b): the vault protocol blocks
 
 ```
