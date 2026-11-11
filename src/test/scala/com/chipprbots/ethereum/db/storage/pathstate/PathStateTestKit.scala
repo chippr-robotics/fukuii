@@ -366,6 +366,11 @@ object PathStateTestKit:
       beforeUpdate(dataSourceUpdates)
       batches.add(dataSourceUpdates)
       under.update(dataSourceUpdates)
+    override def updateSync(dataSourceUpdates: Seq[DataUpdate]): Unit =
+      calls.add("updateSync")
+      beforeUpdate(dataSourceUpdates)
+      batches.add(dataSourceUpdates)
+      under.updateSync(dataSourceUpdates)
     override def clear(): Unit = under.clear()
     override def close(): Unit = under.close()
     override def destroy(): Unit = under.destroy()

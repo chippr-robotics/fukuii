@@ -100,6 +100,9 @@ class GenesisCommitSpec extends AnyFlatSpec with Matchers:
     onPositions.blockchainReader.getBlockBodyByHash(header.hash) shouldBe
       onHashes.blockchainReader.getBlockBodyByHash(header.hash)
     onPositions.storages.appStateStorage.getStateLayout() shouldBe Some(StateLayout.PathLive1)
+    onPositions.storages.appStateStorage.isDatadirCreatedUnderInvariant() shouldBe true
+    onPositions.storages.appStateStorage.hasChainWeightInvariant() shouldBe true
+    // nothing on this layout has reference counts: it is never said that they are exact
     onPositions.storages.appStateStorage.hasRefCountsExact() shouldBe false
     // nothing came before a genesis: no changeset record, and no count of pruned ones
     new ChangesetStorage(onPositions.source).isEmpty shouldBe true
@@ -230,6 +233,8 @@ class GenesisCommitSpec extends AnyFlatSpec with Matchers:
     val batches = watched.batchesWritten.drop(before)
     batches should have size 1
     seenInFlight shouldBe true
+    // a datadir's first state is synced to the disk before the node goes on
+    watched.callsMade.filter(_.startsWith("update")) shouldBe Seq("updateSync")
     val keys = batches.head.collect { case DataSourceUpdate(_, _, upserts) =>
       upserts.map((key, _) => new String(key.toArray, "UTF-8"))
     }.flatten
@@ -310,6 +315,20 @@ class GenesisCommitSpec extends AnyFlatSpec with Matchers:
     // a block that is not block 0 is no genesis
     an[IllegalArgumentException] should be thrownBy
       pathState.commitGenesis(pathState.genesisLayer(), pathState.anchor.get.copy(number = 1), None)
+  }
+
+  // While SNAP owns the rows there is no anchor, and there are rows: not a datadir to commit a genesis to.
+  it should "refuse a datadir that holds rows of a state and no anchor" taggedAs UnitTest in {
+    val source = EphemDataSource()
+    new PathNodeStorage(source).writeStorageNode(owner(alice), Array[Byte](1), Array.fill[Byte](40)(7))
+    val node = new Node(source, guard = true)
+    val pathState = node.storages.pathStateStorage.get
+    pathState.anchor shouldBe None
+    val named = BlockRef(ByteString(Array.fill[Byte](32)(1)), 0, ByteString(MerklePatriciaTrie.EmptyRootHash))
+    (the[IllegalStateException] thrownBy pathState.commitGenesis(pathState.genesisLayer(), named, None)).getMessage should
+      include("rows of a state")
+    node.storages.appStateStorage.getStateLayout() shouldBe None
+    pathState.anchor shouldBe None
   }
 
   it should "refuse a build that is not the state its block names" taggedAs UnitTest in {
