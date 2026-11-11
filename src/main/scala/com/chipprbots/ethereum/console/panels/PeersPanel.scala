@@ -128,7 +128,7 @@ private[console] object PeersPanel:
       case Column.Address => TuiText.external(p.address, c.g)
       case Column.Client =>
         details.map(d => TuiText.external(TuiText.clientName(d.clientId), c.g)).filter(_.nonEmpty).getOrElse("?")
-      case Column.Best  => details.map(_.bestBlock).filter(_ > 0).fold("?")(formatNumber)
+      case Column.Best => details.map(_.bestBlock).filter(_ > 0).fold("?")(formatNumber)
       // From the same units the order and the trend use, so what is drawn, what is sorted on and what trends agree
       // exactly: `%.3f` rounds half up on the binary value and can disagree with `scoreUnits` at a half-way tie.
       case Column.Score =>

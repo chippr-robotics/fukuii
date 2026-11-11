@@ -40,9 +40,9 @@ final case class LogLine(seq: Long, time: String, level: String, logger: String,
   * The store is monotone: a slot keeps the line with the highest sequence number ever offered to it ([[store]]). A
   * writer that took its number and was descheduled while others went a whole lap round the ring stores a line the ring
   * has already replaced; that line is dropped, and does not overwrite the newer one. So once every writer has stored,
-  * the ring holds exactly the newest `capacity` lines, whatever the scheduling. While writers are in flight, a read
-  * may miss a line that is not stored yet, or one whose slot a lap newer line took while the read ran: it never shows
-  * a line out of order or twice. Lines are sanitised on capture (FR-020), so nothing a peer sent reaches a frame from a
+  * the ring holds exactly the newest `capacity` lines, whatever the scheduling. While writers are in flight, a read may
+  * miss a line that is not stored yet, or one whose slot a lap newer line took while the read ran: it never shows a
+  * line out of order or twice. Lines are sanitised on capture (FR-020), so nothing a peer sent reaches a frame from a
   * log line.
   *
   * `UnsynchronizedAppenderBase`, not `AppenderBase`: every logging thread passes through `doAppend`, and the ring needs
