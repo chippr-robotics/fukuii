@@ -108,13 +108,14 @@ final class PathMptStorage private (
       replaced: Seq[(NibblePath, MptNode)],
       absorbed: Seq[(NibblePath, MptNode)]
   ): Option[MptNode] =
-    owner("An update")
+    val trie = owner("An update")
     val into = layer.getOrElse(throw PathMptStorage.readOnlyView)
-    newRoot.map { root =>
-      val (collapsed, created) = MptTraversals.collapseTrieAt(root, NibblePath.Empty)
-      created.foreach { case (_, hash, encoded) => into.byHash.put(hash, encoded) }
-      collapsed
-    }
+    val collapsed = newRoot.map(root => MptTraversals.collapseTrieAt(root, NibblePath.Empty))
+    val created = collapsed.fold(Seq.empty[(NibblePath, ByteString, Array[Byte])])(_._2)
+    created.foreach { case (_, hash, encoded) => into.byHash.put(hash, encoded) }
+    // a block that commits also keeps what it did to each position (data-model 3)
+    into.changes.foreach(_.record(trie, replaced ++ absorbed, created))
+    collapsed.map(_._1)
 
   override def updateNodesInStorage(newRoot: Option[MptNode], toRemove: Seq[MptNode]): Option[MptNode] =
     throw new IllegalStateException("An update without positions: a position store cannot place its nodes")
@@ -122,8 +123,10 @@ final class PathMptStorage private (
   /** Nothing to write: a throwaway layer is never committed, and a read-only view holds nothing. */
   override def persist(): Unit = ()
 
-  /** Nothing to drop: this storage owns no row, and what its layer holds is found by hash whatever trie it was in. */
-  override def resetOwner(owner: ByteString): Unit = ()
+  /** No row is dropped here: this storage owns none, and what its layer holds by hash stays, whatever trie it was in
+    * (an older world of the same block may still read it). A block that commits notes the reset, for its diff.
+    */
+  override def resetOwner(owner: ByteString): Unit = layer.flatMap(_.changes).foreach(_.reset(owner))
 
   override def storeRawNodes(nodes: Seq[(ByteString, Array[Byte])]): Unit =
     throw new UnsupportedOperationException("A position store cannot place a node it is given by hash alone")
@@ -143,8 +146,10 @@ final class PathMptStorage private (
 
 object PathMptStorage:
 
-  /** What the tries of one execution wrote: every node, in every version it had, by hash. */
-  final private[pathstate] class Layer:
+  /** What the tries of one execution wrote: every node, in every version it had, by hash. And, for a block that is to
+    * commit, what it did to each position.
+    */
+  final private[pathstate] class Layer(val changes: Option[StagedChanges] = None):
     val byHash = new ConcurrentHashMap[ByteString, Array[Byte]]()
 
   /** `view` as a storage nothing can be written to. */
@@ -152,6 +157,12 @@ object PathMptStorage:
 
   /** `view` under a fresh layer that takes an execution's writes and is dropped with it. */
   def throwaway(view: StateView): MptStorage = new PathMptStorage(view, Some(new Layer), None)
+
+  /** `view` under a fresh layer for a block that is to commit: the layer of [[throwaway]], which also records in
+    * `changes` what the block does to each position.
+    */
+  private[pathstate] def staged(view: StateView, changes: StagedChanges): MptStorage =
+    new PathMptStorage(view, Some(new Layer(Some(changes))), None)
 
   private def readOnlyView: UnsupportedOperationException =
     new UnsupportedOperationException("This view of the state is read-only")

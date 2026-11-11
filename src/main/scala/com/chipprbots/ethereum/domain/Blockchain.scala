@@ -87,7 +87,8 @@ class BlockchainImpl(
     protected val transactionMappingStorage: TransactionMappingStorage,
     protected val appStateStorage: AppStateStorage,
     protected val stateStorage: StateStorage,
-    blockchainReader: BlockchainReader
+    blockchainReader: BlockchainReader,
+    pathState: Option[pathstate.PathStateStorage] = None
 ) extends Blockchain
     with ReorgStateHandler
     with Logger:
@@ -131,13 +132,38 @@ class BlockchainImpl(
     if ethCompatibleStorage then domain.EthereumUInt256Mpt.storageMpt(storageRoot, nodes)
     else domain.ArbitraryIntegerMpt.storageMpt(storageRoot, nodes)
 
-  def getBackingMptStorage(blockNumber: BigInt): MptStorage = stateStorage.getBackingStorage(blockNumber)
+  /** The hash store, for a block executed with nothing staged.
+    *
+    * @throws IllegalStateException
+    *   on the unified layout (spec 018 data-model 7.6): a path-live store has one writer, the staged commit, and an
+    *   execution that asks for this would write, or read, a store that is not this chain's state
+    */
+  def getBackingMptStorage(blockNumber: BigInt): MptStorage =
+    if pathState.isDefined then
+      throw new IllegalStateException(
+        s"Block $blockNumber is executed with nothing staged, on the unified state layout: " +
+          "every execution there runs on a staged layer or on a view"
+      )
+    stateStorage.getBackingStorage(blockNumber)
 
   def getReadOnlyMptStorage(): MptStorage = stateStorage.getReadOnlyStorage
 
-  /** State storage for executing block `blockNumber`, its writes held back until committed. See [[StagedBlockState]].
+  /** State storage for executing the block of `header`, its writes held back until committed. See [[StagedBlockState]].
+    *
+    * By the header: the unified layout stages a block over its parent's state, which it finds by the parent's hash, and
+    * holds what the block wrote to the state root the header carries. The hash store needs the number alone.
     */
-  def stageBlockState(blockNumber: BigInt): StagedBlockState = stateStorage.stageBlock(blockNumber)
+  def stageBlockState(header: BlockHeader): StagedBlockState =
+    pathState.fold(stateStorage.stageBlock(header.number.value)) { state =>
+      new pathstate.PathStagedBlock(
+        state,
+        refOf(header),
+        () => blockchainReader.getBlockHeaderByHash(header.parentHash).map(refOf)
+      )
+    }
+
+  private def refOf(header: BlockHeader): pathstate.BlockRef =
+    pathstate.BlockRef(header.hash.value, header.number.value, header.stateRoot.value)
 
   /** See [[StateStorage.onBlocksAbandoned]]. */
   override def abandonBlockStates(blocks: Seq[(BigInt, ByteString)]): Unit = stateStorage.onBlocksAbandoned(blocks)
@@ -238,5 +264,6 @@ object BlockchainImpl:
       transactionMappingStorage = storages.transactionMappingStorage,
       appStateStorage = storages.appStateStorage,
       stateStorage = storages.stateStorage,
-      blockchainReader = blockchainReader
+      blockchainReader = blockchainReader,
+      pathState = storages.pathStateStorage
     )

@@ -55,6 +55,18 @@ class AppStateStorage(val dataSource: DataSource) extends TransactionalKeyValueS
   private[storage] def putStateAnchor(block: pathstate.BlockRef): DataSourceBatchUpdate =
     put(Keys.StateAnchor, pathstate.StateAnchor.encode(block))
 
+  /** The height the changeset records have been pruned up to (spec 018 data-model 4.5): every height below it has had
+    * its records deleted, or never had one. `None` on a datadir no block has been committed to in place. The records
+    * cannot be scanned for their lowest height (data-model 4.1), so this is the only thing that knows it.
+    */
+  def getChangesetPrunedTo(): Option[BigInt] = get(Keys.StateChangesetPrunedTo).map(BigInt(_))
+
+  /** The update that moves [[getChangesetPrunedTo]]. It belongs in the batch that deletes the records below it, which
+    * is the canonical commit's.
+    */
+  private[storage] def putChangesetPrunedTo(height: BigInt): DataSourceBatchUpdate =
+    put(Keys.StateChangesetPrunedTo, height.toString)
+
   /** Whether fast sync finished on this node. Fast sync was removed and nothing in the node sets this flag any more; a
     * database that fast sync completed earlier still carries it. `SyncController` reads it in two places: to tell a
     * stranded fast sync from a finished one, and, with SNAP on and not done, to send a node where fast sync finished
@@ -916,6 +928,7 @@ object AppStateStorage:
     val SnapAuditForcedOnce = "snap.heal.auditForcedOnce"
     val RefCountsExact = "state.refcounts.exact"
     val StateAnchor = com.chipprbots.ethereum.db.storage.pathstate.StateAnchor.Key
+    val StateChangesetPrunedTo = "state.changeset.pruned-to"
     val ChainWeightInvariant = "chain.weight.invariant"
     val ChainWeightReconcileProgress = "chain.weight.reconcileProgress"
     val ChainWeightSnapPending = "chain.weight.snapPending"

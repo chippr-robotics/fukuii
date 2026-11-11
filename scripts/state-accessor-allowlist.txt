@@ -23,6 +23,7 @@ bulk-load 2 src/main/scala/com/chipprbots/ethereum/db/storage/StateStorage.scala
 stage-block 3 src/main/scala/com/chipprbots/ethereum/db/storage/StateStorage.scala the definition and two modes' forms; replaced by the staged commit (C3b, T093)
 prefetch-reader 3 src/main/scala/com/chipprbots/ethereum/db/storage/StateStorage.scala the staged block's definition and two modes' forms; the call site moves to the position store's in C3b (T093)
 prefetch-reader 1 src/main/scala/com/chipprbots/ethereum/db/storage/pathstate/PathStateStorage.scala the position store's own: it takes the parent block and reads its view (kept)
+prefetch-reader 2 src/main/scala/com/chipprbots/ethereum/db/storage/pathstate/PathStagedBlock.scala the staged block of the unified layout hands the prefetch a reader of its parent's view, by asking the position store's own (kept)
 node-by-hash 1 src/main/scala/com/chipprbots/ethereum/db/storage/StateStorage.scala the definition of getNode; it goes with getMptNodeByHash, its one caller (C3c, T116)
 get-by-hash 1 src/main/scala/com/chipprbots/ethereum/db/storage/StateStorage.scala getNode's read of the buffer over the store; it goes with getNode (C3c, T116)
 store-built 14 src/main/scala/com/chipprbots/ethereum/db/storage/StateStorage.scala the hash stores themselves, in each pruning mode; deleted with the Hash scheme (C8b). The ephemeral form for list tries is kept (T280)
@@ -45,8 +46,9 @@ store-handed 2 src/main/scala/com/chipprbots/ethereum/db/storage/MptStorage.scal
 store-handed 3 src/main/scala/com/chipprbots/ethereum/db/storage/MptStorageDecorator.scala the decorator's own members: what it wraps, how it rewraps, and forOwner (kept)
 store-handed 1 src/main/scala/com/chipprbots/ethereum/db/storage/DecodedNodeCache.scala a decorator's rewrap of an owner's view (kept)
 store-handed 1 src/main/scala/com/chipprbots/ethereum/db/storage/PrefetchNodeReader.scala a decorator's rewrap of an owner's view (kept)
-store-handed 3 src/main/scala/com/chipprbots/ethereum/db/storage/pathstate/PathMptStorage.scala the position store's forOwner and its two factories, readOnly and throwaway (kept)
+store-handed 4 src/main/scala/com/chipprbots/ethereum/db/storage/pathstate/PathMptStorage.scala the position store's forOwner and its three factories: readOnly, throwaway, and staged for a block that commits (C3b) (kept)
 store-handed 2 src/main/scala/com/chipprbots/ethereum/db/storage/pathstate/PathStateStorage.scala the position store's two doors, each over the view of a block: what the seam of C2b hands out (kept)
+store-handed 1 src/main/scala/com/chipprbots/ethereum/db/storage/pathstate/PathStagedBlock.scala the staged block's storage: the layer of one execution over its parent's view, made when first asked for (kept)
 store-handed 4 src/main/scala/com/chipprbots/ethereum/domain/Blockchain.scala the two accessors, declared and defined; deleted with the Hash scheme (C8b)
 trie-of 7 src/main/scala/com/chipprbots/ethereum/mpt/MerklePatriciaTrie.scala the trie's own constructors, and the copies its updates return (kept)
 visit-hash 1 src/main/scala/com/chipprbots/ethereum/mpt/MptVisitors/MptVisitor.scala the definition of the visitor's member
@@ -93,7 +95,7 @@ trie-of 1 src/main/scala/com/chipprbots/ethereum/transactions/PendingTransaction
 # Serving and walking: what C2b left. Every walk reads by position now; the rows below are a store that is not the
 # state, the store a walk is handed (SNAP's own until C5a), and one check that C3c replaces.
 get-by-hash 1 src/main/scala/com/chipprbots/ethereum/network/snapserver/SnapServer.scala not the state: serveByteCodes reads the code store, named `storage` (kept)
-node-by-hash 2 src/main/scala/com/chipprbots/ethereum/domain/BlockchainReader.scala the definition of getMptNodeByHash and its call of getNode; its one caller left is ChainImporter's check that a state is held, which becomes stateAvailable (C3c, T116)
+node-by-hash 3 src/main/scala/com/chipprbots/ethereum/domain/BlockchainReader.scala the definition of getMptNodeByHash, its call of getNode, and holdsStateOf, which asks it on the hash store only (the unified layout asks the anchor, C3b); deleted with the Hash scheme (C8b)
 backing 1 src/main/scala/com/chipprbots/ethereum/blockchain/sync/BytecodeRecoveryActor.scala the store the bytecode recovery scan walks, by position since C2b: the store SNAP builds, before there is an anchor to take a view of; C5a
 backing 1 src/main/scala/com/chipprbots/ethereum/blockchain/sync/CombinedRecoveryScanActor.scala the store the combined recovery scan hands to each shard's walk, by position since C2b: the store SNAP builds, before there is an anchor; C5a
 backing 3 src/main/scala/com/chipprbots/ethereum/blockchain/sync/StorageRecoveryActor.scala two are the store the storage recovery scan and its closing check read, by position since C2b; the third is where recovered storage is written; all three are the store SNAP builds, C5a
@@ -101,16 +103,15 @@ snap-store 2 src/main/scala/com/chipprbots/ethereum/blockchain/sync/snap/control
 visit-hash 1 src/main/scala/com/chipprbots/ethereum/mpt/MptVisitors/PathTrackingLeafWalkVisitor.scala the visitor interface hands visitHash no position; this visitor carries its own and reads each node at it (kept)
 
 # Execution, block production and the writers beside them: C3b and C3c.
-backing-mpt 1 src/main/scala/com/chipprbots/ethereum/ledger/BlockExecution.scala WRITER: the block's store when nothing is staged; the staged commit, C3b (T093)
-stage-block 2 src/main/scala/com/chipprbots/ethereum/ledger/BlockExecution.scala WRITER: where a block's staged state is opened; stageBlock(parent, number) in C3b (T093)
-stage-block 2 src/main/scala/com/chipprbots/ethereum/domain/Blockchain.scala the definition of stageBlockState and its call of the store's; C3b (T093)
+backing-mpt 1 src/main/scala/com/chipprbots/ethereum/ledger/BlockExecution.scala WRITER: the block's store when nothing is staged, which the unified layout refuses (C3b, dm 7.6); deleted with the Hash scheme (C8b)
+stage-block 2 src/main/scala/com/chipprbots/ethereum/ledger/BlockExecution.scala WRITER: where a block's staged state is opened, by its header since C3b; the hash store's form goes with the Hash scheme (C8b)
+stage-block 2 src/main/scala/com/chipprbots/ethereum/domain/Blockchain.scala the definition of stageBlockState, which stages on the unified layout or calls the hash store's; the second goes with the Hash scheme (C8b)
 prefetch-reader 1 src/main/scala/com/chipprbots/ethereum/ledger/BlockExecution.scala the prefetch reader of the staged block; the position store's, by parent, in C3b (T093)
 readonly-mpt 1 src/main/scala/com/chipprbots/ethereum/ledger/BlockPreparator.scala block production executes over a buffer; the proposer view, C3c (T111)
 backing-mpt 1 src/main/scala/com/chipprbots/ethereum/testmode/TestModeBlockExecution.scala WRITER: test-mode execution writes with nothing staged; the staged commit, C3c (T116)
 backing 1 src/main/scala/com/chipprbots/ethereum/jsonrpc/TestService.scala WRITER: the test_ RPC writes genesis storage tries over block 0's store; through the genesis commit in C3c (T108, T115)
 storage-mpt 1 src/main/scala/com/chipprbots/ethereum/jsonrpc/TestService.scala that write's storage trie, from the empty root with no owner; C3c (T108, T115)
 readonly 1 src/main/scala/com/chipprbots/ethereum/blockchain/data/GenesisDataLoader.scala WRITER: genesis builds its state in a buffer over the store; the genesis commit, C3c (T115)
-node-by-hash 1 src/main/scala/com/chipprbots/ethereum/blockchain/data/ChainImporter.scala asks whether a block's state is held by reading its root; stateAvailable in C3c (T116)
 
 # SNAP hand-off, the audit, repair and import: C5a, C5b and C5c.
 backing 1 src/main/scala/com/chipprbots/ethereum/blockchain/sync/snap/controller/StateIngest.scala WRITER: the store SNAP ingest and healing write the pivot's state to; the hand-off without a copy, C5a

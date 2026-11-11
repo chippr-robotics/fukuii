@@ -269,6 +269,20 @@ class BlockchainReaderSeamSpec extends AnyFlatSpec with Matchers:
       f.node.reader.stateForRoot(EmptyRoot) shouldBe None
     }
 
+  // The strict chain import asks whether the head's state is there before it takes a block as present (forge).
+  "Whether a block's state can be built on" should "be said by the store the chain's state is in" taggedAs UnitTest in {
+    val onHashes = new Node(EphemDataSource(), ArchivePruning, guard = false)
+    val root = writeThrough(onHashes.storages.stateStorage.getBackingStorage(1), onHashes)
+    onHashes.reader.holdsStateOf(headerOf(1, root)) shouldBe true
+    onHashes.reader.holdsStateOf(headerOf(1, ByteString(kec256("a root nobody holds".getBytes)))) shouldBe false
+
+    // on the unified layout: the block whose state the disk holds, and no other, whatever the hash store has
+    val f = new OnPositions
+    f.node.reader.holdsStateOf(f.header) shouldBe true
+    f.node.reader.holdsStateOf(headerOf(2, f.hashed.root)) shouldBe false
+    f.node.reader.getMptNodeByHash(f.hashed.root) shouldBe None
+  }
+
   it should "stop being served once the best block is more than the served window past it" taggedAs UnitTest in {
     val f = new OnPositions
     val appState = f.node.storages.appStateStorage

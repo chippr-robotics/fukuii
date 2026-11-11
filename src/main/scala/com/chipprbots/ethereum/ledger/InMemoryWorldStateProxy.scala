@@ -133,7 +133,19 @@ object InMemoryWorldStateProxy:
     def persistAccountsStateTrie(worldState: InMemoryWorldStateProxy): InMemoryWorldStateProxy =
       worldState.copyWith(accountsStateTrie = worldState.accountsStateTrie.persist())
 
-    persistCode.andThen(persistContractStorage).andThen(persistAccountsStateTrie)(worldState)
+    // The storage tries this world replaced whole, told to the storage BEFORE anything of theirs is persisted: what
+    // follows for one of those accounts is a new trie, starting empty (spec 018 data-model 3 rule 6). Only a world that
+    // is persisted gets here.
+    def resetReplacedStorage(worldState: InMemoryWorldStateProxy): InMemoryWorldStateProxy =
+      if worldState.storageResets.isEmpty then worldState
+      else
+        worldState.storageResets.foreach(address => worldState.stateStorage.resetOwner(storageOwner(address)))
+        worldState.copyWith(storageResets = Set.empty)
+
+    persistCode
+      .andThen(resetReplacedStorage)
+      .andThen(persistContractStorage)
+      .andThen(persistAccountsStateTrie)(worldState)
 
   /** Returns an [[InMemorySimpleMapProxy]] of the accounts state trie "The world state (state), is a mapping between
     * Keccak 256-bit hashes of the addresses (160-bit identifiers) and account states (a data structure serialised as
@@ -223,7 +235,11 @@ class InMemoryWorldStateProxy(
     // When present, storage reads check flat storage before MPT traversal.
     val flatSlotStorage: Option[FlatSlotStorage] = None,
     // Memos of reads of the persisted base tries, shared by every copy of this world (see [[TrieReadMemo]]).
-    val readMemos: WorldReadMemos = new WorldReadMemos
+    val readMemos: WorldReadMemos = new WorldReadMemos,
+    // The accounts whose storage trie this world has replaced as a whole and has not yet told its storage about (spec
+    // 018 data-model 3 rule 6). A value of the world, like everything it has not persisted: a world that is thrown
+    // away (a call frame that reverts) takes its resets with it.
+    val storageResets: Set[Address] = Set.empty
 ) extends WorldStateProxy[InMemoryWorldStateProxy, InMemoryWorldStateProxyStorage]:
 
   override def getAccount(address: Address): Option[Account] =
@@ -239,18 +255,37 @@ class InMemoryWorldStateProxy(
   override def saveAccount(address: Address, account: Account): InMemoryWorldStateProxy =
     copyWith(accountsStateTrie = accountsStateTrie.put(address, account))
 
-  /** Also tells the storage that this account's storage trie is replaced as a whole, whatever becomes of the address
-    * afterwards (it may be created again in the same block): a storage that keeps a trie by position has that trie's
-    * nodes to drop, where one that keeps nodes by hash has nothing to do (spec 018 data-model 3 rule 6). Every caller
-    * deletes at the end of a transaction, never inside a call frame that can still revert.
+  /** The account's storage trie is replaced as a whole with it, whatever becomes of the address afterwards (it may be
+    * created again in the same block): a storage that keeps a trie by position has that trie's nodes to drop, where one
+    * that keeps nodes by hash has nothing to do (spec 018 data-model 3 rule 6). The world notes it and tells its
+    * storage when it is persisted ([[InMemoryWorldStateProxy.persistState]]), not here: a world is a value, and one
+    * that is never persisted must leave no trace in the storage.
     */
   override def deleteAccount(address: Address): InMemoryWorldStateProxy =
-    stateStorage.resetOwner(InMemoryWorldStateProxy.storageOwner(address))
     copyWith(
       accountsStateTrie = accountsStateTrie.remove(address),
       contractStorages = contractStorages - address,
-      accountCodes = accountCodes - address
+      accountCodes = accountCodes - address,
+      storageResets = storageResets + address
     )
+
+  /** A CREATE can land on an account that exists: an address collision the create rules let through, which on ETC is an
+    * account with storage and neither code nor nonce (core-geth checks those two; EIP-7610 is not ETC's). Its storage
+    * is then replaced by the new contract's, whole (yellow paper, eq. 79). So the world forgets the old trie, which it
+    * may have read earlier in the block and would otherwise go on reading and writing, and notes the reset as
+    * [[deleteAccount]] does.
+    *
+    * This runs inside a call frame. A frame that reverts throws this world away, and the reset with it.
+    */
+  override def initialiseAccount(newAddress: Address): InMemoryWorldStateProxy =
+    val hadStorage = getAccount(newAddress).exists(_.storageRoot != Account.EmptyStorageRootHash)
+    val initialised = super.initialiseAccount(newAddress)
+    if !hadStorage then initialised
+    else
+      initialised.copyWith(
+        contractStorages = initialised.contractStorages - newAddress,
+        storageResets = initialised.storageResets + newAddress
+      )
 
   override def jumpDestMemo: Option[JumpDestAnalysis.BlockMemo] = readMemos.jumpDests
 
@@ -349,7 +384,8 @@ class InMemoryWorldStateProxy(
         contractStorages,
       evmCodeStorage: EvmCodeStorage = evmCodeStorage,
       accountCodes: Map[Address, Code] = accountCodes,
-      touchedAccounts: Set[Address] = touchedAccounts
+      touchedAccounts: Set[Address] = touchedAccounts,
+      storageResets: Set[Address] = storageResets
   ): InMemoryWorldStateProxy =
     new InMemoryWorldStateProxy(
       stateStorage,
@@ -363,7 +399,8 @@ class InMemoryWorldStateProxy(
       noEmptyAccountsCond,
       ethCompatibleStorage,
       flatSlotStorage,
-      readMemos
+      readMemos,
+      storageResets
     )
 
   override def getBlockHash(number: UInt256): Option[UInt256] = getBlockByNumber(number).map(UInt256(_))

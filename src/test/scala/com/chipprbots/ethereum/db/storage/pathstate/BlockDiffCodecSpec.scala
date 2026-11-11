@@ -249,8 +249,39 @@ class BlockDiffCodecSpec extends AnyFlatSpec with Matchers:
           decoded shouldBe Right(diff)
           ByteString(BlockDiffCodec.encode(decoded.toOption.get)) shouldBe ByteString(encoded)
           diff.byHash.size shouldBe diff.changes.values.flatMap(_.next).toSet.size
+          // the length a writer holds against its bound, without making the bytes
+          BlockDiffCodec.encodedLength(diff) shouldBe encoded.length
         }
       }
+    }
+
+  "The length of a record" should "be known without writing it, for lengths of one, two and three bytes" taggedAs
+    UnitTest in {
+      def sized(nodeLength: Int, entries: Int): BlockDiff =
+        val root = ByteString(fill(0xa0, nodeLength))
+        BlockDiff(
+          ByteString(hash),
+          9,
+          ByteString(fill(0x22)),
+          BlockDiff.EmptyRoot,
+          ByteString(kec256(root.toArray)),
+          (1 to entries)
+            .map(i =>
+              PositionKey
+                .at(None, NibblePath.fromNibbles(Array((i / 16).toByte, (i % 16).toByte))) -> Change(Some(root), None)
+            )
+            .toMap + (PositionKey.AccountRoot -> Change(None, Some(root)))
+        )
+      for
+        nodeLength <- Seq(32, 127, 128, 16383, 16384, 70000)
+        entries <- Seq(0, 1, 126, 127, 128, 200)
+      do
+        val diff = sized(nodeLength, entries)
+        withClue(s"nodes of $nodeLength bytes, $entries entries: ") {
+          BlockDiffCodec.encodedLength(diff) shouldBe BlockDiffCodec.encode(diff).length
+        }
+      val tombstone = sized(32, 0).copy(changes = Map.empty, incomplete = true)
+      BlockDiffCodec.encodedLength(tombstone) shouldBe BlockDiffCodec.encode(tombstone).length
     }
 
   private val big = ByteString(fill(0xc5, 32))

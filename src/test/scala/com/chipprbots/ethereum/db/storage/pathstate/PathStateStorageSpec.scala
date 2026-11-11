@@ -113,11 +113,6 @@ class PathStateStorageSpec extends AnyFlatSpec with Matchers:
     }
   }
 
-  "The rows of one storage trie" should "not be listable before the staged commit exists" taggedAs UnitTest in {
-    val f = new Fixture(com.chipprbots.ethereum.db.dataSource.EphemDataSource())
-    an[UnsupportedOperationException] should be thrownBy f.state.ownerRows(owner(alice))
-  }
-
   private trait Archive extends Storages.PruningModeComponent:
     override val pruningMode: PruningMode = ArchivePruning
 

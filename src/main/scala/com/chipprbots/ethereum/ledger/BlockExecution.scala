@@ -61,7 +61,11 @@ class BlockExecution(
     val hash = block.header.hash.value
     // One execution + commit per block hash at a time, across the Engine API and the regular-sync importer.
     ChainInsertLock.shared(BlockImportGate.withBlock(hash) {
-      val staged = blockchain.stageBlockState(block.header.number.value)
+      val staged = blockchain.stageBlockState(block.header)
+      // This path commits a block's state alone: the block is stored, and the head moved, by the caller afterwards.
+      // On the unified layout the state on disk moves with the best block, in one batch, until the overlay takes
+      // blocks that are executed ahead of the head (spec 018 C4a, C4d).
+      refuseUnadopted(block, staged, "a block whose state is committed apart from the block")
       BlockImportGate.alreadyExecuted(hash, staged) match
         case Some(done) => Right(done.asTuple)
         case None =>
@@ -84,6 +88,20 @@ class BlockExecution(
             case Left(_) => staged.discard()
           result
     })
+
+  /** On the unified state layout, before its overlay, a block is committed in place or not at all: in the batch that
+    * makes it the best block (spec 018 data-model 7.1, and the scope of C3b). A block that is executed without being
+    * adopted (a payload ahead of the head, a side branch, the blocks of a reorganisation) is refused here, before it
+    * runs, as a condition of this node's own state: never a verdict on the block.
+    *
+    * @throws StateUnavailable
+    *   for such a block
+    */
+  private def refuseUnadopted(block: Block, staged: StagedBlockState, what: String): Unit =
+    if staged.commitsInPlace then
+      throw new com.chipprbots.ethereum.db.storage.pathstate.StateUnavailable(
+        s"block ${block.header.number.value} is $what, which the unified state layout cannot hold before its overlay"
+      )
 
   /** Times the block's database commit (one atomic batch since #1465), which `[IMPORT-TIMING]` ends before. */
   private def timedCommit[A](block: Block)(body: => A): A =
@@ -517,7 +535,8 @@ class BlockExecution(
     // path already executed and committed (and that is still applied) is not executed again: its recorded
     // result is used and only the block's own records are written.
     ChainInsertLock.shared(BlockImportGate.withBlock(blockHash) {
-      val staged = blockchain.stageBlockState(blockToExecute.header.number.value)
+      val staged = blockchain.stageBlockState(blockToExecute.header)
+      if !adoptEachBlock then refuseUnadopted(blockToExecute, staged, "a block that is not adopted as it is executed")
       val outcome =
         try
           BlockImportGate.alreadyExecuted(blockHash, staged) match

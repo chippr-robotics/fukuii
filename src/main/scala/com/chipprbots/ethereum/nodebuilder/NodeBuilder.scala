@@ -157,6 +157,8 @@ trait StorageBuilder:
           // The guard as this instance's configuration has it, the value its capabilities are made from: the default
           // reads the process-wide configuration, which another instance of a multi-instance run does not share.
           override protected def statePathLive: Boolean = self.instanceConfig.statePathLive
+          override protected def stateConfig: com.chipprbots.ethereum.db.storage.pathstate.StateConfig =
+            com.chipprbots.ethereum.db.storage.pathstate.StateConfig(self.instanceConfig.config)
 
 trait DiscoveryConfigBuilder extends BlockchainConfigBuilder with StorageBuilder:
   self: InstanceConfigProvider & ActorSystemBuilder =>
@@ -999,7 +1001,8 @@ trait EngineApiBuilder extends Logger:
       // go-ethereum's --miner.gaslimit equivalent, as for the testing_* namespace: mining.gas-limit-target.
       builderGasCeil = mining.config.generic.gasLimitTarget,
       reorgState = blockchain,
-      txGossipGate = Some(txGossipGate)
+      txGossipGate = Some(txGossipGate),
+      stateHeldInPlace = storagesInstance.storages.pathStateStorage.map(state => () => state.anchor.map(_.hash))
     )(using blockchainConfig, typedScheduler)
 
   // The controller's fork gates read the same schedule its service executes with (not the process-global config, which

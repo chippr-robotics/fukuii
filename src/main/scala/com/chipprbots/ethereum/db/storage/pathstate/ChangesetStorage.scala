@@ -57,7 +57,7 @@ final class ChangesetStorage(val dataSource: DataSource):
   /** The hashes of the blocks that have a record at height `number`, in the order they were recorded. */
   def hashesAt(number: BigInt): Seq[ByteString] =
     dataSource.getOptimized(namespace, heightKey(number)).fold(Seq.empty[ByteString]) { value =>
-      require(value.length % HashLength == 0, s"the height index of $number is not a list of 32-byte hashes")
+      if value.length % HashLength != 0 then throw new CorruptIndex(number, value.length)
       ByteString(value).grouped(HashLength).toSeq
     }
 
@@ -93,6 +93,12 @@ final class ChangesetStorage(val dataSource: DataSource):
 
 object ChangesetStorage:
   private val HashLength = BlockDiff.HashLength
+
+  /** The index of a height is not a list of hashes: the datadir's corruption, and no fault of any block. */
+  final class CorruptIndex(val number: BigInt, val length: Int)
+      extends IllegalStateException(
+        s"the index of changeset records at height $number is $length bytes, which is not a list of 32-byte hashes"
+      )
 
   /** The first byte of a height-index key. */
   val HeightPrefix: Byte = 0x00

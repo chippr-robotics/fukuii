@@ -2,29 +2,56 @@ package com.chipprbots.ethereum.db.storage.pathstate
 
 import org.apache.pekko.util.ByteString
 
-import org.bouncycastle.util.encoders.Hex
+import scala.util.control.NonFatal
 
+import com.chipprbots.ethereum.db.dataSource.DataSource
+import com.chipprbots.ethereum.db.dataSource.DataSourceBatchUpdate
+import com.chipprbots.ethereum.db.dataSource.DataUpdate
 import com.chipprbots.ethereum.db.storage.AppStateStorage
 import com.chipprbots.ethereum.db.storage.DecodedNodeCache
 import com.chipprbots.ethereum.db.storage.MptStorage
 import com.chipprbots.ethereum.db.storage.PathNodeStorage
 import com.chipprbots.ethereum.db.storage.PrefetchNodeReader
+import com.chipprbots.ethereum.utils.LazyLogger
 
 /** The state of the unified layout (spec 018 Track C): the position-keyed rows of CF `t` and CF `u`, the anchor that
   * says which block's state they hold, and the views a reader takes of them.
   *
-  * This is its '''read side'''. It serves the state of the anchor and nothing else: the states of other blocks come
-  * with the overlay (C4a), and every write (a block's commit, a head move, a repair) with the staged commit (C3b),
-  * which is also the first caller of [[clock]]'s `publish`. It exists only behind the in-development guard
-  * `fukuii.state.path-live`.
+  * '''Reads.''' It serves the state of the anchor and nothing else: the states of other blocks come with the overlay
+  * (C4a).
+  *
+  * '''Writes.''' One: the commit of a block that extends the anchor ([[stage]], then [[commitCanonical]]), which moves
+  * the anchor to that block in the batch that writes its rows. A head move and a repair come later (C4b, C5b), and are
+  * the other holders of [[lock]].
+  *
+  * '''One of these for a data source.''' The clock and the lock are this object's: a second one over the same data
+  * source would have its own, and neither would see the other's moves. The node builds one, in `Storages`.
+  *
+  * It exists only behind the in-development guard `fukuii.state.path-live`.
   *
   * @param maxViewAgeMoves
   *   how many state moves a view outlives (`state.overlay.max-view-age-moves`)
+  * @param settings
+  *   what a commit is bounded by, keeps and reports
   */
-final class PathStateStorage(rows: PathNodeStorage, appState: AppStateStorage, maxViewAgeMoves: Int = 8):
+final class PathStateStorage(
+    rows: PathNodeStorage,
+    appState: AppStateStorage,
+    maxViewAgeMoves: Int = 8,
+    settings: PathStateStorage.CommitSettings = PathStateStorage.CommitSettings()
+) extends LazyLogger:
+  import PathStateStorage.*
+
+  private val dataSource: DataSource = rows.dataSource
+  require(appState.dataSource eq dataSource, "the anchor and the rows it describes are written in one batch")
+
+  private val changesets = new ChangesetStorage(dataSource)
 
   /** The clock of in-place moves, started from the anchor the datadir holds. */
   val clock: StateMoveLog = new StateMoveLog(maxViewAgeMoves, appState.getStateAnchor())
+
+  /** The lock of the in-place writers (data-model 7.0). */
+  val lock: StateLock = new StateLock
 
   /** The block whose state the disk holds, or `None` when the datadir has no state yet (SNAP in progress). */
   def anchor: Option[BlockRef] = clock.anchor
@@ -66,10 +93,274 @@ final class PathStateStorage(rows: PathNodeStorage, appState: AppStateStorage, m
     try Some(PathPrefetchReader(view(parent), cache, budgetBytes, onLoaded))
     catch case _: StateFault => None
 
-  /** The positions of one storage trie's rows: a prefix scan of CF `u`, merged with the layers above the disk. It
-    * serves the replacement of a whole storage trie (data-model 3.6) and arrives with the staged commit (C3b).
+  /** Whether `blockHash` is the block whose state the disk holds: its changes are committed and in force. */
+  def isApplied(blockHash: ByteString): Boolean = anchor.exists(_.hash == blockHash)
+
+  /** A fresh layer over `parent`'s state for one execution of a block that builds on it.
+    *
+    * @throws StateUnavailable
+    *   when `parent` is not the anchor, or there is no anchor
     */
-  def ownerRows(owner: ByteString): Iterator[PositionKey] =
-    throw new UnsupportedOperationException(
-      s"The rows of the storage trie of ${Hex.toHexString(owner.toArray)} cannot be listed yet"
+  def stage(parent: BlockRef): PathStagedState = new PathStagedState(parent, view(parent))
+
+  /** Commits `block`, executed on `staged`, as the block whose state the disk holds (data-model 7.1): '''one batch'''
+    * of the caller's own updates (`extra`: the block, its receipts and weight, the best-block pointer), the rows the
+    * block changed, its changeset record and the index of its height, the records retention deletes, and the anchor. It
+    * is written under the state lock, as a move of the clock.
+    *
+    *   - '''The block is the anchor already''': the state half is dropped and `extra` alone is written. This is the
+    *     only case a caller with nothing staged can be in: one that found the block executed and applied, and has only
+    *     the block's own records to write. Whether it is still applied is decided here, under the lock. The block, its
+    *     receipts and its weight went to the disk with the batch that moved the anchor, so all `extra` can add here is
+    *     '''a best-block pointer, and it is written''': a caller that is not entitled to move the head (a payload sent
+    *     again, on a chain whose head is the consensus client's to choose) must hand an `extra` without one (beacon).
+    *   - '''There is no anchor''', or the anchor is not the block `staged` was built on: refused, with nothing written.
+    *     Until the overlay (C4a) a block is committed in place or not at all.
+    *
+    * A failure of the write leaves the disk as it was, and is the storage's failure, thrown as it came: it is never a
+    * verdict on the block.
+    *
+    * @param block
+    *   the block being committed, with the state root its header carries
+    * @throws StateUnavailable
+    *   when the block does not extend the anchor, or there is no anchor
+    */
+  def commitCanonical(
+      staged: Option[PathStagedState],
+      block: BlockRef,
+      extra: Option[DataSourceBatchUpdate]
+  ): CommitOutcome =
+    extra.foreach(other =>
+      require(other.dataSource eq dataSource, "a block and its state are written in one batch, to one data source")
     )
+    // Read before the lock is asked for: nothing runs under it but this class and the data source (vault), and what
+    // names the finalized block is not this class's.
+    val finalized = settings.finalized()
+    val outcome = lock.locked(
+      s"canonical commit of block ${block.show}",
+      nanos => told("the wait for the state lock")(settings.observer.lockWaited(nanos))
+    ) {
+      // Every in-place writer holds this lock, so the clock is at rest and the anchor is the disk's.
+      clock.anchor match
+        case None =>
+          throw new StateUnavailable(
+            s"block ${block.show} cannot be committed: there is no state anchor, so the disk holds no block's state"
+          )
+        case Some(held) if held.hash == block.hash =>
+          extra.foreach(_.commit())
+          CommitOutcome.AlreadyApplied
+        case Some(held) =>
+          staged match
+            case Some(executed) if executed.parent == held => commitInPlace(executed, held, block, extra, finalized)
+            case Some(executed) =>
+              throw new StateUnavailable(
+                s"block ${block.show} was executed on the state of ${executed.parent.show}, " +
+                  s"and the disk holds ${held.show}"
+              )
+            case None =>
+              throw new StateUnavailable(
+                s"block ${block.show} was not executed for this commit and is not the block the disk holds, " +
+                  s"which is ${held.show}"
+              )
+    }
+    // Told once the lock is free. The block is committed whatever its observer makes of it.
+    outcome match
+      case CommitOutcome.Applied(commit) =>
+        told(s"the commit of block ${block.show}")(settings.observer.committed(commit))
+      case CommitOutcome.AlreadyApplied => ()
+    outcome
+
+  /** `tell`, whose failure is the observer's own: it is logged, and changes nothing of the commit it was told of. */
+  private def told(what: String)(tell: => Unit): Unit =
+    try tell
+    catch case NonFatal(e) => log.warn(s"The observer of the state's commits failed on $what: $e")
+
+  private def commitInPlace(
+      staged: PathStagedState,
+      parent: BlockRef,
+      block: BlockRef,
+      extra: Option[DataSourceBatchUpdate],
+      finalized: Option[BigInt]
+  )(using StateLockHeld): CommitOutcome =
+    require(block.number == parent.number + 1, s"block ${block.show} does not follow ${parent.show}")
+
+    // The rows of each storage trie the block replaced, as the disk holds them: the parent's (data-model 3.6). Scanned
+    // here, under the lock, so that they are the rows this batch is written over; and bounded in rows and in bytes,
+    // since they are held in memory and the lock is held meanwhile.
+    val maxRows = settings.maxEntriesPerOwnerDelete.min(Int.MaxValue.toLong).toInt
+    val finalised = staged.changes.finalise(owner => rows.storageRows(owner, maxRows, settings.maxOwnerScanBytes))
+
+    val diff = BlockDiff(block.hash, block.number, parent.hash, parent.stateRoot, block.stateRoot, finalised.changes)
+    // The account trie's root row is held to the two state roots: a layer that is not this block's final world, or not
+    // built on this parent, stops here, before a row is written.
+    val faults = diff.validate
+    if faults.nonEmpty then
+      throw new IllegalStateException(
+        s"The staged changes of block ${block.show} are not what a block does to the state of ${parent.show}: " +
+          faults.take(MaxFaultsShown).mkString("; ")
+      )
+
+    val tombstone: Option[TombstoneCause] =
+      if finalised.unlisted.nonEmpty then Some(TombstoneCause.OwnerDeleteBound)
+      else if BlockDiffCodec.encodedLength(diff) > settings.maxRecordBytes then Some(TombstoneCause.RecordSize)
+      else None
+    val record = if tombstone.isEmpty then diff else diff.copy(changes = Map.empty, incomplete = true)
+
+    // What the batch leaves at each position it writes, and what a reader of the parent's state must go on seeing
+    // there. For a trie whose old rows were not listed, the second is read: one point read for each row written.
+    //
+    // Elsewhere the second is the entry's prior, which is the row, with one exception that does no harm. Where an
+    // unlisted trie left a row behind, a later block's first write records no prior, and the row is there. No reader
+    // of the parent's state comes to that position: a read descends from a root through hashes, and no node of the
+    // parent's state names a child there.
+    val unrecorded = finalised.unrecorded
+    val written: Map[PositionKey, Option[ByteString]] =
+      diff.changes.view.mapValues(_.next).toMap ++ unrecorded.view.mapValues(Some(_))
+    val before: Map[PositionKey, Option[ByteString]] =
+      diff.changes.view.mapValues(_.prior).toMap ++
+        unrecorded.keysIterator.map(position => position -> rows.read(position).map(ByteString(_)))
+
+    val (changesetUpdates, prunedHeights, prunedTo) = changesetIndexed(block) {
+      val pruned = pruning(block, finalized)
+      // The deletes come before the record: a batch applies its updates in order, and no delete may follow the write
+      // of a key it names.
+      val moved = pruned.movedTo.toSeq.flatMap(appState.putChangesetPrunedTo(_).updates)
+      (pruned.deletes ++ changesets.recordUpdates(record) ++ moved, pruned.heights, pruned.reached)
+    }
+
+    val updates: Seq[DataUpdate] =
+      extra.toSeq.flatMap(_.updates) ++ rows.rowUpdates(written) ++ changesetUpdates ++
+        appState.putStateAnchor(block).updates
+
+    val started = System.nanoTime()
+    // Nothing but the one write happens between the move's announcement and its end: a view asked for in there would
+    // wait for this thread.
+    clock.inFlight(StateMove(block, before))(dataSource.update(updates))
+
+    CommitOutcome.Applied(
+      Commit(
+        block = block,
+        positions = written.size,
+        stateBytes =
+          written.iterator.map((position, node) => position.rowKey.length.toLong + node.fold(0)(_.length)).sum,
+        recordBytes = BlockDiffCodec.encodedLength(record),
+        tombstone = tombstone,
+        unlistedOwners = finalised.unlisted,
+        prunedHeights = prunedHeights,
+        prunedTo = prunedTo,
+        nanos = System.nanoTime() - started
+      )
+    )
+
+  /** What retention does in this block's batch. The first block committed on a datadir starts the count at itself: no
+    * height below it has a record.
+    */
+  private def pruning(block: BlockRef, finalized: Option[BigInt])(using StateLockHeld): Pruning =
+    appState.getChangesetPrunedTo() match
+      case None => Pruning(Nil, movedTo = Some(block.number), reached = block.number, heights = 0)
+      case Some(from) =>
+        settings.retention.floor(block.number, finalized) match
+          case Some(floor) if floor > from =>
+            val (deletes, next) = changesets.pruneUpdates(from, floor, settings.retention.heightsPerBatch(floor - from))
+            Pruning(deletes, Option.when(next > from)(next), reached = next, heights = (next - from).toInt)
+          case _ => Pruning(Nil, movedTo = None, reached = from, heights = 0)
+
+  /** `build`, which reads the index of changeset records. An index that cannot be read is this datadir's corruption,
+    * and is said as that, with the block that met it: it is no fault of the block.
+    */
+  private def changesetIndexed[A](block: BlockRef)(build: => A): A =
+    try build
+    catch
+      case e: ChangesetStorage.CorruptIndex =>
+        throw new IllegalStateException(
+          s"The index of changeset records is corrupt; block ${block.show} was not committed: ${e.getMessage}",
+          e
+        )
+
+object PathStateStorage:
+
+  private val MaxFaultsShown = 3
+
+  /** What retention does in one batch: the records it deletes, the height the count of pruned heights moves to when it
+    * moves, the height it has then reached, and how many heights that is.
+    */
+  final private case class Pruning(deletes: Seq[DataUpdate], movedTo: Option[BigInt], reached: BigInt, heights: Int)
+
+  /** What a commit is bounded by, keeps and reports (the `state` section of the configuration, data-model 10).
+    *
+    * @param maxEntriesPerOwnerDelete
+    *   a replaced storage trie with more rows than this keeps them (`state.changeset.max-entries-per-owner-delete`)
+    * @param maxRecordBytes
+    *   a changeset record above this is written as a tombstone (`state.changeset.max-record-bytes`)
+    * @param finalized
+    *   the number of the finalized block, where a consensus client names one. Asked once for each commit, before the
+    *   state lock is taken: it must answer from what it holds, and not wait
+    * @param maxOwnerScanBytes
+    *   a replaced storage trie whose rows hold more than this keeps them too: the rows are read into memory under the
+    *   state lock, and a count of rows alone does not bound that
+    */
+  final case class CommitSettings(
+      maxEntriesPerOwnerDelete: Long = 1000000L,
+      maxRecordBytes: Long = 256L * 1024 * 1024,
+      retention: RetentionPolicy = RetentionPolicy.KeepAll,
+      finalized: () => Option[BigInt] = () => None,
+      observer: CommitObserver = CommitObserver.Silent,
+      maxOwnerScanBytes: Long = 64L * 1024 * 1024
+  )
+
+  object CommitSettings:
+    def of(config: StateConfig, finalized: () => Option[BigInt], observer: CommitObserver): CommitSettings =
+      CommitSettings(
+        config.changeset.maxEntriesPerOwnerDelete,
+        config.changeset.maxRecordBytes,
+        RetentionPolicy(config),
+        finalized,
+        observer
+      )
+
+  /** Why a block's record is a tombstone: it has no entries, and no head move may cross it (data-model 3.6). */
+  enum TombstoneCause:
+    /** A storage trie it replaced has more rows, or more bytes of them, than may be listed; they were left in place. */
+    case OwnerDeleteBound
+
+    /** Its record would be larger than a record may be. Its rows were all written. */
+    case RecordSize
+
+  /** One canonical commit, as it was written.
+    *
+    * @param positions
+    *   rows written or deleted
+    * @param prunedHeights
+    *   heights whose records retention deleted in this batch
+    * @param prunedTo
+    *   the lowest height that may still hold a record
+    */
+  final case class Commit(
+      block: BlockRef,
+      positions: Int,
+      stateBytes: Long,
+      recordBytes: Long,
+      tombstone: Option[TombstoneCause],
+      unlistedOwners: Seq[ByteString],
+      prunedHeights: Int,
+      prunedTo: BigInt,
+      nanos: Long
+  )
+
+  enum CommitOutcome:
+    /** The block's state is on disk, and the block is the anchor. */
+    case Applied(commit: Commit)
+
+    /** The block was the anchor already: the caller's own updates were written and nothing else. */
+    case AlreadyApplied
+
+  /** What is told of the commits: for metrics, which this package does not know. What an observer throws is logged and
+    * goes no further.
+    */
+  trait CommitObserver:
+    /** A writer waited `nanos` for the state lock. */
+    def lockWaited(nanos: Long): Unit = ()
+    def committed(commit: Commit): Unit = ()
+
+  object CommitObserver:
+    val Silent: CommitObserver = new CommitObserver {}

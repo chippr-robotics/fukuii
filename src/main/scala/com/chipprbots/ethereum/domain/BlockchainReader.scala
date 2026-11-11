@@ -157,6 +157,13 @@ class BlockchainReader(
   def getMptNodeByHash(hash: ByteString): Option[MptNode] =
     stateStorage.getNode(hash)
 
+  /** Whether the state of `header`'s block can be built on: its root node is in the hash store or, on the unified
+    * layout, the block is the one whose state the disk holds. There a root is not found by its hash in the hash store,
+    * which holds nothing of the chain's state.
+    */
+  def holdsStateOf(header: BlockHeader): Boolean =
+    pathState.fold(getMptNodeByHash(header.stateRoot.value).isDefined)(_.isApplied(header.hash.value))
+
   /** Returns the receipts based on a block hash
     * @param blockhash
     * @return

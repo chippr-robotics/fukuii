@@ -5,6 +5,8 @@ import com.chipprbots.ethereum.db.cache.LruCache
 import com.chipprbots.ethereum.db.storage.*
 import com.chipprbots.ethereum.db.storage.NodeStorage.NodeHash
 import com.chipprbots.ethereum.db.storage.pathstate.PathStateStorage
+import com.chipprbots.ethereum.db.storage.pathstate.StateConfig
+import com.chipprbots.ethereum.db.storage.pathstate.StateMetrics
 import com.chipprbots.ethereum.db.storage.pruning.PruningMode
 import com.chipprbots.ethereum.utils.Config
 import com.chipprbots.ethereum.utils.StateLayoutConfig
@@ -22,6 +24,11 @@ object Storages:
       * `storages` is being built.
       */
     protected def statePathLive: Boolean = StateLayoutConfig.pathLive
+
+    /** The `state` section the unified layout runs on. Read only when the guard is on: reading it refuses `pruning.mode
+      * \= "inmemory"`, which has no place on that layout.
+      */
+    protected def stateConfig: StateConfig = StateConfig(Config.config)
 
     override val storages: Storages = new DefaultStorages(pruningMode)
 
@@ -75,4 +82,14 @@ object Storages:
       // After `appStateStorage`, which it reads the state anchor from. Built only with the guard on: with it off this
       // object graph is what it was before the track.
       override val pathStateStorage: Option[PathStateStorage] =
-        Option.when(statePathLive)(new PathStateStorage(new PathNodeStorage(dataSource), appStateStorage))
+        Option.when(statePathLive) {
+          val config = stateConfig
+          new PathStateStorage(
+            new PathNodeStorage(dataSource),
+            appStateStorage,
+            config.overlay.maxViewAgeMoves,
+            // No finalized block is named yet: nothing follows a consensus client on this layout before the overlay
+            // (C4d), and without one the floor is the larger, `state.retention.without-finality`.
+            PathStateStorage.CommitSettings.of(config, finalized = () => None, observer = StateMetrics)
+          )
+        }

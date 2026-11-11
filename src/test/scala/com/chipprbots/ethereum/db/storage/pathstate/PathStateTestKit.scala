@@ -38,24 +38,42 @@ object PathStateTestKit:
     "RocksDB" -> ((test: DataSource => Unit) => onRocksDb(test))
   )
 
+  private def rocksDbAt(directory: File): RocksDbDataSource =
+    val config = new RocksDbConfig:
+      override val createIfMissing: Boolean = true
+      override val paranoidChecks: Boolean = true
+      override val path: String = directory.getAbsolutePath
+      override val maxThreads: Int = 1
+      override val maxOpenFiles: Int = 32
+      override val verifyChecksums: Boolean = true
+      override val levelCompaction: Boolean = true
+      override val blockSize: Long = 16384
+      override val blockCacheSize: Long = 33554432
+    RocksDbDataSource(config, Namespaces.nsSeq)
+
   private def onRocksDb(test: DataSource => Unit): Unit =
     val directory = Files.createTempDirectory("pathstate-rocksdb").toFile
     // The directory goes whatever happens to the database: an open that throws, a test that fails, a destroy that
     // throws.
     try
-      val config = new RocksDbConfig:
-        override val createIfMissing: Boolean = true
-        override val paranoidChecks: Boolean = true
-        override val path: String = directory.getAbsolutePath
-        override val maxThreads: Int = 1
-        override val maxOpenFiles: Int = 32
-        override val verifyChecksums: Boolean = true
-        override val levelCompaction: Boolean = true
-        override val blockSize: Long = 16384
-        override val blockCacheSize: Long = 33554432
-      val dataSource = RocksDbDataSource(config, Namespaces.nsSeq)
+      val dataSource = rocksDbAt(directory)
       try test(dataSource)
       finally dataSource.destroy()
+    finally deleteRecursively(directory)
+
+  /** One RocksDB datadir, opened, closed and opened again: what a node's restart is to its storage. `first` runs on the
+    * first opening and what it returns is handed to `second`, which runs on the second.
+    */
+  def onRocksDbReopened[A](first: DataSource => A)(second: (DataSource, A) => Unit): Unit =
+    val directory = Files.createTempDirectory("pathstate-rocksdb-reopened").toFile
+    try
+      val opened = rocksDbAt(directory)
+      val carried =
+        try first(opened)
+        finally opened.close()
+      val reopened = rocksDbAt(directory)
+      try second(reopened, carried)
+      finally reopened.destroy()
     finally deleteRecursively(directory)
 
   private def deleteRecursively(f: File): Unit =
@@ -299,6 +317,77 @@ object PathStateTestKit:
       val kept = positions.map((trie, rows) => trie -> rows.filterNot((row, _) => holes.contains(trie -> row)))
       seedPositions(source, kept, anchor)
       new PathStateStorage(new PathNodeStorage(source), new AppStateStorage(source)).readOnly(anchor)
+
+  /** `under`, watched: every call is noted in order, each batch is kept, and a write can be made to fail or to wait. It
+    * is not the in-memory data source to anything that asks, so rows are dumped ([[allRows]]) through `under`.
+    */
+  final class Watched(val under: DataSource) extends DataSource:
+    import cats.effect.IO
+    import fs2.Stream
+    import com.chipprbots.ethereum.db.dataSource.DataSource.*
+    import com.chipprbots.ethereum.db.dataSource.DataUpdate
+    import com.chipprbots.ethereum.db.dataSource.RocksDbDataSource.IterationError
+
+    val calls = new java.util.concurrent.ConcurrentLinkedQueue[String]()
+    val batches = new java.util.concurrent.ConcurrentLinkedQueue[Seq[DataUpdate]]()
+
+    /** Runs on the writer's thread before each batch reaches `under`; what it throws, the write throws. */
+    @volatile var beforeUpdate: Seq[DataUpdate] => Unit = _ => ()
+
+    def callsMade: Seq[String] = calls.toArray(Array.empty[String]).toSeq
+    def batchesWritten: Seq[Seq[DataUpdate]] = batches.toArray(Array.empty[Seq[DataUpdate]]).toSeq
+
+    override def get(namespace: Namespace, key: Key): Option[Value] =
+      calls.add("read")
+      under.get(namespace, key)
+    override def getOptimized(namespace: Namespace, key: Array[Byte]): Option[Array[Byte]] =
+      calls.add("read")
+      under.getOptimized(namespace, key)
+    override def scanRange(
+        namespace: Namespace,
+        fromKey: Array[Byte],
+        toKeyExclusive: Array[Byte]
+    ): Iterator[(Array[Byte], Array[Byte])] =
+      calls.add("scan")
+      under.scanRange(namespace, fromKey, toKeyExclusive)
+    override def scanRangeLimit(
+        namespace: Namespace,
+        fromKey: Array[Byte],
+        toKeyExclusive: Array[Byte],
+        limit: Int
+    ): Iterator[(Array[Byte], Array[Byte])] =
+      calls.add("scan")
+      under.scanRangeLimit(namespace, fromKey, toKeyExclusive, limit)
+    override def deleteRange(namespace: Namespace, fromKey: Array[Byte], toKeyExclusive: Array[Byte]): Unit =
+      calls.add("deleteRange")
+      under.deleteRange(namespace, fromKey, toKeyExclusive)
+    override def update(dataSourceUpdates: Seq[DataUpdate]): Unit =
+      calls.add("update")
+      beforeUpdate(dataSourceUpdates)
+      batches.add(dataSourceUpdates)
+      under.update(dataSourceUpdates)
+    override def clear(): Unit = under.clear()
+    override def close(): Unit = under.close()
+    override def destroy(): Unit = under.destroy()
+    override def iterate(): Stream[IO, Either[IterationError, (Array[Byte], Array[Byte])]] = under.iterate()
+    override def iterate(namespace: Namespace): Stream[IO, Either[IterationError, (Array[Byte], Array[Byte])]] =
+      under.iterate(namespace)
+
+  /** Every row of the hash store's column family (`n`): what the unified layout must leave as it finds it, since a
+    * path-live store has one writer and it is not that one (data-model 7.6).
+    */
+  def hashStoreRows(dataSource: DataSource): Map[ByteString, ByteString] =
+    import cats.effect.unsafe.implicits.global
+    dataSource
+      .iterate(Namespaces.NodeNamespace)
+      .compile
+      .toList
+      .unsafeRunSync()
+      .map {
+        case Right((key, value)) => ByteString(key) -> ByteString(value)
+        case Left(error)         => throw new IllegalStateException("the hash store could not be read", error.ex)
+      }
+      .toMap
 
   /** Every row of CF `t` and CF `u`, by its key in its column family. */
   def allRows(rows: PathNodeStorage): (Map[ByteString, ByteString], Map[ByteString, ByteString]) =
