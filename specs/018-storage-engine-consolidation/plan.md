@@ -630,6 +630,52 @@ prefetch (import and `newPayload`), and noted that a caller must ask `stateAvail
 its batch inside `inFlight`, under the state lock. T093 switches the prefetch's call site. T130 puts the forward chain and the
 reverse index behind the same `StateView.read`. T131's in-place commit evicts after it writes.
 
+### C3a record (2026-11-11)
+
+C3a is the changeset record (data-model 4), its storage in CF `v`, and the `fukuii.state` keys. Nothing reads or writes
+any of it until C3b. **The record's bytes are a one-way door**, so `forge` and `beacon` each re-derived the CRC32C of the three
+frozen vectors with an implementation of their own, and **both sign the vectors and the format**.
+
+What the frozen text left open, and how it was decided:
+
+| Decision | Signed by |
+| --- | --- |
+| The reader refuses four things more than data-model 4.2 lists (a length in more bytes than it needs, a presence byte other than 0 or 1, a tag other than 1 or 2, a key that is no row key), so that a record it accepts encodes back to its own bytes. No future writer needs any of them: new data is a new kind, and a new layout is a new version and a re-sync (4.4) | forge, beacon |
+| The version is checked first and alone, then the kind and flags, then the CRC, then the fields | forge, beacon |
+| `BlockDiff.byHash` is derived from the `next` nodes. The every-version map of an execution (`PathMptStorage.Layer`) is another structure and stays one | beacon |
+| The retention arithmetic: 64 with no finalized block, 106 at a 90-block finality lag, 512 when finality has stopped, 64 while the anchor is behind the finalized block | beacon |
+| No range scan in `ChangesetStorage`. An ETC mainnet block hash begins with about six zero bytes, so its record key sorts before every height key from 2^24 up; on Mordor, about four, they interleave. Pruning reads heights by their own keys | forge |
+| CF `v` joins `nsSeq`: a datadir this build has started cannot be opened by an older one | forge, with a release note |
+
+Changes asked for, and applied:
+
+| Finding | By | Change |
+| --- | --- | --- |
+| The index of a height is read, extended and written back. Outside the state lock two sibling commits lose one hash, and that record is never pruned | beacon | `recordUpdates` and `pruneUpdates` ask for a `StateLockHeld`, which only the lock of C3b can make; `put` and `prune` are private to the package |
+| `validate` can catch a diff built from the wrong world of a block (a persist inside a pre-Byzantium block, a world the miner threw away) | forge | the root rule: the account trie's root entry has a prior hashing to the pre-state root and a next hashing to the post-state root, and is there exactly when the two differ |
+| `retention.max-blocks` below `pruning.history` should not load | forge | refused when the configuration is read |
+| `recovery.escalation-refusals` is written in forkchoiceUpdated terms | forge | the conf says it does nothing on a proof-of-work node |
+
+Five rules were broken on purpose after the specs first passed (the writer sorts keys as signed bytes; no CRC check; a
+non-minimal length accepted; pruning takes the floor's height too; a second block at a height overwrites the index). Each
+was caught.
+
+**Carried to C3b, in its tasks:** a **persisted** prune cursor (T095: without one a restart or a switch from archive to
+basic would point-read every height from 0, about 22 million on ETC mainnet); a malformed height index fails the commit as
+storage corruption, never as a fault of the block (T091); `pruning.mode = "inmemory"` starts failing at start when C3b
+builds `StateConfig`, which the release notes must say (T093).
+
+**Two decisions for the user before C3b** (neither changes this slice):
+
+1. **ETC keeps 64 blocks of changesets** by this design, because a proof-of-work chain has no finalized block and the floor
+   is then `pruning.history`. A reorganisation deeper than that is refused and the node re-syncs its state. ETC was
+   reorganised 3,000 to 7,000 blocks deep in 2020, and MESS returns only with Olympia; Besu keeps 512 trie logs by default.
+   forge asks for a proof-of-work default of at least 512 (`retention.max-blocks`). The cost is disk: one record per block
+   kept.
+2. **The downgrade barrier.** After this slice a build older than it cannot open a datadir (RocksDB must open every column
+   family a database has). forge asks that every column family C3b needs land in the same release, so operators meet one
+   barrier and not two, and that the release note say a rollback means a re-sync.
+
 ### Destructive change (C8a and C8b): the vault protocol blocks
 
 ```
