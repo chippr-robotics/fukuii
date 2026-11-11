@@ -1,5 +1,7 @@
 package com.chipprbots.ethereum.jsonrpc
 
+import cats.effect.IO
+
 import scala.annotation.tailrec
 
 import com.chipprbots.ethereum.db.storage.MptStorage
@@ -45,6 +47,20 @@ object StateRead:
       outcome match
         case Some(answer) => answer
         case None         => attempt(left - 1)
+    attempt(Attempts)
+
+  /** A whole request that executes on a block's state and changes nothing but its answer (`eth_call`, a simulation, a
+    * trace). It builds a world and holds it across many reads, so no single read can be run again on its own: when the
+    * state moves under it the request runs again from the start, and takes a fresh state when it does.
+    *
+    * Not for a request with an effect: it would have the effect once for each run.
+    */
+  def request[A](run: IO[Either[JsonRpcError, A]]): IO[Either[JsonRpcError, A]] =
+    def attempt(left: Int): IO[Either[JsonRpcError, A]] =
+      run.recoverWith {
+        case _: StaleStateViewException if left > 1 => attempt(left - 1)
+        case fault: StateFault                      => IO.pure(Left(unavailable(fault)))
+      }
     attempt(Attempts)
 
   /** What a client is told when the state it asked about cannot be read: the error it already gets for a state node

@@ -112,7 +112,6 @@ class TypedCallPathSpec
 
     lazy val ledger: StxLedger =
       new StxLedger(
-        blockchain,
         blockchainReader,
         storagesInstance.storages.evmCodeStorage,
         mining.blockPreparator,

@@ -375,7 +375,6 @@ trait ScenarioSetup extends EphemBlockchainTestSetup:
 
   override lazy val stxLedger =
     new StxLedger(
-      blockchain,
       blockchainReader,
       storagesInstance.storages.evmCodeStorage,
       mining.blockPreparator,

@@ -90,6 +90,16 @@ trait JsonRpcBaseController:
         } *> IO.raiseError(t)
       }
 
+  /** [[handle]] for a method that executes on a block's state and changes nothing but its answer (`eth_call`, a
+    * simulation, a trace): when the state moves under it the whole request runs again, on a fresh state
+    * ([[StateRead.request]], spec 018 Track C). Never for a method with an effect, which would have it twice.
+    */
+  def handleRead[Req, Res](
+      fn: Req => IO[Either[JsonRpcError, Res]],
+      rpcReq: JsonRpcRequest
+  )(implicit dec: JsonMethodDecoder[Req], enc: JsonEncoder[Res]): IO[JsonRpcResponse] =
+    handle[Req, Res](req => StateRead.request(fn(req)), rpcReq)
+
   def handle[Req, Res](
       fn: Req => IO[Either[JsonRpcError, Res]],
       rpcReq: JsonRpcRequest

@@ -156,7 +156,7 @@ class DebugTracingService(
           JsonRpcError.InvalidParams(s"Transaction index $txIndex out of range")
         )
         targetStx = stxs(txIndex)
-        world = stxLedger.advanceWorldToTx(block.header, stxs, txIndex, parentHeader.stateRoot.value)
+        world = stxLedger.advanceWorldToTx(block.header, stxs, txIndex, parentHeader)
         tracer = selectTracer(req.config, Some(world))
         _ = stxLedger.replayTransaction(targetStx, block.header, world, Some(tracer))
       yield TraceTransactionResponse(tracer.getResult)
@@ -260,7 +260,7 @@ class DebugTracingService(
         val stxs = SignedTransactionWithSender.getSignedTransactionsOfBlock(block.header, block.body.transactionList)
         if stxs.isEmpty then Seq.empty
         else
-          var currentWorld = stxLedger.advanceWorldToTx(block.header, stxs, 0, parentHeader.stateRoot.value)
+          var currentWorld = stxLedger.advanceWorldToTx(block.header, stxs, 0, parentHeader)
           val resultsBuf = scala.collection.mutable.ArrayBuffer[TxTraceResult]()
           stxs.foreach { stx =>
             val tracer = selectTracer(config, Some(currentWorld))
@@ -351,7 +351,7 @@ class DebugTracingService(
           else
             // Chain world states tx-by-tx and capture state root after each finalization.
             // On tx error: return partial result (same as core-geth — errors on canon blocks are rare).
-            var currentWorld = stxLedger.advanceWorldToTx(block.header, stxs, 0, parentHeader.stateRoot.value)
+            var currentWorld = stxLedger.advanceWorldToTx(block.header, stxs, 0, parentHeader)
             val rootBuf = scala.collection.mutable.ArrayBuffer[ByteString]()
             stxs.foreach { stx =>
               val txResult = stxLedger.replayTransaction(stx, block.header, currentWorld, tracer = None)
@@ -390,7 +390,7 @@ class DebugTracingService(
               val stxs =
                 SignedTransactionWithSender.getSignedTransactionsOfBlock(block.header, block.body.transactionList)
               val traces = stxs.zipWithIndex.map { case (stx, txIndex) =>
-                val world = stxLedger.advanceWorldToTx(block.header, stxs, txIndex, parentHeader.stateRoot.value)
+                val world = stxLedger.advanceWorldToTx(block.header, stxs, txIndex, parentHeader)
                 val tracer = selectTracer(config, Some(world))
                 stxLedger.replayTransaction(stx, block.header, world, Some(tracer))
                 tracer.getResult

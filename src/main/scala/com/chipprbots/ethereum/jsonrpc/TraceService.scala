@@ -15,6 +15,7 @@ import com.chipprbots.ethereum.db.storage.TransactionMappingStorage.TransactionL
 import com.chipprbots.ethereum.domain.Address
 import com.chipprbots.ethereum.domain.Block
 import com.chipprbots.ethereum.domain.BlockHash
+import com.chipprbots.ethereum.domain.BlockHeader
 import com.chipprbots.ethereum.domain.Blockchain
 import com.chipprbots.ethereum.domain.BlockchainReader
 import com.chipprbots.ethereum.domain.SignedTransactionWithSender
@@ -142,7 +143,7 @@ class TraceService(
           JsonRpcError.InvalidParams(s"Transaction index $txIndex out of range")
         )
         targetStx = stxs(txIndex)
-        world = stxLedger.advanceWorldToTx(block.header, stxs, txIndex, parentHeader.stateRoot.value)
+        world = stxLedger.advanceWorldToTx(block.header, stxs, txIndex, parentHeader)
         tracer = new CallTracer(onlyTopCall = false)
         _ = stxLedger.replayTransaction(targetStx, block.header, world, Some(tracer))
         flat = flattenCallTree(
@@ -171,7 +172,7 @@ class TraceService(
         parentHeader <- blockchainReader
           .getBlockHeaderByHash(block.header.parentHash)
           .toRight(JsonRpcError.InvalidParams("Parent block not found"))
-        traces = traceAllTxsFlat(block, parentHeader.stateRoot.value)
+        traces = traceAllTxsFlat(block, parentHeader)
       yield TraceBlockResponse(traces)
     }.recover { case _: MissingNodeException =>
       Left(JsonRpcError.NodeNotFound)
@@ -205,7 +206,7 @@ class TraceService(
           JsonRpcError.InvalidParams(s"Transaction index $txIndex out of range")
         )
         targetStx = stxs(txIndex)
-        world = stxLedger.advanceWorldToTx(block.header, stxs, txIndex, parentHeader.stateRoot.value)
+        world = stxLedger.advanceWorldToTx(block.header, stxs, txIndex, parentHeader)
         result = buildReplayResult(block, req.txHash, txIndex, req.options)(tracer =>
           stxLedger.replayTransaction(targetStx, block.header, world, Some(tracer))
         )
@@ -232,7 +233,7 @@ class TraceService(
           .toRight(JsonRpcError.InvalidParams("Parent block not found"))
         stxs = SignedTransactionWithSender.getSignedTransactionsOfBlock(block.header, block.body.transactionList)
         results = stxs.zipWithIndex.map { case (stx, txIndex) =>
-          val world = stxLedger.advanceWorldToTx(block.header, stxs, txIndex, parentHeader.stateRoot.value)
+          val world = stxLedger.advanceWorldToTx(block.header, stxs, txIndex, parentHeader)
           buildReplayResult(block, stx.tx.hash.value, txIndex, req.options)(tracer =>
             stxLedger.replayTransaction(stx, block.header, world, Some(tracer))
           )
@@ -281,10 +282,10 @@ class TraceService(
   // ─── Helpers ──────────────────────────────────────────────────────────────────
 
   /** Traces all txs in a block and returns flat trace objects for all of them concatenated. */
-  private def traceAllTxsFlat(block: Block, parentStateRoot: ByteString): Seq[JValue] =
+  private def traceAllTxsFlat(block: Block, parentHeader: BlockHeader): Seq[JValue] =
     val stxs = SignedTransactionWithSender.getSignedTransactionsOfBlock(block.header, block.body.transactionList)
     stxs.zipWithIndex.flatMap { case (stx, txIndex) =>
-      val world = stxLedger.advanceWorldToTx(block.header, stxs, txIndex, parentStateRoot)
+      val world = stxLedger.advanceWorldToTx(block.header, stxs, txIndex, parentHeader)
       val tracer = new CallTracer(onlyTopCall = false)
       stxLedger.replayTransaction(stx, block.header, world, Some(tracer))
       flattenCallTree(tracer.getResult, stx.tx.hash.value, txIndex, block.header.hash.value, block.header.number.value)
@@ -442,7 +443,7 @@ class TraceService(
               .getBlockByNumber(branch, blockNum)
               .flatMap { block =>
                 blockchainReader.getBlockHeaderByHash(block.header.parentHash).map { parentHeader =>
-                  val flat = traceAllTxsFlat(block, parentHeader.stateRoot.value)
+                  val flat = traceAllTxsFlat(block, parentHeader)
                   applyAddressFilter(flat, req.fromAddress, req.toAddress)
                 }
               }

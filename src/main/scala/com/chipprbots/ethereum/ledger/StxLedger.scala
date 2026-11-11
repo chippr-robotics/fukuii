@@ -13,7 +13,6 @@ import com.chipprbots.ethereum.domain.Account
 import com.chipprbots.ethereum.domain.Address
 import com.chipprbots.ethereum.domain.BlobTransaction
 import com.chipprbots.ethereum.domain.BlockHeader
-import com.chipprbots.ethereum.domain.BlockchainImpl
 import com.chipprbots.ethereum.domain.BlockchainReader
 import com.chipprbots.ethereum.domain.GasAmount
 import com.chipprbots.ethereum.domain.SetCodeAuthorization
@@ -32,7 +31,6 @@ import com.chipprbots.ethereum.vm.ProgramError
 import com.chipprbots.ethereum.vm.RevertOccurs
 
 class StxLedger(
-    blockchain: BlockchainImpl,
     blockchainReader: BlockchainReader,
     evmCodeStorage: EvmCodeStorage,
     blockPreparator: BlockPreparator,
@@ -135,7 +133,7 @@ class StxLedger(
     val world1 = world.getOrElse(
       InMemoryWorldStateProxy(
         evmCodeStorage = evmCodeStorage,
-        mptStorage = blockchain.getReadOnlyMptStorage(),
+        mptStorage = blockchainReader.scratchStateAt(blockHeader),
         getBlockHashByNumber = (number: BigInt) => blockchainReader.getBlockHeaderByNumber(number).map(_.hash.value),
         accountStartNonce = blockchainConfig.accountStartNonce,
         stateRootHash = blockHeader.stateRoot.value,
@@ -171,7 +169,7 @@ class StxLedger(
     val world1 = world.getOrElse(
       InMemoryWorldStateProxy(
         evmCodeStorage = evmCodeStorage,
-        mptStorage = blockchain.getReadOnlyMptStorage(),
+        mptStorage = blockchainReader.scratchStateAt(blockHeader),
         getBlockHashByNumber = (number: BigInt) => blockchainReader.getBlockHeaderByNumber(number).map(_.hash.value),
         accountStartNonce = blockchainConfig.accountStartNonce,
         stateRootHash = blockHeader.stateRoot.value,
@@ -207,8 +205,9 @@ class StxLedger(
     *   all transactions in the block with recovered sender addresses
     * @param txIndex
     *   index of the target transaction (0-based); returns parent state if 0
-    * @param parentStateRoot
-    *   state root of the parent block (baseline)
+    * @param parentHeader
+    *   the parent block: the replay starts from its state, taken as a scratch state of that block (not of
+    *   `blockHeader`, whose state is the one the replay arrives at)
     * @return
     *   world state at the point just before txs(txIndex) executes
     */
@@ -216,15 +215,15 @@ class StxLedger(
       blockHeader: BlockHeader,
       txs: Seq[SignedTransactionWithSender],
       txIndex: Int,
-      parentStateRoot: org.apache.pekko.util.ByteString
+      parentHeader: BlockHeader
   ): InMemoryWorldStateProxy =
     if !blockchainConfig.isAmsterdamTimestamp(blockHeader.unixTimestamp) then
       val world0 = InMemoryWorldStateProxy(
         evmCodeStorage = evmCodeStorage,
-        mptStorage = blockchain.getReadOnlyMptStorage(),
+        mptStorage = blockchainReader.scratchStateAt(parentHeader),
         getBlockHashByNumber = (number: BigInt) => blockchainReader.getBlockHeaderByNumber(number).map(_.hash.value),
         accountStartNonce = blockchainConfig.accountStartNonce,
-        stateRootHash = parentStateRoot,
+        stateRootHash = parentHeader.stateRoot.value,
         noEmptyAccounts = EvmConfig.forBlock(blockHeader.number.value, blockchainConfig).noEmptyAccounts,
         ethCompatibleStorage = blockchainConfig.ethCompatibleStorage
       )
@@ -238,10 +237,10 @@ class StxLedger(
       // (BlockExecution.buildInitialWorld), which matters when the block being traced is not canonical.
       val world0 = InMemoryWorldStateProxy(
         evmCodeStorage = evmCodeStorage,
-        mptStorage = new StxLedger.ReplayMptStorage(blockchain.getReadOnlyMptStorage()),
+        mptStorage = new StxLedger.ReplayMptStorage(blockchainReader.scratchStateAt(parentHeader)),
         getBlockHashByNumber = AncestorBlockHashes.forBlock(blockHeader, blockchainReader),
         accountStartNonce = blockchainConfig.accountStartNonce,
-        stateRootHash = parentStateRoot,
+        stateRootHash = parentHeader.stateRoot.value,
         noEmptyAccounts = EvmConfig.forBlock(blockHeader.number.value, blockchainConfig).noEmptyAccounts,
         ethCompatibleStorage = blockchainConfig.ethCompatibleStorage
       )
@@ -258,7 +257,7 @@ class StxLedger(
   def worldAt(blockHeader: BlockHeader): InMemoryWorldStateProxy =
     InMemoryWorldStateProxy(
       evmCodeStorage = evmCodeStorage,
-      mptStorage = blockchain.getReadOnlyMptStorage(),
+      mptStorage = blockchainReader.scratchStateAt(blockHeader),
       getBlockHashByNumber = (number: BigInt) => blockchainReader.getBlockHeaderByNumber(number).map(_.hash.value),
       accountStartNonce = blockchainConfig.accountStartNonce,
       stateRootHash = blockHeader.stateRoot.value,

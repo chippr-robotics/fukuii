@@ -2,6 +2,8 @@ package com.chipprbots.ethereum.jsonrpc
 
 import org.apache.pekko.util.ByteString
 
+import cats.effect.IO
+
 import org.scalatest.flatspec.AnyFlatSpec
 import org.scalatest.matchers.should.Matchers
 
@@ -19,7 +21,7 @@ import com.chipprbots.ethereum.testing.Tags.*
   * A stale view is not an answer and not an error: the whole read runs again on a fresh view of the same block. A state
   * that is not held, and a read that stays stale, are the error a client already gets for a missing state node.
   */
-class StateReadSpec extends AnyFlatSpec with Matchers:
+class StateReadRetrySpec extends AnyFlatSpec with Matchers:
 
   private val block = BlockRef(ByteString(Array.fill[Byte](32)(7)), 9, ByteString(Array.fill[Byte](32)(1)))
   private def stale = new StaleStateViewException(block, createdAtEpoch = 2, epochNow = 6, "the disk moved on")
@@ -91,3 +93,52 @@ class StateReadSpec extends AnyFlatSpec with Matchers:
     }
     states.taken should have size 2
   }
+
+  // eth_call, a simulation, a trace: a world is held across the whole execution, so the request is what runs again.
+  "A request that executes on a block's state" should "run again from the start when the state moved under it" taggedAs
+    UnitTest in {
+      import cats.effect.unsafe.implicits.global
+      var runs = 0
+      val request = IO {
+        runs += 1
+        if runs < 3 then throw stale
+        Right(s"answered on run $runs"): Either[JsonRpcError, String]
+      }
+      StateRead.request(request).unsafeRunSync() shouldBe Right("answered on run 3")
+      runs shouldBe 3
+    }
+
+  it should "give up after the runs it is allowed, and answer a state that is not held at once" taggedAs UnitTest in {
+    import cats.effect.unsafe.implicits.global
+    var runs = 0
+    val alwaysStale = IO[Either[JsonRpcError, String]] {
+      runs += 1
+      throw stale
+    }
+    StateRead.request(alwaysStale).unsafeRunSync() shouldBe Left(JsonRpcError.NodeNotFound)
+    runs shouldBe StateRead.Attempts
+
+    runs = 0
+    val notHeld = IO[Either[JsonRpcError, String]] {
+      runs += 1
+      throw new StateUnavailable("block 9 is not the anchor")
+    }
+    StateRead.request(notHeld).unsafeRunSync() shouldBe Left(JsonRpcError.NodeNotFound)
+    runs shouldBe 1
+  }
+
+  it should "pass on its answer, an error it answers with, and any other failure, untouched and after one run" taggedAs
+    UnitTest in {
+      import cats.effect.unsafe.implicits.global
+      var runs = 0
+      def counted[A](answer: => Either[JsonRpcError, A]): IO[Either[JsonRpcError, A]] = IO { runs += 1; answer }
+
+      StateRead.request(counted(Right(7))).unsafeRunSync() shouldBe Right(7)
+      StateRead
+        .request(counted(Left(JsonRpcError.InvalidParams("no"))))
+        .unsafeRunSync() shouldBe Left(JsonRpcError.InvalidParams("no"))
+      a[MissingNodeException] should be thrownBy StateRead
+        .request(counted[Int](throw new MissingNodeException(ByteString(1, 2, 3))))
+        .unsafeRunSync()
+      runs shouldBe 3
+    }

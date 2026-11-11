@@ -83,16 +83,13 @@ readonly 2 src/main/scala/com/chipprbots/ethereum/jsonrpc/EthSimulateService.sca
 trie-of 2 src/main/scala/com/chipprbots/ethereum/jsonrpc/EthSimulateService.scala not the state: a list trie (a transactions, receipts or withdrawals root) over an ephemeral source (kept)
 
 # Readers behind RPC, and the pool: C2b, the second pull request. They move to stateAt(header) and scratchStateAt(header).
-readonly-mpt 5 src/main/scala/com/chipprbots/ethereum/ledger/StxLedger.scala eth_call, estimateGas, the access list and the two trace replays execute over a buffer; scratchStateAt(header) in C2b (T057)
-readonly-mpt 1 src/main/scala/com/chipprbots/ethereum/jsonrpc/EthSimulateService.scala eth_simulateV1's one state for all of its blocks; scratchStateAt(base header), once, in C2b (T057)
 backing 1 src/main/scala/com/chipprbots/ethereum/domain/Blockchain.scala getBackingMptStorage's body; deleted with the Hash scheme (C8b)
 storage-mpt 2 src/main/scala/com/chipprbots/ethereum/domain/Blockchain.scala the storage trie of eth_getStorageAt and eth_getProof, over the view of the state that is under the account, for each key encoding (C2b, kept)
 backing 1 src/main/scala/com/chipprbots/ethereum/domain/BlockchainReader.scala getAccountMpt, the account trie of a block NUMBER, left for the importer's read of a parent's account; it moves with the importer (C5b)
 readonly 3 src/main/scala/com/chipprbots/ethereum/domain/BlockchainReader.scala two are the seam: with the guard off stateAt and scratchStateAt hand out the read-only store, an arm that goes with the Hash scheme (C8b); the third is getAccountAtStateRoot, an account from a root alone, left for the proposer's nonce read (C3c, T111) and the importer's fetch (C5b)
 trie-of 3 src/main/scala/com/chipprbots/ethereum/domain/BlockchainReader.scala accountsIn, the account trie of a block over forOwner(None) (C2b, kept); and the tries of getAccountMpt and getAccountAtStateRoot, which go with them (C3c, C5b)
 store-handed 2 src/main/scala/com/chipprbots/ethereum/domain/BlockchainReader.scala the seam (C2b): stateAt and scratchStateAt hand a reader the state of a block, by its header (kept)
-readonly 1 src/main/scala/com/chipprbots/ethereum/transactions/PendingTransactionsManager.scala the pool reads senders' accounts at the best block from its root alone; stateAt(header) in C2b, with the readers behind RPC
-trie-of 1 src/main/scala/com/chipprbots/ethereum/transactions/PendingTransactionsManager.scala the account trie of that read; C2b, with the readers behind RPC
+trie-of 1 src/main/scala/com/chipprbots/ethereum/transactions/PendingTransactionsManager.scala the pool's account trie of the best block, over stateAt(header).forOwner(None) (C2b, kept)
 
 # Serving and walking: C2b, the third pull request. SNAP serving, checkpoint export, the recovery scans, the walkers.
 readonly 1 src/main/scala/com/chipprbots/ethereum/nodebuilder/NodeBuilder.scala the one store SNAP serving answers from (account ranges, storage ranges, trie nodes); stateForRoot(root) in C2b (T058)
