@@ -1,0 +1,307 @@
+package com.chipprbots.ethereum.console
+
+import org.scalatest.BeforeAndAfterAll
+import org.scalatest.flatspec.AnyFlatSpec
+import org.scalatest.matchers.should.Matchers
+
+import com.chipprbots.ethereum.testing.Tags.*
+
+/** The consensus-layer panel and its two alerts (spec 027 FR-022, FR-016, T110, research §3.3, §3.9): what the Engine
+  * API last heard, and what the node did with it, on an ETH node; nothing on an ETC node.
+  *
+  * The alerts are each tested at the boundary. The text comes from the node's own metrics, never from outside it.
+  */
+class ClPanelSpec extends AnyFlatSpec with Matchers with BeforeAndAfterAll with TuiGoldenFiles:
+
+  protected val goldenTerminal = new TuiTestTerminal()
+  override def afterAll(): Unit = goldenTerminal.close()
+
+  private val renderer = TuiRenderer(TuiConfig.default)
+  private val sizes: Seq[(Int, Int)] = Seq((80, 24), (120, 40), (160, 48))
+  private val t0 = TuiFixtures.Now
+
+  private def still(s: TuiState): TuiState = s.copy(motion = Motion.Reduced)
+
+  private def rows(s: TuiState, w: Int, h: Int): Seq[String] = renderer.render(still(s), w, h).map(_.toString)
+
+  /** The panel's rows: from its title row down to the separator before the next panel. */
+  private def clRows(s: TuiState, w: Int, h: Int): Seq[String] =
+    val all = rows(s, w, h)
+    val start = all.indexWhere(r => r.startsWith(" Consensus layer") || r.startsWith(" CL "))
+    if start < 0 then Nil
+    else all.drop(start).takeWhile(r => !r.startsWith("──") && !r.startsWith("--")).filter(_.trim.nonEmpty)
+
+  private def texts(s: TuiState): Seq[String] = Alerts.of(s).map(_.text)
+
+  /** [[TuiFixtures.sepoliaNearHead]] whose consensus layer last called `fcu` and `payload` seconds ago. */
+  private def callsAgo(fcu: Long, payload: Long, state: TuiState = TuiFixtures.sepoliaNearHead()): TuiState =
+    TuiFixtures.withLocal(
+      state,
+      l =>
+        l.copy(cl =
+          l.cl.map(
+            _.copy(forkchoiceUpdated = Some(TuiFixtures.clCall(fcu)), newPayload = Some(TuiFixtures.clCall(payload)))
+          )
+        )
+    )
+
+  /** At its head: the node's block is the highest block any peer has. */
+  private def atHead(s: TuiState): TuiState = s.copy(currentBlock = s.bestBlock)
+
+  // ---- the panel -------------------------------------------------------------------------------------------------
+
+  "The consensus-layer panel" should "show the link and the last calls in a row, the blocks in a second, the payloads in a third, from tier M" taggedAs (
+    UnitTest
+  ) in {
+    for (w, h) <- sizes.drop(1) do
+      val panel = clRows(TuiFixtures.sepoliaNearHead(), w, h)
+      withClue(s"${w}x$h:\n${panel.mkString("\n")}\n") {
+        panel should have size 3
+        panel.head should startWith(" Consensus layer ")
+        panel.head should include("connected")
+        panel.head should include("forkchoiceUpdated 4s ago (VALID)")
+        panel.head should include("newPayload 4s ago (VALID)")
+        panel(1) should include("head 0x7b3e…a91c")
+        panel(1) should include("safe 7,411,977")
+        panel(1) should include("finalized 7,411,945")
+        panel(2) should include("payloads 184,203 (VALID 184,199 · ACCEPTED 4 · INVALID 0)")
+      }
+  }
+
+  it should "fit the link and both calls on one row at tier S" taggedAs (UnitTest) in {
+    val panel = clRows(TuiFixtures.sepoliaNearHead(), 80, 24)
+    panel should have size 1
+    panel.head should startWith(" CL ")
+    panel.head should include("connected")
+    panel.head should include("forkchoice 4s (VALID)")
+    panel.head should include("payload 4s (VALID)")
+  }
+
+  it should "count the payloads as the node counts them: ACCEPTED apart from INVALID, SYNCING only when counted" taggedAs (
+    UnitTest
+  ) in {
+    def payloads(counts: PayloadCounts): String =
+      val s = TuiFixtures.withLocal(
+        TuiFixtures.sepoliaNearHead(),
+        l => l.copy(cl = l.cl.map(_.copy(payloads = counts)))
+      )
+      clRows(s, 120, 40)(2)
+    payloads(PayloadCounts(total = 10, valid = 6, syncing = 0, accepted = 3, invalid = 1)) should
+      include("payloads 10 (VALID 6 · ACCEPTED 3 · INVALID 1)")
+    payloads(PayloadCounts(total = 10, valid = 5, syncing = 2, accepted = 3, invalid = 0)) should
+      include("payloads 10 (VALID 5 · SYNCING 2 · ACCEPTED 3 · INVALID 0)")
+  }
+
+  it should "show the authentication failures only when there are some" taggedAs (UnitTest) in {
+    (clRows(TuiFixtures.sepoliaNearHead(), 120, 40).mkString("\n") should not).include("auth")
+    val failing =
+      TuiFixtures.withLocal(TuiFixtures.sepoliaNearHead(), l => l.copy(cl = l.cl.map(_.copy(authFailures = 3L))))
+    clRows(failing, 120, 40)(1) should include("auth failures 3")
+  }
+
+  it should "show a missing safe or finalized block as the missing glyph, not as zero" taggedAs (UnitTest) in {
+    val none = TuiFixtures.withLocal(
+      TuiFixtures.sepoliaNearHead(),
+      l => l.copy(cl = l.cl.map(_.copy(safe = None, finalized = None)))
+    )
+    val row = clRows(none, 120, 40)(1)
+    row should include("safe —")
+    row should include("finalized —")
+    clRows(none.copy(glyphs = GlyphSet.Ascii), 120, 40)(1) should include("safe -")
+  }
+
+  it should "say waiting, in one row, before the consensus layer has called" taggedAs (UnitTest) in {
+    for (w, h) <- sizes do
+      val panel = clRows(TuiFixtures.clWaitingSepolia(), w, h)
+      withClue(s"${w}x$h:\n${panel.mkString("\n")}\n") {
+        panel should have size 1
+        panel.head should include("waiting for the consensus layer")
+      }
+  }
+
+  it should "say DISCONNECTED when the last forkchoiceUpdated is more than a minute old" taggedAs (UnitTest) in {
+    for (w, h) <- sizes do
+      val panel = clRows(TuiFixtures.clDisconnectedSepolia(), w, h)
+      withClue(s"${w}x$h:\n${panel.mkString("\n")}\n") {
+        panel.head should include("DISCONNECTED")
+        (panel.head should not).include("connected ·")
+        panel.head should include("6m 3s")
+        panel.head should include("6m 5s")
+      }
+  }
+
+  it should "be on an ETH node only: an ETC node, whatever it mines, has no consensus-layer row" taggedAs (UnitTest) in {
+    for (name, fixture) <- TuiFixtures.all; (w, h) <- sizes; set <- GlyphSet.values do
+      val s = fixture(set)
+      if s.chain.exists(_.family == ChainFamily.PoW) then
+        withClue(s"$name ${w}x$h $set: ")(clRows(s, w, h) shouldBe empty)
+  }
+
+  it should "draw the same rows at every tick: nothing in it moves" taggedAs (UnitTest) in {
+    for set <- GlyphSet.values; (w, h) <- sizes do
+      val full = TuiFixtures.sepoliaNearHead(set).copy(motion = Motion.Full)
+      val frames = (0L to 3L).map(t => clRows(full.copy(tick = t), w, h))
+      frames.distinct should have size 1
+  }
+
+  it should "draw ASCII only under the ASCII set" taggedAs (UnitTest) in {
+    for
+      (w, h) <- sizes;
+      fixture <- Seq(
+        (g: GlyphSet) => TuiFixtures.sepoliaNearHead(g),
+        (g: GlyphSet) => TuiFixtures.clDisconnectedSepolia(g)
+      )
+    do
+      val panel = clRows(fixture(GlyphSet.Ascii), w, h)
+      panel should not be empty
+      for row <- panel do withClue(s"'$row': ")(row.forall(ch => ch >= ' ' && ch < '\u007f') shouldBe true)
+  }
+
+  // ---- the alert: no forkchoiceUpdated for more than 60 s is an error ----------------------------------------------
+
+  "The forkchoiceUpdated alert" should "be an error after 60 s without a call, and not at 60 s" taggedAs (UnitTest) in {
+    texts(callsAgo(fcu = 60, payload = 4)) shouldBe empty
+    val silent = callsAgo(fcu = 61, payload = 4)
+    Alerts.of(silent) shouldBe Seq(
+      Alert(Severity.Error, "CL disconnected: no forkchoiceUpdated for 1m 1s (last VALID)")
+    )
+    texts(callsAgo(fcu = 363, payload = 365)) shouldBe Seq(
+      "CL disconnected: no forkchoiceUpdated for 6m 3s (last VALID)"
+    )
+  }
+
+  it should "name the status of the last call, as it was recorded" taggedAs (UnitTest) in {
+    val invalid = TuiFixtures.withLocal(
+      callsAgo(fcu = 120, payload = 4),
+      l => l.copy(cl = l.cl.map(c => c.copy(forkchoiceUpdated = c.forkchoiceUpdated.map(_.copy(status = "SYNCING")))))
+    )
+    texts(invalid) shouldBe Seq("CL disconnected: no forkchoiceUpdated for 2m 0s (last SYNCING)")
+  }
+
+  it should "clear when the consensus layer calls again" taggedAs (UnitTest) in {
+    texts(callsAgo(fcu = 400, payload = 400)).exists(_.startsWith("CL disconnected")) shouldBe true
+    texts(callsAgo(fcu = 0, payload = 400)).exists(_.startsWith("CL disconnected")) shouldBe false
+  }
+
+  it should "not fire on an ETC node, or before the probe has read the Engine API" taggedAs (UnitTest) in {
+    texts(TuiFixtures.syncedEtc()) shouldBe empty
+    texts(TuiFixtures.sepoliaNearHead().copy(snapshot = None)) shouldBe empty
+  }
+
+  it should "show on the alert row, and in the panel, at 80×24" taggedAs (UnitTest) in {
+    val frame = rows(TuiFixtures.clDisconnectedSepolia(), 80, 24)
+    frame(2) should include("1 error")
+    frame(2) should include("CL disconnected: no forkchoiceUpdated for 6m 3s (last VALID)")
+  }
+
+  "The waiting warning" should "come after 60 s of uptime without a first call, and not before" taggedAs (UnitTest) in {
+    def waiting(uptimeSeconds: Long) = TuiFixtures.clWaitingSepolia().copy(startTime = t0.minusSeconds(uptimeSeconds))
+    texts(waiting(60)) shouldBe empty
+    Alerts.of(waiting(61)) shouldBe Seq(Alert(Severity.Warn, "no CL yet: no forkchoiceUpdated in 1m 1s"))
+  }
+
+  it should "be a warning, not an error: a node waiting for its first consensus layer is not a node that lost one" taggedAs (
+    UnitTest
+  ) in {
+    Alerts.of(TuiFixtures.clWaitingSepolia().copy(startTime = t0.minusSeconds(3_600))).map(_.severity) shouldBe
+      Seq(Severity.Warn)
+  }
+
+  // ---- the alert: no newPayload for more than 5 min while peers advance is a warning -------------------------------
+
+  "The newPayload alert" should "warn after 5 min without a newPayload while peers are ahead, and not at 5 min" taggedAs (
+    UnitTest
+  ) in {
+    texts(callsAgo(fcu = 4, payload = 300)) shouldBe empty
+    Alerts.of(callsAgo(fcu = 4, payload = 301)) shouldBe Seq(
+      Alert(Severity.Warn, "no newPayload for 5m 1s while peers are ahead")
+    )
+    texts(callsAgo(fcu = 4, payload = 3_900)) shouldBe Seq("no newPayload for 1h 5m while peers are ahead")
+  }
+
+  it should "not warn when no peer is ahead: payloads the node already had record nothing, so a node at its head is quiet" taggedAs (
+    UnitTest
+  ) in {
+    // A re-sent payload the node already holds is answered VALID without a record (EngineApiService.scala:448): the
+    // last newPayload does not move. At the head no peer is ahead, and that silence is not an alert.
+    texts(atHead(callsAgo(fcu = 4, payload = 3_900))) shouldBe empty
+  }
+
+  it should "leave the disconnection to the forkchoiceUpdated alert: one cause, one row" taggedAs (UnitTest) in {
+    texts(callsAgo(fcu = 400, payload = 400)) shouldBe Seq(
+      "CL disconnected: no forkchoiceUpdated for 6m 40s (last VALID)"
+    )
+  }
+
+  it should "count a consensus layer that has called but never sent a payload from the start of the node" taggedAs (
+    UnitTest
+  ) in {
+    val noPayload = TuiFixtures.withLocal(
+      TuiFixtures.sepoliaNearHead().copy(startTime = t0.minusSeconds(301)),
+      l => l.copy(cl = l.cl.map(_.copy(newPayload = None)))
+    )
+    texts(noPayload) shouldBe Seq("no newPayload for 5m 1s while peers are ahead")
+    texts(noPayload.copy(startTime = t0.minusSeconds(300))) shouldBe empty
+  }
+
+  it should "need a peer ahead of the node's head: a peer's best block, or the sync's own target" taggedAs (UnitTest) in {
+    val stale = callsAgo(fcu = 4, payload = 400)
+    texts(stale) should not be empty
+    // Only the peers' best blocks say the chain moved: the sync controller knows no target.
+    texts(stale.copy(bestBlock = 0L)) should not be empty
+    // Only the sync's target does: no peer's details.
+    val noDetails = stale.copy(snapshot = stale.snapshot.map(_.copy(details = None)))
+    texts(noDetails) should not be empty
+    // Neither is above the head.
+    texts(atHead(stale)) shouldBe empty
+    texts(atHead(noDetails)) shouldBe empty
+  }
+
+  // ---- the rules of the row ------------------------------------------------------------------------------------------
+
+  "The alert row" should "list the consensus layer's alert after the other errors, in §2.3's order" taggedAs (UnitTest) in {
+    val s = TuiFixtures.withPeers(
+      callsAgo(fcu = 363, payload = 365),
+      Sourced.Unresponsive("no reply within 500ms")
+    )
+    texts(s) shouldBe Seq(
+      "peer manager Unresponsive (no reply within 500ms)",
+      "CL disconnected: no forkchoiceUpdated for 6m 3s (last VALID)"
+    )
+  }
+
+  "The age of a call" should "never be negative, whatever the two clocks say" taggedAs (UnitTest) in {
+    // A call stamped a little ahead of the snapshot: the machine's clock moved, or the two were read a moment apart.
+    val ahead = TuiFixtures.withLocal(
+      TuiFixtures.sepoliaNearHead(),
+      l => l.copy(cl = l.cl.map(_.copy(forkchoiceUpdated = Some(ClCall(t0.plusSeconds(90), "VALID")))))
+    )
+    clRows(ahead, 120, 40).head should include("forkchoiceUpdated 0s ago (VALID)")
+    texts(ahead) shouldBe empty
+  }
+
+  // ---- goldens: research §3.3 and §3.9 ---------------------------------------------------------------------------
+
+  private val goldens: Seq[(String, GlyphSet => TuiState)] = Seq(
+    "connected" -> (g => TuiFixtures.sepoliaNearHead(g)),
+    "waiting" -> (g => TuiFixtures.clWaitingSepolia(g)),
+    "disconnected" -> (g => TuiFixtures.clDisconnectedSepolia(g))
+  )
+
+  private def fileName(width: Int, height: Int, state: String, set: GlyphSet): String =
+    s"cl-${Tier.of(width, height).toString.toLowerCase}-$state-${set.toString.toLowerCase}.txt"
+
+  "The consensus-layer goldens" should "cover three states, three tiers, two glyph sets: 18 files" taggedAs (UnitTest) in {
+    val names = for (s, _) <- goldens; (w, h) <- sizes; set <- GlyphSet.values.toSeq yield fileName(w, h, s, set)
+    names.distinct should have size 18
+  }
+
+  for (stateName, fixture) <- goldens; (width, height) <- sizes; set <- GlyphSet.values do
+    val name = fileName(width, height, stateName, set)
+
+    "The Overview of an ETH node" should s"match $name" taggedAs (UnitTest) in {
+      val lines = renderer.render(still(fixture(set)), width, height, TuiTheme.Ansi16)
+      lines should have size height.toLong
+      all(lines.map(_.columnLength())) shouldBe width
+      matchGolden(name, visibleFrame(lines))
+    }

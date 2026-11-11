@@ -1,0 +1,24 @@
+ # FUKUII  sepolia (11155111) . PoS . up 3d 4h                         Overview 
+--------------------------------------------------------------------------------
+ x 1 error   CL disconnected: no forkchoiceUpdated for 6m 3s (last VALID)       
+ Peers   23/50 ##########         Block  7,412,009 -> 7,412,011 (-2)            
+ RPC     :8545 on   Engine :8551  Disk   1.2T free       Txpool  1,204 (3 blob) 
+--------------------------------------------------------------------------------
+ Sync    regular                                      rate 0.08 blk/s . ETA 24s 
+   Blocks   [==================~o.]@@ 99%   7,412,009 / 7,412,011               
+--------------------------------------------------------------------------------
+ CL      DISCONNECTED . forkchoice 6m 3s (VALID) . payload 6m 5s (VALID)        
+--------------------------------------------------------------------------------
+ Forks   BPO2 + ==================> Amsterdam @ 2026-10-06T13:53:36Z (in 3d 4h) 
+--------------------------------------------------------------------------------
+ Node    .../sepolia . SNAP sync . archive pruning . 50 peers max . mining off  
+--------------------------------------------------------------------------------
+ Recent                                                                         
+ 11:59:25 INFO  [====================~o]@@ 100% - RegularSync                   
+ 11:59:30 ERROR Cannot decode a message from 203.0.113.40:30303                 
+ 11:59:34 INFO  Imported block 21,884,101 0x9b0c..ff31 with 9 txs in 17ms       
+ 11:59:47 INFO  Imported block 21,884,102 0x6d21..1a0e with 14 txs in 22ms      
+ 11:59:52 INFO  Peers: 41 handshaked . 14 in . 27 out                           
+ 12:00:00 INFO  RegularSync: at head, block 21884102                            
+                                                                                
+ 1 Over 2 Sync 3 Peers 4 Chain 5 Logs | p Pause ? Help r Redraw d Detach q Quit 

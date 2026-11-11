@@ -80,6 +80,24 @@ object TuiText:
     else if gib >= 1 then String.format(Locale.ROOT, "%.1fG", gib)
     else String.format(Locale.ROOT, "%.0fM", bytes / (KiB * KiB))
 
+  private val HashrateUnits: Seq[String] = Seq("H/s", "kH/s", "MH/s", "GH/s", "TH/s", "PH/s", "EH/s")
+
+  /** A hashrate in hashes a second with the unit that keeps its integer part under 1,000: 0 H/s, 999 H/s, 48.2 MH/s,
+    * 3.1 TH/s. A negative reading is 0. The miner submits `Long.MaxValue` when the time it took was 0
+    * (`Miner.submitHashRate`), which is 9.2 EH/s, the last unit: no reading overflows it.
+    */
+  def formatHashrate(hashesPerSecond: Long): String =
+    val h = hashesPerSecond.max(0L)
+    if h < 1000 then s"$h ${HashrateUnits.head}"
+    else
+      var value = h.toDouble
+      var unit = 0
+      // 999.95 and up rounds to 1000.0 at one decimal: it is the next unit's 1.0.
+      while value >= 999.95 && unit < HashrateUnits.size - 1 do
+        value /= 1000.0
+        unit += 1
+      String.format(Locale.ROOT, "%.1f %s", value, HashrateUnits(unit))
+
   /** A share of 1 as a percentage with one decimal: 0.3%. */
   def formatPercent(share: Double): String = String.format(Locale.ROOT, "%.1f%%", share * 100)
 
