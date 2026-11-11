@@ -22,6 +22,7 @@ import com.chipprbots.ethereum.blockchain.data.GenesisDataLoader.JsonSerializers
 import com.chipprbots.ethereum.blockchain.data.GenesisDataLoader.JsonSerializers.UInt256JsonSerializer
 import com.chipprbots.ethereum.crypto
 import com.chipprbots.ethereum.db.storage.MptStorage
+import com.chipprbots.ethereum.db.storage.MptStorageDecorator
 import com.chipprbots.ethereum.db.storage.StateStorage
 import com.chipprbots.ethereum.db.storage.StateStorage.GenesisDataLoad
 import com.chipprbots.ethereum.domain.*
@@ -146,10 +147,16 @@ class GenesisDataLoader(
   ) =
     import MerklePatriciaTrie.defaultByteArraySerializable
 
+    // Each trie is built over its own view of the storage: the account trie's, and for an account's storage trie the
+    // view its owner names, `keccak256(address)` (spec 018 data-model 5.4). A hash-keyed storage is its own view of
+    // every trie.
+    val accountTrieNodes = storage.forOwner(None)
+
     genesisData.alloc.zipWithIndex.foldLeft(initalRootHash) { case (rootHash, ((address, genesisAccount), _)) =>
-      val mpt = MerklePatriciaTrie[Array[Byte], Account](rootHash, storage)
+      val mpt = MerklePatriciaTrie[Array[Byte], Account](rootHash, accountTrieNodes)
       val cleanAddress = if address.startsWith("0x") || address.startsWith("0X") then address.substring(2) else address
       val paddedAddress = cleanAddress.reverse.padTo(addressLength, "0").reverse.mkString
+      val accountHash = crypto.kec256(Hex.decode(paddedAddress))
 
       // Store contract code in EVM code storage if present
       genesisAccount.code.foreach { code =>
@@ -159,14 +166,14 @@ class GenesisDataLoader(
 
       val stateRoot = mpt
         .put(
-          crypto.kec256(Hex.decode(paddedAddress)),
+          accountHash,
           Account(
             nonce = genesisAccount.nonce
               .getOrElse(blockchainConfig.accountStartNonce),
             balance = genesisAccount.balance,
             codeHash = genesisAccount.code.fold(Account.EmptyCodeHash)(codeValue => CodeHash(crypto.kec256(codeValue))),
             storageRoot = genesisAccount.storage.fold(Account.EmptyStorageRootHash)(s =>
-              TrieRoot(computeStorageRootHash(s, storage))
+              TrieRoot(computeStorageRootHash(s, storage.forOwner(Some(ByteString(accountHash)))))
             )
           )
         )
@@ -178,10 +185,10 @@ class GenesisDataLoader(
     * Previously this used an ephemeral DataSource, causing every genesis-deployed contract with storage to throw
     * MPTException on first SLOAD.
     */
-  private def computeStorageRootHash(storage: Map[UInt256, UInt256], sharedStorage: MptStorage): ByteString =
+  private def computeStorageRootHash(storage: Map[UInt256, UInt256], storageTrieNodes: MptStorage): ByteString =
     val emptyTrie = EthereumUInt256Mpt.storageMpt(
       ByteString(MerklePatriciaTrie.EmptyRootHash),
-      sharedStorage
+      storageTrieNodes
     )
 
     val storageTrie = storage.foldLeft(emptyTrie) {
@@ -308,13 +315,12 @@ object GenesisDataLoader:
     * Nothing a genesis build replaces can be garbage that must be deleted — the buffer's removals are never persisted
     * anyway (`ReadOnlyNodeStorage.persist` only sees upserts) — so dropping removals here is exact.
     */
-  final private[data] case class AppendOnlyMptStorage(underlying: MptStorage) extends MptStorage:
-    override def get(nodeId: Array[Byte]): com.chipprbots.ethereum.mpt.MptNode = underlying.get(nodeId)
-    override def updateNodesInStorage(
+  final private[data] case class AppendOnlyMptStorage(underlying: MptStorage) extends MptStorageDecorator:
+    override protected def decorate(scoped: MptStorage): MptStorage = AppendOnlyMptStorage(scoped)
+    override protected def update(
         newRoot: Option[com.chipprbots.ethereum.mpt.MptNode],
-        toRemove: Seq[com.chipprbots.ethereum.mpt.MptNode]
-    ): Option[com.chipprbots.ethereum.mpt.MptNode] = underlying.updateNodesInStorage(newRoot, Nil)
-    override def persist(): Unit = underlying.persist()
+        removals: MptStorageDecorator.Removals
+    ): Option[com.chipprbots.ethereum.mpt.MptNode] = super.update(newRoot, removals.none)
   object JsonSerializers:
 
     def deserializeByteString(jv: JValue): ByteString = jv match

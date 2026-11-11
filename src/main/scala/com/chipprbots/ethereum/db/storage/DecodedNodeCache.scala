@@ -4,6 +4,7 @@ import org.apache.pekko.util.ByteString
 
 import com.chipprbots.ethereum.db.storage.NodeStorage.NodeHash
 import com.chipprbots.ethereum.mpt.MptNode
+import com.chipprbots.ethereum.mpt.NibblePath
 import com.chipprbots.ethereum.utils.ByteBoundedLru
 import com.chipprbots.ethereum.vm.ImportProfile
 
@@ -77,13 +78,18 @@ object DecodedNodeCache:
   def withOwnBudget(maxBytes: Long, strongValues: Boolean = false): DecodedNodeCache =
     new DecodedNodeCache(new ByteBoundedLru[Key, MptNode](maxBytes, weigh, strongValues), owners.incrementAndGet())
 
-/** [[MptStorage]] that answers `get` from a [[DecodedNodeCache]] before the wrapped storage. A miss, including a
-  * missing node, goes to the wrapped storage unchanged: its `MissingNodeException` propagates and nothing is cached.
-  * Writes, removals and batch lookups pass straight through.
+/** [[MptStorage]] that answers a node read from a [[DecodedNodeCache]] before the wrapped storage, whether the caller
+  * named the node by hash alone or by position and hash: content is addressed by hash, so a hit is the node wherever it
+  * is asked for. A miss, including a missing node, goes to the wrapped storage unchanged: its `MissingNodeException`
+  * propagates and nothing is cached. Writes, removals and batch lookups pass straight through.
   */
-final class CachingMptStorage(underlying: MptStorage, cache: DecodedNodeCache) extends MptStorage:
+final class CachingMptStorage(protected val underlying: MptStorage, cache: DecodedNodeCache)
+    extends MptStorageDecorator:
 
-  override def get(nodeId: Array[Byte]): MptNode =
+  /** The same cache in front of one trie's view of the wrapped storage. */
+  override protected def decorate(scoped: MptStorage): MptStorage = new CachingMptStorage(scoped, cache)
+
+  override protected def read(nodeId: Array[Byte], path: NibblePath | Null): MptNode =
     val key = ByteString.fromArrayUnsafe(nodeId)
     val hit = cache.get(key)
     if hit != null then
@@ -91,18 +97,7 @@ final class CachingMptStorage(underlying: MptStorage, cache: DecodedNodeCache) e
       hit
     else
       val generation = cache.generation // before the read: see DecodedNodeCache.putIfCurrent
-      val node = underlying.get(nodeId)
+      val node = super.read(nodeId, path)
       ImportProfile.nodeMiss()
       cache.putIfCurrent(key.compact, node, generation)
       node
-
-  override def updateNodesInStorage(newRoot: Option[MptNode], toRemove: Seq[MptNode]): Option[MptNode] =
-    underlying.updateNodesInStorage(newRoot, toRemove)
-
-  override def persist(): Unit = underlying.persist()
-
-  override def multiGetNodes(hashes: Seq[Array[Byte]]): Seq[Option[MptNode]] = underlying.multiGetNodes(hashes)
-
-  override def rawNodes(hashes: Seq[ByteString]): Seq[RawNodeRead] = underlying.rawNodes(hashes)
-
-  override def storeRawNodes(nodes: Seq[(ByteString, Array[Byte])]): Unit = underlying.storeRawNodes(nodes)

@@ -15,6 +15,7 @@ import com.chipprbots.ethereum.crypto.kec256
 import com.chipprbots.ethereum.db.dataSource.EphemDataSource
 import com.chipprbots.ethereum.db.storage.EvmCodeStorage
 import com.chipprbots.ethereum.db.storage.MptStorage
+import com.chipprbots.ethereum.db.storage.MptStorageDecorator
 import com.chipprbots.ethereum.db.storage.StateStorage
 import com.chipprbots.ethereum.domain.*
 import com.chipprbots.ethereum.domain.BlockHeader.HeaderExtraFields.*
@@ -154,15 +155,12 @@ object EthSimulateService:
     * starting world must stay readable. Nodes are content-addressed: keeping them changes no root and no hash. Nothing
     * reaches the database either way; the wrapped store is the read-only one.
     */
-  final private[jsonrpc] class RetainingMptStorage(underlying: MptStorage) extends MptStorage:
-    override def get(nodeId: Array[Byte]): com.chipprbots.ethereum.mpt.MptNode = underlying.get(nodeId)
-    override def updateNodesInStorage(
+  final private[jsonrpc] class RetainingMptStorage(protected val underlying: MptStorage) extends MptStorageDecorator:
+    override protected def decorate(scoped: MptStorage): MptStorage = new RetainingMptStorage(scoped)
+    override protected def update(
         newRoot: Option[com.chipprbots.ethereum.mpt.MptNode],
-        toRemove: Seq[com.chipprbots.ethereum.mpt.MptNode]
-    ): Option[com.chipprbots.ethereum.mpt.MptNode] = underlying.updateNodesInStorage(newRoot, Nil)
-    override def persist(): Unit = underlying.persist()
-    override def multiGetNodes(hashes: Seq[Array[Byte]]): Seq[Option[com.chipprbots.ethereum.mpt.MptNode]] =
-      underlying.multiGetNodes(hashes)
+        removals: MptStorageDecorator.Removals
+    ): Option[com.chipprbots.ethereum.mpt.MptNode] = super.update(newRoot, removals.none)
 
   /** The address a contract creation by `sender` at account nonce `nonce` deploys to (yellow paper equation 82), as
     * [[com.chipprbots.ethereum.vm.WorldStateProxy.createAddress]] derives it after the nonce increment.

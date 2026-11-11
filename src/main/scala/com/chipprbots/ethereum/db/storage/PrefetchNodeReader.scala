@@ -5,6 +5,7 @@ import java.util.concurrent.atomic.AtomicLong
 import org.apache.pekko.util.ByteString
 
 import com.chipprbots.ethereum.mpt.MptNode
+import com.chipprbots.ethereum.mpt.NibblePath
 
 /** A read-only view of the PARENT state's trie nodes for the BAL prefetch (`BalPrefetcher`), safe to use from many
   * threads while the block executes.
@@ -23,15 +24,27 @@ import com.chipprbots.ethereum.mpt.MptNode
   * [[DecodedNodeCache.putIfCurrent]], which drops a node read before an eviction that has since run, so a read that
   * raced a prune's delete cannot leave the pruned node cached.
   */
-final class PrefetchNodeReader(
-    underlying: MptStorage,
+final class PrefetchNodeReader private (
+    protected val underlying: MptStorage,
     cache: Option[DecodedNodeCache],
     budgetBytes: Long,
-    onLoaded: ByteString => Unit = _ => ()
-) extends MptStorage:
+    onLoaded: ByteString => Unit,
+    spent: AtomicLong,
+    loaded: AtomicLong
+) extends MptStorageDecorator:
 
-  private val spent = new AtomicLong
-  private val loaded = new AtomicLong
+  def this(
+      underlying: MptStorage,
+      cache: Option[DecodedNodeCache],
+      budgetBytes: Long,
+      onLoaded: ByteString => Unit = _ => ()
+  ) = this(underlying, cache, budgetBytes, onLoaded, new AtomicLong, new AtomicLong)
+
+  /** One trie's view of the parent state, on the SAME budget and the same counts: a block's prefetch is one budget,
+    * however many tries it reads.
+    */
+  override protected def decorate(scoped: MptStorage): MptStorage =
+    new PrefetchNodeReader(scoped, cache, budgetBytes, onLoaded, spent, loaded)
 
   /** True when the cache's share for this block's prefetch is used up. A reader with no cache never is. */
   def exhausted: Boolean = cache.isDefined && spent.get >= budgetBytes
@@ -39,12 +52,12 @@ final class PrefetchNodeReader(
   /** Nodes this reader read from the database (cache hits are not counted). */
   def nodesLoaded: Long = loaded.get
 
-  override def get(nodeId: Array[Byte]): MptNode =
+  override protected def read(nodeId: Array[Byte], path: NibblePath | Null): MptNode =
     val key = ByteString.fromArrayUnsafe(nodeId)
     val hit = cache.flatMap(c => Option(c.get(key)))
     hit.getOrElse {
       val generation = cache.fold(0L)(_.generation) // before the read: see DecodedNodeCache.putIfCurrent
-      val node = underlying.get(nodeId)
+      val node = super.read(nodeId, path)
       loaded.incrementAndGet()
       cache.foreach { c =>
         if spent.addAndGet(DecodedNodeCache.weigh(node)) <= budgetBytes then
@@ -55,7 +68,13 @@ final class PrefetchNodeReader(
       node
     }
 
-  override def updateNodesInStorage(newRoot: Option[MptNode], toRemove: Seq[MptNode]): Option[MptNode] =
-    throw new UnsupportedOperationException("the prefetch reader is read-only")
+  private def readOnly: Nothing = throw new UnsupportedOperationException("the prefetch reader is read-only")
+
+  override protected def update(newRoot: Option[MptNode], removals: MptStorageDecorator.Removals): Option[MptNode] =
+    readOnly
+
+  override def resetOwner(owner: ByteString): Unit = readOnly
+
+  override def storeRawNodes(nodes: Seq[(ByteString, Array[Byte])]): Unit = readOnly
 
   override def persist(): Unit = ()
