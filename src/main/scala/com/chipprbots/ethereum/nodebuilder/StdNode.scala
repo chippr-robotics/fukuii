@@ -20,7 +20,9 @@ import com.chipprbots.ethereum.blockchain.sync.SyncController
 import com.chipprbots.ethereum.blockchain.sync.SyncProtocol
 import com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncMetrics
 import com.chipprbots.ethereum.consensus.mining.StdMiningBuilder
+import com.chipprbots.ethereum.consensus.pow.PoWMiningMetrics
 import com.chipprbots.ethereum.console.ChainFacts
+import com.chipprbots.ethereum.console.ForkChoiceHashes
 import com.chipprbots.ethereum.console.NodeSettings
 import com.chipprbots.ethereum.console.NodeStatusSnapshot
 import com.chipprbots.ethereum.console.Tui
@@ -29,6 +31,7 @@ import com.chipprbots.ethereum.console.TuiStatusProbe
 import com.chipprbots.ethereum.console.TuiUpdater
 import com.chipprbots.ethereum.db.dataSource.RocksDbCacheMetrics
 import com.chipprbots.ethereum.domain.BestMappingRepair
+import com.chipprbots.ethereum.domain.BlockHash
 import com.chipprbots.ethereum.jsonrpc.server.RpcExposureCheck
 import com.chipprbots.ethereum.metrics.Metrics
 import com.chipprbots.ethereum.metrics.MetricsConfig
@@ -226,7 +229,12 @@ abstract class BaseNode extends Node:
   private def startMining(): Unit =
     // A node that produces blocks takes transactions from peers: core-geth's StartMining calls
     // `enableSyncedFeatures()` for the same reason, or a miner held behind the gate would mine empty blocks.
-    if mining.config.generic.miningEnabled then txGossipGate.markSynced("block production is enabled")
+    if mining.config.generic.miningEnabled then
+      txGossipGate.markSynced("block production is enabled")
+      // The DAG gauges are written from the mining thread (EthashDAGManager), inside loops whose failure paths
+      // delete and regenerate the DAG file. Initialise the metrics object here, after startMetricsClient and before
+      // that thread exists, so that a failed initialiser surfaces at start-up and not on it (spec 027 slice 5, M2).
+      val _ = PoWMiningMetrics
     mining.startProtocol(this)
 
   private def startDiscoveryManager(): Unit = peerDiscoveryManagerTyped ! PeerDiscoveryManager.Start
@@ -339,12 +347,32 @@ abstract class BaseNode extends Node:
       tui.updateNodeSettings(settings)
       // Display only: the fork configuration is read, never changed (spec 027 FR-017).
       tui.updateChain(ChainFacts.from(blockchainConfig, BuildInfo.version))
+      // Spec 027 slice 5. The consensus-layer panel exists on a post-merge chain with a live Engine API, the gate that
+      // binds the designated head (`bindDesignatedHead`): an ETC node, even one with an Engine API for `testing_*`, has
+      // none and no engine series. The mining panel exists on ETC. Each reading is a thunk the probe thread calls: the
+      // fork choice through one read of the manager's state (the manager itself is not handed to the TUI, whose
+      // listener slot is the SNAP pivot's feed), the safe and finalized numbers by header lookup, and the coinbase
+      // from the same provider `eth_coinbase` and `eth_getWork` answer from.
+      val consensusLayerPanel = engineApiConfig.enabled && blockchainConfig.terminalTotalDifficulty.isDefined
       val local = TuiStatusProbe.LocalSources.node(
         dataDir = Option(settings.dataDir).filter(_.nonEmpty).map(new java.io.File(_)),
         // Only ETH's fork timeline stands on a timestamp; ETC's stands on the block number, so no header is read.
         headTimestamp =
           if blockchainConfig.networkType == NetworkType.ETH then
             () => blockchainReader.getBestBlockHeader.map(_.unixTimestamp.toLong)
+          else () => None,
+        cl =
+          if consensusLayerPanel then
+            TuiStatusProbe.LocalSources.clReader(
+              forkChoice = () =>
+                forkChoiceManager.getState
+                  .map(s => ForkChoiceHashes(s.headBlockHash, s.safeBlockHash, s.finalizedBlockHash)),
+              headerNumber = hash => blockchainReader.getBlockHeaderByHash(BlockHash(hash)).map(_.number.toLong)
+            )
+          else () => None,
+        mining =
+          if blockchainConfig.networkType == NetworkType.ETC then
+            TuiStatusProbe.LocalSources.miningReader(coinbase = () => coinbaseProvider.get().toString)
           else () => None
       )
       val probe = new TuiStatusProbe(

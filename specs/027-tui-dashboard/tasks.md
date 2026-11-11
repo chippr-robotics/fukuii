@@ -457,39 +457,44 @@ shows a score for every handshaked peer.
 
 ### Tests for slice 5 (write first, must fail)
 
-- [ ] T108 [P] [US5] `src/test/scala/com/chipprbots/ethereum/consensus/engine/EngineApiMetricsSpec.scala` (new):
+- [x] T108 [P] [US5] `src/test/scala/com/chipprbots/ethereum/consensus/engine/EngineApiMetricsSpec.scala` (new):
       `recordNewPayload` and `recordForkchoiceUpdated` set the last call time (injected clock) and status (E1, Q6); the
       existing gauges keep their names and values; the auth-failure count (E3)
-- [ ] T109 [P] [US5] `src/test/scala/com/chipprbots/ethereum/consensus/pow/PoWMiningMetricsSpec.scala` (new): DAG epoch,
+- [x] T109 [P] [US5] `src/test/scala/com/chipprbots/ethereum/consensus/pow/PoWMiningMetricsSpec.scala` (new): DAG epoch,
       progress and loaded gauges (M2); the existing gauges keep their names and values
-- [ ] T110 [P] [US5] `console tests/ClPanelSpec.scala`: waiting, connected, and the two alerts (no
+- [x] T110 [P] [US5] `console tests/ClPanelSpec.scala`: waiting, connected, and the two alerts (no
       forkchoiceUpdated for more than 60 s is an error; no newPayload for more than 5 min while peers advance is a
       warning) at their boundaries; goldens of research
       §3.3 and §3.9's rows at 3 tiers × 2 glyph sets
-- [ ] T111 [P] [US5] `console tests/MiningPanelSpec.scala`: off on one line; on with hashrate; DAG generating with the
+- [x] T111 [P] [US5] `console tests/MiningPanelSpec.scala`: off on one line; on with hashrate; DAG generating with the
       spinner; hashrate 0 for > 10 min with mining on is a warning; goldens of research §3.4's rows
-- [ ] T112 `sbt "testOnly com.chipprbots.ethereum.console.* *Tui* *EngineApiMetrics* *PoWMiningMetrics*"` → T108–T111 fail; record which
+- [x] T112 `sbt "testOnly com.chipprbots.ethereum.console.* *Tui* *EngineApiMetrics* *PoWMiningMetrics*"` → T108–T111 fail; record which
+      (recorded 2026-11-10: `Test / compileIncremental` failed, 255 errors, every one a missing member: the
+      `EngineApiMetrics` last-call, accepted and auth members and their `nowMs` overloads, the `PoWMiningMetrics` DAG
+      members, `LocalSample.cl`, `PayloadCounts` and the other console types)
 
 ### Implementation for slice 5
 
-- [ ] T113 [US5] E1 and E3: `consensus/engine/EngineApiMetrics.scala` records last call times and statuses in
+- [x] T113 [US5] E1 and E3: `consensus/engine/EngineApiMetrics.scala` records last call times and statuses in
       `recordNewPayload` (`:54-61`) and `recordForkchoiceUpdated` (`:74-79`) and counts auth failures;
-      `consensus/engine/EngineApiHttpServer.scala` counts on the auth-failure path (`:100`) without changing the response
-- [ ] T114 [US5] E2: pass `forkChoiceManager` (`nodebuilder/NodeBuilder.scala:964`) to the probe from `StdNode`;
-      safe and finalized numbers from a header lookup on the probe thread
-- [ ] T115 [US5] M2: `consensus/pow/PoWMiningMetrics.scala` DAG gauges, updated in
-      `consensus/pow/miners/EthashDAGManager.scala` where it logs progress (`:75`, `:98`) and sets the epoch (`:46`)
-- [ ] T116 [US5] M1 and coinbase: read the `PoWMiningMetrics` gauges (`:24-40`, C-6); pass the `CoinbaseProvider`
+      `consensus/engine/JwtAuthenticator.scala` counts in its two 401 branches (`:48`, `:52`) without changing the
+      response (beacon's pre-flight: `EngineApiHttpServer.scala:100` is the success continuation, and is not edited)
+- [x] T114 [US5] E2: hand the probe a thunk over `forkChoiceManager.getState` (the manager is
+      `nodebuilder/NodeBuilder.scala:986`; the manager itself stays out of `console/`, as its `setListener` is the SNAP
+      pivot's feed) from `StdNode`; safe and finalized numbers from a header lookup on the probe thread
+- [x] T115 [US5] M2: `consensus/pow/PoWMiningMetrics.scala` DAG gauges, updated in
+      `consensus/pow/miners/EthashDAGManager.scala` where it logs progress (`:80`, `:105`) and sets the epoch (`:35`, `:51`)
+- [x] T116 [US5] M1 and coinbase: read the `PoWMiningMetrics` gauges (`:24-40`, C-6); pass the `CoinbaseProvider`
       (`consensus/mining/MiningBuilder.scala:32`) to the probe
-- [ ] T117 [US5] The CL and mining panels in `console/panels/`, and their rows in `console/Alerts.scala`: CL only on
+- [x] T117 [US5] The CL and mining panels in `console/panels/`, and their rows in `console/Alerts.scala`: CL only on
       ETH, mining only on ETC
-- [ ] T118 Generate the T110 and T111 goldens; check them against research §3; commit
+- [x] T118 Generate the T110 and T111 goldens; check them against research §3; commit
 
 ### Gate and exit for slice 5
 
-- [ ] T119 `sbt compile-all`; `sbt "testOnly com.chipprbots.ethereum.console.* *Tui* *EngineApiMetrics* *PoWMiningMetrics* *EngineApi*"` → PASS
-- [ ] T120 `sbt scalafmtAll`; `sbt formatCheck` → clean
-- [ ] T121 `scripts/snap-split/verify.sh --branch feat/027-s5-chain-panels origin/staging` → OK
+- [x] T119 `sbt compile-all`; `sbt "testOnly com.chipprbots.ethereum.console.* *Tui* *EngineApiMetrics* *PoWMiningMetrics* *EngineApi*"` → PASS
+- [x] T120 `sbt scalafmtAll`; `sbt formatCheck` → clean
+- [x] T121 `scripts/snap-split/verify.sh --branch feat/027-s5-chain-panels origin/staging` → OK
 - [ ] T122 [US5] `beacon` reviews the ETH half (E1–E3) and `forge` the ETC half (M1–M2), reporting only: no Engine API
       response, status or timing and no mining or DAG behaviour changed; findings in the PR (SC-010)
 - [ ] T123 [US5] Manual, one JVM at a time: `fukuii sepolia --tui` with a consensus client attached, at 80×24 and

@@ -6,8 +6,8 @@ import com.chipprbots.ethereum.console.*
 import com.chipprbots.ethereum.console.panels.Rows.*
 
 /** The Overview, by tier (spec 027 research §3.2–§3.4): the vitals and resources strips; the sync panel (SNAP's five
-  * worm rows, or the Blocks worm); the forks; at tier L the top peers by score, beside the logo; the node's settings;
-  * and the Recent strip of the newest log lines.
+  * worm rows, or the Blocks worm); the consensus layer (ETH) or the mining (ETC); the forks; at tier L the top peers by
+  * score, beside the logo; the node's settings; and the Recent strip of the newest log lines.
   */
 private[console] object OverviewPanels:
 
@@ -21,7 +21,8 @@ private[console] object OverviewPanels:
     )
     val middle =
       if c.config.showLogo && c.tier.logo.inDashboard then Seq(withLogo(c, width))
-      else Seq(sync(c, c.tier.trackSlots)) ++ forks(c) ++ Option.when(c.tier == Tier.L)(peers(c)).flatten
+      else
+        Seq(sync(c, c.tier.trackSlots)) ++ chainLayer(c) ++ forks(c) ++ Option.when(c.tier == Tier.L)(peers(c)).flatten
     Seq(strips) ++ middle ++ node :+ LogsPanel.recent(c, "Recent", _ => true)
 
   /** The sync panel: SNAP's phase and five worm rows (and the chain download from tier M), or the Blocks worm. */
@@ -43,6 +44,12 @@ private[console] object OverviewPanels:
     val preferred = c.state.snapSyncState.fold(2)(s => 6 + (if c.tier != Tier.S && s.chainTarget > 0 then 1 else 0))
     Panel(1, preferred, 2, (w, _) => rows(w), separated = separated)
 
+  /** What only one consensus family has: the consensus-layer panel on an ETH node, the mining panel on an ETC node
+    * (spec 027 FR-022, FR-023). Each exists only where the probe read its source, which `StdNode` reads for one family
+    * only; a node has none, or one of them, never both.
+    */
+  def chainLayer(c: Ctx): Seq[Panel] = ClPanel.panel(c).toSeq ++ MiningPanel.panel(c)
+
   /** Where the chain is on its fork timeline: one row at S, a title, the timeline and a detail row from M. */
   def forks(c: Ctx): Option[Panel] =
     c.state.chain.map { chain =>
@@ -61,7 +68,7 @@ private[console] object OverviewPanels:
     */
   def withLogo(c: Ctx, width: Int): Panel =
     val leftCols = width - LogoColumnCols - 1
-    val left = Seq(sync(c, Tier.M.trackSlots, separated = false)) ++ forks(c) ++ peers(c)
+    val left = Seq(sync(c, Tier.M.trackSlots, separated = false)) ++ chainLayer(c) ++ forks(c) ++ peers(c)
     val logo = TuiRenderer.SmallLogo.map(row => centred(text(row, c.t.healthy.bold()), LogoColumnCols))
     val preferred = Layout.allocate(left, 1000).zip(left).map((n, p) => n + (if p.separated && n > 0 then 1 else 0)).sum
     Panel(

@@ -45,9 +45,11 @@ class JwtAuthenticator(secretHex: String) extends Logger:
           case Right(_) => provide(())
           case Left(err) =>
             log.warn(s"JWT auth failed: $err")
+            EngineApiMetrics.recordAuthFailure()
             complete(StatusCodes.Unauthorized, err)
       case _ =>
         log.warn("JWT auth: missing Authorization header")
+        EngineApiMetrics.recordAuthFailure()
         complete(StatusCodes.Unauthorized, "Missing bearer token")
     }
 

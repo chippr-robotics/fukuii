@@ -9,6 +9,7 @@ import java.util.concurrent.TimeoutException
 import org.apache.pekko.actor.typed.ActorRef
 import org.apache.pekko.actor.typed.Scheduler
 import org.apache.pekko.actor.typed.scaladsl.AskPattern.*
+import org.apache.pekko.util.ByteString
 import org.apache.pekko.util.Timeout
 
 import scala.concurrent.Await
@@ -20,12 +21,17 @@ import scala.util.Failure
 import scala.util.Success
 import scala.util.Try
 
+import io.micrometer.core.instrument.Gauge
+
 import com.chipprbots.ethereum.blockchain.sync.SyncController
 import com.chipprbots.ethereum.blockchain.sync.SyncProtocol
 import com.chipprbots.ethereum.blockchain.sync.regular.RegularSyncMetrics
 import com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncController.SyncPhase
 import com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncMetrics
 import com.chipprbots.ethereum.blockchain.sync.snap.SyncProgress
+import com.chipprbots.ethereum.consensus.engine.EngineApiMetrics
+import com.chipprbots.ethereum.consensus.engine.EngineCall
+import com.chipprbots.ethereum.consensus.pow.PoWMiningMetrics
 import com.chipprbots.ethereum.network.NetworkMetrics
 import com.chipprbots.ethereum.network.NetworkPeerManagerActor
 import com.chipprbots.ethereum.network.Peer
@@ -152,7 +158,9 @@ class TuiStatusProbe(
       snapCounters = read("the SNAP counters")(local.snapCounters()),
       snapPivot = read("the SNAP pivot")(local.snapPivot()),
       peerScores = read("the peer scores")(local.peerScores()),
-      lastImport = read("the last import")(local.lastImport())
+      lastImport = read("the last import")(local.lastImport()),
+      cl = read("the consensus layer")(local.cl()),
+      mining = read("the mining metrics")(local.mining())
     )
 
   /** The sync status as the TUI reads it, with the SNAP progress while SNAP is running: a sample of an active phase,
@@ -221,6 +229,12 @@ object TuiStatusProbe:
     *   the JVM's cumulative GC time, all collectors
     * @param headTimestamp
     *   the best block header's timestamp, Unix seconds
+    * @param cl
+    *   the consensus layer as the Engine API saw it ([[LocalSources.clReader]]); a thunk that reads nothing keeps the
+    *   consensus-layer panel off the screen, which is how an ETC node has none
+    * @param mining
+    *   the mining metrics ([[LocalSources.miningReader]]); a thunk that reads nothing keeps the mining panel off the
+    *   screen, which is how an ETH node has none
     */
   final case class LocalSources(
       dataDir: Option[File] = None,
@@ -232,15 +246,23 @@ object TuiStatusProbe:
       snapCounters: () => Option[SnapCounters] = () => None,
       snapPivot: () => Option[Long] = () => None,
       peerScores: () => Option[PeerScores] = () => None,
-      lastImport: () => Option[ImportSample] = () => None
+      lastImport: () => Option[ImportSample] = () => None,
+      cl: () => Option[ClSample] = () => None,
+      mining: () => Option[MiningSample] = () => None
   )
 
   object LocalSources:
 
     /** The running node's readings: the datadir's disk, this JVM, `NetworkMetrics`, `SNAPSyncMetrics` (counters and
-      * pivot), and the best header's timestamp through `headTimestamp`.
+      * pivot), the best header's timestamp through `headTimestamp`, and the Engine API and the mining metrics through
+      * `cl` and `mining`, which the caller builds for the chain it runs (nothing for the other chain's).
       */
-    def node(dataDir: Option[File], headTimestamp: () => Option[Long]): LocalSources =
+    def node(
+        dataDir: Option[File],
+        headTimestamp: () => Option[Long],
+        cl: () => Option[ClSample] = () => None,
+        mining: () => Option[MiningSample] = () => None
+    ): LocalSources =
       LocalSources(
         dataDir = dataDir,
         heap = jvmHeap,
@@ -250,8 +272,34 @@ object TuiStatusProbe:
         snapCounters = snapMetrics,
         snapPivot = snapPivotBlock,
         peerScores = networkScores,
-        lastImport = regularSyncImport
+        lastImport = regularSyncImport,
+        cl = cl,
+        mining = mining
       )
+
+    /** The consensus layer as the Engine API saw it (spec 027 E1-E3): the metrics' last calls, counts and failed
+      * authentications, and the last executed fork choice through `forkChoice` (read once a poll, which is one atomic
+      * read in the node: the probe is handed no `ForkChoiceManager`, which could be told to change the fork choice, or
+      * to change who hears of it). A safe or finalized hash is looked up through `headerNumber` once and remembered, so
+      * a poll costs no storage read while they stand; a zero hash, which the consensus layer sends before it has one,
+      * is no block, and a header the node does not have yet is tried again next poll.
+      *
+      * Only the probe thread calls it: it keeps the two remembered numbers without a lock.
+      */
+    def clReader(
+        forkChoice: () => Option[ForkChoiceHashes],
+        headerNumber: ByteString => Option[Long]
+    ): () => Option[ClSample] =
+      new ClReader(forkChoice, headerNumber)
+
+    /** The mining metrics (spec 027 M1, M2), and the coinbase through `coinbase`: the node's own `CoinbaseProvider`, so
+      * what `eth_coinbase` answers is what shows, and nothing that can change it is handed over. It reads gauges, and
+      * calls no `EthMiningService` method: those prune hashrates, mark the miner active, or build a block.
+      *
+      * Only the probe thread calls it: it keeps the last minute of `eth_getWork` counts without a lock.
+      */
+    def miningReader(coinbase: () => String, clock: Clock = Clock.systemUTC()): () => Option[MiningSample] =
+      new MiningReader(coinbase, clock)
 
     /** The peer scores slice 4a last published to `NetworkMetrics` (Q5: the export, not the scorer). */
     def networkScores(): Option[PeerScores] = TuiStatusProbe.peerScores(NetworkMetrics.peerScores)
@@ -308,6 +356,139 @@ object TuiStatusProbe:
           blacklisted = SNAPSyncMetrics.peersBlacklisted
         )
       )
+
+  /** The reader [[LocalSources.clReader]] returns. A header lookup that fails costs that block's number and nothing
+    * else: the calls and the counts, which the panel and the disconnection alert stand on, are read from metrics that
+    * cannot fail, and one broken storage read must not take them off the screen.
+    */
+  final private class ClReader(forkChoice: () => Option[ForkChoiceHashes], headerNumber: ByteString => Option[Long])
+      extends (() => Option[ClSample])
+      with Logger:
+
+    private var safe: Option[(ByteString, Long)] = None
+    private var finalized: Option[(ByteString, Long)] = None
+    private var head: Option[(ByteString, String)] = None
+    private var lookupFailing = false
+
+    private def lookup(hash: ByteString): Option[Long] =
+      Try(headerNumber(hash)) match
+        case Success(number) =>
+          lookupFailing = false
+          number
+        case Failure(e) =>
+          if !lookupFailing then
+            log.debug("TUI could not look a block up: {}", Option(e.getMessage).getOrElse(e.toString))
+          lookupFailing = true
+          None
+
+    private def resolve(hash: ByteString, remembered: Option[(ByteString, Long)]): Option[(ByteString, Long)] =
+      if hash.forall(_ == 0) then None // empty, or 32 zero bytes: the consensus layer has no such block yet
+      else remembered.filter(_._1 == hash).orElse(lookup(hash).map(hash -> _))
+
+    /** The head as `0x` and its hex, made again only when the head moves: a poll a second would otherwise build the
+      * same 66 characters on every one.
+      */
+    private def headHex(hash: ByteString): String =
+      head.filter(_._1 == hash).map(_._2).getOrElse {
+        val text = "0x" + hex(hash)
+        head = Some(hash -> text)
+        text
+      }
+
+    def apply(): Option[ClSample] =
+      val fork = forkChoice()
+      safe = fork.flatMap(f => resolve(f.safe, safe))
+      finalized = fork.flatMap(f => resolve(f.finalized, finalized))
+      // A status is the node's own string, but it reaches the screen through the one sanitiser all the same.
+      def call(c: EngineCall) = ClCall(Instant.ofEpochMilli(c.atMs), Sanitize.line(Option(c.status).getOrElse("")))
+      // The writer counts an invalid payload and then, if it was ACCEPTED, the accepted count: read them in that order,
+      // so the accepted count is never behind the invalid one it is taken from. The clamp absorbs a payload in between.
+      val invalidCount = EngineApiMetrics.newPayloadInvalid.value().toLong
+      val accepted = EngineApiMetrics.newPayloadAccepted.value().toLong
+      Some(
+        ClSample(
+          forkchoiceUpdated = EngineApiMetrics.lastForkchoiceUpdated.map(call),
+          newPayload = EngineApiMetrics.lastNewPayload.map(call),
+          payloads = PayloadCounts(
+            total = EngineApiMetrics.newPayloadTotal.value().toLong,
+            valid = EngineApiMetrics.newPayloadValid.value().toLong,
+            syncing = EngineApiMetrics.newPayloadSyncing.value().toLong,
+            accepted = accepted,
+            // The node's invalid count has the ACCEPTED payloads in it (its `status match` has no arm for them); the
+            // panel's does not.
+            invalid = (invalidCount - accepted).max(0L)
+          ),
+          authFailures = EngineApiMetrics.authFailures.value().toLong,
+          head = fork.map(f => headHex(f.head)),
+          safe = safe.map(_._2),
+          finalized = finalized.map(_._2)
+        )
+      )
+
+  private def hex(bytes: ByteString): String = bytes.iterator.map(b => f"${b & 0xff}%02x").mkString
+
+  /** The reader [[LocalSources.miningReader]] returns. */
+  final private class MiningReader(coinbase: () => String, clock: Clock) extends (() => Option[MiningSample]):
+
+    private val getWorkWindow = new RateWindow()
+
+    private def read(gauge: Gauge): Long = gauge.value().toLong
+
+    // The DAG gauges are read epoch first and loaded last, and that order is load-bearing: it pairs with
+    // `PoWMiningMetrics.recordDagStarted` writing the epoch last, so a poll never sees "epoch N+1, loaded".
+    def apply(): Option[MiningSample] =
+      val getWork = read(PoWMiningMetrics.workRequestsTotal)
+      val minedAt = read(PoWMiningMetrics.lastBlockMinedAt)
+      Some(
+        MiningSample(
+          coinbase = Some(coinbase()),
+          hashrate = read(PoWMiningMetrics.currentHashrate),
+          blocksMined = read(PoWMiningMetrics.blocksMinedTotal),
+          lastMinedAt = Option.when(minedAt > 0)(Instant.ofEpochSecond(minedAt)),
+          staleShares = read(PoWMiningMetrics.staleSharesTotal),
+          getWork = getWork,
+          getWorkPerMinute = getWorkWindow.add(clock.millis(), getWork),
+          dag = dagSample(
+            read(PoWMiningMetrics.dagEpoch),
+            read(PoWMiningMetrics.dagPhase),
+            read(PoWMiningMetrics.dagProgress),
+            read(PoWMiningMetrics.dagLoaded)
+          )
+        )
+      )
+
+  /** The DAG the gauges describe: none before the first build starts (epoch `-1`), else its epoch, its phase (0 not yet
+    * known, 1 loading, 2 generating), its percent held to 0 to 100, and whether it is loaded.
+    */
+  private[console] def dagSample(epoch: Long, phase: Long, progress: Long, loaded: Long): Option[DagSample] =
+    Option.when(epoch >= 0)(
+      DagSample(
+        epoch,
+        phase match
+          case 1L => DagPhase.Loading
+          case 2L => DagPhase.Generating
+          case _  => DagPhase.Pending,
+        progress.max(0L).min(100L).toInt,
+        loaded != 0L
+      )
+    )
+
+  /** A counter's rate over the last minute, per minute, from the readings it is given: none until two are at least
+    * `minSpan` apart, and it starts over when the counter goes backwards (a restarted node) or the clock does. Not
+    * thread-safe.
+    */
+  final private[console] class RateWindow(window: Long = 60_000L, minSpan: Long = 5_000L):
+    private var samples: Vector[(Long, Long)] = Vector.empty
+
+    /** The rate at `atMs`, per minute, with the counter at `total`. */
+    def add(atMs: Long, total: Long): Option[Long] =
+      // A counter that went backwards is a restarted node; a newest reading later than this one is a clock that stepped
+      // back. Either way the readings held say nothing about what comes next.
+      if samples.lastOption.exists(last => last._2 > total || last._1 > atMs) then samples = Vector.empty
+      samples = (samples :+ (atMs -> total)).dropWhile(_._1 < atMs - window)
+      val (oldestAt, oldestTotal) = samples.head
+      val span = atMs - oldestAt
+      Option.when(span >= minSpan)((total - oldestTotal) * 60_000L / span)
 
   /** A handshaked peer as the TUI shows it: `GetPeersCmd`'s id, address, direction and connection time. */
   private[console] def tuiPeer(p: Peer): TuiPeer =

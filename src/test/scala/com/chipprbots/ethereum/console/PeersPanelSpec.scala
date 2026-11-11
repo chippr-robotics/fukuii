@@ -117,6 +117,33 @@ class PeersPanelSpec extends AnyFlatSpec with Matchers:
       (missing should not).include("0.000")
   }
 
+  it should "draw a score that is not finite as — and sort it last, with no trend" taggedAs (UnitTest) in {
+    val current = TuiFixtures.peerScores(fewPeers)
+    val scored = fewPeers.filter(p => current.scores.contains(p.id))
+    val (nan, up, down) = (scored(0), scored(1), scored(2))
+    val broken = current.copy(scores =
+      current.scores ++ Seq(
+        nan.id -> Double.NaN,
+        up.id -> Double.PositiveInfinity,
+        down.id -> Double.NegativeInfinity
+      )
+    )
+    val s = few.copy(scores = few.scores.copy(current = Some(broken)))
+    for p <- Seq(nan, up, down) do
+      s.peerScore(p.id) shouldBe None
+      s.scoreTrend(p.id) shouldBe None
+    val rows = peersView(s, 160, 48)
+    for p <- Seq(nan, up, down) do
+      val row = rowOf(rows, p.id)
+      row should include("—")
+      for text <- Seq("NaN", "Infinity", "0.000", "9223372036854775807") do (row should not).include(text)
+    // A finite score stays as it was, and the three come after every scored peer.
+    val finite = scored.drop(3).head
+    s.peerScore(finite.id) shouldBe current.scores.get(finite.id)
+    val at = (p: TuiPeer) => rows.indexWhere(_.contains(panels.Rows.shortId(p.id, TuiGlyphs.Emoji)))
+    for bad <- Seq(nan, up, down); good <- scored.drop(3) do at(bad) should be > at(good)
+  }
+
   it should "show the trend at L: up, down or steady against the previous snapshot (T088)" taggedAs (UnitTest) in {
     val rows = peersView(few, 160, 48)
     for (p, trend) <- TuiFixtures.trends(fewPeers) do

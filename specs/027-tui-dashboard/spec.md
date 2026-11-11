@@ -4,9 +4,9 @@
 
 **Created**: 2026-11-07
 
-**Status**: Active (2026-11-10). Slice 1 (worms, glyphs, tiers) merged as #1752, slice 4a (peer scoring) as #1782, slice 2 (tick, motion, non-blocking loop) as #1783 and slice 3 (views, layout, alerts) as #1784; slices 4 and 5 follow, one PR each, from the plan and 150 tasks merged as #1742. The manual gate runs (T029, T057, T081, T149 and later) are one UAT across all slices once they are code complete (user, 2026-11-09).
+**Status**: Active (2026-11-10). Slice 1 (worms, glyphs, tiers) merged as #1752, slice 4a (peer scoring) as #1782, slice 2 (tick, motion, non-blocking loop) as #1783 slice 3 (views, layout, alerts) as #1784 and slice 4 (log tail, peer details) as #1787; slice 5 (consensus-layer and mining panels) is the last, one PR each, from the plan and 150 tasks merged as #1742. The manual gate runs (T029, T057, T081, T106, T123, T149) are one UAT across all slices once they are code complete (user, 2026-11-09; backlog B-189).
 
-**In flight**: `feat/027-s4-logs-peers` and `feat/027-s5-chain-panels` (`dev-node`, local session): slice 4 in PR; slice 5 in review, on top of slice 4
+**In flight**: `feat/027-s5-chain-panels` (`dev-node`, local session): slice 5 in PR; then the all-slices UAT (B-189) and Phase 7 closure
 
 **Input**: The design proposal #1490 carried as `docs/architecture/tui-design-proposal.md` ("the worm goes to the
 brain": five phased increments, views, tiers, animation, glyph and colour system, data inventory, architecture, testing,
@@ -88,8 +88,8 @@ no default; the answer is the option the user chose. D-1 arose while writing thi
 
 - **No consensus code.** Nothing under `consensus/`, `vm/`, `ledger/` block execution, `mpt/`, `rlp/`, `crypto/` or
   `domain/` changes behaviour. The only `consensus/` files touched are the two metrics objects of FR-022 and FR-023
-  (`EngineApiMetrics`, `PoWMiningMetrics`) and two call sites that write to them (`EngineApiHttpServer`'s auth-failure
-  path, `EthashDAGManager`'s progress logs). The per-chain panels (phase 5) **only read metrics**: E1–E3 and M1–M2 add state to metrics
+  (`EngineApiMetrics`, `PoWMiningMetrics`) and the call sites that write to them (`JwtAuthenticator`'s two 401 branches,
+  `EthashDAGManager`'s progress logs). The per-chain panels (phase 5) **only read metrics**: E1–E3 and M1–M2 add state to metrics
   objects at existing call sites and change no response, status, timing or DAG content.
 - No new actor, no new wire-protocol message, no new RPC method, no change to `--tui`'s default (off) or to standard
   logging.
@@ -341,7 +341,7 @@ Each requirement names the research.md section it comes from.
   suppressor detaches and restores (§7.4, C-11, C-13).
 - **FR-022** On ETH, the consensus-layer panel MUST show the last `engine_forkchoiceUpdated` and `engine_newPayload` call
   times and statuses (E1, kept in `EngineApiMetrics`, Q6), head/safe/finalized (E2, from `ForkChoiceManager.getState`),
-  payload counts, and JWT authentication failures (E3, a counter at the existing auth site in `EngineApiHttpServer`)
+  payload counts, and JWT authentication failures (E3, a counter in `JwtAuthenticator`'s two 401 branches)
   (§6).
 - **FR-023** On ETC, the mining panel MUST show mining on/off, coinbase, hashrate, blocks mined, last mined, stale shares
   and getWork rate (M1, from `PoWMiningMetrics`), and the DAG epoch with generation or load progress (M2, gauges updated

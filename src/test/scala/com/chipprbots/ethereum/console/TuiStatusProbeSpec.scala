@@ -604,3 +604,248 @@ class TuiStatusProbeSpec extends ScalaTestWithActorTestKit with AnyFlatSpecLike 
       TuiStatusProbe.LocalSources(lastImport = () => Some(ImportSample(1, java.time.Duration.ZERO)))
     )().local.lastImport shouldBe Some(ImportSample(1, java.time.Duration.ZERO))
   }
+
+  // ---- Spec 027 slice 5 (T108-T116): the Engine API and the mining metrics, read on the probe thread -------------
+
+  private def hashOf(first: Int): ByteString = ByteString(Array.fill[Byte](32)(first.toByte))
+
+  private val zeroHash: ByteString = ByteString(new Array[Byte](32))
+
+  it should "carry the consensus-layer and mining readings its thunks give, and nothing where they are not wired" taggedAs (
+    UnitTest
+  ) in {
+    val cl = ClSample(forkchoiceUpdated = Some(ClCall(now.minusSeconds(4), "VALID")))
+    val mining = MiningSample(hashrate = 48_200_000L)
+    val wired = localProbe(TuiStatusProbe.LocalSources(cl = () => Some(cl), mining = () => Some(mining)))().local
+    (wired.cl, wired.mining) shouldBe ((Some(cl), Some(mining)))
+    // The gate is the thunk: a probe given none (an ETC node's cl, an ETH node's mining) reads nothing.
+    val unwired = localProbe(TuiStatusProbe.LocalSources())().local
+    (unwired.cl, unwired.mining) shouldBe ((None, None))
+  }
+
+  it should "leave the consensus-layer and mining readings empty when they fail, and still answer" taggedAs (
+    UnitTest
+  ) in {
+    val failing = TuiStatusProbe.LocalSources(
+      cl = () => throw new IllegalStateException("storage closed"),
+      mining = () => throw new RuntimeException("no metrics")
+    )
+    val s = localProbe(failing)()
+    (s.local.cl, s.local.mining) shouldBe ((None, None))
+    s.sync shouldBe a[Sourced.Fresh[?]]
+  }
+
+  private class CountingForkChoice(var state: Option[ForkChoiceHashes]):
+    var reads = 0
+    val read: () => Option[ForkChoiceHashes] = () =>
+      reads += 1
+      state
+
+  private class Headers(numbers: Map[ByteString, Long]):
+    var lookups: Seq[ByteString] = Nil
+    val number: ByteString => Option[Long] = hash =>
+      lookups :+= hash
+      numbers.get(hash)
+
+  "The consensus-layer reader" should "read the fork choice once a poll, and show the head in full hex" taggedAs (
+    UnitTest
+  ) in {
+    val fc = new CountingForkChoice(Some(ForkChoiceHashes(hashOf(0x7b), hashOf(0x11), hashOf(0x22))))
+    val headers = new Headers(Map(hashOf(0x11) -> 7_411_977L, hashOf(0x22) -> 7_411_945L))
+    val reader = TuiStatusProbe.LocalSources.clReader(fc.read, headers.number)
+    val sample = reader().get
+    fc.reads shouldBe 1
+    sample.head shouldBe Some("0x" + "7b" * 32)
+    (sample.safe, sample.finalized) shouldBe ((Some(7_411_977L), Some(7_411_945L)))
+    reader()
+    fc.reads shouldBe 2
+  }
+
+  it should "show no head, safe or finalized before the consensus layer's first fork choice" taggedAs (UnitTest) in {
+    val reader = TuiStatusProbe.LocalSources.clReader(() => None, _ => fail("no hash to look up"))
+    val sample = reader().get
+    (sample.head, sample.safe, sample.finalized) shouldBe ((None, None, None))
+  }
+
+  it should "look a safe or finalized hash up once, then remember its number" taggedAs (UnitTest) in {
+    val fc = new CountingForkChoice(Some(ForkChoiceHashes(hashOf(1), hashOf(2), hashOf(3))))
+    val headers = new Headers(Map(hashOf(2) -> 100L, hashOf(3) -> 90L, hashOf(4) -> 101L))
+    val reader = TuiStatusProbe.LocalSources.clReader(fc.read, headers.number)
+    reader()
+    reader()
+    reader()
+    headers.lookups.sortBy(_.head) shouldBe Seq(hashOf(2), hashOf(3))
+    // A new safe block is a new lookup; the finalized one is still remembered.
+    fc.state = Some(ForkChoiceHashes(hashOf(1), hashOf(4), hashOf(3)))
+    val sample = reader().get
+    (sample.safe, sample.finalized) shouldBe ((Some(101L), Some(90L)))
+    headers.lookups.count(_ == hashOf(3)) shouldBe 1
+    headers.lookups.count(_ == hashOf(4)) shouldBe 1
+  }
+
+  it should "show a missing safe or finalized block for the zero hash, without a lookup" taggedAs (UnitTest) in {
+    val fc = new CountingForkChoice(Some(ForkChoiceHashes(hashOf(1), zeroHash, zeroHash)))
+    val reader = TuiStatusProbe.LocalSources.clReader(fc.read, _ => fail("a zero hash is no block"))
+    val sample = reader().get
+    (sample.safe, sample.finalized) shouldBe ((None, None))
+  }
+
+  it should "try again next poll for a hash whose header is not stored yet" taggedAs (UnitTest) in {
+    val fc = new CountingForkChoice(Some(ForkChoiceHashes(hashOf(1), hashOf(2), zeroHash)))
+    var known = Map.empty[ByteString, Long]
+    val reader = TuiStatusProbe.LocalSources.clReader(fc.read, hash => known.get(hash))
+    reader().get.safe shouldBe None
+    known = Map(hashOf(2) -> 55L)
+    reader().get.safe shouldBe Some(55L)
+  }
+
+  it should "read what the Engine API metrics recorded: the last calls, the counts, and no ACCEPTED in INVALID" taggedAs (
+    UnitTest
+  ) in {
+    val reader = TuiStatusProbe.LocalSources.clReader(() => None, _ => None)
+    val before = reader().get
+    val started = System.currentTimeMillis()
+    com.chipprbots.ethereum.consensus.engine.EngineApiMetrics.recordForkchoiceUpdated("SYNCING")
+    com.chipprbots.ethereum.consensus.engine.EngineApiMetrics.recordNewPayload("ACCEPTED", 9L, 9L)
+    com.chipprbots.ethereum.consensus.engine.EngineApiMetrics.recordNewPayload("VALID", 10L, 10L)
+    val after = reader().get
+    after.forkchoiceUpdated.map(_.status) shouldBe Some("SYNCING")
+    after.newPayload.map(_.status) shouldBe Some("VALID")
+    after.forkchoiceUpdated.map(_.at.toEpochMilli).get should be >= started
+    after.payloads.total - before.payloads.total shouldBe 2L
+    after.payloads.accepted - before.payloads.accepted shouldBe 1L
+    after.payloads.valid - before.payloads.valid shouldBe 1L
+    // The node's invalid count has ACCEPTED in it; the panel's does not.
+    after.payloads.invalid - before.payloads.invalid shouldBe 0L
+    com.chipprbots.ethereum.consensus.engine.EngineApiMetrics.recordNewPayload("INVALID", 11L, 11L)
+    reader().get.payloads.invalid - after.payloads.invalid shouldBe 1L
+  }
+
+  it should "read the authentication failures from the metrics" taggedAs (UnitTest) in {
+    val reader = TuiStatusProbe.LocalSources.clReader(() => None, _ => None)
+    val before = reader().get.authFailures
+    com.chipprbots.ethereum.consensus.engine.EngineApiMetrics.recordAuthFailure()
+    reader().get.authFailures - before shouldBe 1L
+  }
+
+  it should "keep the calls and the counts when a header lookup fails, and show no number for that block" taggedAs (
+    UnitTest
+  ) in {
+    val fc = new CountingForkChoice(Some(ForkChoiceHashes(hashOf(1), hashOf(2), hashOf(3))))
+    var failing = true
+    val reader = TuiStatusProbe.LocalSources.clReader(
+      fc.read,
+      hash => if failing then throw new IllegalStateException("storage closed") else Some(hash.head.toLong)
+    )
+    com.chipprbots.ethereum.consensus.engine.EngineApiMetrics.recordForkchoiceUpdated("VALID")
+    // The reading is still there: the panel and the disconnection alert do not flicker out for a failed lookup.
+    val sample = reader().getOrElse(fail("a header lookup that throws must not empty the reading"))
+    sample.forkchoiceUpdated.map(_.status) shouldBe Some("VALID")
+    sample.head shouldBe Some("0x" + "01" * 32)
+    (sample.safe, sample.finalized) shouldBe ((None, None))
+    // It recovers on the next poll.
+    failing = false
+    val recovered = reader().get
+    (recovered.safe, recovered.finalized) shouldBe ((Some(2L), Some(3L)))
+  }
+
+  it should "draw the status as text from the node, never as a control sequence" taggedAs (UnitTest) in {
+    val reader = TuiStatusProbe.LocalSources.clReader(() => None, _ => None)
+    com.chipprbots.ethereum.consensus.engine.EngineApiMetrics.recordForkchoiceUpdated("VA\u001b[2JLID\nnext")
+    val status = reader().get.forkchoiceUpdated.map(_.status).get
+    status.exists(ch => Character.isISOControl(ch)) shouldBe false
+    status should include("VA")
+    com.chipprbots.ethereum.consensus.engine.EngineApiMetrics.recordForkchoiceUpdated("VALID")
+  }
+
+  it should "show the head string it showed, not a new one, while the head stands" taggedAs (UnitTest) in {
+    val fc = new CountingForkChoice(Some(ForkChoiceHashes(hashOf(7), zeroHash, zeroHash)))
+    val reader = TuiStatusProbe.LocalSources.clReader(fc.read, _ => None)
+    val first = reader().get.head.get
+    (reader().get.head.get eq first) shouldBe true
+    fc.state = Some(ForkChoiceHashes(hashOf(8), zeroHash, zeroHash))
+    reader().get.head shouldBe Some("0x" + "08" * 32)
+  }
+
+  "The mining reader" should "read the hashrate, the counts and the DAG from PoWMiningMetrics, and the coinbase from its thunk" taggedAs (
+    UnitTest
+  ) in {
+    import com.chipprbots.ethereum.consensus.pow.PoWMiningMetrics as Pow
+    Pow.updateHashrate(BigInt(48_200_000L))
+    Pow.recordBlockMined(0L)
+    Pow.recordDagStarted(364L)
+    Pow.recordDagGenerating(37)
+    val reader = TuiStatusProbe.LocalSources.miningReader(() => "0x4f2a0b9c" + "0" * 32)
+    val sample = reader().get
+    sample.coinbase shouldBe Some("0x4f2a0b9c" + "0" * 32)
+    sample.hashrate shouldBe 48_200_000L
+    sample.blocksMined should be >= 1L
+    sample.lastMinedAt.map(_.getEpochSecond).get should be > 1_700_000_000L
+    sample.dag shouldBe Some(DagSample(364L, DagPhase.Generating, 37, loaded = false))
+    Pow.recordDagLoaded()
+    reader().get.dag shouldBe Some(DagSample(364L, DagPhase.Generating, 100, loaded = true))
+  }
+
+  it should "let a failing coinbase thunk fail the reading, which the probe logs once and leaves empty" taggedAs (
+    UnitTest
+  ) in {
+    val reader = TuiStatusProbe.LocalSources.miningReader(() => throw new IllegalStateException("no coinbase"))
+    an[IllegalStateException] should be thrownBy reader()
+  }
+
+  it should "read the getWork rate over the last minute, once it has seen two readings far enough apart" taggedAs (
+    UnitTest
+  ) in {
+    import com.chipprbots.ethereum.consensus.pow.PoWMiningMetrics as Pow
+    val clock = new TuiFixtures.TestClock(now)
+    val reader = TuiStatusProbe.LocalSources.miningReader(() => "0x00", clock)
+    reader().get.getWorkPerMinute shouldBe None
+    for _ <- 1 to 30 do Pow.recordGetWork()
+    clock.advance(30)
+    reader().get.getWorkPerMinute shouldBe Some(60L)
+  }
+
+  "The DAG sample" should "be absent before the first build and name the phase after it" taggedAs (UnitTest) in {
+    TuiStatusProbe.dagSample(epoch = -1L, phase = 0L, progress = 0L, loaded = 0L) shouldBe None
+    TuiStatusProbe.dagSample(0L, 0L, 0L, 0L) shouldBe Some(DagSample(0L, DagPhase.Pending, 0, loaded = false))
+    TuiStatusProbe.dagSample(364L, 1L, 42L, 0L) shouldBe Some(DagSample(364L, DagPhase.Loading, 42, loaded = false))
+    TuiStatusProbe.dagSample(364L, 2L, 37L, 0L) shouldBe Some(DagSample(364L, DagPhase.Generating, 37, loaded = false))
+    TuiStatusProbe.dagSample(364L, 2L, 100L, 1L) shouldBe Some(DagSample(364L, DagPhase.Generating, 100, loaded = true))
+  }
+
+  it should "keep a progress outside 0 to 100, which no writer sends, inside it" taggedAs (UnitTest) in {
+    TuiStatusProbe.dagSample(1L, 2L, 250L, 0L).map(_.progress) shouldBe Some(100)
+    TuiStatusProbe.dagSample(1L, 2L, -3L, 0L).map(_.progress) shouldBe Some(0)
+    TuiStatusProbe.dagSample(1L, 9L, 5L, 0L).map(_.phase) shouldBe Some(DagPhase.Pending)
+  }
+
+  "The getWork rate window" should "need two readings at least five seconds apart" taggedAs (UnitTest) in {
+    val w = new TuiStatusProbe.RateWindow()
+    w.add(0L, 100L) shouldBe None
+    w.add(4_000L, 100L) shouldBe None
+    w.add(5_000L, 100L) shouldBe Some(0L)
+  }
+
+  it should "be the change over the window, per minute" taggedAs (UnitTest) in {
+    val w = new TuiStatusProbe.RateWindow()
+    w.add(0L, 100L)
+    w.add(10_000L, 110L) shouldBe Some(60L)
+    w.add(70_000L, 190L) shouldBe Some(80L) // the reading at 0 s is a minute and more old: 10 s to 70 s, 80 requests
+  }
+
+  it should "start over when the clock goes backwards, as a stepped clock does" taggedAs (UnitTest) in {
+    val w = new TuiStatusProbe.RateWindow()
+    w.add(10_000L, 100L)
+    w.add(20_000L, 110L) shouldBe Some(60L)
+    // The newest reading is later than this one: time went back. The old readings say nothing about what comes next.
+    w.add(5_000L, 120L) shouldBe None
+    w.add(15_000L, 130L) shouldBe Some(60L)
+  }
+
+  it should "start over when the counter goes backwards, as a restarted node's does" taggedAs (UnitTest) in {
+    val w = new TuiStatusProbe.RateWindow()
+    w.add(0L, 500L)
+    w.add(10_000L, 600L) shouldBe Some(600L)
+    w.add(20_000L, 3L) shouldBe None
+    w.add(30_000L, 13L) shouldBe Some(60L)
+  }

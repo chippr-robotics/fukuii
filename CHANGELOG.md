@@ -231,6 +231,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     regular sync (`Import   last 3 blocks in 61ms`).
   - **Motion.** A frame counts as moving when either of the next two ticks draws it differently: a worm near the start
     of its track drew two ticks alike, and the dashboard dropped to one frame a second for a beat.
+- **The `--tui` dashboard has a consensus-layer panel on ETH and a mining panel on ETC, each with its alerts (spec 027
+  slice 5).** Both only report: no Engine API response, status or timing, and no mining or DAG behaviour, changes.
+  - **Consensus layer (ETH, Engine API on).** The Overview shows whether the consensus layer is calling (`waiting`,
+    `connected`, `DISCONNECTED`), the age and status of its last `engine_forkchoiceUpdated` and `engine_newPayload`, the
+    head, safe and finalized blocks (the safe and finalized numbers are looked up once and remembered), the JWT
+    authentication failures when there are any, and the payload counts. The counts are labelled by what is counted:
+    `app_engine_newpayload_invalid` has always counted an ACCEPTED payload with the INVALID ones, and keeps doing so, so
+    the panel reads a new count of the ACCEPTED ones and shows VALID, ACCEPTED and INVALID apart (SYNCING only when
+    something counts it; no caller does).
+  - **Mining (ETC).** The Overview shows `Mining  off`, `Mining  off (internal) · external: 48.2 MH/s · getWork 1,204
+    (20/min)` when external miners are asking the node for work (`mining-enabled` gates the internal CPU miner only), or
+    mining on with the coinbase, hashrate, blocks mined and
+    when the last was, stale shares, the `eth_getWork` count and its rate over the last minute, and the DAG with its
+    ECIP-1099 epoch, its phase (preparing, loading from file, generating), its percent and a spinner. The hashrate is the
+    last one submitted, so it does not fall when a miner goes quiet. Nothing of Olympia, a treasury or a base fee is on
+    the panel.
+  - **Alerts.** Error: no `engine_forkchoiceUpdated` for more than 60 s after one was heard. Warning: none yet 60 s
+    after the node started, with the count of failed JWT checks when there are any (a secret that does not match
+    leaves the consensus layer waiting for ever, and the panel says so on its first row); no `engine_newPayload` for more
+    than 5 minutes while a peer, or the sync's target, is ahead of the node's head (a payload the node already held is
+    answered without a record, so a node at its head is quiet, and one never recorded counts from when the consensus
+    layer was first seen, so a late attach is not measured against the node's uptime);
+    ETC mining on with a reported hashrate of 0 for more than 10 minutes, counted from when the DAG is loaded.
+  - **New metrics.** `app_engine_newpayload_accepted`, `app_engine_auth_failures` (JWT checks answered 401, one number,
+    no tag), `app_pow_dag_epoch` (`-1` before the first build), `app_pow_dag_phase`, `app_pow_dag_progress` and
+    `app_pow_dag_loaded`. The 11 `app_engine_*` and 6 `app_pow_*` series that were there are unchanged. The mining
+    metrics object is now initialised before the miner starts, when mining is enabled. With `--tui` on, an ETC node
+    now exposes the `app_pow_*` series even with mining off, as the panel reads them on every poll.
 - **SNAP sync on ETC and Mordor now ends with the exact pivot total difficulty (#1654).**
   `fukuii.sync.snap-sync.defer-chain-backfill-until-state-complete` is now `true` for every chain; before, only the
   Ethereum, Sepolia, Platåberget and Ephemery configs set it. With it off, ETC and Mordor finished SNAP before the

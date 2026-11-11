@@ -58,13 +58,17 @@ class TuiRenderer(config: TuiConfig):
   /** Whether anything at all can move: only under full motion. */
   private def moving(state: TuiState): Boolean = state.motion == Motion.Full
 
-  /** Whether any row could move: SNAP's worm rows, a syncing Blocks worm, a spinner beside an in-flight status. A node
-    * with none of them (at its head, connected, idle) is not drawn a second time to find out, which halves the frame
-    * loop's render cost at the 1 s pace.
+  /** Whether any row could move: SNAP's worm rows, a syncing Blocks worm, a spinner beside an in-flight status, the
+    * spinner of a DAG that is being built. A node with none of them (at its head, connected, idle) is not drawn a
+    * second time to find out, which halves the frame loop's render cost at the 1 s pace.
     */
   private def mayMove(state: TuiState): Boolean =
     state.snapSyncState.isDefined || (state.bestBlock > 0 && !state.isSynchronized) ||
-      InFlight.contains(state.connectionStatus)
+      InFlight.contains(state.connectionStatus) || dagBuilding(state)
+
+  /** The mining panel draws a spinner beside a DAG that is not yet loaded (`MiningPanel`). */
+  private def dagBuilding(state: TuiState): Boolean =
+    state.nodeSettings.miningEnabled && state.snapshot.exists(_.local.mining.exists(_.dag.exists(!_.loaded)))
 
   private def handover(state: TuiState, w: Int, height: Int, theme: TuiTheme, rows: Int): Seq[AttributedString] =
     dashboard(state, w, height, theme).take(rows) ++ Splash.render(state, w, height, theme, config.showLogo).drop(rows)

@@ -52,8 +52,10 @@ class TuiGoldenLintSpec extends AnyFlatSpec with Matchers:
   }
 
   it should "never cut a number: no ellipsis right after a digit or a comma" taggedAs (UnitTest) in {
-    // A peer's short id (0x3fa1…e2) is the one number the TUI shortens on purpose.
-    val shortId = "0x[0-9a-f]{4}(…|\\.\\.)[0-9a-f]{2}".r
+    // The hex ids the TUI shortens on purpose, in the three shapes it draws: a peer's (0x3fa1…e2), a block hash
+    // (0x7b3e…a91c) and the coinbase (0x4f2a0b9c…c91e). Each is a name, not a number, and shows both of its ends.
+    val shortId =
+      ("0x(?:[0-9a-f]{4}(?:…|\\.\\.)[0-9a-f]{2}|[0-9a-f]{4}(?:…|\\.\\.)[0-9a-f]{4}|[0-9a-f]{8}(?:…|\\.\\.)[0-9a-f]{4})(?![0-9a-f])").r
     val cutNumber = "[0-9,](…|\\.\\.)".r
     for (name, rows) <- goldens; (row, i) <- rows.zipWithIndex do
       withClue(s"$name row $i: '$row'\n")(cutNumber.findFirstIn(shortId.replaceAllIn(row, "")) shouldBe None)

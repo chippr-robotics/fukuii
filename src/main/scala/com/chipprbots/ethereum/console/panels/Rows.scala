@@ -121,14 +121,17 @@ private[console] object Rows:
       )
     else text(s"${formatNumber(s.currentBlock)} $arrow unknown", c.t.value)
 
-  /** `:8545 on   WS :8552 on   IPC on   Engine :8551 on`: each endpoint that is on, or RPC off. */
+  /** `:8545 on WS :8552 on IPC on Engine :8551 on`: each endpoint that is on, or RPC off. At tier S the RPC cell has 32
+    * columns, which `:8545 on Engine :8551` fills and `Engine :8551 on` would cut inside the port number: the port
+    * alone says the Engine API is on.
+    */
   def endpointsValue(c: Ctx): AttributedString =
     val n = c.state.nodeSettings
     val parts =
       Seq(if n.rpcEnabled then s":${n.rpcPort} on" else "off") ++
         Option.when(n.wsEnabled)(s"WS :${n.wsPort} on") ++
         Option.when(n.ipcEnabled)("IPC on") ++
-        Option.when(n.engineEnabled)(s"Engine :${n.enginePort} on")
+        Option.when(n.engineEnabled)(s"Engine :${n.enginePort}${if c.tier == Tier.S then "" else " on"}")
     text(parts.mkString("   "), c.t.value)
 
   private def local(c: Ctx): LocalSample = c.state.snapshot.fold(LocalSample())(_.local)
