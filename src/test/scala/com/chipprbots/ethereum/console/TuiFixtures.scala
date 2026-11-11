@@ -514,6 +514,14 @@ object TuiFixtures:
       _.copy(mining = Some(miningOn.copy(hashrate = 0L, blocksMined = 0L, lastMinedAt = None, getWorkPerMinute = None)))
     )
 
+  /** An ETC node whose internal miner is off but that external miners use: they submit a hashrate and ask for work. */
+  def miningExternalEtc(glyphs: GlyphSet = GlyphSet.Emoji): TuiState =
+    val s = withLocal(
+      syncedEtc(glyphs),
+      _.copy(mining = Some(miningOn.copy(blocksMined = 0L, lastMinedAt = None, dag = None)))
+    )
+    s.copy(nodeSettings = s.nodeSettings.copy(miningEnabled = false))
+
   /** An ETC node with mining off: the mining panel is one line. */
   def miningOffEtc(glyphs: GlyphSet = GlyphSet.Emoji): TuiState =
     val s = withLocal(syncedEtc(glyphs), _.copy(mining = Some(MiningSample())))
@@ -530,7 +538,8 @@ object TuiFixtures:
     "mining" -> (g => miningEtc(g)),
     "dag-generating" -> (g => dagGeneratingEtc(g)),
     "no-hashrate" -> (g => noHashrateEtc(g)),
-    "mining-off" -> (g => miningOffEtc(g))
+    "mining-off" -> (g => miningOffEtc(g)),
+    "mining-external" -> (g => miningExternalEtc(g))
   )
 
   /** A poll at `now` that both actors answered: `peers` of 50, the sync controller at `current` of `best`. */

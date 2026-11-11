@@ -60,6 +60,34 @@ class MiningPanelSpec extends AnyFlatSpec with Matchers with BeforeAndAfterAll w
       }
   }
 
+  it should "say so, in one row, when the internal miner is off and external miners are using the node" taggedAs (
+    UnitTest
+  ) in {
+    // `mining-enabled` gates the internal CPU miner only: eth_getWork and eth_submitHashrate serve ethminer and pools.
+    for (w, h) <- sizes; set <- GlyphSet.values do
+      val panel = miningRows(TuiFixtures.miningExternalEtc(set), w, h)
+      withClue(s"${w}x$h $set:\n${panel.mkString("\n")}\n") {
+        panel should have size 1
+        panel.head should startWith(" Mining  off (internal)")
+        panel.head should include("external: 48.2 MH/s")
+        panel.head should include("getWork 1,204 (20/min)")
+      }
+    val s = TuiFixtures.miningExternalEtc()
+    // Work asked for, no hashrate submitted: say so, not 0 H/s.
+    val noHashrate = drawn(s, TuiFixtures.miningOn.copy(hashrate = 0L, dag = None), 120, 40)
+    noHashrate shouldBe Seq(noHashrate.head)
+    noHashrate.head should include("external: none reported")
+    noHashrate.head should include("getWork 1,204")
+    // A hashrate with no getWork (a pool that only reports).
+    drawn(s, MiningSample(hashrate = 1_500L), 120, 40).head should include("external: 1.5 kH/s")
+    (drawn(s, MiningSample(hashrate = 1_500L), 120, 40).head should not).include("getWork")
+    // Nothing from an external miner: plain off, as before.
+    drawn(s, MiningSample(), 120, 40).head.trim shouldBe "Mining  off"
+    // And no total when the rate is not known yet.
+    drawn(s, MiningSample(getWork = 9L), 120, 40).head should include("getWork 9")
+    (drawn(s, MiningSample(getWork = 9L), 120, 40).head should not).include("/min")
+  }
+
   it should "show on, the coinbase, the DAG epoch and that it is loaded in a row, the hashrate and the counts in a second, from tier M" taggedAs (
     UnitTest
   ) in {
@@ -235,6 +263,7 @@ class MiningPanelSpec extends AnyFlatSpec with Matchers with BeforeAndAfterAll w
   }
 
   it should "not fire when mining is off, or on a node whose probe reads no mining at all" taggedAs (UnitTest) in {
+    // The hashrate alert is the internal miner's: external miners that submit nothing are not "mining on" with no hashrate.
     texts(polled(false, 0L -> Some(loadedNoHashrate), 900L -> Some(loadedNoHashrate))) shouldBe empty
     texts(polled(true, 0L -> None, 900L -> None)) shouldBe empty
   }
@@ -268,15 +297,16 @@ class MiningPanelSpec extends AnyFlatSpec with Matchers with BeforeAndAfterAll w
     "on" -> (g => TuiFixtures.miningEtc(g)),
     "dag" -> (g => TuiFixtures.dagGeneratingEtc(g)),
     "off" -> (g => TuiFixtures.miningOffEtc(g)),
-    "no-hashrate" -> (g => TuiFixtures.noHashrateEtc(g))
+    "no-hashrate" -> (g => TuiFixtures.noHashrateEtc(g)),
+    "external" -> (g => TuiFixtures.miningExternalEtc(g))
   )
 
   private def fileName(width: Int, height: Int, state: String, set: GlyphSet): String =
     s"mining-${Tier.of(width, height).toString.toLowerCase}-$state-${set.toString.toLowerCase}.txt"
 
-  "The mining goldens" should "cover four states, three tiers, two glyph sets: 24 files" taggedAs (UnitTest) in {
+  "The mining goldens" should "cover five states, three tiers, two glyph sets: 30 files" taggedAs (UnitTest) in {
     val names = for (s, _) <- goldens; (w, h) <- sizes; set <- GlyphSet.values.toSeq yield fileName(w, h, s, set)
-    names.distinct should have size 24
+    names.distinct should have size 30
   }
 
   for (stateName, fixture) <- goldens; (width, height) <- sizes; set <- GlyphSet.values do

@@ -7,7 +7,7 @@
  Sync    regular                                                                       rate 0.08 blk/s . ETA 24s |                      --                      
    Blocks   [======================================~o.]@@ 99%   7,412,009 / 7,412,011                            |                    .=+#+.                    
 -----------------------------------------------------------------------------------------------------------------|                   .+++*#*.                   
- Consensus layer CL waiting for the consensus layer's first forkchoiceUpdated                                    |                  :++++*###-                  
+ Consensus layer waiting for its first forkchoiceUpdated                                                         |                  :++++*###-                  
 -----------------------------------------------------------------------------------------------------------------|                .=+++++*####+.                
  Forks (timestamp)                                                                                               |               .=++++++*#####+.               
    Cancun + - Prague + - Osaka + - BPO1 + - BPO2 + ========> Amsterdam @ 2026-10-06T13:53:36Z (in 3d 4h)         |              :++++++++*#######:              

@@ -728,6 +728,45 @@ class TuiStatusProbeSpec extends ScalaTestWithActorTestKit with AnyFlatSpecLike 
     reader().get.authFailures - before shouldBe 1L
   }
 
+  it should "keep the calls and the counts when a header lookup fails, and show no number for that block" taggedAs (
+    UnitTest
+  ) in {
+    val fc = new CountingForkChoice(Some(ForkChoiceHashes(hashOf(1), hashOf(2), hashOf(3))))
+    var failing = true
+    val reader = TuiStatusProbe.LocalSources.clReader(
+      fc.read,
+      hash => if failing then throw new IllegalStateException("storage closed") else Some(hash.head.toLong)
+    )
+    com.chipprbots.ethereum.consensus.engine.EngineApiMetrics.recordForkchoiceUpdated("VALID")
+    // The reading is still there: the panel and the disconnection alert do not flicker out for a failed lookup.
+    val sample = reader().getOrElse(fail("a header lookup that throws must not empty the reading"))
+    sample.forkchoiceUpdated.map(_.status) shouldBe Some("VALID")
+    sample.head shouldBe Some("0x" + "01" * 32)
+    (sample.safe, sample.finalized) shouldBe ((None, None))
+    // It recovers on the next poll.
+    failing = false
+    val recovered = reader().get
+    (recovered.safe, recovered.finalized) shouldBe ((Some(2L), Some(3L)))
+  }
+
+  it should "draw the status as text from the node, never as a control sequence" taggedAs (UnitTest) in {
+    val reader = TuiStatusProbe.LocalSources.clReader(() => None, _ => None)
+    com.chipprbots.ethereum.consensus.engine.EngineApiMetrics.recordForkchoiceUpdated("VA\u001b[2JLID\nnext")
+    val status = reader().get.forkchoiceUpdated.map(_.status).get
+    status.exists(ch => Character.isISOControl(ch)) shouldBe false
+    status should include("VA")
+    com.chipprbots.ethereum.consensus.engine.EngineApiMetrics.recordForkchoiceUpdated("VALID")
+  }
+
+  it should "show the head string it showed, not a new one, while the head stands" taggedAs (UnitTest) in {
+    val fc = new CountingForkChoice(Some(ForkChoiceHashes(hashOf(7), zeroHash, zeroHash)))
+    val reader = TuiStatusProbe.LocalSources.clReader(fc.read, _ => None)
+    val first = reader().get.head.get
+    (reader().get.head.get eq first) shouldBe true
+    fc.state = Some(ForkChoiceHashes(hashOf(8), zeroHash, zeroHash))
+    reader().get.head shouldBe Some("0x" + "08" * 32)
+  }
+
   "The mining reader" should "read the hashrate, the counts and the DAG from PoWMiningMetrics, and the coinbase from its thunk" taggedAs (
     UnitTest
   ) in {
@@ -792,6 +831,15 @@ class TuiStatusProbeSpec extends ScalaTestWithActorTestKit with AnyFlatSpecLike 
     w.add(0L, 100L)
     w.add(10_000L, 110L) shouldBe Some(60L)
     w.add(70_000L, 190L) shouldBe Some(80L) // the reading at 0 s is a minute and more old: 10 s to 70 s, 80 requests
+  }
+
+  it should "start over when the clock goes backwards, as a stepped clock does" taggedAs (UnitTest) in {
+    val w = new TuiStatusProbe.RateWindow()
+    w.add(10_000L, 100L)
+    w.add(20_000L, 110L) shouldBe Some(60L)
+    // The newest reading is later than this one: time went back. The old readings say nothing about what comes next.
+    w.add(5_000L, 120L) shouldBe None
+    w.add(15_000L, 130L) shouldBe Some(60L)
   }
 
   it should "start over when the counter goes backwards, as a restarted node's does" taggedAs (UnitTest) in {

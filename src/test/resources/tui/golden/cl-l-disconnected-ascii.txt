@@ -7,7 +7,7 @@
  Sync    regular                                                                       rate 0.08 blk/s . ETA 24s |                      --                      
    Blocks   [======================================~o.]@@ 99%   7,412,009 / 7,412,011                            |                    .=+#+.                    
 -----------------------------------------------------------------------------------------------------------------|                   .+++*#*.                   
- Consensus layer CL DISCONNECTED . forkchoiceUpdated 6m 3s ago (VALID) . newPayload 6m 5s ago (VALID)            |                  :++++*###-                  
+ Consensus layer DISCONNECTED . forkchoiceUpdated 6m 3s ago (VALID) . newPayload 6m 5s ago (VALID)               |                  :++++*###-                  
    head 0x7b3e..a91c   safe 7,411,977   finalized 7,411,945                                                      |                .=+++++*####+.                
    payloads 184,203 (VALID 184,199 . ACCEPTED 4 . INVALID 0)                                                     |               .=++++++*#####+.               
 -----------------------------------------------------------------------------------------------------------------|              :++++++++*#######:              

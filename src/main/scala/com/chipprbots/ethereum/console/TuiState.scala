@@ -68,7 +68,10 @@ enum Catchup:
   *   the last two peer-score snapshots slice 4a published: the score column and its trend (FR-019, D-1)
   * @param hashrateZeroSince
   *   when the node's reported hashrate, with its DAG loaded, was last seen to become 0: the alert row's "no hashrate
-  *   reported for …" (§2.3). It does not run while the DAG is being built, which submits nothing
+  *   reported for …" (§2.3). It does not run while the DAG is being built, which submits nothing * @param clSeenSince
+  *   when the probe first read a forkchoiceUpdated from the consensus layer: a payload never recorded counts from then,
+  *   or from the node's start if that is later, so a consensus layer that attaches to a node that has been up for an
+  *   hour is not measured against the hour
   */
 case class TuiState(
     networkName: String = "unknown",
@@ -99,7 +102,8 @@ case class TuiState(
     logs: Vector[LogLine] = Vector.empty,
     logScroll: Int = 0,
     scores: ScoreHistory = ScoreHistory(),
-    hashrateZeroSince: Option[Instant] = None
+    hashrateZeroSince: Option[Instant] = None,
+    clSeenSince: Option[Instant] = None
 ):
 
   import TuiState.*
@@ -212,6 +216,7 @@ case class TuiState(
       case Some(m) if m.dag.exists(_.loaded) && m.hashrate == 0L => hashrateZeroSince.orElse(Some(status.now))
       case Some(_)                                               => None
       case None                                                  => hashrateZeroSince
+    val seenSince = clSeenSince.orElse(status.local.cl.flatMap(_.forkchoiceUpdated).map(_ => status.now))
     val next = copy(now = status.now)
       .withPeerCount(status.peerCount, status.maxPeers)
       .withBlockInfo(status.currentBlock, status.bestBlock)
@@ -222,7 +227,8 @@ case class TuiState(
         snapshot = Some(status),
         zeroPeersSince = zeroSince,
         scores = scores.next(status.local.peerScores),
-        hashrateZeroSince = zeroHashrateSince
+        hashrateZeroSince = zeroHashrateSince,
+        clSeenSince = seenSince
       )
     val caughtUp = bestBlock > 0 && !isSynchronized && next.isSynchronized
     if !caughtUp then next
@@ -289,8 +295,11 @@ case class TuiState(
     val bound = (logs.size - page.max(1)).max(0)
     copy(logScroll = (logScroll.min(bound) + lines).max(0).min(bound))
 
-  /** A peer's score in the latest published snapshot; none for a peer it does not have, never zero (Q5). */
-  def peerScore(peerId: String): Option[Double] = scores.current.flatMap(_.scores.get(peerId))
+  /** A peer's score in the latest published snapshot; none for a peer it does not have, never zero (Q5), and none for a
+    * score that is not finite: a NaN would draw as `0.000` and an infinity as a 19-digit number, so it is a score the
+    * scorer has not given, which draws `—` and sorts last.
+    */
+  def peerScore(peerId: String): Option[Double] = scores.current.flatMap(_.scores.get(peerId)).filter(_.isFinite)
 
   /** The sign of a peer's score change from the previous published snapshot, at the precision the column shows
     * ([[TuiState.ScoreDigits]] decimals): the recency term drifts every score down a little between snapshots, which is
@@ -299,7 +308,7 @@ case class TuiState(
   def scoreTrend(peerId: String): Option[Trend] =
     for
       now <- peerScore(peerId)
-      before <- scores.previous.flatMap(_.scores.get(peerId))
+      before <- scores.previous.flatMap(_.scores.get(peerId)).filter(_.isFinite)
     yield scoreUnits(now).compareTo(scoreUnits(before)) match
       case d if d > 0 => Trend.Up
       case d if d < 0 => Trend.Down
@@ -508,7 +517,12 @@ final case class LocalSample(
 )
 
 /** The Engine API's last call of one method (`EngineApiMetrics`, E1): when, and the status it was answered with. */
-final case class ClCall(at: Instant, status: String)
+final case class ClCall(at: Instant, status: String):
+
+  /** How long ago the call was at `now`: never negative, whichever clock is ahead. */
+  def ageAt(now: Instant): Duration =
+    val gap = Duration.between(at, now)
+    if gap.isNegative then Duration.ZERO else gap
 
 /** The node's count of `engine_newPayload` calls by status. `accepted` is counted apart, so `invalid` is the INVALID
   * ones alone: `engine_newpayload_invalid` has always counted the ACCEPTED ones with them. `syncing` is whatever the
@@ -524,7 +538,7 @@ enum ClLink:
   /** No `engine_forkchoiceUpdated` yet. */
   case Waiting
 
-  /** The last one is no older than [[Alerts.ClSilentAfter]]. */
+  /** The last one is no older than [[ClSample.ClSilentAfter]]. */
   case Connected
 
   /** The last one is older: the consensus layer was calling and has stopped. */
@@ -557,16 +571,23 @@ final case class ClSample(
     finalized: Option[Long] = None
 ):
 
-  /** How long ago `call` was at `now`: never negative, whichever clock is ahead. */
-  def age(call: ClCall, now: Instant): Duration =
-    val gap = Duration.between(call.at, now)
-    if gap.isNegative then Duration.ZERO else gap
-
   /** The link, at `now`. */
-  def link(now: Instant): ClLink = forkchoiceUpdated.map(age(_, now)) match
-    case None                                                       => ClLink.Waiting
-    case Some(silent) if silent.compareTo(Alerts.ClSilentAfter) > 0 => ClLink.Disconnected
-    case Some(_)                                                    => ClLink.Connected
+  def link(now: Instant): ClLink = forkchoiceUpdated.map(_.ageAt(now)) match
+    case None                                                         => ClLink.Waiting
+    case Some(silent) if silent.compareTo(ClSample.ClSilentAfter) > 0 => ClLink.Disconnected
+    case Some(_)                                                      => ClLink.Connected
+
+object ClSample:
+
+  /** The consensus layer calls `engine_forkchoiceUpdated` every slot, 12 s: a last call older than this is 5 slots of
+    * silence, and the link is down.
+    */
+  val ClSilentAfter: Duration = Duration.ofSeconds(60)
+
+  /** How long a node may be up, with no forkchoiceUpdated at all, before that is worth a warning: a consensus layer
+    * that has not connected yet is not one that was lost.
+    */
+  val ClFirstCallGrace: Duration = Duration.ofSeconds(60)
 
 /** What a DAG build is doing (`pow_dag_phase`). */
 enum DagPhase:

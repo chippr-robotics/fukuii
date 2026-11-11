@@ -115,7 +115,7 @@ class ClPanelSpec extends AnyFlatSpec with Matchers with BeforeAndAfterAll with 
       val panel = clRows(TuiFixtures.clWaitingSepolia(), w, h)
       withClue(s"${w}x$h:\n${panel.mkString("\n")}\n") {
         panel should have size 1
-        panel.head should include("waiting for the consensus layer")
+        panel.head should include("waiting for its first forkchoiceUpdated")
       }
   }
 
@@ -128,6 +128,62 @@ class ClPanelSpec extends AnyFlatSpec with Matchers with BeforeAndAfterAll with 
         panel.head should include("6m 3s")
         panel.head should include("6m 5s")
       }
+  }
+
+  it should "show the authentication failures on the first row while it is waiting, and at tier S, which have no second row" taggedAs (
+    UnitTest
+  ) in {
+    def withAuth(s: TuiState, n: Long) =
+      TuiFixtures.withLocal(s, l => l.copy(cl = l.cl.map(_.copy(authFailures = n))))
+    // A wrong JWT secret leaves the consensus layer waiting for ever: the count is the one sign of it.
+    for (w, h) <- sizes do
+      clRows(withAuth(TuiFixtures.clWaitingSepolia(), 3L), w, h).head should include("3 auth failures")
+      clRows(withAuth(TuiFixtures.clWaitingSepolia(), 1L), w, h).head should include("1 auth failure")
+      (clRows(withAuth(TuiFixtures.clWaitingSepolia(), 1L), w, h).head should not).include("1 auth failures")
+    // At tier S every state has one row, and the count outranks the statuses: they go before it is cut.
+    val connected = clRows(withAuth(TuiFixtures.sepoliaNearHead(), 3L), 80, 24).head
+    connected should include("3 auth failures")
+    connected should include("forkchoice 4s")
+    (connected should not).include("…")
+    clRows(withAuth(TuiFixtures.clDisconnectedSepolia(), 3L), 80, 24).head should include("3 auth failures")
+    // None when there are none.
+    (clRows(TuiFixtures.clWaitingSepolia(), 80, 24).head should not).include("auth")
+    (clRows(TuiFixtures.sepoliaNearHead(), 80, 24).head should not).include("auth")
+    // From tier M a node that is calling has them on its second row, and only there.
+    val m = clRows(withAuth(TuiFixtures.sepoliaNearHead(), 3L), 120, 40)
+    (m.head should not).include("auth")
+    m(1) should include("auth failures 3")
+  }
+
+  it should "give the link glyph to the emoji set only: the ASCII set's own is the label's `CL`" taggedAs (UnitTest) in {
+    for
+      (w, h) <- sizes.drop(1);
+      fixture <- Seq(
+        (g: GlyphSet) => TuiFixtures.sepoliaNearHead(g),
+        (g: GlyphSet) => TuiFixtures.clWaitingSepolia(g),
+        (g: GlyphSet) => TuiFixtures.clDisconnectedSepolia(g)
+      )
+    do
+      val ascii = clRows(fixture(GlyphSet.Ascii), w, h).head
+      withClue(s"${w}x$h: '$ascii'\n") {
+        ascii should startWith(" Consensus layer ")
+        (ascii should not).include("Consensus layer CL")
+      }
+      clRows(fixture(GlyphSet.Emoji), w, h).head should include("Consensus layer 🔗 ")
+  }
+
+  it should "use the compact form, without ago, when the long one would be cut, as it is at 100 columns" taggedAs (UnitTest) in {
+    val disconnected = clRows(TuiFixtures.clDisconnectedSepolia(), 100, 32)
+    withClue(disconnected.mkString("\n")) {
+      disconnected.head should include("DISCONNECTED")
+      disconnected.head should include("forkchoiceUpdated 6m 3s (VALID)")
+      disconnected.head should include("newPayload 6m 5s (VALID)")
+      (disconnected.head should not).include("…")
+      (disconnected.head should not).include(" ago")
+    }
+    // A row that fits keeps its long form, and a wider terminal keeps it for the disconnected one too.
+    clRows(TuiFixtures.sepoliaNearHead(), 100, 32).head should include("forkchoiceUpdated 4s ago (VALID)")
+    clRows(TuiFixtures.clDisconnectedSepolia(), 120, 40).head should include("forkchoiceUpdated 6m 3s ago (VALID)")
   }
 
   it should "be on an ETH node only: an ETC node, whatever it mines, has no consensus-layer row" taggedAs (UnitTest) in {
@@ -200,6 +256,20 @@ class ClPanelSpec extends AnyFlatSpec with Matchers with BeforeAndAfterAll with 
     Alerts.of(waiting(61)) shouldBe Seq(Alert(Severity.Warn, "no CL yet: no forkchoiceUpdated in 1m 1s"))
   }
 
+  it should "say how many JWT checks failed: a wrong secret is a consensus layer that calls and is refused" taggedAs (
+    UnitTest
+  ) in {
+    def refused(n: Long) =
+      TuiFixtures
+        .withLocal(
+          TuiFixtures.clWaitingSepolia().copy(startTime = t0.minusSeconds(61)),
+          l => l.copy(cl = l.cl.map(_.copy(authFailures = n)))
+        )
+    texts(refused(1L)) shouldBe Seq("no CL yet: no forkchoiceUpdated in 1m 1s (1 JWT failure)")
+    texts(refused(40L)) shouldBe Seq("no CL yet: no forkchoiceUpdated in 1m 1s (40 JWT failures)")
+    texts(refused(0L)) shouldBe Seq("no CL yet: no forkchoiceUpdated in 1m 1s")
+  }
+
   it should "be a warning, not an error: a node waiting for its first consensus layer is not a node that lost one" taggedAs (
     UnitTest
   ) in {
@@ -233,15 +303,31 @@ class ClPanelSpec extends AnyFlatSpec with Matchers with BeforeAndAfterAll with 
     )
   }
 
-  it should "count a consensus layer that has called but never sent a payload from the start of the node" taggedAs (
-    UnitTest
-  ) in {
+  it should "count a node's own start for a consensus layer seen before any state had its time" taggedAs (UnitTest) in {
+    // The fixtures are not built poll by poll, so they carry no time the consensus layer was first seen: the start counts.
     val noPayload = TuiFixtures.withLocal(
       TuiFixtures.sepoliaNearHead().copy(startTime = t0.minusSeconds(301)),
       l => l.copy(cl = l.cl.map(_.copy(newPayload = None)))
     )
     texts(noPayload) shouldBe Seq("no newPayload for 5m 1s while peers are ahead")
     texts(noPayload.copy(startTime = t0.minusSeconds(300))) shouldBe empty
+  }
+
+  it should "count a payload never recorded from when the consensus layer was first seen, or the node started, whichever is later" taggedAs (
+    UnitTest
+  ) in {
+    val noPayload = TuiFixtures.withLocal(
+      TuiFixtures.sepoliaNearHead().copy(startTime = t0.minusSeconds(3_600)),
+      l => l.copy(cl = l.cl.map(_.copy(newPayload = None)))
+    )
+    // Up for an hour, the consensus layer seen 100 s ago: it has been calling for 100 s, not for an hour.
+    texts(noPayload.copy(clSeenSince = Some(t0.minusSeconds(100)))) shouldBe empty
+    texts(noPayload.copy(clSeenSince = Some(t0.minusSeconds(300)))) shouldBe empty
+    texts(noPayload.copy(clSeenSince = Some(t0.minusSeconds(301)))) shouldBe Seq(
+      "no newPayload for 5m 1s while peers are ahead"
+    )
+    // Seen before the node started (a clock step, a restarted TUI): the start is the later of the two.
+    texts(noPayload.copy(startTime = t0.minusSeconds(100), clSeenSince = Some(t0.minusSeconds(900)))) shouldBe empty
   }
 
   it should "need a peer ahead of the node's head: a peer's best block, or the sync's own target" taggedAs (UnitTest) in {
@@ -255,6 +341,44 @@ class ClPanelSpec extends AnyFlatSpec with Matchers with BeforeAndAfterAll with 
     // Neither is above the head.
     texts(atHead(stale)) shouldBe empty
     texts(atHead(noDetails)) shouldBe empty
+  }
+
+  // ---- when the consensus layer was first seen: what a late attach is measured from ------------------------------------
+
+  /** A poll `seconds` after t0: the head moves every poll, so nothing here is a stalled sync. */
+  private def clPoll(state: TuiState, seconds: Long, cl: ClSample): TuiState =
+    state.withStatus(
+      TuiFixtures
+        .snapshot(current = 100 + seconds, best = 200 + seconds, now = t0.plusSeconds(seconds))
+        .copy(local = LocalSample(cl = Some(cl)))
+    )
+
+  /** A sample whose last forkchoiceUpdated came 4 s before `seconds`, and no payload. */
+  private def calling(seconds: Long): ClSample =
+    ClSample(forkchoiceUpdated = Some(ClCall(t0.plusSeconds(seconds - 4), "VALID")))
+
+  "The time the consensus layer was first seen" should "be the first poll with a forkchoiceUpdated, and stay" taggedAs (
+    UnitTest
+  ) in {
+    val start = TuiState(maxPeers = 50, startTime = t0, now = t0)
+    val waiting = clPoll(start, 0, ClSample())
+    waiting.clSeenSince shouldBe None
+    val seen = clPoll(waiting, 100, calling(100))
+    seen.clSeenSince shouldBe Some(t0.plusSeconds(100))
+    clPoll(seen, 200, calling(200)).clSeenSince shouldBe Some(t0.plusSeconds(100))
+    // A poll the probe could not read leaves it.
+    seen.withStatus(TuiFixtures.snapshot(current = 100, best = 200, now = t0.plusSeconds(300))).clSeenSince shouldBe
+      Some(t0.plusSeconds(100))
+  }
+
+  "A consensus layer that attaches to a node that has been up for an hour" should "not trip the newPayload warning on its first call" taggedAs (
+    UnitTest
+  ) in {
+    val up = clPoll(clPoll(TuiState(maxPeers = 50, startTime = t0, now = t0), 0, ClSample()), 3_600, ClSample())
+    val attached = clPoll(up, 3_700, calling(3_700))
+    texts(attached) shouldBe empty
+    texts(clPoll(attached, 4_000, calling(4_000))) shouldBe empty // 300 s of calling, no payload yet
+    texts(clPoll(attached, 4_001, calling(4_001))) shouldBe Seq("no newPayload for 5m 1s while peers are ahead")
   }
 
   // ---- the rules of the row ------------------------------------------------------------------------------------------
@@ -278,6 +402,8 @@ class ClPanelSpec extends AnyFlatSpec with Matchers with BeforeAndAfterAll with 
     )
     clRows(ahead, 120, 40).head should include("forkchoiceUpdated 0s ago (VALID)")
     texts(ahead) shouldBe empty
+    ClCall(t0.plusSeconds(90), "VALID").ageAt(t0) shouldBe java.time.Duration.ZERO
+    ClCall(t0.minusSeconds(61), "VALID").ageAt(t0) shouldBe java.time.Duration.ofSeconds(61)
   }
 
   // ---- goldens: research §3.3 and §3.9 ---------------------------------------------------------------------------
@@ -295,6 +421,21 @@ class ClPanelSpec extends AnyFlatSpec with Matchers with BeforeAndAfterAll with 
     val names = for (s, _) <- goldens; (w, h) <- sizes; set <- GlyphSet.values.toSeq yield fileName(w, h, s, set)
     names.distinct should have size 18
   }
+
+  /** The narrowest tier M, 100 columns, where the disconnected row's long form was cut: `(VALI…`. */
+  private def narrowName(set: GlyphSet): String = s"cl-m-100x32-disconnected-${set.toString.toLowerCase}.txt"
+
+  // The golden is the panel's three rows, not the frame: slice 3's Forks detail row on an ETH node is itself cut at 100
+  // columns, in the middle of a timestamp, which TuiGoldenLintSpec would (rightly) refuse in a golden.
+  for set <- GlyphSet.values do
+    "The consensus-layer panel at the narrowest tier M" should s"match ${narrowName(set)}" taggedAs (UnitTest) in {
+      val lines = renderer.render(still(TuiFixtures.clDisconnectedSepolia(set)), 100, 32, TuiTheme.Ansi16)
+      lines should have size 32L
+      all(lines.map(_.columnLength())) shouldBe 100
+      val start = lines.indexWhere(_.toString.startsWith(" Consensus layer"))
+      start should be >= 0
+      matchGolden(narrowName(set), visibleFrame(lines.slice(start, start + 3)))
+    }
 
   for (stateName, fixture) <- goldens; (width, height) <- sizes; set <- GlyphSet.values do
     val name = fileName(width, height, stateName, set)

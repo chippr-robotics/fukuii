@@ -357,22 +357,53 @@ object TuiStatusProbe:
         )
       )
 
-  /** The reader [[LocalSources.clReader]] returns. */
+  /** The reader [[LocalSources.clReader]] returns. A header lookup that fails costs that block's number and nothing
+    * else: the calls and the counts, which the panel and the disconnection alert stand on, are read from metrics that
+    * cannot fail, and one broken storage read must not take them off the screen.
+    */
   final private class ClReader(forkChoice: () => Option[ForkChoiceHashes], headerNumber: ByteString => Option[Long])
-      extends (() => Option[ClSample]):
+      extends (() => Option[ClSample])
+      with Logger:
 
     private var safe: Option[(ByteString, Long)] = None
     private var finalized: Option[(ByteString, Long)] = None
+    private var head: Option[(ByteString, String)] = None
+    private var lookupFailing = false
+
+    private def lookup(hash: ByteString): Option[Long] =
+      Try(headerNumber(hash)) match
+        case Success(number) =>
+          lookupFailing = false
+          number
+        case Failure(e) =>
+          if !lookupFailing then
+            log.debug("TUI could not look a block up: {}", Option(e.getMessage).getOrElse(e.toString))
+          lookupFailing = true
+          None
 
     private def resolve(hash: ByteString, remembered: Option[(ByteString, Long)]): Option[(ByteString, Long)] =
       if hash.forall(_ == 0) then None // empty, or 32 zero bytes: the consensus layer has no such block yet
-      else remembered.filter(_._1 == hash).orElse(headerNumber(hash).map(hash -> _))
+      else remembered.filter(_._1 == hash).orElse(lookup(hash).map(hash -> _))
+
+    /** The head as `0x` and its hex, made again only when the head moves: a poll a second would otherwise build the
+      * same 66 characters on every one.
+      */
+    private def headHex(hash: ByteString): String =
+      head.filter(_._1 == hash).map(_._2).getOrElse {
+        val text = "0x" + hex(hash)
+        head = Some(hash -> text)
+        text
+      }
 
     def apply(): Option[ClSample] =
       val fork = forkChoice()
       safe = fork.flatMap(f => resolve(f.safe, safe))
       finalized = fork.flatMap(f => resolve(f.finalized, finalized))
-      def call(c: EngineCall) = ClCall(Instant.ofEpochMilli(c.atMs), c.status)
+      // A status is the node's own string, but it reaches the screen through the one sanitiser all the same.
+      def call(c: EngineCall) = ClCall(Instant.ofEpochMilli(c.atMs), Sanitize.line(Option(c.status).getOrElse("")))
+      // The writer counts an invalid payload and then, if it was ACCEPTED, the accepted count: read them in that order,
+      // so the accepted count is never behind the invalid one it is taken from. The clamp absorbs a payload in between.
+      val invalidCount = EngineApiMetrics.newPayloadInvalid.value().toLong
       val accepted = EngineApiMetrics.newPayloadAccepted.value().toLong
       Some(
         ClSample(
@@ -385,10 +416,10 @@ object TuiStatusProbe:
             accepted = accepted,
             // The node's invalid count has the ACCEPTED payloads in it (its `status match` has no arm for them); the
             // panel's does not.
-            invalid = (EngineApiMetrics.newPayloadInvalid.value().toLong - accepted).max(0L)
+            invalid = (invalidCount - accepted).max(0L)
           ),
           authFailures = EngineApiMetrics.authFailures.value().toLong,
-          head = fork.map(f => "0x" + hex(f.head)),
+          head = fork.map(f => headHex(f.head)),
           safe = safe.map(_._2),
           finalized = finalized.map(_._2)
         )
@@ -441,14 +472,17 @@ object TuiStatusProbe:
     )
 
   /** A counter's rate over the last minute, per minute, from the readings it is given: none until two are at least
-    * `minSpan` apart, and it starts over when the counter goes backwards (a restarted node). Not thread-safe.
+    * `minSpan` apart, and it starts over when the counter goes backwards (a restarted node) or the clock does. Not
+    * thread-safe.
     */
   final private[console] class RateWindow(window: Long = 60_000L, minSpan: Long = 5_000L):
     private var samples: Vector[(Long, Long)] = Vector.empty
 
     /** The rate at `atMs`, per minute, with the counter at `total`. */
     def add(atMs: Long, total: Long): Option[Long] =
-      if samples.lastOption.exists(_._2 > total) then samples = Vector.empty
+      // A counter that went backwards is a restarted node; a newest reading later than this one is a clock that stepped
+      // back. Either way the readings held say nothing about what comes next.
+      if samples.lastOption.exists(last => last._2 > total || last._1 > atMs) then samples = Vector.empty
       samples = (samples :+ (atMs -> total)).dropWhile(_._1 < atMs - window)
       val (oldestAt, oldestTotal) = samples.head
       val span = atMs - oldestAt
