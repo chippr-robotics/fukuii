@@ -84,12 +84,17 @@ object PoWMiningMetrics extends MetricsContainer:
   def updateHashrate(hashrate: BigInt): Unit =
     _currentHashrate.set(hashrate.toLong)
 
-  /** A DAG build starts for `epoch`: not loaded, no progress, the phase not yet known. */
+  /** A DAG build starts for `epoch`: not loaded, no progress, the phase not yet known.
+    *
+    * The epoch is written last. A poll reads the epoch first and the rest after it (`TuiStatusProbe`), so a poll that
+    * sees the new epoch sees the cleared flag, phase and progress with it, and never "epoch N+1, loaded": with the
+    * epoch written first it could read the new epoch beside the last one's loaded flag.
+    */
   def recordDagStarted(epoch: Long): Unit =
-    _dagEpoch.set(epoch)
+    _dagLoaded.set(0)
     _dagPhase.set(0)
     _dagProgress.set(0)
-    _dagLoaded.set(0)
+    _dagEpoch.set(epoch)
 
   /** A step of loading the DAG from its file, at `percent`. */
   def recordDagLoading(percent: Int): Unit =

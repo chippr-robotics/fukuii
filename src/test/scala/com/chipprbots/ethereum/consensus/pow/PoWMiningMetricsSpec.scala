@@ -87,6 +87,38 @@ class PoWMiningMetricsSpec extends AnyFlatSpec with Matchers:
     dag shouldBe ((365L, 0L, 0L, 0L))
   }
 
+  it should "never show a new epoch with the last epoch's loaded flag: the flag is cleared before the epoch moves" taggedAs (
+    UnitTest
+  ) in {
+    // The writer loads each epoch in turn. It publishes the epoch it is about to load BEFORE it calls recordDagLoaded, so
+    // a reader that sees epoch e with loaded = 1, and then finds the writer has not published e, saw the flag of an
+    // earlier epoch: recordDagStarted moved the epoch before it cleared the flag. A poll reads the epoch first
+    // (`TuiStatusProbe`'s MiningReader), then the flag; so does this reader.
+    val loading = new java.util.concurrent.atomic.AtomicLong(-1)
+    val done = new java.util.concurrent.atomic.AtomicBoolean(false)
+    val epochs = 200_000L
+    val writer = new Thread(() =>
+      var e = 0L
+      while e < epochs do
+        metrics.recordDagStarted(e)
+        loading.set(e)
+        metrics.recordDagLoaded()
+        e += 1
+      done.set(true)
+    )
+    writer.setDaemon(true)
+    metrics.recordDagStarted(0L)
+    writer.start()
+    var wrong: Option[(Long, Long)] = None
+    while !done.get() && wrong.isEmpty do
+      val epoch = read(metrics.dagEpoch)
+      val loadedFlag = read(metrics.dagLoaded)
+      val published = loading.get()
+      if loadedFlag == 1L && published < epoch then wrong = Some((epoch, published))
+    writer.join()
+    wrong shouldBe None
+  }
+
   it should "be registered with no tag, one series each" taggedAs (UnitTest) in {
     for gauge <- added do
       val found = metrics.metrics.registry.find(gauge.getId.getName).gauges()
