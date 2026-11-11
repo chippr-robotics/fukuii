@@ -652,14 +652,14 @@ items:
     opened: 2026-11-07
     refs: [018 C2a]
     links:
-      prs: [1791]
+      prs: [1791, 1792]
       spec: specs/018-storage-engine-consolidation
     depends_on: [B-054]
     claim:
       by: cloud-dc960fdc
       agent: main
       since: 2026-11-11T04:55:01Z
-      heartbeat: 2026-11-11T06:18:54Z
+      heartbeat: 2026-11-11T06:43:19Z
       branch: ccr-dc960fdc-6a9h1c
   - id: B-056
     title: "Spec 018 Track C C2b: every reader can be handed the position store (item 8c)"
