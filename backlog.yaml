@@ -2389,3 +2389,13 @@ items:
       spec: specs/018-storage-engine-consolidation
     depends_on: [B-053]
     notes: C2b's serving PR compares the position store with the hash store through the same server (SnapServePositionStoreSpec). Against the pre-track jar it would also show a change of the server itself. Needs C0's pinned jar (T002).
+  - id: B-213
+    title: "SNAP serving: a trie node that cannot be read (missing, or corrupt) is served as a hole in the range; go-ethereum answers the whole request with nothing"
+    priority: P3
+    status: open
+    area: p2p
+    size: S
+    opened: 2026-11-11
+    refs: []
+    links: {}
+    notes: SnapServer.orAbsent takes any failed read but a StateFault as NullNode, as resolve always did. On a pruned or damaged store the range then leaves out a subtree and its proofs cannot close over it, so the peer finds the response invalid. A corrupt node is not logged either. Found in spec 018 C2b (T058); behaviour unchanged there.
