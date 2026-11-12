@@ -1,20 +1,11 @@
 package com.chipprbots.ethereum.db.storage.pathstate
 
-import java.util.concurrent.ConcurrentHashMap
-import java.util.concurrent.CountDownLatch
-import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
-import java.util.concurrent.atomic.AtomicReference
-
-import scala.util.Try
 
 import org.scalatest.flatspec.AnyFlatSpec
 import org.scalatest.matchers.should.Matchers
 
-import com.chipprbots.ethereum.db.dataSource.DataSource.*
-import com.chipprbots.ethereum.db.dataSource.EphemDataSource
 import com.chipprbots.ethereum.db.storage.MptStorage
-import com.chipprbots.ethereum.db.storage.Namespaces
 import com.chipprbots.ethereum.testing.Tags.*
 
 /** Spec 018 Track C, C4a part 4: what a reader of a state behind the head may cost the node. A reader is anyone who can
@@ -34,15 +25,7 @@ class ReaderIndexBuildSpec extends AnyFlatSpec with Matchers with LayerChains:
 
   import PathStateStorage.*
   import PathStateTestKit.*
-
-  /** An in-memory source that tells of every read of a changeset record. (A subclass and not a wrapper: the storages
-    * ask a source whether it is the in-memory one.)
-    */
-  final private class Watched extends EphemDataSource(Map.empty):
-    @volatile var onRecordRead: () => Unit = () => ()
-    override def get(namespace: Namespace, key: Key): Option[Value] =
-      if namespace == Namespaces.StateChangesetNamespace then onRecordRead()
-      super.get(namespace, key)
+  import RecordReads.onThread
 
   /** What the store tells of its indexes and its views. */
   final private class Counting extends CommitObserver:
@@ -57,7 +40,7 @@ class ReaderIndexBuildSpec extends AnyFlatSpec with Matchers with LayerChains:
     * after a start.
     */
   final private class Rig(blocks: Int = 8, settings: CommitSettings => CommitSettings = identity):
-    val source = new Watched
+    val source = new RecordReads.Watched
     val told = new Counting
     val chain = new Chain(settings(CommitSettings(observer = told)), source = source)
     val refs: Vector[BlockRef] = (1 to blocks).foldLeft(Vector(chain.first)) { (done, n) =>
@@ -71,27 +54,7 @@ class ReaderIndexBuildSpec extends AnyFlatSpec with Matchers with LayerChains:
     def behind(block: BlockRef, as: Reader = Reader.Peer): MptStorage = chain.state.readOnlyBehind(block, as)
 
     /** Stops the threads whose name starts with `named` inside their first read of a record, until they are let go. */
-    final class Stop(named: String, threads: Int):
-      private val inTheRead = new CountDownLatch(threads)
-      private val letGo = new CountDownLatch(1)
-      private val stopped = ConcurrentHashMap.newKeySet[String]()
-
-      /** How many records each thread read, by its name. */
-      val reads = new ConcurrentHashMap[String, AtomicInteger]()
-      source.onRecordRead = () =>
-        val name = Thread.currentThread.getName
-        reads.computeIfAbsent(name, _ => new AtomicInteger(0)).incrementAndGet()
-        if name.startsWith(named) && stopped.add(name) then
-          inTheRead.countDown()
-          letGo.await(60, TimeUnit.SECONDS)
-      def readsOf(name: String): Int = Option(reads.get(name)).fold(0)(_.get)
-
-      /** Waits until every one of them is in its read. */
-      def allStopped(): Unit = inTheRead.await(60, TimeUnit.SECONDS) shouldBe true
-      def go(): Unit = letGo.countDown()
-      def over(): Unit =
-        go()
-        source.onRecordRead = () => ()
+    final class Stop(named: String, threads: Int) extends RecordReads.Stopped(source, named, threads)
 
     /** Waits until `callers` wait for an index another is building, or `thread` has ended. */
     def awaited(callers: Int, thread: Thread): Unit =
@@ -105,19 +68,6 @@ class ReaderIndexBuildSpec extends AnyFlatSpec with Matchers with LayerChains:
       try body
       finally source.onRecordRead = () => ()
       reads.get
-
-    /** `body` on a thread of its own, named `name`; what it gave, or threw, once it has ended. */
-    def onThread[A](name: String)(body: => A): (Thread, AtomicReference[Option[Try[A]]]) =
-      val result = new AtomicReference[Option[Try[A]]](None)
-      val thread = new Thread(() => result.set(Some(Try(body))), name)
-      thread.setDaemon(true)
-      thread.start()
-      (thread, result)
-
-    def ended[A](run: (Thread, AtomicReference[Option[Try[A]]])): A =
-      run._1.join(60000)
-      run._1.isAlive shouldBe false
-      run._2.get.getOrElse(fail(s"${run._1.getName} gave nothing")).get
 
   "The first reader of a state behind the anchor" should "look at the blocks behind the anchor with the state lock held by no one" taggedAs
     (UnitTest, ConsensusTest) in {
@@ -205,16 +155,17 @@ class ReaderIndexBuildSpec extends AnyFlatSpec with Matchers with LayerChains:
         val stop = new Stop("the reader that builds", threads = 1)
         val one = onThread("the reader that builds")(behind(refs(2)))
         stop.allStopped()
+        // a second reader, and then an execution on that block: they wait for the index that is being built, they
+        // build none, and are not refused
         val other = onThread("the reader that waits")(behind(refs(2)))
-        // and an execution on that block
+        awaited(1, other.thread)
         val third = onThread("the execution that waits")(chain.state.viewOf(refs(2)))
-        // they wait for the index that is being built: they build none, and are not refused
-        awaited(1, other._1)
-        awaited(2, third._1)
+        awaited(2, third.thread)
         told.built.get shouldBe 1
         chain.state.indexBuildsInFlight shouldBe 1
         stop.go()
-        val storages: Seq[MptStorage] = Seq(ended(one), ended(other), PathMptStorage.readOnly(ended(third)))
+        val storages: Seq[MptStorage] =
+          Seq(one.ended.get, other.ended.get, PathMptStorage.readOnly(third.ended.get))
         stop.over()
 
         told.built.get shouldBe 2
@@ -238,10 +189,10 @@ class ReaderIndexBuildSpec extends AnyFlatSpec with Matchers with LayerChains:
       val one = onThread("the reader that builds")(behind(refs(1)))
       stop.allStopped()
       val execution = onThread("the execution that waits")(chain.state.viewOf(refs(1)))
-      awaited(1, execution._1)
+      awaited(1, execution.thread)
       stop.go()
-      ended(one)
-      ended(execution)
+      one.ended.get
+      execution.ended.get
       stop.over()
       // a sweep of reads over other blocks: the readers' few are all others now
       (2 to 8).foreach(n => behind(refs(n)))
@@ -258,11 +209,10 @@ class ReaderIndexBuildSpec extends AnyFlatSpec with Matchers with LayerChains:
     val one = onThread("the reader that builds")(behind(refs(2)))
     stop.allStopped()
     val other = onThread("the reader that waits")(behind(refs(2)))
-    awaited(1, other._1)
+    awaited(1, other.thread)
     stop.go()
     val failures = Seq(one, other).map { run =>
-      run._1.join(60000)
-      run._2.get.flatMap(_.failed.toOption).getOrElse(fail(s"${run._1.getName} was given a state"))
+      run.ended.failed.toOption.getOrElse(fail(s"${run.thread.getName} was given a state"))
     }
     stop.over()
     failures.foreach(_ shouldBe a[StateUnavailable])
@@ -290,7 +240,7 @@ class ReaderIndexBuildSpec extends AnyFlatSpec with Matchers with LayerChains:
       told.refused.get shouldBe 1
       // one that asks for a block that is being built waits for it, and needs no leave: it is not refused
       val waits = onThread("the peer that waits")(behind(refs(1)))
-      awaited(1, waits._1)
+      awaited(1, waits.thread)
       told.refused.get shouldBe 1
       // a caller of the JSON-RPC has its own two
       val built = told.built.get
@@ -310,8 +260,8 @@ class ReaderIndexBuildSpec extends AnyFlatSpec with Matchers with LayerChains:
       told.refused.get shouldBe 2
 
       stop.go()
-      held.zip(Seq(1, 2)).foreach((run, n) => chain.readThrough(ended(run), refs(n)))
-      chain.readThrough(ended(waits), refs(1))
+      held.zip(Seq(1, 2)).foreach((run, n) => chain.readThrough(run.ended.get, refs(n)))
+      chain.readThrough(waits.ended.get, refs(1))
       stop.over()
       // the two are done: a peer builds again
       chain.readThrough(behind(refs(4)), refs(4))

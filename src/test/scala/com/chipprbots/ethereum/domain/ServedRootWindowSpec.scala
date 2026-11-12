@@ -12,6 +12,7 @@ import com.chipprbots.ethereum.db.storage.pathstate.PathStateStorage.CommitSetti
 import com.chipprbots.ethereum.db.storage.pathstate.PathStateStorage.Reader
 import com.chipprbots.ethereum.db.storage.pathstate.PathStateTestKit.*
 import com.chipprbots.ethereum.db.storage.pathstate.PositionKey
+import com.chipprbots.ethereum.db.storage.pathstate.RecordReads
 import com.chipprbots.ethereum.db.storage.pathstate.RetentionPolicy
 import com.chipprbots.ethereum.db.storage.pathstate.StaleStateViewException
 import com.chipprbots.ethereum.db.storage.pathstate.StateConfig
@@ -160,4 +161,39 @@ class ServedRootWindowSpec extends AnyFlatSpec with Matchers:
       val caughtUp = chain.next(block(8)*)
       chain.reader.getBestBlockNumber shouldBe caughtUp.number.value
       served(chain, caughtUp)
+    }
+
+  "A peer" should "be served from the peers' own builds: callers of the JSON-RPC that read old blocks do not have it refused" taggedAs
+    UnitTest in {
+      val source = new RecordReads.Watched
+      val chain = new CanonicalChainOnPositions(source = source)
+      (1 to 8).foreach(n => chain.next(block(n)*))
+      def at(number: Int): BlockHeader = chain.headers.find(_.number.value == number).get
+      // the look at the blocks behind the block the disk holds is made
+      served(chain, at(8))
+
+      // two callers of the JSON-RPC are making the states of two old blocks, and stand in their reads
+      val callers = new RecordReads.Stopped(source, "a caller", threads = 2)
+      val calls = Seq(2, 3).map { n =>
+        RecordReads.onThread(s"a caller of block $n")(chain.state.readOnlyBehind(chain.refOf(at(n)), Reader.Rpc))
+      }
+      callers.allStopped()
+      // a third caller is told to ask again, and a peer is served
+      a[StateFault] should be thrownBy chain.state.readOnlyBehind(chain.refOf(at(4)), Reader.Rpc)
+      served(chain, at(5))
+      callers.over()
+      calls.foreach(_.ended.isSuccess shouldBe true)
+
+      // and the peers have their own two: a third peer, of a block no state was made of, is not served while they
+      // are being made, and a caller is not held to that
+      val peers = new RecordReads.Stopped(source, "a peer", threads = 2)
+      val asked = Seq(6, 7).map { n =>
+        RecordReads.onThread(s"a peer of block $n")(chain.reader.stateForRoot(at(n).stateRoot.value))
+      }
+      peers.allStopped()
+      notServed(chain, at(4).stateRoot.value)
+      reads(chain, chain.state.readOnlyBehind(chain.refOf(at(4)), Reader.Rpc), at(4).stateRoot.value)
+      peers.over()
+      asked.foreach(_.ended.get shouldBe defined)
+      served(chain, at(4))
     }
