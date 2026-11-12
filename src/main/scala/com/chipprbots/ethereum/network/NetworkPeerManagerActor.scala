@@ -1137,7 +1137,9 @@ object NetworkPeerManagerActor:
     private def isStateRootFresh(rootHash: ByteString): Boolean = blockchainReader match
       case None => true
       // On the unified state layout the state that is handed out for a root IS the rule: a root of no canonical block
-      // of the window has no state (spec 018 C4a), for this request and for the other two alike.
+      // of the window has no state (spec 018 C4a), for this request and for the other two alike. The roots kept below
+      // would say the same, but for one case: they are kept by the best block's number, and a block that takes
+      // another's place at one height has other roots behind it.
       case Some(reader) if reader.holdsStateInPlace => true
       case Some(reader) =>
         refreshFreshRootCache(reader)

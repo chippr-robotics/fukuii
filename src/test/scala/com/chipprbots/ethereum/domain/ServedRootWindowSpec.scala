@@ -52,7 +52,7 @@ class ServedRootWindowSpec extends AnyFlatSpec with Matchers:
     chain.reader.stateForRoot(root) shouldBe None
 
   "The state served for a root" should "be that of the canonical block which has it, the block the disk holds and those behind it" taggedAs
-    (UnitTest, SyncTest) in {
+    UnitTest in {
       val chain = new CanonicalChainOnPositions()
       (1 to 6).foreach(n => chain.next(block(n)*))
       chain.headers.map(_.stateRoot.value).distinct should have size chain.headers.size
@@ -61,12 +61,9 @@ class ServedRootWindowSpec extends AnyFlatSpec with Matchers:
       notServed(chain, EmptyRoot)
     }
 
-  it should "reach back as far as the served window behind the best block, and no further" taggedAs (
-    UnitTest,
-    SyncTest
-  ) in {
+  it should "reach back as far as the served window behind the best block, and no further" taggedAs UnitTest in {
     val chain = new CanonicalChainOnPositions()
-    (1 to BlockchainReader.ServedRootWindow + 2).foreach(n => chain.next(block(n)*))
+    (1 to BlockchainReader.ServedRootWindow + 5).foreach(n => chain.next(block(n)*))
     val best = chain.head.number.value
     def at(number: BigInt): BlockHeader = chain.headers.find(_.number.value == number).get
     // the oldest block of the window, and the block before it
@@ -78,10 +75,17 @@ class ServedRootWindowSpec extends AnyFlatSpec with Matchers:
     chain.appState.putBestBlockNumber(best + 1).commit()
     notServed(chain, at(best - BlockchainReader.ServedRootWindow).stateRoot.value)
     served(chain, at(best - BlockchainReader.ServedRootWindow + 1))
+
+    // and when the best block's number is behind the block the disk holds, that block and those under it are served
+    // still, and the window ends 128 behind the number
+    chain.appState.putBestBlockNumber(best - 2).commit()
+    Seq(best, best - 1, best - 2, best - 3).foreach(number => served(chain, at(number)))
+    served(chain, at(best - 2 - BlockchainReader.ServedRootWindow))
+    notServed(chain, at(best - 2 - BlockchainReader.ServedRootWindow - 1).stateRoot.value)
   }
 
   it should "not be served where the records no longer lead back to its block, and be read at the newest block that has the root" taggedAs
-    (UnitTest, SyncTest) in {
+    UnitTest in {
       // the records of three blocks are kept
       val chain = new CanonicalChainOnPositions(
         CommitSettings(retention = new RetentionPolicy(StateConfig.Mode.Basic, (_, _) => 3))
@@ -104,7 +108,7 @@ class ServedRootWindowSpec extends AnyFlatSpec with Matchers:
     }
 
   it should "never be that of an executed block kept beside the chain, in the index by number or not" taggedAs
-    (UnitTest, SyncTest) in {
+    UnitTest in {
       val chain = new CanonicalChainOnPositions()
       (1 to 4).foreach(n => chain.next(block(n)*))
       val onHead = chain.beside(chain.head, salt = 1)(block(70)*)
@@ -130,7 +134,7 @@ class ServedRootWindowSpec extends AnyFlatSpec with Matchers:
     }
 
   it should "follow the chain: a new block's root is served at once, and a state handed out earlier goes stale, never wrong" taggedAs
-    (UnitTest, SyncTest) in {
+    UnitTest in {
       val chain = new CanonicalChainOnPositions(maxViewAgeMoves = 3)
       (1 to 3).foreach(n => chain.next(block(n)*))
       val behind = chain.headers(2)

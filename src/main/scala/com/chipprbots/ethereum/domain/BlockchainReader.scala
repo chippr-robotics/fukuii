@@ -120,7 +120,9 @@ class BlockchainReader(
       case Some((`held`, `best`, roots)) => roots
       case _ =>
         val oldest = (best - BlockchainReader.ServedRootWindow).max(BigInt(0))
-        // newest first, and the first block that has a root keeps it
+        // Newest first, and the first block that has a root keeps it. The block the disk holds is known without the
+        // index, and is the newest whatever the best block's number says: where that number is behind it (a pointer
+        // not yet written), the block is served and the window still ends 128 behind the best block.
         val roots = Iterator
           .iterate(held.number)(_ - 1)
           .takeWhile(_ >= oldest)
