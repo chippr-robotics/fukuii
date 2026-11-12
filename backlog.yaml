@@ -2658,3 +2658,14 @@ items:
     links:
       spec: specs/028-builtin-ephemery-hoodi
       branch: feat/028-s4a-transport
+  - id: B-235
+    title: "028 S4b: Ephemery refresh after a reset, CL testnet dir, fetch-genesis.sh exec wrapper"
+    priority: P2
+    status: open
+    area: ops
+    size: L
+    opened: 2026-11-12
+    refs: [B-227]
+    links:
+      spec: specs/028-builtin-ephemery-hoodi
+      branch: feat/028-s4b-refresh
