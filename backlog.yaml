@@ -2456,3 +2456,15 @@ items:
     refs: []
     links: {}
     notes: "sbt 'testOnly *SyncControllerSpec': 149 pass, that one fails (isSnapSyncAccountsComplete was false, SyncControllerSpec.scala:1182), 3 of 3, at 80e1fef7c (#1797's head) and after. In the full testEssential run of the same tree it passed (767 suites, 2026-11-11 15:39Z), and CI's Test and Build was green on that head. Order- or environment-dependent: something another suite does, or leaves behind, decides it. Found during spec 018 C2b; not touched by it."
+  - id: B-219
+    title: "Spec 018 C4b: mining on the unified layout (lift the mining and getWork refusals, MinedBlock dropped during an import, an Olympia block on positions)"
+    priority: P2
+    status: open
+    area: storage
+    size: M
+    opened: 2026-11-12
+    refs: []
+    links:
+      spec: 018
+    depends_on: [B-061]
+    notes: "Found by C3c part 2 (#1802, plan.md 'C3c proposer view record'). A mined block reaches import only through network sync, which the guard does not run before the head move. When C4b brings it back: lift ConfigValidator's mining refusal and EthMiningService.NoRouteForMinedBlocks together; fix BlockImporter's 'case _: MinedBlock => Behaviors.same' (a miner that waits for its last import meets it every time); add an Olympia block (base fee to the Treasury) to MinedBlockOnPositionsSpec on Mordor's configuration (forge)."
