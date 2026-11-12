@@ -2661,7 +2661,7 @@ items:
   - id: B-234
     title: "028 S4a: strict HTTPS release transport and tar reader"
     priority: P2
-    status: claimed
+    status: in-progress
     area: ops
     size: M
     opened: 2026-11-12
@@ -2673,7 +2673,8 @@ items:
       by: dev-node
       agent: main
       since: 2026-11-12T21:49:32Z
-      heartbeat: 2026-11-12T21:49:32Z
+      heartbeat: 2026-11-12T21:57:18Z
+    notes: "2026-11-12 in-progress: implementer running (sonnet) in ~/work/e028-s4a"
   - id: B-235
     title: "028 S4b: Ephemery refresh after a reset, CL testnet dir, fetch-genesis.sh exec wrapper"
     priority: P2
