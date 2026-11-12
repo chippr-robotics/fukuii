@@ -21,6 +21,7 @@ import org.json4s.JValue
 import com.chipprbots.ethereum.blockchain.data.GenesisDataLoader.JsonSerializers.ByteStringJsonSerializer
 import com.chipprbots.ethereum.blockchain.data.GenesisDataLoader.JsonSerializers.UInt256JsonSerializer
 import com.chipprbots.ethereum.crypto
+import com.chipprbots.ethereum.db.dataSource.EphemDataSource
 import com.chipprbots.ethereum.db.storage.MptStorage
 import com.chipprbots.ethereum.db.storage.MptStorageDecorator
 import com.chipprbots.ethereum.db.storage.StateStorage
@@ -55,13 +56,9 @@ class GenesisDataLoader(
     stateLayout: () => Option[String] = () => None
 ) extends Logger:
 
-  private val bloomLength = 512
-  private val hashLength = 64
   private val addressLength = GenesisDataLoader.AddressLength
 
   import Account.*
-
-  private val emptyTrieRootHash = ByteString(crypto.kec256(rlp.encode(Array.empty[Byte])))
 
   def loadGenesisData()(implicit blockchainConfig: BlockchainConfig): Unit =
     log.debug("Loading genesis data")
@@ -98,12 +95,8 @@ class GenesisDataLoader(
         throw ex
 
   private def loadGenesisData(genesisJson: String)(implicit blockchainConfig: BlockchainConfig): Try[Unit] =
-    import org.json4s.native.JsonMethods.parse
-    import GenesisDataLoader.JsonSerializers.GenesisAccountSerializer
-    given formats: Formats =
-      DefaultFormats + ByteStringJsonSerializer + UInt256JsonSerializer + GenesisAccountSerializer
     for
-      genesisData <- Try(Extraction.extract[GenesisData](parse(genesisJson)))
+      genesisData <- GenesisDataLoader.parseGenesisData(genesisJson)
       _ <- loadGenesisData(genesisData)
     yield ()
 
@@ -250,6 +243,81 @@ class GenesisDataLoader(
   protected def prepareHeader(genesisData: GenesisData, stateMptRootHash: Array[Byte])(implicit
       blockchainConfig: BlockchainConfig
   ): BlockHeader =
+    GenesisDataLoader.headerOver(genesisData, stateMptRootHash)
+
+object GenesisDataLoader:
+
+  private val bloomLength = 512
+  private val hashLength = 64
+  private val emptyTrieRootHash = ByteString(crypto.kec256(rlp.encode(Array.empty[Byte])))
+
+  /** A genesis file (its JSON text) read the way the loader reads it. */
+  def parseGenesisData(genesisJson: String): Try[GenesisData] =
+    import org.json4s.native.JsonMethods.parse
+    import JsonSerializers.GenesisAccountSerializer
+    given formats: Formats =
+      DefaultFormats + ByteStringJsonSerializer + UInt256JsonSerializer + GenesisAccountSerializer
+    Try(Extraction.extract[GenesisData](parse(genesisJson)))
+
+  /** The header of block 0 for `genesisData`, computed without a node: the state root over a throwaway in-memory trie
+    * ([[pureStateRoot]]), then the header logic of [[headerOver]]. It is the function a release check hashes with (spec
+    * 028 R3), and for every genesis a node loads it equals the header the loader stores.
+    *
+    * It is not what [[GenesisDataLoader.loadGenesisData]] calls: the loader takes the state root from the tries it
+    * built on its own layout, and passes it to its overridable `prepareHeader`, which delegates to [[headerOver]].
+    */
+  def genesisHeader(genesisData: GenesisData)(using blockchainConfig: BlockchainConfig): BlockHeader =
+    headerOver(genesisData, pureStateRoot(genesisData))
+
+  /** The state root of a genesis allocation, computed with no side effect: the tries are built over an in-memory,
+    * hash-keyed store that nothing else sees, and no code is written anywhere (the code hash needs only
+    * `keccak256(code)`). Never goes through the loader's state storage, `pathState` or `genesisLayer`.
+    *
+    * The same fold as the loader's `getGenesisStateRoot`, whose persistence stays where it is; the two are pinned equal
+    * by `GenesisHeaderExtractionSpec`. The store drops removals ([[AppendOnlyMptStorage]]), so tries that share a node
+    * do not corrupt each other.
+    */
+  def pureStateRoot(genesisData: GenesisData)(using blockchainConfig: BlockchainConfig): Array[Byte] =
+    import MerklePatriciaTrie.defaultByteArraySerializable
+    import Account.*
+
+    val storage: MptStorage = AppendOnlyMptStorage(StateStorage.getReadOnlyStorage(EphemDataSource()))
+    val accountTrieNodes = storage.forOwner(None)
+
+    genesisData.alloc.foldLeft(MerklePatriciaTrie.EmptyRootHash) { case (rootHash, (address, genesisAccount)) =>
+      val mpt = MerklePatriciaTrie[Array[Byte], Account](rootHash, accountTrieNodes)
+      val cleanAddress = if address.startsWith("0x") || address.startsWith("0X") then address.substring(2) else address
+      val paddedAddress = cleanAddress.reverse.padTo(AddressLength, "0").reverse.mkString
+      val accountHash = crypto.kec256(Hex.decode(paddedAddress))
+      mpt
+        .put(
+          accountHash,
+          Account(
+            nonce = genesisAccount.nonce.getOrElse(blockchainConfig.accountStartNonce),
+            balance = genesisAccount.balance,
+            codeHash = genesisAccount.code.fold(Account.EmptyCodeHash)(codeValue => CodeHash(crypto.kec256(codeValue))),
+            storageRoot = genesisAccount.storage.fold(Account.EmptyStorageRootHash)(slots =>
+              TrieRoot(pureStorageRoot(slots, storage.forOwner(Some(ByteString(accountHash)))))
+            )
+          )
+        )
+        .getRootHash
+    }
+
+  private def pureStorageRoot(slots: Map[UInt256, UInt256], storageTrieNodes: MptStorage): ByteString =
+    val emptyTrie = EthereumUInt256Mpt.storageMpt(ByteString(MerklePatriciaTrie.EmptyRootHash), storageTrieNodes)
+    val storageTrie = slots.foldLeft(emptyTrie) {
+      case (trie, (_, UInt256.Zero)) => trie
+      case (trie, (key, value))      => trie.put(key, value)
+    }
+    ByteString(storageTrie.getRootHash)
+
+  /** The header of the genesis block over the state whose root is `stateMptRootHash`: the logic of the loader's
+    * `prepareHeader`, which delegates here, and of [[genesisHeader]].
+    */
+  private[data] def headerOver(genesisData: GenesisData, stateMptRootHash: Array[Byte])(using
+      blockchainConfig: BlockchainConfig
+  ): BlockHeader =
     // Determine the fork era for the genesis block based on the genesis timestamp (0)
     val genesisTimestamp = Timestamp(BigInt(genesisData.timestamp.replace("0x", ""), 16).toLong)
     val baseFee = genesisData.baseFeePerGas
@@ -336,8 +404,6 @@ class GenesisDataLoader(
 
   private def zeros(length: Int) =
     ByteString(Hex.decode(List.fill(length)("0").mkString))
-
-object GenesisDataLoader:
 
   /** The loader of a node's storages: on the hash store, or on the unified layout when the storages hold it. */
   def over(
