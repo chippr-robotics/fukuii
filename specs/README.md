@@ -6,7 +6,7 @@
 Lifecycle, vocabulary and closure procedure: [docs/development/spec-lifecycle.md](../docs/development/spec-lifecycle.md). Directories are never moved or renumbered; the Spec Kit
 scripts allocate the next number from the highest `NNN-` prefix present here.
 
-**27 specs**: Draft 2, Planned 4, Active 7, Done 7, Superseded 5, Parked 2.
+**28 specs**: Draft 2, Planned 5, Active 7, Done 7, Superseded 5, Parked 2.
 
 ## Open
 
@@ -27,6 +27,7 @@ Tasks are `done / open` boxes in `tasks.md`; a closed spec keeps its boxes as th
 | [025](./025-change-record-export/spec.md) | Change-Record Export Contract (Kafka) | Planned | 2026-11-03 | — | 0 / 91 | — | Clarified 2026-10-31; plan with the GT-2 hook-point table, record schema (with block body), topic and golden-vector contracts, 91 tasks. Phase A: schema freeze with `vault` (018 F2) and `forge`/`beacon` hook sign-off; code in phase C. |
 | [026](./026-follower-roles/spec.md) | Follower Roles — `replica` and `archive` | Planned | 2026-11-03 | — | 0 / 84 | — | Clarified 2026-10-31; plan, `StateReplay` and follower-RPC contracts, 84 tasks. Phase C on today's layout after 025's file sink; archive (GT-2) in phase D; blocked on 013 §11 rows 2/6/8 for the production seed. |
 | [027](./027-tui-dashboard/spec.md) | TUI Dashboard — "the worm goes to the brain" | Active | 2026-11-10 | — | 132 / 18 | `feat/027-s5-chain-panels` (`dev-node`, local session): slice 5 in PR; then the all-slices UAT (B-189) and Phase 7 closure | Slice 1 (worms, glyphs, tiers) merged as #1752, slice 4a (peer scoring) as #1782, slice 2 (tick, motion, non-blocking loop) as #1783 slice 3 (views, layout, alerts) as #1784 and slice 4 (log tail, peer details) as #1787; slice 5 (consensus-layer and mining panels) is the last, one PR each, from the plan and 150 tasks merged as #1742. The manual gate runs (T029, T057, T081, T106, T123, T149) are one UAT across all slices once they are code complete (user, 2026-11-09; backlog B-189). |
+| [028](./028-builtin-ephemery-hoodi/spec.md) | Ephemery and Hoodi as Built-in Networks | Planned | 2026-11-12 | — | 1 / 93 | `spec/028-builtin-ephemery-hoodi` (`dev-node`, local session): tasks written (T001-T094); S1, S2 and S4a start in parallel | Built from the user's decisions of 2026-11-12: bundle Ephemery with a |
 
 ## Closed
 
