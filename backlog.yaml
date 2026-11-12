@@ -2526,20 +2526,15 @@ items:
   - id: B-224
     title: "TuiUpdaterSpec key tests race the 20 ms test pace on a loaded CI runner (failed PR #1809)"
     priority: P1
-    status: review
+    status: done
     area: tui
     size: S
     opened: 2026-11-12
+    closed: 2026-11-12
     refs: ["PR #1809 CI run 43247554050 attempt 1"]
     links:
       prs: [1810]
       spec: specs/027-tui-dashboard
-    claim:
-      by: dev-node
-      agent: main
-      since: 2026-11-12T20:33:40Z
-      heartbeat: 2026-11-12T21:38:03Z
-      branch: fix/tui-key-test-pace
     notes: |-
       'should run the quit hook off the updater thread on q' failed at TuiUpdaterSpec.scala:84: tt.press then one tick whose key read waits only the 20 ms test pace; JLine's input pump can take longer on a loaded runner, so the read expires and tick returns true. Same pattern at :101 and :117.
       2026-11-12 review: Test-only fix: keyConfig 5 s pace for the 3 press-then-tick tests; 5x 19/0; prism OK.
