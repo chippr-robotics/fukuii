@@ -197,7 +197,13 @@ class StateDestructionSpec extends AnyFlatSpec with Matchers:
         }
       }
       // the bound itself is taken
-      val store = withState(EphemDataSource(), maxKeys = 19)
+      val source = EphemDataSource()
+      val store = withState(source, maxKeys = 19)
+      // each of the two is bounded by itself: the rows at 19, the changeset keys at 2
+      new PathNodeStorage(source).removalOfEveryRow(18) shouldBe None
+      new PathNodeStorage(source).removalOfEveryRow(19).map(_.map(_.toRemove.size).sum) shouldBe Some(19)
+      new ChangesetStorage(source).removalOfEverything(1) shouldBe None
+      new ChangesetStorage(source).removalOfEverything(2).map(_.map(_.toRemove.size).sum) shouldBe Some(2)
       store.refusalToDestroyState() shouldBe None
       store.destroyStateForNewGenesis() shouldBe 21
     }

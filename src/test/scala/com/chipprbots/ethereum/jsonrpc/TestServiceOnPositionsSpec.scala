@@ -276,18 +276,23 @@ class TestServiceOnPositionsSpec extends ScalaTestWithActorTestKit with AnyFlatS
       )
     def accountsAtHead: AccountsInRangeResponse = accountsAt(head.header.number.value).toOption.get
 
-  /** A datadir whose synced writes fail when told to: `syncedWritesBeforeFailure` more are taken, the next one throws,
-    * and the count is then off (-1). An in-memory source and not a wrapper of one: the storages ask a source whether it
-    * is the in-memory one, to know the shape of its keys.
+  /** A datadir whose writes fail when told to: `syncedWritesBeforeFailure` more synced writes are taken, the next one
+    * throws, and the count is then off (-1); and the next write that is not synced throws while `failingUnsynced`. An
+    * in-memory source and not a wrapper of one: the storages ask a source whether it is the in-memory one, to know the
+    * shape of its keys.
     */
   final private class Faulty extends EphemDataSource(Map.empty):
     import com.chipprbots.ethereum.db.dataSource.DataUpdate
     @volatile var syncedWritesBeforeFailure: Int = -1
+    @volatile var failingUnsynced = false
+    override def update(dataSourceUpdates: Seq[DataUpdate]): Unit =
+      if failingUnsynced then throw new java.io.IOException("the disk is full")
+      super.update(dataSourceUpdates)
     override def updateSync(dataSourceUpdates: Seq[DataUpdate]): Unit =
       val left = syncedWritesBeforeFailure
       if left >= 0 then syncedWritesBeforeFailure = left - 1
       if left == 0 then throw new java.io.IOException("the disk is full")
-      super.updateSync(dataSourceUpdates)
+      super.update(dataSourceUpdates)
 
   /** The state of `header` as the hash store of `reference` holds it, position by position. */
   private def stateOf(reference: Rig, header: BlockHeader): Disk =
@@ -491,6 +496,23 @@ class TestServiceOnPositionsSpec extends ScalaTestWithActorTestKit with AnyFlatS
           rig.allButCode shouldBe fresh.allButCode
         }
       }
+
+      // The first write of all, the removal of the head: the chain before is whole on disk, and it is no longer the
+      // chain this service was given, whose rules it has dropped. So there is none to rewind to, and it says so.
+      val faulty = new Faulty
+      val rig = new Rig(guard = true, faulty)
+      rig.setChain(chainA) shouldBe Right(SetChainParamsResponse())
+      rig.mine(Seq(transfer(0, Address(42), 9000))) shouldBe Right(MineBlocksResponse())
+      val before = rig.everything
+      faulty.failingUnsynced = true
+      val failed = rig.run(rig.service.setChainParams(SetChainParamsRequest(chainParams(chainB))))
+      faulty.failingUnsynced = false
+      failed.left.map(_.message).left.getOrElse("") should include(TestService.ChainNotSet)
+      rig.everything shouldBe before
+      rig.rewind(0).left.map(_.message).left.getOrElse("") should include("test_setChainParams")
+      rig.everything shouldBe before
+      rig.setChain(chainB) shouldBe Right(SetChainParamsResponse())
+      rig.allButCode shouldBe fresh.allButCode
     }
 
   it should "say so when a block it mined was not made the head, or its head's state is not the one held" taggedAs
