@@ -159,12 +159,13 @@ class OverlayBudgetSpec extends AnyFlatSpec with Matchers with LayerChains:
       val u1 = chain.on(chain.first)(one(91))
       u1.layered()
 
-      val (branch, u2, u3) = chain.state.withPinnedBranch("a heavier branch") { pin =>
-        val branch = (1 to 6).foldLeft(Vector.empty[BlockRef]) { (done, n) =>
-          val next = chain.on(done.lastOption.getOrElse(chain.first))(one(n))
+      val (executed, u2, u3) = chain.state.withPinnedBranch("a heavier branch") { pin =>
+        val executed = (1 to 6).foldLeft(Vector.empty[chain.Executed]) { (done, n) =>
+          val next = chain.on(done.lastOption.fold(chain.first)(_.ref))(one(n))
           keptWith(chain, pin)(next)
-          done :+ next.ref
+          done :+ next
         }
+        val branch = executed.map(_.ref)
         chain.state.overlayUsage shouldBe OverlayUsage(layers = 1, bytes = size, 6, 6 * size, evictions = 0)
 
         // the others come and go beside it, within their own bound, and no layer of the branch goes for them
@@ -182,12 +183,16 @@ class OverlayBudgetSpec extends AnyFlatSpec with Matchers with LayerChains:
         chain.state.dropLayer(onBranch.ref.hash)
         u2.layered()
         chain.state.overlayUsage shouldBe OverlayUsage(layers = 2, bytes = 2 * size, 6, 6 * size, evictions = 2)
-        (branch, u2, u3)
+        (executed, u2, u3)
       }
+      val branch = executed.map(_.ref)
 
       // released: nothing goes by that alone
       chain.state.overlayUsage shouldBe OverlayUsage(layers = 8, bytes = 8 * size, 0, 0L, evictions = 2)
       held(chain)(branch*)
+      // nor when a block of it is delivered again: it is the layer there is, and nothing is kept that was not
+      chain.state.commitOverlay(executed(2).staged, executed(2).ref) shouldBe a[OverlayOutcome.Kept]
+      chain.state.overlayUsage shouldBe OverlayUsage(layers = 8, bytes = 8 * size, 0, 0L, evictions = 2)
       // the next layer that is kept finds eight where two may be. What the branch left was in use when it was
       // released, after the others: they go first, and then the branch from its tip down
       val u4 = chain.on(chain.first)(one(95))
@@ -222,7 +227,82 @@ class OverlayBudgetSpec extends AnyFlatSpec with Matchers with LayerChains:
       }
     }
 
-  it should "take hold of the kept layers it stands on and of a layer delivered again, each counted once whoever holds it" taggedAs
+  it should "take hold of nothing when it is refused, and leave the layers it stood on as they were" taggedAs UnitTest in {
+    val chain = new Chain(CommitSettings(pinnedMaxBytes = 2 * size))
+    val b = chain.on(chain.first)(one(1))
+    b.layered()
+    val c = chain.on(b.ref)(one(2))
+    c.layered()
+    chain.state.withPinnedBranch("a branch on two blocks that are kept") { pin =>
+      // with the two it stands on it would hold three, and may hold two
+      val d = chain.on(c.ref)(one(3))
+      val fault = the[BranchTooLarge] thrownBy chain.state.commitOverlay(d.staged, d.ref, Some(pin))
+      (fault.bytes, fault.cap) shouldBe (3 * size, 2 * size)
+      gone(chain)(d.ref)
+      chain.state.overlayUsage shouldBe OverlayUsage(layers = 2, bytes = 2 * size, 0, 0L, evictions = 0)
+    }
+    held(chain)(b.ref, c.ref)
+  }
+
+  it should "not be pinned by the holder of the state lock, which its release needs" taggedAs UnitTest in {
+    val chain = new Chain()
+    var ran = false
+    val refused = the[IllegalStateException] thrownBy chain.state.lock.locked("a commit") {
+      chain.state.withPinnedBranch("inside a commit") { _ =>
+        ran = true
+      }
+    }
+    refused.getMessage should include("cannot be pinned by the holder of the state lock")
+    ran shouldBe false
+    chain.state.lock.holder shouldBe None
+  }
+
+  it should "hold what an earlier branch left to the bounds when its own first block is kept" taggedAs UnitTest in {
+    val chain = new Chain(CommitSettings(maxForwardLayers = 2))
+    val first = chain.state.withPinnedBranch("a branch that is not adopted") { pin =>
+      (1 to 4).foldLeft(Vector.empty[BlockRef]) { (done, n) =>
+        val next = chain.on(done.lastOption.getOrElse(chain.first))(one(n))
+        keptWith(chain, pin)(next)
+        done :+ next.ref
+      }
+    }
+    chain.state.overlayUsage shouldBe OverlayUsage(layers = 4, bytes = 4 * size, 0, 0L, evictions = 0)
+    // another branch, and nothing kept in between: what the first left goes from its tip down, to what may be kept
+    chain.state.withPinnedBranch("the next branch") { pin =>
+      val other = chain.on(chain.first)(one(9))
+      keptWith(chain, pin)(other)
+      chain.state.overlayUsage shouldBe OverlayUsage(layers = 2, bytes = 2 * size, 1, size, evictions = 2)
+      held(chain)(first(0), first(1), other.ref)
+      gone(chain)(first(2), first(3))
+    }
+  }
+
+  "The layers a branch left" should "stay as they are when a block that stands on them finds no room in the end" taggedAs
+    UnitTest in {
+      val chain = new Chain(CommitSettings(maxForwardLayers = 2))
+      val (b, c, s) = chain.state.withPinnedBranch("two branches") { pin =>
+        val b = chain.on(chain.first)(one(1))
+        keptWith(chain, pin)(b)
+        val c = chain.on(b.ref)(one(2))
+        keptWith(chain, pin)(c)
+        val s = chain.on(chain.first)(one(3))
+        keptWith(chain, pin)(s)
+        (b.ref, c.ref, s.ref)
+      }
+      // three where two may be. A block on c: s could go for it, and b and c, which it stands on, could not; that
+      // would be three still. So nothing goes
+      val d = chain.on(c)(one(4))
+      chain.state.commitOverlay(d.staged, d.ref) shouldBe OverlayOutcome.NotKept(NotKeptReason.NoRoom)
+      held(chain)(b, c, s)
+      chain.state.overlayUsage shouldBe OverlayUsage(layers = 3, bytes = 3 * size, 0, 0L, evictions = 0)
+      // a block beside them finds room: s, and then c
+      val t = chain.on(chain.first)(one(5))
+      t.layered()
+      gone(chain)(s, c)
+      held(chain)(b, t.ref)
+    }
+
+  "The layers of a branch under execution" should "take hold of the kept layers it stands on and of a layer delivered again, each counted once whoever holds it" taggedAs
     UnitTest in {
       val chain = new Chain(CommitSettings(maxForwardLayers = 2, pinnedMaxBytes = 3 * size))
       val b = chain.on(chain.first)(one(1))
@@ -353,8 +433,10 @@ class OverlayBudgetSpec extends AnyFlatSpec with Matchers with LayerChains:
     UnitTest in {
       val told = mutable.Buffer.empty[OverlayUsage]
       var (retried, stale) = (0, 0)
+      var evictedTold = 0L
       val observer = new CommitObserver:
         override def overlay(usage: OverlayUsage): Unit = told += usage
+        override def evicted(layers: Long): Unit = evictedTold += layers
         override def viewRetried(): Unit = retried += 1
         override def viewStale(): Unit = stale += 1
       val chain = new Chain(CommitSettings(maxForwardLayers = 1, observer = observer))
@@ -365,6 +447,7 @@ class OverlayBudgetSpec extends AnyFlatSpec with Matchers with LayerChains:
       val s = chain.on(chain.first)(one(2))
       s.layered()
       told.last shouldBe OverlayUsage(layers = 1, bytes = size, 0, 0L, evictions = 1)
+      evictedTold shouldBe 1
       chain.state.withPinnedBranch("a branch") { pin =>
         keptWith(chain, pin)(b)
         told.last shouldBe OverlayUsage(layers = 1, bytes = size, 1, size, evictions = 1)
@@ -372,6 +455,8 @@ class OverlayBudgetSpec extends AnyFlatSpec with Matchers with LayerChains:
       told.last shouldBe OverlayUsage(layers = 2, bytes = 2 * size, 0, 0L, evictions = 1)
       chain.state.dropLayer(s.ref.hash)
       told.last shouldBe OverlayUsage(layers = 1, bytes = size, 0, 0L, evictions = 1)
+      // each eviction was told once, however often the overlay was told of
+      evictedTold shouldBe 1
 
       // a view of a block is made while its parent is promoted between the two looks: made again, once
       val grown = new Chain(CommitSettings(observer = observer))

@@ -70,11 +70,13 @@ class StateMetricsSpec extends AnyFlatSpec with Matchers:
     (byBound, bySize, skipped) shouldBe (bound + 1, size + 1, left + 2)
   }
 
-  it should "say what the overlay holds, count what is new of its evictions, and count the views made again" taggedAs
+  it should "say what the overlay holds, count its evictions as they are told, and count the views made again" taggedAs
     UnitTest in {
       def evictions = counter("db.state.overlay.evictions")
-      StateMetrics.overlay(OverlayUsage(3, 300L, 2, 200L, evictions = 1000L, reverseIndexes = 1, reverseBytes = 50L))
       val before = evictions
+      StateMetrics.overlay(OverlayUsage(3, 300L, 2, 200L, evictions = 1000L, reverseIndexes = 1, reverseBytes = 50L))
+      // what the store has evicted since it was opened is not what the counter counts
+      evictions shouldBe before
       gauge("db.state.overlay.forward.layers") shouldBe 3d
       gauge("db.state.overlay.forward.bytes") shouldBe 300d
       gauge("db.state.overlay.pinned.layers") shouldBe 2d
@@ -82,14 +84,11 @@ class StateMetricsSpec extends AnyFlatSpec with Matchers:
       gauge("db.state.overlay.reverse.resident") shouldBe 1d
       gauge("db.state.overlay.reverse.bytes") shouldBe 50d
 
-      // the store counts its evictions since it was opened: two more of them since the last word
+      StateMetrics.evicted(2)
       StateMetrics.overlay(OverlayUsage(1, 100L, 0, 0L, evictions = 1002L))
       evictions shouldBe before + 2
       gauge("db.state.overlay.forward.layers") shouldBe 1d
       gauge("db.state.overlay.pinned.bytes") shouldBe 0d
-      // and nothing when there is none new
-      StateMetrics.overlay(OverlayUsage(1, 100L, 0, 0L, evictions = 1002L))
-      evictions shouldBe before + 2
 
       val (retries, stale) = (counter("db.state.view.retries"), counter("db.state.view.stale"))
       StateMetrics.viewRetried()

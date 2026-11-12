@@ -67,6 +67,14 @@ class StateConfigSpec extends AnyFlatSpec with Matchers:
       (shipped.maxForwardLayers, shipped.maxForwardBytes, shipped.maxLayerBytes, shipped.pinnedMaxBytes) shouldBe
         (32, 134217728L, 67108864L, 268435456L)
       (shipped.maxReversePoolBytes, shipped.maxReverseIndexBytes) shouldBe (134217728L, 67108864L)
+
+      // a bound of one block above what all of them may hold is a configuration nothing could be kept under
+      val refused = the[IllegalArgumentException] thrownBy PathStateStorage.CommitSettings.of(
+        StateConfig(fukuii("fukuii.state.overlay { max-bytes = 1000, max-layer-bytes = 501 }")),
+        () => None,
+        PathStateStorage.CommitObserver.Silent
+      )
+      refused.getMessage should include("state.overlay.max-layer-bytes (501)")
     }
 
   it should "have no key the code does not read" taggedAs UnitTest in {

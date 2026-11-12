@@ -21,6 +21,11 @@ import scala.jdk.CollectionConverters.*
   * in bytes alone, across every branch that is pinned, and a branch that would not fit is refused with
   * [[BranchTooLarge]], which is a fault to try again after and never a verdict on a block.
   *
+  * '''What the bounds hold at any time.''' After a layer is kept, pinned or not, the layers that are not pinned are
+  * within their bounds: a pinned one that is kept evicts the others' tips down to them too. Between the release of a
+  * branch and the next layer that is kept, what the branch held is over them: a release evicts nothing, so that a
+  * caller can promote what it adopts and execute again on what it keeps.
+  *
   * '''Which tip goes first.''' A fork whose fork point is the oldest block the changeset records still lead back to: it
   * is the first that the anchor's moving on takes away in any case. Then the layer least recently ''used'': one an
   * execution was staged through, one a layer was registered on, one that was delivered again. A view made for a reader
@@ -40,6 +45,7 @@ final private[pathstate] class StateOverlay(budget: StateOverlay.Budget):
   private val forward = new ConcurrentHashMap[ByteString, Held]()
   private val uses = new AtomicLong(0L)
   private val evictions = new AtomicLong(0L)
+  private val evictionsUntold = new AtomicLong(0L)
 
   def layerOf(blockHash: ByteString): Option[ForwardLayer] = Option(forward.get(blockHash)).map(_.layer)
 
@@ -58,6 +64,9 @@ final private[pathstate] class StateOverlay(budget: StateOverlay.Budget):
       pinnedBytes = pinned.iterator.map(_.layer.bytes).sum,
       evictions = evictions.get
     )
+
+  /** How many layers were evicted since this was last asked: for a counter, which takes each eviction once. */
+  def evictionsSinceAsked(): Long = evictionsUntold.getAndSet(0L)
 
   /** `layers` were used just now: an execution was staged through them, or one of them was delivered again. Needs no
     * lock: it changes the order in which layers are evicted and nothing else.
@@ -106,15 +115,19 @@ final private[pathstate] class StateOverlay(budget: StateOverlay.Budget):
             val bytes = pinnedBytes + joining.iterator.map(_.layer.bytes).sum
             if bytes > budget.pinnedMaxBytes then throw new BranchTooLarge(bytes, budget.pinnedMaxBytes)
             (entry :: under).foreach(held => held.pins = held.pins + branch)
-            keep(entry, under)
+            val kept = keep(entry, under)
+            // What an earlier branch left when it was released is held to the bounds here too: a node that executes
+            // one branch after another, and keeps nothing else in between, would otherwise hold them all.
+            evict(victims(None, anchor, behind, floor)._1)
+            kept
           case None if known.isDefined                    => keep(entry, under)
           case None if layer.bytes > budget.maxLayerBytes => Registered.TooLarge(layer.bytes, budget.maxLayerBytes)
-          case None =>
-            roomFor(layer, anchor, behind, floor) match
-              case None => Registered.NoRoom
-              case Some(victims) =>
-                victims.foreach(victim => forward.remove(victim.layer.block.hash))
-                evictions.addAndGet(victims.size.toLong)
+          case None                                       =>
+            // nothing goes for a layer that is not kept in the end
+            victims(Some(layer), anchor, behind, floor) match
+              case (_, false) => Registered.NoRoom
+              case (going, true) =>
+                evict(going)
                 keep(entry, under)
 
   private def heldOf(layer: ForwardLayer): Held = forward.get(layer.block.hash)
@@ -127,34 +140,41 @@ final private[pathstate] class StateOverlay(budget: StateOverlay.Budget):
 
   private def pinnedBytes: Long = forward.values.asScala.iterator.filter(_.pinned).map(_.layer.bytes).sum
 
-  /** The layers to evict so that `layer` fits among those that are not pinned, in the order they go; none when it fits
-    * as things are; `None` when it cannot be made to fit, and then nothing is evicted for it.
+  private def evict(going: List[Held]): Unit =
+    going.foreach(victim => forward.remove(victim.layer.block.hash))
+    evictions.addAndGet(going.size.toLong)
+    evictionsUntold.addAndGet(going.size.toLong)
+    ()
+
+  /** The layers to evict so that those that are not pinned are within their bounds, in the order they go, and whether
+    * they then are: with `joining`, a layer that is to be kept among them, counted with them, and whose parent is not
+    * evicted for it.
     */
-  private def roomFor(
-      layer: ForwardLayer,
+  private def victims(
+      joining: Option[ForwardLayer],
       anchor: BlockRef,
       behind: BlockRef => Boolean,
       floor: Option[BlockRef]
-  ): Option[List[Held]] =
+  ): (List[Held], Boolean) =
     var kept = forward.values.asScala.toList
-    var count = kept.count(!_.pinned) + 1
-    var bytes = kept.iterator.filterNot(_.pinned).map(_.layer.bytes).sum + layer.bytes
-    var victims = List.empty[Held]
+    var count = kept.count(!_.pinned) + joining.size
+    var bytes = kept.iterator.filterNot(_.pinned).map(_.layer.bytes).sum + joining.fold(0L)(_.bytes)
+    var going = List.empty[Held]
     var fits = count <= budget.maxLayers && bytes <= budget.maxBytes
     var none = false
     while !fits && !none do
       // what a kept layer stands on, and what the new one would: every layer under the new one is among them
-      val parents = kept.iterator.map(_.layer.parent.hash).toSet + layer.parent.hash
+      val parents = kept.iterator.map(_.layer.parent.hash).toSet ++ joining.map(_.parent.hash)
       val tips = kept.filter(held => !held.pinned && !parents(held.layer.block.hash))
       if tips.isEmpty then none = true
       else
         val victim = tips.minBy(order(_, anchor, behind, floor))
-        victims = victim :: victims
+        going = victim :: going
         kept = kept.filterNot(_ eq victim)
         count -= 1
         bytes -= victim.layer.bytes
         fits = count <= budget.maxLayers && bytes <= budget.maxBytes
-    Option.when(fits)(victims.reverse)
+    (going.reverse, fits)
 
   /** What a tip is evicted before: see the class. */
   private def order(

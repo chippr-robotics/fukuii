@@ -64,11 +64,9 @@ object StateMetrics extends MetricsContainer with PathStateStorage.CommitObserve
 
   override def lockWaited(nanos: Long): Unit = lockWait.record(nanos, TimeUnit.NANOSECONDS)
 
-  override def overlay(usage: OverlayUsage): Unit =
-    // the count of evictions is the store's, since it was opened: the counter takes what is new of it
-    val before = overlayNow.getAndSet(usage)
-    val evicted = usage.evictions - before.evictions
-    if evicted > 0 then overlayEvictions.increment(evicted.toDouble)
+  override def overlay(usage: OverlayUsage): Unit = overlayNow.set(usage)
+
+  override def evicted(layers: Long): Unit = overlayEvictions.increment(layers.toDouble)
 
   override def viewRetried(): Unit = viewRetries.increment()
 

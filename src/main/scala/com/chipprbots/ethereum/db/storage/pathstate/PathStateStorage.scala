@@ -75,10 +75,10 @@ final class PathStateStorage(
     */
   private val window = new AtomicReference[Option[AncestorWindow]](None)
 
-  /** The reverse indexes last built, by the anchor and the ancestor they lie between: the blocks of one branch are each
-    * executed on a view of the same fork point.
+  /** The reverse indexes last built, by the anchor and the ancestor they lie between, each with the epoch it was built
+    * at: the blocks of one branch are each executed on a view of the same fork point.
     */
-  private val indexes = new ConcurrentHashMap[(ByteString, ByteString), ReverseIndex]()
+  private val indexes = new ConcurrentHashMap[(ByteString, ByteString), (Long, ReverseIndex)]()
 
   /** The window of `held`, which is the anchor: built from the records' headers if there is none of that anchor. */
   private def windowOf(held: BlockRef)(using StateLockHeld): AncestorWindow =
@@ -95,27 +95,47 @@ final class PathStateStorage(
       .filter(_.anchor == held)
       .orElse(lock.locked("the look at the blocks behind the anchor")(clock.anchor.filter(_ == held).map(windowOf)))
 
-  private def indexBetween(anchor: BlockRef, fork: BlockRef): ReverseIndex =
+  /** The index between `anchor` and `fork`, for a view that observed `epoch`: the one that was built at that epoch, or
+    * one built now.
+    *
+    * An index is of the records as they were at one epoch. A view whose epoch has moved by the time it is made is
+    * thrown away ([[viewOf]]), but its index may have been built across the move, from records a commit was pruning,
+    * and it is put here all the same, possibly after the move emptied the cache. So an index is kept with its epoch and
+    * given only to a view of that epoch: one built across a move is never met again, since no later view observes an
+    * earlier epoch, also when a head move brings the anchor back to a block it has been at (beacon).
+    */
+  private def indexBetween(anchor: BlockRef, fork: BlockRef, epoch: Long): ReverseIndex =
     val key = (anchor.hash, fork.hash)
-    Option(indexes.get(key)).filter(index => index.from == anchor && index.to == fork).getOrElse {
-      val built =
-        ReverseIndex.between(changesets, anchor, fork, settings.maxReverseHops, settings.maxReverseIndexBytes)
-      // A handful, and no more bytes than their pool has: an index is of one anchor, and the anchor moves with every
-      // block. One that is by itself more than the pool is built for its view and not kept.
-      if built.bytes <= settings.maxReversePoolBytes then
-        if indexes.size >= MaxIndexesKept || indexBytes + built.bytes > settings.maxReversePoolBytes then
-          indexes.clear()
-        indexes.put(key, built)
-      built
-    }
+    Option(indexes.get(key))
+      .collect { case (`epoch`, index) if index.from == anchor && index.to == fork => index }
+      .getOrElse {
+        val built =
+          ReverseIndex.between(changesets, anchor, fork, settings.maxReverseHops, settings.maxReverseIndexBytes)
+        // A handful, and no more bytes than their pool has: an index is of one anchor, and the anchor moves with
+        // every block. One that is by itself more than the pool is built for its view and not kept.
+        if built.bytes <= settings.maxReversePoolBytes then
+          if indexes.size >= MaxIndexesKept || indexBytes + built.bytes > settings.maxReversePoolBytes then
+            indexes.clear()
+          indexes.put(key, (epoch, built))
+        built
+      }
 
-  private def indexBytes: Long = indexes.values.asScala.iterator.map(_.bytes).sum
+  private def indexBytes: Long = indexes.values.asScala.iterator.map(_._2.bytes).sum
 
   /** What the overlay holds right now (data-model 6.4, 11). */
   def overlayUsage: OverlayUsage =
     overlay.usage.copy(reverseIndexes = indexes.size, reverseBytes = indexBytes)
 
-  private def overlayTold(): Unit = told("what the overlay holds")(settings.observer.overlay(overlayUsage))
+  /** Tells the observer what the overlay holds, and of the layers that were evicted since it was last told: each
+    * eviction once, whichever thread comes to tell of it, where a count worked out from two totals would count again
+    * when two tellings cross (beacon).
+    */
+  private def overlayTold(): Unit =
+    told("what the overlay holds") {
+      val evicted = overlay.evictionsSinceAsked()
+      if evicted > 0 then settings.observer.evicted(evicted)
+      settings.observer.overlay(overlayUsage)
+    }
 
   /** The block whose state the disk holds, or `None` when the datadir has no state yet (SNAP in progress). */
   def anchor: Option[BlockRef] = clock.anchor
@@ -199,10 +219,10 @@ final class PathStateStorage(
             windowFor(anchor).map { behind =>
               overlay.chainFrom(anchor, block, behind.contains) match
                 case Some((layers, on)) =>
-                  val reverse = Option.when(on != anchor)(indexBetween(anchor, on))
+                  val reverse = Option.when(on != anchor)(indexBetween(anchor, on, epoch))
                   new StateView(block, epoch, clock, rows, layers, reverse)
                 case None if behind.contains(block) =>
-                  new StateView(block, epoch, clock, rows, Nil, Some(indexBetween(anchor, block)))
+                  new StateView(block, epoch, clock, rows, Nil, Some(indexBetween(anchor, block, epoch)))
                 case None =>
                   throw new StateUnavailable(
                     s"the state of block ${block.show} is not held: the disk holds ${anchor.show}, and neither its " +
@@ -596,14 +616,30 @@ final class PathStateStorage(
     * bounds apply to them from the next one that is kept: so a caller that adopts the branch promotes it first, and
     * releases after.
     *
-    * `body` must not hold the state lock when it ends.
+    * @throws IllegalStateException
+    *   when the calling thread holds the state lock: the pin is released under it, and a release that could not take it
+    *   would leave the branch pinned for good
     */
   def withPinnedBranch[A](name: String)(body: BranchPin => A): A =
+    if lock.isHeldByCurrentThread then
+      throw new IllegalStateException(
+        s"The branch '$name' cannot be pinned by the holder of the state lock ('${lock.holder.getOrElse("?")}'): " +
+          "its pin is released under that lock"
+      )
     val pin = new BranchPin(name)
-    try body(pin)
-    finally
+    def release(): Unit =
       lock.locked(s"the release of the pinned branch $name")(overlay.release(pin))
       overlayTold()
+    val result =
+      try body(pin)
+      catch
+        case failure: Throwable =>
+          // the execution's own failure is the one that is thrown
+          try release()
+          catch case NonFatal(also) => failure.addSuppressed(also)
+          throw failure
+    release()
+    result
 
   /** Commits the forward layer of `block` as the block whose state the disk holds (data-model 7.1, the second of the
     * cases that are not a staged block on the anchor): the batch an in-place commit of the block writes. The layer goes
@@ -922,6 +958,12 @@ object PathStateStorage:
 
   object CommitSettings:
     def of(config: StateConfig, finalized: () => Option[BigInt], observer: CommitObserver): CommitSettings =
+      require(
+        config.overlay.maxLayerBytes <= config.overlay.maxBytes / 2,
+        s"state.overlay.max-layer-bytes (${config.overlay.maxLayerBytes}) is more than the executed blocks kept beside " +
+          s"the disk may hold together, which is half of state.overlay.max-bytes (${config.overlay.maxBytes}): no " +
+          "block of that size could be kept"
+      )
       CommitSettings(
         config.changeset.maxEntriesPerOwnerDelete,
         config.changeset.maxRecordBytes,
@@ -983,6 +1025,9 @@ object PathStateStorage:
 
     /** What the overlay holds, after something of it changed. */
     def overlay(usage: OverlayUsage): Unit = ()
+
+    /** `layers` executed blocks were evicted to make room: each eviction is told once. */
+    def evicted(layers: Long): Unit = ()
 
     /** A view was made again, because the disk moved while it was being made. */
     def viewRetried(): Unit = ()
