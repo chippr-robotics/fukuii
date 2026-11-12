@@ -102,6 +102,10 @@ global `utils.Config`. A slice 2 task greps the transitive calls (MPT storage, `
 read. The resolver runs before `Config` exists (R5): a `Config` read on this path would freeze the pre-selection
 datadir for the whole process.
 
+**The override hook stays.** `prepareHeader` is `protected` and overridden in test code: `EestBlockchainReplay.scala:279`
+substitutes a known header. So the pure function goes in the companion, and the instance method keeps delegating to
+it. `loadGenesisData` keeps calling the overridable instance method; only the resolver calls the companion directly.
+
 **Review.** The extraction is a refactor of a path shared with ETC. beacon reviews it for the ETH genesis shapes:
 Cancun for Hoodi, Amsterdam with 23 fields for Ephemery 165. forge confirms the ETC genesis tests are unchanged
 (FR-021).
@@ -167,8 +171,11 @@ anything touches `utils.Config`. It does nothing for any other network. The step
 5. **Report (US1-3).** It logs: iteration, chain id, genesis hash, reset time in UTC, local clock, source (bundled,
    cached or fetched), datadir, and the CL directory path or how to get it.
 
-**Test seam.** The resolver takes a `java.time.Clock`, a `ReleaseTransport` (R8) and the raw `Config` as constructor
-arguments. No test-only configuration key exists.
+**Test seam.**
+- `App.main(args)` becomes `App.run(args, StartupDeps.production)`. `StartupDeps` carries the `Clock`, the
+  `ReleaseTransport` (R8) and the exit function.
+- The resolver and the watchdog take them as constructor arguments.
+- Tests build their own `StartupDeps` (R16). No test-only configuration key exists.
 
 **Shipped default removed.** `conf/ephemery.conf` stops setting
 `custom-chains-dir = ~/.fukuii/ephemery-network/current/chains`. While that default exists, stale script output at
@@ -235,7 +242,10 @@ FR-015 is unaffected.
 **Measured 2026-11-12.** Each release's `published_at`, compared with its genesis, which is 19:00 UTC on each 28-day
 boundary:
 
-| Release | Genesis (UTC) | Published (UTC) | Lag |
+Only 165's genesis is measured (from its retention.vars). The other genesis times are derived by subtracting
+28 days; the publication times are all measured.
+
+| Release | Genesis (UTC, derived) | Published (UTC, measured) | Lag |
 |---------|---------------|-----------------|-----|
 | ephemery-165 | 2026-10-22 19:00 | 2026-10-22 17:37 | −1 h 22 m |
 | ephemery-164 | 2026-09-24 19:00 | 2026-09-24 19:59 | +59 m |
@@ -396,8 +406,8 @@ is 7.3 MB of binary state in the jar per iteration, regenerated every 28 days.
 25 global `Config` reads and a split of the node object. The node already exits cleanly through its shutdown hooks
 when the TUI's `q` calls `sys.exit(0)`, so the reset exit adds no new shutdown path.
 
-**Check in slice 3.** Show that `sys.exit` from the watchdog thread completes the graceful shutdown. A forked-JVM
-test should see exit code 75 and a RocksDB that reopens cleanly.
+**Check in slice 3.** Show that `sys.exit` from the watchdog thread completes the graceful shutdown. The forked
+integration test (R16) should see exit code 75 and a RocksDB that reopens cleanly.
 
 ## R12. Exit codes and the restart loop
 
@@ -540,11 +550,20 @@ test.
 | Transport | `JdkHttpsTransportSpec`: local `HttpsServer`, self-signed certificate. Cases: https-only, hop allow-list, 5-hop cap, size cap, body deadline, proxy env mapping | FR-011, FR-012 |
 | Tar reader | `StrictTarReaderSpec`: crafted in-memory archives. Cases: absolute path, `..`, `a/../../x`, symlink, hardlink, device, pax, oversize, too many entries, ratio bomb, truncation, duplicate, exec bit cleared, plus the real 165 header list | FR-012, FR-017 |
 | Reset exit | `EphemeryResetWatchdogSpec`: fixed `Clock`, manual scheduler, captured exit. A forked-JVM launcher test sees code 75 and a RocksDB that reopens cleanly | FR-016, US5 |
-| Launch | `LauncherIntegrationSpec` and `ChainConfigMatrixSpec`: add hoodi and ephemery | FR-001, FR-018, FR-020 |
+| Launch | `LauncherIntegrationSpec`: add hoodi to the known networks. `ChainConfigMatrixSpec`: add hoodi only, since Ephemery is not in `blockchains.conf` (R4) | FR-018, FR-020 |
+| Property hand-over | In process: apply the resolver's property map, call `ConfigFactory.invalidateCaches()`, load a fresh `ConfigFactory.load()` (never the `Config` object), and check where `fukuii.datadir`, `db.rocksdb.path`, `node-key-file` and `logging.logs-dir` resolve | FR-009, R5 |
+| End to end | IntegrationTest under `src/it`, forked: `EphemeryForkedHarness`, a test-scope main calling `App.run` with its own `StartupDeps`. It uses an offset clock anchored to the fixture's reset (see the next table), and a fake transport serving fixture bytes or a synthetic next iteration. Checks: start on the right iteration and datadir; exit 75 at the reset; RocksDB reopens; the restart refreshes | FR-001, FR-004, FR-016, US2, US5 |
 | ETC unchanged | the existing ETC, Mordor and Gorgoroth suites pass with no assertion changes, and forge reviews | FR-021, SC-006 |
 
 There is no live network in any unit test, and no `Thread.sleep` (Principle III). Waits use a fixed `Clock`, a
 manually advanced scheduler, or `eventually`.
+
+**Time rules.**
+
+| Rule | Why |
+|------|-----|
+| The `ephemery` unit tests never read the system clock. A grep gate in S2 enforces it: no `Clock.systemUTC`, `Instant.now`, `System.currentTimeMillis` or `LocalDateTime.now` under `src/test/scala/.../ephemery/`. Only the forked harness uses a clock offset from real time, so that its watchdog fires a few seconds after start | The bundle ends 2026-11-19, and every 28 days after a bundle bump. A test on the real clock would go red on that day, or reach for the network, in every PR's CI |
+| Releases beyond the committed fixtures come from `SyntheticRelease.next(raw)`, a test helper. It shifts the timestamp and reset by one interval, adds 1 to the chain id and iteration, and computes the published hash with the library itself | It tests the refresh path without waiting for real iterations, and stays internally consistent |
 
 ## R17. Live validation (SC-007, SC-008)
 

@@ -58,7 +58,12 @@ The work ships as **five code PRs (S1, S2, S3, S4a, S4b) and a validation-and-cl
 - A local JDK `HttpsServer` with a self-signed certificate tests the real transport.
 - A fixed `java.time.Clock` and a manually advanced scheduler control time.
 - Golden fixtures: the raw ephemery-164 and ephemery-165 inputs.
-- Forked-JVM launcher tests cover exit codes and the datadir actually used.
+- **Property hand-over.** An in-process test applies the resolver's property map to a fresh `ConfigFactory.load()`,
+  never the `Config` object.
+- **End to end.** A forked IntegrationTest, `EphemeryForkedHarness`, calls `App.run(args, StartupDeps)` with an offset
+  clock and a fake transport (research R16). It covers exit codes and the datadir actually used.
+- **No system clock** in the `ephemery` unit tests, enforced by a grep gate (R16), because the bundle ends on a fixed
+  date.
 - There is no live network in unit tests and no `Thread.sleep`.
 
 **Target Platform**: Linux servers and containers under a supervisor (systemd, Docker, Kubernetes), as for Sepolia.
@@ -176,7 +181,8 @@ src/main/scala/com/chipprbots/ethereum/
 ├── network/discovery/Eip1459.scala           # EDIT: all.hoodi.ethdisco.net trust anchor
 ├── utils/Config.scala                        # EDIT: B-225 message names the searched dir (FR-023)
 ├── cli/CliLauncher.scala (or its command table)  # EDIT: register ephemery-fetch
-├── App.scala                                 # EDIT: knownNetworks + hoodi, help text, resolver call
+├── App.scala                                 # EDIT: knownNetworks + hoodi, help text; main → run(args, StartupDeps) + resolver;
+│                                             #       `cli ephemery-fetch` gets the ephemery network config first
 └── Fukuii.scala                              # EDIT: start the watchdog after the node starts
 
 src/main/resources/
@@ -190,12 +196,15 @@ src/main/resources/
 src/test/scala/com/chipprbots/ethereum/
 ├── ephemery/                                 # NEW: EphemeryReleaseSpec, golden render spec, ReleaseStoreSpec,
 │                                             #      JdkHttpsTransportSpec, StrictTarReaderSpec, ReleaseFetcherSpec,
-│                                             #      EphemeryResolverSpec, EphemeryResetWatchdogSpec, BundledEphemerySpec
+│                                             #      EphemeryResolverSpec, EphemeryResetWatchdogSpec, BundledEphemerySpec,
+│                                             #      EphemeryPropertyHandoverSpec
+├── ephemery/SyntheticRelease.scala           # NEW test helper: the next iteration from a raw release (R16)
 ├── blockchain/data/HoodiGenesisSpec.scala    # NEW
 ├── network/ForkIdHoodiSpec.scala             # NEW
 └── (edits) EphemeryGenesisSpec, LauncherIntegrationSpec, ChainConfigMatrixSpec, BlobScheduleSpec
 
 src/test/resources/ephemery/releases/ephemery-{164,165}/   # NEW raw inputs (R1)
+src/it/scala/com/chipprbots/ethereum/ephemery/EphemeryForkedHarness.scala + EphemeryLaunchItSpec.scala   # NEW (S3, S4b)
 
 scripts/ephemery/fetch-genesis.sh      # S2: delegates the rules to the CLI; S4b: exec wrapper
 scripts/ephemery/update-bundled.sh     # NEW (FR-003)
@@ -261,10 +270,11 @@ unless a slice needs more (memory: subagent model choice).
   - refusal tests for R1 to R11 and N1 to N4.
 - **Commit 2.** The spec 024 keys in the renderer, and the fixtures regenerated.
 - **Commit 3.** `fetch-genesis.sh` keeps its download and calls the CLI for everything else (R1). `check-fixture.sh`
-  is removed.
+  is removed, and so is its one reference, in `docs/runbooks/ephemery.md:213`.
 - **Gate.**
   - `testOnly` on the `*Ephemery*` and `GenesisDataLoader*` specs, plus the ETC genesis specs, unchanged;
   - the transitive no-`Config` grep (R3);
+  - the no-system-clock grep over the `ephemery` tests (R16);
   - a manual `fetch-genesis.sh --from-dir` run that diffs clean against the fixtures.
 - **Review.** beacon (the encoder, renderer and genesis extraction) and forge (the shared genesis path), then prism,
   then eye.
@@ -285,10 +295,13 @@ unless a slice needs more (memory: subagent model choice).
   - `BundledEphemerySpec`: the bundled hash equals release.json, the computed hash, and the raw-input render.
   - `EphemeryResolverSpec`: every no-fetch case.
   - `EphemeryResetWatchdogSpec`.
-  - A forked-JVM launcher test: `fukuii ephemery` on a clean HOME starts on the bundle in `<root>/ephemery-165`, and
-    exits 75 with a clean RocksDB when the clock is set past the reset.
+  - The in-process property hand-over test (R16).
+  - `EphemeryLaunchItSpec` through `EphemeryForkedHarness` (forked IntegrationTest):
+    - on an empty root it starts on the bundle in `<root>/ephemery-165`;
+    - with the clock offset to 5 s before the reset, it exits 75, and RocksDB then reopens cleanly.
   - The updated `EphemeryGenesisSpec`.
-- **Gate.** The specs above, then `LauncherIntegrationSpec`, then `compile-all` and `formatCheck`.
+- **Gate.** The specs above; `LauncherIntegrationSpec`; `IntegrationTest / testOnly *EphemeryLaunchItSpec`;
+  `compile-all` and `formatCheck`.
 - **Review.** prism (resolver, store and watchdog), then beacon (the bundle's chain config and hash pin), then eye.
 - **Live.** On dev-node, `fukuii ephemery` with no `FUKUII_CONF_DIR` starts on 165 and follows the head with
   `eb-lighthouse` (the start of SC-007).
@@ -310,12 +323,19 @@ unless a slice needs more (memory: subagent model choice).
   - the CL `testnet/` directory, written into the release entry (R10);
   - `ephemery-fetch --release` and the no-`--out` mode (contracts/cli.md);
   - `fetch-genesis.sh` reduced to `exec`;
-  - docs: the Ephemery runbook rewrite (quick start, supervisor units with exit codes, pinning with the script,
-    pointing a CL at `<root>/current/testnet`), the CHANGELOG, and the Ephemery lines of the network lists.
+  - docs: the Ephemery runbook rewrite, plus the CHANGELOG and the Ephemery lines of the network lists. The runbook
+    covers:
+    - a quick start;
+    - supervisor units with the exit codes;
+    - pinning an iteration with the script;
+    - **the CL across a reset.** It must restart on the new `<root>/current/testnet`, with a fresh CL datadir for each
+      iteration, for example a systemd unit that is `PartOf=` the fukuii unit with a datadir keyed by
+      `readlink <root>/current`. fukuii's restart alone does not move the CL;
+    - the datadir-derived paths that move at each reset, and how to pin them (contracts/config.md).
 - **Tests.**
   - `ReleaseFetcherSpec` and the `EphemeryResolverSpec` fetch cases, all against the fake transport.
-  - A forked-JVM test: clock past the reset, plus a fake server holding the next iteration. It must refresh and start
-    in the new datadir, leaving the old one untouched (US2).
+  - `EphemeryLaunchItSpec` refresh case: clock past the reset, plus a fake transport serving
+    `SyntheticRelease.next(165)`. It must refresh and start in the new datadir, leaving the old one untouched (US2).
 - **Gate.** The specs above; `pp`; `formatCheck`.
 - **Review.** prism, then conduit for the fetch wiring, then beacon (the release validation call site), then eye.
 
@@ -323,8 +343,11 @@ unless a slice needs more (memory: subagent model choice).
 
 - **Checks.**
   - **SC-007.** 24 h on the live iteration with no `FUKUII_CONF_DIR`.
-  - **SC-008.** The 165→166 reset, 2026-11-19 19:00 UTC, under a systemd unit with the runbook's settings, if S4b is
-    installed by 2026-11-18. Otherwise a controllable-clock run, with the live check moved to 167, 2026-12-17.
+  - **SC-008.** The 165→166 reset, 2026-11-19 19:00 UTC, if S4b is installed by 2026-11-18. Otherwise a
+    controllable-clock run, with the live check moved to 167, 2026-12-17.
+    - fukuii runs under a systemd unit with the runbook's settings.
+    - `eb-lighthouse` runs under a companion unit (`PartOf=`) that restarts it on `<root>/current/testnet` with a fresh
+      CL datadir, so neither side needs an operator.
   - **SC-005.** The Hoodi peer check from S1, repeated on the release candidate.
 - **Close.** Set the spec status to Shipped or Validated per `docs/development/spec-lifecycle.md`, regenerate the index,
   and release B-227.
@@ -342,6 +365,8 @@ the reset, plus a documented manual refresh with the script. That is the fallbac
 | The `GenesisDataLoader` extraction changes the genesis hash on some chain | A pure extraction; every existing genesis spec, ETC included, passes unchanged; beacon and forge review |
 | The Ephemery release format changes (pax headers, new keys, bpo3) | A refusal with exit 78 and the reason, in place of a wrong chain; the local-dir source is the fallback (R9, R13) |
 | A Hoodi bootnode with TCP port 0 is dialled at port 0 | The S1 pin test decides the list (R15); DNS discovery is the backstop |
+| Paths derived from the datadir move at each reset (static nodes, IPC socket, keystore, node key) | The table in contracts/config.md; the resolver seeds `static-nodes.json` from the root; the runbook says how to pin the others |
+| A test on the bundle reads the real clock and goes red on the reset date | The no-system-clock grep gate (R16) |
 | The 166 reset arrives before S4b | S3's exit 75 plus a manual refresh with the script (R17) |
 | The resolver overrides an operator's `custom-chains-dir` that holds other chains | It overrides only when that dir has no `ephemery-chain.conf`, and logs the override; for `network = ephemery` the other entries are unused |
 

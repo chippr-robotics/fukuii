@@ -37,6 +37,15 @@ fukuii cli ephemery-fetch [--release ephemery-N] [--from-dir DIR] [--out DIR]
 | `--from-dir DIR` | read an unpacked release from DIR instead of downloading (no network) | download from `fukuii.ephemery.source` |
 | `--out DIR` | write **today's script layout** to DIR (FR-015): `DIR/ephemery-N/{testnet,chains,conf,data,release.env,release.json}`, the `DIR/current` symlink, and `DIR/ephemery-local.conf` once. DIR must not contain quotes, backslashes, `$`, backticks or newlines (as `F`:74) | no `--out`: write into **the node's Ephemery root** (`<root>/releases/ephemery-N/`, including `testnet/`), the place the node reads from. This is how to get the CL directory for the bundled iteration (R10), or prepare offline before a reset |
 
+**How it finds its configuration.** `App`'s `determineNetworkArg` returns `None` for `cli`, so a plain `cli`
+subcommand never loads `conf/ephemery.conf`. `ephemery-fetch` therefore selects the Ephemery network configuration
+itself, with `App.setNetworkConfig("ephemery")`, before it reads the raw config. Then:
+- `FUKUII_CONF_DIR` and `-Dfukuii.conf.dir` find an operator `ephemery.conf` exactly as `fukuii ephemery` does.
+- `-Dfukuii.datadir` sets the Ephemery root. Without `--out`, the command writes where `fukuii ephemery` with the same
+  environment reads.
+- `fukuii.ephemery.source` and `refresh-timeout` apply. `refresh = false` does not stop an explicit `ephemery-fetch`:
+  the operator asked.
+
 **Behaviour.**
 - It applies exactly the node's rules: same library, same refusals, same messages.
 - Its exit codes are 0 on success and the class of the refusal otherwise (exit-codes.md). A usage error exits 2, as

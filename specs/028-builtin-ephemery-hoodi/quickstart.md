@@ -49,7 +49,9 @@ diff -u src/test/resources/ephemery/ephemery-165/ephemery-chain.conf /tmp/eph-s2
 ## S3: bundled, selection, the exit at the reset
 
 ```bash
-sbt "testOnly *BundledEphemerySpec *EphemeryResolverSpec *EphemeryResetWatchdogSpec *LauncherIntegrationSpec"
+sbt "testOnly *BundledEphemerySpec *EphemeryResolverSpec *EphemeryResetWatchdogSpec *EphemeryPropertyHandoverSpec *LauncherIntegrationSpec"
+sbt "IntegrationTest / testOnly *EphemeryLaunchItSpec"
+grep -rnE "Clock\.systemUTC|Instant\.now|currentTimeMillis|LocalDateTime\.now" src/test/scala/com/chipprbots/ethereum/ephemery/   # expect nothing
 ```
 
 **Expect:**
@@ -59,7 +61,10 @@ sbt "testOnly *BundledEphemerySpec *EphemeryResolverSpec *EphemeryResetWatchdogS
   2. a current cache entry;
   3. the bundle;
 - an ended bundle with nothing cached refuses with exit 78;
-- the forked launcher test starts in `<root>/ephemery-165`, and exits 75 with the clock past `resetTime`;
+- the property hand-over test resolves `fukuii.datadir` to `<root>/ephemery-165`, and `logging.logs-dir` to
+  `<root>/logs`;
+- the forked `EphemeryLaunchItSpec` starts in `<root>/ephemery-165`, then exits 75 when its offset clock passes
+  `resetTime`;
 - RocksDB reopens cleanly afterwards.
 
 **Live** (start of SC-007), on dev-node with no `FUKUII_CONF_DIR` and a new datadir root:
@@ -94,11 +99,12 @@ sbt "testOnly *JdkHttpsTransportSpec *StrictTarReaderSpec"
 
 ```bash
 sbt "testOnly *ReleaseFetcherSpec *EphemeryResolverSpec *LauncherIntegrationSpec"
+sbt "IntegrationTest / testOnly *EphemeryLaunchItSpec"
 ```
 
 **Expect:**
-- **Clock past the 165 reset, fake transport serving 166.** Fetch, validate, hash match, place
-  `releases/ephemery-166`, then start in `<root>/ephemery-166`; `ephemery-165/` is untouched.
+- **Clock past the 165 reset, fake transport serving `SyntheticRelease.next(165)`.** Fetch, validate, hash match,
+  place `releases/ephemery-166`, then start in `<root>/ephemery-166`; `ephemery-165/` is untouched.
 - **Not published.** Exit 69 within the 60 s budget.
 - **Refresh off.** Exit 78.
 - **Several iterations behind.** Straight to the iteration whose window contains now.

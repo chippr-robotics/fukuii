@@ -22,8 +22,12 @@ RestartSec=120
 RestartPreventExitStatus=78
 ```
 
-Docker's `--restart on-failure` restarts on 78 too. The runbook says so and suggests `--restart on-failure:5` (at most
-5 retries) as the limit.
+Docker's `--restart on-failure` (no retry cap) restarts on 78 too, and has no equivalent of
+`RestartPreventExitStatus`. The runbook says so.
+- **Do not cap the retries.** A late release took 3 h 42 m, about 75 restarts (research.md R12), so a cap such as
+  `on-failure:5` would leave the node down.
+- **Under Docker, watch for 78** in the logs or the exit status instead. Kubernetes' `CrashLoopBackOff` backoff is
+  fine as it is.
 
 ## Log lines (stable wording; tests match on the leading text)
 

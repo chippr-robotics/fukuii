@@ -117,7 +117,8 @@ The inputs are the raw config, the `Clock`, the bundle, `ReleaseStore`, and the 
 - `logging.logs-dir = <its value before selection>`;
 - `fukuii.ephemery.active.{iteration,reset-time,genesis-hash,managed=true}`.
 
-It then updates `current` and logs the startup report (contracts/exit-codes.md).
+When it creates `<root>/ephemery-N` for the first time, it copies `<root>/static-nodes.json` into it if that file
+exists (contracts/config.md). It then updates `current` and logs the startup report (contracts/exit-codes.md).
 
 ## ResetWatchdog state
 

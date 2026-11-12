@@ -49,8 +49,24 @@ row 3, 4 or 6).
 | `fukuii.ephemery.active.genesis-hash` | `0x…` |
 | `fukuii.ephemery.active.managed` | `true` |
 
-`tmpdir`, `node-key-file` and `keystore-dir` follow `fukuii.datadir` through their existing substitutions. An operator
-who sets them to absolute paths keeps those paths.
+## What moves at each reset (managed iteration)
+
+Every path derived from `fukuii.datadir` follows the iteration, unless the operator sets it as an absolute path. Checked
+in `conf/base/*.conf` and `DiscoveryConfig.scala:56` on 2026-11-12.
+
+| Key or file | Default | At each new iteration | To keep it across iterations |
+|-------------|---------|-----------------------|------------------------------|
+| `db.rocksdb.path` | `${fukuii.datadir}/rocksdb/` | new (by design, FR-009) | – |
+| `tmpdir` | `${fukuii.datadir}/tmp` | new | not needed |
+| `node-key-file` | `${fukuii.datadir}/node.key` | new: a new enode, as with the script today (R6) | set an absolute path |
+| `keystore.keystore-dir` | `${fukuii.datadir}/keystore` | new: accounts do not carry over | set an absolute path |
+| `network.rpc.ipc.socket-file` | `${fukuii.datadir}/fukuii.ipc` | moves | set an absolute path |
+| `static-nodes.json` | `${fukuii.datadir}/static-nodes.json` | **seeded**: when the resolver creates a new iteration datadir, it copies `<root>/static-nodes.json` into it if that file exists, and never overwrites | put it at `<root>/static-nodes.json` |
+| `logging.logs-dir` | `${fukuii.datadir}/logs` | **pinned** to `<root>/logs` by the resolver (R5) | – |
+| Engine API `jwt-secret-path` | unset (a random secret) | unaffected: not derived from the datadir. An operator conf that writes `${fukuii.datadir}/…` would move it, so the runbook says to use an absolute path, as on Sepolia | an absolute path |
+
+An operator conf that substitutes `${fukuii.datadir}` into any other key gets the iteration's directory. The runbook
+says so.
 
 ## `conf/ephemery.conf` changes
 
