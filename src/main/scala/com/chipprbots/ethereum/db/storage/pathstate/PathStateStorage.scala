@@ -60,11 +60,10 @@ final class PathStateStorage(
   /** The block whose state the disk holds, or `None` when the datadir has no state yet (SNAP in progress). */
   def anchor: Option[BlockRef] = clock.anchor
 
-  /** Whether a view of `block`'s state can be made right now: it is the anchor, or forward layers lead to it from the
-    * anchor.
+  /** Whether `block` is the block whose state the disk holds. (A block kept as a forward layer has a view too:
+    * [[view]]. What takes a layer for a state that is there comes with the callers, in C4a's last part.)
     */
-  def stateAvailable(block: BlockRef): Boolean =
-    anchor.exists(held => held == block || overlay.chainFrom(held, block).isDefined)
+  def stateAvailable(block: BlockRef): Boolean = anchor.contains(block)
 
   /** The forward layer of `blockHash`, when it has one: it was executed, and its state is on no row. */
   def forwardLayer(blockHash: ByteString): Option[ForwardLayer] = overlay.layerOf(blockHash)
@@ -266,8 +265,9 @@ final class PathStateStorage(
               val finalised =
                 executed.changes.finalise(owner => rows.storageRows(owner, maxOwnerRows, settings.maxOwnerScanBytes))
               val applied = commitInPlace(finalised, held, block, extra, finalized)
-              // the block is on disk: a layer an earlier execution left of it is of no more use
-              overlay.drop(block.hash)
+              // the block is on disk: a layer an earlier execution left of it is of no more use, nor is one that
+              // no chain now leads to
+              layersAfterMoveTo(block)
               applied
             case Some(executed) =>
               throw new StateUnavailable(
@@ -404,8 +404,10 @@ final class PathStateStorage(
                 s"block ${block.show} cannot be kept: there is no state anchor, so there is no state to keep it beside"
               )
             case Some(held) if held.hash == block.hash => OverlayOutcome.AlreadyApplied
-            case Some(held) =>
-              if held != parent && overlay.layerOf(parent).isEmpty then
+            case Some(held)                            =>
+              // the parent is the anchor, or layers lead to it from the anchor: a layer on a layer the anchor has
+              // left behind would be kept for nothing, and for good
+              if held != parent && overlay.chainFrom(held, parent).isEmpty then
                 throw new StateUnavailable(
                   s"block ${block.show} was executed on the state of ${parent.show}, which is not held any more: " +
                     s"the disk holds ${held.show}"
@@ -466,13 +468,14 @@ final class PathStateStorage(
           elsewhere match
             case Some(position) =>
               overlay.drop(block.hash)
+              overlay.dropUnreachableFrom(held)
               throw new StateUnavailable(
                 s"the executed block ${block.show} was not built on the state the disk holds: it found another node " +
                   s"at ${position.show} than the row there. It is dropped, and is executed again"
               )
             case None =>
               val applied = commitInPlace(layer.finalised, held, block, extra, finalized)
-              overlay.drop(block.hash)
+              layersAfterMoveTo(block)
               applied
     }
     outcome match
@@ -481,13 +484,24 @@ final class PathStateStorage(
       case CommitOutcome.AlreadyApplied => ()
     outcome
 
-  /** Drops the forward layer of `blockHash`, if it has one: its execution was found not to stand (data-model 7.2).
-    * Views that hold it go on reading it; no new view is made through it, and none of its descendants'.
+  /** Drops the forward layer of `blockHash`, if it has one, and the layers built on it: its execution was found not to
+    * stand (data-model 7.2). Views that hold them go on reading them; no new view is made through them.
     */
   def dropLayer(blockHash: ByteString): Unit =
     lock.locked("the drop of an executed block") {
       overlay.drop(blockHash)
+      clock.anchor.fold(overlay.clear()) { held =>
+        overlay.dropUnreachableFrom(held); ()
+      }
     }
+
+  /** The anchor has moved to `block`, whose batch has returned: its own layer goes, and every layer no chain leads to
+    * any more. Only now: a view that is being made finds either the layer or a moved epoch (see [[viewAfter]]).
+    */
+  private def layersAfterMoveTo(block: BlockRef)(using StateLockHeld): Unit =
+    overlay.drop(block.hash)
+    overlay.dropUnreachableFrom(block)
+    ()
 
   private def commitInPlace(
       finalised: StagedChanges.Final,

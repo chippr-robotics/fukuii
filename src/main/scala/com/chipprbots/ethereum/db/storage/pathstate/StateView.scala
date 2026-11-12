@@ -227,9 +227,12 @@ final class StateView private[pathstate] (
 
   /** [[read]], and whether a layer answered: a node a layer gives is this view's whatever the disk does. */
   private[pathstate] def readFrom(p: PositionKey): (Option[Array[Byte]], Boolean) =
-    forward.iterator.map(_.lookup(p)).collectFirst { case Some(left) => left.map(_.toArray) } match
-      case Some(answer) => (answer, true)
-      case None         => (onDiskAsOfBase(p), false)
+    // the anchor's view, which every block of a node that follows the head is executed on, has nothing to look through
+    if forward.isEmpty then (onDiskAsOfBase(p), false)
+    else
+      forward.iterator.map(_.lookup(p)).collectFirst { case Some(left) => left.map(_.toArray) } match
+        case Some(answer) => (answer, true)
+        case None         => (onDiskAsOfBase(p), false)
 
   /** A node one of this view's layers leaves, by its hash. */
   private[pathstate] def layerNode(hash: ByteString): Option[Array[Byte]] =
@@ -278,13 +281,23 @@ final class StateView private[pathstate] (
     *   when the log no longer reaches back to the view
     */
   def ownerRows(owner: ByteString, maxRows: Int, maxBytes: Long): Option[Seq[(PositionKey, ByteString)]] =
+    ownerRowsAfter(owner, maxRows, maxBytes, () => ())
+
+  /** [[ownerRows]], with `beforeScan` run before each scan of the disk: a test moves the disk there. */
+  private[pathstate] def ownerRowsAfter(
+      owner: ByteString,
+      maxRows: Int,
+      maxBytes: Long,
+      beforeScan: () => Unit
+  ): Option[Seq[(PositionKey, ByteString)]] =
     val laid: Map[PositionKey, Option[ByteString]] =
       forward.reverseIterator.foldLeft(Map.empty[PositionKey, Option[ByteString]])(_ ++ _.ofOwner(owner))
 
     // What the disk may hold for this owner that the state does not: a row a layer replaces or removes, and a row a
     // move has written since. The scan is allowed that many more, each of at most a stored node and its key. Moves go
-    // on while it runs, so the allowance is taken again after it, and the scan made again if it was too small.
-    def allowance(): Int = laid.size + movedSince().map(_.preOf(owner).size).sum
+    // on while it runs, so the count is taken again after it, and the scan made again if it was allowed too few. A
+    // position is counted once however many moves wrote it; and the allowance has a bound of its own, since a view
+    // that old lists a trie by holding it (vault).
     def movedSince(): Seq[StateMove] =
       val now = clock.epoch
       if now == createdAt then Nil
@@ -299,16 +312,26 @@ final class StateView private[pathstate] (
               "the log of state moves no longer reaches back to it"
             )
           )
+    def beside(moves: Seq[StateMove]): Int =
+      (laid.keySet ++ moves.iterator.flatMap(_.preOf(owner).keysIterator)).size
 
     @annotation.tailrec
     def scan(extra: Int, triesLeft: Int): Option[(Seq[(PositionKey, ByteString)], Seq[StateMove])] =
+      if extra > maxRows.max(StateView.MinScanAllowance) then
+        throw new StaleStateViewException(
+          block,
+          createdAt,
+          clock.epoch,
+          s"$extra rows of one storage trie were written since it was made: too many to list that trie by"
+        )
+      beforeScan()
       val limit = (maxRows.toLong + extra).min(Int.MaxValue.toLong).toInt
       val bytes =
         if maxBytes > Long.MaxValue - extra.toLong * StateView.MaxRowBytes then Long.MaxValue
         else maxBytes + extra.toLong * StateView.MaxRowBytes
       val scanned = rows.storageRows(owner, limit, bytes)
       val moves = movedSince()
-      val needed = laid.size + moves.iterator.map(_.preOf(owner).size).sum
+      val needed = beside(moves)
       scanned match
         case Some(found)             => Some((found, moves))
         case None if needed <= extra => None
@@ -316,7 +339,7 @@ final class StateView private[pathstate] (
           throw new StaleStateViewException(block, createdAt, clock.epoch, "the disk moved on under a scan of its rows")
         case None => scan(needed, triesLeft - 1)
 
-    scan(allowance(), StateView.ScanTries).flatMap { (found, moves) =>
+    scan(beside(movedSince()), StateView.ScanTries).flatMap { (found, moves) =>
       val state = scala.collection.mutable.HashMap.from(found)
       val settled = scala.collection.mutable.HashSet.empty[PositionKey]
       // the earliest move that wrote a position knows what the view's base held there
@@ -346,6 +369,9 @@ object StateView:
 
   /** How often a scan of an owner's rows is made again because moves went on while it ran. */
   private val ScanTries: Int = 3
+
+  /** The least a scan may be allowed beside the state's rows, whatever the bound of rows it is given. */
+  private val MinScanAllowance: Int = 65536
 
   /** The block before any block: what a view of no state is a view of. */
   private val BeforeGenesis: BlockRef =

@@ -44,9 +44,21 @@ class ForwardLayerSpec extends AnyFlatSpec with Matchers:
   private def delete(address: Address): Tx = _.deleteAccount(address)
   private val eve = Address(0xe7e)
 
+  /** An in-memory source whose writes fail when told to. (A subclass and not a wrapper: the storages ask a source
+    * whether it is the in-memory one, to know the shape of its keys.)
+    */
+  final private class Failing extends EphemDataSource(Map.empty):
+    @volatile var fails = false
+    override def update(dataSourceUpdates: Seq[com.chipprbots.ethereum.db.dataSource.DataUpdate]): Unit =
+      if fails then throw new java.io.IOException("the disk is full")
+      super.update(dataSourceUpdates)
+
   /** A datadir whose position store holds `HashedState`'s state as block 1's. */
-  final private class Chain(settings: CommitSettings = CommitSettings(), maxViewAgeMoves: Int = 8):
-    val source: EphemDataSource = EphemDataSource()
+  final private class Chain(
+      settings: CommitSettings = CommitSettings(),
+      maxViewAgeMoves: Int = 8,
+      val source: EphemDataSource = EphemDataSource()
+  ):
     val hashed = new HashedState
     val first: BlockRef = block(1, hashed.root)
     val rows = new PathNodeStorage(source)
@@ -80,7 +92,9 @@ class ForwardLayerSpec extends AnyFlatSpec with Matchers:
       val root: ByteString = run(hashed.world(parent.stateRoot)).stateRootHash
       // what the block's world reads, through whatever layers its parent's state is made of, is the parent's state
       run(worldOver(staged.storage, parent.stateRoot, hashed.codes)).stateRootHash shouldBe root
-      val ref: BlockRef = BlockRef(ByteString(kec256(s"block-${parent.number + 1}".getBytes)), parent.number + 1, root)
+      // named by its parent and its state: two blocks on one parent, or at one height, are two blocks
+      val ref: BlockRef =
+        BlockRef(ByteString(kec256((parent.hash ++ root).toArray)), parent.number + 1, root)
 
       def inPlace(): Commit = state.commitCanonical(Some(staged), ref, pointer(ref)) match
         case CommitOutcome.Applied(done) => done
@@ -159,7 +173,7 @@ class ForwardLayerSpec extends AnyFlatSpec with Matchers:
     layers.everything shouldBe untouched
     layers.state.anchor shouldBe Some(layers.first)
     layers.state.clock.epoch shouldBe epoch
-    kept.foreach((ref, _, _) => layers.state.stateAvailable(ref) shouldBe true)
+    kept.foreach((ref, _, _) => layers.state.forwardLayer(ref.hash).map(_.block) shouldBe Some(ref))
 
     // promoted, oldest first: after each, the datadir is the one the block left when it was committed in place
     kept.foreach { (ref, afterInPlace, reference) =>
@@ -300,10 +314,17 @@ class ForwardLayerSpec extends AnyFlatSpec with Matchers:
       ByteString(onLayers.forOwner(None).getAt(written.path, kec256(left.toArray)).encode) shouldBe left
       // and a node of the layer is found by its hash
       ByteString(onLayers.get(kec256(left.toArray)).encode) shouldBe left
+      // a position the layer left with no row (the block removed bob's storage), where a node is named
+      val (removed, _) = layer.written.collectFirst { case (p, None) if p.owner.contains(owner(bob)) => p -> () }.get
+      a[LayerInconsistent] should be thrownBy
+        onLayers.forOwner(removed.owner).getAt(removed.path, kec256(other.toArray))
 
       // the disk moves: what the old view meets is no longer known to be the state it was made over
       chain.state.clock.inFlight(StateMove(chain.first, Map.empty))(())
       a[StaleStateViewException] should be thrownBy at(onLayers)
+      // what a layer gives is the view's whatever the disk does: a wrong node there is the layers' fault still
+      a[LayerInconsistent] should be thrownBy
+        onLayers.forOwner(None).getAt(written.path, kec256(other.toArray))
     }
 
   "A forward layer" should "be one for a block, be refused beside the anchor or over a state that is gone, and be bounded" taggedAs
@@ -318,7 +339,7 @@ class ForwardLayerSpec extends AnyFlatSpec with Matchers:
       // a block on a layer that is dropped: its parent's state is held nowhere
       val c = chain.on(b.ref)(fourBlocks(1)*)
       chain.state.dropLayer(b.ref.hash)
-      chain.state.stateAvailable(b.ref) shouldBe false
+      chain.state.forwardLayer(b.ref.hash) shouldBe None
       a[StateUnavailable] should be thrownBy chain.state.commitOverlay(c.staged, c.ref)
       a[StateUnavailable] should be thrownBy chain.state.view(c.ref)
       chain.state.forwardLayer(c.ref.hash) shouldBe None
@@ -383,7 +404,7 @@ class ForwardLayerSpec extends AnyFlatSpec with Matchers:
 
   "The rows of a storage trie, as an old view lists them" should "be the rows of its state after the disk moved on" taggedAs
     UnitTest in {
-      val chain = new Chain(maxViewAgeMoves = 1)
+      val chain = new Chain(maxViewAgeMoves = 2)
       val old = chain.state.view(chain.first)
       val bobs = owner(bob)
       val atFirst = chain.rowsOf(chain.first, bobs)
@@ -404,7 +425,130 @@ class ForwardLayerSpec extends AnyFlatSpec with Matchers:
       old.ownerRows(bobs, Int.MaxValue, bytes).map(_.size) shouldBe Some(atFirst.size)
       old.ownerRows(bobs, Int.MaxValue, bytes - 1) shouldBe None
 
+      // a second move writes rows the first wrote: what the view's state held there is what the FIRST found
+      val c = chain.on(b.ref)(slots(bob, (41 to 55).map(i => i -> 0)*), slots(bob, 1 -> 12345, 71 -> 1))
+      c.inPlace()
+      chain.listed(old, bobs) shouldBe Some(atFirst)
+
       // one move more than the log holds
-      chain.on(b.ref)(account(dave, 3, 3)).inPlace()
+      chain.on(c.ref)(account(dave, 3, 3)).inPlace()
       a[StaleStateViewException] should be thrownBy chain.listed(old, bobs)
+    }
+
+  it should "be scanned again when the disk moves under the scan, and give up when it keeps moving" taggedAs
+    UnitTest in {
+      val chain = new Chain()
+      val old = chain.state.view(chain.first)
+      val bobs = owner(bob)
+      val atFirst = chain.rowsOf(chain.first, bobs)
+      var head = chain.first
+      def grow(by: Int): Unit =
+        val next = chain.on(head)(slots(bob, (1 to by).map(i => (1000 * head.number.toInt + i) -> i)*))
+        next.inPlace()
+        head = next.ref
+
+      // The bound is exactly the state's rows, and nothing has moved when the listing begins: the scan is allowed no
+      // row beside them. A block that adds rows lands before the scan, which then finds too many, and is made again
+      // with room for what that block wrote.
+      var moved = false
+      val listed = old.ownerRowsAfter(
+        bobs,
+        atFirst.size,
+        Long.MaxValue,
+        () =>
+          if !moved then
+            moved = true
+            grow(60)
+      )
+      listed.map(_.map((p, node) => ByteString(p.rowKey) -> node).toMap) shouldBe Some(atFirst)
+
+      // a block lands before every scan, each adding more rows than all before it wrote
+      var by = 400
+      val stale = the[StaleStateViewException] thrownBy old.ownerRowsAfter(
+        bobs,
+        atFirst.size,
+        Long.MaxValue,
+        () =>
+          grow(by)
+          by = by * 3
+      )
+      stale.getMessage should include("under a scan of its rows")
+    }
+
+  "The layers no chain leads to from the anchor" should "go when the anchor moves, and with the layer they were built on" taggedAs
+    UnitTest in {
+      val chain = new Chain(CommitSettings(maxForwardLayers = 4))
+      val b = chain.on(chain.first)(fourBlocks(0)*)
+      b.layered()
+      val c = chain.on(b.ref)(fourBlocks(1)*)
+      c.layered()
+      // a sibling of b, and a block on it
+      val sibling = chain.on(chain.first)(account(dave, 1, 1))
+      val beside = sibling.ref.copy(hash = ByteString(kec256("the sibling".getBytes)))
+      chain.state.commitOverlay(sibling.staged, beside) shouldBe a[OverlayOutcome.Layered]
+      val onSibling = chain.on(beside)(account(dave, 2, 2))
+      onSibling.layered()
+      val late = chain.on(beside)(account(dave, 3, 3))
+      // four layers, and no room for a fifth
+      val d = chain.on(c.ref)(fourBlocks(2)*)
+      a[StateUnavailable] should be thrownBy chain.state.commitOverlay(d.staged, d.ref)
+
+      // b becomes the anchor: its sibling and what stands on it are states nothing leads to
+      chain.promote(b.ref)
+      Seq(beside, onSibling.ref).foreach(gone => chain.state.forwardLayer(gone.hash) shouldBe None)
+      chain.state.forwardLayer(c.ref.hash) should not be empty
+      // a block that was executed on the sibling meanwhile is not kept: its parent is a layer no more
+      a[StateUnavailable] should be thrownBy chain.state.commitOverlay(late.staged, late.ref)
+      // and there is room again
+      d.layered()
+
+      // a block committed in place beside a layer does the same to it
+      val other = chain.on(b.ref)(account(dave, 4, 4))
+      other.inPlace()
+      Seq(c.ref, d.ref).foreach(gone => chain.state.forwardLayer(gone.hash) shouldBe None)
+
+      // a layer that is dropped takes with it what was built on it
+      val e = chain.on(other.ref)(account(dave, 5, 5))
+      e.layered()
+      val f = chain.on(e.ref)(account(dave, 6, 6))
+      f.layered()
+      chain.state.dropLayer(e.ref.hash)
+      Seq(e.ref, f.ref).foreach(gone => chain.state.forwardLayer(gone.hash) shouldBe None)
+    }
+
+  "A promotion" should "keep its layer when the write fails, write the block's own records for the anchor, and not outlive the state" taggedAs
+    UnitTest in {
+      val failing = new Failing
+      val chain = new Chain(CommitSettings(allowsStateDestruction = true), source = failing)
+      val b = chain.on(chain.first)(fourBlocks(0)*)
+      val layer = b.layered()
+      val before = chain.everything
+
+      failing.fails = true
+      a[java.io.IOException] should be thrownBy chain.state.promote(b.ref, chain.pointer(b.ref))
+      failing.fails = false
+      chain.everything shouldBe before
+      chain.state.anchor shouldBe Some(chain.first)
+      chain.state.forwardLayer(b.ref.hash) shouldBe Some(layer)
+      chain.state.lock.holder shouldBe None
+      // asked again, it is promoted
+      chain.promote(b.ref)
+      chain.state.anchor shouldBe Some(b.ref)
+
+      // the anchor promoted again: nothing of the state is written, and the caller's own records are
+      val records = chain.appState.putBestBlockInfo(BlockInfo(b.ref.hash, 99))
+      chain.state.promote(b.ref, Some(records)) shouldBe CommitOutcome.AlreadyApplied
+      chain.appState.getBestBlockNumber() shouldBe 99
+
+      // a block of a hash that is kept, on another parent, is a defect and no layer
+      val c = chain.on(b.ref)(fourBlocks(1)*)
+      c.layered()
+      val d = chain.on(c.ref)(fourBlocks(2)*)
+      an[Exception] should be thrownBy chain.state.commitOverlay(d.staged, c.ref)
+      // and a block of that hash with another state root has no view
+      a[StateUnavailable] should be thrownBy chain.state.view(c.ref.copy(stateRoot = b.ref.stateRoot))
+
+      // the state is destroyed: the blocks kept beside it are of no state
+      chain.state.destroyStateForNewGenesis()
+      chain.state.forwardLayer(c.ref.hash) shouldBe None
     }
