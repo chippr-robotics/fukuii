@@ -2485,3 +2485,14 @@ items:
       spec: 018
     depends_on: [B-060]
     notes: "By the user's decision of 2026-11-12, C3c part 3 is its linear subset (plan.md 'C3c part 3'). Left for the overlay (C4a) and the head move (C4b): ChainImporter.importInPlace refuses a block that is not built on the head (the rest of T109: pre-merge side blocks through the fork choice, post-merge ones adopted; bcMultiChainTest, the uncle races, lotsOfLeafs end on another head with the guard on); test_rewindToBlock in test mode; it/ethtest EthereumTestHelper, EthereumTestExecutor and ForkChoiceBlockchainTestsSpec (the rest of T117, needed by EG-2 / T254); engine_newPayload adopting nothing on the guard."
+  - id: B-221
+    title: "SNAPCoordinatorGoneSpec failed once on CI (PR #1805, run 43158234872): passes 3/3 locally; same family as B-020"
+    priority: P2
+    status: open
+    area: tests
+    size: S
+    opened: 2026-11-12
+    refs: []
+    links: {}
+    depends_on: [B-020]
+    notes: Test and Build, JDK 25, 2026-11-12. One test of the spec failed in a full testEssential on CI; the PR's diff has no SNAP or sync file. Name the failing case from the run's test-results artifact, then make its waits deterministic with the others of B-020.
