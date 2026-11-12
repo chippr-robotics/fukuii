@@ -1,5 +1,8 @@
 package com.chipprbots.ethereum.db.storage.pathstate
 
+import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.atomic.AtomicReference
+
 import org.apache.pekko.util.ByteString
 
 import scala.util.control.NonFatal
@@ -57,6 +60,42 @@ final class PathStateStorage(
   /** The executed blocks whose state is on no row (data-model 6.1). Nothing in the node makes one yet. */
   private[pathstate] val overlay = new StateOverlay(settings.maxForwardLayers)
 
+  /** The blocks behind the anchor that the changeset records lead to, when they have been looked up: built at the first
+    * need of them, moved on by each commit, and dropped whenever the anchor moves in any other way.
+    */
+  private val window = new AtomicReference[Option[AncestorWindow]](None)
+
+  /** The reverse indexes last built, by the anchor and the ancestor they lie between: the blocks of one branch are each
+    * executed on a view of the same fork point.
+    */
+  private val indexes = new ConcurrentHashMap[(ByteString, ByteString), ReverseIndex]()
+
+  /** The window of `held`, which is the anchor: built from the records' headers if there is none of that anchor. */
+  private def windowOf(held: BlockRef)(using StateLockHeld): AncestorWindow =
+    window.get match
+      case Some(known) if known.anchor == held => known
+      case _ =>
+        val built = AncestorWindow.of(changesets, held, settings.maxReverseHops)
+        window.set(Some(built))
+        built
+
+  /** The window of `held` for a reader that holds no lock, or `None` when `held` is no longer the anchor. */
+  private def windowFor(held: BlockRef): Option[AncestorWindow] =
+    window.get
+      .filter(_.anchor == held)
+      .orElse(lock.locked("the look at the blocks behind the anchor")(clock.anchor.filter(_ == held).map(windowOf)))
+
+  private def indexBetween(anchor: BlockRef, fork: BlockRef): ReverseIndex =
+    val key = (anchor.hash, fork.hash)
+    Option(indexes.get(key)).filter(index => index.from == anchor && index.to == fork).getOrElse {
+      val built =
+        ReverseIndex.between(changesets, anchor, fork, settings.maxReverseHops, settings.maxReverseIndexBytes)
+      // a handful: an index is of one anchor, and the anchor moves with every block
+      if indexes.size >= MaxIndexesKept then indexes.clear()
+      indexes.put(key, built)
+      built
+    }
+
   /** The block whose state the disk holds, or `None` when the datadir has no state yet (SNAP in progress). */
   def anchor: Option[BlockRef] = clock.anchor
 
@@ -92,7 +131,7 @@ final class PathStateStorage(
       case None => throw new StateUnavailable(s"the state of block ${block.show} is not held: there is no state anchor")
       case Some(`block`) => new StateView(block, epoch, clock, rows)
       case Some(other) =>
-        val chain = overlay.chainFrom(other, block)
+        val chain = overlay.chainFrom(other, block).map(_._1)
         if clock.epoch != epoch then
           if triesLeft > 0 then viewAfter(block, rested, triesLeft - 1)
           else
@@ -107,6 +146,64 @@ final class PathStateStorage(
             case Some(layers) => new StateView(block, epoch, clock, rows, layers)
             case None =>
               throw new StateUnavailable(s"the state of block ${block.show} is not held: the disk holds ${other.show}")
+
+  /** A view of the state of any block this store can give one of: the anchor; a block forward layers lead to; '''a
+    * block behind the anchor''' that its changeset records lead back to, read through the reverse index between them;
+    * and a block on '''a fork''', through the index back to the block the fork left the anchor's chain at and the
+    * fork's layers from there (data-model 6.1, 6.2).
+    *
+    * [[view]] gives the first two, and it is what the node's readers and its execution ask. This one is for the
+    * overlay's own use until the callers that may take a state behind the head are changed with it (C4a's last part): a
+    * reader handed such a view today would answer where it refuses, and an execution would run to a commit that is
+    * refused.
+    *
+    * The epoch, the anchor, the window of its ancestors, the layers and the records are one observation, as in
+    * [[viewAfter]]: when the epoch has moved by the end, the view is made again. A record that is not there while the
+    * epoch stands is a state that is not held; one that went with a moved epoch is asked for again.
+    *
+    * @throws StateUnavailable
+    *   when no layers and no records lead to `block`'s state
+    */
+  private[pathstate] def viewOf(block: BlockRef, triesLeft: Int = ViewTries): StateView =
+    val (epoch, held) = clock.awaitRest()
+    held match
+      case None => throw new StateUnavailable(s"the state of block ${block.show} is not held: there is no state anchor")
+      case Some(`block`) => new StateView(block, epoch, clock, rows)
+      case Some(anchor) =>
+        val made =
+          try
+            windowFor(anchor).map { behind =>
+              overlay.chainFrom(anchor, block, behind.contains) match
+                case Some((layers, on)) =>
+                  val reverse = Option.when(on != anchor)(indexBetween(anchor, on))
+                  new StateView(block, epoch, clock, rows, layers, reverse)
+                case None if behind.contains(block) =>
+                  new StateView(block, epoch, clock, rows, Nil, Some(indexBetween(anchor, block)))
+                case None =>
+                  throw new StateUnavailable(
+                    s"the state of block ${block.show} is not held: the disk holds ${anchor.show}, and neither its " +
+                      "changeset records nor the executed blocks kept beside it lead there"
+                  )
+            }
+          catch case _: StateUnavailable if clock.epoch != epoch => None
+        made.filter(_ => clock.epoch == epoch).getOrElse {
+          if clock.epoch == epoch then
+            // the window was of another anchor and the epoch has not moved: the clock is read again
+            if triesLeft > 0 then viewOf(block, triesLeft - 1)
+            else
+              throw new StateUnavailable(s"the state of block ${block.show} is not held: the anchor could not be read")
+          else if triesLeft > 0 then viewOf(block, triesLeft - 1)
+          else
+            throw new StaleStateViewException(
+              block,
+              epoch,
+              clock.epoch,
+              "the disk moved on each time a view of it was being made"
+            )
+        }
+
+  /** [[stage]] over [[viewOf]]: a layer for the execution of a block on a fork, or on a block behind the anchor. */
+  private[pathstate] def stageOf(parent: BlockRef): PathStagedState = new PathStagedState(parent, viewOf(parent))
 
   /** `block`'s state for a reader that writes nothing. */
   def readOnly(block: BlockRef): MptStorage = PathMptStorage.readOnly(view(block))
@@ -265,9 +362,7 @@ final class PathStateStorage(
               val finalised =
                 executed.changes.finalise(owner => rows.storageRows(owner, maxOwnerRows, settings.maxOwnerScanBytes))
               val applied = commitInPlace(finalised, diffOf(finalised, held, block), block, extra, finalized)
-              // the block is on disk: a layer an earlier execution left of it is of no more use, nor is one that
-              // no chain now leads to
-              layersAfterMoveTo(block)
+              movedTo(held, block, applied)
               applied
             case Some(executed) =>
               throw new StateUnavailable(
@@ -318,8 +413,11 @@ final class PathStateStorage(
         case Some(deletes) =>
           val updates: Seq[DataUpdate] = deletes ++ appState.removeStateMarks().updates
           clock.inFlightToNoState(dataSource.updateSync(updates))
-          // executed blocks kept beside a state that is gone are of no state
+          // executed blocks kept beside a state that is gone are of no state, and neither is what was derived from
+          // its records
           overlay.clear()
+          window.set(None)
+          indexes.clear()
           deletes.map(_.toRemove.size).sum
     }
 
@@ -417,15 +515,21 @@ final class PathStateStorage(
                 s"block ${block.show} cannot be kept: there is no state anchor, so there is no state to keep it beside"
               )
             case Some(held) if held.hash == block.hash => OverlayOutcome.AlreadyApplied
-            case Some(held)                            =>
-              // the parent is the anchor, or layers lead to it from the anchor: a layer on a layer the anchor has
-              // left behind would be kept for nothing, and for good
-              if held != parent && overlay.chainFrom(held, parent).isEmpty then
-                throw new StateUnavailable(
-                  s"block ${block.show} was executed on the state of ${parent.show}, which is not held any more: " +
-                    s"the disk holds ${held.show}"
-                )
-              OverlayOutcome.Layered(overlay.register(layer))
+            case Some(held) =>
+              val behind = windowOf(held)
+              // a block of the anchor's own chain is on disk or in the records: it is not kept as a layer beside them
+              if behind.contains(block) then OverlayOutcome.BehindTheAnchor
+              else
+                // The parent is the anchor, a block behind it that the records lead to, or a block layers lead to
+                // from one of those: a layer on anything else would be kept for nothing, and for good.
+                val held0 = held == parent || behind.contains(parent) ||
+                  overlay.chainFrom(held, parent, behind.contains).isDefined
+                if !held0 then
+                  throw new StateUnavailable(
+                    s"block ${block.show} was executed on the state of ${parent.show}, which is not held any more: " +
+                      s"the disk holds ${held.show}"
+                  )
+                OverlayOutcome.Layered(overlay.register(layer))
         }
 
   /** Commits the forward layer of `block` as the block whose state the disk holds (data-model 7.1, the second of the
@@ -482,7 +586,7 @@ final class PathStateStorage(
           layer.changesOver(position => rows.read(position).map(ByteString(_))) match
             case Left(position) =>
               overlay.drop(block.hash)
-              overlay.dropUnreachableFrom(held)
+              dropUnreachable(held)
               throw new StateUnavailable(
                 s"the executed block ${block.show} was not built on the state the disk holds: it found another node " +
                   s"at ${position.show} than the row there. It is dropped, and is executed again"
@@ -498,10 +602,10 @@ final class PathStateStorage(
                 catch
                   case fault: (IllegalStateException | IllegalArgumentException) =>
                     overlay.drop(block.hash)
-                    overlay.dropUnreachableFrom(held)
+                    dropUnreachable(held)
                     throw fault
               val applied = commitInPlace(finalised, diff, block, extra, finalized)
-              layersAfterMoveTo(block)
+              movedTo(held, block, applied)
               applied
     }
     outcome match
@@ -516,18 +620,34 @@ final class PathStateStorage(
   def dropLayer(blockHash: ByteString): Unit =
     lock.locked("the drop of an executed block") {
       overlay.drop(blockHash)
-      clock.anchor.fold(overlay.clear()) { held =>
-        overlay.dropUnreachableFrom(held); ()
-      }
+      clock.anchor.fold(overlay.clear())(dropUnreachable)
     }
 
-  /** The anchor has moved to `block`, whose batch has returned: its own layer goes, and every layer no chain leads to
-    * any more. Only now: a view that is being made finds either the layer or a moved epoch (see [[viewAfter]]).
+  /** The anchor has moved from `parent` to `block`, whose batch has returned. The window of ancestors follows it, when
+    * there is one: `parent` is now the nearest, unless the block's record is a tombstone, which nothing is read across;
+    * and the ancestors whose records the batch pruned are gone. Then the layers: the block's own, and every one that
+    * nothing leads to any more. Only now: a view that is being made finds either the layer or a moved epoch (see
+    * [[viewAfter]]).
     */
-  private def layersAfterMoveTo(block: BlockRef)(using StateLockHeld): Unit =
-    // the block's own layer is one of them: no chain leads from a block to itself
-    overlay.dropUnreachableFrom(block)
-    ()
+  private def movedTo(parent: BlockRef, block: BlockRef, outcome: CommitOutcome)(using StateLockHeld): Unit =
+    val advanced = (window.get, outcome) match
+      case (Some(known), CommitOutcome.Applied(commit)) if known.anchor == parent =>
+        Some(
+          known.advancedTo(block, commit.tombstone.isDefined, floor = commit.prunedTo - 1, settings.maxReverseHops)
+        )
+      case _ => None
+    window.set(advanced)
+    // an index is of one anchor, and that was the last: the views that read through one hold it themselves
+    indexes.clear()
+    dropUnreachable(block)
+
+  /** Drops the layers nothing leads to from `held`, the anchor. With no layer there is nothing to look at, and the
+    * window is not built for it: a node that keeps none pays nothing here.
+    */
+  private def dropUnreachable(held: BlockRef)(using StateLockHeld): Unit =
+    if overlay.size > 0 then
+      overlay.dropUnreachableFrom(held, windowOf(held).contains)
+      ()
 
   /** Writes `diff`, which is `finalised` as the diff of `block` on the block the disk holds ([[diffOf]]). */
   private def commitInPlace(
@@ -624,6 +744,9 @@ object PathStateStorage:
   /** How many executed blocks are kept beside the state on disk, until the budgets of data-model 6.4 replace it. */
   val MaxForwardLayers: Int = 32
 
+  /** How many reverse indexes are kept at once. */
+  private val MaxIndexesKept = 4
+
   /** What [[PathStateStorage.commitOverlay]] did with a block. */
   enum OverlayOutcome:
     /** The block is kept as this forward layer: the one just made, or the one there already was. */
@@ -631,6 +754,11 @@ object PathStateStorage:
 
     /** The block is the one whose state the disk holds: there is nothing to keep beside it. */
     case AlreadyApplied
+
+    /** The block is one of the anchor's own chain, behind it: its state is what the changeset records lead back to, and
+      * it is not the head.
+      */
+    case BehindTheAnchor
 
   /** The most rows, and the most changeset keys, [[PathStateStorage.destroyStateForNewGenesis]] deletes: what one batch
     * can hold in memory, and far more than a test's state has.
@@ -670,7 +798,10 @@ object PathStateStorage:
       // The most rows, and the most changeset keys, it deletes.
       maxKeysDestroyed: Long = MaxKeysDestroyed,
       // How many forward layers are kept (a stopgap: see [[MaxForwardLayers]]).
-      maxForwardLayers: Int = MaxForwardLayers
+      maxForwardLayers: Int = MaxForwardLayers,
+      // How many blocks back a view is made through the changeset records, and how much one reverse index may hold.
+      maxReverseHops: Int = 1024,
+      maxReverseIndexBytes: Long = 64L * 1024 * 1024
   )
 
   object CommitSettings:

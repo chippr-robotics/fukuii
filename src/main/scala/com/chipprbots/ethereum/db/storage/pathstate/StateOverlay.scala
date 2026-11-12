@@ -57,26 +57,39 @@ final private[pathstate] class StateOverlay(maxLayers: Int):
 
   def clear()(using StateLockHeld): Unit = forward.clear()
 
-  /** Drops every layer no chain leads to from `anchor`, and says how many: the siblings of a block that became the
-    * anchor and what was built on them, and what was built on a layer that was dropped. No view can be made of them,
-    * and nothing else would ever take them away. (The reverse index gives the state of a block behind the anchor: when
-    * it is there, a sibling of the anchor is reached through it.)
+  /** Drops every layer no chain leads to from `anchor` or from a block of `behind` (the anchor's ancestors that
+    * changeset records still lead to), and every layer of a block that is the anchor or one of those: it is canonical,
+    * and its state is the disk's or the records'. Says how many. What goes: the layer of a block that became the
+    * anchor; what was built on a layer that was dropped; a fork whose first block stands on an ancestor the records no
+    * longer reach. No view can be made of them, and nothing else would ever take them away.
     */
-  def dropUnreachableFrom(anchor: BlockRef)(using StateLockHeld): Int =
-    val gone = forward.values.asScala.filter(layer => chainFrom(anchor, layer.block).isEmpty).map(_.block.hash).toList
+  def dropUnreachableFrom(anchor: BlockRef, behind: BlockRef => Boolean)(using StateLockHeld): Int =
+    val gone = forward.values.asScala
+      .filter { layer =>
+        layer.block == anchor || behind(layer.block) || chainFrom(anchor, layer.block, behind).isEmpty
+      }
+      .map(_.block.hash)
+      .toList
     gone.foreach(forward.remove)
     gone.size
 
-  /** The layers that lead from the state of `anchor` to the state of `target`, newest first, or `None` when there is no
-    * such chain: `target`'s layer, its parent's, and so on down to a layer whose parent is `anchor`.
+  /** The layers that lead to the state of `target`, newest first, and the block the oldest of them stands on: the
+    * anchor, or a block of `behind` (an ancestor of the anchor). `None` when there is no such chain: `target`'s layer,
+    * its parent's, and so on down, never reach one of those.
     */
-  def chainFrom(anchor: BlockRef, target: BlockRef): Option[List[ForwardLayer]] =
+  def chainFrom(
+      anchor: BlockRef,
+      target: BlockRef,
+      behind: BlockRef => Boolean = _ => false
+  ): Option[(List[ForwardLayer], BlockRef)] =
     @annotation.tailrec
-    def down(to: BlockRef, chain: List[ForwardLayer]): Option[List[ForwardLayer]] =
-      if to.number <= anchor.number then None
+    def down(to: BlockRef, chain: List[ForwardLayer], left: Int): Option[(List[ForwardLayer], BlockRef)] =
+      if left == 0 then None
       else
         layerOf(to) match
-          case None                                  => None
-          case Some(layer) if layer.parent == anchor => Some((layer :: chain).reverse)
-          case Some(layer)                           => down(layer.parent, layer :: chain)
-    down(target, Nil)
+          case None => None
+          case Some(layer) if layer.parent == anchor || behind(layer.parent) =>
+            Some(((layer :: chain).reverse, layer.parent))
+          case Some(layer) => down(layer.parent, layer :: chain, left - 1)
+    // a chain has no more layers than there are
+    down(target, Nil, forward.size)

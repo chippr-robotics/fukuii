@@ -199,14 +199,17 @@ final class StateView private[pathstate] (
     val createdAt: Long,
     clock: StateClock,
     rows: PathNodeStorage,
-    forward: List[ForwardLayer] = Nil
+    forward: List[ForwardLayer] = Nil,
+    reverse: Option[ReverseIndex] = None
 ):
 
-  /** The block whose state the disk held when the view was made: what the rows under the layers are the state of. */
-  val base: BlockRef = forward.lastOption.fold(block)(_.parent)
+  /** The block whose state the disk held when the view was made: what the rows under everything else are the state of.
+    * With a reverse index it is the anchor the index was built from, whatever block the layers stand on.
+    */
+  val base: BlockRef = reverse.map(_.from).getOrElse(forward.lastOption.fold(block)(_.parent))
 
-  /** Whether this view reads through layers. */
-  def layered: Boolean = forward.nonEmpty
+  /** Whether this view reads through anything but the rows: forward layers, a reverse index, or both. */
+  def layered: Boolean = forward.nonEmpty || reverse.nonEmpty
 
   /** What position `p` held in this view's state: the stored node's RLP, or `None` for no row.
     *
@@ -219,14 +222,20 @@ final class StateView private[pathstate] (
     */
   def read(p: PositionKey): Option[Array[Byte]] = readFrom(p)._1
 
-  /** [[read]], and whether a layer answered: a node a layer gives is this view's whatever the disk does. */
-  private[pathstate] def readFrom(p: PositionKey): (Option[Array[Byte]], Boolean) =
+  /** [[read]], and what answered. What a layer or the reverse index gives is this view's whatever the disk does: the
+    * newest layer that wrote the position, else the index (what the state the layers stand on held there), else the row
+    * as the base held it.
+    */
+  private[pathstate] def readFrom(p: PositionKey): (Option[Array[Byte]], StateView.Source) =
     // the anchor's view, which every block of a node that follows the head is executed on, has nothing to look through
-    if forward.isEmpty then (onDiskAsOfBase(p), false)
+    if forward.isEmpty && reverse.isEmpty then (onDiskAsOfBase(p), StateView.Source.Disk)
     else
       forward.iterator.map(_.lookup(p)).collectFirst { case Some(left) => left.map(_.toArray) } match
-        case Some(answer) => (answer, true)
-        case None         => (onDiskAsOfBase(p), false)
+        case Some(answer) => (answer, StateView.Source.Layer)
+        case None =>
+          reverse.flatMap(_.lookup(p)) match
+            case Some(held) => (held.map(_.toArray), StateView.Source.Index)
+            case None       => (onDiskAsOfBase(p), StateView.Source.Disk)
 
   /** A node one of this view's layers leaves, by its hash. */
   private[pathstate] def layerNode(hash: ByteString): Option[Array[Byte]] =
@@ -254,7 +263,8 @@ final class StateView private[pathstate] (
     * anchor. Decided when asked, never remembered: a mismatch found on such a view is the disk's own fault, while on
     * any other view it only means the disk has moved on.
     */
-  def isAnchorViewNow: Boolean = forward.isEmpty && clock.epoch == createdAt && clock.anchor.contains(block)
+  def isAnchorViewNow: Boolean =
+    forward.isEmpty && reverse.isEmpty && clock.epoch == createdAt && clock.anchor.contains(block)
 
   /** Whether the rows under this view are, right now, the state it takes them for: nothing has moved since it was made
     * and its base is the anchor. A mismatch met then will be met again by the next read.
@@ -265,6 +275,10 @@ final class StateView private[pathstate] (
   def epochNow: Long = clock.epoch
 
 object StateView:
+
+  /** What answered a read of a view. */
+  private[pathstate] enum Source:
+    case Layer, Index, Disk
 
   /** The block before any block: what a view of no state is a view of. */
   private val BeforeGenesis: BlockRef =
