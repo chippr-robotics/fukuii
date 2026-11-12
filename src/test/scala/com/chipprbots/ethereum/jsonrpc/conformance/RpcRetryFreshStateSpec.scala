@@ -16,6 +16,7 @@ import com.chipprbots.ethereum.db.storage.pathstate.BlockRef
 import com.chipprbots.ethereum.db.storage.pathstate.StaleStateViewException
 import com.chipprbots.ethereum.domain.BlockHeader
 import com.chipprbots.ethereum.domain.BlockchainReader
+import com.chipprbots.ethereum.jsonrpc.JsonRpcError
 import com.chipprbots.ethereum.jsonrpc.JsonRpcRequest
 import com.chipprbots.ethereum.jsonrpc.StateRead
 import com.chipprbots.ethereum.testing.Tags.*
@@ -96,9 +97,11 @@ class RpcRetryFreshStateSpec extends ScalaTestWithActorTestKit with AnyFlatSpecL
         takenInAll shouldBe 2 + perRun
       }
 
-    it should "stop after the runs it is allowed, with the error for a state that is not there" taggedAs UnitTest in {
+    it should "stop after the runs it is allowed, and say the state moved and to ask again" taggedAs UnitTest in {
       val (answer, takenInAll) = node.ask(method, staleFirst = 1000, call, JString("latest"))
-      (answer \ "error" \ "code") shouldBe JInt(3)
+      // no execution error: a client takes that for a revert
+      (answer \ "error" \ "code") shouldBe JInt(JsonRpcError.StateMoved.code)
+      (answer \ "error" \ "message") shouldBe JString(JsonRpcError.StateMoved.message)
       takenInAll shouldBe StateRead.Attempts
     }
   }

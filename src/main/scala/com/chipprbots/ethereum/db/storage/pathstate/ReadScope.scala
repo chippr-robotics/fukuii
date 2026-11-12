@@ -9,8 +9,8 @@ import scala.collection.mutable
   *
   * Such a state is made from the changeset records, and what is made lives as long as anything reads through it: a
   * storage, a world built on it. Nothing in a storage says when its reader is done, so the reader says it: it reads
-  * inside [[run]], and when `run` returns it holds nothing any more. That is what lets the store count the reads
-  * behind the head that are in flight, and refuse one more ([[PathStateStorage.readOnlyInScope]]).
+  * inside [[run]], and when `run` returns it holds nothing any more. That is what lets the store count the reads behind
+  * the head that are in flight, and refuse one more ([[PathStateStorage.readOnlyInScope]]).
   *
   * The scope is the calling thread's. Everything that reads through what was handed out inside `run` must be done
   * before `run` returns, on that thread: a world or a storage that is kept for later, or handed to another thread,
@@ -23,8 +23,8 @@ object ReadScope:
   final class Scope private[ReadScope] ():
     private val held = mutable.LinkedHashMap.empty[(AnyRef, ByteString), () => Unit]
 
-    /** Whether this scope holds a leave of `pool` for `block`: the one it has, or one `acquire` gives it now.
-      * `acquire` returns how the leave is given back, or `None` when there is none to have.
+    /** Whether this scope holds a leave of `pool` for `block`: the one it has, or one `acquire` gives it now. `acquire`
+      * returns how the leave is given back, or `None` when there is none to have.
       */
     private[pathstate] def leave(pool: AnyRef, block: ByteString)(acquire: => Option[() => Unit]): Boolean =
       held.contains((pool, block)) || acquire.exists { giveBack =>

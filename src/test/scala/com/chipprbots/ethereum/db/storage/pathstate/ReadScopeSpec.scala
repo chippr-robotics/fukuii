@@ -13,9 +13,9 @@ import com.chipprbots.ethereum.testing.Tags.*
 /** Spec 018 Track C, C4a part 4: the reads of a state behind the head that are in flight are counted, and bounded.
   *
   * A state behind the block the disk holds is made from the changeset records, and what is made lives as long as
-  * anything reads through it. So such a state is handed out only inside a [[ReadScope]], which says when its reader
-  * is done, and to no more blocks' readers at once than the settings say. The state of the block the disk holds is
-  * handed out as ever.
+  * anything reads through it. So such a state is handed out only inside a [[ReadScope]], which says when its reader is
+  * done, and to no more blocks' readers at once than the settings say. The state of the block the disk holds is handed
+  * out as ever.
   */
 class ReadScopeSpec extends AnyFlatSpec with Matchers with LayerChains:
 

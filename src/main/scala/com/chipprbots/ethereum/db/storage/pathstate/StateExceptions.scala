@@ -30,8 +30,8 @@ final class StaleStateViewException(val block: BlockRef, val createdAtEpoch: Lon
 /** There is no layer, record or path from the anchor for the state asked for.
   *
   * @param askAgain
-  *   the state is held, and is not handed out right now: as many readers as may are being served, and the one who
-  *   asked asks again. Not so when the state is not held at all, which asking again does not change
+  *   the state is held, and is not handed out right now: as many readers as may are being served, and the one who asked
+  *   asks again. Not so when the state is not held at all, which asking again does not change
   */
 final class StateUnavailable(val reason: String, val askAgain: Boolean = false)
     extends StateFault(s"State unavailable: $reason")

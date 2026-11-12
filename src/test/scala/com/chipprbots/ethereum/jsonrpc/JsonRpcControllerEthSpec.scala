@@ -435,7 +435,7 @@ class JsonRpcControllerEthSpec
     mockEthInfoService.call
       .expects(*)
       .returning(IO.raiseError(new StateUnavailable("the state of block 9 is not held")))
-    jsonRpcController.handleRequest(call).unsafeRunSync() should haveError(JsonRpcError.NodeNotFound)
+    jsonRpcController.handleRequest(call).unsafeRunSync() should haveError(JsonRpcError.StateNotHeld)
 
   it should "eth_estimateGas" taggedAs (UnitTest, RPCTest) in new JsonRpcControllerFixture:
     val mockEthInfoService: EthInfoService = mock[EthInfoService]

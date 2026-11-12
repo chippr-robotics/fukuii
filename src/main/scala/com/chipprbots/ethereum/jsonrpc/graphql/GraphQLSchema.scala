@@ -46,6 +46,7 @@ import com.chipprbots.ethereum.domain.Withdrawal
 import com.chipprbots.ethereum.jsonrpc.BlockParam
 import com.chipprbots.ethereum.jsonrpc.EthInfoService
 import com.chipprbots.ethereum.jsonrpc.JsonRpcError
+import com.chipprbots.ethereum.jsonrpc.StateRead
 import com.chipprbots.ethereum.jsonrpc.TxArgs
 import com.chipprbots.ethereum.jsonrpc.graphql.GraphQLScalars.*
 import com.chipprbots.ethereum.jsonrpc.graphql.GraphQLTypes.*
@@ -425,9 +426,11 @@ object GraphQLSchema:
           "code",
           BytesType,
           resolve = c =>
-            worldStateAt(c.ctx, c.value.blockNumber)
-              .map(_.getCode(Address(c.value.address)))
-              .getOrElse(ByteString.empty)
+            stateRead {
+              worldStateAt(c.ctx, c.value.blockNumber)
+                .map(_.getCode(Address(c.value.address)))
+                .getOrElse(ByteString.empty)
+            }
         ),
         Field(
           "storage",
@@ -436,7 +439,7 @@ object GraphQLSchema:
           resolve = c =>
             val slotBytes = c.arg(SlotArg)
             val slotBigInt = BigInt(1, slotBytes.toArray[Byte])
-            resolveAccountIn(c.ctx, c.value.address, c.value.blockNumber) match
+            stateRead(resolveAccountIn(c.ctx, c.value.address, c.value.blockNumber) match
               case Some((state, acct)) =>
                 val v = c.ctx.blockchain.getAccountStorageAt(
                   state,
@@ -453,6 +456,7 @@ object GraphQLSchema:
                 ByteString(padded)
               case None =>
                 ByteString(new Array[Byte](32))
+            )
         )
       )
   )
@@ -462,7 +466,14 @@ object GraphQLSchema:
       address: ByteString,
       blockNumber: BigInt
   ): Option[com.chipprbots.ethereum.domain.Account] =
-    resolveAccountIn(ctx, address, blockNumber).map(_._2)
+    stateRead(resolveAccountIn(ctx, address, blockNumber).map(_._2))
+
+  /** A field's read of a block's state: in one scope of reads (the state of a block behind the head is handed out in no
+    * other way), run again on a fresh state when the state moved under it, and, when it cannot be read, an error of the
+    * field in the words a JSON-RPC caller is told. Everything that reads through the state is done inside it.
+    */
+  private def stateRead[A](read: => A): A =
+    StateRead.attempting(read).fold(error => throw GraphQLUserError(error.message), identity)
 
   /** The account at `address` in the state of the canonical block `blockNumber`, with that state: its storage is read
     * from the state the account was read from. `None` when there is no such block, no such account, or the state cannot

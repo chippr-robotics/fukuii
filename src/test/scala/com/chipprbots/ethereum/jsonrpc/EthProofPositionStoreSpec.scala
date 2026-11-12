@@ -177,5 +177,5 @@ class EthProofPositionStoreSpec extends AnyFlatSpec with Matchers with MockFacto
     val f = new Fixture
     val other = Block(f.block.header.copy(extraData = ByteString("a side block")), BlockBody.empty)
     BlockchainWriter(f.onPositions.storages).storeBlock(other).commit()
-    f.onPositions.proof(alice, Seq(1), byHash(other)) shouldBe Left(JsonRpcError.NodeNotFound)
+    f.onPositions.proof(alice, Seq(1), byHash(other)) shouldBe Left(JsonRpcError.StateNotHeld)
   }

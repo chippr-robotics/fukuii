@@ -416,38 +416,43 @@ class EthInfoService(
     * `preCheck` / `buyGas` / intrinsic gas / the transfer check), which geth's GraphQL returns as an error.
     */
   def callOutcome(req: CallRequest): ServiceResponse[StxLedger.CallOutcome] =
-    IO {
-      for
-        // eth_call: geth applyMessage sets SkipExecutionGasCapCheck
-        prepared <- prepareCall(req, CallTxBuilder.callGas(req.tx, gasCap), skipExecutionGasCap = true)
-        (msg, world) = prepared
-        r <- stxLedger
-          .simulateCall(msg.stx, msg.header, world, msg.options, tracer = None)
-          .left
-          .map(callPreCheckError(msg.stx.tx.tx.gasLimit.value))
-      yield r
-    }.recover { case _: MissingNodeException =>
-      Left(JsonRpcError.NodeNotFound)
-    }
+    StateRead
+      .reading {
+        for
+          // eth_call: geth applyMessage sets SkipExecutionGasCapCheck
+          prepared <- prepareCall(req, CallTxBuilder.callGas(req.tx, gasCap), skipExecutionGasCap = true)
+          (msg, world) = prepared
+          r <- stxLedger
+            .simulateCall(msg.stx, msg.header, world, msg.options, tracer = None)
+            .left
+            .map(callPreCheckError(msg.stx.tx.tx.gasLimit.value))
+        yield r
+      }
+      .recover { case _: MissingNodeException =>
+        Left(JsonRpcError.NodeNotFound)
+      }
 
   /** eth_estimateGas (go-ethereum `DoEstimateGas` -> `eth/gasestimator.Estimate`). */
   def estimateGas(req: CallRequest): ServiceResponse[EstimateGasResponse] =
-    IO {
-      for
-        resolved <- resolveBlock(req.block)
-        hi = CallTxBuilder.estimateGasCeiling(req.tx, resolved.block.header, gasCap)(using blockchainConfig)
-        // the estimator does not skip the execution gas cap (gasestimator)
-        prepared <- prepareCall(req, resolved, hi, skipExecutionGasCap = false)
-        (msg, world) = prepared
-        gas <- stxLedger.estimateCallGas(msg.stx, msg.header, world, msg.options).left.map {
-          case StxLedger.CallEstimateFailure.Reverted(data) => revertError(data)
-          case StxLedger.CallEstimateFailure.PreCheck(msg)  => JsonRpcError.LogicError(msg)
-          case StxLedger.CallEstimateFailure.Failed(error)  => JsonRpcError.LogicError(CallErrors.vmErrorMessage(error))
-        }
-      yield EstimateGasResponse(gas)
-    }.recover { case _: MissingNodeException =>
-      Left(JsonRpcError.NodeNotFound)
-    }
+    StateRead
+      .reading {
+        for
+          resolved <- resolveBlock(req.block)
+          hi = CallTxBuilder.estimateGasCeiling(req.tx, resolved.block.header, gasCap)(using blockchainConfig)
+          // the estimator does not skip the execution gas cap (gasestimator)
+          prepared <- prepareCall(req, resolved, hi, skipExecutionGasCap = false)
+          (msg, world) = prepared
+          gas <- stxLedger.estimateCallGas(msg.stx, msg.header, world, msg.options).left.map {
+            case StxLedger.CallEstimateFailure.Reverted(data) => revertError(data)
+            case StxLedger.CallEstimateFailure.PreCheck(msg)  => JsonRpcError.LogicError(msg)
+            case StxLedger.CallEstimateFailure.Failed(error) =>
+              JsonRpcError.LogicError(CallErrors.vmErrorMessage(error))
+          }
+        yield EstimateGasResponse(gas)
+      }
+      .recover { case _: MissingNodeException =>
+        Left(JsonRpcError.NodeNotFound)
+      }
 
   /** eth_createAccessList (go-ethereum `internal/ethapi` `AccessList`).
     *
@@ -470,30 +475,34 @@ class EthInfoService(
     *     not converge.
     */
   def createAccessList(req: CreateAccessListRequest): ServiceResponse[CreateAccessListResponse] =
-    IO {
-      for
-        _ <- req.tx.validateForCall.left.map(_.toJsonRpcError)
-        resolved <- resolveBlock(req.block)
-        header = resolved.block.header
-        base = resolved.pendingState.getOrElse(stxLedger.worldAt(header))
-        // geth applies the overrides straight after loading the state, before reading the sender's nonce, and with no
-        // precompiles (`Apply(db, nil)`, api.go:1366): no move is possible and no precompile is deleted, so the
-        // relocations that come back are always empty
-        overridden <- req.stateOverrides.fold[Either[JsonRpcError, (InMemoryWorldStateProxy, Map[Address, Address])]](
-          Right((base, Map.empty[Address, Address]))
-        )(
-          EthSimulateService.applyStateOverrides(base, _, Set.empty, blockchainConfig.accountStartNonce)
-        )
-        (world, relocations) = overridden
-        gas = CallTxBuilder.callGas(req.tx, gasCap)
-        first <- CallTxBuilder.build(req.tx, header, None, defaultFrom, gas, relocations, false)(using blockchainConfig)
-        sender = first.stx.senderAddress
-        excluded = accessListExclusions(req.tx, sender, first.header, world)
-        result <- accessListFixedPoint(req.tx, header, gas, world, relocations, excluded)
-      yield result
-    }.recover { case _: MissingNodeException =>
-      Left(JsonRpcError.NodeNotFound)
-    }
+    StateRead
+      .reading {
+        for
+          _ <- req.tx.validateForCall.left.map(_.toJsonRpcError)
+          resolved <- resolveBlock(req.block)
+          header = resolved.block.header
+          base = resolved.pendingState.getOrElse(stxLedger.worldAt(header))
+          // geth applies the overrides straight after loading the state, before reading the sender's nonce, and with no
+          // precompiles (`Apply(db, nil)`, api.go:1366): no move is possible and no precompile is deleted, so the
+          // relocations that come back are always empty
+          overridden <- req.stateOverrides.fold[Either[JsonRpcError, (InMemoryWorldStateProxy, Map[Address, Address])]](
+            Right((base, Map.empty[Address, Address]))
+          )(
+            EthSimulateService.applyStateOverrides(base, _, Set.empty, blockchainConfig.accountStartNonce)
+          )
+          (world, relocations) = overridden
+          gas = CallTxBuilder.callGas(req.tx, gasCap)
+          first <- CallTxBuilder.build(req.tx, header, None, defaultFrom, gas, relocations, false)(using
+            blockchainConfig
+          )
+          sender = first.stx.senderAddress
+          excluded = accessListExclusions(req.tx, sender, first.header, world)
+          result <- accessListFixedPoint(req.tx, header, gas, world, relocations, excluded)
+        yield result
+      }
+      .recover { case _: MissingNodeException =>
+        Left(JsonRpcError.NodeNotFound)
+      }
 
   private def accessListFixedPoint(
       args: TxArgs,

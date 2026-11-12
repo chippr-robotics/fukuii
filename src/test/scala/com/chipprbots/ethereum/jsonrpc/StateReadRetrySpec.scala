@@ -55,14 +55,15 @@ class StateReadRetrySpec extends AnyFlatSpec with Matchers:
     runs shouldBe states.taken
   }
 
-  it should "give up after the views it is allowed, with the error for a missing state node" taggedAs UnitTest in {
+  it should "give up after the views it is allowed, and say the state moved" taggedAs UnitTest in {
     val states = new States
     var runs = 0
     val answer = StateRead.retrying[String](states.next) { _ =>
       runs += 1
       throw stale
     }
-    answer shouldBe Left(JsonRpcError.NodeNotFound)
+    // the state moved under every view of it: an error that says to ask again, and no revert
+    answer shouldBe Left(JsonRpcError.StateMoved)
     runs shouldBe StateRead.Attempts
     states.taken should have size StateRead.Attempts
   }
@@ -74,13 +75,48 @@ class StateReadRetrySpec extends AnyFlatSpec with Matchers:
       StateRead.retrying[String](states.next) { _ =>
         runs += 1
         throw new StateUnavailable("block 9 is not the anchor")
-      } shouldBe Left(JsonRpcError.NodeNotFound)
+      } shouldBe Left(JsonRpcError.StateNotHeld)
       runs shouldBe 1
 
       StateRead.retrying[String](() => throw new StateUnavailable("there is no state anchor"))(_ =>
         fail("there was no state to read")
-      ) shouldBe Left(JsonRpcError.NodeNotFound)
+      ) shouldBe Left(JsonRpcError.StateNotHeld)
     }
+
+  it should "answer a state that is held and not handed out right now as one to ask for again, at once" taggedAs
+    UnitTest in {
+      val states = new States
+      var runs = 0
+      StateRead.retrying[String](states.next) { _ =>
+        runs += 1
+        throw new StateUnavailable("as many states behind the head as may be read at once are being read", true)
+      } shouldBe Left(JsonRpcError.StateBusy)
+      // not tried again here: the caller is told, and waits as long as it sees fit
+      runs shouldBe 1
+    }
+
+  it should "tell a client three things apart, and none of them as an execution error" taggedAs UnitTest in {
+    val errors = Seq(JsonRpcError.StateNotHeld, JsonRpcError.StateBusy, JsonRpcError.StateMoved)
+    errors.distinct should have size 3
+    // code 3 is what a client takes for a revert
+    errors.map(_.code) shouldBe Seq(-32000, -32005, -32005)
+    JsonRpcError.StateNotHeld.message should include("missing trie node")
+    Seq(JsonRpcError.StateBusy, JsonRpcError.StateMoved).foreach(_.message should include("ask again"))
+    (JsonRpcError.StateNotHeld.message should not).include("ask again")
+  }
+
+  it should "read inside a scope, which ends with the read" taggedAs UnitTest in {
+    import com.chipprbots.ethereum.db.storage.pathstate.ReadScope
+    val states = new States
+    ReadScope.isOpen shouldBe false
+    StateRead.retrying(states.next)(_ => ReadScope.isOpen) shouldBe Right(true)
+    ReadScope.isOpen shouldBe false
+    an[IllegalArgumentException] should be thrownBy StateRead.retrying[String](states.next) { _ =>
+      throw new IllegalArgumentException("not about the state")
+    }
+    ReadScope.isOpen shouldBe false
+    StateRead.scoped(ReadScope.isOpen) shouldBe true
+  }
 
   // Each method keeps the answer it gives for a missing node today: some say NodeNotFound, one says LogicError.
   it should "leave a missing node, and any other failure, to the method that reads" taggedAs UnitTest in {
@@ -115,7 +151,7 @@ class StateReadRetrySpec extends AnyFlatSpec with Matchers:
       runs += 1
       throw stale
     }
-    StateRead.request(alwaysStale).unsafeRunSync() shouldBe Left(JsonRpcError.NodeNotFound)
+    StateRead.request(alwaysStale).unsafeRunSync() shouldBe Left(JsonRpcError.StateMoved)
     runs shouldBe StateRead.Attempts
 
     runs = 0
@@ -123,9 +159,28 @@ class StateReadRetrySpec extends AnyFlatSpec with Matchers:
       runs += 1
       throw new StateUnavailable("block 9 is not the anchor")
     }
-    StateRead.request(notHeld).unsafeRunSync() shouldBe Left(JsonRpcError.NodeNotFound)
+    StateRead.request(notHeld).unsafeRunSync() shouldBe Left(JsonRpcError.StateNotHeld)
     runs shouldBe 1
   }
+
+  "The synchronous body of a method that executes on a state" should "be one scope, which no later stage of the IO is in" taggedAs
+    UnitTest in {
+      import cats.effect.unsafe.implicits.global
+      import com.chipprbots.ethereum.db.storage.pathstate.ReadScope
+      val stages =
+        for
+          inside <- StateRead.reading(ReadScope.isOpen)
+          _ <- IO.cede
+          after <- IO(ReadScope.isOpen)
+        yield (inside, after)
+      stages.unsafeRunSync() shouldBe (true, false)
+      // and a body that throws leaves no scope on the thread it ran on
+      StateRead
+        .reading[Boolean](throw new IllegalArgumentException("not about the state"))
+        .attempt
+        .flatMap(_ => IO(ReadScope.isOpen))
+        .unsafeRunSync() shouldBe false
+    }
 
   it should "pass on its answer, an error it answers with, and any other failure, untouched and after one run" taggedAs
     UnitTest in {

@@ -52,8 +52,8 @@ class BlockchainReader(
     * flight are counted and bounded. Never of an executed block that is kept beside the chain.
     *
     * @throws com.chipprbots.ethereum.db.storage.pathstate.StateUnavailable
-    *   with the guard on, when that block's state is not held, or is behind the head and the caller is in no scope;
-    *   and with `askAgain` when as many reads behind the head as may be are in flight
+    *   with the guard on, when that block's state is not held, or is behind the head and the caller is in no scope; and
+    *   with `askAgain` when as many reads behind the head as may be are in flight
     */
   def stateAt(header: BlockHeader): MptStorage =
     pathState.fold(stateStorage.getReadOnlyStorage)(_.readOnlyInScope(refOf(header)))

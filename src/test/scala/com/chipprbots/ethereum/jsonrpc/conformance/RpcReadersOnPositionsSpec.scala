@@ -46,8 +46,9 @@ import com.chipprbots.ethereum.transactions.PendingTransactionsManager
   * anchor at the head, and a second node is built over that datadir with the in-development guard on. Every request is
   * sent to both through `JsonRpcController.handleRequest` and the two answers are compared as JSON.
   *
-  * The position store holds the head's state and no other until the overlay (C4a): a request about an earlier block is
-  * answered with the error for a state that is not there.
+  * This position store holds the head's state and no other: the chain was imported on the hash store, so no changeset
+  * record leads back from the head. A request about an earlier block is answered with the error for a state that is not
+  * held. (The chain imported on the unified layout, and read behind its head, is `RpcReadersBehindHeadSpec`.)
   */
 class RpcReadersOnPositionsSpec extends ScalaTestWithActorTestKit with AnyFlatSpecLike with Matchers:
 
@@ -329,17 +330,19 @@ class RpcReadersOnPositionsSpec extends ScalaTestWithActorTestKit with AnyFlatSp
     }
   }
 
-  // Until the overlay (C4a) the position store holds one block's state.
-  it should "answer a request about an earlier block with the error for a state that is not there" taggedAs UnitTest in {
+  // No record leads back from this head: the position store holds one block's state.
+  it should "answer a request about an earlier block with the error for a state that is not held" taggedAs UnitTest in {
     val address = JString(accounts.head)
     val notThere = ask(onPositions, "eth_getBalance", address, JString("earliest"))
-    (notThere \ "error" \ "code") shouldBe JInt(3)
+    (notThere \ "error" \ "code") shouldBe JInt(JsonRpcError.StateNotHeld.code)
+    (notThere \ "error" \ "message") shouldBe JString(JsonRpcError.StateNotHeld.message)
     (notThere \ "result") shouldBe JNothing
     // the hash store still answers it
     (ask(onHashes, "eth_getBalance", address, JString("earliest")) \ "error") shouldBe JNothing
 
     val call = JObject("to" -> address, "data" -> JString("0x"))
-    (ask(onPositions, "eth_call", call, JString("earliest")) \ "error" \ "code") shouldBe JInt(3)
-    proof(onPositions, accounts.head, Nil, BlockParam.Earliest) shouldBe Left(JsonRpcError.NodeNotFound)
+    (ask(onPositions, "eth_call", call, JString("earliest")) \ "error" \ "code") shouldBe
+      JInt(JsonRpcError.StateNotHeld.code)
+    proof(onPositions, accounts.head, Nil, BlockParam.Earliest) shouldBe Left(JsonRpcError.StateNotHeld)
     proof(onHashes, accounts.head, Nil, BlockParam.Earliest).isRight shouldBe true
   }

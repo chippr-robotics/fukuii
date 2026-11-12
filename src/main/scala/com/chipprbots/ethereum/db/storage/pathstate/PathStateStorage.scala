@@ -386,15 +386,15 @@ final class PathStateStorage(
   /** How many reads behind the anchor are in flight in the scopes of JSON-RPC callers right now. */
   def readsBehindInFlight: Int = settings.maxReadsBehindHead - readsBehind.availablePermits
 
-  /** [[readOnlyBehind]] for a caller of the JSON-RPC, and for anyone whose reads are not one at a time: '''the state
-    * of a block behind the anchor is handed out only inside a [[ReadScope]], and to no more than
-    * `maxReadsBehindHead` blocks' readers at once.'''
+  /** [[readOnlyBehind]] for a caller of the JSON-RPC, and for anyone whose reads are not one at a time: '''the state of
+    * a block behind the anchor is handed out only inside a [[ReadScope]], and to no more than `maxReadsBehindHead`
+    * blocks' readers at once.'''
     *
     * What is made of the records for such a state lives as long as anything reads through it, kept or not, so the
-    * builds and the kept indexes being bounded does not bound what callers hold between them: the reads in flight do.
-    * A scope is counted once for each block it reads behind the anchor, however many states of that block it takes,
-    * and is counted no more when it ends. One more is refused, at once and not queued: the caller asks again, and
-    * nothing a caller asks for is waited for by anyone else.
+    * builds and the kept indexes being bounded does not bound what callers hold between them: the reads in flight do. A
+    * scope is counted once for each block it reads behind the anchor, however many states of that block it takes, and
+    * is counted no more when it ends. One more is refused, at once and not queued: the caller asks again, and nothing a
+    * caller asks for is waited for by anyone else.
     *
     * The anchor's own state is handed out as ever: with no scope and no count.
     *
