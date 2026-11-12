@@ -43,7 +43,7 @@ class TestmodeMining(
     blockchain: BlockchainImpl,
     blockchainReader: BlockchainReader,
     miningConfig: MiningConfig,
-    node: TestNode,
+    node: TestModeNode,
     blockTimestamp: Long = 0
 ) // var, because it can be modified by test_ RPC endpoints
     extends Mining:

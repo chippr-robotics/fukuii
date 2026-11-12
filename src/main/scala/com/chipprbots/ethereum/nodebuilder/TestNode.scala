@@ -11,12 +11,14 @@ import com.chipprbots.ethereum.jsonrpc.TestService
 import com.chipprbots.ethereum.testmode.SealEngineType
 import com.chipprbots.ethereum.testmode.TestEthBlockServiceWrapper
 import com.chipprbots.ethereum.testmode.TestModeComponentsProvider
+import com.chipprbots.ethereum.testmode.TestModeNode
 import com.chipprbots.ethereum.testmode.TestmodeMining
 import com.chipprbots.ethereum.utils.BlockchainConfig
 
 class TestNode(
     _instanceConfig: com.chipprbots.ethereum.utils.InstanceConfig = com.chipprbots.ethereum.utils.Config
-) extends BaseNode:
+) extends BaseNode
+    with TestModeNode:
   override lazy val instanceConfig: com.chipprbots.ethereum.utils.InstanceConfig = _instanceConfig
 
   override lazy val ioRuntime: IORuntime = IORuntime.global
@@ -70,3 +72,6 @@ class TestNode(
 
   val currentSealEngine: AtomicReference[SealEngineType] = new AtomicReference(SealEngineType.NoReward)
   def sealEngine: SealEngineType = currentSealEngine.get()
+
+  override def pathStateStorage: Option[com.chipprbots.ethereum.db.storage.pathstate.PathStateStorage] =
+    storagesInstance.storages.pathStateStorage

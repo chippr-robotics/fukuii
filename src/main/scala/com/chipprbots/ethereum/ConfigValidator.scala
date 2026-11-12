@@ -67,11 +67,16 @@ object ConfigValidator extends Logger:
     * A block that is mined reaches import through network sync, which a node on the guard does not run until the
     * unified layout can follow a side branch and move its head (C4): the block would be mined and dropped.
     *
-    * Test mode executes with nothing staged until its part of C3c, and the unified layout refuses that: the node would
-    * fail while it starts (forge). The chain file imported at start is taken since C3c: block by block onto the head,
-    * with a block that is not built on the head refused until the overlay. So a file that ends on a side chain (the
-    * multi-chain and uncle-race vectors of ethereum/tests) ends on another head there: taking the key is not parity
-    * with the hash store on such files.
+    * The chain file imported at start is taken since C3c: block by block onto the head, with a block that is not built
+    * on the head refused until the overlay. So a file that ends on a side chain (the multi-chain and uncle-race vectors
+    * of ethereum/tests) ends on another head there: taking the key is not parity with the hash store on such files.
+    *
+    * Test mode is taken since C3c too, and it is not parity either. A block beside the head is queued and never
+    * reorganised to (`test_importRawBlock` of the block that makes a branch the heavier one is answered with an error);
+    * `test_rewindToBlock` goes to the head or to the genesis and no block between them; and `debug_storageRangeAt` and
+    * `debug_accountRange` answer at the head alone. Each waits for the overlay and the head move (C4a, C4b).
+    * `test_setChainParams` destroys the state the chain before it left: a node in test mode is the only one whose
+    * position store can do that.
     */
   def stateGuardErrors(config: TypesafeConfig): List[String] =
     def on(key: String): Boolean = config.hasPath(key) && config.getBoolean(key)
@@ -88,11 +93,6 @@ object ConfigValidator extends Logger:
             "fukuii.mining.mining-enabled = true: a block that is mined is imported by network sync, which this " +
             "node does not run until the unified layout can follow a side branch and move its head (spec 018 C4), " +
             "so the block would be mined and dropped. Set fukuii.mining.mining-enabled = false."
-        ),
-        Option.when(on("testmode"))(
-          "fukuii.state.path-live = true (the in-development guard of the unified state layout) cannot run with " +
-            "fukuii.testmode = true: test mode executes with nothing staged until spec 018 C3c. Set " +
-            "fukuii.testmode = false."
         )
       ).flatten
 
