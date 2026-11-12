@@ -1933,6 +1933,45 @@ the case stages on another layer in between), and a released branch counting as 
 whichever went first, so the case evicts one layer and no more). One changes nothing a test of one thread can see:
 an index given to a view of a later epoch, which is there for a builder that crosses a move of the disk.
 
+### C4a part 3c: the ordering, the stress and M3 (2026-11-12)
+
+Tests and a measurement; no change to the store. Tasks T125, T127 and T134.
+
+- **`EpochOrderingSpec` (T125)**: the one ordering the isolation of a view rests on (data-model 6.3.3). A data source
+  that stops before and after its write makes the steps: one thread, the same interleaving every run. *The writer*:
+  when its batch is about to be written the epoch is odd, the move is in the log with the new anchor, and nothing
+  is written; when the batch has returned the move is in flight still, and says of every row the batch changed
+  what it held, and of no row a thing that was not so (the rows before and after, compared). For a commit in place
+  and for a promotion. *A reader*: the anchor's view, a view through a layer, a view behind the anchor and a view
+  of a fork, each made before the move, read every node of their states before the batch, after it while the clock
+  is not settled, and after. *The fallback* of 6.3.3 is another clock under the same view: a view asks its clock
+  three things, so a store whose writers exclude its readers by a reader-writer lock is a `StateClock` of a few
+  lines, shown reading. The memory model's own gap (no happens-before across the native write) is as the
+  data-model has it: documented, and not something a test of one thread can close.
+- **`OverlayStressSpec` (T127)**: ten thousand steps in an order a seed decides: blocks committed in place (with
+  readers reading before and after the batch, inside the write), blocks kept on the anchor, on layers, behind the
+  anchor and on forks, branches of two to four blocks under a pin while other blocks arrive, promotions, drops,
+  views opened and read. The overlay is small (six layers, 40 KB, 12 blocks of records), so its bounds are met all
+  the time. **Every read that succeeds is right, and every failure is `StaleStateViewException`,
+  `StateUnavailable` or `BranchTooLarge`**: never a wrong node, a missing one, or `LayerInconsistent`. A read is of
+  nodes by their hash, and of rows: at positions of the view's state and of another state, where a view must hold
+  nothing if its own state has no row there. Every block is executed on a hash store too and the two state roots
+  are held to each other, so an execution through layers and records is checked as it is made. Two invariants are
+  held as the run goes: every kept layer has a view while the disk is at rest, and what a branch holds stays while
+  it is under execution. At the end the disk is its anchor's state, row for row. About five seconds.
+- **The mutation run for the two**: 12 mutants of isolation (the batch written before the move is said, a move that
+  says nothing of its rows, a view that reads the rows as they are, the wrong move or the wrong layer answering, a
+  row of a replaced trie showing through, an inner or a pinned layer evicted, a promotion that scans nothing, the
+  layers nothing leads to left). Ten are caught. Six were not at first: the stress read only nodes that exist and
+  took every refusal for a right answer, so it was given the reads of rows and the two invariants. Two change
+  nothing one thread can see: a view that is not made again when the disk moves while it is made (`viewOf`; the
+  same rule in `view` has its case in `ForwardLayerSpec`), and an index kept across a move of the anchor (it is
+  kept with its epoch and never given again).
+- **M3** (`baselines/m3-layer-heap.md`, `LayerHeapBenchmark`): what a layer holds on the heap against what the
+  overlay counts. The count is no less than the heap in every shape measured, by 9 % to 2.2 times, so a bound on the
+  count is a bound on the heap and the defaults stay. Measured by a heap difference over hundreds of layers, not by
+  JOL, which is not a dependency of the build. Setting the defaults from real blocks waits for M1 and M2.
+
 ### Destructive change (C8a and C8b): the vault protocol blocks
 
 ```
