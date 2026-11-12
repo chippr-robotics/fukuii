@@ -42,6 +42,33 @@ class StateConfigSpec extends AnyFlatSpec with Matchers:
     config.reorgMaxDepth shouldBe ReorgDepth.Floor
   }
 
+  it should "bound the overlay as it says: half its bytes for the forward layers, half for the reverse indexes" taggedAs
+    UnitTest in {
+      val settings = PathStateStorage.CommitSettings.of(
+        StateConfig(
+          fukuii(
+            """fukuii.state.overlay { max-bytes = 1000, pinned-max-bytes = 700, max-forward-layers = 5,
+              |  max-layer-bytes = 300 }""".stripMargin
+          )
+        ),
+        () => None,
+        PathStateStorage.CommitObserver.Silent
+      )
+      settings.maxForwardLayers shouldBe 5
+      settings.maxForwardBytes shouldBe 500L
+      settings.maxLayerBytes shouldBe 300L
+      settings.pinnedMaxBytes shouldBe 700L
+      settings.maxReversePoolBytes shouldBe 500L
+      // no index may be more than its pool
+      settings.maxReverseIndexBytes shouldBe 500L
+      // and the node's defaults
+      val shipped =
+        PathStateStorage.CommitSettings.of(StateConfig(fukuii()), () => None, PathStateStorage.CommitObserver.Silent)
+      (shipped.maxForwardLayers, shipped.maxForwardBytes, shipped.maxLayerBytes, shipped.pinnedMaxBytes) shouldBe
+        (32, 134217728L, 67108864L, 268435456L)
+      (shipped.maxReversePoolBytes, shipped.maxReverseIndexBytes) shouldBe (134217728L, 67108864L)
+    }
+
   it should "have no key the code does not read" taggedAs UnitTest in {
     import scala.jdk.CollectionConverters.*
     fukuii().getConfig("state").entrySet.asScala.map(_.getKey).toSet shouldBe Set(

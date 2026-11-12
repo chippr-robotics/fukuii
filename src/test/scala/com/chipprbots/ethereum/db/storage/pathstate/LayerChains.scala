@@ -95,8 +95,8 @@ trait LayerChains:
         case CommitOutcome.Applied(done) => done
         case other                       => fail(s"block ${ref.show} was not applied: $other")
       def layered(): ForwardLayer = state.commitOverlay(staged, ref) match
-        case OverlayOutcome.Layered(layer) => layer
-        case other                         => fail(s"block ${ref.show} was not kept as a layer: $other")
+        case OverlayOutcome.Kept(layer) => layer
+        case other                      => fail(s"block ${ref.show} was not kept as a layer: $other")
 
     def on(parent: BlockRef)(transactions: Tx*): Executed = new Executed(parent, transactions)
     def onAny(parent: BlockRef)(transactions: Tx*): Executed = new Executed(parent, transactions, behind = true)

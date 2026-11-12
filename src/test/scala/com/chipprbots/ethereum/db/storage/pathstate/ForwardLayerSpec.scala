@@ -261,17 +261,16 @@ class ForwardLayerSpec extends AnyFlatSpec with Matchers with LayerChains:
       an[IllegalArgumentException] should be thrownBy chain.state.commitOverlay(b.staged, elsewhere)
       chain.state.forwardLayer(elsewhere.hash) shouldBe None
 
-      // as many as may be kept, and no more
+      // as many as may be kept: one more takes the place of a layer nothing stands on (the bounds are
+      // OverlayBudgetSpec's)
       b.layered()
       val sibling = chain.on(chain.first)(account(dave, 1, 1))
-      chain.state.commitOverlay(
-        sibling.staged,
-        sibling.ref.copy(hash = ByteString(kec256("sibling".getBytes)))
-      ) shouldBe
-        a[OverlayOutcome.Layered]
+      val beside = sibling.ref.copy(hash = ByteString(kec256("sibling".getBytes)))
+      chain.state.commitOverlay(sibling.staged, beside) shouldBe a[OverlayOutcome.Kept]
       val third = chain.on(b.ref)(fourBlocks(1)*)
-      (the[StateUnavailable] thrownBy chain.state.commitOverlay(third.staged, third.ref)).getMessage should
-        include("2 executed blocks")
+      third.layered()
+      chain.state.forwardLayer(beside.hash) shouldBe None
+      chain.state.forwardLayer(b.ref.hash) should not be empty
 
       // the block that is committed in place meanwhile is the anchor: it is not kept beside itself, and a layer an
       // earlier execution left of it goes
@@ -355,7 +354,9 @@ class ForwardLayerSpec extends AnyFlatSpec with Matchers with LayerChains:
       // on it, and nothing is written
       val frozen = b.staged.changes.frozen
       val defect = frozen.copy(changes = frozen.changes + (below -> Change(None, Some(small))))
-      chain.state.lock.locked("a test")(chain.state.overlay.register(ForwardLayer.of(b.ref, chain.first, defect)))
+      chain.state.lock.locked("a test")(
+        chain.state.overlay.register(ForwardLayer.of(b.ref, chain.first, defect), None, chain.first, _ => false, None)
+      )
       // (a block that does not come to the node the defect left)
       val c = chain.on(b.ref)(account(dave, 9, 9))
       c.layered()
@@ -419,10 +420,7 @@ class ForwardLayerSpec extends AnyFlatSpec with Matchers with LayerChains:
     UnitTest in {
       // the records of two blocks are kept
       val chain = new Chain(
-        CommitSettings(
-          maxForwardLayers = 4,
-          retention = new RetentionPolicy(StateConfig.Mode.Basic, (_, _) => 2)
-        )
+        CommitSettings(retention = new RetentionPolicy(StateConfig.Mode.Basic, (_, _) => 2))
       )
       val b = chain.on(chain.first)(fourBlocks(0)*)
       b.layered()
@@ -431,20 +429,17 @@ class ForwardLayerSpec extends AnyFlatSpec with Matchers with LayerChains:
       // a sibling of b, and a block on it
       val sibling = chain.on(chain.first)(account(dave, 1, 1))
       val beside = sibling.ref.copy(hash = ByteString(kec256("the sibling".getBytes)))
-      chain.state.commitOverlay(sibling.staged, beside) shouldBe a[OverlayOutcome.Layered]
+      chain.state.commitOverlay(sibling.staged, beside) shouldBe a[OverlayOutcome.Kept]
       val onSibling = chain.on(beside)(account(dave, 2, 2))
       onSibling.layered()
       val late = chain.on(beside)(account(dave, 3, 3))
-      // four layers, and no room for a fifth
       val d = chain.on(c.ref)(fourBlocks(2)*)
-      a[StateUnavailable] should be thrownBy chain.state.commitOverlay(d.staged, d.ref)
 
       // b becomes the anchor. Its own layer goes: it is on disk. Its sibling stays, with what stands on it: the block
       // they forked from is behind the anchor, and b's record leads back to it.
       chain.promote(b.ref)
       chain.state.forwardLayer(b.ref.hash) shouldBe None
       Seq(beside, onSibling.ref, c.ref).foreach(kept => chain.state.forwardLayer(kept.hash) should not be empty)
-      // so there is room for one
       d.layered()
 
       // c, then d: with d the record of b is pruned, and nothing leads back to the first block any more
@@ -501,7 +496,7 @@ class ForwardLayerSpec extends AnyFlatSpec with Matchers with LayerChains:
       onFirst.layered()
       val sameState = chain.on(b.ref)(account(dave, 7, 7))
       chain.state.commitOverlay(sameState.staged, onFirst.ref.copy(hash = twin.hash)) shouldBe
-        a[OverlayOutcome.Layered]
+        a[OverlayOutcome.Kept]
       val child = chain.on(onFirst.ref)(account(dave, 8, 8))
       child.layered()
       val onTwin = chain.on(onFirst.ref.copy(hash = twin.hash))(account(dave, 8, 8))

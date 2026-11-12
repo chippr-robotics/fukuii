@@ -70,6 +70,34 @@ class StateMetricsSpec extends AnyFlatSpec with Matchers:
     (byBound, bySize, skipped) shouldBe (bound + 1, size + 1, left + 2)
   }
 
+  it should "say what the overlay holds, count what is new of its evictions, and count the views made again" taggedAs
+    UnitTest in {
+      def evictions = counter("db.state.overlay.evictions")
+      StateMetrics.overlay(OverlayUsage(3, 300L, 2, 200L, evictions = 1000L, reverseIndexes = 1, reverseBytes = 50L))
+      val before = evictions
+      gauge("db.state.overlay.forward.layers") shouldBe 3d
+      gauge("db.state.overlay.forward.bytes") shouldBe 300d
+      gauge("db.state.overlay.pinned.layers") shouldBe 2d
+      gauge("db.state.overlay.pinned.bytes") shouldBe 200d
+      gauge("db.state.overlay.reverse.resident") shouldBe 1d
+      gauge("db.state.overlay.reverse.bytes") shouldBe 50d
+
+      // the store counts its evictions since it was opened: two more of them since the last word
+      StateMetrics.overlay(OverlayUsage(1, 100L, 0, 0L, evictions = 1002L))
+      evictions shouldBe before + 2
+      gauge("db.state.overlay.forward.layers") shouldBe 1d
+      gauge("db.state.overlay.pinned.bytes") shouldBe 0d
+      // and nothing when there is none new
+      StateMetrics.overlay(OverlayUsage(1, 100L, 0, 0L, evictions = 1002L))
+      evictions shouldBe before + 2
+
+      val (retries, stale) = (counter("db.state.view.retries"), counter("db.state.view.stale"))
+      StateMetrics.viewRetried()
+      StateMetrics.viewRetried()
+      StateMetrics.viewStale()
+      (counter("db.state.view.retries"), counter("db.state.view.stale")) shouldBe (retries + 2, stale + 1)
+    }
+
   it should "time the wait for the state lock" taggedAs UnitTest in {
     val waits = registry.get(s"$prefix.db.state.lock.wait.seconds").tags("holder", "commit").timer()
     val before = waits.count()

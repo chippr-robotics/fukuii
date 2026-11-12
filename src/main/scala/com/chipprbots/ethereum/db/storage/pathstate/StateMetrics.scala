@@ -2,6 +2,7 @@ package com.chipprbots.ethereum.db.storage.pathstate
 
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicLong
+import java.util.concurrent.atomic.AtomicReference
 
 import com.chipprbots.ethereum.metrics.MetricsContainer
 
@@ -17,7 +18,15 @@ import com.chipprbots.ethereum.metrics.MetricsContainer
   *   - `db.state.lock.wait.seconds`: time spent waiting for the state lock;
   *   - `db.state.record.tombstones`: records written with no entries, by cause. '''A head move cannot cross one''', so
   *     on a chain that follows a consensus client this must stay at zero;
-  *   - `db.state.dead-trie.skipped`: replaced storage tries whose rows were left in place.
+  *   - `db.state.dead-trie.skipped`: replaced storage tries whose rows were left in place;
+  *   - `db.state.overlay.forward.layers`, `.bytes`: the executed blocks kept beside the disk that no branch pins, and
+  *     what they hold; `db.state.overlay.pinned.layers`, `.bytes`: those a branch under execution holds;
+  *   - `db.state.overlay.reverse.resident`, `.bytes`: the reverse indexes that are kept, and what they hold;
+  *   - `db.state.overlay.evictions`: executed blocks that were evicted to make room, and are executed again if their
+  *     state is needed;
+  *   - `db.state.view.retries`, `db.state.view.stale`: views that were made again because the disk moved meanwhile, and
+  *     those that could not be made for it. (A read that goes stale after its view was made is counted by what catches
+  *     it, which comes with the callers; `db.state.move.seconds` comes with the head move.)
   *
   * `db.state.anchor.lag.blocks` and `db.state.commit.degraded` arrive with what gives them a value other than zero: the
   * block importer's wiring and the overlay.
@@ -41,7 +50,29 @@ object StateMetrics extends MetricsContainer with PathStateStorage.CommitObserve
   private val tombstonesByRecordSize = metrics.registry.counter(tombstones, "cause", "record-size")
   private val deadTriesSkipped = metrics.counter("db.state.dead-trie.skipped")
 
+  // The overlay (data-model 6.4, 11): what the last change of it left.
+  private val overlayNow = new AtomicReference(OverlayUsage(0, 0L, 0, 0L, 0L))
+  metrics.gauge("db.state.overlay.forward.layers", () => overlayNow.get.layers.toDouble)
+  metrics.gauge("db.state.overlay.forward.bytes", () => overlayNow.get.bytes.toDouble)
+  metrics.gauge("db.state.overlay.pinned.layers", () => overlayNow.get.pinnedLayers.toDouble)
+  metrics.gauge("db.state.overlay.pinned.bytes", () => overlayNow.get.pinnedBytes.toDouble)
+  metrics.gauge("db.state.overlay.reverse.resident", () => overlayNow.get.reverseIndexes.toDouble)
+  metrics.gauge("db.state.overlay.reverse.bytes", () => overlayNow.get.reverseBytes.toDouble)
+  private val overlayEvictions = metrics.counter("db.state.overlay.evictions")
+  private val viewRetries = metrics.counter("db.state.view.retries")
+  private val viewsStale = metrics.counter("db.state.view.stale")
+
   override def lockWaited(nanos: Long): Unit = lockWait.record(nanos, TimeUnit.NANOSECONDS)
+
+  override def overlay(usage: OverlayUsage): Unit =
+    // the count of evictions is the store's, since it was opened: the counter takes what is new of it
+    val before = overlayNow.getAndSet(usage)
+    val evicted = usage.evictions - before.evictions
+    if evicted > 0 then overlayEvictions.increment(evicted.toDouble)
+
+  override def viewRetried(): Unit = viewRetries.increment()
+
+  override def viewStale(): Unit = viewsStale.increment()
 
   override def committed(commit: Commit): Unit =
     anchorNumber.set(commit.block.number.toLong)
