@@ -2506,3 +2506,16 @@ items:
       spec: specs/018-storage-engine-consolidation
     depends_on: [B-060]
     notes: plan.md, 'C4a part 3', 'Two questions part 4 cannot be designed without'. The user decides; forge and beacon raised them.
+  - id: B-223
+    title: "Flaky: TuiUpdaterSpec 'run the quit hook off the updater thread on q' gives a key press one 20 ms frame to arrive"
+    priority: P2
+    status: open
+    area: tests
+    size: S
+    opened: 2026-11-12
+    refs: []
+    links:
+      prs: [1809]
+    notes: |-
+      CI run 43247554050: 'true was not equal to false (TuiUpdaterSpec.scala:84)'. The key is written to a pipe and reaches the reader on JLine's pump thread; one tick waits one pace (20 ms in TuiTestTerminal.config) for it.
+      Fix: tick until it answers false (eventually), here and at :102 and the 'd' case; passes 3/3 locally.
