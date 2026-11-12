@@ -62,7 +62,11 @@ import com.chipprbots.ethereum.utils.*
   * of the hash store's overwrite: a second chain, or the first again, is set on a datadir that holds nothing of the
   * chain before it.
   */
-class TestServiceOnPositionsSpec extends ScalaTestWithActorTestKit with AnyFlatSpecLike with Matchers:
+class TestServiceOnPositionsSpec
+    extends ScalaTestWithActorTestKit
+    with AnyFlatSpecLike
+    with Matchers
+    with org.scalamock.scalatest.MockFactory:
 
   private type Disk = (Map[ByteString, ByteString], Map[ByteString, ByteString])
 
@@ -650,3 +654,38 @@ class TestServiceOnPositionsSpec extends ScalaTestWithActorTestKit with AnyFlatS
     onHashes.rewind(1) shouldBe Right(RewindToBlockResponse())
     onHashes.head.header.hash shouldBe firstBlock.header.hash
   }
+
+  // What a refusal is to the harness that drives these methods: the error of its request, through the controller that
+  // every transport hands a request to. Not a fault thrown past it, and not the answer an invalid block gets.
+  "The controller" should "answer what test mode refuses on the unified layout as the error of the request" taggedAs
+    (UnitTest, RPCTest) in {
+      import org.apache.pekko.actor.typed.scaladsl.adapter.*
+      import org.json4s.JsonAST.JBool
+      import org.json4s.JsonAST.JInt
+      given org.apache.pekko.actor.ActorSystem = system.toClassic
+      given org.scalamock.scalatest.MockFactory = this
+      given org.apache.pekko.actor.testkit.typed.scaladsl.ActorTestKit = testKit
+      val fixture = new JsonRpcControllerFixture
+      val rig = new Rig(guard = true)
+      rig.setChain(chainA) shouldBe Right(SetChainParamsResponse())
+      rig.mine(Seq(transfer(0, Address(42), 9000))) shouldBe Right(MineBlocksResponse())
+      rig.mine(Seq(transfer(1, Address(43), 1))) shouldBe Right(MineBlocksResponse())
+      val controller = fixture.jsonRpcController.copy(testServiceOpt = Some(rig.service)).forApis(Seq("test"))
+      def rewind(to: Int): JsonRpcResponse =
+        controller
+          .handleRequest(fixture.newJsonRpcRequest("test_rewindToBlock", JInt(to) :: Nil))
+          .unsafeRunSync()(using IORuntime.global)
+      val before = rig.everything
+
+      val refused = rewind(1)
+      refused.error shouldBe Some(JsonRpcError.LogicError(TestService.RewindBelowTheHead))
+      refused.error.map(_.code) shouldBe Some(-32000)
+      refused.result shouldBe None
+      rig.everything shouldBe before
+
+      // and what it does is answered as it is on the hash store
+      val taken = rewind(2)
+      taken.error shouldBe None
+      taken.result shouldBe Some(JBool(true))
+      rig.everything shouldBe before
+    }
