@@ -64,14 +64,17 @@ object ConfigValidator extends Logger:
     * With `state.path-live` on, SNAP is not advertised until the overlay can serve recent roots (C4a). A capability is
     * mutual, so no peer offers SNAP to such a node, and a SNAP sync would wait for a snap-capable peer for ever.
     *
-    * And a block is built over a view of its parent's state, which the builders do not take yet (the proposer view,
-    * C3c): a miner on the guard would build on a store that is not this chain's state. The chain file imported at start
-    * and the test mode both execute with nothing staged until the same slice, and the unified layout refuses that: the
-    * node would fail while it starts (forge).
+    * A block that is mined reaches import through network sync, which a node on the guard does not run until the
+    * unified layout can follow a side branch and move its head (C4): the block would be mined and dropped.
+    *
+    * Test mode executes with nothing staged until its part of C3c, and the unified layout refuses that: the node would
+    * fail while it starts (forge). The chain file imported at start is taken since C3c: block by block onto the head,
+    * with a block that is not built on the head refused until the overlay. So a file that ends on a side chain (the
+    * multi-chain and uncle-race vectors of ethereum/tests) ends on another head there: taking the key is not parity
+    * with the hash store on such files.
     */
   def stateGuardErrors(config: TypesafeConfig): List[String] =
     def on(key: String): Boolean = config.hasPath(key) && config.getBoolean(key)
-    def named(key: String): Boolean = config.hasPath(key) && config.getString(key).trim.nonEmpty
     if !on("state.path-live") then Nil
     else
       List(
@@ -85,12 +88,6 @@ object ConfigValidator extends Logger:
             "fukuii.mining.mining-enabled = true: a block that is mined is imported by network sync, which this " +
             "node does not run until the unified layout can follow a side branch and move its head (spec 018 C4), " +
             "so the block would be mined and dropped. Set fukuii.mining.mining-enabled = false."
-        ),
-        Option.when(named("import-chain-file"))(
-          "fukuii.state.path-live = true (the in-development guard of the unified state layout) cannot run with " +
-            "fukuii.import-chain-file: the import at start executes its blocks with nothing staged until spec 018 " +
-            "C3c. Import the file with the `import` command or admin_importChain, which commit each block with " +
-            "its state, and start the node without the key."
         ),
         Option.when(on("testmode"))(
           "fukuii.state.path-live = true (the in-development guard of the unified state layout) cannot run with " +

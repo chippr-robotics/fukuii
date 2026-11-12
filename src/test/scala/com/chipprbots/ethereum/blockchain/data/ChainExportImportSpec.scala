@@ -33,6 +33,10 @@ import com.chipprbots.ethereum.db.dataSource.DataSourceUpdateOptimized
 import com.chipprbots.ethereum.db.dataSource.DataUpdate
 import com.chipprbots.ethereum.db.dataSource.EphemDataSource
 import com.chipprbots.ethereum.db.storage.Namespaces
+import com.chipprbots.ethereum.db.storage.NodeStorage
+import com.chipprbots.ethereum.db.storage.PathNodeStorage
+import com.chipprbots.ethereum.db.storage.pathstate.BlockRef
+import com.chipprbots.ethereum.db.storage.pathstate.PathStateTestKit
 import com.chipprbots.ethereum.db.storage.pruning.BasicPruning
 import com.chipprbots.ethereum.db.storage.pruning.PruningMode
 import com.chipprbots.ethereum.domain.*
@@ -43,6 +47,7 @@ import com.chipprbots.ethereum.ledger.BlockData
 import com.chipprbots.ethereum.ledger.BlockExecution
 import com.chipprbots.ethereum.ledger.BlockExecutionError
 import com.chipprbots.ethereum.ledger.BlockValidation
+import com.chipprbots.ethereum.mpt.PositionTestKit.RawTrieWalk
 import com.chipprbots.ethereum.network.BlockedIPRegistry
 import com.chipprbots.ethereum.nodebuilder.PruningConfigBuilder
 import com.chipprbots.ethereum.testing.Tags.*
@@ -127,8 +132,10 @@ class ChainExportImportSpec extends ScalaTestWithActorTestKit with AnyFlatSpecLi
   private trait BasicPruningConfig extends PruningConfigBuilder with TestInstanceConfigProvider:
     override val pruningMode: PruningMode = BasicPruning(64)
 
-  /** A fresh in-memory node holding only the fixture's genesis; archive pruning unless `basicPruning`. */
-  private class Node(basicPruning: Boolean = false) extends RpcCompatNode:
+  /** A fresh in-memory node holding only the fixture's genesis; archive pruning unless `basicPruning`. With `guard`, on
+    * the unified state layout (spec 018), its genesis committed there by the loader.
+    */
+  private class Node(basicPruning: Boolean = false, guard: Boolean = false) extends RpcCompatNode:
     override lazy val validators: Validators = ValidatorsExecutor(MockedSealHeaderValidator)
 
     override lazy val storagesInstance
@@ -143,7 +150,8 @@ class ChainExportImportSpec extends ScalaTestWithActorTestKit with AnyFlatSpecLi
         new ArmedDataSourceComponent
           with LocalPruningConfigBuilder
           with Storages.DefaultStorages
-          with TestInstanceConfigProvider
+          with TestInstanceConfigProvider:
+          override protected def statePathLive: Boolean = guard
 
     def armed: ArmedDataSource = storagesInstance.dataSource.asInstanceOf[ArmedDataSource]
 
@@ -157,12 +165,15 @@ class ChainExportImportSpec extends ScalaTestWithActorTestKit with AnyFlatSpecLi
 
     if basicPruning then
       storagesInstance.storages.appStateStorage.markRefCountsExact().commit() // #1692: stamped, as a fresh datadir is
-    new GenesisDataLoader(
-      blockchainReader,
-      blockchainWriter,
-      storagesInstance.storages.evmCodeStorage,
-      storagesInstance.storages.stateStorage
-    ).loadGenesisData()
+    if guard then
+      GenesisDataLoader.over(blockchainReader, blockchainWriter, storagesInstance.storages).loadGenesisData()
+    else
+      new GenesisDataLoader(
+        blockchainReader,
+        blockchainWriter,
+        storagesInstance.storages.evmCodeStorage,
+        storagesInstance.storages.stateStorage
+      ).loadGenesisData()
 
     /** Run once, after the importer's extends-head check and before the block executes and commits: stands in for a
       * head writer outside the chain insert lock (a consensus client's forkchoiceUpdated).
@@ -192,7 +203,12 @@ class ChainExportImportSpec extends ScalaTestWithActorTestKit with AnyFlatSpecLi
             hook.foreach(_())
             super.executeAndAdoptBlockIf(block, parentWeight, beforeCommit)
         ,
-        blockValidation
+        blockValidation,
+        // On the unified layout no block reaches the fork choice: a block that is not built on the head is refused
+        // before it. On the hash store this spec's importer has none, as it had.
+        Option.when(guard)((block, _) =>
+          cats.effect.IO(fail(s"block ${block.header.number} reached the fork choice on the unified layout"))
+        )
       )
 
     def importStrict(file: Path): Either[ChainImporter.ImportFailure, ChainImporter.ImportSummary] =
@@ -454,6 +470,137 @@ class ChainExportImportSpec extends ScalaTestWithActorTestKit with AnyFlatSpecLi
     given BlockchainConfig = node.blockchainConfig
     node.importer.importChainFile(write(concat(fixtureBlocks.init :+ tampered :+ bad)).toString) shouldBe (60, 0, 1)
     node.head.hash shouldBe bad.hash
+  }
+
+  // ─── Spec 018 Track C, C3c: the same loader on the unified state layout ────────────────────────────────────────────
+  //
+  // There a block is committed with its state, in the batch that makes it the head, or not at all: so a block that
+  // is built on the head goes through the import an operator's restore uses, and a block that is not (a side block,
+  // which the hash store hands to the fork choice, or adopts outright after the merge) is refused until the overlay
+  // can hold a state beside the head's.
+
+  private def lenient(node: Node, blocks: Seq[Block]): (Int, Int, Int) =
+    given BlockchainConfig = node.blockchainConfig
+    node.importer.importChainFile(write(concat(blocks)).toString)
+
+  private def refOf(header: BlockHeader): BlockRef =
+    BlockRef(header.hash.value, header.number.value, header.stateRoot.value)
+
+  /** What a node on the unified layout must hold when its head is `header`: the block's state as rows, as a walk of the
+    * hash store of `source` finds it, the block as the anchor and the head, and nothing in its own hash store.
+    */
+  private def holdsExactly(node: Node, header: BlockHeader): Unit =
+    val nodes = new NodeStorage(source.armed)
+    val positions = RawTrieWalk.statePositions(
+      header.stateRoot.value.toArray,
+      hash => nodes.get(ByteString(hash)).getOrElse(throw new IllegalStateException("the reference lacks a node"))
+    )
+    PathStateTestKit.allRows(new PathNodeStorage(node.armed)) shouldBe (
+      positions.getOrElse(None, Map.empty),
+      positions.collect { case (Some(owner), trie) => trie.map((hp, row) => (owner ++ hp) -> row) }.flatten.toMap
+    )
+    PathStateTestKit.hashStoreRows(node.armed) shouldBe empty
+    node.head.hash shouldBe header.hash
+    node.storagesInstance.storages.pathStateStorage.get.anchor shouldBe Some(refOf(header))
+
+  "importChainFile on the unified layout" should "import the file block by block to the head and the state it has on the hash store" taggedAs
+    UnitTest in {
+      val node = new Node(guard = true)
+      lenient(node, fixtureBlocks) shouldBe (60, 0, 0)
+      holdsExactly(node, fixtureBlocks.last.header)
+      // every block's receipts and weight are those of the same file on the hash store
+      fixtureBlocks.foreach { block =>
+        node.blockchainReader.getReceiptsByHash(block.hash) shouldBe source.blockchainReader.getReceiptsByHash(
+          block.hash
+        )
+        node.blockchainReader.getChainWeightByHash(block.hash) shouldBe
+          source.blockchainReader.getChainWeightByHash(block.hash)
+      }
+      // and the file again is every block skipped, with nothing written
+      val keys = node.keys
+      lenient(node, fixtureBlocks) shouldBe (0, 60, 0)
+      node.keys shouldBe keys
+    }
+
+  it should "count an invalid block and go on to the valid one at its height" taggedAs UnitTest in {
+    val bad = fixtureBlocks(59)
+    val tampered = bad.copy(header = bad.header.copy(gasUsed = GasAmount(1)))
+    val node = new Node(guard = true)
+    lenient(node, fixtureBlocks.init :+ tampered :+ bad) shouldBe (60, 0, 1)
+    holdsExactly(node, bad.header)
+  }
+
+  // The checks that come after execution are the ones the hash store's arm makes: here, an Amsterdam block whose
+  // header commits to another access list than the one its execution builds.
+  it should "refuse a block whose header commits to another access list, and write nothing of it" taggedAs UnitTest in {
+    val last = fixtureBlocks(59)
+    val otherList = last.header.extraFields match
+      case amsterdam: BlockHeader.HeaderExtraFields.HefPostAmsterdam =>
+        amsterdam.copy(blockAccessListHash = ByteString(Array.fill[Byte](32)(0x22)))
+      case other => fail(s"the last block of the fixture is not an Amsterdam block: $other")
+    val tampered = last.copy(header = last.header.copy(extraFields = otherList))
+    val node = new Node(guard = true)
+    lenient(node, fixtureBlocks.init) shouldBe (59, 0, 0)
+    val keys = node.keys
+    lenient(node, Seq(tampered)) shouldBe (0, 0, 1)
+    (node.importer.sideBlocksRefused, node.importer.orphanBlocksRefused) shouldBe (0, 0)
+    node.keys shouldBe keys
+    holdsExactly(node, fixtureBlocks(58).header)
+    // and the reason is the access list, found after the block was executed
+    node.importStrict(write(concat(Seq(tampered)))).left.toOption.get.reason should include("INVALID_BLOCK_ACCESS_LIST")
+  }
+
+  it should "refuse the blocks after one that failed: they are not built on the head" taggedAs UnitTest in {
+    val bad = fixtureBlocks(20)
+    val tampered = bad.copy(header = bad.header.copy(stateRoot = TrieRoot(ByteString(Array.fill[Byte](32)(0x11)))))
+    val node = new Node(guard = true)
+    // twenty blocks, the one that is invalid, and thirty-nine that follow the block it stands in for
+    lenient(node, fixtureBlocks.take(20) ++ (tampered +: fixtureBlocks.drop(21))) shouldBe (20, 0, 40)
+    // one that execution found invalid; the next, whose parent is not here; and the rest, each on a block before it
+    // that was not taken
+    (node.importer.sideBlocksRefused, node.importer.orphanBlocksRefused) shouldBe (0, 39)
+    holdsExactly(node, fixtureBlocks(19).header)
+  }
+
+  it should "refuse a side block, before the merge and after it, and leave the datadir as it was" taggedAs UnitTest in {
+    // heads at block 20, which is proof of work, and at block 50, which is after the merge
+    Seq(20, 50).foreach { height =>
+      withClue(s"head at block $height: ") {
+        val node = new Node(guard = true)
+        lenient(node, fixtureBlocks.take(height)) shouldBe (height, 0, 0)
+        val head = fixtureBlocks(height - 1)
+        (head.header.difficulty == Difficulty.Zero) shouldBe (height == 50)
+        // a block beside the head: the same parent, another header
+        val beside = head.copy(header = head.header.copy(extraData = ByteString("beside the head")))
+        beside.header.parentHash shouldBe head.header.parentHash
+        val keys = node.keys
+        lenient(node, Seq(beside)) shouldBe (0, 0, 1)
+        // refused as a side block, and not for anything an execution found
+        (node.importer.sideBlocksRefused, node.importer.orphanBlocksRefused) shouldBe (1, 0)
+        node.keys shouldBe keys
+        holdsExactly(node, head.header)
+        // and the chain goes on from the head
+        lenient(node, Seq(fixtureBlocks(height))) shouldBe (1, 0, 0)
+        holdsExactly(node, fixtureBlocks(height).header)
+      }
+    }
+  }
+
+  // The head and the state on disk move together, in one batch. A datadir where they have come apart is at fault, and
+  // the import says so and ends: no block can be judged against a state that is not its parent's.
+  it should "end on a head whose state is not the one the disk holds, as a fault of the datadir" taggedAs UnitTest in {
+    val node = new Node(guard = true)
+    lenient(node, fixtureBlocks.take(20)) shouldBe (20, 0, 0)
+    // the head pointer alone is moved back a block: the disk still holds the state of block 20
+    val before = fixtureBlocks(18)
+    node.blockchainWriter.saveBestKnownBlocks(before.hash, before.header.number.value)
+    node.head.hash shouldBe before.hash
+    val onIt = fixtureBlocks(19).copy(header = fixtureBlocks(19).header.copy(extraData = ByteString("on the head")))
+    val keys = node.keys
+    val fault = the[com.chipprbots.ethereum.db.storage.pathstate.StateUnavailable] thrownBy lenient(node, Seq(onIt))
+    fault.getMessage should include("is not the block whose state is held")
+    node.keys shouldBe keys
+    node.storagesInstance.storages.pathStateStorage.get.anchor shouldBe Some(refOf(fixtureBlocks(19).header))
   }
 
   "admin_exportChain / admin_importChain" should "round-trip through the RPC service" taggedAs (UnitTest, RPCTest) in {
