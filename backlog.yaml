@@ -2497,15 +2497,19 @@ items:
   - id: B-222
     title: "Spec 018 C4a part 4: two decisions before the overlay is wired (a heavier branch above pinned-max-bytes; more than 32 payloads ahead of a forkchoiceUpdated)"
     priority: P1
-    status: open
+    status: done
     area: storage
     size: S
     opened: 2026-11-12
+    closed: 2026-11-12
     refs: []
     links:
+      prs: [1809]
       spec: specs/018-storage-engine-consolidation
     depends_on: [B-060]
-    notes: plan.md, 'C4a part 3', 'Two questions part 4 cannot be designed without'. The user decides; forge and beacon raised them.
+    notes: |-
+      plan.md, 'C4a part 3', 'Two questions part 4 cannot be designed without'. The user decides; forge and beacon raised them.
+      2026-11-12 done: Decided by the user, 2026-11-12: (1) reverse-then-commit when the pinned cap is hit, moved back by the records if the branch fails; lands with C4b's head move. (2) the bounds stay; blocks whose state is not held are executed again at the forkchoiceUpdated. Recorded in plan.md, 'C4a part 3'.
   - id: B-223
     title: "Flaky: TuiUpdaterSpec 'run the quit hook off the updater thread on q' gives a key press one 20 ms frame to arrive"
     priority: P2
