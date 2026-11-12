@@ -88,7 +88,7 @@ backing 1 src/main/scala/com/chipprbots/ethereum/domain/Blockchain.scala getBack
 storage-mpt 2 src/main/scala/com/chipprbots/ethereum/domain/Blockchain.scala the storage trie of eth_getStorageAt and eth_getProof, over the view of the state that is under the account, for each key encoding (C2b, kept)
 backing 1 src/main/scala/com/chipprbots/ethereum/domain/BlockchainReader.scala getAccountMpt, the account trie of a block NUMBER, left for the importer's read of a parent's account; it moves with the importer (C5b)
 readonly 4 src/main/scala/com/chipprbots/ethereum/domain/BlockchainReader.scala three are the seam: with the guard off stateAt, scratchStateAt and stateForRoot hand out the read-only store, an arm that goes with the Hash scheme (C8b); the fourth is getAccountAtStateRoot, an account from a root alone, left for the proposer's nonce read (C3c, T111) and the importer's fetch (C5b)
-trie-of 3 src/main/scala/com/chipprbots/ethereum/domain/BlockchainReader.scala accountsIn, the account trie of a block over forOwner(None) (C2b, kept); and the tries of getAccountMpt and getAccountAtStateRoot, which go with them (C3c, C5b)
+trie-of 3 src/main/scala/com/chipprbots/ethereum/domain/BlockchainReader.scala accountsIn, the account trie of a block over forOwner(None) (C2b, kept); and the tries of getAccountMpt and getAccountAtStateRoot, both left for the importer, which go with it (C5b)
 store-handed 2 src/main/scala/com/chipprbots/ethereum/domain/BlockchainReader.scala the seam (C2b): stateAt and scratchStateAt hand a reader the state of a block, by its header (kept)
 trie-of 1 src/main/scala/com/chipprbots/ethereum/transactions/PendingTransactionsManager.scala the pool's account trie of the best block, over stateAt(header).forOwner(None) (C2b, kept)
 
@@ -107,7 +107,7 @@ backing-mpt 1 src/main/scala/com/chipprbots/ethereum/ledger/BlockExecution.scala
 stage-block 2 src/main/scala/com/chipprbots/ethereum/ledger/BlockExecution.scala WRITER: where a block's staged state is opened, by its header since C3b; the hash store's form goes with the Hash scheme (C8b)
 stage-block 2 src/main/scala/com/chipprbots/ethereum/domain/Blockchain.scala the definition of stageBlockState, which stages on the unified layout or calls the hash store's; the second goes with the Hash scheme (C8b)
 prefetch-reader 1 src/main/scala/com/chipprbots/ethereum/ledger/BlockExecution.scala the prefetch reader of the staged block; the position store's, by parent, in C3b (T093)
-readonly-mpt 1 src/main/scala/com/chipprbots/ethereum/ledger/BlockPreparator.scala block production executes over a buffer; the proposer view, C3c (T111)
+readonly-mpt 1 src/main/scala/com/chipprbots/ethereum/ledger/BlockPreparator.scala the guard-off arm of block production, a buffer over the hash store; the unified layout takes proposerStateOn before it (C3c, T111); deleted with the Hash scheme (C8b)
 backing-mpt 1 src/main/scala/com/chipprbots/ethereum/testmode/TestModeBlockExecution.scala WRITER: test-mode execution writes with nothing staged; the staged commit, C3c (T116)
 backing 1 src/main/scala/com/chipprbots/ethereum/jsonrpc/TestService.scala WRITER: the test_ RPC writes genesis storage tries over block 0's store; through the genesis commit in C3c (T108, T115)
 storage-mpt 1 src/main/scala/com/chipprbots/ethereum/jsonrpc/TestService.scala that write's storage trie, from the empty root with no owner; C3c (T108, T115)

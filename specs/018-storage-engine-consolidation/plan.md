@@ -1327,6 +1327,78 @@ there), so part 3 needs a reset of the state in one synced batch that also clear
 header on the unified layout (no shipped chain has one: Platåberget's genesis is before its Amsterdam) comes with the
 fixture replay of T117, whose Amsterdam fixtures start there.
 
+### C3c proposer view record (2026-11-12)
+
+The second of C3c's three PRs: T102 to T106 and T111 to T114.
+
+**What a node on the guard can and cannot do after it.** Every builder is right on the unified layout, and is held
+to import by differentials. **No running node proposes and follows yet**, and this PR does not change that:
+
+- a block that is mined reaches import through `SyncController` to `RegularSync` to `BlockImporter.MinedBlock`, and
+  a node on the guard does not start network sync (C3b): it could not follow the side branches and reorganisations
+  that come with it. A mined block would be dropped as a dead letter;
+- `engine_newPayload` executes a payload apart from adopting it, which the unified layout refuses before its overlay
+  (`refuseUnadopted`, C3b): the answer is ACCEPTED, and a `forkchoiceUpdated` to that block is SYNCING. A payload
+  this node built is a block like any other there.
+
+So the refusal of `mining.mining-enabled` at start **stays**, with its real reason in its message, until the head
+can move (C4b); and `eth_getWork` and `eth_submitWork`, which are served with the internal miner off, answer an
+error with the same reason, where a solution would have been answered `true` and its block dropped. The plan had
+this PR lift the mining refusal; forge traced the route and it does not exist. A solo miner that started regular
+sync for its own blocks alone would refuse every valid block beside its own and publish a minority chain: that is
+the door C3b closed.
+
+**What it is.**
+
+| | Guard on | Guard off |
+| --- | --- | --- |
+| The state a block is built on (`BlockchainReader.proposerStateOn`) | the parent's state under a layer of the build's own (`PathStateStorage.throwaway`): a fresh view and a fresh layer at every call. What the build persists is read back by it and dropped with it. No row, no record, no anchor move | `None`: `executeForProposer` takes `getBackingMptStorage(child number)`, `prepareBlock` takes `getReadOnlyMptStorage()`, each as it did |
+| The Engine API's build | `forkchoiceUpdated` with attributes builds on the block whose state is held (the SYNCING answer of C3b is gone). A view that goes stale under a lenient attempt is retried on a fresh one with the attempt's own list, three times; any other fault of the node's state is thrown past both fallbacks (the empty payload, and the block sealed over its parent's root), and the first build answers -38003 with no payload id, as go-ethereum answers a `BuildPayload` that fails. A rebuild that meets one serves the version it has | unchanged |
+| The pool's nonce filter (`executableAtParent`) | reads the parent's state through `accountAt(parent, …)`; a state that is not held is the build's to answer, where a missing node of the hash store leaves the pool unfiltered | the same read-only buffer at the same root |
+| `testing_commitBlockV1` | commits the block it built by importing it (`executeAndValidateBlocks(…, adoptEachBlock = true)`): the block, its receipts, its access list, the head and its state in one batch. An import that refuses is an error, and the head does not move | unchanged: the build's own writes are the state |
+| `BlockParam.Pending` (both copies: `ResolveBlock`, `EthProofService`) | the head: the pending block's state is held nowhere, and readers that take its header would be refused | the generator's last block and its world |
+| `MockedMiner` | builds the next block with no inherited world, once the block before is the block whose state is held; waits up to ten ticks for that import, stops at once when the state on disk is another block's at that height | chains the worlds of its builds |
+
+What a build does write on both layouts is contract code: `persistState` puts it in the code store, by its hash.
+It is the bytes import writes.
+
+**Two consults before code (forge and beacon: AGREE WITH CHANGES), and what they changed.**
+
+| Finding | Change |
+| --- | --- |
+| beacon: the design said `newPayload` commits a block that extends the anchor. It does not: it executes apart from adopting, which is refused. No node on the guard proposes and follows before the overlay | said above and in the PR; `testing_commitBlockV1` goes through the adopting import and not through `newPayload` |
+| forge: a mined block has no route to import on the guard | the mining refusal stays, reworded; `eth_getWork` and `eth_submitWork` refuse, which the design had not seen: with the builders fixed, work would have been given and a solution dropped |
+| forge: "pending while its parent is the anchor" is not enough. `eth_getBalance`, `eth_getCode`, `eth_getStorageAt`, `eth_getTransactionCount` and `eth_getProof` read state by the pending block's header, which is never the block whose state is held. On the hash store they work because the proposer's nodes leak into it | pending is the head on the unified layout |
+| beacon: the pool's nonce filter reads the hash store, which is empty there: the pool went unfiltered and stale transactions burned the lenient retries | it reads through the seam (T111) |
+| beacon: the first build's answer on a fault is neither SYNCING (the head was already set) nor VALID with no id | -38003, the head kept, nothing stored |
+| beacon: catch the stale view around the attempt alone, as a value; never turn a fault into a `Left`, which falls to the empty payload and then to a block sealed over its parent's root | so built; a state fault still cannot reach either fallback |
+| forge, beacon: the guard-off arms must be the calls they were, to the letter (mocks stub them, the ratchet counts them, `getBackingMptStorage` takes the child's number) | `proposerStateOn(...)` is tried first and the old call is its `getOrElse` |
+| forge: the mocked miner is gated on the guard and not on the kind of fault; it retries only while the state is behind the block it mined | so built |
+
+**Tests.**
+
+| Spec | What is held |
+| --- | --- |
+| `ProposerOnPositionsSpec` | every post-merge block of the execution-apis chain, to Amsterdam, is built again on the unified layout, strict and lenient (with a transaction an earlier block included, which the lenient build drops): the fixture's hash. Around each build every key of the datadir but contract code is compared; new code is keyed by its hash; the epoch and the anchor have not moved. The block is then imported. Also: a stale view retried once; a view that stays stale ends as that after four attempts and never as an empty payload; a parent that is not held; `forkchoiceUpdated` with attributes, whose payload import takes; its answer with no id on a fault; the pool filter; `testing_commitBlockV1`, and its import refusing |
+| `MinedBlockOnPositionsSpec` | proof-of-work blocks prepared on both layouts from the same parent, transactions, ommers and clock are the same block: a contract deployed with storage, a slot cleared, the contract destroyed and its address paid again in one block (no row of its storage is left), a transaction the generator leaves out, ommers, the first block of the next era. A block that is prepared writes nothing; import computes the root it carries. Pending is the head on the unified layout |
+| `MockedMinerOnPositionsSpec` | on the test's own clock: the next block is built on its parent with no inherited world, after the import; the bound; a block lost to a sibling; a state that moves between the look and the build; a fault that is not of the state |
+| `EthMiningServiceSpec`, `EthProofPositionStoreSpec` | no work given or taken on the unified layout, and nothing sent to sync; `eth_getProof` for pending answers for the head and does not ask the generator |
+
+**Mutation run.** 24 mutants over the accessor, the two builders, the Engine API's retry and its answer on a fault, the pool filter, `testing_commitBlockV1`, pending in both resolvers, the two work methods and the mocked miner's wait: 24 caught. One was first written so that it did not compile, and was re-aimed. One was missed at first: the mocked miner building on the world of its last build when the import had landed before its next look, which the tests reached only after a wait (where the world is dropped anyway); a case was added, and the mutant is caught. Not mutated: one layer shared between attempts, which gives the same roots.
+
+**Not here, with the reason.**
+
+- The fixture replay of the builder on positions (`EestBuilderReplay`): it starts from a fixture's genesis header,
+  which the loader does not produce. With the harness ports (T117).
+- A rebuild that meets a fault after the head moved (beacon): the path is the one that already serves the stored
+  version when a rebuild throws; a test needs a pool. Not added.
+- `test_mineBlocks`, `TestmodeMining` and `NoOmmersBlockGenerator`'s caller are test mode: part 3, with its refusal.
+- For C4b, when network sync returns: `BlockImporter` drops a `MinedBlock` that arrives while an import is running
+  (`case _: MinedBlock => Behaviors.same`), which a miner that waits for its last import will meet every time; and
+  the mining refusal and the two work methods are lifted there.
+- A node that is corrupt (`CorruptNodeException`, an `MPTException`) still reaches the lenient build's fallbacks,
+  as a missing node of the hash store does. Unchanged.
+
 
 ### Destructive change (C8a and C8b): the vault protocol blocks
 

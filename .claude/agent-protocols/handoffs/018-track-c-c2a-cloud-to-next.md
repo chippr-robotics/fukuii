@@ -103,11 +103,17 @@ Read plan.md, "C2a part 1 record" and "C2a part 2 record", then:
   writer, storages)` commits the genesis of an empty datadir to the unified layout, and refuses a datadir of the
   other layout either way (`layoutRefusal`: move it to `StateLayoutGuard` in C5a). A spec that needs a path-live
   datadir starts from it, not from `seedPositions`, unless its genesis header is not the loader's (the fixture replay).
-- **C3c, what is left** (T102 to T106, T108 to T114, T116, T117) is what makes the guard usable beyond a strict import: the proposer view (`eth_getWork`,
-  the Engine API builder and the PoW generators still build over the hash store, which holds nothing on the unified
-  layout), the lenient chain import and test mode (both execute with nothing staged, and are refused at start with
-  the guard until then: lift each refusal in `ConfigValidator.stateGuardErrors` with the code that makes it safe),
-  and the ported harnesses. `TestModeWorldStateProxy` has its own `deleteAccount` and no `initialiseAccount`: it
+- **C3c part 2, the proposer view, is written** (plan.md, "C3c proposer view record"): a block is built on
+  `BlockchainReader.proposerStateOn(parent)`, a throwaway layer over a view; `forkchoiceUpdated` builds a payload;
+  `testing_commitBlockV1` commits by the adopting import; pending is the head. **No node on the guard proposes and
+  follows yet**: a mined block has no route to import without network sync, and `newPayload` adopts nothing before
+  the overlay. The `mining.mining-enabled` refusal stays until C4b, and `eth_getWork` / `eth_submitWork` refuse
+  with it. A spec that builds on positions starts from `ProposerOnPositionsSpec`'s `Rig` or
+  `MinedBlockOnPositionsSpec`'s `Node`.
+- **C3c, what is left** (T108 to T110, T116, T117): the lenient chain import and test mode (both execute with
+  nothing staged, and are refused at start with the guard until then: lift each refusal in
+  `ConfigValidator.stateGuardErrors` with the code that makes it safe), and the ported harnesses (the fixture
+  replays, of import and of the builder, start from a fixture's genesis header). `TestModeWorldStateProxy` has its own `deleteAccount` and no `initialiseAccount`: it
   needs the world's `storageResets` (T108, forge). `TestService.setChainParams` loads a second genesis on a datadir
   that has an anchor: it must build its loader with `GenesisDataLoader.over`, reset the state (rows, records, the
   count, the anchor, the stamp, and the clock's anchor) in one synced batch before the load, stop writing codes and
