@@ -2083,7 +2083,15 @@ none; the failure told to who waited without a second walk; two builds per kind,
 kind and an execution not; a build that failed gives its leave back; a sweep of readers leaves the execution's
 index; the reach; no view under the lock. `StateConfigSpec`, `StateMetricsSpec`: the reach by mode, the counters.
 
-**The mutation run**: @@MUTATION@@
+**The mutation run**, twice: 27 mutants before beacon's read (26 caught, one did not compile), and 32 over the
+code as it is after it: the lock around the look, a look kept across a move, each caller building, a waiter not
+given the index or the reason, the take-over by an execution that waited, the limit lifted, shared between the
+kinds, put on an execution, or one more or less, a leave not given back at all or only after a failure, a build
+left behind or never ended, the cache's seven rules of who goes and what is found, the past epoch's index kept or
+a late one taken, the reach by mode, the guard against the lock's holder, and a peer served as a caller. All
+caught: one after it was written again so that it compiled, and one after a case was added (a peer served from the
+peers' own builds, in `ServedRootWindowSpec`). The run also showed one of the new cases to depend on the order two
+threads came to wait in: it now starts the second after the first is counted.
 
 **Read after code (beacon): APPROVE WITH CHANGES, nothing that hands out a wrong state.** Verified by beacon in
 code: every change of the anchor moves the epoch, so a look or an index built across a move is never used; the
