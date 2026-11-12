@@ -58,8 +58,17 @@ object EestBuilderReplay:
       .collect { case (name, (b, f)) if b != f => s"$name: built $b, execution-specs $f" }
       .mkString("; ")
 
-  def rebuild(t: JValue): Outcome =
-    val env = new Env
+  /** @param onPositions
+    *   on the unified state layout (spec 018 Track C, C3c): the genesis is committed there by the node's loader, each
+    *   block is built on a view of its parent's state, and a block that comes out with the fixture's hash is then
+    *   IMPORTED, which executes it again and commits it with its state. On the hash store the block is saved as it was
+    *   built, the build having written its state.
+    */
+  def rebuild(t: JValue, onPositions: Boolean = false): Outcome =
+    val env: EphemBlockchainTestSetup =
+      if onPositions then
+        new EestBlockchainReplay.EnvOver(com.chipprbots.ethereum.db.dataSource.EphemDataSource(), guard = true)
+      else new Env
     import env.{blockQueue, blockchain, blockchainReader, blockchainWriter, mining, storagesInstance}
     val chainId = (t \ "config" \ "chainid").toOption.map(v => bi(str(v))).getOrElse(BigInt(1))
     EestBlockchainReplay
@@ -85,31 +94,39 @@ object EestBuilderReplay:
           )
         }.toMap
         val gh = genesis.header
-        new GenesisDataLoader(
-          blockchainReader,
-          blockchainWriter,
-          storagesInstance.storages.evmCodeStorage,
-          storagesInstance.storages.stateStorage
-        ).loadGenesisData(
-          GenesisData(
-            nonce = gh.nonce,
-            mixHash = Some(gh.mixHash.value),
-            difficulty = gh.difficulty.value.toString,
-            extraData = gh.extraData,
-            gasLimit = gh.gasLimit.value.toString,
-            coinbase = gh.beneficiary,
-            timestamp = gh.unixTimestamp.toString,
-            alloc = alloc,
-            baseFeePerGas = gh.baseFee.map(_.toString),
-            excessBlobGas = gh.excessBlobGas.map(_.toString),
-            blobGasUsed = gh.blobGasUsed.map(_.toString)
-          )
-        ).get
-        val loadedRoot = blockchainReader.getBlockHeaderByNumber(0).map(_.stateRoot)
-        if !loadedRoot.contains(gh.stateRoot) then Outcome(0, Seq(s"genesis state root $loadedRoot != ${gh.stateRoot}"))
+        val genesisLoaded: Either[String, Unit] =
+          if onPositions then EestBlockchainReplay.loadFixtureGenesis(env, t, genesis)
+          else
+            new GenesisDataLoader(
+              blockchainReader,
+              blockchainWriter,
+              storagesInstance.storages.evmCodeStorage,
+              storagesInstance.storages.stateStorage
+            ).loadGenesisData(
+              GenesisData(
+                nonce = gh.nonce,
+                mixHash = Some(gh.mixHash.value),
+                difficulty = gh.difficulty.value.toString,
+                extraData = gh.extraData,
+                gasLimit = gh.gasLimit.value.toString,
+                coinbase = gh.beneficiary,
+                timestamp = gh.unixTimestamp.toString,
+                alloc = alloc,
+                baseFeePerGas = gh.baseFee.map(_.toString),
+                excessBlobGas = gh.excessBlobGas.map(_.toString),
+                blobGasUsed = gh.blobGasUsed.map(_.toString)
+              )
+            ).get
+            val loadedRoot = blockchainReader.getBlockHeaderByNumber(0).map(_.stateRoot)
+            if !loadedRoot.contains(gh.stateRoot) then Left(s"genesis state root $loadedRoot != ${gh.stateRoot}")
+            else
+              blockchainWriter.save(genesis, Nil, ChainWeight.zero.increase(gh), saveAsBestBlock = true)
+              Right(())
+        if genesisLoaded.isLeft then Outcome(0, genesisLoaded.left.toSeq)
+        // on the unified layout the genesis is the block whose state is held, before anything is built on it
+        else if onPositions && EestBlockchainReplay.notOnPositions(env).nonEmpty then
+          Outcome(0, EestBlockchainReplay.notOnPositions(env).map(fault => s"genesis: $fault"))
         else
-          blockchainWriter.save(genesis, Nil, ChainWeight.zero.increase(gh), saveAsBestBlock = true)
-
           val blockExecution = new BlockExecution(
             blockchain,
             blockchainReader,
@@ -127,6 +144,20 @@ object EestBuilderReplay:
             None
           )(using config, null)
 
+          // What makes a block that was built the head. On the hash store the build wrote its state, and the block is
+          // saved over it. On the unified layout a build writes nothing: the block is imported.
+          val commit: BuiltBlock => Either[String, Unit] = built =>
+            val header = built.block.header
+            val weight = blockchainReader.getChainWeightByHash(header.parentHash).getOrElse(ChainWeight.zero)
+            if onPositions then
+              blockExecution.executeAndValidateBlocks(List(built.block), weight, adoptEachBlock = true) match
+                case (List(_), None)  => Right(())
+                case (_, Some(error)) => Left(s"import refused the block that was built: ${error.describe}")
+                case (other, None)    => Left(s"import took ${other.size} blocks of one")
+            else
+              blockchainWriter.save(built.block, built.receipts, weight.increase(header), saveAsBestBlock = true)
+              Right(())
+
           val JArray(blocks) = t \ "blocks": @unchecked
           val outcomes: Seq[Either[String, Unit]] = blocks.zipWithIndex.flatMap { case (b, i) =>
             if (b \ "expectException").toOption.isDefined then None
@@ -134,7 +165,7 @@ object EestBuilderReplay:
               Some(
                 Try(hx(str(b \ "rlp")).toBlock).toEither.left
                   .map(e => s"block[$i]: the fixture's RLP does not decode: $e")
-                  .flatMap(block => rebuildOne(service, env, i, block))
+                  .flatMap(block => rebuildOne(service, blockchainReader, commit, i, block))
               )
           }
           val head = blockchainReader.getBestBlock.map(b => "0x" + Hex.toHexString(b.header.hash.value.toArray))
@@ -144,12 +175,18 @@ object EestBuilderReplay:
             outcomes.collect { case Left(divergence) =>
               divergence
             } ++
-              (if head.contains(expectedHead) then Nil else Seq(s"head $head != $expectedHead"))
+              (if head.contains(expectedHead) then Nil else Seq(s"head $head != $expectedHead")) ++
+              (if onPositions then EestBlockchainReplay.notOnPositions(env) else Nil)
           )
 
   /** Builds block `i` on its parent from the fixture block's inputs; on a match the built block becomes the head. */
-  private def rebuildOne(service: EngineApiService, env: Env, i: Int, fixture: Block): Either[String, Unit] =
-    import env.{blockchainReader, blockchainWriter}
+  private def rebuildOne(
+      service: EngineApiService,
+      blockchainReader: BlockchainReader,
+      commit: BuiltBlock => Either[String, Unit],
+      i: Int,
+      fixture: Block
+  ): Either[String, Unit] =
     val h = fixture.header
     blockchainReader.getBlockByHash(h.parentHash).toRight(s"block[$i]: parent ${h.parentHash} was not built").flatMap {
       parent =>
@@ -171,9 +208,6 @@ object EestBuilderReplay:
               Left(s"block[$i]: built ${header.hashAsHexString} != ${h.hashAsHexString}: ${differingFields(header, h)}")
             else if header.blockAccessListHash != built.blockAccessList.map(_.hash) then
               Left(s"block[$i]: the access list the builder keeps does not hash to its header's blockAccessListHash")
-            else
-              val weight = blockchainReader.getChainWeightByHash(h.parentHash).getOrElse(ChainWeight.zero)
-              blockchainWriter.save(built.block, built.receipts, weight.increase(header), saveAsBestBlock = true)
-              Right(())
+            else commit(built).left.map(refused => s"block[$i]: $refused")
           }
     }
