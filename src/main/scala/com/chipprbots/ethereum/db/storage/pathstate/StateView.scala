@@ -140,6 +140,35 @@ final class StateMoveLog(maxMoves: Int, initialAnchor: Option[BlockRef]) extends
       result
     finally settled(committed)
 
+  /** `write`, as the batch that leaves the disk with '''no state''': every row deleted, and the anchor with them. It is
+    * not a move: a move has an anchor to move to, and prior values for what it changed, and this has neither.
+    *
+    * The log is emptied '''before''' the epoch is made odd. A view made earlier that reads a row the batch has
+    * deleted, and then the epoch, must not find a log that reaches back to it with no move for that row: it would
+    * take "no row" for its state. With the log empty it finds that the log does not reach back, and is stale. When the
+    * batch has returned there is no anchor, so no new view can be made until a genesis is committed.
+    *
+    * A `write` that throws is taken to have written nothing, as in [[inFlight]]: the anchor is kept and a new view
+    * reads the disk as it still is. The views made before it are stale all the same.
+    */
+  private[pathstate] def inFlightToNoState[A](write: => A): A =
+    synchronized {
+      require(current % 2 == 0, "a state move is already being written")
+      log.clear()
+      current += 1
+    }
+    var committed = false
+    try
+      val result = write
+      committed = true
+      result
+    finally
+      synchronized {
+        if committed then anchorNow = None
+        current += 1
+        notifyAll()
+      }
+
   override def movesBetween(from: Long, to: Long): Option[Seq[StateMove]] = synchronized {
     if to <= from then Some(Nil)
     else

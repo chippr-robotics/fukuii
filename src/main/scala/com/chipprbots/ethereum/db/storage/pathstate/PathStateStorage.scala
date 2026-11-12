@@ -243,6 +243,51 @@ final class PathStateStorage(
     outcome
 
   /** `tell`, whose failure is the observer's own: it is logged, and changes nothing of the commit it was told of. */
+  /** '''Destroys the state this datadir holds''', so that a genesis can be committed to it again: every row of both
+    * column families, every changeset record and index entry, the count of pruned records, the layout stamp and the
+    * anchor, in '''one batch''', synced, under the state lock. Returns how many keys it deleted.
+    *
+    * This is for test mode and nothing else. A test harness (retesteth) sets a new chain on one datadir before each
+    * test (`test_setChainParams`), and on this layout a genesis is committed only to a datadir that holds no state
+    * ([[commitGenesis]]). A node that is not in test mode cannot call it: the store is built with
+    * `allowsStateDestruction` only there, and without it this throws before it reads anything.
+    *
+    * One batch, and so point deletes and not a range delete, which is no part of a batch: there is no moment with the
+    * rows gone and the anchor still there, or the reverse. That needs the keys in memory, which is right for the
+    * states test mode makes and for no other: above [[PathStateStorage.MaxKeysDestroyed]] keys it refuses.
+    *
+    * A view made before it is stale from the moment it starts ([[StateMoveLog.inFlightToNoState]]); after it there is
+    * no anchor and no view until the next genesis commit. A write that fails leaves the datadir and the anchor as they
+    * were. On a datadir that holds no state it deletes nothing.
+    *
+    * @throws IllegalStateException
+    *   when the store was not built for test mode, or the state has more keys than may be deleted this way
+    */
+  private[ethereum] def destroyStateForNewGenesis(): Int =
+    if !settings.allowsStateDestruction then
+      throw new IllegalStateException(
+        "The state of a data directory is destroyed only in test mode (fukuii.testmode), for a new genesis"
+      )
+    lock.locked(
+      "destruction of the state for a new genesis",
+      nanos => told("the wait for the state lock")(settings.observer.lockWaited(nanos))
+    ) {
+      val removals = for
+        ofRows <- rows.removalOfEveryRow(MaxKeysDestroyed)
+        ofRecords <- changesets.removalOfEverything(MaxKeysDestroyed)
+      yield ofRows ++ ofRecords
+      removals match
+        case None =>
+          throw new IllegalStateException(
+            s"The state holds more than $MaxKeysDestroyed rows or changeset keys: too many to delete in one batch. " +
+              "Test mode's new genesis is for the states test mode makes; use another data directory."
+          )
+        case Some(deletes) =>
+          val updates: Seq[DataUpdate] = deletes ++ appState.removeStateMarks().updates
+          clock.inFlightToNoState(dataSource.updateSync(updates))
+          deletes.map(_.toRemove.size).sum
+    }
+
   private def told(what: String)(tell: => Unit): Unit =
     try tell
     catch case NonFatal(e) => log.warn(s"The observer of the state's commits failed on $what: $e")
@@ -353,6 +398,11 @@ object PathStateStorage:
 
   private val MaxFaultsShown = 3
 
+  /** The most rows, and the most changeset keys, [[PathStateStorage.destroyStateForNewGenesis]] deletes: what one
+    * batch can hold in memory, and far more than a test's state has.
+    */
+  val MaxKeysDestroyed: Long = 1000000L
+
   /** What retention does in one batch: the records it deletes, the height the count of pruned heights moves to when it
     * moves, the height it has then reached, and how many heights that is.
     */
@@ -377,7 +427,9 @@ object PathStateStorage:
       retention: RetentionPolicy = RetentionPolicy.KeepAll,
       finalized: () => Option[BigInt] = () => None,
       observer: CommitObserver = CommitObserver.Silent,
-      maxOwnerScanBytes: Long = 64L * 1024 * 1024
+      maxOwnerScanBytes: Long = 64L * 1024 * 1024,
+      // Whether [[PathStateStorage.destroyStateForNewGenesis]] may run: test mode only.
+      allowsStateDestruction: Boolean = false
   )
 
   object CommitSettings:

@@ -25,6 +25,11 @@ object Storages:
       */
     protected def statePathLive: Boolean = StateLayoutConfig.pathLive
 
+    /** Whether the state of this datadir may be destroyed for a new genesis: test mode, and nothing else (spec 018
+      * Track C, C3c). See `PathStateStorage.destroyStateForNewGenesis`.
+      */
+    protected def stateMayBeDestroyed: Boolean = false
+
     /** The `state` section the unified layout runs on. Read only when the guard is on: reading it refuses `pruning.mode
       * \= "inmemory"`, which has no place on that layout.
       */
@@ -90,6 +95,10 @@ object Storages:
             config.overlay.maxViewAgeMoves,
             // No finalized block is named yet: nothing follows a consensus client on this layout before the overlay
             // (C4d), and without one the floor is the larger, `state.retention.without-finality`.
-            PathStateStorage.CommitSettings.of(config, finalized = () => None, observer = StateMetrics)
+            PathStateStorage.CommitSettings
+              .of(config, finalized = () => None, observer = StateMetrics)
+              // test mode sets a new genesis on one datadir before each test, which on this layout means destroying
+              // the state it holds; nothing else may
+              .copy(allowsStateDestruction = stateMayBeDestroyed)
           )
         }

@@ -61,6 +61,28 @@ final class ChangesetStorage(val dataSource: DataSource):
       ByteString(value).grouped(HashLength).toSeq
     }
 
+  /** The removal of every record and every index entry, by its key, for one batch; `None` when there are more than
+    * `maxKeys` of them. For the destruction of a small state as a whole (test mode's new genesis).
+    */
+  def removalOfEverything(maxKeys: Long): Option[Seq[DataSourceUpdateOptimized]] =
+    import cats.effect.unsafe.implicits.global
+    // RocksDbDataSource yields keys without the namespace byte; the in-memory EphemDataSource keeps it
+    val strip =
+      if dataSource.isInstanceOf[com.chipprbots.ethereum.db.dataSource.EphemDataSource] then namespace.length else 0
+    val keys = dataSource
+      .iterate(namespace)
+      .take(maxKeys + 1)
+      .map {
+        case Right((key, _)) => key.drop(strip)
+        case Left(err)       => throw new IllegalStateException("Changeset iteration failed", err.ex)
+      }
+      .compile
+      .toVector
+      .unsafeRunSync()
+    Option.when(keys.size <= maxKeys)(
+      if keys.isEmpty then Nil else Seq(DataSourceUpdateOptimized(namespace, toRemove = keys, toUpsert = Nil))
+    )
+
   /** Whether the column family holds nothing at all: no record and no index. One seek, run to its end on the calling
     * thread: for a caller at start-up, as the genesis commit is, and not for one inside an `IO`.
     */
