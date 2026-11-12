@@ -192,7 +192,7 @@ object EestBlockchainReplay:
       if diffs.isEmpty then " (content equals the fixture's JSON list)"
       else diffs.take(6).mkString(" | vs fixture JSON: ", "; ", if diffs.size > 6 then s"; +${diffs.size - 6}" else "")
 
-  private class Env extends EphemBlockchainTestSetup:
+  private[ethereum] class Env extends EphemBlockchainTestSetup:
     override lazy val validators: Validators = ValidatorsExecutor(Protocol.EngineApi)
     override lazy val vm: VMImpl = new VMImpl
 
@@ -257,6 +257,64 @@ object EestBlockchainReplay:
   /** Replays one fixture and returns its divergences from the release; empty means the fixture passes. */
   def replay(t: JValue): Seq[String] = replay(t, Unobserved)
 
+  /** Loads the genesis of fixture `t` into `env`'s datadir by the node's own loader, under the fixture's own genesis
+    * header: on the hash store as a node stores a genesis there, on the unified state layout as the genesis commit
+    * (spec 018 Track C, C3c). The loader builds the state from the fixture's `pre`; the header is the fixture's when
+    * its state root is that state's, and `Left` says so when it is not.
+    */
+  private[ethereum] def loadFixtureGenesis(env: EphemBlockchainTestSetup, t: JValue, genesis: Block)(using
+      BlockchainConfig
+  ): Either[String, Unit] =
+    val gh = genesis.header
+    val storages = env.storagesInstance.storages
+    val loader = new GenesisDataLoader(
+      env.blockchainReader,
+      env.blockchainWriter,
+      storages.evmCodeStorage,
+      storages.stateStorage,
+      countsExact => storages.appStateStorage.markDatadirCreated(countsExact).commitSync(),
+      storages.pathStateStorage,
+      () => storages.appStateStorage.getStateLayout()
+    ):
+      override protected def prepareHeader(data: GenesisData, root: Array[Byte])(implicit
+          blockchainConfig: BlockchainConfig
+      ): BlockHeader =
+        if ByteString(root) == gh.stateRoot.value then gh else super.prepareHeader(data, root)
+    loader.loadGenesisData(genesisData(t, gh)).toEither.left.map(e => s"the genesis was not loaded: $e").flatMap { _ =>
+      env.blockchainReader.getBlockByNumber(env.blockchainReader.getBestBranch, 0) match
+        case Some(stored) if stored.header.hash == gh.hash && stored.body == genesis.body => Right(())
+        case Some(stored) if stored.header.hash == gh.hash => Left("the genesis body stored is not the fixture's")
+        case Some(stored) => Left(s"genesis state root ${stored.header.stateRoot} != ${gh.stateRoot}")
+        case None         => Left("no genesis block was stored")
+    }
+
+  /** What says a datadir is NOT one the unified state layout wrote alone and left whole: nodes in the hash store, no
+    * layout stamp or another's, no state anchor, or an anchor that is not the head. Empty for a datadir a replay on
+    * positions leaves; the harness canary (T110) holds that a run on the hash store is seen by it.
+    */
+  private[ethereum] def notOnPositions(env: EphemBlockchainTestSetup): Seq[String] =
+    import com.chipprbots.ethereum.db.storage.pathstate.PathStateTestKit
+    val storages = env.storagesInstance.storages
+    Seq(
+      Option.when(PathStateTestKit.hashStoreRows(env.storagesInstance.dataSource).nonEmpty)(
+        "the hash store was written to"
+      ),
+      Option.unless(
+        storages.appStateStorage
+          .getStateLayout()
+          .contains(com.chipprbots.ethereum.db.storage.pathstate.StateLayout.PathLive1)
+      )(
+        "the datadir has no layout stamp"
+      ),
+      storages.appStateStorage.getStateAnchor() match
+        case None => Some("the datadir has no state anchor")
+        // the state on disk and the head move in one batch: an anchor that is not the head is a state left behind
+        case Some(anchor) =>
+          Option.unless(env.blockchainReader.getBestBlockHeader.exists(_.hash.value == anchor.hash))(
+            s"the state anchor ${anchor.show} is not the head"
+          )
+    ).flatten
+
   /** What [[replayOnPositions]] saw of one fixture. */
   final case class OnPositions(
       divergences: Seq[String],
@@ -269,7 +327,8 @@ object EestBlockchainReplay:
   )
 
   /** [[Env]] over a data source of the caller's, on the hash store or, with `guard`, on the unified state layout. */
-  private class EnvOver(source: com.chipprbots.ethereum.db.dataSource.EphemDataSource, guard: Boolean) extends Env:
+  private[ethereum] class EnvOver(source: com.chipprbots.ethereum.db.dataSource.EphemDataSource, guard: Boolean)
+      extends Env:
     import com.chipprbots.ethereum.db.components.EphemDataSourceComponent
     import com.chipprbots.ethereum.db.components.Storages
     private trait Shared extends EphemDataSourceComponent:
@@ -286,12 +345,12 @@ object EestBlockchainReplay:
     * `BlockExecution.executeAndValidateBlocks`, which stages each block over its parent's state and commits it in one
     * batch with the block.
     *
-    * The genesis is loaded as it is today and its state copied into the position store, with the anchor at the genesis
-    * block (the genesis commit is C3c's). After every block the fixture keeps, the rows of CF `t` and CF `u` must be
-    * exactly the block's state: a walk of the raw nodes from the header's state root, finding each node among the rows
-    * by its hash, says which row belongs at which position, and the disk must hold those rows and no other. Then the
-    * block's changeset record is held to take the rows back to what they were before it. A block the fixture rejects
-    * must leave rows, anchor and best block as they were.
+    * The genesis is committed by the node's loader, under the fixture's own genesis header ([[loadFixtureGenesis]]): no
+    * node of the state is written to the hash store, at the genesis or after it. After every block the fixture keeps,
+    * the rows of CF `t` and CF `u` must be exactly the block's state: a walk of the raw nodes from the header's state
+    * root, finding each node among the rows by its hash, says which row belongs at which position, and the disk must
+    * hold those rows and no other. Then the block's changeset record is held to take the rows back to what they were
+    * before it. A block the fixture rejects must leave rows, anchor and best block as they were.
     */
   def replayOnPositions(t: JValue): OnPositions =
     import com.chipprbots.ethereum.crypto.kec256
@@ -307,35 +366,20 @@ object EestBlockchainReplay:
     def none(divergence: String): OnPositions = OnPositions(Seq(divergence), 0, 0, 0, 0, 0, 0)
 
     val source = EphemDataSource()
-    val loading = new EnvOver(source, guard = false)
+    // The node on the unified layout, from an empty datadir.
+    val env = new EnvOver(source, guard = true)
     val chainId = (t \ "config" \ "chainid").toOption.map(v => bi(str(v))).getOrElse(BigInt(1))
-    configFor(loading.blockchainConfig, str(t \ "network"), chainId).flatMap(withFixtureBlobSchedule(_, t)) match
+    configFor(env.blockchainConfig, str(t \ "network"), chainId).flatMap(withFixtureBlobSchedule(_, t)) match
       case Left(unmodelled) => none(unmodelled)
       case Right(config) =>
         given BlockchainConfig = config
         val genesis = hx(str(t \ "genesisRLP")).toBlock
         val gh = genesis.header
-        new GenesisDataLoader(
-          loading.blockchainReader,
-          loading.blockchainWriter,
-          loading.storagesInstance.storages.evmCodeStorage,
-          loading.storagesInstance.storages.stateStorage
-        ).loadGenesisData(genesisData(t, gh)).get
-        if !loading.blockchainReader.getBlockHeaderByNumber(0).map(_.stateRoot).contains(gh.stateRoot) then
-          none(s"genesis state root != ${gh.stateRoot}")
+        val loaded = loadFixtureGenesis(env, t, genesis)
+        if loaded.isLeft then none(loaded.left.toOption.get)
+        else if !env.storagesInstance.storages.pathStateStorage.flatMap(_.anchor).contains(refOf(gh)) then
+          none("the genesis commit did not leave the genesis as the anchor")
         else
-          loading.blockchainWriter.save(genesis, Nil, ChainWeight.zero.increase(gh), saveAsBestBlock = true)
-          val hashNodes = loading.storagesInstance.storages.nodeStorage
-          PathStateTestKit.seedPositions(
-            source,
-            RawTrieWalk.statePositions(gh.stateRoot.value.toArray, hash => hashNodes.get(ByteString(hash)).get),
-            refOf(gh)
-          )
-
-          val hashStoreAfterGenesis = PathStateTestKit.hashStoreRows(source)
-
-          // The node on the unified layout, over the datadir that now holds the genesis state as rows.
-          val env = new EnvOver(source, guard = true)
           val pathState = env.storagesInstance.storages.pathStateStorage.get
           val rows = new PathNodeStorage(source)
           val records = new ChangesetStorage(source)
@@ -371,6 +415,14 @@ object EestBlockchainReplay:
                   .toMap
               )
             }
+
+          // The genesis commit is trusted for nothing: the rows it left must be the genesis state, each of its nodes
+          // and no other. A row missing here could hide behind a block the fixture expects to be rejected.
+          val genesisFault: Option[String] =
+            stateOnDisk(gh.stateRoot.value, disk).fold(
+              fault => Some(s"genesis: $fault"),
+              state => Option.when(state != disk)("genesis: the rows are not the genesis state")
+            )
 
           var kept, rejected, positionsChanged, storageRowsDeleted, storageTriesEmptied, tombstones = 0
           val JArray(blocks) = t \ "blocks": @unchecked
@@ -450,12 +502,8 @@ object EestBlockchainReplay:
           val head = env.blockchainReader.getBestBlock.map(b => "0x" + Hex.toHexString(b.header.hash.value.toArray))
           val expectedHead = str(t \ "lastblockhash")
           // one writer of the state, and not the hash store's (data-model 7.6)
-          val hashStoreWritten =
-            Option.when(PathStateTestKit.hashStoreRows(source) != hashStoreAfterGenesis)(
-              "the hash store was written to"
-            )
           OnPositions(
-            divergences ++ hashStoreWritten ++
+            genesisFault.toSeq ++ divergences ++ notOnPositions(env) ++
               (if head.contains(expectedHead) then Nil else Seq(s"head $head != $expectedHead")),
             kept,
             rejected,

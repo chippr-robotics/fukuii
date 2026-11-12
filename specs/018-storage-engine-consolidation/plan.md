@@ -1481,6 +1481,46 @@ it imported. The ethereum/tests vectors that end on a side chain (`bcMultiChainT
 consensus client after the import is still accepted and not adopted, before the overlay (C4a, C4d).
 
 
+### C3c part 3b: the fixture replays from a genesis commit, and the harness canary
+
+The two replays of the execution-spec-tests fixtures (`EestBlockchainReplay.replayOnPositions`, of import, and
+`EestBuilderReplay`, of the builder) started on the unified layout from rows a test kit copied out of a genesis
+loaded on the hash store: a fixture's genesis header carries fields the loader does not produce, so the loader's
+genesis was not the fixture's. They now start from **the node's own genesis commit, under the fixture's header**:
+the loader builds the state from the fixture's allocation and commits it, and the header it stores is the one the
+harness hands it. The seam is the loader's `prepareHeader`, protected where it was private; nothing in the node
+overrides it. So no node of a fixture's state is written to the hash store, at the genesis or after it, and the
+datadir a replay ends on is one the unified layout wrote alone.
+
+- **The import replay** (`EestImportOnPositionsSpec`) is otherwise as it was: after each block the rows are the
+  block's state, the anchor and the head are the block, and its record takes the rows back.
+- **The builder replay** has a run on the unified layout (`rebuild(t, onPositions = true)`,
+  `EngineApiAmsterdamBuilderEestSpec`): each block is built on a view of its parent's state to the fixture's hash,
+  and is then imported, where on the hash store it is saved as it was built. The eight vendored Amsterdam fixtures
+  (14 blocks, the EIP-8282 dequeues among them) pass, and an Amsterdam fixture's genesis is the first
+  Amsterdam-at-genesis header committed to this layout.
+- **The harness canary** (T110, `HarnessCanarySpec`): a replay on positions ends by asking its datadir what wrote it
+  (`EestBlockchainReplay.notOnPositions`: nodes in the hash store, no layout stamp, no anchor, an anchor that is
+  not the head). The spec holds the
+  question to both answers: a genesis the unified layout committed passes it, and the same fixture's genesis loaded
+  with the guard off is seen for what it is. A harness that was quietly on the hash store no longer passes.
+
+**The corpora, again, from genesis commits** (`EEST_IMPORT_POSITIONS`, the replay of import): the Paris and Shanghai sets, 8,835 fixtures, 11,262 blocks committed, 596 rejected, 336 storage tries emptied; the Amsterdam corpus, 26,503 fixtures, 27,352 blocks committed, 5,715 rejected, 848 storage tries emptied. No divergence and no tombstone in either, and the figures are those of C3b's runs from copied rows. The 35,338 genesis states the loader committed are the states the fixtures name: each one's rows were walked from its root and compared, as every block's are (run again after the read below asked for that).
+
+**One read after code (beacon: APPROVE WITH CHANGES).** The seam is the narrowest there is: no new public method,
+no constructor argument, no flag in the node; the override gives the fixture's header only when the state built is
+the one it names. Two changes, both in the harness: the rows a genesis commit leaves are held to the genesis state,
+each of its nodes and no other, where the copy that seeded them was exact by construction (a row missing at the
+genesis could have hidden behind a block the fixture expects to be rejected); and the question the canary asks also
+holds the anchor to the head, at the genesis and at the end, so that a run whose state stopped moving is seen.
+
+**Not here.** The three harnesses under `it/ethtest` (`EthereumTestHelper`, `EthereumTestExecutor`,
+`ForkChoiceBlockchainTestsSpec`): the first two import ethereum/tests chains with side blocks through the lenient
+importer, and the third goes through `reorganise`; they wait for the overlay and the head move with the rest of
+T109 and T117. `RpcCompatNode` needs no port: `ImportOnPositionsSpec`, `ProposerOnPositionsSpec` and
+`ChainExportImportSpec` run it on the unified layout by overriding its storages.
+
+
 ### Destructive change (C8a and C8b): the vault protocol blocks
 
 ```

@@ -240,9 +240,16 @@ class GenesisDataLoader(
 
     ByteString(storageTrie.getRootHash)
 
-  private def prepareHeader(genesisData: GenesisData, stateMptRootHash: Array[Byte])(implicit
+  /** The header of the genesis block over the state whose root is `stateMptRootHash`.
+    *
+    * Protected, and not private, for one reason: a harness that replays a chain it was handed with its genesis block
+    * (the execution-spec-tests fixtures) loads that chain's allocation through this loader, so that its genesis is
+    * stored the way a node stores one on either state layout, and gives the header it was handed in place of this one,
+    * whose fields it does not all produce. Nothing in the node overrides it.
+    */
+  protected def prepareHeader(genesisData: GenesisData, stateMptRootHash: Array[Byte])(implicit
       blockchainConfig: BlockchainConfig
-  ) =
+  ): BlockHeader =
     // Determine the fork era for the genesis block based on the genesis timestamp (0)
     val genesisTimestamp = Timestamp(BigInt(genesisData.timestamp.replace("0x", ""), 16).toLong)
     val baseFee = genesisData.baseFeePerGas
