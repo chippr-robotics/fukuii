@@ -251,7 +251,7 @@ class BlockExecution(
     * responsible for filling in header fields (stateRoot, receiptsRoot, gasUsed, requestsHash, etc.) from the result.
     *
     * Where what it persists goes depends on the state layout; see [[buildInitialWorld]]. On the hash store the trie
-    * nodes reach the store, by their hashes, and the block is found already executed by whoever imports it. On the
+    * nodes reach the store, by their hashes, where the import of the same block finds them already written. On the
     * unified layout they go to a layer of this execution's own and are dropped with it: nothing is written but contract
     * code, which is kept by its hash on both. Either way no block, receipt or head is written here, and a block that
     * was built is executed again when it is imported.
@@ -391,7 +391,7 @@ class BlockExecution(
     //
     // On the unified layout a proposer has a storage of its own: the parent's state under a layer that is dropped
     // with it (spec 018 C3c). It is the storage import executes the same block on, less the record of what changed,
-    // so the divergence above has no counterpart there; `ProposerNeverWritesSpec` holds a build to the block that
+    // so the divergence above has no counterpart there; `ProposerOnPositionsSpec` holds a build to the block that
     // import commits. With the guard off there is none, and the store is the one it was.
     InMemoryWorldStateProxy(
       evmCodeStorage = evmCodeStorage,

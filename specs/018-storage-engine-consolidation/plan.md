@@ -1386,8 +1386,33 @@ It is the bytes import writes.
 
 **Mutation run.** 24 mutants over the accessor, the two builders, the Engine API's retry and its answer on a fault, the pool filter, `testing_commitBlockV1`, pending in both resolvers, the two work methods and the mocked miner's wait: 24 caught. One was first written so that it did not compile, and was re-aimed. One was missed at first: the mocked miner building on the world of its last build when the import had landed before its next look, which the tests reached only after a wait (where the world is dropped anyway); a case was added, and the mutant is caught. Not mutated: one layer shared between attempts, which gives the same roots.
 
+**Two reads after code (forge and beacon: APPROVE WITH CHANGES, no blocker).** Both traced the guard off, call by
+call, to what `staging` evaluates, and found no route by which a fault of the state reaches a fallback of the
+lenient build.
+
+| Finding | Change |
+| --- | --- |
+| forge: the mocked miner's spec raced its own clock: the miner tells sync of a block before it sets its timer, and a failed build comes back after the reply a tick waits for | the spec waits for the miner to have dealt with what it was sent before it moves the clock, and where a failure comes back on its own it ticks until the block is there |
+| beacon: the lenient builds of blocks with no transaction proved nothing, since dropping a transaction and falling to the empty payload give the same block there | drops are counted where the block has transactions, and each such build is two executions: the one that fails and the one that is the block |
+| beacon: no test on the unified layout reached the empty-payload arm | a case: a failure no transaction explains gives the empty payload, which import takes, and writes nothing |
+| forge: what ommers are paid was held only through the block's hash | the ommers' miners are read on both layouts |
+| both: comments that named a spec that does not exist, or the proposer's nonce read as a caller of the read by a root | corrected, with the allow-list's reason |
+
 **Not here, with the reason.**
 
+- An Olympia block prepared on the unified layout (forge). At Olympia the base fee is credited to the Treasury
+  account: one more account written through the same layer, by code import shares. The shipped test configuration
+  has no fork between Frontier and Olympia that a four-block chain can cross. With the lift of the mining refusal
+  (C4b), on Mordor's own configuration.
+- That each lenient attempt has a view of its own is not asserted by a count: one layer shared between attempts
+  gives the same roots, so no test could tell. The retry on a stale view is what needs it, and that is tested.
+- A fault of the state raised by a read in the middle of an execution: every injected fault is thrown before the
+  execution or as it opens its storage. Nothing between a trie read and the builder catches it (beacon read the
+  path), and import's own tests of a view lost in mid-execution are C3b's.
+- A view that goes stale in the pool's nonce filter is not retried, and neither is one in the strict build of the
+  testing namespace: before the overlay a stale view means the parent is no longer held, and a fresh one would be
+  refused. The first answers -38003, the second a JSON-RPC error; the head does not move.
+- `eth_submitHashrate` still marks the node as active on the guard. Left.
 - The fixture replay of the builder on positions (`EestBuilderReplay`): it starts from a fixture's genesis header,
   which the loader does not produce. With the harness ports (T117).
 - A rebuild that meets a fault after the head moved (beacon): the path is the one that already serves the stored

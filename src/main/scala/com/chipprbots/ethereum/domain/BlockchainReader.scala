@@ -62,10 +62,9 @@ class BlockchainReader(
     * own, which takes what the build persists, is read back by it, and is dropped with the storage. `None` with the
     * in-development guard off, where each builder goes on taking the store it always took.
     *
-    * A fresh view and a fresh layer at every call: an attempt of a lenient build, a generation for `eth_getWork`, a
-    * block the miner prepares, each has its own. Nothing built here is committed, no row is written and no layer is
-    * registered: a block that was built is executed again when it is imported (spec 018 data-model, "Block generation
-    * and mining").
+    * A fresh view and a fresh layer at every call: an attempt of a lenient build and a block the miner prepares each
+    * have their own. Nothing built here is committed, no row is written and no layer is registered: a block that was
+    * built is executed again when it is imported (spec 018 data-model, "Block generation and mining").
     *
     * @throws com.chipprbots.ethereum.db.storage.pathstate.StateUnavailable
     *   when `parent` is not the block whose state is held
@@ -319,9 +318,8 @@ class BlockchainReader(
     * `None` means the account does not exist in that state. A trie node missing from storage throws `MPTException`;
     * callers decide what "cannot judge" means for them.
     *
-    * Spec 018 Track C: a reader that holds the header uses [[accountAt]] (C2b). What is left on this form is on the
-    * execution side: the proposer's nonce read, which moves with the proposer view (C3c), and the importer's placing of
-    * a storage hole (C5b).
+    * Spec 018 Track C: a reader that holds the header uses [[accountAt]] (C2b), and so does the proposer's nonce read
+    * since the proposer view (C3c). What is left on this form is the importer's placing of a storage hole (C5b).
     */
   def getAccountAtStateRoot(stateRoot: ByteString, address: Address): Option[Account] =
     MerklePatriciaTrie[Address, Account](

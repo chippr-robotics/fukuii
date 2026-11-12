@@ -1033,8 +1033,9 @@ class EngineApiService(
                       // served. What reached the pool since is picked up by engine_getPayload (resolvePayload).
                       val alreadyBuilding =
                         Option(pendingPayloadTimestamps.get(id)).exists(System.nanoTime() - _ <= PayloadTtlNs)
-                      // `None` when the build is there to be served; the reason when this node's own state could not
-                      // give one (the unified layout: the parent's state is no longer held).
+                      // `None` unless a fault of this node's own state stopped the build (the unified layout: the
+                      // parent's state is no longer held), and then the reason. Any other failure is logged and is
+                      // `None` too, as it was: the id is handed out, and getPayload has nothing for it.
                       val build: IO[Option[String]] =
                         if alreadyBuilding then
                           IO(log.debug("Payload {} is already being built; not restarting it", hexOf(id))).as(None)
@@ -1416,6 +1417,10 @@ class EngineApiService(
     *
     * Only when even the empty payload cannot be executed does it still fall back to that old shape — empty now — so
     * forkchoiceUpdated keeps answering with a payloadId.
+    *
+    * On the unified state layout a fault of this node's own state is neither of those: "missing state" there is a state
+    * that is not held, and nothing can be built on it. It is thrown from here, past both fallbacks (a view that went
+    * stale is first tried again on a fresh one), and the first build answers that no payload was built.
     */
   private def buildLeniently(
       parent: Block,
