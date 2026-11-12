@@ -2564,10 +2564,15 @@ items:
   - id: B-227
     title: Ship Ephemery (bundled iteration + self-refresh at reset) and Hoodi as built-in networks
     priority: P2
-    status: open
+    status: claimed
     area: ops
     size: M
     opened: 2026-11-12
     refs: [user 2026-11-12]
     links: {}
+    claim:
+      by: dev-node
+      agent: main
+      since: 2026-11-12T20:41:02Z
+      heartbeat: 2026-11-12T20:41:02Z
     notes: "User decision: Ephemery bundled like Mordor/Sepolia with a startup self-refresh after RESET_TIME (fetch the ephemery-genesis release, validate like fetch-genesis.sh, check the published genesis hash, per-iteration datadir); add Hoodi as a static built-in. Spec Kit; dev-node implements."
