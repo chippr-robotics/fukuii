@@ -58,6 +58,31 @@ class BlockchainReader(
   def scratchStateAt(header: BlockHeader): MptStorage =
     pathState.fold(stateStorage.getReadOnlyStorage)(_.throwaway(refOf(header)))
 
+  /** The state a block is BUILT on, when the unified layout holds it: `parent`'s state under a layer of this build's
+    * own, which takes what the build persists, is read back by it, and is dropped with the storage. `None` with the
+    * in-development guard off, where each builder goes on taking the store it always took.
+    *
+    * A fresh view and a fresh layer at every call: an attempt of a lenient build, a generation for `eth_getWork`, a
+    * block the miner prepares, each has its own. Nothing built here is committed, no row is written and no layer is
+    * registered: a block that was built is executed again when it is imported (spec 018 data-model, "Block generation
+    * and mining").
+    *
+    * @throws com.chipprbots.ethereum.db.storage.pathstate.StateUnavailable
+    *   when `parent` is not the block whose state is held
+    */
+  def proposerStateOn(parent: BlockHeader): Option[MptStorage] = pathState.map(_.throwaway(refOf(parent)))
+
+  /** Whether the state is held in place, one block's at a time (the unified layout): what a caller asks when what it
+    * does depends on a block's state being the one on disk. Always false with the in-development guard off.
+    */
+  def holdsStateInPlace: Boolean = pathState.isDefined
+
+  /** Whether `blockHash` is the block whose state is held in place; false with the guard off, where no block is. */
+  def isHeldInPlace(blockHash: ByteString): Boolean = pathState.exists(_.isApplied(blockHash))
+
+  /** The block whose state is held in place, by number and hash; `None` with the guard off or with no state yet. */
+  def heldInPlace: Option[(BigInt, ByteString)] = pathState.flatMap(_.anchor).map(held => (held.number, held.hash))
+
   /** The state at `root`, for serving it to a peer (SNAP); `None` when it is not served.
     *
     * Guard off, the read-only store whatever the root: the serve finds the root's node there or answers with nothing,

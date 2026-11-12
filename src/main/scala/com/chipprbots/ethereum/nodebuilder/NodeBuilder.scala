@@ -1425,6 +1425,9 @@ trait Node
       // go-ethereum's --miner.gaslimit equivalent. hive's rpc-compat sets HIVE_TARGET_GAS_LIMIT
       // to 60000000 so every client converges to the same next-block gas limit; fukuii's default
       // mining.gas-limit-target is already 60000000.
-      miningConfig.gasLimitTarget
+      miningConfig.gasLimitTarget,
+      Option.when(blockchainReader.holdsStateInPlace)(
+        TestingService.importInPlace(blockchainReader, blockExecution)(using blockchainConfig)
+      )
     )(using blockchainConfig)
   )

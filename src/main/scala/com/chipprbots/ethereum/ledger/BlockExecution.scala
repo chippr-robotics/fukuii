@@ -250,11 +250,11 @@ class BlockExecution(
     * executionRequests populated. No pre- or post-execution validation against the header is performed — caller is
     * responsible for filling in header fields (stateRoot, receiptsRoot, gasUsed, requestsHash, etc.) from the result.
     *
-    * Executes against a read-only-backed WorldStateProxy so tx effects do NOT persist to RocksDB. A proposer block is
-    * speculative until the CL promotes it via `forkchoiceUpdated(head=hash(block))`; leaking its state would cause a
-    * subsequent `newPayload` for the same slot (e.g. a tampered sibling) to fail with stale nonces / balances instead
-    * of the expected stateRoot / receiptsRoot mismatch. Matches the read-only pattern used by `eth_call`,
-    * `eth_estimateGas`, and `debug_traceTransaction`.
+    * Where what it persists goes depends on the state layout; see [[buildInitialWorld]]. On the hash store the trie
+    * nodes reach the store, by their hashes, and the block is found already executed by whoever imports it. On the
+    * unified layout they go to a layer of this execution's own and are dropped with it: nothing is written but
+    * contract code, which is kept by its hash on both. Either way no block, receipt or head is written here, and a
+    * block that was built is executed again when it is imported.
     */
   def executeForProposer(
       block: Block
@@ -323,9 +323,8 @@ class BlockExecution(
             collectDepositRequests(execResult.receipts)
           else Right(None)
         ).leftMap(BlockExecutionError.ValidationAfterExecError.apply)
-        // State root hash needs to be up-to-date for validateBlockAfterExecution. In proposer mode the
-        // backing MPT storage is read-only, so persistState computes the trie hash in-memory without
-        // writing to RocksDB — exactly what we want for a speculative payload.
+        // State root hash needs to be up-to-date for validateBlockAfterExecution. For a proposer this is also where
+        // the root its header will carry is computed; where the nodes go is buildInitialWorld's storage.
         worldPersisted = ImportProfile.finalPersist(InMemoryWorldStateProxy.persistState(worldAfterSystemCalls))
       yield
         for
@@ -389,10 +388,17 @@ class BlockExecution(
     // roots diverged for reasons we haven't fully isolated (likely buffered-node read ordering
     // inside SerializingMptStorage/MerklePatriciaTrie). Use the writable backing in both modes;
     // we still get idempotence because the MPT hash is deterministic given the same inputs.
-    val _ = isProposer
+    //
+    // On the unified layout a proposer has a storage of its own: the parent's state under a layer that is dropped
+    // with it (spec 018 C3c). It is the storage import executes the same block on, less the record of what changed,
+    // so the divergence above has no counterpart there; `ProposerNeverWritesSpec` holds a build to the block that
+    // import commits. With the guard off there is none, and the store is the one it was.
     InMemoryWorldStateProxy(
       evmCodeStorage = evmCodeStorage,
-      staged.fold(blockchain.getBackingMptStorage(block.header.number.value))(_.storage) match
+      staged
+        .map(_.storage)
+        .orElse(if isProposer then blockchainReader.proposerStateOn(parentHeader) else None)
+        .getOrElse(blockchain.getBackingMptStorage(block.header.number.value)) match
         // Execution alone reads through the decoded-node cache; see DecodedNodeCache.
         case serializing: SerializingMptStorage => serializing.cachedForExecution
         case other                              => other,

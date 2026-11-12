@@ -823,16 +823,6 @@ class EngineApiService(
       )
       EngineApiMetrics.recordForkchoiceUpdated("SYNCING")
       IO.pure(Right(ForkchoiceUpdatedResponse(payloadStatus = PayloadStatusV1(Syncing))))
-    else if stateHeldInPlace.isDefined && payloadAttributes.isDefined then
-      // A payload is built over its parent's state, which the builders do not read from the unified layout until
-      // they take a view of it (the proposer view, spec 018 C3c). Answered here, with no payload id, where a build
-      // that fails later would leave the consensus client holding an id that getPayload cannot serve (beacon).
-      log.error(
-        "[ENGINE-API] forkchoiceUpdated: a payload was asked for; a block cannot be built on the unified state " +
-          "layout yet (spec 018 C3c). Answering SYNCING with no payload id."
-      )
-      EngineApiMetrics.recordForkchoiceUpdated("SYNCING")
-      IO.pure(Right(ForkchoiceUpdatedResponse(payloadStatus = PayloadStatusV1(Syncing))))
     else
       // Check if the head block is fully stored (number→hash mapping exists).
       // Blocks stored via storeBlockByHashOnly (ACCEPTED) don't have this mapping.
@@ -1043,9 +1033,11 @@ class EngineApiService(
                       // served. What reached the pool since is picked up by engine_getPayload (resolvePayload).
                       val alreadyBuilding =
                         Option(pendingPayloadTimestamps.get(id)).exists(System.nanoTime() - _ <= PayloadTtlNs)
-                      val build: IO[Unit] =
+                      // `None` when the build is there to be served; the reason when this node's own state could not
+                      // give one (the unified layout: the parent's state is no longer held).
+                      val build: IO[Option[String]] =
                         if alreadyBuilding then
-                          IO(log.debug("Payload {} is already being built; not restarting it", hexOf(id)))
+                          IO(log.debug("Payload {} is already being built; not restarting it", hexOf(id))).as(None)
                         else
                           pendingPoolTransactions.flatMap { pool =>
                             IO {
@@ -1067,20 +1059,39 @@ class EngineApiService(
                                 forkNameAt(payload.built.block.header.unixTimestamp),
                                 payload.built.executionRequests.size
                               )
-                            }.handleError { e =>
-                              log.error("Failed to build payload: {}", e.getMessage)
+                              Option.empty[String]
+                            }.handleError {
+                              case fault: com.chipprbots.ethereum.db.storage.pathstate.StateFault
+                                  if stateHeldInPlace.isDefined =>
+                                // The head is set and stays set; no payload was built, none is stored, and the
+                                // consensus client is told so where an id would be one getPayload cannot serve.
+                                // go-ethereum answers a BuildPayload that fails the same way (eth/catalyst/api.go:
+                                // `valid(nil), engine.InvalidPayloadAttributes.With(err)`).
+                                log.warn(
+                                  "[ENGINE-API] forkchoiceUpdated: no payload built on block {}: {}",
+                                  parent.header.number,
+                                  fault.getMessage
+                                )
+                                Some(s"no payload could be built on the head: ${fault.getMessage}")
+                              case e =>
+                                log.error("Failed to build payload: {}", e.getMessage)
+                                None
                             }
                           }
                       build
-                        .map { _ =>
-                          EngineApiMetrics.recordForkchoiceUpdated("VALID")
-                          Right(
-                            ForkchoiceUpdatedResponse(
-                              payloadStatus =
-                                PayloadStatusV1(Valid, latestValidHash = Some(forkChoiceState.headBlockHash)),
-                              payloadId = Some(id)
+                        .map {
+                          case Some(unbuilt) =>
+                            EngineApiMetrics.recordForkchoiceUpdated("INVALID")
+                            Left("ATTR:" + unbuilt)
+                          case None =>
+                            EngineApiMetrics.recordForkchoiceUpdated("VALID")
+                            Right(
+                              ForkchoiceUpdatedResponse(
+                                payloadStatus =
+                                  PayloadStatusV1(Valid, latestValidHash = Some(forkChoiceState.headBlockHash)),
+                                payloadId = Some(id)
+                              )
                             )
-                          )
                         }
           // closes: parentOpt match
           // closes: payloadAttributes match
@@ -1218,8 +1229,10 @@ class EngineApiService(
               case Some(sender) =>
                 val expected = nextNonce.getOrElseUpdate(
                   sender,
+                  // by the parent's header: the hash store's read-only buffer at its root with the guard off, a view
+                  // of the parent on the unified layout, where a fault of the state is the build's to answer
                   blockchainReader
-                    .getAccountAtStateRoot(parent.stateRoot.value, sender)
+                    .accountAt(parent, sender)
                     .map(_.nonce.toBigInt)
                     .getOrElse(blockchainConfig.accountStartNonce.toBigInt)
                 )
@@ -1319,9 +1332,9 @@ class EngineApiService(
     * `testing_*` namespace both go through here, so a payload produced by one can never disagree with the other on
     * header field derivation (withdrawalsRoot, excessBlobGas, requestsHash, bloom, roots).
     *
-    * Side-effect free with respect to the canonical chain: nothing is stored, no head moves. `executeForProposer` does
-    * write trie nodes to the backing MPT storage (see BlockExecution.buildInitialWorld), but writes no block, receipt,
-    * or number->hash mapping.
+    * Side-effect free with respect to the canonical chain: nothing is stored, no head moves. On the hash store
+    * `executeForProposer` does write trie nodes to the backing MPT storage (see BlockExecution.buildInitialWorld); on
+    * the unified state layout it writes none. Neither writes a block, a receipt or a number->hash mapping.
     *
     * @param transactions
     *   exactly the transactions to include, in order. Caller does the mempool selection.
@@ -1372,6 +1385,13 @@ class EngineApiService(
     */
   private val LenientBuildRetries = 8
 
+  /** Times a lenient build is made again because the view of its parent's state went stale under it (the unified
+    * state layout). A view goes stale when the state on disk has moved on further than the log of moves reaches, so a
+    * fresh one of the same parent is there only while that parent's state is still held; when it is not, the fresh
+    * view is refused and the build ends with that.
+    */
+  private val StaleViewRebuilds = 3
+
   private def executeProposerBlock(
       block: Block
   ): Either[com.chipprbots.ethereum.ledger.BlockExecutionError, ProposerExecution] =
@@ -1405,11 +1425,27 @@ class EngineApiService(
       gasLimit: GasAmount
   ): BuiltBlock =
     import com.chipprbots.ethereum.ledger.BlockExecutionError.TxsExecutionError
+    import com.chipprbots.ethereum.db.storage.pathstate.StaleStateViewException
+    // One attempt, with a view that went stale under it (the unified layout) caught as a value: the attempt is made
+    // again on a fresh view, with the list it had. Any other fault of this node's own state is thrown through, past
+    // both fallbacks below: neither the empty payload nor a block sealed over its parent's state root can be built
+    // on a state that is not held, and the caller answers that no payload was built.
+    def attemptOn(txs: Seq[SignedTransaction]) =
+      try Right(sealProposerBlock(parent, attrs, txs, extraData, gasLimit)(executeProposerBlock))
+      catch case stale: StaleStateViewException => Left(stale)
     @scala.annotation.tailrec
-    def attempt(txs: Seq[SignedTransaction], retriesLeft: Int): BuiltBlock =
-      sealProposerBlock(parent, attrs, txs, extraData, gasLimit)(executeProposerBlock) match
-        case Right(built) => built
-        case Left(TxsExecutionError(failed, before, reason)) =>
+    def attempt(txs: Seq[SignedTransaction], retriesLeft: Int, freshViewsLeft: Int): BuiltBlock =
+      attemptOn(txs) match
+        case Left(stale) if freshViewsLeft > 0 =>
+          log.info(
+            "Proposer build on block {}: the view of its parent's state went stale ({}); building again on a fresh one",
+            parent.header.number,
+            stale.getMessage
+          )
+          attempt(txs, retriesLeft, freshViewsLeft - 1)
+        case Left(stale)         => throw stale
+        case Right(Right(built)) => built
+        case Right(Left(TxsExecutionError(failed, before, reason))) =>
           val failedAt = txs.indexWhere(_.hash == failed.hash)
           val remaining =
             if failedAt < 0 then Nil
@@ -1441,16 +1477,16 @@ class EngineApiService(
             remaining.size,
             txs.size
           )
-          attempt(remaining, retriesLeft - 1)
-        case Left(other) if txs.nonEmpty =>
+          attempt(remaining, retriesLeft - 1, freshViewsLeft)
+        case Right(Left(other)) if txs.nonEmpty =>
           log.warn(
             "Proposer build on block {}: execution failed for a reason no transaction explains ({}); building the " +
               "empty payload instead",
             parent.header.number,
             other.describe
           )
-          attempt(Nil, retriesLeft)
-        case Left(other) =>
+          attempt(Nil, retriesLeft, freshViewsLeft)
+        case Right(Left(other)) =>
           log.error(
             "Proposer build on block {}: even the empty payload failed to execute ({}); sealing it over the " +
               "parent's state root",
@@ -1463,7 +1499,7 @@ class EngineApiService(
           sealProposerBlock(parent, attrs, Nil, extraData, gasLimit)(_ =>
             Right(ProposerExecution(Nil, BigInt(0), parent.header.stateRoot.value, Nil, None))
           ).fold(err => throw new IllegalStateException(s"sealing without execution failed: $err"), identity)
-    attempt(transactions, LenientBuildRetries)
+    attempt(transactions, LenientBuildRetries, StaleViewRebuilds)
 
   /** What block execution hands the proposer's header derivation. */
   final private case class ProposerExecution(

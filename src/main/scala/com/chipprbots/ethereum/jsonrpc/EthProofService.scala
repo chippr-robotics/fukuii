@@ -242,7 +242,12 @@ class EthProofService(
       case BlockParam.Safe      => getLatestBlock().map(ResolvedBlock(_, pendingState = None))
       case BlockParam.Finalized => getLatestBlock().map(ResolvedBlock(_, pendingState = None))
       case BlockParam.Pending =>
-        blockGenerator.getPendingBlockAndState
+        // On the unified state layout the pending block's state is held nowhere: the block was built on a layer that
+        // was dropped, and only the state of the head is on disk. So "pending" is the head there, which is what it
+        // is on any node with no pending block. With the guard off it is the block the generator last built.
+        Option
+          .unless(blockchainReader.holdsStateInPlace)(blockGenerator.getPendingBlockAndState)
+          .flatten
           .map(pb => ResolvedBlock(pb.pendingBlock.block, pendingState = Some(pb.worldState)))
           .map(Right.apply)
           .getOrElse(resolveBlock(BlockParam.Latest)) // Default behavior in other clients

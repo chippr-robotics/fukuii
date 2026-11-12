@@ -74,6 +74,24 @@ object TestingService:
 
   final case class CommitBlockResponse(blockHash: ByteString)
 
+  /** How a block that was built is committed on the unified state layout: by the import that adopts a block in the
+    * batch that writes its state (the one a chain file is imported by), on the weight of its parent. `Left` says why
+    * the block was refused; nothing is written then, and the head does not move.
+    */
+  def importInPlace(
+      blockchainReader: BlockchainReader,
+      blockExecution: com.chipprbots.ethereum.ledger.BlockExecution
+  )(using BlockchainConfig): Block => Either[String, Unit] = block =>
+    blockchainReader.getChainWeightByHash(block.header.parentHash) match
+      case None =>
+        val parent = org.bouncycastle.util.encoders.Hex.toHexString(block.header.parentHash.value.toArray)
+        Left(s"the weight of its parent 0x$parent is not known")
+      case Some(parentWeight) =>
+        blockExecution.executeAndValidateBlocks(List(block), parentWeight, adoptEachBlock = true) match
+          case (_, Some(error)) => Left(error.describe)
+          case (Nil, None)      => Left("the import took no block")
+          case (_, None)        => Right(())
+
 class TestingService(
     engineApiService: EngineApiService,
     blockchainReader: BlockchainReader,
@@ -81,7 +99,11 @@ class TestingService(
     forkChoiceManager: ForkChoiceManager,
     pendingTransactionsManager: Option[ActorRef[PendingTransactionsManager.Command]],
     blockTopic: Option[ActorRef[Topic.Command[NewBlockImported]]],
-    gasLimitTarget: BigInt
+    gasLimitTarget: BigInt,
+    // On the unified state layout a build writes no state, so a block that was built is committed by importing it:
+    // executed again and written with its state in one batch ([[TestingService.importInPlace]]). `None` with the
+    // in-development guard off, where the build's own writes to the hash store are the block's state.
+    importInPlace: Option[Block => Either[String, Unit]] = None
 )(implicit blockchainConfig: BlockchainConfig)
     extends Logger:
 
@@ -116,19 +138,36 @@ class TestingService(
       case None =>
         IO.pure(Left(JsonRpcError.LogicError("no canonical head block")))
       case Some(head) =>
-        buildOn(head, req.payloadAttributes, req.transactions, req.extraData).map(_.map { case (built, _) =>
+        buildOn(head, req.payloadAttributes, req.transactions, req.extraData).map(_.flatMap { case (built, _) =>
           val block = built.block
           val hash = block.header.hash
 
-          // Same write sequence engine_newPayload + engine_forkchoiceUpdated perform for a
-          // canonical-extending payload: store block, store receipts, promote to canonical head.
-          // The world state is already persisted — buildBlockOnParent ran executeForProposer,
-          // which calls InMemoryWorldStateProxy.persistState against the writable backing.
-          blockchainWriter.storeBlock(block).commit()
-          blockchainWriter.storeReceipts(hash, built.receipts).commit()
-          // EIP-7928: keep the list the header commits to, as engine_newPayload does for an Amsterdam block, so
-          // engine_getPayloadBodies*V2 and eth/71 can serve the committed block. None before Amsterdam.
-          built.blockAccessList.foreach(bal => blockchainWriter.storeBlockAccessList(hash, bal).commit())
+          val stored: Either[JsonRpcError, Unit] = importInPlace match
+            case Some(importBlock) =>
+              // The unified state layout: the block, its receipts, its access list, the head and its state are one
+              // batch, written by the import that executes it. A block the builder made and import refuses is a
+              // difference between the two, which is this node's fault and never the caller's.
+              importBlock(block).left.map { refused =>
+                log.error(
+                  "testing_commitBlockV1: the block that was built ({}, number={}) was refused by import: {}",
+                  hex(hash.value),
+                  block.header.number,
+                  refused
+                )
+                JsonRpcError.LogicError(s"the block that was built was refused by import: $refused")
+              }
+            case None =>
+              // Same write sequence engine_newPayload + engine_forkchoiceUpdated perform for a
+              // canonical-extending payload: store block, store receipts, promote to canonical head.
+              // The world state is already persisted — buildBlockOnParent ran executeForProposer,
+              // which calls InMemoryWorldStateProxy.persistState against the writable backing.
+              blockchainWriter.storeBlock(block).commit()
+              blockchainWriter.storeReceipts(hash, built.receipts).commit()
+              // EIP-7928: keep the list the header commits to, as engine_newPayload does for an Amsterdam block, so
+              // engine_getPayloadBodies*V2 and eth/71 can serve the committed block. None before Amsterdam.
+              built.blockAccessList.foreach(bal => blockchainWriter.storeBlockAccessList(hash, bal).commit())
+              Right(())
+          stored.map { _ =>
           forkChoiceManager.applyForkChoiceState(
             ForkChoiceState(
               headBlockHash = hash.value,
@@ -160,6 +199,7 @@ class TestingService(
             block.body.transactionList.size
           )
           CommitBlockResponse(hash.value)
+          }
         })
 
   /** Shared body of both methods: resolve the transaction list, then build. */
