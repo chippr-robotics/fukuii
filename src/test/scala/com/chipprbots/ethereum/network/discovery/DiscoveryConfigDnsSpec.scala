@@ -47,7 +47,8 @@ class DiscoveryConfigDnsSpec extends AnyFlatSpec with Matchers:
       "all.classic.blockd.info",
       "all.mordor.etcdisco.net",
       "all.mordor.blockd.info",
-      "all.sepolia.ethdisco.net"
+      "all.sepolia.ethdisco.net",
+      "all.hoodi.ethdisco.net"
     )
 
     val config = load(useBootstrapNodes = true, dnsDomains = shipped)

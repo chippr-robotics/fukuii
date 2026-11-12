@@ -236,7 +236,8 @@ object DnsTrustAnchors:
     "all.classic.blockd.info" -> EtcKey,
     "all.mordor.etcdisco.net" -> EtcKey,
     "all.mordor.blockd.info" -> EtcKey,
-    "all.sepolia.ethdisco.net" -> EthKey
+    "all.sepolia.ethdisco.net" -> EthKey,
+    "all.hoodi.ethdisco.net" -> EthKey
   )
 
   /** A `dns-discovery-domains` entry is either an `enrtree://<key>@<domain>` URL, which carries its own key, or a bare
