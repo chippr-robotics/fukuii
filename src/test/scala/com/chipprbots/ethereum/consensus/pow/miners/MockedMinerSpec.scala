@@ -258,6 +258,8 @@ class MockedMinerSpec
 
     // Allow getBestBlock to be called 0 or more times since some tests use getBlockByHash instead
     (() => blockchainReader.getBestBlock).expects().returns(Some(origin)).anyNumberOfTimes()
+    // The hash store: no block's state is held in place, and the miner chains the worlds of its builds as it did.
+    (() => blockchainReader.holdsStateInPlace).expects().returns(false).anyNumberOfTimes()
 
     // Implement abstract expectation methods
     // NOTE: MockedMiner tests use createBlockForMining() which doesn't call this method,

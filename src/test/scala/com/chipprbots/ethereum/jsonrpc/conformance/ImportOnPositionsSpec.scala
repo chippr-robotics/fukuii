@@ -278,17 +278,7 @@ class ImportOnPositionsSpec extends ScalaTestWithActorTestKit with AnyFlatSpecLi
       pathState.anchor shouldBe Some(refOf(head))
       disk shouldBe before
 
-      // a payload asked for on the block the disk holds: none can be built yet, and no id is handed out
-      import com.chipprbots.ethereum.consensus.engine.PayloadAttributes
-      import com.chipprbots.ethereum.domain.Address
-      val asked = engine
-        .forkchoiceUpdated(
-          ForkChoiceState(head.hash.value, zero, zero),
-          Some(PayloadAttributes(4102444800L, zero, Address(1)))
-        )
-        .unsafeRunSync()
-      asked.map(_.payloadStatus.status) shouldBe Right(PayloadStatus.Syncing)
-      asked.map(_.payloadId) shouldBe Right(None)
+      // (a payload asked for on the block the disk holds is built: `ProposerOnPositionsSpec`)
 
       // the block the disk holds is a head like any other
       engine
