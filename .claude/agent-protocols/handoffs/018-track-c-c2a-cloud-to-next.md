@@ -176,6 +176,15 @@ Read plan.md, "C2a part 1 record" and "C2a part 2 record", then:
   many reads behind the head run at once at its own seam** (an index that is not kept lives as long as its views),
   and treat a refusal and a stale view alike. A spec that needs a thread stopped inside a read uses
   `ReaderIndexBuildSpec`'s `Stop`; it waits on `indexBuildsWaitedFor`, never on a thread's state.
+- **C4a part 4b-2: the JSON-RPC and GraphQL read behind the head, in a scope** (plan.md, "C4a part 4b-2").
+  `BlockchainReader.stateAt` and `scratchStateAt` hand out the head's state to anyone and a block behind it only
+  inside `ReadScope.run` (`StateRead.at`, `scratchAt`, `attempting`, `reading`, `scoped`): four such reads in flight,
+  a fifth told to ask again. **A new caller that takes a state and is in no scope reads the head only**: wrap the
+  synchronous body that takes the state and reads through it, never an `IO` that hops threads, and one scope a
+  block for a range. Three RPC errors: `JsonRpcError.StateNotHeld`, `StateBusy`, `StateMoved`. The chain imported
+  on the unified layout and compared with the hash store behind its head is `RpcReadersBehindHeadSpec`: start
+  there for any reader of a block behind the head. Forward layers by hash over RPC, `requireCanonical` and
+  `BLOCKHASH` by a block's own ancestry are C4d's.
 - **C4a** brings back what C3b refuses: the overlay commit for a block that does not extend the anchor
   (`buildExtra(adopted)`, `NotExtendingAnchor`, `saveLastBlock` writing nothing),
   `stateAvailable(hash)`, the served-root window, and SNAP advertised again. C4b: the head move, `ConsensusStateFault`

@@ -6,7 +6,6 @@ import org.scalatest.flatspec.AnyFlatSpec
 import org.scalatest.matchers.should.Matchers
 
 import com.chipprbots.ethereum.db.storage.MptStorage
-import com.chipprbots.ethereum.ledger.InMemoryWorldStateProxy
 import com.chipprbots.ethereum.testing.Tags.*
 
 /** Spec 018 Track C, C4a part 4: what a reader of a state behind the head may cost the node. A reader is anyone who can
@@ -315,36 +314,6 @@ class ReaderIndexBuildSpec extends AnyFlatSpec with Matchers with LayerChains:
       chain.readThrough(behind(refs(refs.size - 4)), refs(refs.size - 4))
       (the[StateUnavailable] thrownBy behind(refs(refs.size - 5))).askAgain shouldBe false
       a[StateUnavailable] should be thrownBy chain.state.stageOf(refs(refs.size - 5))
-    }
-
-  "An execution that commits nothing, on a block behind the anchor" should "read that block's state, keep what it persists to itself and write nothing" taggedAs
-    (UnitTest, ConsensusTest) in {
-      val rig = new Rig
-      import rig.*
-      val before = chain.everything
-      val change: Tx = slots(alice, 3 -> 0, 77 -> 7).andThen(account(eve, 1, 1)).andThen(delete(bob))
-      val on = refs(3)
-      val storage = chain.state.throwawayBehind(on, Reader.Rpc)
-      val persisted = InMemoryWorldStateProxy.persistState(change(worldOver(storage, on.stateRoot, chain.hashed.codes)))
-      persisted.stateRootHash shouldBe chain.hashed.change(on.stateRoot)(change)
-      // what it persisted is read back through the same storage, and by no other
-      worldOver(storage, persisted.stateRootHash, chain.hashed.codes).getAccount(eve) shouldBe defined
-      worldOver(chain.state.throwawayBehind(on, Reader.Rpc), on.stateRoot, chain.hashed.codes)
-        .getAccount(eve) shouldBe None
-      // no row, no record, no layer
-      chain.everything shouldBe before
-      chain.state.overlayUsage.layers shouldBe 0
-      // the block's state is as it was for the next reader
-      chain.readThrough(behind(on), on)
-      // a reader that writes nothing is given no place to persist to
-      an[UnsupportedOperationException] should be thrownBy InMemoryWorldStateProxy.persistState(
-        change(worldOver(behind(on), on.stateRoot, chain.hashed.codes))
-      )
-      // and neither door gives the state of an executed block kept beside the chain
-      val beside = chain.onAny(on)(slots(bob, 7 -> 7))
-      beside.layered()
-      a[StateUnavailable] should be thrownBy chain.state.throwawayBehind(beside.ref, Reader.Rpc)
-      a[StateUnavailable] should be thrownBy behind(beside.ref)
     }
 
   "A view" should "not be made by the holder of the state lock: it may wait for records to be read" taggedAs UnitTest in {

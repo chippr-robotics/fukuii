@@ -379,18 +379,6 @@ final class PathStateStorage(
     */
   def readOnlyForPeer(block: BlockRef): MptStorage = readOnlyBehind(block, Reader.Peer)
 
-  /** [[readOnlyBehind]] for an execution that commits nothing (`eth_call`, a simulation, a trace at a block of the
-    * chain): what it persists is kept beside the view, read back by that execution, and dropped with the storage.
-    * Nothing is written, no layer is kept, and no layer is read through or counted as used.
-    *
-    * @throws StateUnavailable
-    *   as [[readOnlyBehind]]
-    * @throws IllegalStateException
-    *   when the calling thread holds the state lock
-    */
-  private[pathstate] def throwawayBehind(block: BlockRef, reader: Reader): MptStorage =
-    PathMptStorage.throwaway(viewBehind(block, reader))
-
   /** How many reads of a state behind the anchor callers of the JSON-RPC may have in flight. */
   private val readsBehind = new Semaphore(settings.maxReadsBehindHead)
 
@@ -415,7 +403,10 @@ final class PathStateStorage(
     */
   def readOnlyInScope(block: BlockRef): MptStorage = PathMptStorage.readOnly(viewInScope(block))
 
-  /** [[readOnlyInScope]] for an execution that commits nothing: see [[throwawayBehind]]. */
+  /** [[readOnlyInScope]] for an execution that commits nothing (`eth_call`, a simulation, a trace at a block of the
+    * chain): what it persists is kept beside the view, read back by that execution, and dropped with the storage.
+    * Nothing is written, no layer is kept, and no layer is read through or counted as used.
+    */
   def throwawayInScope(block: BlockRef): MptStorage = PathMptStorage.throwaway(viewInScope(block))
 
   private def viewInScope(block: BlockRef): StateView =

@@ -2138,26 +2138,50 @@ guard off nothing changes.
   `-32005 ... ask again`. They were all the error for a missing state node. Only under the guard: no `StateFault`
   is thrown with it off.
 
-**Tests.** `ReadScopeSpec` (8): the head with no scope and no count; behind with no scope refused at no cost;
+**Tests.** `ReadScopeSpec` (13): the head with no scope and no count; behind with no scope refused at no cost;
 counted once a block while the scope lasts; given back on an exception and with the outer scope; a third reader
 of two refused before a record is walked, a peer and an execution not; counted when the disk moves on under a
 scope; a scratch execution behind the head writes nothing; a scope is its thread's. `RpcReadersBehindHeadSpec`
-(10): **the rpc-compat chain imported on the unified layout from its genesis**, and every reader asked about the
+(12): **the rpc-compat chain imported on the unified layout from its genesis**, and every reader asked about the
 blocks 1, 2, 8, 20 and 40 behind its head and compared, as JSON, with a node that imported the same chain on the
 hash store: balance, nonce, code and storage of every genesis account; `eth_getProof` by number and by hash;
 `eth_call`, `estimateGas` and `createAccessList`; the replay of a block's transactions on its parent's state, the
-head's too; a range of twelve blocks one scope a block; the fifth block of one scope refused; `eth_simulateV1` on
-a block behind. `StateReadRetrySpec`: the three errors, the scope of a read and of a method's body, and that no
+head's too; a range of twelve blocks one scope a block; `debug_traceBlockByNumber`, `debug_traceTransaction`, `trace_block`,
+`debug_traceChain` and `trace_filter` through the services, with transactions; GraphQL's account fields, `call`
+and `estimateGas`; a fifth request told to ask again over JSON-RPC and over GraphQL while four are in flight; the
+fifth block of one scope refused for good; `eth_simulateV1` on a block behind. `StateReadRetrySpec`: the three errors, the scope of a read and of a method's body, and that no
 later stage of the `IO` is in it.
 
-**Not held to the hash store by a transaction, and said so in the spec**: the tracing services read the chain
-rules of the node's configuration and not the test chain's, so on that chain they trace no transaction. Their
-replay is held at the ledger, and the services are held to answer alike and to hold nothing after. A fixture on
-the node's own chain is a follow-up (backlog).
+**The mutation run**: 37 mutants, 19 before the reads after code and 18 over what they changed. A scope that
+gives nothing back, that ends inside another, that is counted for every state it takes, or that stays on its
+thread; a caller in no scope let through; the count not taken, or not at the view's look at the disk; no bound, a
+leave not given back, the bound one more; a refusal that does not say to ask again, and one that says so to a
+scope that holds every leave itself; the seam handing out the old doors, or a state that takes no writes to an
+execution; a read through `StateRead` in no scope, and a method's body; each of the three errors said as another;
+each wrapped method in no scope (`eth_call`, `estimateGas`, `createAccessList`, `simulateV1`, four of the tracing
+methods), a range read in no scope and a range read in one; a GraphQL field in no scope, one that gives a call's
+default for a state that was not read, one that does not run again; the tracing services under the node's rules
+whatever chain they serve; a failure to give back hiding the read's own; a peer counted as a caller. All caught.
+The two range mutants and the tracing ones were missed until the tracing services took the chain's rules as a
+parameter: on the test chain they had traced no transaction.
 
-**The mutation run**: @@MUTATION2@@
-
-**Reads after code**: @@READS2@@
+**Reads after code: conduit and beacon, both APPROVE WITH CHANGES, nothing blocking.** Verified by them in code:
+nothing that reads through a state leaves a wrapped body (no lazy collection, no later stage of an `IO`); no
+nesting that piles up counts; a `StateFault` reaches the controllers' backstop from every wrapped method; SNAP
+serving holds a state for one request (a typed actor, synchronous handlers); the refusal cannot be swallowed by
+the view's own retry; a scratch execution behind the head writes no row, keeps no layer and repairs nothing.
+Taken: GraphQL's `call` and `estimateGas` answer a state that cannot be read with an error of the field and run
+again when it moved (an estimate of 0 was the default they would have given); the tracing services take the
+chain's rules, which made the conformance spec trace real transactions through them; a scope that holds every
+leave itself is refused for good; the doors behind the anchor that count nothing are the package's, with one for
+a peer, so that no later caller goes round the count; a failure to give back goes with the read's own failure;
+the invariant a count rests on is written where the scope is (**a scope keeps no more than one world of a block
+within reach**: it is counted once for a block however often it takes it, and after a move of the disk each
+taking is an index made anew). **The bound as built** (beacon): the kept pool, plus one index for each read in
+flight and one for a peer, each at most `maxReverseIndexBytes`; twice that for the moment a replay holds the
+last world and the next. Follow-ups in the backlog: the head-only callers read in a scope, for the one block the
+disk may move between their lookup and their read (B-238); `executableAtParent` through the proposer's door when
+layers return (B-239, C4d); `IO.blocking` for the bodies that run for seconds (B-240).
 
 ### Destructive change (C8a and C8b): the vault protocol blocks
 

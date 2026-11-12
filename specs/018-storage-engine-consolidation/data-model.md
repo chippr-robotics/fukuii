@@ -696,6 +696,17 @@ built is given that one. A view reaches `state.retention.max-blocks` behind the 
 `state.archive.view-reach` in the archive mode. **Not bounded here**: an index that is no longer kept lives as long as the
 views that read through it, so the layer that serves reads behind the head bounds how many run at once (C4a part 4b-2).
 
+*(C4a part 4b-2 as built, 2026-11-12.)* **The reads behind the head that are in flight are bounded too.** A caller that is
+not served one request at a time (the JSON-RPC, GraphQL) is handed the state of a block behind the anchor only inside a
+`ReadScope`, the calling thread's, which says when the reader is done; a scope is counted once for each block it reads
+behind the anchor, four may be counted at once (`maxReadsBehindHead`, a constant until M5), and one more is refused and
+told to ask again. So what readers hold is the kept indexes within their pool, two builds for each kind of reader, and four
+reads in flight of at most one index each while the caller keeps one world of a block within reach (a replay does; a scope
+is counted once for a block however often it takes it). A caller in no scope reads the anchor's state and no other. A peer
+is served through a door of its own, one request at a time. Over RPC a state that cannot be read is one of three errors,
+none of them an execution error: not held (`-32000`, `missing trie node`), not handed out right now (`-32005`), moved under
+every view of it (`-32005`).
+
 **Why branches are pinned (forge, S0 item 3a).** `reorganise` executes the whole new branch with `adoptEachBlock = false`
 (`ConsensusImpl.scala:325-326`) and settles only after the last block (`:328`), so every block of the branch is a live forward
 layer at once. A batch is up to 50 blocks (`blocks-batch-size = 50`, `sync.conf:351`) and BlockQueue can hold branches up to
@@ -1139,6 +1150,7 @@ them fails at start with a message naming the deleted key. `pruning.history` kee
 | `app.db.state.overlay.reverse.builds`, `.build.bytes`, `.refused` | counter, summary, counter | reverse indexes built, their size, and readers told to ask again because as many as their kind may build were being built (C4a part 4b-1) |
 | `app.db.state.view.stale` | counter | `StaleStateViewException` thrown, by caller (execution, rpc, snap-serve, prefetch) |
 | `app.db.state.view.retries` | counter | executions retried after a stale view |
+| `app.db.state.view.behind.refused` | counter | reads behind the head refused because as many as may be were in flight (C4a part 4b-2) |
 | `app.db.state.move.seconds` | timer | `moveHead`, by direction and block count |
 | `app.db.state.reorg.refused` | counter | `ReorgTooDeep` and `StateUnavailable`, by reason |
 | `app.db.state.verify.mismatch` | counter | position mismatches, by class (stale, corrupt, absent) |
