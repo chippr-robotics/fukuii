@@ -4,11 +4,11 @@
 
 **Created**: 2026-11-12
 
-**Status**: Planned (2026-11-12). Built from the user's decisions of 2026-11-12: bundle Ephemery with a
+**Status**: Active (2026-11-12). Built from the user's decisions of 2026-11-12: bundle Ephemery with a
 self-refresh at startup; at a reset, a running node warns and exits for a supervisor restart (FR-016); add Hoodi;
 dev-node implements. Plan: slices S1, S2, S3, S4a, S4b and S5 in [plan.md](./plan.md).
 
-**In flight**: `spec/028-builtin-ephemery-hoodi` (`dev-node`, local session): tasks written (T001-T094); S1, S2 and S4a start in parallel
+**In flight**: `feat/028-s1-hoodi` (S1, in review); `feat/028-s2-release-lib` and `feat/028-s4a-transport` (`dev-node`, local)
 
 **Input**: User request of 2026-11-12, "Ephemery should be shipped with fukuii by default same as mordor, hoodi, and
 sepolia", and the answers that followed: bundle the current Ephemery iteration plus a startup self-refresh after the
