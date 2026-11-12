@@ -138,11 +138,14 @@ object TestService:
   case class GetLogHashResponse(logHash: ByteString)
 
   /** What a request that needs the state of a block other than the head is answered with on the unified state layout,
-    * before its overlay (spec 018 C4a): a reorganisation, above all.
+    * before its overlay (spec 018 C4a): a reorganisation to a branch that outweighs the head, above all.
     */
   val HeadStateOnly: String =
     "the unified state layout (fukuii.state.path-live) holds the state of its head alone until its overlay, and " +
-      "this needs the state of another block: a branch that outweighs the head cannot be reorganised to"
+      "this needs the state of another block"
+
+  /** What `test_setChainParams` is answered with there when a write of it failed. */
+  val ChainNotSet: String = "the chain was not set"
 
   /** What a rewind to a block between the genesis and the head is answered with there (spec 018 C4b). */
   val RewindBelowTheHead: String =
@@ -185,12 +188,6 @@ class TestService(
     new collection.concurrent.TrieMap[ByteString, UInt256]()
 
   def setChainParams(request: SetChainParamsRequest): ServiceResponse[SetChainParamsResponse] =
-    node.currentBlockchainConfig.set(buildNewConfig(request.chainParams.blockchainParams))
-
-    // clear ledger's cache on test start
-    // setChainParams is expected to be the first remote call for each test
-    testModeComponentsProvider.clearState()
-
     val genesisData = GenesisData(
       nonce = request.chainParams.genesis.nonce,
       mixHash = Some(request.chainParams.genesis.mixHash),
@@ -204,6 +201,32 @@ class TestService(
       }
     )
 
+    refusalOnTheUnifiedLayout(genesisData) match
+      case Some(refusal) => IO.pure(Left(JsonRpcError.LogicError(refusal)))
+      case None          => setChain(request, genesisData)
+
+  /** What the unified state layout refuses of a chain before anything is changed, of the datadir or of this service: a
+    * genesis it cannot commit, and a state it would not destroy (a store that was not built for test mode, a state of
+    * more keys than one batch deletes). The blocks of the chain before go first, and they must not go from a datadir
+    * whose state stays. `None` on the hash store.
+    */
+  private def refusalOnTheUnifiedLayout(genesisData: GenesisData): Option[String] =
+    node.pathStateStorage.flatMap { pathState =>
+      GenesisDataLoader
+        .unifiedLayoutRefusal(genesisData, GenesisDataLoader.AddressLength)
+        .orElse(pathState.refusalToDestroyState())
+    }
+
+  private def setChain(
+      request: SetChainParamsRequest,
+      genesisData: GenesisData
+  ): ServiceResponse[SetChainParamsResponse] =
+    node.currentBlockchainConfig.set(buildNewConfig(request.chainParams.blockchainParams))
+
+    // clear ledger's cache on test start
+    // setChainParams is expected to be the first remote call for each test
+    testModeComponentsProvider.clearState()
+
     // set coinbase for blocks that will be tried to mine
     etherbase = Address(genesisData.coinbase)
 
@@ -212,7 +235,10 @@ class TestService(
     resetPreimages(genesisData)
 
     setGenesis(genesisData) match
-      case Left(refused) => IO.pure(Left(refused))
+      case Left(failed) =>
+        // no chain is set: there is none to rewind to
+        genesisOfThisChain = None
+        IO.pure(Left(failed))
       case Right(()) =>
         genesisOfThisChain = Some(genesisData)
         accountHashWithAdresses = (etherbase.toUnprefixedString :: genesisData.alloc.keys.toList)
@@ -242,26 +268,25 @@ class TestService(
 
       case Some(pathState) =>
         // The unified state layout (spec 018 Track C, C3c). A genesis is committed there only to a datadir that holds
-        // no state, so the chain the test before left is taken away first, and in this order: a genesis that cannot
-        // be committed is refused with the datadir as it is; then the blocks go, from the head down, so that no
-        // number is left naming a block of the old chain; then the state; then the node's own loader commits the new
-        // genesis. The blocks before the state: a genesis block with no layout stamp beside it is what a datadir of
-        // the other layout looks like.
-        GenesisDataLoader.unifiedLayoutRefusal(genesisData, GenesisDataLoader.AddressLength) match
-          case Some(refusal) => Left(JsonRpcError.LogicError(refusal))
-          case None =>
-            (blockchainReader.getBestBlockNumber to BigInt(0) by -1).foreach { number =>
-              blockchainReader.getBlockHeaderByNumber(number).foreach(header => blockchain.removeBlock(header.hash))
-            }
-            pathState.destroyStateForNewGenesis()
-            node.genesisDataLoader.loadGenesisData(genesisData) match
-              case Failure(refused) =>
-                log.error("test_setChainParams: the genesis was not committed", refused)
-                Left(JsonRpcError.LogicError(s"the genesis was not committed: ${refused.getMessage}"))
-              case Success(()) =>
-                // Code is kept by its hash on both layouts, and the loader has stored it. The storage tries are rows
-                // the genesis commit wrote: nothing of them goes to the hash store.
-                Right(())
+        // no state, so the chain the test before left is taken away first, and in this order: the blocks go, from the
+        // head down, so that no number is left naming a block of the old chain; then the state; then the node's own
+        // loader commits the new genesis. The blocks before the state: a genesis block with no layout stamp beside it
+        // is what a datadir of the other layout looks like. What the layout refuses was refused before this
+        // (`refusalOnTheUnifiedLayout`); what fails here is a write, and it is answered as an error, with a datadir
+        // that holds no chain or the state of the old one and none of its blocks. Setting a chain again mends either.
+        Try {
+          (blockchainReader.getBestBlockNumber to BigInt(0) by -1).foreach { number =>
+            blockchainReader.getBlockHeaderByNumber(number).foreach(header => blockchain.removeBlock(header.hash))
+          }
+          pathState.destroyStateForNewGenesis()
+          // Code is kept by its hash on both layouts, and the loader stores it. The storage tries are rows the genesis
+          // commit writes: nothing of them goes to the hash store.
+          node.genesisDataLoader.loadGenesisData(genesisData)
+        }.flatten match
+          case Failure(failed) =>
+            log.error("Test mode on the unified state layout: the chain was not set", failed)
+            Left(JsonRpcError.LogicError(s"${TestService.ChainNotSet}: ${failed.getMessage}"))
+          case Success(()) => Right(())
 
   val neverOccurringBlock: Int = Int.MaxValue
 
@@ -400,7 +425,8 @@ class TestService(
   /** What the unified state layout cannot do before its overlay, said as that and not as a fault of the block: the
     * state of a block that is not the one held was asked for, and refused before anything was written (a branch that
     * outweighs the head reaches a reorganisation; a block is to be mined on a head whose state is not the one the disk
-    * holds); and a mined block that was not made the head. Never met on the hash store.
+    * holds; a range of the state of a block below the head is read); and a mined block that was not made the head.
+    * Never met on the hash store.
     */
   private def notOnTheUnifiedLayout[A]: PartialFunction[Throwable, Either[JsonRpcError, A]] =
     case fault: com.chipprbots.ethereum.db.storage.pathstate.StateUnavailable if blockchainReader.holdsStateInPlace =>
@@ -468,6 +494,16 @@ class TestService(
     *   https://github.com/ethereum/retesteth/wiki/RPC-Methods#debug_accountrange
     */
   def getAccountsInRange(request: AccountsInRangeRequest): ServiceResponse[AccountsInRangeResponse] =
+    ofAStateHeld(accountsInRange(request))
+
+  /** `answer`, which reads the state of a block. On the unified state layout that is the head's alone before the
+    * overlay: for another block the read is refused as it starts, and the refusal is answered as that. On the hash
+    * store `answer` is what it was.
+    */
+  private def ofAStateHeld[A](answer: => ServiceResponse[A]): ServiceResponse[A] =
+    if blockchainReader.holdsStateInPlace then IO.defer(answer).recover(notOnTheUnifiedLayout) else answer
+
+  private def accountsInRange(request: AccountsInRangeRequest): ServiceResponse[AccountsInRangeResponse] =
     // This implementation works by keeping a list of know account from the genesis state
     // It might not cover all the cases as an account created inside a transaction won't be there.
 
@@ -508,6 +544,9 @@ class TestService(
     *   https://github.com/ethereum/retesteth/wiki/RPC-Methods#debug_storagerangeat
     */
   def storageRangeAt(request: StorageRangeRequest): ServiceResponse[StorageRangeResponse] =
+    ofAStateHeld(storageRange(request))
+
+  private def storageRange(request: StorageRangeRequest): ServiceResponse[StorageRangeResponse] =
 
     val blockOpt = request.parameters.blockHashOrNumber
       .fold(

@@ -143,8 +143,11 @@ class TestServiceOnPositionsSpec extends ScalaTestWithActorTestKit with AnyFlatS
   /** A test-mode node in memory, on the layout `guard` says: its storages, its position store when it has one, the
     * services of test mode over them, and a pending-transactions manager that hands out what a test gave it.
     */
-  final private class Rig(guard: Boolean, val source: EphemDataSource = EphemDataSource())
-      extends EphemBlockchainTestSetup:
+  final private class Rig(
+      guard: Boolean,
+      val source: EphemDataSource = EphemDataSource(),
+      inTestMode: Boolean = true
+  ) extends EphemBlockchainTestSetup:
 
     implicit override lazy val blockchainConfig: BlockchainConfig = BlockchainConfig(
       forkBlockNumbers = ForkBlockNumbers.Empty,
@@ -169,7 +172,7 @@ class TestServiceOnPositionsSpec extends ScalaTestWithActorTestKit with AnyFlatS
       new Shared with LocalPruningConfigBuilder with Storages.DefaultStorages with TestInstanceConfigProvider:
         override protected def statePathLive: Boolean = guard
         // what a node in test mode is built with (`NodeBuilder`)
-        override protected def stateMayBeDestroyed: Boolean = true
+        override protected def stateMayBeDestroyed: Boolean = inTestMode
 
     private val initialConfig = blockchainConfig
     val node: TestModeNode = new TestModeNode:
@@ -262,20 +265,16 @@ class TestServiceOnPositionsSpec extends ScalaTestWithActorTestKit with AnyFlatS
     def allButCode: Map[ByteString, ByteString] =
       everything.filter((key, _) => key.head != Namespaces.CodeNamespace.head)
 
-    def storageAt(address: Address): StorageRangeResponse =
-      run(
-        service.storageRangeAt(
-          StorageRangeRequest(StorageRangeParams(Left(head.header.number.value), 0, address.bytes, 0, 100))
-        )
-      ).toOption.get
-    def accountsAtHead: AccountsInRangeResponse =
+    def storageAt(address: Address, block: BigInt): Either[JsonRpcError, StorageRangeResponse] =
+      run(service.storageRangeAt(StorageRangeRequest(StorageRangeParams(Left(block), 0, address.bytes, 0, 100))))
+    def storageAt(address: Address): StorageRangeResponse = storageAt(address, head.header.number.value).toOption.get
+    def accountsAt(block: BigInt): Either[JsonRpcError, AccountsInRangeResponse] =
       run(
         service.getAccountsInRange(
-          AccountsInRangeRequest(
-            AccountsInRangeRequestParams(Left(head.header.number.value), 0, ByteString(new Array[Byte](32)), 100)
-          )
+          AccountsInRangeRequest(AccountsInRangeRequestParams(Left(block), 0, ByteString(new Array[Byte](32)), 100))
         )
-      ).toOption.get
+      )
+    def accountsAtHead: AccountsInRangeResponse = accountsAt(head.header.number.value).toOption.get
 
   /** A datadir whose synced writes fail when told to: `syncedWritesBeforeFailure` more are taken, the next one throws,
     * and the count is then off (-1). An in-memory source and not a wrapper of one: the storages ask a source whether it
@@ -374,6 +373,19 @@ class TestServiceOnPositionsSpec extends ScalaTestWithActorTestKit with AnyFlatS
       val accounts = onPositions.accountsAtHead
       accounts shouldBe onHashes.accountsAtHead
       accounts.addressMap.values.toSet should contain.allOf(sender.bytes, keeper.bytes, squatted.bytes)
+
+      // The state of a block below the head: the hash store holds it, and answers. The unified layout holds the
+      // head's alone, and says so; the answer is an error of the method, and no fault thrown at its caller.
+      onHashes.storageAt(contract, 2).map(keysOf) shouldBe Right(Set(slot(1), slot(2)))
+      onHashes.accountsAt(2).map(_.addressMap.values.toSet.contains(contract.bytes)) shouldBe Right(false)
+      onPositions.storageAt(contract, 2).left.map(_.message).left.getOrElse("") should include(
+        TestService.HeadStateOnly
+      )
+      onPositions.accountsAt(2).left.map(_.message).left.getOrElse("") should include(TestService.HeadStateOnly)
+      // a block neither has is no error on either
+      Seq(onHashes, onPositions).foreach(
+        _.storageAt(contract, 99) shouldBe Right(StorageRangeResponse(false, Map.empty, None))
+      )
     }
 
   it should "set a second chain on a datadir that holds nothing of the first" taggedAs UnitTest in {
@@ -416,29 +428,69 @@ class TestServiceOnPositionsSpec extends ScalaTestWithActorTestKit with AnyFlatS
     rig.everything shouldBe before
     rig.head.header.hash shouldBe head
     rig.anchor shouldBe Some(rig.refOf(rig.head.header))
+
+    // nothing of the service changed either: the chain goes on under the rules it was set with, and a rewind to the
+    // genesis sets the chain that was set
+    rig.mine(Seq(transfer(1, Address(43), 1))) shouldBe Right(MineBlocksResponse())
+    rig.head.header.number.value shouldBe 2
+    rig.rewind(0) shouldBe Right(RewindToBlockResponse())
+    val fresh = new Rig(guard = true)
+    fresh.setChain(chainA) shouldBe Right(SetChainParamsResponse())
+    rig.allButCode shouldBe fresh.allButCode
   }
 
-  it should "answer a genesis commit that fails with an error, and take the chain when it is set again" taggedAs
+  it should "refuse a chain when it would not destroy the state there is, before a block is taken away" taggedAs
     UnitTest in {
-      val faulty = new Faulty
-      val rig = new Rig(guard = true, faulty)
-      rig.setChain(chainA) shouldBe Right(SetChainParamsResponse())
-      rig.mine(Seq(transfer(0, Address(42), 9000))) shouldBe Right(MineBlocksResponse())
+      val first = new Rig(guard = true)
+      first.setChain(chainA) shouldBe Right(SetChainParamsResponse())
+      first.mine(Seq(transfer(0, Address(42), 9000))) shouldBe Right(MineBlocksResponse())
 
-      // the state of the chain before is destroyed in one synced write, and the genesis is committed in the next
-      faulty.syncedWritesBeforeFailure = 1
-      val failed = rig.run(rig.service.setChainParams(SetChainParamsRequest(chainParams(chainB))))
-      failed.left.map(_.message).left.getOrElse("") should include("the genesis was not committed")
-      faulty.syncedWritesBeforeFailure shouldBe -1
-      // no chain: the blocks and the state of the first are gone, and nothing of the second is there
-      rig.blockchainReader.getBestBlock shouldBe None
-      rig.anchor shouldBe None
-      rig.rows shouldBe (Map.empty, Map.empty)
+      // the same datadir under a store that was not built for test mode
+      val rig = new Rig(guard = true, first.source, inTestMode = false)
+      val before = rig.everything
+      val refused = rig.run(rig.service.setChainParams(SetChainParamsRequest(chainParams(chainB))))
+      refused.left.map(_.message).left.getOrElse("") should include("only in test mode")
+      rig.everything shouldBe before
+      rig.head.header.hash shouldBe first.head.header.hash
+      rig.anchor shouldBe Some(rig.refOf(rig.head.header))
+    }
 
-      rig.setChain(chainB) shouldBe Right(SetChainParamsResponse())
+  it should "answer a write that fails with an error, and take the chain when it is set again" taggedAs
+    UnitTest in {
       val fresh = new Rig(guard = true)
       fresh.setChain(chainB) shouldBe Right(SetChainParamsResponse())
-      rig.allButCode shouldBe fresh.allButCode
+
+      // The state of the chain before is destroyed in one synced write, and the genesis is committed in the next.
+      // Either may fail: the answer is an error of the method, and the chain is set by asking again.
+      Seq(0, 1).foreach { syncedWrites =>
+        withClue(s"the synced write after $syncedWrites: ") {
+          val faulty = new Faulty
+          val rig = new Rig(guard = true, faulty)
+          rig.setChain(chainA) shouldBe Right(SetChainParamsResponse())
+          rig.mine(Seq(transfer(0, Address(42), 9000))) shouldBe Right(MineBlocksResponse())
+          val held = rig.anchor
+
+          faulty.syncedWritesBeforeFailure = syncedWrites
+          val failed = rig.run(rig.service.setChainParams(SetChainParamsRequest(chainParams(chainB))))
+          failed.left.map(_.message).left.getOrElse("") should include(TestService.ChainNotSet)
+          failed.left.map(_.message).left.getOrElse("") should include("the disk is full")
+          faulty.syncedWritesBeforeFailure shouldBe -1
+          // the blocks of the first are gone; its state is there when its destruction failed, and gone when the
+          // genesis commit did; nothing of the second is there
+          rig.blockchainReader.getBestBlock shouldBe None
+          if syncedWrites == 0 then rig.anchor shouldBe held
+          else
+            rig.anchor shouldBe None
+            rig.rows shouldBe (Map.empty, Map.empty)
+          // no chain is set: a rewind to the genesis has none to set, and takes nothing away
+          val after = rig.everything
+          rig.rewind(0) shouldBe Right(RewindToBlockResponse())
+          rig.everything shouldBe after
+
+          rig.setChain(chainB) shouldBe Right(SetChainParamsResponse())
+          rig.allButCode shouldBe fresh.allButCode
+        }
+      }
     }
 
   it should "say so when a block it mined was not made the head, or its head's state is not the one held" taggedAs

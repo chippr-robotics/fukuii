@@ -6,6 +6,7 @@ import scala.util.control.NonFatal
 
 import com.chipprbots.ethereum.db.dataSource.DataSource
 import com.chipprbots.ethereum.db.dataSource.DataSourceBatchUpdate
+import com.chipprbots.ethereum.db.dataSource.DataSourceUpdateOptimized
 import com.chipprbots.ethereum.db.dataSource.DataUpdate
 import com.chipprbots.ethereum.db.storage.AppStateStorage
 import com.chipprbots.ethereum.db.storage.DecodedNodeCache
@@ -242,7 +243,6 @@ final class PathStateStorage(
       case CommitOutcome.AlreadyApplied => ()
     outcome
 
-  /** `tell`, whose failure is the observer's own: it is logged, and changes nothing of the commit it was told of. */
   /** '''Destroys the state this datadir holds''', so that a genesis can be committed to it again: every row of both
     * column families, every changeset record and index entry, the count of pruned records, the layout stamp and the
     * anchor, in '''one batch''', synced, under the state lock. Returns how many keys it deleted.
@@ -264,30 +264,42 @@ final class PathStateStorage(
     *   when the store was not built for test mode, or the state has more keys than may be deleted this way
     */
   private[ethereum] def destroyStateForNewGenesis(): Int =
-    if !settings.allowsStateDestruction then
-      throw new IllegalStateException(
-        "The state of a data directory is destroyed only in test mode (fukuii.testmode), for a new genesis"
-      )
+    if !settings.allowsStateDestruction then throw new IllegalStateException(NotBuiltForDestruction)
     lock.locked(
       "destruction of the state for a new genesis",
       nanos => told("the wait for the state lock")(settings.observer.lockWaited(nanos))
     ) {
-      val removals = for
-        ofRows <- rows.removalOfEveryRow(MaxKeysDestroyed)
-        ofRecords <- changesets.removalOfEverything(MaxKeysDestroyed)
-      yield ofRows ++ ofRecords
-      removals match
-        case None =>
-          throw new IllegalStateException(
-            s"The state holds more than $MaxKeysDestroyed rows or changeset keys: too many to delete in one batch. " +
-              "Test mode's new genesis is for the states test mode makes; use another data directory."
-          )
+      removalOfTheState() match
+        case None => throw new IllegalStateException(tooManyKeysToDestroy)
         case Some(deletes) =>
           val updates: Seq[DataUpdate] = deletes ++ appState.removeStateMarks().updates
           clock.inFlightToNoState(dataSource.updateSync(updates))
           deletes.map(_.toRemove.size).sum
     }
 
+  /** Why [[destroyStateForNewGenesis]] would refuse this datadir as it is now, or `None` when it would not. It reads,
+    * under the state lock, and writes nothing: for a caller that has something to take away before the state, and must
+    * not take it away from a datadir whose state will stay.
+    */
+  private[ethereum] def refusalToDestroyState(): Option[String] =
+    if !settings.allowsStateDestruction then Some(NotBuiltForDestruction)
+    else
+      lock.locked("the look at the state before its destruction") {
+        Option.when(removalOfTheState().isEmpty)(tooManyKeysToDestroy)
+      }
+
+  /** The deletes of every row and every changeset key, or `None` when either is more than may be deleted in a batch. */
+  private def removalOfTheState()(using StateLockHeld): Option[Seq[DataSourceUpdateOptimized]] =
+    for
+      ofRows <- rows.removalOfEveryRow(settings.maxKeysDestroyed)
+      ofRecords <- changesets.removalOfEverything(settings.maxKeysDestroyed)
+    yield ofRows ++ ofRecords
+
+  private def tooManyKeysToDestroy: String =
+    s"The state holds more than ${settings.maxKeysDestroyed} rows or changeset keys: too many to delete in one " +
+      "batch. Test mode's new genesis is for the states test mode makes; use another data directory."
+
+  /** `tell`, whose failure is the observer's own: it is logged, and changes nothing of the commit it was told of. */
   private def told(what: String)(tell: => Unit): Unit =
     try tell
     catch case NonFatal(e) => log.warn(s"The observer of the state's commits failed on $what: $e")
@@ -403,6 +415,9 @@ object PathStateStorage:
     */
   val MaxKeysDestroyed: Long = 1000000L
 
+  private val NotBuiltForDestruction =
+    "The state of a data directory is destroyed only in test mode (fukuii.testmode), for a new genesis"
+
   /** What retention does in one batch: the records it deletes, the height the count of pruned heights moves to when it
     * moves, the height it has then reached, and how many heights that is.
     */
@@ -429,7 +444,9 @@ object PathStateStorage:
       observer: CommitObserver = CommitObserver.Silent,
       maxOwnerScanBytes: Long = 64L * 1024 * 1024,
       // Whether [[PathStateStorage.destroyStateForNewGenesis]] may run: test mode only.
-      allowsStateDestruction: Boolean = false
+      allowsStateDestruction: Boolean = false,
+      // The most rows, and the most changeset keys, it deletes.
+      maxKeysDestroyed: Long = MaxKeysDestroyed
   )
 
   object CommitSettings:

@@ -32,7 +32,11 @@ class StateDestructionSpec extends AnyFlatSpec with Matchers:
   /** A datadir with a state on it: rows of the account trie and of one storage trie, a changeset record and its index
     * entry, a count of pruned records, the stamp and the anchor. And the store over it.
     */
-  private def withState(source: DataSource, testMode: Boolean = true): PathStateStorage =
+  private def withState(
+      source: DataSource,
+      testMode: Boolean = true,
+      maxKeys: Long = PathStateStorage.MaxKeysDestroyed
+  ): PathStateStorage =
     val rows = new PathNodeStorage(source)
     (0 until 12).foreach(i => rows.writeAccountNode(Array[Byte]((i % 16).toByte, (i / 16).toByte), aNode))
     (0 until 7).foreach(i => rows.writeStorageNode(owner, Array[Byte](i.toByte), aNode))
@@ -53,7 +57,7 @@ class StateDestructionSpec extends AnyFlatSpec with Matchers:
     new PathStateStorage(
       rows,
       appState,
-      settings = PathStateStorage.CommitSettings(allowsStateDestruction = testMode)
+      settings = PathStateStorage.CommitSettings(allowsStateDestruction = testMode, maxKeysDestroyed = maxKeys)
     )
 
   private def stateOf(source: DataSource) =
@@ -119,10 +123,15 @@ class StateDestructionSpec extends AnyFlatSpec with Matchers:
   it should "leave a view made before it stale, and allow no view after it" taggedAs UnitTest in {
     val source = EphemDataSource()
     val store = withState(source)
+    // a move before the view, so that the log reaches back past it: a log kept across the destruction would say that
+    // nothing moved since, and the view would take the rows that are gone for its state
+    store.clock.inFlight(StateMove(held, Map.empty))(())
     val view = store.view(held)
     val position =
       PositionKey(Some(owner), ByteString(com.chipprbots.ethereum.mpt.HexPrefix.encode(Array[Byte](3), false)))
     view.read(position).map(_.toSeq) shouldBe Some(aNode.toSeq)
+    store.refusalToDestroyState() shouldBe None
+    view.isAnchorViewNow shouldBe true
     store.destroyStateForNewGenesis()
     a[StaleStateViewException] should be thrownBy view.read(position)
     a[StaleStateViewException] should be thrownBy view.read(PositionKey.AccountRoot)
@@ -135,6 +144,7 @@ class StateDestructionSpec extends AnyFlatSpec with Matchers:
     val store = withState(watched, testMode = false)
     val before = (stateOf(watched), watched.writes.size)
     val view = store.view(held)
+    store.refusalToDestroyState().getOrElse("") should include("only in test mode")
     val refused = the[IllegalStateException] thrownBy store.destroyStateForNewGenesis()
     refused.getMessage should include("only in test mode")
     watched.writes.size shouldBe before._2
@@ -166,6 +176,31 @@ class StateDestructionSpec extends AnyFlatSpec with Matchers:
     store.destroyStateForNewGenesis() shouldBe 21
     stateOf(watched) shouldBe nothing
   }
+
+  // 19 rows (12 of the account trie, 7 of a storage trie) and 2 changeset keys
+  it should "refuse a state of more keys than it may delete, of rows or of records, and write nothing" taggedAs
+    UnitTest in {
+      Seq(18L, 1L).foreach { max =>
+        withClue(s"at most $max keys: ") {
+          val watched = new Recording
+          val store = withState(watched, maxKeys = max)
+          val before = (stateOf(watched), watched.writes.size)
+          val view = store.view(held)
+          store.refusalToDestroyState().getOrElse("") should include(s"more than $max rows or changeset keys")
+          val refused = the[IllegalStateException] thrownBy store.destroyStateForNewGenesis()
+          refused.getMessage should include(s"more than $max rows or changeset keys")
+          watched.writes.size shouldBe before._2
+          stateOf(watched) shouldBe before._1
+          store.anchor shouldBe Some(held)
+          store.lock.holder shouldBe None
+          view.isAnchorViewNow shouldBe true
+        }
+      }
+      // the bound itself is taken
+      val store = withState(EphemDataSource(), maxKeys = 19)
+      store.refusalToDestroyState() shouldBe None
+      store.destroyStateForNewGenesis() shouldBe 21
+    }
 
   it should "delete nothing on a datadir that holds no state, and be done again without harm" taggedAs UnitTest in {
     val source = EphemDataSource()
