@@ -2538,7 +2538,7 @@ items:
       by: dev-node
       agent: main
       since: 2026-11-12T20:33:40Z
-      heartbeat: 2026-11-12T20:57:06Z
+      heartbeat: 2026-11-12T21:38:03Z
       branch: fix/tui-key-test-pace
     notes: |-
       'should run the quit hook off the updater thread on q' failed at TuiUpdaterSpec.scala:84: tt.press then one tick whose key read waits only the 20 ms test pace; JLine's input pump can take longer on a loaded runner, so the read expires and tick returns true. Same pattern at :101 and :117.
