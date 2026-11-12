@@ -260,20 +260,22 @@ class TestService(
   def mineBlocks(
       request: MineBlocksRequest
   ): ServiceResponse[MineBlocksResponse] =
+    // Deferred: each block is built on the head as it is when its turn comes. Read when this is defined, the head is
+    // read once for the whole request, and `test_mineBlocks(n)` mined one block and n - 1 siblings of it.
     def mineBlock(): IO[Unit] =
-      getBlockForMining(
-        blockchainReader.getBestBlock.getOrElse(throw new IllegalStateException("No best block found"))
-      )
-        .flatMap { blockForMining =>
-          testModeComponentsProvider
-            .getConsensus(preimageCache)
-            .evaluateBranchBlock(blockForMining.block)
-        }
-        .map { res =>
-          log.info("Block mining result: " + res)
-          pendingTransactionsManager ! PendingTransactionsManager.ClearPendingTransactions
-          blockTimestamp += 1
-        }
+      IO.defer(
+        getBlockForMining(
+          blockchainReader.getBestBlock.getOrElse(throw new IllegalStateException("No best block found"))
+        )
+      ).flatMap { blockForMining =>
+        testModeComponentsProvider
+          .getConsensus(preimageCache)
+          .evaluateBranchBlock(blockForMining.block)
+      }.map { res =>
+        log.info("Block mining result: " + res)
+        pendingTransactionsManager ! PendingTransactionsManager.ClearPendingTransactions
+        blockTimestamp += 1
+      }
 
     def doNTimesF(n: Int)(fn: IO[Unit]): IO[Unit] = fn.flatMap { _ =>
       if n <= 1 then IO.unit
