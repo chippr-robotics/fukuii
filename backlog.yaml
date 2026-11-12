@@ -2713,3 +2713,14 @@ items:
     links:
       spec: 018
     notes: "EthTxService :328 :463 :498, PersonalService :335, McpTools :330, McpResources :299, GraphQL sendRawTransaction, PendingTransactionsManager :500 read the best block's state with no ReadScope, so a block that the disk moved past between the lookup and the read is answered as not held. A read of the anchor takes no leave: wrapping them in StateRead.scoped serves that race from the records. Found by conduit, C4a part 4b-2"
+  - id: B-239
+    title: executableAtParent reads the parent through the proposer's door once forward layers return (C4d)
+    priority: P2
+    status: open
+    area: consensus
+    size: S
+    opened: 2026-11-12
+    refs: []
+    links:
+      spec: 018
+    notes: EngineApiService.executableAtParent reads accountAt(parent), which is the anchor-chain seam and refuses a forward-layer parent, while proposerStateOn serves one. No node flow makes a layer today. Route it through the proposer's door with C4d; also refuse layers before building an index in viewBehind. Found by beacon, C4a part 4b-2
