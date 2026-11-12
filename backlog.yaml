@@ -2625,3 +2625,14 @@ items:
     links:
       spec: specs/028-builtin-ephemery-hoodi
       branch: feat/028-s1-hoodi
+  - id: B-232
+    title: "028 S2: Ephemery release rules in Scala; ephemery-fetch --from-dir; fetch-genesis.sh delegates"
+    priority: P2
+    status: open
+    area: ops
+    size: L
+    opened: 2026-11-12
+    refs: [B-227]
+    links:
+      spec: specs/028-builtin-ephemery-hoodi
+      branch: feat/028-s2-release-lib
