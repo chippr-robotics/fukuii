@@ -1809,6 +1809,130 @@ that replaces and remakes a trie, and the promotion after a move back named as C
 caught; nine were not at first and each got a case. Two change nothing that can be seen: a layer of a block behind
 the anchor (it is dropped when that block becomes the anchor), and a window of another anchor (there is never one).
 
+### C4a part 3: the bounds (2026-11-12)
+
+What the overlay keeps, and what goes when it is full (data-model 6.4). Tasks T124 and T132, and the rest of T129.
+Still storage and its spec: nothing in the node keeps a layer until part 4.
+
+- **The forward layers no branch pins are bounded** in number (`state.overlay.max-forward-layers`, 32), in bytes
+  together (half of `state.overlay.max-bytes`, 128 MiB) and in bytes each (`max-layer-bytes`, 64 MiB). A layer's
+  bytes are what `ForwardLayer.bytes` counts: its nodes, their keys, and an overhead for each entry.
+- **One more than fits evicts layers to make room.** Only a **tip** goes, a layer no kept layer stands on: an inner
+  layer would take every state above it with it. Never a pinned layer, and never one the new layer stands on. The
+  eviction is worked out first and done only if the layer then fits: nothing goes for a layer that is not kept in
+  the end.
+- **Which tip goes first**: a fork whose fork point is the oldest block the records still lead back to (the first
+  the anchor's moving on would take away in any case); then the layer least recently **used**; between layers used
+  alike a fork's before one on the anchor's chain, and then the lower block. A use is an execution staged through
+  the layer (`stage`, `stageOf`), a layer kept on it, and a delivery again. **A reader's view is no use**
+  (`readOnly`, `throwaway`): a caller of `eth_call` does not decide what a node keeps.
+- **A block that is not kept is answered with an outcome, and not a fault**: `OverlayOutcome.NotKept(TooLarge |
+  NoRoom)`, beside `Kept`, `AlreadyApplied` and `BehindTheAnchor`. Nothing is wrong with the block; its state is to
+  be had by executing it again. `Kept` is as of now: the next layer can evict it.
+- **A branch under execution is pinned** (`PathStateStorage.withPinnedBranch(name)(pin => ...)`, and
+  `commitOverlay(staged, block, Some(pin))`). Its layers are kept whatever the bounds of the others are, are never
+  evicted, and are bounded together in bytes across every pinned branch (`pinned-max-bytes`, 256 MiB), each layer
+  once whoever holds it. A pin takes hold of the kept layers its blocks stand on, and of a layer that is there
+  already. A branch that would not fit is refused with `BranchTooLarge`, a fault to try again after and never a
+  verdict on a block, and nothing of that block is kept or pinned.
+- **A pin is released however the execution ends**, under the lock. Nothing is evicted by a release: the bounds
+  apply to what the branch held from the next layer that is kept, pinned or not, and what it held counts as used at
+  the release. So a caller that adopts a branch promotes it first and releases after. Between a release and the
+  next layer that is kept, the layers no branch pins can be over their bounds by what the branch held. A branch is
+  not pinned by the holder of the state lock, which the release needs.
+- **The reverse indexes that are kept** are bounded together in bytes (the other half of `max-bytes`); one that is
+  by itself more than that is built for its view and not kept.
+- **Metrics** (data-model 11): `db.state.overlay.forward.layers` and `.bytes`, `.pinned.layers` and `.bytes`,
+  `.reverse.resident` and `.bytes`, `.evictions` (each eviction told once, from a count the overlay hands over),
+  and `db.state.view.retries` and `.stale` for the views that were made again or could not be made.
+- **A reverse index is kept with the epoch it was built at**, and given only to a view of that epoch: one built
+  across a move of the disk is never met again, also when a head move (C4b) brings the anchor back to a block it
+  has been at (beacon).
+
+**Not as the data-model has it, and why.**
+
+- *"One layer above `max-layer-bytes` is committed in place if it extends the anchor"* (6.4): a layer is kept or not
+  kept, and the store does not commit a block nobody adopted. A caller that adopts the block commits it in place
+  from what it staged, whatever its size; part 4 does that.
+- *`resident-reverse-blocks`* is not read: whole indexes are kept, by the anchor and the block they lead back to,
+  and not decoded records. The key stays in the configuration until the measurements say what the pool should be.
+- *Pinned layers are exempt from the bound of one layer too*: a branch is as large as its blocks are, and
+  `pinned-max-bytes` is its bound. (ETC: a block's layer does not grow with a storage trie it destroys, part 1.)
+- *An evicted layer that a view still holds is not counted.* A view holds its layers; it ends with its caller or
+  with `max-view-age-moves`.
+- *A pin does not keep a layer nothing leads to.* When the anchor moves and no chain leads to a pinned layer any
+  more, it goes like any other: a pin holds a branch against the bounds, not a state that cannot be reached.
+- `db.state.move.seconds` comes with the head move (C4b). A read that goes stale after its view was made is counted
+  by what catches it, which comes with the callers (part 4).
+- **T126 and T131 do not apply as the code stands**: the position store is given no decoded-node cache
+  (`PathStagedBlock.prefetchReader` passes none, and `PathMptStorage` has none). They stay open, with what they ask:
+  when a cache is put in front of the position store, the in-place commit evicts the hashes of the nodes it
+  replaces or removes, after its write.
+
+**For part 4** (from the consults before code, and the reads after): "kept" is a snapshot, so a caller asks for a
+view and executes again when there is none; the candidates for the head are the pinned chains and the last
+`forkchoiceUpdated` target; a branch is rebuilt from the stored side blocks and executed again when its layers
+went. What each answer of the store means to a caller (beacon, forge): `Kept`, `AlreadyApplied` and
+`BehindTheAnchor` are a block that was executed and is valid; **`NotKept` is that too**, with its state to be had
+again by execution, and its header, body and weight are stored all the same; a parent's state that is not held
+(`StateUnavailable` when an execution is staged or kept) is answered by executing the ancestors again from their
+stored bodies, or by SYNCING or ACCEPTED, and on a proof-of-work chain by leaving the block queued. **None of these
+is an invalid block, a penalty for a peer, or an entry in a cache of bad blocks.** Side blocks and payloads are
+handled one at a time with the execution of a branch, so that nothing evicts the layers a branch is about to take
+hold of. Blocks of the head's own chain are committed in place or pinned, and never left to the layers no branch
+pins. To count there: blocks not kept, by reason; branches refused; blocks executed again because their state had
+gone; the lag of the anchor behind the head.
+
+**Two questions part 4 cannot be designed without, and they are the user's** (forge, beacon; raised 2026-11-12).
+
+1. *A branch that is heavier and holds more than `pinned-max-bytes`.* `BranchTooLarge` is the same answer however
+   often the branch is tried: as built, such a branch is never adopted, and on a proof-of-work chain a node that
+   cannot adopt the heaviest chain has left it. Forge's estimate of what 256 MiB holds: some 85 full blocks at
+   today's 8M gas, some 20 at 60M, and the deep reorganisations ETC has seen were of thousands of blocks. The
+   data-model records a fallback and does not make it the default (6.4, "reverse-then-commit with rollback from
+   records", pending M10 and M13). The choices: (a) that fallback, as the rule when the cap is hit: the executed
+   prefix is promoted block by block, and the disk is moved back by the records if a later block is invalid or the
+   branch turns out lighter; (b) pinned layers that spill to a scratch column family, so that a branch is bounded by
+   disk and the head is not moved before the branch has won; (c) the cap as the limit, raised by an operator.
+2. *More than 32 payloads in a row ahead of a `forkchoiceUpdated`.* A pin lasts for one call, so the payloads a
+   consensus client sends ahead of its choice are layers no branch pins: the 33rd on one chain finds no room (every
+   kept layer is under it), and the 34th finds its parent's state not held. That is answered correctly by execution
+   again at the `forkchoiceUpdated`, at a cost. The choices: the bound as it is; a higher bound for a chain that
+   follows a consensus client (geth keeps 128 layers); or a pin that outlives a call, held for "payloads awaiting a
+   choice" and bounded like a branch.
+
+**Two reads after code (beacon, forge: each APPROVE WITH CHANGES; nothing blocks this part).** Found sound: nothing
+that is not pinned can evict or block a pinned branch; a refusal with `BranchTooLarge` pins and keeps nothing; a
+view made while tips are evicted is refused or right, never wrong (only tips go, a layer's content never changes,
+and a child is registered under the lock that evicts); dropping a pinned layer nothing leads to. Taken: a branch is
+not pinned under the state lock, and a failed release does not hide the execution's failure; a pinned layer that is
+kept holds the others to their bounds; evictions told once each; an index kept with its epoch; a bound of one layer
+above the bound of all refused when the store is made; the comments of the overlay's keys. Left, and said: a use is
+marked with one write and no lock, so two at once can leave the older stamp (the order of eviction bends, nothing
+else); a branch whose execution failed counts as used when it is released like one that was not adopted (forge
+would not stamp it); a legitimate ETC block at a 60M gas target can be above 64 MiB and is then `NotKept` unless a
+branch pins it, which is why `NotKept` is never a verdict.
+
+**Tests.** `OverlayBudgetSpec` (16 cases; every block changes one account, so a bound in bytes is a count of
+layers): the count bound, with the one layer that could go being the one the new layer stands on; nothing going for
+a block that finds no room in the end, where some layers could have gone; a refused branch taking hold of nothing;
+a branch refused a pin under the state lock; what an earlier branch left held to the bounds by the next; a view of an
+evicted layer that goes on reading, and the block kept again when it is executed again; the order of use (a
+reader's view, an execution staged, a delivery again, a layer kept on one); the bytes together and each, to the
+byte; a pinned branch of six beside a bound of two, others coming and going beside it, and the bounds applied after
+the release; `BranchTooLarge` at one layer more than fits, with nothing kept of it; a pin taking hold of the layers
+under its block, two pins on one layer counted once; the release when the execution throws, and a branch promoted
+before it is released; a fork at the floor going first though it was last used; the order between layers used
+alike; what the observer is told, and the views made again and given up; the index pool. `StateMetricsSpec` and
+`StateConfigSpec` hold the metrics and the settings the configuration gives.
+
+**The mutation run**: 54 mutants over the bounds, the eviction and its order, the pins, the release, the pool of
+indexes, what the observer is told and the settings. 53 are caught. Two were not at first, and each got a case: a
+layer kept on a layer being a use of it (an execution is staged through the layer first, which is a use already, so
+the case stages on another layer in between), and a released branch counting as used (the same layers were left
+whichever went first, so the case evicts one layer and no more). One changes nothing a test of one thread can see:
+an index given to a view of a later epoch, which is there for a builder that crosses a move of the disk.
+
 ### Destructive change (C8a and C8b): the vault protocol blocks
 
 ```
