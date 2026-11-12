@@ -22,7 +22,7 @@ Read `../CONVENTIONS.md` first. Almost every config change needs a restart → �
 ## Config model
 - HOCON, layered: base fragments in `src/main/resources/conf/base/*.conf`
   (`network.conf`, `sync.conf`, `mining.conf`, `db.conf`, …) composed per network
-  (`etc.conf`, `mordor.conf`, `sepolia.conf`, …). Operators override via their own
+  (`etc.conf`, `mordor.conf`, `sepolia.conf`, `hoodi.conf`, …). Operators override via their own
   `conf/fukuii.conf` and `-Dconfig.file=`.
 - Templates worth reading: `conf/enterprise-template.conf`,
   `src/universal/custom-config-example.conf`.

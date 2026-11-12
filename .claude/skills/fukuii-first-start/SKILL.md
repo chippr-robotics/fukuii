@@ -4,7 +4,7 @@ description: >-
   Bring up a brand-new Fukuii node end to end — pick the network, generate the
   node key, set the datadir and config, start the node, and confirm it discovers
   peers and begins syncing. Use when bootstrapping a fresh node, onboarding a new
-  host, or setting up ETC/Mordor/Sepolia for the first time. For ETH/Sepolia
+  host, or setting up ETC/Mordor/Sepolia/Hoodi for the first time. For ETH/Sepolia
   nodes a Consensus Layer client must also be running and connected to the Engine
   API before the EL will sync. Generating keys and starting the node are
   security-sensitive/irreversible actions under the guarded-write protocol.

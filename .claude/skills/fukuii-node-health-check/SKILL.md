@@ -24,7 +24,7 @@ This skill is **read-only** — no guarded writes. `admin_peers`/`admin_datadir`
 - As the first step when a vaguer problem is reported, to localize it.
 
 ## Inputs to gather first
-Network (`etc`/`mordor`/`sepolia`/…), RPC host/port, datadir. See CONVENTIONS §1.
+Network (`etc`/`mordor`/`sepolia`/`hoodi`/…), RPC host/port, datadir. See CONVENTIONS §1.
 
 ## Procedure (all 🟢 read-only)
 1. **Liveness / identity** — `web3_clientVersion`, `net_version`,
