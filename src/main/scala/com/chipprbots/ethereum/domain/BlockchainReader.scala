@@ -109,7 +109,7 @@ class BlockchainReader(
           // the disk may move between the lookup and the view: a state that is no longer held is not served
           try
             Some(
-              if block == held then state.readOnly(held) else state.readOnlyBehind(block, PathStateStorage.Reader.Peer)
+              if block == held then state.readOnly(held) else state.readOnlyForPeer(block)
             )
           catch case _: StateFault => None
         }

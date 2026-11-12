@@ -213,7 +213,8 @@ class RpcReadersBehindHeadSpec extends ScalaTestWithActorTestKit with AnyFlatSpe
       node.blockchainReader,
       node.mining,
       node.stxLedger,
-      node.storagesInstance.storages.transactionMappingStorage
+      node.storagesInstance.storages.transactionMappingStorage,
+      chainConfig = node.blockchainConfig
     )
 
   private def traces(node: RpcCompatNode): TraceService =
@@ -222,7 +223,8 @@ class RpcReadersBehindHeadSpec extends ScalaTestWithActorTestKit with AnyFlatSpe
       node.blockchainReader,
       node.mining,
       node.stxLedger,
-      node.storagesInstance.storages.transactionMappingStorage
+      node.storagesInstance.storages.transactionMappingStorage,
+      chainConfig = node.blockchainConfig
     )
 
   private lazy val traced: Seq[Block] = RpcCompatNode.blocks.filter(_.body.transactionList.nonEmpty).takeRight(6)
@@ -278,48 +280,81 @@ class RpcReadersBehindHeadSpec extends ScalaTestWithActorTestKit with AnyFlatSpe
       replayed shouldBe 12
     }
 
-  // The tracing services read the chain rules of the node's own configuration and not this test chain's, so on this
-  // chain they recover no sender and trace no transaction: what holds a replay to the hash store is the two cases
-  // above, at the ledger. What is held here is that the services answer on the unified layout what they answer on the
-  // hash store, about blocks behind the head and about a range longer than the reads that may be in flight, and hold
-  // nothing when they have answered.
-  it should "answer the tracing services' requests about blocks behind the head as the hash store does" taggedAs
+  it should "trace a block, a transaction and a range of blocks through the tracing services as the hash store does" taggedAs
     UnitTest in {
+      var transactionsTraced = 0
       traced.foreach { block =>
         val at = BlockParam.WithNumber(block.header.number.value)
         withClue(s"block ${block.header.number.value}: ") {
           val ofBlock = debug(onPositions).traceBlockByNumber(TraceBlockByNumberRequest(at)).unsafeRunSync()
           ofBlock shouldBe debug(onHashes).traceBlockByNumber(TraceBlockByNumberRequest(at)).unsafeRunSync()
-          ofBlock.isRight shouldBe true
+          ofBlock.map(_.results.size) shouldBe Right(block.body.transactionList.size)
+          transactionsTraced += block.body.transactionList.size
           val hash = block.body.transactionList.head.hash.value
-          debug(onPositions).traceTransaction(TraceTransactionRequest(hash)).unsafeRunSync() shouldBe
-            debug(onHashes).traceTransaction(TraceTransactionRequest(hash)).unsafeRunSync()
-          traces(onPositions).traceBlock(TraceBlockRequest(at)).unsafeRunSync() shouldBe
-            traces(onHashes).traceBlock(TraceBlockRequest(at)).unsafeRunSync()
+          val ofTransaction = debug(onPositions).traceTransaction(TraceTransactionRequest(hash)).unsafeRunSync()
+          ofTransaction shouldBe debug(onHashes).traceTransaction(TraceTransactionRequest(hash)).unsafeRunSync()
+          ofTransaction.isRight shouldBe true
+          val flat = traces(onPositions).traceBlock(TraceBlockRequest(at)).unsafeRunSync()
+          flat shouldBe traces(onHashes).traceBlock(TraceBlockRequest(at)).unsafeRunSync()
+          flat.map(_.traces.nonEmpty) shouldBe Right(true)
         }
       }
+      transactionsTraced should be > 0
+      state.readsBehindInFlight shouldBe 0
+
+      // A range of more blocks than may be read behind the head at once, with transactions in them: each block is
+      // traced on its parent's state, which is held for that block alone. So the range is answered, and nothing is held
+      // when it is.
       val to = head.header.number.value
       val (from, until) = (BlockParam.WithNumber(to - 12), BlockParam.WithNumber(to))
       val range = debug(onPositions).traceChainBlockRange(from, until, TraceConfig()).unsafeRunSync()
       range shouldBe debug(onHashes).traceChainBlockRange(from, until, TraceConfig()).unsafeRunSync()
       range.map(_.size) shouldBe Right(12)
+      // more than four of the twelve have transactions: one scope for the range would have been refused its fifth
+      range.map(_.count(_.traces.nonEmpty)).getOrElse(0) should be > 4
       val filtered = traces(onPositions).traceFilter(TraceFilterRequest(from, until)).unsafeRunSync()
       filtered shouldBe traces(onHashes).traceFilter(TraceFilterRequest(from, until)).unsafeRunSync()
-      filtered.isRight shouldBe true
+      filtered.map(_.traces.nonEmpty) shouldBe Right(true)
       state.readsBehindInFlight shouldBe 0
     }
 
-  it should "be refused the fifth block of one scope, and told to ask again: a range reads its blocks one at a time" taggedAs
+  private def graphql(node: RpcCompatNode, query: String): io.circe.Json =
+    node.graphQL.execute(query, None, None).unsafeRunSync()._2
+
+  it should "answer GraphQL's account fields, call and estimateGas as the hash store does" taggedAs UnitTest in {
+    val slot = "0x" + "0" * 64
+    var answered = 0
+    behind.take(3).foreach { number =>
+      accounts.take(12).foreach { address =>
+        val query =
+          s"""{ block(number: $number) {
+             |  account(address: "$address") { balance transactionCount code storage(slot: "$slot") }
+             |  estimateGas(data: {to: "$address"})
+             |  call(data: {to: "$address"}) { data gasUsed status }
+             |} }""".stripMargin
+        withClue(s"block $number, $address: ") {
+          val fromPositions = graphql(onPositions, query)
+          fromPositions shouldBe graphql(onHashes, query)
+          if fromPositions.hcursor.downField("errors").failed then answered += 1
+        }
+      }
+    }
+    answered should be > 0
+    state.readsBehindInFlight shouldBe 0
+  }
+
+  it should "be refused the fifth block of one scope, for good: a range reads its blocks one at a time" taggedAs
     UnitTest in {
       val headers =
         (1 to 5).map(back => onHashes.blockchainReader.getBlockHeaderByNumber(head.header.number.value - back).get)
       StateRead.scoped {
         headers.take(4).foreach(onPositions.blockchainReader.stateAt)
         state.readsBehindInFlight shouldBe 4
-        (the[StateUnavailable] thrownBy onPositions.blockchainReader.stateAt(headers(4))).askAgain shouldBe true
+        // the scope holds every leave itself: asking again would not help it
+        (the[StateUnavailable] thrownBy onPositions.blockchainReader.stateAt(headers(4))).askAgain shouldBe false
       }
       state.readsBehindInFlight shouldBe 0
-      // over RPC that is an error that says to ask again, and no execution error
+      // a scope of its own reads that block
       StateRead.at(onPositions.blockchainReader, headers(4))(_ => ()) shouldBe Right(())
       // and a caller in no scope reads the head and no other block
       a[StateUnavailable] should be thrownBy onPositions.blockchainReader.stateAt(headers.head)

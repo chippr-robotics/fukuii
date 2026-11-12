@@ -67,7 +67,8 @@ object StateRead extends Logger:
   /** `body`, as one scope of reads of the state: what it is handed of a block behind the head is counted while it runs
     * and given back when it returns or throws. Everything that reads through a state taken inside `body` must be done
     * before it returns, on the calling thread: a world kept for a later stage of an `IO` reads through a state the node
-    * no longer counts.
+    * no longer counts. And a scope keeps no more than one world of a block within reach at a time: what it took before
+    * is let go before it takes the same block's state again, as a replay does for each transaction.
     */
   def scoped[A](body: => A): A = ReadScope.run(body)
 
@@ -94,6 +95,12 @@ object StateRead extends Logger:
     * [[JsonRpcError.StateMoved]]). None of them is the execution error a client takes for a revert. The backstop of the
     * controllers answers a [[StateFault]] that escapes a method with these too.
     */
+  /** Whether `error` is one of the three answers of [[unavailable]]: for a caller that gives a default for any other
+    * error of a method, and must not give it for a state that could not be read.
+    */
+  def isStateError(error: JsonRpcError): Boolean =
+    error == JsonRpcError.StateNotHeld || error == JsonRpcError.StateBusy || error == JsonRpcError.StateMoved
+
   def unavailable(fault: StateFault, attempts: Int = 1): JsonRpcError =
     // the client is told which of the three; why is said here
     log.debug(s"A read of the state is answered as unavailable after $attempts attempt(s): ${fault.getMessage}")

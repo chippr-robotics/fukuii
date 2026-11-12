@@ -9,9 +9,9 @@ import com.chipprbots.ethereum.crypto.kec256
 import com.chipprbots.ethereum.db.storage.MptStorage
 import com.chipprbots.ethereum.db.storage.pathstate.CanonicalChainOnPositions
 import com.chipprbots.ethereum.db.storage.pathstate.PathStateStorage.CommitSettings
-import com.chipprbots.ethereum.db.storage.pathstate.PathStateStorage.Reader
 import com.chipprbots.ethereum.db.storage.pathstate.PathStateTestKit.*
 import com.chipprbots.ethereum.db.storage.pathstate.PositionKey
+import com.chipprbots.ethereum.db.storage.pathstate.ReadScope
 import com.chipprbots.ethereum.db.storage.pathstate.RecordReads
 import com.chipprbots.ethereum.db.storage.pathstate.RetentionPolicy
 import com.chipprbots.ethereum.db.storage.pathstate.StaleStateViewException
@@ -103,7 +103,7 @@ class ServedRootWindowSpec extends AnyFlatSpec with Matchers:
       chain.headers.takeRight(4).foreach(served(chain, _))
       newer shouldBe chain.headers(chain.headers.size - 4)
       // so the root the two share is served, at the newer: the older is one record too far
-      a[StateFault] should be thrownBy chain.state.readOnlyBehind(chain.refOf(older), Reader.Peer)
+      a[StateFault] should be thrownBy chain.state.readOnlyForPeer(chain.refOf(older))
       served(chain, older)
       // and what is behind it is not
       chain.headers.take(3).foreach(header => notServed(chain, header.stateRoot.value))
@@ -175,11 +175,11 @@ class ServedRootWindowSpec extends AnyFlatSpec with Matchers:
       // two callers of the JSON-RPC are making the states of two old blocks, and stand in their reads
       val callers = new RecordReads.Stopped(source, "a caller", threads = 2)
       val calls = Seq(2, 3).map { n =>
-        RecordReads.onThread(s"a caller of block $n")(chain.state.readOnlyBehind(chain.refOf(at(n)), Reader.Rpc))
+        RecordReads.onThread(s"a caller of block $n")(ReadScope.run(chain.state.readOnlyInScope(chain.refOf(at(n)))))
       }
       callers.allStopped()
       // a third caller is told to ask again, and a peer is served
-      a[StateFault] should be thrownBy chain.state.readOnlyBehind(chain.refOf(at(4)), Reader.Rpc)
+      a[StateFault] should be thrownBy ReadScope.run(chain.state.readOnlyInScope(chain.refOf(at(4))))
       served(chain, at(5))
       callers.over()
       calls.foreach(_.ended.isSuccess shouldBe true)
@@ -192,7 +192,7 @@ class ServedRootWindowSpec extends AnyFlatSpec with Matchers:
       }
       peers.allStopped()
       notServed(chain, at(4).stateRoot.value)
-      reads(chain, chain.state.readOnlyBehind(chain.refOf(at(4)), Reader.Rpc), at(4).stateRoot.value)
+      ReadScope.run(reads(chain, chain.state.readOnlyInScope(chain.refOf(at(4))), at(4).stateRoot.value))
       peers.over()
       asked.foreach(_.ended.get shouldBe defined)
       served(chain, at(4))

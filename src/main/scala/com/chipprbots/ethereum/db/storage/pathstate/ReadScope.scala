@@ -12,6 +12,11 @@ import scala.collection.mutable
   * inside [[run]], and when `run` returns it holds nothing any more. That is what lets the store count the reads behind
   * the head that are in flight, and refuse one more ([[PathStateStorage.readOnlyInScope]]).
   *
+  * '''A scope keeps no more than one world of a block within reach at a time.''' It is counted once for a block however
+  * often it takes that block's state, and each taking is a state made anew when the disk has moved: a caller that kept
+  * every world it built would hold as many as it took under one count. A replay takes its block's state for each
+  * transaction and lets the last one go, which is what the count assumes.
+  *
   * The scope is the calling thread's. Everything that reads through what was handed out inside `run` must be done
   * before `run` returns, on that thread: a world or a storage that is kept for later, or handed to another thread,
   * reads through a state the store no longer counts. A caller that reads outside any scope is given the state of the
@@ -26,6 +31,9 @@ object ReadScope:
     /** Whether this scope holds a leave of `pool` for `block`: the one it has, or one `acquire` gives it now. `acquire`
       * returns how the leave is given back, or `None` when there is none to have.
       */
+    /** How many leaves of `pool` this scope holds. */
+    private[pathstate] def holds(pool: AnyRef): Int = held.keysIterator.count(_._1 eq pool)
+
     private[pathstate] def leave(pool: AnyRef, block: ByteString)(acquire: => Option[() => Unit]): Boolean =
       held.contains((pool, block)) || acquire.exists { giveBack =>
         held.update((pool, block), giveBack)
@@ -53,10 +61,21 @@ object ReadScope:
     else
       val scope = new Scope
       current.set(scope)
+      var failed: Option[Throwable] = None
       try body
+      catch
+        case e: Throwable =>
+          failed = Some(e)
+          throw e
       finally
         current.remove()
-        scope.end()
+        // what the body threw is what the caller is told: a failure to give back goes with it
+        try scope.end()
+        catch
+          case e: Throwable =>
+            failed match
+              case Some(first) => first.addSuppressed(e)
+              case None        => throw e
 
   /** The scope the calling thread reads in, if it is in one. */
   private[pathstate] def ambient: Option[Scope] = Option(current.get)

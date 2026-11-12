@@ -2102,6 +2102,63 @@ with the keeps; indexes of a past epoch dropped; the tests told apart from an ac
 who waits, in place of a thread's state). Recorded for 4b-2: the bound on reads in flight. Not tested, because
 nothing stops a thread there: a caller that waited on a reader that was refused asks again.
 
+### C4a part 4b-2: the JSON-RPC reads a block behind the head (2026-11-12)
+
+The readers behind the JSON-RPC and GraphQL now read the state of a canonical block behind the head, within the
+reach of the changeset records, and the reads behind the head that are in flight are counted and bounded. With the
+guard off nothing changes.
+
+- **A read behind the head is made in a scope** (`ReadScope`, the calling thread's). What is made of the records
+  for such a state lives as long as anything reads through it, and nothing in a storage says when its reader is
+  done; so the reader says it. `BlockchainReader.stateAt` and `scratchStateAt` hand out the state of the block the
+  disk holds to any caller, as ever, and the state of a block behind it only to a caller inside a scope
+  (`PathStateStorage.readOnlyInScope`, `throwawayInScope`). **A caller in no scope reads the head and no other
+  block**: that is every caller that was not looked at for this slice, and the node's own (the transaction pool,
+  the Engine API's `executableAtParent`, the exporter, test mode, the MCP tools, `personal_`).
+- **Four reads behind the head in flight, and a fifth is refused** (`maxReadsBehindHead`, a constant until M5): a
+  scope is counted once for each block it reads behind the head, at the view's own look at the block the disk
+  holds and before a record is read for it, and counted no more when it ends. A refusal and not a queue, as for
+  the builds: the caller is told at once and bears the retry, and nothing a caller asks for is waited for by
+  anyone else. With part 4b-1 this bounds what readers hold: the kept indexes within their pool, two builds per
+  kind of reader, and four reads in flight of at most `maxReverseIndexBytes` each. (This closes what part 4b-1
+  left open.)
+- **Anchor chain only.** A scoped read is of the block the disk holds or of a block behind it on its own chain,
+  never of an executed block kept beside it, whether it is named by number or by hash. Reads of such a block by
+  its hash, with EIP-1898's `requireCanonical` and `BLOCKHASH` by the block's own ancestry, are C4d's.
+- **Where the scope is.** `StateRead.at`, `scratchAt`, `retrying` and `attempting` run each attempt in one
+  (`eth_getBalance`, `getTransactionCount`, `getCode`, `getStorageAt`, `getProof`). A method that executes on a
+  state wraps the synchronous body in which it takes the state and reads through it (`StateRead.reading`):
+  `eth_call`, `estimateGas`, `createAccessList`, `simulateV1`, the `debug_trace*` and `trace_*` methods. **A range
+  takes one scope for each block** (`debug_traceChain`, `trace_filter`): a block's state is held for that block
+  alone, so a range of any length holds one read at a time. GraphQL's `code`, `storage`, `balance` and nonce
+  fields read through `StateRead.attempting`, which also gives them the retry on a state that moved.
+- **Three errors, none of them an execution error** (code 3 is what a client takes for a revert): a state that is
+  not held is `-32000 missing trie node: the state of that block is not held` (go-ethereum's words for a pruned
+  state); one that is not handed out right now is `-32005 ... ask again`; one that moved under every view of it is
+  `-32005 ... ask again`. They were all the error for a missing state node. Only under the guard: no `StateFault`
+  is thrown with it off.
+
+**Tests.** `ReadScopeSpec` (8): the head with no scope and no count; behind with no scope refused at no cost;
+counted once a block while the scope lasts; given back on an exception and with the outer scope; a third reader
+of two refused before a record is walked, a peer and an execution not; counted when the disk moves on under a
+scope; a scratch execution behind the head writes nothing; a scope is its thread's. `RpcReadersBehindHeadSpec`
+(10): **the rpc-compat chain imported on the unified layout from its genesis**, and every reader asked about the
+blocks 1, 2, 8, 20 and 40 behind its head and compared, as JSON, with a node that imported the same chain on the
+hash store: balance, nonce, code and storage of every genesis account; `eth_getProof` by number and by hash;
+`eth_call`, `estimateGas` and `createAccessList`; the replay of a block's transactions on its parent's state, the
+head's too; a range of twelve blocks one scope a block; the fifth block of one scope refused; `eth_simulateV1` on
+a block behind. `StateReadRetrySpec`: the three errors, the scope of a read and of a method's body, and that no
+later stage of the `IO` is in it.
+
+**Not held to the hash store by a transaction, and said so in the spec**: the tracing services read the chain
+rules of the node's configuration and not the test chain's, so on that chain they trace no transaction. Their
+replay is held at the ledger, and the services are held to answer alike and to hold nothing after. A fixture on
+the node's own chain is a follow-up (backlog).
+
+**The mutation run**: @@MUTATION2@@
+
+**Reads after code**: @@READS2@@
+
 ### Destructive change (C8a and C8b): the vault protocol blocks
 
 ```

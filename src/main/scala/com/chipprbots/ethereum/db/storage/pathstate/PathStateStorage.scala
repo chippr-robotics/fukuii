@@ -370,7 +370,14 @@ final class PathStateStorage(
     * @throws IllegalStateException
     *   when the calling thread holds the state lock
     */
-  def readOnlyBehind(block: BlockRef, reader: Reader): MptStorage = PathMptStorage.readOnly(viewBehind(block, reader))
+  private[pathstate] def readOnlyBehind(block: BlockRef, reader: Reader): MptStorage =
+    PathMptStorage.readOnly(viewBehind(block, reader))
+
+  /** [[readOnlyBehind]] for a peer that is served a state by its root: one request at a time, each done with its state
+    * before the next is taken, so that what peers hold is one state. Whoever reads otherwise reads in a scope
+    * ([[readOnlyInScope]]), where what is in flight is counted: this door counts nothing.
+    */
+  def readOnlyForPeer(block: BlockRef): MptStorage = readOnlyBehind(block, Reader.Peer)
 
   /** [[readOnlyBehind]] for an execution that commits nothing (`eth_call`, a simulation, a trace at a block of the
     * chain): what it persists is kept beside the view, read back by that execution, and dropped with the storage.
@@ -381,7 +388,7 @@ final class PathStateStorage(
     * @throws IllegalStateException
     *   when the calling thread holds the state lock
     */
-  def throwawayBehind(block: BlockRef, reader: Reader): MptStorage =
+  private[pathstate] def throwawayBehind(block: BlockRef, reader: Reader): MptStorage =
     PathMptStorage.throwaway(viewBehind(block, reader))
 
   /** How many reads of a state behind the anchor callers of the JSON-RPC may have in flight. */
@@ -423,6 +430,13 @@ final class PathStateStorage(
         }
         if !has then
           told("a read behind the head that was refused")(settings.observer.readRefused())
+          // A scope that holds every leave itself is not helped by asking again: it reads more blocks behind the
+          // head at once than anyone may.
+          if scope.holds(this) >= settings.maxReadsBehindHead then
+            throw new StateUnavailable(
+              s"the state of block ${block.show} is not read: one request reads the states of more than " +
+                s"${settings.maxReadsBehindHead} blocks behind the head at once"
+            )
           throw new StateUnavailable(
             s"the state of block ${block.show} is not available right now: as many states behind the head as may " +
               "be read at once are being read. Ask again",

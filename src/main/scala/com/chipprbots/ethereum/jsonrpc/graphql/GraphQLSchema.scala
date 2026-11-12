@@ -2,6 +2,7 @@ package com.chipprbots.ethereum.jsonrpc.graphql
 
 import org.apache.pekko.util.ByteString
 
+import cats.effect.IO
 import cats.effect.unsafe.IORuntime
 
 import scala.concurrent.Future
@@ -472,6 +473,17 @@ object GraphQLSchema:
     * other way), run again on a fresh state when the state moved under it, and, when it cannot be read, an error of the
     * field in the words a JSON-RPC caller is told. Everything that reads through the state is done inside it.
     */
+  /** A field that executes on a block's state through a service (`call`, `estimateGas`): run again from the start when
+    * the state moved under it, and, when the state cannot be read, an error of the field in the words a JSON-RPC caller
+    * is told. Never the value a field gives for an error of the call itself: a gas estimate of 0 for a state that was
+    * not read would be a wrong answer.
+    */
+  private def executing[A](run: IO[Either[JsonRpcError, A]]): IO[Either[JsonRpcError, A]] =
+    StateRead.request(run).flatMap {
+      case Left(error) if StateRead.isStateError(error) => IO.raiseError(GraphQLUserError(error.message))
+      case answered                                     => IO.pure(answered)
+    }
+
   private def stateRead[A](read: => A): A =
     StateRead.attempting(read).fold(error => throw GraphQLUserError(error.message), identity)
 
@@ -822,8 +834,8 @@ object GraphQLSchema:
           resolve = c =>
             val callTx = toTxArgs(c.arg(CallDataArg))
             val req = EthInfoService.CallRequest(callTx, BlockParam.WithNumber(c.value.number))
-            val io = c.ctx.ethInfoService.callOutcome(req)
-            val estGasIo = c.ctx.ethInfoService.estimateGas(req)
+            val io = executing(c.ctx.ethInfoService.callOutcome(req))
+            val estGasIo = executing(c.ctx.ethInfoService.estimateGas(req))
             val fut: Future[Option[GCallResult]] = (for
               callE <- io
               gasE <- estGasIo
@@ -837,8 +849,7 @@ object GraphQLSchema:
           resolve = c =>
             val callTx = toTxArgs(c.arg(CallDataArg))
             val req = EthInfoService.CallRequest(callTx, BlockParam.WithNumber(c.value.number))
-            c.ctx.ethInfoService
-              .estimateGas(req)
+            executing(c.ctx.ethInfoService.estimateGas(req))
               .map {
                 case Right(r) => r.gas.toLong
                 case Left(_)  => 0L
@@ -908,8 +919,8 @@ object GraphQLSchema:
             val callTx = toTxArgs(c.arg(CallDataArg))
             val req = EthInfoService.CallRequest(callTx, BlockParam.Pending)
             val fut = (for
-              callE <- c.ctx.ethInfoService.callOutcome(req)
-              gasE <- c.ctx.ethInfoService.estimateGas(req)
+              callE <- executing(c.ctx.ethInfoService.callOutcome(req))
+              gasE <- executing(c.ctx.ethInfoService.estimateGas(req))
             yield callResult(callE, gasE)).unsafeToFuture()
             fut
         ),
@@ -920,8 +931,7 @@ object GraphQLSchema:
           resolve = c =>
             val callTx = toTxArgs(c.arg(CallDataArg))
             val req = EthInfoService.CallRequest(callTx, BlockParam.Pending)
-            c.ctx.ethInfoService
-              .estimateGas(req)
+            executing(c.ctx.ethInfoService.estimateGas(req))
               .map {
                 case Right(r) => r.gas.toLong
                 case Left(_)  => 0L

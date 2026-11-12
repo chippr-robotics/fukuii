@@ -118,12 +118,14 @@ class DebugTracingService(
     stxLedger: StxLedger,
     transactionMappingStorage: TransactionMappingStorage,
     // go-ethereum --rpc.gascap, as for eth_call (TraceCall runs CallDefaults with the backend's RPCGasCap)
-    gasCap: BigInt = CallTxBuilder.DefaultGasCap
+    gasCap: BigInt = CallTxBuilder.DefaultGasCap,
+    // the rules of the chain the blocks are replayed under: the node's, unless a caller serves another chain
+    chainConfig: BlockchainConfig = Config.blockchains.blockchainConfig
 ) extends ResolveBlock:
 
   import DebugTracingService.*
 
-  implicit private val blockchainConfig: BlockchainConfig = Config.blockchains.blockchainConfig
+  implicit private val blockchainConfig: BlockchainConfig = chainConfig
 
   /** Implements debug_traceTransaction.
     *

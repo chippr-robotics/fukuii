@@ -4,6 +4,8 @@ import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
 
+import org.apache.pekko.util.ByteString
+
 import org.scalatest.flatspec.AnyFlatSpec
 import org.scalatest.matchers.should.Matchers
 
@@ -23,12 +25,15 @@ class ReadScopeSpec extends AnyFlatSpec with Matchers with LayerChains:
   import PathStateTestKit.*
   import RecordReads.onThread
 
-  final private class Rig(blocks: Int = 8, reads: Int = 2):
+  final private class Rig(blocks: Int = 8, reads: Int = 2, hops: Int = 1024):
     val source = new RecordReads.Watched
     val refused = new AtomicInteger(0)
+    val built = new AtomicInteger(0)
     private val observer = new CommitObserver:
       override def readRefused(): Unit = refused.incrementAndGet()
-    val chain = new Chain(CommitSettings(observer = observer, maxReadsBehindHead = reads), source = source)
+      override def indexBuilt(bytes: Long): Unit = built.incrementAndGet()
+    val chain =
+      new Chain(CommitSettings(observer = observer, maxReadsBehindHead = reads, maxReverseHops = hops), source = source)
     val refs: Vector[BlockRef] = (1 to blocks).foldLeft(Vector(chain.first)) { (done, n) =>
       val next = chain.on(done.last)(slots(alice, n -> (n + 1), (n + 40) -> n), account(dave, n, n))
       next.inPlace()
@@ -210,8 +215,103 @@ class ReadScopeSpec extends AnyFlatSpec with Matchers with LayerChains:
     ReadScope.run {
       state.readOnlyInScope(refs(3))
       val other = onThread("another thread") {
-        (ReadScope.isOpen, scala.util.Try(state.readOnlyInScope(refs(3))).isFailure)
+        val refusal = the[StateUnavailable] thrownBy state.readOnlyInScope(refs(3))
+        (ReadScope.isOpen, refusal.askAgain)
       }
-      other.ended.get shouldBe (false, true)
+      other.ended.get shouldBe (false, false)
     }
   }
+
+  it should "be counted once for a block it reads again after the disk moved on, though the state is made anew" taggedAs
+    (UnitTest, ConsensusTest) in {
+      val rig = new Rig
+      import rig.*
+      ReadScope.run {
+        chain.readThrough(state.readOnlyInScope(refs(3)), refs(3))
+        (inFlight, built.get) shouldBe (1, 1)
+        chain.on(head)(slots(alice, 3 -> 0)).inPlace()
+        // the same block, from another block on disk: another index, and the same count. What the scope took before
+        // is the caller's to let go.
+        chain.readThrough(state.readOnlyInScope(refs(3)), refs(3))
+        (inFlight, built.get) shouldBe (1, 2)
+      }
+      inFlight shouldBe 0
+    }
+
+  it should "stay counted for a block whose state turned out not to be held, until it ends" taggedAs UnitTest in {
+    // a view reaches three blocks behind the disk
+    val rig = new Rig(hops = 3, reads = 4)
+    import rig.*
+    val (edge, past) = (refs(refs.size - 4), refs(refs.size - 5))
+    ReadScope.run {
+      chain.readThrough(state.readOnlyInScope(edge), edge)
+      inFlight shouldBe 1
+      val refusal = the[StateUnavailable] thrownBy state.readOnlyInScope(past)
+      // not held: asking again changes nothing
+      refusal.askAgain shouldBe false
+      a[StateUnavailable] should be thrownBy state.throwawayInScope(past)
+      inFlight shouldBe 2
+    }
+    inFlight shouldBe 0
+    refused.get shouldBe 0
+  }
+
+  it should "refuse itself one block more than may be read at once, for good and not to be asked again" taggedAs
+    (UnitTest, ConsensusTest) in {
+      val rig = new Rig(reads = 2)
+      import rig.*
+      ReadScope.run {
+        state.readOnlyInScope(refs(2))
+        state.readOnlyInScope(refs(3))
+        val refusal = the[StateUnavailable] thrownBy state.readOnlyInScope(refs(4))
+        refusal.askAgain shouldBe false
+        refusal.getMessage should include("more than 2 blocks")
+        // the blocks it has are its own still
+        chain.readThrough(state.readOnlyInScope(refs(3)), refs(3))
+      }
+      refused.get shouldBe 1
+      inFlight shouldBe 0
+    }
+
+  it should "keep its count across a read that is run again inside it because the state moved" taggedAs UnitTest in {
+    import com.chipprbots.ethereum.jsonrpc.StateRead
+    val rig = new Rig
+    import rig.*
+    var runs = 0
+    ReadScope.run {
+      StateRead.attempting {
+        val storage = state.readOnlyInScope(refs(3))
+        runs += 1
+        if runs < 3 then throw new StaleStateViewException(refs(3), 0L, 2L, "the disk moved on")
+        chain.readThrough(storage, refs(3))
+      } shouldBe Right(())
+      // the attempts were part of this scope: one count, held still
+      inFlight shouldBe 1
+    }
+    runs shouldBe 3
+    inFlight shouldBe 0
+  }
+
+  "What a scope holds" should "all be given back when one giving back fails, and the read's own failure is the one told" taggedAs
+    UnitTest in {
+      val pool = new Object
+      var givenBack = 0
+      def taking(): Unit =
+        val scope = ReadScope.ambient.get
+        scope.leave(pool, ByteString(1))(Some(() => throw new IllegalStateException("not given back"))) shouldBe true
+        scope.leave(pool, ByteString(2))(Some(() => givenBack += 1)) shouldBe true
+        scope.holds(pool) shouldBe 2
+        scope.holds(new Object) shouldBe 0
+      // the body ends well: the failure to give back is what the caller is told
+      an[IllegalStateException] should be thrownBy ReadScope.run(taking())
+      givenBack shouldBe 1
+      ReadScope.isOpen shouldBe false
+      // the body fails: its failure is told, and the other goes with it
+      val failure = the[IllegalArgumentException] thrownBy ReadScope.run {
+        taking()
+        throw new IllegalArgumentException("the read failed")
+      }
+      failure.getSuppressed.map(_.getMessage).toSeq shouldBe Seq("not given back")
+      givenBack shouldBe 2
+      ReadScope.isOpen shouldBe false
+    }
