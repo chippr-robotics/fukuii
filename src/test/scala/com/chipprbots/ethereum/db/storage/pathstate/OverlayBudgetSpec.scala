@@ -104,9 +104,10 @@ class OverlayBudgetSpec extends AnyFlatSpec with Matchers with LayerChains:
       gone(chain)(y.ref)
       held(chain)(w.ref, v.ref, u.ref)
 
-      // A layer is kept on v, and taken away again (w goes for it): v was in use then, after u was. So u goes before
-      // v, though v was made first.
+      // A block is executed on v, and then one is staged on u; the block on v is kept (w goes for it), and taken away
+      // again. v was in use when a layer was kept on it, after u was: so u goes before v, though u was staged on last.
       val onV = chain.on(v.ref)(one(7))
+      chain.state.stage(u.ref)
       onV.layered()
       gone(chain)(w.ref)
       chain.state.dropLayer(onV.ref.hash)
@@ -202,6 +203,25 @@ class OverlayBudgetSpec extends AnyFlatSpec with Matchers with LayerChains:
       held(chain)(branch.head, u4.ref)
       chain.state.overlayUsage shouldBe OverlayUsage(layers = 2, bytes = 2 * size, 0, 0L, evictions = 9)
     }
+
+  it should "count as used when it is released: what was kept beside it meanwhile goes before it" taggedAs UnitTest in {
+    val chain = new Chain(CommitSettings(maxForwardLayers = 3))
+    val (b1, b2, beside) = chain.state.withPinnedBranch("a branch") { pin =>
+      val b1 = chain.on(chain.first)(one(1))
+      keptWith(chain, pin)(b1)
+      val b2 = chain.on(b1.ref)(one(2))
+      keptWith(chain, pin)(b2)
+      // kept after the branch's blocks were, and held by nothing
+      val beside = chain.on(chain.first)(one(3))
+      beside.layered()
+      (b1.ref, b2.ref, beside.ref)
+    }
+    // three, which may be kept. One more: the block beside the branch, and not the branch's tip
+    val next = chain.on(chain.first)(one(4))
+    next.layered()
+    gone(chain)(beside)
+    held(chain)(b1, b2, next.ref)
+  }
 
   it should "be refused, as a fault to try again after, when the pinned layers would hold more than they may" taggedAs
     UnitTest in {
