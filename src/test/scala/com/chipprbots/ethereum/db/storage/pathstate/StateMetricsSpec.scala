@@ -95,6 +95,16 @@ class StateMetricsSpec extends AnyFlatSpec with Matchers:
       StateMetrics.viewRetried()
       StateMetrics.viewStale()
       (counter("db.state.view.retries"), counter("db.state.view.stale")) shouldBe (retries + 2, stale + 1)
+
+      val built = registry.get(s"$prefix.db.state.overlay.reverse.build.bytes").summary()
+      val (builds, bytesBuilt, refused) =
+        (counter("db.state.overlay.reverse.builds"), built.totalAmount(), counter("db.state.overlay.reverse.refused"))
+      StateMetrics.indexBuilt(300L)
+      StateMetrics.indexBuilt(200L)
+      StateMetrics.indexRefused()
+      counter("db.state.overlay.reverse.builds") shouldBe builds + 2
+      built.totalAmount() shouldBe bytesBuilt + 500
+      counter("db.state.overlay.reverse.refused") shouldBe refused + 1
     }
 
   it should "time the wait for the state lock" taggedAs UnitTest in {

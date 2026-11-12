@@ -22,6 +22,9 @@ import com.chipprbots.ethereum.metrics.MetricsContainer
   *   - `db.state.overlay.forward.layers`, `.bytes`: the executed blocks kept beside the disk that no branch pins, and
   *     what they hold; `db.state.overlay.pinned.layers`, `.bytes`: those a branch under execution holds;
   *   - `db.state.overlay.reverse.resident`, `.bytes`: the reverse indexes that are kept, and what they hold;
+  *     `db.state.overlay.reverse.builds`, `.build.bytes`: indexes that were built because a state behind the head, or
+  *     on a fork, was asked for and none was kept; `db.state.overlay.reverse.refused`: readers told to ask again
+  *     because as many indexes as readers may build at once were being built;
   *   - `db.state.overlay.evictions`: executed blocks that were evicted to make room, and are executed again if their
   *     state is needed;
   *   - `db.state.view.retries`, `db.state.view.stale`: views that were made again because the disk moved meanwhile, and
@@ -59,6 +62,9 @@ object StateMetrics extends MetricsContainer with PathStateStorage.CommitObserve
   metrics.gauge("db.state.overlay.reverse.resident", () => overlayNow.get.reverseIndexes.toDouble)
   metrics.gauge("db.state.overlay.reverse.bytes", () => overlayNow.get.reverseBytes.toDouble)
   private val overlayEvictions = metrics.counter("db.state.overlay.evictions")
+  private val indexBuilds = metrics.counter("db.state.overlay.reverse.builds")
+  private val indexBuildBytes = metrics.distribution("db.state.overlay.reverse.build.bytes")
+  private val indexRefusals = metrics.counter("db.state.overlay.reverse.refused")
   private val viewRetries = metrics.counter("db.state.view.retries")
   private val viewsStale = metrics.counter("db.state.view.stale")
 
@@ -67,6 +73,12 @@ object StateMetrics extends MetricsContainer with PathStateStorage.CommitObserve
   override def overlay(usage: OverlayUsage): Unit = overlayNow.set(usage)
 
   override def evicted(layers: Long): Unit = overlayEvictions.increment(layers.toDouble)
+
+  override def indexBuilt(bytes: Long): Unit =
+    indexBuilds.increment()
+    indexBuildBytes.record(bytes.toDouble)
+
+  override def indexRefused(): Unit = indexRefusals.increment()
 
   override def viewRetried(): Unit = viewRetries.increment()
 
