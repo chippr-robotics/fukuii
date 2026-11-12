@@ -712,7 +712,8 @@ refused, because refusing a shallow fork on length would escalate to a re-SNAP (
 - *PoW, heavier by weight* (`selectedByWeight`): keeps execute-first, so `REORG-PARTIAL` (an executed prefix that does not
   outweigh the head) leaves the old head untouched. It uses pinned layers. If M10 and M13 show real ETC branches above the
   pinned cap, the fallback is **reverse-then-commit with rollback from records** (the old branch's records make the move back
-  cheap), recorded here and not the default.
+  cheap), recorded here and not the default. **Decided 2026-11-12 (user): it is the rule when the pinned cap is hit**,
+  with the disk moved back by the records if the branch then fails; it lands with the head move (`plan.md`, "C4a part 3").
 - *PoS designated-head arm* (`!selectedByWeight`, `ConsensusImpl.scala:453-460`): this arm already moves best to the last
   executed block whatever happens, so it does **no overlay stack at all**: one reverse move to the fork point, then a
   canonical commit block by block. No N-layer pin, no N-block batch (beacon, S0 item 3g).

@@ -1883,23 +1883,32 @@ hold of. Blocks of the head's own chain are committed in place or pinned, and ne
 pins. To count there: blocks not kept, by reason; branches refused; blocks executed again because their state had
 gone; the lag of the anchor behind the head.
 
-**Two questions part 4 cannot be designed without, and they are the user's** (forge, beacon; raised 2026-11-12).
+**Two decisions part 4 could not be designed without** (raised by forge and beacon; **decided by the user,
+2026-11-12**).
 
 1. *A branch that is heavier and holds more than `pinned-max-bytes`.* `BranchTooLarge` is the same answer however
-   often the branch is tried: as built, such a branch is never adopted, and on a proof-of-work chain a node that
-   cannot adopt the heaviest chain has left it. Forge's estimate of what 256 MiB holds: some 85 full blocks at
-   today's 8M gas, some 20 at 60M, and the deep reorganisations ETC has seen were of thousands of blocks. The
-   data-model records a fallback and does not make it the default (6.4, "reverse-then-commit with rollback from
-   records", pending M10 and M13). The choices: (a) that fallback, as the rule when the cap is hit: the executed
-   prefix is promoted block by block, and the disk is moved back by the records if a later block is invalid or the
-   branch turns out lighter; (b) pinned layers that spill to a scratch column family, so that a branch is bounded by
-   disk and the head is not moved before the branch has won; (c) the cap as the limit, raised by an operator.
+   often the branch is tried: left as the last word, such a branch is never adopted, and on a proof-of-work chain a
+   node that cannot adopt the heaviest chain has left it. Forge's estimate of what 256 MiB holds: some 85 full
+   blocks at today's 8M gas, some 20 at 60M, and the deep reorganisations ETC has seen were of thousands of blocks.
+   **Decided: reverse-then-commit, as the rule when the cap is hit** (the fallback data-model 6.4 records). The
+   branch is executed under a pin as far as the cap allows; when the cap is hit, the disk is moved to the fork
+   point by the records, the executed prefix is promoted block by block, and the rest of the branch is executed
+   and committed in place on it. If a later block is invalid, or the branch turns out not to outweigh the head it
+   left, the disk is moved back by the records of the blocks it committed and the old branch is committed again
+   from its stored blocks. Not chosen: pinned layers spilled to a scratch column family; the cap as the limit.
+   What this asks of the slices: the head move is C4b's, so the fallback lands with it, and until then a branch
+   above the cap is deferred and never judged; the move back after a failed adoption is in the crash matrix (a
+   crash between the move to the fork point and the last commit leaves a head the node must be able to explain
+   from its records and stored blocks); only a branch whose headers prove more weight than the head starts it,
+   so what it costs to make a node do this is the work of that branch.
 2. *More than 32 payloads in a row ahead of a `forkchoiceUpdated`.* A pin lasts for one call, so the payloads a
    consensus client sends ahead of its choice are layers no branch pins: the 33rd on one chain finds no room (every
-   kept layer is under it), and the 34th finds its parent's state not held. That is answered correctly by execution
-   again at the `forkchoiceUpdated`, at a cost. The choices: the bound as it is; a higher bound for a chain that
-   follows a consensus client (geth keeps 128 layers); or a pin that outlives a call, held for "payloads awaiting a
-   choice" and bounded like a branch.
+   kept layer is under it), and the 34th finds its parent's state not held. **Decided: the bounds stay as they
+   are, and the cost is execution again**: at the `forkchoiceUpdated`, the blocks of the chosen chain whose state
+   is not held are executed again from their stored bodies, in order, and committed. Not chosen: a higher bound
+   for a chain that follows a consensus client; a pin that outlives a call. To look at again with M1's bytes per
+   block on Sepolia and Platåberget: the bound of 128 MiB on the layers' bytes would bind before a higher count of
+   layers did.
 
 **Two reads after code (beacon, forge: each APPROVE WITH CHANGES; nothing blocks this part).** Found sound: nothing
 that is not pinned can evict or block a pinned branch; a refusal with `BranchTooLarge` pins and keeps nothing; a
