@@ -57,7 +57,7 @@ class GenesisDataLoader(
 
   private val bloomLength = 512
   private val hashLength = 64
-  private val addressLength = 40
+  private val addressLength = GenesisDataLoader.AddressLength
 
   import Account.*
 
@@ -382,6 +382,9 @@ object GenesisDataLoader:
             "directory, and start again."
         )
       case _ => None
+
+  /** The hex digits of an address, as an allocation's key is padded to. */
+  val AddressLength: Int = 40
 
   /** What a genesis may not have on the unified layout; `None` when it has none of it.
     *

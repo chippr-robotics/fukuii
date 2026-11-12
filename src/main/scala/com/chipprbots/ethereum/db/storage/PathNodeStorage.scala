@@ -276,6 +276,35 @@ class PathNodeStorage(val dataSource: DataSource):
       ByteString(1.toByte) ++ o ++ ByteString(encodePath(nibbles))
     )
 
+  /** The removal of every row of both column families, by its key, for one batch; `None` when they hold more than
+    * `maxRows` rows, which is no state to delete this way. For the destruction of a small state as a whole (test mode's
+    * new genesis): a range delete is not part of a batch, and would leave a moment with the rows gone and the anchor
+    * still there.
+    */
+  def removalOfEveryRow(maxRows: Long): Option[Seq[DataSourceUpdateOptimized]] =
+    val accounts = keysOf(acctNs, maxRows + 1)
+    val storage = keysOf(storageNs, maxRows + 1 - accounts.size)
+    Option.when(accounts.size.toLong + storage.size <= maxRows)(
+      Seq(acctNs -> accounts, storageNs -> storage).collect {
+        case (namespace, keys) if keys.nonEmpty => DataSourceUpdateOptimized(namespace, toRemove = keys, toUpsert = Nil)
+      }
+    )
+
+  /** The first `limit` keys of a column family, bare (see [[foreachChunk]] on the namespace byte). */
+  private def keysOf(ns: IndexedSeq[Byte], limit: Long): Vector[Array[Byte]] =
+    import cats.effect.unsafe.implicits.global
+    val strip = if dataSource.isInstanceOf[com.chipprbots.ethereum.db.dataSource.EphemDataSource] then ns.length else 0
+    dataSource
+      .iterate(ns)
+      .take(limit.max(0L))
+      .map {
+        case Right((key, _)) => key.drop(strip)
+        case Left(err)       => throw new IllegalStateException("Path node iteration failed", err.ex)
+      }
+      .compile
+      .toVector
+      .unsafeRunSync()
+
   private def hasAnyEntry(ns: IndexedSeq[Byte]): Boolean =
     import cats.effect.unsafe.implicits.global
     dataSource.iterate(ns).take(1).compile.last.unsafeRunSync().isDefined

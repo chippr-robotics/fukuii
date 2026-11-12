@@ -39,10 +39,14 @@ class TestModeBlockExecution(
       isProposer: Boolean = false,
       staged: Option[StagedBlockState] = None
   )(implicit blockchainConfig: BlockchainConfig): InMemoryWorldStateProxy =
-    val _ = isProposer // see BlockExecution.buildInitialWorld: read-only did not hold invariants
+    // As BlockExecution.buildInitialWorld: a staged block's storage; else, for a block that is being built on the
+    // unified state layout, the parent's state under a layer of the build's own; else the hash store.
     TestModeWorldStateProxy(
       evmCodeStorage = evmCodeStorage,
-      nodesKeyValueStorage = staged.fold(blockchain.getBackingMptStorage(block.header.number.value))(_.storage),
+      nodesKeyValueStorage = staged
+        .map(_.storage)
+        .orElse(if isProposer then blockchainReader.proposerStateOn(parentHeader) else None)
+        .getOrElse(blockchain.getBackingMptStorage(block.header.number.value)),
       getBlockHashByNumber = AncestorBlockHashes.forBlock(block.header, blockchainReader),
       accountStartNonce = blockchainConfig.accountStartNonce,
       stateRootHash = parentHeader.stateRoot.value,

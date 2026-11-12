@@ -40,11 +40,11 @@ import com.chipprbots.ethereum.domain.BlockchainReader
 import com.chipprbots.ethereum.domain.BlockchainWriter
 import com.chipprbots.ethereum.domain.UInt256
 import com.chipprbots.ethereum.jsonrpc.JsonMethodsImplicits.*
-import com.chipprbots.ethereum.nodebuilder.TestNode
 import com.chipprbots.ethereum.rlp
 import com.chipprbots.ethereum.rlp.RLPList
 import com.chipprbots.ethereum.testmode.SealEngineType
 import com.chipprbots.ethereum.testmode.TestModeComponentsProvider
+import com.chipprbots.ethereum.testmode.TestModeNode
 import com.chipprbots.ethereum.transactions.PendingTransactionsManager
 import com.chipprbots.ethereum.transactions.PendingTransactionsManager.GetPendingTransactionsReq
 import com.chipprbots.ethereum.transactions.PendingTransactionsManager.PendingTransactionsResponse
@@ -137,6 +137,27 @@ object TestService:
   case class GetLogHashRequest(transactionHash: ByteString)
   case class GetLogHashResponse(logHash: ByteString)
 
+  /** What a request that needs the state of a block other than the head is answered with on the unified state layout,
+    * before its overlay (spec 018 C4a): a reorganisation to a branch that outweighs the head, above all.
+    */
+  val HeadStateOnly: String =
+    "the unified state layout (fukuii.state.path-live) holds the state of its head alone until its overlay, and " +
+      "this needs the state of another block"
+
+  /** What `test_setChainParams` is answered with there when a write of it failed. */
+  val ChainNotSet: String = "the chain was not set"
+
+  /** What a rewind to a block between the genesis and the head is answered with there (spec 018 C4b). */
+  val RewindBelowTheHead: String =
+    "the unified state layout (fukuii.state.path-live) holds the state of the head alone until its head can move " +
+      "back, so it rewinds to the genesis only"
+
+  /** A block that was mined on the unified state layout and was not made the head. */
+  final class NotImportedToTheHead(result: BlockImportResult)
+      extends RuntimeException(
+        s"the block that was mined was not imported as the head on the unified state layout: $result"
+      )
+
 class TestService(
     blockchain: BlockchainImpl,
     blockchainReader: BlockchainReader,
@@ -147,7 +168,7 @@ class TestService(
     miningConfig: MiningConfig,
     testModeComponentsProvider: TestModeComponentsProvider,
     transactionMappingStorage: TransactionMappingStorage,
-    node: TestNode,
+    node: TestModeNode,
     scheduler: Scheduler
 )(implicit ioRuntime: IORuntime)
     extends Logger:
@@ -160,16 +181,13 @@ class TestService(
   private var accountHashWithAdresses: List[(ByteString, Address)] = List()
   private var blockTimestamp: Long = 0
 
+  /** The chain the last `test_setChainParams` set: what a rewind to the genesis sets again on the unified layout. */
+  private var genesisOfThisChain: Option[GenesisData] = None
+
   private val preimageCache: collection.concurrent.Map[ByteString, UInt256] =
     new collection.concurrent.TrieMap[ByteString, UInt256]()
 
   def setChainParams(request: SetChainParamsRequest): ServiceResponse[SetChainParamsResponse] =
-    node.currentBlockchainConfig.set(buildNewConfig(request.chainParams.blockchainParams))
-
-    // clear ledger's cache on test start
-    // setChainParams is expected to be the first remote call for each test
-    testModeComponentsProvider.clearState()
-
     val genesisData = GenesisData(
       nonce = request.chainParams.genesis.nonce,
       mixHash = Some(request.chainParams.genesis.mixHash),
@@ -183,6 +201,32 @@ class TestService(
       }
     )
 
+    refusalOnTheUnifiedLayout(genesisData) match
+      case Some(refusal) => IO.pure(Left(JsonRpcError.LogicError(refusal)))
+      case None          => setChain(request, genesisData)
+
+  /** What the unified state layout refuses of a chain before anything is changed, of the datadir or of this service: a
+    * genesis it cannot commit, and a state it would not destroy (a store that was not built for test mode, a state of
+    * more keys than one batch deletes). The blocks of the chain before go first, and they must not go from a datadir
+    * whose state stays. `None` on the hash store.
+    */
+  private def refusalOnTheUnifiedLayout(genesisData: GenesisData): Option[String] =
+    node.pathStateStorage.flatMap { pathState =>
+      GenesisDataLoader
+        .unifiedLayoutRefusal(genesisData, GenesisDataLoader.AddressLength)
+        .orElse(pathState.refusalToDestroyState())
+    }
+
+  private def setChain(
+      request: SetChainParamsRequest,
+      genesisData: GenesisData
+  ): ServiceResponse[SetChainParamsResponse] =
+    node.currentBlockchainConfig.set(buildNewConfig(request.chainParams.blockchainParams))
+
+    // clear ledger's cache on test start
+    // setChainParams is expected to be the first remote call for each test
+    testModeComponentsProvider.clearState()
+
     // set coinbase for blocks that will be tried to mine
     etherbase = Address(genesisData.coinbase)
 
@@ -190,25 +234,59 @@ class TestService(
 
     resetPreimages(genesisData)
 
-    // remove current genesis (Try because it may not exist)
-    Try(blockchain.removeBlock(blockchainReader.genesisHeader.hash))
+    setGenesis(genesisData) match
+      case Left(failed) =>
+        // no chain is set: there is none to rewind to
+        genesisOfThisChain = None
+        IO.pure(Left(failed))
+      case Right(()) =>
+        genesisOfThisChain = Some(genesisData)
+        accountHashWithAdresses = (etherbase.toUnprefixedString :: genesisData.alloc.keys.toList)
+          .map { hexAddress =>
+            val address = Address(hexAddress)
+            crypto.kec256(address.bytes) -> address
+          }
+          .sortBy(v => UInt256(v._1))
 
-    // load the new genesis
-    val genesisDataLoader = new GenesisDataLoader(blockchainReader, blockchainWriter, evmCodeStorage, stateStorage)
-    genesisDataLoader.loadGenesisData(genesisData)
+        SetChainParamsResponse().rightNow
 
-    // save account codes to world state
-    storeGenesisAccountCodes(genesisData.alloc)
-    storeGenesisAccountStorageData(genesisData.alloc)
+  /** Makes `genesisData` the genesis of this datadir, in place of whatever chain the test before left on it. */
+  private def setGenesis(genesisData: GenesisData): Either[JsonRpcError, Unit] =
+    node.pathStateStorage match
+      case None =>
+        // remove current genesis (Try because it may not exist)
+        Try(blockchain.removeBlock(blockchainReader.genesisHeader.hash))
 
-    accountHashWithAdresses = (etherbase.toUnprefixedString :: genesisData.alloc.keys.toList)
-      .map { hexAddress =>
-        val address = Address(hexAddress)
-        crypto.kec256(address.bytes) -> address
-      }
-      .sortBy(v => UInt256(v._1))
+        // load the new genesis
+        val genesisDataLoader = new GenesisDataLoader(blockchainReader, blockchainWriter, evmCodeStorage, stateStorage)
+        genesisDataLoader.loadGenesisData(genesisData)
 
-    SetChainParamsResponse().rightNow
+        // save account codes to world state
+        storeGenesisAccountCodes(genesisData.alloc)
+        storeGenesisAccountStorageData(genesisData.alloc)
+        Right(())
+
+      case Some(pathState) =>
+        // The unified state layout (spec 018 Track C, C3c). A genesis is committed there only to a datadir that holds
+        // no state, so the chain the test before left is taken away first, and in this order: the blocks go, from the
+        // head down, so that no number is left naming a block of the old chain; then the state; then the node's own
+        // loader commits the new genesis. The blocks before the state: a genesis block with no layout stamp beside it
+        // is what a datadir of the other layout looks like. What the layout refuses was refused before this
+        // (`refusalOnTheUnifiedLayout`); what fails here is a write, and it is answered as an error, with a datadir
+        // that holds no chain or the state of the old one and none of its blocks. Setting a chain again mends either.
+        Try {
+          (blockchainReader.getBestBlockNumber to BigInt(0) by -1).foreach { number =>
+            blockchainReader.getBlockHeaderByNumber(number).foreach(header => blockchain.removeBlock(header.hash))
+          }
+          pathState.destroyStateForNewGenesis()
+          // Code is kept by its hash on both layouts, and the loader stores it. The storage tries are rows the genesis
+          // commit writes: nothing of them goes to the hash store.
+          node.genesisDataLoader.loadGenesisData(genesisData)
+        }.flatten match
+          case Failure(failed) =>
+            log.error("Test mode on the unified state layout: the chain was not set", failed)
+            Left(JsonRpcError.LogicError(s"${TestService.ChainNotSet}: ${failed.getMessage}"))
+          case Success(()) => Right(())
 
   val neverOccurringBlock: Int = Int.MaxValue
 
@@ -260,27 +338,37 @@ class TestService(
   def mineBlocks(
       request: MineBlocksRequest
   ): ServiceResponse[MineBlocksResponse] =
+    // Deferred: each block is built on the head as it is when its turn comes. Read when this is defined, the head is
+    // read once for the whole request, and `test_mineBlocks(n)` mined one block and n - 1 siblings of it.
     def mineBlock(): IO[Unit] =
-      getBlockForMining(
-        blockchainReader.getBestBlock.getOrElse(throw new IllegalStateException("No best block found"))
-      )
-        .flatMap { blockForMining =>
-          testModeComponentsProvider
-            .getConsensus(preimageCache)
-            .evaluateBranchBlock(blockForMining.block)
-        }
-        .map { res =>
-          log.info("Block mining result: " + res)
-          pendingTransactionsManager ! PendingTransactionsManager.ClearPendingTransactions
-          blockTimestamp += 1
-        }
+      IO.defer(
+        getBlockForMining(
+          blockchainReader.getBestBlock.getOrElse(throw new IllegalStateException("No best block found"))
+        )
+      ).flatMap { blockForMining =>
+        testModeComponentsProvider
+          .getConsensus(preimageCache)
+          .evaluateBranchBlock(blockForMining.block)
+      }.map { res =>
+        log.info("Block mining result: " + res)
+        pendingTransactionsManager ! PendingTransactionsManager.ClearPendingTransactions
+        blockTimestamp += 1
+        // On the unified state layout a block that is mined is committed with its state as the head, or it is not
+        // there at all: an answer that says it was mined when it was only queued would be found out a call later.
+        res match
+          case _: BlockImportedToTop                       => ()
+          case other if blockchainReader.holdsStateInPlace => throw new TestService.NotImportedToTheHead(other)
+          case _                                           => ()
+      }
 
     def doNTimesF(n: Int)(fn: IO[Unit]): IO[Unit] = fn.flatMap { _ =>
       if n <= 1 then IO.unit
       else doNTimesF(n - 1)(fn)
     }
 
-    doNTimesF(request.num)(mineBlock()).as(Right(MineBlocksResponse()))
+    doNTimesF(request.num)(mineBlock())
+      .as[Either[JsonRpcError, MineBlocksResponse]](Right(MineBlocksResponse()))
+      .recover(notOnTheUnifiedLayout)
 
   def modifyTimestamp(
       request: ModifyTimestampRequest
@@ -289,6 +377,30 @@ class TestService(
     ModifyTimestampResponse().rightNow
 
   def rewindToBlock(request: RewindToBlockRequest): ServiceResponse[RewindToBlockResponse] =
+    if blockchainReader.holdsStateInPlace then rewindInPlace(request.blockNum) else rewindOnTheHashStore(request)
+
+  /** A rewind on the unified state layout, before its head can move back along the changeset records (spec 018 C4b).
+    *
+    * The state on disk is the head's, and the state of a block below it is held nowhere. So a rewind to the head or
+    * above it removes no block, as on the hash store; a rewind to the genesis sets the chain's genesis again, which is
+    * the same block and the same state; and a rewind to a block between them is refused, before anything is removed and
+    * before the pending transactions are. The blocks in the queue stay, as they do on the hash store.
+    */
+  private def rewindInPlace(blockNum: Long): ServiceResponse[RewindToBlockResponse] =
+    if blockchainReader.getBestBlockNumber <= blockNum then
+      pendingTransactionsManager ! PendingTransactionsManager.ClearPendingTransactions
+      RewindToBlockResponse().rightNow
+    else if blockNum > 0 then IO.pure(Left(JsonRpcError.LogicError(TestService.RewindBelowTheHead)))
+    else
+      genesisOfThisChain match
+        case None => IO.pure(Left(JsonRpcError.LogicError("no chain was set: test_setChainParams comes first")))
+        case Some(genesisData) =>
+          pendingTransactionsManager ! PendingTransactionsManager.ClearPendingTransactions
+          setGenesis(genesisData) match
+            case Left(refused) => IO.pure(Left(refused))
+            case Right(())     => RewindToBlockResponse().rightNow
+
+  private def rewindOnTheHashStore(request: RewindToBlockRequest): ServiceResponse[RewindToBlockResponse] =
     pendingTransactionsManager ! PendingTransactionsManager.ClearPendingTransactions
     (blockchainReader.getBestBlockNumber until request.blockNum by -1).foreach { n =>
       blockchainReader.getBlockHeaderByNumber(n).foreach { header =>
@@ -308,6 +420,21 @@ class TestService(
           .getConsensus(preimageCache)
           .evaluateBranchBlock(value)
           .flatMap(handleResult(value))
+          .recover(notOnTheUnifiedLayout)
+
+  /** What the unified state layout cannot do before its overlay, said as that and not as a fault of the block: the
+    * state of a block that is not the one held was asked for, and refused before anything was written (a branch that
+    * outweighs the head reaches a reorganisation; a block is to be mined on a head whose state is not the one the disk
+    * holds; a range of the state of a block below the head is read); and a mined block that was not made the head.
+    * Never met on the hash store.
+    */
+  private def notOnTheUnifiedLayout[A]: PartialFunction[Throwable, Either[JsonRpcError, A]] =
+    case fault: com.chipprbots.ethereum.db.storage.pathstate.StateUnavailable if blockchainReader.holdsStateInPlace =>
+      log.warn("Test mode on the unified state layout: {}", fault.getMessage)
+      Left(JsonRpcError.LogicError(s"${TestService.HeadStateOnly} (${fault.getMessage})"))
+    case notImported: TestService.NotImportedToTheHead =>
+      log.warn("Test mode on the unified state layout: {}", notImported.getMessage)
+      Left(JsonRpcError.LogicError(notImported.getMessage))
 
   private def handleResult(
       block: Block
@@ -367,6 +494,16 @@ class TestService(
     *   https://github.com/ethereum/retesteth/wiki/RPC-Methods#debug_accountrange
     */
   def getAccountsInRange(request: AccountsInRangeRequest): ServiceResponse[AccountsInRangeResponse] =
+    ofAStateHeld(accountsInRange(request))
+
+  /** `answer`, which reads the state of a block. On the unified state layout that is the head's alone before the
+    * overlay: for another block the read is refused as it starts, and the refusal is answered as that. On the hash
+    * store `answer` is what it was.
+    */
+  private def ofAStateHeld[A](answer: => ServiceResponse[A]): ServiceResponse[A] =
+    if blockchainReader.holdsStateInPlace then IO.defer(answer).recover(notOnTheUnifiedLayout) else answer
+
+  private def accountsInRange(request: AccountsInRangeRequest): ServiceResponse[AccountsInRangeResponse] =
     // This implementation works by keeping a list of know account from the genesis state
     // It might not cover all the cases as an account created inside a transaction won't be there.
 
@@ -407,6 +544,9 @@ class TestService(
     *   https://github.com/ethereum/retesteth/wiki/RPC-Methods#debug_storagerangeat
     */
   def storageRangeAt(request: StorageRangeRequest): ServiceResponse[StorageRangeResponse] =
+    ofAStateHeld(storageRange(request))
+
+  private def storageRange(request: StorageRangeRequest): ServiceResponse[StorageRangeResponse] =
 
     val blockOpt = request.parameters.blockHashOrNumber
       .fold(

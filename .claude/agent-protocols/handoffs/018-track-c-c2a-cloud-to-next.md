@@ -119,13 +119,17 @@ Read plan.md, "C2a part 1 record" and "C2a part 2 record", then:
   `prepareHeader`), the builder replay has a run on the unified layout that imports what it built, and
   `HarnessCanarySpec` holds that a replay on positions is on positions. A new harness on the unified layout ends on
   `EestBlockchainReplay.notOnPositions(env)`.
-- **C3c, what is left**: 3c, test mode (T108, the rest of T116: `TestService.setChainParams`'s second genesis,
-  `TestModeWorldStateProxy`'s resets, its refusal at start). `TestModeWorldStateProxy` has its own `deleteAccount` and no `initialiseAccount`: it
-  needs the world's `storageResets` (T108, forge). `TestService.setChainParams` loads a second genesis on a datadir
-  that has an anchor: it must build its loader with `GenesisDataLoader.over`, reset the state (rows, records, the
-  count, the anchor, the stamp, and the clock's anchor) in one synced batch before the load, stop writing codes and
-  storage to the hash store, and return the load's failure (plan.md, "For part 3", beacon and forge). The fixture
-  replay of T117 is also the first Amsterdam-at-genesis header on the unified layout.
+- **3c, test mode, is written** (plan.md, "C3c part 3c"): `test_setChainParams` removes the blocks of the chain
+  before from the head down, destroys its state (`PathStateStorage.destroyStateForNewGenesis`: one synced batch,
+  allowed only on a store built for a node in test mode) and commits the genesis through the node's loader; a
+  heavier branch and a rewind between the genesis and the head are answered with an error and write nothing; a
+  rewind to the genesis sets the chain again. A spec of test mode starts from `TestServiceOnPositionsSpec`'s `Rig`
+  (a `TestModeNode` in memory, on either layout). **Two faults of test mode were fixed on both layouts**: the world
+  stayed a test-mode world for the first transaction of a block alone (so `debug_storageRangeAt` missed later
+  slots), and `test_mineBlocks(n)` mined one block and n - 1 siblings.
+- **C3c is complete in its linear subset.** What it left is B-219 (mining: no route to import without network sync)
+  and B-220 (side blocks in the lenient import and in test mode, `test_rewindToBlock` below the head, the three
+  harnesses under `it/ethtest`, `newPayload` adopting nothing).
 - **C4a** brings back what C3b refuses: the overlay commit for a block that does not extend the anchor
   (`buildExtra(adopted)`, `NotExtendingAnchor`, `saveLastBlock` writing nothing), `StateView.ownerRows` over layers,
   `stateAvailable(hash)`, the served-root window, and SNAP advertised again. C4b: the head move, `ConsensusStateFault`

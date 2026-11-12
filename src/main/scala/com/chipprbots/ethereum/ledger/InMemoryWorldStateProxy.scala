@@ -376,7 +376,13 @@ class InMemoryWorldStateProxy(
     )
     createProxiedContractStorageTrie(contextStorage, storageRoot.value)
 
-  private def copyWith(
+  /** This world with some of what it holds replaced: what every mutator of the world is made of.
+    *
+    * Protected, and not private, so that a world of another class stays one of that class through its own changes and
+    * through [[InMemoryWorldStateProxy.persistState]]: the test-mode world overrides it. While it was private, the
+    * first persist of a test-mode world, which is after the first transaction of a block, made it a plain one.
+    */
+  protected def copyWith(
       stateStorage: MptStorage = stateStorage,
       accountsStateTrie: InMemorySimpleMapProxy[Address, Account, MerklePatriciaTrie[Address, Account]] =
         accountsStateTrie,

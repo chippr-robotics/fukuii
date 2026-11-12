@@ -72,6 +72,13 @@ class AppStateStorage(val dataSource: DataSource) extends TransactionalKeyValueS
     */
   def getChangesetPrunedTo(): Option[BigInt] = get(Keys.StateChangesetPrunedTo).map(BigInt(_))
 
+  /** The removal of everything that says this datadir holds a state on the unified layout: the anchor, the layout stamp
+    * and the count of pruned changeset records. It belongs in the batch that deletes every row and every record, and
+    * nowhere else: [[pathstate.PathStateStorage.destroyStateForNewGenesis]], which only test mode may call.
+    */
+  private[storage] def removeStateMarks(): DataSourceBatchUpdate =
+    update(Seq(Keys.StateAnchor, Keys.StateLayout, Keys.StateChangesetPrunedTo), Nil)
+
   /** The update that moves [[getChangesetPrunedTo]]. It belongs in the batch that deletes the records below it, which
     * is the canonical commit's.
     */

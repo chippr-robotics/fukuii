@@ -1521,6 +1521,95 @@ T109 and T117. `RpcCompatNode` needs no port: `ImportOnPositionsSpec`, `Proposer
 `ChainExportImportSpec` run it on the unified layout by overriding its storages.
 
 
+### C3c part 3c: test mode on the unified layout (2026-11-12)
+
+Test mode (`fukuii.testmode`, retesteth's `test_*` methods, `TestService`) runs on the unified layout, in the linear
+subset. Its refusal at start is lifted. Tasks T108 and the rest of T116. With the guard off each method does what it
+did, but for two faults of test mode that the work found and that are fixed on both layouts (below).
+
+- **A chain is set on a datadir that holds the chain before** (`test_setChainParams` is the first call of every
+  test). On the hash store the new genesis is written over the old. Here a genesis is committed only to a datadir
+  that holds no state, so, in this order: a genesis the layout cannot commit is refused with the datadir as it is
+  (`GenesisDataLoader.unifiedLayoutRefusal`); the blocks of the chain before are removed, from the head down (the
+  hash store's arm removes block 0 alone and leaves the numbers above it naming old blocks); its state is destroyed;
+  the node's own loader commits the genesis, and its failure is answered as an error. Nothing of the genesis goes to
+  the hash store: the storage tries are rows of the commit.
+- **The destruction of a state** is new, and is the position store's (`PathStateStorage.destroyStateForNewGenesis`):
+  under the state lock, one synced batch of point deletes of every row and every changeset record, with the anchor,
+  the layout stamp and the pruned-to count. One batch, so there is no moment with the rows gone and the anchor
+  there, or the reverse; point deletes, since a range delete is no part of a batch; so it holds the keys in memory,
+  and refuses above a million. It is a move of the clock of its own kind (`StateMoveLog.inFlightToNoState`): the log
+  of moves is emptied before the epoch goes odd, so a view made before it is stale and never reads "no row" as its
+  state. **Only a store built for a node in test mode does it** (`CommitSettings.allowsStateDestruction`, set from
+  `instanceConfig.testmode` in `NodeBuilder`); any other throws.
+- **Blocks.** A block on the head is committed in place by the import test mode always used (`importToTop`, the
+  adopting execution). A block beside the head is queued, as on the hash store. The block that makes a branch the
+  heavier one reaches a reorganisation, which the layout refuses before anything is written; the answer says the
+  layout holds the state of its head alone until its overlay (`TestService.HeadStateOnly`), and is no verdict on
+  the block. A mined block that was not made the head is an error there, where the hash store answers that it was
+  mined.
+- **A rewind** (`test_rewindToBlock`): to the head or above it, no block goes; to the genesis, the chain that was set
+  is set again (the same block, the same state, on a datadir that holds nothing of the blocks above it); to a block
+  between them, refused before anything is removed. The state of such a block is held nowhere until the head can
+  move back (C4b).
+- **The world of test mode** (`TestModeWorldStateProxy`) carries the storage tries it replaces whole, as the base
+  world does since C3b, and builds its account trie over the account trie's own view of the storage: without the
+  second every import in test mode threw on the unified layout (forge).
+- **`TestModeNode`**: what the three classes of test mode take from their node (the chain configuration and seal
+  engine a test sets, the queue, the genesis loader, the position store). `TestNode` is it; a spec gives the
+  services one in memory.
+
+**Two faults of test mode, fixed on both layouts, each in a commit of its own.** Both are visible with the guard off,
+in test mode and nowhere else; neither touches a state root.
+
+1. *The world of test mode stopped being that world at the first persist.* The base world's `copyWith` built a plain
+   world, and a block's transactions are each persisted. So the hook that notes the storage keys a transaction
+   writes ran for the first transaction of a block alone, and `debug_storageRangeAt` left out every slot first
+   written by a later one. `copyWith` is protected and the test-mode world overrides it.
+2. *`test_mineBlocks(n)` mined one block and n - 1 siblings of it.* The head was read once, outside the effect that
+   is repeated; each later block was built on the same parent, queued as a side block, and reported as mined. The
+   head is read when each block's turn comes.
+
+**Not parity with the hash store, and said in `ConfigValidator.stateGuardErrors`:** a side branch is never
+reorganised to; a rewind goes to the head or the genesis; `debug_storageRangeAt` and `debug_accountRange` answer at
+the head alone. Each is in B-220, with the side blocks of the lenient import.
+
+**Tests.** `TestServiceOnPositionsSpec`: two test-mode nodes in memory, one on each layout, given the same calls.
+The same block at each height; rows that are exactly the head's state; nothing in the hash store; the same answers
+from the storage range and the account range. The blocks: a contract created with storage, a slot first written by
+the third transaction of a block, a storage trie that loses a leaf, a contract created onto an account with storage
+and no code, a contract destroyed and paid again in one block, two blocks in one request. A second chain, and the
+first again by a rewind, each leave the datadir a node that was only ever given that chain has. The refusals each
+leave the datadir as it was: a genesis written twice, a store that would not destroy its state, the heavier branch,
+the rewind between, a mined block that is already queued, a head whose state is not held, a range of the state of a
+block below the head. A write that fails (the destruction, the genesis commit) is an error of the method, and the
+chain is set by asking again. `TestModeWorldSpec` (the world), `StateDestructionSpec` (in memory and on RocksDB),
+`StorageBuilderStateGuardSpec` (only a node in test mode).
+
+**Three reads after code (forge, vault, conduit: each APPROVE WITH CHANGES, no blocker).** Guard off was traced
+method by method to what `staging` does but for the two faults above; the destruction's batch, key shapes, bound
+and clock were found right, and its fence closed (one override, `instanceConfig.testmode`). Taken:
+
+- *What is refused is refused before anything changes* (vault). The store's refusals (not built for test mode, more
+  keys than one batch deletes) were met after the blocks of the chain before were gone. The service now asks first
+  (`PathStateStorage.refusalToDestroyState`, a read under the lock), with the genesis refusal, and before it takes
+  the new chain's rules.
+- *A fault is an answer* (forge, conduit). A write that failed in `test_setChainParams`, and a range read of a block
+  below the head, were thrown before any effect existed, past the controller's mapping, to the transport (an HTTP
+  500). Both are now errors of the method. The codes stay -32000: -1 is "block validation failed", a verdict on a
+  block, and a limit of the layout answered as that could let a test that expects an invalid block pass.
+- *A view made after a move is stale across a destruction* (the mutation run): the case had an empty log, where a
+  log kept across the destruction changes nothing. It now has a move in it.
+
+**The mutation run**: 41 mutants over the service, the world, the destruction, its clock and its fence; every one
+is caught. Four were not at first, and each got a case: the log of moves kept across a destruction, a state above
+the bound deleted all the same, the changeset keys with no bound of their own, and a chain that was not set still
+taken for the one to rewind to.
+
+Left as they are, and said: an invalid branch that outweighs the head is answered with the layout's refusal and not
+with "block validation failed" (the refusal comes before validation); the service's fields are plain variables, as
+they were (retesteth calls in sequence); the queue is kept across a rewind to the genesis, as on the hash store.
+
 ### Destructive change (C8a and C8b): the vault protocol blocks
 
 ```

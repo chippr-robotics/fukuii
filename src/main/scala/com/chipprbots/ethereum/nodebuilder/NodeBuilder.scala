@@ -157,6 +157,7 @@ trait StorageBuilder:
           // The guard as this instance's configuration has it, the value its capabilities are made from: the default
           // reads the process-wide configuration, which another instance of a multi-instance run does not share.
           override protected def statePathLive: Boolean = self.instanceConfig.statePathLive
+          override protected def stateMayBeDestroyed: Boolean = self.instanceConfig.testmode
           override protected def stateConfig: com.chipprbots.ethereum.db.storage.pathstate.StateConfig =
             com.chipprbots.ethereum.db.storage.pathstate.StateConfig(self.instanceConfig.config)
 
