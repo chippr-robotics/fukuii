@@ -718,7 +718,7 @@ items:
   - id: B-060
     title: "Spec 018 Track C C4a: the overlay (item 6c)"
     priority: P2
-    status: open
+    status: claimed
     area: storage
     size: L
     opened: 2026-11-07
@@ -726,6 +726,11 @@ items:
     links:
       spec: specs/018-storage-engine-consolidation
     depends_on: [B-059]
+    claim:
+      by: cloud-dc960fdc
+      agent: main
+      since: 2026-11-12T05:21:27Z
+      heartbeat: 2026-11-12T05:21:27Z
   - id: B-061
     title: "Spec 018 Track C C4b: the move core (item 6d)"
     priority: P2
