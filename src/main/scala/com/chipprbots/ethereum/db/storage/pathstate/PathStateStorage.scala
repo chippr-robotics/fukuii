@@ -172,7 +172,8 @@ final class PathStateStorage(
               told("an index a reader was refused")(settings.observer.indexRefused())
               throw new StateUnavailable(
                 s"the state of block ${fork.show} is not available right now: as many states behind the head as " +
-                  "may be read at once are being read. Ask again"
+                  "may be read at once are being read. Ask again",
+                askAgain = true
               )
             try
               // built and kept between the look above and now
@@ -365,14 +366,29 @@ final class PathStateStorage(
     * @throws IllegalStateException
     *   when the calling thread holds the state lock
     */
-  def readOnlyBehind(block: BlockRef, reader: Reader): MptStorage =
+  def readOnlyBehind(block: BlockRef, reader: Reader): MptStorage = PathMptStorage.readOnly(viewBehind(block, reader))
+
+  /** [[readOnlyBehind]] for an execution that commits nothing (`eth_call`, a simulation, a trace at a block of the
+    * chain): what it persists is kept beside the view, read back by that execution, and dropped with the storage.
+    * Nothing is written, no layer is kept, and no layer is read through or counted as used.
+    *
+    * @throws StateUnavailable
+    *   as [[readOnlyBehind]]
+    * @throws IllegalStateException
+    *   when the calling thread holds the state lock
+    */
+  def throwawayBehind(block: BlockRef, reader: Reader): MptStorage =
+    PathMptStorage.throwaway(viewBehind(block, reader))
+
+  /** The view of the anchor, or of a block behind it on its own chain, for a reader. */
+  private def viewBehind(block: BlockRef, reader: Reader): StateView =
     val view = viewOf(block, Some(reader))
     if view.layers.nonEmpty then
       throw new StateUnavailable(
         s"the state of block ${block.show} is not held as a state of the chain the disk is on: it is an executed " +
           "block kept beside it"
       )
-    PathMptStorage.readOnly(view)
+    view
 
   /** `block`'s state for an execution that commits nothing: what it persists is kept beside the view and dropped with
     * the storage (`eth_call`, a simulation, a trace, a payload being built).

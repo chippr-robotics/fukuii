@@ -27,8 +27,14 @@ final class StaleStateViewException(val block: BlockRef, val createdAtEpoch: Lon
       s"The view of the state at block ${block.show} is stale (made at epoch $createdAtEpoch, now $epochNow): $detail"
     )
 
-/** There is no layer, record or path from the anchor for the state asked for. */
-final class StateUnavailable(val reason: String) extends StateFault(s"State unavailable: $reason")
+/** There is no layer, record or path from the anchor for the state asked for.
+  *
+  * @param askAgain
+  *   the state is held, and is not handed out right now: as many readers as may are being served, and the one who
+  *   asked asks again. Not so when the state is not held at all, which asking again does not change
+  */
+final class StateUnavailable(val reason: String, val askAgain: Boolean = false)
+    extends StateFault(s"State unavailable: $reason")
 
 /** A view over forward layers met a node that is not the one its parent names, with the disk under it at rest: the
   * layers and the rows do not make up the state the view is of. It is no fault of a block and no stale read: reading
