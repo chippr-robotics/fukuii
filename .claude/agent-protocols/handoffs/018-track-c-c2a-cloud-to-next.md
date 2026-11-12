@@ -146,6 +146,13 @@ Read plan.md, "C2a part 1 record" and "C2a part 2 record", then:
   disk after the blocks above it are reversed by their records, at every position, leftovers included; C4b's move
   back writes priors exactly, and a layer promoted after it is settled against that disk. Before part 4: the window's first build off the state lock, and the RocksDB cases. A spec of these views
   starts from `ReverseIndexSpec` and the shared `LayerChains`.
+- **C4a part 3, the bounds, is written** (plan.md, "C4a part 3"): the layers no branch pins are bounded in number
+  and bytes and evicted least recently used, tips only; a branch under execution is pinned
+  (`PathStateStorage.withPinnedBranch`, `commitOverlay(staged, block, Some(pin))`) and bounded by
+  `pinned-max-bytes`, above which it is refused with `BranchTooLarge`. `commitOverlay` answers `Kept`, `NotKept`,
+  `AlreadyApplied` or `BehindTheAnchor`: **`NotKept` is not a fault and not a verdict on the block**, and `Kept` is as
+  of now. A caller that adopts a pinned branch promotes first and releases after. A spec of the bounds starts from
+  `OverlayBudgetSpec`, where every block changes one account so that a bound in bytes is a count of layers.
 - **C4a** brings back what C3b refuses: the overlay commit for a block that does not extend the anchor
   (`buildExtra(adopted)`, `NotExtendingAnchor`, `saveLastBlock` writing nothing),
   `stateAvailable(hash)`, the served-root window, and SNAP advertised again. C4b: the head move, `ConsensusStateFault`

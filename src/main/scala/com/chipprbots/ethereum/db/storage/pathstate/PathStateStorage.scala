@@ -5,6 +5,7 @@ import java.util.concurrent.atomic.AtomicReference
 
 import org.apache.pekko.util.ByteString
 
+import scala.jdk.CollectionConverters.*
 import scala.util.control.NonFatal
 
 import com.chipprbots.ethereum.db.dataSource.DataSource
@@ -57,18 +58,27 @@ final class PathStateStorage(
   /** The lock of the in-place writers (data-model 7.0). */
   val lock: StateLock = new StateLock
 
-  /** The executed blocks whose state is on no row (data-model 6.1). Nothing in the node makes one yet. */
-  private[pathstate] val overlay = new StateOverlay(settings.maxForwardLayers)
+  /** The executed blocks whose state is on no row (data-model 6.1), within their bounds (6.4). Nothing in the node
+    * makes one yet.
+    */
+  private[pathstate] val overlay = new StateOverlay(
+    StateOverlay.Budget(
+      settings.maxForwardLayers,
+      settings.maxForwardBytes,
+      settings.maxLayerBytes,
+      settings.pinnedMaxBytes
+    )
+  )
 
   /** The blocks behind the anchor that the changeset records lead to, when they have been looked up: built at the first
     * need of them, moved on by each commit, and dropped whenever the anchor moves in any other way.
     */
   private val window = new AtomicReference[Option[AncestorWindow]](None)
 
-  /** The reverse indexes last built, by the anchor and the ancestor they lie between: the blocks of one branch are each
-    * executed on a view of the same fork point.
+  /** The reverse indexes last built, by the anchor and the ancestor they lie between, each with the epoch it was built
+    * at: the blocks of one branch are each executed on a view of the same fork point.
     */
-  private val indexes = new ConcurrentHashMap[(ByteString, ByteString), ReverseIndex]()
+  private val indexes = new ConcurrentHashMap[(ByteString, ByteString), (Long, ReverseIndex)]()
 
   /** The window of `held`, which is the anchor: built from the records' headers if there is none of that anchor. */
   private def windowOf(held: BlockRef)(using StateLockHeld): AncestorWindow =
@@ -85,15 +95,46 @@ final class PathStateStorage(
       .filter(_.anchor == held)
       .orElse(lock.locked("the look at the blocks behind the anchor")(clock.anchor.filter(_ == held).map(windowOf)))
 
-  private def indexBetween(anchor: BlockRef, fork: BlockRef): ReverseIndex =
+  /** The index between `anchor` and `fork`, for a view that observed `epoch`: the one that was built at that epoch, or
+    * one built now.
+    *
+    * An index is of the records as they were at one epoch. A view whose epoch has moved by the time it is made is
+    * thrown away ([[viewOf]]), but its index may have been built across the move, from records a commit was pruning,
+    * and it is put here all the same, possibly after the move emptied the cache. So an index is kept with its epoch and
+    * given only to a view of that epoch: one built across a move is never met again, since no later view observes an
+    * earlier epoch, also when a head move brings the anchor back to a block it has been at (beacon).
+    */
+  private def indexBetween(anchor: BlockRef, fork: BlockRef, epoch: Long): ReverseIndex =
     val key = (anchor.hash, fork.hash)
-    Option(indexes.get(key)).filter(index => index.from == anchor && index.to == fork).getOrElse {
-      val built =
-        ReverseIndex.between(changesets, anchor, fork, settings.maxReverseHops, settings.maxReverseIndexBytes)
-      // a handful: an index is of one anchor, and the anchor moves with every block
-      if indexes.size >= MaxIndexesKept then indexes.clear()
-      indexes.put(key, built)
-      built
+    Option(indexes.get(key))
+      .collect { case (`epoch`, index) if index.from == anchor && index.to == fork => index }
+      .getOrElse {
+        val built =
+          ReverseIndex.between(changesets, anchor, fork, settings.maxReverseHops, settings.maxReverseIndexBytes)
+        // A handful, and no more bytes than their pool has: an index is of one anchor, and the anchor moves with
+        // every block. One that is by itself more than the pool is built for its view and not kept.
+        if built.bytes <= settings.maxReversePoolBytes then
+          if indexes.size >= MaxIndexesKept || indexBytes + built.bytes > settings.maxReversePoolBytes then
+            indexes.clear()
+          indexes.put(key, (epoch, built))
+        built
+      }
+
+  private def indexBytes: Long = indexes.values.asScala.iterator.map(_._2.bytes).sum
+
+  /** What the overlay holds right now (data-model 6.4, 11). */
+  def overlayUsage: OverlayUsage =
+    overlay.usage.copy(reverseIndexes = indexes.size, reverseBytes = indexBytes)
+
+  /** Tells the observer what the overlay holds, and of the layers that were evicted since it was last told: each
+    * eviction once, whichever thread comes to tell of it, where a count worked out from two totals would count again
+    * when two tellings cross (beacon).
+    */
+  private def overlayTold(): Unit =
+    told("what the overlay holds") {
+      val evicted = overlay.evictionsSinceAsked()
+      if evicted > 0 then settings.observer.evicted(evicted)
+      settings.observer.overlay(overlayUsage)
     }
 
   /** The block whose state the disk holds, or `None` when the datadir has no state yet (SNAP in progress). */
@@ -133,8 +174,11 @@ final class PathStateStorage(
       case Some(other) =>
         val chain = overlay.chainFrom(other, block).map(_._1)
         if clock.epoch != epoch then
-          if triesLeft > 0 then viewAfter(block, rested, triesLeft - 1)
+          if triesLeft > 0 then
+            told("a view made again")(settings.observer.viewRetried())
+            viewAfter(block, rested, triesLeft - 1)
           else
+            told("a view that could not be made")(settings.observer.viewStale())
             throw new StaleStateViewException(
               block,
               epoch,
@@ -175,10 +219,10 @@ final class PathStateStorage(
             windowFor(anchor).map { behind =>
               overlay.chainFrom(anchor, block, behind.contains) match
                 case Some((layers, on)) =>
-                  val reverse = Option.when(on != anchor)(indexBetween(anchor, on))
+                  val reverse = Option.when(on != anchor)(indexBetween(anchor, on, epoch))
                   new StateView(block, epoch, clock, rows, layers, reverse)
                 case None if behind.contains(block) =>
-                  new StateView(block, epoch, clock, rows, Nil, Some(indexBetween(anchor, block)))
+                  new StateView(block, epoch, clock, rows, Nil, Some(indexBetween(anchor, block, epoch)))
                 case None =>
                   throw new StateUnavailable(
                     s"the state of block ${block.show} is not held: the disk holds ${anchor.show}, and neither its " +
@@ -192,8 +236,11 @@ final class PathStateStorage(
             if triesLeft > 0 then viewOf(block, triesLeft - 1)
             else
               throw new StateUnavailable(s"the state of block ${block.show} is not held: the anchor could not be read")
-          else if triesLeft > 0 then viewOf(block, triesLeft - 1)
+          else if triesLeft > 0 then
+            told("a view made again")(settings.observer.viewRetried())
+            viewOf(block, triesLeft - 1)
           else
+            told("a view that could not be made")(settings.observer.viewStale())
             throw new StaleStateViewException(
               block,
               epoch,
@@ -203,7 +250,12 @@ final class PathStateStorage(
         }
 
   /** [[stage]] over [[viewOf]]: a layer for the execution of a block on a fork, or on a block behind the anchor. */
-  private[pathstate] def stageOf(parent: BlockRef): PathStagedState = new PathStagedState(parent, viewOf(parent))
+  private[pathstate] def stageOf(parent: BlockRef): PathStagedState = staged(parent, viewOf(parent))
+
+  /** An execution is staged on `view`: the layers it reads through are in use (data-model 6.4). */
+  private def staged(parent: BlockRef, view: StateView): PathStagedState =
+    overlay.used(view.layers)
+    new PathStagedState(parent, view)
 
   /** `block`'s state for a reader that writes nothing. */
   def readOnly(block: BlockRef): MptStorage = PathMptStorage.readOnly(view(block))
@@ -305,7 +357,7 @@ final class PathStateStorage(
     * @throws StateUnavailable
     *   when `parent`'s state is not held (it is not the anchor and no forward layers lead to it), or there is no anchor
     */
-  def stage(parent: BlockRef): PathStagedState = new PathStagedState(parent, view(parent))
+  def stage(parent: BlockRef): PathStagedState = staged(parent, view(parent))
 
   /** Commits `block`, executed on `staged`, as the block whose state the disk holds (data-model 7.1): '''one batch'''
     * of the caller's own updates (`extra`: the block, its receipts and weight, the best-block pointer), the rows the
@@ -379,6 +431,7 @@ final class PathStateStorage(
     outcome match
       case CommitOutcome.Applied(commit) =>
         told(s"the commit of block ${block.show}")(settings.observer.committed(commit))
+        overlayTold()
       case CommitOutcome.AlreadyApplied => ()
     outcome
 
@@ -478,34 +531,53 @@ final class PathStateStorage(
     *
     * A block that is a layer already stays the layer it is: one block, one layer.
     *
-    * Nothing in the node calls this yet. What does must come with the bounds of data-model 6.4.
+    * '''Within the bounds of data-model 6.4.''' A layer that is by itself more than a layer may hold is not kept, and
+    * one that does not fit among those that are kept has room made for it by the eviction of others, or is not kept
+    * either ([[OverlayOutcome.NotKept]]): the block's state is then not held, and whoever needs it executes the block
+    * again. Nothing is wrong with the block.
+    *
+    * With a `pin` ([[withPinnedBranch]]) the layer, and every kept layer it stands on, is held by that branch until it
+    * is released: not evicted, and bounded only by what all pinned layers may hold together. A branch that is more than
+    * that is refused with [[BranchTooLarge]], and nothing of this block is then kept.
+    *
+    * Nothing in the node calls this yet.
     *
     * @throws StateUnavailable
-    *   when there is no anchor, or the state of the block's parent is not held any more, or no more layers are kept
+    *   when there is no anchor, or the state of the block's parent is not held any more
+    * @throws BranchTooLarge
+    *   with a pin, when the pinned layers would hold more than they may
     * @throws IllegalStateException
     *   when what was staged is not what a block does between the two state roots
     * @throws IllegalArgumentException
     *   when the block is not at the height after its parent's
     */
-  def commitOverlay(staged: PathStagedState, block: BlockRef): OverlayOutcome =
+  def commitOverlay(staged: PathStagedState, block: BlockRef, pin: Option[BranchPin] = None): OverlayOutcome =
     val parent = staged.parent
-    overlay.layerOf(block) match
-      case Some(known) if known.parent == parent => OverlayOutcome.Layered(known)
+    val known = overlay.layerOf(block).filter(_.parent == parent)
+    known match
+      case Some(layer) if pin.isEmpty =>
+        // delivered again: it is in use
+        overlay.used(Seq(layer))
+        OverlayOutcome.Kept(layer)
       case _ =>
-        require(block.number == parent.number + 1, s"block ${block.show} does not follow ${parent.show}")
-        val frozen = staged.changes.frozen
-        val layer = ForwardLayer.of(block, parent, frozen)
-        // The account trie's root is held to the two state roots, as a commit in place holds it: changes that are not
-        // this block's final world, or were not made on this parent, stop here, before anything is kept. So does
-        // everything else of a diff's validation that needs no row of the parent's state: what is kept can be
-        // promoted, unless the disk is not the state it was built on.
-        val faults = ForwardLayer.shapeFaults(block, parent, frozen) ++ layer.rootFaults
-        if faults.nonEmpty then
-          throw new IllegalStateException(
-            s"The staged changes of block ${block.show} are not what a block does to the state of ${parent.show}: " +
-              faults.take(MaxFaultsShown).mkString("; ")
-          )
-        lock.locked(
+        // a layer there already is, which a branch now takes hold of, is pinned under the lock like a new one
+        val layer = known.getOrElse {
+          require(block.number == parent.number + 1, s"block ${block.show} does not follow ${parent.show}")
+          val frozen = staged.changes.frozen
+          val made = ForwardLayer.of(block, parent, frozen)
+          // The account trie's root is held to the two state roots, as a commit in place holds it: changes that are
+          // not this block's final world, or were not made on this parent, stop here, before anything is kept. So
+          // does everything else of a diff's validation that needs no row of the parent's state: what is kept can be
+          // promoted, unless the disk is not the state it was built on.
+          val faults = ForwardLayer.shapeFaults(block, parent, frozen) ++ made.rootFaults
+          if faults.nonEmpty then
+            throw new IllegalStateException(
+              s"The staged changes of block ${block.show} are not what a block does to the state of ${parent.show}: " +
+                faults.take(MaxFaultsShown).mkString("; ")
+            )
+          made
+        }
+        val outcome = lock.locked(
           s"overlay commit of block ${block.show}",
           nanos => told("the wait for the state lock")(settings.observer.lockWaited(nanos))
         ) {
@@ -529,8 +601,45 @@ final class PathStateStorage(
                     s"block ${block.show} was executed on the state of ${parent.show}, which is not held any more: " +
                       s"the disk holds ${held.show}"
                   )
-                OverlayOutcome.Layered(overlay.register(layer))
+                overlay.register(layer, pin, held, behind.contains, behind.ancestors.lastOption) match
+                  case StateOverlay.Registered.Kept(kept) => OverlayOutcome.Kept(kept)
+                  case StateOverlay.Registered.TooLarge(bytes, max) =>
+                    OverlayOutcome.NotKept(NotKeptReason.TooLarge(bytes, max))
+                  case StateOverlay.Registered.NoRoom => OverlayOutcome.NotKept(NotKeptReason.NoRoom)
         }
+        overlayTold()
+        outcome
+
+  /** Runs `body` with a pin for one branch under execution, and releases the pin when `body` ends, however it ends
+    * (data-model 6.4). The layers [[commitOverlay]] keeps with the pin are held meanwhile: none is evicted, and they
+    * are bounded together by what pinned layers may hold. After the release they are layers like any other, and the
+    * bounds apply to them from the next one that is kept: so a caller that adopts the branch promotes it first, and
+    * releases after.
+    *
+    * @throws IllegalStateException
+    *   when the calling thread holds the state lock: the pin is released under it, and a release that could not take it
+    *   would leave the branch pinned for good
+    */
+  def withPinnedBranch[A](name: String)(body: BranchPin => A): A =
+    if lock.isHeldByCurrentThread then
+      throw new IllegalStateException(
+        s"The branch '$name' cannot be pinned by the holder of the state lock ('${lock.holder.getOrElse("?")}'): " +
+          "its pin is released under that lock"
+      )
+    val pin = new BranchPin(name)
+    def release(): Unit =
+      lock.locked(s"the release of the pinned branch $name")(overlay.release(pin))
+      overlayTold()
+    val result =
+      try body(pin)
+      catch
+        case failure: Throwable =>
+          // the execution's own failure is the one that is thrown
+          try release()
+          catch case NonFatal(also) => failure.addSuppressed(also)
+          throw failure
+    release()
+    result
 
   /** Commits the forward layer of `block` as the block whose state the disk holds (data-model 7.1, the second of the
     * cases that are not a staged block on the anchor): the batch an in-place commit of the block writes. The layer goes
@@ -611,6 +720,7 @@ final class PathStateStorage(
     outcome match
       case CommitOutcome.Applied(commit) =>
         told(s"the commit of block ${block.show}")(settings.observer.committed(commit))
+        overlayTold()
       case CommitOutcome.AlreadyApplied => ()
     outcome
 
@@ -622,6 +732,7 @@ final class PathStateStorage(
       overlay.drop(blockHash)
       clock.anchor.fold(overlay.clear())(dropUnreachable)
     }
+    overlayTold()
 
   /** The anchor has moved from `parent` to `block`, whose batch has returned. The window of ancestors follows it, when
     * there is one: `parent` is now the nearest, unless the block's record is a tombstone, which nothing is read across;
@@ -741,7 +852,7 @@ object PathStateStorage:
   /** How often a view is made again because the disk moved between the look at the clock and the look at the layers. */
   private val ViewTries = 3
 
-  /** How many executed blocks are kept beside the state on disk, until the budgets of data-model 6.4 replace it. */
+  /** How many executed blocks that no branch pins are kept beside the state on disk, unless the configuration says. */
   val MaxForwardLayers: Int = 32
 
   /** How many reverse indexes are kept at once. */
@@ -749,8 +860,14 @@ object PathStateStorage:
 
   /** What [[PathStateStorage.commitOverlay]] did with a block. */
   enum OverlayOutcome:
-    /** The block is kept as this forward layer: the one just made, or the one there already was. */
-    case Layered(layer: ForwardLayer)
+    /** The block is kept as this forward layer: the one just made, or the one there already was. It is kept as of now:
+      * a layer that is not pinned can be evicted by the next one.
+      */
+    case Kept(layer: ForwardLayer)
+
+    /** The block is not kept: its state is not held, and is to be had by executing it again. Nothing is wrong with it.
+      */
+    case NotKept(reason: NotKeptReason)
 
     /** The block is the one whose state the disk holds: there is nothing to keep beside it. */
     case AlreadyApplied
@@ -759,6 +876,35 @@ object PathStateStorage:
       * it is not the head.
       */
     case BehindTheAnchor
+
+  /** Why an executed block is not kept as a forward layer. */
+  enum NotKeptReason:
+    /** It holds more than one layer may: `bytes`, above `max`. */
+    case TooLarge(bytes: Long, max: Long)
+
+    /** There is no room among the layers that are kept, and none of them can be evicted for it. */
+    case NoRoom
+
+  /** What the overlay holds (data-model 6.4, 11).
+    *
+    * @param layers
+    *   the forward layers that no branch pins
+    * @param bytes
+    *   what they hold, as [[ForwardLayer.bytes]] counts it
+    * @param evictions
+    *   how many layers were evicted since the store was opened
+    * @param reverseIndexes
+    *   the reverse indexes that are kept for the next view of the same fork point
+    */
+  final case class OverlayUsage(
+      layers: Int,
+      bytes: Long,
+      pinnedLayers: Int,
+      pinnedBytes: Long,
+      evictions: Long,
+      reverseIndexes: Int = 0,
+      reverseBytes: Long = 0L
+  )
 
   /** The most rows, and the most changeset keys, [[PathStateStorage.destroyStateForNewGenesis]] deletes: what one batch
     * can hold in memory, and far more than a test's state has.
@@ -797,21 +943,40 @@ object PathStateStorage:
       allowsStateDestruction: Boolean = false,
       // The most rows, and the most changeset keys, it deletes.
       maxKeysDestroyed: Long = MaxKeysDestroyed,
-      // How many forward layers are kept (a stopgap: see [[MaxForwardLayers]]).
+      // The bounds of the forward layers no branch pins: how many, how much together, how much each.
       maxForwardLayers: Int = MaxForwardLayers,
-      // How many blocks back a view is made through the changeset records, and how much one reverse index may hold.
+      maxForwardBytes: Long = 128L * 1024 * 1024,
+      maxLayerBytes: Long = 64L * 1024 * 1024,
+      // How much the layers of the branches under execution hold together.
+      pinnedMaxBytes: Long = 256L * 1024 * 1024,
+      // How many blocks back a view is made through the changeset records, how much one reverse index may hold, and
+      // how much the indexes that are kept hold together.
       maxReverseHops: Int = 1024,
-      maxReverseIndexBytes: Long = 64L * 1024 * 1024
+      maxReverseIndexBytes: Long = 64L * 1024 * 1024,
+      maxReversePoolBytes: Long = 128L * 1024 * 1024
   )
 
   object CommitSettings:
     def of(config: StateConfig, finalized: () => Option[BigInt], observer: CommitObserver): CommitSettings =
+      require(
+        config.overlay.maxLayerBytes <= config.overlay.maxBytes / 2,
+        s"state.overlay.max-layer-bytes (${config.overlay.maxLayerBytes}) is more than the executed blocks kept beside " +
+          s"the disk may hold together, which is half of state.overlay.max-bytes (${config.overlay.maxBytes}): no " +
+          "block of that size could be kept"
+      )
       CommitSettings(
         config.changeset.maxEntriesPerOwnerDelete,
         config.changeset.maxRecordBytes,
         RetentionPolicy(config),
         finalized,
-        observer
+        observer,
+        maxForwardLayers = config.overlay.maxForwardLayers,
+        // the overlay's bytes are the forward layers' and the reverse indexes', half each (data-model 6.4)
+        maxForwardBytes = config.overlay.maxBytes / 2,
+        maxLayerBytes = config.overlay.maxLayerBytes,
+        pinnedMaxBytes = config.overlay.pinnedMaxBytes,
+        maxReverseIndexBytes = (config.overlay.maxBytes / 2).min(64L * 1024 * 1024),
+        maxReversePoolBytes = config.overlay.maxBytes / 2
       )
 
   /** Why a block's record is a tombstone: it has no entries, and no head move may cross it (data-model 3.6). */
@@ -857,6 +1022,18 @@ object PathStateStorage:
     /** A writer waited `nanos` for the state lock. */
     def lockWaited(nanos: Long): Unit = ()
     def committed(commit: Commit): Unit = ()
+
+    /** What the overlay holds, after something of it changed. */
+    def overlay(usage: OverlayUsage): Unit = ()
+
+    /** `layers` executed blocks were evicted to make room: each eviction is told once. */
+    def evicted(layers: Long): Unit = ()
+
+    /** A view was made again, because the disk moved while it was being made. */
+    def viewRetried(): Unit = ()
+
+    /** A view could not be made: the disk moved on each time. */
+    def viewStale(): Unit = ()
 
   object CommitObserver:
     val Silent: CommitObserver = new CommitObserver {}

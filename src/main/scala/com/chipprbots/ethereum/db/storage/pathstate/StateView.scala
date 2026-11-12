@@ -268,6 +268,9 @@ final class StateView private[pathstate] (
   def isAnchorViewNow: Boolean =
     forward.isEmpty && reverse.isEmpty && clock.epoch == createdAt && clock.anchor.contains(block)
 
+  /** The forward layers this view reads through, newest first. */
+  private[pathstate] def layers: List[ForwardLayer] = forward
+
   /** Whether the rows under this view are, right now, the state it takes them for: nothing has moved since it was made
     * and its base is the anchor. A mismatch met then will be met again by the next read.
     */
