@@ -1,7 +1,8 @@
 package com.chipprbots.ethereum.db.storage.pathstate
 
+import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.CountDownLatch
-import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicReference
 
@@ -21,8 +22,9 @@ import com.chipprbots.ethereum.testing.Tags.*
   *
   *   - The look at the blocks behind the anchor reads a record for each of them. A reader makes it with no lock held,
   *     and the view is made again when the disk moved meanwhile.
-  *   - An index is built once for those who ask for it together.
-  *   - Readers build few indexes at once, and a reader over that is told to ask again. An execution is not held to it.
+  *   - An index is built once for those who ask for it together: who waits is given it, or told why there is none.
+  *   - The readers of one kind build few indexes at once, and a reader over that is told to ask again. Another kind of
+  *     reader is not held to it, and neither is an execution.
   *   - What readers keep costs an execution none of its own.
   *
   * The threads here are stopped and let go by latches inside the data source's read: no sleep, and the same
@@ -65,6 +67,37 @@ class ReaderIndexBuildSpec extends AnyFlatSpec with Matchers with LayerChains:
     }
     val head: BlockRef = refs.last
 
+    /** The state of `block`, behind the anchor, for a reader: a peer unless it is said to be another. */
+    def behind(block: BlockRef, as: Reader = Reader.Peer): MptStorage = chain.state.readOnlyBehind(block, as)
+
+    /** Stops the threads whose name starts with `named` inside their first read of a record, until they are let go. */
+    final class Stop(named: String, threads: Int):
+      private val inTheRead = new CountDownLatch(threads)
+      private val letGo = new CountDownLatch(1)
+      private val stopped = ConcurrentHashMap.newKeySet[String]()
+
+      /** How many records each thread read, by its name. */
+      val reads = new ConcurrentHashMap[String, AtomicInteger]()
+      source.onRecordRead = () =>
+        val name = Thread.currentThread.getName
+        reads.computeIfAbsent(name, _ => new AtomicInteger(0)).incrementAndGet()
+        if name.startsWith(named) && stopped.add(name) then
+          inTheRead.countDown()
+          letGo.await(60, TimeUnit.SECONDS)
+      def readsOf(name: String): Int = Option(reads.get(name)).fold(0)(_.get)
+
+      /** Waits until every one of them is in its read. */
+      def allStopped(): Unit = inTheRead.await(60, TimeUnit.SECONDS) shouldBe true
+      def go(): Unit = letGo.countDown()
+      def over(): Unit =
+        go()
+        source.onRecordRead = () => ()
+
+    /** Waits until `callers` wait for an index another is building, or `thread` has ended. */
+    def awaited(callers: Int, thread: Thread): Unit =
+      while chain.state.indexBuildsWaitedFor < callers && thread.isAlive do Thread.onSpinWait()
+      chain.state.indexBuildsWaitedFor shouldBe callers
+
     /** The record reads `body` makes. */
     def recordReads(body: => Any): Int =
       val reads = new AtomicInteger(0)
@@ -97,7 +130,7 @@ class ReaderIndexBuildSpec extends AnyFlatSpec with Matchers with LayerChains:
         chain.state.lock.holder shouldBe None
         chain.state.lock.locked("a writer that comes meanwhile")(reads += 1)
       val storage =
-        try chain.state.readOnlyBehind(refs(3))
+        try behind(refs(3))
         finally source.onRecordRead = () => ()
       // the headers of the records behind the anchor, and the records between the anchor and the block
       reads should be >= refs.size - 1
@@ -119,7 +152,7 @@ class ReaderIndexBuildSpec extends AnyFlatSpec with Matchers with LayerChains:
           moved = true
           next.inPlace()
       val storage =
-        try chain.state.readOnlyBehind(refs(3))
+        try behind(refs(3))
         finally source.onRecordRead = () => ()
       moved shouldBe true
       chain.state.anchor shouldBe Some(next.ref)
@@ -130,81 +163,158 @@ class ReaderIndexBuildSpec extends AnyFlatSpec with Matchers with LayerChains:
       chain.readThrough(storage, refs(3))
       // and the look that is kept is the new anchor's
       recordReads(chain.state.viewOf(next.ref)) shouldBe 0
-      chain.readThrough(chain.state.readOnlyBehind(head), head)
+      chain.readThrough(behind(head), head)
     }
 
-  "Readers that ask for the state of one block together" should "have one index built for them" taggedAs
+  "A reader whose index is built while the disk moves" should "have its view made again, and the index of the epoch that is past is not kept" taggedAs
     (UnitTest, ConsensusTest) in {
       val rig = new Rig
       import rig.*
       // the look at the blocks behind the anchor is made, and one index
-      chain.state.readOnlyBehind(refs(7))
-      told.built.get shouldBe 1
-
-      val inTheBuild = new CountDownLatch(1)
-      val letGo = new CountDownLatch(1)
-      val firstRead = new AtomicBoolean(true)
+      behind(refs(7))
+      val next = chain.on(head)(slots(alice, 3 -> 0, 90 -> 9), delete(bob))
+      var moved = false
+      // this time the first record that is read is read for the index
       source.onRecordRead = () =>
-        if firstRead.compareAndSet(true, false) then
-          inTheBuild.countDown()
-          letGo.await()
-      val one = onThread("the reader that builds")(chain.state.readOnlyBehind(refs(2)))
-      inTheBuild.await()
-      val other = onThread("the reader that waits")(chain.state.readOnlyBehind(refs(2)))
-      // the second waits at the index that is being built: it does not build one, and it is not refused
-      while other._1.getState != Thread.State.BLOCKED && other._1.isAlive do Thread.onSpinWait()
-      other._1.isAlive shouldBe true
-      told.built.get shouldBe 1
-      chain.state.indexBuildsInFlight shouldBe 1
-      letGo.countDown()
-      val storages: Seq[MptStorage] = Seq(ended(one), ended(other))
-      source.onRecordRead = () => ()
-
-      told.built.get shouldBe 2
-      told.refused.get shouldBe 0
-      chain.state.indexBuildsInFlight shouldBe 0
-      storages.foreach(chain.readThrough(_, refs(2)))
-      // and who asks after reads no record
-      recordReads(chain.readThrough(chain.state.readOnlyBehind(refs(2)), refs(2))) shouldBe 0
+        if !moved then
+          moved = true
+          next.inPlace()
+      val storage =
+        try behind(refs(3))
+        finally source.onRecordRead = () => ()
+      chain.state.anchor shouldBe Some(next.ref)
+      told.retried.get shouldBe 1
+      // one index before, one built across the move and one for the view that was made
+      told.built.get shouldBe 3
+      chain.readThrough(storage, refs(3))
+      // of the three the last is kept: the others are of an epoch no view is made of again
+      chain.state.overlayUsage.reverseIndexes shouldBe 1
+      recordReads(behind(refs(3))) shouldBe 0
     }
 
-  "Readers" should "build no more than two indexes at once: a third is told to ask again, and an execution is not held to it" taggedAs
+  "Readers that ask for the state of one block together" should "have one index built for them, kept or not" taggedAs
+    (UnitTest, ConsensusTest) in {
+      // with room for the index, and with none: who waited is given it all the same
+      Seq[CommitSettings => CommitSettings](identity, _.copy(maxReversePoolBytes = 0L)).foreach { settings =>
+        val rig = new Rig(settings = settings)
+        import rig.*
+        // the look at the blocks behind the anchor is made, and one index
+        behind(refs(7))
+        told.built.get shouldBe 1
+
+        val stop = new Stop("the reader that builds", threads = 1)
+        val one = onThread("the reader that builds")(behind(refs(2)))
+        stop.allStopped()
+        val other = onThread("the reader that waits")(behind(refs(2)))
+        // and an execution on that block
+        val third = onThread("the execution that waits")(chain.state.viewOf(refs(2)))
+        // they wait for the index that is being built: they build none, and are not refused
+        awaited(1, other._1)
+        awaited(2, third._1)
+        told.built.get shouldBe 1
+        chain.state.indexBuildsInFlight shouldBe 1
+        stop.go()
+        val storages: Seq[MptStorage] = Seq(ended(one), ended(other), PathMptStorage.readOnly(ended(third)))
+        stop.over()
+
+        told.built.get shouldBe 2
+        told.refused.get shouldBe 0
+        chain.state.indexBuildsInFlight shouldBe 0
+        chain.state.indexBuildsWaitedFor shouldBe 0
+        // the two that waited read no record
+        stop.readsOf("the reader that builds") should be > 0
+        stop.readsOf("the reader that waits") shouldBe 0
+        stop.readsOf("the execution that waits") shouldBe 0
+        storages.foreach(chain.readThrough(_, refs(2)))
+      }
+    }
+
+  it should "have an index a reader built be the execution's that waited for it: no reader pushes it out" taggedAs
+    UnitTest in {
+      val rig = new Rig(blocks = 10)
+      import rig.*
+      behind(refs(9))
+      val stop = new Stop("the reader that builds", threads = 1)
+      val one = onThread("the reader that builds")(behind(refs(1)))
+      stop.allStopped()
+      val execution = onThread("the execution that waits")(chain.state.viewOf(refs(1)))
+      awaited(1, execution._1)
+      stop.go()
+      ended(one)
+      ended(execution)
+      stop.over()
+      // a sweep of reads over other blocks: the readers' few are all others now
+      (2 to 8).foreach(n => behind(refs(n)))
+      recordReads(chain.state.viewOf(refs(1))) shouldBe 0
+    }
+
+  it should "be told together why there is none, when the records do not give one" taggedAs UnitTest in {
+    // no index may hold a thing: every build fails
+    val rig = new Rig(settings = _.copy(maxReverseIndexBytes = 1L))
+    import rig.*
+    // the look at the blocks behind the anchor is made
+    a[StateUnavailable] should be thrownBy behind(refs(7))
+    val stop = new Stop("the reader that builds", threads = 1)
+    val one = onThread("the reader that builds")(behind(refs(2)))
+    stop.allStopped()
+    val other = onThread("the reader that waits")(behind(refs(2)))
+    awaited(1, other._1)
+    stop.go()
+    val failures = Seq(one, other).map { run =>
+      run._1.join(60000)
+      run._2.get.flatMap(_.failed.toOption).getOrElse(fail(s"${run._1.getName} was given a state"))
+    }
+    stop.over()
+    failures.foreach(_ shouldBe a[StateUnavailable])
+    failures.map(_.getMessage).distinct.size shouldBe 1
+    (failures.head.getMessage should not).include("Ask again")
+    // the one that waited walked no record to be told so
+    stop.readsOf("the reader that waits") shouldBe 0
+    told.built.get shouldBe 0
+    chain.state.indexBuildsInFlight shouldBe 0
+  }
+
+  "Readers of one kind" should "build no more than two indexes at once: a third is told to ask again, and neither another kind nor an execution is held to it" taggedAs
     (UnitTest, ConsensusTest) in {
       val rig = new Rig
       import rig.*
-      chain.state.readOnlyBehind(refs(7))
-      val inTheBuild = new CountDownLatch(2)
-      val letGo = new CountDownLatch(1)
-      source.onRecordRead = () =>
-        if Thread.currentThread.getName.startsWith("held") then
-          inTheBuild.countDown()
-          letGo.await()
-      val held = Seq(1, 2).map(n => onThread(s"held reader $n")(chain.state.readOnlyBehind(refs(n))))
-      inTheBuild.await()
+      behind(refs(7))
+      val stop = new Stop("held", threads = 2)
+      val held = Seq(1, 2).map(n => onThread(s"held reader $n")(behind(refs(n))))
+      stop.allStopped()
       chain.state.indexBuildsInFlight shouldBe 2
 
-      // a third reader, of another block: refused, and told so in words a caller can act on
-      val refusal = the[StateUnavailable] thrownBy chain.state.readOnlyBehind(refs(3))
+      // a third peer, of another block: refused, and told so in words a caller can act on
+      val refusal = the[StateUnavailable] thrownBy behind(refs(3))
       refusal.getMessage should include("Ask again")
       told.refused.get shouldBe 1
-      // an execution on that block is not: what a peer or a caller asks for does not keep a block from being executed
+      // one that asks for a block that is being built waits for it, and needs no leave: it is not refused
+      val waits = onThread("the peer that waits")(behind(refs(1)))
+      awaited(1, waits._1)
+      told.refused.get shouldBe 1
+      // a caller of the JSON-RPC has its own two
       val built = told.built.get
+      chain.readThrough(behind(refs(5), Reader.Rpc), refs(5))
+      chain.readThrough(behind(refs(6), Reader.Rpc), refs(6))
+      told.built.get shouldBe built + 2
+      // and an execution is held to nothing: what a peer or a caller asks for does not keep a block from being executed
       val executed = chain.onAny(refs(3))(slots(bob, 7 -> 7))
       executed.layered()
-      told.built.get shouldBe built + 1
+      told.built.get shouldBe built + 3
       told.refused.get shouldBe 1
-      // and a reader of that block now finds the index there is: it builds none, so it is not refused
-      chain.readThrough(chain.state.readOnlyBehind(refs(3)), refs(3))
+      // a peer that asks for that block now finds the index there is: it builds none, so it is not refused
+      chain.readThrough(behind(refs(3)), refs(3))
       told.refused.get shouldBe 1
       // the same again of a block no one has an index of
-      a[StateUnavailable] should be thrownBy chain.state.readOnlyBehind(refs(4))
+      a[StateUnavailable] should be thrownBy behind(refs(4))
       told.refused.get shouldBe 2
 
-      letGo.countDown()
+      stop.go()
       held.zip(Seq(1, 2)).foreach((run, n) => chain.readThrough(ended(run), refs(n)))
-      source.onRecordRead = () => ()
-      // the two are done: a reader builds again
-      chain.readThrough(chain.state.readOnlyBehind(refs(4)), refs(4))
+      chain.readThrough(ended(waits), refs(1))
+      stop.over()
+      // the two are done: a peer builds again
+      chain.readThrough(behind(refs(4)), refs(4))
       told.refused.get shouldBe 2
       // and nothing is left of the builds that were refused, or made
       chain.state.indexBuildsInFlight shouldBe 0
@@ -215,7 +325,7 @@ class ReaderIndexBuildSpec extends AnyFlatSpec with Matchers with LayerChains:
     val rig = new Rig(settings = _.copy(maxReverseIndexBytes = 1L))
     import rig.*
     (1 to 5).foreach { n =>
-      val failure = the[StateUnavailable] thrownBy chain.state.readOnlyBehind(refs(n))
+      val failure = the[StateUnavailable] thrownBy behind(refs(n))
       (failure.getMessage should not).include("Ask again")
     }
     told.refused.get shouldBe 0
@@ -230,23 +340,35 @@ class ReaderIndexBuildSpec extends AnyFlatSpec with Matchers with LayerChains:
       // a block is executed on a block behind the anchor: an index is built for it
       chain.onAny(refs(1))(slots(bob, 7 -> 7)).layered()
       told.built.get shouldBe 1
-      // a sweep of reads over the blocks behind the head
-      (2 to 9).foreach(n => chain.readThrough(chain.state.readOnlyBehind(refs(n)), refs(n)))
+      // a sweep of reads over the blocks behind the head, by readers of both kinds
+      (2 to 9).foreach { n =>
+        chain.readThrough(behind(refs(n), if n % 2 == 0 then Reader.Peer else Reader.Rpc), refs(n))
+      }
       told.built.get shouldBe 9
       // the readers keep four of theirs, and the execution's is there still: the next block of that branch builds none
       chain.state.overlayUsage.reverseIndexes shouldBe 5
       recordReads(chain.onAny(refs(1))(slots(bob, 8 -> 8))) shouldBe 0
       told.built.get shouldBe 9
       // and of the readers', the last four
-      recordReads((6 to 9).foreach(n => chain.state.readOnlyBehind(refs(n)))) shouldBe 0
-      recordReads(chain.state.readOnlyBehind(refs(5))) should be > 0
+      recordReads((6 to 9).foreach(n => behind(refs(n)))) shouldBe 0
+      recordReads(behind(refs(5))) should be > 0
     }
 
   "How far behind the anchor a view reaches" should "be as far as the settings say, for a reader as for an execution" taggedAs
     UnitTest in {
       val rig = new Rig(settings = _.copy(maxReverseHops = 3))
       import rig.*
-      chain.readThrough(chain.state.readOnlyBehind(refs(refs.size - 4)), refs(refs.size - 4))
-      a[StateUnavailable] should be thrownBy chain.state.readOnlyBehind(refs(refs.size - 5))
+      chain.readThrough(behind(refs(refs.size - 4)), refs(refs.size - 4))
+      a[StateUnavailable] should be thrownBy behind(refs(refs.size - 5))
       a[StateUnavailable] should be thrownBy chain.state.stageOf(refs(refs.size - 5))
     }
+
+  "A view" should "not be made by the holder of the state lock: it may wait for records to be read" taggedAs UnitTest in {
+    val rig = new Rig
+    import rig.*
+    val refused = the[IllegalStateException] thrownBy chain.state.lock.locked("a commit")(chain.state.viewOf(refs(3)))
+    refused.getMessage should include("a commit")
+    an[IllegalStateException] should be thrownBy chain.state.lock.locked("a commit")(behind(refs(3)))
+    told.built.get shouldBe 0
+    chain.readThrough(behind(refs(3)), refs(3))
+  }

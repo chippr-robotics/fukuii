@@ -62,14 +62,19 @@ class ReverseIndexCacheSpec extends AnyFlatSpec with Matchers with LayerChains:
       cache.find(index.from, index.to, 6L, reader = true).exists(_ eq again) shouldBe true
       cache.find(index.from, index.to, 4L, reader = true) shouldBe None
 
-      // and of nothing else: the one that is replaced is not counted beside its own successor
-      val two = new ReverseIndexCache(maxKept = 2, maxBytes = Long.MaxValue)
-      two.keep(byDepth(1), 4L, reader = true)
-      two.keep(byDepth(3), 4L, reader = true)
-      two.keep(back(3), 6L, reader = true)
-      two.size shouldBe 2
-      two.find(byDepth(1).from, byDepth(1).to, 4L, reader = true) should not be empty
-      two.find(index.from, index.to, 6L, reader = true) should not be empty
+      // an index of an epoch that is past goes when one of a later epoch is kept: no view is made of that epoch again
+      val moved = new ReverseIndexCache(maxKept = 4, maxBytes = Long.MaxValue)
+      moved.keep(byDepth(1), 4L, reader = true)
+      moved.keep(byDepth(2), 4L, reader = false)
+      moved.size shouldBe 2
+      moved.keep(byDepth(3), 6L, reader = true)
+      moved.size shouldBe 1
+      moved.bytes shouldBe byDepth(3).bytes
+      moved.find(byDepth(3).from, byDepth(3).to, 6L, reader = true) should not be empty
+      // and one that comes late, built across the move, is not kept
+      moved.keep(byDepth(4), 4L, reader = false)
+      moved.size shouldBe 1
+      moved.find(byDepth(4).from, byDepth(4).to, 4L, reader = false) shouldBe None
 
       cache.clear()
       cache.size shouldBe 0

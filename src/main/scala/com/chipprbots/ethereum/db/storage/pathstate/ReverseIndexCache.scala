@@ -19,7 +19,7 @@ import scala.jdk.CollectionConverters.*
   * more than `maxBytes`.
   *
   * An index is of the records as they were at one epoch, and is given only to a view of that epoch (see
-  * [[PathStateStorage]]).
+  * [[PathStateStorage]]). The readers of every kind share the readers' few.
   *
   * @param maxKept
   *   how many indexes of each kind are kept
@@ -35,24 +35,40 @@ final private[pathstate] class ReverseIndexCache(maxKept: Int, maxBytes: Long):
   private val kept = new ConcurrentHashMap[(ByteString, ByteString), Kept]()
   private val uses = new AtomicLong(0L)
 
+  /** The epoch of the newest index that was kept. */
+  private var newest = Long.MinValue
+
   /** The index between `anchor` and `fork` that was built at `epoch`, when it is kept. An execution that finds an index
-    * a reader built takes it over: it is an execution's from then on.
+    * a reader built takes it over: it is an execution's from then on. That is done as a keep is, one at a time: an
+    * index is not chosen to go as a reader's while an execution takes it.
     */
   def find(anchor: BlockRef, fork: BlockRef, epoch: Long, reader: Boolean): Option[ReverseIndex] =
-    Option(kept.get((anchor.hash, fork.hash)))
-      .filter(entry => entry.epoch == epoch && entry.index.from == anchor && entry.index.to == fork)
-      .map { entry =>
-        entry.used = uses.incrementAndGet()
-        if !reader then entry.reader = false
-        entry.index
+    def found: Option[Kept] =
+      Option(kept.get((anchor.hash, fork.hash)))
+        .filter(entry => entry.epoch == epoch && entry.index.from == anchor && entry.index.to == fork)
+    def used(entry: Kept): ReverseIndex =
+      entry.used = uses.incrementAndGet()
+      entry.index
+    if reader then found.map(used)
+    else
+      synchronized {
+        found.map { entry =>
+          entry.reader = false
+          used(entry)
+        }
       }
 
-  /** Keeps `index`, built at `epoch` by a reader or by an execution, if there is room for it or room can be made. */
+  /** Keeps `index`, built at `epoch` by a reader or by an execution, if there is room for it or room can be made.
+    *
+    * No view is made of an epoch that is past, so an index of an earlier epoch than this one is of no more use, and
+    * goes: one that was built across a move, or before a write that failed. And one that comes after a later one was
+    * kept is not kept.
+    */
   def keep(index: ReverseIndex, epoch: Long, reader: Boolean): Unit = synchronized {
-    if index.bytes <= maxBytes then
+    if index.bytes <= maxBytes && epoch >= newest then
+      newest = epoch
+      kept.values.removeIf(_.epoch < epoch)
       val key = (index.from.hash, index.to.hash)
-      // an index of the same two blocks from another epoch is of no more use
-      kept.remove(key)
       def ofKind: Int = kept.values.asScala.count(_.reader == reader)
       def fits: Boolean = ofKind < maxKept && bytes + index.bytes <= maxBytes
       // What may go for it, least recently used first. For a reader: a reader's. For an execution: one of its own

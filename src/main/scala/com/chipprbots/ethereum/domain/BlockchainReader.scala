@@ -103,7 +103,10 @@ class BlockchainReader(
       state.anchor.flatMap { held =>
         servedRoots(held).get(root).flatMap { block =>
           // the disk may move between the lookup and the view: a state that is no longer held is not served
-          try Some(if block == held then state.readOnly(held) else state.readOnlyBehind(block))
+          try
+            Some(
+              if block == held then state.readOnly(held) else state.readOnlyBehind(block, PathStateStorage.Reader.Peer)
+            )
           catch case _: StateFault => None
         }
       }

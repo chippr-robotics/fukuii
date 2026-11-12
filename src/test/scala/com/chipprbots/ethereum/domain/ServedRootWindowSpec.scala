@@ -9,6 +9,7 @@ import com.chipprbots.ethereum.crypto.kec256
 import com.chipprbots.ethereum.db.storage.MptStorage
 import com.chipprbots.ethereum.db.storage.pathstate.CanonicalChainOnPositions
 import com.chipprbots.ethereum.db.storage.pathstate.PathStateStorage.CommitSettings
+import com.chipprbots.ethereum.db.storage.pathstate.PathStateStorage.Reader
 import com.chipprbots.ethereum.db.storage.pathstate.PathStateTestKit.*
 import com.chipprbots.ethereum.db.storage.pathstate.PositionKey
 import com.chipprbots.ethereum.db.storage.pathstate.RetentionPolicy
@@ -101,7 +102,7 @@ class ServedRootWindowSpec extends AnyFlatSpec with Matchers:
       chain.headers.takeRight(4).foreach(served(chain, _))
       newer shouldBe chain.headers(chain.headers.size - 4)
       // so the root the two share is served, at the newer: the older is one record too far
-      a[StateFault] should be thrownBy chain.state.readOnlyBehind(chain.refOf(older))
+      a[StateFault] should be thrownBy chain.state.readOnlyBehind(chain.refOf(older), Reader.Peer)
       served(chain, older)
       // and what is behind it is not
       chain.headers.take(3).foreach(header => notServed(chain, header.stateRoot.value))

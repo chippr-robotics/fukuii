@@ -1,7 +1,9 @@
 package com.chipprbots.ethereum.db.storage.pathstate
 
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.CountDownLatch
 import java.util.concurrent.Semaphore
+import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicReference
 
 import org.apache.pekko.util.ByteString
@@ -78,11 +80,15 @@ final class PathStateStorage(
   /** The reverse indexes last built ([[ReverseIndexCache]]): those an execution built, and those a reader did. */
   private val indexes = new ReverseIndexCache(MaxIndexesKept, settings.maxReversePoolBytes)
 
-  /** One gate for each index that is being built: who asks for the same index meanwhile waits for it. */
-  private val indexesBeingBuilt = new ConcurrentHashMap[(ByteString, ByteString, Long), Object]()
+  /** The indexes that are being built: who asks for one of them meanwhile waits for it, and is given it. */
+  private val indexesBeingBuilt = new ConcurrentHashMap[(ByteString, ByteString, Long), IndexBuild]()
+  private val indexBuildsAwaited = new AtomicInteger(0)
 
-  /** How many indexes readers may be building at once. A reader is anyone who can reach the node. */
-  private val readerBuilds = new Semaphore(MaxReaderIndexBuilds)
+  /** How many indexes the readers of each kind may be building at once. A reader is anyone who can reach the node, and
+    * each kind has its own few: a caller of the JSON-RPC who asks about many old blocks does not have a peer refused.
+    */
+  private val readerBuilds: Map[Reader, Semaphore] =
+    Reader.values.iterator.map(_ -> new Semaphore(MaxReaderIndexBuilds)).toMap
 
   /** The window of `held`, which is the anchor, for a writer: built from the records' headers if there is none of that
     * anchor. Under the lock, which a writer holds anyway: once after a start, and after an anchor move that was no
@@ -125,42 +131,79 @@ final class PathStateStorage(
     * earlier epoch, also when a head move brings the anchor back to a block it has been at (beacon).
     *
     * '''An index is built once for those who ask for it together''': who asks for an index that is being built waits
-    * for it, where each would otherwise walk the same records and hold the same bytes. And '''readers build few at
-    * once''': a reader that finds as many being built as readers may build is told the state is not available, and asks
-    * again. An execution is held to no such limit: what a peer or a caller of the JSON-RPC asks for must not keep a
-    * block from being executed (beacon, conduit).
+    * for it and is given it, also when it is not kept, and is told what the one who built it was told when it could not
+    * be built. Each would otherwise walk the same records and hold the same bytes (beacon).
+    *
+    * And '''readers build few at once''', each kind its own: a reader that finds as many being built as its kind may
+    * build is told the state is not available, and asks again. One that waits for an index another builds needs no such
+    * leave. An execution is held to no limit: what a peer or a caller of the JSON-RPC asks for must not keep a block
+    * from being executed (beacon, conduit).
+    *
+    * What this bounds is what is being built and what is kept. An index that is not kept, or no longer, lives as long
+    * as the views that read through it: how many reads behind the head run at once is for those who serve them to
+    * bound.
     *
     * @param reader
-    *   whether it is for a reader (a peer served a state, a JSON-RPC call), and not for an execution
+    *   who it is for when it is for a reader (a peer served a state, a JSON-RPC call), and not for an execution
     */
-  private def indexBetween(anchor: BlockRef, fork: BlockRef, epoch: Long, reader: Boolean): ReverseIndex =
-    indexes.find(anchor, fork, epoch, reader).getOrElse {
-      val key = (anchor.hash, fork.hash, epoch)
-      val gate = indexesBeingBuilt.computeIfAbsent(key, _ => new Object)
-      try
-        gate.synchronized {
-          // built meanwhile by the one this waited for
-          indexes.find(anchor, fork, epoch, reader).getOrElse {
-            if reader && !readerBuilds.tryAcquire() then
-              told("an index a reader was refused")(settings.observer.indexRefused())
-              throw new StateUnavailable(
-                s"the state of block ${fork.show} is not available right now: as many states behind the head as may " +
-                  "be read at once are being read. Ask again"
-              )
+  private def indexBetween(anchor: BlockRef, fork: BlockRef, epoch: Long, reader: Option[Reader]): ReverseIndex =
+    val key = (anchor.hash, fork.hash, epoch)
+    indexes.find(anchor, fork, epoch, reader.isDefined).getOrElse {
+      Option(indexesBeingBuilt.get(key)) match
+        case Some(build) =>
+          indexBuildsAwaited.incrementAndGet()
+          val ended =
+            try build.await()
+            finally indexBuildsAwaited.decrementAndGet()
+          ended match
+            case Some(Right(index)) =>
+              // an execution that was given an index a reader built takes it over, if it is kept
+              if reader.isEmpty then indexes.find(anchor, fork, epoch, reader = false)
+              index
+            case Some(Left(why)) => throw new StateUnavailable(why)
+            // it ended in a way that says nothing of the records: asked again
+            case None => indexBetween(anchor, fork, epoch, reader)
+        case None =>
+          val leave = reader.map(readerBuilds)
+          if leave.exists(!_.tryAcquire()) then
+            told("an index a reader was refused")(settings.observer.indexRefused())
+            throw new StateUnavailable(
+              s"the state of block ${fork.show} is not available right now: as many states behind the head as may " +
+                "be read at once are being read. Ask again"
+            )
+          val mine = new IndexBuild
+          if indexesBeingBuilt.putIfAbsent(key, mine) != null then
+            // another came first: it is waited for, with no leave held
+            leave.foreach(_.release())
+            indexBetween(anchor, fork, epoch, reader)
+          else
+            var ended: Option[Either[String, ReverseIndex]] = None
             try
-              val built =
-                ReverseIndex.between(changesets, anchor, fork, settings.maxReverseHops, settings.maxReverseIndexBytes)
-              indexes.keep(built, epoch, reader)
-              told("an index that was built")(settings.observer.indexBuilt(built.bytes))
+              // built and kept between the look above and now
+              val built = indexes.find(anchor, fork, epoch, reader.isDefined).getOrElse {
+                val made =
+                  ReverseIndex.between(changesets, anchor, fork, settings.maxReverseHops, settings.maxReverseIndexBytes)
+                indexes.keep(made, epoch, reader.isDefined)
+                told("an index that was built")(settings.observer.indexBuilt(made.bytes))
+                made
+              }
+              ended = Some(Right(built))
               built
-            finally if reader then readerBuilds.release()
-          }
-        }
-      finally indexesBeingBuilt.remove(key, gate)
+            catch
+              case unavailable: StateUnavailable =>
+                ended = Some(Left(unavailable.reason))
+                throw unavailable
+            finally
+              indexesBeingBuilt.remove(key, mine)
+              mine.end(ended)
+              leave.foreach(_.release())
     }
 
-  /** How many indexes are being built, or waited for, right now: none when no view is being made. */
+  /** How many indexes are being built right now, and how many callers wait for one of them: none when no view is being
+    * made.
+    */
   private[pathstate] def indexBuildsInFlight: Int = indexesBeingBuilt.size
+  private[pathstate] def indexBuildsWaitedFor: Int = indexBuildsAwaited.get
 
   /** What the overlay holds right now (data-model 6.4, 11). */
   def overlayUsage: OverlayUsage =
@@ -248,7 +291,18 @@ final class PathStateStorage(
     * @throws StateUnavailable
     *   when no layers and no records lead to `block`'s state
     */
-  private[pathstate] def viewOf(block: BlockRef, reader: Boolean = false, triesLeft: Int = ViewTries): StateView =
+  private[pathstate] def viewOf(
+      block: BlockRef,
+      reader: Option[Reader] = None,
+      triesLeft: Int = ViewTries
+  ): StateView =
+    // The view may wait for an index another builds, and reads records to build one: under the state lock that is
+    // every commit held up behind one read.
+    if lock.isHeldByCurrentThread then
+      throw new IllegalStateException(
+        s"A view of block ${block.show} cannot be made by the holder of the state lock " +
+          s"('${lock.holder.getOrElse("?")}'): it may wait for records to be read"
+      )
     val (epoch, held) = clock.awaitRest()
     held match
       case None => throw new StateUnavailable(s"the state of block ${block.show} is not held: there is no state anchor")
@@ -310,10 +364,13 @@ final class PathStateStorage(
     *
     * @throws StateUnavailable
     *   when `block` is not the anchor and the records do not lead back to it: it is too far behind, a record on the way
-    *   is pruned or lists nothing, or the block is not of the anchor's chain
+    *   is pruned or lists nothing, or the block is not of the anchor's chain; or as many states behind the head as
+    *   readers of this kind may have made at once are being made, and the caller asks again
+    * @throws IllegalStateException
+    *   when the calling thread holds the state lock
     */
-  def readOnlyBehind(block: BlockRef): MptStorage =
-    val view = viewOf(block, reader = true)
+  def readOnlyBehind(block: BlockRef, reader: Reader): MptStorage =
+    val view = viewOf(block, Some(reader))
     if view.layers.nonEmpty then
       throw new StateUnavailable(
         s"the state of block ${block.show} is not held as a state of the chain the disk is on: it is an executed " +
@@ -919,8 +976,30 @@ object PathStateStorage:
   /** How many reverse indexes are kept at once. */
   private val MaxIndexesKept = 4
 
-  /** How many reverse indexes readers may be building at once. */
+  /** How many reverse indexes the readers of one kind may be building at once. */
   private val MaxReaderIndexBuilds = 2
+
+  /** Who reads a state behind the head, when it is no execution. */
+  enum Reader:
+    /** A peer that is served a state by its root. */
+    case Peer
+
+    /** A caller of the JSON-RPC, or of another interface the node answers on. */
+    case Rpc
+
+  /** An index that is being built, and what its building came to: the index, or why the records do not give one. */
+  final private class IndexBuild:
+    private val over = new CountDownLatch(1)
+    @volatile private var result: Option[Either[String, ReverseIndex]] = None
+
+    /** Said once, by the one who builds: `None` when it ended in a way that says nothing of the records. */
+    def end(result: Option[Either[String, ReverseIndex]]): Unit =
+      this.result = result
+      over.countDown()
+
+    def await(): Option[Either[String, ReverseIndex]] =
+      over.await()
+      result
 
   /** What [[PathStateStorage.commitOverlay]] did with a block. */
   enum OverlayOutcome:
