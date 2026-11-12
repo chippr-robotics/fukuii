@@ -96,6 +96,78 @@ final class PathStateStorage(
   /** Whether `blockHash` is the block whose state the disk holds: its changes are committed and in force. */
   def isApplied(blockHash: ByteString): Boolean = anchor.exists(_.hash == blockHash)
 
+  /** A layer to build a genesis state on. Making one changes nothing and asks nothing of the datadir. */
+  def genesisLayer(): GenesisLayer = new GenesisLayer
+
+  /** Commits the genesis built on `layer` as the first state of a datadir that holds none (data-model 5.4): '''one
+    * batch''', synced, of the caller's own updates (the genesis block, its weight, the best-block pointer), the rows,
+    * the marks of a datadir this build created, the layout stamp, and the anchor. It is one of the writers that make an
+    * anchor where there was none, so it runs with no anchor, under the state lock, as a move of the clock.
+    *
+    * There is no changeset record for a genesis: nothing came before it.
+    *
+    * @throws IllegalStateException
+    *   when the datadir already holds a state anchor, a row of `t` or `u`, a changeset record or a layout stamp; or
+    *   when what was built is not the state `genesis` names
+    */
+  def commitGenesis(layer: GenesisLayer, genesis: BlockRef, extra: Option[DataSourceBatchUpdate]): Unit =
+    extra.foreach(other =>
+      require(other.dataSource eq dataSource, "a block and its state are written in one batch, to one data source")
+    )
+    require(genesis.number == 0, s"a genesis block is block 0, not ${genesis.number}")
+    lock.locked(
+      s"genesis commit of block ${genesis.show}",
+      nanos => told("the wait for the state lock")(settings.observer.lockWaited(nanos))
+    ) {
+      val held = Seq(
+        clock.anchor.map(anchor => s"the state of block ${anchor.show}"),
+        Option.when(!rows.isEmpty)("rows of a state"),
+        Option.when(!changesets.isEmpty)("changeset records"),
+        appState.getChangesetPrunedTo().map(height => s"a count of pruned changesets ($height)"),
+        appState.getStateLayout().map(stamp => s"the layout stamp '$stamp'")
+      ).flatten
+      if held.nonEmpty then
+        throw new IllegalStateException(
+          s"A genesis cannot be committed to a data directory that already holds ${held.mkString(", ")}"
+        )
+
+      if layer.changes.resetOwners.nonEmpty then
+        throw new IllegalStateException(
+          "The build of a genesis replaced a storage trie whole: a genesis has no account to remove"
+        )
+      val built = layer.changes.finalise(_ => Some(Nil))
+      // nothing came before a genesis, and its account trie's root is the state root its header carries (an empty
+      // allocation has no row, and the root of the empty trie)
+      val diff = BlockDiff(
+        genesis.hash,
+        genesis.number,
+        ByteString(new Array[Byte](BlockDiff.HashLength)),
+        BlockDiff.EmptyRoot,
+        genesis.stateRoot,
+        built.changes
+      )
+      val faults = diff.validate ++ built.changes.collect {
+        case (position, change) if change.prior.isDefined => s"${position.show}: a node before the genesis"
+      }
+      if faults.nonEmpty then
+        throw new IllegalStateException(
+          s"What was built is not the genesis state of block ${genesis.show}: " +
+            faults.take(MaxFaultsShown).mkString("; ")
+        )
+
+      val written: Map[PositionKey, Option[ByteString]] = built.changes.view.mapValues(_.next).toMap
+      val updates: Seq[DataUpdate] =
+        extra.toSeq.flatMap(_.updates) ++ rows.rowUpdates(written) ++
+          // who created the datadir and that its chain weights follow from the genesis's; never that reference counts
+          // are exact, which nothing on this layout has (forge)
+          appState.markDatadirCreated(countsExact = false).updates ++
+          appState.putStateLayout().updates ++
+          appState.putStateAnchor(genesis).updates
+      clock.inFlight(StateMove(genesis, written.view.mapValues(_ => Option.empty[ByteString]).toMap))(
+        dataSource.updateSync(updates)
+      )
+    }
+
   /** A fresh layer over `parent`'s state for one execution of a block that builds on it.
     *
     * @throws StateUnavailable

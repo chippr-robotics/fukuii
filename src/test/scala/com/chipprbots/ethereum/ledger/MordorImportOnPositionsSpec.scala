@@ -63,12 +63,7 @@ class MordorImportOnPositionsSpec extends AnyFlatSpec with Matchers:
       new BlockValidation(mining, blockchainReader, blockQueue)
     )
     def loadGenesis(): BlockHeader =
-      new GenesisDataLoader(
-        blockchainReader,
-        blockchainWriter,
-        storagesInstance.storages.evmCodeStorage,
-        storagesInstance.storages.stateStorage
-      ).loadGenesisData()
+      GenesisDataLoader.over(blockchainReader, blockchainWriter, storagesInstance.storages).loadGenesisData()
       blockchainReader.getBlockHeaderByNumber(0).get
     def importOne(block: Block): (List[BlockData], Option[BlockExecutionError]) =
       val weight = blockchainReader.getChainWeightByHash(block.header.parentHash).getOrElse(ChainWeight.zero)
@@ -103,18 +98,11 @@ class MordorImportOnPositionsSpec extends AnyFlatSpec with Matchers:
           positions.collect { case (Some(owner), trie) => trie.map((hp, node) => (owner ++ hp) -> node) }.flatten.toMap
         )
 
-      // the unified layout: the genesis state as rows, the anchor at the genesis block
+      // the unified layout: Mordor's genesis committed by the node (it allocates nothing: no row, the empty root)
       val source = EphemDataSource()
-      val genesis = new Node(source, guard = false).loadGenesis()
-      genesis.hash shouldBe headers.head.hash
-      val seeded = new NodeStorage(source)
-      PathStateTestKit.seedPositions(
-        source,
-        RawTrieWalk.statePositions(genesis.stateRoot.value.toArray, hash => seeded.get(ByteString(hash)).get),
-        refOf(genesis)
-      )
-      val hashStoreAtGenesis = PathStateTestKit.hashStoreRows(source)
       val onPositions = new Node(source, guard = true)
+      val genesis = onPositions.loadGenesis()
+      genesis.hash shouldBe headers.head.hash
       val pathState = onPositions.storagesInstance.storages.pathStateStorage.get
       val rows = new PathNodeStorage(source)
       val records = new ChangesetStorage(source)
@@ -152,8 +140,8 @@ class MordorImportOnPositionsSpec extends AnyFlatSpec with Matchers:
       disk shouldBe before
       pathState.anchor shouldBe Some(refOf(last))
 
-      // the hash store holds the genesis load and no node more
-      PathStateTestKit.hashStoreRows(source) shouldBe hashStoreAtGenesis
+      // the hash store holds no node: one writer of the state, and not that one
+      PathStateTestKit.hashStoreRows(source) shouldBe empty
 
       // and the records take the rows back to the genesis state
       val chain = genesis +: blocks.map(_.header)
