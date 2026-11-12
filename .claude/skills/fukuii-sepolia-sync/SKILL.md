@@ -27,7 +27,7 @@ Sepolia is **post-Merge PoS** — sync at the tip is driven by a Consensus Layer
   leaves the EL idle for hours.
 
 > Hoodi (chain id 560048, `fukuii hoodi`) is built in on the same ETH/PoS path and is run the same way; see
-> `docs/runbooks/hoodi.md`. Its CL checkpoint endpoint is `https://hoodi.checkpoint.ethpandaops.io`.
+> `docs/runbooks/hoodi.md`. Its CL checkpoint endpoint is `https://checkpoint-sync.hoodi.ethpandaops.io`.
 
 ## Config for Sepolia
 The shipped `sepolia` network config already sets the consensus-critical values

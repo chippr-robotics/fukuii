@@ -111,6 +111,7 @@ class Eip1459Spec extends AnyFlatSpec with Matchers:
     keyOf("all.mordor.etcdisco.net") shouldBe DnsTrustAnchors.EtcKey
     keyOf("all.mordor.blockd.info") shouldBe DnsTrustAnchors.EtcKey
     keyOf("all.sepolia.ethdisco.net") shouldBe DnsTrustAnchors.EthKey
+    keyOf("all.hoodi.ethdisco.net") shouldBe DnsTrustAnchors.EthKey
   }
 
   it should "refuse a bare domain it has no key for, and take a URL's own key" taggedAs (UnitTest, NetworkTest) in {
@@ -127,6 +128,20 @@ class Eip1459Spec extends AnyFlatSpec with Matchers:
     root.seq shouldBe 1168L
     root.signature.length shouldBe 65
     Eip1459.verifyRoot(root, snapshotTree.publicKey) shouldBe true
+  }
+
+  it should "verify the recorded all.hoodi.ethdisco.net root against the shipped EF key" taggedAs (
+    UnitTest,
+    NetworkTest
+  ) in {
+    // TXT record of all.hoodi.ethdisco.net seen on 2026-11-12 (recorded vector, no network access in this test).
+    val hoodiRoot =
+      "enrtree-root:v1 e=PJFYMLOBJ3UM4YA7HMYZ67ORDI l=FDXN3SN67NA5DKA4J2GOK7BVQI seq=1794520894 sig=nIcQulprxRACi1eCrFyD0Oq26R2rXVe0dldhBjvvkdAL8lReQWRf4Qg6H2qJ2yRCE5Kp6yPzq3-qma7XVKbnrwE"
+    val root = Eip1459.parseRoot(hoodiRoot).toOption.get
+    val key = DnsTrustAnchors.resolve("all.hoodi.ethdisco.net").toOption.get.publicKey
+
+    root.seq shouldBe 1794520894L
+    Eip1459.verifyRoot(root, key) shouldBe true
   }
 
   it should "not verify a real root under another tree's key" taggedAs (UnitTest, NetworkTest) in {

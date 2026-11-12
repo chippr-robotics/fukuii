@@ -227,7 +227,8 @@ object DnsTrustAnchors:
   val EtcKey = "AJE62Q4DUX4QMMXEHCSSCSC65TDHZYSMONSD64P3WULVLSF6MRQ3K"
 
   /** The Ethereum Foundation's key: go-ethereum `params/bootnodes.go:72`, used there for `all.sepolia.ethdisco.net`
-    * (line 89).
+    * (line 89). `KnownDNSNetwork` (`params/bootnodes.go:108-115`) uses this one key for every EF tree, so it also signs
+    * `all.hoodi.ethdisco.net`: checked against the live Hoodi root on 2026-11-12 (`Eip1459Spec`, recorded vector).
     */
   val EthKey = "AKA3AM6LPBYEUDMVNU3BSVQJ5AD45Y7YPOHJLEF6W26QOE4VTUDPE"
 
