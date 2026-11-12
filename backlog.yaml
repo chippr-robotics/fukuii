@@ -2660,7 +2660,7 @@ items:
   - id: B-234
     title: "028 S4a: strict HTTPS release transport and tar reader"
     priority: P2
-    status: open
+    status: claimed
     area: ops
     size: M
     opened: 2026-11-12
@@ -2668,6 +2668,11 @@ items:
     links:
       spec: specs/028-builtin-ephemery-hoodi
       branch: feat/028-s4a-transport
+    claim:
+      by: dev-node
+      agent: main
+      since: 2026-11-12T21:49:32Z
+      heartbeat: 2026-11-12T21:49:32Z
   - id: B-235
     title: "028 S4b: Ephemery refresh after a reset, CL testnet dir, fetch-genesis.sh exec wrapper"
     priority: P2
