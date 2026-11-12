@@ -149,7 +149,8 @@ final class PathStateStorage(
   private def indexBetween(anchor: BlockRef, fork: BlockRef, epoch: Long, reader: Option[Reader]): ReverseIndex =
     val key = (anchor.hash, fork.hash, epoch)
     indexes.find(anchor, fork, epoch, reader.isDefined).getOrElse {
-      Option(indexesBeingBuilt.get(key)) match
+      val mine = new IndexBuild
+      Option(indexesBeingBuilt.putIfAbsent(key, mine)) match
         case Some(build) =>
           indexBuildsAwaited.incrementAndGet()
           val ended =
@@ -161,23 +162,18 @@ final class PathStateStorage(
               if reader.isEmpty then indexes.find(anchor, fork, epoch, reader = false)
               index
             case Some(Left(why)) => throw new StateUnavailable(why)
-            // it ended in a way that says nothing of the records: asked again
+            // it ended in a way that says nothing of the records (a reader that was refused): asked again
             case None => indexBetween(anchor, fork, epoch, reader)
         case None =>
-          val leave = reader.map(readerBuilds)
-          if leave.exists(!_.tryAcquire()) then
-            told("an index a reader was refused")(settings.observer.indexRefused())
-            throw new StateUnavailable(
-              s"the state of block ${fork.show} is not available right now: as many states behind the head as may " +
-                "be read at once are being read. Ask again"
-            )
-          val mine = new IndexBuild
-          if indexesBeingBuilt.putIfAbsent(key, mine) != null then
-            // another came first: it is waited for, with no leave held
-            leave.foreach(_.release())
-            indexBetween(anchor, fork, epoch, reader)
-          else
-            var ended: Option[Either[String, ReverseIndex]] = None
+          var ended: Option[Either[String, ReverseIndex]] = None
+          try
+            val leave = reader.map(readerBuilds)
+            if leave.exists(!_.tryAcquire()) then
+              told("an index a reader was refused")(settings.observer.indexRefused())
+              throw new StateUnavailable(
+                s"the state of block ${fork.show} is not available right now: as many states behind the head as " +
+                  "may be read at once are being read. Ask again"
+              )
             try
               // built and kept between the look above and now
               val built = indexes.find(anchor, fork, epoch, reader.isDefined).getOrElse {
@@ -193,10 +189,10 @@ final class PathStateStorage(
               case unavailable: StateUnavailable =>
                 ended = Some(Left(unavailable.reason))
                 throw unavailable
-            finally
-              indexesBeingBuilt.remove(key, mine)
-              mine.end(ended)
-              leave.foreach(_.release())
+            finally leave.foreach(_.release())
+          finally
+            indexesBeingBuilt.remove(key, mine)
+            mine.end(ended)
     }
 
   /** How many indexes are being built right now, and how many callers wait for one of them: none when no view is being
