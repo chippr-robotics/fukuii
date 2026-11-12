@@ -67,6 +67,17 @@ class StateConfigSpec extends AnyFlatSpec with Matchers:
       (shipped.maxForwardLayers, shipped.maxForwardBytes, shipped.maxLayerBytes, shipped.pinnedMaxBytes) shouldBe
         (32, 134217728L, 67108864L, 268435456L)
       (shipped.maxReversePoolBytes, shipped.maxReverseIndexBytes) shouldBe (134217728L, 67108864L)
+      // a view reaches as far behind the anchor as the records that are kept; in the archive mode, where all of them
+      // are, as far as the archive's own key says
+      def reach(overrides: String): Int =
+        PathStateStorage.CommitSettings
+          .of(StateConfig(fukuii(overrides)), () => None, PathStateStorage.CommitObserver.Silent)
+          .maxReverseHops
+      shipped.maxReverseHops shouldBe 512
+      reach("fukuii.state { retention.max-blocks = 700, archive.view-reach = 90 }") shouldBe 700
+      reach(
+        """fukuii { pruning.mode = "archive", state { retention.max-blocks = 700, archive.view-reach = 90 } }"""
+      ) shouldBe 90
 
       // a bound of one block above what all of them may hold is a configuration nothing could be kept under
       val refused = the[IllegalArgumentException] thrownBy PathStateStorage.CommitSettings.of(

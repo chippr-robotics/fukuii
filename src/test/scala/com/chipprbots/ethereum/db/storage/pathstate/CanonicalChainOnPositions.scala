@@ -23,13 +23,13 @@ import com.chipprbots.ethereum.ledger.InMemoryWorldStateProxy
   */
 final class CanonicalChainOnPositions(
     settings: PathStateStorage.CommitSettings = PathStateStorage.CommitSettings(),
-    maxViewAgeMoves: Int = 8
+    maxViewAgeMoves: Int = 8,
+    val source: EphemDataSource = EphemDataSource()
 ):
   import PathStateStorage.*
   import PathStateTestKit.*
 
   val hashed = new HashedState
-  val source: EphemDataSource = EphemDataSource()
   val appState = new AppStateStorage(source)
   val headersByHash = new BlockHeadersStorage(source)
   val hashesByNumber = new BlockNumberMappingStorage(source)

@@ -687,6 +687,15 @@ waits for the longest running execution. The epoch protocol is recommended and t
 Total overlay hard cap, excluding pinned layers: **256 MiB** (`state.overlay.max-bytes`). These are first guesses; section 13
 lists what to measure.
 
+*(C4a part 4b-1 as built, 2026-11-12.)* What is resident behind the anchor is **a reverse index per (anchor, block)**, not
+decoded records: at most four an execution built and four a reader built, in the reverse half of `max-bytes`, least recently
+used first to go, and a reader's never in an execution's place (`ReverseIndexCache`). All of them go when the anchor moves.
+`resident-reverse-blocks` is not read. A reader (a peer served a state, a JSON-RPC call) builds at most two indexes at once
+per kind of reader and is told to ask again beyond that; an execution is not limited; whoever asks for an index that is being
+built is given that one. A view reaches `state.retention.max-blocks` behind the anchor in the basic mode and
+`state.archive.view-reach` in the archive mode. **Not bounded here**: an index that is no longer kept lives as long as the
+views that read through it, so the layer that serves reads behind the head bounds how many run at once (C4a part 4b-2).
+
 **Why branches are pinned (forge, S0 item 3a).** `reorganise` executes the whole new branch with `adoptEachBlock = false`
 (`ConsensusImpl.scala:325-326`) and settles only after the last block (`:328`), so every block of the branch is a live forward
 layer at once. A batch is up to 50 blocks (`blocks-batch-size = 50`, `sync.conf:351`) and BlockQueue can hold branches up to
@@ -1127,6 +1136,7 @@ them fails at start with a message naming the deleted key. `pruning.history` kee
 | `app.db.state.overlay.forward.layers`, `.bytes` | gauge | forward layers and their size |
 | `app.db.state.overlay.reverse.resident`, `.bytes` | gauge | resident reverse diffs |
 | `app.db.state.overlay.evictions` | counter | by pool |
+| `app.db.state.overlay.reverse.builds`, `.build.bytes`, `.refused` | counter, summary, counter | reverse indexes built, their size, and readers told to ask again because as many as their kind may build were being built (C4a part 4b-1) |
 | `app.db.state.view.stale` | counter | `StaleStateViewException` thrown, by caller (execution, rpc, snap-serve, prefetch) |
 | `app.db.state.view.retries` | counter | executions retried after a stale view |
 | `app.db.state.move.seconds` | timer | `moveHead`, by direction and block count |

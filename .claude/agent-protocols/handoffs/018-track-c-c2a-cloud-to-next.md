@@ -168,6 +168,14 @@ Read plan.md, "C2a part 1 record" and "C2a part 2 record", then:
   records, best block, the reader) starts from `CanonicalChainOnPositions`. Next in part 4: JSON-RPC reads at a
   block behind the head. The overlay commit of a block that is executed and not adopted (`PathStagedBlock`,
   `BlockExecution.refuseUnadopted`) lands with its first caller, in C4d or C4e.
+- **C4a part 4b-1: a reader behind the head is bounded in what it costs** (plan.md, "C4a part 4b-1"). A reader's
+  view is made with no lock held and never by the lock's holder; an index is built once for those who ask together;
+  `readOnlyBehind(block, Reader.Peer | Reader.Rpc)` builds two indexes at once per kind and refuses a third with
+  `StateUnavailable` ("Ask again"); the kept indexes are `ReverseIndexCache`'s, four an execution's and four a
+  reader's. The reach is `retention.max-blocks` (basic) or `archive.view-reach` (archive). **4b-2 must bound how
+  many reads behind the head run at once at its own seam** (an index that is not kept lives as long as its views),
+  and treat a refusal and a stale view alike. A spec that needs a thread stopped inside a read uses
+  `ReaderIndexBuildSpec`'s `Stop`; it waits on `indexBuildsWaitedFor`, never on a thread's state.
 - **C4a** brings back what C3b refuses: the overlay commit for a block that does not extend the anchor
   (`buildExtra(adopted)`, `NotExtendingAnchor`, `saveLastBlock` writing nothing),
   `stateAvailable(hash)`, the served-root window, and SNAP advertised again. C4b: the head move, `ConsensusStateFault`

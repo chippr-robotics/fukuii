@@ -2036,6 +2036,72 @@ retention (nothing in the position store touches the code store), so a code hash
 good (`AccountPeerDispatch`), which is the behaviour not advertising avoids. `ServedRootWindowSpec` runs in the
 essential tier (no actors); the actor spec's cases are `SyncTest`, as that spec's are.
 
+### C4a part 4b-1: what a reader behind the head may cost the node (2026-11-12)
+
+The readers that come next are anyone who can reach the node: a peer (part 4, above) and a caller of the JSON-RPC
+(part 4b-2). Two consults before code (conduit, beacon; both AGREE WITH CHANGES) named what the store had to be
+first, and this is that: no change to what any caller reads.
+
+- **The look at the blocks behind the anchor is made by a reader with no lock held.** It reads the header of a
+  record for each block behind the anchor (up to the reach), and under the state lock that was every commit held
+  up behind one read after a start. A reader builds it at the epoch its view observed and it is kept only if the
+  disk did not move meanwhile; otherwise the view is made again. A writer builds it under the lock it holds
+  anyway.
+- **An index is built once for those who ask for it together.** Who asks for an index that is being built waits
+  for it and is given it, kept or not, and is told what the builder was told when the records give none: no second
+  walk of the same records, no second copy of the same bytes.
+- **The readers of one kind build two at once**, a peer and a caller of the JSON-RPC each their own
+  (`PathStateStorage.Reader`): a third is told the state is not available right now and to ask again
+  (`StateUnavailable`), and counted. One that waits for a build in flight needs no such leave. **An execution is
+  held to no limit.** The number is a constant until it is measured (M5).
+- **The indexes that are kept are an execution's or a reader's** (`ReverseIndexCache`, in place of four that were
+  all dropped when a fifth came): four of each, the least recently used going first, within the pool's bytes. A
+  reader's makes room only among readers'; an execution's takes a reader's place when it must, and takes over a
+  reader's index it uses. An index of an epoch that is past goes when a later one is kept. So a sweep of reads
+  over old blocks costs the readers their own indexes and nothing else.
+- **A view is not made by the holder of the state lock** (`IllegalStateException`): it may wait for records to be
+  read.
+- **How far behind the anchor a view reaches is the configuration's**: `state.retention.max-blocks` in the basic
+  mode (as far as records are kept), `state.archive.view-reach` in the archive mode. It was 1024 whatever the
+  configuration said. **In the archive mode this bounds an execution on a fork point too**: a head move across
+  more than `view-reach` blocks must not go through a view (C4b: the move walks the records itself).
+- Metrics: `db.state.overlay.reverse.builds`, `.build.bytes`, `.refused`.
+
+**What this does not bound, and 4b-2 must (beacon W1).** The pool and the builds in flight are bounded. An index
+that is not kept, or no longer, lives as long as the views that read through it, up to 64 MiB each: how many reads
+behind the head run at once is for the layer that serves them to bound. SNAP serving answers one request at a
+time; the JSON-RPC does not, and 4b-2 bounds it at its seam. Also for 4b-2: a refusal may reach the caller as a
+stale view when the disk moved meanwhile, and both mean "ask again".
+
+**Tests.** `ReverseIndexCacheSpec` (6 cases): found by its two blocks and its epoch and nothing else; each kind's
+few and their order of going; a reader never at the cost of an execution, by count and by bytes; an execution's
+three ways of making room; the take-over; an index above the pool. `ReaderIndexBuildSpec` (11 cases, threads
+stopped inside the data source's read by latches, no sleep): the look made with the lock free (a writer takes it
+inside every record read); the view made again when the disk moves during the look, and during the index build;
+one build for a reader, a second reader and an execution that ask together, with room for the index and with
+none; the failure told to who waited without a second walk; two builds per kind, the third refused, the other
+kind and an execution not; a build that failed gives its leave back; a sweep of readers leaves the execution's
+index; the reach; no view under the lock. `StateConfigSpec`, `StateMetricsSpec`: the reach by mode, the counters.
+
+**The mutation run**, twice: 27 mutants before beacon's read (26 caught, one did not compile), and 32 over the
+code as it is after it: the lock around the look, a look kept across a move, each caller building, a waiter not
+given the index or the reason, the take-over by an execution that waited, the limit lifted, shared between the
+kinds, put on an execution, or one more or less, a leave not given back at all or only after a failure, a build
+left behind or never ended, the cache's seven rules of who goes and what is found, the past epoch's index kept or
+a late one taken, the reach by mode, the guard against the lock's holder, and a peer served as a caller. All
+caught: one after it was written again so that it compiled, and one after a case was added (a peer served from the
+peers' own builds, in `ServedRootWindowSpec`). The run also showed one of the new cases to depend on the order two
+threads came to wait in: it now starts the second after the first is counted.
+
+**Read after code (beacon): APPROVE WITH CHANGES, nothing that hands out a wrong state.** Verified by beacon in
+code: every change of the anchor moves the epoch, so a look or an index built across a move is never used; the
+window's and the walk's bounds agree with the retention floor to the block. Taken: waiters given the result
+directly (they were given it through the kept indexes only, so an index that was not kept was built again by each);
+a kind of reader each with its own builds; the guard against the lock's holder; the take-over made one at a time
+with the keeps; indexes of a past epoch dropped; the tests told apart from an accident of interleaving (a count of
+who waits, in place of a thread's state). Recorded for 4b-2: the bound on reads in flight. Not tested, because
+nothing stops a thread there: a caller that waited on a reader that was refused asks again.
+
 ### Destructive change (C8a and C8b): the vault protocol blocks
 
 ```
