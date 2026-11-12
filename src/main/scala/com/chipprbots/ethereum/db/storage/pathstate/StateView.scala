@@ -283,12 +283,15 @@ final class StateView private[pathstate] (
   def ownerRows(owner: ByteString, maxRows: Int, maxBytes: Long): Option[Seq[(PositionKey, ByteString)]] =
     ownerRowsAfter(owner, maxRows, maxBytes, () => ())
 
-  /** [[ownerRows]], with `beforeScan` run before each scan of the disk: a test moves the disk there. */
+  /** [[ownerRows]], with `beforeScan` run before each scan of the disk: a test moves the disk there, and gives the
+    * least allowance of a scan a size it can reach.
+    */
   private[pathstate] def ownerRowsAfter(
       owner: ByteString,
       maxRows: Int,
       maxBytes: Long,
-      beforeScan: () => Unit
+      beforeScan: () => Unit,
+      minAllowance: Int = StateView.MinScanAllowance
   ): Option[Seq[(PositionKey, ByteString)]] =
     val laid: Map[PositionKey, Option[ByteString]] =
       forward.reverseIterator.foldLeft(Map.empty[PositionKey, Option[ByteString]])(_ ++ _.ofOwner(owner))
@@ -317,7 +320,7 @@ final class StateView private[pathstate] (
 
     @annotation.tailrec
     def scan(extra: Int, triesLeft: Int): Option[(Seq[(PositionKey, ByteString)], Seq[StateMove])] =
-      if extra > maxRows.max(StateView.MinScanAllowance) then
+      if extra > maxRows.max(minAllowance) then
         throw new StaleStateViewException(
           block,
           createdAt,

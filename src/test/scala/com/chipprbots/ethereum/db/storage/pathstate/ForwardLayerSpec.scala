@@ -399,6 +399,8 @@ class ForwardLayerSpec extends AnyFlatSpec with Matchers:
     chain.everything shouldBe tampered
     chain.state.anchor shouldBe Some(chain.first)
     chain.state.forwardLayer(b.ref.hash) shouldBe None
+    // and so is what was built on it
+    chain.state.forwardLayer(c.ref.hash) shouldBe None
     chain.state.lock.holder shouldBe None
   }
 
@@ -473,6 +475,11 @@ class ForwardLayerSpec extends AnyFlatSpec with Matchers:
           by = by * 3
       )
       stale.getMessage should include("under a scan of its rows")
+
+      // so much of the trie was written since the view was made that listing it would hold it many times over
+      val tooOld = the[StaleStateViewException] thrownBy
+        old.ownerRowsAfter(bobs, atFirst.size, Long.MaxValue, () => (), minAllowance = 0)
+      tooOld.getMessage should include("too many to list that trie by")
     }
 
   "The layers no chain leads to from the anchor" should "go when the anchor moves, and with the layer they were built on" taggedAs
@@ -545,6 +552,19 @@ class ForwardLayerSpec extends AnyFlatSpec with Matchers:
       c.layered()
       val d = chain.on(c.ref)(fourBlocks(2)*)
       an[Exception] should be thrownBy chain.state.commitOverlay(d.staged, c.ref)
+      // the same where the other parent has the state of the first, so that the block's changes are a block's on it
+      val twin = b.ref.copy(hash = ByteString(kec256("b's twin".getBytes)))
+      val onFirst = chain.on(b.ref)(account(dave, 7, 7))
+      // (there is no layer of b to stand a twin beside: it is the anchor. One level up, then.)
+      onFirst.layered()
+      val sameState = chain.on(b.ref)(account(dave, 7, 7))
+      chain.state.commitOverlay(sameState.staged, onFirst.ref.copy(hash = twin.hash)) shouldBe
+        a[OverlayOutcome.Layered]
+      val child = chain.on(onFirst.ref)(account(dave, 8, 8))
+      child.layered()
+      val onTwin = chain.on(onFirst.ref.copy(hash = twin.hash))(account(dave, 8, 8))
+      (the[IllegalStateException] thrownBy chain.state.commitOverlay(onTwin.staged, child.ref)).getMessage should
+        include("has the hash of an executed block that is kept")
       // and a block of that hash with another state root has no view
       a[StateUnavailable] should be thrownBy chain.state.view(c.ref.copy(stateRoot = b.ref.stateRoot))
 

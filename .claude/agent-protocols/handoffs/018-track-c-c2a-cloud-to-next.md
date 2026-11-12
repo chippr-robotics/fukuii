@@ -130,6 +130,12 @@ Read plan.md, "C2a part 1 record" and "C2a part 2 record", then:
 - **C3c is complete in its linear subset.** What it left is B-219 (mining: no route to import without network sync)
   and B-220 (side blocks in the lenient import and in test mode, `test_rewindToBlock` below the head, the three
   harnesses under `it/ethtest`, `newPayload` adopting nothing).
+- **C4a is four PRs** (plan.md, "C4a part 1"): forward layers, the reverse index, the bounds, the node's use of
+  them, in that order. **Part 1, forward layers, is written**: `ForwardLayer`, `StateOverlay`, a `StateView` that
+  reads through layers, `StateView.ownerRows`, `PathStateStorage.commitOverlay` and `promote`,
+  `LayerInconsistent`. Nothing in the node makes a layer, and nothing may before part 3's bounds. A spec of layers
+  starts from `ForwardLayerSpec`'s `Chain` and its `sameAsInPlace`. The degrade of a staged commit to an overlay
+  commit is NOT built: it lands with its callers in part 4.
 - **C4a** brings back what C3b refuses: the overlay commit for a block that does not extend the anchor
   (`buildExtra(adopted)`, `NotExtendingAnchor`, `saveLastBlock` writing nothing), `StateView.ownerRows` over layers,
   `stateAvailable(hash)`, the served-root window, and SNAP advertised again. C4b: the head move, `ConsensusStateFault`

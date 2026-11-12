@@ -499,7 +499,7 @@ final class PathStateStorage(
     * any more. Only now: a view that is being made finds either the layer or a moved epoch (see [[viewAfter]]).
     */
   private def layersAfterMoveTo(block: BlockRef)(using StateLockHeld): Unit =
-    overlay.drop(block.hash)
+    // the block's own layer is one of them: no chain leads from a block to itself
     overlay.dropUnreachableFrom(block)
     ()
 
