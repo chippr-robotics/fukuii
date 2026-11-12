@@ -1617,31 +1617,42 @@ C4a is four PRs, in this order, each a precondition of the last: **forward layer
 uses it** (an execution that is not adopted commits to the overlay). Until the fourth, nothing in the node makes a
 layer: part 1 is storage and its spec.
 
-- **A forward layer** (`ForwardLayer`) is the frozen changes of an executed block whose state is on no row: what
-  `StagedChanges.finalise` gives, against the block's parent. It answers for every position the block wrote,
-  **the rows of a storage trie whose old rows were too many to list among them**: those are in no entry of the
-  changes, and a descendant reads them all the same (beacon, forge, before code).
+- **A forward layer** (`ForwardLayer`) is what an executed block, whose state is on no row, **left** of its
+  parent's state: the node at each position its tries touched (or that it left none), the **hash** of the node its
+  first event there named as old, and the owners of the storage tries it replaced whole. A position of a replaced
+  trie that the block did not write again reads as no row. It is made from what the execution staged
+  (`StagedChanges.frozen`), and **nothing of the parent's state is read to make it**.
+- **A layer does not grow with a storage trie its block destroys** (forge, in the consult for part 3). ETC has no
+  EIP-6780: a SELFDESTRUCT removes a trie of any size. A layer that held a prior for each of its rows, which is
+  what this part first built, is as large as the trie; under the bounds of part 3 a heavier proof-of-work branch
+  with such a block in it could not be kept, so could not be adopted, and the node would stay on the lighter
+  branch. What a block did to the rows (the priors, the rows of a replaced trie, whether they are too many to
+  list) is therefore settled **when the layer is promoted**, below.
 - **A view** (`StateView`) of a block that is not the anchor reads through the layers between the disk and that block,
   newest first, and then the row as its base held it: the existing read, corrected by the log of moves. It holds its
   layers itself, so it reads the same after one of them is promoted or dropped, until the log no longer reaches back.
   **The epoch, the anchor and the layers are one observation** (`PathStateStorage.viewAfter`): a layer goes only
   after the batch that promoted it has settled, and a view whose epoch moved while its layers were looked up is made
   again.
-- **The rows of a storage trie in a view's state** (`StateView.ownerRows`), which a block that replaces that trie
-  must list as gone: the disk's rows, scanned with no lock held; put right by the moves since the view was made
-  (each position of the owner a move wrote gets what the earliest such move found there, so a row a move deleted is
-  back and one it created is gone, whichever side of a batch a chunk of the scan fell on; the epoch is read after
-  the scan); then the layers laid over, oldest first. **The bounds are held to the result, which is the state's**,
-  so a block lists a replaced trie, or leaves it, as it would committed in place over the same state.
 - **The overlay commit** (`PathStateStorage.commitOverlay`, data-model 7.2) keeps a staged block as a layer and writes
   nothing: no row, no record, no anchor, no move of the clock. The lock is held for the look at the anchor and the
   registration alone, which are one step: the block that has become the anchor is not kept beside itself, and a
   block whose parent's state is no longer held (neither the anchor nor a layer) is not kept.
 - **Promotion** (`PathStateStorage.promote`, data-model 7.1 case 2) commits a layer whose parent is the anchor
-  through the batch an in-place commit writes, from the frozen changes, and drops the layer when the batch has
-  returned. **The priors are read again** under the lock, where the layer names one: they go into the move that
-  open views are corrected by and into the record a reverse writes back. A layer that was not built on the rows the
-  disk holds is dropped, and nothing is written.
+  through the batch an in-place commit writes, and drops the layer when the batch has returned. **The block is
+  settled then, against the disk, under the lock, as a commit in place settles one**
+  (`StagedChanges.settle`, which `finalise` now is): the prior of each position is the row, read then and held to
+  the hash the layer names; the rows of a replaced trie are scanned then, and listed or left by the bound a commit
+  in place applies. The disk is the parent's state at that moment, so the record, the rows deleted and the priors
+  of the move are those of the same block committed in place. A layer that was not built on the rows the disk holds
+  is dropped, with what stands on it, and nothing is written.
+- **What is kept can be promoted, unless the disk is not the state it was built on.** A layer is held to the two
+  state roots when it is made, by the account trie's root (the hash of the node the block first found there is the
+  parent's state root, and the node it left hashes to the root in the block's header), and to every other check of
+  a diff that needs no row of the parent's state: a node under 32 bytes away from its trie's root, the shape of the
+  blocks' names. The whole diff is validated again at promotion; a layer that fails there, which only a defect can
+  bring about, goes with what stands on it. Kept, it would be the answer to every later execution of its block,
+  and a branch with that block in it could never be adopted (forge, beacon).
 - **A wrong node under a layered view** is `LayerInconsistent` when the layer gave it, or when the disk is at rest on
   the view's base: a new `StateFault`, not retried as a stale read and **never a corrupt row**, since what a corrupt
   row is answered with deletes it by hash. Stale otherwise.
@@ -1659,6 +1670,11 @@ layer: part 1 is storage and its spec.
 - A prior of none is not held against the row at promotion. A storage trie replaced with too many rows to list
   leaves them on disk, and a block that first writes where one lies names no prior there, committed in place or
   kept as a layer.
+- **No view lists a storage trie's rows** (data-model 3.6, 6.2 and 7.0 have `StateView.ownerRows`, outside the
+  lock). Every commit, in place or a promotion, is made over the rows of the block's parent, so a replaced trie is
+  listed there, from the disk, under the lock (`PathNodeStorage.storageRows`, as C3b built it). The listing through
+  a view that this part first built, put right by the log of moves and laid over by the layers, had no other caller
+  and is removed.
 - The count of layers is capped at 32 as a stopgap (`CommitSettings.maxForwardLayers`); part 3 replaces it.
 - **No layer outlives the chain that leads to it** (the reads after code, all three). A layer is kept only on the
   anchor or on layers that lead from it. When the anchor moves, by a commit in place or a promotion, and when a
@@ -1668,45 +1684,57 @@ layer: part 1 is storage and its spec.
   through the block behind it.
 
 **Tests.** `ForwardLayerSpec`: two datadirs are given the same blocks, one committing each in place, the other
-keeping each as a layer on the layers before it. Every node of each block's state is read through the layers, and a
-trie's rows are listed as the other datadir's disk holds them; then the layers are promoted, oldest first, and after
-each the datadir is the other's, key for key (rows, records, their index, the anchor, the head). The blocks replace a
-storage trie in one block, make it again in the next and replace it again in the third. Run again where the replaced
-trie has too many rows to list, and with the bound just above and just below the disk's rows while the layers add to
-them or take from them. A view read across the promotion of its own oldest layer, and stale when the log ends; a view
-made while a promotion lands between its two looks; the faults; the refusals of a layer and of a promotion; the rows
-of a trie as an old view lists them after the disk moved on, after two moves wrote one position, and when a block
-lands between the allowance and the scan; the layers nothing leads to; a promotion whose write fails.
+keeping each as a layer on the layers before it. Every node of each block's state is read through the layers; then
+the layers are promoted, oldest first, and after each the datadir is the other's, key for key (rows, records, their
+index, the anchor, the head). The blocks replace a storage trie in one block, make it again in the next and replace
+it again in the third. Run again where the replaced trie has too many rows to list, and with the bound just above
+and just below the disk's rows while the layers add to them or take from them. A view read across the promotion of
+its own oldest layer, and stale when the log ends; a view made while a promotion lands between its two looks; the
+faults; the refusals of a layer and of a promotion; **a block that destroys a storage trie grown by 400 slots holds
+what the same block holds of the small one, to the byte, reads every row of it as gone, and deletes and records
+each when promoted**; the layers nothing leads to; a promotion whose write fails.
 
 **Three reads after code (beacon, forge, vault: each APPROVE WITH CHANGES, no blocker).** Found sound: the capture
 of a view (a layer is dropped after its batch settles, so a chain seen without it is seen with a moved epoch), the
-correction of a scan by the earliest prior of each position, the batch of a promotion being the staged commit's,
-the lock (no path asks for it while holding it), and every flow of a node that makes no layer being what it was.
-Taken: the layers nothing leads to, above; the scan's allowance counts a position once and is bounded (a view old by
-a long log could otherwise be made to hold a trie many times over); a block of a hash that is kept, on another
-parent or with another state root, is refused; `stateAvailable` is the anchor alone again; a view with no layers
-does not look through any.
+batch of a promotion being the staged commit's, the lock (no path asks for it while holding it), and every flow of
+a node that makes no layer being what it was. Taken: the layers nothing leads to, above; a block of a hash that is
+kept, on another parent or with another state root, is refused; `stateAvailable` is the anchor alone again; a view
+with no layers does not look through any.
 
-**The mutation run**: 46 mutants over the layer, the overlay, the view, the listing of a trie's rows, the overlay
-commit and the promotion. 42 are caught. Eleven were not at first, and each got a case (the earliest of two moves
-on one position, a scan the disk moves under, the bound of a scan's allowance, the anchor promoted again, the
-layers after the state is destroyed, a layer's removed row and its wrong node after a move, a block of a kept hash
-with another state root or on another parent, what stood on a layer that failed its promotion). Four change nothing
-that can be seen: two fast paths (a view with no layers, a block that is a layer already), the check of a layer's
-parent by its layer where every layer kept is reachable, and a chain ending on a block of the anchor's hash and
-another state root, which nothing can register.
+**Two reads of the layer as it now is (beacon, forge: each APPROVE WITH CHANGES, no blocker).** Found sound: a
+layer grows with what its block wrote, which gas bounds, and never with a trie it destroyed, also where the trie is
+made again in the same block or in the next layer; a promotion's record, rows, tombstone and move are those of the
+block committed in place (the settling overwrites the prior of every position of a replaced trie from the scan, so
+what the layer names there does not matter); a view reads as before, and more exactly at the positions a replaced
+trie left; under the lock a promotion does what a commit in place does, with the same bounds, and one hash for
+each named prior. Taken: the checks without the disk when a layer is kept, and a layer that cannot be promoted
+dropped, above; a commit in place settles the staged changes without copying them; the cases beacon named (the old
+anchor's view across the promotion of a layer that removed a trie, a promotion over a row that is not there, the
+root check's branches, the positions a block left as it found them).
 
-**For part 2, from the same reads.** (1) *A move's priors are not exact where a block first writes over a row an
-unlisted trie left behind*: the move says "no row", and a row was there. A read never comes to such a position, but
-`ownerRows` of a view whose base is not on the move's chain would drop that row, and list a replaced trie
-differently from a commit in place. No such view can lead to a layer in part 1 (its parent would not be reachable).
-The reverse index makes one: before it lands, the move reads the row where it names no prior, or fork views are
-shown never to list through such a move (beacon). (2) A layered view at rest that meets an *absent* row answers
-with a missing node, which is fetched, and not with an inconsistency of its layers: to settle before part 4 routes
-it. (3) `commitOverlay` can answer with a layer that a promotion has just put on disk: part 4 does not read
-"layered" as "not on disk". (4) `promote` is for an adopted block, and only its documentation says so: part 4 guards
-its caller. (5) The differential on RocksDB (the shape of scan keys, the resume key of a chunk), and
-`EphemDataSource.scanRangeLimit`, which copies the whole range for each chunk.
+**The mutation run**: 51 mutants over the layer, the overlay, the view, the overlay commit, the promotion and the
+settling. 47 are caught. Fourteen were not at first, over the two forms of the layer, and each got a case (the
+anchor promoted again, the layers after the state is destroyed, a layer's removed row and its wrong node after a
+move, a block of a kept hash with another state root or on another parent, what stood on a layer that failed its
+promotion, the two branches of the root check that no staged block reaches, what a layer is taken to hold). Four
+change nothing that can be seen: two fast paths (a view with no layers, a block that is a layer already), the check
+of a layer's parent by its layer where every layer kept is reachable, and a chain ending on a block of the anchor's
+hash and another state root, which nothing can register.
+
+**For the later parts, from the reads.** (1) *A move's priors are not exact where a block first writes over a row
+an unlisted trie left behind*: the move says "no row", and a row was there. A read never comes to such a position,
+and nothing lists a trie's rows through a view any more, so nothing is misled by it. (2) A layered view at rest that
+meets an *absent* row answers with a missing node, which is fetched, and not with an inconsistency of its layers: to
+settle before part 4 routes it. (3) `commitOverlay` can answer with a layer that a promotion has just put on disk:
+part 4 does not read "layered" as "not on disk". (4) `promote` is for an adopted block, and only its documentation
+says so: part 4 guards its caller. (5) A promotion that answers "was not built on the state the disk holds" has
+dropped the layer: the caller of part 4 (`forkchoiceUpdated`, the head move of a proof-of-work branch) executes the
+block again from its stored body before it answers (beacon). (6) Part 3's bound on a layer's bytes is set above
+what the largest block can write at the highest gas limit a chain allows, Olympia's schedule included: a bound
+under that would bring back, for writes, what this part removed for destroyed tries (forge). And the time the lock
+is held by a promotion is measured there: the scan of each replaced trie is under it, as in a commit in place, and
+an 8M-gas ETC block can replace some 1,600 (forge). (7) The differential on RocksDB (the shape of scan keys, the
+resume key of a chunk), and `EphemDataSource.scanRangeLimit`, which copies the whole range for each chunk.
 
 ### Destructive change (C8a and C8b): the vault protocol blocks
 

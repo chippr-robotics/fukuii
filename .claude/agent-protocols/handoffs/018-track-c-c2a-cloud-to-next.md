@@ -132,12 +132,15 @@ Read plan.md, "C2a part 1 record" and "C2a part 2 record", then:
   harnesses under `it/ethtest`, `newPayload` adopting nothing).
 - **C4a is four PRs** (plan.md, "C4a part 1"): forward layers, the reverse index, the bounds, the node's use of
   them, in that order. **Part 1, forward layers, is written**: `ForwardLayer`, `StateOverlay`, a `StateView` that
-  reads through layers, `StateView.ownerRows`, `PathStateStorage.commitOverlay` and `promote`,
-  `LayerInconsistent`. Nothing in the node makes a layer, and nothing may before part 3's bounds. A spec of layers
-  starts from `ForwardLayerSpec`'s `Chain` and its `sameAsInPlace`. The degrade of a staged commit to an overlay
-  commit is NOT built: it lands with its callers in part 4.
+  reads through layers, `PathStateStorage.commitOverlay` and `promote`, `LayerInconsistent`. **A layer holds what
+  its block left, the hash of what it found, and the owners of the tries it replaced; it is settled against the
+  disk when it is promoted** (`StagedChanges.settle`), so it does not grow with a trie an ETC SELFDESTRUCT removes
+  (forge). Keep it so: nothing may put the rows of a replaced trie, or a prior's bytes, into a layer. No view lists
+  a trie's rows (`StateView.ownerRows` was built and removed). Nothing in the node makes a layer, and nothing may
+  before part 3's bounds. A spec of layers starts from `ForwardLayerSpec`'s `Chain` and its `sameAsInPlace`. The
+  degrade of a staged commit to an overlay commit is NOT built: it lands with its callers in part 4.
 - **C4a** brings back what C3b refuses: the overlay commit for a block that does not extend the anchor
-  (`buildExtra(adopted)`, `NotExtendingAnchor`, `saveLastBlock` writing nothing), `StateView.ownerRows` over layers,
+  (`buildExtra(adopted)`, `NotExtendingAnchor`, `saveLastBlock` writing nothing),
   `stateAvailable(hash)`, the served-root window, and SNAP advertised again. C4b: the head move, `ConsensusStateFault`
   (T148), the refusal of a reverse across a tombstone. C4d: `newPayload` on a forward layer, `forkchoiceUpdated`
   moving the head (its gate today sits before the canonical-ancestor branch: beacon), the consensus client's
