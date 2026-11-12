@@ -1425,6 +1425,62 @@ lenient build.
   as a missing node of the hash store does. Unchanged.
 
 
+### C3c part 3: the linear subset now (user, 2026-11-12), and the lenient import record
+
+The third part of C3c was written as the lenient chain import, test mode and the ported harnesses (T108 to T110,
+T116, T117). As written it takes side blocks, rewinds and reorganisations, which the unified layout cannot do before
+its overlay: a block is committed in place when it is built on the block whose state is held, or not at all (C3b).
+**Decision (user): the linear subset is done now**, and what needs a state beside the head's moves to C4a and C4b:
+post-merge side blocks in the lenient import (the rest of T109), `test_rewindToBlock`, and the fork-choice harness
+(`ForkChoiceBlockchainTestsSpec`, the rest of T117). It is three PRs: the lenient import (this record), the fixture
+replays on positions with the harness canary, and test mode.
+
+**The lenient import (`ChainImporter.importChainFile`, the `import-chain-file` key: hive and ethereum/tests).** On
+the unified layout a block that is built on the head goes through the node's own import of one block onto the head
+(`BlockExecution.executeAndAdoptBlockIf`, the one an operator's restore uses): one batch for the block, its
+receipts, its weight, the head and the state. A block that is not built on the head is refused, on either side of
+the merge, and nothing of it is kept; it is counted as failed, and the log says it is a limit of this node's layout
+and no verdict on the block (the first loudly, the rest at debug). A head whose state is not the one the disk holds
+is a fault of the datadir, and ends the import. The refusal of `import-chain-file` with the guard at start is
+lifted. With the guard off the three arms are as they were.
+
+**One consult before code (forge and beacon: AGREE WITH CHANGES).** Both read the two paths side by side: for a
+block built on the head the standard import makes the checks the lenient arm makes, in the same order, with the
+same validator (before execution, after it, the requests hash, the access-list hash), and writes what
+`saveImported` wrote, in one batch where that was two writes.
+
+| Finding | Change |
+| --- | --- |
+| beacon: a fault of the node's own state must not be counted as a failed block and passed over; every block after it meets it too | it is thrown, as anything thrown by the hash store's arm is, and ends the import |
+| beacon: "built on the head" must also mean "the head's state is the one held"; otherwise the log blames the block for a fault of the datadir | checked, and thrown as that fault |
+| forge: calling the fork choice for a side block would be worse than refusing it: a heavier branch reaches a reorganisation that the layout refuses on its first block, and the throw would end the node's start | refused before the fork choice |
+| both: failed and not skipped (skipped means present, or kept as a side block; nothing is kept); do not store the side block by its hash | so |
+| forge: the parent's weight as the strict path takes it | so; each block's weight is compared with the hash store's |
+| beacon: one error line per refused block is noise for a long tail | the first of each kind at error, the rest at debug, and both counts in the import's last line |
+| beacon: an Amsterdam block with a wrong access-list hash should be among the cases | it is, and its reason is held |
+
+**Two reads after code (forge: APPROVE WITH CHANGES; beacon: APPROVE).** Both traced the guard off to what it was:
+one more read, of a flag that is false there. Taken: the two checks and the commit are under one exclusive lock,
+with the head looked at again before the commit, as the strict path has it (the import runs at start, where
+nothing else writes the head, so this is parity and not a fix); a fork choice that fails the test when it is
+reached, and the refusal counted by its kind, so that a side block is seen to be refused for that and not for
+something an execution found; the counters are per import; the datadir compared around the fault of the held
+state. The exclusive lock taken around an import that takes the shared one is the nesting the strict path has had
+since C3b (a write lock's holder may take the read lock).
+
+**Tests** (`ChainExportImportSpec`, on the unified layout): the execution-apis chain file imported whole, to the
+head, rows, receipts and weights it has on the hash store, with nothing in the hash store; the file again, every
+block skipped and nothing written; an invalid block counted and the valid one at its height imported; an Amsterdam
+block whose header commits to another access list refused with nothing written; the blocks after a failed one
+refused; a side block before the merge and after it refused with the datadir as it was, and the chain going on;
+a head whose state is not held. A mutation run over the new arm (the arm not taken, a block that is not on the head not refused, or counted as kept, or counted under the other kind; the held-state check dropped; the weight taken wrong; a block that import refuses counted as imported): 7 mutants, 7 caught. The look at the head before the commit has no mutant: nothing moves the head while this import runs.
+
+**What a node on the guard gets from it, and what it does not.** It starts from a chain file and serves the head
+it imported. The ethereum/tests vectors that end on a side chain (`bcMultiChainTest`, the uncle races,
+`lotsOfLeafs`) end on another head with the guard on, until C4. No hive run sets the guard. And a payload sent by a
+consensus client after the import is still accepted and not adopted, before the overlay (C4a, C4d).
+
+
 ### Destructive change (C8a and C8b): the vault protocol blocks
 
 ```

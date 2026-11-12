@@ -110,10 +110,14 @@ Read plan.md, "C2a part 1 record" and "C2a part 2 record", then:
   the overlay. The `mining.mining-enabled` refusal stays until C4b, and `eth_getWork` / `eth_submitWork` refuse
   with it. A spec that builds on positions starts from `ProposerOnPositionsSpec`'s `Rig` or
   `MinedBlockOnPositionsSpec`'s `Node`.
-- **C3c, what is left** (T108 to T110, T116, T117): the lenient chain import and test mode (both execute with
-  nothing staged, and are refused at start with the guard until then: lift each refusal in
-  `ConfigValidator.stateGuardErrors` with the code that makes it safe), and the ported harnesses (the fixture
-  replays, of import and of the builder, start from a fixture's genesis header). `TestModeWorldStateProxy` has its own `deleteAccount` and no `initialiseAccount`: it
+- **C3c part 3 is the linear subset** (user, 2026-11-12; plan.md, "C3c part 3"): side blocks, rewinds and the
+  fork-choice harness wait for C4a and C4b. **3a, the lenient chain import, is written**: on the unified layout
+  `importChainFile` takes a block built on the head through `executeAndAdoptBlockIf` and refuses any other;
+  `import-chain-file` is no longer refused at start.
+- **C3c, what is left**: 3b, the fixture replays of import and of the builder on positions from a genesis commit
+  under the fixture's own header, and the harness canary (T110, the linear part of T117); 3c, test mode (T108, the
+  rest of T116: `TestService.setChainParams`'s second genesis, `TestModeWorldStateProxy`'s resets, its refusal at
+  start). `TestModeWorldStateProxy` has its own `deleteAccount` and no `initialiseAccount`: it
   needs the world's `storageResets` (T108, forge). `TestService.setChainParams` loads a second genesis on a datadir
   that has an anchor: it must build its loader with `GenesisDataLoader.over`, reset the state (rows, records, the
   count, the anchor, the stamp, and the clock's anchor) in one synced batch before the load, stop writing codes and
