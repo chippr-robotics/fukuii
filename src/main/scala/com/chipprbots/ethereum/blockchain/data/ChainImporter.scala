@@ -80,6 +80,8 @@ class ChainImporter(
       var failed = 0
       var first = true
       var done = false
+      sideBlocksRefused = 0
+      orphanBlocksRefused = 0
 
       while !done do
         reader.next() match
@@ -100,7 +102,14 @@ class ChainImporter(
               case LenientOutcome.Failed  => failed += 1
 
       log.info(s"Chain import: decoded ${reader.blocksRead} blocks")
-      log.info(s"Chain import complete: $imported imported, $skipped skipped, $failed failed")
+      // On the unified state layout a block that is not built on the head is refused, which is no fault of the block:
+      // said apart, so that the count of failed blocks can be read.
+      val refused =
+        if sideBlocksRefused + orphanBlocksRefused == 0 then ""
+        else
+          s" ($sideBlocksRefused of them side blocks and $orphanBlocksRefused with no parent here, not taken by " +
+            "the unified state layout)"
+      log.info(s"Chain import complete: $imported imported, $skipped skipped, $failed failed$refused")
       (imported, skipped, failed)
     finally in.close()
 
@@ -157,6 +166,7 @@ class ChainImporter(
     }
 
     if alreadyExists then LenientOutcome.Skipped
+    else if blockchainReader.holdsStateInPlace then importInPlace(block)
     else if !extendsHead && !postMerge && forkChoice.isDefined then
       // A side-chain block. Saving it as best — what this loop did for every block — made the LAST block of
       // the file the head whatever its total difficulty, so every ethereum/tests fork/uncle-race vector
@@ -188,6 +198,69 @@ class ChainImporter(
         case Left(error) =>
           log.error(s"Chain import: block $blockNum failed — $error")
           LenientOutcome.Failed
+
+  /** Blocks refused on the unified state layout in the import that is running because they are not built on the head:
+    * side blocks, and blocks whose parent this node does not have. The first of each is said loudly, the rest quietly,
+    * and the import's last line names both counts.
+    */
+  private[data] var sideBlocksRefused = 0
+  private[data] var orphanBlocksRefused = 0
+
+  /** [[importLenient]] on the unified state layout (spec 018 Track C), before its overlay.
+    *
+    * There a block is committed with its state, in the batch that makes it the head, or not at all. So a block built on
+    * the head goes through the node's own import of one block onto the head, the one an operator's restore uses
+    * ([[BlockExecution.executeAndAdoptBlockIf]]): the same validation before and after execution as the arm below, the
+    * same requests-hash and access-list checks, and one batch for the block, its receipts, its weight, the head and the
+    * state. As there, the whole of it is under the exclusive chain insert lock, and the head is looked at again just
+    * before the commit: this import runs at start, before anything else writes the head, and is right if it ever runs
+    * beside one that does.
+    *
+    * A block that is not built on the head is refused, whichever side of the merge it is on: the fork choice would need
+    * the state of a block that is not the head, and so would adopting it outright. Nothing of it is kept, since nothing
+    * could use it before the overlay (C4a) and the head move (C4b). That is a limit of this node's layout and no
+    * verdict on the block; it is counted as failed because it was neither imported nor kept.
+    *
+    * A fault of the node's own state is thrown, as anything thrown by the arm below is: it ends the import, and every
+    * block after it would meet it too.
+    */
+  private def importInPlace(block: Block)(implicit blockchainConfig: BlockchainConfig): LenientOutcome =
+    ChainInsertLock.exclusive {
+      val header = block.header
+      def onHead: Boolean = blockchainReader.getBestBlockHeader.exists(_.hash == header.parentHash)
+      if !onHead then
+        val parent = ByteStringUtils.hash2string(header.parentHash.value)
+        val head =
+          blockchainReader.getBestBlockHeader.map(h => s"#${h.number} (${h.hashAsHexString})").getOrElse("none")
+        val sideBlock = blockchainReader.getBlockHeaderByHash(header.parentHash).isDefined
+        val what =
+          if sideBlock then s"is built on $parent, which is not the head $head: a side block"
+          else s"has parent $parent, which this node does not have (head $head): the chain before it is broken"
+        val message =
+          s"Chain import: block ${header.number} (${header.hashAsHexString}) $what. Not taken: the unified state " +
+            "layout holds the state of the head alone until its overlay (spec 018 C4), so only a block built on " +
+            "the head can be imported. This says nothing about the block."
+        val earlier = if sideBlock then sideBlocksRefused else orphanBlocksRefused
+        if earlier == 0 then log.error(message) else log.debug(message)
+        if sideBlock then sideBlocksRefused += 1 else orphanBlocksRefused += 1
+        LenientOutcome.Failed
+      else if !blockchainReader.isHeldInPlace(header.parentHash.value) then
+        // the head and the state on disk are written in one batch: a head whose state is not the one held is a fault
+        // of this datadir, and no block can be judged against it
+        throw new com.chipprbots.ethereum.db.storage.pathstate.StateUnavailable(
+          s"the head ${ByteStringUtils.hash2string(header.parentHash.value)} is not the block whose state is held; " +
+            s"block ${header.number} cannot be imported"
+        )
+      else
+        val parentWeight = blockchainReader.getChainWeightByHash(header.parentHash).getOrElse(ChainWeight.zero)
+        val stillOnHead =
+          () => Option.unless(onHead)(BlockExecutionError.ValidationAfterExecError(ChainImporter.HeadMoved))
+        blockExecution.executeAndAdoptBlockIf(block, parentWeight, stillOnHead) match
+          case Right(_) => LenientOutcome.Imported(1)
+          case Left(error) =>
+            log.error(s"Chain import: block ${header.number} failed — ${error.describe}")
+            LenientOutcome.Failed
+    }
 
   private def saveImported(block: Block, receipts: Seq[Receipt], blockAccessList: Option[BlockAccessList]): Unit =
     val parentWeight = blockchainReader
