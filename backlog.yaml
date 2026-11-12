@@ -2561,3 +2561,13 @@ items:
     links:
       spec: specs/027-tui-dashboard
     notes: "TuiKeysSpec.scala:177-179, 185-187, 201-204: the first checkInput waits 1000 ms, but drainEscape (Tui.scala:477, 494) gives the tail 50 ms; a pump stall between introducer and final byte leaves a tail char for the follow-up checkInput(50). Lower odds than B-224 (one write per sequence). Fix with the drain's injectable clock in these tests."
+  - id: B-227
+    title: Ship Ephemery (bundled iteration + self-refresh at reset) and Hoodi as built-in networks
+    priority: P2
+    status: open
+    area: ops
+    size: M
+    opened: 2026-11-12
+    refs: [user 2026-11-12]
+    links: {}
+    notes: "User decision: Ephemery bundled like Mordor/Sepolia with a startup self-refresh after RESET_TIME (fetch the ephemery-genesis release, validate like fetch-genesis.sh, check the published genesis hash, per-iteration datadir); add Hoodi as a static built-in. Spec Kit; dev-node implements."
