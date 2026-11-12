@@ -1776,8 +1776,10 @@ them. Where a block first wrote over such a row its prior is "none"; a reverse d
 it was not there. So a move's priors need not be made exact (part 1's open point): an inexact "none" lies only over
 a leftover row, which no state names, and a head move back must write a record's priors exactly, "none" as a
 delete. A layer promoted after such a move is settled against that disk, so it lists a replaced trie by the rows
-the move left. The spec holds what a view behind the anchor reads at every position of a trie, the leftover rows
-among them, to a second datadir whose last blocks were reversed by their records.
+the move left: **C4b's spec promotes a fork's layer after the move back and holds its record to the block committed
+in place over that disk** (beacon; nothing here moves the disk back, so nothing here can show it). The spec holds
+what a view behind the anchor reads at every position of a trie, the leftover rows among them, to a second datadir
+whose last blocks were reversed by their records.
 
 **Not built, and where it goes.** No cache of decoded records and no index built from a nearer one: a handful of
 whole indexes are kept by (anchor, fork) and dropped when the anchor moves; part 3 owns the budgets. The first
@@ -1789,7 +1791,8 @@ pruning commits, a reopened datadir, a record of several MiB, hashes that begin 
 it as the hash store holds it, on a chain that replaces a trie every third block and makes it again; the same after
 the anchor moves on, until the log of moves ends, and from records alone after a restart; a fork of three blocks
 from a block behind the head, executed on layers and read through index and layers, before and after the anchor
-moves; the states that are not held; the faults; the positions of a trie behind a tombstone's successors, held to
+moves, and a second fork that replaces a storage trie and makes it again, where neither the fork point's rows nor
+the disk's show through; the states that are not held; the faults; the positions of a trie behind a tombstone's successors, held to
 a datadir reversed by its records; the window. `ForwardLayerSpec`'s case of the layers nothing leads to is now a
 fork that outlives its fork point's records.
 
@@ -1799,10 +1802,12 @@ walked under the lock at each move. After (each APPROVE WITH CHANGES,
 no blocker), taken: the window is bounded by the depth a view is made across (on an archive node it grew with every
 block, and a layer was accepted on a parent no view could serve); a record's encoded size is held to the cap before
 it is decoded; the indexes of an anchor go when it moves; a block behind the anchor has an outcome of its own; a
-hole under a layered view names no row. 38 mutants, 35 caught; nine were not at first and each got a case. Three
-change nothing that can be seen: a layer of a block behind the anchor (it is dropped when that block becomes the
-anchor), a window that is not moved on (it is built again from the records), and a window of another anchor (there
-is never one).
+hole under a layered view names no row. A third read (beacon, APPROVE WITH CHANGES, no blocker) of this part on the
+layer as part 1 now has it: a fork block that replaces a trie reads right through layers, index and disk; a named
+prior of a fork's layer is the row after the move back, and a leftover row is never a named prior; taken: the fork
+that replaces and remakes a trie, and the promotion after a move back named as C4b's to test. 34 mutants, 32
+caught; nine were not at first and each got a case. Two change nothing that can be seen: a layer of a block behind
+the anchor (it is dropped when that block becomes the anchor), and a window of another anchor (there is never one).
 
 ### Destructive change (C8a and C8b): the vault protocol blocks
 

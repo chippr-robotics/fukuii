@@ -15,8 +15,8 @@ import com.chipprbots.ethereum.testing.Tags.*
   * through the changeset records with no row touched.
   *
   * A chain is committed in place, block by block. The state of each block behind the head is then read through a view:
-  * every node of it, as a hash store the same blocks were run on holds it, and the rows of a storage trie as that state
-  * holds them. A fork is executed on a block behind the head, on layers, and read the same way.
+  * every node of it, as a hash store the same blocks were run on holds it. A fork is executed on a block behind the
+  * head, on layers, and read the same way.
   */
 class ReverseIndexSpec extends AnyFlatSpec with Matchers with LayerChains:
 
@@ -114,6 +114,29 @@ class ReverseIndexSpec extends AnyFlatSpec with Matchers with LayerChains:
       view.base shouldBe refs.last
       Seq(first, second, third).foreach(block => reads(chain, chain.state.viewOf(block.ref), block.ref))
 
+      // Another branch from the same block replaces bob's storage trie and makes it again, and its next block writes
+      // more of it. The trie's rows at the fork point, which the records give, and those on the anchor's disk, which
+      // differ from them, are both under the layer: neither shows through where the new trie has no row.
+      val remade = chain.onAny(forkPoint)(delete(bob), slots(bob, (1 to 6).map(k => k -> (k + 50))*))
+      remade.layered()
+      val grownOn = chain.onAny(remade.ref)(slots(bob, 30 -> 1, 2 -> 0))
+      grownOn.layered()
+      val bobs = owner(bob)
+      val atForkPoint = chain.rowsOf(forkPoint, bobs)
+      val onDisk = chain.disk._2.filter(_._1.startsWith(bobs))
+      atForkPoint should not be onDisk
+      Seq(remade, grownOn).foreach { block =>
+        val ofBlock = chain.state.viewOf(block.ref)
+        reads(chain, ofBlock, block.ref)
+        val held = chain.rowsOf(block.ref, bobs)
+        (atForkPoint.keySet ++ onDisk.keySet ++ held.keySet).foreach { key =>
+          val position = PositionKey(Some(bobs), key.drop(PositionKey.OwnerLength))
+          withClue(s"block ${block.ref.number}, ${position.show}: ") {
+            ofBlock.readFrom(position)._1.map(ByteString(_)) shouldBe held.get(key)
+          }
+        }
+      }
+
       // the anchor moves on: the view made before reads the same, and so does one made after
       val sixth = chain.on(refs.last)(blockOf(6)*)
       sixth.inPlace()
@@ -150,8 +173,7 @@ class ReverseIndexSpec extends AnyFlatSpec with Matchers with LayerChains:
       // What the view holds at the positions of bob's trie is what a head move back would leave on the disk: the old
       // trie's rows that the tombstone's block left behind among them, but for those a later block wrote over, which
       // a reverse takes away with what was written. So a second datadir is given the same blocks and the last two are
-      // reversed there, by their records; and a block promoted on that disk after such a move lists a replaced trie
-      // by those rows.
+      // reversed there, by their records.
       val reversed = new Chain(CommitSettings(maxEntriesPerOwnerDelete = 5))
       grown(reversed, 5) shouldBe over
       Seq(over(5), over(4)).foreach { undone =>

@@ -522,9 +522,9 @@ final class PathStateStorage(
               else
                 // The parent is the anchor, a block behind it that the records lead to, or a block layers lead to
                 // from one of those: a layer on anything else would be kept for nothing, and for good.
-                val held0 = held == parent || behind.contains(parent) ||
+                val parentHeld = held == parent || behind.contains(parent) ||
                   overlay.chainFrom(held, parent, behind.contains).isDefined
-                if !held0 then
+                if !parentHeld then
                   throw new StateUnavailable(
                     s"block ${block.show} was executed on the state of ${parent.show}, which is not held any more: " +
                       s"the disk holds ${held.show}"

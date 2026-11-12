@@ -186,13 +186,15 @@ final class StateMoveLog(maxMoves: Int, initialAnchor: Option[BlockRef]) extends
   * executed on the anchor's state and is not on disk has that block's '''forward layers''' in front of the same read:
   * the newest layer that wrote a position answers for it (data-model 6.2). The view holds its layers itself, so what it
   * reads does not change when a layer is promoted to the disk or dropped: the rows under it stay those of its [[base]]
-  * through the log of moves, for as long as the log reaches back. Views of blocks behind the anchor (the reverse index)
-  * come next.
+  * through the log of moves, for as long as the log reaches back. The view of a block '''behind the anchor''', or of a
+  * block on a fork that left the anchor's chain there, has a '''reverse index''' behind its layers: what that block's
+  * state held at every position the blocks after it changed, from their records.
   *
   * @param createdAt
   *   the even epoch at which the view was made
   * @param forward
-  *   the layers between the state on disk and this view's, newest first; none for the view of the anchor
+  *   the layers between this view's state and the state they stand on (the disk's, or the one the index gives), newest
+  *   first; none for the view of the anchor or of a block behind it
   */
 final class StateView private[pathstate] (
     val block: BlockRef,
