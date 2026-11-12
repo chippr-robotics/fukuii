@@ -9,17 +9,23 @@ import java.nio.charset.CharacterCodingException
 import java.nio.charset.CodingErrorAction
 import java.nio.charset.StandardCharsets
 import java.nio.file.FileAlreadyExistsException
+import java.nio.file.FileVisitResult
 import java.nio.file.Files
 import java.nio.file.LinkOption
 import java.nio.file.OpenOption
 import java.nio.file.Path
+import java.nio.file.SimpleFileVisitor
 import java.nio.file.StandardOpenOption
+import java.nio.file.attribute.BasicFileAttributes
+import java.nio.file.attribute.PosixFileAttributeView
+import java.nio.file.attribute.PosixFilePermission
 import java.nio.file.attribute.PosixFilePermissions
 import java.util.Locale
 import java.util.zip.GZIPInputStream
 import java.util.zip.ZipException
 
 import scala.collection.mutable
+import scala.util.control.NonFatal
 
 /** The limits of [[StrictTarReader]]. The defaults are the spec 028 rules (R9); a caller never loosens them. Tests pass
   * smaller values to reach one rule at a time.
@@ -57,6 +63,8 @@ final case class TarResult(el: Map[String, Array[Byte]], staged: Vector[String],
 object StrictTarReader:
 
   private val Block = 512
+  private val FilePerms = PosixFilePermissions.fromString("rw-r--r--")
+  private val DirPerms = PosixFilePermissions.fromString("rwxr-xr-x")
 
   /** @param in
     *   the gzip stream, e.g. the bytes of `testnet-all.tar.gz`
@@ -76,18 +84,45 @@ object StrictTarReader:
       limits: TarLimits = TarLimits()
   ): Either[TarRefusal, TarResult] =
     val counted = new CountingInputStream(in)
+    var started = false
+    var succeeded = false
     try
-      if !Files.isDirectory(stage, LinkOption.NOFOLLOW_LINKS) then
-        Left(TarRefusal(None, "the stage is not a directory"))
-      else if !isEmptyDir(stage) then Left(TarRefusal(None, "the stage is not empty"))
-      else
-        val gz = new CountingInputStream(new GZIPInputStream(counted, 64 * 1024))
-        new Run(counted, gz, elNames, stage.toRealPath(), excludes, limits).run()
-    catch
-      case _: EOFException => Left(TarRefusal(None, "truncated archive"))
-      case e: ZipException => Left(TarRefusal(None, s"bad gzip stream (${e.getMessage})"))
-      case e: Refused      => Left(e.refusal)
-      case e: IOException  => Left(TarRefusal(None, s"read failure (${e.getClass.getSimpleName})"))
+      val result =
+        try
+          if !Files.isDirectory(stage, LinkOption.NOFOLLOW_LINKS) then
+            Left(TarRefusal(None, "the stage is not a directory"))
+          else if !isEmptyDir(stage) then Left(TarRefusal(None, "the stage is not empty"))
+          else
+            started = true
+            val gz = new CountingInputStream(new GZIPInputStream(counted, 64 * 1024))
+            new Run(counted, gz, elNames, stage.toRealPath(), excludes, limits).run()
+        catch
+          case _: EOFException => Left(TarRefusal(None, "truncated archive"))
+          case e: ZipException => Left(TarRefusal(None, s"bad gzip stream (${e.getMessage})"))
+          case e: Refused      => Left(e.refusal)
+          case e: IOException  => Left(TarRefusal(None, s"read failure (${e.getClass.getSimpleName})"))
+          // InvalidPathException, UnsupportedOperationException from the POSIX calls, and the like
+          case NonFatal(e) => Left(TarRefusal(None, s"cannot write the entry (${e.getClass.getName})"))
+      succeeded = result.isRight
+      result
+    finally
+      // a refusal, or any exception, leaves the stage as it was found: empty
+      if started && !succeeded then cleanStage(stage)
+
+  /** Deletes everything under `stage` without following links; the stage itself stays. Best effort, never throws. */
+  private def cleanStage(stage: Path): Unit =
+    try
+      Files.walkFileTree(
+        stage,
+        new SimpleFileVisitor[Path]:
+          override def visitFile(f: Path, a: BasicFileAttributes): FileVisitResult =
+            Files.delete(f) // a symlink is deleted as a link: walkFileTree does not follow links by default
+            FileVisitResult.CONTINUE
+          override def postVisitDirectory(d: Path, e: IOException): FileVisitResult =
+            if d != stage then Files.delete(d)
+            FileVisitResult.CONTINUE
+      )
+    catch case NonFatal(_) => ()
 
   private def isEmptyDir(dir: Path): Boolean =
     val s = Files.list(dir)
@@ -158,7 +193,12 @@ object StrictTarReader:
       while !ended do
         if !readFully(header, Block) then refuse(None, "truncated archive: no end-of-archive marker")
         checkCounts(None)
-        if header.forall(_ == 0) then ended = true
+        if header.forall(_ == 0) then
+          // the end marker is two zero blocks
+          val second = new Array[Byte](Block)
+          if !readFully(second, Block) then refuse(None, "truncated archive: the end-of-archive marker is one block")
+          if !second.forall(_ == 0) then refuse(None, "the end-of-archive marker is not two zero blocks")
+          ended = true
         else
           val h = parseHeader(header)
           h.typeflag match
@@ -175,11 +215,17 @@ object StrictTarReader:
       drain()
       Right(TarResult(el.toMap, staged.result(), entries, gz.count))
 
-    /** After the end marker: read the rest of the gzip stream (padding), counting it and checking the gzip trailer. */
+    /** After the end marker only zero bytes (record padding) may follow. Reads to the end of the gzip stream, counting
+      * the bytes and letting the gzip trailer check run.
+      */
     private def drain(): Unit =
       val buf = new Array[Byte](16384)
       var n = gz.read(buf)
       while n >= 0 do
+        var i = 0
+        while i < n do
+          if buf(i) != 0 then refuse(None, "trailing data after the end of the archive")
+          i += 1
         checkCounts(None)
         n = gz.read(buf)
       checkCounts(None)
@@ -254,7 +300,7 @@ object StrictTarReader:
       case other                => Some(s"unsupported typeflag 0x${Integer.toHexString(other.toInt & 0xff)}")
 
     /** Validates a member name and returns its normalised form (no trailing slash) and its segments. */
-    private def validateName(raw: String): (String, List[String]) =
+    private def validateName(raw: String, isDir: Boolean): (String, List[String]) =
       val shown = Some(raw)
       if raw.isEmpty then refuse(shown, "empty name")
       if raw.indexOf('\u0000') >= 0 then refuse(shown, "NUL in name")
@@ -263,10 +309,13 @@ object StrictTarReader:
         refuse(shown, s"name over ${limits.maxNameBytes} bytes")
       if raw.startsWith("/") then refuse(shown, "absolute name")
       if raw.length >= 2 && raw(1) == ':' && raw(0).isLetter then refuse(shown, "name starts with a drive letter")
+      if !isDir && raw.endsWith("/") then refuse(shown, "regular file with a directory name")
       val trimmed = raw.stripSuffix("/")
       val segs = trimmed.split("/", -1).toList
       if segs.exists(_ == "..") then refuse(shown, "'..' in name")
       if segs.exists(s => s.isEmpty || s == ".") then refuse(shown, "empty or '.' segment in name")
+      if segs.exists(seg => !seg.forall(c => c.isLetterOrDigit && c < 128 || c == '.' || c == '_' || c == '-')) then
+        refuse(shown, "character outside [A-Za-z0-9._-] in name")
       if segs.size > limits.maxDepth then refuse(shown, s"more than ${limits.maxDepth} levels")
       if !seen.add(trimmed.toLowerCase(Locale.ROOT)) then refuse(shown, "duplicate name")
       (trimmed, segs)
@@ -279,8 +328,8 @@ object StrictTarReader:
 
     private def entry(h: Header, rawName: String): Unit =
       typeName(h.typeflag).foreach(kind => refuse(Some(rawName), s"$kind is not accepted"))
-      val (name, segs) = validateName(rawName)
       val isDir = h.typeflag == '5'
+      val (name, segs) = validateName(rawName, isDir)
       if h.size > limits.maxEntryBytes then refuse(Some(name), s"entry over ${limits.maxEntryBytes} bytes")
       if isDir then
         if h.size != 0 then refuse(Some(name), "directory with data")
@@ -332,19 +381,32 @@ object StrictTarReader:
         if Files.exists(cur, LinkOption.NOFOLLOW_LINKS) then
           if !Files.isDirectory(cur, LinkOption.NOFOLLOW_LINKS) then refuse(Some(name), "conflicts with a file")
         else
-          Files.createDirectory(cur, PosixFilePermissions.asFileAttribute(PosixFilePermissions.fromString("rwxr-xr-x")))
-          Files.setPosixFilePermissions(cur, PosixFilePermissions.fromString("rwxr-xr-x"))
+          Files.createDirectory(cur, PosixFilePermissions.asFileAttribute(DirPerms))
+          setExactMode(cur, DirPerms)
       }
 
     private def openNew(target: Path, parents: List[String], name: String): java.io.OutputStream =
       makeDirs(name, parents)
+      val ch =
+        try
+          Files.newByteChannel(
+            target,
+            java.util.Set
+              .of[OpenOption](StandardOpenOption.CREATE_NEW, StandardOpenOption.WRITE, LinkOption.NOFOLLOW_LINKS),
+            PosixFilePermissions.asFileAttribute(FilePerms)
+          )
+        catch case _: FileAlreadyExistsException => refuse(Some(name), "already exists in the stage")
       try
-        val ch = Files.newByteChannel(
-          target,
-          java.util.Set
-            .of[OpenOption](StandardOpenOption.CREATE_NEW, StandardOpenOption.WRITE, LinkOption.NOFOLLOW_LINKS),
-          PosixFilePermissions.asFileAttribute(PosixFilePermissions.fromString("rw-r--r--"))
-        )
-        Files.setPosixFilePermissions(target, PosixFilePermissions.fromString("rw-r--r--"))
+        setExactMode(target, FilePerms) // the umask may have removed bits at creation
         java.nio.channels.Channels.newOutputStream(ch)
-      catch case _: FileAlreadyExistsException => refuse(Some(name), "already exists in the stage")
+      catch
+        case t: Throwable =>
+          try ch.close()
+          catch case _: IOException => ()
+          throw t
+
+    /** Sets the mode through a view that does not follow links. */
+    private def setExactMode(path: Path, perms: java.util.Set[PosixFilePermission]): Unit =
+      val view = Files.getFileAttributeView(path, classOf[PosixFileAttributeView], LinkOption.NOFOLLOW_LINKS)
+      if view == null then throw new UnsupportedOperationException("no POSIX attribute view")
+      view.setPermissions(perms)

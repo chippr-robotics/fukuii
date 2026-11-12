@@ -43,6 +43,11 @@ class StrictTarReaderSpec extends AnyFlatSpec with Matchers:
     withStage { stage =>
       val r = read(bytes, stage, limits)
       withClue(s"expected a refusal, got $r: ")(r.isLeft shouldBe true)
+      withClue("a refusal must leave the stage empty: ") {
+        val s = Files.list(stage)
+        try s.iterator().asScala.toList shouldBe empty
+        finally s.close()
+      }
       r.left.getOrElse(fail())
     }
 
@@ -59,6 +64,11 @@ class StrictTarReaderSpec extends AnyFlatSpec with Matchers:
       "a dot segment" -> file("a/./b", one) -> "'.' segment",
       "an empty segment" -> file("a//b", one) -> "empty",
       "a name over 255 bytes" -> longNamed("d/" + "n" * 260, one) -> "name over 255 bytes",
+      "a space" -> file("a b", one) -> "outside [A-Za-z0-9._-]",
+      "a colon later in the name" -> file("a/b:c", one) -> "outside [A-Za-z0-9._-]",
+      "non-ASCII" -> file("caf\u00e9", one) -> "outside [A-Za-z0-9._-]",
+      "a control character" -> file("a\u0001b", one) -> "outside [A-Za-z0-9._-]",
+      "a regular file named like a directory" -> file("dirname/", one) -> "regular file",
       "nine levels" -> file("a/b/c/d/e/f/g/h/i", one) -> "more than 8 levels"
     )
     cases.foreach { case (((label, archive), fragment)) =>
@@ -248,6 +258,61 @@ class StrictTarReaderSpec extends AnyFlatSpec with Matchers:
       Files.exists(stage.resolve("parsedBeaconState.json")) shouldBe false
       Files.exists(stage.resolve("bootnode-keys")) shouldBe false
       Files.readString(stage.resolve("config.yaml")) shouldBe "content of config.yaml"
+    }
+  }
+
+  it should "refuse a POSIX prefix holding .. or an absolute path" taggedAs UnitTest in {
+    refusal(tgz(header("leaf", size = 1, gnu = false, prefix = "../up") ++ padded(one))).message should include("'..'")
+    refusal(tgz(header("leaf", size = 1, gnu = false, prefix = "/abs") ++ padded(one))).message should include(
+      "absolute name"
+    )
+  }
+
+  it should "refuse two GNU long-name headers in a row, and a long name with no entry after it" taggedAs UnitTest in {
+    val payload = "abc".getBytes(StandardCharsets.UTF_8) :+ 0.toByte
+    val l = header("././@LongLink", 'L', payload.length.toLong) ++ padded(payload)
+    refusal(tgz(l, l, file("x", one))).message should include("two GNU long-name headers in a row")
+    refusal(tgz(l)).message should include("not followed by an entry")
+  }
+
+  it should "refuse a directory with data, a base-256 size and a name that is not UTF-8" taggedAs UnitTest in {
+    refusal(tgz(header("d", '5', 10) ++ padded(new Array[Byte](10)))).message should include("directory with data")
+    val base256 = Array.fill[Byte](12)(0)
+    base256(0) = 0x80.toByte
+    base256(11) = 1
+    refusal(tgz(header("a", sizeField = Some(base256)) ++ padded(one))).message should include(
+      "unsupported size encoding"
+    )
+    refusal(tgz(header("a", nameBytes = Some(Array[Byte](0x61, 0xff.toByte, 0xfe.toByte))) ++ padded(one))).message
+      .should(include("not valid UTF-8"))
+  }
+
+  it should "not accept a header planted in the data of an entry whose size field is too small" taggedAs UnitTest in {
+    // the header says 1 byte; the second data block is a symlink header and is read as a header, then refused
+    val planted = header("planted", '2')
+    refusal(tgz(header("a", size = 1) ++ padded(one) ++ planted)).message should include("symlink")
+    val escape = header("../escape", size = 0)
+    refusal(tgz(header("a", size = 1) ++ padded(one) ++ escape)).message should include("'..'")
+  }
+
+  it should "need two zero blocks, and allow only zero bytes after them" taggedAs UnitTest in {
+    // one zero block and then the stream ends
+    refusal(gz(file("a", one) ++ new Array[Byte](512))).message should include("truncated")
+    // record padding of zeros after the marker is fine
+    withStage(stage => read(gz(tar(file("a", one)) ++ new Array[Byte](8192)), stage).isRight shouldBe true)
+    // a second tar stream appended after the first
+    refusal(gz(tar(file("a", one)) ++ tar(file("b", one)))).message should include("trailing data")
+    // a single stray byte
+    refusal(gz(tar(file("a", one)) ++ Array[Byte](1))).message should include("trailing data")
+  }
+
+  it should "leave the stage empty after a refusal, including one that follows a written file" taggedAs UnitTest in {
+    withStage { stage =>
+      val r = read(tgz(file("genesis.json", one), dir("sub"), file("sub/f", one), file("evil", typeflag = '2')), stage)
+      r.left.map(_.message).left.getOrElse("") should include("symlink")
+      val s = Files.list(stage)
+      try s.iterator().asScala.toList shouldBe empty
+      finally s.close()
     }
   }
 

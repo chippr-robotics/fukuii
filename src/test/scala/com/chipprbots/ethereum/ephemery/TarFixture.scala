@@ -14,7 +14,9 @@ object TarFixture:
       mode: Int = 420,
       gnu: Boolean = true,
       badChecksum: Boolean = false,
-      prefix: String = ""
+      prefix: String = "",
+      nameBytes: Option[Array[Byte]] = None,
+      sizeField: Option[Array[Byte]] = None
   ): Array[Byte] =
     val b = new Array[Byte](512)
     def put(off: Int, s: String, max: Int): Unit =
@@ -26,6 +28,8 @@ object TarFixture:
     put(116, "0000000", 7)
     put(124, f"$size%011o", 11)
     put(136, "00000000000", 11)
+    nameBytes.foreach(nb => System.arraycopy(nb, 0, b, 0, math.min(nb.length, 100)))
+    sizeField.foreach(sf => System.arraycopy(sf, 0, b, 124, math.min(sf.length, 12)))
     java.util.Arrays.fill(b, 148, 156, 0x20.toByte)
     b(156) = typeflag.toByte
     if gnu then put(257, "ustar  ", 8) else put(257, "ustar\u000000", 8)

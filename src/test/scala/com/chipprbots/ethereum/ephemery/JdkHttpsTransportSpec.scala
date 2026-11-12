@@ -1,11 +1,16 @@
 package com.chipprbots.ethereum.ephemery
 
+import java.io.InputStream
 import java.math.BigInteger
 import java.net.InetAddress
 import java.net.InetSocketAddress
 import java.net.Proxy
+import java.net.ServerSocket
+import java.net.Socket
 import java.net.URI
 import java.net.http.HttpClient
+import java.net.http.HttpConnectTimeoutException
+import java.net.http.HttpTimeoutException
 import java.security.KeyPairGenerator
 import java.security.KeyStore
 import java.security.cert.X509Certificate
@@ -13,9 +18,14 @@ import java.time.Clock
 import java.time.Instant
 import java.time.ZoneOffset
 import java.util.Date
+import java.util.concurrent.ConcurrentLinkedQueue
 import java.util.concurrent.CountDownLatch
+import java.util.concurrent.ExecutionException
 import java.util.concurrent.Executors
+import java.util.concurrent.LinkedBlockingQueue
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicInteger
+import java.util.concurrent.atomic.AtomicReference
 import javax.net.ssl.KeyManagerFactory
 import javax.net.ssl.SSLContext
 import javax.net.ssl.TrustManagerFactory
@@ -48,6 +58,19 @@ class JdkHttpsTransportSpec extends AnyFlatSpec with Matchers with BeforeAndAfte
   private val Now = Instant.parse("2026-11-12T00:00:00Z")
   private val fixedClock = Clock.fixed(Now, ZoneOffset.UTC)
   private val farDeadline = Now.plusSeconds(60)
+
+  /** A clock the server handlers advance, so a budget visibly shrinks between hops. */
+  final private class TestClock(start: Instant) extends Clock:
+    private val now = new AtomicReference(start)
+    def advance(d: java.time.Duration): Unit = now.updateAndGet(_.plus(d))
+    override def getZone: java.time.ZoneId = ZoneOffset.UTC
+    override def withZone(z: java.time.ZoneId): Clock = this
+    override def instant(): Instant = now.get
+
+  private val created = new ConcurrentLinkedQueue[JdkHttpsTransport]()
+  private val okHits = new AtomicInteger(0)
+  private val stallInBody = new CountDownLatch(1)
+  @volatile private var hopClock: TestClock = new TestClock(Now)
 
   private val keyPair =
     val g = KeyPairGenerator.getInstance("RSA")
@@ -108,6 +131,10 @@ class JdkHttpsTransportSpec extends AnyFlatSpec with Matchers with BeforeAndAfte
     ex.getResponseHeaders.add("Location", location)
     reply(ex, 302, Array.emptyByteArray)
 
+  private def redirectWith(ex: HttpExchange, status: Int, location: String): Unit =
+    ex.getResponseHeaders.add("Location", location)
+    reply(ex, status, Array.emptyByteArray)
+
   private def route(path: String)(h: HttpExchange => Unit): Unit =
     server.createContext(
       path,
@@ -119,7 +146,10 @@ class JdkHttpsTransportSpec extends AnyFlatSpec with Matchers with BeforeAndAfte
   override def beforeAll(): Unit =
     server.setHttpsConfigurator(new HttpsConfigurator(serverContext))
     server.setExecutor(pool)
-    route("/ok")(ex => reply(ex, 200, "hello".getBytes("UTF-8")))
+    route("/ok") { ex =>
+      okHits.incrementAndGet()
+      reply(ex, 200, "hello".getBytes("UTF-8"))
+    }
     route("/ua")(ex =>
       reply(
         ex,
@@ -149,30 +179,60 @@ class JdkHttpsTransportSpec extends AnyFlatSpec with Matchers with BeforeAndAfte
       ex.sendResponseHeaders(200, 100000L)
       ex.getResponseBody.write(new Array[Byte](10))
       ex.getResponseBody.flush()
+      stallInBody.countDown() // the headers and the first 10 bytes are out: the client is in the body phase
       release.await(30, TimeUnit.SECONDS)
+      ex.close()
+    }
+    route("/slow-headers") { ex =>
+      release.await(30, TimeUnit.SECONDS)
+      ex.close()
+    }
+    route("/code/") { ex =>
+      redirectWith(ex, ex.getRequestURI.getPath.stripPrefix("/code/").toInt, "/ok")
+    }
+    route("/rel")(ex => redirect(ex, "ok"))
+    route("/slashes")(ex => redirect(ex, s"//127.0.0.1:$port/ok"))
+    route("/slow-redirect") { ex =>
+      hopClock.advance(java.time.Duration.ofSeconds(10))
+      redirect(ex, "/ok")
+    }
+    route("/nocontent")(ex => reply(ex, 204, Array.emptyByteArray))
+    route("/partial")(ex => reply(ex, 206, "part".getBytes("UTF-8")))
+    route("/encoded") { ex =>
+      ex.getResponseHeaders.add("Content-Encoding", "gzip")
+      reply(ex, 200, "x".getBytes("UTF-8"))
+    }
+    route("/short") { ex =>
+      ex.sendResponseHeaders(200, 100L)
+      ex.getResponseBody.write(new Array[Byte](10))
       ex.close()
     }
     server.start()
 
   override def afterAll(): Unit =
     release.countDown()
+    created.asScala.foreach(_.close())
     server.stop(0)
     pool.shutdownNow()
 
   private def transport(
       policy: SourcePolicy,
       ssl: SSLContext = clientContext,
-      ua: String = "fukuii/9.9.9-test"
+      ua: String = "fukuii/9.9.9-test",
+      clock: Clock = fixedClock
   ): JdkHttpsTransport =
     val client = HttpClient
       .newBuilder()
+      .version(HttpClient.Version.HTTP_1_1)
       .sslContext(ssl)
       .followRedirects(HttpClient.Redirect.NEVER)
       .connectTimeout(java.time.Duration.ofSeconds(10))
       .build()
-    new JdkHttpsTransport(client, policy, fixedClock, ua)
+    val t = new JdkHttpsTransport(client, policy, clock, ua)
+    created.add(t)
+    t
 
-  private val localhostOnly = SourcePolicy.AllowList(Seq("localhost"))
+  private def localhostOnly = SourcePolicy.AllowList(Seq("localhost"), Set(port))
 
   private def get(t: JdkHttpsTransport, path: String, maxBytes: Long = 1 << 20, deadline: Instant = farDeadline) =
     t.get(new URI(s"$base$path"), maxBytes, deadline)
@@ -273,11 +333,27 @@ class JdkHttpsTransportSpec extends AnyFlatSpec with Matchers with BeforeAndAfte
     get(t, "/chunked-big", maxBytes = 9999).isLeft shouldBe true
   }
 
-  it should "honour the body deadline against a server stalled on a latch" taggedAs UnitTest in {
+  it should "honour the body deadline against a server stalled on a latch, after reaching the body phase" taggedAs
+    UnitTest in {
+      val t = transport(localhostOnly)
+      get(t, "/ok").isRight shouldBe true // warm the connection, so the 3 s budget is spent in the body
+      val r = failure(get(t, "/stall", deadline = Now.plusSeconds(3)))
+      // the server only counts down after it has sent the headers and the first 10 bytes
+      stallInBody.getCount shouldBe 0L
+      r shouldBe TransportFailure.DeadlineExceeded
+    }
+
+  it should "map a timeout while waiting for the headers to DeadlineExceeded, never Io" taggedAs UnitTest in {
     val t = transport(localhostOnly)
-    // fixed clock: the remaining budget is always 600 ms of real time
-    val r = failure(get(t, "/stall", deadline = Now.plusMillis(600)))
-    r shouldBe TransportFailure.DeadlineExceeded
+    failure(get(t, "/slow-headers", deadline = Now.plusSeconds(2))) shouldBe TransportFailure.DeadlineExceeded
+  }
+
+  it should "give the second hop a smaller budget: the clock advances in the first hop's handler" taggedAs UnitTest in {
+    hopClock = new TestClock(Now)
+    val t = transport(localhostOnly, clock = hopClock)
+    val before = okHits.get()
+    failure(get(t, "/slow-redirect", deadline = Now.plusSeconds(5))) shouldBe TransportFailure.DeadlineExceeded
+    okHits.get() shouldBe before // the second hop was never sent
   }
 
   it should "refuse a deadline that has already passed without sending a request" taggedAs UnitTest in {
@@ -329,6 +405,213 @@ class JdkHttpsTransportSpec extends AnyFlatSpec with Matchers with BeforeAndAfte
       (f.message should not).include("SECRET")
       (f.message should not).include("?")
     }
+  }
+
+  it should "classify exceptions: timeouts are DeadlineExceeded, anything else Io with the class name" taggedAs
+    UnitTest in {
+      import JdkHttpsTransport.classify
+      classify(new HttpTimeoutException("x")) shouldBe TransportFailure.DeadlineExceeded
+      classify(new HttpConnectTimeoutException("x")) shouldBe TransportFailure.DeadlineExceeded
+      classify(new ExecutionException(new HttpTimeoutException("x"))) shouldBe TransportFailure.DeadlineExceeded
+      classify(new ExecutionException(new IllegalStateException("https://h/p?secret=1"))) shouldBe
+        TransportFailure.Io("java.lang.IllegalStateException")
+      classify(new java.util.concurrent.CancellationException("c")) shouldBe
+        TransportFailure.Io("java.util.concurrent.CancellationException")
+      val anon = new RuntimeException("q") {}
+      classify(anon) shouldBe a[TransportFailure.Io]
+      (classify(anon).message should not).include("q")
+      classify(anon).asInstanceOf[TransportFailure.Io].why should not be empty
+    }
+
+  it should "return a runtime exception from the JDK as Io, not throw" taggedAs UnitTest in {
+    val r = transport(SourcePolicy.Mirror).get(new URI("https://localhost:99999/ok"), 1000, farDeadline)
+    failure(r) shouldBe a[TransportFailure.Io]
+  }
+
+  it should "refuse a start URL with userinfo and a //host redirect off the policy" taggedAs UnitTest in {
+    val withUser = transport(localhostOnly).get(new URI(s"https://user:hunter2@localhost:$port/ok"), 1000, farDeadline)
+    failure(withUser) shouldBe a[TransportFailure.BadRedirect]
+    (failure(withUser).message should not).include("hunter2")
+    failure(get(transport(localhostOnly), "/slashes")) shouldBe TransportFailure.HostNotAllowed("127.0.0.1")
+    get(transport(SourcePolicy.Mirror), "/slashes").map(_.finalHost) shouldBe Right("127.0.0.1")
+  }
+
+  it should "follow 301, 303, 307 and 308, and a relative Location" taggedAs UnitTest in {
+    val t = transport(localhostOnly)
+    Seq(301, 303, 307, 308).foreach { code =>
+      withClue(s"HTTP $code: ")(get(t, s"/code/$code").map(b => new String(b.bytes, "UTF-8")) shouldBe Right("hello"))
+    }
+    get(t, "/rel").map(b => new String(b.bytes, "UTF-8")) shouldBe Right("hello")
+  }
+
+  it should "accept a body exactly at the cap and refuse one byte over" taggedAs UnitTest in {
+    val t = transport(localhostOnly)
+    get(t, "/big", maxBytes = 10000).map(_.bytes.length) shouldBe Right(10000)
+    failure(get(t, "/big", maxBytes = 9999)) shouldBe TransportFailure.BodyTooLarge(9999)
+  }
+
+  it should "refuse a body shorter than its Content-Length" taggedAs UnitTest in {
+    failure(get(transport(localhostOnly), "/short")) shouldBe a[TransportFailure.Io]
+  }
+
+  it should "treat only 200 as success, and refuse a content encoding" taggedAs UnitTest in {
+    val t = transport(localhostOnly)
+    failure(get(t, "/nocontent")) shouldBe TransportFailure.HttpStatus(204)
+    failure(get(t, "/partial")) shouldBe TransportFailure.HttpStatus(206)
+    val enc = failure(get(t, "/encoded"))
+    enc shouldBe TransportFailure.ContentEncoding("gzip")
+    enc.message should include("gzip")
+  }
+
+  it should "allow only port 443 under the allow-list" taggedAs UnitTest in {
+    val t = transport(SourcePolicy.DefaultGithub)
+    failure(t.get(new URI("https://github.com:8443/x"), 1000, farDeadline)) shouldBe TransportFailure.PortNotAllowed(
+      8443
+    )
+    failure(t.get(new URI("https://x.githubusercontent.com:22/x"), 1000, farDeadline)) shouldBe
+      TransportFailure.PortNotAllowed(22)
+    SourcePolicy.DefaultGithub.permitsPort(-1) shouldBe true
+    SourcePolicy.DefaultGithub.permitsPort(443) shouldBe true
+    SourcePolicy.Mirror.permitsPort(8443) shouldBe true
+  }
+
+  it should "leave no watchdog thread behind after get returns" taggedAs UnitTest in {
+    val t = transport(localhostOnly)
+    get(t, "/ok").isRight shouldBe true
+    failure(get(t, "/missing")) shouldBe TransportFailure.HttpStatus(404)
+    failure(get(t, "/big", maxBytes = 10)) shouldBe TransportFailure.BodyTooLarge(10)
+    val names = Thread.getAllStackTraces.keySet.asScala.toList.map(_.getName)
+    names.count(_ == "release-transport-watchdog") shouldBe 0
+  }
+
+  it should "build the production client with HTTP/1.1 and an explicit HTTPS endpoint check" taggedAs UnitTest in {
+    val t = JdkHttpsTransport
+      .default(
+        localhostOnly,
+        "1",
+        env = Map.empty,
+        clock = fixedClock,
+        sslContext = Some(clientContext),
+        props = _ => None
+      )
+      .getOrElse(fail())
+    created.add(t)
+    t.client.version() shouldBe HttpClient.Version.HTTP_1_1
+    t.client.followRedirects() shouldBe HttpClient.Redirect.NEVER
+    t.client.sslParameters().getEndpointIdentificationAlgorithm shouldBe "HTTPS"
+  }
+
+  it should "refuse to build when hostname verification is switched off by a system property" taggedAs UnitTest in {
+    val key = "jdk.internal.httpclient.disableHostnameVerification"
+    Seq("true", "", "1").foreach { v =>
+      val r = JdkHttpsTransport.default(SourcePolicy.DefaultGithub, "1", Map.empty, fixedClock, None, Map(key -> v).get)
+      withClue(s"value '$v': ")(r.left.map(_.contains("hostname verification")) shouldBe Left(true))
+    }
+    // "false" is the JDK default and is fine
+    val ok =
+      JdkHttpsTransport.default(SourcePolicy.DefaultGithub, "1", Map.empty, fixedClock, None, Map(key -> "false").get)
+    ok.isRight shouldBe true
+    ok.foreach(_.close())
+  }
+
+  it should "log the proxy source and whether a trust store is set, never the address or the path" taggedAs UnitTest in {
+    val (r, logs) = withLog {
+      JdkHttpsTransport.default(
+        SourcePolicy.DefaultGithub,
+        "1",
+        Map("HTTPS_PROXY" -> "http://proxy.hidden.example:3128"),
+        fixedClock,
+        None,
+        Map("javax.net.ssl.trustStore" -> "/private/trust.jks").get
+      )
+    }
+    r.foreach(_.close())
+    val text = logs.mkString("\n")
+    text should include("HTTPS_PROXY")
+    text should include("trust store: yes")
+    (text should not).include("hidden.example")
+    (text should not).include("trust.jks")
+    val (r2, logs2) =
+      withLog(JdkHttpsTransport.default(SourcePolicy.DefaultGithub, "1", Map.empty, fixedClock, None, _ => None))
+    r2.foreach(_.close())
+    logs2.mkString("\n") should (include("proxy: none").and(include("trust store: no")))
+    val (r3, logs3) = withLog(
+      JdkHttpsTransport.default(
+        SourcePolicy.DefaultGithub,
+        "1",
+        Map.empty,
+        fixedClock,
+        None,
+        Map("https.proxyHost" -> "p.hidden.example").get
+      )
+    )
+    r3.foreach(_.close())
+    logs3.mkString("\n") should include("JDK properties")
+    (logs3.mkString("\n") should not).include("hidden.example")
+  }
+
+  it should "tunnel through an HTTP proxy named by HTTPS_PROXY (CONNECT seen by the proxy)" taggedAs UnitTest in {
+    val seen = new LinkedBlockingQueue[String]()
+    val proxy = new ServerSocket(0, 5, InetAddress.getByName("127.0.0.1"))
+    def line(in: InputStream): String =
+      val sb = new StringBuilder
+      var c = in.read()
+      while c >= 0 && c != '\n' do
+        if c != '\r' then sb.append(c.toChar)
+        c = in.read()
+      sb.toString
+    def pipe(from: InputStream, to: java.io.OutputStream): Unit =
+      try
+        val buf = new Array[Byte](8192)
+        var n = from.read(buf)
+        while n >= 0 do
+          to.write(buf, 0, n)
+          to.flush()
+          n = from.read(buf)
+      catch case _: java.io.IOException => ()
+    val acceptor = new Thread(() =>
+      try
+        while true do
+          val client = proxy.accept()
+          val handler = new Thread(() =>
+            try
+              val first = line(client.getInputStream)
+              seen.add(first)
+              var l = line(client.getInputStream)
+              while l.nonEmpty do l = line(client.getInputStream)
+              val upstream = new Socket("127.0.0.1", port)
+              client.getOutputStream.write("HTTP/1.1 200 Connection established\r\n\r\n".getBytes("US-ASCII"))
+              client.getOutputStream.flush()
+              val back = new Thread(() => pipe(upstream.getInputStream, client.getOutputStream))
+              back.setDaemon(true)
+              back.start()
+              pipe(client.getInputStream, upstream.getOutputStream)
+              upstream.close()
+              client.close()
+            catch case _: java.io.IOException => ()
+          )
+          handler.setDaemon(true)
+          handler.start()
+      catch case _: java.io.IOException => ()
+    )
+    acceptor.setDaemon(true)
+    acceptor.start()
+    try
+      val t = JdkHttpsTransport
+        .default(
+          localhostOnly,
+          "1",
+          Map("HTTPS_PROXY" -> s"http://127.0.0.1:${proxy.getLocalPort}"),
+          fixedClock,
+          Some(clientContext),
+          _ => None
+        )
+        .getOrElse(fail())
+      created.add(t)
+      val body = get(t, "/ok").getOrElse(fail())
+      new String(body.bytes, "UTF-8") shouldBe "hello"
+      Option(seen.poll(5, TimeUnit.SECONDS)).getOrElse("") shouldBe s"CONNECT localhost:$port HTTP/1.1"
+    finally proxy.close()
   }
 
   // ── proxy environment ───────────────────────────────────────────────────────────────────────────────────────────
@@ -391,4 +674,25 @@ class JdkHttpsTransportSpec extends AnyFlatSpec with Matchers with BeforeAndAfte
   it should "refuse a proxy scheme the JDK cannot speak" taggedAs UnitTest in {
     ProxyEnv.selector(Map("HTTPS_PROXY" -> "socks5://p:1080")).isLeft shouldBe true
     ProxyEnv.selector(Map("HTTPS_PROXY" -> "https://p:443")).isLeft shouldBe true
+  }
+
+  it should "strip the brackets from an IPv6 proxy host" taggedAs UnitTest in {
+    val p = select(Map("HTTPS_PROXY" -> "http://[::1]:3128"), "https://github.com/x")
+    p.address().asInstanceOf[InetSocketAddress].getHostString shouldBe "::1"
+    p.address().asInstanceOf[InetSocketAddress].getPort shouldBe 3128
+  }
+
+  it should "strip a :port from a NO_PROXY entry, and let lower-case variables win" taggedAs UnitTest in {
+    val env = Map("HTTPS_PROXY" -> "http://p:1", "NO_PROXY" -> "skip.example:8443, .corp.example:443")
+    select(env, "https://skip.example/x") shouldBe Proxy.NO_PROXY
+    select(env, "https://a.corp.example/x") shouldBe Proxy.NO_PROXY
+    val both = Map(
+      "HTTPS_PROXY" -> "http://upper:1",
+      "https_proxy" -> "http://lower:2",
+      "NO_PROXY" -> "upper.example",
+      "no_proxy" -> "lower.example"
+    )
+    select(both, "https://a.example").address().asInstanceOf[InetSocketAddress].getPort shouldBe 2
+    select(both, "https://lower.example") shouldBe Proxy.NO_PROXY
+    select(both, "https://upper.example").`type`() shouldBe Proxy.Type.HTTP
   }
