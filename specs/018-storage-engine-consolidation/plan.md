@@ -1883,23 +1883,32 @@ hold of. Blocks of the head's own chain are committed in place or pinned, and ne
 pins. To count there: blocks not kept, by reason; branches refused; blocks executed again because their state had
 gone; the lag of the anchor behind the head.
 
-**Two questions part 4 cannot be designed without, and they are the user's** (forge, beacon; raised 2026-11-12).
+**Two decisions part 4 could not be designed without** (raised by forge and beacon; **decided by the user,
+2026-11-12**).
 
 1. *A branch that is heavier and holds more than `pinned-max-bytes`.* `BranchTooLarge` is the same answer however
-   often the branch is tried: as built, such a branch is never adopted, and on a proof-of-work chain a node that
-   cannot adopt the heaviest chain has left it. Forge's estimate of what 256 MiB holds: some 85 full blocks at
-   today's 8M gas, some 20 at 60M, and the deep reorganisations ETC has seen were of thousands of blocks. The
-   data-model records a fallback and does not make it the default (6.4, "reverse-then-commit with rollback from
-   records", pending M10 and M13). The choices: (a) that fallback, as the rule when the cap is hit: the executed
-   prefix is promoted block by block, and the disk is moved back by the records if a later block is invalid or the
-   branch turns out lighter; (b) pinned layers that spill to a scratch column family, so that a branch is bounded by
-   disk and the head is not moved before the branch has won; (c) the cap as the limit, raised by an operator.
+   often the branch is tried: left as the last word, such a branch is never adopted, and on a proof-of-work chain a
+   node that cannot adopt the heaviest chain has left it. Forge's estimate of what 256 MiB holds: some 85 full
+   blocks at today's 8M gas, some 20 at 60M, and the deep reorganisations ETC has seen were of thousands of blocks.
+   **Decided: reverse-then-commit, as the rule when the cap is hit** (the fallback data-model 6.4 records). The
+   branch is executed under a pin as far as the cap allows; when the cap is hit, the disk is moved to the fork
+   point by the records, the executed prefix is promoted block by block, and the rest of the branch is executed
+   and committed in place on it. If a later block is invalid, or the branch turns out not to outweigh the head it
+   left, the disk is moved back by the records of the blocks it committed and the old branch is committed again
+   from its stored blocks. Not chosen: pinned layers spilled to a scratch column family; the cap as the limit.
+   What this asks of the slices: the head move is C4b's, so the fallback lands with it, and until then a branch
+   above the cap is deferred and never judged; the move back after a failed adoption is in the crash matrix (a
+   crash between the move to the fork point and the last commit leaves a head the node must be able to explain
+   from its records and stored blocks); only a branch whose headers prove more weight than the head starts it,
+   so what it costs to make a node do this is the work of that branch.
 2. *More than 32 payloads in a row ahead of a `forkchoiceUpdated`.* A pin lasts for one call, so the payloads a
    consensus client sends ahead of its choice are layers no branch pins: the 33rd on one chain finds no room (every
-   kept layer is under it), and the 34th finds its parent's state not held. That is answered correctly by execution
-   again at the `forkchoiceUpdated`, at a cost. The choices: the bound as it is; a higher bound for a chain that
-   follows a consensus client (geth keeps 128 layers); or a pin that outlives a call, held for "payloads awaiting a
-   choice" and bounded like a branch.
+   kept layer is under it), and the 34th finds its parent's state not held. **Decided: the bounds stay as they
+   are, and the cost is execution again**: at the `forkchoiceUpdated`, the blocks of the chosen chain whose state
+   is not held are executed again from their stored bodies, in order, and committed. Not chosen: a higher bound
+   for a chain that follows a consensus client; a pin that outlives a call. To look at again with M1's bytes per
+   block on Sepolia and Platåberget: the bound of 128 MiB on the layers' bytes would bind before a higher count of
+   layers did.
 
 **Two reads after code (beacon, forge: each APPROVE WITH CHANGES; nothing blocks this part).** Found sound: nothing
 that is not pinned can evict or block a pinned branch; a refusal with `BranchTooLarge` pins and keeps nothing; a
@@ -1932,6 +1941,45 @@ layer kept on a layer being a use of it (an execution is staged through the laye
 the case stages on another layer in between), and a released branch counting as used (the same layers were left
 whichever went first, so the case evicts one layer and no more). One changes nothing a test of one thread can see:
 an index given to a view of a later epoch, which is there for a builder that crosses a move of the disk.
+
+### C4a part 3c: the ordering, the stress and M3 (2026-11-12)
+
+Tests and a measurement; no change to the store. Tasks T125, T127 and T134.
+
+- **`EpochOrderingSpec` (T125)**: the one ordering the isolation of a view rests on (data-model 6.3.3). A data source
+  that stops before and after its write makes the steps: one thread, the same interleaving every run. *The writer*:
+  when its batch is about to be written the epoch is odd, the move is in the log with the new anchor, and nothing
+  is written; when the batch has returned the move is in flight still, and says of every row the batch changed
+  what it held, and of no row a thing that was not so (the rows before and after, compared). For a commit in place
+  and for a promotion. *A reader*: the anchor's view, a view through a layer, a view behind the anchor and a view
+  of a fork, each made before the move, read every node of their states before the batch, after it while the clock
+  is not settled, and after. *The fallback* of 6.3.3 is another clock under the same view: a view asks its clock
+  three things, so a store whose writers exclude its readers by a reader-writer lock is a `StateClock` of a few
+  lines, shown reading. The memory model's own gap (no happens-before across the native write) is as the
+  data-model has it: documented, and not something a test of one thread can close.
+- **`OverlayStressSpec` (T127)**: ten thousand steps in an order a seed decides: blocks committed in place (with
+  readers reading before and after the batch, inside the write), blocks kept on the anchor, on layers, behind the
+  anchor and on forks, branches of two to four blocks under a pin while other blocks arrive, promotions, drops,
+  views opened and read. The overlay is small (six layers, 40 KB, 12 blocks of records), so its bounds are met all
+  the time. **Every read that succeeds is right, and every failure is `StaleStateViewException`,
+  `StateUnavailable` or `BranchTooLarge`**: never a wrong node, a missing one, or `LayerInconsistent`. A read is of
+  nodes by their hash, and of rows: at positions of the view's state and of another state, where a view must hold
+  nothing if its own state has no row there. Every block is executed on a hash store too and the two state roots
+  are held to each other, so an execution through layers and records is checked as it is made. Two invariants are
+  held as the run goes: every kept layer has a view while the disk is at rest, and what a branch holds stays while
+  it is under execution. At the end the disk is its anchor's state, row for row. About five seconds.
+- **The mutation run for the two**: 12 mutants of isolation (the batch written before the move is said, a move that
+  says nothing of its rows, a view that reads the rows as they are, the wrong move or the wrong layer answering, a
+  row of a replaced trie showing through, an inner or a pinned layer evicted, a promotion that scans nothing, the
+  layers nothing leads to left). Ten are caught. Six were not at first: the stress read only nodes that exist and
+  took every refusal for a right answer, so it was given the reads of rows and the two invariants. Two change
+  nothing one thread can see: a view that is not made again when the disk moves while it is made (`viewOf`; the
+  same rule in `view` has its case in `ForwardLayerSpec`), and an index kept across a move of the anchor (it is
+  kept with its epoch and never given again).
+- **M3** (`baselines/m3-layer-heap.md`, `LayerHeapBenchmark`): what a layer holds on the heap against what the
+  overlay counts. The count is no less than the heap in every shape measured, by 9 % to 2.2 times, so a bound on the
+  count is a bound on the heap and the defaults stay. Measured by a heap difference over hundreds of layers, not by
+  JOL, which is not a dependency of the build. Setting the defaults from real blocks waits for M1 and M2.
 
 ### Destructive change (C8a and C8b): the vault protocol blocks
 

@@ -153,6 +153,13 @@ Read plan.md, "C2a part 1 record" and "C2a part 2 record", then:
   `AlreadyApplied` or `BehindTheAnchor`: **`NotKept` is not a fault and not a verdict on the block**, and `Kept` is as
   of now. A caller that adopts a pinned branch promotes first and releases after. A spec of the bounds starts from
   `OverlayBudgetSpec`, where every block changes one account so that a bound in bytes is a count of layers.
+- **C4a part 3c is written** (plan.md, "C4a part 3c"): `EpochOrderingSpec` (the writer's order, readers at every
+  step of a move), `OverlayStressSpec` (10,000 seeded steps; change the store's isolation and run it first: it reads
+  rows as well as nodes, and holds two invariants), and M3 (`baselines/m3-layer-heap.md`). **The two decisions part
+  4 waited on are taken (user, 2026-11-12; plan.md, "C4a part 3")**: a heavier branch above `pinned-max-bytes` is
+  adopted by reverse-then-commit, with the disk moved back by the records if it fails (it lands with C4b's head
+  move; until then such a branch is deferred, never judged); and the overlay's bounds stay, with the blocks whose
+  state is not held executed again at the `forkchoiceUpdated`.
 - **C4a** brings back what C3b refuses: the overlay commit for a block that does not extend the anchor
   (`buildExtra(adopted)`, `NotExtendingAnchor`, `saveLastBlock` writing nothing),
   `stateAvailable(hash)`, the served-root window, and SNAP advertised again. C4b: the head move, `ConsensusStateFault`
