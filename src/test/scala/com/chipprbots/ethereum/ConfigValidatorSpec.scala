@@ -195,13 +195,12 @@ class ConfigValidatorSpec extends AnyFlatSpec with Matchers:
     ConfigValidator.stateGuardErrors(cfg("state.path-live = true\nmining.mining-enabled = false")) shouldBe empty
   }
 
-  // Both execute with nothing staged until the proposer view and the ported import (C3c): the node would fail while
-  // it starts.
-  it should "refuse state.path-live with a chain file imported at start, and with test mode" taggedAs UnitTest in {
-    val withFile =
-      ConfigValidator.stateGuardErrors(cfg("state.path-live = true\nimport-chain-file = \"/data/chain.rlp\""))
-    withFile should have size 1
-    withFile.head should (include("fukuii.import-chain-file").and(include("admin_importChain")))
+  // Test mode executes with nothing staged until its part of C3c: the node would fail while it starts. The chain file
+  // imported at start is taken on the unified layout since C3c, block by block onto the head.
+  it should "take state.path-live with a chain file imported at start, and refuse it with test mode" taggedAs UnitTest in {
+    ConfigValidator.stateGuardErrors(
+      cfg("state.path-live = true\nimport-chain-file = \"/data/chain.rlp\"")
+    ) shouldBe empty
     ConfigValidator.stateGuardErrors(cfg("state.path-live = true\nimport-chain-file = \"\"")) shouldBe empty
     ConfigValidator.stateGuardErrors(
       cfg("state.path-live = false\nimport-chain-file = \"/data/chain.rlp\"")
