@@ -2633,7 +2633,7 @@ items:
   - id: B-232
     title: "028 S2: Ephemery release rules in Scala; ephemery-fetch --from-dir; fetch-genesis.sh delegates"
     priority: P2
-    status: open
+    status: claimed
     area: ops
     size: L
     opened: 2026-11-12
@@ -2641,6 +2641,11 @@ items:
     links:
       spec: specs/028-builtin-ephemery-hoodi
       branch: feat/028-s2-release-lib
+    claim:
+      by: dev-node
+      agent: main
+      since: 2026-11-12T21:49:28Z
+      heartbeat: 2026-11-12T21:49:28Z
   - id: B-233
     title: "028 S3: bundled Ephemery iteration, startup selection, exit 75 at the reset"
     priority: P2
