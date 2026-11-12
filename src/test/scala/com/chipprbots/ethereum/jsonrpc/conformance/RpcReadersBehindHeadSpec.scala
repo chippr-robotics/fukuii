@@ -19,6 +19,7 @@ import com.chipprbots.ethereum.db.components.EphemDataSourceComponent
 import com.chipprbots.ethereum.db.components.Storages
 import com.chipprbots.ethereum.db.dataSource.EphemDataSource
 import com.chipprbots.ethereum.db.storage.pathstate.PathStateStorage
+import com.chipprbots.ethereum.db.storage.pathstate.RecordReads
 import com.chipprbots.ethereum.db.storage.pathstate.StateUnavailable
 import com.chipprbots.ethereum.domain.Address
 import com.chipprbots.ethereum.domain.Block
@@ -342,6 +343,54 @@ class RpcReadersBehindHeadSpec extends ScalaTestWithActorTestKit with AnyFlatSpe
     answered should be > 0
     state.readsBehindInFlight shouldBe 0
   }
+
+  it should "be told to ask again, over JSON-RPC and over GraphQL, while as many read behind the head as may" taggedAs
+    UnitTest in {
+      val headers =
+        (1 to 5).map(back => onHashes.blockchainReader.getBlockHeaderByNumber(head.header.number.value - back).get)
+      val reading = new java.util.concurrent.CountDownLatch(4)
+      val letGo = new java.util.concurrent.CountDownLatch(1)
+      // four requests in flight, each on a block of its own behind the head
+      val inFlight = headers.take(4).map { header =>
+        RecordReads.onThread(s"a request on block ${header.number.value}") {
+          StateRead.scoped {
+            onPositions.blockchainReader.stateAt(header)
+            reading.countDown()
+            letGo.await(60, java.util.concurrent.TimeUnit.SECONDS)
+          }
+        }
+      }
+      try
+        reading.await(60, java.util.concurrent.TimeUnit.SECONDS) shouldBe true
+        state.readsBehindInFlight shouldBe 4
+        val at = hex(headers(4).number.value)
+        val address = accounts.head
+        // a fifth, on another block: an error that says to ask again, and no revert
+        val balance = ask(onPositions, "eth_getBalance", JString(address), at)
+        (balance \ "error" \ "code") shouldBe JInt(JsonRpcError.StateBusy.code)
+        (balance \ "error" \ "message") shouldBe JString(JsonRpcError.StateBusy.message)
+        val call = ask(onPositions, "eth_call", JObject("to" -> JString(address), "data" -> JString("0x")), at)
+        (call \ "error" \ "code") shouldBe JInt(JsonRpcError.StateBusy.code)
+        // over GraphQL each field says so, and none gives the value it gives for a call that failed
+        Seq(
+          s"""account(address: "$address") { balance }""",
+          s"""estimateGas(data: {to: "$address"})""",
+          s"""call(data: {to: "$address"}) { status }"""
+        ).foreach { field =>
+          withClue(s"$field: ") {
+            val answer = graphql(onPositions, s"{ block(number: ${headers(4).number.value}) { $field } }").noSpaces
+            answer should include(JsonRpcError.StateBusy.message)
+            (answer should not).include("\"estimateGas\":0")
+          }
+        }
+        // the head's state, and a block one of the four reads, are read as ever
+        (ask(onPositions, "eth_getBalance", JString(address), JString("latest")) \ "error") shouldBe JNothing
+      finally letGo.countDown()
+      inFlight.foreach(_.ended.get)
+      state.readsBehindInFlight shouldBe 0
+      (ask(onPositions, "eth_getBalance", JString(accounts.head), hex(headers(4).number.value)) \ "error") shouldBe
+        JNothing
+    }
 
   it should "be refused the fifth block of one scope, for good: a range reads its blocks one at a time" taggedAs
     UnitTest in {
