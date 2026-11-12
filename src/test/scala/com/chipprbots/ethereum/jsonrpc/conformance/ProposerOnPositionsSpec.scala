@@ -76,6 +76,9 @@ class ProposerOnPositionsSpec extends ScalaTestWithActorTestKit with AnyFlatSpec
       ):
     @volatile var proposerCalls = 0
     @volatile var faults: List[Throwable] = Nil
+
+    /** Failures of an execution that no transaction explains, each answered once in place of the execution. */
+    @volatile var refusals: List[BlockExecutionError] = Nil
     override def executeForProposer(
         block: Block
     )(implicit blockchainConfig: BlockchainConfig): Either[BlockExecutionError, BlockResult] =
@@ -84,7 +87,12 @@ class ProposerOnPositionsSpec extends ScalaTestWithActorTestKit with AnyFlatSpec
         case next :: rest =>
           faults = rest
           throw next
-        case Nil => super.executeForProposer(block)
+        case Nil =>
+          refusals match
+            case refusal :: rest =>
+              refusals = rest
+              Left(refusal)
+            case Nil => super.executeForProposer(block)
 
   private val chain: Seq[Block] = RpcCompatNode.blocks
   private def proofOfStake(block: Block): Boolean = block.header.difficulty.value == 0
@@ -182,9 +190,13 @@ class ProposerOnPositionsSpec extends ScalaTestWithActorTestKit with AnyFlatSpec
             // the engine's build: a transaction that cannot be applied is left out, and the list executed again.
             // One that an earlier block included is such a transaction, here and in a pool that is behind the head.
             val included = chain.take(index).flatMap(_.body.transactionList).lastOption
+            val executions = rig.execution.proposerCalls
             val lenient = rig.build(block, block.body.transactionList ++ included, strict = false)
             lenient.map(_.block.header.hash) shouldBe Right(block.header.hash)
-            lenientDrops += included.size
+            // the execution that meets the transaction and fails, and the one of the list without it. Where the
+            // block has transactions that is what the hash says: an empty payload would be another block.
+            rig.execution.proposerCalls - executions shouldBe 1 + included.size
+            if block.body.transactionList.nonEmpty then lenientDrops += included.size
 
             // nothing of either build is on disk, and the state on disk has not moved
             rig.allButCode shouldBe before
@@ -235,6 +247,25 @@ class ProposerOnPositionsSpec extends ScalaTestWithActorTestKit with AnyFlatSpec
     rig.execution.proposerCalls shouldBe 4
     rig.allButCode shouldBe before
   }
+
+  // A failure of the execution that no transaction explains (a system call, the layout of a deposit log) gives the
+  // empty payload, on this layout as on the other: that is a block, built on the parent's state like any other.
+  "A lenient build whose execution fails for no transaction's fault" should "be the empty payload, which import takes, and write nothing" taggedAs
+    UnitTest in {
+      val index = chain.lastIndexWhere(block => proofOfStake(block) && block.body.transactionList.nonEmpty)
+      val rig = new Rig(held = index)
+      val block = chain(index)
+      val before = rig.allButCode
+      rig.execution.refusals = List(BlockExecutionError.ValidationAfterExecError("a failure no transaction explains"))
+      val built = rig.build(block, block.body.transactionList, strict = false).fold(why => fail(why), identity)
+      built.block.body.transactionList shouldBe empty
+      built.block.header.parentHash shouldBe block.header.parentHash
+      // the list that failed, then the empty one, which was executed: its header is one import computes
+      rig.execution.proposerCalls shouldBe 2
+      rig.allButCode shouldBe before
+      rig.importBlock(built.block) shouldBe None
+      rig.pathState.anchor shouldBe Some(rig.refOf(built.block.header))
+    }
 
   "A build on a block whose state is not held" should "be refused as that, strict or lenient" taggedAs UnitTest in {
     val rig = new Rig(held = chain.size - 1)

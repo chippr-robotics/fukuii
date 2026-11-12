@@ -184,6 +184,16 @@ class MinedBlockOnPositionsSpec extends AnyFlatSpec with Matchers:
       def disk: Disk = PathStateTestKit.allRows(new PathNodeStorage(onPositions.source))
       def storageRowsOf(owner: ByteString): Int = disk._2.keys.count(_.startsWith(owner))
 
+      /** What `block` paid the miner of each of its ommers, and its own, as each layout holds it. */
+      def paid(block: Block): Unit =
+        (block.header.beneficiary +: block.body.uncleNodesList.map(_.beneficiary)).foreach { who =>
+          val onUnified = onPositions.blockchainReader.accountAt(block.header, Address(who)).map(_.balance)
+          withClue(s"block ${block.header.number}, ${Address(who)}: ") {
+            onUnified.exists(_ > UInt256.Zero) shouldBe true
+            onUnified shouldBe onHashes.blockchainReader.accountAt(block.header, Address(who)).map(_.balance)
+          }
+        }
+
       /** One block, on both layouts: prepared, compared, and imported. */
       def step(transactions: Seq[SignedTransaction], ommers: BlockHeader => Seq[BlockHeader], included: Int): Block =
         val parent = onPositions.head.header
@@ -221,6 +231,7 @@ class MinedBlockOnPositionsSpec extends AnyFlatSpec with Matchers:
       // block 2: slot 0 is cleared, so the contract's storage trie loses a leaf; an ommer is paid
       val second = step(Seq(call(2, contract, ByteString.empty)), parent => Seq(ommerOf(parent, 1)), included = 1)
       second.body.uncleNodesList should have size 1
+      paid(second)
       storageRowsOf(contractOwner) should ((be > 0).and(be <= threeSlots))
 
       // block 3, the first of era 1: the contract destroys itself, and its address is paid again in the same block.
@@ -234,6 +245,12 @@ class MinedBlockOnPositionsSpec extends AnyFlatSpec with Matchers:
       // block 4: no transaction, two ommers
       val fourth = step(Nil, parent => Seq(ommerOf(parent, 2), ommerOf(parent, 3)), included = 0)
       fourth.body.uncleNodesList should have size 2
+      paid(fourth)
+      // era 1 pays an ommer's miner less than era 0 did: the reward that is read is the era's
+      val eraZero =
+        onPositions.blockchainReader.accountAt(fourth.header, Address(ommerOf(second.header, 1).beneficiary))
+      val eraOne = onPositions.blockchainReader.accountAt(fourth.header, Address(ommerOf(third.header, 2).beneficiary))
+      eraOne.map(_.balance).exists(one => eraZero.map(_.balance).exists(_ > one)) shouldBe true
     }
 
   // The generator keeps the last blocks it prepared, each with the world its preparation left. On the unified layout

@@ -110,8 +110,36 @@ class MockedMinerOnPositionsSpec
       miner ! Send(MineBlocks(blocks, withTransactions = false, None), asker.ref)
       asker.expectMessage(MiningOrdered)
 
+    /** `block` reaches sync, and the miner has gone on to set its next tick: it tells sync first and sets the timer
+      * after, so the clock is not moved until it has answered something sent after that.
+      */
     def mined(block: Block): Unit =
       sync.expectMessage(SyncController.WrappedSyncProtocol(SyncProtocol.MinedBlock(block)))
+      miner ! Send(MineBlocks(1, withTransactions = false, None), asker.ref)
+      asker.expectMessage(MinerIsWorking)
+
+    /** `block` reaches sync within some ticks. For a build whose failure comes back to the miner on its own, after
+      * anything the test can wait on: a tick before the miner has set its timer moves nothing, and the next one does.
+      */
+    def minedWithinTicks(block: Block): Unit =
+      val arrived = (1 to 40).exists { _ =>
+        manualTime.timePasses(1.second)
+        try
+          sync.expectMessage(100.millis, SyncController.WrappedSyncProtocol(SyncProtocol.MinedBlock(block)))
+          true
+        catch case _: AssertionError => false
+      }
+      arrived shouldBe true
+
+    /** The miner takes an order again: the run it was on has ended. Asked until it says so, for a run that ends on a
+      * failure that comes back on its own.
+      */
+    def takesOrders(): Unit =
+      val ordered = (1 to 40).exists { _ =>
+        miner ! Send(MineBlocks(1, withTransactions = false, None), asker.ref)
+        asker.receiveMessage() == MiningOrdered
+      }
+      ordered shouldBe true
 
     /** One second of the miner's clock, and the miner seen to have dealt with it: it answers what it is doing. */
     def tick(): MockedMinerResponse =
@@ -203,8 +231,7 @@ class MockedMinerOnPositionsSpec
     rig.mined(first)
     rig.held = first
     rig.tick() shouldBe MinerIsWorking
-    manualTime.timePasses(1.second)
-    rig.mined(second)
+    rig.minedWithinTicks(second)
     rig.builds shouldBe
       Vector(origin.header.hash -> None, first.header.hash -> None, first.header.hash -> None)
   }
@@ -213,6 +240,6 @@ class MockedMinerOnPositionsSpec
     val rig = new Rig
     rig.answers = Map(origin.header.hash -> List(Left(new RuntimeException("no block"))))
     rig.order(1)
-    rig.tick() shouldBe MiningOrdered
+    rig.takesOrders()
     rig.sync.expectNoMessage(50.millis)
   }
