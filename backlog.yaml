@@ -2614,3 +2614,14 @@ items:
     links:
       spec: specs/018-storage-engine-consolidation
     notes: Found by beacon in the spec 018 C4a part 4b consult. Content-addressed, so not wrong, but unbounded growth by RPC.
+  - id: B-231
+    title: "028 S1: Hoodi as a built-in network (chain config, genesis, fork ids, DNS anchor)"
+    priority: P2
+    status: open
+    area: ops
+    size: M
+    opened: 2026-11-12
+    refs: [B-227]
+    links:
+      spec: specs/028-builtin-ephemery-hoodi
+      branch: feat/028-s1-hoodi
