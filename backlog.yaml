@@ -2724,3 +2724,14 @@ items:
     links:
       spec: 018
     notes: EngineApiService.executableAtParent reads accountAt(parent), which is the anchor-chain seam and refuses a forward-layer parent, while proposerStateOn serves one. No node flow makes a layer today. Route it through the proposer's door with C4d; also refuse layers before building an index in viewBehind. Found by beacon, C4a part 4b-2
+  - id: B-240
+    title: "trace and simulate bodies run on the compute pool for seconds: IO.blocking in StateRead.reading"
+    priority: P3
+    status: open
+    area: rpc
+    size: S
+    opened: 2026-11-12
+    refs: []
+    links:
+      spec: 018
+    notes: StateRead.reading is IO(scoped(body)); debug_trace*, trace_* and eth_simulateV1 run for seconds on a compute thread (as before the scope). IO.blocking keeps the body on one thread, so the scope stays valid. Four slow traces can also hold every read behind the head. Found by conduit, C4a part 4b-2
