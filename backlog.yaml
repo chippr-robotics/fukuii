@@ -2579,3 +2579,14 @@ items:
       since: 2026-11-12T20:41:02Z
       heartbeat: 2026-11-12T20:41:02Z
     notes: "User decision: Ephemery bundled like Mordor/Sepolia with a startup self-refresh after RESET_TIME (fetch the ephemery-genesis release, validate like fetch-genesis.sh, check the published genesis hash, per-iteration datadir); add Hoodi as a static built-in. Spec Kit; dev-node implements."
+  - id: B-228
+    title: "GraphQL answers a missing trie node as an account that does not exist: balance 0, nonce 0, zero storage (GraphQLSchema.scala:484); answer an error"
+    priority: P2
+    status: open
+    area: rpc
+    size: S
+    opened: 2026-11-12
+    refs: []
+    links:
+      spec: specs/018-storage-engine-consolidation
+    notes: Found by conduit in the spec 018 C4a part 4b consult. Wrong on any layout; the comment at :481 already says a fault must not be 'no account'. A guard-off behaviour change, so not in the storage PRs.
