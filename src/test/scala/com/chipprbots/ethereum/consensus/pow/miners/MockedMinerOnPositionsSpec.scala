@@ -142,6 +142,22 @@ class MockedMinerOnPositionsSpec
       rig.builds shouldBe Vector(origin.header.hash -> None, first.header.hash -> None)
     }
 
+  // The import is done before the miner looks again: no wait, and still nothing of the world its last build left. That
+  // world reads through a view of the state the disk has just moved away from.
+  it should "build on the state on disk, and not on the world of its last build, when the import is already done" taggedAs
+    (UnitTest, ConsensusTest) in {
+      val rig = new Rig
+      val first = childOf(origin)
+      val second = childOf(first)
+      rig.answers = Map(origin.header.hash -> List(Right(first)), first.header.hash -> List(Right(second)))
+      rig.order(2)
+      rig.mined(first)
+      rig.held = first
+      manualTime.timePasses(1.second)
+      rig.mined(second)
+      rig.builds shouldBe Vector(origin.header.hash -> None, first.header.hash -> None)
+    }
+
   it should "give the run up when the import does not come within its bound" taggedAs (UnitTest, ConsensusTest) in {
     val rig = new Rig
     val first = childOf(origin)
@@ -189,7 +205,8 @@ class MockedMinerOnPositionsSpec
     rig.tick() shouldBe MinerIsWorking
     manualTime.timePasses(1.second)
     rig.mined(second)
-    rig.builds.map(_._1) shouldBe Vector(origin.header.hash, first.header.hash, first.header.hash)
+    rig.builds shouldBe
+      Vector(origin.header.hash -> None, first.header.hash -> None, first.header.hash -> None)
   }
 
   it should "end the run on a fault that is not of the state, as it always did" taggedAs (UnitTest, ConsensusTest) in {
