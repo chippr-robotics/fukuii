@@ -2550,3 +2550,14 @@ items:
     refs: [user report 2026-11-12]
     links: {}
     notes: "Config.scala:355 says 'run scripts/ephemery/fetch-genesis.sh first', which misleads when fetch-genesis ran with --out elsewhere: the CLI default is ~/.fukuii/ephemery-network/current/chains, and the generated conf must be passed with FUKUII_CONF_DIR=<out>/current/conf."
+  - id: B-226
+    title: "TuiKeysSpec escape-sequence tests: the escape drain's fixed 50 ms tail budget can flake on a starved CI runner"
+    priority: P3
+    status: open
+    area: tui
+    size: S
+    opened: 2026-11-12
+    refs: ["prism review of B-224, 2026-11-12"]
+    links:
+      spec: specs/027-tui-dashboard
+    notes: "TuiKeysSpec.scala:177-179, 185-187, 201-204: the first checkInput waits 1000 ms, but drainEscape (Tui.scala:477, 494) gives the tail 50 ms; a pump stall between introducer and final byte leaves a tail char for the follow-up checkInput(50). Lower odds than B-224 (one write per sequence). Fix with the drain's injectable clock in these tests."
