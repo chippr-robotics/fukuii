@@ -2468,3 +2468,15 @@ items:
       spec: 018
     depends_on: [B-061]
     notes: "Found by C3c part 2 (#1802, plan.md 'C3c proposer view record'). A mined block reaches import only through network sync, which the guard does not run before the head move. When C4b brings it back: lift ConfigValidator's mining refusal and EthMiningService.NoRouteForMinedBlocks together; fix BlockImporter's 'case _: MinedBlock => Behaviors.same' (a miner that waits for its last import meets it every time); add an Olympia block (base fee to the Treasury) to MinedBlockOnPositionsSpec on Mordor's configuration (forge)."
+  - id: B-220
+    title: "Spec 018 C4: what C3c part 3 deferred (side blocks in the lenient import, test_rewindToBlock, the it/ethtest harnesses and the fork-choice harness)"
+    priority: P2
+    status: open
+    area: storage
+    size: L
+    opened: 2026-11-12
+    refs: []
+    links:
+      spec: 018
+    depends_on: [B-060]
+    notes: "By the user's decision of 2026-11-12, C3c part 3 is its linear subset (plan.md 'C3c part 3'). Left for the overlay (C4a) and the head move (C4b): ChainImporter.importInPlace refuses a block that is not built on the head (the rest of T109: pre-merge side blocks through the fork choice, post-merge ones adopted; bcMultiChainTest, the uncle races, lotsOfLeafs end on another head with the guard on); test_rewindToBlock in test mode; it/ethtest EthereumTestHelper, EthereumTestExecutor and ForkChoiceBlockchainTestsSpec (the rest of T117, needed by EG-2 / T254); engine_newPayload adopting nothing on the guard."
