@@ -1,5 +1,7 @@
 package com.chipprbots.ethereum.domain
 
+import java.util.concurrent.atomic.AtomicReference
+
 import org.apache.pekko.util.ByteString
 
 import com.chipprbots.ethereum.db.storage.AppStateStorage
@@ -13,7 +15,7 @@ import com.chipprbots.ethereum.db.storage.ReceiptStorage
 import com.chipprbots.ethereum.db.storage.StateStorage
 import com.chipprbots.ethereum.db.storage.pathstate.BlockRef
 import com.chipprbots.ethereum.db.storage.pathstate.PathStateStorage
-import com.chipprbots.ethereum.db.storage.pathstate.StateUnavailable
+import com.chipprbots.ethereum.db.storage.pathstate.StateFault
 import com.chipprbots.ethereum.domain.branch.BestBranch
 import com.chipprbots.ethereum.domain.branch.Branch
 import com.chipprbots.ethereum.domain.branch.EmptyBranch
@@ -85,22 +87,49 @@ class BlockchainReader(
   /** The state at `root`, for serving it to a peer (SNAP); `None` when it is not served.
     *
     * Guard off, the read-only store whatever the root: the serve finds the root's node there or answers with nothing,
-    * as it always has. Guard on, a view of the block whose state the position store holds, when `root` is that block's
-    * and the block is within [[BlockchainReader.ServedRootWindow]] of the best block. No other state is held until the
-    * overlay (C4a), so no other root is served.
+    * as it always has.
+    *
+    * Guard on, the state of '''the canonical block that has that state root''', among the blocks from the one the disk
+    * holds back to [[BlockchainReader.ServedRootWindow]] behind the best block: the disk's own rows for the block it
+    * holds, and for a block behind it a view through the changeset records. A root of no such block is not served, nor
+    * one the records no longer lead back to (it is past the retention floor, or behind a record that lists nothing). An
+    * executed block that is kept beside the disk is never served: its root is of no canonical block. Where two blocks
+    * of the window have one state root (an empty block after the merge), the newer is read: it is the same state,
+    * through fewer records.
     */
   def stateForRoot(root: ByteString): Option[MptStorage] = pathState match
     case None => Some(stateStorage.getReadOnlyStorage)
     case Some(state) =>
-      state.anchor
-        .filter { held =>
-          held.stateRoot == root && getBestBlockNumber - held.number <= BlockchainReader.ServedRootWindow
+      state.anchor.flatMap { held =>
+        servedRoots(held).get(root).flatMap { block =>
+          // the disk may move between the lookup and the view: a state that is no longer held is not served
+          try Some(if block == held then state.readOnly(held) else state.readOnlyBehind(block))
+          catch case _: StateFault => None
         }
-        .flatMap { held =>
-          // the disk may move between the two lines: a state that is no longer held is not served
-          try Some(state.readOnly(held))
-          catch case _: StateUnavailable => None
-        }
+      }
+
+  /** The state roots served while `held` is the block the disk holds and the best block is where it is, each with the
+    * block it is read at: kept for the next request, and made again when either moves. Keyed by the block and not by
+    * its number: a block that takes another's place at one height has other roots behind it.
+    */
+  private val servedWindow = new AtomicReference[Option[(BlockRef, BigInt, Map[ByteString, BlockRef])]](None)
+
+  private def servedRoots(held: BlockRef): Map[ByteString, BlockRef] =
+    val best = getBestBlockNumber
+    servedWindow.get match
+      case Some((`held`, `best`, roots)) => roots
+      case _ =>
+        val oldest = (best - BlockchainReader.ServedRootWindow).max(BigInt(0))
+        // newest first, and the first block that has a root keeps it
+        val roots = Iterator
+          .iterate(held.number)(_ - 1)
+          .takeWhile(_ >= oldest)
+          .flatMap(number => if number == held.number then Some(held) else getBlockHeaderByNumber(number).map(refOf))
+          .foldLeft(Map.empty[ByteString, BlockRef]) { (found, block) =>
+            if found.contains(block.stateRoot) then found else found.updated(block.stateRoot, block)
+          }
+        servedWindow.set(Some((held, best, roots)))
+        roots
 
   private def refOf(header: BlockHeader): BlockRef =
     BlockRef(header.hash.value, header.number.value, header.stateRoot.value)

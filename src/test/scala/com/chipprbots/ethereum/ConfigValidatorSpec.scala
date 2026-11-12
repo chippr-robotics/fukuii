@@ -174,12 +174,14 @@ class ConfigValidatorSpec extends AnyFlatSpec with Matchers:
 
   // ── The in-development guard of the unified state layout (spec 018 Track C) ──────────────────────────────────
 
-  // With the guard on SNAP is not advertised until the overlay can serve recent roots, and a capability is mutual: a
-  // SNAP sync would wait for a snap-capable peer for ever. A node that would start and never sync does not start.
+  // With the guard on a SNAP sync has nowhere to hand its state off to before C5a, and SNAP is not advertised until
+  // the node follows the head: a capability is mutual, so a SNAP sync would wait for a snap-capable peer for ever. A
+  // node that would start and never sync does not start.
   it should "refuse state.path-live with SNAP sync on, and name both keys" taggedAs UnitTest in {
     val errors = ConfigValidator.validate(cfg("state.path-live = true\nsync.do-snap-sync = true"))
     errors should have size 1
     errors.head should (include("fukuii.state.path-live").and(include("fukuii.sync.do-snap-sync = false")))
+    errors.head should include("C5a")
   }
 
   // A block is built over a view of its parent's state, which the builders do not take before the proposer view.
