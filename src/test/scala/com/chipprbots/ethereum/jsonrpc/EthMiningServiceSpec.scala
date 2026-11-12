@@ -481,6 +481,31 @@ class EthMiningServiceSpec
 
     response shouldBe Symbol("right")
 
+  // Spec 018 Track C, C3c: a mined block is imported by network sync, which a node on the unified state layout does not
+  // run before its overlay. So no work is given, where a solution would be answered `true` and its block dropped.
+  it should "give no work and take none on the unified state layout, and say why" taggedAs (UnitTest, RPCTest) in new TestSetup:
+    import com.chipprbots.ethereum.db.components.EphemDataSourceComponent
+    import com.chipprbots.ethereum.db.components.Storages
+    override lazy val storagesInstance
+        : EphemDataSourceComponent & LocalPruningConfigBuilder & Storages.DefaultStorages =
+      new EphemDataSourceComponent with LocalPruningConfigBuilder with Storages.DefaultStorages:
+        override protected def statePathLive: Boolean = true
+
+    blockchainReader.holdsStateInPlace shouldBe true
+    // no block is generated and no prepared block is looked for: the mocked generator expects neither
+    ethMiningService.getWork(GetWorkRequest()).unsafeRunSync().left.map(_.message) shouldBe
+      Left(EthMiningService.NoRouteForMinedBlocks)
+    ethMiningService
+      .submitWork(
+        SubmitWorkRequest(ByteString("nonce"), ByteString(Hex.decode("01" * 32)), ByteString(Hex.decode("01" * 32)))
+      )
+      .unsafeRunSync()
+      .left
+      .map(_.message) shouldBe Left(EthMiningService.NoRouteForMinedBlocks)
+    syncingController.expectNoMessage(100.millis)
+    // and the node is not counted as mining for having been asked
+    ethMiningService.getMining(GetMiningRequest()).unsafeRunSync() shouldEqual Right(GetMiningResponse(false))
+
   // NOTE TestSetup uses Ethash consensus; check `consensusConfig`.
   class TestSetup(implicit system: ActorSystem) extends EphemBlockchainTestSetup with ApisBuilder:
     val blockGenerator: PoWBlockGenerator = mock[PoWBlockGenerator]
