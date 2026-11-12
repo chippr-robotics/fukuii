@@ -1736,6 +1736,74 @@ is held by a promotion is measured there: the scan of each replaced trie is unde
 an 8M-gas ETC block can replace some 1,600 (forge). (7) The differential on RocksDB (the shape of scan keys, the
 resume key of a chunk), and `EphemDataSource.scanRangeLimit`, which copies the whole range for each chunk.
 
+### C4a part 2: the reverse index (2026-11-12)
+
+The state of a block **behind the anchor**, and of a block on **a fork**, is read through the changeset records with
+no row touched. Tasks T121 to T123, and the rest of T128 and T130. Still storage and its spec: the node's readers
+and its execution are given the anchor's state and no other (`PathStateStorage.view`); the new views come from
+`viewOf`, which only the overlay's own code can call until part 4 changes the callers with it (beacon: a reader
+handed a state behind the head today would answer where it refuses, `CheckpointExporter`'s walk would go stale, and
+test mode would lose its refusal).
+
+- **`ReverseIndex.between(anchor, fork)`** is what the state of `fork` held at every position the blocks after it
+  changed: the prior of the earliest such block. It is built by a walk of the anchor's own records, by the parent
+  each record names; the canonical index of blocks by number is never asked (data-model 7.0), and neither is the
+  index of records by height. Each record is held to its block (its number and the state root it leaves; its hash by
+  the record's key), and the walk ends on the record whose parent is exactly `fork`. A record that is pruned, is a
+  tombstone, cannot be read, is too far back or would make the index too large is a state that is not held: never
+  an index with a block missing from it. `fork`'s own record is not read. A record is not decoded to find that it is
+  by itself more than an index may hold.
+- **A view** reads its layers, then the index, then the row as its base held it. Its base is the anchor the index
+  was built from, so the log of moves keeps the rows under it that anchor's, and the index, a fact about two states,
+  needs no correction. **What the index gives is never taken for the disk's**: a wrong node there, or none where one
+  is named, is the records' inconsistency (`LayerInconsistent`), not a missing node, which is fetched and written to
+  a row that is the anchor's, and not a corrupt row. A row that is missing where neither layers nor records say
+  anything is a real hole in the anchor's disk, and is said as a missing node with no position.
+- **A block executed on such a view is kept as a layer like any other**: a layer holds what the block left and is
+  settled against the disk when it is promoted (part 1), so nothing lists a storage trie's rows through the index.
+- **`AncestorWindow`**: the blocks behind the anchor that the records lead back to, newest first. It is derived (a
+  walk of the records' headers at the first need, then one step with each commit) and never stored. It says which
+  forward layers stand on the anchor's chain and which are of a block that is now canonical, without a record being
+  read under the lock at every move (vault). An error in it costs a view that could have been made; the view itself
+  is made from the records.
+- **A fork's layers are kept while the block they left the chain at is led back to**: a sibling of the new anchor
+  stays readable, where part 1 dropped it. A layer of a block that is the anchor or behind it is dropped, and such a
+  block is not kept as a layer (`OverlayOutcome.BehindTheAnchor`).
+
+**The invariant part 4 and C4b build on** (beacon): *the index's view of a block equals the disk after the blocks
+above it are reversed by their records, at every position*, the rows a replaced storage trie left behind among
+them. Where a block first wrote over such a row its prior is "none"; a reverse deletes the row, and the index says
+it was not there. So a move's priors need not be made exact (part 1's open point): an inexact "none" lies only over
+a leftover row, which no state names, and a head move back must write a record's priors exactly, "none" as a
+delete. A layer promoted after such a move is settled against that disk, so it lists a replaced trie by the rows
+the move left. The spec holds what a view behind the anchor reads at every position of a trie, the leftover rows
+among them, to a second datadir whose last blocks were reversed by their records.
+
+**Not built, and where it goes.** No cache of decoded records and no index built from a nearer one: a handful of
+whole indexes are kept by (anchor, fork) and dropped when the anchor moves; part 3 owns the budgets. The first
+build of the window reads whole records under the state lock: before part 4 it is walked outside the lock and
+installed under it, or bounded in bytes (beacon, vault). The specs run in memory: the RocksDB cases (a reader beside
+pruning commits, a reopened datadir, a record of several MiB, hashes that begin 0x00) come before part 4.
+
+**Tests.** `ReverseIndexSpec` (6 cases): the view 1, 2, 8 and 9 blocks back reads that block's state, every node of
+it as the hash store holds it, on a chain that replaces a trie every third block and makes it again; the same after
+the anchor moves on, until the log of moves ends, and from records alone after a restart; a fork of three blocks
+from a block behind the head, executed on layers and read through index and layers, before and after the anchor
+moves; the states that are not held; the faults; the positions of a trie behind a tombstone's successors, held to
+a datadir reversed by its records; the window. `ForwardLayerSpec`'s case of the layers nothing leads to is now a
+fork that outlives its fork point's records.
+
+**Two reads before code and two after (beacon, vault), and the mutation run.** Before: an answer of the index must
+never reach the disk's fault branches; the new anchor's own layer would have counted as reachable; no record is
+walked under the lock at each move. After (each APPROVE WITH CHANGES,
+no blocker), taken: the window is bounded by the depth a view is made across (on an archive node it grew with every
+block, and a layer was accepted on a parent no view could serve); a record's encoded size is held to the cap before
+it is decoded; the indexes of an anchor go when it moves; a block behind the anchor has an outcome of its own; a
+hole under a layered view names no row. 38 mutants, 35 caught; nine were not at first and each got a case. Three
+change nothing that can be seen: a layer of a block behind the anchor (it is dropped when that block becomes the
+anchor), a window that is not moved on (it is built again from the records), and a window of another anchor (there
+is never one).
+
 ### Destructive change (C8a and C8b): the vault protocol blocks
 
 ```
