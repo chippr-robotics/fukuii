@@ -2647,3 +2647,14 @@ items:
     links:
       spec: specs/028-builtin-ephemery-hoodi
       branch: feat/028-s3-bundle
+  - id: B-234
+    title: "028 S4a: strict HTTPS release transport and tar reader"
+    priority: P2
+    status: open
+    area: ops
+    size: M
+    opened: 2026-11-12
+    refs: [B-227]
+    links:
+      spec: specs/028-builtin-ephemery-hoodi
+      branch: feat/028-s4a-transport
