@@ -2601,3 +2601,14 @@ items:
     links:
       spec: specs/018-storage-engine-consolidation
     notes: Found by beacon and conduit in the spec 018 C4a part 4b consult. DebugTracingService.scala:375-400. The cap changes behaviour with the guard off too; the per-block retry matters on the unified layout (M5).
+  - id: B-230
+    title: "An execution that is thrown away writes its contract code durably (InMemoryWorldStateProxy.persistState, :111): an eth_call that deploys writes code to disk"
+    priority: P3
+    status: open
+    area: evm
+    size: S
+    opened: 2026-11-12
+    refs: []
+    links:
+      spec: specs/018-storage-engine-consolidation
+    notes: Found by beacon in the spec 018 C4a part 4b consult. Content-addressed, so not wrong, but unbounded growth by RPC.
