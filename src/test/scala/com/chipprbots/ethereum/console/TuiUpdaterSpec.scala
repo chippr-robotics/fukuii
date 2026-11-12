@@ -34,6 +34,14 @@ class TuiUpdaterSpec extends AnyFlatSpec with Matchers with Eventually:
 
   private val snapshot = TuiFixtures.snapshot(current = 100, best = 200, peers = 3)
 
+  /** For a test that presses a key BEFORE it runs one frame. The frame waits for a key only as long as its pace, and at
+    * the test pace (20 ms) that wait can expire before JLine's input pump hands the key over on a loaded CI runner: the
+    * frame then reads no key and keeps going (PR #1809's CI, B-224). With a long pace the read still returns the moment
+    * the key arrives (within one 10 ms read slice). Only for tests that press first: with no key, the frame waits the
+    * whole 5 s.
+    */
+  private val keyConfig = TuiTestTerminal.config.copy(updateIntervalMs = 5_000, animationIntervalMs = 5_000)
+
   private def withUpdater(
       snapshots: () => Option[NodeStatusSnapshot] = () => Some(snapshot),
       onQuit: () => Unit = () => (),
@@ -78,7 +86,8 @@ class TuiUpdaterSpec extends AnyFlatSpec with Matchers with Eventually:
       snapshots = () =>
         tickThread = Thread.currentThread(); Some(snapshot)
       ,
-      onQuit = () => quitThread.success(Thread.currentThread())
+      onQuit = () => quitThread.success(Thread.currentThread()),
+      config = keyConfig
     ) { (updater, _, tt) =>
       tt.press("q")
       tickWithin(updater) shouldBe false
@@ -96,7 +105,7 @@ class TuiUpdaterSpec extends AnyFlatSpec with Matchers with Eventually:
     // What the exit finds when it runs: the screen it would leave behind, and whether the TUI is still up.
     val atExit = Promise[(String, Boolean)]()
     val quit = TuiUpdater.restoreThenQuit(tui, () => atExit.success((tt.output, tui.isEnabled)))
-    val updater = new TuiUpdater(tui, TuiTestTerminal.config, () => Some(snapshot), "mordor", quit)
+    val updater = new TuiUpdater(tui, keyConfig, () => Some(snapshot), "mordor", quit)
     try
       tt.press("q")
       tickWithin(updater) shouldBe false
@@ -113,7 +122,7 @@ class TuiUpdaterSpec extends AnyFlatSpec with Matchers with Eventually:
 
   it should "stop looping on 'd' without quitting the node" taggedAs (UnitTest) in {
     val quits = new AtomicInteger(0)
-    withUpdater(onQuit = () => quits.incrementAndGet()) { (updater, tui, tt) =>
+    withUpdater(onQuit = () => quits.incrementAndGet(), config = keyConfig) { (updater, tui, tt) =>
       tt.press("d")
       tickWithin(updater) shouldBe false
       tui.isEnabled shouldBe false
