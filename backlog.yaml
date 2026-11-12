@@ -2617,7 +2617,7 @@ items:
   - id: B-231
     title: "028 S1: Hoodi as a built-in network (chain config, genesis, fork ids, DNS anchor)"
     priority: P2
-    status: open
+    status: claimed
     area: ops
     size: M
     opened: 2026-11-12
@@ -2625,6 +2625,11 @@ items:
     links:
       spec: specs/028-builtin-ephemery-hoodi
       branch: feat/028-s1-hoodi
+    claim:
+      by: dev-node
+      agent: beacon
+      since: 2026-11-12T21:49:25Z
+      heartbeat: 2026-11-12T21:49:25Z
   - id: B-232
     title: "028 S2: Ephemery release rules in Scala; ephemery-fetch --from-dir; fetch-genesis.sh delegates"
     priority: P2
