@@ -8,7 +8,7 @@
 self-refresh at startup; at a reset, a running node warns and exits for a supervisor restart (FR-016); add Hoodi;
 dev-node implements. Plan: slices S1, S2, S3, S4a, S4b and S5 in [plan.md](./plan.md).
 
-**In flight**: `spec/028-builtin-ephemery-hoodi` (`dev-node`, local session): plan written; tasks next
+**In flight**: `spec/028-builtin-ephemery-hoodi` (`dev-node`, local session): tasks written (T001-T094); S1, S2 and S4a start in parallel
 
 **Input**: User request of 2026-11-12, "Ephemery should be shipped with fukuii by default same as mordor, hoodi, and
 sepolia", and the answers that followed: bundle the current Ephemery iteration plus a startup self-refresh after the
