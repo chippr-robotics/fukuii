@@ -6,17 +6,9 @@ import org.scalatest.flatspec.AnyFlatSpec
 import org.scalatest.matchers.should.Matchers
 
 import com.chipprbots.ethereum.crypto.kec256
-import com.chipprbots.ethereum.db.dataSource.DataSourceBatchUpdate
-import com.chipprbots.ethereum.db.dataSource.EphemDataSource
-import com.chipprbots.ethereum.db.storage.AppStateStorage
 import com.chipprbots.ethereum.db.storage.MptStorage
-import com.chipprbots.ethereum.db.storage.PathNodeStorage
-import com.chipprbots.ethereum.domain.Account
-import com.chipprbots.ethereum.domain.Address
 import com.chipprbots.ethereum.domain.appstate.BlockInfo
-import com.chipprbots.ethereum.ledger.InMemoryWorldStateProxy
 import com.chipprbots.ethereum.mpt.MerklePatriciaTrie.CorruptNodeException
-import com.chipprbots.ethereum.mpt.PositionTestKit.RawTrieWalk
 import com.chipprbots.ethereum.testing.Tags.*
 
 /** Spec 018 Track C, C4a part 1: forward layers. An executed block whose state is on no row is kept as a layer, read
@@ -27,116 +19,10 @@ import com.chipprbots.ethereum.testing.Tags.*
   * reads must be what the first datadir holds, position by position; and when the layers are promoted, block by block,
   * the second datadir must be the first, key for key: rows, changeset records, their index, the anchor and the head.
   */
-class ForwardLayerSpec extends AnyFlatSpec with Matchers:
+class ForwardLayerSpec extends AnyFlatSpec with Matchers with LayerChains:
 
   import PathStateStorage.*
   import PathStateTestKit.*
-
-  private type Tx = World => World
-  private type Disk = (Map[ByteString, ByteString], Map[ByteString, ByteString])
-
-  private def slots(address: Address, written: (Int, Int)*): Tx = withSlots(address, written)
-  private def account(address: Address, nonce: Int, balance: Int): Tx = world =>
-    world.saveAccount(
-      address,
-      world.getAccount(address).getOrElse(Account(0, 0)).copy(nonce = nonce, balance = balance)
-    )
-  private def delete(address: Address): Tx = _.deleteAccount(address)
-  private val eve = Address(0xe7e)
-
-  /** An in-memory source whose writes fail when told to. (A subclass and not a wrapper: the storages ask a source
-    * whether it is the in-memory one, to know the shape of its keys.)
-    */
-  final private class Failing extends EphemDataSource(Map.empty):
-    @volatile var fails = false
-    override def update(dataSourceUpdates: Seq[com.chipprbots.ethereum.db.dataSource.DataUpdate]): Unit =
-      if fails then throw new java.io.IOException("the disk is full")
-      super.update(dataSourceUpdates)
-
-  /** A datadir whose position store holds `HashedState`'s state as block 1's. */
-  final private class Chain(
-      settings: CommitSettings = CommitSettings(),
-      maxViewAgeMoves: Int = 8,
-      val source: EphemDataSource = EphemDataSource()
-  ):
-    val hashed = new HashedState
-    val first: BlockRef = block(1, hashed.root)
-    val rows = new PathNodeStorage(source)
-    val appState = new AppStateStorage(source)
-    writeState(rows, hashed.positions())
-    appState.putStateAnchor(first).commit()
-    val state = new PathStateStorage(rows, appState, maxViewAgeMoves, settings)
-    val records = new ChangesetStorage(source)
-
-    def disk: Disk = allRows(rows)
-    def everything: Map[ByteString, ByteString] =
-      source.storage.map((key, value) => ByteString(key.array()) -> ByteString(value))
-
-    /** The rows a state is, by a walk of its raw nodes on the hash store. */
-    def rowsOf(root: ByteString): Disk =
-      val positions = RawTrieWalk.statePositions(root.toArray, hashed.nodes.load)
-      (
-        positions.getOrElse(None, Map.empty),
-        positions.collect { case (Some(owner), trie) => trie.map((hp, node) => (owner ++ hp) -> node) }.flatten.toMap
-      )
-
-    /** The best-block pointer, as the block's own half of the batch. */
-    def pointer(ref: BlockRef): Option[DataSourceBatchUpdate] =
-      Some(appState.putBestBlockInfo(BlockInfo(ref.hash, ref.number)))
-
-    /** A block of `transactions` on `parent`: executed on a fresh staged layer, and on the hash store. */
-    final class Executed(val parent: BlockRef, transactions: Seq[Tx]):
-      val staged: PathStagedState = state.stage(parent)
-      private def run(start: World): World =
-        transactions.foldLeft(start)((world, tx) => InMemoryWorldStateProxy.persistState(tx(world)))
-      val root: ByteString = run(hashed.world(parent.stateRoot)).stateRootHash
-      // what the block's world reads, through whatever layers its parent's state is made of, is the parent's state
-      run(worldOver(staged.storage, parent.stateRoot, hashed.codes)).stateRootHash shouldBe root
-      // named by its parent and its state: two blocks on one parent, or at one height, are two blocks
-      val ref: BlockRef =
-        BlockRef(ByteString(kec256((parent.hash ++ root).toArray)), parent.number + 1, root)
-
-      def inPlace(): Commit = state.commitCanonical(Some(staged), ref, pointer(ref)) match
-        case CommitOutcome.Applied(done) => done
-        case other                       => fail(s"block ${ref.show} was not applied: $other")
-      def layered(): ForwardLayer = state.commitOverlay(staged, ref) match
-        case OverlayOutcome.Layered(layer) => layer
-        case other                         => fail(s"block ${ref.show} was not kept as a layer: $other")
-
-    def on(parent: BlockRef)(transactions: Tx*): Executed = new Executed(parent, transactions)
-
-    def promote(ref: BlockRef): Commit = state.promote(ref, pointer(ref)) match
-      case CommitOutcome.Applied(done) => done
-      case other                       => fail(s"block ${ref.show} was not promoted: $other")
-
-    /** Every stored node of the state of `ref`, read through `storage` at its position: each must be the node the
-      * reference has there.
-      */
-    def readThrough(storage: MptStorage, ref: BlockRef): Unit =
-      RawTrieWalk.statePositions(ref.stateRoot.toArray, hashed.nodes.load).foreach { (trie, trieRows) =>
-        trieRows.foreach { (hp, node) =>
-          val position = PositionKey(trie, hp)
-          withClue(s"block ${ref.number}, ${position.show}: ") {
-            ByteString(storage.forOwner(trie).getAt(position.path, kec256(node.toArray)).encode) shouldBe node
-          }
-        }
-      }
-
-    /** The rows of `owner`'s storage trie in the state of `ref`. */
-    def rowsOf(ref: BlockRef, owner: ByteString): Map[ByteString, ByteString] =
-      rowsOf(ref.stateRoot)._2.filter(_._1.startsWith(owner))
-
-  // A trie replaced whole in one block, made again in the next and replaced again in the third: each is settled against
-  // rows that are partly the disk's and partly the layers'.
-  private val fourBlocks: Seq[Seq[Tx]] = Seq(
-    Seq(slots(alice, 1 -> 5, 2 -> 6).andThen(account(dave, 8, 8)), delete(bob)),
-    Seq(
-      slots(bob, (1 to 30).map(i => i -> (i + 7))*),
-      slots(carol, otherSlots.take(12).map((k, _) => k -> 0)*)
-    ),
-    Seq(delete(bob), account(eve, 0, 1).andThen(slots(eve, 1 -> 1, 2 -> 2)), slots(alice, 41 -> 1)),
-    Seq(slots(bob, 3 -> 3), delete(crowd(3)))
-  )
 
   /** The blocks, kept as layers on one datadir and committed in place on another: read through the layers, then
     * promoted, the first is the second.
@@ -529,9 +415,15 @@ class ForwardLayerSpec extends AnyFlatSpec with Matchers:
       record.changes.keys.count(_.owner.contains(owner(bob))) shouldBe rows.size
     }
 
-  "The layers no chain leads to from the anchor" should "go when the anchor moves, and with the layer they were built on" taggedAs
+  "The layers nothing leads to" should "go with the layer they were built on, and when the block they forked from is led back to no more" taggedAs
     UnitTest in {
-      val chain = new Chain(CommitSettings(maxForwardLayers = 4))
+      // the records of two blocks are kept
+      val chain = new Chain(
+        CommitSettings(
+          maxForwardLayers = 4,
+          retention = new RetentionPolicy(StateConfig.Mode.Basic, (_, _) => 2)
+        )
+      )
       val b = chain.on(chain.first)(fourBlocks(0)*)
       b.layered()
       val c = chain.on(b.ref)(fourBlocks(1)*)
@@ -547,22 +439,25 @@ class ForwardLayerSpec extends AnyFlatSpec with Matchers:
       val d = chain.on(c.ref)(fourBlocks(2)*)
       a[StateUnavailable] should be thrownBy chain.state.commitOverlay(d.staged, d.ref)
 
-      // b becomes the anchor: its sibling and what stands on it are states nothing leads to
+      // b becomes the anchor. Its own layer goes: it is on disk. Its sibling stays, with what stands on it: the block
+      // they forked from is behind the anchor, and b's record leads back to it.
       chain.promote(b.ref)
-      Seq(beside, onSibling.ref).foreach(gone => chain.state.forwardLayer(gone.hash) shouldBe None)
-      chain.state.forwardLayer(c.ref.hash) should not be empty
-      // a block that was executed on the sibling meanwhile is not kept: its parent is a layer no more
-      a[StateUnavailable] should be thrownBy chain.state.commitOverlay(late.staged, late.ref)
-      // and there is room again
+      chain.state.forwardLayer(b.ref.hash) shouldBe None
+      Seq(beside, onSibling.ref, c.ref).foreach(kept => chain.state.forwardLayer(kept.hash) should not be empty)
+      // so there is room for one
       d.layered()
 
-      // a block committed in place beside a layer does the same to it
-      val other = chain.on(b.ref)(account(dave, 4, 4))
-      other.inPlace()
-      Seq(c.ref, d.ref).foreach(gone => chain.state.forwardLayer(gone.hash) shouldBe None)
+      // c, then d: with d the record of b is pruned, and nothing leads back to the first block any more
+      chain.promote(c.ref)
+      Seq(beside, onSibling.ref).foreach(kept => chain.state.forwardLayer(kept.hash) should not be empty)
+      chain.promote(d.ref)
+      chain.records.get(b.ref.hash) shouldBe None
+      Seq(beside, onSibling.ref).foreach(gone => chain.state.forwardLayer(gone.hash) shouldBe None)
+      // a block that was executed on the sibling meanwhile is not kept: its parent's state is held nowhere
+      a[StateUnavailable] should be thrownBy chain.state.commitOverlay(late.staged, late.ref)
 
       // a layer that is dropped takes with it what was built on it
-      val e = chain.on(other.ref)(account(dave, 5, 5))
+      val e = chain.on(d.ref)(account(dave, 5, 5))
       e.layered()
       val f = chain.on(e.ref)(account(dave, 6, 6))
       f.layered()

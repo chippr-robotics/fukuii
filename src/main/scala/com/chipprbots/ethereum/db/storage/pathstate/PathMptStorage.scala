@@ -78,14 +78,27 @@ final class PathMptStorage private (
   /** The node at `position` in the view, which must be the one `hash` names. */
   private def stored(position: PositionKey, hash: Array[Byte]): MptNode =
     view.readFrom(position) match
-      // A layer's word does not change, and the hash was read through this same view: asked again, it is the same.
-      case (None, true) =>
-        throw new LayerInconsistent(view.block, s"a layer leaves no node at ${position.show}, where one is named")
-      case (None, false) => throw new MissingNodeException(ByteString(hash)).withLocation(position.hp)
-      case (Some(encoded), fromLayer) =>
+      // What a layer or the reverse index says does not change, and the hash was read through this same view: asked
+      // again, it is the same. It is never a missing node: that is fetched and written to the row, and the row is
+      // another state's (beacon).
+      case (None, source) if source != StateView.Source.Disk =>
+        throw new LayerInconsistent(
+          view.block,
+          s"${PathMptStorage.named(source)} leaves no node at ${position.show}, where one is named"
+        )
+      case (None, _) =>
+        // No row where neither a layer nor the records say anything: this state holds there what the base holds, and
+        // the base's disk has a hole. It is a missing node. It is said with its position only on a view of the rows
+        // alone: what is fetched for a position is written to that row, and the row is the anchor's (beacon).
+        val missing = new MissingNodeException(ByteString(hash))
+        throw (if view.layered then missing else missing.withLocation(position.hp))
+      case (Some(encoded), source) =>
         if Arrays.equals(kec256(encoded), hash) then decoded(position, encoded, hash)
-        else if fromLayer then
-          throw new LayerInconsistent(view.block, s"a layer leaves another node at ${position.show} than is named")
+        else if source != StateView.Source.Disk then
+          throw new LayerInconsistent(
+            view.block,
+            s"${PathMptStorage.named(source)} leaves another node at ${position.show} than is named"
+          )
         else if view.isAnchorViewNow then
           throw new CorruptNodeException(
             ByteString(hash),
@@ -160,6 +173,11 @@ final class PathMptStorage private (
   override def rawNodes(hashes: Seq[ByteString]): Seq[RawNodeRead] = throw PathMptStorage.byHashAlone
 
 object PathMptStorage:
+
+  private def named(source: StateView.Source): String = source match
+    case StateView.Source.Layer => "a layer"
+    case StateView.Source.Index => "the changeset records"
+    case StateView.Source.Disk  => "the disk"
 
   /** What the tries of one execution wrote: every node, in every version it had, by hash. And, for a block that is to
     * commit, what it did to each position.

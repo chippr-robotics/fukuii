@@ -166,6 +166,22 @@ object BlockDiffCodec:
     try Right(new Reader(key, record).read())
     catch case Refuse(rejected) => Left(rejected)
 
+  /** What a record says of its block before its entries: the block, its parent, the two state roots, and whether it is
+    * a tombstone. The record is held to its key and its checksum as [[decode]] holds it; the entries are not parsed.
+    */
+  final case class Header(
+      blockHash: ByteString,
+      number: BigInt,
+      parentHash: ByteString,
+      preStateRoot: ByteString,
+      postStateRoot: ByteString,
+      incomplete: Boolean
+  )
+
+  def decodeHeader(key: Array[Byte], record: Array[Byte]): Either[Rejected, Header] =
+    try Right(new Reader(key, record).header())
+    catch case Refuse(rejected) => Left(rejected)
+
   final private case class Refuse(rejected: Rejected) extends RuntimeException(null, null, false, false)
 
   private def refuse(reason: Rejection, detail: String): Nothing = throw Refuse(Rejected(reason, detail))
@@ -175,6 +191,12 @@ object BlockDiffCodec:
     private var at = 0
 
     def read(): BlockDiff =
+      val of = header()
+      val count = varint("the entry count")
+      if of.incomplete && count != 0 then refuse(Rejection.TombstoneWithEntries, s"a tombstone with $count entries")
+      entries(of, count)
+
+    def header(): Header =
       if key.length != HashLength + 1 then refuse(Rejection.KeyMismatch, s"a record key is 33 bytes, not ${key.length}")
       if record.isEmpty then refuse(Rejection.Truncated, "an empty record")
       // The version comes first, alone: another version may lay out everything after it differently.
@@ -201,11 +223,9 @@ object BlockDiffCodec:
       val parentHash = ByteString(take(HashLength, "the parent hash"))
       val preStateRoot = ByteString(take(HashLength, "the pre-state root"))
       val postStateRoot = ByteString(take(HashLength, "the post-state root"))
+      Header(blockHash, number, parentHash, preStateRoot, postStateRoot, (flags & FlagIncomplete) != 0)
 
-      val count = varint("the entry count")
-      val incomplete = (flags & FlagIncomplete) != 0
-      if incomplete && count != 0 then refuse(Rejection.TombstoneWithEntries, s"a tombstone with $count entries")
-
+    private def entries(of: Header, count: Long): BlockDiff =
       val changes = Map.newBuilder[PositionKey, Change]
       var previousTag: Byte = 0
       var previousKey: Array[Byte] = Array.emptyByteArray
@@ -231,7 +251,15 @@ object BlockDiffCodec:
         read += 1
 
       if at != end then refuse(Rejection.TrailingBytes, s"${end - at} bytes after the last entry")
-      BlockDiff(blockHash, number, parentHash, preStateRoot, postStateRoot, changes.result(), incomplete)
+      BlockDiff(
+        of.blockHash,
+        of.number,
+        of.parentHash,
+        of.preStateRoot,
+        of.postStateRoot,
+        changes.result(),
+        of.incomplete
+      )
 
     private def take(length: Int, what: String): Array[Byte] =
       if length < 0 || length > end - at then refuse(Rejection.Truncated, s"the record ends inside $what")

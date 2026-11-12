@@ -54,6 +54,24 @@ final class ChangesetStorage(val dataSource: DataSource):
     val key = recordKey(blockHash)
     dataSource.getOptimized(namespace, key).map(BlockDiffCodec.decode(key, _))
 
+  /** [[get]] for a walk back along a chain of records. The walk keeps what it reads, and reading many large records
+    * through the block cache would push out what block import keeps there. A record of more than `maxEncodedBytes` is
+    * not decoded: a record may be far larger than what a walk may hold, and decoding it builds every entry first
+    * (vault).
+    */
+  def getForWalk(blockHash: ByteString, maxEncodedBytes: Long): Walked =
+    val key = recordKey(blockHash)
+    dataSource.getOptimizedNoFill(namespace, key) match
+      case None                                            => Walked.Absent
+      case Some(record) if record.length > maxEncodedBytes => Walked.TooLarge(record.length)
+      case Some(record) =>
+        BlockDiffCodec.decode(key, record).fold(Walked.Unreadable(_), Walked.Read(_))
+
+  /** The header of `blockHash`'s record: which block came before it, and whether the record is a tombstone. */
+  def header(blockHash: ByteString): Option[Either[BlockDiffCodec.Rejected, BlockDiffCodec.Header]] =
+    val key = recordKey(blockHash)
+    dataSource.getOptimizedNoFill(namespace, key).map(BlockDiffCodec.decodeHeader(key, _))
+
   /** The hashes of the blocks that have a record at height `number`, in the order they were recorded. */
   def hashesAt(number: BigInt): Seq[ByteString] =
     dataSource.getOptimized(namespace, heightKey(number)).fold(Seq.empty[ByteString]) { value =>
@@ -121,6 +139,13 @@ final class ChangesetStorage(val dataSource: DataSource):
     next
 
 object ChangesetStorage:
+
+  /** What a walk finds for a block. */
+  enum Walked:
+    case Absent
+    case TooLarge(encodedBytes: Int)
+    case Unreadable(rejected: BlockDiffCodec.Rejected)
+    case Read(record: BlockDiff)
   private val HashLength = BlockDiff.HashLength
 
   /** The index of a height is not a list of hashes: the datadir's corruption, and no fault of any block. */

@@ -139,6 +139,13 @@ Read plan.md, "C2a part 1 record" and "C2a part 2 record", then:
   a trie's rows (`StateView.ownerRows` was built and removed). Nothing in the node makes a layer, and nothing may
   before part 3's bounds. A spec of layers starts from `ForwardLayerSpec`'s `Chain` and its `sameAsInPlace`. The
   degrade of a staged commit to an overlay commit is NOT built: it lands with its callers in part 4.
+- **C4a part 2, the reverse index, is written** (plan.md, "C4a part 2"): `ReverseIndex.between(anchor, fork)` from
+  the anchor's own records, `AncestorWindow`, a `StateView` that reads layers, then the index, then the rows, and
+  `PathStateStorage.viewOf` / `stageOf` for a block behind the anchor or on a fork (package-private until part 4).
+  A fork's layers live while its fork point is led back to. **The invariant**: the index's view of a block is the
+  disk after the blocks above it are reversed by their records, at every position, leftovers included; C4b's move
+  back writes priors exactly, and a layer promoted after it is settled against that disk. Before part 4: the window's first build off the state lock, and the RocksDB cases. A spec of these views
+  starts from `ReverseIndexSpec` and the shared `LayerChains`.
 - **C4a** brings back what C3b refuses: the overlay commit for a block that does not extend the anchor
   (`buildExtra(adopted)`, `NotExtendingAnchor`, `saveLastBlock` writing nothing),
   `stateAvailable(hash)`, the served-root window, and SNAP advertised again. C4b: the head move, `ConsensusStateFault`
