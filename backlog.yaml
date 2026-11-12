@@ -2494,3 +2494,15 @@ items:
     links: {}
     depends_on: [B-020]
     notes: Test and Build, JDK 25, 2026-11-12. One test of the spec failed in a full testEssential on CI; the PR's diff has no SNAP or sync file. Name the failing case from the run's test-results artifact, then make its waits deterministic with the others of B-020.
+  - id: B-222
+    title: "Spec 018 C4a part 4: two decisions before the overlay is wired (a heavier branch above pinned-max-bytes; more than 32 payloads ahead of a forkchoiceUpdated)"
+    priority: P1
+    status: open
+    area: storage
+    size: S
+    opened: 2026-11-12
+    refs: []
+    links:
+      spec: specs/018-storage-engine-consolidation
+    depends_on: [B-060]
+    notes: plan.md, 'C4a part 3', 'Two questions part 4 cannot be designed without'. The user decides; forge and beacon raised them.
