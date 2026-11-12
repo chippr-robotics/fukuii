@@ -124,7 +124,7 @@ final private[pathstate] class StagedChanges:
     * An entry that says nothing is left out (rule 2).
     */
   def finalise(parentRows: ByteString => Option[Iterable[(PositionKey, ByteString)]]): StagedChanges.Final =
-    StagedChanges.settle(changes.toMap, resets.toSeq, parentRows)
+    StagedChanges.settle(changes, resets.toSeq, positionsOf, parentRows)
 
   /** What the block has staged, as it stands: for a block that is kept and settled later ([[ForwardLayer]]). */
   def frozen: StagedChanges.Frozen = StagedChanges.Frozen(changes.toMap, resets.toSeq)
@@ -143,19 +143,31 @@ private[pathstate] object StagedChanges:
     */
   final case class Frozen(changes: Map[PositionKey, Change], resets: Seq[ByteString])
 
-  /** [[StagedChanges.finalise]], of changes that were staged earlier. */
+  /** [[StagedChanges.finalise]], of changes that were staged earlier and are settled now. */
   def settle(
       changes: Map[PositionKey, Change],
       resets: Seq[ByteString],
+      parentRows: ByteString => Option[Iterable[(PositionKey, ByteString)]]
+  ): Final =
+    // by owner, and only where a trie was replaced: most blocks replace none
+    lazy val ofOwner: Map[Option[ByteString], Set[PositionKey]] = changes.keySet.groupBy(_.owner)
+    settle(changes, resets, owner => ofOwner.getOrElse(Some(owner), Set.empty), parentRows)
+
+  /** @param positionsOf
+    *   the positions of `changes` in the storage trie of an owner
+    */
+  private def settle(
+      changes: collection.Map[PositionKey, Change],
+      resets: Seq[ByteString],
+      positionsOf: ByteString => Iterable[PositionKey],
       parentRows: ByteString => Option[Iterable[(PositionKey, ByteString)]]
   ): Final =
     val out = mutable.HashMap.empty[PositionKey, Change]
     out ++= changes
     val unrecorded = Map.newBuilder[PositionKey, ByteString]
     val unlisted = Seq.newBuilder[ByteString]
-    lazy val ofOwner: Map[Option[ByteString], Set[PositionKey]] = changes.keySet.groupBy(_.owner)
     resets.foreach { owner =>
-      val written = ofOwner.getOrElse(Some(owner), Set.empty)
+      val written = positionsOf(owner)
       parentRows(owner) match
         case Some(scanned) =>
           val rows = scanned.toMap

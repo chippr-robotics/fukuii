@@ -55,7 +55,7 @@ final class PathStateStorage(
   val lock: StateLock = new StateLock
 
   /** The executed blocks whose state is on no row (data-model 6.1). Nothing in the node makes one yet. */
-  private val overlay = new StateOverlay(settings.maxForwardLayers)
+  private[pathstate] val overlay = new StateOverlay(settings.maxForwardLayers)
 
   /** The block whose state the disk holds, or `None` when the datadir has no state yet (SNAP in progress). */
   def anchor: Option[BlockRef] = clock.anchor
@@ -264,7 +264,7 @@ final class PathStateStorage(
               // in rows and in bytes, since they are held in memory and the lock is held meanwhile.
               val finalised =
                 executed.changes.finalise(owner => rows.storageRows(owner, maxOwnerRows, settings.maxOwnerScanBytes))
-              val applied = commitInPlace(finalised, held, block, extra, finalized)
+              val applied = commitInPlace(finalised, diffOf(finalised, held, block), block, extra, finalized)
               // the block is on disk: a layer an earlier execution left of it is of no more use, nor is one that
               // no chain now leads to
               layersAfterMoveTo(block)
@@ -386,6 +386,8 @@ final class PathStateStorage(
     *   when there is no anchor, or the state of the block's parent is not held any more, or no more layers are kept
     * @throws IllegalStateException
     *   when what was staged is not what a block does between the two state roots
+    * @throws IllegalArgumentException
+    *   when the block is not at the height after its parent's
     */
   def commitOverlay(staged: PathStagedState, block: BlockRef): OverlayOutcome =
     val parent = staged.parent
@@ -393,14 +395,17 @@ final class PathStateStorage(
       case Some(known) if known.parent == parent => OverlayOutcome.Layered(known)
       case _ =>
         require(block.number == parent.number + 1, s"block ${block.show} does not follow ${parent.show}")
-        val layer = ForwardLayer.of(block, parent, staged.changes.frozen)
+        val frozen = staged.changes.frozen
+        val layer = ForwardLayer.of(block, parent, frozen)
         // The account trie's root is held to the two state roots, as a commit in place holds it: changes that are not
-        // this block's final world, or were not made on this parent, stop here, before anything is kept.
-        val faults = layer.rootFaults
+        // this block's final world, or were not made on this parent, stop here, before anything is kept. So does
+        // everything else of a diff's validation that needs no row of the parent's state: what is kept can be
+        // promoted, unless the disk is not the state it was built on.
+        val faults = ForwardLayer.shapeFaults(block, parent, frozen) ++ layer.rootFaults
         if faults.nonEmpty then
           throw new IllegalStateException(
             s"The staged changes of block ${block.show} are not what a block does to the state of ${parent.show}: " +
-              faults.mkString("; ")
+              faults.take(MaxFaultsShown).mkString("; ")
           )
         lock.locked(
           s"overlay commit of block ${block.show}",
@@ -436,6 +441,12 @@ final class PathStateStorage(
     * block writes committed in place over this disk. Where a row is another node than the one the layer names, or none,
     * the layer was not built on this state: it is dropped, with what was built on it, nothing is written, and the block
     * is executed again (beacon, forge).
+    *
+    * '''A layer that cannot be promoted is not kept.''' The same holds where the settled changes are not a block's
+    * diff, which the checks made when the layer was kept leave to a defect: the layer goes, with what stands on it, and
+    * the fault is thrown. Kept, it would be the answer to every later execution of its block, and a branch with that
+    * block in it could never be adopted (forge). A write that fails is another matter: the disk is as it was, and the
+    * layer stays.
     *
     * It moves the anchor, so it is for a caller that '''adopts''' the block: one that only has the block's own records
     * to write must not come here (forge).
@@ -482,7 +493,14 @@ final class PathStateStorage(
                 layer.resets,
                 owner => rows.storageRows(owner, maxOwnerRows, settings.maxOwnerScanBytes)
               )
-              val applied = commitInPlace(finalised, held, block, extra, finalized)
+              val diff =
+                try diffOf(finalised, held, block)
+                catch
+                  case fault: (IllegalStateException | IllegalArgumentException) =>
+                    overlay.drop(block.hash)
+                    overlay.dropUnreachableFrom(held)
+                    throw fault
+              val applied = commitInPlace(finalised, diff, block, extra, finalized)
               layersAfterMoveTo(block)
               applied
     }
@@ -511,15 +529,14 @@ final class PathStateStorage(
     overlay.dropUnreachableFrom(block)
     ()
 
+  /** Writes `diff`, which is `finalised` as the diff of `block` on the block the disk holds ([[diffOf]]). */
   private def commitInPlace(
       finalised: StagedChanges.Final,
-      parent: BlockRef,
+      diff: BlockDiff,
       block: BlockRef,
       extra: Option[DataSourceBatchUpdate],
       finalized: Option[BigInt]
   )(using StateLockHeld): CommitOutcome =
-    val diff = diffOf(finalised, parent, block)
-
     val tombstone: Option[TombstoneCause] =
       if finalised.unlisted.nonEmpty then Some(TombstoneCause.OwnerDeleteBound)
       else if BlockDiffCodec.encodedLength(diff) > settings.maxRecordBytes then Some(TombstoneCause.RecordSize)

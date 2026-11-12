@@ -240,12 +240,17 @@ class ForwardLayerSpec extends AnyFlatSpec with Matchers:
       view.base shouldBe chain.first
       view.layered shouldBe true
       val held = PathMptStorage.readOnly(view)
+      // and a view of the anchor, which reads through no layer
+      val ofFirst = PathMptStorage.readOnly(chain.state.view(chain.first))
 
       // the disk now holds b's rows; the view takes the rows under its layers for the first block's, and is right:
       // the move says what each row was
       chain.promote(b.ref)
       view.diskHalfAtRestNow shouldBe false
       chain.readThrough(held, c.ref)
+      // b removed a storage trie, whose rows were listed and deleted when it was promoted: the old anchor's view has
+      // them from the move alone
+      chain.readThrough(ofFirst, chain.first)
       // a view made now has one layer, over the new anchor, and reads the same
       val fresh = chain.state.view(c.ref)
       fresh.base shouldBe b.ref
@@ -344,6 +349,27 @@ class ForwardLayerSpec extends AnyFlatSpec with Matchers:
       val wrong = b.ref.copy(stateRoot = chain.first.stateRoot)
       an[IllegalStateException] should be thrownBy chain.state.commitOverlay(b.staged, wrong)
       chain.state.forwardLayer(b.ref.hash) shouldBe None
+      // what a layer is held to, by the account trie's root: the state it was found on and the state it leaves
+      val frozen = b.staged.changes.frozen
+      ForwardLayer.of(b.ref, chain.first, frozen).rootFaults shouldBe empty
+      ForwardLayer.of(b.ref, chain.first.copy(stateRoot = b.ref.stateRoot), frozen).rootFaults should have size 1
+      ForwardLayer.of(wrong, chain.first, frozen).rootFaults should have size 1
+      // a layer answers for each position its block touched, also where the block left what it found
+      val (touched, node) = layer.left.collectFirst { case (p, ForwardLayer.Left(_, Some(n))) => p -> n }.get
+      val came = PositionKey(Some(owner(carol)), touched.hp)
+      val went = PositionKey(Some(owner(alice)), touched.hp)
+      val same = ForwardLayer.of(
+        b.ref,
+        chain.first,
+        frozen.copy(changes = frozen.changes ++ Seq(came -> Change(Some(node), Some(node)), went -> Change(None, None)))
+      )
+      same.lookup(came) shouldBe Some(Some(node))
+      same.lookup(went) shouldBe Some(None)
+      same.lookup(PositionKey(Some(owner(dave)), touched.hp)) shouldBe None
+      // a block that touched nothing leaves the state root as it found it
+      val nothing = StagedChanges.Frozen(Map.empty, Nil)
+      ForwardLayer.of(b.ref, chain.first, nothing).rootFaults should have size 1
+      ForwardLayer.of(wrong, chain.first, nothing).rootFaults shouldBe empty
       // nor are a block's changes a layer of a block at another height
       val elsewhere = b.ref.copy(hash = ByteString(kec256("elsewhere".getBytes)), number = b.ref.number + 1)
       an[IllegalArgumentException] should be thrownBy chain.state.commitOverlay(b.staged, elsewhere)
@@ -400,7 +426,64 @@ class ForwardLayerSpec extends AnyFlatSpec with Matchers:
     // and so is what was built on it
     chain.state.forwardLayer(c.ref.hash) shouldBe None
     chain.state.lock.holder shouldBe None
+
+    // the same where the row b found a node at is not there
+    val other = new Chain()
+    val onOther = other.on(other.first)(fourBlocks(0)*)
+    onOther.layered()
+    other.source.update(other.rows.rowUpdates(Map(position -> None)))
+    (the[StateUnavailable] thrownBy other.state.promote(onOther.ref, other.pointer(onOther.ref))).getMessage should
+      include("was not built on the state the disk holds")
+    other.state.forwardLayer(onOther.ref.hash) shouldBe None
   }
+
+  // What is kept can be promoted, unless the disk is not the state it was built on: a layer that could not be would
+  // be the answer to every execution of its block, and a branch with that block in it could never be adopted.
+  it should "not be kept when its changes are not a block's, and not stay when its promotion finds that out" taggedAs
+    UnitTest in {
+      val chain = new Chain()
+      val small = ByteString(1, 2, 3)
+      // a position of carol's storage trie below its root, which the block does not touch
+      val below = chain
+        .rowsOf(chain.first, owner(carol))
+        .keys
+        .map(key => PositionKey(Some(owner(carol)), key.drop(PositionKey.OwnerLength)))
+        .find(_.hp != PositionKey.AccountRoot.hp)
+        .get
+
+      // a node under 32 bytes has no row of its own
+      val bad = chain.on(chain.first)(fourBlocks(0)*)
+      bad.staged.changes.record(below.owner, Nil, Seq((below.path, ByteString(kec256(small.toArray)), small.toArray)))
+      (the[IllegalStateException] thrownBy chain.state.commitOverlay(bad.staged, bad.ref)).getMessage should
+        include("the next is not a stored node")
+      chain.state.forwardLayer(bad.ref.hash) shouldBe None
+      // nor is a block named by anything but a 32-byte hash
+      val b = chain.on(chain.first)(fourBlocks(0)*)
+      (the[IllegalStateException] thrownBy chain.state.commitOverlay(
+        b.staged,
+        b.ref.copy(hash = small)
+      )).getMessage should
+        include("not 32 bytes")
+
+      // a layer that is one all the same (a defect put it there) goes when its promotion finds it, with what stands
+      // on it, and nothing is written
+      val frozen = b.staged.changes.frozen
+      val defect = frozen.copy(changes = frozen.changes + (below -> Change(None, Some(small))))
+      chain.state.lock.locked("a test")(chain.state.overlay.register(ForwardLayer.of(b.ref, chain.first, defect)))
+      // (a block that does not come to the node the defect left)
+      val c = chain.on(b.ref)(account(dave, 9, 9))
+      c.layered()
+      val before = chain.everything
+      (the[IllegalStateException] thrownBy chain.state.promote(b.ref, chain.pointer(b.ref))).getMessage should
+        include("the next is not a stored node")
+      chain.everything shouldBe before
+      chain.state.anchor shouldBe Some(chain.first)
+      Seq(b.ref, c.ref).foreach(gone => chain.state.forwardLayer(gone.hash) shouldBe None)
+      chain.state.lock.holder shouldBe None
+      // executed again, the block is kept and promoted
+      chain.on(chain.first)(fourBlocks(0)*).layered()
+      chain.promote(b.ref)
+    }
 
   // ETC has no EIP-6780: a SELFDESTRUCT removes a whole storage trie, of any size. A layer that held a prior for each
   // of its rows would be as large as the trie, and a branch with such a block in it could be too large to keep (forge).
@@ -427,6 +510,10 @@ class ForwardLayerSpec extends AnyFlatSpec with Matchers:
       ofLarge.positions shouldBe ofSmall.positions
       ofLarge.bytes shouldBe ofSmall.bytes
       ofLarge.bytes should be < rows.iterator.map((key, node) => key.length.toLong + node.length).sum
+      // what a layer is taken to hold: its nodes and their keys, and an overhead for each entry and each mark
+      ofLarge.bytes shouldBe ofLarge.left.iterator.map { (position, written) =>
+        position.rowKey.length.toLong + written.next.fold(0)(_.length)
+      }.sum + (ofLarge.positions + ofLarge.resets.size) * ForwardLayer.EntryOverhead
 
       // every row of it is no row of the block's state, read through the layer
       val view = large.state.view(ofLarge.block)

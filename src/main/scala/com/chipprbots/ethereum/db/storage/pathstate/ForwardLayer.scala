@@ -88,10 +88,9 @@ final class ForwardLayer private (
     * `Left`, with the first position found, where a row is not the node the block named as old there: the layer was not
     * built on the state `row` reads.
     *
-    * A position of a replaced storage trie is not held to its row: the settling takes the priors of such a trie from a
-    * scan of its rows. And where the block named no prior the row is not looked at: a storage trie replaced with too
-    * many rows to list leaves them behind, and a block that first writes where one lies names none there, committed in
-    * place or kept as a layer. No node of a state names a child at such a position.
+    * Where the block named no prior the row is not looked at: a storage trie replaced with too many rows to list leaves
+    * them behind, and a block that first writes where one lies names none there, committed in place or kept as a layer.
+    * No node of a state names a child at such a position.
     */
   private[pathstate] def changesOver(
       row: PositionKey => Option[ByteString]
@@ -99,13 +98,13 @@ final class ForwardLayer private (
     val changes = Map.newBuilder[PositionKey, Change]
     val wrong = left.iterator.collectFirst(Function.unlift { (position, written) =>
       written.prior match
-        case Some(hash) if !position.owner.exists(replaced.contains) =>
+        case Some(hash) =>
           row(position) match
             case Some(node) if ByteString(kec256(node.toArray)) == hash =>
               changes += position -> Change(Some(node), written.next)
               None
             case _ => Some(position)
-        case _ =>
+        case None =>
           changes += position -> Change(None, written.next)
           None
     })
@@ -123,7 +122,36 @@ object ForwardLayer:
   /** What an entry is taken to hold beside its node: its key's objects, the hash of its prior, and its share of the
     * maps (by position and by hash).
     */
-  private val EntryOverhead: Long = 440L
+  private[pathstate] val EntryOverhead: Long = 440L
+
+  /** Why what was staged for `block` on `parent` is not something a block does, as far as can be said without the rows
+    * of the parent's state: the shape of the two blocks' names, and a node that is not a stored one (under 32 bytes of
+    * RLP away from its trie's root). Empty when it is.
+    *
+    * These are the checks of [[BlockDiff.validate]] that need no disk, made when a layer is made: a layer that could
+    * not be promoted would be answered with on every execution of its block, and a branch with that block in it could
+    * not be adopted (forge, beacon).
+    */
+  private[pathstate] def shapeFaults(block: BlockRef, parent: BlockRef, staged: StagedChanges.Frozen): Seq[String] =
+    val names = Seq(
+      Option.when(
+        Seq(block.hash, parent.hash, block.stateRoot, parent.stateRoot).exists(_.length != BlockDiff.HashLength)
+      )(
+        "a block hash or state root is not 32 bytes"
+      ),
+      Option.when(block.number < 0 || block.number > BlockDiff.MaxNumber)(
+        s"block number ${block.number} does not fit 8 bytes"
+      )
+    ).flatten
+    val nodes = staged.changes.iterator.flatMap { (position, change) =>
+      val atRoot = position.hp == PositionKey.AccountRoot.hp
+      def embedded(side: Option[ByteString]): Boolean = side.exists(_.length < BlockDiff.StoredNodeLength) && !atRoot
+      Seq(
+        Option.when(embedded(change.prior))(s"${position.show}: the prior is not a stored node"),
+        Option.when(embedded(change.next))(s"${position.show}: the next is not a stored node")
+      ).flatten
+    }
+    names ++ nodes
 
   /** The layer of `block`, executed on `parent`, from what its execution staged. */
   private[pathstate] def of(block: BlockRef, parent: BlockRef, staged: StagedChanges.Frozen): ForwardLayer =
