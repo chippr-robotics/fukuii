@@ -2696,3 +2696,13 @@ items:
     refs: [B-227]
     links:
       spec: specs/028-builtin-ephemery-hoodi
+  - id: B-237
+    title: PeerManagerActor dials bootstrap/discovered enodes with TCP port 0 (enode ...:0?discport=N form)
+    priority: P3
+    status: open
+    area: p2p
+    size: S
+    opened: 2026-11-12
+    refs: [B-231]
+    links: {}
+    notes: "Found in spec 028 S1 (HoodiBootnodeSpec): NodeParser accepts tcp 0; PeerDiscoveryManager hands bootstrap nodes to PeerManagerActor which ConnectToPeerCmd's :0. DnsDiscovery.scala:515 already skips tcp-0 ENRs. Hoodi ships only :30303 enodes meanwhile."
