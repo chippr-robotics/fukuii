@@ -2636,3 +2636,14 @@ items:
     links:
       spec: specs/028-builtin-ephemery-hoodi
       branch: feat/028-s2-release-lib
+  - id: B-233
+    title: "028 S3: bundled Ephemery iteration, startup selection, exit 75 at the reset"
+    priority: P2
+    status: open
+    area: ops
+    size: L
+    opened: 2026-11-12
+    refs: [B-227]
+    links:
+      spec: specs/028-builtin-ephemery-hoodi
+      branch: feat/028-s3-bundle
