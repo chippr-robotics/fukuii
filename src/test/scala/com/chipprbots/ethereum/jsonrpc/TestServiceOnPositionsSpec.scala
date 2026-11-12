@@ -143,8 +143,8 @@ class TestServiceOnPositionsSpec extends ScalaTestWithActorTestKit with AnyFlatS
   /** A test-mode node in memory, on the layout `guard` says: its storages, its position store when it has one, the
     * services of test mode over them, and a pending-transactions manager that hands out what a test gave it.
     */
-  final private class Rig(guard: Boolean) extends EphemBlockchainTestSetup:
-    val source: EphemDataSource = EphemDataSource()
+  final private class Rig(guard: Boolean, val source: EphemDataSource = EphemDataSource())
+      extends EphemBlockchainTestSetup:
 
     implicit override lazy val blockchainConfig: BlockchainConfig = BlockchainConfig(
       forkBlockNumbers = ForkBlockNumbers.Empty,
@@ -186,7 +186,16 @@ class TestServiceOnPositionsSpec extends ScalaTestWithActorTestKit with AnyFlatS
       * arrive after a test has set the next: so the stub counts the order and keeps what it was given.
       */
     val pending = new AtomicReference[Seq[SignedTransaction]](Nil)
-    val cleared = new AtomicInteger(0)
+    private val orders = new AtomicInteger(0)
+    private val asked = testKit.createTestProbe[PendingTransactionsResponse]()
+
+    /** How many times the manager was told to forget its transactions. The orders are messages: one more is sent and
+      * answered first, so that every order sent before this was asked has been counted.
+      */
+    def cleared: Int =
+      manager ! GetPendingTransactionsReq(asked.ref)
+      asked.receiveMessage()
+      orders.get()
     private val manager: ActorRef[PendingTransactionsManager.Command] = testKit.spawn(
       Behaviors.receiveMessage[PendingTransactionsManager.Command] {
         case GetPendingTransactionsReq(replyTo) =>
@@ -195,7 +204,7 @@ class TestServiceOnPositionsSpec extends ScalaTestWithActorTestKit with AnyFlatS
           )
           Behaviors.same
         case ClearPendingTransactions =>
-          cleared.incrementAndGet()
+          orders.incrementAndGet()
           Behaviors.same
         case _ => Behaviors.same
       }
@@ -267,6 +276,19 @@ class TestServiceOnPositionsSpec extends ScalaTestWithActorTestKit with AnyFlatS
           )
         )
       ).toOption.get
+
+  /** A datadir whose synced writes fail when told to: `syncedWritesBeforeFailure` more are taken, the next one throws,
+    * and the count is then off (-1). An in-memory source and not a wrapper of one: the storages ask a source whether it
+    * is the in-memory one, to know the shape of its keys.
+    */
+  final private class Faulty extends EphemDataSource(Map.empty):
+    import com.chipprbots.ethereum.db.dataSource.DataUpdate
+    @volatile var syncedWritesBeforeFailure: Int = -1
+    override def updateSync(dataSourceUpdates: Seq[DataUpdate]): Unit =
+      val left = syncedWritesBeforeFailure
+      if left >= 0 then syncedWritesBeforeFailure = left - 1
+      if left == 0 then throw new java.io.IOException("the disk is full")
+      super.updateSync(dataSourceUpdates)
 
   /** The state of `header` as the hash store of `reference` holds it, position by position. */
   private def stateOf(reference: Rig, header: BlockHeader): Disk =
@@ -360,7 +382,7 @@ class TestServiceOnPositionsSpec extends ScalaTestWithActorTestKit with AnyFlatS
     step(Seq(transfer(0, Address(42), 9000), create(1), call(2, keeper, word(0xaa) ++ word(0xbb))))
     step(Seq(call(3, contract, ByteString.empty)))
     val firstGenesis = onPositions.blockchainReader.genesisHeader.hash
-    val cleared = onPositions.cleared.get()
+    val cleared = onPositions.cleared
 
     Seq(onHashes, onPositions).foreach(_.setChain(chainB) shouldBe Right(SetChainParamsResponse()))
     onPositions.head.header.number.value shouldBe 0
@@ -373,7 +395,7 @@ class TestServiceOnPositionsSpec extends ScalaTestWithActorTestKit with AnyFlatS
     fresh.setChain(chainB) shouldBe Right(SetChainParamsResponse())
     onPositions.allButCode shouldBe fresh.allButCode
     onPositions.pathState.clock.atRest should not be empty
-    onPositions.cleared.get() shouldBe cleared
+    onPositions.cleared shouldBe cleared
 
     // and the chain goes on from it, as it does on the hash store
     step(Seq(transfer(0, Address(42), 1), call(1, Address(0xb2), word(4) ++ word(5))))
@@ -395,6 +417,63 @@ class TestServiceOnPositionsSpec extends ScalaTestWithActorTestKit with AnyFlatS
     rig.head.header.hash shouldBe head
     rig.anchor shouldBe Some(rig.refOf(rig.head.header))
   }
+
+  it should "answer a genesis commit that fails with an error, and take the chain when it is set again" taggedAs
+    UnitTest in {
+      val faulty = new Faulty
+      val rig = new Rig(guard = true, faulty)
+      rig.setChain(chainA) shouldBe Right(SetChainParamsResponse())
+      rig.mine(Seq(transfer(0, Address(42), 9000))) shouldBe Right(MineBlocksResponse())
+
+      // the state of the chain before is destroyed in one synced write, and the genesis is committed in the next
+      faulty.syncedWritesBeforeFailure = 1
+      val failed = rig.run(rig.service.setChainParams(SetChainParamsRequest(chainParams(chainB))))
+      failed.left.map(_.message).left.getOrElse("") should include("the genesis was not committed")
+      faulty.syncedWritesBeforeFailure shouldBe -1
+      // no chain: the blocks and the state of the first are gone, and nothing of the second is there
+      rig.blockchainReader.getBestBlock shouldBe None
+      rig.anchor shouldBe None
+      rig.rows shouldBe (Map.empty, Map.empty)
+
+      rig.setChain(chainB) shouldBe Right(SetChainParamsResponse())
+      val fresh = new Rig(guard = true)
+      fresh.setChain(chainB) shouldBe Right(SetChainParamsResponse())
+      rig.allButCode shouldBe fresh.allButCode
+    }
+
+  it should "say so when a block it mined was not made the head, or its head's state is not the one held" taggedAs
+    UnitTest in {
+      // the block the node is about to mine, already in its queue: import calls it a duplicate and imports nothing
+      val twin = new Rig(guard = true)
+      twin.setChain(chainA) shouldBe Right(SetChainParamsResponse())
+      twin.mine(Seq(transfer(0, Address(42), 9000))) shouldBe Right(MineBlocksResponse())
+
+      Seq(false, true).foreach { guard =>
+        withClue(s"guard = $guard: ") {
+          val rig = new Rig(guard)
+          rig.setChain(chainA) shouldBe Right(SetChainParamsResponse())
+          rig.node.blockQueue.enqueueBlock(twin.head, 0) should not be empty
+          val before = rig.everything
+          val mined = rig.mine(Seq(transfer(0, Address(42), 9000)))
+          // the hash store's answer is the one it always gave
+          if guard then mined.left.map(_.message).left.getOrElse("") should include("was not imported as the head")
+          else mined shouldBe Right(MineBlocksResponse())
+          rig.head.header.number.value shouldBe 0
+          rig.everything shouldBe before
+        }
+      }
+
+      // a head whose state is not the one the disk holds (here: its block was taken away behind the service's back)
+      val rig = new Rig(guard = true)
+      rig.setChain(chainA) shouldBe Right(SetChainParamsResponse())
+      rig.mine(Seq(transfer(0, Address(42), 9000))) shouldBe Right(MineBlocksResponse())
+      rig.blockchain.removeBlock(rig.head.header.hash)
+      rig.head.header.number.value shouldBe 0
+      val before = rig.everything
+      val mined = rig.mine(Seq(transfer(1, Address(43), 1)))
+      mined.left.map(_.message).left.getOrElse("") should include(TestService.HeadStateOnly)
+      rig.everything shouldBe before
+    }
 
   it should "keep a side block, and refuse the branch that outweighs the head with the datadir as it was" taggedAs
     UnitTest in {
@@ -436,7 +515,7 @@ class TestServiceOnPositionsSpec extends ScalaTestWithActorTestKit with AnyFlatS
       onHashes.importRaw(sideTwo) shouldBe Right(ImportRawBlockResponse(hex(sideTwo)))
       onHashes.head.header.hash shouldBe sideTwo.header.hash
       val refused = onPositions.importRaw(sideTwo)
-      refused.left.map(_.message).left.getOrElse("") should include(TestService.NoReorganisation)
+      refused.left.map(_.message).left.getOrElse("") should include(TestService.HeadStateOnly)
       onPositions.everything shouldBe before
       onPositions.head.header.hash shouldBe own.header.hash
       onPositions.anchor shouldBe Some(onPositions.refOf(own.header))
@@ -455,24 +534,26 @@ class TestServiceOnPositionsSpec extends ScalaTestWithActorTestKit with AnyFlatS
     val firstBlock = step(first)
     step(Seq(call(3, contract, ByteString.empty)))
     val before = onPositions.everything
-    val cleared = onPositions.cleared.get()
+    val cleared = onPositions.cleared
 
-    // a block between the genesis and the head: its state is held nowhere. Refused before anything is taken away.
+    // a block between the genesis and the head: its state is held nowhere. Refused before anything is taken away, and
+    // before the pending transactions are.
     val refused = onPositions.rewind(1)
     refused.left.map(_.message).left.getOrElse("") shouldBe TestService.RewindBelowTheHead
     onPositions.everything shouldBe before
-    onPositions.cleared.get() shouldBe cleared
+    onPositions.cleared shouldBe cleared
 
-    // the head, and a block above it: nothing to take away, as on the hash store
+    // the head, and a block above it: no block to take away; the pending transactions go, as on the hash store
     Seq(2L, 7L).foreach(to => onPositions.rewind(to) shouldBe Right(RewindToBlockResponse()))
     onPositions.everything shouldBe before
-    onPositions.cleared.get() shouldBe cleared
+    onPositions.cleared shouldBe cleared + 2
 
     // a service that was never given the chain (the node was started again) has no genesis to set
     val restarted = onPositions.newService()
     onPositions.run(restarted.rewindToBlock(RewindToBlockRequest(0))).left.map(_.message).left.getOrElse("") should
       include("test_setChainParams")
     onPositions.everything shouldBe before
+    onPositions.cleared shouldBe cleared + 2
 
     // the genesis: the chain's genesis is set again, on a datadir that holds nothing of the blocks above it
     onPositions.rewind(0) shouldBe Right(RewindToBlockResponse())
@@ -482,7 +563,7 @@ class TestServiceOnPositionsSpec extends ScalaTestWithActorTestKit with AnyFlatS
     onPositions.head.header.hash shouldBe fresh.head.header.hash
     onPositions.allButCode shouldBe fresh.allButCode
     onPositions.anchor shouldBe Some(onPositions.refOf(onPositions.head.header))
-    onPositions.cleared.get() shouldBe cleared + 1
+    onPositions.cleared shouldBe cleared + 3
 
     // and the first block is mined again, to the block it was
     onPositions.run(onPositions.service.modifyTimestamp(ModifyTimestampRequest(1000))) shouldBe

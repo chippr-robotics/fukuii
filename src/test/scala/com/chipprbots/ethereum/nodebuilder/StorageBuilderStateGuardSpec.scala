@@ -31,13 +31,16 @@ class StorageBuilderStateGuardSpec extends AnyFlatSpec with Matchers:
     finally walk.close()
 
   /** The production `StorageBuilder` of an instance whose configuration sets the guard to `guard`. */
-  private def instance(guard: Boolean)(check: (StorageBuilder & InstanceConfigProvider) => Unit): Unit =
+  private def instance(guard: Boolean, testMode: Boolean = false)(
+      check: (StorageBuilder & InstanceConfigProvider) => Unit
+  ): Unit =
     val dir = Files.createTempDirectory("storage-builder-guard")
     val config = ConfigFactory
       .load()
       .getConfig("fukuii")
       .withValue("db.rocksdb.path", ConfigValueFactory.fromAnyRef(dir.toString))
       .withValue("state.path-live", ConfigValueFactory.fromAnyRef(guard))
+      .withValue("testmode", ConfigValueFactory.fromAnyRef(testMode))
     val builder = new StorageBuilder with InstanceConfigProvider:
       override lazy val instanceConfig: InstanceConfig = new InstanceConfig(config, s"guard-$guard")
     try check(builder)
@@ -64,3 +67,18 @@ class StorageBuilderStateGuardSpec extends AnyFlatSpec with Matchers:
       node.instanceConfig.supportedCapabilities should contain(Capability.SNAP1)
     }
   }
+
+  // Spec 018 Track C, C3c: `test_setChainParams` sets a chain on a datadir that held another, and the state of that
+  // one is destroyed first. Only the position store of a node in test mode does that.
+  "The position store of an instance" should "destroy its state for a new genesis in test mode, and in no other" taggedAs
+    (UnitTest, DatabaseTest) in {
+      instance(guard = true, testMode = true) { node =>
+        node.storagesInstance.storages.pathStateStorage.get.destroyStateForNewGenesis() shouldBe 0
+      }
+      instance(guard = true) { node =>
+        val refused = intercept[IllegalStateException] {
+          node.storagesInstance.storages.pathStateStorage.get.destroyStateForNewGenesis()
+        }
+        refused.getMessage should include("test mode")
+      }
+    }

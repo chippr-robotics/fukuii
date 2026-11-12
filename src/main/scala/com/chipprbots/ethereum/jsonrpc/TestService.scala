@@ -137,10 +137,12 @@ object TestService:
   case class GetLogHashRequest(transactionHash: ByteString)
   case class GetLogHashResponse(logHash: ByteString)
 
-  /** What a reorganisation is answered with on the unified state layout, before its overlay (spec 018 C4a). */
-  val NoReorganisation: String =
-    "the unified state layout (fukuii.state.path-live) holds the state of the head alone until its overlay, so it " +
-      "cannot reorganise to another branch"
+  /** What a request that needs the state of a block other than the head is answered with on the unified state layout,
+    * before its overlay (spec 018 C4a): a reorganisation, above all.
+    */
+  val HeadStateOnly: String =
+    "the unified state layout (fukuii.state.path-live) holds the state of its head alone until its overlay, and " +
+      "this needs the state of another block: a branch that outweighs the head cannot be reorganised to"
 
   /** What a rewind to a block between the genesis and the head is answered with there (spec 018 C4b). */
   val RewindBelowTheHead: String =
@@ -355,18 +357,20 @@ class TestService(
   /** A rewind on the unified state layout, before its head can move back along the changeset records (spec 018 C4b).
     *
     * The state on disk is the head's, and the state of a block below it is held nowhere. So a rewind to the head or
-    * above it removes nothing, as on the hash store; a rewind to the genesis sets the chain's genesis again, which is
-    * the same block and the same state; and a rewind to a block between them is refused, before anything is removed.
+    * above it removes no block, as on the hash store; a rewind to the genesis sets the chain's genesis again, which is
+    * the same block and the same state; and a rewind to a block between them is refused, before anything is removed and
+    * before the pending transactions are. The blocks in the queue stay, as they do on the hash store.
     */
   private def rewindInPlace(blockNum: Long): ServiceResponse[RewindToBlockResponse] =
-    if blockchainReader.getBestBlockNumber <= blockNum then RewindToBlockResponse().rightNow
+    if blockchainReader.getBestBlockNumber <= blockNum then
+      pendingTransactionsManager ! PendingTransactionsManager.ClearPendingTransactions
+      RewindToBlockResponse().rightNow
     else if blockNum > 0 then IO.pure(Left(JsonRpcError.LogicError(TestService.RewindBelowTheHead)))
     else
       genesisOfThisChain match
         case None => IO.pure(Left(JsonRpcError.LogicError("no chain was set: test_setChainParams comes first")))
         case Some(genesisData) =>
           pendingTransactionsManager ! PendingTransactionsManager.ClearPendingTransactions
-          testModeComponentsProvider.clearState()
           setGenesis(genesisData) match
             case Left(refused) => IO.pure(Left(refused))
             case Right(())     => RewindToBlockResponse().rightNow
@@ -393,14 +397,15 @@ class TestService(
           .flatMap(handleResult(value))
           .recover(notOnTheUnifiedLayout)
 
-  /** What the unified state layout cannot do before its overlay, said as that and not as a fault of the block: a branch
-    * that outweighs the head reaches a reorganisation, which needs the state of a block that is not the head and is
-    * refused before anything is written; and a mined block that was not made the head. Never met on the hash store.
+  /** What the unified state layout cannot do before its overlay, said as that and not as a fault of the block: the
+    * state of a block that is not the one held was asked for, and refused before anything was written (a branch that
+    * outweighs the head reaches a reorganisation; a block is to be mined on a head whose state is not the one the disk
+    * holds); and a mined block that was not made the head. Never met on the hash store.
     */
   private def notOnTheUnifiedLayout[A]: PartialFunction[Throwable, Either[JsonRpcError, A]] =
     case fault: com.chipprbots.ethereum.db.storage.pathstate.StateUnavailable if blockchainReader.holdsStateInPlace =>
       log.warn("Test mode on the unified state layout: {}", fault.getMessage)
-      Left(JsonRpcError.LogicError(s"${TestService.NoReorganisation} (${fault.getMessage})"))
+      Left(JsonRpcError.LogicError(s"${TestService.HeadStateOnly} (${fault.getMessage})"))
     case notImported: TestService.NotImportedToTheHead =>
       log.warn("Test mode on the unified state layout: {}", notImported.getMessage)
       Left(JsonRpcError.LogicError(notImported.getMessage))
