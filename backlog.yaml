@@ -2669,3 +2669,13 @@ items:
     links:
       spec: specs/028-builtin-ephemery-hoodi
       branch: feat/028-s4b-refresh
+  - id: B-236
+    title: "028 S5: live checks (24 h follow, 166 reset under a supervisor, Hoodi peers) and closure"
+    priority: P2
+    status: open
+    area: ops
+    size: M
+    opened: 2026-11-12
+    refs: [B-227]
+    links:
+      spec: specs/028-builtin-ephemery-hoodi
