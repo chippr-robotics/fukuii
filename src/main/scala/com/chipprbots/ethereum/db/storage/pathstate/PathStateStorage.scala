@@ -371,11 +371,12 @@ final class PathStateStorage(
     * memory, and '''nothing is written''': no row, no record, no anchor, and the clock does not move. The block's own
     * records (header, body, receipts) are the caller's to write, as they are today.
     *
-    * The block's parent may be the anchor or a forward layer. What the block did is settled against its parent's state
-    * as the staged view reads it: the rows of a storage trie it replaced whole are that view's
-    * ([[StateView.ownerRows]]), scanned with no lock held. The lock is taken for the look at the anchor and the
-    * registration, which are one step: a block that has become the anchor meanwhile is not kept as a layer beside
-    * itself, and a block whose parent's state is no longer held is not kept at all (vault, beacon).
+    * The block's parent may be the anchor or a forward layer. The layer holds what the block left and the hashes of
+    * what it found ([[ForwardLayer]]): nothing of the parent's state is read to make it, and a storage trie the block
+    * replaced whole is a mark in it, not a list of that trie's rows. What the block did to the rows is settled when the
+    * layer is promoted. The lock is taken for the look at the anchor and the registration, which are one step: a block
+    * that has become the anchor meanwhile is not kept as a layer beside itself, and a block whose parent's state is no
+    * longer held is not kept at all (vault, beacon).
     *
     * A block that is a layer already stays the layer it is: one block, one layer.
     *
@@ -383,17 +384,24 @@ final class PathStateStorage(
     *
     * @throws StateUnavailable
     *   when there is no anchor, or the state of the block's parent is not held any more, or no more layers are kept
-    * @throws StaleStateViewException
-    *   when the disk moved further on during the execution than the log of moves reaches
+    * @throws IllegalStateException
+    *   when what was staged is not what a block does between the two state roots
     */
   def commitOverlay(staged: PathStagedState, block: BlockRef): OverlayOutcome =
     val parent = staged.parent
     overlay.layerOf(block) match
       case Some(known) if known.parent == parent => OverlayOutcome.Layered(known)
       case _ =>
-        val finalised =
-          staged.changes.finalise(owner => staged.view.ownerRows(owner, maxOwnerRows, settings.maxOwnerScanBytes))
-        diffOf(finalised, parent, block)
+        require(block.number == parent.number + 1, s"block ${block.show} does not follow ${parent.show}")
+        val layer = ForwardLayer.of(block, parent, staged.changes.frozen)
+        // The account trie's root is held to the two state roots, as a commit in place holds it: changes that are not
+        // this block's final world, or were not made on this parent, stop here, before anything is kept.
+        val faults = layer.rootFaults
+        if faults.nonEmpty then
+          throw new IllegalStateException(
+            s"The staged changes of block ${block.show} are not what a block does to the state of ${parent.show}: " +
+              faults.mkString("; ")
+          )
         lock.locked(
           s"overlay commit of block ${block.show}",
           nanos => told("the wait for the state lock")(settings.observer.lockWaited(nanos))
@@ -412,21 +420,22 @@ final class PathStateStorage(
                   s"block ${block.show} was executed on the state of ${parent.show}, which is not held any more: " +
                     s"the disk holds ${held.show}"
                 )
-              OverlayOutcome.Layered(overlay.register(new ForwardLayer(block, parent, finalised)))
+              OverlayOutcome.Layered(overlay.register(layer))
         }
 
   /** Commits the forward layer of `block` as the block whose state the disk holds (data-model 7.1, the second of the
-    * cases that are not a staged block on the anchor): the batch an in-place commit of the block writes, from the
-    * changes that were frozen when it was executed. The layer goes once the batch has returned, and not when it fails:
-    * the disk is then as it was.
+    * cases that are not a staged block on the anchor): the batch an in-place commit of the block writes. The layer goes
+    * once the batch has returned, and not when it fails: the disk is then as it was.
     *
     * Only a layer '''whose parent is the anchor''' is promoted here. Moving the disk to any other is a head move (C4b).
     *
-    * '''The priors are read again''', one point read for each position where the block replaced or removed a node,
-    * under the lock: the layer was settled against a view, and what it calls the prior of a position goes into the move
-    * that every open view is corrected by and into the record a later reverse writes back. Where the disk holds another
-    * node than the one the layer names, or none, the layer is dropped and nothing is written: the block is executed
-    * again (beacon, forge).
+    * '''The block is settled here, against the rows the disk holds''', which are its parent's, under the lock, as a
+    * commit in place settles one: the prior of each position is the row, read now and held to the hash the layer names
+    * for it; the rows of a storage trie the block replaced whole are scanned now, and listed or left by the bound a
+    * commit in place applies. So the record, the rows that are deleted and the priors of the move are those the same
+    * block writes committed in place over this disk. Where a row is another node than the one the layer names, or none,
+    * the layer was not built on this state: it is dropped, with what was built on it, nothing is written, and the block
+    * is executed again (beacon, forge).
     *
     * It moves the anchor, so it is for a caller that '''adopts''' the block: one that only has the block's own records
     * to write must not come here (forge).
@@ -459,22 +468,21 @@ final class PathStateStorage(
             s"block ${block.show} was executed on the state of ${layer.parent.show}, and the disk holds ${held.show}"
           )
         case (Some(held), Some(layer)) =>
-          // Where the layer names no prior the row is not looked at: a storage trie that was replaced with too
-          // many rows to list leaves them behind, and a block that first writes where one lies names none there,
-          // committed in place or kept as a layer. No node of a state names a child at such a position.
-          val elsewhere = layer.finalised.changes.iterator.collectFirst {
-            case (position, Change(Some(prior), _)) if !rows.read(position).exists(ByteString(_) == prior) => position
-          }
-          elsewhere match
-            case Some(position) =>
+          layer.changesOver(position => rows.read(position).map(ByteString(_))) match
+            case Left(position) =>
               overlay.drop(block.hash)
               overlay.dropUnreachableFrom(held)
               throw new StateUnavailable(
                 s"the executed block ${block.show} was not built on the state the disk holds: it found another node " +
                   s"at ${position.show} than the row there. It is dropped, and is executed again"
               )
-            case None =>
-              val applied = commitInPlace(layer.finalised, held, block, extra, finalized)
+            case Right(changes) =>
+              val finalised = StagedChanges.settle(
+                changes,
+                layer.resets,
+                owner => rows.storageRows(owner, maxOwnerRows, settings.maxOwnerScanBytes)
+              )
+              val applied = commitInPlace(finalised, held, block, extra, finalized)
               layersAfterMoveTo(block)
               applied
     }

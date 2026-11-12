@@ -124,12 +124,38 @@ final private[pathstate] class StagedChanges:
     * An entry that says nothing is left out (rule 2).
     */
   def finalise(parentRows: ByteString => Option[Iterable[(PositionKey, ByteString)]]): StagedChanges.Final =
+    StagedChanges.settle(changes.toMap, resets.toSeq, parentRows)
+
+  /** What the block has staged, as it stands: for a block that is kept and settled later ([[ForwardLayer]]). */
+  def frozen: StagedChanges.Frozen = StagedChanges.Frozen(changes.toMap, resets.toSeq)
+
+  /** [[finalise]] where every reset owner's rows are listed. */
+  def diff(parentRows: ByteString => Iterator[(PositionKey, ByteString)]): Map[PositionKey, Change] =
+    finalise(owner => Some(parentRows(owner).toSeq)).changes
+
+  /** How many positions the block has touched so far: for a metric. */
+  def size: Int = changes.size
+
+private[pathstate] object StagedChanges:
+
+  /** What a block staged: one change for each position its tries touched, with the prior its first event there named,
+    * and the owners whose storage trie it replaced whole, in the order it did.
+    */
+  final case class Frozen(changes: Map[PositionKey, Change], resets: Seq[ByteString])
+
+  /** [[StagedChanges.finalise]], of changes that were staged earlier. */
+  def settle(
+      changes: Map[PositionKey, Change],
+      resets: Seq[ByteString],
+      parentRows: ByteString => Option[Iterable[(PositionKey, ByteString)]]
+  ): Final =
     val out = mutable.HashMap.empty[PositionKey, Change]
     out ++= changes
     val unrecorded = Map.newBuilder[PositionKey, ByteString]
     val unlisted = Seq.newBuilder[ByteString]
+    lazy val ofOwner: Map[Option[ByteString], Set[PositionKey]] = changes.keySet.groupBy(_.owner)
     resets.foreach { owner =>
-      val written = positionsOf(owner).toSet
+      val written = ofOwner.getOrElse(Some(owner), Set.empty)
       parentRows(owner) match
         case Some(scanned) =>
           val rows = scanned.toMap
@@ -146,16 +172,7 @@ final private[pathstate] class StagedChanges:
           }
     }
     out.filterInPlace((_, change) => change.prior != change.next)
-    StagedChanges.Final(out.toMap, unrecorded.result(), unlisted.result())
-
-  /** [[finalise]] where every reset owner's rows are listed. */
-  def diff(parentRows: ByteString => Iterator[(PositionKey, ByteString)]): Map[PositionKey, Change] =
-    finalise(owner => Some(parentRows(owner).toSeq)).changes
-
-  /** How many positions the block has touched so far: for a metric. */
-  def size: Int = changes.size
-
-private[pathstate] object StagedChanges:
+    Final(out.toMap, unrecorded.result(), unlisted.result())
 
   /** What a block did to the state, as it is when the block commits.
     *

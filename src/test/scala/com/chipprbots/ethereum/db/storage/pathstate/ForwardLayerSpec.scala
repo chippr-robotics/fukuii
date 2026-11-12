@@ -122,9 +122,7 @@ class ForwardLayerSpec extends AnyFlatSpec with Matchers:
         }
       }
 
-    /** The rows of `owner`'s storage trie in the state of `ref`, as a view of it lists them. */
-    def listed(view: StateView, owner: ByteString): Option[Map[ByteString, ByteString]] =
-      view.ownerRows(owner, Int.MaxValue, Long.MaxValue).map(_.map((p, node) => ByteString(p.rowKey) -> node).toMap)
+    /** The rows of `owner`'s storage trie in the state of `ref`. */
     def rowsOf(ref: BlockRef, owner: ByteString): Map[ByteString, ByteString] =
       rowsOf(ref.stateRoot)._2.filter(_._1.startsWith(owner))
 
@@ -158,15 +156,8 @@ class ForwardLayerSpec extends AnyFlatSpec with Matchers:
         reference.ref shouldBe onLayers.ref
         val commit = reference.inPlace()
 
-        // every node of the block's state is read through the layers, and a trie's rows are listed as the disk of
-        // the other datadir holds them
+        // every node of the block's state is read through the layers
         layers.readThrough(layers.state.readOnly(onLayers.ref), onLayers.ref)
-        val view = layers.state.view(onLayers.ref)
-        Seq(alice, bob, carol, eve).map(owner).foreach { trie =>
-          withClue(s"block ${onLayers.ref.number}, the rows of ${trie.take(4)}: ") {
-            layers.listed(view, trie) shouldBe Some(inPlace.disk._2.filter(_._1.startsWith(trie)))
-          }
-        }
         (onLayers.ref, done :+ (onLayers.ref, inPlace.everything, commit))
     }
     // a layer is no row, no record, no anchor and no move of the clock
@@ -197,7 +188,7 @@ class ForwardLayerSpec extends AnyFlatSpec with Matchers:
       commits.map(_.tombstone) shouldBe Seq(None, None, None, None)
     }
 
-  // The rows the block wrote in a trie whose old rows were too many to list are in no entry of its changes. A
+  // The rows the block wrote in a trie whose old rows were too many to list are in no entry of its record. A
   // descendant reads them all the same, and a later reset of that trie meets the old rows that were left.
   it should "do so where a block replaces a storage trie that has too many rows to list, and makes it again" taggedAs
     UnitTest in {
@@ -215,7 +206,8 @@ class ForwardLayerSpec extends AnyFlatSpec with Matchers:
     }
 
   // The bound of a replaced trie's rows is held to the rows of the parent's STATE, as an in-place commit holds it to
-  // the disk when the parent is there: not to the rows the disk happens to hold under the layers.
+  // the disk when the parent is there: not to the rows the disk held under the layers when the block was executed.
+  // The block is settled when it is promoted, and the disk is then its parent's.
   it should "list a replaced trie, or not, as the block committed in place does: by its rows in the parent's state" taggedAs
     UnitTest in {
       val bobsRows = new HashedState().positions()(Some(owner(bob))).size
@@ -254,7 +246,6 @@ class ForwardLayerSpec extends AnyFlatSpec with Matchers:
       chain.promote(b.ref)
       view.diskHalfAtRestNow shouldBe false
       chain.readThrough(held, c.ref)
-      chain.listed(view, owner(bob)) shouldBe Some(chain.rowsOf(c.ref, owner(bob)))
       // a view made now has one layer, over the new anchor, and reads the same
       val fresh = chain.state.view(c.ref)
       fresh.base shouldBe b.ref
@@ -266,7 +257,6 @@ class ForwardLayerSpec extends AnyFlatSpec with Matchers:
       val d = chain.on(c.ref)(fourBlocks(2)*)
       d.inPlace()
       a[StaleStateViewException] should be thrownBy chain.readThrough(held, c.ref)
-      a[StaleStateViewException] should be thrownBy chain.listed(view, owner(bob))
     }
 
   it should "be made again when the disk moves between the look at the clock and the look at the layers" taggedAs
@@ -308,14 +298,20 @@ class ForwardLayerSpec extends AnyFlatSpec with Matchers:
       // the anchor's own view calls it what it is
       a[CorruptNodeException] should be thrownBy at(chain.state.readOnly(chain.first))
       // a position the layer wrote, asked for under another hash
-      val (written, left) = layer.written.collectFirst { case (p, Some(n)) if p.owner.isEmpty => p -> n }.get
+      val (written, left) = layer.left.collectFirst {
+        case (p, ForwardLayer.Left(_, Some(n))) if p.owner.isEmpty => p -> n
+      }.get
       a[LayerInconsistent] should be thrownBy
         onLayers.forOwner(None).getAt(written.path, kec256(other.toArray))
       ByteString(onLayers.forOwner(None).getAt(written.path, kec256(left.toArray)).encode) shouldBe left
       // and a node of the layer is found by its hash
       ByteString(onLayers.get(kec256(left.toArray)).encode) shouldBe left
-      // a position the layer left with no row (the block removed bob's storage), where a node is named
-      val (removed, _) = layer.written.collectFirst { case (p, None) if p.owner.contains(owner(bob)) => p -> () }.get
+      // a position the layer leaves with no row (the block removed bob's storage, and the layer holds the trie's
+      // owner and none of its positions), where a node is named
+      val removedKey = chain.rowsOf(chain.first, owner(bob)).keys.head
+      val removed = PositionKey(Some(owner(bob)), removedKey.drop(PositionKey.OwnerLength))
+      layer.left.contains(removed) shouldBe false
+      layer.lookup(removed) shouldBe Some(None)
       a[LayerInconsistent] should be thrownBy
         onLayers.forOwner(removed.owner).getAt(removed.path, kec256(other.toArray))
 
@@ -348,6 +344,10 @@ class ForwardLayerSpec extends AnyFlatSpec with Matchers:
       val wrong = b.ref.copy(stateRoot = chain.first.stateRoot)
       an[IllegalStateException] should be thrownBy chain.state.commitOverlay(b.staged, wrong)
       chain.state.forwardLayer(b.ref.hash) shouldBe None
+      // nor are a block's changes a layer of a block at another height
+      val elsewhere = b.ref.copy(hash = ByteString(kec256("elsewhere".getBytes)), number = b.ref.number + 1)
+      an[IllegalArgumentException] should be thrownBy chain.state.commitOverlay(b.staged, elsewhere)
+      chain.state.forwardLayer(elsewhere.hash) shouldBe None
 
       // as many as may be kept, and no more
       b.layered()
@@ -389,10 +389,8 @@ class ForwardLayerSpec extends AnyFlatSpec with Matchers:
     chain.state.forwardLayer(c.ref.hash) should not be empty
 
     // a row b changed is another node than b found there: b is dropped, and nothing is written
-    val (position, change) = layer.finalised.changes.collectFirst {
-      case (p, change) if change.prior.isDefined && change.next.isDefined => p -> change
-    }.get
-    chain.source.update(chain.rows.rowUpdates(Map(position -> change.next)))
+    val (position, next) = layer.left.collectFirst { case (p, ForwardLayer.Left(Some(_), Some(next))) => p -> next }.get
+    chain.source.update(chain.rows.rowUpdates(Map(position -> Some(next))))
     val tampered = chain.everything
     (the[StateUnavailable] thrownBy chain.state.promote(b.ref, chain.pointer(b.ref))).getMessage should
       include("was not built on the state the disk holds")
@@ -404,82 +402,44 @@ class ForwardLayerSpec extends AnyFlatSpec with Matchers:
     chain.state.lock.holder shouldBe None
   }
 
-  "The rows of a storage trie, as an old view lists them" should "be the rows of its state after the disk moved on" taggedAs
-    UnitTest in {
-      val chain = new Chain(maxViewAgeMoves = 2)
-      val old = chain.state.view(chain.first)
-      val bobs = owner(bob)
-      val atFirst = chain.rowsOf(chain.first, bobs)
-      chain.listed(old, bobs) shouldBe Some(atFirst)
+  // ETC has no EIP-6780: a SELFDESTRUCT removes a whole storage trie, of any size. A layer that held a prior for each
+  // of its rows would be as large as the trie, and a branch with such a block in it could be too large to keep (forge).
+  it should "hold nothing of a storage trie its block destroys, however many rows the trie has" taggedAs
+    (UnitTest, ConsensusTest) in {
+      def destroyed(grownBy: Int): (Chain, ForwardLayer, BlockRef) =
+        val chain = new Chain()
+        val parent =
+          if grownBy == 0 then chain.first
+          else
+            val grown = chain.on(chain.first)(slots(bob, (1 to grownBy).map(i => (5000 + i) -> i)*))
+            grown.inPlace()
+            grown.ref
+        (chain, chain.on(parent)(delete(bob)).layered(), parent)
 
-      // the next block takes rows of the trie away and adds others: the scan now finds neither set whole
-      val b = chain.on(chain.first)(
-        slots(bob, manySlots.take(20).map((k, _) => k -> 0)*),
-        slots(bob, (41 to 70).map(i => i -> i)*)
-      )
-      b.inPlace()
-      chain.disk._2.filter(_._1.startsWith(bobs)) should not be atFirst
-      chain.listed(old, bobs) shouldBe Some(atFirst)
-      // the bounds are the state's: exactly its rows fit, one fewer does not
-      old.ownerRows(bobs, atFirst.size, Long.MaxValue).map(_.size) shouldBe Some(atFirst.size)
-      old.ownerRows(bobs, atFirst.size - 1, Long.MaxValue) shouldBe None
-      val bytes = atFirst.iterator.map((key, node) => key.length.toLong + node.length).sum
-      old.ownerRows(bobs, Int.MaxValue, bytes).map(_.size) shouldBe Some(atFirst.size)
-      old.ownerRows(bobs, Int.MaxValue, bytes - 1) shouldBe None
+      val (small, ofSmall, _) = destroyed(grownBy = 0)
+      val (large, ofLarge, parent) = destroyed(grownBy = 400)
+      val rows = large.rowsOf(parent, owner(bob))
+      rows.size should be > small.rowsOf(small.first, owner(bob)).size + 400
 
-      // a second move writes rows the first wrote: what the view's state held there is what the FIRST found
-      val c = chain.on(b.ref)(slots(bob, (41 to 55).map(i => i -> 0)*), slots(bob, 1 -> 12345, 71 -> 1))
-      c.inPlace()
-      chain.listed(old, bobs) shouldBe Some(atFirst)
+      // the trie is a mark in the layer, and what the layer holds does not grow with it
+      ofLarge.resets shouldBe Seq(owner(bob))
+      ofLarge.left.keys.exists(_.owner.contains(owner(bob))) shouldBe false
+      ofLarge.positions shouldBe ofSmall.positions
+      ofLarge.bytes shouldBe ofSmall.bytes
+      ofLarge.bytes should be < rows.iterator.map((key, node) => key.length.toLong + node.length).sum
 
-      // one move more than the log holds
-      chain.on(c.ref)(account(dave, 3, 3)).inPlace()
-      a[StaleStateViewException] should be thrownBy chain.listed(old, bobs)
-    }
-
-  it should "be scanned again when the disk moves under the scan, and give up when it keeps moving" taggedAs
-    UnitTest in {
-      val chain = new Chain()
-      val old = chain.state.view(chain.first)
-      val bobs = owner(bob)
-      val atFirst = chain.rowsOf(chain.first, bobs)
-      var head = chain.first
-      def grow(by: Int): Unit =
-        val next = chain.on(head)(slots(bob, (1 to by).map(i => (1000 * head.number.toInt + i) -> i)*))
-        next.inPlace()
-        head = next.ref
-
-      // The bound is exactly the state's rows, and nothing has moved when the listing begins: the scan is allowed no
-      // row beside them. A block that adds rows lands before the scan, which then finds too many, and is made again
-      // with room for what that block wrote.
-      var moved = false
-      val listed = old.ownerRowsAfter(
-        bobs,
-        atFirst.size,
-        Long.MaxValue,
-        () =>
-          if !moved then
-            moved = true
-            grow(60)
-      )
-      listed.map(_.map((p, node) => ByteString(p.rowKey) -> node).toMap) shouldBe Some(atFirst)
-
-      // a block lands before every scan, each adding more rows than all before it wrote
-      var by = 400
-      val stale = the[StaleStateViewException] thrownBy old.ownerRowsAfter(
-        bobs,
-        atFirst.size,
-        Long.MaxValue,
-        () =>
-          grow(by)
-          by = by * 3
-      )
-      stale.getMessage should include("under a scan of its rows")
-
-      // so much of the trie was written since the view was made that listing it would hold it many times over
-      val tooOld = the[StaleStateViewException] thrownBy
-        old.ownerRowsAfter(bobs, atFirst.size, Long.MaxValue, () => (), minAllowance = 0)
-      tooOld.getMessage should include("too many to list that trie by")
+      // every row of it is no row of the block's state, read through the layer
+      val view = large.state.view(ofLarge.block)
+      rows.keys.foreach { key =>
+        val position = PositionKey(Some(owner(bob)), key.drop(PositionKey.OwnerLength))
+        ofLarge.lookup(position) shouldBe Some(None)
+        view.readFrom(position)._1 shouldBe None
+      }
+      // and each is deleted, and listed in the block's record, when the layer is promoted
+      large.promote(ofLarge.block).tombstone shouldBe None
+      large.disk._2.keys.exists(_.startsWith(owner(bob))) shouldBe false
+      val record = large.records.get(ofLarge.block.hash).flatMap(_.toOption).get
+      record.changes.keys.count(_.owner.contains(owner(bob))) shouldBe rows.size
     }
 
   "The layers no chain leads to from the anchor" should "go when the anchor moves, and with the layer they were built on" taggedAs
