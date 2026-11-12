@@ -260,6 +260,27 @@ final class PathStateStorage(
   /** `block`'s state for a reader that writes nothing. */
   def readOnly(block: BlockRef): MptStorage = PathMptStorage.readOnly(view(block))
 
+  /** The state of the anchor, or of a block '''behind it''' that its changeset records lead back to, for a reader that
+    * writes nothing: a block of the anchor's own chain, read through the records and never through an executed block
+    * that is kept beside the disk. So what a caller finds by a block's number on the canonical chain is that block's
+    * state or no state, also while a branch is under execution.
+    *
+    * It is read through a view like any other: it reads the same while the disk moves on, for as many moves as a view
+    * outlives, and then it is stale.
+    *
+    * @throws StateUnavailable
+    *   when `block` is not the anchor and the records do not lead back to it: it is too far behind, a record on the way
+    *   is pruned or lists nothing, or the block is not of the anchor's chain
+    */
+  def readOnlyBehind(block: BlockRef): MptStorage =
+    val view = viewOf(block)
+    if view.layers.nonEmpty then
+      throw new StateUnavailable(
+        s"the state of block ${block.show} is not held as a state of the chain the disk is on: it is an executed " +
+          "block kept beside it"
+      )
+    PathMptStorage.readOnly(view)
+
   /** `block`'s state for an execution that commits nothing: what it persists is kept beside the view and dropped with
     * the storage (`eth_call`, a simulation, a trace, a payload being built).
     */

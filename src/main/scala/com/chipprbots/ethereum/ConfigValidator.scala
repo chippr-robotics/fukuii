@@ -61,8 +61,9 @@ object ConfigValidator extends Logger:
   /** What `config` (a `fukuii` block) asks for that the in-development guard of the unified state layout (spec 018
     * Track C) cannot do yet. Fatal: the node would start and never sync.
     *
-    * With `state.path-live` on, SNAP is not advertised until the overlay can serve recent roots (C4a). A capability is
-    * mutual, so no peer offers SNAP to such a node, and a SNAP sync would wait for a snap-capable peer for ever.
+    * With `state.path-live` on, a SNAP sync has nowhere to hand its state off to: the hand-off onto the unified layout
+    * is a later slice (C5a). And SNAP is not advertised while the node does not follow the network's head (C4d, C4e): a
+    * capability is mutual, so no peer offers SNAP to such a node, and a SNAP sync would wait for one for ever.
     *
     * A block that is mined reaches import through network sync, which a node on the guard does not run until the
     * unified layout can follow a side branch and move its head (C4): the block would be mined and dropped.
@@ -85,8 +86,9 @@ object ConfigValidator extends Logger:
       List(
         Option.when(on("sync.do-snap-sync"))(
           "fukuii.state.path-live = true (the in-development guard of the unified state layout) cannot run with " +
-            "fukuii.sync.do-snap-sync = true: SNAP is not advertised while the guard is on, so no peer would offer " +
-            "it and the sync would never start. Set fukuii.sync.do-snap-sync = false."
+            "fukuii.sync.do-snap-sync = true: a SNAP sync cannot hand its state off onto the unified layout yet " +
+            "(spec 018 C5a), and SNAP is not advertised while the guard is on, so no peer would offer it and the " +
+            "sync would never start. Set fukuii.sync.do-snap-sync = false."
         ),
         Option.when(on("mining.mining-enabled"))(
           "fukuii.state.path-live = true (the in-development guard of the unified state layout) cannot run with " +

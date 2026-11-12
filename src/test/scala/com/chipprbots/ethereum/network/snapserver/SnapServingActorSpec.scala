@@ -369,10 +369,12 @@ class SnapServingActorSpec extends AnyFlatSpec with Matchers with MockFactory wi
     seed(source, hashed, block(1, hashed.root))
     val appState = new AppStateStorage(source)
     appState.putBestBlockNumber(1).commit()
+    // the headers and their index by number are what a root is looked up in: none is stored but for the block the
+    // disk holds, which is known without them
     val reader = new BlockchainReader(
+      new com.chipprbots.ethereum.db.storage.BlockHeadersStorage(source),
       null,
-      null,
-      null,
+      new com.chipprbots.ethereum.db.storage.BlockNumberMappingStorage(source),
       null,
       null,
       appState,
@@ -429,6 +431,75 @@ class SnapServingActorSpec extends AnyFlatSpec with Matchers with MockFactory wi
     accounts(hashed.root) shouldBe AccountRange(BigInt(1), Seq.empty, Seq.empty)
     slots(hashed.root) shouldBe StorageRanges(BigInt(2), Seq.empty, Seq.empty)
     nodes(hashed.root) shouldBe TrieNodes(BigInt(3), Seq.empty)
+  }
+
+  // Spec 018 Track C, C4a part 4. With the overlay the position store reads the state of a block behind the one the
+  // disk holds, through its changeset records. So a peer is served every root of the window, by all three requests,
+  // and the answer is the one the same state gives on a hash store, proofs included.
+
+  it should "serve the root of a canonical block behind the one the disk holds, by each request, as a hash store serves it" taggedAs (
+    UnitTest,
+    SyncTest
+  ) in {
+    import com.chipprbots.ethereum.db.storage.pathstate.CanonicalChainOnPositions
+    import com.chipprbots.ethereum.db.storage.pathstate.PathStateTestKit.*
+    val pm = TestProbe("pm-behind")
+    val eb = TestProbe("eb-behind")
+    val chain = new CanonicalChainOnPositions()
+    // alice's storage changes in every block: a storage trie behind the head is not the head's
+    (1 to 4).foreach { n =>
+      chain.next(withSlots(alice, Seq(n -> (100 + n), (n + 40) -> n)), withSlots(bob, Seq(n -> 0)))
+    }
+    val actor = makeActor(pm, eb, stateForRoot = Some(chain.reader.stateForRoot))
+    val aliceHash = owner(alice)
+    val rootPath = ByteString(Array[Byte](0x00))
+    val paths = Seq(Seq(rootPath), Seq(aliceHash, rootPath))
+
+    def accounts(root: ByteString): AccountRange =
+      actor ! PeerEventCmd(MessageFromPeer(GetAccountRange(BigInt(1), root, zeroHash, maxHash, bigBudget), testPeer))
+      nextSend(pm).message.underlyingMsg.asInstanceOf[AccountRange]
+    def slots(root: ByteString): StorageRanges =
+      actor ! PeerEventCmd(
+        MessageFromPeer(GetStorageRanges(BigInt(2), root, Seq(aliceHash), zeroHash, maxHash, bigBudget), testPeer)
+      )
+      nextSend(pm).message.underlyingMsg.asInstanceOf[StorageRanges]
+    def nodes(root: ByteString): TrieNodes =
+      actor ! PeerEventCmd(MessageFromPeer(GetTrieNodes(BigInt(3), root, paths, bigBudget), testPeer))
+      nextSend(pm).message.underlyingMsg.asInstanceOf[TrieNodes]
+
+    val reference = chain.hashed.nodes
+    val served = chain.headers.map(_.stateRoot.value)
+    served.distinct should have size served.size
+    served.foreach { root =>
+      withClue(s"the root of block ${chain.headers.find(_.stateRoot.value == root).get.number.value}: ") {
+        val accountsServed = accounts(root)
+        accountsServed shouldBe SnapServer.serveAccountRange(1, root, zeroHash, maxHash, bigBudget, reference)
+        accountsServed.accounts should not be empty
+        val slotsServed = slots(root)
+        slotsServed shouldBe SnapServer.serveStorageRanges(
+          2,
+          root,
+          Seq(aliceHash),
+          zeroHash,
+          maxHash,
+          bigBudget,
+          reference,
+          SnapServer.storageRootOf(root, reference)
+        )
+        slotsServed.slots.flatten should not be empty
+        nodes(root) shouldBe SnapServer.serveTrieNodes(3, root, paths, bigBudget, reference)
+      }
+    }
+    // the storage tries of two blocks are two answers
+    slots(served.head) should not be slots(served.last)
+
+    // a root of no canonical block: an executed block kept beside the chain, and a root nobody has
+    val beside = chain.beside(chain.head, salt = 1)(withSlots(alice, Seq(9 -> 9)))
+    Seq(beside.stateRoot.value, kec256(ByteString("a root nobody holds"))).foreach { root =>
+      accounts(root) shouldBe AccountRange(BigInt(1), Seq.empty, Seq.empty)
+      slots(root) shouldBe StorageRanges(BigInt(2), Seq.empty, Seq.empty)
+      nodes(root) shouldBe TrieNodes(BigInt(3), Seq.empty)
+    }
   }
 
   // A request is answered whatever happens while its state is being found: a handler that threw would take the actor

@@ -1981,6 +1981,61 @@ Tests and a measurement; no change to the store. Tasks T125, T127 and T134.
   count is a bound on the heap and the defaults stay. Measured by a heap difference over hundreds of layers, not by
   JOL, which is not a dependency of the build. Setting the defaults from real blocks waits for M1 and M2.
 
+### C4a part 4: the node reads behind its head, first for SNAP (2026-11-12)
+
+**What part 4 is.** The record of part 1 said the degrade of a staged commit to an overlay commit "lands with its
+callers in part 4". Its callers are not C4a's: a block that is executed and not adopted comes from a `newPayload`
+(C4d) or from the blocks of a reorganisation (C4e), and what moves the head to it is C4b. So the degrade lands with
+the first of those, and C4a ends where its checkpoint says: *non-head state is readable and bounded; nothing moves
+the head yet.* Part 4 is the readers: the state served to a peer by its root (this), and the readers of a block
+behind the head over JSON-RPC (next).
+
+- **`BlockchainReader.stateForRoot(root)` under the guard** looks the root up among the canonical blocks from the
+  block the disk holds back to 128 behind the best block, and hands out that block's state: the disk's own rows
+  for the block it holds, and for a block behind it a view through the changeset records
+  (`PathStateStorage.readOnlyBehind`). Where two blocks of the window have one state root (an empty block after
+  the merge) the newer is read: the same state through fewer records. The roots of a window are kept for the next
+  request, by the block the disk holds and the best block's number, and made again when either moves.
+- **Not served**: a root of no canonical block of the window; a root whose block the records no longer lead back
+  to (past the retention floor, or behind a record that lists nothing); and **an executed block kept beside the
+  chain, ever**, also where the index by number names it (a side branch's headers written under the chain):
+  `readOnlyBehind` gives the state of a block of the anchor's own chain and of no other.
+- **One rule for the three requests.** Under the guard the state that is handed out for a root is the rule, for
+  `GetAccountRange`, `GetStorageRanges` and `GetTrieNodes` alike. With the guard off nothing changes: the
+  read-only store whatever the root, and the 128-block check on `GetAccountRange` alone.
+- **A state that goes away while a request is served** (a view the disk moved past, a state no longer held) is
+  answered with nothing, as a root that is not served is, and logged at debug: nothing is wrong with the node.
+- **SNAP stays unadvertised under the guard, and T130's "advertise again" moves to the slice in which the node
+  follows the head (C4d, C4e)** (herald). A node on the guard does not sync from the network yet, so the roots a
+  syncing peer asks about, which are near the network's head, are none of its own: every answer would be empty,
+  which is what the user's decision of 2026-11-11 was made to avoid. The window is served to whoever asks (the
+  handlers do not wait for the capability). The refusal of `do-snap-sync` under the guard stays, and says why: the
+  hand-off of a SNAP sync onto the unified layout is C5a.
+
+**Tests.** `ServedRootWindowSpec` (5 cases, on `CanonicalChainOnPositions`: a chain as a node holds one, with its
+headers, their index, the records and the best block): every block of a chain served and read node for node
+against a hash store; the window's edge to the block, and its move with the best block; a root past the records
+not served, and a root two blocks share read at the newer when the older is one record too far; three executed
+blocks beside the chain not served, one of them named by the index; a state handed out earlier stale after as many
+moves as a view outlives and never wrong, and the new root served when the disk catches up with the best block.
+`SnapServingActorSpec`: each of the three requests for each root of a chain whose storage trie changes in every
+block, equal to the answer a hash store gives, proofs included; and nothing for a root of no canonical block.
+
+**The mutation run**: 9 mutants over the lookup, the window, the kept roots and the seam; all caught, one after a
+case was added (the roots kept when the disk moves to another block while the best block's number stands).
+
+**Two reads (herald).** Before code, AGREE WITH CHANGES: the same window for the three requests is what geth,
+Nethermind and Besu do (from memory, not from their code: to check before it is relied on elsewhere), and an empty
+answer with the request's id is the answer for a root that is not held, never a disconnect. After code, APPROVE
+WITH CHANGES, nothing blocking: with the guard off nothing differs (no `StateFault` can be thrown there); the
+window is the old rule's and the fresh-root cache's, to the block; the kept roots can miss a state and cannot hand
+out a wrong one, since the view is made of the exact block and only of a block the records lead back to. Taken:
+the case of a best block's number behind the disk. **Checked in code by herald**: contract code is not pruned with
+retention (nothing in the position store touches the code store), so a code hash of a window state is there for
+`GetByteCodes`; and fukuii's own SNAP client marks a peer that answers empty five times running as unusable for
+good (`AccountPeerDispatch`), which is the behaviour not advertising avoids. `ServedRootWindowSpec` runs in the
+essential tier (no actors); the actor spec's cases are `SyncTest`, as that spec's are.
+
 ### Destructive change (C8a and C8b): the vault protocol blocks
 
 ```

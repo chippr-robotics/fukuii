@@ -1104,6 +1104,9 @@ object NetworkPeerManagerActor:
             case _ =>
               AccountRange(msg.requestId, Seq.empty, Seq.empty)
         catch
+          case fault: com.chipprbots.ethereum.db.storage.pathstate.StateFault =>
+            stateWentAway("GetAccountRange", peerId, msg.requestId, fault)
+            AccountRange(msg.requestId, Seq.empty, Seq.empty)
           case t: Throwable =>
             log.error(
               s"serveAccountRange threw for peer $peerId (requestId=${msg.requestId}): ${t.getClass.getName}: ${t.getMessage}"
@@ -1133,9 +1136,32 @@ object NetworkPeerManagerActor:
     /** Per SNAP/1: nodes only need to serve state for "recent" roots — geth uses a 128-block window. */
     private def isStateRootFresh(rootHash: ByteString): Boolean = blockchainReader match
       case None => true
+      // On the unified state layout the state that is handed out for a root IS the rule: a root of no canonical block
+      // of the window has no state (spec 018 C4a), for this request and for the other two alike. The roots kept below
+      // would say the same, but for one case: they are kept by the best block's number, and a block that takes
+      // another's place at one height has other roots behind it.
+      case Some(reader) if reader.holdsStateInPlace => true
       case Some(reader) =>
         refreshFreshRootCache(reader)
         freshRootCache.contains(rootHash)
+
+    /** A request whose state went away while it was served: the disk moved on further than a view outlives, or the
+      * state is not held any more. The peer is answered with nothing, as for a root that is not served, and it asks
+      * another peer or asks again: nothing is wrong with this node, so nothing is logged as an error.
+      */
+    private def stateWentAway(
+        what: String,
+        peerId: PeerId,
+        requestId: BigInt,
+        fault: com.chipprbots.ethereum.db.storage.pathstate.StateFault
+    ): Unit =
+      log.debug(
+        "SNAP-SERVE: {} for peer {} (requestId={}) answered with nothing: {}",
+        what,
+        peerId,
+        requestId,
+        fault.getMessage
+      )
 
     /** Handle incoming GetStorageRanges request from a peer (server-side) */
     private def handleGetStorageRanges(
@@ -1179,6 +1205,9 @@ object NetworkPeerManagerActor:
             case None =>
               StorageRanges(msg.requestId, Seq.empty, Seq.empty)
         catch
+          case fault: com.chipprbots.ethereum.db.storage.pathstate.StateFault =>
+            stateWentAway("GetStorageRanges", peerId, msg.requestId, fault)
+            StorageRanges(msg.requestId, Seq.empty, Seq.empty)
           case t: Throwable =>
             log.error(
               s"serveStorageRanges threw for peer $peerId (requestId=${msg.requestId}): ${t.getClass.getName}: ${t.getMessage}"
@@ -1218,6 +1247,9 @@ object NetworkPeerManagerActor:
             case None =>
               TrieNodes(msg.requestId, Seq.empty)
         catch
+          case fault: com.chipprbots.ethereum.db.storage.pathstate.StateFault =>
+            stateWentAway("GetTrieNodes", peerId, msg.requestId, fault)
+            TrieNodes(msg.requestId, Seq.empty)
           case t: Throwable =>
             log.error(
               s"serveTrieNodes threw for peer $peerId (requestId=${msg.requestId}): ${t.getClass.getName}: ${t.getMessage}"

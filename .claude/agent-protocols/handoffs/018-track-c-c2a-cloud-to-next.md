@@ -160,6 +160,14 @@ Read plan.md, "C2a part 1 record" and "C2a part 2 record", then:
   adopted by reverse-then-commit, with the disk moved back by the records if it fails (it lands with C4b's head
   move; until then such a branch is deferred, never judged); and the overlay's bounds stay, with the blocks whose
   state is not held executed again at the `forkchoiceUpdated`.
+- **C4a part 4 is the readers, not the consensus callers** (plan.md, "C4a part 4"). The served-root window is
+  built: `BlockchainReader.stateForRoot` hands out the state of any canonical block within 128 of the best block,
+  through `PathStateStorage.readOnlyBehind`, never an executed block kept beside the chain. **SNAP is still not
+  advertised under the guard**: it is advertised again when the node follows the head (C4d, C4e), and the refusal
+  of `do-snap-sync` goes with the hand-off (C5a). A spec that needs a chain as a node holds one (headers, index,
+  records, best block, the reader) starts from `CanonicalChainOnPositions`. Next in part 4: JSON-RPC reads at a
+  block behind the head. The overlay commit of a block that is executed and not adopted (`PathStagedBlock`,
+  `BlockExecution.refuseUnadopted`) lands with its first caller, in C4d or C4e.
 - **C4a** brings back what C3b refuses: the overlay commit for a block that does not extend the anchor
   (`buildExtra(adopted)`, `NotExtendingAnchor`, `saveLastBlock` writing nothing),
   `stateAvailable(hash)`, the served-root window, and SNAP advertised again. C4b: the head move, `ConsensusStateFault`

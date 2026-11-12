@@ -54,10 +54,12 @@ class InstanceConfig(val config: TypesafeConfig, val instanceId: String = "defau
     */
   val statePathLive: Boolean = config.hasPath("state.path-live") && config.getBoolean("state.path-live")
 
-  /** With the guard on, the position store holds the state of one block until the overlay lands (C4a): a syncing peer
-    * would get an empty answer for every other root, and peers mark a node whose SNAP answers are empty as unusable. So
-    * SNAP is not advertised while the guard is on (user decision, 2026-11-11). The capability is mutual: such a node
-    * does not sync by SNAP either.
+  /** With the guard on, SNAP is not advertised (user decision, 2026-11-11): peers mark a node whose SNAP answers are
+    * empty as unusable. The position store can serve the roots of the blocks behind the one it holds since the overlay
+    * (spec 018 C4a), but a node on the guard does not follow the network's head yet (C4d, C4e), so the roots a syncing
+    * peer asks about, which are near that head, are none of its own: every answer would still be empty. It is
+    * advertised again in the slice in which the node follows the head. The capability is mutual: such a node does not
+    * sync by SNAP either.
     */
   val supportedCapabilities: List[Capability] = networkProtocols.capabilities(snapServed = !statePathLive)
 
@@ -74,7 +76,7 @@ class InstanceConfig(val config: TypesafeConfig, val instanceId: String = "defau
     if statePathLive && (p.snap1 || p.snap2) then
       log.warn(
         "[InstanceConfig] state.path-live is on (in-development guard): SNAP is not advertised, and this node " +
-          "neither serves nor syncs by SNAP, until the unified state layout can serve recent roots"
+          "does not sync by SNAP, until it follows the network's head on the unified state layout"
       )
     val disabled = List(
       Option.unless(p.eth70)("eth70"),
