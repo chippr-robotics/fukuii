@@ -181,19 +181,32 @@ final class StateMoveLog(maxMoves: Int, initialAnchor: Option[BlockRef]) extends
 
 /** A view of the state of one block (data-model 6.1, 6.3), able to say what any position held in that state.
   *
-  * This is the view of the '''anchor''': the block whose state is on disk when the view is made. A read is a point read
-  * of the row, corrected by the log of moves when the disk has moved since. Views of other blocks (forward layers, the
-  * reverse index) arrive with the overlay (C4a).
+  * The view of the '''anchor''', the block whose state is on disk when the view is made, has no layers: a read is a
+  * point read of the row, corrected by the log of moves when the disk has moved since. The view of a block that was
+  * executed on the anchor's state and is not on disk has that block's '''forward layers''' in front of the same read:
+  * the newest layer that wrote a position answers for it (data-model 6.2). The view holds its layers itself, so what it
+  * reads does not change when a layer is promoted to the disk or dropped: the rows under it stay those of its [[base]]
+  * through the log of moves, for as long as the log reaches back. Views of blocks behind the anchor (the reverse index)
+  * come next.
   *
   * @param createdAt
   *   the even epoch at which the view was made
+  * @param forward
+  *   the layers between the state on disk and this view's, newest first; none for the view of the anchor
   */
 final class StateView private[pathstate] (
     val block: BlockRef,
     val createdAt: Long,
     clock: StateClock,
-    rows: PathNodeStorage
+    rows: PathNodeStorage,
+    forward: List[ForwardLayer] = Nil
 ):
+
+  /** The block whose state the disk held when the view was made: what the rows under the layers are the state of. */
+  val base: BlockRef = forward.lastOption.fold(block)(_.parent)
+
+  /** Whether this view reads through layers. */
+  def layered: Boolean = forward.nonEmpty
 
   /** What position `p` held in this view's state: the stored node's RLP, or `None` for no row.
     *
@@ -204,7 +217,22 @@ final class StateView private[pathstate] (
     * @throws StaleStateViewException
     *   when the log no longer reaches back to the view
     */
-  def read(p: PositionKey): Option[Array[Byte]] =
+  def read(p: PositionKey): Option[Array[Byte]] = readFrom(p)._1
+
+  /** [[read]], and whether a layer answered: a node a layer gives is this view's whatever the disk does. */
+  private[pathstate] def readFrom(p: PositionKey): (Option[Array[Byte]], Boolean) =
+    // the anchor's view, which every block of a node that follows the head is executed on, has nothing to look through
+    if forward.isEmpty then (onDiskAsOfBase(p), false)
+    else
+      forward.iterator.map(_.lookup(p)).collectFirst { case Some(left) => left.map(_.toArray) } match
+        case Some(answer) => (answer, true)
+        case None         => (onDiskAsOfBase(p), false)
+
+  /** A node one of this view's layers leaves, by its hash. */
+  private[pathstate] def layerNode(hash: ByteString): Option[Array[Byte]] =
+    forward.iterator.map(_.byHash.get(hash)).collectFirst { case Some(node) => node.toArray }
+
+  private def onDiskAsOfBase(p: PositionKey): Option[Array[Byte]] =
     val onDisk = rows.read(p)
     val now = clock.epoch
     if now == createdAt then onDisk
@@ -226,7 +254,12 @@ final class StateView private[pathstate] (
     * anchor. Decided when asked, never remembered: a mismatch found on such a view is the disk's own fault, while on
     * any other view it only means the disk has moved on.
     */
-  def isAnchorViewNow: Boolean = clock.epoch == createdAt && clock.anchor.contains(block)
+  def isAnchorViewNow: Boolean = forward.isEmpty && clock.epoch == createdAt && clock.anchor.contains(block)
+
+  /** Whether the rows under this view are, right now, the state it takes them for: nothing has moved since it was made
+    * and its base is the anchor. A mismatch met then will be met again by the next read.
+    */
+  def diskHalfAtRestNow: Boolean = clock.epoch == createdAt && clock.anchor.contains(base)
 
   /** The epoch right now, for a fault that reports how far the disk has moved on. */
   def epochNow: Long = clock.epoch

@@ -54,25 +54,59 @@ final class PathStateStorage(
   /** The lock of the in-place writers (data-model 7.0). */
   val lock: StateLock = new StateLock
 
+  /** The executed blocks whose state is on no row (data-model 6.1). Nothing in the node makes one yet. */
+  private[pathstate] val overlay = new StateOverlay(settings.maxForwardLayers)
+
   /** The block whose state the disk holds, or `None` when the datadir has no state yet (SNAP in progress). */
   def anchor: Option[BlockRef] = clock.anchor
 
-  /** Whether a view of `block`'s state can be made right now. */
+  /** Whether `block` is the block whose state the disk holds. (A block kept as a forward layer has a view too:
+    * [[view]]. What takes a layer for a state that is there comes with the callers, in C4a's last part.)
+    */
   def stateAvailable(block: BlockRef): Boolean = anchor.contains(block)
 
+  /** The forward layer of `blockHash`, when it has one: it was executed, and its state is on no row. */
+  def forwardLayer(blockHash: ByteString): Option[ForwardLayer] = overlay.layerOf(blockHash)
+
   /** A view of `block`'s state, made at a moment when the disk is at rest: a view is made at an even epoch (data-model
-    * 6.3.1), so one made while a batch is being written waits for that batch.
+    * 6.3.1), so one made while a batch is being written waits for that batch. The anchor's view reads the rows; the
+    * view of a block executed on the anchor's state reads through its forward layers first.
     *
     * @throws StateUnavailable
-    *   when `block` is not the anchor, or there is no anchor
+    *   when `block` is not the anchor and no forward layers lead to it from the anchor, or there is no anchor
     */
-  def view(block: BlockRef): StateView =
+  def view(block: BlockRef): StateView = viewAfter(block, () => ())
+
+  /** [[view]], with `rested` run between the look at the clock and the look at the layers: a test stands there.
+    *
+    * The epoch, the anchor and the layers are one observation. A layer is taken away only after the batch that promoted
+    * it has settled, so layers found after the clock was read are the ones that lead from that anchor '''unless the
+    * epoch has moved''', and then the view is made again. Without the second look a promotion in between would give a
+    * view its new, shorter chain over rows it takes for the old anchor's, and the log of moves would then take the
+    * promoted block's rows back out from under its own descendants: a wrong state, and no fault (beacon).
+    */
+  private[pathstate] def viewAfter(block: BlockRef, rested: () => Unit, triesLeft: Int = ViewTries): StateView =
     val (epoch, held) = clock.awaitRest()
+    rested()
     held match
+      case None => throw new StateUnavailable(s"the state of block ${block.show} is not held: there is no state anchor")
       case Some(`block`) => new StateView(block, epoch, clock, rows)
       case Some(other) =>
-        throw new StateUnavailable(s"the state of block ${block.show} is not held: the disk holds ${other.show}")
-      case None => throw new StateUnavailable(s"the state of block ${block.show} is not held: there is no state anchor")
+        val chain = overlay.chainFrom(other, block)
+        if clock.epoch != epoch then
+          if triesLeft > 0 then viewAfter(block, rested, triesLeft - 1)
+          else
+            throw new StaleStateViewException(
+              block,
+              epoch,
+              clock.epoch,
+              "the disk moved on each time a view of it was being made"
+            )
+        else
+          chain match
+            case Some(layers) => new StateView(block, epoch, clock, rows, layers)
+            case None =>
+              throw new StateUnavailable(s"the state of block ${block.show} is not held: the disk holds ${other.show}")
 
   /** `block`'s state for a reader that writes nothing. */
   def readOnly(block: BlockRef): MptStorage = PathMptStorage.readOnly(view(block))
@@ -172,7 +206,7 @@ final class PathStateStorage(
   /** A fresh layer over `parent`'s state for one execution of a block that builds on it.
     *
     * @throws StateUnavailable
-    *   when `parent` is not the anchor, or there is no anchor
+    *   when `parent`'s state is not held (it is not the anchor and no forward layers lead to it), or there is no anchor
     */
   def stage(parent: BlockRef): PathStagedState = new PathStagedState(parent, view(parent))
 
@@ -224,7 +258,17 @@ final class PathStateStorage(
           CommitOutcome.AlreadyApplied
         case Some(held) =>
           staged match
-            case Some(executed) if executed.parent == held => commitInPlace(executed, held, block, extra, finalized)
+            case Some(executed) if executed.parent == held =>
+              // The rows of each storage trie the block replaced, as the disk holds them: the parent's (data-model
+              // 3.6). Scanned here, under the lock, so that they are the rows this batch is written over; and bounded
+              // in rows and in bytes, since they are held in memory and the lock is held meanwhile.
+              val finalised =
+                executed.changes.finalise(owner => rows.storageRows(owner, maxOwnerRows, settings.maxOwnerScanBytes))
+              val applied = commitInPlace(finalised, diffOf(finalised, held, block), block, extra, finalized)
+              // the block is on disk: a layer an earlier execution left of it is of no more use, nor is one that
+              // no chain now leads to
+              layersAfterMoveTo(block)
+              applied
             case Some(executed) =>
               throw new StateUnavailable(
                 s"block ${block.show} was executed on the state of ${executed.parent.show}, " +
@@ -274,6 +318,8 @@ final class PathStateStorage(
         case Some(deletes) =>
           val updates: Seq[DataUpdate] = deletes ++ appState.removeStateMarks().updates
           clock.inFlightToNoState(dataSource.updateSync(updates))
+          // executed blocks kept beside a state that is gone are of no state
+          overlay.clear()
           deletes.map(_.toRemove.size).sum
     }
 
@@ -304,31 +350,193 @@ final class PathStateStorage(
     try tell
     catch case NonFatal(e) => log.warn(s"The observer of the state's commits failed on $what: $e")
 
-  private def commitInPlace(
-      staged: PathStagedState,
-      parent: BlockRef,
-      block: BlockRef,
-      extra: Option[DataSourceBatchUpdate],
-      finalized: Option[BigInt]
-  )(using StateLockHeld): CommitOutcome =
+  private def maxOwnerRows: Int = settings.maxEntriesPerOwnerDelete.min(Int.MaxValue.toLong).toInt
+
+  /** `finalised` as the diff of `block` on `parent`, held to the two state roots by the account trie's root row:
+    * changes that are not this block's final world, or were not made on this parent, stop here, before anything is kept
+    * or written.
+    */
+  private def diffOf(finalised: StagedChanges.Final, parent: BlockRef, block: BlockRef): BlockDiff =
     require(block.number == parent.number + 1, s"block ${block.show} does not follow ${parent.show}")
-
-    // The rows of each storage trie the block replaced, as the disk holds them: the parent's (data-model 3.6). Scanned
-    // here, under the lock, so that they are the rows this batch is written over; and bounded in rows and in bytes,
-    // since they are held in memory and the lock is held meanwhile.
-    val maxRows = settings.maxEntriesPerOwnerDelete.min(Int.MaxValue.toLong).toInt
-    val finalised = staged.changes.finalise(owner => rows.storageRows(owner, maxRows, settings.maxOwnerScanBytes))
-
     val diff = BlockDiff(block.hash, block.number, parent.hash, parent.stateRoot, block.stateRoot, finalised.changes)
-    // The account trie's root row is held to the two state roots: a layer that is not this block's final world, or not
-    // built on this parent, stops here, before a row is written.
     val faults = diff.validate
     if faults.nonEmpty then
       throw new IllegalStateException(
         s"The staged changes of block ${block.show} are not what a block does to the state of ${parent.show}: " +
           faults.take(MaxFaultsShown).mkString("; ")
       )
+    diff
 
+  /** Keeps `block`, executed on `staged`, as a forward layer (data-model 7.2): its changes are frozen and kept in
+    * memory, and '''nothing is written''': no row, no record, no anchor, and the clock does not move. The block's own
+    * records (header, body, receipts) are the caller's to write, as they are today.
+    *
+    * The block's parent may be the anchor or a forward layer. The layer holds what the block left and the hashes of
+    * what it found ([[ForwardLayer]]): nothing of the parent's state is read to make it, and a storage trie the block
+    * replaced whole is a mark in it, not a list of that trie's rows. What the block did to the rows is settled when the
+    * layer is promoted. The lock is taken for the look at the anchor and the registration, which are one step: a block
+    * that has become the anchor meanwhile is not kept as a layer beside itself, and a block whose parent's state is no
+    * longer held is not kept at all (vault, beacon).
+    *
+    * A block that is a layer already stays the layer it is: one block, one layer.
+    *
+    * Nothing in the node calls this yet. What does must come with the bounds of data-model 6.4.
+    *
+    * @throws StateUnavailable
+    *   when there is no anchor, or the state of the block's parent is not held any more, or no more layers are kept
+    * @throws IllegalStateException
+    *   when what was staged is not what a block does between the two state roots
+    * @throws IllegalArgumentException
+    *   when the block is not at the height after its parent's
+    */
+  def commitOverlay(staged: PathStagedState, block: BlockRef): OverlayOutcome =
+    val parent = staged.parent
+    overlay.layerOf(block) match
+      case Some(known) if known.parent == parent => OverlayOutcome.Layered(known)
+      case _ =>
+        require(block.number == parent.number + 1, s"block ${block.show} does not follow ${parent.show}")
+        val frozen = staged.changes.frozen
+        val layer = ForwardLayer.of(block, parent, frozen)
+        // The account trie's root is held to the two state roots, as a commit in place holds it: changes that are not
+        // this block's final world, or were not made on this parent, stop here, before anything is kept. So does
+        // everything else of a diff's validation that needs no row of the parent's state: what is kept can be
+        // promoted, unless the disk is not the state it was built on.
+        val faults = ForwardLayer.shapeFaults(block, parent, frozen) ++ layer.rootFaults
+        if faults.nonEmpty then
+          throw new IllegalStateException(
+            s"The staged changes of block ${block.show} are not what a block does to the state of ${parent.show}: " +
+              faults.take(MaxFaultsShown).mkString("; ")
+          )
+        lock.locked(
+          s"overlay commit of block ${block.show}",
+          nanos => told("the wait for the state lock")(settings.observer.lockWaited(nanos))
+        ) {
+          clock.anchor match
+            case None =>
+              throw new StateUnavailable(
+                s"block ${block.show} cannot be kept: there is no state anchor, so there is no state to keep it beside"
+              )
+            case Some(held) if held.hash == block.hash => OverlayOutcome.AlreadyApplied
+            case Some(held)                            =>
+              // the parent is the anchor, or layers lead to it from the anchor: a layer on a layer the anchor has
+              // left behind would be kept for nothing, and for good
+              if held != parent && overlay.chainFrom(held, parent).isEmpty then
+                throw new StateUnavailable(
+                  s"block ${block.show} was executed on the state of ${parent.show}, which is not held any more: " +
+                    s"the disk holds ${held.show}"
+                )
+              OverlayOutcome.Layered(overlay.register(layer))
+        }
+
+  /** Commits the forward layer of `block` as the block whose state the disk holds (data-model 7.1, the second of the
+    * cases that are not a staged block on the anchor): the batch an in-place commit of the block writes. The layer goes
+    * once the batch has returned, and not when it fails: the disk is then as it was.
+    *
+    * Only a layer '''whose parent is the anchor''' is promoted here. Moving the disk to any other is a head move (C4b).
+    *
+    * '''The block is settled here, against the rows the disk holds''', which are its parent's, under the lock, as a
+    * commit in place settles one: the prior of each position is the row, read now and held to the hash the layer names
+    * for it; the rows of a storage trie the block replaced whole are scanned now, and listed or left by the bound a
+    * commit in place applies. So the record, the rows that are deleted and the priors of the move are those the same
+    * block writes committed in place over this disk. Where a row is another node than the one the layer names, or none,
+    * the layer was not built on this state: it is dropped, with what was built on it, nothing is written, and the block
+    * is executed again (beacon, forge).
+    *
+    * '''A layer that cannot be promoted is not kept.''' The same holds where the settled changes are not a block's
+    * diff, which the checks made when the layer was kept leave to a defect: the layer goes, with what stands on it, and
+    * the fault is thrown. Kept, it would be the answer to every later execution of its block, and a branch with that
+    * block in it could never be adopted (forge). A write that fails is another matter: the disk is as it was, and the
+    * layer stays.
+    *
+    * It moves the anchor, so it is for a caller that '''adopts''' the block: one that only has the block's own records
+    * to write must not come here (forge).
+    *
+    * @throws StateUnavailable
+    *   when `block` has no forward layer, or its parent is not the anchor, or its layer was not built on the state the
+    *   disk holds
+    */
+  def promote(block: BlockRef, extra: Option[DataSourceBatchUpdate]): CommitOutcome =
+    extra.foreach(other =>
+      require(other.dataSource eq dataSource, "a block and its state are written in one batch, to one data source")
+    )
+    val finalized = settings.finalized()
+    val outcome = lock.locked(
+      s"promotion of block ${block.show}",
+      nanos => told("the wait for the state lock")(settings.observer.lockWaited(nanos))
+    ) {
+      (clock.anchor, overlay.layerOf(block)) match
+        case (None, _) =>
+          throw new StateUnavailable(s"block ${block.show} cannot be committed: there is no state anchor")
+        case (Some(held), _) if held.hash == block.hash =>
+          extra.foreach(_.commit())
+          CommitOutcome.AlreadyApplied
+        case (Some(held), None) =>
+          throw new StateUnavailable(
+            s"block ${block.show} is not kept as an executed block, and the disk holds ${held.show}"
+          )
+        case (Some(held), Some(layer)) if layer.parent != held =>
+          throw new StateUnavailable(
+            s"block ${block.show} was executed on the state of ${layer.parent.show}, and the disk holds ${held.show}"
+          )
+        case (Some(held), Some(layer)) =>
+          layer.changesOver(position => rows.read(position).map(ByteString(_))) match
+            case Left(position) =>
+              overlay.drop(block.hash)
+              overlay.dropUnreachableFrom(held)
+              throw new StateUnavailable(
+                s"the executed block ${block.show} was not built on the state the disk holds: it found another node " +
+                  s"at ${position.show} than the row there. It is dropped, and is executed again"
+              )
+            case Right(changes) =>
+              val finalised = StagedChanges.settle(
+                changes,
+                layer.resets,
+                owner => rows.storageRows(owner, maxOwnerRows, settings.maxOwnerScanBytes)
+              )
+              val diff =
+                try diffOf(finalised, held, block)
+                catch
+                  case fault: (IllegalStateException | IllegalArgumentException) =>
+                    overlay.drop(block.hash)
+                    overlay.dropUnreachableFrom(held)
+                    throw fault
+              val applied = commitInPlace(finalised, diff, block, extra, finalized)
+              layersAfterMoveTo(block)
+              applied
+    }
+    outcome match
+      case CommitOutcome.Applied(commit) =>
+        told(s"the commit of block ${block.show}")(settings.observer.committed(commit))
+      case CommitOutcome.AlreadyApplied => ()
+    outcome
+
+  /** Drops the forward layer of `blockHash`, if it has one, and the layers built on it: its execution was found not to
+    * stand (data-model 7.2). Views that hold them go on reading them; no new view is made through them.
+    */
+  def dropLayer(blockHash: ByteString): Unit =
+    lock.locked("the drop of an executed block") {
+      overlay.drop(blockHash)
+      clock.anchor.fold(overlay.clear()) { held =>
+        overlay.dropUnreachableFrom(held); ()
+      }
+    }
+
+  /** The anchor has moved to `block`, whose batch has returned: its own layer goes, and every layer no chain leads to
+    * any more. Only now: a view that is being made finds either the layer or a moved epoch (see [[viewAfter]]).
+    */
+  private def layersAfterMoveTo(block: BlockRef)(using StateLockHeld): Unit =
+    // the block's own layer is one of them: no chain leads from a block to itself
+    overlay.dropUnreachableFrom(block)
+    ()
+
+  /** Writes `diff`, which is `finalised` as the diff of `block` on the block the disk holds ([[diffOf]]). */
+  private def commitInPlace(
+      finalised: StagedChanges.Final,
+      diff: BlockDiff,
+      block: BlockRef,
+      extra: Option[DataSourceBatchUpdate],
+      finalized: Option[BigInt]
+  )(using StateLockHeld): CommitOutcome =
     val tombstone: Option[TombstoneCause] =
       if finalised.unlisted.nonEmpty then Some(TombstoneCause.OwnerDeleteBound)
       else if BlockDiffCodec.encodedLength(diff) > settings.maxRecordBytes then Some(TombstoneCause.RecordSize)
@@ -410,6 +618,20 @@ object PathStateStorage:
 
   private val MaxFaultsShown = 3
 
+  /** How often a view is made again because the disk moved between the look at the clock and the look at the layers. */
+  private val ViewTries = 3
+
+  /** How many executed blocks are kept beside the state on disk, until the budgets of data-model 6.4 replace it. */
+  val MaxForwardLayers: Int = 32
+
+  /** What [[PathStateStorage.commitOverlay]] did with a block. */
+  enum OverlayOutcome:
+    /** The block is kept as this forward layer: the one just made, or the one there already was. */
+    case Layered(layer: ForwardLayer)
+
+    /** The block is the one whose state the disk holds: there is nothing to keep beside it. */
+    case AlreadyApplied
+
   /** The most rows, and the most changeset keys, [[PathStateStorage.destroyStateForNewGenesis]] deletes: what one batch
     * can hold in memory, and far more than a test's state has.
     */
@@ -446,7 +668,9 @@ object PathStateStorage:
       // Whether [[PathStateStorage.destroyStateForNewGenesis]] may run: test mode only.
       allowsStateDestruction: Boolean = false,
       // The most rows, and the most changeset keys, it deletes.
-      maxKeysDestroyed: Long = MaxKeysDestroyed
+      maxKeysDestroyed: Long = MaxKeysDestroyed,
+      // How many forward layers are kept (a stopgap: see [[MaxForwardLayers]]).
+      maxForwardLayers: Int = MaxForwardLayers
   )
 
   object CommitSettings:
