@@ -2590,3 +2590,14 @@ items:
     links:
       spec: specs/018-storage-engine-consolidation
     notes: Found by conduit in the spec 018 C4a part 4b consult. Wrong on any layout; the comment at :481 already says a fault must not be 'no account'. A guard-off behaviour change, so not in the storage PRs.
+  - id: B-229
+    title: debug_traceChain has no range limit (trace_filter has MaxTraceFilterRange); cap it, and retry a stale state per block in both
+    priority: P2
+    status: open
+    area: rpc
+    size: S
+    opened: 2026-11-12
+    refs: []
+    links:
+      spec: specs/018-storage-engine-consolidation
+    notes: Found by beacon and conduit in the spec 018 C4a part 4b consult. DebugTracingService.scala:375-400. The cap changes behaviour with the guard off too; the per-block retry matters on the unified layout (M5).
