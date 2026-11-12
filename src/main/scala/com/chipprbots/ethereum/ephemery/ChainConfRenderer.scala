@@ -2,9 +2,10 @@ package com.chipprbots.ethereum.ephemery
 
 /** Renders the chain configuration fukuii reads for one Ephemery iteration (the HOCON of `custom-chains-dir`).
   *
-  * The text is the one `scripts/ephemery/fetch-genesis.sh` wrote before spec 028, and a golden test holds it byte for
-  * byte against the committed fixtures `src/test/resources/ephemery/ephemery-16x/`. A change of the rendered output is
-  * therefore always a reviewed fixture diff.
+  * The text is the one `scripts/ephemery/fetch-genesis.sh` wrote before spec 028, plus the two spec 024 keys inside the
+  * chain object (`consensus` and `genesis-hash`, spec 028 R14), and a golden test holds it byte for byte against the
+  * committed fixtures `src/test/resources/ephemery/ephemery-16x/`. A change of the rendered output is therefore always
+  * a reviewed fixture diff.
   *
   * Pure: no `Config`, no clock, no file.
   */
@@ -68,6 +69,8 @@ object ChainConfRenderer:
   network-id = ${p.chainId}
   chain-id = "0x${p.chainId.toString(16)}"
   network-type = "eth"
+  consensus = "engine-api"
+  genesis-hash = "${p.publishedHash}"
 
   # Merged at genesis (terminalTotalDifficulty 0).
   terminal-total-difficulty = "0"

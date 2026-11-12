@@ -733,11 +733,11 @@ class EphemeryReleaseSpec extends AnyFlatSpec with Matchers:
       // the node loads the genesis from that directory: its hash is the one the release engine computed in memory
       val data = GenesisDataLoader.parseGenesisData(viaDir.customGenesisJsonOpt.getOrElse(fail("no genesis"))).get
       GenesisDataLoader.genesisHeader(data)(using viaDir).hash.value shouldBe v.genesisHash
-      // and the raw conf parses on its own too
-      BlockchainConfig
-        .fromRawConfig(ConfigFactory.parseFile(dir.resolve(EphemeryRelease.ChainConfFileName).toFile))
-        .chainId
-        .value shouldBe v.chainId
+      // and the raw conf parses on its own too, with the two spec 024 keys inside the chain object (R14)
+      val rawConf = ConfigFactory.parseFile(dir.resolve(EphemeryRelease.ChainConfFileName).toFile)
+      BlockchainConfig.fromRawConfig(rawConf).chainId.value shouldBe v.chainId
+      rawConf.getString("consensus") shouldBe "engine-api"
+      rawConf.getString("genesis-hash") shouldBe v.genesisHashHex
     finally
       Files.list(dir).forEach(f => Files.delete(f))
       Files.delete(dir)
