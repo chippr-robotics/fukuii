@@ -168,37 +168,37 @@ class TestingService(
               built.blockAccessList.foreach(bal => blockchainWriter.storeBlockAccessList(hash, bal).commit())
               Right(())
           stored.map { _ =>
-          forkChoiceManager.applyForkChoiceState(
-            ForkChoiceState(
-              headBlockHash = hash.value,
-              // safe/finalized track the head: this namespace has no beacon chain behind it to
-              // justify anything else, and applyForkChoiceState only reads them for logging.
-              safeBlockHash = hash.value,
-              finalizedBlockHash = hash.value
+            forkChoiceManager.applyForkChoiceState(
+              ForkChoiceState(
+                headBlockHash = hash.value,
+                // safe/finalized track the head: this namespace has no beacon chain behind it to
+                // justify anything else, and applyForkChoiceState only reads them for logging.
+                safeBlockHash = hash.value,
+                finalizedBlockHash = hash.value
+              )
+            ) match
+              case Left(err) => log.error("testing_commitBlockV1: fork choice rejected freshly stored head: {}", err)
+              case Right(()) => ()
+
+            // Drop the committed transactions from the pool so the next build does not re-queue
+            // them (they would fail with NONCE_MISMATCH_TOO_LOW). engine_forkchoiceUpdated does
+            // the same on head advance.
+            if block.body.transactionList.nonEmpty then
+              pendingTransactionsManager.foreach(
+                _ ! PendingTransactionsManager.RemoveTransactions(block.body.transactionList)
+              )
+
+            // "emit the same chain events it would for any new head" — BlockImporter publishes
+            // NewBlockImported on the same topic; eth_subscribe newHeads/logs read it from there.
+            blockTopic.foreach(_ ! Topic.Publish(NewBlockImported(block)))
+
+            log.info(
+              "testing_commitBlockV1: committed block {} (number={}, txs={})",
+              hex(hash.value),
+              block.header.number,
+              block.body.transactionList.size
             )
-          ) match
-            case Left(err) => log.error("testing_commitBlockV1: fork choice rejected freshly stored head: {}", err)
-            case Right(()) => ()
-
-          // Drop the committed transactions from the pool so the next build does not re-queue
-          // them (they would fail with NONCE_MISMATCH_TOO_LOW). engine_forkchoiceUpdated does
-          // the same on head advance.
-          if block.body.transactionList.nonEmpty then
-            pendingTransactionsManager.foreach(
-              _ ! PendingTransactionsManager.RemoveTransactions(block.body.transactionList)
-            )
-
-          // "emit the same chain events it would for any new head" — BlockImporter publishes
-          // NewBlockImported on the same topic; eth_subscribe newHeads/logs read it from there.
-          blockTopic.foreach(_ ! Topic.Publish(NewBlockImported(block)))
-
-          log.info(
-            "testing_commitBlockV1: committed block {} (number={}, txs={})",
-            hex(hash.value),
-            block.header.number,
-            block.body.transactionList.size
-          )
-          CommitBlockResponse(hash.value)
+            CommitBlockResponse(hash.value)
           }
         })
 

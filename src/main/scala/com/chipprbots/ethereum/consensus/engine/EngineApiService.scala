@@ -1385,10 +1385,10 @@ class EngineApiService(
     */
   private val LenientBuildRetries = 8
 
-  /** Times a lenient build is made again because the view of its parent's state went stale under it (the unified
-    * state layout). A view goes stale when the state on disk has moved on further than the log of moves reaches, so a
-    * fresh one of the same parent is there only while that parent's state is still held; when it is not, the fresh
-    * view is refused and the build ends with that.
+  /** Times a lenient build is made again because the view of its parent's state went stale under it (the unified state
+    * layout). A view goes stale when the state on disk has moved on further than the log of moves reaches, so a fresh
+    * one of the same parent is there only while that parent's state is still held; when it is not, the fresh view is
+    * refused and the build ends with that.
     */
   private val StaleViewRebuilds = 3
 

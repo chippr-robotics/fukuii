@@ -43,8 +43,8 @@ import com.chipprbots.ethereum.utils.ByteStringUtils
 object MockedMiner:
   final val BlockForgerDispatcherId = "fukuii.async.dispatchers.block-forger"
 
-  /** Ticks, one second each, that the miner waits for the import of the block it mined before it gives the run up
-    * (the unified state layout, where the next block is built on that block's state as the disk holds it).
+  /** Ticks, one second each, that the miner waits for the import of the block it mined before it gives the run up (the
+    * unified state layout, where the next block is built on that block's state as the disk holds it).
     */
   final val MaxImportWaits = 10
 

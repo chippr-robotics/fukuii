@@ -252,9 +252,9 @@ class BlockExecution(
     *
     * Where what it persists goes depends on the state layout; see [[buildInitialWorld]]. On the hash store the trie
     * nodes reach the store, by their hashes, and the block is found already executed by whoever imports it. On the
-    * unified layout they go to a layer of this execution's own and are dropped with it: nothing is written but
-    * contract code, which is kept by its hash on both. Either way no block, receipt or head is written here, and a
-    * block that was built is executed again when it is imported.
+    * unified layout they go to a layer of this execution's own and are dropped with it: nothing is written but contract
+    * code, which is kept by its hash on both. Either way no block, receipt or head is written here, and a block that
+    * was built is executed again when it is imported.
     */
   def executeForProposer(
       block: Block

@@ -483,7 +483,10 @@ class EthMiningServiceSpec
 
   // Spec 018 Track C, C3c: a mined block is imported by network sync, which a node on the unified state layout does not
   // run before its overlay. So no work is given, where a solution would be answered `true` and its block dropped.
-  it should "give no work and take none on the unified state layout, and say why" taggedAs (UnitTest, RPCTest) in new TestSetup:
+  it should "give no work and take none on the unified state layout, and say why" taggedAs (
+    UnitTest,
+    RPCTest
+  ) in new TestSetup:
     import com.chipprbots.ethereum.db.components.EphemDataSourceComponent
     import com.chipprbots.ethereum.db.components.Storages
     override lazy val storagesInstance

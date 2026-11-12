@@ -13,6 +13,7 @@ import org.scalatest.matchers.should.Matchers
 
 import com.chipprbots.ethereum.TestInstanceConfigProvider
 import com.chipprbots.ethereum.blockchain.data.GenesisDataLoader
+import com.chipprbots.ethereum.consensus.engine.BuiltBlock
 import com.chipprbots.ethereum.consensus.engine.EngineApiService
 import com.chipprbots.ethereum.consensus.engine.ForkChoiceState
 import com.chipprbots.ethereum.consensus.engine.PayloadAttributes
@@ -40,15 +41,15 @@ import com.chipprbots.ethereum.ledger.HeaderTrustingBlockExecution
 import com.chipprbots.ethereum.testing.Tags.*
 import com.chipprbots.ethereum.utils.BlockchainConfig
 
-/** Spec 018 Track C, C3c (T102, T106, T111, T114): a block is BUILT on the unified state layout from its parent's
-  * state under a layer of the build's own, and nothing of the build reaches the disk.
+/** Spec 018 Track C, C3c (T102, T106, T111, T114): a block is BUILT on the unified state layout from its parent's state
+  * under a layer of the build's own, and nothing of the build reaches the disk.
   *
-  * The chain is the execution-apis test chain ([[RpcCompatNode]]), from the merge to Amsterdam: withdrawals, the
-  * system calls of each fork, deposit and request contracts, block access lists. Each of its post-merge blocks is
-  * built again on the unified layout by the node's one builder (`EngineApiService.buildBlockOnParent`), from the
-  * block's own inputs, and must come out as that block: the same hash, so the same state root, receipts root, requests
-  * hash and access-list hash. The block is then imported, which executes it once more on a staged layer and commits
-  * it; so the builder is held to the fixture and to import at every height.
+  * The chain is the execution-apis test chain ([[RpcCompatNode]]), from the merge to Amsterdam: withdrawals, the system
+  * calls of each fork, deposit and request contracts, block access lists. Each of its post-merge blocks is built again
+  * on the unified layout by the node's one builder (`EngineApiService.buildBlockOnParent`), from the block's own
+  * inputs, and must come out as that block: the same hash, so the same state root, receipts root, requests hash and
+  * access-list hash. The block is then imported, which executes it once more on a staged layer and commits it; so the
+  * builder is held to the fixture and to import at every height.
   *
   * Around each build the whole datadir is compared: no row of the position store, no node of the hash store, no
   * changeset record, no AppState key, no block. The one thing a build writes is contract code, which is kept by its
@@ -142,7 +143,7 @@ class ProposerOnPositionsSpec extends ScalaTestWithActorTestKit with AnyFlatSpec
         slotNumber = h.slotNumber
       )
 
-    def build(block: Block, transactions: Seq[SignedTransaction], strict: Boolean) =
+    def build(block: Block, transactions: Seq[SignedTransaction], strict: Boolean): Either[String, BuiltBlock] =
       val parent = node.blockchainReader.getBlockByHash(block.header.parentHash).get
       engine.buildBlockOnParent(
         parent,

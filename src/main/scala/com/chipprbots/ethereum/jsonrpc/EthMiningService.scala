@@ -118,9 +118,9 @@ class EthMiningService(
     *
     * A block that is mined reaches import through network sync, which a node on the in-development guard does not run
     * (spec 018 C3b): it could not follow the side branches and reorganisations that come with it. So a solution
-    * submitted here would be answered `true` and the block dropped. Work is refused where it is asked for, and said
-    * so, until the head can move (C4b). `mining.mining-enabled` is refused at start for the same reason; these two
-    * methods are served with the internal miner off, so they say it themselves.
+    * submitted here would be answered `true` and the block dropped. Work is refused where it is asked for, and said so,
+    * until the head can move (C4b). `mining.mining-enabled` is refused at start for the same reason; these two methods
+    * are served with the internal miner off, so they say it themselves.
     */
   private def noRouteForMinedBlocks: Option[JsonRpcError] =
     Option.when(blockchainReader.holdsStateInPlace)(JsonRpcError.LogicError(EthMiningService.NoRouteForMinedBlocks))

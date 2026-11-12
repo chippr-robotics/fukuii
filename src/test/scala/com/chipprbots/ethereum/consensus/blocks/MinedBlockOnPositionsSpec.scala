@@ -39,15 +39,15 @@ import com.chipprbots.ethereum.testing.Tags.*
 import com.chipprbots.ethereum.utils.*
 
 /** Spec 018 Track C, C3c (T103, T105, T111, T112): a proof-of-work block is PREPARED on the unified state layout from
-  * its parent's state under a layer of the build's own, to the block the hash store prepares, and import then
-  * computes the state root the block carries.
+  * its parent's state under a layer of the build's own, to the block the hash store prepares, and import then computes
+  * the state root the block carries.
   *
   * Two nodes, one on each layout, are given the same parent, transactions, ommers and clock, block after block. What
   * the generator of each makes must be the same block: the state root, the receipts root and the gas used are in its
-  * hash. The blocks cross what this path has to get right on a store of rows: a contract deployed with storage, a
-  * slot cleared (a storage trie that collapses), the contract destroyed and its address paid again in the same block
-  * (the account's rows are dropped, and the account is there again with none), a transaction the generator leaves
-  * out, ommers and their rewards, and the first block of the next ECIP-1017 era.
+  * hash. The blocks cross what this path has to get right on a store of rows: a contract deployed with storage, a slot
+  * cleared (a storage trie that collapses), the contract destroyed and its address paid again in the same block (the
+  * account's rows are dropped, and the account is there again with none), a transaction the generator leaves out,
+  * ommers and their rewards, and the first block of the next ECIP-1017 era.
   *
   * Around each generation on the unified layout the datadir is compared: a block that is prepared writes nothing but
   * contract code, and the world it leaves in the generator's cache is never committed. The block is committed by its
@@ -63,7 +63,8 @@ class MinedBlockOnPositionsSpec extends AnyFlatSpec with Matchers:
   private val chain = BigInt(0x3d)
   private val miner = Address(0xc0ffee)
 
-  /** An ommers validator that takes any ommer: the ommers here carry no seal, and what is held is what they are paid. */
+  /** An ommers validator that takes any ommer: the ommers here carry no seal, and what is held is what they are paid.
+    */
   private object AnyOmmer extends OmmersValidator:
     override def validate(
         parentHash: ByteString,
@@ -91,7 +92,8 @@ class MinedBlockOnPositionsSpec extends AnyFlatSpec with Matchers:
       customGenesisFileOpt = Some("test-genesis.json"),
       customGenesisJsonOpt = None,
       // an era of two blocks: block 3 is the first of era 1
-      monetaryPolicyConfig = MonetaryPolicyConfig(2, 0.2, 5000000000000000000L, 3000000000000000000L, 2000000000000000000L),
+      monetaryPolicyConfig =
+        MonetaryPolicyConfig(2, 0.2, 5000000000000000000L, 3000000000000000000L, 2000000000000000000L),
       maxCodeSize = None,
       accountStartNonce = UInt256.Zero,
       daoForkConfig = None,
@@ -150,7 +152,9 @@ class MinedBlockOnPositionsSpec extends AnyFlatSpec with Matchers:
   //   runtime: CALLDATASIZE PUSH1 0a JUMPI | PUSH1 00 PUSH1 00 SSTORE STOP | JUMPDEST CALLER SELFDESTRUCT
   private val runtime = Hex.decode("36600a57600060005500" + "5b33ff")
   //   init: SSTORE(0, 0x11) SSTORE(1, 0x22) SSTORE(2, 0x33); CODECOPY(0, 0x1b, 0x0d); RETURN(0, 0x0d)
-  private val init = ByteString(Hex.decode("601160005560226001556033600255" + "600d601b600039" + "600d6000f3") ++ runtime)
+  private val init = ByteString(
+    Hex.decode("601160005560226001556033600255" + "600d601b600039" + "600d6000f3") ++ runtime
+  )
   private val deploy: SignedTransaction =
     signed(LegacyTransaction(1, GasPrice(1), GasAmount(300000), None, 0, init))
   private val contract: Address = CallErrors.createAddress(sender, 1)
@@ -217,7 +221,7 @@ class MinedBlockOnPositionsSpec extends AnyFlatSpec with Matchers:
       // block 2: slot 0 is cleared, so the contract's storage trie loses a leaf; an ommer is paid
       val second = step(Seq(call(2, contract, ByteString.empty)), parent => Seq(ommerOf(parent, 1)), included = 1)
       second.body.uncleNodesList should have size 1
-      storageRowsOf(contractOwner) should (be > 0 and be <= threeSlots)
+      storageRowsOf(contractOwner) should ((be > 0).and(be <= threeSlots))
 
       // block 3, the first of era 1: the contract destroys itself, and its address is paid again in the same block.
       // The account is there, with no storage: none of the old trie's rows may be left under it.

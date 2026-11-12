@@ -39,9 +39,9 @@ import com.chipprbots.ethereum.utils.BlockchainConfig
 /** Spec 018 Track C, C3c (T104, T113): on the unified state layout the mocked miner builds each block on the state its
   * parent's import left on disk, and waits for that import.
   *
-  * With the hash store the miner chains the worlds of its builds, one second apart, whether or not the block before
-  * was imported ([[MockedMinerSpec]]). Here a block's state is the one on disk or it is nowhere, so the next block is
-  * built with no inherited world, once the block before is the block whose state is held.
+  * With the hash store the miner chains the worlds of its builds, one second apart, whether or not the block before was
+  * imported ([[MockedMinerSpec]]). Here a block's state is the one on disk or it is nowhere, so the next block is built
+  * with no inherited world, once the block before is the block whose state is held.
   *
   * Time is the test's own: a tick of the miner happens when the test says a second has passed.
   */
@@ -155,7 +155,10 @@ class MockedMinerOnPositionsSpec
     rig.builds.count(_._1 == first.header.hash) shouldBe 0
   }
 
-  it should "stop at once when the state on disk is another block's at that height" taggedAs (UnitTest, ConsensusTest) in {
+  it should "stop at once when the state on disk is another block's at that height" taggedAs (
+    UnitTest,
+    ConsensusTest
+  ) in {
     val rig = new Rig
     val first = childOf(origin)
     rig.answers = Map(origin.header.hash -> List(Right(first)))
@@ -168,7 +171,10 @@ class MockedMinerOnPositionsSpec
     rig.builds.count(_._1 == first.header.hash) shouldBe 0
   }
 
-  it should "wait the same way when the state moves between its look and its build" taggedAs (UnitTest, ConsensusTest) in {
+  it should "wait the same way when the state moves between its look and its build" taggedAs (
+    UnitTest,
+    ConsensusTest
+  ) in {
     val rig = new Rig
     val first = childOf(origin)
     val second = childOf(first)
