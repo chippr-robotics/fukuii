@@ -1018,7 +1018,9 @@ class BlockPreparator(
       initialWorldStateBeforeExecution.getOrElse(
         InMemoryWorldStateProxy(
           evmCodeStorage = evmCodeStorage,
-          mptStorage = blockchain.getReadOnlyMptStorage(),
+          // On the unified layout, the parent's state under a layer of this build's own (spec 018 C3c); with the
+          // guard off, the buffer over the hash store it always was.
+          mptStorage = blockchainReader.proposerStateOn(parent).getOrElse(blockchain.getReadOnlyMptStorage()),
           // Mined blocks must answer BLOCKHASH exactly as every importer will: by the ancestry of the block being
           // built (core-geth GetHashFn), not by the canonical index. See AncestorBlockHashes.
           getBlockHashByNumber = AncestorBlockHashes.forBlock(block.header, blockchainReader),

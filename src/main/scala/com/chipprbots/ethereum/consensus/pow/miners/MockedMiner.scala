@@ -43,6 +43,11 @@ import com.chipprbots.ethereum.utils.ByteStringUtils
 object MockedMiner:
   final val BlockForgerDispatcherId = "fukuii.async.dispatchers.block-forger"
 
+  /** Ticks, one second each, that the miner waits for the import of the block it mined before it gives the run up (the
+    * unified state layout, where the next block is built on that block's state as the disk holds it).
+    */
+  final val MaxImportWaits = 10
+
   sealed trait Command
 
   /** Typed-actor envelope: carries an external [[MockedMinerProtocol]] message together with the reply target. The
@@ -162,18 +167,56 @@ private class MockedMiner(
     replyTo ! MiningOrdered
     working(mineBlocks.numBlocks, mineBlocks.withTransactions, parentBlock, None)
 
+  /** On the unified state layout, what the miner does about a parent whose state is not the one on disk: the block is
+    * built on a view of the parent, which is there once the parent's import has committed it and not before.
+    */
+  private enum ParentState:
+    case Held, Awaited, Lost
+
+  private def stateOf(parentBlock: Block): ParentState =
+    if blockchainReader.isHeldInPlace(parentBlock.header.hash.value) then ParentState.Held
+    else
+      blockchainReader.heldInPlace match
+        // the state has reached the parent's height, or passed it, as another block's: the parent was refused, or a
+        // block beside it was imported, and no wait will bring its state
+        case Some((number, _)) if number >= parentBlock.header.number.value => ParentState.Lost
+        case _                                                              => ParentState.Awaited
+
+  /** One more tick for the import of `parentBlock`, with the count of blocks left as it was; or the end of the run when
+    * [[MockedMiner.MaxImportWaits]] ticks have gone by.
+    */
+  private def awaitImport(
+      numBlocks: Int,
+      withTransactions: Boolean,
+      parentBlock: Block,
+      importWaits: Int
+  ): Behavior[Command] =
+    if importWaits >= MockedMiner.MaxImportWaits then
+      log.error(
+        "Mocked mining stopped: block {} was not imported within {} s; {} block(s) were not mined",
+        parentBlock.idTag,
+        MockedMiner.MaxImportWaits,
+        numBlocks
+      )
+      waiting()
+    else
+      log.debug("Mocked mining: waiting for the import of block {} ({})", parentBlock.idTag, importWaits + 1)
+      context.scheduleOnce(1.second, context.self, MineBlock)
+      working(numBlocks, withTransactions, parentBlock, None, importWaits + 1)
+
   def working(
       numBlocks: Int,
       withTransactions: Boolean,
       parentBlock: Block,
-      initialWorldStateBeforeExecution: Option[InMemoryWorldStateProxy]
+      initialWorldStateBeforeExecution: Option[InMemoryWorldStateProxy],
+      importWaits: Int = 0
   ): Behavior[Command] = Behaviors.receiveMessage {
     case Send(_: MineBlocks, replyTo) =>
       replyTo ! MinerIsWorking
       Behaviors.same
 
     case MineBlock =>
-      if numBlocks > 0 then
+      def build(): Behavior[Command] =
         context.pipeToSelf(
           blockCreator
             .getBlockForMining(parentBlock, withTransactions, initialWorldStateBeforeExecution)
@@ -183,9 +226,22 @@ private class MockedMiner(
           case Failure(t)      => MiningFailed(t)
         }
         Behaviors.same
-      else
+      if numBlocks <= 0 then
         log.info(s"Mining all mocked blocks successful")
         waiting()
+      else if !blockchainReader.holdsStateInPlace then build()
+      else
+        stateOf(parentBlock) match
+          case ParentState.Held    => build()
+          case ParentState.Awaited => awaitImport(numBlocks, withTransactions, parentBlock, importWaits)
+          case ParentState.Lost =>
+            log.error(
+              "Mocked mining stopped: the state on disk is not that of block {}, and is not behind it; {} block(s) " +
+                "were not mined",
+              parentBlock.idTag,
+              numBlocks
+            )
+            waiting()
 
     case MockBlockMined(PendingBlockAndState(pendingBlock, state)) =>
       val minedBlock = pendingBlock.block
@@ -200,7 +256,15 @@ private class MockedMiner(
       syncEventListener ! SyncController.WrappedSyncProtocol(SyncProtocol.MinedBlock(minedBlock))
       // because of using seconds to calculate block timestamp, we can't mine blocks faster than one block per second
       context.scheduleOnce(1.second, context.self, MineBlock)
-      working(numBlocks - 1, withTransactions, minedBlock, Some(state))
+      // On the unified state layout the next block is built on the mined block's state as its import leaves it on
+      // disk, never on the world this build left: that world reads through a view of a state the disk moves away from.
+      val inherited = if blockchainReader.holdsStateInPlace then None else Some(state)
+      working(numBlocks - 1, withTransactions, minedBlock, inherited)
+
+    case MiningFailed(_: com.chipprbots.ethereum.db.storage.pathstate.StateFault)
+        if blockchainReader.holdsStateInPlace && stateOf(parentBlock) != ParentState.Lost =>
+      // The state moved between the check and the build, or the build's view went stale: the same wait.
+      awaitImport(numBlocks, withTransactions, parentBlock, importWaits)
 
     case MiningFailed(t) =>
       log.error("Unable to get block for mining", t)

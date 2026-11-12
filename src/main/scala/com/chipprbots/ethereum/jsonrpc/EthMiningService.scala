@@ -42,6 +42,11 @@ import com.chipprbots.ethereum.transactions.TransactionPicker
 
 object EthMiningService:
 
+  /** What `eth_getWork` and `eth_submitWork` answer on the unified state layout before its overlay. */
+  val NoRouteForMinedBlocks: String =
+    "fukuii.state.path-live is on: a mined block is imported by network sync, which this node does not run until " +
+      "the unified state layout can move its head (spec 018 C4). No work is given and none is taken."
+
   case class GetMiningRequest()
   case class GetMiningResponse(isMining: Boolean)
 
@@ -109,7 +114,24 @@ class EthMiningService(
       GetMiningResponse(isMining)
     }
 
-  def getWork(@unused req: GetWorkRequest): ServiceResponse[GetWorkResponse] =
+  /** Why work is neither given nor taken on the unified state layout before its overlay; `None` with the guard off.
+    *
+    * A block that is mined reaches import through network sync, which a node on the in-development guard does not run
+    * (spec 018 C3b): it could not follow the side branches and reorganisations that come with it. So a solution
+    * submitted here would be answered `true` and the block dropped. Work is refused where it is asked for, and said so,
+    * until the head can move (C4b). `mining.mining-enabled` is refused at start for the same reason; these two methods
+    * are served with the internal miner off, so they say it themselves.
+    */
+  private def noRouteForMinedBlocks: Option[JsonRpcError] =
+    Option.when(blockchainReader.holdsStateInPlace)(JsonRpcError.LogicError(EthMiningService.NoRouteForMinedBlocks))
+
+  def getWork(req: GetWorkRequest): ServiceResponse[GetWorkResponse] =
+    noRouteForMinedBlocks.fold(workFor(req))(refusal => IO.pure(Left(refusal)))
+
+  def submitWork(req: SubmitWorkRequest): ServiceResponse[SubmitWorkResponse] =
+    noRouteForMinedBlocks.fold(workSubmitted(req))(refusal => IO.pure(Left(refusal)))
+
+  private def workFor(@unused req: GetWorkRequest): ServiceResponse[GetWorkResponse] =
     mining.ifEthash { ethash =>
       PoWMiningMetrics.recordGetWork()
       reportActive()
@@ -146,7 +168,7 @@ class EthMiningService(
           IO.pure(Left(JsonRpcError.InternalError))
     }(IO.pure(Left(JsonRpcError.MiningIsNotEthash)))
 
-  def submitWork(req: SubmitWorkRequest): ServiceResponse[SubmitWorkResponse] =
+  private def workSubmitted(req: SubmitWorkRequest): ServiceResponse[SubmitWorkResponse] =
     mining.ifEthash[ServiceResponse[SubmitWorkResponse]] { ethash =>
       reportActive()
       IO {

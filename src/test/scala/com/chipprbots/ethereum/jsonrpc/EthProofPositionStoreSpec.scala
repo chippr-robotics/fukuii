@@ -131,6 +131,16 @@ class EthProofPositionStoreSpec extends AnyFlatSpec with Matchers with MockFacto
       }
     }
 
+  // Spec 018 Track C, C3c: the pending block's state is held nowhere on the unified layout, so "pending" is the head
+  // there. The generator is a mock that expects no call: what it last prepared is not asked for.
+  it should "answer for the head when asked for the pending block on the unified layout" taggedAs UnitTest in {
+    val f = new Fixture
+    val (address, slots) = asked.head
+    val pending = f.onPositions.proof(address, slots, BlockParam.Pending)
+    pending.isRight shouldBe true
+    pending shouldBe f.onPositions.proof(address, slots, BlockParam.Latest)
+  }
+
   // Frozen. A change here is a change to what a light client verifies against a state root.
   private val golden: Map[Address, String] = Map(
     alice -> "bd469d58828db776cdd70b06abd5281d3c32dcf2adbc96e00b81cd797673b186",

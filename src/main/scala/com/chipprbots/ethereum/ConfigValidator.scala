@@ -82,8 +82,9 @@ object ConfigValidator extends Logger:
         ),
         Option.when(on("mining.mining-enabled"))(
           "fukuii.state.path-live = true (the in-development guard of the unified state layout) cannot run with " +
-            "fukuii.mining.mining-enabled = true: a block cannot be built on the unified layout until its builders " +
-            "take a view of the parent's state (spec 018 C3c). Set fukuii.mining.mining-enabled = false."
+            "fukuii.mining.mining-enabled = true: a block that is mined is imported by network sync, which this " +
+            "node does not run until the unified layout can follow a side branch and move its head (spec 018 C4), " +
+            "so the block would be mined and dropped. Set fukuii.mining.mining-enabled = false."
         ),
         Option.when(named("import-chain-file"))(
           "fukuii.state.path-live = true (the in-development guard of the unified state layout) cannot run with " +
