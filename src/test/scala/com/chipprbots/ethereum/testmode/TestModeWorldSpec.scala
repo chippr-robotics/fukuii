@@ -16,6 +16,7 @@ import com.chipprbots.ethereum.db.storage.StateStorage
 import com.chipprbots.ethereum.db.storage.pathstate.BlockRef
 import com.chipprbots.ethereum.domain.Account
 import com.chipprbots.ethereum.domain.Address
+import com.chipprbots.ethereum.domain.BlockHeader
 import com.chipprbots.ethereum.domain.UInt256
 import com.chipprbots.ethereum.ledger.InMemoryWorldStateProxy
 import com.chipprbots.ethereum.mpt.MerklePatriciaTrie
@@ -25,9 +26,9 @@ import com.chipprbots.ethereum.testing.Tags.*
   * is handed on, so that `debug_storageRangeAt` can name keys by their hashes. It must stay that world through
   * everything a block does to it, and keep what the base world keeps.
   *
-  * Spec 018 Track C, C3c: the world carried its own copy of each mutator. They did not record the storage tries a
-  * world replaces whole, which the unified state layout needs in order to delete their rows; and the base's persist
-  * built a plain world, so that after the first transaction of a block the hook was gone.
+  * Spec 018 Track C, C3c: the world carried its own copy of each mutator. They did not record the storage tries a world
+  * replaces whole, which the unified state layout needs in order to delete their rows; and the base's persist built a
+  * plain world, so that after the first transaction of a block the hook was gone.
   */
 class TestModeWorldSpec extends AnyFlatSpec with Matchers:
 
@@ -116,7 +117,7 @@ class TestModeWorldSpec extends AnyFlatSpec with Matchers:
       new Shared with LocalPruningConfigBuilder with Storages.DefaultStorages with TestInstanceConfigProvider:
         override protected def statePathLive: Boolean = true
     GenesisDataLoader.over(blockchainReader, blockchainWriter, storagesInstance.storages).loadGenesisData()
-    val genesis = blockchainReader.getBlockHeaderByNumber(0).get
+    val genesis: BlockHeader = blockchainReader.getBlockHeaderByNumber(0).get
     val pathState = storagesInstance.storages.pathStateStorage.get
 
   // The storage a block is executed on there is the storage of the whole state, which reads and writes nothing until

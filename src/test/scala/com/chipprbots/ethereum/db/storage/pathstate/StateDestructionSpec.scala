@@ -19,9 +19,9 @@ import com.chipprbots.ethereum.testing.Tags.*
   *
   * A test harness sets a new chain on one datadir before each test. On the unified layout a genesis is committed only
   * to a datadir that holds no state, so the state the test before left has to go first: every row, every changeset
-  * record, the count of pruned records, the layout stamp and the anchor, in one batch. Nothing but test mode may do
-  * it, and a reader that held a view of the state that went must be told its view is stale, never that the state has
-  * no rows.
+  * record, the count of pruned records, the layout stamp and the anchor, in one batch. Nothing but test mode may do it,
+  * and a reader that held a view of the state that went must be told its view is stale, never that the state has no
+  * rows.
   */
 class StateDestructionSpec extends AnyFlatSpec with Matchers:
 
@@ -68,8 +68,8 @@ class StateDestructionSpec extends AnyFlatSpec with Matchers:
 
   private val nothing = ((Map.empty, Map.empty), true, None, None, None)
 
-  /** The in-memory source, which says what was written to it and how, and can be made to fail a write. (A wrapper
-    * will not do here: the storages ask a source whether it is the in-memory one, to know the shape of its keys.)
+  /** The in-memory source, which says what was written to it and how, and can be made to fail a write. (A wrapper will
+    * not do here: the storages ask a source whether it is the in-memory one, to know the shape of its keys.)
     */
   final private class Recording extends EphemDataSource(Map.empty):
     import com.chipprbots.ethereum.db.dataSource.DataUpdate
@@ -120,7 +120,8 @@ class StateDestructionSpec extends AnyFlatSpec with Matchers:
     val source = EphemDataSource()
     val store = withState(source)
     val view = store.view(held)
-    val position = PositionKey(Some(owner), ByteString(com.chipprbots.ethereum.mpt.HexPrefix.encode(Array[Byte](3), false)))
+    val position =
+      PositionKey(Some(owner), ByteString(com.chipprbots.ethereum.mpt.HexPrefix.encode(Array[Byte](3), false)))
     view.read(position).map(_.toSeq) shouldBe Some(aNode.toSeq)
     store.destroyStateForNewGenesis()
     a[StaleStateViewException] should be thrownBy view.read(position)

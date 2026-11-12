@@ -253,8 +253,8 @@ final class PathStateStorage(
     * `allowsStateDestruction` only there, and without it this throws before it reads anything.
     *
     * One batch, and so point deletes and not a range delete, which is no part of a batch: there is no moment with the
-    * rows gone and the anchor still there, or the reverse. That needs the keys in memory, which is right for the
-    * states test mode makes and for no other: above [[PathStateStorage.MaxKeysDestroyed]] keys it refuses.
+    * rows gone and the anchor still there, or the reverse. That needs the keys in memory, which is right for the states
+    * test mode makes and for no other: above [[PathStateStorage.MaxKeysDestroyed]] keys it refuses.
     *
     * A view made before it is stale from the moment it starts ([[StateMoveLog.inFlightToNoState]]); after it there is
     * no anchor and no view until the next genesis commit. A write that fails leaves the datadir and the anchor as they
@@ -398,8 +398,8 @@ object PathStateStorage:
 
   private val MaxFaultsShown = 3
 
-  /** The most rows, and the most changeset keys, [[PathStateStorage.destroyStateForNewGenesis]] deletes: what one
-    * batch can hold in memory, and far more than a test's state has.
+  /** The most rows, and the most changeset keys, [[PathStateStorage.destroyStateForNewGenesis]] deletes: what one batch
+    * can hold in memory, and far more than a test's state has.
     */
   val MaxKeysDestroyed: Long = 1000000L
 
