@@ -291,7 +291,10 @@ final class PathStateStorage(
   private[pathstate] def viewOf(
       block: BlockRef,
       reader: Option[Reader] = None,
-      triesLeft: Int = ViewTries
+      triesLeft: Int = ViewTries,
+      // told, before anything is read for it, that the block is not the one the disk holds: at the look at the anchor
+      // the view itself is made from, so that whoever counts such views counts exactly those that are made
+      notTheAnchor: () => Unit = () => ()
   ): StateView =
     // The view may wait for an index another builds, and reads records to build one: under the state lock that is
     // every commit held up behind one read.
@@ -305,6 +308,7 @@ final class PathStateStorage(
       case None => throw new StateUnavailable(s"the state of block ${block.show} is not held: there is no state anchor")
       case Some(`block`) => new StateView(block, epoch, clock, rows)
       case Some(anchor) =>
+        notTheAnchor()
         val made =
           try
             windowFor(anchor, epoch).map { behind =>
@@ -324,12 +328,12 @@ final class PathStateStorage(
         made.filter(_ => clock.epoch == epoch).getOrElse {
           if clock.epoch == epoch then
             // the window was of another anchor and the epoch has not moved: the clock is read again
-            if triesLeft > 0 then viewOf(block, reader, triesLeft - 1)
+            if triesLeft > 0 then viewOf(block, reader, triesLeft - 1, notTheAnchor)
             else
               throw new StateUnavailable(s"the state of block ${block.show} is not held: the anchor could not be read")
           else if triesLeft > 0 then
             told("a view made again")(settings.observer.viewRetried())
-            viewOf(block, reader, triesLeft - 1)
+            viewOf(block, reader, triesLeft - 1, notTheAnchor)
           else
             told("a view that could not be made")(settings.observer.viewStale())
             throw new StaleStateViewException(
@@ -424,16 +428,13 @@ final class PathStateStorage(
               "be read at once are being read. Ask again",
             askAgain = true
           )
-    // before the view is made, so that one more than may be is refused before it costs a walk of the records
-    if !clock.anchor.contains(block) then counted()
-    val view = viewBehind(block, Reader.Rpc)
-    // and when the disk moved on between the look at the anchor and the view
-    if view.layered then counted()
-    view
+    // Counted when the view finds the block is not the one the disk holds, and before it reads a record for it: one
+    // more than may be is refused before it costs a walk.
+    viewBehind(block, Reader.Rpc, () => counted())
 
   /** The view of the anchor, or of a block behind it on its own chain, for a reader. */
-  private def viewBehind(block: BlockRef, reader: Reader): StateView =
-    val view = viewOf(block, Some(reader))
+  private def viewBehind(block: BlockRef, reader: Reader, notTheAnchor: () => Unit = () => ()): StateView =
+    val view = viewOf(block, Some(reader), notTheAnchor = notTheAnchor)
     if view.layers.nonEmpty then
       throw new StateUnavailable(
         s"the state of block ${block.show} is not held as a state of the chain the disk is on: it is an executed " +
