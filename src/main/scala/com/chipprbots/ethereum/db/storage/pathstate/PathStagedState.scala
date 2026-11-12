@@ -18,7 +18,7 @@ import com.chipprbots.ethereum.db.storage.MptStorage
   * @param parent
   *   the block whose state the execution starts from
   */
-final class PathStagedState private[pathstate] (val parent: BlockRef, view: StateView):
+final class PathStagedState private[pathstate] (val parent: BlockRef, private[pathstate] val view: StateView):
 
   private[pathstate] val changes = new StagedChanges
 

@@ -30,6 +30,16 @@ final class StaleStateViewException(val block: BlockRef, val createdAtEpoch: Lon
 /** There is no layer, record or path from the anchor for the state asked for. */
 final class StateUnavailable(val reason: String) extends StateFault(s"State unavailable: $reason")
 
+/** A view over forward layers met a node that is not the one its parent names, with the disk under it at rest: the
+  * layers and the rows do not make up the state the view is of. It is no fault of a block and no stale read: reading
+  * again finds the same. The layers are dropped and their blocks executed again. It is never taken for a corrupt row:
+  * what a corrupt row is answered with deletes it, and this row may be another state's good node (beacon).
+  */
+final class LayerInconsistent(val block: BlockRef, detail: String)
+    extends StateFault(
+      s"The executed blocks kept for the state at block ${block.show} do not make up that state: $detail"
+    )
+
 /** Why a move of the head was refused. */
 enum ReorgRefusal:
 

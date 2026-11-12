@@ -65,24 +65,39 @@ final class PathMptStorage private (
     written(hash).getOrElse(stored(PositionKey.at(trie, path), hash))
 
   override def get(nodeId: Array[Byte]): MptNode =
-    written(nodeId).getOrElse {
-      view.read(PositionKey.AccountRoot) match
-        case Some(encoded) if Arrays.equals(kec256(encoded), nodeId) =>
-          decoded(PositionKey.AccountRoot, encoded, nodeId)
-        case _ => throw new MissingNodeException(ByteString(nodeId))
-    }
+    written(nodeId)
+      // a node one of the view's forward layers leaves: its bytes were hashed when the layer was made
+      .orElse(view.layerNode(ByteString.fromArrayUnsafe(nodeId)).map(MptStorage.decodeNode(_, nodeId)))
+      .getOrElse {
+        view.read(PositionKey.AccountRoot) match
+          case Some(encoded) if Arrays.equals(kec256(encoded), nodeId) =>
+            decoded(PositionKey.AccountRoot, encoded, nodeId)
+          case _ => throw new MissingNodeException(ByteString(nodeId))
+      }
 
   /** The node at `position` in the view, which must be the one `hash` names. */
   private def stored(position: PositionKey, hash: Array[Byte]): MptNode =
-    view.read(position) match
-      case None => throw new MissingNodeException(ByteString(hash)).withLocation(position.hp)
-      case Some(encoded) =>
+    view.readFrom(position) match
+      // A layer's word does not change, and the hash was read through this same view: asked again, it is the same.
+      case (None, true) =>
+        throw new LayerInconsistent(view.block, s"a layer leaves no node at ${position.show}, where one is named")
+      case (None, false) => throw new MissingNodeException(ByteString(hash)).withLocation(position.hp)
+      case (Some(encoded), fromLayer) =>
         if Arrays.equals(kec256(encoded), hash) then decoded(position, encoded, hash)
+        else if fromLayer then
+          throw new LayerInconsistent(view.block, s"a layer leaves another node at ${position.show} than is named")
         else if view.isAnchorViewNow then
           throw new CorruptNodeException(
             ByteString(hash),
             s"the row of ${position.show} is another node",
             location = Some(position.hp)
+          )
+        else if view.layered && view.diskHalfAtRestNow then
+          // The disk is at rest on this view's base, so the row is the base's: the layers were not built on it. Never
+          // a corrupt row: what that is answered with deletes it, and it may be another state's good node.
+          throw new LayerInconsistent(
+            view.block,
+            s"the row of ${position.show} in the state of block ${view.base.show} is another node than is named"
           )
         else
           throw new StaleStateViewException(

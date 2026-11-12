@@ -53,7 +53,13 @@ object StateLayout:
 /** One in-place change of the state on disk (data-model 6.3.1): the anchor it moves to, and for every position its
   * batch writes, the value a reader of the state '''before''' the move must see there (`None`: no row).
   */
-final case class StateMove(newAnchor: BlockRef, pre: Map[PositionKey, Option[ByteString]])
+final case class StateMove(newAnchor: BlockRef, pre: Map[PositionKey, Option[ByteString]]):
+
+  /** `pre`, for the positions of one storage trie: what a scan of that trie's rows is put right with. */
+  private lazy val preByOwner: Map[ByteString, Map[PositionKey, Option[ByteString]]] =
+    pre.groupBy(_._1.owner).collect { case (Some(owner), positions) => owner -> positions }
+
+  def preOf(owner: ByteString): Map[PositionKey, Option[ByteString]] = preByOwner.getOrElse(owner, Map.empty)
 
 /** The clock of in-place moves, as a reader sees it. The epoch is even while the disk is at rest and odd while a batch
   * is being written.
@@ -181,19 +187,32 @@ final class StateMoveLog(maxMoves: Int, initialAnchor: Option[BlockRef]) extends
 
 /** A view of the state of one block (data-model 6.1, 6.3), able to say what any position held in that state.
   *
-  * This is the view of the '''anchor''': the block whose state is on disk when the view is made. A read is a point read
-  * of the row, corrected by the log of moves when the disk has moved since. Views of other blocks (forward layers, the
-  * reverse index) arrive with the overlay (C4a).
+  * The view of the '''anchor''', the block whose state is on disk when the view is made, has no layers: a read is a
+  * point read of the row, corrected by the log of moves when the disk has moved since. The view of a block that was
+  * executed on the anchor's state and is not on disk has that block's '''forward layers''' in front of the same read:
+  * the newest layer that wrote a position answers for it (data-model 6.2). The view holds its layers itself, so what it
+  * reads does not change when a layer is promoted to the disk or dropped: the rows under it stay those of its [[base]]
+  * through the log of moves, for as long as the log reaches back. Views of blocks behind the anchor (the reverse index)
+  * come next.
   *
   * @param createdAt
   *   the even epoch at which the view was made
+  * @param forward
+  *   the layers between the state on disk and this view's, newest first; none for the view of the anchor
   */
 final class StateView private[pathstate] (
     val block: BlockRef,
     val createdAt: Long,
     clock: StateClock,
-    rows: PathNodeStorage
+    rows: PathNodeStorage,
+    forward: List[ForwardLayer] = Nil
 ):
+
+  /** The block whose state the disk held when the view was made: what the rows under the layers are the state of. */
+  val base: BlockRef = forward.lastOption.fold(block)(_.parent)
+
+  /** Whether this view reads through layers. */
+  def layered: Boolean = forward.nonEmpty
 
   /** What position `p` held in this view's state: the stored node's RLP, or `None` for no row.
     *
@@ -204,7 +223,19 @@ final class StateView private[pathstate] (
     * @throws StaleStateViewException
     *   when the log no longer reaches back to the view
     */
-  def read(p: PositionKey): Option[Array[Byte]] =
+  def read(p: PositionKey): Option[Array[Byte]] = readFrom(p)._1
+
+  /** [[read]], and whether a layer answered: a node a layer gives is this view's whatever the disk does. */
+  private[pathstate] def readFrom(p: PositionKey): (Option[Array[Byte]], Boolean) =
+    forward.iterator.map(_.lookup(p)).collectFirst { case Some(left) => left.map(_.toArray) } match
+      case Some(answer) => (answer, true)
+      case None         => (onDiskAsOfBase(p), false)
+
+  /** A node one of this view's layers leaves, by its hash. */
+  private[pathstate] def layerNode(hash: ByteString): Option[Array[Byte]] =
+    forward.iterator.map(_.byHash.get(hash)).collectFirst { case Some(node) => node.toArray }
+
+  private def onDiskAsOfBase(p: PositionKey): Option[Array[Byte]] =
     val onDisk = rows.read(p)
     val now = clock.epoch
     if now == createdAt then onDisk
@@ -226,12 +257,95 @@ final class StateView private[pathstate] (
     * anchor. Decided when asked, never remembered: a mismatch found on such a view is the disk's own fault, while on
     * any other view it only means the disk has moved on.
     */
-  def isAnchorViewNow: Boolean = clock.epoch == createdAt && clock.anchor.contains(block)
+  def isAnchorViewNow: Boolean = forward.isEmpty && clock.epoch == createdAt && clock.anchor.contains(block)
+
+  /** Whether the rows under this view are, right now, the state it takes them for: nothing has moved since it was made
+    * and its base is the anchor. A mismatch met then will be met again by the next read.
+    */
+  def diskHalfAtRestNow: Boolean = clock.epoch == createdAt && clock.anchor.contains(base)
+
+  /** The rows of the storage trie of `owner` in this view's state, or `None` when they are more than `maxRows` or hold
+    * more than `maxBytes` (data-model 3.6): what a block that replaces that trie whole must list as gone.
+    *
+    * The disk's rows of the owner are scanned, with no lock held. They are put right by the moves since the view was
+    * made: every position of the owner a move wrote is given the value the earliest such move found there, so a row a
+    * move deleted is back and a row a move created is gone, whichever side of a batch a chunk of the scan fell on. The
+    * epoch is read after the scan, so a batch that could have touched it is among those moves. Then the layers are laid
+    * over, oldest first. The bounds are held to the result, which is the state's, and not to the scan: a block decides
+    * the same here as it would committed in place over the same state (beacon, forge).
+    *
+    * @throws StaleStateViewException
+    *   when the log no longer reaches back to the view
+    */
+  def ownerRows(owner: ByteString, maxRows: Int, maxBytes: Long): Option[Seq[(PositionKey, ByteString)]] =
+    val laid: Map[PositionKey, Option[ByteString]] =
+      forward.reverseIterator.foldLeft(Map.empty[PositionKey, Option[ByteString]])(_ ++ _.ofOwner(owner))
+
+    // What the disk may hold for this owner that the state does not: a row a layer replaces or removes, and a row a
+    // move has written since. The scan is allowed that many more, each of at most a stored node and its key. Moves go
+    // on while it runs, so the allowance is taken again after it, and the scan made again if it was too small.
+    def allowance(): Int = laid.size + movedSince().map(_.preOf(owner).size).sum
+    def movedSince(): Seq[StateMove] =
+      val now = clock.epoch
+      if now == createdAt then Nil
+      else
+        clock
+          .movesBetween(createdAt, now)
+          .getOrElse(
+            throw new StaleStateViewException(
+              block,
+              createdAt,
+              now,
+              "the log of state moves no longer reaches back to it"
+            )
+          )
+
+    @annotation.tailrec
+    def scan(extra: Int, triesLeft: Int): Option[(Seq[(PositionKey, ByteString)], Seq[StateMove])] =
+      val limit = (maxRows.toLong + extra).min(Int.MaxValue.toLong).toInt
+      val bytes =
+        if maxBytes > Long.MaxValue - extra.toLong * StateView.MaxRowBytes then Long.MaxValue
+        else maxBytes + extra.toLong * StateView.MaxRowBytes
+      val scanned = rows.storageRows(owner, limit, bytes)
+      val moves = movedSince()
+      val needed = laid.size + moves.iterator.map(_.preOf(owner).size).sum
+      scanned match
+        case Some(found)             => Some((found, moves))
+        case None if needed <= extra => None
+        case None if triesLeft == 0 =>
+          throw new StaleStateViewException(block, createdAt, clock.epoch, "the disk moved on under a scan of its rows")
+        case None => scan(needed, triesLeft - 1)
+
+    scan(allowance(), StateView.ScanTries).flatMap { (found, moves) =>
+      val state = scala.collection.mutable.HashMap.from(found)
+      val settled = scala.collection.mutable.HashSet.empty[PositionKey]
+      // the earliest move that wrote a position knows what the view's base held there
+      moves.foreach(_.preOf(owner).foreach { (position, before) =>
+        if settled.add(position) then
+          before match
+            case Some(node) => state.update(position, node)
+            case None       => state.remove(position)
+      })
+      laid.foreach {
+        case (position, Some(node)) => state.update(position, node)
+        case (position, None)       => state.remove(position)
+      }
+      val held = state.iterator.map((position, node) => position.rowKey.length.toLong + node.length).sum
+      Option.when(state.size <= maxRows && held <= maxBytes)(state.toSeq)
+    }
 
   /** The epoch right now, for a fault that reports how far the disk has moved on. */
   def epochNow: Long = clock.epoch
 
 object StateView:
+
+  /** More than a row of a storage trie holds: the largest stored node (a branch of sixteen hashes and a value) and its
+    * key (the owner and a hex-prefix path). What a scan is allowed for each row the disk may hold beside the state's.
+    */
+  private val MaxRowBytes: Long = 1024L
+
+  /** How often a scan of an owner's rows is made again because moves went on while it ran. */
+  private val ScanTries: Int = 3
 
   /** The block before any block: what a view of no state is a view of. */
   private val BeforeGenesis: BlockRef =
