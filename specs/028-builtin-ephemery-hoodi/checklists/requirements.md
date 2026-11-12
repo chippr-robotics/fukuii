@@ -13,7 +13,7 @@
 
 ## Requirement Completeness
 
-- [x] No [NEEDS CLARIFICATION] markers remain (FR-016 answered by the user, 2026-11-12: switch in place)
+- [x] No [NEEDS CLARIFICATION] markers remain (FR-016 answered by the user, 2026-11-12: warn and exit for a supervisor restart)
 - [x] Requirements are testable and unambiguous
 - [x] Success criteria are measurable
 - [x] Success criteria are technology-agnostic (no implementation details)
@@ -34,6 +34,7 @@
 - The spec names some interfaces that operators already use, because they are part of the product's surface:
   `fukuii ephemery` and `fukuii hoodi`, `FUKUII_CONF_DIR`, `scripts/ephemery/fetch-genesis.sh`, the ephemery-genesis
   releases, HTTPS, and go-ethereum as the reference for Hoodi's values. It names no internal module, class or library.
-- **FR-016** was the one open question, about a running node at a reset. The user chose to switch iteration in place,
-  so that long-running services survive resets. It is now the largest part of the work, and the plan must design it
-  first: stopping and restarting the chain's components inside one process.
+- **FR-016** was the one open question, about a running node at a reset. The user's final answer was to warn and exit
+  for a supervisor restart, after briefly choosing an in-place switch. The research put an in-place switch at a sweep
+  of about 25 global config reads plus a split of the node object, which is too much for a reset pattern only Ephemery
+  uses.

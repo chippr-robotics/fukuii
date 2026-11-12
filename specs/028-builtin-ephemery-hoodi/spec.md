@@ -4,10 +4,11 @@
 
 **Created**: 2026-11-12
 
-**Status**: Clarified (2026-11-12). Written from the user's decisions of 2026-11-12: bundle Ephemery with a
-self-refresh at reset, switch a running node to the new iteration in place (FR-016), add Hoodi, dev-node implements.
+**Status**: Planned (2026-11-12). Built from the user's decisions of 2026-11-12: bundle Ephemery with a
+self-refresh at startup; at a reset, a running node warns and exits for a supervisor restart (FR-016); add Hoodi;
+dev-node implements. Plan: slices S1, S2, S3, S4a, S4b and S5 in [plan.md](./plan.md).
 
-**In flight**: `spec/028-builtin-ephemery-hoodi` (`dev-node`, local session): spec clarified; plan next
+**In flight**: `spec/028-builtin-ephemery-hoodi` (`dev-node`, local session): plan written; tasks next
 
 **Input**: User request of 2026-11-12, "Ephemery should be shipped with fukuii by default same as mordor, hoodi, and
 sepolia", and the answers that followed: bundle the current Ephemery iteration plus a startup self-refresh after the
@@ -140,35 +141,25 @@ check the result in each case. With a prepared directory configured, check that 
 
 ---
 
-### User Story 5 - A node running across a reset switches in place (Priority: P2)
+### User Story 5 - A node running across a reset exits for a restart (Priority: P3)
 
-A long-running Ephemery node, run as a service for the network (an RPC endpoint, a bootnode, a validator's EL),
-reaches its iteration's reset time. It moves onto the new iteration by itself, without exiting, so the service stays
-up across resets.
+A long-running Ephemery node, run under a supervisor, reaches its iteration's reset time. It says so and exits
+cleanly, and the supervisor's restart lands it on the new iteration.
 
-**Why this priority**: The user chose this so that long-running Ephemery services do not need an operator, or a
-supervisor restart, every 28 days. Every running node meets a reset every 28 days.
+**Why this priority**: Every running Ephemery node meets a reset every 28 days. Today it just stops following, without
+saying why. The user chose a clean exit over an in-place switch (FR-016).
 
-**Independent Test**: Run the node with a controllable clock and a fake release server. Cross the reset time, then
-check four things:
-- the same process is still running and its listeners never closed;
-- the old chain's components stopped;
-- the new iteration was fetched, validated and opened in its own datadir;
-- the node is syncing the new chain with its new chain id and fork id.
+**Independent Test**: Run the node with a controllable clock that crosses its reset time. Check that:
+- it logs the WARN;
+- it shuts down cleanly with the documented exit code;
+- a restart against a fake release server holding the next iteration starts on that iteration.
 
 **Acceptance Scenarios**:
 
-1. **Given** a running node and a published next iteration, **When** the reset time passes, **Then** it logs at WARN
-   that the iteration has ended, obtains and validates the new iteration, and continues on it in its own datadir. The
-   process does not exit.
-2. **Given** that switch, **When** a client calls JSON-RPC, WebSocket or the Engine API during and after it, **Then**
-   the listeners stay open. Chain-dependent answers reflect a node syncing the new chain from genesis until it has
-   caught up.
-3. **Given** the next iteration is not yet published at the reset time, **When** the node reaches the reset, **Then**
-   it stops serving the old chain as current, logs that it is waiting for the new iteration, and retries on a bounded
-   schedule until it can switch.
-4. **Given** a consensus client still on the old iteration, **When** it sends old-chain payloads after the switch,
-   **Then** fukuii does not import them.
+1. **Given** a running node, **When** its iteration's reset time passes, **Then** it logs at WARN that the iteration
+   has ended and shuts down cleanly with the documented exit code.
+2. **Given** that node under a supervisor that restarts on that exit code, **When** it restarts, **Then** it refreshes
+   onto the new iteration (User Story 2).
 
 ---
 
@@ -181,8 +172,11 @@ check four things:
   ended; N+1 is not published yet".
 - **Network trouble.** A partial download, a truncated archive or a TLS failure is refused. Nothing partial is cached,
   and the next start tries again.
-- **Retracted release.** A published release is retracted and republished with a different hash. The cached copy's
-  hash no longer matches the published one, so the node fetches again.
+- **Retracted release.** A published release is retracted and republished with a different hash.
+  - The node can see this only when it fetches, and it does not fetch while its iteration is current (SC-003). Until
+    then the stale copy runs, and its peers refuse it through the fork-id check, which the node reports as zero peers.
+  - When a fetch does find iteration N with a hash other than the cached copy's, the node refuses with both hashes.
+    It never deletes the old copy or its datadir: the operator moves them aside (plan research R6).
 - **Old datadirs.** A datadir from an earlier iteration exists. It is left untouched, never deleted by the node. The
   node logs where earlier iterations' datadirs are and how much space they use.
 - **Explicit datadir.** The operator set an explicit datadir. The per-iteration subdirectory is created under it, so
@@ -244,28 +238,23 @@ check four things:
   - point the node at a local copy of a release, instead of the default source.
 - **FR-015**: A directory prepared by `fetch-genesis.sh` and launched with `FUKUII_CONF_DIR` MUST keep working
   unchanged. If such a directory is configured, it MUST take precedence over the bundled and refreshed iteration.
-- **FR-016**: When a running node passes its iteration's reset time, it MUST switch to the new iteration in place,
-  without the process exiting (user, 2026-11-12: "it would allow long running services for the network"). The switch
-  MUST:
-  - log a WARN that names the ended iteration;
-  - obtain the new iteration as in FR-004 to FR-008, retrying within a bounded schedule until it is published;
-  - stop everything that belongs to the old chain: sync, peers and their handshakes, and the transaction pool;
-  - open the new iteration's datadir (FR-009);
-  - start again on the new genesis, chain id, fork schedule and bootnodes.
+- **FR-016**: When a running node passes its iteration's reset time, it MUST:
+  - log a WARN that names the ended iteration and says a restart picks up the next one;
+  - shut down cleanly, with a distinct, documented exit code.
 
-  A process with a single running chain does not change for anything outside the chain:
-  - The process, its configuration, its JSON-RPC, WebSocket and Engine API listeners, its JWT secret, its metrics
-    endpoint and the TUI stay up across the switch.
-  - Until the new chain is ready, chain-dependent requests answer as a node that is syncing from genesis would.
-  - If the switch cannot complete (the new iteration cannot be obtained, cannot be represented, or fails to start), the
-    node MUST log an ERROR naming the cause and keep retrying on its schedule. It MUST NOT keep serving the old chain
-    as current.
-- **FR-016a**: A consensus client attached over the Engine API must also move to the new iteration. When it sends
-  payloads or forkchoice updates for the old chain after the switch, fukuii MUST answer them as unknown-chain payloads
-  and MUST NOT import them. The new iteration's consensus-layer files (FR-017) MUST be in place, and their path logged,
-  before the switch completes.
-- **FR-017**: The node MUST unpack the release's consensus-layer network directory next to its cache and log its path,
-  so a consensus client can be pointed at the same iteration without a separate download.
+  A supervisor (systemd `Restart=`, a container runtime) then restarts it, and the restart refreshes onto the new
+  iteration under FR-004 to FR-009. The node does not switch iterations in place.
+
+  The user chose this on 2026-11-12, after briefly choosing an in-place switch. The research showed that switching in
+  place needs a sweep of about 25 global chain-config reads and a split of the node object. That is a lot of work for
+  a reset pattern only Ephemery uses. The exit code and the supervisor setup are documented in the runbook.
+- **FR-017**: Whenever the node or `fukuii cli ephemery-fetch` fetches a release, it MUST unpack the release's
+  consensus-layer network directory next to its cache and log its path. A consensus client can then be pointed at the
+  same iteration without a separate download.
+  - **The bundled iteration** does not carry these files: `genesis.ssz` alone is 7.3 MB. FR-005 forbids fetching them
+    while the iteration is current, unless the operator asks.
+  - **So for it**, the startup log names the one command that fetches them.
+  - **Amended at planning, 2026-11-12** (research R10).
 
 **Hoodi**
 
@@ -321,10 +310,10 @@ check four things:
 - **SC-006**: All ETC, Mordor and Gorgoroth tests pass unchanged, and no ETC chain configuration changes.
 - **SC-007**: Live check on dev-node: `fukuii ephemery`, with a consensus client and no `FUKUII_CONF_DIR`, follows the
   live iteration for 24 hours.
-- **SC-008**: Across a reset, the same node process keeps running with no operator action. The live check is the
-  166 reset, due around 2026-11-19, if the code is ready by then; otherwise a test reset with a controllable clock.
-  Within 10 minutes of the new iteration being published, the node is importing the new chain. Its listeners stay open
-  throughout.
+- **SC-008**: Across a reset, a node under a supervisor reaches the new iteration with no operator action. It exits at
+  the reset with the documented code, and its restart refreshes and starts on the new iteration within 10 minutes of
+  that iteration's publication. The live check is the 166 reset, due around 2026-11-19, if the code is ready by then;
+  otherwise a test reset with a controllable clock.
 
 ## Assumptions
 
