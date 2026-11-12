@@ -159,6 +159,9 @@ final class PathStateStorage(
       finally indexesBeingBuilt.remove(key, gate)
     }
 
+  /** How many indexes are being built, or waited for, right now: none when no view is being made. */
+  private[pathstate] def indexBuildsInFlight: Int = indexesBeingBuilt.size
+
   /** What the overlay holds right now (data-model 6.4, 11). */
   def overlayUsage: OverlayUsage =
     overlay.usage.copy(reverseIndexes = indexes.size, reverseBytes = indexes.bytes)

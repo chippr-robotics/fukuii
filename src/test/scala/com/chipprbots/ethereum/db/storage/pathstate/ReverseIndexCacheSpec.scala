@@ -62,6 +62,15 @@ class ReverseIndexCacheSpec extends AnyFlatSpec with Matchers with LayerChains:
       cache.find(index.from, index.to, 6L, reader = true).exists(_ eq again) shouldBe true
       cache.find(index.from, index.to, 4L, reader = true) shouldBe None
 
+      // and of nothing else: the one that is replaced is not counted beside its own successor
+      val two = new ReverseIndexCache(maxKept = 2, maxBytes = Long.MaxValue)
+      two.keep(byDepth(1), 4L, reader = true)
+      two.keep(byDepth(3), 4L, reader = true)
+      two.keep(back(3), 6L, reader = true)
+      two.size shouldBe 2
+      two.find(byDepth(1).from, byDepth(1).to, 4L, reader = true) should not be empty
+      two.find(index.from, index.to, 6L, reader = true) should not be empty
+
       cache.clear()
       cache.size shouldBe 0
       cache.bytes shouldBe 0L

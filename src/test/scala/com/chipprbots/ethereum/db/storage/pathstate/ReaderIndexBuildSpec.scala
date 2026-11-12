@@ -124,6 +124,8 @@ class ReaderIndexBuildSpec extends AnyFlatSpec with Matchers with LayerChains:
       moved shouldBe true
       chain.state.anchor shouldBe Some(next.ref)
       told.retried.get shouldBe 1
+      // no index was built for the view that was not to be: one, for the view that was made
+      told.built.get shouldBe 1
       // the view is of the new anchor's epoch, and reads the block's state through the records up to the new anchor
       chain.readThrough(storage, refs(3))
       // and the look that is kept is the new anchor's
@@ -153,12 +155,14 @@ class ReaderIndexBuildSpec extends AnyFlatSpec with Matchers with LayerChains:
       while other._1.getState != Thread.State.BLOCKED && other._1.isAlive do Thread.onSpinWait()
       other._1.isAlive shouldBe true
       told.built.get shouldBe 1
+      chain.state.indexBuildsInFlight shouldBe 1
       letGo.countDown()
       val storages: Seq[MptStorage] = Seq(ended(one), ended(other))
       source.onRecordRead = () => ()
 
       told.built.get shouldBe 2
       told.refused.get shouldBe 0
+      chain.state.indexBuildsInFlight shouldBe 0
       storages.foreach(chain.readThrough(_, refs(2)))
       // and who asks after reads no record
       recordReads(chain.readThrough(chain.state.readOnlyBehind(refs(2)), refs(2))) shouldBe 0
@@ -177,6 +181,7 @@ class ReaderIndexBuildSpec extends AnyFlatSpec with Matchers with LayerChains:
           letGo.await()
       val held = Seq(1, 2).map(n => onThread(s"held reader $n")(chain.state.readOnlyBehind(refs(n))))
       inTheBuild.await()
+      chain.state.indexBuildsInFlight shouldBe 2
 
       // a third reader, of another block: refused, and told so in words a caller can act on
       val refusal = the[StateUnavailable] thrownBy chain.state.readOnlyBehind(refs(3))
@@ -201,6 +206,8 @@ class ReaderIndexBuildSpec extends AnyFlatSpec with Matchers with LayerChains:
       // the two are done: a reader builds again
       chain.readThrough(chain.state.readOnlyBehind(refs(4)), refs(4))
       told.refused.get shouldBe 2
+      // and nothing is left of the builds that were refused, or made
+      chain.state.indexBuildsInFlight shouldBe 0
     }
 
   it should "be free to build again after a build that failed" taggedAs UnitTest in {
@@ -213,6 +220,7 @@ class ReaderIndexBuildSpec extends AnyFlatSpec with Matchers with LayerChains:
     }
     told.refused.get shouldBe 0
     told.built.get shouldBe 0
+    chain.state.indexBuildsInFlight shouldBe 0
   }
 
   "What readers keep" should "cost an execution none of its indexes, however many blocks they read" taggedAs
