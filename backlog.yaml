@@ -2540,3 +2540,13 @@ items:
       heartbeat: 2026-11-12T20:33:40Z
       branch: fix/tui-key-test-pace
     notes: "'should run the quit hook off the updater thread on q' failed at TuiUpdaterSpec.scala:84: tt.press then one tick whose key read waits only the 20 ms test pace; JLine's input pump can take longer on a loaded runner, so the read expires and tick returns true. Same pattern at :101 and :117."
+  - id: B-225
+    title: "fukuii ephemery: the not-configured error should name the custom-chains-dir it searched and the FUKUII_CONF_DIR launch"
+    priority: P3
+    status: open
+    area: ops
+    size: S
+    opened: 2026-11-12
+    refs: [user report 2026-11-12]
+    links: {}
+    notes: "Config.scala:355 says 'run scripts/ephemery/fetch-genesis.sh first', which misleads when fetch-genesis ran with --out elsewhere: the CLI default is ~/.fukuii/ephemery-network/current/chains, and the generated conf must be passed with FUKUII_CONF_DIR=<out>/current/conf."
