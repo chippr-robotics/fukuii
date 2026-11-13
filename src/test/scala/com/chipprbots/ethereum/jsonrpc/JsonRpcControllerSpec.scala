@@ -343,9 +343,9 @@ class JsonRpcControllerSpec
     base.forApis(Seq("eth", "miner")).handleRequest(setEtherbase).unsafeRunSync().error shouldBe None
     coinbase.handleRequest(newJsonRpcRequest("eth_coinbase")).unsafeRunSync() should haveStringResult(address)
 
-  // Spec 018 Track C, C2b: a state that is not held, where the method did not answer it itself, is the error a client
-  // already gets for a missing state node, and not an internal error.
-  it should "answer a state fault that escapes a method with the error for a missing state node" taggedAs (
+  // Spec 018 Track C, C2b: a state that is not held, where the method did not answer it itself, is the error that says
+  // so, and not an internal error. C4a part 4: and not an execution error, which a client takes for a revert.
+  it should "answer a state fault that escapes a method with the error for a state that is not held" taggedAs (
     UnitTest,
     RPCTest
   ) in new JsonRpcControllerFixture:
@@ -353,7 +353,10 @@ class JsonRpcControllerSpec
     val net: JsonRpcController = jsonRpcController.forApis(Seq("net"))
 
     netService.versionFn = _ => IO.raiseError(new StateUnavailable("the state of block 9 is not held"))
-    net.handleRequest(newJsonRpcRequest("net_version")).unsafeRunSync() should haveError(JsonRpcError.NodeNotFound)
+    net.handleRequest(newJsonRpcRequest("net_version")).unsafeRunSync() should haveError(JsonRpcError.StateNotHeld)
+    // one that is held and not handed out right now is one to ask for again
+    netService.versionFn = _ => IO.raiseError(new StateUnavailable("too many reads in flight", askAgain = true))
+    net.handleRequest(newJsonRpcRequest("net_version")).unsafeRunSync() should haveError(JsonRpcError.StateBusy)
 
     // any other failure is still an internal error
     netService.versionFn = _ => IO.raiseError(new IllegalStateException("not about the state"))

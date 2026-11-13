@@ -65,6 +65,7 @@ object StateMetrics extends MetricsContainer with PathStateStorage.CommitObserve
   private val indexBuilds = metrics.counter("db.state.overlay.reverse.builds")
   private val indexBuildBytes = metrics.distribution("db.state.overlay.reverse.build.bytes")
   private val indexRefusals = metrics.counter("db.state.overlay.reverse.refused")
+  private val readRefusals = metrics.counter("db.state.view.behind.refused")
   private val viewRetries = metrics.counter("db.state.view.retries")
   private val viewsStale = metrics.counter("db.state.view.stale")
 
@@ -79,6 +80,8 @@ object StateMetrics extends MetricsContainer with PathStateStorage.CommitObserve
     indexBuildBytes.record(bytes.toDouble)
 
   override def indexRefused(): Unit = indexRefusals.increment()
+
+  override def readRefused(): Unit = readRefusals.increment()
 
   override def viewRetried(): Unit = viewRetries.increment()
 

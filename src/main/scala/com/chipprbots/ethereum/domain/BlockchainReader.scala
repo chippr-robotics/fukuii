@@ -46,19 +46,23 @@ class BlockchainReader(
     *
     * With the in-development guard off, which is how the node ships, this is the read-only store every reader could
     * already take: a buffer over the hash store, so that a reader that persists by accident writes nowhere. With it on,
-    * a view of the position store.
+    * a view of the position store: of the block the disk holds, for any caller; and of a canonical block '''behind'''
+    * it that the changeset records lead back to, for a caller that reads inside a
+    * [[com.chipprbots.ethereum.db.storage.pathstate.ReadScope]], which is how the reads behind the head that are in
+    * flight are counted and bounded. Never of an executed block that is kept beside the chain.
     *
     * @throws com.chipprbots.ethereum.db.storage.pathstate.StateUnavailable
-    *   with the guard on, when that block's state is not held
+    *   with the guard on, when that block's state is not held, or is behind the head and the caller is in no scope; and
+    *   with `askAgain` when as many reads behind the head as may be are in flight
     */
   def stateAt(header: BlockHeader): MptStorage =
-    pathState.fold(stateStorage.getReadOnlyStorage)(_.readOnly(refOf(header)))
+    pathState.fold(stateStorage.getReadOnlyStorage)(_.readOnlyInScope(refOf(header)))
 
   /** The same state, for an execution that commits nothing (`eth_call`, a simulation, a trace): what it persists is
     * kept beside the state, read back by that execution, and dropped with the storage.
     */
   def scratchStateAt(header: BlockHeader): MptStorage =
-    pathState.fold(stateStorage.getReadOnlyStorage)(_.throwaway(refOf(header)))
+    pathState.fold(stateStorage.getReadOnlyStorage)(_.throwawayInScope(refOf(header)))
 
   /** The state a block is BUILT on, when the unified layout holds it: `parent`'s state under a layer of this build's
     * own, which takes what the build persists, is read back by it, and is dropped with the storage. `None` with the
@@ -105,7 +109,7 @@ class BlockchainReader(
           // the disk may move between the lookup and the view: a state that is no longer held is not served
           try
             Some(
-              if block == held then state.readOnly(held) else state.readOnlyBehind(block, PathStateStorage.Reader.Peer)
+              if block == held then state.readOnly(held) else state.readOnlyForPeer(block)
             )
           catch case _: StateFault => None
         }

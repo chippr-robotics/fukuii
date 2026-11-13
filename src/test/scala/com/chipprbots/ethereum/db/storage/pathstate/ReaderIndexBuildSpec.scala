@@ -237,6 +237,7 @@ class ReaderIndexBuildSpec extends AnyFlatSpec with Matchers with LayerChains:
       // a third peer, of another block: refused, and told so in words a caller can act on
       val refusal = the[StateUnavailable] thrownBy behind(refs(3))
       refusal.getMessage should include("Ask again")
+      refusal.askAgain shouldBe true
       told.refused.get shouldBe 1
       // one that asks for a block that is being built waits for it, and needs no leave: it is not refused
       val waits = onThread("the peer that waits")(behind(refs(1)))
@@ -277,6 +278,8 @@ class ReaderIndexBuildSpec extends AnyFlatSpec with Matchers with LayerChains:
     (1 to 5).foreach { n =>
       val failure = the[StateUnavailable] thrownBy behind(refs(n))
       (failure.getMessage should not).include("Ask again")
+      // asking again changes nothing
+      failure.askAgain shouldBe false
     }
     told.refused.get shouldBe 0
     told.built.get shouldBe 0
@@ -309,7 +312,7 @@ class ReaderIndexBuildSpec extends AnyFlatSpec with Matchers with LayerChains:
       val rig = new Rig(settings = _.copy(maxReverseHops = 3))
       import rig.*
       chain.readThrough(behind(refs(refs.size - 4)), refs(refs.size - 4))
-      a[StateUnavailable] should be thrownBy behind(refs(refs.size - 5))
+      (the[StateUnavailable] thrownBy behind(refs(refs.size - 5))).askAgain shouldBe false
       a[StateUnavailable] should be thrownBy chain.state.stageOf(refs(refs.size - 5))
     }
 

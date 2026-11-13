@@ -172,7 +172,8 @@ final class PathStateStorage(
               told("an index a reader was refused")(settings.observer.indexRefused())
               throw new StateUnavailable(
                 s"the state of block ${fork.show} is not available right now: as many states behind the head as " +
-                  "may be read at once are being read. Ask again"
+                  "may be read at once are being read. Ask again",
+                askAgain = true
               )
             try
               // built and kept between the look above and now
@@ -290,7 +291,10 @@ final class PathStateStorage(
   private[pathstate] def viewOf(
       block: BlockRef,
       reader: Option[Reader] = None,
-      triesLeft: Int = ViewTries
+      triesLeft: Int = ViewTries,
+      // told, before anything is read for it, that the block is not the one the disk holds: at the look at the anchor
+      // the view itself is made from, so that whoever counts such views counts exactly those that are made
+      notTheAnchor: () => Unit = () => ()
   ): StateView =
     // The view may wait for an index another builds, and reads records to build one: under the state lock that is
     // every commit held up behind one read.
@@ -304,6 +308,7 @@ final class PathStateStorage(
       case None => throw new StateUnavailable(s"the state of block ${block.show} is not held: there is no state anchor")
       case Some(`block`) => new StateView(block, epoch, clock, rows)
       case Some(anchor) =>
+        notTheAnchor()
         val made =
           try
             windowFor(anchor, epoch).map { behind =>
@@ -323,12 +328,12 @@ final class PathStateStorage(
         made.filter(_ => clock.epoch == epoch).getOrElse {
           if clock.epoch == epoch then
             // the window was of another anchor and the epoch has not moved: the clock is read again
-            if triesLeft > 0 then viewOf(block, reader, triesLeft - 1)
+            if triesLeft > 0 then viewOf(block, reader, triesLeft - 1, notTheAnchor)
             else
               throw new StateUnavailable(s"the state of block ${block.show} is not held: the anchor could not be read")
           else if triesLeft > 0 then
             told("a view made again")(settings.observer.viewRetried())
-            viewOf(block, reader, triesLeft - 1)
+            viewOf(block, reader, triesLeft - 1, notTheAnchor)
           else
             told("a view that could not be made")(settings.observer.viewStale())
             throw new StaleStateViewException(
@@ -365,14 +370,82 @@ final class PathStateStorage(
     * @throws IllegalStateException
     *   when the calling thread holds the state lock
     */
-  def readOnlyBehind(block: BlockRef, reader: Reader): MptStorage =
-    val view = viewOf(block, Some(reader))
+  private[pathstate] def readOnlyBehind(block: BlockRef, reader: Reader): MptStorage =
+    PathMptStorage.readOnly(viewBehind(block, reader))
+
+  /** [[readOnlyBehind]] for a peer that is served a state by its root: one request at a time, each done with its state
+    * before the next is taken, so that what peers hold is one state. Whoever reads otherwise reads in a scope
+    * ([[readOnlyInScope]]), where what is in flight is counted: this door counts nothing.
+    */
+  def readOnlyForPeer(block: BlockRef): MptStorage = readOnlyBehind(block, Reader.Peer)
+
+  /** How many reads of a state behind the anchor callers of the JSON-RPC may have in flight. */
+  private val readsBehind = new Semaphore(settings.maxReadsBehindHead)
+
+  /** How many reads behind the anchor are in flight in the scopes of JSON-RPC callers right now. */
+  def readsBehindInFlight: Int = settings.maxReadsBehindHead - readsBehind.availablePermits
+
+  /** [[readOnlyBehind]] for a caller of the JSON-RPC, and for anyone whose reads are not one at a time: '''the state of
+    * a block behind the anchor is handed out only inside a [[ReadScope]], and to no more than `maxReadsBehindHead`
+    * blocks' readers at once.'''
+    *
+    * What is made of the records for such a state lives as long as anything reads through it, kept or not, so the
+    * builds and the kept indexes being bounded does not bound what callers hold between them: the reads in flight do. A
+    * scope is counted once for each block it reads behind the anchor, however many states of that block it takes, and
+    * is counted no more when it ends. One more is refused, at once and not queued: the caller asks again, and nothing a
+    * caller asks for is waited for by anyone else.
+    *
+    * The anchor's own state is handed out as ever: with no scope and no count.
+    *
+    * @throws StateUnavailable
+    *   as [[readOnlyBehind]]; when `block` is behind the anchor and the caller is in no scope; and, to be asked again
+    *   (`askAgain`), when as many reads behind the anchor as may be are in flight
+    */
+  def readOnlyInScope(block: BlockRef): MptStorage = PathMptStorage.readOnly(viewInScope(block))
+
+  /** [[readOnlyInScope]] for an execution that commits nothing (`eth_call`, a simulation, a trace at a block of the
+    * chain): what it persists is kept beside the view, read back by that execution, and dropped with the storage.
+    * Nothing is written, no layer is kept, and no layer is read through or counted as used.
+    */
+  def throwawayInScope(block: BlockRef): MptStorage = PathMptStorage.throwaway(viewInScope(block))
+
+  private def viewInScope(block: BlockRef): StateView =
+    def counted(): Unit = ReadScope.ambient match
+      case None =>
+        throw new StateUnavailable(
+          s"the state of block ${block.show} is not the state the disk holds, and this caller reads no other"
+        )
+      case Some(scope) =>
+        val has = scope.leave(this, block.hash) {
+          Option.when(readsBehind.tryAcquire())(() => readsBehind.release())
+        }
+        if !has then
+          told("a read behind the head that was refused")(settings.observer.readRefused())
+          // A scope that holds every leave itself is not helped by asking again: it reads more blocks behind the
+          // head at once than anyone may.
+          if scope.holds(this) >= settings.maxReadsBehindHead then
+            throw new StateUnavailable(
+              s"the state of block ${block.show} is not read: one request reads the states of more than " +
+                s"${settings.maxReadsBehindHead} blocks behind the head at once"
+            )
+          throw new StateUnavailable(
+            s"the state of block ${block.show} is not available right now: as many states behind the head as may " +
+              "be read at once are being read. Ask again",
+            askAgain = true
+          )
+    // Counted when the view finds the block is not the one the disk holds, and before it reads a record for it: one
+    // more than may be is refused before it costs a walk.
+    viewBehind(block, Reader.Rpc, () => counted())
+
+  /** The view of the anchor, or of a block behind it on its own chain, for a reader. */
+  private def viewBehind(block: BlockRef, reader: Reader, notTheAnchor: () => Unit = () => ()): StateView =
+    val view = viewOf(block, Some(reader), notTheAnchor = notTheAnchor)
     if view.layers.nonEmpty then
       throw new StateUnavailable(
         s"the state of block ${block.show} is not held as a state of the chain the disk is on: it is an executed " +
           "block kept beside it"
       )
-    PathMptStorage.readOnly(view)
+    view
 
   /** `block`'s state for an execution that commits nothing: what it persists is kept beside the view and dropped with
     * the storage (`eth_call`, a simulation, a trace, a payload being built).
@@ -1092,7 +1165,10 @@ object PathStateStorage:
       // how much the indexes that are kept hold together.
       maxReverseHops: Int = 1024,
       maxReverseIndexBytes: Long = 64L * 1024 * 1024,
-      maxReversePoolBytes: Long = 128L * 1024 * 1024
+      maxReversePoolBytes: Long = 128L * 1024 * 1024,
+      // How many reads of a state behind the anchor callers of the JSON-RPC may have in flight: each may hold an
+      // index of maxReverseIndexBytes that is not kept. A constant until it is measured (M5).
+      maxReadsBehindHead: Int = 4
   )
 
   object CommitSettings:
@@ -1178,6 +1254,9 @@ object PathStateStorage:
     /** A reader was refused a state behind the anchor: as many indexes as readers may build at once were being built.
       */
     def indexRefused(): Unit = ()
+
+    /** A caller was refused a state behind the anchor: as many reads behind it as may be were in flight. */
+    def readRefused(): Unit = ()
 
     /** `layers` executed blocks were evicted to make room: each eviction is told once. */
     def evicted(layers: Long): Unit = ()

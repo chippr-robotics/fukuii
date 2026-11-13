@@ -2,8 +2,6 @@ package com.chipprbots.ethereum.jsonrpc
 
 import org.apache.pekko.util.ByteString
 
-import cats.effect.IO
-
 import scala.collection.mutable
 import scala.util.boundary
 import scala.util.boundary.break
@@ -347,11 +345,13 @@ class EthSimulateService(
   given bcConfig: BlockchainConfig = blockchainConfig
 
   def ethSimulate(req: EthSimulateRequest): ServiceResponse[EthSimulateResponse] =
-    IO {
-      doSimulate(req)
-    }.recover { case _: MissingNodeException =>
-      Left(JsonRpcError.NodeNotFound)
-    }
+    StateRead
+      .reading {
+        doSimulate(req)
+      }
+      .recover { case _: MissingNodeException =>
+        Left(JsonRpcError.NodeNotFound)
+      }
 
   private def doSimulate(req: EthSimulateRequest): Either[JsonRpcError, EthSimulateResponse] = boundary {
     // go-ethereum SimulateV1 (internal/ethapi/api.go:886-887): no blocks to simulate is `invalidParamsError{"empty

@@ -137,12 +137,13 @@ object TestService:
   case class GetLogHashRequest(transactionHash: ByteString)
   case class GetLogHashResponse(logHash: ByteString)
 
-  /** What a request that needs the state of a block other than the head is answered with on the unified state layout,
-    * before its overlay (spec 018 C4a): a reorganisation to a branch that outweighs the head, above all.
+  /** What a test-mode request that needs the state of a block other than the head is answered with on the unified state
+    * layout, until the head can move to another branch (spec 018 C4b): a reorganisation to a branch that outweighs the
+    * head, above all. Test mode reads in no scope of reads, so it reads the head's state and no other.
     */
   val HeadStateOnly: String =
-    "the unified state layout (fukuii.state.path-live) holds the state of its head alone until its overlay, and " +
-      "this needs the state of another block"
+    "on the unified state layout (fukuii.state.path-live) test mode reads the state of its head alone, and this " +
+      "needs the state of another block"
 
   /** What `test_setChainParams` is answered with there when a write of it failed. */
   val ChainNotSet: String = "the chain was not set"

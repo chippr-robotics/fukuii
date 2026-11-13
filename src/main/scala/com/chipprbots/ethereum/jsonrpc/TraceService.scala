@@ -108,12 +108,14 @@ class TraceService(
     stxLedger: StxLedger,
     transactionMappingStorage: TransactionMappingStorage,
     // go-ethereum --rpc.gascap, as for eth_call (TraceCall runs CallDefaults with the backend's RPCGasCap)
-    gasCap: BigInt = CallTxBuilder.DefaultGasCap
+    gasCap: BigInt = CallTxBuilder.DefaultGasCap,
+    // the rules of the chain the blocks are replayed under: the node's, unless a caller serves another chain
+    chainConfig: BlockchainConfig = Config.blockchains.blockchainConfig
 ) extends ResolveBlock:
 
   import TraceService.*
 
-  implicit private val blockchainConfig: BlockchainConfig = Config.blockchains.blockchainConfig
+  implicit private val blockchainConfig: BlockchainConfig = chainConfig
 
   /** Implements trace_transaction.
     *
@@ -125,39 +127,41 @@ class TraceService(
     * transactionHash, transactionPosition, blockHash, blockNumber
     */
   def traceTransaction(req: TraceTransactionRequest): ServiceResponse[TraceTransactionResponse] =
-    IO {
-      for
-        location <- transactionMappingStorage
-          .get(req.txHash)
-          .toRight(JsonRpcError.InvalidParams("Transaction not found"))
-        TransactionLocation(blockHash, txIndex) = location
-        block <- blockchainReader
-          .getBlockByHash(BlockHash(blockHash))
-          .toRight(JsonRpcError.InvalidParams(s"Block not found for hash ${blockHash.toHex}"))
-        parentHeader <- blockchainReader
-          .getBlockHeaderByHash(block.header.parentHash)
-          .toRight(JsonRpcError.InvalidParams("Parent block not found"))
-        stxs = SignedTransactionWithSender.getSignedTransactionsOfBlock(block.header, block.body.transactionList)
-        _ <- Either.cond(
-          txIndex >= 0 && txIndex < stxs.length,
-          (),
-          JsonRpcError.InvalidParams(s"Transaction index $txIndex out of range")
-        )
-        targetStx = stxs(txIndex)
-        world = stxLedger.advanceWorldToTx(block.header, stxs, txIndex, parentHeader)
-        tracer = new CallTracer(onlyTopCall = false)
-        _ = stxLedger.replayTransaction(targetStx, block.header, world, Some(tracer))
-        flat = flattenCallTree(
-          tracer.getResult,
-          req.txHash,
-          txIndex,
-          block.header.hash.value,
-          block.header.number.value
-        )
-      yield TraceTransactionResponse(flat)
-    }.recover { case _: MissingNodeException =>
-      Left(JsonRpcError.NodeNotFound)
-    }
+    StateRead
+      .reading {
+        for
+          location <- transactionMappingStorage
+            .get(req.txHash)
+            .toRight(JsonRpcError.InvalidParams("Transaction not found"))
+          TransactionLocation(blockHash, txIndex) = location
+          block <- blockchainReader
+            .getBlockByHash(BlockHash(blockHash))
+            .toRight(JsonRpcError.InvalidParams(s"Block not found for hash ${blockHash.toHex}"))
+          parentHeader <- blockchainReader
+            .getBlockHeaderByHash(block.header.parentHash)
+            .toRight(JsonRpcError.InvalidParams("Parent block not found"))
+          stxs = SignedTransactionWithSender.getSignedTransactionsOfBlock(block.header, block.body.transactionList)
+          _ <- Either.cond(
+            txIndex >= 0 && txIndex < stxs.length,
+            (),
+            JsonRpcError.InvalidParams(s"Transaction index $txIndex out of range")
+          )
+          targetStx = stxs(txIndex)
+          world = stxLedger.advanceWorldToTx(block.header, stxs, txIndex, parentHeader)
+          tracer = new CallTracer(onlyTopCall = false)
+          _ = stxLedger.replayTransaction(targetStx, block.header, world, Some(tracer))
+          flat = flattenCallTree(
+            tracer.getResult,
+            req.txHash,
+            txIndex,
+            block.header.hash.value,
+            block.header.number.value
+          )
+        yield TraceTransactionResponse(flat)
+      }
+      .recover { case _: MissingNodeException =>
+        Left(JsonRpcError.NodeNotFound)
+      }
 
   /** Implements trace_block.
     *
@@ -166,18 +170,20 @@ class TraceService(
     * core-geth reference: TraceBlock() iterates block txs and produces flat trace per tx.
     */
   def traceBlock(req: TraceBlockRequest): ServiceResponse[TraceBlockResponse] =
-    IO {
-      for
-        resolved <- resolveBlock(req.block)
-        block = resolved.block
-        parentHeader <- blockchainReader
-          .getBlockHeaderByHash(block.header.parentHash)
-          .toRight(JsonRpcError.InvalidParams("Parent block not found"))
-        traces = traceAllTxsFlat(block, parentHeader)
-      yield TraceBlockResponse(traces)
-    }.recover { case _: MissingNodeException =>
-      Left(JsonRpcError.NodeNotFound)
-    }
+    StateRead
+      .reading {
+        for
+          resolved <- resolveBlock(req.block)
+          block = resolved.block
+          parentHeader <- blockchainReader
+            .getBlockHeaderByHash(block.header.parentHash)
+            .toRight(JsonRpcError.InvalidParams("Parent block not found"))
+          traces = traceAllTxsFlat(block, parentHeader)
+        yield TraceBlockResponse(traces)
+      }
+      .recover { case _: MissingNodeException =>
+        Left(JsonRpcError.NodeNotFound)
+      }
 
   /** Implements trace_replayTransaction.
     *
@@ -188,33 +194,35 @@ class TraceService(
     * for trace.
     */
   def replayTransaction(req: TraceReplayTransactionRequest): ServiceResponse[TraceReplayTransactionResponse] =
-    IO {
-      for
-        location <- transactionMappingStorage
-          .get(req.txHash)
-          .toRight(JsonRpcError.InvalidParams("Transaction not found"))
-        TransactionLocation(blockHash, txIndex) = location
-        block <- blockchainReader
-          .getBlockByHash(BlockHash(blockHash))
-          .toRight(JsonRpcError.InvalidParams(s"Block not found for hash ${blockHash.toHex}"))
-        parentHeader <- blockchainReader
-          .getBlockHeaderByHash(block.header.parentHash)
-          .toRight(JsonRpcError.InvalidParams("Parent block not found"))
-        stxs = SignedTransactionWithSender.getSignedTransactionsOfBlock(block.header, block.body.transactionList)
-        _ <- Either.cond(
-          txIndex >= 0 && txIndex < stxs.length,
-          (),
-          JsonRpcError.InvalidParams(s"Transaction index $txIndex out of range")
-        )
-        targetStx = stxs(txIndex)
-        world = stxLedger.advanceWorldToTx(block.header, stxs, txIndex, parentHeader)
-        result = buildReplayResult(block, req.txHash, txIndex, req.options)(tracer =>
-          stxLedger.replayTransaction(targetStx, block.header, world, Some(tracer))
-        )
-      yield TraceReplayTransactionResponse(result)
-    }.recover { case _: MissingNodeException =>
-      Left(JsonRpcError.NodeNotFound)
-    }
+    StateRead
+      .reading {
+        for
+          location <- transactionMappingStorage
+            .get(req.txHash)
+            .toRight(JsonRpcError.InvalidParams("Transaction not found"))
+          TransactionLocation(blockHash, txIndex) = location
+          block <- blockchainReader
+            .getBlockByHash(BlockHash(blockHash))
+            .toRight(JsonRpcError.InvalidParams(s"Block not found for hash ${blockHash.toHex}"))
+          parentHeader <- blockchainReader
+            .getBlockHeaderByHash(block.header.parentHash)
+            .toRight(JsonRpcError.InvalidParams("Parent block not found"))
+          stxs = SignedTransactionWithSender.getSignedTransactionsOfBlock(block.header, block.body.transactionList)
+          _ <- Either.cond(
+            txIndex >= 0 && txIndex < stxs.length,
+            (),
+            JsonRpcError.InvalidParams(s"Transaction index $txIndex out of range")
+          )
+          targetStx = stxs(txIndex)
+          world = stxLedger.advanceWorldToTx(block.header, stxs, txIndex, parentHeader)
+          result = buildReplayResult(block, req.txHash, txIndex, req.options)(tracer =>
+            stxLedger.replayTransaction(targetStx, block.header, world, Some(tracer))
+          )
+        yield TraceReplayTransactionResponse(result)
+      }
+      .recover { case _: MissingNodeException =>
+        Left(JsonRpcError.NodeNotFound)
+      }
 
   /** Implements trace_replayBlockTransactions.
     *
@@ -225,24 +233,26 @@ class TraceService(
   def replayBlockTransactions(
       req: TraceReplayBlockTransactionsRequest
   ): ServiceResponse[TraceReplayBlockTransactionsResponse] =
-    IO {
-      for
-        resolved <- resolveBlock(req.block)
-        block = resolved.block
-        parentHeader <- blockchainReader
-          .getBlockHeaderByHash(block.header.parentHash)
-          .toRight(JsonRpcError.InvalidParams("Parent block not found"))
-        stxs = SignedTransactionWithSender.getSignedTransactionsOfBlock(block.header, block.body.transactionList)
-        results = stxs.zipWithIndex.map { case (stx, txIndex) =>
-          val world = stxLedger.advanceWorldToTx(block.header, stxs, txIndex, parentHeader)
-          buildReplayResult(block, stx.tx.hash.value, txIndex, req.options)(tracer =>
-            stxLedger.replayTransaction(stx, block.header, world, Some(tracer))
-          )
-        }
-      yield TraceReplayBlockTransactionsResponse(results)
-    }.recover { case _: MissingNodeException =>
-      Left(JsonRpcError.NodeNotFound)
-    }
+    StateRead
+      .reading {
+        for
+          resolved <- resolveBlock(req.block)
+          block = resolved.block
+          parentHeader <- blockchainReader
+            .getBlockHeaderByHash(block.header.parentHash)
+            .toRight(JsonRpcError.InvalidParams("Parent block not found"))
+          stxs = SignedTransactionWithSender.getSignedTransactionsOfBlock(block.header, block.body.transactionList)
+          results = stxs.zipWithIndex.map { case (stx, txIndex) =>
+            val world = stxLedger.advanceWorldToTx(block.header, stxs, txIndex, parentHeader)
+            buildReplayResult(block, stx.tx.hash.value, txIndex, req.options)(tracer =>
+              stxLedger.replayTransaction(stx, block.header, world, Some(tracer))
+            )
+          }
+        yield TraceReplayBlockTransactionsResponse(results)
+      }
+      .recover { case _: MissingNodeException =>
+        Left(JsonRpcError.NodeNotFound)
+      }
 
   /** Implements trace_call.
     *
@@ -252,14 +262,16 @@ class TraceService(
     * from the call parameters.
     */
   def traceCall(req: TraceCallRequest): ServiceResponse[TraceCallResponse] =
-    IO {
-      for
-        resolved <- resolveBlock(req.block)
-        result <- traceCallResult(req.call, resolved, req.options)
-      yield TraceCallResponse(result)
-    }.recover { case _: MissingNodeException =>
-      Left(JsonRpcError.NodeNotFound)
-    }
+    StateRead
+      .reading {
+        for
+          resolved <- resolveBlock(req.block)
+          result <- traceCallResult(req.call, resolved, req.options)
+        yield TraceCallResponse(result)
+      }
+      .recover { case _: MissingNodeException =>
+        Left(JsonRpcError.NodeNotFound)
+      }
 
   /** Implements trace_callMany.
     *
@@ -268,17 +280,19 @@ class TraceService(
     * Besu does not implement this method; core-geth alignment only.
     */
   def traceCallMany(req: TraceCallManyRequest): ServiceResponse[TraceCallManyResponse] =
-    IO {
-      for resolved <- resolveBlock(req.block)
-      yield
-        val results: Seq[JValue] = req.calls.map { case (callTx, options) =>
-          traceCallResult(callTx, resolved, options)
-            .getOrElse(JNull)
-        }
-        TraceCallManyResponse(results)
-    }.recover { case _: MissingNodeException =>
-      Left(JsonRpcError.NodeNotFound)
-    }
+    StateRead
+      .reading {
+        for resolved <- resolveBlock(req.block)
+        yield
+          val results: Seq[JValue] = req.calls.map { case (callTx, options) =>
+            traceCallResult(callTx, resolved, options)
+              .getOrElse(JNull)
+          }
+          TraceCallManyResponse(results)
+      }
+      .recover { case _: MissingNodeException =>
+        Left(JsonRpcError.NodeNotFound)
+      }
 
   // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -444,7 +458,8 @@ class TraceService(
               .getBlockByNumber(branch, blockNum)
               .flatMap { block =>
                 blockchainReader.getBlockHeaderByHash(block.header.parentHash).map { parentHeader =>
-                  val flat = traceAllTxsFlat(block, parentHeader)
+                  // one scope of reads for each block of the range, held for this block and no longer
+                  val flat = StateRead.scoped(traceAllTxsFlat(block, parentHeader))
                   applyAddressFilter(flat, req.fromAddress, req.toAddress)
                 }
               }

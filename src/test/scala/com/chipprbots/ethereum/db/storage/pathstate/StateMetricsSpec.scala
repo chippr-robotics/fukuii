@@ -102,6 +102,9 @@ class StateMetricsSpec extends AnyFlatSpec with Matchers:
       StateMetrics.indexBuilt(300L)
       StateMetrics.indexBuilt(200L)
       StateMetrics.indexRefused()
+      val readsRefused = counter("db.state.view.behind.refused")
+      StateMetrics.readRefused()
+      counter("db.state.view.behind.refused") shouldBe readsRefused + 1
       counter("db.state.overlay.reverse.builds") shouldBe builds + 2
       built.totalAmount() shouldBe bytesBuilt + 500
       counter("db.state.overlay.reverse.refused") shouldBe refused + 1
