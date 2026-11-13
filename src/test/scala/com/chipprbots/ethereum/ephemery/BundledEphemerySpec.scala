@@ -1,5 +1,10 @@
 package com.chipprbots.ethereum.ephemery
 
+import java.nio.file.Files
+import java.nio.file.Paths
+
+import scala.jdk.CollectionConverters.*
+
 import org.scalatest.flatspec.AnyFlatSpec
 import org.scalatest.matchers.should.Matchers
 
@@ -58,4 +63,28 @@ class BundledEphemerySpec extends AnyFlatSpec with Matchers:
     tampered should not be text.genesisJson
     ReleaseEntry.verify(text.metadata, text.chainConf, tampered).isLeft shouldBe true
     ReleaseEntry.verify("{}", text.chainConf, text.genesisJson).isLeft shouldBe true
+  }
+
+  it should "be named by index.txt, which matches the bundled directories exactly" taggedAs UnitTest in {
+    val index = Paths.get(getClass.getResource("/" + BundleSource.IndexFile).toURI)
+    val listed = Files.readAllLines(index).asScala.map(_.trim).filter(_.nonEmpty).toList
+    val dirs =
+      val s = Files.list(index.getParent)
+      try s.iterator().asScala.filter(Files.isDirectory(_)).map(_.getFileName.toString).toList.sorted
+      finally s.close()
+    listed shouldBe dirs
+    listed shouldBe List("ephemery-165")
+    // each is a directory of exactly the three files of an entry
+    dirs.foreach { d =>
+      val files = Files.list(index.getParent.resolve(d))
+      val names =
+        try files.iterator().asScala.map(_.getFileName.toString).toList.sorted
+        finally files.close()
+      names shouldBe List("ephemery-chain.conf", "ephemery-genesis.json", "release.json")
+    }
+  }
+
+  it should "be read through the index: an iteration the index does not list is not found" taggedAs UnitTest in {
+    BundleSource.classpath.entries().map(_.name) shouldBe List("ephemery-165")
+    BundleSource.none.entries() shouldBe Nil
   }

@@ -62,7 +62,7 @@ class EphemeryPropertyHandoverSpec extends AnyFlatSpec with Matchers with Before
     val settings = Settings.from(before)
     val result = EphemeryResolver.resolve(
       settings,
-      StartupDeps(Clock.fixed(inside165, ZoneOffset.UTC), ReleaseTransport.Refusing, _ => ()),
+      StartupDeps(Clock.fixed(inside165, ZoneOffset.UTC), RefusingTransport, _ => ()),
       BundleSource.classpath
     )
     result.properties.foreach { case (k, v) => System.setProperty(k, v) }
@@ -93,7 +93,7 @@ class EphemeryPropertyHandoverSpec extends AnyFlatSpec with Matchers with Before
       val settings = Settings.from(load())
       val result = EphemeryResolver.resolve(
         settings,
-        StartupDeps(Clock.fixed(inside165, ZoneOffset.UTC), ReleaseTransport.Refusing, _ => ()),
+        StartupDeps(Clock.fixed(inside165, ZoneOffset.UTC), RefusingTransport, _ => ()),
         BundleSource.classpath
       )
       result.properties.foreach { case (k, v) => System.setProperty(k, v) }

@@ -21,5 +21,5 @@ object EphemeryForkedHarness:
   def main(args: Array[String]): Unit =
     val anchor = Instant.ofEpochSecond(args.head.toLong)
     val clock = Clock.offset(Clock.systemUTC(), Duration.between(Instant.now(), anchor))
-    val deps = StartupDeps(clock, ReleaseTransport.Refusing, code => sys.exit(code))
+    val deps = StartupDeps(clock, RefusingTransport, code => sys.exit(code))
     App.run(args.tail, deps)

@@ -51,7 +51,7 @@ class EphemeryResolverSpec extends AnyFlatSpec with Matchers with BeforeAndAfter
   private def read(p: Path): String = new String(Files.readAllBytes(p), StandardCharsets.UTF_8)
 
   private def deps(at: Instant): StartupDeps =
-    StartupDeps(Clock.fixed(at, ZoneOffset.UTC), ReleaseTransport.Refusing, _ => ())
+    StartupDeps(Clock.fixed(at, ZoneOffset.UTC), RefusingTransport, _ => ())
 
   private def settings(
       network: String = "ephemery",

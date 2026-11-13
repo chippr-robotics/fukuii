@@ -11,7 +11,7 @@
 #      --out <tmp>. The script downloads the release and the fukuii rule engine validates it and writes the files:
 #      it refuses, and this script stops, when the release does not validate (a hash mismatch, a feature fukuii cannot
 #      represent, ...);
-#   3. replaces src/main/resources/ephemery/bundled/ephemery-* with ephemery-N/{ephemery-chain.conf,
+#   3. replaces src/main/resources/ephemery/bundled/ephemery-* (and index.txt, which names the iteration) with ephemery-N/{ephemery-chain.conf,
 #      ephemery-genesis.json, release.json};
 #   4. copies the raw execution-layer inputs (genesis.json, retention.vars, deposit_contract_block_hash.txt,
 #      enodes.txt, boot_enr.txt) from <tmp>/ephemery-N/testnet/ to src/test/resources/ephemery/releases/ephemery-N/,
@@ -67,12 +67,14 @@ done
 rm -rf "${BUNDLED:?}"/ephemery-*
 mkdir -p "$BUNDLED/$RELEASE" "$RAW"
 cp "$SRC/chains/ephemery-chain.conf" "$SRC/chains/ephemery-genesis.json" "$SRC/release.json" "$BUNDLED/$RELEASE/"
+echo "$RELEASE" > "$BUNDLED/index.txt"
 for f in genesis.json retention.vars deposit_contract_block_hash.txt enodes.txt boot_enr.txt; do
   [[ -f "$SRC/testnet/$f" ]] && cp "$SRC/testnet/$f" "$RAW/$f"
 done
 
 echo
 echo "Bundled $RELEASE. Add these files (and remove the old iteration's, if git shows deletions):"
+echo "  git add $BUNDLED/index.txt"
 echo "  git add $BUNDLED/$RELEASE/ephemery-chain.conf $BUNDLED/$RELEASE/ephemery-genesis.json $BUNDLED/$RELEASE/release.json"
 for f in genesis.json retention.vars deposit_contract_block_hash.txt enodes.txt boot_enr.txt; do
   [[ -f "$RAW/$f" ]] && echo "  git add $RAW/$f"
