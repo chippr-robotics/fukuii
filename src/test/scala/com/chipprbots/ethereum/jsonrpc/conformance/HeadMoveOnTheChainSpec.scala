@@ -307,3 +307,132 @@ class HeadMoveOnTheChainSpec extends ScalaTestWithActorTestKit with AnyFlatSpecL
       on.index shouldBe Vector(chain.head.header.hash.value)
       on.disk shouldBe stateOf(chain.head.header)
     }
+
+  "A writer of the head" should "refuse on the unified layout to move the best block or the index without the state" taggedAs
+    (UnitTest, ConsensusTest) in {
+      val on = new Node
+      val chain = blocks.take(4)
+      chain.foreach(on.imports)
+      val before = on.everything
+      val refusals: Seq[(String, () => Unit)] = Seq(
+        "saveBestKnownBlocks" -> (() =>
+          on.writer.saveBestKnownBlocks(chain(1).header.hash, chain(1).header.number.value)
+        ),
+        "setCanonicalChainHead" -> (() =>
+          on.writer
+            .setCanonicalChainHead(chain(1).header.number.value, chain(1).header.hash, chain.last.header.number.value)
+        ),
+        "rewriteCanonicalIndex" -> (() =>
+          on.writer.rewriteCanonicalIndex(Nil, Seq(chain.last.header.number.value), None, on.reader)
+        ),
+        "removeBlock" -> (() => on.node.blockchain.removeBlock(chain.last.header.hash)),
+        // not in test mode: the chain is not removed for a new genesis either
+        "removeChainForNewGenesis" -> (() => on.node.blockchain.removeChainForNewGenesis())
+      )
+      refusals.foreach { (named, write) =>
+        withClue(s"$named: ") {
+          an[IllegalStateException] should be thrownBy write()
+          on.everything shouldBe before
+        }
+      }
+      on.holds(chain.last.header, chain)
+    }
+
+  "A batch that moves the head" should "not be written over a best block that another writer moved alone" taggedAs
+    (UnitTest, ConsensusTest) in {
+      val on = new Node
+      val chain = blocks.take(5)
+      chain.take(4).foreach(on.imports)
+      // a writer that moves the best block without the state (a defect the guards above are there to stop)
+      val appState = on.node.storagesInstance.storages.appStateStorage
+      appState
+        .putBestBlockInfo(com.chipprbots.ethereum.domain.appstate.BlockInfo(chain(1).header.hash.value, 2))
+        .commit()
+      val before = on.everything
+      // neither a block's commit nor a move is written over it
+      (the[IllegalStateException] thrownBy on.imports(chain(4))).getMessage should
+        include("is not the block the state is held at")
+      // (contract code is kept by its hash as a block is executed, outside its batch, on either layout: nothing of the
+      // head is in it)
+      val code = com.chipprbots.ethereum.db.storage.Namespaces.CodeNamespace.head
+      val after = on.everything
+      val changed = (after.keySet ++ before.keySet).filter(key => after.get(key) != before.get(key))
+      changed.filterNot(_.head == code) shouldBe empty
+      val beforeMove = on.everything
+      (the[IllegalStateException] thrownBy on.move(chain(1).header)).getMessage should
+        include("is not the block the state is held at")
+      on.everything shouldBe beforeMove
+      on.pathState.moveInProgress shouldBe false
+      // nor the caller's rows for the head as it is: a move to the block the state is at
+      (the[IllegalStateException] thrownBy on.move(on.headerOf(on.pathState.anchor.get))).getMessage should
+        include("is not the block the state is held at")
+      on.everything shouldBe beforeMove
+      // the best block's own hash with another number is no less a best block moved alone
+      val anchor = on.pathState.anchor.get
+      appState
+        .putBestBlockInfo(com.chipprbots.ethereum.domain.appstate.BlockInfo(anchor.hash, anchor.number + 1))
+        .commit()
+      val beforeAgain = on.everything
+      an[IllegalStateException] should be thrownBy on.move(chain(1).header)
+      on.everything shouldBe beforeAgain
+    }
+
+  "A move in the node" should "not be written without the rows that move the best block with the state" taggedAs
+    (UnitTest, ConsensusTest) in {
+      val on = new Node
+      val chain = blocks.take(4)
+      chain.foreach(on.imports)
+      val before = on.everything
+      (the[IllegalStateException] thrownBy on.pathState.moveHead(
+        refOf(chain(1).header),
+        on.link,
+        _ => None
+      )).getMessage should
+        include("without the rows that move the best block")
+      on.everything shouldBe before
+      on.holds(chain.last.header, chain)
+    }
+
+  "The link a move is planned from" should "be the header stored under a hash, and never a row of the index of blocks by number" taggedAs
+    (UnitTest, ConsensusTest) in {
+      val on = new Node
+      val chain = blocks.take(5)
+      chain.foreach(on.imports)
+      val storages = on.node.storagesInstance.storages
+      // a reader whose index of blocks by number throws at every read
+      val numbers = new com.chipprbots.ethereum.db.storage.BlockNumberMappingStorage(on.source):
+        override def get(key: BigInt): Option[com.chipprbots.ethereum.db.storage.BlockHeadersStorage.BlockHeaderHash] =
+          throw new IllegalStateException(s"the index of blocks by number was read, at $key")
+      val byHashOnly = new com.chipprbots.ethereum.domain.BlockchainReader(
+        storages.blockHeadersStorage,
+        storages.blockBodiesStorage,
+        numbers,
+        storages.stateStorage,
+        storages.receiptStorage,
+        storages.appStateStorage,
+        storages.chainWeightStorage,
+        storages.blockAccessListStorage,
+        storages.pathStateStorage
+      )
+      val head = chain.last.header
+      byHashOnly.headerLink(head.hash.value) shouldBe Some(HeadMovePlan.Link(refOf(head), head.parentHash.value))
+      byHashOnly.headerLink(ByteString(new Array[Byte](32))) shouldBe None
+      byHashOnly.ancestorAt(head, 2).map(_.hash) shouldBe Some(chain(1).header.hash)
+      byHashOnly.ancestorAt(head, head.number.value).map(_.hash) shouldBe Some(head.hash)
+      byHashOnly.ancestorAt(chain(1).header, 4) shouldBe None
+      // a move down planned and made by that link alone
+      on.pathState.moveHead(
+        refOf(chain(1).header),
+        byHashOnly.headerLink,
+        c => Some(on.writer.canonicalHeadUpdate(on.headerOf(c.head), on.reader).batch)
+      )
+      on.holds(chain(1).header, chain.take(2))
+
+      // a header stored under a hash that is not its own is no link, and no ancestor is found through one
+      val headers = storages.blockHeadersStorage
+      val elsewhere = ByteString(Array.fill[Byte](32)(7))
+      headers.put(elsewhere, chain(1).header).commit()
+      byHashOnly.headerLink(elsewhere) shouldBe None
+      headers.put(chain(1).header.hash.value, chain(2).header).commit()
+      byHashOnly.ancestorAt(head, 1) shouldBe None
+    }

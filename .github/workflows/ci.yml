@@ -78,6 +78,10 @@ jobs:
       - name: Check the state accessor allow-list (spec 018)
         run: scripts/check-state-accessors.sh
 
+      # HeadWriterRatchetSpec runs the same script in the test step; here it fails before the compile.
+      - name: Check the head writer allow-list (spec 018)
+        run: scripts/check-head-writers.sh
+
       - name: Compile all modules
         run: sbt compile-all
         env:

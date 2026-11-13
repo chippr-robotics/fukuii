@@ -277,9 +277,7 @@ class TestService(
         // (`refusalOnTheUnifiedLayout`); what fails here is a write, and it is answered as an error, with a datadir
         // that holds no chain or the state of the old one and none of its blocks. Setting a chain again mends either.
         Try {
-          (blockchainReader.getBestBlockNumber to BigInt(0) by -1).foreach { number =>
-            blockchainReader.getBlockHeaderByNumber(number).foreach(header => blockchain.removeBlock(header.hash))
-          }
+          blockchain.removeChainForNewGenesis()
           pathState.destroyStateForNewGenesis()
           // Code is kept by its hash on both layouts, and the loader stores it. The storage tries are rows the genesis
           // commit writes: nothing of them goes to the hash store.

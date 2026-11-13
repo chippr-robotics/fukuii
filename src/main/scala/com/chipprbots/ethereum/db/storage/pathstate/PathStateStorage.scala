@@ -699,6 +699,7 @@ final class PathStateStorage(
         case Some(held) =>
           staged match
             case Some(executed) if executed.parent == held =>
+              bestIsTheAnchor(held, s"the commit of block ${block.show}")
               // The rows of each storage trie the block replaced, as the disk holds them: the parent's (data-model
               // 3.6). Scanned here, under the lock, so that they are the rows this batch is written over; and bounded
               // in rows and in bytes, since they are held in memory and the lock is held meanwhile.
@@ -996,6 +997,25 @@ final class PathStateStorage(
       case CommitOutcome.AlreadyApplied => ()
     outcome
 
+  /** That the best block is `anchor`, the block whose state the disk holds, before a batch that moves both is written
+    * (data-model 5.1, I1): the two move together or not at all on this layout. A writer that moved the best block alone
+    * (the rows a caller gave a move were built from an index another writer then changed; a writer the table of head
+    * writers missed) is a defect, and nothing is written over it (beacon, forge). Asked only of a store that keeps the
+    * node's own best block beside it ([[CommitSettings.checksBestBlock]]).
+    */
+  private def bestIsTheAnchor(anchor: BlockRef, what: String)(using StateLockHeld): Unit =
+    if settings.checksBestBlock then
+      val best = appState.getBestBlockInfo()
+      if best.hash != anchor.hash || best.number != anchor.number then
+        log.error(
+          s"[STATE-MOVE] The best block is ${best.number} and the state is held at ${anchor.show}: a writer moved the " +
+            s"best block without the state. $what was not written."
+        )
+        throw new IllegalStateException(
+          s"$what was not written: the best block (${best.number}) is not the block the state is held at " +
+            s"(${anchor.show})"
+        )
+
   /** `body`, as a writer that adopts a block: under the state lock, and not in between two batches of a move of the
     * head. A writer that finds a move under way lets the state lock go, waits for the move to end, and asks again; one
     * that finds none pays nothing for the asking, and waits where every writer waits, in the state lock's own queue.
@@ -1199,6 +1219,8 @@ final class PathStateStorage(
           }
           if !clock.anchor.contains(chunk.from) || clock.epoch != epoch || !layersStand then None
           else if chunk.reverse.isEmpty && chunk.forward.isEmpty then
+            // the caller's rows for the head as it is: written over a best block that is the anchor, as any batch is
+            bestIsTheAnchor(chunk.from, s"the rows of the head at block ${chunk.from.show}")
             extra.foreach(_.commit())
             Some(epoch)
           else
@@ -1252,6 +1274,13 @@ final class PathStateStorage(
       finalized: Option[BigInt]
   )(using StateLockHeld): ChunkWritten =
     require(chunk.reverse.nonEmpty || chunk.forward.nonEmpty, "a batch of a head move reverses or applies a block")
+    bestIsTheAnchor(chunk.from, s"the move to block ${chunk.head.show}")
+    // In the node the state moves with the best block, so a batch that moves the state brings the caller's rows: one
+    // that did not would leave the best block behind, and only the next batch would find it (beacon).
+    if settings.checksBestBlock && extra.isEmpty then
+      throw new IllegalStateException(
+        s"the move to block ${chunk.head.show} was not written: it came without the rows that move the best block with it"
+      )
     val batch = new MoveBatch(
       position => rows.read(position).map(ByteString(_)),
       (owner, maxRows, maxBytes) => rows.storageRows(owner, maxRows, maxBytes),
@@ -1631,6 +1660,9 @@ object PathStateStorage:
       // What the log of moves holds of prior values together (each move above `maxMovePreBytes` is a barrier and holds
       // none): the oldest moves go first, and the views older than them are then stale.
       maxMoveLogBytes: Long = 128L * 1024 * 1024,
+      // Whether the node's best block is held to the anchor before a batch that moves both (I1): the node's own store
+      // keeps its best block beside the state; a test of this package that writes none does not.
+      checksBestBlock: Boolean = false,
       // Policy: how many blocks a move of the head may reverse, given the anchor's number and the finalized block's
       // (`state.reorg.max-depth`). What can be reversed at all is decided by the records that are there.
       maxReorgDepth: (BigInt, Option[BigInt]) => Int = (_, _) => Int.MaxValue,
@@ -1667,6 +1699,7 @@ object PathStateStorage:
           case StateConfig.Mode.Basic   => config.retention.maxBlocks
         ,
         maxBlocksPerMove = config.maxBlocksPerMoveBatch,
+        checksBestBlock = true,
         // The archive mode keeps every record, so there the floor of retention is no bound: a depth that is
         // configured is, and otherwise what one plan holds.
         maxReorgDepth = (config.pruning.mode, config.reorgMaxDepth) match

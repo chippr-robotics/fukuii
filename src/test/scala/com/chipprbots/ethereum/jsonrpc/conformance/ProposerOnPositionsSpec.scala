@@ -385,6 +385,23 @@ class ProposerOnPositionsSpec extends ScalaTestWithActorTestKit with AnyFlatSpec
       PathStateTestKit.hashStoreRows(rig.source) shouldBe empty
     }
 
+  it should "commit two in a row, the head moved with the state each time: the fork choice after a commit writes the head the state is at" taggedAs
+    UnitTest in {
+      val rig = new Rig(held = chain.size - 3)
+      import rig.given
+      val service = testing(rig, TestingService.importInPlace(rig.node.blockchainReader, rig.execution))
+      chain.takeRight(2).foreach { block =>
+        val head = rig.head
+        val request = TestingService.CommitBlockRequest(rig.attributesOf(block), Some(Nil), None)
+        val committed = service.commitBlock(request).unsafeRunSync().fold(error => fail(error.message), _.blockHash)
+        val now = rig.head
+        now.hash.value shouldBe committed
+        now.parentHash shouldBe head.hash
+        rig.pathState.anchor shouldBe Some(rig.refOf(now))
+        rig.node.storagesInstance.storages.appStateStorage.getBestBlockInfo().hash shouldBe committed
+      }
+    }
+
   it should "leave the head and the disk as they were when import refuses the block" taggedAs UnitTest in {
     val rig = new Rig(held = chain.size - 1)
     val head = rig.head

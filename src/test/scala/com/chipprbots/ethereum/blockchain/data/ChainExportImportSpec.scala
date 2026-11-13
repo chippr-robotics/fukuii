@@ -591,9 +591,16 @@ class ChainExportImportSpec extends ScalaTestWithActorTestKit with AnyFlatSpecLi
   it should "end on a head whose state is not the one the disk holds, as a fault of the datadir" taggedAs UnitTest in {
     val node = new Node(guard = true)
     lenient(node, fixtureBlocks.take(20)) shouldBe (20, 0, 0)
-    // the head pointer alone is moved back a block: the disk still holds the state of block 20
+    // the head pointer alone is moved back a block: the disk still holds the state of block 20 (the writers that move
+    // the head alone refuse on this layout, so the defect is made with a raw write of the row)
     val before = fixtureBlocks(18)
-    node.blockchainWriter.saveBestKnownBlocks(before.hash, before.header.number.value)
+    an[IllegalStateException] should be thrownBy
+      node.blockchainWriter.saveBestKnownBlocks(before.hash, before.header.number.value)
+    node.storagesInstance.storages.appStateStorage
+      .putBestBlockInfo(
+        com.chipprbots.ethereum.domain.appstate.BlockInfo(before.hash.value, before.header.number.value)
+      )
+      .commit()
     node.head.hash shouldBe before.hash
     val onIt = fixtureBlocks(19).copy(header = fixtureBlocks(19).header.copy(extraData = ByteString("on the head")))
     val keys = node.keys

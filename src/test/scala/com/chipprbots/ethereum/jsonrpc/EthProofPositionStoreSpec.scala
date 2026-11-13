@@ -60,7 +60,13 @@ class EthProofPositionStoreSpec extends AnyFlatSpec with Matchers with MockFacto
     val blockchain: BlockchainImpl = BlockchainImpl(storages, reader)
     private val writer = BlockchainWriter(storages)
     writer.storeBlock(block).commit()
-    writer.saveBestKnownBlocks(block.header.hash, block.header.number.value)
+    // the block is the head, as the commit that left its state would have made it (on the unified layout the writers
+    // that move the head alone refuse, so the fixture writes the row itself)
+    storages.appStateStorage
+      .putBestBlockInfo(
+        com.chipprbots.ethereum.domain.appstate.BlockInfo(block.header.hash.value, block.header.number.value)
+      )
+      .commit()
 
     val service = new EthProofService(blockchain, reader, mock[BlockGenerator], ethCompatibleStorage = true)
 

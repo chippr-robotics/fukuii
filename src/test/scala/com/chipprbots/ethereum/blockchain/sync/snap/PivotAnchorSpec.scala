@@ -7,8 +7,10 @@ import org.scalatest.matchers.should.Matchers
 
 import com.chipprbots.ethereum.blockchain.sync.EphemBlockchainTestSetup
 import com.chipprbots.ethereum.db.storage.AppStateStorage
+import com.chipprbots.ethereum.db.storage.pathstate.BlockRef
 import com.chipprbots.ethereum.domain.BlockHeader
 import com.chipprbots.ethereum.domain.TrieRoot
+import com.chipprbots.ethereum.domain.appstate.BlockInfo
 import com.chipprbots.ethereum.testing.Tags.*
 
 /** SNAP finalisation's pivot anchor ([[PivotAnchor]]): the persisted pivot against the header the validated header
@@ -282,3 +284,31 @@ class PivotAnchorSpec extends AnyFlatSpec with Matchers:
     blockchainReader.getBlockHeaderByNumber(15) shouldBe Some(headers(15))
     appState.getBestBlockInfo().hash shouldBe headers(15).hash.value
     check(15) shouldBe PivotAnchor.Check.Anchored(headers(15))
+
+  it should "refuse once the state is held in place: the best block moves only with the state then (spec 018 C4b)" taggedAs
+    UnitTest in new Chain:
+      downloaded(20)
+      committed(headers(10))
+      // the anchor of a state held in place, as the batch that gives a datadir one writes it
+      val anchor: BlockRef = com.chipprbots.ethereum.db.storage.pathstate
+        .BlockRef(headers(10).hash.value, 10, headers(10).stateRoot.value)
+      storagesInstance.dataSource.update(
+        Seq(
+          com.chipprbots.ethereum.db.dataSource.DataSourceUpdate(
+            com.chipprbots.ethereum.db.storage.Namespaces.AppStateNamespace,
+            Seq.empty,
+            Seq(
+              com.chipprbots.ethereum.db.storage.pathstate.StateAnchor.Key.getBytes("UTF-8").toIndexedSeq ->
+                com.chipprbots.ethereum.db.storage.pathstate.StateAnchor.encode(anchor).getBytes("UTF-8").toIndexedSeq
+            )
+          )
+        )
+      )
+      val before: (Option[BigInt], BlockInfo) = (appState.getSnapSyncPivotBlock(), appState.getBestBlockInfo())
+      (the[IllegalStateException] thrownBy PivotAnchor.reanchor(
+        appState,
+        blockchainWriter,
+        headers(15)
+      )).getMessage should
+        include("the state is held in place")
+      (appState.getSnapSyncPivotBlock(), appState.getBestBlockInfo()) shouldBe before
