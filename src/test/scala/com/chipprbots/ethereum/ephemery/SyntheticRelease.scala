@@ -37,3 +37,16 @@ object SyntheticRelease:
   def nextEntry(base: ReleaseInputs, producedAt: java.time.Instant): ReleaseEntry =
     val valid = EphemeryRelease.validate(next(base)).fold(r => throw new AssertionError(r.message), identity)
     ReleaseEntry.of(valid, "https://example.invalid/synthetic", None, "test", producedAt)
+
+  /** The same iteration with another genesis (a different gas limit) and the hash the library computes for it: a
+    * release that was published again under the same name.
+    */
+  def variant(base: ReleaseInputs): ReleaseInputs =
+    val changed = base.editGenesis(_.set("gasLimit", JStr("0x2255101")))
+    EphemeryRelease.validate(changed) match
+      case Left(ReleaseRefusal.HashMismatch(_, computed)) => changed.copy(publishedHashText = computed)
+      case other => throw new AssertionError(s"the variant is not a hash mismatch first: $other")
+
+  def variantEntry(base: ReleaseInputs, producedAt: java.time.Instant): ReleaseEntry =
+    val valid = EphemeryRelease.validate(variant(base)).fold(r => throw new AssertionError(r.message), identity)
+    ReleaseEntry.of(valid, "https://example.invalid/variant", None, "test", producedAt)

@@ -60,7 +60,7 @@ Every path derived from `fukuii.datadir` moves with the iteration, unless you se
 the keystore, the IPC socket, the JWT secret). The full table, with what to set to keep each one across resets, is in
 the configuration contract of spec 028 (`contracts/config.md`, "What moves at each reset"). A datadir from before
 built-in Ephemery (`<datadir>/rocksdb`) is not used and not touched; fukuii logs it, and the earlier iterations'
-datadirs with their sizes, at each start.
+datadirs by name, at each start.
 
 **At the reset the node exits with code 75** (`EX_TEMPFAIL`): it logs a WARN, then shuts down through its normal
 shutdown hooks, which close RocksDB. Run it under a supervisor that restarts it, so that it picks up the next iteration:

@@ -5,7 +5,6 @@ import java.nio.file.Files
 import java.nio.file.Path
 import java.nio.file.Paths
 import java.time.Instant
-import java.util.Locale
 import java.util.regex.Pattern
 
 import scala.collection.mutable
@@ -86,10 +85,10 @@ object EphemeryResolver extends LazyLogger:
         logsDir = optional("logging.logs-dir").getOrElse(root.resolve("logs").toString),
         refresh = !raw.hasPath("fukuii.ephemery.refresh") || raw.getBoolean("fukuii.ephemery.refresh"),
         source = optional("fukuii.ephemery.source").getOrElse(DefaultSource),
-        refreshTimeout =
-          if raw.hasPath("fukuii.ephemery.refresh-timeout") then
-            Duration.fromNanos(raw.getDuration("fukuii.ephemery.refresh-timeout").toNanos)
-          else Duration(60, "s"),
+        // A value that is not a duration is `ConfigValidator`'s to report (exit 1) once the node's configuration loads;
+        // here it must not throw, so it falls back to the default.
+        refreshTimeout = Try(Duration.fromNanos(raw.getDuration("fukuii.ephemery.refresh-timeout").toNanos))
+          .getOrElse(Duration(60, "s")),
         exitAtReset = !raw.hasPath("fukuii.ephemery.exit-at-reset") || raw.getBoolean("fukuii.ephemery.exit-at-reset")
       )
 
@@ -142,17 +141,6 @@ object EphemeryResolver extends LazyLogger:
       "or unset custom-chains-dir to use the built-in refresh"
 
   private def shortHash(hash: String): String = hash.take(6) + "…" + hash.takeRight(4)
-
-  private def size(bytes: Long): String =
-    val units = List("KiB", "MiB", "GiB", "TiB")
-    if bytes < 1024 then s"$bytes B"
-    else
-      var value = bytes.toDouble
-      var unit = -1
-      while value >= 1024 && unit < units.size - 1 do
-        value /= 1024
-        unit += 1
-      "%.1f %s".formatLocal(Locale.ROOT, value, units(unit))
 
   // ---- the decision --------------------------------------------------------------------------------------------------
 
@@ -262,20 +250,31 @@ object EphemeryResolver extends LazyLogger:
     val builtIn = bundled.map(e => Candidate(e, Origin.Bundled, None))
     // For one iteration the entry on disk is the node's own; the bundle only stands in where none is held.
     val all = cached ++ builtIn.filterNot(b => cached.exists(_.entry.iteration == b.entry.iteration))
-    cached.foreach { c =>
-      builtIn
-        .find(b => b.entry.iteration == c.entry.iteration && b.entry.genesisHash != c.entry.genesisHash)
-        .foreach(b =>
-          lines += Line(
-            Level.Warn,
-            s"Ephemery: the cached ${c.entry.release} (genesis ${c.entry.genesisHash}) differs from the bundled one " +
-              s"(${b.entry.genesisHash}); running the cached one"
-          )
-        )
-    }
     all.filter(_.entry.isCurrent(now)).maxByOption(_.entry.iteration) match
-      case Some(chosen) => select(settings, store, chosen, now, lines)
-      case None         => (Refused(noneCurrent(settings, all.map(_.entry), now)), Map.empty)
+      case Some(chosen) =>
+        warnWhenCachedDiffers(chosen, cached, builtIn, lines)
+        select(store, settings, chosen, now, lines)
+      case None => (Refused(noneCurrent(settings, all.map(_.entry), now)), Map.empty)
+
+  /** A cached copy of an iteration that the bundle also holds, with another genesis hash: say so. */
+  private def warnWhenCachedDiffers(
+      chosen: Candidate,
+      cached: List[Candidate],
+      builtIn: List[Candidate],
+      lines: mutable.ListBuffer[Line]
+  ): Unit =
+    for
+      c <- cached
+      b <- builtIn.find(b => b.entry.iteration == c.entry.iteration && b.entry.genesisHash != c.entry.genesisHash)
+    do
+      val differs =
+        s"Ephemery: the cached ${c.entry.release} (genesis ${c.entry.genesisHash}) differs from the bundled one " +
+          s"(${b.entry.genesisHash})"
+      lines += Line(
+        Level.Warn,
+        if c.entry.iteration == chosen.entry.iteration then s"$differs; running the cached one"
+        else s"$differs; it is not the iteration run now"
+      )
 
   /** Nothing is current: the window of the newest known iteration has not opened (69), or it has ended (78). */
   private def noneCurrent(settings: Settings, known: List[ReleaseEntry], now: Instant): ReleaseRefusal =
@@ -298,23 +297,38 @@ object EphemeryResolver extends LazyLogger:
 
   /** Row 3: run the chosen entry: place it, make its datadir, and name what the node must be given. */
   private def select(
-      settings: Settings,
       store: ReleaseStore,
+      settings: Settings,
       chosen: Candidate,
       now: Instant,
       lines: mutable.ListBuffer[Line]
   ): (Resolution, Map[String, String]) =
     val entry = chosen.entry
+    // The entry's files were validated above (cache: on load; bundle: before it was placed), and the node reads them
+    // again from `custom-chains-dir` when `Config` loads. Between the two, the files are operator-trusted local state:
+    // whoever can rewrite `<root>/releases` can already rewrite the node's datadir and keys, so that window is accepted
+    // and not closed with a second read of the text (spec 028 review B2). Nothing else in the hand-over names a path.
     val held: Either[ReleaseRefusal, ReleaseStore.Held] = chosen.held match
       case Some(h) => Right(h)
       case None =>
-        store.place(entry).flatMap { _ =>
+        store.place(entry).flatMap { result =>
+          result match
+            case ReleaseStore.SetAside(aside) =>
+              lines += Line(
+                Level.Warn,
+                s"Ephemery: ${store.releaseDir(entry.iteration)} did not validate; set aside as $aside (kept, never " +
+                  s"deleted) and placed ${entry.release} again"
+              )
+            case _ => ()
           store.list().entries.find(_.entry.iteration == entry.iteration).toRight {
             ReleaseRefusal.CannotStore(s"${store.releaseDir(entry.iteration)} does not validate after it was placed")
           }
         }
     val datadir: Either[ReleaseRefusal, Path] = held.flatMap { _ =>
-      try Right(store.seedDatadir(entry.iteration))
+      try
+        val seeded = store.seedDatadir(entry.iteration)
+        seeded.warning.foreach(w => lines += Line(Level.Warn, s"Ephemery: $w"))
+        Right(seeded.dir)
       catch case NonFatal(e) => Left(ReleaseRefusal.CannotStore(s"cannot make the datadir: ${e.getMessage}"))
     }
     (held, datadir) match
@@ -356,15 +370,12 @@ object EphemeryResolver extends LazyLogger:
     if earlier.nonEmpty then
       lines += Line(
         Level.Info,
-        "Ephemery: earlier iteration datadirs kept: " +
-          earlier.map { case (name, bytes) => s"$name (${size(bytes)})" }.mkString(", ") +
-          "; fukuii never deletes them"
+        "Ephemery: earlier iteration datadirs kept: " + earlier.mkString(", ") + "; fukuii never deletes them"
       )
-    store.legacyDatadir().foreach { case (path, bytes) =>
+    store.legacyDatadir().foreach { path =>
       lines += Line(
         Level.Info,
-        s"Ephemery: found a datadir from before built-in Ephemery at $path (${size(bytes)}); " +
-          "it is not used and fukuii does not touch it"
+        s"Ephemery: found a datadir from before built-in Ephemery at $path; it is not used and fukuii does not touch it"
       )
     }
 
@@ -376,11 +387,14 @@ object EphemeryResolver extends LazyLogger:
     *
     * @param raw
     *   the raw configuration, by name so that a test can supply its own
+    * @param reloadLogging
+    *   moves the log to where the properties say; a test passes its own so it does not reset the test JVM's logger
     */
   def startup(
       deps: StartupDeps,
       bundle: BundleSource = BundleSource.classpath,
-      raw: => TConfig = ConfigFactory.load()
+      raw: => TConfig = ConfigFactory.load(),
+      reloadLogging: () => Unit = () => LogbackReload.reload()
   ): Option[Int] =
     val result = resolve(Settings.from(raw), deps, bundle)
     result.resolution match
@@ -394,7 +408,7 @@ object EphemeryResolver extends LazyLogger:
         ConfigFactory.invalidateCaches()
         // The logger was set up when the process started, from the configuration of that moment; the log must go where
         // the properties now say (`<root>/logs`), and `truncateLogs()` reads the same place.
-        if result.properties.contains("fukuii.datadir") then LogbackReload.reload()
+        if result.properties.contains("fukuii.datadir") then reloadLogging()
         // Held back, not written: `Fukuii.run` truncates the log files when it starts, which would erase these lines.
         // It writes them right after ([[flushReport]]); `App.run` does when the command does not go through it.
         pending.set(result.lines)
@@ -404,7 +418,7 @@ object EphemeryResolver extends LazyLogger:
   private val pending = new java.util.concurrent.atomic.AtomicReference[List[Line]](Nil)
 
   /** Writes the report lines [[startup]] held back, once. Called after the log files are truncated. */
-  def flushReport(): Unit = emit(pending.getAndSet(Nil))
+  def flushReport(sink: List[Line] => Unit = emit): Unit = sink(pending.getAndSet(Nil))
 
   private def emit(lines: List[Line]): Unit =
     lines.foreach { l =>

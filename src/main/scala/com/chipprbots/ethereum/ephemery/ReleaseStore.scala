@@ -1,14 +1,9 @@
 package com.chipprbots.ethereum.ephemery
 
-import java.io.IOException
-import java.nio.charset.StandardCharsets
 import java.nio.file.FileAlreadyExistsException
-import java.nio.file.FileVisitResult
 import java.nio.file.Files
 import java.nio.file.LinkOption
 import java.nio.file.Path
-import java.nio.file.SimpleFileVisitor
-import java.nio.file.attribute.BasicFileAttributes
 import java.nio.file.attribute.PosixFilePermissions
 import java.time.Clock
 import java.util.regex.Pattern
@@ -50,32 +45,46 @@ final class ReleaseStore(root: Path, clock: Clock, ops: FileOps = FileOps.Defaul
         loaded.collect { case Left(problem) => problem }
       )
 
-  /** Puts `entry` at `releases/ephemery-N` with one rename. The same hash already there is [[AlreadyPresent]] and the
-    * stage is discarded; another hash is `Republished`; a directory there that is not a valid entry is refused, and
-    * deleted never.
+  /** Puts `entry` at `releases/ephemery-N` with one rename, after the stage's files and directories are on disk. The
+    * same hash already there is [[AlreadyPresent]] and the stage is discarded; another hash is `Republished`. A
+    * directory there that is not a valid entry (a torn write, a hand edit) is renamed to
+    * `releases/.invalid-ephemery-N-<k>`, never deleted, and the entry is placed ([[SetAside]]).
     */
   def place(entry: ReleaseEntry): Either[ReleaseRefusal, PlaceResult] =
     withStage { stage =>
-      write(stage.resolve(ReleaseEntry.ChainsDir).resolve(EphemeryRelease.ChainConfFileName), entry.chainConf)
-      write(stage.resolve(ReleaseEntry.ChainsDir).resolve(EphemeryRelease.GenesisFileName), entry.genesisJson)
-      write(stage.resolve(ReleaseEntry.MetadataFile), entry.metadata.toJson)
+      val chains = stage.resolve(ReleaseEntry.ChainsDir)
+      StageSupport.writeDurable(chains.resolve(EphemeryRelease.ChainConfFileName), entry.chainConf)
+      StageSupport.writeDurable(chains.resolve(EphemeryRelease.GenesisFileName), entry.genesisJson)
+      StageSupport.writeDurable(stage.resolve(ReleaseEntry.MetadataFile), entry.metadata.toJson)
+      StageSupport.syncDir(chains)
+      StageSupport.syncDir(stage)
       val target = releaseDir(entry.iteration)
-      if Files.exists(target, LinkOption.NOFOLLOW_LINKS) then
-        load(target) match
-          case Right(held) if held.entry.genesisHash == entry.genesisHash => Right(AlreadyPresent)
-          case Right(held) =>
-            Left(ReleaseRefusal.Republished(entry.iteration, held.entry.genesisHash, entry.genesisHash))
-          case Left(problem) =>
-            Left(
-              ReleaseRefusal.Inconsistent(
-                s"$target exists but is not a valid entry ($problem); move it aside to use ${entry.release}"
-              )
-            )
-      else
-        Files.createDirectories(releases)
-        ops.move(stage, target)
-        Right(Placed)
+      val placed: Either[ReleaseRefusal, PlaceResult] =
+        if Files.exists(target, LinkOption.NOFOLLOW_LINKS) then
+          load(target) match
+            case Right(held) if held.entry.genesisHash == entry.genesisHash => Right(AlreadyPresent)
+            case Right(held) =>
+              Left(ReleaseRefusal.Republished(entry.iteration, held.entry.genesisHash, entry.genesisHash))
+            case Left(_) =>
+              val aside = freeInvalidName(entry.iteration)
+              ops.move(target, aside)
+              ops.move(stage, target)
+              Right(SetAside(aside))
+        else
+          Files.createDirectories(releases)
+          ops.move(stage, target)
+          Right(Placed)
+      StageSupport.syncDir(releases)
+      placed
     }
+
+  /** `releases/.invalid-ephemery-N-<k>`, the first `k` from 1 that is free. */
+  private def freeInvalidName(iteration: Int): Path =
+    Iterator
+      .from(1)
+      .map(k => releases.resolve(s".invalid-ephemery-$iteration-$k"))
+      .find(p => !Files.exists(p, LinkOption.NOFOLLOW_LINKS))
+      .get
 
   /** Adds `testnet/` (the consensus-layer directory) to an existing entry, with one rename, if it has none. `true` when
     * it was added, `false` when it was there already.
@@ -93,35 +102,48 @@ final class ReleaseStore(root: Path, clock: Clock, ops: FileOps = FileOps.Defaul
 
   /** Removes the `.stage-*` directories of runs that died: older than an hour, and holding no old copy. */
   def sweepStages(): Unit =
-    if Files.isDirectory(root) then StageSupport.sweepStale(root, clock.instant())
+    if Files.isDirectory(root) then
+      // Under the root's lock, so it cannot remove the stage of a writer that is running; held elsewhere, skip it.
+      Try(StageSupport.acquire(root)).toOption.flatten.foreach { lock =>
+        try StageSupport.sweepStale(root, clock.instant())
+        finally StageSupport.release(Some(lock))
+      }
 
-  /** The datadir of iteration N, made when it is new. A new one gets `<root>/static-nodes.json` when the root has it;
-    * one that exists is the node's, and is left as it is.
+  /** The datadir of iteration N, made when it is new. A new one gets `<root>/static-nodes.json` when the root has it (a
+    * copy that fails is a warning, not a failure: the node starts without it); one that exists is the node's, and is
+    * left as it is.
     */
-  def seedDatadir(iteration: Int): Path =
+  def seedDatadir(iteration: Int): Seeded =
     val dir = datadir(iteration)
-    if !Files.exists(dir, LinkOption.NOFOLLOW_LINKS) then
+    if Files.exists(dir, LinkOption.NOFOLLOW_LINKS) then Seeded(dir, None)
+    else
       Files.createDirectories(dir)
       val seed = root.resolve(StaticNodesFile)
-      if Files.isRegularFile(seed) then
-        try Files.copy(seed, dir.resolve(StaticNodesFile))
-        catch case _: FileAlreadyExistsException => ()
-    dir
+      if !Files.isRegularFile(seed) then Seeded(dir, None)
+      else
+        try
+          Files.copy(seed, dir.resolve(StaticNodesFile))
+          Seeded(dir, None)
+        catch
+          case _: FileAlreadyExistsException => Seeded(dir, None)
+          case NonFatal(e) =>
+            Seeded(dir, Some(s"cannot copy $seed into $dir: ${e.getMessage}; the node starts without it"))
 
-  /** The other iterations' datadirs, by iteration, with the bytes they hold. */
-  def earlierDatadirs(except: Int): List[(String, Long)] =
+  /** The other iterations' datadirs, by iteration: names only. Sizing them would walk a database (tens of thousands of
+    * files) at every start.
+    */
+  def earlierDatadirs(except: Int): List[String] =
     children(root)
       .filter(p =>
         DatadirName.matcher(p.getFileName.toString).matches() && Files.isDirectory(p, LinkOption.NOFOLLOW_LINKS)
       )
       .filter(_.getFileName.toString != s"ephemery-$except")
       .sortBy(p => p.getFileName.toString.stripPrefix("ephemery-").toInt)
-      .map(p => (p.getFileName.toString, sizeOf(p)))
+      .map(_.getFileName.toString)
 
   /** A datadir from before built-in Ephemery: RocksDB straight under the root. Never used, never touched. */
-  def legacyDatadir(): Option[(Path, Long)] =
-    val db = root.resolve("rocksdb")
-    Option.when(Files.isDirectory(db, LinkOption.NOFOLLOW_LINKS))((db, sizeOf(db)))
+  def legacyDatadir(): Option[Path] =
+    Option(root.resolve("rocksdb")).filter(Files.isDirectory(_, LinkOption.NOFOLLOW_LINKS))
 
   /** `current -> releases/ephemery-N`. A `current` that is not a symlink is the operator's and is left alone. */
   def pointCurrent(iteration: Int): Either[String, Unit] =
@@ -158,10 +180,6 @@ final class ReleaseStore(root: Path, clock: Clock, ops: FileOps = FileOps.Defaul
       stage.foreach(s => Try(StageSupport.deleteTree(s)))
       StageSupport.release(lock)
 
-  private def write(file: Path, text: String): Unit =
-    Files.createDirectories(file.getParent)
-    Files.write(file, text.getBytes(StandardCharsets.UTF_8))
-
   private def children(dir: Path): List[Path] =
     if !Files.isDirectory(dir) then Nil
     else
@@ -192,21 +210,6 @@ final class ReleaseStore(root: Path, clock: Clock, ops: FileOps = FileOps.Defaul
       Held(entry, dir, Option.when(Files.isDirectory(testnet))(testnet))
     }
 
-  /** The bytes of the regular files under `dir`. A file that cannot be read counts for nothing. */
-  private def sizeOf(dir: Path): Long =
-    var total = 0L
-    Try(
-      Files.walkFileTree(
-        dir,
-        new SimpleFileVisitor[Path]:
-          override def visitFile(file: Path, attrs: BasicFileAttributes): FileVisitResult =
-            if attrs.isRegularFile then total += attrs.size()
-            FileVisitResult.CONTINUE
-          override def visitFileFailed(file: Path, e: IOException): FileVisitResult = FileVisitResult.CONTINUE
-      )
-    )
-    total
-
 object ReleaseStore:
 
   val StaticNodesFile: String = "static-nodes.json"
@@ -218,6 +221,14 @@ object ReleaseStore:
 
   /** The entry was not there and is now. */
   case object Placed extends PlaceResult
+
+  /** The entry is placed; an invalid directory that was in its way was renamed to `aside` (kept, not deleted). */
+  final case class SetAside(aside: Path) extends PlaceResult
+
+  /** @param warning
+    *   why the static nodes were not copied, when they were not
+    */
+  final case class Seeded(dir: Path, warning: Option[String])
 
   /** The same iteration with the same genesis hash was there: the stage was discarded. */
   case object AlreadyPresent extends PlaceResult

@@ -31,6 +31,12 @@ object Fukuii extends Logger:
     * it, so a test can drive both.
     */
   def run(args: Array[String], deps: StartupDeps): Unit =
+    // The resolver's report is written after the log files are truncated below. If startup throws before that (the
+    // configuration fails to load), it is written here instead; `flushReport` writes it once.
+    try start(args, deps)
+    finally EphemeryResolver.flushReport()
+
+  private def start(args: Array[String], deps: StartupDeps): Unit =
     LogManager.getLogManager().reset(); // disable java.util.logging, ie. in legacy parts of jupnp
 
     // A thread that dies of a missing precompile backend halts the node; any other VirtualMachineError is logged (B-135).

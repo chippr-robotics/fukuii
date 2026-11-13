@@ -255,8 +255,11 @@ object App extends Logger:
     val network = determineNetworkArg(argsWithoutModifiers)
     network.foreach(setNetworkConfig)
 
-    // `cli ephemery-fetch --out DIR` writes into DIR: its log must not go to a node's datadir (the launcher's logger
-    // was set up before any argument was read), so it goes to the console only.
+    // `cli ephemery-fetch --out DIR` writes into DIR: its log should not go to a node's datadir, so the file appenders
+    // are dropped and it logs to the console only. BEST EFFORT: the launcher's logger was set up when `App` was
+    // initialised, before any argument was read, and its file appender has already opened (and created) the default
+    // network's log file. Moving that is App-init logging, which is B-241 and the user's call; this only stops further
+    // writes to it. A caller can also pass `-Dlogging.logs-dir` (fetch-genesis.sh and update-bundled.sh do).
     if isEphemeryFetchWithOut(argsWithoutModifiers) then LogbackReload.consoleOnly()
 
     // Ephemery needs no preparation step (spec 028): choose its iteration now, after the network is set and before
@@ -268,10 +271,12 @@ object App extends Logger:
 
     refused match
       case Some(code) => deps.exit(code)
-      case None =>
-        dispatch(argsWithoutModifiers, modifiers, deps)
-        // `Fukuii.run` writes the resolver's report after it has truncated the logs; any other command writes it here
-        EphemeryResolver.flushReport()
+      case None       =>
+        // `Fukuii.run` writes the resolver's report after it has truncated the logs. Any other command, and any path
+        // that ends by throwing before `Fukuii.run` got that far, writes it here: it is held back until then, and
+        // `flushReport` writes it once.
+        try dispatch(argsWithoutModifiers, modifiers, deps)
+        finally EphemeryResolver.flushReport()
 
   private def isEphemeryFetchWithOut(args: Array[String]): Boolean =
     args.headOption.contains(cli) && args.tail.headOption.contains(EphemeryFetchCli.CommandName) &&

@@ -85,7 +85,7 @@ class EphemeryResetWatchdogSpec extends AnyFlatSpec with Matchers:
   it should "wake in bounded steps and check the clock each time, so a clock that jumps is still caught" taggedAs UnitTest in {
     val f = new Fixture(reset.minus(Duration.ofDays(20)))
     f.watchdog.start(Target(165, reset, Mode.ExitAtReset))
-    f.scheduler.delays.max.compareTo(Duration.ofHours(1)) should be <= 0
+    f.scheduler.delays.max.compareTo(EphemeryResetWatchdog.MaxWake) should be <= 0
     // the clock jumps past the reset (a suspended host); the next wake-up sees it
     f.clock.current = reset.plusSeconds(7)
     f.scheduler.advanceTo(f.clock.current.plus(Duration.ofHours(1)))

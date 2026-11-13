@@ -139,9 +139,7 @@ object EphemeryResetWatchdog extends LazyLogger:
         () =>
           future.cancel(false); ()
 
-  /** The watchdog the node starts after it has started: the configuration says whether and how. A shutdown for another
-    * reason cancels it.
-    */
+  /** The watchdog the node starts after it has started: the configuration says whether and how. */
   def startFor(fukuii: TConfig, deps: StartupDeps): Option[Armed] =
     Target.fromConfig(fukuii).map { target =>
       val watchdog = new EphemeryResetWatchdog(
@@ -154,7 +152,7 @@ object EphemeryResetWatchdog extends LazyLogger:
             case Level.Warn  => log.warn(line.text)
             case Level.Info  => log.info(line.text)
       )
-      val armed = watchdog.start(target)
-      Runtime.getRuntime.addShutdownHook(new Thread(() => armed.cancel(), "EphemeryWatchdogCancel"))
-      armed
+      // No shutdown hook cancels it: its thread is a daemon, so a node that stops for any reason takes it along, and
+      // a hook that only cancelled would add a thread to the exit path for nothing.
+      watchdog.start(target)
     }

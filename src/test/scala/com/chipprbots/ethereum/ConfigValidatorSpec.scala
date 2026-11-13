@@ -246,3 +246,11 @@ class ConfigValidatorSpec extends AnyFlatSpec with Matchers:
       ConfigFactory.load(ConfigFactory.parseResources("conf/ephemery.conf")).getConfig("fukuii")
     ) shouldBe empty
   }
+
+  it should "turn a malformed refresh-timeout into a configuration error, not an exception" taggedAs UnitTest in {
+    List("abc", "\"ten seconds\"", "[1]").foreach { t =>
+      val errors = ConfigValidator.validate(cfg(s"ephemery.refresh-timeout = $t"))
+      errors should have size 1
+      errors.head should include("fukuii.ephemery.refresh-timeout")
+    }
+  }

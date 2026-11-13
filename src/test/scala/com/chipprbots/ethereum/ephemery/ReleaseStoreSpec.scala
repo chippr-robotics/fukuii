@@ -90,11 +90,26 @@ class ReleaseStoreSpec extends AnyFlatSpec with Matchers with BeforeAndAfterEach
     stages shouldBe Nil
   }
 
-  it should "refuse to place over an entry directory that is not a valid entry, and delete nothing" taggedAs UnitTest in {
+  it should "set an entry directory that is not valid aside, never delete it, and place the entry" taggedAs UnitTest in {
     write(root.resolve("releases/ephemery-165/release.json"), "not json")
-    store().place(entry165).left.map(_.exitCode) shouldBe Left(ReleaseRefusal.ExitConfig)
-    read(root.resolve("releases/ephemery-165/release.json")) shouldBe "not json"
+    val aside = root.resolve("releases/.invalid-ephemery-165-1")
+    store().place(entry165) shouldBe Right(SetAside(aside))
+    read(aside.resolve("release.json")) shouldBe "not json"
+    store().list().entries.map(_.entry.release) shouldBe List("ephemery-165")
+    // a second invalid one takes the next name, and the first is still there
+    delete(root.resolve("releases/ephemery-165"))
+    write(root.resolve("releases/ephemery-165/release.json"), "torn")
+    store().place(entry165) shouldBe Right(SetAside(root.resolve("releases/.invalid-ephemery-165-2")))
+    read(aside.resolve("release.json")) shouldBe "not json"
+    // the set-aside directories are not entries
+    store().list().entries.map(_.entry.release) shouldBe List("ephemery-165")
     stages shouldBe Nil
+  }
+
+  it should "write the entry's files durably before the rename: the files are there and complete" taggedAs UnitTest in {
+    store().place(entry165) shouldBe Right(Placed)
+    Files.size(root.resolve("releases/ephemery-165/chains/ephemery-genesis.json")) shouldBe
+      entry165.genesisJson.getBytes(StandardCharsets.UTF_8).length.toLong
   }
 
   "addTestnet" should "stage a testnet/ and rename it into an existing entry, once" taggedAs UnitTest in {
@@ -177,13 +192,15 @@ class ReleaseStoreSpec extends AnyFlatSpec with Matchers with BeforeAndAfterEach
 
   "seedDatadir" should "copy static-nodes.json from the root into a new iteration datadir, and never overwrite it" taggedAs UnitTest in {
     write(root.resolve("static-nodes.json"), "[\"enode://a\"]")
-    val datadir = store().seedDatadir(165)
+    val seeded = store().seedDatadir(165)
+    val datadir = seeded.dir
+    seeded.warning shouldBe None
     datadir shouldBe root.resolve("ephemery-165")
     read(datadir.resolve("static-nodes.json")) shouldBe "[\"enode://a\"]"
     // the node's own copy is its own: a later change at the root does not reach it, and a second call changes nothing
     write(datadir.resolve("static-nodes.json"), "[\"enode://own\"]")
     write(root.resolve("static-nodes.json"), "[\"enode://b\"]")
-    store().seedDatadir(165) shouldBe datadir
+    store().seedDatadir(165).dir shouldBe datadir
     read(datadir.resolve("static-nodes.json")) shouldBe "[\"enode://own\"]"
   }
 
@@ -197,7 +214,7 @@ class ReleaseStoreSpec extends AnyFlatSpec with Matchers with BeforeAndAfterEach
     Files.exists(root.resolve("ephemery-165/static-nodes.json")) shouldBe false
   }
 
-  "earlierDatadirs" should "list the other iterations' datadirs with their sizes, and find a pre-028 datadir" taggedAs UnitTest in {
+  "earlierDatadirs" should "list the other iterations' datadirs by name, and find a pre-028 datadir" taggedAs UnitTest in {
     write(root.resolve("ephemery-163/rocksdb/a"), "x" * 1000)
     write(root.resolve("ephemery-164/rocksdb/a"), "x" * 2000)
     write(root.resolve("ephemery-164/rocksdb/b"), "x" * 24)
@@ -205,11 +222,11 @@ class ReleaseStoreSpec extends AnyFlatSpec with Matchers with BeforeAndAfterEach
     write(root.resolve("releases/ephemery-163/release.json"), "{}")
     write(root.resolve("logs/fukuii.log"), "log")
     val s = store()
-    s.earlierDatadirs(except = 165) shouldBe List(("ephemery-163", 1000L), ("ephemery-164", 2024L))
+    s.earlierDatadirs(except = 165) shouldBe List("ephemery-163", "ephemery-164")
     s.legacyDatadir() shouldBe None
     write(root.resolve("rocksdb/CURRENT"), "x" * 7)
-    s.legacyDatadir() shouldBe Some((root.resolve("rocksdb"), 7L))
-    s.earlierDatadirs(except = 165).map(_._1) shouldBe List("ephemery-163", "ephemery-164")
+    s.legacyDatadir() shouldBe Some(root.resolve("rocksdb"))
+    s.earlierDatadirs(except = 165) shouldBe List("ephemery-163", "ephemery-164")
   }
 
   "pointCurrent" should "make current a symlink to releases/ephemery-N, and re-point it" taggedAs UnitTest in {
@@ -224,4 +241,48 @@ class ReleaseStoreSpec extends AnyFlatSpec with Matchers with BeforeAndAfterEach
     write(root.resolve("current/mine"), "mine")
     store().pointCurrent(165).isLeft shouldBe true
     read(root.resolve("current/mine")) shouldBe "mine"
+  }
+
+  "seedDatadir" should "warn, not fail, when the seed cannot be copied" taggedAs UnitTest in {
+    val seed = root.resolve("static-nodes.json")
+    write(seed, "[]")
+    Files.setPosixFilePermissions(seed, java.nio.file.attribute.PosixFilePermissions.fromString("---------"))
+    try
+      // a process that can read it anyway (root) cannot show the failure
+      assume(!Files.isReadable(seed))
+      val seeded = store().seedDatadir(165)
+      Files.isDirectory(seeded.dir) shouldBe true
+      seeded.warning.exists(_.contains("static-nodes.json")) shouldBe true
+      Files.exists(seeded.dir.resolve("static-nodes.json")) shouldBe false
+    finally Files.setPosixFilePermissions(seed, java.nio.file.attribute.PosixFilePermissions.fromString("rw-------"))
+  }
+
+  "sweepStages" should "skip the sweep when another writer holds the root's lock" taggedAs UnitTest in {
+    val stale = root.resolve(".stage-dead")
+    write(stale.resolve("x"), "x")
+    Files.setLastModifiedTime(stale, FileTime.from(now.minus(java.time.Duration.ofHours(3))))
+    val held = StageSupport.acquire(root)
+    held shouldBe defined
+    try
+      store().sweepStages()
+      Files.exists(stale) shouldBe true
+    finally StageSupport.release(held)
+    store().sweepStages()
+    Files.exists(stale) shouldBe false
+  }
+
+  it should "remove stale .current-* temporary links too, and keep a fresh one" taggedAs UnitTest in {
+    Files.createDirectories(root)
+    def link(name: String, age: java.time.Duration): Path =
+      val l = root.resolve(name)
+      Files.createSymbolicLink(l, java.nio.file.Paths.get("releases/ephemery-165"))
+      Files
+        .getFileAttributeView(l, classOf[java.nio.file.attribute.BasicFileAttributeView], LinkOption.NOFOLLOW_LINKS)
+        .setTimes(FileTime.from(now.minus(age)), null, null)
+      l
+    val old = link(".current-1", java.time.Duration.ofHours(2))
+    val fresh = link(".current-2", java.time.Duration.ofMinutes(5))
+    store().sweepStages()
+    Files.exists(old, LinkOption.NOFOLLOW_LINKS) shouldBe false
+    Files.exists(fresh, LinkOption.NOFOLLOW_LINKS) shouldBe true
   }

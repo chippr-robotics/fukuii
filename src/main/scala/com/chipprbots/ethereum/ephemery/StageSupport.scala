@@ -33,15 +33,18 @@ import com.chipprbots.ethereum.ephemery.ReleaseLayout.FileOps
   */
 private[ephemery] object StageSupport:
 
+  // These three are ReleaseLayout's own, referenced and not copied, so the two writers cannot disagree on what a stage
+  // is, how old one must be to be swept, or which are kept.
+
   /** A `.stage-*` directory older than this is the remains of a run that died, and is swept. */
-  val StaleStage: java.time.Duration = java.time.Duration.ofHours(1)
+  val StaleStage: java.time.Duration = ReleaseLayout.StaleStage
 
   /** A stage set aside by ReleaseLayout because it may hold the only old copy: never swept. */
-  val KeptPrefix = ".stage-kept-"
+  val KeptPrefix: String = ReleaseLayout.KeptPrefix
 
-  def isStage(p: Path): Boolean =
-    val n = p.getFileName.toString
-    n.startsWith(".stage-") && !n.startsWith(KeptPrefix)
+  def isStage(p: Path): Boolean = ReleaseLayout.isStage(p)
+
+  private val TempLink = ".current-"
 
   /** An exclusive lock on `root/.lock` for the whole write; `None` when another writer holds it. */
   def acquire(root: Path): Option[(FileChannel, FileLock)] =
@@ -80,6 +83,37 @@ private[ephemery] object StageSupport:
           then Try(deleteTree(p))
         }
       finally entries.close()
+    }
+    // The temporary link of an interrupted `point`: a symlink, older than a stage may be.
+    Try {
+      val entries = Files.list(root)
+      try
+        entries.iterator().asScala.filter(p => p.getFileName.toString.startsWith(TempLink)).foreach { p =>
+          if Files.isSymbolicLink(p) && Files
+              .getLastModifiedTime(p, LinkOption.NOFOLLOW_LINKS)
+              .toInstant
+              .isBefore(now.minus(StaleStage))
+          then Try(Files.deleteIfExists(p))
+        }
+      finally entries.close()
+    }
+
+  /** Writes `text` and forces it to disk before returning. */
+  def writeDurable(file: Path, text: String): Unit =
+    Files.createDirectories(file.getParent)
+    val channel =
+      FileChannel.open(file, StandardOpenOption.CREATE, StandardOpenOption.WRITE, StandardOpenOption.TRUNCATE_EXISTING)
+    try
+      channel.write(java.nio.ByteBuffer.wrap(text.getBytes(java.nio.charset.StandardCharsets.UTF_8)))
+      channel.force(true)
+    finally channel.close()
+
+  /** Forces a directory's entries to disk, where the file system lets a directory be opened; best effort elsewhere. */
+  def syncDir(dir: Path): Unit =
+    Try {
+      val channel = FileChannel.open(dir, StandardOpenOption.READ)
+      try channel.force(true)
+      finally channel.close()
     }
 
   /** `link -> target`, replacing an existing symlink atomically (`ln -sfnT`). */

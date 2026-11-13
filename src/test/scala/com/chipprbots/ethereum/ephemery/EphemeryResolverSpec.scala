@@ -230,14 +230,15 @@ class EphemeryResolverSpec extends AnyFlatSpec with Matchers with BeforeAndAfter
     x.exitCode shouldBe 69
   }
 
-  it should "refuse, naming the directory, when the bundle must go where an invalid entry is" taggedAs UnitTest in {
+  it should "set an invalid entry aside, warn, and start on the bundle" taggedAs UnitTest in {
     write(root.resolve("releases/ephemery-165/release.json"), "garbage")
     val r = resolve(inside165)
-    val x = refusal(r)
-    x.exitCode shouldBe 78
-    x.message should include(root.resolve("releases/ephemery-165").toString)
+    val aside = root.resolve("releases/.invalid-ephemery-165-1")
+    managed(r).origin shouldBe Origin.Bundled
     texts(r, Level.Warn).exists(_.contains("ephemery-165")) shouldBe true
-    read(root.resolve("releases/ephemery-165/release.json")) shouldBe "garbage"
+    texts(r, Level.Warn).exists(l => l.contains(aside.toString) && l.contains("set aside")) shouldBe true
+    read(aside.resolve("release.json")) shouldBe "garbage"
+    Files.isRegularFile(root.resolve("releases/ephemery-165/chains/ephemery-chain.conf")) shouldBe true
   }
 
   it should "log, and leave untouched, a datadir from before built-in Ephemery" taggedAs UnitTest in {
@@ -245,7 +246,7 @@ class EphemeryResolverSpec extends AnyFlatSpec with Matchers with BeforeAndAfter
     val r = resolve(inside165)
     managed(r)
     texts(r, Level.Info).exists(l =>
-      l.contains(root.resolve("rocksdb").toString) && l.contains("2.0 KiB") && l.contains("not used")
+      l.contains(root.resolve("rocksdb").toString) && l.contains("not used")
     ) shouldBe true
     read(root.resolve("rocksdb/CURRENT")) shouldBe "x" * 2048
   }
@@ -256,7 +257,7 @@ class EphemeryResolverSpec extends AnyFlatSpec with Matchers with BeforeAndAfter
     val r = resolve(inside165)
     managed(r)
     texts(r, Level.Info) should contain(
-      "Ephemery: earlier iteration datadirs kept: ephemery-163 (1.5 KiB), ephemery-164 (3.0 MiB); fukuii never deletes them"
+      "Ephemery: earlier iteration datadirs kept: ephemery-163, ephemery-164; fukuii never deletes them"
     )
     Files.exists(root.resolve("ephemery-163/rocksdb/a")) shouldBe true
   }
@@ -276,6 +277,107 @@ class EphemeryResolverSpec extends AnyFlatSpec with Matchers with BeforeAndAfter
     )
     resolve(inside165)
     Files.exists(stale) shouldBe false
+  }
+
+  // ---- the half-open window [genesis, reset) of each iteration (beacon B1) ----------------------------------------------
+
+  private val genesis165 = Instant.ofEpochSecond(1792695600L)
+  private val reset165 = Instant.ofEpochSecond(1795114800L)
+
+  it should "refuse one second before the first iteration's genesis (WindowMismatch), with no earlier one cached" taggedAs UnitTest in {
+    refusal(resolve(genesis165.minusSeconds(1))) shouldBe a[ReleaseRefusal.WindowMismatch]
+  }
+
+  it should "run the previous iteration one second before the next one's genesis, and the next at its genesis" taggedAs UnitTest in {
+    val valid164 = EphemeryRelease.validate(raw(164)).fold(r => fail(r.message), identity)
+    store().place(ReleaseEntry.of(valid164, "/src", None, "test", inside165)) shouldBe Right(ReleaseStore.Placed)
+    managed(resolve(genesis165.minusSeconds(1))).entry.release shouldBe "ephemery-164"
+    managed(resolve(genesis165)).entry.release shouldBe "ephemery-165"
+  }
+
+  it should "run an iteration one second before its reset, and not at the reset second" taggedAs UnitTest in {
+    managed(resolve(reset165.minusSeconds(1))).entry.release shouldBe "ephemery-165"
+    val x = refusal(resolve(reset165, settings(refresh = false)))
+    x shouldBe a[ReleaseRefusal.Ended]
+  }
+
+  it should "give the reset second to the next iteration when it is cached" taggedAs UnitTest in {
+    val e166 = SyntheticRelease.nextEntry(raw(165), inside165)
+    store().place(e166) shouldBe Right(ReleaseStore.Placed)
+    managed(resolve(reset165.minusSeconds(1))).entry.release shouldBe "ephemery-165"
+    managed(resolve(reset165)).entry.release shouldBe "ephemery-166"
+  }
+
+  // ---- a cached copy that differs from the bundle (prism P5) -------------------------------------------------------------
+
+  it should "warn that the cached copy differs from the bundle, and run the cached one when it is current" taggedAs UnitTest in {
+    val variant = SyntheticRelease.variantEntry(raw(165), inside165)
+    store().place(variant) shouldBe Right(ReleaseStore.Placed)
+    val r = resolve(inside165)
+    managed(r).origin shouldBe Origin.Cache
+    managed(r).entry.genesisHash shouldBe variant.genesisHash
+    texts(r, Level.Warn) should contain(
+      s"Ephemery: the cached ephemery-165 (genesis ${variant.genesisHash}) differs from the bundled one " +
+        s"($Hash165); running the cached one"
+    )
+  }
+
+  it should "not claim to run a differing cached copy that is not the iteration it runs" taggedAs UnitTest in {
+    val variant = SyntheticRelease.variantEntry(raw(165), inside165)
+    store().place(variant) shouldBe Right(ReleaseStore.Placed)
+    val e166 = SyntheticRelease.nextEntry(raw(165), inside165)
+    store().place(e166) shouldBe Right(ReleaseStore.Placed)
+    val r = resolve(Instant.ofEpochSecond(e166.metadata.genesisTimestamp + 60))
+    managed(r).entry.release shouldBe "ephemery-166"
+    val warnings = texts(r, Level.Warn).filter(_.contains("differs from the bundled one"))
+    warnings should have size 1
+    (warnings.head should not).include("running the cached one")
+    warnings.head should include("not the iteration run now")
+  }
+
+  // ---- startup: the properties, and the report once (prism P2, P5) ------------------------------------------------------
+
+  it should "set the system properties in startup, hold the report back, and write it once" taggedAs UnitTest in {
+    val touched = EphemeryResolver.PropertyKeys
+    touched.foreach(System.clearProperty)
+    ConfigFactory.invalidateCaches()
+    try
+      val raw = ConfigFactory.parseString(
+        s"""fukuii.blockchains.network = "ephemery"
+           |fukuii.datadir = "$root"
+           |logging.logs-dir = "$root/logs"
+           |""".stripMargin
+      )
+      var reloads = 0
+      val code = EphemeryResolver.startup(deps(inside165), BundleSource.classpath, raw, () => reloads += 1)
+      code shouldBe None
+      reloads shouldBe 1
+      System.getProperty("fukuii.datadir") shouldBe root.resolve("ephemery-165").toString
+      System.getProperty("fukuii.ephemery.active.iteration") shouldBe "165"
+      System.getProperty("fukuii.ephemery.active.managed") shouldBe "true"
+      System.getProperty("logging.logs-dir") shouldBe root.resolve("logs").toString
+
+      val written = scala.collection.mutable.ListBuffer.empty[Line]
+      EphemeryResolver.flushReport(ls => written ++= ls)
+      written.map(_.text).exists(_.startsWith("Ephemery ephemery-165 (chain id 39438165")) shouldBe true
+      val count = written.size
+      count should be > 0
+      EphemeryResolver.flushReport(ls => written ++= ls)
+      written.size shouldBe count
+    finally
+      touched.foreach(System.clearProperty)
+      ConfigFactory.invalidateCaches()
+  }
+
+  it should "return the exit code of a refusal from startup, with the properties untouched" taggedAs UnitTest in {
+    val raw = ConfigFactory.parseString(
+      s"""fukuii.blockchains.network = "ephemery"
+         |fukuii.datadir = "$root"
+         |fukuii.ephemery.refresh = false
+         |""".stripMargin
+    )
+    EphemeryResolver.startup(deps(after165), BundleSource.classpath, raw, () => ()) shouldBe Some(78)
+    System.getProperty("fukuii.ephemery.active.managed") shouldBe null
   }
 
   "Settings.from" should "read the raw configuration, with the operator keys' defaults when they are absent" taggedAs UnitTest in {
@@ -310,4 +412,14 @@ class EphemeryResolverSpec extends AnyFlatSpec with Matchers with BeforeAndAfter
     s.exitAtReset shouldBe false
     s.source shouldBe "/a/dir"
     s.refreshTimeout.toSeconds shouldBe 20L
+  }
+
+  it should "not throw on a malformed refresh-timeout: the validator reports it later" taggedAs UnitTest in {
+    val raw = ConfigFactory.parseString(
+      s"""fukuii.blockchains.network = "ephemery"
+         |fukuii.datadir = "$root"
+         |fukuii.ephemery.refresh-timeout = "soon"
+         |""".stripMargin
+    )
+    Settings.from(raw).refreshTimeout.toSeconds shouldBe 60L
   }
