@@ -23,11 +23,13 @@ import com.chipprbots.ethereum.consensus.mining.MiningConfigs
 import com.chipprbots.ethereum.crypto.*
 import com.chipprbots.ethereum.db.components.EphemDataSourceComponent
 import com.chipprbots.ethereum.db.components.Storages
+import com.chipprbots.ethereum.db.dataSource.DataSourceUpdateOptimized
 import com.chipprbots.ethereum.db.dataSource.EphemDataSource
 import com.chipprbots.ethereum.db.storage.Namespaces
 import com.chipprbots.ethereum.db.storage.NodeStorage
 import com.chipprbots.ethereum.db.storage.PathNodeStorage
 import com.chipprbots.ethereum.db.storage.pathstate.BlockRef
+import com.chipprbots.ethereum.db.storage.pathstate.ChangesetStorage
 import com.chipprbots.ethereum.db.storage.pathstate.PathStateStorage
 import com.chipprbots.ethereum.db.storage.pathstate.PathStateTestKit
 import com.chipprbots.ethereum.domain.*
@@ -264,6 +266,18 @@ class TestServiceOnPositionsSpec
     def storageRowsOf(owner: ByteString): Int = rows._2.keys.count(_.startsWith(owner))
     def everything: Map[ByteString, ByteString] =
       source.storage.map((key, value) => ByteString(key.array()) -> ByteString(value))
+
+    /** The changeset record of `block` taken away, as a datadir that lost it would be: what a move back along it is
+      * refused for. What was there is returned, to be put back with [[putRecordBack]].
+      */
+    def loseRecordOf(block: Block): Array[Byte] =
+      val key = ChangesetStorage.recordKey(block.header.hash.value)
+      val kept = source.getOptimized(Namespaces.StateChangesetNamespace, key).get
+      source.update(Seq(DataSourceUpdateOptimized(Namespaces.StateChangesetNamespace, Seq(key), Nil)))
+      kept
+    def putRecordBack(block: Block, record: Array[Byte]): Unit =
+      val key = ChangesetStorage.recordKey(block.header.hash.value)
+      source.update(Seq(DataSourceUpdateOptimized(Namespaces.StateChangesetNamespace, Nil, Seq(key -> record))))
 
     /** The datadir but for contract code, which is kept by its hash and is never taken away. */
     def allButCode: Map[ByteString, ByteString] =
@@ -615,55 +629,81 @@ class TestServiceOnPositionsSpec
       onPositions.anchor shouldBe Some(onPositions.refOf(onPositions.head.header))
     }
 
-  it should "rewind to its head and to its genesis, and refuse a block between them" taggedAs UnitTest in {
-    val pair = new Pair(chainA)
-    import pair.*
-    val first = Seq(transfer(0, Address(42), 9000), create(1), call(2, keeper, word(0xaa) ++ word(0xbb)))
-    val firstBlock = step(first)
-    step(Seq(call(3, contract, ByteString.empty)))
-    val before = onPositions.everything
-    val cleared = onPositions.cleared
+  it should "rewind to its head, to a block of its chain by moving its head back, and to its genesis" taggedAs
+    UnitTest in {
+      val pair = new Pair(chainA)
+      import pair.*
+      val first = Seq(transfer(0, Address(42), 9000), create(1), call(2, keeper, word(0xaa) ++ word(0xbb)))
+      val firstBlock = step(first)
+      val secondBlock = step(Seq(call(3, contract, ByteString.empty)))
+      val before = onPositions.everything
+      val cleared = onPositions.cleared
 
-    // a block between the genesis and the head: its state is held nowhere. Refused before anything is taken away, and
-    // before the pending transactions are.
-    val refused = onPositions.rewind(1)
-    refused.left.map(_.message).left.getOrElse("") shouldBe TestService.RewindBelowTheHead
-    onPositions.everything shouldBe before
-    onPositions.cleared shouldBe cleared
+      // the head, and a block above it: no block to take away; the pending transactions go, as on the hash store
+      Seq(2L, 7L).foreach(to => onPositions.rewind(to) shouldBe Right(RewindToBlockResponse()))
+      onPositions.everything shouldBe before
+      onPositions.cleared shouldBe cleared + 2
 
-    // the head, and a block above it: no block to take away; the pending transactions go, as on the hash store
-    Seq(2L, 7L).foreach(to => onPositions.rewind(to) shouldBe Right(RewindToBlockResponse()))
-    onPositions.everything shouldBe before
-    onPositions.cleared shouldBe cleared + 2
+      // a block between the genesis and the head, with the record of the block above it lost: the head cannot move back
+      // along it. Refused before anything is written, and before the pending transactions are taken away.
+      val record = onPositions.loseRecordOf(secondBlock)
+      val damaged = onPositions.everything
+      val refused = onPositions.rewind(1)
+      refused.left.map(_.message).left.getOrElse("") should startWith(TestService.RewindRefused)
+      onPositions.everything shouldBe damaged
+      onPositions.cleared shouldBe cleared + 2
+      onPositions.putRecordBack(secondBlock, record)
+      onPositions.everything shouldBe before
 
-    // a service that was never given the chain (the node was started again) has no genesis to set
-    val restarted = onPositions.newService()
-    onPositions.run(restarted.rewindToBlock(RewindToBlockRequest(0))).left.map(_.message).left.getOrElse("") should
-      include("test_setChainParams")
-    onPositions.everything shouldBe before
-    onPositions.cleared shouldBe cleared + 2
+      // with it: the head and the state move back to the block, as the hash store's head does by removing the block above
+      Seq(onHashes, onPositions).foreach(_.rewind(1) shouldBe Right(RewindToBlockResponse()))
+      held()
+      onPositions.head.header.hash shouldBe firstBlock.header.hash
+      onPositions.blockchainReader.getBlockHeaderByNumber(2) shouldBe None
+      onPositions.cleared shouldBe cleared + 3
+      // the block it left is known by its hash still, with its record: the way back up
+      onPositions.blockchainReader.getBlockByHash(secondBlock.header.hash) shouldBe Some(secondBlock)
+      new ChangesetStorage(onPositions.source).get(secondBlock.header.hash.value).map(_.isRight) shouldBe Some(true)
 
-    // the genesis: the chain's genesis is set again, on a datadir that holds nothing of the blocks above it
-    onPositions.rewind(0) shouldBe Right(RewindToBlockResponse())
-    onPositions.head.header.number.value shouldBe 0
-    val fresh = new Rig(guard = true)
-    fresh.setChain(chainA) shouldBe Right(SetChainParamsResponse())
-    onPositions.head.header.hash shouldBe fresh.head.header.hash
-    onPositions.allButCode shouldBe fresh.allButCode
-    onPositions.anchor shouldBe Some(onPositions.refOf(onPositions.head.header))
-    onPositions.cleared shouldBe cleared + 3
+      // and mined again on it, at its time, it is executed again to the block it was, on both: on the unified layout a
+      // block that is known by its hash and has a record is committed in place as any other is
+      Seq(onHashes, onPositions).foreach { rig =>
+        rig.run(rig.service.modifyTimestamp(ModifyTimestampRequest(secondBlock.header.unixTimestamp.toLong))) shouldBe
+          Right(ModifyTimestampResponse())
+      }
+      step(secondBlock.body.transactionList.toSeq)
+      onPositions.head.header.hash shouldBe secondBlock.header.hash
+      onPositions.blockchainReader.getBlockHeaderByNumber(2).map(_.hash) shouldBe Some(secondBlock.header.hash)
+      val again = onPositions.everything
 
-    // and the first block is mined again, to the block it was
-    onPositions.run(onPositions.service.modifyTimestamp(ModifyTimestampRequest(1000))) shouldBe
-      Right(ModifyTimestampResponse())
-    onPositions.mine(first) shouldBe Right(MineBlocksResponse())
-    onPositions.head.header.hash shouldBe firstBlock.header.hash
-    onPositions.rows shouldBe stateOf(onHashes, firstBlock.header)
+      // a service that was never given the chain (the node was started again) has no genesis to set
+      val restarted = onPositions.newService()
+      onPositions.run(restarted.rewindToBlock(RewindToBlockRequest(0))).left.map(_.message).left.getOrElse("") should
+        include("test_setChainParams")
+      onPositions.everything shouldBe again
+      onPositions.cleared shouldBe cleared + 4
 
-    // the hash store holds the state of every block: it rewinds to any
-    onHashes.rewind(1) shouldBe Right(RewindToBlockResponse())
-    onHashes.head.header.hash shouldBe firstBlock.header.hash
-  }
+      // the genesis: the chain's genesis is set again, on a datadir that holds nothing of the blocks above it
+      onPositions.rewind(0) shouldBe Right(RewindToBlockResponse())
+      onPositions.head.header.number.value shouldBe 0
+      val fresh = new Rig(guard = true)
+      fresh.setChain(chainA) shouldBe Right(SetChainParamsResponse())
+      onPositions.head.header.hash shouldBe fresh.head.header.hash
+      onPositions.allButCode shouldBe fresh.allButCode
+      onPositions.anchor shouldBe Some(onPositions.refOf(onPositions.head.header))
+      onPositions.cleared shouldBe cleared + 5
+
+      // and the first block is mined again, to the block it was
+      onPositions.run(onPositions.service.modifyTimestamp(ModifyTimestampRequest(1000))) shouldBe
+        Right(ModifyTimestampResponse())
+      onPositions.mine(first) shouldBe Right(MineBlocksResponse())
+      onPositions.head.header.hash shouldBe firstBlock.header.hash
+      onPositions.rows shouldBe stateOf(onHashes, firstBlock.header)
+
+      // the hash store holds the state of every block: it rewinds to any
+      onHashes.rewind(1) shouldBe Right(RewindToBlockResponse())
+      onHashes.head.header.hash shouldBe firstBlock.header.hash
+    }
 
   // What a refusal is to the harness that drives these methods: the error of its request, through the controller that
   // every transport hands a request to. Not a fault thrown past it, and not the answer an invalid block gets.
@@ -685,10 +725,12 @@ class TestServiceOnPositionsSpec
         controller
           .handleRequest(fixture.newJsonRpcRequest("test_rewindToBlock", JInt(to) :: Nil))
           .unsafeRunSync()(using IORuntime.global)
+      // a datadir that lost the record of the head: the head cannot move back along it
+      rig.loseRecordOf(rig.head)
       val before = rig.everything
 
       val refused = rewind(1)
-      refused.error shouldBe Some(JsonRpcError.LogicError(TestService.RewindBelowTheHead))
+      refused.error.map(_.message).getOrElse("") should startWith(TestService.RewindRefused)
       refused.error.map(_.code) shouldBe Some(-32000)
       refused.result shouldBe None
       rig.everything shouldBe before

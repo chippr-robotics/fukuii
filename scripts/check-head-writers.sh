@@ -40,7 +40,7 @@ regex_of() {
   case "$1" in
     best-pointer) echo '\bputBestBlock(Info|Number)\(' ;;
     index-write)  echo '\bblockNumberMappingStorage\.(put|remove)\(' ;;
-    head-writer)  echo '\b(saveBestKnownBlocks|setCanonicalChainHead|rewriteCanonicalIndex|promoteToCanonicalHead|canonicalHeadUpdate|repairBestBlockNumberMapping|removeBlock|removeChainForNewGenesis|reanchor|discardBlocksAfter)\(' ;;
+    head-writer)  echo '\b(moveHeadInPlace|saveBestKnownBlocks|setCanonicalChainHead|rewriteCanonicalIndex|promoteToCanonicalHead|canonicalHeadUpdate|repairBestBlockNumberMapping|removeBlock|removeChainForNewGenesis|reanchor|discardBlocksAfter)\(' ;;
     block-store)  echo '\b(storeBlock|storeBlockHeader|saveBatch)\(|\bblockchainWriter\.save\(' ;;
     *) return 1 ;;
   esac
@@ -170,7 +170,7 @@ if [ "$failed" -ne 0 ]; then
 
 The best block or the index of blocks by number is written somewhere the allow-list does not say, or the list says
 more than is there. A NEW writer: on the unified state layout the best block moves only with the state (spec 018
-Track C, I1). Move the head with PathStateStorage.moveHead and BlockchainWriter.canonicalHeadUpdate, or refuse on that
+Track C, I1). Move the head with BlockchainWriter.moveHeadInPlace (PathStateStorage.moveHead with canonicalHeadUpdate), or refuse on that
 layout; then add a line to ${allowlist#"$root"/} that says which. A use that is GONE: lower its count or remove its
 line, in the same change.
 EOF
