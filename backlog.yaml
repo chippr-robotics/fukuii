@@ -2748,3 +2748,14 @@ items:
     refs: [B-232]
     links: {}
     notes: "App extends Logger, so logback's LOGSDIR (logging.logs-dir = <datadir>/logs) is fixed before main runs; a one-shot 'fukuii cli ...' appends to e.g. ~/.fukuii/etc/logs/fukuii.log. Found in spec 028 S2; S3 fixes it for ephemery-fetch. Options: console-only logging for cli commands."
+  - id: B-242
+    title: a reorganisation that meets a state fault after an executed prefix tells the importer the prefix it settled (C4e)
+    priority: P2
+    status: open
+    area: consensus
+    size: S
+    opened: 2026-11-13
+    refs: []
+    links:
+      spec: 018
+    notes: "ConsensusImpl.reorganise answers ConsensusStateFault(fault, Nil, rest) after settleHead. When a branch is executed on layers (C4e) and a prefix was settled as the head before the fault, the answer must carry imported = the executed prefix and the old branch's blocks to queue, as SelectedNewBestBranch does; settleHead has to say whether it adopted. Unreachable today: the unified layout refuses the first block of a branch that is not adopted as it is executed, and the hash layout throws no such fault. Found by forge, C4b part 0."
