@@ -63,6 +63,7 @@ class EphemeryResolverSpec extends AnyFlatSpec with Matchers with BeforeAndAfter
       root = root,
       customChainsDir = customChainsDir,
       logsDir = root.resolve("logs").toString,
+      jwtSecretPath = None,
       refresh = refresh,
       source = "https://github.com/ephemery-testnet/ephemery-genesis",
       refreshTimeout = scala.concurrent.duration.Duration(60, "s"),
@@ -155,6 +156,7 @@ class EphemeryResolverSpec extends AnyFlatSpec with Matchers with BeforeAndAfter
       "fukuii.blockchains.custom-chains-dir" -> root.resolve("releases/ephemery-165/chains").toString,
       "fukuii.datadir" -> root.resolve("ephemery-165").toString,
       "logging.logs-dir" -> root.resolve("logs").toString,
+      "fukuii.network.engine-api.jwt-secret-path" -> root.resolve("jwt.hex").toString,
       "fukuii.ephemery.active.iteration" -> "165",
       "fukuii.ephemery.active.reset-time" -> "1795114800",
       "fukuii.ephemery.active.genesis-hash" -> Hash165,
@@ -680,9 +682,56 @@ class EphemeryResolverSpec extends AnyFlatSpec with Matchers with BeforeAndAfter
     s.root shouldBe root
     s.customChainsDir shouldBe None
     s.logsDir shouldBe s"$root/logs"
+    s.jwtSecretPath shouldBe None
     s.refresh shouldBe true
     s.exitAtReset shouldBe true
     s.source shouldBe "https://github.com/ephemery-testnet/ephemery-genesis"
+  }
+
+  it should "read the Engine API secret path the operator set, and none when unset" taggedAs UnitTest in {
+    val unset = ConfigFactory.parseString(
+      s"""fukuii.blockchains.network = "ephemery"
+         |fukuii.datadir = "$root"
+         |""".stripMargin
+    )
+    Settings.from(unset).jwtSecretPath shouldBe None
+    val set = ConfigFactory.parseString(
+      s"""fukuii.blockchains.network = "ephemery"
+         |fukuii.datadir = "$root"
+         |fukuii.network.engine-api.jwt-secret-path = "/secrets/jwt.hex"
+         |""".stripMargin
+    )
+    Settings.from(set).jwtSecretPath shouldBe Some("/secrets/jwt.hex")
+  }
+
+  it should "pin an unset Engine API secret to <root>/jwt.hex, and leave an operator's alone" taggedAs UnitTest in {
+    val pinned = resolve(inside165)
+    pinned.properties("fukuii.network.engine-api.jwt-secret-path") shouldBe root.resolve("jwt.hex").toString
+    val operators = resolve(inside165, settings().copy(jwtSecretPath = Some("/secrets/jwt.hex")))
+    operators.properties.contains("fukuii.network.engine-api.jwt-secret-path") shouldBe false
+  }
+
+  it should "tell the node, as a typed value, only the path it pinned itself" taggedAs UnitTest in {
+    val touched = EphemeryResolver.PropertyKeys
+    touched.foreach(System.clearProperty)
+    ConfigFactory.invalidateCaches()
+    def run(extra: String): Unit =
+      val raw = ConfigFactory.parseString(
+        s"""fukuii.blockchains.network = "ephemery"
+           |fukuii.datadir = "$root"
+           |$extra
+           |""".stripMargin
+      )
+      EphemeryResolver.startup(deps(inside165), BundleSource.classpath, raw, () => ())
+    try
+      run("")
+      EphemeryResolver.pinnedJwtSecretPath shouldBe Some(root.resolve("jwt.hex").toString)
+      touched.foreach(System.clearProperty)
+      run("""fukuii.network.engine-api.jwt-secret-path = "/secrets/jwt.hex"""")
+      EphemeryResolver.pinnedJwtSecretPath shouldBe None
+    finally
+      touched.foreach(System.clearProperty)
+      ConfigFactory.invalidateCaches()
   }
 
   it should "read the operator's keys" taggedAs UnitTest in {

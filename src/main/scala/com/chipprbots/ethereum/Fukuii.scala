@@ -17,6 +17,7 @@ import com.chipprbots.ethereum.ephemery.EphemeryResetWatchdog
 import com.chipprbots.ethereum.ephemery.EphemeryResolver
 import com.chipprbots.ethereum.ephemery.StartupDeps
 import com.chipprbots.ethereum.nodebuilder.ChainTool
+import com.chipprbots.ethereum.nodebuilder.EngineApiStartupRefusal
 import com.chipprbots.ethereum.nodebuilder.StdNode
 import com.chipprbots.ethereum.nodebuilder.TestNode
 import com.chipprbots.ethereum.utils.Config
@@ -157,7 +158,14 @@ object Fukuii extends Logger:
         new TestNode
       else new StdNode
 
-    node.start()
+    try node.start()
+    catch
+      case refusal: EngineApiStartupRefusal =>
+        // The terminal first, so the message is not lost in the alternate screen, then the message once, with no trace.
+        Tui.current.foreach(_.shutdown())
+        System.err.println(refusal.getMessage)
+        log.error(refusal.getMessage)
+        sys.exit(1)
 
     // An Ephemery iteration ends at its reset: exit 75 for a supervisor to restart (managed), or only warn (an
     // operator's prepared directory, or `exit-at-reset = false`). Nothing is armed on any other network.
