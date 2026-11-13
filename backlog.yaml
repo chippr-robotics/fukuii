@@ -2740,3 +2740,13 @@ items:
     links:
       spec: 018
     notes: StateRead.reading is IO(scoped(body)); debug_trace*, trace_* and eth_simulateV1 run for seconds on a compute thread (as before the scope). IO.blocking keeps the body on one thread, so the scope stays valid. Four slow traces can also hold every read behind the head. Found by conduit, C4a part 4b-2
+  - id: B-241
+    title: fukuii cli subcommands append to the default network's node log (logback resolves before the network config)
+    priority: P3
+    status: open
+    area: ops
+    size: S
+    opened: 2026-11-13
+    refs: [B-232]
+    links: {}
+    notes: "App extends Logger, so logback's LOGSDIR (logging.logs-dir = <datadir>/logs) is fixed before main runs; a one-shot 'fukuii cli ...' appends to e.g. ~/.fukuii/etc/logs/fukuii.log. Found in spec 028 S2; S3 fixes it for ephemery-fetch. Options: console-only logging for cli commands."
