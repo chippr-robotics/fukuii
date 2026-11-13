@@ -2684,7 +2684,7 @@ items:
   - id: B-236
     title: "028 S5: live checks (24 h follow, 166 reset under a supervisor, Hoodi peers) and closure"
     priority: P2
-    status: claimed
+    status: in-progress
     area: ops
     size: M
     opened: 2026-11-12
@@ -2695,7 +2695,8 @@ items:
       by: dev-node
       agent: main
       since: 2026-11-13T15:29:09Z
-      heartbeat: 2026-11-13T15:29:09Z
+      heartbeat: 2026-11-13T15:35:56Z
+    notes: "2026-11-13 in-progress: S5 running on dev-node since 2026-11-13 09:34 CST: user units fukuii-ephemery-builtin + lighthouse-ephemery-builtin, root /chipprbots/blockchain/ephemery/builtin, jar 0.11.78 (staging 8b82e132c); 165 reset 2026-11-19 19:00 UTC"
   - id: B-237
     title: PeerManagerActor dials bootstrap/discovered enodes with TCP port 0 (enode ...:0?discport=N form)
     priority: P3
