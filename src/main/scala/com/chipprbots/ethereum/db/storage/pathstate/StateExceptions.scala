@@ -58,6 +58,16 @@ enum ReorgRefusal:
   /** The move would cross the block this datadir's state started from. */
   case Pivot
 
+  /** The move would reverse the finalized block. It is the one refusal that is not answered by syncing the state again:
+    * that would follow a consensus client that broke finality.
+    */
+  case Finalized
+
+  /** A changeset record on the way is not there though it was not pruned, or is not its block's: this data directory's
+    * records are corrupt. Never said as `Deep`, which is an ordinary answer.
+    */
+  case Corrupt
+
 /** A move of the head that was refused before anything was changed. */
 final class ReorgTooDeep(val reason: ReorgRefusal, detail: String)
     extends StateFault(s"Head move refused ($reason): $detail")

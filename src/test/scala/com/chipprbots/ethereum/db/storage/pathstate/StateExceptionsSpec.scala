@@ -60,8 +60,14 @@ class StateExceptionsSpec extends AnyFlatSpec with Matchers:
     (large.bytes, large.cap) shouldBe (300L, 256L)
   }
 
-  "A refused head move" should "be refused for one of three reasons" taggedAs UnitTest in {
-    ReorgRefusal.values.toSeq shouldBe Seq(ReorgRefusal.Deep, ReorgRefusal.Incomplete, ReorgRefusal.Pivot)
+  "A refused head move" should "be refused for one of five reasons" taggedAs UnitTest in {
+    ReorgRefusal.values.toSeq shouldBe Seq(
+      ReorgRefusal.Deep,
+      ReorgRefusal.Incomplete,
+      ReorgRefusal.Pivot,
+      ReorgRefusal.Finalized,
+      ReorgRefusal.Corrupt
+    )
   }
 
   "A corrupt stored node" should "stay a missing node, handled wherever a missing node is" taggedAs UnitTest in {

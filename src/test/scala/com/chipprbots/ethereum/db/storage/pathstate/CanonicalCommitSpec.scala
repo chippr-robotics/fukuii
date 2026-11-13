@@ -689,7 +689,7 @@ class CanonicalCommitSpec extends AnyFlatSpec with Matchers:
           ),
           finalized = () =>
             heldWhenAsked = Some(chain.state.lock.holder.isDefined)
-            Some(BigInt(1))
+            Some(FinalizedBlock(BigInt(1), ByteString(Array.fill[Byte](32)(1))))
           ,
           observer = new CommitObserver:
             override def committed(commit: Commit): Unit =
