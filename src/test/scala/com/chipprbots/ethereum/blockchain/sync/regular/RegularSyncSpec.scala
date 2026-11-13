@@ -1150,6 +1150,39 @@ class RegularSyncSpec
           finally BlockImporter.exhaustBackoff = 5.minutes
       )
 
+      // Spec 018 Track C, C4b: the state a block was to be executed on was moved from under the batch by another
+      // writer, or is not held. The block was not judged. It is fetched and tried again, and nobody is blamed for it.
+      "try a block again that this node's state could not take: no peer blamed, no strike" taggedAs (
+        UnitTest,
+        SyncTest
+      ) in sync(
+        new Fixture:
+          val failingBlock: Block = testBlocksChunked.head.head
+          val attempts = new java.util.concurrent.atomic.AtomicInteger(0)
+          setImportResult(
+            failingBlock,
+            IO {
+              attempts.incrementAndGet()
+              BlockImportStateFault(
+                new com.chipprbots.ethereum.db.storage.pathstate.StateUnavailable("the head moved under the batch")
+              )
+            }
+          )
+          peersClient.setAutoPilot(new PeersClientAutoPilot)
+
+          regularSync ! SyncProtocol.Start
+
+          // tried, fetched again and tried again: more often than a block that failed would be before its peer is
+          // evicted (three strikes) and a fork is looked for (five)
+          awaitCond(attempts.get > 5, 15.seconds)
+          withClue("neither blacklisted nor evicted: ") {
+            peersClient.receiveWhile(500.millis) { case m => m }.collect { case b: PeersClient.BlacklistPeer =>
+              b
+            } shouldBe
+              empty
+          }
+      )
+
       "recognise a block execution's trie error by the text it reaches the importer as" taggedAs (
         UnitTest,
         SyncTest
