@@ -508,11 +508,9 @@ object EphemeryResolver extends LazyLogger:
       case (Left(refusal), _) => (Refused(refusal), Map.empty)
       case (_, Left(refusal)) => (Refused(refusal), Map.empty)
 
-  /** The Engine API secret (B-246): the operator's own path is left as it is, and no path becomes `<root>/jwt.hex`,
-    * marked as the node's default so that the node creates the file as it does `<datadir>/jwt.hex`.
-    */
   private val JwtKey = "fukuii.network.engine-api.jwt-secret-path"
 
+  /** The holder behind [[pinnedJwtSecretPath]]: set by `startup`, once per process. */
   private val pinnedJwt = new java.util.concurrent.atomic.AtomicReference[Option[String]](None)
 
   /** The Engine API secret path this resolver chose because the operator set none, or `None`: the node creates a file
@@ -520,6 +518,9 @@ object EphemeryResolver extends LazyLogger:
     */
   def pinnedJwtSecretPath: Option[String] = pinnedJwt.get()
 
+  /** The Engine API secret (B-246): the operator's own path is left as it is, and no path becomes `<root>/jwt.hex`,
+    * marked as the node's default so that the node creates the file as it does `<datadir>/jwt.hex`.
+    */
   private def jwtProperties(settings: Settings): Map[String, String] =
     settings.jwtSecretPath match
       case Some(_) => Map.empty

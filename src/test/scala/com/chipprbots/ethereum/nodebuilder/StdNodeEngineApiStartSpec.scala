@@ -59,3 +59,22 @@ class StdNodeEngineApiStartSpec extends AnyFlatSpec with Matchers with Scalatest
     val result = StdNode.awaitEngineApiBind(Future.never, "localhost", 8551, 100.milliseconds)
     result.left.exists(_.contains("network.engine-api.port")) shouldBe true
   }
+
+  "StdNode.failIfRefused" should "throw the dedicated refusal, carrying only the message, instead of exiting" taggedAs UnitTest in {
+    val e = the[EngineApiStartupRefusal] thrownBy
+      StdNode.failIfRefused(throw new IllegalStateException("Refusing to start: the file x is not usable"))
+    e.getMessage shouldBe "Refusing to start: the file x is not usable"
+    e.getCause shouldBe null
+    e.getStackTrace.length shouldBe 0
+  }
+
+  it should "do nothing when the secret is fine" taggedAs UnitTest in {
+    StdNode.failIfRefused(42)
+  }
+
+  "StdNode.startupRefusal" should "be the same dedicated type, for a bind that failed" taggedAs UnitTest in {
+    val e = StdNode.startupRefusal("cannot bind")
+    e shouldBe an[EngineApiStartupRefusal]
+    e shouldBe a[RuntimeException]
+    e.getMessage shouldBe "cannot bind"
+  }

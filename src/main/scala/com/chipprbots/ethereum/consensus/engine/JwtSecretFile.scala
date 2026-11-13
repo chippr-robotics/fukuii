@@ -120,12 +120,21 @@ object JwtSecretFile extends Logger:
       // Neither a link nor a plain move replaces an existing target: the file that got there first wins.
       try
         try Files.createLink(path, tmp)
-        catch
-          case _: UnsupportedOperationException   => Files.move(tmp, path)
-          case _: AtomicMoveNotSupportedException => Files.move(tmp, path)
+        catch case e if isLinkUnsupported(e) => Files.move(tmp, path)
         log.info(s"Created the Engine API JWT secret file $path")
       catch case _: FileAlreadyExistsException => log.info(s"Engine API JWT secret file $path was created meanwhile")
     finally Files.deleteIfExists(tmp)
+
+  /** A failure of `createLink` that means the filesystem cannot make hard links (FAT, some network and FUSE mounts
+    * report a plain `FileSystemException`), as opposed to "the name exists", which is the race this method exists to
+    * lose gracefully.
+    */
+  private[engine] def isLinkUnsupported(e: Throwable): Boolean =
+    e match
+      case _: FileAlreadyExistsException                                         => false
+      case _: UnsupportedOperationException | _: AtomicMoveNotSupportedException => true
+      case _: java.nio.file.FileSystemException                                  => true
+      case _                                                                     => false
 
   /** True on a filesystem with POSIX permissions; warns once, when not, that the file's permissions cannot be held. */
   private def supportsPosix(dir: Path): Boolean =

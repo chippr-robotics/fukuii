@@ -272,3 +272,23 @@ class JwtSecretFileSpec extends AnyFlatSpec with Matchers with BeforeAndAfterEac
     messages.exists(m => m.contains(path.toString) && m.contains("readable")) shouldBe true
     messages.foreach(m => (m should not).include(Good))
   }
+
+  it should "fall back to a plain move, never a replace, when hard links are not supported" taggedAs UnitTest in {
+    // The fallback is taken for UnsupportedOperationException, AtomicMoveNotSupportedException and any other
+    // FileSystemException from createLink except FileAlreadyExistsException (G2). A seam for a link that fails would
+    // need an injectable filesystem; what can be shown here is the contract of the fallback itself: Files.move without
+    // REPLACE_EXISTING refuses an existing target, so a file that appeared first still wins.
+    val existing = dir.resolve("winner.hex")
+    write(existing, Good, "rw-------")
+    val tmp = Files.createTempFile(dir, "jwt-", ".tmp")
+    a[java.nio.file.FileAlreadyExistsException] should be thrownBy Files.move(tmp, existing)
+    Files.readString(existing) shouldBe Good
+    Files.delete(tmp)
+    JwtSecretFile.isLinkUnsupported(
+      new java.nio.file.FileSystemException("x", null, "Operation not permitted")
+    ) shouldBe true
+    JwtSecretFile.isLinkUnsupported(new java.nio.file.FileAlreadyExistsException("x")) shouldBe false
+    JwtSecretFile.isLinkUnsupported(new UnsupportedOperationException) shouldBe true
+    JwtSecretFile.isLinkUnsupported(new java.nio.file.AtomicMoveNotSupportedException("a", "b", "c")) shouldBe true
+    JwtSecretFile.isLinkUnsupported(new java.io.IOException("disk")) shouldBe false
+  }

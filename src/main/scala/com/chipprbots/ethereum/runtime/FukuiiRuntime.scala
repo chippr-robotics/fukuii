@@ -28,8 +28,12 @@ class FukuiiRuntime(val instances: Map[String, ChainInstance]) extends Logger:
     log.info(s"Starting Fukuii runtime with ${instances.size} chain instance(s): ${instances.keys.mkString(", ")}")
     instances.foreach { case (id, instance) =>
       log.info(s"Starting chain instance: $id (network=${instance.instanceConfig.blockchains.network})")
-      Try(instance.start()).recover { case e =>
-        log.error(s"Failed to start chain instance $id: ${e.getMessage}", e)
+      Try(instance.start()).recover {
+        // one refused instance does not end the JVM; its message is all there is to say
+        case e: com.chipprbots.ethereum.nodebuilder.EngineApiStartupRefusal =>
+          log.error(s"Failed to start chain instance $id: ${e.getMessage}")
+        case e =>
+          log.error(s"Failed to start chain instance $id: ${e.getMessage}", e)
       }
     }
     log.info(s"All ${instances.size} chain instance(s) started")

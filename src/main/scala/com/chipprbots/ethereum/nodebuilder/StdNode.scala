@@ -68,9 +68,10 @@ abstract class BaseNode extends Node:
   private var periodicConsistencyCheckSystem: Option[ActorSystem[?]] = None
 
   def start(): Unit =
-    // Phase -1 (B-246): the Engine API's JWT secret is resolved before anything starts. A refused file is one clear
-    // line and exit 1 here, not a stack trace from phase 3 with P2P and discovery already up.
-    StdNode.engineApiRefusal(engineApiJwtAuthenticator).foreach(refuseToStart)
+    // Phase -1 (B-246): the Engine API's JWT secret is resolved before anything starts. A refused file is an
+    // EngineApiStartupRefusal here, which the caller turns into one clear line and exit 1, not a stack trace from
+    // phase 3 with P2P and discovery already up.
+    StdNode.failIfRefused(engineApiJwtAuthenticator)
 
     // Phase 0: the TUI's frames, so its splash and "starting node" move while the node starts. The probe that feeds it
     // starts in phase 6, once the actors it asks exist.
@@ -307,11 +308,6 @@ abstract class BaseNode extends Node:
   private def startJsonRpcIpcServer(): Unit =
     if jsonRpcConfig.ipcServerConfig.enabled then jsonRpcIpcServer.run()
 
-  /** One ERROR line and exit 1: the node does not start half-way. */
-  private def refuseToStart(message: String): Unit =
-    log.error(message)
-    sys.exit(1)
-
   /** With the Engine API enabled the node needs a consensus client to follow a post-merge chain, so a port it cannot
     * bind is fatal: a node that logs it and runs on would look healthy and never sync.
     */
@@ -319,7 +315,7 @@ abstract class BaseNode extends Node:
     maybeEngineApiServer.foreach { server =>
       StdNode.awaitEngineApiBind(server.start(), engineApiConfig.interface, engineApiConfig.port, 10.seconds) match
         case Right(binding) => log.info(s"Engine API server bound to ${binding.localAddress}")
-        case Left(message)  => refuseToStart(message)
+        case Left(message)  => throw StdNode.startupRefusal(message)
     }
 
   def startPeriodicDBConsistencyCheck(): Unit =
@@ -555,6 +551,13 @@ class StdNode(
 
 object StdNode:
 
+  /** The refusal to start, for the caller (`Fukuii.run`, or one instance of the multi-instance runtime) to report. */
+  def startupRefusal(message: String): EngineApiStartupRefusal = new EngineApiStartupRefusal(message)
+
+  /** Forces the Engine API secret and throws [[EngineApiStartupRefusal]] if it is refused. */
+  def failIfRefused(thunk: => Any): Unit =
+    engineApiRefusal(thunk).foreach(m => throw startupRefusal(m))
+
   /** The message of a refused Engine API secret, if the secret is refused (B-246). `thunk` forces it. */
   def engineApiRefusal(thunk: => Any): Option[String] =
     try
@@ -591,3 +594,9 @@ object StdNode:
     */
   def engineApiBindsLast(readinessPort: Option[Int], engineApiPort: Int): Boolean =
     readinessPort.contains(engineApiPort)
+
+/** The node cannot start, for a reason the operator can fix: a refused Engine API secret file, or an Engine API port it
+  * cannot bind. It carries only the operator-facing message, no cause and no stack trace, which the caller prints and
+  * logs once before it exits 1 (B-246).
+  */
+final class EngineApiStartupRefusal(message: String) extends RuntimeException(message, null, false, false)
