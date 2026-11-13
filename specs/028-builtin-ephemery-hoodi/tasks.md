@@ -477,15 +477,15 @@ FR-014, FR-017).
 **Independent test**: the refresh cases of `ReleaseFetcherSpec`, `EphemeryResolverSpec` and `EphemeryLaunchItSpec`
 pass against the fake transport.
 
-- [ ] T073 After S3 and S4a merge, make a full clone at `~/work/e028-s4b` on branch `feat/028-s4b-refresh`, and claim
+- [x] T073 After S3 and S4a merge, make a full clone at `~/work/e028-s4b` on branch `feat/028-s4b-refresh`, and claim
       B-235.
 
 ### Tests for S4b (write first, see them fail)
 
-- [ ] T074 [P] [US2] Write `ephemery tests/SyntheticRelease.scala`, a test helper. `next(raw)` shifts the timestamp and
+- [x] T074 [P] [US2] Write `ephemery tests/SyntheticRelease.scala`, a test helper. `next(raw)` shifts the timestamp and
       reset by one interval, adds 1 to the iteration and chain id, computes the published hash with the library, and
       can pack a GNU-tar `testnet-all.tar.gz` (R16).
-- [ ] T075 [P] [US2] Write `ephemery tests/ReleaseFetcherSpec.scala`, with the fake transport, a manual clock and a
+- [x] T075 [P] [US2] Write `ephemery tests/ReleaseFetcherSpec.scala`, with the fake transport, a manual clock and a
       manual scheduler. It covers:
       - target K, including several iterations behind;
       - the asset URL form;
@@ -495,7 +495,7 @@ pass against the fake transport.
       - the size cap;
       - `Republished` (78);
       - the EL members in memory, and `testnet/` without the excluded members.
-- [ ] T076 [P] [US2] [US4] Add the fetch cases to `ephemery tests/EphemeryResolverSpec.scala`:
+- [x] T076 [P] [US2] [US4] Add the fetch cases to `ephemery tests/EphemeryResolverSpec.scala`:
       - ended, then fetched: `Managed(166)` with `testnet/`;
       - `refresh = false`: `Ended` (78);
       - `source = <dir>`: no network, then `Managed`, `Ended` or `BadSource`;
@@ -503,27 +503,27 @@ pass against the fake transport.
       - an https mirror;
       - not published, or unreachable: 69;
       - **zero transport calls** while the iteration is current (SC-003).
-- [ ] T077 [US2] Add the refresh case to `it/ephemery/EphemeryLaunchItSpec.scala`: the clock past the 165 reset, and
+- [x] T077 [US2] Add the refresh case to `it/ephemery/EphemeryLaunchItSpec.scala`: the clock past the 165 reset, and
       the fake transport serving `SyntheticRelease.next(165)`. The node starts in `<root>/ephemery-166`, and
       `<root>/ephemery-165` is untouched.
-- [ ] T078 [P] [US4] Extend `ephemery tests/EphemeryFetchCliSpec.scala`:
+- [x] T078 [P] [US4] Extend `ephemery tests/EphemeryFetchCliSpec.scala`:
       - `--release` through the fake transport (the CLI takes `StartupDeps`);
       - without `--out`, it writes into the node's root, including `testnet/`;
       - `refresh = false` does not block an explicit fetch.
 
 ### Implementation for S4b
 
-- [ ] T079 [US2] Write `ephemery/ReleaseFetcher.scala` (R7): target K, the asset URL, the single API fallback, the
+- [x] T079 [US2] Write `ephemery/ReleaseFetcher.scala` (R7): target K, the asset URL, the single API fallback, the
       60 s budget from `fukuii.ephemery.refresh-timeout`, and a call to `StrictTarReader` and then
       `EphemeryRelease.validate`.
-- [ ] T080 [US2] [US4] Add the fetch path to `ephemery/EphemeryResolver.scala`: rows 4 and 6 of data-model.md, exits
+- [x] T080 [US2] [US4] Add the fetch path to `ephemery/EphemeryResolver.scala`: rows 4 and 6 of data-model.md, exits
       69 and 78, `fukuii.ephemery.refresh` and `source`, `testnet/` placed into the entry, and the CL path on the
       startup line. `StartupDeps.production` now carries the real `JdkHttpsTransport`.
-- [ ] T081 [US4] Add the S4b modes to `ephemery/EphemeryFetchCli.scala`: `--release` downloads, and with no `--out`
+- [x] T081 [US4] Add the S4b modes to `ephemery/EphemeryFetchCli.scala`: `--release` downloads, and with no `--out`
       it writes into the node's root, adding `testnet/` to an existing entry with an atomic rename.
-- [ ] T082 [US4] Reduce `scripts/ephemery/fetch-genesis.sh` to argument defaults (`--out`) plus
+- [x] T082 [US4] Reduce `scripts/ephemery/fetch-genesis.sh` to argument defaults (`--out`) plus
       `exec "${FUKUII_BIN:-fukuii}" cli ephemery-fetch "$@"`.
-- [ ] T083 [P] [US2] Rewrite `docs/runbooks/ephemery.md` to cover:
+- [x] T083 [P] [US2] Rewrite `docs/runbooks/ephemery.md` to cover:
       - the quick start;
       - systemd (`Restart=on-failure`, `RestartSec=120`, `RestartPreventExitStatus=78`);
       - Docker: no retry cap, and watch for 78;
@@ -539,10 +539,10 @@ pass against the fake transport.
 
 ### Gate and exit for S4b
 
-- [ ] T084 Run `sbt compile-all`, then `sbt "testOnly com.chipprbots.ethereum.ephemery.* *LauncherIntegrationSpec"`,
+- [x] T084 Run `sbt compile-all`, then `sbt "testOnly com.chipprbots.ethereum.ephemery.* *LauncherIntegrationSpec"`,
       then `sbt "IntegrationTest / testOnly *EphemeryLaunchItSpec"`. Expect PASS. Then the T039 grep gates.
-- [ ] T085 Run `sbt formatAll`, read `git diff`, then run `sbt formatCheck`. Expect clean.
-- [ ] T086 [US4] Manual, with network, from an empty scratch `HOME`: `fukuii cli ephemery-fetch --release
+- [x] T085 Run `sbt formatAll`, read `git diff`, then run `sbt formatCheck`. Expect clean.
+- [x] T086 [US4] Manual, with network, from an empty scratch `HOME`: `fukuii cli ephemery-fetch --release
       ephemery-165`. Check that `releases/ephemery-165/testnet/config.yaml` is present and that there is no
       `parsedBeaconState.json`. Also check that `scripts/ephemery/fetch-genesis.sh --out /tmp/eph-s4b` writes the old
       layout.
