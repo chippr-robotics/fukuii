@@ -75,6 +75,10 @@ object BlockImporter:
   // imported clears them.
   val StuckEscapeThreshold: Int = 3
 
+  // From this many faults of this node's own state in a row on one block, the block's tries are spaced out by
+  // exhaustBackoff. Nothing is escalated: what the node does when the fault stays is a later slice's (spec 018, C4b).
+  val StateFaultBackoffAfter: Int = 3
+
   // How often a block waiting on a missing node is imported again. A variable only so a spec can shorten it.
   private[regular] var resolvingRetryInterval: FiniteDuration = 30.seconds
 
@@ -335,6 +339,11 @@ object BlockImporter:
     */
   case object RunningAfterFetcherRewind extends NewBehavior
 
+  /** [[RunningAfterFetcherRewind]], with the next pick of blocks put off by [[BlockImporter.exhaustBackoff]]: the same
+    * block could not be executed on this node's own state several times running (spec 018 Track C, C4b).
+    */
+  case object BackingOffAfterStateFault extends NewBehavior
+
   /** Waiting for a missing node. `alreadyExhausted`: the wait ends as it starts, as an exhausted fetch, because the
     * import asked no peer (a storage node it could not locate), or because a fetch exhausted while that import ran.
     */
@@ -428,6 +437,11 @@ final private class BlockImporterLogic(
   // An exhausted fetch that arrived while an import ran, for that import's ImportDone to act on (#1694).
   private var exhaustedDuringImport: Boolean = false
   private var unknownParentStrikes: Map[ByteString, Int] = Map.empty
+
+  /** The block the import last stopped at on a fault of this node's own state, and how often in a row (spec 018 Track
+    * C, C4b): cleared by any block that is imported.
+    */
+  private var stateFaultStreak: Option[(ByteString, Int)] = None
   // Orphan announcements per peer, in a row (B-007): a peer is blacklisted for them only after a bounded number.
   private val orphanAnnounces = new OrphanAnnounceStrikes
   // How many times in a row the pivot floor sent the fetcher back to the same block (forge, B-007).
@@ -518,6 +532,10 @@ final private class BlockImporterLogic(
             if deferred.nonEmpty then
               log.debug("Deferred batches dropped: count={} reason=import-failed-fetcher-rewound", deferred.size)
             selfRef ! PickBlocks
+          case BackingOffAfterStateFault =>
+            // As after any fetcher rewind, and no pick now: the timer set below brings the next one.
+            if deferred.nonEmpty then
+              log.debug("Deferred batches dropped: count={} reason=state-fault-backoff", deferred.size)
           case r: ResolvingBranch =>
             // The fetcher is being rewound (InvalidateBlocksFrom already sent): it re-serves these blocks.
             if deferred.nonEmpty then
@@ -718,6 +736,9 @@ final private class BlockImporterLogic(
       case Running | RunningAfterFetcherRewind =>
         timers.startTimerWithFixedDelay(RetryKey, SyncRetryTick, syncConfig.syncRetryInterval)
         running(state)
+      case BackingOffAfterStateFault =>
+        timers.startTimerWithFixedDelay(RetryKey, SyncRetryTick, BlockImporter.exhaustBackoff)
+        running(state)
       case ResolvingMissingNode(blocksToRetry, alreadyExhausted) =>
         timers.startTimerWithFixedDelay(RetryKey, SyncRetryTick, BlockImporter.resolvingRetryInterval)
         // Sent here, not from the import: there it would reach `running`, which does not wait on a node.
@@ -776,13 +797,15 @@ final private class BlockImporterLogic(
         if importedBlocks.nonEmpty then
           exhausts.reset()
           floorGapRewinds.reset()
+          stateFaultStreak = None
 
         errorOpt match
           case None      => Running
           case Some(err) =>
             // An orphan batch is expected on a reorging chain and right after SNAP hand-off: a warning, not an error.
             if err == UnknownParent then log.warning("Block import: the batch hangs from a block this node lacks")
-            else log.error("Block import error {}", err)
+            // a fault of this node's own state is said by its own arm below, once, and is no error of the import
+            else if !err.isInstanceOf[BlockImportStateFault] then log.error("Block import error {}", err)
             val notImportedBlocks = blocks.drop(importedBlocks.size)
 
             err match
@@ -1029,6 +1052,44 @@ final private class BlockImporterLogic(
                 )
                 pendingStateNodeHash = None
                 ResolvingMissingNode(NonEmptyList(failedBlock, notImportedBlocks.tail), alreadyExhausted = true)
+              case BlockImportStateFault(fault, _) =>
+                // The state these blocks are to be executed on is not the one this node holds, or is no longer: the
+                // head moved under the batch, or could not be moved (spec 018 Track C, C4b). The blocks were not
+                // judged. They are fetched again from the first that was not executed, and the peer that served them
+                // is not blamed: it was asked for these blocks and gave them.
+                val failedBlock = notImportedBlocks.head
+                val streak = stateFaultStreak
+                  .collect {
+                    case (hash, count) if hash == failedBlock.hash.value => count
+                  }
+                  .getOrElse(0) + 1
+                stateFaultStreak = Some((failedBlock.hash.value, streak))
+                fetcher ! BlockFetcher.InvalidateBlocksFrom(
+                  failedBlock.number.value,
+                  "this node's state could not take the block",
+                  shouldBlacklist = false
+                )
+                // A head that moved under the batch is gone at the next try. A fault that stays (a branch this layout
+                // cannot execute yet, a state that is not held) would otherwise be met again at every round trip of
+                // the fetcher, for good: from the third in a row on the same block the tries are spaced out.
+                if streak < BlockImporter.StateFaultBackoffAfter then
+                  log.warning(
+                    "[LOCAL-STATE-FAULT] block {} was not executed on this node's own state, no peer blamed: {}",
+                    failedBlock.number,
+                    fault.getMessage
+                  )
+                  RunningAfterFetcherRewind
+                else
+                  if streak == BlockImporter.StateFaultBackoffAfter then
+                    log.error(
+                      "[LOCAL-STATE-FAULT] block {} could not be executed on this node's own state {} times " +
+                        "running; it is tried again every {}s, and no peer is blamed: {}",
+                      failedBlock.number,
+                      streak,
+                      BlockImporter.exhaustBackoff.toSeconds,
+                      fault.getMessage
+                    )
+                  BackingOffAfterStateFault
               case _ =>
                 val invalidBlockNr = notImportedBlocks.head.number.value
                 fetcher ! BlockFetcher.InvalidateBlocksFrom(invalidBlockNr, err.toString)
@@ -1085,6 +1146,12 @@ final private class BlockImporterLogic(
 
           case BlockImportFailedDueToMissingNode(missingNodeException, adopted) =>
             IO(adoptedPrefix(adopted, importedBlocks)).flatMap(_ => IO.raiseError(missingNodeException))
+
+          // This node's own state could not take a block of the batch (spec 018 Track C, C4b). The prefix that was
+          // adopted before it is counted, as above. No strike: the block was not judged, so the peer that sent it is
+          // not evicted and no fork is detected.
+          case stateFault @ BlockImportStateFault(_, adopted) =>
+            IO.pure((adoptedPrefix(adopted, importedBlocks), Some(stateFault)))
 
           // This node's own state failed, not the block: no strike, so the peer that sent it is not evicted and no fork
           // is detected (spec 022 T062). The caller backs off and escalates instead.
@@ -1226,6 +1293,9 @@ final private class BlockImporterLogic(
           case BlockImportFailed(error) if informFetcherOnFail && !Consensus.isLocalStateFault(error) =>
             fetcher ! BlockFetcher.BlockImportFailed(block.number.value, BlacklistReason.BlockImportError(error))
           case UnknownParent => announcedBy.foreach(handleOrphanAnnounce(block, _))
+          // Not judged, so nothing is said of it to the fetcher or of the peer that announced it; what was adopted
+          // before the fault is announced as any imported blocks are.
+          case BlockImportStateFault(_, adopted)                     => announceAdopted(adopted, internally)
           case BlockEnqueued | DuplicateBlock | BlockImportFailed(_) => ()
         }
         // A block that shows the announced block's parent was here clears the peer's orphan strikes. A duplicate shows

@@ -92,6 +92,8 @@ class ConsensusAdapterSpec extends AnyFlatSpec with Matchers with ScalaFutures w
       .expects(*, *, *, true)
       .returning(com.chipprbots.ethereum.db.dataSource.DataSourceBatchUpdate(storagesInstance.dataSource))
     blockchainWriter.saveBestKnownBlocks.expects(*, *).returning(())
+    // the pointer is written after a batch only where it does not move with the state (spec 018 Track C, C4b)
+    (() => blockchainReader.holdsStateInPlace).expects().anyNumberOfTimes().returning(false)
 
     blockQueue.enqueueBlock.expects(block, bestNum).returning(Some(Leaf(hash, newWeight)))
     blockQueue.getBranch.expects(BlockHash(hash), true).returning(List(block))

@@ -7,6 +7,7 @@ import cats.effect.IO
 import cats.effect.unsafe.IORuntime
 
 import com.chipprbots.ethereum.consensus.Consensus.ConsensusResult
+import com.chipprbots.ethereum.db.storage.pathstate.StateFault
 import com.chipprbots.ethereum.domain.Block
 import com.chipprbots.ethereum.domain.BlockAccessList
 import com.chipprbots.ethereum.domain.ChainWeight
@@ -100,6 +101,21 @@ object Consensus:
     * this is due to an inconsistency in the database.
     */
   case class ConsensusError(blockToEnqueue: List[Block], err: String) extends ConsensusResult
+
+  /** This node's own state could not take a block of the branch (spec 018 Track C, C4b): the state the block is to be
+    * executed on is not held, or is no longer, or the head could not be moved to it. '''Nothing is wrong with the
+    * block, nor with the peer that sent it''': no block is reported invalid for it and no peer is penalised, and the
+    * blocks that were not executed are tried again.
+    *
+    * `imported` is the prefix of the batch that was adopted before the fault, as for
+    * [[ConsensusErrorDueToMissingNode]]: those blocks are the node's head already. `blocksToEnqueue` are the blocks
+    * that were not executed, the one the fault was met at first.
+    */
+  case class ConsensusStateFault(
+      fault: StateFault,
+      imported: List[BlockData] = Nil,
+      blocksToEnqueue: List[Block] = Nil
+  ) extends ConsensusResult
 
   /** A block hit a missing state node. `imported` is the prefix of the batch that executed and validated BEFORE it:
     * those blocks are already adopted (state and best block), exactly as a successful shorter batch would have left

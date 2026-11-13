@@ -24,6 +24,7 @@ import com.chipprbots.ethereum.domain.BlockchainWriter
 import com.chipprbots.ethereum.domain.Receipt
 import com.chipprbots.ethereum.domain.SignedTransaction
 import com.chipprbots.ethereum.domain.Timestamp
+import com.chipprbots.ethereum.ledger.BlockExecutionError
 import com.chipprbots.ethereum.transactions.PendingTransactionsManager
 import com.chipprbots.ethereum.utils.BlockchainConfig
 import com.chipprbots.ethereum.utils.Logger
@@ -88,9 +89,11 @@ object TestingService:
         Left(s"the weight of its parent 0x$parent is not known")
       case Some(parentWeight) =>
         blockExecution.executeAndValidateBlocks(List(block), parentWeight, adoptEachBlock = true) match
-          case (_, Some(error)) => Left(error.describe)
-          case (Nil, None)      => Left("the import took no block")
-          case (_, None)        => Right(())
+          // no verdict on the block: thrown as the state fault it is, as it was before it was a way for a batch to end
+          case (_, Some(BlockExecutionError.StateFaulted(fault))) => throw fault
+          case (_, Some(error))                                   => Left(error.describe)
+          case (Nil, None)                                        => Left("the import took no block")
+          case (_, None)                                          => Right(())
 
 class TestingService(
     engineApiService: EngineApiService,

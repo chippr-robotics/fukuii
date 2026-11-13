@@ -9,6 +9,7 @@ import cats.effect.unsafe.IORuntime
 
 import com.chipprbots.ethereum.blockchain.sync.regular.BlockEnqueued
 import com.chipprbots.ethereum.blockchain.sync.regular.BlockImportResult
+import com.chipprbots.ethereum.blockchain.sync.regular.BlockImportStateFault
 import com.chipprbots.ethereum.blockchain.sync.regular.BlockImportedToTop
 import com.chipprbots.ethereum.blockchain.sync.regular.ChainReorganised
 import com.chipprbots.ethereum.blockchain.sync.regular.DuplicateBlock
@@ -181,6 +182,11 @@ class ChainImporter(
           LenientOutcome.Imported(newBranch.size)
         case BlockEnqueued | DuplicateBlock =>
           LenientOutcome.Skipped // kept as a side block (lighter or not yet rooted), exactly as core-geth writes a side chain
+        case BlockImportStateFault(fault, _) =>
+          // Not a verdict on the block: this node's state could not take it. (Not met as the code stands: fork choice
+          // decides here on the hash layout only, where no such fault is thrown.)
+          log.error(s"Chain import: block $blockNum was not executed on this node's own state: ${fault.getMessage}")
+          LenientOutcome.Failed
         case other =>
           log.error(s"Chain import: block $blockNum rejected by fork choice — $other")
           LenientOutcome.Failed
