@@ -204,8 +204,10 @@ Read plan.md, "C2a part 1 record" and "C2a part 2 record", then:
   commits the same blocks in place. **Part 2b is built**: `BlockchainWriter.canonicalHeadUpdate` (the head's
   index rows, built apart from their commit) is what a caller passes as `extraFor`, and `HeadMoveOnTheChainSpec`
   drives that on the execution-apis chain on the unified layout. The plan's layers are pinned for the move; the
-  move's metrics are told. Nothing in the node calls `moveHead` yet: part 2c is the bound by bytes and the pruning
-  hold, part 3 the callers on the guard.
+  move's metrics are told. **Part 2c is built**: batches cut by bytes, the barrier move (and the log's byte budget),
+  and `withRecordsHeld` for C4e's reverse-then-commit. Nothing in the node calls `moveHead` yet: part 3 is the
+  callers on the guard and the table of index writers (T140), which must settle the race beacon found between a
+  move's index rows and `newPayload`'s `storeBlock`.
 - **C4a** brings back what C3b refuses: the overlay commit for a block that does not extend the anchor
   (`buildExtra(adopted)`, `NotExtendingAnchor`, `saveLastBlock` writing nothing),
   `stateAvailable(hash)`, the served-root window, and SNAP advertised again. C4b: the head move, `ConsensusStateFault`

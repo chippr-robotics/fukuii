@@ -338,6 +338,31 @@ class HeadMovePlanSpec extends AnyFlatSpec with Matchers with LayerChains with P
       an[IllegalArgumentException] should be thrownBy plan.chunks(0)
     }
 
+  it should "be cut by what its blocks are worth as well, a block that is worth more than a batch going alone" taggedAs
+    (UnitTest, ConsensusTest) in {
+      val model = new Model
+      val ours = model.chain(model.genesis, 5, "a")(model.recorded)
+      val theirs = model.chain(ours(1), 4, "t")(model.layered)
+      val plan = model.planned(ours.last, theirs.last)
+      // the reversed blocks are worth 10 each, the applied ones 30, and the second applied one 500
+      val worth: Either[Reversed, Forwarded] => Long = {
+        case Left(_)                                => 10L
+        case Right(step) if step.block == theirs(1) => 500L
+        case Right(_)                               => 30L
+      }
+      val chunks = plan.chunks(256, 60, worth)
+      chunks.map(c => (c.reverse.size, c.forward.size)) shouldBe Vector((3, 1), (0, 1), (0, 2))
+      chunks.map(_.head) shouldBe Vector(theirs(0), theirs(1), theirs(3))
+      chunks.flatMap(_.reverse) shouldBe plan.reverse
+      chunks.flatMap(_.forward) shouldBe plan.forward
+      // the count bounds as well
+      plan.chunks(2, 60, worth).map(c => (c.reverse.size, c.forward.size)) shouldBe
+        Vector((2, 0), (1, 1), (0, 1), (0, 2))
+      // and a batch at the bound itself is not cut
+      plan.chunks(256, 1000, worth) should have size 1
+      plan.chunks(256, 619, worth) should have size 2
+    }
+
   "The store's own plan" should "be of the anchor and the epoch it was made at, from the records and the layers it keeps" taggedAs
     (UnitTest, ConsensusTest) in {
       val chain = new Chain()

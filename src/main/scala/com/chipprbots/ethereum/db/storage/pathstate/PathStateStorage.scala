@@ -9,6 +9,7 @@ import java.util.concurrent.locks.ReentrantLock
 
 import org.apache.pekko.util.ByteString
 
+import scala.jdk.CollectionConverters.*
 import scala.util.control.NonFatal
 
 import com.chipprbots.ethereum.db.dataSource.DataSource
@@ -56,7 +57,7 @@ final class PathStateStorage(
   private val changesets = new ChangesetStorage(dataSource)
 
   /** The clock of in-place moves, started from the anchor the datadir holds. */
-  val clock: StateMoveLog = new StateMoveLog(maxViewAgeMoves, appState.getStateAnchor())
+  val clock: StateMoveLog = new StateMoveLog(maxViewAgeMoves, appState.getStateAnchor(), settings.maxMoveLogBytes)
 
   /** The lock of the in-place writers (data-model 7.0). */
   val lock: StateLock = new StateLock
@@ -259,6 +260,14 @@ final class PathStateStorage(
       link: ByteString => Option[HeadMovePlan.Link]
   ): HeadMovePlan.Outcome = planMoveAfter(target, link, () => ())
 
+  /** [[planMove]], and the size of each changeset record it read, by block hash: what a move cuts its batches by. */
+  private def planMoveSized(
+      target: BlockRef,
+      link: ByteString => Option[HeadMovePlan.Link]
+  ): (HeadMovePlan.Outcome, collection.Map[ByteString, Long]) =
+    val sizes = collection.concurrent.TrieMap.empty[ByteString, Long]
+    (planMoveAfter(target, link, () => (), sizes = Some(sizes)), sizes)
+
   /** [[planMove]], with `walked` run between the walk and the second look at the clock: a test stands there.
     *
     * The anchor, the mark of what was pruned and the records are one observation only if nothing was committed while
@@ -270,13 +279,14 @@ final class PathStateStorage(
       target: BlockRef,
       link: ByteString => Option[HeadMovePlan.Link],
       walked: () => Unit,
-      triesLeft: Int = ViewTries
+      triesLeft: Int = ViewTries,
+      sizes: Option[collection.mutable.Map[ByteString, Long]] = None
   ): HeadMovePlan.Outcome =
     val (epoch, held) = clock.awaitRest()
-    val outcome = planAt(epoch, held, target, link)
+    val outcome = planAt(epoch, held, target, link, sizes)
     walked()
     if clock.epoch == epoch then outcome
-    else if triesLeft > 0 then planMoveAfter(target, link, walked, triesLeft - 1)
+    else if triesLeft > 0 then planMoveAfter(target, link, walked, triesLeft - 1, sizes)
     else
       HeadMovePlan.Outcome.NotHeld(
         s"no move to block ${target.show} could be planned: the state moved under every plan of it",
@@ -287,7 +297,8 @@ final class PathStateStorage(
       epoch: Long,
       held: Option[BlockRef],
       target: BlockRef,
-      link: ByteString => Option[HeadMovePlan.Link]
+      link: ByteString => Option[HeadMovePlan.Link],
+      sizes: Option[collection.mutable.Map[ByteString, Long]]
   ): HeadMovePlan.Outcome =
     held match
       case None =>
@@ -298,11 +309,19 @@ final class PathStateStorage(
         val sources = new HeadMovePlan.Sources:
           def recordHeader(
               blockHash: ByteString
-          ): Option[Either[BlockDiffCodec.Rejected, BlockDiffCodec.Header]] = changesets.header(blockHash)
+          ): Option[Either[BlockDiffCodec.Rejected, BlockDiffCodec.Header]] =
+            changesets.headerAndLength(blockHash).map { (header, length) =>
+              sizes.foreach(_.update(blockHash, length))
+              header
+            }
           def layer(block: BlockRef): Option[ForwardLayer] = overlay.layerOf(block)
           def link(blockHash: ByteString): Option[HeadMovePlan.Link] = headers(blockHash)
         val limits = HeadMovePlan.Limits(
-          maxReverse = settings.maxReorgDepth(anchor.number, finalized.map(_.number)),
+          // An attempt that holds the records above its fork may go back to it, however deep that has become: the
+          // policy bounds what a move may undo, and not the way back from one the node made itself (forge)
+          maxReverse = heldFrom.fold(settings.maxReorgDepth(anchor.number, finalized.map(_.number))) { from =>
+            settings.maxReorgDepth(anchor.number, finalized.map(_.number)).max((anchor.number - from + 1).toInt)
+          },
           // above the anchor a block is applied from a layer, or from the record of a branch that was the head
           maxForward = (settings.maxReverseHops.toLong + settings.maxForwardLayers).min(Int.MaxValue.toLong).toInt,
           prunedTo = appState.getChangesetPrunedTo(),
@@ -1009,6 +1028,40 @@ final class PathStateStorage(
       )
     }
 
+  /** The heights whose changeset records an attempt holds against retention, by the attempt: see [[withRecordsHeld]].
+    */
+  private val recordHolds = new ConcurrentHashMap[Object, BigInt]()
+
+  /** The lowest height an attempt holds the records of, if any does. */
+  private def heldFrom: Option[BigInt] =
+    recordHolds.values().iterator().asScala.minOption
+
+  /** `body`, with the changeset records of every block above `above` kept from retention for as long as it runs.
+    *
+    * For the adoption of a heavier branch by reverse-then-commit (the user's decision of 2026-11-12, plan.md "C4b: the
+    * move core"): the head is moved down to the fork point, the branch is committed in place block by block, and if a
+    * block of it fails the head is moved back to the old head by the records. Every in-place commit prunes, so without
+    * this a branch longer than what is retained would delete the old branch's records, which are the way back, and its
+    * own first ones. Nothing is pruned while it runs that the hold covers; the commit after it catches up.
+    */
+  @throws[ReorgTooDeep]("when the records above `above` are not all kept already: the way back is not there")
+  def withRecordsHeld[A](above: BlockRef)(body: => A): A =
+    val hold = new Object
+    // under the lock, so that no commit prunes between the look at what is kept and the hold
+    lock.locked(s"a hold of the records above block ${above.show}") {
+      appState.getChangesetPrunedTo().filter(_ > above.number + 1).foreach { prunedTo =>
+        throw new ReorgTooDeep(
+          ReorgRefusal.Deep,
+          s"the records above block ${above.show} cannot be held: retention has pruned them up to height $prunedTo"
+        )
+      }
+      recordHolds.put(hold, above.number + 1)
+    }
+    try body
+    finally
+      recordHolds.remove(hold)
+      ()
+
   /** Whether a move of the head is under way: from its plan to its last batch, the time between two batches included.
     * The head then steps through blocks that are not the one the move ends on, and nothing should be built on them.
     */
@@ -1094,7 +1147,8 @@ final class PathStateStorage(
       pin: BranchPin,
       replansLeft: Int
   ): MoveOutcome =
-    val plan = planMove(target, link) match
+    val (planned, sizes) = planMoveSized(target, link)
+    val plan = planned match
       case HeadMovePlan.Outcome.Planned(plan) => plan
       case HeadMovePlan.Outcome.Refused(reason, detail) =>
         told("a move that was refused")(settings.observer.moveRefused(reason))
@@ -1110,7 +1164,17 @@ final class PathStateStorage(
     val started = System.nanoTime()
     val chunks =
       if plan.isNoMove then Vector(HeadMovePlan.Chunk(plan.anchor, plan.anchor, Vector.empty, Vector.empty))
-      else plan.chunks(settings.maxBlocksPerMove)
+      else
+        // a batch is cut by its blocks and by what it reads: the records it reverses or applies, the layers it applies
+        plan.chunks(
+          settings.maxBlocksPerMove,
+          settings.maxMoveBatchBytes,
+          {
+            case Left(step) => sizes.getOrElse(step.block.hash, 0L)
+            case Right(HeadMovePlan.Forwarded(block, _, HeadMovePlan.Source.Record)) => sizes.getOrElse(block.hash, 0L)
+            case Right(HeadMovePlan.Forwarded(_, _, HeadMovePlan.Source.Layer(layer))) => layer.bytes
+          }
+        )
 
     // The batches from `at` on, written one after the other; `epoch` is the epoch the state must still be at.
     @annotation.tailrec
@@ -1238,7 +1302,12 @@ final class PathStateStorage(
     val started = System.nanoTime()
     // Nothing but the one write happens between the move's announcement and its end: a view asked for in there would
     // wait for this thread.
-    clock.inFlight(StateMove(chunk.head, built.before))(dataSource.update(updates))
+    // What a reader of the state before this batch must be given back is kept in memory for as long as the log keeps
+    // the move. Above a bound it is not kept: the batch is a barrier, and every view made before it is stale (vault).
+    val preBytes =
+      built.before.iterator.map((position, node) => position.rowKey.length.toLong + node.fold(0)(_.length)).sum
+    if preBytes > settings.maxMovePreBytes then clock.inFlightBarrier(chunk.head)(dataSource.update(updates))
+    else clock.inFlight(StateMove(chunk.head, built.before))(dataSource.update(updates))
     val nanos = System.nanoTime() - started
 
     // A look at some of what was written. It cannot fail unless the store wrote other bytes than it was given, and
@@ -1361,7 +1430,10 @@ final class PathStateStorage(
     val started = System.nanoTime()
     // Nothing but the one write happens between the move's announcement and its end: a view asked for in there would
     // wait for this thread.
-    clock.inFlight(StateMove(block, before))(dataSource.update(updates))
+    if before.iterator.map((position, node) => position.rowKey.length.toLong + node.fold(0)(_.length)).sum >
+        settings.maxMovePreBytes
+    then clock.inFlightBarrier(block)(dataSource.update(updates))
+    else clock.inFlight(StateMove(block, before))(dataSource.update(updates))
 
     CommitOutcome.Applied(
       Commit(
@@ -1390,9 +1462,10 @@ final class PathStateStorage(
     */
   private def pruning(first: BigInt, head: BigInt, finalized: Option[BigInt])(using StateLockHeld): Pruning =
     appState.getChangesetPrunedTo() match
-      case None => Pruning(Nil, movedTo = Some(first), reached = first, heights = 0)
+      case None       => Pruning(Nil, movedTo = Some(first), reached = first, heights = 0)
       case Some(from) =>
-        settings.retention.floor(head, finalized).map(_.min(first)) match
+        // and nothing a move's attempt holds (see [[withRecordsHeld]])
+        settings.retention.floor(head, finalized).map(_.min(first)).map(floor => heldFrom.fold(floor)(floor.min)) match
           case Some(floor) if floor > from =>
             val (deletes, next) = changesets.pruneUpdates(from, floor, settings.retention.heightsPerBatch(floor - from))
             Pruning(deletes, Option.when(next > from)(next), reached = next, heights = (next - from).toInt)
@@ -1550,6 +1623,14 @@ object PathStateStorage:
       maxReverseHops: Int = 1024,
       // How many blocks one batch of a move of the head reverses and applies (`state.move.max-blocks-per-batch`).
       maxBlocksPerMove: Int = 256,
+      // What one batch of a move may read, by its records' and its layers' bytes: a block that is more goes alone.
+      // And above how many bytes of prior values a batch is a barrier that makes older views stale rather than keeping
+      // them. Constants until they are measured (M6).
+      maxMoveBatchBytes: Long = 128L * 1024 * 1024,
+      maxMovePreBytes: Long = 64L * 1024 * 1024,
+      // What the log of moves holds of prior values together (each move above `maxMovePreBytes` is a barrier and holds
+      // none): the oldest moves go first, and the views older than them are then stale.
+      maxMoveLogBytes: Long = 128L * 1024 * 1024,
       // Policy: how many blocks a move of the head may reverse, given the anchor's number and the finalized block's
       // (`state.reorg.max-depth`). What can be reversed at all is decided by the records that are there.
       maxReorgDepth: (BigInt, Option[BigInt]) => Int = (_, _) => Int.MaxValue,
