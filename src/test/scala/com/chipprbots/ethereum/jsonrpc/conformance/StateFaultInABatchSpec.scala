@@ -27,6 +27,7 @@ import com.chipprbots.ethereum.db.storage.StagedBlockState
 import com.chipprbots.ethereum.db.storage.pathstate.BlockRef
 import com.chipprbots.ethereum.db.storage.pathstate.ChangesetStorage
 import com.chipprbots.ethereum.db.storage.pathstate.PathStateTestKit
+import com.chipprbots.ethereum.db.storage.pathstate.StaleStateViewException
 import com.chipprbots.ethereum.db.storage.pathstate.StateUnavailable
 import com.chipprbots.ethereum.domain.Block
 import com.chipprbots.ethereum.domain.BlockAccessList
@@ -103,6 +104,9 @@ class StateFaultInABatchSpec extends ScalaTestWithActorTestKit with AnyFlatSpecL
     /** Run once, inside the execution of the block of that hash: after it is executed, before it is committed. */
     var inside: Map[ByteString, () => Unit] = Map.empty
 
+    /** Run once, before the block of that hash is executed: after the block before it was committed. */
+    var before: Map[ByteString, () => Unit] = Map.empty
+
     private def executionOf(hooked: Boolean): BlockExecution =
       new HeaderTrustingBlockExecution(
         node.blockchain,
@@ -119,6 +123,11 @@ class StateFaultInABatchSpec extends ScalaTestWithActorTestKit with AnyFlatSpecL
         )(implicit
             blockchainConfig: BlockchainConfig
         ): Either[BlockExecutionError, (Seq[Receipt], Seq[ByteString], Option[BlockAccessList])] =
+          if hooked then
+            before.get(block.hash.value).foreach { run =>
+              before -= block.hash.value
+              run()
+            }
           val executed = super.executeAndValidateStaged(block, alreadyValidated, staged)
           if hooked then
             inside.get(block.hash.value).foreach { run =>
@@ -138,8 +147,9 @@ class StateFaultInABatchSpec extends ScalaTestWithActorTestKit with AnyFlatSpecL
     private val reporter = new InvalidChainReporter:
       def reportInvalid(blockHash: ByteString, latestValidHash: ByteString): Unit = reported :+= blockHash
 
+    val execution: BlockExecution = executionOf(hooked = true)
     val consensus =
-      new ConsensusImpl(node.blockchainReader, node.blockchainWriter, executionOf(hooked = true), Some(reporter))
+      new ConsensusImpl(node.blockchainReader, node.blockchainWriter, execution, Some(reporter))
     val adapter = new ConsensusAdapter(
       consensus,
       node.blockchainReader,
@@ -198,6 +208,51 @@ class StateFaultInABatchSpec extends ScalaTestWithActorTestKit with AnyFlatSpecL
         on.node.blockchainReader.getBlockHeaderByHash(block.header.hash) shouldBe None
         on.node.blockchainReader.getCanonicalHashByNumber(block.header.number.value) shouldBe None
       }
+    }
+
+  // The same, with the head moved after the second block was committed and before the third is executed: the fault is
+  // then met where the block's state is taken, not where it is committed.
+  it should "end the same way when the head moved before the third block was executed" taggedAs
+    (UnitTest, ConsensusTest) in {
+      val on = new Node
+      import on.given
+      val batch = blocks.take(5)
+      val competing = siblingOf(batch(2))
+      on.before = Map(batch(2).hash.value -> (() => on.otherWriterImports(competing)))
+
+      on.consensus.evaluateBranch(NonEmptyList.fromListUnsafe(batch.toList)).unsafeRunSync() match
+        case ConsensusStateFault(fault, imported, toEnqueue) =>
+          fault shouldBe a[StateUnavailable]
+          imported.map(_.block) shouldBe batch.take(2).toList
+          toEnqueue shouldBe batch.drop(2).toList
+        case other => fail(s"the batch was answered with $other")
+      on.reported shouldBe empty
+      on.pathState.anchor shouldBe Some(refOf(competing.header))
+      on.best.map(_.hash) shouldBe Some(competing.header.hash)
+      on.disk shouldBe stateOf(batch(2).header)
+      on.records.get(batch(2).header.hash.value) shouldBe None
+    }
+
+  "Any fault of the state met in a batch" should "end it with the blocks before adopted and the fault itself, not thrown" taggedAs
+    (UnitTest, ConsensusTest) in {
+      val on = new Node
+      import on.given
+      val batch = blocks.take(4)
+      // the view the third block read through went stale: another kind of fault than a state that is not held
+      val stale = new StaleStateViewException(refOf(batch(1).header), 2L, 6L, "the disk moved on")
+      on.before = Map(batch(2).hash.value -> (() => throw stale))
+
+      val (executed, error) = on.execution.executeAndValidateBlocks(batch.toList, ChainWeight.zero, adoptEachBlock = true)
+
+      executed.map(_.block) shouldBe batch.take(2).toList
+      error match
+        case Some(BlockExecutionError.StateFaulted(fault)) => (fault should be).theSameInstanceAs(stale)
+        case other => fail(s"the batch ended with $other")
+      // and what tells the endings apart takes it for no error of the block
+      BlockExecution.BatchOutcome.of(executed, error) shouldBe BlockExecution.BatchOutcome(executed, None, Some(stale))
+      on.pathState.anchor shouldBe Some(refOf(batch(1).header))
+      on.best.map(_.hash) shouldBe Some(batch(1).header.hash)
+      on.disk shouldBe stateOf(batch(1).header)
     }
 
   it should "be answered to the importer as a state fault with the adopted blocks, and keep the rest queued" taggedAs

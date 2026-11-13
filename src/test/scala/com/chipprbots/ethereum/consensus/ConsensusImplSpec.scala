@@ -389,7 +389,8 @@ class ConsensusImplSpec extends AnyFlatSpec with Matchers with ScalaFutures with
       initialChain(2),
       b => b.copy(header = b.header.copy(difficulty = Difficulty(10000000)))
     )
-    setFailingBlockWith(branch(1), stateFault)
+    // at the first block of the branch: where a branch that is not adopted as it is executed is refused today
+    setFailingBlockWith(branch.head, stateFault)
     var reported: List[ByteString] = Nil
     val reporter: com.chipprbots.ethereum.consensus.engine.InvalidChainReporter =
       (blockHash: ByteString, _: ByteString) => reported ::= blockHash
@@ -397,12 +398,14 @@ class ConsensusImplSpec extends AnyFlatSpec with Matchers with ScalaFutures with
 
     whenReady(reporting.evaluateBranch(NonEmptyList.fromListUnsafe(branch)).unsafeToFuture()) {
       case ConsensusStateFault(_, imported, toEnqueue) =>
-        // what of the branch was executed is settled as any executed prefix is; the rest is handed back
+        // nothing of the branch was executed, and all of it is handed back
         imported shouldBe Nil
-        toEnqueue shouldBe branch.drop(1)
+        toEnqueue shouldBe branch
       case other => fail(s"expected ConsensusStateFault, got $other")
     }
     reported shouldBe Nil
+    // the head and the index are as they were
+    blockchainReader.getBestBlock shouldBe Some(initialBestBlock)
 
   // spec 022 T062: the importer tells this node's own state fault from a bad block by the text that reaches it, and
   // blames no peer for the first. These drive that text through ConsensusImpl itself, so a reworded message fails here

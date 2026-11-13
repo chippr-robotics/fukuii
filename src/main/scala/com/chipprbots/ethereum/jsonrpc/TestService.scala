@@ -358,7 +358,9 @@ class TestService(
         // On the unified state layout a block that is mined is committed with its state as the head, or it is not
         // there at all: an answer that says it was mined when it was only queued would be found out a call later.
         res match
-          case _: BlockImportedToTop                       => ()
+          case _: BlockImportedToTop => ()
+          // answered as the state fault it is, as when it was thrown out of the import
+          case BlockImportStateFault(fault, _)             => throw fault
           case other if blockchainReader.holdsStateInPlace => throw new TestService.NotImportedToTheHead(other)
           case _                                           => ()
       }

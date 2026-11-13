@@ -183,7 +183,8 @@ class ChainImporter(
         case BlockEnqueued | DuplicateBlock =>
           LenientOutcome.Skipped // kept as a side block (lighter or not yet rooted), exactly as core-geth writes a side chain
         case BlockImportStateFault(fault, _) =>
-          // not a verdict on the block: this node's state could not take it
+          // Not a verdict on the block: this node's state could not take it. (Not met as the code stands: fork choice
+          // decides here on the hash layout only, where no such fault is thrown.)
           log.error(s"Chain import: block $blockNum was not executed on this node's own state: ${fault.getMessage}")
           LenientOutcome.Failed
         case other =>

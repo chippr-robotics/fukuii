@@ -124,6 +124,7 @@ class ConsensusImpl(
     *   - [[Consensus.ConsensusError]] - block failed to execute (when importing to top or reorganising the chain)
     *   - [[Consensus.ConsensusErrorDueToMissingNode]] - block failed to execute (when importing to top or reorganising
     *     the chain)
+    *   - [[Consensus.ConsensusStateFault]] - this node's own state could not take a block: no block was judged
     */
   override def evaluateBranch(
       branch: NonEmptyList[Block]
@@ -364,19 +365,29 @@ class ConsensusImpl(
 
     settleHead(executedBlocks, parentWeight, bestBlockNumber, bestBlockWeight, fork, oldCanonical, selectedByWeight)
 
-    if outcome.stateFault.isDefined then
-      // This node's state could not take a block of the branch: the branch was not judged. What of it was executed
-      // is settled above as any executed prefix is; the rest is handed back, and nothing is reported invalid.
-      val fault = outcome.stateFault.get
-      log.warn(
-        "[STATE-FAULT] REORG blocks [{}-{}] stopped on this node's own state after {} block(s): {}",
-        newBranch.head.number,
-        newBranch.last.number,
-        executedBlocks.length,
-        fault.getMessage
-      )
-      ConsensusStateFault(fault, Nil, newBranch.toList.drop(executedBlocks.length))
-    else reorganised(newBranch, oldBlocksData, executedBlocks, maybeError)
+    outcome.stateFault match
+      case Some(fault) =>
+        // This node's state could not take a block of the branch: the branch was not judged. What of it was executed
+        // is settled above as any executed prefix is; the rest is handed back, and nothing is reported invalid.
+        log.warn(
+          "[STATE-FAULT] REORG blocks [{}-{}] stopped on this node's own state after {} block(s): {}",
+          newBranch.head.number,
+          newBranch.last.number,
+          executedBlocks.length,
+          fault.getMessage
+        )
+        // Not met as the code stands: on the unified layout the first block of a branch that is not adopted as it is
+        // executed is refused, and on the hash layout no such fault is thrown. When a branch is executed there on
+        // layers (spec 018 C4e), a prefix that was settled as the head has to be told here, with the old branch's
+        // blocks to queue, as a reorganisation that went through tells them (B-242).
+        if executedBlocks.nonEmpty then
+          log.error(
+            "[STATE-FAULT] REORG: {} block(s) of the branch were executed and settled before the fault, " +
+              "and are not told to the importer",
+            executedBlocks.length
+          )
+        ConsensusStateFault(fault, Nil, newBranch.toList.drop(executedBlocks.length))
+      case None => reorganised(newBranch, oldBlocksData, executedBlocks, maybeError)
 
   private def reorganised(
       newBranch: NonEmptyList[Block],

@@ -24,6 +24,7 @@ import com.chipprbots.ethereum.domain.BlockchainWriter
 import com.chipprbots.ethereum.domain.Receipt
 import com.chipprbots.ethereum.domain.SignedTransaction
 import com.chipprbots.ethereum.domain.Timestamp
+import com.chipprbots.ethereum.ledger.BlockExecutionError
 import com.chipprbots.ethereum.transactions.PendingTransactionsManager
 import com.chipprbots.ethereum.utils.BlockchainConfig
 import com.chipprbots.ethereum.utils.Logger
@@ -89,7 +90,7 @@ object TestingService:
       case Some(parentWeight) =>
         blockExecution.executeAndValidateBlocks(List(block), parentWeight, adoptEachBlock = true) match
           // no verdict on the block: thrown as the state fault it is, as it was before it was a way for a batch to end
-          case (_, Some(com.chipprbots.ethereum.ledger.BlockExecutionError.StateFaulted(fault))) => throw fault
+          case (_, Some(BlockExecutionError.StateFaulted(fault))) => throw fault
           case (_, Some(error))                                   => Left(error.describe)
           case (Nil, None)                                        => Left("the import took no block")
           case (_, None)        => Right(())
