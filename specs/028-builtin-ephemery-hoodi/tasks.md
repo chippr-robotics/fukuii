@@ -410,11 +410,11 @@ security-reviewed, and not yet wired into startup (FR-011, FR-012).
 
 **Independent test**: `JdkHttpsTransportSpec` and `StrictTarReaderSpec` pass.
 
-- [ ] T065 Make a full clone at `~/work/e028-s4a` on branch `feat/028-s4a-transport`, and claim B-234.
+- [x] T065 Make a full clone at `~/work/e028-s4a` on branch `feat/028-s4a-transport`, and claim B-234.
 
 ### Tests for S4a (write first, see them fail)
 
-- [ ] T066 [P] Write `ephemery tests/StrictTarReaderSpec.scala`. Archives are built in memory. Each of these is
+- [x] T066 [P] Write `ephemery tests/StrictTarReaderSpec.scala`. Archives are built in memory. Each of these is
       refused with its own message:
       - an absolute name, `..`, `a/../../x`, a backslash or NUL in a name, a name over 255 bytes, more than 8 levels;
       - a duplicate name;
@@ -429,7 +429,7 @@ security-reviewed, and not yet wired into startup (FR-011, FR-012).
       - a synthetic archive with the 29 names and types of the real 165 listing (research R9).
 
       Mode 0755 on a file is written as 0644. Every write is `CREATE_NEW` inside the stage.
-- [ ] T067 [P] Write `ephemery tests/JdkHttpsTransportSpec.scala`. It runs a local `com.sun.net.httpserver.HttpsServer`
+- [x] T067 [P] Write `ephemery tests/JdkHttpsTransportSpec.scala`. It runs a local `com.sun.net.httpserver.HttpsServer`
       with a self-signed certificate generated in the test (BouncyCastle is on the classpath), and passes in its
       `SSLContext` and allow-list. It checks that the transport:
       - refuses an `http:` start URL, a hop to http, a hop to a host off the allow-list under the default-source
@@ -443,17 +443,17 @@ security-reviewed, and not yet wired into startup (FR-011, FR-012).
 
 ### Implementation for S4a
 
-- [ ] T068 [P] Write `ephemery/StrictTarReader.scala` (R9): a streaming gzip and tar reader. It reads the EL members
+- [x] T068 [P] Write `ephemery/StrictTarReader.scala` (R9): a streaming gzip and tar reader. It reads the EL members
       into memory and the CL members into a given stage directory, skipping `parsedBeaconState.json` and
       `bootnode-keys/`.
-- [ ] T069 [P] Write `ephemery/ReleaseTransport.scala`: the trait, `JdkHttpsTransport`, `SourcePolicy`
+- [x] T069 [P] Write `ephemery/ReleaseTransport.scala`: the trait, `JdkHttpsTransport`, `SourcePolicy`
       (`DefaultGithub` with the allow-list, or `Mirror`), and the environment proxy selector (R8).
 
 ### Gate and exit for S4a
 
-- [ ] T070 Run `sbt compile-all`, then `sbt "testOnly *StrictTarReaderSpec *JdkHttpsTransportSpec"`. Expect PASS.
+- [x] T070 Run `sbt compile-all`, then `sbt "testOnly *StrictTarReaderSpec *JdkHttpsTransportSpec"`. Expect PASS.
       Then the T039 grep gates.
-- [ ] T071 Run `sbt formatAll`, read `git diff`, then run `sbt formatCheck`. Expect clean.
+- [x] T071 Run `sbt formatAll`, read `git diff`, then run `sbt formatCheck`. Expect clean.
 - [ ] T072 Exit S4a:
       1. `prism` reviews with the security lens.
       2. `conduit` gives the second, independent review of the HTTP client.
