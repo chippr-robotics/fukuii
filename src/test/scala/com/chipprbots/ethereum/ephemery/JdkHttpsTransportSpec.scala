@@ -211,8 +211,8 @@ class JdkHttpsTransportSpec extends AnyFlatSpec with Matchers with BeforeAndAfte
 
   override def afterAll(): Unit =
     release.countDown()
-    server.stop(0) // drops the stalled exchanges, so closing a client cannot wait on them
     created.asScala.foreach(_.close())
+    server.stop(0)
     pool.shutdownNow()
 
   private def transport(
@@ -364,6 +364,31 @@ class JdkHttpsTransportSpec extends AnyFlatSpec with Matchers with BeforeAndAfte
       flag.get() shouldBe true
     }
 
+  it should "close a response that completed before the cancel, so the client can shut down (the orphan race)" taggedAs
+    UnitTest in {
+      val t = transport(localhostOnly)
+      stallInBody = new CountDownLatch(1)
+      val request = java.net.http.HttpRequest
+        .newBuilder(new URI(s"$base/stall"))
+        .version(HttpClient.Version.HTTP_1_1)
+        .GET()
+        .build()
+      // /stall sends the headers and 10 of 100000 bytes: the response completes, its body stays open
+      val future = t.client.sendAsync(request, java.net.http.HttpResponse.BodyHandlers.ofInputStream())
+      future.get(10, TimeUnit.SECONDS).statusCode() shouldBe 200
+      future.isDone shouldBe true
+      // the caller gave up after the response had arrived: cancel(true) alone cannot touch this exchange
+      Thread.currentThread().interrupt()
+      val flagAfter =
+        try
+          t.abandon(future)
+          Thread.currentThread().isInterrupted
+        finally Thread.interrupted()
+      flagAfter shouldBe true // abandon must not clear the caller's flag
+      t.client.shutdown()
+      t.client.awaitTermination(java.time.Duration.ofSeconds(5)) shouldBe true
+    }
+
   it should "map a timeout while waiting for the headers to DeadlineExceeded, never Io" taggedAs UnitTest in {
     val t = transport(localhostOnly)
     failure(get(t, "/slow-headers", deadline = Now.plusSeconds(2))) shouldBe TransportFailure.DeadlineExceeded
@@ -438,6 +463,10 @@ class JdkHttpsTransportSpec extends AnyFlatSpec with Matchers with BeforeAndAfte
         TransportFailure.Io("java.lang.IllegalStateException")
       classify(new java.util.concurrent.CancellationException("c")) shouldBe
         TransportFailure.Io("java.util.concurrent.CancellationException")
+      // SocketTimeoutException extends InterruptedIOException, but it is a timeout, not an interrupt
+      classify(new java.net.SocketTimeoutException("read timed out")) shouldBe TransportFailure.DeadlineExceeded
+      classify(new ExecutionException(new java.net.SocketTimeoutException("t"))) shouldBe
+        TransportFailure.DeadlineExceeded
       val anon = new RuntimeException("q") {}
       classify(anon) shouldBe a[TransportFailure.Io]
       (classify(anon).message should not).include("q")

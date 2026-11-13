@@ -189,19 +189,18 @@ final class JdkHttpsTransport(
         sendAndRead(builder.build(), left, redirects, maxBytes, deadline, accept, uri, watchdog)
     }
 
-  /** Closes a response body. With the interrupt flag set, the JDK's close can fail to cancel the exchange, which leaves
-    * the connection open; so the flag is cleared for the close and then set again.
-    */
-  private def closeBody(body: InputStream): Unit =
-    val wasInterrupted = Thread.interrupted()
-    try Try(body.close())
-    finally if wasInterrupted then Thread.currentThread().interrupt()
+  private def closeBody(body: InputStream): Unit = Try(body.close())
 
-  /** Gives up on a request. `cancel(true)` cancels the JDK exchange, so a response that has not arrived is dropped by
-    * the client; the response body of a request that did complete is closed by the caller's own `finally`.
+  /** Gives up on a request. `cancel(true)` cancels an exchange whose response has not arrived. It does nothing to a
+    * future that already completed with a response, and that response's body stays open until closed or fully read, so
+    * the client's `close()` would wait on it. The `whenComplete` closes such a response: if the future completed
+    * normally before the cancel, it fires at once with the response.
     */
-  private def abandon(future: java.util.concurrent.CompletableFuture[HttpResponse[InputStream]]): Unit =
+  private[ephemery] def abandon(future: java.util.concurrent.CompletableFuture[HttpResponse[InputStream]]): Unit =
     future.cancel(true)
+    future.whenComplete { (r, _) =>
+      if r != null then closeBody(r.body())
+    }
     ()
 
   private def sendAndRead(
@@ -329,14 +328,20 @@ object JdkHttpsTransport extends Logger:
       .iterate(e)(_.getCause)
       .takeWhile(_ != null)
       .take(16)
-      .exists(t => t.isInstanceOf[InterruptedException] || t.isInstanceOf[java.io.InterruptedIOException])
+      .exists {
+        case _: java.net.SocketTimeoutException => false // extends InterruptedIOException, but it is a timeout
+        case _: InterruptedException            => true
+        case _: java.io.InterruptedIOException  => true
+        case _                                  => false
+      }
 
   /** Maps an exception to a failure. Timeouts (including connect timeouts) are `DeadlineExceeded`; anything else is
     * `Io` with the root cause's class name only, because messages can echo a URL with its query.
     */
   private[ephemery] def classify(e: Throwable): TransportFailure =
     val chain = Iterator.iterate(e)(_.getCause).takeWhile(_ != null).take(16).toList
-    if chain.exists(_.isInstanceOf[HttpTimeoutException]) then TransportFailure.DeadlineExceeded
+    if chain.exists(t => t.isInstanceOf[HttpTimeoutException] || t.isInstanceOf[java.net.SocketTimeoutException]) then
+      TransportFailure.DeadlineExceeded
     else TransportFailure.Io(chain.last.getClass.getName)
 
   /** The production transport: a 10 s connect timeout, no automatic redirects, HTTP/1.1, an explicit HTTPS endpoint
