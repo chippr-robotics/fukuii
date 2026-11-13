@@ -194,6 +194,15 @@ final private[pathstate] class StateOverlay(budget: StateOverlay.Budget):
       held.layer.block.show
     )
 
+  /** Pins `layers`, each where it is still the layer kept for its block, to `pin`: a move of the head holds the layers
+    * its plan applies for as long as it runs, so that nothing evicts one between two of its batches. They are held in
+    * memory already, so the bound on pinned bytes is not asked: it bounds what a branch under execution may add.
+    */
+  def pinAll(layers: Iterable[ForwardLayer], pin: BranchPin)(using StateLockHeld): Unit =
+    layers.foreach { layer =>
+      Option(forward.get(layer.block.hash)).filter(_.layer eq layer).foreach(held => held.pins = held.pins + pin)
+    }
+
   /** The branch of `pin` is no longer under execution: its layers are held by it no more, and are as any other from the
     * next registration on. Nothing is evicted here, and they count as used just now, so that what a branch left is not
     * the first to go.

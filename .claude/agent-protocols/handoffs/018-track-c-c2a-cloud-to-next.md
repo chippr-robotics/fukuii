@@ -201,8 +201,11 @@ Read plan.md, "C2a part 1 record" and "C2a part 2 record", then:
   batch built against the disk plus the batch so far, every step held to it before anything is written);
   `promote` is that batch for one block; a commit waits for a move that is under way (`adopting`); a store that
   failed its read-back gives out no state. The spec is `HeadMoveSpec`, whose oracle is a second chain that
-  commits the same blocks in place. Nothing in the node calls `moveHead` yet: part 2b is `BlockchainWriter`'s
-  rows, the bound by bytes and the pruning hold; part 3 the callers on the guard.
+  commits the same blocks in place. **Part 2b is built**: `BlockchainWriter.canonicalHeadUpdate` (the head's
+  index rows, built apart from their commit) is what a caller passes as `extraFor`, and `HeadMoveOnTheChainSpec`
+  drives that on the execution-apis chain on the unified layout. The plan's layers are pinned for the move; the
+  move's metrics are told. Nothing in the node calls `moveHead` yet: part 2c is the bound by bytes and the pruning
+  hold, part 3 the callers on the guard.
 - **C4a** brings back what C3b refuses: the overlay commit for a block that does not extend the anchor
   (`buildExtra(adopted)`, `NotExtendingAnchor`, `saveLastBlock` writing nothing),
   `stateAvailable(hash)`, the served-root window, and SNAP advertised again. C4b: the head move, `ConsensusStateFault`

@@ -29,7 +29,11 @@ import com.chipprbots.ethereum.metrics.MetricsContainer
   *     state is needed;
   *   - `db.state.view.retries`, `db.state.view.stale`: views that were made again because the disk moved meanwhile, and
   *     those that could not be made for it. (A read that goes stale after its view was made is counted by what catches
-  *     it, which comes with the callers; `db.state.move.seconds` comes with the head move.)
+  *     it, which comes with the callers.)
+  *   - `db.state.move.seconds`: a move of the head, from its plan to its last batch; `db.state.move.blocks`: the blocks
+  *     it reversed and applied, by side; `db.state.move.batches`: how many batches it was written as;
+  *   - `db.state.reorg.refused`: moves of the head that were refused, by reason. `Deep` is the one that is answered by
+  *     syncing the state again; `Corrupt` means the changeset records do not describe the disk
   *
   * `db.state.anchor.lag.blocks` and `db.state.commit.degraded` arrive with what gives them a value other than zero: the
   * block importer's wiring and the overlay.
@@ -68,6 +72,16 @@ object StateMetrics extends MetricsContainer with PathStateStorage.CommitObserve
   private val readRefusals = metrics.counter("db.state.view.behind.refused")
   private val viewRetries = metrics.counter("db.state.view.retries")
   private val viewsStale = metrics.counter("db.state.view.stale")
+  private val moveTimer = metrics.timer("db.state.move.seconds")
+  private val moveBlocks = s"${metrics.metricsPrefix}.db.state.move.blocks"
+  private val moveReversed = metrics.registry.counter(moveBlocks, "side", "reversed")
+  private val moveApplied = metrics.registry.counter(moveBlocks, "side", "applied")
+  private val moveBatches = metrics.distribution("db.state.move.batches")
+  private val refusedName = s"${metrics.metricsPrefix}.db.state.reorg.refused"
+  private val refusals: Map[ReorgRefusal, io.micrometer.core.instrument.Counter] =
+    ReorgRefusal.values.iterator
+      .map(reason => reason -> metrics.registry.counter(refusedName, "reason", reason.toString))
+      .toMap
 
   override def lockWaited(nanos: Long): Unit = lockWait.record(nanos, TimeUnit.NANOSECONDS)
 
@@ -86,6 +100,15 @@ object StateMetrics extends MetricsContainer with PathStateStorage.CommitObserve
   override def viewRetried(): Unit = viewRetries.increment()
 
   override def viewStale(): Unit = viewsStale.increment()
+
+  override def moved(move: MoveOutcome.Moved): Unit =
+    anchorNumber.set(move.to.number.toLong)
+    moveTimer.record(move.nanos, TimeUnit.NANOSECONDS)
+    moveReversed.increment(move.reversed.toDouble)
+    moveApplied.increment(move.applied.toDouble)
+    moveBatches.record(move.batches.toDouble)
+
+  override def moveRefused(reason: ReorgRefusal): Unit = refusals(reason).increment()
 
   override def committed(commit: Commit): Unit =
     anchorNumber.set(commit.block.number.toLong)

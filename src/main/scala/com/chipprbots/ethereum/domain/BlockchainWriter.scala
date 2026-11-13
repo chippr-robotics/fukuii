@@ -259,6 +259,26 @@ class BlockchainWriter(
     * Only the index, the lookups and the best-block pointer move; headers, bodies and receipts stay where they are.
     */
   def promoteToCanonicalHead(head: BlockHeader, reader: BlockchainReader): CanonicalMove =
+    val update = canonicalHeadUpdate(head, reader)
+    // A plain extension rewrites only heights above the old best and clears nothing: not worth a line.
+    if update.reorganises then
+      log.info(
+        "Canonical head moved: head=#{} {} previousBest=#{} rewritten={} clearedAboveHead={} droppedTxLookups={}",
+        head.number.value,
+        head.hash.toHexString,
+        update.previousBest,
+        update.move.adopted.size,
+        update.cleared,
+        update.droppedTxLookups
+      )
+    update.batch.commit()
+    update.move
+
+  /** The batch [[promoteToCanonicalHead]] commits, uncommitted, and what it does: for a caller that writes it with its
+    * own rows in one atomic batch, as a move of the state's head does (spec 018 C4b), and for that caller only. It
+    * reads the index and the best block as they are when it is called: the batch is of that moment.
+    */
+  def canonicalHeadUpdate(head: BlockHeader, reader: BlockchainReader): CanonicalHeadUpdate =
     val oldBest = reader.getBestBlockNumber
     val headNumber = head.number.value
 
@@ -292,23 +312,18 @@ class BlockchainWriter(
       blocks.flatMap(reader.getBlockBodyByHash).flatMap(_.transactionList.map(_.hash.value)).toSet
     val staleLookups = txHashes(dropped) -- txHashes(put.map(_._2))
 
-    // A plain extension rewrites only heights above the old best and clears nothing: not worth a line.
-    if remove.nonEmpty || put.exists(_._1 <= oldBest) then
-      log.info(
-        "Canonical head moved: head=#{} {} previousBest=#{} rewritten={} clearedAboveHead={} droppedTxLookups={}",
-        headNumber,
-        head.hash.toHexString,
-        oldBest,
-        put.size,
-        remove.size,
-        staleLookups.size
-      )
-    canonicalIndexUpdate(put, remove, Some((head.hash, headNumber)), reader)
+    val batch = canonicalIndexUpdate(put, remove, Some((head.hash, headNumber)), reader)
       .and(staleLookups.foldLeft(transactionMappingStorage.emptyBatchUpdate) { (acc, tx) =>
         acc.and(transactionMappingStorage.remove(tx))
       })
-      .commit()
-    CanonicalMove(adopted = put, dropped = droppedAt)
+    CanonicalHeadUpdate(
+      batch = batch,
+      move = CanonicalMove(adopted = put, dropped = droppedAt),
+      previousBest = oldBest,
+      cleared = remove.size,
+      droppedTxLookups = staleLookups.size,
+      reorganises = remove.nonEmpty || put.exists(_._1 <= oldBest)
+    )
 
   private def saveBlockNumberMapping(number: BigInt, hash: BlockHash): DataSourceBatchUpdate =
     blockNumberMappingStorage.put(number, hash.value)
@@ -325,6 +340,26 @@ class BlockchainWriter(
   * `ReorgStateHandler`), which the index write cannot do atomically.
   */
 final case class CanonicalMove(adopted: Seq[(BigInt, BlockHash)], dropped: Seq[(BigInt, BlockHash)])
+
+/** The batch that makes a block the canonical head ([[BlockchainWriter.canonicalHeadUpdate]]), not yet written.
+  *
+  * @param previousBest
+  *   the best block's number when it was built
+  * @param cleared
+  *   heights whose index entry it deletes
+  * @param droppedTxLookups
+  *   transaction lookups it deletes
+  * @param reorganises
+  *   it rewrites a height at or below the previous best block, or deletes one: more than an extension
+  */
+final case class CanonicalHeadUpdate(
+    batch: DataSourceBatchUpdate,
+    move: CanonicalMove,
+    previousBest: BigInt,
+    cleared: Int,
+    droppedTxLookups: Int,
+    reorganises: Boolean
+)
 
 object BlockchainWriter:
   def apply(storages: BlockchainStorages): BlockchainWriter =

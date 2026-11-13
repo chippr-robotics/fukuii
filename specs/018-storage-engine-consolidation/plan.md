@@ -2461,6 +2461,53 @@ on the virtual rows (above); the layers a later batch needs are not dropped betw
 store gives out no state, and its memory follows the disk before it says so; records are read past the block
 cache; the move's lock is fair, and a move asked for from inside a move is refused.
 
+#### C4b part 2b: the writer's rows in the move's batch (2026-11-13)
+
+**The head's index rows are built apart from their commit.** `BlockchainWriter.canonicalHeadUpdate(head, reader)`
+builds the batch that makes a block the canonical head (its ancestry in the index of blocks by number, nothing
+above it, the best-block pointer, the transaction lookups of the blocks it drops) and writes nothing;
+`promoteToCanonicalHead` is that batch committed, with its log line. With the guard off nothing changes, and a
+spec holds it to that byte for byte: two stores of the same chains, one promoted and one given the builder's batch,
+are equal after a move up, across, down and to the head itself.
+
+**The move writes them in its batch** (T137). On the execution-apis chain imported on the unified layout, a move
+whose `extraFor` is the builder for the block each batch ends on leaves the index the ancestry of the state's
+block, the best block that block, the transaction lookups in the canonical one of two blocks that share them, and
+the anchor, in one batch: down by three records, a competing block imported in place, and across by records. A
+batch that fails writes none of them; after each batch of a move of one block a batch, the index is the ancestry
+of the block the state is at.
+
+**The layers a plan applies are pinned for the whole move**, and the pin released at its end, whatever came of it
+(beacon: an eviction between two batches would stop the move). They are in memory already, so the bound on pinned
+bytes is not asked.
+
+**The move's metrics** (T151): `db.state.move.seconds`, `db.state.move.blocks` by side, `db.state.move.batches`,
+`db.state.reorg.refused` by reason.
+
+**Read after code (beacon): APPROVE WITH CHANGES, nothing critical.** Verified in code: guard off, promotion
+reads, builds, logs and writes what it did; the builder is right for a head on the way down and on the way up, and
+a lookup deleted in one batch and written again in a later one ends as one promotion would leave it. Taken: the
+byte comparison now covers a move up and the sweep of entries left above the head; an across move one block a
+batch checks the index, the pointer and every lookup after each batch; the way down checks the lookups it drops;
+a failure to release the pin does not hide the move's own; every refusal reason has its counter. **Owed by part 3**
+(recorded at T140): the index rows a caller gives a move are built outside the state lock and written blind, so
+any other writer of the index or the best block in between makes them stale (`newPayload`'s `storeBlock` indexes a
+payload whose parent is canonical). On the guard the move must be the only such writer, or the batch checked under
+the lock.
+
+**Left, and where.** Nothing in the node calls `moveHead` yet: the callers that exist on the guard
+(`test_rewindToBlock`, the index writers, the SYNC-FORK rewind) are part 3, with the table of pointer writers as a
+test; the Engine API's `forkchoiceUpdated` is C4d. A bound on a batch by bytes with a barrier move, and the hold
+that keeps retention off the records while a reverse-then-commit attempt is unsettled, are part 2c.
+
+**The mutation run**: 13 mutants; 12 caught, 1 equivalent. Promotion that writes nothing; the lookups of dropped transactions
+kept, or those of re-included ones dropped; what was dropped or cleared not said right; an extension taken for a
+reorganisation and the other way round (missed at first: no case moved to a branch that ends above the old head;
+it has one now); a move's layers not pinned, or the pin of a move that failed never released; a move, or a refused
+one, not told; a refusal reason without its counter. After the read four were run again on the new cases (the
+lookups both ways, and the pin). **Equivalent**: the release of the pin after a move that succeeded, whose every
+pinned layer has been applied and dropped by then.
+
 ### Destructive change (C8a and C8b): the vault protocol blocks
 
 ```

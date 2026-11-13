@@ -503,6 +503,59 @@ class HeadMoveSpec extends AnyFlatSpec with Matchers with LayerChains with Plann
       net.holds(layers(1))
     }
 
+  "The layers a move applies" should "be held against eviction until its last batch, and be let go after it" taggedAs
+    (UnitTest, ConsensusTest) in {
+      // room for four executed blocks that no branch holds
+      val net = new Net(CommitSettings(maxBlocksPerMove = 1, maxForwardLayers = 4))
+      val head = net.inPlace(net.chain.first, fourBlocks.head*)
+      val layers = grown(head, branch)((p, txs) => net.layered(p, txs*))
+      var batches = 0
+      val moved = net.move(
+        layers.last,
+        chunk =>
+          batches += 1
+          // between two batches other blocks are executed and kept, more than there is room for: what goes to make
+          // room is never a block of the move
+          if batches == 2 then
+            (1 to 3).foreach { n =>
+              val other = net.chain.on(net.anchor)(slots(carol, (90 + n) -> n))
+              net.chain.state.commitOverlay(other.staged, other.ref)
+            }
+            layers.drop(1).foreach(block => net.chain.state.forwardLayer(block.hash) should not be empty)
+            // (the layer of the block the first batch applied goes with the move's last batch, as the others do)
+            net.chain.state.overlayUsage.pinnedLayers shouldBe 4
+          net.pointers(chunk)
+      )
+      moved match
+        case done: MoveOutcome.Moved => done.applied shouldBe 4
+        case other                   => fail(s"not moved: $other")
+      net.holds(layers.last)
+      // and nothing is held for it now
+      net.chain.state.overlayUsage.pinnedLayers shouldBe 0
+      // nor after a move that failed
+      val again = net.inPlace(layers.last, slots(carol, 1 -> 2))
+      val more = grown(again, branch.take(2))((p, txs) => net.layered(p, txs*))
+      an[IllegalStateException] should be thrownBy net.move(more.last, _ => throw new IllegalStateException("no"))
+      net.chain.state.overlayUsage.pinnedLayers shouldBe 0
+    }
+
+  "A move" should "be told: what it moved when it is made, and why when it is refused" taggedAs UnitTest in {
+    var told = Vector.empty[Any]
+    val observer = new CommitObserver:
+      override def moved(move: MoveOutcome.Moved): Unit = told :+= move
+      override def moveRefused(reason: ReorgRefusal): Unit = told :+= reason
+    val net =
+      new Net(CommitSettings(observer = observer, retention = new RetentionPolicy(StateConfig.Mode.Basic, (_, _) => 2)))
+    val ours = grown(net.chain.first, fourBlocks)((p, txs) => net.inPlace(p, txs*))
+    val moved = net.moved(ours(2))
+    told shouldBe Vector(moved)
+    an[ReorgTooDeep] should be thrownBy net.move(net.chain.first)
+    told.last shouldBe ReorgRefusal.Deep
+    // a move to the head is no move, and is not told
+    net.move(ours(2)) shouldBe MoveOutcome.AlreadyThere
+    told should have size 2
+  }
+
   "A move whose write fails" should "change nothing: the anchor, the layers and the rows stand, and the move can be made again" taggedAs
     (UnitTest, ConsensusTest) in {
       val source = new Failing
