@@ -15,8 +15,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     `<datadir>/ephemery-N`. Logs stay at `<datadir>/logs`. An operator's `custom-chains-dir` that holds
     `ephemery-chain.conf` is used as before, with no fetch and no exit.
   - At the iteration's reset the node logs a WARN and exits with code 75, for a supervisor to restart; set
-    `fukuii.ephemery.exit-at-reset = false` to only warn. After the reset, this build refuses to start (exit 78) and
-    names `scripts/ephemery/fetch-genesis.sh`.
+    `fukuii.ephemery.exit-at-reset = false` to only warn.
+  - **A restarted node refreshes itself.** When no iteration it holds is current, it fetches the one whose window
+    contains now from `https://github.com/ephemery-testnet/ephemery-genesis` (https only, a host allow-list, size
+    caps, a strict archive reader), validates it with the rules of `fukuii cli ephemery-fetch`, keeps it under
+    `<datadir>/releases/ephemery-N` with the consensus client's `testnet/` directory, and runs it. Retries and waits
+    share one budget, `fukuii.ephemery.refresh-timeout` (60 s). No network call is made while an iteration is current.
+    A release not yet published exits 69 (a restart retries); a refused one, a republished one, a bad source or
+    `fukuii.ephemery.refresh = false` after the reset exits 78. `fukuii.ephemery.source` takes an https mirror or a
+    local directory (no network). See `docs/runbooks/ephemery.md`.
+  - **`fukuii cli ephemery-fetch` downloads.** `--release ephemery-N` fetches a release; without `--out` it writes into
+    the node's root (adding `testnet/` to an entry that is there), with `--out DIR` it writes the script's layout.
+    `scripts/ephemery/fetch-genesis.sh` is now `exec fukuii cli ephemery-fetch` with `--out` defaulted: it needs no
+    `curl` or `tar`, and its `testnet/` leaves out `parsedBeaconState.json` and `bootnode-keys/`.
   - **Behaviour change.** `conf/ephemery.conf` no longer sets a default `fukuii.blockchains.custom-chains-dir`
     (`~/.fukuii/ephemery-network/current/chains`). Someone who ran `fetch-genesis.sh` with its default `--out` and
     launched without `FUKUII_CONF_DIR` now runs the built-in iteration, which is the same one, in a new datadir
