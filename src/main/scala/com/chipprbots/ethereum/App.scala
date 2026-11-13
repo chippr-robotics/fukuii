@@ -70,7 +70,7 @@ object App extends Logger:
       .find(file => file.exists() && file.isFile)
 
   /** Set config file for the specified network (must be called before Config is accessed) */
-  private def setNetworkConfig(network: String): Unit =
+  private[ethereum] def setNetworkConfig(network: String): Unit =
     val currentConfigFile = Option(System.getProperty("config.file"))
     findFilesystemConfig(network, currentConfigFile) match
       case Some(file) =>
@@ -95,6 +95,11 @@ object App extends Logger:
   private def determineNetworkArg(args: Array[String]): Option[String] =
     args.headOption match
       case Some(`launchFukuii`) => args.tail.find(isNetwork)
+      // `cli ephemery-fetch` reads the Ephemery configuration (spec 028): a plain `cli` command loads no network's conf,
+      // so it selects the Ephemery one itself, before anything reads the configuration.
+      case Some(`cli`)
+          if args.tail.headOption.contains(com.chipprbots.ethereum.ephemery.EphemeryFetchCli.CommandName) =>
+        Some("ephemery")
       case Some(`launchKeytool`) | Some(`downloadBootstrap`) | Some(`faucet`) | Some(`sigValidator`) | Some(`cli`) =>
         None
       case Some(network) if isNetwork(network) => Some(network)

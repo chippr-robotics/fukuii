@@ -34,7 +34,10 @@ scripts/ephemery/fetch-genesis.sh                      # latest release -> ~/.fu
 scripts/ephemery/fetch-genesis.sh --release ephemery-164 --out /chipprbots/blockchain/ephemery
 ```
 
-Requires bash >= 4, `curl`, `tar`, `jq`. It writes `OUT/ephemery-N/` and points `OUT/current` at it:
+Requires bash >= 4, `curl`, `tar` and the fukuii launcher (`FUKUII_BIN`, default `fukuii` on `PATH`; from a
+checkout, `FUKUII_BIN=target/universal/stage/bin/fukuii` after `sbt stage`). The script downloads and unpacks the
+release; every rule, the re-encoding and the genesis-hash check are fukuii's own (`fukuii cli ephemery-fetch`). It
+writes `OUT/ephemery-N/` and points `OUT/current` at it:
 
 | Path | What |
 |------|------|
@@ -43,7 +46,18 @@ Requires bash >= 4, `curl`, `tar`, `jq`. It writes `OUT/ephemery-N/` and points 
 | `chains/ephemery-genesis.json` | the release genesis re-encoded for fukuii (see below) |
 | `conf/ephemery.conf` | operator conf: includes the shipped `conf/ephemery.conf`, sets `custom-chains-dir` and a per-iteration `datadir = OUT/ephemery-N/data` |
 | `release.env` | `CHAIN_ID`, `GENESIS_HASH` (published), `RESET_TIME`, `BOOTNODE_ENR_LIST`, ... |
+| `release.json` | the same facts as JSON, with where the release came from (`source`, `archiveSha256`) |
 | `OUT/ephemery-local.conf` | your overrides (ports, JWT); created once, never overwritten, included by every iteration's conf |
+
+Exit codes: `0` written; `1` the output could not be written (nothing of the new iteration is left); `2` a usage
+error or no fukuii launcher (set `FUKUII_BIN`); `78` the release is refused (the message says why).
+
+Re-running for an iteration that exists keeps its `data/` and replaces only the generated members, all or nothing: the
+old `testnet/`, `chains/`, `conf/`, `release.env` and `release.json` are moved aside, the new ones moved in, and if any
+step fails the old ones are put back, so `OUT/current` never points at a half-written iteration. A failure after that
+point (updating `current`, creating `ephemery-local.conf`) is a warning: the iteration is written. The script's own log
+goes to a scratch directory, so it never touches a node's log. `retention.vars` must carry `CHAIN_ID`,
+`ITERATION_NUMBER` and `GENESIS_TIMESTAMP` (every release does).
 
 The script refuses (non-zero exit, nothing written) a release whose genesis declares something fukuii
 cannot represent: a non-zero block fork, an unknown fork key (e.g. `bpo3Time`), a non-zero TTD, or a header
@@ -210,7 +224,8 @@ A chain config generated before #1637 has no `blob-schedule` and is refused this
   (`values.env` on `master` announces the next iteration)
 - Network overview, RPC, checkpoint endpoints: <https://github.com/ephemery-testnet/ephemery-resources>
 - Reset/retention tooling for other clients: <https://github.com/ephemery-testnet/ephemery-scripts>
-- Fixture check: `scripts/ephemery/check-fixture.sh` regenerates `ephemery-164` with the current script
-  and diffs it against `src/test/resources/ephemery/ephemery-164/` (run after any script change).
+- Fixture check: `EphemeryGoldenRenderSpec` renders the raw inputs of `ephemery-164` and `ephemery-165`
+  (`src/test/resources/ephemery/releases/`) with the release engine and compares them byte for byte with
+  `src/test/resources/ephemery/ephemery-16x/`. A change of the rendered output is a reviewed fixture diff.
 - Test: `EphemeryGenesisSpec` builds the `ephemery-164` genesis from the script's output and checks the
   published hash and the live fork ids.

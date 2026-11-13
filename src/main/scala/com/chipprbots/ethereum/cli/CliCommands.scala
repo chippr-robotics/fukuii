@@ -11,9 +11,11 @@ import org.bouncycastle.util.encoders.Hex
 import com.chipprbots.ethereum.crypto
 import com.chipprbots.ethereum.crypto.*
 import com.chipprbots.ethereum.domain.Address
+import com.chipprbots.ethereum.ephemery.EphemeryFetchCli
 import com.chipprbots.ethereum.keystore.EncryptedKey
 import com.chipprbots.ethereum.keystore.EncryptedKeyJsonCodec
 import com.chipprbots.ethereum.security.SecureRandomBuilder
+import com.chipprbots.ethereum.utils.BuildInfo
 import com.chipprbots.ethereum.utils.ByteStringUtils
 
 object CliCommands extends SecureRandomBuilder:
@@ -23,6 +25,10 @@ object CliCommands extends SecureRandomBuilder:
   val deriveAddressCommand = "derive-address"
   val generateAllocsCommand = "generate-allocs"
   val encryptKeyCommand = "encrypt-key"
+  val ephemeryFetchCommand: String = EphemeryFetchCli.CommandName
+
+  /** What `release.json` records as the producer of a release. */
+  val producedBy: String = s"fukuii ${BuildInfo.version}"
 
   val balanceOption = "balance"
   val keyOption = "key"
@@ -112,6 +118,7 @@ object CliCommands extends SecureRandomBuilder:
       DeriveAddressFromPrivateKey,
       GenerateAllocs,
       GenerateKeyPairs,
-      EncryptKey
+      EncryptKey,
+      EphemeryFetchCli.helpStub
     )
   }
