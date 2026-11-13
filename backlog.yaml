@@ -2649,7 +2649,7 @@ items:
   - id: B-233
     title: "028 S3: bundled Ephemery iteration, startup selection, exit 75 at the reset"
     priority: P2
-    status: open
+    status: claimed
     area: ops
     size: L
     opened: 2026-11-12
@@ -2657,6 +2657,11 @@ items:
     links:
       spec: specs/028-builtin-ephemery-hoodi
       branch: feat/028-s3-bundle
+    claim:
+      by: dev-node
+      agent: main
+      since: 2026-11-13T02:38:25Z
+      heartbeat: 2026-11-13T02:38:25Z
   - id: B-234
     title: "028 S4a: strict HTTPS release transport and tar reader"
     priority: P2
