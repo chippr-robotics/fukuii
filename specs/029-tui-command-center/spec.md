@@ -4,9 +4,9 @@
 
 **Created**: 2026-11-13
 
-**Status**: Draft (2026-11-13). Written from the user's brief of 2026-11-13; three scope questions (D-1 to D-3) are open and there is no plan yet.
+**Status**: Clarified (2026-11-13). The user answered D-1 to D-3 on 2026-11-13: in-process only, a peer radar, and sprite sheets supplied by the user.
 
-**In flight**: `ccr-452bbde8-2hrv25` (cloud session, B-244): spec and research in PR; the plan and tasks follow the answers to D-1 to D-3
+**In flight**: `ccr-452bbde8-2hrv25` (cloud session, B-244): spec, research, plan and tasks in PR #1820
 
 **Input**: The user's brief of 2026-11-13: "the tui has basic ascii graphics currently and no real input controls …
 we can use Kitty Graphics Protocol to build a vga inspired execution command center … a 1980s arcade-style Network
@@ -45,14 +45,20 @@ the Engine API, base fee, blobs. Every view says which it is on, and shows only 
 
 ## Clarifications
 
-### Open (asked 2026-11-13)
+### Session 2026-11-13
 
-Three choices change the scope and are the user's to make. Each is marked `[NEEDS CLARIFICATION]` where it applies;
-the options and a recommendation are in research §9.
+Three choices changed the scope and were the user's to make. The options are in research §9.
 
-- **D-1**: starting and restarting the node from a TUI that runs inside it (FR-055).
-- **D-2**: the topology panel: a peer radar, or a world map that needs a bundled location database (FR-030).
-- **D-3**: who draws the sprites (FR-060).
+- Q (D-1): The TUI runs inside the node, so it cannot start it, and almost no service restarts at run time. How are
+  "start and stop node processes" and "restart client services" handled? → A: **In process only.** Stop the node, with
+  confirmation; stop and start the HTTP and WebSocket RPC servers and mining. No start, no whole-node restart, no
+  attachable TUI. (user, 2026-11-13)
+- Q (D-2): The mockup's topology panel is a world map with arcs between peers, and the node has neither location data
+  nor knowledge of its peers' connections. What is the panel? → A: **A peer radar** that plots only what the node
+  knows. No map and no location database. (user, 2026-11-13)
+- Q (D-3): The supplied images are concept art, not sprite sheets. Who draws the sprites? → A: **The user supplies the
+  sprite sheets**, to the format in [contracts/art.md](./contracts/art.md). The build ships plain placeholder art in
+  the same format until they arrive. (user, 2026-11-13)
 
 ### Defaults taken without asking
 
@@ -83,8 +89,9 @@ Each is reversible in review (§9):
 - **No consensus change.** As in spec 027: nothing under `consensus/`, `vm/`, `ledger/` block execution, `mpt/`,
   `rlp/`, `crypto/` or `domain/` changes behaviour. Observation added there is state written at existing call sites.
 - **No new network-reachable interface.** No new RPC method, no new port. New actions are called in process.
-- **No new dependency.** Compression and the management beans come from the JDK. A bundled location database, if D-2
-  chooses a map, is the one exception and is justified in the plan.
+- **No new dependency.** Compression and the management beans come from the JDK.
+- **No world map and no location data** (D-2). **No attachable or remote TUI**, no start or restart of the node
+  (D-1).
 - **No mouse.**
 - **No other image protocol**: no Sixel, no iTerm2 inline images.
 - **No Kitty pixels through tmux or screen** in the first release. Block graphics are the answer there. The frame
@@ -423,7 +430,8 @@ Each requirement names the research section it rests on.
 - **FR-016** No image may outlive the TUI. Every image is removed on `q`, `d`, Ctrl-C and a lost terminal, and placed
   again after a resize or `r` (§4.4, §5.6).
 - **FR-017** Sprite sheets are sent to the terminal once. A moving sprite MUST then cost no pixel data per frame, and a
-  chart MUST be redrawn only when its data changes, at most once a second (§5.3).
+  chart MUST be redrawn only when its data changes, at most once a second. In block mode a sprite changes only when
+  the state it shows changes; it does not cycle frames. A frame write MUST send only the rows that changed (§5.3).
 - **FR-018** The mascot MUST show the node's state and nothing else: starting, syncing, at the head, a warning, an
   error, stalled, and the one celebration of spec 027. It never covers the alert row, never moves in a confirmation
   dialog, and never reacts to an action except through the state the action leaves (§5.5).
@@ -463,9 +471,10 @@ Each requirement names the research section it rests on.
 
 - **FR-030** The Peers view keeps spec 027's list, now selectable, with a details screen per peer (client,
   capabilities, direction, age, best block, score and its components, request latency, recent activity). It gains a
-  topology panel: [NEEDS CLARIFICATION: D-2 — a peer radar that plots only what the node knows (latency, score,
-  direction, activity), or a world map, which needs a bundled offline location database; research §6.6 and §9
-  recommend the radar].
+  **peer radar** (D-2): this node at the centre and one blip per peer, whose distance is its request latency, whose
+  angle is fixed by its node id, whose colour is its score band, whose shape is its direction, and which flashes when
+  it answers a request. A peer with no latency measured yet sits on the outer ring, marked as unmeasured. The radar
+  draws no link between peers and no geography (§6.6).
 
 **Mempool**
 
@@ -523,9 +532,10 @@ Each requirement names the research section it rests on.
 
 - **FR-047** Every action MUST declare its name, what it changes, its class (Observe, Adjust, Disrupt or Halt), how
   its preview is computed, and how it is undone if it can be (§7.3).
-- **FR-048** Confirmation follows the class. Observe: none. Adjust: a dialog showing the value before and after, and
-  Enter. Disrupt: the preview, and `y`. Halt: the preview, and typing a word the dialog shows. A dialog opens with
-  Cancel in focus, is never animated, and closes on Esc (§7.3).
+- **FR-048** Confirmation follows the class. Observe: none. Adjust: a dialog showing the value before and after, whose
+  Apply button the operator chooses and accepts. Disrupt: the preview, and `y`. Halt: the preview, and typing a word
+  the dialog shows. A dialog opens with Cancel in focus, is never animated, and closes on Esc (§7.3;
+  [contracts/operator.md](./contracts/operator.md)).
 - **FR-049** `q` MUST open the Halt dialog for stopping the node and MUST NOT stop it. Ctrl-C and signals stop the node
   as they do today (§2 R4, §3 E6).
 - **FR-050** A preview MUST be computed from the node's state when the dialog opens and MUST name what will change in
@@ -537,7 +547,8 @@ Each requirement names the research section it rests on.
   no RPC namespace enabled and MUST enable none. No action may add a network-reachable method (§7.5).
 - **FR-053** With `fukuii.tui.read-only = true` no action other than Observe can run, and the Ops view says so. The
   default is false (§8.1).
-- **FR-054** The first release MUST offer:
+- **FR-054** The first release MUST offer the actions below; each one's preview, the function that carries it out and
+  its undo are in [contracts/actions.md](./contracts/actions.md):
   - *Observe*: the effective configuration, searchable, with secrets hidden; the list of settings that can change
     without a restart; a test of each enabled RPC endpoint that reports the answer and the time; the node's listening
     and detected external addresses with the inbound peer count as evidence of reachability; the list of subsystems
@@ -549,13 +560,14 @@ Each requirement names the research section it rests on.
     a database consistency check; a database compaction, whose preview says writers may wait; re-detecting the
     external address, whose preview names the outside services it contacts; writing a support bundle.
   - *Halt*: stopping the node (§7.1, §7.2).
-- **FR-055** Node and service lifecycle: [NEEDS CLARIFICATION: D-1 — the TUI runs inside the node, so it can stop the
-  node and, with new work, stop and start the HTTP and WebSocket RPC servers and mining, but it cannot start the
-  node. Research §9 recommends in-process only; the alternatives are a supervisor-driven restart, or a separate
-  attachable TUI, which is its own spec].
+- **FR-055** Node and service lifecycle is in process only (D-1). Beyond stopping the node (Halt) and mining
+  (FR-054), the operator MUST be able to stop and start the HTTP and the WebSocket RPC servers, each a Disrupt action
+  whose preview names the address, the namespaces served and the open connections that will drop. A server stopped
+  here shows as stopped in the RPC view and raises no alert. The TUI offers no way to start the node, no whole-node
+  restart, and no restart of the Engine API server, peer discovery or sync (§7.2).
 - **FR-056** What the brief lists and this release does not offer MUST be named in the Ops view with the reason:
-  snapshots (spec 013 has no code), configuration reload from file (no key supports it), and restart of the Engine
-  API server, peer discovery or sync (§7.2).
+  starting or restarting the node (the TUI runs inside it), snapshots (spec 013 has no code), configuration reload
+  from file (no key supports it), and restart of the Engine API server, peer discovery or sync (§7.2).
 - **FR-057** An action that takes time MUST show progress, MUST NOT be startable a second time while it runs, MUST
   continue while the operator changes view, and MUST report its end. It never runs on the frame loop (§8.4).
 - **FR-058** No secret may reach a frame or a file. The configuration view and the support bundle hide the value of
@@ -566,15 +578,17 @@ Each requirement names the research section it rests on.
 
 **Settings and art**
 
-- **FR-059** New settings live under `fukuii.tui` (`graphics`, `read-only`, `alerts.*`, history lengths) with
-  environment overrides in the style of spec 027 (`FUKUII_TUI_GRAPHICS`, `FUKUII_TUI_READ_ONLY`). An invalid setting
-  fails at start with an error naming the key; an invalid environment value logs a warning and uses the default
-  (027 FR-024).
+- **FR-059** New settings live under `fukuii.tui` (`graphics`, `read-only`, `art-dir`, `history-seconds`,
+  `observatory-blocks`, `alerts.*`) with environment overrides in the style of spec 027 (`FUKUII_TUI_GRAPHICS`,
+  `FUKUII_TUI_READ_ONLY`, `FUKUII_TUI_ART_DIR`). An invalid setting fails at start with an error naming the key; an
+  invalid environment value logs a warning and the setting is used (027 FR-024). The keys, prompt commands and
+  settings are listed in [contracts/operator.md](./contracts/operator.md).
 - **FR-060** Art is data, not code: sprite sheets in the fixed palette with a manifest naming each sprite, its frames
   and the state each is for, so that art can be replaced without a code change. A test rejects art outside the
-  palette. [NEEDS CLARIFICATION: D-3 — who draws the first sprites: a starter set traced from the supplied images
-  during the build (recommended), sheets supplied by the user before the graphics slice, or no characters at all;
-  research §5.4 and §9].
+  palette or the declared sizes. The user supplies the sheets (D-3) to [contracts/art.md](./contracts/art.md). Until
+  they arrive, and as the permanent fallback for a missing or invalid sheet, the build carries plain placeholder art
+  in the same format, so no slice waits on art and a bad sheet never stops the node: it is reported at start and the
+  placeholder is drawn (§5.4).
 
 ### Key Entities
 
@@ -615,9 +629,9 @@ Each requirement names the research section it rests on.
   text of the same frame; the text-mode frame of each fixture answers the five-second questions of spec 027 SC-002.
 - **SC-006 No image left behind.** After `q` with confirmation, `d`, an interrupt, and a lost terminal, the test
   terminal holds no image and the output ends with the removal of all of them.
-- **SC-007 Cheap to run.** After the one-time upload of art, the busiest view at 4 frames a second on a 160×48
-  terminal writes under 20 KiB/s, and the TUI's threads use under 3 % of one core, and under 0.5 % when nothing moves.
-  A 160×48 frame renders in under 2 ms (median of 100).
+- **SC-007 Cheap to run.** After the one-time upload of art, the busiest view on a 160×48 terminal writes under
+  20 KiB/s in pixel mode at 4 frames a second and in block mode, and the TUI's threads use under 3 % of one core, and
+  under 0.5 % when nothing moves. A 160×48 frame renders in under 2 ms (median of 100).
 - **SC-008 The chain is current.** On a synced node a new block is on screen within 2 s. A fixture reorg of depth 3 is
   recorded with the right depth and tips. On a synced Mordor node a transaction lookup answers within 1 s (manual).
 - **SC-009 The pool is not burdened.** With a fixture pool the tier counts, inclusions, drops and replacements match
@@ -646,7 +660,8 @@ Each requirement names the research section it rests on.
 - Spec 027's manual gate (B-189) runs before this spec's first slice changes the files it covers, or that slice
   rebases onto its fixes.
 - B-193 (Engine API status counters) and B-196 (a count-only pool query) land before the panels that read them.
-- Art shipped in the repository is Chippr Robotics' own or made for this feature.
+- The user supplies the sprite sheets (D-3). They are Chippr Robotics' own work. Engineering does not wait for them:
+  placeholder art in the same format ships first, and the release gate (SC-014) is run with the real sheets.
 - "One heavy JVM at a time" on the build host still holds, so slices are built and gated serially, as in spec 027.
 
 ## Related specs

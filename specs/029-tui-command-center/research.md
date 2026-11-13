@@ -324,8 +324,14 @@ contract already allows it.
 - **Reduced motion and pause** freeze sprites on a pose chosen by state, exactly as they freeze the worm's ripple.
 
 Budget to hold the design to (spec SC-007): after the one-time upload, under 20 KiB/s to the terminal on the busiest
-view at 4 fps. 027's text frame at 160×48 is already up to about 15 KiB per changed frame, so text dominates; the
-pixel layer must not double it.
+view. Two things follow from the arithmetic.
+
+- 027 rewrites the whole frame whenever any cell changes (`Tui.scala:242`): up to about 15 KiB at 160×48, so 60 KiB/s
+  at 4 fps. The writer must send only the rows that changed. JLine's `Display` diffs by cell, with its own width
+  tables and cursor tracking; a whole row is the safe unit beside emoji and placeholder cells.
+- A sprite in block mode is cells: a 32×16-cell mascot is 512 cells at about 20 bytes each, 10 KiB a frame. Cycling
+  it at 4 fps would cost 40 KiB/s on exactly the links (tmux over SSH) that have least to spare. So in block mode a
+  sprite changes only when its pose changes. In pixel mode a frame change is one placement, about 60 bytes.
 
 ### 5.4 Art
 
@@ -620,7 +626,10 @@ client". A zero is only ever a measured zero.
 
 ## 9. Decisions for the user
 
-Three choices change the scope and have no default the spec could take alone. They are marked in the spec.
+Three choices changed the scope and had no default the spec could take alone. **All three were answered on
+2026-11-13: D-1 (a) in process only; D-2 (a) the peer radar; D-3 (b) the user supplies the sprite sheets.** The
+options are kept here as the record of what was weighed. D-3 was answered against the recommendation: the user draws
+the art, to [contracts/art.md](./contracts/art.md), and the build carries placeholder art so no slice waits.
 
 **D-1. Starting and restarting the node.** The brief lists "start and stop node processes" and "restart client
 services". In process, the TUI can stop the node and (with new lifecycle work) stop and start the HTTP and WebSocket

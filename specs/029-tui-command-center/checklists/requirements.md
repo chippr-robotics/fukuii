@@ -15,7 +15,7 @@
 
 ## Requirement Completeness
 
-- [ ] No [NEEDS CLARIFICATION] markers remain
+- [x] No [NEEDS CLARIFICATION] markers remain
 - [x] Requirements are testable and unambiguous
 - [x] Success criteria are measurable
 - [x] Success criteria are technology-agnostic (no implementation details)
@@ -33,9 +33,9 @@
 
 ## Notes
 
-- **Open: three `[NEEDS CLARIFICATION]` markers**, asked of the user on 2026-11-13. FR-030 (D-2, the topology panel),
-  FR-055 (D-1, node and service lifecycle) and FR-060 (D-3, who draws the sprites). Options and a recommendation for
-  each are in research §9. `/speckit-plan` waits for the answers; the status stays `Draft` until then.
+- **Clarified 2026-11-13.** The three markers (D-1 node and service lifecycle, D-2 the topology panel, D-3 who draws
+  the sprites) were answered by the user: in process only; a peer radar; the user supplies the sprite sheets. The
+  answers are in the spec's Clarifications section and in FR-030, FR-055 and FR-060.
 - **Implementation detail, by the house style.** The spec names the Kitty graphics protocol, `fukuii.tui.*` settings
   and `FUKUII_TUI_*` variables. The protocol is the user's stated constraint, and the settings are operator-visible
   behaviour, as in spec 027. Code structure, classes and file-level changes are kept in research.md and left to the
