@@ -716,19 +716,17 @@ items:
   - id: B-060
     title: "Spec 018 Track C C4a: the overlay (item 6c)"
     priority: P2
-    status: claimed
+    status: done
     area: storage
     size: L
     opened: 2026-11-07
+    closed: 2026-11-13
     refs: [018 C4a]
     links:
+      prs: [1815]
       spec: specs/018-storage-engine-consolidation
     depends_on: [B-059]
-    claim:
-      by: cloud-dc960fdc
-      agent: main
-      since: 2026-11-12T05:21:27Z
-      heartbeat: 2026-11-12T23:55:52Z
+    notes: "2026-11-13 done: C4a, the overlay, in seven PRs: #1806 (forward layers), #1807 (reverse index), #1808 (bounds), #1809 (ordering, stress, M3), #1811 (SNAP serves the window), #1813 (what a reader behind the head may cost), #1815 (JSON-RPC and GraphQL behind the head, reads in flight bounded). Non-head state is readable and bounded; nothing moves the head yet. T135's DC-14 figures stay open with the other slices' (B-203). SNAP stays unadvertised until the node follows the head (C4d, C4e)."
   - id: B-061
     title: "Spec 018 Track C C4b: the move core (item 6d)"
     priority: P2
