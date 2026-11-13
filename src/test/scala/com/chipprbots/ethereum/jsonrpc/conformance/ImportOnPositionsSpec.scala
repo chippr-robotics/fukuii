@@ -146,8 +146,11 @@ class ImportOnPositionsSpec extends ScalaTestWithActorTestKit with AnyFlatSpecLi
       given BlockchainConfig = onPositions.blockchainConfig
       val before = disk
       an[IllegalStateException] should be thrownBy execution.executeBlockNoValidation(blocks.head)
-      // a side branch, a reorganisation's blocks: executed, and adopted later or never
-      val unadopted = the[StateUnavailable] thrownBy importOne(onPositions, execution, blocks.head, adopt = false)
+      // a side branch, a reorganisation's blocks: executed, and adopted later or never. The batch ends on it as on a
+      // fault of this node's state, which it is, and not as on an error of the block (C4b): nothing was judged.
+      val unadopted = importOne(onPositions, execution, blocks.head, adopt = false) match
+        case (Nil, Some(BlockExecutionError.StateFaulted(fault: StateUnavailable))) => fault
+        case other => fail(s"the block that is not adopted was answered with $other")
       unadopted.reason should include("not adopted")
       // a payload ahead of the head: its state committed apart from the block
       // refused before it runs, not when its state comes to be committed

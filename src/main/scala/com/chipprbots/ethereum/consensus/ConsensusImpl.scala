@@ -12,6 +12,7 @@ import com.chipprbots.ethereum.consensus.Consensus.*
 import com.chipprbots.ethereum.consensus.ConsensusImpl.ForkPoint
 import com.chipprbots.ethereum.consensus.engine.DesignatedHead
 import com.chipprbots.ethereum.consensus.engine.InvalidChainReporter
+import com.chipprbots.ethereum.db.storage.pathstate.StateFault
 import com.chipprbots.ethereum.domain.Block
 import com.chipprbots.ethereum.domain.BlockAccessList
 import com.chipprbots.ethereum.domain.BlockHash
@@ -123,6 +124,7 @@ class ConsensusImpl(
     *   - [[Consensus.ConsensusError]] - block failed to execute (when importing to top or reorganising the chain)
     *   - [[Consensus.ConsensusErrorDueToMissingNode]] - block failed to execute (when importing to top or reorganising
     *     the chain)
+    *   - [[Consensus.ConsensusStateFault]] - this node's own state could not take a block: no block was judged
     */
   override def evaluateBranch(
       branch: NonEmptyList[Block]
@@ -239,10 +241,33 @@ class ConsensusImpl(
           blockchainReader.getCanonicalHashByNumber(b.number.value).filterNot(_ == b.hash).map(b.number.value -> _)
         )
       else Nil
-    val result = executeBranch(branch.toList, currentBestBlockWeight, adoptEachBlock = true, accessLists)
+    val outcome = executeBranch(branch.toList, currentBestBlockWeight, adoptEachBlock = true, accessLists)
     if displaced.nonEmpty then
-      val executed = result._1.map(_.block.number.value).toSet
+      val executed = outcome.executed.map(_.block.number.value).toSet
       reorgState.abandonBlockStates(displaced.collect { case (n, h) if executed(n) => (n, h.value) })
+    outcome.stateFault match
+      case Some(fault) => stateFaulted(fault, outcome.executed, branch.toList)
+      case None        => extendedBy(branch, (outcome.executed, outcome.error))
+
+  /** A batch that stopped on a fault of this node's own state (spec 018 Track C, C4b): the blocks before it are
+    * adopted, as a shorter batch would have left them, and the rest are handed back to be tried again. No block is
+    * reported invalid and no peer is blamed: the block the fault was met at was not judged.
+    */
+  private def stateFaulted(fault: StateFault, imported: List[BlockData], branch: List[Block]): ConsensusResult =
+    saveLastBlock(imported)
+    val notExecuted = branch.drop(imported.length)
+    log.warn(
+      "[STATE-FAULT] the import stopped at block {} on this node's own state, after {} block(s) of the batch: {}",
+      notExecuted.headOption.fold("?")(_.number.value.toString),
+      imported.length,
+      fault.getMessage
+    )
+    ConsensusStateFault(fault, imported, notExecuted)
+
+  private def extendedBy(
+      branch: NonEmptyList[Block],
+      result: (List[BlockData], Option[BlockExecutionError])
+  ): ConsensusResult =
     result match
       case (importedBlocks, None) =>
         saveLastBlock(importedBlocks)
@@ -279,16 +304,29 @@ class ConsensusImpl(
       parentWeight: ChainWeight,
       adoptEachBlock: Boolean,
       accessLists: Map[ByteString, BlockAccessList]
-  )(implicit blockchainConfig: BlockchainConfig): (List[BlockData], Option[BlockExecutionError]) =
-    if accessLists.isEmpty then blockExecution.executeAndValidateBlocks(blocks, parentWeight, adoptEachBlock)
-    else blockExecution.executeAndValidateBlocksWithAccessLists(blocks, parentWeight, adoptEachBlock, accessLists)
+  )(implicit blockchainConfig: BlockchainConfig): BlockExecution.BatchOutcome =
+    val (executed, error) =
+      if accessLists.isEmpty then blockExecution.executeAndValidateBlocks(blocks, parentWeight, adoptEachBlock)
+      else blockExecution.executeAndValidateBlocksWithAccessLists(blocks, parentWeight, adoptEachBlock, accessLists)
+    // A fault of this node's state is taken out of the errors here, once, so that no arm below that judges a block
+    // by its error (and reports it invalid) can be handed one.
+    BlockExecution.BatchOutcome.of(executed, error)
 
-  private def saveLastBlock(blocks: List[BlockData]): Unit = blocks.lastOption.foreach(b =>
-    blockchainWriter.saveBestKnownBlocks(
-      b.block.hash,
-      b.block.number.value
-    )
-  )
+  /** The best-block pointer, set to the last block of a batch that was adopted.
+    *
+    * '''On the unified state layout it writes nothing''' (spec 018 data-model 7.1): there the pointer moves with the
+    * state, in the batch that commits each block, so it is at the last adopted block already. Written again here,
+    * outside that batch and under no lock, it could only be wrong: after a batch that stopped because another writer
+    * moved the head, it would put the pointer back on a block whose state the disk no longer holds.
+    */
+  private def saveLastBlock(blocks: List[BlockData]): Unit =
+    if !blockchainReader.holdsStateInPlace then
+      blocks.lastOption.foreach(b =>
+        blockchainWriter.saveBestKnownBlocks(
+          b.block.hash,
+          b.block.number.value
+        )
+      )
 
   // Execute-first reorganise — reference client pattern (go-ethereum/Besu/Nethermind).
   // Old canonical blocks are NOT deleted before execution, and their state is never touched.
@@ -322,11 +360,41 @@ class ConsensusImpl(
     val oldBlocksData = collectOldBranch(oldCanonical)
 
     // Execute new branch against the unchanged parent canonical state
-    val (executedBlocks, maybeError) =
-      executeBranch(newBranch.toList, parentWeight, adoptEachBlock = false, accessLists)
+    val outcome = executeBranch(newBranch.toList, parentWeight, adoptEachBlock = false, accessLists)
+    val (executedBlocks, maybeError) = (outcome.executed, outcome.error)
 
     settleHead(executedBlocks, parentWeight, bestBlockNumber, bestBlockWeight, fork, oldCanonical, selectedByWeight)
 
+    outcome.stateFault match
+      case Some(fault) =>
+        // This node's state could not take a block of the branch: the branch was not judged. What of it was executed
+        // is settled above as any executed prefix is; the rest is handed back, and nothing is reported invalid.
+        log.warn(
+          "[STATE-FAULT] REORG blocks [{}-{}] stopped on this node's own state after {} block(s): {}",
+          newBranch.head.number,
+          newBranch.last.number,
+          executedBlocks.length,
+          fault.getMessage
+        )
+        // Not met as the code stands: on the unified layout the first block of a branch that is not adopted as it is
+        // executed is refused, and on the hash layout no such fault is thrown. When a branch is executed there on
+        // layers (spec 018 C4e), a prefix that was settled as the head has to be told here, with the old branch's
+        // blocks to queue, as a reorganisation that went through tells them (B-242).
+        if executedBlocks.nonEmpty then
+          log.error(
+            "[STATE-FAULT] REORG: {} block(s) of the branch were executed and settled before the fault, " +
+              "and are not told to the importer",
+            executedBlocks.length
+          )
+        ConsensusStateFault(fault, Nil, newBranch.toList.drop(executedBlocks.length))
+      case None => reorganised(newBranch, oldBlocksData, executedBlocks, maybeError)
+
+  private def reorganised(
+      newBranch: NonEmptyList[Block],
+      oldBlocksData: List[BlockData],
+      executedBlocks: List[BlockData],
+      maybeError: Option[BlockExecutionError]
+  ): ConsensusResult =
     maybeError match
       case None =>
         SelectedNewBestBranch(oldBlocksData.map(_.block), executedBlocks.map(_.block), executedBlocks.map(_.weight))
@@ -396,6 +464,8 @@ class ConsensusImpl(
       case SelectedNewBestBranch(_, newBranch, _) =>
         newBranch.foreach(block => BlockMetrics.measure(block, blockchainReader.getBlockByHash))
       case ConsensusErrorDueToMissingNode(_, _, adopted) =>
+        adopted.foreach(blockData => BlockMetrics.measure(blockData.block, blockchainReader.getBlockByHash))
+      case ConsensusStateFault(_, adopted, _) =>
         adopted.foreach(blockData => BlockMetrics.measure(blockData.block, blockchainReader.getBlockByHash))
       case _ => ()
 

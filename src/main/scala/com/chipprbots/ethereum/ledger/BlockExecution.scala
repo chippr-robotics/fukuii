@@ -12,6 +12,7 @@ import com.chipprbots.ethereum.consensus.validators.std.StdBlockValidator.BlockE
 import com.chipprbots.ethereum.db.storage.EvmCodeStorage
 import com.chipprbots.ethereum.db.storage.SerializingMptStorage
 import com.chipprbots.ethereum.db.storage.StagedBlockState
+import com.chipprbots.ethereum.db.storage.pathstate.StateFault
 import com.chipprbots.ethereum.domain.*
 import com.chipprbots.ethereum.ledger.BlockExecutionError.MissingParentError
 import com.chipprbots.ethereum.mpt.MerklePatriciaTrie.MPTException
@@ -471,7 +472,17 @@ class BlockExecution(
   )(implicit blockchainConfig: BlockchainConfig): (List[BlockData], Option[BlockExecutionError]) =
     executeAndValidateBlocksWithAccessLists(blocks, parentChainWeight, adoptEachBlock, Map.empty)
 
-  /** [[executeAndValidateBlocks]] for blocks that arrived with peer-supplied EIP-7928 lists. */
+  /** [[executeAndValidateBlocks]] for blocks that arrived with peer-supplied EIP-7928 lists.
+    *
+    * '''A batch has a third way to end''' (spec 018 Track C, C4b): this node's own state could not take the next block.
+    * The state the block is to be executed on is not the one the disk holds, or is no longer (another writer moved it
+    * between two blocks of the batch), or the view it was read through went stale. That says nothing about the block,
+    * and nothing about the peer that sent it. It is returned as [[BlockExecutionError.StateFaulted]], which is no
+    * verdict: the blocks before it are adopted, each in its own atomic write, exactly as a shorter batch would have
+    * left them; the block the fault was met at wrote nothing, and neither it nor the blocks after it were judged. So
+    * the batch stops there: executing on would be executing on a state that is not held. A caller tells the two endings
+    * apart with [[BlockExecution.BatchOutcome.of]].
+    */
   def executeAndValidateBlocksWithAccessLists(
       blocks: List[Block],
       parentChainWeight: ChainWeight,
@@ -508,20 +519,29 @@ class BlockExecution(
         // single @tailrec loop on one thread, each iteration's `blockchainWriter.save`
         // completes before the next begins, and `executeBlock` already resolves the parent
         // header from the same storage at BlockExecution.scala:104-106.
-        val step = executeAndCommit(
-          blockToExecute,
-          parentWeight,
-          adoptEachBlock,
-          suppliedBlockAccessLists.get(blockToExecute.hash.value),
-          () => None
-        )
+        // A fault of the state is no verdict on the block: it is kept apart from the block's own errors, so that
+        // nothing downstream can take the one for the other.
+        val step: Either[StateFault, Either[BlockExecutionError, BlockData]] =
+          try
+            Right(
+              executeAndCommit(
+                blockToExecute,
+                parentWeight,
+                adoptEachBlock,
+                suppliedBlockAccessLists.get(blockToExecute.hash.value),
+                () => None
+              )
+            )
+          catch case fault: StateFault => Left(fault)
         step match
-          case Right(newBlockData) =>
+          case Right(Right(newBlockData)) =>
             blockchain.saveBlockState(blockToExecute.header.number.value)
             blockchainReader.recordBlockDifficulty(blockToExecute.header.difficulty)
             go(newBlockData :: executedBlocksDecOrder, remainingBlocksIncOrder.tail, newBlockData.weight)
-          case Left(executionError) =>
+          case Right(Left(executionError)) =>
             (executedBlocksDecOrder.reverse, Some(executionError))
+          case Left(fault) =>
+            (executedBlocksDecOrder.reverse, Some(BlockExecutionError.StateFaulted(fault)))
 
     go(List.empty[BlockData], blocks, parentChainWeight)
 
@@ -721,6 +741,31 @@ class BlockExecution(
     BlockExecution.depositRequests(receipts)
 
 object BlockExecution:
+
+  /** How a batch of blocks ended ([[BlockExecution.executeAndValidateBlocksWithAccessLists]]), with the fault of this
+    * node's own state told apart from an error of the block.
+    *
+    * @param executed
+    *   the blocks that were executed, validated and committed, in order: a prefix of the batch
+    * @param error
+    *   why the block after them is not accepted, when it was judged and failed
+    * @param stateFault
+    *   why the block after them could not be executed or committed, when the fault is this node's own state's: the
+    *   block was not judged. Never set together with `error`
+    */
+  final case class BatchOutcome(
+      executed: List[BlockData],
+      error: Option[BlockExecutionError],
+      stateFault: Option[StateFault]
+  )
+
+  object BatchOutcome:
+    /** What a batch returned, with a [[BlockExecutionError.StateFaulted]] taken out of the errors: after this nothing
+      * that judges a block by its error can be handed a fault of the state.
+      */
+    def of(executed: List[BlockData], error: Option[BlockExecutionError]): BatchOutcome = error match
+      case Some(BlockExecutionError.StateFaulted(fault)) => BatchOutcome(executed, None, Some(fault))
+      case judged                                        => BatchOutcome(executed, judged, None)
 
   /** What [[requestSystemCalls]] does with a request contract that has no code when its turn comes.
     *
@@ -1285,6 +1330,14 @@ object BlockExecutionError:
 
   final case class MPTError(error: MPTException) extends BlockExecutionError:
     def describe: String = error.toString
+
+  /** '''No error of the block.''' This node's own state could not take it (spec 018 Track C, C4b): the block was not
+    * executed, or was executed and not committed, and nothing was judged. It ends a batch the way an error does and is
+    * carried here for that; whoever reads it must not take it for a verdict ([[BlockExecution.BatchOutcome.of]] takes
+    * it out).
+    */
+  final case class StateFaulted(fault: StateFault) extends BlockExecutionError:
+    def describe: String = s"this node's state could not take the block: ${fault.getMessage}"
 
 /** The chain insert lock: go-ethereum's `chainmu`, for the one writer that is not part of the node's own import paths.
   *

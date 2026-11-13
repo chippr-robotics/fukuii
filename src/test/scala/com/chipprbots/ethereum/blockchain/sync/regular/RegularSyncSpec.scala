@@ -1150,6 +1150,46 @@ class RegularSyncSpec
           finally BlockImporter.exhaustBackoff = 5.minutes
       )
 
+      // Spec 018 Track C, C4b: the state a block was to be executed on was moved from under the batch by another
+      // writer, or is not held. The block was not judged. It is fetched and tried again, and nobody is blamed for it.
+      "try a block again that this node's state could not take, and space the tries out from the third: no peer blamed" taggedAs (
+        UnitTest,
+        SyncTest
+      ) in sync(
+        new Fixture:
+          val failingBlock: Block = testBlocksChunked.head.head
+          val attempts = new java.util.concurrent.atomic.AtomicInteger(0)
+          // the wait between two spaced-out tries: longer than this test
+          BlockImporter.exhaustBackoff = 1.hour
+          try
+            setImportResult(
+              failingBlock,
+              IO {
+                attempts.incrementAndGet()
+                BlockImportStateFault(
+                  new com.chipprbots.ethereum.db.storage.pathstate.StateUnavailable("the head moved under the batch")
+                )
+              }
+            )
+            peersClient.setAutoPilot(new PeersClientAutoPilot)
+
+            regularSync ! SyncProtocol.Start
+
+            // tried, fetched again and tried again at the importer's usual pace (the pick sent at once after a rewind
+            // finds the fetcher emptied; the retry tick brings the next): three times, as often as a failed block is
+            // tried before its peer is evicted
+            awaitCond(attempts.get == 3, 15.seconds)
+            // Then the tries are spaced out. Over three of the importer's usual retry intervals, in which a block
+            // that is tried at the usual pace is tried again, none comes; and nobody is blacklisted or evicted.
+            withClue("neither blacklisted nor evicted: ") {
+              peersClient
+                .receiveWhile(syncConfig.syncRetryInterval * 3) { case m => m }
+                .collect { case b: PeersClient.BlacklistPeer => b } shouldBe empty
+            }
+            attempts.get shouldBe 3
+          finally BlockImporter.exhaustBackoff = 5.minutes
+      )
+
       "recognise a block execution's trie error by the text it reaches the importer as" taggedAs (
         UnitTest,
         SyncTest

@@ -11,6 +11,7 @@ import com.chipprbots.ethereum.blockchain.sync.regular.BlockImportFailed
 import com.chipprbots.ethereum.blockchain.sync.regular.BlockImportFailedAt
 import com.chipprbots.ethereum.blockchain.sync.regular.BlockImportFailedDueToMissingNode
 import com.chipprbots.ethereum.blockchain.sync.regular.BlockImportResult
+import com.chipprbots.ethereum.blockchain.sync.regular.BlockImportStateFault
 import com.chipprbots.ethereum.blockchain.sync.regular.BlockImportedToTop
 import com.chipprbots.ethereum.blockchain.sync.regular.ChainReorganised
 import com.chipprbots.ethereum.blockchain.sync.regular.DuplicateBlock
@@ -18,6 +19,7 @@ import com.chipprbots.ethereum.blockchain.sync.regular.UnknownParent
 import com.chipprbots.ethereum.consensus.Consensus.BranchExecutionFailure
 import com.chipprbots.ethereum.consensus.Consensus.ConsensusError
 import com.chipprbots.ethereum.consensus.Consensus.ConsensusErrorDueToMissingNode
+import com.chipprbots.ethereum.consensus.Consensus.ConsensusStateFault
 import com.chipprbots.ethereum.consensus.Consensus.ExtendedCurrentBestBranch
 import com.chipprbots.ethereum.consensus.Consensus.ExtendedCurrentBestBranchPartially
 import com.chipprbots.ethereum.consensus.Consensus.KeptCurrentBestBranch
@@ -192,6 +194,11 @@ class ConsensusAdapter(
         case ConsensusErrorDueToMissingNode(blocksToEnqueue, reason, imported) =>
           blocksToEnqueue.foreach(blockQueue.enqueueBlock(_))
           BlockImportFailedDueToMissingNode(reason, imported)
+        case ConsensusStateFault(fault, imported, blocksToEnqueue) =>
+          // The blocks were not judged: they wait in the queue to be tried again, and none of them is dropped from it
+          // as an invalid block's descendants are.
+          blocksToEnqueue.foreach(blockQueue.enqueueBlock(_))
+          BlockImportStateFault(fault, imported)
       }
 
   private def doBlockPreValidation(block: Block)(implicit

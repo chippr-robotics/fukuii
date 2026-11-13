@@ -185,6 +185,15 @@ Read plan.md, "C2a part 1 record" and "C2a part 2 record", then:
   on the unified layout and compared with the hash store behind its head is `RpcReadersBehindHeadSpec`: start
   there for any reader of a block behind the head. Forward layers by hash over RPC, `requireCanonical` and
   `BLOCKHASH` by a block's own ancestry are C4d's.
+- **C4b is planned in plan.md, "C4b: the move core, as it is to be built"**, after forge's and beacon's consults:
+  read that before data-model 7.0 and 7.3, which it corrects (the move takes the caller's rows and hands out
+  nothing; a move of several blocks is settled against a virtual disk; `Deep` by the records that are there; a
+  `Finalized` refusal; the chunk invariant). **Part 0 is built**: a `StateFault` met in a batch is
+  `BlockExecutionError.StateFaulted` in the batch's result, `ConsensusStateFault` and `BlockImportStateFault`
+  above it, never a failed import; `saveLastBlock` writes nothing on the unified layout. A new consumer of a
+  batch's result must take the fault out before it judges a block (`BlockExecution.BatchOutcome.of`). The chain
+  on the unified layout driven through the node's own consensus, with a second writer, is
+  `StateFaultInABatchSpec`.
 - **C4a** brings back what C3b refuses: the overlay commit for a block that does not extend the anchor
   (`buildExtra(adopted)`, `NotExtendingAnchor`, `saveLastBlock` writing nothing),
   `stateAvailable(hash)`, the served-root window, and SNAP advertised again. C4b: the head move, `ConsensusStateFault`
