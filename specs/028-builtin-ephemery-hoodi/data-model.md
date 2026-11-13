@@ -105,7 +105,7 @@ The inputs are the raw config, the `Clock`, the bundle, `ReleaseStore`, and the 
 | # | Condition | Action | Result |
 |---|-----------|--------|--------|
 | 1 | network ≠ ephemery | nothing | no properties set |
-| 2 | `custom-chains-dir` set and holds `ephemery-chain.conf` | stand down (FR-015); WARN if its genesis ts plus 2,419,200 (or adjacent `release.env RESET_TIME`) ≤ now | today's behaviour; no watchdog |
+| 2 | `custom-chains-dir` set and holds `ephemery-chain.conf` | stand down (FR-015); WARN if its genesis ts plus 2,419,200 (or adjacent `release.env RESET_TIME`) ≤ now | today's behaviour, with a WarnOnly watchdog (warns at the reset, never exits). If the chain config's `network-id` (or the reset time) cannot be read, no properties are set and no watchdog is armed |
 | 3 | a valid entry or the bundle is current | choose the highest current N; place the bundle if it is chosen | Managed(N) |
 | 4 | none current, `refresh = true` | fetch target K (R7) → validate → place | Managed(K), or refusal 69/78 |
 | 5 | none current, `refresh = false` | none | `Ended`, exit 78 |

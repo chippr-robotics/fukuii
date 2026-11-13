@@ -151,6 +151,9 @@
     <logger name="com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncControllerImpl" level="INFO" />
     <logger name="com.chipprbots.ethereum.blockchain.sync.AdaptiveSyncStrategy" level="INFO" />
     
+    <!-- Ephemery: the startup report, the choice of iteration, and the exit at its reset (spec 028) -->
+    <logger name="com.chipprbots.ethereum.ephemery" level="INFO" />
+
     <!-- Genesis and checkpoint loading -->
     <logger name="com.chipprbots.ethereum.blockchain.data.GenesisDataLoader" level="INFO" />
     <logger name="com.chipprbots.ethereum.blockchain.data.BootstrapCheckpointLoader" level="INFO" />

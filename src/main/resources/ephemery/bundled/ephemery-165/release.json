@@ -1,0 +1,14 @@
+{
+  "schema": 1,
+  "release": "ephemery-165",
+  "iteration": 165,
+  "chainId": "39438165",
+  "genesisTimestamp": 1792695600,
+  "resetInterval": 2419200,
+  "resetTime": 1795114800,
+  "genesisHash": "0x9485bbe8e32e278194666d249590c9167057edeabaecc62e7a68355f68305ecc",
+  "source": "https://github.com/ephemery-testnet/ephemery-genesis/releases/tag/ephemery-165",
+  "archiveSha256": "c076b69e5cf37a27c1162ad37d8a8432ae086f80eefb53a388579fc4b6cc8757",
+  "producedBy": "fukuii 0.11.66",
+  "producedAt": "2026-11-13T02:50:57.133860239Z"
+}

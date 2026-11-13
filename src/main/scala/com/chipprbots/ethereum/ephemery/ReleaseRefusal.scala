@@ -65,3 +65,8 @@ object ReleaseRefusal:
   final case class BadSource(detail: String) extends ReleaseRefusal:
     val exitCode: Int = ExitConfig
     def message: String = s"$detail; the source is not a usable Ephemery release"
+
+  /** The node's own Ephemery root cannot be written (a full disk, a permission): the operator must act. */
+  final case class CannotStore(detail: String) extends ReleaseRefusal:
+    val exitCode: Int = ExitConfig
+    def message: String = s"cannot write the Ephemery root: $detail"

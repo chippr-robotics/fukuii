@@ -65,5 +65,8 @@ class ConfigPropertyDefiner extends PropertyDefinerBase:
 
 object ConfigPropertyDefiner:
 
-  /** Shared configuration instance to avoid reloading on each PropertyDefiner instantiation */
-  private lazy val config: Config = ConfigFactory.load()
+  /** The configuration as it is now. `ConfigFactory.load()` caches its result until `invalidateCaches()`, so this does
+    * not reload on each PropertyDefiner instantiation; and a logger configured again after the system properties
+    * changed (`LogbackReload`, the Ephemery resolver) sees them, which a value kept here for ever would not.
+    */
+  private def config: Config = ConfigFactory.load()

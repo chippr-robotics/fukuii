@@ -21,9 +21,61 @@ Ephemery exercises empty-block processing, system calls and withdrawals; anythin
 execution load (e.g. an import differential) must generate it — fund an account from
 <https://faucet.bordel.wtf> or <https://ephemery-faucet.pk910.de> and send your own transactions.
 
-fukuii ships **no** Ephemery iteration. `scripts/ephemery/fetch-genesis.sh` downloads a release and
-generates the chain config and genesis fukuii reads; `conf/ephemery.conf` (the `fukuii ephemery`
-launcher config) loads them from a `custom-chains-dir`.
+fukuii ships the current iteration inside the jar (spec 028), so `fukuii ephemery` needs no setup; see
+[Quick start: built in](#quick-start-built-in). `scripts/ephemery/fetch-genesis.sh` is the optional way to pin or
+prepare an iteration by hand: it downloads a release and generates the chain config and genesis fukuii reads, in a
+`custom-chains-dir`.
+
+## Quick start: built in
+
+```bash
+fukuii ephemery          # nothing to prepare
+```
+
+At start, before the node's configuration loads, fukuii picks the Ephemery iteration to run:
+
+1. **A directory you prepared.** If `fukuii.blockchains.custom-chains-dir` is set and holds `ephemery-chain.conf`
+   (for example by launching with `FUKUII_CONF_DIR=<out>/current/conf`, as the sections below describe), fukuii uses it
+   exactly as before: no fetch, no exit at the reset. It logs a WARN when that iteration has ended.
+2. **The newest current iteration it holds**: a cached one under `<datadir>/releases/ephemery-N`, or the iteration
+   built into the jar (`ephemery-165`, until 2026-11-19T19:00:00Z). The built-in one is copied into the cache on
+   first use.
+3. After that iteration's reset, and while this build cannot fetch the next one yet, fukuii refuses to start (exit 78)
+   and names the manual way: `fetch-genesis.sh`, then `FUKUII_CONF_DIR=<out>/current/conf`.
+
+The startup report is one INFO line: iteration, chain id, genesis hash, where it came from (`bundled`, `cache`), the
+reset time in UTC, the local clock, the datadir, and where the consensus-layer directory is or how to get it.
+
+**The root and its layout.** `<datadir>` here is `fukuii.datadir` as you set it (default `~/.fukuii/ephemery`):
+
+| Path | What it is |
+|------|------------|
+| `<datadir>/releases/ephemery-N/` | one validated iteration (`chains/`, `release.json`, `testnet/` when present); never modified or deleted by fukuii |
+| `<datadir>/ephemery-N/` | the node's datadir for iteration N: `rocksdb/`, `node.key`, `keystore/`, `tmp/`; never deleted by fukuii |
+| `<datadir>/logs/` | the logs, pinned here for every iteration |
+| `<datadir>/current` | a symlink to the iteration last selected |
+| `<datadir>/static-nodes.json` | copied into each new iteration's datadir, never overwritten there |
+
+Every path derived from `fukuii.datadir` moves with the iteration, unless you set it as an absolute path (the node key,
+the keystore, the IPC socket, the JWT secret). The full table, with what to set to keep each one across resets, is in
+the configuration contract of spec 028 (`contracts/config.md`, "What moves at each reset"). A datadir from before
+built-in Ephemery (`<datadir>/rocksdb`) is not used and not touched; fukuii logs it, and the earlier iterations'
+datadirs by name, at each start.
+
+**At the reset the node exits with code 75** (`EX_TEMPFAIL`): it logs a WARN, then shuts down through its normal
+shutdown hooks, which close RocksDB. Run it under a supervisor that restarts it, so that it picks up the next iteration:
+
+```ini
+# systemd
+Restart=on-failure
+RestartSec=120
+RestartPreventExitStatus=78
+```
+
+Exit 78 (`EX_CONFIG`) is permanent, so the unit must not restart on it; Docker's `--restart on-failure` cannot exclude
+it, so watch for 78 in the logs. Do not cap the retries. Set `fukuii.ephemery.exit-at-reset = false` to only log a WARN
+at the reset and keep running (for a run with no supervisor). Exit codes are 0 (a normal stop), 75 (the reset), 69 (the
+iteration has ended and the next cannot be had now), 78 (permanent refusal) and 1 (the existing configuration errors).
 
 ## 1. Fetch the current iteration
 

@@ -47,7 +47,7 @@ WARN Ephemery: the prepared iteration in <dir> ended at <UTC>; re-run scripts/ep
 **Old datadirs** (INFO, at most one line):
 
 ```text
-Ephemery: earlier iteration datadirs kept: ephemery-163 (1.2 GiB), ephemery-164 (3.4 GiB); fukuii never deletes them
+Ephemery: earlier iteration datadirs kept: ephemery-163, ephemery-164; fukuii never deletes them
 ```
 
 **At the reset** (WARN, FR-016):

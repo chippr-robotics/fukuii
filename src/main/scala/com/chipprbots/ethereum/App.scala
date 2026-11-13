@@ -8,8 +8,12 @@ import com.typesafe.config.ConfigFactory
 
 import com.chipprbots.ethereum.cli.CliLauncher
 import com.chipprbots.ethereum.crypto.SignatureValidator
+import com.chipprbots.ethereum.ephemery.EphemeryFetchCli
+import com.chipprbots.ethereum.ephemery.EphemeryResolver
+import com.chipprbots.ethereum.ephemery.StartupDeps
 import com.chipprbots.ethereum.faucet.Faucet
 import com.chipprbots.ethereum.utils.JvmFlagGuard
+import com.chipprbots.ethereum.utils.LogbackReload
 import com.chipprbots.ethereum.utils.Logger
 
 object App extends Logger:
@@ -97,8 +101,7 @@ object App extends Logger:
       case Some(`launchFukuii`) => args.tail.find(isNetwork)
       // `cli ephemery-fetch` reads the Ephemery configuration (spec 028): a plain `cli` command loads no network's conf,
       // so it selects the Ephemery one itself, before anything reads the configuration.
-      case Some(`cli`)
-          if args.tail.headOption.contains(com.chipprbots.ethereum.ephemery.EphemeryFetchCli.CommandName) =>
+      case Some(`cli`) if args.tail.headOption.contains(EphemeryFetchCli.CommandName) =>
         Some("ephemery")
       case Some(`launchKeytool`) | Some(`downloadBootstrap`) | Some(`faucet`) | Some(`sigValidator`) | Some(`cli`) =>
         None
@@ -167,7 +170,7 @@ object App extends Logger:
         |  sepolia                Sepolia testnet (ETH)
         |  hoodi                  Hoodi testnet (ETH)
         |  plataberget            Platåberget testnet (ETH, public Glamsterdam testnet)
-        |  ephemery               Ephemery testnet (ETH, resets every 28 days; run scripts/ephemery/fetch-genesis.sh first)
+        |  ephemery               Ephemery testnet (ETH, resets every 28 days; built in, refreshes itself after a reset)
         |  mordor                 Mordor testnet
         |  gorgoroth              Fukuii battlenet
         |  bootnode               Bootnode configuration (advanced)
@@ -237,27 +240,62 @@ object App extends Logger:
         |""".stripMargin
     )
 
-  def main(args: Array[String]): Unit =
+  def main(args: Array[String]): Unit = run(args, StartupDeps.production)
+
+  /** The launcher, with what it takes from outside the process (the clock, the network, the exit) passed in, so the
+    * forked integration harness can run the real startup with its own (spec 028 R5, "Test seam").
+    */
+  private[ethereum] def run(args: Array[String], deps: StartupDeps): Unit =
 
     // Parse and extract modifiers from arguments
     val modifiers = args.filter(isModifier).toSet
     val argsWithoutModifiers = args.filterNot(isModifier)
 
     // Configure network before any logging (required for logback property definers)
-    determineNetworkArg(argsWithoutModifiers).foreach(setNetworkConfig)
+    val network = determineNetworkArg(argsWithoutModifiers)
+    network.foreach(setNetworkConfig)
+
+    // `cli ephemery-fetch --out DIR` writes into DIR: its log should not go to a node's datadir, so the file appenders
+    // are dropped and it logs to the console only. BEST EFFORT: the launcher's logger was set up when `App` was
+    // initialised, before any argument was read, and its file appender has already opened (and created) the default
+    // network's log file. Moving that is App-init logging, which is B-241 and the user's call; this only stops further
+    // writes to it. A caller can also pass `-Dlogging.logs-dir` (fetch-genesis.sh and update-bundled.sh do).
+    if isEphemeryFetchWithOut(argsWithoutModifiers) then LogbackReload.consoleOnly()
+
+    // Ephemery needs no preparation step (spec 028): choose its iteration now, after the network is set and before
+    // anything reads `utils.Config`, which reads its properties once. A refusal ends the process with its code.
+    val refused =
+      if network.contains("ephemery") && !argsWithoutModifiers.headOption.contains(cli) then
+        EphemeryResolver.startup(deps)
+      else None
+
+    refused match
+      case Some(code) => deps.exit(code)
+      case None       =>
+        // `Fukuii.run` writes the resolver's report after it has truncated the logs. Any other command, and any path
+        // that ends by throwing before `Fukuii.run` got that far, writes it here: it is held back until then, and
+        // `flushReport` writes it once.
+        try dispatch(argsWithoutModifiers, modifiers, deps)
+        finally EphemeryResolver.flushReport()
+
+  private def isEphemeryFetchWithOut(args: Array[String]): Boolean =
+    args.headOption.contains(cli) && args.tail.headOption.contains(EphemeryFetchCli.CommandName) &&
+      args.exists(a => a == "--out" || a.startsWith("--out="))
+
+  private def dispatch(argsWithoutModifiers: Array[String], modifiers: Set[String], deps: StartupDeps): Unit =
 
     // Apply modifiers (e.g., "public" enables discovery)
     applyModifiers(modifiers)
 
     argsWithoutModifiers.headOption match
-      case None                  => Fukuii.main(argsWithoutModifiers)
+      case None                  => Fukuii.run(argsWithoutModifiers, deps)
       case Some("--help" | "-h") => showHelp()
       case Some(`launchFukuii`)  =>
         // Filter out network name from remaining args to avoid passing it to Fukuii.main
         val remainingArgs = argsWithoutModifiers.tail.headOption.filter(isNetwork) match
           case Some(_) => argsWithoutModifiers.tail.tail
           case None    => argsWithoutModifiers.tail
-        Fukuii.main(remainingArgs)
+        Fukuii.run(remainingArgs, deps)
       case Some(`launchKeytool`)     => KeyTool.main(argsWithoutModifiers.tail)
       case Some(`downloadBootstrap`) =>
         // Import Config locally to ensure it's loaded after any network config is set.
@@ -286,16 +324,16 @@ object App extends Logger:
         com.chipprbots.ethereum.blockchain.checkpoint.CheckpointCli.main(argsWithoutModifiers.tail)
       // `fukuii import|export ...` without a network: the default (or -Dconfig.file) chain.
       case Some(cmd) if com.chipprbots.ethereum.nodebuilder.ChainTool.isCommand(cmd) =>
-        Fukuii.main(argsWithoutModifiers)
+        Fukuii.run(argsWithoutModifiers, deps)
       case Some(network) if isNetwork(network) =>
         val tail = argsWithoutModifiers.tail
         tail.headOption match
           case Some("checkpoint") =>
             com.chipprbots.ethereum.blockchain.checkpoint.CheckpointCli.main(tail.tail)
-          case _ => Fukuii.main(tail)
+          case _ => Fukuii.run(tail, deps)
       case Some(arg) if isOptionFlag(arg) =>
         // Option flags (starting with -) are passed directly to Fukuii
-        Fukuii.main(argsWithoutModifiers)
+        Fukuii.run(argsWithoutModifiers, deps)
       case Some(unknown) =>
         log.error(
           s"Unrecognised launcher option: $unknown\n" +

@@ -90,7 +90,7 @@ fukuii {
   private val Members = List("testnet", "chains", "conf", "release.env", "release.json")
 
   /** A `.stage-*` directory older than this is the remains of a run that died, and is swept. */
-  private val StaleStage = java.time.Duration.ofHours(1)
+  private[ephemery] val StaleStage = java.time.Duration.ofHours(1)
 
   /** `path` with its existing prefix resolved through `toRealPath`, so a symlink cannot hide an overlap. */
   private def realOf(path: Path): Path =
@@ -237,9 +237,9 @@ fukuii {
     ops.delete(stage.resolve(".old"))
     ops.delete(stage)
 
-  private val KeptPrefix = ".stage-kept-"
+  private[ephemery] val KeptPrefix = ".stage-kept-"
 
-  private def isStage(p: Path): Boolean =
+  private[ephemery] def isStage(p: Path): Boolean =
     val n = p.getFileName.toString
     n.startsWith(".stage-") && !n.startsWith(KeptPrefix)
 
