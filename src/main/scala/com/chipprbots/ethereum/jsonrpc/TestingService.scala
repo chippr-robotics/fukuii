@@ -88,8 +88,10 @@ object TestingService:
         Left(s"the weight of its parent 0x$parent is not known")
       case Some(parentWeight) =>
         blockExecution.executeAndValidateBlocks(List(block), parentWeight, adoptEachBlock = true) match
-          case (_, Some(error)) => Left(error.describe)
-          case (Nil, None)      => Left("the import took no block")
+          // no verdict on the block: thrown as the state fault it is, as it was before it was a way for a batch to end
+          case (_, Some(com.chipprbots.ethereum.ledger.BlockExecutionError.StateFaulted(fault))) => throw fault
+          case (_, Some(error))                                   => Left(error.describe)
+          case (Nil, None)                                        => Left("the import took no block")
           case (_, None)        => Right(())
 
 class TestingService(

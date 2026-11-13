@@ -304,7 +304,12 @@ class ConsensusImpl(
       adoptEachBlock: Boolean,
       accessLists: Map[ByteString, BlockAccessList]
   )(implicit blockchainConfig: BlockchainConfig): BlockExecution.BatchOutcome =
-    blockExecution.executeBatch(blocks, parentWeight, adoptEachBlock, accessLists)
+    val (executed, error) =
+      if accessLists.isEmpty then blockExecution.executeAndValidateBlocks(blocks, parentWeight, adoptEachBlock)
+      else blockExecution.executeAndValidateBlocksWithAccessLists(blocks, parentWeight, adoptEachBlock, accessLists)
+    // A fault of this node's state is taken out of the errors here, once, so that no arm below that judges a block
+    // by its error (and reports it invalid) can be handed one.
+    BlockExecution.BatchOutcome.of(executed, error)
 
   /** The best-block pointer, set to the last block of a batch that was adopted.
     *
