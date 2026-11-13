@@ -328,6 +328,96 @@ class HeadMoveSpec extends AnyFlatSpec with Matchers with LayerChains with Plann
       net.chain.state.moveInProgress shouldBe false
     }
 
+  "A move whose blocks are worth more than a batch may read" should "be cut into a batch for each, and leave what one batch would" taggedAs
+    (UnitTest, ConsensusTest) in {
+      // every record and every layer is worth more than a batch may read: one block a batch
+      val net = new Net(CommitSettings(maxMoveBatchBytes = 1L))
+      val ours = grown(net.chain.first, fourBlocks)((p, txs) => net.inPlace(p, txs*))
+      val theirs = grown(ours(0), branch)((p, txs) => net.onFork(p, txs*))
+      val over = net.moved(theirs.last)
+      (over.reversed, over.applied, over.batches) shouldBe (3, 4, 7)
+      net.asked.map(c => c.reverse.size + c.forward.size) shouldBe Vector.fill(7)(1)
+      net.holds(theirs.last)
+      // and what it wrote is what one batch writes
+      val whole = new Net()
+      val wholeOurs = grown(whole.chain.first, fourBlocks)((p, txs) => whole.inPlace(p, txs*))
+      val wholeTheirs = grown(wholeOurs(0), branch)((p, txs) => whole.onFork(p, txs*))
+      whole.moved(wholeTheirs.last).batches shouldBe 1
+      net.chain.everything shouldBe whole.chain.everything
+    }
+
+  "A batch whose prior values are more than may be kept" should "be a barrier: every view made before it is stale, never wrong, and new ones read the new state" taggedAs
+    (UnitTest, ConsensusTest) in {
+      Seq(256, 1).foreach { perBatch =>
+        withClue(s"$perBatch blocks to a batch: ") {
+          val net = new Net(CommitSettings(maxMovePreBytes = 0L, maxBlocksPerMove = perBatch))
+          val ours = grown(net.chain.first, fourBlocks)((p, txs) => net.inPlace(p, txs*))
+          val theirs = grown(ours(0), branch)((p, txs) => net.onFork(p, txs*))
+          val ofOldHead = net.chain.state.readOnly(ours.last)
+          val behind = net.chain.state.readOnlyBehind(ours(1), PathStateStorage.Reader.Rpc)
+          val onTop = net.layered(ours.last, slots(carol, 5 -> 5))
+          val throughLayer = PathMptStorage.readOnly(net.chain.state.viewOf(onTop))
+          net.moved(theirs.last)
+          net.holds(theirs.last)
+          // a view made before reads nothing it should not: the first row the move changed under it is stale
+          a[StaleStateViewException] should be thrownBy net.chain.readThrough(ofOldHead, ours.last)
+          a[StaleStateViewException] should be thrownBy net.chain.readThrough(behind, ours(1))
+          a[StaleStateViewException] should be thrownBy net.chain.readThrough(throughLayer, onTop)
+          // views made now read right
+          net.chain.readThrough(net.chain.state.readOnly(theirs.last), theirs.last)
+          net.chain.readThrough(net.chain.state.readOnlyBehind(ours(0), PathStateStorage.Reader.Rpc), ours(0))
+          // a commit in place whose prior values are more than may be kept is a barrier too
+          val ofNew = net.chain.state.readOnly(theirs.last)
+          net.inPlace(theirs.last, slots(carol, 3 -> 3))
+          a[StaleStateViewException] should be thrownBy net.chain.readThrough(ofNew, theirs.last)
+        }
+      }
+    }
+
+  "An attempt that holds the records above its fork" should "keep them from retention while it runs, so that the way back is there however long the branch it commits" taggedAs
+    (UnitTest, ConsensusTest) in {
+      def attempt(held: Boolean): Net =
+        // two blocks keep their record, and a move may undo no more than two, as `reorg.max-depth = floor` makes it
+        val net = new Net(
+          CommitSettings(
+            retention = new RetentionPolicy(StateConfig.Mode.Basic, (_, _) => 2),
+            maxReorgDepth = (_, _) => 2
+          )
+        )
+        val fork = net.inPlace(net.chain.first, slots(alice, 99 -> 1))
+        val ours = grown(fork, fourBlocks.take(2))((p, txs) => net.inPlace(p, txs*))
+        def reverseThenCommit(): Unit =
+          // down to the fork, the branch committed in place block by block, then back to the old head
+          net.moved(fork)
+          val theirs = grown(fork, branch)((p, txs) => net.inPlace(p, txs*))
+          net.anchor shouldBe theirs.last
+          net.moved(ours.last)
+        if held then
+          // the way back reverses four blocks, which is more than the policy allows a move: it is the way back
+          net.chain.state.withRecordsHeld(fork)(reverseThenCommit())
+          net.holds(ours.last)
+          // and once the hold is let go the policy is the policy again: three blocks down is one too many
+          (the[ReorgTooDeep] thrownBy net.move(net.chain.first)).reason shouldBe ReorgRefusal.Deep
+        else
+          // four blocks of the branch committed with two kept: the old branch's records are pruned under it
+          (the[ReorgTooDeep] thrownBy reverseThenCommit()).reason shouldBe ReorgRefusal.Deep
+        net
+
+      attempt(held = false)
+      val net = attempt(held = true)
+      // nothing above the fork was pruned while it ran; the next commit catches up
+      val prunedTo = net.chain.appState.getChangesetPrunedTo().get
+      prunedTo should be <= BigInt(3)
+      val next = net.inPlace(net.anchor, slots(carol, 1 -> 2))
+      net.chain.appState.getChangesetPrunedTo().get should be > prunedTo
+      net.chain.appState.getChangesetPrunedTo() shouldBe Some(next.number - 2 + 1)
+
+      // a hold above a block whose records above it are pruned already is refused at once: there is no way back
+      val gone = (the[ReorgTooDeep] thrownBy net.chain.state.withRecordsHeld(net.chain.first)(fail("no attempt")))
+      gone.reason shouldBe ReorgRefusal.Deep
+      gone.getMessage should include("cannot be held")
+    }
+
   "A move up of many blocks" should "prune no height it records, and leave no record without its index or index without its record" taggedAs
     (UnitTest, ConsensusTest) in {
       val net = new Net(CommitSettings(retention = new RetentionPolicy(StateConfig.Mode.Basic, (_, _) => 2)))

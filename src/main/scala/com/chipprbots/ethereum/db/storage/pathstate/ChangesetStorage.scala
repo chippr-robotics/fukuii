@@ -76,8 +76,16 @@ final class ChangesetStorage(val dataSource: DataSource):
 
   /** The header of `blockHash`'s record: which block came before it, and whether the record is a tombstone. */
   def header(blockHash: ByteString): Option[Either[BlockDiffCodec.Rejected, BlockDiffCodec.Header]] =
+    headerAndLength(blockHash).map(_._1)
+
+  /** [[header]], and how many bytes the record is: what a move of the head reads a record's size from, in the one read
+    * it makes of it to plan.
+    */
+  def headerAndLength(blockHash: ByteString): Option[(Either[BlockDiffCodec.Rejected, BlockDiffCodec.Header], Long)] =
     val key = recordKey(blockHash)
-    dataSource.getOptimizedNoFill(namespace, key).map(BlockDiffCodec.decodeHeader(key, _))
+    dataSource
+      .getOptimizedNoFill(namespace, key)
+      .map(record => (BlockDiffCodec.decodeHeader(key, record), record.length.toLong))
 
   /** The hashes of the blocks that have a record at height `number`, in the order they were recorded. */
   def hashesAt(number: BigInt): Seq[ByteString] =

@@ -53,15 +53,28 @@ final case class HeadMovePlan(
     */
   def newRecords: Vector[BlockRef] = forward.collect { case Forwarded(block, _, Source.Layer(_)) => block }
 
-  /** The move as a chain of smaller ones, of at most `maxBlocks` blocks each, reversed or applied. Each ends with the
-    * disk holding the state of a block on the way from the anchor down to the fork and up to the target, which is where
-    * a move that is interrupted leaves the head. A plan that moves nothing has none.
+  /** The move as a chain of smaller ones, of at most `maxBlocks` blocks each, reversed or applied, and of at most
+    * `maxBytes` by `bytesOf` each: a block that is by itself more goes alone. Each ends with the disk holding the state
+    * of a block on the way from the anchor down to the fork and up to the target, which is where a move that is
+    * interrupted leaves the head. A plan that moves nothing has none.
     */
-  def chunks(maxBlocks: Int): Vector[Chunk] =
+  def chunks(
+      maxBlocks: Int,
+      maxBytes: Long = Long.MaxValue,
+      bytesOf: Either[Reversed, Forwarded] => Long = _ => 0L
+  ): Vector[Chunk] =
     require(maxBlocks > 0, s"a chunk of a head move holds at least one block, not $maxBlocks")
     val steps: Vector[Either[Reversed, Forwarded]] = reverse.map(Left(_)) ++ forward.map(Right(_))
-    steps
-      .grouped(maxBlocks)
+    val groups = steps
+      .foldLeft((Vector.empty[Vector[Either[Reversed, Forwarded]]], 0L)) { case ((done, bytes), step) =>
+        val size = bytesOf(step)
+        done.lastOption match
+          case Some(group) if group.size < maxBlocks && bytes + size <= maxBytes =>
+            (done.updated(done.size - 1, group :+ step), bytes + size)
+          case _ => (done :+ Vector(step), size)
+      }
+      ._1
+    groups
       .foldLeft((Vector.empty[Chunk], anchor)) { case ((done, from), group) =>
         val head = group.last.fold(_.parent, _.block)
         (done :+ Chunk(from, head, group.collect { case Left(r) => r }, group.collect { case Right(f) => f }), head)
