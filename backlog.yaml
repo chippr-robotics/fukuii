@@ -732,7 +732,7 @@ items:
   - id: B-061
     title: "Spec 018 Track C C4b: the move core (item 6d)"
     priority: P2
-    status: open
+    status: claimed
     area: storage
     size: L
     opened: 2026-11-07
@@ -740,6 +740,11 @@ items:
     links:
       spec: specs/018-storage-engine-consolidation
     depends_on: [B-060]
+    claim:
+      by: cloud-dc960fdc
+      agent: main
+      since: 2026-11-13T00:06:25Z
+      heartbeat: 2026-11-13T00:06:25Z
   - id: B-062
     title: "Spec 018 Track C C4d: the PoS arms (item 6f)"
     priority: P2
