@@ -68,7 +68,16 @@ trait Blockchain:
     */
   def getReadOnlyMptStorage(): MptStorage
 
+  /** Removes a block, and moves the best block to its parent where it was the best. Refused on the unified state
+    * layout, where the best block moves only with the state: see [[removeChainForNewGenesis]].
+    */
   def removeBlock(hash: BlockHash): Unit
+
+  /** Removes every block of the chain, from the best down to the genesis, before test mode sets a new genesis
+    * (`test_setChainParams`, a rewind to the genesis). On the unified state layout only where the state may be
+    * destroyed (test mode), and only with it: the caller destroys the state next.
+    */
+  def removeChainForNewGenesis(): Unit
 
   /** Flush all in-memory MPT trie nodes written during block execution to RocksDB.
     *
@@ -178,6 +187,20 @@ class BlockchainImpl(
     blockNumberMappingStorage.remove(number)
 
   override def removeBlock(blockHash: BlockHash): Unit =
+    if pathState.isDefined then
+      throw new IllegalStateException(
+        s"Block ${ByteStringUtils.hash2string(blockHash.value)} cannot be removed on the unified state layout: removing " +
+          "it moves the best block without the state, which moves only with a move of its head"
+      )
+    removeAnyLayout(blockHash)
+
+  override def removeChainForNewGenesis(): Unit =
+    pathState.flatMap(_.refusalToDestroyState()).foreach(refused => throw new IllegalStateException(refused))
+    (blockchainReader.getBestBlockNumber to BigInt(0) by -1).foreach { number =>
+      blockchainReader.getBlockHeaderByNumber(number).foreach(header => removeAnyLayout(header.hash))
+    }
+
+  private def removeAnyLayout(blockHash: BlockHash): Unit =
     val maybeBlock = blockchainReader.getBlockByHash(blockHash)
 
     maybeBlock match

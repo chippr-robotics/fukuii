@@ -2547,6 +2547,63 @@ layers and a barrier whose write fails. **Noted for M6**: a batch's memory at it
 its records' bytes (decoded record, the virtual disk, the maps it writes from, the write batch), and the scans of
 replaced tries are not counted in the cut.
 
+#### C4b part 3a: the head's writers on the unified layout (2026-11-13)
+
+Beacon and forge, consulted before code (both read the tree), agree: **on the unified layout the move of the head,
+and a block's own commit, which is the move of one block, are the only writers of the best block and the index of
+blocks by number.** A check under the lock alone does not close the window beacon found in part 2b (a writer that
+takes no lock writes between the check and the batch), so every other writer is routed through a move, refuses on
+that layout, or runs only where the layout is not yet in force (before an anchor, at start). Part 3a is the
+structure; part 3b routes the two callers that reach the head on the guard today (the fork choice, which promotes
+the head after `newPayload`, and test mode's rewind).
+
+- **The writers refuse** on the unified layout with an `IllegalStateException`: `BlockchainWriter.saveBestKnownBlocks`,
+  `setCanonicalChainHead` (the SYNC-FORK rewind), `rewriteCanonicalIndex` (the reorganisation's index), and
+  `Blockchain.removeBlock` (and with it `discardBlocksAfter`). Test mode's reset of the chain for a new genesis is
+  `Blockchain.removeChainForNewGenesis`, allowed only where the state may be destroyed, which it is next.
+  `PivotAnchor.reanchor` refuses once there is a state anchor. None of these is reached on the guard today (sync is
+  not started there, SNAP and mining are refused); a path that reaches one later fails loudly at its first test.
+  `promoteToCanonicalHead` refuses with part 3b, which routes the fork choice through a move.
+- **The best block is held to the anchor under the state lock** before a block's commit and before every batch of a
+  move (`CommitSettings.checksBestBlock`, on in the node): a writer that moved the best block alone is a defect, and
+  nothing is written over it.
+- **A move's link is the header stored under a hash**: `BlockchainReader.headerLink` and `ancestorAt`, which never read
+  the index of blocks by number (a spec plans and makes a move with a reader whose index throws at every read).
+- **The table of the head's writers is a ratchet** (T140): `scripts/check-head-writers.sh` and
+  `scripts/head-writer-allowlist.txt`, the state accessors' engine with its own entry points (the best block's rows,
+  the index's, the head's writers by name, the block stores that index). Every line says which of MOVE, REFUSED, DEF,
+  HASH, PRE, START or C4D/C4E holds for that writer. It runs in CI beside the state accessors' check.
+
+**Recorded, with the slice that owns it.**
+- **SYNC-FORK on the unified layout makes no head move at all** (forge): today it rewinds to the common ancestor and
+  imports the peer's branch with no comparison of weight, and the old branch is deleted, so there is no way back. On
+  that layout the fetcher is invalidated from above the ancestor, the blocks arrive as a side branch, and the
+  reorganisation decides by weight under `withRecordsHeld` (C4E); `Deep`, `Pivot` or `Corrupt` there escalate (D).
+- **`newPayload` stores by hash only on the unified layout** (beacon, C4D), as go-ethereum's
+  `InsertBlockWithoutSetHead` writes no canonical hash.
+- A pre-existing defect of the hash layout that forge found reading the resolver: `discardBlocksAfter` deletes the
+  index entries before `rewindCanonicalChain` reads them, so the reference counts' undo never runs on that path
+  (B-248, its own change).
+
+**Read after code (beacon): APPROVE WITH CHANGES.** Verified in code: nothing on the hash layout changes; on the
+unified layout no path reachable today throws in its normal order (test mode's commit is followed by the fork
+choice's promotion of the same block; the Engine API promotes only the head the state is at); throwing, not failing
+the store closed, is right for a best block moved alone, since nothing was written and the disk keeps the refusal
+across a restart. Taken: two guard specs that staged "the head moved alone" with a writer that now refuses write the
+row themselves; the caller's rows for the head as it is are held to the anchor as any batch is; in the node a batch
+that moves the state must bring the rows that move the best block; the ratchet holds each line to its verdict word;
+two `testing_commitBlockV1` in a row on the unified layout. **Owed by part 3b** (recorded in the allow-list): the
+fork choice still promotes outside the state lock; a commit that moves the anchor in between leaves the best block
+behind, which the check then refuses to write over, and nothing but test mode's reset mends that before part 4.
+
+**The mutation run**: 18 mutants, all caught. The writer not told the layout; each refusal undone
+(`saveBestKnownBlocks`, `setCanonicalChainHead`, `rewriteCanonicalIndex`, `removeBlock`, the reset outside test
+mode, the pivot's re-anchor); the best block not held to the anchor, held by its hash alone, not for a move, not for
+a commit, not in the node; a header under another hash taken for a link, or followed to an ancestor (a walk that
+then never ends); an ancestor above the block found; the head's own rows written over a best block moved alone; a
+move without the rows that move the best block; a reason without its verdict. Five were missed at first and got
+their cases.
+
 ### Destructive change (C8a and C8b): the vault protocol blocks
 
 ```

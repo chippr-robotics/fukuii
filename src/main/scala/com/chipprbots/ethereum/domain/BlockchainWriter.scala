@@ -25,8 +25,24 @@ class BlockchainWriter(
     receiptStorage: ReceiptStorage,
     chainWeightStorage: ChainWeightStorage,
     appStateStorage: AppStateStorage,
-    blockAccessListStorage: BlockAccessListStorage
+    blockAccessListStorage: BlockAccessListStorage,
+    // Whether this node holds its state on the unified layout (spec 018 Track C): there the best block and the index
+    // of blocks by number move only with the state, in a move of its head, and the writers below that move them alone
+    // refuse.
+    holdsStateInPlace: Boolean = false
 ) extends Logger:
+
+  /** Refuses, on the unified layout, a write of the best block or the index of blocks by number that does not move the
+    * state with it: the state anchor and the best block are one block there (spec 018 data-model 5.1, I1), and only a
+    * move of the head ([[com.chipprbots.ethereum.db.storage.pathstate.PathStateStorage.moveHead]], with
+    * [[canonicalHeadUpdate]] as its rows) or a block's own commit moves both (plan.md "C4b part 3").
+    */
+  private def refuseOnTheUnifiedLayout(what: String): Unit =
+    if holdsStateInPlace then
+      throw new IllegalStateException(
+        s"$what would move the best block or the index of blocks by number without the state, on the unified state " +
+          "layout, where the two move together or not at all"
+      )
 
   def save(block: Block, receipts: Seq[Receipt], weight: ChainWeight, saveAsBestBlock: Boolean): Unit =
     saveBatch(block, receipts, weight, saveAsBestBlock).commit()
@@ -181,6 +197,7 @@ class BlockchainWriter(
       bestBlockHash: BlockHash,
       bestBlockNumber: BigInt
   ): Unit =
+    refuseOnTheUnifiedLayout(s"saveBestKnownBlocks to block $bestBlockNumber")
     appStateStorage.putBestBlockInfo(BlockInfo(bestBlockHash.value, bestBlockNumber)).commit()
 
   /** Roll back the canonical chain index to `targetNumber`, removing number→hash entries for all blocks above
@@ -193,6 +210,7 @@ class BlockchainWriter(
     * No-op if `currentBest <= targetNumber`.
     */
   def setCanonicalChainHead(targetNumber: BigInt, targetHash: BlockHash, currentBest: BigInt): Unit =
+    refuseOnTheUnifiedLayout(s"setCanonicalChainHead to block $targetNumber")
     if currentBest > targetNumber then
       val batch = ((targetNumber + 1) to currentBest).foldLeft(blockNumberMappingStorage.emptyBatchUpdate) { (acc, n) =>
         acc.and(blockNumberMappingStorage.remove(n))
@@ -212,6 +230,7 @@ class BlockchainWriter(
       newBest: Option[(BlockHash, BigInt)],
       reader: BlockchainReader
   ): Unit =
+    refuseOnTheUnifiedLayout("rewriteCanonicalIndex")
     canonicalIndexUpdate(put, remove, newBest, reader).commit()
 
   /** The batch [[rewriteCanonicalIndex]] commits, uncommitted, so a caller can add to the same atomic write. */
@@ -371,7 +390,8 @@ object BlockchainWriter:
       storages.receiptStorage,
       storages.chainWeightStorage,
       storages.appStateStorage,
-      storages.blockAccessListStorage
+      storages.blockAccessListStorage,
+      holdsStateInPlace = storages.pathStateStorage.isDefined
     )
 
 /** Outcome of [[BlockchainWriter.repairBestBlockNumberMapping]]. */

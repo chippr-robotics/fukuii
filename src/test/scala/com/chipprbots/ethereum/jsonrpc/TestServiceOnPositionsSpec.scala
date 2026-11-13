@@ -541,11 +541,21 @@ class TestServiceOnPositionsSpec
         }
       }
 
-      // a head whose state is not the one the disk holds (here: its block was taken away behind the service's back)
+      // a head whose state is not the one the disk holds
       val rig = new Rig(guard = true)
       rig.setChain(chainA) shouldBe Right(SetChainParamsResponse())
       rig.mine(Seq(transfer(0, Address(42), 9000))) shouldBe Right(MineBlocksResponse())
-      rig.blockchain.removeBlock(rig.head.header.hash)
+      // a block can no longer be taken away on this layout: that moves the best block without the state
+      an[IllegalStateException] should be thrownBy rig.blockchain.removeBlock(rig.head.header.hash)
+      rig.head.header.number.value shouldBe 1
+      // a writer that moves the best block alone all the same (a defect the guards of the head's writers are there to
+      // stop)
+      val appState = rig.storagesInstance.storages.appStateStorage
+      appState
+        .putBestBlockInfo(
+          com.chipprbots.ethereum.domain.appstate.BlockInfo(rig.blockchainReader.genesisHeader.hash.value, 0)
+        )
+        .commit()
       rig.head.header.number.value shouldBe 0
       val before = rig.everything
       val mined = rig.mine(Seq(transfer(1, Address(43), 1)))

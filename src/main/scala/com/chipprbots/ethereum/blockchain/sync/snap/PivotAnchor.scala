@@ -244,6 +244,14 @@ private[sync] object PivotAnchor:
     * state root.
     */
   def reanchor(appState: AppStateStorage, writer: BlockchainWriter, validated: BlockHeader): Unit =
+    // On the unified state layout the best block moves only with the state (spec 018, plan.md "C4b part 3"): a pivot
+    // is moved before the state has an anchor, never after.
+    appState.getStateAnchor().foreach { anchor =>
+      throw new IllegalStateException(
+        s"The pivot cannot be moved to block ${validated.number.value}: the state is held in place at block " +
+          s"${anchor.show}, and the best block moves only with it"
+      )
+    }
     committed(appState, validated.number.value, validated)
       .and(writer.storeBlockHeader(validated))
       .and(appState.putBestBlockInfo(BlockInfo(validated.hash.value, validated.number.value)))

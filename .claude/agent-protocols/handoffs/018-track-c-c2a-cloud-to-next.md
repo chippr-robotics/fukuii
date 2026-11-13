@@ -205,9 +205,11 @@ Read plan.md, "C2a part 1 record" and "C2a part 2 record", then:
   index rows, built apart from their commit) is what a caller passes as `extraFor`, and `HeadMoveOnTheChainSpec`
   drives that on the execution-apis chain on the unified layout. The plan's layers are pinned for the move; the
   move's metrics are told. **Part 2c is built**: batches cut by bytes, the barrier move (and the log's byte budget),
-  and `withRecordsHeld` for C4e's reverse-then-commit. Nothing in the node calls `moveHead` yet: part 3 is the
-  callers on the guard and the table of index writers (T140), which must settle the race beacon found between a
-  move's index rows and `newPayload`'s `storeBlock`.
+  and `withRecordsHeld` for C4e's reverse-then-commit. **Part 3a is built**: on the unified layout the move and a
+  block's own commit are the only writers of the best block and the index; every other writer refuses there (or is
+  PRE/START), the best block is held to the anchor under the state lock, and `scripts/check-head-writers.sh` holds
+  the table (a NEW writer of the head must say in `scripts/head-writer-allowlist.txt` which way it stays safe).
+  Part 3b routes the fork choice and test mode's rewind through `moveHead`.
 - **C4a** brings back what C3b refuses: the overlay commit for a block that does not extend the anchor
   (`buildExtra(adopted)`, `NotExtendingAnchor`, `saveLastBlock` writing nothing),
   `stateAvailable(hash)`, the served-root window, and SNAP advertised again. C4b: the head move, `ConsensusStateFault`
