@@ -414,7 +414,34 @@ class EphemeryResolverSpec extends AnyFlatSpec with Matchers with BeforeAndAfter
     s.refreshTimeout.toSeconds shouldBe 20L
   }
 
-  it should "not throw on a malformed refresh-timeout: the validator reports it later" taggedAs UnitTest in {
+  it should "refuse a malformed refresh-timeout in startup with exit 1: no properties, no transport call" taggedAs UnitTest in {
+    EphemeryResolver.PropertyKeys.foreach(System.clearProperty)
+    var calls = 0
+    val spy = new ReleaseTransport:
+      override def get(
+          url: java.net.URI,
+          maxBytes: Long,
+          deadline: Instant,
+          accept: Option[String]
+      ): Either[TransportFailure, FetchedBody] =
+        calls += 1
+        RefusingTransport.get(url, maxBytes, deadline, accept)
+    List("\"soon\"", "5s", "301s").foreach { bad =>
+      val raw = ConfigFactory.parseString(
+        s"""fukuii.blockchains.network = "ephemery"
+           |fukuii.datadir = "$root"
+           |fukuii.ephemery.refresh-timeout = $bad
+           |""".stripMargin
+      )
+      val d = StartupDeps(Clock.fixed(after165, ZoneOffset.UTC), spy, _ => ())
+      EphemeryResolver.startup(d, BundleSource.classpath, raw, () => ()) shouldBe Some(1)
+    }
+    calls shouldBe 0
+    EphemeryResolver.PropertyKeys.foreach(k => System.getProperty(k) shouldBe null)
+    Files.exists(root) shouldBe false
+  }
+
+  it should "not throw in Settings.from on a malformed refresh-timeout (defence only; startup refuses first)" taggedAs UnitTest in {
     val raw = ConfigFactory.parseString(
       s"""fukuii.blockchains.network = "ephemery"
          |fukuii.datadir = "$root"

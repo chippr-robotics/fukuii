@@ -16,6 +16,7 @@ import scala.util.control.NonFatal
 import com.typesafe.config.Config as TConfig
 import com.typesafe.config.ConfigFactory
 
+import com.chipprbots.ethereum.ConfigValidator
 import com.chipprbots.ethereum.ephemery.StrictJson.*
 import com.chipprbots.ethereum.utils.LazyLogger
 import com.chipprbots.ethereum.utils.LogbackReload
@@ -85,8 +86,8 @@ object EphemeryResolver extends LazyLogger:
         logsDir = optional("logging.logs-dir").getOrElse(root.resolve("logs").toString),
         refresh = !raw.hasPath("fukuii.ephemery.refresh") || raw.getBoolean("fukuii.ephemery.refresh"),
         source = optional("fukuii.ephemery.source").getOrElse(DefaultSource),
-        // A value that is not a duration is `ConfigValidator`'s to report (exit 1) once the node's configuration loads;
-        // here it must not throw, so it falls back to the default.
+        // Unreachable defence: `startup` refuses a malformed refresh-timeout (exit 1) before it reads Settings, so no
+        // caller of it sees this fallback. It only keeps `Settings.from` itself from throwing for a direct caller.
         refreshTimeout = Try(Duration.fromNanos(raw.getDuration("fukuii.ephemery.refresh-timeout").toNanos))
           .getOrElse(Duration(60, "s")),
         exitAtReset = !raw.hasPath("fukuii.ephemery.exit-at-reset") || raw.getBoolean("fukuii.ephemery.exit-at-reset")
@@ -395,6 +396,28 @@ object EphemeryResolver extends LazyLogger:
       bundle: BundleSource = BundleSource.classpath,
       raw: => TConfig = ConfigFactory.load(),
       reloadLogging: () => Unit = () => LogbackReload.reload()
+  ): Option[Int] =
+    // The operator keys are checked first, with the validator the node runs later: a bad refresh-timeout must not be
+    // replaced by a default and used for a fetch, and a command that never reaches `Fukuii.run` would never be checked.
+    val config = raw
+    val configErrors =
+      if config.hasPath("fukuii.blockchains.network") && config.getString("fukuii.blockchains.network") == "ephemery" &&
+        config.hasPath("fukuii")
+      then ConfigValidator.ephemeryErrors(config.getConfig("fukuii"))
+      else Nil
+    if configErrors.nonEmpty then
+      configErrors.foreach(e => log.error(s"Configuration error: $e"))
+      Some(ConfigErrorExit)
+    else startupChecked(config, deps, bundle, reloadLogging)
+
+  /** The exit code of a configuration error, as `Fukuii.run`'s own validation exits. */
+  val ConfigErrorExit: Int = 1
+
+  private def startupChecked(
+      raw: TConfig,
+      deps: StartupDeps,
+      bundle: BundleSource,
+      reloadLogging: () => Unit
   ): Option[Int] =
     val result = resolve(Settings.from(raw), deps, bundle)
     result.resolution match
