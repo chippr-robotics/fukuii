@@ -2642,19 +2642,16 @@ items:
   - id: B-233
     title: "028 S3: bundled Ephemery iteration, startup selection, exit 75 at the reset"
     priority: P2
-    status: in-progress
+    status: done
     area: ops
     size: L
     opened: 2026-11-12
+    closed: 2026-11-13
     refs: [B-227]
     links:
+      prs: [1821]
       spec: specs/028-builtin-ephemery-hoodi
       branch: feat/028-s3-bundle
-    claim:
-      by: dev-node
-      agent: main
-      since: 2026-11-13T02:38:25Z
-      heartbeat: 2026-11-13T02:38:31Z
     notes: "2026-11-13 in-progress: S3 implementer (sonnet) in ~/work/e028-s3, stacked on feat/028-s2-release-lib"
   - id: B-234
     title: "028 S4a: strict HTTPS release transport and tar reader"
