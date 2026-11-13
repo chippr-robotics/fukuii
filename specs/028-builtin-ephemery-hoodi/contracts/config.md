@@ -44,6 +44,8 @@ row 3, 4 or 6).
 | `fukuii.blockchains.custom-chains-dir` | `<root>/releases/ephemery-N/chains` |
 | `fukuii.datadir` | `<root>/ephemery-N` |
 | `logging.logs-dir` | the value before selection (normally `<root>/logs`) |
+| `fukuii.network.engine-api.jwt-secret-path` | **only when the operator set none** (B-246): `<root>/jwt.hex`. An operator's value is left alone and no property is set |
+| `fukuii.ephemery.active.jwt-secret-defaulted` | `true`, set with the row above: the node created the path itself, so it creates the file (0600) and applies the strict checks, as for `<datadir>/jwt.hex`. An operator's path is read as before and is never created |
 | `fukuii.ephemery.active.iteration` | `N` |
 | `fukuii.ephemery.active.reset-time` | epoch seconds |
 | `fukuii.ephemery.active.genesis-hash` | `0x…` |
@@ -63,7 +65,7 @@ in `conf/base/*.conf` and `DiscoveryConfig.scala:56` on 2026-11-12.
 | `network.rpc.ipc.socket-file` | `${fukuii.datadir}/fukuii.ipc` | moves | set an absolute path |
 | `static-nodes.json` | `${fukuii.datadir}/static-nodes.json` | **seeded**: when the resolver creates a new iteration datadir, it copies `<root>/static-nodes.json` into it if that file exists, and never overwrites | put it at `<root>/static-nodes.json` |
 | `logging.logs-dir` | `${fukuii.datadir}/logs` | **pinned** to `<root>/logs` by the resolver (R5) | – |
-| Engine API `jwt-secret-path` | unset (a random secret) | unaffected: not derived from the datadir. An operator conf that writes `${fukuii.datadir}/…` would move it, so the runbook says to use an absolute path, as on Sepolia | an absolute path |
+| Engine API `jwt-secret-path` | unset: `<fukuii.datadir>/jwt.hex`, created at the first start (B-246) | unaffected: **pinned** to `<root>/jwt.hex` by the resolver when the operator set none. An operator conf that writes `${fukuii.datadir}/…` would move it, so the runbook says to use an absolute path, as on Sepolia | an absolute path |
 
 An operator conf that substitutes `${fukuii.datadir}` into any other key gets the iteration's directory. The runbook
 says so.

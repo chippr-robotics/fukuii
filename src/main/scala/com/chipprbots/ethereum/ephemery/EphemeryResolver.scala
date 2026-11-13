@@ -64,12 +64,17 @@ object EphemeryResolver extends LazyLogger:
     *   `fukuii.datadir` before the selection: the Ephemery root (R6)
     * @param logsDir
     *   `logging.logs-dir` before the selection, which the resolver pins so the log stays at `<root>/logs`
+    * @param jwtSecretPath
+    *   `fukuii.network.engine-api.jwt-secret-path` before the selection, if the operator set it. When not, the resolver
+    *   pins it to `<root>/jwt.hex` and marks it as the node's own default, so the Engine API secret is not derived from
+    *   the iteration's datadir and the consensus client keeps working after a reset (B-246)
     */
   final case class Settings(
       network: String,
       root: Path,
       customChainsDir: Option[Path],
       logsDir: String,
+      jwtSecretPath: Option[String],
       refresh: Boolean,
       source: String,
       refreshTimeout: FiniteDuration,
@@ -90,6 +95,7 @@ object EphemeryResolver extends LazyLogger:
         root = root,
         customChainsDir = optional("fukuii.blockchains.custom-chains-dir").map(Paths.get(_)),
         logsDir = optional("logging.logs-dir").getOrElse(root.resolve("logs").toString),
+        jwtSecretPath = optional("fukuii.network.engine-api.jwt-secret-path"),
         refresh = !raw.hasPath("fukuii.ephemery.refresh") || raw.getBoolean("fukuii.ephemery.refresh"),
         source = optional("fukuii.ephemery.source").getOrElse(DefaultSource),
         // Unreachable defence: `startup` refuses a malformed refresh-timeout (exit 1) before it reads Settings, so no
@@ -131,6 +137,8 @@ object EphemeryResolver extends LazyLogger:
     "fukuii.blockchains.custom-chains-dir",
     "fukuii.datadir",
     "logging.logs-dir",
+    "fukuii.network.engine-api.jwt-secret-path",
+    s"${Prefix}jwt-secret-defaulted",
     s"${Prefix}iteration",
     s"${Prefix}reset-time",
     s"${Prefix}genesis-hash",
@@ -496,10 +504,22 @@ object EphemeryResolver extends LazyLogger:
           s"${Prefix}reset-time" -> entry.metadata.resetTime.toString,
           s"${Prefix}genesis-hash" -> entry.genesisHash,
           s"${Prefix}managed" -> "true"
-        )
+        ) ++ jwtProperties(settings)
         (Managed(entry, chosen.origin, dir, h.chainsDir, h.testnetDir), properties)
       case (Left(refusal), _) => (Refused(refusal), Map.empty)
       case (_, Left(refusal)) => (Refused(refusal), Map.empty)
+
+  /** The Engine API secret (B-246): the operator's own path is left as it is, and no path becomes `<root>/jwt.hex`,
+    * marked as the node's default so that the node creates the file as it does `<datadir>/jwt.hex`.
+    */
+  private def jwtProperties(settings: Settings): Map[String, String] =
+    settings.jwtSecretPath match
+      case Some(_) => Map.empty
+      case None =>
+        Map(
+          "fukuii.network.engine-api.jwt-secret-path" -> settings.root.resolve("jwt.hex").toString,
+          s"${Prefix}jwt-secret-defaulted" -> "true"
+        )
 
   /** The startup report (US1-3), the earlier datadirs, and a datadir from before built-in Ephemery. */
   private def report(

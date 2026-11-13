@@ -1050,9 +1050,17 @@ trait EngineApiBuilder extends Logger:
 
   lazy val maybeEngineApiServer: Option[EngineApiHttpServer] =
     if engineApiConfig.enabled then
-      val jwtAuth = engineApiConfig.jwtSecretPath match
-        case Some(path) => JwtAuthenticator.fromFile(path)
-        case None       => JwtAuthenticator.generateRandom()
+      // No path configured: <datadir>/jwt.hex, created on first start as go-ethereum does (B-246), so a consensus
+      // client can be given the same file. A random in-memory secret would be one no consensus client can share.
+      val jwtAuth = JwtSecretFile.authenticator(
+        engineApiConfig.jwtSecretPath,
+        // set by `fukuii ephemery` when it pinned the path itself, because the operator set none
+        pathIsDefault = scala.util
+          .Try(instanceConfig.config.getBoolean("ephemery.active.jwt-secret-defaulted"))
+          .getOrElse(false),
+        instanceConfig.config.getString("datadir"),
+        new java.security.SecureRandom()
+      )
       Some(new EngineApiHttpServer(engineApiController, jwtAuth, engineApiConfig))
     else None
 

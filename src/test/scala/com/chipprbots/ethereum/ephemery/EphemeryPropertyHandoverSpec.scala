@@ -14,6 +14,7 @@ import org.scalatest.BeforeAndAfterEach
 import org.scalatest.flatspec.AnyFlatSpec
 import org.scalatest.matchers.should.Matchers
 
+import com.chipprbots.ethereum.consensus.engine.JwtSecretFile
 import com.chipprbots.ethereum.ephemery.EphemeryResolver.*
 import com.chipprbots.ethereum.testing.Tags.*
 
@@ -77,6 +78,23 @@ class EphemeryPropertyHandoverSpec extends AnyFlatSpec with Matchers with Before
     after.getString("fukuii.tmpdir") shouldBe s"$iteration/tmp"
     after.getString("fukuii.network.rpc.ipc.socket-file") shouldBe s"$iteration/fukuii.ipc"
     after.getString("logging.logs-dir") shouldBe s"$root/logs"
+    // not derived from the iteration: the secret survives a reset, so the consensus client keeps working
+    after.getString("fukuii.network.engine-api.jwt-secret-path") shouldBe s"$root/jwt.hex"
+    after.getBoolean("fukuii.network.engine-api.enabled") shouldBe true
+    after.getBoolean("fukuii.ephemery.active.jwt-secret-defaulted") shouldBe true
+
+    // what NodeBuilder does with it on a fresh root: the file is created there, at 0600, outside the iteration
+    val engine = after.getConfig("fukuii.network.engine-api")
+    JwtSecretFile.authenticator(
+      Some(engine.getString("jwt-secret-path")),
+      after.getBoolean("fukuii.ephemery.active.jwt-secret-defaulted"),
+      after.getString("fukuii.datadir"),
+      new java.security.SecureRandom()
+    )
+    val secret = root.resolve("jwt.hex")
+    Files.isRegularFile(secret) shouldBe true
+    java.nio.file.attribute.PosixFilePermissions.toString(Files.getPosixFilePermissions(secret)) shouldBe "rw-------"
+    Files.exists(root.resolve("ephemery-165/jwt.hex")) shouldBe false
     after.getString("fukuii.blockchains.custom-chains-dir") shouldBe s"$root/releases/ephemery-165/chains"
     after.getInt("fukuii.ephemery.active.iteration") shouldBe 165
     after.getLong("fukuii.ephemery.active.reset-time") shouldBe 1795114800L

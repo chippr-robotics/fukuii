@@ -137,7 +137,9 @@ object JwtAuthenticator extends Logger:
     log.info(s"Loaded JWT secret from $path")
     new JwtAuthenticator(secretHex)
 
-  /** Generate a random 32-byte JWT secret (for testing/development). */
+  /** Generate a random in-memory 32-byte JWT secret. For tests only: no consensus client can share it, so the node
+    * never uses it (B-246; see [[JwtSecretFile]]).
+    */
   def generateRandom(): JwtAuthenticator =
     val random = new java.security.SecureRandom()
     val bytes = new Array[Byte](32)

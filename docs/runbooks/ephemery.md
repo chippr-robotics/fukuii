@@ -165,9 +165,16 @@ RestartSec=30
 WantedBy=fukuii.service
 ```
 
-This unit needs `nc` (netcat) on the host and the Engine API enabled in fukuii (`mining.protocol = "engine-api"`, the
-default in `conf/ephemery.conf`). Without them the `ExecStartPre` waits until `TimeoutStartSec`, and then the unit
-fails.
+This unit needs `nc` (netcat) on the host and the Engine API enabled in fukuii. `conf/ephemery.conf` enables it
+(`fukuii.network.engine-api.enabled = true`), so it is on by default, on `localhost:8551`; `mining.protocol =
+"engine-api"` only selects the post-merge header validator and does not turn the Engine API on. Without `nc` or the
+Engine API the `ExecStartPre` waits until `TimeoutStartSec`, and then the unit fails.
+
+The JWT secret is `<root>/jwt.hex` (`/data/ephemery/jwt.hex` above), where `<root>` is your `fukuii.datadir`. When you
+set no `jwt-secret-path`, the startup resolver pins it there, outside the iteration's datadir, so the secret is the same
+across resets and the consensus client keeps working. Fukuii creates the file at the first start (32 random bytes as 64
+hex characters, mode 0600), refuses to start on a file that is malformed or readable by its group or by others, and
+logs the path, never the secret. Give the consensus client `--execution-jwt <root>/jwt.hex`, or your configured path.
 
 `PartOf=fukuii.service` stops and restarts the consensus client whenever fukuii restarts. The `ExecStartPre` is what
 makes it pick up the new iteration: `After=` only waits for fukuii's JVM to be started, not for its startup resolver,
@@ -194,7 +201,7 @@ Every path derived from `fukuii.datadir` follows the iteration unless you set it
 | `network.rpc.ipc.socket-file` | `${fukuii.datadir}/fukuii.ipc` | moves | set an absolute path |
 | `static-nodes.json` | `${fukuii.datadir}/static-nodes.json` | seeded: copied from `<root>/static-nodes.json` into a new iteration's datadir if that file exists, never overwritten | put it at `<root>/static-nodes.json` |
 | `logging.logs-dir` | `${fukuii.datadir}/logs` | pinned to `<root>/logs` | n/a |
-| Engine API `jwt-secret-path` | unset (a random secret each start) | unaffected, unless your conf writes `${fukuii.datadir}/...` | use an absolute path |
+| Engine API `jwt-secret-path` | pinned to `<root>/jwt.hex` when unset | unaffected, unless your conf writes `${fukuii.datadir}/...` | use an absolute path |
 
 An operator conf that substitutes `${fukuii.datadir}` into any other key gets the iteration's directory.
 
@@ -283,8 +290,10 @@ timestamp as the decimal string `"1790276400"`. Loaded verbatim, fukuii builds a
 
 ## 2. Run fukuii
 
-Set the JWT path in `OUT/ephemery-local.conf` (`fukuii.network.engine-api.jwt-secret-path`) and create
-the secret once: `openssl rand -hex 32 > OUT/jwt.hex`.
+The Engine API is on by default (`localhost:8551`; `ephemery-local.conf` moves it to 8561). With no
+`fukuii.network.engine-api.jwt-secret-path`, fukuii creates `<fukuii.datadir>/jwt.hex` itself. To use a secret you
+made, set an absolute path in `OUT/ephemery-local.conf` and create it once: `openssl rand -hex 32 > OUT/jwt.hex`
+with mode 0600.
 
 ```bash
 FUKUII_CONF_DIR=OUT/current/conf java -XX:+UnlockDiagnosticVMOptions -XX:-ReduceAllocationMerges \
