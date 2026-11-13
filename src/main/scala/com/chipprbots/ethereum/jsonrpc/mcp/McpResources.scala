@@ -77,6 +77,7 @@ object NodeConfigResource:
         case id if id == BigInt(1)           => "ethereum"; case id if id == BigInt(61)     => "etc"
         case id if id == BigInt(63)          => "mordor"; case id if id == BigInt(11155111) => "sepolia"
         case id if id == BigInt(7091047534L) => "plataberget"
+        case id if id == BigInt(560048)      => "hoodi"
         case id                              => s"chain-$id"
       }",
       |  "accountStartNonce": ${cfg.accountStartNonce},

@@ -377,6 +377,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `.env` files.
 
 ### Added
+- **Hoodi is a built-in network (spec 028 slice 1).** `fukuii hoodi` starts the Hoodi testnet (chain id 560048)
+  from the shipped `conf/hoodi.conf` and `conf/base/chains/hoodi-chain.conf`, with no setup. The genesis hash fukuii
+  computes (`0xbbe312868b376a3001692a646dd2d7d1e4406380dfd86b98aa8a34d1557c971b`, state root `0xda87d7f5...7576`) and the
+  five fork ids (`0xbef71d30` through `0x23aa1351`) are pinned by tests against go-ethereum and the public Hoodi RPCs.
+  Peers come from four static `:30303` enodes and the Ethereum Foundation's DNS tree `all.hoodi.ethdisco.net`
+  (added to the shipped trust anchors); the five EF NodeOps enodes that Hoodi lists with TCP port 0 are not listed,
+  because fukuii would dial port 0. Hoodi has no Amsterdam fork scheduled. See `docs/runbooks/hoodi.md`.
+
 - **Every peer the node deals with has a reliability score, exported to the metrics registry (spec 027 slice 4a).**
   `PeerScoringManager` (written long ago, never constructed) is now built once per node and fed from the peer events:
   a successful handshake (`PeerManagerActor`), a failed handshake and a protocol violation (`PeerActor`), a response

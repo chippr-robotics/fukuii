@@ -124,7 +124,7 @@ class ChainConfigMatrixSpec extends AnyFlatSpec with Matchers:
       .collect { case e if e.getValue.valueType == ConfigValueType.OBJECT => e.getKey }
       .toSeq
       .sorted
-    (chains should contain).allOf("etc", "mordor", "gorgoroth", "eth", "sepolia", "plataberget")
+    (chains should contain).allOf("etc", "mordor", "gorgoroth", "eth", "sepolia", "plataberget", "hoodi")
     chains.foreach { name =>
       withClue(s"$name-chain.conf: ") {
         val config = shippedChain(name)
@@ -152,6 +152,7 @@ class ChainConfigMatrixSpec extends AnyFlatSpec with Matchers:
     "eth" -> MainnetDepositContract,
     "sepolia" -> Address("0x7f02c3e3c98b133055b8b348b2ac625669ed295d"),
     "plataberget" -> MainnetDepositContract,
+    "hoodi" -> Address("0x00000000219ab540356cBB839Cbe05303d7705Fa"), // eth-clients/hoodi, go-ethereum HoodiChainConfig
     "hive" -> MainnetDepositContract
   )
 

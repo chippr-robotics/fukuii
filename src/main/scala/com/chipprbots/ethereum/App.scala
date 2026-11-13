@@ -20,6 +20,7 @@ object App extends Logger:
     "eth",
     "mordor",
     "sepolia",
+    "hoodi",
     "plataberget",
     "ephemery",
     "hive",
@@ -159,6 +160,7 @@ object App extends Logger:
         |  etc                    Ethereum Classic mainnet (default)
         |  eth                    Ethereum mainnet
         |  sepolia                Sepolia testnet (ETH)
+        |  hoodi                  Hoodi testnet (ETH)
         |  plataberget            Platåberget testnet (ETH, public Glamsterdam testnet)
         |  ephemery               Ephemery testnet (ETH, resets every 28 days; run scripts/ephemery/fetch-genesis.sh first)
         |  mordor                 Mordor testnet
