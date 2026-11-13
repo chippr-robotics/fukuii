@@ -242,12 +242,13 @@ class StateFaultInABatchSpec extends ScalaTestWithActorTestKit with AnyFlatSpecL
       val stale = new StaleStateViewException(refOf(batch(1).header), 2L, 6L, "the disk moved on")
       on.before = Map(batch(2).hash.value -> (() => throw stale))
 
-      val (executed, error) = on.execution.executeAndValidateBlocks(batch.toList, ChainWeight.zero, adoptEachBlock = true)
+      val (executed, error) =
+        on.execution.executeAndValidateBlocks(batch.toList, ChainWeight.zero, adoptEachBlock = true)
 
       executed.map(_.block) shouldBe batch.take(2).toList
       error match
         case Some(BlockExecutionError.StateFaulted(fault)) => (fault should be).theSameInstanceAs(stale)
-        case other => fail(s"the batch ended with $other")
+        case other                                         => fail(s"the batch ended with $other")
       // and what tells the endings apart takes it for no error of the block
       BlockExecution.BatchOutcome.of(executed, error) shouldBe BlockExecution.BatchOutcome(executed, None, Some(stale))
       on.pathState.anchor shouldBe Some(refOf(batch(1).header))

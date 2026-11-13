@@ -93,7 +93,7 @@ object TestingService:
           case (_, Some(BlockExecutionError.StateFaulted(fault))) => throw fault
           case (_, Some(error))                                   => Left(error.describe)
           case (Nil, None)                                        => Left("the import took no block")
-          case (_, None)        => Right(())
+          case (_, None)                                          => Right(())
 
 class TestingService(
     engineApiService: EngineApiService,

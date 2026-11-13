@@ -474,14 +474,14 @@ class BlockExecution(
 
   /** [[executeAndValidateBlocks]] for blocks that arrived with peer-supplied EIP-7928 lists.
     *
-    * '''A batch has a third way to end''' (spec 018 Track C, C4b): this node's own state could not take the next
-    * block. The state the block is to be executed on is not the one the disk holds, or is no longer (another writer
-    * moved it between two blocks of the batch), or the view it was read through went stale. That says nothing about
-    * the block, and nothing about the peer that sent it. It is returned as [[BlockExecutionError.StateFaulted]], which
-    * is no verdict: the blocks before it are adopted, each in its own atomic write, exactly as a shorter batch would
-    * have left them; the block the fault was met at wrote nothing, and neither it nor the blocks after it were judged.
-    * So the batch stops there: executing on would be executing on a state that is not held. A caller tells the two
-    * endings apart with [[BlockExecution.BatchOutcome.of]].
+    * '''A batch has a third way to end''' (spec 018 Track C, C4b): this node's own state could not take the next block.
+    * The state the block is to be executed on is not the one the disk holds, or is no longer (another writer moved it
+    * between two blocks of the batch), or the view it was read through went stale. That says nothing about the block,
+    * and nothing about the peer that sent it. It is returned as [[BlockExecutionError.StateFaulted]], which is no
+    * verdict: the blocks before it are adopted, each in its own atomic write, exactly as a shorter batch would have
+    * left them; the block the fault was met at wrote nothing, and neither it nor the blocks after it were judged. So
+    * the batch stops there: executing on would be executing on a state that is not held. A caller tells the two endings
+    * apart with [[BlockExecution.BatchOutcome.of]].
     */
   def executeAndValidateBlocksWithAccessLists(
       blocks: List[Block],
@@ -1332,9 +1332,9 @@ object BlockExecutionError:
     def describe: String = error.toString
 
   /** '''No error of the block.''' This node's own state could not take it (spec 018 Track C, C4b): the block was not
-    * executed, or was executed and not committed, and nothing was judged. It ends a batch the way an error does and
-    * is carried here for that; whoever reads it must not take it for a verdict
-    * ([[BlockExecution.BatchOutcome.of]] takes it out).
+    * executed, or was executed and not committed, and nothing was judged. It ends a batch the way an error does and is
+    * carried here for that; whoever reads it must not take it for a verdict ([[BlockExecution.BatchOutcome.of]] takes
+    * it out).
     */
   final case class StateFaulted(fault: StateFault) extends BlockExecutionError:
     def describe: String = s"this node's state could not take the block: ${fault.getMessage}"

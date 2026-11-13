@@ -314,10 +314,10 @@ class ConsensusImpl(
 
   /** The best-block pointer, set to the last block of a batch that was adopted.
     *
-    * '''On the unified state layout it writes nothing''' (spec 018 data-model 7.1): there the pointer moves with the state,
-    * in the batch that commits each block, so it is at the last adopted block already. Written again here, outside
-    * that batch and under no lock, it could only be wrong: after a batch that stopped because another writer moved the
-    * head, it would put the pointer back on a block whose state the disk no longer holds.
+    * '''On the unified state layout it writes nothing''' (spec 018 data-model 7.1): there the pointer moves with the
+    * state, in the batch that commits each block, so it is at the last adopted block already. Written again here,
+    * outside that batch and under no lock, it could only be wrong: after a batch that stopped because another writer
+    * moved the head, it would put the pointer back on a block whose state the disk no longer holds.
     */
   private def saveLastBlock(blocks: List[BlockData]): Unit =
     if !blockchainReader.holdsStateInPlace then

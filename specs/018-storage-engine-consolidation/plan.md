@@ -2183,6 +2183,124 @@ last world and the next. Follow-ups in the backlog: the head-only callers read i
 disk may move between their lookup and their read (B-238); `executableAtParent` through the proposer's door when
 layers return (B-239, C4d); `IO.blocking` for the bodies that run for seconds (B-240).
 
+### C4b: the move core, as it is to be built (2026-11-13)
+
+Two consults before code (forge for ETC, beacon for ETH; both AGREE WITH CHANGES) changed the shape of the slice.
+What follows is the plan C4b is built to; where it differs from data-model 7.0 and 7.3 and from tasks.md, this
+is the later word, and the tasks are annotated.
+
+- **The move takes the caller's rows; it hands out nothing** (beacon). `moveHead(target, extraFor)` asks the
+  caller for its index and best-pointer rows outside the state lock, once for each chunk and again after every
+  re-plan, and writes them in its own batch under the lock, as `commitCanonical(staged, block, extra)` does. No
+  `HeadMovePrepared` is handed out with the lock held: the lock is one thread's and not re-entrant, the Engine
+  API's callers run in `IO`, and a caller that never committed would leave every view of the node waiting on an
+  odd epoch. `BlockchainWriter.promoteToCanonicalHead` splits into a builder of its rows and a commit; with the
+  guard off it builds and commits as today, byte for byte, and a test holds it to that.
+- **A move of several blocks is settled and verified against a virtual disk**: the disk and the batch so far
+  (beacon, forge). A block that is forwarded from a layer has its priors, and the rows of the storage tries it
+  replaces, read from its parent's state, which inside one batch is not on disk. Settled against the disk its
+  record lists the wrong rows, and a later move back by that record writes a wrong state; ETC has no EIP-6780, so
+  a replaced storage trie is routine there. Every reversed entry's `next` and every forwarded record's `prior`
+  is compared with the virtual value before anything is written, and what a reader's view needs of the old state
+  is the disk's row, read under the lock. That is also the interior check, made before the write and not after.
+- **Refusals.** `Deep` is decided by the records that are there (the walk meets one that is gone below the
+  pruned-to mark), with `reorg.max-depth` as policy on top: the retention formula and the disk differ after a
+  jump of the finalized block, after a restart, and after a move to a shorter branch. `Pivot` needs the block the
+  state began at, kept durably (`state.origin`, written with the batch that creates the anchor). `Incomplete` is
+  a tombstone in the reverse set. **`Finalized` is new**: a reverse set that crosses the finalized block is
+  refused and does not escalate, since escalating would follow a consensus client that broke finality. A record
+  that is gone above the pruned-to mark is corruption, said as that and never as `Deep`.
+- **One move at a time, and a latch for the builders.** A mutex outside the state lock is held across all the
+  chunks of a move, and a move-in-progress latch spans the whole move or adoption attempt. "The state lock's
+  holder flag" of data-model 7.3 cannot be the pause: the lock is free between chunks.
+- **The chunk invariant** is `anchor == best` on the path old head, fork, target. Data-model 7.3 and T138 say
+  "on an ancestor of the target", which the reverse chunks are not. A move that fails mid-way leaves the head on
+  a block of that path.
+- **Compare-and-set on the anchor and the epoch, and on the layers**: a layer of the plan may be dropped as
+  invalid or evicted between the plan and the lock, and is checked for identity under it.
+- **Records and pruning of one batch are computed together**; the pre-values of a chunk are bounded in bytes,
+  with a barrier move above the bound that makes older views stale, never wrong; a deep move in the archive mode
+  streams its records by chunk.
+- **Reverse-then-commit** (the user's decision of 2026-11-12) is, at this slice's surface: a move to the fork
+  point with nothing to forward; the branch committed in place block by block; and, to go back, a move to the
+  old head, forwarded from its records. **Retention must not prune a record above the fork point while such an
+  attempt is unsettled** (forge): every in-place commit prunes, so a branch longer than the retained depth would
+  delete what the way back needs. The slice offers a hold for that; its caller is C4e.
+- **After the write** a sample that does not match means the store wrote wrong bytes: the node fails closed (no
+  in-place writer goes on, the Engine API answers SYNCING) and takes the escalation route. It never rolls back
+  onto such a store.
+
+**The parts.** Part 0: a fault of the state as a way for a batch to end (below). Part 1: the plan, pure, with the
+refusals. Part 2: the move, with the split of `BlockchainWriter` and the one-batch test (T137 and T147 move here
+from the callers). Part 3: the callers that exist on the guard (`test_rewindToBlock`, the index writers), and the
+table of pointer writers as a test, with the rows the audit missed (forge: the SYNC-FORK resolver's
+`discardBlocksAfter`, which steps the best block down one batch at a time under no lock;
+`PivotAnchor.reanchor`; `repairBestBlockNumberMapping`). Part 4: the reconciliation at start, placed after
+`fixDatabase` and `repairBestBlockMapping`, which write the pointer and the index before it today.
+
+**Recorded and not decided here.** A legal reorganisation deeper than 512 blocks during a time without finality
+is refused and escalated (retention's bound; an accepted risk, to be stated in the operator's notes).
+`recovery.max-blocks` is the history, 64, against 512 retained on ETC: a lost side chain longer than that is not
+executed again but escalated (C4e).
+
+#### C4b part 0: a fault of this node's state ends a batch as a result of its own (2026-11-13)
+
+Forge found this live on the guard as it stands: a `StateFault` met while a batch is imported (the state a block
+is to be executed on is not the one the disk holds, or is no longer; a view went stale) was thrown out of
+`BlockExecution`, past the blocks of the batch that were already adopted, and failed the import as an exception.
+With the head able to move under a batch it is an ordinary event, so it comes first.
+
+- **`BlockExecutionError.StateFaulted(fault)`** ends a batch as an error does and is no error of the block: the
+  blocks before it are adopted, the block it was met at wrote nothing, and neither it nor the blocks after it
+  were judged. It travels in the result the batch executor's callers already take; `ConsensusImpl` takes it out
+  once (`BlockExecution.BatchOutcome.of`), before any arm that judges a block by its error.
+- **`ConsensusStateFault(fault, imported, blocksToEnqueue)`**, and from the adapter
+  **`BlockImportStateFault(fault, imported)`**: a result of its own and no failed import, so that every place
+  that tells the results apart has to say what it does with it. The blocks that were not executed are queued
+  again and none is dropped from the queue; no block is reported invalid; the importer counts the adopted prefix,
+  fetches the rest again from the first that was not executed, and blames no peer.
+- **`saveLastBlock` writes nothing on the unified layout** (T149): there the pointer moves with the state, in
+  the batch that commits each block. Written again after a batch, under no lock, it would put the pointer back
+  on a block whose state the disk no longer holds.
+- **Not here**: the block-by-hash-only records of a block that is executed and not adopted (they come with the
+  overlay commit's first caller, C4d or C4e); what the node does when the fault keeps coming (the escalation of
+  Part 2, D).
+
+**Tests.** `StateFaultInABatchSpec`: the rpc-compat chain on the unified layout through the node's own
+consensus; a batch of five whose third block is executed, and before it is committed another writer makes a
+sibling of it the head. The first two are adopted with their records; the third is answered as a state fault
+with the last three handed back; nothing is reported invalid; the best block is the block the disk holds, which
+is the other writer's; the last two were never stored. The same through the adapter, with the blocks still
+queued; the same with the head moved before the third block is executed; and a view gone stale under a block,
+which ends the batch with that very fault and the blocks before it adopted. `ConsensusImplSpec`: the fault
+mid-batch, at the first block, and in a reorganisation, each with a reporter that stays silent.
+`RegularSyncSpec`: the block is tried three times at the importer's usual pace, then spaced out; no peer is
+blacklisted.
+
+**The mutation run**: 18 mutants; 15 caught. The fault thrown out of a batch; judged as an error of the block;
+the pointer written after a batch on the unified layout; the blocks not handed back, the adopted ones not told,
+the handing back starting one block late; a reorganisation answered as done; the adapter answering a failed
+import, or not queueing the blocks again; the importer blaming the peer, or counting a strike; test mode
+answering an invalid block; the tries never spaced out, spaced out at the usual pace, or from the second. **Three
+missed, and why**: the `testing_` namespace's rethrow and test mode's answer for a mined block have no spec that
+meets a state fault there; and a pick of blocks sent at once after the third fault is no change of behaviour (the
+fetcher was emptied from that block on before the pick reaches it, and answers a pick it cannot serve with
+nothing: the mutant is equivalent). The first case of the spaced-out tries could not tell them from ordinary ones (its
+window was shorter than the importer's usual pace) and was made to.
+
+**Read after code (forge): APPROVE WITH CHANGES, nothing critical.** Verified in code: every way a `StateFault`
+can leave a batch is inside the catch (staging, the refusal of a block that is not adopted, a stale view, the
+commit); no arm of `ConsensusImpl` that judges a block can be handed one; `saveLastBlock` writes the same row
+the block's own batch wrote, so writing nothing is right at each of its calls; the fetcher's rewind without a
+blacklist blames nobody; the queue cannot grow without bound; with the guard off nothing changes, the old matches
+being moved and not altered. Taken: **the tries are spaced out** (a fault that stays, such as a branch this
+layout cannot execute yet, was met again at every round trip of the fetcher for good: from the third in a row on
+one block the next pick waits out the importer's backoff, said once at ERROR, and nothing is escalated); the
+fault met where a block's state is taken as well as where it is committed, and another kind of fault through
+the real catch, as cases; test mode's parity; the reorganisation's answer after an executed prefix, which is
+not met as the code stands and is said so in the code and in B-242 (it must tell the settled prefix and the old
+branch's blocks when a branch is executed on layers, C4e).
+
 ### Destructive change (C8a and C8b): the vault protocol blocks
 
 ```

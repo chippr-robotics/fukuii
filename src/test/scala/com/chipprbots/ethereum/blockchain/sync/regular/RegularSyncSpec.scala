@@ -1175,16 +1175,18 @@ class RegularSyncSpec
 
             regularSync ! SyncProtocol.Start
 
-            // tried, fetched again and tried again at once, as often as a failed block is before its peer is evicted
-            awaitCond(attempts.get == BlockImporter.StateFaultBackoffAfter, 15.seconds)
+            // tried, fetched again and tried again at the importer's usual pace (the pick sent at once after a rewind
+            // finds the fetcher emptied; the retry tick brings the next): three times, as often as a failed block is
+            // tried before its peer is evicted
+            awaitCond(attempts.get == 3, 15.seconds)
+            // Then the tries are spaced out. Over three of the importer's usual retry intervals, in which a block
+            // that is tried at the usual pace is tried again, none comes; and nobody is blacklisted or evicted.
             withClue("neither blacklisted nor evicted: ") {
-              peersClient.receiveWhile(500.millis) { case m => m }.collect { case b: PeersClient.BlacklistPeer =>
-                b
-              } shouldBe
-                empty
+              peersClient
+                .receiveWhile(syncConfig.syncRetryInterval * 3) { case m => m }
+                .collect { case b: PeersClient.BlacklistPeer => b } shouldBe empty
             }
-            // and from there the tries are spaced out: none came meanwhile
-            attempts.get shouldBe BlockImporter.StateFaultBackoffAfter
+            attempts.get shouldBe 3
           finally BlockImporter.exhaustBackoff = 5.minutes
       )
 

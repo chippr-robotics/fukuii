@@ -1058,9 +1058,11 @@ final private class BlockImporterLogic(
                 // judged. They are fetched again from the first that was not executed, and the peer that served them
                 // is not blamed: it was asked for these blocks and gave them.
                 val failedBlock = notImportedBlocks.head
-                val streak = stateFaultStreak.collect {
-                  case (hash, count) if hash == failedBlock.hash.value => count
-                }.getOrElse(0) + 1
+                val streak = stateFaultStreak
+                  .collect {
+                    case (hash, count) if hash == failedBlock.hash.value => count
+                  }
+                  .getOrElse(0) + 1
                 stateFaultStreak = Some((failedBlock.hash.value, streak))
                 fetcher ! BlockFetcher.InvalidateBlocksFrom(
                   failedBlock.number.value,
