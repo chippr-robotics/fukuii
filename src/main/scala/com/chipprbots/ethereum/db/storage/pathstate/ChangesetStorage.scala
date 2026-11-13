@@ -54,6 +54,13 @@ final class ChangesetStorage(val dataSource: DataSource):
     val key = recordKey(blockHash)
     dataSource.getOptimized(namespace, key).map(BlockDiffCodec.decode(key, _))
 
+  /** [[get]] for a move of the head, which reads the record of every block it reverses or applies again, once: read
+    * through the block cache they would push out what block import keeps there (vault).
+    */
+  def getUncached(blockHash: ByteString): Option[Either[BlockDiffCodec.Rejected, BlockDiff]] =
+    val key = recordKey(blockHash)
+    dataSource.getOptimizedNoFill(namespace, key).map(BlockDiffCodec.decode(key, _))
+
   /** [[get]] for a walk back along a chain of records. The walk keeps what it reads, and reading many large records
     * through the block cache would push out what block import keeps there. A record of more than `maxEncodedBytes` is
     * not decoded: a record may be far larger than what a walk may hold, and decoding it builds every entry first
