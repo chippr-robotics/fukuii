@@ -2508,6 +2508,45 @@ one, not told; a refusal reason without its counter. After the read four were ru
 lookups both ways, and the pin). **Equivalent**: the release of the pin after a move that succeeded, whose every
 pinned layer has been applied and dropped by then.
 
+#### C4b part 2c: a move's batches bounded, the barrier, the hold for an attempt (2026-11-13)
+
+**Batches cut by what they read.** A plan reads every record's header already; the store keeps each record's
+length from that one read, and a move's batches are cut by count and by bytes (a record's length, a layer's
+bytes; `CommitSettings.maxMoveBatchBytes`, 128 MiB). A block worth more than a batch goes alone. What ends up on
+disk does not depend on the cut: a move cut into a batch per block leaves the data source one batch leaves.
+
+**The barrier.** The prior values a batch must give back to older views are kept in memory for as long as the log
+keeps its move. A batch whose prior values are more than `CommitSettings.maxMovePreBytes` (64 MiB) is written as a
+barrier (`StateMoveLog.inFlightBarrier`): the log is emptied before the epoch is made odd, and every view made
+before it is stale, never wrong. An in-place commit takes the same rule. And the log as a whole holds no more than
+`CommitSettings.maxMoveLogBytes` (128 MiB) of prior values: the oldest moves go first, the newest stays whatever it
+holds (forge: eight moves of 64 MiB each would otherwise be held outside every bound).
+
+**The hold for an attempt** (reverse-then-commit, the user's decision of 2026-11-12; C4e is its caller).
+`PathStateStorage.withRecordsHeld(above)(body)`: while it runs, no commit and no move prunes a record above
+`above`, and a move may go back to `above` however deep that has become (forge: the depth policy bounds what a
+move may undo, and not the way back from an attempt the node made itself; on ETC with 512 retained, an attempt
+longer than that would otherwise have no way back though every record is on disk). It is taken under the state
+lock and refused at once (`Deep`) when the records above `above` are pruned already. It lives in memory: after a
+crash mid-attempt the next commit prunes as usual, and what a restart means for an attempt is C4e's to say.
+
+**The mutation run**: 17 mutants, all caught. A batch not cut by bytes, cut at the bound itself, or started at
+nothing; the records' sizes not kept; a layer worth nothing; no barrier, a barrier that keeps the log or leaves the
+anchor; an in-place commit never a barrier; a log that keeps its bytes whatever they are, or lets the newest move
+go; a hold that holds nothing, holds too little, outlives its attempt, or is ignored by retention; the way back
+bounded by the policy; a hold taken above records that are gone. Two of them did not compile as first written and
+were written again.
+
+**Read after code (forge, with vault's questions): APPROVE WITH CHANGES, nothing critical.** Verified in code: the
+barrier leaves every view made before it stale, never wrong (the anchor's, one through a reverse index, one through
+layers, one made while the log was already empty); nothing else reads the log in a way it breaks; a hold taken with
+no lock could not corrupt a state (a prune before it is caught by the epoch and the re-plan), and capping the floor
+at the block above the fork is exact. Taken: the way back's depth while a hold is open; the log's byte budget, and
+the barrier for in-place commits; the hold under the lock and refused at once; barrier cases for a view through
+layers and a barrier whose write fails. **Noted for M6**: a batch's memory at its peak is some three to five times
+its records' bytes (decoded record, the virtual disk, the maps it writes from, the write batch), and the scans of
+replaced tries are not counted in the cut.
+
 ### Destructive change (C8a and C8b): the vault protocol blocks
 
 ```
