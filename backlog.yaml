@@ -2776,3 +2776,15 @@ items:
     links:
       spec: 018
     notes: C4b part 1 added AppState state.origin, written by the genesis commit only. C5a's finalization commit and E.1's checkpoint import must write it with their anchor (AppStateStorage.putStateOrigin), or a move below the pivot answers Deep instead of Pivot. plan.md 'C4b part 1'.
+  - id: B-244
+    title: "Spec 029: TUI command center (pixel graphics over the Kitty protocol, key input, chain / mempool / RPC / storage views, operator actions): spec and research"
+    priority: P2
+    status: open
+    area: tui
+    size: M
+    opened: 2026-11-13
+    refs: []
+    links:
+      spec: specs/029-tui-command-center
+      branch: ccr-452bbde8-2hrv25
+    notes: User brief of 2026-11-13. Builds on spec 027; the plan and tasks follow the clarification answers.
