@@ -51,7 +51,7 @@ fukuii.network.engine-api.jwt-secret-path = "/chipprbots/blockchain/hoodi/jwt.he
 ```
 
 A configured path is read as given, and must already exist: a relative path resolves against the JVM's working
-directory, so use an absolute one. The secret must be at least 64 hex characters.
+directory, so use an absolute one. The secret must be exactly 64 hex characters (`0x` optional); a group- or world-readable file only draws a WARN.
 
 ## 3. Pair a consensus client
 

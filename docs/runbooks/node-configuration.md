@@ -444,6 +444,18 @@ start on a file that is not exactly 64 hex characters (optionally `0x`-prefixed)
 others, and logs the path, never the secret. The consensus client takes `--execution-jwt <datadir>/jwt.hex`, or the
 configured path. Use an absolute path when the secret must be shared or must not move with the datadir.
 
+- **A refused secret or a port that cannot bind stops the node at once**, with one ERROR line and exit code 1, before
+  P2P starts. A node with the Engine API on never runs without it, because it would look healthy and never sync.
+- **An explicit `jwt-secret-path` is never created.** The file must already exist and hold 64 hex characters; a
+  group- or world-readable one only draws a WARN. Only the default `<datadir>/jwt.hex` (and Ephemery's `<root>/jwt.hex`)
+  is created by fukuii.
+- **The consensus client must run as the same user**, because the default file is mode 0600, or use an explicit path
+  that both can read.
+- **Several instances on one host** each need their own `network.engine-api.port`, and their own datadir or their own
+  `jwt-secret-path`. The default port is 8551.
+- **The ETC chains (`etc`, `mordor`, `gorgoroth`) must opt in explicitly**
+  (`fukuii.network.engine-api.enabled = true`): they never ran the Engine API by default and still do not.
+
 #### Database Configuration
 
 ```hocon

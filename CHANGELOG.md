@@ -17,8 +17,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     renamed). A file that is not 64 hex characters, or is readable by its group or by others, stops the start with a
     message saying how to fix it. The path is logged, never the secret. Before, an unset path gave a random in-memory
     secret that no consensus client could share. The consensus client takes `--execution-jwt <datadir>/jwt.hex`, or the
-    configured path; use an absolute path to share the secret or to keep it where it is when the datadir moves.
-  - `fukuii ephemery` pins the path to `<datadir>/jwt.hex` of the Ephemery root when you set none, so the secret is the
+    configured path; use an absolute path to share the secret or to keep it where it is when the datadir moves. A
+    configured path is never created: the file must exist and hold 64 hex characters (a group- or world-readable one
+    draws a WARN). The consensus client must run as the same user as fukuii, as the default file is mode 0600.
+  - With the Engine API on, a refused secret file or a port that cannot bind stops the node at once, with one ERROR
+    line and exit code 1, before P2P starts. Before, a bind failure was only logged. Several instances on one host
+    each need their own `network.engine-api.port` and datadir or `jwt-secret-path`; the ETC chains must opt in.
+  - `fukuii ephemery` pins the path to `<root>/jwt.hex`, where `<root>` is the Ephemery root (your `fukuii.datadir`), when you set none, so the secret is the
     same across iterations and the Lighthouse companion keeps working after a reset.
 - **`fukuii ephemery` needs no preparation step: the current Ephemery iteration is built in, and a node exits 75 at its
   reset (spec 028).**

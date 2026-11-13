@@ -138,7 +138,6 @@ object EphemeryResolver extends LazyLogger:
     "fukuii.datadir",
     "logging.logs-dir",
     "fukuii.network.engine-api.jwt-secret-path",
-    s"${Prefix}jwt-secret-defaulted",
     s"${Prefix}iteration",
     s"${Prefix}reset-time",
     s"${Prefix}genesis-hash",
@@ -512,13 +511,21 @@ object EphemeryResolver extends LazyLogger:
   /** The Engine API secret (B-246): the operator's own path is left as it is, and no path becomes `<root>/jwt.hex`,
     * marked as the node's default so that the node creates the file as it does `<datadir>/jwt.hex`.
     */
+  private val JwtKey = "fukuii.network.engine-api.jwt-secret-path"
+
+  private val pinnedJwt = new java.util.concurrent.atomic.AtomicReference[Option[String]](None)
+
+  /** The Engine API secret path this resolver chose because the operator set none, or `None`: the node creates a file
+    * at exactly this path, and never at an operator's. A typed value, not a configuration key an operator could set.
+    */
+  def pinnedJwtSecretPath: Option[String] = pinnedJwt.get()
+
   private def jwtProperties(settings: Settings): Map[String, String] =
     settings.jwtSecretPath match
       case Some(_) => Map.empty
       case None =>
         Map(
-          "fukuii.network.engine-api.jwt-secret-path" -> settings.root.resolve("jwt.hex").toString,
-          s"${Prefix}jwt-secret-defaulted" -> "true"
+          JwtKey -> settings.root.resolve("jwt.hex").toString
         )
 
   /** The startup report (US1-3), the earlier datadirs, and a datadir from before built-in Ephemery. */
@@ -600,6 +607,7 @@ object EphemeryResolver extends LazyLogger:
         Some(refusal.exitCode)
       case _ =>
         result.properties.foreach { case (k, v) => System.setProperty(k, v) }
+        pinnedJwt.set(result.properties.get(JwtKey))
         ConfigFactory.invalidateCaches()
         // The logger was set up when the process started, from the configuration of that moment; the log must go where
         // the properties now say (`<root>/logs`), and `truncateLogs()` reads the same place.

@@ -81,13 +81,12 @@ class EphemeryPropertyHandoverSpec extends AnyFlatSpec with Matchers with Before
     // not derived from the iteration: the secret survives a reset, so the consensus client keeps working
     after.getString("fukuii.network.engine-api.jwt-secret-path") shouldBe s"$root/jwt.hex"
     after.getBoolean("fukuii.network.engine-api.enabled") shouldBe true
-    after.getBoolean("fukuii.ephemery.active.jwt-secret-defaulted") shouldBe true
 
-    // what NodeBuilder does with it on a fresh root: the file is created there, at 0600, outside the iteration
+    // what NodeBuilder does with the pinned path on a fresh root: the file is created there, at 0600, outside the iteration
     val engine = after.getConfig("fukuii.network.engine-api")
     JwtSecretFile.authenticator(
       Some(engine.getString("jwt-secret-path")),
-      after.getBoolean("fukuii.ephemery.active.jwt-secret-defaulted"),
+      true,
       after.getString("fukuii.datadir"),
       new java.security.SecureRandom()
     )

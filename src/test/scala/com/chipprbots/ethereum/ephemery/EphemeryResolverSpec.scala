@@ -157,7 +157,6 @@ class EphemeryResolverSpec extends AnyFlatSpec with Matchers with BeforeAndAfter
       "fukuii.datadir" -> root.resolve("ephemery-165").toString,
       "logging.logs-dir" -> root.resolve("logs").toString,
       "fukuii.network.engine-api.jwt-secret-path" -> root.resolve("jwt.hex").toString,
-      "fukuii.ephemery.active.jwt-secret-defaulted" -> "true",
       "fukuii.ephemery.active.iteration" -> "165",
       "fukuii.ephemery.active.reset-time" -> "1795114800",
       "fukuii.ephemery.active.genesis-hash" -> Hash165,
@@ -705,13 +704,34 @@ class EphemeryResolverSpec extends AnyFlatSpec with Matchers with BeforeAndAfter
     Settings.from(set).jwtSecretPath shouldBe Some("/secrets/jwt.hex")
   }
 
-  it should "pin an unset Engine API secret to <root>/jwt.hex, marked as the default, and leave an operator's alone" taggedAs UnitTest in {
+  it should "pin an unset Engine API secret to <root>/jwt.hex, and leave an operator's alone" taggedAs UnitTest in {
     val pinned = resolve(inside165)
     pinned.properties("fukuii.network.engine-api.jwt-secret-path") shouldBe root.resolve("jwt.hex").toString
-    pinned.properties("fukuii.ephemery.active.jwt-secret-defaulted") shouldBe "true"
     val operators = resolve(inside165, settings().copy(jwtSecretPath = Some("/secrets/jwt.hex")))
     operators.properties.contains("fukuii.network.engine-api.jwt-secret-path") shouldBe false
-    operators.properties.contains("fukuii.ephemery.active.jwt-secret-defaulted") shouldBe false
+  }
+
+  it should "tell the node, as a typed value, only the path it pinned itself" taggedAs UnitTest in {
+    val touched = EphemeryResolver.PropertyKeys
+    touched.foreach(System.clearProperty)
+    ConfigFactory.invalidateCaches()
+    def run(extra: String): Unit =
+      val raw = ConfigFactory.parseString(
+        s"""fukuii.blockchains.network = "ephemery"
+           |fukuii.datadir = "$root"
+           |$extra
+           |""".stripMargin
+      )
+      EphemeryResolver.startup(deps(inside165), BundleSource.classpath, raw, () => ())
+    try
+      run("")
+      EphemeryResolver.pinnedJwtSecretPath shouldBe Some(root.resolve("jwt.hex").toString)
+      touched.foreach(System.clearProperty)
+      run("""fukuii.network.engine-api.jwt-secret-path = "/secrets/jwt.hex"""")
+      EphemeryResolver.pinnedJwtSecretPath shouldBe None
+    finally
+      touched.foreach(System.clearProperty)
+      ConfigFactory.invalidateCaches()
   }
 
   it should "read the operator's keys" taggedAs UnitTest in {

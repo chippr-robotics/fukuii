@@ -1048,21 +1048,28 @@ trait EngineApiBuilder extends Logger:
         "Not a post-merge chain with a live Engine API: p2p branch resolution keeps chain-weight fork choice"
       )
 
-  lazy val maybeEngineApiServer: Option[EngineApiHttpServer] =
+  /** The Engine API's authenticator, or `None` when the Engine API is off.
+    *
+    * Forced at the top of `StdNode.start()`, before anything binds, so a refused secret file stops the node there with
+    * one clear line (B-246). No path configured: `<datadir>/jwt.hex`, created on the first start as go-ethereum does,
+    * so a consensus client can be given the same file. A random in-memory secret would be one none can share. A path
+    * the Ephemery startup resolver pinned is created the same way; an operator's path is read and never created.
+    */
+  lazy val engineApiJwtAuthenticator: Option[JwtAuthenticator] =
     if engineApiConfig.enabled then
-      // No path configured: <datadir>/jwt.hex, created on first start as go-ethereum does (B-246), so a consensus
-      // client can be given the same file. A random in-memory secret would be one no consensus client can share.
-      val jwtAuth = JwtSecretFile.authenticator(
-        engineApiConfig.jwtSecretPath,
-        // set by `fukuii ephemery` when it pinned the path itself, because the operator set none
-        pathIsDefault = scala.util
-          .Try(instanceConfig.config.getBoolean("ephemery.active.jwt-secret-defaulted"))
-          .getOrElse(false),
-        instanceConfig.config.getString("datadir"),
-        new java.security.SecureRandom()
+      val pinned = com.chipprbots.ethereum.ephemery.EphemeryResolver.pinnedJwtSecretPath
+      Some(
+        JwtSecretFile.authenticator(
+          engineApiConfig.jwtSecretPath,
+          pathIsDefault = engineApiConfig.jwtSecretPath.isDefined && engineApiConfig.jwtSecretPath == pinned,
+          instanceConfig.config.getString("datadir"),
+          new java.security.SecureRandom()
+        )
       )
-      Some(new EngineApiHttpServer(engineApiController, jwtAuth, engineApiConfig))
     else None
+
+  lazy val maybeEngineApiServer: Option[EngineApiHttpServer] =
+    engineApiJwtAuthenticator.map(jwtAuth => new EngineApiHttpServer(engineApiController, jwtAuth, engineApiConfig))
 
 trait GraphQLServiceBuilder:
   self: BlockchainBuilder & BlockchainConfigBuilder & MiningBuilder & StorageBuilder & EthBlocksServiceBuilder &

@@ -44,8 +44,7 @@ row 3, 4 or 6).
 | `fukuii.blockchains.custom-chains-dir` | `<root>/releases/ephemery-N/chains` |
 | `fukuii.datadir` | `<root>/ephemery-N` |
 | `logging.logs-dir` | the value before selection (normally `<root>/logs`) |
-| `fukuii.network.engine-api.jwt-secret-path` | **only when the operator set none** (B-246): `<root>/jwt.hex`. An operator's value is left alone and no property is set |
-| `fukuii.ephemery.active.jwt-secret-defaulted` | `true`, set with the row above: the node created the path itself, so it creates the file (0600) and applies the strict checks, as for `<datadir>/jwt.hex`. An operator's path is read as before and is never created |
+| `fukuii.network.engine-api.jwt-secret-path` | **only when the operator set none** (B-246): `<root>/jwt.hex`. An operator's value is left alone and no property is set. The node learns it is the resolver's own path from `EphemeryResolver.pinnedJwtSecretPath`, a typed value, and creates the file there; an operator's path is never created |
 | `fukuii.ephemery.active.iteration` | `N` |
 | `fukuii.ephemery.active.reset-time` | epoch seconds |
 | `fukuii.ephemery.active.genesis-hash` | `0x…` |

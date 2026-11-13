@@ -1,8 +1,6 @@
 package com.chipprbots.ethereum.consensus.engine
 
 import java.nio.charset.StandardCharsets
-import java.nio.file.Files
-import java.nio.file.Paths
 import java.security.MessageDigest
 import java.time.Instant
 import javax.crypto.Mac
@@ -127,15 +125,10 @@ class JwtAuthenticator(secretHex: String) extends Logger:
 
 object JwtAuthenticator extends Logger:
 
-  /** Load JWT secret from a file path. The file should contain a 32-byte hex-encoded secret. */
-  def fromFile(path: String): JwtAuthenticator =
-    val secretHex = new String(Files.readAllBytes(Paths.get(path))).trim
-    if secretHex.replaceAll("^0x", "").length < 64 then
-      throw new IllegalArgumentException(
-        s"JWT secret must be at least 32 bytes (64 hex chars), got: ${secretHex.length}"
-      )
-    log.info(s"Loaded JWT secret from $path")
-    new JwtAuthenticator(secretHex)
+  /** Load the JWT secret from an operator's file: 64 hex characters, `0x` optional, never created or changed. See
+    * [[JwtSecretFile.loadExplicit]].
+    */
+  def fromFile(path: String): JwtAuthenticator = JwtSecretFile.loadExplicit(java.nio.file.Paths.get(path))
 
   /** Generate a random in-memory 32-byte JWT secret. For tests only: no consensus client can share it, so the node
     * never uses it (B-246; see [[JwtSecretFile]]).

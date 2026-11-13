@@ -180,7 +180,7 @@ class JwtSecretFileSpec extends AnyFlatSpec with Matchers with BeforeAndAfterEac
     Files.delete(pinned.getParent)
 
     val operators = dir.resolve("operators.hex")
-    a[java.nio.file.NoSuchFileException] should be thrownBy
+    an[IllegalStateException] should be thrownBy
       JwtSecretFile.authenticator(Some(operators.toString), false, dir.toString, new SecureRandom())
     Files.exists(operators) shouldBe false
   }
@@ -191,4 +191,84 @@ class JwtSecretFileSpec extends AnyFlatSpec with Matchers with BeforeAndAfterEac
     an[IllegalStateException] should be thrownBy
       JwtSecretFile.authenticator(Some(pinned.toString), true, dir.toString, new SecureRandom())
     Files.delete(pinned)
+  }
+
+  it should "never replace a file that appears while it creates one, and agree with every concurrent creator" taggedAs UnitTest in {
+    val path = dir.resolve("raced.hex")
+    val n = 8
+    val pool = java.util.concurrent.Executors.newFixedThreadPool(n)
+    val start = new java.util.concurrent.CountDownLatch(1)
+    try
+      val futures = (1 to n).map { _ =>
+        pool.submit(
+          new java.util.concurrent.Callable[String]:
+            override def call(): String =
+              start.await()
+              JwtSecretFile.loadOrCreateHex(path, new SecureRandom())
+        )
+      }
+      start.countDown()
+      val secrets = futures.map(_.get()).toSet
+      secrets should have size 1
+      secrets.head shouldBe Files.readString(path).trim
+    finally pool.shutdownNow()
+  }
+
+  it should "leave the bytes of a file that already exists exactly as they were" taggedAs UnitTest in {
+    val path = dir.resolve("jwt.hex")
+    write(path, "0x" + Good + "\n", "rw-------")
+    JwtSecretFile.loadOrCreateHex(path, new SecureRandom()) shouldBe Good
+    Files.readString(path) shouldBe "0x" + Good + "\n"
+  }
+
+  it should "refuse a symlink at the path, and write nothing through it" taggedAs UnitTest in {
+    val target = dir.resolve("real.hex")
+    val link = dir.resolve("jwt.hex")
+    Files.createSymbolicLink(link, target)
+    val e = the[IllegalStateException] thrownBy JwtSecretFile.loadOrCreate(link, new SecureRandom())
+    e.getMessage should include(link.toString)
+    e.getMessage should include("symbolic link")
+    Files.exists(target) shouldBe false
+    Files.delete(link)
+  }
+
+  it should "turn an I/O failure into the same refusal" taggedAs UnitTest in {
+    val file = dir.resolve("a-file")
+    Files.writeString(file, "x")
+    val e = the[IllegalStateException] thrownBy JwtSecretFile.loadOrCreate(file.resolve("jwt.hex"), new SecureRandom())
+    e.getMessage should include("jwt.hex")
+    Files.delete(file)
+  }
+
+  "an explicit jwt-secret-path" should "never be created, and a missing file is a clear refusal" taggedAs UnitTest in {
+    val missing = dir.resolve("missing.hex")
+    val e = the[IllegalStateException] thrownBy
+      JwtSecretFile.authenticator(Some(missing.toString), false, dir.toString, new SecureRandom())
+    e.getMessage should include(missing.toString)
+    e.getMessage should include("never created")
+    Files.exists(missing) shouldBe false
+  }
+
+  it should "take 64 hex characters, with an optional 0x and surrounding whitespace, and refuse anything else" taggedAs UnitTest in {
+    val path = dir.resolve("explicit.hex")
+    List(Good, "0x" + Good, "  " + Good + "\n\n").foreach { text =>
+      write(path, text, "rw-------")
+      JwtAuthenticator.fromFile(path.toString) shouldBe a[JwtAuthenticator]
+    }
+    List("", "abc", Good + "00", Good.dropRight(1) + "g").foreach { text =>
+      write(path, text, "rw-------")
+      val e = the[IllegalStateException] thrownBy JwtAuthenticator.fromFile(path.toString)
+      e.getMessage should include(path.toString)
+      e.getMessage should include("64 hex")
+      if text.length > 8 then (e.getMessage should not).include(text)
+    }
+  }
+
+  it should "only warn about a group- or world-readable file, and leave its permissions alone" taggedAs UnitTest in {
+    val path = dir.resolve("explicit.hex")
+    write(path, Good, "rw-r--r--")
+    val (_, messages) = logged(JwtAuthenticator.fromFile(path.toString))
+    perms(path) shouldBe "rw-r--r--"
+    messages.exists(m => m.contains(path.toString) && m.contains("readable")) shouldBe true
+    messages.foreach(m => (m should not).include(Good))
   }
