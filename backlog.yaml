@@ -2662,20 +2662,16 @@ items:
   - id: B-234
     title: "028 S4a: strict HTTPS release transport and tar reader"
     priority: P2
-    status: review
+    status: done
     area: ops
     size: M
     opened: 2026-11-12
+    closed: 2026-11-13
     refs: [B-227]
     links:
       prs: [1817]
       spec: specs/028-builtin-ephemery-hoodi
       branch: feat/028-s4a-transport
-    claim:
-      by: dev-node
-      agent: main
-      since: 2026-11-12T21:49:32Z
-      heartbeat: 2026-11-13T03:14:18Z
     notes: "2026-11-12 in-progress: implementer running (sonnet) in ~/work/e028-s4a"
   - id: B-235
     title: "028 S4b: Ephemery refresh after a reset, CL testnet dir, fetch-genesis.sh exec wrapper"
