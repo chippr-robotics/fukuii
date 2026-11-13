@@ -69,7 +69,7 @@ class JdkHttpsTransportSpec extends AnyFlatSpec with Matchers with BeforeAndAfte
 
   private val created = new ConcurrentLinkedQueue[JdkHttpsTransport]()
   private val okHits = new AtomicInteger(0)
-  private val stallInBody = new CountDownLatch(1)
+  @volatile private var stallInBody = new CountDownLatch(1)
   @volatile private var hopClock: TestClock = new TestClock(Now)
 
   private val keyPair =
@@ -211,8 +211,8 @@ class JdkHttpsTransportSpec extends AnyFlatSpec with Matchers with BeforeAndAfte
 
   override def afterAll(): Unit =
     release.countDown()
+    server.stop(0) // drops the stalled exchanges, so closing a client cannot wait on them
     created.asScala.foreach(_.close())
-    server.stop(0)
     pool.shutdownNow()
 
   private def transport(
@@ -337,10 +337,31 @@ class JdkHttpsTransportSpec extends AnyFlatSpec with Matchers with BeforeAndAfte
     UnitTest in {
       val t = transport(localhostOnly)
       get(t, "/ok").isRight shouldBe true // warm the connection, so the 3 s budget is spent in the body
+      stallInBody = new CountDownLatch(1)
       val r = failure(get(t, "/stall", deadline = Now.plusSeconds(3)))
       // the server only counts down after it has sent the headers and the first 10 bytes
       stallInBody.getCount shouldBe 0L
       r shouldBe TransportFailure.DeadlineExceeded
+    }
+
+  it should "return Io(interrupted) and keep the interrupt flag when the calling thread is interrupted in the body" taggedAs
+    UnitTest in {
+      val t = transport(localhostOnly)
+      get(t, "/ok").isRight shouldBe true
+      stallInBody = new CountDownLatch(1)
+      val result = new AtomicReference[Either[TransportFailure, FetchedBody]]()
+      val flag = new AtomicReference[java.lang.Boolean]()
+      val worker = new Thread(() =>
+        result.set(get(t, "/stall", deadline = Now.plusSeconds(60)))
+        flag.set(java.lang.Boolean.valueOf(Thread.currentThread().isInterrupted))
+      )
+      worker.start()
+      stallInBody.await(10, TimeUnit.SECONDS) shouldBe true // the worker is blocked reading the body
+      worker.interrupt()
+      worker.join(10000)
+      worker.isAlive shouldBe false
+      result.get().left.map(identity) shouldBe Left(TransportFailure.Io("interrupted"))
+      flag.get() shouldBe true
     }
 
   it should "map a timeout while waiting for the headers to DeadlineExceeded, never Io" taggedAs UnitTest in {
@@ -486,7 +507,7 @@ class JdkHttpsTransportSpec extends AnyFlatSpec with Matchers with BeforeAndAfte
 
   it should "build the production client with HTTP/1.1 and an explicit HTTPS endpoint check" taggedAs UnitTest in {
     val t = JdkHttpsTransport
-      .default(
+      .create(
         localhostOnly,
         "1",
         env = Map.empty,
@@ -504,19 +525,19 @@ class JdkHttpsTransportSpec extends AnyFlatSpec with Matchers with BeforeAndAfte
   it should "refuse to build when hostname verification is switched off by a system property" taggedAs UnitTest in {
     val key = "jdk.internal.httpclient.disableHostnameVerification"
     Seq("true", "", "1").foreach { v =>
-      val r = JdkHttpsTransport.default(SourcePolicy.DefaultGithub, "1", Map.empty, fixedClock, None, Map(key -> v).get)
+      val r = JdkHttpsTransport.create(SourcePolicy.DefaultGithub, "1", Map.empty, fixedClock, None, Map(key -> v).get)
       withClue(s"value '$v': ")(r.left.map(_.contains("hostname verification")) shouldBe Left(true))
     }
     // "false" is the JDK default and is fine
     val ok =
-      JdkHttpsTransport.default(SourcePolicy.DefaultGithub, "1", Map.empty, fixedClock, None, Map(key -> "false").get)
+      JdkHttpsTransport.create(SourcePolicy.DefaultGithub, "1", Map.empty, fixedClock, None, Map(key -> "false").get)
     ok.isRight shouldBe true
     ok.foreach(_.close())
   }
 
   it should "log the proxy source and whether a trust store is set, never the address or the path" taggedAs UnitTest in {
     val (r, logs) = withLog {
-      JdkHttpsTransport.default(
+      JdkHttpsTransport.create(
         SourcePolicy.DefaultGithub,
         "1",
         Map("HTTPS_PROXY" -> "http://proxy.hidden.example:3128"),
@@ -532,11 +553,11 @@ class JdkHttpsTransportSpec extends AnyFlatSpec with Matchers with BeforeAndAfte
     (text should not).include("hidden.example")
     (text should not).include("trust.jks")
     val (r2, logs2) =
-      withLog(JdkHttpsTransport.default(SourcePolicy.DefaultGithub, "1", Map.empty, fixedClock, None, _ => None))
+      withLog(JdkHttpsTransport.create(SourcePolicy.DefaultGithub, "1", Map.empty, fixedClock, None, _ => None))
     r2.foreach(_.close())
     logs2.mkString("\n") should (include("proxy: none").and(include("trust store: no")))
     val (r3, logs3) = withLog(
-      JdkHttpsTransport.default(
+      JdkHttpsTransport.create(
         SourcePolicy.DefaultGithub,
         "1",
         Map.empty,
@@ -598,7 +619,7 @@ class JdkHttpsTransportSpec extends AnyFlatSpec with Matchers with BeforeAndAfte
     acceptor.start()
     try
       val t = JdkHttpsTransport
-        .default(
+        .create(
           localhostOnly,
           "1",
           Map("HTTPS_PROXY" -> s"http://127.0.0.1:${proxy.getLocalPort}"),

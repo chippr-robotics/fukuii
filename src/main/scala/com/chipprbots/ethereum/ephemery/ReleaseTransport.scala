@@ -119,8 +119,18 @@ final class JdkHttpsTransport(
     "JdkHttpsTransport needs a client with Redirect.NEVER; it checks each hop itself"
   )
 
-  /** Releases the client's connections and selector thread (JDK 21+). */
-  def close(): Unit = client.close()
+  /** Releases the client's connections and selector thread. Waits up to 5 s for in-flight exchanges, then stops them:
+    * `HttpClient.close()` alone can wait indefinitely on an exchange that was abandoned mid-body.
+    */
+  def close(): Unit =
+    client.shutdown()
+    val done =
+      try client.awaitTermination(CloseWait)
+      catch
+        case _: InterruptedException =>
+          Thread.currentThread().interrupt()
+          false
+    if !done then client.shutdownNow()
 
   def get(
       url: URI,
@@ -134,7 +144,11 @@ final class JdkHttpsTransport(
       t
     }
     try hop(url, 0, maxBytes, deadline, accept, watchdog)
-    catch case NonFatal(e) => Left(classify(e))
+    catch
+      case e: Exception if isInterrupt(e) =>
+        Thread.currentThread().interrupt()
+        Left(TransportFailure.Io("interrupted"))
+      case NonFatal(e) => Left(classify(e))
     finally
       watchdog.shutdownNow()
       try watchdog.awaitTermination(1, TimeUnit.SECONDS)
@@ -175,13 +189,19 @@ final class JdkHttpsTransport(
         sendAndRead(builder.build(), left, redirects, maxBytes, deadline, accept, uri, watchdog)
     }
 
-  /** Gives up on a request: cancels it and closes a response that arrives anyway. */
+  /** Closes a response body. With the interrupt flag set, the JDK's close can fail to cancel the exchange, which leaves
+    * the connection open; so the flag is cleared for the close and then set again.
+    */
+  private def closeBody(body: InputStream): Unit =
+    val wasInterrupted = Thread.interrupted()
+    try Try(body.close())
+    finally if wasInterrupted then Thread.currentThread().interrupt()
+
+  /** Gives up on a request. `cancel(true)` cancels the JDK exchange, so a response that has not arrived is dropped by
+    * the client; the response body of a request that did complete is closed by the caller's own `finally`.
+    */
   private def abandon(future: java.util.concurrent.CompletableFuture[HttpResponse[InputStream]]): Unit =
     future.cancel(true)
-    future.whenComplete { (r, _) =>
-      if r != null then Try(r.body().close())
-      ()
-    }
     ()
 
   private def sendAndRead(
@@ -201,7 +221,7 @@ final class JdkHttpsTransport(
         case _: TimeoutException =>
           abandon(future)
           Left(TransportFailure.DeadlineExceeded)
-        case _: InterruptedException =>
+        case e: Exception if isInterrupt(e) =>
           Thread.currentThread().interrupt()
           abandon(future)
           Left(TransportFailure.Io("interrupted"))
@@ -212,7 +232,7 @@ final class JdkHttpsTransport(
       val body = resp.body()
       val status = resp.statusCode()
       if REDIRECTS.contains(status) then
-        Try(body.close())
+        closeBody(body)
         if redirects >= MaxRedirects then Left(TransportFailure.TooManyRedirects(MaxRedirects))
         else
           resp.headers().firstValue("Location").toScala match
@@ -222,16 +242,16 @@ final class JdkHttpsTransport(
                 case Left(_)     => Left(TransportFailure.BadRedirect("unparseable Location"))
                 case Right(next) => hop(next, redirects + 1, maxBytes, deadline, accept, watchdog)
       else if status != 200 then
-        Try(body.close())
+        closeBody(body)
         Left(TransportFailure.HttpStatus(status))
       else
         val encoding = resp.headers().firstValue("Content-Encoding").toScala.map(_.trim)
         val declared = resp.headers().firstValueAsLong("Content-Length")
         if encoding.exists(e => e.nonEmpty && !e.equalsIgnoreCase("identity")) then
-          Try(body.close())
+          closeBody(body)
           Left(TransportFailure.ContentEncoding(encoding.getOrElse("").take(32)))
         else if declared.isPresent && declared.getAsLong > maxBytes then
-          Try(body.close())
+          closeBody(body)
           Left(TransportFailure.BodyTooLarge(maxBytes))
         else
           readBody(
@@ -283,19 +303,33 @@ final class JdkHttpsTransport(
       else Right(FetchedBody(uri, status, out.toByteArray))
     catch
       case _: IOException if fired.get() => Left(TransportFailure.DeadlineExceeded)
-      case NonFatal(e)                   => Left(classify(e))
+      case e: Exception if isInterrupt(e) =>
+        Thread.currentThread().interrupt() // keep the flag for the caller
+        Left(TransportFailure.Io("interrupted"))
+      case NonFatal(e) => Left(classify(e))
     finally
       timer.cancel(false)
-      Try(body.close())
+      closeBody(body)
 
 object JdkHttpsTransport extends Logger:
   val MaxRedirects: Int = 5
   val ConnectTimeout: Duration = Duration.ofSeconds(10)
+  private val CloseWait: Duration = Duration.ofSeconds(5)
   val WatchdogThreadName: String = "release-transport-watchdog"
   private val REDIRECTS: Set[Int] = Set(301, 302, 303, 307, 308)
   private val HostnameVerificationProperty = "jdk.internal.httpclient.disableHostnameVerification"
 
   extension [A](o: java.util.Optional[A]) private def toScala: Option[A] = if o.isPresent then Some(o.get) else None
+
+  /** An `InterruptedException` or `InterruptedIOException` anywhere in the cause chain. Scala's `NonFatal` does not
+    * match `InterruptedException`, so interrupts are handled before it.
+    */
+  private def isInterrupt(e: Throwable): Boolean =
+    Iterator
+      .iterate(e)(_.getCause)
+      .takeWhile(_ != null)
+      .take(16)
+      .exists(t => t.isInstanceOf[InterruptedException] || t.isInstanceOf[java.io.InterruptedIOException])
 
   /** Maps an exception to a failure. Timeouts (including connect timeouts) are `DeadlineExceeded`; anything else is
     * `Io` with the root cause's class name only, because messages can echo a URL with its query.
@@ -309,17 +343,25 @@ object JdkHttpsTransport extends Logger:
     * identity check, and the proxy from the JDK's `https.proxyHost` properties or else from `HTTPS_PROXY` / `NO_PROXY`.
     * `Left` when the proxy variable is unusable (credentials, a scheme the JDK cannot speak) or when hostname
     * verification has been switched off by property.
-    *
-    * `sslContext` and `props` are parameters for tests; production passes neither (the JDK default context and the
-    * system properties).
     */
   def default(
       policy: SourcePolicy,
       version: String,
       env: Map[String, String] = sys.env,
-      clock: Clock = Clock.systemUTC(),
-      sslContext: Option[SSLContext] = None,
-      props: String => Option[String] = k => Option(System.getProperty(k))
+      clock: Clock = Clock.systemUTC()
+  ): Either[String, JdkHttpsTransport] =
+    create(policy, version, env, clock, None, k => Option(System.getProperty(k)))
+
+  /** [[default]] with the TLS context and the system-property reader injected. Visible to the package (tests) only, so
+    * no production caller can weaken the checks through it.
+    */
+  private[ephemery] def create(
+      policy: SourcePolicy,
+      version: String,
+      env: Map[String, String],
+      clock: Clock,
+      sslContext: Option[SSLContext],
+      props: String => Option[String]
   ): Either[String, JdkHttpsTransport] =
     if props(HostnameVerificationProperty).exists(_.trim.toLowerCase(Locale.ROOT) != "false") then
       Left(

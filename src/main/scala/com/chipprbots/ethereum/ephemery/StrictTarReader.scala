@@ -27,6 +27,8 @@ import java.util.zip.ZipException
 import scala.collection.mutable
 import scala.util.control.NonFatal
 
+import com.chipprbots.ethereum.utils.Logger
+
 /** The limits of [[StrictTarReader]]. The defaults are the spec 028 rules (R9); a caller never loosens them. Tests pass
   * smaller values to reach one rule at a time.
   */
@@ -57,10 +59,12 @@ object TarRefusal:
 final case class TarResult(el: Map[String, Array[Byte]], staged: Vector[String], entries: Int, bytes: Long)
 
 /** A strict streaming `.tar.gz` reader (spec 028 R9). It accepts regular files, directories and GNU long names, and
-  * refuses everything else, naming the entry. Counts are of bytes actually read. On a refusal, the stage may hold
-  * partial files: the caller deletes the stage directory.
+  * refuses everything else, naming the entry. Counts are of bytes actually read. On a refusal or any exception, `read`
+  * deletes what it wrote into the stage (best effort, links not followed) and leaves the stage directory itself. If
+  * something could not be deleted, the refusal says "stage not fully cleaned" and a WARN names the stage path; the
+  * caller still owns the stage directory and should remove it.
   */
-object StrictTarReader:
+object StrictTarReader extends Logger:
 
   private val Block = 512
   private val FilePerms = PosixFilePermissions.fromString("rw-r--r--")
@@ -86,6 +90,7 @@ object StrictTarReader:
     val counted = new CountingInputStream(in)
     var started = false
     var succeeded = false
+    var handled = false
     try
       val result =
         try
@@ -104,25 +109,43 @@ object StrictTarReader:
           // InvalidPathException, UnsupportedOperationException from the POSIX calls, and the like
           case NonFatal(e) => Left(TarRefusal(None, s"cannot write the entry (${e.getClass.getName})"))
       succeeded = result.isRight
-      result
+      val out =
+        if started && !succeeded && !cleanStage(stage) then
+          result.left.map(r => r.copy(rule = s"${r.rule}; stage not fully cleaned"))
+        else result
+      handled = true
+      out
     finally
-      // a refusal, or any exception, leaves the stage as it was found: empty
-      if started && !succeeded then cleanStage(stage)
+      // only a fatal error gets here unhandled: still try to leave the stage empty
+      if started && !handled then cleanStage(stage)
 
-  /** Deletes everything under `stage` without following links; the stage itself stays. Best effort, never throws. */
-  private def cleanStage(stage: Path): Unit =
+  /** Deletes everything under `stage` without following links; the stage itself stays. Best effort: a delete that fails
+    * does not stop the rest. Returns whether the stage is empty afterwards; if not, logs a WARN naming the stage path
+    * (never file contents).
+    */
+  private def cleanStage(stage: Path): Boolean =
     try
       Files.walkFileTree(
         stage,
         new SimpleFileVisitor[Path]:
           override def visitFile(f: Path, a: BasicFileAttributes): FileVisitResult =
-            Files.delete(f) // a symlink is deleted as a link: walkFileTree does not follow links by default
+            // a symlink is deleted as a link: walkFileTree does not follow links by default
+            try Files.delete(f)
+            catch case NonFatal(_) => ()
             FileVisitResult.CONTINUE
+          override def visitFileFailed(f: Path, e: IOException): FileVisitResult = FileVisitResult.CONTINUE
           override def postVisitDirectory(d: Path, e: IOException): FileVisitResult =
-            if d != stage then Files.delete(d)
+            if d != stage then
+              try Files.delete(d)
+              catch case NonFatal(_) => ()
             FileVisitResult.CONTINUE
       )
     catch case NonFatal(_) => ()
+    val empty =
+      try isEmptyDir(stage)
+      catch case NonFatal(_) => false
+    if !empty then log.warn(s"could not fully clean the stage directory $stage; remove it by hand")
+    empty
 
   private def isEmptyDir(dir: Path): Boolean =
     val s = Files.list(dir)
