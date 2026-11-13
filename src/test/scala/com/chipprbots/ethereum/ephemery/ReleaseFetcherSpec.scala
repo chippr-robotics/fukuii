@@ -203,7 +203,6 @@ class ReleaseFetcherSpec extends AnyFlatSpec with Matchers with BeforeAndAfterEa
       c.deadline.isAfter(c.at) shouldBe true
       c.deadline.isAfter(start.plus(Budget)) shouldBe false
     }
-    t.calls.map(_.deadline).distinct.size should be >= 1
   }
 
   it should "give each attempt a fresh absolute deadline, none past the budget" taggedAs UnitTest in {
@@ -211,8 +210,96 @@ class ReleaseFetcherSpec extends AnyFlatSpec with Matchers with BeforeAndAfterEa
     val start = clock.instant()
     refusal(fetcher(t).fetchCurrent(166, () => newStage()))
     t.calls should have size 3
-    t.calls.foreach(c => c.deadline.isAfter(start.plus(Budget)) shouldBe false)
+    // each deadline is min(end of the budget, the attempt's own start + budget / 2)
+    t.calls.foreach { c =>
+      val expected = List(start.plus(Budget), c.at.plus(Budget.dividedBy(2))).minBy(_.toEpochMilli)
+      c.deadline shouldBe expected
+    }
     t.calls.map(_.at).distinct should have size 3
+    t.calls.map(_.deadline).distinct should have size 3
+  }
+
+  it should "cap an attempt's deadline at the end of the budget when half a budget would pass it" taggedAs UnitTest in {
+    val short = Duration.ofSeconds(10)
+    val t = new FakeTransport(clock, cost = Duration.ofSeconds(1)).on(asset(166), Reply.status(500))
+    val start = clock.instant()
+    refusal(fetcher(t, budget = short).fetchCurrent(166, () => newStage()))
+    t.calls should have size 3
+    // attempts start at 0 s, 3 s and 8 s: the deadlines are 5 s, 8 s and (13 s capped to) 10 s
+    t.calls.map(c => Duration.between(start, c.deadline).getSeconds) shouldBe List(5L, 8L, 10L)
+  }
+
+  it should "not start an attempt with less than a second of budget left" taggedAs UnitTest in {
+    // 8.5 s used by the call; a 2 s wait ends at 10.5 s of 11 s: 0.5 s would be left for an attempt
+    val t = new FakeTransport(clock, cost = Duration.ofMillis(8500)).on(asset(166), Reply.status(500))
+    refusal(fetcher(t, budget = Duration.ofSeconds(11)).fetchCurrent(166, () => newStage()))
+    t.calls should have size 1
+    sleeper.waits shouldBe empty
+  }
+
+  it should "abort at once when the sleeper is interrupted, keeping the flag, and say so (69)" taggedAs UnitTest in {
+    val interrupting = new Sleeper:
+      override def sleep(d: Duration): Unit = Thread.currentThread().interrupt()
+    val t = new FakeTransport(clock).on(asset(166), Reply.status(503))
+    try
+      val x = refusal(
+        new ReleaseFetcher(t, clock, interrupting, new URI(Base), Budget).fetchCurrent(166, () => newStage())
+      )
+      x shouldBe a[ReleaseRefusal.Unreachable]
+      x.exitCode shouldBe 69
+      x.message should include("interrupted")
+      t.calls should have size 1
+      Thread.currentThread().isInterrupted shouldBe true
+    finally Thread.interrupted()
+  }
+
+  it should "abort when an attempt ends with the thread interrupted, without waiting" taggedAs UnitTest in {
+    var calls = 0
+    val self = new ReleaseTransport:
+      override def get(
+          url: URI,
+          maxBytes: Long,
+          deadline: Instant,
+          accept: Option[String]
+      ): Either[TransportFailure, FetchedBody] =
+        calls += 1
+        Thread.currentThread().interrupt()
+        Left(TransportFailure.Io("interrupted"))
+    try
+      refusal(fetcher(self).fetchCurrent(166, () => newStage())).message should include("interrupted")
+      calls shouldBe 1
+      sleeper.waits shouldBe empty
+      Thread.currentThread().isInterrupted shouldBe true
+    finally Thread.interrupted()
+  }
+
+  "Sleeper.real" should "return at once when interrupted, and keep the flag set" taggedAs UnitTest in {
+    Thread.currentThread().interrupt()
+    try
+      Sleeper.real.sleep(Duration.ofSeconds(60))
+      Thread.currentThread().isInterrupted shouldBe true
+    finally Thread.interrupted()
+  }
+
+  "fetchCurrent" should "treat a 404 from the API as permanent: a window mismatch, with no wait" taggedAs UnitTest in {
+    clock = new ManualClock(reset165.plus(interval).plusSeconds(60))
+    sleeper = new ManualSleeper(clock)
+    val t = new FakeTransport(clock).on(asset(166), archive166).on(ApiLatest, Reply.status(404))
+    val x = refusal(fetcher(t).fetchCurrent(166, () => newStage()))
+    x shouldBe a[ReleaseRefusal.WindowMismatch]
+    x.message should include("the API has no release")
+    t.calls.count(_.url == ApiLatest) shouldBe 1
+    sleeper.waits shouldBe empty
+  }
+
+  it should "name a wrong source when a mirror answers 404 every time" taggedAs UnitTest in {
+    val mirror = "https://mirror.example.org/eph"
+    val x = refusal(fetcher(new FakeTransport(clock), base = mirror).fetchCurrent(166, () => newStage()))
+    x shouldBe ReleaseRefusal.NotYetPublished(166, wrongSourcePossible = true)
+    x.exitCode shouldBe 69
+    x.message should include("fukuii.ephemery.source is wrong")
+    // GitHub keeps the plain wording
+    (refusal(fetcher(new FakeTransport(clock)).fetchCurrent(166, () => newStage())).message should not).include("wrong")
   }
 
   it should "not wait for a backoff that would end past the budget" taggedAs UnitTest in {

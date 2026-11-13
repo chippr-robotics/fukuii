@@ -78,7 +78,8 @@ RestartPreventExitStatus=78
 Exit 78 (`EX_CONFIG`) is permanent, so the unit must not restart on it; Docker's `--restart on-failure` cannot exclude
 it, so watch for 78 in the logs. Do not cap the retries. Set `fukuii.ephemery.exit-at-reset = false` to only log a WARN
 at the reset and keep running (for a run with no supervisor). Exit codes are 0 (a normal stop), 75 (the reset), 69 (the
-iteration has ended and the next cannot be had now), 78 (permanent refusal) and 1 (the existing configuration errors).
+iteration has ended and the next cannot be had now), 78 (permanent refusal) and 1 (the existing configuration errors, and
+unexpected or I/O failures, which a restart may clear).
 
 ## Refresh after a reset
 
@@ -95,13 +96,16 @@ is current, it does this inside one budget, `fukuii.ephemery.refresh-timeout` (d
    hash against the published one. The consensus-layer files go to `releases/ephemery-K/testnet/`, without
    `parsedBeaconState.json` and the encrypted `bootnode-keys/`.
 4. If the release's own window does not contain now (the interval changed), it asks the GitHub API for the latest
-   release once, and accepts that one if its window does. Otherwise it exits 69.
+   release once, and accepts that one if its window does. Otherwise it exits 69. A 404 for `ephemery-K` itself gets no
+   API fallback, by design: the release is simply not out yet.
 
 Each attempt is retried up to three times (2 s, then 4 s of backoff) for connection errors, timeouts, HTTP 5xx and 429,
 a 403 from the API (its rate limit), and a 404 (the release is not published yet). A refusal of the transport (a host
 off the allow-list, a non-https hop, too many redirects, a body over the cap) is permanent. A release that is not out
 yet exits **69**; one that fails validation, was published again with another genesis, or comes from a bad `source`
-exits **78**. A late release is normal: of the last eight, one came 3 h 42 m after the reset.
+exits **78**; a full disk, a held lock or an unexpected exception exits **1**, which a supervisor restarts. A mirror that answers 404 to every request looks the same as "not published yet", so the 69 message for a non-GitHub
+source says "or fukuii.ephemery.source is wrong (every request answered 404)": check the base URL and its
+`releases/download/ephemery-N/testnet-all.tar.gz` layout. A late release is normal: of the last eight, one came 3 h 42 m after the reset.
 
 The transport is https only, follows at most five redirects and checks every hop against an allow-list (`github.com`,
 `api.github.com`, `*.githubusercontent.com`), caps the body, and sends no credentials. No configuration key weakens
@@ -128,7 +132,8 @@ RestartPreventExitStatus=78
   `RestartPreventExitStatus`. Use it with no retry cap, and watch for exit status 78 in the logs or `docker inspect`:
   it means the operator must act. Kubernetes' `CrashLoopBackOff` backoff is fine as it is.
 - **Exit codes:** 75 the reset (restart refreshes), 69 not published or unreachable (restart later), 78 permanent (do
-  not restart), 1 and 2 the existing configuration and usage errors.
+  not restart), 1 an unexpected or I/O failure (a full disk, a held lock, an exception: restartable), and 2 a usage
+  error.
 
 ## The consensus client across a reset
 
@@ -144,6 +149,10 @@ PartOf=fukuii.service
 After=fukuii.service
 
 [Service]
+# wait for fukuii's Engine API port: it opens only after the startup resolver has chosen (and, after a reset, fetched)
+# the iteration and updated `current`, which `After=` alone does not wait for
+ExecStartPre=/bin/sh -c 'until nc -z 127.0.0.1 8551; do sleep 2; done'
+TimeoutStartSec=600
 ExecStart=/bin/sh -c 'ITER=$(basename "$(readlink /data/ephemery/current)"); \
   exec lighthouse bn --testnet-dir /data/ephemery/current/testnet \
     --datadir /data/ephemery-lighthouse/$ITER \
@@ -156,12 +165,17 @@ RestartSec=30
 WantedBy=fukuii.service
 ```
 
-`PartOf=fukuii.service` stops and restarts the consensus client whenever fukuii restarts, so it picks up the new
-`current`. The datadir named after `readlink /data/ephemery/current` (`ephemery-166`, ...) is empty for a new iteration,
-which is what a new chain needs. Order matters only in that fukuii must have updated `current` first: it does so
-before the node starts, and the unit's `After=` orders the companion behind it. (`/data/ephemery` stands for your
-`fukuii.datadir`.) The bundled iteration has no `testnet/` until you run `fukuii cli ephemery-fetch --release
-ephemery-N` once; every iteration fukuii fetches has it.
+`PartOf=fukuii.service` stops and restarts the consensus client whenever fukuii restarts. The `ExecStartPre` is what
+makes it pick up the new iteration: `After=` only waits for fukuii's JVM to be started, not for its startup resolver,
+which after a reset may spend up to the refresh budget (60 s by default) fetching the next iteration. Without the wait
+the companion could read the old `current` and start on the old iteration's `testnet/` and datadir. The Engine API port
+(8551 here; use your `fukuii.network.engine-api.port`, 8561 in the generated `ephemery-local.conf`) opens only once the
+node itself is starting, after `current` has been updated, and the old node has stopped before the new one starts, so
+the port cannot be the old node's. The datadir named after `readlink /data/ephemery/current` (`ephemery-166`, ...) is
+empty for a new iteration, which is what a new chain needs. (`/data/ephemery` stands for your `fukuii.datadir`.) The
+bundled iteration has no `testnet/` until you run `fukuii cli ephemery-fetch --release ephemery-N` once; every iteration
+fukuii fetches has it. If a `testnet/` is torn (a required file such as `genesis.ssz` is missing or empty), fukuii
+reports it as absent and the same command replaces it, keeping the torn one beside it as `.testnet-torn-<k>`.
 
 ## Paths that move at each reset
 
@@ -208,6 +222,14 @@ consensus-layer directory of the bundled iteration, or prepare the next iteratio
 There are no fukuii keys. The JVM properties `https.proxyHost`, `https.proxyPort` and `http.nonProxyHosts` apply; when
 they are unset, `HTTPS_PROXY` / `https_proxy` and `NO_PROXY` / `no_proxy` are read from the environment. A proxy URL
 with credentials, or a scheme the JDK cannot speak, is refused at start (exit 78) with the variable named.
+
+## Trying it without touching your own datadir
+
+A trial run of `fukuii ephemery` or `fukuii cli ephemery-fetch` writes under `fukuii.datadir` (default
+`~/.fukuii/ephemery`). The JVM takes its home from the account database, not from `$HOME`, so setting `HOME` does not
+move it. Use `JAVA_OPTS="-Duser.home=/scratch/home -Dlogging.logs-dir=/scratch/logs"` (or `-Dfukuii.datadir=...`). The
+launcher also appends one "Loading network configuration" line to the default network's log file before it reads those
+options (known, B-241); `fetch-genesis.sh` and `--out` runs write everything else under the `--out` directory.
 
 ## 1. Fetch the current iteration
 

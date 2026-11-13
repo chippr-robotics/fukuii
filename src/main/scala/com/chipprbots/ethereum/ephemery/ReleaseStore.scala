@@ -58,7 +58,10 @@ final class ReleaseStore(root: Path, clock: Clock, ops: FileOps = FileOps.Defaul
       StageSupport.writeDurable(stage.resolve(ReleaseEntry.MetadataFile), entry.metadata.toJson)
       // The consensus-layer directory moves into the new entry (a rename inside the root): the entry then appears with
       // it, or, when the entry is already there, `testnet` stays where it is for the caller to add with [[addTestnet]].
-      testnet.foreach(t => ops.move(t, stage.resolve("testnet")))
+      testnet.foreach { t =>
+        syncTree(t)
+        ops.move(t, stage.resolve("testnet"))
+      }
       StageSupport.syncDir(chains)
       StageSupport.syncDir(stage)
       val target = releaseDir(entry.iteration)
@@ -94,18 +97,46 @@ final class ReleaseStore(root: Path, clock: Clock, ops: FileOps = FileOps.Defaul
       .get
 
   /** Adds `testnet/` (the consensus-layer directory) to an existing entry, with one rename, if it has none. `true` when
-    * it was added, `false` when it was there already.
+    * it was added, `false` when a complete one was there already. A `testnet/` that is there but torn (a required file
+    * missing or empty: a copy that was cut off) is moved aside to `.testnet-torn-<k>` (kept, never deleted) and
+    * replaced by the staged one. The copy is forced to disk before the rename.
     */
   def addTestnet(iteration: Int, from: Path): Either[String, Boolean] =
     val entry = releaseDir(iteration)
     withStage { stage =>
+      val existing = entry.resolve("testnet")
+      val present = Files.exists(existing, LinkOption.NOFOLLOW_LINKS)
       if !Files.isDirectory(entry) then Left(s"$entry does not exist")
-      else if Files.exists(entry.resolve("testnet"), LinkOption.NOFOLLOW_LINKS) then Right(false)
+      else if present && complete(existing) then Right(false)
       else
         StageSupport.copyMembers(from, stage.resolve("testnet"))
-        ops.move(stage.resolve("testnet"), entry.resolve("testnet"))
+        syncTree(stage.resolve("testnet"))
+        if present then
+          Iterator
+            .from(1)
+            .map(k => entry.resolve(s".testnet-torn-$k"))
+            .find(p => !Files.exists(p, LinkOption.NOFOLLOW_LINKS))
+            .foreach(aside => ops.move(existing, aside))
+        ops.move(stage.resolve("testnet"), existing)
+        StageSupport.syncDir(entry)
         Right(true)
     }.left.map(_.message)
+
+  /** Forces every file and directory under `dir` to disk, where the file system allows it. */
+  private def syncTree(dir: Path): Unit =
+    val all = Files.walk(dir)
+    val paths =
+      try all.iterator().asScala.toList
+      finally all.close()
+    paths.foreach(p => if Files.isRegularFile(p, LinkOption.NOFOLLOW_LINKS) then syncFile(p))
+    paths.reverse.foreach(p => if Files.isDirectory(p, LinkOption.NOFOLLOW_LINKS) then StageSupport.syncDir(p))
+
+  private def syncFile(file: Path): Unit =
+    Try {
+      val channel = java.nio.channels.FileChannel.open(file, java.nio.file.StandardOpenOption.WRITE)
+      try channel.force(true)
+      finally channel.close()
+    }
 
   /** An empty directory under the root for a download or a copy, named `.stage-*` so a later start sweeps it if the run
     * dies. The caller removes it, or hands it to [[place]], which moves it. Not under the root's lock: a stage younger
@@ -225,12 +256,23 @@ final class ReleaseStore(root: Path, clock: Clock, ops: FileOps = FileOps.Defaul
     yield entry
     verified.map { entry =>
       val testnet = dir.resolve("testnet")
-      Held(entry, dir, Option.when(Files.isDirectory(testnet))(testnet))
+      // a torn `testnet/` is reported as absent, so the startup line says how to fetch it and `ephemery-fetch` repairs it
+      Held(entry, dir, Option.when(complete(testnet))(testnet))
     }
 
 object ReleaseStore:
 
   val StaticNodesFile: String = "static-nodes.json"
+
+  /** What a consensus client cannot start without: a `testnet/` that lacks one of these, or holds it empty, is torn. */
+  val RequiredClFiles: List[String] = List("config.yaml", "genesis.ssz", "deploy_block.txt")
+
+  /** `testnet/` is a directory holding every required file, non-empty. */
+  def complete(testnet: Path): Boolean =
+    Files.isDirectory(testnet, LinkOption.NOFOLLOW_LINKS) && RequiredClFiles.forall { n =>
+      val f = testnet.resolve(n)
+      Files.isRegularFile(f, LinkOption.NOFOLLOW_LINKS) && Try(Files.size(f) > 0).getOrElse(false)
+    }
 
   private val EntryName = Pattern.compile("ephemery-[0-9]+")
   private val DatadirName = Pattern.compile("ephemery-[0-9]{1,9}")

@@ -10,7 +10,7 @@ The codes follow sysexits(3). fukuii already uses 0, 1, 2 and 78 (`JvmFlagGuard.
 | **75** | `EX_TEMPFAIL` | **a running node reached its iteration's reset (FR-016)** | refreshes onto the next iteration |
 | **69** | `EX_UNAVAILABLE` | at startup, the iteration has ended and the next cannot be had now: `NotYetPublished`, `Unreachable` or `WindowMismatch` | succeeds once the release is out or the network is back |
 | **78** | `EX_CONFIG` | permanent: `CannotRepresent`, `Inconsistent`, `HashMismatch`, `Republished`, `Ended` (refresh off or local source exhausted), or `BadSource` | does not help; the operator must act |
-| 1 | – | the existing configuration and startup errors, unchanged | – |
+| 1 | – | the existing configuration and startup errors, unchanged; and an unexpected or I/O failure while fetching or storing a release (`CannotStore`: a full disk, a held lock, an exception) | restart may clear it |
 | 2 | – | a usage error in `ephemery-fetch` (as `CheckpointCli`) | – |
 
 **Recommended supervisor** (from the runbook, sized in research.md R12):

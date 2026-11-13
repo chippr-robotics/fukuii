@@ -57,7 +57,9 @@ class ReleaseStoreSpec extends AnyFlatSpec with Matchers with BeforeAndAfterEach
   private def testnetStage(): Path =
     val dir = store().newStageDir()
     write(dir.resolve("config.yaml"), "PRESET_BASE: mainnet\n")
-    write(dir.resolve("sub/genesis.ssz"), "ssz")
+    write(dir.resolve("genesis.ssz"), "ssz")
+    write(dir.resolve("deploy_block.txt"), "0\n")
+    write(dir.resolve("sub/extra"), "x")
     dir
 
   "place with a testnet directory" should "move it into the new entry, so the entry appears with it" taggedAs UnitTest in {
@@ -67,7 +69,7 @@ class ReleaseStoreSpec extends AnyFlatSpec with Matchers with BeforeAndAfterEach
     val dir = root.resolve("releases/ephemery-165")
     names(dir) shouldBe List("chains", "release.json", "testnet")
     read(dir.resolve("testnet/config.yaml")) shouldBe "PRESET_BASE: mainnet\n"
-    read(dir.resolve("testnet/sub/genesis.ssz")) shouldBe "ssz"
+    read(dir.resolve("testnet/sub/extra")) shouldBe "x"
     Files.exists(stage) shouldBe false
     store().list().entries.map(_.testnetDir.isDefined) shouldBe List(true)
   }
@@ -151,13 +153,14 @@ class ReleaseStoreSpec extends AnyFlatSpec with Matchers with BeforeAndAfterEach
 
   "addTestnet" should "stage a testnet/ and rename it into an existing entry, once" taggedAs UnitTest in {
     store().place(entry165) shouldBe Right(Placed)
-    store().addTestnet(165, releaseDir(165)) shouldBe Right(true)
+    val cl = completeClDir()
+    store().addTestnet(165, cl) shouldBe Right(true)
     val dir = root.resolve("releases/ephemery-165")
     names(dir) shouldBe List("chains", "release.json", "testnet")
     read(dir.resolve("testnet/retention.vars")) shouldBe read(releaseDir(165).resolve("retention.vars"))
     // a second call finds it there and changes nothing
     write(dir.resolve("testnet/marker"), "kept")
-    store().addTestnet(165, releaseDir(165)) shouldBe Right(false)
+    store().addTestnet(165, cl) shouldBe Right(false)
     read(dir.resolve("testnet/marker")) shouldBe "kept"
     stages shouldBe Nil
   }
@@ -165,6 +168,21 @@ class ReleaseStoreSpec extends AnyFlatSpec with Matchers with BeforeAndAfterEach
   it should "refuse an entry that is not there" taggedAs UnitTest in {
     store().addTestnet(165, releaseDir(165)).isLeft shouldBe true
     Files.exists(root.resolve("releases/ephemery-165")) shouldBe false
+    stages shouldBe Nil
+  }
+
+  it should "repair a torn testnet/ (a required CL file missing or empty) through a stage, keeping the old one aside" taggedAs UnitTest in {
+    store().place(entry165) shouldBe Right(Placed)
+    val dir = root.resolve("releases/ephemery-165")
+    write(dir.resolve("testnet/config.yaml"), "PRESET_BASE: mainnet\n")
+    write(dir.resolve("testnet/genesis.ssz"), "") // empty: torn
+    store().list().entries.head.testnetDir shouldBe None
+    store().addTestnet(165, completeClDir()) shouldBe Right(true)
+    read(dir.resolve("testnet/genesis.ssz")) shouldBe "content of genesis.ssz"
+    store().list().entries.head.testnetDir shouldBe Some(dir.resolve("testnet"))
+    // the torn one is kept, never deleted
+    names(dir).filter(_.startsWith(".testnet-torn-")) shouldBe List(".testnet-torn-1")
+    read(dir.resolve(".testnet-torn-1/config.yaml")) shouldBe "PRESET_BASE: mainnet\n"
     stages shouldBe Nil
   }
 
@@ -195,7 +213,7 @@ class ReleaseStoreSpec extends AnyFlatSpec with Matchers with BeforeAndAfterEach
   it should "report where an entry's testnet/ is when it has one" taggedAs UnitTest in {
     store().place(entry165) shouldBe Right(Placed)
     store().list().entries.head.testnetDir shouldBe None
-    store().addTestnet(165, releaseDir(165)) shouldBe Right(true)
+    store().addTestnet(165, completeClDir()) shouldBe Right(true)
     store().list().entries.head.testnetDir shouldBe Some(root.resolve("releases/ephemery-165/testnet"))
   }
 

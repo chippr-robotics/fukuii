@@ -21,6 +21,18 @@ object EphemeryTestInputs:
       StandardCharsets.UTF_8
     )
 
+  /** A new temporary directory holding the release's members and the three CL files a complete `testnet/` needs. */
+  def completeClDir(iteration: Int = 165): Path =
+    val dir = Files.createTempDirectory("eph-cl")
+    val src = releaseDir(iteration)
+    val list = Files.list(src)
+    try list.forEach(f => Files.copy(f, dir.resolve(f.getFileName.toString)))
+    finally list.close()
+    List("config.yaml", "genesis.ssz", "deploy_block.txt").foreach(n =>
+      Files.write(dir.resolve(n), s"content of $n".getBytes(StandardCharsets.UTF_8))
+    )
+    dir
+
   def raw(iteration: Int): ReleaseInputs =
     ReleaseInputs.fromDir(releaseDir(iteration)).fold(r => throw new AssertionError(r.message), identity)
 

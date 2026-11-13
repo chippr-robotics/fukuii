@@ -244,9 +244,11 @@ object EphemeryFetchCli:
         got =>
           args.release.filter(_ != got.release.release) match
             case Some(asked) =>
+              // a directory the operator named that holds another release is a usage error; an archive that holds another
+              // release than its tag is the publisher's inconsistency
               refuse(
-                ReleaseRefusal.ExitConfig,
-                s"--release $asked disagrees with the release fetched, which is ${got.release.release}"
+                if got.staged then ReleaseRefusal.ExitConfig else ExitUsage,
+                s"--release $asked disagrees with the release ${if got.staged then "fetched" else "in --from-dir"}, which is ${got.release.release}"
               )
             case None =>
               args.out match

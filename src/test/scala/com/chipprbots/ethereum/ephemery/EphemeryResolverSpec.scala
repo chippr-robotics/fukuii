@@ -173,7 +173,7 @@ class EphemeryResolverSpec extends AnyFlatSpec with Matchers with BeforeAndAfter
 
   it should "name the CL directory when the entry has one, and say from cache for a placed entry" taggedAs UnitTest in {
     resolve(inside165)
-    store().addTestnet(165, releaseDir(165)) shouldBe Right(true)
+    store().addTestnet(165, completeClDir()) shouldBe Right(true)
     val r = resolve(inside165)
     managed(r).origin shouldBe Origin.Cache
     texts(r, Level.Info).exists(l =>
@@ -498,6 +498,31 @@ class EphemeryResolverSpec extends AnyFlatSpec with Matchers with BeforeAndAfter
     w.transport.closed shouldBe 1
     Files.exists(root.resolve("ephemery-166")) shouldBe false
     Files.exists(root.resolve("releases/ephemery-166")) shouldBe false
+  }
+
+  it should "map a republished iteration to exit 78" taggedAs UnitTest in {
+    // the server publishes, under the target's tag, a variant of 165 (another genesis): the cached 165 is the bundle's
+    val w = new Wiring(afterReset)
+    val variant = SyntheticRelease.variant(raw(165))
+    w.transport.on(EphemeryUrls.asset(166), Reply.Body(SyntheticRelease.archive(variant)))
+    val x = refusal(EphemeryResolver.resolve(fetchSettings(), w.deps, BundleSource.classpath))
+    x shouldBe a[ReleaseRefusal.Republished]
+    x.exitCode shouldBe 78
+  }
+
+  it should "exit 1, a restartable code, on an unexpected failure while fetching, not 78" taggedAs UnitTest in {
+    val boom = new ReleaseTransport:
+      override def get(
+          url: java.net.URI,
+          maxBytes: Long,
+          deadline: Instant,
+          accept: Option[String]
+      ): Either[TransportFailure, FetchedBody] = throw new IllegalStateException("disk exploded")
+    val deps = StartupDeps(new ManualClock(afterReset), boom, _ => ())
+    val x = refusal(EphemeryResolver.resolve(fetchSettings(), deps, BundleSource.classpath))
+    x shouldBe a[ReleaseRefusal.CannotStore]
+    x.exitCode shouldBe 1
+    ReleaseRefusal.CannotStore("x").exitCode shouldBe 1
   }
 
   it should "refuse with 69 when the source is unreachable" taggedAs UnitTest in {

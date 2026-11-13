@@ -48,7 +48,8 @@ final class ReleaseFetcher(
 
   /** The release whose window contains now, starting from the target `target` (R7): the asset of `target`, and, if its
     * window does not contain now, the one API call that names the latest release. Refused with
-    * [[ReleaseRefusal.WindowMismatch]] (69) when neither does.
+    * [[ReleaseRefusal.WindowMismatch]] (69) when neither does. A 404 on the computed target gets no API fallback, by
+    * design: the release is not out yet (the usual case), and the fallback is for a target whose own window is wrong.
     *
     * @param newStage
     *   makes an empty directory for one archive; this may be called twice
@@ -73,8 +74,11 @@ final class ReleaseFetcher(
           latest(first.release, window, newStage, known, overall)
     yield current
 
-  /** The named release, whatever its window: the operator asked for it. */
-  def fetchExact(
+  /** The named release, whatever its window: the operator asked for it. Only `ephemery-fetch --release` uses it; the
+    * node's startup must go through [[fetchCurrent]], which checks the window, so this is not visible outside the
+    * package.
+    */
+  private[ephemery] def fetchExact(
       iteration: Int,
       newStage: () => Path,
       known: Int => Option[String] = _ => None
@@ -149,7 +153,15 @@ final class ReleaseFetcher(
       overall: Instant
   ): Either[ReleaseRefusal, Fetched] =
     val url = new URI(s"$root/releases/download/$tag/testnet-all.tar.gz")
-    get(url, MaxArchiveBytes, None, overall, isApi = false, notFound = ReleaseRefusal.NotYetPublished(iteration))
+    get(
+      url,
+      MaxArchiveBytes,
+      None,
+      overall,
+      isApi = false,
+      // a mirror has no API to cross-check with: a mistyped source looks exactly like "not published yet"
+      notFound = ReleaseRefusal.NotYetPublished(iteration, wrongSourcePossible = apiLatest.isEmpty)
+    )
       .flatMap(body => unpack(body, tag, newStage(), known))
 
   private def unpack(
@@ -191,6 +203,7 @@ final class ReleaseFetcher(
       notFound: => ReleaseRefusal
   ): Either[ReleaseRefusal, FetchedBody] =
     var attempt = 1
+    var interrupted = false
     var outcome: Option[Either[TransportFailure, FetchedBody]] = None
     while outcome.isEmpty do
       val now = clock.instant()
@@ -198,15 +211,27 @@ final class ReleaseFetcher(
       transport.get(url, maxBytes, deadline, accept) match
         case ok @ Right(_) => outcome = Some(ok)
         case Left(failure) =>
-          if !retryable(failure, isApi) || attempt >= Attempts then outcome = Some(Left(failure))
+          if Thread.currentThread().isInterrupted then
+            interrupted = true
+            outcome = Some(Left(failure))
+          else if !retryable(failure, isApi) || attempt >= Attempts then outcome = Some(Left(failure))
           else
             val wait = Backoffs(attempt - 1)
-            // the next attempt must still start inside the budget: a wait that would end past it is not taken
-            if clock.instant().plus(wait).isBefore(overall) then
+            // the next attempt must still start inside the budget, with time to do something: a wait that would leave
+            // less than MinAttempt is not taken
+            if clock.instant().plus(wait).plus(MinAttempt).isBefore(overall) then
               sleeper.sleep(wait)
-              attempt += 1
+              if Thread.currentThread().isInterrupted then
+                interrupted = true
+                outcome = Some(Left(failure))
+              else attempt += 1
             else outcome = Some(Left(failure))
-    outcome.get.left.map(f => refusalOf(f, url, attempt, isApi, notFound))
+    if interrupted then
+      // the flag stays set for whoever interrupted: the process is being stopped
+      Left(
+        ReleaseRefusal.Unreachable(s"interrupted while fetching from ${Option(url.getHost).getOrElse("the source")}")
+      )
+    else outcome.get.left.map(f => refusalOf(f, url, attempt, isApi, notFound))
 
   private def refusalOf(
       failure: TransportFailure,
@@ -217,7 +242,8 @@ final class ReleaseFetcher(
   ): ReleaseRefusal =
     val host = Option(url.getHost).getOrElse("the source")
     failure match
-      case TransportFailure.HttpStatus(404) if !isApi => notFound
+      // the API's 404 is permanent (see `retryable`), so it is reported at once; an asset's only after the retries
+      case TransportFailure.HttpStatus(404) => notFound
       case f if retryable(f, isApi) =>
         ReleaseRefusal.Unreachable(s"$host: ${f.message} (after $attempts attempt${if attempts == 1 then "" else "s"})")
       case f => ReleaseRefusal.BadSource(s"$host: ${f.message}")
@@ -225,7 +251,7 @@ final class ReleaseFetcher(
   private def retryable(failure: TransportFailure, isApi: Boolean): Boolean = failure match
     case TransportFailure.Io(_) | TransportFailure.DeadlineExceeded => true
     case TransportFailure.HttpStatus(code) =>
-      code >= 500 || code == 429 || code == 404 || (code == 403 && isApi)
+      code >= 500 || code == 429 || (code == 404 && !isApi) || (code == 403 && isApi)
     case _ => false
 
   private def earlier(a: Instant, b: Instant): Instant = if a.isBefore(b) then a else b
@@ -255,6 +281,9 @@ object ReleaseFetcher:
 
   /** A release archive is about 8 MB; the reader's own cap on the compressed stream is the same. */
   val MaxArchiveBytes: Long = TarLimits().maxCompressedBytes
+
+  /** The least budget worth starting another attempt with. */
+  val MinAttempt: Duration = Duration.ofSeconds(1)
 
   /** A release object of the GitHub API is a few KB. */
   val MaxApiBytes: Long = 1L << 20

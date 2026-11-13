@@ -65,17 +65,20 @@ usage_error() { echo "fetch-genesis: ERROR: $*" >&2; exit 2; }
 # Only --out is looked at here (to default it, and to place the command's log); every flag goes to the command as given.
 OUT=""
 HAVE_OUT=0
-prev=""
+want_value=0
 for arg in "$@"; do
+  if [[ "$want_value" == 1 ]]; then OUT="$arg"; HAVE_OUT=1; want_value=0; continue; fi
   case "$arg" in
     -h|--help) awk 'NR > 1 && /^#/ { sub(/^# ?/, ""); print; next } NR > 1 { exit }' "$0"; exit 0 ;;
     --out=*) OUT="${arg#--out=}"; HAVE_OUT=1 ;;
+    --out) want_value=1 ;;
   esac
-  if [[ "$prev" == "--out" ]]; then OUT="$arg"; HAVE_OUT=1; fi
-  prev="$arg"
 done
+[[ "$want_value" == 0 ]] || usage_error "--out needs a directory"
 if [[ "$HAVE_OUT" == 0 ]]; then
-  OUT="${FUKUII_EPHEMERY_DIR:-$HOME/.fukuii/ephemery-network}"
+  if [[ -n "${FUKUII_EPHEMERY_DIR:-}" ]]; then OUT="$FUKUII_EPHEMERY_DIR"
+  elif [[ -n "${HOME:-}" ]]; then OUT="$HOME/.fukuii/ephemery-network"
+  else usage_error "no --out, FUKUII_EPHEMERY_DIR is unset and HOME is empty: pass --out DIR"; fi
   set -- "$@" --out "$OUT"
 fi
 
@@ -90,5 +93,6 @@ fi
 
 # The launcher initialises logging before it runs the command, and would append to the default network's node log:
 # this run's log goes under the output directory instead. (`exec` ends this shell, so there is no scratch directory to
-# clean up.) The command's own messages go to stderr; the release.env lines, to stdout.
+# clean up.) The command's own messages go to stderr; the release.env lines, to stdout. The staged launcher passes a
+# -D value that contains spaces as one argument (checked), so an --out with spaces works.
 exec "$FUKUII" -Dlogging.logs-dir="$OUT/logs" cli ephemery-fetch "$@"

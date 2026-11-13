@@ -412,7 +412,9 @@ object EphemeryResolver extends LazyLogger:
                 ReleaseEntry.of(f.release, f.sourceUrl, Some(f.archiveSha256), producedBy, deps.clock.instant())
               placeAndSelect(store, settings, entry, Some(f.stage), Origin.Fetched, now, lines)
         catch
-          case NonFatal(e) => refuse(ReleaseRefusal.CannotStore(s"cannot fetch into ${settings.root}: ${e.getMessage}"))
+          case NonFatal(e) =>
+            log.error(s"Ephemery: unexpected failure while fetching into ${settings.root}", e)
+            refuse(ReleaseRefusal.CannotStore(s"cannot fetch into ${settings.root}: ${e}"))
         finally
           transport match
             case c: AutoCloseable => Try(c.close())

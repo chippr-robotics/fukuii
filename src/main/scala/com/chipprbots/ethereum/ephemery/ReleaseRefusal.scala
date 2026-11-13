@@ -15,6 +15,9 @@ object ReleaseRefusal:
   /** `EX_UNAVAILABLE`: a later restart may succeed. */
   val ExitUnavailable: Int = 69
 
+  /** The process's ordinary failure code: unexpected or I/O trouble that a supervisor's restart may clear. */
+  val ExitFailure: Int = 1
+
   /** `EX_CONFIG`: the operator must act. */
   val ExitConfig: Int = 78
 
@@ -42,9 +45,13 @@ object ReleaseRefusal:
         s"old releases/ephemery-$iteration and ephemery-$iteration directories aside to use the new one"
 
   /** The next iteration is not published yet. */
-  final case class NotYetPublished(iteration: Int) extends ReleaseRefusal:
+  final case class NotYetPublished(iteration: Int, wrongSourcePossible: Boolean = false) extends ReleaseRefusal:
     val exitCode: Int = ExitUnavailable
-    def message: String = s"ephemery-$iteration is not published yet; a restart retries"
+    def message: String =
+      if wrongSourcePossible then
+        s"ephemery-$iteration is not published yet, or fukuii.ephemery.source is wrong (every request answered 404); " +
+          "a restart retries"
+      else s"ephemery-$iteration is not published yet; a restart retries"
 
   /** The release could not be fetched. The cause never carries a signed URL. */
   final case class Unreachable(cause: String) extends ReleaseRefusal:
@@ -66,7 +73,9 @@ object ReleaseRefusal:
     val exitCode: Int = ExitConfig
     def message: String = s"$detail; the source is not a usable Ephemery release"
 
-  /** The node's own Ephemery root cannot be written (a full disk, a permission): the operator must act. */
+  /** The node's own Ephemery root cannot be written (a full disk, a held lock, an I/O error) or something unexpected
+    * failed. Exit 1, not 78: such a fault may pass, and `RestartPreventExitStatus=78` would leave the node down.
+    */
   final case class CannotStore(detail: String) extends ReleaseRefusal:
-    val exitCode: Int = ExitConfig
+    val exitCode: Int = ExitFailure
     def message: String = s"cannot write the Ephemery root: $detail"

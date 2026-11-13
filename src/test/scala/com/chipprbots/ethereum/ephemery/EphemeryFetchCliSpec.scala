@@ -220,7 +220,7 @@ class EphemeryFetchCliSpec extends AnyFlatSpec with Matchers with BeforeAndAfter
     r.code shouldBe 78
     r.err should include("has no genesis.json")
     val wrong = run("--from-dir", raw165, "--out", tmp.resolve("out2").toString, "--release", "ephemery-164")
-    wrong.code shouldBe 78
+    wrong.code shouldBe 2 // a usage error: --release and --from-dir disagree
     wrong.err should include("--release ephemery-164 disagrees")
     run("--from-dir", tmp.resolve("missing").toString, "--out", tmp.resolve("out3").toString).code shouldBe 78
   }
