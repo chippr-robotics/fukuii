@@ -193,7 +193,11 @@ Read plan.md, "C2a part 1 record" and "C2a part 2 record", then:
   above it, never a failed import; `saveLastBlock` writes nothing on the unified layout. A new consumer of a
   batch's result must take the fault out before it judges a block (`BlockExecution.BatchOutcome.of`). The chain
   on the unified layout driven through the node's own consensus, with a second writer, is
-  `StateFaultInABatchSpec`.
+  `StateFaultInABatchSpec`. **Part 1 is built**: `HeadMovePlan.of` (pure) and `PathStateStorage.planMove`, with
+  the refusals `Deep`, `Incomplete`, `Pivot`, `Finalized` (number and hash) and `Corrupt`; `state.origin` in
+  AppState, written by the genesis commit; `CommitSettings.finalized` names a `FinalizedBlock`. Nothing calls
+  the plan yet. The specs' model of blocks that are only headers, records' headers and empty layers is
+  `PlannedMoves`. Part 2 is the move.
 - **C4a** brings back what C3b refuses: the overlay commit for a block that does not extend the anchor
   (`buildExtra(adopted)`, `NotExtendingAnchor`, `saveLastBlock` writing nothing),
   `stateAvailable(hash)`, the served-root window, and SNAP advertised again. C4b: the head move, `ConsensusStateFault`

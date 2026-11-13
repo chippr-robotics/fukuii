@@ -2301,6 +2301,85 @@ the real catch, as cases; test mode's parity; the reorganisation's answer after 
 not met as the code stands and is said so in the code and in B-242 (it must tell the settled prefix and the old
 branch's blocks when a branch is executed on layers, C4e).
 
+#### C4b part 1: the plan of a move, and why one is refused (2026-11-13)
+
+**What it is.** `HeadMovePlan.of(anchor, epoch, target, sources, limits)` says how the disk's state gets from the
+block it holds to another, and changes nothing: the blocks to reverse, newest first, by the headers of the
+anchor's own changeset records; the blocks to apply, oldest first, by the target's headers; the fork, which is the
+highest block the two chains name by one hash. It is given no index of blocks by number and no chain weight, so it
+can ask neither (T136's two cases of an index ahead of the anchor and behind it are met by what the plan is made
+from; the caller's `link`, built from headers by hash, is part 3's to test with a reader whose index throws). A
+block to apply is taken from its record where it has a complete one that leads from its parent, since a record is
+exact and needs no settling, and from its layer otherwise. `PathStateStorage.planMove(target, link)` makes it from
+what the store keeps, off the lock. Nothing calls it yet: the move is part 2.
+
+**Three answers.** `Planned`; `Refused(reason)`, which executing blocks again does not change; `NotHeld(heldTo)`,
+where a block on the way up has neither a record nor a layer and `heldTo` is the highest block a move could be made
+to as things are (the caller executes from there), or `None` where no fork was found at all (the target's headers
+do not lead here, or it lies further above the head than a move reaches: a sync's matter, not re-execution's).
+
+**The refusals, asked for each block to reverse in this order**, so that the answer does not depend on what happens
+to have been pruned:
+
+1. `Finalized`: the block is the finalized one, by number **and hash**. A block of another hash at that height is
+   not it: the head is then on a branch the consensus client left, and the way back is open (beacon: a number alone
+   would refuse that move, and `Finalized` is the one refusal that does not escalate, so the node would be stuck).
+2. `Pivot`: block 0, or a block at or below `state.origin`, the block this datadir's state began at (a new
+   AppState key, written by the genesis commit; SNAP finalization and checkpoint import write it with their anchor,
+   C5a and E.1, B-243). A datadir that does not say where its state began answers `Deep` there.
+3. `Deep` by policy: more blocks than `state.reorg.max-depth` allows. In the archive mode with `floor`, which keeps
+   every record, that is what one plan holds (65,536 blocks), unless a depth is configured.
+4. By the record: gone below `state.changeset.pruned-to` is `Deep` (the physical bound: what retention left, which
+   is not always what its formula says); gone at or above that mark, unreadable, or not its block's, is `Corrupt`,
+   a refusal of its own that is never said as `Deep`; a tombstone is `Incomplete`.
+
+A fork exactly at the finalized block, at the origin, or at the block below the lowest record is planned: that
+block is not reversed and its record is never read.
+
+**Recorded, with the slice that owns it.**
+- **A depth met above the finalized block is said as `Deep`** even when the fork would have lain below it: the walk
+  never came to it. With retention capped at 512 and more than that without finality, a head that breaks finality
+  would be escalated and followed. That a head descends from the finalized block is asked of its headers **before
+  a move is planned** (C4d, at the `forkchoiceUpdated`: `-38002`), and not inside a plan of the state (beacon).
+- **`Corrupt` fails closed** at the Engine API (C4d): SYNCING, no in-place writer goes on, ERROR, then the
+  escalation route; never INVALID, never as `Deep`.
+- **`NotHeld(None)` is SYNCING and a sync**, not re-execution (C4d, C4e).
+- `ReorgTooDeep` and `StateUnavailable` are thrown from these answers by the move (part 2), which also carries
+  `heldTo`.
+
+**The mutation run**: 44 mutants, all caught. One was missed at first (a genesis committed to a datadir that
+says where a state began) and got a case. The walk (a move to the anchor walked; a target's header of another
+block; a meeting block its header does not describe; the anchor's chain reversed whatever the target's height;
+the reverse set out of order; a parent given its child's state root); the bound above the head, on both sides of
+it; each refusal, its boundary and its place in the order (the finalized block reversed, taken by its number
+alone, not looked at, or asked after the depth; the origin and block 0; one block more than the policy; a record
+gone at the mark itself, where nothing was pruned, above the mark; a record of another number or state root; a
+tombstone taken for a record); the target's headers (under another hash, of another height); the sources (a
+layer preferred to a record; a record on another parent or another state; a layer on another parent; what is held
+said to end at the fork; a record written for a block that has one); the chunks; and the store (no origin written
+at genesis, or left behind when the state is destroyed; a plan without the finalized block, the policy, the mark
+or the origin; the depth taken without the finalized block; the bounds wrapping round; a plan given out though
+the state moved under it, or made again one time fewer; the archive's cap). Twenty-one of them were run before
+the reads' changes and not again, the code they break being unchanged.
+
+**Reads after code (forge, beacon): both APPROVE WITH CHANGES, nothing critical.** Verified by them in code: the
+fork and every parent named are right (each parent comes from a record and is held to its header at the next step
+or at the meeting point; a forward parent is held by hash and height); both walks end on hostile headers; with the
+guard off nothing changes (`commitGenesis` and the new key are reached only on the unified layout). Taken:
+- **The bound on the target's chain no longer overrides the refusals** (forge): it counted every header walked, so
+  a deep move answered "not held", which sends the caller to execute blocks again for nothing, and in the archive
+  mode capped a re-adoption at about a thousand blocks. It now bounds how far **above** the head a target lies;
+  below that each header walked is a block reversed.
+- **The finalized block by hash** (beacon), as above.
+- **A plan is made again if the state moved while it was made** (beacon): a commit prunes records and moves the
+  mark in one batch, and a walk that began before it would call the records corrupt. No answer is given out that
+  the epoch moved under; after a few tries, `NotHeld(None)`.
+- **A hard cap where nothing else bounds a reverse** (both), as above; a deep move in the archive mode that streams
+  its records is part 2's.
+- **Corruption on the forward side is said at ERROR** (forge): the block can still be applied from its layer or
+  executed again, and a record is then written over the bad one, so it is said where it is last seen.
+- The bounds are added without wrapping round; the detail of a chain that shares no block with this node's.
+
 ### Destructive change (C8a and C8b): the vault protocol blocks
 
 ```
