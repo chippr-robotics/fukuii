@@ -197,7 +197,12 @@ Read plan.md, "C2a part 1 record" and "C2a part 2 record", then:
   the refusals `Deep`, `Incomplete`, `Pivot`, `Finalized` (number and hash) and `Corrupt`; `state.origin` in
   AppState, written by the genesis commit; `CommitSettings.finalized` names a `FinalizedBlock`. Nothing calls
   the plan yet. The specs' model of blocks that are only headers, records' headers and empty layers is
-  `PlannedMoves`. Part 2 is the move.
+  `PlannedMoves`. **Part 2a is built**: `PathStateStorage.moveHead(target, link, extraFor)` and `MoveBatch` (a
+  batch built against the disk plus the batch so far, every step held to it before anything is written);
+  `promote` is that batch for one block; a commit waits for a move that is under way (`adopting`); a store that
+  failed its read-back gives out no state. The spec is `HeadMoveSpec`, whose oracle is a second chain that
+  commits the same blocks in place. Nothing in the node calls `moveHead` yet: part 2b is `BlockchainWriter`'s
+  rows, the bound by bytes and the pruning hold; part 3 the callers on the guard.
 - **C4a** brings back what C3b refuses: the overlay commit for a block that does not extend the anchor
   (`buildExtra(adopted)`, `NotExtendingAnchor`, `saveLastBlock` writing nothing),
   `stateAvailable(hash)`, the served-root window, and SNAP advertised again. C4b: the head move, `ConsensusStateFault`

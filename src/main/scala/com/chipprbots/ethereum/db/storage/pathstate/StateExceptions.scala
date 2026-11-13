@@ -32,9 +32,15 @@ final class StaleStateViewException(val block: BlockRef, val createdAtEpoch: Lon
   * @param askAgain
   *   the state is held, and is not handed out right now: as many readers as may are being served, and the one who asked
   *   asks again. Not so when the state is not held at all, which asking again does not change
+  * @param heldTo
+  *   from a move of the head that a block on the way has no state for: the highest block of the target's chain a move
+  *   could be made to as things are. The blocks above it are executed again, and the move asked for again
   */
-final class StateUnavailable(val reason: String, val askAgain: Boolean = false)
-    extends StateFault(s"State unavailable: $reason")
+final class StateUnavailable(
+    val reason: String,
+    val askAgain: Boolean = false,
+    val heldTo: Option[BlockRef] = None
+) extends StateFault(s"State unavailable: $reason")
 
 /** A view over forward layers met a node that is not the one its parent names, with the disk under it at rest: the
   * layers and the rows do not make up the state the view is of. It is no fault of a block and no stale read: reading

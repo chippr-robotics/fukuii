@@ -5,6 +5,7 @@ import java.util.concurrent.CountDownLatch
 import java.util.concurrent.Semaphore
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicReference
+import java.util.concurrent.locks.ReentrantLock
 
 import org.apache.pekko.util.ByteString
 
@@ -59,6 +60,22 @@ final class PathStateStorage(
 
   /** The lock of the in-place writers (data-model 7.0). */
   val lock: StateLock = new StateLock
+
+  /** One move of the head at a time, from its plan to its last batch; and no commit of a block in between two batches
+    * of it. A move of many blocks is a chain of batches, and the state lock is free between them: `moving` is what a
+    * writer that adopts a block looks at under the state lock, and this lock is what it then waits on, with the state
+    * lock let go ([[adopting]]). A move takes this one first and the state lock for each batch; nothing takes this one
+    * with the state lock held.
+    */
+  private val moves = new ReentrantLock(true)
+  @volatile private var moving = false
+  private val movesBegun = new java.util.concurrent.atomic.AtomicLong(0L)
+
+  /** Set when a row read back after a write was not the row written: the store wrote other bytes than it was given.
+    * Nothing is written in place after that, by a commit or by a move, until the node is started again and its state
+    * looked at (plan.md "C4b: the move core": it never rolls back onto such a store).
+    */
+  @volatile private var faulted: Option[String] = None
 
   /** The executed blocks whose state is on no row (data-model 6.1), within their bounds (6.4). Nothing in the node
     * makes one yet.
@@ -312,6 +329,7 @@ final class PathStateStorage(
     * promoted block's rows back out from under its own descendants: a wrong state, and no fault (beacon).
     */
   private[pathstate] def viewAfter(block: BlockRef, rested: () => Unit, triesLeft: Int = ViewTries): StateView =
+    refuseIfFaulted()
     val (epoch, held) = clock.awaitRest()
     rested()
     held match
@@ -369,6 +387,7 @@ final class PathStateStorage(
         s"A view of block ${block.show} cannot be made by the holder of the state lock " +
           s"('${lock.holder.getOrElse("?")}'): it may wait for records to be read"
       )
+    refuseIfFaulted()
     val (epoch, held) = clock.awaitRest()
     held match
       case None => throw new StateUnavailable(s"the state of block ${block.show} is not held: there is no state anchor")
@@ -648,10 +667,7 @@ final class PathStateStorage(
     // Read before the lock is asked for: nothing runs under it but this class and the data source (vault), and what
     // names the finalized block is not this class's.
     val finalized = settings.finalized().map(_.number)
-    val outcome = lock.locked(
-      s"canonical commit of block ${block.show}",
-      nanos => told("the wait for the state lock")(settings.observer.lockWaited(nanos))
-    ) {
+    val outcome = adopting(s"canonical commit of block ${block.show}") {
       // Every in-place writer holds this lock, so the clock is at rest and the anchor is the disk's.
       clock.anchor match
         case None =>
@@ -837,6 +853,7 @@ final class PathStateStorage(
           s"overlay commit of block ${block.show}",
           nanos => told("the wait for the state lock")(settings.observer.lockWaited(nanos))
         ) {
+          refuseIfFaulted()
           clock.anchor match
             case None =>
               throw new StateUnavailable(
@@ -929,10 +946,7 @@ final class PathStateStorage(
       require(other.dataSource eq dataSource, "a block and its state are written in one batch, to one data source")
     )
     val finalized = settings.finalized().map(_.number)
-    val outcome = lock.locked(
-      s"promotion of block ${block.show}",
-      nanos => told("the wait for the state lock")(settings.observer.lockWaited(nanos))
-    ) {
+    val outcome = adopting(s"promotion of block ${block.show}") {
       (clock.anchor, overlay.layerOf(block)) match
         case (None, _) =>
           throw new StateUnavailable(s"block ${block.show} cannot be committed: there is no state anchor")
@@ -948,30 +962,13 @@ final class PathStateStorage(
             s"block ${block.show} was executed on the state of ${layer.parent.show}, and the disk holds ${held.show}"
           )
         case (Some(held), Some(layer)) =>
-          layer.changesOver(position => rows.read(position).map(ByteString(_))) match
-            case Left(position) =>
-              overlay.drop(block.hash)
-              dropUnreachable(held)
-              throw new StateUnavailable(
-                s"the executed block ${block.show} was not built on the state the disk holds: it found another node " +
-                  s"at ${position.show} than the row there. It is dropped, and is executed again"
-              )
-            case Right(changes) =>
-              val finalised = StagedChanges.settle(
-                changes,
-                layer.resets,
-                owner => rows.storageRows(owner, maxOwnerRows, settings.maxOwnerScanBytes)
-              )
-              val diff =
-                try diffOf(finalised, held, block)
-                catch
-                  case fault: (IllegalStateException | IllegalArgumentException) =>
-                    overlay.drop(block.hash)
-                    dropUnreachable(held)
-                    throw fault
-              val applied = commitInPlace(finalised, diff, block, extra, finalized)
-              movedTo(held, block, applied)
-              applied
+          // a move of one block up, from its layer: the one batch of a head move, with nothing reversed
+          val step = HeadMovePlan.Forwarded(block, held, HeadMovePlan.Source.Layer(layer))
+          val wrote = writeChunk(HeadMovePlan.Chunk(held, block, Vector.empty, Vector(step)), extra, finalized)
+          val applied = CommitOutcome.Applied(wrote.commitOf(block))
+          movedTo(held, block, applied)
+          refuseIfFaulted()
+          applied
     }
     outcome match
       case CommitOutcome.Applied(commit) =>
@@ -979,6 +976,296 @@ final class PathStateStorage(
         overlayTold()
       case CommitOutcome.AlreadyApplied => ()
     outcome
+
+  /** `body`, as a writer that adopts a block: under the state lock, and not in between two batches of a move of the
+    * head. A writer that finds a move under way lets the state lock go, waits for the move to end, and asks again; one
+    * that finds none pays nothing for the asking, and waits where every writer waits, in the state lock's own queue.
+    * Nothing is written by a store that failed a check after a write.
+    */
+  @annotation.tailrec
+  private def adopting[A](holder: String)(body: StateLockHeld ?=> A): A =
+    val done: Option[A] =
+      lock.locked(holder, nanos => told("the wait for the state lock")(settings.observer.lockWaited(nanos))) {
+        if moving && !moves.isHeldByCurrentThread then None
+        else
+          refuseIfFaulted()
+          Some(body)
+      }
+    done match
+      case Some(result) => result
+      case None =>
+        moves.lock()
+        moves.unlock()
+        adopting(holder)(body)
+
+  /** A store that wrote other bytes than it was given takes no write and gives out no state: a block executed on it
+    * could be judged invalid, and that verdict is kept by whoever is told it (beacon).
+    */
+  private def refuseIfFaulted(): Unit =
+    faulted.foreach { why =>
+      throw new StateUnavailable(
+        s"this node's state takes no write and is not read: a row read back after a write was not the row written " +
+          s"($why). Start the node again"
+      )
+    }
+
+  /** Whether a move of the head is under way: from its plan to its last batch, the time between two batches included.
+    * The head then steps through blocks that are not the one the move ends on, and nothing should be built on them.
+    */
+  def moveInProgress: Boolean = moving
+
+  /** How many moves of the head have begun. Who builds on the head reads it before and after: [[moveInProgress]] seen
+    * as false says nothing of a move that began the moment after (forge).
+    */
+  def movesStarted: Long = movesBegun.get
+
+  /** '''Moves the head to `target`''': the disk's state becomes that block's, by the changeset records of the blocks
+    * that are reversed and by the records or the layers of the blocks that are applied (spec 018 data-model 7.3,
+    * plan.md "C4b: the move core").
+    *
+    * The move is planned from the anchor ([[planMove]]) and written as one batch, or as a chain of batches of at most
+    * `state.move.max-blocks-per-batch` blocks. Each batch holds the rows, the records of the blocks that had none, the
+    * anchor, and '''what the caller gives for it''': its index of blocks by number and its best-block pointer, so that
+    * after any batch, and after a crash between two, the anchor and the best block are one block, on the way from the
+    * old head down to the fork and up to the target.
+    *
+    * Before a batch is written every block of it is held to the disk as the batch so far leaves it, and the account
+    * trie's root to the state root of the block it ends on ([[MoveBatch]]). A move that fails that writes nothing of
+    * that batch; the batches before it stand.
+    *
+    * @param link
+    *   a block as its header gives it, by its hash ([[HeadMovePlan.Sources.link]])
+    * @param extraFor
+    *   the caller's rows for the batch that ends on a block. It is called with no lock of this store held but the one
+    *   that keeps other moves and commits out, once for each batch, and again if the move is planned again; what it
+    *   returns is written in that batch or not at all. For a target that is the head already it is called once, with a
+    *   batch that moves nothing. '''It must take no lock that a thread committing a block may hold''': that thread
+    *   waits for this move. And it must not move the head itself
+    * @throws IllegalStateException
+    *   when called from inside a move: by `extraFor`
+    * @throws ReorgTooDeep
+    *   when the move is refused: nothing was changed
+    * @throws StateUnavailable
+    *   when a block on the way up has neither record nor layer (`heldTo` says how far a move could be made), when the
+    *   target's chain does not lead to this node's state, or when a layer was found not to stand and was dropped
+    */
+  def moveHead(
+      target: BlockRef,
+      link: ByteString => Option[HeadMovePlan.Link],
+      extraFor: HeadMovePlan.Chunk => Option[DataSourceBatchUpdate]
+  ): MoveOutcome =
+    if moves.isHeldByCurrentThread then
+      throw new IllegalStateException(s"A move of the head to ${target.show} cannot start inside another")
+    // It may be long, and it waits: for a thread that may block (beacon).
+    moves.lock()
+    moving = true
+    movesBegun.incrementAndGet()
+    try
+      val outcome =
+        try move(target, link, extraFor, MoveReplans)
+        catch
+          case NonFatal(failed) =>
+            // A move that stopped part of the way kept the layers its later batches were to apply. Those of the
+            // blocks it did apply go now, as they would have at its end.
+            try lock.locked("the end of a move that failed")(clock.anchor.foreach(dropUnreachable))
+            catch case NonFatal(inCleanup) => failed.addSuppressed(inCleanup)
+            throw failed
+      outcome match
+        case moved: MoveOutcome.Moved => told(s"the move of the head to ${target.show}")(settings.observer.moved(moved))
+        case MoveOutcome.AlreadyThere => ()
+      overlayTold()
+      outcome
+    finally
+      moving = false
+      moves.unlock()
+
+  private def move(
+      target: BlockRef,
+      link: ByteString => Option[HeadMovePlan.Link],
+      extraFor: HeadMovePlan.Chunk => Option[DataSourceBatchUpdate],
+      replansLeft: Int
+  ): MoveOutcome =
+    val plan = planMove(target, link) match
+      case HeadMovePlan.Outcome.Planned(plan) => plan
+      case HeadMovePlan.Outcome.Refused(reason, detail) =>
+        told("a move that was refused")(settings.observer.moveRefused(reason))
+        throw new ReorgTooDeep(reason, s"to block ${target.show}: $detail")
+      case HeadMovePlan.Outcome.NotHeld(detail, heldTo) => throw new StateUnavailable(detail, heldTo = heldTo)
+    val finalized = settings.finalized().map(_.number)
+    val started = System.nanoTime()
+    val chunks =
+      if plan.isNoMove then Vector(HeadMovePlan.Chunk(plan.anchor, plan.anchor, Vector.empty, Vector.empty))
+      else plan.chunks(settings.maxBlocksPerMove)
+
+    // The batches from `at` on, written one after the other; `epoch` is the epoch the state must still be at.
+    @annotation.tailrec
+    def write(at: Int, epoch: Long): Boolean =
+      if at == chunks.size then true
+      else
+        val chunk = chunks(at)
+        // the caller's rows are asked for outside the state lock: what makes them reads the caller's own stores
+        val extra = extraFor(chunk)
+        extra.foreach(other =>
+          require(other.dataSource eq dataSource, "a move and its head are written in one batch, to one data source")
+        )
+        val next: Option[Long] = lock.locked(
+          s"head move to block ${chunk.head.show}",
+          nanos => told("the wait for the state lock")(settings.observer.lockWaited(nanos))
+        ) {
+          refuseIfFaulted()
+          val layersStand = chunk.forward.forall { step =>
+            step.source match
+              case HeadMovePlan.Source.Layer(layer) => overlay.layerOf(step.block).exists(_ eq layer)
+              case HeadMovePlan.Source.Record       => true
+          }
+          if !clock.anchor.contains(chunk.from) || clock.epoch != epoch || !layersStand then None
+          else if chunk.reverse.isEmpty && chunk.forward.isEmpty then
+            extra.foreach(_.commit())
+            Some(epoch)
+          else
+            val wrote = writeChunk(chunk, extra, finalized)
+            movedBy(chunk, wrote, last = at == chunks.size - 1)
+            // after what is kept in memory has followed the disk: a store that failed its check is not left with the
+            // window and the layers of another head
+            refuseIfFaulted()
+            Some(clock.epoch)
+        }
+        next match
+          case Some(epochNow)  => write(at + 1, epochNow)
+          case None if at == 0 => false
+          case None =>
+            throw new StateUnavailable(
+              s"the move of the head to ${target.show} stopped at ${chunk.from.show}: the state was moved by another " +
+                "writer between two batches of it",
+              askAgain = true
+            )
+
+    if write(0, plan.epoch) then
+      if plan.isNoMove then MoveOutcome.AlreadyThere
+      else
+        MoveOutcome.Moved(
+          from = plan.anchor,
+          to = target,
+          fork = plan.fork,
+          reversed = plan.reverse.size,
+          applied = plan.forward.size,
+          recorded = plan.newRecords.size,
+          batches = chunks.size,
+          nanos = System.nanoTime() - started
+        )
+    else if replansLeft > 0 then move(target, link, extraFor, replansLeft - 1)
+    else
+      throw new StateUnavailable(
+        s"no move of the head to ${target.show} could be made: the state, or an executed block of the plan, changed " +
+          "under every plan of it",
+        askAgain = true
+      )
+
+  /** Writes one batch of a head move, built against the disk as the batch so far leaves it ([[MoveBatch]]).
+    *
+    * A layer that does not stand is dropped, with what was built on it, and nothing is written. Retention prunes in a
+    * batch that only applies blocks, as the commit of a block does, and never a height the batch itself records; a
+    * batch that reverses a block prunes nothing: the records above the fork are what the way back is made of.
+    */
+  private def writeChunk(
+      chunk: HeadMovePlan.Chunk,
+      extra: Option[DataSourceBatchUpdate],
+      finalized: Option[BigInt]
+  )(using StateLockHeld): ChunkWritten =
+    require(chunk.reverse.nonEmpty || chunk.forward.nonEmpty, "a batch of a head move reverses or applies a block")
+    val batch = new MoveBatch(
+      position => rows.read(position).map(ByteString(_)),
+      (owner, maxRows, maxBytes) => rows.storageRows(owner, maxRows, maxBytes),
+      changesets.getUncached,
+      diffOf,
+      maxOwnerRows,
+      settings.maxOwnerScanBytes,
+      settings.maxRecordBytes
+    )
+    val built =
+      try
+        chunk.reverse.foreach(batch.reverse)
+        chunk.forward.foreach(batch.forward)
+        batch.result(chunk.head)
+      catch
+        case refused: MoveBatch.LayerRefused =>
+          overlay.drop(refused.block.hash)
+          dropUnreachable(chunk.from)
+          throw refused.cause
+        case corrupt: ReorgTooDeep =>
+          log.error(s"[STATE-MOVE] The move from ${chunk.from.show} to ${chunk.head.show} was not written: $corrupt")
+          throw corrupt
+
+    val (changesetUpdates, prunedHeights, prunedTo) = changesetIndexed(chunk.head) {
+      val pruned =
+        if chunk.reverse.isEmpty then pruning(chunk.forward.head.block.number, chunk.head.number, finalized)
+        else
+          // a block that was reversed had a record, so the count of pruned heights was begun
+          val reached = appState.getChangesetPrunedTo().getOrElse {
+            throw new IllegalStateException(
+              s"A block was reversed on the way to ${chunk.head.show} on a datadir that never recorded one"
+            )
+          }
+          Pruning(Nil, movedTo = None, reached = reached, heights = 0)
+      // The deletes come before the records: a batch applies its updates in order, and no delete may follow the write
+      // of a key it names.
+      val moved = pruned.movedTo.toSeq.flatMap(appState.putChangesetPrunedTo(_).updates)
+      (
+        pruned.deletes ++ built.records.flatMap(written => changesets.recordUpdates(written.record)) ++ moved,
+        pruned.heights,
+        pruned.reached
+      )
+    }
+    val updates: Seq[DataUpdate] =
+      extra.toSeq.flatMap(_.updates) ++ rows.rowUpdates(built.written) ++ changesetUpdates ++
+        appState.putStateAnchor(chunk.head).updates
+
+    val started = System.nanoTime()
+    // Nothing but the one write happens between the move's announcement and its end: a view asked for in there would
+    // wait for this thread.
+    clock.inFlight(StateMove(chunk.head, built.before))(dataSource.update(updates))
+    val nanos = System.nanoTime() - started
+
+    // A look at some of what was written. It cannot fail unless the store wrote other bytes than it was given, and
+    // then nothing more is written to it, and no state is given out: the caller says so once what is kept in memory
+    // has followed the disk.
+    built.written.iterator
+      .take(RowsReadBack)
+      .find((position, node) => rows.read(position).map(ByteString(_)) != node)
+      .foreach { (position, _) =>
+        val why = s"${position.show}, after the move to block ${chunk.head.show}"
+        faulted = Some(why)
+        log.error(
+          s"[STATE-MOVE] The row at $why is not the row that was written. This node's state takes no further write."
+        )
+      }
+
+    ChunkWritten(
+      positions = built.written.size,
+      stateBytes = built.written.iterator
+        .map((position, node) => position.rowKey.length.toLong + node.fold(0)(_.length))
+        .sum,
+      records = built.records,
+      prunedHeights = prunedHeights,
+      prunedTo = prunedTo,
+      nanos = nanos
+    )
+
+  /** The anchor has moved by `chunk`, whose batch has returned. The window of ancestors is of another anchor now, and
+    * is built again from the records when it is next needed; the indexes were of the old anchor; and, after the last
+    * batch of a move, the layers that were applied go, with every one nothing leads to any more. Only now: see
+    * [[movedTo]].
+    */
+  private def movedBy(chunk: HeadMovePlan.Chunk, wrote: ChunkWritten, last: Boolean)(using StateLockHeld): Unit =
+    (chunk.reverse, chunk.forward) match
+      case (Vector(), Vector(HeadMovePlan.Forwarded(block, parent, HeadMovePlan.Source.Layer(_)))) if last =>
+        movedTo(parent, block, CommitOutcome.Applied(wrote.commitOf(block)))
+      case _ =>
+        window.set(None)
+        indexes.clear()
+        // Not between two batches: a layer a later batch applies may stand on a block this one has not come to yet,
+        // and would be taken for one nothing leads to (beacon).
+        if last then dropUnreachable(chunk.head)
 
   /** Drops the forward layer of `blockHash`, if it has one, and the layers built on it: its execution was found not to
     * stand (data-model 7.2). Views that hold them go on reading them; no new view is made through them.
@@ -1080,10 +1367,17 @@ final class PathStateStorage(
     * height below it has a record.
     */
   private def pruning(block: BlockRef, finalized: Option[BigInt])(using StateLockHeld): Pruning =
+    pruning(block.number, block.number, finalized)
+
+  /** [[pruning]], in a batch that records the blocks from height `first` up to `head`. No height from `first` up is
+    * pruned in it: the index of a height is read from the disk, which does not hold what this batch writes there, and a
+    * record written and deleted in one batch would be left behind with nothing to name it (beacon).
+    */
+  private def pruning(first: BigInt, head: BigInt, finalized: Option[BigInt])(using StateLockHeld): Pruning =
     appState.getChangesetPrunedTo() match
-      case None => Pruning(Nil, movedTo = Some(block.number), reached = block.number, heights = 0)
+      case None => Pruning(Nil, movedTo = Some(first), reached = first, heights = 0)
       case Some(from) =>
-        settings.retention.floor(block.number, finalized) match
+        settings.retention.floor(head, finalized).map(_.min(first)) match
           case Some(floor) if floor > from =>
             val (deletes, next) = changesets.pruneUpdates(from, floor, settings.retention.heightsPerBatch(floor - from))
             Pruning(deletes, Option.when(next > from)(next), reached = next, heights = (next - from).toInt)
@@ -1104,6 +1398,12 @@ final class PathStateStorage(
 object PathStateStorage:
 
   private val MaxFaultsShown = 3
+
+  /** How often a move of the head is planned again because the state, or a layer of the plan, changed under it. */
+  private val MoveReplans = 3
+
+  /** How many of the rows a batch of a move wrote are read back after it. */
+  private val RowsReadBack = 64
 
   /** How often a view is made again because the disk moved between the look at the clock and the look at the layers. */
   private val ViewTries = 3
@@ -1233,6 +1533,8 @@ object PathStateStorage:
       // How many blocks back a view is made through the changeset records, how much one reverse index may hold, and
       // how much the indexes that are kept hold together.
       maxReverseHops: Int = 1024,
+      // How many blocks one batch of a move of the head reverses and applies (`state.move.max-blocks-per-batch`).
+      maxBlocksPerMove: Int = 256,
       // Policy: how many blocks a move of the head may reverse, given the anchor's number and the finalized block's
       // (`state.reorg.max-depth`). What can be reversed at all is decided by the records that are there.
       maxReorgDepth: (BigInt, Option[BigInt]) => Int = (_, _) => Int.MaxValue,
@@ -1268,6 +1570,7 @@ object PathStateStorage:
           case StateConfig.Mode.Archive => config.archiveViewReach
           case StateConfig.Mode.Basic   => config.retention.maxBlocks
         ,
+        maxBlocksPerMove = config.maxBlocksPerMoveBatch,
         // The archive mode keeps every record, so there the floor of retention is no bound: a depth that is
         // configured is, and otherwise what one plan holds.
         maxReorgDepth = (config.pruning.mode, config.reorgMaxDepth) match
@@ -1307,6 +1610,57 @@ object PathStateStorage:
       nanos: Long
   )
 
+  /** One batch of a head move, as it was written. */
+  final private[pathstate] case class ChunkWritten(
+      positions: Int,
+      stateBytes: Long,
+      records: Vector[MoveBatch.Recorded],
+      prunedHeights: Int,
+      prunedTo: BigInt,
+      nanos: Long
+  ):
+
+    /** The batch as the commit of `block`, which it applied from its layer and which was all it did. */
+    def commitOf(block: BlockRef): Commit =
+      val written = records.find(_.block == block)
+      Commit(
+        block = block,
+        positions = positions,
+        stateBytes = stateBytes,
+        recordBytes = written.fold(0L)(recorded => BlockDiffCodec.encodedLength(recorded.record)),
+        tombstone = written.flatMap(_.tombstone),
+        unlistedOwners = written.fold(Seq.empty[ByteString])(_.unlisted),
+        prunedHeights = prunedHeights,
+        prunedTo = prunedTo,
+        nanos = nanos
+      )
+
+  /** What came of a move of the head. */
+  enum MoveOutcome:
+
+    /** The disk holds `to`'s state.
+      *
+      * @param fork
+      *   the highest block the old head's chain and the new one's share
+      * @param recorded
+      *   the applied blocks that had no changeset record, and have one now
+      * @param batches
+      *   how many batches it was written as
+      */
+    case Moved(
+        from: BlockRef,
+        to: BlockRef,
+        fork: BlockRef,
+        reversed: Int,
+        applied: Int,
+        recorded: Int,
+        batches: Int,
+        nanos: Long
+    )
+
+    /** The target was the head already: the caller's own rows were written, and nothing else. */
+    case AlreadyThere
+
   enum CommitOutcome:
     /** The block's state is on disk, and the block is the anchor. */
     case Applied(commit: Commit)
@@ -1321,6 +1675,12 @@ object PathStateStorage:
     /** A writer waited `nanos` for the state lock. */
     def lockWaited(nanos: Long): Unit = ()
     def committed(commit: Commit): Unit = ()
+
+    /** The head was moved, by a move of more than the commit of one block. */
+    def moved(move: MoveOutcome.Moved): Unit = ()
+
+    /** A move of the head was refused. */
+    def moveRefused(reason: ReorgRefusal): Unit = ()
 
     /** What the overlay holds, after something of it changed. */
     def overlay(usage: OverlayUsage): Unit = ()
