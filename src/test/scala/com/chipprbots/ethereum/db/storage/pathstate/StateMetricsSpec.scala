@@ -36,7 +36,29 @@ class StateMetricsSpec extends AnyFlatSpec with Matchers:
       nanos = 5000000L
     )
 
-  "The state metrics" should "say which block the disk holds, what a commit wrote and what retention keeps" taggedAs UnitTest in {
+  "The state metrics" should "count a refused move of the head under its reason, every reason" taggedAs UnitTest in {
+    ReorgRefusal.values.foreach { reason =>
+      withClue(s"$reason: ") {
+        StateMetrics.moveRefused(reason)
+        val before = counter("db.state.reorg.refused", "reason", reason.toString)
+        StateMetrics.moveRefused(reason)
+        counter("db.state.reorg.refused", "reason", reason.toString) shouldBe before + 1
+      }
+    }
+    // and a move: the blocks it reversed and applied, how many batches, how long, and the block the disk then holds
+    val reversed = counter("db.state.move.blocks", "side", "reversed")
+    val applied = counter("db.state.move.blocks", "side", "applied")
+    val moves = registry.get(s"$prefix.db.state.move.seconds").timer().count()
+    StateMetrics.moved(
+      MoveOutcome.Moved(block(9, EmptyRoot), block(12, EmptyRoot), block(8, EmptyRoot), 1, 4, 4, 2, 7L)
+    )
+    counter("db.state.move.blocks", "side", "reversed") shouldBe reversed + 1
+    counter("db.state.move.blocks", "side", "applied") shouldBe applied + 4
+    registry.get(s"$prefix.db.state.move.seconds").timer().count() shouldBe moves + 1
+    gauge("db.state.anchor.number") shouldBe 12d
+  }
+
+  it should "say which block the disk holds, what a commit wrote and what retention keeps" taggedAs UnitTest in {
     val commits = registry.get(s"$prefix.db.state.commit.seconds").timer()
     val positions = registry.get(s"$prefix.db.state.commit.positions").summary()
     val bytes = registry.get(s"$prefix.db.state.commit.bytes").summary()

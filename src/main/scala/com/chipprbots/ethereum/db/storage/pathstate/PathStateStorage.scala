@@ -1060,16 +1060,24 @@ final class PathStateStorage(
     moves.lock()
     moving = true
     movesBegun.incrementAndGet()
+    // the layers of each plan, held against eviction until the move is over
+    val pin = new BranchPin(s"the move of the head to ${target.show}")
     try
       val outcome =
-        try move(target, link, extraFor, MoveReplans)
+        try move(target, link, extraFor, pin, MoveReplans)
         catch
           case NonFatal(failed) =>
             // A move that stopped part of the way kept the layers its later batches were to apply. Those of the
             // blocks it did apply go now, as they would have at its end.
             try lock.locked("the end of a move that failed")(clock.anchor.foreach(dropUnreachable))
-            catch case NonFatal(inCleanup) => failed.addSuppressed(inCleanup)
+            catch
+              case NonFatal(inCleanup) => failed.addSuppressed(inCleanup)
+              // released whatever came of it; a failure to release it is not the one that is thrown
+            try lock.locked("the end of a move that failed")(overlay.release(pin))
+            catch case NonFatal(inRelease) => failed.addSuppressed(inRelease)
             throw failed
+      // before what the overlay holds is told
+      lock.locked("the end of a move")(overlay.release(pin))
       outcome match
         case moved: MoveOutcome.Moved => told(s"the move of the head to ${target.show}")(settings.observer.moved(moved))
         case MoveOutcome.AlreadyThere => ()
@@ -1083,6 +1091,7 @@ final class PathStateStorage(
       target: BlockRef,
       link: ByteString => Option[HeadMovePlan.Link],
       extraFor: HeadMovePlan.Chunk => Option[DataSourceBatchUpdate],
+      pin: BranchPin,
       replansLeft: Int
   ): MoveOutcome =
     val plan = planMove(target, link) match
@@ -1091,6 +1100,12 @@ final class PathStateStorage(
         told("a move that was refused")(settings.observer.moveRefused(reason))
         throw new ReorgTooDeep(reason, s"to block ${target.show}: $detail")
       case HeadMovePlan.Outcome.NotHeld(detail, heldTo) => throw new StateUnavailable(detail, heldTo = heldTo)
+    lock.locked("the layers of a move's plan")(
+      overlay.pinAll(
+        plan.forward.collect { case HeadMovePlan.Forwarded(_, _, HeadMovePlan.Source.Layer(layer)) => layer },
+        pin
+      )
+    )
     val finalized = settings.finalized().map(_.number)
     val started = System.nanoTime()
     val chunks =
@@ -1153,7 +1168,7 @@ final class PathStateStorage(
           batches = chunks.size,
           nanos = System.nanoTime() - started
         )
-    else if replansLeft > 0 then move(target, link, extraFor, replansLeft - 1)
+    else if replansLeft > 0 then move(target, link, extraFor, pin, replansLeft - 1)
     else
       throw new StateUnavailable(
         s"no move of the head to ${target.show} could be made: the state, or an executed block of the plan, changed " +
