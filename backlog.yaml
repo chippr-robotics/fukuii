@@ -2794,3 +2794,13 @@ items:
       heartbeat: 2026-11-13T04:39:13Z
       branch: ccr-452bbde8-2hrv25
     notes: User brief of 2026-11-13. Builds on spec 027; the plan and tasks follow the clarification answers.
+  - id: B-245
+    title: "eth_subscribe newHeads: blocks made canonical through the Engine API are not published to the block topic (only BlockImporter and TestingService publish)"
+    priority: P2
+    status: open
+    area: rpc
+    size: S
+    opened: 2026-11-13
+    refs: [spec 029 research §11]
+    links: {}
+    notes: Found by reading the code while writing spec 029; not checked on a running node. NodeBuilder.scala:134 blockTopic; no publisher under consensus/engine/.
