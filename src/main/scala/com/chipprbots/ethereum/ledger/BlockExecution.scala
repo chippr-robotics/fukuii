@@ -12,6 +12,7 @@ import com.chipprbots.ethereum.consensus.validators.std.StdBlockValidator.BlockE
 import com.chipprbots.ethereum.db.storage.EvmCodeStorage
 import com.chipprbots.ethereum.db.storage.SerializingMptStorage
 import com.chipprbots.ethereum.db.storage.StagedBlockState
+import com.chipprbots.ethereum.db.storage.pathstate.StateFault
 import com.chipprbots.ethereum.domain.*
 import com.chipprbots.ethereum.ledger.BlockExecutionError.MissingParentError
 import com.chipprbots.ethereum.mpt.MerklePatriciaTrie.MPTException
@@ -471,20 +472,43 @@ class BlockExecution(
   )(implicit blockchainConfig: BlockchainConfig): (List[BlockData], Option[BlockExecutionError]) =
     executeAndValidateBlocksWithAccessLists(blocks, parentChainWeight, adoptEachBlock, Map.empty)
 
-  /** [[executeAndValidateBlocks]] for blocks that arrived with peer-supplied EIP-7928 lists. */
+  /** [[executeAndValidateBlocks]] for blocks that arrived with peer-supplied EIP-7928 lists.
+    *
+    * A fault of this node's own state is thrown, as it always was here: a caller that has to go on with the blocks that
+    * were adopted before it takes [[executeBatch]].
+    */
   def executeAndValidateBlocksWithAccessLists(
       blocks: List[Block],
       parentChainWeight: ChainWeight,
       adoptEachBlock: Boolean,
       suppliedBlockAccessLists: Map[ByteString, BlockAccessList]
   )(implicit blockchainConfig: BlockchainConfig): (List[BlockData], Option[BlockExecutionError]) =
+    val outcome = executeBatch(blocks, parentChainWeight, adoptEachBlock, suppliedBlockAccessLists)
+    outcome.stateFault.foreach(throw _)
+    (outcome.executed, outcome.error)
+
+  /** [[executeAndValidateBlocksWithAccessLists]], with a third way for a batch to end (spec 018 Track C, C4b): '''this
+    * node's own state could not take the next block'''. The state the block is to be executed on is not the one the
+    * disk holds, or is no longer (another writer moved it between two blocks of the batch), or the view it was read
+    * through went stale. That says nothing about the block, and nothing about the peer that sent it.
+    *
+    * The blocks before it are adopted, each in its own atomic write, exactly as a shorter batch would have left them;
+    * the block the fault was met at wrote nothing, and neither it nor the blocks after it were judged. So the batch
+    * stops there: executing on would be executing on a state that is not held.
+    */
+  def executeBatch(
+      blocks: List[Block],
+      parentChainWeight: ChainWeight,
+      adoptEachBlock: Boolean,
+      suppliedBlockAccessLists: Map[ByteString, BlockAccessList] = Map.empty
+  )(implicit blockchainConfig: BlockchainConfig): BlockExecution.BatchOutcome =
     @tailrec
     def go(
         executedBlocksDecOrder: List[BlockData],
         remainingBlocksIncOrder: List[Block],
         parentWeight: ChainWeight
-    ): (List[BlockData], Option[BlockExecutionError]) =
-      if remainingBlocksIncOrder.isEmpty then (executedBlocksDecOrder.reverse, None)
+    ): BlockExecution.BatchOutcome =
+      if remainingBlocksIncOrder.isEmpty then BlockExecution.BatchOutcome(executedBlocksDecOrder.reverse, None, None)
       else
         val blockToExecute = remainingBlocksIncOrder.head
         // `alreadyValidated = false`: validate each block BEFORE executing it.
@@ -508,20 +532,29 @@ class BlockExecution(
         // single @tailrec loop on one thread, each iteration's `blockchainWriter.save`
         // completes before the next begins, and `executeBlock` already resolves the parent
         // header from the same storage at BlockExecution.scala:104-106.
-        val step = executeAndCommit(
-          blockToExecute,
-          parentWeight,
-          adoptEachBlock,
-          suppliedBlockAccessLists.get(blockToExecute.hash.value),
-          () => None
-        )
+        // A fault of the state is no verdict on the block: it is kept apart from the block's own errors, so that
+        // nothing downstream can take the one for the other.
+        val step: Either[StateFault, Either[BlockExecutionError, BlockData]] =
+          try
+            Right(
+              executeAndCommit(
+                blockToExecute,
+                parentWeight,
+                adoptEachBlock,
+                suppliedBlockAccessLists.get(blockToExecute.hash.value),
+                () => None
+              )
+            )
+          catch case fault: StateFault => Left(fault)
         step match
-          case Right(newBlockData) =>
+          case Right(Right(newBlockData)) =>
             blockchain.saveBlockState(blockToExecute.header.number.value)
             blockchainReader.recordBlockDifficulty(blockToExecute.header.difficulty)
             go(newBlockData :: executedBlocksDecOrder, remainingBlocksIncOrder.tail, newBlockData.weight)
-          case Left(executionError) =>
-            (executedBlocksDecOrder.reverse, Some(executionError))
+          case Right(Left(executionError)) =>
+            BlockExecution.BatchOutcome(executedBlocksDecOrder.reverse, Some(executionError), None)
+          case Left(fault) =>
+            BlockExecution.BatchOutcome(executedBlocksDecOrder.reverse, None, Some(fault))
 
     go(List.empty[BlockData], blocks, parentChainWeight)
 
@@ -721,6 +754,22 @@ class BlockExecution(
     BlockExecution.depositRequests(receipts)
 
 object BlockExecution:
+
+  /** How a batch of blocks ended ([[BlockExecution.executeBatch]]).
+    *
+    * @param executed
+    *   the blocks that were executed, validated and committed, in order: a prefix of the batch
+    * @param error
+    *   why the block after them is not accepted, when it was judged and failed
+    * @param stateFault
+    *   why the block after them could not be executed or committed, when the fault is this node's own state's: the
+    *   block was not judged. Never set together with `error`
+    */
+  final case class BatchOutcome(
+      executed: List[BlockData],
+      error: Option[BlockExecutionError],
+      stateFault: Option[StateFault]
+  )
 
   /** What [[requestSystemCalls]] does with a request contract that has no code when its turn comes.
     *

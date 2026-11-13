@@ -20,6 +20,7 @@ import com.chipprbots.ethereum.blockchain.data.GenesisData
 import com.chipprbots.ethereum.blockchain.data.GenesisDataLoader
 import com.chipprbots.ethereum.blockchain.sync.regular.BlockEnqueued
 import com.chipprbots.ethereum.blockchain.sync.regular.BlockImportResult
+import com.chipprbots.ethereum.blockchain.sync.regular.BlockImportStateFault
 import com.chipprbots.ethereum.blockchain.sync.regular.BlockImportedToTop
 import com.chipprbots.ethereum.blockchain.sync.regular.ChainReorganised
 import com.chipprbots.ethereum.consensus.blocks.*
@@ -447,6 +448,8 @@ class TestService(
       case BlockEnqueued | ChainReorganised(_, _, _) =>
         val blockHash = s"0x${ByteStringUtils.hash2string(block.hash.value)}"
         ImportRawBlockResponse(blockHash).rightNow
+      // Not a verdict on the block: answered as the state fault it is, as when it was thrown
+      case BlockImportStateFault(fault, _) => IO.raiseError(fault)
       case e =>
         log.warn("Block import failed with {}", e)
         IO.pure(Left(JsonRpcError(-1, "block validation failed!", None)))

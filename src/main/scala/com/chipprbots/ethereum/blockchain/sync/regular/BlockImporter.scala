@@ -1029,6 +1029,23 @@ final private class BlockImporterLogic(
                 )
                 pendingStateNodeHash = None
                 ResolvingMissingNode(NonEmptyList(failedBlock, notImportedBlocks.tail), alreadyExhausted = true)
+              case BlockImportStateFault(fault, _) =>
+                // The state these blocks are to be executed on is not the one this node holds, or is no longer: the
+                // head moved under the batch, or could not be moved (spec 018 Track C, C4b). The blocks were not
+                // judged. They are fetched again from the first that was not executed, and the peer that served them
+                // is not blamed: it was asked for these blocks and gave them.
+                val failedBlock = notImportedBlocks.head
+                log.warning(
+                  "[LOCAL-STATE-FAULT] block {} was not executed on this node's own state, no peer blamed: {}",
+                  failedBlock.number,
+                  fault.getMessage
+                )
+                fetcher ! BlockFetcher.InvalidateBlocksFrom(
+                  failedBlock.number.value,
+                  "this node's state could not take the block",
+                  shouldBlacklist = false
+                )
+                RunningAfterFetcherRewind
               case _ =>
                 val invalidBlockNr = notImportedBlocks.head.number.value
                 fetcher ! BlockFetcher.InvalidateBlocksFrom(invalidBlockNr, err.toString)
@@ -1085,6 +1102,12 @@ final private class BlockImporterLogic(
 
           case BlockImportFailedDueToMissingNode(missingNodeException, adopted) =>
             IO(adoptedPrefix(adopted, importedBlocks)).flatMap(_ => IO.raiseError(missingNodeException))
+
+          // This node's own state could not take a block of the batch (spec 018 Track C, C4b). The prefix that was
+          // adopted before it is counted, as above. No strike: the block was not judged, so the peer that sent it is
+          // not evicted and no fork is detected.
+          case stateFault @ BlockImportStateFault(_, adopted) =>
+            IO.pure((adoptedPrefix(adopted, importedBlocks), Some(stateFault)))
 
           // This node's own state failed, not the block: no strike, so the peer that sent it is not evicted and no fork
           // is detected (spec 022 T062). The caller backs off and escalates instead.
@@ -1226,6 +1249,9 @@ final private class BlockImporterLogic(
           case BlockImportFailed(error) if informFetcherOnFail && !Consensus.isLocalStateFault(error) =>
             fetcher ! BlockFetcher.BlockImportFailed(block.number.value, BlacklistReason.BlockImportError(error))
           case UnknownParent => announcedBy.foreach(handleOrphanAnnounce(block, _))
+          // Not judged, so nothing is said of it to the fetcher or of the peer that announced it; what was adopted
+          // before the fault is announced as any imported blocks are.
+          case BlockImportStateFault(_, adopted)                     => announceAdopted(adopted, internally)
           case BlockEnqueued | DuplicateBlock | BlockImportFailed(_) => ()
         }
         // A block that shows the announced block's parent was here clears the peer's orphan strikes. A duplicate shows
