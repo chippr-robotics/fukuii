@@ -187,12 +187,12 @@ them, and the script delegates to it (R1, R2, R3; FR-006, FR-007, FR-013, FR-015
 **Independent test**: the golden renders equal the committed fixtures, every refusal has a test, and the 165 hash is
 pinned.
 
-- [ ] T020 Make a full clone at `~/work/e028-s2` on branch `feat/028-s2-release-lib`, and claim B-232. Pre-flight:
+- [x] T020 Make a full clone at `~/work/e028-s2` on branch `feat/028-s2-release-lib`, and claim B-232. Pre-flight:
       - `beacon` (sonnet) on R1 to R3: the encoder and renderer, and the genesis extraction;
       - `forge` (sonnet) on R3's change to the shared `GenesisDataLoader` path.
 
       Record both notes.
-- [ ] T021 [P] Download the raw inputs. Put `testnet-all.tar.gz` for `ephemery-164` and `ephemery-165` into a new,
+- [x] T021 [P] Download the raw inputs. Put `testnet-all.tar.gz` for `ephemery-164` and `ephemery-165` into a new,
       empty scratch directory. Copy only `genesis.json`, `retention.vars`, `deposit_contract_block_hash.txt`,
       `enodes.txt` and `boot_enr.txt` into `src/test/resources/ephemery/releases/ephemery-{164,165}/`. Add a `README.md`
       there with the source URL, each tarball's sha256 and the date. Never commit `parsedBeaconState.json` or
@@ -200,21 +200,21 @@ pinned.
 
 ### Tests for S2 (write first, see them fail)
 
-- [ ] T022 [P] Write `ephemery tests/EphemeryGoldenRenderSpec.scala`. For 164 and 165, the raw inputs must render
+- [x] T022 [P] Write `ephemery tests/EphemeryGoldenRenderSpec.scala`. For 164 and 165, the raw inputs must render
       byte for byte to `src/test/resources/ephemery/ephemery-16x/ephemery-chain.conf` and `ephemery-genesis.json`.
       This replaces `scripts/ephemery/check-fixture.sh`.
-- [ ] T023 [P] Write `ephemery tests/EphemeryReleaseSpec.scala`: one test for each of R1 to R11 and N1 to N3
+- [x] T023 [P] Write `ephemery tests/EphemeryReleaseSpec.scala`: one test for each of R1 to R11 and N1 to N3
       (research R2).
       - Each test mutates one field of an in-memory copy of the raw 165 inputs.
       - It checks the `ReleaseRefusal` case, its exit class (contracts/exit-codes.md), and that the message keeps
         `fetch-genesis.sh`'s wording.
       - Also: a valid 164 and 165, N4's reset time, and that large JSON numbers stay exact.
-- [ ] T024 [P] Write `src/test/scala/com/chipprbots/ethereum/blockchain/data/GenesisHeaderExtractionSpec.scala`.
+- [x] T024 [P] Write `src/test/scala/com/chipprbots/ethereum/blockchain/data/GenesisHeaderExtractionSpec.scala`.
       - The companion's pure `genesisHeader` must equal what `loadGenesisData` stores for the etc, mordor, sepolia and
         plataberget built-ins and the ephemery-164 and -165 fixtures.
       - A subclass that overrides the instance `prepareHeader`, as `src/test/scala/com/chipprbots/ethereum/ledger/
         EestBlockchainReplay.scala:279` does, still takes effect in `loadGenesisData`.
-- [ ] T025 [P] Write `ephemery tests/EphemeryFetchCliSpec.scala`.
+- [x] T025 [P] Write `ephemery tests/EphemeryFetchCliSpec.scala`.
       - `ephemery-fetch --from-dir <raw 165> --out <tmp>` writes the script's layout:
         `ephemery-165/{testnet,chains,conf,release.env,release.json}`, `current` and `ephemery-local.conf`.
         `release.env` has the script's keys.
@@ -223,36 +223,36 @@ pinned.
 
 ### Implementation for S2
 
-- [ ] T026 In `src/main/scala/com/chipprbots/ethereum/blockchain/data/GenesisDataLoader.scala`, extract the pure
+- [x] T026 In `src/main/scala/com/chipprbots/ethereum/blockchain/data/GenesisDataLoader.scala`, extract the pure
       `GenesisDataLoader.genesisHeader(genesisData)(using BlockchainConfig): BlockHeader` into the companion: the state
       root over an in-memory MPT on `EphemDataSource`, then today's header logic.
       - The instance `protected def prepareHeader` (`:250`) delegates to the companion, so overrides still apply.
       - `loadGenesisData` (`:110-149`) keeps calling the instance method. No behaviour change.
-- [ ] T027 Run the transitive no-`Config` check (R3). From the extraction and every file under `ephemery/`, list the
+- [x] T027 Run the transitive no-`Config` check (R3). From the extraction and every file under `ephemery/`, list the
       reachable classes: MPT storage, `EphemDataSource`, `BlockchainConfig.fromRawConfig`, `BlobSchedule`, json4s
       formats. Grep each for `utils.Config` imports and `Config.` reads. Fix any hit by passing the value explicitly.
       Put the list and the result in the PR body.
-- [ ] T028 [P] Write `ephemery/ReleaseInputs.scala`: the EL members read from a directory. `retention.vars` is parsed
+- [x] T028 [P] Write `ephemery/ReleaseInputs.scala`: the EL members read from a directory. `retention.vars` is parsed
       with the key=value regex of R2 and never sourced. `chainspec.json` is optional.
-- [ ] T029 [P] Write `ephemery/ReleaseRefusal.scala`: the sealed ADT of data-model.md, with the exit class (69 or 78)
+- [x] T029 [P] Write `ephemery/ReleaseRefusal.scala`: the sealed ADT of data-model.md, with the exit class (69 or 78)
       and the message of each case (contracts/exit-codes.md).
-- [ ] T030 Write `ephemery/GenesisJsonEncoder.scala`: R9 and R10, the top-level allow-list and the hex re-encoding.
-- [ ] T031 Write `ephemery/ChainConfRenderer.scala`: HOCON identical to `fetch-genesis.sh:280-372`. In this commit it
+- [x] T030 Write `ephemery/GenesisJsonEncoder.scala`: R9 and R10, the top-level allow-list and the hex re-encoding.
+- [x] T031 Write `ephemery/ChainConfRenderer.scala`: HOCON identical to `fetch-genesis.sh:280-372`. In this commit it
       has no spec 024 keys.
-- [ ] T032 Write `ephemery/EphemeryRelease.scala`: `validate(inputs): Either[ReleaseRefusal, ValidRelease]`, applying
+- [x] T032 Write `ephemery/EphemeryRelease.scala`: `validate(inputs): Either[ReleaseRefusal, ValidRelease]`, applying
       R1 to R11, N1, N2 and N4. It then checks N3 by parsing the rendered config with `BlockchainConfig.fromRawConfig`
       and computing the hash with T026's function.
-- [ ] T033 [P] Write `ephemery/ReleaseMetadata.scala`: the `release.json` codec and rules of
+- [x] T033 [P] Write `ephemery/ReleaseMetadata.scala`: the `release.json` codec and rules of
       contracts/release-json.md.
-- [ ] T034 Write `ephemery/EphemeryFetchCli.scala` and add `ephemery-fetch` to
+- [x] T034 Write `ephemery/EphemeryFetchCli.scala` and add `ephemery-fetch` to
       `src/main/scala/com/chipprbots/ethereum/cli/CliCommands.scala`. In S2, `--from-dir` and `--out` are required.
       `App.scala` makes `cli ephemery-fetch` call `setNetworkConfig("ephemery")` before anything reads configuration
       (contracts/cli.md, "How it finds its configuration").
-- [ ] T035 Commit 1: the byte-identical port. T022 to T025 pass.
-- [ ] T036 Commit 2: `ChainConfRenderer` emits `consensus = "engine-api"` and `genesis-hash = "0x…"` inside the chain
+- [x] T035 Commit 1: the byte-identical port. T022 to T025 pass.
+- [x] T036 Commit 2: `ChainConfRenderer` emits `consensus = "engine-api"` and `genesis-hash = "0x…"` inside the chain
       object (R14). Regenerate `src/test/resources/ephemery/ephemery-16x/ephemery-chain.conf` with the CLI, and review
       the fixture diff: two lines per file.
-- [ ] T037 Commit 3, the script and its fixture check:
+- [x] T037 Commit 3, the script and its fixture check:
       - `scripts/ephemery/fetch-genesis.sh` keeps its flags, download and extraction. It replaces the rules and
         rendering (`:105-415`) with `"${FUKUII_BIN:-fukuii}" cli ephemery-fetch --from-dir "$SRC" --out "$OUT"`. A
         missing binary exits 2, naming `FUKUII_BIN`.
@@ -261,17 +261,17 @@ pinned.
 
 ### Gate and exit for S2
 
-- [ ] T038 Run `sbt compile-all`, then `sbt "testOnly com.chipprbots.ethereum.ephemery.* *GenesisHeaderExtractionSpec
+- [x] T038 Run `sbt compile-all`, then `sbt "testOnly com.chipprbots.ethereum.ephemery.* *GenesisHeaderExtractionSpec
       *GenesisDataLoader* *EphemeryGenesisSpec *EphemeryBlobScheduleVectorsSpec *EestBlockchainReplay* *ForkId*"`.
       Expect PASS.
-- [ ] T039 Run the grep gates; each must find nothing:
+- [x] T039 Run the grep gates; each must find nothing:
       - `grep -rnE "Clock\.systemUTC|Instant\.now|currentTimeMillis|LocalDateTime\.now" ephemery tests`;
       - `grep -rn "utils.Config\b" src/main/scala/com/chipprbots/ethereum/ephemery/`.
-- [ ] T040 Manual check of the script. Run `sbt stage`, then
+- [x] T040 Manual check of the script. Run `sbt stage`, then
       `FUKUII_BIN=target/universal/stage/bin/fukuii scripts/ephemery/fetch-genesis.sh --from-dir
       src/test/resources/ephemery/releases/ephemery-165 --out /tmp/eph-s2`. `diff -u` against the fixtures must be
       clean.
-- [ ] T041 Run `sbt formatAll`, read `git diff`, then run `sbt formatCheck`. Expect clean.
+- [x] T041 Run `sbt formatAll`, read `git diff`, then run `sbt formatCheck`. Expect clean.
 - [ ] T042 Exit S2:
       1. `beacon` reviews the encoder, renderer and extraction.
       2. `forge` reviews the shared genesis path.
