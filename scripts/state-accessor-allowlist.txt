@@ -62,8 +62,8 @@ trie-of 1 src/main/scala/com/chipprbots/ethereum/ledger/InMemoryWorldStateProxy.
 storage-mpt 2 src/main/scala/com/chipprbots/ethereum/ledger/InMemoryWorldStateProxy.scala a contract's storage trie, over forOwner(Some(keccak(address))), for each key encoding (C2a, kept)
 trie-of 1 src/main/scala/com/chipprbots/ethereum/ledger/BalPrefetcher.scala the prefetch's account trie, over forOwner(None) (C2a, kept)
 storage-mpt 2 src/main/scala/com/chipprbots/ethereum/ledger/BalPrefetcher.scala the prefetch's storage tries, each over its owner, for each key encoding (C2a, kept)
-trie-of 1 src/main/scala/com/chipprbots/ethereum/blockchain/data/GenesisDataLoader.scala the account trie of genesis, over forOwner(None) (C2a); the genesis commit is C3c (T115)
-storage-mpt 1 src/main/scala/com/chipprbots/ethereum/blockchain/data/GenesisDataLoader.scala a genesis account's storage trie, over its owner (C2a); the genesis commit is C3c (T115)
+trie-of 2 src/main/scala/com/chipprbots/ethereum/blockchain/data/GenesisDataLoader.scala the account trie of genesis, over forOwner(None) (C2a); the genesis commit is C3c (T115). Second: pureStateRoot, the account trie of a genesis built in a throwaway in-memory buffer to check its hash before any store exists (spec 028 R3, kept)
+storage-mpt 2 src/main/scala/com/chipprbots/ethereum/blockchain/data/GenesisDataLoader.scala a genesis account's storage trie, over its owner (C2a); the genesis commit is C3c (T115). Second: pureStateRoot's storage tries, in the same throwaway buffer (spec 028 R3, kept)
 store-handed 1 src/main/scala/com/chipprbots/ethereum/ledger/InMemoryWorldStateProxy.scala a decorator's rewrap of an owner's view: the world's storage nodes (C2a, kept)
 store-handed 1 src/main/scala/com/chipprbots/ethereum/ledger/StxLedger.scala a decorator's rewrap of an owner's view: the replay store (C2a, kept)
 store-handed 1 src/main/scala/com/chipprbots/ethereum/jsonrpc/EthSimulateService.scala a decorator's rewrap of an owner's view: the retaining store (C2a, kept)
@@ -111,7 +111,7 @@ readonly-mpt 1 src/main/scala/com/chipprbots/ethereum/ledger/BlockPreparator.sca
 backing-mpt 1 src/main/scala/com/chipprbots/ethereum/testmode/TestModeBlockExecution.scala WRITER: test-mode execution writes with nothing staged; the staged commit, C3c (T116)
 backing 1 src/main/scala/com/chipprbots/ethereum/jsonrpc/TestService.scala WRITER: the test_ RPC writes genesis storage tries over block 0's store; through the genesis commit in C3c (T108, T115)
 storage-mpt 1 src/main/scala/com/chipprbots/ethereum/jsonrpc/TestService.scala that write's storage trie, from the empty root with no owner; C3c (T108, T115)
-readonly 1 src/main/scala/com/chipprbots/ethereum/blockchain/data/GenesisDataLoader.scala WRITER: genesis builds its state in a buffer over the store; the genesis commit, C3c (T115)
+readonly 2 src/main/scala/com/chipprbots/ethereum/blockchain/data/GenesisDataLoader.scala WRITER: genesis builds its state in a buffer over the store; the genesis commit, C3c (T115). Second: pureStateRoot's buffer over an EphemDataSource, never the node's store; it reads nothing by hash and writes nothing that is kept (spec 028 R3, kept)
 
 # SNAP hand-off, the audit, repair and import: C5a, C5b and C5c.
 backing 1 src/main/scala/com/chipprbots/ethereum/blockchain/sync/snap/controller/StateIngest.scala WRITER: the store SNAP ingest and healing write the pivot's state to; the hand-off without a copy, C5a
