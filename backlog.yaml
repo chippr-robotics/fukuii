@@ -2670,19 +2670,20 @@ items:
   - id: B-235
     title: "028 S4b: Ephemery refresh after a reset, CL testnet dir, fetch-genesis.sh exec wrapper"
     priority: P2
-    status: in-progress
+    status: review
     area: ops
     size: L
     opened: 2026-11-12
     refs: [B-227]
     links:
+      prs: [1822]
       spec: specs/028-builtin-ephemery-hoodi
       branch: feat/028-s4b-refresh
     claim:
       by: dev-node
       agent: main
       since: 2026-11-13T04:36:37Z
-      heartbeat: 2026-11-13T04:36:41Z
+      heartbeat: 2026-11-13T13:54:48Z
     notes: "2026-11-13 in-progress: S4b implementer (sonnet) in ~/work/e028-s4b, stacked on S3 da8055e3dc"
   - id: B-236
     title: "028 S5: live checks (24 h follow, 166 reset under a supervisor, Hoodi peers) and closure"
