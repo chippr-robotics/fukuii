@@ -2604,6 +2604,71 @@ then never ends); an ancestor above the block found; the head's own rows written
 move without the rows that move the best block; a reason without its verdict. Five were missed at first and got
 their cases.
 
+#### C4b part 3b: the fork choice and test mode's rewind move the head through a move (2026-11-13)
+
+Part 3a left two callers that reach the head on the guard today: the fork choice, which promoted the head outside the
+state lock, and test mode's rewind, which refused any block between the genesis and the head. Part 3b routes both
+through a move of the head, the design beacon gave before code (part 3a's consult, §3 and §4).
+
+- **One way to move the head with the state**: `BlockchainWriter.moveHeadInPlace(target, reader, refuse)`, which is
+  `PathStateStorage.moveHead` planned by `BlockchainReader.headerLink`, with `canonicalHeadUpdate` for the block each
+  batch ends on as that batch's rows. The writer now takes the path store (`pathState`, from `BlockchainWriter(storages)`),
+  so every writer the node and the specs build from their storages has it, and no caller is wired by hand. `refuse` is
+  asked for each batch before its rows are built; a refusal ends the move with a `StateUnavailable`.
+  **`promoteToCanonicalHead` refuses on the unified layout.**
+- **The fork choice confirms the head by a move of nothing** (`ForkChoiceManager.applyForkChoiceState` on the guard).
+  `EngineApiService.forkchoiceUpdated` lets through only the head the state is at; a commit in place of the next block
+  may land between that look and the write. The move of nothing is written under the state lock against the anchor it
+  was planned from, so that commit makes it a move back, which is refused: nothing is written and `currentState` is
+  not set. `forkchoiceUpdated` then finds the head it was given a VALID ancestor of the canonical head and answers it
+  as its own branch for one does, VALID with no payload (execution-apis paris.md point 2; go-ethereum "Ignoring beacon
+  update to old head"); T145's interleaving, driven through the Engine API with the commit landed after every look
+  it takes at the head and before the fork choice's write. Before 3b the promotion moved the best block back and deleted the new head's index entry under a state that
+  stayed the new head's. Any other move off the held block is refused until C4d (`SYNCING`); a `Corrupt` plan is
+  thrown on. On that layout the call runs under `IO.blocking`, since it may wait behind a move; the hash store's runs
+  as it did. The reference counts are not touched on that layout.
+- **`test_rewindToBlock` below the head moves the head back** to the block of its own chain at that height, found by
+  parent hashes from the held block (`ancestorAt`), never by the index the move rewrites. The blocks above it are not
+  removed: they stay known by their hash, with their records, the way back up; imported again, a block is executed
+  again, to the block it was. A refused move (`Deep`, `Corrupt`, `Incomplete`, `Pivot`, `Finalized`) is the request's
+  error, `TestService.RewindRefused`, with nothing changed and the pending transactions kept. A rewind to the genesis
+  still sets the chain's genesis again.
+- **The writes themselves are watched** (beacon 5b): the guard chain spec's data source records every write of the best
+  block's rows or of the index of blocks by number made while the state has an anchor by a thread that does not hold
+  the state lock. The commits, the moves, the fork choice (confirmed and refused) write none; a write of the best
+  block's rows alone is seen.
+- **The ratchet** counts `moveHeadInPlace` as a writer of the head (MOVE): the fork choice's line becomes HASH for the
+  hash layout's promotion and MOVE for the confirmation; test mode's gains the rewind.
+
+**Read after code (beacon): APPROVE WITH CHANGES**, all taken but where said. The hash layout is unchanged (the
+refusal is inert without a path store; the hash arms of the fork choice and the rewind are untouched); the guard's
+branch is reached for a head other than the anchor only by the race. Taken: the race answers VALID, not `SYNCING`
+(above), with an end-to-end case through `forkchoiceUpdated`, with and without payload attributes; the guard's call
+under `IO.blocking`; a `Corrupt` refusal logged at ERROR with `[STATE-MOVE]` in test mode, as the fork choice throws
+it; a `StateUnavailable` in a rewind answered as `RewindRefused`. Not taken, with the reason: a rewind of several
+batches is the writer's one-block-a-batch case in `HeadMoveOnTheChainSpec`; `importRawBlock` of the very block kept
+above the new head cannot be made in this rig (a block mined in test mode carries no seal, and a sealed copy is
+another block), so the same block mined again stands for it (known by its hash, with a record, committed in place
+again); a commit that waits for a confirmation under way is `adopting`'s, covered by `HeadMoveSpec`.
+
+**Recorded.**
+- **A kept block still answers by its hash** after a rewind on the unified layout (`eth_getBlockByHash`, its receipts
+  are kept), where the hash layout and go-ethereum's `SetHead` answer null. The headers are what a move back up is
+  planned from (`headerLink`), so they stay; `eth_getBlockByNumber` above the head answers null on both.
+- **A confirmation counts as a move** (`movesStarted`, `moving`): no code in main reads them yet. A builder that does
+  (the miner, C4e; the payload builder, C4d) must not take a confirmation for a move, or the store gets a path for a
+  move of nothing that does not count.
+
+**The mutation run**: 17 mutants, all caught. The fork choice promoting on the unified layout, moving the head off the
+held block in any direction or only up, taking a head it did not confirm as applied, answering a corrupt record
+`SYNCING`, throwing a refused move; the Engine API answering a head the race made an ancestor `SYNCING`; the writer's
+promotion not refused, a refused batch written, every batch given the target's rows, a move's batches given none, the
+writer not given the store; the rewind keeping the pending transactions, taking them for a refused move, throwing a
+refusal past the request, refusing as before, or going to the block above. Two did not compile at first (an unused
+symbol is an error here) and were rewritten so that they do. The Engine API's mutant survived the first form of the
+end-to-end case, which committed inside the gate's look: there the Engine API's own branch for an ancestor answers
+first. The case now commits inside the fork choice, where the window is.
+
 ### Destructive change (C8a and C8b): the vault protocol blocks
 
 ```

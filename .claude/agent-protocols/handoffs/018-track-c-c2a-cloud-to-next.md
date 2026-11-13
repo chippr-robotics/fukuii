@@ -209,7 +209,11 @@ Read plan.md, "C2a part 1 record" and "C2a part 2 record", then:
   block's own commit are the only writers of the best block and the index; every other writer refuses there (or is
   PRE/START), the best block is held to the anchor under the state lock, and `scripts/check-head-writers.sh` holds
   the table (a NEW writer of the head must say in `scripts/head-writer-allowlist.txt` which way it stays safe).
-  Part 3b routes the fork choice and test mode's rewind through `moveHead`.
+  **Part 3b is built**: `BlockchainWriter.moveHeadInPlace` (the writer now takes the path store) is the node's one way to
+  move the head with the state; the fork choice on the unified layout confirms the head by a move of nothing under
+  the state lock and refuses every move off the held block until C4d (`SYNCING`); `promoteToCanonicalHead` refuses
+  there; `test_rewindToBlock` below the head moves back along the records and removes no block. Next: part 4, the
+  reconciliation at start (T150), then C4d (newPayload by hash only, the fork choice's real moves) and C4e.
 - **C4a** brings back what C3b refuses: the overlay commit for a block that does not extend the anchor
   (`buildExtra(adopted)`, `NotExtendingAnchor`, `saveLastBlock` writing nothing),
   `stateAvailable(hash)`, the served-root window, and SNAP advertised again. C4b: the head move, `ConsensusStateFault`
