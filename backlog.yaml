@@ -2829,3 +2829,14 @@ items:
     links:
       spec: 028
     notes: The test's last assertion calls JdkHttpsTransport.default with HTTPS_PROXY credentials and expects Left; default prefers the JDK https.proxyHost property over the environment (ReleaseTransport.scala:376-378), which cloud containers set in JAVA_TOOL_OPTIONS, so it answers Right there. Isolate the test from the JVM's properties (inject props) like the environment map. Seen in testEssential on the C4b part 2a branch, which does not touch ephemery/.
+  - id: B-248
+    title: "SYNC-FORK resolver: discardBlocksAfter deletes the index entries before rewindCanonicalChain reads them"
+    priority: P2
+    status: open
+    area: sync
+    size: S
+    opened: 2026-11-13
+    refs: []
+    links:
+      spec: 018
+    notes: "Forge, C4b part 3 pre-code consult (verified in code): Blockchain.removeBlock via FastSyncBranchResolver.discardBlocksAfter removes the number->hash entries (Blockchain.scala:197-199) before BlockImporter.rewindCanonicalChain reads them (:198-200), so abandonBlockStates gets nothing on the resolver-success path and the #1471 reference-count undo never runs there. Hash layout; its own bucket-C commit, not part of spec 018 C4b."
