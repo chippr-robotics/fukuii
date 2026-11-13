@@ -77,7 +77,20 @@ class AppStateStorage(val dataSource: DataSource) extends TransactionalKeyValueS
     * nowhere else: [[pathstate.PathStateStorage.destroyStateForNewGenesis]], which only test mode may call.
     */
   private[storage] def removeStateMarks(): DataSourceBatchUpdate =
-    update(Seq(Keys.StateAnchor, Keys.StateLayout, Keys.StateChangesetPrunedTo), Nil)
+    update(Seq(Keys.StateAnchor, Keys.StateOrigin, Keys.StateLayout, Keys.StateChangesetPrunedTo), Nil)
+
+  /** The block this datadir's state on the unified layout began at (spec 018 plan.md "C4b: the move core"): its
+    * genesis, or the block a sync or an imported checkpoint left the state of. No state before it was ever here, so no
+    * move of the head goes below it. `None` on a datadir of the hash layout, and on one whose anchor was made before
+    * this was kept.
+    */
+  def getStateOrigin(): Option[pathstate.BlockRef] = get(Keys.StateOrigin).map(pathstate.StateAnchor.decode)
+
+  /** The update that sets [[getStateOrigin]]. It belongs in the batch that gives the datadir a state anchor where it
+    * had none, which only the path state storage builds.
+    */
+  private[storage] def putStateOrigin(block: pathstate.BlockRef): DataSourceBatchUpdate =
+    put(Keys.StateOrigin, pathstate.StateAnchor.encode(block))
 
   /** The update that moves [[getChangesetPrunedTo]]. It belongs in the batch that deletes the records below it, which
     * is the canonical commit's.
@@ -946,6 +959,7 @@ object AppStateStorage:
     val SnapAuditForcedOnce = "snap.heal.auditForcedOnce"
     val RefCountsExact = "state.refcounts.exact"
     val StateAnchor = com.chipprbots.ethereum.db.storage.pathstate.StateAnchor.Key
+    val StateOrigin = "state.origin"
     val StateChangesetPrunedTo = "state.changeset.pruned-to"
     val StateLayout = com.chipprbots.ethereum.db.storage.pathstate.StateLayout.Key
     val ChainWeightInvariant = "chain.weight.invariant"

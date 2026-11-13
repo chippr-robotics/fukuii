@@ -15,6 +15,12 @@ import com.chipprbots.ethereum.db.storage.PathNodeStorage
 final case class BlockRef(hash: ByteString, number: BigInt, stateRoot: ByteString):
   def show: String = s"$number (${Hex.toHexString(hash.toArray).take(16)})"
 
+/** The finalized block, as a consensus client last named it: by its number, for what retention keeps, and by its hash,
+  * for what a move of the head must not reverse. A number alone would say "finalized" of a block of another branch at
+  * that height.
+  */
+final case class FinalizedBlock(number: BigInt, hash: ByteString)
+
 /** The state anchor (spec 018 data-model 5.1): the one statement of which block's state the rows of CF `t` and CF `u`
   * hold. It is the AppState string `v1:<blockHash hex>:<number decimal>:<stateRoot hex>`, written in the same batch as
   * the rows it describes and never without them.

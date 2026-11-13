@@ -53,7 +53,12 @@ class StateDestructionSpec extends AnyFlatSpec with Matchers:
       )
     )
     val appState = new AppStateStorage(source)
-    appState.putStateAnchor(held).and(appState.putStateLayout()).and(appState.putChangesetPrunedTo(3)).commit()
+    appState
+      .putStateAnchor(held)
+      .and(appState.putStateOrigin(held))
+      .and(appState.putStateLayout())
+      .and(appState.putChangesetPrunedTo(3))
+      .commit()
     new PathStateStorage(
       rows,
       appState,
@@ -66,11 +71,12 @@ class StateDestructionSpec extends AnyFlatSpec with Matchers:
       PathStateTestKit.allRows(new PathNodeStorage(source)),
       new ChangesetStorage(source).isEmpty,
       appState.getStateAnchor(),
+      appState.getStateOrigin(),
       appState.getStateLayout(),
       appState.getChangesetPrunedTo()
     )
 
-  private val nothing = ((Map.empty, Map.empty), true, None, None, None)
+  private val nothing = ((Map.empty, Map.empty), true, None, None, None, None)
 
   /** The in-memory source, which says what was written to it and how, and can be made to fail a write. (A wrapper will
     * not do here: the storages ask a source whether it is the in-memory one, to know the shape of its keys.)

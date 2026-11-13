@@ -96,6 +96,8 @@ class GenesisCommitSpec extends AnyFlatSpec with Matchers:
     val pathState = onPositions.storages.pathStateStorage.get
     pathState.anchor shouldBe Some(refOf(header))
     onPositions.storages.appStateStorage.getStateAnchor() shouldBe Some(refOf(header))
+    // and the block the state began at: no move of the head goes below it
+    onPositions.storages.appStateStorage.getStateOrigin() shouldBe Some(refOf(header))
     pathState.view(refOf(header)).isAnchorViewNow shouldBe true
     // the block, the head, the stamp, and the marks of a datadir this build created
     onPositions.storages.appStateStorage.getBestBlockInfo() shouldBe BlockInfo(header.hash.value, 0)
@@ -299,6 +301,7 @@ class GenesisCommitSpec extends AnyFlatSpec with Matchers:
     PathStateTestKit.allRows(new PathNodeStorage(watched.under)) shouldBe (Map.empty, Map.empty)
     Parts.storages.appStateStorage.getStateLayout() shouldBe None
     Parts.storages.appStateStorage.getStateAnchor() shouldBe None
+    Parts.storages.appStateStorage.getStateOrigin() shouldBe None
     Parts.storages.pathStateStorage.get.anchor shouldBe None
     Parts.storages.pathStateStorage.get.lock.holder shouldBe None
     // and the next start commits it
@@ -387,6 +390,12 @@ class GenesisCommitSpec extends AnyFlatSpec with Matchers:
             Namespaces.AppStateNamespace,
             Seq.empty,
             Seq(text("state.changeset.pruned-to") -> text("5"))
+          ),
+        "a state that began at block 7" ->
+          DataSourceUpdate(
+            Namespaces.AppStateNamespace,
+            Seq.empty,
+            Seq(text("state.origin") -> text(s"v1:${"ab" * 32}:7:${"cd" * 32}"))
           ),
         "the layout stamp 'path-live-1'" ->
           DataSourceUpdate(Namespaces.AppStateNamespace, Seq.empty, Seq(text(StateLayout.Key) -> text("path-live-1")))

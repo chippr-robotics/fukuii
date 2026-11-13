@@ -228,6 +228,72 @@ final class PathStateStorage(
   /** The forward layer of `blockHash`, when it has one: it was executed, and its state is on no row. */
   def forwardLayer(blockHash: ByteString): Option[ForwardLayer] = overlay.layerOf(blockHash)
 
+  /** How the disk's state would get to `target`'s ([[HeadMovePlan]]): the blocks to reverse by their records, down to
+    * the highest block the anchor's chain and the target's share, and the blocks to apply from there, or why that
+    * cannot be done. It changes nothing and holds no lock; it is made at a moment when the disk is at rest, and is of
+    * the anchor and the epoch of that moment.
+    *
+    * @param link
+    *   a block as its header gives it, by its hash. Never by its number: the index of canonical blocks may run ahead of
+    *   the anchor or lie behind it
+    */
+  private[pathstate] def planMove(
+      target: BlockRef,
+      link: ByteString => Option[HeadMovePlan.Link]
+  ): HeadMovePlan.Outcome = planMoveAfter(target, link, () => ())
+
+  /** [[planMove]], with `walked` run between the walk and the second look at the clock: a test stands there.
+    *
+    * The anchor, the mark of what was pruned and the records are one observation only if nothing was committed while
+    * they were read. A commit prunes records and moves the mark in one batch: a walk that began before it and met a
+    * record it deleted would call the records corrupt. So a plan, and above all a refusal, is given out only if the
+    * epoch has not moved; otherwise it is made again, a few times.
+    */
+  private[pathstate] def planMoveAfter(
+      target: BlockRef,
+      link: ByteString => Option[HeadMovePlan.Link],
+      walked: () => Unit,
+      triesLeft: Int = ViewTries
+  ): HeadMovePlan.Outcome =
+    val (epoch, held) = clock.awaitRest()
+    val outcome = planAt(epoch, held, target, link)
+    walked()
+    if clock.epoch == epoch then outcome
+    else if triesLeft > 0 then planMoveAfter(target, link, walked, triesLeft - 1)
+    else
+      HeadMovePlan.Outcome.NotHeld(
+        s"no move to block ${target.show} could be planned: the state moved under every plan of it",
+        None
+      )
+
+  private def planAt(
+      epoch: Long,
+      held: Option[BlockRef],
+      target: BlockRef,
+      link: ByteString => Option[HeadMovePlan.Link]
+  ): HeadMovePlan.Outcome =
+    held match
+      case None =>
+        HeadMovePlan.Outcome.NotHeld(s"no move to block ${target.show} can be made: there is no state anchor", None)
+      case Some(anchor) =>
+        val finalized = settings.finalized()
+        val headers = link
+        val sources = new HeadMovePlan.Sources:
+          def recordHeader(
+              blockHash: ByteString
+          ): Option[Either[BlockDiffCodec.Rejected, BlockDiffCodec.Header]] = changesets.header(blockHash)
+          def layer(block: BlockRef): Option[ForwardLayer] = overlay.layerOf(block)
+          def link(blockHash: ByteString): Option[HeadMovePlan.Link] = headers(blockHash)
+        val limits = HeadMovePlan.Limits(
+          maxReverse = settings.maxReorgDepth(anchor.number, finalized.map(_.number)),
+          // above the anchor a block is applied from a layer, or from the record of a branch that was the head
+          maxForward = (settings.maxReverseHops.toLong + settings.maxForwardLayers).min(Int.MaxValue.toLong).toInt,
+          prunedTo = appState.getChangesetPrunedTo(),
+          origin = appState.getStateOrigin(),
+          finalized = finalized
+        )
+        HeadMovePlan.of(anchor, epoch, target, sources, limits)
+
   /** A view of `block`'s state, made at a moment when the disk is at rest: a view is made at an even epoch (data-model
     * 6.3.1), so one made while a batch is being written waits for that batch. The anchor's view reads the rows; the
     * view of a block executed on the anchor's state reads through its forward layers first.
@@ -495,6 +561,7 @@ final class PathStateStorage(
         Option.when(!rows.isEmpty)("rows of a state"),
         Option.when(!changesets.isEmpty)("changeset records"),
         appState.getChangesetPrunedTo().map(height => s"a count of pruned changesets ($height)"),
+        appState.getStateOrigin().map(origin => s"a state that began at block ${origin.show}"),
         appState.getStateLayout().map(stamp => s"the layout stamp '$stamp'")
       ).flatten
       if held.nonEmpty then
@@ -533,6 +600,8 @@ final class PathStateStorage(
           // are exact, which nothing on this layout has (forge)
           appState.markDatadirCreated(countsExact = false).updates ++
           appState.putStateLayout().updates ++
+          // the block this state began at: no move of the head goes below it
+          appState.putStateOrigin(genesis).updates ++
           appState.putStateAnchor(genesis).updates
       clock.inFlight(StateMove(genesis, written.view.mapValues(_ => Option.empty[ByteString]).toMap))(
         dataSource.updateSync(updates)
@@ -578,7 +647,7 @@ final class PathStateStorage(
     )
     // Read before the lock is asked for: nothing runs under it but this class and the data source (vault), and what
     // names the finalized block is not this class's.
-    val finalized = settings.finalized()
+    val finalized = settings.finalized().map(_.number)
     val outcome = lock.locked(
       s"canonical commit of block ${block.show}",
       nanos => told("the wait for the state lock")(settings.observer.lockWaited(nanos))
@@ -859,7 +928,7 @@ final class PathStateStorage(
     extra.foreach(other =>
       require(other.dataSource eq dataSource, "a block and its state are written in one batch, to one data source")
     )
-    val finalized = settings.finalized()
+    val finalized = settings.finalized().map(_.number)
     val outcome = lock.locked(
       s"promotion of block ${block.show}",
       nanos => told("the wait for the state lock")(settings.observer.lockWaited(nanos))
@@ -1138,8 +1207,8 @@ object PathStateStorage:
     * @param maxRecordBytes
     *   a changeset record above this is written as a tombstone (`state.changeset.max-record-bytes`)
     * @param finalized
-    *   the number of the finalized block, where a consensus client names one. Asked once for each commit, before the
-    *   state lock is taken: it must answer from what it holds, and not wait
+    *   the finalized block, where a consensus client names one. Asked once for each commit, before the state lock is
+    *   taken, and once for each plan of a move: it must answer from what it holds, and not wait
     * @param maxOwnerScanBytes
     *   a replaced storage trie whose rows hold more than this keeps them too: the rows are read into memory under the
     *   state lock, and a count of rows alone does not bound that
@@ -1148,7 +1217,7 @@ object PathStateStorage:
       maxEntriesPerOwnerDelete: Long = 1000000L,
       maxRecordBytes: Long = 256L * 1024 * 1024,
       retention: RetentionPolicy = RetentionPolicy.KeepAll,
-      finalized: () => Option[BigInt] = () => None,
+      finalized: () => Option[FinalizedBlock] = () => None,
       observer: CommitObserver = CommitObserver.Silent,
       maxOwnerScanBytes: Long = 64L * 1024 * 1024,
       // Whether [[PathStateStorage.destroyStateForNewGenesis]] may run: test mode only.
@@ -1164,6 +1233,9 @@ object PathStateStorage:
       // How many blocks back a view is made through the changeset records, how much one reverse index may hold, and
       // how much the indexes that are kept hold together.
       maxReverseHops: Int = 1024,
+      // Policy: how many blocks a move of the head may reverse, given the anchor's number and the finalized block's
+      // (`state.reorg.max-depth`). What can be reversed at all is decided by the records that are there.
+      maxReorgDepth: (BigInt, Option[BigInt]) => Int = (_, _) => Int.MaxValue,
       maxReverseIndexBytes: Long = 64L * 1024 * 1024,
       maxReversePoolBytes: Long = 128L * 1024 * 1024,
       // How many reads of a state behind the anchor callers of the JSON-RPC may have in flight: each may hold an
@@ -1172,7 +1244,7 @@ object PathStateStorage:
   )
 
   object CommitSettings:
-    def of(config: StateConfig, finalized: () => Option[BigInt], observer: CommitObserver): CommitSettings =
+    def of(config: StateConfig, finalized: () => Option[FinalizedBlock], observer: CommitObserver): CommitSettings =
       require(
         config.overlay.maxLayerBytes <= config.overlay.maxBytes / 2,
         s"state.overlay.max-layer-bytes (${config.overlay.maxLayerBytes}) is more than the executed blocks kept beside " +
@@ -1195,6 +1267,12 @@ object PathStateStorage:
         maxReverseHops = config.pruning.mode match
           case StateConfig.Mode.Archive => config.archiveViewReach
           case StateConfig.Mode.Basic   => config.retention.maxBlocks
+        ,
+        // The archive mode keeps every record, so there the floor of retention is no bound: a depth that is
+        // configured is, and otherwise what one plan holds.
+        maxReorgDepth = (config.pruning.mode, config.reorgMaxDepth) match
+          case (StateConfig.Mode.Archive, StateConfig.ReorgDepth.Floor) => (_, _) => HeadMovePlan.MaxBlocks
+          case _                                                        => config.maxReorgDepth
         ,
         maxReverseIndexBytes = (config.overlay.maxBytes / 2).min(64L * 1024 * 1024),
         maxReversePoolBytes = config.overlay.maxBytes / 2
