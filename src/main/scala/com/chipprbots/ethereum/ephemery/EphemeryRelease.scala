@@ -474,18 +474,40 @@ object EphemeryRelease:
     * `genesisHeader`. A configuration `BlobSchedule` rejects fails here, at fetch, and not at node start.
     */
   private def genesisHash(conf: String, genesisJson: String): R[ByteString] =
+    recompute(conf, genesisJson).map(_.hash)
+
+  /** What a rendered chain configuration and genesis come to when a node loads them: the chain id the configuration
+    * states, the genesis timestamp, the computed genesis block hash, and the hash the configuration itself states
+    * (`genesis-hash`, R14), when it states one.
+    */
+  final case class Recomputed(chainId: BigInt, genesisTimestamp: Long, hash: ByteString, statedHash: Option[String]):
+    def hashHex: String = "0x" + Hex.toHexString(hash.toArray)
+
+  /** N3 over any rendered pair: the same load a node does, with the include answered from memory. A cache entry or the
+    * bundle is re-validated with it before it is trusted ([[ReleaseEntry.verify]]).
+    */
+  def recompute(conf: String, genesisJson: String): R[Recomputed] =
     val parsed = Try {
       val options = ConfigParseOptions
         .defaults()
         .setSyntax(ConfigSyntax.CONF)
         .setIncluder(new InMemoryIncluder(Map(GenesisFileName -> genesisJson)))
         .setOriginDescription(ChainConfFileName)
-      val blockchainConfig = BlockchainConfig.fromRawConfig(ConfigFactory.parseString(conf, options))
+      val raw = ConfigFactory.parseString(conf, options)
+      val blockchainConfig = BlockchainConfig.fromRawConfig(raw)
       val json = blockchainConfig.customGenesisJsonOpt.getOrElse(
         throw new IllegalStateException("the rendered configuration carries no genesis")
       )
       val data = GenesisDataLoader.parseGenesisData(json).get
-      GenesisDataLoader.genesisHeader(data)(using blockchainConfig).hash.value
+      val hash = GenesisDataLoader.genesisHeader(data)(using blockchainConfig).hash.value
+      val timestamp =
+        java.lang.Long.parseLong(data.timestamp.stripPrefix("0x"), if data.timestamp.startsWith("0x") then 16 else 10)
+      Recomputed(
+        blockchainConfig.chainId.value,
+        timestamp,
+        hash,
+        Option.when(raw.hasPath("genesis-hash"))(raw.getString("genesis-hash"))
+      )
     }
     parsed.toEither.left.map {
       case e: BlobSchedule.InvalidBlobSchedule => CannotRepresent("a blob schedule", e.getMessage)

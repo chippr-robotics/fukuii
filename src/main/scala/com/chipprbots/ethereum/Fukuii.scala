@@ -13,6 +13,9 @@ import com.chipprbots.ethereum.console.FukuiiBanner
 import com.chipprbots.ethereum.console.Tui
 import com.chipprbots.ethereum.console.TuiConfig
 import com.chipprbots.ethereum.console.TuiEnv
+import com.chipprbots.ethereum.ephemery.EphemeryResetWatchdog
+import com.chipprbots.ethereum.ephemery.EphemeryResolver
+import com.chipprbots.ethereum.ephemery.StartupDeps
 import com.chipprbots.ethereum.nodebuilder.ChainTool
 import com.chipprbots.ethereum.nodebuilder.StdNode
 import com.chipprbots.ethereum.nodebuilder.TestNode
@@ -22,7 +25,12 @@ import com.chipprbots.ethereum.utils.Logger
 import com.chipprbots.ethereum.vm.NativeBackends
 
 object Fukuii extends Logger:
-  def main(args: Array[String]): Unit =
+  def main(args: Array[String]): Unit = run(args, StartupDeps.production)
+
+  /** Starts the node. `deps` is what `App.run` was given: the Ephemery reset watchdog takes its clock and its exit from
+    * it, so a test can drive both.
+    */
+  def run(args: Array[String], deps: StartupDeps): Unit =
     LogManager.getLogManager().reset(); // disable java.util.logging, ie. in legacy parts of jupnp
 
     // A thread that dies of a missing precompile backend halts the node; any other VirtualMachineError is logged (B-135).
@@ -43,6 +51,9 @@ object Fukuii extends Logger:
     // Placed here — after tmpdir is set, before any log.info() call — so the truncation notice
     // is the first line in each file and nothing from the current process is missed.
     if chainToolCommand.isEmpty then truncateLogs()
+
+    // The Ephemery resolver ran before this, and its report would have been truncated away: it is written now.
+    EphemeryResolver.flushReport()
 
     // Check for --tui flag to enable console UI (disabled by default)
     val enableConsoleUI = args.contains("--tui") && chainToolCommand.isEmpty
@@ -141,6 +152,10 @@ object Fukuii extends Logger:
       else new StdNode
 
     node.start()
+
+    // An Ephemery iteration ends at its reset: exit 75 for a supervisor to restart (managed), or only warn (an
+    // operator's prepared directory, or `exit-at-reset = false`). Nothing is armed on any other network.
+    EphemeryResetWatchdog.startFor(Config.config, deps)
 
   private def truncateLogs(): Unit =
     import scala.util.Try

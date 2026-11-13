@@ -56,7 +56,23 @@ object ConfigValidator extends Logger:
     val errors = List.newBuilder[String]
     checkPortClash(config, errors)
     errors ++= stateGuardErrors(config)
+    errors ++= ephemeryErrors(config)
     errors.result()
+
+  /** The bounds of `ephemery.refresh-timeout` (spec 028 SC-002): 10 s to 300 s. Fatal, like any configuration error. */
+  def ephemeryErrors(config: TypesafeConfig): List[String] =
+    if !config.hasPath("ephemery.refresh-timeout") then Nil
+    else
+      val timeout = config.getDuration("ephemery.refresh-timeout")
+      Option
+        .when(
+          timeout.compareTo(java.time.Duration.ofSeconds(10)) < 0 || timeout.compareTo(
+            java.time.Duration.ofSeconds(300)
+          ) > 0
+        )(
+          s"fukuii.ephemery.refresh-timeout is $timeout; it must be between 10 seconds and 300 seconds"
+        )
+        .toList
 
   /** What `config` (a `fukuii` block) asks for that the in-development guard of the unified state layout (spec 018
     * Track C) cannot do yet. Fatal: the node would start and never sync.

@@ -346,17 +346,32 @@ object DaoForkConfig:
         Try(daoConfig.getStringList("drain-list").asScala.toList).toOption.getOrElse(List.empty).map(Address(_))
       override val includeOnForkIdList: Boolean = daoConfig.getBoolean("include-on-fork-id-list")
 
-case class BlockchainsConfig(network: String, blockchains: Map[String, BlockchainConfig]):
-  // Same exception type as the plain `blockchains(network)` lookup this replaces; only the message is new. Generated
-  // networks (Ephemery) live in `custom-chains-dir`, so a missing or unprepared directory surfaces here.
+/** @param customChainsDir
+  *   `fukuii.blockchains.custom-chains-dir` as configured, for the message of a network that is not found
+  */
+case class BlockchainsConfig(
+    network: String,
+    blockchains: Map[String, BlockchainConfig],
+    customChainsDir: Option[String] = None
+):
+  // Same exception type as the plain `blockchains(network)` lookup this replaces; only the message is new (FR-023).
   val blockchainConfig: BlockchainConfig = blockchains.getOrElse(
     network,
     throw new NoSuchElementException(
       s"blockchain network '$network' is not configured (known: ${blockchains.keys.toSeq.sorted.mkString(", ")}). " +
-        "Networks without a built-in chain config are loaded from <custom-chains-dir>/<network>-chain.conf " +
-        "(fukuii.blockchains.custom-chains-dir); for Ephemery run scripts/ephemery/fetch-genesis.sh first."
+        s"A custom network is loaded from <custom-chains-dir>/$network-chain.conf; " + customChainsDirNote
     )
   )
+
+  /** Where that file would be, and whether it is: the directory resolved, so a relative path is not a guess. */
+  private def customChainsDirNote: String = customChainsDir match
+    case None => "fukuii.blockchains.custom-chains-dir is not set."
+    case Some(dir) =>
+      val resolved = new File(dir).getAbsoluteFile
+      val state =
+        if !resolved.isDirectory then "it does not exist"
+        else s"it has no $network-chain.conf"
+      s"that directory is $resolved ($state)."
 object BlockchainsConfig extends Logger:
   private val networkKey = "network"
   private val customChainsDirKey = "custom-chains-dir"
@@ -410,7 +425,11 @@ object BlockchainsConfig extends Logger:
         s"Loaded ${customBlockchains.size} custom chain configuration(s): ${customBlockchains.keys.mkString(", ")}"
       )
 
-    BlockchainsConfig(network, allBlockchains)
+    BlockchainsConfig(
+      network,
+      allBlockchains,
+      Option.when(rawConfig.hasPath(customChainsDirKey))(rawConfig.getString(customChainsDirKey))
+    )
 
 case class MonetaryPolicyConfig(
     eraDuration: Int,

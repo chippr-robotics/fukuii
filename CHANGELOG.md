@@ -8,6 +8,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Changed
+- **`fukuii ephemery` needs no preparation step: the current Ephemery iteration is built in, and a node exits 75 at its
+  reset (spec 028).**
+  - The jar carries `ephemery-165`. At start, before the node's configuration loads, fukuii picks the newest current
+    iteration (a cached one under `<datadir>/releases/ephemery-N`, or the bundled one) and runs it in its own datadir
+    `<datadir>/ephemery-N`. Logs stay at `<datadir>/logs`. An operator's `custom-chains-dir` that holds
+    `ephemery-chain.conf` is used as before, with no fetch and no exit.
+  - At the iteration's reset the node logs a WARN and exits with code 75, for a supervisor to restart; set
+    `fukuii.ephemery.exit-at-reset = false` to only warn. After the reset, this build refuses to start (exit 78) and
+    names `scripts/ephemery/fetch-genesis.sh`.
+  - **Behaviour change.** `conf/ephemery.conf` no longer sets a default `fukuii.blockchains.custom-chains-dir`
+    (`~/.fukuii/ephemery-network/current/chains`). Someone who ran `fetch-genesis.sh` with its default `--out` and
+    launched without `FUKUII_CONF_DIR` now runs the built-in iteration, which is the same one, in a new datadir
+    (`~/.fukuii/ephemery/ephemery-165`); their old datadir is untouched. Launching with `FUKUII_CONF_DIR` is unchanged.
+  - A network that is not configured now says which directory it looked in and whether it exists.
 - **On proof-of-work chains (ETC, Mordor) the SNAP header download validates every header against its parent, and SNAP
   finalisation takes the pivot from that validated chain.**
   - **Header download.** Each header must pass the block-import header rules against its parent (extra data including

@@ -230,3 +230,19 @@ class ConfigValidatorSpec extends AnyFlatSpec with Matchers:
     val refused = the[IllegalArgumentException] thrownBy com.chipprbots.ethereum.runtime.FukuiiRuntime.fromConfig(root)
     refused.getMessage should (include("Instance guarded").and(include("fukuii.state.path-live")))
   }
+
+  "the Ephemery refresh-timeout" should "be accepted from 10 s to 300 s, and refused outside" taggedAs UnitTest in {
+    List("10s", "60s", "300s", "5 minutes").foreach { t =>
+      ConfigValidator.validate(cfg(s"ephemery.refresh-timeout = $t")) shouldBe empty
+    }
+    List("9s", "1s", "301s", "1 hour").foreach { t =>
+      val errors = ConfigValidator.validate(cfg(s"ephemery.refresh-timeout = $t"))
+      errors should have size 1
+      errors.head should include("fukuii.ephemery.refresh-timeout")
+      errors.head should include("between 10 seconds and 300 seconds")
+    }
+    // the shipped default is inside the bounds
+    ConfigValidator.ephemeryErrors(
+      ConfigFactory.load(ConfigFactory.parseResources("conf/ephemery.conf")).getConfig("fukuii")
+    ) shouldBe empty
+  }
