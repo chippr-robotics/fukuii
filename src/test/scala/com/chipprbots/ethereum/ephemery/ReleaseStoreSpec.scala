@@ -53,6 +53,43 @@ class ReleaseStoreSpec extends AnyFlatSpec with Matchers with BeforeAndAfterEach
   private def store(ops: ReleaseLayout.FileOps = ReleaseLayout.FileOps.Default) = new ReleaseStore(root, clock, ops)
   private def stages: List[String] = names(root).filter(_.startsWith(".stage-"))
 
+  /** A directory of consensus-layer files to hand to `place`: the way a fetch leaves its stage. */
+  private def testnetStage(): Path =
+    val dir = store().newStageDir()
+    write(dir.resolve("config.yaml"), "PRESET_BASE: mainnet\n")
+    write(dir.resolve("sub/genesis.ssz"), "ssz")
+    dir
+
+  "place with a testnet directory" should "move it into the new entry, so the entry appears with it" taggedAs UnitTest in {
+    val stage = testnetStage()
+    stage.getFileName.toString should startWith(".stage-")
+    store().place(entry165, Some(stage)) shouldBe Right(Placed)
+    val dir = root.resolve("releases/ephemery-165")
+    names(dir) shouldBe List("chains", "release.json", "testnet")
+    read(dir.resolve("testnet/config.yaml")) shouldBe "PRESET_BASE: mainnet\n"
+    read(dir.resolve("testnet/sub/genesis.ssz")) shouldBe "ssz"
+    Files.exists(stage) shouldBe false
+    store().list().entries.map(_.testnetDir.isDefined) shouldBe List(true)
+  }
+
+  it should "leave the directory with the caller when the entry is already there, for addTestnet" taggedAs UnitTest in {
+    store().place(entry165) shouldBe Right(Placed)
+    val stage = testnetStage()
+    store().place(entry165, Some(stage)) shouldBe Right(AlreadyPresent)
+    Files.isRegularFile(stage.resolve("config.yaml")) shouldBe true
+    Files.exists(root.resolve("releases/ephemery-165/testnet")) shouldBe false
+    store().addTestnet(165, stage) shouldBe Right(true)
+    read(root.resolve("releases/ephemery-165/testnet/config.yaml")) shouldBe "PRESET_BASE: mainnet\n"
+  }
+
+  it should "leave the directory with the caller when the entry was published again (Republished)" taggedAs UnitTest in {
+    store().place(SyntheticRelease.variantEntry(raw(165), now)) shouldBe Right(Placed)
+    val stage = testnetStage()
+    store().place(entry165, Some(stage)).left.map(_.exitCode) shouldBe Left(78)
+    Files.isRegularFile(stage.resolve("config.yaml")) shouldBe true
+    Files.exists(root.resolve("releases/ephemery-165/testnet")) shouldBe false
+  }
+
   "place" should "put the entry in releases/ephemery-N with one rename and leave no stage" taggedAs UnitTest in {
     store().place(entry165) shouldBe Right(Placed)
     val dir = root.resolve("releases/ephemery-165")

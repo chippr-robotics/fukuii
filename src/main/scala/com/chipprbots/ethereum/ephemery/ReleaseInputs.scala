@@ -90,6 +90,32 @@ object ReleaseInputs:
         enrs <- optional(dir, BootEnrFile)
       yield ReleaseInputs(genesis, retention, hash, chainspec, enodes, enrs)
 
+  /** The members of a release that a tar reader kept in memory, by name. The same refusals as [[fromDir]]: no
+    * `genesis.json` is [[ReleaseRefusal.BadSource]] (the archive is not a release), no `retention.vars` or published
+    * hash is [[ReleaseRefusal.Inconsistent]] (N1).
+    */
+  def fromMembers(members: Map[String, Array[Byte]]): Either[ReleaseRefusal, ReleaseInputs] =
+    def text(name: String): Either[ReleaseRefusal, Option[String]] =
+      members.get(name) match
+        case None => Right(None)
+        case Some(bytes) if bytes.length > MaxMemberBytes =>
+          Left(ReleaseRefusal.BadSource(s"the archive's $name is larger than $MaxMemberBytes bytes"))
+        case Some(bytes) => decode(bytes, s"the archive's $name").map(Some(_))
+    def required(name: String)(refuse: String => ReleaseRefusal): Either[ReleaseRefusal, String] =
+      text(name).flatMap(_.toRight(refuse(s"the archive has no $name")))
+    for
+      genesis <- required(GenesisFile)(detail => ReleaseRefusal.BadSource(detail))
+      retention <- required(RetentionFile)(detail => ReleaseRefusal.Inconsistent(detail))
+      hash <- required(PublishedHashFile)(detail => ReleaseRefusal.Inconsistent(detail))
+      chainspec <- text(ChainspecFile)
+      enodes <- text(EnodesFile)
+      enrs <- text(BootEnrFile)
+    yield ReleaseInputs(genesis, retention, hash, chainspec, enodes, enrs)
+
+  /** The names a tar reader keeps in memory for [[fromMembers]]. */
+  val MemberNames: Set[String] =
+    Set(GenesisFile, RetentionFile, PublishedHashFile, ChainspecFile, EnodesFile, BootEnrFile)
+
   private def required(dir: Path, name: String)(
       refuse: String => ReleaseRefusal
   ): Either[ReleaseRefusal, String] =

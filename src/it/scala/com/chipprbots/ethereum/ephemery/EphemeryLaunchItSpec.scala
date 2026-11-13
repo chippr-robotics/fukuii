@@ -65,7 +65,12 @@ class EphemeryLaunchItSpec extends AnyFlatSpec with Matchers with BeforeAndAfter
   /** Forks the harness at `anchor`; returns when `until` accepts a line, or the process ends. A process still running
     * is stopped (SIGTERM, then SIGKILL), and `exit` is then `None`.
     */
-  private def fork(anchor: Long, until: String => Boolean, timeoutSeconds: Long): Run =
+  private def fork(
+      anchor: Long,
+      until: String => Boolean,
+      timeoutSeconds: Long,
+      archive: Option[(Path, Int)] = None
+  ): Run =
     val java = Paths.get(System.getProperty("java.home"), "bin", "java").toString
     val home = Files.createDirectories(base.resolve("home"))
     val ports = List.fill(3)(freePort())
@@ -77,6 +82,9 @@ class EphemeryLaunchItSpec extends AnyFlatSpec with Matchers with BeforeAndAfter
       "-XX:-ReduceAllocationMerges",
       "-Xlog:class+load=info",
       s"-Duser.home=$home",
+      // the harness's fixed transport: this archive for this iteration's release URL, a 404 for any other
+      s"-Dephemery.it.archive=${archive.map(_._1.toString).getOrElse("")}",
+      s"-Dephemery.it.archive.iteration=${archive.map(_._2.toString).getOrElse("")}",
       // the main logback.xml (an explicit property wins over logback-test.xml), as the launcher passes its own
       "-Dlogback.configurationFile=logback.xml",
       s"-Dfukuii.datadir=$root",
@@ -202,6 +210,40 @@ class EphemeryLaunchItSpec extends AnyFlatSpec with Matchers with BeforeAndAfter
     val source = RocksDbDataSource(rocksConfig(db.toAbsolutePath.toString), Namespaces.nsSeq)
     try new AppStateStorage(source).getBestBlockNumber() shouldBe BigInt(0)
     finally source.close()
+  }
+
+  it should "fetch the next iteration after the reset, and start in <root>/ephemery-166, leaving 165 untouched" taggedAs IntegrationTest in {
+    // The clock reads one minute past ephemery-165's reset; the fixed transport serves a synthetic ephemery-166 (the
+    // library's own hash) for its release URL, so nothing waits for a real iteration and nothing touches the network.
+    val inputs166 = SyntheticRelease.next(EphemeryTestInputs.raw(165))
+    val archive = Files.write(base.resolve("testnet-all.tar.gz"), SyntheticRelease.archive(inputs166))
+    // an earlier run's datadir and file: they must be exactly as they were
+    val old = root.resolve("ephemery-165/rocksdb/marker")
+    Files.createDirectories(old.getParent)
+    Files.write(old, "earlier iteration".getBytes(StandardCharsets.UTF_8))
+
+    val run = fork(Reset165 + 60L, _.contains("Using network ephemery"), timeoutSeconds = 240, Some((archive, 166)))
+
+    val report = run.lines.find(_.contains("Ephemery ephemery-166 (chain id 39438166")).getOrElse {
+      fail(s"no startup report in:\n${run.lines.takeRight(60).mkString("\n")}")
+    }
+    report should include("from fetched")
+    report should include(s"datadir ${root.resolve("ephemery-166")}")
+    report should include(s"CL dir ${root.resolve("releases/ephemery-166/testnet")}")
+
+    Files.isRegularFile(root.resolve("releases/ephemery-166/chains/ephemery-chain.conf")) shouldBe true
+    Files.isRegularFile(root.resolve("releases/ephemery-166/testnet/config.yaml")) shouldBe true
+    Files.exists(root.resolve("releases/ephemery-166/testnet/parsedBeaconState.json")) shouldBe false
+    Files.isDirectory(root.resolve("ephemery-166")) shouldBe true
+    Files.readSymbolicLink(root.resolve("current")).toString shouldBe "releases/ephemery-166"
+
+    // 165 is untouched: its datadir is as it was, and the node did not place or run it
+    read(old) shouldBe "earlier iteration"
+    Files.list(root.resolve("ephemery-165")).iterator().asScala.map(_.getFileName.toString).toList shouldBe List(
+      "rocksdb"
+    )
+    Files.exists(root.resolve("releases/ephemery-165")) shouldBe false
+    Files.list(root).iterator().asScala.map(_.getFileName.toString).filter(_.startsWith(".stage-")).toList shouldBe Nil
   }
 
   private def rocksConfig(dbPath: String): RocksDbConfig =

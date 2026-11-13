@@ -50,20 +50,27 @@ final class ReleaseStore(root: Path, clock: Clock, ops: FileOps = FileOps.Defaul
     * directory there that is not a valid entry (a torn write, a hand edit) is renamed to
     * `releases/.invalid-ephemery-N-<k>`, never deleted, and the entry is placed ([[SetAside]]).
     */
-  def place(entry: ReleaseEntry): Either[ReleaseRefusal, PlaceResult] =
+  def place(entry: ReleaseEntry, testnet: Option[Path] = None): Either[ReleaseRefusal, PlaceResult] =
     withStage { stage =>
       val chains = stage.resolve(ReleaseEntry.ChainsDir)
       StageSupport.writeDurable(chains.resolve(EphemeryRelease.ChainConfFileName), entry.chainConf)
       StageSupport.writeDurable(chains.resolve(EphemeryRelease.GenesisFileName), entry.genesisJson)
       StageSupport.writeDurable(stage.resolve(ReleaseEntry.MetadataFile), entry.metadata.toJson)
+      // The consensus-layer directory moves into the new entry (a rename inside the root): the entry then appears with
+      // it, or, when the entry is already there, `testnet` stays where it is for the caller to add with [[addTestnet]].
+      testnet.foreach(t => ops.move(t, stage.resolve("testnet")))
       StageSupport.syncDir(chains)
       StageSupport.syncDir(stage)
       val target = releaseDir(entry.iteration)
       val placed: Either[ReleaseRefusal, PlaceResult] =
         if Files.exists(target, LinkOption.NOFOLLOW_LINKS) then
           load(target) match
-            case Right(held) if held.entry.genesisHash == entry.genesisHash => Right(AlreadyPresent)
+            case Right(held) if held.entry.genesisHash == entry.genesisHash =>
+              // not placed: the directory given is still the caller's
+              testnet.foreach(t => ops.move(stage.resolve("testnet"), t))
+              Right(AlreadyPresent)
             case Right(held) =>
+              testnet.foreach(t => ops.move(stage.resolve("testnet"), t))
               Left(ReleaseRefusal.Republished(entry.iteration, held.entry.genesisHash, entry.genesisHash))
             case Left(_) =>
               val aside = freeInvalidName(entry.iteration)
@@ -99,6 +106,17 @@ final class ReleaseStore(root: Path, clock: Clock, ops: FileOps = FileOps.Defaul
         ops.move(stage.resolve("testnet"), entry.resolve("testnet"))
         Right(true)
     }.left.map(_.message)
+
+  /** An empty directory under the root for a download or a copy, named `.stage-*` so a later start sweeps it if the run
+    * dies. The caller removes it, or hands it to [[place]], which moves it. Not under the root's lock: a stage younger
+    * than an hour is never swept.
+    */
+  def newStageDir(): Path =
+    Files.createDirectories(root)
+    val dir = Files.createTempDirectory(root, ".stage-")
+    // createTempDirectory makes it 0700, and `testnet/` would inherit that mode.
+    Try(Files.setPosixFilePermissions(dir, PosixFilePermissions.fromString("rwxr-xr-x")))
+    dir
 
   /** Removes the `.stage-*` directories of runs that died: older than an hour, and holding no old copy. */
   def sweepStages(): Unit =

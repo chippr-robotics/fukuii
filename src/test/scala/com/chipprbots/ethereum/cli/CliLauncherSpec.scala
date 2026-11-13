@@ -49,8 +49,8 @@ class CliLauncherSpec extends AnyFlatSpec with Matchers with BeforeAndAfterEach:
   }
 
   it should "exit 2 for a usage error" taggedAs (UnitTest) in {
-    run("ephemery-fetch", "--from-dir", "x") shouldBe Some(2)
-    run("ephemery-fetch") shouldBe Some(2)
+    run("ephemery-fetch", "--release", "x") shouldBe Some(2)
+    run("ephemery-fetch", "--bogus") shouldBe Some(2)
   }
 
   it should "exit 78 for a release that is refused" taggedAs (UnitTest) in {

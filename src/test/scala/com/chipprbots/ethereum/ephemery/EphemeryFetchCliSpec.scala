@@ -180,9 +180,7 @@ class EphemeryFetchCliSpec extends AnyFlatSpec with Matchers with BeforeAndAfter
   }
 
   it should "exit 2 on a usage error" taggedAs (UnitTest) in {
-    run().code shouldBe 2
-    run("--from-dir", raw165).code shouldBe 2 // --out is required in this slice
-    run("--out", tmp.toString).code shouldBe 2
+    run("--release", "165").code shouldBe 2
     run("--from-dir", raw165, "--out", tmp.resolve("a\"b").toString).code shouldBe 2
     run("--from-dir", raw165, "--out", tmp.resolve("a$b").toString).code shouldBe 2
     run("--from-dir", raw165, "--out", tmp.toString, "--release", "165").code shouldBe 2
@@ -236,4 +234,229 @@ class EphemeryFetchCliSpec extends AnyFlatSpec with Matchers with BeforeAndAfter
     val r = run("--from-dir", src.toString, "--out", src.resolve("out").toString)
     r.code shouldBe 1
     r.err should include("is inside --from-dir")
+  }
+
+  // ---- S4b: downloading, and writing into the node's root -----------------------------------------------------------------
+
+  private val at165 = Instant.parse("2026-11-12T10:00:00Z")
+  private val afterReset = Instant.ofEpochSecond(1795114800L).plusSeconds(60)
+  private lazy val inputs166 = SyntheticRelease.next(raw(165))
+  private lazy val archive165 = Reply.Body(SyntheticRelease.archive(raw(165)))
+  private lazy val archive166 = Reply.Body(SyntheticRelease.archive(inputs166))
+
+  private def nodeRoot: Path = tmp.resolve("node/ephemery")
+
+  /** The command with a fake transport, a manual clock at `at`, and a raw configuration whose root is [[nodeRoot]]. */
+  final private class Net(at: Instant, extraConfig: String = ""):
+    val clock = new ManualClock(at)
+    val sleeper = new ManualSleeper(clock)
+    val transport = new FakeTransport(clock)
+    var policies: List[SourcePolicy] = Nil
+    private val deps = StartupDeps(
+      clock,
+      (p: SourcePolicy) =>
+        policies = policies :+ p
+        Right(transport)
+      ,
+      _ => (),
+      sleeper
+    )
+    def run(args: String*): Run =
+      val out = new ByteArrayOutputStream
+      val err = new ByteArrayOutputStream
+      val config = com.typesafe.config.ConfigFactory.parseString(
+        s"""fukuii.blockchains.network = "ephemery"
+           |fukuii.datadir = "$nodeRoot"
+           |$extraConfig
+           |""".stripMargin
+      )
+      val code = EphemeryFetchCli.main(
+        args.toSeq,
+        Map.empty,
+        clock,
+        "fukuii test",
+        new PrintStream(out, true, "UTF-8"),
+        new PrintStream(err, true, "UTF-8"),
+        deps,
+        config
+      )
+      Run(code, out.toString("UTF-8"), err.toString("UTF-8"))
+
+  "ephemery-fetch --release" should "download the release into the node's root, testnet/ included, with no --out" taggedAs (UnitTest) in {
+    val net = new Net(afterReset)
+    net.transport.on(EphemeryUrls.asset(166), archive166)
+    val r = net.run("--release", "ephemery-166")
+    withClue(r.err)(r.code shouldBe 0)
+    val dir = nodeRoot.resolve("releases/ephemery-166")
+    Files.isRegularFile(dir.resolve("chains/ephemery-chain.conf")) shouldBe true
+    Files.isRegularFile(dir.resolve("release.json")) shouldBe true
+    Files.isRegularFile(dir.resolve("testnet/config.yaml")) shouldBe true
+    Files.isRegularFile(dir.resolve("testnet/genesis.ssz")) shouldBe true
+    Files.exists(dir.resolve("testnet/parsedBeaconState.json")) shouldBe false
+    Files.exists(dir.resolve("testnet/bootnode-keys")) shouldBe false
+    net.transport.calls.map(_.url) shouldBe List(EphemeryUrls.asset(166))
+    net.transport.closed shouldBe 1
+    net.policies shouldBe List(SourcePolicy.DefaultGithub)
+    r.out should include("ITERATION=\"166\"")
+    // the node's own datadir is not made by the command
+    Files.exists(nodeRoot.resolve("ephemery-166")) shouldBe false
+  }
+
+  it should "download the iteration whose window contains now when no --release is given" taggedAs (UnitTest) in {
+    val net = new Net(afterReset)
+    net.transport.on(EphemeryUrls.asset(166), archive166)
+    val r = net.run()
+    withClue(r.err)(r.code shouldBe 0)
+    net.transport.calls.map(_.url).distinct shouldBe List(EphemeryUrls.asset(166))
+  }
+
+  it should "fetch the bundled current iteration when that is the one whose window contains now" taggedAs (UnitTest) in {
+    val net = new Net(at165)
+    net.transport.on(EphemeryUrls.asset(165), archive165)
+    val r = net.run()
+    withClue(r.err)(r.code shouldBe 0)
+    Files.isRegularFile(nodeRoot.resolve("releases/ephemery-165/testnet/config.yaml")) shouldBe true
+  }
+
+  it should "add testnet/ to an entry the node already placed, leaving its other files alone" taggedAs (UnitTest) in {
+    val store = new ReleaseStore(nodeRoot, net0Clock)
+    val valid = EphemeryRelease.validate(raw(165)).fold(r => fail(r.message), identity)
+    val entry = ReleaseEntry.of(valid, "/bundled", None, "test", at165)
+    store.place(entry) shouldBe Right(ReleaseStore.Placed)
+    val dir = nodeRoot.resolve("releases/ephemery-165")
+    val before = read(dir.resolve("release.json"))
+    Files.exists(dir.resolve("testnet")) shouldBe false
+
+    val net = new Net(at165)
+    net.transport.on(EphemeryUrls.asset(165), archive165)
+    val r = net.run("--release", "ephemery-165")
+    withClue(r.err)(r.code shouldBe 0)
+    Files.isRegularFile(dir.resolve("testnet/config.yaml")) shouldBe true
+    read(dir.resolve("release.json")) shouldBe before
+    // run again: nothing changes, still exit 0
+    net.run("--release", "ephemery-165").code shouldBe 0
+  }
+
+  private def net0Clock: Clock = Clock.fixed(at165, ZoneOffset.UTC)
+
+  it should "refuse a release published again with another genesis, exit 78, and change nothing" taggedAs (UnitTest) in {
+    val store = new ReleaseStore(nodeRoot, net0Clock)
+    store.place(SyntheticRelease.variantEntry(raw(165), at165)) shouldBe Right(ReleaseStore.Placed)
+    val dir = nodeRoot.resolve("releases/ephemery-165")
+    val before = read(dir.resolve("release.json"))
+    val net = new Net(at165)
+    net.transport.on(EphemeryUrls.asset(165), archive165)
+    val r = net.run("--release", "ephemery-165")
+    r.code shouldBe 78
+    r.err should include("published again")
+    read(dir.resolve("release.json")) shouldBe before
+    Files.exists(dir.resolve("testnet")) shouldBe false
+  }
+
+  it should "exit 69 when the release is not published" taggedAs (UnitTest) in {
+    val net = new Net(afterReset)
+    val r = net.run("--release", "ephemery-166")
+    r.code shouldBe 69
+    r.err should include("not published yet")
+    Files.exists(nodeRoot.resolve("releases/ephemery-166")) shouldBe false
+  }
+
+  it should "exit 69 when the source is unreachable" taggedAs (UnitTest) in {
+    val net = new Net(afterReset)
+    net.transport.on(EphemeryUrls.asset(166), Reply.Fail(TransportFailure.Io("no route to host")))
+    net.run("--release", "ephemery-166").code shouldBe 69
+  }
+
+  it should "exit 78 for a release that is refused, and write nothing" taggedAs (UnitTest) in {
+    val net = new Net(afterReset)
+    val bad = SyntheticRelease.archive(inputs166.copy(publishedHashText = "0x" + "ab" * 32))
+    net.transport.on(EphemeryUrls.asset(166), Reply.Body(bad))
+    net.run("--release", "ephemery-166").code shouldBe 78
+    Files.exists(nodeRoot.resolve("releases/ephemery-166")) shouldBe false
+  }
+
+  it should "exit 78 when the release in the archive is not the one asked for" taggedAs (UnitTest) in {
+    val net = new Net(afterReset)
+    net.transport.on(EphemeryUrls.asset(166), archive165)
+    val r = net.run("--release", "ephemery-166")
+    r.code shouldBe 78
+    r.err should include("disagrees")
+  }
+
+  it should "not be stopped by refresh = false: the operator asked" taggedAs (UnitTest) in {
+    val net = new Net(afterReset, extraConfig = "fukuii.ephemery.refresh = false")
+    net.transport.on(EphemeryUrls.asset(166), archive166)
+    withClue(net.run("--release", "ephemery-166").err)(
+      Files.isDirectory(nodeRoot.resolve("releases/ephemery-166")) shouldBe true
+    )
+  }
+
+  it should "use the configured https mirror" taggedAs (UnitTest) in {
+    val mirror = "https://mirror.example.org/eph"
+    val net = new Net(afterReset, extraConfig = s"""fukuii.ephemery.source = "$mirror"""")
+    net.transport.on(EphemeryUrls.asset(166, mirror), archive166)
+    net.run("--release", "ephemery-166").code shouldBe 0
+    net.policies shouldBe List(SourcePolicy.Mirror)
+  }
+
+  it should "exit 78 for an http source, without a call" taggedAs (UnitTest) in {
+    val net = new Net(afterReset, extraConfig = """fukuii.ephemery.source = "http://mirror.example.org/eph"""")
+    net.run("--release", "ephemery-166").code shouldBe 78
+    net.transport.calls shouldBe empty
+  }
+
+  it should "write the script's layout under --out when it downloads, testnet/ included" taggedAs (UnitTest) in {
+    val net = new Net(afterReset)
+    net.transport.on(EphemeryUrls.asset(166), archive166)
+    val out = tmp.resolve("out")
+    val r = net.run("--release", "ephemery-166", "--out", out.toString)
+    withClue(r.err)(r.code shouldBe 0)
+    val dest = out.resolve("ephemery-166")
+    List("chains/ephemery-chain.conf", "conf/ephemery.conf", "release.env", "release.json", "testnet/config.yaml")
+      .foreach(f => Files.isRegularFile(dest.resolve(f)) shouldBe true)
+    Files.exists(dest.resolve("testnet/parsedBeaconState.json")) shouldBe false
+    Files.readSymbolicLink(out.resolve("current")).toString shouldBe "ephemery-166"
+    // the node's root is not touched by --out
+    Files.exists(nodeRoot) shouldBe false
+    // release.json says where it came from
+    read(dest.resolve("release.json")) should include(s"${EphemeryUrls.Base}/releases/tag/ephemery-166")
+  }
+
+  it should "take a --from-dir release into the node's root with no --out and no network" taggedAs (UnitTest) in {
+    val net = new Net(at165)
+    val r = net.run("--from-dir", raw165)
+    withClue(r.err)(r.code shouldBe 0)
+    Files.isRegularFile(nodeRoot.resolve("releases/ephemery-165/chains/ephemery-chain.conf")) shouldBe true
+    Files.isRegularFile(nodeRoot.resolve("releases/ephemery-165/testnet/enodes.txt")) shouldBe true
+    net.transport.calls shouldBe empty
+    net.policies shouldBe empty
+  }
+
+  it should "leave parsedBeaconState.json and bootnode-keys/ out of testnet/ when it takes a directory in" taggedAs (UnitTest) in {
+    val src = tmp.resolve("full")
+    Files.createDirectories(src.resolve("bootnode-keys"))
+    Files.list(releaseDir(165)).iterator().asScala.foreach(f => Files.copy(f, src.resolve(f.getFileName.toString)))
+    Files.write(src.resolve("parsedBeaconState.json"), "{}".getBytes(StandardCharsets.UTF_8))
+    Files.write(src.resolve("bootnode-keys/k.enc"), "secret".getBytes(StandardCharsets.UTF_8))
+    Files.write(src.resolve("config.yaml"), "PRESET_BASE: mainnet\n".getBytes(StandardCharsets.UTF_8))
+    val r = new Net(at165).run("--from-dir", src.toString)
+    withClue(r.err)(r.code shouldBe 0)
+    val testnet = nodeRoot.resolve("releases/ephemery-165/testnet")
+    Files.isRegularFile(testnet.resolve("config.yaml")) shouldBe true
+    Files.exists(testnet.resolve("parsedBeaconState.json")) shouldBe false
+    Files.exists(testnet.resolve("bootnode-keys")) shouldBe false
+  }
+
+  it should "read a source directory from the configuration when no --from-dir is given" taggedAs (UnitTest) in {
+    val net = new Net(at165, extraConfig = s"""fukuii.ephemery.source = "$raw165"""")
+    val r = net.run("--out", tmp.resolve("o2").toString)
+    withClue(r.err)(r.code shouldBe 0)
+    net.transport.calls shouldBe empty
+  }
+
+  it should "exit 2 for --source or --archive-sha256 without --from-dir" taggedAs (UnitTest) in {
+    val net = new Net(afterReset)
+    net.run("--release", "ephemery-166", "--source", "https://example.org/x").code shouldBe 2
+    net.run("--release", "ephemery-166", "--archive-sha256", "ab" * 32).code shouldBe 2
+    net.transport.calls shouldBe empty
   }

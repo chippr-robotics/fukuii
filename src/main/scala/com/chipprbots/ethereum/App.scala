@@ -255,12 +255,12 @@ object App extends Logger:
     val network = determineNetworkArg(argsWithoutModifiers)
     network.foreach(setNetworkConfig)
 
-    // `cli ephemery-fetch --out DIR` writes into DIR: its log should not go to a node's datadir, so the file appenders
-    // are dropped and it logs to the console only. BEST EFFORT: the launcher's logger was set up when `App` was
+    // `cli ephemery-fetch` writes into the directory it is given (or a node's root): its log should not go to a node's
+    // datadir, so the file appenders are dropped and it logs to the console only. BEST EFFORT: the launcher's logger was set up when `App` was
     // initialised, before any argument was read, and its file appender has already opened (and created) the default
     // network's log file. Moving that is App-init logging, which is B-241 and the user's call; this only stops further
     // writes to it. A caller can also pass `-Dlogging.logs-dir` (fetch-genesis.sh and update-bundled.sh do).
-    if isEphemeryFetchWithOut(argsWithoutModifiers) then LogbackReload.consoleOnly()
+    if isEphemeryFetch(argsWithoutModifiers) then LogbackReload.consoleOnly()
 
     // Ephemery needs no preparation step (spec 028): choose its iteration now, after the network is set and before
     // anything reads `utils.Config`, which reads its properties once. A refusal ends the process with its code.
@@ -278,9 +278,8 @@ object App extends Logger:
         try dispatch(argsWithoutModifiers, modifiers, deps)
         finally EphemeryResolver.flushReport()
 
-  private def isEphemeryFetchWithOut(args: Array[String]): Boolean =
-    args.headOption.contains(cli) && args.tail.headOption.contains(EphemeryFetchCli.CommandName) &&
-      args.exists(a => a == "--out" || a.startsWith("--out="))
+  private def isEphemeryFetch(args: Array[String]): Boolean =
+    args.headOption.contains(cli) && args.tail.headOption.contains(EphemeryFetchCli.CommandName)
 
   private def dispatch(argsWithoutModifiers: Array[String], modifiers: Set[String], deps: StartupDeps): Unit =
 
