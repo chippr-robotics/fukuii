@@ -80,6 +80,7 @@ One binary, every major EVM network:
 
 - **ETC Mainnet** — full PoW node with SNAP sync
 - **Ethereum Mainnet** — full PoS execution layer via Engine API
+- **Hoodi** — Ethereum testnet (chain id 560048), built in: `fukuii hoodi`. See [the Hoodi runbook](docs/runbooks/hoodi.md)
 - **Sepolia, Platåberget** — Ethereum testnets, with Glamsterdam (Amsterdam) support from v0.9.0. Platåberget is the public Glamsterdam testnet; Sepolia activates Amsterdam on 2026-10-06 13:53:36 UTC
 - **Mordor** — ETC testnet
 - **Private and consortium chains** — custom genesis, no source modification required

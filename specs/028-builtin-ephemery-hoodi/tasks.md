@@ -66,7 +66,7 @@ Every slice ends with the same gate shape and an exit task, using the review cyc
 - [ ] T002 Baseline, one JVM, on `origin/staging`: `sbt "testOnly *Ephemery* *ForkId* *GenesisDataLoader*
       *ChainConfigMatrixSpec *LauncherIntegrationSpec *BlobScheduleSpec *EestBlockchainReplay*"`. Record the suite and
       test counts in each slice's PR body, as the before figure.
-- [ ] T003 On the first code commit of whichever slice lands first, update spec.md:
+- [x] T003 On the first code commit of whichever slice lands first, update spec.md:
       - set `**Status**` to `Active (<date>)`;
       - set `**In flight**` to that slice's branch;
       - run `python3 -I scripts/specs/index.py` and commit `specs/README.md`.
@@ -83,9 +83,9 @@ bootnodes, and peers on Hoodi (FR-018 to FR-020, SC-005).
 **Independent test**: `HoodiGenesisSpec` and `ForkIdHoodiSpec` pass. A clean `fukuii hoodi` connects to Hoodi peers,
 which accept its fork id.
 
-- [ ] T004 Make a full clone at `~/work/e028-s1` from `origin/staging`, on branch `feat/028-s1-hoodi`. Claim B-231
+- [x] T004 Make a full clone at `~/work/e028-s1` from `origin/staging`, on branch `feat/028-s1-hoodi`. Claim B-231
       (`backlog.py claim B-231`).
-- [ ] T005 Pre-flight with `beacon`, model `sonnet`, before any code. Give it research.md R15 and the raw [H] and [G]
+- [x] T005 Pre-flight with `beacon`, model `sonnet`, before any code. Give it research.md R15 and the raw [H] and [G]
       files. Have it:
       - confirm every value in R15's table and the 5 fork-id rows;
       - confirm the genesis re-encoding: `timestamp` to `"0x67d80ec0"`, `mixhash` to `mixHash`;
@@ -96,23 +96,23 @@ which accept its fork id.
 
 ### Tests for S1 (write first, see them fail)
 
-- [ ] T006 [P] [US3] Write `src/test/scala/com/chipprbots/ethereum/blockchain/data/HoodiGenesisSpec.scala`. It loads
+- [x] T006 [P] [US3] Write `src/test/scala/com/chipprbots/ethereum/blockchain/data/HoodiGenesisSpec.scala`. It loads
       the built-in `hoodi` chain config and builds the genesis through `GenesisDataLoader` over `EphemDataSource`. It
       checks:
       - the hash equals `0xbbe312868b376a3001692a646dd2d7d1e4406380dfd86b98aa8a34d1557c971b`;
       - the state root equals block 0's `stateRoot` from a public Hoodi RPC (fetch it once at implementation; put the
         value and its source in a comment);
       - the load is not refused, even with 3 storage accounts and `countsExact = false` (research R15's correction).
-- [ ] T007 [P] [US3] Write `src/test/scala/com/chipprbots/ethereum/network/ForkIdHoodiSpec.scala`, modelled on
+- [x] T007 [P] [US3] Write `src/test/scala/com/chipprbots/ethereum/network/ForkIdHoodiSpec.scala`, modelled on
       `ForkIdSepoliaSpec.scala`. It uses `ForkId.create(genesisHash, 1742212800L, blockchains("hoodi"))` and checks the
       5 rows of research R15, from `0xbef71d30`/1742999832 to `0x23aa1351`/None. Tag it `UnitTest`, `NetworkTest`.
-- [ ] T008 [P] [US3] Write `src/test/scala/com/chipprbots/ethereum/network/discovery/HoodiBootnodeSpec.scala`, the
+- [x] T008 [P] [US3] Write `src/test/scala/com/chipprbots/ethereum/network/discovery/HoodiBootnodeSpec.scala`, the
       pin test of R15.
       - It checks that `Node.fromUri` on `enode://70ba…d1a3@212.99.218.66:0?discport=20153` gives TCP 0 and UDP 20153.
       - It traces what `DiscoveryConfig` and the peer dialler do with a TCP-0 bootstrap node: a discovery ping to the
         UDP port, and whether any RLPx dial to port 0 happens. It asserts the behaviour it finds.
       - The result decides T012's bootnode list.
-- [ ] T009 [P] [US3] Edit three existing tests:
+- [x] T009 [P] [US3] Edit three existing tests:
       - `src/test/scala/com/chipprbots/ethereum/utils/ChainConfigMatrixSpec.scala`: add `hoodi` to `allOf` (`:127`)
         and `"hoodi" -> 0x00000000219ab540356cBB839Cbe05303d7705Fa` to `ExpectedDepositContract` (`:153`);
       - `root tests/LauncherIntegrationSpec.scala`: add `hoodi` to the known networks (`:129`) and the conf pairing
@@ -121,7 +121,7 @@ which accept its fork id.
 
 ### Implementation for S1
 
-- [ ] T010 [US3] Create `src/main/resources/conf/base/chains/hoodi-genesis.json` from [H] `metadata/genesis.json`:
+- [x] T010 [US3] Create `src/main/resources/conf/base/chains/hoodi-genesis.json` from [H] `metadata/genesis.json`:
       - `timestamp` becomes `"0x67d80ec0"`;
       - `mixhash` is renamed to `mixHash`;
       - `extraData` becomes `"0x"`;
@@ -130,24 +130,24 @@ which accept its fork id.
 
       If S2's `GenesisJsonEncoder` is merged, use it. Otherwise use a one-off `jq`, with the command in the commit
       message. T006 is the check.
-- [ ] T011 [US3] Create `src/main/resources/conf/base/chains/hoodi-chain.conf` by copying `sepolia-chain.conf` and
+- [x] T011 [US3] Create `src/main/resources/conf/base/chains/hoodi-chain.conf` by copying `sepolia-chain.conf` and
       setting the values of data-model.md "HoodiNetworkEntry". That includes:
       - `consensus = "engine-api"` and `genesis-hash`;
       - `dns-discovery-domains = ["all.hoodi.ethdisco.net"]`;
       - no `amsterdam-timestamp`.
-- [ ] T012 [US3] Set `bootstrap-nodes` in `hoodi-chain.conf` from T008's result: either [H]'s 6 enodes, or the 4
+- [x] T012 [US3] Set `bootstrap-nodes` in `hoodi-chain.conf` from T008's result: either [H]'s 6 enodes, or the 4
       `:30303` enodes (the 3 legacy from [G] plus Lodestar). Record the choice in the PR body.
-- [ ] T013 [US3] Add Hoodi to the launch and discovery code:
+- [x] T013 [US3] Add Hoodi to the launch and discovery code:
       - `src/main/resources/conf/base/blockchains.conf`: `hoodi {include required("chains/hoodi-chain.conf")}` after
         sepolia;
       - `src/main/resources/conf/hoodi.conf`: a copy of `sepolia.conf` with `network = "hoodi"` (contracts/config.md);
       - `src/main/scala/com/chipprbots/ethereum/network/discovery/Eip1459.scala` (`DnsTrustAnchors.shipped`, `:230`):
         `all.hoodi.ethdisco.net` mapped to the EF key Sepolia's entry uses.
-- [ ] T014 [US3] Add Hoodi to the names the node prints:
+- [x] T014 [US3] Add Hoodi to the names the node prints:
       - `src/main/scala/com/chipprbots/ethereum/App.scala`: `"hoodi"` in `knownNetworks` and the help-text line
         (contracts/cli.md);
       - `src/main/scala/com/chipprbots/ethereum/jsonrpc/mcp/McpResources.scala:78`: map `560048` to `"hoodi"`.
-- [ ] T015 [P] [US3] Write the docs:
+- [x] T015 [P] [US3] Write the docs:
       - a new `docs/runbooks/hoodi.md`: launch, pairing a CL (Lighthouse `--network hoodi`), the JWT as an absolute
         path, sync defaults as Sepolia's;
       - a `CHANGELOG.md` entry;
@@ -156,9 +156,9 @@ which accept its fork id.
 
 ### Gate and exit for S1
 
-- [ ] T016 Run `sbt compile-all`, then `sbt "testOnly *HoodiGenesisSpec *ForkIdHoodiSpec *HoodiBootnodeSpec
+- [x] T016 Run `sbt compile-all`, then `sbt "testOnly *HoodiGenesisSpec *ForkIdHoodiSpec *HoodiBootnodeSpec
       *ChainConfigMatrixSpec *LauncherIntegrationSpec *BlobScheduleSpec"`. Expect PASS.
-- [ ] T017 Run `sbt "testOnly *ForkId* *GenesisDataLoader* *Mordor* *Gorgoroth*"`. Expect PASS with no assertion
+- [x] T017 Run `sbt "testOnly *ForkId* *GenesisDataLoader* *Mordor* *Gorgoroth*"`. Expect PASS with no assertion
       changes (FR-021). Then `sbt formatAll`, read `git diff`, and run `sbt formatCheck`. Expect clean.
 - [ ] T018 [US3] Manual, with no sbt running. Run `fukuii hoodi -Dfukuii.datadir=/chipprbots/blockchain/hoodi-check`,
       a new path. It needs a JWT file and Lighthouse `--network hoodi` with checkpoint sync. Check:
