@@ -2380,6 +2380,87 @@ guard off nothing changes (`commitGenesis` and the new key are reached only on t
   executed again, and a record is then written over the bad one, so it is said where it is last seen.
 - The bounds are added without wrapping round; the detail of a chain that shares no block with this node's.
 
+#### C4b part 2a: the move of the head in the store (2026-11-13)
+
+**What it is.** `PathStateStorage.moveHead(target, link, extraFor)` plans the move (part 1) and writes it: as one
+batch, or as a chain of batches of at most `state.move.max-blocks-per-batch` blocks. Each batch holds the rows, the
+records of the blocks that had none, the anchor, and **what the caller gives for it** (`extraFor`, asked for
+outside the state lock, once for each batch and again after a re-plan): its index of blocks by number and its
+best-block pointer. So after any batch, and after a crash between two, the anchor and the best block are one
+block, on the way from the old head down to the fork and up to the target. Nothing in the node calls it yet; the
+callers that exist on the guard are part 3, and `BlockchainWriter`'s rows part 2b.
+
+**A batch is built against a virtual disk** (`MoveBatch`): the disk's rows under what the batch has done so far.
+A block reversed must find at every position what its record says it left; a record applied again must find what
+it was applied over (not where it names no prior, as a layer's is not: the rows a trie left behind when it had
+too many to list). A block applied from its layer is settled against the virtual rows of the tries it replaces,
+with the bounds of an in-place commit held on **those** rows and not on the disk's: an owner the batch has shrunk
+is listed as a commit on its parent's state would list it, and one it has grown is not (forge, beacon: else the
+record of a block, and whether its old rows stay, would depend on how a move was cut into batches). The account
+trie's root on the virtual disk must be the state root of the block the batch ends on. All of that is before
+anything is written; a batch that fails it writes nothing, and the batches before it stand. What is written is
+each position whose final value differs from the disk's, and a reader of the old state is given back the disk's
+row for exactly those.
+
+**A promotion is that batch for one block.** `promote` goes through the same builder; the 411 specs of the store
+that existed before passed unchanged.
+
+**One move at a time, and no commit between two batches.** A move holds a lock of its own from its plan to its
+last batch and says it is under way (`moveInProgress`, with `movesStarted` for who builds on the head and must
+know a move began meanwhile). A writer that adopts a block looks at that under the state lock; if a move is under
+way it lets the state lock go, waits for the move's end and asks again. It does not take the move's lock
+otherwise: writers queue where they always did, in the fair state lock. A commit that got in just before a move
+began makes the move's first batch find another head, and the move is planned again (three times at most); a
+head moved under a later batch stops the move where it is.
+
+**Retention.** A batch that only applies blocks prunes as the commit of a block does, and never a height it
+records itself (the index of a height is read from the disk, which does not hold what the batch writes there). A
+batch that reverses a block prunes nothing: the records above the fork are the way back.
+
+**A store that wrote other bytes than it was given fails closed.** Up to 64 of the rows a batch wrote are read
+back. A mismatch cannot come from anything but the store: what is kept in memory follows the disk first, and then
+nothing is written in place and **no state is given out**, by a view or an overlay commit, until the node is
+started again (beacon: a block executed on such a store could be answered INVALID, and a consensus client keeps
+that verdict).
+
+**Left for part 2b** (recorded by the reads): a bound on a batch by bytes and a barrier move above it; the layers
+of a plan pinned for the whole move (an eviction between two batches stops the move, which fails closed);
+`max-view-age-moves` against batches of one block; the hold that keeps retention off the records while a
+reverse-then-commit attempt is unsettled; `BlockchainWriter` split into a builder of its rows and a commit, with
+the one-batch test (T137, T147); the metrics. For C4e: the miner reads `movesStarted` before and after it
+builds, with the flag (forge). `moveHead` waits and may be long: its callers run it where a thread may block
+(beacon).
+
+**The mutation run**: 50 mutants; 48 caught, 2 equivalent. The batch builder (a reversed or re-applied block not
+held to the disk; a reverse that writes what the block left; a re-applied record that writes its priors; a layer
+read over the disk and not over the batch so far; a replaced trie settled against the disk's rows alone, or with
+the batch's deletes shown, or bounded on the disk's rows and not the virtual ones, in rows or in bytes; rows of an
+unlisted trie not written; the root not held to the target's; every touched row written, changed or not; a reader
+of the old state given the new rows; a tombstone or a record over its bound or an unlisted trie's block treated as
+an ordinary record); the move (a commit between two batches; a move not said to be under way, or said to be after
+its end; a dropped layer applied; a batch written though the epoch moved; the caller's rows of a move to the head
+not written; no re-plan, or a re-plan after a later batch; a layer that does not stand kept; pruning in a reversing
+batch, of heights the batch records, or counted from its last block; no record for a layer's block; the caller's
+rows or the anchor left out of the batch; one batch whatever the size; no `heldTo`; the layers applied kept, or
+dropped between batches, or kept after a move that failed; a move inside a move; a move not counted); and the
+store that failed its read-back (written to again, moved, read, given an executed block, or its promotion or batch
+saying nothing). **Equivalent**: the check that the anchor is where a batch starts, with the epoch checked too (the
+anchor never moves without the epoch); and the drop of layers after a one-layer batch that is not the last (records
+lie on a prefix of the blocks applied, so every later block is a layer on it). Three cases were added for mutants
+the first run missed: a branch that leaves a trie as the old one left it writes none of its rows; a record that
+became a tombstone under the plan is named; a layer dropped between two batches stops the move where it is.
+
+**Reads after code (forge, beacon, vault): all APPROVE WITH CHANGES, nothing critical.** Verified by them in
+code: the coalescing is exact for a trie reset earlier in the batch, a reset that is reversed, and a contract
+destroyed and made again in one block; the reverse check is sound above an older tombstone, and the reverse of a
+prior of none over a row left behind deletes that row, rightly; the views of the old head, behind it, through
+fork layers and through layers being promoted stay right across one batch and across several; no key is written
+twice or deleted after it is written in a batch; rows, records and anchor recover together (one write-ahead log,
+never disabled); no commit can land between two batches; with the guard off nothing changes. Taken: the bounds
+on the virtual rows (above); the layers a later batch needs are not dropped between batches; the fail-closed
+store gives out no state, and its memory follows the disk before it says so; records are read past the block
+cache; the move's lock is fair, and a move asked for from inside a move is refused.
+
 ### Destructive change (C8a and C8b): the vault protocol blocks
 
 ```
