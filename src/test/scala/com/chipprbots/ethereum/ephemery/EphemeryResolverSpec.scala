@@ -173,7 +173,7 @@ class EphemeryResolverSpec extends AnyFlatSpec with Matchers with BeforeAndAfter
 
   it should "name the CL directory when the entry has one, and say from cache for a placed entry" taggedAs UnitTest in {
     resolve(inside165)
-    store().addTestnet(165, releaseDir(165)) shouldBe Right(true)
+    store().addTestnet(165, completeClDir()) shouldBe Right(true)
     val r = resolve(inside165)
     managed(r).origin shouldBe Origin.Cache
     texts(r, Level.Info).exists(l =>
@@ -206,22 +206,16 @@ class EphemeryResolverSpec extends AnyFlatSpec with Matchers with BeforeAndAfter
     texts(resolve(inside165), Level.Warn) shouldBe empty
   }
 
-  it should "refuse with exit 78, naming fetch-genesis.sh, when every iteration has ended and refresh is off" taggedAs UnitTest in {
+  it should "refuse with exit 78, and name the way to supply the next iteration, when every iteration has ended and refresh is off" taggedAs UnitTest in {
     val r = resolve(after165, settings(refresh = false))
     val x = refusal(r)
     x shouldBe a[ReleaseRefusal.Ended]
     x.exitCode shouldBe 78
     x.message should include("ephemery-165 ended at " + Reset165)
-    x.message should include("fetch-genesis.sh")
+    x.message should include("fetching is disabled (fukuii.ephemery.refresh = false)")
+    x.message should include("supply ephemery-166 with `fukuii cli ephemery-fetch --from-dir DIR` or enable refresh")
     r.properties shouldBe empty
     Files.exists(root.resolve("ephemery-165")) shouldBe false
-  }
-
-  it should "refuse with exit 78 when every iteration has ended and this build cannot fetch yet" taggedAs UnitTest in {
-    val x = refusal(resolve(after165, settings(refresh = true)))
-    x shouldBe a[ReleaseRefusal.Ended]
-    x.exitCode shouldBe 78
-    x.message should include("fetch-genesis.sh")
   }
 
   it should "refuse with exit 69 before the first iteration's window opens" taggedAs UnitTest in {
@@ -378,6 +372,300 @@ class EphemeryResolverSpec extends AnyFlatSpec with Matchers with BeforeAndAfter
     )
     EphemeryResolver.startup(deps(after165), BundleSource.classpath, raw, () => ()) shouldBe Some(78)
     System.getProperty("fukuii.ephemery.active.managed") shouldBe null
+  }
+
+  // ---- the refresh: rows 4 and 6 (spec 028 S4b) ------------------------------------------------------------------------
+
+  private val afterReset = Instant.ofEpochSecond(1795114800L).plusSeconds(60)
+  private val Mirror = "https://mirror.example.org/eph"
+
+  private lazy val inputs166 = SyntheticRelease.next(raw(165))
+  private lazy val archive166 = Reply.Body(SyntheticRelease.archive(inputs166))
+
+  /** A deps whose factory hands out one fake transport and records the policy it was asked for. */
+  final private class Wiring(at: Instant, cost: java.time.Duration = java.time.Duration.ZERO):
+    val clock = new ManualClock(at)
+    val sleeper = new ManualSleeper(clock)
+    val transport = new FakeTransport(clock, cost)
+    var policies: List[SourcePolicy] = Nil
+    val deps: StartupDeps = StartupDeps(
+      clock,
+      (p: SourcePolicy) =>
+        policies = policies :+ p
+        Right(transport)
+      ,
+      _ => (),
+      sleeper
+    )
+
+  private def fetchSettings(source: String = EphemeryUrls.Base, refresh: Boolean = true) =
+    settings(refresh = refresh).copy(source = source)
+
+  it should "fetch the next iteration after a reset, place it with its testnet/, and run it" taggedAs UnitTest in {
+    val w = new Wiring(afterReset)
+    w.transport.on(EphemeryUrls.asset(166), archive166)
+    val r = EphemeryResolver.resolve(fetchSettings(), w.deps, BundleSource.classpath)
+    val m = managed(r)
+    m.origin shouldBe Origin.Fetched
+    m.entry.release shouldBe "ephemery-166"
+    m.datadir shouldBe root.resolve("ephemery-166")
+    m.chainsDir shouldBe root.resolve("releases/ephemery-166/chains")
+    val testnet = root.resolve("releases/ephemery-166/testnet")
+    m.clDir shouldBe Some(testnet)
+    Files.isRegularFile(testnet.resolve("config.yaml")) shouldBe true
+    Files.isRegularFile(testnet.resolve("genesis.ssz")) shouldBe true
+    Files.exists(testnet.resolve("parsedBeaconState.json")) shouldBe false
+    Files.exists(testnet.resolve("bootnode-keys")) shouldBe false
+    Files.readSymbolicLink(root.resolve("current")).toString shouldBe "releases/ephemery-166"
+    r.properties("fukuii.ephemery.active.iteration") shouldBe "166"
+    r.properties("fukuii.datadir") shouldBe root.resolve("ephemery-166").toString
+    w.policies shouldBe List(SourcePolicy.DefaultGithub)
+    w.transport.closed shouldBe 1
+    texts(r, Level.Info).exists(l =>
+      l.contains("from fetched;") && l.contains(s"CL dir $testnet") && l.startsWith(
+        "Ephemery ephemery-166 (chain id 39438166"
+      )
+    ) shouldBe true
+    // the entry carries where it came from and the archive hash
+    m.entry.metadata.source shouldBe s"${EphemeryUrls.Base}/releases/tag/ephemery-166"
+    m.entry.metadata.archiveSha256.isDefined shouldBe true
+    // 165's datadir is not made, and its entry is not touched
+    Files.exists(root.resolve("ephemery-165")) shouldBe false
+  }
+
+  it should "run the fetched entry from the cache at the next start, with no call to the network" taggedAs UnitTest in {
+    val w = new Wiring(afterReset)
+    w.transport.on(EphemeryUrls.asset(166), archive166)
+    managed(EphemeryResolver.resolve(fetchSettings(), w.deps, BundleSource.classpath))
+    val again = new Wiring(afterReset.plusSeconds(3600))
+    val m = managed(EphemeryResolver.resolve(fetchSettings(), again.deps, BundleSource.classpath))
+    m.origin shouldBe Origin.Cache
+    again.transport.calls shouldBe empty
+    again.policies shouldBe empty
+  }
+
+  it should "make no transport and no call while an iteration is current (SC-003)" taggedAs UnitTest in {
+    val w = new Wiring(inside165)
+    val r = EphemeryResolver.resolve(fetchSettings(), w.deps, BundleSource.classpath)
+    managed(r).origin shouldBe Origin.Bundled
+    w.policies shouldBe empty
+    w.transport.calls shouldBe empty
+    // and a cached current one
+    val cached = new Wiring(inside165)
+    managed(EphemeryResolver.resolve(fetchSettings(), cached.deps, BundleSource.classpath)).origin shouldBe Origin.Cache
+    cached.policies shouldBe empty
+    cached.transport.calls shouldBe empty
+    // one second before the reset is still current
+    val edge = new Wiring(Instant.ofEpochSecond(1795114800L).minusSeconds(1))
+    managed(EphemeryResolver.resolve(fetchSettings(), edge.deps, BundleSource.classpath))
+    edge.transport.calls shouldBe empty
+  }
+
+  it should "make no call when refresh is off, and refuse with 78" taggedAs UnitTest in {
+    val w = new Wiring(afterReset)
+    w.transport.on(EphemeryUrls.asset(166), archive166)
+    val r = EphemeryResolver.resolve(fetchSettings(refresh = false), w.deps, BundleSource.classpath)
+    refusal(r) shouldBe a[ReleaseRefusal.Ended]
+    refusal(r).exitCode shouldBe 78
+    w.policies shouldBe empty
+    w.transport.calls shouldBe empty
+  }
+
+  it should "fetch from an https mirror under the Mirror policy" taggedAs UnitTest in {
+    val w = new Wiring(afterReset)
+    w.transport.on(EphemeryUrls.asset(166, Mirror), archive166)
+    val m = managed(EphemeryResolver.resolve(fetchSettings(source = Mirror), w.deps, BundleSource.classpath))
+    m.entry.release shouldBe "ephemery-166"
+    w.policies shouldBe List(SourcePolicy.Mirror)
+    w.transport.calls.map(_.url) shouldBe List(EphemeryUrls.asset(166, Mirror))
+  }
+
+  it should "keep the GitHub allow-list for another path on github.com" taggedAs UnitTest in {
+    val w = new Wiring(afterReset)
+    val fork = "https://github.com/someone/ephemery-genesis"
+    w.transport.on(EphemeryUrls.asset(166, fork), archive166)
+    managed(EphemeryResolver.resolve(fetchSettings(source = fork), w.deps, BundleSource.classpath))
+    w.policies shouldBe List(SourcePolicy.DefaultGithub)
+  }
+
+  it should "refuse with 69 when the next iteration is not published, after three attempts and two waits" taggedAs UnitTest in {
+    val w = new Wiring(afterReset)
+    val x = refusal(EphemeryResolver.resolve(fetchSettings(), w.deps, BundleSource.classpath))
+    x shouldBe ReleaseRefusal.NotYetPublished(166)
+    x.exitCode shouldBe 69
+    w.transport.calls should have size 3
+    w.sleeper.waits should have size 2
+    w.transport.closed shouldBe 1
+    Files.exists(root.resolve("ephemery-166")) shouldBe false
+    Files.exists(root.resolve("releases/ephemery-166")) shouldBe false
+  }
+
+  it should "map a republished iteration to exit 78" taggedAs UnitTest in {
+    // the server publishes, under the target's tag, a variant of 165 (another genesis): the cached 165 is the bundle's
+    val w = new Wiring(afterReset)
+    val variant = SyntheticRelease.variant(raw(165))
+    w.transport.on(EphemeryUrls.asset(166), Reply.Body(SyntheticRelease.archive(variant)))
+    val x = refusal(EphemeryResolver.resolve(fetchSettings(), w.deps, BundleSource.classpath))
+    x shouldBe a[ReleaseRefusal.Republished]
+    x.exitCode shouldBe 78
+  }
+
+  it should "exit 1, a restartable code, on an unexpected failure while fetching, not 78" taggedAs UnitTest in {
+    val boom = new ReleaseTransport:
+      override def get(
+          url: java.net.URI,
+          maxBytes: Long,
+          deadline: Instant,
+          accept: Option[String]
+      ): Either[TransportFailure, FetchedBody] = throw new IllegalStateException("disk exploded")
+    val deps = StartupDeps(new ManualClock(afterReset), boom, _ => ())
+    val x = refusal(EphemeryResolver.resolve(fetchSettings(), deps, BundleSource.classpath))
+    x shouldBe a[ReleaseRefusal.CannotStore]
+    x.exitCode shouldBe 1
+    ReleaseRefusal.CannotStore("x").exitCode shouldBe 1
+  }
+
+  it should "refuse with 69 when the source is unreachable" taggedAs UnitTest in {
+    val w = new Wiring(afterReset)
+    w.transport.on(EphemeryUrls.asset(166), Reply.Fail(TransportFailure.Io("no route to host")))
+    val x = refusal(EphemeryResolver.resolve(fetchSettings(), w.deps, BundleSource.classpath))
+    x shouldBe a[ReleaseRefusal.Unreachable]
+    x.exitCode shouldBe 69
+  }
+
+  it should "use the configured refresh-timeout as the whole budget" taggedAs UnitTest in {
+    val w = new Wiring(afterReset, cost = java.time.Duration.ofSeconds(8))
+    val s = fetchSettings().copy(refreshTimeout = scala.concurrent.duration.Duration(10, "s"))
+    refusal(EphemeryResolver.resolve(s, w.deps, BundleSource.classpath))
+    // 8 s spent, a 2 s wait would reach the 10 s limit: one attempt
+    w.transport.calls should have size 1
+  }
+
+  it should "refuse with 78 when the transport cannot be built (a bad proxy variable)" taggedAs UnitTest in {
+    val deps = StartupDeps(
+      new ManualClock(afterReset),
+      (_: SourcePolicy) => Left("HTTPS_PROXY carries credentials"),
+      _ => (),
+      Sleeper.real
+    )
+    val x = refusal(EphemeryResolver.resolve(fetchSettings(), deps, BundleSource.classpath))
+    x shouldBe a[ReleaseRefusal.BadSource]
+    x.exitCode shouldBe 78
+    x.message should include("HTTPS_PROXY carries credentials")
+  }
+
+  it should "refuse a source that is not https or a directory, without a call (78)" taggedAs UnitTest in {
+    List(
+      "http://github.com/ephemery-testnet/ephemery-genesis",
+      "https://user:pw@mirror.example.org/eph",
+      "https://mirror.example.org/eph?token=1",
+      "ftp://mirror.example.org/eph",
+      "relative/dir",
+      "file:///tmp/x"
+    ).foreach { source =>
+      val w = new Wiring(afterReset)
+      val x = refusal(EphemeryResolver.resolve(fetchSettings(source = source), w.deps, BundleSource.classpath))
+      withClue(source)(x shouldBe a[ReleaseRefusal.BadSource])
+      withClue(source)(x.exitCode shouldBe 78)
+      withClue(source)(w.policies shouldBe empty)
+    }
+  }
+
+  it should "not name the credentials of a refused source in the message" taggedAs UnitTest in {
+    val w = new Wiring(afterReset)
+    val x = refusal(
+      EphemeryResolver.resolve(
+        fetchSettings(source = "https://user:hunter2@mirror.example.org/eph"),
+        w.deps,
+        BundleSource.classpath
+      )
+    )
+    (x.message should not).include("hunter2")
+  }
+
+  private def releaseDirOf(inputs: ReleaseInputs, name: String): Path =
+    val dir = Files.createDirectories(scratch.resolve(name))
+    write(dir.resolve("genesis.json"), inputs.genesisJson)
+    write(dir.resolve("retention.vars"), inputs.retentionVars)
+    write(dir.resolve("deposit_contract_block_hash.txt"), inputs.publishedHashText)
+    inputs.enodesText.foreach(write(dir.resolve("enodes.txt"), _))
+    inputs.bootEnrText.foreach(write(dir.resolve("boot_enr.txt"), _))
+    dir
+
+  it should "run a release from a source directory with no network" taggedAs UnitTest in {
+    val dir = releaseDirOf(inputs166, "src166")
+    val w = new Wiring(afterReset)
+    val m = managed(EphemeryResolver.resolve(fetchSettings(source = dir.toString), w.deps, BundleSource.classpath))
+    m.entry.release shouldBe "ephemery-166"
+    m.origin shouldBe Origin.Fetched
+    w.policies shouldBe empty
+    w.transport.calls shouldBe empty
+    Files.isRegularFile(root.resolve("releases/ephemery-166/chains/ephemery-chain.conf")) shouldBe true
+  }
+
+  it should "use a source directory even when refresh is off, since it needs no network" taggedAs UnitTest in {
+    val dir = releaseDirOf(inputs166, "src166")
+    val w = new Wiring(afterReset)
+    managed(
+      EphemeryResolver.resolve(fetchSettings(source = dir.toString, refresh = false), w.deps, BundleSource.classpath)
+    ).entry.release shouldBe "ephemery-166"
+  }
+
+  it should "refuse with 78 when the source directory holds an iteration that has ended" taggedAs UnitTest in {
+    val dir = releaseDirOf(raw(165), "src165")
+    val x = refusal(
+      EphemeryResolver.resolve(
+        fetchSettings(source = dir.toString),
+        new Wiring(afterReset).deps,
+        BundleSource.classpath
+      )
+    )
+    x shouldBe a[ReleaseRefusal.Ended]
+    x.exitCode shouldBe 78
+    x.message should include("ephemery-165")
+  }
+
+  it should "refuse with 78 when the source directory is empty or not a directory" taggedAs UnitTest in {
+    val empty = Files.createDirectories(scratch.resolve("empty"))
+    refusal(
+      EphemeryResolver.resolve(
+        fetchSettings(source = empty.toString),
+        new Wiring(afterReset).deps,
+        BundleSource.classpath
+      )
+    ).exitCode shouldBe 78
+    val missing = scratch.resolve("missing")
+    val x = refusal(
+      EphemeryResolver.resolve(
+        fetchSettings(source = missing.toString),
+        new Wiring(afterReset).deps,
+        BundleSource.classpath
+      )
+    )
+    x shouldBe a[ReleaseRefusal.BadSource]
+    x.exitCode shouldBe 78
+  }
+
+  it should "refuse a source directory that holds a release that does not validate" taggedAs UnitTest in {
+    val bad = SyntheticRelease.next(raw(165)).copy(publishedHashText = "0x" + "cd" * 32)
+    val dir = releaseDirOf(bad, "bad166")
+    val x = refusal(
+      EphemeryResolver.resolve(
+        fetchSettings(source = dir.toString),
+        new Wiring(afterReset).deps,
+        BundleSource.classpath
+      )
+    )
+    x shouldBe a[ReleaseRefusal.HashMismatch]
+  }
+
+  it should "leave no stage behind after a refusal or a fetch" taggedAs UnitTest in {
+    val w = new Wiring(afterReset)
+    refusal(EphemeryResolver.resolve(fetchSettings(), w.deps, BundleSource.classpath))
+    val w2 = new Wiring(afterReset)
+    w2.transport.on(EphemeryUrls.asset(166), archive166)
+    managed(EphemeryResolver.resolve(fetchSettings(), w2.deps, BundleSource.classpath))
+    Files.list(root).iterator().asScala.map(_.getFileName.toString).filter(_.startsWith(".stage-")).toList shouldBe Nil
   }
 
   "Settings.from" should "read the raw configuration, with the operator keys' defaults when they are absent" taggedAs UnitTest in {

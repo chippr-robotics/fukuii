@@ -18,6 +18,7 @@ import com.typesafe.config.ConfigFactory
 
 import com.chipprbots.ethereum.ConfigValidator
 import com.chipprbots.ethereum.ephemery.StrictJson.*
+import com.chipprbots.ethereum.utils.BuildInfo
 import com.chipprbots.ethereum.utils.LazyLogger
 import com.chipprbots.ethereum.utils.LogbackReload
 
@@ -28,11 +29,15 @@ import com.chipprbots.ethereum.utils.LogbackReload
   * object is process-wide, read once, and must not be initialised until the properties are set. Nothing on this path
   * may touch it, and `EphemeryLaunchItSpec` checks the class-load order.
   *
-  * The decision (data-model.md, "Startup decision"), with no fetch in this slice:
+  * The decision (data-model.md, "Startup decision"):
   *   1. a network other than ephemery: nothing;
   *   1. an operator's `custom-chains-dir` that holds `ephemery-chain.conf`: stand down, as before this spec;
-  *   1. a valid cached entry or the bundle that is current: the highest such iteration, placed in the root;
-  *   1. none current: refuse (exit 78, or 69 before the first window opens).
+  *   1. a valid cached entry or the bundle that is current: the highest such iteration, placed in the root. Nothing is
+  *      fetched, and no transport is made, while one is current (SC-003);
+  *   1. none current, `source` a directory: its release, no network (row 6);
+  *   1. none current, `refresh = false`: refuse (exit 78);
+  *   1. none current: fetch the target (R7) with [[ReleaseFetcher]], validate, place with its `testnet/`, run it; or
+  *      refuse (69 when it is not out or not reachable, 78 when it is refused).
   */
 object EphemeryResolver extends LazyLogger:
 
@@ -44,6 +49,7 @@ object EphemeryResolver extends LazyLogger:
 
   /** Where the iteration the node runs came from. */
   enum Origin:
+    /** `Fetched` is also a release read from a `source` directory: it came from outside the node. */
     case Bundled, Cache, Fetched
 
     /** The word of the startup report. */
@@ -224,6 +230,15 @@ object EphemeryResolver extends LazyLogger:
         case _                             => None
       }
 
+  /** Every iteration this node holds or carries, the cached copy standing in for the bundled one of the same number:
+    * what the refresh counts forward from, and what a fetched release is compared with (`Republished`). With no store,
+    * the bundle alone.
+    */
+  def knownEntries(store: Option[ReleaseStore], bundle: BundleSource): List[ReleaseEntry] =
+    val cached = store.toList.flatMap(_.list().entries.map(_.entry))
+    val bundled = bundle.entries().flatMap(t => ReleaseEntry.verify(t.metadata, t.chainConf, t.genesisJson).toOption)
+    (cached ++ bundled.filterNot(b => cached.exists(_.iteration == b.iteration))).sortBy(_.iteration)
+
   final private case class Candidate(entry: ReleaseEntry, origin: Origin, held: Option[ReleaseStore.Held])
 
   /** Rows 3 and 5 (and, in a later slice, 4 and 6). */
@@ -255,7 +270,7 @@ object EphemeryResolver extends LazyLogger:
       case Some(chosen) =>
         warnWhenCachedDiffers(chosen, cached, builtIn, lines)
         select(store, settings, chosen, now, lines)
-      case None => (Refused(noneCurrent(settings, all.map(_.entry), now)), Map.empty)
+      case None => ended(store, settings, deps, all, now, lines)
 
   /** A cached copy of an iteration that the bundle also holds, with another genesis hash: say so. */
   private def warnWhenCachedDiffers(
@@ -277,24 +292,165 @@ object EphemeryResolver extends LazyLogger:
         else s"$differs; it is not the iteration run now"
       )
 
-  /** Nothing is current: the window of the newest known iteration has not opened (69), or it has ended (78). */
-  private def noneCurrent(settings: Settings, known: List[ReleaseEntry], now: Instant): ReleaseRefusal =
-    known.maxByOption(_.iteration) match
-      case None => ReleaseRefusal.BadSource("no Ephemery iteration is built in or cached")
+  private def refuse(refusal: ReleaseRefusal): (Resolution, Map[String, String]) = (Refused(refusal), Map.empty)
+
+  /** What `release.json` says made the entry. */
+  private def producedBy: String = s"fukuii ${BuildInfo.version}"
+
+  /** Nothing is current. Before the newest known iteration's window opens: 69. After it has ended: the source decides
+    * (rows 4 to 6).
+    */
+  private def ended(
+      store: ReleaseStore,
+      settings: Settings,
+      deps: StartupDeps,
+      all: List[Candidate],
+      now: Instant,
+      lines: mutable.ListBuffer[Line]
+  ): (Resolution, Map[String, String]) =
+    all.map(_.entry).maxByOption(_.iteration) match
+      case None => refuse(ReleaseRefusal.BadSource("no Ephemery iteration is built in or cached"))
       case Some(newest) if now.isBefore(newest.genesisTime) =>
-        ReleaseRefusal.WindowMismatch(
-          newest.iteration,
-          s"${newest.genesisTime} to ${newest.resetTime}",
-          now.toString
+        refuse(
+          ReleaseRefusal.WindowMismatch(newest.iteration, s"${newest.genesisTime} to ${newest.resetTime}", now.toString)
         )
       case Some(newest) =>
-        val next = newest.iteration + 1
-        val manual = s"prepare ephemery-$next with scripts/ephemery/fetch-genesis.sh and launch with " +
-          "FUKUII_CONF_DIR=<out>/current/conf, or set fukuii.blockchains.custom-chains-dir to its chains directory"
-        val why =
-          if settings.refresh then s"this build cannot fetch ephemery-$next yet; $manual"
-          else s"fetching is disabled (fukuii.ephemery.refresh = false); $manual"
-        ReleaseRefusal.Ended(newest.iteration, newest.resetTime.toString, why)
+        ReleaseSource.parse(settings.source) match
+          case Left(bad) => refuse(bad)
+          // a directory is no network: `refresh = false` does not stop it, which is what an operator who offers one wants
+          case Right(ReleaseSource.Directory(dir)) => fromDirectory(store, settings, all, newest, dir, now, lines)
+          case Right(_) if !settings.refresh =>
+            val next = newest.iteration + 1
+            refuse(
+              ReleaseRefusal.Ended(
+                newest.iteration,
+                newest.resetTime.toString,
+                s"fetching is disabled (fukuii.ephemery.refresh = false); supply ephemery-$next with " +
+                  "`fukuii cli ephemery-fetch --from-dir DIR` or enable refresh"
+              )
+            )
+          case Right(ReleaseSource.Https(base, policy)) =>
+            fetchNext(store, settings, deps, all, newest, base, policy, now, lines)
+
+  /** Row 6: the release in the operator's directory, read, validated and placed. No network. */
+  private def fromDirectory(
+      store: ReleaseStore,
+      settings: Settings,
+      all: List[Candidate],
+      newest: ReleaseEntry,
+      dir: Path,
+      now: Instant,
+      lines: mutable.ListBuffer[Line]
+  ): (Resolution, Map[String, String]) =
+    val read = ReleaseInputs.fromDir(dir).flatMap(EphemeryRelease.validate).map { valid =>
+      ReleaseEntry.of(valid, dir.toAbsolutePath.normalize.toString, None, producedBy, now)
+    }
+    read match
+      case Left(refusal) => refuse(refusal)
+      case Right(entry) if !entry.isCurrent(now) =>
+        val state =
+          if now.isBefore(entry.genesisTime) then s"does not begin until ${entry.genesisTime}"
+          else s"ended at ${entry.resetTime}"
+        refuse(
+          ReleaseRefusal.Ended(
+            newest.iteration,
+            newest.resetTime.toString,
+            s"the source directory $dir holds ${entry.release}, which $state; nothing newer is available"
+          )
+        )
+      case Right(entry) =>
+        known(all)(entry.iteration).filter(_ != entry.genesisHash) match
+          case Some(held) => refuse(ReleaseRefusal.Republished(entry.iteration, held, entry.genesisHash))
+          case None       => placeAndSelect(store, settings, entry, None, Origin.Fetched, now, lines)
+
+  private def known(all: List[Candidate])(iteration: Int): Option[String] =
+    all.find(_.entry.iteration == iteration).map(_.entry.genesisHash)
+
+  /** Row 4: fetch the target with [[ReleaseFetcher]] under the one budget, then place it with its `testnet/`. */
+  private def fetchNext(
+      store: ReleaseStore,
+      settings: Settings,
+      deps: StartupDeps,
+      all: List[Candidate],
+      newest: ReleaseEntry,
+      base: java.net.URI,
+      policy: SourcePolicy,
+      now: Instant,
+      lines: mutable.ListBuffer[Line]
+  ): (Resolution, Map[String, String]) =
+    deps.transportFor(policy) match
+      case Left(why) => refuse(ReleaseRefusal.BadSource(s"cannot make the HTTPS client: $why"))
+      case Right(transport) =>
+        val stages = mutable.ListBuffer.empty[Path]
+        try
+          val target = ReleaseFetcher.targetIteration(newest, now)
+          lines += Line(
+            Level.Info,
+            s"Ephemery: ${newest.release} ended at ${newest.resetTime}; fetching ephemery-$target from ${base.getHost} " +
+              s"(within ${settings.refreshTimeout.toSeconds} s)"
+          )
+          val fetcher = new ReleaseFetcher(
+            transport,
+            deps.clock,
+            deps.sleeper,
+            base,
+            java.time.Duration.ofNanos(settings.refreshTimeout.toNanos)
+          )
+          val fetched = fetcher.fetchCurrent(
+            target,
+            () =>
+              val d = store.newStageDir()
+              stages += d
+              d
+            ,
+            known(all)
+          )
+          fetched match
+            case Left(refusal) => refuse(refusal)
+            case Right(f) =>
+              val entry =
+                ReleaseEntry.of(f.release, f.sourceUrl, Some(f.archiveSha256), producedBy, deps.clock.instant())
+              placeAndSelect(store, settings, entry, Some(f.stage), Origin.Fetched, now, lines)
+        catch
+          case NonFatal(e) =>
+            log.error(s"Ephemery: unexpected failure while fetching into ${settings.root}", e)
+            refuse(ReleaseRefusal.CannotStore(s"cannot fetch into ${settings.root}: ${e}"))
+        finally
+          transport match
+            case c: AutoCloseable => Try(c.close())
+            case _                => ()
+          stages.foreach(d => Try(StageSupport.deleteTree(d)))
+
+  /** Places a release that came from outside (with the `testnet/` staged beside it, when there is one), and runs it. */
+  private def placeAndSelect(
+      store: ReleaseStore,
+      settings: Settings,
+      entry: ReleaseEntry,
+      testnet: Option[Path],
+      origin: Origin,
+      now: Instant,
+      lines: mutable.ListBuffer[Line]
+  ): (Resolution, Map[String, String]) =
+    store.place(entry, testnet) match
+      case Left(refusal) => refuse(refusal)
+      case Right(placed) =>
+        placed match
+          case ReleaseStore.SetAside(aside) => lines += Line(Level.Warn, asideText(store, entry, aside))
+          case ReleaseStore.AlreadyPresent =>
+            testnet.foreach(t =>
+              store.addTestnet(entry.iteration, t).left.foreach(w => lines += Line(Level.Warn, s"Ephemery: $w"))
+            )
+          case ReleaseStore.Placed => ()
+        store.list().entries.find(_.entry.iteration == entry.iteration) match
+          case None =>
+            refuse(
+              ReleaseRefusal.CannotStore(s"${store.releaseDir(entry.iteration)} does not validate after it was placed")
+            )
+          case Some(held) => select(store, settings, Candidate(entry, origin, Some(held)), now, lines)
+
+  private def asideText(store: ReleaseStore, entry: ReleaseEntry, aside: Path): String =
+    s"Ephemery: ${store.releaseDir(entry.iteration)} did not validate; set aside as $aside (kept, never " +
+      s"deleted) and placed ${entry.release} again"
 
   /** Row 3: run the chosen entry: place it, make its datadir, and name what the node must be given. */
   private def select(
@@ -315,11 +471,7 @@ object EphemeryResolver extends LazyLogger:
         store.place(entry).flatMap { result =>
           result match
             case ReleaseStore.SetAside(aside) =>
-              lines += Line(
-                Level.Warn,
-                s"Ephemery: ${store.releaseDir(entry.iteration)} did not validate; set aside as $aside (kept, never " +
-                  s"deleted) and placed ${entry.release} again"
-              )
+              lines += Line(Level.Warn, asideText(store, entry, aside))
             case _ => ()
           store.list().entries.find(_.entry.iteration == entry.iteration).toRight {
             ReleaseRefusal.CannotStore(s"${store.releaseDir(entry.iteration)} does not validate after it was placed")

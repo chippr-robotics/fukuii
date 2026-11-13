@@ -50,3 +50,40 @@ object SyntheticRelease:
   def variantEntry(base: ReleaseInputs, producedAt: java.time.Instant): ReleaseEntry =
     val valid = EphemeryRelease.validate(variant(base)).fold(r => throw new AssertionError(r.message), identity)
     ReleaseEntry.of(valid, "https://example.invalid/variant", None, "test", producedAt)
+
+  /** The CL members a real release carries next to the EL ones, and the two that must never be staged. */
+  val ClMembers: Seq[(String, Array[Byte])] = Seq(
+    "config.yaml" -> "PRESET_BASE: mainnet\n".getBytes(java.nio.charset.StandardCharsets.UTF_8),
+    "genesis.ssz" -> Array.tabulate[Byte](4096)(i => (i % 251).toByte),
+    "deploy_block.txt" -> "0\n".getBytes(java.nio.charset.StandardCharsets.UTF_8),
+    "boot_enr.yaml" -> "- enr:-synthetic\n".getBytes(java.nio.charset.StandardCharsets.UTF_8)
+  )
+  val ExcludedMembers: Seq[(String, Array[Byte])] = Seq(
+    "parsedBeaconState.json" -> "{}".getBytes(java.nio.charset.StandardCharsets.UTF_8),
+    "bootnode-keys/bootnode_pk.key.enc" -> "secret".getBytes(java.nio.charset.StandardCharsets.UTF_8)
+  )
+
+  /** The `testnet-all.tar.gz` of a release: a GNU tar, as the real ones are, with the release's EL members, the CL
+    * members, the two the node never stages, and `extra` (a member to add, or to put in place of one).
+    */
+  def archive(inputs: ReleaseInputs, extra: Seq[(String, Array[Byte])] = Nil): Array[Byte] =
+    import java.nio.charset.StandardCharsets.UTF_8
+    def bytes(s: String): Array[Byte] = s.getBytes(UTF_8)
+    val el: Seq[(String, Array[Byte])] = Seq(
+      Some(ReleaseInputs.GenesisFile -> bytes(inputs.genesisJson)),
+      Some(ReleaseInputs.RetentionFile -> bytes(inputs.retentionVars)),
+      Some(ReleaseInputs.PublishedHashFile -> bytes(inputs.publishedHashText)),
+      inputs.chainspecJson.map(ReleaseInputs.ChainspecFile -> bytes(_)),
+      inputs.enodesText.map(ReleaseInputs.EnodesFile -> bytes(_)),
+      inputs.bootEnrText.map(ReleaseInputs.BootEnrFile -> bytes(_))
+    ).flatten
+    val replaced = extra.map(_._1).toSet
+    val members = (el ++ ClMembers ++ ExcludedMembers).filterNot(m => replaced.contains(m._1)) ++ extra
+    val parts = members.flatMap { case (name, data) =>
+      val dirs = name.split('/').dropRight(1).scanLeft("")((acc, seg) => if acc.isEmpty then seg else s"$acc/$seg")
+      dirs.filter(_.nonEmpty).map(d => TarFixture.dir(d + "/")).toSeq :+ TarFixture.file(name, data)
+    }
+    // a directory header may appear once
+    val seen = scala.collection.mutable.Set.empty[Int]
+    val unique = parts.filter(p => seen.add(java.util.Arrays.hashCode(p)))
+    TarFixture.tgz(unique*)

@@ -126,19 +126,30 @@ private[ephemery] object StageSupport:
         Try(Files.deleteIfExists(tmp))
         throw e
 
-  /** Copies the directory `from` to `to`: directories and regular files. A symlink is skipped, and said so. */
-  def copyMembers(from: Path, to: Path): Seq[String] =
+  /** Copies the directory `from` to `to`: directories and regular files. A symlink is skipped, and said so. `excludes`
+    * are member names left out, as for [[StrictTarReader]]: a name ending in `/` excludes that directory and what is in
+    * it; the other names, a file.
+    */
+  def copyMembers(from: Path, to: Path, excludes: Set[String] = Set.empty): Seq[String] =
     val notes = mutable.ArrayBuffer.empty[String]
+    def excluded(rel: String, isDir: Boolean): Boolean =
+      excludes.exists(e =>
+        if e.endsWith("/") then rel == e.stripSuffix("/") || rel.startsWith(e) else rel == e && !isDir
+      )
     Files.walkFileTree(
       from,
       new SimpleFileVisitor[Path]:
         override def preVisitDirectory(dir: Path, attrs: BasicFileAttributes): FileVisitResult =
-          Files.createDirectories(to.resolve(from.relativize(dir).toString))
-          FileVisitResult.CONTINUE
+          val rel = from.relativize(dir).toString
+          if rel.nonEmpty && excluded(rel, isDir = true) then FileVisitResult.SKIP_SUBTREE
+          else
+            Files.createDirectories(to.resolve(rel))
+            FileVisitResult.CONTINUE
         override def visitFile(file: Path, attrs: BasicFileAttributes): FileVisitResult =
-          if attrs.isRegularFile then
-            Files.copy(file, to.resolve(from.relativize(file).toString), StandardCopyOption.COPY_ATTRIBUTES)
-          else notes += s"not copied into testnet/ (not a regular file): ${from.relativize(file)}"
+          val rel = from.relativize(file).toString
+          if excluded(rel, isDir = false) then ()
+          else if attrs.isRegularFile then Files.copy(file, to.resolve(rel), StandardCopyOption.COPY_ATTRIBUTES)
+          else notes += s"not copied into testnet/ (not a regular file): $rel"
           FileVisitResult.CONTINUE
     )
     notes.toSeq
