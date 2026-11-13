@@ -2818,3 +2818,14 @@ items:
       since: 2026-11-13T17:16:30Z
       heartbeat: 2026-11-13T18:26:05Z
     notes: "Found in spec 028 S5 on dev-node 2026-11-13: fukuii ephemery started but nothing listened on 8551 until -Dfukuii.network.engine-api.enabled=true. Decide: enable it (and require jwt-secret-path) in conf/ephemery.conf + conf/hoodi.conf, or document it; fix docs/runbooks/ephemery.md line added in #1822."
+  - id: B-247
+    title: JdkHttpsTransportSpec 'refuse a proxy URL with credentials' fails where the JVM has https.proxyHost set
+    priority: P3
+    status: open
+    area: tests
+    size: S
+    opened: 2026-11-13
+    refs: []
+    links:
+      spec: 028
+    notes: The test's last assertion calls JdkHttpsTransport.default with HTTPS_PROXY credentials and expects Left; default prefers the JDK https.proxyHost property over the environment (ReleaseTransport.scala:376-378), which cloud containers set in JAVA_TOOL_OPTIONS, so it answers Right there. Isolate the test from the JVM's properties (inject props) like the environment map. Seen in testEssential on the C4b part 2a branch, which does not touch ephemery/.
