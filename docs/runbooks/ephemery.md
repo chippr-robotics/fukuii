@@ -165,6 +165,10 @@ RestartSec=30
 WantedBy=fukuii.service
 ```
 
+This unit needs `nc` (netcat) on the host and the Engine API enabled in fukuii (`mining.protocol = "engine-api"`, the
+default in `conf/ephemery.conf`). Without them the `ExecStartPre` waits until `TimeoutStartSec`, and then the unit
+fails.
+
 `PartOf=fukuii.service` stops and restarts the consensus client whenever fukuii restarts. The `ExecStartPre` is what
 makes it pick up the new iteration: `After=` only waits for fukuii's JVM to be started, not for its startup resolver,
 which after a reset may spend up to the refresh budget (60 s by default) fetching the next iteration. Without the wait
