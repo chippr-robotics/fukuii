@@ -2766,3 +2766,14 @@ items:
     links:
       spec: 018
     notes: "ConsensusImpl.reorganise answers ConsensusStateFault(fault, Nil, rest) after settleHead. When a branch is executed on layers (C4e) and a prefix was settled as the head before the fault, the answer must carry imported = the executed prefix and the old branch's blocks to queue, as SelectedNewBestBranch does; settleHead has to say whether it adopted. Unreachable today: the unified layout refuses the first block of a branch that is not adopted as it is executed, and the hash layout throws no such fault. Found by forge, C4b part 0."
+  - id: B-243
+    title: "The batch that creates the state anchor writes state.origin: SNAP finalization and checkpoint import"
+    priority: P2
+    status: open
+    area: storage
+    size: S
+    opened: 2026-11-13
+    refs: []
+    links:
+      spec: 018
+    notes: C4b part 1 added AppState state.origin, written by the genesis commit only. C5a's finalization commit and E.1's checkpoint import must write it with their anchor (AppStateStorage.putStateOrigin), or a move below the pivot answers Deep instead of Pivot. plan.md 'C4b part 1'.
