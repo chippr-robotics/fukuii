@@ -2177,17 +2177,18 @@ items:
   - id: B-193
     title: "Engine API metrics mislabel: ACCEPTED counted as INVALID, engine_newpayload_syncing never moves, dedup/early returns unrecorded"
     priority: P3
-    status: claimed
+    status: review
     area: engine
     size: S
     opened: 2026-11-10
     refs: ["beacon pre-flight, 027 slice 5, 2026-11-10"]
-    links: {}
+    links:
+      prs: [1842]
     claim:
       by: cloud-ccr-452bbde8
       agent: main
       since: 2026-11-14T19:00:41Z
-      heartbeat: 2026-11-14T19:00:41Z
+      heartbeat: 2026-11-14T20:11:36Z
     notes: EngineApiMetrics.scala:61 case _ folds ACCEPTED (EngineApiService.scala:747) into INVALID; no caller passes SYNCING; newPayload returns at :385/:411/:448 record nothing; FCU INVALID also covers -38002/-38003. Additive fix only; beacon owns.
   - id: B-194
     title: "Protocol: a metrics object initialiser on an IO path is fatal to every IORuntime in the JVM if it throws"
