@@ -293,6 +293,9 @@ private[console] object Rows:
     WormBar.budgetFor(slots, c.g).min(width - WormIndentCols).max(0)
 
   /** ` Label [===🪱....]🧠 52% detail`: without the progress bar, the row says in words what the bar would show.
+    *
+    * A detail is parts joined by the dot (`119.6M slots @ 21.4K/s · 2,114/5,702 contracts`). When the row is too narrow
+    * for all of it, the last parts are left out whole: a count cut in the middle reads as another count.
     */
   def wormRow(
       c: Ctx,
@@ -312,8 +315,13 @@ private[console] object Rows:
         case WormProgress.Known(f) => s"${(f.max(0.0).min(1.0) * 100).toInt}%"
         case other                 => other.toString.toLowerCase(Locale.ROOT)
       sb.append(words, c.t.value)
-    if detail.nonEmpty then sb.append(s"  $detail", c.t.value)
-    fit(sb.toAttributedString, width, c.g)
+    val head = sb.toAttributedString
+    def withDetail(d: String): AttributedString =
+      if d.isEmpty then head else concat(head, text(s"  $d", c.t.value))
+    val dot = s" ${c.g.dot.text} "
+    val parts = detail.split(java.util.regex.Pattern.quote(dot)).toSeq
+    val whole = (parts.size to 1 by -1).iterator.map(n => withDetail(parts.take(n).mkString(dot)))
+    fit(whole.find(_.columnLength() <= width - 1).getOrElse(withDetail(parts.headOption.getOrElse(""))), width, c.g)
 
   /** The synced Blocks row during a catch-up: the worm's last crawl into the brain, frame by frame, or the one quiet
     * frame (research §3.8). Its bar is not held to the budget: the row is fitted to the width, like every row.

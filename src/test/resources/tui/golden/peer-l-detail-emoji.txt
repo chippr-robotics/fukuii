@@ -1,0 +1,48 @@
+ ◆ FUKUII  etc (61) · PoW · head 21,884,102 · 41/50 peers · up 12d 7h · v0.11.0                                                                            Peer 
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+ ✓ no alerts                                                                                                                                                    
+ etc              │ Peers   41/50 ◆◆◆◆◆◆◆◆◆◆  Block  21,884,102 (at head)                    Txpool  142             Disk  388G free     JVM  3.4G / 8.0G heap  
+ PoW · id 61      │ Sync    ✓ at head                                                                                                                           
+                  │─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+ [1] Overview     │ Peer   Esc returns to the list                                                                                                              
+ [2] Chain        │ Id      11a29b9b11a29b9b11a29b9b11a29b9b11a29b9b11a29b9b11a29b9b11a29b9b11a29b9b11a29b9b11a29b9b11a29b9b11a29b9b11a29b9b11a29b9b11a29b9b    
+ [3] Peers        │ Address 203.0.113.36:30303                                                                                                                  
+ [4] Mempool      │ Dir     outbound: this node dialled it                                                                                                      
+ [5] RPC          │ Age     connected 1h 43m ago                                                                                                                
+ [6] Storage      │ Client  besu/v24.1.2/linux-x86_64/openjdk-java-21                                                                                           
+ [7] System       │ Best    21,884,100                                                                                                                          
+ [8] Logs         │ Score   0.930 ↓ falling                                                                                                                     
+ [9] Ops          │                                                                                                                                             
+                  │                                                                                                                                             
+                  │                                                                                                                                             
+                  │                                                                                                                                             
+                  │                                                                                                                                             
+                  │                                                                                                                                             
+                  │                                                                                                                                             
+                  │                                                                                                                                             
+                  │                                                                                                                                             
+                  │                                                                                                                                             
+                  │                                                                                                                                             
+                  │                                                                                                                                             
+                  │                                                                                                                                             
+                  │                                                                                                                                             
+                  │                                                                                                                                             
+                  │                                                                                                                                             
+                  │                                                                                                                                             
+                  │                                                                                                                                             
+                  │                                                                                                                                             
+                  │                                                                                                                                             
+                  │                                                                                                                                             
+                  │                                                                                                                                             
+                  │                                                                                                                                             
+                  │                                                                                                                                             
+                  │                                                                                                                                             
+                  │                                                                                                                                             
+                  │                                                                                                                                             
+                  │                                                                                                                                             
+                  │                                                                                                                                             
+                  │                                                                                                                                             
+                  │                                                                                                                                             
+                  │                                                                                                                                             
+                  │                                                                                                                                             
+ 1-9 view  [ ] other views  Up Down select  Enter open  Esc back  : prompt  / filter  ? help  g glyphs  p pause  r redraw  d detach  q quit                     

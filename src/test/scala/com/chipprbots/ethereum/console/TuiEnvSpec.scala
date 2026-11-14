@@ -125,6 +125,17 @@ class TuiEnvSpec extends AnyFlatSpec with Matchers:
     env().applyTo(TuiSettings()).splashMs shouldBe TuiConfig.default.splashMs
   }
 
+  it should "set read-only when FUKUII_TUI_READ_ONLY is non-empty, and never unset it (spec 029 FR-053)" taggedAs (
+    UnitTest
+  ) in {
+    env("FUKUII_TUI_READ_ONLY" -> "1").applyTo(TuiSettings()).readOnly shouldBe true
+    env("FUKUII_TUI_READ_ONLY" -> "").applyTo(TuiSettings()).readOnly shouldBe false
+    env().applyTo(TuiSettings()).readOnly shouldBe false
+    // The variable adds the restriction; leaving it unset does not lift the configured one.
+    env().applyTo(TuiSettings(readOnly = true)).readOnly shouldBe true
+    env("FUKUII_TUI_READ_ONLY" -> "").applyTo(TuiSettings(readOnly = true)).readOnly shouldBe true
+  }
+
   it should "leave motion alone under NO_COLOR (§4.5)" taggedAs (UnitTest) in {
     env("NO_COLOR" -> "1").applyTo(TuiSettings()).reducedMotion shouldBe false
   }

@@ -1,0 +1,24 @@
+ # FUKUII  etc (61) . PoW . up 12d 7h                                   Storage 
+--------------------------------------------------------------------------------
+ + no alerts                                                                    
+ Peers   41/50 ##########         Block  21,884,102 (at head)                   
+ Sync    + at head                                                              
+--------------------------------------------------------------------------------
+ Storage                                                                        
+ Disk    388G free                                                              
+ Datadir /var/lib/fukuii/etc                                                    
+ Pruning archive                                                                
+--------------------------------------------------------------------------------
+ Not built yet: database size, compaction, caches, the integrity audit          
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+ 1-9 view  : prompt  / filter  ? help  p pause  r redraw  d detach  q quit      

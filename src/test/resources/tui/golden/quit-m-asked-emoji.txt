@@ -1,0 +1,40 @@
+ ◆ FUKUII  etc (61) · PoW · head 21,884,102 · 41/50 peers · up 12d 7h                                          Overview 
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+ ✓ no alerts                                                                                                            
+ etc              │ Peers   41/50 ◆◆◆◆◆◆◆◆◆◆                    Block  21,884,102 (at head)                     Txpool… 
+ PoW · id 61      │ RPC     :8545 on                            Disk   388G free                                JVM   … 
+                  │─────────────────────────────────────────────────────────────────────────────────────────────────────
+ [1] Overview     │ Sync    ✓ at head                                                                                   
+ [2] Chain        │   Blocks   🪱[COMPLETE ✓]🧠                                    21,884,102                           
+ [3] Peers        │─────────────────────────────────────────────────────────────────────────────────────────────────────
+ [4] Mempool      │ Forks (block)                                                                                       
+ [5] RPC          │   Phoenix ✓ ─ ECIP-1099 ✓ ─ Magneto ✓ ─ Mystique ✓ ─ Spiral ✓ ════════▶ Olympia not scheduled       
+ [6] Storage      │   block 21,884,102 · Spiral since 19,250,000 · Olympia not scheduled on this network                
+ [7] System       │─────────────────────────────────────────────────────────────────────────────────────────────────────
+ [8] Logs         │ Node    /var/lib/fukuii/etc · SNAP sync · archive pruning · 50 peers max · mining on                
+ [9] Ops          │─────────────────────────────────────────────────────────────────────────────────────────────────────
+                  │ Recent                                                                                              
+                  │ 11:59:00 WARN  Peer 0x9c0d…77 timed out on GetBlockHeaders, retrying                                
+                  │               ──────────────────────────────────────────────────────────────────────                
+                  │               Stop this node?                                                                       
+                  │               The node process ends: block import, its peers and every RPC client.                  
+                  │               Mining stops.                                                                         
+                  │               The TUI cannot start the node again.                                                  
+                  │                                                                                                     
+                  │               y  stop the node      n or Esc  cancel                                                
+                  │               ──────────────────────────────────────────────────────────────────────                
+                  │ 12:00:00 INFO  RegularSync: at head, block 21884102                                                 
+                  │                                                                                                     
+                  │                                                                                                     
+                  │                                                                                                     
+                  │                                                                                                     
+                  │                                                                                                     
+                  │                                                                                                     
+                  │                                                                                                     
+                  │                                                                                                     
+                  │                                                                                                     
+                  │                                                                                                     
+                  │                                                                                                     
+                  │                                                                                                     
+                  │                                                                                                     
+ a question is open: answer it, or Esc                                                                                  

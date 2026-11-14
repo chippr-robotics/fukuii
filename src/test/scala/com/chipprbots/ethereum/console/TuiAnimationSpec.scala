@@ -244,14 +244,14 @@ class TuiAnimationSpec extends AnyFlatSpec with Matchers with BeforeAndAfterAll 
 
   // prism, slice 3 review: the pace follows what each view draws, not what the Overview would.
   it should "follow the view on screen" taggedAs (UnitTest) in {
-    // SNAP's Accounts row pulses on the Sync view; its storage worm ripples.
-    animated(TuiFixtures.snapStorageMordor().withView(TuiView.Sync)) shouldBe true
-    // Regular sync ripples on the Overview and the Sync view, and nowhere else.
+    // SNAP's Accounts row pulses on the Chain view, which the sync panels lead while syncing; its storage worm ripples.
+    animated(TuiFixtures.snapStorageMordor().withView(TuiView.Chain)) shouldBe true
+    // Regular sync ripples on the Overview and the Chain view, and nowhere else.
     val regular = TuiFixtures.regularSyncEtc()
     animated(regular) shouldBe true
-    animated(regular.withView(TuiView.Sync)) shouldBe true
+    animated(regular.withView(TuiView.Chain)) shouldBe true
     animated(regular.withView(TuiView.Peers)) shouldBe false
-    animated(regular.withView(TuiView.Chain)) shouldBe false
+    animated(regular.withView(TuiView.Storage)) shouldBe false
     animated(regular.openHelp) shouldBe false
     // A spinner in the vitals row moves on every view.
     val searching = TuiFixtures.syncedEtc().copy(connectionStatus = "Searching for peers")
@@ -286,7 +286,7 @@ class TuiAnimationSpec extends AnyFlatSpec with Matchers with BeforeAndAfterAll 
   it should "keep the 250 ms pace for a worm at cell 2, whose ripple draws ticks 1 and 2 (mod 3) the same" taggedAs (
     UnitTest
   ) in {
-    val s = TuiFixtures.earlyRegularEtc().withView(TuiView.Sync).copy(motion = Motion.Full)
+    val s = TuiFixtures.earlyRegularEtc().withView(TuiView.Chain).copy(motion = Motion.Full)
     WormBar.wormAt(s.syncProgress / 100.0, Tier.S.trackSlots) shouldBe 2
     for tick <- 0L to 5L do
       withClue(s"tick $tick: ")(renderer.frame(s.copy(tick = tick), 80, 24, theme).animated shouldBe true)

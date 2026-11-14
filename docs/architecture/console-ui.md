@@ -72,7 +72,7 @@ and the footer with the keys. The Overview at 80×24, regular sync (from the gol
 
 
 
- 1 Over 2 Sync 3 Peers 4 Chain 5 Logs │ p Pause ? Help r Redraw d Detach q Quit
+ 1-9 view  : prompt  / filter  ? help  p pause  r redraw  d detach  q quit
 ```
 
 The Recent strip at the bottom is the newest log lines (6 at tier S). Sizes: below 100 columns or 32 rows is tier S,
@@ -82,14 +82,22 @@ footer always stay.
 
 ### Views
 
+Nine views, chosen with `1` to `9`, with `[` and `]`, or by name at the `:` prompt. From 100 columns and 32 rows a
+sidebar down the left lists them and marks the one on screen. Spec 029 is building these out a slice at a time; a view
+whose slice has not landed shows what the dashboard already reads for it and one line naming what is to come.
+
 | Key | View | What it shows |
 |-----|------|---------------|
 | `1` | Overview | Peers and blocks, the txpool, endpoints, disk and heap (GC and discovery at L), the sync (SNAP's five worm rows or the Blocks worm, with ETA), the consensus layer (ETH) or the mining (ETC), the forks, the node's settings; at L the top 8 peers by score; the Recent strip of the newest log lines |
-| `2` | Sync | The worm rows on a 20-, 40- or 60-cell track; SNAP's rates, request counters, snap-capable peers and phase timeline (M and L); a regular sync's session, lag and last import; the Recent (sync) strip |
-| `3` | Peers | Each handshaked peer, highest score first: id, direction, client, best block, age; from M the address and the score, at L the score's trend |
-| `4` | Chain | Chain id, PoW or PoS, the fork timeline: by block number on ETC, by timestamp on ETH, the next fork with its distance |
-| `5` `L` | Logs | The newest log lines (1,000 by default, INFO and above), with their time and level; `-` and `+` scroll a page |
-| `?` `H` | Help | The keys and the legend of the glyph set on screen |
+| `2` | Chain | While the node is syncing, the sync's panels lead: the worm rows on a 20-, 40- or 60-cell track; SNAP's rates, request counters, snap-capable peers and phase timeline (M and L); a regular sync's session, lag and last import; the Recent (sync) strip. Always: chain id, PoW or PoS, the fork timeline (by block number on ETC, by timestamp on ETH), the next fork with its distance |
+| `3` | Peers | Each handshaked peer, highest score first: id, direction, client, best block, age; from M the address and the score, at L the score's trend. `Up`/`Down` select a peer, `Enter` opens its details, `Esc` returns, `/` filters by id, address or client |
+| `4` | Mempool | The pending count (the rest with spec 029 slice 4) |
+| `5` | RPC | The endpoints (the rest with slice 5) |
+| `6` | Storage | Disk free, the data directory, the pruning mode (the rest with slice 6) |
+| `7` | System | Heap, GC share, discovery counts (the rest with slice 6) |
+| `8` `L` | Logs | The newest log lines (1,000 by default, INFO and above), with their time and level; `Up`/`Down` scroll a line, `-` and `+` a page, `/` filters by text |
+| `9` | Ops | Whether the TUI is read-only; the actions arrive with slice 7 |
+| `?` `H` `F1` | Help | Every key, and the legend of the glyph set on screen |
 
 ### Alert row
 
@@ -199,22 +207,41 @@ in ASCII only, in the same columns.
 
 ## Keyboard Commands
 
-| Key | Action |
-|-----|--------|
-| `1` `2` `3` `4` `5` | Overview, Sync, Peers, Chain, Logs |
-| `L` | Logs |
-| `-` `+` | Logs view: a page back to older lines, a page forward to newer ones (nothing on other views) |
-| `Tab` | The next view (wraps) |
-| `?` or `H` | Help over the current view: the keys and the glyph legend; any key but `Q`, `R` and `D` returns |
-| `G` | Switch the glyph set (emoji / ASCII); no column moves |
-| `P` | Pause or resume the motion (the frame counter stops; polling continues) |
-| `R` | Redraw the display |
-| `D` | Detach: the TUI closes and standard logging returns; the node keeps running |
-| `Q` | Quit: stops the node |
+The same table Help draws (`Bindings.Global`). Every key that is an escape sequence has a single character that does
+the same, so a link that delivers no arrow keys loses nothing.
+
+| Key | Also | Action |
+|-----|------|--------|
+| `1` … `9` | | Overview, Chain, Peers, Mempool, RPC, Storage, System, Logs, Ops |
+| `]` `[` | | The next and the previous view (wrap) |
+| `Tab` `Shift-Tab` | | The next and the previous panel of the view |
+| `Up` `Down` | `K` `J` | The row above and below (Peers: the selection; Logs: a line) |
+| `Page Up` `Page Down` | `-` `+` | A page up and down (Logs: older and newer lines) |
+| `Home` `End` | `<` `>` | The first and the last row |
+| `Enter` | | Open the selected row (a peer's details) |
+| `Esc` | `Backspace` | Back; clear the view's filter |
+| `:` | | The prompt: a view's name, `peer <id>`, `glyphs emoji` or `glyphs ascii`, `detach`, `quit`, `help`. `Tab` completes, `Up`/`Down` walk the history |
+| `/` | | Filter the list on screen as you type (Peers, Logs). `Enter` keeps the filter, `Esc` clears it |
+| `?` | `H` `F1` | Help over the current view; any key but `Q`, `R` and `D` returns |
+| `L` | | Logs |
+| `G` | | Switch the glyph set (emoji / ASCII); no column moves |
+| `P` | | Pause or resume the motion (the frame counter stops; polling continues) |
+| `R` | | Redraw the display |
+| `D` | | Detach: the TUI closes and standard logging returns; the node keeps running |
+| `Q` | | **Ask** to stop the node: a dialog says what stops with it; `Y` stops it, `N` or `Esc` cancels. Nothing else answers it, pasted text included |
+| `Ctrl-C` | | Stop the node at once, as a signal |
 
 Any key skips the startup splash, and does nothing else. A change of view cancels the catch-up celebration. Opening
 the Logs view shows its newest lines; while it is scrolled back, new lines arriving keep the lines on screen where
 they are.
+
+An arrow or a function key is an escape sequence. The TUI reads a sequence whole before deciding what it is: one it
+knows is a key, any other is nothing, so the tail of a sequence is never read as keys. Text pasted into the terminal
+arrives marked as a paste (bracketed paste) and goes to the prompt or a filter only: it cannot open a view, move a
+selection or answer a dialog.
+
+With `fukuii.tui.read-only = true` (or `FUKUII_TUI_READ_ONLY` set) `Q` does not offer to stop the node, and says so.
+`Ctrl-C` still stops it.
 
 Commands are case-insensitive (both `q` and `Q` work).
 

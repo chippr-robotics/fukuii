@@ -1,40 +1,40 @@
  # FUKUII  etc (61) . PoW . head 18,402,113 . 23/50 peers . up 9m 0s                                           Overview 
 ------------------------------------------------------------------------------------------------------------------------
  ! 1 warn    sync stalled: head 18,402,113 unchanged for 3m 10s                                                         
- Peers   23/50 ##########                    Block  18,402,113 -> 21,884,102 (-3,481,989)    Txpool  142                
- RPC     :8545 on                            Disk   1.2T free                                JVM     2.1G / 8.0G heap   
-------------------------------------------------------------------------------------------------------------------------
- Sync    regular                                                                         rate 184.37 blk/s . ETA 5h 14m 
-   Blocks   [================================~oz .....]@@ 84%   18,402,113 / 21,884,102                                 
-------------------------------------------------------------------------------------------------------------------------
- Forks (block)                                                                                                          
-   Agharta + - Phoenix + - ECIP-1099 + - Magneto + - Mystique + ========> Spiral @ 19,250,000 (847.9K away)             
-   block 18,402,113 . Mystique since 14,525,000                                                                         
-------------------------------------------------------------------------------------------------------------------------
- Node    /var/lib/fukuii/etc . Full sync . archive pruning . 50 peers max . mining off                                  
-------------------------------------------------------------------------------------------------------------------------
- Recent                                                                                                                 
- 11:59:00 WARN  Peer 0x9c0d..77 timed out on GetBlockHeaders, retrying                                                  
- 11:59:04 INFO  Imported block 21,884,099 0x7ab2..d4c7 with 6 txs in 14ms                                               
- 11:59:12 INFO  eth_getWork served for block 21,884,100                                                                 
- 11:59:17 INFO  Imported block 21,884,100 0x3301..2e9d with 21 txs in 31ms                                              
- 11:59:25 INFO  [====================~o]@@ 100% - RegularSync                                                           
- 11:59:30 ERROR Cannot decode a message from 203.0.113.40:30303                                                         
- 11:59:34 INFO  Imported block 21,884,101 0x9b0c..ff31 with 9 txs in 17ms                                               
- 11:59:47 INFO  Imported block 21,884,102 0x6d21..1a0e with 14 txs in 22ms                                              
- 11:59:52 INFO  Peers: 41 handshaked . 14 in . 27 out                                                                   
- 12:00:00 INFO  RegularSync: at head, block 21884102                                                                    
-                                                                                                                        
-                                                                                                                        
-                                                                                                                        
-                                                                                                                        
-                                                                                                                        
-                                                                                                                        
-                                                                                                                        
-                                                                                                                        
-                                                                                                                        
-                                                                                                                        
-                                                                                                                        
-                                                                                                                        
-                                                                                                                        
- 1 Overview  2 Sync  3 Peers  4 Chain  5 Logs | p Pause  ? Help  r Redraw  d Detach  q Quit                             
+ etc              | Peers   23/50 ##########                    Block  18,402,113 -> 21,884,102 (-3,481,989)    Txpoo.. 
+ PoW . id 61      | RPC     :8545 on                            Disk   1.2T free                                JVM  .. 
+                  |-----------------------------------------------------------------------------------------------------
+ [1] Overview     | Sync    regular                                                      rate 184.37 blk/s . ETA 5h 14m 
+ [2] Chain        |   Blocks   [================================~oz .....]@@ 84%   18,402,113 / 21,884,102              
+ [3] Peers        |-----------------------------------------------------------------------------------------------------
+ [4] Mempool      | Forks (block)                                                                                       
+ [5] RPC          |   Phoenix + - ECIP-1099 + - Magneto + - Mystique + ========> Spiral @ 19,250,000 (847.9K away)      
+ [6] Storage      |   block 18,402,113 . Mystique since 14,525,000                                                      
+ [7] System       |-----------------------------------------------------------------------------------------------------
+ [8] Logs         | Node    /var/lib/fukuii/etc . Full sync . archive pruning . 50 peers max . mining off               
+ [9] Ops          |-----------------------------------------------------------------------------------------------------
+                  | Recent                                                                                              
+                  | 11:59:00 WARN  Peer 0x9c0d..77 timed out on GetBlockHeaders, retrying                               
+                  | 11:59:04 INFO  Imported block 21,884,099 0x7ab2..d4c7 with 6 txs in 14ms                            
+                  | 11:59:12 INFO  eth_getWork served for block 21,884,100                                              
+                  | 11:59:17 INFO  Imported block 21,884,100 0x3301..2e9d with 21 txs in 31ms                           
+                  | 11:59:25 INFO  [====================~o]@@ 100% - RegularSync                                        
+                  | 11:59:30 ERROR Cannot decode a message from 203.0.113.40:30303                                      
+                  | 11:59:34 INFO  Imported block 21,884,101 0x9b0c..ff31 with 9 txs in 17ms                            
+                  | 11:59:47 INFO  Imported block 21,884,102 0x6d21..1a0e with 14 txs in 22ms                           
+                  | 11:59:52 INFO  Peers: 41 handshaked . 14 in . 27 out                                                
+                  | 12:00:00 INFO  RegularSync: at head, block 21884102                                                 
+                  |                                                                                                     
+                  |                                                                                                     
+                  |                                                                                                     
+                  |                                                                                                     
+                  |                                                                                                     
+                  |                                                                                                     
+                  |                                                                                                     
+                  |                                                                                                     
+                  |                                                                                                     
+                  |                                                                                                     
+                  |                                                                                                     
+                  |                                                                                                     
+                  |                                                                                                     
+ 1-9 view  Enter open  Esc back  : prompt  / filter  ? help  p pause  r redraw  d detach  q quit                        

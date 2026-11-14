@@ -21,4 +21,4 @@
  11:59:47 INFO  Imported block 21,884,102 0x6d21…1a0e with 14 txs in 22ms       
  11:59:52 INFO  Peers: 41 handshaked · 14 in · 27 out                           
  12:00:00 INFO  RegularSync: at head, block 21884102                            
- 1 Over 2 Sync 3 Peers 4 Chain 5 Logs │ p Pause ? Help r Redraw d Detach q Quit 
+ 1-9 view  : prompt  / filter  ? help  p pause  r redraw  d detach  q quit      

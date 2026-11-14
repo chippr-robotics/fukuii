@@ -24,7 +24,8 @@ class MiningPanelSpec extends AnyFlatSpec with Matchers with BeforeAndAfterAll w
 
   private def still(s: TuiState): TuiState = s.copy(motion = Motion.Reduced)
 
-  private def rows(s: TuiState, w: Int, h: Int): Seq[String] = renderer.render(s, w, h).map(_.toString)
+  private def rows(s: TuiState, w: Int, h: Int): Seq[String] =
+    TuiFixtures.panelRows(renderer.render(s, w, h).map(_.toString), w, h)
 
   /** The panel's rows: from its title row down to the separator before the next panel. */
   private def miningRows(s: TuiState, w: Int, h: Int): Seq[String] =

@@ -1,0 +1,48 @@
+ ◆ FUKUII  etc (61) · PoW · head 21,884,102 · 41/50 peers · up 12d 7h · v0.11.0                                                                            Logs 
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+ ✓ no alerts                                                                                                                                                    
+ etc              │ Peers   41/50 ◆◆◆◆◆◆◆◆◆◆  Block  21,884,102 (at head)                    Txpool  142             Disk  388G free     JVM  3.4G / 8.0G heap  
+ PoW · id 61      │ Sync    ✓ at head                                                                                                                           
+                  │─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+ [1] Overview     │ Logs   5 of 13 lines match 'imported', INFO and above · newest at the bottom · - older  + newer  / filter                                   
+ [2] Chain        │ 11:58:47 INFO  Imported block 21,884,098 0x1f09…88a1 with 17 txs in 26ms                                                                    
+ [3] Peers        │ 11:59:04 INFO  Imported block 21,884,099 0x7ab2…d4c7 with 6 txs in 14ms                                                                     
+ [4] Mempool      │ 11:59:17 INFO  Imported block 21,884,100 0x3301…2e9d with 21 txs in 31ms                                                                    
+ [5] RPC          │ 11:59:34 INFO  Imported block 21,884,101 0x9b0c…ff31 with 9 txs in 17ms                                                                     
+ [6] Storage      │ 11:59:47 INFO  Imported block 21,884,102 0x6d21…1a0e with 14 txs in 22ms                                                                    
+ [7] System       │                                                                                                                                             
+ [8] Logs         │                                                                                                                                             
+ [9] Ops          │                                                                                                                                             
+                  │                                                                                                                                             
+                  │                                                                                                                                             
+                  │                                                                                                                                             
+                  │                                                                                                                                             
+                  │                                                                                                                                             
+                  │                                                                                                                                             
+                  │                                                                                                                                             
+                  │                                                                                                                                             
+                  │                                                                                                                                             
+                  │                                                                                                                                             
+                  │                                                                                                                                             
+                  │                                                                                                                                             
+                  │                                                                                                                                             
+                  │                                                                                                                                             
+                  │                                                                                                                                             
+                  │                                                                                                                                             
+                  │                                                                                                                                             
+                  │                                                                                                                                             
+                  │                                                                                                                                             
+                  │                                                                                                                                             
+                  │                                                                                                                                             
+                  │                                                                                                                                             
+                  │                                                                                                                                             
+                  │                                                                                                                                             
+                  │                                                                                                                                             
+                  │                                                                                                                                             
+                  │                                                                                                                                             
+                  │                                                                                                                                             
+                  │                                                                                                                                             
+                  │                                                                                                                                             
+                  │                                                                                                                                             
+                  │                                                                                                                                             
+ 1-9 view  [ ] other views  Up Down select  Enter open  Esc back  : prompt  / filter  ? help  g glyphs  p pause  r redraw  d detach  q quit                     

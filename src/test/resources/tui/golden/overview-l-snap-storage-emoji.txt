@@ -1,48 +1,48 @@
  ◆ FUKUII  mordor (63) · PoW · head 0 · 11/50 peers · up 2h 11m · v0.11.0                                                                              Overview 
 ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
  ⚠ 1 warn    peers 11/50 below 25%                                                                                                                              
- Peers   11/50 ◆◆◆◆◆◆◆◆◆◆  Block  0 → 9,118,000 (pivot)                   Txpool  142             Disk  412G free     JVM  5.1G / 8.0G heap                     
- RPC     :8545 on                                                            Discovery  1,912 known · 14 pending · 3 blacklisted   GC  1.2%                     
-────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
- SNAP 💾   Downloading bytecodes & storage                                           elapsed 2h 11m · ETA 1h 58m │                      --                      
-   Overall  [==========🪱.............................]🧠 27%                                                    │                    .=+#+.                    
-   Accounts 🪱[COMPLETE ✓]🧠                                    34.1M                                            │                   .+++*#*.                   
-   Storage  [==============🪱.........................]🧠 37%   119.6M slots @ 21.4K/s · 2,114/5,702 contracts   │                  :++++*###-                  
-   Bytecode 🪱[ACTIVE]   🧠                                     412.0K @ 310/s                                   │                .=+++++*####+.                
-   Healing  🪱[QUEUED]🧠                                                                                         │               .=++++++*#####+.               
-   Chain    headers 4.2M / 9.1M · bodies 0 · receipts 0                                                          │              :++++++++*#######:              
-─────────────────────────────────────────────────────────────────────────────────────────────────────────────────│             :+++++++++*########-             
- Forks (block)                                                                                                   │            =++++++++++*#########+            
-   Agharta ✓ ─ Phoenix ✓ ─ ECIP-1099 ✓ ─ Magneto ✓ ─ Mystique ✓ ════════▶ Spiral @ 9,957,000 (839.0K away)       │          .++++++++++++*##########*.          
-   block 9,118,000 · Mystique since 5,520,000                                                                    │        .:+++++++++++++*############:         
-─────────────────────────────────────────────────────────────────────────────────────────────────────────────────│        -++++++++++++++*#############=        
- Peers (top 8 of 11 by score)                                                                                    │                                              
-   id          dir  client                best        score  trend  age                                          │                                              
-   0x0000…a1   in   CoreGeth/v1.12.19     9,118,000   0.950  ↑      4h 10m                                       │                                              
-   0x1715…16   out  CoreGeth/v1.12.19     9,117,998   0.900  ↓      3h 41m                                       │                                              
-   0x2e2b…8b   out  CoreGeth/v1.12.19     9,117,999   0.850  →      3h 13m                                       │                                              
-   0x3c6f…03   out  Geth/v1.13.5          9,117,998   0.810  ↓      3h 58m                                       │                                              
-   0x5384…78   out  Geth/v1.13.5          9,117,999   0.760  →      3h 30m                                       │                                              
-   0x78de…65   out  Nethermind/v1.25.4    9,117,999   0.670  →      3h 47m                                       │                                              
-   0x8ff3…da   in   Nethermind/v1.25.4    9,118,000   0.620  ↑      3h 19m                                       │                                              
-   0x9e37…52   out  besu/v24.1.2          9,117,999   0.580  →      4h 4m                                        │                                              
-────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
- Node    /var/lib/fukuii/mordor · SNAP sync · archive pruning · 50 peers max · mining off                                                                       
-────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
- Recent                                                                                                                                                         
- 11:58:21 INFO  Handshaked peer 0x3fa1…e2 CoreGeth/v1.12.19                                                                                                     
- 11:58:34 INFO  RegularSync: current=21884097 best=21884102 lag=5                                                                                               
- 11:58:47 INFO  Imported block 21,884,098 0x1f09…88a1 with 17 txs in 26ms                                                                                       
- 11:59:00 WARN  Peer 0x9c0d…77 timed out on GetBlockHeaders, retrying                                                                                           
- 11:59:04 INFO  Imported block 21,884,099 0x7ab2…d4c7 with 6 txs in 14ms                                                                                        
- 11:59:12 INFO  eth_getWork served for block 21,884,100                                                                                                         
- 11:59:17 INFO  Imported block 21,884,100 0x3301…2e9d with 21 txs in 31ms                                                                                       
- 11:59:25 INFO  [====================🪱]🧠 100% — RegularSync                                                                                                   
- 11:59:30 ERROR Cannot decode a message from 203.0.113.40:30303                                                                                                 
- 11:59:34 INFO  Imported block 21,884,101 0x9b0c…ff31 with 9 txs in 17ms                                                                                        
- 11:59:47 INFO  Imported block 21,884,102 0x6d21…1a0e with 14 txs in 22ms                                                                                       
- 11:59:52 INFO  Peers: 41 handshaked · 14 in · 27 out                                                                                                           
- 12:00:00 INFO  RegularSync: at head, block 21884102                                                                                                            
-                                                                                                                                                                
-                                                                                                                                                                
- 1 Overview  2 Sync  3 Peers  4 Chain  5 Logs │ p Pause  ? Help  r Redraw  d Detach  q Quit                                                                     
+ mordor           │ Peers   11/50 ◆◆◆◆◆◆◆◆◆◆  Block  0 → 9,118,000 (pivot)                   Txpool  142             Disk  412G free     JVM  5.1G / 8.0G heap  
+ PoW · id 63      │ RPC     :8545 on                                                            Discovery  1,912 known · 14 pending · 3 blacklisted   GC  1.2%  
+                  │─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+ [1] Overview     │ SNAP 💾   Downloading bytecodes & storage                                                                       elapsed 2h 11m · ETA 1h 58m 
+ [2] Chain        │   Overall  [================🪱...........................................]🧠 27%                                                            
+ [3] Peers        │   Accounts 🪱[COMPLETE ✓]🧠                                                        34.1M                                                    
+ [4] Mempool      │   Storage  [=====================🪱......................................]🧠 37%   119.6M slots @ 21.4K/s · 2,114/5,702 contracts           
+ [5] RPC          │   Bytecode 🪱[ACTIVE]   🧠                                                         412.0K @ 310/s                                           
+ [6] Storage      │   Healing  🪱[QUEUED]🧠                                                                                                                     
+ [7] System       │   Chain    headers 4.2M / 9.1M · bodies 0 · receipts 0                                                                                      
+ [8] Logs         │─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+ [9] Ops          │ Forks (block)                                                                                                                               
+                  │   DiffBomb-Removal ✓ ─ Atlantis ✓ ─ Agharta ✓ ─ Phoenix ✓ ─ ECIP-1099 ✓ ─ Magneto ✓ ─ Mystique ✓ ════════▶ Spiral @ 9,957,000 (839.0K away) 
+                  │   block 9,118,000 · Mystique since 5,520,000                                                                                                
+                  │─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+                  │ Peers (top 8 of 11 by score)                                                                                                                
+                  │   id          dir  client                best        score  trend  age                                                                      
+                  │   0x0000…a1   in   CoreGeth/v1.12.19     9,118,000   0.950  ↑      4h 10m                                                                   
+                  │   0x1715…16   out  CoreGeth/v1.12.19     9,117,998   0.900  ↓      3h 41m                                                                   
+                  │   0x2e2b…8b   out  CoreGeth/v1.12.19     9,117,999   0.850  →      3h 13m                                                                   
+                  │   0x3c6f…03   out  Geth/v1.13.5          9,117,998   0.810  ↓      3h 58m                                                                   
+                  │   0x5384…78   out  Geth/v1.13.5          9,117,999   0.760  →      3h 30m                                                                   
+                  │   0x78de…65   out  Nethermind/v1.25.4    9,117,999   0.670  →      3h 47m                                                                   
+                  │   0x8ff3…da   in   Nethermind/v1.25.4    9,118,000   0.620  ↑      3h 19m                                                                   
+                  │   0x9e37…52   out  besu/v24.1.2          9,117,999   0.580  →      4h 4m                                                                    
+                  │─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+                  │ Node    /var/lib/fukuii/mordor · SNAP sync · archive pruning · 50 peers max · mining off                                                    
+                  │─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+                  │ Recent                                                                                                                                      
+                  │ 11:58:21 INFO  Handshaked peer 0x3fa1…e2 CoreGeth/v1.12.19                                                                                  
+                  │ 11:58:34 INFO  RegularSync: current=21884097 best=21884102 lag=5                                                                            
+                  │ 11:58:47 INFO  Imported block 21,884,098 0x1f09…88a1 with 17 txs in 26ms                                                                    
+                  │ 11:59:00 WARN  Peer 0x9c0d…77 timed out on GetBlockHeaders, retrying                                                                        
+                  │ 11:59:04 INFO  Imported block 21,884,099 0x7ab2…d4c7 with 6 txs in 14ms                                                                     
+                  │ 11:59:12 INFO  eth_getWork served for block 21,884,100                                                                                      
+                  │ 11:59:17 INFO  Imported block 21,884,100 0x3301…2e9d with 21 txs in 31ms                                                                    
+                  │ 11:59:25 INFO  [====================🪱]🧠 100% — RegularSync                                                                                
+                  │ 11:59:30 ERROR Cannot decode a message from 203.0.113.40:30303                                                                              
+                  │ 11:59:34 INFO  Imported block 21,884,101 0x9b0c…ff31 with 9 txs in 17ms                                                                     
+                  │ 11:59:47 INFO  Imported block 21,884,102 0x6d21…1a0e with 14 txs in 22ms                                                                    
+                  │ 11:59:52 INFO  Peers: 41 handshaked · 14 in · 27 out                                                                                        
+                  │ 12:00:00 INFO  RegularSync: at head, block 21884102                                                                                         
+                  │                                                                                                                                             
+                  │                                                                                                                                             
+ 1-9 view  [ ] other views  Up Down select  Enter open  Esc back  : prompt  / filter  ? help  g glyphs  p pause  r redraw  d detach  q quit                     

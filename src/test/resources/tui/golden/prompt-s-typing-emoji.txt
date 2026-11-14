@@ -1,0 +1,24 @@
+ ◆ FUKUII  etc (61) · PoW · up 12d 7h                                  Overview 
+────────────────────────────────────────────────────────────────────────────────
+ ✓ no alerts                                                                    
+ Peers   41/50 ◆◆◆◆◆◆◆◆◆◆         Block  21,884,102 (at head)                   
+ RPC     :8545 on                 Disk   388G free       Txpool  142            
+────────────────────────────────────────────────────────────────────────────────
+ Sync    ✓ at head                                                              
+   Blocks   🪱[COMPLETE ✓]🧠                21,884,102                          
+────────────────────────────────────────────────────────────────────────────────
+ Forks   Spiral ✓ ══════════════════════════════════════▶ Olympia not scheduled 
+────────────────────────────────────────────────────────────────────────────────
+ Node    …/fukuii/etc · SNAP sync · archive pruning · 50 peers max · mining on  
+────────────────────────────────────────────────────────────────────────────────
+ Recent                                                                         
+ 11:59:25 INFO  [====================🪱]🧠 100% — RegularSync                   
+ 11:59:30 ERROR Cannot decode a message from 203.0.113.40:30303                 
+ 11:59:34 INFO  Imported block 21,884,101 0x9b0c…ff31 with 9 txs in 17ms        
+ 11:59:47 INFO  Imported block 21,884,102 0x6d21…1a0e with 14 txs in 22ms       
+ 11:59:52 INFO  Peers: 41 handshaked · 14 in · 27 out                           
+ 12:00:00 INFO  RegularSync: at head, block 21884102                            
+                                                                                
+                                                                                
+                                                                                
+ :mem                                        Enter run  Tab complete  Esc close 

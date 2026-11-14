@@ -18,7 +18,7 @@ class PeersPanelSpec extends AnyFlatSpec with Matchers:
     val lines = renderer.render(s.copy(motion = Motion.Reduced), w, h)
     lines should have size h.toLong
     all(lines.map(_.columnLength())) shouldBe w
-    lines.map(_.toString)
+    TuiFixtures.panelRows(lines.map(_.toString), w, h)
 
   private def peersView(s: TuiState, w: Int, h: Int): Seq[String] = frame(s.withView(TuiView.Peers), w, h)
 

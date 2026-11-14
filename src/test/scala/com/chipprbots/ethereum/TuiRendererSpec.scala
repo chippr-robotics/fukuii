@@ -17,7 +17,7 @@ class TuiRendererSpec extends AnyFlatSpec with Matchers:
   val minimalRenderer: TuiRenderer = TuiRenderer(minimalConfig)
 
   private def rows(state: TuiState, width: Int, height: Int, r: TuiRenderer = renderer): Seq[String] =
-    r.render(state, width, height).map(_.toString)
+    TuiFixtures.panelRows(r.render(state, width, height).map(_.toString), width, height)
 
   private def occurrences(text: String, of: String): Int = text.split(Pattern.quote(of), -1).length - 1
 
@@ -139,9 +139,9 @@ class TuiRendererSpec extends AnyFlatSpec with Matchers:
     val lines = renderer.render(state, width, height)
     val footer = lines.last.toString
 
-    footer should include("r Redraw")
-    footer should include("d Detach")
-    footer should include("q Quit")
+    footer should include("r redraw")
+    footer should include("d detach")
+    footer should include("q quit")
     (footer should not).include("Disable")
   }
 
@@ -240,7 +240,7 @@ class TuiRendererSpec extends AnyFlatSpec with Matchers:
   it should "keep the keyboard commands on the bottom row when the content does not fit" taggedAs (UnitTest) in {
     val lines = renderer.render(TuiState.initial, 80, 8)
     lines.length shouldBe 8
-    lines.last.toString should include("q Quit")
+    lines.last.toString should include("q quit")
   }
 
   it should "truncate an over-long value instead of wrapping" taggedAs (UnitTest) in {
@@ -249,17 +249,11 @@ class TuiRendererSpec extends AnyFlatSpec with Matchers:
     all(lines.map(_.columnLength())) shouldBe 60
   }
 
-  // §3.1: the logo is in the dashboard only at tier L, in a right-hand column.
-  it should "show the logo in a right-hand column at tier L only" taggedAs (UnitTest) in {
-    def logoRows(width: Int, height: Int, r: TuiRenderer = renderer) =
-      r.render(TuiState.initial, width, height).map(_.toString).filter(_.contains("=+#+."))
-    logoRows(160, 48) should have size 1
-    logoRows(160, 48).head.indexOf("=+#+.") should be > 100
-    logoRows(160, 48).head should include(TuiGlyphs.Emoji.divider.text)
-    logoRows(100, 60) shouldBe empty // M
-    logoRows(120, 40) shouldBe empty // M
-    logoRows(80, 24) shouldBe empty // S
-    logoRows(160, 48, minimalRenderer) shouldBe empty // showLogo = false
+  // Spec 029: the sidebar took the logo column's place; the logo is on the splash (SplashSpec), never in the dashboard.
+  it should "not draw the logo in the dashboard at any tier" taggedAs (UnitTest) in {
+    def logoRows(width: Int, height: Int) =
+      renderer.render(TuiState.initial, width, height).map(_.toString).filter(_.contains("=+#+."))
+    for (w, h) <- Seq((200, 60), (160, 48), (120, 40), (100, 60), (80, 24)) do logoRows(w, h) shouldBe empty
   }
 
   it should "show an unknown network head as 'unknown', not 0" taggedAs (UnitTest) in {
@@ -307,21 +301,21 @@ class TuiRendererSpec extends AnyFlatSpec with Matchers:
 
   it should "show the fields the probe used to drop: contracts, chain download, phase time" taggedAs (UnitTest) in {
     val text = rows(TuiFixtures.snapStorageMordor(), 160, 48).mkString("\n")
-    // At tier L the logo column narrows the body; the row still keeps its rate and its contract count.
     text should include("119.6M slots @ 21.4K/s · 2,114/5,702 contracts")
     text should include("headers 4.2M / 9.1M")
     // Slice 3: the time in the phase is on the Sync view's phase row.
-    rows(TuiFixtures.snapStorageMordor().withView(TuiView.Sync), 160, 48).mkString("\n") should include("phase 1h 8m")
+    rows(TuiFixtures.snapStorageMordor().withView(TuiView.Chain), 160, 48).mkString("\n") should include("phase 1h 8m")
   }
 
-  // Slice 1 review W4: at the tier L minimum the logo column leaves the body 93 columns. The rate survives; the contract
-  // count, last on the row, is what is cut.
-  it should "keep the Storage rate at the tier L minimum, 140×45, and cut the contract count" taggedAs (UnitTest) in {
-    val lines = rows(TuiFixtures.snapStorageMordor(), 140, 45)
-    lines.exists(_.contains("=+#+.")) shouldBe true // the logo column is drawn
+  // Spec 029: the sidebar took the logo column's place, so at the narrowest tier L body (140 columns beside the
+  // sidebar) the Storage row is whole: its rate and its contract count.
+  it should "keep the Storage row whole at the narrowest tier L body, with no logo column" taggedAs (UnitTest) in {
+    val width = Tier.MinLWidth + TuiFixtures.SidebarCols
+    val lines = rows(TuiFixtures.snapStorageMordor(), width, 45)
+    lines.exists(_.contains("=+#+.")) shouldBe false // the logo is on the splash only
     val storage = lines.find(_.trim.startsWith("Storage")).get
     storage should include("119.6M slots @ 21.4K/s")
-    (storage should not).include("contracts")
+    storage should include("contracts")
   }
 
   it should "draw the network name the same under a Turkish default locale" taggedAs (UnitTest) in {
@@ -335,7 +329,7 @@ class TuiRendererSpec extends AnyFlatSpec with Matchers:
     // Slice 3 review: at tier S the Storage row drops the word "slots", so its contract count fits whole.
     lines.find(_.trim.startsWith("Storage")).get should include("119.6M @ 21.4K/s · 2,114/5,702 ")
     lines.find(_.trim.startsWith("Bytecode")).get should include("@ 310/s")
-    val sync = rows(TuiFixtures.snapStorageMordor().withView(TuiView.Sync), 80, 24)
+    val sync = rows(TuiFixtures.snapStorageMordor().withView(TuiView.Chain), 80, 24)
     sync.find(_.trim.startsWith("Storage")).get should include("2,114/5,702 ")
     sync.find(_.contains("SNAP sync")).get should include("Downloading bytecodes & storage")
   }

@@ -44,18 +44,37 @@ Every slice ends with the same gate. The art (phase 0) is done and in the tree.
 
 **Purpose**: baseline before slice 1. No behaviour change.
 
-- [ ] T005 Read spec.md (both Clarifications sessions), research.md §2 and §3, plan.md (sequencing, decisions). Confirm
+- [x] T005 Read spec.md (both Clarifications sessions), research.md §2 and §3, plan.md (sequencing, decisions). Confirm
       spec 027's manual gate (B-189) has run, or note the rebase. Add a backlog item for slice 1 and claim it. On slice
       1's first code commit set spec.md `**Status**` to `Active (<date>)` and `**In flight**` to `feat/029-s1-input`,
       then run `python3 -I scripts/specs/index.py`
-- [ ] T006 Baseline, one JVM: `sbt "testOnly com.chipprbots.ethereum.console.* *Tui*"` on `origin/staging`; record
+- [x] T006 Baseline, one JVM: `sbt "testOnly com.chipprbots.ethereum.console.* *Tui*"` on `origin/staging`; record
       suites and tests for the slice 1 PR
-- [ ] T007 [P] Move research §3's experiments into `console tests` as `JLineAssumptionsSpec`: placeholder widths,
+- [x] T007 [P] Move research §3's experiments into `console tests` as `JLineAssumptionsSpec`: placeholder widths,
       indexed-colour emission, a graphics command through the writer. They pin what the design assumes of JLine 3.30.13
 
 ---
 
 ## Phase 2: Slice 1 — input and navigation (US1) 🎯 MVP
+
+> As built (2026-11-14). Baseline before the slice: 785 tests in 35 suites of
+> `testOnly com.chipprbots.ethereum.console.* *Tui*`; after it, 939. What differs from the tasks as written:
+>
+> - **T012, T021**: there is no `ListView` or `Table` widget yet. The Peers list's selection and paging are in
+>   `PeersPanel` and `TuiState` (the selection is kept by peer id, the page is the one that holds it); `widgets/` has
+>   `Sidebar` and `DialogBox`. A shared list widget waits for the second list that needs one (slice 3). The list's
+>   behaviour is tested in `UpdateSpec` and the goldens, not in a `ListViewSpec`.
+> - **T013, T014**: the Help-lists-every-key and reachability tests are in `UpdateSpec` and `TuiViewGoldenSpec`.
+> - **T020**: `TuiState` keeps `view` and `helpOpen` as fields and adds `screens`, `overlay`, `selectedPeer`,
+>   `filters`: fewer of spec 027's tests change than a derived `view` would cost.
+> - **T023**: every view has one panel that takes keys so far, so `Tab` has nothing to move between and no focus
+>   marker is drawn. The key is bound and listed.
+> - **Beyond the tasks**: the 12-line logo column of the tier-L Overview is gone (the sidebar takes its columns; slice
+>   2 puts the mascot there); a detail row that is too wide now drops its last part whole instead of cutting a number
+>   or a timestamp (the SNAP rows and the Forks row, B-201).
+> - **T005**: spec 027's manual gate (B-189) had not run when this slice was written; the slice rewrites files it
+>   covers, so B-189 now runs against this code.
+> - **T028 is open**: the manual gate needs a terminal, and the session that built the slice has none.
 
 **Goal**: the TUI is driven from the keyboard. **Branch**: `feat/029-s1-input`.
 
@@ -64,47 +83,47 @@ Every slice ends with the same gate. The art (phase 0) is done and in the tree.
 
 ### Tests first
 
-- [ ] T008 [P] [US1] `KeyDecoderSpec` in `console tests`: every row of research E3; a lone Esc after 50 ms; a sequence
+- [x] T008 [P] [US1] `KeyDecoderSpec` in `console tests`: every row of research E3; a lone Esc after 50 ms; a sequence
       split across reads; an unknown CSI, an APC reply and a cell-size report yield no key (E4); bounds; bracketed paste
       as one `Key.Paste`
-- [ ] T009 [P] [US1] `KeyDecoderPropertySpec` (property): 10,000 generated inputs mixing keys, sequences, replies and
+- [x] T009 [P] [US1] `KeyDecoderPropertySpec` (property): 10,000 generated inputs mixing keys, sequences, replies and
       truncated sequences; every key out was a key in (SC-003)
-- [ ] T010 [P] [US1] `UpdateSpec`: view keys, `Tab`, `[`/`]`, selection and paging with both the escape and the
+- [x] T010 [P] [US1] `UpdateSpec`: view keys, `Tab`, `[`/`]`, selection and paging with both the escape and the
       printable key, Enter pushes a screen, Esc pops it with focus and selection restored, overlays take every key
-- [ ] T011 [P] [US1] `PromptSpec` and `CommandsSpec`: editing, history, completion, parse of every command in
+- [x] T011 [P] [US1] `PromptSpec` and `CommandsSpec`: editing, history, completion, parse of every command in
       contracts/operator.md that slice 1 implements, the nearest-command message
-- [ ] T012 [P] [US1] `NavSpec` and `ListViewSpec`: selection stays in view and is clamped when the list shrinks
-- [ ] T013 [P] [US1] `HelpKeysSpec`: Help lists exactly the keys `Update` accepts in each context (SC-002's "no hidden
+- [x] T012 [P] [US1] `NavSpec` and `ListViewSpec`: selection stays in view and is clamped when the list shrinks
+- [x] T013 [P] [US1] `HelpKeysSpec`: Help lists exactly the keys `Update` accepts in each context (SC-002's "no hidden
       key")
-- [ ] T014 [P] [US1] `ReachabilitySpec`: every view and panel is reached at 80×24 with printable keys, Tab and Enter
+- [x] T014 [P] [US1] `ReachabilitySpec`: every view and panel is reached at 80×24 with printable keys, Tab and Enter
       only (SC-002); extended by each later slice
-- [ ] T015 [P] [US1] Goldens: Peers with a selection, the peer detail screen, Logs with a filter, the prompt, Help, the
+- [x] T015 [P] [US1] Goldens: Peers with a selection, the peer detail screen, Logs with a filter, the prompt, Help, the
       quit dialog, the sidebar at tiers M and L, in both glyph sets; extend `TuiWidthPropertySpec` to the new state
-- [ ] T016 [P] [US1] `TuiSpec` and `TuiKeysSpec` in `console tests`: `q` opens a dialog and does not quit; pasted `q`
+- [x] T016 [P] [US1] `TuiSpec` and `TuiKeysSpec` in `console tests`: `q` opens a dialog and does not quit; pasted `q`
       and `y` do not quit; `d` detaches; Ctrl-C is not read as a key
 
 ### Implementation
 
-- [ ] T017 [US1] `console/Key.scala` and `console/KeyDecoder.scala` (data-model.md); build the sequence table from
+- [x] T017 [US1] `console/Key.scala` and `console/KeyDecoder.scala` (data-model.md); build the sequence table from
       `KeyMap.key(terminal, capability)` plus the fixed normal and application forms
-- [ ] T018 [US1] `console/Tui.scala`: `checkInput` feeds the decoder and returns `Seq[Key]`; enable and disable
+- [x] T018 [US1] `console/Tui.scala`: `checkInput` feeds the decoder and returns `Seq[Key]`; enable and disable
       bracketed paste in `initialize` and the teardown ladder; remove `drainEscape` (closes B-226)
-- [ ] T019 [US1] `console/Nav.scala`, `console/Overlay.scala`, `console/Prompt.scala`, `console/Commands.scala`
-- [ ] T020 [US1] `console/Update.scala`: the pure update and `Effect`; `Tui.handleCommand` becomes "run `Update`, then
+- [x] T019 [US1] `console/Nav.scala`, `console/Overlay.scala`, `console/Prompt.scala`, `console/Commands.scala`
+- [x] T020 [US1] `console/Update.scala`: the pure update and `Effect`; `Tui.handleCommand` becomes "run `Update`, then
       the effects"; `TuiState` gains `nav` and `overlay`, with `view` and `helpOpen` derived
-- [ ] T021 [P] [US1] `console/widgets/`: `ListView`, `Table`, `Box`, `DialogBox`, `Sidebar`
-- [ ] T022 [US1] `console/TuiView.scala`: the nine views; re-home the 027 panels (Sync leads Chain while syncing; RPC,
+- [x] T021 [P] [US1] `console/widgets/`: `ListView`, `Table`, `Box`, `DialogBox`, `Sidebar`
+- [x] T022 [US1] `console/TuiView.scala`: the nine views; re-home the 027 panels (Sync leads Chain while syncing; RPC,
       Storage, System, Mempool and Ops show what 027 already has for them, or a one-line "arrives with slice N")
-- [ ] T023 [US1] `console/TuiRenderer.scala` and `console/Layout.scala`: the sidebar at tiers M and L, the focused
+- [x] T023 [US1] `console/TuiRenderer.scala` and `console/Layout.scala`: the sidebar at tiers M and L, the focused
       panel's marker, the contextual footer, overlays drawn over the body and never over the alert row
-- [ ] T024 [US1] `console/panels/PeersPanel.scala` and `LogsPanel.scala` as lists; a peer detail screen; `/` filters
-- [ ] T025 [US1] `console/panels/HelpPanel.scala` generated from the key table
-- [ ] T026 [US1] The quit dialog (`y` to confirm until slice 7 makes it a Halt); `console/TuiConfig.scala` and
+- [x] T024 [US1] `console/panels/PeersPanel.scala` and `LogsPanel.scala` as lists; a peer detail screen; `/` filters
+- [x] T025 [US1] `console/panels/HelpPanel.scala` generated from the key table
+- [x] T026 [US1] The quit dialog (`y` to confirm until slice 7 makes it a Halt); `console/TuiConfig.scala` and
       `TuiEnv.scala` parse `read-only` and `FUKUII_TUI_READ_ONLY`; `conf/base/tui.conf`
 
 ### Gate
 
-- [ ] T027 The per-slice gate of plan.md, steps 1 to 4 and 7; counts in the PR
+- [x] T027 The per-slice gate of plan.md, steps 1 to 4 and 7; counts in the PR
 - [ ] T028 quickstart.md "Slice 1", captures in the PR; `prism` and `eye` reports; open the PR with `Backlog: B-…`
 
 ---

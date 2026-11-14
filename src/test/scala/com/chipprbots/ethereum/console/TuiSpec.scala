@@ -65,7 +65,7 @@ class TuiSpec extends AnyFlatSpec with Matchers:
     val tui = new Tui(TuiTestTerminal.config, () => throw new IllegalStateException("not a tty"))
     tui.initialize() shouldBe false
     tui.isEnabled shouldBe false
-    tui.checkInput(10) shouldBe None
+    tui.checkInput(10) shouldBe empty
     noException should be thrownBy tui.render()
   }
 
@@ -86,12 +86,14 @@ class TuiSpec extends AnyFlatSpec with Matchers:
   it should "return from checkInput within its timeout when no key is pressed" taggedAs (UnitTest) in withTui() {
     (tui, _) =>
       val pending = Future(tui.checkInput(50))
-      Await.result(pending, 5.seconds) shouldBe None
+      Await.result(pending, 5.seconds) shouldBe empty
   }
 
-  it should "deliver a pressed key, lower-cased" taggedAs (UnitTest) in withTui() { (tui, tt) =>
-    tt.press("Q")
-    tui.checkInput(5000) shouldBe Some('q')
+  it should "deliver a pressed key as it was typed: the key table reads either case" taggedAs (UnitTest) in withTui() {
+    (tui, tt) =>
+      tt.press("Q")
+      tui.checkInput(5000) shouldBe Seq(Key.Char('Q'))
+      Bindings.actionFor(Key.Char('Q')) shouldBe Bindings.actionFor(Key.Char('q'))
   }
 
   it should "draw a frame of exactly the terminal height, without a trailing newline" taggedAs (UnitTest) in withTui(
@@ -104,7 +106,7 @@ class TuiSpec extends AnyFlatSpec with Matchers:
     frame.split("\r\n", -1).length shouldBe 30
     (frame should not).endWith("\n")
     TuiTestTerminal.visible(frame) should include("mordor")
-    TuiTestTerminal.visible(frame) should include("q Quit")
+    TuiTestTerminal.visible(frame) should include("q quit")
   }
 
   // Spec 027 FR-009: NO_COLOR (resolved into the config by TuiEnv) puts the monochrome theme on the wire.
@@ -170,9 +172,11 @@ class TuiSpec extends AnyFlatSpec with Matchers:
     text should include("regular") // slice 3: the sync panel names the sync
   }
 
-  it should "keep running on 'q' — quitting the node is the caller's job" taggedAs (UnitTest) in withTui() { (tui, _) =>
-    tui.handleCommand('q') shouldBe TuiCommand.Quit
-    tui.isEnabled shouldBe true
+  it should "keep running on 'q' then 'y' — quitting the node is the caller's job" taggedAs (UnitTest) in withTui() {
+    (tui, _) =>
+      tui.handleCommand('q') shouldBe TuiCommand.Continue // q asks (spec 029 FR-049)
+      tui.handleCommand('y') shouldBe TuiCommand.Quit
+      tui.isEnabled shouldBe true
   }
 
   it should "redraw on 'r'" taggedAs (UnitTest) in withTui() { (tui, tt) =>
@@ -287,7 +291,7 @@ class TuiSpec extends AnyFlatSpec with Matchers:
     val bytes = tt.output.length
     tui.handleCommand('r') shouldBe TuiCommand.Continue
     tt.output.substring(bytes) should include(Tui.ClearScreen)
-    TuiTestTerminal.visible(tt.lastFrame) should include("q Quit")
+    TuiTestTerminal.visible(tt.lastFrame) should include("q quit")
   }
 
   // Spec 027 FR-012: `p` pauses the frame counter; a second `p` resumes the configured motion.
@@ -387,7 +391,7 @@ class TuiSpec extends AnyFlatSpec with Matchers:
   it should "report a failed key read, and give the terminal and the logs back" taggedAs (UnitTest) in withTui() {
     (tui, tt) =>
       tt.failReads = true
-      val events = tuiLogDuring(tui.checkInput(10) shouldBe None)
+      val events = tuiLogDuring(tui.checkInput(10) shouldBe empty)
       events.map(_._1) shouldBe List(Level.ERROR)
       events.head._2 should include("could not read a key")
       tui.isEnabled shouldBe false
@@ -396,7 +400,7 @@ class TuiSpec extends AnyFlatSpec with Matchers:
 
   it should "stop reading once the terminal is closed, without an ERROR" taggedAs (UnitTest) in withTui() { (tui, tt) =>
     tt.terminal.close()
-    val events = tuiLogDuring(Await.result(Future(tui.checkInput(5000)), 2.seconds) shouldBe None)
+    val events = tuiLogDuring(Await.result(Future(tui.checkInput(5000)), 2.seconds) shouldBe empty)
     events.map(_._1) should not contain Level.ERROR
     tui.isEnabled shouldBe false
   }
@@ -423,7 +427,7 @@ class TuiSpec extends AnyFlatSpec with Matchers:
     logger.addAppender(watcher)
     try
       tt.failReads = true
-      tui.checkInput(10) shouldBe None
+      tui.checkInput(10) shouldBe empty
     finally logger.detachAppender(watcher)
     enabledAtError.get shouldBe Some(false)
   }
@@ -594,7 +598,7 @@ class TuiSpec extends AnyFlatSpec with Matchers:
       logger.setLevel(Level.INFO) // the test configuration's root is at ERROR
       logger.info("hello from the node")
       tui.nextFrame(None)
-      tui.handleCommand('5')
+      tui.handleCommand('8')
       tui.render()
       TuiTestTerminal.visible(tt.lastFrame) should include("hello from the node")
     finally

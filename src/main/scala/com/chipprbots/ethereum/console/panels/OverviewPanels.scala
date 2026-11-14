@@ -7,22 +7,20 @@ import com.chipprbots.ethereum.console.panels.Rows.*
 
 /** The Overview, by tier (spec 027 research §3.2–§3.4): the vitals and resources strips; the sync panel (SNAP's five
   * worm rows, or the Blocks worm); the consensus layer (ETH) or the mining (ETC); the forks; at tier L the top peers by
-  * score, beside the logo; the node's settings; and the Recent strip of the newest log lines.
+  * score; the node's settings; and the Recent strip of the newest log lines.
+  *
+  * The 12-line logo that spec 027 drew in a column at tier L is not drawn here any more: the sidebar (spec 029 FR-006)
+  * takes those columns, and slice 2 of spec 029 gives the operator's place to the mascot. The logo stays on the splash.
   */
 private[console] object OverviewPanels:
 
-  /** The right-hand column that holds the logo at tier L. */
-  val LogoColumnCols: Int = 46
-
-  def panels(c: Ctx, width: Int): Seq[Panel] =
+  def panels(c: Ctx): Seq[Panel] =
     val strips = Panel(1, 2, 1, (w, _) => Seq(vitalsRow(c, w), resourcesRow(c, w)))
     val node = Option.when(c.config.showNodeSettings && c.state.nodeSettings.network.nonEmpty)(
       Panel(1, 1, 5, (w, _) => Seq(nodeRow(c, w)), separated = true)
     )
     val middle =
-      if c.config.showLogo && c.tier.logo.inDashboard then Seq(withLogo(c, width))
-      else
-        Seq(sync(c, c.tier.trackSlots)) ++ chainLayer(c) ++ forks(c) ++ Option.when(c.tier == Tier.L)(peers(c)).flatten
+      Seq(sync(c, c.tier.trackSlots)) ++ chainLayer(c) ++ forks(c) ++ Option.when(c.tier == Tier.L)(peers(c)).flatten
     Seq(strips) ++ middle ++ node :+ LogsPanel.recent(c, "Recent", _ => true)
 
   /** The sync panel: SNAP's phase and five worm rows (and the chain download from tier M), or the Blocks worm. */
@@ -61,29 +59,6 @@ private[console] object OverviewPanels:
   def peers(c: Ctx): Option[Panel] =
     Option.when(c.state.snapshot.isDefined)(
       Panel(3, 10, 4, (w, n) => PeersPanel.table(c, w, n, top = true), separated = true)
-    )
-
-  /** The sync panel, forks and peers on the left, and the 12-line logo centred in a column on the right (§3.4). Its
-    * body takes tier M's worm track: the logo column leaves fewer columns than a tier-M screen has (C-18).
-    */
-  def withLogo(c: Ctx, width: Int): Panel =
-    val leftCols = width - LogoColumnCols - 1
-    val left = Seq(sync(c, Tier.M.trackSlots, separated = false)) ++ chainLayer(c) ++ forks(c) ++ peers(c)
-    val logo = TuiRenderer.SmallLogo.map(row => centred(text(row, c.t.healthy.bold()), LogoColumnCols))
-    val preferred = Layout.allocate(left, 1000).zip(left).map((n, p) => n + (if p.separated && n > 0 then 1 else 0)).sum
-    Panel(
-      1,
-      preferred.max(logo.size),
-      2,
-      (_, n) =>
-        Layout.columns(
-          Layout.render(left, leftCols, n, c.separator(leftCols)),
-          logo,
-          leftCols,
-          LogoColumnCols,
-          text(c.g.divider.text, c.t.muted)
-        ),
-      separated = true
     )
 
   /** ` Node /var/lib/fukuii/etc · SNAP sync · archive pruning · 50 peers max · mining on`: the datadir is cut from the

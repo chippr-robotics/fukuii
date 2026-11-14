@@ -1,48 +1,48 @@
- ◆ FUKUII  etc (61) · PoW · head 18,402,113 · 23/50 peers · up 9m 0s · v0.11.0                                                                             Sync 
+ ◆ FUKUII  etc (61) · PoW · head 18,402,113 · 23/50 peers · up 9m 0s · v0.11.0                                                                            Chain 
 ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
  ✓ no alerts                                                                                                                                                    
- Peers   23/50 ◆◆◆◆◆◆◆◆◆◆  Block  18,402,113 → 21,884,102 (−3,481,989)    Txpool  142             Disk  1.2T free     JVM  2.1G / 8.0G heap                     
-────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
- Regular sync                                                                                                                    rate 184.37 blk/s · ETA 5h 14m 
-   Blocks   [=================================================🪱..........]🧠 84%   18,402,113 / 21,884,102                                                     
-   Session  imported 101,220 blocks since 18,300,893 (9m 9s ago)                                                                                                
-   Lag      3,481,989 blocks behind best known                                                                                                                  
-────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
- Import     last 3 blocks in 61ms                                                                                                                               
-────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
- Recent (sync)                                                                                                                                                  
- 11:58:34 INFO  RegularSync: current=21884097 best=21884102 lag=5                                                                                               
- 11:58:47 INFO  Imported block 21,884,098 0x1f09…88a1 with 17 txs in 26ms                                                                                       
- 11:59:04 INFO  Imported block 21,884,099 0x7ab2…d4c7 with 6 txs in 14ms                                                                                        
- 11:59:17 INFO  Imported block 21,884,100 0x3301…2e9d with 21 txs in 31ms                                                                                       
- 11:59:25 INFO  [====================🪱]🧠 100% — RegularSync                                                                                                   
- 11:59:34 INFO  Imported block 21,884,101 0x9b0c…ff31 with 9 txs in 17ms                                                                                        
- 11:59:47 INFO  Imported block 21,884,102 0x6d21…1a0e with 14 txs in 22ms                                                                                       
- 12:00:00 INFO  RegularSync: at head, block 21884102                                                                                                            
-                                                                                                                                                                
-                                                                                                                                                                
-                                                                                                                                                                
-                                                                                                                                                                
-                                                                                                                                                                
-                                                                                                                                                                
-                                                                                                                                                                
-                                                                                                                                                                
-                                                                                                                                                                
-                                                                                                                                                                
-                                                                                                                                                                
-                                                                                                                                                                
-                                                                                                                                                                
-                                                                                                                                                                
-                                                                                                                                                                
-                                                                                                                                                                
-                                                                                                                                                                
-                                                                                                                                                                
-                                                                                                                                                                
-                                                                                                                                                                
-                                                                                                                                                                
-                                                                                                                                                                
-                                                                                                                                                                
-                                                                                                                                                                
-                                                                                                                                                                
-                                                                                                                                                                
- 1 Overview  2 Sync  3 Peers  4 Chain  5 Logs │ p Pause  ? Help  r Redraw  d Detach  q Quit                                                                     
+ etc              │ Peers   23/50 ◆◆◆◆◆◆◆◆◆◆  Block  18,402,113 → 21,884,102 (−3,481,989)    Txpool  142             Disk  1.2T free     JVM  2.1G / 8.0G heap  
+ PoW · id 61      │─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+                  │ Regular sync                                                                                                 rate 184.37 blk/s · ETA 5h 14m 
+ [1] Overview     │   Blocks   [=================================================🪱..........]🧠 84%   18,402,113 / 21,884,102                                  
+ [2] Chain        │   Session  imported 101,220 blocks since 18,300,893 (9m 9s ago)                                                                             
+ [3] Peers        │   Lag      3,481,989 blocks behind best known                                                                                               
+ [4] Mempool      │─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+ [5] RPC          │ Import     last 3 blocks in 61ms                                                                                                            
+ [6] Storage      │─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+ [7] System       │ Chain   etc · chain id 61 · PoW · forks by block number                                                                                     
+ [8] Logs         │─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+ [9] Ops          │ Forks (block)                                                                                                                               
+                  │   ✓ Frontier           block 0                                                                                                              
+                  │   ✓ Homestead          block 1,150,000                                                                                                      
+                  │   ✓ EIP-150            block 2,500,000                                                                                                      
+                  │   ✓ EIP-155            block 3,000,000                                                                                                      
+                  │   ✓ EIP-160            block 3,000,000                                                                                                      
+                  │   ✓ DiffBomb-Pause     block 3,000,000                                                                                                      
+                  │   ✓ DiffBomb-Continue  block 5,000,000                                                                                                      
+                  │   ✓ DiffBomb-Removal   block 5,900,000                                                                                                      
+                  │   ✓ Atlantis           block 8,772,000                                                                                                      
+                  │   ✓ Agharta            block 9,573,000                                                                                                      
+                  │   ✓ Phoenix            block 10,500,839                                                                                                     
+                  │   ✓ ECIP-1099          block 11,700,000                                                                                                     
+                  │   ✓ Magneto            block 13,189,133                                                                                                     
+                  │   ✓ Mystique           block 14,525,000                                                                                                     
+                  │   ▶ Spiral             block 19,250,000  847.9K away                                                                                        
+                  │   · Olympia            not scheduled on this network                                                                                        
+                  │                                                                                                                                             
+                  │                                                                                                                                             
+                  │                                                                                                                                             
+                  │                                                                                                                                             
+                  │─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+                  │ Recent (sync)                                                                                                                               
+                  │ 11:58:34 INFO  RegularSync: current=21884097 best=21884102 lag=5                                                                            
+                  │ 11:58:47 INFO  Imported block 21,884,098 0x1f09…88a1 with 17 txs in 26ms                                                                    
+                  │ 11:59:04 INFO  Imported block 21,884,099 0x7ab2…d4c7 with 6 txs in 14ms                                                                     
+                  │ 11:59:17 INFO  Imported block 21,884,100 0x3301…2e9d with 21 txs in 31ms                                                                    
+                  │ 11:59:25 INFO  [====================🪱]🧠 100% — RegularSync                                                                                
+                  │ 11:59:34 INFO  Imported block 21,884,101 0x9b0c…ff31 with 9 txs in 17ms                                                                     
+                  │ 11:59:47 INFO  Imported block 21,884,102 0x6d21…1a0e with 14 txs in 22ms                                                                    
+                  │ 12:00:00 INFO  RegularSync: at head, block 21884102                                                                                         
+                  │                                                                                                                                             
+                  │                                                                                                                                             
+ 1-9 view  [ ] other views  Up Down select  Enter open  Esc back  : prompt  / filter  ? help  g glyphs  p pause  r redraw  d detach  q quit                     
