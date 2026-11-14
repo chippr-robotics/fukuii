@@ -113,7 +113,8 @@ private[console] object MempoolPanels:
   val BarCols: Int = 24
 
   /** The Mempool Radar (FR-032): a tier a row, from the most urgent, each with its count as a bar and a figure and the
-    * fee it starts at.
+    * fee it starts at. The fees are all in gwei, however small: a column that changed unit half-way down would have to
+    * be read twice.
     */
   private def radarRows(c: Ctx, p: PoolSample, w: Int): Seq[AttributedString] =
     p.suggested match
@@ -121,7 +122,7 @@ private[console] object MempoolPanels:
         Seq(
           ObservatoryPanels.partsRow(
             c,
-            "Fees",
+            "Radar",
             Seq("the node has no fee to suggest yet", "no tier is drawn without one"),
             w
           )
@@ -130,13 +131,13 @@ private[console] object MempoolPanels:
         // On a chain with a base fee the node suggests a tip, and a transaction is measured by its tip.
         val head = ObservatoryPanels.partsRow(
           c,
-          "Fees",
+          "Radar",
           if hasBaseFee(c) then
             Seq(
-              s"tips against the tip this node would suggest, ${ObservatoryPanels.gwei(suggested)}",
+              s"tips against the tip this node would suggest, ${ObservatoryPanels.gweiOnly(suggested)}",
               "above the base fee"
             )
-          else Seq(s"gas prices against the price this node would suggest, ${ObservatoryPanels.gwei(suggested)}"),
+          else Seq(s"gas prices against the price this node would suggest, ${ObservatoryPanels.gweiOnly(suggested)}"),
           w
         )
         val most = p.tiers.values.maxOption.getOrElse(0).max(1)
@@ -153,8 +154,8 @@ private[console] object MempoolPanels:
             case FeeTier.Low    => c.t.label
           val from = starts
             .get(tier)
-            .fold(s"below ${ObservatoryPanels.gwei(starts(FeeTier.Normal))}")(fee =>
-              s"from ${ObservatoryPanels.gwei(fee)}"
+            .fold(s"below ${ObservatoryPanels.gweiOnly(starts(FeeTier.Normal))}")(fee =>
+              s"from ${ObservatoryPanels.gweiOnly(fee)}"
             )
           val sb = new AttributedStringBuilder()
           sb.append(f"   ${tier.label}%-7s ", c.t.label)

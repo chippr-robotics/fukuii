@@ -249,10 +249,12 @@ does not answer keeps the last reading on screen, which says how old it is from 
 says it is reading again. With DEBUG logging the node logs one line when the whole-pool reading starts and one when
 it stops.
 
+- **The Mempool Radar** is the row labelled `Radar` and the four bars under it, one a tier.
 - **Tiers.** A transaction's fee is measured against the fee the node's own gas-price oracle would suggest
   (`eth_maxPriorityFeePerGas` on a chain with a base fee, `eth_gasPrice` on one without): *low* is under half of it,
   *normal* from half to one and a half times, *high* up to three times, *urgent* above that. The tier counts sum to
-  the pending count. While the node has no fee to suggest, no tier is drawn.
+  the pending count. The boundaries are in gwei however small the fees are. While the node has no fee to suggest,
+  no tier is drawn.
 - **Flow.** From one poll to the next the dashboard sees which transactions arrived and which left. One that left
   while another from its sender with its nonce is pending was *replaced*; of the rest, one the node's transaction
   index now holds was *mined*, and the others were *dropped*. At most 500 departures are looked up a poll; when more
@@ -262,6 +264,12 @@ it stops.
   before that the row says it is measuring. The replacements count from when the watch began, and the row says how
   long ago that is: the watch starts again when the view is opened, or when the pool has gone unread for more than
   five seconds.
+- **What the flow can and cannot see.** A transaction is counted as mined when it has left the pool and the index
+  holds it. The view reports what the pool does: where the pool keeps a transaction that a block already holds,
+  it is still pending here, and when the pool later lets it expire it counts under *expired unmined*, not as
+  mined. A node that follows the chain by regular sync without a consensus client does this today (B-270: the
+  batch import path does not tell the pool which transactions it imported), so on such a node *mined/s* reads low
+  and *expired unmined* reads high.
 - **Counters.** Refusals are named by the admission rule that refused (`Underpriced`, `AlreadyKnown`, `NonceTooLow`,
   …). They count since the node started, whether or not the dashboard was looking. They are a lower bound: a peer's
   transaction whose sender has no account, or whose nonce is not the next after the sender's pending ones, is

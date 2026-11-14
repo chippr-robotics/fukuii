@@ -119,11 +119,11 @@ class MempoolViewSpec extends AnyFlatSpec with Matchers with OptionValues with B
   ) in {
     val s = TuiFixtures.mempoolEtc()
     val all = rows(s)
-    val fees = all.indexWhere(_.contains(" Fees "))
+    val fees = all.indexWhere(_.contains(" Radar "))
     all(fees) should include("gas prices against the price this node would suggest, 1.00 gwei")
     (all(fees) should not).include("base fee")
-    row(TuiFixtures.mempoolSepolia(), "Fees") should include("tips against the tip this node would suggest, 1.50 gwei")
-    row(TuiFixtures.mempoolSepolia(), "Fees") should include("above the base fee")
+    row(TuiFixtures.mempoolSepolia(), "Radar") should include("tips against the tip this node would suggest, 1.50 gwei")
+    row(TuiFixtures.mempoolSepolia(), "Radar") should include("above the base fee")
     val tiers = all.slice(fees + 1, fees + 5)
     tiers.map(_.trim.takeWhile(_ != ' ')) shouldBe Seq("urgent", "high", "normal", "low")
     val pool = s.snapshot.value.pool.value
@@ -131,13 +131,37 @@ class MempoolViewSpec extends AnyFlatSpec with Matchers with OptionValues with B
       (line should include).regex(s""" ${pool.tiers.getOrElse(tier, 0)} +(from|below) """)
     tiers(0) should include("from 3.00 gwei")
     tiers(1) should include("from 1.50 gwei")
-    tiers(2) should include("from 0.500 gwei")
-    tiers(3) should include("below 0.500 gwei")
+    tiers(2) should include("from 0.5 gwei")
+    tiers(3) should include("below 0.5 gwei")
     pool.tiers.values.sum shouldBe pool.size
     // The fullest tier's bar is whole, and no bar is longer.
     val bars = tiers.map(_.count(_ == '█'))
     bars.max shouldBe MempoolPanels.BarCols
     tiers.map(_.count(c => c == '█' || c == '░')).distinct shouldBe Seq(MempoolPanels.BarCols)
+  }
+
+  // dev-node, slice 4, on Ephemery (a suggestion of 0.001 gwei): two tiers read "from 500,000 wei" beside two in
+  // gwei, and 0.0015 gwei was rounded to 0.002, onto the tier above's 0.003.
+  it should "say every boundary in gwei, however small the fees, each told apart from the next" taggedAs (UnitTest) in {
+    val s = TuiFixtures.mempoolSepolia()
+    val suggested = BigInt(1_000_000) // 0.001 gwei
+    val low = TuiFixtures.withPool(
+      s,
+      TuiFixtures.poolSample(TuiFixtures.poolTxs(40, suggested, baseFee = true), Some(suggested))
+    )
+    val drawn = rows(low)
+    val head = drawn.indexWhere(_.contains(" Radar "))
+    drawn(head) should include("suggest, 0.001 gwei")
+    val tiers = drawn.slice(head + 1, head + 5)
+    tiers(0) should include("from 0.003 gwei")
+    tiers(1) should include("from 0.0015 gwei")
+    tiers(2) should include("from 0.0005 gwei")
+    tiers(3) should include("below 0.0005 gwei")
+    tiers.exists(_.contains(" wei")) shouldBe false
+    panels.ObservatoryPanels.gweiOnly(BigInt(3)) shouldBe "0.000000003 gwei"
+    panels.ObservatoryPanels.gweiOnly(BigInt(750_000_000)) shouldBe "0.75 gwei"
+    panels.ObservatoryPanels.gweiOnly(BigInt(1_500_000_001L)) shouldBe "1.50 gwei"
+    panels.ObservatoryPanels.gweiOnly(BigInt(0)) shouldBe "0 gwei"
   }
 
   it should "show a cell for a tier with one transaction among thousands, and none for an empty tier" taggedAs (
@@ -150,7 +174,7 @@ class MempoolViewSpec extends AnyFlatSpec with Matchers with OptionValues with B
       pool.copy(tiers = Map(FeeTier.Normal -> 5_000, FeeTier.Urgent -> 1, FeeTier.High -> 0))
     )
     val all = rows(lopsided)
-    val fees = all.indexWhere(_.contains(" Fees "))
+    val fees = all.indexWhere(_.contains(" Radar "))
     all(fees + 1).count(_ == '█') shouldBe 1 // urgent: one in five thousand is still there
     all(fees + 2).count(_ == '█') shouldBe 0 // high: none
     all(fees + 4).count(_ == '█') shouldBe 0 // low: not in the map at all
@@ -158,13 +182,13 @@ class MempoolViewSpec extends AnyFlatSpec with Matchers with OptionValues with B
 
   it should "draw no tier while the node has no fee to suggest, and say so" taggedAs (UnitTest) in {
     val all = rows(TuiFixtures.mempoolEmptyEtc())
-    all.find(_.contains(" Fees ")).value should include("the node has no fee to suggest yet")
+    all.find(_.contains(" Radar ")).value should include("the node has no fee to suggest yet")
     all.exists(_.trim.startsWith("urgent")) shouldBe false
   }
 
   it should "use ASCII bars in the ASCII glyph set" taggedAs (UnitTest) in {
     val all = rows(TuiFixtures.mempoolEtc(GlyphSet.Ascii))
-    val fees = all.indexWhere(_.contains(" Fees "))
+    val fees = all.indexWhere(_.contains(" Radar "))
     all.slice(fees + 1, fees + 5).mkString.forall(_ < 128) shouldBe true
     all.slice(fees + 1, fees + 5).map(_.count(c => c == '#' || c == '.')).min should be >= MempoolPanels.BarCols
   }

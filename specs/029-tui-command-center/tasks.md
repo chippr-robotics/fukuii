@@ -334,7 +334,7 @@ Every slice ends with the same gate. The art (phase 0) is done and in the tree.
 
 - [x] T072 The per-slice gate; quickstart.md "Slice 4"; `herald`, `prism` and `eye`; open the PR
 
-> As built (2026-11-14). After the slice: 1,292 tests in 52 suites of
+> As built (2026-11-14). After the slice: 1,293 tests in 52 suites of
 > `testOnly com.chipprbots.ethereum.console.* *Tui* *PeerScor*`, and 104 in the pool's own
 > (`*TxPoolMetricsSpec *PendingTransactionsManager* *TxGossip* *PoolSenderIndex*`). What differs from the tasks as
 > written:
@@ -373,6 +373,14 @@ Every slice ends with the same gate. The art (phase 0) is done and in the tree.
 >   the list's columns out of line). Left as is, and in the backlog: the list's cursor stays on the bottom row once
 >   past the first screenful, as in the Block Observatory (B-267); opening a pending transaction copies the whole
 >   pool to find one hash, for want of a by-hash query on the pool (B-268).
+> - **On a terminal** (the `dev-node` session; a side instance on Ephemery, tmux at 160×48, 120×40 and 80×24, DEBUG
+>   logging; at the slice's first push): every step of quickstart "Slice 4" passed, with a transaction sent and then
+>   replaced through the side node's RPC. From it: the tier bars are now under a row labelled `Radar` (they were not
+>   recognised as the Mempool Radar), and the boundaries are in gwei however small (two of four read in wei, and
+>   0.0015 gwei was rounded onto 0.002). Found there and not this slice's: regular sync's batch import does not tell
+>   the pool which transactions it imported (B-270), so on a node with no consensus client a mined transaction stays
+>   pending until it expires; the view's *mined/s* reads low there, and the operator doc says so. Not tried: the
+>   selection keeping its transaction as the list reorders (one pending transaction at a time), which the tests cover.
 
 ---
 

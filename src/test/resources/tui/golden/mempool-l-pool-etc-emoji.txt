@@ -7,11 +7,11 @@
                   │ Pool    142 pending · 3% of 4,096 · oldest 14m 59s · 5 sent from this node                                                                  
        ETC        │ Flow    3.4 in/s · 2.9 mined/s · 0.1 dropped/s · 7 replaced in the 3m 12s watched                                                           
                   │─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
-                  │ Fees    gas prices against the price this node would suggest, 1.00 gwei                                                                     
+                  │ Radar   gas prices against the price this node would suggest, 1.00 gwei                                                                     
                   │   urgent  █████████████████░░░░░░░      36   from 3.00 gwei                                                                                 
  etc              │   high    ████████████████████████      52   from 1.50 gwei                                                                                 
- PoW · id 61      │   normal  ██████████████████░░░░░░      38   from 0.500 gwei                                                                                
- main network     │   low     ███████░░░░░░░░░░░░░░░░░      16   below 0.500 gwei                                                                               
+ PoW · id 61      │   normal  ██████████████████░░░░░░      38   from 0.5 gwei                                                                                  
+ main network     │   low     ███████░░░░░░░░░░░░░░░░░      16   below 0.5 gwei                                                                                 
                   │─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
  [1] Overview     │ Senders 0x2c87…0003 7 · 0x51e2…0000 7 · 0x8e50…0002 7 · 0xf019…0001 7 · 0x072c…0006 6 · 0x0ff7…0013 6 · 0x1e3f…000b 6 · 0x3552…0010 6       
  [2] Chain        │ Refused Underpriced 1,204 · AlreadyKnown 311 · NonceTooLow 58 · NonceTooFarAhead 4                                                          

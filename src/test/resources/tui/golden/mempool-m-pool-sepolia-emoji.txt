@@ -7,11 +7,11 @@
                   │ Pool    1,240 pending · 30% of 4,096 · 73 blob · oldest 15m 1s · 43 sent from this node             
        ETH        │ Flow    3.4 in/s · 2.9 mined/s · 0.1 dropped/s · 7 replaced in the 3m 12s watched                   
                   │─────────────────────────────────────────────────────────────────────────────────────────────────────
-                  │ Fees    tips against the tip this node would suggest, 1.50 gwei · above the base fee                
+                  │ Radar   tips against the tip this node would suggest, 1.50 gwei · above the base fee                
                   │   urgent  ████████████████░░░░░░░░     309   from 4.50 gwei                                         
  sepolia          │   high    ████████████████████████     465   from 2.25 gwei                                         
- PoS              │   normal  █████████████████░░░░░░░     325   from 0.750 gwei                                        
- id 11155111      │   low     ███████░░░░░░░░░░░░░░░░░     141   below 0.750 gwei                                       
+ PoS              │   normal  █████████████████░░░░░░░     325   from 0.75 gwei                                         
+ id 11155111      │   low     ███████░░░░░░░░░░░░░░░░░     141   below 0.75 gwei                                        
  test network     │─────────────────────────────────────────────────────────────────────────────────────────────────────
                   │ Senders 0x072c…0006 54 · 0x0ff7…0013 54 · 0x1e3f…000b 54 · 0x2c87…0003 54 · 0x3552…0010 54          
  [1] Overview     │ Refused Underpriced 1,204 · AlreadyKnown 311 · NonceTooLow 58 · NonceTooFarAhead 4                  

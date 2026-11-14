@@ -7,7 +7,7 @@
  Pool    0 pending . 0% of 4,096 . 0 sent from this node                        
  Flow    in: measuring . mined: measuring . dropped: measuring                  
 --------------------------------------------------------------------------------
- Fees    the node has no fee to suggest yet . no tier is drawn without one      
+ Radar   the node has no fee to suggest yet . no tier is drawn without one      
 --------------------------------------------------------------------------------
  Senders no pending transaction                                                 
  Refused none since the node started                                            

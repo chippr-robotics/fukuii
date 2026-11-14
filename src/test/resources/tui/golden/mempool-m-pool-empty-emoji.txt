@@ -7,7 +7,7 @@
                   │ Pool    0 pending · 0% of 4,096 · 0 sent from this node                                             
        ETC        │ Flow    in: measuring · mined: measuring · dropped: measuring · 0 replaced in the 0s watched        
                   │─────────────────────────────────────────────────────────────────────────────────────────────────────
-                  │ Fees    the node has no fee to suggest yet · no tier is drawn without one                           
+                  │ Radar   the node has no fee to suggest yet · no tier is drawn without one                           
                   │─────────────────────────────────────────────────────────────────────────────────────────────────────
  etc              │ Senders no pending transaction                                                                      
  PoW · id 61      │ Refused none since the node started                                                                 

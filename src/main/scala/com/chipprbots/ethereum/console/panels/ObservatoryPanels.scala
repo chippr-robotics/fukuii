@@ -45,6 +45,15 @@ private[console] object ObservatoryPanels:
     else if value >= BigDecimal("0.001") then String.format(Locale.ROOT, "%.3f gwei", value.toDouble)
     else s"${formatNumber(wei.toLong)} wei"
 
+  /** Wei as gwei whatever its size, to three significant figures below a gwei: `0.75 gwei`, `0.0015 gwei`, `0.000000003
+    * gwei`. For figures that are read against each other, where [[gwei]]'s change of unit below a thousandth of a gwei,
+    * and its three decimals above it, would have one of them in another unit or rounded onto its neighbour.
+    */
+  def gweiOnly(wei: BigInt): String =
+    val value = BigDecimal(wei) / BigDecimal(1_000_000_000L)
+    if wei <= 0 || value >= 1 then gwei(wei.max(0))
+    else s"${value.round(new java.math.MathContext(3)).bigDecimal.stripTrailingZeros.toPlainString} gwei"
+
   private val Magnitudes: Seq[String] = Seq("", "K", "M", "G", "T", "P", "E")
 
   /** A large count with the unit that keeps its integer part under 1,000: `412.6T`, `8.0M`, `310`. For gas and for a

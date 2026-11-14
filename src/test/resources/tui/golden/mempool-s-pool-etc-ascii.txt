@@ -7,11 +7,11 @@
  Pool    142 pending . 3% of 4,096 . oldest 14m 59s . 5 sent from this node     
  Flow    3.4 in/s . 2.9 mined/s . 0.1 dropped/s                                 
 --------------------------------------------------------------------------------
- Fees    gas prices against the price this node would suggest, 1.00 gwei        
+ Radar   gas prices against the price this node would suggest, 1.00 gwei        
    urgent  #################.......      36   from 3.00 gwei                    
    high    ########################      52   from 1.50 gwei                    
-   normal  ##################......      38   from 0.500 gwei                   
-   low     #######.................      16   below 0.500 gwei                  
+   normal  ##################......      38   from 0.5 gwei                     
+   low     #######.................      16   below 0.5 gwei                    
 --------------------------------------------------------------------------------
  Refused Underpriced 1,204 . AlreadyKnown 311 . NonceTooLow 58                  
  Queue   not kept by this client                                                
