@@ -63,7 +63,18 @@ class TuiConfigSpec extends AnyFlatSpec with Matchers:
   }
 
   // Spec 027 FR-024, C-12: the TUI's settings come from `fukuii.tui`.
-  "TuiSettings.fromConfig" should "read fukuii.tui.glyphs" taggedAs (UnitTest) in {
+  "TuiSettings.fromConfig" should "read fukuii.tui.read-only, false when absent (spec 029 FR-053)" taggedAs (
+    UnitTest
+  ) in {
+    TuiSettings.fromConfig(ConfigFactory.parseString("read-only = true")).readOnly shouldBe true
+    TuiSettings.fromConfig(ConfigFactory.parseString("read-only = false")).readOnly shouldBe false
+    TuiSettings.fromConfig(ConfigFactory.empty()).readOnly shouldBe false
+    a[ConfigException.WrongType] should be thrownBy TuiSettings.fromConfig(
+      ConfigFactory.parseString("read-only = maybe")
+    )
+  }
+
+  it should "read fukuii.tui.glyphs" taggedAs (UnitTest) in {
     def glyphs(value: String) = TuiSettings.fromConfig(ConfigFactory.parseString(s"glyphs = $value")).glyphs
     glyphs("emoji") shouldBe GlyphChoice.Emoji
     glyphs("ascii") shouldBe GlyphChoice.Ascii

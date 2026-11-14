@@ -29,8 +29,21 @@ class TuiGoldenLintSpec extends AnyFlatSpec with Matchers:
       .toSeq
       .sortBy(_.getFileName.toString)
       .map(p =>
-        p.getFileName.toString -> Files.readString(p, StandardCharsets.UTF_8).stripSuffix("\n").split("\n").toSeq
+        p.getFileName.toString -> Files
+          .readString(p, StandardCharsets.UTF_8)
+          .stripSuffix("\n")
+          .split("\n")
+          .toSeq
+          .map(withoutSidebar)
       )
+
+  /** A body row of a frame with the sidebar (spec 029 FR-006) starts with its columns and the divider; what the panels
+    * drew is what follows. The rules below are the panels'.
+    */
+  private def withoutSidebar(row: String): String =
+    val divider = widgets.Sidebar.Cols
+    if row.length > divider && (row.charAt(divider) == '│' || row.charAt(divider) == '|') then row.drop(divider + 1)
+    else row
 
   /** A separator: drawn to the edge on purpose. */
   private def border(row: String): Boolean = row.nonEmpty && row.forall(ch => ch == '─' || ch == '-')

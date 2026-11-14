@@ -21,4 +21,4 @@
                                                                                 
                                                                                 
                                                                                 
- 1 Over 2 Sync 3 Peers 4 Chain 5 Logs | p Pause ? Help r Redraw d Detach q Quit 
+ 1-9 view  : prompt  / filter  ? help  p pause  r redraw  d detach  q quit      

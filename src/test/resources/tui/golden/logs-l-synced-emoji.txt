@@ -1,48 +1,48 @@
  ◆ FUKUII  etc (61) · PoW · head 21,884,102 · 41/50 peers · up 12d 7h · v0.11.0                                                                            Logs 
 ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
  ✓ no alerts                                                                                                                                                    
- Peers   41/50 ◆◆◆◆◆◆◆◆◆◆  Block  21,884,102 (at head)                    Txpool  142             Disk  388G free     JVM  3.4G / 8.0G heap                     
- Sync    ✓ at head                                                                                                                                              
-────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
- Logs   13 lines, INFO and above · newest at the bottom · - older  + newer                                                                                      
- 11:58:21 INFO  Handshaked peer 0x3fa1…e2 CoreGeth/v1.12.19                                                                                                     
- 11:58:34 INFO  RegularSync: current=21884097 best=21884102 lag=5                                                                                               
- 11:58:47 INFO  Imported block 21,884,098 0x1f09…88a1 with 17 txs in 26ms                                                                                       
- 11:59:00 WARN  Peer 0x9c0d…77 timed out on GetBlockHeaders, retrying                                                                                           
- 11:59:04 INFO  Imported block 21,884,099 0x7ab2…d4c7 with 6 txs in 14ms                                                                                        
- 11:59:12 INFO  eth_getWork served for block 21,884,100                                                                                                         
- 11:59:17 INFO  Imported block 21,884,100 0x3301…2e9d with 21 txs in 31ms                                                                                       
- 11:59:25 INFO  [====================🪱]🧠 100% — RegularSync                                                                                                   
- 11:59:30 ERROR Cannot decode a message from 203.0.113.40:30303                                                                                                 
- 11:59:34 INFO  Imported block 21,884,101 0x9b0c…ff31 with 9 txs in 17ms                                                                                        
- 11:59:47 INFO  Imported block 21,884,102 0x6d21…1a0e with 14 txs in 22ms                                                                                       
- 11:59:52 INFO  Peers: 41 handshaked · 14 in · 27 out                                                                                                           
- 12:00:00 INFO  RegularSync: at head, block 21884102                                                                                                            
-                                                                                                                                                                
-                                                                                                                                                                
-                                                                                                                                                                
-                                                                                                                                                                
-                                                                                                                                                                
-                                                                                                                                                                
-                                                                                                                                                                
-                                                                                                                                                                
-                                                                                                                                                                
-                                                                                                                                                                
-                                                                                                                                                                
-                                                                                                                                                                
-                                                                                                                                                                
-                                                                                                                                                                
-                                                                                                                                                                
-                                                                                                                                                                
-                                                                                                                                                                
-                                                                                                                                                                
-                                                                                                                                                                
-                                                                                                                                                                
-                                                                                                                                                                
-                                                                                                                                                                
-                                                                                                                                                                
-                                                                                                                                                                
-                                                                                                                                                                
-                                                                                                                                                                
-                                                                                                                                                                
- 1 Overview  2 Sync  3 Peers  4 Chain  5 Logs │ p Pause  ? Help  r Redraw  d Detach  q Quit                                                                     
+ etc              │ Peers   41/50 ◆◆◆◆◆◆◆◆◆◆  Block  21,884,102 (at head)                    Txpool  142             Disk  388G free     JVM  3.4G / 8.0G heap  
+ PoW · id 61      │ Sync    ✓ at head                                                                                                                           
+                  │─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+ [1] Overview     │ Logs   13 lines, INFO and above · newest at the bottom · - older  + newer  / filter                                                         
+ [2] Chain        │ 11:58:21 INFO  Handshaked peer 0x3fa1…e2 CoreGeth/v1.12.19                                                                                  
+ [3] Peers        │ 11:58:34 INFO  RegularSync: current=21884097 best=21884102 lag=5                                                                            
+ [4] Mempool      │ 11:58:47 INFO  Imported block 21,884,098 0x1f09…88a1 with 17 txs in 26ms                                                                    
+ [5] RPC          │ 11:59:00 WARN  Peer 0x9c0d…77 timed out on GetBlockHeaders, retrying                                                                        
+ [6] Storage      │ 11:59:04 INFO  Imported block 21,884,099 0x7ab2…d4c7 with 6 txs in 14ms                                                                     
+ [7] System       │ 11:59:12 INFO  eth_getWork served for block 21,884,100                                                                                      
+ [8] Logs         │ 11:59:17 INFO  Imported block 21,884,100 0x3301…2e9d with 21 txs in 31ms                                                                    
+ [9] Ops          │ 11:59:25 INFO  [====================🪱]🧠 100% — RegularSync                                                                                
+                  │ 11:59:30 ERROR Cannot decode a message from 203.0.113.40:30303                                                                              
+                  │ 11:59:34 INFO  Imported block 21,884,101 0x9b0c…ff31 with 9 txs in 17ms                                                                     
+                  │ 11:59:47 INFO  Imported block 21,884,102 0x6d21…1a0e with 14 txs in 22ms                                                                    
+                  │ 11:59:52 INFO  Peers: 41 handshaked · 14 in · 27 out                                                                                        
+                  │ 12:00:00 INFO  RegularSync: at head, block 21884102                                                                                         
+                  │                                                                                                                                             
+                  │                                                                                                                                             
+                  │                                                                                                                                             
+                  │                                                                                                                                             
+                  │                                                                                                                                             
+                  │                                                                                                                                             
+                  │                                                                                                                                             
+                  │                                                                                                                                             
+                  │                                                                                                                                             
+                  │                                                                                                                                             
+                  │                                                                                                                                             
+                  │                                                                                                                                             
+                  │                                                                                                                                             
+                  │                                                                                                                                             
+                  │                                                                                                                                             
+                  │                                                                                                                                             
+                  │                                                                                                                                             
+                  │                                                                                                                                             
+                  │                                                                                                                                             
+                  │                                                                                                                                             
+                  │                                                                                                                                             
+                  │                                                                                                                                             
+                  │                                                                                                                                             
+                  │                                                                                                                                             
+                  │                                                                                                                                             
+                  │                                                                                                                                             
+                  │                                                                                                                                             
+ 1-9 view  [ ] other views  Up Down select  Enter open  Esc back  : prompt  / filter  ? help  g glyphs  p pause  r redraw  d detach  q quit                     

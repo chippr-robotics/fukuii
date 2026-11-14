@@ -36,6 +36,9 @@ import com.typesafe.config.ConfigException
   *   the log lines the Logs view keeps (`fukuii.tui.log-ring-size`, FR-021)
   * @param logLevel
   *   the lowest level the log ring keeps (`fukuii.tui.log-level`, Q4); the loggers' own levels apply first
+  * @param readOnly
+  *   no operator action can run (`fukuii.tui.read-only`, `FUKUII_TUI_READ_ONLY`; spec 029 FR-053). Stopping the node
+  *   with `q` is an action
   */
 final case class TuiConfig(
     updateIntervalMs: Long = TuiConfig.DefaultUpdateIntervalMs,
@@ -51,7 +54,8 @@ final case class TuiConfig(
     reducedMotion: Boolean = false,
     splashMs: Long = TuiConfig.DefaultSplashMs,
     logRingSize: Int = TuiConfig.DefaultLogRingSize,
-    logLevel: Level = TuiConfig.DefaultLogLevel
+    logLevel: Level = TuiConfig.DefaultLogLevel,
+    readOnly: Boolean = false
 ):
   /** The motion the TUI starts with, and resumes after `p`. */
   def motion: Motion = if reducedMotion then Motion.Reduced else Motion.Full
@@ -129,7 +133,8 @@ final case class TuiSettings(
     statusPollIntervalMs: Long = TuiConfig.DefaultStatusPollIntervalMs,
     splashMs: Long = TuiConfig.DefaultSplashMs,
     logRingSize: Int = TuiConfig.DefaultLogRingSize,
-    logLevel: Level = TuiConfig.DefaultLogLevel
+    logLevel: Level = TuiConfig.DefaultLogLevel,
+    readOnly: Boolean = false
 )
 
 object TuiSettings:
@@ -188,5 +193,6 @@ object TuiSettings:
       reducedMotion = tui.hasPath("reduced-motion") && tui.getBoolean("reduced-motion"),
       splashMs = millis("splash-ms", TuiConfig.DefaultSplashMs, 0),
       logRingSize = logRingSize,
-      logLevel = logLevel
+      logLevel = logLevel,
+      readOnly = tui.hasPath("read-only") && tui.getBoolean("read-only")
     )

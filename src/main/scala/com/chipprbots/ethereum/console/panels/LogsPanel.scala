@@ -54,21 +54,28 @@ private[console] object LogsPanel:
 
   private def view(c: Ctx, w: Int, rows: Int): Seq[AttributedString] =
     val s = c.state
-    val (from, until) = window(s.logs.size, s.logScroll, rows - 1)
+    val lines = s.visibleLogs
+    val (from, until) = window(lines.size, s.logScroll, rows - 1)
     val dot = c.g.dot.text
-    val below = s.logs.size - until
+    val below = lines.size - until
     val position = if below <= 0 then "newest at the bottom" else s"${formatNumber(below.toLong)} newer below"
+    val filter = s.filterOf(TuiView.Logs)
+    val counted =
+      if filter.isEmpty then s"${formatNumber(s.logs.size.toLong)} lines"
+      else
+        s"${formatNumber(lines.size.toLong)} of ${formatNumber(s.logs.size.toLong)} lines match '${TuiText.external(filter, c.g)}'"
     val title = fit(
       text(
-        s" Logs   ${formatNumber(s.logs.size.toLong)} lines, ${c.config.logLevel} and above $dot $position $dot " +
-          "- older  + newer",
+        s" Logs   $counted, ${c.config.logLevel} and above $dot $position $dot " +
+          "- older  + newer  / filter",
         c.t.healthy.bold()
       ),
       w,
       c.g
     )
     if s.logs.isEmpty then Seq(title, fit(text("   no log line yet", c.t.muted), w, c.g))
-    else title +: s.logs.slice(from, until).map(row(c, _, w))
+    else if lines.isEmpty then Seq(title, fit(text("   no line matches the filter", c.t.muted), w, c.g))
+    else title +: lines.slice(from, until).map(row(c, _, w))
 
   private def strip(c: Ctx, title: String, keep: LogLine => Boolean, w: Int, rows: Int): Seq[AttributedString] =
     val head = fit(text(s" $title", c.t.healthy.bold()), w, c.g)

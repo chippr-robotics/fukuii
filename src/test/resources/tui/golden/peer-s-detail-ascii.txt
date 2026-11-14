@@ -1,0 +1,24 @@
+ # FUKUII  etc (61) . PoW . up 12d 7h                                      Peer 
+--------------------------------------------------------------------------------
+ + no alerts                                                                    
+ Peers   41/50 ##########         Block  21,884,102 (at head)                   
+ Sync    + at head                                                              
+--------------------------------------------------------------------------------
+ Peer   Esc returns to the list                                                 
+ Id      11a29b9b11a29b9b11a29b9b11a29b9b11a29b9b11a29b9b11a29b9b11a29b9b       
+         11a29b9b11a29b9b11a29b9b11a29b9b11a29b9b11a29b9b11a29b9b11a29b9b       
+ Address 203.0.113.36:30303                                                     
+ Dir     outbound: this node dialled it                                         
+ Age     connected 1h 43m ago                                                   
+ Client  besu/v24.1.2/linux-x86_64/openjdk-java-21                              
+ Best    21,884,100                                                             
+ Score   0.930 v falling                                                        
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+ 1-9 view  : prompt  / filter  ? help  p pause  r redraw  d detach  q quit      

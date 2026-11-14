@@ -76,20 +76,18 @@ class TuiUpdater(
   private[console] def tick(): Boolean =
     tui.nextFrame(snapshots())
     val animated = tui.render()
-    tui.checkInput(config.paceMs(animated)) match
-      case Some(key) =>
-        tui.handleCommand(key) match
-          case TuiCommand.Continue => true
-          case TuiCommand.Disable =>
-            log.info("TUI disabled by user; node continues with standard logging")
-            false
-          case TuiCommand.Quit =>
-            log.info("Quit requested via TUI")
-            // Off-thread: onQuit typically exits the JVM, whose shutdown hooks stop this updater and join its thread.
-            val quitter = new Thread(() => onQuit(), "TuiQuit")
-            quitter.start()
-            false
-      case None => true
+    // Every key read is handled, in order, up to the first that ends the loop.
+    tui.checkInput(config.paceMs(animated)).iterator.map(tui.handleKey).find(_ != TuiCommand.Continue) match
+      case Some(TuiCommand.Disable) =>
+        log.info("TUI disabled by user; node continues with standard logging")
+        false
+      case Some(TuiCommand.Quit) =>
+        log.info("Quit requested via TUI")
+        // Off-thread: onQuit typically exits the JVM, whose shutdown hooks stop this updater and join its thread.
+        val quitter = new Thread(() => onQuit(), "TuiQuit")
+        quitter.start()
+        false
+      case _ => true
 
   private def updateLoop(): Unit =
     // A throwable that is not NonFatal ends the loop; the finally names it. It is rethrown unchanged.

@@ -1,40 +1,40 @@
  ◆ FUKUII  sepolia (11155111) · PoS · head 7,412,009 · 23/50 peers · up 3d 4h                                     Chain 
 ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
  ✓ no alerts                                                                                                            
- Peers   23/50 ◆◆◆◆◆◆◆◆◆◆                    Block  7,412,009 → 7,412,011 (−2)               Txpool  1,204 (3 blob)     
- Sync    regular 99% · rate 0.08 blk/s · ETA 24s                                                                        
-────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
- Chain   sepolia · chain id 11155111 · PoS · forks by timestamp                                                         
-────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
- Forks (timestamp)                                                                                                      
-   ✓ Shanghai   2023-02-28T04:04:48Z  1677557088                                                                        
-   ✓ Cancun     2024-01-30T22:51:12Z  1706655072                                                                        
-   ✓ Prague     2025-03-05T07:29:36Z  1741159776                                                                        
-   ✓ Osaka      2025-10-14T07:36:00Z  1760427360                                                                        
-   ✓ BPO1       2025-10-21T03:26:24Z  1761017184                                                                        
-   ✓ BPO2       2025-10-27T23:16:48Z  1761607008                                                                        
-   ▶ Amsterdam  2026-10-06T13:53:36Z  1791294816  in 3d 4h                                                              
-                                                                                                                        
-                                                                                                                        
-                                                                                                                        
-                                                                                                                        
-                                                                                                                        
-                                                                                                                        
-                                                                                                                        
-                                                                                                                        
-                                                                                                                        
-                                                                                                                        
-                                                                                                                        
-                                                                                                                        
-                                                                                                                        
-                                                                                                                        
-                                                                                                                        
-                                                                                                                        
-                                                                                                                        
-                                                                                                                        
-                                                                                                                        
-                                                                                                                        
-                                                                                                                        
-                                                                                                                        
-                                                                                                                        
- 1 Overview  2 Sync  3 Peers  4 Chain  5 Logs │ p Pause  ? Help  r Redraw  d Detach  q Quit                             
+ sepolia          │ Peers   23/50 ◆◆◆◆◆◆◆◆◆◆                    Block  7,412,009 → 7,412,011 (−2)               Txpool… 
+ PoS · id 11155111│─────────────────────────────────────────────────────────────────────────────────────────────────────
+                  │ Regular sync                                                              rate 0.08 blk/s · ETA 24s 
+ [1] Overview     │   Blocks   [======================================🪱.]🧠 99%   7,412,009 / 7,412,011                
+ [2] Chain        │   Session  imported 12 blocks since 7,411,997 (2m 24s ago)                                          
+ [3] Peers        │   Lag      2 blocks behind best known                                                               
+ [4] Mempool      │─────────────────────────────────────────────────────────────────────────────────────────────────────
+ [5] RPC          │ Chain   sepolia · chain id 11155111 · PoS · forks by timestamp                                      
+ [6] Storage      │─────────────────────────────────────────────────────────────────────────────────────────────────────
+ [7] System       │ Forks (timestamp)                                                                                   
+ [8] Logs         │   ✓ Shanghai   2023-02-28T04:04:48Z  1677557088                                                     
+ [9] Ops          │   ✓ Cancun     2024-01-30T22:51:12Z  1706655072                                                     
+                  │   ✓ Prague     2025-03-05T07:29:36Z  1741159776                                                     
+                  │   ✓ Osaka      2025-10-14T07:36:00Z  1760427360                                                     
+                  │   ✓ BPO1       2025-10-21T03:26:24Z  1761017184                                                     
+                  │   ✓ BPO2       2025-10-27T23:16:48Z  1761607008                                                     
+                  │   ▶ Amsterdam  2026-10-06T13:53:36Z  1791294816  in 3d 4h                                           
+                  │                                                                                                     
+                  │                                                                                                     
+                  │                                                                                                     
+                  │                                                                                                     
+                  │                                                                                                     
+                  │                                                                                                     
+                  │                                                                                                     
+                  │─────────────────────────────────────────────────────────────────────────────────────────────────────
+                  │ Recent (sync)                                                                                       
+                  │ 11:58:34 INFO  RegularSync: current=21884097 best=21884102 lag=5                                    
+                  │ 11:58:47 INFO  Imported block 21,884,098 0x1f09…88a1 with 17 txs in 26ms                            
+                  │ 11:59:04 INFO  Imported block 21,884,099 0x7ab2…d4c7 with 6 txs in 14ms                             
+                  │ 11:59:17 INFO  Imported block 21,884,100 0x3301…2e9d with 21 txs in 31ms                            
+                  │ 11:59:25 INFO  [====================🪱]🧠 100% — RegularSync                                        
+                  │ 11:59:34 INFO  Imported block 21,884,101 0x9b0c…ff31 with 9 txs in 17ms                             
+                  │ 11:59:47 INFO  Imported block 21,884,102 0x6d21…1a0e with 14 txs in 22ms                            
+                  │ 12:00:00 INFO  RegularSync: at head, block 21884102                                                 
+                  │                                                                                                     
+                  │                                                                                                     
+ 1-9 view  Enter open  Esc back  : prompt  / filter  ? help  p pause  r redraw  d detach  q quit                        

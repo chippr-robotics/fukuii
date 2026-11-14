@@ -69,15 +69,27 @@ private[console] object PeersPanel:
         val why = TuiText.external(reason, c.g)
         Seq(fit(field("Peers", text(s"peer manager Unresponsive ($why)", c.t.error), c.t), w, c.g))
       case Some(source) =>
-        val peers = sorted(c, source.value.getOrElse(Nil))
+        val peers = c.state.orderedPeers
         val room = (rows - 2).max(0)
         // Every row a peer when all fit; else the last row says how many more there are. The top table lists its best.
         val shown =
           if top then peers.size.min(TopPeers).min(room)
           else if peers.size <= room then peers.size
           else (room - 1).max(0)
+        // The list (spec 029 FR-005): the page of rows that holds the selection, so the selected row is always on
+        // screen and the rows do not slide under it.
+        val selected = if top then None else c.state.selectedPeerIndex
+        val first = if top || shown <= 0 then 0 else selected.fold(0)(i => (i / shown) * shown)
         val more = Option.when(!top && shown < peers.size && room > 0)(
-          fit(text(s"   + ${peers.size - shown} more", c.t.muted), w, c.g)
+          fit(
+            text(
+              if first == 0 then s"   + ${peers.size - shown} more"
+              else s"   rows ${first + 1}-${(first + shown).min(peers.size)} of ${peers.size}",
+              c.t.muted
+            ),
+            w,
+            c.g
+          )
         )
         val stale = source match
           case Sourced.Stale(_, since) => s" $dot last answer ${ago(c, since)} ago"
@@ -86,29 +98,27 @@ private[console] object PeersPanel:
         val inbound = peers.count(_.incoming)
         // "By score" only when every row listed has one: the top table lists the unscored after the scored.
         val scored = peers.count(p => c.state.peerScore(p.id).isDefined)
+        val filter = c.state.filterOf(TuiView.Peers)
+        val filtered = if !top && filter.nonEmpty then s" $dot filter '${TuiText.external(filter, c.g)}'" else ""
         val heading =
           if top then
             val by = if scored >= shown then " by score" else s", $scored scored"
             s" Peers (top $shown of ${peers.size}$by)$stale"
           else
             s" Peers   ${peers.size} handshaked of ${c.state.maxPeers} max $dot $inbound in $dot " +
-              s"${peers.size - inbound} out$stale$details"
+              s"${peers.size - inbound} out$stale$details$filtered"
         val warn = stale.nonEmpty || details.nonEmpty
         val title = fit(text(heading, if warn then c.t.warn else c.t.healthy.bold()), w, c.g)
         val cols = columns(c.tier, top)
         val heads = fit(line(c, cols.map(col => col -> col.head), c.t.muted), w, c.g)
-        val body = peers.take(shown).map(p => fit(line(c, cols.map(col => col -> cell(c, p, col)), c.t.value), w, c.g))
-        if peers.isEmpty then Seq(title, fit(text("   no handshaked peer", c.t.muted), w, c.g))
+        val body = peers.slice(first, first + shown).zipWithIndex.map { (p, i) =>
+          val style = if selected.contains(first + i) then c.t.value.inverse() else c.t.value
+          fit(line(c, cols.map(col => col -> cell(c, p, col)), style), w, c.g)
+        }
+        if peers.isEmpty then
+          val none = if filter.nonEmpty && !top then "   no peer matches the filter" else "   no handshaked peer"
+          Seq(title, fit(text(none, c.t.muted), w, c.g))
         else Seq(title, heads) ++ body ++ more
-
-  /** Highest score first, at the precision the column shows, so peers it draws alike go by age; the unscored last; then
-    * the longest connected.
-    */
-  private def sorted(c: Ctx, peers: Seq[TuiPeer]): Seq[TuiPeer] =
-    peers.sortBy { p =>
-      val units = c.state.peerScore(p.id).map(TuiState.scoreUnits)
-      (units.isEmpty, units.fold(0L)(-_), p.connectedAt, p.id)
-    }
 
   /** Why the client and best block read `?` or may be old: the network peer manager (`GetHandshakedPeersCmd`) did not
     * answer, or missed the last polls.

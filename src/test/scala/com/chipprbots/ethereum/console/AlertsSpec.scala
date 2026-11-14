@@ -199,7 +199,7 @@ class AlertsSpec extends AnyFlatSpec with Matchers:
   it should "stay on screen, under the header, on a terminal four rows high" taggedAs (UnitTest) in {
     val rows = renderer.render(TuiFixtures.zeroPeersEtc(), 80, 4).map(_.toString)
     rows(2) should include("0 peers for 4m 12s")
-    rows(3) should include("q Quit")
+    rows(3) should include("q quit")
   }
 
   "Alerts.of" should "measure every duration on the snapshot's clock, never on ticks" taggedAs (UnitTest) in {

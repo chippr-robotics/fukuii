@@ -4,9 +4,9 @@
 
 **Created**: 2026-11-13
 
-**Status**: Planned (2026-11-14). The plan (seven slices, one PR each) and 118 tasks exist, and the art is in the tree; no slice has started.
+**Status**: Active (2026-11-14). The spec, plan, tasks and art merged as #1820; slice 1 (input and navigation) is in review; slices 2 to 7 follow, one PR each.
 
-**In flight**: `ccr-452bbde8-2hrv25` (cloud session, B-244): spec, research, plan, tasks and art in PR #1820
+**In flight**: `ccr-452bbde8-2hrv25` (cloud session, B-254): slice 1, input and navigation
 
 **Input**: The user's brief of 2026-11-13: "the tui has basic ascii graphics currently and no real input controls …
 we can use Kitty Graphics Protocol to build a vga inspired execution command center … a 1980s arcade-style Network

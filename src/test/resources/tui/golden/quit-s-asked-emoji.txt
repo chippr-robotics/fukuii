@@ -1,0 +1,24 @@
+ ◆ FUKUII  etc (61) · PoW · up 12d 7h                                  Overview 
+────────────────────────────────────────────────────────────────────────────────
+ ✓ no alerts                                                                    
+ Peers   41/50 ◆◆◆◆◆◆◆◆◆◆         Block  21,884,102 (at head)                   
+ RPC     :8545 on                 Disk   388G free       Txpool  142            
+────────────────────────────────────────────────────────────────────────────────
+ Sync    ✓ at head                                                              
+   Blocks   🪱[COMPLETE ✓]🧠                21,884,102                          
+────────────────────────────────────────────────────────────────────────────────
+     ──────────────────────────────────────────────────────────────────────     
+     Stop this node?                                                            
+     The node process ends: block import, its peers and every RPC client.       
+     Mining stops.                                                              
+     The TUI cannot start the node again.                                       
+                                                                                
+     y  stop the node      n or Esc  cancel                                     
+     ──────────────────────────────────────────────────────────────────────     
+ 11:59:47 INFO  Imported block 21,884,102 0x6d21…1a0e with 14 txs in 22ms       
+ 11:59:52 INFO  Peers: 41 handshaked · 14 in · 27 out                           
+ 12:00:00 INFO  RegularSync: at head, block 21884102                            
+                                                                                
+                                                                                
+                                                                                
+ a question is open: answer it, or Esc                                          

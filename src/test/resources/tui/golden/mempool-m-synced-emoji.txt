@@ -1,0 +1,40 @@
+ ◆ FUKUII  etc (61) · PoW · head 21,884,102 · 41/50 peers · up 12d 7h                                           Mempool 
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+ ✓ no alerts                                                                                                            
+ etc              │ Peers   41/50 ◆◆◆◆◆◆◆◆◆◆                    Block  21,884,102 (at head)                     Txpool… 
+ PoW · id 61      │ Sync    ✓ at head                                                                                   
+                  │─────────────────────────────────────────────────────────────────────────────────────────────────────
+ [1] Overview     │ Mempool                                                                                             
+ [2] Chain        │ Pending 142                                                                                         
+ [3] Peers        │─────────────────────────────────────────────────────────────────────────────────────────────────────
+ [4] Mempool      │ Not built yet: fee tiers, flow in and out, senders, replacements                                    
+ [5] RPC          │                                                                                                     
+ [6] Storage      │                                                                                                     
+ [7] System       │                                                                                                     
+ [8] Logs         │                                                                                                     
+ [9] Ops          │                                                                                                     
+                  │                                                                                                     
+                  │                                                                                                     
+                  │                                                                                                     
+                  │                                                                                                     
+                  │                                                                                                     
+                  │                                                                                                     
+                  │                                                                                                     
+                  │                                                                                                     
+                  │                                                                                                     
+                  │                                                                                                     
+                  │                                                                                                     
+                  │                                                                                                     
+                  │                                                                                                     
+                  │                                                                                                     
+                  │                                                                                                     
+                  │                                                                                                     
+                  │                                                                                                     
+                  │                                                                                                     
+                  │                                                                                                     
+                  │                                                                                                     
+                  │                                                                                                     
+                  │                                                                                                     
+                  │                                                                                                     
+                  │                                                                                                     
+ 1-9 view  Enter open  Esc back  : prompt  / filter  ? help  p pause  r redraw  d detach  q quit                        

@@ -1,40 +1,40 @@
  # FUKUII  etc (61) . PoW . head 21,884,102 . 41/50 peers . up 12d 7h                                              Help 
 ------------------------------------------------------------------------------------------------------------------------
  + no alerts                                                                                                            
- Peers   41/50 ##########                    Block  21,884,102 (at head)                     Txpool  142                
- Sync    + at head                                                                                                      
-------------------------------------------------------------------------------------------------------------------------
- Keys                                                                                                                   
-   1-5       1 Overview  2 Sync  3 Peers  4 Chain  5 Logs                                                               
-   Tab       the next view (wraps)                                                                                      
-   l         the Logs view                                                                                              
-   + -       Logs: + newer lines, - older lines, a page at a time                                                       
-   ? h       this help; any key but q, r and d returns                                                                  
-   p         pause or resume the motion (polling continues)                                                             
-   g         switch the glyph set: emoji / ascii                                                                        
-   r         redraw the screen                                                                                          
-   d         detach: the TUI closes, the node keeps running                                                             
-   q         quit: stops the node                                                                                       
-------------------------------------------------------------------------------------------------------------------------
- Glyphs (ascii, g switches)                                                                                             
-   ~o worm (progress)   @@ brain (done)   z  stalled   + done / active   # peer   ! warning   x error   > next fork     
-   . to come   [S] SNAP phase   ^ v - score trend   - no score yet                                                      
-                                                                                                                        
-                                                                                                                        
-                                                                                                                        
-                                                                                                                        
-                                                                                                                        
-                                                                                                                        
-                                                                                                                        
-                                                                                                                        
-                                                                                                                        
-                                                                                                                        
-                                                                                                                        
-                                                                                                                        
-                                                                                                                        
-                                                                                                                        
-                                                                                                                        
-                                                                                                                        
-                                                                                                                        
-                                                                                                                        
- 1 Overview  2 Sync  3 Peers  4 Chain  5 Logs | p Pause  ? Help  r Redraw  d Detach  q Quit                             
+ etc              | Peers   41/50 ##########                    Block  21,884,102 (at head)                     Txpoo.. 
+ PoW . id 61      | Sync    + at head                                                                                   
+                  |-----------------------------------------------------------------------------------------------------
+ [1] Overview     | Keys                                                                                                
+ [2] Chain        |   1-5        1 Overview  2 Chain  3 Peers  4 Mempool  5 RPC                                         
+ [3] Peers        |   6-9        6 Storage  7 System  8 Logs  9 Ops                                                     
+ [4] Mempool      |   ]          the next view (wraps)                                                                  
+ [5] RPC          |   [          the previous view (wraps)                                                              
+ [6] Storage      |   Tab        the next panel of the view                                                             
+ [7] System       |   Shift-Tab  the previous panel of the view                                                         
+ [8] Logs         |   Up k       the row above                                                                          
+ [9] Ops          |   Down j     the row below                                                                          
+                  |   Left ,     across, to the left                                                                    
+                  |   Right .    across, to the right                                                                   
+                  |   PgUp -     a page up (Logs: older lines)                                                          
+                  |   PgDn +     a page down (Logs: newer lines)                                                        
+                  |   Home <     the first row                                                                          
+                  |   End >      the last row                                                                           
+                  |   Enter      open the selected row                                                                  
+                  |   Esc Bksp   back; clear a filter                                                                   
+                  |   :          the prompt: a view's name, peer <id>, glyphs, detach, quit, help                       
+                  |   /          filter the list on screen as you type                                                  
+                  |   ? h F1     this help; any key but q, r and d returns                                              
+                  |   g          switch the glyph set: emoji / ascii                                                    
+                  |   p          pause or resume the motion (polling continues)                                         
+                  |   r          redraw the screen                                                                      
+                  |   d          detach: the TUI closes, the node keeps running                                         
+                  |   q          ask to stop the node (Ctrl-C stops it at once)                                         
+                  |   l          the Logs view                                                                          
+                  |-----------------------------------------------------------------------------------------------------
+                  | Glyphs (ascii, g switches)                                                                          
+                  |   ~o worm (progress)   @@ brain (done)   z  stalled   + done / active   # peer   ! warning          
+                  |   x error   > next fork   . to come   [S] SNAP phase   ^ v - score trend   - no score yet           
+                  |                                                                                                     
+                  |                                                                                                     
+                  |                                                                                                     
+ 1-9 view  Enter open  Esc back  : prompt  / filter  ? help  p pause  r redraw  d detach  q quit                        

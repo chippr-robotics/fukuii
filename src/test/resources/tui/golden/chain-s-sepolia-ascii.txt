@@ -2,23 +2,23 @@
 --------------------------------------------------------------------------------
  + no alerts                                                                    
  Peers   23/50 ##########         Block  7,412,009 -> 7,412,011 (-2)            
- Sync    regular 99% . rate 0.08 blk/s . ETA 24s                                
+--------------------------------------------------------------------------------
+ Regular sync                                         rate 0.08 blk/s . ETA 24s 
+   Blocks   [==================~o.]@@ 99%   7,412,009 / 7,412,011               
+   Session  imported 12 blocks since 7,411,997 (2m 24s ago)                     
+   Lag      2 blocks behind best known                                          
 --------------------------------------------------------------------------------
  Chain   sepolia . chain id 11155111 . PoS . forks by timestamp                 
 --------------------------------------------------------------------------------
  Last    BPO2 + since 2025-10-27T23:16:48Z                                      
  Next    Amsterdam @ 2026-10-06T13:53:36Z (in 3d 4h)                            
                                                                                 
-                                                                                
-                                                                                
-                                                                                
-                                                                                
-                                                                                
-                                                                                
-                                                                                
-                                                                                
-                                                                                
-                                                                                
-                                                                                
-                                                                                
- 1 Over 2 Sync 3 Peers 4 Chain 5 Logs | p Pause ? Help r Redraw d Detach q Quit 
+--------------------------------------------------------------------------------
+ Recent (sync)                                                                  
+ 11:59:04 INFO  Imported block 21,884,099 0x7ab2..d4c7 with 6 txs in 14ms       
+ 11:59:17 INFO  Imported block 21,884,100 0x3301..2e9d with 21 txs in 31ms      
+ 11:59:25 INFO  [====================~o]@@ 100% - RegularSync                   
+ 11:59:34 INFO  Imported block 21,884,101 0x9b0c..ff31 with 9 txs in 17ms       
+ 11:59:47 INFO  Imported block 21,884,102 0x6d21..1a0e with 14 txs in 22ms      
+ 12:00:00 INFO  RegularSync: at head, block 21884102                            
+ 1-9 view  : prompt  / filter  ? help  p pause  r redraw  d detach  q quit      

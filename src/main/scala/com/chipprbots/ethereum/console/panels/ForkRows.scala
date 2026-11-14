@@ -63,13 +63,17 @@ private[console] object ForkRows:
               text(shown.mkString(sep) + (if shown.nonEmpty then " " else ""), c.t.healthy),
               right
             )
-          Seq(title(c, chain, w), fit(timeline, w, c.g), fit(detail(c, chain, at, last), w, c.g))
+          Seq(title(c, chain, w), fit(timeline, w, c.g), fit(detail(c, chain, at, last, w), w, c.g))
 
   private def title(c: Ctx, chain: ChainFacts, w: Int): AttributedString =
     fit(text(s" Forks (${chain.scheduleLabel})", c.t.healthy.bold()), w, c.g)
 
-  /** `   block 21,884,102 · Spiral since 19,250,000 · Olympia not scheduled on this network` */
-  private def detail(c: Ctx, chain: ChainFacts, at: Long, last: Option[ForkPoint]): AttributedString =
+  /** ` block 21,884,102 · Spiral since 19,250,000 · Olympia not scheduled on this network`
+    *
+    * A part that does not fit in `w` columns is left out whole, never cut: half a timestamp reads as another time
+    * (B-201). What comes next goes last, after where the chain stands; the fork it is on goes first.
+    */
+  private def detail(c: Ctx, chain: ChainFacts, at: Long, last: Option[ForkPoint], w: Int): AttributedString =
     val dot = c.g.dot.text
     val where = chain.schedule match
       case ForkSchedule.ByBlock     => s"block ${formatNumber(at)}"
@@ -80,7 +84,9 @@ private[console] object ForkRows:
         Some(s"${next.name} activates ${chain.when(next)}")
       case Some(_) => None
       case None    => chain.notScheduled.headOption.map(n => s"$n not scheduled on this network")
-    text("   " + (Seq(where) ++ since ++ upcoming).mkString(s" $dot "), c.t.value)
+    def row(parts: Seq[String]) = text("   " + parts.mkString(s" $dot "), c.t.value)
+    val choices = Seq(Seq(where) ++ since ++ upcoming, Seq(where) ++ upcoming, Seq(where) ++ since, Seq(where)).distinct
+    choices.map(row).find(_.columnLength() <= w - 1).getOrElse(row(Seq(where)))
 
   /** The Chain view's timeline, one row per fork: active (✓), next (▶, with its distance), later (·), and the forks not
     * scheduled.

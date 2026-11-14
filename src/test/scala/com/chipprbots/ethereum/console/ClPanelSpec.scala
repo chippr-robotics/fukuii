@@ -22,7 +22,8 @@ class ClPanelSpec extends AnyFlatSpec with Matchers with BeforeAndAfterAll with 
 
   private def still(s: TuiState): TuiState = s.copy(motion = Motion.Reduced)
 
-  private def rows(s: TuiState, w: Int, h: Int): Seq[String] = renderer.render(still(s), w, h).map(_.toString)
+  private def rows(s: TuiState, w: Int, h: Int): Seq[String] =
+    TuiFixtures.panelRows(renderer.render(still(s), w, h).map(_.toString), w, h)
 
   /** The panel's rows: from its title row down to the separator before the next panel. */
   private def clRows(s: TuiState, w: Int, h: Int): Seq[String] =
@@ -173,7 +174,7 @@ class ClPanelSpec extends AnyFlatSpec with Matchers with BeforeAndAfterAll with 
   }
 
   it should "use the compact form, without ago, when the long one would be cut, as it is at 100 columns" taggedAs (UnitTest) in {
-    val disconnected = clRows(TuiFixtures.clDisconnectedSepolia(), 100, 32)
+    val disconnected = clRows(TuiFixtures.clDisconnectedSepolia(), NarrowM, 32)
     withClue(disconnected.mkString("\n")) {
       disconnected.head should include("DISCONNECTED")
       disconnected.head should include("forkchoiceUpdated 6m 3s (VALID)")
@@ -182,8 +183,10 @@ class ClPanelSpec extends AnyFlatSpec with Matchers with BeforeAndAfterAll with 
       (disconnected.head should not).include(" ago")
     }
     // A row that fits keeps its long form, and a wider terminal keeps it for the disconnected one too.
-    clRows(TuiFixtures.sepoliaNearHead(), 100, 32).head should include("forkchoiceUpdated 4s ago (VALID)")
-    clRows(TuiFixtures.clDisconnectedSepolia(), 120, 40).head should include("forkchoiceUpdated 6m 3s ago (VALID)")
+    clRows(TuiFixtures.sepoliaNearHead(), NarrowM, 32).head should include("forkchoiceUpdated 4s ago (VALID)")
+    clRows(TuiFixtures.clDisconnectedSepolia(), 120 + TuiFixtures.SidebarCols, 40).head should include(
+      "forkchoiceUpdated 6m 3s ago (VALID)"
+    )
   }
 
   it should "be on an ETH node only: an ETC node, whatever it mines, has no consensus-layer row" taggedAs (UnitTest) in {
@@ -425,16 +428,20 @@ class ClPanelSpec extends AnyFlatSpec with Matchers with BeforeAndAfterAll with 
   /** The narrowest tier M, 100 columns, where the disconnected row's long form was cut: `(VALI…`. */
   private def narrowName(set: GlyphSet): String = s"cl-m-100x32-disconnected-${set.toString.toLowerCase}.txt"
 
+  /** The screen whose body, beside the sidebar (spec 029 FR-006), is those 100 columns. */
+  private val NarrowM: Int = 100 + widgets.Sidebar.Cols + 1
+
   // The golden is the panel's three rows, not the frame: slice 3's Forks detail row on an ETH node is itself cut at 100
   // columns, in the middle of a timestamp, which TuiGoldenLintSpec would (rightly) refuse in a golden.
   for set <- GlyphSet.values do
     "The consensus-layer panel at the narrowest tier M" should s"match ${narrowName(set)}" taggedAs (UnitTest) in {
-      val lines = renderer.render(still(TuiFixtures.clDisconnectedSepolia(set)), 100, 32, TuiTheme.Ansi16)
+      val lines = renderer.render(still(TuiFixtures.clDisconnectedSepolia(set)), NarrowM, 32, TuiTheme.Ansi16)
       lines should have size 32L
-      all(lines.map(_.columnLength())) shouldBe 100
-      val start = lines.indexWhere(_.toString.startsWith(" Consensus layer"))
+      all(lines.map(_.columnLength())) shouldBe NarrowM
+      val body = lines.map(_.columnSubSequence(widgets.Sidebar.Cols + 1, NarrowM))
+      val start = body.indexWhere(_.toString.startsWith(" Consensus layer"))
       start should be >= 0
-      matchGolden(narrowName(set), visibleFrame(lines.slice(start, start + 3)))
+      matchGolden(narrowName(set), visibleFrame(body.slice(start, start + 3)))
     }
 
   for (stateName, fixture) <- goldens; (width, height) <- sizes; set <- GlyphSet.values do

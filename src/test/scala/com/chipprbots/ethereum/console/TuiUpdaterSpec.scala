@@ -76,10 +76,10 @@ class TuiUpdaterSpec extends AnyFlatSpec with Matchers with Eventually:
     (updater, tui, tt) =>
       tickWithin(updater) shouldBe true
       tui.getState.connectionStatus shouldBe "Initializing"
-      TuiTestTerminal.visible(tt.lastFrame) should include("q Quit")
+      TuiTestTerminal.visible(tt.lastFrame) should include("q quit")
   }
 
-  it should "run the quit hook off the updater thread on 'q'" taggedAs (UnitTest) in {
+  it should "run the quit hook off the updater thread on 'q' then 'y'" taggedAs (UnitTest) in {
     val quitThread = Promise[Thread]()
     @volatile var tickThread: Thread = null
     withUpdater(
@@ -88,8 +88,11 @@ class TuiUpdaterSpec extends AnyFlatSpec with Matchers with Eventually:
       ,
       onQuit = () => quitThread.success(Thread.currentThread()),
       config = keyConfig
-    ) { (updater, _, tt) =>
+    ) { (updater, tui, tt) =>
       tt.press("q")
+      tickWithin(updater) shouldBe true // q asks (spec 029 FR-049); the node is not stopped yet
+      tui.getState.overlay shouldBe Overlay.Dialog(DialogKind.Quit)
+      tt.press("y")
       tickWithin(updater) shouldBe false
       tickThread should not be null
       Await.result(quitThread.future, 5.seconds) should not be tickThread
@@ -98,7 +101,7 @@ class TuiUpdaterSpec extends AnyFlatSpec with Matchers with Eventually:
 
   // Regression: `q` left the restore to the TuiRestore shutdown hook, which lost the race with JLine's own hook and
   // left the user's shell in the alternate screen with the cursor hidden.
-  it should "restore the terminal on 'q' before the quit hook exits" taggedAs (UnitTest) in {
+  it should "restore the terminal on a confirmed 'q' before the quit hook exits" taggedAs (UnitTest) in {
     val tt = new TuiTestTerminal()
     val tui = tt.tui()
     tui.initialize() shouldBe true
@@ -108,6 +111,8 @@ class TuiUpdaterSpec extends AnyFlatSpec with Matchers with Eventually:
     val updater = new TuiUpdater(tui, keyConfig, () => Some(snapshot), "mordor", quit)
     try
       tt.press("q")
+      tickWithin(updater) shouldBe true
+      tt.press("y")
       tickWithin(updater) shouldBe false
       val (screen, enabled) = Await.result(atExit.future, 5.seconds)
       screen should include(Tui.ExitAltScreen)
@@ -204,7 +209,7 @@ class TuiUpdaterSpec extends AnyFlatSpec with Matchers with Eventually:
   }
 
   // SC-004: at the 1000 ms pace a key is handled when it arrives, not at the next frame.
-  it should "dispatch 'q' within 500 ms at the 1000 ms pace" taggedAs (UnitTest) in {
+  it should "dispatch 'q' and its 'y' within 500 ms at the 1000 ms pace" taggedAs (UnitTest) in {
     val quitAt = Promise[Long]()
     val reads = new AtomicInteger(0)
     withUpdater(
@@ -220,7 +225,8 @@ class TuiUpdaterSpec extends AnyFlatSpec with Matchers with Eventually:
       eventually(timeout(5.seconds), interval(10.millis))(tt.readTimeouts should contain(1000L))
       tui.getState.motion shouldBe Motion.Reduced
       val pressed = System.nanoTime()
-      tt.press("q")
+      // Both keys in one write: the first opens the dialog, the second answers it, each handled as it is read.
+      tt.press("qy")
       val dispatched = Await.result(quitAt.future, 5.seconds)
       (dispatched - pressed) / 1_000_000L should be < 500L
     }

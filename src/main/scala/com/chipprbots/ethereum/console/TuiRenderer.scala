@@ -9,6 +9,8 @@ import com.chipprbots.ethereum.console.TuiText.formatNumber
 import com.chipprbots.ethereum.console.TuiText.formatShort
 import com.chipprbots.ethereum.console.panels.Ctx
 import com.chipprbots.ethereum.console.panels.Views
+import com.chipprbots.ethereum.console.widgets.DialogBox
+import com.chipprbots.ethereum.console.widgets.Sidebar
 
 /** The TUI's compositor (spec 027 research §7.3): the header band, its separator and the alert row on top, the view's
   * panels laid out by [[Layout]], and the footer on the last row.
@@ -77,18 +79,38 @@ class TuiRenderer(config: TuiConfig):
     * the separator goes first, then the header; the alert row stays above the footer down to two rows.
     */
   private def dashboard(state: TuiState, w: Int, height: Int, theme: TuiTheme): Seq[AttributedString] =
-    val c = Ctx(state, Tier.of(w, height), TuiGlyphs.of(state.glyphs), theme, config)
-    val header = createHeader(c, w)
-    val alert = Alerts.row(state, w, c.g, theme)
-    val footer = createFooter(c, w)
+    val g = TuiGlyphs.of(state.glyphs)
+    // The header and the footer span the screen and take its tier. The body is what the sidebar leaves, and its panels
+    // take the tier of that width, so a panel is never drawn for more columns than it gets (spec 029 FR-006).
+    val frame = Ctx(state, Tier.of(w, height), g, theme, config)
+    val side = if Sidebar.shown(w, height) then Sidebar.Cols + 1 else 0
+    val bodyCols = w - side
+    val c = Ctx(state, Tier.of(bodyCols, height), g, theme, config)
+    val header = createHeader(frame, w)
+    val alert = Alerts.row(state, w, g, theme)
+    val footer = createFooter(frame, w)
     val above = height - 1
     val top =
-      if above >= 3 || height <= 0 then Seq(header, c.separator(w), alert)
+      if above >= 3 || height <= 0 then Seq(header, frame.separator(w), alert)
       else if above == 2 then Seq(header, alert)
       else if above == 1 then Seq(alert)
       else Nil
     val bodyRows = if height <= 0 then 0 else above - top.size
-    val body = Layout.render(Views.panels(c, w), w, bodyRows, c.separator(w))
+    val panels = Layout.render(Views.panels(c), bodyCols, bodyRows, c.separator(bodyCols))
+    // A dialog replaces rows of the body only: the alert row stays above it (spec 029 FR-048).
+    val asked = state.overlay match
+      case Overlay.Dialog(DialogKind.Quit) => DialogBox.over(panels, DialogBox.quit(c), bodyCols, c)
+      case _                               => panels
+    val body =
+      if side == 0 then asked
+      else
+        Layout.columns(
+          Sidebar.rows(frame, bodyRows),
+          asked,
+          Sidebar.Cols,
+          bodyCols,
+          new AttributedString(g.divider.text, theme.muted)
+        )
     // Every row is already exactly `w` columns: Layout fits the body, and the fixed rows are fitted where they are made.
     (top ++ body) :+ footer
 
@@ -119,25 +141,66 @@ class TuiRenderer(config: TuiConfig):
     else sb.append(" " * width.max(0), style)
     fitToWidth(sb.toAttributedString, width)
 
-  /** The keys: the views, then `p`, `?`, `r`, `d`, `q` (Q7: `d` is Detach). Short names below tier M. */
+  /** The last row (spec 029 FR-006, FR-007): the prompt or the filter while one is being typed; else what the last
+    * command had to say; else the keys, more of them the wider the screen. Help lists them all.
+    */
   private def createFooter(c: Ctx, width: Int): AttributedString =
-    val divider = c.g.divider.text
-    val text =
-      if c.tier == Tier.S then
-        s" ${TuiView.values.map(v => s"${v.key} ${v.short}").mkString(" ")} $divider p Pause ? Help r Redraw d Detach q Quit"
-      else
-        s" ${TuiView.values.map(v => s"${v.key} ${v.title}").mkString("  ")} $divider " +
-          "p Pause  ? Help  r Redraw  d Detach  q Quit"
+    c.state.overlay match
+      case Overlay.Prompt(text, cursor, _) =>
+        inputLine(c, ":", text, cursor, "Enter run  Tab complete  Esc close", width)
+      case Overlay.Filter(text) => inputLine(c, "/", text, text.length, "Enter keep  Esc clear", width)
+      case Overlay.Dialog(_)    => band(c, " a question is open: answer it, or Esc", width)
+      case Overlay.None =>
+        c.state.notice match
+          case Some(notice) =>
+            fitToWidth(
+              new AttributedString(s" ${c.g.warn.text} ${TuiText.external(notice, c.g)}", c.t.warn.bold()),
+              width
+            )
+          case None => band(c, FooterKeys(c.tier), width)
+
+  /** A row of text on the accent band. */
+  private def band(c: Ctx, text: String, width: Int): AttributedString =
     val line = new AttributedString(text, c.t.accent)
     val sb = new AttributedStringBuilder()
     sb.append(line)
     sb.append(" " * (width - line.columnLength()).max(0), c.t.accent)
     fitToWidth(sb.toAttributedString, width)
 
+  /** A line being typed: the mark, the text with its cursor in reverse video, and the keys that end it. When the text
+    * is longer than the row, its start scrolls off so that the cursor stays on screen.
+    */
+  private def inputLine(c: Ctx, mark: String, text: String, cursor: Int, keys: String, width: Int): AttributedString =
+    val hint = s"  $keys "
+    val room = (width - 1 - mark.length - (if width >= 60 then hint.length else 0) - 1).max(1)
+    val from = (cursor - room + 1).max(0)
+    val shown = text.slice(from, from + room)
+    val at = cursor - from
+    val sb = new AttributedStringBuilder()
+    sb.append(s" $mark", c.t.healthy.bold())
+    sb.append(shown.take(at), c.t.value)
+    sb.append(shown.slice(at, at + 1).padTo(1, ' '), c.t.value.inverse())
+    sb.append(shown.drop(at + 1), c.t.value)
+    val typed = sb.toAttributedString
+    if width < 60 then fitToWidth(typed, width)
+    else
+      val out = new AttributedStringBuilder()
+      out.append(fitToWidth(typed, width - hint.length))
+      out.append(hint, c.t.muted)
+      fitToWidth(out.toAttributedString, width)
+
 /** A rendered frame, and whether it moves with `tick` (the frame loop's pace, Q1). */
 final case class Frame(lines: Seq[AttributedString], animated: Boolean)
 
 object TuiRenderer:
+  /** The footer's keys by tier: the essentials at S, more as the screen widens. Every key is in Help. */
+  private[console] def FooterKeys(tier: Tier): String = tier match
+    case Tier.S => " 1-9 view  : prompt  / filter  ? help  p pause  r redraw  d detach  q quit"
+    case Tier.M => " 1-9 view  Enter open  Esc back  : prompt  / filter  ? help  p pause  r redraw  d detach  q quit"
+    case Tier.L =>
+      " 1-9 view  [ ] other views  Up Down select  Enter open  Esc back  : prompt  / filter  ? help  g glyphs  " +
+        "p pause  r redraw  d detach  q quit"
+
   /** Connection statuses that are waiting for something, each with the word the Peers cell shows: a spinner turns
     * beside it (§4.2).
     */

@@ -40,7 +40,7 @@ enum TuiCommand:
   *   - State management through TuiState
   *   - Rendering through TuiRenderer
   *   - Log suppression through TuiLogSuppressor, and the log tail through TuiLogRingAppender
-  *   - Keyboard input handling
+  *   - Keyboard input: bytes to keys through KeyDecoder, keys to state through Update
   *
   * Threading: `render`, `initialize` and `shutdown` are serialized on this instance. `checkInput` waits for a key
   * WITHOUT holding the lock, so a pending read never blocks a redraw or a shutdown. The state is one atomic reference:
@@ -109,6 +109,15 @@ class Tui(
   /** The ring's next sequence number when the frame loop last read its lines: unchanged, nothing new to read. */
   @volatile private var logsRead = -1L
 
+  /** The terminal's bytes become keys here (spec 029 FR-004). Only the frame loop's thread reads keys, so the decoder's
+    * place in the input is its own.
+    */
+  private var decoder: KeyDecoder = new KeyDecoder()
+  private var decoding: KeyDecoder.State = KeyDecoder.State.Ground
+
+  /** How long the input has been quiet inside a paste whose end has not come. */
+  private var pasteQuietMillis: Long = 0L
+
   /** Initialize the TUI.
     *
     * Fails (returning false, with standard logging left in place) when there is no interactive terminal — stdin/stdout
@@ -131,8 +140,11 @@ class Tui(
         theme = TuiTheme.of(config.noColor, Tui.maxColors(term))
         directOutput = processOutput(term)
         savedAttributes = Some(term.enterRawMode())
-        // Alternate screen buffer (restored on exit, so the user's scrollback survives) + hidden cursor.
-        write(term, Tui.EnterAltScreen + Tui.HideCursor + Tui.ClearScreen)
+        decoder = KeyDecoder.forTerminal(term)
+        decoding = KeyDecoder.State.Ground
+        // Alternate screen buffer (restored on exit, so the user's scrollback survives) + hidden cursor. Bracketed
+        // paste, so that pasted text arrives marked as such and cannot be read as keys (spec 029 FR-009).
+        write(term, Tui.EnterAltScreen + Tui.HideCursor + KeyDecoder.EnablePaste + Tui.ClearScreen)
         inAltScreen = true
 
         // Suppress console logs if configured
@@ -255,109 +267,107 @@ class Tui(
       }
   }
 
-  /** Wait up to `timeoutMs` for a key press.
+  /** Wait up to `timeoutMs` for input, and decode what arrives into keys (spec 029 FR-004).
+    *
+    * An escape sequence is read to its end before anything is returned: once a sequence has started, the rest of it is
+    * waited for [[KeyDecoder.EscapeWaitMillis]] at a time. A sequence the decoder knows is a key; any other, and any
+    * reply of the terminal, is nothing. So the tail of a sequence is never dispatched as keys (Left arrow ends in `D`:
+    * Detach).
     *
     * @return
-    *   the lower-cased key, or None if none arrived (or the TUI is not active)
+    *   the keys read, in order; empty if none arrived (or the TUI is not active)
     */
-  def checkInput(timeoutMs: Long = 1L): Option[Char] =
+  def checkInput(timeoutMs: Long = 1L): Seq[Key] =
     val term = synchronized(if enabled then terminal else None)
-    term.flatMap { t =>
+    term.fold(Seq.empty[Key]) { t =>
       try
-        // NonBlockingReader treats a timeout of 0 as "wait forever" — never pass it through.
         val reader = t.reader()
-        val c = reader.read(Math.max(1L, timeoutMs))
-        // An arrow, Home, Insert, Delete or a function key is an escape sequence. Its tail must not be read as keys
-        // (Left arrow ends in `D`: Detach; Home in `H`: Help), so the whole sequence is consumed and dropped (§2.2).
-        if c == Tui.Esc then
-          Tui.drainEscape(reader)
-          None
-        else if c >= 0 then Some(c.toChar.toLower)
-        else
-          // End of input: nothing can be typed again, and every later read would return at once.
-          if c == NonBlockingReader.EOF then
-            val wasUp = synchronized(enabled)
-            terminalLost("reading a key (end of input)")
-            if wasUp then
-              log.warn("TUI keyboard input reached end of input; the terminal and standard logging are restored")
-          None
+        val keys = Vector.newBuilder[Key]
+        // NonBlockingReader treats a timeout of 0 as "wait forever" — never pass it through.
+        var wait = Math.max(1L, timeoutMs)
+        var reading = true
+        while reading do
+          val c = reader.read(wait)
+          if c >= 0 then
+            pasteQuietMillis = 0L
+            val (next, decoded) = decoder.step(decoding, c.toChar)
+            decoding = next
+            keys ++= decoded
+            // Between keys: hand back what there is. Inside a sequence: its rest is on the way.
+            if next == KeyDecoder.State.Ground then reading = false else wait = KeyDecoder.EscapeWaitMillis
+          else if c == NonBlockingReader.READ_EXPIRED then
+            val (next, decoded) = decoder.idle(decoding)
+            keys ++= decoded
+            pasteQuietMillis = if next == KeyDecoder.State.Ground then 0L else pasteQuietMillis + wait
+            decoding = if pasteQuietMillis >= KeyDecoder.PasteWaitMillis then decoder.abandon(next) else next
+            reading = false
+          else
+            reading = false
+            // End of input: nothing can be typed again, and every later read would return at once.
+            if c == NonBlockingReader.EOF then
+              val wasUp = synchronized(enabled)
+              terminalLost("reading a key (end of input)")
+              if wasUp then
+                log.warn("TUI keyboard input reached end of input; the terminal and standard logging are restored")
+        keys.result()
       catch
         case e: IllegalStateException if Tui.isClosedTerminal(e) =>
           terminalLost("reading a key")
-          None
+          Nil
         case _: InterruptedIOException =>
           // The frame loop is being stopped (TuiUpdater.stop, on Ctrl-C, SIGTERM or `q`): JLine answers the interrupt
           // with InterruptedIOException. Not a failed read; keep the interrupt for the loop to see.
           Thread.currentThread().interrupt()
-          None
+          Nil
         case NonFatal(e) =>
           // Keys are how the TUI is left (q, d): without them, give the terminal and the console logs back, then log,
           // so the ERROR reaches the console.
           shutdown()
           log.error("TUI could not read a key ({}); the terminal and standard logging are restored", e.getMessage, e)
-          None
+          Nil
     }
 
-  /** Handle keyboard commands (FR-015, research §2.2). While the splash is on screen any key skips it, and does nothing
-    * else (FR-013). While Help is open, `q`, `r` and `d` keep their meaning and any other key returns to the view under
-    * it.
+  /** A key (spec 029 FR-003 to FR-010). While the splash is on screen any key skips it, and does nothing else (spec 027
+    * FR-013). Otherwise [[Update]] says what the key does to the state, and what it asks of the terminal and the node.
     */
-  def handleCommand(command: Char): TuiCommand =
+  def handleKey(key: Key): TuiCommand =
     val height = synchronized(lastSize._2)
-    val current = state.get
-    if current.splashCover(height).isDefined then
+    if state.get.splashCover(height).isDefined then
       modify(_.skipSplash)
       TuiCommand.Continue
-    else if current.helpOpen && !Tui.KeysInHelp.contains(command) then
-      modify(_.closeHelp)
-      TuiCommand.Continue
-    else dispatch(command, height)
-
-  private def dispatch(command: Char, height: Int): TuiCommand = TuiView.forKey(command) match
-    case Some(view) =>
-      modify(_.withView(view))
-      TuiCommand.Continue
-    case None => dispatchKey(command, height)
-
-  private def dispatchKey(command: Char, height: Int): TuiCommand = command match
-    case 'l' =>
-      modify(_.withView(TuiView.Logs))
-      TuiCommand.Continue
-    case '+' | '-' =>
-      // The Logs view only: `-` a page back to older lines, `+` a page forward to newer ones (§2.2).
-      val page = (height - panels.LogsPanel.ChromeRows).max(1)
-      val lines = if command == '-' then page else -page
-      modify(s => if s.view == TuiView.Logs then s.scrollLogs(lines, page) else s)
-      TuiCommand.Continue
-    case '\t' =>
-      modify(_.nextView)
-      TuiCommand.Continue
-    case '?' | 'h' =>
-      modify(_.openHelp)
-      TuiCommand.Continue
-    case 'g' =>
-      // §3.10: the other glyph set, with the same column budgets.
-      modify(_.toggleGlyphs)
-      TuiCommand.Continue
-    case 'q' =>
-      log.info("Quit command received")
-      TuiCommand.Quit
-    case 'r' =>
-      synchronized {
-        lastSize = (0, 0) // forces a full clear on the next frame
+    else
+      val ctx = UpdateCtx(
+        page = (height - panels.LogsPanel.ChromeRows).max(1),
+        configuredMotion = config.motion,
+        readOnly = config.readOnly
+      )
+      var effects: Seq[Effect] = Nil
+      state.updateAndGet { s =>
+        val (next, asked) = Update(s, key, ctx)
+        effects = asked
+        next
       }
-      render()
-      TuiCommand.Continue
-    case 'd' =>
-      shutdown()
-      log.info("TUI disabled, switching to standard logging")
-      TuiCommand.Disable
-    case 'p' =>
-      // FR-012: pause the frame counter (polling continues), or resume the configured motion.
-      modify(_.togglePause(config.motion))
-      TuiCommand.Continue
-    case _ =>
-      TuiCommand.Continue
+      effects.foldLeft(TuiCommand.Continue: TuiCommand) { (result, effect) =>
+        if result != TuiCommand.Continue then result
+        else
+          effect match
+            case Effect.Redraw =>
+              synchronized {
+                lastSize = (0, 0) // forces a full clear on the next frame
+              }
+              render()
+              TuiCommand.Continue
+            case Effect.Detach =>
+              shutdown()
+              log.info("TUI disabled, switching to standard logging")
+              TuiCommand.Disable
+            case Effect.Quit =>
+              log.info("Quit confirmed in the TUI")
+              TuiCommand.Quit
+      }
+
+  /** A typed character, as a key. */
+  def handleCommand(command: Char): TuiCommand = handleKey(Key.Char(command))
 
   /** The terminal went away under the TUI: JLine's shutdown hook closed it (Ctrl-C, SIGTERM), or its input ended. Stop
     * drawing and reading at once, and restore what can be restored, so the frame loop ends instead of failing on every
@@ -468,44 +478,10 @@ object Tui:
   private[console] val ClearScreen = "\u001b[2J\u001b[H"
   private[console] val CursorHome = "\u001b[H"
 
-  /** Leaves the TUI's screen: attributes reset, cursor shown, back to the normal buffer and the user's scrollback. */
-  private[console] val RestoreScreen = ResetColors + ShowCursor + ExitAltScreen
-
-  private[console] val Esc: Int = 0x1b
-
-  /** How long the rest of an escape sequence may take to arrive: a terminal sends it in one write. */
-  private[console] val EscapeTailMillis: Long = 50L
-
-  /** The longest CSI sequence drained: parameters and intermediates, then the final byte. */
-  private[console] val EscapeMaxBytes: Int = 32
-
-  /** Reads and drops the rest of an escape sequence whose ESC was just read: a CSI sequence (`ESC [` parameters, then a
-    * final byte in `@`–`~`), an SS3 one (`ESC O` and one byte, F1–F4), or ESC and one more byte (Alt and a key). A lone
-    * ESC drops nothing more.
-    *
-    * The wait is bounded twice: by [[EscapeTailMillis]] in all, and by [[EscapeMaxBytes]] for a CSI sequence. Every
-    * byte is read with at least a 1 ms wait, even once the time is up, so a tail already buffered behind a stall (a GC
-    * pause on a loaded host) is still read here and never dispatched as keys (`D` would detach, `H` open Help).
-    *
-    * @param nanoTime
-    *   the clock the deadline is measured on; tests move it
+  /** Leaves the TUI's screen: attributes reset, bracketed paste off, cursor shown, back to the normal buffer and the
+    * user's scrollback.
     */
-  private[console] def drainEscape(reader: NonBlockingReader, nanoTime: () => Long = () => System.nanoTime()): Unit =
-    val deadline = nanoTime() + EscapeTailMillis * 1_000_000L
-    def next(): Int = reader.read(((deadline - nanoTime()) / 1_000_000L).max(1L))
-    def isFinal(b: Int): Boolean = b >= '@'.toInt && b <= '~'.toInt
-    val introducer = next()
-    if introducer == '['.toInt then
-      var b = next()
-      var read = 1
-      while b >= 0 && !isFinal(b) && read < EscapeMaxBytes do
-        b = next()
-        read += 1
-    else if introducer == 'O'.toInt then
-      val _ = next()
-
-  /** The keys that keep their meaning while Help is open; any other key closes it. */
-  private[console] val KeysInHelp: Set[Char] = Set('q', 'r', 'd')
+  private[console] val RestoreScreen = ResetColors + KeyDecoder.DisablePaste + ShowCursor + ExitAltScreen
 
   /** Size used when the terminal cannot report one (some PTYs report 0x0). */
   private[console] val FallbackSize: (Int, Int) = (80, 24)

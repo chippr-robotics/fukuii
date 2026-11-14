@@ -27,7 +27,8 @@ final case class TuiEnv(
     utf8Locale: Boolean,
     warnings: List[String],
     reducedMotion: Option[Boolean] = None,
-    noSplash: Boolean = false
+    noSplash: Boolean = false,
+    readOnly: Boolean = false
 ):
   /** The configuration the TUI runs with: `settings` (`fukuii.tui`) with these overrides applied, and `auto` resolved
     * against the locale into a [[GlyphSet]] (B-124). Every other field keeps [[TuiConfig.default]]'s value.
@@ -45,7 +46,8 @@ final case class TuiEnv(
       statusPollIntervalMs = settings.statusPollIntervalMs,
       splashMs = if noSplash then 0L else settings.splashMs,
       logRingSize = settings.logRingSize,
-      logLevel = settings.logLevel
+      logLevel = settings.logLevel,
+      readOnly = readOnly || settings.readOnly
     )
 
 object TuiEnv:
@@ -53,6 +55,11 @@ object TuiEnv:
   val GlyphsVar: String = "FUKUII_TUI_GLYPHS"
   val MotionVar: String = "FUKUII_TUI_MOTION"
   val NoSplashVar: String = "FUKUII_TUI_NO_SPLASH"
+
+  /** Set to a non-empty value: no operator action can run (spec 029 FR-053). It can only add the restriction:
+    * `fukuii.tui.read-only = true` is not undone by leaving the variable unset.
+    */
+  val ReadOnlyVar: String = "FUKUII_TUI_READ_ONLY"
 
   /** The accepted `FUKUII_TUI_MOTION` values. */
   val MotionAccepted: String = "full, reduced"
@@ -85,7 +92,8 @@ object TuiEnv:
       utf8Locale = localeIsUtf8(env, props),
       warnings = glyphWarnings ++ motionWarnings,
       reducedMotion = reducedMotion,
-      noSplash = env.get(NoSplashVar).exists(_.nonEmpty)
+      noSplash = env.get(NoSplashVar).exists(_.nonEmpty),
+      readOnly = env.get(ReadOnlyVar).exists(_.nonEmpty)
     )
 
   /** The running process's environment and system properties. */

@@ -1,0 +1,24 @@
+ ◆ FUKUII  etc (61) · PoW · up 12d 7h                                     Peers 
+────────────────────────────────────────────────────────────────────────────────
+ ✓ no alerts                                                                    
+ Peers   41/50 ◆◆◆◆◆◆◆◆◆◆         Block  21,884,102 (at head)                   
+ Sync    ✓ at head                                                              
+────────────────────────────────────────────────────────────────────────────────
+ Peers   8 handshaked of 50 max · 3 in · 5 out · filter 'besu'                  
+   id          dir  client                best        age                       
+   0x11a2…9b   out  besu/v24.1.2          21,884,100  1h 43m                    
+   0x28b7…10   out  besu/v24.1.2          21,884,101  1h 15m                    
+   0x3fcd…85   in   besu/v24.1.2          21,884,102  47m 48s                   
+   0x9e37…52   out  besu/v24.1.2          21,884,101  4h 4m                     
+   0xcc62…3c   out  besu/v24.1.2          21,884,100  3h 8m                     
+   0xe377…b1   out  besu/v24.1.2          21,884,101  2h 40m                    
+   0xfa8d…26   in   besu/v24.1.2          21,884,102  2h 12m                    
+   0xb54d…c7   in   besu/v24.1.2          21,884,102  3h 36m                    
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+ /besu                                                    Enter keep  Esc clear 

@@ -1,4 +1,4 @@
- # FUKUII  mordor (63) . PoW . up 2h 11m                                   Sync 
+ # FUKUII  mordor (63) . PoW . up 2h 11m                                  Chain 
 --------------------------------------------------------------------------------
  ! 1 warn    peers 11/50 below 25%                                              
  Peers   11/50 ##########         Block  0 -> 9,118,000 (pivot)                 
@@ -12,13 +12,13 @@
    Healing  ~o[QUEUED]@@                                                        
    Chain    headers 4.2M / 9.1M . bodies 0 . receipts 0                         
 --------------------------------------------------------------------------------
+ Chain   mordor . chain id 63 . PoW . forks by block number                     
+--------------------------------------------------------------------------------
+ Last    Mystique + since 5,520,000                                             
+ Next    Spiral @ 9,957,000 (839.0K away)                                       
+--------------------------------------------------------------------------------
  Recent (sync)                                                                  
- 11:59:04 INFO  Imported block 21,884,099 0x7ab2..d4c7 with 6 txs in 14ms       
- 11:59:17 INFO  Imported block 21,884,100 0x3301..2e9d with 21 txs in 31ms      
- 11:59:25 INFO  [====================~o]@@ 100% - RegularSync                   
  11:59:34 INFO  Imported block 21,884,101 0x9b0c..ff31 with 9 txs in 17ms       
  11:59:47 INFO  Imported block 21,884,102 0x6d21..1a0e with 14 txs in 22ms      
  12:00:00 INFO  RegularSync: at head, block 21884102                            
-                                                                                
-                                                                                
- 1 Over 2 Sync 3 Peers 4 Chain 5 Logs | p Pause ? Help r Redraw d Detach q Quit 
+ 1-9 view  : prompt  / filter  ? help  p pause  r redraw  d detach  q quit      

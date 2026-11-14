@@ -13,7 +13,20 @@ import com.chipprbots.ethereum.console.panels.Rows.*
   */
 private[console] object ChainPanel:
 
+  /** The Chain view (spec 029 FR-006). While the node is syncing its sync panels lead, then the chain's identity and
+    * forks, then the Recent (sync) strip; at the head, the chain's panels alone.
+    */
   def panels(c: Ctx): Seq[Panel] =
+    val s = c.state
+    val syncing = s.snapSyncState.isDefined || (s.bestBlock > 0 && !s.isSynchronized)
+    if !syncing then chain(c)
+    else
+      val sync = SyncPanels.panels(c)
+      // Without the chain's own vitals strip: the sync's leads. The forks take the rows that are left, as they do at
+      // the head; the Recent strip keeps its own.
+      sync.init ++ chain(c).drop(1) :+ sync.last
+
+  private def chain(c: Ctx): Seq[Panel] =
     val vitals = vitalsPanel(c, withSummary = true)
     c.state.chain match
       case None =>

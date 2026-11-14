@@ -1,48 +1,48 @@
- ◆ FUKUII  mordor (63) · PoW · head 0 · 11/50 peers · up 2h 11m · v0.11.0                                                                                  Sync 
+ ◆ FUKUII  mordor (63) · PoW · head 0 · 11/50 peers · up 2h 11m · v0.11.0                                                                                 Chain 
 ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
  ⚠ 1 warn    peers 11/50 below 25%                                                                                                                              
- Peers   11/50 ◆◆◆◆◆◆◆◆◆◆  Block  0 → 9,118,000 (pivot)                   Txpool  142             Disk  412G free     JVM  5.1G / 8.0G heap                     
-────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
- SNAP sync   💾   Downloading bytecodes & storage                                                                     elapsed 2h 11m · phase 1h 8m · ETA 1h 58m 
-────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
-   Overall  [================🪱...........................................]🧠 27%                                                                               
-   Accounts 🪱[COMPLETE ✓]🧠                                                        34.1M                                                                       
-   Storage  [=====================🪱......................................]🧠 37%   119.6M slots @ 21.4K/s · 2,114/5,702 contracts                              
-   Bytecode 🪱[ACTIVE]   🧠                                                         412.0K @ 310/s                                                              
-   Healing  🪱[QUEUED]🧠                                                                                                                                        
-   Chain    headers 4.2M / 9.1M · bodies 0 · receipts 0                                                                                                         
-────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
- Rates (recent / overall)  accounts 0/4.8K  ·  slots 21.4K/18.9K  ·  bytecodes 310/288  ·  nodes 0/0                                                            
- Requests                  account 48,112 ✓ 31 ✗  storage 210,004 ✓ 402 ✗  bytecode 9,331 ✓ 12 ✗  healing 0 ✓ 0 ✗                                               
- Peers (snap-capable)      9 of 11 · blacklisted this run 2 · request timeouts 118                                                                              
-────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
- Phase timeline                                                                                                                                                 
-   AccountRange ✓ ── ByteCodeAndStorage ● 1h 8m ── StateHealing · ── StateValidation · ── ChainDownload ·                                                       
-────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
- Recent (sync)                                                                                                                                                  
- 11:58:34 INFO  RegularSync: current=21884097 best=21884102 lag=5                                                                                               
- 11:58:47 INFO  Imported block 21,884,098 0x1f09…88a1 with 17 txs in 26ms                                                                                       
- 11:59:04 INFO  Imported block 21,884,099 0x7ab2…d4c7 with 6 txs in 14ms                                                                                        
- 11:59:17 INFO  Imported block 21,884,100 0x3301…2e9d with 21 txs in 31ms                                                                                       
- 11:59:25 INFO  [====================🪱]🧠 100% — RegularSync                                                                                                   
- 11:59:34 INFO  Imported block 21,884,101 0x9b0c…ff31 with 9 txs in 17ms                                                                                        
- 11:59:47 INFO  Imported block 21,884,102 0x6d21…1a0e with 14 txs in 22ms                                                                                       
- 12:00:00 INFO  RegularSync: at head, block 21884102                                                                                                            
-                                                                                                                                                                
-                                                                                                                                                                
-                                                                                                                                                                
-                                                                                                                                                                
-                                                                                                                                                                
-                                                                                                                                                                
-                                                                                                                                                                
-                                                                                                                                                                
-                                                                                                                                                                
-                                                                                                                                                                
-                                                                                                                                                                
-                                                                                                                                                                
-                                                                                                                                                                
-                                                                                                                                                                
-                                                                                                                                                                
-                                                                                                                                                                
-                                                                                                                                                                
- 1 Overview  2 Sync  3 Peers  4 Chain  5 Logs │ p Pause  ? Help  r Redraw  d Detach  q Quit                                                                     
+ mordor           │ Peers   11/50 ◆◆◆◆◆◆◆◆◆◆  Block  0 → 9,118,000 (pivot)                   Txpool  142             Disk  412G free     JVM  5.1G / 8.0G heap  
+ PoW · id 63      │─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+                  │ SNAP sync   💾   Downloading bytecodes & storage                                                  elapsed 2h 11m · phase 1h 8m · ETA 1h 58m 
+ [1] Overview     │─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+ [2] Chain        │   Overall  [================🪱...........................................]🧠 27%                                                            
+ [3] Peers        │   Accounts 🪱[COMPLETE ✓]🧠                                                        34.1M                                                    
+ [4] Mempool      │   Storage  [=====================🪱......................................]🧠 37%   119.6M slots @ 21.4K/s · 2,114/5,702 contracts           
+ [5] RPC          │   Bytecode 🪱[ACTIVE]   🧠                                                         412.0K @ 310/s                                           
+ [6] Storage      │   Healing  🪱[QUEUED]🧠                                                                                                                     
+ [7] System       │   Chain    headers 4.2M / 9.1M · bodies 0 · receipts 0                                                                                      
+ [8] Logs         │─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+ [9] Ops          │ Rates (recent / overall)  accounts 0/4.8K  ·  slots 21.4K/18.9K  ·  bytecodes 310/288  ·  nodes 0/0                                         
+                  │ Requests                  account 48,112 ✓ 31 ✗  storage 210,004 ✓ 402 ✗  bytecode 9,331 ✓ 12 ✗  healing 0 ✓ 0 ✗                            
+                  │ Peers (snap-capable)      9 of 11 · blacklisted this run 2 · request timeouts 118                                                           
+                  │─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+                  │ Phase timeline                                                                                                                              
+                  │   AccountRange ✓ ── ByteCodeAndStorage ● 1h 8m ── StateHealing · ── StateValidation · ── ChainDownload ·                                    
+                  │─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+                  │ Chain   mordor · chain id 63 · PoW · forks by block number                                                                                  
+                  │─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+                  │ Forks (block)                                                                                                                               
+                  │   ✓ Frontier           block 0                                                                                                              
+                  │   ✓ Homestead          block 0                                                                                                              
+                  │   ✓ EIP-150            block 0                                                                                                              
+                  │   ✓ EIP-155            block 0                                                                                                              
+                  │   ✓ EIP-160            block 0                                                                                                              
+                  │   ✓ DiffBomb-Pause     block 0                                                                                                              
+                  │   ✓ DiffBomb-Continue  block 0                                                                                                              
+                  │   ✓ DiffBomb-Removal   block 0                                                                                                              
+                  │   ✓ Atlantis           block 0                                                                                                              
+                  │   ✓ Agharta            block 301,243                                                                                                        
+                  │   ✓ Phoenix            block 999,983                                                                                                        
+                  │─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+                  │ Recent (sync)                                                                                                                               
+                  │ 11:58:34 INFO  RegularSync: current=21884097 best=21884102 lag=5                                                                            
+                  │ 11:58:47 INFO  Imported block 21,884,098 0x1f09…88a1 with 17 txs in 26ms                                                                    
+                  │ 11:59:04 INFO  Imported block 21,884,099 0x7ab2…d4c7 with 6 txs in 14ms                                                                     
+                  │ 11:59:17 INFO  Imported block 21,884,100 0x3301…2e9d with 21 txs in 31ms                                                                    
+                  │ 11:59:25 INFO  [====================🪱]🧠 100% — RegularSync                                                                                
+                  │ 11:59:34 INFO  Imported block 21,884,101 0x9b0c…ff31 with 9 txs in 17ms                                                                     
+                  │ 11:59:47 INFO  Imported block 21,884,102 0x6d21…1a0e with 14 txs in 22ms                                                                    
+                  │ 12:00:00 INFO  RegularSync: at head, block 21884102                                                                                         
+                  │                                                                                                                                             
+                  │                                                                                                                                             
+ 1-9 view  [ ] other views  Up Down select  Enter open  Esc back  : prompt  / filter  ? help  g glyphs  p pause  r redraw  d detach  q quit                     

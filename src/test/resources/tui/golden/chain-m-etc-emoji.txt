@@ -1,40 +1,40 @@
  ◆ FUKUII  etc (61) · PoW · head 21,884,102 · 41/50 peers · up 12d 7h                                             Chain 
 ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
  ✓ no alerts                                                                                                            
- Peers   41/50 ◆◆◆◆◆◆◆◆◆◆                    Block  21,884,102 (at head)                     Txpool  142                
- Sync    ✓ at head                                                                                                      
-────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
- Chain   etc · chain id 61 · PoW · forks by block number                                                                
-────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
- Forks (block)                                                                                                          
-   ✓ Frontier           block 0                                                                                         
-   ✓ Homestead          block 1,150,000                                                                                 
-   ✓ EIP-150            block 2,500,000                                                                                 
-   ✓ EIP-155            block 3,000,000                                                                                 
-   ✓ EIP-160            block 3,000,000                                                                                 
-   ✓ DiffBomb-Pause     block 3,000,000                                                                                 
-   ✓ DiffBomb-Continue  block 5,000,000                                                                                 
-   ✓ DiffBomb-Removal   block 5,900,000                                                                                 
-   ✓ Atlantis           block 8,772,000                                                                                 
-   ✓ Agharta            block 9,573,000                                                                                 
-   ✓ Phoenix            block 10,500,839                                                                                
-   ✓ ECIP-1099          block 11,700,000                                                                                
-   ✓ Magneto            block 13,189,133                                                                                
-   ✓ Mystique           block 14,525,000                                                                                
-   ✓ Spiral             block 19,250,000                                                                                
-   · Olympia            not scheduled on this network                                                                   
-                                                                                                                        
-                                                                                                                        
-                                                                                                                        
-                                                                                                                        
-                                                                                                                        
-                                                                                                                        
-                                                                                                                        
-                                                                                                                        
-                                                                                                                        
-                                                                                                                        
-                                                                                                                        
-                                                                                                                        
-                                                                                                                        
-                                                                                                                        
- 1 Overview  2 Sync  3 Peers  4 Chain  5 Logs │ p Pause  ? Help  r Redraw  d Detach  q Quit                             
+ etc              │ Peers   41/50 ◆◆◆◆◆◆◆◆◆◆                    Block  21,884,102 (at head)                     Txpool… 
+ PoW · id 61      │ Sync    ✓ at head                                                                                   
+                  │─────────────────────────────────────────────────────────────────────────────────────────────────────
+ [1] Overview     │ Chain   etc · chain id 61 · PoW · forks by block number                                             
+ [2] Chain        │─────────────────────────────────────────────────────────────────────────────────────────────────────
+ [3] Peers        │ Forks (block)                                                                                       
+ [4] Mempool      │   ✓ Frontier           block 0                                                                      
+ [5] RPC          │   ✓ Homestead          block 1,150,000                                                              
+ [6] Storage      │   ✓ EIP-150            block 2,500,000                                                              
+ [7] System       │   ✓ EIP-155            block 3,000,000                                                              
+ [8] Logs         │   ✓ EIP-160            block 3,000,000                                                              
+ [9] Ops          │   ✓ DiffBomb-Pause     block 3,000,000                                                              
+                  │   ✓ DiffBomb-Continue  block 5,000,000                                                              
+                  │   ✓ DiffBomb-Removal   block 5,900,000                                                              
+                  │   ✓ Atlantis           block 8,772,000                                                              
+                  │   ✓ Agharta            block 9,573,000                                                              
+                  │   ✓ Phoenix            block 10,500,839                                                             
+                  │   ✓ ECIP-1099          block 11,700,000                                                             
+                  │   ✓ Magneto            block 13,189,133                                                             
+                  │   ✓ Mystique           block 14,525,000                                                             
+                  │   ✓ Spiral             block 19,250,000                                                             
+                  │   · Olympia            not scheduled on this network                                                
+                  │                                                                                                     
+                  │                                                                                                     
+                  │                                                                                                     
+                  │                                                                                                     
+                  │                                                                                                     
+                  │                                                                                                     
+                  │                                                                                                     
+                  │                                                                                                     
+                  │                                                                                                     
+                  │                                                                                                     
+                  │                                                                                                     
+                  │                                                                                                     
+                  │                                                                                                     
+                  │                                                                                                     
+ 1-9 view  Enter open  Esc back  : prompt  / filter  ? help  p pause  r redraw  d detach  q quit                        

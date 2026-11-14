@@ -1,40 +1,40 @@
  # FUKUII  sepolia (11155111) . PoS . head 7,412,009 . 23/50 peers . up 3d 4h                                  Overview 
 ------------------------------------------------------------------------------------------------------------------------
  x 1 error   CL disconnected: no forkchoiceUpdated for 6m 3s (last VALID)                                               
- Peers   23/50 ##########                    Block  7,412,009 -> 7,412,011 (-2)              Txpool  1,204 (3 blob)     
- RPC     :8545 on   Engine :8551 on          Disk   1.2T free                                JVM     2.1G / 8.0G heap   
-------------------------------------------------------------------------------------------------------------------------
- Sync    regular                                                                              rate 0.08 blk/s . ETA 24s 
-   Blocks   [======================================~o.]@@ 99%   7,412,009 / 7,412,011                                   
-------------------------------------------------------------------------------------------------------------------------
- Consensus layer DISCONNECTED . forkchoiceUpdated 6m 3s ago (VALID) . newPayload 6m 5s ago (VALID)                      
-   head 0x7b3e..a91c   safe 7,411,977   finalized 7,411,945                                                             
-   payloads 184,203 (VALID 184,199 . ACCEPTED 4 . INVALID 0)                                                            
-------------------------------------------------------------------------------------------------------------------------
- Forks (timestamp)                                                                                                      
-   Shanghai + - Cancun + - Prague + - Osaka + - BPO1 + - BPO2 + ========> Amsterdam @ 2026-10-06T13:53:36Z (in 3d 4h)   
-   head 2026-10-03T09:53:36Z . BPO2 since 2025-10-27T23:16:48Z . Amsterdam activates 2026-10-06T13:53:36Z               
-------------------------------------------------------------------------------------------------------------------------
- Node    /var/lib/fukuii/sepolia . SNAP sync . archive pruning . 50 peers max . mining off                              
-------------------------------------------------------------------------------------------------------------------------
- Recent                                                                                                                 
- 11:59:00 WARN  Peer 0x9c0d..77 timed out on GetBlockHeaders, retrying                                                  
- 11:59:04 INFO  Imported block 21,884,099 0x7ab2..d4c7 with 6 txs in 14ms                                               
- 11:59:12 INFO  eth_getWork served for block 21,884,100                                                                 
- 11:59:17 INFO  Imported block 21,884,100 0x3301..2e9d with 21 txs in 31ms                                              
- 11:59:25 INFO  [====================~o]@@ 100% - RegularSync                                                           
- 11:59:30 ERROR Cannot decode a message from 203.0.113.40:30303                                                         
- 11:59:34 INFO  Imported block 21,884,101 0x9b0c..ff31 with 9 txs in 17ms                                               
- 11:59:47 INFO  Imported block 21,884,102 0x6d21..1a0e with 14 txs in 22ms                                              
- 11:59:52 INFO  Peers: 41 handshaked . 14 in . 27 out                                                                   
- 12:00:00 INFO  RegularSync: at head, block 21884102                                                                    
-                                                                                                                        
-                                                                                                                        
-                                                                                                                        
-                                                                                                                        
-                                                                                                                        
-                                                                                                                        
-                                                                                                                        
-                                                                                                                        
-                                                                                                                        
- 1 Overview  2 Sync  3 Peers  4 Chain  5 Logs | p Pause  ? Help  r Redraw  d Detach  q Quit                             
+ sepolia          | Peers   23/50 ##########                    Block  7,412,009 -> 7,412,011 (-2)              Txpoo.. 
+ PoS . id 11155111| RPC     :8545 on   Engine :8551 on          Disk   1.2T free                                JVM  .. 
+                  |-----------------------------------------------------------------------------------------------------
+ [1] Overview     | Sync    regular                                                           rate 0.08 blk/s . ETA 24s 
+ [2] Chain        |   Blocks   [======================================~o.]@@ 99%   7,412,009 / 7,412,011                
+ [3] Peers        |-----------------------------------------------------------------------------------------------------
+ [4] Mempool      | Consensus layer DISCONNECTED . forkchoiceUpdated 6m 3s ago (VALID) . newPayload 6m 5s ago (VALID)   
+ [5] RPC          |   head 0x7b3e..a91c   safe 7,411,977   finalized 7,411,945                                          
+ [6] Storage      |   payloads 184,203 (VALID 184,199 . ACCEPTED 4 . INVALID 0)                                         
+ [7] System       |-----------------------------------------------------------------------------------------------------
+ [8] Logs         | Forks (timestamp)                                                                                   
+ [9] Ops          |   Prague + - Osaka + - BPO1 + - BPO2 + ========> Amsterdam @ 2026-10-06T13:53:36Z (in 3d 4h)        
+                  |   head 2026-10-03T09:53:36Z . Amsterdam activates 2026-10-06T13:53:36Z                              
+                  |-----------------------------------------------------------------------------------------------------
+                  | Node    /var/lib/fukuii/sepolia . SNAP sync . archive pruning . 50 peers max . mining off           
+                  |-----------------------------------------------------------------------------------------------------
+                  | Recent                                                                                              
+                  | 11:59:00 WARN  Peer 0x9c0d..77 timed out on GetBlockHeaders, retrying                               
+                  | 11:59:04 INFO  Imported block 21,884,099 0x7ab2..d4c7 with 6 txs in 14ms                            
+                  | 11:59:12 INFO  eth_getWork served for block 21,884,100                                              
+                  | 11:59:17 INFO  Imported block 21,884,100 0x3301..2e9d with 21 txs in 31ms                           
+                  | 11:59:25 INFO  [====================~o]@@ 100% - RegularSync                                        
+                  | 11:59:30 ERROR Cannot decode a message from 203.0.113.40:30303                                      
+                  | 11:59:34 INFO  Imported block 21,884,101 0x9b0c..ff31 with 9 txs in 17ms                            
+                  | 11:59:47 INFO  Imported block 21,884,102 0x6d21..1a0e with 14 txs in 22ms                           
+                  | 11:59:52 INFO  Peers: 41 handshaked . 14 in . 27 out                                                
+                  | 12:00:00 INFO  RegularSync: at head, block 21884102                                                 
+                  |                                                                                                     
+                  |                                                                                                     
+                  |                                                                                                     
+                  |                                                                                                     
+                  |                                                                                                     
+                  |                                                                                                     
+                  |                                                                                                     
+                  |                                                                                                     
+                  |                                                                                                     
+ 1-9 view  Enter open  Esc back  : prompt  / filter  ? help  p pause  r redraw  d detach  q quit                        

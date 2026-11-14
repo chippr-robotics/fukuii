@@ -1,0 +1,24 @@
+ ◆ FUKUII  etc (61) · PoW · up 12d 7h                                    System 
+────────────────────────────────────────────────────────────────────────────────
+ ✓ no alerts                                                                    
+ Peers   41/50 ◆◆◆◆◆◆◆◆◆◆         Block  21,884,102 (at head)                   
+ Sync    ✓ at head                                                              
+────────────────────────────────────────────────────────────────────────────────
+ System                                                                         
+ Heap    3.4G / 8.0G heap                                                       
+ GC      0.3%                                                                   
+ Discover1,912 known · 14 pending · 3 blacklisted                               
+────────────────────────────────────────────────────────────────────────────────
+ Not built yet: CPU, threads, network throughput, health bars                   
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+ 1-9 view  : prompt  / filter  ? help  p pause  r redraw  d detach  q quit      

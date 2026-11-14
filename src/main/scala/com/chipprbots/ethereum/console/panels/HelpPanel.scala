@@ -10,19 +10,10 @@ import com.chipprbots.ethereum.console.panels.Rows.*
   */
 private[console] object HelpPanel:
 
-  /** Each key and what it does. */
-  val Keys: Seq[(String, String)] = Seq(
-    "1-5" -> "1 Overview  2 Sync  3 Peers  4 Chain  5 Logs",
-    "Tab" -> "the next view (wraps)",
-    "l" -> "the Logs view",
-    "+ -" -> "Logs: + newer lines, - older lines, a page at a time",
-    "? h" -> "this help; any key but q, r and d returns",
-    "p" -> "pause or resume the motion (polling continues)",
-    "g" -> "switch the glyph set: emoji / ascii",
-    "r" -> "redraw the screen",
-    "d" -> "detach: the TUI closes, the node keeps running",
-    "q" -> "quit: stops the node"
-  )
+  /** Each key and what it does: drawn from the table the keys are dispatched from (spec 029 FR-006), so Help lists
+    * exactly the keys that work.
+    */
+  def Keys: Seq[(String, String)] = Bindings.helpRows
 
   def panels(c: Ctx): Seq[Panel] =
     Seq(
@@ -34,7 +25,7 @@ private[console] object HelpPanel:
 
   private def keys(c: Ctx, w: Int): Seq[AttributedString] =
     fit(text(" Keys", c.t.healthy.bold()), w, c.g) +: Keys.map { (key, what) =>
-      fit(concat(text(s"   ${key.padTo(10, ' ')}", c.t.label), text(what, c.t.value)), w, c.g)
+      fit(concat(text(s"   ${key.padTo(11, ' ')}", c.t.label), text(what, c.t.value)), w, c.g)
     }
 
   /** The glyphs the dashboard draws, in the set on screen, packed into rows. */

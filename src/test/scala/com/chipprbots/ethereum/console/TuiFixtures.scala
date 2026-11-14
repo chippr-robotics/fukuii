@@ -20,6 +20,21 @@ import com.chipprbots.ethereum.utils.ForkTimestamps
   */
 object TuiFixtures:
 
+  /** The columns the sidebar and its divider take from the body where it is shown (spec 029 FR-006). */
+  val SidebarCols: Int = widgets.Sidebar.Cols + 1
+
+  /** A row of a `w` × `h` frame without the sidebar's columns (spec 029 FR-006): what the view's panels drew. The
+    * sidebar's text is one column a character, so the cut is by characters.
+    */
+  def body(row: String, w: Int, h: Int): String =
+    if widgets.Sidebar.shown(w, h) then row.drop(widgets.Sidebar.Cols + 1) else row
+
+  /** The rows of a `w` × `h` frame as text, the sidebar's columns cut from the body rows: the header, its separator,
+    * the alert row and the footer span the screen and are kept whole. What a spec that reads a panel's rows wants.
+    */
+  def panelRows(rows: Seq[String], w: Int, h: Int): Seq[String] =
+    rows.zipWithIndex.map((row, i) => if i >= 3 && i < rows.size - 1 then body(row, w, h) else row)
+
   /** The fixtures' "now". */
   val Now: Instant = Instant.parse("2026-11-07T12:00:00Z")
 

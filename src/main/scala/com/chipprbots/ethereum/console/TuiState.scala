@@ -51,9 +51,21 @@ enum Catchup:
   * @param lastAdvanceAt
   *   when the current block last moved; a bar unchanged for [[TuiState.StallAfter]] is stalled
   * @param view
-  *   the view on screen (`1`–`5`, `l`, `Tab`)
+  *   the view on screen (`1`–`9`, `l`, `[`, `]`, the prompt)
   * @param helpOpen
-  *   Help is open over [[view]] (`?`, `h`); any key but `q`, `r` and `d` closes it
+  *   Help is open over [[view]] (`?`, `h`, F1); any key but `q`, `r` and `d` closes it
+  * @param screens
+  *   the screens opened over [[view]] by Enter, the one on screen first; Esc closes it (spec 029 FR-005)
+  * @param overlay
+  *   what has the keyboard instead of the view: the prompt, a filter being typed, a dialog (spec 029 FR-007 to FR-009)
+  * @param selectedPeer
+  *   the id of the Peers list's selected row; kept by id, so the selection follows the peer when the order changes
+  * @param filters
+  *   the `/` filter of each view's list; an absent or empty one shows every row (spec 029 FR-008)
+  * @param promptHistory
+  *   the lines run at the prompt in this session, oldest first
+  * @param notice
+  *   what the last command had to say (an unknown command, a peer not found); it shows in the footer until the next key
   * @param chain
   *   the chain's identity and fork timeline, once the node has read its configuration
   * @param snapshot
@@ -104,7 +116,13 @@ case class TuiState(
     logScroll: Int = 0,
     scores: ScoreHistory = ScoreHistory(),
     hashrateZeroSince: Option[Instant] = None,
-    clSeenSince: Option[Instant] = None
+    clSeenSince: Option[Instant] = None,
+    screens: List[Screen] = Nil,
+    overlay: Overlay = Overlay.None,
+    selectedPeer: Option[String] = None,
+    filters: Map[TuiView, String] = Map.empty,
+    promptHistory: Vector[String] = Vector.empty,
+    notice: Option[String] = None
 ):
 
   import TuiState.*
@@ -254,12 +272,57 @@ case class TuiState(
     * view shows its newest lines.
     */
   def withView(next: TuiView): TuiState =
-    if next == view && !helpOpen then this
-    else if next == view then copy(helpOpen = false)
-    else copy(view = next, helpOpen = false, logScroll = if next == TuiView.Logs then 0 else logScroll).cancelCatchup
+    if next == view && !helpOpen && screens.isEmpty then this
+    else if next == view then copy(helpOpen = false, screens = Nil)
+    else
+      copy(
+        view = next,
+        helpOpen = false,
+        screens = Nil,
+        logScroll = if next == TuiView.Logs then 0 else logScroll
+      ).cancelCatchup
 
-  /** `Tab`: the next view, wrapping. */
+  /** `]`: the next view, wrapping. */
   def nextView: TuiState = withView(view.next)
+
+  /** `[`: the previous view, wrapping. */
+  def previousView: TuiState = withView(view.previous)
+
+  /** The filter of `v`'s list, trimmed; empty when there is none. */
+  def filterOf(v: TuiView): String = filters.getOrElse(v, "").trim
+
+  /** The handshaked peers as the Peers list shows them: highest score first, at the precision the column shows, so
+    * peers it draws alike go by age; the unscored last; then the longest connected. With a filter, only the peers whose
+    * id, address or client contains it.
+    */
+  def orderedPeers: Seq[TuiPeer] =
+    val all = snapshot.flatMap(_.peers.value).getOrElse(Nil)
+    val wanted = filterOf(TuiView.Peers).toLowerCase(java.util.Locale.ROOT)
+    val kept =
+      if wanted.isEmpty then all
+      else
+        val clients = snapshot.flatMap(_.details).flatMap(_.value).getOrElse(Map.empty)
+        all.filter { p =>
+          val text = s"${p.id} ${p.address} ${clients.get(p.id).fold("")(_.clientId)}"
+          text.toLowerCase(java.util.Locale.ROOT).contains(wanted)
+        }
+    kept.sortBy { p =>
+      val units = peerScore(p.id).map(scoreUnits)
+      (units.isEmpty, units.fold(0L)(-_), p.connectedAt, p.id)
+    }
+
+  /** The selected row of the Peers list, if the selected peer is still listed. */
+  def selectedPeerIndex: Option[Int] =
+    selectedPeer.map(id => orderedPeers.indexWhere(_.id == id)).filter(_ >= 0)
+
+  /** The log lines the Logs view lists: all of them, or with a filter the ones whose text or logger contains it. */
+  def visibleLogs: Vector[LogLine] =
+    val wanted = filterOf(TuiView.Logs).toLowerCase(java.util.Locale.ROOT)
+    if wanted.isEmpty then logs
+    else logs.filter(l => s"${l.level} ${l.logger} ${l.text}".toLowerCase(java.util.Locale.ROOT).contains(wanted))
+
+  /** The screen opened over the view, if any. */
+  def screen: Option[Screen] = if helpOpen then None else screens.headOption
 
   /** `?`, `h`: Help over the current view; it cancels a catch-up on screen, as a view change does. */
   def openHelp: TuiState = copy(helpOpen = true).cancelCatchup
@@ -293,7 +356,7 @@ case class TuiState(
   def scrollLogs(lines: Int, page: Int): TuiState =
     // A scroll the arrival of new lines carried past the bound counts as the bound: the first `+` moves a page from the
     // oldest page, not from a place no key reaches (prism, slice 4 review).
-    val bound = (logs.size - page.max(1)).max(0)
+    val bound = (visibleLogs.size - page.max(1)).max(0)
     copy(logScroll = (logScroll.min(bound) + lines).max(0).min(bound))
 
   /** A peer's score in the latest published snapshot; none for a peer it does not have, never zero (Q5), and none for a
@@ -316,7 +379,12 @@ case class TuiState(
       case _          => Trend.Steady
 
   /** The view's name, as the header shows it. */
-  def viewTitle: String = if helpOpen then "Help" else view.title
+  def viewTitle: String =
+    if helpOpen then "Help"
+    else
+      screen match
+        case Some(Screen.PeerDetail(_)) => "Peer"
+        case None                       => view.title
 
   /** SNAP's pivot block, while SNAP's rows are on screen: the Block cell's target and the fork timeline's position
     * then, since the sync controller reports no block target and the local best block is far behind (B-044).
