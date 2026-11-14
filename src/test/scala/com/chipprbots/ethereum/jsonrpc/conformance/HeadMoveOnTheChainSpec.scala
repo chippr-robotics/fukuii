@@ -1428,9 +1428,32 @@ class HeadMoveOnTheChainSpec extends ScalaTestWithActorTestKit with AnyFlatSpecL
       )
       val chain = blocks.take(41)
       chain.foreach(on.imports)
-      val recovery = new on.Recovery(maxBlocks = 1)
+      // seen while 43' is committed: how far the adoption has got, and what the safe tag names
+      val seen = new java.util.concurrent.ConcurrentLinkedQueue[(Option[StateRecovery.Progress], BigInt)]()
+      lazy val tags = new com.chipprbots.ethereum.jsonrpc.ResolveBlock:
+        def blockchain = on.node.blockchain
+        def blockchainReader = on.reader
+        def mining = on.node.mining
+        override def forkChoiceManagerOpt: Option[ForkChoiceManager] = Some(on.node.forkChoiceManager)
+      def safeNow: BigInt =
+        tags
+          .resolveBlock(com.chipprbots.ethereum.jsonrpc.BlockParam.Safe)
+          .map(_.block.header.number.value)
+          .getOrElse(BigInt(-1))
+      lazy val recovery: on.Recovery = new on.Recovery(
+        maxBlocks = 1,
+        adopting = _ => seen.add((recovery.adoption, safeNow))
+      )
       val (newPayload, choose) = recoveringEngine(on, recovery)
-      statusOf(choose(chain.last)) shouldBe PayloadStatus.Valid
+      // followed with 41 as its safe block and 39, the fork, finalized: a head on the branch holds it
+      on.engine(() => on.pathState.anchor.map(_.hash), recovery = Some(recovery))
+        .forkchoiceUpdated(
+          ForkChoiceState(chain.last.header.hash.value, chain.last.header.hash.value, chain(38).header.hash.value),
+          None
+        )
+        .unsafeRunSync()(using cats.effect.unsafe.IORuntime.global)
+        .map(_.payloadStatus.status) shouldBe Right(PayloadStatus.Valid)
+      safeNow shouldBe 41
       val side = sideFrom39
       side.take(4).foreach(block => newPayload(block).status shouldBe PayloadStatus.Valid)
       on.pathState.stateAvailable(refOf(side(3).header)) shouldBe false
@@ -1440,6 +1463,14 @@ class HeadMoveOnTheChainSpec extends ScalaTestWithActorTestKit with AnyFlatSpecL
       recovery.outcomes.last shouldBe a[StateRecovery.Outcome.Invalid]
       // 43' was committed across the fork, 44' found invalid: the head is back on 41, the head followed
       recovery.adoptedBlocks shouldBe Seq(BigInt(43))
+      // while the head was on the branch: the adoption from 41 to 44', at 42' then 43'; the safe block 41, which the
+      // head had left, was named by where the two chains meet, 39 (part 4b)
+      seen.toArray(Array.empty[(Option[StateRecovery.Progress], BigInt)]).toSeq shouldBe Seq(
+        (Some(StateRecovery.Progress(39, 42, 44)), BigInt(39)),
+        (Some(StateRecovery.Progress(39, 43, 44)), BigInt(39))
+      )
+      recovery.adoption shouldBe None
+      safeNow shouldBe 41
       on.holds(chain.last.header, chain)
       val chosen = choose(bad).toOption.get.payloadStatus
       chosen.status shouldBe PayloadStatus.Invalid
@@ -1640,13 +1671,58 @@ class HeadMoveOnTheChainSpec extends ScalaTestWithActorTestKit with AnyFlatSpecL
     val side = sideFrom39
     side.take(4).foreach(block => newPayload(block).status shouldBe PayloadStatus.Valid)
     newPayload(side(4)).status shouldBe PayloadStatus.Accepted
+    // the payload's own recovery is over
+    recovery.outcomes
     val before = on.everything
-    statusOf(choose(side(4))) shouldBe PayloadStatus.Syncing
-    recovery.outcomes.last shouldBe a[StateRecovery.Outcome.NotAdopted]
+    val asked = recovery.tickets.size
+    // the fork choice to its tip, a head never executed, is not consistent with the finalized block: -38002, and no
+    // adoption is asked for (part 4b, the user's decision)
+    choose(side(4)).left.toOption.getOrElse("") should startWith("invalid forkchoice state")
+    recovery.tickets.size shouldBe asked
+    // asked all the same, the adoption refuses before anything moves
+    val named = new StateRecovery.Sink:
+      def executed(
+          block: Block,
+          receipts: Seq[com.chipprbots.ethereum.domain.Receipt],
+          accessList: Option[com.chipprbots.ethereum.domain.BlockAccessList]
+      ): Unit = ()
+      def rejected(block: Block, error: BlockExecutionError, above: List[Block]): Unit = fail("rejected")
+      override def requestedHead: Option[ByteString] = Some(side(4).header.hash.value)
+    recovery
+      .requestFor(side(4).header.hash.value, named, "a test", StateRecovery.Authority.ForkChoice)
+      .outcome
+      .get(60, java.util.concurrent.TimeUnit.SECONDS) shouldBe a[StateRecovery.Outcome.NotAdopted]
     recovery.adoptedBlocks shouldBe empty
     on.everything shouldBe before
     on.holds(chain.last.header, chain)
   }
+
+  "A fork choice to a head never executed" should "be -38002 when its chain names another block below the finalized one, and not when its chain is not known there" taggedAs
+    (UnitTest, ConsensusTest) in {
+      val on = new Node
+      val chain = blocks.take(41)
+      chain.foreach(on.imports)
+      val engine = on.engine(() => on.pathState.anchor.map(_.hash))
+      given cats.effect.unsafe.IORuntime = cats.effect.unsafe.IORuntime.global
+      def choose(head: Block) = engine.forkchoiceUpdated(choiceTo(head), None).unsafeRunSync()
+      engine
+        .forkchoiceUpdated(choiceTo(chain.last, chain(39).header.hash.value), None)
+        .unsafeRunSync()
+        .map(_.payloadStatus.status) shouldBe Right(PayloadStatus.Valid)
+      // a block at 39, below the finalized 40, beside the 39 the index names: stored and never executed
+      val beside = siblingOf(chain(38))
+      on.writer.storeBlockByHashOnly(beside).commit()
+      choose(beside).left.toOption.getOrElse("") should startWith("invalid forkchoice state")
+      // a block whose parent is not known: its chain says nothing of the finalized block
+      val unknown = blocks(44).pipe(b =>
+        b.copy(header = b.header.copy(parentHash = com.chipprbots.ethereum.domain.BlockHash(unknownHash(5))))
+      )
+      on.writer.storeBlockByHashOnly(unknown).commit()
+      statusOf(choose(unknown)) shouldBe PayloadStatus.Syncing
+      // with nothing named at 39 (a resync from an older checkpoint), the block beside it says nothing either
+      on.dropIndex(39)
+      statusOf(choose(beside)) shouldBe PayloadStatus.Syncing
+    }
 
   "Whether a state is held" should "say so of the anchor, a block behind it, an executed block and one on it, a side block behind the anchor, and of nothing else" taggedAs
     (UnitTest, ConsensusTest) in {

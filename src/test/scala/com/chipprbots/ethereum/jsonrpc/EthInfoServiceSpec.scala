@@ -95,6 +95,46 @@ class EthServiceSpec
 
     response shouldEqual Right(SyncingResponse(None))
 
+  // spec 018 C4d part 4b: the adoption of a long branch on the unified layout moves the head block by block to the
+  // branch's tip; meanwhile the node is syncing to it, whatever its sync controller says
+  it should "return the adoption of a long branch as syncing, while it runs" taggedAs (
+    UnitTest,
+    RPCTest
+  ) in new TestSetup:
+    syncingController.setAutoPilot(syncStatusAutoPilot(SyncProtocol.Status.SyncDone))
+    @volatile var adoption: Option[com.chipprbots.ethereum.ledger.StateRecovery.Progress] =
+      Some(com.chipprbots.ethereum.ledger.StateRecovery.Progress(start = 41, current = 42, target = 44))
+    val adopting = new EthInfoService(
+      blockchain,
+      blockchainReader,
+      blockchainConfig,
+      mining,
+      stxLedger,
+      keyStore,
+      syncingController.ref.toTyped[SyncController.Command],
+      Capability.ETH63,
+      Timeouts.shortTimeout,
+      system.scheduler,
+      adoption = () => adoption
+    )
+
+    adopting.syncing(SyncingRequest()).unsafeRunSync() shouldEqual Right(
+      SyncingResponse(
+        Some(
+          EthInfoService.SyncingStatus(
+            startingBlock = 41,
+            currentBlock = 42,
+            highestBlock = 44,
+            knownStates = 0,
+            pulledStates = 0
+          )
+        )
+      )
+    )
+    // and once it is over, the sync controller answers again
+    adoption = None
+    adopting.syncing(SyncingRequest()).unsafeRunSync() shouldEqual Right(SyncingResponse(None))
+
   it should "execute call and return a value" taggedAs (UnitTest, RPCTest) in new TestSetup:
     blockchainWriter.storeBlock(blockToRequest).commit()
     blockchainWriter.saveBestKnownBlocks(blockToRequest.hash, blockToRequest.number.value)

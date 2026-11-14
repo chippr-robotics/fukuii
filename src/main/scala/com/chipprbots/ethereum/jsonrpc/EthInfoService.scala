@@ -142,7 +142,10 @@ class EthInfoService(
     askTimeout: Timeout,
     scheduler: Scheduler,
     // go-ethereum --rpc.gascap: the gas of a call that names none, and the most any call or estimate may use. 0 = no cap
-    gasCap: BigInt = CallTxBuilder.DefaultGasCap
+    gasCap: BigInt = CallTxBuilder.DefaultGasCap,
+    // On the unified state layout, the adoption of a long branch under way (spec 018 C4d part 4b): the head walks down
+    // to the fork and up the branch meanwhile, and this node is syncing to it. None elsewhere.
+    adoption: () => Option[com.chipprbots.ethereum.ledger.StateRecovery.Progress] = () => None
 ) extends ResolveBlock:
 
   import EthInfoService.*
@@ -161,6 +164,27 @@ class EthInfoService(
     *   The syncing status if the node is syncing or None if not
     */
   def syncing(@unused req: SyncingRequest): ServiceResponse[SyncingResponse] =
+    adoption() match
+      case Some(progress) =>
+        // the head is being moved, block by block, to a branch's tip: what a reader sees of it is not the head yet
+        IO.pure(
+          Right(
+            SyncingResponse(
+              Some(
+                SyncingStatus(
+                  startingBlock = progress.start,
+                  currentBlock = progress.current,
+                  highestBlock = progress.target,
+                  knownStates = 0,
+                  pulledStates = 0
+                )
+              )
+            )
+          )
+        )
+      case None => syncingFromTheController
+
+  private def syncingFromTheController: ServiceResponse[SyncingResponse] =
     syncingController
       .askForTyped[SyncProtocol.Status](replyTo => SyncController.WrappedSyncProtocol(SyncProtocol.GetStatus(replyTo)))(
         using
