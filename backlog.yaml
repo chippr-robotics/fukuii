@@ -2986,7 +2986,7 @@ items:
   - id: B-260
     title: Publish releases to the Launchpad PPA ppa:chipprbots/fukuii (noble, jammy)
     priority: P2
-    status: claimed
+    status: in-progress
     area: ci
     size: M
     opened: 2026-11-14
@@ -2997,5 +2997,5 @@ items:
       by: dev-node
       agent: claude-opus
       since: 2026-11-14T16:05:34Z
-      heartbeat: 2026-11-14T16:05:34Z
+      heartbeat: 2026-11-14T16:05:41Z
     notes: "Signed source upload of the release tarball; key in the launchpad-ppa environment. User steps: bot LP account in ~chipprbots, register the key."
