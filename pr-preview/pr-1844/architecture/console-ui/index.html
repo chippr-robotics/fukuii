@@ -6792,7 +6792,10 @@ says (<code>read 1m 35s ago</code>). Under a long write the figures are of a whi
   ones are counted and not listed, and so are the ones a short terminal has no rows for.</li>
 <li><strong>Integrity.</strong> The node's own marks, in words that say what each vouches for and no more: the state layout,
   whether SNAP (or a checkpoint) is marked done, the heal invariant, a checkpoint import running or interrupted, a
-  code scan or an audit pass owed, whether the reference counts are exact, and the chain-weight invariant. Then the
+  code scan or an audit pass owed, whether the reference counts are exact, and the chain-weight invariant. A mark
+  that only a SNAP sync stamps reads <code>not marked (a SNAP start stamps it; none has run)</code> on a node that never ran one:
+  that is not a fault. The reference counts' row is the one that costs something when it is not <code>exact</code>: without
+  that stamp a prune deletes no trie node, so the state's stores grow without reclaim, and the row says so. Then the
   background audit, asked what it has walked: it counts nodes and does not know the whole until it ends, so there is
   no percentage. Reading them writes nothing.</li>
 <li>This client has no freezer for old blocks and expires no history; the view says so.</li>
