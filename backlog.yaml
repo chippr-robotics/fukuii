@@ -3228,13 +3228,18 @@ items:
   - id: B-280
     title: "Spec 029 slice 7: operator actions on the --tui dashboard (Ops view, dialogs by class, audit log, the admin functions made true)"
     priority: P2
-    status: open
+    status: claimed
     area: tui
     size: L
     opened: 2026-11-14
     refs: []
     links:
       spec: 029
+    claim:
+      by: cloud-ccr-452bbde8
+      agent: main
+      since: 2026-11-14T22:18:42Z
+      heartbeat: 2026-11-14T22:18:42Z
   - id: B-281
     title: "RocksDbDataSource: a manual compaction that does not hold the database lock (compactionGuard, per family, cancellable), then the TUI's compact action"
     priority: P2
