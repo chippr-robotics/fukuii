@@ -11,6 +11,7 @@ import scala.util.Failure
 import scala.util.Success
 
 import com.chipprbots.ethereum.jsonrpc.JsonRpcHealthChecker
+import com.chipprbots.ethereum.jsonrpc.RpcCallStats
 import com.chipprbots.ethereum.jsonrpc.graphql.GraphQLService
 import com.chipprbots.ethereum.jsonrpc.server.controllers.JsonRpcBaseController
 import com.chipprbots.ethereum.jsonrpc.server.http.JsonRpcHttpServer.JsonRpcHttpServerConfig
@@ -41,10 +42,14 @@ class SecureJsonRpcHttpServer(
           case Success(serverBinding) => log.info(s"JSON RPC HTTPS server listening on ${serverBinding.localAddress}")
           case Failure(ex)            => log.error("Cannot start JSON HTTPS RPC server", ex)
         }
+        // Whether it bound, for the dashboard's RPC view (spec 029 FR-039).
+        bindingResultF.onComplete(bound => RpcCallStats.Node.listening(RpcCallStats.Http, bound.isSuccess))
 
         bindingResultF
       case Left(error) =>
         log.error(s"Cannot start JSON HTTPS RPC server due to: $error")
+        // It will not listen: said for the dashboard's RPC view (spec 029 FR-039).
+        RpcCallStats.Node.listening(RpcCallStats.Http, isListening = false)
         throw new IllegalStateException(error.reason)
 
   override def corsAllowedOrigins: HttpOriginMatcher = config.corsAllowedOrigins

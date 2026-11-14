@@ -272,9 +272,13 @@ class JsonRpcHttpServerSpec
       jsonRpcResponse.jsonrpc shouldEqual jsonRpc
       jsonRpcResponse.id shouldEqual JInt(id)
     }
+    // Spec 029 FR-039: the refusal is counted for the dashboard, and is what it was. The first request, which
+    // passed, was not counted.
+    val refusedBefore = com.chipprbots.ethereum.jsonrpc.RpcCallStats.Node.snapshot.rateLimited
     postRequest ~> Route.seal(mockJsonRpcHttpServerWithRateLimit.route) ~> check {
       status shouldEqual StatusCodes.TooManyRequests
     }
+    com.chipprbots.ethereum.jsonrpc.RpcCallStats.Node.snapshot.rateLimited shouldBe refusedBefore + 1
 
   it should "return method not allowed error for batch request with ip-restriction enabled" taggedAs (
     UnitTest,

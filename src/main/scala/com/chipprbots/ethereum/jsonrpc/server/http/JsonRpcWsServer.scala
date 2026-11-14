@@ -35,6 +35,7 @@ import org.json4s.native.Serialization
 
 import com.chipprbots.ethereum.jsonrpc.JsonRpcError
 import com.chipprbots.ethereum.jsonrpc.JsonRpcRequest
+import com.chipprbots.ethereum.jsonrpc.RpcCallStats
 import com.chipprbots.ethereum.jsonrpc.SubscriptionManager
 import com.chipprbots.ethereum.jsonrpc.SubscriptionManager.*
 import com.chipprbots.ethereum.jsonrpc.serialization.JsonSerializers
@@ -104,6 +105,8 @@ class JsonRpcWsServer(
       case Success(b)  => log.info(s"JSON RPC WS server listening on ${b.localAddress}")
       case Failure(ex) => log.error("Cannot start JSON RPC WS server", ex)
     }
+    // Whether it bound, for the dashboard's RPC view (spec 029 FR-039).
+    bindingF.onComplete(bound => RpcCallStats.Node.listening(RpcCallStats.Ws, bound.isSuccess))
 
   private def buildWsFlow(): Flow[Message, Message, Any] =
     val connId = UUID.randomUUID().toString

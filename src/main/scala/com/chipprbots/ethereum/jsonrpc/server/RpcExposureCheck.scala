@@ -22,11 +22,18 @@ object RpcExposureCheck:
   /** One JSON-RPC endpoint: `name` for the message, `key` the config key (`http`, `ws`) of its `apis` list. */
   final case class Transport(name: String, key: String, enabled: Boolean, interface: String, apis: Seq[String])
 
+  /** The sensitive namespaces `transport` serves to other hosts: none unless it is enabled, serves one and is not bound
+    * to loopback. The rule of [[warnings]], and what the dashboard's RPC view shows (spec 029 FR-039).
+    */
+  def exposedNamespaces(transport: Transport): Seq[String] =
+    val sensitive = SensitiveNamespaces.filter(transport.apis.contains)
+    if transport.enabled && sensitive.nonEmpty && !isLoopback(transport.interface) then sensitive else Nil
+
   /** One warning for each enabled endpoint that is not bound to loopback and serves a sensitive namespace. */
   def warnings(transports: Seq[Transport]): Seq[String] =
     transports.flatMap { transport =>
-      val exposed = SensitiveNamespaces.filter(transport.apis.contains)
-      if transport.enabled && exposed.nonEmpty && !isLoopback(transport.interface) then
+      val exposed = exposedNamespaces(transport)
+      if exposed.nonEmpty then
         Some(
           s"JSON-RPC ${transport.name} is bound to '${transport.interface}', which is not a loopback address, and " +
             s"serves ${exposed.mkString(", ")}. Those namespaces can unlock accounts, change node settings or reveal " +

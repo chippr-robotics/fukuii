@@ -61,6 +61,10 @@ class JsonRpcIpcServerSpec extends AnyFlatSpec with Matchers:
     }
   }
 
+  private def ipcListening: Option[Boolean] =
+    import com.chipprbots.ethereum.jsonrpc.RpcCallStats
+    RpcCallStats.Node.snapshot.listening.get(RpcCallStats.Ipc)
+
   "JsonRpcIpcServer.run" should "bind a socket that only its owner can read and write" taggedAs (UnitTest, RPCTest) in {
     assume(posixFileSystem, "needs a POSIX file system")
     withTempDir { dir =>
@@ -72,6 +76,9 @@ class JsonRpcIpcServerSpec extends AnyFlatSpec with Matchers:
         server.run()
         Files.exists(socket) shouldBe true
         Files.getPosixFilePermissions(socket) shouldBe ownerOnly
+        // Spec 029 FR-039: the server says it is bound, for the dashboard's RPC view, and that it closed.
+        ipcListening shouldBe Some(true)
       finally server.close()
+      ipcListening shouldBe Some(false)
     }
   }

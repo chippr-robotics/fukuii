@@ -8,6 +8,7 @@ import scala.util.Failure
 import scala.util.Success
 
 import com.chipprbots.ethereum.jsonrpc.*
+import com.chipprbots.ethereum.jsonrpc.RpcCallStats
 import com.chipprbots.ethereum.jsonrpc.graphql.GraphQLService
 import com.chipprbots.ethereum.jsonrpc.server.controllers.JsonRpcBaseController
 import com.chipprbots.ethereum.jsonrpc.server.http.JsonRpcHttpServer.JsonRpcHttpServerConfig
@@ -31,6 +32,8 @@ class InsecureJsonRpcHttpServer(
       case Success(serverBinding) => log.info(s"JSON RPC HTTP server listening on ${serverBinding.localAddress}")
       case Failure(ex)            => log.error("Cannot start JSON HTTP RPC server", ex)
     }
+    // Whether it bound, for the dashboard's RPC view (spec 029 FR-039).
+    bindingResultF.onComplete(bound => RpcCallStats.Node.listening(RpcCallStats.Http, bound.isSuccess))
 
     bindingResultF
 

@@ -1030,7 +1030,12 @@ trait EngineApiBuilder extends Logger:
   // The controller's fork gates read the same schedule its service executes with (not the process-global config, which
   // a ChainInstance with its own InstanceConfig does not share).
   lazy val engineApiController: EngineApiController =
-    new EngineApiController(engineApiService, Some(jsonRpcController), blockchainConfig)
+    // The pass-through's calls are counted as the Engine port's, for the dashboard (spec 029 FR-038).
+    new EngineApiController(
+      engineApiService,
+      Some(jsonRpcController.onTransport(com.chipprbots.ethereum.jsonrpc.RpcCallStats.Engine)),
+      blockchainConfig
+    )
 
   /** Bind the p2p import path's invalid-chain channel to this node's Engine API registry. Called once, from
     * `StdNode.start()`, before sync begins.
