@@ -2966,3 +2966,14 @@ items:
       spec: specs/029-tui-command-center
     depends_on: [B-257]
     notes: tasks T046, T049, T050 (charts wait for slice 3's first chart).
+  - id: B-259
+    title: "TUI pixel mode: free the least recently shown images instead of holding every sprite frame until a clear"
+    priority: P3
+    status: open
+    area: tui
+    size: S
+    opened: 2026-11-14
+    refs: ["prism review of 029 slice 2a, 2026-11-14"]
+    links:
+      spec: specs/029-tui-command-center
+    notes: console/gfx/PixelLayer.images only grows while pixel mode stays on. At scale 4 the mascot's 28 frames are about 112 MB at the terminal; kitty's quota is about 320 MB, and an evicted image would stay 'known' and blank until the next clear.
