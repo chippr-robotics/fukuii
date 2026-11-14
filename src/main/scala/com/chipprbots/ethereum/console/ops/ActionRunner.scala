@@ -43,12 +43,7 @@ final class ActionRunner(
 ):
   import ActionRunner.*
 
-  private val state = new AtomicReference(ActionsView())
-
   private val byName: Map[String, ActionSpec] = specs.map(s => s.name -> s).toMap
-
-  /** What the frame loop reads. */
-  def view: ActionsView = state.get
 
   /** Why `action` cannot be run on this node, if it cannot: there is no such action, it is not offered here, or the
     * dashboard is read-only and the action changes something.
@@ -58,9 +53,16 @@ final class ActionRunner(
       case None => Some(s"there is no action '$action'")
       case Some(spec) =>
         if readOnly && spec.risk != RiskClass.Observe then Some(ReadOnly)
-        else if !handlers.contains(action) then
-          Some(unavailable.getOrElse(action, "not offered on this node"))
+        else if !handlers.contains(action) then Some(unavailable.getOrElse(action, "not offered on this node"))
         else None
+
+  // What the Ops view says of each action that cannot be run here, from the start.
+  private val state = new AtomicReference(
+    ActionsView(unavailable = specs.flatMap(s => refusal(s.name).map(s.name -> _)).toMap)
+  )
+
+  /** What the frame loop reads. */
+  def view: ActionsView = state.get
 
   /** Reads what `request` would change, off the frame loop, and publishes it. Asked again, it reads again: a dialog
     * that stays open asks every poll, so what it shows is never older than that (FR-050).

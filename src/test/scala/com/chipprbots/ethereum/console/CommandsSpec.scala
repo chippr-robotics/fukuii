@@ -15,7 +15,7 @@ class CommandsSpec extends AnyFlatSpec with Matchers:
   }
 
   it should "read the fixed commands and their arguments" taggedAs (UnitTest) in {
-    Commands.parse("quit") shouldBe Command.Quit
+    Commands.parse("quit") shouldBe Command.Act(TuiFixtures.Quit)
     Commands.parse("detach") shouldBe Command.Detach
     Commands.parse("help") shouldBe Command.Help
     Commands.parse("peer 0xab12") shouldBe Command.OpenPeer("0xab12")
@@ -39,7 +39,9 @@ class CommandsSpec extends AnyFlatSpec with Matchers:
   }
 
   "complete" should "finish a word only one command starts with, and go as far as several agree" taggedAs (UnitTest) in {
-    Commands.complete("m") shouldBe "mempool"
+    Commands.complete("me") shouldBe "mempool"
+    Commands.complete("m") shouldBe "m" // mempool, maxpeers and mining agree on no more
+    Commands.complete("thr") shouldBe "threshold "
     Commands.complete("ov") shouldBe "overview"
     Commands.complete("gl") shouldBe "glyphs "
     Commands.complete("p") shouldBe "peer" // peers, peer

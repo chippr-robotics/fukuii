@@ -756,6 +756,22 @@ object TuiFixtures:
       )
     )
 
+  // ---- Operator actions (spec 029 slice 7) -------------------------------------------------------------------------
+
+  val Quit: ops.ActionRequest = ops.ActionRequest(ops.Actions.Quit.name)
+
+  /** The dialog `q` opens on `state`: stopping the node is a Halt, and what stops with it is its preview. */
+  def quitDialog(state: TuiState): Overlay =
+    Overlay.Dialog(
+      DialogKind.Confirm(Quit, ops.RiskClass.Halt, Some(ops.Preview(widgets.DialogBox.quitLines(state))))
+    )
+
+  /** `state` with that dialog open. */
+  def askedToQuit(state: TuiState): TuiState = state.copy(overlay = quitDialog(state))
+
+  /** The keys that confirm a Halt: its word, then Enter. */
+  val HaltKeys: Seq[Key] = ops.Actions.HaltWord.map(Key.Char(_)) :+ Key.Enter
+
   // ---- Storage, System and health (spec 029 slice 6) ---------------------------------------------------------------
 
   private val MiB: Long = 1024L * 1024

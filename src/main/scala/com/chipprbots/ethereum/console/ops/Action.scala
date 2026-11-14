@@ -25,7 +25,7 @@ enum RiskClass(val label: String, val meaning: String):
   * @param usage
   *   the command as it is typed, with its parameters
   * @param changes
-  *   what it changes, in a sentence
+  *   what it changes, in under fifty characters: the Ops view says it whole at 80 columns or not at all
   * @param undo
   *   how it is undone, or that there is nothing to undo
   */
@@ -76,13 +76,15 @@ final case class ActionRecord(request: ActionRequest, outcome: ActionOutcome, at
 final case class ActionReport(lines: Vector[String], at: Instant)
 
 /** What the frame loop reads of the actions (it reads, and never waits): the previews asked for, what is running, what
-  * has ended this session, newest last, and what the Observe actions last found, by action.
+  * has ended this session, newest last, what the Observe actions last found, by action, and why each action that is
+  * not offered on this node is not.
   */
 final case class ActionsView(
     previews: Map[ActionRequest, Preview] = Map.empty,
     running: Vector[ActionActivity] = Vector.empty,
     history: Vector[ActionRecord] = Vector.empty,
-    reports: Map[String, ActionReport] = Map.empty
+    reports: Map[String, ActionReport] = Map.empty,
+    unavailable: Map[String, String] = Map.empty
 ):
   def isRunning(action: String): Boolean = running.exists(_.request.action == action)
 

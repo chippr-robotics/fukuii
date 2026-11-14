@@ -17,17 +17,17 @@
  [2] Chain        |   0x11a2..9b  out  besu/v24.1.2          21,884,100  0.930  v      1h 43m                                                                   
  [3] Peers        |   0x1a73..98  in   Nethermind/v1.25.4    21,884,102  0.920  ^      30m 57s                                                                  
  [4] Mempool      |   0x1715..16  out  CoreGeth/v1.12.19     21,884,100  0.900  v      3h 41m                                                                   
- [5] RPC          |   0x1fe6..13  in   fukuii/v0.11.0        21,884,102  0.890  ^      2h 28m                                                                   
- [6] Storage      |   0x28b7..10  out  besu/v24.1.2          21,884,101  0.880  -      1h 15m                                                                   
- [7] System       |                                   ----------------------------------------------------------------------                                    
- [8] Logs         |                                   Stop this node?                                                                                           
- [9] Ops          |                                   The node process ends: block import, its peers and every RPC client.                                      
-                  |                                   Mining stops.                                                                                             
+ [5] RPC          |                                   ----------------------------------------------------------------------                                    
+ [6] Storage      |                                   Stop this node?                                                                                           
+ [7] System       |                                   The node process ends: block import stops and every peer is                                               
+ [8] Logs         |                                   disconnected.                                                                                             
+ [9] Ops          |                                   Mining stops.                                                                                             
+                  |                                   Every RPC client loses its connection: HTTP.                                                              
  graphics text    |                                   The TUI cannot start the node again.                                                                      
+                  |                                   Undo: start the node again, from outside the dashboard.                                                   
                   |                                                                                                                                             
-                  |                                   y  stop the node      n or Esc  cancel                                                                    
+                  |                                   type stop then Enter: _      Esc  cancel                                                                  
                   |                                   ----------------------------------------------------------------------                                    
-                  | 11:58:34 INFO  RegularSync: current=21884097 best=21884102 lag=5                                                                            
                   | 11:58:47 INFO  Imported block 21,884,098 0x1f09..88a1 with 17 txs in 26ms                                                                   
                   | 11:59:00 WARN  Peer 0x9c0d..77 timed out on GetBlockHeaders, retrying                                                                       
                   | 11:59:04 INFO  Imported block 21,884,099 0x7ab2..d4c7 with 6 txs in 14ms                                                                    

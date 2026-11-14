@@ -4,37 +4,37 @@
                   │ Peers   41/50 ◆◆◆◆◆◆◆◆◆◆  Block  21,884,102 (at head)                    Txpool  142                
                   │ Sync    ✓ at head                                                                                   
                   │─────────────────────────────────────────────────────────────────────────────────────────────────────
-                  │ Ops                                                                                                 
-       ETC        │ Mode    actions allowed                                                                             
-                  │ q       ask to stop the node                                                                        
-                  │ d       detach the TUI; the node keeps running                                                      
+                  │ Mode    actions allowed · each is confirmed in its dialog                                           
+       ETC        │ Running nothing                                                                                     
                   │─────────────────────────────────────────────────────────────────────────────────────────────────────
- etc              │ Not built yet: log levels, peers, mining, RPC servers, configuration                                
- PoW · id 61      │                                                                                                     
- main network     │                                                                                                     
-                  │                                                                                                     
- [1] Overview     │                                                                                                     
- [2] Chain        │                                                                                                     
- [3] Peers        │                                                                                                     
- [4] Mempool      │                                                                                                     
- [5] RPC          │                                                                                                     
- [6] Storage      │                                                                                                     
- [7] System       │                                                                                                     
- [8] Logs         │                                                                                                     
- [9] Ops          │                                                                                                     
-                  │                                                                                                     
- graphics text    │                                                                                                     
-                  │                                                                                                     
-                  │                                                                                                     
-                  │                                                                                                     
-                  │                                                                                                     
-                  │                                                                                                     
-                  │                                                                                                     
-                  │                                                                                                     
-                  │                                                                                                     
-                  │                                                                                                     
-                  │                                                                                                     
-                  │                                                                                                     
-                  │                                                                                                     
-                  │                                                                                                     
+                  │ Actions 25, by what they can break · Up and Down select · Enter or a types one at the prompt        
+                  │   Observe  config        the effective configuration, secrets hidden                                
+ etc              │   Observe  tunables      what changes without a restart, as it is now                               
+ PoW · id 61      │   Observe  deps          each subsystem, what it needs, its health                                  
+ main network     │   Observe  test-rpc      calls each RPC endpoint here: answer and time                              
+                  │   Observe  net           listening and external addresses, inbound peers                            
+ [1] Overview     │   Observe  art           every sprite                                                               
+ [2] Chain        │   Observe  lookup        a block, a transaction, a receipt or an account                            
+ [3] Peers        │   Adjust   loglevel      a logger's level, until the node restarts                                  
+ [4] Mempool      │   Adjust   maxpeers      the limit on outgoing peers, until restart                                 
+ [5] RPC          │   Adjust   peer trust    a peer is trusted: exempt from pruning                                     
+ [6] Storage      │   Adjust   peer untrust  a peer stops being trusted                                                 
+ [7] System       │   Adjust   threshold     where an alert begins, for this session                                    
+ [8] Logs         │   Disrupt  peer add      the node dials a peer and keeps dialling it                                
+ [9] Ops          │   Disrupt  peer drop     a peer is disconnected; it may reconnect                                   
+                  │   Disrupt  peer block    an address is refused until restart                                        
+ graphics text    │   Disrupt  peer unblock  an address stops being refused                                             
+                  │   Disrupt  mining start  the node's own miner starts (ETC)                                          
+                  │   Halt     mining stop   the node's own miner stops until restart (ETC)                             
+                  │   Disrupt  coinbase      the address mined blocks pay from now on (ETC)                             
+                  │   Disrupt  rpc stop      a JSON-RPC server stops; its connections drop                              
+                  │   Disrupt  rpc start     a server that was stopped here listens again                               
+                  │   Disrupt  dbcheck       the start's database check, run now; it reports                            
+                  │   Disrupt  detect-ip     asks outside services for this node's address                              
+                  │   Disrupt  bundle        writes a support bundle under the datadir                                  
+                  │   Halt     quit          the node process ends                                                      
+                  │─────────────────────────────────────────────────────────────────────────────────────────────────────
+                  │ Last    no action has been attempted in this session                                                
+                  │─────────────────────────────────────────────────────────────────────────────────────────────────────
+                  │ Not offered, and why                                                                                
  1-9 view  Enter open  Esc back  : prompt  / filter  ? help  p pause  r redraw  d detach  q quit                        

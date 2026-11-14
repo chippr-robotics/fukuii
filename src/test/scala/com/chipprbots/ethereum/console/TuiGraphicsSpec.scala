@@ -252,7 +252,8 @@ class TuiGraphicsSpec extends AnyFlatSpec with Matchers with OptionValues:
   it should "outlive it after q, confirmed" taggedAs (UnitTest) in
     leftBy { (tui, tt) =>
       tui.handleKey(Key.Char('q')) shouldBe TuiCommand.Continue
-      tui.handleKey(Key.Char('y')) shouldBe TuiCommand.Quit
+      TuiFixtures.HaltKeys.init.foreach(key => tui.handleKey(key) shouldBe TuiCommand.Continue)
+      tui.handleKey(Key.Enter) shouldBe TuiCommand.Quit
       TuiUpdater.restoreThenQuit(tui, () => ())()
       clean(tt.output)
     }

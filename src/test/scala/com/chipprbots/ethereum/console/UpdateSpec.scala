@@ -169,7 +169,11 @@ class UpdateSpec extends AnyFlatSpec with Matchers:
   }
 
   it should "complete a command with Tab" taggedAs (UnitTest) in {
-    press(synced, Key.Char(':'), Key.Char('m'), Key.Tab).overlay shouldBe Overlay.Prompt("mempool", 7, None)
+    press(synced, Key.Char(':'), Key.Char('m'), Key.Char('e'), Key.Tab).overlay shouldBe Overlay.Prompt("mempool", 7, None)
+    // Several commands start with m now: Tab goes as far as they agree, which is no further.
+    press(synced, Key.Char(':'), Key.Char('m'), Key.Tab).overlay shouldBe Overlay.Prompt("m", 1, None)
+    press(synced, Key.Char(':'), Key.Char('l'), Key.Char('o'), Key.Char('g'), Key.Char('l'), Key.Tab).overlay shouldBe
+      Overlay.Prompt("loglevel ", 9, None)
     press(synced, Key.Char(':'), Key.Char('p'), Key.Tab).overlay shouldBe Overlay.Prompt("peer", 4, None)
     press(synced, Key.Char(':'), Key.Char('z'), Key.Tab).overlay shouldBe Overlay.Prompt("z", 1, None)
   }
@@ -208,7 +212,7 @@ class UpdateSpec extends AnyFlatSpec with Matchers:
   }
 
   "quit, detach, help and glyphs" should "do at the prompt what their keys do" taggedAs (UnitTest) in {
-    run(synced, "quit")._1.overlay shouldBe Overlay.Dialog(DialogKind.Quit)
+    run(synced, "quit")._1.overlay shouldBe TuiFixtures.quitDialog(synced)
     run(synced, "quit")._2 shouldBe empty // the dialog asks; the prompt stops nothing by itself
     run(synced, "detach")._2 shouldBe Seq(Effect.Detach)
     run(synced, "help")._1.helpOpen shouldBe true
@@ -218,14 +222,30 @@ class UpdateSpec extends AnyFlatSpec with Matchers:
 
   // ---- the quit dialog, pastes, read-only ---------------------------------------------------------------------------
 
-  "The quit dialog" should "take y to stop, n or Esc to cancel, and nothing else" taggedAs (UnitTest) in {
+  "The quit dialog" should "be a Halt: the word typed, then Enter, stops; Esc cancels; nothing else does either" taggedAs (
+    UnitTest
+  ) in {
     val asked = press(synced, Key.Char('q'))
-    asked.overlay shouldBe Overlay.Dialog(DialogKind.Quit)
-    Update(asked, Key.Char('y'), ctx)._2 shouldBe Seq(Effect.Quit)
-    Update(asked, Key.Char('Y'), ctx)._2 shouldBe Seq(Effect.Quit)
-    for key <- Seq(Key.Enter, Key.Tab, Key.Char('1'), Key.Char('d'), Key.Paste("y"), Key.Up) do
+    asked.overlay shouldBe TuiFixtures.quitDialog(synced)
+    // The old answer, and everything short of the word, stops nothing.
+    for key <- Seq(Key.Enter, Key.Tab, Key.Char('1'), Key.Paste("stop"), Key.Paste("y"), Key.Up) do
       Update(asked, key, ctx) shouldBe ((asked, Nil))
-    for key <- Seq(Key.Char('n'), Key.Esc, Key.Backspace) do Update(asked, key, ctx)._1.overlay shouldBe Overlay.None
+    Update(asked, Key.Char('y'), ctx)._2 shouldBe empty
+    Update(press(asked, Key.Char('y')), Key.Enter, ctx)._2 shouldBe empty
+    Update(press(asked, typed("sto")*), Key.Enter, ctx)._2 shouldBe empty
+    // The word, in either case, then Enter: the attempt is handed over for the audit log, and the node stops.
+    val (stopped, effects) = Update(press(asked, typed("stop")*), Key.Enter, ctx)
+    stopped.overlay shouldBe Overlay.None
+    effects shouldBe Seq(Effect.Confirm(TuiFixtures.Quit), Effect.Quit)
+    Update(press(asked, typed("STOP")*), Key.Enter, ctx)._2 should contain(Effect.Quit)
+    // Backspace takes back a letter; with none typed it is Back.
+    press(asked, (typed("stox") :+ Key.Backspace :+ Key.Char('p'))*) shouldBe press(asked, typed("stop")*)
+    val (cancelled, said) = Update(asked, Key.Backspace, ctx)
+    cancelled.overlay shouldBe Overlay.None
+    said shouldBe Seq(Effect.CancelAction(TuiFixtures.Quit))
+    Update(asked, Key.Esc, ctx) shouldBe ((synced.copy(overlay = Overlay.None), Seq(Effect.CancelAction(TuiFixtures.Quit))))
+    // Esc cancels with the word half typed, too.
+    Update(press(asked, typed("st")*), Key.Esc, ctx)._1.overlay shouldBe Overlay.None
   }
 
   "Pasted text" should "open nothing, move nothing and confirm nothing (FR-009)" taggedAs (UnitTest) in {
@@ -238,7 +258,8 @@ class UpdateSpec extends AnyFlatSpec with Matchers:
     val (s, effects) = Update(synced, Key.Char('q'), readOnly)
     s.overlay shouldBe Overlay.None
     s.notice shouldBe Some(Update.ReadOnlyNotice)
-    effects shouldBe empty
+    // Nothing runs, and the attempt is handed over so that the audit log says it was refused (FR-051).
+    effects shouldBe Seq(Effect.Confirm(TuiFixtures.Quit))
     val typing = press(synced, (Key.Char(':') +: typed("quit"))*)
     Update(typing, Key.Enter, readOnly)._1.overlay shouldBe Overlay.None
     // Detaching stops nothing: it stays.
@@ -249,7 +270,7 @@ class UpdateSpec extends AnyFlatSpec with Matchers:
     val help = press(synced, Key.Char('?'))
     Update(help, Key.Char('r'), ctx) shouldBe ((help, Seq(Effect.Redraw)))
     Update(help, Key.Char('d'), ctx)._2 shouldBe Seq(Effect.Detach)
-    Update(help, Key.Char('q'), ctx)._1.overlay shouldBe Overlay.Dialog(DialogKind.Quit)
+    Update(help, Key.Char('q'), ctx)._1.overlay shouldBe TuiFixtures.quitDialog(help)
     for key <- Seq(Key.Char('2'), Key.Enter, Key.Esc, Key.Down, Key.Char('x')) do
       val closed = Update(help, key, ctx)._1
       closed.helpOpen shouldBe false

@@ -214,6 +214,6 @@ class TuiViewGoldenSpec extends AnyFlatSpec with Matchers with BeforeAndAfterAll
     press(start, "3jj\n").screen shouldBe a[Some[?]] // a peer's screen, with j and Enter
     press(start, "3jj\n").viewTitle shouldBe "Peer"
     press(start, "?").helpOpen shouldBe true
-    press(start, "q").overlay shouldBe Overlay.Dialog(DialogKind.Quit)
+    press(start, "q").overlay shouldBe TuiFixtures.quitDialog(start)
     press(start, "8/block\n").filterOf(TuiView.Logs) shouldBe "block"
   }

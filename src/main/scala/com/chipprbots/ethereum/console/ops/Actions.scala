@@ -10,43 +10,43 @@ object Actions:
   val Config: ActionSpec = ActionSpec(
     "config",
     "config [filter]",
-    "shows the effective configuration, secrets hidden",
+    "the effective configuration, secrets hidden",
     Observe,
     "nothing to undo"
   )
   val Tunables: ActionSpec = ActionSpec(
     "tunables",
     "tunables",
-    "shows the settings that change without a restart, with their values now",
+    "what changes without a restart, as it is now",
     Observe,
     "nothing to undo"
   )
   val Deps: ActionSpec = ActionSpec(
     "deps",
     "deps",
-    "shows each subsystem, what it depends on, and its health",
+    "each subsystem, what it needs, its health",
     Observe,
     "nothing to undo"
   )
   val TestRpc: ActionSpec = ActionSpec(
     "test-rpc",
     "test-rpc",
-    "calls each enabled RPC endpoint on this machine and reports the answer and the time",
+    "calls each RPC endpoint here: answer and time",
     Observe,
     "nothing to undo"
   )
   val Net: ActionSpec = ActionSpec(
     "net",
     "net",
-    "shows the listening address, the external address detected at start, and the inbound peers",
+    "listening and external addresses, inbound peers",
     Observe,
     "nothing to undo"
   )
-  val Art: ActionSpec = ActionSpec("art", "art", "shows every sprite", Observe, "nothing to undo")
+  val Art: ActionSpec = ActionSpec("art", "art", "every sprite", Observe, "nothing to undo")
   val Lookup: ActionSpec = ActionSpec(
     "lookup",
     "block <number | hash | latest> | tx <hash> | receipt <hash> | account <address>",
-    "shows a block, a transaction, a receipt or an account",
+    "a block, a transaction, a receipt or an account",
     Observe,
     "nothing to undo"
   )
@@ -61,14 +61,14 @@ object Actions:
   val MaxPeers: ActionSpec = ActionSpec(
     "maxpeers",
     "maxpeers <n>",
-    "the limit on connected peers, until the node restarts",
+    "the limit on outgoing peers, until restart",
     Adjust,
     "set the old value"
   )
   val PeerTrust: ActionSpec = ActionSpec(
     "peer trust",
     "peer trust <id>",
-    "a peer becomes trusted: it is not dropped for a low score",
+    "a peer is trusted: exempt from pruning",
     Adjust,
     "peer untrust"
   )
@@ -82,7 +82,7 @@ object Actions:
   val Threshold: ActionSpec = ActionSpec(
     "threshold",
     "threshold <name> <value> | threshold reset",
-    "where an alert begins, for this session of the dashboard",
+    "where an alert begins, for this session",
     Adjust,
     "threshold reset"
   )
@@ -90,7 +90,7 @@ object Actions:
   val PeerAdd: ActionSpec = ActionSpec(
     "peer add",
     "peer add <enode>",
-    "the node dials a peer",
+    "the node dials a peer and keeps dialling it",
     Disrupt,
     "peer drop"
   )
@@ -104,14 +104,14 @@ object Actions:
   val PeerBlock: ActionSpec = ActionSpec(
     "peer block",
     "peer block <address>",
-    "an address is blocked until the node restarts, and the peers at it are dropped",
+    "an address is refused until restart",
     Disrupt,
     "peer unblock"
   )
   val PeerUnblock: ActionSpec = ActionSpec(
     "peer unblock",
     "peer unblock <address>",
-    "an address stops being blocked",
+    "an address stops being refused",
     Disrupt,
     "peer block"
   )
@@ -128,35 +128,35 @@ object Actions:
   val MiningStop: ActionSpec = ActionSpec(
     "mining stop",
     "mining stop",
-    "the node's own miner stops until the node restarts (ETC)",
+    "the node's own miner stops until restart (ETC)",
     Halt,
     "restart the node"
   )
   val Coinbase: ActionSpec = ActionSpec(
     "coinbase",
     "coinbase <address>",
-    "the address blocks mined from now pay (ETC)",
+    "the address mined blocks pay from now on (ETC)",
     Disrupt,
     "set the old address"
   )
   val RpcStop: ActionSpec = ActionSpec(
     "rpc stop",
     "rpc stop <http | ws>",
-    "a JSON-RPC server stops listening and its open connections drop",
+    "a JSON-RPC server stops; its connections drop",
     Disrupt,
     "rpc start"
   )
   val RpcStart: ActionSpec = ActionSpec(
     "rpc start",
     "rpc start <http | ws>",
-    "a JSON-RPC server that was stopped here listens again",
+    "a server that was stopped here listens again",
     Disrupt,
     "rpc stop"
   )
   val DbCheck: ActionSpec = ActionSpec(
     "dbcheck",
     "dbcheck",
-    "runs the database consistency check of the node's start, and reports",
+    "the start's database check, run now; it reports",
     Disrupt,
     "nothing to undo"
   )
@@ -170,7 +170,7 @@ object Actions:
   val Bundle: ActionSpec = ActionSpec(
     "bundle",
     "bundle",
-    "writes a support bundle under the data directory",
+    "writes a support bundle under the datadir",
     Disrupt,
     "delete the file"
   )

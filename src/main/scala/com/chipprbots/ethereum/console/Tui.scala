@@ -491,12 +491,12 @@ class Tui(
     * FR-013). Otherwise [[Update]] says what the key does to the state, and what it asks of the terminal and the node.
     */
   def handleKey(key: Key): TuiCommand =
-    val height = synchronized(lastSize._2)
+    val (width, height) = synchronized(lastSize)
     key match
       case Key.CellSize(width, height) =>
         cellSizeReported(gfx.CellSize(width, height))
         TuiCommand.Continue
-      case _ => keyPressed(key, height)
+      case _ => keyPressed(key, width, height)
 
   /** The terminal's cell is `cell` pixels now. In pixel mode the art is sent and placed again at that size. */
   private def cellSizeReported(cell: gfx.CellSize): Unit = synchronized {
@@ -510,12 +510,14 @@ class Tui(
         case _                     => ()
   }
 
-  private def keyPressed(key: Key, height: Int): TuiCommand =
+  private def keyPressed(key: Key, width: Int, height: Int): TuiCommand =
     if state.get.splashCover(height).isDefined then
       modify(_.skipSplash)
       TuiCommand.Continue
     else
-      val (bodyCols, bodyRows) = renderer.bodySize(lastSize._1, height)
+      // Before the first frame there is no size, and no dialog on any screen for a size to be too small for.
+      val (bodyCols, bodyRows) =
+        if width <= 0 || height <= 0 then (Int.MaxValue, Int.MaxValue) else renderer.bodySize(width, height)
       val ctx = UpdateCtx(
         page = (height - panels.LogsPanel.ChromeRows).max(1),
         configuredMotion = config.motion,

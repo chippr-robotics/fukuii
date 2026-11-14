@@ -53,7 +53,9 @@ private[console] object DialogBox:
   def confirm(c: DialogKind.Confirm, fits: Boolean = true): Content =
     import ops.RiskClass
     val spec = ops.Actions.named(c.request.action)
-    val title = s"${c.risk.label}: ${c.request.text}"
+    // Stopping the node keeps the question it has always asked; every other action is named with its class.
+    val title =
+      if c.request.action == ops.Actions.Quit.name then "Stop this node?" else s"${c.risk.label}: ${c.request.text}"
     val changed = Option.when(c.changed)("What this said has changed since it was first shown: read it again.")
     val body = c.preview match
       case None                                       => Seq("Reading what this would change…")
