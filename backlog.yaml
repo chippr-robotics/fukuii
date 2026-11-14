@@ -3035,3 +3035,13 @@ items:
     links:
       spec: specs/029-tui-command-center
     notes: T050's chart primitives. The charts are text in every graphics mode since slice 3; PixelLayer already places Graphic.Chart.
+  - id: B-264
+    title: "Node start prints about 200 logback status lines: logback.xml has a nested <if> inside <appender> (line 43)"
+    priority: P3
+    status: open
+    area: ops
+    size: S
+    opened: 2026-11-14
+    refs: ["dev-node terminal gate of spec 029 slices 1-2, 2026-11-14"]
+    links: {}
+    notes: Seen on every start before the TUI takes the screen; predates spec 029.
