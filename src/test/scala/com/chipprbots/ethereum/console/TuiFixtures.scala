@@ -203,9 +203,24 @@ object TuiFixtures:
 
   private def scoreOf(i: Int): Double = 0.95 - ((i * 37) % 60) / 100.0
 
+  /** What each scored peer's score is made of (spec 029 FR-030): every fifth has answered nothing yet, the others
+    * between 20 ms and 2.6 s; the first answered within the last second.
+    */
+  def peerStats(peers: Seq[TuiPeer]): Map[String, PeerStats] =
+    scoredPeers(peers).map { (p, i) =>
+      val latency = Option.when(i % 5 != 4)(20.0 + ((i * 173) % 2600))
+      p.id -> PeerStats(
+        latency,
+        responses = if latency.isDefined then 40 + i * 3 else 0,
+        timeouts = i % 4,
+        violations = if i % 11 == 10 then 1 else 0,
+        lastSeen = Some(Now.minusMillis(if i == 0 then 400 else 5_000L + i * 1_000L))
+      )
+    }.toMap
+
   /** The scores slice 4a published 4 s before [[Now]]. */
   def peerScores(peers: Seq[TuiPeer]): PeerScores =
-    PeerScores(Now.minusSeconds(4), scoredPeers(peers).map((p, i) => p.id -> scoreOf(i)).toMap)
+    PeerScores(Now.minusSeconds(4), scoredPeers(peers).map((p, i) => p.id -> scoreOf(i)).toMap, peerStats(peers))
 
   /** The snapshot before, 10 s earlier: by peer, a third of the scores lower (now up), a third equal, a third higher.
     */
@@ -577,6 +592,83 @@ object TuiFixtures:
   /** [[regularSyncEtc]] whose head has not moved for 3m 10s (research §3.9). */
   def stalledEtc(glyphs: GlyphSet = GlyphSet.Emoji): TuiState =
     regularSyncEtc(glyphs).copy(lastAdvanceAt = Some(Now.minusSeconds(190L)))
+
+  // ---- The chain as the head observer saw it (spec 029 slice 3) -----------------------------------------------------
+
+  /** `count` blocks ending at `head`, 13 s apart, the head 4 s before [[Now]]: gas, transactions and sizes that vary
+    * with the number, and a base fee where `baseFee` gives one. The bodies of the newest eight were read.
+    */
+  def blocks(
+      head: Long,
+      count: Int,
+      baseFee: Option[Long => BigInt] = None,
+      pos: Boolean = false
+  ): Vector[BlockSummary] =
+    ((head - count + 1) to head).map { n =>
+      val age = (head - n) * 13 + 4
+      val read = head - n < 8
+      val txs = ((n * 7) % 43).toInt
+      BlockSummary(
+        number = n,
+        hash = f"0x${(n * 2_654_435_761L) & 0xffffffffL}%08x" + "0" * 48 + f"${n & 0xffffffffL}%08x",
+        parentHash = f"0x${((n - 1) * 2_654_435_761L) & 0xffffffffL}%08x" + "0" * 48 + f"${(n - 1) & 0xffffffffL}%08x",
+        timestamp = Now.getEpochSecond - age,
+        gasUsed = BigInt(8_000_000) * ((n * 37) % 101) / 100,
+        gasLimit = BigInt(8_000_000),
+        miner = if n % 3 == 0 then "0x51e2" + "0" * 32 + "07bd" else "0x9f3a" + "0" * 32 + "c210",
+        difficulty = if pos then BigInt(0) else BigInt("412600000000000"),
+        seenAt = Now.minusSeconds(age),
+        txCount = Option.when(read)(txs),
+        sizeBytes = Option.when(read)(600L + txs * 180L),
+        baseFee = baseFee.map(_(n)),
+        slot = None,
+        fees = Option.when(read && txs > 0)(
+          FeePercentiles(BigInt(1_000_000_000L), BigInt(1_500_000_000L) + n % 5 * 100_000_000L, BigInt(3_000_000_000L))
+        )
+      )
+    }.toVector
+
+  /** `state` with the chain the observer saw: `count` blocks to the state's head. */
+  def withChain(state: TuiState, sample: ChainSample): TuiState = withLocal(state, _.copy(chain = Some(sample)))
+
+  /** [[syncedEtc]] with 64 blocks seen: no base fee, gas prices, a miner, and no reorg. */
+  def observedEtc(glyphs: GlyphSet = GlyphSet.Emoji): TuiState =
+    val s = syncedEtc(glyphs)
+    withChain(
+      withLocal(s, _.copy(lastImport = Some(ImportSample(1, java.time.Duration.ofMillis(22))))),
+      ChainSample(blocks(s.currentBlock, 64), blocksPerSecond = Some(0.077), gasPerSecond = Some(310_000.0))
+    )
+
+  /** [[sepoliaNearHead]] with 64 blocks seen: a base fee, tips, a fee recipient, and one reorg of depth 2. */
+  def observedSepolia(glyphs: GlyphSet = GlyphSet.Emoji): TuiState =
+    val s = sepoliaNearHead(glyphs)
+    val seen = blocks(s.currentBlock, 64, Some(n => BigInt(12_400_000_000L) + (n % 9) * 250_000_000L), pos = true)
+    val left = seen.last.copy(hash = "0xdead" + "0" * 56 + "beef", number = seen.last.number - 1)
+    withChain(
+      s,
+      ChainSample(
+        seen,
+        Vector(ReorgRecord(Now.minusSeconds(741), 2, false, left, seen(60), Some(seen(58)))),
+        blocksPerSecond = Some(0.083),
+        gasPerSecond = Some(1_240_000.0)
+      )
+    )
+
+  /** [[regularSyncEtc]] with blocks arriving faster than they are read: a sample, and a deep reorg. */
+  def observedSyncingEtc(glyphs: GlyphSet = GlyphSet.Emoji): TuiState =
+    val s = regularSyncEtc(glyphs)
+    val newest = blocks(s.currentBlock, 40)
+    val older = blocks(s.currentBlock - 500, 24)
+    withChain(
+      s,
+      ChainSample(
+        older ++ newest,
+        Vector(ReorgRecord(Now.minusSeconds(30), 64, true, older.last, newest.head, None)),
+        sampled = true,
+        blocksPerSecond = Some(184.37),
+        gasPerSecond = Some(4.1e8)
+      )
+    )
 
   // ---- The alert fixtures (spec 027 T066, research §3.9) ------------------------------------------------------------
 

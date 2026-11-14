@@ -12,10 +12,10 @@
  etc              │ Client  besu/v24.1.2/linux-x86_64/openjdk-java-21                                                                                           
  PoW · id 61      │ Best    21,884,100                                                                                                                          
  main network     │ Score   0.930 ↓ falling                                                                                                                     
-                  │                                                                                                                                             
- [1] Overview     │                                                                                                                                             
- [2] Chain        │                                                                                                                                             
- [3] Peers        │                                                                                                                                             
+                  │ Latency 1,918 ms, the running average of its answers                                                                                        
+ [1] Overview     │ Answers 118 answered, 2 timed out                                                                                                           
+ [2] Chain        │ Faults  no protocol violation                                                                                                               
+ [3] Peers        │ Seen    last answered 31s ago                                                                                                               
  [4] Mempool      │                                                                                                                                             
  [5] RPC          │                                                                                                                                             
  [6] Storage      │                                                                                                                                             

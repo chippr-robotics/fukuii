@@ -56,8 +56,18 @@ class PeerScoringManager(
   /** The score of every peer, read at one instant from one consistent view of the map. */
   def snapshot(): PeerScoreSnapshot =
     val now = clock.instant()
-    val values = scores.readOnlySnapshot().iterator.map { case (id, s) => id -> s.score(now) }.toMap
-    PeerScoreSnapshot(now, values, ScoringStatistics.of(values.values))
+    val view = scores.readOnlySnapshot().toMap
+    val values = view.map { case (id, s) => id -> s.score(now) }
+    val details = view.map { case (id, s) =>
+      id -> PeerScoreDetail(
+        s.averageLatencyMs,
+        s.responsesReceived,
+        s.requestsTimedOut,
+        s.protocolViolations,
+        s.lastSeen
+      )
+    }
+    PeerScoreSnapshot(now, values, ScoringStatistics.of(values.values), details)
 
   /** Hand a fresh [[PeerScoreSnapshot]] to the exporter now, whatever the throttle says, and restart the throttle. Run
     * on a timer so the recency decay shows without events.
@@ -215,8 +225,29 @@ object PeerScoringManager:
 
   val NoExport: PeerScoreSnapshot => Unit = _ => ()
 
+/** What a peer's score is made of, for display: the terms an operator can act on. Read from the same view of the scores
+  * as the score itself.
+  *
+  * @param latencyMs
+  *   the running average of its response times; None until it has answered a request
+  * @param lastSeen
+  *   when it last answered a request or completed a handshake
+  */
+final case class PeerScoreDetail(
+    latencyMs: Option[Double],
+    responses: Int,
+    timeouts: Int,
+    violations: Int,
+    lastSeen: Option[Instant]
+)
+
 /** Every peer's score at one instant, as the scorer exports it. */
-final case class PeerScoreSnapshot(takenAt: Instant, scores: Map[PeerId, Double], statistics: ScoringStatistics)
+final case class PeerScoreSnapshot(
+    takenAt: Instant,
+    scores: Map[PeerId, Double],
+    statistics: ScoringStatistics,
+    details: Map[PeerId, PeerScoreDetail] = Map.empty
+)
 
 object PeerScoreSnapshot:
   val empty: PeerScoreSnapshot = PeerScoreSnapshot(Instant.EPOCH, Map.empty, ScoringStatistics.empty)

@@ -1,0 +1,24 @@
+ ◆ FUKUII  etc (61) · PoW · up 12d 7h                                   Receipt 
+────────────────────────────────────────────────────────────────────────────────
+ ✓ no alerts                                                                    
+ Receipt   of transaction 0xf3e3…dc8f                                           
+                                                                                
+   status     failed                                                            
+   block      3,125,369, transaction 1                                          
+   gas used   42,000 (the block's 63,000 up to here)                            
+   logs       1                                                                 
+                                                                                
+   Enter opens the selected row                                                 
+   tx        0xf3e33ba2cb400221476fa4025afd95a13907734c38a4a8dff4b7d860ee5adc8f 
+   from      0x0000000000000000000000000000000000abcdef                         
+   to        0xc68e9954c7422f479e344faace70c692217ea05b                         
+   log 0     0x0000000000000000000000000000000000001234                         
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+ 1-9 view  : prompt  / filter  ? help  p pause  r redraw  d detach  q quit      

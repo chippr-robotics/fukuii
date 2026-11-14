@@ -24,7 +24,9 @@ class CommandsSpec extends AnyFlatSpec with Matchers:
   }
 
   it should "say how a command is used when its argument is missing or wrong" taggedAs (UnitTest) in {
-    Commands.parse("peer") shouldBe a[Command.Usage]
+    // With no id it is the list: what `:pe`, Tab, Enter reaches (the terminal gate of slices 1 and 2 found it a dead end).
+    Commands.parse("peer") shouldBe Command.OpenView(TuiView.Peers)
+    Commands.parse(Commands.complete("pe")) shouldBe Command.OpenView(TuiView.Peers)
     Commands.parse("glyphs") shouldBe a[Command.Usage]
     Commands.parse("glyphs braille") shouldBe a[Command.Usage]
   }

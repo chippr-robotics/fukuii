@@ -22,6 +22,8 @@ import com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncMetrics
 import com.chipprbots.ethereum.consensus.mining.StdMiningBuilder
 import com.chipprbots.ethereum.consensus.pow.PoWMiningMetrics
 import com.chipprbots.ethereum.console.ChainFacts
+import com.chipprbots.ethereum.console.ChainLookups
+import com.chipprbots.ethereum.console.ChainReads
 import com.chipprbots.ethereum.console.ForkChoiceHashes
 import com.chipprbots.ethereum.console.NodeSettings
 import com.chipprbots.ethereum.console.NodeStatusSnapshot
@@ -33,7 +35,9 @@ import com.chipprbots.ethereum.console.TuiUpdater
 import com.chipprbots.ethereum.db.dataSource.RocksDbCacheMetrics
 import com.chipprbots.ethereum.domain.BestMappingRepair
 import com.chipprbots.ethereum.domain.BlockHash
+import com.chipprbots.ethereum.domain.SignedTransaction
 import com.chipprbots.ethereum.domain.StateReconciliation
+import com.chipprbots.ethereum.forkid.ForkId
 import com.chipprbots.ethereum.jsonrpc.server.RpcExposureCheck
 import com.chipprbots.ethereum.metrics.Metrics
 import com.chipprbots.ethereum.metrics.MetricsConfig
@@ -405,7 +409,52 @@ abstract class BaseNode extends Node:
         mining =
           if blockchainConfig.networkType == NetworkType.ETC then
             TuiStatusProbe.LocalSources.miningReader(coinbase = () => coinbaseProvider.get().toString)
-          else () => None
+          else () => None,
+        // Spec 029 slice 3: the head and its ancestors, read by hash on the probe's thread, a bounded number a poll.
+        // The same lookups the JSON-RPC block methods make; display only.
+        chain = Some(
+          new ChainReads.Source(
+            bestHeader = () => blockchainReader.getBestBlockHeader,
+            headerByHash = blockchainReader.getBlockHeaderByHash,
+            bodyByHash = blockchainReader.getBlockBodyByHash
+          )
+        ),
+        // The fork id the handshake tells a peer (EIP-2124, EIP-6122), computed the same way, for display.
+        forkId = () =>
+          blockchainReader.getBestBlockHeader.map { head =>
+            val genesis = blockchainReader.genesisHeader
+            val id = ForkId.create(genesis.hash.value, genesis.unixTimestamp.toLong, blockchainConfig)(
+              head.number.value,
+              head.unixTimestamp.toLong
+            )
+            f"0x${id.hash.toLong}%08x" + id.next.fold("")(next =>
+              s", next ${ForkId.knownSentinels.getOrElse(next, next.toString)}"
+            )
+          }
+      )
+      // Spec 029 slice 3: the explorer's lookups, answered from the node's own stores on a worker thread of the TUI's.
+      // The same reads the JSON-RPC block, transaction and account methods make; nothing is written.
+      tui.setLookups(
+        new ChainLookups(
+          bestHeader = () => blockchainReader.getBestBlockHeader,
+          headerByNumber = blockchainReader.getBlockHeaderByNumber,
+          headerByHash = blockchainReader.getBlockHeaderByHash,
+          bodyByHash = blockchainReader.getBlockBodyByHash,
+          receiptsByHash = blockchainReader.getReceiptsByHash,
+          txLocation = hash =>
+            storagesInstance.storages.transactionMappingStorage
+              .get(hash.toIndexedSeq)
+              .map(location => (location.blockHash, location.txIndex)),
+          accountAt = blockchainReader.accountAt,
+          codeSize = hash => storagesInstance.storages.evmCodeStorage.get(hash).map(_.size),
+          sender = stx => SignedTransaction.getSender(stx)(using blockchainConfig)
+        )
+      )
+      // The genesis block is loaded by now: its hash completes the chain's identity (spec 029 FR-027).
+      tui.updateChain(
+        ChainFacts
+          .from(blockchainConfig, BuildInfo.version)
+          .copy(genesisHash = Some(ChainReads.hex(blockchainReader.genesisHeader.hash.value)))
       )
       val probe = new TuiStatusProbe(
         peerManager,

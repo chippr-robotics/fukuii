@@ -60,7 +60,8 @@ final case class TuiEnv(
       graphics = graphics.getOrElse(settings.graphics),
       artDir = artDir.orElse(settings.artDir),
       multiplexer = multiplexer,
-      utf8Locale = utf8Locale
+      utf8Locale = utf8Locale,
+      reorgAlertDepth = settings.reorgAlertDepth
     )
 
 object TuiEnv:

@@ -70,6 +70,12 @@ enum Catchup:
   *   how graphics are drawn (spec 029 FR-011); text until the terminal has been asked what it can do
   * @param startup
   *   the phases of its start the node has reported done (spec 029 FR-020)
+  * @param reorgAlertDepth
+  *   a reorg at least this deep raises a warning (`fukuii.tui.alerts.reorg-depth`)
+  * @param lookups
+  *   the explorer's lookups and where each stands, as the worker last published them (spec 029 FR-029)
+  * @param selectedBlock
+  *   the hash of the block selected in the Block Observatory: kept by hash, so new blocks do not move it
   * @param chain
   *   the chain's identity and fork timeline, once the node has read its configuration
   * @param snapshot
@@ -128,8 +134,20 @@ case class TuiState(
     promptHistory: Vector[String] = Vector.empty,
     notice: Option[String] = None,
     graphics: GraphicsMode = GraphicsMode.Text,
-    startup: Set[StartupPhase] = Set.empty
+    startup: Set[StartupPhase] = Set.empty,
+    reorgAlertDepth: Int = Alerts.ReorgDepth,
+    lookups: Vector[(LookupQuery, LookupState)] = Vector.empty,
+    selectedBlock: Option[String] = None
 ):
+  /** Where the lookup of `query` stands, if it was asked. */
+  def lookupOf(query: LookupQuery): Option[LookupState] = lookups.find(_._1 == query).map(_._2)
+
+  /** The blocks the Block Observatory lists, newest first. */
+  def observedBlocks: Vector[BlockSummary] = snapshot.flatMap(_.local.chain).fold(Vector.empty)(_.recent.reverse)
+
+  /** The selected block's place in [[observedBlocks]]; None with no selection, or once the block has left the list. */
+  def selectedBlockIndex: Option[Int] =
+    selectedBlock.map(hash => observedBlocks.indexWhere(_.hash == hash)).filter(_ >= 0)
 
   import TuiState.*
 
@@ -371,6 +389,9 @@ case class TuiState(
     */
   def peerScore(peerId: String): Option[Double] = scores.current.flatMap(_.scores.get(peerId)).filter(_.isFinite)
 
+  /** What the peer's score is made of, if the scorer has published it. */
+  def peerStats(peerId: String): Option[PeerStats] = scores.current.flatMap(_.stats.get(peerId))
+
   /** The sign of a peer's score change from the previous published snapshot, at the precision the column shows
     * ([[TuiState.ScoreDigits]] decimals): the recency term drifts every score down a little between snapshots, which is
     * not a trend.
@@ -391,6 +412,7 @@ case class TuiState(
       screen match
         case Some(Screen.PeerDetail(_)) => "Peer"
         case Some(Screen.Art(_))        => "Art"
+        case Some(Screen.Explore(q, _)) => q.title
         case None                       => view.title
 
   /** SNAP's pivot block, while SNAP's rows are on screen: the Block cell's target and the fork timeline's position
@@ -411,7 +433,22 @@ enum Trend:
 /** Every peer's score at one instant, as slice 4a published it to `NetworkMetrics`, by peer id (the remote node id in
   * hex, as [[TuiPeer.id]]).
   */
-final case class PeerScores(takenAt: Instant, scores: Map[String, Double])
+final case class PeerScores(takenAt: Instant, scores: Map[String, Double], stats: Map[String, PeerStats] = Map.empty)
+
+/** What a peer's score is made of, as the scorer published it (spec 029 FR-030).
+  *
+  * @param latencyMs
+  *   the running average of its response times; None until it has answered a request
+  * @param lastSeen
+  *   when it last answered a request or completed a handshake
+  */
+final case class PeerStats(
+    latencyMs: Option[Double],
+    responses: Int,
+    timeouts: Int,
+    violations: Int,
+    lastSeen: Option[Instant]
+)
 
 /** The two latest published score snapshots: the trend is the change from `previous` to `current` (T098). The probe
   * reads the same snapshot every poll until the scorer publishes the next one (at most once a second on an event, every
@@ -578,6 +615,11 @@ final case class ImportSample(blocks: Int, duration: Duration)
   *   chain, so its presence is what puts the consensus-layer panel on screen (E1-E3)
   * @param mining
   *   the node's mining metrics: only on an ETC node, so its presence is what puts the mining panel on screen (M1, M2)
+  * @param chain
+  *   the newest blocks and the reorgs the head observer has seen (spec 029 FR-023, FR-026); None when the probe has no
+  *   chain to read
+  * @param forkId
+  *   the fork id the node tells its peers at the head (EIP-2124), as it is written: `0xfc64ec04, next 1150000`
   */
 final case class LocalSample(
     diskFree: Option[Long] = None,
@@ -589,7 +631,9 @@ final case class LocalSample(
     peerScores: Option[PeerScores] = None,
     lastImport: Option[ImportSample] = None,
     cl: Option[ClSample] = None,
-    mining: Option[MiningSample] = None
+    mining: Option[MiningSample] = None,
+    chain: Option[ChainSample] = None,
+    forkId: Option[String] = None
 )
 
 /** The Engine API's last call of one method (`EngineApiMetrics`, E1): when, and the status it was answered with. */

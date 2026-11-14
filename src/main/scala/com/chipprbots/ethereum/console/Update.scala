@@ -63,8 +63,8 @@ object Update:
     case Action.First                            => (move(s, ctx, Int.MinValue), Nil)
     case Action.Last                             => (move(s, ctx, Int.MaxValue), Nil)
     case Action.Left | Action.Right              => (s, Nil)
-    case Action.Open                             => (open(s), Nil)
-    case Action.Back                             => (back(s), Nil)
+    case Action.Open                             => open(s)
+    case Action.Back                             => back(s)
     case Action.OpenPrompt                       => (s.copy(overlay = Overlay.Prompt("", 0, None)), Nil)
     case Action.OpenFilter =>
       if s.screen.isEmpty && !s.helpOpen && Filterable.contains(s.view) then
@@ -100,6 +100,14 @@ object Update:
     if s.helpOpen then s
     else if s.screen.isDefined then
       s.screens match
+        // An explorer screen: the selection moves among the rows that lead somewhere.
+        case Screen.Explore(query, selected) :: under =>
+          val last = (panels.ExplorerPanels.linkCount(s, query) - 1).max(0)
+          val to = by match
+            case Int.MinValue => 0
+            case Int.MaxValue => last
+            case _            => (selected.toLong + by).max(0L).min(last.toLong).toInt
+          s.copy(screens = Screen.Explore(query, to) :: under)
         // The Art screen's pages wrap, so a page is counted and never clamped here: the art says how many there are.
         case Screen.Art(page) :: under =>
           val to = by match
@@ -121,6 +129,17 @@ object Update:
               // With nothing selected, the first move selects the first row.
               case _ => s.selectedPeerIndex.fold(0)(i => (i.toLong + by).max(0L).min(last.toLong).toInt)
             s.copy(selectedPeer = Some(peers(target).id))
+        case TuiView.Chain =>
+          // The Block Observatory's rows, newest first. The selection is a block's hash: new blocks do not move it.
+          val blocks = s.observedBlocks
+          if blocks.isEmpty then s
+          else
+            val last = blocks.size - 1
+            val target = by match
+              case Int.MinValue => 0
+              case Int.MaxValue => last
+              case _            => s.selectedBlockIndex.fold(0)(i => (i.toLong + by).max(0L).min(last.toLong).toInt)
+            s.copy(selectedBlock = Some(blocks(target).hash))
         case TuiView.Logs =>
           // Up is older: the scroll counts lines back from the newest.
           by match
@@ -129,19 +148,51 @@ object Update:
             case _            => s.scrollLogs(-by, ctx.page)
         case _ => s
 
-  private def open(s: TuiState): TuiState =
-    if s.helpOpen || s.screen.isDefined then s
+  /** Enter: the selected row opens. A peer's details; a block of the observatory; on an explorer screen, the row's own
+    * lookup (a block's transaction, a transaction's receipt, an address).
+    */
+  private def open(s: TuiState): (TuiState, Seq[Effect]) =
+    if s.helpOpen then (s, Nil)
     else
-      s.view match
-        case TuiView.Peers =>
-          s.selectedPeerIndex.fold(s)(i => s.copy(screens = Screen.PeerDetail(s.orderedPeers(i).id) :: s.screens))
-        case _ => s
+      s.screens match
+        case Screen.Explore(query, selected) :: _ =>
+          panels.ExplorerPanels.target(s, query, selected).fold((s, Seq.empty[Effect]))(explore(s, _))
+        case _ :: _ => (s, Nil)
+        case Nil =>
+          s.view match
+            case TuiView.Peers =>
+              (
+                s.selectedPeerIndex.fold(s)(i =>
+                  s.copy(screens = Screen.PeerDetail(s.orderedPeers(i).id) :: s.screens)
+                ),
+                Nil
+              )
+            case TuiView.Chain =>
+              s.selectedBlockIndex.fold((s, Seq.empty[Effect]))(i =>
+                explore(s, LookupQuery.BlockByHash(s.observedBlocks(i).hash))
+              )
+            case _ => (s, Nil)
 
-  /** Esc: the screen on top closes; with none open, the view's filter is cleared. */
-  private def back(s: TuiState): TuiState =
-    if s.screens.nonEmpty then s.copy(screens = s.screens.tail)
-    else if s.filterOf(s.view).nonEmpty then s.copy(filters = s.filters - s.view, logScroll = 0)
-    else s
+  /** Opens the explorer's screen for `query`, and has the worker read it (spec 029 FR-028, FR-029). */
+  private def explore(s: TuiState, query: LookupQuery): (TuiState, Seq[Effect]) =
+    (s.copy(screens = Screen.Explore(query, 0) :: s.screens), Seq(Effect.Lookup(query)))
+
+  /** Esc: the screen on top closes, and a lookup of its that is still running is not wanted any more; with no screen
+    * open, the view's filter is cleared.
+    */
+  private def back(s: TuiState): (TuiState, Seq[Effect]) =
+    s.screens match
+      case Screen.Explore(query, _) :: under =>
+        val running = s.lookupOf(query).exists(_.isInstanceOf[LookupState.Running])
+        // The screen under it may show the same lookup: then it is still wanted.
+        val wanted = under.exists {
+          case Screen.Explore(other, _) => other == query
+          case _                        => false
+        }
+        (s.copy(screens = under), if running && !wanted then Seq(Effect.CancelLookup(query)) else Nil)
+      case _ :: under => (s.copy(screens = under), Nil)
+      case Nil =>
+        if s.filterOf(s.view).nonEmpty then (s.copy(filters = s.filters - s.view, logScroll = 0), Nil) else (s, Nil)
 
   // ---- the quit dialog ------------------------------------------------------------------------------------------
 
@@ -224,6 +275,7 @@ object Update:
         case Command.Glyphs(set)    => (closed.copy(glyphs = set), Nil)
         case Command.Graphics(to)   => (closed, Seq(Effect.SetGraphics(to)))
         case Command.Art            => (closed.copy(helpOpen = false, screens = List(Screen.Art(0))), Nil)
+        case Command.Explore(query) => explore(closed.copy(helpOpen = false), query)
         case Command.Usage(message) => (closed.copy(notice = Some(message)), Nil)
         case Command.Unknown(word, nearest) =>
           val hint = if nearest.isEmpty then "; ? lists the keys" else s"; did you mean ${nearest.mkString(", ")}?"

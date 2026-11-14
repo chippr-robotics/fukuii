@@ -103,7 +103,6 @@ class TuiRenderer(config: TuiConfig, art: ArtStore = ArtStore.Empty):
     val frame = Ctx(state, Tier.of(w, height), g, theme, config, art)
     val side = if Sidebar.shown(w, height) then Sidebar.Cols + 1 else 0
     val bodyCols = w - side
-    val c = Ctx(state, Tier.of(bodyCols, height), g, theme, config, art, Some(frame.tier))
     val header = createHeader(frame, w)
     val alert = Alerts.row(state, w, g, theme)
     val footer = createFooter(frame, w)
@@ -114,6 +113,7 @@ class TuiRenderer(config: TuiConfig, art: ArtStore = ArtStore.Empty):
       else if above == 1 then Seq(alert)
       else Nil
     val bodyRows = if height <= 0 then 0 else above - top.size
+    val c = Ctx(state, Tier.of(bodyCols, height), g, theme, config, art, Some(frame.tier), Some(bodyRows))
     val views = Views.panels(c)
     val panels = Layout.render(views, bodyCols, bodyRows, c.separator(bodyCols))
     // A dialog replaces rows of the body only: the alert row stays above it (spec 029 FR-048).

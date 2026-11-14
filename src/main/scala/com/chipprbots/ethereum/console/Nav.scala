@@ -7,6 +7,11 @@ enum Screen:
   /** One peer's details, opened from the Peers list. */
   case PeerDetail(peerId: String)
 
+  /** What a lookup found (spec 029 FR-028): a block, a transaction, a receipt, an account. `selected` is the row of the
+    * screen that Enter opens.
+    */
+  case Explore(query: LookupQuery, selected: Int)
+
   /** The art, a pose of a sprite a page, in the graphics mode on screen (`:art`; contracts/art.md). `page` counts from
     * the first and wraps.
     */
@@ -41,6 +46,12 @@ enum Effect:
 
   /** Clear the screen and draw the whole frame again. */
   case Redraw
+
+  /** Have the lookup worker read `query` (spec 029 FR-029): never on the frame loop. */
+  case Lookup(query: LookupQuery)
+
+  /** Esc on a lookup that is still running: its result is not wanted. */
+  case CancelLookup(query: LookupQuery)
 
   /** `v`: the next graphics mode this terminal can draw. */
   case CycleGraphics

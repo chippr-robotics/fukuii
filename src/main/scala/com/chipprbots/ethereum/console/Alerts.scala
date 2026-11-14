@@ -28,6 +28,14 @@ object Alerts:
   /** No handshaked peer for longer than this is an error. */
   val ZeroPeersAfter: Duration = Duration.ofSeconds(30)
 
+  /** A reorg at least this deep is a warning, unless `fukuii.tui.alerts.reorg-depth` says another (spec 029 FR-026). */
+  val ReorgDepth: Int = 3
+
+  /** How long a reorg stays on the alert row: long enough to be seen by someone who looks up every few minutes. The
+    * Chain view lists it for as long as the TUI runs.
+    */
+  val ReorgAlertFor: Duration = Duration.ofMinutes(10)
+
   /** A SNAP sample older than this while SNAP runs is a warning (the monitor samples every 30 s). */
   val SnapSampleMaxAge: Duration = Duration.ofSeconds(90)
 
@@ -100,8 +108,19 @@ object Alerts:
         snapshot.forall(_.peers.value.isDefined)
     )(Alert(Severity.Warn, s"peers ${state.peerCount}/${state.maxPeers} below 25%"))
 
+    // The newest reorg at least as deep as the threshold, while it is recent.
+    val reorg = snapshot
+      .flatMap(_.local.chain)
+      .flatMap(_.reorgs.findLast(_.depth >= state.reorgAlertDepth))
+      .filter(r => Duration.between(r.at, now).compareTo(ReorgAlertFor) <= 0)
+      .map { r =>
+        val depth = s"${r.depth}${if r.depthIsLowerBound then " or more" else ""}"
+        val ago = formatShort(Duration.between(r.at, now).getSeconds.max(0L))
+        Alert(Severity.Warn, s"reorg $depth blocks deep $ago ago, to ${formatNumber(r.newTip.number)}")
+      }
+
     val all = Seq(zeroPeers, peerManager, syncController).flatten ++ clAlerts(state) ++
-      Seq(stalled, snapSample, disk, fewPeers).flatten ++ miningAlert(state)
+      Seq(stalled, snapSample, reorg, disk, fewPeers).flatten ++ miningAlert(state)
     all.filter(_.severity == Severity.Error) ++ all.filter(_.severity == Severity.Warn)
 
   /** ETH (spec 027 T110), in §2.3's order. The consensus layer is silent when its last forkchoiceUpdated is older than

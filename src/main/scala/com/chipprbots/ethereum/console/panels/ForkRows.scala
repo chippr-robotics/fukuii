@@ -78,7 +78,7 @@ private[console] object ForkRows:
     val where = chain.schedule match
       case ForkSchedule.ByBlock     => s"block ${formatNumber(at)}"
       case ForkSchedule.ByTimestamp => s"head ${ChainFacts.utc(at)}"
-    val since = last.map(f => s"${f.name} since ${chain.when(f)}")
+    val since = last.map(f => s"${f.name} ${chain.since(f)}")
     val upcoming = chain.next(at) match
       case Some(next) if chain.schedule == ForkSchedule.ByTimestamp =>
         Some(s"${next.name} activates ${chain.when(next)}")
@@ -120,7 +120,7 @@ private[console] object ForkRows:
     position(c, chain) match
       case None => Seq(unknown(c, w))
       case Some(at) =>
-        val last = chain.last(at).fold("none yet")(f => s"${f.name} ${c.g.check.text} since ${chain.when(f)}")
+        val last = chain.last(at).fold("none yet")(f => s"${f.name} ${c.g.check.text} ${chain.since(f)}")
         Seq(
           fit(field("Last", text(last, c.t.healthy), c.t), w, c.g),
           fit(field("Next", text(ahead(c, chain, at).stripPrefix(c.g.arrow.text + " "), c.t.value), c.t), w, c.g)

@@ -36,6 +36,14 @@ private[console] object DialogBox:
       Seq("The TUI cannot start the node again.")
     Content("Stop this node?", body, "y  stop the node      n or Esc  cancel")
 
+  /** `text` in rows of at most `cols` columns, broken between words. */
+  def wrap(text: String, cols: Int): Seq[String] =
+    text.split(' ').foldLeft(Vector.empty[String]) { (rows, word) =>
+      rows.lastOption match
+        case Some(last) if last.length + 1 + word.length <= cols => rows.init :+ s"$last $word"
+        case _                                                   => rows :+ word
+    }
+
   /** `body` with the dialog drawn over its middle rows. With too few rows for the whole dialog, the title and the keys
     * are kept; with one row, the question and the keys share it.
     */
@@ -52,7 +60,9 @@ private[console] object DialogBox:
       val rule = row(c.g.separator.text * (cols - 2).max(0), c.t.warn)
       val title = row(content.title, c.t.error)
       val keys = row(content.keys, c.t.value.bold())
-      val full = Seq(rule, title) ++ content.body.map(row(_, c.t.value)) ++ Seq(row("", c.t.value), keys, rule)
+      // A sentence longer than the box goes on over the next row: what a dialog says will happen is never cut.
+      val sentences = content.body.flatMap(wrap(_, (cols - 2).max(8)))
+      val full = Seq(rule, title) ++ sentences.map(row(_, c.t.value)) ++ Seq(row("", c.t.value), keys, rule)
       val drawn =
         if body.size >= full.size then full
         else if body.size >= 2 then Seq(title, keys)

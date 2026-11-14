@@ -1,0 +1,40 @@
+ ◆ FUKUII  etc (61) · PoW · head 21,884,102 · 41/50 peers · up 12d 7h                                       Transaction 
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+ ✓ no alerts                                                                                                            
+                  │ Transaction   0xf3e3…dc8f                                                                           
+                  │                                                                                                     
+                  │   hash       0xf3e33ba2cb400221476fa4025afd95a13907734c38a4a8dff4b7d860ee5adc8f                     
+                  │   block      3,125,369, transaction 1                                                               
+       ETC        │   type       legacy                                                                                 
+                  │   value      0.65601 ETC                                                                            
+                  │   gas price  20.0 gwei, limit 50,000                                                                
+                  │   nonce      438,551                                                                                
+ etc              │   input      none                                                                                   
+ PoW · id 61      │                                                                                                     
+ main network     │   Enter opens the selected row                                                                      
+                  │   receipt   0xf3e33ba2cb400221476fa4025afd95a13907734c38a4a8dff4b7d860ee5adc8f                      
+ [1] Overview     │   block     0x8fda1f865bd3000d7a226009b296f0ba403dbbbdec12a7ea54a971a0e1fd6ad5                      
+ [2] Chain        │   from      0x0000000000000000000000000000000000abcdef                                              
+ [3] Peers        │   to        0xc68e9954c7422f479e344faace70c692217ea05b                                              
+ [4] Mempool      │                                                                                                     
+ [5] RPC          │                                                                                                     
+ [6] Storage      │                                                                                                     
+ [7] System       │                                                                                                     
+ [8] Logs         │                                                                                                     
+ [9] Ops          │                                                                                                     
+                  │                                                                                                     
+ graphics text    │                                                                                                     
+                  │                                                                                                     
+                  │                                                                                                     
+                  │                                                                                                     
+                  │                                                                                                     
+                  │                                                                                                     
+                  │                                                                                                     
+                  │                                                                                                     
+                  │                                                                                                     
+                  │                                                                                                     
+                  │                                                                                                     
+                  │                                                                                                     
+                  │                                                                                                     
+                  │                                                                                                     
+ 1-9 view  Enter open  Esc back  : prompt  / filter  ? help  p pause  r redraw  d detach  q quit                        

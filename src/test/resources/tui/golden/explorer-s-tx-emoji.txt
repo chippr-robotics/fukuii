@@ -1,0 +1,24 @@
+ ◆ FUKUII  etc (61) · PoW · up 12d 7h                               Transaction 
+────────────────────────────────────────────────────────────────────────────────
+ ✓ no alerts                                                                    
+ Transaction   0xf3e3…dc8f                                                      
+                                                                                
+   hash                                                                         
+     0xf3e33ba2cb400221476fa4025afd95a13907734c38a4a8dff4b7d860ee5adc8f         
+   block      3,125,369, transaction 1                                          
+   type       legacy                                                            
+   value      0.65601 ETC                                                       
+   gas price  20.0 gwei, limit 50,000                                           
+   nonce      438,551                                                           
+   input      none                                                              
+                                                                                
+   Enter opens the selected row                                                 
+   receipt   0xf3e33ba2cb400221476fa4025afd95a13907734c38a4a8dff4b7d860ee5adc8f 
+   block     0x8fda1f865bd3000d7a226009b296f0ba403dbbbdec12a7ea54a971a0e1fd6ad5 
+   from      0x0000000000000000000000000000000000abcdef                         
+   to        0xc68e9954c7422f479e344faace70c692217ea05b                         
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+ 1-9 view  : prompt  / filter  ? help  p pause  r redraw  d detach  q quit      

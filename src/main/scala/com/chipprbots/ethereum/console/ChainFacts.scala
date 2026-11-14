@@ -42,6 +42,10 @@ final case class ForkPoint(name: String, at: Long)
   *   forks, and are left out); on ETH, those with no timestamp
   * @param version
   *   the node's version, for the L-tier header
+  * @param networkId
+  *   the network id the node tells its peers
+  * @param genesisHash
+  *   the genesis block's hash, once the node has loaded it
   */
 final case class ChainFacts(
     chainId: BigInt,
@@ -49,7 +53,9 @@ final case class ChainFacts(
     schedule: ForkSchedule,
     forks: Seq[ForkPoint],
     notScheduled: Seq[String],
-    version: String = ""
+    version: String = "",
+    networkId: Option[Long] = None,
+    genesisHash: Option[String] = None
 ):
   /** Main network, test network, or neither known, by the chain id (spec 029 FR-061). */
   def kind: NetworkKind =
@@ -67,6 +73,11 @@ final case class ChainFacts(
   def when(fork: ForkPoint): String = schedule match
     case ForkSchedule.ByBlock     => formatNumber(fork.at)
     case ForkSchedule.ByTimestamp => ChainFacts.utc(fork.at)
+
+  /** Since when `fork` has been active: `since 19,250,000`, `since 2025-10-27T23:16:48Z`, and `since genesis` for one
+    * at block or time 0, which a network started with (Ephemery's forks are all at time 0).
+    */
+  def since(fork: ForkPoint): String = if fork.at == 0 then "since genesis" else s"since ${when(fork)}"
 
   /** How far `fork` is from `position`: `4.0M away` (blocks), or `in 3d 4h`. */
   def distance(fork: ForkPoint, position: Long): String =
@@ -95,9 +106,10 @@ object ChainFacts:
     * are configured.
     */
   def from(config: BlockchainConfig, version: String = ""): ChainFacts =
-    config.networkType match
+    val facts = config.networkType match
       case NetworkType.ETC => byBlock(config.chainId.value, config.forkBlockNumbers, version)
       case NetworkType.ETH => byTimestamp(config.chainId.value, config.forkTimestamps, version)
+    facts.copy(networkId = Some(config.networkId))
 
   /** The block number from which a fork counts as not scheduled: `Long.MaxValue`, and the far-future placeholder the
     * shipped chain configurations give a fork that has no block yet (`olympia-block-number = "1000000000000000000"`,
