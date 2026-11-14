@@ -2916,3 +2916,15 @@ items:
       spec: specs/029-tui-command-center
     depends_on: [B-244]
     notes: tasks.md T005-T028. Closes B-226 (the escape drain).
+  - id: B-255
+    title: "Spec 018 T156: child-JVM kill -9 between newPayload and forkchoiceUpdated on RocksDB, restart with no peers, real consensus client reaches VALID"
+    priority: P2
+    status: open
+    area: storage
+    size: M
+    opened: 2026-11-14
+    refs: []
+    links:
+      spec: specs/018-storage-engine-consolidation
+    depends_on: [B-062]
+    notes: C4d part 3 pins T156 in process (a node reopened on the same in-memory source). The crash test proper (it/consensus/engine/CrashBetweenNewPayloadAndFcuItSpec.scala) and a real CL (EG-14) remain.
