@@ -1,29 +1,29 @@
  ◆ FUKUII  etc (61) · PoW · head 21,884,102 · 41/50 peers · up 12d 7h                                              Peer 
 ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
  ✓ no alerts                                                                                                            
- etc              │ Peers   41/50 ◆◆◆◆◆◆◆◆◆◆                    Block  21,884,102 (at head)                     Txpool… 
- PoW · id 61      │ Sync    ✓ at head                                                                                   
+                  │ Peers   41/50 ◆◆◆◆◆◆◆◆◆◆  Block  21,884,102 (at head)                    Txpool  142                
+                  │ Sync    ✓ at head                                                                                   
                   │─────────────────────────────────────────────────────────────────────────────────────────────────────
- [1] Overview     │ Peer   Esc returns to the list                                                                      
- [2] Chain        │ Id      11a29b9b11a29b9b11a29b9b11a29b9b11a29b9b11a29b9b11a29b9b11a29b9b                            
- [3] Peers        │         11a29b9b11a29b9b11a29b9b11a29b9b11a29b9b11a29b9b11a29b9b11a29b9b                            
- [4] Mempool      │ Address 203.0.113.36:30303                                                                          
- [5] RPC          │ Dir     outbound: this node dialled it                                                              
- [6] Storage      │ Age     connected 1h 43m ago                                                                        
- [7] System       │ Client  besu/v24.1.2/linux-x86_64/openjdk-java-21                                                   
- [8] Logs         │ Best    21,884,100                                                                                  
- [9] Ops          │ Score   0.930 ↓ falling                                                                             
+                  │ Peer   Esc returns to the list                                                                      
+       ETC        │ Id      11a29b9b11a29b9b11a29b9b11a29b9b11a29b9b11a29b9b11a29b9b11a29b9b                            
+                  │         11a29b9b11a29b9b11a29b9b11a29b9b11a29b9b11a29b9b11a29b9b11a29b9b                            
+                  │ Address 203.0.113.36:30303                                                                          
+                  │ Dir     outbound: this node dialled it                                                              
+ etc              │ Age     connected 1h 43m ago                                                                        
+ PoW · id 61      │ Client  besu/v24.1.2/linux-x86_64/openjdk-java-21                                                   
+ main network     │ Best    21,884,100                                                                                  
+                  │ Score   0.930 ↓ falling                                                                             
+ [1] Overview     │                                                                                                     
+ [2] Chain        │                                                                                                     
+ [3] Peers        │                                                                                                     
+ [4] Mempool      │                                                                                                     
+ [5] RPC          │                                                                                                     
+ [6] Storage      │                                                                                                     
+ [7] System       │                                                                                                     
+ [8] Logs         │                                                                                                     
+ [9] Ops          │                                                                                                     
                   │                                                                                                     
-                  │                                                                                                     
-                  │                                                                                                     
-                  │                                                                                                     
-                  │                                                                                                     
-                  │                                                                                                     
-                  │                                                                                                     
-                  │                                                                                                     
-                  │                                                                                                     
-                  │                                                                                                     
-                  │                                                                                                     
+ graphics text    │                                                                                                     
                   │                                                                                                     
                   │                                                                                                     
                   │                                                                                                     

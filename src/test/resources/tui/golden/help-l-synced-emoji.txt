@@ -1,30 +1,31 @@
  ◆ FUKUII  etc (61) · PoW · head 21,884,102 · 41/50 peers · up 12d 7h · v0.11.0                                                                            Help 
 ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
  ✓ no alerts                                                                                                                                                    
- etc              │ Peers   41/50 ◆◆◆◆◆◆◆◆◆◆  Block  21,884,102 (at head)                    Txpool  142             Disk  388G free     JVM  3.4G / 8.0G heap  
- PoW · id 61      │ Sync    ✓ at head                                                                                                                           
+                  │ Peers   41/50 ◆◆◆◆◆◆◆◆◆◆  Block  21,884,102 (at head)                    Txpool  142             Disk  388G free     JVM  3.4G / 8.0G heap  
+                  │ Sync    ✓ at head                                                                                                                           
                   │─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
- [1] Overview     │ Keys                                                                                                                                        
- [2] Chain        │   1-5        1 Overview  2 Chain  3 Peers  4 Mempool  5 RPC                                                                                 
- [3] Peers        │   6-9        6 Storage  7 System  8 Logs  9 Ops                                                                                             
- [4] Mempool      │   ]          the next view (wraps)                                                                                                          
- [5] RPC          │   [          the previous view (wraps)                                                                                                      
- [6] Storage      │   Tab        the next panel of the view                                                                                                     
- [7] System       │   Shift-Tab  the previous panel of the view                                                                                                 
- [8] Logs         │   Up k       the row above                                                                                                                  
- [9] Ops          │   Down j     the row below                                                                                                                  
-                  │   Left ,     across, to the left                                                                                                            
-                  │   Right .    across, to the right                                                                                                           
-                  │   PgUp -     a page up (Logs: older lines)                                                                                                  
-                  │   PgDn +     a page down (Logs: newer lines)                                                                                                
-                  │   Home <     the first row                                                                                                                  
-                  │   End >      the last row                                                                                                                   
-                  │   Enter      open the selected row                                                                                                          
-                  │   Esc Bksp   back; clear a filter                                                                                                           
-                  │   :          the prompt: a view's name, peer <id>, glyphs, detach, quit, help                                                               
+                  │ Keys                                                                                                                                        
+       ETC        │   1-5        1 Overview  2 Chain  3 Peers  4 Mempool  5 RPC                                                                                 
+                  │   6-9        6 Storage  7 System  8 Logs  9 Ops                                                                                             
+                  │   ]          the next view (wraps)                                                                                                          
+                  │   [          the previous view (wraps)                                                                                                      
+ etc              │   Tab        the next panel of the view                                                                                                     
+ PoW · id 61      │   Shift-Tab  the previous panel of the view                                                                                                 
+ main network     │   Up k       the row above                                                                                                                  
+                  │   Down j     the row below                                                                                                                  
+ [1] Overview     │   Left ,     across, to the left                                                                                                            
+ [2] Chain        │   Right .    across, to the right                                                                                                           
+ [3] Peers        │   PgUp -     a page up (Logs: older lines)                                                                                                  
+ [4] Mempool      │   PgDn +     a page down (Logs: newer lines)                                                                                                
+ [5] RPC          │   Home <     the first row                                                                                                                  
+ [6] Storage      │   End >      the last row                                                                                                                   
+ [7] System       │   Enter      open the selected row                                                                                                          
+ [8] Logs         │   Esc Bksp   back; clear a filter                                                                                                           
+ [9] Ops          │   :          the prompt: a view's name, peer <id>, glyphs, graphics, art, detach, quit                                                      
                   │   /          filter the list on screen as you type                                                                                          
-                  │   ? h F1     this help; any key but q, r and d returns                                                                                      
+ graphics text    │   ? h F1     this help; any key but q, r and d returns                                                                                      
                   │   g          switch the glyph set: emoji / ascii                                                                                            
+                  │   v          switch the graphics: pixel / block / text                                                                                      
                   │   p          pause or resume the motion (polling continues)                                                                                 
                   │   r          redraw the screen                                                                                                              
                   │   d          detach: the TUI closes, the node keeps running                                                                                 
@@ -44,5 +45,4 @@
                   │                                                                                                                                             
                   │                                                                                                                                             
                   │                                                                                                                                             
-                  │                                                                                                                                             
- 1-9 view  [ ] other views  Up Down select  Enter open  Esc back  : prompt  / filter  ? help  g glyphs  p pause  r redraw  d detach  q quit                     
+ 1-9 view  [ ] next view  Up Down select  Enter open  Esc back  : prompt  / filter  ? help  v graphics  p pause  r redraw  d detach  q quit                     

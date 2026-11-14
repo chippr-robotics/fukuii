@@ -18,6 +18,12 @@ import java.util.Locale
   *   a valid `FUKUII_TUI_MOTION`: `reduced` (true) or `full` (false), overriding `fukuii.tui.reduced-motion`
   * @param noSplash
   *   `FUKUII_TUI_NO_SPLASH` is set to a non-empty value: no startup splash
+  * @param graphics
+  *   a valid `FUKUII_TUI_GRAPHICS`, overriding `fukuii.tui.graphics`
+  * @param artDir
+  *   `FUKUII_TUI_ART_DIR`, overriding `fukuii.tui.art-dir`
+  * @param multiplexer
+  *   `TMUX` is set, or `TERM` is tmux's or screen's
   * @param warnings
   *   one per invalid variable, for the caller to log
   */
@@ -28,7 +34,10 @@ final case class TuiEnv(
     warnings: List[String],
     reducedMotion: Option[Boolean] = None,
     noSplash: Boolean = false,
-    readOnly: Boolean = false
+    readOnly: Boolean = false,
+    graphics: Option[GraphicsChoice] = None,
+    artDir: Option[String] = None,
+    multiplexer: Boolean = false
 ):
   /** The configuration the TUI runs with: `settings` (`fukuii.tui`) with these overrides applied, and `auto` resolved
     * against the locale into a [[GlyphSet]] (B-124). Every other field keeps [[TuiConfig.default]]'s value.
@@ -47,7 +56,11 @@ final case class TuiEnv(
       splashMs = if noSplash then 0L else settings.splashMs,
       logRingSize = settings.logRingSize,
       logLevel = settings.logLevel,
-      readOnly = readOnly || settings.readOnly
+      readOnly = readOnly || settings.readOnly,
+      graphics = graphics.getOrElse(settings.graphics),
+      artDir = artDir.orElse(settings.artDir),
+      multiplexer = multiplexer,
+      utf8Locale = utf8Locale
     )
 
 object TuiEnv:
@@ -60,6 +73,12 @@ object TuiEnv:
     * `fukuii.tui.read-only = true` is not undone by leaving the variable unset.
     */
   val ReadOnlyVar: String = "FUKUII_TUI_READ_ONLY"
+
+  /** `auto`, `pixel`, `block` or `text`: overrides `fukuii.tui.graphics` (spec 029 FR-011). */
+  val GraphicsVar: String = "FUKUII_TUI_GRAPHICS"
+
+  /** A directory of sprite sheets: overrides `fukuii.tui.art-dir` (contracts/art.md). */
+  val ArtDirVar: String = "FUKUII_TUI_ART_DIR"
 
   /** The accepted `FUKUII_TUI_MOTION` values. */
   val MotionAccepted: String = "full, reduced"
@@ -86,14 +105,22 @@ object TuiEnv:
     val motionWarnings = motionValue.filter(_ => reducedMotion.isEmpty).toList.map { v =>
       s"Ignoring $MotionVar='$v': expected one of $MotionAccepted; fukuii.tui.reduced-motion applies (default false)"
     }
+    val graphicsValue = env.get(GraphicsVar).map(_.trim).filter(_.nonEmpty)
+    val graphics = graphicsValue.flatMap(GraphicsChoice.parse)
+    val graphicsWarnings = graphicsValue.filter(_ => graphics.isEmpty).toList.map { v =>
+      s"Ignoring $GraphicsVar='$v': expected one of ${GraphicsChoice.Accepted}; fukuii.tui.graphics applies (default auto)"
+    }
     TuiEnv(
       noColor = env.get(NoColorVar).exists(_.nonEmpty),
       glyphs = glyphs,
       utf8Locale = localeIsUtf8(env, props),
-      warnings = glyphWarnings ++ motionWarnings,
+      warnings = glyphWarnings ++ motionWarnings ++ graphicsWarnings,
       reducedMotion = reducedMotion,
       noSplash = env.get(NoSplashVar).exists(_.nonEmpty),
-      readOnly = env.get(ReadOnlyVar).exists(_.nonEmpty)
+      readOnly = env.get(ReadOnlyVar).exists(_.nonEmpty),
+      graphics = graphics,
+      artDir = env.get(ArtDirVar).map(_.trim).filter(_.nonEmpty),
+      multiplexer = TerminalCaps.multiplexer(env)
     )
 
   /** The running process's environment and system properties. */

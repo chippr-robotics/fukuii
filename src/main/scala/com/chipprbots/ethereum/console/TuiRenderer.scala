@@ -7,8 +7,11 @@ import org.jline.utils.AttributedStyle
 import com.chipprbots.ethereum.console.TuiText.fitToWidth
 import com.chipprbots.ethereum.console.TuiText.formatNumber
 import com.chipprbots.ethereum.console.TuiText.formatShort
+import com.chipprbots.ethereum.console.gfx.ArtStore
+import com.chipprbots.ethereum.console.gfx.GraphicRegion
 import com.chipprbots.ethereum.console.panels.Ctx
 import com.chipprbots.ethereum.console.panels.Views
+import com.chipprbots.ethereum.console.widgets.Art
 import com.chipprbots.ethereum.console.widgets.DialogBox
 import com.chipprbots.ethereum.console.widgets.Sidebar
 
@@ -18,8 +21,11 @@ import com.chipprbots.ethereum.console.widgets.Sidebar
   * The renderer is a function of (state, width, height, theme): the glyph set, the view and the frame counter `tick`
   * are the state's, every style is the theme's, and the size picks the [[Tier]] (spec 027 FR-003, FR-004). It reads no
   * clock and no random source, so one state always draws one frame.
+  *
+  * @param art
+  *   the sprite sheets (spec 029 FR-060); with none, every graphic region shows its words
   */
-class TuiRenderer(config: TuiConfig):
+class TuiRenderer(config: TuiConfig, art: ArtStore = ArtStore.Empty):
 
   import TuiRenderer.*
 
@@ -27,9 +33,9 @@ class TuiRenderer(config: TuiConfig):
   def render(state: TuiState, width: Int, height: Int, theme: TuiTheme = TuiTheme.Ansi16): Seq[AttributedString] =
     val w = Math.max(width, 1)
     state.splashCover(height) match
-      case Some(0)    => Splash.render(state, w, height, theme, config.showLogo)
+      case Some(0)    => Splash.render(state, w, height, theme, config.showLogo, art)
       case Some(rows) => handover(state, w, height, theme, rows)
-      case None       => dashboard(state, w, height, theme)
+      case None       => dashboard(state, w, height, theme)._1
 
   /** The frame, and whether it moves with `tick`: the frame loop paces itself by it (Q1).
     *
@@ -42,15 +48,18 @@ class TuiRenderer(config: TuiConfig):
   def frame(state: TuiState, width: Int, height: Int, theme: TuiTheme = TuiTheme.Ansi16): Frame =
     val w = Math.max(width, 1)
     state.splashCover(height) match
-      case Some(0)    => Frame(Splash.render(state, w, height, theme, config.showLogo), moving(state))
+      case Some(0) =>
+        val (lines, regions) = Splash.frame(state, w, height, theme, config.showLogo, art)
+        Frame(lines, moving(state), regions.filter(_ => state.graphics != GraphicsMode.Block))
+      // While the dashboard's rows take the splash's, no picture is placed: the rows under one are changing.
       case Some(rows) => Frame(handover(state, w, height, theme, rows), true)
       case None =>
-        val lines = dashboard(state, w, height, theme)
+        val drawn = dashboard(state, w, height, theme)
         // The next `Lookahead` ticks: a worm at cell 2 draws its ripple at cells 1, 0, 0, so ticks 1 and 2 (mod 3) draw
         // alike and one tick's lookahead would drop the loop to 1 fps for a beat. The later renders run only then.
-        def differsAt(ahead: Long) = dashboard(state.copy(tick = state.tick + ahead), w, height, theme) != lines
+        def differsAt(ahead: Long) = dashboard(state.copy(tick = state.tick + ahead), w, height, theme) != drawn
         def nextDiffers = (1L to Lookahead).exists(differsAt)
-        Frame(lines, moving(state) && (state.catchup.isDefined || (mayMove(state) && nextDiffers)))
+        Frame(drawn._1, moving(state) && (state.catchup.isDefined || (mayMove(state) && nextDiffers)), drawn._2)
 
   /** How many ticks ahead a frame is compared: the ripple's period less one, since the ripple is the one animation that
     * draws the same frame at consecutive ticks (the pulse and the spinner change at every tick).
@@ -61,31 +70,40 @@ class TuiRenderer(config: TuiConfig):
   private def moving(state: TuiState): Boolean = state.motion == Motion.Full
 
   /** Whether any row could move: SNAP's worm rows, a syncing Blocks worm, a spinner beside an in-flight status, the
-    * spinner of a DAG that is being built. A node with none of them (at its head, connected, idle) is not drawn a
-    * second time to find out, which halves the frame loop's render cost at the 1 s pace.
+    * spinner of a DAG that is being built; and in pixel mode a sprite, whose frames follow the tick (spec 029 FR-019).
+    * A node with none of them (at its head, connected, idle, in block or text mode) is not drawn a second time to find
+    * out, which halves the frame loop's render cost at the 1 s pace.
     */
   private def mayMove(state: TuiState): Boolean =
     state.snapSyncState.isDefined || (state.bestBlock > 0 && !state.isSynchronized) ||
-      InFlight.contains(state.connectionStatus) || dagBuilding(state)
+      InFlight.contains(state.connectionStatus) || dagBuilding(state) ||
+      (state.graphics != GraphicsMode.Text && state.graphics != GraphicsMode.Block)
 
   /** The mining panel draws a spinner beside a DAG that is not yet loaded (`MiningPanel`). */
   private def dagBuilding(state: TuiState): Boolean =
     state.nodeSettings.miningEnabled && state.snapshot.exists(_.local.mining.exists(_.dag.exists(!_.loaded)))
 
   private def handover(state: TuiState, w: Int, height: Int, theme: TuiTheme, rows: Int): Seq[AttributedString] =
-    dashboard(state, w, height, theme).take(rows) ++ Splash.render(state, w, height, theme, config.showLogo).drop(rows)
+    dashboard(state, w, height, theme)._1.take(rows) ++
+      Splash.render(state, w, height, theme, config.showLogo, art).drop(rows)
 
-  /** Header, separator, alert row, the view's panels, footer (FR-002). On a terminal too short for all four fixed rows
-    * the separator goes first, then the header; the alert row stays above the footer down to two rows.
+  /** Header, separator, alert row, the view's panels, footer (FR-002), and the graphic regions among them (spec 029
+    * FR-012). On a terminal too short for all four fixed rows the separator goes first, then the header; the alert row
+    * stays above the footer down to two rows.
     */
-  private def dashboard(state: TuiState, w: Int, height: Int, theme: TuiTheme): Seq[AttributedString] =
+  private def dashboard(
+      state: TuiState,
+      w: Int,
+      height: Int,
+      theme: TuiTheme
+  ): (Seq[AttributedString], Seq[GraphicRegion]) =
     val g = TuiGlyphs.of(state.glyphs)
     // The header and the footer span the screen and take its tier. The body is what the sidebar leaves, and its panels
     // take the tier of that width, so a panel is never drawn for more columns than it gets (spec 029 FR-006).
-    val frame = Ctx(state, Tier.of(w, height), g, theme, config)
+    val frame = Ctx(state, Tier.of(w, height), g, theme, config, art)
     val side = if Sidebar.shown(w, height) then Sidebar.Cols + 1 else 0
     val bodyCols = w - side
-    val c = Ctx(state, Tier.of(bodyCols, height), g, theme, config)
+    val c = Ctx(state, Tier.of(bodyCols, height), g, theme, config, art, Some(frame.tier))
     val header = createHeader(frame, w)
     val alert = Alerts.row(state, w, g, theme)
     val footer = createFooter(frame, w)
@@ -96,7 +114,8 @@ class TuiRenderer(config: TuiConfig):
       else if above == 1 then Seq(alert)
       else Nil
     val bodyRows = if height <= 0 then 0 else above - top.size
-    val panels = Layout.render(Views.panels(c), bodyCols, bodyRows, c.separator(bodyCols))
+    val views = Views.panels(c)
+    val panels = Layout.render(views, bodyCols, bodyRows, c.separator(bodyCols))
     // A dialog replaces rows of the body only: the alert row stays above it (spec 029 FR-048).
     val asked = state.overlay match
       case Overlay.Dialog(DialogKind.Quit) => DialogBox.over(panels, DialogBox.quit(c), bodyCols, c)
@@ -111,8 +130,13 @@ class TuiRenderer(config: TuiConfig):
           bodyCols,
           new AttributedString(g.divider.text, theme.muted)
         )
+    // The regions, from the screen's corner: the sidebar's under the fixed rows, the body's right of the sidebar. One
+    // that is drawn as words (text mode, a sprite the art has not) is no picture, and is not listed.
+    val regions =
+      (if side == 0 then Nil else Sidebar.regions(frame, bodyRows).map(_.shift(top.size, 0))) ++
+        Layout.regions(views, bodyCols, bodyRows).map(_.shift(top.size, side))
     // Every row is already exactly `w` columns: Layout fits the body, and the fixed rows are fitted where they are made.
-    (top ++ body) :+ footer
+    ((top ++ body) :+ footer, regions.filter(Art.pictured(frame, _)))
 
   /** ` ◆ FUKUII etc (61) · PoW · up 1h 23m … Overview `; from tier M the head and the peers, at tier L the version
     * (§3.1). In the accent style; during the celebration's flash (frames 2–6, §3.8) in the flash style.
@@ -189,8 +213,13 @@ class TuiRenderer(config: TuiConfig):
       out.append(hint, c.t.muted)
       fitToWidth(out.toAttributedString, width)
 
-/** A rendered frame, and whether it moves with `tick` (the frame loop's pace, Q1). */
-final case class Frame(lines: Seq[AttributedString], animated: Boolean)
+/** A rendered frame, and whether it moves with `tick` (the frame loop's pace, Q1).
+  *
+  * @param regions
+  *   the rectangles of cells that hold a picture (spec 029 FR-012), from the screen's top-left corner. In block mode
+  *   the picture is in `lines` already; in pixel mode the frame writer shows an image over the region's blank cells
+  */
+final case class Frame(lines: Seq[AttributedString], animated: Boolean, regions: Seq[GraphicRegion] = Nil)
 
 object TuiRenderer:
   /** The footer's keys by tier: the essentials at S, more as the screen widens. Every key is in Help. */
@@ -198,7 +227,7 @@ object TuiRenderer:
     case Tier.S => " 1-9 view  : prompt  / filter  ? help  p pause  r redraw  d detach  q quit"
     case Tier.M => " 1-9 view  Enter open  Esc back  : prompt  / filter  ? help  p pause  r redraw  d detach  q quit"
     case Tier.L =>
-      " 1-9 view  [ ] other views  Up Down select  Enter open  Esc back  : prompt  / filter  ? help  g glyphs  " +
+      " 1-9 view  [ ] next view  Up Down select  Enter open  Esc back  : prompt  / filter  ? help  v graphics  " +
         "p pause  r redraw  d detach  q quit"
 
   /** Connection statuses that are waiting for something, each with the word the Peers cell shows: a spinner turns
@@ -215,6 +244,9 @@ object TuiRenderer:
 
   /** Create a renderer with the specified configuration. */
   def apply(config: TuiConfig): TuiRenderer = new TuiRenderer(config)
+
+  /** A renderer that draws `art`. */
+  def apply(config: TuiConfig, art: ArtStore): TuiRenderer = new TuiRenderer(config, art)
 
   /** The 12-line logo. */
   private[console] val SmallLogo: Seq[String] = Seq(

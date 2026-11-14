@@ -1,34 +1,34 @@
  # FUKUII  mordor (63) . PoW . head 0 . 11/50 peers . up 2h 11m                                                Overview 
 ------------------------------------------------------------------------------------------------------------------------
  ! 1 warn    peers 11/50 below 25%                                                                                      
- mordor           | Peers   11/50 ##########                    Block  0 -> 9,118,000 (pivot)                   Txpoo.. 
- PoW . id 63      | RPC     :8545 on                            Disk   412G free                                JVM  .. 
+                  | Peers   11/50 ##########  Block  0 -> 9,118,000 (pivot)                  Txpool  142                
+                  | RPC     :8545 on                                     Disk   412G free    JVM     5.1G / 8.0G heap   
                   |-----------------------------------------------------------------------------------------------------
- [1] Overview     | SNAP [S]  Downloading bytecodes & storage                               elapsed 2h 11m . ETA 1h 58m 
- [2] Chain        |   Overall  [==========~o.............................]@@ 27%                                        
- [3] Peers        |   Accounts ~o[COMPLETE +]@@                                    34.1M                                
- [4] Mempool      |   Storage  [==============~o.........................]@@ 37%   119.6M slots @ 21.4K/s               
- [5] RPC          |   Bytecode ~o[ACTIVE]   @@                                     412.0K @ 310/s                       
- [6] Storage      |   Healing  ~o[QUEUED]@@                                                                             
- [7] System       |   Chain    headers 4.2M / 9.1M . bodies 0 . receipts 0                                              
- [8] Logs         |-----------------------------------------------------------------------------------------------------
- [9] Ops          | Forks (block)                                                                                       
-                  |   Phoenix + - ECIP-1099 + - Magneto + - Mystique + ========> Spiral @ 9,957,000 (839.0K away)       
-                  |   block 9,118,000 . Mystique since 5,520,000                                                        
-                  |-----------------------------------------------------------------------------------------------------
-                  | Node    /var/lib/fukuii/mordor . SNAP sync . archive pruning . 50 peers max . mining off            
-                  |-----------------------------------------------------------------------------------------------------
-                  | Recent                                                                                              
-                  | 11:59:00 WARN  Peer 0x9c0d..77 timed out on GetBlockHeaders, retrying                               
-                  | 11:59:04 INFO  Imported block 21,884,099 0x7ab2..d4c7 with 6 txs in 14ms                            
-                  | 11:59:12 INFO  eth_getWork served for block 21,884,100                                              
+                  | SNAP [S]  Downloading bytecodes & storage                               elapsed 2h 11m . ETA 1h 58m 
+       ETC        |   Overall  [==========~o.............................]@@ 27%                                        
+                  |   Accounts ~o[COMPLETE +]@@                                    34.1M                                
+                  |   Storage  [==============~o.........................]@@ 37%   119.6M slots @ 21.4K/s               
+                  |   Bytecode ~o[ACTIVE]   @@                                     412.0K @ 310/s                       
+ mordor           |   Healing  ~o[QUEUED]@@                                                                             
+ PoW . id 63      |   Chain    headers 4.2M / 9.1M . bodies 0 . receipts 0                                              
+ test network     |-----------------------------------------------------------------------------------------------------
+                  | Forks (block)                                                                                       
+ [1] Overview     |   Phoenix + - ECIP-1099 + - Magneto + - Mystique + ========> Spiral @ 9,957,000 (839.0K away)       
+ [2] Chain        |   block 9,118,000 . Mystique since 5,520,000                                                        
+ [3] Peers        |-----------------------------------------------------------------------------------------------------
+ [4] Mempool      | Node    /var/lib/fukuii/mordor . SNAP sync . archive pruning . 50 peers max . mining off            
+ [5] RPC          |-----------------------------------------------------------------------------------------------------
+ [6] Storage      | Recent                                                                                              
+ [7] System       | 11:59:00 WARN  Peer 0x9c0d..77 timed out on GetBlockHeaders, retrying                               
+ [8] Logs         | 11:59:04 INFO  Imported block 21,884,099 0x7ab2..d4c7 with 6 txs in 14ms                            
+ [9] Ops          | 11:59:12 INFO  eth_getWork served for block 21,884,100                                              
                   | 11:59:17 INFO  Imported block 21,884,100 0x3301..2e9d with 21 txs in 31ms                           
-                  | 11:59:25 INFO  [====================~o]@@ 100% - RegularSync                                        
-                  | 11:59:30 ERROR Cannot decode a message from 203.0.113.40:30303                                      
+ graphics text    | 11:59:25 INFO  [====================~o]@@ 100% - RegularSync                                        
+                  | 11:59:30 ERROR Cannot decode a message from 203.0.113.40:30303                          (o_O)!      
                   | 11:59:34 INFO  Imported block 21,884,101 0x9b0c..ff31 with 9 txs in 17ms                            
                   | 11:59:47 INFO  Imported block 21,884,102 0x6d21..1a0e with 14 txs in 22ms                           
                   | 11:59:52 INFO  Peers: 41 handshaked . 14 in . 27 out                                                
-                  | 12:00:00 INFO  RegularSync: at head, block 21884102                                                 
+                  | 12:00:00 INFO  RegularSync: at head, block 21884102                                    warning      
                   |                                                                                                     
                   |                                                                                                     
                   |                                                                                                     

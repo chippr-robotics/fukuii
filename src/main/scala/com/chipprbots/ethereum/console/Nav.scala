@@ -7,6 +7,11 @@ enum Screen:
   /** One peer's details, opened from the Peers list. */
   case PeerDetail(peerId: String)
 
+  /** The art, a pose of a sprite a page, in the graphics mode on screen (`:art`; contracts/art.md). `page` counts from
+    * the first and wraps.
+    */
+  case Art(page: Int)
+
 /** What takes the keys instead of the view (spec 029 FR-007 to FR-009). At most one is open. */
 enum Overlay:
   case None
@@ -36,3 +41,12 @@ enum Effect:
 
   /** Clear the screen and draw the whole frame again. */
   case Redraw
+
+  /** `v`: the next graphics mode this terminal can draw. */
+  case CycleGraphics
+
+  /** `:graphics <mode>`: that mode, if this terminal can draw it. */
+  case SetGraphics(choice: GraphicsChoice)
+
+  /** `r` on the Art screen: read the sprite sheets again (`fukuii.tui.art-dir`). */
+  case ReloadArt

@@ -21,6 +21,7 @@ class ArtTest(unittest.TestCase):
             self.assertTrue(path.exists(), name)
             self.assertTrue(np.array_equal(make_art.load(path), pixels), f"{name} is stale: run make_art.py")
         self.assertEqual((make_art.ART_DIR / "art.conf").read_text(), make_art.manifest())
+        self.assertEqual(make_art.PIXEL_HASHES.read_text(), make_art.pixel_hashes())
 
     def test_committed_sheets_keep_the_contract(self):
         self.assertEqual(check_art.check(make_art.ART_DIR), [])

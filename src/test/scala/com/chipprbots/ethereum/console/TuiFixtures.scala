@@ -35,6 +35,13 @@ object TuiFixtures:
   def panelRows(rows: Seq[String], w: Int, h: Int): Seq[String] =
     rows.zipWithIndex.map((row, i) => if i >= 3 && i < rows.size - 1 then body(row, w, h) else row)
 
+  /** The art shipped with the node, read once for every spec that draws it. */
+  lazy val art: gfx.ArtStore = gfx.ArtStore.bundled()
+
+  /** A terminal that answered both questions, with the VGA cell the art is drawn for. */
+  val Cell: gfx.CellSize = gfx.CellSize(8, 16)
+  val KittyCaps: TerminalCaps = TerminalCaps(kittyGraphics = true, cell = Some(Cell), colors = 256, multiplexer = false)
+
   /** The fixtures' "now". */
   val Now: Instant = Instant.parse("2026-11-07T12:00:00Z")
 
@@ -608,7 +615,9 @@ object TuiFixtures:
   def celebration(glyphs: GlyphSet = GlyphSet.Emoji, frame: Int): TuiState =
     syncedEtc(glyphs).copy(tick = frame.toLong, celebrationStartedTick = Some(0L), celebrated = true)
 
-  /** The splash at `tick` of 12, on an ETC node that is starting (research §3.7). */
+  /** The splash at `tick` of 12, on an ETC node that is starting (research §3.7): its storage is up, and its network is
+    * coming up (spec 029 FR-020).
+    */
   def splash(glyphs: GlyphSet = GlyphSet.Emoji, tick: Long): TuiState =
     TuiState(
       networkName = "etc",
@@ -617,7 +626,8 @@ object TuiFixtures:
       now = Now,
       glyphs = glyphs,
       tick = tick,
-      splashUntilTick = Some(12L)
+      splashUntilTick = Some(12L),
+      startup = Set(StartupPhase.Storage)
     )
 
   /** A clock the test moves. */

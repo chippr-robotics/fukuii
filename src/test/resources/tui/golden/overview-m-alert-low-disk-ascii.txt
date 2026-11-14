@@ -1,29 +1,29 @@
  # FUKUII  etc (61) . PoW . head 18,402,113 . 6/50 peers . up 9m 0s                                            Overview 
 ------------------------------------------------------------------------------------------------------------------------
  ! 2 warns   disk 14.2G free (warn < 20G) . peers 6/50 below 25%                                                        
- etc              | Peers   6/50 ######                         Block  18,402,113 -> 21,884,102 (-3,481,989)    Txpoo.. 
- PoW . id 61      | RPC     :8545 on                            Disk   14.2G free !                             JVM  .. 
+                  | Peers   6/50 ######       Block  18,402,113 -> 21,884,102 (-3,481,989)   Txpool  142                
+                  | RPC     :8545 on                                     Disk   14.2G fre..  JVM     2.1G / 8.0G heap   
                   |-----------------------------------------------------------------------------------------------------
- [1] Overview     | Sync    regular                                                      rate 184.37 blk/s . ETA 5h 14m 
- [2] Chain        |   Blocks   [================================~o.......]@@ 84%   18,402,113 / 21,884,102              
- [3] Peers        |-----------------------------------------------------------------------------------------------------
- [4] Mempool      | Forks (block)                                                                                       
- [5] RPC          |   Phoenix + - ECIP-1099 + - Magneto + - Mystique + ========> Spiral @ 19,250,000 (847.9K away)      
- [6] Storage      |   block 18,402,113 . Mystique since 14,525,000                                                      
- [7] System       |-----------------------------------------------------------------------------------------------------
- [8] Logs         | Node    /var/lib/fukuii/etc . Full sync . archive pruning . 50 peers max . mining off               
- [9] Ops          |-----------------------------------------------------------------------------------------------------
-                  | Recent                                                                                              
-                  | 11:59:00 WARN  Peer 0x9c0d..77 timed out on GetBlockHeaders, retrying                               
-                  | 11:59:04 INFO  Imported block 21,884,099 0x7ab2..d4c7 with 6 txs in 14ms                            
-                  | 11:59:12 INFO  eth_getWork served for block 21,884,100                                              
-                  | 11:59:17 INFO  Imported block 21,884,100 0x3301..2e9d with 21 txs in 31ms                           
-                  | 11:59:25 INFO  [====================~o]@@ 100% - RegularSync                                        
-                  | 11:59:30 ERROR Cannot decode a message from 203.0.113.40:30303                                      
-                  | 11:59:34 INFO  Imported block 21,884,101 0x9b0c..ff31 with 9 txs in 17ms                            
-                  | 11:59:47 INFO  Imported block 21,884,102 0x6d21..1a0e with 14 txs in 22ms                           
+                  | Sync    regular                                                      rate 184.37 blk/s . ETA 5h 14m 
+       ETC        |   Blocks   [================================~o.......]@@ 84%   18,402,113 / 21,884,102              
+                  |-----------------------------------------------------------------------------------------------------
+                  | Forks (block)                                                                                       
+                  |   Phoenix + - ECIP-1099 + - Magneto + - Mystique + ========> Spiral @ 19,250,000 (847.9K away)      
+ etc              |   block 18,402,113 . Mystique since 14,525,000                                                      
+ PoW . id 61      |-----------------------------------------------------------------------------------------------------
+ main network     | Node    /var/lib/fukuii/etc . Full sync . archive pruning . 50 peers max . mining off               
+                  |-----------------------------------------------------------------------------------------------------
+ [1] Overview     | Recent                                                                                              
+ [2] Chain        | 11:59:00 WARN  Peer 0x9c0d..77 timed out on GetBlockHeaders, retrying                               
+ [3] Peers        | 11:59:04 INFO  Imported block 21,884,099 0x7ab2..d4c7 with 6 txs in 14ms                            
+ [4] Mempool      | 11:59:12 INFO  eth_getWork served for block 21,884,100                                              
+ [5] RPC          | 11:59:17 INFO  Imported block 21,884,100 0x3301..2e9d with 21 txs in 31ms                           
+ [6] Storage      | 11:59:25 INFO  [====================~o]@@ 100% - RegularSync                                        
+ [7] System       | 11:59:30 ERROR Cannot decode a message from 203.0.113.40:30303                          (o_O)!      
+ [8] Logs         | 11:59:34 INFO  Imported block 21,884,101 0x9b0c..ff31 with 9 txs in 17ms                            
+ [9] Ops          | 11:59:47 INFO  Imported block 21,884,102 0x6d21..1a0e with 14 txs in 22ms                           
                   | 11:59:52 INFO  Peers: 41 handshaked . 14 in . 27 out                                                
-                  | 12:00:00 INFO  RegularSync: at head, block 21884102                                                 
+ graphics text    | 12:00:00 INFO  RegularSync: at head, block 21884102                                    warning      
                   |                                                                                                     
                   |                                                                                                     
                   |                                                                                                     

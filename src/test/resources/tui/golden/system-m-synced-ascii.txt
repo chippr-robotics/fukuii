@@ -1,29 +1,29 @@
  # FUKUII  etc (61) . PoW . head 21,884,102 . 41/50 peers . up 12d 7h                                            System 
 ------------------------------------------------------------------------------------------------------------------------
  + no alerts                                                                                                            
- etc              | Peers   41/50 ##########                    Block  21,884,102 (at head)                     Txpoo.. 
- PoW . id 61      | Sync    + at head                                                                                   
+                  | Peers   41/50 ##########  Block  21,884,102 (at head)                    Txpool  142                
+                  | Sync    + at head                                                                                   
                   |-----------------------------------------------------------------------------------------------------
- [1] Overview     | System                                                                                              
- [2] Chain        | Heap    3.4G / 8.0G heap                                                                            
- [3] Peers        | GC      0.3%                                                                                        
- [4] Mempool      | Discover1,912 known . 14 pending . 3 blacklisted                                                    
- [5] RPC          |-----------------------------------------------------------------------------------------------------
- [6] Storage      | Not built yet: CPU, threads, network throughput, health bars                                        
+                  | System                                                                                              
+       ETC        | Heap    3.4G / 8.0G heap                                                                            
+                  | GC      0.3%                                                                                        
+                  | Discover1,912 known . 14 pending . 3 blacklisted                                                    
+                  |-----------------------------------------------------------------------------------------------------
+ etc              | Not built yet: CPU, threads, network throughput, health bars                                        
+ PoW . id 61      |                                                                                                     
+ main network     |                                                                                                     
+                  |                                                                                                     
+ [1] Overview     |                                                                                                     
+ [2] Chain        |                                                                                                     
+ [3] Peers        |                                                                                                     
+ [4] Mempool      |                                                                                                     
+ [5] RPC          |                                                                                                     
+ [6] Storage      |                                                                                                     
  [7] System       |                                                                                                     
  [8] Logs         |                                                                                                     
  [9] Ops          |                                                                                                     
                   |                                                                                                     
-                  |                                                                                                     
-                  |                                                                                                     
-                  |                                                                                                     
-                  |                                                                                                     
-                  |                                                                                                     
-                  |                                                                                                     
-                  |                                                                                                     
-                  |                                                                                                     
-                  |                                                                                                     
-                  |                                                                                                     
+ graphics text    |                                                                                                     
                   |                                                                                                     
                   |                                                                                                     
                   |                                                                                                     

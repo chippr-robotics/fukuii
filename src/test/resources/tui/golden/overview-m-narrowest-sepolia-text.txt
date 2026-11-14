@@ -1,0 +1,32 @@
+ ◆ FUKUII  sepolia (11155111) · PoS · head 7,412,009 · 23/50 peers · up 3d 4h              Overview 
+────────────────────────────────────────────────────────────────────────────────────────────────────
+ ✓ no alerts                                                                                        
+                  │ Peers   23/50 ◆◆◆◆◆◆◆◆◆◆         Block  7,412,009 → 7,412,011 (−2)              
+                  │ RPC     :8545 on   Engine :8551  Disk   1.2T free       Txpool  1,204 (3 blob)  
+                  │─────────────────────────────────────────────────────────────────────────────────
+                  │ Sync    regular                                       rate 0.08 blk/s · ETA 24s 
+       ETH        │   Blocks   [==================🪱.]🧠 99%   7,412,009 / 7,412,011                
+                  │─────────────────────────────────────────────────────────────────────────────────
+                  │ CL      connected · forkchoice 4s (VALID) · payload 4s (VALID)                  
+                  │─────────────────────────────────────────────────────────────────────────────────
+ sepolia          │ Forks   BPO2 ✓ ═══════════════════▶ Amsterdam @ 2026-10-06T13:53:36Z (in 3d 4h) 
+ PoS              │─────────────────────────────────────────────────────────────────────────────────
+ id 11155111      │ Node    …/sepolia · SNAP sync · archive pruning · 50 peers max · mining off     
+ test network     │─────────────────────────────────────────────────────────────────────────────────
+                  │ Recent                                                                          
+ [1] Overview     │ 11:59:25 INFO  [====================🪱]🧠 100% — RegularSync                    
+ [2] Chain        │ 11:59:30 ERROR Cannot decode a message from 203.0.113.40:30303                  
+ [3] Peers        │ 11:59:34 INFO  Imported block 21,884,101 0x9b0c…ff31 with 9 txs in 17ms         
+ [4] Mempool      │ 11:59:47 INFO  Imported block 21,884,102 0x6d21…1a0e with 14 txs in 22ms        
+ [5] RPC          │ 11:59:52 INFO  Peers: 41 handshaked · 14 in · 27 out                            
+ [6] Storage      │ 12:00:00 INFO  RegularSync: at head, block 21884102                             
+ [7] System       │                                                                                 
+ [8] Logs         │                                                                                 
+ [9] Ops          │                                                                                 
+                  │                                                                                 
+ graphics text    │                                                                                 
+                  │                                                                                 
+                  │                                                                                 
+                  │                                                                                 
+                  │                                                                                 
+ 1-9 view  Enter open  Esc back  : prompt  / filter  ? help  p pause  r redraw  d detach  q quit    

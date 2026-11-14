@@ -130,6 +130,54 @@ Every slice ends with the same gate. The art (phase 0) is done and in the tree.
 
 ## Phase 3: Slice 2 — graphics (US2)
 
+> As built (2026-11-14), in one pull request (#1835), in two parts. **2a**: the three modes, the terminal query, the
+> frame writer, the art loader, the network icon, the mascot, `v`, `:graphics`, `:art`. **2b**: T046 the
+> command-center theme and T049 the splash with the badge and the node's real start-up phases. The chart primitives of
+> T050 wait for the first chart (slice 3). After the slice: 1,076 tests in 42 suites of
+> `testOnly com.chipprbots.ethereum.console.* *Tui*`. What differs from the tasks as written:
+>
+> - **T031–T035**: the PNG reader, the art store, the half-block cells, the Kitty commands and the pixel layer are
+>   tested in one file, `gfx/GfxSpec`. `GraphicsModeSpec` also holds the terminal-query tests (T029) and the settings.
+> - **T038**: the information-parity test is in `GraphicsRenderSpec`, over every Overview and alert fixture.
+> - **T039**: the no-image-left test is `TuiGraphicsSpec`; `TuiTestTerminal` now plays its output back into rows,
+>   images and placements, because a frame write is no longer the whole screen.
+> - **T045**: `FrameWriter` is a pure function from (what the terminal shows, the frame) to (bytes, what it shows
+>   after); `Tui` holds the value.
+> - **T047**: the mascot stands in the bottom-right corner of the Overview's Recent strip, the rows that lose least by
+>   being narrower, and only where the strip has the rows for it (9 for the small one, 17 and tier L for the large).
+>   Its region is blank while a dialog is open (FR-018). In text mode the region shows a face in plain ASCII.
+> - **T048**: a test network is named from the chain id (`ChainFacts.kind`): 63, 11155111, 17000, 560048 and
+>   7091047534 are test networks, 1 and 61 main networks, anything else is called neither.
+> - **Beyond the tasks**: block mode needs a UTF-8 locale (its one character is not ASCII), so FR-013 gained that
+>   clause; FR-012 names the one row that changes with the mode, the sidebar's `graphics <mode>`; the pose table's
+>   `asleep` row is "stalled, with no other alert" (a source that does not answer is an error alert, and errors come
+>   first); tier M's status strips place their cells by the row's width below 120 columns, so the sidebar's columns
+>   cost no cell its value (a slice 1 leftover: `Txpool…` at 120×40).
+> - **FR-016, resize**: a resize may be a change of font size, so the cell's size is asked again then. The answer
+>   comes back among the keys; a decoder told to read it (`KeyDecoder(cellReports = true)`, the TUI's own) makes it a
+>   `Key.CellSize`, which `Tui.handleKey` takes before any key is dispatched and `Update` ignores.
+> - **B-201**: the whole Overview frame at 100×32, tier M's narrowest screen, is a golden for an ETH and an ETC
+>   fixture, so the golden lint reads the Forks row there; the sidebar gives a chain id a row of its own when it would
+>   not fit beside the family (Sepolia's, Platåberget's).
+> - **From prism's review**: what a terminal reports is input. A cell is believed only from 4 pixels a side to
+>   64 × 128 and only as the answer to a question; art is enlarged at most 8 times; a sheet of the wrong size is
+>   refused at its PNG header; an `include` in `art.conf` fetches nothing. The key decoder keeps an unfinished sequence
+>   across a quiet input (for up to 1 s) instead of dropping it after 50 ms, so the rest of a slow key or a late reply
+>   is never typed as keys: that is B-226's failure, closed here and not by slice 1.
+> - **2b as built** (T046, T049): `TuiTheme.CommandCenter` is the art's palette by index, and
+>   `Tui` draws with it whenever the mode is not text. `StdNode.start` reports five phases (`StartupPhase`) as each
+>   completes; the splash lists them and its worm is the share done, so the worm no longer crawls with time. The
+>   splash still ends on its timer (spec 027 FR-013): it does not wait for the start, and a phase still under way
+>   shows as such until then. The chain's identity reaches the TUI in phase 0, so the icon and the header name the
+>   network while the node starts. In pixel and block mode the badge stands for the logo where it fits above the
+>   phases (the large one from 27 rows, the small one at 80×24); text mode keeps spec 027's logos, and since any key
+>   leaves the splash, the mode cannot change under it. **Not built**: the `splash-scene` backdrop. A backdrop is
+>   under text, which block mode cannot draw, so it would be a picture one mode has and another has not (FR-012);
+>   the sheet stays in the art, shown by `:art`, and unused. `Charts.scala` (the rest of T050) waits for slice 3.
+> - **Backlog**: 2a is B-257, 2b is B-258; both close with #1835.
+> - **T052 is open**: the manual gate needs kitty, Ghostty and tmux, and the session that built the slice has no
+>   terminal.
+
 **Goal**: pixel, block and text modes over one layout; the mascot, the network icon, the splash.
 **Branch**: `feat/029-s2-graphics`.
 
@@ -137,45 +185,45 @@ Every slice ends with the same gate. The art (phase 0) is done and in the tree.
 
 ### Tests first
 
-- [ ] T029 [P] [US2] `TerminalQuerySpec`: a terminal that answers both queries, one that answers only device
+- [x] T029 [P] [US2] `TerminalQuerySpec`: a terminal that answers both queries, one that answers only device
       attributes, one that answers nothing within 500 ms; no reply reaches dispatch
-- [ ] T030 [P] [US2] `GraphicsModeSpec`: the table of FR-013 (setting × capabilities × `NO_COLOR` × multiplexer)
-- [ ] T031 [P] [US2] `PngSpec`: reads every committed sheet to the same pixels `scripts/tui/make_art.py` drew (a
+- [x] T030 [P] [US2] `GraphicsModeSpec`: the table of FR-013 (setting × capabilities × `NO_COLOR` × multiplexer)
+- [x] T031 [P] [US2] `PngSpec`: reads every committed sheet to the same pixels `scripts/tui/make_art.py` drew (a
       fixture of hashes written by the script); rejects interlaced, 16-bit and truncated files
-- [ ] T032 [P] [US2] `ArtStoreSpec`: loads the bundled art; every rule of contracts/art.md, each with a broken sheet;
+- [x] T032 [P] [US2] `ArtStoreSpec`: loads the bundled art; every rule of contracts/art.md, each with a broken sheet;
       a broken sprite is left out and reported, and nothing throws; timelines validated
-- [ ] T033 [P] [US2] `BlocksSpec`: the four half-block cases (both, upper, lower, neither); colours are indexed; a
+- [x] T033 [P] [US2] `BlocksSpec`: the four half-block cases (both, upper, lower, neither); colours are indexed; a
       region is exactly its cells
-- [ ] T034 [P] [US2] `KittySpec`: byte-exact upload (chunks of at most 4,096, `m` flags, `o=z`), placement with a
+- [x] T034 [P] [US2] `KittySpec`: byte-exact upload (chunks of at most 4,096, `m` flags, `o=z`), placement with a
       source rectangle and `C=1`, delete; every command carries `q=2`
-- [ ] T035 [P] [US2] `PixelLayerSpec`: nothing to send for an unchanged frame; one placement for a frame change; an
+- [x] T035 [P] [US2] `PixelLayerSpec`: nothing to send for an unchanged frame; one placement for a frame change; an
       upload once per image; everything again after a clear; enlargement by a whole factor only
-- [ ] T036 [P] [US2] `FrameWriterSpec`: only changed rows are written; a resize writes all; bytes per frame under the
+- [x] T036 [P] [US2] `FrameWriterSpec`: only changed rows are written; a resize writes all; bytes per frame under the
       budget for the Overview fixture in pixel and block mode (SC-007)
-- [ ] T037 [P] [US2] `PoseSpec`: every row of research §5.5; errors outrank warnings outrank stall; reduced motion and
+- [x] T037 [P] [US2] `PoseSpec`: every row of research §5.5; errors outrank warnings outrank stall; reduced motion and
       block mode give frame 0; the frame follows the timeline at `tick`
-- [ ] T038 [P] [US2] `InformationParitySpec`: for every fixture, each value a region declares appears in the frame's
+- [x] T038 [P] [US2] `InformationParitySpec`: for every fixture, each value a region declares appears in the frame's
       text, and switching mode changes no cell outside the regions (SC-005, FR-012)
-- [ ] T039 [P] [US2] `TuiSpec`: after `q` confirmed, `d`, an interrupt and a lost terminal the test terminal holds no
+- [x] T039 [P] [US2] `TuiSpec`: after `q` confirmed, `d`, an interrupt and a lost terminal the test terminal holds no
       image (SC-006); extend `TuiTestTerminal` to track uploads and placements
-- [ ] T040 [P] [US2] Goldens: Overview at tiers M and L in block and text mode; the splash; `:art`; the network icon
+- [x] T040 [P] [US2] Goldens: Overview at tiers M and L in block and text mode; the splash; `:art`; the network icon
       for an ETC and an ETH fixture (FR-061)
 
 ### Implementation
 
-- [ ] T041 [P] [US2] `console/gfx/Palette.scala`, `PixelBuffer.scala`, `Blocks.scala`
-- [ ] T042 [P] [US2] `console/gfx/Png.scala` and `console/gfx/ArtStore.scala`; `art-dir` and `FUKUII_TUI_ART_DIR`
-- [ ] T043 [P] [US2] `console/gfx/Kitty.scala` and `console/gfx/PixelLayer.scala`
-- [ ] T044 [US2] `console/TerminalQuery.scala` and `console/GraphicsMode.scala`; `graphics` and
+- [x] T041 [P] [US2] `console/gfx/Palette.scala`, `PixelBuffer.scala`, `Blocks.scala`
+- [x] T042 [P] [US2] `console/gfx/Png.scala` and `console/gfx/ArtStore.scala`; `art-dir` and `FUKUII_TUI_ART_DIR`
+- [x] T043 [P] [US2] `console/gfx/Kitty.scala` and `console/gfx/PixelLayer.scala`
+- [x] T044 [US2] `console/TerminalQuery.scala` and `console/GraphicsMode.scala`; `graphics` and
       `FUKUII_TUI_GRAPHICS`; run the query in `Tui.initialize` before the frame loop
-- [ ] T045 [US2] `console/FrameWriter.scala`; `Frame` gains `regions`; `Tui.render` writes through it; the image
+- [x] T045 [US2] `console/FrameWriter.scala`; `Frame` gains `regions`; `Tui.render` writes through it; the image
       teardown rung and the `closedByJLine` path
-- [ ] T046 [US2] `console/TuiTheme.scala`: the command-center theme from contracts/art.md's interface colours, used in
+- [x] T046 [US2] `console/TuiTheme.scala`: the command-center theme from contracts/art.md's interface colours, used in
       pixel and block mode; 027's themes unchanged for text mode
-- [ ] T047 [US2] `console/Pose.scala`; the mascot on Overview at tiers M and L with its state named in text beside it
-- [ ] T048 [US2] The network icon in the sidebar, chosen from `ChainFacts.family` (FR-061), with the network's name
+- [x] T047 [US2] `console/Pose.scala`; the mascot on Overview at tiers M and L with its state named in text beside it
+- [x] T048 [US2] The network icon in the sidebar, chosen from `ChainFacts.family` (FR-061), with the network's name
       and a test-network label in text
-- [ ] T049 [US2] `console/Splash.scala`: the badge, the backdrop, and the node's start-up phases reported from
+- [x] T049 [US2] `console/Splash.scala`: the badge, the backdrop, and the node's start-up phases reported from
       `StdNode.start` (FR-020); `Fukuii.scala` and `StdNode.scala` publish each phase as it completes
 - [ ] T050 [US2] `v` and `:graphics`; `:art`; `r` reloads `art-dir`; `console/gfx/Charts.scala` with the bar and
       sparkline primitives the 027 meters can use

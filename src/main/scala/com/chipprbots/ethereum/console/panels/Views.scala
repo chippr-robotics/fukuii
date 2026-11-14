@@ -11,6 +11,7 @@ private[console] object Views:
     else
       c.state.screen match
         case Some(Screen.PeerDetail(id)) => PeerDetailPanel.panels(c, id)
+        case Some(Screen.Art(page))      => ArtPanel.panels(c, page)
         case None =>
           c.state.view match
             case TuiView.Overview => OverviewPanels.panels(c)

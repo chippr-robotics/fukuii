@@ -17,8 +17,11 @@ import org.jline.utils.InfoCmp.Capability
   *
   * @param keys
   *   what each known CSI or SS3 sequence means, by its text after `ESC`: `"[A"`, `"OP"`, `"[5~"`
+  * @param cellReports
+  *   the terminal's report of its cell size (`ESC [ 6 ; height ; width t`) becomes a [[Key.CellSize]] instead of
+  *   nothing: for the program that asks for it after a resize
   */
-final class KeyDecoder(keys: Map[String, Key] = KeyDecoder.Standard):
+final class KeyDecoder(keys: Map[String, Key] = KeyDecoder.Standard, cellReports: Boolean = false):
 
   import KeyDecoder.*
   import KeyDecoder.State.*
@@ -32,28 +35,32 @@ final class KeyDecoder(keys: Map[String, Key] = KeyDecoder.Standard):
     case Str(sawEsc, n)           => string(sawEsc, n, c)
     case Pasting(buf, n, dropped) => pasting(buf, n, dropped, c)
 
-  /** The input went quiet for [[EscapeWaitMillis]]: an Esc with nothing after it was the Esc key, and an unfinished
-    * sequence is dropped. A paste keeps what it has: its end may still be on the way ([[abandon]]).
+  /** The input went quiet for [[EscapeWaitMillis]]: an Esc with nothing after it was the Esc key. An unfinished
+    * sequence or paste is kept: its rest may still be on the way, on a slow link or from a terminal slow to answer, and
+    * read from the ground it would be typed as keys ([[abandon]]).
     */
   def idle(state: State): (State, Seq[Key]) = state match
-    case Escape     => (Ground, Seq(Key.Esc))
-    case p: Pasting => (p, Nil)
-    case _          => (Ground, Nil)
+    case Escape => (Ground, Seq(Key.Esc))
+    case other  => (other, Nil)
 
-  /** The input has been quiet for [[PasteWaitMillis]]: a paste whose end never came is dropped, so that a terminal that
-    * sends no end marker cannot swallow the keyboard.
+  /** The input has been quiet for [[waitMillis]]: a sequence or a paste whose end never came is dropped, so that a
+    * terminal that sends no end cannot swallow the keyboard.
     */
   def abandon(state: State): State = state match
-    case _: Pasting => Ground
-    case other      => other
+    // An Esc waiting for what follows is a key, not a sequence: [[idle]] makes it one, and it is never dropped.
+    case Escape => Escape
+    case _      => Ground
 
   private def ground(c: Char): (State, Seq[Key]) = c match
-    case EscChar           => (Escape, Nil)
-    case '\r' | '\n'       => (Ground, Seq(Key.Enter))
-    case '\t'              => (Ground, Seq(Key.Tab))
-    case '\u007f' | '\b'   => (Ground, Seq(Key.Backspace))
-    case _ if isControl(c) => (Ground, Nil)
-    case _                 => (Ground, Seq(Key.Char(c)))
+    case EscChar => (Escape, Nil)
+    // The same introducers as one character (C1): a terminal in 8-bit mode sends them so.
+    case '\u009b'                                             => (Csi(""), Nil)
+    case '\u0090' | '\u0098' | '\u009d' | '\u009e' | '\u009f' => (Str(sawEsc = false, 0), Nil)
+    case '\r' | '\n'                                          => (Ground, Seq(Key.Enter))
+    case '\t'                                                 => (Ground, Seq(Key.Tab))
+    case '\u007f' | '\b'                                      => (Ground, Seq(Key.Backspace))
+    case _ if isControl(c)                                    => (Ground, Nil)
+    case _                                                    => (Ground, Seq(Key.Char(c)))
 
   private def escape(c: Char): (State, Seq[Key]) = c match
     case '['                         => (Csi(""), Nil)
@@ -68,6 +75,10 @@ final class KeyDecoder(keys: Map[String, Key] = KeyDecoder.Standard):
     if c >= '@' && c <= '~' then
       val sequence = buf + c
       if sequence == PasteStart then (Pasting("", 0, dropped = false), Nil)
+      else if cellReports && c == 't' then
+        (Ground, TerminalQuery.parse(s"$EscChar[$sequence")._2.map(cell => Key.CellSize(cell.width, cell.height)).toSeq)
+      // A sequence with a private marker (`?`, `<`, `=`, `>`) is a report, never a key.
+      else if sequence.exists(PrivateMarkers.contains) then (Ground, Nil)
       else (Ground, keys.get("[" + withoutModifier(sequence)).toSeq)
     else if c >= ' ' && c <= '?' then if buf.length >= MaxCsi then (Ground, Nil) else (Csi(buf + c), Nil)
     // Anything else cannot be part of a sequence: the sequence is abandoned, and so is the character.
@@ -149,6 +160,18 @@ object KeyDecoder:
   /** The longest paste kept. */
   val MaxPaste: Int = 64 * 1024
 
+  /** How long an unfinished sequence is waited for before it is given up: longer than any link delays the rest of a key
+    * or a reply, short enough that a stray `ESC [` costs the keyboard a moment.
+    */
+  val SequenceWaitMillis: Long = 1000L
+
+  /** How long the input may stay quiet inside `state` before it is abandoned. */
+  def waitMillis(state: State): Long = state match
+    case _: State.Pasting => PasteWaitMillis
+    case _                => SequenceWaitMillis
+
+  private val PrivateMarkers = "?<=>"
+
   private val PasteStart = "200~"
   private val PasteEndFull = "\u001b[201~"
 
@@ -193,13 +216,13 @@ object KeyDecoder:
   /** A decoder for `terminal`: the standard sequences, and the ones its terminfo entry names where they are CSI or SS3
     * sequences. A capability the terminal does not have adds nothing.
     */
-  def forTerminal(terminal: Terminal): KeyDecoder =
+  def forTerminal(terminal: Terminal, cellReports: Boolean = false): KeyDecoder =
     val own = Capabilities.flatMap { (capability, key) =>
       Option(KeyMap.key(terminal, capability))
         .filter(s => s.length >= 3 && s.charAt(0) == EscChar && (s.charAt(1) == '[' || s.charAt(1) == 'O'))
         .map(s => s.substring(1) -> key)
     }
-    new KeyDecoder(Standard ++ own)
+    new KeyDecoder(Standard ++ own, cellReports)
 
   /** Every key in `input`, with the input going quiet at its end: for tests and for text already in hand. */
   def decode(input: String, decoder: KeyDecoder = new KeyDecoder()): Seq[Key] =

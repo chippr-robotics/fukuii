@@ -4,6 +4,7 @@ import org.jline.utils.AttributedString
 import org.jline.utils.AttributedStringBuilder
 
 import com.chipprbots.ethereum.console.TuiText.fitToWidth
+import com.chipprbots.ethereum.console.gfx.GraphicRegion
 
 /** A block of rows in a view (spec 027 FR-005, research §7.3).
   *
@@ -19,6 +20,9 @@ import com.chipprbots.ethereum.console.TuiText.fitToWidth
   *   a separator row is drawn above the panel, and counts against the rows
   * @param fill
   *   the panel takes the rows nobody else wants (the recent-log strip)
+  * @param regions
+  *   the graphic regions among the panel's cells for (width, rows), placed from the panel's own top-left corner (spec
+  *   029 FR-012). `draw` draws their cells for the graphics mode on screen
   */
 final case class Panel(
     minRows: Int,
@@ -26,8 +30,12 @@ final case class Panel(
     priority: Int,
     draw: (Int, Int) => Seq[AttributedString],
     separated: Boolean = false,
-    fill: Boolean = false
+    fill: Boolean = false,
+    regions: (Int, Int) => Seq[GraphicRegion] = Panel.NoRegions
 )
+
+object Panel:
+  val NoRegions: (Int, Int) => Seq[GraphicRegion] = (_, _) => Nil
 
 /** Hands a view's rows to its panels, and draws them (spec 027 FR-005, research §7.3). */
 object Layout:
@@ -73,6 +81,22 @@ object Layout:
         if p.separated then separator +: body else body
     }
     drawn.take(rows.max(0)).padTo(rows.max(0), blank).map(fitToWidth(_, w))
+
+  /** The panels' graphic regions, placed from the top-left corner of the `rows` lines [[render]] draws. A region that
+    * does not fit the rows its panel got is left out.
+    */
+  def regions(panels: Seq[Panel], width: Int, rows: Int): Seq[GraphicRegion] =
+    var at = 0
+    panels.zip(allocate(panels, rows)).flatMap { (p, n) =>
+      if n <= 0 then Nil
+      else
+        val top = at + (if p.separated then 1 else 0)
+        at = top + n
+        p.regions(width.max(0), n)
+          .filter(r => r.row >= 0 && r.col >= 0 && r.row + r.rows <= n && r.col + r.cols <= width)
+          .map(_.shift(top, 0))
+          .filter(r => r.row + r.rows <= rows)
+    }
 
   /** Two row lists side by side: `left` in `leftCols`, the divider, `right` in `rightCols`. The shorter list is padded,
     * and every cell is fitted by its columns, never by its length.
