@@ -642,6 +642,78 @@ class PendingTransactionsManagerSpec
     // own announcement (110 bytes), not peer1's.
     requestedFrom(this) shouldBe ((peer2.id, Seq(hash)))
 
+  // ---- the pool's counters (spec 029 FR-034): each event moves its own counter, and no request changes ------------
+
+  it should "count the hashes peers announce that it does not hold, and each request it sends for one" taggedAs (
+    UnitTest
+  ) in new TestSetup:
+    val counters = new TxPoolMetrics
+    val ptm: ActorRef[Command] = spawnPtm(metrics = counters)
+    val held: SignedTransactionWithSender = newStx()
+    ptm ! AddTransactions(Set(held))
+    val unknown: Seq[ByteString] = Seq(7, 8).map(b => ByteString(Array.fill[Byte](32)(b.toByte)))
+    val hashes: Seq[ByteString] = held.tx.hash.value +: unknown
+    ptm ! WrappedPeerEvent(
+      PeerEvent.MessageFromPeer(
+        ETHPackets.NewPooledTransactionHashes(hashes.map(_ => 0.toByte), hashes.map(_ => BigInt(100)), hashes),
+        peer1.id
+      )
+    )
+    // The request is what it was before the counters: the two hashes the pool does not hold, from the announcer.
+    requestedFrom(this) shouldBe ((peer1.id, unknown))
+    eventually {
+      val counted = counters.snapshot
+      (counted.announced, counted.fetchRequested, counted.fetchTimedOut) shouldBe (2L, 2L, 0L)
+    }
+
+  it should "count a request nobody answered once for each peer asked, the last one too" taggedAs (
+    UnitTest
+  ) in new TestSetup:
+    val counters = new TxPoolMetrics
+    val shortFetchTimeout: TxPoolConfig = new TxPoolConfig:
+      override val txPoolSize: Int = 300
+      override val pendingTxManagerQueryTimeout: FiniteDuration = Timeouts.veryLongTimeout
+      override val transactionTimeout: FiniteDuration = Timeouts.veryLongTimeout
+      override val getTransactionFromPoolTimeout: FiniteDuration = Timeouts.veryLongTimeout
+      override val announcementFetchTimeout: FiniteDuration = 300.millis
+    val ptm: ActorRef[Command] = spawnPtm(config = shortFetchTimeout, metrics = counters)
+    val hash: ByteString = ByteString(Array.fill[Byte](32)(6))
+    Seq(peer1, peer2).foreach(announceFrom(ptm, _, hash))
+    requestedFrom(this) shouldBe ((peer1.id, Seq(hash)))
+    requestedFrom(this) shouldBe ((peer2.id, Seq(hash))) // peer1 never answered
+    // peer2 does not answer either, and there is nobody left to ask: that request timed out as well.
+    eventually {
+      val counted = counters.snapshot
+      (counted.announced, counted.fetchRequested, counted.fetchTimedOut) shouldBe (2L, 2L, 2L)
+    }
+
+  it should "count a transaction pushed out for room as evicted, and one that aged out as expired" taggedAs (
+    UnitTest
+  ) in new TestSetup:
+    val full = new TxPoolMetrics
+    val small: ActorRef[Command] = spawnPtm(config = poolConfig(size = 4), metrics = full)
+    val sent: Seq[SignedTransactionWithSender] = (1 to 12).map(n => newStx(n))
+    sent.foreach(stx => small ! AddTransactions(Set(stx)))
+    // Every transaction sent is in the pool or was pushed out of it: none is counted twice, and none goes missing.
+    eventually {
+      val pooled = small.ask[PendingTransactionsResponse](ref => GetPendingTransactionsReq(ref)).futureValue
+      pooled.pendingTransactions.size should be <= 4
+      full.snapshot.evicted shouldBe (sent.size - pooled.pendingTransactions.size).toLong
+    }
+    full.snapshot.expired shouldBe 0L
+
+    val aged = new TxPoolMetrics
+    val brief: ActorRef[Command] = spawnPtm(config = poolConfig(timeout = 300.millis), metrics = aged)
+    brief ! AddTransactions(newStx(99))
+    eventually {
+      brief
+        .ask[PendingTransactionsResponse](ref => GetPendingTransactionsReq(ref))
+        .futureValue
+        .pendingTransactions shouldBe empty
+      aged.snapshot.expired shouldBe 1L
+    }
+    aged.snapshot.evicted shouldBe 0L
+
   it should "remove transaction on timeout" taggedAs (UnitTest) in new TestSetup:
     override val txPoolConfig: TxPoolConfig = new TxPoolConfig:
       override val txPoolSize: Int = 300
@@ -1422,7 +1494,8 @@ class PendingTransactionsManagerSpec
     /** A pool on this setup's probes with its own config and gossip gate. */
     def spawnPtm(
         config: TxPoolConfig = txPoolConfig,
-        gate: TxGossipGate = TxGossipGate.alwaysOpen
+        gate: TxGossipGate = TxGossipGate.alwaysOpen,
+        metrics: TxPoolMetrics = new TxPoolMetrics
     ): org.apache.pekko.actor.typed.ActorRef[Command] = testKit.spawn(
       PendingTransactionsManager(
         config,
@@ -1430,7 +1503,8 @@ class PendingTransactionsManagerSpec
         etcPeerManager.ref,
         peerMessageBus.ref,
         pendingTxTopic,
-        txGossipGate = gate
+        txGossipGate = gate,
+        metrics = metrics
       ),
       s"ptm-test-custom-${java.util.UUID.randomUUID()}"
     )
