@@ -463,7 +463,8 @@ class TestService(
       log.warn("Test mode on the unified state layout: {}", fault.getMessage)
       Left(JsonRpcError.LogicError(s"${TestService.HeadStateOnly} (${fault.getMessage})"))
     case refused: com.chipprbots.ethereum.db.storage.pathstate.ReorgTooDeep if blockchainReader.holdsStateInPlace =>
-      // a record that is not what it should be is this datadir's corruption, as the fork choice says by throwing it
+      // a record that is not what it should be is this datadir's corruption: logged as that, but a test datadir is
+      // the test's to mend, so test mode does not fail the state closed as the fork choice does (C4d part 0)
       if refused.reason == com.chipprbots.ethereum.db.storage.pathstate.ReorgRefusal.Corrupt then
         log.error("[STATE-MOVE] Test mode on the unified state layout: {}", refused.getMessage)
       else log.warn("Test mode on the unified state layout: {}", refused.getMessage)

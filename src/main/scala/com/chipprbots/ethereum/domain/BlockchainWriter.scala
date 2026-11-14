@@ -476,6 +476,11 @@ class BlockchainWriter(
     }).and(relocated)
     HeldBlockIndex(batch, oldBest, put, replaced, removed, staleLookups.size, bestMoves, capped)
 
+  /** The state on the unified layout takes no further write ([[PathStateStorage.failClosed]]): for a caller that found
+    * this datadir's own changeset records corrupt. Nothing on the hash layout.
+    */
+  def failStateClosed(why: String): Unit = pathState.foreach(_.failClosed(why))
+
   private def saveBlockNumberMapping(number: BigInt, hash: BlockHash): DataSourceBatchUpdate =
     blockNumberMappingStorage.put(number, hash.value)
 

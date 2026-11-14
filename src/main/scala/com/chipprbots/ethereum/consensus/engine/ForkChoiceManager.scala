@@ -150,7 +150,8 @@ class ForkChoiceManager(
     * `currentState` is set only when the head was confirmed: it is read as the head that was executed and applied.
     *
     * @return
-    *   `Left("SYNCING")` when the head was not confirmed, and nothing was written
+    *   `Left("SYNCING")` when the head was not confirmed, and nothing was written; when the plan found the records
+    *   corrupt, the state has failed closed too
     */
   private def confirmHeldHead(newState: ForkChoiceState, header: BlockHeader): Either[String, Unit] =
     def notMoved(why: String): Either[String, Unit] =
@@ -174,8 +175,13 @@ class ForkChoiceManager(
       Right(())
     catch
       case unavailable: StateUnavailable => notMoved(unavailable.reason)
-      // A record that is not what it should be is this datadir's fault, not the fork choice's: it is thrown on.
-      case refused: ReorgTooDeep if refused.reason != ReorgRefusal.Corrupt => notMoved(refused.getMessage)
+      // A record that is not what it should be is this datadir's fault, not the fork choice's: the state fails closed
+      // (no further in-place write, no state given out, ERROR) and the head is answered as one not followed (plan.md
+      // "C4b part 1": `Corrupt` fails closed at the Engine API; the escalation is C4d's)
+      case refused: ReorgTooDeep if refused.reason == ReorgRefusal.Corrupt =>
+        blockchainWriter.failStateClosed(s"the changeset records are corrupt (${refused.getMessage})")
+        notMoved(refused.getMessage)
+      case refused: ReorgTooDeep => notMoved(refused.getMessage)
 
   /** Publish the CL head to the registered listener and record it as the requested head — **nothing else**.
     *
