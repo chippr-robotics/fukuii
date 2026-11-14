@@ -138,6 +138,11 @@ class ChainViewSpec extends AnyFlatSpec with Matchers with OptionValues with Bef
     val shown = rows(TuiFixtures.sepoliaNearHead().copy(chain = Some(atGenesis)), 80, 24).mkString("\n")
     shown should include("since genesis")
     (shown should not).include("1970")
+    // And in the timeline, a fork a row (the terminal gate of slice 3 found 1970 still there).
+    val timeline = rows(TuiFixtures.syncedEtc().copy(chain = Some(atGenesis)), 160, 48).mkString("\n")
+    timeline should include("Shanghai")
+    timeline should include("at genesis")
+    (timeline should not).include("1970")
   }
 
   "A node whose blocks are not read" should "draw spec 027's Chain view" taggedAs (UnitTest) in {

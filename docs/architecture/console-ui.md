@@ -244,7 +244,8 @@ is named in the log and on the Art screen and left out; its picture is drawn as 
 holds: a block's header and transactions, a transaction, its receipt with its own gas and its logs, an account's
 balance, nonce and code size at the head. The rows that lead somewhere (a block's parent and transactions, a
 transaction's receipt and addresses, a receipt's logs) can be selected with `Up`/`Down` and opened with `Enter`;
-`Esc` goes back to the row it was opened from. A hash is always shown whole.
+`Esc` goes back to the row it was opened from. A hash is always shown whole. What a screen shows is of the
+moment it was read (an account's balance is the head's of then): `R` reads the node again.
 
 The reading is done on a thread of the TUI's own, never on the one that draws: a lookup that takes more than two
 seconds says so, and `Esc` cancels it. What the node does not have is said in words: a block before the SNAP pivot
@@ -283,7 +284,7 @@ servers, sync, the consistency checks), each marked done when the node reports i
 of them done, and the row beside it names the phase under way. Nothing in it is timed: a node that takes long in a
 phase shows that phase. In pixel and block mode the badge stands where the logo does in text mode.
 
-Any key skips the startup splash, and does nothing else. A change of view cancels the catch-up celebration. Opening
+When its time is over the dashboard takes the whole screen in one frame. Any key skips the startup splash, and does nothing else. A change of view cancels the catch-up celebration. Opening
 the Logs view shows its newest lines; while it is scrolled back, new lines arriving keep the lines on screen where
 they are.
 

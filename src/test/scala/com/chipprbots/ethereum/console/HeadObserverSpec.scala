@@ -106,6 +106,40 @@ class HeadObserverSpec extends AnyFlatSpec with Matchers with OptionValues with 
     after.sampled shouldBe false
   }
 
+  // prism, slice 3: the depth was the number of blocks seen that were left; in a list that skipped blocks that is
+  // fewer than the heights the chain lost.
+  "A reorg's depth" should "be counted in heights, whatever the list skipped" taggedAs (UnitTest) in {
+    val branch = chain(101, 150, "b").updated(0, block(101, "b", parent = Some("0xa100")))
+    val store = new Store(chain(1, 400) ++ branch)
+    // The list holds 100, then a gap, then 236..300: blocks arrived faster than they were read.
+    val sampled = step(step(HeadObserver.State(), block(100), store, capacity = 200), block(300), store, capacity = 200)
+    sampled.sampled shouldBe true
+    // The head moves to a branch that left the chain after block 100.
+    val after = step(sampled, branch.last, store, capacity = 200)
+    val reorg = after.reorgs.loneElement
+    reorg.commonAncestor.value.hash shouldBe "0xa100"
+    reorg.oldTip.hash shouldBe "0xa300"
+    reorg.depth shouldBe 200 // heights 101 to 300, though only 65 of those blocks were seen
+    reorg.depthIsLowerBound shouldBe false
+  }
+
+  "A head that goes back to a block already seen" should "be a reorg as deep as the blocks left, and read nothing" taggedAs (
+    UnitTest
+  ) in {
+    val store = new Store(chain(1, 20))
+    val before = step(HeadObserver.State(), block(20), store)
+    val reads = store.reads
+    val after = step(before, block(17), store)
+    store.reads shouldBe reads
+    val reorg = after.reorgs.loneElement
+    reorg.depth shouldBe 3 // 18, 19 and 20
+    reorg.oldTip.hash shouldBe "0xa20"
+    reorg.newTip.hash shouldBe "0xa17"
+    reorg.commonAncestor.value.hash shouldBe "0xa17"
+    after.recent.last.hash shouldBe "0xa17"
+    after.recent.map(_.number) shouldBe (1L to 17L)
+  }
+
   "A reorg deeper than the walk" should "be recorded as at least as deep as the blocks it is known to have left" taggedAs (
     UnitTest
   ) in {

@@ -33,9 +33,8 @@ class TuiRenderer(config: TuiConfig, art: ArtStore = ArtStore.Empty):
   def render(state: TuiState, width: Int, height: Int, theme: TuiTheme = TuiTheme.Ansi16): Seq[AttributedString] =
     val w = Math.max(width, 1)
     state.splashCover(height) match
-      case Some(0)    => Splash.render(state, w, height, theme, config.showLogo, art)
-      case Some(rows) => handover(state, w, height, theme, rows)
-      case None       => dashboard(state, w, height, theme)._1
+      case Some(_) => Splash.render(state, w, height, theme, config.showLogo, art)
+      case None    => dashboard(state, w, height, theme)._1
 
   /** The frame, and whether it moves with `tick`: the frame loop paces itself by it (Q1).
     *
@@ -48,11 +47,9 @@ class TuiRenderer(config: TuiConfig, art: ArtStore = ArtStore.Empty):
   def frame(state: TuiState, width: Int, height: Int, theme: TuiTheme = TuiTheme.Ansi16): Frame =
     val w = Math.max(width, 1)
     state.splashCover(height) match
-      case Some(0) =>
+      case Some(_) =>
         val (lines, regions) = Splash.frame(state, w, height, theme, config.showLogo, art)
         Frame(lines, moving(state), regions.filter(_ => state.graphics != GraphicsMode.Block))
-      // While the dashboard's rows take the splash's, no picture is placed: the rows under one are changing.
-      case Some(rows) => Frame(handover(state, w, height, theme, rows), true)
       case None =>
         val drawn = dashboard(state, w, height, theme)
         // The next `Lookahead` ticks: a worm at cell 2 draws its ripple at cells 1, 0, 0, so ticks 1 and 2 (mod 3) draw
@@ -82,10 +79,6 @@ class TuiRenderer(config: TuiConfig, art: ArtStore = ArtStore.Empty):
   /** The mining panel draws a spinner beside a DAG that is not yet loaded (`MiningPanel`). */
   private def dagBuilding(state: TuiState): Boolean =
     state.nodeSettings.miningEnabled && state.snapshot.exists(_.local.mining.exists(_.dag.exists(!_.loaded)))
-
-  private def handover(state: TuiState, w: Int, height: Int, theme: TuiTheme, rows: Int): Seq[AttributedString] =
-    dashboard(state, w, height, theme)._1.take(rows) ++
-      Splash.render(state, w, height, theme, config.showLogo, art).drop(rows)
 
   /** Header, separator, alert row, the view's panels, footer (FR-002), and the graphic regions among them (spec 029
     * FR-012). On a terminal too short for all four fixed rows the separator goes first, then the header; the alert row

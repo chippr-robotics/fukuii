@@ -70,9 +70,14 @@ object ChainReads:
       headerByHash: BlockHash => Option[BlockHeader],
       bodyByHash: BlockHash => Option[BlockBody]
   ):
-    /** The head, with its body. */
-    def head(now: Instant): Option[BlockSummary] =
-      bestHeader().map(header => summary(header, bodyByHash(header.hash), now))
+    /** The head, with its body; without it when the head is still `seen`, the one the observer has: nothing of it is
+      * needed then, and a poll of a chain that did not move reads one header.
+      */
+    def head(now: Instant, seen: Option[String] = None): Option[BlockSummary] =
+      bestHeader().map { header =>
+        val same = seen.contains(hex(header.hash.value))
+        summary(header, if same then None else bodyByHash(header.hash), now)
+      }
 
     /** The block with `hash`, with its body when `withBody` is set. */
     def block(hash: String, withBody: Boolean, now: Instant): Option[BlockSummary] =

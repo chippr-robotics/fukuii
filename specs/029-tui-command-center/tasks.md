@@ -238,7 +238,7 @@ Every slice ends with the same gate. The art (phase 0) is done and in the tree.
 
 ## Phase 4: Slice 3 — chain (US3)
 
-> As built (2026-11-14). After the slice: 1,213 tests in 50 suites of
+> As built (2026-11-14). After the slice: 1,222 tests in 50 suites of
 > `testOnly com.chipprbots.ethereum.console.* *Tui* *PeerScor*`. What differs from the tasks as written:
 >
 > - **T058**: the head observer is a pure function over a value (`HeadObserver.observe`); the probe holds the value.
@@ -260,7 +260,20 @@ Every slice ends with the same gate. The art (phase 0) is done and in the tree.
 >   opens the Peers view (`:pe`, Tab, Enter was a dead end); a dialog's sentences wrap instead of being cut; a fork a
 >   network starts with is "since genesis", not "since 1970"; the graphics mode is logged once at start. Pixel mode,
 >   a change of font size and how the art looks are still untried: they need kitty or Ghostty.
-> - **T064 is open** for the same reason as T028 and T052.
+> - **From prism's review**: the lookup worker gives each asking a ticket and interrupts under a lock, so a cancel
+>   can only reach the read it was meant for, a query cancelled and asked again is read again, and an error that is
+>   not `NonFatal` fails its lookup and leaves the worker alive. An explorer value too long for its row goes onto rows
+>   of its own (it lost the value and kept the label). A reorg's depth is counted in heights, and a head that goes
+>   back to a block already seen is a reorg of the blocks after it. A poll of a chain that did not move reads one
+>   header and no body.
+> - **From the terminal gate of slice 3** (dev-node, tmux, the Ephemery side instance, d28efd4): the Chain view's fork
+>   list said 1970 for a fork at time 0 (now "at genesis"); a receipt's running total is called cumulative (on
+>   Amsterdam it is not the header's gas used); a fee-market transaction shows what it paid and what it offered; `r`
+>   on an explorer screen reads the node again. The walk through block, transaction, receipt and account matched
+>   `eth_getTransactionByHash` and `eth_getTransactionReceipt` on the live node.
+> - **The splash ends in one cut** (the user, 2026-11-14): spec 027's hand-over, four rows a tick, read as leftovers
+>   on a real terminal once the splash listed the start's phases. `splashCover` is now whole or nothing.
+> - **T064**: run by dev-node in block and text mode; pixel mode is the user's to try (kitty or Ghostty).
 
 **Goal**: the Block Observatory, fees, reorgs, the explorer, the peer radar. **Branch**: `feat/029-s3-chain`.
 

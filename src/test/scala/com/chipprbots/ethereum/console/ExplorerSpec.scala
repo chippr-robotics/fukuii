@@ -321,6 +321,59 @@ class ExplorerSpec
       matchGolden(file, visibleFrame(lines))
     }
 
+  // prism, slice 3: a value too long for its row lost the value and kept the label. An early ETC receipt's status is a
+  // state root: 76 characters.
+  "A value too long for its row" should "go whole onto a row of its own: no row is a label alone" taggedAs (UnitTest) in {
+    val root = "root 0x" + "ab" * 32
+    val old = LookupResult.Receipt(
+      txHashes(0),
+      3_125_369L,
+      0,
+      root,
+      BigInt(21_000),
+      BigInt(21_000),
+      Vector.empty,
+      None,
+      None,
+      None
+    )
+    val shown = text(screen(LookupQuery.Receipt(txHashes(0)), LookupState.Done(old)), 80, 24)
+    shown should include(root)
+    val wide = text(screen(LookupQuery.Receipt(txHashes(0)), LookupState.Done(old)), 160, 48)
+    wide should include(s"status     $root")
+  }
+
+  "A fee-market transaction" should "say what it paid and what it offered; a receipt's total is called cumulative" taggedAs (
+    UnitTest
+  ) in {
+    val line = TxLine(
+      0,
+      txHashes(0),
+      None,
+      None,
+      BigInt(0),
+      BigInt(2_000_000_007L),
+      BigInt(250_000),
+      "dynamic fee (type 2)",
+      Some((BigInt(30_000_000_000L), BigInt(2_000_000_000L)))
+    )
+    val tx = LookupResult.Tx(line, 21_693L, blockHash, BigInt("18446744073709551616"), 0)
+    val shown = text(screen(LookupQuery.Tx(txHashes(0)), LookupState.Done(tx)))
+    shown should include("2.00 gwei paid (max fee 30.0 gwei, max tip 2.00 gwei)")
+    shown should include("gas limit  250,000")
+    shown should include("18,446,744,073,709,551,616") // a nonce past a Long is not wrapped
+    val receipt = text(screen(LookupQuery.Receipt(txHashes(1)), done(LookupQuery.Receipt(txHashes(1)))))
+    receipt should include("42,000 (cumulative 63,000)")
+    (receipt should not).include("the block's")
+  }
+
+  "r on an explorer screen" should "read the node again, then redraw" taggedAs (UnitTest) in {
+    val account = LookupQuery.Account(ChainReads.hex(senderOf.bytes))
+    val (_, effects) = press(screen(account, done(account)), Key.Char('r'))
+    effects shouldBe Seq(Effect.RefreshLookup(account), Effect.Redraw)
+    text(screen(account, done(account))) should include("r reads it again")
+  }
+
   "A lookup that is running" should "show nothing of itself for two seconds, then say it is working and how to leave" taggedAs (
     UnitTest
   ) in {

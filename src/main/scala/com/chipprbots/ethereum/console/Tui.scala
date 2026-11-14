@@ -518,6 +518,10 @@ class Tui(
               lookups.get.foreach(_.cancel(query))
               mergeLookups()
               TuiCommand.Continue
+            case Effect.RefreshLookup(query) =>
+              lookups.get.foreach(_.refresh(query))
+              mergeLookups()
+              TuiCommand.Continue
             case Effect.Detach =>
               shutdown()
               log.info("TUI disabled, switching to standard logging")

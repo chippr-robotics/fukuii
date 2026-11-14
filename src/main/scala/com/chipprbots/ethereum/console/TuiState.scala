@@ -189,17 +189,13 @@ case class TuiState(
   def stalled: Boolean =
     blocksRemaining > 0 && lastAdvanceAt.exists(at => Duration.between(at, now).compareTo(StallAfter) >= 0)
 
-  /** How much of the splash is on screen at `height` rows: None once it is over; `Some(0)` while it is drawn whole; and
-    * during the hand-over `Some(k)`, the top `k` rows already the dashboard's, `k = 4 × ticksSinceSplashEnd` (§3.7).
+  /** Whether the splash is on screen: `Some(0)` while it is, drawn whole; None once its time is over, when the
+    * dashboard takes the whole screen in one frame. (Spec 027 handed the rows over four a tick; with the start's phases
+    * listed on the splash the half-replaced frames read as leftovers, and spec 029 cuts instead.)
     */
   def splashCover(height: Int): Option[Int] =
-    splashUntilTick.flatMap { until =>
-      if tick < until then Some(0)
-      else if motion == Motion.Full then
-        val rows = HandoverRowsPerTick * (tick - until + 1)
-        if rows < height then Some(rows.toInt) else None
-      else None
-    }
+    val _ = height
+    splashUntilTick.filter(tick < _).map(_ => 0)
 
   /** What the synced Blocks row draws this frame, if a catch-up is on screen. */
   def catchup: Option[Catchup] =
@@ -862,7 +858,6 @@ object TuiState:
   val HeaderFlashFrames: Range = 2 to 6
 
   /** Dashboard rows the splash hands over per tick (§3.7). */
-  val HandoverRowsPerTick: Int = 4
 
   /** The time of a state that has seen no snapshot and no start time: uptime and rates read 0. */
   val Origin: Instant = Instant.EPOCH

@@ -95,6 +95,85 @@ class LookupsSpec extends AnyFlatSpec with Matchers with OptionValues with Event
     finally lookups.shutdown()
   }
 
+  // prism, slice 3: a query cancelled and asked again got the old read's "cancelled", and its new asking was dead.
+  "A query cancelled and asked again" should "be read again, and never get the first read's fate" taggedAs (UnitTest) in {
+    val first = new CountDownLatch(1)
+    val reads = new java.util.concurrent.atomic.AtomicInteger(0)
+    val lookups = new Lookups(_ =>
+      if reads.incrementAndGet() == 1 then
+        first.countDown()
+        new CountDownLatch(1).await() // the first read never returns: only the interrupt ends it
+        Right(account(6))
+      else Right(account(7))
+    )
+    try
+      val q = LookupQuery.LatestBlock
+      lookups.submit(q)
+      first.await(5, TimeUnit.SECONDS) shouldBe true
+      lookups.cancel(q)
+      lookups.submit(q)
+      eventually(stateOf(lookups, q).value shouldBe LookupState.Done(account(7)))
+      reads.get shouldBe 2
+    finally lookups.shutdown()
+  }
+
+  // prism, slice 3: anything thrown that is not NonFatal ended the worker's thread, and every later lookup waited
+  // for ever.
+  "A reader that throws an error" should "fail that lookup in words, and leave the worker for the next" taggedAs (
+    UnitTest
+  ) in {
+    val lookups = new Lookups({
+      case LookupQuery.LatestBlock => throw new StackOverflowError("a deep trie")
+      case _                       => Right(account(8))
+    })
+    try
+      lookups.submit(LookupQuery.LatestBlock)
+      eventually(
+        stateOf(lookups, LookupQuery.LatestBlock).value shouldBe LookupState.Failed(
+          "the node could not read it: a deep trie"
+        )
+      )
+      lookups.submit(LookupQuery.Account("0x08"))
+      eventually(stateOf(lookups, LookupQuery.Account("0x08")).value shouldBe LookupState.Done(account(8)))
+    finally lookups.shutdown()
+  }
+
+  "A lookup still running" should "keep its place when newer ones push the oldest out" taggedAs (UnitTest) in {
+    val release = new CountDownLatch(1)
+    val lookups = new Lookups(
+      {
+        case LookupQuery.LatestBlock => release.await(); Right(account(9))
+        case _                       => Left("not found")
+      },
+      keep = 2
+    )
+    try
+      lookups.submit(LookupQuery.LatestBlock)
+      (1 to 4).foreach(n => lookups.submit(LookupQuery.BlockByNumber(n.toLong)))
+      // The running one is still listed, whatever came after it: only finished lookups are dropped for room.
+      lookups.results.map(_._1) should contain(LookupQuery.LatestBlock)
+      stateOf(lookups, LookupQuery.LatestBlock).value shouldBe a[LookupState.Running]
+      lookups.results should have size 5
+      release.countDown()
+      // Once they have all finished, the newest two are kept.
+      eventually(lookups.results.map(_._1) shouldBe Seq(LookupQuery.BlockByNumber(3L), LookupQuery.BlockByNumber(4L)))
+    finally
+      release.countDown()
+      lookups.shutdown()
+  }
+
+  "Refresh" should "read a lookup again though it is done" taggedAs (UnitTest) in {
+    val reads = new java.util.concurrent.atomic.AtomicInteger(0)
+    val lookups = new Lookups(_ => Right(account(reads.incrementAndGet())))
+    try
+      val q = LookupQuery.Account("0x0c")
+      lookups.submit(q)
+      eventually(stateOf(lookups, q).value shouldBe LookupState.Done(account(1)))
+      lookups.refresh(q)
+      eventually(stateOf(lookups, q).value shouldBe LookupState.Done(account(2)))
+    finally lookups.shutdown()
+  }
+
   "A lookup already done" should "not be read again; a failed one is; and only the newest results are kept" taggedAs (
     UnitTest
   ) in {

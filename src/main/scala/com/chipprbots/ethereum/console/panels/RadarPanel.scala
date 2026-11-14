@@ -13,7 +13,8 @@ import com.chipprbots.ethereum.console.panels.Rows.*
   *
   *   - Distance is the peer's request latency, in bands: the nearer the centre, the faster it answers. A peer that has
   *     answered nothing yet is on the outer ring, and drawn as unmeasured.
-  *   - The angle is fixed by the peer's node id, so a peer stays where it is from frame to frame and from run to run.
+  *   - The angle is fixed by the peer's node id, so a peer is in the same direction from frame to frame and from run to
+  *     run. Two peers that would share a cell are set side by side along their ring.
   *   - The colour is its score band; the shape is its direction; it is bold for a second after it answers a request.
   *
   * Nothing else is drawn: no line between two peers, which the node does not know of, and no geography, which it has no
@@ -112,7 +113,7 @@ private[console] object RadarPanel:
   val MinRows: Int = 11
 
   /** The columns beside the radar that its legend takes. */
-  val LegendCols: Int = 30
+  val LegendCols: Int = 32
 
   /** The radar and its legend for a panel of `n` rows: `n` rows, a column in from the panel's edge. */
   def draw(c: Ctx, n: Int): Seq[AttributedString] =

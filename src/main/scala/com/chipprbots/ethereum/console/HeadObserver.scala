@@ -99,7 +99,7 @@ final case class ChainSample(
   */
 object HeadObserver:
 
-  /** The most parents one poll walks through. */
+  /** The most parents one poll reads: with the head itself, a poll reads at most this many headers and one. */
   val MaxWalk: Int = 64
 
   /** The most blocks one poll reads the body of: the newest ones. */
@@ -135,6 +135,12 @@ object HeadObserver:
       val meanGas = Option.when(seen.nonEmpty)(seen.map(b => BigDecimal(b.gasUsed)).sum.toDouble / seen.size)
       ChainSample(recent, reorgs, sampled, rate, rate.flatMap(r => meanGas.map(_ * r)))
 
+  /** How deep a reorg is that left `left` after `shared`: the heights between the old tip and the block both branches
+    * share. Counted in heights, not in blocks seen: a list that skipped blocks still gives the true depth.
+    */
+  private def depthOf(left: Vector[BlockSummary], shared: BlockSummary): Int =
+    (left.last.number - shared.number).max(left.size.toLong).min(Int.MaxValue.toLong).toInt
+
   /** The state after a poll that found `head`.
     *
     * @param parentOf
@@ -153,6 +159,12 @@ object HeadObserver:
       val heads =
         (state.heads :+ (now -> h.number)).dropWhile((at, _) => Duration.between(at, now).compareTo(RateWindow) > 0)
       if state.recent.lastOption.exists(_.hash == h.hash) then state.copy(heads = heads)
+      // The head went back to a block already seen: the blocks after it were left, and nothing new was read.
+      else if state.recent.exists(_.hash == h.hash) then
+        val at = state.recent.indexWhere(_.hash == h.hash)
+        val left = state.recent.drop(at + 1)
+        val record = ReorgRecord(now, depthOf(left, state.recent(at)), false, left.last, h, Some(state.recent(at)))
+        State(state.recent.take(at + 1), (state.reorgs :+ record).takeRight(MaxReorgs), heads)
       else
         val known = state.recent.map(_.hash).zipWithIndex.toMap
         // From the head back to a block already known, the newest first; the head's body is read by the caller.
@@ -172,7 +184,8 @@ object HeadObserver:
           // An older block is: the blocks after it were left for another branch.
           case Some(i) =>
             val left = state.recent.drop(i + 1)
-            (state.recent.take(i + 1), Some(ReorgRecord(now, left.size, false, left.last, h, Some(state.recent(i)))))
+            val shared = state.recent(i)
+            (state.recent.take(i + 1), Some(ReorgRecord(now, depthOf(left, shared), false, left.last, h, Some(shared))))
           case None =>
             // No meeting point within the walk. If what was walked lies wholly above the last block known, blocks
             // arrived faster than they are read: a gap, not a reorg. Else known blocks at those heights were left, and
@@ -180,7 +193,11 @@ object HeadObserver:
             val lowest = fresh.head.number
             val left = state.recent.filter(_.number >= lowest)
             if left.isEmpty then (state.recent, None)
-            else (state.recent.filter(_.number < lowest), Some(ReorgRecord(now, left.size, true, left.last, h, None)))
+            else
+              // At least the heights the blocks known to be left span.
+              val depth =
+                (left.last.number - left.head.number + 1).max(left.size.toLong).min(Int.MaxValue.toLong).toInt
+              (state.recent.filter(_.number < lowest), Some(ReorgRecord(now, depth, true, left.last, h, None)))
         State(
           (kept ++ fresh).takeRight(capacity.max(1)),
           (state.reorgs ++ reorg).takeRight(MaxReorgs),

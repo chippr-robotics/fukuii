@@ -274,7 +274,7 @@ class TuiWidthPropertySpec extends AnyFlatSpec with Matchers with ScalaCheckProp
       assertExact(fixture(set), 1, 1, r, TuiTheme.Ansi16)
   }
 
-  it should "draw the splash and its hand-over exactly, at every size" taggedAs (UnitTest) in {
+  it should "draw the splash and the frames after it exactly, at every size" taggedAs (UnitTest) in {
     val cases = Gen.zip(Gen.chooseNum(1, 200), Gen.chooseNum(1, 80), Gen.chooseNum(0L, 40L), Gen.oneOf(renderers))
     forAll(cases, minSuccessful(300)) { case (w, h, tick, r) =>
       assertExact(TuiFixtures.splash(GlyphSet.Emoji, tick), w, h, r, TuiTheme.Ansi16)

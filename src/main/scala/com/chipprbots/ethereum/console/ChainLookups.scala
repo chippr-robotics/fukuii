@@ -21,6 +21,7 @@ import com.chipprbots.ethereum.domain.Transaction
 import com.chipprbots.ethereum.domain.TransactionWithAccessList
 import com.chipprbots.ethereum.domain.TransactionWithDynamicFee
 import com.chipprbots.ethereum.jsonrpc.CallErrors
+import com.chipprbots.ethereum.utils.Logger
 
 /** Answers the explorer's lookups from the node's own stores (spec 029 FR-028): the reads the JSON-RPC block,
   * transaction and account methods make, with no request and no response. It runs on the lookup worker's thread, never
@@ -48,7 +49,8 @@ final class ChainLookups(
     codeSize: ByteString => Option[Int],
     sender: SignedTransaction => Option[Address],
     now: () => Instant = () => Instant.now()
-) extends (LookupQuery => Either[String, LookupResult]):
+) extends (LookupQuery => Either[String, LookupResult])
+    with Logger:
 
   import ChainReads.hex
 
@@ -66,11 +68,11 @@ final class ChainLookups(
       for
         bytes <- ChainReads.bytes(address).filter(_.length == 20).toRight("an address is 0x and 40 hexadecimal digits")
         head <- bestHeader().toRight("the node has no head block yet")
-        found <- scala.util
-          .Try(accountAt(head, Address(bytes)))
-          .toEither
-          .left
-          .map(_ => s"the node does not hold the state of its head, block ${TuiText.formatNumber(head.number.toLong)}")
+        found <- scala.util.Try(accountAt(head, Address(bytes))).toEither.left.map { cause =>
+          // The cause goes to the log; the operator gets what it means.
+          log.debug("TUI account lookup at block {} failed: {}", head.number.toLong, cause.toString)
+          s"the node does not hold the state of its head, block ${TuiText.formatNumber(head.number.toLong)}"
+        }
       yield
         val account = found.getOrElse(Account())
         val code = Option.when(account.codeHash != Account.EmptyCodeHash)(codeSize(account.codeHash.value)).flatten
@@ -111,8 +113,16 @@ final class ChainLookups(
       stx.tx.value,
       Transaction.effectiveGasPrice(stx.tx, header.baseFee),
       stx.tx.gasLimit.value,
-      kind(stx.tx)
+      kind(stx.tx),
+      caps(stx.tx)
     )
+
+  /** A fee-market transaction's two caps, the fee and the tip; none for one that names a gas price. */
+  private def caps(t: Transaction): Option[(BigInt, BigInt)] = t match
+    case d: TransactionWithDynamicFee => Some((d.maxFeePerGas, d.maxPriorityFeePerGas))
+    case b: BlobTransaction           => Some((b.maxFeePerGas, b.maxPriorityFeePerGas))
+    case s: SetCodeTransaction        => Some((s.maxFeePerGas, s.maxPriorityFeePerGas))
+    case _                            => None
 
   /** The transaction with `hash`, with its block: found through the transaction index. */
   private def located(hash: String): Either[String, (BlockHeader, SignedTransaction, Int)] =
@@ -144,9 +154,11 @@ final class ChainLookups(
     yield
       val before = if index == 0 then BigInt(0) else receipts(index - 1).cumulativeGasUsed
       val status = found.postTransactionStateHash match
-        case SuccessOutcome    => "success"
-        case FailureOutcome    => "failed"
-        case HashOutcome(root) => s"state root ${hex(root)}"
+        case SuccessOutcome => "success"
+        case FailureOutcome => "failed"
+        // A receipt older than the status code carries the state's root instead. Short enough, with its 64 digits,
+        // to stay on one row of an 80-column screen.
+        case HashOutcome(root) => s"root ${hex(root)}"
       val from = sender(stx)
       // A creation's address is not in the receipt as stored: it follows from the sender and the nonce, as the
       // JSON-RPC receipt computes it.

@@ -172,7 +172,7 @@ class TuiStatusProbe(
   private def observeHead(source: ChainReads.Source, at: Instant): ChainSample =
     headObserver = HeadObserver.observe(
       headObserver,
-      source.head(at),
+      source.head(at, headObserver.recent.lastOption.map(_.hash)),
       (hash, withBody) => source.block(hash, withBody, at),
       at,
       local.observatoryBlocks

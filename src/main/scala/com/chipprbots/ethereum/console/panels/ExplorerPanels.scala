@@ -90,91 +90,74 @@ private[console] object ExplorerPanels:
         if waited < Lookups.SlowAfterMillis then Seq(blank)
         else Seq(note(s"looking it up: ${TuiText.formatShort(waited / 1000)} so far. Esc cancels", c.t.label))
       case Some(LookupState.Failed(reason)) => Seq(note(TuiText.external(reason, c.g), c.t.warn))
-      case Some(LookupState.Done(result))   => details(c, result, w) ++ linkRows(c, links(result), selected, w, n)
+      case Some(LookupState.Done(result)) =>
+        val shown = details(c, result, w)
+        // The rows the links have: what the title, the blank under it and the details leave.
+        shown ++ linkRows(c, links(result), selected, w, n - 2 - shown.size)
     title +: blank +: body
 
   /** The columns a label takes: the longest label and a space. */
   private val LabelCols: Int = 11
 
-  /** A label and its value, as one row. A value too long for the row (a hash on an 80-column screen) goes whole onto a
-    * row of its own under the label: a hash is never cut.
+  /** A label and its value, as one row. A value too long for the row (a hash, or an old receipt's state root, on an
+    * 80-column screen) goes whole onto a row of its own under the label: no value is ever cut or dropped.
     */
   private def rows(c: Ctx, label: String, value: String, w: Int): Seq[AttributedString] =
     val padded = label.padTo(LabelCols, ' ')
     if 3 + LabelCols + value.length <= w - 1 then
       Seq(TuiText.fitToWidth(concat(text(s"   $padded", c.t.label), text(value, c.t.value)), w))
     else
-      Seq(
-        TuiText.fitToWidth(text(s"   $padded", c.t.label), w),
-        TuiText.fitToWidth(text(s"     $value", c.t.value), w)
-      )
+      // Under the label, in as many rows as it takes: each holds what fits before the row's last column.
+      val room = (w - 4).max(8)
+      TuiText.fitToWidth(text(s"   $padded", c.t.label), w) +:
+        value.grouped(room).toSeq.map(part => TuiText.fitToWidth(text(s"   $part", c.t.value), w))
 
-  private def row(c: Ctx, label: String, value: String, w: Int): AttributedString = rows(c, label, value, w).head
+  /** A number of any size with thousands separators: a nonce or a difficulty may not fit a `Long`. */
+  private def big(n: BigInt): String = String.format(Locale.ROOT, "%,d", n.bigInteger)
 
-  private def details(c: Ctx, result: LookupResult, w: Int): Seq[AttributedString] = result match
-    case LookupResult.Block(b, txs, uncles, withdrawals) =>
-      val pos = c.state.chain.exists(_.family == ChainFamily.PoS)
-      val age =
-        TuiText.formatShort(Duration.between(Instant.ofEpochSecond(b.timestamp), c.state.now).getSeconds.max(0L))
-      Seq(
-        row(c, "number", formatNumber(b.number), w)
-      ) ++ rows(c, "hash", b.hash, w) ++ Seq(
-        row(c, "time", s"${Instant.ofEpochSecond(b.timestamp)} ($age ago)", w),
-        row(
-          c,
-          "gas",
-          s"${formatNumber(b.gasUsed.toLong)} of ${formatNumber(b.gasLimit.toLong)} (${(b.gasShare * 100).round}%)",
-          w
-        )
-      ) ++
-        b.baseFee.map(fee => row(c, "base fee", ObservatoryPanels.gwei(fee), w)) ++
-        b.sizeBytes.map(size => row(c, "size", ObservatoryPanels.blockSize(size), w)) ++
-        Option.when(!pos)(row(c, "difficulty", formatNumber(b.difficulty.toLong.max(0L)), w)) ++
-        b.slot.map(slot => row(c, "slot", formatNumber(slot), w)) ++
-        Seq(
-          row(
-            c,
-            "contents",
-            b.txCount.fold("the body is not stored on this node") { count =>
-              val parts = Seq(s"$count ${if count == 1 then "transaction" else "transactions"}") ++
-                Option.when(!pos)(s"$uncles ${if uncles == 1 then "uncle" else "uncles"}") ++
-                withdrawals.map(n => s"$n ${if n == 1 then "withdrawal" else "withdrawals"}")
-              parts.mkString(s" ${c.g.dot.text} ") + (if txs.isEmpty && count > 0 then " (not listed)" else "")
-            },
-            w
-          ),
-          blank
-        )
-    case LookupResult.Tx(t, blockNumber, _, nonce, inputBytes) =>
-      rows(c, "hash", t.hash, w) ++ Seq(
-        row(c, "block", s"${formatNumber(blockNumber)}, transaction ${t.index}", w),
-        row(c, "type", t.kind, w),
-        row(c, "value", coin(t.valueWei, c), w),
-        row(c, "gas price", s"${ObservatoryPanels.gwei(t.gasPrice)}, limit ${formatNumber(t.gasLimit.toLong)}", w),
-        row(c, "nonce", formatNumber(nonce.toLong), w),
-        row(c, "input", if inputBytes == 0 then "none" else s"${formatNumber(inputBytes.toLong)} bytes", w),
-        blank
-      )
-    case r: LookupResult.Receipt =>
-      Seq(
-        row(c, "status", r.status, w),
-        row(c, "block", s"${formatNumber(r.blockNumber)}, transaction ${r.index}", w),
-        row(
-          c,
-          "gas used",
-          s"${formatNumber(r.gasUsed.toLong)} (the block's ${formatNumber(r.cumulativeGasUsed.toLong)} up to here)",
-          w
-        ),
-        row(c, "logs", if r.logs.isEmpty then "none" else r.logs.size.toString, w),
-        blank
-      )
-    case LookupResult.Account(address, atBlock, balance, nonce, code) =>
-      rows(c, "address", address, w) ++ Seq(
-        row(c, "at block", s"${formatNumber(atBlock)} (the head when it was read)", w),
-        row(c, "balance", coin(balance, c), w),
-        row(c, "nonce", formatNumber(nonce.toLong), w),
-        row(c, "code", code.fold("none: not a contract")(bytes => s"${formatNumber(bytes.toLong)} bytes"), w)
-      )
+  private def details(c: Ctx, result: LookupResult, w: Int): Seq[AttributedString] =
+    def row(label: String, value: String): Seq[AttributedString] = rows(c, label, value, w)
+    def some(label: String, value: Option[String]): Seq[AttributedString] = value.toSeq.flatMap(row(label, _))
+    result match
+      case LookupResult.Block(b, txs, uncles, withdrawals) =>
+        val pos = c.state.chain.exists(_.family == ChainFamily.PoS)
+        val age =
+          TuiText.formatShort(Duration.between(Instant.ofEpochSecond(b.timestamp), c.state.now).getSeconds.max(0L))
+        val contents = b.txCount.fold("the body is not stored on this node") { count =>
+          val parts = Seq(s"$count ${if count == 1 then "transaction" else "transactions"}") ++
+            Option.when(!pos)(s"$uncles ${if uncles == 1 then "uncle" else "uncles"}") ++
+            withdrawals.map(n => s"$n ${if n == 1 then "withdrawal" else "withdrawals"}")
+          parts.mkString(s" ${c.g.dot.text} ") + (if txs.isEmpty && count > 0 then " (not listed)" else "")
+        }
+        row("number", formatNumber(b.number)) ++ row("hash", b.hash) ++
+          row("time", s"${Instant.ofEpochSecond(b.timestamp)} ($age ago)") ++
+          row("gas", s"${big(b.gasUsed)} of ${big(b.gasLimit)} (${(b.gasShare * 100).round}%)") ++
+          some("base fee", b.baseFee.map(ObservatoryPanels.gwei)) ++
+          some("size", b.sizeBytes.map(ObservatoryPanels.blockSize)) ++
+          some("difficulty", Option.when(!pos)(big(b.difficulty))) ++
+          some("slot", b.slot.map(formatNumber)) ++
+          row("contents", contents) :+ blank
+      case LookupResult.Tx(t, blockNumber, _, nonce, inputBytes) =>
+        // What it paid, and for a fee-market transaction what it offered: the two differ, and both are asked for.
+        val offered = t.feeCaps.fold("") { (fee, tip) =>
+          s" paid (max fee ${ObservatoryPanels.gwei(fee)}, max tip ${ObservatoryPanels.gwei(tip)})"
+        }
+        row("hash", t.hash) ++ row("block", s"${formatNumber(blockNumber)}, transaction ${t.index}") ++
+          row("type", t.kind) ++ row("value", coin(t.valueWei, c)) ++
+          row("gas price", s"${ObservatoryPanels.gwei(t.gasPrice)}$offered") ++
+          row("gas limit", big(t.gasLimit)) ++ row("nonce", big(nonce)) ++
+          row("input", if inputBytes == 0 then "none" else s"${formatNumber(inputBytes.toLong)} bytes") :+ blank
+      case r: LookupResult.Receipt =>
+        // The receipt's running total is its own count: on a chain whose header counts gas another way (Amsterdam)
+        // the last receipt's total is not the header's gas used, so it is not called the block's.
+        row("status", r.status) ++ row("block", s"${formatNumber(r.blockNumber)}, transaction ${r.index}") ++
+          row("gas used", s"${big(r.gasUsed)} (cumulative ${big(r.cumulativeGasUsed)})") ++
+          row("logs", if r.logs.isEmpty then "none" else r.logs.size.toString) :+ blank
+      case LookupResult.Account(address, atBlock, balance, nonce, code) =>
+        row("address", address) ++
+          row("at block", s"${formatNumber(atBlock)}, the head when it was read; r reads it again") ++
+          row("balance", coin(balance, c)) ++ row("nonce", big(nonce)) ++
+          row("code", code.fold("none: not a contract")(bytes => s"${formatNumber(bytes.toLong)} bytes"))
 
   /** The rows that lead somewhere, the selected one in reverse video, windowed so that it stays on screen. */
   private def linkRows(c: Ctx, all: Vector[Link], selected: Int, w: Int, n: Int): Seq[AttributedString] =
@@ -182,8 +165,8 @@ private[console] object ExplorerPanels:
     else
       val at = selected.max(0).min(all.size - 1)
       val head = fit(text("   Enter opens the selected row", c.t.muted), w, c.g)
-      // The rows left under the title, the details and this heading; at least one.
-      val room = (n - 14).max(1)
+      // The rows under this heading; at least one, so the selected row is always drawn.
+      val room = (n - 1).max(1)
       val from = (at - room + 1).max(0)
       head +: all.slice(from, from + room).zipWithIndex.map { (link, i) =>
         // A label of ten columns: a 64-digit hash then ends one column short of an 80-column row.

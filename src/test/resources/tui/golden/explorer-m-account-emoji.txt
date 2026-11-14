@@ -4,7 +4,7 @@
                   │ Account   0x0000…0777                                                                               
                   │                                                                                                     
                   │   address    0x0000000000000000000000000000000000000777                                             
-                  │   at block   3,125,369 (the head when it was read)                                                  
+                  │   at block   3,125,369, the head when it was read; r reads it again                                 
        ETC        │   balance    5 wei of ETC                                                                           
                   │   nonce      1                                                                                      
                   │   code       2,048 bytes                                                                            

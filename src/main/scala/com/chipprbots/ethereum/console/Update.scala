@@ -78,7 +78,9 @@ object Update:
     case Action.Redraw =>
       s.screen match
         case Some(Screen.Art(_)) => (s, Seq(Effect.ReloadArt, Effect.Redraw))
-        case _                   => (s, Seq(Effect.Redraw))
+        // On an explorer screen `r` reads the node again first: what is shown is of the moment it was read.
+        case Some(Screen.Explore(query, _)) => (s, Seq(Effect.RefreshLookup(query), Effect.Redraw))
+        case _                              => (s, Seq(Effect.Redraw))
     case Action.Detach  => (s, Seq(Effect.Detach))
     case Action.AskQuit => (askQuit(s, ctx), Nil)
 

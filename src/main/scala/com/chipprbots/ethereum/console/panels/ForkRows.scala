@@ -102,9 +102,11 @@ private[console] object ForkRows:
         c.g
       )
     val scheduled = chain.forks.map { f =>
+      // A fork a network starts with has no date: time 0 is not 1970 (Ephemery's forks are all at 0).
       val when = chain.schedule match
-        case ForkSchedule.ByBlock     => s"block ${formatNumber(f.at)}"
-        case ForkSchedule.ByTimestamp => s"${ChainFacts.utc(f.at)}  ${f.at}"
+        case ForkSchedule.ByBlock                  => s"block ${formatNumber(f.at)}"
+        case ForkSchedule.ByTimestamp if f.at == 0 => "at genesis"
+        case ForkSchedule.ByTimestamp              => s"${ChainFacts.utc(f.at)}  ${f.at}"
       if at.exists(f.at <= _) then row(c.g.check.text, c.t.healthy, f.name, when)
       else if next.contains(f) then
         row(c.g.arrow.text, c.t.warn.bold(), f.name, s"$when  ${at.fold("")(p => chain.distance(f, p))}")

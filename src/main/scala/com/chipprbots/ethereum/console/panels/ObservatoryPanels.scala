@@ -112,6 +112,9 @@ private[console] object ObservatoryPanels:
 
   // ---- the Block Observatory (FR-023) ----------------------------------------------------------------------------
 
+  /** The columns of a shortened address: `0x`, four digits, the ellipsis, four digits. */
+  private val ByCols: Int = 11
+
   /** The rows above the table's first block: the title, the chart, the column names. */
   val ObservatoryHead: Int = 3
 
@@ -155,7 +158,8 @@ private[console] object ObservatoryPanels:
     def cells(block: String, age: String, txs: String, gas: String, size: String, fee: String, by: String): String =
       val base = f"   $block%-12s $age%7s $txs%5s  $gas%-11s $size%8s"
       val withBase = if withFee then base + f"  $fee%-12s" else base
-      s"$withBase  $by"
+      // Who made the block is the last column, and the first to go: on a row too narrow for it whole, it is left out.
+      if withBase.length + 2 + ByCols <= w - 1 then s"$withBase  $by" else withBase
     val header =
       TuiText.fitToWidth(text(cells("block", "age", "txs", "gas used", "size", "base fee", "by"), c.t.label), w)
     // Newest first, a window that keeps the selected block on screen. The selection is a block's hash, so the row

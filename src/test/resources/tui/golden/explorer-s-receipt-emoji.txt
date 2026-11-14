@@ -5,7 +5,7 @@
                                                                                 
    status     failed                                                            
    block      3,125,369, transaction 1                                          
-   gas used   42,000 (the block's 63,000 up to here)                            
+   gas used   42,000 (cumulative 63,000)                                        
    logs       1                                                                 
                                                                                 
    Enter opens the selected row                                                 

@@ -8,7 +8,7 @@
        ETC        |             .              8 of 8 peers                                                             
                   |            x.                                                                                       
                   |                o           nearer = answers faster                                                  
-                  |          o  .              rings: under 100, 500, 2000 ms                                           
+                  |          o  .              rings: under 100, 500, 2000 ms,                                          
  etc              |      o      .   o          slower, and not measured                                                 
  PoW . id 61      | . . .   . . + . .  x. . .  1 not measured yet                                                       
  main network     |             .                                                                                       
