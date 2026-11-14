@@ -2948,3 +2948,15 @@ items:
       spec: specs/029-tui-command-center
       branch: ccr-452bbde8-2hrv25
     notes: tasks T029-T045, T047, T048. Slice 2b (theme T046, splash T049, charts T050) and the manual gate T052 stay open.
+  - id: B-258
+    title: "Spec 029 slice 2b: the command-center theme, the splash with the badge and real start-up phases, chart primitives"
+    priority: P2
+    status: open
+    area: tui
+    size: M
+    opened: 2026-11-14
+    refs: []
+    links:
+      spec: specs/029-tui-command-center
+    depends_on: [B-257]
+    notes: tasks T046, T049, T050 (charts wait for slice 3's first chart).
