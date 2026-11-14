@@ -42,9 +42,8 @@ permissions:
   contents: read
 
 env:
-  PPA_INCOMING: "~chipprbots/ubuntu/fukuii/"
-  DEBFULLNAME: "Chippr Robotics"
-  DEBEMAIL: "info@chipprbots.com"
+  PPA_API: "https://api.launchpad.net/1.0/~chipprbots/+archive/ubuntu/fukuii"
+  DEFAULT_SERIES: "noble jammy"
 
 jobs:
   prepare:
@@ -56,6 +55,7 @@ jobs:
       version: ${{ steps.version.outputs.version }}
       series: ${{ steps.version.outputs.series }}
       revision: ${{ steps.version.outputs.revision }}
+      orig_sha256: ${{ steps.fetch.outputs.orig_sha256 }}
     steps:
       - name: Determine version
         id: version
@@ -68,27 +68,40 @@ jobs:
           set -euo pipefail
           if [ "${GITHUB_EVENT_NAME}" = "workflow_dispatch" ]; then
             VERSION="${INPUT_VERSION#v}"
-            SERIES="${INPUT_SERIES:-noble jammy}"
+            SERIES="${INPUT_SERIES:-$DEFAULT_SERIES}"
             REVISION="${INPUT_REVISION:-1}"
           else
             TAG=$(gh release list --repo "$GITHUB_REPOSITORY" --exclude-drafts --exclude-pre-releases --limit 1 \
               --json tagName --jq '.[0].tagName')
             VERSION="${TAG#v}"
-            SERIES="noble jammy"
+            SERIES="$DEFAULT_SERIES"
             REVISION="1"
           fi
           [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "not a release version: '$VERSION'"; exit 1; }
           [[ "$REVISION" =~ ^[0-9]+$ ]] || { echo "revision must be a number: '$REVISION'"; exit 1; }
           for s in $SERIES; do [[ "$s" =~ ^(jammy|noble|questing)$ ]] || { echo "unsupported series: $s"; exit 1; }; done
+          # A release made before the PPA existed may lack the assets. Followed automatically, that is not an
+          # error (or every later Release run would fail on it); dispatched by hand, it is.
+          ASSETS=$(gh release view "v$VERSION" --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets[].name')
+          for a in "fukuii-$VERSION.tgz" SHA256SUMS.txt; do
+            if ! grep -qxF "$a" <<<"$ASSETS"; then
+              [ "${GITHUB_EVENT_NAME}" = "workflow_dispatch" ] && { echo "v$VERSION has no $a"; exit 1; }
+              echo "::notice::v$VERSION has no $a; nothing to publish"
+              SERIES=""
+            fi
+          done
           # Launchpad never accepts a version twice, even after deletion, and the Release workflow runs for every
           # pre-release too. So drop each series that already holds this exact version; with none left, stop here.
-          PUBLISHED=$(curl -fsS --retry 3 \
-            "https://api.launchpad.net/1.0/~chipprbots/+archive/ubuntu/fukuii?ws.op=getPublishedSources&source_name=fukuii&exact_match=true&ws.size=300" \
-            | jq -r '.entries[].source_package_version')
+          # getPublishedSources returns every status (Pending, Published, Superseded, Deleted, Obsolete). An upload
+          # still in Launchpad's queue is not listed yet; a second upload in that window is rejected by mail.
           TODO=""
           for s in $SERIES; do
-            if grep -qxF "$VERSION-$REVISION~${s}1" <<<"$PUBLISHED"; then
-              echo "$VERSION-$REVISION~${s}1 is already in the PPA; skipping $s"
+            DEB_VERSION="$VERSION-$REVISION~${s}1"
+            FOUND=$(curl -fsS --retry 3 -G "$PPA_API" --data-urlencode ws.op=getPublishedSources \
+              --data-urlencode source_name=fukuii --data-urlencode exact_match=true \
+              --data-urlencode "version=$DEB_VERSION" | jq -r '.total_size')
+            if [ "$FOUND" != "0" ]; then
+              echo "$DEB_VERSION is already in the PPA; skipping $s"
             else
               TODO="$TODO $s"
             fi
@@ -100,6 +113,7 @@ jobs:
           echo "fukuii $VERSION (revision $REVISION): uploading for [${TODO# }]"
 
       - name: Download and verify the release tarball
+        id: fetch
         if: steps.version.outputs.series != '[]'
         env:
           GH_TOKEN: ${{ github.token }}
@@ -110,12 +124,14 @@ jobs:
           gh release download "v$VERSION" --repo "$GITHUB_REPOSITORY" -p "fukuii-$VERSION.tgz" -p "SHA256SUMS.txt"
           grep -E " \*?fukuii-$VERSION\.tgz$" SHA256SUMS.txt > tgz.sha256
           sha256sum --check --strict tgz.sha256
+          # SHA256SUMS.txt comes from the same release, so this catches corruption, not a tampered release.
           # The upstream tarball of the source package is the released tarball itself.
           mv "fukuii-$VERSION.tgz" "fukuii_$VERSION.orig.tar.gz"
+          echo "orig_sha256=$(cut -d' ' -f1 tgz.sha256)" >> "$GITHUB_OUTPUT"
 
       - name: Keep the upstream tarball for the upload jobs
         if: steps.version.outputs.series != '[]'
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         with:
           name: fukuii-orig-${{ steps.version.outputs.version }}
           path: dl/fukuii_${{ steps.version.outputs.version }}.orig.tar.gz
@@ -135,13 +151,19 @@ jobs:
     env:
       VERSION: ${{ needs.prepare.outputs.version }}
       REVISION: ${{ needs.prepare.outputs.revision }}
+      ORIG_SHA256: ${{ needs.prepare.outputs.orig_sha256 }}
       SERIES: ${{ matrix.series }}
+      PPA_INCOMING: "~chipprbots/ubuntu/fukuii/"
+      DEBFULLNAME: "Chippr Robotics"
+      DEBEMAIL: "info@chipprbots.com"
     steps:
       - name: Checkout packaging
-        uses: actions/checkout@v5
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
 
       - name: Download the upstream tarball
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
         with:
           name: fukuii-orig-${{ needs.prepare.outputs.version }}
           path: work
@@ -155,8 +177,11 @@ jobs:
         run: |
           set -euo pipefail
           cd work
+          # The key signs what is here, so check it again rather than trust the artifact store.
+          echo "$ORIG_SHA256  fukuii_$VERSION.orig.tar.gz" | sha256sum --check --strict
           tar xzf "fukuii_$VERSION.orig.tar.gz"
           test -d "fukuii-$VERSION"
+          rm -rf "fukuii-$VERSION/debian"
           cp -r "$GITHUB_WORKSPACE/debian" "fukuii-$VERSION/"
           cd "fukuii-$VERSION"
           dch --newversion "$VERSION-$REVISION~${SERIES}1" --distribution "$SERIES" --force-distribution \
@@ -176,7 +201,7 @@ jobs:
           install -d -m 700 "$GNUPGHOME"
           # dput verifies the signature before uploading, so the Upload step needs this keyring too.
           echo "GNUPGHOME=$GNUPGHOME" >> "$GITHUB_ENV"
-          printf '%s' "$GPG_PASSPHRASE" > "$RUNNER_TEMP/gpg-pass" && chmod 600 "$RUNNER_TEMP/gpg-pass"
+          (umask 077; printf '%s' "$GPG_PASSPHRASE" > "$RUNNER_TEMP/gpg-pass")
           printf '%s\n' "$GPG_PRIVATE_KEY" | gpg --batch --quiet --import
           FPR=$(gpg --batch --with-colons --list-secret-keys | awk -F: '/^fpr:/ {print $10; exit}')
           [ -n "$FPR" ] || { echo "no secret key imported"; exit 1; }
@@ -213,4 +238,6 @@ jobs:
 
       - name: Remove the signing material
         if: always()
-        run: rm -rf "$RUNNER_TEMP/gnupg" "$RUNNER_TEMP/gpg-pass"
+        run: |
+          GNUPGHOME="$RUNNER_TEMP/gnupg" gpgconf --kill gpg-agent || true
+          rm -rf "$RUNNER_TEMP/gnupg" "$RUNNER_TEMP/gpg-pass"

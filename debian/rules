@@ -20,22 +20,22 @@ override_dh_strip_nondeterminism:
 
 override_dh_auto_install:
 	install -d debian/fukuii/usr/share/fukuii debian/fukuii/usr/bin debian/fukuii/etc/fukuii \
-	    debian/fukuii/var/lib/fukuii debian/fukuii/usr/share/doc/fukuii
+	    debian/fukuii/usr/share/doc/fukuii
 	# The launcher (bin/fukuii) resolves lib/, kanela-agent/ (the -javaagent it always adds) and conf/ next to bin/.
 	cp -r lib bin kanela-agent debian/fukuii/usr/share/fukuii/
 	# Windows launchers have no use in a .deb.
 	rm -f debian/fukuii/usr/share/fukuii/bin/*.bat
-	cp -r conf/* debian/fukuii/etc/fukuii/
+	cp -r conf/. debian/fukuii/etc/fukuii/
 	# application.ini carries the launcher's default JVM flags (heap, G1, MaxDirectMemorySize, OOM-exit); the
 	# launcher finds it via the /usr/share/fukuii/conf -> /etc/fukuii link (debian/fukuii.links). The shipped
-	# heap-dump path is the Docker one; point it at the package's state directory.
+	# heap-dump path is the Docker one. The node runs as whichever user starts it, so point it at a directory every
+	# user can write (the JVM names the file java_pid<pid>.hprof).
 	test -f debian/fukuii/etc/fukuii/application.ini
-	sed -i 's|^-J-XX:HeapDumpPath=.*|-J-XX:HeapDumpPath=/var/lib/fukuii/heapdump.hprof|' \
+	sed -i 's|^-J-XX:HeapDumpPath=.*|-J-XX:HeapDumpPath=/var/tmp|' \
 	    debian/fukuii/etc/fukuii/application.ini
-	grep -q '^-J-XX:HeapDumpPath=/var/lib/fukuii/' debian/fukuii/etc/fukuii/application.ini
+	grep -q '^-J-XX:HeapDumpPath=/var/tmp$$' debian/fukuii/etc/fukuii/application.ini
 	test -f debian/fukuii/usr/share/fukuii/kanela-agent/kanela-agent-*.jar
 	install -m 755 debian/fukuii-wrapper.sh debian/fukuii/usr/bin/fukuii
-	cp LICENSE debian/fukuii/usr/share/doc/fukuii/
 	cp RELEASE debian/fukuii/usr/share/doc/fukuii/
 
 override_dh_fixperms:
