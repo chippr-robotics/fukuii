@@ -22,7 +22,7 @@
 best-pointer 2 src/main/scala/com/chipprbots/ethereum/db/storage/AppStateStorage.scala DEF putBestBlockInfo and putBestBlockNumber
 best-pointer 4 src/main/scala/com/chipprbots/ethereum/domain/BlockchainWriter.scala DEF saveBatch's best rows (MOVE: a block's own commit, BlockExecution); REFUSED saveBestKnownBlocks, setCanonicalChainHead; DEF canonicalIndexUpdate (rewriteCanonicalIndex REFUSED; canonicalHeadUpdate a move's rows)
 index-write 5 src/main/scala/com/chipprbots/ethereum/domain/BlockchainWriter.scala DEF storeBlockHeader's index row, saveBlockNumberMapping, canonicalIndexUpdate's puts and removes; REFUSED setCanonicalChainHead; repairBestBlockNumberMapping is START
-head-writer 7 src/main/scala/com/chipprbots/ethereum/domain/BlockchainWriter.scala DEF the writers: saveBestKnownBlocks, setCanonicalChainHead, rewriteCanonicalIndex REFUSED; promoteToCanonicalHead C4D (refused with 3b's routing of the fork choice); canonicalHeadUpdate a move's rows; repairBestBlockNumberMapping START
+head-writer 9 src/main/scala/com/chipprbots/ethereum/domain/BlockchainWriter.scala DEF the writers: saveBestKnownBlocks, setCanonicalChainHead, rewriteCanonicalIndex, promoteToCanonicalHead REFUSED; canonicalHeadUpdate a move's rows, and moveHeadInPlace, the MOVE that writes them with the state (PathStateStorage.moveHead); repairBestBlockNumberMapping START
 block-store 6 src/main/scala/com/chipprbots/ethereum/domain/BlockchainWriter.scala DEF save, saveBatch, storeBlock, storeBlockHeader and their uses inside the writer
 best-pointer 1 src/main/scala/com/chipprbots/ethereum/domain/Blockchain.scala REFUSED removeBlock's best row: removeBlock refuses on the unified layout; removeChainForNewGenesis only where the state is destroyed next (test mode)
 index-write 1 src/main/scala/com/chipprbots/ethereum/domain/Blockchain.scala REFUSED removeBlock's index row, as its best row
@@ -33,8 +33,9 @@ block-store 1 src/main/scala/com/chipprbots/ethereum/ledger/BlockExecution.scala
 block-store 2 src/main/scala/com/chipprbots/ethereum/blockchain/data/GenesisDataLoader.scala MOVE the genesis block with the genesis commit, which gives the datadir its anchor
 block-store 1 src/main/scala/com/chipprbots/ethereum/blockchain/data/ChainImporter.scala HASH saveImported: the unified layout imports in place (importInPlace), a block's own commit
 
-# The fork choice and the reorganisation: routed through a move by C4b part 3b, C4d and C4e.
-head-writer 1 src/main/scala/com/chipprbots/ethereum/consensus/engine/ForkChoiceManager.scala C4D promoteToCanonicalHead; on the unified layout reached only for the head the state is at (EngineApiService's gate; TestingService.commitBlock right after its own commit), outside the state lock: a commit that moves the anchor in between leaves the best block behind, which the check under the lock then refuses to write over. Part 3b routes it through a move
+# The fork choice and the reorganisation: the fork choice confirms the head through a move (C4b part 3b); C4d and C4e
+# route the rest.
+head-writer 2 src/main/scala/com/chipprbots/ethereum/consensus/engine/ForkChoiceManager.scala HASH promoteToCanonicalHead on the hash layout's arm; MOVE moveHeadInPlace on the unified layout: the head the state is at, confirmed by a move of nothing under the state lock, and any move off it refused until C4d
 block-store 1 src/main/scala/com/chipprbots/ethereum/consensus/engine/EngineApiService.scala C4D newPayload's storeBlock: execution is refused before it on the unified layout; C4d stores by hash only there
 head-writer 4 src/main/scala/com/chipprbots/ethereum/consensus/ConsensusImpl.scala REFUSED saveBestKnownBlocks and rewriteCanonicalIndex refuse on the unified layout (saveLastBlock writes nothing there; settleHead is reached only with executed blocks, which the layout refuses before executing: C4E)
 block-store 1 src/main/scala/com/chipprbots/ethereum/jsonrpc/TestingService.scala HASH storeBlock on the hash layout's arm; the unified layout commits in place
@@ -59,4 +60,4 @@ block-store 1 src/main/scala/com/chipprbots/ethereum/blockchain/checkpoint/Check
 # Start, and test mode.
 best-pointer 1 src/main/scala/com/chipprbots/ethereum/nodebuilder/StdNode.scala START fixDatabase, before any writer: part 4's reconciliation
 head-writer 1 src/main/scala/com/chipprbots/ethereum/nodebuilder/StdNode.scala START repairBestBlockNumberMapping, before any writer: part 4's reconciliation
-head-writer 3 src/main/scala/com/chipprbots/ethereum/jsonrpc/TestService.scala HASH removeBlock on the hash layout's arms (test reset, rewind); REFUSED on the unified layout but for removeChainForNewGenesis, before the state is destroyed (test mode)
+head-writer 4 src/main/scala/com/chipprbots/ethereum/jsonrpc/TestService.scala HASH removeBlock on the hash layout's arms (test reset, rewind); REFUSED on the unified layout but for removeChainForNewGenesis, before the state is destroyed (test mode); MOVE moveHeadInPlace, the rewind below the head on the unified layout

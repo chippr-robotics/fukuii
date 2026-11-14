@@ -6,6 +6,9 @@ import org.apache.pekko.actor.typed.ActorRef as TypedActorRef
 import org.apache.pekko.util.ByteString
 
 import com.chipprbots.ethereum.consensus.ReorgStateHandler
+import com.chipprbots.ethereum.db.storage.pathstate.ReorgRefusal
+import com.chipprbots.ethereum.db.storage.pathstate.ReorgTooDeep
+import com.chipprbots.ethereum.db.storage.pathstate.StateUnavailable
 import com.chipprbots.ethereum.domain.BlockHash
 import com.chipprbots.ethereum.domain.BlockHeader
 import com.chipprbots.ethereum.domain.BlockchainReader
@@ -110,6 +113,8 @@ class ForkChoiceManager(
     if maybeHeader.isEmpty then
       log.info(s"Fork choice head ${newState.headBlockHash} not known yet (SYNCING)")
       Left("SYNCING")
+    else if blockchainWriter.holdsStateInPlace then
+      maybeHeader.fold[Either[String, Unit]](Left("SYNCING"))(confirmHeldHead(newState, _))
     else
       log.info(
         s"Fork choice updated: head=${newState.headBlockHash}, " +
@@ -129,6 +134,48 @@ class ForkChoiceManager(
       }
 
       Right(())
+
+  /** The fork choice on the unified state layout (spec 018 C4b part 3b), where the head moves with the state or not at
+    * all: through [[BlockchainWriter.moveHeadInPlace]], never [[BlockchainWriter.promoteToCanonicalHead]], which
+    * refuses there.
+    *
+    * `EngineApiService.forkchoiceUpdated` lets through only a head that is the block whose state is held, and a commit
+    * of the next block in place may land between that look and this write. So the head is confirmed by a move of
+    * nothing, written under the state lock against the anchor it was planned from: a commit that landed first makes it
+    * a move back, which is refused, and the best block stays on the block just committed (beacon, plan.md "C4b part 3"
+    * T145). Until C4d a fork choice moves the head off the block whose state is held in no direction; go-ethereum skips
+    * a fork choice that names an ancestor of its head too. The reference counts of the hash store are not touched: the
+    * changeset records are what the unified layout keeps of a block it leaves.
+    *
+    * `currentState` is set only when the head was confirmed: it is read as the head that was executed and applied.
+    *
+    * @return
+    *   `Left("SYNCING")` when the head was not confirmed, and nothing was written
+    */
+  private def confirmHeldHead(newState: ForkChoiceState, header: BlockHeader): Either[String, Unit] =
+    def notMoved(why: String): Either[String, Unit] =
+      log.warn(s"Fork choice head ${header.number.value} ${header.hashAsHexString} not applied (SYNCING): $why")
+      Left("SYNCING")
+    try
+      blockchainWriter.moveHeadInPlace(
+        header,
+        blockchainReader,
+        chunk =>
+          Option.when(chunk.reverse.nonEmpty || chunk.forward.nonEmpty)(
+            s"the state is held at block ${chunk.from.show}, and the head is not moved off it to follow a fork " +
+              "choice on the unified state layout yet (spec 018 C4d)"
+          )
+      )
+      log.info(
+        s"Fork choice updated: head=${newState.headBlockHash} (the block whose state is held), " +
+          s"safe=${newState.safeBlockHash}, finalized=${newState.finalizedBlockHash}"
+      )
+      currentState.set(Some(newState))
+      Right(())
+    catch
+      case unavailable: StateUnavailable => notMoved(unavailable.reason)
+      // A record that is not what it should be is this datadir's fault, not the fork choice's: it is thrown on.
+      case refused: ReorgTooDeep if refused.reason != ReorgRefusal.Corrupt => notMoved(refused.getMessage)
 
   /** Publish the CL head to the registered listener and record it as the requested head — **nothing else**.
     *

@@ -149,10 +149,11 @@ object TestService:
   /** What `test_setChainParams` is answered with there when a write of it failed. */
   val ChainNotSet: String = "the chain was not set"
 
-  /** What a rewind to a block between the genesis and the head is answered with there (spec 018 C4b). */
-  val RewindBelowTheHead: String =
-    "the unified state layout (fukuii.state.path-live) holds the state of the head alone until its head can move " +
-      "back, so it rewinds to the genesis only"
+  /** What a rewind to a block between the genesis and the head is answered with there when the head could not be moved
+    * back to it (spec 018 C4b part 3b): the move was refused, and nothing was changed.
+    */
+  val RewindRefused: String =
+    "the unified state layout (fukuii.state.path-live) could not move its head back to that block"
 
   /** A block that was mined on the unified state layout and was not made the head. */
   final class NotImportedToTheHead(result: BlockImportResult)
@@ -381,18 +382,22 @@ class TestService(
   def rewindToBlock(request: RewindToBlockRequest): ServiceResponse[RewindToBlockResponse] =
     if blockchainReader.holdsStateInPlace then rewindInPlace(request.blockNum) else rewindOnTheHashStore(request)
 
-  /** A rewind on the unified state layout, before its head can move back along the changeset records (spec 018 C4b).
+  /** A rewind on the unified state layout (spec 018 C4b part 3b).
     *
-    * The state on disk is the head's, and the state of a block below it is held nowhere. So a rewind to the head or
-    * above it removes no block, as on the hash store; a rewind to the genesis sets the chain's genesis again, which is
-    * the same block and the same state; and a rewind to a block between them is refused, before anything is removed and
-    * before the pending transactions are. The blocks in the queue stay, as they do on the hash store.
+    * The state on disk is the head's. A rewind to the head or above it removes no block, as on the hash store. A rewind
+    * to a block between the genesis and the head moves the head, and the state with it, back to that block of the
+    * head's chain, along the changeset records ([[BlockchainWriter.moveHeadInPlace]]): the best block, the index of
+    * blocks by number and the transaction lookups follow it in the move's batches. The blocks above it are not removed:
+    * they are known by their hash, and the changeset records are the way back up. A block imported again above the new
+    * head is executed again, as on the hash store. A move that is refused changes nothing, and the pending transactions
+    * stay. A rewind to the genesis sets the chain's genesis again, which is the same block and the same state. The
+    * blocks in the queue stay, as they do on the hash store.
     */
   private def rewindInPlace(blockNum: Long): ServiceResponse[RewindToBlockResponse] =
     if blockchainReader.getBestBlockNumber <= blockNum then
       pendingTransactionsManager ! PendingTransactionsManager.ClearPendingTransactions
       RewindToBlockResponse().rightNow
-    else if blockNum > 0 then IO.pure(Left(JsonRpcError.LogicError(TestService.RewindBelowTheHead)))
+    else if blockNum > 0 then IO.blocking(moveBackInPlace(blockNum)).recover(notOnTheUnifiedLayout)
     else
       genesisOfThisChain match
         case None => IO.pure(Left(JsonRpcError.LogicError("no chain was set: test_setChainParams comes first")))
@@ -401,6 +406,29 @@ class TestService(
           setGenesis(genesisData) match
             case Left(refused) => IO.pure(Left(refused))
             case Right(())     => RewindToBlockResponse().rightNow
+
+  /** The head moved back to the block at `blockNum` of its own chain, found by the parent hashes of the block whose
+    * state is held: never by the index of blocks by number, which is what the move rewrites.
+    */
+  private def moveBackInPlace(blockNum: Long): Either[JsonRpcError, RewindToBlockResponse] =
+    val target = for
+      (_, heldHash) <- blockchainReader.heldInPlace
+      held <- blockchainReader.getBlockHeaderByHash(BlockHash(heldHash))
+      ancestor <- blockchainReader.ancestorAt(held, blockNum)
+    yield ancestor
+    target match
+      case None =>
+        Left(JsonRpcError.LogicError(s"${TestService.RewindRefused}: the head's chain has no block $blockNum"))
+      case Some(header) =>
+        try
+          blockchainWriter.moveHeadInPlace(header, blockchainReader)
+          pendingTransactionsManager ! PendingTransactionsManager.ClearPendingTransactions
+          Right(RewindToBlockResponse())
+        catch
+          // a block on the way that is held nowhere: said as what it is, a rewind that could not be made
+          case unavailable: com.chipprbots.ethereum.db.storage.pathstate.StateUnavailable =>
+            log.warn("Test mode on the unified state layout: {}", unavailable.getMessage)
+            Left(JsonRpcError.LogicError(s"${TestService.RewindRefused} (${unavailable.reason})"))
 
   private def rewindOnTheHashStore(request: RewindToBlockRequest): ServiceResponse[RewindToBlockResponse] =
     pendingTransactionsManager ! PendingTransactionsManager.ClearPendingTransactions
@@ -434,6 +462,12 @@ class TestService(
     case fault: com.chipprbots.ethereum.db.storage.pathstate.StateUnavailable if blockchainReader.holdsStateInPlace =>
       log.warn("Test mode on the unified state layout: {}", fault.getMessage)
       Left(JsonRpcError.LogicError(s"${TestService.HeadStateOnly} (${fault.getMessage})"))
+    case refused: com.chipprbots.ethereum.db.storage.pathstate.ReorgTooDeep if blockchainReader.holdsStateInPlace =>
+      // a record that is not what it should be is this datadir's corruption, as the fork choice says by throwing it
+      if refused.reason == com.chipprbots.ethereum.db.storage.pathstate.ReorgRefusal.Corrupt then
+        log.error("[STATE-MOVE] Test mode on the unified state layout: {}", refused.getMessage)
+      else log.warn("Test mode on the unified state layout: {}", refused.getMessage)
+      Left(JsonRpcError.LogicError(s"${TestService.RewindRefused} (${refused.getMessage})"))
     case notImported: TestService.NotImportedToTheHead =>
       log.warn("Test mode on the unified state layout: {}", notImported.getMessage)
       Left(JsonRpcError.LogicError(notImported.getMessage))

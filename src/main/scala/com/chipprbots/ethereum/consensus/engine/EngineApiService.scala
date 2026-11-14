@@ -926,8 +926,35 @@ class EngineApiService(
         EngineApiMetrics.recordForkchoiceUpdated("INVALID")
         IO.pure(Left("invalid forkchoice state: finalized block is not an ancestor of head"))
       else
+        // On the unified state layout the fork choice confirms the head under the state lock, through a move of the
+        // head, and may wait there behind a move under way: on a thread that may block (beacon, spec 018 C4b part 3b).
+        // The hash store's runs where it always ran.
+        val applied: IO[Either[String, Unit]] =
+          if stateHeldInPlace.isDefined then IO.blocking(forkChoiceManager.applyForkChoiceState(forkChoiceState))
+          else IO.pure(forkChoiceManager.applyForkChoiceState(forkChoiceState))
 
-        forkChoiceManager.applyForkChoiceState(forkChoiceState) match
+        applied.flatMap {
+          case Left(_) if stateHeldInPlace.isDefined && isNowAnAncestorOfTheHead(headHeader) =>
+            // The head was the block whose state is held when it was looked at, and the next block was committed in
+            // place before the fork choice was written: the head it names is now a VALID ancestor of the canonical
+            // head, which is answered as the branch above answers one (execution-apis paris.md engine_forkchoiceUpdatedV1
+            // point 2; go-ethereum "Ignoring beacon update to old head"). Nothing was written, and no payload is built.
+            log.info(
+              "[ENGINE-API] forkchoiceUpdated names #{} {}, which a block committed in place since made an ancestor of " +
+                "the head #{}: head kept, no payload built",
+              headHeader.map(_.number.value).getOrElse(BigInt(-1)),
+              hexOf(forkChoiceState.headBlockHash),
+              blockchainReader.getBestBlockNumber
+            )
+            EngineApiMetrics.recordForkchoiceUpdated("VALID")
+            IO.pure(
+              Right(
+                ForkchoiceUpdatedResponse(
+                  payloadStatus = PayloadStatusV1(Valid, latestValidHash = Some(forkChoiceState.headBlockHash)),
+                  payloadId = None
+                )
+              )
+            )
           case Left(_) =>
             // Head not known — return SYNCING so CL knows we need newPayload
             EngineApiMetrics.recordForkchoiceUpdated("SYNCING")
@@ -1099,9 +1126,17 @@ class EngineApiService(
           // end else (invalidAttrs check)
           // end else (safe/finalized check)
           // end case Right
+        }
       // end else (blockFullyStored check)
     // end else (invalidBlocks check)
   }
+
+  /** Whether `head` is canonical at its height and below the best block: a VALID ancestor of the canonical head. */
+  private def isNowAnAncestorOfTheHead(head: Option[BlockHeader]): Boolean =
+    head.exists { header =>
+      header.number.value < blockchainReader.getBestBlockNumber &&
+      blockchainReader.getBlockHeaderByNumber(header.number.value).exists(_.hash == header.hash)
+    }
 
   /** Mempool selection for a proposer build on `parent` at `timestamp`, in go-ethereum's miner order:
     *   1. chain-ID filter;

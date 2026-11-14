@@ -14,6 +14,10 @@ import com.chipprbots.ethereum.db.storage.ChainWeightStorage
 import com.chipprbots.ethereum.db.storage.ReceiptStorage
 import com.chipprbots.ethereum.db.storage.TransactionMappingStorage
 import com.chipprbots.ethereum.db.storage.TransactionMappingStorage.TransactionLocation
+import com.chipprbots.ethereum.db.storage.pathstate.BlockRef
+import com.chipprbots.ethereum.db.storage.pathstate.HeadMovePlan
+import com.chipprbots.ethereum.db.storage.pathstate.PathStateStorage
+import com.chipprbots.ethereum.db.storage.pathstate.StateUnavailable
 import com.chipprbots.ethereum.domain.appstate.BlockInfo
 import com.chipprbots.ethereum.utils.Logger
 
@@ -26,11 +30,14 @@ class BlockchainWriter(
     chainWeightStorage: ChainWeightStorage,
     appStateStorage: AppStateStorage,
     blockAccessListStorage: BlockAccessListStorage,
-    // Whether this node holds its state on the unified layout (spec 018 Track C): there the best block and the index
-    // of blocks by number move only with the state, in a move of its head, and the writers below that move them alone
-    // refuse.
-    holdsStateInPlace: Boolean = false
+    // The state on the unified layout (spec 018 Track C), where this node holds it there: the best block and the index
+    // of blocks by number then move only with the state, in a block's own commit or in a move of its head
+    // (moveHeadInPlace), and the writers below that move them alone refuse.
+    pathState: Option[PathStateStorage] = None
 ) extends Logger:
+
+  /** Whether this node holds its state on the unified layout, where the head moves with the state or not at all. */
+  def holdsStateInPlace: Boolean = pathState.isDefined
 
   /** Refuses, on the unified layout, a write of the best block or the index of blocks by number that does not move the
     * state with it: the state anchor and the best block are one block there (spec 018 data-model 5.1, I1), and only a
@@ -278,6 +285,7 @@ class BlockchainWriter(
     * Only the index, the lookups and the best-block pointer move; headers, bodies and receipts stay where they are.
     */
   def promoteToCanonicalHead(head: BlockHeader, reader: BlockchainReader): CanonicalMove =
+    refuseOnTheUnifiedLayout(s"promoteToCanonicalHead to block ${head.number.value}")
     val update = canonicalHeadUpdate(head, reader)
     // A plain extension rewrites only heights above the old best and clears nothing: not worth a line.
     if update.reorganises then
@@ -344,6 +352,54 @@ class BlockchainWriter(
       reorganises = remove.nonEmpty || put.exists(_._1 <= oldBest)
     )
 
+  /** '''Moves the head, and the state with it, to `target`''' on the unified layout: with a block's own commit, the one
+    * writer of the best block and the index of blocks by number there (spec 018 data-model 5.1, I1; plan.md "C4b part
+    * 3b"). Each batch of the move ([[PathStateStorage.moveHead]]) carries [[canonicalHeadUpdate]] for the block it ends
+    * on, built when that batch is asked for, so after every batch, and after a crash between two, the anchor, the best
+    * block and the index name one chain. A target that is the head already is a move of nothing, written as one batch
+    * under the state lock: what a caller that confirms the head writes, so that no commit lands between its look at the
+    * head and its write.
+    *
+    * Headers, bodies, receipts and the changeset records stay: a block the head leaves is still known by its hash.
+    *
+    * @param refuse
+    *   why a batch of the move is not to be written, when it is not. Asked for each batch before its rows are built; a
+    *   refusal ends the move there with a [[StateUnavailable]], and the batches before it stand
+    * @throws IllegalStateException
+    *   on the hash layout, which holds the state of every block and has no head of the state to move
+    * @throws com.chipprbots.ethereum.db.storage.pathstate.ReorgTooDeep
+    *   when the move is refused: nothing was changed
+    * @throws StateUnavailable
+    *   as [[PathStateStorage.moveHead]] throws it, and for a refused batch
+    */
+  def moveHeadInPlace(
+      target: BlockHeader,
+      reader: BlockchainReader,
+      refuse: HeadMovePlan.Chunk => Option[String] = _ => None
+  ): PathStateStorage.MoveOutcome =
+    val state = pathState.getOrElse(
+      throw new IllegalStateException(
+        s"the head is moved to block ${target.number.value} with the state on the unified state layout only"
+      )
+    )
+    state.moveHead(
+      BlockRef(target.hash.value, target.number.value, target.stateRoot.value),
+      reader.headerLink,
+      chunk =>
+        refuse(chunk).foreach(why => throw new StateUnavailable(why))
+        val head =
+          if chunk.head.hash == target.hash.value then target
+          else
+            reader
+              .getBlockHeaderByHash(BlockHash(chunk.head.hash))
+              .getOrElse(
+                throw new IllegalStateException(
+                  s"the header of block ${chunk.head.show}, which a move of the head was planned through, is gone"
+                )
+              )
+        Some(canonicalHeadUpdate(head, reader).batch)
+    )
+
   private def saveBlockNumberMapping(number: BigInt, hash: BlockHash): DataSourceBatchUpdate =
     blockNumberMappingStorage.put(number, hash.value)
 
@@ -391,7 +447,7 @@ object BlockchainWriter:
       storages.chainWeightStorage,
       storages.appStateStorage,
       storages.blockAccessListStorage,
-      holdsStateInPlace = storages.pathStateStorage.isDefined
+      pathState = storages.pathStateStorage
     )
 
 /** Outcome of [[BlockchainWriter.repairBestBlockNumberMapping]]. */
