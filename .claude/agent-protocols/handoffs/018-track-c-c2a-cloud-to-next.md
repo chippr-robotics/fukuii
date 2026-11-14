@@ -212,8 +212,10 @@ Read plan.md, "C2a part 1 record" and "C2a part 2 record", then:
   **Part 3b is built**: `BlockchainWriter.moveHeadInPlace` (the writer now takes the path store) is the node's one way to
   move the head with the state; the fork choice on the unified layout confirms the head by a move of nothing under
   the state lock and refuses every move off the held block until C4d (`SYNCING`); `promoteToCanonicalHead` refuses
-  there; `test_rewindToBlock` below the head moves back along the records and removes no block. Next: part 4, the
-  reconciliation at start (T150), then C4d (newPayload by hash only, the fork choice's real moves) and C4e.
+  there; `test_rewindToBlock` below the head moves back along the records and removes no block. **Part 4 is built**:
+  `StateReconciliation` at start makes the best block and the index the held block's (rule 4 always; rules 2 and 3
+  not built: the user's decision of 2026-11-14) and holds the index to its ancestry (I6). Next: C4d (newPayload by hash only, the
+  fork choice's real moves) and C4e.
 - **C4a** brings back what C3b refuses: the overlay commit for a block that does not extend the anchor
   (`buildExtra(adopted)`, `NotExtendingAnchor`, `saveLastBlock` writing nothing),
   `stateAvailable(hash)`, the served-root window, and SNAP advertised again. C4b: the head move, `ConsensusStateFault`

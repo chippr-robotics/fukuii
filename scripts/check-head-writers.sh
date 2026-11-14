@@ -40,7 +40,7 @@ regex_of() {
   case "$1" in
     best-pointer) echo '\bputBestBlock(Info|Number)\(' ;;
     index-write)  echo '\bblockNumberMappingStorage\.(put|remove)\(' ;;
-    head-writer)  echo '\b(moveHeadInPlace|saveBestKnownBlocks|setCanonicalChainHead|rewriteCanonicalIndex|promoteToCanonicalHead|canonicalHeadUpdate|repairBestBlockNumberMapping|removeBlock|removeChainForNewGenesis|reanchor|discardBlocksAfter)\(' ;;
+    head-writer)  echo '\b(heldBlockIndex|moveHeadInPlace|saveBestKnownBlocks|setCanonicalChainHead|rewriteCanonicalIndex|promoteToCanonicalHead|canonicalHeadUpdate|repairBestBlockNumberMapping|removeBlock|removeChainForNewGenesis|reanchor|discardBlocksAfter)\(' ;;
     block-store)  echo '\b(storeBlock|storeBlockHeader|saveBatch)\(|\bblockchainWriter\.save\(' ;;
     *) return 1 ;;
   esac

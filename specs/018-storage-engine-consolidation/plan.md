@@ -2226,6 +2226,10 @@ is the later word, and the tasks are annotated.
   old head, forwarded from its records. **Retention must not prune a record above the fork point while such an
   attempt is unsettled** (forge): every in-place commit prunes, so a branch longer than the retained depth would
   delete what the way back needs. The slice offers a hold for that; its caller is C4e.
+- **A block of the branch that is invalid** (forge W4; the user's decision of 2026-11-14): the blocks of the branch
+  already committed in place stay the head when they already outweigh the old head, as `ConsensusImpl.settleHead`
+  keeps the executed prefix today; only otherwise is the head moved back to the old head along the records. C4e
+  builds it.
 - **After the write** a sample that does not match means the store wrote wrong bytes: the node fails closed (no
   in-place writer goes on, the Engine API answers SYNCING) and takes the escalation route. It never rolls back
   onto such a store.
@@ -2235,8 +2239,9 @@ refusals. Part 2: the move, with the split of `BlockchainWriter` and the one-bat
 from the callers). Part 3: the callers that exist on the guard (`test_rewindToBlock`, the index writers), and the
 table of pointer writers as a test, with the rows the audit missed (forge: the SYNC-FORK resolver's
 `discardBlocksAfter`, which steps the best block down one batch at a time under no lock;
-`PivotAnchor.reanchor`; `repairBestBlockNumberMapping`). Part 4: the reconciliation at start, placed after
-`fixDatabase` and `repairBestBlockMapping`, which write the pointer and the index before it today.
+`PivotAnchor.reanchor`; `repairBestBlockNumberMapping`). Part 4: the reconciliation at start, in place of
+`fixDatabase` and `repairBestBlockMapping` on the unified layout (as built, below: they trust the best block or the
+index, and would undo it).
 
 **Recorded and not decided here.** A legal reorganisation deeper than 512 blocks during a time without finality
 is refused and escalated (retention's bound; an accepted risk, to be stated in the operator's notes).
@@ -2668,6 +2673,80 @@ refusal past the request, refusing as before, or going to the block above. Two d
 symbol is an error here) and were rewritten so that they do. The Engine API's mutant survived the first form of the
 end-to-end case, which committed inside the gate's look: there the Engine API's own branch for an ancestor answers
 first. The case now commits inside the fork choice, where the window is.
+
+#### C4b part 4: the reconciliation at start (2026-11-13)
+
+Vault and forge, consulted before code, agree: **the block whose state the disk holds wins, always.** Since part 2 a
+block's commit and every batch of a move write the state's rows, the anchor, the best block and the index in one
+RocksDB write batch (one `dataSource.update`, the write-ahead log on), under the state lock, after part 3a's check that
+the best block is the anchor. So no crash leaves "the pointer half committed first", the case data-model 5.1's rules 2
+and 3 were written for. A best block that is not the anchor at start comes from a writer's defect, a datadir written
+before 3a, or test mode's reset of the chain, which is two writes (vault). Moving the state to that best block would
+throw away a state that execution proved (rule 2) or undo a fork choice that a move made deliberately (rule 3), and
+trusting the best block while the state stays put leaves every import refused, since a block is committed in place only
+on the anchor (forge). Rule 4 needs only the anchor's header, never writes the state, and loses nothing: the blocks
+above the anchor stay stored by hash and are executed again when they are imported again (on the unified layout today a
+chain import or test mode; the Engine API and sync follow with C4d and C5). go-ethereum's start does the same, down to
+the highest block whose state it has (beacon). **So rule 4 is the rule, and rules 2
+and 3 are not built** (data-model 5.1 amended; the user agreed on 2026-11-14: "go with what is on disk").
+
+- **`StateReconciliation.run`** (`domain/`), called from `StdNode.start` before the genesis loader and before any
+  actor, server or sync, in place of the hash layout's `fixDatabase` and `repairBestBlockMapping`, which trust the best
+  block or the index and would undo it (forge: also before the storage check, the sync controller's starting block and
+  the fork ID, all of which read the best block).
+  - Not stamped `path-live-1`: nothing; the genesis loader judges the datadir.
+  - No anchor: nothing, unless the datadir says SNAP sync is done, which is refused.
+  - The anchor's header not stored: refused, but in test mode, where it is a reset that stopped between its two writes,
+    left for the next `test_setChainParams` (which destroys the state) with nothing written.
+  - The anchor's header naming another number or state root than its row, or its chain weight not stored: refused.
+  - Otherwise the best block and the index are made the anchor's (`[STATE-ANCHOR] best pointer rewound` at WARN), or,
+    with the best block in place, the index alone (I6). A datadir found consistent takes no write.
+- **`BlockchainWriter.heldBlockIndex`**, a START builder: the anchor's ancestry by parent hashes for 1,024 blocks, with
+  every height whose entry is not the ancestor rewritten at whatever depth (not `canonicalHeadUpdate`'s walk, which
+  stops at the first entry that matches); every entry above the anchor deleted, up to the old best block and 1,024
+  heights past the highest found, capped at a million above the anchor; the lookups of the transactions of dropped
+  blocks; the best block. One synced batch, under the state lock. Nothing else: no state row, anchor, record, header,
+  body, receipt or weight.
+- **The ratchet** counts `heldBlockIndex` as a START writer; `StdNode`'s two START lines are the hash layout's only.
+
+**Tests** (`HeadMoveOnTheChainSpec`, the execution-apis chain on the unified layout): a best block above the state with
+its index and lookups (rewound; the rest of the datadir byte for byte as it was; the writes under the lock; a second
+start writes nothing; the blocks above imported again as blocks to execute, and a fork choice on the new head); a best
+block below, on another branch, with no hash, unknown; the index with the best block in place (a side entry under
+entries that match, a hole, an entry above a gap); the refusals, each writing nothing, and test mode's residue left; a
+batch that fails, then the next start.
+
+**Recorded.** I6 is not reachable on the guard today: side-branch execution is refused before its `saveBatch`. C4e
+should store a block it does not adopt by hash only, as C4d does for `newPayload`, so that I6 stays a defence (forge).
+`StdNode.start`'s call is not covered by a spec (the node is not started in unit tests).
+
+**Read after code (beacon): APPROVE WITH CHANGES**, all taken but where said. Rule 4 is right after the merge too,
+and dropping rules 2 and 3 is right on ETH as on ETC. `newPayload`'s answer of VALID for a kept block above the anchor
+(its receipts are kept) is no consensus fault: the block was executed and validated when it was committed in place,
+validity is the block's and not the state's, and nothing moves on it (go-ethereum answers a known payload the same
+way). The caches start empty and the finalized supplier is none on this layout. Taken:
+- the Engine API's gate for a head that is not the held block now records it as the head asked for and publishes it
+  (notify-only, as its other `SYNCING` branches): without it, after a reconciliation that lowered the head, nothing
+  would know where the blocks above lead;
+- the claim that the blocks above "are executed again when they come back" says what imports them today;
+- a transaction of a dropped block that the ancestry includes higher up keeps its lookup, pointed at that block (the
+  re-included set is the ancestry from the lowest rewritten height up, and its locations are written again);
+- the hash layout's two repairs do not run on a datadir stamped for the unified layout and opened with the guard off,
+  which the genesis loader then refuses: nothing is repaired in it first;
+- cases: the Engine API after a reconciliation (the consensus layer's head above answered `SYNCING`, nothing written,
+  that head recorded); the window and the cap; the shared transaction.
+Not taken, with the reason: `newPayload` for a kept block and for its child is not driven here (a payload from a block
+of this chain is not built by any helper of this spec); the duplicate rule (`number <= best`) is read, not driven
+through `ConsensusAdapter`, whose node this fixture does not build; `StdNode.start`'s call has no spec.
+
+**The mutation run**: 16 mutants, all caught. The reconciliation starting a synced datadir with no anchor, refusing
+test mode's residue, taking an anchor row whose state root contradicts its header, taking an anchor with no weight,
+writing a consistent datadir, writing off the state lock, reconciling a datadir with no stamp; the index walk stopping
+at the first entry that matches, looking for no entry above a gap, keeping a window of one block, removing nothing
+above the held block; the best block not moved; the lookups of dropped blocks kept; the old lookups rule (a shared
+transaction dropped and not put back); the Engine API's gate recording no head. Five did not compile at first (an
+unused symbol is an error here) and were rewritten so that they do. One more, the new lookups rule's first half
+alone, is equivalent: the locations written again in the same batch put the lookup back.
 
 ### Destructive change (C8a and C8b): the vault protocol blocks
 
