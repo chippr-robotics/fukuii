@@ -48,8 +48,9 @@ class EthashMiner(
         val blockNumber = block.header.number
         val (startTime, miningResult) = doMining(blockNumber.toLong, block)
 
-        submitHashRate(ethMiningService, System.nanoTime() - startTime, miningResult)
-        handleMiningResult(miningResult, syncController, block)
+        val elapsedNanos = System.nanoTime() - startTime
+        submitHashRate(ethMiningService, elapsedNanos, miningResult)
+        handleMiningResult(miningResult, syncController, block, elapsedNanos / 1_000_000L)
       }
       .handleError { ex =>
         log.error("Error occurred while mining: ", ex)
