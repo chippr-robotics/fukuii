@@ -2257,19 +2257,18 @@ items:
   - id: B-201
     title: TUI Forks detail row is cut mid-timestamp at 100 columns on an ETH node (tier M minimum)
     priority: P3
-    status: claimed
+    status: done
     area: tui
     size: S
     opened: 2026-11-11
+    closed: 2026-11-14
     refs: ["prism review of 027 slice 5, 2026-11-10"]
     links:
+      prs: [1835]
       spec: specs/027-tui-dashboard
-    claim:
-      by: cloud-ccr-452bbde8
-      agent: main
-      since: 2026-11-14T17:05:25Z
-      heartbeat: 2026-11-14T17:05:25Z
-    notes: "console/panels/ForkRows at 100x32: slice 5's 100-column CL goldens hold the panel rows only because the full frame fails TuiGoldenLintSpec on this row. Fix the row, then add a full-frame 100x32 golden."
+    notes: |-
+      console/panels/ForkRows at 100x32: slice 5's 100-column CL goldens hold the panel rows only because the full frame fails TuiGoldenLintSpec on this row. Fix the row, then add a full-frame 100x32 golden.
+      2026-11-14 done: The row was fixed in #1834 (a detail that does not fit is dropped whole); the full-frame 100x32 goldens are in #1835.
   - id: B-202
     title: PeerScore can produce NaN (Math.max(0.0, NaN) stays NaN); find the source term
     priority: P3
