@@ -744,7 +744,7 @@ items:
   - id: B-062
     title: "Spec 018 Track C C4d: the PoS arms (item 6f)"
     priority: P2
-    status: open
+    status: claimed
     area: storage
     size: M
     opened: 2026-11-07
@@ -752,6 +752,11 @@ items:
     links:
       spec: specs/018-storage-engine-consolidation
     depends_on: [B-061]
+    claim:
+      by: cloud-dc960fdc
+      agent: main
+      since: 2026-11-14T00:55:54Z
+      heartbeat: 2026-11-14T00:55:54Z
   - id: B-063
     title: "Spec 018 Track C C4e: the PoW arms (item 6g)"
     priority: P2
