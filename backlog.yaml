@@ -2852,3 +2852,15 @@ items:
       spec: 018
     depends_on: [B-062]
     notes: plan.md C4b part 3b Recorded (beacon). Either a fast path that does not count a move of nothing, or the readers tell them apart.
+  - id: B-250
+    title: "Spec 018 C4b follow-up: C4e stores a block it does not adopt by hash only, so I6 (index = the held block's ancestry) stays a defence"
+    priority: P2
+    status: open
+    area: storage
+    size: S
+    opened: 2026-11-14
+    refs: []
+    links:
+      spec: 018
+    depends_on: [B-063]
+    notes: plan.md C4b part 4 Recorded (forge). Today side execution is refused before saveBatch on the guard (BlockExecution refuseUnadopted).
