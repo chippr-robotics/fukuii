@@ -3152,3 +3152,13 @@ items:
       since: 2026-11-14T20:22:13Z
       heartbeat: 2026-11-14T20:22:13Z
     notes: Tasks T083-T094. vault and herald analysed before code (RocksDB properties read; RLPx byte counters).
+  - id: B-273
+    title: "Bundled gorgoroth.conf sets mining.protocol = \"ethash\", which MiningConfig rejects: fukuii gorgoroth cannot start"
+    priority: P2
+    status: open
+    area: config
+    size: S
+    opened: 2026-11-14
+    refs: []
+    links: {}
+    notes: "Valid values: pow, mocked, restricted-pow, engine-api. Found 2026-11-14 while testing the TUI mining monitor; -Dfukuii.mining.protocol=pow works."
