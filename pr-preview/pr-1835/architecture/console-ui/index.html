@@ -6704,6 +6704,8 @@ the same cells in every mode, and nothing is only a picture: what it shows is al
 </tr>
 </tbody>
 </table>
+<p>Pixel and block mode draw the text in the command-center colours, which are the palette the art is drawn in; text
+mode keeps the colours the terminal's depth chose (16, 256 or none).</p>
 <p><code>fukuii.tui.graphics = auto</code> (the default) asks the terminal once at start, for at most half a second, and picks
 <code>pixel</code> if it answers, else <code>block</code>; under tmux or screen it picks <code>block</code> without asking. <code>FUKUII_TUI_GRAPHICS</code>
 overrides the setting, <code>V</code> switches while the TUI runs, and <code>:graphics &lt;mode&gt;</code> sets one by name. Asking for <code>pixel</code> on
@@ -6827,6 +6829,10 @@ the same, so a link that delivers no arrow keys loses nothing.</p>
 </tr>
 </tbody>
 </table>
+<p>The startup splash lists the phases of the node's start (storage and genesis, the peer-to-peer network, the API
+servers, sync, the consistency checks), each marked done when the node reports it complete; its worm bar is the share
+of them done, and the row beside it names the phase under way. Nothing in it is timed: a node that takes long in a
+phase shows that phase. In pixel and block mode the badge stands where the logo does in text mode.</p>
 <p>Any key skips the startup splash, and does nothing else. A change of view cancels the catch-up celebration. Opening
 the Logs view shows its newest lines; while it is scrolled back, new lines arriving keep the lines on screen where
 they are.</p>
@@ -6914,7 +6920,7 @@ selection or answer a dialog.</p>
 </tr>
 <tr>
 <td><code>Splash</code></td>
-<td>The startup splash, a view of the same renderer: the FUKUII logo by terminal size (<code>FukuiiBanner</code>, the literal the startup log prints), skipped by any key.</td>
+<td>The startup splash, a view of the same renderer: the FUKUII logo by terminal size (<code>FukuiiBanner</code>, the literal the startup log prints) or the badge sprite, and the phases of the start as <code>StdNode.start</code> reports them (<code>StartupPhase</code>); skipped by any key.</td>
 </tr>
 <tr>
 <td><code>TuiLogSuppressor</code></td>
