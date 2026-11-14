@@ -35,6 +35,13 @@ object TuiFixtures:
   def panelRows(rows: Seq[String], w: Int, h: Int): Seq[String] =
     rows.zipWithIndex.map((row, i) => if i >= 3 && i < rows.size - 1 then body(row, w, h) else row)
 
+  /** The art shipped with the node, read once for every spec that draws it. */
+  lazy val art: gfx.ArtStore = gfx.ArtStore.bundled()
+
+  /** A terminal that answered both questions, with the VGA cell the art is drawn for. */
+  val Cell: gfx.CellSize = gfx.CellSize(8, 16)
+  val KittyCaps: TerminalCaps = TerminalCaps(kittyGraphics = true, cell = Some(Cell), colors = 256, multiplexer = false)
+
   /** The fixtures' "now". */
   val Now: Instant = Instant.parse("2026-11-07T12:00:00Z")
 

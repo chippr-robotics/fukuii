@@ -1,29 +1,29 @@
  # FUKUII  etc (61) . PoW . head 21,884,102 . 41/50 peers . up 12d 7h . v0.11.0                                                                        Overview 
 ----------------------------------------------------------------------------------------------------------------------------------------------------------------
  + no alerts                                                                                                                                                    
- etc              | Peers   41/50 ##########  Block  21,884,102 (at head)                    Txpool  142             Disk  388G free     JVM  3.4G / 8.0G heap  
- PoW . id 61      | RPC     :8545 on                                                            Discovery  1,912 known . 14 pending . 3 blacklisted   GC  0.3%  
+                  | Peers   41/50 ##########  Block  21,884,102 (at head)                    Txpool  142             Disk  388G free     JVM  3.4G / 8.0G heap  
+                  | RPC     :8545 on                                                            Discovery  1,912 known . 14 pending . 3 blacklisted   GC  0.3%  
                   |---------------------------------------------------------------------------------------------------------------------------------------------
- [1] Overview     | Sync    + at head                                                                                                                           
- [2] Chain        |   Blocks   ~o[COMPLETE +]@@                                                        21,884,102                                               
- [3] Peers        |---------------------------------------------------------------------------------------------------------------------------------------------
- [4] Mempool      | Mining  off                                                                                                                                 
- [5] RPC          |---------------------------------------------------------------------------------------------------------------------------------------------
- [6] Storage      | Forks (block)                                                                                                                               
- [7] System       |   DiffBomb-Removal + - Atlantis + - Agharta + - Phoenix + - ECIP-1099 + - Magneto + - Mystique + - Spiral + ========> Olympia not scheduled 
- [8] Logs         |   block 21,884,102 . Spiral since 19,250,000 . Olympia not scheduled on this network                                                        
- [9] Ops          |---------------------------------------------------------------------------------------------------------------------------------------------
-                  | Peers (top 8 of 41 by score)                                                                                                                
-                  |   id          dir  client                best        score  trend  age                                                                      
-                  |   0x0000..a1  in   CoreGeth/v1.12.19     21,884,102  0.950  ^      4h 10m                                                                   
-                  |   0x11a2..9b  out  besu/v24.1.2          21,884,100  0.930  v      1h 43m                                                                   
-                  |   0x1a73..98  in   Nethermind/v1.25.4    21,884,102  0.920  ^      30m 57s                                                                  
-                  |   0x1715..16  out  CoreGeth/v1.12.19     21,884,100  0.900  v      3h 41m                                                                   
-                  |   0x1fe6..13  in   fukuii/v0.11.0        21,884,102  0.890  ^      2h 28m                                                                   
-                  |   0x28b7..10  out  besu/v24.1.2          21,884,101  0.880  -      1h 15m                                                                   
-                  |   0x2e2b..8b  out  CoreGeth/v1.12.19     21,884,101  0.850  -      3h 13m                                                                   
+                  | Sync    + at head                                                                                                                           
+       ETC        |   Blocks   ~o[COMPLETE +]@@                                                        21,884,102                                               
+                  |---------------------------------------------------------------------------------------------------------------------------------------------
+                  | Mining  off                                                                                                                                 
+                  |---------------------------------------------------------------------------------------------------------------------------------------------
+ etc              | Forks (block)                                                                                                                               
+ PoW . id 61      |   DiffBomb-Removal + - Atlantis + - Agharta + - Phoenix + - ECIP-1099 + - Magneto + - Mystique + - Spiral + ========> Olympia not scheduled 
+ main network     |   block 21,884,102 . Spiral since 19,250,000 . Olympia not scheduled on this network                                                        
+                  |---------------------------------------------------------------------------------------------------------------------------------------------
+ [1] Overview     | Peers (top 8 of 41 by score)                                                                                                                
+ [2] Chain        |   id          dir  client                best        score  trend  age                                                                      
+ [3] Peers        |   0x0000..a1  in   CoreGeth/v1.12.19     21,884,102  0.950  ^      4h 10m                                                                   
+ [4] Mempool      |   0x11a2..9b  out  besu/v24.1.2          21,884,100  0.930  v      1h 43m                                                                   
+ [5] RPC          |   0x1a73..98  in   Nethermind/v1.25.4    21,884,102  0.920  ^      30m 57s                                                                  
+ [6] Storage      |   0x1715..16  out  CoreGeth/v1.12.19     21,884,100  0.900  v      3h 41m                                                                   
+ [7] System       |   0x1fe6..13  in   fukuii/v0.11.0        21,884,102  0.890  ^      2h 28m                                                                   
+ [8] Logs         |   0x28b7..10  out  besu/v24.1.2          21,884,101  0.880  -      1h 15m                                                                   
+ [9] Ops          |   0x2e2b..8b  out  CoreGeth/v1.12.19     21,884,101  0.850  -      3h 13m                                                                   
                   |   0x36fc..88  out  fukuii/v0.11.0        21,884,100  0.840  v      2h 0m                                                                    
-                  |---------------------------------------------------------------------------------------------------------------------------------------------
+ graphics text    |---------------------------------------------------------------------------------------------------------------------------------------------
                   | Node    /var/lib/fukuii/etc . SNAP sync . archive pruning . 50 peers max . mining off                                                       
                   |---------------------------------------------------------------------------------------------------------------------------------------------
                   | Recent                                                                                                                                      
@@ -36,7 +36,7 @@
                   | 11:59:17 INFO  Imported block 21,884,100 0x3301..2e9d with 21 txs in 31ms                                                                   
                   | 11:59:25 INFO  [====================~o]@@ 100% - RegularSync                                                                                
                   | 11:59:30 ERROR Cannot decode a message from 203.0.113.40:30303                                                                              
-                  | 11:59:34 INFO  Imported block 21,884,101 0x9b0c..ff31 with 9 txs in 17ms                                                                    
+                  | 11:59:34 INFO  Imported block 21,884,101 0x9b0c..ff31 with 9 txs in 17ms                                                (o_o)               
                   | 11:59:47 INFO  Imported block 21,884,102 0x6d21..1a0e with 14 txs in 22ms                                                                   
                   | 11:59:52 INFO  Peers: 41 handshaked . 14 in . 27 out                                                                                        
                   | 12:00:00 INFO  RegularSync: at head, block 21884102                                                                                         
@@ -44,5 +44,5 @@
                   |                                                                                                                                             
                   |                                                                                                                                             
                   |                                                                                                                                             
-                  |                                                                                                                                             
- 1-9 view  [ ] other views  Up Down select  Enter open  Esc back  : prompt  / filter  ? help  g glyphs  p pause  r redraw  d detach  q quit                     
+                  |                                                                                                                        at head              
+ 1-9 view  [ ] next view  Up Down select  Enter open  Esc back  : prompt  / filter  ? help  v graphics  p pause  r redraw  d detach  q quit                     

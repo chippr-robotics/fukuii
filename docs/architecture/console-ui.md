@@ -76,14 +76,15 @@ and the footer with the keys. The Overview at 80×24, regular sync (from the gol
 ```
 
 The Recent strip at the bottom is the newest log lines (6 at tier S). Sizes: below 100 columns or 32 rows is tier S,
-from 100×32 tier M, from 140×45 tier L; each view fills its tier (at L the Overview draws the logo in a right-hand
-column). A panel that does not fit gives up its rows to the ones that matter more; the header, the alert row and the
-footer always stay.
+from 100×32 tier M, from 140×45 tier L; each view fills its tier. A panel that does not fit gives up its rows to the
+ones that matter more; the header, the alert row and the footer always stay.
 
 ### Views
 
 Nine views, chosen with `1` to `9`, with `[` and `]`, or by name at the `:` prompt. From 100 columns and 32 rows a
-sidebar down the left lists them and marks the one on screen. Spec 029 is building these out a slice at a time; a view
+sidebar down the left lists them and marks the one on screen. Its top corner carries the icon of the chain family the
+node is on, Ethereum Classic's mark or Ethereum's, with the network's name, `PoW` or `PoS`, the chain id and `main
+network` or `test network` in words under it; its last row names the graphics mode. Spec 029 is building these out a slice at a time; a view
 whose slice has not landed shows what the dashboard already reads for it and one line naming what is to come.
 
 | Key | View | What it shows |
@@ -205,6 +206,34 @@ escape sequences, control characters, zero-width and direction-override characte
 keeps its first line and an ellipsis, and the length is capped at 512 characters. With the ASCII glyph set it is drawn
 in ASCII only, in the same columns.
 
+### Graphics
+
+The TUI draws its pictures (the network icon, the mascot) in one of three modes over the same layout. A picture has
+the same cells in every mode, and nothing is only a picture: what it shows is also in the frame's text.
+
+| Mode | How it draws | Where |
+|------|--------------|-------|
+| `pixel` | Images, with the Kitty graphics protocol | A terminal that answers the protocol's query and reports its cell size: kitty, Ghostty |
+| `block` | The same art in half-block character cells, in the 256-colour palette | Any 256-colour terminal with a UTF-8 locale; tmux and screen |
+| `text` | No art: the words that stand for each picture | `NO_COLOR`, fewer than 256 colours |
+
+`fukuii.tui.graphics = auto` (the default) asks the terminal once at start, for at most half a second, and picks
+`pixel` if it answers, else `block`; under tmux or screen it picks `block` without asking. `FUKUII_TUI_GRAPHICS`
+overrides the setting, `V` switches while the TUI runs, and `:graphics <mode>` sets one by name. Asking for `pixel` on
+a terminal that cannot draw it gives `block`, and the footer and the log say why.
+
+The **mascot** stands in the corner of the Overview's Recent strip from 100×32 (the large one from 140×45, where the
+strip has the rows). It is a status lamp, and the words under it say the same: `starting`, `syncing`, `at head`,
+`warning`, `error`, `stalled`, and `synced` for the one celebration. It moves only in pixel mode under full motion;
+`P` and reduced motion stop it. Every image is removed from the terminal when the TUI leaves, by `Q`, `D`, Ctrl-C or
+a lost terminal.
+
+`:art` shows every sprite, a pose a page (`Up`/`Down` turn the page), in the mode on screen.
+`fukuii.tui.art-dir` (or `FUKUII_TUI_ART_DIR`) names a directory of sprite sheets to use instead of the shipped ones;
+`R` on the Art screen reads them again. A sheet that breaks
+[the contract](https://github.com/chippr-robotics/fukuii/blob/staging/specs/029-tui-command-center/contracts/art.md)
+is named in the log and on the Art screen and left out; its picture is drawn as words.
+
 ## Keyboard Commands
 
 The same table Help draws (`Bindings.Global`). Every key that is an escape sequence has a single character that does
@@ -220,13 +249,14 @@ the same, so a link that delivers no arrow keys loses nothing.
 | `Home` `End` | `<` `>` | The first and the last row |
 | `Enter` | | Open the selected row (a peer's details) |
 | `Esc` | `Backspace` | Back; clear the view's filter |
-| `:` | | The prompt: a view's name, `peer <id>`, `glyphs emoji` or `glyphs ascii`, `detach`, `quit`, `help`. `Tab` completes, `Up`/`Down` walk the history |
+| `:` | | The prompt: a view's name, `peer <id>`, `glyphs emoji` or `glyphs ascii`, `graphics auto`, `pixel`, `block` or `text`, `art`, `detach`, `quit`, `help`. `Tab` completes, `Up`/`Down` walk the history |
 | `/` | | Filter the list on screen as you type (Peers, Logs). `Enter` keeps the filter, `Esc` clears it |
 | `?` | `H` `F1` | Help over the current view; any key but `Q`, `R` and `D` returns |
 | `L` | | Logs |
 | `G` | | Switch the glyph set (emoji / ASCII); no column moves |
+| `V` | | Switch the graphics mode: pixel, block, text, as far as the terminal can; no text moves |
 | `P` | | Pause or resume the motion (the frame counter stops; polling continues) |
-| `R` | | Redraw the display |
+| `R` | | Redraw the display (on the Art screen: read the sprite sheets again first) |
 | `D` | | Detach: the TUI closes and standard logging returns; the node keeps running |
 | `Q` | | **Ask** to stop the node: a dialog says what stops with it; `Y` stops it, `N` or `Esc` cancels. Nothing else answers it, pasted text included |
 | `Ctrl-C` | | Stop the node at once, as a signal |

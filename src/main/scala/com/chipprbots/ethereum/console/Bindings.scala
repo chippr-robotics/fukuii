@@ -9,7 +9,7 @@ enum Action:
   case PageUp, PageDown, First, Last
   case Open, Back
   case OpenPrompt, OpenFilter
-  case Help, Glyphs, Pause, Redraw, Detach, AskQuit
+  case Help, Glyphs, Graphics, Pause, Redraw, Detach, AskQuit
 
 /** One row of the key table: the keys, how Help names them, and what they do.
   *
@@ -44,11 +44,17 @@ object Bindings:
       Binding(Key.End +: chars('>'), "End >", "the last row", Action.Last),
       Binding(Seq(Key.Enter), "Enter", "open the selected row", Action.Open),
       Binding(Seq(Key.Esc, Key.Backspace), "Esc Bksp", "back; clear a filter", Action.Back),
-      Binding(chars(':'), ":", "the prompt: a view's name, peer <id>, glyphs, detach, quit, help", Action.OpenPrompt),
+      Binding(
+        chars(':'),
+        ":",
+        "the prompt: a view's name, peer <id>, glyphs, graphics, art, detach, quit",
+        Action.OpenPrompt
+      ),
       Binding(chars('/'), "/", "filter the list on screen as you type", Action.OpenFilter),
       Binding(chars('?', 'h') :+ Key.F(1), "? h F1", "this help; any key but q, r and d returns", Action.Help),
       Binding(chars('l'), "l", "the Logs view", Action.OpenView(TuiView.Logs)),
       Binding(chars('g'), "g", "switch the glyph set: emoji / ascii", Action.Glyphs),
+      Binding(chars('v'), "v", "switch the graphics: pixel / block / text", Action.Graphics),
       Binding(chars('p'), "p", "pause or resume the motion (polling continues)", Action.Pause),
       Binding(chars('r'), "r", "redraw the screen", Action.Redraw),
       Binding(chars('d'), "d", "detach: the TUI closes, the node keeps running", Action.Detach),

@@ -356,7 +356,7 @@ never a curtain"; the worm *is* the progress bar). Each pose means one thing:
 | at head, no alerts | watching the screens; a head turn when a block arrives | `✓ no alerts` |
 | a warning alert | looking at the alert row | the alert row, warn style |
 | an error alert | standing, alarm lamp on | the alert row, error style |
-| stalled or source unresponsive | asleep | `💤` |
+| stalled, and no other alert (a source that does not answer is an error alert) | asleep | `💤` |
 | first arrival at head | celebrates once (027 Q8) | the 12-frame celebration |
 
 The mascot never covers the alert row, never animates a confirmation dialog, and never reacts to an operator action

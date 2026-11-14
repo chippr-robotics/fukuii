@@ -17,8 +17,11 @@ import org.jline.utils.InfoCmp.Capability
   *
   * @param keys
   *   what each known CSI or SS3 sequence means, by its text after `ESC`: `"[A"`, `"OP"`, `"[5~"`
+  * @param cellReports
+  *   the terminal's report of its cell size (`ESC [ 6 ; height ; width t`) becomes a [[Key.CellSize]] instead of
+  *   nothing: for the program that asks for it after a resize
   */
-final class KeyDecoder(keys: Map[String, Key] = KeyDecoder.Standard):
+final class KeyDecoder(keys: Map[String, Key] = KeyDecoder.Standard, cellReports: Boolean = false):
 
   import KeyDecoder.*
   import KeyDecoder.State.*
@@ -68,6 +71,8 @@ final class KeyDecoder(keys: Map[String, Key] = KeyDecoder.Standard):
     if c >= '@' && c <= '~' then
       val sequence = buf + c
       if sequence == PasteStart then (Pasting("", 0, dropped = false), Nil)
+      else if cellReports && c == 't' then
+        (Ground, TerminalQuery.parse(s"$EscChar[$sequence")._2.map(cell => Key.CellSize(cell.width, cell.height)).toSeq)
       else (Ground, keys.get("[" + withoutModifier(sequence)).toSeq)
     else if c >= ' ' && c <= '?' then if buf.length >= MaxCsi then (Ground, Nil) else (Csi(buf + c), Nil)
     // Anything else cannot be part of a sequence: the sequence is abandoned, and so is the character.
@@ -193,13 +198,13 @@ object KeyDecoder:
   /** A decoder for `terminal`: the standard sequences, and the ones its terminfo entry names where they are CSI or SS3
     * sequences. A capability the terminal does not have adds nothing.
     */
-  def forTerminal(terminal: Terminal): KeyDecoder =
+  def forTerminal(terminal: Terminal, cellReports: Boolean = false): KeyDecoder =
     val own = Capabilities.flatMap { (capability, key) =>
       Option(KeyMap.key(terminal, capability))
         .filter(s => s.length >= 3 && s.charAt(0) == EscChar && (s.charAt(1) == '[' || s.charAt(1) == 'O'))
         .map(s => s.substring(1) -> key)
     }
-    new KeyDecoder(Standard ++ own)
+    new KeyDecoder(Standard ++ own, cellReports)
 
   /** Every key in `input`, with the input going quiet at its end: for tests and for text already in hand. */
   def decode(input: String, decoder: KeyDecoder = new KeyDecoder()): Seq[Key] =

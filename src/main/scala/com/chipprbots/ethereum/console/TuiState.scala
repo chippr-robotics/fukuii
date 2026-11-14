@@ -66,6 +66,8 @@ enum Catchup:
   *   the lines run at the prompt in this session, oldest first
   * @param notice
   *   what the last command had to say (an unknown command, a peer not found); it shows in the footer until the next key
+  * @param graphics
+  *   how graphics are drawn (spec 029 FR-011); text until the terminal has been asked what it can do
   * @param chain
   *   the chain's identity and fork timeline, once the node has read its configuration
   * @param snapshot
@@ -122,7 +124,8 @@ case class TuiState(
     selectedPeer: Option[String] = None,
     filters: Map[TuiView, String] = Map.empty,
     promptHistory: Vector[String] = Vector.empty,
-    notice: Option[String] = None
+    notice: Option[String] = None,
+    graphics: GraphicsMode = GraphicsMode.Text
 ):
 
   import TuiState.*
@@ -384,6 +387,7 @@ case class TuiState(
     else
       screen match
         case Some(Screen.PeerDetail(_)) => "Peer"
+        case Some(Screen.Art(_))        => "Art"
         case None                       => view.title
 
   /** SNAP's pivot block, while SNAP's rows are on screen: the Block cell's target and the fork timeline's position

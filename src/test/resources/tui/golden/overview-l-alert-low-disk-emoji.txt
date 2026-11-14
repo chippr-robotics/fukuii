@@ -1,29 +1,29 @@
  ◆ FUKUII  etc (61) · PoW · head 18,402,113 · 6/50 peers · up 9m 0s · v0.11.0                                                                          Overview 
 ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
  ⚠ 2 warns   disk 14.2G free (warn < 20G) · peers 6/50 below 25%                                                                                                
- etc              │ Peers   6/50 ◆◆◆◆◆◆       Block  18,402,113 → 21,884,102 (−3,481,989)    Txpool  142             Disk  14.2G free ⚠  JVM  2.1G / 8.0G heap  
- PoW · id 61      │ RPC     :8545 on                                                            Discovery  1,912 known · 14 pending · 3 blacklisted   GC  0.3%  
+                  │ Peers   6/50 ◆◆◆◆◆◆       Block  18,402,113 → 21,884,102 (−3,481,989)    Txpool  142             Disk  14.2G free ⚠  JVM  2.1G / 8.0G heap  
+                  │ RPC     :8545 on                                                            Discovery  1,912 known · 14 pending · 3 blacklisted   GC  0.3%  
                   │─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
- [1] Overview     │ Sync    regular                                                                                              rate 184.37 blk/s · ETA 5h 14m 
- [2] Chain        │   Blocks   [=================================================🪱..........]🧠 84%   18,402,113 / 21,884,102                                  
- [3] Peers        │─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
- [4] Mempool      │ Forks (block)                                                                                                                               
- [5] RPC          │   Atlantis ✓ ─ Agharta ✓ ─ Phoenix ✓ ─ ECIP-1099 ✓ ─ Magneto ✓ ─ Mystique ✓ ════════▶ Spiral @ 19,250,000 (847.9K away)                     
- [6] Storage      │   block 18,402,113 · Mystique since 14,525,000                                                                                              
- [7] System       │─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
- [8] Logs         │ Peers (top 6 of 6 by score)                                                                                                                 
- [9] Ops          │   id          dir  client                best        score  trend  age                                                                      
-                  │   0x0000…a1   in   CoreGeth/v1.12.19     21,884,102  0.950  ↑      4h 10m                                                                   
-                  │   0x1715…16   out  CoreGeth/v1.12.19     21,884,100  0.900  ↓      3h 41m                                                                   
-                  │   0x3c6f…03   out  Geth/v1.13.5          21,884,100  0.810  ↓      3h 58m                                                                   
-                  │   0x78de…65   out  Nethermind/v1.25.4    21,884,101  0.670  →      3h 47m                                                                   
-                  │   0x9e37…52   out  besu/v24.1.2          21,884,101  0.580  →      4h 4m                                                                    
-                  │   0xdaa6…b4   in   fukuii/v0.11.0        21,884,102  0.440  ↑      3h 53m                                                                   
-                  │                                                                                                                                             
-                  │                                                                                                                                             
+                  │ Sync    regular                                                                                              rate 184.37 blk/s · ETA 5h 14m 
+       ETC        │   Blocks   [=================================================🪱..........]🧠 84%   18,402,113 / 21,884,102                                  
                   │─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+                  │ Forks (block)                                                                                                                               
+                  │   Atlantis ✓ ─ Agharta ✓ ─ Phoenix ✓ ─ ECIP-1099 ✓ ─ Magneto ✓ ─ Mystique ✓ ════════▶ Spiral @ 19,250,000 (847.9K away)                     
+ etc              │   block 18,402,113 · Mystique since 14,525,000                                                                                              
+ PoW · id 61      │─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+ main network     │ Peers (top 6 of 6 by score)                                                                                                                 
+                  │   id          dir  client                best        score  trend  age                                                                      
+ [1] Overview     │   0x0000…a1   in   CoreGeth/v1.12.19     21,884,102  0.950  ↑      4h 10m                                                                   
+ [2] Chain        │   0x1715…16   out  CoreGeth/v1.12.19     21,884,100  0.900  ↓      3h 41m                                                                   
+ [3] Peers        │   0x3c6f…03   out  Geth/v1.13.5          21,884,100  0.810  ↓      3h 58m                                                                   
+ [4] Mempool      │   0x78de…65   out  Nethermind/v1.25.4    21,884,101  0.670  →      3h 47m                                                                   
+ [5] RPC          │   0x9e37…52   out  besu/v24.1.2          21,884,101  0.580  →      4h 4m                                                                    
+ [6] Storage      │   0xdaa6…b4   in   fukuii/v0.11.0        21,884,102  0.440  ↑      3h 53m                                                                   
+ [7] System       │                                                                                                                                             
+ [8] Logs         │                                                                                                                                             
+ [9] Ops          │─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
                   │ Node    /var/lib/fukuii/etc · Full sync · archive pruning · 50 peers max · mining off                                                       
-                  │─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+ graphics text    │─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
                   │ Recent                                                                                                                                      
                   │ 11:58:21 INFO  Handshaked peer 0x3fa1…e2 CoreGeth/v1.12.19                                                                                  
                   │ 11:58:34 INFO  RegularSync: current=21884097 best=21884102 lag=5                                                                            
@@ -36,7 +36,7 @@
                   │ 11:59:30 ERROR Cannot decode a message from 203.0.113.40:30303                                                                              
                   │ 11:59:34 INFO  Imported block 21,884,101 0x9b0c…ff31 with 9 txs in 17ms                                                                     
                   │ 11:59:47 INFO  Imported block 21,884,102 0x6d21…1a0e with 14 txs in 22ms                                                                    
-                  │ 11:59:52 INFO  Peers: 41 handshaked · 14 in · 27 out                                                                                        
+                  │ 11:59:52 INFO  Peers: 41 handshaked · 14 in · 27 out                                                                    (o_O)!              
                   │ 12:00:00 INFO  RegularSync: at head, block 21884102                                                                                         
                   │                                                                                                                                             
                   │                                                                                                                                             
@@ -44,5 +44,5 @@
                   │                                                                                                                                             
                   │                                                                                                                                             
                   │                                                                                                                                             
-                  │                                                                                                                                             
- 1-9 view  [ ] other views  Up Down select  Enter open  Esc back  : prompt  / filter  ? help  g glyphs  p pause  r redraw  d detach  q quit                     
+                  │                                                                                                                        warning              
+ 1-9 view  [ ] next view  Up Down select  Enter open  Esc back  : prompt  / filter  ? help  v graphics  p pause  r redraw  d detach  q quit                     

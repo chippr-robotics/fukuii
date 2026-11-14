@@ -13,9 +13,21 @@ import com.chipprbots.ethereum.console.TuiText.formatBytes
 import com.chipprbots.ethereum.console.TuiText.formatNumber
 import com.chipprbots.ethereum.console.TuiText.formatPercent
 import com.chipprbots.ethereum.console.TuiText.formatShort
+import com.chipprbots.ethereum.console.gfx.ArtStore
 
 /** What every panel draws with: the state, the tier, the glyph set, the theme and the display switches. */
-final case class Ctx(state: TuiState, tier: Tier, g: TuiGlyphs, t: TuiTheme, config: TuiConfig):
+final case class Ctx(
+    state: TuiState,
+    tier: Tier,
+    g: TuiGlyphs,
+    t: TuiTheme,
+    config: TuiConfig,
+    art: ArtStore = ArtStore.Empty,
+    screen: Option[Tier] = None
+):
+  /** The tier of the whole screen: a panel's own [[tier]] is that of the columns the sidebar leaves it. */
+  def screenTier: Tier = screen.getOrElse(tier)
+
   def separator(width: Int): AttributedString = new AttributedString(g.separator.text * width.max(0), t.muted)
 
 /** The rows several views share: label/value fields at fixed columns, the worm rows, the vitals strip, the one-line
@@ -183,6 +195,16 @@ private[console] object Rows:
 
   private def txpool(c: Ctx): AttributedString = field("Txpool", txpoolValue(c), c.t)
 
+  /** Where tier M's second and third cells start in `width` columns: at 44 and 92 from 120 columns, as spec 027 drew
+    * them. Below that the sidebar has taken columns (spec 029 FR-006), and no cell may lose its value for it: the third
+    * keeps 28 columns from the right edge, and the second starts where the row's widest cell still fits: after the
+    * peers on the vitals row (`narrowSecond` 26), so the block range has the room between; 20 columns before the third
+    * on the resources row, so the endpoints have it.
+    */
+  private def mediumColumns(width: Int, narrowSecond: Int => Int): (Int, Int) =
+    val third = (width - 28).min(92)
+    (if third >= 92 then 44 else narrowSecond(third), third)
+
   /** Peers and blocks; from M the txpool; at L the disk and the heap too (research §3.2–§3.4). Each cell starts at a
     * fixed column, so neither glyph set moves a label. At L the columns leave each cell its longest common value in
     * both sets (a regular sync's block range with the ASCII arrow, `1,204 (3 blob)`, `14.2G free ⚠`) down to 140
@@ -191,9 +213,10 @@ private[console] object Rows:
   def vitalsRow(c: Ctx, width: Int): AttributedString =
     val peers = field("Peers", peersValue(c), c.t)
     val block = field("Block", blockValue(c), c.t, 7)
+    val (second, third) = mediumColumns(width, _ => 26)
     val cells = c.tier match
       case Tier.S => Seq(0 -> peers, 33 -> block)
-      case Tier.M => Seq(0 -> peers, 44 -> block, 92 -> txpool(c))
+      case Tier.M => Seq(0 -> peers, second -> block, third -> txpool(c))
       case Tier.L =>
         Seq(
           0 -> peers,
@@ -207,9 +230,11 @@ private[console] object Rows:
   /** The endpoints and the disk, with the txpool at S and the heap at M; at L the discovery table and the GC share. */
   def resourcesRow(c: Ctx, width: Int): AttributedString =
     val rpc = field("RPC", endpointsValue(c), c.t)
+    val (second, third) = mediumColumns(width, _ - 20)
     val cells = c.tier match
       case Tier.S => Seq(0 -> rpc, 33 -> field("Disk", diskValue(c), c.t, 7), 56 -> txpool(c))
-      case Tier.M => Seq(0 -> rpc, 44 -> field("Disk", diskValue(c), c.t, 7), 92 -> field("JVM", heapValue(c), c.t))
+      case Tier.M =>
+        Seq(0 -> rpc, second -> field("Disk", diskValue(c), c.t, 7), third -> field("JVM", heapValue(c), c.t))
       case Tier.L =>
         Seq(
           0 -> rpc,

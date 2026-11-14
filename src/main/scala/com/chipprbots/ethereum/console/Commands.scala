@@ -13,6 +13,12 @@ enum Command:
   case Help
   case Glyphs(set: GlyphSet)
 
+  /** `graphics <mode>`: draw graphics so, if the terminal can. */
+  case Graphics(choice: GraphicsChoice)
+
+  /** `art`: every sprite, a pose a page. */
+  case Art
+
   /** A known command used wrongly: `message` says how it is used. */
   case Usage(message: String)
 
@@ -22,7 +28,10 @@ enum Command:
 /** The prompt's commands: parsing, completion, and the nearest command to a mistyped one. Pure. */
 object Commands:
 
-  private val Fixed: Seq[String] = Seq("peer", "glyphs", "help", "detach", "quit")
+  private val Fixed: Seq[String] = Seq("peer", "glyphs", "graphics", "art", "help", "detach", "quit")
+
+  /** The commands that take an argument: completing one leaves a space after it. */
+  private val WithArgument: Set[String] = Set("peer", "glyphs", "graphics")
 
   /** Every command word, the views first. */
   val Words: Seq[String] = TuiView.values.toSeq.map(_.title.toLowerCase(Locale.ROOT)) ++ Fixed
@@ -47,7 +56,12 @@ object Commands:
                   case Some("emoji") => Command.Glyphs(GlyphSet.Emoji)
                   case Some("ascii") => Command.Glyphs(GlyphSet.Ascii)
                   case _             => Command.Usage("usage: glyphs emoji | ascii")
-              case _ => Command.Unknown(word, nearest(word))
+              case "graphics" =>
+                args.headOption.flatMap(GraphicsChoice.parse) match
+                  case Some(choice) => Command.Graphics(choice)
+                  case None         => Command.Usage("usage: graphics auto | pixel | block | text")
+              case "art" => Command.Art
+              case _     => Command.Unknown(word, nearest(word))
 
   /** `line` with its first word completed as far as the commands that start with it agree; unchanged when none does or
     * when the first word is already followed by an argument.
@@ -59,7 +73,7 @@ object Commands:
       val matches = Words.filter(_.startsWith(lower))
       matches match
         case Seq()     => line
-        case Seq(only) => only + (if only == "peer" || only == "glyphs" then " " else "")
+        case Seq(only) => only + (if WithArgument.contains(only) then " " else "")
         case several   => several.reduce(commonPrefix)
 
   /** The commands `word` may have meant: those it is the start of, else those within two edits of it. */

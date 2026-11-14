@@ -427,11 +427,12 @@ Each requirement names the research section it rests on.
   character cells) or **text** (spec 027's glyphs). The mode is chosen automatically, can be set by
   `fukuii.tui.graphics` and `FUKUII_TUI_GRAPHICS`, and can be changed by a key while running (§5.1).
 - **FR-012** A graphic region MUST occupy the same rectangle of cells in every mode. Changing mode changes no cell
-  outside the graphic regions (§5.1).
+  outside the graphic regions, but for the one row of the sidebar that names the mode (§5.1).
 - **FR-013** Pixel mode MUST be chosen only when the terminal itself answers that it supports the protocol and
   reports its cell size, never from the terminal's name. The questions are asked once, before any key is read, within
   a bound of 500 ms; with no answer the mode is block. Under a terminal multiplexer the automatic choice is block.
-  With `NO_COLOR` or fewer than 256 colours it is text (§3 E4, §4.2, §4.5, §5.6).
+  With `NO_COLOR` or fewer than 256 colours it is text, and block mode needs a UTF-8 locale for its one character
+  (§3 E4, §4.2, §4.5, §5.6).
 - **FR-014** All art MUST use one fixed palette that every 256-colour terminal draws exactly, so that block mode shows
   the same colours as pixel mode (§3 E2, §5.4).
 - **FR-015** Pixel art MUST stay sharp: an image is enlarged by a whole factor to the pixels of the cells it covers,

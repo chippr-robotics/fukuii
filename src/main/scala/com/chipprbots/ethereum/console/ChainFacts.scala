@@ -16,6 +16,12 @@ enum ChainFamily(val label: String):
   case PoW extends ChainFamily("PoW")
   case PoS extends ChainFamily("PoS")
 
+/** What a network is for, as far as its chain id says: a public main network, a public test network, or neither that
+  * the node knows of (a private or a new network).
+  */
+enum NetworkKind:
+  case Main, Test, Other
+
 /** How a chain's forks activate: by block number (ETC) or by timestamp (ETH). */
 enum ForkSchedule:
   case ByBlock, ByTimestamp
@@ -45,6 +51,12 @@ final case class ChainFacts(
     notScheduled: Seq[String],
     version: String = ""
 ):
+  /** Main network, test network, or neither known, by the chain id (spec 029 FR-061). */
+  def kind: NetworkKind =
+    if ChainFacts.MainNetworks.contains(chainId) then NetworkKind.Main
+    else if ChainFacts.TestNetworks.contains(chainId) then NetworkKind.Test
+    else NetworkKind.Other
+
   /** The latest fork active at `position` (a block number on ETC, the head's timestamp on ETH). */
   def last(position: Long): Option[ForkPoint] = forks.filter(_.at <= position).lastOption
 
@@ -69,6 +81,15 @@ final case class ChainFacts(
     case ForkSchedule.ByTimestamp => "timestamp"
 
 object ChainFacts:
+
+  /** The chain ids of the public main networks: Ethereum and Ethereum Classic. */
+  val MainNetworks: Set[BigInt] = Set(BigInt(1), BigInt(61))
+
+  /** The chain ids of the public test networks the node ships a configuration for, or is likely to be pointed at:
+    * Mordor, Sepolia, Holesky, Hoodi and Platåberget.
+    */
+  val TestNetworks: Set[BigInt] =
+    Set(BigInt(63), BigInt(11155111L), BigInt(17000), BigInt(560048), BigInt(7091047534L))
 
   /** The facts of a chain's configuration. The family comes from `networkType` (C-4), not from whether timestamp forks
     * are configured.

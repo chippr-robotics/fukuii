@@ -5,6 +5,7 @@ import java.io.FileOutputStream
 import java.io.InterruptedIOException
 import java.io.OutputStream
 import java.nio.charset.StandardCharsets
+import java.nio.file.Path
 import java.time.Clock
 import java.time.Duration
 import java.util.concurrent.atomic.AtomicReference
@@ -16,10 +17,11 @@ import org.jline.terminal.Terminal
 import org.jline.terminal.TerminalBuilder
 import org.jline.terminal.spi.SystemStream
 import org.jline.terminal.spi.TerminalExt
-import org.jline.utils.AttributedString
 import org.jline.utils.InfoCmp.Capability
 import org.jline.utils.NonBlockingReader
 
+import com.chipprbots.ethereum.console.gfx.ArtStore
+import com.chipprbots.ethereum.console.gfx.Kitty
 import com.chipprbots.ethereum.utils.Logger
 
 /** Outcome of a keyboard command. */
@@ -60,13 +62,16 @@ enum TuiCommand:
   * @param logRing
   *   the log tail; None builds one from `config` ([[TuiLogRingAppender.of]]). It is attached once the console is
   *   suppressed and detached before the console is restored (C-11)
+  * @param queryTimeoutMs
+  *   how long the terminal's answers about its graphics are waited for at the start (spec 029 FR-013)
   */
 class Tui(
     val config: TuiConfig = TuiConfig.default,
     terminalFactory: () => Terminal = Tui.systemTerminal,
     processOutput: Terminal => Option[OutputStream] = Tui.processOutputOf,
     clock: Clock = Clock.systemUTC(),
-    logRing: Option[TuiLogRingAppender] = None
+    logRing: Option[TuiLogRingAppender] = None,
+    queryTimeoutMs: Long = TerminalQuery.TimeoutMillis
 ) extends Logger:
 
   private var terminal: Option[Terminal] = None
@@ -77,8 +82,19 @@ class Tui(
   private var inAltScreen = false
   private var lastSize: (Int, Int) = (0, 0)
 
-  /** The last frame written, so an unchanged frame is not written again (FR-010). */
-  private var lastLines: Option[Seq[AttributedString]] = None
+  /** What the terminal shows: an unchanged frame is not written again (FR-010), and of a changed one only the rows and
+    * images that differ (spec 029 FR-017).
+    */
+  private var shown: FrameWriter.Shown = FrameWriter.Blank
+
+  /** The next frame is drawn on a cleared screen: `r`, a change of graphics mode, new art. */
+  private var clearNext = false
+
+  /** An image has gone to this terminal: the teardown removes every one (spec 029 FR-016). */
+  private var imagesSent = false
+
+  /** What the terminal said of itself when the TUI started (spec 029 FR-013). */
+  private var caps: TerminalCaps = TerminalCaps.None
   @volatile private var enabled = true
 
   /** A frame failed to draw: logged at ERROR once, with its stack trace; the ones after it at DEBUG until one draws. */
@@ -99,7 +115,10 @@ class Tui(
   /** Chosen once the terminal is open, from `NO_COLOR` and the colours it reports (spec 027 FR-009). */
   @volatile private var theme: TuiTheme = TuiTheme.of(config.noColor, Tui.DefaultMaxColors)
 
-  private val renderer: TuiRenderer = TuiRenderer(config)
+  /** The sprite sheets: read when a mode that draws them is first chosen, and again by `r` on the Art screen. */
+  private var art: ArtStore = ArtStore.Empty
+  private var artLoaded = false
+  private var renderer: TuiRenderer = TuiRenderer(config)
   private val logSuppressor: TuiLogSuppressor = TuiLogSuppressor()
   private val ring: TuiLogRingAppender = logRing.getOrElse(TuiLogRingAppender.of(config))
 
@@ -140,12 +159,16 @@ class Tui(
         theme = TuiTheme.of(config.noColor, Tui.maxColors(term))
         directOutput = processOutput(term)
         savedAttributes = Some(term.enterRawMode())
-        decoder = KeyDecoder.forTerminal(term)
+        decoder = KeyDecoder.forTerminal(term, cellReports = true)
         decoding = KeyDecoder.State.Ground
         // Alternate screen buffer (restored on exit, so the user's scrollback survives) + hidden cursor. Bracketed
         // paste, so that pasted text arrives marked as such and cannot be read as keys (spec 029 FR-009).
         write(term, Tui.EnterAltScreen + Tui.HideCursor + KeyDecoder.EnablePaste + Tui.ClearScreen)
         inAltScreen = true
+        // What the terminal can draw is asked once, here, before a key is read: its answers never reach the key loop
+        // (spec 029 FR-013).
+        caps = askTerminal(term)
+        chooseGraphics(config.graphics)
 
         // Suppress console logs if configured
         if config.suppressConsoleLogs then
@@ -199,6 +222,54 @@ class Tui(
 
   private[console] def updateStatus(status: NodeStatusSnapshot): Unit = modify(_.withStatus(status))
 
+  /** What the terminal says of itself. The questions go out only where their answer can matter: not under `NO_COLOR` or
+    * below 256 colours (the mode is text), not when blocks or text were asked for, and under a multiplexer only when
+    * pixels were asked for by name.
+    */
+  private def askTerminal(term: Terminal): TerminalCaps =
+    val colors = Tui.maxColors(term)
+    val ask = !config.noColor && colors >= GraphicsMode.MinColors && (config.graphics match
+      case GraphicsChoice.Pixel => true
+      case GraphicsChoice.Auto  => !config.multiplexer
+      case _                    => false
+    )
+    val (graphics, cell) = if ask then TerminalQuery.run(term, queryTimeoutMs) else (false, None)
+    TerminalCaps(graphics, cell, colors, config.multiplexer, config.utf8Locale)
+
+  /** Draw graphics as `choice` asks, as far as this terminal can (spec 029 FR-013); what it cannot do is said in the
+    * footer and the log. The art is read the first time a mode that draws it is chosen, and the next frame starts from
+    * a cleared screen.
+    */
+  private def chooseGraphics(choice: GraphicsChoice): Unit =
+    val (mode, warning) = GraphicsMode.choose(choice, caps, config.noColor)
+    setGraphics(mode)
+    warning.foreach { w =>
+      log.warn("TUI {}", w)
+      modify(_.copy(notice = Some(w)))
+    }
+
+  private def setGraphics(mode: GraphicsMode): Unit =
+    if mode != GraphicsMode.Text && !artLoaded then loadArt()
+    if state.get.graphics != mode then
+      log.info("TUI graphics: {}", mode.label)
+      modify(_.copy(graphics = mode))
+      clearNext = true
+
+  /** Reads the sprite sheets: `fukuii.tui.art-dir` if set, else the shipped ones. A sheet that breaks contracts/art.md
+    * is named in the log and left out; nothing here can stop the node.
+    */
+  private def loadArt(): Unit =
+    val loaded =
+      try config.artDir.fold(ArtStore.bundled())(dir => ArtStore.fromDirectory(Path.of(dir)))
+      catch
+        case NonFatal(e) =>
+          new ArtStore(Map.empty, Seq(s"the art could not be read: ${e.getMessage}"))
+    loaded.problems.foreach(p => log.warn("TUI art: {}", p))
+    art = loaded
+    artLoaded = true
+    renderer = TuiRenderer(config, loaded)
+    clearNext = true
+
   /** A snapshot no newer poll has replaced for two poll intervals and one ask wait is stale: the probe is late.
     * [[Sourced.UnresponsiveAfter]] is a fixed 5 s, so from a poll interval of 2.25 s (when this reaches 5 s) a late
     * snapshot's sources skip Stale and go straight to Unresponsive ([[NodeStatusSnapshot.agedAt]]).
@@ -244,15 +315,23 @@ class Tui(
           val (width, height) = Tui.sizeOf(term)
           // A resize leaves stale glyphs outside the new frame; wipe them.
           val resized = lastSize != ((width, height))
+          // A resize may be a change of font size, which changes the cell: ask again. The answer comes back among the
+          // keys, as a [[Key.CellSize]], and the art is then placed again at the new size (spec 029 FR-016).
+          if resized && lastSize != ((0, 0)) && caps.kittyGraphics then write(term, Kitty.CellSizeQuery)
+          val clear = clearNext || resized
           lastSize = (width, height)
+          clearNext = false
 
-          val frame = renderer.frame(state.get, width, height, theme)
-          if resized || !lastLines.contains(frame.lines) then
-            val clear = if resized then Tui.ClearScreen else ""
-            // Home the cursor and overwrite in place. No newline after the last line: a frame is exactly `height`
-            // rows, and a trailing newline on the bottom row would scroll the whole screen up by one.
-            write(term, clear + Tui.CursorHome + frame.lines.map(_.toAnsi(term)).mkString("\r\n"))
-            lastLines = Some(frame.lines)
+          val current = state.get
+          val frame = renderer.frame(current, width, height, theme)
+          // Each changed row is written at its own position, and no newline is ever written: a frame is exactly
+          // `height` rows, and a newline on the bottom row would scroll the whole screen up by one.
+          val (bytes, next) = FrameWriter.write(shown, frame, current.graphics, art, clear, _.toAnsi(term))
+          if bytes.nonEmpty then
+            // Set before the write: a write that fails half-way may still have left an image with the terminal.
+            if next.hasImages then imagesSent = true
+            write(term, bytes)
+          shown = next
           renderFailing = false
           frame.animated
         catch
@@ -332,6 +411,22 @@ class Tui(
     */
   def handleKey(key: Key): TuiCommand =
     val height = synchronized(lastSize._2)
+    key match
+      case Key.CellSize(width, height) =>
+        cellSizeReported(gfx.CellSize(width, height))
+        TuiCommand.Continue
+      case _ => keyPressed(key, height)
+
+  /** The terminal's cell is `cell` pixels now. In pixel mode the art is sent and placed again at that size. */
+  private def cellSizeReported(cell: gfx.CellSize): Unit = synchronized {
+    if !caps.cell.contains(cell) then
+      caps = caps.copy(cell = Some(cell))
+      state.get.graphics match
+        case GraphicsMode.Pixel(_) => setGraphics(GraphicsMode.Pixel(cell))
+        case _                     => ()
+  }
+
+  private def keyPressed(key: Key, height: Int): TuiCommand =
     if state.get.splashCover(height).isDefined then
       modify(_.skipSplash)
       TuiCommand.Continue
@@ -353,9 +448,20 @@ class Tui(
           effect match
             case Effect.Redraw =>
               synchronized {
-                lastSize = (0, 0) // forces a full clear on the next frame
+                clearNext = true
               }
               render()
+              TuiCommand.Continue
+            case Effect.CycleGraphics =>
+              synchronized(setGraphics(GraphicsMode.next(state.get.graphics, caps, config.noColor)))
+              render()
+              TuiCommand.Continue
+            case Effect.SetGraphics(choice) =>
+              synchronized(chooseGraphics(choice))
+              render()
+              TuiCommand.Continue
+            case Effect.ReloadArt =>
+              synchronized(loadArt())
               TuiCommand.Continue
             case Effect.Detach =>
               shutdown()
@@ -433,7 +539,7 @@ class Tui(
             catch case e: IllegalStateException if Tui.isClosedTerminal(e) => closedAt = Some(name)
           }
       step("reset screen") {
-        write(term, Tui.RestoreScreen)
+        write(term, leaveScreen)
         inAltScreen = false
       }
       step("restore terminal mode")(savedAttributes.foreach(term.setAttributes))
@@ -444,6 +550,12 @@ class Tui(
     savedAttributes = None
     directOutput = None
     inAltScreen = false
+    shown = FrameWriter.Blank
+
+  /** What leaves the TUI's screen: first every image this terminal was sent, so that none outlives the TUI (spec 029
+    * FR-016), then [[Tui.RestoreScreen]]. A terminal that was sent no image is sent no graphics command.
+    */
+  private def leaveScreen: String = (if imagesSent then Kitty.RemoveAll else "") + Tui.RestoreScreen
 
   /** [[releaseTerminal]] found the terminal closed at `step`: JLine's shutdown hook ran first and restored the terminal
     * mode. Reset the screen through the process stream if that had not happened yet. An expected race, so WARN, once; a
@@ -456,7 +568,7 @@ class Tui(
       directOutput match
         case Some(out) =>
           try
-            out.write(Tui.RestoreScreen.getBytes(StandardCharsets.US_ASCII))
+            out.write(leaveScreen.getBytes(StandardCharsets.US_ASCII))
             out.flush()
             log.warn(s"$closed; the screen and cursor were restored through the process output")
           catch

@@ -1,29 +1,29 @@
  # FUKUII  etc (61) . PoW . head 21,884,102 . 41/50 peers . up 12d 7h                                          Overview 
 ------------------------------------------------------------------------------------------------------------------------
  + no alerts                                                                                                            
- etc              | Peers   41/50 ##########                    Block  21,884,102 (at head)                     Txpoo.. 
- PoW . id 61      | RPC     :8545 on                            Disk   388G free                                JVM  .. 
+                  | Peers   41/50 ##########  Block  21,884,102 (at head)                    Txpool  142                
+                  | RPC     :8545 on                                     Disk   388G free    JVM     3.4G / 8.0G heap   
                   |-----------------------------------------------------------------------------------------------------
- [1] Overview     | Sync    + at head                                                                                   
- [2] Chain        |   Blocks   ~o[COMPLETE +]@@                                    21,884,102                           
- [3] Peers        |-----------------------------------------------------------------------------------------------------
- [4] Mempool      | Forks (block)                                                                                       
- [5] RPC          |   Phoenix + - ECIP-1099 + - Magneto + - Mystique + - Spiral + ========> Olympia not scheduled       
- [6] Storage      |   block 21,884,102 . Spiral since 19,250,000 . Olympia not scheduled on this network                
- [7] System       |-----------------------------------------------------------------------------------------------------
- [8] Logs         | Node    /var/lib/fukuii/etc . SNAP sync . archive pruning . 50 peers max . mining on                
- [9] Ops          |-----------------------------------------------------------------------------------------------------
-                  | Recent                                                                                              
-                  | 11:59:00 WARN  Peer 0x9c0d..77 timed out on GetBlockHeaders, retrying                               
+                  | Sync    + at head                                                                                   
+       ETC        |   Blocks   ~o[COMPLETE +]@@                                    21,884,102                           
+                  |-----------------------------------------------------------------------------------------------------
+                  | Forks (block)                                                                                       
+                  |   Phoenix + - ECIP-1099 + - Magneto + - Mystique + - Spiral + ========> Olympia not scheduled       
+ etc              |   block 21,884,102 . Spiral since 19,250,000 . Olympia not scheduled on this network                
+ PoW . id 61      |-----------------------------------------------------------------------------------------------------
+ main network     | Node    /var/lib/fukuii/etc . SNAP sync . archive pruning . 50 peers max . mining on                
+                  |-----------------------------------------------------------------------------------------------------
+ [1] Overview     | Recent                                                                                              
+ [2] Chain        | 11:59:00 WARN  Peer 0x9c0d..77 timed out on GetBlockHeaders, retrying                               
+ [3] Peers        |               ----------------------------------------------------------------------                
+ [4] Mempool      |               Stop this node?                                                                       
+ [5] RPC          |               The node process ends: block import, its peers and every RPC client.                  
+ [6] Storage      |               Mining stops.                                                                         
+ [7] System       |               The TUI cannot start the node again.                                                  
+ [8] Logs         |                                                                                                     
+ [9] Ops          |               y  stop the node      n or Esc  cancel                                                
                   |               ----------------------------------------------------------------------                
-                  |               Stop this node?                                                                       
-                  |               The node process ends: block import, its peers and every RPC client.                  
-                  |               Mining stops.                                                                         
-                  |               The TUI cannot start the node again.                                                  
-                  |                                                                                                     
-                  |               y  stop the node      n or Esc  cancel                                                
-                  |               ----------------------------------------------------------------------                
-                  | 12:00:00 INFO  RegularSync: at head, block 21884102                                                 
+ graphics text    | 12:00:00 INFO  RegularSync: at head, block 21884102                                    at head      
                   |                                                                                                     
                   |                                                                                                     
                   |                                                                                                     

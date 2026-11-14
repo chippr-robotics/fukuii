@@ -1,29 +1,29 @@
  # FUKUII  mordor (63) . PoW . head 0 . 11/50 peers . up 2h 11m . v0.11.0                                                                                 Chain 
 ----------------------------------------------------------------------------------------------------------------------------------------------------------------
  ! 1 warn    peers 11/50 below 25%                                                                                                                              
- mordor           | Peers   11/50 ##########  Block  0 -> 9,118,000 (pivot)                  Txpool  142             Disk  412G free     JVM  5.1G / 8.0G heap  
- PoW . id 63      |---------------------------------------------------------------------------------------------------------------------------------------------
+                  | Peers   11/50 ##########  Block  0 -> 9,118,000 (pivot)                  Txpool  142             Disk  412G free     JVM  5.1G / 8.0G heap  
+                  |---------------------------------------------------------------------------------------------------------------------------------------------
                   | SNAP sync   [S]  Downloading bytecodes & storage                                                  elapsed 2h 11m . phase 1h 8m . ETA 1h 58m 
- [1] Overview     |---------------------------------------------------------------------------------------------------------------------------------------------
- [2] Chain        |   Overall  [================~o...........................................]@@ 27%                                                            
- [3] Peers        |   Accounts ~o[COMPLETE +]@@                                                        34.1M                                                    
- [4] Mempool      |   Storage  [=====================~o......................................]@@ 37%   119.6M slots @ 21.4K/s . 2,114/5,702 contracts           
- [5] RPC          |   Bytecode ~o[ACTIVE]   @@                                                         412.0K @ 310/s                                           
- [6] Storage      |   Healing  ~o[QUEUED]@@                                                                                                                     
- [7] System       |   Chain    headers 4.2M / 9.1M . bodies 0 . receipts 0                                                                                      
+                  |---------------------------------------------------------------------------------------------------------------------------------------------
+       ETC        |   Overall  [================~o...........................................]@@ 27%                                                            
+                  |   Accounts ~o[COMPLETE +]@@                                                        34.1M                                                    
+                  |   Storage  [=====================~o......................................]@@ 37%   119.6M slots @ 21.4K/s . 2,114/5,702 contracts           
+                  |   Bytecode ~o[ACTIVE]   @@                                                         412.0K @ 310/s                                           
+ mordor           |   Healing  ~o[QUEUED]@@                                                                                                                     
+ PoW . id 63      |   Chain    headers 4.2M / 9.1M . bodies 0 . receipts 0                                                                                      
+ test network     |---------------------------------------------------------------------------------------------------------------------------------------------
+                  | Rates (recent / overall)  accounts 0/4.8K  .  slots 21.4K/18.9K  .  bytecodes 310/288  .  nodes 0/0                                         
+ [1] Overview     | Requests                  account 48,112 + 31 x  storage 210,004 + 402 x  bytecode 9,331 + 12 x  healing 0 + 0 x                            
+ [2] Chain        | Peers (snap-capable)      9 of 11 . blacklisted this run 2 . request timeouts 118                                                           
+ [3] Peers        |---------------------------------------------------------------------------------------------------------------------------------------------
+ [4] Mempool      | Phase timeline                                                                                                                              
+ [5] RPC          |   AccountRange + -- ByteCodeAndStorage * 1h 8m -- StateHealing . -- StateValidation . -- ChainDownload .                                    
+ [6] Storage      |---------------------------------------------------------------------------------------------------------------------------------------------
+ [7] System       | Chain   mordor . chain id 63 . PoW . forks by block number                                                                                  
  [8] Logs         |---------------------------------------------------------------------------------------------------------------------------------------------
- [9] Ops          | Rates (recent / overall)  accounts 0/4.8K  .  slots 21.4K/18.9K  .  bytecodes 310/288  .  nodes 0/0                                         
-                  | Requests                  account 48,112 + 31 x  storage 210,004 + 402 x  bytecode 9,331 + 12 x  healing 0 + 0 x                            
-                  | Peers (snap-capable)      9 of 11 . blacklisted this run 2 . request timeouts 118                                                           
-                  |---------------------------------------------------------------------------------------------------------------------------------------------
-                  | Phase timeline                                                                                                                              
-                  |   AccountRange + -- ByteCodeAndStorage * 1h 8m -- StateHealing . -- StateValidation . -- ChainDownload .                                    
-                  |---------------------------------------------------------------------------------------------------------------------------------------------
-                  | Chain   mordor . chain id 63 . PoW . forks by block number                                                                                  
-                  |---------------------------------------------------------------------------------------------------------------------------------------------
-                  | Forks (block)                                                                                                                               
+ [9] Ops          | Forks (block)                                                                                                                               
                   |   + Frontier           block 0                                                                                                              
-                  |   + Homestead          block 0                                                                                                              
+ graphics text    |   + Homestead          block 0                                                                                                              
                   |   + EIP-150            block 0                                                                                                              
                   |   + EIP-155            block 0                                                                                                              
                   |   + EIP-160            block 0                                                                                                              
@@ -45,4 +45,4 @@
                   | 12:00:00 INFO  RegularSync: at head, block 21884102                                                                                         
                   |                                                                                                                                             
                   |                                                                                                                                             
- 1-9 view  [ ] other views  Up Down select  Enter open  Esc back  : prompt  / filter  ? help  g glyphs  p pause  r redraw  d detach  q quit                     
+ 1-9 view  [ ] next view  Up Down select  Enter open  Esc back  : prompt  / filter  ? help  v graphics  p pause  r redraw  d detach  q quit                     

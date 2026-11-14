@@ -4,13 +4,14 @@ import org.jline.utils.AttributedString
 
 import com.chipprbots.ethereum.console.*
 import com.chipprbots.ethereum.console.panels.Rows.*
+import com.chipprbots.ethereum.console.widgets.Mascot
 
 /** The Overview, by tier (spec 027 research §3.2–§3.4): the vitals and resources strips; the sync panel (SNAP's five
   * worm rows, or the Blocks worm); the consensus layer (ETH) or the mining (ETC); the forks; at tier L the top peers by
   * score; the node's settings; and the Recent strip of the newest log lines.
   *
   * The 12-line logo that spec 027 drew in a column at tier L is not drawn here any more: the sidebar (spec 029 FR-006)
-  * takes those columns, and slice 2 of spec 029 gives the operator's place to the mascot. The logo stays on the splash.
+  * takes those columns, and the mascot (FR-018) stands in the corner of the Recent strip. The logo stays on the splash.
   */
 private[console] object OverviewPanels:
 
@@ -21,7 +22,8 @@ private[console] object OverviewPanels:
     )
     val middle =
       Seq(sync(c, c.tier.trackSlots)) ++ chainLayer(c) ++ forks(c) ++ Option.when(c.tier == Tier.L)(peers(c)).flatten
-    Seq(strips) ++ middle ++ node :+ LogsPanel.recent(c, "Recent", _ => true)
+    // The mascot stands in the corner of the Recent strip: log lines are the rows that lose least by being narrower.
+    Seq(strips) ++ middle ++ node :+ Mascot.beside(c, LogsPanel.recent(c, "Recent", _ => true))
 
   /** The sync panel: SNAP's phase and five worm rows (and the chain download from tier M), or the Blocks worm. */
   def sync(c: Ctx, slots: Int, separated: Boolean = true): Panel =

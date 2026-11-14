@@ -1,29 +1,29 @@
  # FUKUII  etc (61) . PoW . head 21,884,102 . 41/50 peers . up 12d 7h                                             Peers 
 ------------------------------------------------------------------------------------------------------------------------
  + no alerts                                                                                                            
- etc              | Peers   41/50 ##########                    Block  21,884,102 (at head)                     Txpoo.. 
- PoW . id 61      | Sync    + at head                                                                                   
+                  | Peers   41/50 ##########  Block  21,884,102 (at head)                    Txpool  142                
+                  | Sync    + at head                                                                                   
                   |-----------------------------------------------------------------------------------------------------
- [1] Overview     | Peers   8 handshaked of 50 max . 3 in . 5 out . filter 'besu'                                       
- [2] Chain        |   id          dir  address                 client                best        score  age             
- [3] Peers        |   0x11a2..9b  out  203.0.113.36:30303      besu/v24.1.2          21,884,100  0.930  1h 43m          
- [4] Mempool      |   0x28b7..10  out  203.0.113.41:30303      besu/v24.1.2          21,884,101  0.880  1h 15m          
- [5] RPC          |   0x3fcd..85  in   203.0.113.46:30303      besu/v24.1.2          21,884,102  0.830  47m 48s         
- [6] Storage      |   0x9e37..52  out  203.0.113.11:30303      besu/v24.1.2          21,884,101  0.580  4h 4m           
- [7] System       |   0xcc62..3c  out  203.0.113.21:30303      besu/v24.1.2          21,884,100  0.480  3h 8m           
- [8] Logs         |   0xe377..b1  out  203.0.113.26:30303      besu/v24.1.2          21,884,101  0.430  2h 40m          
- [9] Ops          |   0xfa8d..26  in   203.0.113.31:30303      besu/v24.1.2          21,884,102  0.380  2h 12m          
-                  |   0xb54d..c7  in   203.0.113.16:30303      besu/v24.1.2          21,884,102  -      3h 36m          
+                  | Peers   8 handshaked of 50 max . 3 in . 5 out . filter 'besu'                                       
+       ETC        |   id          dir  address                 client                best        score  age             
+                  |   0x11a2..9b  out  203.0.113.36:30303      besu/v24.1.2          21,884,100  0.930  1h 43m          
+                  |   0x28b7..10  out  203.0.113.41:30303      besu/v24.1.2          21,884,101  0.880  1h 15m          
+                  |   0x3fcd..85  in   203.0.113.46:30303      besu/v24.1.2          21,884,102  0.830  47m 48s         
+ etc              |   0x9e37..52  out  203.0.113.11:30303      besu/v24.1.2          21,884,101  0.580  4h 4m           
+ PoW . id 61      |   0xcc62..3c  out  203.0.113.21:30303      besu/v24.1.2          21,884,100  0.480  3h 8m           
+ main network     |   0xe377..b1  out  203.0.113.26:30303      besu/v24.1.2          21,884,101  0.430  2h 40m          
+                  |   0xfa8d..26  in   203.0.113.31:30303      besu/v24.1.2          21,884,102  0.380  2h 12m          
+ [1] Overview     |   0xb54d..c7  in   203.0.113.16:30303      besu/v24.1.2          21,884,102  -      3h 36m          
+ [2] Chain        |                                                                                                     
+ [3] Peers        |                                                                                                     
+ [4] Mempool      |                                                                                                     
+ [5] RPC          |                                                                                                     
+ [6] Storage      |                                                                                                     
+ [7] System       |                                                                                                     
+ [8] Logs         |                                                                                                     
+ [9] Ops          |                                                                                                     
                   |                                                                                                     
-                  |                                                                                                     
-                  |                                                                                                     
-                  |                                                                                                     
-                  |                                                                                                     
-                  |                                                                                                     
-                  |                                                                                                     
-                  |                                                                                                     
-                  |                                                                                                     
-                  |                                                                                                     
+ graphics text    |                                                                                                     
                   |                                                                                                     
                   |                                                                                                     
                   |                                                                                                     
