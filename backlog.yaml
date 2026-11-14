@@ -3096,3 +3096,16 @@ items:
     links:
       spec: specs/029-tui-command-center
     notes: prism, slice 4. StdNode.pendingFromPool asks GetPendingTransactionsReq and finds the hash; one lookup at a time, on the TUI's worker.
+  - id: B-269
+    title: "Spec 029 slice 5: the RPC view (per-method figures, transports), the Engine Synchronization Monitor and the mining monitor"
+    priority: P2
+    status: open
+    area: tui
+    size: L
+    opened: 2026-11-14
+    refs: []
+    links:
+      spec: specs/029-tui-command-center
+      branch: ccr-452bbde8-2hrv25
+    depends_on: [B-266]
+    notes: Tasks T073-T082. Fixes B-193 with it (Engine status counters). beacon and conduit analyse before code.
