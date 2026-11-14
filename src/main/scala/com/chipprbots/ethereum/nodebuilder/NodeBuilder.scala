@@ -990,6 +990,22 @@ trait EngineApiBuilder extends Logger:
 
   lazy val forkChoiceManager: ForkChoiceManager = new ForkChoiceManager(blockchainReader, blockchainWriter, blockchain)
 
+  /** The recovery of a state that is no longer held, on the unified layout only (spec 018 C4d part 3). It covers
+    * `state.recovery.max-blocks`, and no more than half of `state.overlay.max-forward-layers`: its layers are kept
+    * beside the others, which a recovery the size of the whole budget would push out (beacon), until the pins of a long
+    * branch (C4d part 4).
+    */
+  lazy val stateRecovery: Option[com.chipprbots.ethereum.ledger.StateRecovery] =
+    storagesInstance.storages.pathStateStorage.map { state =>
+      val config = com.chipprbots.ethereum.db.storage.pathstate.StateConfig(instanceConfig.config)
+      new com.chipprbots.ethereum.ledger.StateRecovery(
+        blockchainReader,
+        blockExecution,
+        state,
+        maxBlocks = config.recovery.maxBlocks.min(config.overlay.maxForwardLayers / 2).max(1)
+      )(using blockchainConfig)
+    }
+
   lazy val engineApiService: EngineApiService =
     given typedScheduler: org.apache.pekko.actor.typed.Scheduler = classicSystem.toTyped.scheduler
     new EngineApiService(
@@ -1003,7 +1019,8 @@ trait EngineApiBuilder extends Logger:
       builderGasCeil = mining.config.generic.gasLimitTarget,
       reorgState = blockchain,
       txGossipGate = Some(txGossipGate),
-      stateHeldInPlace = storagesInstance.storages.pathStateStorage.map(state => () => state.anchor.map(_.hash))
+      stateHeldInPlace = storagesInstance.storages.pathStateStorage.map(state => () => state.anchor.map(_.hash)),
+      stateRecovery = stateRecovery
     )(using blockchainConfig, typedScheduler)
 
   // The controller's fork gates read the same schedule its service executes with (not the process-global config, which

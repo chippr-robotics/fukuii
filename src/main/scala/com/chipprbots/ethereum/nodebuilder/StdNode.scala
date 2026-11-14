@@ -463,6 +463,9 @@ abstract class BaseNode extends Node:
           case _                                            => engineServer.stopSync()
       }
     )
+    // The recovery of a state that is no longer held stops once nothing can ask for one, and before the data source
+    // closes: one under way ends after the block it is executing (spec 018 C4d part 3).
+    tryAndLogFailure(() => stateRecovery.foreach(_.close()))
     // Discovery's own runtime goes once the Stop sent above has released the service (UDP socket, feeder), and before
     // the actor system that hosts PeerDiscoveryManager is terminated (task #52).
     tryAndLogFailure(() => shutdownDiscoveryIoRuntime(10.seconds))

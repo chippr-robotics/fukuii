@@ -39,15 +39,19 @@ import com.chipprbots.ethereum.db.storage.pathstate.PathStateStorage
 import com.chipprbots.ethereum.db.storage.pathstate.PathStateTestKit
 import com.chipprbots.ethereum.db.storage.pathstate.ReorgRefusal
 import com.chipprbots.ethereum.db.storage.pathstate.ReorgTooDeep
+import com.chipprbots.ethereum.db.storage.pathstate.StateConfig
 import com.chipprbots.ethereum.db.storage.pathstate.StateUnavailable
 import com.chipprbots.ethereum.domain.Block
 import com.chipprbots.ethereum.domain.BlockHeader
 import com.chipprbots.ethereum.domain.BlockchainWriter
 import com.chipprbots.ethereum.domain.ChainWeight
 import com.chipprbots.ethereum.domain.StateReconciliation
+import com.chipprbots.ethereum.domain.TrieRoot
 import com.chipprbots.ethereum.domain.appstate.BlockInfo
+import com.chipprbots.ethereum.ledger.BlockExecutionError
 import com.chipprbots.ethereum.ledger.BlockValidation
 import com.chipprbots.ethereum.ledger.HeaderTrustingBlockExecution
+import com.chipprbots.ethereum.ledger.StateRecovery
 import com.chipprbots.ethereum.mpt.PositionTestKit.RawTrieWalk
 import com.chipprbots.ethereum.testing.Tags.*
 import com.chipprbots.ethereum.utils.BlockchainConfig
@@ -121,9 +125,15 @@ class HeadMoveOnTheChainSpec extends ScalaTestWithActorTestKit with AnyFlatSpecL
         of(namespace, (toRemove ++ toUpsert.map(_._1)).map(_.toArray))
       case DataSourceUpdateOptimized(namespace, toRemove, toUpsert) => of(namespace, toRemove ++ toUpsert.map(_._1))
 
-  /** A node on the unified layout with its genesis committed. */
-  final private class Node:
-    val source: Failing = new Failing
+  /** A node on the unified layout with its genesis committed: on a datadir of its own, or on `opened`, another node's,
+    * as the node is started again after it stopped (C4d part 3). `overlay` changes the bounds of the executed blocks
+    * kept beside the disk.
+    */
+  final private class Node(
+      opened: Option[Failing] = None,
+      overlay: StateConfig.Overlay => StateConfig.Overlay = identity
+  ):
+    val source: Failing = opened.getOrElse(new Failing)
     private trait Own extends EphemDataSourceComponent:
       override val dataSource: EphemDataSource = source
     val node: RpcCompatNode =
@@ -133,6 +143,9 @@ class HeadMoveOnTheChainSpec extends ScalaTestWithActorTestKit with AnyFlatSpecL
             : EphemDataSourceComponent & LocalPruningConfigBuilder & Storages.DefaultStorages =
           new Own with LocalPruningConfigBuilder with Storages.DefaultStorages with TestInstanceConfigProvider:
             override protected def statePathLive: Boolean = true
+            override protected def stateConfig: StateConfig =
+              val config = StateConfig(com.chipprbots.ethereum.utils.Config.config)
+              config.copy(overlay = overlay(config.overlay))
     given BlockchainConfig = node.blockchainConfig
     GenesisDataLoader
       .over(node.blockchainReader, node.blockchainWriter, node.storagesInstance.storages)
@@ -151,10 +164,51 @@ class HeadMoveOnTheChainSpec extends ScalaTestWithActorTestKit with AnyFlatSpecL
     /** The node's Engine API over this node, told the block whose state is held by `held`, as the node tells it. */
     def engine(
         held: () => Option[ByteString],
-        choices: com.chipprbots.ethereum.consensus.engine.ForkChoiceManager = node.forkChoiceManager
+        choices: com.chipprbots.ethereum.consensus.engine.ForkChoiceManager = node.forkChoiceManager,
+        recovery: Option[StateRecovery] = None
     ): EngineApiService =
       given org.apache.pekko.actor.typed.Scheduler = system.scheduler
-      new EngineApiService(reader, writer, execution, choices, None, stateHeldInPlace = Some(held))
+      new EngineApiService(
+        reader,
+        writer,
+        execution,
+        choices,
+        None,
+        stateHeldInPlace = Some(held),
+        stateRecovery = recovery
+      )
+
+    /** A recovery over this node's state, which keeps the tickets it hands out and the blocks it executes, in order, by
+      * the thread they ran on (C4d part 3). `fails` fails a block's execution as its execution would, untouched.
+      */
+    final class Recovery(
+        maxBlocks: Int,
+        fails: Block => Option[BlockExecutionError] = _ => None,
+        after: (Block, Seq[com.chipprbots.ethereum.domain.Receipt]) => Unit = (_, _) => ()
+    ) extends StateRecovery(reader, execution, pathState, maxBlocks):
+      val tickets = new java.util.concurrent.ConcurrentLinkedQueue[StateRecovery.Ticket]()
+      val executed = new java.util.concurrent.ConcurrentLinkedQueue[(BigInt, String, Boolean)]()
+      override def requestFor(head: ByteString, sink: StateRecovery.Sink, why: String): StateRecovery.Ticket =
+        super.requestFor(head, sink, why).tap(tickets.add)
+      override protected def execute(
+          block: Block,
+          alreadyValidated: Boolean
+      ): Either[BlockExecutionError, com.chipprbots.ethereum.ledger.BlockImportGate.Executed] =
+        executed.add((block.header.number.value, Thread.currentThread.getName, alreadyValidated))
+        fails(block).fold(super.execute(block, alreadyValidated))(Left(_)).tap(_.foreach(done => after(block, done._1)))
+
+      /** What each recovery handed out so far came to. */
+      def outcomes: Seq[StateRecovery.Outcome] =
+        tickets
+          .toArray(Array.empty[StateRecovery.Ticket])
+          .toSeq
+          .map(_.outcome.get(60, java.util.concurrent.TimeUnit.SECONDS))
+      private def all = executed.toArray(Array.empty[(BigInt, String, Boolean)]).toSeq
+      def executedBlocks: Seq[BigInt] = all.map(_._1)
+      def threads: Set[String] = all.map(_._2).toSet
+
+      /** Each block executed, and whether its execution took it as validated before: it was executed once already. */
+      def validated: Seq[(BigInt, Boolean)] = all.map(e => (e._1, e._3))
 
     // C4b part 4: a datadir staged as a defect would leave it, and the reconciliation at start.
     def storages = node.storagesInstance.storages
@@ -806,6 +860,497 @@ class HeadMoveOnTheChainSpec extends ScalaTestWithActorTestKit with AnyFlatSpecL
       on.reader.getBlockHeaderByHash(afterDrop.header.hash) shouldBe Some(afterDrop.header)
       on.reader.getReceiptsByHash(afterDrop.header.hash) shouldBe None
       on.holds(chain.last.header, chain)
+    }
+
+  // C4d part 3 (T161, T169, T156): the stored blocks of a head whose state is no longer held are executed again, oldest
+  // first, apart, on the recovery's own thread; the head is moved by the next fork choice, as for any executed payload.
+  private def recoveringEngine(on: Node, recovery: StateRecovery) =
+    val engine = on.engine(() => on.pathState.anchor.map(_.hash), recovery = Some(recovery))
+    given cats.effect.unsafe.IORuntime = cats.effect.unsafe.IORuntime.global
+    (
+      (block: Block) => engine.newPayload(payloadOf(block)).unsafeRunSync(),
+      (head: Block) =>
+        engine
+          .forkchoiceUpdated(
+            ForkChoiceState(head.header.hash.value, ForkChoiceManager.ZeroHash, ForkChoiceManager.ZeroHash),
+            None
+          )
+          .unsafeRunSync()
+    )
+
+  private def statusOf(answer: Either[String, ForkchoiceUpdatedResponse]): Any =
+    answer.map(_.payloadStatus.status).fold(identity, identity)
+
+  "A state that is no longer held" should "be had again by executing its stored blocks, oldest first, on the recovery's thread, when a fork choice names a head above them" taggedAs
+    (UnitTest, ConsensusTest) in {
+      val on = new Node
+      val chain = blocks.take(39)
+      chain.foreach(on.imports)
+      val recovery = new on.Recovery(maxBlocks = 8)
+      val (newPayload, choose) = recoveringEngine(on, recovery)
+      val (forty, fortyOne) = (blocks(39), blocks(40))
+      Seq(forty, fortyOne).foreach(block => newPayload(block).status shouldBe PayloadStatus.Valid)
+      // their layers go, as a restart takes them
+      Seq(fortyOne, forty).foreach(block => on.writer.dropForwardLayer(block.header.hash.value))
+      on.pathState.stateAvailable(refOf(fortyOne.header)) shouldBe false
+      // the fork choice is answered SYNCING, and moves nothing; the two blocks are executed again
+      val before = on.everything
+      statusOf(choose(fortyOne)) shouldBe PayloadStatus.Syncing
+      recovery.outcomes shouldBe Seq(StateRecovery.Outcome.Recovered(2))
+      recovery.executedBlocks shouldBe Seq(BigInt(40), BigInt(41))
+      recovery.threads shouldBe Set(StateRecovery.ThreadName)
+      on.holds(chain.last.header, chain)
+      // the state is held again, beside the disk's, and the next fork choice follows the head
+      on.pathState.stateAvailable(refOf(fortyOne.header)) shouldBe true
+      on.everything.keySet shouldBe before.keySet
+      statusOf(choose(fortyOne)) shouldBe PayloadStatus.Valid
+      on.holds(fortyOne.header, chain :+ forty :+ fortyOne)
+      on.source.offTheLock.toArray.toSeq shouldBe empty
+      // a head whose state is held asks for nothing
+      recovery.requestFor(fortyOne.header.hash.value, null, "a test").outcome.get() shouldBe
+        StateRecovery.Outcome.AlreadyHeld
+    }
+
+  it should "be had again for a payload ACCEPTED on a parent whose state is not held, which a fork choice then follows" taggedAs
+    (UnitTest, ConsensusTest) in {
+      val on = new Node
+      val chain = blocks.take(39)
+      chain.foreach(on.imports)
+      val recovery = new on.Recovery(maxBlocks = 8)
+      val (newPayload, choose) = recoveringEngine(on, recovery)
+      val (forty, fortyOne, fortyTwo) = (blocks(39), blocks(40), blocks(41))
+      newPayload(forty).status shouldBe PayloadStatus.Valid
+      on.writer.dropForwardLayer(forty.header.hash.value)
+      // its parent was executed and its state is not held: ACCEPTED, and the two are executed again, apart
+      newPayload(fortyOne).status shouldBe PayloadStatus.Accepted
+      recovery.outcomes shouldBe Seq(StateRecovery.Outcome.Recovered(2))
+      // each validated in full, the one executed before too
+      recovery.validated shouldBe Seq((BigInt(40), false), (BigInt(41), false))
+      // what newPayload keeps of an executed payload is kept of the one executed again: receipts, chain weight
+      on.reader.getReceiptsByHash(fortyOne.header.hash) should not be empty
+      on.reader.getChainWeightByHash(fortyOne.header.hash) should not be empty
+      on.reader.getCanonicalHashByNumber(fortyOne.header.number.value) shouldBe None
+      // a payload on it now executes, and a fork choice follows the head
+      newPayload(fortyTwo).status shouldBe PayloadStatus.Valid
+      statusOf(choose(fortyTwo)) shouldBe PayloadStatus.Valid
+      on.holds(fortyTwo.header, chain :+ forty :+ fortyOne :+ fortyTwo)
+      // a payload whose parent is not known asks for nothing
+      newPayload(blocks(43)).status shouldBe PayloadStatus.Accepted
+      recovery.tickets.size shouldBe 1
+    }
+
+  it should "be had again for a fork choice whose head was stored and never executed, on a parent that is stored" taggedAs
+    (UnitTest, ConsensusTest) in {
+      val on = new Node
+      val chain = blocks.take(39)
+      chain.foreach(on.imports)
+      // a node that recovers nothing kept block 41 ACCEPTED, on block 40 whose layer went: stored, never executed
+      val plain = on.engine(() => on.pathState.anchor.map(_.hash))
+      def plainPayload(block: Block) =
+        plain.newPayload(payloadOf(block)).unsafeRunSync()(using cats.effect.unsafe.IORuntime.global)
+      val (forty, fortyOne) = (blocks(39), blocks(40))
+      plainPayload(forty).status shouldBe PayloadStatus.Valid
+      on.writer.dropForwardLayer(forty.header.hash.value)
+      plainPayload(fortyOne).status shouldBe PayloadStatus.Accepted
+      on.reader.getReceiptsByHash(fortyOne.header.hash) shouldBe None
+      // the fork choice to it is SYNCING, and has the two executed again; the next is followed
+      val recovery = new on.Recovery(maxBlocks = 8)
+      val (_, choose) = recoveringEngine(on, recovery)
+      statusOf(choose(fortyOne)) shouldBe PayloadStatus.Syncing
+      recovery.outcomes shouldBe Seq(StateRecovery.Outcome.Recovered(2))
+      statusOf(choose(fortyOne)) shouldBe PayloadStatus.Valid
+      on.holds(fortyOne.header, chain :+ forty :+ fortyOne)
+    }
+
+  it should "mark a block never executed before that fails invalid, with what stands on it, and execute nothing above it" taggedAs
+    (UnitTest, ConsensusTest) in {
+      val on = new Node
+      val chain = blocks.take(39)
+      chain.foreach(on.imports)
+      val recovery = new on.Recovery(maxBlocks = 8)
+      val (newPayload, choose) = recoveringEngine(on, recovery)
+      val forty = blocks(39)
+      newPayload(forty).status shouldBe PayloadStatus.Valid
+      on.writer.dropForwardLayer(forty.header.hash.value)
+      // a block whose header names another state than its execution leaves, on a parent whose state is not held:
+      // ACCEPTED, as it cannot be judged yet; and one on it
+      val bad = blocks(40).pipe(b => b.copy(header = b.header.copy(stateRoot = TrieRoot.Empty)))
+      val onBad = blocks(41).pipe(b => b.copy(header = b.header.copy(parentHash = bad.header.hash)))
+      newPayload(bad).status shouldBe PayloadStatus.Accepted
+      recovery.outcomes.head shouldBe a[StateRecovery.Outcome.Invalid]
+      // its parent is invalid now: so is it, at once
+      newPayload(onBad).status shouldBe PayloadStatus.Invalid
+      // executed again: block 40 holds, and the bad block is invalid with block 40 its latest valid block
+      val chosen = choose(bad).toOption.get.payloadStatus
+      chosen.status shouldBe PayloadStatus.Invalid
+      chosen.latestValidHash shouldBe Some(forty.header.hash.value)
+      choose(onBad).toOption.get.payloadStatus.status shouldBe PayloadStatus.Invalid
+      recovery.executedBlocks.count(_ == BigInt(41)) shouldBe 1
+      on.reader.getBlockHeaderByHash(bad.header.hash) shouldBe None
+      on.pathState.stateAvailable(refOf(forty.header)) shouldBe true
+      on.holds(chain.last.header, chain)
+    }
+
+  it should "not mark invalid a block executed before that fails now: the fault is the node's" taggedAs
+    (UnitTest, ConsensusTest) in {
+      val on = new Node
+      val chain = blocks.take(39)
+      chain.foreach(on.imports)
+      val forty = blocks(39)
+      val recovery = new on.Recovery(
+        maxBlocks = 8,
+        fails = block =>
+          Option.when(block.header.hash == forty.header.hash)(
+            BlockExecutionError.ValidationAfterExecError("a disk that returns another state")
+          )
+      )
+      val (newPayload, choose) = recoveringEngine(on, recovery)
+      // executed, VALID, and its layer gone; then it fails when it is executed again
+      on.engine(() => on.pathState.anchor.map(_.hash))
+        .newPayload(payloadOf(forty))
+        .unsafeRunSync()(using
+          cats.effect.unsafe.IORuntime.global
+        )
+        .status shouldBe PayloadStatus.Valid
+      on.writer.dropForwardLayer(forty.header.hash.value)
+      newPayload(blocks(40)).status shouldBe PayloadStatus.Accepted
+      recovery.outcomes.head shouldBe a[StateRecovery.Outcome.LocalFault]
+      statusOf(choose(forty)) shouldBe PayloadStatus.Syncing
+      on.reader.getBlockHeaderByHash(forty.header.hash) shouldBe Some(forty.header)
+    }
+
+  it should "mark the head's chain invalid above a block it rejects, after a restart that remembers no payload of theirs" taggedAs
+    (UnitTest, ConsensusTest) in {
+      val first = new Node
+      val chain = blocks.take(39)
+      chain.foreach(first.imports)
+      val plain = first.engine(() => first.pathState.anchor.map(_.hash))
+      def plainPayload(block: Block) =
+        plain.newPayload(payloadOf(block)).unsafeRunSync()(using cats.effect.unsafe.IORuntime.global)
+      val forty = blocks(39)
+      val bad = blocks(40).pipe(b => b.copy(header = b.header.copy(stateRoot = TrieRoot.Empty)))
+      val onBad = blocks(41).pipe(b => b.copy(header = b.header.copy(parentHash = bad.header.hash)))
+      plainPayload(forty).status shouldBe PayloadStatus.Valid
+      first.writer.dropForwardLayer(forty.header.hash.value)
+      Seq(bad, onBad).foreach(block => plainPayload(block).status shouldBe PayloadStatus.Accepted)
+      // started again: no layer is held, and no payload is remembered
+      val again = new Node(opened = Some(first.source))
+      val recovery = new again.Recovery(maxBlocks = 8)
+      val (_, choose) = recoveringEngine(again, recovery)
+      statusOf(choose(onBad)) shouldBe PayloadStatus.Syncing
+      recovery.outcomes.head shouldBe a[StateRecovery.Outcome.Invalid]
+      // the head is INVALID, with the bad block's parent its latest valid block, and so is the bad block
+      Seq(onBad, bad).foreach { block =>
+        val chosen = choose(block).toOption.get.payloadStatus
+        chosen.status shouldBe PayloadStatus.Invalid
+        chosen.latestValidHash shouldBe Some(forty.header.hash.value)
+        again.reader.getBlockHeaderByHash(block.header.hash) shouldBe None
+      }
+      again.holds(chain.last.header, chain)
+    }
+
+  it should "go on past a block whose state a fork choice put behind the anchor while it was being had again" taggedAs
+    (UnitTest, ConsensusTest) in {
+      val on = new Node
+      val chain = blocks.take(39)
+      chain.foreach(on.imports)
+      val plain = on.engine(() => on.pathState.anchor.map(_.hash))
+      given cats.effect.unsafe.IORuntime = cats.effect.unsafe.IORuntime.global
+      def plainPayload(block: Block) = plain.newPayload(payloadOf(block)).unsafeRunSync()
+      val (forty, fortyOne, fortyTwo) = (blocks(39), blocks(40), blocks(41))
+      plainPayload(forty).status shouldBe PayloadStatus.Valid
+      on.writer.dropForwardLayer(forty.header.hash.value)
+      plainPayload(fortyOne).status shouldBe PayloadStatus.Accepted
+      // once block 41 is executed again (its receipts kept, as the sink keeps them), a payload on it and a fork choice to
+      // that move the head past it: its layer is promoted, and its state is behind the anchor
+      val moved = new java.util.concurrent.atomic.AtomicReference[Any]("not yet")
+      val recovery = new on.Recovery(
+        maxBlocks = 8,
+        after = (block, receipts) =>
+          if block.header.hash == fortyOne.header.hash then
+            on.writer.storeReceipts(block.header.hash, receipts).commit()
+            plainPayload(fortyTwo)
+            moved.set(
+              statusOf(
+                plain
+                  .forkchoiceUpdated(
+                    ForkChoiceState(fortyTwo.header.hash.value, ForkChoiceManager.ZeroHash, ForkChoiceManager.ZeroHash),
+                    None
+                  )
+                  .unsafeRunSync()
+              )
+            )
+      )
+      val sink = new StateRecovery.Sink:
+        def executed(
+            block: Block,
+            receipts: Seq[com.chipprbots.ethereum.domain.Receipt],
+            accessList: Option[com.chipprbots.ethereum.domain.BlockAccessList]
+        ): Unit = ()
+        def rejected(block: Block, error: BlockExecutionError, above: List[Block]): Unit = fail("rejected")
+      recovery
+        .requestFor(fortyOne.header.hash.value, sink, "a test")
+        .outcome
+        .get(60, java.util.concurrent.TimeUnit.SECONDS) shouldBe
+        StateRecovery.Outcome.Recovered(2)
+      moved.get shouldBe PayloadStatus.Valid
+      on.holds(fortyTwo.header, chain :+ forty :+ fortyOne :+ fortyTwo)
+    }
+
+  it should "find a block never executed whose requests are not those its header commits to invalid" taggedAs
+    (UnitTest, ConsensusTest) in {
+      val on = new Node
+      // block 45 is the chain's first with a requests hash (Prague)
+      val chain = blocks.take(44)
+      chain.foreach(on.imports)
+      val prague = blocks(44)
+      val tampered = prague.header.extraFields match
+        case fields: com.chipprbots.ethereum.domain.BlockHeader.HeaderExtraFields.HefPostPrague =>
+          prague.copy(header =
+            prague.header.copy(extraFields = fields.copy(requestsHash = ByteString(Array.fill[Byte](32)(1))))
+          )
+        case other => fail(s"block 45 is not a Prague block: $other")
+      // stored as a payload whose parent was not known is, and named by a fork choice
+      on.writer.storeBlockByHashOnly(tampered).commit()
+      val recovery = new on.Recovery(maxBlocks = 8)
+      val (_, choose) = recoveringEngine(on, recovery)
+      statusOf(choose(tampered)) shouldBe PayloadStatus.Syncing
+      recovery.outcomes match
+        case Seq(StateRecovery.Outcome.Invalid(block, reason)) =>
+          block shouldBe refOf(tampered.header)
+          reason should include("INVALID_REQUESTS")
+        case other => fail(s"not rejected: $other")
+      val chosen = choose(tampered).toOption.get.payloadStatus
+      chosen.status shouldBe PayloadStatus.Invalid
+      chosen.latestValidHash shouldBe Some(chain.last.header.hash.value)
+      on.holds(chain.last.header, chain)
+    }
+
+  it should "have a side block's state again on a fork behind the anchor, which a fork choice then moves across to" taggedAs
+    (UnitTest, ConsensusTest) in {
+      val on = new Node
+      val chain = blocks.take(40)
+      chain.foreach(on.imports)
+      val side = siblingOf(chain.last)
+      on.engine(() => on.pathState.anchor.map(_.hash))
+        .newPayload(payloadOf(side))
+        .unsafeRunSync()(using
+          cats.effect.unsafe.IORuntime.global
+        )
+        .status shouldBe PayloadStatus.Valid
+      on.writer.dropForwardLayer(side.header.hash.value)
+      val recovery = new on.Recovery(maxBlocks = 8)
+      val (_, choose) = recoveringEngine(on, recovery)
+      statusOf(choose(side)) shouldBe PayloadStatus.Syncing
+      recovery.outcomes shouldBe Seq(StateRecovery.Outcome.Recovered(1))
+      statusOf(choose(side)) shouldBe PayloadStatus.Valid
+      on.holds(side.header, chain.init :+ side)
+    }
+
+  it should "execute nothing for a chain longer than it covers, a missing body, or a head below no held state, and not try such a head again at once" taggedAs
+    (UnitTest, ConsensusTest) in {
+      val on = new Node
+      val chain = blocks.take(39)
+      chain.foreach(on.imports)
+      val sink = new StateRecovery.Sink:
+        def executed(
+            block: Block,
+            receipts: Seq[com.chipprbots.ethereum.domain.Receipt],
+            accessList: Option[com.chipprbots.ethereum.domain.BlockAccessList]
+        ): Unit = ()
+        def rejected(block: Block, error: BlockExecutionError, above: List[Block]): Unit =
+          fail(s"block ${block.number} rejected")
+      val engine = on.engine(() => on.pathState.anchor.map(_.hash))
+      Seq(blocks(39), blocks(40)).foreach { block =>
+        engine.newPayload(payloadOf(block)).unsafeRunSync()(using cats.effect.unsafe.IORuntime.global)
+        on.writer.dropForwardLayer(block.header.hash.value)
+      }
+      val head = blocks(40).header.hash.value
+      def outcomeOf(recovery: on.Recovery): StateRecovery.Outcome =
+        recovery.requestFor(head, sink, "a test").outcome.get(60, java.util.concurrent.TimeUnit.SECONDS)
+      // two blocks have no state held, and it covers one
+      val short = new on.Recovery(maxBlocks = 1)
+      val tooLong = outcomeOf(short)
+      tooLong shouldBe a[StateRecovery.Outcome.TooLong]
+      short.executedBlocks shouldBe empty
+      // asked again within the cool-down: the answer it had, and nothing walked again
+      (outcomeOf(short) should be).theSameInstanceAs(tooLong)
+      short.inFlight shouldBe 0
+      // the header of a block on the way is not stored
+      val missing = unknownHash(7)
+      new on.Recovery(maxBlocks = 8).requestFor(missing, sink, "a test").outcome.get() shouldBe
+        StateRecovery.Outcome.MissingHeader(missing)
+      // nor the body of block 40: nothing is executed, not even block 40's
+      on.storages.blockBodiesStorage.remove(blocks(39).header.hash.value).commit()
+      val noBody = new on.Recovery(maxBlocks = 8)
+      outcomeOf(noBody) shouldBe StateRecovery.Outcome.MissingBody(refOf(blocks(39).header))
+      noBody.executedBlocks shouldBe empty
+      on.holds(chain.last.header, chain)
+    }
+
+  it should "stop at a block whose state was not kept, and execute nothing above it" taggedAs
+    (UnitTest, ConsensusTest) in {
+      // no layer is kept: each is more than a layer may hold
+      val on = new Node(overlay = _.copy(maxLayerBytes = 1))
+      val chain = blocks.take(39)
+      chain.foreach(on.imports)
+      val recovery = new on.Recovery(maxBlocks = 8)
+      val (newPayload, _) = recoveringEngine(on, recovery)
+      // block 40 is executed, VALID, and not kept; block 41 on it is ACCEPTED, and recovered
+      newPayload(blocks(39)).status shouldBe PayloadStatus.Valid
+      on.pathState.stateAvailable(refOf(blocks(39).header)) shouldBe false
+      newPayload(blocks(40)).status shouldBe PayloadStatus.Accepted
+      recovery.outcomes shouldBe Seq(StateRecovery.Outcome.NotKept(refOf(blocks(39).header)))
+      recovery.executedBlocks shouldBe Seq(BigInt(40))
+    }
+
+  it should "run one recovery per head, queue a few, answer Busy beyond them, and end those waiting when it closes" taggedAs
+    (UnitTest, ConsensusTest) in {
+      val on = new Node
+      val chain = blocks.take(39)
+      chain.foreach(on.imports)
+      val engine = on.engine(() => on.pathState.anchor.map(_.hash))
+      Seq(blocks(39), blocks(40)).foreach { block =>
+        engine.newPayload(payloadOf(block)).unsafeRunSync()(using cats.effect.unsafe.IORuntime.global)
+        on.writer.dropForwardLayer(block.header.hash.value)
+      }
+      val entered = new java.util.concurrent.CountDownLatch(1)
+      val release = new java.util.concurrent.CountDownLatch(1)
+      val recovery = new on.Recovery(
+        maxBlocks = 8,
+        fails = _ =>
+          entered.countDown()
+          release.await(60, java.util.concurrent.TimeUnit.SECONDS)
+          None
+      )
+      val delivered = new java.util.concurrent.atomic.AtomicInteger(0)
+      val sink = new StateRecovery.Sink:
+        def executed(
+            block: Block,
+            receipts: Seq[com.chipprbots.ethereum.domain.Receipt],
+            accessList: Option[com.chipprbots.ethereum.domain.BlockAccessList]
+        ): Unit =
+          delivered.incrementAndGet()
+        def rejected(block: Block, error: BlockExecutionError, above: List[Block]): Unit = ()
+      val head = blocks(40).header.hash.value
+      val running = recovery.requestFor(head, sink, "a test")
+      entered.await(60, java.util.concurrent.TimeUnit.SECONDS) shouldBe true
+      // the same head again: the recovery under way
+      (recovery.requestFor(head, sink, "again") should be).theSameInstanceAs(running)
+      // four more heads wait; a fifth is not taken
+      val waiting = (1 to StateRecovery.QueueSize).map(n => recovery.requestFor(unknownHash(n), sink, "a test"))
+      recovery.requestFor(unknownHash(99), sink, "a test").outcome.get() shouldBe StateRecovery.Outcome.Busy
+      recovery.inFlight shouldBe 1 + StateRecovery.QueueSize
+      // closing ends those waiting, and the one under way after its block: block 41 is not executed
+      val closing = new Thread(() => recovery.close())
+      closing.start()
+      waiting.foreach(_.outcome.get(60, java.util.concurrent.TimeUnit.SECONDS) shouldBe StateRecovery.Outcome.Closed)
+      release.countDown()
+      closing.join(60000)
+      running.outcome.get(60, java.util.concurrent.TimeUnit.SECONDS) shouldBe StateRecovery.Outcome.Closed
+      recovery.executedBlocks shouldBe Seq(BigInt(40))
+      // and nothing of the block it finished was written: the data source closes after it
+      delivered.get shouldBe 0
+      recovery.requestFor(head, sink, "after").outcome.get() shouldBe StateRecovery.Outcome.Closed
+      recovery.inFlight shouldBe 0
+    }
+
+  it should "execute no further block once it is stopping, after the one it finished" taggedAs
+    (UnitTest, ConsensusTest) in {
+      val on = new Node
+      val chain = blocks.take(39)
+      chain.foreach(on.imports)
+      val engine = on.engine(() => on.pathState.anchor.map(_.hash))
+      Seq(blocks(39), blocks(40)).foreach { block =>
+        engine.newPayload(payloadOf(block)).unsafeRunSync()(using cats.effect.unsafe.IORuntime.global)
+        on.writer.dropForwardLayer(block.header.hash.value)
+      }
+      val recovery = new on.Recovery(maxBlocks = 8)
+      // the node begins to stop once block 40 is kept, before block 41 is begun
+      val sink = new StateRecovery.Sink:
+        def executed(
+            block: Block,
+            receipts: Seq[com.chipprbots.ethereum.domain.Receipt],
+            accessList: Option[com.chipprbots.ethereum.domain.BlockAccessList]
+        ): Unit =
+          new Thread(() => recovery.close()).start()
+          val until = System.nanoTime() + 60_000_000_000L
+          while !recovery.isClosed && System.nanoTime() < until do Thread.onSpinWait()
+        def rejected(block: Block, error: BlockExecutionError, above: List[Block]): Unit = fail("rejected")
+      recovery
+        .requestFor(blocks(40).header.hash.value, sink, "a test")
+        .outcome
+        .get(60, java.util.concurrent.TimeUnit.SECONDS) shouldBe
+        StateRecovery.Outcome.Closed
+      recovery.executedBlocks shouldBe Seq(BigInt(40))
+    }
+
+  "Whether a state is held" should "say so of the anchor, a block behind it, an executed block and one on it, a side block behind the anchor, and of nothing else" taggedAs
+    (UnitTest, ConsensusTest) in {
+      val on = new Node
+      val chain = blocks.take(40)
+      chain.foreach(on.imports)
+      val engine = on.engine(() => on.pathState.anchor.map(_.hash))
+      def newPayload(block: Block) =
+        engine.newPayload(payloadOf(block)).unsafeRunSync()(using cats.effect.unsafe.IORuntime.global)
+      val side = siblingOf(chain.last)
+      Seq(blocks(40), blocks(41), side).foreach(block => newPayload(block).status shouldBe PayloadStatus.Valid)
+      Seq(chain.last, chain(37), chain(20), blocks(40), blocks(41), side).foreach { block =>
+        withClue(s"block ${block.header.number.value}: ")(
+          on.pathState.stateAvailable(refOf(block.header)) shouldBe true
+        )
+      }
+      // a layer gone, and what stood on it; a block never executed; a block of no chain
+      on.writer.dropForwardLayer(blocks(40).header.hash.value)
+      on.pathState.stateAvailable(refOf(blocks(40).header)) shouldBe false
+      on.pathState.stateAvailable(refOf(blocks(41).header)) shouldBe false
+      on.pathState.stateAvailable(refOf(blocks(44).header)) shouldBe false
+      on.pathState.stateAvailable(BlockRef(unknownHash(3), 40, unknownHash(4))) shouldBe false
+      // asked under the state lock: refused, as it reads records
+      an[IllegalStateException] should be thrownBy on.pathState.lock.locked("a test")(
+        on.pathState.stateAvailable(refOf(chain.last.header))
+      )
+      // a state that failed closed holds nothing
+      on.writer.failStateClosed("a test")
+      on.pathState.stateAvailable(refOf(chain.last.header)) shouldBe false
+    }
+
+  // T156, in process: the node stops between newPayload(B) and forkchoiceUpdated(B), and starts again with no peers
+  // on the same datadir. The layer of B went with it; B is executed again, and the consensus client reaches VALID.
+  "A node started again between a payload and its fork choice" should "execute the payload again and follow the fork choice, with no sync" taggedAs
+    (UnitTest, ConsensusTest) in {
+      val first = new Node
+      val chain = blocks.take(39)
+      chain.foreach(first.imports)
+      val (forty, fortyOne) = (blocks(39), blocks(40))
+      first
+        .engine(() => first.pathState.anchor.map(_.hash))
+        .newPayload(payloadOf(forty))
+        .unsafeRunSync()(using
+          cats.effect.unsafe.IORuntime.global
+        )
+        .status shouldBe PayloadStatus.Valid
+      // started again on the same datadir: what was on disk is as the first node left it
+      val again = new Node(opened = Some(first.source))
+      again.reconcile() shouldBe a[StateReconciliation.Outcome.Consistent]
+      again.pathState.stateAvailable(refOf(forty.header)) shouldBe false
+      val recovery = new again.Recovery(maxBlocks = 8)
+      val (newPayload, choose) = recoveringEngine(again, recovery)
+      // the fork choice to B: SYNCING, and B executed again; then VALID
+      statusOf(choose(forty)) shouldBe PayloadStatus.Syncing
+      recovery.outcomes shouldBe Seq(StateRecovery.Outcome.Recovered(1))
+      statusOf(choose(forty)) shouldBe PayloadStatus.Valid
+      again.holds(forty.header, chain :+ forty)
+      // and the variant: the next payload comes first, ACCEPTED (neither VALID nor INVALID), and its fork choice VALID
+      val third = new Node(opened = Some(again.source))
+      val more = new third.Recovery(maxBlocks = 8)
+      val (thirdPayload, thirdChoice) = recoveringEngine(third, more)
+      newPayload(fortyOne).status shouldBe PayloadStatus.Valid
+      third.pathState.stateAvailable(refOf(fortyOne.header)) shouldBe false
+      thirdPayload(blocks(41)).status shouldBe PayloadStatus.Accepted
+      more.outcomes shouldBe Seq(StateRecovery.Outcome.Recovered(2))
+      statusOf(thirdChoice(blocks(41))) shouldBe PayloadStatus.Valid
+      third.holds(blocks(41).header, chain :+ forty :+ fortyOne :+ blocks(41))
     }
 
   // C4d part 1 (T160, T171): the finalized block a fork choice names, kept with the move that followed it.

@@ -254,10 +254,39 @@ final class PathStateStorage(
   /** The block whose state the disk holds, or `None` when the datadir has no state yet (SNAP in progress). */
   def anchor: Option[BlockRef] = clock.anchor
 
-  /** Whether `block` is the block whose state the disk holds. (A block kept as a forward layer has a view too:
-    * [[view]]. What takes a layer for a state that is there comes with the callers, in C4a's last part.)
+  /** Whether a view of `block`'s state can be made, as [[viewOf]] makes one, and an execution staged on it: `block` is
+    * the anchor, a block behind it that its changeset records lead back to, or a block that forward layers lead to from
+    * one of those. It is what a recovery of a state that is no longer held walks down to (spec 018 T094, C4d part 3).
+    *
+    * Only the window of the anchor's ancestors is read: no index of what the records hold is built for the answer. A
+    * state that has failed closed holds no block's.
+    *
+    * '''With no lock held''': the window reads a record for each block behind the anchor.
     */
-  def stateAvailable(block: BlockRef): Boolean = anchor.contains(block)
+  def stateAvailable(block: BlockRef): Boolean = stateAvailableAt(block, ViewTries)
+
+  @annotation.tailrec
+  private def stateAvailableAt(block: BlockRef, triesLeft: Int): Boolean =
+    if lock.isHeldByCurrentThread then
+      throw new IllegalStateException(
+        s"Whether the state of block ${block.show} is held cannot be asked by the holder of the state lock " +
+          s"('${lock.holder.getOrElse("?")}'): it may read records"
+      )
+    if hasFailedClosed then false
+    else
+      val (epoch, held) = clock.awaitRest()
+      held match
+        case None            => false
+        case Some(`block`)   => true
+        case Some(anchorNow) =>
+          // the window, the layers and the clock are one observation, as for a view: when the disk moved, asked again
+          val seen = windowFor(anchorNow, epoch).map { behind =>
+            behind.contains(block) || overlay.chainFrom(anchorNow, block, behind.contains).isDefined
+          }
+          seen.filter(_ => clock.epoch == epoch) match
+            case Some(answer)          => answer
+            case None if triesLeft > 0 => stateAvailableAt(block, triesLeft - 1)
+            case None                  => false
 
   /** The forward layer of `blockHash`, when it has one: it was executed, and its state is on no row. */
   def forwardLayer(blockHash: ByteString): Option[ForwardLayer] = overlay.layerOf(blockHash)
