@@ -3134,3 +3134,16 @@ items:
     links:
       spec: specs/029-tui-command-center
     notes: "beacon, spec 029 slice 5 analysis. Consensus-visible: kept out of the B-193 counter fix. Check go-ethereum delayPayloadImport first."
+  - id: B-272
+    title: "Spec 029 slice 6: the Storage and System views, health bars and configurable alert thresholds"
+    priority: P2
+    status: open
+    area: tui
+    size: L
+    opened: 2026-11-14
+    refs: []
+    links:
+      spec: specs/029-tui-command-center
+      branch: ccr-452bbde8-2hrv25
+    depends_on: [B-269]
+    notes: Tasks T083-T094. vault and herald analysed before code (RocksDB properties read; RLPx byte counters).
