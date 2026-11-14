@@ -3024,3 +3024,14 @@ items:
       since: 2026-11-14T17:05:55Z
       heartbeat: 2026-11-14T17:05:58Z
     notes: tasks T053-T064
+  - id: B-263
+    title: "TUI charts as pixel images: Charts.scala, Graphic.Chart regions for the observatory's gas chart and the peer radar"
+    priority: P3
+    status: open
+    area: tui
+    size: M
+    opened: 2026-11-14
+    refs: []
+    links:
+      spec: specs/029-tui-command-center
+    notes: T050's chart primitives. The charts are text in every graphics mode since slice 3; PixelLayer already places Graphic.Chart.
