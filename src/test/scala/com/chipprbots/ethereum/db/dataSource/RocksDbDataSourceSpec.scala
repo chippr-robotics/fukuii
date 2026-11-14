@@ -10,6 +10,7 @@ import scala.concurrent.ExecutionContext
 import scala.concurrent.Future
 import scala.concurrent.duration.*
 
+import org.rocksdb.RocksDB
 import org.scalatest.flatspec.AnyFlatSpec
 import org.scalatest.matchers.should.Matchers
 
@@ -298,4 +299,210 @@ class RocksDbDataSourceSpec extends AnyFlatSpec with Matchers:
       try reopened.get(Ns, ArraySeq.unsafeWrapArray(intKey(0))) should not be empty
       finally reopened.destroy()
     }
+  }
+
+  // ---- Spec 029 FR-043 (T083): what the dashboard's Storage view reads -----------------------------------------------
+  // vault: the read lock is tried in the form that does not queue, so the read never waits, and holds the lock for a
+  // bounded number of in-memory property reads.
+
+  private def filled(dbPath: String, statisticsEnabled: Boolean = false): RocksDbDataSource =
+    val ds = RocksDbDataSource(config(dbPath, statisticsEnabled), Namespaces.nsSeq)
+    ds.update(Seq(DataSourceUpdate(Ns, Nil, (0 until N).map(i => key(i) -> value(i)))))
+    ds.flushAll()
+    ds
+
+  /** `body` on a thread of its own, and its result: a call that blocked fails here instead of hanging the suite. */
+  private def onAnotherThread[A](body: => A): A =
+    Await.result(Future(body)(using ExecutionContext.global), 30.seconds)
+
+  private def lockIsFree(): Unit =
+    RocksDbDataSource.dbLock.getReadLockCount shouldBe 0
+    RocksDbDataSource.dbLock.isWriteLocked shouldBe false
+
+  "RocksDbDataSource.properties" should "give the size on disk, each column family's, and the compaction and stall state" taggedAs (
+    UnitTest,
+    DatabaseTest
+  ) in withTempDir { dbPath =>
+    val ds = filled(dbPath)
+    try
+      val p = ds.properties().get
+      // Every column family, the default one too.
+      p.stores.map(
+        _.namespace
+      ) should contain theSameElementsAs (RocksDB.DEFAULT_COLUMN_FAMILY.toIndexedSeq +: Namespaces.nsSeq)
+      val written = p.stores.find(_.namespace == Ns).get
+      written.sstBytes.get should be > 1_000L // 2,000 repetitive values, compressed on disk
+      // A family nothing was written to holds nothing, which is a figure and not an absence.
+      all(p.stores.filterNot(_.namespace == Ns).map(_.sstBytes)) shouldBe Some(0L)
+      // One measure for the whole and for each family, so the families' sizes sum to the database's.
+      p.sstBytes.get shouldBe p.stores.flatMap(_.sstBytes).sum
+      // Database-wide figures are read once, not once a column family: nothing is compacting, nothing is stopped.
+      p.runningCompactions shouldBe Some(0L)
+      p.writeStopped shouldBe Some(false)
+      p.delayedWriteRate.get should be >= 0L
+      p.compactionPending.get should be <= p.stores.size.toLong
+      p.pendingCompactionBytes.get should be >= 0L
+      p.blockCacheCapacity should be > 0L
+      p.memTables shouldBe defined
+      p.tableReaders shouldBe defined
+      // The estimates are read only when asked for.
+      (p.liveDataBytes, written.keys) shouldBe ((None, None))
+      val estimated = ds.properties(withEstimates = true).get
+      estimated.liveDataBytes.get should be > 0L
+      // The keys are a byte repeated, so the 2,000 writes are of 256 distinct keys: RocksDB estimates those.
+      estimated.stores.find(_.namespace == Ns).get.keys.get shouldBe 256L +- 26L
+      all(estimated.stores.map(_.keys.isDefined)) shouldBe true
+    finally ds.close()
+    lockIsFree()
+  }
+
+  it should "say the cache statistics are off, or give them, a count of nothing included" taggedAs (
+    UnitTest,
+    DatabaseTest
+  ) in withTempDir { dbPath =>
+    val off = filled(dbPath)
+    try off.properties().get.cache shouldBe RocksDbCacheHits.Off
+    finally off.close()
+    val on = RocksDbDataSource(config(dbPath, statisticsEnabled = true), Namespaces.nsSeq)
+    try
+      // On, and nothing read through the cache yet: counts, not an absence.
+      on.properties().get.cache shouldBe a[RocksDbCacheHits.On]
+      (0 until N).foreach(i => on.get(Ns, key(i)))
+      on.properties().get.cache match
+        case RocksDbCacheHits.On(hit, miss, indexFilterHit, indexFilterMiss) =>
+          (hit + miss + indexFilterHit + indexFilterMiss) should be > 0L
+        case other => fail(s"statistics are on, but the cache read $other")
+    finally on.close()
+  }
+
+  it should "be nothing once the database is closed, with no error" taggedAs (UnitTest, DatabaseTest) in withTempDir {
+    dbPath =>
+      val ds = filled(dbPath)
+      ds.properties() should not be empty
+      ds.close()
+      noException should be thrownBy ds.properties()
+      ds.properties() shouldBe None
+      ds.properties(withEstimates = true) shouldBe None
+      lockIsFree()
+  }
+
+  it should "return nothing at once while a write holds the lock, and wait for nobody" taggedAs (
+    UnitTest,
+    DatabaseTest
+  ) in withTempDir { dbPath =>
+    val ds = filled(dbPath)
+    try
+      // A write in progress holds the lock for writing. The read is made on another thread: this one, holding the
+      // write lock, could take the read lock too.
+      RocksDbDataSource.dbLock.writeLock().lock()
+      val during =
+        try onAnotherThread(ds.properties())
+        finally RocksDbDataSource.dbLock.writeLock().unlock()
+      during shouldBe None
+      // The write over, the next read answers.
+      onAnotherThread(ds.properties()) should not be empty
+    finally ds.close()
+    lockIsFree()
+  }
+
+  it should "still answer while a writer waits behind a long read, and hold that writer up no longer than it runs" taggedAs (
+    UnitTest,
+    DatabaseTest
+  ) in withTempDir { dbPath =>
+    val ds = filled(dbPath)
+    try
+      // A long read holds the lock for reading, as a compaction does (B-029).
+      RocksDbDataSource.dbLock.readLock().lock()
+      val writer =
+        try
+          val writing = Future(ds.update(Seq(DataSourceUpdate(Ns, Nil, Seq(key(250) -> value(7))))))(using
+            ExecutionContext.global
+          )
+          // The writer is queued behind the read: from here a reader that queues would wait for it.
+          val deadline = System.nanoTime() + 30.seconds.toNanos
+          while !RocksDbDataSource.dbLock.hasQueuedThreads && System.nanoTime() < deadline do Thread.onSpinWait()
+          RocksDbDataSource.dbLock.hasQueuedThreads shouldBe true
+          // The properties read does not queue: it answers at once, compaction or not.
+          onAnotherThread(ds.properties()) should not be empty
+          writing.isCompleted shouldBe false
+          writing
+        finally RocksDbDataSource.dbLock.readLock().unlock()
+      // The long read over, the write goes through: it was held up by that read, not by the properties.
+      Await.result(writer, 30.seconds)
+      ds.get(Ns, key(250)) shouldBe Some(value(7))
+    finally ds.close()
+    lockIsFree()
+  }
+
+  "RocksDbDataSource.whileFree" should "let a point read through while a writer waits behind a long read" taggedAs (
+    UnitTest,
+    DatabaseTest
+  ) in withTempDir { dbPath =>
+    val ds = filled(dbPath)
+    try
+      ds.update(Seq(DataSourceUpdate(Ns, Nil, Seq(key(251) -> value(9)))))
+      // A long read holds the lock for reading, as a compaction does for its whole length.
+      RocksDbDataSource.dbLock.readLock().lock()
+      val writer =
+        try
+          val writing = Future(ds.update(Seq(DataSourceUpdate(Ns, Nil, Seq(key(250) -> value(7))))))(using
+            ExecutionContext.global
+          )
+          val deadline = System.nanoTime() + 30.seconds.toNanos
+          while !RocksDbDataSource.dbLock.hasQueuedThreads && System.nanoTime() < deadline do Thread.onSpinWait()
+          RocksDbDataSource.dbLock.hasQueuedThreads shouldBe true
+          // Outside `whileFree` this `get` would queue behind that writer until the long read ends: the dashboard's
+          // marker reads would stop its probe for as long as a compaction runs (vault). Inside, the thread already
+          // holds the read lock, and takes it again at once.
+          onAnotherThread(ds.whileFree((ds.properties().isDefined, ds.get(Ns, key(251))))) shouldBe Some(
+            (true, Some(value(9)))
+          )
+          writing.isCompleted shouldBe false
+          writing
+        finally RocksDbDataSource.dbLock.readLock().unlock()
+      Await.result(writer, 30.seconds)
+    finally ds.close()
+    lockIsFree()
+  }
+
+  it should "run nothing while a write holds the lock, or once the database is closed, and say why with None" taggedAs (
+    UnitTest,
+    DatabaseTest
+  ) in withTempDir { dbPath =>
+    val ds = filled(dbPath)
+    var ran = 0
+    RocksDbDataSource.dbLock.writeLock().lock()
+    val during =
+      try onAnotherThread(ds.whileFree { ran += 1; 1 })
+      finally RocksDbDataSource.dbLock.writeLock().unlock()
+    during shouldBe None
+    onAnotherThread(ds.whileFree { ran += 1; 2 }) shouldBe Some(2)
+    // A read that throws is none, and leaves the lock free.
+    ds.whileFree[Int](throw new IllegalStateException("boom")) shouldBe None
+    lockIsFree()
+    ds.close()
+    ds.whileFree { ran += 1; 3 } shouldBe None
+    ran shouldBe 1
+    lockIsFree()
+  }
+
+  "RocksDbDataSource.properties under a close" should "give nothing or the whole of it while another thread closes the database, never an error" taggedAs (
+    UnitTest,
+    DatabaseTest
+  ) in withTempDir { dbPath =>
+    val ds = filled(dbPath)
+    val reading = Future {
+      // Read until the close is seen: every answer is whole, or none.
+      var answers = 0
+      var last: Option[RocksDbProperties] = ds.properties()
+      while last.isDefined do
+        last.get.stores should have size (Namespaces.nsSeq.size + 1).toLong
+        answers += 1
+        last = ds.properties()
+      answers
+    }(using ExecutionContext.global)
+    ds.close()
+    noException should be thrownBy Await.result(reading, 30.seconds)
+    ds.properties() shouldBe None
+    lockIsFree()
   }
