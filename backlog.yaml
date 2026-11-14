@@ -2902,7 +2902,7 @@ items:
   - id: B-254
     title: "Spec 029 slice 1: TUI input and navigation (key decoder, update function, focus, prompt, filters, nine views, q asks)"
     priority: P2
-    status: claimed
+    status: in-progress
     area: tui
     size: L
     opened: 2026-11-14
@@ -2914,7 +2914,7 @@ items:
       by: cloud-ccr-452bbde8
       agent: main
       since: 2026-11-14T11:08:55Z
-      heartbeat: 2026-11-14T11:08:55Z
+      heartbeat: 2026-11-14T11:08:58Z
       branch: ccr-452bbde8-2hrv25
     notes: tasks.md T005-T028. Closes B-226 (the escape drain).
   - id: B-255
