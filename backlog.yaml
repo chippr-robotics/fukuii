@@ -3119,3 +3119,13 @@ items:
       since: 2026-11-14T19:00:38Z
       heartbeat: 2026-11-14T19:00:38Z
     notes: Tasks T073-T082. Fixes B-193 with it (Engine status counters). beacon and conduit analyse before code.
+  - id: B-270
+    title: Regular sync's batch import (BlockImporter.tryImportBlocks) never removes mined transactions from the pool
+    priority: P2
+    status: open
+    area: sync
+    size: S
+    opened: 2026-11-14
+    refs: []
+    links: {}
+    notes: "Seen 2026-11-14 on an Ephemery side node with no CL: tx mined in 148073 stayed pending ~3 min, then left as 'expired unmined'. importBlock and announceAdopted call updateTxPool; the batch path does not (since Mantis). forge: check ETC/Mordor impact."
