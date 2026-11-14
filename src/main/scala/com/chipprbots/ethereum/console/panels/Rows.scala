@@ -23,8 +23,15 @@ final case class Ctx(
     t: TuiTheme,
     config: TuiConfig,
     art: ArtStore = ArtStore.Empty,
-    screen: Option[Tier] = None
+    screen: Option[Tier] = None,
+    bodyRows: Option[Int] = None
 ):
+  /** Whether `panels` would give the panel at `index` at least `rows` rows of the body's: how a view chooses between a
+    * long and a short form of a panel before it is laid out. Without the body's height, it would.
+    */
+  def gives(panels: Seq[Panel], index: Int, rows: Int): Boolean =
+    bodyRows.forall(body => Layout.allocate(panels, body).lift(index).exists(_ >= rows))
+
   /** The tier of the whole screen: a panel's own [[tier]] is that of the columns the sidebar leaves it. */
   def screenTier: Tier = screen.getOrElse(tier)
 

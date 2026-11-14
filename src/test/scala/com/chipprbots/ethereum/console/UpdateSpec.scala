@@ -201,7 +201,8 @@ class UpdateSpec extends AnyFlatSpec with Matchers:
     opened.screen shouldBe Some(Screen.PeerDetail(unique))
     opened.selectedPeer shouldBe Some(unique)
     run(synced, "peer zzzz")._1.notice.get should include("no connected peer")
-    run(synced, "peer")._1.notice.get should include("usage")
+    run(synced, "peer")._1.view shouldBe TuiView.Peers
+    run(synced, "glyphs")._1.notice.get should include("usage")
     val shared = ids.map(_.take(1)).groupBy(identity).find(_._2.size > 1).map(_._1)
     shared.foreach(prefix => run(synced, s"peer $prefix")._1.notice.get should include("type more"))
   }

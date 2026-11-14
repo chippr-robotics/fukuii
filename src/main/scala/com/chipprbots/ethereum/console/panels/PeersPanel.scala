@@ -33,12 +33,12 @@ private[console] object PeersPanel:
   private val ScoreCols = 7
   private val TrendCols = 7
 
-  /** The Peers view: the vitals and sync summary, then the table, which takes the rest of the screen. */
+  /** The Peers view: the vitals and sync summary; from tier M the radar (spec 029 FR-030); then the table, which takes
+    * the rest of the screen. The table's rows come first: the radar is drawn only where it leaves the table six.
+    */
   def panels(c: Ctx): Seq[Panel] =
-    Seq(
-      vitalsPanel(c, withSummary = true),
-      Panel(1, 1, 2, (w, n) => table(c, w, n, top = false), separated = true, fill = true)
-    )
+    Seq(vitalsPanel(c, withSummary = true)) ++ RadarPanel.panel(c) :+
+      Panel(6, 6, 2, (w, n) => table(c, w, n, top = false), separated = true, fill = true)
 
   private enum Column(val head: String, val cols: Int):
     case Id extends Column("id", IdCols)

@@ -90,8 +90,8 @@ whose slice has not landed shows what the dashboard already reads for it and one
 | Key | View | What it shows |
 |-----|------|---------------|
 | `1` | Overview | Peers and blocks, the txpool, endpoints, disk and heap (GC and discovery at L), the sync (SNAP's five worm rows or the Blocks worm, with ETA), the consensus layer (ETH) or the mining (ETC), the forks, the node's settings; at L the top 8 peers by score; the Recent strip of the newest log lines |
-| `2` | Chain | While the node is syncing, the sync's panels lead: the worm rows on a 20-, 40- or 60-cell track; SNAP's rates, request counters, snap-capable peers and phase timeline (M and L); a regular sync's session, lag and last import; the Recent (sync) strip. Always: chain id, PoW or PoS, the fork timeline (by block number on ETC, by timestamp on ETH), the next fork with its distance |
-| `3` | Peers | Each handshaked peer, highest score first: id, direction, client, best block, age; from M the address and the score, at L the score's trend. `Up`/`Down` select a peer, `Enter` opens its details, `Esc` returns, `/` filters by id, address or client |
+| `2` | Chain | While the node is syncing, the sync's panels lead (the worm rows, SNAP's rates and phase timeline, a regular sync's session and lag). Then the **head** (number, hash, age, transactions, gas, size, base fee; the miner and difficulty on ETC, the fee recipient and slot on ETH) and the rate blocks arrive at; the chain's identity (chain id, network id, genesis hash, fork id) and its forks; the **fees** (base fee and tips, or gas prices on a chain with no base fee); the **reorgs** since the TUI started; and the **Block Observatory**: the newest blocks the node has seen, the gas each used as a chart and as a table. `Up`/`Down` select a block, `Enter` opens it |
+| `3` | Peers | From 100×32 the **peer radar**: this node at the centre and a blip a peer, nearer the centre the faster it answers (rings under 100, 500 and 2,000 ms, then slower, then not measured yet), at an angle fixed by its node id, coloured by its score, shaped by its direction, bold for a second after it answers. No line joins two peers and there is no map: the node knows neither. Then each handshaked peer, highest score first: id, direction, client, best block, age; from M the address and the score, at L the score's trend. `Up`/`Down` select a peer, `Enter` opens its details (with its latency, answers and timeouts, protocol violations), `Esc` returns, `/` filters by id, address or client |
 | `4` | Mempool | The pending count (the rest with spec 029 slice 4) |
 | `5` | RPC | The endpoints (the rest with slice 5) |
 | `6` | Storage | Disk free, the data directory, the pruning mode (the rest with slice 6) |
@@ -111,6 +111,7 @@ conditions, errors first. It is never animated and every view has it.
 | The peer manager or the sync controller does not answer | error |
 | The current block has not moved for 2 minutes while blocks remain | warning |
 | The SNAP progress sample is older than 90 s while SNAP runs | warning |
+| A reorg at least 3 blocks deep in the last 10 minutes (`fukuii.tui.alerts.reorg-depth`) | warning |
 | Disk free on the datadir below 20G (below 5G: error) | warning / error |
 | Fewer peers than a quarter of the maximum (the peer count itself turns yellow below half) | warning |
 | ETH: no `engine_forkchoiceUpdated` for more than 60 s, after one has been heard | error |
@@ -237,6 +238,20 @@ a lost terminal.
 [the contract](https://github.com/chippr-robotics/fukuii/blob/staging/specs/029-tui-command-center/contracts/art.md)
 is named in the log and on the Art screen and left out; its picture is drawn as words.
 
+### Explorer
+
+`:block`, `:tx`, `:receipt` and `:account`, or `Enter` on a block of the observatory, open a screen with what the node
+holds: a block's header and transactions, a transaction, its receipt with its own gas and its logs, an account's
+balance, nonce and code size at the head. The rows that lead somewhere (a block's parent and transactions, a
+transaction's receipt and addresses, a receipt's logs) can be selected with `Up`/`Down` and opened with `Enter`;
+`Esc` goes back to the row it was opened from. A hash is always shown whole. What a screen shows is of the
+moment it was read (an account's balance is the head's of then): `R` reads the node again.
+
+The reading is done on a thread of the TUI's own, never on the one that draws: a lookup that takes more than two
+seconds says so, and `Esc` cancels it. What the node does not have is said in words: a block before the SNAP pivot
+has no body, a transaction that is not in the index was not imported by this node, an account cannot be read where
+the node does not hold the head's state.
+
 ## Keyboard Commands
 
 The same table Help draws (`Bindings.Global`). Every key that is an escape sequence has a single character that does
@@ -252,7 +267,7 @@ the same, so a link that delivers no arrow keys loses nothing.
 | `Home` `End` | `<` `>` | The first and the last row |
 | `Enter` | | Open the selected row (a peer's details) |
 | `Esc` | `Backspace` | Back; clear the view's filter |
-| `:` | | The prompt: a view's name, `peer <id>`, `glyphs emoji` or `glyphs ascii`, `graphics auto`, `pixel`, `block` or `text`, `art`, `detach`, `quit`, `help`. `Tab` completes, `Up`/`Down` walk the history |
+| `:` | | The prompt: a view's name, `peer` or `peer <id>`, `block <number, hash or latest>`, `tx <hash>`, `receipt <hash>`, `account <address>`, `glyphs emoji` or `glyphs ascii`, `graphics auto`, `pixel`, `block` or `text`, `art`, `detach`, `quit`, `help`. `Tab` completes, `Up`/`Down` walk the history |
 | `/` | | Filter the list on screen as you type (Peers, Logs). `Enter` keeps the filter, `Esc` clears it |
 | `?` | `H` `F1` | Help over the current view; any key but `Q`, `R` and `D` returns |
 | `L` | | Logs |
@@ -269,14 +284,16 @@ servers, sync, the consistency checks), each marked done when the node reports i
 of them done, and the row beside it names the phase under way. Nothing in it is timed: a node that takes long in a
 phase shows that phase. In pixel and block mode the badge stands where the logo does in text mode.
 
-Any key skips the startup splash, and does nothing else. A change of view cancels the catch-up celebration. Opening
+When its time is over the dashboard takes the whole screen in one frame. Any key skips the startup splash, and does nothing else. A change of view cancels the catch-up celebration. Opening
 the Logs view shows its newest lines; while it is scrolled back, new lines arriving keep the lines on screen where
 they are.
 
 An arrow or a function key is an escape sequence. The TUI reads a sequence whole before deciding what it is: one it
 knows is a key, any other is nothing, so the tail of a sequence is never read as keys. Text pasted into the terminal
 arrives marked as a paste (bracketed paste) and goes to the prompt or a filter only: it cannot open a view, move a
-selection or answer a dialog.
+selection or answer a dialog. That holds where the terminal marks pastes: nearly all do. On one that does not
+(`tmux paste-buffer` without `-p`, some serial consoles), pasted text is indistinguishable from typing, and its
+characters are keys: `d` in it detaches, and `q` asks to stop the node, which nothing in a paste can confirm but `y`.
 
 With `fukuii.tui.read-only = true` (or `FUKUII_TUI_READ_ONLY` set) `Q` does not offer to stop the node, and says so.
 `Ctrl-C` still stops it.

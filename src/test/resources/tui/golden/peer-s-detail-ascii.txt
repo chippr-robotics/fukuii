@@ -13,10 +13,10 @@
  Client  besu/v24.1.2/linux-x86_64/openjdk-java-21                              
  Best    21,884,100                                                             
  Score   0.930 v falling                                                        
-                                                                                
-                                                                                
-                                                                                
-                                                                                
+ Latency 1,918 ms, the running average of its answers                           
+ Answers 118 answered, 2 timed out                                              
+ Faults  no protocol violation                                                  
+ Seen    last answered 31s ago                                                  
                                                                                 
                                                                                 
                                                                                 

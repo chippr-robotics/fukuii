@@ -109,6 +109,7 @@ class Tui(
       TuiState.initial.copy(
         glyphs = config.glyphs,
         motion = config.motion,
+        reorgAlertDepth = config.reorgAlertDepth,
         splashUntilTick = Option.when(config.splashTicks > 0)(config.splashTicks),
         startTime = started,
         now = started
@@ -172,6 +173,13 @@ class Tui(
         // (spec 029 FR-013).
         caps = askTerminal(term)
         chooseGraphics(config.graphics)
+        // Said once at the start whatever was chosen: text is a mode too, and the log is where an operator looks when
+        // the art they expected is not there.
+        log.info(
+          "TUI graphics at start: {} (asked for {})",
+          state.get.graphics.label,
+          config.graphics.toString.toLowerCase
+        )
 
         // Suppress console logs if configured
         if config.suppressConsoleLogs then
@@ -220,6 +228,22 @@ class Tui(
 
   def updateNodeSettings(settings: NodeSettings): Unit = modify(_.withNodeSettings(settings))
 
+  /** The explorer's lookup worker (spec 029 FR-029), once the node has handed the TUI its reads; none before. */
+  private val lookups = new AtomicReference(Option.empty[Lookups])
+
+  /** Hands the TUI the reads its explorer makes: `resolve` runs on a worker thread of the TUI's own, never on the frame
+    * loop or the polling thread.
+    */
+  def setLookups(resolve: LookupQuery => Either[String, LookupResult]): Unit =
+    lookups.getAndSet(Some(new Lookups(resolve, clock))).foreach(_.shutdown())
+
+  /** What the worker has published, into the state the next frame draws. */
+  private def mergeLookups(): Unit =
+    lookups.get.foreach { worker =>
+      val published = worker.results
+      modify(s => if s.lookups == published then s else s.copy(lookups = published))
+    }
+
   /** The node has completed `phase` of its start (spec 029 FR-020): the splash marks it done. */
   def startupDone(phase: StartupPhase): Unit = modify(s => s.copy(startup = s.startup + phase))
 
@@ -264,7 +288,7 @@ class Tui(
   private def setGraphics(mode: GraphicsMode): Unit =
     if mode != GraphicsMode.Text && !artLoaded then loadArt()
     if state.get.graphics != mode then
-      log.info("TUI graphics: {}", mode.label)
+      if inAltScreen && lastSize != ((0, 0)) then log.info("TUI graphics: {}", mode.label)
       modify(_.copy(graphics = mode))
       clearNext = true
 
@@ -297,6 +321,7 @@ class Tui(
   def nextFrame(snapshot: Option[NodeStatusSnapshot]): Unit =
     val now = clock.instant()
     val logs = newLogLines()
+    mergeLookups()
     modify { s =>
       val next = snapshot match
         case Some(polled) => s.nextFrame(Some(polled.agedAt(now, snapshotStaleAfter)))
@@ -484,6 +509,19 @@ class Tui(
             case Effect.ReloadArt =>
               synchronized(loadArt())
               TuiCommand.Continue
+            case Effect.Lookup(query) =>
+              lookups.get.foreach(_.submit(query))
+              // Shown at once as running, not a frame later.
+              mergeLookups()
+              TuiCommand.Continue
+            case Effect.CancelLookup(query) =>
+              lookups.get.foreach(_.cancel(query))
+              mergeLookups()
+              TuiCommand.Continue
+            case Effect.RefreshLookup(query) =>
+              lookups.get.foreach(_.refresh(query))
+              mergeLookups()
+              TuiCommand.Continue
             case Effect.Detach =>
               shutdown()
               log.info("TUI disabled, switching to standard logging")
@@ -524,6 +562,7 @@ class Tui(
     * detach still leaves the console logging and the terminal out of raw mode.
     */
   private def teardown(): Unit =
+    attempt("stop the lookup worker")(lookups.getAndSet(None).foreach(_.shutdown()))
     attempt("detach the log ring") {
       if ringAttached then
         ringAttached = false

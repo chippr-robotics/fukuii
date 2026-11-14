@@ -238,32 +238,69 @@ Every slice ends with the same gate. The art (phase 0) is done and in the tree.
 
 ## Phase 4: Slice 3 — chain (US3)
 
+> As built (2026-11-14). After the slice: 1,222 tests in 50 suites of
+> `testOnly com.chipprbots.ethereum.console.* *Tui* *PeerScor*`. What differs from the tasks as written:
+>
+> - **T058**: the head observer is a pure function over a value (`HeadObserver.observe`); the probe holds the value.
+>   The chain sample is a local reading (`LocalSample.chain`), not a `Sourced`: it is read on the probe's own thread
+>   from the node's stores, like the head's timestamp, and has no actor to go stale.
+> - **T059**: the explorer reads the node's stores directly (`ChainLookups`: the block, receipt, transaction-index and
+>   code stores, and `BlockchainReader.accountAt`), not through `ethBlocksService`, `ethTxService` and
+>   `ethUserService`: the services answer in JSON-RPC's shapes and run on the RPC's runtime; the TUI needs neither.
+>   The gas-price oracle is not used: the fee row is what the newest blocks' transactions paid.
+> - **T055**: no separate `FeeSample`: a block's fee percentiles are part of its `BlockSummary`, read with its body.
+> - **T056, T060, T062 — charts are text**: the observatory's chart is one glyph a block and the radar is a grid of
+>   cells, in every graphics mode. Neither is drawn as a pixel image yet: `Charts.scala` (T050) and
+>   `Graphic.Chart` regions are still to come, and are B-263. Nothing a chart shows is missing from the text.
+> - **T062**: the radar is a panel of its own above the list from tier M, not beside it: the list needs its columns.
+>   A peer's latency, answers, timeouts and violations come from the scorer's snapshot, which gained
+>   `PeerScoreDetail` (`network/PeerScoringManager.scala`): the same view of the scores, read for display.
+> - **T063**: the reorg warning stays on the alert row for ten minutes; the depth is `fukuii.tui.alerts.reorg-depth`.
+> - **From the terminal gate of slices 1 and 2** (dev-node, tmux, an Ephemery side instance, 2026-11-14): bare `:peer`
+>   opens the Peers view (`:pe`, Tab, Enter was a dead end); a dialog's sentences wrap instead of being cut; a fork a
+>   network starts with is "since genesis", not "since 1970"; the graphics mode is logged once at start. Pixel mode,
+>   a change of font size and how the art looks are still untried: they need kitty or Ghostty.
+> - **From prism's review**: the lookup worker gives each asking a ticket and interrupts under a lock, so a cancel
+>   can only reach the read it was meant for, a query cancelled and asked again is read again, and an error that is
+>   not `NonFatal` fails its lookup and leaves the worker alive. An explorer value too long for its row goes onto rows
+>   of its own (it lost the value and kept the label). A reorg's depth is counted in heights, and a head that goes
+>   back to a block already seen is a reorg of the blocks after it. A poll of a chain that did not move reads one
+>   header and no body.
+> - **From the terminal gate of slice 3** (dev-node, tmux, the Ephemery side instance, d28efd4): the Chain view's fork
+>   list said 1970 for a fork at time 0 (now "at genesis"); a receipt's running total is called cumulative (on
+>   Amsterdam it is not the header's gas used); a fee-market transaction shows what it paid and what it offered; `r`
+>   on an explorer screen reads the node again. The walk through block, transaction, receipt and account matched
+>   `eth_getTransactionByHash` and `eth_getTransactionReceipt` on the live node.
+> - **The splash ends in one cut** (the user, 2026-11-14): spec 027's hand-over, four rows a tick, read as leftovers
+>   on a real terminal once the splash listed the start's phases. `splashCover` is now whole or nothing.
+> - **T064**: run by dev-node in block and text mode; pixel mode is the user's to try (kitty or Ghostty).
+
 **Goal**: the Block Observatory, fees, reorgs, the explorer, the peer radar. **Branch**: `feat/029-s3-chain`.
 
 ### Tests first
 
-- [ ] T053 [P] [US3] `HeadObserverSpec`: a straight chain; a gap larger than the walk bound sets `sampled`; a reorg of
+- [x] T053 [P] [US3] `HeadObserverSpec`: a straight chain; a gap larger than the walk bound sets `sampled`; a reorg of
       depth 3 is recorded with both tips; a reorg deeper than the bound is "at least"; a head with no body
-- [ ] T054 [P] [US3] `LookupsSpec`: a result is published by id; a slow reader (latch) does not delay a frame; cancel
+- [x] T054 [P] [US3] `LookupsSpec`: a result is published by id; a slow reader (latch) does not delay a frame; cancel
       discards the result; pruned state and an unknown hash give sentences
-- [ ] T055 [P] [US3] `FeeSampleSpec`: a chain with a base fee and one without
-- [ ] T056 [P] [US3] Goldens: the Chain view while syncing and at the head, ETC and ETH fixtures, three modes; the
+- [x] T055 [P] [US3] `FeeSampleSpec`: a chain with a base fee and one without
+- [x] T056 [P] [US3] Goldens: the Chain view while syncing and at the head, ETC and ETH fixtures, three modes; the
       block, transaction, receipt and account screens; the reorg alert; the radar's chart as a text golden
-- [ ] T057 [P] [US3] `RadarSpec`: a blip's radius is its latency band, its angle is stable for a node id, an
+- [x] T057 [P] [US3] `RadarSpec`: a blip's radius is its latency band, its angle is stable for a node id, an
       unmeasured peer is on the outer ring; no line joins two peers
 
 ### Implementation
 
-- [ ] T058 [US3] `console/HeadObserver.scala`; `TuiStatusProbe` publishes `ChainSample`; bounded reads per poll
-- [ ] T059 [US3] `console/Lookups.scala`; `StdNode.scala` hands the TUI `ethBlocksService`, `ethTxService`,
+- [x] T058 [US3] `console/HeadObserver.scala`; `TuiStatusProbe` publishes `ChainSample`; bounded reads per poll
+- [x] T059 [US3] `console/Lookups.scala`; `StdNode.scala` hands the TUI `ethBlocksService`, `ethTxService`,
       `ethUserService` and `gasPriceOracle`
-- [ ] T060 [P] [US3] `console/panels/ObservatoryPanel.scala`, `HeadPanel.scala`, `FeesPanel.scala`,
+- [x] T060 [P] [US3] `console/panels/ObservatoryPanel.scala`, `HeadPanel.scala`, `FeesPanel.scala`,
       `ReorgsPanel.scala`; the identity rows on `ChainPanel.scala`
-- [ ] T061 [P] [US3] `console/panels/ExplorerPanels.scala`: block, transaction, receipt, account; `block`, `tx`,
+- [x] T061 [P] [US3] `console/panels/ExplorerPanels.scala`: block, transaction, receipt, account; `block`, `tx`,
       `receipt`, `account` in `Commands`
-- [ ] T062 [US3] `console/panels/RadarPanel.scala` on the Peers view; the peer detail screen gains score components
+- [x] T062 [US3] `console/panels/RadarPanel.scala` on the Peers view; the peer detail screen gains score components
       and latency
-- [ ] T063 [US3] `console/Alerts.scala`: the reorg alert at `alerts.reorg-depth`
+- [x] T063 [US3] `console/Alerts.scala`: the reorg alert at `alerts.reorg-depth`
 
 ### Gate
 

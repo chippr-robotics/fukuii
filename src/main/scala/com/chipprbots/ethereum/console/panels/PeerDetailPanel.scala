@@ -14,7 +14,7 @@ private[console] object PeerDetailPanel:
   def panels(c: Ctx, peerId: String): Seq[Panel] =
     Seq(
       vitalsPanel(c, withSummary = true),
-      Panel(2, 12, 2, (w, _) => rows(c, peerId, w), separated = true),
+      Panel(2, 18, 2, (w, _) => rows(c, peerId, w), separated = true),
       fillPanel
     )
 
@@ -49,5 +49,15 @@ private[console] object PeerDetailPanel:
           "Client" -> details.map(d => TuiText.external(d.clientId, c.g)).filter(_.nonEmpty).getOrElse("?"),
           "Best" -> details.map(_.bestBlock).filter(_ > 0).fold("?")(formatNumber),
           "Score" -> score
-        )
+        ) ++ s.peerStats(p.id).toSeq.flatMap { stats =>
+          // What the score is made of (spec 029 FR-030): the terms an operator can act on.
+          Seq(
+            "Latency" -> stats.latencyMs.fold("not measured: it has answered no request yet")(ms =>
+              s"${formatNumber(ms.round)} ms, the running average of its answers"
+            ),
+            "Answers" -> s"${formatNumber(stats.responses.toLong)} answered, ${formatNumber(stats.timeouts.toLong)} timed out",
+            "Faults" -> (if stats.violations == 0 then "no protocol violation"
+                         else s"${formatNumber(stats.violations.toLong)} protocol violations")
+          ) ++ stats.lastSeen.map(at => "Seen" -> s"last answered ${ago(c, at)} ago")
+        }
         (title +: id) ++ fields.map((label, value) => fit(field(label, text(value, c.t.value), c.t), w, c.g))

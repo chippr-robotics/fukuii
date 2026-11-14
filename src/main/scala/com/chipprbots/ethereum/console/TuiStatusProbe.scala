@@ -160,8 +160,24 @@ class TuiStatusProbe(
       peerScores = read("the peer scores")(local.peerScores()),
       lastImport = read("the last import")(local.lastImport()),
       cl = read("the consensus layer")(local.cl()),
-      mining = read("the mining metrics")(local.mining())
+      mining = read("the mining metrics")(local.mining()),
+      chain = local.chain.flatMap(source => read("the chain")(Some(observeHead(source, at)))),
+      forkId = read("the fork id")(local.forkId())
     )
+
+  /** What the head observer has seen (spec 029 FR-023): kept on the probe's thread, moved on by each poll. */
+  private var headObserver: HeadObserver.State = HeadObserver.State()
+
+  /** One poll of the head: a bounded walk from it back to a block already seen ([[HeadObserver]]). */
+  private def observeHead(source: ChainReads.Source, at: Instant): ChainSample =
+    headObserver = HeadObserver.observe(
+      headObserver,
+      source.head(at, headObserver.recent.lastOption.map(_.hash)),
+      (hash, withBody) => source.block(hash, withBody, at),
+      at,
+      local.observatoryBlocks
+    )
+    headObserver.sample
 
   /** The sync status as the TUI reads it, with the SNAP progress while SNAP is running: a sample of an active phase,
     * young enough to show. "Syncing (SNAP)" needs a sample from the monitor's last two rounds. The sample's time is
@@ -235,6 +251,12 @@ object TuiStatusProbe:
     * @param mining
     *   the mining metrics ([[LocalSources.miningReader]]); a thunk that reads nothing keeps the mining panel off the
     *   screen, which is how an ETH node has none
+    * @param chain
+    *   the node's blocks, for the head observer (spec 029 FR-023); None reads no block
+    * @param observatoryBlocks
+    *   the newest blocks the observer keeps
+    * @param forkId
+    *   the fork id at the head, as the node tells it to its peers
     */
   final case class LocalSources(
       dataDir: Option[File] = None,
@@ -248,7 +270,10 @@ object TuiStatusProbe:
       peerScores: () => Option[PeerScores] = () => None,
       lastImport: () => Option[ImportSample] = () => None,
       cl: () => Option[ClSample] = () => None,
-      mining: () => Option[MiningSample] = () => None
+      mining: () => Option[MiningSample] = () => None,
+      chain: Option[ChainReads.Source] = None,
+      observatoryBlocks: Int = HeadObserver.MaxWalk,
+      forkId: () => Option[String] = () => None
   )
 
   object LocalSources:
@@ -261,9 +286,13 @@ object TuiStatusProbe:
         dataDir: Option[File],
         headTimestamp: () => Option[Long],
         cl: () => Option[ClSample] = () => None,
-        mining: () => Option[MiningSample] = () => None
+        mining: () => Option[MiningSample] = () => None,
+        chain: Option[ChainReads.Source] = None,
+        forkId: () => Option[String] = () => None
     ): LocalSources =
       LocalSources(
+        chain = chain,
+        forkId = forkId,
         dataDir = dataDir,
         heap = jvmHeap,
         gcMillis = jvmGcMillis,
@@ -499,7 +528,13 @@ object TuiStatusProbe:
   /** A published score snapshot by peer id; None before slice 4a's scorer has published one. */
   def peerScores(snapshot: PeerScoreSnapshot): Option[PeerScores] =
     Option.when(snapshot.takenAt != PeerScoreSnapshot.empty.takenAt || snapshot.scores.nonEmpty)(
-      PeerScores(snapshot.takenAt, snapshot.scores.map((id, score) => id.value -> score))
+      PeerScores(
+        snapshot.takenAt,
+        snapshot.scores.map((id, score) => id.value -> score),
+        snapshot.details.map((id, d) =>
+          id.value -> PeerStats(d.latencyMs, d.responses, d.timeouts, d.violations, d.lastSeen)
+        )
+      )
     )
 
   /** Each handshaked peer's client id, sanitised as it is read (C-16), and best block, by peer id. */

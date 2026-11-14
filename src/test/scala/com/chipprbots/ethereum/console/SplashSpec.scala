@@ -183,8 +183,8 @@ class SplashSpec
     for f <- Seq(inPixel, inBlock) do
       f.lines should have size 40
       all(f.lines.map(_.columnLength())) shouldBe 120
-    // The hand-over places no picture: the rows under one are changing.
-    drawing.frame(splash(12).copy(graphics = pixel), 120, 40).regions shouldBe empty
+    // Once the splash is over its badge is gone with it: the dashboard's own pictures are placed.
+    drawing.frame(splash(12).copy(graphics = pixel), 120, 40).regions.map(_.id) should not contain "badge"
   }
 
   it should "show the skip hint on the last row, at every size" taggedAs (UnitTest) in {
@@ -202,23 +202,26 @@ class SplashSpec
     }
   }
 
-  it should "last splashMs / animationIntervalMs ticks, then hand over 4 rows a tick" taggedAs (UnitTest) in {
+  // Spec 029: the dashboard takes the whole screen in one frame. Spec 027 handed the rows over four a tick, and with
+  // the start's phases on the splash the half-replaced frames read as leftovers on a real terminal.
+  it should "last splashMs / animationIntervalMs ticks, then give way to the dashboard in one frame" taggedAs (
+    UnitTest
+  ) in {
     val config = TuiConfig.default
     config.splashTicks shouldBe config.splashMs / config.animationIntervalMs
     config.splashTicks shouldBe 12L
     (0L to 11L).foreach(t => splash(t).splashCover(24) shouldBe Some(0))
     def dashboard(tick: Long) = renderer.render(splash(tick).copy(splashUntilTick = None), 80, 24, theme)
-    for tick <- 12L to 16L do
-      val k = 4 * (tick - 12 + 1).toInt // 4 × ticks since the splash's last frame
-      val frame = renderer.render(splash(tick), 80, 24, theme)
-      withClue(s"tick $tick: ") {
-        splash(tick).splashCover(24) shouldBe Some(k)
-        frame.take(k) shouldBe dashboard(tick).take(k)
-        frame.drop(k) shouldBe Splash.render(splash(tick), 80, 24, theme).drop(k)
+    for tick <- 12L to 17L; (w, h) <- Seq((80, 24), (160, 48)) do
+      withClue(s"tick $tick at ${w}x$h: ") {
+        splash(tick).splashCover(h) shouldBe None
+        val frame = renderer.render(splash(tick), w, h, theme)
+        frame shouldBe renderer.render(splash(tick).copy(splashUntilTick = None), w, h, theme)
+        // No row of the splash is left under the dashboard's.
+        (frame.map(_.toString).mkString should not).include("any key to skip")
+        (frame.map(_.toString).mkString should not).include(StartupPhase.Checks.label)
       }
-    // At 24 rows the hand-over takes five ticks; then the dashboard alone.
-    splash(17).splashCover(24) shouldBe None
-    renderer.render(splash(17), 80, 24, theme) shouldBe dashboard(17)
+    renderer.render(splash(12), 80, 24, theme) shouldBe dashboard(12)
   }
 
   it should "be off under FUKUII_TUI_NO_SPLASH, and one static frame under reduced motion" taggedAs (UnitTest) in {
@@ -230,7 +233,7 @@ class SplashSpec
       .applyTo(TuiSettings())
       .splashTicks shouldBe 12L
     TuiConfig.default.copy(reducedMotion = true).splashTicks shouldBe 2L
-    splash(12).copy(motion = Motion.Reduced).splashCover(24) shouldBe None // no hand-over
+    splash(12).copy(motion = Motion.Reduced).splashCover(24) shouldBe None
   }
 
   it should "be skipped by any key" taggedAs (UnitTest) in {

@@ -238,6 +238,22 @@ class TuiKeysSpec extends AnyFlatSpec with Matchers:
     finally tt.close()
   }
 
+  "A dialog's sentences" should "go on over the next row when they are longer than the box, never be cut" taggedAs (
+    UnitTest
+  ) in {
+    widgets.DialogBox.wrap("one two three four", 9) shouldBe Seq("one two", "three", "four")
+    widgets.DialogBox.wrap("short", 40) shouldBe Seq("short")
+    // The quit dialog on a node with a consensus client: its longest sentence is whole at every width.
+    val renderer = TuiRenderer(TuiConfig.default)
+    val asked = TuiFixtures.sepoliaNearHead().copy(overlay = Overlay.Dialog(DialogKind.Quit))
+    val cl = TuiFixtures.withLocal(asked, _.copy(cl = Some(TuiFixtures.clConnected)))
+    for (w, h) <- Seq((80, 24), (120, 40), (160, 48)) do
+      // The body rows without the sidebar columns, joined: a sentence may run over two of them.
+      val text =
+        TuiFixtures.panelRows(renderer.render(cl, w, h).map(_.toString), w, h).mkString(" ").replaceAll("\\s+", " ")
+      withClue(s"${w}x$h: ")(text should include("a validator on it misses duties."))
+  }
+
   "The footer" should "list the keys for its tier" taggedAs (UnitTest) in {
     val renderer = TuiRenderer(TuiConfig.default)
     val s = TuiFixtures.syncedEtc()

@@ -19,6 +19,9 @@ enum Command:
   /** `art`: every sprite, a pose a page. */
   case Art
 
+  /** `block`, `tx`, `receipt`, `account`: look it up and show it (spec 029 FR-028). */
+  case Explore(query: LookupQuery)
+
   /** A known command used wrongly: `message` says how it is used. */
   case Usage(message: String)
 
@@ -28,10 +31,32 @@ enum Command:
 /** The prompt's commands: parsing, completion, and the nearest command to a mistyped one. Pure. */
 object Commands:
 
-  private val Fixed: Seq[String] = Seq("peer", "glyphs", "graphics", "art", "help", "detach", "quit")
+  private val Fixed: Seq[String] =
+    Seq("peer", "block", "tx", "receipt", "account", "glyphs", "graphics", "art", "help", "detach", "quit")
 
   /** The commands that take an argument: completing one leaves a space after it. */
-  private val WithArgument: Set[String] = Set("peer", "glyphs", "graphics")
+  private val WithArgument: Set[String] = Set("peer", "block", "tx", "receipt", "account", "glyphs", "graphics")
+
+  private def isHex(text: String, digits: Int): Boolean =
+    val body = if text.startsWith("0x") || text.startsWith("0X") then text.drop(2) else text
+    body.length == digits && body.forall(ch => Character.digit(ch, 16) >= 0)
+
+  /** `0x` and the digits in lower case, whether or not the `0x` was typed. */
+  private def hex(text: String): String =
+    "0x" + (if text.startsWith("0x") || text.startsWith("0X") then text.drop(2) else text).toLowerCase(Locale.ROOT)
+
+  /** `block` with a number (commas allowed), a hash, `latest`, or nothing at all, which is the head. */
+  private def block(arg: Option[String]): Command = arg.map(_.replace(",", "")) match
+    case None | Some("latest") | Some("head") => Command.Explore(LookupQuery.LatestBlock)
+    case Some(n) if n.nonEmpty && n.forall(_.isDigit) && n.length <= 18 =>
+      Command.Explore(LookupQuery.BlockByNumber(n.toLong))
+    case Some(h) if isHex(h, 64) => Command.Explore(LookupQuery.BlockByHash(hex(h)))
+    case _                       => Command.Usage("usage: block <number> | <hash: 0x and 64 digits> | latest")
+
+  private def hashed(arg: Option[String], word: String, of: String => LookupQuery): Command =
+    arg
+      .filter(isHex(_, 64))
+      .fold(Command.Usage(s"usage: $word <transaction hash: 0x and 64 digits>"))(h => Command.Explore(of(hex(h))))
 
   /** Every command word, the views first. */
   val Words: Seq[String] = TuiView.values.toSeq.map(_.title.toLowerCase(Locale.ROOT)) ++ Fixed
@@ -49,8 +74,9 @@ object Commands:
               case "quit"   => Command.Quit
               case "detach" => Command.Detach
               case "help"   => Command.Help
-              case "peer" =>
-                args.headOption.fold(Command.Usage("usage: peer <the start of a peer's id>"))(Command.OpenPeer(_))
+              // With no id it is the list: Tab completes `pe` to `peer`, the common start of `peers` and `peer`, and
+              // Enter after that must go somewhere.
+              case "peer" => args.headOption.fold(Command.OpenView(TuiView.Peers))(Command.OpenPeer(_))
               case "glyphs" =>
                 args.headOption.map(_.toLowerCase(Locale.ROOT)) match
                   case Some("emoji") => Command.Glyphs(GlyphSet.Emoji)
@@ -60,8 +86,17 @@ object Commands:
                 args.headOption.flatMap(GraphicsChoice.parse) match
                   case Some(choice) => Command.Graphics(choice)
                   case None         => Command.Usage("usage: graphics auto | pixel | block | text")
-              case "art" => Command.Art
-              case _     => Command.Unknown(word, nearest(word))
+              case "art"     => Command.Art
+              case "block"   => block(args.headOption)
+              case "tx"      => hashed(args.headOption, "tx", LookupQuery.Tx(_))
+              case "receipt" => hashed(args.headOption, "receipt", LookupQuery.Receipt(_))
+              case "account" =>
+                args.headOption
+                  .filter(isHex(_, 40))
+                  .fold(Command.Usage("usage: account <address: 0x and 40 digits>"))(a =>
+                    Command.Explore(LookupQuery.Account(hex(a)))
+                  )
+              case _ => Command.Unknown(word, nearest(word))
 
   /** `line` with its first word completed as far as the commands that start with it agree; unchanged when none does or
     * when the first word is already followed by an argument.
