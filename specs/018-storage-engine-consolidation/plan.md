@@ -2889,6 +2889,46 @@ layer not kept, which needs a store with a small layer bound. **Owed by part 2b*
 layers were not kept, or were evicted, re-executes them (go-ethereum's `recoverAncestors`; part 3's re-execution), and
 the descendants of such a block stay ACCEPTED until then.
 
+#### C4d part 2b: the fork choice moves the head (2026-11-14)
+
+The fork choice on the unified layout followed the held block only. Now it moves the head, with the state, to the head
+the consensus client names: **up** a chain of executed blocks (forward layers) or along changeset records, and
+**across** a fork, back along the records to the fork and up the other branch's layers and records, each as one move of
+the head (C4b's `moveHead`, through `BlockchainWriter.moveHeadInPlace`).
+- **Never down to an ancestor of the head**: go-ethereum skips such a fork choice ("Ignoring beacon update to old
+  head"), and the Engine API's branch for an ancestor answers it VALID with no payload before the fork choice is asked.
+  Behind that branch, a move whose plan only reverses blocks is refused before anything of it is written or counted
+  (`PathStateStorage.moveHead`'s new `admit`, asked of each plan): the race of part 3b is answered VALID as before.
+- **The gate for a head other than the held block is gone.** The checks that move nothing run first, as on the hash
+  layout: an invalid head, an unknown head, a head stored by its hash with no receipts (SYNCING), an ancestor (VALID),
+  the safe and finalized blocks' ancestry (-38002). Then the move, under `IO.blocking`, and on its success alone
+  `currentState`, the finalized block (part 1), the gossip gate and the pool. Then the attributes and the build, on the
+  head the move made.
+- **Refusals**: a head whose state is not held (a layer that was not kept, or evicted; a fork beyond the records:
+  `NotHeld`) SYNCING, until part 3 re-executes it; `Deep`, `Incomplete`, `Pivot` SYNCING (a strike in part 5);
+  `Corrupt` fails the state closed, SYNCING; **`Finalized`, a move that would reverse the finalized block, -38002** (the
+  user's decision of 2026-11-14; go-ethereum: "final block not in canonical chain"), with nothing moved.
+
+**The mutation run**: 6 mutants, all caught: a plan not asked whether it may be made, the fork choice moving the head
+in no direction or down, a move that would reverse the finalized block answered SYNCING (by the fork choice, or by the
+Engine API), the writer not passing the plan's check on.
+
+**Read after code (beacon): APPROVE WITH CHANGES.** The order is right (execution-apis: the fork choice is applied,
+then the attributes; a -38003 leaves the move standing, as go-ethereum's SetCanonical then BuildPayload); the ancestor
+rule is go-ethereum's (a block canonical by the index and below the best block), and a reverse-only plan names only such
+a block while the index is the anchor's ancestry; the build after a move reads the new anchor, with the stale-view
+retries; nothing changes on the hash layout. Taken: an ancestor of the head is answered VALID before a `Finalized`
+refusal is (a raced walk back that meets the finalized block); cases: a cross-fork move whose attributes are refused
+(-38003) stands, and the block built on the new head is VALID when it comes back as a payload. Recorded: the pool
+drops only the head block's transactions and puts back none of a reversed block's, on both layouts (B-253). **Put to
+the user**: the `Finalized` refusal is held against the finalized block named before; a fork choice that names a new
+finalized block on its own head's chain, while its move reverses the old one (a consensus client resyncing from a
+corrected checkpoint), is consistent and go-ethereum follows it, where this answers -38002 on every retry. Beacon
+proposes planning against the fork choice's own finalized block when it names one on the head's chain, so the refusal
+fires only for a fork choice that names none, or a stale one. **The user's decision of 2026-11-14: no.** The refusal
+stays held against the finalized block named before; a datadir whose finalized block a consensus client later reverses
+is mended by hand.
+
 ### Destructive change (C8a and C8b): the vault protocol blocks
 
 ```
