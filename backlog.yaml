@@ -3053,3 +3053,16 @@ items:
     links:
       spec: specs/029-tui-command-center
     notes: LOGSLEVEL=ERROR (the Ephemery launch) drops 'TUI graphics ...' and every INFO line the Logs view would show.
+  - id: B-266
+    title: "Spec 029 slice 4: the Mempool view (pool, flow, Mempool Radar, counters, pending transactions in the explorer) and the pool's counters"
+    priority: P2
+    status: open
+    area: tui
+    size: L
+    opened: 2026-11-14
+    refs: []
+    links:
+      spec: specs/029-tui-command-center
+      branch: ccr-452bbde8-2hrv25
+    depends_on: [B-262]
+    notes: Tasks T065-T072. Closes B-196 with it (GetPoolSizeReq).
