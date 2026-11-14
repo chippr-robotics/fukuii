@@ -837,22 +837,6 @@ class EngineApiService(
           )
         )
       )
-    else if stateHeldInPlace.exists(held => !held().contains(forkChoiceState.headBlockHash)) then
-      // The state on disk is one block's, and the head moves with it, in the batch that commits a block. A move of
-      // the head to any other block needs that block's state: a forward layer, or a move back along the changeset
-      // records, which arrive with the overlay and the head move (spec 018 C4a, C4b). Until then this node cannot
-      // follow the head it is given, and says so: nothing is moved or marked. The head is published and recorded as the
-      // one asked for, as the other SYNCING branches do (notify-only: it writes nothing), so that whatever imports the
-      // blocks up to it knows where they lead (beacon, C4b part 4: after a reconciliation at start the head is below the
-      // consensus layer's).
-      forkChoiceManager.notifyBeaconHead(forkChoiceState)
-      log.warn(
-        "[ENGINE-API] forkchoiceUpdated: head {} is not the block whose state this node holds; the unified state " +
-          "layout cannot move its head yet (SYNCING)",
-        org.bouncycastle.util.encoders.Hex.toHexString(forkChoiceState.headBlockHash.toArray).take(16)
-      )
-      EngineApiMetrics.recordForkchoiceUpdated("SYNCING")
-      IO.pure(Right(ForkchoiceUpdatedResponse(payloadStatus = PayloadStatusV1(Syncing))))
     else
       // Check if the head block is fully stored (number→hash mapping exists).
       // Blocks stored via storeBlockByHashOnly (ACCEPTED) don't have this mapping.
@@ -985,6 +969,11 @@ class EngineApiService(
                 )
               )
             )
+          case Left(refused) if refused.startsWith(ForkChoiceManager.FinalizedReversed) =>
+            // the head's chain does not hold the block this node was told is finalized: -38002, nothing moved (after
+            // the arm above: an ancestor of the head is VALID, whatever its walk back met; beacon)
+            EngineApiMetrics.recordForkchoiceUpdated("INVALID")
+            IO.pure(Left(s"invalid forkchoice state: ${refused.stripPrefix(ForkChoiceManager.FinalizedReversed)}"))
           case Left(_) =>
             // Head not known — return SYNCING so CL knows we need newPayload
             EngineApiMetrics.recordForkchoiceUpdated("SYNCING")

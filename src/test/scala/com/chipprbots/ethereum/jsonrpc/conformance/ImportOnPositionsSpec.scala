@@ -246,7 +246,7 @@ class ImportOnPositionsSpec extends ScalaTestWithActorTestKit with AnyFlatSpecLi
 
   // Until the overlay the head can only be the block whose state the disk holds: a move to any other block needs that
   // block's state.
-  "forkchoiceUpdated on the unified layout" should "answer SYNCING for a head that is not the block the disk holds, and move nothing" taggedAs
+  "forkchoiceUpdated on the unified layout" should "answer an ancestor of the head VALID and a head it does not have SYNCING, and move nothing" taggedAs
     UnitTest in {
       import cats.effect.unsafe.implicits.global
       import com.chipprbots.ethereum.consensus.engine.EngineApiService
@@ -265,10 +265,11 @@ class ImportOnPositionsSpec extends ScalaTestWithActorTestKit with AnyFlatSpecLi
       val zero = ByteString(new Array[Byte](32))
       val head = blocks.last.header
       val before = disk
-      // a block this node has, below the head: a move back
+      // a block this node has, below the head: an ancestor of the head, which is not moved down to (go-ethereum skips
+      // such a fork choice too): VALID, no payload, nothing moved (C4d part 2b)
       val earlier = blocks(blocks.size - 3).header
       val moved = engine.forkchoiceUpdated(ForkChoiceState(earlier.hash.value, zero, zero), None).unsafeRunSync()
-      moved.map(_.payloadStatus.status) shouldBe Right(PayloadStatus.Syncing)
+      moved.map(_.payloadStatus.status) shouldBe Right(PayloadStatus.Valid)
       moved.map(_.payloadId) shouldBe Right(None)
       // a block it does not have
       val unknown = ByteString(Array.fill[Byte](32)(0x5a))

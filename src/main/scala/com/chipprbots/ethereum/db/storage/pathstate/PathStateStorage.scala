@@ -1160,6 +1160,10 @@ final class PathStateStorage(
     *   the finalized block the fork choice behind this move named (spec 018 C4d part 1): its row is written in the
     *   batch that ends on `target`, and it is this store's under the state lock right after that batch, so a move or a
     *   commit that follows sees it, and one that was refused names nothing. Not written again when it is the one named
+    * @param admit
+    *   why the move as planned is not to be made, when it is not: asked of each plan before anything of it is written
+    *   or counted, and a refusal ends the move with a [[StateUnavailable]] and nothing written (a fork choice moves the
+    *   head up or across, never down to an ancestor of the head: C4d part 2b)
     * @param extraFor
     *   the caller's rows for the batch that ends on a block. It is called with no lock of this store held but the one
     *   that keeps other moves and commits out, once for each batch, and again if the move is planned again; what it
@@ -1178,7 +1182,8 @@ final class PathStateStorage(
       target: BlockRef,
       link: ByteString => Option[HeadMovePlan.Link],
       extraFor: HeadMovePlan.Chunk => Option[DataSourceBatchUpdate],
-      finalized: Option[FinalizedBlock] = None
+      finalized: Option[FinalizedBlock] = None,
+      admit: HeadMovePlan => Option[String] = _ => None
   ): MoveOutcome =
     if moves.isHeldByCurrentThread then
       throw new IllegalStateException(s"A move of the head to ${target.show} cannot start inside another")
@@ -1190,7 +1195,7 @@ final class PathStateStorage(
     val pin = new BranchPin(s"the move of the head to ${target.show}")
     try
       val outcome =
-        try move(target, link, extraFor, finalized, pin, MoveReplans)
+        try move(target, link, extraFor, finalized, admit, pin, MoveReplans)
         catch
           case NonFatal(failed) =>
             // A move that stopped part of the way kept the layers its later batches were to apply. Those of the
@@ -1218,6 +1223,7 @@ final class PathStateStorage(
       link: ByteString => Option[HeadMovePlan.Link],
       extraFor: HeadMovePlan.Chunk => Option[DataSourceBatchUpdate],
       namesFinalized: Option[FinalizedBlock],
+      admit: HeadMovePlan => Option[String],
       pin: BranchPin,
       replansLeft: Int
   ): MoveOutcome =
@@ -1228,6 +1234,7 @@ final class PathStateStorage(
         told("a move that was refused")(settings.observer.moveRefused(reason))
         throw new ReorgTooDeep(reason, s"to block ${target.show}: $detail")
       case HeadMovePlan.Outcome.NotHeld(detail, heldTo) => throw new StateUnavailable(detail, heldTo = heldTo)
+    admit(plan).foreach(why => throw new StateUnavailable(why))
     lock.locked("the layers of a move's plan")(
       overlay.pinAll(
         plan.forward.collect { case HeadMovePlan.Forwarded(_, _, HeadMovePlan.Source.Layer(layer)) => layer },
@@ -1322,7 +1329,7 @@ final class PathStateStorage(
           batches = chunks.size,
           nanos = System.nanoTime() - started
         )
-    else if replansLeft > 0 then move(target, link, extraFor, namesFinalized, pin, replansLeft - 1)
+    else if replansLeft > 0 then move(target, link, extraFor, namesFinalized, admit, pin, replansLeft - 1)
     else
       throw new StateUnavailable(
         s"no move of the head to ${target.show} could be made: the state, or an executed block of the plan, changed " +
