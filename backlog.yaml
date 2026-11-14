@@ -2936,3 +2936,15 @@ items:
     links:
       spec: specs/016-snap-controller-split
     notes: "parkInStateValidation (SnapControllerFixture:406) waits 10 s for the A5 guard's log line; on #1833's run it never came (suites run one at a time in the fork, so no rival capture). Find why the controller did not reach the guard: a starved dispatcher, or the decision not delivered."
+  - id: B-257
+    title: "Spec 029 slice 2a: TUI graphics modes (pixel, block, text), network icon, mascot, :art"
+    priority: P2
+    status: open
+    area: tui
+    size: L
+    opened: 2026-11-14
+    refs: []
+    links:
+      spec: specs/029-tui-command-center
+      branch: ccr-452bbde8-2hrv25
+    notes: tasks T029-T045, T047, T048. Slice 2b (theme T046, splash T049, charts T050) and the manual gate T052 stay open.
