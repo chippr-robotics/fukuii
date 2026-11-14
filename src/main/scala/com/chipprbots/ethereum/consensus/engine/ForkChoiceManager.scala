@@ -204,6 +204,11 @@ class ForkChoiceManager(
       currentState.set(Some(newState))
       Right(())
     catch
+      // a block on the way up has no state held, and the chain is held up to `heldTo`: the Engine API has the blocks
+      // above it executed again (C4d part 3), and answers SYNCING meanwhile
+      case unavailable: StateUnavailable if unavailable.heldTo.isDefined =>
+        notMoved(unavailable.reason)
+        Left(ForkChoiceManager.NotHeldHead + unavailable.reason)
       case unavailable: StateUnavailable => notMoved(unavailable.reason)
       // A record that is not what it should be is this datadir's fault, not the fork choice's: the state fails closed
       // (no further in-place write, no state given out, ERROR) and the head is answered as one not followed (plan.md
@@ -261,6 +266,12 @@ object ForkChoiceManager:
     * the finalized block: an inconsistent fork choice state, not one this node has yet to sync.
     */
   val FinalizedReversed: String = "FINALIZED: "
+
+  /** The start of what [[ForkChoiceManager.applyForkChoiceState]] answers for a fork choice whose head's chain is held
+    * up to a block below it, and whose blocks above that have no state held: they are executed again, and the head is
+    * not moved meanwhile (spec 018 C4d part 3).
+    */
+  val NotHeldHead: String = "NOT HELD: "
 
   /** The hash a fork choice names when it names no block (a safe or finalized block before there is one). */
   val ZeroHash: ByteString = ByteString(new Array[Byte](32))

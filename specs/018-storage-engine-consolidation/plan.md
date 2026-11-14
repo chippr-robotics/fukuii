@@ -2929,6 +2929,70 @@ fires only for a fork choice that names none, or a stale one. **The user's decis
 stays held against the finalized block named before; a datadir whose finalized block a consensus client later reverses
 is mended by hand.
 
+#### C4d part 3: a state that is no longer held is had again (2026-11-14)
+
+A forward layer lives in memory: a restart loses every one, and a layer that does not fit is not kept. The guard starts
+no sync (C5 brings one), so a consensus client that names a head above such a block got SYNCING for good. Now the node
+executes the stored blocks again on its own, as go-ethereum does when it has the blocks and not their state, and the
+consensus client is answered ACCEPTED or SYNCING meanwhile (`ledger/StateRecovery.scala`, T169; it is in `ledger`, not
+`pathstate` as T169 says, since it executes blocks).
+- **The walk** goes down the head's chain by parent hash to the highest block whose state is held
+  (`PathStateStorage.stateAvailable`, T094: the anchor, a block behind it that its changeset records lead back to, or a
+  block that forward layers lead to from one of those; it reads the window of the anchor's ancestors, builds no index,
+  and is false once the state has failed closed). It covers `state.recovery.max-blocks` blocks, and no more than half of
+  `state.overlay.max-forward-layers` (16 by default): a layer executed must not push out the one below it before that is
+  used, nor every other layer the node keeps (beacon), and the pins of a longer branch are part 4's. Beyond that,
+  `TooLong`; a header or a body that is not stored, nothing executed at all.
+- **The execution**, oldest first, each block through `executeAndValidateBlockFull`, as `newPayload` executes a payload,
+  apart (a forward layer), and **never the head moved**: the next fork choice moves it. Every block is validated in
+  full, before and after its execution (its requests and its access list too), as go-ethereum validates the blocks it
+  recovers; the versioned hashes a consensus client sends are checked by `newPayload` before it looks for the parent,
+  ACCEPTED or not. A block that has receipts and fails now is the node's fault, never the block's (`LocalFault`, ERROR),
+  as is a parent header not found. One never executed that fails a rule of consensus is marked invalid by the Engine
+  API, with every block of the head's chain above it (a node started again remembers no payload of theirs) and what
+  stands on it, its parent the latest valid block; nothing above it is executed. After each block, its state must be
+  held (a layer, or behind the anchor once a fork choice moved the head past it), or the recovery stops (`NotKept`); the
+  state moving under it is walked down to again, once. Once the node is stopping, nothing more is written.
+- **Bounded, never inline**: one daemon thread, `state-recovery`, behind a queue of four heads (`Busy` beyond them); one
+  recovery per head (a head asked for again gets the one under way); a head whose recovery failed is not tried again for
+  12 s. The node closes it on the way down, after the Engine API's server and before the data source: one under way ends
+  after its block, and those waiting are answered `Closed`.
+- **What asks for one** (only on the guard; on the hash layout nothing builds it): a payload ACCEPTED whose parent is
+  stored (its own hash, so the payload is executed too); a fork choice whose head's chain is held up to a block below it
+  (`NotHeld` with `heldTo`: the fork choice answers `NotHeldHead`, the Engine API SYNCING); a fork choice to a head that
+  was stored and never executed, on a parent that is stored. What a recovery executes is kept as `newPayload` keeps an
+  executed payload (receipts, access list, chain weight: `keepExecuted`, one helper for both).
+- **T156** is pinned in process: a node started again on the datadir between `newPayload(B)` and the fork choice to B
+  (the layer gone, no peers) answers the fork choice SYNCING, executes B again, and the next is VALID; in the variant,
+  `newPayload(B+1)` is ACCEPTED (neither VALID nor INVALID) and its fork choice VALID. The child-JVM `kill -9` test on
+  RocksDB with a real consensus client stays T156's (B-255).
+
+**The mutation run**: 23 mutants, all caught. The walk not stopping at a held state, newest first, no bound, a block executed
+before not validated again, one executed before marked invalid, a rejected block not handed over, a block behind the
+anchor taken for one not kept, no dedup, no cool-down, `close` not ending those waiting or not stopping between blocks or
+writing a block finished after it, the fork choice not saying the head is held below, the Engine API not recovering a
+fork choice's head, an ACCEPTED payload or an optimistic head, what a recovery executes not kept, the latest valid
+block not the parent, the chain above a rejected block not marked, a block not kept not noticed, and `stateAvailable`
+not counting a block behind the anchor, a layer, or a state failed closed. One survived the first run (`close` not
+stopping between blocks, once the check after each block landed) and has its case.
+
+**Read after code (beacon)**: **APPROVE WITH CHANGES**, all taken. Nothing can keep a wrong state: every kept layer is held to the header's
+roots, and a recorded execution is reused only while its layer is. Full validation of an ACCEPTED block is sound, and
+the versioned hashes are checked before the parent is looked for (go-ethereum's `ExecutableDataToBlock` does the same).
+Taken:
+- a rejected block takes every block of the head's chain above it with it, its parent the latest valid block, as
+  go-ethereum's `recoverAncestors` answers (a node started again remembers no payload, and its head was SYNCING for good);
+- after each block its state is asked for with `stateAvailable`, so a fork choice that moved the head past it is no "not
+  kept";
+- a recovery covers at most half of the forward-layer budget, so it cannot push out every other layer kept;
+- nothing is written once the node is stopping, and `close` waits two minutes, longer than the slowest block seen;
+- every block is validated in full;
+- a parent header not found is the node's fault, never INVALID.
+Cases added: a restart then a rejection (INVALID with the bad block's parent), a fork choice moving the head past a
+block mid-recovery, a Prague block whose requests are not those its header commits to (`INVALID_REQUESTS`), a fork
+behind the anchor recovered and moved across to, and `close` during an execution. The child-JVM crash test stays
+B-255.
+
 ### Destructive change (C8a and C8b): the vault protocol blocks
 
 ```
