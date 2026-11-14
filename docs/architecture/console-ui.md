@@ -92,7 +92,7 @@ whose slice has not landed shows what the dashboard already reads for it and one
 | `1` | Overview | Peers and blocks, the txpool, endpoints, disk and heap (GC and discovery at L), the sync (SNAP's five worm rows or the Blocks worm, with ETA), the consensus layer (ETH) or the mining (ETC), the forks, the node's settings; at L the top 8 peers by score; the Recent strip of the newest log lines |
 | `2` | Chain | While the node is syncing, the sync's panels lead (the worm rows, SNAP's rates and phase timeline, a regular sync's session and lag). Then the **head** (number, hash, age, transactions, gas, size, base fee; the miner and difficulty on ETC, the fee recipient and slot on ETH) and the rate blocks arrive at; the chain's identity (chain id, network id, genesis hash, fork id) and its forks; the **fees** (base fee and tips, or gas prices on a chain with no base fee); the **reorgs** since the TUI started; and the **Block Observatory**: the newest blocks the node has seen, the gas each used as a chart and as a table. `Up`/`Down` select a block, `Enter` opens it |
 | `3` | Peers | From 100×32 the **peer radar**: this node at the centre and a blip a peer, nearer the centre the faster it answers (rings under 100, 500 and 2,000 ms, then slower, then not measured yet), at an angle fixed by its node id, coloured by its score, shaped by its direction, bold for a second after it answers. No line joins two peers and there is no map: the node knows neither. Then each handshaked peer, highest score first: id, direction, client, best block, age; from M the address and the score, at L the score's trend. `Up`/`Down` select a peer, `Enter` opens its details (with its latency, answers and timeouts, protocol violations), `Esc` returns, `/` filters by id, address or client |
-| `4` | Mempool | The pending count (the rest with spec 029 slice 4) |
+| `4` | Mempool | The **pool** (pending, how full it is, blob transactions, the oldest, those sent from this node) and its **flow** (transactions arriving, mined and dropped a second over the last minute, and replacements); the **Mempool Radar**: the pending transactions in four tiers, urgent to low, by their fee against the fee this node would itself suggest, a bar and a count a tier and the fee each tier starts at; the **senders** with the most pending; what the pool **refused** by reason, **lost** (evicted for room, expired unmined, replaced) and **fetched** (announced, asked for, timed out) since the node started; and the **pending transactions**, best-paying first. `Up`/`Down` select one, `Enter` opens it in the explorer. On a chain with a base fee a fee here is a tip above it; on one without, a gas price. The view says this client keeps no queue: a transaction whose nonce leaves a gap is refused, not held. See [Mempool](#mempool) |
 | `5` | RPC | The endpoints (the rest with slice 5) |
 | `6` | Storage | Disk free, the data directory, the pruning mode (the rest with slice 6) |
 | `7` | System | Heap, GC share, discovery counts (the rest with slice 6) |
@@ -237,6 +237,48 @@ a lost terminal.
 `R` on the Art screen reads them again. A sheet that breaks
 [the contract](https://github.com/chippr-robotics/fukuii/blob/staging/specs/029-tui-command-center/contracts/art.md)
 is named in the log and on the Art screen and left out; its picture is drawn as words.
+
+### Mempool
+
+The pool is read whole only while the Mempool view itself is on screen (not under Help, nor under a screen opened
+over it, such as a transaction in the explorer), and at most once a second however short
+`status-poll-interval-ms` is. At every other time the dashboard asks the pool for its size alone, which copies
+nothing, so watching the node costs the pool nothing it would notice. The first frame after `4` therefore shows the
+count and says the pool is being read; the tiers, the flow and the list arrive with the next poll. A poll the pool
+does not answer keeps the last reading on screen, which says how old it is from three seconds; after five the view
+says it is reading again. With DEBUG logging the node logs one line when the whole-pool reading starts and one when
+it stops.
+
+- **The Mempool Radar** is the row labelled `Radar` and the four bars under it, one a tier.
+- **Tiers.** A transaction's fee is measured against the fee the node's own gas-price oracle would suggest
+  (`eth_maxPriorityFeePerGas` on a chain with a base fee, `eth_gasPrice` on one without): *low* is under half of it,
+  *normal* from half to one and a half times, *high* up to three times, *urgent* above that. The tier counts sum to
+  the pending count. The boundaries are in gwei however small the fees are. While the node has no fee to suggest,
+  no tier is drawn.
+- **Flow.** From one poll to the next the dashboard sees which transactions arrived and which left. One that left
+  while another from its sender with its nonce is pending was *replaced*; of the rest, one the node's transaction
+  index now holds was *mined*, and the others were *dropped*. At most 500 departures are looked up a poll; when more
+  leave at once (a full block out of a full pool) the rest are looked up in the next polls, and the row says how
+  many still wait, so the mined rate is late then, not low. A departure the index could not answer for is counted
+  as never told apart, not as dropped. The rates are over the last minute and need five seconds of watching;
+  before that the row says it is measuring. The replacements count from when the watch began, and the row says how
+  long ago that is: the watch starts again when the view is opened, or when the pool has gone unread for more than
+  five seconds.
+- **What the flow can and cannot see.** A transaction is counted as mined when it has left the pool and the index
+  holds it. The view reports what the pool does: where the pool keeps a transaction that a block already holds,
+  it is still pending here, and when the pool later lets it expire it counts under *expired unmined*, not as
+  mined. A node that follows the chain by regular sync without a consensus client does this today (B-270: the
+  batch import path does not tell the pool which transactions it imported), so on such a node *mined/s* reads low
+  and *expired unmined* reads high.
+- **Counters.** Refusals are named by the admission rule that refused (`Underpriced`, `AlreadyKnown`, `NonceTooLow`,
+  …). They count since the node started, whether or not the dashboard was looking. They are a lower bound: a peer's
+  transaction whose sender has no account, or whose nonce is not the next after the sender's pending ones, is
+  dropped without a named rule and is not counted. *Asked for* counts a hash a request, so a transaction asked of a
+  second peer after the first did not answer is two; *timed out* counts every request nobody answered.
+- **A pending transaction** opens like a mined one, by `Enter` on its row or `:tx <hash>`: the explorer reads the
+  node's index first and then the pool, and says which it found. A pending transaction has no receipt, and the
+  explorer says so. If the pool does not answer within a second the lookup fails and says that; it never reports a
+  transaction as absent because the pool was slow.
 
 ### Explorer
 

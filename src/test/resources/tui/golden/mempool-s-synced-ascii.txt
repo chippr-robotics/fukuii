@@ -4,11 +4,11 @@
  Peers   41/50 ##########         Block  21,884,102 (at head)                   
  Sync    + at head                                                              
 --------------------------------------------------------------------------------
- Mempool                                                                        
- Pending 142                                                                    
+ Pool    142                                                                    
+   reading the pool: it is read whole only while this view is open              
 --------------------------------------------------------------------------------
- Not built yet: fee tiers, flow in and out, senders, replacements               
-                                                                                
+ Refused not counted on this node                                               
+ Queue   not kept by this client                                                
                                                                                 
                                                                                 
                                                                                 

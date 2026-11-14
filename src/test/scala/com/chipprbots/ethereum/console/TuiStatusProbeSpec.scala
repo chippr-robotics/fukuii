@@ -501,8 +501,20 @@ class TuiStatusProbeSpec extends ScalaTestWithActorTestKit with AnyFlatSpecLike 
       0L
     )
 
-  /** The txpool, answering `GetPendingTransactionsReq` with `txs` transactions, `blobs` of them carrying a sidecar. */
-  private def txPool(txs: Int, blobs: Int): Behavior[PendingTransactionsManager.Command] =
+  /** How often a [[txPool]] was asked for its size, and for all of its transactions. */
+  final private class PoolAsks:
+    val size = new java.util.concurrent.atomic.AtomicInteger
+    val whole = new java.util.concurrent.atomic.AtomicInteger
+
+  /** The txpool: `txs` transactions, `blobs` of them carrying a sidecar, and room for 4,096. It answers
+    * `GetPoolSizeReq` with the counts and `GetPendingTransactionsReq` with the transactions, and counts each asking.
+    */
+  private def txPool(
+      txs: Int,
+      blobs: Int,
+      asks: PoolAsks = new PoolAsks,
+      answersWhole: () => Boolean = () => true
+  ): Behavior[PendingTransactionsManager.Command] =
     // Signed here, before the probe's wait starts: a first signing on a cold JVM can outlast the 300 ms wait.
     val response = PendingTransactionsManager.PendingTransactionsResponse(
       (0 until txs).map(pendingTx),
@@ -510,7 +522,12 @@ class TuiStatusProbeSpec extends ScalaTestWithActorTestKit with AnyFlatSpecLike 
     )
     Behaviors.receiveMessage {
       case PendingTransactionsManager.GetPendingTransactionsReq(replyTo) =>
-        replyTo ! response
+        asks.whole.incrementAndGet()
+        if answersWhole() then replyTo ! response
+        Behaviors.same
+      case PendingTransactionsManager.GetPoolSizeReq(replyTo) =>
+        asks.size.incrementAndGet()
+        replyTo ! PendingTransactionsManager.PoolSize(txs, blobs, 4096)
         Behaviors.same
       case _ => Behaviors.same
     }
@@ -518,7 +535,9 @@ class TuiStatusProbeSpec extends ScalaTestWithActorTestKit with AnyFlatSpecLike 
   private def detailedProbe(
       details: Option[Behavior[NetworkPeerManagerActor.Command]] = None,
       pool: Option[Behavior[PendingTransactionsManager.Command]] = None,
-      local: TuiStatusProbe.LocalSources = TuiStatusProbe.LocalSources()
+      local: TuiStatusProbe.LocalSources = TuiStatusProbe.LocalSources(),
+      poolWanted: () => Boolean = () => false,
+      probeClock: java.time.Clock = clock
   ) =
     new TuiStatusProbe(
       spawn(peerManager(PeerActor.Status.Handshaked)),
@@ -527,15 +546,188 @@ class TuiStatusProbeSpec extends ScalaTestWithActorTestKit with AnyFlatSpecLike 
       50,
       () => None,
       300.millis,
-      clock,
+      probeClock,
       local,
       networkPeerManager = details.map(spawn(_)),
-      txPool = pool.map(spawn(_))
+      txPool = pool.map(spawn(_)),
+      poolWanted = poolWanted
     )(using system.scheduler)
 
-  it should "carry the txpool's size and its blob count from PendingTransactionsResponse (T089)" taggedAs (UnitTest) in {
+  it should "carry the txpool's size, its blob count and its capacity from the pool's own count (T089, B-196)" taggedAs (
+    UnitTest
+  ) in {
     detailedProbe(pool = Some(txPool(txs = 3, blobs = 1)))().txpool shouldBe
-      Some(Sourced.Fresh(TxpoolSample(size = 3, blobs = 1), now))
+      Some(Sourced.Fresh(TxpoolSample(size = 3, blobs = 1, capacity = Some(4096)), now))
+  }
+
+  // Spec 029 FR-037: watching the pool must not burden it.
+  it should "never ask for the pool's transactions while the Mempool view is not on screen" taggedAs (UnitTest) in {
+    val asks = new PoolAsks
+    val p = detailedProbe(pool = Some(txPool(txs = 3, blobs = 1, asks)))
+    val snapshots = Seq(p(), p(), p())
+    asks.whole.get shouldBe 0
+    asks.size.get shouldBe 3
+    all(snapshots.map(_.pool)) shouldBe None
+  }
+
+  it should "read the pool whole, once a poll, while the Mempool view is on screen, and stop when it is not" taggedAs (
+    UnitTest
+  ) in {
+    val asks = new PoolAsks
+    val wanted = new java.util.concurrent.atomic.AtomicBoolean(true)
+    val time = new TuiFixtures.TestClock(now)
+    val p = detailedProbe(
+      pool = Some(txPool(txs = 3, blobs = 1, asks)),
+      local = TuiStatusProbe.LocalSources(suggestedFee = () => Some(BigInt(1)), poolCapacity = 4096),
+      poolWanted = () => wanted.get,
+      probeClock = time
+    )
+    val open = p()
+    (asks.whole.get, asks.size.get) shouldBe (1, 0) // one read gives the list and the count
+    val pool = open.pool.get
+    (pool.size, pool.capacity, pool.suggested) shouldBe (3, 4096, Some(BigInt(1)))
+    pool.txs.map(_.nonce) should contain theSameElementsAs Seq(0, 1, 2).map(BigInt(_))
+    // Every transaction pays the suggestion of 1 wei: all in the tier around it.
+    pool.tiers shouldBe Map(FeeTier.Normal -> 3)
+    open.txpool shouldBe Some(Sourced.Fresh(TxpoolSample(3, 1, Some(4096)), now))
+    time.advance(1)
+    p().pool.map(_.at) shouldBe Some(now.plusSeconds(1))
+    asks.whole.get shouldBe 2
+    wanted.set(false)
+    time.advance(1)
+    val closed = p()
+    (asks.whole.get, asks.size.get) shouldBe (2, 1)
+    closed.pool shouldBe None
+    closed.txpool shouldBe Some(Sourced.Fresh(TxpoolSample(3, 1, Some(4096)), now.plusSeconds(2)))
+  }
+
+  // prism, slice 4: the probe's period can be set as low as 100 ms, and the whole pool was then copied ten times a
+  // second. FR-037 says at most once.
+  it should "read the pool whole at most once a second however often it polls, and show the last reading between" taggedAs (
+    UnitTest
+  ) in {
+    val asks = new PoolAsks
+    val time = new TuiFixtures.TestClock(now)
+    val p = detailedProbe(pool = Some(txPool(txs = 3, blobs = 1, asks)), poolWanted = () => true, probeClock = time)
+    p().pool.map(_.at) shouldBe Some(now)
+    for _ <- 1 to 9 do
+      time.advanceMillis(100)
+      val between = p()
+      between.pool.map(_.at) shouldBe Some(now) // the last reading, which says when it was read
+      between.txpool.flatMap(_.value) shouldBe Some(TxpoolSample(3, 1, Some(4096))) // the count is still asked
+    asks.whole.get shouldBe 1
+    time.advanceMillis(100)
+    p().pool.map(_.at) shouldBe Some(now.plusSeconds(1))
+    asks.whole.get shouldBe 2
+  }
+
+  it should "leave the pool unread, not empty, when the whole pool does not answer" taggedAs (UnitTest) in {
+    val s = detailedProbe(pool = Some(silent.narrow[PendingTransactionsManager.Command]), poolWanted = () => true)()
+    s.pool shouldBe None
+    s.txpool shouldBe Some(Sourced.Unresponsive("no reply within 300ms"))
+  }
+
+  // prism, slice 4: one missed answer emptied the view for a poll; the pool is busiest exactly while a block imports.
+  it should "keep the last reading through a poll the pool does not answer, and give it up after five seconds" taggedAs (
+    UnitTest
+  ) in {
+    val answers = new java.util.concurrent.atomic.AtomicBoolean(true)
+    val time = new TuiFixtures.TestClock(now)
+    val p = detailedProbe(
+      pool = Some(txPool(txs = 3, blobs = 1, answersWhole = () => answers.get)),
+      poolWanted = () => true,
+      probeClock = time
+    )
+    p().pool.map(_.at) shouldBe Some(now)
+    answers.set(false)
+    for _ <- 1 to 5 do
+      time.advance(1)
+      p().pool.map(_.at) shouldBe Some(now) // the reading of then, with its time: the view says how old it is
+    time.advance(1)
+    p().pool shouldBe None // six seconds old: the observer would not compare against it any more
+    answers.set(true)
+    time.advance(1)
+    val again = p().pool.get
+    again.at shouldBe now.plusSeconds(7)
+    again.watchedSince shouldBe now.plusSeconds(7) // a new watch: what moved meanwhile was not seen
+  }
+
+  // prism, slice 4: a read that threw was taken for an answer of "no".
+  it should "not take a failed read for an answer: no fee is no tier, and an unread index is not a drop" taggedAs (
+    UnitTest
+  ) in {
+    val time = new TuiFixtures.TestClock(now)
+    val held = new java.util.concurrent.atomic.AtomicBoolean(true)
+    val pool: Behavior[PendingTransactionsManager.Command] =
+      val full = PendingTransactionsManager.PendingTransactionsResponse((0 until 3).map(pendingTx), Map.empty)
+      val less = PendingTransactionsManager.PendingTransactionsResponse(full.pendingTransactions.take(1), Map.empty)
+      Behaviors.receiveMessage {
+        case PendingTransactionsManager.GetPendingTransactionsReq(replyTo) =>
+          replyTo ! (if held.get then full else less)
+          Behaviors.same
+        case _ => Behaviors.same
+      }
+    val p = detailedProbe(
+      pool = Some(pool),
+      local = TuiStatusProbe.LocalSources(
+        suggestedFee = () => throw new IllegalStateException("oracle"),
+        isMined = _ => throw new java.io.IOException("the store is closed")
+      ),
+      poolWanted = () => true,
+      probeClock = time
+    )
+    val first = p().pool.get
+    (first.suggested, first.tiers) shouldBe (None, Map.empty)
+    held.set(false)
+    time.advance(1)
+    val second = p().pool.get
+    second.size shouldBe 1
+    // Two left, and the index could not say what became of them.
+    (second.leftUnchecked, second.awaiting) shouldBe (2L, 0)
+    time.advance(5)
+    p().pool.get.droppedPerSecond shouldBe Some(0.0)
+  }
+
+  it should "ask only for the count when it cannot tell whether the Mempool view is on screen" taggedAs (UnitTest) in {
+    val asks = new PoolAsks
+    val s = detailedProbe(
+      pool = Some(txPool(txs = 3, blobs = 1, asks)),
+      poolWanted = () => throw new IllegalStateException("no state")
+    )()
+    (asks.whole.get, asks.size.get) shouldBe (0, 1)
+    s.pool shouldBe None
+  }
+
+  it should "carry the pool's counters, and none on a node that does not count" taggedAs (UnitTest) in {
+    val counted =
+      com.chipprbots.ethereum.transactions.TxPoolMetrics.Snapshot(Map("AlreadyKnown" -> 2L), 1, 0, 0, 5, 4, 0)
+    detailedProbe(local = TuiStatusProbe.LocalSources(poolCounters = () => Some(counted)))().local.poolCounters shouldBe
+      Some(counted)
+    detailedProbe()().local.poolCounters shouldBe None
+  }
+
+  "A pending transaction's fee" should "be its gas price on a chain with no base fee, and what it offers above one" taggedAs (
+    UnitTest
+  ) in {
+    val pending = pendingTx(7)
+    val plain = TuiStatusProbe.poolTx(pending, None)
+    (plain.nonce, plain.tip, plain.feeCap, plain.isBlob, plain.local) shouldBe (
+      BigInt(7),
+      BigInt(1),
+      BigInt(1),
+      false,
+      false
+    )
+    plain.hash shouldBe "0x" + pending.stx.tx.hash.value.toArray.map("%02x".format(_)).mkString
+    plain.sender shouldBe "0x" + Address(keyPair).bytes.toArray.map("%02x".format(_)).mkString
+    // A legacy transaction pays its gas price whatever the base fee: what is left above it is its tip, never negative.
+    val rich = LegacyTransaction(1, GasPrice(100), GasAmount(21_000), Address("0x1234"), 0, ByteString())
+    val richPending = PendingTransactionsManager.PendingTransaction(
+      SignedTransactionWithSender(SignedTransaction.sign(rich, keyPair, None), Address(keyPair)),
+      0L
+    )
+    TuiStatusProbe.poolTx(richPending, Some(BigInt(30))).tip shouldBe BigInt(70)
+    TuiStatusProbe.poolTx(pending, Some(BigInt(30))).tip shouldBe BigInt(0)
   }
 
   it should "say the txpool is Unresponsive when it does not answer, and leave it unasked when not wired" taggedAs (

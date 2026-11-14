@@ -47,6 +47,8 @@ import com.chipprbots.ethereum.network.StaticNodesLoader
 import com.chipprbots.ethereum.network.discovery.PeerDiscoveryManager
 import com.chipprbots.ethereum.nodebuilder.tooling.PeriodicConsistencyCheck
 import com.chipprbots.ethereum.nodebuilder.tooling.StorageConsistencyChecker
+import com.chipprbots.ethereum.transactions.PendingTransactionsManager
+import com.chipprbots.ethereum.transactions.TxPoolMetrics
 import com.chipprbots.ethereum.utils.BuildInfo
 import com.chipprbots.ethereum.utils.Config
 import com.chipprbots.ethereum.utils.Hex
@@ -157,6 +159,27 @@ abstract class BaseNode extends Node:
     startPeriodicDBConsistencyCheck()
     startTuiUpdater()
     tuiStarted(StartupPhase.Checks)
+
+  /** The pool's transaction with `hash`, for the TUI's explorer: one ask of the pending transactions manager, waited
+    * for at most a second on the caller's thread (the TUI's lookup worker, never the frame loop).
+    */
+  private def pendingFromPool(hash: ByteString): Option[ChainLookups.Pending] =
+    import org.apache.pekko.actor.typed.scaladsl.AskPattern.*
+    given org.apache.pekko.util.Timeout = org.apache.pekko.util.Timeout(1.second)
+    given org.apache.pekko.actor.typed.Scheduler = system.scheduler
+    val asked = pendingTransactionsManagerTyped.ask[PendingTransactionsManager.PendingTransactionsResponse](
+      PendingTransactionsManager.GetPendingTransactionsReq(_)
+    )
+    // A pool that does not answer is not a pool without the transaction: the lookup fails with the reason, and the
+    // explorer shows it.
+    val pool =
+      try Await.result(asked, 1.second)
+      catch
+        case _: java.util.concurrent.TimeoutException =>
+          throw new IllegalStateException("the transaction is not in a block, and the pool did not answer within 1 s")
+    pool.pendingTransactions
+      .find(_.stx.tx.hash.value == hash)
+      .map(p => ChainLookups.Pending(p.stx.tx, p.stx.senderAddress, p.addTimestamp, p.receivedFromLocalSource))
 
   /** Tells the TUI, if there is one, that `phase` of the start has completed: its splash marks the phase done (spec 029
     * FR-020). Display only; it changes nothing the node does, and a node without `--tui` has no TUI to tell.
@@ -419,6 +442,16 @@ abstract class BaseNode extends Node:
             bodyByHash = blockchainReader.getBlockBodyByHash
           )
         ),
+        // Spec 029 slice 4, the Mempool view. The fee is the oracle's, which `eth_maxPriorityFeePerGas` answers with
+        // (a gas price on a chain with no base fee), cached by head. A transaction that left the pool is looked up in
+        // the transaction index to tell mined from dropped. Display only.
+        suggestedFee = () => Some(gasPriceOracle.suggestTipCap()),
+        isMined = hash =>
+          ChainReads
+            .bytes(hash)
+            .exists(b => storagesInstance.storages.transactionMappingStorage.get(b.toIndexedSeq).isDefined),
+        poolCapacity = txPoolConfig.txPoolSize,
+        poolCounters = () => Some(TxPoolMetrics.Node.snapshot),
         // The fork id the handshake tells a peer (EIP-2124, EIP-6122), computed the same way, for display.
         forkId = () =>
           blockchainReader.getBestBlockHeader.map { head =>
@@ -447,7 +480,9 @@ abstract class BaseNode extends Node:
               .map(location => (location.blockHash, location.txIndex)),
           accountAt = blockchainReader.accountAt,
           codeSize = hash => storagesInstance.storages.evmCodeStorage.get(hash).map(_.size),
-          sender = stx => SignedTransaction.getSender(stx)(using blockchainConfig)
+          sender = stx => SignedTransaction.getSender(stx)(using blockchainConfig),
+          // A pending transaction opens too (FR-036): the pool is asked, on the lookup worker's thread, with a bound.
+          pending = hash => pendingFromPool(hash)
         )
       )
       // The genesis block is loaded by now: its hash completes the chain's identity (spec 029 FR-027).
@@ -465,7 +500,9 @@ abstract class BaseNode extends Node:
         local = local,
         // Spec 027 slice 4: each peer's client id and best block, and the txpool; asked in the same bounded wait.
         networkPeerManager = Some(networkPeerManager),
-        txPool = Some(pendingTransactionsManagerTyped)
+        txPool = Some(pendingTransactionsManagerTyped),
+        // The whole pool is read only while the Mempool view is on screen (FR-037).
+        poolWanted = () => tui.wantsPool
       )(using system.scheduler)
       // Polling ends with the TUI: after `d`, a lost terminal or a failed key read, nothing reads the snapshots.
       val thread = new TuiProbeThread(probe, tui.config.statusPollIntervalMs, tuiSnapshots, () => tui.isEnabled)

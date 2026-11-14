@@ -670,6 +670,91 @@ object TuiFixtures:
       )
     )
 
+  // ---- The pool as the pool observer saw it (spec 029 slice 4) ------------------------------------------------------
+
+  /** `count` pending transactions from 23 senders: tips from a twentieth of `suggested` to four times it, so every tier
+    * holds some; every 17th carries a blob where `blobs`, every 29th was sent from this node. With `baseFee` the tip is
+    * what a transaction offers above it and its cap is higher; without, its cap is its gas price.
+    */
+  def poolTxs(count: Int, suggested: BigInt, blobs: Boolean = false, baseFee: Boolean = false): Vector[PoolTx] =
+    (0 until count).map { i =>
+      val tip = suggested * (1 + (i * 37) % 80) / 20
+      PoolTx(
+        hash = f"0x${(i * 2_654_435_761L + 0x7c11L) & 0xffffffffL}%08x" + "0" * 48 + f"$i%08x",
+        sender = f"0x${((i % 23) * 40_503L + 0x51e2L) & 0xffffL}%04x" + "0" * 32 + f"${i % 23}%04x",
+        nonce = BigInt(40 + i / 23),
+        tip = tip,
+        feeCap = if baseFee then tip + suggested * 12 else tip,
+        isBlob = blobs && i % 17 == 3,
+        local = i % 29 == 5,
+        addedAt = Now.minusSeconds(2L + (i * 13L) % 900)
+      )
+    }.toVector
+
+  /** The pool's sample of `txs`, made by the observer itself, with the rates of a minute's watching. */
+  def poolSample(txs: Vector[PoolTx], suggested: Option[BigInt], capacity: Int = 4096): PoolSample =
+    PoolObserver
+      .observe(PoolObserver.State(), txs, _ => Some(false), suggested, capacity, Now)
+      ._2
+      .copy(
+        arrivedPerSecond = Some(3.42),
+        includedPerSecond = Some(2.9),
+        droppedPerSecond = Some(0.05),
+        watchedSince = Now.minusSeconds(192),
+        replaced = 7L
+      )
+
+  val poolCounters: com.chipprbots.ethereum.transactions.TxPoolMetrics.Snapshot =
+    com.chipprbots.ethereum.transactions.TxPoolMetrics.Snapshot(
+      rejected = Map("Underpriced" -> 1_204L, "AlreadyKnown" -> 311L, "NonceTooLow" -> 58L, "NonceTooFarAhead" -> 4L),
+      evicted = 12L,
+      expired = 96L,
+      replaced = 41L,
+      announced = 184_220L,
+      fetchRequested = 9_310L,
+      fetchTimedOut = 27L
+    )
+
+  /** `state` with the pool read whole, and the pool's counters. */
+  def withPool(state: TuiState, pool: PoolSample): TuiState =
+    val s = withLocal(state, _.copy(poolCounters = Some(poolCounters)))
+    s.copy(snapshot =
+      s.snapshot.map(
+        _.copy(
+          pool = Some(pool),
+          txpool = Some(Sourced.Fresh(TxpoolSample(pool.size, pool.blobs, Some(pool.capacity)), s.now))
+        )
+      )
+    )
+
+  /** [[syncedEtc]] with 142 pending transactions against a suggested gas price of 1 gwei. */
+  def mempoolEtc(glyphs: GlyphSet = GlyphSet.Emoji): TuiState =
+    val suggested = BigInt(1_000_000_000L)
+    withPool(syncedEtc(glyphs), poolSample(poolTxs(142, suggested), Some(suggested)))
+
+  /** [[observedSepolia]] (the head has a base fee) with 1,240 pending transactions, some with blobs: more than the view
+    * lists.
+    */
+  def mempoolSepolia(glyphs: GlyphSet = GlyphSet.Emoji): TuiState =
+    val suggested = BigInt(1_500_000_000L)
+    withPool(
+      observedSepolia(glyphs),
+      poolSample(poolTxs(1_240, suggested, blobs = true, baseFee = true), Some(suggested))
+    )
+
+  /** [[syncedEtc]] with the pool read and nothing in it, nothing refused, and no fee to suggest yet. */
+  def mempoolEmptyEtc(glyphs: GlyphSet = GlyphSet.Emoji): TuiState =
+    val s = withPool(
+      syncedEtc(glyphs),
+      PoolObserver.observe(PoolObserver.State(), Nil, _ => Some(false), None, 4096, Now)._2
+    )
+    withLocal(
+      s,
+      _.copy(poolCounters =
+        Some(com.chipprbots.ethereum.transactions.TxPoolMetrics.Snapshot(Map.empty, 0, 0, 0, 0, 0, 0))
+      )
+    )
+
   // ---- The alert fixtures (spec 027 T066, research §3.9) ------------------------------------------------------------
 
   /** [[syncedEtc]] with no peer for 4m 12s. */

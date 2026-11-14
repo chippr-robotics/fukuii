@@ -68,7 +68,10 @@ judged on enlarged renders and mock screens ([art-preview/](./art-preview/)).
 
 1. `4` on a node receiving transactions: the tier counts sum to the pending count; the boundaries are in gwei.
 2. Send a transaction, then replace it with a higher fee: one replacement is counted.
-3. Leave the Mempool view: the debug log shows no further full pool reads.
+3. With DEBUG logging, enter and leave the Mempool view: the log has one line when the whole-pool reading starts
+   and one when it stops, and `Enter` on a transaction (the explorer over the view) stops it too.
+4. `Enter` on a pending transaction: the explorer says it is pending and for how long; `:receipt <its hash>` says a
+   pending transaction has no receipt. Once it is mined, `r` shows it in its block.
 
 ## Slice 5: RPC and the consensus-client link
 

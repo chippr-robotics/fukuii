@@ -37,6 +37,9 @@ import com.chipprbots.ethereum.utils.Logger
   *   the size of the code with this hash
   * @param sender
   *   a transaction's sender, recovered from its signature
+  * @param pending
+  *   the transaction with this hash, if the pool holds it (spec 029 FR-036). It throws when the pool cannot be asked:
+  *   that is not an answer of "no", and the lookup fails with the reason
   */
 final class ChainLookups(
     bestHeader: () => Option[BlockHeader],
@@ -48,7 +51,8 @@ final class ChainLookups(
     accountAt: (BlockHeader, Address) => Option[Account],
     codeSize: ByteString => Option[Int],
     sender: SignedTransaction => Option[Address],
-    now: () => Instant = () => Instant.now()
+    now: () => Instant = () => Instant.now(),
+    pending: ByteString => Option[ChainLookups.Pending] = _ => None
 ) extends (LookupQuery => Either[String, LookupResult])
     with Logger:
 
@@ -62,8 +66,21 @@ final class ChainLookups(
       hash32(hash, "a block hash").flatMap { bytes =>
         headerByHash(BlockHash(bytes)).toRight("the node has no block with this hash").flatMap(block)
       }
-    case LookupQuery.Tx(hash)      => located(hash).map((header, stx, index) => tx(header, stx, index))
-    case LookupQuery.Receipt(hash) => located(hash).flatMap((header, stx, index) => receipt(header, stx, index))
+    // Mined first, then the pool: a transaction opens whether it is in a block or still pending (FR-036).
+    // What the index's own read said is kept when the pool does not hold the transaction either.
+    case LookupQuery.Tx(hash) =>
+      located(hash)
+        .map((header, stx, index) => tx(header, stx, index))
+        .left
+        .flatMap(why => pendingTx(hash).toRight(why))
+    case LookupQuery.Receipt(hash) =>
+      located(hash)
+        .flatMap((header, stx, index) => receipt(header, stx, index))
+        .left
+        .map(why =>
+          if pendingTx(hash).isDefined then "this transaction is pending: it has no receipt until it is in a block"
+          else why
+        )
     case LookupQuery.Account(address) =>
       for
         bytes <- ChainReads.bytes(address).filter(_.length == 20).toRight("an address is 0x and 40 hexadecimal digits")
@@ -128,13 +145,34 @@ final class ChainLookups(
   private def located(hash: String): Either[String, (BlockHeader, SignedTransaction, Int)] =
     for
       bytes <- hash32(hash, "a transaction hash")
-      (blockHash, index) <- txLocation(bytes).toRight(
-        "no transaction with this hash is in the node's index: it is not in a block the node imported, or is pending"
-      )
+      (blockHash, index) <- txLocation(bytes).toRight(NotFound)
       header <- headerByHash(BlockHash(blockHash)).toRight("the transaction's block is no longer in the node")
       body <- bodyByHash(BlockHash(blockHash)).toRight("the body of the transaction's block is not stored")
       stx <- body.transactionList.lift(index).toRight("the transaction index points past its block's transactions")
     yield (header, stx, index)
+
+  private val NotFound =
+    "no transaction with this hash is in the node's index or in its pool: it is not in a block the node imported"
+
+  /** The pool's transaction with `hash`: what it would pay is against the head's base fee, since it has no block. */
+  private def pendingTx(hash: String): Option[LookupResult] =
+    for
+      bytes <- ChainReads.bytes(hash).filter(_.length == 32)
+      p <- pending(bytes)
+    yield
+      val baseFee = bestHeader().flatMap(_.baseFee)
+      val shown = TxLine(
+        -1,
+        hex(p.stx.hash.value),
+        Some(hex(p.sender.bytes)),
+        p.stx.tx.receivingAddress.map(a => hex(a.bytes)),
+        p.stx.tx.value,
+        Transaction.effectiveGasPrice(p.stx.tx, baseFee),
+        p.stx.tx.gasLimit.value,
+        kind(p.stx.tx),
+        caps(p.stx.tx)
+      )
+      LookupResult.PendingTx(shown, p.stx.tx.nonce, p.stx.tx.payload.size, Instant.ofEpochMilli(p.addedMillis), p.local)
 
   private def tx(header: BlockHeader, stx: SignedTransaction, index: Int): LookupResult =
     LookupResult.Tx(
@@ -177,3 +215,10 @@ final class ChainLookups(
         stx.tx.receivingAddress.map(a => hex(a.bytes)),
         contract
       )
+
+object ChainLookups:
+
+  /** A transaction in the pool: its sender as the pool recovered it, when it was added, and whether it was submitted to
+    * this node.
+    */
+  final case class Pending(stx: SignedTransaction, sender: Address, addedMillis: Long, local: Boolean)

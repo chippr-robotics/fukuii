@@ -64,7 +64,8 @@ class ExplorerSpec
         if address == contract then Some(Account(nonce = UInt256(1), balance = UInt256(5), codeHash = contractCode))
         else if address == senderOf then
           Some(Account(nonce = UInt256(7), balance = UInt256(BigInt("1250000000000000000"))))
-        else None
+        else None,
+      pending: ByteString => Option[ChainLookups.Pending] = _ => None
   ): ChainLookups =
     new ChainLookups(
       bestHeader = () => best,
@@ -79,8 +80,30 @@ class ExplorerSpec
       accountAt = accountAt,
       codeSize = hash => Option.when(hash == contractCode.value)(2_048),
       sender = _ => Some(senderOf),
-      now = () => TuiFixtures.Now
+      now = () => TuiFixtures.Now,
+      pending = pending
     )
+
+  /** A transaction that is in the pool and in no block: signed with a fixed key, so its hash is the same every run. */
+  private lazy val pooled: ChainLookups.Pending =
+    val key = com.chipprbots.ethereum.crypto.keyPairFromPrvKey(BigInt(0x1234567890abcdefL))
+    val tx = com.chipprbots.ethereum.domain.LegacyTransaction(
+      41,
+      com.chipprbots.ethereum.domain.GasPrice(BigInt(2_000_000_000L)),
+      com.chipprbots.ethereum.domain.GasAmount(21_000),
+      contract,
+      BigInt("1500000000000000000"),
+      ByteString()
+    )
+    ChainLookups.Pending(
+      com.chipprbots.ethereum.domain.SignedTransaction.sign(tx, key, Some(BigInt(61))),
+      Address(key),
+      TuiFixtures.Now.minusSeconds(95).toEpochMilli,
+      local = true
+    )
+  private lazy val pooledHash = ChainReads.hex(pooled.stx.hash.value)
+  private def inPool(hash: ByteString): Option[ChainLookups.Pending] =
+    Option.when(hash == pooled.stx.hash.value)(pooled)
 
   private lazy val contractCode = com.chipprbots.ethereum.domain.CodeHash(ByteString(Array.fill[Byte](32)(7)))
 
@@ -133,6 +156,48 @@ class ExplorerSpec
       "no transaction with this hash is in the node's index"
     )
     lookups(withBody = false)(LookupQuery.Tx(txHashes(0))).left.value should include("body")
+  }
+
+  // Spec 029 FR-036: a transaction opens whether it is mined or still pending.
+  it should "be found in the pool when no block holds it, as pending and with what the pool knows of it" taggedAs (
+    UnitTest
+  ) in {
+    lookups(pending = inPool)(LookupQuery.Tx(pooledHash)).value match
+      case LookupResult.PendingTx(line, nonce, input, addedAt, local) =>
+        line.hash shouldBe pooledHash
+        line.from shouldBe Some(ChainReads.hex(pooled.sender.bytes))
+        line.to shouldBe Some(ChainReads.hex(contract.bytes))
+        line.gasPrice shouldBe BigInt(2_000_000_000L)
+        line.feeCaps shouldBe None
+        (nonce, input, local) shouldBe (BigInt(41), 0, true)
+        addedAt shouldBe TuiFixtures.Now.minusSeconds(95)
+      case other => fail(s"not a pending transaction: $other")
+    // Without the pool it is nowhere, and the sentence names both places looked in.
+    lookups()(LookupQuery.Tx(pooledHash)).left.value should include("in the node's index or in its pool")
+    // A pending transaction has no receipt: the miss says why.
+    lookups(pending = inPool)(LookupQuery.Receipt(pooledHash)).left.value shouldBe
+      "this transaction is pending: it has no receipt until it is in a block"
+    // A mined transaction whose block's body is gone says that, pool or no pool.
+    lookups(withBody = false, pending = inPool)(LookupQuery.Tx(txHashes(0))).left.value should include("body")
+  }
+
+  // prism, slice 4: a pool too slow to answer was taken for a pool without the transaction, and the explorer said the
+  // transaction was nowhere.
+  it should "fail with the pool's own reason when the pool cannot be asked, and never say the transaction is nowhere" taggedAs (
+    UnitTest
+  ) in {
+    val silent = lookups(pending = _ => throw new IllegalStateException("the pool did not answer within 1 s"))
+    (the[IllegalStateException] thrownBy silent(LookupQuery.Tx(pooledHash)) should have)
+      .message("the pool did not answer within 1 s")
+    // The lookup worker turns what a read throws into the screen's sentence (`LookupsSpec`).
+    // A mined transaction is read from its block and never asks the pool.
+    silent(LookupQuery.Tx(txHashes(2))).value shouldBe a[LookupResult.Tx]
+  }
+
+  it should "be read from its block, not from the pool, once it is mined" taggedAs (UnitTest) in {
+    // The pool still holds a transaction the index already has (it leaves the pool a moment after import).
+    val both = lookups(pending = _ => Some(pooled.copy(stx = body.transactionList(2))))
+    both(LookupQuery.Tx(txHashes(2))).value shouldBe a[LookupResult.Tx]
   }
 
   "A receipt" should "give the transaction's own gas, its status and its logs" taggedAs (UnitTest) in {
@@ -307,6 +372,10 @@ class ExplorerSpec
       LookupQuery.Account(ChainReads.hex(contract.bytes)),
       done(LookupQuery.Account(ChainReads.hex(contract.bytes)))
     ),
+    "pending" -> screen(
+      LookupQuery.Tx(pooledHash),
+      LookupState.Done(lookups(pending = inPool)(LookupQuery.Tx(pooledHash)).value)
+    ),
     "missing" -> screen(LookupQuery.BlockByNumber(5), LookupState.Failed("the node has no block 5")),
     "slow" -> screen(LookupQuery.LatestBlock, LookupState.Running(TuiFixtures.Now.minusSeconds(7)))
   )
@@ -320,6 +389,23 @@ class ExplorerSpec
       all(lines.map(_.columnLength())) shouldBe w
       matchGolden(file, visibleFrame(lines))
     }
+
+  "A pending transaction's screen" should "say it is pending, for how long, where it came from, and link its addresses" taggedAs (
+    UnitTest
+  ) in {
+    val query = LookupQuery.Tx(pooledHash)
+    val s = screen(query, LookupState.Done(lookups(pending = inPool)(query).value))
+    val shown = text(s)
+    shown should include("pending: in this node's pool for 1m 35s, in no block yet")
+    shown should include("submitted to this node")
+    shown should include("2.00 gwei")
+    (shown should not).include("base fee") // a legacy transaction pays its gas price whatever the block
+    (shown should not).include("receipt")
+    panels.ExplorerPanels.links(lookups(pending = inPool)(query).value).map(_.query) shouldBe Vector(
+      LookupQuery.Account(ChainReads.hex(pooled.sender.bytes)),
+      LookupQuery.Account(ChainReads.hex(contract.bytes))
+    )
+  }
 
   // prism, slice 3: a value too long for its row lost the value and kept the label. An early ETC receipt's status is a
   // state root: 76 characters.

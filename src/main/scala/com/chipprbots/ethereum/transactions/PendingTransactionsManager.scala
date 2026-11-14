@@ -114,6 +114,16 @@ object PendingTransactionsManager:
   // Typed ask (used by EngineApiService, BlockchainHostActor — in-scope callers):
   case class GetPendingTransactionsReq(replyTo: ActorRef[PendingTransactionsResponse]) extends Command
 
+  /** How many transactions the pool holds, without copying them (B-196). */
+  case class GetPoolSizeReq(replyTo: ActorRef[PoolSize]) extends Command
+
+  /** @param blobs
+    *   the pooled transactions that carry a blob sidecar
+    * @param capacity
+    *   the most the pool holds (`tx-pool-size`)
+    */
+  case class PoolSize(size: Int, blobs: Int, capacity: Int)
+
   // Legacy Classic case object — NOT a Command — used only by the Classic bridge actor in NodeBuilder
   // which translates it to GetPendingTransactionsReq for out-of-scope callers.
   case object GetPendingTransactions
@@ -149,7 +159,8 @@ object PendingTransactionsManager:
       blockchainReader: com.chipprbots.ethereum.domain.BlockchainReader = null,
       stateStorage: com.chipprbots.ethereum.db.storage.StateStorage = null,
       chainConfig: BlockchainConfig = Config.blockchains.blockchainConfig,
-      txGossipGate: TxGossipGate = TxGossipGate.alwaysOpen
+      txGossipGate: TxGossipGate = TxGossipGate.alwaysOpen,
+      metrics: TxPoolMetrics = TxPoolMetrics.Node
   ): Behavior[Command] = Behaviors.setup { context =>
 
     given blockchainConfig: BlockchainConfig = chainConfig
@@ -242,6 +253,11 @@ object PendingTransactionsManager:
               if notification.wasEvicted() then
                 context.log
                   .debug("Evicting transaction: {} due to {}", notification.getKey.toHex, notification.getCause)
+                // Counted, for the dashboard (spec 029 FR-034): pushed out for room, or aged out unmined.
+                notification.getCause match
+                  case RemovalCause.SIZE    => metrics.evicted()
+                  case RemovalCause.EXPIRED => metrics.expired()
+                  case _                    => ()
               knownTransactions.remove(notification.getKey)
               dropSidecar(notification.getKey)
               authoritiesByTx -= notification.getKey
@@ -289,6 +305,7 @@ object PendingTransactionsManager:
           networkForm.length,
           budget
         )
+        metrics.rejected(TxPoolMetrics.SidecarOverBudget)
         pendingTransactions.invalidate(hash)
         dropSidecar(hash)
       else
@@ -300,6 +317,9 @@ object PendingTransactionsManager:
           context.log.debug("Blob sidecar budget of {} bytes reached: evicting blob tx {}", budget, oldest.toHex)
           // dropSidecar first: progress is guaranteed even for a sidecar whose tx has somehow already left the pool.
           dropSidecar(oldest)
+          // Pushed out for room, like a transaction past the pool's size: the cache calls this removal explicit, so
+          // its listener does not count it.
+          metrics.evicted()
           pendingTransactions.invalidate(oldest)
 
     /** Whether to process a peer's tx message. When not, the message is dropped whole: nothing requested, stored or
@@ -408,6 +428,7 @@ object PendingTransactionsManager:
         .collect { case ((hash, txType), size) if !pool.containsKey(hash) => (hash, txType, size) }
         .toVector
       val used = pendingAnnouncements.announcedBy(peerId)
+      metrics.announcementsReceived(unknown.size)
       val tracked = unknown.take(math.max(0, MaxTxAnnounces - used))
       if tracked.size < unknown.size then
         context.log.debug(
@@ -427,6 +448,7 @@ object PendingTransactionsManager:
       * from `peerId` ([[PendingAnnouncements.announce]]), so none may be left out: the excess goes in further requests.
       */
     def requestPooledTransactions(peerId: PeerId, hashes: Seq[ByteString]): Unit =
+      metrics.fetchRequested(hashes.size)
       hashes.grouped(MaxTxRetrievals).foreach { batch =>
         networkPeerManager ! NetworkPeerManagerActor.SendMessageCmd(
           ETHPackets.GetPooledTransactions(ETHPackets.nextRequestId, batch),
@@ -481,6 +503,7 @@ object PendingTransactionsManager:
         rejection match
           case Some(r) =>
             context.log.debug("Rejecting tx {} from {}: {}", stx.tx.hash.toHex, stx.senderAddress, r.message)
+            metrics.rejected(r)
             false
           case None => true
       }
@@ -517,7 +540,13 @@ object PendingTransactionsManager:
                   val tx = stx.tx.tx
                   // Nonce not below the account's and balance covering the upfront cost: TxAdmission.stateRejection,
                   // the rule local submission applies. A peer's tx may not run more than 1024 ahead of the account.
-                  TxAdmission.stateRejection(tx, account).isEmpty && tx.nonce < account.nonce.toBigInt + 1024
+                  val refused = TxAdmission.stateRejection(tx, account)
+                  val tooFarAhead = tx.nonce >= account.nonce.toBigInt + 1024
+                  // Counted, for the dashboard: the rule's own reason, or the gap rule's name. The result is the same
+                  // conjunction as before.
+                  refused.foreach(metrics.rejected)
+                  if refused.isEmpty && tooFarAhead then metrics.rejected(TxPoolMetrics.NonceTooFarAhead)
+                  refused.isEmpty && !tooFarAhead
                 }
               }
               StateChecked(
@@ -619,6 +648,7 @@ object PendingTransactionsManager:
               ) match
                 case Some(r) =>
                   context.log.debug("Rejecting tx {} from {}: {}", t.tx.hash.toHex, t.senderAddress, r.message)
+                  metrics.rejected(r)
                   false
                 case None => true
             case _ => true
@@ -636,6 +666,7 @@ object PendingTransactionsManager:
             ptx._2.stx.senderAddress == newStxSender && ptx._2.stx.tx.tx.nonce == newStx.tx.nonce
         )
       pendingTransactions.invalidateAll(obsoleteTxs.keys.asJava)
+      metrics.replaced(obsoleteTxs.size)
 
       val timestamp = System.currentTimeMillis()
       val newPendingTx = SignedTransactionWithSender(newStx, newStxSender)
@@ -666,7 +697,12 @@ object PendingTransactionsManager:
         Behaviors.same
 
       case FetchTimeoutTick =>
-        requestFromAlternates(pendingAnnouncements.timedOut(), "request timed out")
+        // Counted from the tracker's own tally, not from the requests it hands back: a hash with nobody left to ask
+        // timed out too, and is in no request.
+        val unansweredBefore = pendingAnnouncements.unansweredRequests
+        val timedOut = pendingAnnouncements.timedOut()
+        metrics.fetchTimedOut((pendingAnnouncements.unansweredRequests - unansweredBefore).toInt)
+        requestFromAlternates(timedOut, "request timed out")
         Behaviors.same
 
       case AddUncheckedTransactions(transactions) =>
@@ -711,6 +747,7 @@ object PendingTransactionsManager:
         rejection match
           case Some(r) =>
             context.log.debug("Refusing local tx {} from {}: {}", stx.hash.toHex, sender, r.message)
+            metrics.rejected(r)
             replyTo ! Left(r)
           case None =>
             addOrOverride(stx, sender, blobRawBytesOpt)
@@ -808,6 +845,12 @@ object PendingTransactionsManager:
             if validTxs.nonEmpty then
               admit(validTxs.toSet, msg.blobTxRawBytes)
               setPooledTxsKnown(validTxs, peerId)
+        Behaviors.same
+
+      // The pool's size without a copy of it (B-196): what a once-a-second watcher needs.
+      case GetPoolSizeReq(replyTo) =>
+        pendingTransactions.cleanUp()
+        replyTo ! PoolSize(pendingTransactions.size().toInt, blobTxNetworkBytes.size, txPoolConfig.txPoolSize)
         Behaviors.same
 
       case GetPendingTransactionsReq(replyTo) =>

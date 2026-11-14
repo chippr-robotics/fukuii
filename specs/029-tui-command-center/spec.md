@@ -4,9 +4,9 @@
 
 **Created**: 2026-11-13
 
-**Status**: Active (2026-11-14). The spec, plan, tasks and art merged as #1820, slice 1 (input and navigation) as #1834, slice 2 (graphics) as #1835; slice 3 (chain) is in review; slices 4 to 7 follow, one PR each.
+**Status**: Active (2026-11-14). The spec, plan, tasks and art merged as #1820, slice 1 (input and navigation) as #1834, slice 2 (graphics) as #1835, slice 3 (chain) as #1837; slice 4 (mempool) is in review; slices 5 to 7 follow, one PR each.
 
-**In flight**: `ccr-452bbde8-2hrv25` (cloud session, B-262): slice 3, chain
+**In flight**: `ccr-452bbde8-2hrv25` (cloud session, B-266): slice 4, mempool
 
 **Input**: The user's brief of 2026-11-13: "the tui has basic ascii graphics currently and no real input controls …
 we can use Kitty Graphics Protocol to build a vga inspired execution command center … a 1980s arcade-style Network

@@ -142,6 +142,18 @@ object Update:
               case Int.MaxValue => last
               case _            => s.selectedBlockIndex.fold(0)(i => (i.toLong + by).max(0L).min(last.toLong).toInt)
             s.copy(selectedBlock = Some(blocks(target).hash))
+        case TuiView.Mempool =>
+          // The pending transactions, best-paying first. The selection is a hash: the list moving under it does not
+          // move it, and it is gone when its transaction leaves the pool.
+          val txs = s.pendingTxs
+          if txs.isEmpty then s
+          else
+            val last = txs.size - 1
+            val target = by match
+              case Int.MinValue => 0
+              case Int.MaxValue => last
+              case _            => s.selectedTxIndex.fold(0)(i => (i.toLong + by).max(0L).min(last.toLong).toInt)
+            s.copy(selectedTx = Some(txs(target).hash))
         case TuiView.Logs =>
           // Up is older: the scroll counts lines back from the newest.
           by match
@@ -173,6 +185,9 @@ object Update:
               s.selectedBlockIndex.fold((s, Seq.empty[Effect]))(i =>
                 explore(s, LookupQuery.BlockByHash(s.observedBlocks(i).hash))
               )
+            // A pending transaction opens like a mined one (spec 029 FR-036).
+            case TuiView.Mempool =>
+              s.selectedTxIndex.fold((s, Seq.empty[Effect]))(i => explore(s, LookupQuery.Tx(s.pendingTxs(i).hash)))
             case _ => (s, Nil)
 
   /** Opens the explorer's screen for `query`, and has the worker read it (spec 029 FR-028, FR-029). */

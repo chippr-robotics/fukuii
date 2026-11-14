@@ -36,6 +36,9 @@ private[console] object ExplorerPanels:
       ) ++
         line.from.map(a => Link("from", a, LookupQuery.Account(a))) ++
         line.to.map(a => Link("to", a, LookupQuery.Account(a)))
+    case LookupResult.PendingTx(line, _, _, _, _) =>
+      Vector.empty ++ line.from.map(a => Link("from", a, LookupQuery.Account(a))) ++
+        line.to.map(a => Link("to", a, LookupQuery.Account(a)))
     case r: LookupResult.Receipt =>
       Vector(Link("tx", r.txHash, LookupQuery.Tx(r.txHash))) ++
         r.from.map(a => Link("from", a, LookupQuery.Account(a))) ++
@@ -143,6 +146,19 @@ private[console] object ExplorerPanels:
           s" paid (max fee ${ObservatoryPanels.gwei(fee)}, max tip ${ObservatoryPanels.gwei(tip)})"
         }
         row("hash", t.hash) ++ row("block", s"${formatNumber(blockNumber)}, transaction ${t.index}") ++
+          row("type", t.kind) ++ row("value", coin(t.valueWei, c)) ++
+          row("gas price", s"${ObservatoryPanels.gwei(t.gasPrice)}$offered") ++
+          row("gas limit", big(t.gasLimit)) ++ row("nonce", big(nonce)) ++
+          row("input", if inputBytes == 0 then "none" else s"${formatNumber(inputBytes.toLong)} bytes") :+ blank
+      case LookupResult.PendingTx(t, nonce, inputBytes, addedAt, local) =>
+        val waited = TuiText.formatShort(Duration.between(addedAt, c.state.now).getSeconds.max(0L))
+        // A fee-market transaction's price depends on the block it lands in: what is shown is what it would pay now.
+        val offered = t.feeCaps.fold("")((fee, tip) =>
+          s" at the head's base fee (max fee ${ObservatoryPanels.gwei(fee)}, max tip ${ObservatoryPanels.gwei(tip)})"
+        )
+        row("hash", t.hash) ++
+          row("state", s"pending: in this node's pool for $waited, in no block yet; r reads it again") ++
+          row("source", if local then "submitted to this node" else "heard from a peer") ++
           row("type", t.kind) ++ row("value", coin(t.valueWei, c)) ++
           row("gas price", s"${ObservatoryPanels.gwei(t.gasPrice)}$offered") ++
           row("gas limit", big(t.gasLimit)) ++ row("nonce", big(nonce)) ++
