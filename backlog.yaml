@@ -3087,3 +3087,14 @@ items:
     links:
       spec: specs/029-tui-command-center
     notes: prism, slice 4. ObservatoryPanels and MempoolPanels compute the first row from the selection; Up scrolls the list instead of moving the cursor.
+  - id: B-268
+    title: "PendingTransactionsManager: a by-hash query, so the TUI explorer does not copy the whole pool to open one pending transaction"
+    priority: P3
+    status: open
+    area: txpool
+    size: S
+    opened: 2026-11-14
+    refs: []
+    links:
+      spec: specs/029-tui-command-center
+    notes: prism, slice 4. StdNode.pendingFromPool asks GetPendingTransactionsReq and finds the hash; one lookup at a time, on the TUI's worker.
