@@ -112,7 +112,8 @@ class EngineApiMetricsSpec extends AnyFlatSpec with Matchers with OptionValues:
     )
   }
 
-  it should "count a newPayload by its status as they always did: ACCEPTED lands in the invalid count" taggedAs (
+  // B-193: ACCEPTED, and any status the match did not name, was counted as INVALID.
+  it should "count a newPayload under its own status: ACCEPTED is not INVALID, and an unknown status is neither" taggedAs (
     UnitTest
   ) in {
     val gauges =
@@ -120,9 +121,12 @@ class EngineApiMetricsSpec extends AnyFlatSpec with Matchers with OptionValues:
     deltas(gauges*)(metrics.recordNewPayload("VALID", 1L, 1L, nowMs = 1L)) shouldBe Seq(1L, 1L, 0L, 0L)
     deltas(gauges*)(metrics.recordNewPayload("SYNCING", 1L, 1L, nowMs = 1L)) shouldBe Seq(1L, 0L, 1L, 0L)
     deltas(gauges*)(metrics.recordNewPayload("INVALID", 1L, 1L, nowMs = 1L)) shouldBe Seq(1L, 0L, 0L, 1L)
-    // The existing match has no ACCEPTED arm: it falls to the last one. The series stay as they were; the TUI reads
-    // the new accepted count beside them instead.
-    deltas(gauges*)(metrics.recordNewPayload("ACCEPTED", 1L, 1L, nowMs = 1L)) shouldBe Seq(1L, 0L, 0L, 1L)
+    // ACCEPTED moves the total and its own count, which is not one of these four.
+    deltas(gauges*)(metrics.recordNewPayload("ACCEPTED", 1L, 1L, nowMs = 1L)) shouldBe Seq(1L, 0L, 0L, 0L)
+    // A status that is none of the four moves the total alone; so does none at all.
+    deltas(gauges*)(metrics.recordNewPayload("SOMETHING_NEW", 1L, 1L, nowMs = 1L)) shouldBe Seq(1L, 0L, 0L, 0L)
+    deltas(gauges*)(metrics.recordNewPayload(null, 1L, 1L, nowMs = 1L)) shouldBe Seq(1L, 0L, 0L, 0L)
+    deltas(metrics.newPayloadAccepted)(metrics.recordNewPayload("SOMETHING_NEW", 1L, 1L, nowMs = 1L)) shouldBe Seq(0L)
   }
 
   it should "count a forkchoiceUpdated by its status as they always did" taggedAs (UnitTest) in {

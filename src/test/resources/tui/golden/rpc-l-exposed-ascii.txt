@@ -1,0 +1,48 @@
+ # FUKUII  sepolia (11155111) . PoS . head 7,412,009 . 23/50 peers . up 3d 4h . v0.11.0                                                                     RPC 
+----------------------------------------------------------------------------------------------------------------------------------------------------------------
+ ! 1 warn    no CL yet: no forkchoiceUpdated in 3d 4h (41 JWT failures)                                                                                         
+                  | Peers   23/50 ##########  Block  7,412,009 -> 7,412,011 (-2)             Txpool  1,204 (3 blob)  Disk  1.2T free     JVM  2.1G / 8.0G heap  
+                  | Sync    regular 99% . rate 0.08 blk/s . ETA 24s                                                                                             
+                  |---------------------------------------------------------------------------------------------------------------------------------------------
+                  | ! HTTP serves debug, admin to other hosts . bound to 0.0.0.0:8546 . no authentication                                                       
+       ETH        | HTTP    listening . 0.0.0.0:8546 . eth net web3 fukuii admin debug . no authentication . 0 calls . 0 failed                                 
+                  | WS      NOT LISTENING: it could not start, or was closed . 127.0.0.1:8552 . eth net web3 fukuii . no authentication . 0 calls . 0 failed    
+                  | IPC     listening . /var/lib/fukuii/etc/fukuii.ipc . restricted to the socket file's owner . 0 calls . 0 failed                             
+                  | Engine  listening . 127.0.0.1:8551 . engine eth net web3 . authenticated by JWT . 0 eth, net and web3 calls passed on . 0 failed            
+ sepolia          | Limit   HTTP: one request each 5s from an address . 12 refused                                                                              
+ PoS              |---------------------------------------------------------------------------------------------------------------------------------------------
+ id 11155111      | Link    waiting for its first forkchoiceUpdated . EL o----------- CL . the consensus client has not said what it is . 0 calls               
+ test network     | Blocks  head - . safe - . finalized -                                                                                                       
+                  | Calls   newPayload not called yet . forkchoiceUpdated not called yet . getPayload not called yet                                            
+ [1] Overview     | Auth    41 requests refused . 38 wrong signature (another secret) . 3 iat too far from now (clocks apart)                                   
+ [2] Chain        | Payload 0 received (VALID 0, ACCEPTED 0, INVALID 0) . 0 built                                                                               
+ [3] Peers        |---------------------------------------------------------------------------------------------------------------------------------------------
+ [4] Mempool      | Methods none called since the node started                                                                                                  
+ [5] RPC          |   a failed call is counted and timed like any other                                                                                         
+ [6] Storage      |---------------------------------------------------------------------------------------------------------------------------------------------
+ [7] System       | Log     no Engine API call yet                                                                                                              
+ [8] Logs         |                                                                                                                                             
+ [9] Ops          |                                                                                                                                             
+                  |                                                                                                                                             
+ graphics text    |                                                                                                                                             
+                  |                                                                                                                                             
+                  |                                                                                                                                             
+                  |                                                                                                                                             
+                  |                                                                                                                                             
+                  |                                                                                                                                             
+                  |                                                                                                                                             
+                  |                                                                                                                                             
+                  |                                                                                                                                             
+                  |                                                                                                                                             
+                  |                                                                                                                                             
+                  |                                                                                                                                             
+                  |                                                                                                                                             
+                  |                                                                                                                                             
+                  |                                                                                                                                             
+                  |                                                                                                                                             
+                  |                                                                                                                                             
+                  |                                                                                                                                             
+                  |                                                                                                                                             
+                  |                                                                                                                                             
+                  |                                                                                                                                             
+ 1-9 view  [ ] next view  Up Down select  Enter open  Esc back  : prompt  / filter  ? help  v graphics  p pause  r redraw  d detach  q quit                     

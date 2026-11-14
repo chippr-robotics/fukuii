@@ -31,9 +31,11 @@ import com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncMetrics
 import com.chipprbots.ethereum.blockchain.sync.snap.SyncProgress
 import com.chipprbots.ethereum.consensus.engine.EngineApiMetrics
 import com.chipprbots.ethereum.consensus.engine.EngineCall
+import com.chipprbots.ethereum.consensus.engine.EngineCallLog
 import com.chipprbots.ethereum.consensus.pow.PoWMiningMetrics
 import com.chipprbots.ethereum.domain.BlobTransaction
 import com.chipprbots.ethereum.domain.Transaction
+import com.chipprbots.ethereum.jsonrpc.RpcCallStats
 import com.chipprbots.ethereum.network.NetworkMetrics
 import com.chipprbots.ethereum.network.NetworkPeerManagerActor
 import com.chipprbots.ethereum.network.Peer
@@ -207,7 +209,8 @@ class TuiStatusProbe(
       mining = read("the mining metrics")(local.mining()),
       chain = local.chain.flatMap(source => read("the chain")(Some(observeHead(source, at)))),
       forkId = read("the fork id")(local.forkId()),
-      poolCounters = read("the pool's counters")(local.poolCounters())
+      poolCounters = read("the pool's counters")(local.poolCounters()),
+      rpc = read("the RPC figures")(local.rpc())
     )
 
   /** What the pool observer has seen (spec 029 FR-031): kept on the probe's thread, moved on by each poll that reads
@@ -349,6 +352,8 @@ object TuiStatusProbe:
     *   the most the transaction pool holds
     * @param poolCounters
     *   the transaction pool's counters
+    * @param rpc
+    *   the JSON-RPC servers' transports and per-method figures ([[LocalSources.rpcReader]])
     */
   final case class LocalSources(
       dataDir: Option[File] = None,
@@ -369,7 +374,8 @@ object TuiStatusProbe:
       suggestedFee: () => Option[BigInt] = () => None,
       isMined: String => Boolean = _ => false,
       poolCapacity: Int = 0,
-      poolCounters: () => Option[TxPoolMetrics.Snapshot] = () => None
+      poolCounters: () => Option[TxPoolMetrics.Snapshot] = () => None,
+      rpc: () => Option[RpcSample] = () => None
   )
 
   object LocalSources:
@@ -388,9 +394,11 @@ object TuiStatusProbe:
         suggestedFee: () => Option[BigInt] = () => None,
         isMined: String => Boolean = _ => false,
         poolCapacity: Int = 0,
-        poolCounters: () => Option[TxPoolMetrics.Snapshot] = () => None
+        poolCounters: () => Option[TxPoolMetrics.Snapshot] = () => None,
+        rpc: () => Option[RpcSample] = () => None
     ): LocalSources =
       LocalSources(
+        rpc = rpc,
         chain = chain,
         forkId = forkId,
         suggestedFee = suggestedFee,
@@ -421,9 +429,21 @@ object TuiStatusProbe:
       */
     def clReader(
         forkChoice: () => Option[ForkChoiceHashes],
-        headerNumber: ByteString => Option[Long]
+        headerNumber: ByteString => Option[Long],
+        calls: () => EngineCallLog.Snapshot = () => EngineCallLog.Node.snapshot
     ): () => Option[ClSample] =
-      new ClReader(forkChoice, headerNumber)
+      new ClReader(forkChoice, headerNumber, calls)
+
+    /** The JSON-RPC servers (spec 029 FR-038, FR-039): `transports` as the node's configuration has them (each one's
+      * exposure is `RpcExposureCheck`'s rule, worked out once by the caller), joined each poll with what the servers
+      * counted. Display only: it reads counters and is handed nothing that serves a request.
+      */
+    def rpcReader(
+        transports: Seq[TransportStatus],
+        rateLimit: Option[java.time.Duration],
+        stats: () => RpcCallStats.Snapshot = () => RpcCallStats.Node.snapshot
+    ): () => Option[RpcSample] =
+      () => Some(TuiStatusProbe.rpcSample(transports, rateLimit, stats()))
 
     /** The mining metrics (spec 027 M1, M2), and the coinbase through `coinbase`: the node's own `CoinbaseProvider`, so
       * what `eth_coinbase` answers is what shows, and nothing that can change it is handed over. It reads gauges, and
@@ -494,9 +514,14 @@ object TuiStatusProbe:
     * else: the calls and the counts, which the panel and the disconnection alert stand on, are read from metrics that
     * cannot fail, and one broken storage read must not take them off the screen.
     */
-  final private class ClReader(forkChoice: () => Option[ForkChoiceHashes], headerNumber: ByteString => Option[Long])
-      extends (() => Option[ClSample])
+  final private class ClReader(
+      forkChoice: () => Option[ForkChoiceHashes],
+      headerNumber: ByteString => Option[Long],
+      calls: () => EngineCallLog.Snapshot
+  ) extends (() => Option[ClSample])
       with Logger:
+
+    private var headNumber: Option[(ByteString, Long)] = None
 
     private var safe: Option[(ByteString, Long)] = None
     private var finalized: Option[(ByteString, Long)] = None
@@ -532,12 +557,12 @@ object TuiStatusProbe:
       val fork = forkChoice()
       safe = fork.flatMap(f => resolve(f.safe, safe))
       finalized = fork.flatMap(f => resolve(f.finalized, finalized))
+      headNumber = fork.flatMap(f => resolve(f.head, headNumber))
+      // The call log (spec 029 FR-040): what a consensus client sent is cut and cleaned where it is kept, and
+      // passes the screen's one sanitiser here all the same.
+      val log = calls()
       // A status is the node's own string, but it reaches the screen through the one sanitiser all the same.
       def call(c: EngineCall) = ClCall(Instant.ofEpochMilli(c.atMs), Sanitize.line(Option(c.status).getOrElse("")))
-      // The writer counts an invalid payload and then, if it was ACCEPTED, the accepted count: read them in that order,
-      // so the accepted count is never behind the invalid one it is taken from. The clamp absorbs a payload in between.
-      val invalidCount = EngineApiMetrics.newPayloadInvalid.value().toLong
-      val accepted = EngineApiMetrics.newPayloadAccepted.value().toLong
       Some(
         ClSample(
           forkchoiceUpdated = EngineApiMetrics.lastForkchoiceUpdated.map(call),
@@ -546,15 +571,35 @@ object TuiStatusProbe:
             total = EngineApiMetrics.newPayloadTotal.value().toLong,
             valid = EngineApiMetrics.newPayloadValid.value().toLong,
             syncing = EngineApiMetrics.newPayloadSyncing.value().toLong,
-            accepted = accepted,
-            // The node's invalid count has the ACCEPTED payloads in it (its `status match` has no arm for them); the
-            // panel's does not.
-            invalid = (invalidCount - accepted).max(0L)
+            accepted = EngineApiMetrics.newPayloadAccepted.value().toLong,
+            // Each status has its own count since B-193: the invalid count is the INVALID answers alone.
+            invalid = EngineApiMetrics.newPayloadInvalid.value().toLong
           ),
           authFailures = EngineApiMetrics.authFailures.value().toLong,
           head = fork.map(f => headHex(f.head)),
           safe = safe.map(_._2),
-          finalized = finalized.map(_._2)
+          finalized = finalized.map(_._2),
+          headNumber = headNumber.map(_._2),
+          client = log.identity.map(i =>
+            ClClient(Sanitize.line(i.code), Sanitize.line(i.name), Sanitize.line(i.version), Sanitize.line(i.commit))
+          ),
+          capabilities = log.capabilities,
+          calls = log.calls.map(k =>
+            EngineCallLine(
+              Instant.ofEpochMilli(k.atMs),
+              Sanitize.line(k.method),
+              k.status.map(Sanitize.line(_)),
+              java.time.Duration.ofNanos(k.nanos.max(0L)),
+              k.blockNumber
+            )
+          ),
+          callsTotal = log.total,
+          authReasons = log.authFailures.map((reason, n) => reason.label -> n),
+          builds = PayloadBuilds(
+            log.payloadsBuilt,
+            log.payloadBuildsFailed,
+            log.lastBuild.map(b => BuiltPayload(Instant.ofEpochMilli(b.atMs), b.blockNumber, b.transactions))
+          )
         )
       )
 
@@ -565,6 +610,9 @@ object TuiStatusProbe:
 
     private val getWorkWindow = new RateWindow()
 
+    /** The monitor's history (spec 029 FR-041): kept here, on the probe's thread, from the gauges every poll reads. */
+    private var history: Vector[MiningPoint] = Vector.empty
+
     private def read(gauge: Gauge): Long = gauge.value().toLong
 
     // The DAG gauges are read epoch first and loaded last, and that order is load-bearing: it pairs with
@@ -572,15 +620,23 @@ object TuiStatusProbe:
     def apply(): Option[MiningSample] =
       val getWork = read(PoWMiningMetrics.workRequestsTotal)
       val minedAt = read(PoWMiningMetrics.lastBlockMinedAt)
+      val hashrate = read(PoWMiningMetrics.currentHashrate)
+      val perMinute = getWorkWindow.add(clock.millis(), getWork)
+      val at = clock.instant()
+      // A point every five seconds, ten minutes of them. A clock that stepped back starts the history again.
+      if history.lastOption.exists(_.at.isAfter(at)) then history = Vector.empty
+      if history.lastOption.forall(last => java.time.Duration.between(last.at, at).compareTo(MiningHistoryStep) >= 0)
+      then history = (history :+ MiningPoint(at, hashrate, perMinute)).takeRight(MiningHistoryPoints)
       Some(
         MiningSample(
+          history = history,
           coinbase = Some(coinbase()),
-          hashrate = read(PoWMiningMetrics.currentHashrate),
+          hashrate = hashrate,
           blocksMined = read(PoWMiningMetrics.blocksMinedTotal),
           lastMinedAt = Option.when(minedAt > 0)(Instant.ofEpochSecond(minedAt)),
           staleShares = read(PoWMiningMetrics.staleSharesTotal),
           getWork = getWork,
-          getWorkPerMinute = getWorkWindow.add(clock.millis(), getWork),
+          getWorkPerMinute = perMinute,
           dag = dagSample(
             read(PoWMiningMetrics.dagEpoch),
             read(PoWMiningMetrics.dagPhase),
@@ -675,6 +731,50 @@ object TuiStatusProbe:
 
   /** An ask as a future that never fails: its outcome is the value. */
   private def settled[A](ask: Future[A]): Future[Try[A]] = ask.transform(Success(_))(using ExecutionContext.parasitic)
+
+  /** The mining monitor's history: a point every five seconds, 120 of them. */
+  val MiningHistoryStep: java.time.Duration = java.time.Duration.ofSeconds(5)
+  val MiningHistoryPoints: Int = 120
+
+  /** The JSON-RPC servers as the RPC view shows them: each transport of the node's configuration with what its server
+    * counted and whether it said it is bound, and each method called, most called first.
+    */
+  private[console] def rpcSample(
+      transports: Seq[TransportStatus],
+      rateLimit: Option[java.time.Duration],
+      counted: RpcCallStats.Snapshot
+  ): RpcSample =
+    def name(kind: TransportKind): String = kind match
+      case TransportKind.Http   => RpcCallStats.Http
+      case TransportKind.Ws     => RpcCallStats.Ws
+      case TransportKind.Ipc    => RpcCallStats.Ipc
+      case TransportKind.Engine => RpcCallStats.Engine
+    def quantile(latency: com.chipprbots.ethereum.metrics.LatencyHistogram.Snapshot, p: Double): Option[Quantile] =
+      latency.percentile(p).map(nanos => Quantile(java.time.Duration.ofNanos(nanos), latency.belowRange(p)))
+    RpcSample(
+      transports = transports.map { t =>
+        val counts = counted.transports.find(_.name == name(t.kind))
+        t.copy(
+          listening = counted.listening.get(name(t.kind)),
+          calls = counts.fold(0L)(_.calls),
+          errors = counts.fold(0L)(_.errors)
+        )
+      }.toVector,
+      methods = counted.methods.map(m =>
+        MethodStats(
+          // A method's name is a caller's text: it is cut where it is kept, and cleaned here.
+          Sanitize.line(m.name),
+          m.calls,
+          m.errors,
+          quantile(m.latency, 0.50),
+          quantile(m.latency, 0.95),
+          quantile(m.latency, 0.99),
+          Option.when(m.lastAtMillis > 0)(Instant.ofEpochMilli(m.lastAtMillis))
+        )
+      ),
+      rateLimit = rateLimit,
+      rateLimited = counted.rateLimited
+    )
 
   /** The least time between two whole readings of the pool (spec 029 FR-037: at most once a second), less the timer's
     * own jitter, so that a probe polling every second reads it every poll.

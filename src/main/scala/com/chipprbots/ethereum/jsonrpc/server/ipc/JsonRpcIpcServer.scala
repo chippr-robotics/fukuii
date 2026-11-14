@@ -29,6 +29,7 @@ import org.scalasbt.ipcsocket.UnixDomainServerSocket
 import com.chipprbots.ethereum.jsonrpc.JsonRpcError
 import com.chipprbots.ethereum.jsonrpc.JsonRpcRequest
 import com.chipprbots.ethereum.jsonrpc.JsonRpcResponse
+import com.chipprbots.ethereum.jsonrpc.RpcCallStats
 import com.chipprbots.ethereum.jsonrpc.serialization.JsonSerializers
 import com.chipprbots.ethereum.jsonrpc.server.controllers.JsonRpcBaseController
 import com.chipprbots.ethereum.jsonrpc.server.ipc.JsonRpcIpcServer.JsonRpcIpcServerConfig
@@ -46,7 +47,13 @@ class JsonRpcIpcServer(jsonRpcController: JsonRpcBaseController, config: JsonRpc
 
     removeSocketFile()
 
-    val socket = new UnixDomainServerSocket(config.socketFile)
+    val socket =
+      try new UnixDomainServerSocket(config.socketFile)
+      catch
+        case e: Exception =>
+          // It will not listen: said for the dashboard's RPC view (spec 029 FR-039).
+          RpcCallStats.Node.listening(RpcCallStats.Ipc, isListening = false)
+          throw e
     // The socket file is what protects IPC, which serves more namespaces than HTTP and WebSocket by default, so it is
     // restricted to its owner as soon as it is bound; if that cannot be done, the server does not start.
     try JsonRpcIpcServer.restrictToOwner(Paths.get(config.socketFile))
@@ -54,8 +61,11 @@ class JsonRpcIpcServer(jsonRpcController: JsonRpcBaseController, config: JsonRpc
       case e: Exception =>
         Try(socket.close())
         removeSocketFile()
+        RpcCallStats.Node.listening(RpcCallStats.Ipc, isListening = false)
         throw e
     serverSocket = Some(socket)
+    // Bound, for the dashboard's RPC view (spec 029 FR-039).
+    RpcCallStats.Node.listening(RpcCallStats.Ipc, isListening = true)
     new Thread:
       override def run(): Unit =
         while !socket.isClosed do
@@ -67,6 +77,7 @@ class JsonRpcIpcServer(jsonRpcController: JsonRpcBaseController, config: JsonRpc
   def close(): Unit =
     serverSocket.foreach(s => Try(s.close()))
     serverSocket = None
+    RpcCallStats.Node.listening(RpcCallStats.Ipc, isListening = false)
     removeSocketFile()
 
   private def removeSocketFile(): Unit =

@@ -91,3 +91,27 @@ class RpcExposureCheckSpec extends AnyFlatSpec with Matchers:
   it should "not warn for an endpoint that is disabled" taggedAs (UnitTest, RPCTest) in {
     RpcExposureCheck.warnings(Seq(http("0.0.0.0", ChainApis :+ "admin", enabled = false))) shouldBe Seq.empty
   }
+
+  // Spec 029 FR-039: the dashboard's RPC view shows the same rule the start-up warning applies.
+  "RpcExposureCheck.exposedNamespaces" should "name the namespaces exactly where warnings warns" taggedAs (
+    UnitTest,
+    RPCTest
+  ) in {
+    val apiSets = Seq(ChainApis, ChainApis :+ "txpool", ChainApis :+ "admin", ChainApis ++ Seq("debug", "personal"))
+    for
+      interface <- Seq("localhost", "127.0.0.1", "::1", "0.0.0.0", "::", "192.168.1.10", "")
+      apis <- apiSets
+      enabled <- Seq(true, false)
+      transport <- Seq(http(interface, apis, enabled), ws(interface, apis, enabled))
+    do
+      val exposed = RpcExposureCheck.exposedNamespaces(transport)
+      withClue(s"$transport: ") {
+        exposed.nonEmpty shouldBe RpcExposureCheck.warnings(Seq(transport)).nonEmpty
+        exposed.foreach(namespace => RpcExposureCheck.warnings(Seq(transport)).head should include(namespace))
+        exposed.toSet.subsetOf(RpcExposureCheck.SensitiveNamespaces.toSet) shouldBe true
+      }
+    RpcExposureCheck.exposedNamespaces(http("0.0.0.0", ChainApis ++ Seq("admin", "debug"))) shouldBe Seq(
+      "debug",
+      "admin"
+    )
+  }

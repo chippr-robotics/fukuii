@@ -755,6 +755,159 @@ object TuiFixtures:
       )
     )
 
+  // ---- The RPC view (spec 029 slice 5) ------------------------------------------------------------------------------
+
+  private def ms(millis: Double): java.time.Duration = java.time.Duration.ofNanos((millis * 1_000_000).toLong)
+
+  /** The methods a busy node was asked: the cheap ones often and fast, the heavy ones seldom and slow, two with
+    * failures, the names nobody has last.
+    */
+  private def q(millis: Double): Option[Quantile] = Some(Quantile(ms(millis)))
+
+  /** A percentile under the histogram's range: at most a tenth of a millisecond, and how much less is not known. */
+  private val under: Option[Quantile] = Some(Quantile(ms(0.1), below = true))
+
+  val rpcMethods: Vector[MethodStats] = Vector(
+    MethodStats("eth_blockNumber", 91_204, 0, q(0.31), q(0.84), q(2.1), Some(Now.minusSeconds(1))),
+    MethodStats("eth_getBalance", 18_422, 3, q(1.9), q(6.2), q(14.8), Some(Now.minusSeconds(2))),
+    MethodStats("eth_call", 9_310, 212, q(8.4), q(41), q(212), Some(Now.minusSeconds(2))),
+    MethodStats("eth_getLogs", 1_204, 17, q(96), q(840), q(1_240), Some(Now.minusSeconds(40))),
+    MethodStats("eth_getBlockByNumber", 880, 0, q(2.4), q(9.1), q(31), Some(Now.minusSeconds(5))),
+    MethodStats("eth_chainId", 412, 0, q(0.12), q(0.2), q(0.41), Some(Now.minusSeconds(190))),
+    MethodStats("eth_sendRawTransaction", 96, 4, q(3.1), q(12), q(28), Some(Now.minusSeconds(75))),
+    MethodStats("net_version", 31, 0, under, q(0.14), q(0.2), Some(Now.minusSeconds(3_700))),
+    MethodStats("(no such method)", 9, 9, under, under, q(0.17), Some(Now.minusSeconds(86_400)))
+  )
+
+  /** The transports of a node bound to loopback: HTTP and IPC on, WebSocket off, and the Engine API where `engine`. */
+  def rpcTransports(engine: Boolean): Vector[TransportStatus] =
+    val chain = Seq("eth", "net", "web3", "fukuii")
+    Vector(
+      TransportStatus(
+        TransportKind.Http,
+        true,
+        Some(true),
+        "127.0.0.1:8546",
+        chain,
+        TransportAuth.None,
+        calls = 121_340,
+        errors = 241
+      ),
+      TransportStatus(TransportKind.Ws, false, None, "127.0.0.1:8552", chain, TransportAuth.None),
+      TransportStatus(
+        TransportKind.Ipc,
+        true,
+        Some(true),
+        "/var/lib/fukuii/etc/fukuii.ipc",
+        chain ++ Seq("personal", "admin", "debug"),
+        TransportAuth.SocketFile,
+        calls = 228,
+        errors = 4
+      )
+    ) ++ Option.when(engine)(
+      TransportStatus(
+        TransportKind.Engine,
+        true,
+        Some(true),
+        "127.0.0.1:8551",
+        Seq("engine", "eth", "net", "web3"),
+        TransportAuth.Jwt,
+        calls = 1_204,
+        errors = 0
+      )
+    )
+
+  /** `state` with the JSON-RPC servers read. */
+  def withRpc(state: TuiState, rpc: RpcSample): TuiState = withLocal(state, _.copy(rpc = Some(rpc)))
+
+  /** The Engine API's last 40 calls, a slot (12 s) apart: a `forkchoiceUpdated` and a `newPayload` each slot, a
+    * `getPayload` now and then, one payload refused and one error.
+    */
+  val engineCalls: Vector[EngineCallLine] =
+    (0 until 20).flatMap { i =>
+      val at = Now.minusSeconds(3L + (19 - i) * 12L)
+      val block = 7_411_992L + i
+      Seq(
+        EngineCallLine(
+          at.minusMillis(400),
+          "engine_newPayloadV4",
+          Some(if i == 7 then "INVALID" else "VALID"),
+          ms(180 + (i * 37) % 90),
+          Some(block)
+        ),
+        EngineCallLine(
+          at,
+          "engine_forkchoiceUpdatedV3",
+          if i == 12 then Some("error -38003") else Some("VALID"),
+          ms(3.2 + i % 4),
+          None
+        )
+      ) ++ Option.when(i % 8 == 5)(
+        EngineCallLine(at.plusMillis(900), "engine_getPayloadV4", None, ms(41), Some(block + 1))
+      )
+    }.toVector
+
+  /** [[clConnected]] as the monitor reads it: the client's name, the calls, the builds. */
+  val clMonitored: ClSample = clConnected.copy(
+    headNumber = Some(7_412_011L),
+    client = Some(ClClient("LH", "Lighthouse", "v7.1.0", "cfb1f733")),
+    capabilities = Some(23),
+    calls = engineCalls,
+    callsTotal = 184_322L,
+    builds = PayloadBuilds(31, 0, Some(BuiltPayload(Now.minusSeconds(87), 7_412_005L, 84)))
+  )
+
+  /** [[sepoliaNearHead]] with the RPC view's readings: the Engine API in use, the methods called. */
+  def rpcSepolia(glyphs: GlyphSet = GlyphSet.Emoji): TuiState =
+    withRpc(
+      withLocal(sepoliaNearHead(glyphs), _.copy(cl = Some(clMonitored))),
+      RpcSample(rpcTransports(engine = true), rpcMethods)
+    )
+
+  /** A Sepolia node whose consensus client cannot authenticate, whose HTTP serves admin and debug to every host, and
+    * that limits the rate: the warnings, and no method called yet.
+    */
+  def rpcExposedSepolia(glyphs: GlyphSet = GlyphSet.Emoji): TuiState =
+    val exposed = rpcTransports(engine = true).map {
+      case t if t.kind == TransportKind.Http =>
+        t.copy(
+          address = "0.0.0.0:8546",
+          apis = t.apis ++ Seq("admin", "debug"),
+          exposed = Seq("debug", "admin"),
+          calls = 0,
+          errors = 0
+        )
+      case t if t.kind == TransportKind.Ws =>
+        t.copy(enabled = true, listening = Some(false))
+      case t => t.copy(calls = 0, errors = 0)
+    }
+    val waiting = ClSample(
+      authFailures = 41,
+      authReasons = Map("wrong signature (another secret)" -> 38L, "iat too far from now (clocks apart)" -> 3L)
+    )
+    withRpc(
+      withLocal(sepoliaNearHead(glyphs), _.copy(cl = Some(waiting))),
+      RpcSample(exposed, Vector.empty, Some(java.time.Duration.ofSeconds(5)), rateLimited = 12)
+    )
+
+  /** The mining over ten minutes: a hashrate that climbs, peaks and settles at [[miningOn]]'s, and work requests that
+    * end at its rate.
+    */
+  val miningHistory: Vector[MiningPoint] =
+    (0 until 120).map { i =>
+      val rate =
+        if i == 119 then miningOn.hashrate else 30_000_000L + ((i * 53) % 37) * 600_000L + (i.min(90)) * 150_000L
+      val work = if i == 119 then miningOn.getWorkPerMinute else Some(14L + (i * 7) % 18)
+      MiningPoint(Now.minusSeconds((119 - i) * 5L), rate, work)
+    }.toVector
+
+  /** [[miningEtc]] with the RPC view's readings: no Engine API, the mining monitor's history. */
+  def rpcEtc(glyphs: GlyphSet = GlyphSet.Emoji): TuiState =
+    withRpc(
+      withLocal(miningEtc(glyphs), l => l.copy(mining = l.mining.map(_.copy(history = miningHistory)))),
+      RpcSample(rpcTransports(engine = false), rpcMethods)
+    )
+
   // ---- The alert fixtures (spec 027 T066, research §3.9) ------------------------------------------------------------
 
   /** [[syncedEtc]] with no peer for 4m 12s. */

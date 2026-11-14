@@ -1,0 +1,40 @@
+ # FUKUII  sepolia (11155111) . PoS . head 7,412,009 . 23/50 peers . up 3d 4h                                       RPC 
+------------------------------------------------------------------------------------------------------------------------
+ ! 1 warn    no CL yet: no forkchoiceUpdated in 3d 4h (41 JWT failures)                                                 
+                  | Peers   23/50 ##########  Block  7,412,009 -> 7,412,011 (-2)             Txpool  1,204 (3 blob)     
+                  | Sync    regular 99% . rate 0.08 blk/s . ETA 24s                                                     
+                  |-----------------------------------------------------------------------------------------------------
+                  | ! HTTP serves debug, admin to other hosts . bound to 0.0.0.0:8546 . no authentication               
+       ETH        | HTTP    listening . 0.0.0.0:8546 . no authentication . 0 calls . 0 failed                           
+                  | WS      NOT LISTENING: it could not start, or was closed . 127.0.0.1:8552 . no authentication       
+                  | IPC     listening . /var/lib/fukuii/etc/fukuii.ipc . restricted to the socket file's owner          
+                  | Engine  listening . 127.0.0.1:8551 . authenticated by JWT . 0 eth, net and web3 calls passed on     
+ sepolia          | Limit   HTTP: one request each 5s from an address . 12 refused                                      
+ PoS              |-----------------------------------------------------------------------------------------------------
+ id 11155111      | Link    waiting for its first forkchoiceUpdated . EL o----------- CL                                
+ test network     | Blocks  head - . safe - . finalized -                                                               
+                  | Calls   newPayload not called yet . forkchoiceUpdated not called yet . getPayload not called yet    
+ [1] Overview     | Auth    41 requests refused . 38 wrong signature (another secret)                                   
+ [2] Chain        | Payload 0 received (VALID 0, ACCEPTED 0, INVALID 0) . 0 built                                       
+ [3] Peers        |-----------------------------------------------------------------------------------------------------
+ [4] Mempool      | Methods none called since the node started                                                          
+ [5] RPC          |   a failed call is counted and timed like any other                                                 
+ [6] Storage      |-----------------------------------------------------------------------------------------------------
+ [7] System       | Log     no Engine API call yet                                                                      
+ [8] Logs         |                                                                                                     
+ [9] Ops          |                                                                                                     
+                  |                                                                                                     
+ graphics text    |                                                                                                     
+                  |                                                                                                     
+                  |                                                                                                     
+                  |                                                                                                     
+                  |                                                                                                     
+                  |                                                                                                     
+                  |                                                                                                     
+                  |                                                                                                     
+                  |                                                                                                     
+                  |                                                                                                     
+                  |                                                                                                     
+                  |                                                                                                     
+                  |                                                                                                     
+ 1-9 view  Enter open  Esc back  : prompt  / filter  ? help  p pause  r redraw  d detach  q quit                        

@@ -444,7 +444,7 @@ Mempool view is open, and never more than one a second.
 | Engine method activity and latency | new (`consensus/engine/`, `beacon` reports) | Engine methods bypass the JSON-RPC controller (`EngineApiController.scala:44`); nothing times them. `getPayload`, `exchangeCapabilities`, `getBlobs` are not counted. |
 | A log of recent Engine API calls | new (`consensus/engine/`, `beacon` reports) | None exists. A bounded ring on the metrics object. |
 | Consensus client name and version | new (`consensus/engine/`, `beacon` reports) | `engine_getClientVersionV1` ignores the caller's own version (`EngineApiController.scala:496-516`); `exchangeCapabilities` logs only a count. |
-| JWT diagnostics | new, small | Failure reasons are not kept; whether the secret is a random start-up one is only logged (`JwtAuthenticator.scala:141-146`). |
+| JWT diagnostics | new, small | Failure reasons are not kept. (Written before B-246: the node no longer runs on a random start-up secret, so there is no such state to show; slice 5 keeps the reasons only.) |
 | Payload building events | new (`consensus/engine/`, `beacon` reports) | State is private to `EngineApiService.scala:83-117`. |
 | newPayload status counts | have, wrong | B-193: ACCEPTED is counted as INVALID and SYNCING is never recorded. Fixed there, read here. |
 | Mining (ETC) | have | 027 slice 5: `consensus/pow/PoWMiningMetrics.scala`. |

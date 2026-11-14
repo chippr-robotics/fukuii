@@ -65,7 +65,9 @@ case class JsonRpcController(
     transportApis: Option[Seq[String]] = None,
     // Set once the deprecated `eth_setEtherbase` alias has logged its warning. The per-transport copies (`forApis`)
     // share it, so the node logs the warning once, however many transports and calls there are.
-    etherbaseAliasWarned: AtomicBoolean = new AtomicBoolean(false)
+    etherbaseAliasWarned: AtomicBoolean = new AtomicBoolean(false),
+    // The transport this instance serves, for the dashboard's per-transport totals (see `onTransport`).
+    transport: String = RpcCallStats.OtherTransport
 ) extends ApisBuilder
     with Logger
     with JsonRpcBaseController:
@@ -119,14 +121,21 @@ case class JsonRpcController(
     */
   def forApis(apis: Seq[String]): JsonRpcController = copy(transportApis = Some(apis))
 
+  /** A copy of this controller whose calls are counted under `name`, one of `RpcCallStats.Transports` (spec 029
+    * FR-038). It answers exactly as this one does.
+    */
+  def onTransport(name: String): JsonRpcController = copy(transport = name)
+
+  override def transportName: String = transport
+
   /** One controller per transport, each answering the namespaces of that transport's key (`network.rpc.http.apis`,
     * `ws.apis`, `ipc.apis`, each falling back to `network.rpc.apis`). The node gives each server its own.
     */
   def perTransport: JsonRpcController.PerTransport =
     JsonRpcController.PerTransport(
-      http = forApis(config.httpApis),
-      ws = forApis(config.wsApis),
-      ipc = forApis(config.ipcApis)
+      http = forApis(config.httpApis).onTransport(RpcCallStats.Http),
+      ws = forApis(config.wsApis).onTransport(RpcCallStats.Ws),
+      ipc = forApis(config.ipcApis).onTransport(RpcCallStats.Ipc)
     )
 
   /** The `miner` namespace: mining control, opt-in as in go-ethereum (HTTP and WebSocket do not serve it unless `miner`

@@ -1,6 +1,7 @@
 package com.chipprbots.ethereum.jsonrpc.server.controllers
 
 import java.time.Duration
+import java.util.concurrent.atomic.AtomicBoolean
 
 import cats.effect.IO
 
@@ -23,6 +24,7 @@ import com.chipprbots.ethereum.jsonrpc.JsonRpcError.MethodNotFound
 import com.chipprbots.ethereum.jsonrpc.JsonRpcRequest
 import com.chipprbots.ethereum.jsonrpc.JsonRpcResponse
 import com.chipprbots.ethereum.jsonrpc.NodeJsonRpcHealthChecker.JsonRpcHealthConfig
+import com.chipprbots.ethereum.jsonrpc.RpcCallStats
 import com.chipprbots.ethereum.jsonrpc.StateRead
 import com.chipprbots.ethereum.jsonrpc.serialization.JsonEncoder
 import com.chipprbots.ethereum.jsonrpc.serialization.JsonMethodDecoder
@@ -50,13 +52,32 @@ trait JsonRpcBaseController:
 
   given serialization: Serialization.type = native.Serialization
 
+  /** The transport this controller serves, for the dashboard's per-transport totals (spec 029 FR-038): one of
+    * `RpcCallStats.Transports`.
+    */
+  def transportName: String = RpcCallStats.OtherTransport
+
+  /** Where this controller's calls are counted for the dashboard: the node's own. */
+  protected def callStats: RpcCallStats = RpcCallStats.Node
+
   def handleRequest(request: JsonRpcRequest): IO[JsonRpcResponse] =
     val startTimeNanos = System.nanoTime()
 
     log.debug(s"received request ${request.inspect}")
 
+    // For the dashboard (spec 029 FR-038, FR-042): every call is counted and timed once it has ended, a failed one
+    // like any other. `observe` is the last statement of each branch below and cannot throw (`RpcCallStats.record`
+    // is total), so the answer, the error and their order are what they were. A call whose IO is cancelled (a
+    // client that went away, the IPC timeout) ends in none of the branches and is not counted.
+    val missing = new AtomicBoolean(false)
+    val observed = new AtomicBoolean(false)
+    def observe(failed: Boolean): Unit =
+      if observed.compareAndSet(false, true) then
+        callStats.record(transportName, request.method, !missing.get, System.nanoTime() - startTimeNanos, failed)
+
     val notFoundFn: PartialFunction[JsonRpcRequest, IO[JsonRpcResponse]] = { case _ =>
       JsonRpcControllerMetrics.NotFoundMethodsCounter.increment()
+      missing.set(true)
       IO.pure(errorResponse(request, MethodNotFound))
     }
 
@@ -73,6 +94,7 @@ trait JsonRpcBaseController:
                 s"${extraData.map(data => s"Extra info: ${data.values}")}"
             )
             JsonRpcControllerMetrics.MethodsErrorCounter.increment()
+            observe(failed = true)
           }
         case JsonRpcResponse(_, _, None, _) =>
           IO {
@@ -80,6 +102,7 @@ trait JsonRpcBaseController:
 
             val time = Duration.ofNanos(System.nanoTime() - startTimeNanos)
             JsonRpcControllerMetrics.recordMethodTime(request.method, time)
+            observe(failed = false)
           }
       }
       .flatTap(response => IO(log.debug(s"sending response ${response.inspect}")))
@@ -87,6 +110,7 @@ trait JsonRpcBaseController:
         IO {
           JsonRpcControllerMetrics.MethodsExceptionCounter.increment()
           log.error(s"Error serving request: ${request.toStringWithSensitiveInformation}", t)
+          observe(failed = true)
         } *> IO.raiseError(t)
       }
 

@@ -137,6 +137,27 @@ private[console] object ObservatoryPanels:
   /** The chart's glyphs, from an empty block to a full one. */
   private def levels(g: TuiGlyphs): String = if g.set == GlyphSet.Ascii then "_.:-=+*#" else "▁▂▃▄▅▆▇█"
 
+  /** The whole of `values`, oldest on the left, in at most `cols` glyphs: where there are more values than glyphs, a
+    * glyph is the highest of the values it stands for, so a peak is never lost. Each is drawn against the highest of
+    * all. All zeroes is a flat line at the bottom, not a full one; a value that is not known, or a glyph none of whose
+    * values is, is a gap.
+    */
+  def spark(values: Seq[Option[Long]], cols: Int, g: TuiGlyphs): String =
+    val glyphs = levels(g)
+    val width = cols.max(0).min(values.size)
+    if width == 0 then ""
+    else
+      val peak = values.flatten.maxOption.getOrElse(0L)
+      (0 until width).map { i =>
+        // The values from i/width to (i+1)/width of the way through.
+        val from = i.toLong * values.size / width
+        val until = ((i + 1).toLong * values.size / width).max(from + 1)
+        values.slice(from.toInt, until.toInt).flatten.maxOption match
+          case None => ' '
+          case Some(v) =>
+            if peak <= 0 then glyphs.head else glyphs(((v.max(0L).toDouble / peak) * (glyphs.length - 1)).round.toInt)
+      }.mkString
+
   /** One glyph a block, oldest on the left: how much of its gas limit the block used. */
   def gasChart(blocks: Seq[BlockSummary], cols: Int, g: TuiGlyphs): String =
     val glyphs = levels(g)

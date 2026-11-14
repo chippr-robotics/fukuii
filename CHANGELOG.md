@@ -8,6 +8,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Changed
+- **`app_engine_newpayload_invalid` counts INVALID answers alone (B-193).** It also counted every `engine_newPayload`
+  answered ACCEPTED, and any status it did not know. ACCEPTED has its own series, `app_engine_newpayload_accepted`
+  (since 0.10.0). A dashboard panel on the invalid series drops by the number of ACCEPTED answers, and its history
+  breaks at the upgrade: the three dashboards under `ops/grafana/Sepolia Consensus` plot it. Nothing a consensus client
+  sees changes.
 - **The Engine API is on by default for the chains that need a consensus client, with a persistent JWT secret (B-246).**
   - `conf/eth.conf`, `sepolia.conf`, `hoodi.conf`, `ephemery.conf` and `plataberget.conf` set
     `fukuii.network.engine-api.enabled = true`, so the Engine API listens on `localhost:8551` without an operator conf.

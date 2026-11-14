@@ -35,6 +35,57 @@ private[console] object MiningPanel:
       Panel(1, rowCount, 4, (w, _) => rows(c, m, w), separated = true)
     }
 
+  /** The mining monitor of the RPC view (spec 029 FR-041): the panel's rows, then the hashrate and the work requests
+    * over the readings kept (ten minutes of them, once the dashboard has run that long), with the figure now and the
+    * highest of them. A node that was never asked for work and reports no hashrate has no history to draw, and the
+    * monitor is the panel alone.
+    */
+  def monitor(c: Ctx): Option[Panel] =
+    c.state.snapshot.flatMap(_.local.mining).map { m =>
+      val base = if !c.state.nodeSettings.miningEnabled || c.tier == Tier.S then 1 else 2
+      val charted = m.history.exists(p => p.hashrate > 0 || p.getWorkPerMinute.exists(_ > 0))
+      Panel(
+        base,
+        base + (if charted then 2 else 0),
+        3,
+        (w, n) => (rows(c, m, w) ++ history(c, m, w)).take(n),
+        separated = true
+      )
+    }
+
+  /** The fewest glyphs a chart is drawn with. */
+  private val MinChartCols: Int = 8
+
+  /** The two charts. Each spans every reading kept, however few glyphs there is room for (a glyph is the highest of the
+    * readings it stands for), against the highest of them all: the figure the caption gives. The caption says how long
+    * the readings span, which is under ten minutes until the dashboard has run that long. A reading that was not known
+    * is a gap, and is not said to be nothing.
+    */
+  private def history(c: Ctx, m: MiningSample, w: Int): Seq[AttributedString] =
+    val span = for
+      first <- m.history.headOption
+      last <- m.history.lastOption
+    yield java.time.Duration.between(first.at, last.at).getSeconds.max(0L)
+    val over = span.filter(_ > 0).fold("")(s => s" in ${formatShort(s)}")
+    def chart(label: String, values: Seq[Option[Long]], say: Long => String): AttributedString =
+      val now = s"  now ${values.lastOption.flatten.fold(c.g.missing.text)(say)}"
+      val highest = values.flatten.maxOption.fold("")(peak => s" ${c.g.dot.text} highest ${say(peak)}$over")
+      val room = w - 1 - (3 + WormLabelCols)
+      // The caption is said whole or in part, never cut: the highest goes first where the row is too narrow for it.
+      val caption = if room - (now + highest).length >= MinChartCols then now + highest else now
+      val cols = (room - caption.length).max(0)
+      val row = concat(
+        text(s"   ${label.padTo(WormLabelCols, ' ')}", c.t.label),
+        text(ObservatoryPanels.spark(values, cols, c.g), c.t.healthy),
+        text(caption, c.t.value)
+      )
+      fit(row, w, c.g)
+    Seq(
+      // "Rate", not "Hashrate": the panel's own row above is named that.
+      chart("Rate", m.history.map(p => Some(p.hashrate)), h => if h > 0 then formatHashrate(h) else "none"),
+      chart("Work", m.history.map(_.getWorkPerMinute), n => s"${formatNumber(n)}/min")
+    )
+
   /** The panel's rows, each fitted to `w`. */
   def rows(c: Ctx, m: MiningSample, w: Int): Seq[AttributedString] =
     if !c.state.nodeSettings.miningEnabled then Seq(fit(offRow(c, m), w, c.g))
