@@ -99,13 +99,15 @@ final class ActionRunner(
       case Some(why) => record(request, ActionOutcome.Refused(why))
       case None =>
         val at = clock.instant()
-        val started = state.updateAndGet { v =>
-          if v.isRunning(request.action) then v
-          else v.copy(running = v.running :+ ActionActivity(request, at, "waiting to start"))
+        // Whether this call put it there. The function may be tried more than once: what the last try decided stands.
+        var added = false
+        val _ = state.updateAndGet { v =>
+          added = !v.isRunning(request.action)
+          if added then v.copy(running = v.running :+ ActionActivity(request, at, "waiting to start")) else v
         }
         val observe = byName.get(request.action).exists(_.risk == RiskClass.Observe)
-        // Whether this call put it there: an action already running is not started a second time (FR-057).
-        if !started.running.exists(a => a.request == request && a.since == at) then
+        // An action already running is not started a second time (FR-057).
+        if !added then
           record(request, ActionOutcome.Refused(AlreadyRunning))
         else
           (if observe then observeThread else actionThread).execute { () =>
