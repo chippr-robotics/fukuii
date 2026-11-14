@@ -1,0 +1,32 @@
+ ◆ FUKUII  etc (61) · PoW · head 21,884,102 · 41/50 peers · up 12d 7h                      Overview 
+────────────────────────────────────────────────────────────────────────────────────────────────────
+ ✓ no alerts                                                                                        
+                  │ Peers   41/50 ◆◆◆◆◆◆◆◆◆◆         Block  21,884,102 (at head)                    
+                  │ RPC     :8545 on                 Disk   388G free       Txpool  142             
+                  │─────────────────────────────────────────────────────────────────────────────────
+                  │ Sync    ✓ at head                                                               
+       ETC        │   Blocks   🪱[COMPLETE ✓]🧠                21,884,102                           
+                  │─────────────────────────────────────────────────────────────────────────────────
+                  │ Forks   Spiral ✓ ═══════════════════════════════════════▶ Olympia not scheduled 
+                  │─────────────────────────────────────────────────────────────────────────────────
+ etc              │ Node    …/fukuii/etc · SNAP sync · archive pruning · 50 peers max · mining on   
+ PoW · id 61      │─────────────────────────────────────────────────────────────────────────────────
+ main network     │ Recent                                                                          
+                  │ 11:59:25 INFO  [====================🪱]🧠 100% — RegularSync                    
+ [1] Overview     │ 11:59:30 ERROR Cannot decode a message from 203.0.113.40:30303                  
+ [2] Chain        │ 11:59:34 INFO  Imported block 21,884,101 0x9b0c…ff31 with 9 txs in 17ms         
+ [3] Peers        │ 11:59:47 INFO  Imported block 21,884,102 0x6d21…1a0e with 14 txs in 22ms        
+ [4] Mempool      │ 11:59:52 INFO  Peers: 41 handshaked · 14 in · 27 out                            
+ [5] RPC          │ 12:00:00 INFO  RegularSync: at head, block 21884102                             
+ [6] Storage      │                                                                                 
+ [7] System       │                                                                                 
+ [8] Logs         │                                                                                 
+ [9] Ops          │                                                                                 
+                  │                                                                                 
+ graphics text    │                                                                                 
+                  │                                                                                 
+                  │                                                                                 
+                  │                                                                                 
+                  │                                                                                 
+                  │                                                                                 
+ 1-9 view  Enter open  Esc back  : prompt  / filter  ? help  p pause  r redraw  d detach  q quit    

@@ -1,31 +1,31 @@
  ◆ FUKUII  etc (61) · PoW · head 21,884,102 · 41/50 peers · up 12d 7h                                          Overview 
 ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
  ✓ no alerts                                                                                                            
- etc              │ Peers   41/50 ◆◆◆◆◆◆◆◆◆◆                    Block  21,884,102 (at head)                     Txpool… 
- PoW · id 61      │ RPC     :8545 on                            Disk   388G free                                JVM   … 
+                  │ Peers   41/50 ◆◆◆◆◆◆◆◆◆◆  Block  21,884,102 (at head)                    Txpool  142                
+                  │ RPC     :8545 on                                     Disk   388G free    JVM     3.4G / 8.0G heap   
                   │─────────────────────────────────────────────────────────────────────────────────────────────────────
- [1] Overview     │ Sync    ✓ at head                                                                                   
- [2] Chain        │   Blocks   🪱[COMPLETE ✓]🧠                                    21,884,102                           
- [3] Peers        │─────────────────────────────────────────────────────────────────────────────────────────────────────
- [4] Mempool      │ Mining  off                                                                                         
- [5] RPC          │─────────────────────────────────────────────────────────────────────────────────────────────────────
- [6] Storage      │ Forks (block)                                                                                       
- [7] System       │   Phoenix ✓ ─ ECIP-1099 ✓ ─ Magneto ✓ ─ Mystique ✓ ─ Spiral ✓ ════════▶ Olympia not scheduled       
- [8] Logs         │   block 21,884,102 · Spiral since 19,250,000 · Olympia not scheduled on this network                
- [9] Ops          │─────────────────────────────────────────────────────────────────────────────────────────────────────
-                  │ Node    /var/lib/fukuii/etc · SNAP sync · archive pruning · 50 peers max · mining off               
+                  │ Sync    ✓ at head                                                                                   
+       ETC        │   Blocks   🪱[COMPLETE ✓]🧠                                    21,884,102                           
                   │─────────────────────────────────────────────────────────────────────────────────────────────────────
-                  │ Recent                                                                                              
-                  │ 11:59:00 WARN  Peer 0x9c0d…77 timed out on GetBlockHeaders, retrying                                
-                  │ 11:59:04 INFO  Imported block 21,884,099 0x7ab2…d4c7 with 6 txs in 14ms                             
-                  │ 11:59:12 INFO  eth_getWork served for block 21,884,100                                              
-                  │ 11:59:17 INFO  Imported block 21,884,100 0x3301…2e9d with 21 txs in 31ms                            
-                  │ 11:59:25 INFO  [====================🪱]🧠 100% — RegularSync                                        
-                  │ 11:59:30 ERROR Cannot decode a message from 203.0.113.40:30303                                      
+                  │ Mining  off                                                                                         
+                  │─────────────────────────────────────────────────────────────────────────────────────────────────────
+ etc              │ Forks (block)                                                                                       
+ PoW · id 61      │   Phoenix ✓ ─ ECIP-1099 ✓ ─ Magneto ✓ ─ Mystique ✓ ─ Spiral ✓ ════════▶ Olympia not scheduled       
+ main network     │   block 21,884,102 · Spiral since 19,250,000 · Olympia not scheduled on this network                
+                  │─────────────────────────────────────────────────────────────────────────────────────────────────────
+ [1] Overview     │ Node    /var/lib/fukuii/etc · SNAP sync · archive pruning · 50 peers max · mining off               
+ [2] Chain        │─────────────────────────────────────────────────────────────────────────────────────────────────────
+ [3] Peers        │ Recent                                                                                              
+ [4] Mempool      │ 11:59:00 WARN  Peer 0x9c0d…77 timed out on GetBlockHeaders, retrying                                
+ [5] RPC          │ 11:59:04 INFO  Imported block 21,884,099 0x7ab2…d4c7 with 6 txs in 14ms                             
+ [6] Storage      │ 11:59:12 INFO  eth_getWork served for block 21,884,100                                              
+ [7] System       │ 11:59:17 INFO  Imported block 21,884,100 0x3301…2e9d with 21 txs in 31ms                            
+ [8] Logs         │ 11:59:25 INFO  [====================🪱]🧠 100% — RegularSync                                        
+ [9] Ops          │ 11:59:30 ERROR Cannot decode a message from 203.0.113.40:30303                          (o_o)       
                   │ 11:59:34 INFO  Imported block 21,884,101 0x9b0c…ff31 with 9 txs in 17ms                             
-                  │ 11:59:47 INFO  Imported block 21,884,102 0x6d21…1a0e with 14 txs in 22ms                            
+ graphics text    │ 11:59:47 INFO  Imported block 21,884,102 0x6d21…1a0e with 14 txs in 22ms                            
                   │ 11:59:52 INFO  Peers: 41 handshaked · 14 in · 27 out                                                
-                  │ 12:00:00 INFO  RegularSync: at head, block 21884102                                                 
+                  │ 12:00:00 INFO  RegularSync: at head, block 21884102                                    at head      
                   │                                                                                                     
                   │                                                                                                     
                   │                                                                                                     

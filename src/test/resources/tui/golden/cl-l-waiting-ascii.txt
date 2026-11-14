@@ -1,30 +1,30 @@
  # FUKUII  sepolia (11155111) . PoS . head 7,412,009 . 23/50 peers . up 20s . v0.11.0                                                                  Overview 
 ----------------------------------------------------------------------------------------------------------------------------------------------------------------
  + no alerts                                                                                                                                                    
- sepolia          | Peers   23/50 ##########  Block  7,412,009 -> 7,412,011 (-2)             Txpool  1,204 (3 blob)  Disk  1.2T free     JVM  2.1G / 8.0G heap  
- PoS . id 11155111| RPC     :8545 on   Engine :8551 on                                          Discovery  1,912 known . 14 pending . 3 blacklisted   GC  0.3%  
+                  | Peers   23/50 ##########  Block  7,412,009 -> 7,412,011 (-2)             Txpool  1,204 (3 blob)  Disk  1.2T free     JVM  2.1G / 8.0G heap  
+                  | RPC     :8545 on   Engine :8551 on                                          Discovery  1,912 known . 14 pending . 3 blacklisted   GC  0.3%  
                   |---------------------------------------------------------------------------------------------------------------------------------------------
- [1] Overview     | Sync    regular                                                                                                   rate 0.08 blk/s . ETA 24s 
- [2] Chain        |   Blocks   [==========================================================~o.]@@ 99%   7,412,009 / 7,412,011                                    
- [3] Peers        |---------------------------------------------------------------------------------------------------------------------------------------------
- [4] Mempool      | Consensus layer waiting for its first forkchoiceUpdated                                                                                     
- [5] RPC          |---------------------------------------------------------------------------------------------------------------------------------------------
- [6] Storage      | Forks (timestamp)                                                                                                                           
- [7] System       |   Shanghai + - Cancun + - Prague + - Osaka + - BPO1 + - BPO2 + ========> Amsterdam @ 2026-10-06T13:53:36Z (in 3d 4h)                        
- [8] Logs         |   head 2026-10-03T09:53:36Z . BPO2 since 2025-10-27T23:16:48Z . Amsterdam activates 2026-10-06T13:53:36Z                                    
- [9] Ops          |---------------------------------------------------------------------------------------------------------------------------------------------
+                  | Sync    regular                                                                                                   rate 0.08 blk/s . ETA 24s 
+       ETH        |   Blocks   [==========================================================~o.]@@ 99%   7,412,009 / 7,412,011                                    
+                  |---------------------------------------------------------------------------------------------------------------------------------------------
+                  | Consensus layer waiting for its first forkchoiceUpdated                                                                                     
+                  |---------------------------------------------------------------------------------------------------------------------------------------------
+ sepolia          | Forks (timestamp)                                                                                                                           
+ PoS              |   Shanghai + - Cancun + - Prague + - Osaka + - BPO1 + - BPO2 + ========> Amsterdam @ 2026-10-06T13:53:36Z (in 3d 4h)                        
+ id 11155111      |   head 2026-10-03T09:53:36Z . BPO2 since 2025-10-27T23:16:48Z . Amsterdam activates 2026-10-06T13:53:36Z                                    
+ test network     |---------------------------------------------------------------------------------------------------------------------------------------------
                   | Peers (top 8 of 23 by score)                                                                                                                
-                  |   id          dir  client                best        score  trend  age                                                                      
-                  |   0x0000..a1  in   CoreGeth/v1.12.19     7,412,011   0.950  ^      4h 10m                                                                   
-                  |   0x1715..16  out  CoreGeth/v1.12.19     7,412,009   0.900  v      3h 41m                                                                   
-                  |   0x1fe6..13  in   fukuii/v0.11.0        7,412,011   0.890  ^      2h 28m                                                                   
-                  |   0x2e2b..8b  out  CoreGeth/v1.12.19     7,412,010   0.850  -      3h 13m                                                                   
-                  |   0x3c6f..03  out  Geth/v1.13.5          7,412,009   0.810  v      3h 58m                                                                   
-                  |   0x4540..00  in   CoreGeth/v1.12.19     7,412,011   0.800  ^      2h 45m                                                                   
-                  |   0x5384..78  out  Geth/v1.13.5          7,412,010   0.760  -      3h 30m                                                                   
-                  |   0x6a99..ed  in   Geth/v1.13.5          7,412,011   0.710  ^      3h 2m                                                                    
+ [1] Overview     |   id          dir  client                best        score  trend  age                                                                      
+ [2] Chain        |   0x0000..a1  in   CoreGeth/v1.12.19     7,412,011   0.950  ^      4h 10m                                                                   
+ [3] Peers        |   0x1715..16  out  CoreGeth/v1.12.19     7,412,009   0.900  v      3h 41m                                                                   
+ [4] Mempool      |   0x1fe6..13  in   fukuii/v0.11.0        7,412,011   0.890  ^      2h 28m                                                                   
+ [5] RPC          |   0x2e2b..8b  out  CoreGeth/v1.12.19     7,412,010   0.850  -      3h 13m                                                                   
+ [6] Storage      |   0x3c6f..03  out  Geth/v1.13.5          7,412,009   0.810  v      3h 58m                                                                   
+ [7] System       |   0x4540..00  in   CoreGeth/v1.12.19     7,412,011   0.800  ^      2h 45m                                                                   
+ [8] Logs         |   0x5384..78  out  Geth/v1.13.5          7,412,010   0.760  -      3h 30m                                                                   
+ [9] Ops          |   0x6a99..ed  in   Geth/v1.13.5          7,412,011   0.710  ^      3h 2m                                                                    
                   |---------------------------------------------------------------------------------------------------------------------------------------------
-                  | Node    /var/lib/fukuii/sepolia . SNAP sync . archive pruning . 50 peers max . mining off                                                   
+ graphics text    | Node    /var/lib/fukuii/sepolia . SNAP sync . archive pruning . 50 peers max . mining off                                                   
                   |---------------------------------------------------------------------------------------------------------------------------------------------
                   | Recent                                                                                                                                      
                   | 11:58:21 INFO  Handshaked peer 0x3fa1..e2 CoreGeth/v1.12.19                                                                                 
@@ -36,7 +36,7 @@
                   | 11:59:17 INFO  Imported block 21,884,100 0x3301..2e9d with 21 txs in 31ms                                                                   
                   | 11:59:25 INFO  [====================~o]@@ 100% - RegularSync                                                                                
                   | 11:59:30 ERROR Cannot decode a message from 203.0.113.40:30303                                                                              
-                  | 11:59:34 INFO  Imported block 21,884,101 0x9b0c..ff31 with 9 txs in 17ms                                                                    
+                  | 11:59:34 INFO  Imported block 21,884,101 0x9b0c..ff31 with 9 txs in 17ms                                               (o_o)...             
                   | 11:59:47 INFO  Imported block 21,884,102 0x6d21..1a0e with 14 txs in 22ms                                                                   
                   | 11:59:52 INFO  Peers: 41 handshaked . 14 in . 27 out                                                                                        
                   | 12:00:00 INFO  RegularSync: at head, block 21884102                                                                                         
@@ -44,5 +44,5 @@
                   |                                                                                                                                             
                   |                                                                                                                                             
                   |                                                                                                                                             
-                  |                                                                                                                                             
- 1-9 view  [ ] other views  Up Down select  Enter open  Esc back  : prompt  / filter  ? help  g glyphs  p pause  r redraw  d detach  q quit                     
+                  |                                                                                                                        syncing              
+ 1-9 view  [ ] next view  Up Down select  Enter open  Esc back  : prompt  / filter  ? help  v graphics  p pause  r redraw  d detach  q quit                     

@@ -3,6 +3,7 @@ package com.chipprbots.ethereum.console
 import org.jline.utils.AttributedString
 import org.scalacheck.Gen
 import org.scalatest.BeforeAndAfterAll
+import org.scalatest.LoneElement
 import org.scalatest.flatspec.AnyFlatSpec
 import org.scalatest.matchers.should.Matchers
 import org.scalatestplus.scalacheck.ScalaCheckPropertyChecks
@@ -15,6 +16,7 @@ class SplashSpec
     with Matchers
     with ScalaCheckPropertyChecks
     with BeforeAndAfterAll
+    with LoneElement
     with TuiGoldenFiles:
 
   protected val goldenTerminal = new TuiTestTerminal()
@@ -105,14 +107,84 @@ class SplashSpec
     (frame should not).include("""/_/    \____/\____/\____/""")
   }
 
-  it should "crawl the worm once across, and say what it waits for, with a spinner" taggedAs (UnitTest) in {
+  // Spec 029 FR-020: the worm is the share of the start's phases the node has reported done, never a timer.
+  it should "move the worm when the node completes a phase, and for nothing else, and name the phase under way" taggedAs (
+    UnitTest
+  ) in {
     val g = TuiGlyphs.Emoji
-    def worm(tick: Long) = text(splash(tick), 80, 24).linesIterator.find(_.contains(g.brain.text)).get
-    (0 to 11).map(t => worm(t)).distinct should have size 12
-    worm(3) should include("starting node \\") // spinner frame 3 of |/-\
-    worm(0).indexOf(g.worm.text) should be < worm(11).indexOf(g.worm.text)
-    // Under reduced motion: one static frame.
-    (0 to 11).map(t => text(splash(t).copy(motion = Motion.Reduced), 80, 24)).distinct should have size 1
+    def worm(s: TuiState) = text(s, 80, 24).linesIterator.find(_.contains(g.brain.text)).get
+    def at(done: StartupPhase*) = splash(3).copy(startup = done.toSet)
+    // The row is centred, so the worm is found by what is left of it: the track it has crossed.
+    def crossed(row: String) = row.substring(row.indexOf('['), row.indexOf(g.worm.text)).count(_ == '=')
+    // Time alone moves the spinner only: the worm stays where the node's progress put it.
+    (0 to 11).map(t => crossed(worm(splash(t)))).distinct should have size 1
+    (0 to 11).map(t => worm(splash(t))).distinct should have size 4 // the spinner's four frames
+    worm(splash(3)) should include("starting: peer-to-peer network \\") // spinner frame 3 of |/-\
+    // Each phase done moves it on; all done, it has arrived and nothing spins.
+    val done = StartupPhase.values.toSeq.inits.toSeq.reverse
+    val shares = done.map(phases => """(\d+)%""".r.findFirstMatchIn(worm(at(phases*))).map(_.group(1).toInt))
+    shares.init shouldBe Seq(Some(0), Some(20), Some(40), Some(60), Some(80))
+    crossed(worm(at(done(1)*))) should be < crossed(worm(at(done(4)*)))
+    worm(at()) should include("0%")
+    worm(at()) should include("starting: storage and genesis")
+    worm(at(StartupPhase.values.toSeq*)) should include("node started")
+    // Under reduced motion nothing moves with the tick, and the phases still follow the node.
+    def reduced(s: TuiState) = text(s.copy(motion = Motion.Reduced), 80, 24)
+    (0 to 11).map(t => reduced(splash(t))).distinct should have size 1
+    reduced(at(StartupPhase.Storage, StartupPhase.Network)) should not be reduced(at(StartupPhase.Storage))
+  }
+
+  it should "list the phases where there are rows: done, under way, to come" taggedAs (UnitTest) in {
+    val g = TuiGlyphs.Emoji
+    val rows =
+      text(splash(3).copy(startup = Set(StartupPhase.Storage, StartupPhase.Network)), 80, 24).linesIterator.toSeq
+    def row(phase: StartupPhase) = rows.find(_.trim.endsWith(phase.label)).get.trim
+    row(StartupPhase.Storage) should startWith(g.check.text)
+    row(StartupPhase.Network) should startWith(g.check.text)
+    row(StartupPhase.Api) should startWith("\\") // the spinner, at tick 3
+    row(StartupPhase.Sync) should startWith(g.dot.text)
+    row(StartupPhase.Checks) should startWith(g.dot.text)
+    // The labels start in one column, whatever the mark beside them.
+    StartupPhase.values.toSeq
+      .map(p => rows.find(_.trim.endsWith(p.label)).get.indexOf(p.label))
+      .distinct should have size 1
+    // Where the logo leaves no rows for the list, the worm row still names the phase under way.
+    val short = text(splash(3), 80, 12)
+    (short should not).include(StartupPhase.Checks.label)
+    short should include("starting: peer-to-peer network")
+    StartupPhase.share(Set.empty) shouldBe 0.0
+    StartupPhase.share(StartupPhase.values.toSet) shouldBe 1.0
+    StartupPhase.current(Set(StartupPhase.Storage)) shouldBe Some(StartupPhase.Network)
+    StartupPhase.current(StartupPhase.values.toSet) shouldBe None
+  }
+
+  it should "draw the badge for the logo in block and pixel mode, where it fits above the phases" taggedAs (UnitTest) in {
+    val drawing = TuiRenderer(TuiConfig.default, TuiFixtures.art)
+    val pixel = GraphicsMode.Pixel(TuiFixtures.Cell)
+    // 120x40: the large badge, which carries the wordmark; 80x24: the small one; neither in text mode.
+    Splash.badgeFor(splash(3).copy(graphics = pixel), 120, 40, TuiFixtures.art) shouldBe Some(("badge-large", 32, 16))
+    Splash.badgeFor(splash(3).copy(graphics = pixel), 80, 24, TuiFixtures.art) shouldBe Some(("badge", 16, 8))
+    Splash.badgeFor(splash(3).copy(graphics = pixel), 80, 12, TuiFixtures.art) shouldBe None
+    Splash.badgeFor(splash(3), 120, 40, TuiFixtures.art) shouldBe None
+    Splash.badgeFor(splash(3).copy(graphics = pixel), 120, 40, gfx.ArtStore.Empty) shouldBe None
+    // Pixel mode: one region, centred, its cells blank. Block mode: the same cells drawn, and no region to place.
+    val inPixel = drawing.frame(splash(3).copy(graphics = pixel), 120, 40)
+    val region = inPixel.regions.loneElement
+    (region.id, region.cols, region.rows, region.col) shouldBe ("badge", 32, 16, 44)
+    region.graphic shouldBe gfx.Graphic.SpriteFrame("badge-large", 0, 0)
+    val inBlock = drawing.frame(splash(3).copy(graphics = GraphicsMode.Block), 120, 40)
+    inBlock.regions shouldBe empty
+    inBlock.lines.slice(region.row, region.row + region.rows).map(_.toString).mkString should include("▀")
+    // The words and the phases are the same rows in both, and in every mode the frame is exact.
+    def under(f: Frame) = f.lines.drop(region.row + region.rows).map(_.toString)
+    under(inPixel) shouldBe under(inBlock)
+    under(inPixel).mkString should include("FUKUII")
+    under(inPixel).mkString should include(StartupPhase.Checks.label)
+    for f <- Seq(inPixel, inBlock) do
+      f.lines should have size 40
+      all(f.lines.map(_.columnLength())) shouldBe 120
+    // The hand-over places no picture: the rows under one are changing.
+    drawing.frame(splash(12).copy(graphics = pixel), 120, 40).regions shouldBe empty
   }
 
   it should "show the skip hint on the last row, at every size" taggedAs (UnitTest) in {

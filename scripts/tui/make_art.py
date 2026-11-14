@@ -25,6 +25,8 @@ from PIL import Image
 
 REPO = Path(__file__).resolve().parents[2]
 ART_DIR = REPO / "src" / "main" / "resources" / "tui" / "art"
+# What each sheet's pixels hash to: the node's own PNG reader is tested against it (PngSpec).
+PIXEL_HASHES = REPO / "src" / "test" / "resources" / "tui" / "art-pixels.sha256"
 
 # ── palette ──────────────────────────────────────────────────────────────────────────────────────────────────────
 
@@ -887,6 +889,18 @@ art {{
 """
 
 
+def pixel_hashes() -> str:
+    """One line a sheet: the SHA-256 of its width, its height (four bytes each, big-endian) and its palette indices."""
+    import hashlib
+
+    lines = []
+    for name, pixels in sorted(sheets().items()):
+        h, w = pixels.shape
+        digest = hashlib.sha256(w.to_bytes(4, "big") + h.to_bytes(4, "big") + pixels.tobytes()).hexdigest()
+        lines.append(f"{digest}  {name}")
+    return "\n".join(lines) + "\n"
+
+
 def palette_bytes() -> bytes:
     flat = bytearray(768)
     for i in range(16, 256):
@@ -961,17 +975,22 @@ def main() -> int:
             args.out.mkdir(parents=True, exist_ok=True)
             save(pixels, path)
     conf = args.out / "art.conf"
+    hashes = PIXEL_HASHES if args.out == ART_DIR else args.out / "art-pixels.sha256"
     if args.check:
         if not conf.exists() or conf.read_text() != manifest():
             stale.append("art.conf")
+        if not hashes.exists() or hashes.read_text() != pixel_hashes():
+            stale.append(hashes.name)
     else:
         conf.write_text(manifest())
+        hashes.parent.mkdir(parents=True, exist_ok=True)
+        hashes.write_text(pixel_hashes())
     if args.preview:
         preview(args.preview)
     if stale:
         print("stale, run scripts/tui/make_art.py: " + ", ".join(stale), file=sys.stderr)
         return 1
-    print(f"{'checked' if args.check else 'wrote'} {len(sheets()) + 1} files in {args.out}")
+    print(f"{'checked' if args.check else 'wrote'} {len(sheets()) + 2} files in {args.out}")
     return 0
 
 

@@ -1,28 +1,29 @@
  ◆ FUKUII  etc (61) · PoW · head 21,884,102 · 41/50 peers · up 12d 7h · v0.11.0                                                                           Chain 
 ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
  ✓ no alerts                                                                                                                                                    
- etc              │ Peers   41/50 ◆◆◆◆◆◆◆◆◆◆  Block  21,884,102 (at head)                    Txpool  142             Disk  388G free     JVM  3.4G / 8.0G heap  
- PoW · id 61      │ Sync    ✓ at head                                                                                                                           
+                  │ Peers   41/50 ◆◆◆◆◆◆◆◆◆◆  Block  21,884,102 (at head)                    Txpool  142             Disk  388G free     JVM  3.4G / 8.0G heap  
+                  │ Sync    ✓ at head                                                                                                                           
                   │─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
- [1] Overview     │ Chain   etc · chain id 61 · PoW · forks by block number                                                                                     
- [2] Chain        │─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
- [3] Peers        │ Forks (block)                                                                                                                               
- [4] Mempool      │   ✓ Frontier           block 0                                                                                                              
- [5] RPC          │   ✓ Homestead          block 1,150,000                                                                                                      
- [6] Storage      │   ✓ EIP-150            block 2,500,000                                                                                                      
- [7] System       │   ✓ EIP-155            block 3,000,000                                                                                                      
- [8] Logs         │   ✓ EIP-160            block 3,000,000                                                                                                      
- [9] Ops          │   ✓ DiffBomb-Pause     block 3,000,000                                                                                                      
-                  │   ✓ DiffBomb-Continue  block 5,000,000                                                                                                      
-                  │   ✓ DiffBomb-Removal   block 5,900,000                                                                                                      
-                  │   ✓ Atlantis           block 8,772,000                                                                                                      
-                  │   ✓ Agharta            block 9,573,000                                                                                                      
-                  │   ✓ Phoenix            block 10,500,839                                                                                                     
-                  │   ✓ ECIP-1099          block 11,700,000                                                                                                     
-                  │   ✓ Magneto            block 13,189,133                                                                                                     
-                  │   ✓ Mystique           block 14,525,000                                                                                                     
-                  │   ✓ Spiral             block 19,250,000                                                                                                     
+                  │ Chain   etc · chain id 61 · PoW · forks by block number                                                                                     
+       ETC        │─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+                  │ Forks (block)                                                                                                                               
+                  │   ✓ Frontier           block 0                                                                                                              
+                  │   ✓ Homestead          block 1,150,000                                                                                                      
+ etc              │   ✓ EIP-150            block 2,500,000                                                                                                      
+ PoW · id 61      │   ✓ EIP-155            block 3,000,000                                                                                                      
+ main network     │   ✓ EIP-160            block 3,000,000                                                                                                      
+                  │   ✓ DiffBomb-Pause     block 3,000,000                                                                                                      
+ [1] Overview     │   ✓ DiffBomb-Continue  block 5,000,000                                                                                                      
+ [2] Chain        │   ✓ DiffBomb-Removal   block 5,900,000                                                                                                      
+ [3] Peers        │   ✓ Atlantis           block 8,772,000                                                                                                      
+ [4] Mempool      │   ✓ Agharta            block 9,573,000                                                                                                      
+ [5] RPC          │   ✓ Phoenix            block 10,500,839                                                                                                     
+ [6] Storage      │   ✓ ECIP-1099          block 11,700,000                                                                                                     
+ [7] System       │   ✓ Magneto            block 13,189,133                                                                                                     
+ [8] Logs         │   ✓ Mystique           block 14,525,000                                                                                                     
+ [9] Ops          │   ✓ Spiral             block 19,250,000                                                                                                     
                   │   · Olympia            not scheduled on this network                                                                                        
+ graphics text    │                                                                                                                                             
                   │                                                                                                                                             
                   │                                                                                                                                             
                   │                                                                                                                                             
@@ -44,5 +45,4 @@
                   │                                                                                                                                             
                   │                                                                                                                                             
                   │                                                                                                                                             
-                  │                                                                                                                                             
- 1-9 view  [ ] other views  Up Down select  Enter open  Esc back  : prompt  / filter  ? help  g glyphs  p pause  r redraw  d detach  q quit                     
+ 1-9 view  [ ] next view  Up Down select  Enter open  Esc back  : prompt  / filter  ? help  v graphics  p pause  r redraw  d detach  q quit                     

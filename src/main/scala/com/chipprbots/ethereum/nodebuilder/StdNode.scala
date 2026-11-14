@@ -25,6 +25,7 @@ import com.chipprbots.ethereum.console.ChainFacts
 import com.chipprbots.ethereum.console.ForkChoiceHashes
 import com.chipprbots.ethereum.console.NodeSettings
 import com.chipprbots.ethereum.console.NodeStatusSnapshot
+import com.chipprbots.ethereum.console.StartupPhase
 import com.chipprbots.ethereum.console.Tui
 import com.chipprbots.ethereum.console.TuiProbeThread
 import com.chipprbots.ethereum.console.TuiStatusProbe
@@ -91,6 +92,7 @@ abstract class BaseNode extends Node:
     loadGenesisData()
     repairStoredBodies() // after genesis is loaded, before the sync controller reads the backfill cursors
     importChainData() // Must complete before APIs so queries return chain data
+    tuiStarted(StartupPhase.Storage)
 
     // Phase 2: P2P networking — bind discovery + TCP server BEFORE the user-facing
     // APIs come up. Hive's client readiness check is on the RPC port (8545); if we
@@ -102,6 +104,7 @@ abstract class BaseNode extends Node:
     startPortForwarding()
     startPeerManager()
     startDiscoveryManager()
+    tuiStarted(StartupPhase.Network)
 
     // Phase 3: API servers (user-facing, ready as early as possible).
     // The Engine API (8551) and ETH JSON-RPC (8545) both bind here, each awaited, in the order chosen further
@@ -138,15 +141,23 @@ abstract class BaseNode extends Node:
       startJsonRpcHttpServer()
     startJsonRpcWsServer()
     startJsonRpcIpcServer()
+    tuiStarted(StartupPhase.Api)
 
     // Phase 5: Background work
     startSyncController()
     startMining()
+    tuiStarted(StartupPhase.Sync)
 
     // Phase 6: Non-critical maintenance
     runDBConsistencyCheck()
     startPeriodicDBConsistencyCheck()
     startTuiUpdater()
+    tuiStarted(StartupPhase.Checks)
+
+  /** Tells the TUI, if there is one, that `phase` of the start has completed: its splash marks the phase done (spec 029
+    * FR-020). Display only; it changes nothing the node does, and a node without `--tui` has no TUI to tell.
+    */
+  private def tuiStarted(phase: StartupPhase): Unit = Tui.current.foreach(_.startupDone(phase))
 
   private def startMetricsClient(): Unit =
     val metricsConfig = MetricsConfig(instanceConfig.config)
@@ -354,6 +365,10 @@ abstract class BaseNode extends Node:
       val quit = TuiUpdater.restoreThenQuit(tui, () => sys.exit(0))
       // The settings Fukuii.main loaded (`fukuii.tui` plus the environment) when it built the TUI.
       val updater = TuiUpdater(tui, tui.config, () => tuiSnapshots.get, Config.blockchains.network, quit)
+      // The chain's identity, from the configuration alone, before the first frame: the sidebar's icon and the header
+      // name the network while the node is still starting. Display only: the fork configuration is read, never
+      // changed (spec 027 FR-017).
+      tui.updateChain(ChainFacts.from(blockchainConfig, BuildInfo.version))
       tuiUpdater = Some(updater)
       updater.start()
     }
@@ -364,8 +379,6 @@ abstract class BaseNode extends Node:
       log.info("Starting TUI status probe")
       val settings = tuiNodeSettings()
       tui.updateNodeSettings(settings)
-      // Display only: the fork configuration is read, never changed (spec 027 FR-017).
-      tui.updateChain(ChainFacts.from(blockchainConfig, BuildInfo.version))
       // Spec 027 slice 5. The consensus-layer panel exists on a post-merge chain with a live Engine API, the gate that
       // binds the designated head (`bindDesignatedHead`): an ETC node, even one with an Engine API for `testing_*`, has
       // none and no engine series. The mining panel exists on ETC. Each reading is a thunk the probe thread calls: the

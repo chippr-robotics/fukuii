@@ -265,7 +265,9 @@ class TuiKeysSpec extends AnyFlatSpec with Matchers:
       ("\u001b[3~", "Delete", Nil),
       ("\u001bOP", "F1", Seq(Key.F(1))),
       ("\u001b[1;5D", "Ctrl-Left", Seq(Key.Left)),
-      ("\u001b[6;20;10t", "a cell-size report", Nil),
+      // The TUI asks for this one after a resize: it is a report, which `handleKey` takes before any key is dispatched.
+      ("\u001b[6;20;10t", "a cell-size report", Seq(Key.CellSize(10, 20))),
+      ("\u001b[8;48;160t", "a window-size report", Nil),
       ("\u001b_Gi=31;OK\u001b\\", "a graphics reply", Nil)
     )
     for (bytes, name, expected) <- sequences do

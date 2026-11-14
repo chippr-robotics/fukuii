@@ -81,6 +81,25 @@ object TuiTheme:
     logError = fg(Plain, 0xf85149)
   )
 
+  /** The command-center look (spec 029 research §5.4, contracts/art.md "Colours the interface itself uses"): the art's
+    * own palette, by index, so that the text beside a sprite is in the colours the sprite is drawn in. Drawn with the
+    * art, in pixel and block mode, which need 256 colours anyway; text mode keeps the themes above.
+    */
+  val CommandCenter: TuiTheme = TuiTheme(
+    palette = Palette.Ansi256,
+    healthy = Plain.foreground(46),
+    warn = Plain.foreground(214),
+    error = Plain.foreground(196).bold(),
+    accent = Plain.foreground(16).background(40),
+    label = Plain.foreground(44),
+    value = Plain.foreground(255),
+    muted = Plain.foreground(244),
+    logDebug = Plain.foreground(244),
+    logInfo = Plain.foreground(250),
+    logWarn = Plain.foreground(214),
+    logError = Plain.foreground(196)
+  )
+
   /** No colour: bold and reverse video only (`NO_COLOR`, or a terminal with fewer than 8 colours). */
   val Mono: TuiTheme = TuiTheme(
     palette = Palette.Mono,

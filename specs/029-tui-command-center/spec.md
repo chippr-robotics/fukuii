@@ -4,9 +4,9 @@
 
 **Created**: 2026-11-13
 
-**Status**: Active (2026-11-14). The spec, plan, tasks and art merged as #1820; slice 1 (input and navigation) is in review; slices 2 to 7 follow, one PR each.
+**Status**: Active (2026-11-14). The spec, plan, tasks and art merged as #1820 and slice 1 (input and navigation) as #1834; slice 2 (graphics) is in review as #1835; slices 3 to 7 follow, one PR each.
 
-**In flight**: `ccr-452bbde8-2hrv25` (cloud session, B-254): slice 1, input and navigation
+**In flight**: `ccr-452bbde8-2hrv25` (cloud session, B-257 and B-258): slice 2, graphics
 
 **Input**: The user's brief of 2026-11-13: "the tui has basic ascii graphics currently and no real input controls …
 we can use Kitty Graphics Protocol to build a vga inspired execution command center … a 1980s arcade-style Network
@@ -427,11 +427,12 @@ Each requirement names the research section it rests on.
   character cells) or **text** (spec 027's glyphs). The mode is chosen automatically, can be set by
   `fukuii.tui.graphics` and `FUKUII_TUI_GRAPHICS`, and can be changed by a key while running (§5.1).
 - **FR-012** A graphic region MUST occupy the same rectangle of cells in every mode. Changing mode changes no cell
-  outside the graphic regions (§5.1).
+  outside the graphic regions, but for the one row of the sidebar that names the mode (§5.1).
 - **FR-013** Pixel mode MUST be chosen only when the terminal itself answers that it supports the protocol and
   reports its cell size, never from the terminal's name. The questions are asked once, before any key is read, within
   a bound of 500 ms; with no answer the mode is block. Under a terminal multiplexer the automatic choice is block.
-  With `NO_COLOR` or fewer than 256 colours it is text (§3 E4, §4.2, §4.5, §5.6).
+  With `NO_COLOR` or fewer than 256 colours it is text, and block mode needs a UTF-8 locale for its one character
+  (§3 E4, §4.2, §4.5, §5.6).
 - **FR-014** All art MUST use one fixed palette that every 256-colour terminal draws exactly, so that block mode shows
   the same colours as pixel mode (§3 E2, §5.4).
 - **FR-015** Pixel art MUST stay sharp: an image is enlarged by a whole factor to the pixels of the cells it covers,

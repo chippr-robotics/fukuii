@@ -16,3 +16,9 @@ enum Key:
   /** Text pasted into the terminal (bracketed paste), control characters removed. Only a text field takes it (FR-009).
     */
   case Paste(text: String)
+
+  /** Not a key: the terminal's answer to "how large is a cell?", in pixels, asked again after a resize (spec 029
+    * FR-016). Only a decoder that was told to read it produces it, and [[Tui]] takes it before any key is dispatched:
+    * it moves no selection and answers no dialog.
+    */
+  case CellSize(width: Int, height: Int)

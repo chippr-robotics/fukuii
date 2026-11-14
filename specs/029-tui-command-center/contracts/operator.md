@@ -67,7 +67,7 @@ A command that starts an action opens that action's dialog. The prompt never run
 | `deps` | Subsystems, what each depends on, and their health |
 | `test-rpc` | Call each enabled RPC endpoint and report |
 | `net` | Listening and detected external addresses, inbound peers |
-| `art` | Every sprite, pose and frame in the current graphics mode |
+| `art` | Every sprite, a pose a page, in the current graphics mode; `r` reads the sheets again |
 | `loglevel <level> [logger]`, `loglevel reset` | Adjust |
 | `maxpeers <n>` | Adjust |
 | `peer trust <id>`, `peer untrust <id>` | Adjust |
@@ -81,7 +81,7 @@ A command that starts an action opens that action's dialog. The prompt never run
 | `bundle` | Disrupt: writes a support bundle |
 | `quit` | Halt |
 | `detach` | Detach the TUI |
-| `graphics <pixel \| block \| text>`, `glyphs <emoji \| ascii>` | Display |
+| `graphics <auto \| pixel \| block \| text>`, `glyphs <emoji \| ascii>` | Display |
 | `help [command]` | The commands, or one command's usage |
 
 ## Settings

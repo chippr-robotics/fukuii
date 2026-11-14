@@ -39,6 +39,14 @@ import com.typesafe.config.ConfigException
   * @param readOnly
   *   no operator action can run (`fukuii.tui.read-only`, `FUKUII_TUI_READ_ONLY`; spec 029 FR-053). Stopping the node
   *   with `q` is an action
+  * @param graphics
+  *   how graphics are drawn: `auto` asks the terminal (`fukuii.tui.graphics`, `FUKUII_TUI_GRAPHICS`; spec 029 FR-011)
+  * @param artDir
+  *   a directory of sprite sheets used instead of the shipped ones (`fukuii.tui.art-dir`, `FUKUII_TUI_ART_DIR`)
+  * @param multiplexer
+  *   the terminal is tmux or screen, by the environment ([[TuiEnv]]): it passes no pixels on, so `auto` draws blocks
+  * @param utf8Locale
+  *   the locale's encoding is UTF-8 ([[TuiEnv]]): block graphics need it
   */
 final case class TuiConfig(
     updateIntervalMs: Long = TuiConfig.DefaultUpdateIntervalMs,
@@ -55,7 +63,11 @@ final case class TuiConfig(
     splashMs: Long = TuiConfig.DefaultSplashMs,
     logRingSize: Int = TuiConfig.DefaultLogRingSize,
     logLevel: Level = TuiConfig.DefaultLogLevel,
-    readOnly: Boolean = false
+    readOnly: Boolean = false,
+    graphics: GraphicsChoice = GraphicsChoice.Auto,
+    artDir: Option[String] = None,
+    multiplexer: Boolean = false,
+    utf8Locale: Boolean = true
 ):
   /** The motion the TUI starts with, and resumes after `p`. */
   def motion: Motion = if reducedMotion then Motion.Reduced else Motion.Full
@@ -134,7 +146,9 @@ final case class TuiSettings(
     splashMs: Long = TuiConfig.DefaultSplashMs,
     logRingSize: Int = TuiConfig.DefaultLogRingSize,
     logLevel: Level = TuiConfig.DefaultLogLevel,
-    readOnly: Boolean = false
+    readOnly: Boolean = false,
+    graphics: GraphicsChoice = GraphicsChoice.Auto,
+    artDir: Option[String] = None
 )
 
 object TuiSettings:
@@ -175,6 +189,19 @@ object TuiSettings:
               s"'$value' is not one of ${TuiConfig.LogLevels.mkString(", ")}"
             )
           )
+    val graphics =
+      if !tui.hasPath("graphics") then GraphicsChoice.Auto
+      else
+        val value = tui.getString("graphics")
+        GraphicsChoice
+          .parse(value)
+          .getOrElse(
+            throw new ConfigException.BadValue(
+              tui.origin(),
+              "fukuii.tui.graphics",
+              s"'$value' is not one of ${GraphicsChoice.Accepted}"
+            )
+          )
     val logRingSize =
       if !tui.hasPath("log-ring-size") then TuiConfig.DefaultLogRingSize
       else
@@ -194,5 +221,7 @@ object TuiSettings:
       splashMs = millis("splash-ms", TuiConfig.DefaultSplashMs, 0),
       logRingSize = logRingSize,
       logLevel = logLevel,
-      readOnly = tui.hasPath("read-only") && tui.getBoolean("read-only")
+      readOnly = tui.hasPath("read-only") && tui.getBoolean("read-only"),
+      graphics = graphics,
+      artDir = Option.when(tui.hasPath("art-dir"))(tui.getString("art-dir").trim).filter(_.nonEmpty)
     )

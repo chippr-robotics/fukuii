@@ -1,15 +1,16 @@
 # Contract: sprite sheets
 
-What a sprite sheet for the TUI command center must look like. The loader (plan, slice 2) accepts exactly this and
-nothing else. A sheet that breaks a rule is reported at start, by file and rule, and that sprite's region is left to
-the text the frame already carries. A bad sheet never stops the node.
+What a sprite sheet for the TUI command center must look like. The loader accepts exactly this and nothing else. A
+sheet that breaks a rule is reported at start, by file and rule, and that sprite's region is left to the text the
+frame already carries. A bad sheet never stops the node.
 
-**The sheets exist.** They are in `src/main/resources/tui/art/`, drawn by `scripts/tui/make_art.py` (spec D-3: the
-art is made in this spec's own work). The art is code: to change a sprite, change the script and run it. Enlarged
-views are in [`../art-preview/`](../art-preview/): `mascot.png` (every pose and frame), `block-mode.png` (the small
-sizes), `badge-and-splash.png`, `network-icons.png`, and two mock screens that show the art at the scale a terminal draws it,
-`overview-pixel.png` and `overview-block.png`. Anyone replacing the art, by editing the script or by drawing sheets
-by hand, keeps to the rules below.
+**The sheets exist**, and so does the loader (`console/gfx/ArtStore.scala`). The sheets are in
+`src/main/resources/tui/art/`, drawn by `scripts/tui/make_art.py` (spec D-3: the art is made in this spec's own work).
+The art is code: to change a sprite, change the script and run it. Enlarged views are in
+[`../art-preview/`](../art-preview/): `mascot.png` (every pose and frame), `block-mode.png` (the small sizes),
+`badge-and-splash.png`, `network-icons.png`, and two mock screens that show the art at the scale a terminal draws it,
+`overview-pixel.png` and `overview-block.png`. Anyone replacing the art, by editing the script or by drawing sheets by
+hand, keeps to the rules below.
 
 ## The short version
 
@@ -42,14 +43,15 @@ a background you do not control.
 
 | Sprite | Region in cells | `lo` frame | `hi` frame | Poses | Where it shows |
 | --- | --- | --- | --- | --- | --- |
-| `mascot` | 32 × 16 | 32 × 32 px | 256 × 256 px | 7, up to 4 frames each | Overview at 140 columns and more; Ops; the splash |
-| `mascot-small` | 16 × 8 | 16 × 16 px | 128 × 128 px | 7, up to 2 frames each | Overview from 100 to 139 columns |
+| `mascot` | 32 × 16 | 32 × 32 px | 256 × 256 px | 7, up to 4 frames each | The corner of the Overview's Recent strip from 140 × 45, where the strip has 17 rows and keeps 80 columns; the splash |
+| `mascot-small` | 16 × 8 | 16 × 16 px | 128 × 128 px | 7, up to 2 frames each | The same corner from 100 × 32, where the strip has 9 rows |
 | `network-etc`, `network-eth` | 16 × 8 | 16 × 16 px | 128 × 128 px | 1 | The top of the sidebar: the chain family the node is on (spec FR-061) |
-| `badge` | 16 × 8 | 16 × 16 px | 128 × 128 px | 1 | Help, Ops |
-| `badge-large` | 32 × 16 | 32 × 32 px | 256 × 256 px | 1 | The splash; carries the FUKUII wordmark |
-| `splash-scene` *(optional)* | 80 × 24 | 80 × 48 px | 640 × 384 px | 1 | Behind the splash; never changes |
+| `badge` | 16 × 8 | 16 × 16 px | 128 × 128 px | 1 | The splash where the large one does not fit (80 × 24) |
+| `badge-large` | 32 × 16 | 32 × 32 px | 256 × 256 px | 1 | The splash from 27 rows; carries the FUKUII wordmark |
+| `splash-scene` *(optional)* | 80 × 24 | 80 × 48 px | 640 × 384 px | 1 | Nowhere yet: a backdrop lies under text, which block mode cannot draw (spec FR-012). `:art` shows it |
 
-Below 100 columns or 32 rows no sprite is drawn; charts still are.
+Below 100 columns or 32 rows no sprite is drawn; charts still are. A sprite's cells are the same in every graphics
+mode: in text mode they hold the words that stand for it (`ETC`, a face for the mascot's pose).
 
 ## Poses
 
@@ -63,7 +65,7 @@ else (spec FR-018).
 | 2 | `watching` | at the head, no alerts | watching the screens; one frame can be a glance to the side |
 | 3 | `warning` | under a warning | looking up at the alert row |
 | 4 | `error` | under an error | standing, alarm lamp lit |
-| 5 | `asleep` | stalled, or a source is not answering | asleep at the console |
+| 5 | `asleep` | stalled, with no other alert | asleep at the console |
 | 6 | `celebrating` | at the head for the first time | once per run, three seconds |
 
 A pose's frames follow its `timeline` in `art.conf`: pairs of (frame, how many quarter-seconds it stays up), played in
@@ -156,9 +158,10 @@ Colours the interface itself uses, for sprites that should sit well beside it:
 - `python3 -I scripts/tui/mock_screen.py DIR` draws the two mock screens from the real sheets.
 - `python3 -I -m unittest discover -s scripts/tui -v` runs both checks and the checker's own tests; the `TUI Art`
   workflow runs it on every pull request that touches the art or the scripts.
-- Once the loader exists (plan, slice 2): `FUKUII_TUI_ART_DIR=<directory> fukuii mordor --tui`, then `:art` at the
-  prompt, shows every sprite, pose and frame in the current graphics mode from another directory, and `r` reloads
-  it. That is how a hand-drawn replacement is tried.
+- `FUKUII_TUI_ART_DIR=<directory> fukuii mordor --tui`, then `:art` at the prompt, shows every sprite from another
+  directory, a pose a page (`Up` and `Down` turn the page), in the current graphics mode: every frame of the pose in
+  pixel mode, its one frame in block mode. `r` reads the sheets again, and what the loader left out is listed under
+  the picture. That is how a hand-drawn replacement is tried.
 
 ## Text
 

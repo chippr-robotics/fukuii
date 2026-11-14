@@ -27,7 +27,12 @@ object Update:
   /** The lines the prompt remembers. */
   val MaxHistory: Int = 100
 
-  def apply(state: TuiState, key: Key, ctx: UpdateCtx): (TuiState, Seq[Effect]) =
+  def apply(state: TuiState, key: Key, ctx: UpdateCtx): (TuiState, Seq[Effect]) = key match
+    // A report of the terminal, not a key: it changes nothing here, not even the notice on screen.
+    case _: Key.CellSize => (state, Nil)
+    case _               => keyed(state, key, ctx)
+
+  private def keyed(state: TuiState, key: Key, ctx: UpdateCtx): (TuiState, Seq[Effect]) =
     val s = state.copy(notice = None)
     s.overlay match
       case Overlay.Dialog(kind)   => dialog(s, kind, key)
@@ -65,10 +70,15 @@ object Update:
       if s.screen.isEmpty && !s.helpOpen && Filterable.contains(s.view) then
         (s.copy(overlay = Overlay.Filter(s.filters.getOrElse(s.view, ""))), Nil)
       else (s, Nil)
-    case Action.Help    => (s.openHelp, Nil)
-    case Action.Glyphs  => (s.toggleGlyphs, Nil)
-    case Action.Pause   => (s.togglePause(ctx.configuredMotion), Nil)
-    case Action.Redraw  => (s, Seq(Effect.Redraw))
+    case Action.Help     => (s.openHelp, Nil)
+    case Action.Glyphs   => (s.toggleGlyphs, Nil)
+    case Action.Graphics => (s, Seq(Effect.CycleGraphics))
+    case Action.Pause    => (s.togglePause(ctx.configuredMotion), Nil)
+    // On the Art screen `r` reads the sheets again first: how a replacement sheet is tried (contracts/art.md).
+    case Action.Redraw =>
+      s.screen match
+        case Some(Screen.Art(_)) => (s, Seq(Effect.ReloadArt, Effect.Redraw))
+        case _                   => (s, Seq(Effect.Redraw))
     case Action.Detach  => (s, Seq(Effect.Detach))
     case Action.AskQuit => (askQuit(s, ctx), Nil)
 
@@ -87,7 +97,17 @@ object Update:
     * `Int.MaxValue` are the first and the last row.
     */
   private def move(s: TuiState, ctx: UpdateCtx, by: Int): TuiState =
-    if s.helpOpen || s.screen.isDefined then s
+    if s.helpOpen then s
+    else if s.screen.isDefined then
+      s.screens match
+        // The Art screen's pages wrap, so a page is counted and never clamped here: the art says how many there are.
+        case Screen.Art(page) :: under =>
+          val to = by match
+            case Int.MinValue => 0
+            case Int.MaxValue => -1
+            case _            => page + by.sign
+          s.copy(screens = Screen.Art(to) :: under)
+        case _ => s
     else
       s.view match
         case TuiView.Peers =>
@@ -202,6 +222,8 @@ object Update:
         case Command.Detach         => (closed, Seq(Effect.Detach))
         case Command.Help           => (closed.openHelp, Nil)
         case Command.Glyphs(set)    => (closed.copy(glyphs = set), Nil)
+        case Command.Graphics(to)   => (closed, Seq(Effect.SetGraphics(to)))
+        case Command.Art            => (closed.copy(helpOpen = false, screens = List(Screen.Art(0))), Nil)
         case Command.Usage(message) => (closed.copy(notice = Some(message)), Nil)
         case Command.Unknown(word, nearest) =>
           val hint = if nearest.isEmpty then "; ? lists the keys" else s"; did you mean ${nearest.mkString(", ")}?"

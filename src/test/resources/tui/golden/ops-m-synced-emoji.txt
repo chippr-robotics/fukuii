@@ -1,29 +1,29 @@
  ◆ FUKUII  etc (61) · PoW · head 21,884,102 · 41/50 peers · up 12d 7h                                               Ops 
 ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
  ✓ no alerts                                                                                                            
- etc              │ Peers   41/50 ◆◆◆◆◆◆◆◆◆◆                    Block  21,884,102 (at head)                     Txpool… 
- PoW · id 61      │ Sync    ✓ at head                                                                                   
+                  │ Peers   41/50 ◆◆◆◆◆◆◆◆◆◆  Block  21,884,102 (at head)                    Txpool  142                
+                  │ Sync    ✓ at head                                                                                   
                   │─────────────────────────────────────────────────────────────────────────────────────────────────────
- [1] Overview     │ Ops                                                                                                 
- [2] Chain        │ Mode    actions allowed                                                                             
- [3] Peers        │ q       ask to stop the node                                                                        
- [4] Mempool      │ d       detach the TUI; the node keeps running                                                      
- [5] RPC          │─────────────────────────────────────────────────────────────────────────────────────────────────────
- [6] Storage      │ Not built yet: log levels, peers, mining, RPC servers, configuration                                
+                  │ Ops                                                                                                 
+       ETC        │ Mode    actions allowed                                                                             
+                  │ q       ask to stop the node                                                                        
+                  │ d       detach the TUI; the node keeps running                                                      
+                  │─────────────────────────────────────────────────────────────────────────────────────────────────────
+ etc              │ Not built yet: log levels, peers, mining, RPC servers, configuration                                
+ PoW · id 61      │                                                                                                     
+ main network     │                                                                                                     
+                  │                                                                                                     
+ [1] Overview     │                                                                                                     
+ [2] Chain        │                                                                                                     
+ [3] Peers        │                                                                                                     
+ [4] Mempool      │                                                                                                     
+ [5] RPC          │                                                                                                     
+ [6] Storage      │                                                                                                     
  [7] System       │                                                                                                     
  [8] Logs         │                                                                                                     
  [9] Ops          │                                                                                                     
                   │                                                                                                     
-                  │                                                                                                     
-                  │                                                                                                     
-                  │                                                                                                     
-                  │                                                                                                     
-                  │                                                                                                     
-                  │                                                                                                     
-                  │                                                                                                     
-                  │                                                                                                     
-                  │                                                                                                     
-                  │                                                                                                     
+ graphics text    │                                                                                                     
                   │                                                                                                     
                   │                                                                                                     
                   │                                                                                                     
