@@ -110,16 +110,47 @@ class TuiGraphicsSpec extends AnyFlatSpec with Matchers with OptionValues:
       tt.graphics.placements should have size 2
     }
 
+  "A reply the bound cut short" should "be finished as a sequence when its rest arrives, never typed as keys" taggedAs (
+    UnitTest
+  ) in
+    // The device attributes stop after `ESC [ ? 6`: the wait ends at its bound, in the middle of the reply.
+    withTui(TuiTestTerminal.kittyReply().dropRight(3)) { (tui, tt) =>
+      tui.getState.graphics shouldBe GraphicsMode.Pixel(TuiFixtures.Cell)
+      tt.press("2;c")
+      tui.checkInput(200L) shouldBe empty // not `2`, which opens the Chain view
+      tui.getState.view shouldBe TuiView.Overview
+      // The keyboard is its own again.
+      tt.press("3")
+      tui.checkInput(200L) shouldBe Seq(Key.Char('3'))
+    }
+
+  "A cell-size report nobody asked for" should "change nothing: it is believed only as an answer" taggedAs (UnitTest) in
+    withTui(TuiTestTerminal.kittyReply()) { (tui, tt) =>
+      val before = tt.graphics.uploads
+      tui.handleKey(Key.CellSize(64, 128)) shouldBe TuiCommand.Continue
+      tui.render()
+      tui.getState.graphics shouldBe GraphicsMode.Pixel(TuiFixtures.Cell)
+      tt.graphics.uploads shouldBe before
+    }
+
+  "A frame that could not be written" should "be drawn again from a cleared screen" taggedAs (UnitTest) in
+    withTui(TuiTestTerminal.PlainReply) { (tui, tt) =>
+      tt.failWrites = true
+      tui.handleKey(Key.Char('r')) // asks for a clear; the write fails
+      tt.failWrites = false
+      val written = tt.output.length
+      tui.render()
+      tt.output.substring(written) should include(Tui.ClearScreen)
+      tt.lastFrame should include("▀")
+    }
+
   "A resize" should "ask the cell's size again, and a new size send the art again at that size" taggedAs (UnitTest) in
     withTui(TuiTestTerminal.kittyReply()) { (tui, tt) =>
       val asked = tt.output.sliding(Kitty.CellSizeQuery.length).count(_ == Kitty.CellSizeQuery)
       tt.terminal.setSize(new org.jline.terminal.Size(150, 46))
       tui.render()
       tt.output.sliding(Kitty.CellSizeQuery.length).count(_ == Kitty.CellSizeQuery) shouldBe asked + 1
-      // The same cell: nothing changes. A cell twice the size (a larger font): pixel mode at that size.
-      tt.press("\u001b[6;16;8t")
-      tui.checkInput(50L).foreach(tui.handleKey)
-      tui.getState.graphics shouldBe GraphicsMode.Pixel(TuiFixtures.Cell)
+      // The answer: a cell twice the size (a larger font), so pixel mode at that size.
       val before = tt.graphics.uploads
       tt.press("\u001b[6;32;16t")
       val keys = tui.checkInput(50L)

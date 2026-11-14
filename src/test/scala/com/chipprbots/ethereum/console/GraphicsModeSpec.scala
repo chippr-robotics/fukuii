@@ -151,6 +151,11 @@ class GraphicsModeSpec extends AnyFlatSpec with Matchers with OptionValues with 
     // A cell no terminal has is not believed.
     TerminalQuery.parse("\u001b[6;0;0t")._2 shouldBe None
     TerminalQuery.parse("\u001b[6;9999;9999t")._2 shouldBe None
+    // The report is input: a cell larger than any display has would have the art enlarged without bound.
+    TerminalQuery.parse("\u001b[6;512;256t")._2 shouldBe None
+    TerminalQuery.parse("\u001b[6;128;64t")._2 shouldBe Some(CellSize(64, 128))
+    gfx.PixelLayer.scale(CellSize(64, 128)) shouldBe gfx.PixelLayer.MaxScale
+    gfx.PixelLayer.scale(CellSize(4096, 4096)) shouldBe gfx.PixelLayer.MaxScale
     TerminalQuery.complete(TuiTestTerminal.PlainReply) shouldBe true
     TerminalQuery.complete("\u001b_Gi=31;OK\u001b\\") shouldBe false
   }
@@ -160,7 +165,9 @@ class GraphicsModeSpec extends AnyFlatSpec with Matchers with OptionValues with 
   ) in {
     val tt = new TuiTestTerminal(queryReply = TuiTestTerminal.kittyReply())
     try
-      TerminalQuery.run(tt.terminal, timeoutMillis = 2000) shouldBe (true, Some(TuiFixtures.Cell))
+      val answers = TerminalQuery.run(tt.terminal, timeoutMillis = 2000)
+      (answers.graphics, answers.cell) shouldBe (true, Some(TuiFixtures.Cell))
+      answers.raw shouldBe TuiTestTerminal.kittyReply()
       tt.output should include(TerminalQuery.Questions)
       tt.terminal.reader().read(20L) shouldBe org.jline.utils.NonBlockingReader.READ_EXPIRED
     finally tt.close()
@@ -187,11 +194,52 @@ class GraphicsModeSpec extends AnyFlatSpec with Matchers with OptionValues with 
     do Update(state, Key.CellSize(10, 20), ctx) shouldBe (state, Nil)
   }
 
+  "A sequence the input went quiet in the middle of" should "be kept, so that its rest is never typed as keys" taggedAs (
+    UnitTest
+  ) in {
+    import KeyDecoder.State
+    val decoder = new KeyDecoder()
+    def feed(state: State, text: String): (State, Seq[Key]) =
+      text.foldLeft((state, Seq.empty[Key])) { case ((s, keys), c) =>
+        val (next, more) = decoder.step(s, c)
+        (next, keys ++ more)
+      }
+    // Half of Ctrl-Left, a pause, the other half: one key. Read from the ground the rest would be `5` and `D`: detach.
+    val (half, none) = feed(State.Ground, "\u001b[1;")
+    none shouldBe empty
+    val (kept, idleKeys) = decoder.idle(half)
+    idleKeys shouldBe empty
+    kept shouldBe half
+    feed(kept, "5D") shouldBe (State.Ground, Seq(Key.Left))
+    // The same inside a string: the rest of a graphics reply.
+    val (inString, _) = feed(State.Ground, "\u001b_Gi=31")
+    feed(decoder.idle(inString)._1, ";OK\u001b\\q")._2 shouldBe Seq(Key.Char('q'))
+    // A sequence that never ends is given up after its wait, and the keyboard is the operator's again.
+    decoder.abandon(half) shouldBe State.Ground
+    decoder.abandon(inString) shouldBe State.Ground
+    KeyDecoder.waitMillis(half) shouldBe KeyDecoder.SequenceWaitMillis
+    KeyDecoder.waitMillis(State.Pasting("", 0, dropped = false)) shouldBe KeyDecoder.PasteWaitMillis
+    // A lone Esc is still the Esc key.
+    decoder.idle(State.Escape) shouldBe (State.Ground, Seq(Key.Esc))
+  }
+
+  "The one-character introducers, and a report with a private marker" should "start a sequence, and be no key" taggedAs (
+    UnitTest
+  ) in {
+    KeyDecoder.decode("\u009bD") shouldBe Seq(Key.Left) // CSI as one character
+    KeyDecoder.decode("\u009b?62;4c") shouldBe empty
+    KeyDecoder.decode("\u009fGi=31;OK\u001b\\x") shouldBe Seq(Key.Char('x')) // APC as one character
+    KeyDecoder.decode("\u001b[?1;2A") shouldBe empty // not Up
+    KeyDecoder.decode("\u001b[<0;10;20M") shouldBe empty
+    KeyDecoder.decode("\u001b[1;2A") shouldBe Seq(Key.Up)
+  }
+
   it should "stop at the device attributes of a terminal that knows no graphics" taggedAs (UnitTest) in {
     val tt = new TuiTestTerminal(queryReply = TuiTestTerminal.PlainReply)
     try
       val started = System.nanoTime()
-      TerminalQuery.run(tt.terminal, timeoutMillis = 5000) shouldBe (false, None)
+      val answers = TerminalQuery.run(tt.terminal, timeoutMillis = 5000)
+      (answers.graphics, answers.cell) shouldBe (false, None)
       // The reply ended the wait: nowhere near the bound.
       (System.nanoTime() - started) / 1_000_000L should be < 4000L
     finally tt.close()
@@ -199,6 +247,6 @@ class GraphicsModeSpec extends AnyFlatSpec with Matchers with OptionValues with 
 
   it should "give up at its bound on a terminal that answers nothing" taggedAs (UnitTest) in {
     val tt = new TuiTestTerminal()
-    try TerminalQuery.run(tt.terminal, timeoutMillis = 30) shouldBe (false, None)
+    try TerminalQuery.run(tt.terminal, timeoutMillis = 30) shouldBe TerminalQuery.NotAsked
     finally tt.close()
   }

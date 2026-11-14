@@ -133,7 +133,7 @@ Every slice ends with the same gate. The art (phase 0) is done and in the tree.
 > As built (2026-11-14), in two pull requests. **2a** (this one): the three modes, the terminal query, the frame
 > writer, the art loader, the network icon, the mascot, `v`, `:graphics`, `:art`. **2b** (open): T046 the
 > command-center theme, T049 the splash with the badge and the node's real start-up phases, and the chart primitives of
-> T050, which wait for the first chart (slice 3). After 2a: 1,066 tests in 42 suites of
+> T050, which wait for the first chart (slice 3). After 2a: 1,072 tests in 42 suites of
 > `testOnly com.chipprbots.ethereum.console.* *Tui*`. What differs from the tasks as written:
 >
 > - **T031–T035**: the PNG reader, the art store, the half-block cells, the Kitty commands and the pixel layer are
@@ -159,6 +159,11 @@ Every slice ends with the same gate. The art (phase 0) is done and in the tree.
 > - **B-201**: the whole Overview frame at 100×32, tier M's narrowest screen, is a golden for an ETH and an ETC
 >   fixture, so the golden lint reads the Forks row there; the sidebar gives a chain id a row of its own when it would
 >   not fit beside the family (Sepolia's, Platåberget's).
+> - **From prism's review**: what a terminal reports is input. A cell is believed only from 4 pixels a side to
+>   64 × 128 and only as the answer to a question; art is enlarged at most 8 times; a sheet of the wrong size is
+>   refused at its PNG header; an `include` in `art.conf` fetches nothing. The key decoder keeps an unfinished sequence
+>   across a quiet input (for up to 1 s) instead of dropping it after 50 ms, so the rest of a slow key or a late reply
+>   is never typed as keys: that is B-226's failure, closed here and not by slice 1.
 > - **Backlog**: 2a is B-257, 2b is B-258.
 > - **T052 is open**: the manual gate needs kitty, Ghostty and tmux, and the session that built the slice has no
 >   terminal.

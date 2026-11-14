@@ -93,6 +93,9 @@ class Tui(
   /** An image has gone to this terminal: the teardown removes every one (spec 029 FR-016). */
   private var imagesSent = false
 
+  /** The cell's size was asked after a resize, and the answer has not come. */
+  private var cellAsked = false
+
   /** What the terminal said of itself when the TUI started (spec 029 FR-013). */
   private var caps: TerminalCaps = TerminalCaps.None
   @volatile private var enabled = true
@@ -134,8 +137,8 @@ class Tui(
   private var decoder: KeyDecoder = new KeyDecoder()
   private var decoding: KeyDecoder.State = KeyDecoder.State.Ground
 
-  /** How long the input has been quiet inside a paste whose end has not come. */
-  private var pasteQuietMillis: Long = 0L
+  /** How long the input has been quiet inside a sequence or a paste whose end has not come. */
+  private var quietMillis: Long = 0L
 
   /** Initialize the TUI.
     *
@@ -233,8 +236,11 @@ class Tui(
       case GraphicsChoice.Auto  => !config.multiplexer
       case _                    => false
     )
-    val (graphics, cell) = if ask then TerminalQuery.run(term, queryTimeoutMs) else (false, None)
-    TerminalCaps(graphics, cell, colors, config.multiplexer, config.utf8Locale)
+    val answers = if ask then TerminalQuery.run(term, queryTimeoutMs) else TerminalQuery.NotAsked
+    // The key decoder starts where the answers left off: a reply the bound cut short is finished as a sequence when
+    // its rest arrives, and nothing typed while the question was open is acted on.
+    decoding = answers.raw.foldLeft(KeyDecoder.State.Ground: KeyDecoder.State)((s, c) => decoder.step(s, c)._1)
+    TerminalCaps(answers.graphics, answers.cell, colors, config.multiplexer, config.utf8Locale)
 
   /** Draw graphics as `choice` asks, as far as this terminal can (spec 029 FR-013); what it cannot do is said in the
     * footer and the log. The art is read the first time a mode that draws it is chosen, and the next frame starts from
@@ -317,10 +323,10 @@ class Tui(
           val resized = lastSize != ((width, height))
           // A resize may be a change of font size, which changes the cell: ask again. The answer comes back among the
           // keys, as a [[Key.CellSize]], and the art is then placed again at the new size (spec 029 FR-016).
-          if resized && lastSize != ((0, 0)) && caps.kittyGraphics then write(term, Kitty.CellSizeQuery)
+          if resized && lastSize != ((0, 0)) && caps.kittyGraphics then
+            write(term, Kitty.CellSizeQuery)
+            cellAsked = true
           val clear = clearNext || resized
-          lastSize = (width, height)
-          clearNext = false
 
           val current = state.get
           val frame = renderer.frame(current, width, height, theme)
@@ -331,7 +337,10 @@ class Tui(
             // Set before the write: a write that fails half-way may still have left an image with the terminal.
             if next.hasImages then imagesSent = true
             write(term, bytes)
+          // Only now: a frame that failed above is drawn again from a cleared screen, at the size it was meant for.
           shown = next
+          lastSize = (width, height)
+          clearNext = false
           renderFailing = false
           frame.animated
         catch
@@ -368,7 +377,7 @@ class Tui(
         while reading do
           val c = reader.read(wait)
           if c >= 0 then
-            pasteQuietMillis = 0L
+            quietMillis = 0L
             val (next, decoded) = decoder.step(decoding, c.toChar)
             decoding = next
             keys ++= decoded
@@ -377,8 +386,8 @@ class Tui(
           else if c == NonBlockingReader.READ_EXPIRED then
             val (next, decoded) = decoder.idle(decoding)
             keys ++= decoded
-            pasteQuietMillis = if next == KeyDecoder.State.Ground then 0L else pasteQuietMillis + wait
-            decoding = if pasteQuietMillis >= KeyDecoder.PasteWaitMillis then decoder.abandon(next) else next
+            quietMillis = if next == KeyDecoder.State.Ground then 0L else quietMillis + wait
+            decoding = if quietMillis >= KeyDecoder.waitMillis(next) then decoder.abandon(next) else next
             reading = false
           else
             reading = false
@@ -419,7 +428,10 @@ class Tui(
 
   /** The terminal's cell is `cell` pixels now. In pixel mode the art is sent and placed again at that size. */
   private def cellSizeReported(cell: gfx.CellSize): Unit = synchronized {
-    if !caps.cell.contains(cell) then
+    // Believed only as the answer to a question: unasked, it is text that reached the terminal's input some other way.
+    val asked = cellAsked
+    cellAsked = false
+    if asked && !caps.cell.contains(cell) then
       caps = caps.copy(cell = Some(cell))
       state.get.graphics match
         case GraphicsMode.Pixel(_) => setGraphics(GraphicsMode.Pixel(cell))

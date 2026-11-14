@@ -41,7 +41,7 @@ final case class GraphicRegion(
   * @param images
   *   the id each image was sent under, by what it is
   * @param content
-  *   the pixels a chart's image held when it was last sent
+  *   the buffer a chart's image was drawn from when it was last sent
   * @param placed
   *   by region id: the image shown there, its placement id, and where
   */
@@ -64,10 +64,16 @@ object PixelLayer:
 
   val Empty: PixelLayer = PixelLayer()
 
-  /** The whole factor a `hi` frame, drawn for [[ArtStore.CellWidth]] × [[ArtStore.CellHeight]] cells, is enlarged by at
-    * `cell`: the largest that still fits, at least 1 (spec 029 FR-015).
+  /** The most an image is enlarged by: a cell of 64 × 128 pixels, more than any display has. A terminal's report of its
+    * cell is input, and an image's size goes with the square of this.
     */
-  def scale(cell: CellSize): Int = (cell.width / ArtStore.CellWidth).min(cell.height / ArtStore.CellHeight).max(1)
+  val MaxScale: Int = 8
+
+  /** The whole factor a `hi` frame, drawn for [[ArtStore.CellWidth]] × [[ArtStore.CellHeight]] cells, is enlarged by at
+    * `cell`: the largest that still fits, at least 1 and at most [[MaxScale]] (spec 029 FR-015).
+    */
+  def scale(cell: CellSize): Int =
+    (cell.width / ArtStore.CellWidth).min(cell.height / ArtStore.CellHeight).max(1).min(MaxScale)
 
   /** The bytes that turn what `previous` says the terminal shows into `regions`, and the layer after them.
     *
@@ -78,26 +84,23 @@ object PixelLayer:
   def diff(previous: PixelLayer, regions: Seq[GraphicRegion], cell: CellSize, art: ArtStore): (String, PixelLayer) =
     val out = new StringBuilder
     var layer = previous
-    val wanted = regions.flatMap { region =>
-      image(region, cell, art).map { pixels =>
-        val key = region.graphic match
-          case Graphic.SpriteFrame(sprite, pose, frame) => ImageKey.Frame(sprite, pose, frame, scale(cell))
-          case Graphic.Chart(id, _)                     => ImageKey.ChartImage(id)
-        (region, key, pixels)
-      }
-    }
-    for (region, key, pixels) <- wanted do
-      val known = layer.images.get(key)
+    val wanted = regions.flatMap(region => image(region, cell, art).map(region -> _))
+    for (region, image) <- wanted do
+      val known = layer.images.get(image.key)
       val id = known.getOrElse(layer.images.size + 1)
-      // A sprite's frame never changes; a chart is sent again when its pixels did.
-      val stale = known.isEmpty || (key.isInstanceOf[ImageKey.ChartImage] && !layer.content.get(id).contains(pixels))
+      // A sprite's frame never changes; a chart is sent again when what it was drawn from did.
+      val stale = known.isEmpty || image.source.exists(source => !layer.content.get(id).contains(source))
       if stale then
-        out.append(Kitty.upload(id, pixels))
-        layer = layer.copy(images = layer.images.updated(key, id), content = layer.content.updated(id, pixels))
+        // The pixels are built here and nowhere else: an image the terminal holds costs no pixel work a frame.
+        out.append(Kitty.upload(id, image.pixels()))
+        layer = layer.copy(
+          images = layer.images.updated(image.key, id),
+          content = image.source.fold(layer.content)(layer.content.updated(id, _))
+        )
       val placement = layer.placements.getOrElse(region.id, layer.placements.size + 1)
       // The image, centred in its region: whole cells of margin move the cursor, the rest is a pixel offset.
-      val marginX = ((region.cols * cell.width - pixels.width) / 2).max(0)
-      val marginY = ((region.rows * cell.height - pixels.height) / 2).max(0)
+      val marginX = ((region.cols * cell.width - image.width) / 2).max(0)
+      val marginY = ((region.rows * cell.height - image.height) / 2).max(0)
       val shown = Shown(
         id,
         placement,
@@ -121,17 +124,40 @@ object PixelLayer:
       layer = layer.copy(placed = layer.placed - regionId)
     (out.toString, layer)
 
-  /** The pixels a region shows at `cell`, enlarged by a whole factor: a sprite's frame by [[scale]]; a chart by as much
-    * as still fits its region. None for a sprite the art does not have.
+  /** An image a region shows: what it is, its size once enlarged, and how to build its pixels when they have to be
+    * sent.
+    *
+    * @param source
+    *   for a chart, the buffer it is drawn from: a chart is sent again when this changes
     */
-  private def image(region: GraphicRegion, cell: CellSize, art: ArtStore): Option[PixelBuffer] = region.graphic match
+  final private case class Wanted(
+      key: ImageKey,
+      width: Int,
+      height: Int,
+      source: Option[PixelBuffer],
+      pixels: () => PixelBuffer
+  )
+
+  /** What a region shows at `cell`, enlarged by a whole factor: a sprite's frame by [[scale]]; a chart by as much as
+    * still fits its region, and no more than [[MaxScale]]. None for a sprite the art does not have.
+    */
+  private def image(region: GraphicRegion, cell: CellSize, art: ArtStore): Option[Wanted] = region.graphic match
     case Graphic.SpriteFrame(name, pose, frame) =>
-      art
-        .sprite(name)
-        .filter(s => pose < s.poses.size && frame < s.poses(pose).frames)
-        .map(_.hiFrame(pose, frame).enlarge(scale(cell)))
-    case Graphic.Chart(_, buffer) =>
+      art.sprite(name).filter(s => pose < s.poses.size && frame < s.poses(pose).frames).map { sprite =>
+        val k = scale(cell)
+        Wanted(
+          ImageKey.Frame(name, pose, frame, k),
+          sprite.cols * ArtStore.CellWidth * k,
+          sprite.rows * ArtStore.CellHeight * k,
+          None,
+          () => sprite.hiFrame(pose, frame).enlarge(k)
+        )
+      }
+    case Graphic.Chart(id, buffer) =>
       if buffer.width <= 0 || buffer.height <= 0 then None
       else
-        val k = ((region.cols * cell.width) / buffer.width).min((region.rows * cell.height) / buffer.height).max(1)
-        Some(buffer.enlarge(k))
+        val fits = ((region.cols * cell.width) / buffer.width).min((region.rows * cell.height) / buffer.height)
+        val k = fits.max(1).min(MaxScale)
+        Some(
+          Wanted(ImageKey.ChartImage(id), buffer.width * k, buffer.height * k, Some(buffer), () => buffer.enlarge(k))
+        )

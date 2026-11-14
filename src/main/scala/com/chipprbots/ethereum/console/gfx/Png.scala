@@ -24,11 +24,17 @@ object Png:
 
   private val Signature: Array[Byte] = Array(0x89, 'P', 'N', 'G', '\r', '\n', 0x1a, '\n').map(_.toByte)
 
-  def read(bytes: Array[Byte]): Either[String, Image] =
-    try decode(bytes)
+  /** The image in `bytes`.
+    *
+    * @param size
+    *   the width and height it must have, if they are known: one of any other size is refused at its header, before a
+    *   pixel of it is decoded or a buffer for it allocated
+    */
+  def read(bytes: Array[Byte], size: Option[(Int, Int)] = None): Either[String, Image] =
+    try decode(bytes, size)
     catch case NonFatal(e) => Left(s"not a readable PNG: ${e.getClass.getSimpleName}: ${e.getMessage}")
 
-  private def decode(bytes: Array[Byte]): Either[String, Image] =
+  private def decode(bytes: Array[Byte], size: Option[(Int, Int)]): Either[String, Image] =
     if bytes.length < 8 || !bytes.take(8).sameElements(Signature) then Left("not a PNG")
     else
       val in = ByteBuffer.wrap(bytes, 8, bytes.length - 8)
@@ -59,6 +65,8 @@ object Png:
                 val (depth, colour, _, _, interlace) = (b.get, b.get, b.get, b.get, b.get)
                 if w <= 0 || h <= 0 || w > MaxSide || h > MaxSide then
                   problem = Some(s"is ${w}x$h: a side is over $MaxSide")
+                else if size.exists(_ != (w, h)) then
+                  problem = size.map((mustW, mustH) => s"is ${w}x$h, must be ${mustW}x$mustH")
                 else if depth != 8 then problem = Some(s"has $depth bits a channel, not 8")
                 else if colour != 3 && colour != 6 then
                   problem = Some(s"is colour type $colour, not indexed (3) or RGBA (6)")

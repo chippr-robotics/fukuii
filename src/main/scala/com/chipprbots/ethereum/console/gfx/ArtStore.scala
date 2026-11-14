@@ -10,6 +10,13 @@ import scala.util.control.NonFatal
 
 import com.typesafe.config.Config
 import com.typesafe.config.ConfigFactory
+import com.typesafe.config.ConfigIncludeContext
+import com.typesafe.config.ConfigIncluder
+import com.typesafe.config.ConfigIncluderClasspath
+import com.typesafe.config.ConfigIncluderFile
+import com.typesafe.config.ConfigIncluderURL
+import com.typesafe.config.ConfigObject
+import com.typesafe.config.ConfigParseOptions
 
 /** One pose of a sprite (contracts/art.md): how many frames it has, and how long each stays up.
   *
@@ -93,6 +100,23 @@ object ArtStore:
 
   val Empty: ArtStore = new ArtStore(Map.empty, Nil)
 
+  /** `art.conf` is read as it stands: an `include` in it fetches nothing, by name, from a file, from the class path or
+    * from the network.
+    */
+  private object NoIncluder
+      extends ConfigIncluder
+      with ConfigIncluderFile
+      with ConfigIncluderURL
+      with ConfigIncluderClasspath:
+    private def nothing: ConfigObject = ConfigFactory.empty().root()
+    override def withFallback(fallback: ConfigIncluder): ConfigIncluder = this
+    override def include(context: ConfigIncludeContext, what: String): ConfigObject = nothing
+    override def includeFile(context: ConfigIncludeContext, what: java.io.File): ConfigObject = nothing
+    override def includeURL(context: ConfigIncludeContext, what: java.net.URL): ConfigObject = nothing
+    override def includeResources(context: ConfigIncludeContext, what: String): ConfigObject = nothing
+
+  private val NoIncludes: ConfigParseOptions = ConfigParseOptions.defaults().setIncluder(NoIncluder)
+
   /** The art shipped with the node, under `tui/art/` in its resources. */
   def bundled(): ArtStore =
     load { name =>
@@ -116,7 +140,7 @@ object ArtStore:
     read("art.conf") match
       case None => new ArtStore(Map.empty, Seq("art.conf: missing"))
       case Some(bytes) =>
-        Try(ConfigFactory.parseString(new String(bytes, StandardCharsets.UTF_8))).toEither match
+        Try(ConfigFactory.parseString(new String(bytes, StandardCharsets.UTF_8), NoIncludes)).toEither match
           case Left(e) => new ArtStore(Map.empty, Seq(s"art.conf: ${e.getMessage}"))
           case Right(conf) =>
             val results = Sprites.map(expected => sprite(expected, conf, read))
@@ -173,7 +197,7 @@ object ArtStore:
   private def sheet(name: String, bytes: Array[Byte], width: Int, height: Int): Either[String, PixelBuffer] =
     if bytes.length > MaxBytes then Left(s"$name: larger than 4 MiB")
     else
-      Png.read(bytes).left.map(reason => s"$name: $reason").flatMap { image =>
+      Png.read(bytes, Some((width, height))).left.map(reason => s"$name: $reason").flatMap { image =>
         if image.width != width || image.height != height then
           Left(s"$name: is ${image.width}x${image.height}, must be ${width}x$height")
         else

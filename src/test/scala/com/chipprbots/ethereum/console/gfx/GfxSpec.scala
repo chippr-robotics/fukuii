@@ -103,6 +103,9 @@ class GfxSpec extends AnyFlatSpec with Matchers:
     corrupt(corrupt.length - 20) = (corrupt(corrupt.length - 20) ^ 0x55).toByte
     Png.read(corrupt).left.toOption.get should include("checksum")
     Png.read(good).map(i => (i.width, i.height)) shouldBe Right((16, 16))
+    // A sheet of the wrong size is refused at its header, before a pixel of it is decoded.
+    Png.read(good, Some((16, 16))).isRight shouldBe true
+    Png.read(good, Some((4096, 4096))) shouldBe Left("is 16x16, must be 4096x4096")
   }
 
   // ---- the art store ------------------------------------------------------------------------------------------------
@@ -124,6 +127,23 @@ class GfxSpec extends AnyFlatSpec with Matchers:
         (f.width, f.height) shouldBe ((256, 256))
         f.nonEmpty shouldBe true
     store.sprite("network-etc").get.poses.map(_.frames) shouldBe Seq(1)
+  }
+
+  "art.conf" should "be read as it stands: an include in it fetches nothing" taggedAs (UnitTest) in {
+    def shipped(name: String): Option[Array[Byte]] =
+      Option(getClass.getResourceAsStream(s"/tui/art/$name")).map { in =>
+        try in.readAllBytes()
+        finally in.close()
+      }
+    val including = ArtStore.load {
+      case "art.conf" =>
+        shipped("art.conf").map(conf =>
+          ("include required(file(\"/nonexistent/art-include.conf\"))\n" + new String(conf, "UTF-8")).getBytes("UTF-8")
+        )
+      case other => shipped(other)
+    }
+    including.problems shouldBe empty
+    including.sprites.keySet shouldBe ArtStore.bundled().sprites.keySet
   }
 
   "A pose's frame" should "follow its timeline at the frame counter, and loop" taggedAs (UnitTest) in {

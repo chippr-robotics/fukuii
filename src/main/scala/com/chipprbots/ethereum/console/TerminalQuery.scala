@@ -20,6 +20,24 @@ object TerminalQuery:
   /** The most characters read: the three replies are under a hundred. */
   val MaxReply: Int = 1024
 
+  /** The cells that are believed: from 4 pixels a side to 64 × 128, which is eight times the cell the art is drawn for.
+    * The report is input, and the size of an image goes with the square of it.
+    */
+  val MinCell: Int = 4
+  val MaxCellWidth: Int = 64
+  val MaxCellHeight: Int = 128
+
+  /** What a terminal said.
+    *
+    * @param raw
+    *   every character read, in order: the caller's key decoder is brought to where this text leaves it, so that the
+    *   rest of a reply cut short by the bound is still read as part of a sequence, never as keys
+    */
+  final case class Answers(graphics: Boolean, cell: Option[CellSize], raw: String)
+
+  /** A terminal that was not asked. */
+  val NotAsked: Answers = Answers(graphics = false, cell = None, raw = "")
+
   /** What goes to the terminal. */
   val Questions: String = Kitty.Query + Kitty.CellSizeQuery + Kitty.DeviceAttributesQuery
 
@@ -34,7 +52,8 @@ object TerminalQuery:
   def parse(reply: String): (Boolean, Option[CellSize]) =
     val cell = CellReport.findFirstMatchIn(reply).flatMap { m =>
       val (height, width) = (m.group(1).toIntOption, m.group(2).toIntOption)
-      for h <- height; w <- width; if w >= 4 && h >= 4 && w <= 256 && h <= 512 yield CellSize(w, h)
+      for h <- height; w <- width; if w >= MinCell && h >= MinCell && w <= MaxCellWidth && h <= MaxCellHeight
+      yield CellSize(w, h)
     }
     (GraphicsOk.findFirstIn(reply).isDefined, cell)
 
@@ -48,7 +67,7 @@ object TerminalQuery:
       terminal: Terminal,
       timeoutMillis: Long = TimeoutMillis,
       nanoTime: () => Long = () => System.nanoTime()
-  ): (Boolean, Option[CellSize]) =
+  ): Answers =
     terminal.writer().print(Questions)
     terminal.writer().flush()
     val reader = terminal.reader()
@@ -64,4 +83,5 @@ object TerminalQuery:
         else
           reply.append(c.toChar)
           if complete(reply.toString) then reading = false
-    parse(reply.toString)
+    val (graphics, cell) = parse(reply.toString)
+    Answers(graphics, cell, reply.toString)
