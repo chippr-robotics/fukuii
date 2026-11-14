@@ -79,6 +79,16 @@ final class PathStateStorage(
     */
   @volatile private var faulted: Option[String] = None
 
+  /** The finalized block named with a fork choice this node followed ([[moveHead]]'s `finalized`), read from AppState
+    * at start (spec 018 C4d part 1). Before one is named, what the settings name, which is none in the node.
+    */
+  @volatile private var named: Option[FinalizedBlock] = appState.getStateFinalized()
+
+  private def finalizedNow(): Option[FinalizedBlock] = named.orElse(settings.finalized())
+
+  /** The finalized block this store holds its moves and its retention to. */
+  def finalizedBlock: Option[FinalizedBlock] = finalizedNow()
+
   /** True from the first move of the head that moves it in the current call of [[moveHead]]: a move of nothing is not
     * counted ([[movesStarted]]).
     */
@@ -310,7 +320,7 @@ final class PathStateStorage(
       case None =>
         HeadMovePlan.Outcome.NotHeld(s"no move to block ${target.show} can be made: there is no state anchor", None)
       case Some(anchor) =>
-        val finalized = settings.finalized()
+        val finalized = finalizedNow()
         val headers = link
         val sources = new HeadMovePlan.Sources:
           def recordHeader(
@@ -693,7 +703,7 @@ final class PathStateStorage(
     )
     // Read before the lock is asked for: nothing runs under it but this class and the data source (vault), and what
     // names the finalized block is not this class's.
-    val finalized = settings.finalized().map(_.number)
+    val finalized = finalizedNow().map(_.number)
     val outcome = adopting(s"canonical commit of block ${block.show}") {
       // Every in-place writer holds this lock, so the clock is at rest and the anchor is the disk's.
       clock.anchor match
@@ -773,6 +783,8 @@ final class PathStateStorage(
           indexes.clear()
           // the state a fault was found in is gone with it: the next genesis is committed on a store that holds none
           faulted = None
+          // and so is what was finalized on it (its row goes with the state's marks)
+          named = None
           deletes.map(_.toRemove.size).sum
     }
 
@@ -975,7 +987,7 @@ final class PathStateStorage(
     extra.foreach(other =>
       require(other.dataSource eq dataSource, "a block and its state are written in one batch, to one data source")
     )
-    val finalized = settings.finalized().map(_.number)
+    val finalized = finalizedNow().map(_.number)
     val outcome = adopting(s"promotion of block ${block.show}") {
       (clock.anchor, overlay.layerOf(block)) match
         case (None, _) =>
@@ -1137,6 +1149,10 @@ final class PathStateStorage(
     *
     * @param link
     *   a block as its header gives it, by its hash ([[HeadMovePlan.Sources.link]])
+    * @param finalized
+    *   the finalized block the fork choice behind this move named (spec 018 C4d part 1): its row is written in the
+    *   batch that ends on `target`, and it is this store's under the state lock right after that batch, so a move or a
+    *   commit that follows sees it, and one that was refused names nothing. Not written again when it is the one named
     * @param extraFor
     *   the caller's rows for the batch that ends on a block. It is called with no lock of this store held but the one
     *   that keeps other moves and commits out, once for each batch, and again if the move is planned again; what it
@@ -1154,7 +1170,8 @@ final class PathStateStorage(
   def moveHead(
       target: BlockRef,
       link: ByteString => Option[HeadMovePlan.Link],
-      extraFor: HeadMovePlan.Chunk => Option[DataSourceBatchUpdate]
+      extraFor: HeadMovePlan.Chunk => Option[DataSourceBatchUpdate],
+      finalized: Option[FinalizedBlock] = None
   ): MoveOutcome =
     if moves.isHeldByCurrentThread then
       throw new IllegalStateException(s"A move of the head to ${target.show} cannot start inside another")
@@ -1166,7 +1183,7 @@ final class PathStateStorage(
     val pin = new BranchPin(s"the move of the head to ${target.show}")
     try
       val outcome =
-        try move(target, link, extraFor, pin, MoveReplans)
+        try move(target, link, extraFor, finalized, pin, MoveReplans)
         catch
           case NonFatal(failed) =>
             // A move that stopped part of the way kept the layers its later batches were to apply. Those of the
@@ -1193,6 +1210,7 @@ final class PathStateStorage(
       target: BlockRef,
       link: ByteString => Option[HeadMovePlan.Link],
       extraFor: HeadMovePlan.Chunk => Option[DataSourceBatchUpdate],
+      namesFinalized: Option[FinalizedBlock],
       pin: BranchPin,
       replansLeft: Int
   ): MoveOutcome =
@@ -1209,7 +1227,7 @@ final class PathStateStorage(
         pin
       )
     )
-    val finalized = settings.finalized().map(_.number)
+    val finalized = finalizedNow().map(_.number)
     val started = System.nanoTime()
     val chunks =
       if plan.isNoMove then Vector(HeadMovePlan.Chunk(plan.anchor, plan.anchor, Vector.empty, Vector.empty))
@@ -1236,6 +1254,12 @@ final class PathStateStorage(
         extra.foreach(other =>
           require(other.dataSource eq dataSource, "a move and its head are written in one batch, to one data source")
         )
+        // the finalized block the fork choice named, in the batch that ends on the target (C4d part 1)
+        val naming = namesFinalized.filter(_ => at == chunks.size - 1).filterNot(named.contains)
+        val rows = naming.fold(extra) { block =>
+          val row = appState.putStateFinalized(block)
+          Some(extra.fold(row)(_.and(row)))
+        }
         val next: Option[Long] = lock.locked(
           s"head move to block ${chunk.head.show}",
           nanos => told("the wait for the state lock")(settings.observer.lockWaited(nanos))
@@ -1250,7 +1274,8 @@ final class PathStateStorage(
           else if chunk.reverse.isEmpty && chunk.forward.isEmpty then
             // the caller's rows for the head as it is: written over a best block that is the anchor, as any batch is
             bestIsTheAnchor(chunk.from, s"the rows of the head at block ${chunk.from.show}")
-            extra.foreach(_.commit())
+            rows.foreach(_.commit())
+            naming.foreach(block => named = Some(block))
             Some(epoch)
           else
             // counted under the lock, before its first batch is built: a confirmation of the head as it is moves
@@ -1259,7 +1284,8 @@ final class PathStateStorage(
             if !countedThisMove then
               countedThisMove = true
               movesBegun.incrementAndGet()
-            val wrote = writeChunk(chunk, extra, finalized)
+            val wrote = writeChunk(chunk, rows, finalized)
+            naming.foreach(block => named = Some(block))
             movedBy(chunk, wrote, last = at == chunks.size - 1)
             // after what is kept in memory has followed the disk: a store that failed its check is not left with the
             // window and the layers of another head
@@ -1289,7 +1315,7 @@ final class PathStateStorage(
           batches = chunks.size,
           nanos = System.nanoTime() - started
         )
-    else if replansLeft > 0 then move(target, link, extraFor, pin, replansLeft - 1)
+    else if replansLeft > 0 then move(target, link, extraFor, namesFinalized, pin, replansLeft - 1)
     else
       throw new StateUnavailable(
         s"no move of the head to ${target.show} could be made: the state, or an executed block of the plan, changed " +

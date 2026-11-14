@@ -6,6 +6,7 @@ import org.apache.pekko.actor.typed.ActorRef as TypedActorRef
 import org.apache.pekko.util.ByteString
 
 import com.chipprbots.ethereum.consensus.ReorgStateHandler
+import com.chipprbots.ethereum.db.storage.pathstate.FinalizedBlock
 import com.chipprbots.ethereum.db.storage.pathstate.ReorgRefusal
 import com.chipprbots.ethereum.db.storage.pathstate.ReorgTooDeep
 import com.chipprbots.ethereum.db.storage.pathstate.StateUnavailable
@@ -157,6 +158,28 @@ class ForkChoiceManager(
     def notMoved(why: String): Either[String, Unit] =
       log.warn(s"Fork choice head ${header.number.value} ${header.hashAsHexString} not applied (SYNCING): $why")
       Left("SYNCING")
+    // the finalized block it names, by its header (the Engine API has found it on the head's chain); the zero hash
+    // names none, and leaves the one named before (C4d part 1)
+    val finalized =
+      Option.when(newState.finalizedBlockHash != ForkChoiceManager.ZeroHash)(newState.finalizedBlockHash).flatMap {
+        hash =>
+          val named = blockchainReader
+            .getBlockHeaderByHash(BlockHash(hash))
+            .map(finalizedHeader => FinalizedBlock(finalizedHeader.number.value, finalizedHeader.hash.value))
+          if named.isEmpty then
+            log.warn(
+              s"Fork choice names finalized block ${ForkChoiceManager.hex(hash)}, whose header is not stored: the one named before is kept"
+            )
+          named.foreach { block =>
+            // taken, as go-ethereum's SetFinalized takes it: on the held state's chain it only loosens what is kept
+            blockchainWriter.finalizedOfTheState.filter(_.number > block.number).foreach { before =>
+              log.warn(
+                s"Fork choice names finalized block ${block.number}, below the one named before (${before.number})"
+              )
+            }
+          }
+          named
+      }
     try
       blockchainWriter.moveHeadInPlace(
         header,
@@ -165,7 +188,8 @@ class ForkChoiceManager(
           Option.when(chunk.reverse.nonEmpty || chunk.forward.nonEmpty)(
             s"the state is held at block ${chunk.from.show}, and the head is not moved off it to follow a fork " +
               "choice on the unified state layout yet (spec 018 C4d)"
-          )
+          ),
+        finalized
       )
       log.info(
         s"Fork choice updated: head=${newState.headBlockHash} (the block whose state is held), " +
@@ -220,6 +244,12 @@ class ForkChoiceManager(
     }
 
 object ForkChoiceManager:
+
+  /** The hash a fork choice names when it names no block (a safe or finalized block before there is one). */
+  val ZeroHash: ByteString = ByteString(new Array[Byte](32))
+
+  private[engine] def hex(hash: ByteString): String =
+    com.chipprbots.ethereum.utils.Hex.toHexString(hash.toArray).take(16)
 
   /** Notification sent by [[ForkChoiceManager]] to its registered listener whenever the CL pushes a fork choice via
     * engine_forkchoiceUpdated. Carries both the head hash (always) and the locally-stored header (when we already have

@@ -399,6 +399,8 @@ class ProposerOnPositionsSpec extends ScalaTestWithActorTestKit with AnyFlatSpec
         now.parentHash shouldBe head.hash
         rig.pathState.anchor shouldBe Some(rig.refOf(now))
         rig.node.storagesInstance.storages.appStateStorage.getBestBlockInfo().hash shouldBe committed
+        // with no beacon chain behind it, a commit names no finalized block, and so refuses no later rewind (C4d)
+        rig.pathState.finalizedBlock shouldBe None
       }
     }
 

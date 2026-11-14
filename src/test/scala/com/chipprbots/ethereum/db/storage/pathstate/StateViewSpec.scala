@@ -398,3 +398,25 @@ class StateViewSpec extends AnyFlatSpec with Matchers:
       withClue(s"'$value': ")(an[IllegalStateException] should be thrownBy StateAnchor.decode(value))
     }
   }
+
+  "The finalized block's row" should "be the string v1:<block hash>:<number>, and refuse what it cannot read" taggedAs
+    UnitTest in {
+      val block = FinalizedBlock(BigInt(1234), ByteString(Array.tabulate[Byte](32)(_.toByte)))
+      val encoded = FinalizedBlock.encode(block)
+      encoded shouldBe s"v1:${(0 until 32).map(i => f"$i%02x").mkString}:1234"
+      FinalizedBlock.decode(encoded) shouldBe block
+      val hash = "ab" * 32
+      Seq(
+        "",
+        "v1",
+        s"v2:$hash:5",
+        s"v1:$hash",
+        s"v1:$hash:",
+        s"v1:$hash:-5",
+        s"v1:${"ab" * 31}:5",
+        s"v1:${"zz" * 32}:5"
+      )
+        .foreach { value =>
+          withClue(s"'$value': ")(an[IllegalStateException] should be thrownBy FinalizedBlock.decode(value))
+        }
+    }

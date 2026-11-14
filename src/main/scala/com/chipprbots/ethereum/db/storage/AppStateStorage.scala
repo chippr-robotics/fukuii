@@ -77,7 +77,24 @@ class AppStateStorage(val dataSource: DataSource) extends TransactionalKeyValueS
     * nowhere else: [[pathstate.PathStateStorage.destroyStateForNewGenesis]], which only test mode may call.
     */
   private[storage] def removeStateMarks(): DataSourceBatchUpdate =
-    update(Seq(Keys.StateAnchor, Keys.StateOrigin, Keys.StateLayout, Keys.StateChangesetPrunedTo), Nil)
+    update(
+      Seq(Keys.StateAnchor, Keys.StateOrigin, Keys.StateLayout, Keys.StateChangesetPrunedTo, Keys.StateFinalized),
+      Nil
+    )
+
+  /** The finalized block as the consensus client last named it with a fork choice this node followed (spec 018 C4d part
+    * 1): what retention keeps above, and what a move of the head must not reverse, across a restart. `None` before one
+    * was named, and on a datadir of the hash layout.
+    */
+  def getStateFinalized(): Option[pathstate.FinalizedBlock] =
+    get(Keys.StateFinalized).map(pathstate.FinalizedBlock.decode)
+
+  /** The update that sets [[getStateFinalized]]. It belongs in the batch of the move of the head that follows the fork
+    * choice that named the block, which only the path state storage builds: a fork choice that was refused names
+    * nothing.
+    */
+  private[storage] def putStateFinalized(block: pathstate.FinalizedBlock): DataSourceBatchUpdate =
+    put(Keys.StateFinalized, pathstate.FinalizedBlock.encode(block))
 
   /** The block this datadir's state on the unified layout began at (spec 018 plan.md "C4b: the move core"): its
     * genesis, or the block a sync or an imported checkpoint left the state of. No state before it was ever here, so no
@@ -960,6 +977,7 @@ object AppStateStorage:
     val RefCountsExact = "state.refcounts.exact"
     val StateAnchor = com.chipprbots.ethereum.db.storage.pathstate.StateAnchor.Key
     val StateOrigin = "state.origin"
+    val StateFinalized = "state.finalized"
     val StateChangesetPrunedTo = "state.changeset.pruned-to"
     val StateLayout = com.chipprbots.ethereum.db.storage.pathstate.StateLayout.Key
     val ChainWeightInvariant = "chain.weight.invariant"

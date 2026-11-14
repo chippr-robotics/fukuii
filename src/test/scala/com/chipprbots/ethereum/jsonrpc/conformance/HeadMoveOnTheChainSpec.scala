@@ -14,6 +14,7 @@ import org.scalatest.matchers.should.Matchers
 import com.chipprbots.ethereum.TestInstanceConfigProvider
 import com.chipprbots.ethereum.blockchain.data.GenesisDataLoader
 import com.chipprbots.ethereum.consensus.engine.EngineApiService
+import com.chipprbots.ethereum.consensus.engine.ForkChoiceManager
 import com.chipprbots.ethereum.consensus.engine.ForkChoiceState
 import com.chipprbots.ethereum.consensus.engine.ForkchoiceUpdatedResponse
 import com.chipprbots.ethereum.consensus.engine.PayloadAttributes
@@ -31,9 +32,12 @@ import com.chipprbots.ethereum.db.storage.Namespaces
 import com.chipprbots.ethereum.db.storage.PathNodeStorage
 import com.chipprbots.ethereum.db.storage.pathstate.BlockRef
 import com.chipprbots.ethereum.db.storage.pathstate.ChangesetStorage
+import com.chipprbots.ethereum.db.storage.pathstate.FinalizedBlock
 import com.chipprbots.ethereum.db.storage.pathstate.HeadMovePlan
 import com.chipprbots.ethereum.db.storage.pathstate.PathStateStorage
 import com.chipprbots.ethereum.db.storage.pathstate.PathStateTestKit
+import com.chipprbots.ethereum.db.storage.pathstate.ReorgRefusal
+import com.chipprbots.ethereum.db.storage.pathstate.ReorgTooDeep
 import com.chipprbots.ethereum.db.storage.pathstate.StateUnavailable
 import com.chipprbots.ethereum.domain.Block
 import com.chipprbots.ethereum.domain.BlockHeader
@@ -171,6 +175,11 @@ class HeadMoveOnTheChainSpec extends ScalaTestWithActorTestKit with AnyFlatSpecL
       )
     def dropAppState(key: String): Unit =
       source.update(Seq(DataSourceUpdate(Namespaces.AppStateNamespace, Seq(key.getBytes.toIndexedSeq), Nil)))
+
+    /** The datadir but for the finalized block a fork choice names (C4d part 1). */
+    def withoutFinalized: Map[ByteString, ByteString] =
+      val key = ByteString(Namespaces.AppStateNamespace.toArray ++ AppStateStorage.Keys.StateFinalized.getBytes)
+      everything - key
 
     /** The datadir but for what the reconciliation may write: the index, the transaction lookups, the best block. */
     def outsideTheHead: Map[ByteString, ByteString] =
@@ -484,10 +493,10 @@ class HeadMoveOnTheChainSpec extends ScalaTestWithActorTestKit with AnyFlatSpecL
       val chain = blocks.take(4)
       chain.foreach(on.imports)
       val choices = on.node.forkChoiceManager
-      val before = on.everything
+      val before = on.withoutFinalized
       choices.applyForkChoiceState(choiceOf(chain.last, chain)) shouldBe Right(())
       choices.getHeadBlockHash shouldBe Some(chain.last.header.hash.value)
-      on.everything shouldBe before
+      on.withoutFinalized shouldBe before; on.pathState.finalizedBlock.map(_.number) shouldBe Some(BigInt(1))
       on.holds(chain.last.header, chain)
       on.pathState.moveInProgress shouldBe false
     }
@@ -562,14 +571,17 @@ class HeadMoveOnTheChainSpec extends ScalaTestWithActorTestKit with AnyFlatSpecL
       val on = new Node
       val chain = blocks.take(4)
       chain.foreach(on.imports)
-      val before = on.everything
+      val before = on.withoutFinalized
       val answer = on
         .engine(() => on.pathState.anchor.map(_.hash))
         .forkchoiceUpdated(choiceOf(chain.last, chain), None)
         .unsafeRunSync()(using cats.effect.unsafe.IORuntime.global)
       answer.map(_.payloadStatus.status) shouldBe Right(PayloadStatus.Valid)
       on.node.forkChoiceManager.getHeadBlockHash shouldBe Some(chain.last.header.hash.value)
-      on.everything shouldBe before
+      on.withoutFinalized shouldBe before
+      // the finalized block it names is the store's (C4d part 1)
+      on.pathState.finalizedBlock shouldBe Some(FinalizedBlock(1, chain.head.header.hash.value))
+      on.storages.appStateStorage.getStateFinalized() shouldBe on.pathState.finalizedBlock
       on.source.offTheLock.toArray.toSeq shouldBe empty
     }
 
@@ -641,6 +653,65 @@ class HeadMoveOnTheChainSpec extends ScalaTestWithActorTestKit with AnyFlatSpecL
     on.move(chain(1).header)
     on.pathState.movesStarted shouldBe before + 1
   }
+
+  // C4d part 1 (T160, T171): the finalized block a fork choice names, kept with the move that followed it.
+  "The finalized block" should "be the fork choice's once its head is followed, kept across a restart, and held to by a move" taggedAs
+    (UnitTest, ConsensusTest) in {
+      val on = new Node
+      val chain = blocks.take(4)
+      chain.foreach(on.imports)
+      on.pathState.finalizedBlock shouldBe None
+      // a fork choice refused names nothing: the next block committed in place since the look at the head
+      on.imports(blocks(4))
+      val withFinality =
+        ForkChoiceState(chain.last.header.hash.value, chain(1).header.hash.value, chain(1).header.hash.value)
+      on.node.forkChoiceManager.applyForkChoiceState(withFinality) shouldBe Left("SYNCING")
+      on.pathState.finalizedBlock shouldBe None
+      on.storages.appStateStorage.getStateFinalized() shouldBe None
+      // one followed names it, in the batch that confirmed the head
+      val head = blocks(4)
+      val followed = ForkChoiceState(head.header.hash.value, chain(1).header.hash.value, chain(1).header.hash.value)
+      on.node.forkChoiceManager.applyForkChoiceState(followed) shouldBe Right(())
+      val named = FinalizedBlock(chain(1).header.number.value, chain(1).header.hash.value)
+      on.pathState.finalizedBlock shouldBe Some(named)
+      on.storages.appStateStorage.getStateFinalized() shouldBe Some(named)
+      on.source.offTheLock.toArray.toSeq shouldBe empty
+      // the zero hash names none, and leaves it
+      on.node.forkChoiceManager.applyForkChoiceState(
+        ForkChoiceState(head.header.hash.value, ForkChoiceManager.ZeroHash, ForkChoiceManager.ZeroHash)
+      ) shouldBe Right(())
+      on.pathState.finalizedBlock shouldBe Some(named)
+      // one below it is taken, as go-ethereum takes it (logged): on the held state's chain it only loosens what is kept
+      val lower = ForkChoiceState(head.header.hash.value, chain.head.header.hash.value, chain.head.header.hash.value)
+      on.node.forkChoiceManager.applyForkChoiceState(lower) shouldBe Right(())
+      on.pathState.finalizedBlock shouldBe Some(FinalizedBlock(1, chain.head.header.hash.value))
+      on.node.forkChoiceManager.applyForkChoiceState(followed) shouldBe Right(())
+      on.pathState.finalizedBlock shouldBe Some(named)
+      // a store opened again on the datadir holds it, and a move does not reverse it
+      val reopened = new PathStateStorage(new PathNodeStorage(on.source), on.storages.appStateStorage)
+      reopened.finalizedBlock shouldBe Some(named)
+      // a row it cannot read is no absent block: a store is not opened over it
+      val unreadable = new Failing
+      unreadable.update(
+        Seq(
+          DataSourceUpdate(
+            Namespaces.AppStateNamespace,
+            Nil,
+            Seq(AppStateStorage.Keys.StateFinalized.getBytes.toIndexedSeq -> "v1:not-a-block".getBytes.toIndexedSeq)
+          )
+        )
+      )
+      an[IllegalStateException] should be thrownBy new PathStateStorage(
+        new PathNodeStorage(unreadable),
+        new AppStateStorage(unreadable)
+      )
+      val before = on.everything
+      (the[ReorgTooDeep] thrownBy on.move(chain.head.header)).reason shouldBe ReorgRefusal.Finalized
+      on.everything shouldBe before
+      // and above it a move goes as before
+      on.move(chain(1).header) shouldBe a[PathStateStorage.MoveOutcome.Moved]
+      on.holds(chain(1).header, chain.take(2))
+    }
 
   // C4b part 4 (T150): the reconciliation at start. The block whose state is held wins, always (vault, forge): the
   // best block and the index are made its own, and nothing else is written.
