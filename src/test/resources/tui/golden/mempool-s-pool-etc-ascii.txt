@@ -1,0 +1,24 @@
+ # FUKUII  etc (61) . PoW . up 12d 7h                                   Mempool 
+--------------------------------------------------------------------------------
+ + no alerts                                                                    
+ Peers   41/50 ##########         Block  21,884,102 (at head)                   
+ Sync    + at head                                                              
+--------------------------------------------------------------------------------
+ Pool    142 pending . 3% of 4,096 . oldest 14m 59s . 5 sent from this node     
+ Flow    3.4 in/s . 2.9 mined/s . 0.1 dropped/s                                 
+--------------------------------------------------------------------------------
+ Fees    gas prices against the price this node would suggest, 1.00 gwei        
+   urgent  #################.......      36   from 3.00 gwei                    
+   high    ########################      52   from 1.50 gwei                    
+   normal  ##################......      38   from 0.500 gwei                   
+   low     #######.................      16   below 0.500 gwei                  
+--------------------------------------------------------------------------------
+ Refused Underpriced 1,204 . AlreadyKnown 311 . NonceTooLow 58                  
+ Queue   not kept by this client                                                
+--------------------------------------------------------------------------------
+ Pending best-paying first . Up Down select, Enter open                         
+   hash          from            nonce  gas price         age  kind             
+   0x6885..0043  0x4c65..0015       42  4.00 gwei     14m 33s                   
+   0x5fb4..0036  0x439a..0008       42  3.95 gwei     11m 44s                   
+   0xd10a..0086  0x0ff7..0013       45  3.95 gwei      14m 4s                   
+ 1-9 view  : prompt  / filter  ? help  p pause  r redraw  d detach  q quit      

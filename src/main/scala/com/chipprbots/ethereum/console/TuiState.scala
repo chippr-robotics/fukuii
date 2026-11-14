@@ -76,6 +76,8 @@ enum Catchup:
   *   the explorer's lookups and where each stands, as the worker last published them (spec 029 FR-029)
   * @param selectedBlock
   *   the hash of the block selected in the Block Observatory: kept by hash, so new blocks do not move it
+  * @param selectedTx
+  *   the hash of the transaction selected in the Mempool view
   * @param chain
   *   the chain's identity and fork timeline, once the node has read its configuration
   * @param snapshot
@@ -137,8 +139,21 @@ case class TuiState(
     startup: Set[StartupPhase] = Set.empty,
     reorgAlertDepth: Int = Alerts.ReorgDepth,
     lookups: Vector[(LookupQuery, LookupState)] = Vector.empty,
-    selectedBlock: Option[String] = None
+    selectedBlock: Option[String] = None,
+    selectedTx: Option[String] = None
 ):
+  /** Whether the Mempool view itself is on screen: not under Help, and not under a screen opened over it (the explorer,
+    * a peer's details). The only time the probe reads the pool whole (spec 029 FR-037). A paused dashboard still shows
+    * the node as it is, so pausing does not stop the reading.
+    */
+  def wantsPool: Boolean = view == TuiView.Mempool && !helpOpen && screens.isEmpty
+
+  /** The pending transactions the Mempool view lists, best-paying first. */
+  def pendingTxs: Vector[PoolTx] = snapshot.flatMap(_.pool).fold(Vector.empty)(_.txs)
+
+  /** The selected transaction's place in [[pendingTxs]]; None with no selection, or once it has left the list. */
+  def selectedTxIndex: Option[Int] = selectedTx.map(hash => pendingTxs.indexWhere(_.hash == hash)).filter(_ >= 0)
+
   /** Where the lookup of `query` stands, if it was asked. */
   def lookupOf(query: LookupQuery): Option[LookupState] = lookups.find(_._1 == query).map(_._2)
 
@@ -500,6 +515,8 @@ final case class SyncSample(
   * @param details
   *   each handshaked peer's client id and best block, by peer id, from the network peer manager
   *   (`GetHandshakedPeersCmd`); None when the probe does not ask it
+  * @param pool
+  *   the pool in full, read only while the Mempool view is on screen (spec 029 FR-037); None otherwise
   * @param txpool
   *   the txpool's size and blob count, from the pending transactions manager; None when the probe does not ask it
   */
@@ -511,7 +528,8 @@ final case class NodeStatusSnapshot(
     sync: Sourced[SyncSample],
     local: LocalSample = LocalSample(),
     details: Option[Sourced[Map[String, PeerDetails]]] = None,
-    txpool: Option[Sourced[TxpoolSample]] = None
+    txpool: Option[Sourced[TxpoolSample]] = None,
+    pool: Option[PoolSample] = None
 ):
   def peerCount: Int = peers.value.fold(0)(_.size)
 
@@ -581,8 +599,10 @@ final case class TuiPeer(id: String, address: String, incoming: Boolean, connect
 /** A handshaked peer's client id (sanitised, FR-020) and best block, as the network peer manager reports them. */
 final case class PeerDetails(clientId: String, bestBlock: Long)
 
-/** The txpool: pending transactions, and how many of them carry a blob sidecar. */
-final case class TxpoolSample(size: Int, blobs: Int)
+/** The txpool: pending transactions, how many of them carry a blob sidecar, and the most it holds where the pool said
+  * (`tx-pool-size`).
+  */
+final case class TxpoolSample(size: Int, blobs: Int, capacity: Option[Int] = None)
 
 /** The last block import's size and how long its consensus call took (`RegularSyncMetrics`, C-7). */
 final case class ImportSample(blocks: Int, duration: Duration)
@@ -616,6 +636,8 @@ final case class ImportSample(blocks: Int, duration: Duration)
   *   chain to read
   * @param forkId
   *   the fork id the node tells its peers at the head (EIP-2124), as it is written: `0xfc64ec04, next 1150000`
+  * @param poolCounters
+  *   what the transaction pool refused, lost and fetched since the node started (spec 029 FR-034)
   */
 final case class LocalSample(
     diskFree: Option[Long] = None,
@@ -629,7 +651,8 @@ final case class LocalSample(
     cl: Option[ClSample] = None,
     mining: Option[MiningSample] = None,
     chain: Option[ChainSample] = None,
-    forkId: Option[String] = None
+    forkId: Option[String] = None,
+    poolCounters: Option[com.chipprbots.ethereum.transactions.TxPoolMetrics.Snapshot] = None
 )
 
 /** The Engine API's last call of one method (`EngineApiMetrics`, E1): when, and the status it was answered with. */

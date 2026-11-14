@@ -314,25 +314,65 @@ Every slice ends with the same gate. The art (phase 0) is done and in the tree.
 
 ### Tests first
 
-- [ ] T065 [P] [US4] `PoolObserverSpec`: tiers against a known suggestion; arrivals; inclusion against observed
+- [x] T065 [P] [US4] `PoolObserverSpec`: tiers against a known suggestion; arrivals; inclusion against observed
       blocks; drops; replacements; the top senders
-- [ ] T066 [P] [US4] `TxPoolMetricsSpec` in `src/test/scala/com/chipprbots/ethereum/transactions/`: a rejection, an
+- [x] T066 [P] [US4] `TxPoolMetricsSpec` in `src/test/scala/com/chipprbots/ethereum/transactions/`: a rejection, an
       eviction, an expiry, an announcement, a fetch and a timeout each move one counter and change no result
-- [ ] T067 [P] [US4] `TuiStatusProbeSpec`: the full pool is asked for only while the Mempool view is on screen, and at
+- [x] T067 [P] [US4] `TuiStatusProbeSpec`: the full pool is asked for only while the Mempool view is on screen, and at
       most once a second (SC-009)
-- [ ] T068 [P] [US4] Goldens: the Mempool view, empty and busy, ETC and ETH fixtures, three modes; "not kept by this
+- [x] T068 [P] [US4] Goldens: the Mempool view, empty and busy, ETC and ETH fixtures, three modes; "not kept by this
       client" for the queue
 
 ### Implementation
 
-- [ ] T069 [US4] `main/transactions/TxPoolMetrics.scala`; counts at the removal listener and the admission results in
+- [x] T069 [US4] `main/transactions/TxPoolMetrics.scala`; counts at the removal listener and the admission results in
       `PendingTransactionsManager.scala`, and in `TxGossipTracking.scala` (`herald` reviews)
-- [ ] T070 [US4] `console/PoolObserver.scala`; the frame loop publishes the screen on show; the probe reads it
-- [ ] T071 [US4] `console/panels/MempoolPanels.scala`: the Radar, flow, senders, counters; Enter opens a transaction
+- [x] T070 [US4] `console/PoolObserver.scala`; the frame loop publishes the screen on show; the probe reads it
+- [x] T071 [US4] `console/panels/MempoolPanels.scala`: the Radar, flow, senders, counters; Enter opens a transaction
 
 ### Gate
 
-- [ ] T072 The per-slice gate; quickstart.md "Slice 4"; `herald`, `prism` and `eye`; open the PR
+- [x] T072 The per-slice gate; quickstart.md "Slice 4"; `herald`, `prism` and `eye`; open the PR
+
+> As built (2026-11-14). After the slice: 1,292 tests in 52 suites of
+> `testOnly com.chipprbots.ethereum.console.* *Tui* *PeerScor*`, and 104 in the pool's own
+> (`*TxPoolMetricsSpec *PendingTransactionsManager* *TxGossip* *PoolSenderIndex*`). What differs from the tasks as
+> written:
+>
+> - **T065, T070**: the pool observer is a pure function over a value (`PoolObserver.observe`), as the head observer
+>   is; the probe holds the value. A departed transaction is *mined* when the node's transaction index holds it, not
+>   by matching it against the blocks the head observer saw: the index is exact, and a block the observer sampled
+>   past is still counted. At most 500 departures are looked up a poll; the rest wait for the next polls (the index
+>   keeps a mined transaction, so a late lookup is as good), and a lookup that fails is counted as never told apart.
+>   "The frame loop publishes the screen" is `TuiState.wantsPool`, read by the probe through `Tui.wantsPool`: the
+>   Mempool view itself on screen, not under Help or the explorer.
+> - **T066**: the counter class has its own spec; that each event moves its counter and changes no result is tested
+>   on the pool itself, in `PendingTransactionsManagerPoolRulesSpec` (a refusal, a replacement, the size query) and
+>   `PendingTransactionsManagerSpec` (announcements, requests, timeouts, an eviction, an expiry), and the tracker's
+>   tally in `TxGossipTrackingSpec`.
+> - **T067**: the whole pool is asked for once a poll while the view is on screen and never otherwise, when the
+>   count comes from `GetPoolSizeReq` (B-196), which copies nothing; and at most once in 950 ms whatever the probe's
+>   period (a second, less the timer's jitter, so a one-second probe reads every poll). A poll the pool does not
+>   answer shows the last reading for up to five seconds.
+> - **T068**: the goldens are three sizes in both glyph sets, for a busy pool on ETC and on Sepolia and an empty one;
+>   the view before the first whole read is `mempool-*-synced-*`. The view's charts are text (a bar a tier), so the
+>   graphics mode changes nothing it draws.
+> - **T069**: `TxGossipTracking` gains one tally, the requests that went unanswered. A timeout with nobody left to
+>   ask is in no request the tracker hands back, so counting the hand-backs missed the commonest timeout (`herald`).
+>   A blob transaction pushed out past the sidecar budget counts as evicted. The refusals are a lower bound: two of
+>   the peer path's drops have no named rule (`TxPoolMetrics`'s header says which).
+> - **T071**: a pending transaction opens in the explorer (`LookupResult.PendingTx`): the index is read first, then
+>   the pool is asked for the one transaction, on the lookup worker's thread. On a chain with no base fee the list
+>   has no fee-cap column, since a transaction's cap is its gas price.
+> - **Beyond the tasks**: the vitals row's Txpool cell keeps the count whole and leaves the blob count out where both
+>   do not fit (`1,240 (73 blob)` was cut at tier L).
+> - **Reviews**: `herald` on the pool (no blocker; the timeout count, above) and `prism` on the console (no blocker;
+>   seven should-fix, all taken: the rate's divisor left out the first step's interval, a failed index read counted
+>   as dropped, the pool was read whole under the explorer and without a floor of a second, a missed read emptied
+>   the view, a slow pool made the explorer say a pending transaction was nowhere, and a wide nonce or fee pushed
+>   the list's columns out of line). Left as is, and in the backlog: the list's cursor stays on the bottom row once
+>   past the first screenful, as in the Block Observatory (B-267); opening a pending transaction copies the whole
+>   pool to find one hash, for want of a by-hash query on the pool (B-268).
 
 ---
 

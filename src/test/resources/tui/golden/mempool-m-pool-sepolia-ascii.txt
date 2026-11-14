@@ -1,0 +1,40 @@
+ # FUKUII  sepolia (11155111) . PoS . head 7,412,009 . 23/50 peers . up 3d 4h                                   Mempool 
+------------------------------------------------------------------------------------------------------------------------
+ + no alerts                                                                                                            
+                  | Peers   23/50 ##########  Block  7,412,009 -> 7,412,011 (-2)             Txpool  1,240 (73 blob)    
+                  | Sync    regular 99% . rate 0.08 blk/s . ETA 24s                                                     
+                  |-----------------------------------------------------------------------------------------------------
+                  | Pool    1,240 pending . 30% of 4,096 . 73 blob . oldest 15m 1s . 43 sent from this node             
+       ETH        | Flow    3.4 in/s . 2.9 mined/s . 0.1 dropped/s . 7 replaced in the 3m 12s watched                   
+                  |-----------------------------------------------------------------------------------------------------
+                  | Fees    tips against the tip this node would suggest, 1.50 gwei . above the base fee                
+                  |   urgent  ################........     309   from 4.50 gwei                                         
+ sepolia          |   high    ########################     465   from 2.25 gwei                                         
+ PoS              |   normal  #################.......     325   from 0.750 gwei                                        
+ id 11155111      |   low     #######.................     141   below 0.750 gwei                                       
+ test network     |-----------------------------------------------------------------------------------------------------
+                  | Senders 0x072c..0006 54 . 0x0ff7..0013 54 . 0x1e3f..000b 54 . 0x2c87..0003 54 . 0x3552..0010 54     
+ [1] Overview     | Refused Underpriced 1,204 . AlreadyKnown 311 . NonceTooLow 58 . NonceTooFarAhead 4                  
+ [2] Chain        | Lost    evicted for room 12 . expired unmined 96 . replaced 41                                      
+ [3] Peers        | Fetch   announced 184,220 . asked for 9,310 . timed out 27                                          
+ [4] Mempool      | Queue   not kept by this client . a transaction whose nonce leaves a gap is refused, not held       
+ [5] RPC          |-----------------------------------------------------------------------------------------------------
+ [6] Storage      | Pending the 500 best-paying of 1,240 . Up Down select, Enter open                                   
+ [7] System       |   hash          from            nonce  tip               age  fee cap       kind                    
+ [8] Logs         |   0x1089..0223  0x71c0..0012       63  6.00 gwei     13m 33s  24.0 gwei     blob                    
+ [9] Ops          |   0x29e3..0453  0x2c87..0003       88  6.00 gwei     14m 53s  24.0 gwei     local                   
+                  |   0x2ddd..0183  0x0ff7..0013       56  6.00 gwei      8m 53s  24.0 gwei                             
+ graphics text    |   0x4737..03b3  0xcabe..0004       81  6.00 gwei     10m 13s  24.0 gwei                             
+                  |   0x4b31..00e3  0xae2e..0014       49  6.00 gwei      4m 13s  24.0 gwei                             
+                  |   0x648b..0313  0x68f5..0005       74  6.00 gwei      5m 33s  24.0 gwei                             
+                  |   0x6885..0043  0x4c65..0015       42  6.00 gwei     14m 33s  24.0 gwei                             
+                  |   0x81df..0273  0x072c..0006       67  6.00 gwei         53s  24.0 gwei                             
+                  |   0x9b39..04a3  0xf8e4..000e       91  6.00 gwei      2m 13s  24.0 gwei                             
+                  |   0x9f33..01d3  0xa563..0007       60  6.00 gwei     11m 13s  24.0 gwei                             
+                  |   0xb88d..0403  0x971b..000f       84  6.00 gwei     12m 33s  24.0 gwei                             
+                  |   0xbc87..0133  0x439a..0008       53  6.00 gwei      6m 33s  24.0 gwei                             
+                  |   0xd5e1..0363  0x3552..0010       77  6.00 gwei      7m 53s  24.0 gwei                             
+                  |   0xd9db..0093  0xe1d1..0009       46  6.00 gwei      1m 53s  24.0 gwei                             
+                  |   0xf335..02c3  0xd389..0011       70  6.00 gwei      3m 13s  24.0 gwei                             
+                  |   0x07b8..0216  0x68f5..0005       63  5.93 gwei     10m 44s  23.9 gwei                             
+ 1-9 view  Enter open  Esc back  : prompt  / filter  ? help  p pause  r redraw  d detach  q quit                        

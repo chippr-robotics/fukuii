@@ -61,6 +61,13 @@ enum LookupResult:
 
   case Tx(line: TxLine, blockNumber: Long, blockHash: String, nonce: BigInt, inputBytes: Int)
 
+  /** A transaction that is in the pool and in no block yet.
+    *
+    * @param local
+    *   it was submitted to this node
+    */
+  case PendingTx(line: TxLine, nonce: BigInt, inputBytes: Int, addedAt: Instant, local: Boolean)
+
   /** @param status
     *   `success`, `failed`, or `root 0x…`, the state root of a receipt older than the status code
     * @param gasUsed

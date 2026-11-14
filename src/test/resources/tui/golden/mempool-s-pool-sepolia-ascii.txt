@@ -1,0 +1,24 @@
+ # FUKUII  sepolia (11155111) . PoS . up 3d 4h                          Mempool 
+--------------------------------------------------------------------------------
+ + no alerts                                                                    
+ Peers   23/50 ##########         Block  7,412,009 -> 7,412,011 (-2)            
+ Sync    regular 99% . rate 0.08 blk/s . ETA 24s                                
+--------------------------------------------------------------------------------
+ Pool    1,240 pending . 30% of 4,096 . 73 blob . oldest 15m 1s                 
+ Flow    3.4 in/s . 2.9 mined/s . 0.1 dropped/s                                 
+--------------------------------------------------------------------------------
+ Fees    tips against the tip this node would suggest, 1.50 gwei                
+   urgent  ################........     309   from 4.50 gwei                    
+   high    ########################     465   from 2.25 gwei                    
+   normal  #################.......     325   from 0.750 gwei                   
+   low     #######.................     141   below 0.750 gwei                  
+--------------------------------------------------------------------------------
+ Refused Underpriced 1,204 . AlreadyKnown 311 . NonceTooLow 58                  
+ Queue   not kept by this client                                                
+--------------------------------------------------------------------------------
+ Pending the 500 best-paying of 1,240 . Up Down select, Enter open              
+   hash          from            nonce  tip               age  fee cap          
+   0x1089..0223  0x71c0..0012       63  6.00 gwei     13m 33s  24.0 gwei        
+   0x29e3..0453  0x2c87..0003       88  6.00 gwei     14m 53s  24.0 gwei        
+   0x2ddd..0183  0x0ff7..0013       56  6.00 gwei      8m 53s  24.0 gwei        
+ 1-9 view  : prompt  / filter  ? help  p pause  r redraw  d detach  q quit      

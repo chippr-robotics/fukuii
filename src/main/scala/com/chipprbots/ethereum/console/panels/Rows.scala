@@ -187,7 +187,7 @@ private[console] object Rows:
   /** `142`, `1,204 (3 blob)`: the pending transactions and the blob-carrying ones among them; `Unresponsive` when the
     * txpool did not answer, `?` before it is asked.
     */
-  def txpoolValue(c: Ctx): AttributedString =
+  def txpoolValue(c: Ctx, room: Int = Int.MaxValue): AttributedString =
     c.state.snapshot.flatMap(_.txpool) match
       case Some(Sourced.Unresponsive(_)) => text("Unresponsive", c.t.error)
       case Some(source) =>
@@ -196,11 +196,13 @@ private[console] object Rows:
           val style = source match
             case Sourced.Stale(_, _) => c.t.warn
             case _                   => c.t.value
-          text(s"${formatNumber(pool.size.toLong)}$blobs", style)
+          // In a cell too narrow for both figures the count stays whole and the blobs go: the Mempool view has them.
+          val both = s"${formatNumber(pool.size.toLong)}$blobs"
+          text(if both.length <= room then both else formatNumber(pool.size.toLong), style)
         }
       case None => text("?", c.t.muted)
 
-  private def txpool(c: Ctx): AttributedString = field("Txpool", txpoolValue(c), c.t)
+  private def txpool(c: Ctx, room: Int = Int.MaxValue): AttributedString = field("Txpool", txpoolValue(c, room), c.t)
 
   /** Where tier M's second and third cells start in `width` columns: at 44 and 92 from 120 columns, as spec 027 drew
     * them. Below that the sidebar has taken columns (spec 029 FR-006), and no cell may lose its value for it: the third
@@ -228,7 +230,8 @@ private[console] object Rows:
         Seq(
           0 -> peers,
           26 -> block,
-          73 -> txpool(c),
+          // 24 columns to the disk's: the label's nine, the value, and the gap.
+          73 -> txpool(c, 14),
           97 -> field("Disk", diskValue(c), c.t, 6),
           117 -> field("JVM", heapValue(c), c.t, 5)
         )

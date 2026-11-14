@@ -32,12 +32,15 @@ import com.chipprbots.ethereum.blockchain.sync.snap.SyncProgress
 import com.chipprbots.ethereum.consensus.engine.EngineApiMetrics
 import com.chipprbots.ethereum.consensus.engine.EngineCall
 import com.chipprbots.ethereum.consensus.pow.PoWMiningMetrics
+import com.chipprbots.ethereum.domain.BlobTransaction
+import com.chipprbots.ethereum.domain.Transaction
 import com.chipprbots.ethereum.network.NetworkMetrics
 import com.chipprbots.ethereum.network.NetworkPeerManagerActor
 import com.chipprbots.ethereum.network.Peer
 import com.chipprbots.ethereum.network.PeerManagerActor
 import com.chipprbots.ethereum.network.PeerScoreSnapshot
 import com.chipprbots.ethereum.transactions.PendingTransactionsManager
+import com.chipprbots.ethereum.transactions.TxPoolMetrics
 import com.chipprbots.ethereum.utils.Logger
 
 /** Polls the running node for the TUI: handshaked peers from the peer manager, sync status from the sync controller
@@ -63,7 +66,10 @@ import com.chipprbots.ethereum.utils.Logger
   * @param networkPeerManager
   *   asked `GetHandshakedPeersCmd` for each peer's client id and best block; None asks nothing
   * @param txPool
-  *   asked `GetPendingTransactionsReq` for the txpool's size and blob count; None asks nothing
+  *   asked `GetPoolSizeReq` for the txpool's size and blob count, which copies nothing; and `GetPendingTransactionsReq`
+  *   for the whole pool while `poolWanted` says the Mempool view is on screen (spec 029 FR-037). None asks nothing
+  * @param poolWanted
+  *   whether the Mempool view is on screen: the only time the whole pool is read
   */
 class TuiStatusProbe(
     peerManager: ActorRef[PeerManagerActor.Command],
@@ -75,7 +81,8 @@ class TuiStatusProbe(
     clock: Clock = Clock.systemUTC(),
     local: TuiStatusProbe.LocalSources = TuiStatusProbe.LocalSources(),
     networkPeerManager: Option[ActorRef[NetworkPeerManagerActor.Command]] = None,
-    txPool: Option[ActorRef[PendingTransactionsManager.Command]] = None
+    txPool: Option[ActorRef[PendingTransactionsManager.Command]] = None,
+    poolWanted: () => Boolean = () => false
 )(using scheduler: Scheduler)
     extends (() => NodeStatusSnapshot)
     with Logger:
@@ -101,18 +108,35 @@ class TuiStatusProbe(
     val detailsAsk = networkPeerManager.map(ref =>
       settled(ref.ask[NetworkPeerManagerActor.HandshakedPeers](NetworkPeerManagerActor.GetHandshakedPeersCmd(_)))
     )
-    val txpoolAsk = txPool.map(ref =>
-      settled(
-        ref.ask[PendingTransactionsManager.PendingTransactionsResponse](
-          PendingTransactionsManager.GetPendingTransactionsReq(_)
+    // The whole pool only while the Mempool view is on screen, and at most once a second however often the probe
+    // polls; a count, which copies nothing, otherwise (FR-037).
+    val asked = clock.instant()
+    val wanted = read("whether the Mempool view is on screen")(Some(poolWanted())).getOrElse(false)
+    if wanted != poolWasWanted then
+      log.debug(
+        if wanted then "TUI reads the whole pool each poll: the Mempool view is on screen"
+        else "TUI no longer reads the whole pool: the Mempool view is not on screen"
+      )
+      poolWasWanted = wanted
+    if !wanted then lastPool = None
+    val wholePool = wanted && lastPool.forall(p => java.time.Duration.between(p.at, asked).compareTo(MinPoolRead) >= 0)
+    val poolAsk = txPool
+      .filter(_ => wholePool)
+      .map(ref =>
+        settled(
+          ref.ask[PendingTransactionsManager.PendingTransactionsResponse](
+            PendingTransactionsManager.GetPendingTransactionsReq(_)
+          )
         )
       )
-    )
+    val txpoolAsk = txPool
+      .filter(_ => !wholePool)
+      .map(ref => settled(ref.ask[PendingTransactionsManager.PoolSize](PendingTransactionsManager.GetPoolSizeReq(_))))
     // One wait for all: the asks run concurrently, and whatever has not answered by the deadline missed this poll.
     // The node-local readings are taken meanwhile, so they add nothing to the poll unless they outlast the wait.
     val deadline = wait.fromNow
     val localSample = readLocal(clock.instant())
-    (Seq(peersAsk, syncAsk) ++ detailsAsk ++ txpoolAsk).foreach(ask =>
+    (Seq(peersAsk, syncAsk) ++ detailsAsk ++ txpoolAsk ++ poolAsk).foreach(ask =>
       Try(Await.ready(ask, deadline.timeLeft.max(Duration.Zero)))
     )
 
@@ -123,25 +147,45 @@ class TuiStatusProbe(
     val sync = Sourced.next(previous.map(_.sync), poll(syncAsk)(sample(_, localBest, now)), now, missed)
     val details =
       detailsAsk.map(ask => Sourced.next(previous.flatMap(_.details), poll(ask)(peerDetails), now, missed))
-    val txpool = txpoolAsk.map(ask => Sourced.next(previous.flatMap(_.txpool), poll(ask)(txpoolSample), now, missed))
-    val snapshot = NodeStatusSnapshot(now, maxPeers, localBest, peers, sync, localSample, details, txpool)
+    // The pool in full, observed: what arrived and left since the last poll that read it. A poll that did not read
+    // it (too soon after the last, or the pool did not answer) shows the last reading, which says when it was read,
+    // for as long as the observer would still compare against it; then the view says it is reading again.
+    val wholeRead = poolAsk.flatMap { ask =>
+      poll(ask)(identity) match
+        case Sourced.Poll.Answered(response) => Some(observePool(response, localSample, now))
+        case _                               => None
+    }
+    if wholeRead.isDefined then lastPool = wholeRead
+    val pool = Option
+      .when(wanted)(lastPool)
+      .flatten
+      .filter(p => java.time.Duration.between(p.at, now).compareTo(PoolObserver.MaxGap) <= 0)
+    val counted = txpoolAsk.map(ask => poll(ask)(size => TxpoolSample(size.size, size.blobs, Some(size.capacity))))
+    // The count is the full read's own when the pool was read whole, so the header never asks twice.
+    val fromPool = poolAsk.map(ask =>
+      poll(ask)(response => txpoolSample(response).copy(capacity = Option(local.poolCapacity).filter(_ > 0)))
+    )
+    val txpool = counted.orElse(fromPool).map(Sourced.next(previous.flatMap(_.txpool), _, now, missed))
+    val snapshot = NodeStatusSnapshot(now, maxPeers, localBest, peers, sync, localSample, details, txpool, pool)
     previous = Some(snapshot)
     snapshot
 
-  /** The node-local readings (research §6): each one that fails is left empty, and logged at DEBUG the first time; none
-    * fails the poll.
+  /** A reading of the node: one that fails is left empty, and logged at DEBUG the first time it fails after it last
+    * succeeded; none fails the poll.
     */
+  private def read[A](name: String)(f: => Option[A]): Option[A] =
+    Try(f) match
+      case Success(value) =>
+        failingReads -= name
+        value
+      case Failure(e) =>
+        if !failingReads.contains(name) then
+          log.debug("TUI could not read {}: {}", name, Option(e.getMessage).getOrElse(e.toString))
+        failingReads += name
+        None
+
+  /** The node-local readings (research §6). */
   private def readLocal(at: Instant): LocalSample =
-    def read[A](name: String)(f: => Option[A]): Option[A] =
-      Try(f) match
-        case Success(value) =>
-          failingReads -= name
-          value
-        case Failure(e) =>
-          if !failingReads.contains(name) then
-            log.debug("TUI could not read {}: {}", name, Option(e.getMessage).getOrElse(e.toString))
-          failingReads += name
-          None
     val gcMillis = read("the GC time")(local.gcMillis())
     val gcShare = for
       total <- gcMillis
@@ -162,8 +206,48 @@ class TuiStatusProbe(
       cl = read("the consensus layer")(local.cl()),
       mining = read("the mining metrics")(local.mining()),
       chain = local.chain.flatMap(source => read("the chain")(Some(observeHead(source, at)))),
-      forkId = read("the fork id")(local.forkId())
+      forkId = read("the fork id")(local.forkId()),
+      poolCounters = read("the pool's counters")(local.poolCounters())
     )
+
+  /** What the pool observer has seen (spec 029 FR-031): kept on the probe's thread, moved on by each poll that reads
+    * the pool whole.
+    */
+  private var poolObserver: PoolObserver.State = PoolObserver.State()
+
+  /** The last whole reading of the pool while the Mempool view has been on screen, and whether it was on screen at the
+    * last poll.
+    */
+  private var lastPool: Option[PoolSample] = None
+  private var poolWasWanted: Boolean = false
+
+  /** One poll of the whole pool ([[PoolObserver]]): each pending transaction's tip against the head's base fee, what
+    * became of the ones that left, and the node's own fee suggestion to sort them by.
+    */
+  private def observePool(
+      response: PendingTransactionsManager.PendingTransactionsResponse,
+      sample: LocalSample,
+      at: Instant
+  ): PoolSample =
+    val head = sample.chain.flatMap(_.head)
+    val baseFee = head.flatMap(_.baseFee)
+    val current = response.pendingTransactions.map(poolTx(_, baseFee))
+    // On a node whose head is read but was not this poll, a tip cannot be told from a gas price: no tier is drawn
+    // rather than every transaction put in a tier it may not belong to.
+    val suggested =
+      if local.chain.isDefined && head.isEmpty then None else read("the suggested fee")(local.suggestedFee())
+    val (next, observed) =
+      PoolObserver.observe(
+        poolObserver,
+        current,
+        // An index that cannot be read says nothing: the departure is counted as not told apart, never as dropped.
+        hash => read("the transaction index")(Some(local.isMined(hash))),
+        suggested,
+        local.poolCapacity,
+        at
+      )
+    poolObserver = next
+    observed
 
   /** What the head observer has seen (spec 029 FR-023): kept on the probe's thread, moved on by each poll. */
   private var headObserver: HeadObserver.State = HeadObserver.State()
@@ -257,6 +341,14 @@ object TuiStatusProbe:
     *   the newest blocks the observer keeps
     * @param forkId
     *   the fork id at the head, as the node tells it to its peers
+    * @param suggestedFee
+    *   the fee the node itself would suggest: a tip on a chain with a base fee, a gas price on one without
+    * @param isMined
+    *   whether the node's transaction index holds this hash: it is in a block the node imported
+    * @param poolCapacity
+    *   the most the transaction pool holds
+    * @param poolCounters
+    *   the transaction pool's counters
     */
   final case class LocalSources(
       dataDir: Option[File] = None,
@@ -273,7 +365,11 @@ object TuiStatusProbe:
       mining: () => Option[MiningSample] = () => None,
       chain: Option[ChainReads.Source] = None,
       observatoryBlocks: Int = HeadObserver.MaxWalk,
-      forkId: () => Option[String] = () => None
+      forkId: () => Option[String] = () => None,
+      suggestedFee: () => Option[BigInt] = () => None,
+      isMined: String => Boolean = _ => false,
+      poolCapacity: Int = 0,
+      poolCounters: () => Option[TxPoolMetrics.Snapshot] = () => None
   )
 
   object LocalSources:
@@ -288,11 +384,19 @@ object TuiStatusProbe:
         cl: () => Option[ClSample] = () => None,
         mining: () => Option[MiningSample] = () => None,
         chain: Option[ChainReads.Source] = None,
-        forkId: () => Option[String] = () => None
+        forkId: () => Option[String] = () => None,
+        suggestedFee: () => Option[BigInt] = () => None,
+        isMined: String => Boolean = _ => false,
+        poolCapacity: Int = 0,
+        poolCounters: () => Option[TxPoolMetrics.Snapshot] = () => None
     ): LocalSources =
       LocalSources(
         chain = chain,
         forkId = forkId,
+        suggestedFee = suggestedFee,
+        isMined = isMined,
+        poolCapacity = poolCapacity,
+        poolCounters = poolCounters,
         dataDir = dataDir,
         heap = jvmHeap,
         gcMillis = jvmGcMillis,
@@ -546,6 +650,23 @@ object TuiStatusProbe:
       )
     }
 
+  /** A pending transaction as the Mempool view shows it: its tip is what it offers above `baseFee`, the head's; on a
+    * chain with no base fee, its gas price.
+    */
+  private[console] def poolTx(p: PendingTransactionsManager.PendingTransaction, baseFee: Option[BigInt]): PoolTx =
+    val tx = p.stx.tx.tx
+    val price = Transaction.effectiveGasPrice(tx, baseFee)
+    PoolTx(
+      ChainReads.hex(p.stx.tx.hash.value),
+      ChainReads.hex(p.stx.senderAddress.bytes),
+      tx.nonce,
+      (price - baseFee.getOrElse(BigInt(0))).max(0),
+      tx.gasPrice.value,
+      tx.isInstanceOf[BlobTransaction],
+      p.receivedFromLocalSource,
+      Instant.ofEpochMilli(p.addTimestamp)
+    )
+
   /** The pending transactions, and how many carry a blob sidecar: the sidecars the pool holds, one per blob transaction
     * (`blobTxNetworkBytes`, research §6).
     */
@@ -554,6 +675,11 @@ object TuiStatusProbe:
 
   /** An ask as a future that never fails: its outcome is the value. */
   private def settled[A](ask: Future[A]): Future[Try[A]] = ask.transform(Success(_))(using ExecutionContext.parasitic)
+
+  /** The least time between two whole readings of the pool (spec 029 FR-037: at most once a second), less the timer's
+    * own jitter, so that a probe polling every second reads it every poll.
+    */
+  val MinPoolRead: java.time.Duration = java.time.Duration.ofMillis(950)
 
   /** The longest failure reason the TUI shows. */
   val MaxReasonChars: Int = 120

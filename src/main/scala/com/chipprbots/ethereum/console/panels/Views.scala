@@ -18,7 +18,7 @@ private[console] object Views:
             case TuiView.Overview => OverviewPanels.panels(c)
             case TuiView.Chain    => ChainPanel.panels(c)
             case TuiView.Peers    => PeersPanel.panels(c)
-            case TuiView.Mempool  => StubPanels.mempool(c)
+            case TuiView.Mempool  => MempoolPanels.panels(c)
             case TuiView.Rpc      => StubPanels.rpc(c)
             case TuiView.Storage  => StubPanels.storage(c)
             case TuiView.System   => StubPanels.system(c)

@@ -228,6 +228,11 @@ class Tui(
 
   def updateNodeSettings(settings: NodeSettings): Unit = modify(_.withNodeSettings(settings))
 
+  /** Whether the Mempool view is on screen: the only time the probe reads the pool whole (spec 029 FR-037). Read by the
+    * probe's thread; a read of the state, which is one atomic reference.
+    */
+  def wantsPool: Boolean = enabled && state.get.wantsPool
+
   /** The explorer's lookup worker (spec 029 FR-029), once the node has handed the TUI its reads; none before. */
   private val lookups = new AtomicReference(Option.empty[Lookups])
 

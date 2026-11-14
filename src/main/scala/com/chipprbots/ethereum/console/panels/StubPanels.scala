@@ -23,14 +23,6 @@ private[console] object StubPanels:
       fillPanel
     )
 
-  def mempool(c: Ctx): Seq[Panel] =
-    view(
-      c,
-      "Mempool",
-      Seq("Pending" -> txpoolValue(c)),
-      "fee tiers, flow in and out, senders, replacements"
-    )
-
   def rpc(c: Ctx): Seq[Panel] =
     view(
       c,

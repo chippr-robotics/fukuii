@@ -1,0 +1,48 @@
+ # FUKUII  etc (61) . PoW . head 21,884,102 . 41/50 peers . up 12d 7h . v0.11.0                                                                         Mempool 
+----------------------------------------------------------------------------------------------------------------------------------------------------------------
+ + no alerts                                                                                                                                                    
+                  | Peers   41/50 ##########  Block  21,884,102 (at head)                    Txpool  0               Disk  388G free     JVM  3.4G / 8.0G heap  
+                  | Sync    + at head                                                                                                                           
+                  |---------------------------------------------------------------------------------------------------------------------------------------------
+                  | Pool    0 pending . 0% of 4,096 . 0 sent from this node                                                                                     
+       ETC        | Flow    in: measuring . mined: measuring . dropped: measuring . 0 replaced in the 0s watched                                                
+                  |---------------------------------------------------------------------------------------------------------------------------------------------
+                  | Fees    the node has no fee to suggest yet . no tier is drawn without one                                                                   
+                  |---------------------------------------------------------------------------------------------------------------------------------------------
+ etc              | Senders no pending transaction                                                                                                              
+ PoW . id 61      | Refused none since the node started                                                                                                         
+ main network     | Lost    evicted for room 0 . expired unmined 0 . replaced 0                                                                                 
+                  | Fetch   announced 0 . asked for 0 . timed out 0                                                                                             
+ [1] Overview     | Queue   not kept by this client . a transaction whose nonce leaves a gap is refused, not held                                               
+ [2] Chain        |---------------------------------------------------------------------------------------------------------------------------------------------
+ [3] Peers        | Pending best-paying first . Up Down select, Enter open                                                                                      
+ [4] Mempool      |   no pending transaction                                                                                                                    
+ [5] RPC          |                                                                                                                                             
+ [6] Storage      |                                                                                                                                             
+ [7] System       |                                                                                                                                             
+ [8] Logs         |                                                                                                                                             
+ [9] Ops          |                                                                                                                                             
+                  |                                                                                                                                             
+ graphics text    |                                                                                                                                             
+                  |                                                                                                                                             
+                  |                                                                                                                                             
+                  |                                                                                                                                             
+                  |                                                                                                                                             
+                  |                                                                                                                                             
+                  |                                                                                                                                             
+                  |                                                                                                                                             
+                  |                                                                                                                                             
+                  |                                                                                                                                             
+                  |                                                                                                                                             
+                  |                                                                                                                                             
+                  |                                                                                                                                             
+                  |                                                                                                                                             
+                  |                                                                                                                                             
+                  |                                                                                                                                             
+                  |                                                                                                                                             
+                  |                                                                                                                                             
+                  |                                                                                                                                             
+                  |                                                                                                                                             
+                  |                                                                                                                                             
+                  |                                                                                                                                             
+ 1-9 view  [ ] next view  Up Down select  Enter open  Esc back  : prompt  / filter  ? help  v graphics  p pause  r redraw  d detach  q quit                     
