@@ -50,7 +50,7 @@ private[console] object EnginePanels:
     * authenticate has neither.
     */
   private def rows(c: Ctx, cl: ClSample, w: Int): Seq[(Int, AttributedString)] =
-    val state = cl.link(c.state.now)
+    val state = cl.link(c.state.now, c.state.thresholds.clSilentAfter)
     val (word, style) = state match
       case ClLink.Waiting      => ("waiting for its first forkchoiceUpdated", c.t.warn)
       case ClLink.Connected    => ("connected", c.t.healthy.bold())

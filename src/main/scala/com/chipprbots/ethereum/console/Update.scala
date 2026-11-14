@@ -154,6 +154,17 @@ object Update:
               case Int.MaxValue => last
               case _            => s.selectedTxIndex.fold(0)(i => (i.toLong + by).max(0L).min(last.toLong).toInt)
             s.copy(selectedTx = Some(txs(target).hash))
+        case TuiView.System =>
+          // The health bars. The selection is a subsystem: a bar that appears above it does not move it.
+          val bars = s.healthBars
+          if bars.isEmpty then s
+          else
+            val last = bars.size - 1
+            val target = by match
+              case Int.MinValue => 0
+              case Int.MaxValue => last
+              case _            => s.selectedHealthIndex.fold(0)(i => (i.toLong + by).max(0L).min(last.toLong).toInt)
+            s.copy(selectedHealth = Some(bars(target).subsystem))
         case TuiView.Logs =>
           // Up is older: the scroll counts lines back from the newest.
           by match
@@ -188,6 +199,14 @@ object Update:
             // A pending transaction opens like a mined one (spec 029 FR-036).
             case TuiView.Mempool =>
               s.selectedTxIndex.fold((s, Seq.empty[Effect]))(i => explore(s, LookupQuery.Tx(s.pendingTxs(i).hash)))
+            // A health bar opens every check behind it (spec 029 FR-045).
+            case TuiView.System =>
+              (
+                s.selectedHealthIndex.fold(s)(i =>
+                  s.copy(screens = Screen.HealthDetail(s.healthBars(i).subsystem) :: s.screens)
+                ),
+                Nil
+              )
             case _ => (s, Nil)
 
   /** Opens the explorer's screen for `query`, and has the worker read it (spec 029 FR-028, FR-029). */

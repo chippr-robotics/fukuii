@@ -61,7 +61,7 @@ final case class TuiEnv(
       artDir = artDir.orElse(settings.artDir),
       multiplexer = multiplexer,
       utf8Locale = utf8Locale,
-      reorgAlertDepth = settings.reorgAlertDepth
+      alerts = settings.alerts
     )
 
 object TuiEnv:

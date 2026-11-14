@@ -485,32 +485,74 @@ Every slice ends with the same gate. The art (phase 0) is done and in the tree.
 
 ### Tests first
 
-- [ ] T083 [P] [US6] `RocksDbDataSourceSpec`: `properties()` returns each figure of data-model.md's `StorageSample`;
+- [x] T083 [P] [US6] `RocksDbDataSourceSpec`: `properties()` returns each figure of data-model.md's `StorageSample`;
       a read that finds the write lock held returns nothing and blocks nobody
-- [ ] T084 [P] [US6] `HealthSpec`: for every subsystem fixture a bar shows a warning or an error exactly when the
+- [x] T084 [P] [US6] `HealthSpec`: for every subsystem fixture a bar shows a warning or an error exactly when the
       alert row does, and names a check the drill-down lists (SC-011); headroom is 1 at the healthy end and 0 at the
       threshold
-- [ ] T085 [P] [US6] `AlertThresholdsSpec` and `TuiConfigSpec`: every key of contracts/operator.md; an invalid value
+- [x] T085 [P] [US6] `AlertThresholdsSpec` and `TuiConfigSpec`: every key of contracts/operator.md; an invalid value
       is a named start-up error; 027's defaults when unset
-- [ ] T086 [P] [US6] `NetworkMetricsSpec`: bytes in and out advance by a frame's size; no behaviour of the connection
+- [x] T086 [P] [US6] `NetworkMetricsSpec`: bytes in and out advance by a frame's size; no behaviour of the connection
       changes
-- [ ] T087 [P] [US6] Goldens: Storage, System, the health strip on Overview, the drill-down, "statistics off", three
+- [x] T087 [P] [US6] Goldens: Storage, System, the health strip on Overview, the drill-down, "statistics off", three
       modes
 
 ### Implementation
 
-- [ ] T088 [US6] `main/db/dataSource/RocksDbDataSource.scala`: `properties()` (`vault` reviews)
-- [ ] T089 [US6] `main/blockchain/sync/SyncController.scala`: forward `BackgroundAudit.GetStatus`
-- [ ] T090 [US6] `main/network/rlpx/RLPxConnectionHandler.scala` and `NetworkMetrics.scala`: byte counters (`herald`
+- [x] T088 [US6] `main/db/dataSource/RocksDbDataSource.scala`: `properties()` (`vault` reviews)
+- [x] T089 [US6] `main/blockchain/sync/SyncController.scala`: forward `BackgroundAudit.GetStatus`
+- [x] T090 [US6] `main/network/rlpx/RLPxConnectionHandler.scala` and `NetworkMetrics.scala`: byte counters (`herald`
       reviews)
-- [ ] T091 [US6] `TuiStatusProbe`: the system sample, the storage sample every fifth poll, uptime from the process
+- [x] T091 [US6] `TuiStatusProbe`: the system sample, the storage sample every fifth poll, uptime from the process
       (closes B-192 if the disk read moves with it); `TuiState` history rings
-- [ ] T092 [US6] `console/Health.scala`; `console/Alerts.scala` reads thresholds from config and rows from `Health`
-- [ ] T093 [P] [US6] `console/panels/StoragePanels.scala`, `SystemPanels.scala`, `HealthPanel.scala`
+- [x] T092 [US6] `console/Health.scala`; `console/Alerts.scala` reads thresholds from config and rows from `Health`
+- [x] T093 [P] [US6] `console/panels/StoragePanels.scala`, `SystemPanels.scala`, `HealthPanel.scala`
 
 ### Gate
 
-- [ ] T094 The per-slice gate; quickstart.md "Slice 6"; `vault`, `herald`, `prism` and `eye`; open the PR
+- [x] T094 The per-slice gate; quickstart.md "Slice 6"; `vault`, `herald`, `prism` and `eye`; open the PR
+
+> As built (2026-11-14). After the slice: 1,464 tests in 57 suites of
+> `testOnly com.chipprbots.ethereum.console.* *Tui* *PeerScor*`. What differs from the tasks as written:
+>
+> - **T088, T083**: `vault` analysed before any code and reviewed after. `properties()` takes the read lock in the
+>   untimed, non-queuing form and holds it for in-memory property reads only; the timed form the metrics use fails
+>   for as long as a writer waits behind a compaction, which is when the figures are most wanted. Its review found
+>   that the markers' point reads, made after a properties read, could still queue behind such a writer for the
+>   length of the compaction: `RocksDbDataSource.whileFree` now runs both in one hold of the lock, where a read
+>   lock already held is taken again at once. Per-store sizes use the same property as the whole
+>   (`total-sst-files-size`), so they sum to it.
+> - **T089**: `SyncController` does not forward `GetStatus`. Its state handlers are many and under active edit
+>   (spec 022); instead `BackgroundAudit` publishes a reference typed to the one question, which `SyncController`
+>   sets where it starts and stops the audit (two lines). `vault` found the audit also ends by itself after a clean
+>   pass: it now withdraws its own reference on `PostStop`, by identity, so a newer audit's stays.
+> - **T090, T086**: the counters are a plain class, `network/P2pTraffic`, not additions to `NetworkMetrics`: that
+>   is a registry-backed object, and an object whose initialiser fails on an IO path takes every IO runtime with it
+>   (B-194). `herald` reviewed: bytes are counted at the two bridge reads and the one write function, messages
+>   where they are decoded and encoded, each side's Hello included. The tests are in `RLPxConnectionHandlerSpec`
+>   and `P2pTrafficSpec`; there is no `NetworkMetricsSpec` change. Not tested: a Disconnect sent in place of a
+>   Hello (counted, one line), and a read that carries the handshake and the Hello in one segment.
+> - **T091**: the histories are kept by the readers on the probe's thread (`SystemReader`, `StorageReader`, as the
+>   mining history is), not in `TuiState` rings: a point every five seconds, 121 of them. The database is read
+>   every five seconds, its estimates and the node's markers every thirty. The disk's size is read with its free
+>   space. The header's uptime counts from the JVM's start (`RuntimeMXBean`), not from the dashboard's making.
+>   B-192 (the disk read on the probe's own wait) is not closed here.
+> - **T092**: `Health.checks` is the alert rules moved, condition for condition and text for text; `Alerts.of` is
+>   their alerts. Spec 027's goldens and `AlertsSpec` did not change, which is the evidence. The alert row now
+>   lists only conditions that fit whole (a cut figure failed the golden lint with four alerts on the row). The
+>   heap and the collector are judged over the last minute of history, not one poll: one poll's figures flap.
+>   The write-stall alert outlasts a stale reading. The subsystems are eight, not research §8.3's ten: the
+>   transaction pool and the CPU have no alert rule, so they have no bar (a bar with no threshold has no room to
+>   show); memory and garbage collection are one bar, as in §8.3.
+> - **T087**: goldens at three sizes in both glyph sets (`storage-*-quiet`, `storage-*-busy`, `system-*-well`,
+>   `system-*-pressure`, `health-*-chain`, `health-*-memory`, `overview-*-health`, `overview-*-pressure`), as the
+>   other slices have them; these views have no graphic region of their own, so "three modes" adds nothing the
+>   `gfx-*` goldens do not pin. Every Overview golden gained one row, the health strip, and changed in nothing else.
+> - **Reviews**: `vault` (two blockers, both fixed: the marker reads, the audit's dead reference), `herald` (the
+>   peer's Hello was not counted while this node's was), `prism` (two blockers, both fixed: the Overview's disk
+>   cell and the SNAP sample's age still read fixed constants; bars were drawn before the node had been read).
+> - **Also here**: B-275, found by the slice 5 terminal run: blocks sealed by the internal miner were never
+>   counted in `pow_blocks_mined_total` (`forge`).
 
 ---
 

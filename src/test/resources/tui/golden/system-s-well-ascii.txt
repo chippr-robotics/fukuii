@@ -1,0 +1,24 @@
+ # FUKUII  etc (61) . PoW . up 12d 7h                                    System 
+--------------------------------------------------------------------------------
+ + no alerts                                                                    
+ Peers   41/50 ##########         Block  21,884,102 (at head)                   
+ Sync    + at head                                                              
+--------------------------------------------------------------------------------
+ Health  7 bars, no alert                    room left before the nearest alert 
+   P2P      ########--  76%  peer count: 41 of 50 . warn below 25% of the limit 
+   Chain    ########## 100%  sync controller: answering                         
+   Mining   ########## 100%  hashrate: 48.2 MH/s                                
+   RPC      ##########  98%  failed calls: 3 of 1,204 in the last minute        
+   DB       ########## 100%  writes: accepted                                   
+   Disk     ##--------  18%  free space: 388G free of 2.0T                      
+   Memory   ######----  61%  heap: never under 35% of 8.0G in the last minute   
+--------------------------------------------------------------------------------
+ Process up 12d 7h . charts span 10m 0s . a point every 5s                      
+ CPU     ..........--........  now 8% . highest 45% in 10m 0s . of 8 processors 
+ Heap    --------------------  now 3.4G of 8.0G . highest 3.7G in 10m 0s        
+ Net in  #################*##  now 1.9M/s . highest 2.0M/s in 10m 0s            
+ Net out ##*##*##*##*##*##**#  now 575K/s . highest 619K/s in 10m 0s            
+ GC      ____________________  now 1% of the time . highest 1% in 10m 0s        
+ Threads ####################  now 148 . peak 171 since the start               
+ … 4 more meters not shown at this height                                       
+ 1-9 view  : prompt  / filter  ? help  p pause  r redraw  d detach  q quit      

@@ -14,6 +14,7 @@ import scala.util.Failure
 import scala.util.Success
 import scala.util.Try
 
+import com.chipprbots.ethereum.blockchain.sync.BackgroundAudit
 import com.chipprbots.ethereum.blockchain.sync.StoredBodyCheck
 import com.chipprbots.ethereum.blockchain.sync.StoredBodyRepair
 import com.chipprbots.ethereum.blockchain.sync.SyncController
@@ -21,6 +22,8 @@ import com.chipprbots.ethereum.blockchain.sync.SyncProtocol
 import com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncMetrics
 import com.chipprbots.ethereum.consensus.mining.StdMiningBuilder
 import com.chipprbots.ethereum.consensus.pow.PoWMiningMetrics
+import com.chipprbots.ethereum.console.AuditReading
+import com.chipprbots.ethereum.console.AuditSample
 import com.chipprbots.ethereum.console.ChainFacts
 import com.chipprbots.ethereum.console.ChainLookups
 import com.chipprbots.ethereum.console.ChainReads
@@ -28,11 +31,17 @@ import com.chipprbots.ethereum.console.ForkChoiceHashes
 import com.chipprbots.ethereum.console.NodeSettings
 import com.chipprbots.ethereum.console.NodeStatusSnapshot
 import com.chipprbots.ethereum.console.StartupPhase
+import com.chipprbots.ethereum.console.StorageRead
+import com.chipprbots.ethereum.console.StorageReader
+import com.chipprbots.ethereum.console.StorageSample
+import com.chipprbots.ethereum.console.StorageSources
 import com.chipprbots.ethereum.console.Tui
 import com.chipprbots.ethereum.console.TuiProbeThread
 import com.chipprbots.ethereum.console.TuiStatusProbe
 import com.chipprbots.ethereum.console.TuiUpdater
 import com.chipprbots.ethereum.db.dataSource.RocksDbCacheMetrics
+import com.chipprbots.ethereum.db.dataSource.RocksDbDataSource
+import com.chipprbots.ethereum.db.storage.AppStateStorage
 import com.chipprbots.ethereum.domain.BestMappingRepair
 import com.chipprbots.ethereum.domain.BlockHash
 import com.chipprbots.ethereum.domain.SignedTransaction
@@ -159,6 +168,78 @@ abstract class BaseNode extends Node:
     startPeriodicDBConsistencyCheck()
     startTuiUpdater()
     tuiStarted(StartupPhase.Checks)
+
+  /** The Storage view's reader (spec 029 FR-043), on a node whose database is RocksDB; none on any other.
+    *
+    * The properties are read without waiting (`RocksDbDataSource.properties`). The markers are point reads of the node
+    * state store, which on their own would queue behind a writer for as long as a compaction runs: they are made inside
+    * the same hold of the database as the properties (`whileFree`), where they wait for nothing, and no more than every
+    * half minute. None of them writes; `forceAuditPassOnce` and the like are not among them. The audit is asked what it
+    * has got to, and waited for a quarter of a second on the probe's thread; one that stopped by itself has withdrawn
+    * its reference, so nothing is asked of it.
+    */
+  private def tuiStorageReader(): () => Option[StorageSample] =
+    storagesInstance.dataSource match
+      case rocks: RocksDbDataSource =>
+        val appState = storagesInstance.storages.appStateStorage
+        // Each in words that say what the marker vouches for and no more (vault): none of them says the state is
+        // whole, and one that is absent says only that nothing vouches.
+        def markers(): Vector[(String, String)] = Vector(
+          "State layout" -> appState.getStateLayout().getOrElse("not stamped"),
+          "SNAP sync" -> (if appState.isSnapSyncDone() then "marked done (by SNAP or a checkpoint)"
+                          else "not marked done"),
+          "Heal invariant" -> (if appState.hasSnapHealInvariant() then "marked: every present node has its subtree"
+                               else "not marked: what is present is not vouched for"),
+          "Checkpoint import" -> appState
+            .getCheckpointImportInProgress()
+            .fold("none")(what => s"running or interrupted ($what)"),
+          "Code scan" -> appState.getSnapCodeScanOwed().fold("not owed")(why => s"owed: $why"),
+          "Audit pass" -> (
+            if appState.isSnapAuditOwed() then "a pass is owed"
+            else
+              appState.getSnapAuditCleanAnchor() match
+                case Some(AppStateStorage.AuditNoPivot) => "clean (checkpoint, no pivot)"
+                case Some(anchor)                       => s"clean at pivot $anchor"
+                case None => "none recorded (none owed until SNAP or a checkpoint finishes)"
+          ),
+          "Reference counts" -> (if appState.hasRefCountsExact() then "exact" else "not vouched for"),
+          "Chain weights" -> (if appState.hasChainWeightInvariant() then "every stored weight follows from its parent"
+                              else "not marked: one reconcile pass owed")
+        )
+        def audit(): AuditReading =
+          import org.apache.pekko.actor.typed.scaladsl.AskPattern.*
+          given org.apache.pekko.util.Timeout = org.apache.pekko.util.Timeout(250.millis)
+          given org.apache.pekko.actor.typed.Scheduler = system.scheduler
+          BackgroundAudit.statusRef.fold(AuditReading.NotRunning) { ref =>
+            Try(Await.result(ref.ask[BackgroundAudit.Status](BackgroundAudit.GetStatus(_)), 250.millis)) match
+              case Success(status) =>
+                AuditReading.Running(
+                  AuditSample(
+                    pass = status.pass,
+                    nodes = status.counters.nodes,
+                    accounts = status.counters.accounts,
+                    holes = status.counters.holes,
+                    repaired = status.counters.repaired,
+                    unresolved = status.counters.unresolved,
+                    paused = status.paused,
+                    waitingForNextPass = status.waitingForNextPass,
+                    elapsed = java.time.Duration.ofMillis(status.counters.elapsedMillis)
+                  )
+                )
+              case Failure(_) => AuditReading.NoAnswer
+          }
+        TuiStatusProbe.LocalSources.storageReader(
+          StorageSources(
+            // One hold of the database for both: the markers' point reads never queue behind a writer.
+            read = (withEstimates, withMarkers) =>
+              rocks
+                .whileFree(rocks.properties(withEstimates).map(StorageRead(_, Option.when(withMarkers)(markers()))))
+                .flatten,
+            storeName = StorageReader.storeName,
+            audit = audit
+          )
+        )
+      case _ => () => None
 
   /** The pool's transaction with `hash`, for the TUI's explorer: one ask of the pending transactions manager, waited
     * for at most a second on the caller's thread (the TUI's lookup worker, never the frame loop).
@@ -524,6 +605,10 @@ abstract class BaseNode extends Node:
         poolCounters = () => Some(TxPoolMetrics.Node.snapshot),
         // Spec 029 slice 5, the RPC view: the transports as configured, and what their servers counted.
         rpc = TuiStatusProbe.LocalSources.rpcReader(tuiRpcTransports, tuiRateLimit),
+        // Spec 029 slice 6, the System and Storage views: this JVM's own beans and the RLPx byte counts; the
+        // database's properties, read without waiting, and the node's markers. Display only: nothing is written.
+        system = TuiStatusProbe.LocalSources.systemReader(),
+        storage = tuiStorageReader(),
         // The fork id the handshake tells a peer (EIP-2124, EIP-6122), computed the same way, for display.
         forkId = () =>
           blockchainReader.getBestBlockHeader.map { head =>

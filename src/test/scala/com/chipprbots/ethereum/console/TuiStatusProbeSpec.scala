@@ -1106,6 +1106,31 @@ class TuiStatusProbeSpec extends ScalaTestWithActorTestKit with AnyFlatSpecLike 
     sample.methods.exists(_.method == "nope") shouldBe false
   }
 
+  it should "say the calls and the failures of the last minute, once it has watched ten seconds" taggedAs (UnitTest) in {
+    val stats = new com.chipprbots.ethereum.jsonrpc.RpcCallStats
+    val time = new TuiFixtures.TestClock(now)
+    val reader = TuiStatusProbe.LocalSources.rpcReader(Nil, None, () => stats.snapshot, time)
+    def call(failed: Boolean): Unit =
+      stats.record(com.chipprbots.ethereum.jsonrpc.RpcCallStats.Http, "eth_chainId", known = true, 1_000L, failed)
+    // What was counted before the reader first looked is not of its minute.
+    (1 to 50).foreach(_ => call(failed = true))
+    reader().get.recent shouldBe None
+    time.advanceMillis(9_000L)
+    reader().get.recent shouldBe None
+    (1 to 30).foreach(i => call(failed = i <= 3))
+    time.advanceMillis(1_000L)
+    reader().get.recent shouldBe Some(RpcWindow(30, 3, java.time.Duration.ofSeconds(10)))
+    // A minute on, with a poll a second, those calls have left the window.
+    (1 to 61).foreach { _ =>
+      time.advanceMillis(1_000L)
+      reader()
+    }
+    val late = reader().get.recent.get
+    late.calls shouldBe 0
+    late.errorRate shouldBe None
+    late.span shouldBe java.time.Duration.ofSeconds(60)
+  }
+
   it should "pass a method's name through the screen's sanitiser" taggedAs (UnitTest) in {
     import com.chipprbots.ethereum.jsonrpc.RpcCallStats
     val stats = new RpcCallStats

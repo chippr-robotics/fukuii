@@ -1,0 +1,48 @@
+ ◆ FUKUII  etc (61) · PoW · head 21,884,102 · 41/50 peers · up 12d 7h · v0.11.0                                                                          Health 
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+ ⚠ 4 warns   heap above 93% of 8.0G for a minute (warn at 90%) · GC pauses 25% of the last minute (warn at 20%)                                                 
+                  │ Peers   41/50 ◆◆◆◆◆◆◆◆◆◆  Block  21,884,102 (at head)                    Txpool  142             Disk  388G free     JVM  7.8G / 8.0G heap  
+                  │ Sync    ✓ at head                                                                                                                           
+                  │─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+                  │ Health  Memory   ░░░░░░░░░░   0%  set by heap                                                                                               
+       ETC        │─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+                  │ heap  never under 93% of 8.0G in the last minute                                                                                            
+                  │    WARN for 3m 4s · warn when above 90% for a minute · 0% room                                                                              
+                  │ garbage collection  25% of the last minute in pauses                                                                                        
+ etc              │    WARN for 3m 4s · warn at 20% of the time · 0% room                                                                                       
+ PoW · id 61      │ A bar's colour is the alert row's: these are the rules the alert row reads.                                                                 
+ main network     │                                                                                                                                             
+                  │                                                                                                                                             
+ [1] Overview     │                                                                                                                                             
+ [2] Chain        │                                                                                                                                             
+ [3] Peers        │                                                                                                                                             
+ [4] Mempool      │                                                                                                                                             
+ [5] RPC          │                                                                                                                                             
+ [6] Storage      │                                                                                                                                             
+ [7] System       │                                                                                                                                             
+ [8] Logs         │                                                                                                                                             
+ [9] Ops          │                                                                                                                                             
+                  │                                                                                                                                             
+ graphics text    │                                                                                                                                             
+                  │                                                                                                                                             
+                  │                                                                                                                                             
+                  │                                                                                                                                             
+                  │                                                                                                                                             
+                  │                                                                                                                                             
+                  │                                                                                                                                             
+                  │                                                                                                                                             
+                  │                                                                                                                                             
+                  │                                                                                                                                             
+                  │                                                                                                                                             
+                  │                                                                                                                                             
+                  │                                                                                                                                             
+                  │                                                                                                                                             
+                  │                                                                                                                                             
+                  │                                                                                                                                             
+                  │                                                                                                                                             
+                  │                                                                                                                                             
+                  │                                                                                                                                             
+                  │                                                                                                                                             
+                  │                                                                                                                                             
+                  │                                                                                                                                             
+ 1-9 view  [ ] next view  Up Down select  Enter open  Esc back  : prompt  / filter  ? help  v graphics  p pause  r redraw  d detach  q quit                     

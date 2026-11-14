@@ -1,0 +1,24 @@
+ # FUKUII  etc (61) . PoW . up 12d 7h                                    System 
+--------------------------------------------------------------------------------
+ ! 4 warns   heap above 93% of 8.0G for a minute (warn at 90%)                  
+ Peers   41/50 ##########         Block  21,884,102 (at head)                   
+ Sync    + at head                                                              
+--------------------------------------------------------------------------------
+ Health  3 of 6 raise an alert               room left before the nearest alert 
+   P2P      ########--  76%  peer count: 41 of 50 . warn below 25% of the limit 
+ > Chain    ########## 100%  sync controller: answering                         
+   RPC      ----------   0%  failed calls: 80 of 240 in the last minute         
+   DB       ----------   0%  writes: refused, flush and compaction behind       
+   Disk     ##--------  18%  free space: 388G free of 2.0T                      
+   Memory   ----------   0%  heap: never under 93% of 8.0G in the last minute   
+--------------------------------------------------------------------------------
+ Process up 12d 7h . charts span 10m 0s . a point every 5s                      
+ CPU     ..........--........  now 8% . highest 45% in 10m 0s . of 8 processors 
+ Heap    ####################  now 7.8G of 8.0G . highest 8.0G in 10m 0s        
+ Net in  #################*##  now 1.9M/s . highest 2.0M/s in 10m 0s            
+ Net out ##*##*##*##*##*##**#  now 575K/s . highest 619K/s in 10m 0s            
+ GC      ::::::::::::::::::::  now 25% of the time . highest 25% in 10m 0s      
+ Threads ####################  now 148 . peak 171 since the start               
+ Machine ::::::::::==::::::::  now 24% . highest 52% in 10m 0s . load 1.84      
+ … 3 more meters not shown at this height                                       
+ 1-9 view  : prompt  / filter  ? help  p pause  r redraw  d detach  q quit      

@@ -10,6 +10,7 @@
  Forks   Spiral ✓ ══════════════════════════════════════▶ Olympia not scheduled 
 ────────────────────────────────────────────────────────────────────────────────
  Node    …/fukuii/etc · SNAP sync · archive pruning · 50 peers max · mining on  
+ Health  P2P ████░ · Chain █████ · Disk █░░░░                                   
 ────────────────────────────────────────────────────────────────────────────────
  Recent                                                                         
  11:59:25 INFO  [====================🪱]🧠 100% — RegularSync                   
@@ -18,7 +19,6 @@
  11:59:47 INFO  Imported block 21,884,102 0x6d21…1a0e with 14 txs in 22ms       
  11:59:52 INFO  Peers: 41 handshaked · 14 in · 27 out                           
  12:00:00 INFO  RegularSync: at head, block 21884102                            
-                                                                                
                                                                                 
                                                                                 
  ⚠ no command 'mempol'; did you mean mempool?                                   

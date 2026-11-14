@@ -70,8 +70,8 @@ enum Catchup:
   *   how graphics are drawn (spec 029 FR-011); text until the terminal has been asked what it can do
   * @param startup
   *   the phases of its start the node has reported done (spec 029 FR-020)
-  * @param reorgAlertDepth
-  *   a reorg at least this deep raises a warning (`fukuii.tui.alerts.reorg-depth`)
+  * @param thresholds
+  *   where each alert begins (`fukuii.tui.alerts`; spec 029 FR-046)
   * @param lookups
   *   the explorer's lookups and where each stands, as the worker last published them (spec 029 FR-029)
   * @param selectedBlock
@@ -137,10 +137,12 @@ case class TuiState(
     notice: Option[String] = None,
     graphics: GraphicsMode = GraphicsMode.Text,
     startup: Set[StartupPhase] = Set.empty,
-    reorgAlertDepth: Int = Alerts.ReorgDepth,
+    thresholds: AlertThresholds = AlertThresholds.Default,
     lookups: Vector[(LookupQuery, LookupState)] = Vector.empty,
     selectedBlock: Option[String] = None,
-    selectedTx: Option[String] = None
+    selectedTx: Option[String] = None,
+    healthSince: Health.Since = Map.empty,
+    selectedHealth: Option[Subsystem] = None
 ):
   /** Whether the Mempool view itself is on screen: not under Help, and not under a screen opened over it (the explorer,
     * a peer's details). The only time the probe reads the pool whole (spec 029 FR-037). A paused dashboard still shows
@@ -153,6 +155,18 @@ case class TuiState(
 
   /** The selected transaction's place in [[pendingTxs]]; None with no selection, or once it has left the list. */
   def selectedTxIndex: Option[Int] = selectedTx.map(hash => pendingTxs.indexWhere(_.hash == hash)).filter(_ >= 0)
+
+  /** Every health check of this state, worked out once: the alert row and the bars read this one value (spec 029
+    * FR-045).
+    */
+  lazy val healthChecks: Seq[HealthCheck] = Health.checks(this)
+
+  /** The health bars, as the System view lists them. */
+  lazy val healthBars: Seq[HealthBar] = Health.bars(this)
+
+  /** The selected bar's place in [[healthBars]]; None with no selection, or once its subsystem has no check. */
+  def selectedHealthIndex: Option[Int] =
+    selectedHealth.map(s => healthBars.indexWhere(_.subsystem == s)).filter(_ >= 0)
 
   /** Where the lookup of `query` stands, if it was asked. */
   def lookupOf(query: LookupQuery): Option[LookupState] = lookups.find(_._1 == query).map(_._2)
@@ -202,7 +216,7 @@ case class TuiState(
 
   /** Blocks remain and the current block has not moved for [[StallAfter]] of snapshot time (§4.1, §3.9). */
   def stalled: Boolean =
-    blocksRemaining > 0 && lastAdvanceAt.exists(at => Duration.between(at, now).compareTo(StallAfter) >= 0)
+    blocksRemaining > 0 && lastAdvanceAt.exists(at => Duration.between(at, now).compareTo(thresholds.stallAfter) >= 0)
 
   /** Whether the splash is on screen: `Some(0)` while it is, drawn whole; None once its time is over, when the
     * dashboard takes the whole screen in one frame. (Spec 027 handed the rows over four a tick; with the start's phases
@@ -285,10 +299,13 @@ case class TuiState(
         clSeenSince = seenSince
       )
     val caughtUp = bestBlock > 0 && !isSynchronized && next.isSynchronized
-    if !caughtUp then next
-    else if motion == Motion.Paused then next.copy(celebrated = true)
-    else if !celebrated then next.copy(celebrationStartedTick = Some(tick), celebrated = true)
-    else next.copy(backAtHeadTick = Some(tick))
+    val moved =
+      if !caughtUp then next
+      else if motion == Motion.Paused then next.copy(celebrated = true)
+      else if !celebrated then next.copy(celebrationStartedTick = Some(tick), celebrated = true)
+      else next.copy(backAtHeadTick = Some(tick))
+    // Since when each health check has been in its state (spec 029 FR-045), by the snapshot's clock.
+    moved.copy(healthSince = Health.since(moved, healthSince))
 
   /** The next frame: the counter moves on (unless paused), then the latest snapshot, if any, applies. */
   def nextFrame(snapshot: Option[NodeStatusSnapshot]): TuiState =
@@ -421,10 +438,11 @@ case class TuiState(
     if helpOpen then "Help"
     else
       screen match
-        case Some(Screen.PeerDetail(_)) => "Peer"
-        case Some(Screen.Art(_))        => "Art"
-        case Some(Screen.Explore(q, _)) => q.title
-        case None                       => view.title
+        case Some(Screen.PeerDetail(_))   => "Peer"
+        case Some(Screen.HealthDetail(_)) => "Health"
+        case Some(Screen.Art(_))          => "Art"
+        case Some(Screen.Explore(q, _))   => q.title
+        case None                         => view.title
 
   /** SNAP's pivot block, while SNAP's rows are on screen: the Block cell's target and the fork timeline's position
     * then, since the sync controller reports no block target and the local best block is far behind (B-044).
@@ -641,6 +659,7 @@ final case class ImportSample(blocks: Int, duration: Duration)
   */
 final case class LocalSample(
     diskFree: Option[Long] = None,
+    diskTotal: Option[Long] = None,
     jvm: Option[JvmSample] = None,
     discovery: Option[DiscoverySample] = None,
     headTimestamp: Option[Long] = None,
@@ -653,7 +672,9 @@ final case class LocalSample(
     chain: Option[ChainSample] = None,
     forkId: Option[String] = None,
     poolCounters: Option[com.chipprbots.ethereum.transactions.TxPoolMetrics.Snapshot] = None,
-    rpc: Option[RpcSample] = None
+    rpc: Option[RpcSample] = None,
+    system: Option[SystemSample] = None,
+    storage: Option[StorageSample] = None
 )
 
 /** A JSON-RPC transport (spec 029 FR-039). */
@@ -729,13 +750,22 @@ final case class MethodStats(
   *   the least time between two requests from one address, where HTTP limits the rate
   * @param rateLimited
   *   requests that limit refused
+  * @param recent
+  *   the calls of about the last minute, once the reader has watched that long or nearly
   */
 final case class RpcSample(
     transports: Vector[TransportStatus],
     methods: Vector[MethodStats],
     rateLimit: Option[Duration] = None,
-    rateLimited: Long = 0L
+    rateLimited: Long = 0L,
+    recent: Option[RpcWindow] = None
 )
+
+/** The calls every transport took over `span`, and how many of them failed. */
+final case class RpcWindow(calls: Long, errors: Long, span: Duration):
+
+  /** The share that failed; None with no call to take a share of. */
+  def errorRate: Option[Double] = Option.when(calls > 0)(errors.toDouble / calls)
 
 /** One Engine API call as the monitor's log shows it (FR-040): what the consensus client was told, and how long the
   * answer took.
@@ -835,11 +865,14 @@ final case class ClSample(
     builds: PayloadBuilds = PayloadBuilds()
 ):
 
-  /** The link, at `now`. */
-  def link(now: Instant): ClLink = forkchoiceUpdated.map(_.ageAt(now)) match
-    case None                                                         => ClLink.Waiting
-    case Some(silent) if silent.compareTo(ClSample.ClSilentAfter) > 0 => ClLink.Disconnected
-    case Some(_)                                                      => ClLink.Connected
+  /** The link, at `now`: down once the last `forkchoiceUpdated` is older than `silentAfter`
+    * (`fukuii.tui.alerts.cl-silent-after`).
+    */
+  def link(now: Instant, silentAfter: Duration = ClSample.ClSilentAfter): ClLink =
+    forkchoiceUpdated.map(_.ageAt(now)) match
+      case None                                              => ClLink.Waiting
+      case Some(silent) if silent.compareTo(silentAfter) > 0 => ClLink.Disconnected
+      case Some(_)                                           => ClLink.Connected
 
 object ClSample:
 

@@ -38,6 +38,7 @@ import com.chipprbots.ethereum.domain.Transaction
 import com.chipprbots.ethereum.jsonrpc.RpcCallStats
 import com.chipprbots.ethereum.network.NetworkMetrics
 import com.chipprbots.ethereum.network.NetworkPeerManagerActor
+import com.chipprbots.ethereum.network.P2pTraffic
 import com.chipprbots.ethereum.network.Peer
 import com.chipprbots.ethereum.network.PeerManagerActor
 import com.chipprbots.ethereum.network.PeerScoreSnapshot
@@ -198,6 +199,8 @@ class TuiStatusProbe(
     previousGc = gcMillis.map(_ -> at)
     LocalSample(
       diskFree = read("the disk free")(local.dataDir.map(local.usableSpace)),
+      // A file system that cannot say its size answers 0.
+      diskTotal = read("the disk size")(local.dataDir.map(local.totalSpace)).filter(_ > 0),
       jvm = read("the heap")(local.heap()).map((used, max) => JvmSample(used, max, gcShare)),
       discovery = read("the discovery counts")(local.discovery()),
       headTimestamp = read("the head timestamp")(local.headTimestamp()),
@@ -210,7 +213,9 @@ class TuiStatusProbe(
       chain = local.chain.flatMap(source => read("the chain")(Some(observeHead(source, at)))),
       forkId = read("the fork id")(local.forkId()),
       poolCounters = read("the pool's counters")(local.poolCounters()),
-      rpc = read("the RPC figures")(local.rpc())
+      rpc = read("the RPC figures")(local.rpc()),
+      system = read("the process and the machine")(local.system()),
+      storage = read("the database")(local.storage())
     )
 
   /** What the pool observer has seen (spec 029 FR-031): kept on the probe's thread, moved on by each poll that reads
@@ -358,6 +363,7 @@ object TuiStatusProbe:
   final case class LocalSources(
       dataDir: Option[File] = None,
       usableSpace: File => Long = _.getUsableSpace,
+      totalSpace: File => Long = _.getTotalSpace,
       heap: () => Option[(Long, Long)] = () => None,
       gcMillis: () => Option[Long] = () => None,
       discovery: () => Option[DiscoverySample] = () => None,
@@ -375,7 +381,9 @@ object TuiStatusProbe:
       isMined: String => Boolean = _ => false,
       poolCapacity: Int = 0,
       poolCounters: () => Option[TxPoolMetrics.Snapshot] = () => None,
-      rpc: () => Option[RpcSample] = () => None
+      rpc: () => Option[RpcSample] = () => None,
+      system: () => Option[SystemSample] = () => None,
+      storage: () => Option[StorageSample] = () => None
   )
 
   object LocalSources:
@@ -395,10 +403,14 @@ object TuiStatusProbe:
         isMined: String => Boolean = _ => false,
         poolCapacity: Int = 0,
         poolCounters: () => Option[TxPoolMetrics.Snapshot] = () => None,
-        rpc: () => Option[RpcSample] = () => None
+        rpc: () => Option[RpcSample] = () => None,
+        system: () => Option[SystemSample] = () => None,
+        storage: () => Option[StorageSample] = () => None
     ): LocalSources =
       LocalSources(
         rpc = rpc,
+        system = system,
+        storage = storage,
         chain = chain,
         forkId = forkId,
         suggestedFee = suggestedFee,
@@ -441,9 +453,25 @@ object TuiStatusProbe:
     def rpcReader(
         transports: Seq[TransportStatus],
         rateLimit: Option[java.time.Duration],
-        stats: () => RpcCallStats.Snapshot = () => RpcCallStats.Node.snapshot
+        stats: () => RpcCallStats.Snapshot = () => RpcCallStats.Node.snapshot,
+        clock: Clock = Clock.systemUTC()
     ): () => Option[RpcSample] =
-      () => Some(TuiStatusProbe.rpcSample(transports, rateLimit, stats()))
+      new RpcReader(transports, rateLimit, stats, clock)
+
+    /** This JVM and its machine, and the RLPx traffic the node counted (spec 029 FR-044). Only the probe thread calls
+      * it.
+      */
+    def systemReader(
+        traffic: () => P2pTraffic.Snapshot = () => P2pTraffic.Node.snapshot,
+        clock: Clock = Clock.systemUTC()
+    ): () => Option[SystemSample] =
+      new SystemReader(SystemSources.jvm(traffic), clock)
+
+    /** The database and its disk (spec 029 FR-043), through reads the caller hands over. Only the probe thread calls
+      * it.
+      */
+    def storageReader(sources: StorageSources, clock: Clock = Clock.systemUTC()): () => Option[StorageSample] =
+      new StorageReader(sources, clock)
 
     /** The mining metrics (spec 027 M1, M2), and the coinbase through `coinbase`: the node's own `CoinbaseProvider`, so
       * what `eth_coinbase` answers is what shows, and nothing that can change it is handed over. It reads gauges, and
@@ -480,9 +508,11 @@ object TuiStatusProbe:
       * Shenandoah's `… Cycles` beans) count the wall time of work that runs beside it, which is not a pause.
       */
     private[console] def pausingGcMillis(collectors: Seq[(String, Long)]): Long =
-      collectors.collect {
-        case (name, millis) if !name.contains("Concurrent") && !name.contains("Cycles") => millis.max(0L)
-      }.sum
+      collectors.collect { case (name, millis) if pausingCollector(name) => millis.max(0L) }.sum
+
+    /** Whether a collector bean counts pauses, by its name. */
+    private[console] def pausingCollector(name: String): Boolean =
+      !name.contains("Concurrent") && !name.contains("Cycles")
 
     def networkDiscovery(): Option[DiscoverySample] =
       Some(
@@ -604,6 +634,34 @@ object TuiStatusProbe:
       )
 
   private def hex(bytes: ByteString): String = bytes.iterator.map(b => f"${b & 0xff}%02x").mkString
+
+  /** The reader [[LocalSources.rpcReader]] returns: the figures as counted, and the calls of the last minute from the
+    * totals it keeps of that minute's polls. Only the probe thread calls it.
+    */
+  final private class RpcReader(
+      transports: Seq[TransportStatus],
+      rateLimit: Option[java.time.Duration],
+      stats: () => RpcCallStats.Snapshot,
+      clock: Clock
+  ) extends (() => Option[RpcSample]):
+    private var totals: Vector[(Instant, Long, Long)] = Vector.empty
+
+    def apply(): Option[RpcSample] =
+      val at = clock.instant()
+      val counted = stats()
+      val calls = counted.transports.map(_.calls).sum
+      val errors = counted.transports.map(_.errors).sum
+      // A clock that stepped back, or totals that fell (they never do in one process), say nothing of the minute.
+      if totals.lastOption.exists((before, c, e) => before.isAfter(at) || c > calls || e > errors) then
+        totals = Vector.empty
+      totals = (totals :+ (at, calls, errors)).dropWhile(p =>
+        java.time.Duration.between(p._1, at).compareTo(RpcRecentWindow) > 0
+      )
+      val recent = totals.headOption.collect {
+        case (from, c, e) if java.time.Duration.between(from, at).compareTo(RpcRecentMinSpan) >= 0 =>
+          RpcWindow(calls - c, errors - e, java.time.Duration.between(from, at))
+      }
+      Some(TuiStatusProbe.rpcSample(transports, rateLimit, counted).copy(recent = recent))
 
   /** The reader [[LocalSources.miningReader]] returns. */
   final private class MiningReader(coinbase: () => String, clock: Clock) extends (() => Option[MiningSample]):
@@ -775,6 +833,12 @@ object TuiStatusProbe:
       rateLimit = rateLimit,
       rateLimited = counted.rateLimited
     )
+
+  /** The window the RPC view's recent calls are taken over, and the least of it the reader must have watched before it
+    * says anything of them.
+    */
+  val RpcRecentWindow: java.time.Duration = java.time.Duration.ofSeconds(60)
+  val RpcRecentMinSpan: java.time.Duration = java.time.Duration.ofSeconds(10)
 
   /** The least time between two whole readings of the pool (spec 029 FR-037: at most once a second), less the timer's
     * own jitter, so that a probe polling every second reads it every poll.

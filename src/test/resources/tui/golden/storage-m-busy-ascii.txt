@@ -1,0 +1,40 @@
+ # FUKUII  sepolia (11155111) . PoS . head 7,412,009 . 23/50 peers . up 3d 4h                                   Storage 
+------------------------------------------------------------------------------------------------------------------------
+ + no alerts                                                                                                            
+                  | Peers   23/50 ##########  Block  7,412,009 -> 7,412,011 (-2)             Txpool  1,204 (3 blob)     
+                  | Sync    regular 99% . rate 0.08 blk/s . ETA 24s                                                     
+                  |-----------------------------------------------------------------------------------------------------
+                  | Size    412G on disk . 390G live (estimate) . +2.1G/h over 10m 0s . read now                        
+       ETH        | Writes  accepted, held to 16M/s while flush and compaction catch up                                 
+                  | Compact 3 stores pending . 2 running . 41.0G to rewrite                                             
+                  | Disk    1.2T free of 2.0T . the database is 20% of the disk . archive pruning                       
+                  | Cache   block cache 1.4G of 2.0G (memtables 312M of it) . 97.1% hits . table readers 84M            
+ sepolia          |-----------------------------------------------------------------------------------------------------
+ PoS              | Stores  13 of 18 hold data . 5 empty not listed                                                     
+ id 11155111      | store                             on disk   keys (estimate)  of the database                        
+ test network     | state trie by path                   141G     1,204,118,220            34.2%                        
+                  | storage tries by path               96.0G       912,440,018            23.3%                        
+ [1] Overview     | flat storage slots                  58.0G     1,480,220,114            14.1%                        
+ [2] Chain        | bodies                              44.0G        21,884,103            10.7%                        
+ [3] Peers        | receipts                            31.0G        21,884,103             7.5%                        
+ [4] Mempool      | flat accounts                       18.0G       214,882,019             4.4%                        
+ [5] RPC          | headers                             11.0G        21,884,103             2.7%                        
+ [6] Storage      | transaction index                    9.0G       188,204,771             2.2%                        
+ [7] System       | contract code                        3.0G         1,204,882             0.7%                        
+ [8] Logs         | canonical hash by number             812M        21,884,103             0.2%                        
+ [9] Ops          | chain weights                        640M        21,884,103             0.2%                        
+                  | known peers                            2M             1,912             0.0%                        
+ graphics text    | node state                             1M                41             0.0%                        
+                  |-----------------------------------------------------------------------------------------------------
+                  | Integrity                                                                                           
+                  | Audit   pass 2 . 412,880,114 nodes . 3 holes . 3 repaired . 0 unresolved . 91,204,118 accounts      
+                  | State layout          unified-v1                                                                    
+                  | SNAP sync             marked done (by SNAP or a checkpoint)                                         
+                  | Heal invariant        marked: every present node has its subtree                                    
+                  | Checkpoint import     none                                                                          
+                  | Code scan             owed: checkpoint import                                                       
+                  | Audit pass            a pass is owed                                                                
+                  | Reference counts      exact                                                                         
+                  | Chain weights         every stored weight follows from its parent                                   
+                  | Not kept by this client: a freezer for old blocks (no history is expired).                          
+ 1-9 view  Enter open  Esc back  : prompt  / filter  ? help  p pause  r redraw  d detach  q quit                        

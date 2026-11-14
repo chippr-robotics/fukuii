@@ -12,6 +12,9 @@ enum Screen:
     */
   case Explore(query: LookupQuery, selected: Int)
 
+  /** Every check behind one health bar (spec 029 FR-045), opened from the System view's bars. */
+  case HealthDetail(subsystem: Subsystem)
+
   /** The art, a pose of a sprite a page, in the graphics mode on screen (`:art`; contracts/art.md). `page` counts from
     * the first and wraps.
     */

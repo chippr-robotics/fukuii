@@ -89,11 +89,25 @@ judged on enlarged renders and mock screens ([art-preview/](./art-preview/)).
 
 ## Slice 6: storage, system, health
 
-1. `6` and `7`: the database size agrees with `du -sh <datadir>/rocksdb` within 5 %; disk free with `df`.
-2. Fill the disk past the warning threshold (a large temporary file): the Disk bar and the alert row change
-   together. Enter on the bar: the check, its value, its threshold, since when.
-3. `fukuii.tui.alerts.disk-warn = "50 GiB"`: the warning fires earlier. An invalid value: the node refuses to start
-   and names the key.
+1. `6`. The `Size` row agrees with `du -sh <datadir>/rocksdb` within 5 % (the write-ahead log is the difference),
+   and the `Disk` row with `df` on the datadir. The stores' sizes sum to the size, and the row says how old the
+   reading is. With `db.rocksdb.enable-statistics` off (the default) the `Cache` row says hit rates are not counted;
+   with it on, a rate appears after two readings.
+2. `7`. The meters fill from the left, a point every five seconds. `Net in`/`Net out` move with the peers' traffic
+   and stand at nothing with no peer. `Process` is the JVM's uptime (compare `ps -o etime`), not the dashboard's:
+   attach late, or restart only the TUI, and it does not start again.
+3. Fill the disk past the warning threshold (a large temporary file on the datadir's file system): the Disk bar,
+   the Overview's Disk cell and the alert row change at the same poll. `Down` to the Disk bar, `Enter`: the check,
+   what it reads, its threshold, its state and since when. Remove the file: all three clear together.
+4. `fukuii.tui.alerts.disk-warn = "500 GiB"` (above what is free): the warning stands from the start. An invalid
+   value (`disk-warn = lots`), a key set to `null`, or a key that is no threshold (`disk-warning = 50 GiB`): the
+   node refuses to start and names the key.
+5. While a SNAP sync or a long compaction writes: the dashboard stays responsive on every view, the `Size` row's
+   age grows and resets, and nothing in the node's log says a write waited on the dashboard.
+6. A node whose background audit runs (after a SNAP sync hands over): the `Audit` row counts nodes, and reads
+   `not running now` once the audit has ended by itself after a clean pass, not `did not answer`.
+7. 80×24: the System view lists the bars and as many meters as fit, and counts the rest; the Storage view counts
+   the stores and marks it has no rows for.
 
 ## Slice 7: actions
 

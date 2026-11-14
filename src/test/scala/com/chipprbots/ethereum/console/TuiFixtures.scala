@@ -173,6 +173,7 @@ object TuiFixtures:
   ): LocalSample =
     LocalSample(
       diskFree = Some((diskGiB * GiB).toLong),
+      diskTotal = Some((2048 * GiB).toLong),
       jvm = Some(JvmSample((heapGiB * GiB).toLong, (maxHeapGiB * GiB).toLong, Some(gcShare))),
       discovery = Some(DiscoverySample(known = 1_912L, pending = 14L, blacklisted = 3L)),
       headTimestamp = headTimestamp,
@@ -753,6 +754,198 @@ object TuiFixtures:
       _.copy(poolCounters =
         Some(com.chipprbots.ethereum.transactions.TxPoolMetrics.Snapshot(Map.empty, 0, 0, 0, 0, 0, 0))
       )
+    )
+
+  // ---- Storage, System and health (spec 029 slice 6) ---------------------------------------------------------------
+
+  private val MiB: Long = 1024L * 1024
+  private val GiBytes: Long = 1024L * MiB
+
+  /** Ten minutes of the process, a point every five seconds: a steady node whose figures move a little, with one busy
+    * stretch. `heapFloor` is the least share of an 8 GiB heap it falls to, and `gc` the collector's share of the time.
+    */
+  def systemSample(heapFloor: Double = 0.35, gc: Double = 0.004, points: Int = 121): SystemSample =
+    val history = (0 until points).map { i =>
+      val busy = i >= 60 && i < 72
+      SystemPoint(
+        at = Now.minusSeconds((points - 1 - i) * 5L),
+        processCpu = Some(0.08 + ((i * 37) % 23) / 400.0 + (if busy then 0.31 else 0.0)),
+        systemCpu = Some(0.21 + ((i * 53) % 29) / 300.0 + (if busy then 0.22 else 0.0)),
+        heapUsed = Some(((heapFloor + ((i * 7) % 12) / 100.0).min(0.995) * 8 * GiBytes).toLong),
+        nonHeap = Some(212 * MiB + (i % 5) * MiB),
+        gcShare = Some(gc + ((i * 11) % 7) / 2000.0),
+        // The collector's total: `gc` of every five seconds since the first point.
+        gcTotalMillis = Some((i * 5_000L * gc).toLong),
+        threads = Some(148 + (i * 3) % 9),
+        bytesInPerSecond = Some(1_240_000.0 + ((i * 97) % 41) * 21_000.0),
+        bytesOutPerSecond = Some(310_000.0 + ((i * 61) % 37) * 9_000.0),
+        messagesInPerSecond = Some(212.0 + (i * 13) % 60),
+        messagesOutPerSecond = Some(88.0 + (i * 17) % 31)
+      )
+    }.toVector
+    val last = history.last
+    SystemSample(
+      processCpu = last.processCpu,
+      systemCpu = last.systemCpu,
+      loadAverage = Some(1.84),
+      processors = 8,
+      nonHeap = last.nonHeap,
+      gcCount = Some(2_114L),
+      lastGcPause = Some(java.time.Duration.ofMillis(14)),
+      threads = last.threads,
+      peakThreads = Some(171),
+      uptime = Some(java.time.Duration.ofSeconds(12L * 86_400 + 7 * 3_600)),
+      traffic = Some(
+        TrafficSample(
+          bytesIn = 1_412L * GiBytes,
+          bytesOut = 344L * GiBytes,
+          messagesIn = 228_411_902L,
+          messagesOut = 91_204_117L,
+          bytesInPerSecond = last.bytesInPerSecond,
+          bytesOutPerSecond = last.bytesOutPerSecond,
+          messagesInPerSecond = last.messagesInPerSecond,
+          messagesOutPerSecond = last.messagesOutPerSecond
+        )
+      ),
+      history = history
+    )
+
+  /** The stores of a node that synced by SNAP on the path scheme: the state's stores the largest, the stores of a
+    * finished sync empty.
+    */
+  val stores: Vector[StoreSize] = Vector(
+    StoreSize("state trie by path", Some(141L * GiBytes), Some(1_204_118_220L)),
+    StoreSize("storage tries by path", Some(96L * GiBytes), Some(912_440_018L)),
+    StoreSize("flat storage slots", Some(58L * GiBytes), Some(1_480_220_114L)),
+    StoreSize("bodies", Some(44L * GiBytes), Some(21_884_103L)),
+    StoreSize("receipts", Some(31L * GiBytes), Some(21_884_103L)),
+    StoreSize("flat accounts", Some(18L * GiBytes), Some(214_882_019L)),
+    StoreSize("headers", Some(11L * GiBytes), Some(21_884_103L)),
+    StoreSize("transaction index", Some(9L * GiBytes), Some(188_204_771L)),
+    StoreSize("contract code", Some(3L * GiBytes), Some(1_204_882L)),
+    StoreSize("canonical hash by number", Some(812 * MiB), Some(21_884_103L)),
+    StoreSize("chain weights", Some(640 * MiB), Some(21_884_103L)),
+    StoreSize("known peers", Some(2 * MiB), Some(1_912L)),
+    StoreSize("node state", Some(1 * MiB), Some(41L)),
+    StoreSize("trie nodes by hash", Some(0L), Some(0L)),
+    StoreSize("healing frontier (retired)", Some(0L), Some(0L)),
+    StoreSize("frontier rebuild queue (legacy)", Some(0L), Some(0L)),
+    StoreSize("SNAP progress", Some(0L), Some(0L)),
+    StoreSize("default", Some(0L), Some(0L))
+  )
+
+  val markers: Vector[(String, String)] = Vector(
+    "State layout" -> "unified-v1",
+    "SNAP sync" -> "marked done (by SNAP or a checkpoint)",
+    "Heal invariant" -> "marked: every present node has its subtree",
+    "Checkpoint import" -> "none",
+    "Code scan" -> "not owed",
+    "Audit pass" -> "clean at pivot 21883000",
+    "Reference counts" -> "exact",
+    "Chain weights" -> "every stored weight follows from its parent"
+  )
+
+  /** The database of a node at its head, read a second ago: nothing pending, the database not counting its cache's
+    * hits, no audit running. Ten minutes of its size, growing a little.
+    */
+  def storageSample: StorageSample =
+    val total = stores.flatMap(_.sstBytes).sum
+    StorageSample(
+      at = Now.minusSeconds(1),
+      sstBytes = Some(total),
+      liveDataBytes = Some(total - 22L * GiBytes),
+      stores = stores,
+      compactionPending = Some(0L),
+      pendingCompactionBytes = Some(0L),
+      runningCompactions = Some(0L),
+      writeStopped = Some(false),
+      delayedWriteRate = Some(0L),
+      blockCacheUsed = 1_480 * MiB,
+      blockCacheCapacity = 2 * GiBytes,
+      memTables = Some(312 * MiB),
+      tableReaders = Some(84 * MiB),
+      cache = CacheReading.Off,
+      markers = markers,
+      audit = AuditReading.NotRunning,
+      sizeHistory =
+        (0 until 121).map(i => Now.minusSeconds((120 - i) * 5L + 1) -> (total - (120 - i) * 3 * MiB)).toVector
+    )
+
+  /** A database under load: compaction behind, writes held, the cache's hits counted, the audit on its second pass, a
+    * code scan owed.
+    */
+  def storageBusy: StorageSample =
+    storageSample.copy(
+      compactionPending = Some(3L),
+      pendingCompactionBytes = Some(41L * GiBytes),
+      runningCompactions = Some(2L),
+      delayedWriteRate = Some(16 * MiB),
+      cache = CacheReading.On(hits = 91_204_118L, misses = 2_811_004L, hitRate = Some(0.9713)),
+      markers = markers.map {
+        case ("Code scan", _)  => "Code scan" -> "owed: checkpoint import"
+        case ("Audit pass", _) => "Audit pass" -> "a pass is owed"
+        case other             => other
+      },
+      audit = AuditReading.Running(
+        AuditSample(
+          pass = 2,
+          nodes = 412_880_114L,
+          accounts = 91_204_118L,
+          holes = 3,
+          repaired = 3,
+          unresolved = 0,
+          paused = false,
+          waitingForNextPass = false,
+          elapsed = java.time.Duration.ofSeconds(4 * 3_600 + 1_260)
+        )
+      )
+    )
+
+  /** `state` with the process and the database read, and the last minute's RPC calls. */
+  def withResources(
+      state: TuiState,
+      system: SystemSample = systemSample(),
+      storage: StorageSample = storageSample,
+      recent: RpcWindow = RpcWindow(1_204, 3, java.time.Duration.ofSeconds(60))
+  ): TuiState =
+    val read = withLocal(
+      state,
+      l =>
+        l.copy(
+          system = Some(system),
+          storage = Some(storage),
+          rpc = Some(l.rpc.getOrElse(RpcSample(rpcTransports(engine = false), rpcMethods)).copy(recent = Some(recent)))
+        )
+    )
+    // Every check has been in its state since the node was first read, twelve minutes ago.
+    read.copy(healthSince = Health.checks(read).map(c => c.key -> (c.state -> Now.minusSeconds(720))).toMap)
+
+  /** [[syncedEtc]] with its resources read: every bar well. */
+  def resourcesEtc(glyphs: GlyphSet = GlyphSet.Emoji): TuiState = withResources(miningEtc(glyphs))
+
+  /** [[sepoliaNearHead]] with its resources read and the database under load: writes held, which raises nothing. */
+  def resourcesSepolia(glyphs: GlyphSet = GlyphSet.Emoji): TuiState =
+    withResources(rpcSepolia(glyphs), storage = storageBusy)
+
+  /** A node in trouble on four counts new with spec 029: the heap never under 93% for a minute, the collector a quarter
+    * of the time, a third of the last minute's RPC calls failing, and the database refusing writes.
+    */
+  def pressureEtc(glyphs: GlyphSet = GlyphSet.Emoji): TuiState =
+    val s = withResources(
+      syncedEtc(glyphs),
+      system = systemSample(heapFloor = 0.93, gc = 0.25),
+      storage = storageBusy.copy(writeStopped = Some(true)),
+      recent = RpcWindow(240, 80, java.time.Duration.ofSeconds(60))
+    )
+    val heap = withLocal(s, l => l.copy(jvm = l.jvm.map(_.copy(heapUsed = (0.97 * 8 * GiBytes).toLong))))
+    // The four alerts began three minutes ago; the rest has stood since the node was first read.
+    heap.copy(healthSince =
+      Health
+        .checks(heap)
+        .map { c =>
+          c.key -> (c.state -> Now.minusSeconds(if c.alert.isDefined then 184 else 720))
+        }
+        .toMap
     )
 
   // ---- The RPC view (spec 029 slice 5) ------------------------------------------------------------------------------
