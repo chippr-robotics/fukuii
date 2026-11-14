@@ -6751,7 +6751,8 @@ is named in the log and on the Art screen and left out; its picture is drawn as 
 holds: a block's header and transactions, a transaction, its receipt with its own gas and its logs, an account's
 balance, nonce and code size at the head. The rows that lead somewhere (a block's parent and transactions, a
 transaction's receipt and addresses, a receipt's logs) can be selected with <code>Up</code>/<code>Down</code> and opened with <code>Enter</code>;
-<code>Esc</code> goes back to the row it was opened from. A hash is always shown whole.</p>
+<code>Esc</code> goes back to the row it was opened from. A hash is always shown whole. What a screen shows is of the
+moment it was read (an account's balance is the head's of then): <code>R</code> reads the node again.</p>
 <p>The reading is done on a thread of the TUI's own, never on the one that draws: a lookup that takes more than two
 seconds says so, and <code>Esc</code> cancels it. What the node does not have is said in words: a block before the SNAP pivot
 has no body, a transaction that is not in the index was not imported by this node, an account cannot be read where
@@ -6869,7 +6870,7 @@ the same, so a link that delivers no arrow keys loses nothing.</p>
 servers, sync, the consistency checks), each marked done when the node reports it complete; its worm bar is the share
 of them done, and the row beside it names the phase under way. Nothing in it is timed: a node that takes long in a
 phase shows that phase. In pixel and block mode the badge stands where the logo does in text mode.</p>
-<p>Any key skips the startup splash, and does nothing else. A change of view cancels the catch-up celebration. Opening
+<p>When its time is over the dashboard takes the whole screen in one frame. Any key skips the startup splash, and does nothing else. A change of view cancels the catch-up celebration. Opening
 the Logs view shows its newest lines; while it is scrolled back, new lines arriving keep the lines on screen where
 they are.</p>
 <p>An arrow or a function key is an escape sequence. The TUI reads a sequence whole before deciding what it is: one it
