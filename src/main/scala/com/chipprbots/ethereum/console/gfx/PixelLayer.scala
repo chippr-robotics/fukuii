@@ -39,7 +39,10 @@ final case class GraphicRegion(
   * image is shown.
   *
   * @param images
-  *   the id each image was sent under, by what it is
+  *   the id each image was sent under, by what it is. It only grows until a clear frees every image: the art bounds it
+  *   (some fifty sprite frames at one scale), but a terminal that evicts images under memory pressure would leave one
+  *   listed here that it no longer holds, blank until the next clear (`r`, a resize). Freeing the least recently shown
+  *   is B-259
   * @param content
   *   the buffer a chart's image was drawn from when it was last sent
   * @param placed
