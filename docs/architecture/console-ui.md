@@ -217,6 +217,9 @@ the same cells in every mode, and nothing is only a picture: what it shows is al
 | `block` | The same art in half-block character cells, in the 256-colour palette | Any 256-colour terminal with a UTF-8 locale; tmux and screen |
 | `text` | No art: the words that stand for each picture | `NO_COLOR`, fewer than 256 colours |
 
+Pixel and block mode draw the text in the command-center colours, which are the palette the art is drawn in; text
+mode keeps the colours the terminal's depth chose (16, 256 or none).
+
 `fukuii.tui.graphics = auto` (the default) asks the terminal once at start, for at most half a second, and picks
 `pixel` if it answers, else `block`; under tmux or screen it picks `block` without asking. `FUKUII_TUI_GRAPHICS`
 overrides the setting, `V` switches while the TUI runs, and `:graphics <mode>` sets one by name. Asking for `pixel` on
@@ -260,6 +263,11 @@ the same, so a link that delivers no arrow keys loses nothing.
 | `D` | | Detach: the TUI closes and standard logging returns; the node keeps running |
 | `Q` | | **Ask** to stop the node: a dialog says what stops with it; `Y` stops it, `N` or `Esc` cancels. Nothing else answers it, pasted text included |
 | `Ctrl-C` | | Stop the node at once, as a signal |
+
+The startup splash lists the phases of the node's start (storage and genesis, the peer-to-peer network, the API
+servers, sync, the consistency checks), each marked done when the node reports it complete; its worm bar is the share
+of them done, and the row beside it names the phase under way. Nothing in it is timed: a node that takes long in a
+phase shows that phase. In pixel and block mode the badge stands where the logo does in text mode.
 
 Any key skips the startup splash, and does nothing else. A change of view cancels the catch-up celebration. Opening
 the Logs view shows its newest lines; while it is scrolled back, new lines arriving keep the lines on screen where
@@ -334,7 +342,7 @@ All TUI code lives in `com.chipprbots.ethereum.console`:
 | `Sourced` | Each polled source's freshness: `Fresh`, `Stale` (it missed a wait; its last answer is kept), `Unresponsive` (it never answered, failed, or has been silent for 5 s). A slow actor degrades its own line only. |
 | `TuiProbeThread` | Daemon thread running the probe every `status-poll-interval-ms` and publishing the snapshot; it stops with the TUI. |
 | `TuiUpdater` | Daemon frame loop: count a frame (`tick`), take the latest snapshot, render, then wait for a key at the frame's pace: `animation-interval-ms` (250 ms) while anything on screen moves, 1 s otherwise. The key wait is the pacing, so a key is handled as it arrives. A frame equal to the last is not written. |
-| `Splash` | The startup splash, a view of the same renderer: the FUKUII logo by terminal size (`FukuiiBanner`, the literal the startup log prints), skipped by any key. |
+| `Splash` | The startup splash, a view of the same renderer: the FUKUII logo by terminal size (`FukuiiBanner`, the literal the startup log prints) or the badge sprite, and the phases of the start as `StdNode.start` reports them (`StartupPhase`); skipped by any key. |
 | `TuiLogSuppressor` | Detaches the console appender while the TUI is active (file logging continues). |
 | `TuiLogRingAppender` | The log tail: an appender of its own on the root logger, a lock-free ring of the newest lines, sanitised on capture. Attached after the console is suppressed and detached before it is restored, through `Tui`'s teardown ladder. |
 | `Sanitize`, `TuiText.external` | Text from outside the node (client ids, log lines, failure reasons): no escape sequence or control character, one line, capped at 512 characters; at most four times that is read, whatever the text's length, so a peer's 16 MiB client id costs no more than a short one; ASCII only under the ASCII glyph set. |

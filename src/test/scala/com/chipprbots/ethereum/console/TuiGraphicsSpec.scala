@@ -144,6 +144,44 @@ class TuiGraphicsSpec extends AnyFlatSpec with Matchers with OptionValues:
       tt.lastFrame should include("▀")
     }
 
+  "The command-center colours" should "be drawn with the art, and text mode keep the terminal's own theme" taggedAs (
+    UnitTest
+  ) in {
+    // The art's palette by index: the green of its titles, never a colour of the 16 a user may have redefined.
+    TuiTheme.CommandCenter.palette shouldBe Palette.Ansi256
+    withTui(TuiTestTerminal.PlainReply) { (tui, tt) =>
+      tui.getState.graphics shouldBe GraphicsMode.Block
+      (tt.lastFrame should include).regex("38;5;46[;m]")
+      tui.handleKey(Key.Char('v')) // to text
+      tui.getState.graphics shouldBe GraphicsMode.Text
+      (tt.lastFrame should not).include("38;5;46")
+    }
+  }
+
+  "The node's start" should "be marked on the splash as the node reports each phase" taggedAs (UnitTest) in {
+    val tt = new TuiTestTerminal(width = 80, height = 24)
+    val tui = tt.tui(TuiTestTerminal.config.copy(splashMs = 3000, animationIntervalMs = 250))
+    try
+      tui.initialize() shouldBe true
+      tui.render()
+      val g = TuiGlyphs.of(tui.getState.glyphs)
+      def row(phase: StartupPhase) =
+        TuiTestTerminal.visible(tt.lastFrame).linesIterator.find(_.trim.endsWith(phase.label)).value.trim
+      (row(StartupPhase.Storage) should not).startWith(g.check.text)
+      TuiTestTerminal.visible(tt.lastFrame) should include("starting: storage and genesis")
+      tui.startupDone(StartupPhase.Storage)
+      tui.startupDone(StartupPhase.Network)
+      tui.render()
+      row(StartupPhase.Storage) should startWith(g.check.text)
+      row(StartupPhase.Network) should startWith(g.check.text)
+      (row(StartupPhase.Api) should not).startWith(g.check.text)
+      TuiTestTerminal.visible(tt.lastFrame) should include("40%")
+      tui.getState.startup shouldBe Set(StartupPhase.Storage, StartupPhase.Network)
+    finally
+      tui.shutdown()
+      tt.close()
+  }
+
   "A resize" should "ask the cell's size again, and a new size send the art again at that size" taggedAs (UnitTest) in
     withTui(TuiTestTerminal.kittyReply()) { (tui, tt) =>
       val asked = tt.output.sliding(Kitty.CellSizeQuery.length).count(_ == Kitty.CellSizeQuery)

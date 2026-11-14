@@ -46,9 +46,9 @@ a background you do not control.
 | `mascot` | 32 × 16 | 32 × 32 px | 256 × 256 px | 7, up to 4 frames each | The corner of the Overview's Recent strip from 140 × 45, where the strip has 17 rows and keeps 80 columns; the splash |
 | `mascot-small` | 16 × 8 | 16 × 16 px | 128 × 128 px | 7, up to 2 frames each | The same corner from 100 × 32, where the strip has 9 rows |
 | `network-etc`, `network-eth` | 16 × 8 | 16 × 16 px | 128 × 128 px | 1 | The top of the sidebar: the chain family the node is on (spec FR-061) |
-| `badge` | 16 × 8 | 16 × 16 px | 128 × 128 px | 1 | Help, Ops |
-| `badge-large` | 32 × 16 | 32 × 32 px | 256 × 256 px | 1 | The splash; carries the FUKUII wordmark |
-| `splash-scene` *(optional)* | 80 × 24 | 80 × 48 px | 640 × 384 px | 1 | Behind the splash; never changes |
+| `badge` | 16 × 8 | 16 × 16 px | 128 × 128 px | 1 | The splash where the large one does not fit (80 × 24) |
+| `badge-large` | 32 × 16 | 32 × 32 px | 256 × 256 px | 1 | The splash from 27 rows; carries the FUKUII wordmark |
+| `splash-scene` *(optional)* | 80 × 24 | 80 × 48 px | 640 × 384 px | 1 | Nowhere yet: a backdrop lies under text, which block mode cannot draw (spec FR-012). `:art` shows it |
 
 Below 100 columns or 32 rows no sprite is drawn; charts still are. A sprite's cells are the same in every graphics
 mode: in text mode they hold the words that stand for it (`ETC`, a face for the mascot's pose).

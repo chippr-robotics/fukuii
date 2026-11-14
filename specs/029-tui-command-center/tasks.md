@@ -130,10 +130,10 @@ Every slice ends with the same gate. The art (phase 0) is done and in the tree.
 
 ## Phase 3: Slice 2 — graphics (US2)
 
-> As built (2026-11-14), in two pull requests. **2a** (this one): the three modes, the terminal query, the frame
-> writer, the art loader, the network icon, the mascot, `v`, `:graphics`, `:art`. **2b** (open): T046 the
-> command-center theme, T049 the splash with the badge and the node's real start-up phases, and the chart primitives of
-> T050, which wait for the first chart (slice 3). After 2a: 1,072 tests in 42 suites of
+> As built (2026-11-14), in one pull request (#1835), in two parts. **2a**: the three modes, the terminal query, the
+> frame writer, the art loader, the network icon, the mascot, `v`, `:graphics`, `:art`. **2b**: T046 the
+> command-center theme and T049 the splash with the badge and the node's real start-up phases. The chart primitives of
+> T050 wait for the first chart (slice 3). After the slice: 1,076 tests in 42 suites of
 > `testOnly com.chipprbots.ethereum.console.* *Tui*`. What differs from the tasks as written:
 >
 > - **T031–T035**: the PNG reader, the art store, the half-block cells, the Kitty commands and the pixel layer are
@@ -164,7 +164,17 @@ Every slice ends with the same gate. The art (phase 0) is done and in the tree.
 >   refused at its PNG header; an `include` in `art.conf` fetches nothing. The key decoder keeps an unfinished sequence
 >   across a quiet input (for up to 1 s) instead of dropping it after 50 ms, so the rest of a slow key or a late reply
 >   is never typed as keys: that is B-226's failure, closed here and not by slice 1.
-> - **Backlog**: 2a is B-257, 2b is B-258.
+> - **2b as built** (T046, T049): `TuiTheme.CommandCenter` is the art's palette by index, and
+>   `Tui` draws with it whenever the mode is not text. `StdNode.start` reports five phases (`StartupPhase`) as each
+>   completes; the splash lists them and its worm is the share done, so the worm no longer crawls with time. The
+>   splash still ends on its timer (spec 027 FR-013): it does not wait for the start, and a phase still under way
+>   shows as such until then. The chain's identity reaches the TUI in phase 0, so the icon and the header name the
+>   network while the node starts. In pixel and block mode the badge stands for the logo where it fits above the
+>   phases (the large one from 27 rows, the small one at 80×24); text mode keeps spec 027's logos, and since any key
+>   leaves the splash, the mode cannot change under it. **Not built**: the `splash-scene` backdrop. A backdrop is
+>   under text, which block mode cannot draw, so it would be a picture one mode has and another has not (FR-012);
+>   the sheet stays in the art, shown by `:art`, and unused. `Charts.scala` (the rest of T050) waits for slice 3.
+> - **Backlog**: 2a is B-257, 2b is B-258; both close with #1835.
 > - **T052 is open**: the manual gate needs kitty, Ghostty and tmux, and the session that built the slice has no
 >   terminal.
 
@@ -208,12 +218,12 @@ Every slice ends with the same gate. The art (phase 0) is done and in the tree.
       `FUKUII_TUI_GRAPHICS`; run the query in `Tui.initialize` before the frame loop
 - [x] T045 [US2] `console/FrameWriter.scala`; `Frame` gains `regions`; `Tui.render` writes through it; the image
       teardown rung and the `closedByJLine` path
-- [ ] T046 [US2] `console/TuiTheme.scala`: the command-center theme from contracts/art.md's interface colours, used in
+- [x] T046 [US2] `console/TuiTheme.scala`: the command-center theme from contracts/art.md's interface colours, used in
       pixel and block mode; 027's themes unchanged for text mode
 - [x] T047 [US2] `console/Pose.scala`; the mascot on Overview at tiers M and L with its state named in text beside it
 - [x] T048 [US2] The network icon in the sidebar, chosen from `ChainFacts.family` (FR-061), with the network's name
       and a test-network label in text
-- [ ] T049 [US2] `console/Splash.scala`: the badge, the backdrop, and the node's start-up phases reported from
+- [x] T049 [US2] `console/Splash.scala`: the badge, the backdrop, and the node's start-up phases reported from
       `StdNode.start` (FR-020); `Fukuii.scala` and `StdNode.scala` publish each phase as it completes
 - [ ] T050 [US2] `v` and `:graphics`; `:art`; `r` reloads `art-dir`; `console/gfx/Charts.scala` with the bar and
       sparkline primitives the 027 meters can use

@@ -68,6 +68,8 @@ enum Catchup:
   *   what the last command had to say (an unknown command, a peer not found); it shows in the footer until the next key
   * @param graphics
   *   how graphics are drawn (spec 029 FR-011); text until the terminal has been asked what it can do
+  * @param startup
+  *   the phases of its start the node has reported done (spec 029 FR-020)
   * @param chain
   *   the chain's identity and fork timeline, once the node has read its configuration
   * @param snapshot
@@ -125,7 +127,8 @@ case class TuiState(
     filters: Map[TuiView, String] = Map.empty,
     promptHistory: Vector[String] = Vector.empty,
     notice: Option[String] = None,
-    graphics: GraphicsMode = GraphicsMode.Text
+    graphics: GraphicsMode = GraphicsMode.Text,
+    startup: Set[StartupPhase] = Set.empty
 ):
 
   import TuiState.*

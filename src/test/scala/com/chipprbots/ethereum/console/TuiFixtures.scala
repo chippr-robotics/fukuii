@@ -615,7 +615,9 @@ object TuiFixtures:
   def celebration(glyphs: GlyphSet = GlyphSet.Emoji, frame: Int): TuiState =
     syncedEtc(glyphs).copy(tick = frame.toLong, celebrationStartedTick = Some(0L), celebrated = true)
 
-  /** The splash at `tick` of 12, on an ETC node that is starting (research §3.7). */
+  /** The splash at `tick` of 12, on an ETC node that is starting (research §3.7): its storage is up, and its network is
+    * coming up (spec 029 FR-020).
+    */
   def splash(glyphs: GlyphSet = GlyphSet.Emoji, tick: Long): TuiState =
     TuiState(
       networkName = "etc",
@@ -624,7 +626,8 @@ object TuiFixtures:
       now = Now,
       glyphs = glyphs,
       tick = tick,
-      splashUntilTick = Some(12L)
+      splashUntilTick = Some(12L),
+      startup = Set(StartupPhase.Storage)
     )
 
   /** A clock the test moves. */

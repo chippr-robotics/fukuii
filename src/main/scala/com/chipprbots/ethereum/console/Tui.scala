@@ -220,10 +220,17 @@ class Tui(
 
   def updateNodeSettings(settings: NodeSettings): Unit = modify(_.withNodeSettings(settings))
 
+  /** The node has completed `phase` of its start (spec 029 FR-020): the splash marks it done. */
+  def startupDone(phase: StartupPhase): Unit = modify(s => s.copy(startup = s.startup + phase))
+
   /** The chain's identity and fork timeline, once the node has read its configuration (spec 027 FR-017). */
   def updateChain(chain: ChainFacts): Unit = modify(_.copy(chain = Some(chain)))
 
   private[console] def updateStatus(status: NodeStatusSnapshot): Unit = modify(_.withStatus(status))
+
+  private def themeFor(mode: GraphicsMode): TuiTheme = mode match
+    case GraphicsMode.Text => theme
+    case _                 => TuiTheme.CommandCenter
 
   /** What the terminal says of itself. The questions go out only where their answer can matter: not under `NO_COLOR` or
     * below 256 colours (the mode is text), not when blocks or text were asked for, and under a multiplexer only when
@@ -329,7 +336,9 @@ class Tui(
           val clear = clearNext || resized
 
           val current = state.get
-          val frame = renderer.frame(current, width, height, theme)
+          // The command-center colours go with the art: they are the palette it is drawn in (contracts/art.md). Text
+          // mode keeps the theme the terminal's colours chose.
+          val frame = renderer.frame(current, width, height, themeFor(current.graphics))
           // Each changed row is written at its own position, and no newline is ever written: a frame is exactly
           // `height` rows, and a newline on the bottom row would scroll the whole screen up by one.
           val (bytes, next) = FrameWriter.write(shown, frame, current.graphics, art, clear, _.toAnsi(term))
