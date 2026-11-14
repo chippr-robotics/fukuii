@@ -3162,3 +3162,13 @@ items:
     refs: []
     links: {}
     notes: "Valid values: pow, mocked, restricted-pow, engine-api. Found 2026-11-14 while testing the TUI mining monitor; -Dfukuii.mining.protocol=pow works."
+  - id: B-274
+    title: A startup exception in StdNode leaves the JVM running half-started (P2P up, no APIs); under --tui the error is never shown
+    priority: P1
+    status: open
+    area: node
+    size: M
+    opened: 2026-11-14
+    refs: []
+    links: {}
+    notes: "gorgoroth's bad mining.protocol threw from the main thread ('Exception in thread main', stderr only); the process stayed up (plain run killed by timeout at 60s), TUI showed 'Starting...' forever, nothing in the log. Fail loudly: log at ERROR, restore the terminal, exit non-zero."
