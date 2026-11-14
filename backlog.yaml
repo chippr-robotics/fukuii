@@ -2207,12 +2207,17 @@ items:
   - id: B-196
     title: "PendingTransactionsManager: a pool-size query message for the TUI (GetPendingTransactionsReq copies the whole pool per poll)"
     priority: P3
-    status: open
+    status: claimed
     area: txpool
     size: S
     opened: 2026-11-10
     refs: ["prism review of 027 slice 4, 2026-11-10"]
     links: {}
+    claim:
+      by: cloud-ccr-452bbde8
+      agent: main
+      since: 2026-11-14T18:34:17Z
+      heartbeat: 2026-11-14T18:34:17Z
     notes: PendingTransactionsManager.scala:811-816 runs cleanUp() and copies the pool to answer the TUI's once-a-second size read.
   - id: B-197
     title: eth_getBalance on pruned state answers code 3 "Execution error" (the revert code); geth answers missing state with -32000
