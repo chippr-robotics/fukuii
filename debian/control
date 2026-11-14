@@ -1,11 +1,10 @@
 Source: fukuii
 Section: net
 Priority: optional
-Maintainer: Chippr Robotics <dev@chipprbots.com>
-Build-Depends: debhelper (>= 11),
-               openjdk-25-jdk-headless,
-               sbt (>= 1.10.0)
-Standards-Version: 4.5.0
+Maintainer: Chippr Robotics <info@chipprbots.com>
+Build-Depends: debhelper-compat (= 13)
+Standards-Version: 4.6.2
+Rules-Requires-Root: no
 Homepage: https://github.com/chippr-robotics/fukuii
 Vcs-Browser: https://github.com/chippr-robotics/fukuii
 Vcs-Git: https://github.com/chippr-robotics/fukuii.git
@@ -13,15 +12,14 @@ Vcs-Git: https://github.com/chippr-robotics/fukuii.git
 Package: fukuii
 Architecture: all
 Depends: ${misc:Depends},
-         openjdk-25-jre-headless | openjdk-25-jre | java25-runtime-headless
-Description: Scala-based Ethereum Classic client
- Fukuii is a fully-featured Ethereum Classic client written in Scala.
- It implements the Ethereum Classic protocol specification and provides
- support for mining, JSON-RPC API, and full node synchronization.
+         openjdk-25-jre-headless | java25-runtime-headless
+Description: Scala execution client for Ethereum Classic and Ethereum
+ Fukuii is an execution client written in Scala. It follows Ethereum
+ Classic (ETC, Mordor) with proof of work, and Ethereum (mainnet, Sepolia,
+ Hoodi, Ephemery) next to a consensus client over the Engine API.
  .
  Features:
-  * Full Ethereum Classic protocol support
-  * JSON-RPC API for dApp development
-  * Mining support
-  * Configurable sync modes
-  * Container-ready deployment
+  * ETC and ETH networks built in, selected by name (fukuii etc, fukuii sepolia)
+  * SNAP and full sync
+  * JSON-RPC, WebSocket and Engine API servers
+  * Terminal dashboard (--tui)
