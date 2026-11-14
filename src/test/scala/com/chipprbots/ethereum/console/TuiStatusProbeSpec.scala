@@ -859,14 +859,15 @@ class TuiStatusProbeSpec extends ScalaTestWithActorTestKit with AnyFlatSpecLike 
     (sample.head, sample.safe, sample.finalized) shouldBe ((None, None, None))
   }
 
-  it should "look a safe or finalized hash up once, then remember its number" taggedAs (UnitTest) in {
+  it should "look the head, a safe or a finalized hash up once, then remember its number" taggedAs (UnitTest) in {
     val fc = new CountingForkChoice(Some(ForkChoiceHashes(hashOf(1), hashOf(2), hashOf(3))))
-    val headers = new Headers(Map(hashOf(2) -> 100L, hashOf(3) -> 90L, hashOf(4) -> 101L))
+    val headers = new Headers(Map(hashOf(1) -> 102L, hashOf(2) -> 100L, hashOf(3) -> 90L, hashOf(4) -> 101L))
     val reader = TuiStatusProbe.LocalSources.clReader(fc.read, headers.number)
     reader()
     reader()
-    reader()
-    headers.lookups.sortBy(_.head) shouldBe Seq(hashOf(2), hashOf(3))
+    reader().get.headNumber shouldBe Some(102L)
+    // Spec 029 slice 5: the head's number is read like the other two, once for a hash.
+    headers.lookups.sortBy(_.head) shouldBe Seq(hashOf(1), hashOf(2), hashOf(3))
     // A new safe block is a new lookup; the finalized one is still remembered.
     fc.state = Some(ForkChoiceHashes(hashOf(1), hashOf(4), hashOf(3)))
     val sample = reader().get
@@ -877,9 +878,12 @@ class TuiStatusProbeSpec extends ScalaTestWithActorTestKit with AnyFlatSpecLike 
 
   it should "show a missing safe or finalized block for the zero hash, without a lookup" taggedAs (UnitTest) in {
     val fc = new CountingForkChoice(Some(ForkChoiceHashes(hashOf(1), zeroHash, zeroHash)))
-    val reader = TuiStatusProbe.LocalSources.clReader(fc.read, _ => fail("a zero hash is no block"))
+    val headers = new Headers(Map(hashOf(1) -> 102L))
+    val reader = TuiStatusProbe.LocalSources.clReader(fc.read, headers.number)
     val sample = reader().get
     (sample.safe, sample.finalized) shouldBe ((None, None))
+    // The head was looked up; a zero hash is no block, and was not.
+    headers.lookups shouldBe Seq(hashOf(1))
   }
 
   it should "try again next poll for a hash whose header is not stored yet" taggedAs (UnitTest) in {
@@ -907,7 +911,7 @@ class TuiStatusProbeSpec extends ScalaTestWithActorTestKit with AnyFlatSpecLike 
     after.payloads.total - before.payloads.total shouldBe 2L
     after.payloads.accepted - before.payloads.accepted shouldBe 1L
     after.payloads.valid - before.payloads.valid shouldBe 1L
-    // The node's invalid count has ACCEPTED in it; the panel's does not.
+    // B-193: ACCEPTED has its own count, and the invalid count is the INVALID answers alone.
     after.payloads.invalid - before.payloads.invalid shouldBe 0L
     com.chipprbots.ethereum.consensus.engine.EngineApiMetrics.recordNewPayload("INVALID", 11L, 11L)
     reader().get.payloads.invalid - after.payloads.invalid shouldBe 1L
@@ -1040,4 +1044,206 @@ class TuiStatusProbeSpec extends ScalaTestWithActorTestKit with AnyFlatSpecLike 
     w.add(10_000L, 600L) shouldBe Some(600L)
     w.add(20_000L, 3L) shouldBe None
     w.add(30_000L, 13L) shouldBe Some(60L)
+  }
+
+  // ---- Spec 029 slice 5: the RPC figures, the Engine call log, the mining history ------------------------------------
+
+  "The RPC sample" should "join the configured transports with what their servers counted and said" taggedAs (
+    UnitTest
+  ) in {
+    import com.chipprbots.ethereum.jsonrpc.RpcCallStats
+    val stats = new RpcCallStats(clock = () => now.toEpochMilli)
+    stats.record(RpcCallStats.Http, "eth_blockNumber", known = true, 2_000_000L, failed = false)
+    stats.record(RpcCallStats.Http, "eth_blockNumber", known = true, 4_000_000L, failed = false)
+    stats.record(RpcCallStats.Engine, "eth_syncing", known = true, 1_000_000L, failed = true)
+    stats.record(RpcCallStats.Ipc, "nope", known = false, 300_000L, failed = true)
+    stats.rateLimited()
+    stats.listening(RpcCallStats.Http, isListening = true)
+    stats.listening(RpcCallStats.Ws, isListening = false)
+    val configured = Seq(
+      TransportStatus(
+        TransportKind.Http,
+        true,
+        None,
+        "127.0.0.1:8546",
+        Seq("eth"),
+        TransportAuth.None,
+        exposed = Seq("admin")
+      ),
+      TransportStatus(TransportKind.Ws, true, None, "127.0.0.1:8552", Seq("eth"), TransportAuth.None),
+      TransportStatus(TransportKind.Ipc, true, None, "/tmp/fukuii.ipc", Seq("eth"), TransportAuth.SocketFile),
+      TransportStatus(TransportKind.Engine, true, None, "127.0.0.1:8551", Seq("engine"), TransportAuth.Jwt)
+    )
+    val sample = TuiStatusProbe.LocalSources
+      .rpcReader(configured, Some(java.time.Duration.ofSeconds(5)), () => stats.snapshot)()
+      .get
+    val by = sample.transports.map(t => t.kind -> t).toMap
+    // What its server said: bound, could not bind, and nothing yet.
+    by(TransportKind.Http).listening shouldBe Some(true)
+    by(TransportKind.Ws).listening shouldBe Some(false)
+    by(TransportKind.Ipc).listening shouldBe None
+    (by(TransportKind.Http).calls, by(TransportKind.Http).errors) shouldBe ((2L, 0L))
+    (by(TransportKind.Engine).calls, by(TransportKind.Engine).errors) shouldBe ((1L, 1L))
+    (by(TransportKind.Ipc).calls, by(TransportKind.Ipc).errors) shouldBe ((1L, 1L))
+    // The configuration is carried as it was given: the address, the namespaces, the exposure.
+    by(TransportKind.Http).copy(listening = None, calls = 0, errors = 0) shouldBe configured.head
+    sample.rateLimit shouldBe Some(java.time.Duration.ofSeconds(5))
+    sample.rateLimited shouldBe 1
+    val blockNumber = sample.methods.find(_.method == "eth_blockNumber").get
+    (blockNumber.calls, blockNumber.errors, blockNumber.lastAt) shouldBe ((2L, 0L, Some(now)))
+    // The percentiles are the histogram's: within its 10 % of what was recorded, and never above the longest.
+    blockNumber.p50.get.value.toNanos.toDouble shouldBe 2_000_000.0 +- 200_000.0
+    blockNumber.p99.get.value.toNanos should be <= 4_000_000L
+    blockNumber.p99.get.value.toNanos.toDouble shouldBe 4_000_000.0 +- 400_000.0
+    blockNumber.p50.get.below shouldBe false
+    // A method answered in 0.3 ms is under the histogram's range of 100 µs? No: within it. One of 30 µs is under it.
+    val missing = sample.methods.find(_.method == RpcCallStats.NotFound).get
+    missing.p50.get.below shouldBe false
+    stats.record(RpcCallStats.Http, "eth_chainId", known = true, 30_000L, failed = false)
+    val fast = TuiStatusProbe.rpcSample(configured, None, stats.snapshot).methods.find(_.method == "eth_chainId").get
+    fast.p50.get shouldBe Quantile(java.time.Duration.ofNanos(30_000L), below = true)
+    sample.methods.map(_.method) should contain(RpcCallStats.NotFound)
+    sample.methods.exists(_.method == "nope") shouldBe false
+  }
+
+  it should "pass a method's name through the screen's sanitiser" taggedAs (UnitTest) in {
+    import com.chipprbots.ethereum.jsonrpc.RpcCallStats
+    val stats = new RpcCallStats
+    stats.record(RpcCallStats.Http, "eth_\u001b[2Jx\nq", known = true, 1_000_000L, failed = false)
+    val name = TuiStatusProbe.rpcSample(Nil, None, stats.snapshot).methods.head.method
+    (name should not).include("\u001b")
+    (name should not).include("\n")
+    name should startWith("eth_")
+  }
+
+  "The Engine call log" should "reach the consensus-layer sample: the calls, the client, the reasons, the builds" taggedAs (
+    UnitTest
+  ) in {
+    import com.chipprbots.ethereum.consensus.engine.*
+    import scala.util.Success
+    import org.json4s.*
+    import org.json4s.native.JsonMethods.parse
+    import com.chipprbots.ethereum.jsonrpc.JsonRpcResponse
+    val log = new EngineCallLog(() => now.toEpochMilli)
+    def ok(result: String) =
+      Success(JsonRpcResponse("2.0", Some(parse(s"""{"r":$result}""") \ "r"), None, JInt(1)))
+    log.observe(
+      "engine_newPayloadV4",
+      parse("""{"method":"engine_newPayloadV4","params":[{"blockNumber":"0x10"}]}"""),
+      ok("""{"status":"VALID"}"""),
+      System.nanoTime() - 5_000_000L
+    )
+    log.observe(
+      "engine_getClientVersionV1",
+      parse(
+        """{"method":"engine_getClientVersionV1","params":[{"code":"LH","name":"Light\u001b[2Jhouse","version":"v7","commit":"ab"}]}"""
+      ),
+      ok("[]"),
+      System.nanoTime()
+    )
+    log.observe(
+      "engine_exchangeCapabilities",
+      parse("""{"method":"engine_exchangeCapabilities","params":[["engine_newPayloadV4","engine_getPayloadV4"]]}"""),
+      ok("[]"),
+      System.nanoTime()
+    )
+    log.authFailed(AuthFailure.Expired)
+    log.authFailed(AuthFailure.Expired)
+    log.payloadBuilt(17L, 84)
+    log.payloadBuildFailed()
+    val head = ByteString(Array.fill[Byte](32)(7))
+    val reader = TuiStatusProbe.LocalSources.clReader(
+      () => Some(ForkChoiceHashes(head, ByteString.empty, ByteString.empty)),
+      hash => Option.when(hash == head)(7_412_011L),
+      () => log.snapshot
+    )
+    val cl = reader().get
+    cl.headNumber shouldBe Some(7_412_011L)
+    cl.calls should have size 3
+    val first = cl.calls.head
+    (first.at, first.method, first.status, first.block) shouldBe ((
+      now,
+      "engine_newPayloadV4",
+      Some("VALID"),
+      Some(16L)
+    ))
+    first.duration.toMillis should be >= 5L
+    cl.callsTotal shouldBe 3
+    // The name the client gave, with the escape sequence gone: cleaned where it is kept, and again on its way here.
+    cl.client shouldBe Some(ClClient("LH", "Light[2Jhouse", "v7", "ab"))
+    cl.capabilities shouldBe Some(2)
+    cl.authReasons shouldBe Map(AuthFailure.Expired.label -> 2L)
+    cl.builds shouldBe PayloadBuilds(1, 1, Some(BuiltPayload(now, 17L, 84)))
+  }
+
+  // prism, slice 5: the earlier test fed the probe a name the log had already cleaned, so it proved nothing of the
+  // probe's own pass. A snapshot built by hand has what the log would never keep.
+  it should "pass every text of a call through the screen's sanitiser itself, whatever the log holds" taggedAs (
+    UnitTest
+  ) in {
+    import com.chipprbots.ethereum.consensus.engine.*
+    val raw = EngineCallLog.Snapshot(
+      calls =
+        Vector(EngineCallRecord(now.toEpochMilli, "engine_\u001b[2Jx\ny", Some("VA\u0007LID\u001b[0m"), 1_000L, None)),
+      total = 1,
+      identity = Some(ClIdentity("L\u001bH", "Light\nhouse" + "x" * 600, "v\u00077", "ab\rcd")),
+      capabilities = None,
+      authFailures = Map.empty,
+      payloadsBuilt = 0,
+      payloadBuildsFailed = 0,
+      lastBuild = None
+    )
+    val cl = TuiStatusProbe.LocalSources.clReader(() => None, _ => None, () => raw)().get
+    val texts = Seq(cl.calls.head.method, cl.calls.head.status.get) ++
+      cl.client.toSeq.flatMap(k => Seq(k.code, k.name, k.version, k.commit))
+    all(texts.map(_.exists(ch => Character.isISOControl(ch)))) shouldBe false
+    cl.client.get.name.length should be <= TuiStatusProbe.MaxReasonChars + 1
+    cl.calls.head.status.get should startWith("VALID")
+  }
+
+  it should "leave the sample empty of calls before any, and the head's number empty where its header is not held" taggedAs (
+    UnitTest
+  ) in {
+    import com.chipprbots.ethereum.consensus.engine.EngineCallLog
+    val quiet = new EngineCallLog
+    val head = ByteString(Array.fill[Byte](32)(9))
+    val cl = TuiStatusProbe.LocalSources
+      .clReader(
+        () => Some(ForkChoiceHashes(head, ByteString.empty, ByteString.empty)),
+        _ => None,
+        () => quiet.snapshot
+      )()
+      .get
+    (cl.calls, cl.callsTotal, cl.client, cl.capabilities, cl.headNumber) shouldBe ((Vector.empty, 0L, None, None, None))
+    cl.authReasons shouldBe empty
+    cl.builds shouldBe PayloadBuilds()
+  }
+
+  "The mining history" should "gain a point each five seconds, keep ten minutes, and start again when the clock goes back" taggedAs (
+    UnitTest
+  ) in {
+    val clock = new TuiFixtures.TestClock(now)
+    val reader = TuiStatusProbe.LocalSources.miningReader(() => "0x00", clock)
+    reader().get.history.map(_.at) shouldBe Vector(now)
+    // Polls a second apart add nothing until five seconds have passed.
+    for _ <- 1 to 4 do
+      clock.advance(1)
+      reader().get.history should have size 1
+    clock.advance(1)
+    val two = reader().get.history
+    two.map(_.at) shouldBe Vector(now, now.plusSeconds(5))
+    two.last.hashrate shouldBe reader().get.hashrate
+    // Ten minutes of them, and no more.
+    for _ <- 1 to 200 do
+      clock.advance(5)
+      reader()
+    val full = reader().get.history
+    full should have size TuiStatusProbe.MiningHistoryPoints.toLong
+    full.map(_.at) shouldBe full.map(_.at).sorted
+    java.time.Duration
+      .between(full.head.at, full.last.at)
+      .getSeconds shouldBe 5L * (TuiStatusProbe.MiningHistoryPoints - 1)
+    // A clock that stepped back says nothing about what came before it.
+    clock.advance(-3_600)
+    reader().get.history should have size 1
   }

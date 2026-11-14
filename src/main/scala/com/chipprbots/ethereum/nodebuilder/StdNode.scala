@@ -187,6 +187,14 @@ abstract class BaseNode extends Node:
   private def tuiStarted(phase: StartupPhase): Unit = Tui.current.foreach(_.startupDone(phase))
 
   private def startMetricsClient(): Unit =
+    // The dashboard's in-process counters are made here, at start-up and outside any IO, so that no request is the
+    // first to touch them (B-194: an initialiser that fails on a request's path is fatal to every IO runtime).
+    // Making them reads no configuration and registers nothing.
+    val _ = (
+      com.chipprbots.ethereum.jsonrpc.RpcCallStats.Node,
+      com.chipprbots.ethereum.consensus.engine.EngineCallLog.Node,
+      TxPoolMetrics.Node
+    )
     val metricsConfig = MetricsConfig(instanceConfig.config)
     Metrics.configure(metricsConfig, instanceConfig.instanceId) match
       case Success(_) =>
@@ -330,8 +338,70 @@ abstract class BaseNode extends Node:
                 s"${jsonRpcConfig.httpServerConfig.port}",
               ex
             )
-      case Left(error) if jsonRpcConfig.httpServerConfig.enabled => log.error(error)
-      case _                                                     => // Nothing
+      case Left(error) if jsonRpcConfig.httpServerConfig.enabled =>
+        log.error(error)
+        // No server was made: it will not listen, and the dashboard's RPC view says so (spec 029 FR-039).
+        com.chipprbots.ethereum.jsonrpc.RpcCallStats.Node
+          .listening(com.chipprbots.ethereum.jsonrpc.RpcCallStats.Http, isListening = false)
+      case _ => // Nothing
+  /** The JSON-RPC transports as the dashboard's RPC view lists them (spec 029 FR-039): from the node's configuration,
+    * with each one's exposure worked out once by the start-up warning's own rule. The Engine API is listed where it is
+    * on, or where the chain is one it serves.
+    */
+  private def tuiRpcTransports: Seq[com.chipprbots.ethereum.console.TransportStatus] =
+    import com.chipprbots.ethereum.console.TransportAuth
+    import com.chipprbots.ethereum.console.TransportKind
+    import com.chipprbots.ethereum.console.TransportStatus
+    val http = jsonRpcConfig.httpServerConfig
+    val ws = jsonRpcConfig.wsServerConfig
+    val ipc = jsonRpcConfig.ipcServerConfig
+    def exposed(name: String, key: String, enabled: Boolean, interface: String, apis: Seq[String]): Seq[String] =
+      RpcExposureCheck.exposedNamespaces(RpcExposureCheck.Transport(name, key, enabled, interface, apis))
+    val engine = Option.when(engineApiConfig.enabled || blockchainConfig.networkType == NetworkType.ETH)(
+      TransportStatus(
+        TransportKind.Engine,
+        engineApiConfig.enabled,
+        None,
+        s"${engineApiConfig.interface}:${engineApiConfig.port}",
+        Seq("engine", "eth", "net", "web3"),
+        TransportAuth.Jwt
+      )
+    )
+    Seq(
+      TransportStatus(
+        TransportKind.Http,
+        http.enabled,
+        None,
+        s"${http.interface}:${http.port}",
+        jsonRpcConfig.httpApis,
+        TransportAuth.None,
+        exposed("HTTP", "http", http.enabled, http.interface, jsonRpcConfig.httpApis),
+        tls = http.mode == "https"
+      ),
+      TransportStatus(
+        TransportKind.Ws,
+        ws.enabled,
+        None,
+        s"${ws.interface}:${ws.port}",
+        jsonRpcConfig.wsApis,
+        TransportAuth.None,
+        exposed("WebSocket", "ws", ws.enabled, ws.interface, jsonRpcConfig.wsApis)
+      ),
+      TransportStatus(
+        TransportKind.Ipc,
+        ipc.enabled,
+        None,
+        ipc.socketFile,
+        jsonRpcConfig.ipcApis,
+        TransportAuth.SocketFile
+      )
+    ) ++ engine
+
+  /** The least time between two HTTP requests from one address, where the rate is limited. */
+  private def tuiRateLimit: Option[java.time.Duration] =
+    val limit = jsonRpcConfig.httpServerConfig.rateLimit
+    Option.when(limit.enabled)(java.time.Duration.ofMillis(limit.minRequestInterval.toMillis))
+
   /** Logs a warning for each HTTP or WebSocket endpoint that serves personal, debug, admin, qa or miner while bound to
     * an address that is not loopback. IPC is not checked: its socket is protected by file permissions.
     */
@@ -452,6 +522,8 @@ abstract class BaseNode extends Node:
             .exists(b => storagesInstance.storages.transactionMappingStorage.get(b.toIndexedSeq).isDefined),
         poolCapacity = txPoolConfig.txPoolSize,
         poolCounters = () => Some(TxPoolMetrics.Node.snapshot),
+        // Spec 029 slice 5, the RPC view: the transports as configured, and what their servers counted.
+        rpc = TuiStatusProbe.LocalSources.rpcReader(tuiRpcTransports, tuiRateLimit),
         // The fork id the handshake tells a peer (EIP-2124, EIP-6122), computed the same way, for display.
         forkId = () =>
           blockchainReader.getBestBlockHeader.map { head =>

@@ -75,12 +75,17 @@ judged on enlarged renders and mock screens ([art-preview/](./art-preview/)).
 
 ## Slice 5: RPC and the consensus-client link
 
-1. `5`. Run `curl` against `eth_blockNumber` 100 times and `eth_getBlockByNumber` with a bad argument 3 times: the
-   table shows the calls, the errors and latencies.
-2. Sepolia with a consensus client: the monitor shows the client's name and version, the link pulses with calls, the
-   call log scrolls. Stop the consensus client: after 60 s the link is down and the alert row says so.
-3. Start the node with a wrong JWT secret on the consensus client: authentication failures with their reason.
-4. Mordor: the mining monitor, and no consensus-client element.
+1. `5`. Each transport says whether it listens, where and what it serves. Run `curl` against `eth_blockNumber` 100
+   times, `eth_getBlockByNumber` with a bad argument 3 times and a method that does not exist twice: the table shows
+   100 calls, 3 failed with their latency, and 2 under `(no such method)`; the HTTP row's calls went up by 105.
+2. A node with a consensus client: the monitor shows the client's name and version, the link's marker moves one
+   place a call and not otherwise, the call log gains a row a call with what was told and how long it took. Stop
+   the consensus client: after 60 s the link says DISCONNECTED and the alert row says so.
+3. Start the consensus client with a wrong JWT secret: the link waits, and the Auth row counts the refusals under
+   "wrong signature (another secret)".
+4. A node that mines (Mordor, or a private PoW chain): the mining monitor with its two charts, and no
+   consensus-client element.
+5. Bind HTTP to `0.0.0.0` with `admin` among its namespaces: the warning stands above the transports, as at start-up.
 
 ## Slice 6: storage, system, health
 

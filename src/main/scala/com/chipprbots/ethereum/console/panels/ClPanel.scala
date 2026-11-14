@@ -20,9 +20,9 @@ import com.chipprbots.ethereum.console.panels.Rows.*
   * proof-of-stake chain with the Engine API on: an ETC node has no consensus layer and no panel. It reads the snapshot
   * alone, as every panel does.
   *
-  * The payload counts are the node's own, and the labels say what is counted. `engine_newpayload_invalid` has always
-  * counted an ACCEPTED payload with the INVALID ones, so the panel reads the separate accepted count and shows both;
-  * SYNCING is shown only when something counted it, as no caller records one today.
+  * The payload counts are the node's own, each status under its own count (B-193: until then
+  * `engine_newpayload_invalid` counted an ACCEPTED payload with the INVALID ones); SYNCING is shown only when something
+  * counted it, as no caller records one today.
   */
 private[console] object ClPanel:
 

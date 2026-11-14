@@ -93,7 +93,7 @@ whose slice has not landed shows what the dashboard already reads for it and one
 | `2` | Chain | While the node is syncing, the sync's panels lead (the worm rows, SNAP's rates and phase timeline, a regular sync's session and lag). Then the **head** (number, hash, age, transactions, gas, size, base fee; the miner and difficulty on ETC, the fee recipient and slot on ETH) and the rate blocks arrive at; the chain's identity (chain id, network id, genesis hash, fork id) and its forks; the **fees** (base fee and tips, or gas prices on a chain with no base fee); the **reorgs** since the TUI started; and the **Block Observatory**: the newest blocks the node has seen, the gas each used as a chart and as a table. `Up`/`Down` select a block, `Enter` opens it |
 | `3` | Peers | From 100×32 the **peer radar**: this node at the centre and a blip a peer, nearer the centre the faster it answers (rings under 100, 500 and 2,000 ms, then slower, then not measured yet), at an angle fixed by its node id, coloured by its score, shaped by its direction, bold for a second after it answers. No line joins two peers and there is no map: the node knows neither. Then each handshaked peer, highest score first: id, direction, client, best block, age; from M the address and the score, at L the score's trend. `Up`/`Down` select a peer, `Enter` opens its details (with its latency, answers and timeouts, protocol violations), `Esc` returns, `/` filters by id, address or client |
 | `4` | Mempool | The **pool** (pending, how full it is, blob transactions, the oldest, those sent from this node) and its **flow** (transactions arriving, mined and dropped a second over the last minute, and replacements); the **Mempool Radar**: the pending transactions in four tiers, urgent to low, by their fee against the fee this node would itself suggest, a bar and a count a tier and the fee each tier starts at; the **senders** with the most pending; what the pool **refused** by reason, **lost** (evicted for room, expired unmined, replaced) and **fetched** (announced, asked for, timed out) since the node started; and the **pending transactions**, best-paying first. `Up`/`Down` select one, `Enter` opens it in the explorer. On a chain with a base fee a fee here is a tip above it; on one without, a gas price. The view says this client keeps no queue: a transaction whose nonce leaves a gap is refused, not held. See [Mempool](#mempool) |
-| `5` | RPC | The endpoints (the rest with slice 5) |
+| `5` | RPC | Each **transport** (HTTP, WebSocket, IPC, and the Engine API where the chain has one): whether it listens, where, the namespaces it serves, how a caller is authenticated, and the calls and failures that came in on it; a warning above them when a sensitive namespace is served to other hosts; the HTTP rate limit and how many requests it refused. On a node with a consensus client, the **Engine Synchronization Monitor**: the link and who is at its other end, the head, safe and finalized blocks, the last call of each kind, the payloads, failed authentications by reason, and the last calls as a log. On a node that mines, the **mining monitor** in the same place, with ten minutes of hashrate and work requests. Then every **method** called: its calls, its failures, its 50th, 95th and 99th percentile latency and its last call. See [RPC](#rpc) |
 | `6` | Storage | Disk free, the data directory, the pruning mode (the rest with slice 6) |
 | `7` | System | Heap, GC share, discovery counts (the rest with slice 6) |
 | `8` `L` | Logs | The newest log lines (1,000 by default, INFO and above), with their time and level; `Up`/`Down` scroll a line, `-` and `+` a page, `/` filters by text |
@@ -142,9 +142,10 @@ its first `forkchoiceUpdated`) until that call comes, `connected` while the last
 at 80×24) says its failed JWT checks on the first (`· 3 auth failures`): a secret that does not match leaves the
 consensus layer waiting for ever, and the warning's text says how many (`no CL yet: no forkchoiceUpdated in 1m 5s (3
 JWT failures)`). The golden files `cl-{s,m,l}-{connected,waiting,disconnected}-{emoji,ascii}.txt` and
-`cl-m-100x32-disconnected-{emoji,ascii}.txt` have the states. The counts are the node's own and labelled by what is counted: `engine_newpayload_invalid`
-has always counted an ACCEPTED payload (stored, not executed) with the INVALID ones, so the panel reads the separate
-`engine_newpayload_accepted` and shows both, and shows SYNCING only when something counted it (no caller records one).
+`cl-m-100x32-disconnected-{emoji,ascii}.txt` have the states. The counts are the node's own, each status under its own count: until B-193 `engine_newpayload_invalid` counted an
+ACCEPTED payload (stored, not executed), and any status it did not know, with the INVALID ones; it now counts INVALID
+answers alone, and `engine_newpayload_accepted` the ACCEPTED ones. SYNCING is shown only when something counted it (no
+caller records one: this node answers a payload it cannot yet execute ACCEPTED).
 A payload the node already held is answered VALID without being recorded, so "last newPayload" does not move for it,
 which is why the newPayload alert needs a peer ahead of the node's head. With none recorded at all it counts from when
 the consensus layer was first seen, or from the node's start if that is later, so a consensus layer that attaches to a
@@ -279,6 +280,50 @@ it stops.
   node's index first and then the pool, and says which it found. A pending transaction has no receipt, and the
   explorer says so. If the pool does not answer within a second the lookup fails and says that; it never reports a
   transaction as absent because the pool was slow.
+
+### RPC
+
+Every figure on this view is the node's own count since it started, kept in process. Counting changes nothing a
+caller sees: each call is noted once it has ended, by code that cannot fail the call, and the Prometheus series are
+what they were (the per-method timer on `/metrics` is still recorded for successful calls only).
+
+- **Transports.** `listening` is what the server itself said when it bound its address; an enabled server that has
+  not said so is `enabled, not bound yet`, and one that said it could not bind, or that it closed, is
+  `NOT LISTENING`. HTTP and
+  WebSocket have no authentication of their own (HTTPS encrypts and authenticates no caller), IPC is restricted to
+  its socket file's owner, and the Engine API is authenticated by its JWT secret. The Engine row's calls are the
+  ones it passed on to JSON-RPC; its own are the monitor's. The exposure warning is the start-up warning's own rule: an enabled HTTP or WebSocket
+  endpoint that is not bound to loopback and serves `personal`, `debug`, `admin`, `qa`, `miner`, `test` or
+  `testing`.
+- **Methods.** A call is counted under its method and its transport, timed from the request to its answer, whether
+  it succeeded, was answered with an error, or failed. A method the node does not have is counted under `(no such
+  method)` whatever it was called, so a client that asks for names that do not exist fills no table; past 256
+  distinct methods the rest count under `(other methods)`. A percentile is read from a histogram of 72 buckets from
+  100 µs to 60 s and is within 10 % of the true value; one under 100 µs reads `<0.10 ms`. The time is from the request
+  reaching the controller to its answer being ready: writing the answer to the socket is not in it.
+- **What is not a call here.** `eth_subscribe` and `eth_unsubscribe`, which the WebSocket server answers itself; a
+  request the rate limit refused (counted on the `Limit` row instead); an IPC call cut off by its five-minute
+  timeout; and a handler that fails before it has started its work, which the node's own exception counter does
+  not see either. A call whose client went away is still counted: the node finishes it. Each element of a batch is
+  a call of its own, and the batch as a whole is not counted; with the rate limit on, a batch is refused outright
+  and is counted nowhere. The Engine transport's figures are the `eth_`, `net_` and `web3_` calls that came through
+  the Engine API's port; its `engine_` calls are the monitor's.
+- **The Engine Synchronization Monitor.** The marker on the link (`EL ───●──────── CL`) stands at the count of
+  calls: it moves one place for each call that arrived and stays where it is while none does. The consensus
+  client's name and version are what it sent in its own `engine_getClientVersionV1` call, cut to 64 characters and
+  stripped of control characters; until it has, the row says it has not said. `told` in the log is what the
+  consensus client was told: a payload status for `newPayload` and `forkchoiceUpdated`, `error <code>` for an error
+  answer, nothing for a method that answers neither. The log holds the last 256 calls. `built` counts the payloads
+  built at a `forkchoiceUpdated`; one built again with the pool of the moment when `getPayload` asks is not counted,
+  and may hold other transactions than the last-built figure says. A failed authentication is
+  counted under one of seven reasons (no bearer token, not a JWT, wrong signature, unsupported algorithm, no `iat`,
+  `iat` too far from now, malformed), never under anything the request carried. Noting a call takes about a third
+  of a microsecond, beside the answer and not in front of it (`EngineCallLogBenchmark`).
+- **The mining monitor.** The hashrate and the `eth_getWork` requests a minute, a reading about every five seconds,
+  120 of them. Each chart spans every reading kept, however few glyphs it has room for (a glyph is the highest of
+  the readings it stands for), against the highest of them all, and its caption says how long they span: about ten
+  minutes once the dashboard has run that long. A rate not known yet is a gap. The history is the dashboard's own,
+  kept from the gauges it already reads: it starts when the TUI does.
 
 ### Explorer
 

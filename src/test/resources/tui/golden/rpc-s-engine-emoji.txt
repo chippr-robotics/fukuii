@@ -1,0 +1,24 @@
+ ◆ FUKUII  sepolia (11155111) · PoS · up 3d 4h                              RPC 
+────────────────────────────────────────────────────────────────────────────────
+ ✓ no alerts                                                                    
+ Peers   23/50 ◆◆◆◆◆◆◆◆◆◆         Block  7,412,009 → 7,412,011 (−2)             
+ Sync    regular 99% · rate 0.08 blk/s · ETA 24s                                
+────────────────────────────────────────────────────────────────────────────────
+ HTTP    listening · 127.0.0.1:8546 · no authentication · 121,340 calls         
+ WS      off                                                                    
+ IPC     listening · /var/lib/fukuii/etc/fukuii.ipc · 228 calls · 4 failed      
+ Engine  listening · 127.0.0.1:8551 · authenticated by JWT                      
+ Limit   off                                                                    
+────────────────────────────────────────────────────────────────────────────────
+ Link    connected · EL ──●───────── CL · Lighthouse v7.1.0 (cfb1f733)          
+ Blocks  head 7,412,011 · safe 7,411,977 (34 behind)                            
+ Calls   newPayload 3s ago VALID 253 ms                                         
+────────────────────────────────────────────────────────────────────────────────
+ Methods 8 called · 121,568 calls · 245 failed                                  
+   method                      calls   failed       p50       p99         last  
+   eth_blockNumber            91,204        0   0.31 ms   2.10 ms       1s ago  
+────────────────────────────────────────────────────────────────────────────────
+ Log     the last 42 of 184,322 calls · newest first · times in UTC             
+   answered  method                      told              took      block      
+   11:59:57  engine_forkchoiceUpdatedV3  VALID          6.20 ms          —      
+ 1-9 view  : prompt  / filter  ? help  p pause  r redraw  d detach  q quit      

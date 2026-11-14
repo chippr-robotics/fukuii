@@ -1,0 +1,24 @@
+ # FUKUII  etc (61) . PoW . up 12d 7h                                       RPC 
+--------------------------------------------------------------------------------
+ + no alerts                                                                    
+ Peers   41/50 ##########         Block  21,884,102 (at head)                   
+ Sync    + at head                                                              
+--------------------------------------------------------------------------------
+ HTTP    listening . 127.0.0.1:8546 . no authentication . 121,340 calls         
+ WS      off                                                                    
+ IPC     listening . /var/lib/fukuii/etc/fukuii.ipc . 228 calls . 4 failed      
+ Limit   off                                                                    
+--------------------------------------------------------------------------------
+ Mining  on . 48.2 MH/s . DAG epoch 364 + loaded                                
+   Rate     +*+*********#*#######*  now 48.2 MH/s . highest 65.1 MH/s in 9m 55s 
+   Work     *###*###*##*##*##*###*###*##  now 20/min . highest 31/min in 9m 55s 
+--------------------------------------------------------------------------------
+ Methods 8 called . 121,568 calls . 245 failed                                  
+   method                      calls   failed       p50       p99         last  
+   eth_blockNumber            91,204        0   0.31 ms   2.10 ms       1s ago  
+   eth_getBalance             18,422        3   1.90 ms   14.8 ms       2s ago  
+   eth_call                    9,310      212   8.40 ms    212 ms       2s ago  
+   eth_getLogs                 1,204       17   96.0 ms    1.24 s      40s ago  
+   eth_getBlockByNumber          880        0   2.40 ms   31.0 ms       5s ago  
+   eth_chainId                   412        0   0.12 ms   0.41 ms   3m 10s ago  
+ 1-9 view  : prompt  / filter  ? help  p pause  r redraw  d detach  q quit      

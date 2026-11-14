@@ -652,8 +652,112 @@ final case class LocalSample(
     mining: Option[MiningSample] = None,
     chain: Option[ChainSample] = None,
     forkId: Option[String] = None,
-    poolCounters: Option[com.chipprbots.ethereum.transactions.TxPoolMetrics.Snapshot] = None
+    poolCounters: Option[com.chipprbots.ethereum.transactions.TxPoolMetrics.Snapshot] = None,
+    rpc: Option[RpcSample] = None
 )
+
+/** A JSON-RPC transport (spec 029 FR-039). */
+enum TransportKind(val label: String):
+  case Http extends TransportKind("HTTP")
+  case Ws extends TransportKind("WebSocket")
+  case Ipc extends TransportKind("IPC")
+  case Engine extends TransportKind("Engine API")
+
+/** A transport as the RPC view shows it.
+  *
+  * @param listening
+  *   whether its server is bound, as the server itself said; None when it has not said (not started, or disabled)
+  * @param address
+  *   where it listens: `interface:port`, or the IPC socket's path
+  * @param apis
+  *   the namespaces it serves
+  * @param auth
+  *   how a caller is authenticated
+  * @param tls
+  *   the transport is encrypted (HTTPS); that authenticates no caller
+  * @param exposed
+  *   the sensitive namespaces it serves to other hosts (`RpcExposureCheck`'s rule); empty when none
+  * @param calls
+  *   the calls that came in on it, and of those the ones that failed
+  */
+final case class TransportStatus(
+    kind: TransportKind,
+    enabled: Boolean,
+    listening: Option[Boolean],
+    address: String,
+    apis: Seq[String],
+    auth: TransportAuth,
+    exposed: Seq[String] = Nil,
+    calls: Long = 0L,
+    errors: Long = 0L,
+    tls: Boolean = false
+)
+
+/** How a transport tells one caller from another: not at all, by the Engine API's JWT secret, or by who may open the
+  * IPC socket's file. A type, so that the words for each are written once and no comparison of texts decides them.
+  */
+enum TransportAuth:
+  case None, Jwt, SocketFile
+
+/** A percentile of a method's latency.
+  *
+  * @param below
+  *   the latency is under the histogram's range: `value` is the most it can be, and how much less is not known
+  */
+final case class Quantile(value: Duration, below: Boolean = false)
+
+/** One JSON-RPC method's figures since the node started (FR-038): every call is timed, a failed one too.
+  *
+  * @param lastAt
+  *   when the last call ended
+  */
+final case class MethodStats(
+    method: String,
+    calls: Long,
+    errors: Long,
+    p50: Option[Quantile],
+    p95: Option[Quantile],
+    p99: Option[Quantile],
+    lastAt: Option[Instant]
+)
+
+/** The JSON-RPC servers as the node counted them.
+  *
+  * @param methods
+  *   most called first
+  * @param rateLimit
+  *   the least time between two requests from one address, where HTTP limits the rate
+  * @param rateLimited
+  *   requests that limit refused
+  */
+final case class RpcSample(
+    transports: Vector[TransportStatus],
+    methods: Vector[MethodStats],
+    rateLimit: Option[Duration] = None,
+    rateLimited: Long = 0L
+)
+
+/** One Engine API call as the monitor's log shows it (FR-040): what the consensus client was told, and how long the
+  * answer took.
+  */
+final case class EngineCallLine(
+    at: Instant,
+    method: String,
+    status: Option[String],
+    duration: Duration,
+    block: Option[Long]
+)
+
+/** Who the consensus client says it is, in its own `engine_getClientVersionV1` call. */
+final case class ClClient(code: String, name: String, version: String, commit: String)
+
+/** A payload this node built: when, its block number, its transactions. */
+final case class BuiltPayload(at: Instant, block: Long, transactions: Int)
+
+/** The payloads this node built for the consensus client at its `forkchoiceUpdated` calls. One built again when
+  * `getPayload` asks is not among them.
+  */
+final case class PayloadBuilds(built: Long = 0L, failed: Long = 0L, last: Option[BuiltPayload] = None)
 
 /** The Engine API's last call of one method (`EngineApiMetrics`, E1): when, and the status it was answered with. */
 final case class ClCall(at: Instant, status: String):
@@ -663,9 +767,9 @@ final case class ClCall(at: Instant, status: String):
     val gap = Duration.between(at, now)
     if gap.isNegative then Duration.ZERO else gap
 
-/** The node's count of `engine_newPayload` calls by status. `accepted` is counted apart, so `invalid` is the INVALID
-  * ones alone: `engine_newpayload_invalid` has always counted the ACCEPTED ones with them. `syncing` is whatever the
-  * node counted as SYNCING, which no caller records today.
+/** The node's count of `engine_newPayload` calls by status, each status under its own count (B-193). `syncing` is
+  * whatever the node counted as SYNCING, which no caller records today: this node answers a payload it cannot yet
+  * execute ACCEPTED.
   */
 final case class PayloadCounts(total: Long, valid: Long, syncing: Long, accepted: Long, invalid: Long)
 
@@ -699,6 +803,20 @@ enum ClLink:
   *   the safe block's number, if the consensus layer named one and the node has its header
   * @param finalized
   *   the finalized block's number, likewise
+  * @param headNumber
+  *   the head's number, if the node has its header
+  * @param client
+  *   who the consensus client says it is, once it has said
+  * @param capabilities
+  *   how many Engine API methods it listed in its last `engine_exchangeCapabilities`
+  * @param calls
+  *   the last calls, oldest first, at most 256
+  * @param callsTotal
+  *   every Engine API call since the node started
+  * @param authReasons
+  *   the failed authentications by reason, in words
+  * @param builds
+  *   the payloads built for the consensus client
   */
 final case class ClSample(
     forkchoiceUpdated: Option[ClCall] = None,
@@ -707,7 +825,14 @@ final case class ClSample(
     authFailures: Long = 0L,
     head: Option[String] = None,
     safe: Option[Long] = None,
-    finalized: Option[Long] = None
+    finalized: Option[Long] = None,
+    headNumber: Option[Long] = None,
+    client: Option[ClClient] = None,
+    capabilities: Option[Int] = None,
+    calls: Vector[EngineCallLine] = Vector.empty,
+    callsTotal: Long = 0L,
+    authReasons: Map[String, Long] = Map.empty,
+    builds: PayloadBuilds = PayloadBuilds()
 ):
 
   /** The link, at `now`. */
@@ -759,6 +884,8 @@ final case class DagSample(epoch: Long, phase: DagPhase, progress: Int, loaded: 
   *   those over the last minute, once the probe has two readings at least 5 s apart
   * @param dag
   *   the DAG, once a build has started
+  * @param history
+  *   the hashrate and the work requests a minute over the last ten minutes, a point every five seconds, oldest first
   */
 final case class MiningSample(
     coinbase: Option[String] = None,
@@ -768,8 +895,12 @@ final case class MiningSample(
     staleShares: Long = 0L,
     getWork: Long = 0L,
     getWorkPerMinute: Option[Long] = None,
-    dag: Option[DagSample] = None
+    dag: Option[DagSample] = None,
+    history: Vector[MiningPoint] = Vector.empty
 )
+
+/** The mining at one moment, for the mining monitor's charts (spec 029 FR-041). */
+final case class MiningPoint(at: Instant, hashrate: Long, getWorkPerMinute: Option[Long])
 
 /** The JVM's heap in bytes, and the share of wall time spent in GC between the last two polls (0 to 1). */
 final case class JvmSample(heapUsed: Long, heapMax: Long, gcShare: Option[Double])

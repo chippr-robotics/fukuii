@@ -391,37 +391,91 @@ Every slice ends with the same gate. The art (phase 0) is done and in the tree.
 
 ### Before code
 
-- [ ] T073 [US5] `beacon` impact analysis of the Engine API observation (the timer around `processRequest`, the call
+- [x] T073 [US5] `beacon` impact analysis of the Engine API observation (the timer around `processRequest`, the call
       ring, the client identity, the auth reasons): confirm each is a write at an existing call site. `conduit` reads
       the RPC half
 
 ### Tests first
 
-- [ ] T074 [P] [US5] `LatencyHistogramSpec` in `src/test/scala/com/chipprbots/ethereum/metrics/`: recorded latencies
+- [x] T074 [P] [US5] `LatencyHistogramSpec` in `src/test/scala/com/chipprbots/ethereum/metrics/`: recorded latencies
       with known percentiles are reported within 10 % (SC-010); adds from four threads lose nothing
-- [ ] T075 [P] [US5] `JsonRpcControllerMetricsSpec`: a success, an error and an exception each count under their
+- [x] T075 [P] [US5] `JsonRpcControllerMetricsSpec`: a success, an error and an exception each count under their
       method and are timed; the 257th method name counts under `other`
-- [ ] T076 [P] [US5] `EngineApiMetricsSpec`: a call adds one ring entry with its status and duration; the ring keeps
+- [x] T076 [P] [US5] `EngineApiMetricsSpec`: a call adds one ring entry with its status and duration; the ring keeps
       256; identity and capabilities are stored sanitised; a response's bytes are unchanged with and without the
       observation
-- [ ] T077 [P] [US5] Goldens: the RPC view; the monitor for link waiting, connected and down; the call log; the
+- [x] T077 [P] [US5] Goldens: the RPC view; the monitor for link waiting, connected and down; the call log; the
       mining monitor; the exposure warning
 
 ### Implementation
 
-- [ ] T078 [P] [US5] `main/metrics/LatencyHistogram.scala`; `JsonRpcControllerMetrics.scala` per-method figures;
+- [x] T078 [P] [US5] `main/metrics/LatencyHistogram.scala`; `JsonRpcControllerMetrics.scala` per-method figures;
       `JsonRpcBaseController.scala` times failures too; `RateLimit.scala` counts rejections
-- [ ] T079 [US5] `main/consensus/engine/`: `EngineApiHttpServer.scala` times `processRequest`; `EngineApiMetrics.scala`
+- [x] T079 [US5] `main/consensus/engine/`: `EngineApiHttpServer.scala` times `processRequest`; `EngineApiMetrics.scala`
       gains the ring, `ClIdentity` and auth reasons; `EngineApiController.scala` records the caller's client version
       and capability list; `JwtAuthenticator.scala` names the reason in its two 401 branches
-- [ ] T080 [P] [US5] `console/panels/RpcPanels.scala`: methods, transports
-- [ ] T081 [P] [US5] `console/panels/EnginePanels.scala`: the monitor, whose link moves once per call that arrived;
+- [x] T080 [P] [US5] `console/panels/RpcPanels.scala`: methods, transports
+- [x] T081 [P] [US5] `console/panels/EnginePanels.scala`: the monitor, whose link moves once per call that arrived;
       `MiningPanel.scala` with history
 
 ### Gate
 
-- [ ] T082 The per-slice gate; quickstart.md "Slice 5" on Sepolia with a consensus client and on Mordor; `beacon`
+- [x] T082 The per-slice gate; quickstart.md "Slice 5" on Sepolia with a consensus client and on Mordor; `beacon`
       reports no response, status or timing changed; `conduit`, `prism` and `eye`; open the PR
+
+> As built (2026-11-14). After the slice: 1,349 tests in 53 suites of
+> `testOnly com.chipprbots.ethereum.console.* *Tui* *PeerScor*`. What differs from the tasks as written:
+>
+> - **T073**: `beacon` and `conduit` analysed before any code. Their shapes were taken as given: one choke point
+>   for JSON-RPC (`JsonRpcBaseController.handleRequest`), in-process state only and no new Prometheus series, the
+>   Engine call noted by a callback of its own beside the answer and never chained in front of it, the status read
+>   from the answer the consensus client received and not from the service's own record sites (which differ from
+>   the wire on an error), and the counters' holders made at start-up outside any IO (B-194).
+> - **T074, T078**: the histogram has 72 buckets, not 40: at 40 the ratio is 1.4 and a bucket's middle is up to
+>   18 % from its ends, outside SC-010's 10 %. At 72 it is under 10 % everywhere in the range, tested a bucket at
+>   a time.
+> - **T075, T078**: the per-method figures are a new plain class, `jsonrpc/RpcCallStats`, not additions to
+>   `JsonRpcControllerMetrics`: that is a registry-backed object, and its series stay exactly as they were (the
+>   timer on `/metrics` is still success-only, pinned by a test). A method the node does not have counts under one
+>   name of its own and takes no place among the 256, so a flood of unknown names cannot push real methods into
+>   `other`. A cancelled call (a client that went away, the IPC timeout) ends in no branch and is not counted.
+> - **T076, T079**: the ring, the identity, the auth reasons and the builds are on a new plain class,
+>   `consensus/engine/EngineCallLog`, not on `EngineApiMetrics`, for the same reason. `EngineApiController` is not
+>   touched at all: the caller's client version and capability count are read from the parsed request in the
+>   callback. "A response's bytes are unchanged with and without the observation" is `EngineApiHttpServerObservationSpec`,
+>   at the HTTP route, over 25 request shapes, with the log keeping, off, and failing at every note. No spec drove
+>   the Engine API's HTTP layer before.
+> - **`randomSecret` is dropped** from `ClSample`: since B-246 the node never runs on a random in-memory secret,
+>   so there is nothing to show. The head, safe and finalized numbers are resolved by the probe from the fork
+>   choice it already read, with no write on the Engine path.
+> - **B-193** is fixed here: `engine_newpayload_invalid` counts INVALID alone. That `engine_newPayload` never
+>   answers SYNCING is not a counter's fault but the node's answer (it says ACCEPTED), and is B-271.
+> - **T080, T081**: the monitor's first row is labelled `Link` (the Engine API's transport row is `Engine`). The
+>   link's marker stands at the count of calls, so it moves once a call and with nothing else. The mining history
+>   is kept by the probe from the gauges it already reads; nothing under `consensus/pow/` changed, so `forge` has
+>   no code to report on, and was asked to confirm that.
+> - **Beyond the tasks**: each server says once whether it bound (`RpcCallStats.listening`, written where a server
+>   starts and stops), so the view can say `listening` and not only `enabled`. `RpcExposureCheck.exposedNamespaces`
+>   is the start-up warning's rule as a value; the warning's text is unchanged and its spec pins it.
+> - **Measured** (`Benchmark / testOnly *EngineCallLogBenchmark`, this session's shared machine): a note takes
+>   0.28 µs at the median and 1.4 to 1.8 µs at p99, the same for an empty payload as for one of 1,500 transactions.
+> - **Reviews.** `beacon` signed the Engine half: "no response, status, ordering or timing of any Engine API call
+>   changed", reading timing as no added waiting (the note is constant work that may run just before the answer is
+>   rendered). From it: a request is looked into only where it is an object, a client's text is cut by whole
+>   characters, and one test goes through the unmodified `EngineApiController`. `conduit` found the claim to hold
+>   for JSON-RPC; from it: a server that cannot start says so (HTTPS with no usable keystore, an IPC socket that
+>   cannot be made), and the operator doc's list of what is not a call was corrected. `forge` confirmed nothing on
+>   the ETC mining or consensus path changed. `prism`, on the console: one blocker (an HTTPS transport read
+>   "authenticated by none (TLS)": the authentication is now a type, worded in one place) and seven should-fix, all
+>   taken: the Engine row's calls are said to be the pass-through ones; the tables' columns depend on the screen's
+>   width and not on the figures in view; a percentile under the histogram's range reads `<0.10 ms`; a rate limit
+>   under a second is said in milliseconds; a consensus client's text passes the ASCII mapping; the mining charts
+>   span every reading kept and say how long that is, with a gap for what is not known; and a transport's row keeps
+>   its parts by importance, so a long address or list of namespaces does not take the rest with it.
+> - **Left as is**: the link's marker is the count of calls modulo twelve, so a burst of twelve or more between two
+>   polls leaves it where it was; a payload built again at `getPayload` is not counted among those built (the doc
+>   says so); a handler that throws before it starts its work is not counted, as the node's own exception counter
+>   does not count it either.
 
 ---
 

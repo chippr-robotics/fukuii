@@ -5,9 +5,9 @@ import org.jline.utils.AttributedString
 import com.chipprbots.ethereum.console.*
 import com.chipprbots.ethereum.console.panels.Rows.*
 
-/** The Mempool, RPC, Storage, System and Ops views as they stand before their slices of spec 029 land: what the
-  * dashboard already reads for each, and one line naming what the view will show (slices 4 to 7 of spec 029; the line
-  * fits 80 columns). Nothing here is invented: a row is a figure the probe reads today, or it is not drawn (FR-021).
+/** The Storage, System and Ops views as they stand before their slices of spec 029 land: what the dashboard already
+  * reads for each, and one line naming what the view will show (slices 6 and 7 of spec 029; the line fits 80 columns).
+  * Nothing here is invented: a row is a figure the probe reads today, or it is not drawn (FR-021).
   */
 private[console] object StubPanels:
 
@@ -21,14 +21,6 @@ private[console] object StubPanels:
       Panel(1, rows.size + 1, 2, (w, _) => lines(w), separated = true),
       Panel(1, 1, 3, (w, _) => Seq(fit(text(s" Not built yet: $toCome", c.t.muted), w, c.g)), separated = true),
       fillPanel
-    )
-
-  def rpc(c: Ctx): Seq[Panel] =
-    view(
-      c,
-      "RPC",
-      Seq("RPC" -> endpointsValue(c)),
-      "calls and latency by method, the consensus-client link"
     )
 
   def storage(c: Ctx): Seq[Panel] =
