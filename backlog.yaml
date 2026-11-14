@@ -2939,7 +2939,7 @@ items:
   - id: B-257
     title: "Spec 029 slice 2a: TUI graphics modes (pixel, block, text), network icon, mascot, :art"
     priority: P2
-    status: open
+    status: claimed
     area: tui
     size: L
     opened: 2026-11-14
@@ -2947,6 +2947,11 @@ items:
     links:
       spec: specs/029-tui-command-center
       branch: ccr-452bbde8-2hrv25
+    claim:
+      by: cloud-ccr-452bbde8
+      agent: main
+      since: 2026-11-14T12:14:35Z
+      heartbeat: 2026-11-14T12:14:35Z
     notes: tasks T029-T045, T047, T048. Slice 2b (theme T046, splash T049, charts T050) and the manual gate T052 stay open.
   - id: B-258
     title: "Spec 029 slice 2b: the command-center theme, the splash with the badge and real start-up phases, chart primitives"
