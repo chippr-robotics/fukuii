@@ -2878,3 +2878,15 @@ items:
     links:
       spec: 018
     notes: "plan.md C4b part 4: the call has no spec (the node is not started in unit tests). Cases: reconcileState on the unified layout; fixDatabase + repairBestBlockMapping on the hash layout; neither on a stamped datadir with the guard off."
+  - id: B-252
+    title: "Spec 018 C4d follow-up: a state that failed closed is closed in memory only; persist the fault, or check the records at start"
+    priority: P2
+    status: open
+    area: storage
+    size: S
+    opened: 2026-11-14
+    refs: []
+    links:
+      spec: 018
+    depends_on: [B-062]
+    notes: "beacon, C4d part 0's read: failClosed (Corrupt at the fork choice) is not durable; nothing re-checks the changeset records at start."
