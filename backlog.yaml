@@ -3063,21 +3063,17 @@ items:
   - id: B-266
     title: "Spec 029 slice 4: the Mempool view (pool, flow, Mempool Radar, counters, pending transactions in the explorer) and the pool's counters"
     priority: P2
-    status: review
+    status: done
     area: tui
     size: L
     opened: 2026-11-14
+    closed: 2026-11-14
     refs: []
     links:
       prs: [1839]
       spec: specs/029-tui-command-center
       branch: ccr-452bbde8-2hrv25
     depends_on: [B-262]
-    claim:
-      by: cloud-ccr-452bbde8
-      agent: main
-      since: 2026-11-14T18:34:14Z
-      heartbeat: 2026-11-14T18:57:02Z
     notes: Tasks T065-T072. Closes B-196 with it (GetPoolSizeReq).
   - id: B-267
     title: "TUI lists: keep a scroll offset so the cursor moves within the screenful (Block Observatory and Mempool pending list pin the cursor to the bottom row)"
