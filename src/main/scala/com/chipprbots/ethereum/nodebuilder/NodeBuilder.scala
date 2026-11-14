@@ -998,11 +998,15 @@ trait EngineApiBuilder extends Logger:
   lazy val stateRecovery: Option[com.chipprbots.ethereum.ledger.StateRecovery] =
     storagesInstance.storages.pathStateStorage.map { state =>
       val config = com.chipprbots.ethereum.db.storage.pathstate.StateConfig(instanceConfig.config)
+      val layered = config.recovery.maxBlocks.min(config.overlay.maxForwardLayers / 2).max(1)
       new com.chipprbots.ethereum.ledger.StateRecovery(
         blockchainReader,
+        blockchainWriter,
         blockExecution,
         state,
-        maxBlocks = config.recovery.maxBlocks.min(config.overlay.maxForwardLayers / 2).max(1)
+        maxBlocks = layered,
+        // a fork choice's branch longer than that is committed in place, as far as `state.recovery.max-blocks` (C4d part 4)
+        maxAdoptedBlocks = config.recovery.maxBlocks.max(layered)
       )(using blockchainConfig)
     }
 

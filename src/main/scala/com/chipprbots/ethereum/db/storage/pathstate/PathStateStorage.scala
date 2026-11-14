@@ -263,30 +263,37 @@ final class PathStateStorage(
     *
     * '''With no lock held''': the window reads a record for each block behind the anchor.
     */
-  def stateAvailable(block: BlockRef): Boolean = stateAvailableAt(block, ViewTries)
+  def stateAvailable(block: BlockRef): Boolean = heldDepth(block).isDefined
+
+  /** How many forward layers `block`'s state stands on above the disk's, when it is held: none for the anchor and a
+    * block behind it that the records lead back to, `n` for a block `n` layers lead to. What a recovery adds on top of
+    * it is bounded with it (spec 018 C4d part 4). `None` when it is not held, as for [[stateAvailable]].
+    */
+  def heldDepth(block: BlockRef): Option[Int] = heldDepthAt(block, ViewTries)
 
   @annotation.tailrec
-  private def stateAvailableAt(block: BlockRef, triesLeft: Int): Boolean =
+  private def heldDepthAt(block: BlockRef, triesLeft: Int): Option[Int] =
     if lock.isHeldByCurrentThread then
       throw new IllegalStateException(
         s"Whether the state of block ${block.show} is held cannot be asked by the holder of the state lock " +
           s"('${lock.holder.getOrElse("?")}'): it may read records"
       )
-    if hasFailedClosed then false
+    if hasFailedClosed then None
     else
       val (epoch, held) = clock.awaitRest()
       held match
-        case None            => false
-        case Some(`block`)   => true
+        case None            => None
+        case Some(`block`)   => Some(0)
         case Some(anchorNow) =>
           // the window, the layers and the clock are one observation, as for a view: when the disk moved, asked again
           val seen = windowFor(anchorNow, epoch).map { behind =>
-            behind.contains(block) || overlay.chainFrom(anchorNow, block, behind.contains).isDefined
+            if behind.contains(block) then Some(0)
+            else overlay.chainFrom(anchorNow, block, behind.contains).map((layers, _) => layers.size)
           }
           seen.filter(_ => clock.epoch == epoch) match
             case Some(answer)          => answer
-            case None if triesLeft > 0 => stateAvailableAt(block, triesLeft - 1)
-            case None                  => false
+            case None if triesLeft > 0 => heldDepthAt(block, triesLeft - 1)
+            case None                  => None
 
   /** The forward layer of `blockHash`, when it has one: it was executed, and its state is on no row. */
   def forwardLayer(blockHash: ByteString): Option[ForwardLayer] = overlay.layerOf(blockHash)

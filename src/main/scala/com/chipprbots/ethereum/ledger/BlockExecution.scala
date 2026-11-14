@@ -611,10 +611,11 @@ class BlockExecution(
           Left(executionError)
     })
 
-  /** One block onto the head, for an operator chain import holding [[ChainInsertLock.exclusive]]: the same execution,
-    * validation and atomic commit (with the head pointer) as [[executeAndValidateBlocks]], plus `beforeCommit`, checked
-    * after validation and immediately before the commit, so a head that moved meanwhile (a consensus client's
-    * forkchoiceUpdated is not under the lock) fails the block instead of being overwritten.
+  /** One block onto the head, for an operator chain import holding [[ChainInsertLock.exclusive]], and for the adoption
+    * of a long branch on the unified layout (`StateRecovery`, which holds it shared, as any import): the same
+    * execution, validation and atomic commit (with the head pointer) as [[executeAndValidateBlocks]], plus
+    * `beforeCommit`, checked after validation and immediately before the commit, so a head that moved meanwhile (a
+    * consensus client's forkchoiceUpdated is not under the lock) fails the block instead of being overwritten.
     */
   def executeAndAdoptBlockIf(
       block: Block,
