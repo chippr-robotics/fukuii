@@ -3010,7 +3010,7 @@ items:
   - id: B-262
     title: "Spec 029 slice 3: the Chain view (head, Block Observatory, fees, reorgs), the explorer and the peer radar"
     priority: P2
-    status: claimed
+    status: in-progress
     area: tui
     size: L
     opened: 2026-11-14
@@ -3022,5 +3022,5 @@ items:
       by: cloud-ccr-452bbde8
       agent: main
       since: 2026-11-14T17:05:55Z
-      heartbeat: 2026-11-14T17:05:55Z
+      heartbeat: 2026-11-14T17:05:58Z
     notes: tasks T053-T064
