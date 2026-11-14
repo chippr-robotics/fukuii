@@ -2904,3 +2904,15 @@ items:
     refs: []
     links: {}
     notes: beacon, C4d part 2b's read; pre-existing on both layouts (promoteToCanonicalHead too). go-ethereum's txpool reset purges every block moved onto and re-injects the reversed blocks' transactions. Builds stay correct (executableAtParent filters stale ones).
+  - id: B-254
+    title: "Spec 029 slice 1: TUI input and navigation (key decoder, update function, focus, prompt, filters, nine views, q asks)"
+    priority: P2
+    status: open
+    area: tui
+    size: L
+    opened: 2026-11-14
+    refs: []
+    links:
+      spec: specs/029-tui-command-center
+    depends_on: [B-244]
+    notes: tasks.md T005-T028. Closes B-226 (the escape drain).
