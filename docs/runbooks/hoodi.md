@@ -23,35 +23,35 @@ Without `-Dfukuii.datadir` the datadir is `~/.fukuii/hoodi`. This loads `conf/ho
 - `do-snap-sync = false` (SNAP is off, as on Sepolia; blocks come from the CL and the EL fetches state and bodies from
   peers);
 - eth/70 and eth/71 offered;
-- `mining.protocol = "engine-api"`.
+- `mining.protocol = "engine-api"`;
+- `network.engine-api.enabled = true`.
 
 Peers come from four static enodes and DNS discovery (`all.hoodi.ethdisco.net`).
 
-## 2. Enable the Engine API
+## 2. The Engine API
 
-Blocks arrive from a consensus-layer client, so the Engine API must be on and share a JWT secret with it. **Without
-`jwt-secret-path`, fukuii generates a random secret at start-up** (`NodeBuilder.scala:1053-1055`), which no consensus
-client can know, so none can authenticate. Create the secret once:
+Blocks arrive from a consensus-layer client over the Engine API, so `conf/hoodi.conf` turns it on
+(`fukuii.network.engine-api.enabled = true`). **The Engine API is on by default for this chain, on `localhost:8551`**
+(Constitution VI: it is not bound to a public interface).
 
-```bash
-openssl rand -hex 32 > /chipprbots/blockchain/hoodi/jwt.hex
-```
+The JWT secret is a file, as in go-ethereum. With no `jwt-secret-path`, fukuii uses `<datadir>/jwt.hex`
+(`~/.fukuii/hoodi/jwt.hex` without `-Dfukuii.datadir`). If the file exists it is loaded; if not, fukuii creates it at the
+first start with 32 random bytes as 64 hex characters, mode 0600. It refuses to start, naming the file, when the file
+is not exactly 64 hex characters (optionally `0x`-prefixed) or is readable by its group or by others (`chmod 600` it).
+The log names the path, never the secret. The consensus client takes `--execution-jwt <datadir>/jwt.hex`, or the
+configured path.
 
-Put this in an operator conf that includes the shipped one (as `docs/runbooks/ephemery.md` does), for example
-`/chipprbots/blockchain/hoodi/hoodi.conf`, and start with `-Dconfig.file=` pointing at it:
+To share the secret between hosts, or to keep it where it is when the datadir moves, set an absolute path in an
+operator conf that includes the shipped one (as `docs/runbooks/ephemery.md` does) and start with `-Dconfig.file=`:
 
 ```hocon
 include classpath("conf/hoodi.conf")
 
-fukuii.network.engine-api {
-  enabled = true
-  jwt-secret-path = "/chipprbots/blockchain/hoodi/jwt.hex"
-}
+fukuii.network.engine-api.jwt-secret-path = "/chipprbots/blockchain/hoodi/jwt.hex"
 ```
 
-`JwtAuthenticator.fromFile` reads the path as given, so a relative path resolves against the JVM's working directory.
-Use an absolute path so it does not depend on where you start fukuii. The secret must be at least 64 hex characters.
-The default Engine API port is 8551. See `fukuii-engine-api-setup`.
+A configured path is read as given, and must already exist: a relative path resolves against the JVM's working
+directory, so use an absolute one. The secret must be exactly 64 hex characters (`0x` optional); a group- or world-readable file only draws a WARN.
 
 ## 3. Pair a consensus client
 
@@ -60,7 +60,7 @@ Lighthouse v8.x (a Hoodi-aware build is required; use the `--network hoodi` of y
 ```bash
 lighthouse bn --network hoodi \
   --execution-endpoint http://127.0.0.1:8551 \
-  --execution-jwt /chipprbots/blockchain/hoodi/jwt.hex \
+  --execution-jwt ~/.fukuii/hoodi/jwt.hex \
   --checkpoint-sync-url https://checkpoint-sync.hoodi.ethpandaops.io
 ```
 

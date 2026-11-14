@@ -141,7 +141,7 @@ class ImportOnPositionsSpec extends ScalaTestWithActorTestKit with AnyFlatSpecLi
     }
 
   // dm 7.6: a path-live store has one writer, the staged commit.
-  it should "refuse a block executed with nothing staged, and one that is not adopted as it is executed" taggedAs
+  it should "refuse a block executed with nothing staged, and one that is not adopted as it is executed, and keep a payload apart" taggedAs
     UnitTest in {
       given BlockchainConfig = onPositions.blockchainConfig
       val before = disk
@@ -152,10 +152,10 @@ class ImportOnPositionsSpec extends ScalaTestWithActorTestKit with AnyFlatSpecLi
         case (Nil, Some(BlockExecutionError.StateFaulted(fault: StateUnavailable))) => fault
         case other => fail(s"the block that is not adopted was answered with $other")
       unadopted.reason should include("not adopted")
-      // a payload ahead of the head: its state committed apart from the block
-      // refused before it runs, not when its state comes to be committed
-      val apart = the[StateUnavailable] thrownBy execution.executeAndValidateBlock(blocks.head, alreadyValidated = true)
-      apart.reason should include("committed apart from the block")
+      // a payload ahead of the head: its state committed apart from the block, as a forward layer beside the state
+      // the disk holds (C4d part 2a): executed, and nothing on disk moved
+      execution.executeAndValidateBlock(blocks.head, alreadyValidated = true).isRight shouldBe true
+      pathState.view(refOf(blocks.head.header)).block shouldBe refOf(blocks.head.header)
       disk shouldBe before
       pathState.anchor shouldBe Some(refOf(genesis))
       onPositions.blockchainReader.getBestBlockNumber shouldBe BigInt(0)

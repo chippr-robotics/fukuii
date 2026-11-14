@@ -174,10 +174,11 @@ class TestingService(
             forkChoiceManager.applyForkChoiceState(
               ForkChoiceState(
                 headBlockHash = hash.value,
-                // safe/finalized track the head: this namespace has no beacon chain behind it to
-                // justify anything else, and applyForkChoiceState only reads them for logging.
-                safeBlockHash = hash.value,
-                finalizedBlockHash = hash.value
+                // no safe or finalized block: this namespace has no beacon chain behind it. A finalized block
+                // names what a move of the head must not reverse on the unified layout (spec 018 C4d part 1), and
+                // naming each committed head would refuse every later rewind (beacon).
+                safeBlockHash = ForkChoiceManager.ZeroHash,
+                finalizedBlockHash = ForkChoiceManager.ZeroHash
               )
             ) match
               case Left(err) => log.error("testing_commitBlockV1: fork choice rejected freshly stored head: {}", err)

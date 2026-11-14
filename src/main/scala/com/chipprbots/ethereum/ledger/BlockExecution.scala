@@ -62,11 +62,10 @@ class BlockExecution(
     val hash = block.header.hash.value
     // One execution + commit per block hash at a time, across the Engine API and the regular-sync importer.
     ChainInsertLock.shared(BlockImportGate.withBlock(hash) {
-      val staged = blockchain.stageBlockState(block.header)
-      // This path commits a block's state alone: the block is stored, and the head moved, by the caller afterwards.
-      // On the unified layout the state on disk moves with the best block, in one batch, until the overlay takes
-      // blocks that are executed ahead of the head (spec 018 C4a, C4d).
-      refuseUnadopted(block, staged, "a block whose state is committed apart from the block")
+      val staged = blockchain.stageBlockStateApart(block.header)
+      // This path commits a block's state apart from the block: the block is stored, and the head moved, by the caller
+      // afterwards. On the unified layout the state is kept as a forward layer beside the state the disk holds, and
+      // only a fork choice moves the head to it (spec 018 C4d part 2a).
       BlockImportGate.alreadyExecuted(hash, staged) match
         case Some(done) => Right(done.asTuple)
         case None =>
@@ -84,16 +83,17 @@ class BlockExecution(
             // Accepted: its state goes to the database (nobody else commits it here). Rejected: it leaves nothing
             // behind.
             case Right(executed) =>
-              timedCommit(block)(staged.commitWith(block.header.number.value, hash, None))
+              timedCommit(block)(staged.commitApart(block.header.number.value, hash))
               BlockImportGate.record(hash, executed)
             case Left(_) => staged.discard()
           result
     })
 
-  /** On the unified state layout, before its overlay, a block is committed in place or not at all: in the batch that
-    * makes it the best block (spec 018 data-model 7.1, and the scope of C3b). A block that is executed without being
-    * adopted (a payload ahead of the head, a side branch, the blocks of a reorganisation) is refused here, before it
-    * runs, as a condition of this node's own state: never a verdict on the block.
+  /** On the unified state layout the importer commits a block in place or not at all: in the batch that makes it the
+    * best block (spec 018 data-model 7.1, and the scope of C3b). A block it executes without adopting it (a side
+    * branch, the blocks of a reorganisation) is refused here, before it runs, as a condition of this node's own state:
+    * never a verdict on the block (C4e routes them). A payload ahead of the head is kept as a forward layer instead
+    * (`executeAndValidateBlockFull`, C4d part 2a).
     *
     * @throws StateUnavailable
     *   for such a block
@@ -1429,6 +1429,13 @@ object BlockImportGate:
   def alreadyExecuted(blockHash: ByteString, staged: StagedBlockState): Option[Result] =
     val known = remembered.synchronized(Option(remembered.get(blockHash)))
     known.filter(_ => staged.isBlockApplied(blockHash))
+
+  /** Forget the execution recorded for `blockHash`: the block was found invalid after it was executed (a payload's
+    * requests that are not those its execution derived), and what was recorded is no answer for it (spec 018 C4d part
+    * 2a). Call under [[withBlock]], or where no execution of the block can be under way.
+    */
+  def forget(blockHash: ByteString): Unit =
+    remembered.synchronized { remembered.remove(blockHash); () }
 
   /** Remember a committed execution for a waiter on the same hash. Call under [[withBlock]]. */
   def record(blockHash: ByteString, executed: Executed): Unit =

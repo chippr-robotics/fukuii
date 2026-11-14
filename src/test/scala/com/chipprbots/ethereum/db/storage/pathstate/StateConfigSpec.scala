@@ -166,6 +166,18 @@ class StateConfigSpec extends AnyFlatSpec with Matchers:
     // deeper than the records reach cannot be honoured
     StateConfig(fukuii("fukuii.state.reorg.max-depth = 5000")).maxReorgDepth(1000, None) shouldBe 512
 
+    // What the store is given as its policy: the configuration's depth; and in the archive mode, which keeps every
+    // record, what one plan holds unless a depth is configured. What can be reversed at all is the records' to say.
+    def policy(overrides: String): Int =
+      PathStateStorage.CommitSettings
+        .of(StateConfig(fukuii(overrides)), () => None, PathStateStorage.CommitObserver.Silent)
+        .maxReorgDepth(1000, Some(BigInt(910)))
+    policy("") shouldBe 106
+    policy("fukuii.state.reorg.max-depth = 10") shouldBe 10
+    policy("fukuii.pruning.mode = archive") shouldBe HeadMovePlan.MaxBlocks
+    HeadMovePlan.MaxBlocks shouldBe 65536
+    policy("fukuii.pruning.mode = archive, fukuii.state.reorg.max-depth = 10") shouldBe 10
+
     an[IllegalArgumentException] should be thrownBy StateConfig(fukuii("fukuii.state.reorg.max-depth = deepest"))
     an[IllegalArgumentException] should be thrownBy StateConfig(fukuii("fukuii.state.reorg.max-depth = 0"))
   }

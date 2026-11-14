@@ -193,7 +193,29 @@ Read plan.md, "C2a part 1 record" and "C2a part 2 record", then:
   above it, never a failed import; `saveLastBlock` writes nothing on the unified layout. A new consumer of a
   batch's result must take the fault out before it judges a block (`BlockExecution.BatchOutcome.of`). The chain
   on the unified layout driven through the node's own consensus, with a second writer, is
-  `StateFaultInABatchSpec`.
+  `StateFaultInABatchSpec`. **Part 1 is built**: `HeadMovePlan.of` (pure) and `PathStateStorage.planMove`, with
+  the refusals `Deep`, `Incomplete`, `Pivot`, `Finalized` (number and hash) and `Corrupt`; `state.origin` in
+  AppState, written by the genesis commit; `CommitSettings.finalized` names a `FinalizedBlock`. Nothing calls
+  the plan yet. The specs' model of blocks that are only headers, records' headers and empty layers is
+  `PlannedMoves`. **Part 2a is built**: `PathStateStorage.moveHead(target, link, extraFor)` and `MoveBatch` (a
+  batch built against the disk plus the batch so far, every step held to it before anything is written);
+  `promote` is that batch for one block; a commit waits for a move that is under way (`adopting`); a store that
+  failed its read-back gives out no state. The spec is `HeadMoveSpec`, whose oracle is a second chain that
+  commits the same blocks in place. **Part 2b is built**: `BlockchainWriter.canonicalHeadUpdate` (the head's
+  index rows, built apart from their commit) is what a caller passes as `extraFor`, and `HeadMoveOnTheChainSpec`
+  drives that on the execution-apis chain on the unified layout. The plan's layers are pinned for the move; the
+  move's metrics are told. **Part 2c is built**: batches cut by bytes, the barrier move (and the log's byte budget),
+  and `withRecordsHeld` for C4e's reverse-then-commit. **Part 3a is built**: on the unified layout the move and a
+  block's own commit are the only writers of the best block and the index; every other writer refuses there (or is
+  PRE/START), the best block is held to the anchor under the state lock, and `scripts/check-head-writers.sh` holds
+  the table (a NEW writer of the head must say in `scripts/head-writer-allowlist.txt` which way it stays safe).
+  **Part 3b is built**: `BlockchainWriter.moveHeadInPlace` (the writer now takes the path store) is the node's one way to
+  move the head with the state; the fork choice on the unified layout confirms the head by a move of nothing under
+  the state lock and refuses every move off the held block until C4d (`SYNCING`); `promoteToCanonicalHead` refuses
+  there; `test_rewindToBlock` below the head moves back along the records and removes no block. **Part 4 is built**:
+  `StateReconciliation` at start makes the best block and the index the held block's (rule 4 always; rules 2 and 3
+  not built: the user's decision of 2026-11-14) and holds the index to its ancestry (I6). Next: C4d (newPayload by hash only, the
+  fork choice's real moves) and C4e.
 - **C4a** brings back what C3b refuses: the overlay commit for a block that does not extend the anchor
   (`buildExtra(adopted)`, `NotExtendingAnchor`, `saveLastBlock` writing nothing),
   `stateAvailable(hash)`, the served-root window, and SNAP advertised again. C4b: the head move, `ConsensusStateFault`

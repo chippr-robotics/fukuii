@@ -15,6 +15,32 @@ import com.chipprbots.ethereum.db.storage.PathNodeStorage
 final case class BlockRef(hash: ByteString, number: BigInt, stateRoot: ByteString):
   def show: String = s"$number (${Hex.toHexString(hash.toArray).take(16)})"
 
+/** The finalized block, as a consensus client last named it: by its number, for what retention keeps, and by its hash,
+  * for what a move of the head must not reverse. A number alone would say "finalized" of a block of another branch at
+  * that height.
+  */
+final case class FinalizedBlock(number: BigInt, hash: ByteString)
+
+object FinalizedBlock:
+  private val Version = "v1"
+  private val HashHexLength = 64
+
+  /** The AppState string `v1:<blockHash hex>:<number decimal>` ([[com.chipprbots.ethereum.db.storage.AppStateStorage]],
+    * `state.finalized`).
+    */
+  def encode(block: FinalizedBlock): String = s"$Version:${Hex.toHexString(block.hash.toArray)}:${block.number}"
+
+  /** The finalized block a stored value names. A value this build cannot read is an error, not an absent block: an
+    * absent one lets a move reverse what was finalized.
+    */
+  def decode(value: String): FinalizedBlock =
+    def malformed: Nothing = throw new IllegalStateException(s"state.finalized is not a $Version block: '$value'")
+    value.split(':') match
+      case Array(Version, hash, number)
+          if hash.length == HashHexLength && number.nonEmpty && number.forall(_.isDigit) =>
+        FinalizedBlock(BigInt(number), Try(ByteString(Hex.decode(hash))).getOrElse(malformed))
+      case _ => malformed
+
 /** The state anchor (spec 018 data-model 5.1): the one statement of which block's state the rows of CF `t` and CF `u`
   * hold. It is the AppState string `v1:<blockHash hex>:<number decimal>:<stateRoot hex>`, written in the same batch as
   * the rows it describes and never without them.
@@ -78,12 +104,20 @@ trait StateClock:
   *
   * The in-place writers arrive with the staged commit (C3b). Until then nothing in the node calls [[publish]].
   */
-final class StateMoveLog(maxMoves: Int, initialAnchor: Option[BlockRef]) extends StateClock:
+final class StateMoveLog(maxMoves: Int, initialAnchor: Option[BlockRef], maxBytes: Long = Long.MaxValue)
+    extends StateClock:
   require(maxMoves > 0, "the move log keeps at least one move")
 
   @volatile private var current: Long = 0L
   @volatile private var anchorNow: Option[BlockRef] = initialAnchor
   private val log = new ArrayDeque[(Long, StateMove)]()
+
+  /** What the moves in the log hold of prior values: the log keeps as many moves as it may, and no more bytes than it
+    * may. A move it lets go makes the views older than it stale, never wrong (forge, vault).
+    */
+  private var bytesHeld: Long = 0L
+  private def bytesOf(move: StateMove): Long =
+    move.pre.iterator.map((position, node) => position.rowKey.length.toLong + node.fold(0)(_.length)).sum
 
   override def epoch: Long = current
 
@@ -109,7 +143,9 @@ final class StateMoveLog(maxMoves: Int, initialAnchor: Option[BlockRef]) extends
   private[pathstate] def publish(move: StateMove): Unit = synchronized {
     require(current % 2 == 0, "a state move is already being written")
     log.addLast((current + 1, move))
-    while log.size > maxMoves do log.removeFirst()
+    bytesHeld += bytesOf(move)
+    // the newest move stays whatever it holds: a reader of the batch in flight must find it
+    while log.size > maxMoves || (bytesHeld > maxBytes && log.size > 1) do bytesHeld -= bytesOf(log.removeFirst()._2)
     current += 1
   }
 
@@ -140,6 +176,30 @@ final class StateMoveLog(maxMoves: Int, initialAnchor: Option[BlockRef]) extends
       result
     finally settled(committed)
 
+  /** `write`, as the batch of a move whose prior values are too many to keep: a '''barrier'''. The log is emptied
+    * before the epoch is made odd, so every view made before it finds that the log does not reach back to it, and is
+    * stale: never wrong, as a move logged without its prior values would leave it. The disk's anchor is `newAnchor`
+    * once the batch has returned. A `write` that throws is taken to have written nothing, as in [[inFlight]].
+    */
+  private[pathstate] def inFlightBarrier[A](newAnchor: BlockRef)(write: => A): A =
+    synchronized {
+      require(current % 2 == 0, "a state move is already being written")
+      log.clear()
+      bytesHeld = 0L
+      current += 1
+    }
+    var committed = false
+    try
+      val result = write
+      committed = true
+      result
+    finally
+      synchronized {
+        if committed then anchorNow = Some(newAnchor)
+        current += 1
+        notifyAll()
+      }
+
   /** `write`, as the batch that leaves the disk with '''no state''': every row deleted, and the anchor with them. It is
     * not a move: a move has an anchor to move to, and prior values for what it changed, and this has neither.
     *
@@ -155,6 +215,7 @@ final class StateMoveLog(maxMoves: Int, initialAnchor: Option[BlockRef]) extends
     synchronized {
       require(current % 2 == 0, "a state move is already being written")
       log.clear()
+      bytesHeld = 0L
       current += 1
     }
     var committed = false

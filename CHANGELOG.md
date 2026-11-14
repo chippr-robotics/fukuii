@@ -8,6 +8,48 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Changed
+- **The Engine API is on by default for the chains that need a consensus client, with a persistent JWT secret (B-246).**
+  - `conf/eth.conf`, `sepolia.conf`, `hoodi.conf`, `ephemery.conf` and `plataberget.conf` set
+    `fukuii.network.engine-api.enabled = true`, so the Engine API listens on `localhost:8551` without an operator conf.
+    ETC, Mordor and Gorgoroth are unchanged (off). The interface stays `localhost`.
+  - With no `jwt-secret-path`, the secret is `<datadir>/jwt.hex`, as go-ethereum does it: loaded if present, otherwise
+    created at the first start (32 random bytes as 64 hex characters, mode 0600, written to a temporary file and
+    renamed). A file that is not 64 hex characters, or is readable by its group or by others, stops the start with a
+    message saying how to fix it. The path is logged, never the secret. Before, an unset path gave a random in-memory
+    secret that no consensus client could share. The consensus client takes `--execution-jwt <datadir>/jwt.hex`, or the
+    configured path; use an absolute path to share the secret or to keep it where it is when the datadir moves. A
+    configured path is never created: the file must exist and hold 64 hex characters (a group- or world-readable one
+    draws a WARN). The consensus client must run as the same user as fukuii, as the default file is mode 0600.
+  - With the Engine API on, a refused secret file or a port that cannot bind stops the node at once, with one ERROR
+    line and exit code 1, before P2P starts. Before, a bind failure was only logged. Several instances on one host
+    each need their own `network.engine-api.port` and datadir or `jwt-secret-path`; the ETC chains must opt in.
+  - `fukuii ephemery` pins the path to `<root>/jwt.hex`, where `<root>` is the Ephemery root (your `fukuii.datadir`), when you set none, so the secret is the
+    same across iterations and the Lighthouse companion keeps working after a reset.
+- **`fukuii ephemery` needs no preparation step: the current Ephemery iteration is built in, and a node exits 75 at its
+  reset (spec 028).**
+  - The jar carries `ephemery-165`. At start, before the node's configuration loads, fukuii picks the newest current
+    iteration (a cached one under `<datadir>/releases/ephemery-N`, or the bundled one) and runs it in its own datadir
+    `<datadir>/ephemery-N`. Logs stay at `<datadir>/logs`. An operator's `custom-chains-dir` that holds
+    `ephemery-chain.conf` is used as before, with no fetch and no exit.
+  - At the iteration's reset the node logs a WARN and exits with code 75, for a supervisor to restart; set
+    `fukuii.ephemery.exit-at-reset = false` to only warn.
+  - **A restarted node refreshes itself.** When no iteration it holds is current, it fetches the one whose window
+    contains now from `https://github.com/ephemery-testnet/ephemery-genesis` (https only, a host allow-list, size
+    caps, a strict archive reader), validates it with the rules of `fukuii cli ephemery-fetch`, keeps it under
+    `<datadir>/releases/ephemery-N` with the consensus client's `testnet/` directory, and runs it. Retries and waits
+    share one budget, `fukuii.ephemery.refresh-timeout` (60 s). No network call is made while an iteration is current.
+    A release not yet published exits 69 (a restart retries); a refused one, a republished one, a bad source or
+    `fukuii.ephemery.refresh = false` after the reset exits 78. `fukuii.ephemery.source` takes an https mirror or a
+    local directory (no network). See `docs/runbooks/ephemery.md`.
+  - **`fukuii cli ephemery-fetch` downloads.** `--release ephemery-N` fetches a release; without `--out` it writes into
+    the node's root (adding `testnet/` to an entry that is there), with `--out DIR` it writes the script's layout.
+    `scripts/ephemery/fetch-genesis.sh` is now `exec fukuii cli ephemery-fetch` with `--out` defaulted: it needs no
+    `curl` or `tar`, and its `testnet/` leaves out `parsedBeaconState.json` and `bootnode-keys/`.
+  - **Behaviour change.** `conf/ephemery.conf` no longer sets a default `fukuii.blockchains.custom-chains-dir`
+    (`~/.fukuii/ephemery-network/current/chains`). Someone who ran `fetch-genesis.sh` with its default `--out` and
+    launched without `FUKUII_CONF_DIR` now runs the built-in iteration, which is the same one, in a new datadir
+    (`~/.fukuii/ephemery/ephemery-165`); their old datadir is untouched. Launching with `FUKUII_CONF_DIR` is unchanged.
+  - A network that is not configured now says which directory it looked in and whether it exists.
 - **On proof-of-work chains (ETC, Mordor) the SNAP header download validates every header against its parent, and SNAP
   finalisation takes the pivot from that validated chain.**
   - **Header download.** Each header must pass the block-import header rules against its parent (extra data including

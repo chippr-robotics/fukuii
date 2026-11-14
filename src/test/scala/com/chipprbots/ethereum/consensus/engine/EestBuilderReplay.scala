@@ -141,7 +141,9 @@ object EestBuilderReplay:
             blockchainWriter,
             blockExecution,
             new ForkChoiceManager(blockchainReader, blockchainWriter),
-            None
+            None,
+            // on the unified layout the node tells the Engine API the block whose state is held, as NodeBuilder does
+            stateHeldInPlace = storagesInstance.storages.pathStateStorage.map(state => () => state.anchor.map(_.hash))
           )(using config, null)
 
           // What makes a block that was built the head. On the hash store the build wrote its state, and the block is

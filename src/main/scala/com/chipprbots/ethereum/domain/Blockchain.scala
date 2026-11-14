@@ -68,7 +68,16 @@ trait Blockchain:
     */
   def getReadOnlyMptStorage(): MptStorage
 
+  /** Removes a block, and moves the best block to its parent where it was the best. Refused on the unified state
+    * layout, where the best block moves only with the state: see [[removeChainForNewGenesis]].
+    */
   def removeBlock(hash: BlockHash): Unit
+
+  /** Removes every block of the chain, from the best down to the genesis, before test mode sets a new genesis
+    * (`test_setChainParams`, a rewind to the genesis). On the unified state layout only where the state may be
+    * destroyed (test mode), and only with it: the caller destroys the state next.
+    */
+  def removeChainForNewGenesis(): Unit
 
   /** Flush all in-memory MPT trie nodes written during block execution to RocksDB.
     *
@@ -153,12 +162,22 @@ class BlockchainImpl(
     * By the header: the unified layout stages a block over its parent's state, which it finds by the parent's hash, and
     * holds what the block wrote to the state root the header carries. The hash store needs the number alone.
     */
-  def stageBlockState(header: BlockHeader): StagedBlockState =
+  def stageBlockState(header: BlockHeader): StagedBlockState = staging(header, apart = false)
+
+  /** [[stageBlockState]] for a block whose state is committed apart from the block ([[StagedBlockState.commitApart]]):
+    * a payload executed ahead of the head. On the unified layout its parent may be any block whose state is held: the
+    * anchor, an executed block kept beside it, a block behind it that the changeset records lead to, or a block on a
+    * fork from one of those (spec 018 C4d part 2a). The hash store stages it as [[stageBlockState]] does.
+    */
+  def stageBlockStateApart(header: BlockHeader): StagedBlockState = staging(header, apart = true)
+
+  private def staging(header: BlockHeader, apart: Boolean): StagedBlockState =
     pathState.fold(stateStorage.stageBlock(header.number.value)) { state =>
       new pathstate.PathStagedBlock(
         state,
         refOf(header),
-        () => blockchainReader.getBlockHeaderByHash(header.parentHash).map(refOf)
+        () => blockchainReader.getBlockHeaderByHash(header.parentHash).map(refOf),
+        apart
       )
     }
 
@@ -178,6 +197,20 @@ class BlockchainImpl(
     blockNumberMappingStorage.remove(number)
 
   override def removeBlock(blockHash: BlockHash): Unit =
+    if pathState.isDefined then
+      throw new IllegalStateException(
+        s"Block ${ByteStringUtils.hash2string(blockHash.value)} cannot be removed on the unified state layout: removing " +
+          "it moves the best block without the state, which moves only with a move of its head"
+      )
+    removeAnyLayout(blockHash)
+
+  override def removeChainForNewGenesis(): Unit =
+    pathState.flatMap(_.refusalToDestroyState()).foreach(refused => throw new IllegalStateException(refused))
+    (blockchainReader.getBestBlockNumber to BigInt(0) by -1).foreach { number =>
+      blockchainReader.getBlockHeaderByNumber(number).foreach(header => removeAnyLayout(header.hash))
+    }
+
+  private def removeAnyLayout(blockHash: BlockHash): Unit =
     val maybeBlock = blockchainReader.getBlockByHash(blockHash)
 
     maybeBlock match

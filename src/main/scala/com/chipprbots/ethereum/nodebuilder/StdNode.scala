@@ -32,6 +32,7 @@ import com.chipprbots.ethereum.console.TuiUpdater
 import com.chipprbots.ethereum.db.dataSource.RocksDbCacheMetrics
 import com.chipprbots.ethereum.domain.BestMappingRepair
 import com.chipprbots.ethereum.domain.BlockHash
+import com.chipprbots.ethereum.domain.StateReconciliation
 import com.chipprbots.ethereum.jsonrpc.server.RpcExposureCheck
 import com.chipprbots.ethereum.metrics.Metrics
 import com.chipprbots.ethereum.metrics.MetricsConfig
@@ -68,14 +69,25 @@ abstract class BaseNode extends Node:
   private var periodicConsistencyCheckSystem: Option[ActorSystem[?]] = None
 
   def start(): Unit =
+    // Phase -1 (B-246): the Engine API's JWT secret is resolved before anything starts. A refused file is an
+    // EngineApiStartupRefusal here, which the caller turns into one clear line and exit 1, not a stack trace from
+    // phase 3 with P2P and discovery already up.
+    StdNode.failIfRefused(engineApiJwtAuthenticator)
+
     // Phase 0: the TUI's frames, so its splash and "starting node" move while the node starts. The probe that feeds it
     // starts in phase 6, once the actors it asks exist.
     startTuiFrames()
 
     // Phase 1: Essential initialization (must complete before anything else)
     startMetricsClient()
-    fixDatabase()
-    repairBestBlockMapping() // before any server binds, so no newPayload/FCU races the read-then-write
+    // On the unified state layout the best block and the index are the held block's, made so before anything reads
+    // them (spec 018 C4b part 4): the hash layout's two repairs trust the best block or the index, and would undo it.
+    if blockchainReader.holdsStateInPlace then reconcileState()
+    // a datadir stamped for the unified layout, opened with the guard off, is refused by the genesis loader: nothing
+    // is repaired in it first (beacon)
+    else if storagesInstance.storages.appStateStorage.getStateLayout().isEmpty then
+      fixDatabase()
+      repairBestBlockMapping() // before any server binds, so no newPayload/FCU races the read-then-write
     loadGenesisData()
     repairStoredBodies() // after genesis is loaded, before the sync controller reads the backfill cursors
     importChainData() // Must complete before APIs so queries return chain data
@@ -303,17 +315,14 @@ abstract class BaseNode extends Node:
   private def startJsonRpcIpcServer(): Unit =
     if jsonRpcConfig.ipcServerConfig.enabled then jsonRpcIpcServer.run()
 
+  /** With the Engine API enabled the node needs a consensus client to follow a post-merge chain, so a port it cannot
+    * bind is fatal: a node that logs it and runs on would look healthy and never sync.
+    */
   private def startEngineApiServer(): Unit =
     maybeEngineApiServer.foreach { server =>
-      try
-        val binding = scala.concurrent.Await.result(
-          server.start(),
-          scala.concurrent.duration.Duration(10, "seconds")
-        )
-        log.info(s"Engine API server bound to ${binding.localAddress}")
-      catch
-        case ex: Exception =>
-          log.error(s"Engine API server failed to start on ${engineApiConfig.interface}:${engineApiConfig.port}", ex)
+      StdNode.awaitEngineApiBind(server.start(), engineApiConfig.interface, engineApiConfig.port, 10.seconds) match
+        case Right(binding) => log.info(s"Engine API server bound to ${binding.localAddress}")
+        case Left(message)  => throw StdNode.startupRefusal(message)
     }
 
   def startPeriodicDBConsistencyCheck(): Unit =
@@ -467,6 +476,24 @@ abstract class BaseNode extends Node:
     tryAndLogFailure(() => Metrics.get().close())
     tryAndLogFailure(() => storagesInstance.dataSource.close())
 
+  /** The reconciliation at start of a datadir on the unified state layout ([[StateReconciliation]]): the best block and
+    * the index of blocks by number made those of the block whose state the disk holds. It throws, and the node does not
+    * start, on a datadir it cannot mend.
+    */
+  def reconcileState(): Unit =
+    storagesInstance.storages.pathStateStorage.foreach { pathState =>
+      StateReconciliation.run(
+        storagesInstance.storages.appStateStorage,
+        pathState,
+        blockchainReader,
+        blockchainWriter,
+        testMode = Config.testmode
+      ) match
+        case StateReconciliation.Outcome.Consistent(anchor) =>
+          log.info("State reconciled at start: the best block is the block whose state is held ({})", anchor.show)
+        case other => log.info("State reconciliation at start: {}", other)
+    }
+
   /** Restores the number->hash entry at the best block's height if an earlier version rewrote the best block's header
     * (SNAP startup) and left the index naming the forged copy. See [[BlockchainWriter.repairBestBlockNumberMapping]].
     */
@@ -549,6 +576,40 @@ class StdNode(
 
 object StdNode:
 
+  /** The refusal to start, for the caller (`Fukuii.run`, or one instance of the multi-instance runtime) to report. */
+  def startupRefusal(message: String): EngineApiStartupRefusal = new EngineApiStartupRefusal(message)
+
+  /** Forces the Engine API secret and throws [[EngineApiStartupRefusal]] if it is refused. */
+  def failIfRefused(thunk: => Any): Unit =
+    engineApiRefusal(thunk).foreach(m => throw startupRefusal(m))
+
+  /** The message of a refused Engine API secret, if the secret is refused (B-246). `thunk` forces it. */
+  def engineApiRefusal(thunk: => Any): Option[String] =
+    try
+      val _ = thunk
+      None
+    catch
+      case e @ (_: IllegalStateException | _: java.io.IOException | _: IllegalArgumentException) =>
+        Some(e.getMessage)
+
+  /** Waits for the Engine API bind. A failure, or no answer in `timeout`, is a message naming the address and the key
+    * to change, for the caller to log before it exits.
+    */
+  def awaitEngineApiBind[A](
+      bind: scala.concurrent.Future[A],
+      interface: String,
+      port: Int,
+      timeout: scala.concurrent.duration.FiniteDuration
+  ): Either[String, A] =
+    try Right(scala.concurrent.Await.result(bind, timeout))
+    catch
+      case scala.util.control.NonFatal(e) =>
+        Left(
+          s"Refusing to start: the Engine API cannot bind $interface:$port (${e.getClass.getSimpleName}: ${e.getMessage}). " +
+            "The consensus client could never reach this node, which would not sync. Free the port, or set " +
+            "network.engine-api.port (each instance on one host needs its own)."
+        )
+
   /** Should the Engine API bind after the ETH JSON-RPC server rather than before it?
     *
     * Only when the readiness probe targets the Engine API port. hive's `ethereum/sync` simulator probes 8551 on the
@@ -558,3 +619,9 @@ object StdNode:
     */
   def engineApiBindsLast(readinessPort: Option[Int], engineApiPort: Int): Boolean =
     readinessPort.contains(engineApiPort)
+
+/** The node cannot start, for a reason the operator can fix: a refused Engine API secret file, or an Engine API port it
+  * cannot bind. It carries only the operator-facing message, no cause and no stack trace, which the caller prints and
+  * logs once before it exits 1 (B-246).
+  */
+final class EngineApiStartupRefusal(message: String) extends RuntimeException(message, null, false, false)

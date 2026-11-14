@@ -6,6 +6,10 @@ import org.apache.pekko.actor.typed.ActorRef as TypedActorRef
 import org.apache.pekko.util.ByteString
 
 import com.chipprbots.ethereum.consensus.ReorgStateHandler
+import com.chipprbots.ethereum.db.storage.pathstate.FinalizedBlock
+import com.chipprbots.ethereum.db.storage.pathstate.ReorgRefusal
+import com.chipprbots.ethereum.db.storage.pathstate.ReorgTooDeep
+import com.chipprbots.ethereum.db.storage.pathstate.StateUnavailable
 import com.chipprbots.ethereum.domain.BlockHash
 import com.chipprbots.ethereum.domain.BlockHeader
 import com.chipprbots.ethereum.domain.BlockchainReader
@@ -110,6 +114,8 @@ class ForkChoiceManager(
     if maybeHeader.isEmpty then
       log.info(s"Fork choice head ${newState.headBlockHash} not known yet (SYNCING)")
       Left("SYNCING")
+    else if blockchainWriter.holdsStateInPlace then
+      maybeHeader.fold[Either[String, Unit]](Left("SYNCING"))(confirmHeldHead(newState, _))
     else
       log.info(
         s"Fork choice updated: head=${newState.headBlockHash}, " +
@@ -129,6 +135,77 @@ class ForkChoiceManager(
       }
 
       Right(())
+
+  /** The fork choice on the unified state layout (spec 018 C4b part 3b), where the head moves with the state or not at
+    * all: through [[BlockchainWriter.moveHeadInPlace]], never [[BlockchainWriter.promoteToCanonicalHead]], which
+    * refuses there.
+    *
+    * `EngineApiService.forkchoiceUpdated` lets through only a head that is the block whose state is held, and a commit
+    * of the next block in place may land between that look and this write. So the head is confirmed by a move of
+    * nothing, written under the state lock against the anchor it was planned from: a commit that landed first makes it
+    * a move back, which is refused, and the best block stays on the block just committed (beacon, plan.md "C4b part 3"
+    * T145). Until C4d a fork choice moves the head off the block whose state is held in no direction; go-ethereum skips
+    * a fork choice that names an ancestor of its head too. The reference counts of the hash store are not touched: the
+    * changeset records are what the unified layout keeps of a block it leaves.
+    *
+    * `currentState` is set only when the head was confirmed: it is read as the head that was executed and applied.
+    *
+    * @return
+    *   `Left("SYNCING")` when the head was not confirmed, and nothing was written; when the plan found the records
+    *   corrupt, the state has failed closed too
+    */
+  private def confirmHeldHead(newState: ForkChoiceState, header: BlockHeader): Either[String, Unit] =
+    def notMoved(why: String): Either[String, Unit] =
+      log.warn(s"Fork choice head ${header.number.value} ${header.hashAsHexString} not applied (SYNCING): $why")
+      Left("SYNCING")
+    // the finalized block it names, by its header (the Engine API has found it on the head's chain); the zero hash
+    // names none, and leaves the one named before (C4d part 1)
+    val finalized =
+      Option.when(newState.finalizedBlockHash != ForkChoiceManager.ZeroHash)(newState.finalizedBlockHash).flatMap {
+        hash =>
+          val named = blockchainReader
+            .getBlockHeaderByHash(BlockHash(hash))
+            .map(finalizedHeader => FinalizedBlock(finalizedHeader.number.value, finalizedHeader.hash.value))
+          if named.isEmpty then
+            log.warn(
+              s"Fork choice names finalized block ${ForkChoiceManager.hex(hash)}, whose header is not stored: the one named before is kept"
+            )
+          named.foreach { block =>
+            // taken, as go-ethereum's SetFinalized takes it: on the held state's chain it only loosens what is kept
+            blockchainWriter.finalizedOfTheState.filter(_.number > block.number).foreach { before =>
+              log.warn(
+                s"Fork choice names finalized block ${block.number}, below the one named before (${before.number})"
+              )
+            }
+          }
+          named
+      }
+    try
+      blockchainWriter.moveHeadInPlace(
+        header,
+        blockchainReader,
+        chunk =>
+          Option.when(chunk.reverse.nonEmpty || chunk.forward.nonEmpty)(
+            s"the state is held at block ${chunk.from.show}, and the head is not moved off it to follow a fork " +
+              "choice on the unified state layout yet (spec 018 C4d)"
+          ),
+        finalized
+      )
+      log.info(
+        s"Fork choice updated: head=${newState.headBlockHash} (the block whose state is held), " +
+          s"safe=${newState.safeBlockHash}, finalized=${newState.finalizedBlockHash}"
+      )
+      currentState.set(Some(newState))
+      Right(())
+    catch
+      case unavailable: StateUnavailable => notMoved(unavailable.reason)
+      // A record that is not what it should be is this datadir's fault, not the fork choice's: the state fails closed
+      // (no further in-place write, no state given out, ERROR) and the head is answered as one not followed (plan.md
+      // "C4b part 1": `Corrupt` fails closed at the Engine API; the escalation is C4d's)
+      case refused: ReorgTooDeep if refused.reason == ReorgRefusal.Corrupt =>
+        blockchainWriter.failStateClosed(s"the changeset records are corrupt (${refused.getMessage})")
+        notMoved(refused.getMessage)
+      case refused: ReorgTooDeep => notMoved(refused.getMessage)
 
   /** Publish the CL head to the registered listener and record it as the requested head — **nothing else**.
     *
@@ -167,6 +244,12 @@ class ForkChoiceManager(
     }
 
 object ForkChoiceManager:
+
+  /** The hash a fork choice names when it names no block (a safe or finalized block before there is one). */
+  val ZeroHash: ByteString = ByteString(new Array[Byte](32))
+
+  private[engine] def hex(hash: ByteString): String =
+    com.chipprbots.ethereum.utils.Hex.toHexString(hash.toArray).take(16)
 
   /** Notification sent by [[ForkChoiceManager]] to its registered listener whenever the CL pushes a fork choice via
     * engine_forkchoiceUpdated. Carries both the head hash (always) and the locally-stored header (when we already have

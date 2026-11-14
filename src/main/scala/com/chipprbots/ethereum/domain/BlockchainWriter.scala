@@ -14,6 +14,11 @@ import com.chipprbots.ethereum.db.storage.ChainWeightStorage
 import com.chipprbots.ethereum.db.storage.ReceiptStorage
 import com.chipprbots.ethereum.db.storage.TransactionMappingStorage
 import com.chipprbots.ethereum.db.storage.TransactionMappingStorage.TransactionLocation
+import com.chipprbots.ethereum.db.storage.pathstate.BlockRef
+import com.chipprbots.ethereum.db.storage.pathstate.FinalizedBlock
+import com.chipprbots.ethereum.db.storage.pathstate.HeadMovePlan
+import com.chipprbots.ethereum.db.storage.pathstate.PathStateStorage
+import com.chipprbots.ethereum.db.storage.pathstate.StateUnavailable
 import com.chipprbots.ethereum.domain.appstate.BlockInfo
 import com.chipprbots.ethereum.utils.Logger
 
@@ -25,8 +30,27 @@ class BlockchainWriter(
     receiptStorage: ReceiptStorage,
     chainWeightStorage: ChainWeightStorage,
     appStateStorage: AppStateStorage,
-    blockAccessListStorage: BlockAccessListStorage
+    blockAccessListStorage: BlockAccessListStorage,
+    // The state on the unified layout (spec 018 Track C), where this node holds it there: the best block and the index
+    // of blocks by number then move only with the state, in a block's own commit or in a move of its head
+    // (moveHeadInPlace), and the writers below that move them alone refuse.
+    pathState: Option[PathStateStorage] = None
 ) extends Logger:
+
+  /** Whether this node holds its state on the unified layout, where the head moves with the state or not at all. */
+  def holdsStateInPlace: Boolean = pathState.isDefined
+
+  /** Refuses, on the unified layout, a write of the best block or the index of blocks by number that does not move the
+    * state with it: the state anchor and the best block are one block there (spec 018 data-model 5.1, I1), and only a
+    * move of the head ([[com.chipprbots.ethereum.db.storage.pathstate.PathStateStorage.moveHead]], with
+    * [[canonicalHeadUpdate]] as its rows) or a block's own commit moves both (plan.md "C4b part 3").
+    */
+  private def refuseOnTheUnifiedLayout(what: String): Unit =
+    if holdsStateInPlace then
+      throw new IllegalStateException(
+        s"$what would move the best block or the index of blocks by number without the state, on the unified state " +
+          "layout, where the two move together or not at all"
+      )
 
   def save(block: Block, receipts: Seq[Receipt], weight: ChainWeight, saveAsBestBlock: Boolean): Unit =
     saveBatch(block, receipts, weight, saveAsBestBlock).commit()
@@ -181,6 +205,7 @@ class BlockchainWriter(
       bestBlockHash: BlockHash,
       bestBlockNumber: BigInt
   ): Unit =
+    refuseOnTheUnifiedLayout(s"saveBestKnownBlocks to block $bestBlockNumber")
     appStateStorage.putBestBlockInfo(BlockInfo(bestBlockHash.value, bestBlockNumber)).commit()
 
   /** Roll back the canonical chain index to `targetNumber`, removing number→hash entries for all blocks above
@@ -193,6 +218,7 @@ class BlockchainWriter(
     * No-op if `currentBest <= targetNumber`.
     */
   def setCanonicalChainHead(targetNumber: BigInt, targetHash: BlockHash, currentBest: BigInt): Unit =
+    refuseOnTheUnifiedLayout(s"setCanonicalChainHead to block $targetNumber")
     if currentBest > targetNumber then
       val batch = ((targetNumber + 1) to currentBest).foldLeft(blockNumberMappingStorage.emptyBatchUpdate) { (acc, n) =>
         acc.and(blockNumberMappingStorage.remove(n))
@@ -212,6 +238,7 @@ class BlockchainWriter(
       newBest: Option[(BlockHash, BigInt)],
       reader: BlockchainReader
   ): Unit =
+    refuseOnTheUnifiedLayout("rewriteCanonicalIndex")
     canonicalIndexUpdate(put, remove, newBest, reader).commit()
 
   /** The batch [[rewriteCanonicalIndex]] commits, uncommitted, so a caller can add to the same atomic write. */
@@ -259,6 +286,27 @@ class BlockchainWriter(
     * Only the index, the lookups and the best-block pointer move; headers, bodies and receipts stay where they are.
     */
   def promoteToCanonicalHead(head: BlockHeader, reader: BlockchainReader): CanonicalMove =
+    refuseOnTheUnifiedLayout(s"promoteToCanonicalHead to block ${head.number.value}")
+    val update = canonicalHeadUpdate(head, reader)
+    // A plain extension rewrites only heights above the old best and clears nothing: not worth a line.
+    if update.reorganises then
+      log.info(
+        "Canonical head moved: head=#{} {} previousBest=#{} rewritten={} clearedAboveHead={} droppedTxLookups={}",
+        head.number.value,
+        head.hash.toHexString,
+        update.previousBest,
+        update.move.adopted.size,
+        update.cleared,
+        update.droppedTxLookups
+      )
+    update.batch.commit()
+    update.move
+
+  /** The batch [[promoteToCanonicalHead]] commits, uncommitted, and what it does: for a caller that writes it with its
+    * own rows in one atomic batch, as a move of the state's head does (spec 018 C4b), and for that caller only. It
+    * reads the index and the best block as they are when it is called: the batch is of that moment.
+    */
+  def canonicalHeadUpdate(head: BlockHeader, reader: BlockchainReader): CanonicalHeadUpdate =
     val oldBest = reader.getBestBlockNumber
     val headNumber = head.number.value
 
@@ -292,23 +340,162 @@ class BlockchainWriter(
       blocks.flatMap(reader.getBlockBodyByHash).flatMap(_.transactionList.map(_.hash.value)).toSet
     val staleLookups = txHashes(dropped) -- txHashes(put.map(_._2))
 
-    // A plain extension rewrites only heights above the old best and clears nothing: not worth a line.
-    if remove.nonEmpty || put.exists(_._1 <= oldBest) then
-      log.info(
-        "Canonical head moved: head=#{} {} previousBest=#{} rewritten={} clearedAboveHead={} droppedTxLookups={}",
-        headNumber,
-        head.hash.toHexString,
-        oldBest,
-        put.size,
-        remove.size,
-        staleLookups.size
-      )
-    canonicalIndexUpdate(put, remove, Some((head.hash, headNumber)), reader)
+    val batch = canonicalIndexUpdate(put, remove, Some((head.hash, headNumber)), reader)
       .and(staleLookups.foldLeft(transactionMappingStorage.emptyBatchUpdate) { (acc, tx) =>
         acc.and(transactionMappingStorage.remove(tx))
       })
-      .commit()
-    CanonicalMove(adopted = put, dropped = droppedAt)
+    CanonicalHeadUpdate(
+      batch = batch,
+      move = CanonicalMove(adopted = put, dropped = droppedAt),
+      previousBest = oldBest,
+      cleared = remove.size,
+      droppedTxLookups = staleLookups.size,
+      reorganises = remove.nonEmpty || put.exists(_._1 <= oldBest)
+    )
+
+  /** '''Moves the head, and the state with it, to `target`''' on the unified layout: with a block's own commit, the one
+    * writer of the best block and the index of blocks by number there (spec 018 data-model 5.1, I1; plan.md "C4b part
+    * 3b"). Each batch of the move ([[PathStateStorage.moveHead]]) carries [[canonicalHeadUpdate]] for the block it ends
+    * on, built when that batch is asked for, so after every batch, and after a crash between two, the anchor, the best
+    * block and the index name one chain. A target that is the head already is a move of nothing, written as one batch
+    * under the state lock: what a caller that confirms the head writes, so that no commit lands between its look at the
+    * head and its write.
+    *
+    * Headers, bodies, receipts and the changeset records stay: a block the head leaves is still known by its hash.
+    *
+    * @param refuse
+    *   why a batch of the move is not to be written, when it is not. Asked for each batch before its rows are built; a
+    *   refusal ends the move there with a [[StateUnavailable]], and the batches before it stand
+    * @param finalized
+    *   the finalized block the fork choice behind this move named: written in the batch that ends on `target`, and the
+    *   store's from then on, only once that batch was written (spec 018 C4d part 1)
+    * @throws IllegalStateException
+    *   on the hash layout, which holds the state of every block and has no head of the state to move
+    * @throws com.chipprbots.ethereum.db.storage.pathstate.ReorgTooDeep
+    *   when the move is refused: nothing was changed
+    * @throws StateUnavailable
+    *   as [[PathStateStorage.moveHead]] throws it, and for a refused batch
+    */
+  def moveHeadInPlace(
+      target: BlockHeader,
+      reader: BlockchainReader,
+      refuse: HeadMovePlan.Chunk => Option[String] = _ => None,
+      finalized: Option[FinalizedBlock] = None
+  ): PathStateStorage.MoveOutcome =
+    val state = pathState.getOrElse(
+      throw new IllegalStateException(
+        s"the head is moved to block ${target.number.value} with the state on the unified state layout only"
+      )
+    )
+    state.moveHead(
+      BlockRef(target.hash.value, target.number.value, target.stateRoot.value),
+      reader.headerLink,
+      chunk =>
+        refuse(chunk).foreach(why => throw new StateUnavailable(why))
+        val head =
+          if chunk.head.hash == target.hash.value then target
+          else
+            reader
+              .getBlockHeaderByHash(BlockHash(chunk.head.hash))
+              .getOrElse(
+                throw new IllegalStateException(
+                  s"the header of block ${chunk.head.show}, which a move of the head was planned through, is gone"
+                )
+              )
+        Some(canonicalHeadUpdate(head, reader).batch)
+      ,
+      finalized
+    )
+
+  /** '''START only''': the batch that makes the index of blocks by number the ancestry of `held`, the block whose state
+    * the disk holds, and the best block `held` (spec 018 data-model 5.1, I1 rule 4 and I6; plan.md "C4b part 4"). For
+    * the reconciliation at start ([[StateReconciliation]]) and for it alone: at runtime the head moves with the state,
+    * in a move ([[moveHeadInPlace]]) or a block's own commit, never the other way round.
+    *
+    * '''Below `held`''': its ancestry by parent hashes, never by the index, for `window` blocks or down to the genesis
+    * or a header that is not stored. Every height whose entry is not the ancestor is rewritten, at whatever depth: the
+    * walk does not stop at the first entry that matches, as [[canonicalHeadUpdate]]'s does, since an entry below one
+    * that matches can still name another block.
+    *
+    * '''Above `held`''': every entry is deleted, up to the old best block and `gapScan` heights beyond the highest
+    * entry found, and never more than `scanAbove` heights above `held`: the old best block may be any number. A scan
+    * that ends at that cap says so (`capped`).
+    *
+    * The transaction lookups of the blocks it drops go, but for those of the transactions the ancestry includes, as
+    * [[canonicalHeadUpdate]] does. Nothing else is written: no header, body, receipt, weight, state row or record.
+    */
+  def heldBlockIndex(
+      held: BlockHeader,
+      reader: BlockchainReader,
+      window: Int,
+      scanAbove: Int,
+      gapScan: Int = BlockchainWriter.IndexGapScan
+  ): HeldBlockIndex =
+    val heldNumber = held.number.value
+    val oldBest = appStateStorage.getBestBlockInfo()
+
+    @tailrec
+    def ancestry(at: BlockHeader, left: Int, acc: List[(BigInt, BlockHash)]): List[(BigInt, BlockHash)] =
+      val withAt = (at.number.value, at.hash) :: acc
+      if left <= 1 || at.number.value == 0 then withAt
+      else
+        reader.getBlockHeaderByHash(at.parentHash).filter(_.hash == at.parentHash) match
+          case Some(parent) => ancestry(parent, left - 1, withAt)
+          case None         => withAt
+    val chain = ancestry(held, window.max(1), Nil)
+    val put = chain.filterNot((number, hash) => reader.getCanonicalHashByNumber(number).contains(hash))
+
+    val ceiling = heldNumber + scanAbove
+    @tailrec
+    def above(height: BigInt, highest: BigInt, acc: List[(BigInt, BlockHash)]): (List[(BigInt, BlockHash)], Boolean) =
+      if height > ceiling then (acc.reverse, true)
+      else if height > highest + gapScan then (acc.reverse, false)
+      else
+        reader.getCanonicalHashByNumber(height) match
+          case Some(hash) => above(height + 1, height, (height, hash) :: acc)
+          case None       => above(height + 1, highest, acc)
+    val (removed, capped) = above(heldNumber + 1, oldBest.number.max(heldNumber), Nil)
+
+    val replaced: Seq[(BigInt, BlockHash)] =
+      put.flatMap((number, hash) => reader.getCanonicalHashByNumber(number).filterNot(_ == hash).map(number -> _))
+    // The ancestry from the lowest height rewritten up: a transaction a dropped block shared with any of these blocks
+    // keeps its lookup, and is pointed at the ancestor that includes it (beacon), not only at a rewritten one.
+    val reincluded: Seq[(BigInt, BlockHash)] =
+      put.headOption.fold(Seq.empty[(BigInt, BlockHash)])((lowest, _) => chain.filter(_._1 >= lowest))
+    def txHashes(blocks: Seq[BlockHash]): Set[ByteString] =
+      blocks.flatMap(reader.getBlockBodyByHash).flatMap(_.transactionList.map(_.hash.value)).toSet
+    val staleLookups = txHashes((replaced ++ removed).map(_._2)) -- txHashes(reincluded.map(_._2))
+    val putHashes = put.map(_._2).toSet
+    val relocated =
+      reincluded.filterNot((_, hash) => putHashes(hash)).foldLeft(transactionMappingStorage.emptyBatchUpdate) {
+        case (acc, (_, hash)) =>
+          reader.getBlockBodyByHash(hash).fold(acc)(body => acc.and(saveTxsLocations(hash, body)))
+      }
+    val bestMoves = oldBest.hash != held.hash.value || oldBest.number != heldNumber
+
+    val batch = canonicalIndexUpdate(
+      put,
+      removed.map(_._1),
+      Option.when(bestMoves)((held.hash, heldNumber)),
+      reader
+    ).and(staleLookups.foldLeft(transactionMappingStorage.emptyBatchUpdate) { (acc, tx) =>
+      acc.and(transactionMappingStorage.remove(tx))
+    }).and(relocated)
+    HeldBlockIndex(batch, oldBest, put, replaced, removed, staleLookups.size, bestMoves, capped)
+
+  /** The state on the unified layout takes no further write ([[PathStateStorage.failClosed]]): for a caller that found
+    * this datadir's own changeset records corrupt. Nothing on the hash layout.
+    */
+  def failStateClosed(why: String): Unit = pathState.foreach(_.failClosed(why))
+
+  /** Drops the forward layer of `blockHash` on the unified layout, with the layers built on it
+    * ([[PathStateStorage.dropLayer]]): the block was found invalid after it was executed, and no fork choice may move
+    * the head to it. Nothing on the hash layout.
+    */
+  def dropForwardLayer(blockHash: ByteString): Unit = pathState.foreach(_.dropLayer(blockHash))
+
+  /** The finalized block the state on the unified layout is held to ([[PathStateStorage.finalizedBlock]]). */
+  def finalizedOfTheState: Option[FinalizedBlock] = pathState.flatMap(_.finalizedBlock)
 
   private def saveBlockNumberMapping(number: BigInt, hash: BlockHash): DataSourceBatchUpdate =
     blockNumberMappingStorage.put(number, hash.value)
@@ -326,7 +513,59 @@ class BlockchainWriter(
   */
 final case class CanonicalMove(adopted: Seq[(BigInt, BlockHash)], dropped: Seq[(BigInt, BlockHash)])
 
+/** The batch that makes a block the canonical head ([[BlockchainWriter.canonicalHeadUpdate]]), not yet written.
+  *
+  * @param previousBest
+  *   the best block's number when it was built
+  * @param cleared
+  *   heights whose index entry it deletes
+  * @param droppedTxLookups
+  *   transaction lookups it deletes
+  * @param reorganises
+  *   it rewrites a height at or below the previous best block, or deletes one: more than an extension
+  */
+final case class CanonicalHeadUpdate(
+    batch: DataSourceBatchUpdate,
+    move: CanonicalMove,
+    previousBest: BigInt,
+    cleared: Int,
+    droppedTxLookups: Int,
+    reorganises: Boolean
+)
+
+/** The batch [[BlockchainWriter.heldBlockIndex]] builds, not yet written, and what it does.
+  *
+  * @param previousBest
+  *   the best block as it was when it was built
+  * @param put
+  *   the heights it writes with the held block's ancestor (ascending)
+  * @param replaced
+  *   what the index named at those heights before, where it named a block
+  * @param removed
+  *   the entries above the held block it deletes
+  * @param capped
+  *   the scan above the held block stopped at its cap: heights above it were not looked at
+  */
+final case class HeldBlockIndex(
+    batch: DataSourceBatchUpdate,
+    previousBest: BlockInfo,
+    put: Seq[(BigInt, BlockHash)],
+    replaced: Seq[(BigInt, BlockHash)],
+    removed: Seq[(BigInt, BlockHash)],
+    droppedTxLookups: Int,
+    movesBest: Boolean,
+    capped: Boolean
+):
+  /** Whether it writes anything at all: a datadir whose index and best block are the held block's takes no write. */
+  def writes: Boolean = put.nonEmpty || removed.nonEmpty || movesBest || droppedTxLookups > 0
+
 object BlockchainWriter:
+
+  /** How many heights above the highest entry found the reconciliation at start still looks for another: entries left
+    * above a gap (a removal that stopped at the first height with no entry) are found too.
+    */
+  val IndexGapScan: Int = 1024
+
   def apply(storages: BlockchainStorages): BlockchainWriter =
     new BlockchainWriter(
       storages.blockHeadersStorage,
@@ -336,7 +575,8 @@ object BlockchainWriter:
       storages.receiptStorage,
       storages.chainWeightStorage,
       storages.appStateStorage,
-      storages.blockAccessListStorage
+      storages.blockAccessListStorage,
+      pathState = storages.pathStateStorage
     )
 
 /** Outcome of [[BlockchainWriter.repairBestBlockNumberMapping]]. */

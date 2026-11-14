@@ -267,6 +267,49 @@ class StateViewSpec extends AnyFlatSpec with Matchers:
       log.movesBetween(2, 3) shouldBe Some(Seq(next))
     }
 
+  it should "keep no more bytes of prior values than it may, letting the oldest moves go: the views older than them are stale" taggedAs
+    UnitTest in {
+      val node = ByteString(Array.fill[Byte](100)(7))
+      // room for two moves' prior values and a little more
+      val bytesOfOne = p.rowKey.length.toLong + node.length
+      val log = new StateMoveLog(maxMoves = 8, Some(first), maxBytes = 2 * bytesOfOne + 10)
+      val moves = (1 to 3).map(n => StateMove(block(n + 1, first.stateRoot), Map(p -> Some(node))))
+      moves.foreach(move => log.inFlight(move)(()))
+      // the first went to make room for the third; a view made before it can no longer be given back what it read
+      log.movesBetween(0, log.epoch) shouldBe None
+      log.movesBetween(2, log.epoch) shouldBe Some(moves.drop(1))
+      // a move that is by itself more than all may hold is kept while it is the newest: a reader of it must find it
+      val large = StateMove(block(9, first.stateRoot), Map(q -> Some(ByteString(Array.fill[Byte](1000)(1)))))
+      log.inFlight(large)(())
+      log.movesBetween(log.epoch - 2, log.epoch) shouldBe Some(Seq(large))
+      log.movesBetween(4, log.epoch) shouldBe None
+    }
+
+  it should "empty itself for a barrier, so that every view made before it is stale; and keep the anchor when the barrier's write failed" taggedAs
+    UnitTest in {
+      val log = new StateMoveLog(maxMoves = 4, Some(first))
+      log.inFlight(StateMove(second, Map(p -> None)))(())
+      log.movesBetween(0, log.epoch) should not be empty
+      val third = block(3, second.stateRoot)
+      log.inFlightBarrier(third)(())
+      log.anchor shouldBe Some(third)
+      log.epoch shouldBe 4
+      log.movesBetween(0, 4) shouldBe None
+      log.movesBetween(2, 4) shouldBe None
+      log.movesBetween(4, 4) shouldBe Some(Nil)
+      // after it, moves are logged as ever
+      val next = StateMove(block(4, second.stateRoot), Map(q -> None))
+      log.inFlight(next)(())
+      log.movesBetween(4, log.epoch) shouldBe Some(Seq(next))
+      // a barrier whose write fails: the anchor stays, the epoch moves on, and what was older is stale all the same
+      an[IllegalStateException] should be thrownBy log.inFlightBarrier(block(5, second.stateRoot))(
+        throw new IllegalStateException("the batch failed")
+      )
+      log.anchor shouldBe Some(block(4, second.stateRoot))
+      log.epoch shouldBe 8
+      log.movesBetween(4, 8) shouldBe None
+    }
+
   it should "keep the anchor when a batch failed, and still count the epoch" taggedAs UnitTest in {
     val log = new StateMoveLog(maxMoves = 4, Some(first))
     log.publish(StateMove(second, Map(p -> None)))
@@ -355,3 +398,25 @@ class StateViewSpec extends AnyFlatSpec with Matchers:
       withClue(s"'$value': ")(an[IllegalStateException] should be thrownBy StateAnchor.decode(value))
     }
   }
+
+  "The finalized block's row" should "be the string v1:<block hash>:<number>, and refuse what it cannot read" taggedAs
+    UnitTest in {
+      val block = FinalizedBlock(BigInt(1234), ByteString(Array.tabulate[Byte](32)(_.toByte)))
+      val encoded = FinalizedBlock.encode(block)
+      encoded shouldBe s"v1:${(0 until 32).map(i => f"$i%02x").mkString}:1234"
+      FinalizedBlock.decode(encoded) shouldBe block
+      val hash = "ab" * 32
+      Seq(
+        "",
+        "v1",
+        s"v2:$hash:5",
+        s"v1:$hash",
+        s"v1:$hash:",
+        s"v1:$hash:-5",
+        s"v1:${"ab" * 31}:5",
+        s"v1:${"zz" * 32}:5"
+      )
+        .foreach { value =>
+          withClue(s"'$value': ")(an[IllegalStateException] should be thrownBy FinalizedBlock.decode(value))
+        }
+    }

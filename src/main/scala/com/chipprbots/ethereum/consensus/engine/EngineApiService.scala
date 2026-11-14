@@ -57,6 +57,14 @@ class EngineApiService(
 )(implicit blockchainConfig: BlockchainConfig, typedScheduler: org.apache.pekko.actor.typed.Scheduler)
     extends Logger:
 
+  // The gate for a head on the unified layout and the layout itself are wired apart: they must agree, or an executed
+  // payload would be indexed by number on that layout, and the fork choice's head left ungated (beacon, C4d part 2a).
+  // (a spec's stand-in service, which overrides what it answers, may be built with no writer at all)
+  require(
+    Option(blockchainWriter).forall(writer => stateHeldInPlace.isDefined == writer.holdsStateInPlace),
+    "the Engine API is told the block whose state is held exactly when the state is held in place"
+  )
+
   import org.apache.pekko.util.Timeout
   import scala.concurrent.duration.*
   implicit private val askTimeout: Timeout = Timeout(3.seconds)
@@ -220,7 +228,7 @@ class EngineApiService(
   // chain through an optimistically-accepted descendant.
   private val acceptedChildrenByParent =
     new java.util.concurrent.ConcurrentHashMap[ByteString, java.util.Set[ByteString]]()
-  private val zeroHash = ByteString(new Array[Byte](32))
+  private val zeroHash = ForkChoiceManager.ZeroHash
 
   /** Mark `hash` as INVALID and recursively invalidate every optimistically-accepted descendant. All descendants
     * inherit the same `latestValidHash`.
@@ -625,11 +633,23 @@ class EngineApiService(
                     blockchainConfig.isPragueTimestamp(block.header.unixTimestamp) &&
                       suppliedRequests != derivedRequests
                   if requestsMismatch then
-                    // The block executed and its state is committed (applied); it will never be canonical.
-                    reorgState.abandonBlockStates(Seq((block.header.number.value, block.header.hash.value)))
                     val lvh = parentHeader.map(_.hash.value).getOrElse(zeroHash)
-                    blockchainWriter.removeBlockByHash(BlockHash(payload.blockHash)).commit()
-                    markInvalidRecursive(payload.blockHash, lvh)
+                    if stateHeldInPlace.isDefined then
+                      // The unified layout kept its state as a forward layer: the block is marked invalid first, so a
+                      // fork choice that comes in between finds it so, and then its layer, with what stands on it, and
+                      // the recorded execution go (spec 018 C4d part 2a; beacon).
+                      markInvalidRecursive(payload.blockHash, lvh)
+                      // under the block's own gate, as the record it forgets is made under it
+                      com.chipprbots.ethereum.ledger.BlockImportGate.withBlock(block.header.hash.value) {
+                        blockchainWriter.dropForwardLayer(block.header.hash.value)
+                        com.chipprbots.ethereum.ledger.BlockImportGate.forget(block.header.hash.value)
+                      }
+                      blockchainWriter.removeBlockByHash(BlockHash(payload.blockHash)).commit()
+                    else
+                      // The block executed and its state is committed (applied); it will never be canonical.
+                      reorgState.abandonBlockStates(Seq((block.header.number.value, block.header.hash.value)))
+                      blockchainWriter.removeBlockByHash(BlockHash(payload.blockHash)).commit()
+                      markInvalidRecursive(payload.blockHash, lvh)
                     executionErrorReason.set(
                       Some(
                         s"INVALID_REQUESTS: executionRequests mismatch " +
@@ -656,7 +676,12 @@ class EngineApiService(
                     } && blockchainReader
                       .getBlockHeaderByNumber(block.header.number.value)
                       .forall(_.hash == block.header.hash)
-                    if extendsCanonical then blockchainWriter.storeBlock(block).commit()
+                    // On the unified layout an executed payload is stored by its hash only, whatever its parent: the index
+                    // of blocks by number is the ancestry of the block whose state is held, and moves with the state,
+                    // in a fork choice's move of the head (spec 018 C4d part 2a; beacon). Its state is a forward layer,
+                    // not a reference count to take back out.
+                    if stateHeldInPlace.isDefined then blockchainWriter.storeBlockByHashOnly(block).commit()
+                    else if extendsCanonical then blockchainWriter.storeBlock(block).commit()
                     else
                       blockchainWriter.storeBlockByHashOnly(block).commit()
                       // A side payload is executed but not canonical: take its reference-count changes back out NOW,
@@ -680,7 +705,8 @@ class EngineApiService(
                       "[ENGINE-API] newPayload #{}: EXECUTED OK (txs={} sidechain={} requests={} headerStateRoot={}...)",
                       payload.blockNumber,
                       block.body.numberOfTxs,
-                      !extendsCanonical,
+                      // on the unified layout every executed payload is a forward layer until a fork choice moves to it
+                      if stateHeldInPlace.isDefined then "layer" else (!extendsCanonical).toString,
                       derivedRequests.size,
                       block.header.stateRoot.value.take(8).map("%02x".format(_)).mkString
                     )
@@ -795,7 +821,7 @@ class EngineApiService(
   ): IO[Either[String, ForkchoiceUpdatedResponse]] = IO.defer {
     // Check invalid/unvalidated blocks BEFORE applying fork choice state
     // (applyForkChoiceState calls promoteToCanonicalHead, which would make the block canonical)
-    val zeroHash = ByteString(new Array[Byte](32))
+    val zeroHash = ForkChoiceManager.ZeroHash
 
     if invalidBlocks.containsKey(forkChoiceState.headBlockHash) then
       val latestValid = Option(invalidBlocks.get(forkChoiceState.headBlockHash))
@@ -815,7 +841,11 @@ class EngineApiService(
       // The state on disk is one block's, and the head moves with it, in the batch that commits a block. A move of
       // the head to any other block needs that block's state: a forward layer, or a move back along the changeset
       // records, which arrive with the overlay and the head move (spec 018 C4a, C4b). Until then this node cannot
-      // follow the head it is given, and says so: nothing is moved, published or marked.
+      // follow the head it is given, and says so: nothing is moved or marked. The head is published and recorded as the
+      // one asked for, as the other SYNCING branches do (notify-only: it writes nothing), so that whatever imports the
+      // blocks up to it knows where they lead (beacon, C4b part 4: after a reconciliation at start the head is below the
+      // consensus layer's).
+      forkChoiceManager.notifyBeaconHead(forkChoiceState)
       log.warn(
         "[ENGINE-API] forkchoiceUpdated: head {} is not the block whose state this node holds; the unified state " +
           "layout cannot move its head yet (SYNCING)",
@@ -926,8 +956,35 @@ class EngineApiService(
         EngineApiMetrics.recordForkchoiceUpdated("INVALID")
         IO.pure(Left("invalid forkchoice state: finalized block is not an ancestor of head"))
       else
+        // On the unified state layout the fork choice confirms the head under the state lock, through a move of the
+        // head, and may wait there behind a move under way: on a thread that may block (beacon, spec 018 C4b part 3b).
+        // The hash store's runs where it always ran.
+        val applied: IO[Either[String, Unit]] =
+          if stateHeldInPlace.isDefined then IO.blocking(forkChoiceManager.applyForkChoiceState(forkChoiceState))
+          else IO.pure(forkChoiceManager.applyForkChoiceState(forkChoiceState))
 
-        forkChoiceManager.applyForkChoiceState(forkChoiceState) match
+        applied.flatMap {
+          case Left(_) if stateHeldInPlace.isDefined && isNowAnAncestorOfTheHead(headHeader) =>
+            // The head was the block whose state is held when it was looked at, and the next block was committed in
+            // place before the fork choice was written: the head it names is now a VALID ancestor of the canonical
+            // head, which is answered as the branch above answers one (execution-apis paris.md engine_forkchoiceUpdatedV1
+            // point 2; go-ethereum "Ignoring beacon update to old head"). Nothing was written, and no payload is built.
+            log.info(
+              "[ENGINE-API] forkchoiceUpdated names #{} {}, which a block committed in place since made an ancestor of " +
+                "the head #{}: head kept, no payload built",
+              headHeader.map(_.number.value).getOrElse(BigInt(-1)),
+              hexOf(forkChoiceState.headBlockHash),
+              blockchainReader.getBestBlockNumber
+            )
+            EngineApiMetrics.recordForkchoiceUpdated("VALID")
+            IO.pure(
+              Right(
+                ForkchoiceUpdatedResponse(
+                  payloadStatus = PayloadStatusV1(Valid, latestValidHash = Some(forkChoiceState.headBlockHash)),
+                  payloadId = None
+                )
+              )
+            )
           case Left(_) =>
             // Head not known — return SYNCING so CL knows we need newPayload
             EngineApiMetrics.recordForkchoiceUpdated("SYNCING")
@@ -1099,9 +1156,17 @@ class EngineApiService(
           // end else (invalidAttrs check)
           // end else (safe/finalized check)
           // end case Right
+        }
       // end else (blockFullyStored check)
     // end else (invalidBlocks check)
   }
+
+  /** Whether `head` is canonical at its height and below the best block: a VALID ancestor of the canonical head. */
+  private def isNowAnAncestorOfTheHead(head: Option[BlockHeader]): Boolean =
+    head.exists { header =>
+      header.number.value < blockchainReader.getBestBlockNumber &&
+      blockchainReader.getBlockHeaderByNumber(header.number.value).exists(_.hash == header.hash)
+    }
 
   /** Mempool selection for a proposer build on `parent` at `timestamp`, in go-ethereum's miner order:
     *   1. chain-ID filter;

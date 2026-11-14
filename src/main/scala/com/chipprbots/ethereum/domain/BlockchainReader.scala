@@ -181,6 +181,34 @@ class BlockchainReader(
   def getBlockHeaderByHash(hash: BlockHash): Option[BlockHeader] =
     blockHeadersStorage.get(hash.value)
 
+  /** The block `hash` as its header gives it, for a move of the head to be planned from
+    * ([[com.chipprbots.ethereum.db.storage.pathstate.HeadMovePlan.Sources.link]]): the header stored under that hash,
+    * and nothing unless it is the header of that hash. Never by the index of blocks by number, which may run ahead of
+    * the state or lie behind it.
+    */
+  def headerLink(hash: ByteString): Option[com.chipprbots.ethereum.db.storage.pathstate.HeadMovePlan.Link] =
+    blockHeadersStorage.get(hash).filter(_.hash.value == hash).map { header =>
+      com.chipprbots.ethereum.db.storage.pathstate.HeadMovePlan.Link(
+        com.chipprbots.ethereum.db.storage.pathstate
+          .BlockRef(header.hash.value, header.number.value, header.stateRoot.value),
+        header.parentHash.value
+      )
+    }
+
+  /** The ancestor of `from` at height `number` (or `from` itself), by its parent hashes: never by the index of blocks
+    * by number. `None` when the walk meets a header that is not stored, or `number` is above `from`.
+    */
+  def ancestorAt(from: BlockHeader, number: BigInt): Option[BlockHeader] =
+    @scala.annotation.tailrec
+    def down(at: BlockHeader): Option[BlockHeader] =
+      if at.number.value == number then Some(at)
+      else if at.number.value < number then None
+      else
+        blockHeadersStorage.get(at.parentHash.value) match
+          case Some(parent) if parent.hash == at.parentHash => down(parent)
+          case _                                            => None
+    down(from)
+
   /** Allows to query a blockBody by block hash
     *
     * @param hash

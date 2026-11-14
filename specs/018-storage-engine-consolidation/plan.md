@@ -2226,6 +2226,10 @@ is the later word, and the tasks are annotated.
   old head, forwarded from its records. **Retention must not prune a record above the fork point while such an
   attempt is unsettled** (forge): every in-place commit prunes, so a branch longer than the retained depth would
   delete what the way back needs. The slice offers a hold for that; its caller is C4e.
+- **A block of the branch that is invalid** (forge W4; the user's decision of 2026-11-14): the blocks of the branch
+  already committed in place stay the head when they already outweigh the old head, as `ConsensusImpl.settleHead`
+  keeps the executed prefix today; only otherwise is the head moved back to the old head along the records. C4e
+  builds it.
 - **After the write** a sample that does not match means the store wrote wrong bytes: the node fails closed (no
   in-place writer goes on, the Engine API answers SYNCING) and takes the escalation route. It never rolls back
   onto such a store.
@@ -2235,8 +2239,9 @@ refusals. Part 2: the move, with the split of `BlockchainWriter` and the one-bat
 from the callers). Part 3: the callers that exist on the guard (`test_rewindToBlock`, the index writers), and the
 table of pointer writers as a test, with the rows the audit missed (forge: the SYNC-FORK resolver's
 `discardBlocksAfter`, which steps the best block down one batch at a time under no lock;
-`PivotAnchor.reanchor`; `repairBestBlockNumberMapping`). Part 4: the reconciliation at start, placed after
-`fixDatabase` and `repairBestBlockMapping`, which write the pointer and the index before it today.
+`PivotAnchor.reanchor`; `repairBestBlockNumberMapping`). Part 4: the reconciliation at start, in place of
+`fixDatabase` and `repairBestBlockMapping` on the unified layout (as built, below: they trust the best block or the
+index, and would undo it).
 
 **Recorded and not decided here.** A legal reorganisation deeper than 512 blocks during a time without finality
 is refused and escalated (retention's bound; an accepted risk, to be stated in the operator's notes).
@@ -2300,6 +2305,589 @@ fault met where a block's state is taken as well as where it is committed, and a
 the real catch, as cases; test mode's parity; the reorganisation's answer after an executed prefix, which is
 not met as the code stands and is said so in the code and in B-242 (it must tell the settled prefix and the old
 branch's blocks when a branch is executed on layers, C4e).
+
+#### C4b part 1: the plan of a move, and why one is refused (2026-11-13)
+
+**What it is.** `HeadMovePlan.of(anchor, epoch, target, sources, limits)` says how the disk's state gets from the
+block it holds to another, and changes nothing: the blocks to reverse, newest first, by the headers of the
+anchor's own changeset records; the blocks to apply, oldest first, by the target's headers; the fork, which is the
+highest block the two chains name by one hash. It is given no index of blocks by number and no chain weight, so it
+can ask neither (T136's two cases of an index ahead of the anchor and behind it are met by what the plan is made
+from; the caller's `link`, built from headers by hash, is part 3's to test with a reader whose index throws). A
+block to apply is taken from its record where it has a complete one that leads from its parent, since a record is
+exact and needs no settling, and from its layer otherwise. `PathStateStorage.planMove(target, link)` makes it from
+what the store keeps, off the lock. Nothing calls it yet: the move is part 2.
+
+**Three answers.** `Planned`; `Refused(reason)`, which executing blocks again does not change; `NotHeld(heldTo)`,
+where a block on the way up has neither a record nor a layer and `heldTo` is the highest block a move could be made
+to as things are (the caller executes from there), or `None` where no fork was found at all (the target's headers
+do not lead here, or it lies further above the head than a move reaches: a sync's matter, not re-execution's).
+
+**The refusals, asked for each block to reverse in this order**, so that the answer does not depend on what happens
+to have been pruned:
+
+1. `Finalized`: the block is the finalized one, by number **and hash**. A block of another hash at that height is
+   not it: the head is then on a branch the consensus client left, and the way back is open (beacon: a number alone
+   would refuse that move, and `Finalized` is the one refusal that does not escalate, so the node would be stuck).
+2. `Pivot`: block 0, or a block at or below `state.origin`, the block this datadir's state began at (a new
+   AppState key, written by the genesis commit; SNAP finalization and checkpoint import write it with their anchor,
+   C5a and E.1, B-243). A datadir that does not say where its state began answers `Deep` there.
+3. `Deep` by policy: more blocks than `state.reorg.max-depth` allows. In the archive mode with `floor`, which keeps
+   every record, that is what one plan holds (65,536 blocks), unless a depth is configured.
+4. By the record: gone below `state.changeset.pruned-to` is `Deep` (the physical bound: what retention left, which
+   is not always what its formula says); gone at or above that mark, unreadable, or not its block's, is `Corrupt`,
+   a refusal of its own that is never said as `Deep`; a tombstone is `Incomplete`.
+
+A fork exactly at the finalized block, at the origin, or at the block below the lowest record is planned: that
+block is not reversed and its record is never read.
+
+**Recorded, with the slice that owns it.**
+- **A depth met above the finalized block is said as `Deep`** even when the fork would have lain below it: the walk
+  never came to it. With retention capped at 512 and more than that without finality, a head that breaks finality
+  would be escalated and followed. That a head descends from the finalized block is asked of its headers **before
+  a move is planned** (C4d, at the `forkchoiceUpdated`: `-38002`), and not inside a plan of the state (beacon).
+- **`Corrupt` fails closed** at the Engine API (C4d): SYNCING, no in-place writer goes on, ERROR, then the
+  escalation route; never INVALID, never as `Deep`.
+- **`NotHeld(None)` is SYNCING and a sync**, not re-execution (C4d, C4e).
+- `ReorgTooDeep` and `StateUnavailable` are thrown from these answers by the move (part 2), which also carries
+  `heldTo`.
+
+**The mutation run**: 44 mutants, all caught. One was missed at first (a genesis committed to a datadir that
+says where a state began) and got a case. The walk (a move to the anchor walked; a target's header of another
+block; a meeting block its header does not describe; the anchor's chain reversed whatever the target's height;
+the reverse set out of order; a parent given its child's state root); the bound above the head, on both sides of
+it; each refusal, its boundary and its place in the order (the finalized block reversed, taken by its number
+alone, not looked at, or asked after the depth; the origin and block 0; one block more than the policy; a record
+gone at the mark itself, where nothing was pruned, above the mark; a record of another number or state root; a
+tombstone taken for a record); the target's headers (under another hash, of another height); the sources (a
+layer preferred to a record; a record on another parent or another state; a layer on another parent; what is held
+said to end at the fork; a record written for a block that has one); the chunks; and the store (no origin written
+at genesis, or left behind when the state is destroyed; a plan without the finalized block, the policy, the mark
+or the origin; the depth taken without the finalized block; the bounds wrapping round; a plan given out though
+the state moved under it, or made again one time fewer; the archive's cap). Twenty-one of them were run before
+the reads' changes and not again, the code they break being unchanged.
+
+**Reads after code (forge, beacon): both APPROVE WITH CHANGES, nothing critical.** Verified by them in code: the
+fork and every parent named are right (each parent comes from a record and is held to its header at the next step
+or at the meeting point; a forward parent is held by hash and height); both walks end on hostile headers; with the
+guard off nothing changes (`commitGenesis` and the new key are reached only on the unified layout). Taken:
+- **The bound on the target's chain no longer overrides the refusals** (forge): it counted every header walked, so
+  a deep move answered "not held", which sends the caller to execute blocks again for nothing, and in the archive
+  mode capped a re-adoption at about a thousand blocks. It now bounds how far **above** the head a target lies;
+  below that each header walked is a block reversed.
+- **The finalized block by hash** (beacon), as above.
+- **A plan is made again if the state moved while it was made** (beacon): a commit prunes records and moves the
+  mark in one batch, and a walk that began before it would call the records corrupt. No answer is given out that
+  the epoch moved under; after a few tries, `NotHeld(None)`.
+- **A hard cap where nothing else bounds a reverse** (both), as above; a deep move in the archive mode that streams
+  its records is part 2's.
+- **Corruption on the forward side is said at ERROR** (forge): the block can still be applied from its layer or
+  executed again, and a record is then written over the bad one, so it is said where it is last seen.
+- The bounds are added without wrapping round; the detail of a chain that shares no block with this node's.
+
+#### C4b part 2a: the move of the head in the store (2026-11-13)
+
+**What it is.** `PathStateStorage.moveHead(target, link, extraFor)` plans the move (part 1) and writes it: as one
+batch, or as a chain of batches of at most `state.move.max-blocks-per-batch` blocks. Each batch holds the rows, the
+records of the blocks that had none, the anchor, and **what the caller gives for it** (`extraFor`, asked for
+outside the state lock, once for each batch and again after a re-plan): its index of blocks by number and its
+best-block pointer. So after any batch, and after a crash between two, the anchor and the best block are one
+block, on the way from the old head down to the fork and up to the target. Nothing in the node calls it yet; the
+callers that exist on the guard are part 3, and `BlockchainWriter`'s rows part 2b.
+
+**A batch is built against a virtual disk** (`MoveBatch`): the disk's rows under what the batch has done so far.
+A block reversed must find at every position what its record says it left; a record applied again must find what
+it was applied over (not where it names no prior, as a layer's is not: the rows a trie left behind when it had
+too many to list). A block applied from its layer is settled against the virtual rows of the tries it replaces,
+with the bounds of an in-place commit held on **those** rows and not on the disk's: an owner the batch has shrunk
+is listed as a commit on its parent's state would list it, and one it has grown is not (forge, beacon: else the
+record of a block, and whether its old rows stay, would depend on how a move was cut into batches). The account
+trie's root on the virtual disk must be the state root of the block the batch ends on. All of that is before
+anything is written; a batch that fails it writes nothing, and the batches before it stand. What is written is
+each position whose final value differs from the disk's, and a reader of the old state is given back the disk's
+row for exactly those.
+
+**A promotion is that batch for one block.** `promote` goes through the same builder; the 411 specs of the store
+that existed before passed unchanged.
+
+**One move at a time, and no commit between two batches.** A move holds a lock of its own from its plan to its
+last batch and says it is under way (`moveInProgress`, with `movesStarted` for who builds on the head and must
+know a move began meanwhile). A writer that adopts a block looks at that under the state lock; if a move is under
+way it lets the state lock go, waits for the move's end and asks again. It does not take the move's lock
+otherwise: writers queue where they always did, in the fair state lock. A commit that got in just before a move
+began makes the move's first batch find another head, and the move is planned again (three times at most); a
+head moved under a later batch stops the move where it is.
+
+**Retention.** A batch that only applies blocks prunes as the commit of a block does, and never a height it
+records itself (the index of a height is read from the disk, which does not hold what the batch writes there). A
+batch that reverses a block prunes nothing: the records above the fork are the way back.
+
+**A store that wrote other bytes than it was given fails closed.** Up to 64 of the rows a batch wrote are read
+back. A mismatch cannot come from anything but the store: what is kept in memory follows the disk first, and then
+nothing is written in place and **no state is given out**, by a view or an overlay commit, until the node is
+started again (beacon: a block executed on such a store could be answered INVALID, and a consensus client keeps
+that verdict).
+
+**Left for part 2b** (recorded by the reads): a bound on a batch by bytes and a barrier move above it; the layers
+of a plan pinned for the whole move (an eviction between two batches stops the move, which fails closed);
+`max-view-age-moves` against batches of one block; the hold that keeps retention off the records while a
+reverse-then-commit attempt is unsettled; `BlockchainWriter` split into a builder of its rows and a commit, with
+the one-batch test (T137, T147); the metrics. For C4e: the miner reads `movesStarted` before and after it
+builds, with the flag (forge). `moveHead` waits and may be long: its callers run it where a thread may block
+(beacon).
+
+**The mutation run**: 50 mutants; 48 caught, 2 equivalent. The batch builder (a reversed or re-applied block not
+held to the disk; a reverse that writes what the block left; a re-applied record that writes its priors; a layer
+read over the disk and not over the batch so far; a replaced trie settled against the disk's rows alone, or with
+the batch's deletes shown, or bounded on the disk's rows and not the virtual ones, in rows or in bytes; rows of an
+unlisted trie not written; the root not held to the target's; every touched row written, changed or not; a reader
+of the old state given the new rows; a tombstone or a record over its bound or an unlisted trie's block treated as
+an ordinary record); the move (a commit between two batches; a move not said to be under way, or said to be after
+its end; a dropped layer applied; a batch written though the epoch moved; the caller's rows of a move to the head
+not written; no re-plan, or a re-plan after a later batch; a layer that does not stand kept; pruning in a reversing
+batch, of heights the batch records, or counted from its last block; no record for a layer's block; the caller's
+rows or the anchor left out of the batch; one batch whatever the size; no `heldTo`; the layers applied kept, or
+dropped between batches, or kept after a move that failed; a move inside a move; a move not counted); and the
+store that failed its read-back (written to again, moved, read, given an executed block, or its promotion or batch
+saying nothing). **Equivalent**: the check that the anchor is where a batch starts, with the epoch checked too (the
+anchor never moves without the epoch); and the drop of layers after a one-layer batch that is not the last (records
+lie on a prefix of the blocks applied, so every later block is a layer on it). Three cases were added for mutants
+the first run missed: a branch that leaves a trie as the old one left it writes none of its rows; a record that
+became a tombstone under the plan is named; a layer dropped between two batches stops the move where it is.
+
+**Reads after code (forge, beacon, vault): all APPROVE WITH CHANGES, nothing critical.** Verified by them in
+code: the coalescing is exact for a trie reset earlier in the batch, a reset that is reversed, and a contract
+destroyed and made again in one block; the reverse check is sound above an older tombstone, and the reverse of a
+prior of none over a row left behind deletes that row, rightly; the views of the old head, behind it, through
+fork layers and through layers being promoted stay right across one batch and across several; no key is written
+twice or deleted after it is written in a batch; rows, records and anchor recover together (one write-ahead log,
+never disabled); no commit can land between two batches; with the guard off nothing changes. Taken: the bounds
+on the virtual rows (above); the layers a later batch needs are not dropped between batches; the fail-closed
+store gives out no state, and its memory follows the disk before it says so; records are read past the block
+cache; the move's lock is fair, and a move asked for from inside a move is refused.
+
+#### C4b part 2b: the writer's rows in the move's batch (2026-11-13)
+
+**The head's index rows are built apart from their commit.** `BlockchainWriter.canonicalHeadUpdate(head, reader)`
+builds the batch that makes a block the canonical head (its ancestry in the index of blocks by number, nothing
+above it, the best-block pointer, the transaction lookups of the blocks it drops) and writes nothing;
+`promoteToCanonicalHead` is that batch committed, with its log line. With the guard off nothing changes, and a
+spec holds it to that byte for byte: two stores of the same chains, one promoted and one given the builder's batch,
+are equal after a move up, across, down and to the head itself.
+
+**The move writes them in its batch** (T137). On the execution-apis chain imported on the unified layout, a move
+whose `extraFor` is the builder for the block each batch ends on leaves the index the ancestry of the state's
+block, the best block that block, the transaction lookups in the canonical one of two blocks that share them, and
+the anchor, in one batch: down by three records, a competing block imported in place, and across by records. A
+batch that fails writes none of them; after each batch of a move of one block a batch, the index is the ancestry
+of the block the state is at.
+
+**The layers a plan applies are pinned for the whole move**, and the pin released at its end, whatever came of it
+(beacon: an eviction between two batches would stop the move). They are in memory already, so the bound on pinned
+bytes is not asked.
+
+**The move's metrics** (T151): `db.state.move.seconds`, `db.state.move.blocks` by side, `db.state.move.batches`,
+`db.state.reorg.refused` by reason.
+
+**Read after code (beacon): APPROVE WITH CHANGES, nothing critical.** Verified in code: guard off, promotion
+reads, builds, logs and writes what it did; the builder is right for a head on the way down and on the way up, and
+a lookup deleted in one batch and written again in a later one ends as one promotion would leave it. Taken: the
+byte comparison now covers a move up and the sweep of entries left above the head; an across move one block a
+batch checks the index, the pointer and every lookup after each batch; the way down checks the lookups it drops;
+a failure to release the pin does not hide the move's own; every refusal reason has its counter. **Owed by part 3**
+(recorded at T140): the index rows a caller gives a move are built outside the state lock and written blind, so
+any other writer of the index or the best block in between makes them stale (`newPayload`'s `storeBlock` indexes a
+payload whose parent is canonical). On the guard the move must be the only such writer, or the batch checked under
+the lock.
+
+**Left, and where.** Nothing in the node calls `moveHead` yet: the callers that exist on the guard
+(`test_rewindToBlock`, the index writers, the SYNC-FORK rewind) are part 3, with the table of pointer writers as a
+test; the Engine API's `forkchoiceUpdated` is C4d. A bound on a batch by bytes with a barrier move, and the hold
+that keeps retention off the records while a reverse-then-commit attempt is unsettled, are part 2c.
+
+**The mutation run**: 13 mutants; 12 caught, 1 equivalent. Promotion that writes nothing; the lookups of dropped transactions
+kept, or those of re-included ones dropped; what was dropped or cleared not said right; an extension taken for a
+reorganisation and the other way round (missed at first: no case moved to a branch that ends above the old head;
+it has one now); a move's layers not pinned, or the pin of a move that failed never released; a move, or a refused
+one, not told; a refusal reason without its counter. After the read four were run again on the new cases (the
+lookups both ways, and the pin). **Equivalent**: the release of the pin after a move that succeeded, whose every
+pinned layer has been applied and dropped by then.
+
+#### C4b part 2c: a move's batches bounded, the barrier, the hold for an attempt (2026-11-13)
+
+**Batches cut by what they read.** A plan reads every record's header already; the store keeps each record's
+length from that one read, and a move's batches are cut by count and by bytes (a record's length, a layer's
+bytes; `CommitSettings.maxMoveBatchBytes`, 128 MiB). A block worth more than a batch goes alone. What ends up on
+disk does not depend on the cut: a move cut into a batch per block leaves the data source one batch leaves.
+
+**The barrier.** The prior values a batch must give back to older views are kept in memory for as long as the log
+keeps its move. A batch whose prior values are more than `CommitSettings.maxMovePreBytes` (64 MiB) is written as a
+barrier (`StateMoveLog.inFlightBarrier`): the log is emptied before the epoch is made odd, and every view made
+before it is stale, never wrong. An in-place commit takes the same rule. And the log as a whole holds no more than
+`CommitSettings.maxMoveLogBytes` (128 MiB) of prior values: the oldest moves go first, the newest stays whatever it
+holds (forge: eight moves of 64 MiB each would otherwise be held outside every bound).
+
+**The hold for an attempt** (reverse-then-commit, the user's decision of 2026-11-12; C4e is its caller).
+`PathStateStorage.withRecordsHeld(above)(body)`: while it runs, no commit and no move prunes a record above
+`above`, and a move may go back to `above` however deep that has become (forge: the depth policy bounds what a
+move may undo, and not the way back from an attempt the node made itself; on ETC with 512 retained, an attempt
+longer than that would otherwise have no way back though every record is on disk). It is taken under the state
+lock and refused at once (`Deep`) when the records above `above` are pruned already. It lives in memory: after a
+crash mid-attempt the next commit prunes as usual, and what a restart means for an attempt is C4e's to say.
+
+**The mutation run**: 17 mutants, all caught. A batch not cut by bytes, cut at the bound itself, or started at
+nothing; the records' sizes not kept; a layer worth nothing; no barrier, a barrier that keeps the log or leaves the
+anchor; an in-place commit never a barrier; a log that keeps its bytes whatever they are, or lets the newest move
+go; a hold that holds nothing, holds too little, outlives its attempt, or is ignored by retention; the way back
+bounded by the policy; a hold taken above records that are gone. Two of them did not compile as first written and
+were written again.
+
+**Read after code (forge, with vault's questions): APPROVE WITH CHANGES, nothing critical.** Verified in code: the
+barrier leaves every view made before it stale, never wrong (the anchor's, one through a reverse index, one through
+layers, one made while the log was already empty); nothing else reads the log in a way it breaks; a hold taken with
+no lock could not corrupt a state (a prune before it is caught by the epoch and the re-plan), and capping the floor
+at the block above the fork is exact. Taken: the way back's depth while a hold is open; the log's byte budget, and
+the barrier for in-place commits; the hold under the lock and refused at once; barrier cases for a view through
+layers and a barrier whose write fails. **Noted for M6**: a batch's memory at its peak is some three to five times
+its records' bytes (decoded record, the virtual disk, the maps it writes from, the write batch), and the scans of
+replaced tries are not counted in the cut.
+
+#### C4b part 3a: the head's writers on the unified layout (2026-11-13)
+
+Beacon and forge, consulted before code (both read the tree), agree: **on the unified layout the move of the head,
+and a block's own commit, which is the move of one block, are the only writers of the best block and the index of
+blocks by number.** A check under the lock alone does not close the window beacon found in part 2b (a writer that
+takes no lock writes between the check and the batch), so every other writer is routed through a move, refuses on
+that layout, or runs only where the layout is not yet in force (before an anchor, at start). Part 3a is the
+structure; part 3b routes the two callers that reach the head on the guard today (the fork choice, which promotes
+the head after `newPayload`, and test mode's rewind).
+
+- **The writers refuse** on the unified layout with an `IllegalStateException`: `BlockchainWriter.saveBestKnownBlocks`,
+  `setCanonicalChainHead` (the SYNC-FORK rewind), `rewriteCanonicalIndex` (the reorganisation's index), and
+  `Blockchain.removeBlock` (and with it `discardBlocksAfter`). Test mode's reset of the chain for a new genesis is
+  `Blockchain.removeChainForNewGenesis`, allowed only where the state may be destroyed, which it is next.
+  `PivotAnchor.reanchor` refuses once there is a state anchor. None of these is reached on the guard today (sync is
+  not started there, SNAP and mining are refused); a path that reaches one later fails loudly at its first test.
+  `promoteToCanonicalHead` refuses with part 3b, which routes the fork choice through a move.
+- **The best block is held to the anchor under the state lock** before a block's commit and before every batch of a
+  move (`CommitSettings.checksBestBlock`, on in the node): a writer that moved the best block alone is a defect, and
+  nothing is written over it.
+- **A move's link is the header stored under a hash**: `BlockchainReader.headerLink` and `ancestorAt`, which never read
+  the index of blocks by number (a spec plans and makes a move with a reader whose index throws at every read).
+- **The table of the head's writers is a ratchet** (T140): `scripts/check-head-writers.sh` and
+  `scripts/head-writer-allowlist.txt`, the state accessors' engine with its own entry points (the best block's rows,
+  the index's, the head's writers by name, the block stores that index). Every line says which of MOVE, REFUSED, DEF,
+  HASH, PRE, START or C4D/C4E holds for that writer. It runs in CI beside the state accessors' check.
+
+**Recorded, with the slice that owns it.**
+- **SYNC-FORK on the unified layout makes no head move at all** (forge): today it rewinds to the common ancestor and
+  imports the peer's branch with no comparison of weight, and the old branch is deleted, so there is no way back. On
+  that layout the fetcher is invalidated from above the ancestor, the blocks arrive as a side branch, and the
+  reorganisation decides by weight under `withRecordsHeld` (C4E); `Deep`, `Pivot` or `Corrupt` there escalate (D).
+- **`newPayload` stores by hash only on the unified layout** (beacon, C4D), as go-ethereum's
+  `InsertBlockWithoutSetHead` writes no canonical hash.
+- A pre-existing defect of the hash layout that forge found reading the resolver: `discardBlocksAfter` deletes the
+  index entries before `rewindCanonicalChain` reads them, so the reference counts' undo never runs on that path
+  (B-248, its own change).
+
+**Read after code (beacon): APPROVE WITH CHANGES.** Verified in code: nothing on the hash layout changes; on the
+unified layout no path reachable today throws in its normal order (test mode's commit is followed by the fork
+choice's promotion of the same block; the Engine API promotes only the head the state is at); throwing, not failing
+the store closed, is right for a best block moved alone, since nothing was written and the disk keeps the refusal
+across a restart. Taken: two guard specs that staged "the head moved alone" with a writer that now refuses write the
+row themselves; the caller's rows for the head as it is are held to the anchor as any batch is; in the node a batch
+that moves the state must bring the rows that move the best block; the ratchet holds each line to its verdict word;
+two `testing_commitBlockV1` in a row on the unified layout. **Owed by part 3b** (recorded in the allow-list): the
+fork choice still promotes outside the state lock; a commit that moves the anchor in between leaves the best block
+behind, which the check then refuses to write over, and nothing but test mode's reset mends that before part 4.
+
+**The mutation run**: 18 mutants, all caught. The writer not told the layout; each refusal undone
+(`saveBestKnownBlocks`, `setCanonicalChainHead`, `rewriteCanonicalIndex`, `removeBlock`, the reset outside test
+mode, the pivot's re-anchor); the best block not held to the anchor, held by its hash alone, not for a move, not for
+a commit, not in the node; a header under another hash taken for a link, or followed to an ancestor (a walk that
+then never ends); an ancestor above the block found; the head's own rows written over a best block moved alone; a
+move without the rows that move the best block; a reason without its verdict. Five were missed at first and got
+their cases.
+
+#### C4b part 3b: the fork choice and test mode's rewind move the head through a move (2026-11-13)
+
+Part 3a left two callers that reach the head on the guard today: the fork choice, which promoted the head outside the
+state lock, and test mode's rewind, which refused any block between the genesis and the head. Part 3b routes both
+through a move of the head, the design beacon gave before code (part 3a's consult, §3 and §4).
+
+- **One way to move the head with the state**: `BlockchainWriter.moveHeadInPlace(target, reader, refuse)`, which is
+  `PathStateStorage.moveHead` planned by `BlockchainReader.headerLink`, with `canonicalHeadUpdate` for the block each
+  batch ends on as that batch's rows. The writer now takes the path store (`pathState`, from `BlockchainWriter(storages)`),
+  so every writer the node and the specs build from their storages has it, and no caller is wired by hand. `refuse` is
+  asked for each batch before its rows are built; a refusal ends the move with a `StateUnavailable`.
+  **`promoteToCanonicalHead` refuses on the unified layout.**
+- **The fork choice confirms the head by a move of nothing** (`ForkChoiceManager.applyForkChoiceState` on the guard).
+  `EngineApiService.forkchoiceUpdated` lets through only the head the state is at; a commit in place of the next block
+  may land between that look and the write. The move of nothing is written under the state lock against the anchor it
+  was planned from, so that commit makes it a move back, which is refused: nothing is written and `currentState` is
+  not set. `forkchoiceUpdated` then finds the head it was given a VALID ancestor of the canonical head and answers it
+  as its own branch for one does, VALID with no payload (execution-apis paris.md point 2; go-ethereum "Ignoring beacon
+  update to old head"); T145's interleaving, driven through the Engine API with the commit landed after every look
+  it takes at the head and before the fork choice's write. Before 3b the promotion moved the best block back and deleted the new head's index entry under a state that
+  stayed the new head's. Any other move off the held block is refused until C4d (`SYNCING`); a `Corrupt` plan is
+  thrown on. On that layout the call runs under `IO.blocking`, since it may wait behind a move; the hash store's runs
+  as it did. The reference counts are not touched on that layout.
+- **`test_rewindToBlock` below the head moves the head back** to the block of its own chain at that height, found by
+  parent hashes from the held block (`ancestorAt`), never by the index the move rewrites. The blocks above it are not
+  removed: they stay known by their hash, with their records, the way back up; imported again, a block is executed
+  again, to the block it was. A refused move (`Deep`, `Corrupt`, `Incomplete`, `Pivot`, `Finalized`) is the request's
+  error, `TestService.RewindRefused`, with nothing changed and the pending transactions kept. A rewind to the genesis
+  still sets the chain's genesis again.
+- **The writes themselves are watched** (beacon 5b): the guard chain spec's data source records every write of the best
+  block's rows or of the index of blocks by number made while the state has an anchor by a thread that does not hold
+  the state lock. The commits, the moves, the fork choice (confirmed and refused) write none; a write of the best
+  block's rows alone is seen.
+- **The ratchet** counts `moveHeadInPlace` as a writer of the head (MOVE): the fork choice's line becomes HASH for the
+  hash layout's promotion and MOVE for the confirmation; test mode's gains the rewind.
+
+**Read after code (beacon): APPROVE WITH CHANGES**, all taken but where said. The hash layout is unchanged (the
+refusal is inert without a path store; the hash arms of the fork choice and the rewind are untouched); the guard's
+branch is reached for a head other than the anchor only by the race. Taken: the race answers VALID, not `SYNCING`
+(above), with an end-to-end case through `forkchoiceUpdated`, with and without payload attributes; the guard's call
+under `IO.blocking`; a `Corrupt` refusal logged at ERROR with `[STATE-MOVE]` in test mode, as the fork choice throws
+it; a `StateUnavailable` in a rewind answered as `RewindRefused`. Not taken, with the reason: a rewind of several
+batches is the writer's one-block-a-batch case in `HeadMoveOnTheChainSpec`; `importRawBlock` of the very block kept
+above the new head cannot be made in this rig (a block mined in test mode carries no seal, and a sealed copy is
+another block), so the same block mined again stands for it (known by its hash, with a record, committed in place
+again); a commit that waits for a confirmation under way is `adopting`'s, covered by `HeadMoveSpec`.
+
+**Recorded.**
+- **A kept block still answers by its hash** after a rewind on the unified layout (`eth_getBlockByHash`, its receipts
+  are kept), where the hash layout and go-ethereum's `SetHead` answer null. The headers are what a move back up is
+  planned from (`headerLink`), so they stay; `eth_getBlockByNumber` above the head answers null on both.
+- **A confirmation counts as a move** (`movesStarted`, `moving`): no code in main reads them yet. A builder that does
+  (the miner, C4e; the payload builder, C4d) must not take a confirmation for a move, or the store gets a path for a
+  move of nothing that does not count.
+
+**The mutation run**: 17 mutants, all caught. The fork choice promoting on the unified layout, moving the head off the
+held block in any direction or only up, taking a head it did not confirm as applied, answering a corrupt record
+`SYNCING`, throwing a refused move; the Engine API answering a head the race made an ancestor `SYNCING`; the writer's
+promotion not refused, a refused batch written, every batch given the target's rows, a move's batches given none, the
+writer not given the store; the rewind keeping the pending transactions, taking them for a refused move, throwing a
+refusal past the request, refusing as before, or going to the block above. Two did not compile at first (an unused
+symbol is an error here) and were rewritten so that they do. The Engine API's mutant survived the first form of the
+end-to-end case, which committed inside the gate's look: there the Engine API's own branch for an ancestor answers
+first. The case now commits inside the fork choice, where the window is.
+
+#### C4b part 4: the reconciliation at start (2026-11-13)
+
+Vault and forge, consulted before code, agree: **the block whose state the disk holds wins, always.** Since part 2 a
+block's commit and every batch of a move write the state's rows, the anchor, the best block and the index in one
+RocksDB write batch (one `dataSource.update`, the write-ahead log on), under the state lock, after part 3a's check that
+the best block is the anchor. So no crash leaves "the pointer half committed first", the case data-model 5.1's rules 2
+and 3 were written for. A best block that is not the anchor at start comes from a writer's defect, a datadir written
+before 3a, or test mode's reset of the chain, which is two writes (vault). Moving the state to that best block would
+throw away a state that execution proved (rule 2) or undo a fork choice that a move made deliberately (rule 3), and
+trusting the best block while the state stays put leaves every import refused, since a block is committed in place only
+on the anchor (forge). Rule 4 needs only the anchor's header, never writes the state, and loses nothing: the blocks
+above the anchor stay stored by hash and are executed again when they are imported again (on the unified layout today a
+chain import or test mode; the Engine API and sync follow with C4d and C5). go-ethereum's start does the same, down to
+the highest block whose state it has (beacon). **So rule 4 is the rule, and rules 2
+and 3 are not built** (data-model 5.1 amended; the user agreed on 2026-11-14: "go with what is on disk").
+
+- **`StateReconciliation.run`** (`domain/`), called from `StdNode.start` before the genesis loader and before any
+  actor, server or sync, in place of the hash layout's `fixDatabase` and `repairBestBlockMapping`, which trust the best
+  block or the index and would undo it (forge: also before the storage check, the sync controller's starting block and
+  the fork ID, all of which read the best block).
+  - Not stamped `path-live-1`: nothing; the genesis loader judges the datadir.
+  - No anchor: nothing, unless the datadir says SNAP sync is done, which is refused.
+  - The anchor's header not stored: refused, but in test mode, where it is a reset that stopped between its two writes,
+    left for the next `test_setChainParams` (which destroys the state) with nothing written.
+  - The anchor's header naming another number or state root than its row, or its chain weight not stored: refused.
+  - Otherwise the best block and the index are made the anchor's (`[STATE-ANCHOR] best pointer rewound` at WARN), or,
+    with the best block in place, the index alone (I6). A datadir found consistent takes no write.
+- **`BlockchainWriter.heldBlockIndex`**, a START builder: the anchor's ancestry by parent hashes for 1,024 blocks, with
+  every height whose entry is not the ancestor rewritten at whatever depth (not `canonicalHeadUpdate`'s walk, which
+  stops at the first entry that matches); every entry above the anchor deleted, up to the old best block and 1,024
+  heights past the highest found, capped at a million above the anchor; the lookups of the transactions of dropped
+  blocks; the best block. One synced batch, under the state lock. Nothing else: no state row, anchor, record, header,
+  body, receipt or weight.
+- **The ratchet** counts `heldBlockIndex` as a START writer; `StdNode`'s two START lines are the hash layout's only.
+
+**Tests** (`HeadMoveOnTheChainSpec`, the execution-apis chain on the unified layout): a best block above the state with
+its index and lookups (rewound; the rest of the datadir byte for byte as it was; the writes under the lock; a second
+start writes nothing; the blocks above imported again as blocks to execute, and a fork choice on the new head); a best
+block below, on another branch, with no hash, unknown; the index with the best block in place (a side entry under
+entries that match, a hole, an entry above a gap); the refusals, each writing nothing, and test mode's residue left; a
+batch that fails, then the next start.
+
+**Recorded.** I6 is not reachable on the guard today: side-branch execution is refused before its `saveBatch`. C4e
+should store a block it does not adopt by hash only, as C4d does for `newPayload`, so that I6 stays a defence (forge).
+`StdNode.start`'s call is not covered by a spec (the node is not started in unit tests).
+
+**Read after code (beacon): APPROVE WITH CHANGES**, all taken but where said. Rule 4 is right after the merge too,
+and dropping rules 2 and 3 is right on ETH as on ETC. `newPayload`'s answer of VALID for a kept block above the anchor
+(its receipts are kept) is no consensus fault: the block was executed and validated when it was committed in place,
+validity is the block's and not the state's, and nothing moves on it (go-ethereum answers a known payload the same
+way). The caches start empty and the finalized supplier is none on this layout. Taken:
+- the Engine API's gate for a head that is not the held block now records it as the head asked for and publishes it
+  (notify-only, as its other `SYNCING` branches): without it, after a reconciliation that lowered the head, nothing
+  would know where the blocks above lead;
+- the claim that the blocks above "are executed again when they come back" says what imports them today;
+- a transaction of a dropped block that the ancestry includes higher up keeps its lookup, pointed at that block (the
+  re-included set is the ancestry from the lowest rewritten height up, and its locations are written again);
+- the hash layout's two repairs do not run on a datadir stamped for the unified layout and opened with the guard off,
+  which the genesis loader then refuses: nothing is repaired in it first;
+- cases: the Engine API after a reconciliation (the consensus layer's head above answered `SYNCING`, nothing written,
+  that head recorded); the window and the cap; the shared transaction.
+Not taken, with the reason: `newPayload` for a kept block and for its child is not driven here (a payload from a block
+of this chain is not built by any helper of this spec); the duplicate rule (`number <= best`) is read, not driven
+through `ConsensusAdapter`, whose node this fixture does not build; `StdNode.start`'s call has no spec.
+
+**The mutation run**: 16 mutants, all caught. The reconciliation starting a synced datadir with no anchor, refusing
+test mode's residue, taking an anchor row whose state root contradicts its header, taking an anchor with no weight,
+writing a consistent datadir, writing off the state lock, reconciling a datadir with no stamp; the index walk stopping
+at the first entry that matches, looking for no entry above a gap, keeping a window of one block, removing nothing
+above the held block; the best block not moved; the lookups of dropped blocks kept; the old lookups rule (a shared
+transaction dropped and not put back); the Engine API's gate recording no head. Five did not compile at first (an
+unused symbol is an error here) and were rewritten so that they do. One more, the new lookups rule's first half
+alone, is equivalent: the locations written again in the same batch put the lookup back.
+
+### C4d: the PoS arms, as it is to be built (2026-11-14)
+
+Beacon's decomposition, before code (C4d is beacon-first). What the guard does today, read in the code:
+`newPayload` never executes (a block not on the anchor is refused before execution, `refuseUnadopted`), and is stored
+by hash only and answered ACCEPTED; `forkchoiceUpdated` follows only the held head. **A latent defect part 2a must
+close first:** once a payload executes, its store indexes it by number (`storeBlock` -> `storeBlockHeader`), which is
+not refused on the guard and would put an index entry above the anchor: on the guard every executed payload is stored by
+hash only, and a spec pins it.
+
+The parts, in order, each mergeable alone:
+- **Part 0, plumbing, no change to the answer table**: a confirmation of the head is no move (B-249); `Corrupt` fails
+  the state closed at the fork choice, answered `SYNCING` (below).
+- **Part 1, finality** (T160, T171): the finalized block from the fork choice, set only after a move that succeeded
+  (the zero hash is none), persisted in AppState in the move's own batch; the retention floor follows it.
+- **Part 2a, `newPayload` executes as a forward layer** (never in place: only a fork choice moves the head): a parent
+  that is the anchor, a layer or a block behind the anchor executes (VALID or INVALID); a parent stored and executed
+  whose state is not held, or unknown, is ACCEPTED; stored by hash only; `INVALID_REQUESTS` drops the layer and the
+  import gate's memo (`BlockImportGate.forget`), marking the block invalid first. `stateAvailable` over layers and
+  records (T094) lands here, with its first caller. The fork choice still follows only the held head.
+- **Part 2b, `forkchoiceUpdated` moves** (`moveHeadInPlace` with no refusal): the checks that move nothing first
+  (invalid blocks, safe and finalized ancestry `-38002`, a head with no receipts), the move under `IO.blocking`, then
+  on success alone `currentState`, the finalized block, the gossip gate, the pool, then the attributes and the build
+  (on the named parent's view, never on `movesStarted`). Refusals: `Finalized` `-38002` (decided, below), `Deep`,
+  `Incomplete` and `Pivot` `SYNCING` with a strike, `Corrupt` fails closed, `NotHeld` `SYNCING`.
+- **Part 3, `StateRecovery`** (T161, T169, T156): needed now, since the guard starts no sync. Re-executes, oldest
+  first, the stored blocks from one whose state is available up to the head the consensus client names, as overlay
+  commits on a bounded dispatcher, never inline; bounded by `recovery.max-blocks`.
+- **Part 4, a branch longer than the forward-layer budget** (T159): reverse-then-commit under `withRecordsHeld`.
+- **Part 5, the escalation trigger, log-only** (T163, T164, T174): strikes, hysteresis, cool-down, loop guard,
+  metrics; `StateEscalationRequested` logged and counted as suppressed until there is a SNAP to escalate to.
+- **Part 6, the ordered clear** (T165, T166, T172, T173): with or after C5a, never before: with SNAP refused on the
+  guard, a clear would leave a datadir that can never hold a state again.
+
+**Decided by the user on 2026-11-14**, on beacon's proposal: `Finalized` is answered `-38002` (go-ethereum: the
+finalized block is not in the canonical chain); on PoS a block of a long branch found invalid moves the head back to
+the fork choice's last head (the consensus layer's head stays the validated one), where W4 (PoW, C4e) keeps the
+executed prefix; the designated-head arm (T170) moves to C4e, which edits the same `reorganise`; the armed ordered
+clear lands with C5a, not before.
+
+#### C4d part 0: a confirmation is no move, and `Corrupt` fails closed (2026-11-14)
+
+- **B-249**: `movesStarted` counts a move of the head under the state lock before its first batch is written. A
+  confirmation of the head as it is moves nothing and is not counted, and neither is a move refused before any write
+  (by its plan, or by its caller's rows). A build that overlaps any write of a move still sees the count change.
+- **`Corrupt` fails closed at the fork choice** (plan.md "C4b part 1"): `PathStateStorage.failClosed(why)` (through
+  `BlockchainWriter.failStateClosed`) marks the store as one that takes no further in-place write and gives out no
+  state until the node is started again, logged at ERROR; the fork choice answers `SYNCING` and does not set
+  `currentState`. Before, part 3b threw the refusal past the Engine API. Test mode's rewind still answers it as a
+  refused rewind with nothing changed (C4b part 4), since a test datadir is mended by the test.
+
+**The mutation run**: 6 mutants, all caught: a move not counted, counted at every batch, a confirmation counted; a
+corrupt record leaving the state open, thrown past the fork choice, a closed store taking writes. The count at every
+batch survived the first run; the one-block-a-batch case now counts its moves.
+
+**Read after code (beacon): APPROVE WITH CHANGES**, all taken. The count is under the moves lock at every access and
+counted once per move; `Corrupt` reaches the fork choice only from a real bad record or a codec fault (a prune, a
+commit in between or a test-mode wipe moves the epoch and is refused otherwise); the reconciliation at start reads no
+view; nothing changes on the hash layout. Taken: the count's wording (counted before its first batch is built, so a
+first batch refused while it is built is counted with nothing written, the safe side; one per move, so a reader pairs
+it with `moveInProgress`); `failClosed` takes no lock, so a write already past its check completes and none that
+starts after does; a genesis commit refuses a store that failed closed, and test mode's destruction of the state
+clears the fault with the state it was found in (a case); test mode's comment on `Corrupt` (it logs, and does not fail
+closed: a test datadir is the test's to mend). Recorded: the fault is kept in memory only, and nothing looks at the
+records again at the next start (B-252).
+
+#### C4d part 1: the finalized block (2026-11-14)
+
+The node's finalized block on the unified layout, which a move of the head must not reverse (C4b part 1's `Finalized`
+refusal) and above which retention keeps the records (`StateConfig.retained`: the anchor less the finalized block,
+plus the margin), was none: no consensus client drove the layout. Now:
+- **The fork choice names it** (T160, T171): the finalized block hash of a fork choice that was followed, by its
+  header, is written in the batch of the move, or the confirmation, of the head that followed it, as the AppState row
+  `state.finalized` (`v1:<hash>:<number>`), and is the store's (`PathStateStorage.finalizedBlock`) under the state
+  lock right after that batch (`moveHead(..., finalized)`, through `BlockchainWriter.moveHeadInPlace`), so the move or
+  commit that follows sees it. A fork choice that was refused names nothing; the row is not written again when it is
+  the block already named. The zero hash names none and leaves the block named before; a hash with no stored header
+  does too, logged; a block below the one named is taken, logged (go-ethereum's `SetFinalized` takes it, and on the
+  held state's chain it only loosens what is kept). `testing_commitBlockV1` names none: test mode has no beacon chain
+  behind it, and naming each committed head would refuse every later rewind.
+- **It survives a restart**: the store reads the row when it is opened. Before this a restart lost the `Finalized`
+  refusal, and the retention floor jumped from the finality lag to `state.retention.without-finality` and back.
+- **Test mode's destruction of the state takes it away** with the state's other marks.
+
+**The mutation run**: 9 mutants, all caught: a refused fork choice naming the block, the row not written, the row not
+read at start, the store ignoring the block it was given, test mode's reset keeping the block or its row, the block
+not taken by the store after a confirmation's batch, the writer not passing it on, a test-mode commit finalizing its
+head.
+
+**Read after code (beacon): APPROVE WITH CHANGES**, all taken. The named block is always on the held state's chain:
+the Engine API refuses a finalized block it does not know or that is not an ancestor of the head before the fork
+choice, and the confirmation passes only for the anchor. Taken: the block is the store's under the state lock right
+after the batch that ends on the target (it was set after the move returned, a window a fork choice that reverses
+blocks, from part 2b, could have used, and a gap where a throw after the write left the row on disk and the store
+without it); `testing_commitBlockV1` names none; the two WARN lines; the row not rewritten each slot; one zero hash.
+Cases: the Engine API's fork choice names it; a lower one is taken; a store is not opened over a row it cannot read; a
+test-mode commit names none. Not driven here: retention narrowing to the finality lag once a block is named (the
+arithmetic is `StateConfig.retained`'s, and its spec; a chain longer than `pruning.history` is not built here).
+Recorded: a path that gives a datadir its anchor again (the hand-off of C5a, a checkpoint import of C5c) must take the
+row away with the old state, as test mode's destruction does.
+
+#### C4d part 2a: a payload is executed as a forward layer (2026-11-14)
+
+`newPayload` on the unified layout executed nothing: a block not on the anchor was refused before it ran, and every
+payload was answered ACCEPTED. Now a payload is executed and its state kept beside the state the disk holds, as a
+forward layer (C4a), and the head does not move: only a fork choice moves it (part 2b; the execution-apis Paris
+specification).
+- **A block is committed apart from the block** (`StagedBlockState.commitApart`): on the hash layout the commit of its
+  state alone, as before; on the unified layout `PathStateStorage.commitOverlay`. A payload is staged apart
+  (`Blockchain.stageBlockStateApart`): its parent may be the anchor, a layer, a block behind the anchor that the
+  records lead to, or a block on a fork from those (`stageOf`, which C4a kept private until an execution could commit
+  such a block). The importer's in-place staging, and its refusal of a block it does not adopt (C4e), are unchanged.
+- **An executed payload is stored by its hash only** on the unified layout, whatever its parent (beacon: the store
+  that indexes it by number was not refused there, and would have put an entry above the anchor, I6). Its state is a
+  layer, not a reference count, so nothing is taken back out of the hash store's counts.
+- **A payload whose requests are not those its execution derived** is marked invalid first, so a fork choice in
+  between finds it so, and then its layer, with what stands on it, and the import gate's record of it are dropped
+  (`BlockchainWriter.dropForwardLayer`, `BlockImportGate.forget`).
+
+Answers on the unified layout: a parent whose state is held (the anchor, a layer, behind the anchor through the
+records, a fork from those) executes, VALID or INVALID; a parent stored and executed whose state is not held any more
+(its layer evicted), or a parent not known, ACCEPTED, stored by its hash; a layer not kept (too large, no room) is still
+VALID, since the block was validated and its state can be executed again (part 3). The fork choice still follows the
+held block only until part 2b.
+
+**The mutation run**: 5 mutants, all caught: a payload's layer not kept, a payload staged in place, a block staged
+apart staged on the anchor only, an executed payload indexed, a payload committed in place.
+
+**Read after code (beacon): APPROVE WITH CHANGES**, all taken but where said. The answers are right (a layer's
+receipts admit its child; a parent whose layer is gone is a state fault, ACCEPTED, as go-ethereum's
+`delayPayloadImport`), no state fault reaches INVALID, and nothing changes on the hash layout. Taken: a payload staged
+apart is "applied" for the import gate while its layer is kept, so one delivered again while its first execution runs
+takes that execution instead of a second (the consensus client resends a slow block); the `INVALID_REQUESTS` cleanup
+runs under the block's gate; a layer not kept is logged with its reason; `newPayload`'s log line says "layer" on the
+unified layout; the Engine API requires that it is told the held block exactly when the state is held in place (a
+builder replay on positions that was not told it is fixed); cases: an unknown parent answered exactly ACCEPTED, a
+parent whose layer was dropped answered ACCEPTED with nothing executed. Not taken: `INVALID_REQUESTS` is not driven (it
+is unreachable over RPC: the controller refuses malformed requests, and the requests hash binds the block hash), and a
+layer not kept, which needs a store with a small layer bound. **Owed by part 2b**: a fork choice to a head whose
+layers were not kept, or were evicted, re-executes them (go-ethereum's `recoverAncestors`; part 3's re-execution), and
+the descendants of such a block stay ACCEPTED until then.
 
 ### Destructive change (C8a and C8b): the vault protocol blocks
 
