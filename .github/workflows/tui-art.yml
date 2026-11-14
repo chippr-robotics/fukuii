@@ -1,0 +1,39 @@
+# TUI art
+#
+# The sprite sheets of the TUI command center (spec 029) are drawn by scripts/tui/make_art.py and held to
+# specs/029-tui-command-center/contracts/art.md by scripts/tui/check_art.py. This job fails when a committed sheet is
+# not what the script draws, or breaks the contract (a colour outside the 240, a soft edge, a wrong size).
+# Run locally: `python3 -I -m unittest discover -s scripts/tui -v`.
+# Fix a stale sheet: `python3 -I scripts/tui/make_art.py` and commit src/main/resources/tui/art/.
+
+name: TUI Art
+
+on:
+  pull_request:
+    paths:
+      - 'scripts/tui/**'
+      - 'src/main/resources/tui/art/**'
+      - '.github/workflows/tui-art.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  tui-art:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Setup Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+
+      - name: Install Pillow and NumPy
+        run: pip install pillow numpy
+
+      - name: Self-test
+        run: python3 -I -m unittest discover -s scripts/tui -v
