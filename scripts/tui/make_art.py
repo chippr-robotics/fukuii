@@ -128,6 +128,20 @@ class Canvas:
                 if c != T:
                     self.px(x + sx, y + sy, c)
 
+    def tri(self, a, b, c, colour: int) -> None:
+        """Fills the triangle a, b, c."""
+        (ax, ay), (bx, by), (cx, cy) = a, b, c
+
+        def inside(x, y):
+            d1 = (x - bx) * (ay - by) - (ax - bx) * (y - by)
+            d2 = (x - cx) * (by - cy) - (bx - cx) * (y - cy)
+            d3 = (x - ax) * (cy - ay) - (cx - ax) * (y - ay)
+            neg = (d1 < 0) | (d2 < 0) | (d3 < 0)
+            pos = (d1 > 0) | (d2 > 0) | (d3 > 0)
+            return ~(neg & pos)
+
+        self.where(inside, colour)
+
     def bitmap(self, rows: list[str], x: int, y: int, colours: dict[str, int]) -> None:
         """Draws rows of characters, one character a pixel; a character missing from `colours` is transparent."""
         for dy, row in enumerate(rows):
@@ -713,6 +727,49 @@ def _wordmark(cv: Canvas, text: str, centre_x: int, y: int) -> None:
     cv.blit(word, centre_x - (width + 2) // 2, y)
 
 
+# ── the network icons ────────────────────────────────────────────────────────────────────────────────────────────
+
+ETH_LIGHT, ETH_MID, ETH_DARK = 146, 103, 60
+ETC_LIGHT, ETC_MID, ETC_DARK = 77, 28, 22
+
+
+def network_icon(family: str, size: int) -> Canvas:
+    """The chain family's mark, so that the network is recognised at a glance: "eth" or "etc".
+
+    Both are the familiar octahedron seen edge-on, lit from the left. Ethereum's is two pieces, a kite over a
+    chevron; Ethereum Classic's is three, with the middle of the solid floating free.
+    """
+    cv = Canvas(size, size)
+    k = size / 32.0
+
+    def t(a, b, c, colour):
+        cv.tri(*[(x * k, y * k) for x, y in (a, b, c)], colour)
+
+    m = 16.0
+    if family == "eth":
+        top, left, right, heart, low = (m, 0.5), (6.0, 16.2), (26.0, 16.2), (m, 12.2), (m, 21.8)
+        t(top, left, heart, ETH_LIGHT)
+        t(top, heart, right, ETH_MID)
+        t(left, heart, low, ETH_MID)
+        t(heart, right, low, ETH_DARK)
+        t((6.0, 18.2), (m, 23.8), (m, 31.5), ETH_LIGHT)
+        t((26.0, 18.2), (m, 23.8), (m, 31.5), ETH_MID)
+    elif family == "etc":
+        top, notch = (m, 0.5), (m, 9.6)
+        t(top, (6.5, 13.6), notch, ETC_LIGHT)
+        t(top, notch, (25.5, 13.6), ETC_MID)
+        west, north, east, south, heart = (7.0, 16.0), (m, 11.6), (25.0, 16.0), (m, 20.6), (m, 16.6)
+        t(west, north, heart, ETC_LIGHT)
+        t(north, east, heart, ETC_MID)
+        t(west, heart, south, ETC_MID)
+        t(heart, east, south, ETC_DARK)
+        t((6.5, 18.4), (m, 22.6), (m, 31.5), ETC_LIGHT)
+        t((25.5, 18.4), (m, 22.6), (m, 31.5), ETC_MID)
+    else:
+        raise ValueError(family)
+    return cv
+
+
 # ── the splash's backdrop ────────────────────────────────────────────────────────────────────────────────────────
 
 
@@ -793,6 +850,10 @@ def sheets() -> dict[str, np.ndarray]:
         "badge.lo.png": badge(16).a,
         "badge-large.hi.png": enlarge(badge(64), HI_SCALE),
         "badge-large.lo.png": badge(32).a,
+        "network-etc.hi.png": enlarge(network_icon("etc", 32), HI_SCALE),
+        "network-etc.lo.png": network_icon("etc", 16).a,
+        "network-eth.hi.png": enlarge(network_icon("eth", 32), HI_SCALE),
+        "network-eth.lo.png": network_icon("eth", 16).a,
         "splash-scene.hi.png": enlarge(splash_scene(160, 96), HI_SCALE),
         "splash-scene.lo.png": splash_scene(80, 48).a,
     }
@@ -819,6 +880,8 @@ art {{
   }}
   badge        {{ cols = 16, rows = 8 }}
   badge-large  {{ cols = 32, rows = 16 }}
+  network-etc  {{ cols = 16, rows = 8 }}
+  network-eth  {{ cols = 16, rows = 8 }}
   splash-scene {{ cols = 80, rows = 24 }}
 }}
 """
@@ -876,6 +939,9 @@ def preview(out_dir: Path) -> None:
     contact([[mascot(32, p, 0).a for p in POSES], [mascot16(p).a for p in POSES] + [badge(16).a]], 8).save(
         out_dir / "block-mode.png")
     contact([[badge(64).a, badge(32).a], [splash_scene(160, 96).a]], 6).save(out_dir / "badge-and-splash.png")
+    contact([[network_icon("etc", 32).a, network_icon("eth", 32).a,
+              np.kron(network_icon("etc", 16).a, np.ones((2, 2), dtype=np.uint8)),
+              np.kron(network_icon("eth", 16).a, np.ones((2, 2), dtype=np.uint8))]], 8).save(out_dir / "network-icons.png")
 
 
 def main() -> int:

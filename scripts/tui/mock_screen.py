@@ -137,8 +137,8 @@ def draw(mode: str, state: str) -> Image.Image:
     else:
         s.text(1, 1, "✓ no alerts", OK)
 
-    # The sidebar: the badge, the views, the node.
-    s.sprite(sheets["badge.hi.png"], sheets["badge.lo.png"], 2, 2, 16, 8, mode)
+    # The sidebar: the network's icon (Mordor is an Ethereum Classic network), the views, the node.
+    s.sprite(sheets["network-etc.hi.png"], sheets["network-etc.lo.png"], 2, 2, 16, 8, mode)
     views = ["OVERVIEW", "CHAIN", "PEERS", "MEMPOOL", "RPC", "STORAGE", "SYSTEM", "LOGS", "OPS"]
     for i, v in enumerate(views):
         if i == 0:

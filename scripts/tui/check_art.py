@@ -25,6 +25,8 @@ SPRITES = {
     "mascot-small": (16, 8, 7, 2, False),
     "badge": (16, 8, 1, 1, False),
     "badge-large": (32, 16, 1, 1, False),
+    "network-etc": (16, 8, 1, 1, False),
+    "network-eth": (16, 8, 1, 1, False),
     "splash-scene": (80, 24, 1, 1, True),
 }
 POSES = ("starting", "syncing", "watching", "warning", "error", "asleep", "celebrating")

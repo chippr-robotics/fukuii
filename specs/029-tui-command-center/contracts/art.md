@@ -7,7 +7,7 @@ the text the frame already carries. A bad sheet never stops the node.
 **The sheets exist.** They are in `src/main/resources/tui/art/`, drawn by `scripts/tui/make_art.py` (spec D-3: the
 art is made in this spec's own work). The art is code: to change a sprite, change the script and run it. Enlarged
 views are in [`../art-preview/`](../art-preview/): `mascot.png` (every pose and frame), `block-mode.png` (the small
-sizes), `badge-and-splash.png`, and two mock screens that show the art at the scale a terminal draws it,
+sizes), `badge-and-splash.png`, `network-icons.png`, and two mock screens that show the art at the scale a terminal draws it,
 `overview-pixel.png` and `overview-block.png`. Anyone replacing the art, by editing the script or by drawing sheets
 by hand, keeps to the rules below.
 
@@ -44,7 +44,8 @@ a background you do not control.
 | --- | --- | --- | --- | --- | --- |
 | `mascot` | 32 × 16 | 32 × 32 px | 256 × 256 px | 7, up to 4 frames each | Overview at 140 columns and more; Ops; the splash |
 | `mascot-small` | 16 × 8 | 16 × 16 px | 128 × 128 px | 7, up to 2 frames each | Overview from 100 to 139 columns |
-| `badge` | 16 × 8 | 16 × 16 px | 128 × 128 px | 1 | The header at 140 columns and more; Help |
+| `network-etc`, `network-eth` | 16 × 8 | 16 × 16 px | 128 × 128 px | 1 | The top of the sidebar: the chain family the node is on (spec FR-061) |
+| `badge` | 16 × 8 | 16 × 16 px | 128 × 128 px | 1 | Help, Ops |
 | `badge-large` | 32 × 16 | 32 × 32 px | 256 × 256 px | 1 | The splash; carries the FUKUII wordmark |
 | `splash-scene` *(optional)* | 80 × 24 | 80 × 48 px | 640 × 384 px | 1 | Behind the splash; never changes |
 
@@ -86,6 +87,8 @@ art.conf
 mascot.lo.png          mascot.hi.png
 mascot-small.lo.png    mascot-small.hi.png
 badge.lo.png           badge.hi.png
+network-etc.lo.png     network-etc.hi.png
+network-eth.lo.png     network-eth.hi.png
 badge-large.lo.png     badge-large.hi.png
 splash-scene.lo.png    splash-scene.hi.png      (optional)
 ```

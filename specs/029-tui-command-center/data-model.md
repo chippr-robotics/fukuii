@@ -33,7 +33,7 @@ are unless a row says otherwise.
 | `PixelBuffer` | `width`, `height`, `pixels: Array[Byte]` (palette index, 0 = transparent) | Immutable once built. Equality by content, so a frame's graphics compare cheaply by a cached hash. |
 | `Sprite` | `name`, `cols`, `rows`, `lo: SpriteSheet`, `hi: SpriteSheet`, `frames: Vector[Int]` (per pose) | From [contracts/art.md](./contracts/art.md). |
 | `SpriteSheet` | `frameWidth`, `frameHeight`, `pixels: PixelBuffer` | Dimensions are exactly frame × grid. |
-| `ArtStore` | `sprites: Map[String, Sprite]`, `problems: Seq[String]` | Loaded once at start and on `r` when `art-dir` is set. A sprite that fails a rule is replaced by its placeholder and adds a problem. |
+| `ArtStore` | `sprites: Map[String, Sprite]`, `problems: Seq[String]` | Loaded once at start and on `r` when `art-dir` is set. A sprite that fails a rule is left out, so its region shows the frame's text, and adds a problem. |
 | `Pose` (enum) | `Starting`, `Syncing`, `Watching`, `Warning`, `Error`, `Asleep`, `Celebrating` | `Pose.of(state): Pose` is pure: errors over warnings over stall over celebration over sync over head. |
 | `Graphic` (enum) | `SpriteFrame(sprite, pose, frame)`, `Chart(id, buffer: PixelBuffer)` | What a region shows. |
 | `GraphicRegion` | `id: String`, `row`, `col`, `cols`, `rows`, `graphic: Graphic` | `id` is stable across frames for the same on-screen slot. Regions of one frame never overlap and never include the alert row. |

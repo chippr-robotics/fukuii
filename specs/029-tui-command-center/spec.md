@@ -63,6 +63,12 @@ Three choices changed the scope and were the user's to make. The options are in 
   `src/main/resources/tui/art/`, drawn by `scripts/tui/make_art.py`; views of it are in
   [art-preview/](./art-preview/). (user, 2026-11-13)
 
+### Session 2026-11-14
+
+- The user, on seeing the mock screen: "the top left badge could be the network icon so users can quickly identify if
+  it is etc or an eth network." → The sidebar's corner carries the icon of the chain family the node is on (FR-061).
+  The FUKUII badge moves to the splash and Help. (user, 2026-11-14)
+
 ### Defaults taken without asking
 
 Each is reversible in review (§9):
@@ -615,6 +621,11 @@ Each requirement names the research section it rests on.
 - **Redaction**: the rule that hides a secret.
 
 ---
+
+- **FR-061** Where the sidebar is shown, its top corner MUST carry the icon of the chain family the node is on:
+  Ethereum Classic's mark on an ETC-family network, Ethereum's on an ETH-family one, chosen from the node's own
+  configuration. The network's name and chain id stay beside it in text, and a test network is named as one in
+  text, so the icon is never the only way to tell (FR-001).
 
 ## Success Criteria *(mandatory)*
 
