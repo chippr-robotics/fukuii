@@ -35,7 +35,7 @@ block-store 1 src/main/scala/com/chipprbots/ethereum/blockchain/data/ChainImport
 
 # The fork choice and the reorganisation: the fork choice confirms the head through a move (C4b part 3b); C4d and C4e
 # route the rest.
-head-writer 2 src/main/scala/com/chipprbots/ethereum/consensus/engine/ForkChoiceManager.scala HASH promoteToCanonicalHead on the hash layout's arm; MOVE moveHeadInPlace on the unified layout: the head the state is at, confirmed by a move of nothing under the state lock, and any move off it refused until C4d
+head-writer 2 src/main/scala/com/chipprbots/ethereum/consensus/engine/ForkChoiceManager.scala HASH promoteToCanonicalHead on the hash layout's arm; MOVE moveHeadInPlace on the unified layout: the head moved with the state, up and across (C4d part 2b), never down to an ancestor
 block-store 1 src/main/scala/com/chipprbots/ethereum/consensus/engine/EngineApiService.scala HASH newPayload's storeBlock on the hash layout's arm; the unified layout stores an executed payload by hash only (C4d part 2a)
 head-writer 4 src/main/scala/com/chipprbots/ethereum/consensus/ConsensusImpl.scala REFUSED saveBestKnownBlocks and rewriteCanonicalIndex refuse on the unified layout (saveLastBlock writes nothing there; settleHead is reached only with executed blocks, which the layout refuses before executing: C4E)
 block-store 1 src/main/scala/com/chipprbots/ethereum/jsonrpc/TestingService.scala HASH storeBlock on the hash layout's arm; the unified layout commits in place
@@ -62,3 +62,4 @@ best-pointer 1 src/main/scala/com/chipprbots/ethereum/nodebuilder/StdNode.scala 
 head-writer 1 src/main/scala/com/chipprbots/ethereum/nodebuilder/StdNode.scala START repairBestBlockNumberMapping, before any writer, on the hash layout only: the unified layout reconciles instead (StateReconciliation, C4b part 4)
 head-writer 1 src/main/scala/com/chipprbots/ethereum/domain/StateReconciliation.scala START heldBlockIndex: the best block and the index made the held block's, at start, before any actor, under the state lock
 head-writer 4 src/main/scala/com/chipprbots/ethereum/jsonrpc/TestService.scala HASH removeBlock on the hash layout's arms (test reset, rewind); REFUSED on the unified layout but for removeChainForNewGenesis, before the state is destroyed (test mode); MOVE moveHeadInPlace, the rewind below the head on the unified layout
+head-writer 2 src/main/scala/com/chipprbots/ethereum/ledger/StateRecovery.scala MOVE moveHeadInPlace: an adoption's move to the block it stands on, and the move back after a branch failed (C4d part 4); each is PathStateStorage.moveHead, the head with the state

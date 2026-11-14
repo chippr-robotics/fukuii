@@ -329,6 +329,11 @@ class EngineApiService(
           accessList
         )
 
+      // an adoption goes on while the consensus client names its head, and a branch that fails takes the head back to
+      // the last one followed (C4d part 4)
+      override def requestedHead: Option[ByteString] = forkChoiceManager.getRequestedHeadBlockHash
+      override def followedHead: Option[ByteString] = forkChoiceManager.getHeadBlockHash
+
       def rejected(
           block: Block,
           error: com.chipprbots.ethereum.ledger.BlockExecutionError,
@@ -344,10 +349,17 @@ class EngineApiService(
         }
 
   /** Has the state of the head `hash` names recovered, when this node recovers states: the stored blocks of its chain
-    * above the highest one whose state is held are executed again, apart (spec 018 C4d part 3).
+    * above the highest one whose state is held are executed again, apart (spec 018 C4d part 3). Asked by a fork choice
+    * that names the head, a branch longer than the forward layers may hold is committed in place, the head moved with
+    * it (C4d part 4); asked for a payload, never.
     */
-  private def recoverStateOf(hash: ByteString, why: String): Unit =
-    stateRecovery.foreach(_.requestFor(hash, recoverySink, why))
+  private def recoverStateOf(
+      hash: ByteString,
+      why: String,
+      authority: com.chipprbots.ethereum.ledger.StateRecovery.Authority =
+        com.chipprbots.ethereum.ledger.StateRecovery.Authority.Payload
+  ): Unit =
+    stateRecovery.foreach(_.requestFor(hash, recoverySink, why, authority))
 
   private def storeChainWeightFor(block: Block, parentHeader: Option[BlockHeader]): Unit =
     // #1654: the parent's weight is read and the child's written under the chain insert lock (shared), so the
@@ -952,7 +964,11 @@ class EngineApiService(
         // on the unified layout the stored blocks that lead to it are executed, apart, when they lead to a state that is
         // held (C4d part 3)
         if headHeader.exists(h => blockchainReader.getBlockHeaderByHash(BlockHash(h.parentHash.value)).isDefined) then
-          recoverStateOf(forkChoiceState.headBlockHash, "forkchoiceUpdated to a head never executed")
+          recoverStateOf(
+            forkChoiceState.headBlockHash,
+            "forkchoiceUpdated to a head never executed",
+            com.chipprbots.ethereum.ledger.StateRecovery.Authority.ForkChoice
+          )
         EngineApiMetrics.recordForkchoiceUpdated("SYNCING")
         IO.pure(Right(ForkchoiceUpdatedResponse(payloadStatus = PayloadStatusV1(Syncing))))
       else if blockFullyStored && headHeader.exists(_.number.value < bestBlockNumber) then
@@ -1032,7 +1048,11 @@ class EngineApiService(
             // Head not known — return SYNCING so CL knows we need newPayload. On the unified layout a head whose chain is
             // held only up to a block below it has the blocks above that executed again meanwhile (C4d part 3).
             if refused.startsWith(ForkChoiceManager.NotHeldHead) then
-              recoverStateOf(forkChoiceState.headBlockHash, "forkchoiceUpdated to a head whose state is not held")
+              recoverStateOf(
+                forkChoiceState.headBlockHash,
+                "forkchoiceUpdated to a head whose state is not held",
+                com.chipprbots.ethereum.ledger.StateRecovery.Authority.ForkChoice
+              )
             EngineApiMetrics.recordForkchoiceUpdated("SYNCING")
             IO.pure(Right(ForkchoiceUpdatedResponse(payloadStatus = PayloadStatusV1(Syncing))))
 

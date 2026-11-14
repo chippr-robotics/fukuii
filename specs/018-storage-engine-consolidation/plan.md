@@ -2993,6 +2993,72 @@ block mid-recovery, a Prague block whose requests are not those its header commi
 behind the anchor recovered and moved across to, and `close` during an execution. The child-JVM crash test stays
 B-255.
 
+#### C4d part 4a: a branch longer than the forward layers is committed in place (2026-11-14)
+
+What part 3 left (beacon, read in the code): a branch of payloads longer than the forward layers may hold could not be
+followed. Only a layer at the tip of a chain is evicted, never one another stands on, so the layer past the budget is
+not kept (`NoRoom`). The payloads after it are ACCEPTED on a state that is not held, and the recovery as layers
+(at most half the budget) ends `TooLong` or `NotKept`. A fork choice to the tip then answered SYNCING for good: the
+guard has no sync to fall back on. The same held for a straight run of payloads on the head.
+
+**The user's decision of 2026-11-14: in place**, beacon's design (data-model 6.4: reverse-then-commit, no stack of
+layers). Pinned layers up to `pinned-max-bytes` were the alternative, and were not taken: in place is needed beyond
+that anyway, and pins are released before the next fork choice. Three side fixes go with it, in part 4b: `eth_syncing`
+says syncing while an adoption runs; a fork choice that reaches the adoption through the arm for a head never executed
+answers -38002 where it would reverse the finalized block; the `safe` tag never names a block an adoption reversed.
+
+As built:
+- **Who asks.** A recovery says what asked for it (`StateRecovery.Authority`). A payload keeps its blocks as layers and
+  never moves the head, as in part 3. A fork choice that names the head (the arm for a head never executed, and
+  `NotHeldHead`) walks as far as `state.recovery.max-blocks`, and has a branch committed in place when its blocks and
+  the layers it stands on (`PathStateStorage.heldDepth`) are more than a recovery as layers covers, or when a layer of
+  it did not fit. In-flight recoveries are one per head and per authority, so a fork choice that arrives during a
+  payload's recovery of the same head runs its own after it; a payload's failure does not hold a fork choice back.
+- **The adoption**, on the recovery's thread. With the changeset records above the fork held from retention
+  (`withRecordsHeld`; the fork is where the branch meets the index of blocks by number, I6), the head is moved with the
+  state to the highest block of the branch whose state is held (down and across, or up its layers), then each block
+  above it is executed, validated in full and committed in place as the head (`executeAndAdoptBlockIf`, as an import
+  commits a block). Before each commit the consensus client must still name the tip, and the node must not be
+  stopping; otherwise the adoption stops, uncommitted, and the head stays where it got to. It never sets the fork
+  choice's head: the consensus client's next fork choice to the tip confirms it, VALID. Meanwhile it answers SYNCING.
+- **A block that fails**: one never executed is INVALID, with what stands on it, its parent the latest valid block (as
+  in part 3); one executed before is the node's fault. Either way the head is moved back, along the records held, to
+  the head of the last fork choice followed, or to where the adoption found it (on proof of stake the consensus
+  client's head stays the one it validated, the user's decision). A way back that cannot be taken leaves the head on
+  the last block committed, all valid, at ERROR.
+- **Refused before anything moves**: records already pruned above the fork (`Deep`), a move that would reverse the
+  finalized block, a branch that does not lead back to the held chain (`NotAdopted`).
+
+**The mutation run**: 18 mutants, 17 caught. Caught: a fork choice never adopting, a payload adopting (with
+the consensus client naming its head), the records not held (retention of two blocks: the way back across the fork is
+pruned by the branch's commits but for the hold), no move to the held block, the first move ignoring another head, no
+move back, the move back aiming at where the adoption began, the check before each commit ignored, a head that extends
+the branch stopping it, a local fault not taken back, a payload's failure holding a fork choice back, one ticket per
+head whatever asked, a payload taking the last place in the queue, a fork choice whose layer did not fit not adopted,
+a stopped adoption cooled, the Engine API's fork choice asking as a payload, and the sink naming no followed head. The
+one left is equivalent: without the look before the adoption runs, the first move's own refusal stops it, and nothing
+is written either way. Six survived the first run, and have their cases.
+
+**Read after code (beacon)**: **APPROVE WITH CHANGES**, all but three notes taken. Nothing can commit a wrong state: an
+in-place commit checks under the state lock that the staged parent is still the anchor, so a fork choice that moves
+the head between the check before the commit and the commit makes it refused; and no lock cycle (the recovery holds the
+chain insert lock, shared, and the block's gate only inside one block's commit). Taken:
+- **(critical) the head is not taken off a head the consensus client has gone on to**: the first move is refused,
+  before any of it is written, once another head is named (its check runs per batch under the moves' lock, and the fork
+  choice sets the named head before it takes that lock); and an adoption whose head is no longer named does not begin;
+- a first move of more than one batch that is refused part way takes the head back;
+- a head that extends the branch does not stop it, as go-ethereum goes on inserting what its new head extends (a block
+  slower than a slot made no progress otherwise);
+- the records are held from the fork, or from where the last followed head leaves the index if that is lower;
+- a superseded or stopped recovery is not cooled down; the last place in the queue is a fork choice's;
+- the docs of the class and of `executeAndAdoptBlockIf`, and what a sink that names no head means.
+Not taken: bounding the search for the fork by the window (65,536 header reads only on a broken index), the relaxation
+of a move's reach while records are held (it predates this part; the finalized block bounds it), and a one-layer move
+in place of executing a block whose layer stands on the anchor (a saving). Cases added: an adoption across a fork with
+its way back on held records; another head named before it runs, and between its look and its move; a local fault
+taken back with nothing marked invalid; a head that extends the branch; the node stopping mid-adoption; a branch long
+only by the layers it stands on; a fork choice whose single block's layer does not fit; a payload never adopted.
+
 ### Destructive change (C8a and C8b): the vault protocol blocks
 
 ```
