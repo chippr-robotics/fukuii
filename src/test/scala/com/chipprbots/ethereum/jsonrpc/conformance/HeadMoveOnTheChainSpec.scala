@@ -586,7 +586,8 @@ class HeadMoveOnTheChainSpec extends ScalaTestWithActorTestKit with AnyFlatSpecL
       on.source.offTheLock.toArray.toSeq shouldBe empty
     }
 
-  "The fork choice on the unified layout" should "move the head in no direction off the block the state is at, before C4d" taggedAs
+  // C4d part 2b: the fork choice moves the head up, or across, as one move; never down to an ancestor of the head.
+  "The fork choice on the unified layout" should "move the head up the chain it left, and never down to an ancestor of the head" taggedAs
     (UnitTest, ConsensusTest) in {
       val on = new Node
       val chain = blocks.take(4)
@@ -594,15 +595,18 @@ class HeadMoveOnTheChainSpec extends ScalaTestWithActorTestKit with AnyFlatSpecL
       on.move(chain(1).header)
       val choices = on.node.forkChoiceManager
       val before = on.everything
-      // up the chain it left, whose records are kept; and down to the first block
-      Seq(chain.last, chain(2), chain.head).foreach { head =>
-        withClue(s"block ${head.header.number.value}: ") {
-          choices.applyForkChoiceState(choiceOf(head, chain)) shouldBe Left("SYNCING")
-          on.everything shouldBe before
-        }
-      }
+      val started = on.pathState.movesStarted
+      // down to the first block, an ancestor of the head: not followed, nothing written, no move counted
+      choices.applyForkChoiceState(choiceOf(chain.head, chain)) shouldBe Left("SYNCING")
+      on.everything shouldBe before
+      on.pathState.movesStarted shouldBe started
       choices.getHeadBlockHash shouldBe None
-      on.holds(chain(1).header, chain.take(2))
+      // up the chain it left, along its records: followed, as one move, the head and the index with the state
+      choices.applyForkChoiceState(choiceOf(chain.last, chain)) shouldBe Right(())
+      on.holds(chain.last.header, chain)
+      choices.getHeadBlockHash shouldBe Some(chain.last.header.hash.value)
+      on.pathState.movesStarted shouldBe started + 1
+      on.source.offTheLock.toArray.toSeq shouldBe empty
       on.pathState.moveInProgress shouldBe false
     }
 
@@ -714,6 +718,57 @@ class HeadMoveOnTheChainSpec extends ScalaTestWithActorTestKit with AnyFlatSpecL
       on.source.offTheLock.toArray.toSeq shouldBe empty
       // and the fork choice to it is not followed before part 2b
       on.node.forkChoiceManager.getHeadBlockHash shouldBe None
+    }
+
+  it should "be followed by a fork choice: up two layers, across to a side branch, with a payload built on the new head, and refused where it would reverse the finalized block" taggedAs
+    (UnitTest, ConsensusTest) in {
+      val on = new Node
+      val chain = blocks.take(39)
+      chain.foreach(on.imports)
+      val engine = on.engine(() => on.pathState.anchor.map(_.hash))
+      given cats.effect.unsafe.IORuntime = cats.effect.unsafe.IORuntime.global
+      def newPayload(block: Block) = engine.newPayload(payloadOf(block)).unsafeRunSync()
+      def choose(head: Block, finalized: ByteString, attributes: Option[PayloadAttributes] = None) =
+        engine
+          .forkchoiceUpdated(ForkChoiceState(head.header.hash.value, finalized, finalized), attributes)
+          .unsafeRunSync()
+      val (forty, fortyOne) = (blocks(39), blocks(40))
+      Seq(forty, fortyOne).foreach(block => newPayload(block).status shouldBe PayloadStatus.Valid)
+      // up two layers, as one move: the head, the index and the anchor follow, and the head names block 40 finalized.
+      // Its attributes are refused (-38003) after the move, which stands (execution-apis: the fork choice is applied,
+      // then the attributes are looked at)
+      val zeroTime = PayloadAttributes(0, ByteString(new Array[Byte](32)), com.chipprbots.ethereum.domain.Address(0x42))
+      choose(fortyOne, forty.header.hash.value, Some(zeroTime)).left.toOption.getOrElse("") should startWith("ATTR:")
+      on.holds(fortyOne.header, chain :+ forty :+ fortyOne)
+      on.node.forkChoiceManager.getHeadBlockHash shouldBe Some(fortyOne.header.hash.value)
+      // a side branch from block 40: across, along block 41's record and the side block's layer
+      val side = siblingOf(fortyOne)
+      newPayload(side).status shouldBe PayloadStatus.Valid
+      val attributes = PayloadAttributes(
+        side.header.unixTimestamp.toLong + 12,
+        ByteString(new Array[Byte](32)),
+        com.chipprbots.ethereum.domain.Address(0x42),
+        withdrawals = Some(Nil),
+        parentBeaconBlockRoot = side.header.parentBeaconBlockRoot.map(_.value)
+      )
+      val across = choose(side, forty.header.hash.value, Some(attributes))
+      across.map(_.payloadStatus.status) shouldBe Right(PayloadStatus.Valid)
+      // a payload is built on the head it moved to, and the block built is VALID when it comes back as a payload: the
+      // state it was built on is the state the move left
+      val payloadId = across.toOption.flatMap(_.payloadId)
+      payloadId should not be empty
+      val built = engine.getPayload(payloadId.get).unsafeRunSync().fold(fail(_), identity)
+      built.header.parentHash shouldBe side.header.hash
+      newPayload(built).status shouldBe PayloadStatus.Valid
+      on.holds(side.header, chain :+ forty :+ side)
+      // a fork choice whose head is on the other side of the finalized block 40: refused -38002, nothing moved
+      val below = siblingOf(forty)
+      newPayload(below).status shouldBe PayloadStatus.Valid
+      val before = on.everything
+      choose(below, ForkChoiceManager.ZeroHash).left.toOption.getOrElse("") should startWith("invalid forkchoice state")
+      on.everything shouldBe before
+      on.holds(side.header, chain :+ forty :+ side)
+      on.source.offTheLock.toArray.toSeq shouldBe empty
     }
 
   it should "be executed on a block behind the held one, as a side branch, and answer ACCEPTED on a parent it does not know" taggedAs
@@ -947,7 +1002,7 @@ class HeadMoveOnTheChainSpec extends ScalaTestWithActorTestKit with AnyFlatSpecL
 
   // Beacon, part 4's read: after the head is lowered at start, the consensus layer's head is above it. Its fork choice is
   // answered SYNCING with nothing written, and its head is recorded as the one asked for.
-  it should "leave the Engine API answering the consensus layer's head above it SYNCING, with that head recorded" taggedAs
+  it should "leave the Engine API following the consensus layer's head above it, along the records kept" taggedAs
     (UnitTest, ConsensusTest) in {
       val on = new Node
       val chain = blocks.take(5)
@@ -956,16 +1011,19 @@ class HeadMoveOnTheChainSpec extends ScalaTestWithActorTestKit with AnyFlatSpecL
       chain.drop(2).foreach(b => on.putIndex(b.header.number.value, b.header.hash.value))
       on.putBest(chain.last.header.hash.value, chain.last.header.number.value)
       on.reconcile() shouldBe a[StateReconciliation.Outcome.Reconciled]
-      val before = on.everything
+      // what was staged above was written off the lock on purpose: the watch is of what follows
+      on.source.offTheLock.clear()
       val answer = on
         .engine(() => on.pathState.anchor.map(_.hash))
         .forkchoiceUpdated(choiceOf(chain.last, chain), None)
         .unsafeRunSync()(using cats.effect.unsafe.IORuntime.global)
-      answer.map(_.payloadStatus.status) shouldBe Right(PayloadStatus.Syncing)
-      on.everything shouldBe before
+      // the blocks above the head it was lowered to kept their records: the fork choice moves the head back up along
+      // them (C4d part 2b)
+      answer.map(_.payloadStatus.status) shouldBe Right(PayloadStatus.Valid)
       on.node.forkChoiceManager.getRequestedHeadBlockHash shouldBe Some(chain.last.header.hash.value)
-      on.node.forkChoiceManager.getHeadBlockHash shouldBe None
-      on.holds(chain(1).header, chain.take(2))
+      on.node.forkChoiceManager.getHeadBlockHash shouldBe Some(chain.last.header.hash.value)
+      on.holds(chain.last.header, chain)
+      on.source.offTheLock.toArray.toSeq shouldBe empty
     }
 
   it should "refuse what it cannot mend, writing nothing, and leave test mode's reset residue to the next reset" taggedAs
@@ -1036,7 +1094,8 @@ class HeadMoveOnTheChainSpec extends ScalaTestWithActorTestKit with AnyFlatSpecL
       on.move(chain(1).header)
       val competing = siblingOf(chain(2))
       on.imports(competing)
-      choices.applyForkChoiceState(choiceOf(chain(3), chain)) shouldBe Left("SYNCING")
+      // across the fork, along the competing block's record and the old chain's records (C4d part 2b)
+      choices.applyForkChoiceState(choiceOf(chain(3), chain)) shouldBe Right(())
       on.move(chain(3).header)
       on.imports(chain(4))
       choices.applyForkChoiceState(choiceOf(chain(4), chain)) shouldBe Right(())
