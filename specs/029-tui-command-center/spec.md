@@ -4,7 +4,7 @@
 
 **Created**: 2026-11-13
 
-**Status**: Clarified (2026-11-13). The user answered D-1 to D-3 on 2026-11-13: in-process only, a peer radar, and sprite sheets supplied by the user.
+**Status**: Clarified (2026-11-13). The user answered D-1 to D-3 on 2026-11-13: in-process only, a peer radar, and art made in this spec's own work.
 
 **In flight**: `ccr-452bbde8-2hrv25` (cloud session, B-244): spec, research, plan and tasks in PR #1820
 
@@ -56,9 +56,12 @@ Three choices changed the scope and were the user's to make. The options are in 
 - Q (D-2): The mockup's topology panel is a world map with arcs between peers, and the node has neither location data
   nor knowledge of its peers' connections. What is the panel? → A: **A peer radar** that plots only what the node
   knows. No map and no location database. (user, 2026-11-13)
-- Q (D-3): The supplied images are concept art, not sprite sheets. Who draws the sprites? → A: **The user supplies the
-  sprite sheets**, to the format in [contracts/art.md](./contracts/art.md). The build ships plain placeholder art in
-  the same format until they arrive. (user, 2026-11-13)
+- Q (D-3): The supplied images are concept art, not sprite sheets. Who draws the sprites? → A, first: the user
+  supplies the sheets. **Revised the same day: "you should create the sprites and graphics to ensure you have full
+  artistic control. make sure you view them to get the look correct."** The art is made in this spec's own work, to
+  [contracts/art.md](./contracts/art.md), and looked at as it is drawn. The first set is in
+  `src/main/resources/tui/art/`, drawn by `scripts/tui/make_art.py`; views of it are in
+  [art-preview/](./art-preview/). (user, 2026-11-13)
 
 ### Defaults taken without asking
 
@@ -585,10 +588,10 @@ Each requirement names the research section it rests on.
   settings are listed in [contracts/operator.md](./contracts/operator.md).
 - **FR-060** Art is data, not code: sprite sheets in the fixed palette with a manifest naming each sprite, its frames
   and the state each is for, so that art can be replaced without a code change. A test rejects art outside the
-  palette or the declared sizes. The user supplies the sheets (D-3) to [contracts/art.md](./contracts/art.md). Until
-  they arrive, and as the permanent fallback for a missing or invalid sheet, the build carries plain placeholder art
-  in the same format, so no slice waits on art and a bad sheet never stops the node: it is reported at start and the
-  placeholder is drawn (§5.4).
+  palette or the declared sizes. The art is made in this spec's own work (D-3) to
+  [contracts/art.md](./contracts/art.md): the sheets are the output of a drawing script, so a sprite is changed by
+  changing the script, and a check fails when the committed sheets are not what it draws. A missing or invalid sheet
+  never stops the node: it is reported at start and that region shows the text the frame already carries (§5.4).
 
 ### Key Entities
 
@@ -660,8 +663,8 @@ Each requirement names the research section it rests on.
 - Spec 027's manual gate (B-189) runs before this spec's first slice changes the files it covers, or that slice
   rebases onto its fixes.
 - B-193 (Engine API status counters) and B-196 (a count-only pool query) land before the panels that read them.
-- The user supplies the sprite sheets (D-3). They are Chippr Robotics' own work. Engineering does not wait for them:
-  placeholder art in the same format ships first, and the release gate (SC-014) is run with the real sheets.
+- The art is made for this feature, in the repository, and is Chippr Robotics' own (D-3). It has been judged on
+  enlarged renders and mock screens, not yet on a real terminal; SC-014 is where it is first seen in one.
 - "One heavy JVM at a time" on the build host still holds, so slices are built and gated serially, as in spec 027.
 
 ## Related specs

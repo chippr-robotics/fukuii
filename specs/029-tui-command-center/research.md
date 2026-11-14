@@ -627,9 +627,11 @@ client". A zero is only ever a measured zero.
 ## 9. Decisions for the user
 
 Three choices changed the scope and had no default the spec could take alone. **All three were answered on
-2026-11-13: D-1 (a) in process only; D-2 (a) the peer radar; D-3 (b) the user supplies the sprite sheets.** The
-options are kept here as the record of what was weighed. D-3 was answered against the recommendation: the user draws
-the art, to [contracts/art.md](./contracts/art.md), and the build carries placeholder art so no slice waits.
+2026-11-13: D-1 (a) in process only; D-2 (a) the peer radar; D-3, first (b) and then revised the same day to: the
+art is made in this spec's own work, with full control of it, and looked at as it is drawn.** The options are kept
+here as the record of what was weighed. The first set of art is in the tree (`src/main/resources/tui/art/`, drawn by
+`scripts/tui/make_art.py`, views in [art-preview/](./art-preview/)); §5.4's rules became
+[contracts/art.md](./contracts/art.md).
 
 **D-1. Starting and restarting the node.** The brief lists "start and stop node processes" and "restart client
 services". In process, the TUI can stop the node and (with new lifecycle work) stop and start the HTTP and WebSocket

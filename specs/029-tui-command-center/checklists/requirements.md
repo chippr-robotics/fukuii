@@ -34,7 +34,7 @@
 ## Notes
 
 - **Clarified 2026-11-13.** The three markers (D-1 node and service lifecycle, D-2 the topology panel, D-3 who draws
-  the sprites) were answered by the user: in process only; a peer radar; the user supplies the sprite sheets. The
+  the sprites) were answered by the user: in process only; a peer radar; the art is made in this spec's own work. The
   answers are in the spec's Clarifications section and in FR-030, FR-055 and FR-060.
 - **Implementation detail, by the house style.** The spec names the Kitty graphics protocol, `fukuii.tui.*` settings
   and `FUKUII_TUI_*` variables. The protocol is the user's stated constraint, and the settings are operator-visible
