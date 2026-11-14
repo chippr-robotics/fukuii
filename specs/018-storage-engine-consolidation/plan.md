@@ -2813,6 +2813,41 @@ clears the fault with the state it was found in (a case); test mode's comment on
 closed: a test datadir is the test's to mend). Recorded: the fault is kept in memory only, and nothing looks at the
 records again at the next start (B-252).
 
+#### C4d part 1: the finalized block (2026-11-14)
+
+The node's finalized block on the unified layout, which a move of the head must not reverse (C4b part 1's `Finalized`
+refusal) and above which retention keeps the records (`StateConfig.retained`: the anchor less the finalized block,
+plus the margin), was none: no consensus client drove the layout. Now:
+- **The fork choice names it** (T160, T171): the finalized block hash of a fork choice that was followed, by its
+  header, is written in the batch of the move, or the confirmation, of the head that followed it, as the AppState row
+  `state.finalized` (`v1:<hash>:<number>`), and is the store's (`PathStateStorage.finalizedBlock`) under the state
+  lock right after that batch (`moveHead(..., finalized)`, through `BlockchainWriter.moveHeadInPlace`), so the move or
+  commit that follows sees it. A fork choice that was refused names nothing; the row is not written again when it is
+  the block already named. The zero hash names none and leaves the block named before; a hash with no stored header
+  does too, logged; a block below the one named is taken, logged (go-ethereum's `SetFinalized` takes it, and on the
+  held state's chain it only loosens what is kept). `testing_commitBlockV1` names none: test mode has no beacon chain
+  behind it, and naming each committed head would refuse every later rewind.
+- **It survives a restart**: the store reads the row when it is opened. Before this a restart lost the `Finalized`
+  refusal, and the retention floor jumped from the finality lag to `state.retention.without-finality` and back.
+- **Test mode's destruction of the state takes it away** with the state's other marks.
+
+**The mutation run**: 9 mutants, all caught: a refused fork choice naming the block, the row not written, the row not
+read at start, the store ignoring the block it was given, test mode's reset keeping the block or its row, the block
+not taken by the store after a confirmation's batch, the writer not passing it on, a test-mode commit finalizing its
+head.
+
+**Read after code (beacon): APPROVE WITH CHANGES**, all taken. The named block is always on the held state's chain:
+the Engine API refuses a finalized block it does not know or that is not an ancestor of the head before the fork
+choice, and the confirmation passes only for the anchor. Taken: the block is the store's under the state lock right
+after the batch that ends on the target (it was set after the move returned, a window a fork choice that reverses
+blocks, from part 2b, could have used, and a gap where a throw after the write left the row on disk and the store
+without it); `testing_commitBlockV1` names none; the two WARN lines; the row not rewritten each slot; one zero hash.
+Cases: the Engine API's fork choice names it; a lower one is taken; a store is not opened over a row it cannot read; a
+test-mode commit names none. Not driven here: retention narrowing to the finality lag once a block is named (the
+arithmetic is `StateConfig.retained`'s, and its spec; a chain longer than `pruning.history` is not built here).
+Recorded: a path that gives a datadir its anchor again (the hand-off of C5a, a checkpoint import of C5c) must take the
+row away with the old state, as test mode's destruction does.
+
 ### Destructive change (C8a and C8b): the vault protocol blocks
 
 ```

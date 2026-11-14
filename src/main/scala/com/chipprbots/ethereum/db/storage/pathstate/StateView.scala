@@ -21,6 +21,26 @@ final case class BlockRef(hash: ByteString, number: BigInt, stateRoot: ByteStrin
   */
 final case class FinalizedBlock(number: BigInt, hash: ByteString)
 
+object FinalizedBlock:
+  private val Version = "v1"
+  private val HashHexLength = 64
+
+  /** The AppState string `v1:<blockHash hex>:<number decimal>` ([[com.chipprbots.ethereum.db.storage.AppStateStorage]],
+    * `state.finalized`).
+    */
+  def encode(block: FinalizedBlock): String = s"$Version:${Hex.toHexString(block.hash.toArray)}:${block.number}"
+
+  /** The finalized block a stored value names. A value this build cannot read is an error, not an absent block: an
+    * absent one lets a move reverse what was finalized.
+    */
+  def decode(value: String): FinalizedBlock =
+    def malformed: Nothing = throw new IllegalStateException(s"state.finalized is not a $Version block: '$value'")
+    value.split(':') match
+      case Array(Version, hash, number)
+          if hash.length == HashHexLength && number.nonEmpty && number.forall(_.isDigit) =>
+        FinalizedBlock(BigInt(number), Try(ByteString(Hex.decode(hash))).getOrElse(malformed))
+      case _ => malformed
+
 /** The state anchor (spec 018 data-model 5.1): the one statement of which block's state the rows of CF `t` and CF `u`
   * hold. It is the AppState string `v1:<blockHash hex>:<number decimal>:<stateRoot hex>`, written in the same batch as
   * the rows it describes and never without them.

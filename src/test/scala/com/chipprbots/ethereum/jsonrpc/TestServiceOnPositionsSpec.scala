@@ -711,10 +711,16 @@ class TestServiceOnPositionsSpec
     val rig = new Rig(guard = true)
     rig.setChain(chainA) shouldBe Right(SetChainParamsResponse())
     rig.mine(Seq(transfer(0, Address(42), 9000))) shouldBe Right(MineBlocksResponse())
+    // a finalized block named on the state that goes (C4d part 1)
+    val finalized = com.chipprbots.ethereum.db.storage.pathstate.FinalizedBlock(1, rig.head.header.hash.value)
+    rig.blockchainWriter.moveHeadInPlace(rig.head.header, rig.blockchainReader, finalized = Some(finalized))
+    rig.pathState.finalizedBlock shouldBe Some(finalized)
     rig.pathState.failClosed("a test's corrupt record")
     rig.mine(Seq(transfer(1, Address(43), 1))).isLeft shouldBe true
     rig.setChain(chainA) shouldBe Right(SetChainParamsResponse())
     rig.pathState.hasFailedClosed shouldBe false
+    rig.pathState.finalizedBlock shouldBe None
+    rig.storagesInstance.storages.appStateStorage.getStateFinalized() shouldBe None
     rig.head.header.number.value shouldBe 0
     rig.mine(Seq(transfer(0, Address(42), 9000))) shouldBe Right(MineBlocksResponse())
     rig.anchor shouldBe Some(rig.refOf(rig.head.header))

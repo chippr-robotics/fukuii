@@ -220,7 +220,7 @@ class EngineApiService(
   // chain through an optimistically-accepted descendant.
   private val acceptedChildrenByParent =
     new java.util.concurrent.ConcurrentHashMap[ByteString, java.util.Set[ByteString]]()
-  private val zeroHash = ByteString(new Array[Byte](32))
+  private val zeroHash = ForkChoiceManager.ZeroHash
 
   /** Mark `hash` as INVALID and recursively invalidate every optimistically-accepted descendant. All descendants
     * inherit the same `latestValidHash`.
@@ -795,7 +795,7 @@ class EngineApiService(
   ): IO[Either[String, ForkchoiceUpdatedResponse]] = IO.defer {
     // Check invalid/unvalidated blocks BEFORE applying fork choice state
     // (applyForkChoiceState calls promoteToCanonicalHead, which would make the block canonical)
-    val zeroHash = ByteString(new Array[Byte](32))
+    val zeroHash = ForkChoiceManager.ZeroHash
 
     if invalidBlocks.containsKey(forkChoiceState.headBlockHash) then
       val latestValid = Option(invalidBlocks.get(forkChoiceState.headBlockHash))

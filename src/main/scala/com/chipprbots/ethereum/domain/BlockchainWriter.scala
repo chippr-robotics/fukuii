@@ -15,6 +15,7 @@ import com.chipprbots.ethereum.db.storage.ReceiptStorage
 import com.chipprbots.ethereum.db.storage.TransactionMappingStorage
 import com.chipprbots.ethereum.db.storage.TransactionMappingStorage.TransactionLocation
 import com.chipprbots.ethereum.db.storage.pathstate.BlockRef
+import com.chipprbots.ethereum.db.storage.pathstate.FinalizedBlock
 import com.chipprbots.ethereum.db.storage.pathstate.HeadMovePlan
 import com.chipprbots.ethereum.db.storage.pathstate.PathStateStorage
 import com.chipprbots.ethereum.db.storage.pathstate.StateUnavailable
@@ -365,6 +366,9 @@ class BlockchainWriter(
     * @param refuse
     *   why a batch of the move is not to be written, when it is not. Asked for each batch before its rows are built; a
     *   refusal ends the move there with a [[StateUnavailable]], and the batches before it stand
+    * @param finalized
+    *   the finalized block the fork choice behind this move named: written in the batch that ends on `target`, and the
+    *   store's from then on, only once that batch was written (spec 018 C4d part 1)
     * @throws IllegalStateException
     *   on the hash layout, which holds the state of every block and has no head of the state to move
     * @throws com.chipprbots.ethereum.db.storage.pathstate.ReorgTooDeep
@@ -375,7 +379,8 @@ class BlockchainWriter(
   def moveHeadInPlace(
       target: BlockHeader,
       reader: BlockchainReader,
-      refuse: HeadMovePlan.Chunk => Option[String] = _ => None
+      refuse: HeadMovePlan.Chunk => Option[String] = _ => None,
+      finalized: Option[FinalizedBlock] = None
   ): PathStateStorage.MoveOutcome =
     val state = pathState.getOrElse(
       throw new IllegalStateException(
@@ -398,6 +403,8 @@ class BlockchainWriter(
                 )
               )
         Some(canonicalHeadUpdate(head, reader).batch)
+      ,
+      finalized
     )
 
   /** '''START only''': the batch that makes the index of blocks by number the ancestry of `held`, the block whose state
@@ -480,6 +487,9 @@ class BlockchainWriter(
     * this datadir's own changeset records corrupt. Nothing on the hash layout.
     */
   def failStateClosed(why: String): Unit = pathState.foreach(_.failClosed(why))
+
+  /** The finalized block the state on the unified layout is held to ([[PathStateStorage.finalizedBlock]]). */
+  def finalizedOfTheState: Option[FinalizedBlock] = pathState.flatMap(_.finalizedBlock)
 
   private def saveBlockNumberMapping(number: BigInt, hash: BlockHash): DataSourceBatchUpdate =
     blockNumberMappingStorage.put(number, hash.value)
