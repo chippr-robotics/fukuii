@@ -2957,7 +2957,7 @@ items:
   - id: B-258
     title: "Spec 029 slice 2b: the command-center theme, the splash with the badge and real start-up phases, chart primitives"
     priority: P2
-    status: open
+    status: claimed
     area: tui
     size: M
     opened: 2026-11-14
@@ -2965,6 +2965,11 @@ items:
     links:
       spec: specs/029-tui-command-center
     depends_on: [B-257]
+    claim:
+      by: cloud-ccr-452bbde8
+      agent: main
+      since: 2026-11-14T12:45:42Z
+      heartbeat: 2026-11-14T12:45:42Z
     notes: tasks T046, T049, T050 (charts wait for slice 3's first chart).
   - id: B-259
     title: "TUI pixel mode: free the least recently shown images instead of holding every sprite frame until a clear"
