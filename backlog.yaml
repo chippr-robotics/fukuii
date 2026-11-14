@@ -2928,3 +2928,14 @@ items:
       spec: specs/018-storage-engine-consolidation
     depends_on: [B-062]
     notes: C4d part 3 pins T156 in process (a node reopened on the same in-memory source). The crash test proper (it/consensus/engine/CrashBetweenNewPayloadAndFcuItSpec.scala) and a real CL (EG-14) remain.
+  - id: B-256
+    title: "SNAPResetCharacterizationSpec dormant-mode case: the 10 s wait for 'SNAP finalization aborted' timed out once in CI (#1833), passes locally"
+    priority: P2
+    status: open
+    area: snap
+    size: S
+    opened: 2026-11-14
+    refs: []
+    links:
+      spec: specs/016-snap-controller-split
+    notes: "parkInStateValidation (SnapControllerFixture:406) waits 10 s for the A5 guard's log line; on #1833's run it never came (suites run one at a time in the fork, so no rival capture). Find why the controller did not reach the guard: a starved dispatcher, or the decision not delivered."
