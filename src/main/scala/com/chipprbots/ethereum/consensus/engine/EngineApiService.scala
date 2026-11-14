@@ -815,7 +815,11 @@ class EngineApiService(
       // The state on disk is one block's, and the head moves with it, in the batch that commits a block. A move of
       // the head to any other block needs that block's state: a forward layer, or a move back along the changeset
       // records, which arrive with the overlay and the head move (spec 018 C4a, C4b). Until then this node cannot
-      // follow the head it is given, and says so: nothing is moved, published or marked.
+      // follow the head it is given, and says so: nothing is moved or marked. The head is published and recorded as the
+      // one asked for, as the other SYNCING branches do (notify-only: it writes nothing), so that whatever imports the
+      // blocks up to it knows where they lead (beacon, C4b part 4: after a reconciliation at start the head is below the
+      // consensus layer's).
+      forkChoiceManager.notifyBeaconHead(forkChoiceState)
       log.warn(
         "[ENGINE-API] forkchoiceUpdated: head {} is not the block whose state this node holds; the unified state " +
           "layout cannot move its head yet (SYNCING)",

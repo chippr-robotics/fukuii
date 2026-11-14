@@ -41,6 +41,8 @@ import com.chipprbots.ethereum.domain.Block
 import com.chipprbots.ethereum.domain.BlockHeader
 import com.chipprbots.ethereum.domain.BlockchainWriter
 import com.chipprbots.ethereum.domain.ChainWeight
+import com.chipprbots.ethereum.domain.StateReconciliation
+import com.chipprbots.ethereum.domain.appstate.BlockInfo
 import com.chipprbots.ethereum.ledger.BlockValidation
 import com.chipprbots.ethereum.ledger.HeaderTrustingBlockExecution
 import com.chipprbots.ethereum.mpt.PositionTestKit.RawTrieWalk
@@ -92,8 +94,10 @@ class HeadMoveOnTheChainSpec extends ScalaTestWithActorTestKit with AnyFlatSpecL
     @volatile var fails = false
     @volatile var watching: Option[PathStateStorage] = None
     val offTheLock = new java.util.concurrent.ConcurrentLinkedQueue[String]()
+    val writes = new java.util.concurrent.atomic.AtomicInteger(0)
     override def update(dataSourceUpdates: Seq[DataUpdate]): Unit =
       if fails then throw new java.io.IOException("the disk is full")
+      writes.incrementAndGet()
       watching.filter(state => state.anchor.isDefined && !state.lock.isHeldByCurrentThread).foreach { _ =>
         dataSourceUpdates.flatMap(headWritten).foreach(offTheLock.add)
       }
@@ -148,6 +152,35 @@ class HeadMoveOnTheChainSpec extends ScalaTestWithActorTestKit with AnyFlatSpecL
     ): EngineApiService =
       given org.apache.pekko.actor.typed.Scheduler = system.scheduler
       new EngineApiService(reader, writer, execution, choices, None, stateHeldInPlace = Some(held))
+
+    // C4b part 4: a datadir staged as a defect would leave it, and the reconciliation at start.
+    def storages = node.storagesInstance.storages
+    def reconcile(testMode: Boolean = false): StateReconciliation.Outcome =
+      StateReconciliation.run(storages.appStateStorage, pathState, reader, writer, testMode)
+    def putBest(hash: ByteString, number: BigInt): Unit =
+      storages.appStateStorage.putBestBlockInfo(BlockInfo(hash, number)).commit()
+    def putIndex(number: BigInt, hash: ByteString): Unit = storages.blockNumberMappingStorage.put(number, hash).commit()
+    def dropIndex(number: BigInt): Unit = storages.blockNumberMappingStorage.remove(number).commit()
+    def putAppState(key: String, value: String): Unit =
+      source.update(
+        Seq(
+          DataSourceUpdate(
+            Namespaces.AppStateNamespace,
+            Nil,
+            Seq(key.getBytes.toIndexedSeq -> value.getBytes.toIndexedSeq)
+          )
+        )
+      )
+    def dropAppState(key: String): Unit =
+      source.update(Seq(DataSourceUpdate(Namespaces.AppStateNamespace, Seq(key.getBytes.toIndexedSeq), Nil)))
+
+    /** The datadir but for what the reconciliation may write: the index, the transaction lookups, the best block. */
+    def outsideTheHead: Map[ByteString, ByteString] =
+      everything.filterNot { (key, _) =>
+        key.head == Namespaces.HeightsNamespace.head || key.head == Namespaces.TransactionMappingNamespace.head ||
+        (key.head == Namespaces.AppStateNamespace.head &&
+          bestBlockKeys(new String(key.tail.toArray, java.nio.charset.StandardCharsets.UTF_8)))
+      }
 
     /** `block` executed and committed in place as the head, as an import of it does. */
     def imports(block: Block): Unit =
@@ -581,6 +614,218 @@ class HeadMoveOnTheChainSpec extends ScalaTestWithActorTestKit with AnyFlatSpecL
         ReorgRefusal.Corrupt
       on.everything shouldBe before
       on.node.forkChoiceManager.getHeadBlockHash shouldBe None
+    }
+
+  // C4b part 4 (T150): the reconciliation at start. The block whose state is held wins, always (vault, forge): the
+  // best block and the index are made its own, and nothing else is written.
+  private def unknownHash(n: Int): ByteString = ByteString(Array.fill[Byte](32)(n.toByte))
+
+  "The reconciliation at start" should "make the best block and the index the held block's when the best block is above it, and the chain go on" taggedAs
+    (UnitTest, ConsensusTest) in {
+      val on = new Node
+      val chain = blocks.take(5)
+      chain.foreach(on.imports)
+      on.move(chain(1).header)
+      // a best block left above the state, with the index up to it and the lookups of its blocks' transactions
+      chain.drop(2).foreach(b => on.putIndex(b.header.number.value, b.header.hash.value))
+      val above = chain.drop(2).flatMap { b =>
+        b.body.transactionList.zipWithIndex.map { (tx, i) =>
+          on.storages.transactionMappingStorage
+            .put(
+              tx.hash.value,
+              com.chipprbots.ethereum.db.storage.TransactionMappingStorage.TransactionLocation(b.header.hash.value, i)
+            )
+            .commit()
+          tx.hash.value
+        }
+      }
+      above should not be empty
+      on.putBest(chain.last.header.hash.value, chain.last.header.number.value)
+      val before = on.outsideTheHead
+      // what was staged above was written off the lock on purpose: the watch is of the reconciliation's own writes
+      on.source.offTheLock.clear()
+      on.reconcile() match
+        case StateReconciliation.Outcome.Reconciled(anchor, from, _, removed, _) =>
+          (anchor, from.number, removed) shouldBe (refOf(chain(1).header), chain.last.header.number.value, 3)
+        case other => fail(s"not reconciled: $other")
+      on.holds(chain(1).header, chain.take(2))
+      on.outsideTheHead shouldBe before
+      on.source.offTheLock.toArray.toSeq shouldBe empty
+      // a transaction of a block above the state is looked up in no block
+      above.foreach(tx => on.lookup(tx) shouldBe None)
+      // once: a second start writes nothing
+      val writes = on.source.writes.get
+      on.reconcile() shouldBe StateReconciliation.Outcome.Consistent(refOf(chain(1).header))
+      on.source.writes.get shouldBe writes
+      // and the blocks above come back as blocks to execute, not as blocks already there
+      chain.drop(2).foreach(on.imports)
+      on.holds(chain.last.header, chain)
+      on.node.forkChoiceManager.applyForkChoiceState(choiceOf(chain.last, chain)) shouldBe Right(())
+    }
+
+  it should "make them the held block's whatever the best block was: below it, on another branch, with no hash, unknown" taggedAs
+    (UnitTest, ConsensusTest) in {
+      val chain = blocks.take(4)
+      val shapes: Seq[(String, Node => Unit)] = Seq(
+        "below" -> { on =>
+          on.putBest(chain(1).header.hash.value, 2)
+          Seq(3, 4).foreach(n => on.dropIndex(n))
+        },
+        "on another branch" -> { on =>
+          val side = siblingOf(chain(2))
+          on.storages.blockHeadersStorage.put(side.header.hash.value, side.header).commit()
+          on.putIndex(3, side.header.hash.value)
+          on.dropIndex(4)
+          on.putBest(side.header.hash.value, 3)
+        },
+        "with no hash" -> (_.putBest(ByteString.empty, 7)),
+        "unknown" -> { on =>
+          on.putIndex(9, unknownHash(9))
+          on.putBest(unknownHash(9), 9)
+        }
+      )
+      shapes.foreach { (shape, stage) =>
+        withClue(s"a best block $shape: ") {
+          val on = new Node
+          chain.foreach(on.imports)
+          stage(on)
+          val before = on.outsideTheHead
+          on.reconcile() shouldBe a[StateReconciliation.Outcome.Reconciled]
+          on.holds(chain.last.header, chain)
+          on.outsideTheHead shouldBe before
+          on.reconcile() shouldBe StateReconciliation.Outcome.Consistent(refOf(chain.last.header))
+        }
+      }
+    }
+
+  // I6: the walk does not stop at the first entry that matches, and entries above a gap are found
+  it should "hold the index to the held block's ancestry with the best block in place: a side entry under matching ones, a hole, an entry above a gap" taggedAs
+    (UnitTest, ConsensusTest) in {
+      val on = new Node
+      val chain = blocks.take(5)
+      chain.foreach(on.imports)
+      // a side block at height 2 that holds the transactions the chain includes at height 3 (beacon)
+      val side = siblingOf(chain(1)).copy(body = chain(2).body)
+      on.storages.blockHeadersStorage.put(side.header.hash.value, side.header).commit()
+      on.storages.blockBodiesStorage.put(side.header.hash.value, side.body).commit()
+      on.putIndex(2, side.header.hash.value)
+      on.dropIndex(4)
+      on.putIndex(8, unknownHash(8))
+      val before = on.outsideTheHead
+      on.reconcile() match
+        case StateReconciliation.Outcome.Reconciled(_, from, rewritten, removed, _) =>
+          (from.number, rewritten, removed) shouldBe (chain.last.header.number.value, 2, 1)
+        case other => fail(s"not reconciled: $other")
+      on.holds(chain.last.header, chain)
+      on.outsideTheHead shouldBe before
+      // a transaction of the side block that the chain includes higher up is looked up in the block that includes it
+      val shared = on.txsOf(chain(2))
+      shared should not be empty
+      shared.foreach(tx => on.lookup(tx) shouldBe Some(chain(2).header.hash.value))
+    }
+
+  it should "leave what lies past its window and its cap, as it says" taggedAs (UnitTest, ConsensusTest) in {
+    val on = new Node
+    val chain = blocks.take(5)
+    chain.foreach(on.imports)
+    val side = siblingOf(chain(0))
+    on.storages.blockHeadersStorage.put(side.header.hash.value, side.header).commit()
+    on.putIndex(1, side.header.hash.value) // four blocks below the held one: past a window of two
+    on.putIndex(6, unknownHash(6)) // the first height above: within a cap of two
+    on.putIndex(8, unknownHash(8)) // three above: past it
+    StateReconciliation.run(
+      on.storages.appStateStorage,
+      on.pathState,
+      on.reader,
+      on.writer,
+      testMode = false,
+      window = 2,
+      scanAbove = 2
+    ) match
+      case StateReconciliation.Outcome.Reconciled(_, _, rewritten, removed, _) => (rewritten, removed) shouldBe (0, 1)
+      case other                                                               => fail(s"not reconciled: $other")
+    on.reader.getCanonicalHashByNumber(1).map(_.value) shouldBe Some(side.header.hash.value)
+    on.reader.getCanonicalHashByNumber(6) shouldBe None
+    on.reader.getCanonicalHashByNumber(8).map(_.value) shouldBe Some(unknownHash(8))
+  }
+
+  // Beacon, part 4's read: after the head is lowered at start, the consensus layer's head is above it. Its fork choice is
+  // answered SYNCING with nothing written, and its head is recorded as the one asked for.
+  it should "leave the Engine API answering the consensus layer's head above it SYNCING, with that head recorded" taggedAs
+    (UnitTest, ConsensusTest) in {
+      val on = new Node
+      val chain = blocks.take(5)
+      chain.foreach(on.imports)
+      on.move(chain(1).header)
+      chain.drop(2).foreach(b => on.putIndex(b.header.number.value, b.header.hash.value))
+      on.putBest(chain.last.header.hash.value, chain.last.header.number.value)
+      on.reconcile() shouldBe a[StateReconciliation.Outcome.Reconciled]
+      val before = on.everything
+      val answer = on
+        .engine(() => on.pathState.anchor.map(_.hash))
+        .forkchoiceUpdated(choiceOf(chain.last, chain), None)
+        .unsafeRunSync()(using cats.effect.unsafe.IORuntime.global)
+      answer.map(_.payloadStatus.status) shouldBe Right(PayloadStatus.Syncing)
+      on.everything shouldBe before
+      on.node.forkChoiceManager.getRequestedHeadBlockHash shouldBe Some(chain.last.header.hash.value)
+      on.node.forkChoiceManager.getHeadBlockHash shouldBe None
+      on.holds(chain(1).header, chain.take(2))
+    }
+
+  it should "refuse what it cannot mend, writing nothing, and leave test mode's reset residue to the next reset" taggedAs
+    (UnitTest, ConsensusTest) in {
+      val chain = blocks.take(3)
+      def staged(stage: Node => Unit): Node =
+        val on = new Node
+        chain.foreach(on.imports)
+        stage(on)
+        on
+      // the held block's header gone: refused; in test mode, a reset that stopped between its two writes
+      val noHeader = staged(on => on.storages.blockHeadersStorage.remove(chain.last.header.hash.value).commit())
+      val writes = noHeader.source.writes.get
+      val everything = noHeader.everything
+      (the[IllegalStateException] thrownBy noHeader.reconcile()).getMessage should include("is not stored")
+      noHeader.reconcile(testMode = true) shouldBe
+        StateReconciliation.Outcome.LeftForTheReset(refOf(chain.last.header))
+      noHeader.source.writes.get shouldBe writes
+      noHeader.everything shouldBe everything
+      // the anchor's row naming another state root than its header
+      val contradicted = staged(on =>
+        on.putAppState(
+          com.chipprbots.ethereum.db.storage.pathstate.StateAnchor.Key,
+          com.chipprbots.ethereum.db.storage.pathstate.StateAnchor
+            .encode(refOf(chain.last.header).copy(stateRoot = unknownHash(1)))
+        )
+      )
+      val beforeContradicted = contradicted.everything
+      (the[IllegalStateException] thrownBy contradicted.reconcile()).getMessage should include("its header says")
+      contradicted.everything shouldBe beforeContradicted
+      // the held block's weight gone
+      val noWeight = staged(on => on.storages.chainWeightStorage.remove(chain.last.header.hash.value).commit())
+      (the[IllegalStateException] thrownBy noWeight.reconcile()).getMessage should include("chain weight")
+      // no anchor: nothing to do, unless the datadir says it was synced
+      val noAnchor = staged(on => on.dropAppState(com.chipprbots.ethereum.db.storage.pathstate.StateAnchor.Key))
+      noAnchor.reconcile() shouldBe StateReconciliation.Outcome.NoAnchor
+      noAnchor.storages.appStateStorage.snapSyncDone().commit()
+      (the[IllegalStateException] thrownBy noAnchor.reconcile()).getMessage should include("SNAP")
+      // no stamp: not this layout's datadir, the loader's to judge
+      val noStamp = staged(on => on.dropAppState(com.chipprbots.ethereum.db.storage.pathstate.StateLayout.Key))
+      noStamp.reconcile() shouldBe StateReconciliation.Outcome.NotOnTheUnifiedLayout
+    }
+
+  it should "write nothing when its batch fails, and mend the datadir at the next start" taggedAs
+    (UnitTest, ConsensusTest) in {
+      val on = new Node
+      val chain = blocks.take(4)
+      chain.foreach(on.imports)
+      on.putBest(chain(1).header.hash.value, 2)
+      val before = on.everything
+      on.source.fails = true
+      an[java.io.IOException] should be thrownBy on.reconcile()
+      on.source.fails = false
+      on.everything shouldBe before
+      on.reconcile() shouldBe a[StateReconciliation.Outcome.Reconciled]
+      on.holds(chain.last.header, chain)
     }
 
   // Beacon 5b: behind the source ratchet and the refusals, the writes themselves. Every flow that is reached on the

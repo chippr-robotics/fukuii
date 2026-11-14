@@ -400,6 +400,82 @@ class BlockchainWriter(
         Some(canonicalHeadUpdate(head, reader).batch)
     )
 
+  /** '''START only''': the batch that makes the index of blocks by number the ancestry of `held`, the block whose state
+    * the disk holds, and the best block `held` (spec 018 data-model 5.1, I1 rule 4 and I6; plan.md "C4b part 4"). For
+    * the reconciliation at start ([[StateReconciliation]]) and for it alone: at runtime the head moves with the state,
+    * in a move ([[moveHeadInPlace]]) or a block's own commit, never the other way round.
+    *
+    * '''Below `held`''': its ancestry by parent hashes, never by the index, for `window` blocks or down to the genesis
+    * or a header that is not stored. Every height whose entry is not the ancestor is rewritten, at whatever depth: the
+    * walk does not stop at the first entry that matches, as [[canonicalHeadUpdate]]'s does, since an entry below one
+    * that matches can still name another block.
+    *
+    * '''Above `held`''': every entry is deleted, up to the old best block and `gapScan` heights beyond the highest
+    * entry found, and never more than `scanAbove` heights above `held`: the old best block may be any number. A scan
+    * that ends at that cap says so (`capped`).
+    *
+    * The transaction lookups of the blocks it drops go, but for those of the transactions the ancestry includes, as
+    * [[canonicalHeadUpdate]] does. Nothing else is written: no header, body, receipt, weight, state row or record.
+    */
+  def heldBlockIndex(
+      held: BlockHeader,
+      reader: BlockchainReader,
+      window: Int,
+      scanAbove: Int,
+      gapScan: Int = BlockchainWriter.IndexGapScan
+  ): HeldBlockIndex =
+    val heldNumber = held.number.value
+    val oldBest = appStateStorage.getBestBlockInfo()
+
+    @tailrec
+    def ancestry(at: BlockHeader, left: Int, acc: List[(BigInt, BlockHash)]): List[(BigInt, BlockHash)] =
+      val withAt = (at.number.value, at.hash) :: acc
+      if left <= 1 || at.number.value == 0 then withAt
+      else
+        reader.getBlockHeaderByHash(at.parentHash).filter(_.hash == at.parentHash) match
+          case Some(parent) => ancestry(parent, left - 1, withAt)
+          case None         => withAt
+    val chain = ancestry(held, window.max(1), Nil)
+    val put = chain.filterNot((number, hash) => reader.getCanonicalHashByNumber(number).contains(hash))
+
+    val ceiling = heldNumber + scanAbove
+    @tailrec
+    def above(height: BigInt, highest: BigInt, acc: List[(BigInt, BlockHash)]): (List[(BigInt, BlockHash)], Boolean) =
+      if height > ceiling then (acc.reverse, true)
+      else if height > highest + gapScan then (acc.reverse, false)
+      else
+        reader.getCanonicalHashByNumber(height) match
+          case Some(hash) => above(height + 1, height, (height, hash) :: acc)
+          case None       => above(height + 1, highest, acc)
+    val (removed, capped) = above(heldNumber + 1, oldBest.number.max(heldNumber), Nil)
+
+    val replaced: Seq[(BigInt, BlockHash)] =
+      put.flatMap((number, hash) => reader.getCanonicalHashByNumber(number).filterNot(_ == hash).map(number -> _))
+    // The ancestry from the lowest height rewritten up: a transaction a dropped block shared with any of these blocks
+    // keeps its lookup, and is pointed at the ancestor that includes it (beacon), not only at a rewritten one.
+    val reincluded: Seq[(BigInt, BlockHash)] =
+      put.headOption.fold(Seq.empty[(BigInt, BlockHash)])((lowest, _) => chain.filter(_._1 >= lowest))
+    def txHashes(blocks: Seq[BlockHash]): Set[ByteString] =
+      blocks.flatMap(reader.getBlockBodyByHash).flatMap(_.transactionList.map(_.hash.value)).toSet
+    val staleLookups = txHashes((replaced ++ removed).map(_._2)) -- txHashes(reincluded.map(_._2))
+    val putHashes = put.map(_._2).toSet
+    val relocated =
+      reincluded.filterNot((_, hash) => putHashes(hash)).foldLeft(transactionMappingStorage.emptyBatchUpdate) {
+        case (acc, (_, hash)) =>
+          reader.getBlockBodyByHash(hash).fold(acc)(body => acc.and(saveTxsLocations(hash, body)))
+      }
+    val bestMoves = oldBest.hash != held.hash.value || oldBest.number != heldNumber
+
+    val batch = canonicalIndexUpdate(
+      put,
+      removed.map(_._1),
+      Option.when(bestMoves)((held.hash, heldNumber)),
+      reader
+    ).and(staleLookups.foldLeft(transactionMappingStorage.emptyBatchUpdate) { (acc, tx) =>
+      acc.and(transactionMappingStorage.remove(tx))
+    }).and(relocated)
+    HeldBlockIndex(batch, oldBest, put, replaced, removed, staleLookups.size, bestMoves, capped)
+
   private def saveBlockNumberMapping(number: BigInt, hash: BlockHash): DataSourceBatchUpdate =
     blockNumberMappingStorage.put(number, hash.value)
 
@@ -436,7 +512,39 @@ final case class CanonicalHeadUpdate(
     reorganises: Boolean
 )
 
+/** The batch [[BlockchainWriter.heldBlockIndex]] builds, not yet written, and what it does.
+  *
+  * @param previousBest
+  *   the best block as it was when it was built
+  * @param put
+  *   the heights it writes with the held block's ancestor (ascending)
+  * @param replaced
+  *   what the index named at those heights before, where it named a block
+  * @param removed
+  *   the entries above the held block it deletes
+  * @param capped
+  *   the scan above the held block stopped at its cap: heights above it were not looked at
+  */
+final case class HeldBlockIndex(
+    batch: DataSourceBatchUpdate,
+    previousBest: BlockInfo,
+    put: Seq[(BigInt, BlockHash)],
+    replaced: Seq[(BigInt, BlockHash)],
+    removed: Seq[(BigInt, BlockHash)],
+    droppedTxLookups: Int,
+    movesBest: Boolean,
+    capped: Boolean
+):
+  /** Whether it writes anything at all: a datadir whose index and best block are the held block's takes no write. */
+  def writes: Boolean = put.nonEmpty || removed.nonEmpty || movesBest || droppedTxLookups > 0
+
 object BlockchainWriter:
+
+  /** How many heights above the highest entry found the reconciliation at start still looks for another: entries left
+    * above a gap (a removal that stopped at the first height with no entry) are found too.
+    */
+  val IndexGapScan: Int = 1024
+
   def apply(storages: BlockchainStorages): BlockchainWriter =
     new BlockchainWriter(
       storages.blockHeadersStorage,

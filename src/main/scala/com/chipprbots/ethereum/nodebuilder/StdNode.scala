@@ -32,6 +32,7 @@ import com.chipprbots.ethereum.console.TuiUpdater
 import com.chipprbots.ethereum.db.dataSource.RocksDbCacheMetrics
 import com.chipprbots.ethereum.domain.BestMappingRepair
 import com.chipprbots.ethereum.domain.BlockHash
+import com.chipprbots.ethereum.domain.StateReconciliation
 import com.chipprbots.ethereum.jsonrpc.server.RpcExposureCheck
 import com.chipprbots.ethereum.metrics.Metrics
 import com.chipprbots.ethereum.metrics.MetricsConfig
@@ -79,8 +80,14 @@ abstract class BaseNode extends Node:
 
     // Phase 1: Essential initialization (must complete before anything else)
     startMetricsClient()
-    fixDatabase()
-    repairBestBlockMapping() // before any server binds, so no newPayload/FCU races the read-then-write
+    // On the unified state layout the best block and the index are the held block's, made so before anything reads
+    // them (spec 018 C4b part 4): the hash layout's two repairs trust the best block or the index, and would undo it.
+    if blockchainReader.holdsStateInPlace then reconcileState()
+    // a datadir stamped for the unified layout, opened with the guard off, is refused by the genesis loader: nothing
+    // is repaired in it first (beacon)
+    else if storagesInstance.storages.appStateStorage.getStateLayout().isEmpty then
+      fixDatabase()
+      repairBestBlockMapping() // before any server binds, so no newPayload/FCU races the read-then-write
     loadGenesisData()
     repairStoredBodies() // after genesis is loaded, before the sync controller reads the backfill cursors
     importChainData() // Must complete before APIs so queries return chain data
@@ -468,6 +475,24 @@ abstract class BaseNode extends Node:
     if jsonRpcConfig.ipcServerConfig.enabled then tryAndLogFailure(() => jsonRpcIpcServer.close())
     tryAndLogFailure(() => Metrics.get().close())
     tryAndLogFailure(() => storagesInstance.dataSource.close())
+
+  /** The reconciliation at start of a datadir on the unified state layout ([[StateReconciliation]]): the best block and
+    * the index of blocks by number made those of the block whose state the disk holds. It throws, and the node does not
+    * start, on a datadir it cannot mend.
+    */
+  def reconcileState(): Unit =
+    storagesInstance.storages.pathStateStorage.foreach { pathState =>
+      StateReconciliation.run(
+        storagesInstance.storages.appStateStorage,
+        pathState,
+        blockchainReader,
+        blockchainWriter,
+        testMode = Config.testmode
+      ) match
+        case StateReconciliation.Outcome.Consistent(anchor) =>
+          log.info("State reconciled at start: the best block is the block whose state is held ({})", anchor.show)
+        case other => log.info("State reconciliation at start: {}", other)
+    }
 
   /** Restores the number->hash entry at the best block's height if an earlier version rewrote the best block's header
     * (SNAP startup) and left the index naming the forged copy. See [[BlockchainWriter.repairBestBlockNumberMapping]].
