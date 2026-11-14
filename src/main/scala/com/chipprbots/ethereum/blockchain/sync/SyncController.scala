@@ -2179,6 +2179,8 @@ object SyncController:
               DispatcherSelector.blocking()
             )
           )
+          // Its status may be asked of it (the dashboard's Storage view): nothing else is handed out.
+          BackgroundAudit.publish(backgroundAudit)
         case BackgroundAudit.Gate.CannotRepair => sayAuditOff("pruning.mode = inmemory")
         case BackgroundAudit.Gate.Disabled     => sayAuditOff(s"fukuii.sync.${BackgroundAudit.EnabledPath} = false")
         case BackgroundAudit.Gate.NotOwed      => ()
@@ -2192,6 +2194,7 @@ object SyncController:
     private def stopBackgroundAudit(): Unit =
       backgroundAudit.foreach(ctx.stop)
       backgroundAudit = None
+      BackgroundAudit.publish(None)
 
     // ---- stored chain weights (#1654) --------------------------------------------------------------------------------
 
