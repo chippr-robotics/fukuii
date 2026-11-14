@@ -3215,3 +3215,13 @@ items:
     refs: []
     links: {}
     notes: Found mapping services for spec 029 slice 7. EthMiningService.startMiner/stopMiner are gated by mining.ifEthash only; MiningBuilder builds PoWMining for every protocol, and the coordinator is spawned only when miningEnabled. sendMiner is fire-and-forget, so with no coordinator the call returns Right(true) having done nothing. getMining's isMining means 'an external miner called recently', not the internal miner's state.
+  - id: B-279
+    title: "miner_stop is permanent until restart: the coordinator actor ends and miner_start then messages a dead actor, answering success"
+    priority: P2
+    status: open
+    area: rpc
+    size: M
+    opened: 2026-11-14
+    refs: []
+    links: {}
+    notes: "forge, spec 029 slice 7 analysis. PoWMiningCoordinator StopMining returns Behaviors.stopped (PoWMiningCoordinator.scala:103-105); PoWMining.minerCoordinatorRef is never cleared and startMiningProcess runs once at boot (PoWMining.scala:71,107), so a later StartMining/SetMiningMode is dropped. Also nothing records whether the internal miner runs: EthMiningService.isMining is 'someone reported a hashrate recently' and lags both ways. Related: B-278. The TUI will refuse 'mining start' and say why, and treat 'mining stop' as lasting until restart."
