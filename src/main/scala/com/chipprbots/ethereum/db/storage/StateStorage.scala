@@ -66,6 +66,14 @@ trait StagedBlockState:
       case (None, Some(other))        => other.commit()
       case (None, None)               => ()
 
+  /** Commit this block's state apart from the block, for a block executed without being adopted (a payload ahead of the
+    * head, a side branch): its state is kept beside the head, and the block itself is stored by its caller. On the
+    * modes that write a block's state with no head behind it, that is [[commitWith]] with nothing else in the batch. On
+    * the unified layout it is a forward layer beside the state the disk holds (spec 018 C4d part 2a), and the head does
+    * not move.
+    */
+  def commitApart(blockNumber: BigInt, blockHash: ByteString): Unit = commitWith(blockNumber, blockHash, None)
+
   /** Whether committing this block moves the state on disk to it, in place (the unified layout, before its overlay).
     * Such a commit is only possible in the batch that makes the block the best block, so a block that is executed
     * without being adopted cannot be staged this way: its caller asks, and refuses before the block runs.

@@ -2848,6 +2848,47 @@ arithmetic is `StateConfig.retained`'s, and its spec; a chain longer than `pruni
 Recorded: a path that gives a datadir its anchor again (the hand-off of C5a, a checkpoint import of C5c) must take the
 row away with the old state, as test mode's destruction does.
 
+#### C4d part 2a: a payload is executed as a forward layer (2026-11-14)
+
+`newPayload` on the unified layout executed nothing: a block not on the anchor was refused before it ran, and every
+payload was answered ACCEPTED. Now a payload is executed and its state kept beside the state the disk holds, as a
+forward layer (C4a), and the head does not move: only a fork choice moves it (part 2b; the execution-apis Paris
+specification).
+- **A block is committed apart from the block** (`StagedBlockState.commitApart`): on the hash layout the commit of its
+  state alone, as before; on the unified layout `PathStateStorage.commitOverlay`. A payload is staged apart
+  (`Blockchain.stageBlockStateApart`): its parent may be the anchor, a layer, a block behind the anchor that the
+  records lead to, or a block on a fork from those (`stageOf`, which C4a kept private until an execution could commit
+  such a block). The importer's in-place staging, and its refusal of a block it does not adopt (C4e), are unchanged.
+- **An executed payload is stored by its hash only** on the unified layout, whatever its parent (beacon: the store
+  that indexes it by number was not refused there, and would have put an entry above the anchor, I6). Its state is a
+  layer, not a reference count, so nothing is taken back out of the hash store's counts.
+- **A payload whose requests are not those its execution derived** is marked invalid first, so a fork choice in
+  between finds it so, and then its layer, with what stands on it, and the import gate's record of it are dropped
+  (`BlockchainWriter.dropForwardLayer`, `BlockImportGate.forget`).
+
+Answers on the unified layout: a parent whose state is held (the anchor, a layer, behind the anchor through the
+records, a fork from those) executes, VALID or INVALID; a parent stored and executed whose state is not held any more
+(its layer evicted), or a parent not known, ACCEPTED, stored by its hash; a layer not kept (too large, no room) is still
+VALID, since the block was validated and its state can be executed again (part 3). The fork choice still follows the
+held block only until part 2b.
+
+**The mutation run**: 5 mutants, all caught: a payload's layer not kept, a payload staged in place, a block staged
+apart staged on the anchor only, an executed payload indexed, a payload committed in place.
+
+**Read after code (beacon): APPROVE WITH CHANGES**, all taken but where said. The answers are right (a layer's
+receipts admit its child; a parent whose layer is gone is a state fault, ACCEPTED, as go-ethereum's
+`delayPayloadImport`), no state fault reaches INVALID, and nothing changes on the hash layout. Taken: a payload staged
+apart is "applied" for the import gate while its layer is kept, so one delivered again while its first execution runs
+takes that execution instead of a second (the consensus client resends a slow block); the `INVALID_REQUESTS` cleanup
+runs under the block's gate; a layer not kept is logged with its reason; `newPayload`'s log line says "layer" on the
+unified layout; the Engine API requires that it is told the held block exactly when the state is held in place (a
+builder replay on positions that was not told it is fixed); cases: an unknown parent answered exactly ACCEPTED, a
+parent whose layer was dropped answered ACCEPTED with nothing executed. Not taken: `INVALID_REQUESTS` is not driven (it
+is unreachable over RPC: the controller refuses malformed requests, and the requests hash binds the block hash), and a
+layer not kept, which needs a store with a small layer bound. **Owed by part 2b**: a fork choice to a head whose
+layers were not kept, or were evicted, re-executes them (go-ethereum's `recoverAncestors`; part 3's re-execution), and
+the descendants of such a block stay ACCEPTED until then.
+
 ### Destructive change (C8a and C8b): the vault protocol blocks
 
 ```

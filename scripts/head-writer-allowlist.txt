@@ -36,7 +36,7 @@ block-store 1 src/main/scala/com/chipprbots/ethereum/blockchain/data/ChainImport
 # The fork choice and the reorganisation: the fork choice confirms the head through a move (C4b part 3b); C4d and C4e
 # route the rest.
 head-writer 2 src/main/scala/com/chipprbots/ethereum/consensus/engine/ForkChoiceManager.scala HASH promoteToCanonicalHead on the hash layout's arm; MOVE moveHeadInPlace on the unified layout: the head the state is at, confirmed by a move of nothing under the state lock, and any move off it refused until C4d
-block-store 1 src/main/scala/com/chipprbots/ethereum/consensus/engine/EngineApiService.scala C4D newPayload's storeBlock: execution is refused before it on the unified layout; C4d stores by hash only there
+block-store 1 src/main/scala/com/chipprbots/ethereum/consensus/engine/EngineApiService.scala HASH newPayload's storeBlock on the hash layout's arm; the unified layout stores an executed payload by hash only (C4d part 2a)
 head-writer 4 src/main/scala/com/chipprbots/ethereum/consensus/ConsensusImpl.scala REFUSED saveBestKnownBlocks and rewriteCanonicalIndex refuse on the unified layout (saveLastBlock writes nothing there; settleHead is reached only with executed blocks, which the layout refuses before executing: C4E)
 block-store 1 src/main/scala/com/chipprbots/ethereum/jsonrpc/TestingService.scala HASH storeBlock on the hash layout's arm; the unified layout commits in place
 

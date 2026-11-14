@@ -923,7 +923,14 @@ final class PathStateStorage(
                   case StateOverlay.Registered.NoRoom => OverlayOutcome.NotKept(NotKeptReason.NoRoom)
         }
         overlayTold()
+        outcome match
+          // the block is valid and its state is not held: whoever needs it executes the block again (beacon)
+          case OverlayOutcome.NotKept(reason) => log.info(s"[STATE-OVERLAY] Block ${block.show} not kept: $reason")
+          case _                              => ()
         outcome
+
+  /** Whether the forward layer of `block` is kept: its state is held beside the disk's. */
+  def holdsLayer(block: BlockRef): Boolean = overlay.layerOf(block).isDefined
 
   /** Runs `body` with a pin for one branch under execution, and releases the pin when `body` ends, however it ends
     * (data-model 6.4). The layers [[commitOverlay]] keeps with the pin are held meanwhile: none is evicted, and they

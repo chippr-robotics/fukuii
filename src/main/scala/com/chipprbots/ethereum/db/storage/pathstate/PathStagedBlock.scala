@@ -16,18 +16,25 @@ import com.chipprbots.ethereum.db.storage.StagedBlockState
   * Such a block never reaches the storage. It reaches [[commitWith]] with nothing staged, where its own records are
   * written if it is still the block the disk holds.
   *
-  * '''Until the overlay (C4a) a block is committed in place or not at all''' ([[commitsInPlace]]). In place means in
-  * the batch that makes it the best block: the state on disk and the best block move together. So a block that is
-  * executed without being adopted (a payload ahead of the head, a side branch, a reorganisation's blocks) cannot be
-  * committed here, and its caller refuses it before it runs.
+  * '''A block is committed in place''' ([[commitWith]]), in the batch that makes it the best block: the state on disk
+  * and the best block move together; '''or apart''' ([[commitApart]]), as a forward layer beside the state the disk
+  * holds, for a block executed without being adopted (a payload ahead of the head, C4d part 2a). A reorganisation's
+  * blocks are still refused before they run (C4e).
   *
   * @param block
   *   the block, with the state root its '''header''' carries: what the staged changes are held to
   * @param parent
   *   the block it builds on, or `None` when its header is not known
+  * @param apart
+  *   staged to be committed apart ([[commitApart]]): its parent may be any block whose state is held, not only the
+  *   anchor ([[PathStateStorage.stageOf]])
   */
-final class PathStagedBlock(state: PathStateStorage, block: BlockRef, parent: () => Option[BlockRef])
-    extends StagedBlockState:
+final class PathStagedBlock(
+    state: PathStateStorage,
+    block: BlockRef,
+    parent: () => Option[BlockRef],
+    apart: Boolean = false
+) extends StagedBlockState:
 
   private var layer: Option[PathStagedState] = None
 
@@ -39,7 +46,7 @@ final class PathStagedBlock(state: PathStateStorage, block: BlockRef, parent: ()
     */
   override def storage: MptStorage = synchronized {
     layer.getOrElse {
-      val made = state.stage(knownParent)
+      val made = if apart then state.stageOf(knownParent) else state.stage(knownParent)
       layer = Some(made)
       made
     }.storage
@@ -78,6 +85,31 @@ final class PathStagedBlock(state: PathStateStorage, block: BlockRef, parent: ()
     state.commitCanonical(staged, block, extra)
     ()
 
-  override def isBlockApplied(blockHash: ByteString): Boolean = state.isApplied(blockHash)
+  /** The block's state kept as a forward layer beside the state the disk holds ([[PathStateStorage.commitOverlay]]):
+    * the head does not move, and only a fork choice moves it there (spec 018 C4d part 2a). A layer that is not kept
+    * (too large, or no room) leaves nothing wrong with the block: whoever needs its state executes it again. A block
+    * whose storage was never asked for (one the disk holds already) has nothing to keep.
+    *
+    * @throws StateUnavailable
+    *   when the parent's state is not held any more
+    */
+  override def commitApart(blockNumber: BigInt, blockHash: ByteString): Unit =
+    require(
+      blockHash == block.hash && blockNumber == block.number,
+      s"block ${block.show} was staged, and block $blockNumber is being committed"
+    )
+    val staged = synchronized {
+      val taken = layer
+      layer = None
+      taken
+    }
+    staged.foreach(state.commitOverlay(_, block))
+
+  /** The block's state is in force: it is the anchor, or, for a block staged apart, its forward layer is kept. So a
+    * payload delivered again while its first execution runs takes the execution recorded for it, not a second run
+    * (beacon); one whose layer was not kept, or was dropped, is executed again.
+    */
+  override def isBlockApplied(blockHash: ByteString): Boolean =
+    state.isApplied(blockHash) || (apart && blockHash == block.hash && state.holdsLayer(block))
 
   override def discard(): Unit = synchronized { layer = None }
