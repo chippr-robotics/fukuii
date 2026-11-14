@@ -2840,3 +2840,15 @@ items:
     links:
       spec: 018
     notes: "Forge, C4b part 3 pre-code consult (verified in code): Blockchain.removeBlock via FastSyncBranchResolver.discardBlocksAfter removes the number->hash entries (Blockchain.scala:197-199) before BlockImporter.rewindCanonicalChain reads them (:198-200), so abandonBlockStates gets nothing on the resolver-success path and the #1471 reference-count undo never runs there. Hash layout; its own bucket-C commit, not part of spec 018 C4b."
+  - id: B-249
+    title: "Spec 018 C4b follow-up: a confirmation of the head counts as a move (movesStarted, moving); C4d's payload builder and C4e's miner must not read one as a move"
+    priority: P2
+    status: open
+    area: storage
+    size: S
+    opened: 2026-11-14
+    refs: []
+    links:
+      spec: 018
+    depends_on: [B-062]
+    notes: plan.md C4b part 3b Recorded (beacon). Either a fast path that does not count a move of nothing, or the readers tell them apart.
