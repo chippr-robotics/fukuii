@@ -14,6 +14,7 @@ import org.scalatest.matchers.should.Matchers
 import com.chipprbots.ethereum.TestInstanceConfigProvider
 import com.chipprbots.ethereum.blockchain.data.GenesisDataLoader
 import com.chipprbots.ethereum.consensus.engine.EngineApiService
+import com.chipprbots.ethereum.consensus.engine.ExecutionPayload
 import com.chipprbots.ethereum.consensus.engine.ForkChoiceManager
 import com.chipprbots.ethereum.consensus.engine.ForkChoiceState
 import com.chipprbots.ethereum.consensus.engine.ForkchoiceUpdatedResponse
@@ -653,6 +654,104 @@ class HeadMoveOnTheChainSpec extends ScalaTestWithActorTestKit with AnyFlatSpecL
     on.move(chain(1).header)
     on.pathState.movesStarted shouldBe before + 1
   }
+
+  /** The payload a consensus client sends for `block`: the fields its header and body carry. */
+  private def payloadOf(block: Block): ExecutionPayload =
+    import com.chipprbots.ethereum.network.p2p.messages.ETHPackets.SignedTransactions.*
+    import com.chipprbots.ethereum.rlp.encode as rlpEncode
+    val h = block.header
+    ExecutionPayload(
+      parentHash = h.parentHash.value,
+      feeRecipient = com.chipprbots.ethereum.domain.Address(h.beneficiary),
+      stateRoot = h.stateRoot.value,
+      receiptsRoot = h.receiptsRoot.value,
+      logsBloom = h.logsBloom.value,
+      prevRandao = h.mixHash.value,
+      blockNumber = h.number.value,
+      gasLimit = h.gasLimit.value,
+      gasUsed = h.gasUsed.value,
+      timestamp = h.unixTimestamp.toLong,
+      extraData = h.extraData,
+      baseFeePerGas = h.baseFee.getOrElse(BigInt(0)),
+      blockHash = h.hash.value,
+      transactions =
+        block.body.transactionList.map(stx => ByteString(rlpEncode(SignedTransactionEnc(stx).toRLPEncodable))),
+      withdrawals = block.body.withdrawals,
+      blobGasUsed = h.blobGasUsed,
+      excessBlobGas = h.excessBlobGas,
+      parentBeaconBlockRoot = h.parentBeaconBlockRoot.map(_.value),
+      executionRequests = h.requestsHash.map(_ => Nil)
+    )
+
+  // C4d part 2a: a payload is executed as a forward layer beside the state the disk holds, and stored by its hash only.
+  "A payload on the unified layout" should "be executed as a forward layer, VALID, stored by its hash only, and move nothing" taggedAs
+    (UnitTest, ConsensusTest) in {
+      val on = new Node
+      // after the merge (block 36) and Shanghai (39): the blocks a consensus client sends as payloads
+      val chain = blocks.take(39)
+      chain.foreach(on.imports)
+      val engine = on.engine(() => on.pathState.anchor.map(_.hash))
+      def newPayload(block: Block) =
+        engine.newPayload(payloadOf(block)).unsafeRunSync()(using cats.effect.unsafe.IORuntime.global)
+      val before = on.disk
+      // one on the block whose state is held, and one on that: a layer on a layer
+      Seq(blocks(39), blocks(40)).foreach { block =>
+        withClue(s"block ${block.header.number.value}: ") {
+          val status = newPayload(block)
+          withClue(status.validationError.getOrElse(""))(status.status shouldBe PayloadStatus.Valid)
+          // its state is held, beside the disk's
+          on.pathState.view(refOf(block.header)).block shouldBe refOf(block.header)
+          // stored by its hash, with its receipts, and named by no height of the index (I6: the index is the ancestry
+          // of the block whose state is held)
+          on.reader.getBlockHeaderByHash(block.header.hash) shouldBe Some(block.header)
+          on.reader.getReceiptsByHash(block.header.hash) should not be empty
+          on.reader.getCanonicalHashByNumber(block.header.number.value) shouldBe None
+        }
+      }
+      // nothing moved: the disk, the anchor, the best block and the index are the held block's
+      on.disk shouldBe before
+      on.holds(chain.last.header, chain)
+      on.source.offTheLock.toArray.toSeq shouldBe empty
+      // and the fork choice to it is not followed before part 2b
+      on.node.forkChoiceManager.getHeadBlockHash shouldBe None
+    }
+
+  it should "be executed on a block behind the held one, as a side branch, and answer ACCEPTED on a parent it does not know" taggedAs
+    (UnitTest, ConsensusTest) in {
+      val on = new Node
+      val chain = blocks.take(40)
+      chain.foreach(on.imports)
+      val engine = on.engine(() => on.pathState.anchor.map(_.hash))
+      def newPayload(block: Block) =
+        engine.newPayload(payloadOf(block)).unsafeRunSync()(using cats.effect.unsafe.IORuntime.global)
+      // a sibling of the held block, on its parent, whose state the records hold
+      val side = siblingOf(chain.last)
+      val status = newPayload(side)
+      withClue(status.validationError.getOrElse(""))(status.status shouldBe PayloadStatus.Valid)
+      // its state is held: a payload on it executes, through its layer and the records that lead to its parent
+      val onSide = blocks(40).pipe(b => b.copy(header = b.header.copy(parentHash = side.header.hash)))
+      val next = newPayload(onSide)
+      withClue(next.validationError.getOrElse(""))(next.status shouldBe PayloadStatus.Valid)
+      on.reader.getCanonicalHashByNumber(side.header.number.value).map(_.value) shouldBe Some(
+        chain.last.header.hash.value
+      )
+      on.holds(chain.last.header, chain)
+      // a payload whose parent is not known: nothing executed, stored by its hash
+      val orphan = blocks(41)
+      newPayload(orphan).status shouldBe PayloadStatus.Accepted
+      an[StateUnavailable] should be thrownBy on.pathState.view(refOf(orphan.header))
+      on.holds(chain.last.header, chain)
+      // a payload whose parent was executed and whose layer is not held any more: ACCEPTED, stored by its hash, and
+      // nothing executed (its parent's state is executed again by whoever needs it, part 3)
+      on.writer.dropForwardLayer(side.header.hash.value)
+      val afterDrop = blocks(40).pipe(b =>
+        b.copy(header = b.header.copy(parentHash = side.header.hash, extraData = ByteString("again".getBytes)))
+      )
+      newPayload(afterDrop).status shouldBe PayloadStatus.Accepted
+      on.reader.getBlockHeaderByHash(afterDrop.header.hash) shouldBe Some(afterDrop.header)
+      on.reader.getReceiptsByHash(afterDrop.header.hash) shouldBe None
+      on.holds(chain.last.header, chain)
+    }
 
   // C4d part 1 (T160, T171): the finalized block a fork choice names, kept with the move that followed it.
   "The finalized block" should "be the fork choice's once its head is followed, kept across a restart, and held to by a move" taggedAs

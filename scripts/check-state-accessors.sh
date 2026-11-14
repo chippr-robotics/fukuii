@@ -61,7 +61,7 @@ regex_of() {
     backing)         echo '\bgetBackingStorage\b' ;;
     readonly)        echo '\bgetReadOnlyStorage\b' ;;
     bulk-load)       echo '\bgetBulkLoadStorage\b' ;;
-    stage-block)     echo '\bstageBlock(State)?\(' ;;
+    stage-block)     echo '\bstageBlock(State)?(Apart)?\(' ;;
     prefetch-reader) echo '\bprefetchReader\(' ;;
     node-by-hash)    echo '\bgetMptNodeByHash\b|\bgetNode\(' ;;
     get-by-hash)     echo '\b(mptStorage|storage|source|hashStore|mpt|getReadOnlyStorage)\.get\(' ;;

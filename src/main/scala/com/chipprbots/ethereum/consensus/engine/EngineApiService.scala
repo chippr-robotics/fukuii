@@ -57,6 +57,14 @@ class EngineApiService(
 )(implicit blockchainConfig: BlockchainConfig, typedScheduler: org.apache.pekko.actor.typed.Scheduler)
     extends Logger:
 
+  // The gate for a head on the unified layout and the layout itself are wired apart: they must agree, or an executed
+  // payload would be indexed by number on that layout, and the fork choice's head left ungated (beacon, C4d part 2a).
+  // (a spec's stand-in service, which overrides what it answers, may be built with no writer at all)
+  require(
+    Option(blockchainWriter).forall(writer => stateHeldInPlace.isDefined == writer.holdsStateInPlace),
+    "the Engine API is told the block whose state is held exactly when the state is held in place"
+  )
+
   import org.apache.pekko.util.Timeout
   import scala.concurrent.duration.*
   implicit private val askTimeout: Timeout = Timeout(3.seconds)
@@ -625,11 +633,23 @@ class EngineApiService(
                     blockchainConfig.isPragueTimestamp(block.header.unixTimestamp) &&
                       suppliedRequests != derivedRequests
                   if requestsMismatch then
-                    // The block executed and its state is committed (applied); it will never be canonical.
-                    reorgState.abandonBlockStates(Seq((block.header.number.value, block.header.hash.value)))
                     val lvh = parentHeader.map(_.hash.value).getOrElse(zeroHash)
-                    blockchainWriter.removeBlockByHash(BlockHash(payload.blockHash)).commit()
-                    markInvalidRecursive(payload.blockHash, lvh)
+                    if stateHeldInPlace.isDefined then
+                      // The unified layout kept its state as a forward layer: the block is marked invalid first, so a
+                      // fork choice that comes in between finds it so, and then its layer, with what stands on it, and
+                      // the recorded execution go (spec 018 C4d part 2a; beacon).
+                      markInvalidRecursive(payload.blockHash, lvh)
+                      // under the block's own gate, as the record it forgets is made under it
+                      com.chipprbots.ethereum.ledger.BlockImportGate.withBlock(block.header.hash.value) {
+                        blockchainWriter.dropForwardLayer(block.header.hash.value)
+                        com.chipprbots.ethereum.ledger.BlockImportGate.forget(block.header.hash.value)
+                      }
+                      blockchainWriter.removeBlockByHash(BlockHash(payload.blockHash)).commit()
+                    else
+                      // The block executed and its state is committed (applied); it will never be canonical.
+                      reorgState.abandonBlockStates(Seq((block.header.number.value, block.header.hash.value)))
+                      blockchainWriter.removeBlockByHash(BlockHash(payload.blockHash)).commit()
+                      markInvalidRecursive(payload.blockHash, lvh)
                     executionErrorReason.set(
                       Some(
                         s"INVALID_REQUESTS: executionRequests mismatch " +
@@ -656,7 +676,12 @@ class EngineApiService(
                     } && blockchainReader
                       .getBlockHeaderByNumber(block.header.number.value)
                       .forall(_.hash == block.header.hash)
-                    if extendsCanonical then blockchainWriter.storeBlock(block).commit()
+                    // On the unified layout an executed payload is stored by its hash only, whatever its parent: the index
+                    // of blocks by number is the ancestry of the block whose state is held, and moves with the state,
+                    // in a fork choice's move of the head (spec 018 C4d part 2a; beacon). Its state is a forward layer,
+                    // not a reference count to take back out.
+                    if stateHeldInPlace.isDefined then blockchainWriter.storeBlockByHashOnly(block).commit()
+                    else if extendsCanonical then blockchainWriter.storeBlock(block).commit()
                     else
                       blockchainWriter.storeBlockByHashOnly(block).commit()
                       // A side payload is executed but not canonical: take its reference-count changes back out NOW,
@@ -680,7 +705,8 @@ class EngineApiService(
                       "[ENGINE-API] newPayload #{}: EXECUTED OK (txs={} sidechain={} requests={} headerStateRoot={}...)",
                       payload.blockNumber,
                       block.body.numberOfTxs,
-                      !extendsCanonical,
+                      // on the unified layout every executed payload is a forward layer until a fork choice moves to it
+                      if stateHeldInPlace.isDefined then "layer" else (!extendsCanonical).toString,
                       derivedRequests.size,
                       block.header.stateRoot.value.take(8).map("%02x".format(_)).mkString
                     )

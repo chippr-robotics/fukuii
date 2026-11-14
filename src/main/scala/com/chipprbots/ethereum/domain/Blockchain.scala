@@ -162,12 +162,22 @@ class BlockchainImpl(
     * By the header: the unified layout stages a block over its parent's state, which it finds by the parent's hash, and
     * holds what the block wrote to the state root the header carries. The hash store needs the number alone.
     */
-  def stageBlockState(header: BlockHeader): StagedBlockState =
+  def stageBlockState(header: BlockHeader): StagedBlockState = staging(header, apart = false)
+
+  /** [[stageBlockState]] for a block whose state is committed apart from the block ([[StagedBlockState.commitApart]]):
+    * a payload executed ahead of the head. On the unified layout its parent may be any block whose state is held: the
+    * anchor, an executed block kept beside it, a block behind it that the changeset records lead to, or a block on a
+    * fork from one of those (spec 018 C4d part 2a). The hash store stages it as [[stageBlockState]] does.
+    */
+  def stageBlockStateApart(header: BlockHeader): StagedBlockState = staging(header, apart = true)
+
+  private def staging(header: BlockHeader, apart: Boolean): StagedBlockState =
     pathState.fold(stateStorage.stageBlock(header.number.value)) { state =>
       new pathstate.PathStagedBlock(
         state,
         refOf(header),
-        () => blockchainReader.getBlockHeaderByHash(header.parentHash).map(refOf)
+        () => blockchainReader.getBlockHeaderByHash(header.parentHash).map(refOf),
+        apart
       )
     }
 
