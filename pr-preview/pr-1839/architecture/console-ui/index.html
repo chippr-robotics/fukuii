@@ -6778,10 +6778,12 @@ does not answer keeps the last reading on screen, which says how old it is from 
 says it is reading again. With DEBUG logging the node logs one line when the whole-pool reading starts and one when
 it stops.</p>
 <ul>
+<li><strong>The Mempool Radar</strong> is the row labelled <code>Radar</code> and the four bars under it, one a tier.</li>
 <li><strong>Tiers.</strong> A transaction's fee is measured against the fee the node's own gas-price oracle would suggest
   (<code>eth_maxPriorityFeePerGas</code> on a chain with a base fee, <code>eth_gasPrice</code> on one without): <em>low</em> is under half of it,
   <em>normal</em> from half to one and a half times, <em>high</em> up to three times, <em>urgent</em> above that. The tier counts sum to
-  the pending count. While the node has no fee to suggest, no tier is drawn.</li>
+  the pending count. The boundaries are in gwei however small the fees are. While the node has no fee to suggest,
+  no tier is drawn.</li>
 <li><strong>Flow.</strong> From one poll to the next the dashboard sees which transactions arrived and which left. One that left
   while another from its sender with its nonce is pending was <em>replaced</em>; of the rest, one the node's transaction
   index now holds was <em>mined</em>, and the others were <em>dropped</em>. At most 500 departures are looked up a poll; when more
@@ -6791,6 +6793,12 @@ it stops.</p>
   before that the row says it is measuring. The replacements count from when the watch began, and the row says how
   long ago that is: the watch starts again when the view is opened, or when the pool has gone unread for more than
   five seconds.</li>
+<li><strong>What the flow can and cannot see.</strong> A transaction is counted as mined when it has left the pool and the index
+  holds it. The view reports what the pool does: where the pool keeps a transaction that a block already holds,
+  it is still pending here, and when the pool later lets it expire it counts under <em>expired unmined</em>, not as
+  mined. A node that follows the chain by regular sync without a consensus client does this today (B-270: the
+  batch import path does not tell the pool which transactions it imported), so on such a node <em>mined/s</em> reads low
+  and <em>expired unmined</em> reads high.</li>
 <li><strong>Counters.</strong> Refusals are named by the admission rule that refused (<code>Underpriced</code>, <code>AlreadyKnown</code>, <code>NonceTooLow</code>,
   …). They count since the node started, whether or not the dashboard was looking. They are a lower bound: a peer's
   transaction whose sender has no account, or whose nonce is not the next after the sender's pending ones, is
