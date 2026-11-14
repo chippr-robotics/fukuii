@@ -3195,3 +3195,13 @@ items:
     refs: []
     links: {}
     notes: "Fails 5 of 5 here, on a clean clone of staging and on the slice 6 branch alike; passed in CI on #1842. With WARN logging: 'Recovery: persisted task file unusable while its phase is incomplete (storage: <none persisted> unusable=true; codeHashes: <none persisted> unusable=true)' clears accounts-complete, and the test then asserts it is still set. The test seeds accounts-complete with no storage-task file path, which SnapResumePlanner's storageTaskFileUnusable treats as unusable; so the assertion holds only if it runs before the recovery does. Likely a race the test wins in CI. Not from spec 029."
+  - id: B-277
+    title: "admin_blockIP / admin_unblockIP change nothing: BlockedIPRegistry is read by no network code, so a 'blocked' address still connects"
+    priority: P1
+    status: open
+    area: p2p
+    size: M
+    opened: 2026-11-14
+    refs: []
+    links: {}
+    notes: "Found mapping services for spec 029 slice 7. AdminService.blockIP only calls blockedIPRegistry.block(ip) (no IP validation either); BlockedIPRegistry is referenced by AdminService and NodeBuilder only: discovery, ServerActor and RLPx never consult it. An operator who blocks an abusive address believes it is blocked. The working mechanism is the peer manager's Blacklist (AddToBlacklistCmd, net_* blacklist methods). The fukuii-security-hardening skill documents IP blocking as working."
