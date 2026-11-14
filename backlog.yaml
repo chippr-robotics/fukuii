@@ -2902,21 +2902,16 @@ items:
   - id: B-254
     title: "Spec 029 slice 1: TUI input and navigation (key decoder, update function, focus, prompt, filters, nine views, q asks)"
     priority: P2
-    status: review
+    status: done
     area: tui
     size: L
     opened: 2026-11-14
+    closed: 2026-11-14
     refs: []
     links:
       prs: [1834]
       spec: specs/029-tui-command-center
     depends_on: [B-244]
-    claim:
-      by: cloud-ccr-452bbde8
-      agent: main
-      since: 2026-11-14T11:08:55Z
-      heartbeat: 2026-11-14T11:25:34Z
-      branch: ccr-452bbde8-2hrv25
     notes: tasks.md T005-T028. Closes B-226 (the escape drain).
   - id: B-255
     title: "Spec 018 T156: child-JVM kill -9 between newPayload and forkchoiceUpdated on RocksDB, restart with no peers, real consensus client reaches VALID"
