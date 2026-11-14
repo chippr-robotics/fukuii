@@ -11,9 +11,10 @@ import org.slf4j.LoggerFactory
 
 import com.chipprbots.ethereum.console.Sanitize
 
-/** Runs the operator's actions (spec 029 FR-051, FR-053, FR-057): previews on one daemon thread, the actions
-  * themselves on another, so that a preview is never stuck behind a compaction, and neither ever runs on the frame
-  * loop. The frame loop reads [[view]] and nothing else.
+/** Runs the operator's actions (spec 029 FR-051, FR-053, FR-057): previews on one daemon thread, the actions that
+  * change something on another, and the Observe actions on a third, so that a preview or a look at the configuration
+  * is never stuck behind an action that takes time, and none ever runs on the frame loop. The frame loop reads
+  * [[view]] and nothing else.
   *
   * Every attempt ends in one INFO line from the logger [[ActionRunner.AuditLogger]]:
   * `action=<name> params=<…> outcome=<confirmed|cancelled|refused|failed: reason> by=tui`. An action that takes time
@@ -37,7 +38,8 @@ final class ActionRunner(
     clock: Clock = Clock.systemUTC(),
     audit: String => Unit = ActionRunner.auditLine,
     previewThread: ExecutorService = ActionRunner.thread("fukuii-tui-preview"),
-    actionThread: ExecutorService = ActionRunner.thread("fukuii-tui-action")
+    actionThread: ExecutorService = ActionRunner.thread("fukuii-tui-action"),
+    observeThread: ExecutorService = ActionRunner.thread("fukuii-tui-observe")
 ):
   import ActionRunner.*
 
@@ -72,7 +74,7 @@ final class ActionRunner(
             val p = handlers(request.action).preview(request)
             // A preview can quote a peer's client id or an address the operator typed: cleaned like any other
             // text from outside the node.
-            Preview(p.lines.map(Sanitize.line), p.refusal.map(Sanitize.line))
+            Preview(p.lines.map(Sanitize.line(_)), p.refusal.map(Sanitize.line(_)))
           catch case NonFatal(e) => Preview(Vector.empty, Some(s"the preview could not be read: ${reason(e)}"))
       val _ = state.updateAndGet(v => v.copy(previews = v.previews.updated(request, read)))
     }
@@ -99,20 +101,37 @@ final class ActionRunner(
           if v.isRunning(request.action) then v
           else v.copy(running = v.running :+ ActionActivity(request, at, "waiting to start"))
         }
+        val observe = byName.get(request.action).exists(_.risk == RiskClass.Observe)
         // Whether this call put it there: an action already running is not started a second time (FR-057).
         if !started.running.exists(a => a.request == request && a.since == at) then
           record(request, ActionOutcome.Refused(AlreadyRunning))
         else
-          actionThread.execute { () =>
+          (if observe then observeThread else actionThread).execute { () =>
             progress(request, "running")
             if byName.get(request.action).exists(s => LongRunning.contains(s.name)) then
               audit(line(request, "started"))
             val outcome =
               try
                 handlers(request.action).run(request, said => progress(request, said)) match
+                  case Right(result) if observe =>
+                    // What it found is for its screen, a row a line; the audit line says only that it was read.
+                    val lines = result.split('\n').toVector.map(Sanitize.line(_, ReportLineChars))
+                    val _ = state.updateAndGet(v =>
+                      v.copy(reports = v.reports.updated(request.action, ActionReport(lines, clock.instant())))
+                    )
+                    ActionOutcome.Confirmed(s"${lines.size} lines")
                   case Right(result) => ActionOutcome.Confirmed(Sanitize.line(result))
                   case Left(why)     => ActionOutcome.Failed(Sanitize.line(why))
               catch case NonFatal(e) => ActionOutcome.Failed(reason(e))
+            // An Observe action that failed says so on its screen, where the operator is looking.
+            outcome match
+              case ActionOutcome.Failed(why) if observe =>
+                val _ = state.updateAndGet(v =>
+                  v.copy(reports =
+                    v.reports.updated(request.action, ActionReport(Vector(s"could not be read: $why"), clock.instant()))
+                  )
+                )
+              case _ => ()
             val _ = state.updateAndGet(v => v.copy(running = v.running.filterNot(_.request == request)))
             record(request, outcome)
           }
@@ -133,6 +152,7 @@ final class ActionRunner(
   def shutdown(): Unit =
     val _ = previewThread.shutdownNow()
     val _ = actionThread.shutdownNow()
+    val _ = observeThread.shutdownNow()
 
 object ActionRunner:
 
@@ -142,6 +162,14 @@ object ActionRunner:
   val ReadOnly: String = "the dashboard is read-only (fukuii.tui.read-only)"
   val AlreadyRunning: String = "it is already running"
 
+  /** The longest row of a report: a configuration value can be long. */
+  val ReportLineChars: Int = 400
+
+  /** An attempt that no runner saw (the dashboard has not been handed the node's services yet, or the action is
+    * `quit`, which needs none): written from the same logger, in the same form.
+    */
+  def audited(request: ActionRequest, outcome: ActionOutcome): Unit = auditLine(line(request, outcome.word))
+
   /** The attempts the Ops view remembers. */
   val MaxHistory: Int = 50
 
@@ -150,7 +178,7 @@ object ActionRunner:
 
   private val logger = LoggerFactory.getLogger(AuditLogger)
 
-  private def auditLine(text: String): Unit = logger.info(text)
+  private[ops] def auditLine(text: String): Unit = logger.info(text)
 
   /** `action=peer drop params=id=0x1f3a… outcome=confirmed by=tui`. A parameter is the operator's text: cleaned, so a
     * line is one line.

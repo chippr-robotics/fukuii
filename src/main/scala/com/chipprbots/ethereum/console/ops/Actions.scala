@@ -122,12 +122,15 @@ object Actions:
     Disrupt,
     "mining stop"
   )
+  /** A Halt, not the Disrupt the contract first gave it: a miner stopped here cannot be started again while the node
+    * runs (B-279), so mining stops until someone restarts the node from outside.
+    */
   val MiningStop: ActionSpec = ActionSpec(
     "mining stop",
     "mining stop",
-    "the node's own miner stops (ETC)",
-    Disrupt,
-    "mining start"
+    "the node's own miner stops until the node restarts (ETC)",
+    Halt,
+    "restart the node"
   )
   val Coinbase: ActionSpec = ActionSpec(
     "coinbase",
@@ -156,13 +159,6 @@ object Actions:
     "runs the database consistency check of the node's start, and reports",
     Disrupt,
     "nothing to undo"
-  )
-  val Compact: ActionSpec = ActionSpec(
-    "compact",
-    "compact",
-    "compacts the whole database; writers wait while it runs",
-    Disrupt,
-    "cannot be undone; changes no data"
   )
   val DetectIp: ActionSpec = ActionSpec(
     "detect-ip",
@@ -214,7 +210,6 @@ object Actions:
     RpcStop,
     RpcStart,
     DbCheck,
-    Compact,
     DetectIp,
     Bundle,
     Quit
@@ -229,5 +224,8 @@ object Actions:
       "none can be stopped and started again without ending the process",
     "Reload configuration from file" -> "no key is read again after the start; `tunables` lists what changes while it runs",
     "Create a snapshot" -> "this client has no snapshots (spec 013 has no code)",
+    "Compact the database" ->
+      ("it holds the database lock for its whole run, so the node would import nothing until it ended, which on a " +
+        "large database may take hours and cannot be stopped (B-281)"),
     "Change the pruning mode or the state scheme" -> "needs a restart, and for the scheme a resync"
   )

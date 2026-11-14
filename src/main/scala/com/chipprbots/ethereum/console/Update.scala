@@ -8,8 +8,18 @@ package com.chipprbots.ethereum.console
   *   the motion `p` resumes to
   * @param readOnly
   *   no operator action can run (spec 029 FR-053): `q` does not offer to stop the node
+  * @param bodyCols
+  *   the columns and
+  * @param bodyRows
+  *   the rows a dialog is drawn in: one whose preview they cannot show whole cannot be confirmed (FR-048)
   */
-final case class UpdateCtx(page: Int, configuredMotion: Motion, readOnly: Boolean = false)
+final case class UpdateCtx(
+    page: Int,
+    configuredMotion: Motion,
+    readOnly: Boolean = false,
+    bodyCols: Int = Int.MaxValue,
+    bodyRows: Int = Int.MaxValue
+)
 
 /** What a key does (spec 029 FR-003 to FR-010): a pure function from the state and the key to the next state and the
   * effects [[Tui]] is to run. Every key the TUI understands passes through here, so every key is tested without a
@@ -35,7 +45,7 @@ object Update:
   private def keyed(state: TuiState, key: Key, ctx: UpdateCtx): (TuiState, Seq[Effect]) =
     val s = state.copy(notice = None)
     s.overlay match
-      case Overlay.Dialog(kind)   => dialog(s, kind, key)
+      case Overlay.Dialog(kind)   => dialog(s, kind, key, ctx)
       case prompt: Overlay.Prompt => typing(s, prompt, key, ctx)
       case Overlay.Filter(text)   => filtering(s, text, key)
       case Overlay.None =>
@@ -80,17 +90,61 @@ object Update:
         case Some(Screen.Art(_)) => (s, Seq(Effect.ReloadArt, Effect.Redraw))
         // On an explorer screen `r` reads the node again first: what is shown is of the moment it was read.
         case Some(Screen.Explore(query, _)) => (s, Seq(Effect.RefreshLookup(query), Effect.Redraw))
-        case _                              => (s, Seq(Effect.Redraw))
+        // On a screen an Observe action fills, `r` runs it again: what is shown is of the moment it was read.
+        case Some(screen) if observed(screen).isDefined =>
+          (s, observed(screen).map(Effect.Confirm(_)).toSeq :+ Effect.Redraw)
+        case _ => (s, Seq(Effect.Redraw))
     case Action.Detach  => (s, Seq(Effect.Detach))
-    case Action.AskQuit => (askQuit(s, ctx), Nil)
+    case Action.AskQuit => ask(s, ctx, ops.ActionRequest(ops.Actions.Quit.name))
+    case Action.Act     => actOnSelection(s)
 
-  /** Stopping the node is an action: in read-only mode it is not offered. Ctrl-C is a signal and stops it regardless.
+  /** Asks for `request` (spec 029 FR-048): its dialog opens, Cancel in focus, and the action runner is asked what it
+    * would change. On a read-only dashboard nothing above Observe is offered: it says so, and the attempt is handed
+    * to the runner all the same, which refuses it in the audit log (FR-051, FR-053). Ctrl-C is a signal and stops the
+    * node regardless.
     */
-  private def askQuit(s: TuiState, ctx: UpdateCtx): TuiState =
-    if ctx.readOnly then s.copy(notice = Some(ReadOnlyNotice))
-    else s.copy(overlay = Overlay.Dialog(DialogKind.Quit))
+  private def ask(s: TuiState, ctx: UpdateCtx, request: ops.ActionRequest): (TuiState, Seq[Effect]) =
+    ops.Actions.named(request.action) match
+      case None => (s.copy(notice = Some(s"there is no action '${request.action}'")), Nil)
+      case Some(spec) if ctx.readOnly && spec.risk != ops.RiskClass.Observe =>
+        val said = if spec == ops.Actions.Quit then ReadOnlyNotice else readOnlyNotice(spec.name)
+        (s.copy(notice = Some(said)), Seq(Effect.Confirm(request)))
+      case Some(spec) if s.actions.isRunning(spec.name) =>
+        (s.copy(notice = Some(s"${spec.name} is already running: the Ops view shows how far it is")), Nil)
+      // What stops with the node is known here, from what the dashboard already reads: `q` is answered at once, and
+      // needs nothing of the node's services, which a node that is still starting has not handed over.
+      case Some(spec) if spec == ops.Actions.Quit =>
+        val preview = ops.Preview(widgets.DialogBox.quitLines(s))
+        (s.copy(overlay = Overlay.Dialog(DialogKind.Confirm(request, spec.risk, Some(preview)))), Nil)
+      case Some(spec) =>
+        (
+          s.copy(overlay = Overlay.Dialog(DialogKind.Confirm(request, spec.risk, s.actions.previews.get(request)))),
+          Seq(Effect.Preview(request))
+        )
 
   val ReadOnlyNotice: String = "read-only: the TUI cannot stop the node; Ctrl-C does"
+
+  def readOnlyNotice(action: String): String = s"read-only: the TUI cannot run '$action' (fukuii.tui.read-only)"
+
+  /** `a`: the prompt, with the action that goes with the selected row typed and not yet entered. On the Peers view,
+    * dropping the selected peer (the operator changes the word to trust or block); on the RPC view of a node that
+    * mines, stopping the miner. Nothing runs before the dialog the prompt's Enter opens.
+    */
+  private def actOnSelection(s: TuiState): (TuiState, Seq[Effect]) =
+    val typed =
+      if s.helpOpen then None
+      else
+        (s.screen, s.view) match
+          case (Some(Screen.PeerDetail(id)), _) => Some(s"peer drop ${id.take(PeerIdChars)}")
+          case (None, TuiView.Peers) =>
+            s.selectedPeerIndex.map(i => s"peer drop ${s.orderedPeers(i).id.take(PeerIdChars)}")
+          case (None, TuiView.Rpc) if s.snapshot.exists(_.local.mining.isDefined) => Some("mining stop")
+          case (None, TuiView.Ops) => s.selectedAction.map(_ + " ")
+          case _                   => None
+    (typed.fold(s)(text => s.copy(overlay = Overlay.Prompt(text, text.length, None))), Nil)
+
+  /** As much of a peer's id as the prompt is given: enough to name one peer among those connected. */
+  val PeerIdChars: Int = 16
 
   /** The views whose list `/` filters. */
   val Filterable: Set[TuiView] = Set(TuiView.Peers, TuiView.Logs)
@@ -111,6 +165,13 @@ object Update:
             case _            => (selected.toLong + by).max(0L).min(last.toLong).toInt
           s.copy(screens = Screen.Explore(query, to) :: under)
         // The Art screen's pages wrap, so a page is counted and never clamped here: the art says how many there are.
+        case Screen.Config(filter, scroll) :: under =>
+          // The screen clamps the scroll to what it has: here it only never goes above the first row.
+          val to = by match
+            case Int.MinValue => 0
+            case Int.MaxValue => Int.MaxValue / 2
+            case _            => (scroll.toLong + by).max(0L).min(Int.MaxValue / 2).toInt
+          s.copy(screens = Screen.Config(filter, to) :: under)
         case Screen.Art(page) :: under =>
           val to = by match
             case Int.MinValue => 0
@@ -165,6 +226,15 @@ object Update:
               case Int.MaxValue => last
               case _            => s.selectedHealthIndex.fold(0)(i => (i.toLong + by).max(0L).min(last.toLong).toInt)
             s.copy(selectedHealth = Some(bars(target).subsystem))
+        case TuiView.Ops =>
+          // The actions, in the order the view lists them.
+          val all = ops.Actions.all
+          val last = all.size - 1
+          val target = by match
+            case Int.MinValue => 0
+            case Int.MaxValue => last
+            case _            => s.selectedActionIndex.fold(0)(i => (i.toLong + by).max(0L).min(last.toLong).toInt)
+          s.copy(selectedAction = Some(all(target).name))
         case TuiView.Logs =>
           // Up is older: the scroll counts lines back from the newest.
           by match
@@ -199,6 +269,8 @@ object Update:
             // A pending transaction opens like a mined one (spec 029 FR-036).
             case TuiView.Mempool =>
               s.selectedTxIndex.fold((s, Seq.empty[Effect]))(i => explore(s, LookupQuery.Tx(s.pendingTxs(i).hash)))
+            // An action opens the prompt with its name typed: nothing runs before Enter there, and its dialog.
+            case TuiView.Ops => actOnSelection(s)
             // A health bar opens every check behind it (spec 029 FR-045).
             case TuiView.System =>
               (
@@ -232,13 +304,58 @@ object Update:
 
   // ---- the quit dialog ------------------------------------------------------------------------------------------
 
-  private def dialog(s: TuiState, kind: DialogKind, key: Key): (TuiState, Seq[Effect]) = kind match
-    case DialogKind.Quit =>
+  /** A confirmation's keys, by its class (spec 029 FR-048, contracts/operator.md). Nothing else is accepted, and
+    * pasted text is ignored whatever it holds (FR-009). An action is confirmed only with its preview on screen, whole,
+    * and saying it can be run: while the preview is being read, when it says the action cannot be run now, or on a
+    * screen too small to show it all, nothing confirms it.
+    */
+  private def dialog(s: TuiState, kind: DialogKind, key: Key, ctx: UpdateCtx): (TuiState, Seq[Effect]) = kind match
+    case c: DialogKind.Confirm =>
+      import ops.RiskClass
+      val closed = s.copy(overlay = Overlay.None)
+      val quit = c.request.action == ops.Actions.Quit.name
+      def cancel: (TuiState, Seq[Effect]) = (closed, Seq(Effect.CancelAction(c.request)))
+      def run: (TuiState, Seq[Effect]) =
+        if quit then (closed, Seq(Effect.Confirm(c.request), Effect.Quit))
+        else (closed.copy(notice = Some(s"${c.request.action}: started; the Ops view shows how it ends")), Seq(Effect.Confirm(c.request)))
+      def set(next: DialogKind.Confirm): (TuiState, Seq[Effect]) = (s.copy(overlay = Overlay.Dialog(next)), Nil)
+      val confirmable =
+        c.preview.exists(_.refusal.isEmpty) && widgets.DialogBox.fits(c, ctx.bodyCols, ctx.bodyRows)
       key match
-        case Key.Char('y' | 'Y')                           => (s.copy(overlay = Overlay.None), Seq(Effect.Quit))
-        case Key.Char('n' | 'N') | Key.Esc | Key.Backspace => (s.copy(overlay = Overlay.None), Nil)
-        // Anything else, pasted text included, neither confirms nor cancels.
-        case _ => (s, Nil)
+        case _: Key.Paste => (s, Nil)
+        case Key.Esc      => cancel
+        case _ =>
+          c.risk match
+            case RiskClass.Observe =>
+              key match
+                case Key.Enter if confirmable => run
+                case Key.Backspace            => cancel
+                case _                        => (s, Nil)
+            case RiskClass.Adjust =>
+              key match
+                case Key.Tab | Key.BackTab | Key.Left | Key.Right =>
+                  set(c.copy(focus = if c.focus == DialogFocus.Cancel then DialogFocus.Apply else DialogFocus.Cancel))
+                case Key.Enter if c.focus == DialogFocus.Cancel => cancel
+                case Key.Enter if confirmable                   => run
+                case Key.Backspace                              => cancel
+                case _                                          => (s, Nil)
+            case RiskClass.Disrupt =>
+              key match
+                case Key.Char('y' | 'Y') if confirmable            => run
+                case Key.Char('n' | 'N') | Key.Backspace           => cancel
+                // Anything else neither confirms nor cancels.
+                case _ => (s, Nil)
+            case RiskClass.Halt =>
+              key match
+                case Key.Char(ch) if ch.isLetter && c.typed.length < HaltWordMax => set(c.copy(typed = c.typed + ch))
+                // Backspace takes back a letter; with none typed it is Back, as everywhere.
+                case Key.Backspace if c.typed.nonEmpty => set(c.copy(typed = c.typed.dropRight(1)))
+                case Key.Backspace                     => cancel
+                case Key.Enter if confirmable && c.typed.equalsIgnoreCase(ops.Actions.HaltWord) => run
+                case _ => (s, Nil)
+
+  /** The most letters a Halt's dialog takes: the word is four. */
+  private val HaltWordMax: Int = 12
 
   // ---- the prompt -----------------------------------------------------------------------------------------------
 
@@ -277,6 +394,33 @@ object Update:
       case Key.Enter => submit(s, p.text, ctx)
       case _         => (s, Nil)
 
+  /** The Observe action behind a screen, if it has one: what reads what the screen shows. */
+  def observed(screen: Screen): Option[ops.ActionRequest] = screen match
+    case Screen.Config(_, _) => Some(ops.ActionRequest(ops.Actions.Config.name))
+    case Screen.Tunables     => Some(ops.ActionRequest(ops.Actions.Tunables.name))
+    case Screen.TestRpc      => Some(ops.ActionRequest(ops.Actions.TestRpc.name))
+    case Screen.Net          => Some(ops.ActionRequest(ops.Actions.Net.name))
+    case _                   => None
+
+  /** An action typed at the prompt. One that names a connected peer by the start of its id is asked for with the
+    * whole id of the one peer that starts so; an id that fits none, or several, is said and nothing is asked.
+    */
+  private def act(s: TuiState, ctx: UpdateCtx, request: ops.ActionRequest): (TuiState, Seq[Effect]) =
+    val byPeer = Set(ops.Actions.PeerTrust.name, ops.Actions.PeerUntrust.name, ops.Actions.PeerDrop.name)
+    request.param("id") match
+      case Some(typed) if byPeer.contains(request.action) =>
+        val prefix = typed.toLowerCase(java.util.Locale.ROOT).stripPrefix("0x")
+        val all = s.copy(filters = s.filters - TuiView.Peers).orderedPeers
+        all.filter(_.id.toLowerCase(java.util.Locale.ROOT).stripPrefix("0x").startsWith(prefix)) match
+          case Seq(peer) => ask(s, ctx, request.copy(params = Vector("id" -> peer.id)))
+          // Trust is of a node, connected or not: a whole id that no connected peer has can still lose it.
+          case Seq() if request.action == ops.Actions.PeerUntrust.name && prefix.length == 128 &&
+                prefix.forall(ch => Character.digit(ch, 16) >= 0) =>
+            ask(s, ctx, request.copy(params = Vector("id" -> prefix)))
+          case Seq()   => (s.copy(notice = Some(s"no connected peer's id starts with '$typed'")), Nil)
+          case several => (s.copy(notice = Some(s"${several.size} peers' ids start with '$typed': type more of it")), Nil)
+      case _ => ask(s, ctx, request)
+
   private def submit(s: TuiState, line: String, ctx: UpdateCtx): (TuiState, Seq[Effect]) =
     val text = line.trim
     val history =
@@ -305,7 +449,10 @@ object Update:
             case Seq() => (closed.copy(notice = Some(s"no connected peer's id starts with '$prefix'")), Nil)
             case several =>
               (closed.copy(notice = Some(s"${several.size} peers' ids start with '$prefix': type more of it")), Nil)
-        case Command.Quit           => (askQuit(closed, ctx), Nil)
+        case Command.Act(request)   => act(closed.copy(helpOpen = false), ctx, request)
+        case Command.Show(screen) =>
+          // An Observe action changes nothing and asks nothing: it runs as its screen opens.
+          (closed.copy(helpOpen = false, screens = List(screen)), observed(screen).map(Effect.Confirm(_)).toSeq)
         case Command.Detach         => (closed, Seq(Effect.Detach))
         case Command.Help           => (closed.openHelp, Nil)
         case Command.Glyphs(set)    => (closed.copy(glyphs = set), Nil)

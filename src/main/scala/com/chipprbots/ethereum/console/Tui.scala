@@ -248,6 +248,31 @@ class Tui(
   def setLookups(resolve: LookupQuery => Either[String, LookupResult]): Unit =
     lookups.getAndSet(Some(new Lookups(resolve, clock))).foreach(_.shutdown())
 
+  /** The action runner (spec 029 FR-047 to FR-057), once the node has handed the TUI what carries its actions out;
+    * none before, when only `quit` is offered, which needs nothing of the node.
+    */
+  private val actions = new AtomicReference(Option.empty[ops.ActionRunner])
+
+  /** Hands the TUI the actions it may run: `handlers` are called on threads of the runner's own, never on the frame
+    * loop or the polling thread. `unavailable` says why an action with no handler is not offered on this node. The
+    * thresholds' action is the dashboard's own and is added here.
+    */
+  def setActions(handlers: Map[String, ops.ActionHandler], unavailable: Map[String, String] = Map.empty): Unit =
+    val own = Map(ops.Actions.Threshold.name -> ops.ThresholdAction.handler(() => state.get, modify))
+    val runner =
+      new ops.ActionRunner(ops.Actions.all, handlers ++ own, unavailable, readOnly = config.readOnly, clock = clock)
+    actions.getAndSet(Some(runner)).foreach(_.shutdown())
+
+  /** What the runner has published, into the state the next frame draws; and, while a confirmation is on screen, its
+    * preview read again, so that what the operator confirms is what the node says now (FR-050).
+    */
+  private def mergeActions(refresh: Boolean): Unit =
+    actions.get.foreach { runner =>
+      if refresh then state.get.confirming.filter(_.action != ops.Actions.Quit.name).foreach(runner.preview)
+      val published = runner.view
+      modify(_.withActions(published))
+    }
+
   /** What the worker has published, into the state the next frame draws. */
   private def mergeLookups(): Unit =
     lookups.get.foreach { worker =>
@@ -333,6 +358,8 @@ class Tui(
     val now = clock.instant()
     val logs = newLogLines()
     mergeLookups()
+    // A preview is read again when the node has been polled again: once a poll, not once a frame.
+    mergeActions(refresh = snapshot.isDefined)
     modify { s =>
       val next = snapshot match
         case Some(polled) => s.nextFrame(Some(polled.agedAt(now, snapshotStaleAfter)))
@@ -488,10 +515,13 @@ class Tui(
       modify(_.skipSplash)
       TuiCommand.Continue
     else
+      val (bodyCols, bodyRows) = renderer.bodySize(lastSize._1, height)
       val ctx = UpdateCtx(
         page = (height - panels.LogsPanel.ChromeRows).max(1),
         configuredMotion = config.motion,
-        readOnly = config.readOnly
+        readOnly = config.readOnly,
+        bodyCols = bodyCols,
+        bodyRows = bodyRows
       )
       var effects: Seq[Effect] = Nil
       state.updateAndGet { s =>
@@ -532,6 +562,31 @@ class Tui(
             case Effect.RefreshLookup(query) =>
               lookups.get.foreach(_.refresh(query))
               mergeLookups()
+              TuiCommand.Continue
+            case Effect.Preview(request) =>
+              actions.get.foreach(_.preview(request))
+              TuiCommand.Continue
+            case Effect.Confirm(request) =>
+              actions.get match
+                case Some(runner) if request.action != ops.Actions.Quit.name => runner.confirmed(request)
+                // `quit` is carried out by the TUI itself, and before the node has handed its services over nothing
+                // else can be: the attempt is written to the audit log all the same.
+                case _ =>
+                  val refused = Option.when(config.readOnly)(ops.ActionOutcome.Refused(ops.ActionRunner.ReadOnly))
+                  val unready = Option.when(request.action != ops.Actions.Quit.name)(
+                    ops.ActionOutcome.Refused("the node has not finished starting")
+                  )
+                  ops.ActionRunner.audited(
+                    request,
+                    refused.orElse(unready).getOrElse(ops.ActionOutcome.Confirmed("the node stops"))
+                  )
+              mergeActions(refresh = false)
+              TuiCommand.Continue
+            case Effect.CancelAction(request) =>
+              actions.get match
+                case Some(runner) => runner.cancelled(request)
+                case None         => ops.ActionRunner.audited(request, ops.ActionOutcome.Cancelled)
+              mergeActions(refresh = false)
               TuiCommand.Continue
             case Effect.Detach =>
               shutdown()
@@ -574,6 +629,7 @@ class Tui(
     */
   private def teardown(): Unit =
     attempt("stop the lookup worker")(lookups.getAndSet(None).foreach(_.shutdown()))
+    attempt("stop the action runner")(actions.getAndSet(None).foreach(_.shutdown()))
     attempt("detach the log ring") {
       if ringAttached then
         ringAttached = false

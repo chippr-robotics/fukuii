@@ -76,6 +76,15 @@ class TuiRenderer(config: TuiConfig, art: ArtStore = ArtStore.Empty):
       InFlight.contains(state.connectionStatus) || dagBuilding(state) ||
       (state.graphics != GraphicsMode.Text && state.graphics != GraphicsMode.Block)
 
+  /** The body of a `w` by `height` screen: its columns beside the sidebar and its rows under the header, the rule
+    * and the alert row and above the footer. What [[Update]] needs to know whether a dialog can be read whole.
+    */
+  def bodySize(w: Int, height: Int): (Int, Int) =
+    val side = if Sidebar.shown(w, height) then Sidebar.Cols + 1 else 0
+    val above = height - 1
+    val top = if above >= 3 || height <= 0 then 3 else if above == 2 then 2 else if above == 1 then 1 else 0
+    (w - side, if height <= 0 then 0 else above - top)
+
   /** The mining panel draws a spinner beside a DAG that is not yet loaded (`MiningPanel`). */
   private def dagBuilding(state: TuiState): Boolean =
     state.nodeSettings.miningEnabled && state.snapshot.exists(_.local.mining.exists(_.dag.exists(!_.loaded)))
@@ -111,8 +120,9 @@ class TuiRenderer(config: TuiConfig, art: ArtStore = ArtStore.Empty):
     val panels = Layout.render(views, bodyCols, bodyRows, c.separator(bodyCols))
     // A dialog replaces rows of the body only: the alert row stays above it (spec 029 FR-048).
     val asked = state.overlay match
-      case Overlay.Dialog(DialogKind.Quit) => DialogBox.over(panels, DialogBox.quit(c), bodyCols, c)
-      case _                               => panels
+      case Overlay.Dialog(confirm: DialogKind.Confirm) =>
+        DialogBox.over(panels, DialogBox.confirm(confirm, DialogBox.fits(confirm, bodyCols, bodyRows)), bodyCols, c)
+      case _ => panels
     val body =
       if side == 0 then asked
       else

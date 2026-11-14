@@ -142,6 +142,8 @@ case class TuiState(
     selectedBlock: Option[String] = None,
     selectedTx: Option[String] = None,
     healthSince: Health.Since = Map.empty,
+    actions: ops.ActionsView = ops.ActionsView(),
+    selectedAction: Option[String] = None,
     selectedHealth: Option[Subsystem] = None
 ):
   /** Whether the Mempool view itself is on screen: not under Help, and not under a screen opened over it (the explorer,
@@ -167,6 +169,33 @@ case class TuiState(
   /** The selected bar's place in [[healthBars]]; None with no selection, or once its subsystem has no check. */
   def selectedHealthIndex: Option[Int] =
     selectedHealth.map(s => healthBars.indexWhere(_.subsystem == s)).filter(_ >= 0)
+
+  /** What the action runner has published, and with it the preview of the dialog that is open (spec 029 FR-050): a
+    * preview that is not the one the dialog showed takes its place, and the dialog asks again from the start, Cancel
+    * in focus and nothing typed.
+    */
+  def withActions(view: ops.ActionsView): TuiState =
+    val merged = if view == actions then this else copy(actions = view)
+    merged.overlay match
+      case Overlay.Dialog(c: DialogKind.Confirm) if c.request.action != ops.Actions.Quit.name =>
+        view.previews.get(c.request) match
+          case Some(read) if !c.preview.contains(read) =>
+            merged.copy(overlay =
+              Overlay.Dialog(
+                c.copy(preview = Some(read), focus = DialogFocus.Cancel, typed = "", changed = c.preview.isDefined)
+              )
+            )
+          case _ => merged
+      case _ => merged
+
+  /** The action whose confirmation is on screen, if one is: the runner reads its preview again every poll. */
+  def confirming: Option[ops.ActionRequest] = overlay match
+    case Overlay.Dialog(c: DialogKind.Confirm) => Some(c.request)
+    case _                                     => None
+
+  /** The selected action's place among the actions the Ops view lists. */
+  def selectedActionIndex: Option[Int] =
+    selectedAction.map(name => ops.Actions.all.indexWhere(_.name == name)).filter(_ >= 0)
 
   /** Where the lookup of `query` stands, if it was asked. */
   def lookupOf(query: LookupQuery): Option[LookupState] = lookups.find(_._1 == query).map(_._2)
@@ -440,6 +469,11 @@ case class TuiState(
       screen match
         case Some(Screen.PeerDetail(_))   => "Peer"
         case Some(Screen.HealthDetail(_)) => "Health"
+        case Some(Screen.Config(_, _))    => "Config"
+        case Some(Screen.Tunables)        => "Tunables"
+        case Some(Screen.Deps)            => "Deps"
+        case Some(Screen.TestRpc)         => "Test RPC"
+        case Some(Screen.Net)             => "Net"
         case Some(Screen.Art(_))          => "Art"
         case Some(Screen.Explore(q, _))   => q.title
         case None                         => view.title

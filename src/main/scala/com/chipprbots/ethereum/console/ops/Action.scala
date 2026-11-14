@@ -72,13 +72,17 @@ final case class ActionActivity(request: ActionRequest, since: Instant, progress
 /** An attempt that has ended. */
 final case class ActionRecord(request: ActionRequest, outcome: ActionOutcome, at: Instant)
 
-/** What the frame loop reads of the actions (it reads, and never waits): the previews asked for, what is running, and
-  * what has ended this session, newest last.
+/** What an Observe action found, for its screen: a row a line, and when it was read. */
+final case class ActionReport(lines: Vector[String], at: Instant)
+
+/** What the frame loop reads of the actions (it reads, and never waits): the previews asked for, what is running, what
+  * has ended this session, newest last, and what the Observe actions last found, by action.
   */
 final case class ActionsView(
     previews: Map[ActionRequest, Preview] = Map.empty,
     running: Vector[ActionActivity] = Vector.empty,
-    history: Vector[ActionRecord] = Vector.empty
+    history: Vector[ActionRecord] = Vector.empty,
+    reports: Map[String, ActionReport] = Map.empty
 ):
   def isRunning(action: String): Boolean = running.exists(_.request.action == action)
 
@@ -91,7 +95,7 @@ trait ActionHandler:
   def preview(request: ActionRequest): Preview
 
   /** Carries the action out. `progress` may be called with a sentence as it goes. A Left is why it failed; a Right
-    * says what happened.
+    * says what happened: one sentence, or, for an Observe action, what it found, a row a line.
     */
   def run(request: ActionRequest, progress: String => Unit): Either[String, String]
 
