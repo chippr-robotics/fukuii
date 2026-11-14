@@ -3167,11 +3167,16 @@ items:
   - id: B-275
     title: "pow_blocks_mined_total counts only eth_submitWork: blocks the internal miner seals are never counted (TUI shows blocks mined 0)"
     priority: P2
-    status: open
+    status: claimed
     area: tui
     size: S
     opened: 2026-11-14
     refs: []
     links:
       spec: 029
+    claim:
+      by: cloud-ccr-452bbde8
+      agent: main
+      since: 2026-11-14T20:47:00Z
+      heartbeat: 2026-11-14T20:47:00Z
     notes: "dev-node, slice 5 run on gorgoroth: node mined blocks 1-23 itself, counter stayed 0. recordBlockMined is called from EthMiningService.submitWork only; Miner.handleMiningResult does not call it."
