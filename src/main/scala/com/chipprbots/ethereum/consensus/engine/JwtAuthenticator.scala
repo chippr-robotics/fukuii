@@ -30,7 +30,7 @@ import com.chipprbots.ethereum.utils.Logger
   * secret. Tokens are valid for 60 seconds. A request whose token is missing or malformed in any way is answered with
   * 401.
   */
-class JwtAuthenticator(secretHex: String) extends Logger:
+class JwtAuthenticator(secretHex: String, calls: EngineCallLog = EngineCallLog.Node) extends Logger:
 
   private val secretBytes: Array[Byte] = hexToBytes(secretHex.trim)
   private val MaxClockSkewSeconds = 60L
@@ -44,10 +44,14 @@ class JwtAuthenticator(secretHex: String) extends Logger:
           case Left(err) =>
             log.warn(s"JWT auth failed: $err")
             EngineApiMetrics.recordAuthFailure()
+            // The reason, as one of a fixed few, for the dashboard (spec 029 FR-040): the message itself carries the
+            // token's `iat` and is no key. The answer is what it was.
+            calls.authFailed(AuthFailure.of(err))
             complete(StatusCodes.Unauthorized, err)
       case _ =>
         log.warn("JWT auth: missing Authorization header")
         EngineApiMetrics.recordAuthFailure()
+        calls.authFailed(AuthFailure.Missing)
         complete(StatusCodes.Unauthorized, "Missing bearer token")
     }
 

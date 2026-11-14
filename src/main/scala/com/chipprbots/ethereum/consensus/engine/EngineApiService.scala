@@ -1174,6 +1174,11 @@ class EngineApiService(
                                 PayloadBuildProcess(parent, attrs, poolTxHashes(pool), System.nanoTime())
                               )
                               servedPayloads.remove(id)
+                              // Noted for the dashboard (spec 029 FR-040): two atomic writes, which cannot throw.
+                              EngineCallLog.Node.payloadBuilt(
+                                payload.built.block.header.number.toLong,
+                                payload.built.block.body.transactionList.size
+                              )
                               log.info(
                                 "Built payload {} for block {} (baseFee={}, parent={}, fork={}, requests={})",
                                 hexOf(id),
@@ -1196,9 +1201,11 @@ class EngineApiService(
                                   parent.header.number,
                                   fault.getMessage
                                 )
+                                EngineCallLog.Node.payloadBuildFailed()
                                 Some(s"no payload could be built on the head: ${fault.getMessage}")
                               case e =>
                                 log.error("Failed to build payload: {}", e.getMessage)
+                                EngineCallLog.Node.payloadBuildFailed()
                                 None
                             }
                           }

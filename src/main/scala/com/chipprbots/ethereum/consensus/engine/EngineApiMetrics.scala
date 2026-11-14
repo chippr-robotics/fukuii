@@ -71,9 +71,8 @@ object EngineApiMetrics extends MetricsContainer:
   val latestPayloadTimestamp: Gauge =
     metrics.gauge("engine_latest_payload_timestamp", () => _latestPayloadTimestamp.get().toDouble)
 
-  /** `engine_newPayload` calls whose answer was ACCEPTED (stored, not executed). `engine_newpayload_invalid` has always
-    * counted these too, as its `status match` has no arm for them; it keeps that, and this series is how to tell them
-    * from the INVALID ones.
+  /** `engine_newPayload` calls whose answer was ACCEPTED (stored, not executed). Until B-193
+    * `engine_newpayload_invalid` counted these too; it now counts INVALID answers alone.
     */
   val newPayloadAccepted: Gauge =
     metrics.gauge("engine_newpayload_accepted", () => _newPayloadAcceptedCount.get().toDouble)
@@ -100,14 +99,15 @@ object EngineApiMetrics extends MetricsContainer:
     _newPayloadCount.incrementAndGet()
     _latestPayloadBlockNumber.set(blockNumber)
     _latestPayloadTimestamp.set(timestamp)
+    // Each status under its own count (B-193: ACCEPTED was counted as INVALID, as was anything unknown). A status
+    // that is none of the four moves the total alone.
     status match
-      case "VALID"   => _newPayloadValidCount.incrementAndGet()
-      case "SYNCING" => _newPayloadSyncingCount.incrementAndGet()
-      case _         => _newPayloadInvalidCount.incrementAndGet()
-    _lastNewPayload.set(EngineCall(nowMs, status))
-    status match
+      case "VALID"    => _newPayloadValidCount.incrementAndGet()
+      case "SYNCING"  => _newPayloadSyncingCount.incrementAndGet()
       case "ACCEPTED" => _newPayloadAcceptedCount.incrementAndGet()
+      case "INVALID"  => _newPayloadInvalidCount.incrementAndGet()
       case _          => ()
+    _lastNewPayload.set(EngineCall(nowMs, status))
 
   /** One distinct hole in the state that `newPayload` could not execute over, as `engine_state_hole_total{kind}`: see
     * [[EngineStateHoles]].
