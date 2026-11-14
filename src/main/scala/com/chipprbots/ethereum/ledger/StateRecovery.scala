@@ -148,6 +148,13 @@ class StateRecovery(
   /** The heads being recovered, or waiting to be. */
   def inFlight: Int = running.size
 
+  @volatile private var adopting: Option[Progress] = None
+
+  /** The adoption of a long branch under way, if one is: the node's head walks down to its fork and up the branch
+    * meanwhile, and `eth_syncing` says so (C4d part 4b, the user's decision of 2026-11-14).
+    */
+  def adoption: Option[Progress] = adopting
+
   /** Whether it is stopping, or has stopped: no recovery is taken, and none executes another block. */
   def isClosed: Boolean = closed
 
@@ -373,6 +380,8 @@ class StateRecovery(
               .getOrElse(fork)
             if !asked() then Outcome.Superseded
             else
+              // from the fork, where the chain the head leaves meets the branch, to the branch's tip (beacon)
+              adopting = Some(Progress(fork.number.value, held.number.value, chain.last.number.value))
               try
                 state.withRecordsHeld(refOf(holdFrom)) {
                   val movedTo =
@@ -401,6 +410,7 @@ class StateRecovery(
                   }
                 }
               catch case refused: ReorgTooDeep => Outcome.NotAdopted(refused.getMessage)
+              finally adopting = None
     logEnd(head, why, outcome)
     outcome
 
@@ -448,8 +458,10 @@ class StateRecovery(
                 try Right(adoptBlock(block, parentWeight, stop))
                 catch case fault: StateFault => Left(fault)
               result match
-                case Left(_)         => Outcome.Superseded
-                case Right(Right(_)) => next(rest, committed + 1)
+                case Left(_) => Outcome.Superseded
+                case Right(Right(_)) =>
+                  adopting = adopting.map(_.copy(current = block.header.number.value))
+                  next(rest, committed + 1)
                 case Right(Left(error)) if error eq Stopped =>
                   if closed then Outcome.Closed else Outcome.Superseded
                 case Right(Left(BlockExecutionError.StateFaulted(_))) => Outcome.Superseded
@@ -540,6 +552,9 @@ object StateRecovery:
 
   /** How many blocks above an adoption's head a new head of the consensus client's is followed down, at most. */
   private val ExtendsSearch = 1_024
+
+  /** How far an adoption has got: the head it began from, the block the head is at, and the branch's tip. */
+  final case class Progress(start: BigInt, current: BigInt, target: BigInt)
 
   /** What asks for a recovery. */
   enum Authority:

@@ -361,6 +361,30 @@ class EngineApiService(
   ): Unit =
     stateRecovery.foreach(_.requestFor(hash, recoverySink, why, authority))
 
+  /** Whether `head`'s chain, followed down by its stored headers, leaves out the finalized block this node was told of
+    * last (spec 018 C4d part 4b). A chain whose headers run out above that height, or that is not followed that far,
+    * says nothing: no.
+    */
+  private def reversesTheFinalized(head: Option[BlockHeader]): Boolean =
+    (head, blockchainWriter.finalizedOfTheState) match
+      case (Some(top), Some(finalized)) =>
+        @scala.annotation.tailrec
+        def down(at: BlockHeader, left: Int): Boolean =
+          if at.number.value < finalized.number then
+            // below the finalized block the index is its ancestry: another block named there is a reversal, and an
+            // empty place says nothing (a consensus client resyncing from an older checkpoint; beacon)
+            blockchainReader.getBlockHeaderByNumber(at.number.value).exists(_.hash != at.hash)
+          else if at.number.value == finalized.number then at.hash.value != finalized.hash
+          // a block of the index at or above the finalized height: the chain from here down is the head's, which holds it
+          else if blockchainReader.getCanonicalHashByNumber(at.number.value).contains(at.hash) then false
+          else if left == 0 then false
+          else
+            blockchainReader.getBlockHeaderByHash(BlockHash(at.parentHash.value)) match
+              case Some(parent) => down(parent, left - 1)
+              case None         => false
+        down(top, EngineApiService.FinalizedSearch)
+      case _ => false
+
   private def storeChainWeightFor(block: Block, parentHeader: Option[BlockHeader]): Unit =
     // #1654: the parent's weight is read and the child's written under the chain insert lock (shared), so the
     // chain-weight repair's final step, which holds it exclusively, never sets its marker between the two.
@@ -945,6 +969,18 @@ class EngineApiService(
         forkChoiceManager.notifyBeaconHead(forkChoiceState)
         EngineApiMetrics.recordForkchoiceUpdated("SYNCING")
         IO.pure(Right(ForkchoiceUpdatedResponse(payloadStatus = PayloadStatusV1(Syncing))))
+      else if headOptimistic && stateHeldInPlace.isDefined && reversesTheFinalized(headHeader) then
+        // On the unified layout a head never executed has its branch adopted in place, which is refused, with nothing
+        // moved, where it would reverse the finalized block the node was told of: such a fork choice is not consistent
+        // with what it finalized, and is answered so, -38002, as the fork choice answers one it plans (C4d part 4b,
+        // the user's decision of 2026-11-14), and not SYNCING for good
+        log.warn(
+          "[ENGINE-API] forkchoiceUpdated names {} #{}, whose chain does not hold the finalized block: -38002",
+          hexOf(forkChoiceState.headBlockHash),
+          headHeader.map(_.number.value).getOrElse(BigInt(-1))
+        )
+        EngineApiMetrics.recordForkchoiceUpdated("INVALID")
+        IO.pure(Left("invalid forkchoice state: the head's chain does not hold the finalized block"))
       else if headOptimistic then
         // Same rationale as the unknown-head case: drive ForkChoiceManager so SNAP sync
         // can re-pivot on the freshest CL head while we're still optimistically caught up.
@@ -2570,6 +2606,11 @@ object BlobGasUtils:
     BlobParams.fakeExponential(factor, numerator, denominator)
 
 object EngineApiService:
+
+  /** How far down a head never executed its chain is followed to the finalized block's height, at most: one header read
+    * each (spec 018 C4d part 4b).
+    */
+  val FinalizedSearch: Int = 1_024
 
   /** How long engine_getPayload may spend bringing a payload up to date with the pool (`resolvePayload`) before it
     * serves the payload as built. The CL waits 1 s for engine_getPayload (execution-apis common.md, "Timeouts"); half

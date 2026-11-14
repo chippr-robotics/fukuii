@@ -3059,6 +3059,37 @@ its way back on held records; another head named before it runs, and between its
 taken back with nothing marked invalid; a head that extends the branch; the node stopping mid-adoption; a branch long
 only by the layers it stands on; a fork choice whose single block's layer does not fit; a payload never adopted.
 
+#### C4d part 4b: what readers and the consensus client see of an adoption (2026-11-14)
+
+The three side fixes the user took with part 4a's design (beacon flagged them; the user's decision of 2026-11-14):
+- **`eth_syncing` says syncing while an adoption runs.** The recovery keeps how far the adoption has got (from the
+  fork to the branch's tip, and the block the head is at); `EthInfoService` answers it before it asks the sync
+  controller (`startingBlock`, `currentBlock`, `highestBlock`, as go-ethereum answers during beacon sync). Meanwhile
+  the Engine API answers SYNCING, which agrees.
+- **The `safe` tag never names a block the head has left.** On the unified layout a safe block the index does not name
+  is answered by its highest ancestor the index names, where the two chains meet; it walks headers, at most 1,024, and
+  reads the one block at the end. Off the guard nothing changes. The fork is at or above the finalized block, since an
+  adoption that would reverse it is refused, so `safe` stays at or above `finalized`.
+- **A fork choice to a head never executed is answered -38002 when its chain does not hold the finalized block** the
+  node was told of (the one named before, as the user decided for the `Finalized` refusal), with no notice to the sync
+  layer and no recovery asked: an adoption to it would be refused, and it answered SYNCING for good. Its stored headers
+  are followed down: a different block at the finalized height, or below it a block other than the one the index names
+  there, is a reversal; a block of the index at or above that height, an empty place in the index (a consensus client
+  resyncing from an older checkpoint), headers that run out or 1,024 of them read say nothing, and it is answered as
+  before. go-ethereum answers SYNCING for a head it has not executed; this follows what the fork choice answers for one
+  it plans (beacon).
+
+**The mutation run**: 9 mutants, all caught: `eth_syncing` ignoring the adoption, no adoption told, the adoption not
+cleared or its progress not told, the safe tag naming a reversed block, no -38002 for a head never executed, the
+finalized block's hash not compared, and below it another block named there taken for none or an empty place taken for
+a reversal.
+
+**Read after code (beacon): APPROVE WITH CHANGES**, all taken: an empty place in the index below the finalized height
+is no reversal (it was, for a head below that height); the walk stops at the first block of the index; the adoption's
+`startingBlock` is the fork (the old head could be above the tip); the safe tag's walk reads headers. Cases: a head
+beside the index below the finalized block (-38002), with the index's place emptied (SYNCING), a head whose parent is
+not known (SYNCING), and a finalized block the branch holds (the adoption goes on).
+
 ### Destructive change (C8a and C8b): the vault protocol blocks
 
 ```

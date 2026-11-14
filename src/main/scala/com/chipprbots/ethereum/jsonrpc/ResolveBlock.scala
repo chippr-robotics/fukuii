@@ -47,6 +47,7 @@ trait ResolveBlock:
         forkChoiceManagerOpt
           .flatMap(_.getSafeBlockHash)
           .flatMap(h => blockchainReader.getBlockByHash(BlockHash(h)))
+          .flatMap(onTheHeadsChain)
           .map(b => Right(ResolvedBlock(b, pendingState = None)))
           .getOrElse(Left(JsonRpcError.InvalidParams("safe block not available")))
       case BlockParam.Finalized =>
@@ -66,6 +67,26 @@ trait ResolveBlock:
           .map(Right.apply)
           .getOrElse(resolveBlock(BlockParam.Latest)) // Default behavior in other clients
 
+  /** On the unified state layout the head moves with the state, and the adoption of a long branch walks it down to the
+    * fork before the consensus client names a new safe block (spec 018 C4d part 4b): a safe block the head has left is
+    * not named. Its highest ancestor on the head's chain is, where the two chains meet. Elsewhere the block itself.
+    */
+  private def onTheHeadsChain(block: Block): Option[Block] =
+    if !blockchainReader.holdsStateInPlace then Some(block)
+    else
+      // by headers, and the one block read at the end: any reader may ask (beacon)
+      @annotation.tailrec
+      def down(at: BlockHeader, left: Int): Option[BlockHeader] =
+        if blockchainReader.getCanonicalHashByNumber(at.number.value).contains(at.hash) then Some(at)
+        else if left == 0 || at.number.value == 0 then None
+        else
+          blockchainReader.getBlockHeaderByHash(at.parentHash) match
+            case Some(parent) => down(parent, left - 1)
+            case None         => None
+      down(block.header, ResolveBlock.SafeAncestorSearch).flatMap { header =>
+        if header.hash == block.header.hash then Some(block) else blockchainReader.getBlockByHash(header.hash)
+      }
+
   private def getBlockByHash(hash: org.apache.pekko.util.ByteString): Either[JsonRpcError, Block] =
     blockchainReader
       .getBlockByHash(BlockHash(hash))
@@ -79,3 +100,8 @@ trait ResolveBlock:
   private def getLatestBlock(): Either[JsonRpcError, Block] =
     blockchainReader.getBestBlock
       .toRight(JsonRpcError.InvalidParams("Latest block not found"))
+
+object ResolveBlock:
+
+  /** How far below a safe block the head's chain is looked for, at most: one block read each. */
+  val SafeAncestorSearch: Int = 1_024

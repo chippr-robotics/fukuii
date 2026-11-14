@@ -664,8 +664,14 @@ trait EthInfoServiceBuilder:
     Capability.best(instanceConfig.supportedCapabilities),
     asyncConfig.askTimeout,
     classicSystem.toTyped.scheduler,
-    com.chipprbots.ethereum.jsonrpc.CallTxBuilder.gasCapFrom(instanceConfig.config)
+    com.chipprbots.ethereum.jsonrpc.CallTxBuilder.gasCapFrom(instanceConfig.config),
+    () => stateAdoptionForRpc()
   )
+
+  /** The adoption of a long branch under way on the unified layout, for `eth_syncing` (spec 018 C4d part 4b).
+    * Overridden where the state recovery is built.
+    */
+  def stateAdoptionForRpc: () => Option[com.chipprbots.ethereum.ledger.StateRecovery.Progress] = () => None
 
 trait EthSimulateServiceBuilder:
   self: StorageBuilder & BlockchainBuilder & BlockchainConfigBuilder & MiningBuilder =>
@@ -1436,6 +1442,10 @@ trait Node
     with BlacklistBuilder:
   // Resolve conflicting ioRuntime from PeerDiscoveryManagerBuilder and PortForwardingBuilder
   implicit override lazy val ioRuntime: IORuntime = IORuntime.global
+
+  // The adoption of a long branch, for eth_syncing (spec 018 C4d part 4b)
+  override def stateAdoptionForRpc: () => Option[com.chipprbots.ethereum.ledger.StateRecovery.Progress] =
+    () => stateRecovery.flatMap(_.adoption)
 
   // Wire ForkChoiceManager to RPC services for "safe"/"finalized" block tag resolution
   override def forkChoiceManagerForRpc: Option[com.chipprbots.ethereum.consensus.engine.ForkChoiceManager] =
