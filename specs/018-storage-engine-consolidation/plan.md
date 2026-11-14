@@ -2748,6 +2748,71 @@ transaction dropped and not put back); the Engine API's gate recording no head. 
 unused symbol is an error here) and were rewritten so that they do. One more, the new lookups rule's first half
 alone, is equivalent: the locations written again in the same batch put the lookup back.
 
+### C4d: the PoS arms, as it is to be built (2026-11-14)
+
+Beacon's decomposition, before code (C4d is beacon-first). What the guard does today, read in the code:
+`newPayload` never executes (a block not on the anchor is refused before execution, `refuseUnadopted`), and is stored
+by hash only and answered ACCEPTED; `forkchoiceUpdated` follows only the held head. **A latent defect part 2a must
+close first:** once a payload executes, its store indexes it by number (`storeBlock` -> `storeBlockHeader`), which is
+not refused on the guard and would put an index entry above the anchor: on the guard every executed payload is stored by
+hash only, and a spec pins it.
+
+The parts, in order, each mergeable alone:
+- **Part 0, plumbing, no change to the answer table**: a confirmation of the head is no move (B-249); `Corrupt` fails
+  the state closed at the fork choice, answered `SYNCING` (below).
+- **Part 1, finality** (T160, T171): the finalized block from the fork choice, set only after a move that succeeded
+  (the zero hash is none), persisted in AppState in the move's own batch; the retention floor follows it.
+- **Part 2a, `newPayload` executes as a forward layer** (never in place: only a fork choice moves the head): a parent
+  that is the anchor, a layer or a block behind the anchor executes (VALID or INVALID); a parent stored and executed
+  whose state is not held, or unknown, is ACCEPTED; stored by hash only; `INVALID_REQUESTS` drops the layer and the
+  import gate's memo (`BlockImportGate.forget`), marking the block invalid first. `stateAvailable` over layers and
+  records (T094) lands here, with its first caller. The fork choice still follows only the held head.
+- **Part 2b, `forkchoiceUpdated` moves** (`moveHeadInPlace` with no refusal): the checks that move nothing first
+  (invalid blocks, safe and finalized ancestry `-38002`, a head with no receipts), the move under `IO.blocking`, then
+  on success alone `currentState`, the finalized block, the gossip gate, the pool, then the attributes and the build
+  (on the named parent's view, never on `movesStarted`). Refusals: `Finalized` `-38002` (decided, below), `Deep`,
+  `Incomplete` and `Pivot` `SYNCING` with a strike, `Corrupt` fails closed, `NotHeld` `SYNCING`.
+- **Part 3, `StateRecovery`** (T161, T169, T156): needed now, since the guard starts no sync. Re-executes, oldest
+  first, the stored blocks from one whose state is available up to the head the consensus client names, as overlay
+  commits on a bounded dispatcher, never inline; bounded by `recovery.max-blocks`.
+- **Part 4, a branch longer than the forward-layer budget** (T159): reverse-then-commit under `withRecordsHeld`.
+- **Part 5, the escalation trigger, log-only** (T163, T164, T174): strikes, hysteresis, cool-down, loop guard,
+  metrics; `StateEscalationRequested` logged and counted as suppressed until there is a SNAP to escalate to.
+- **Part 6, the ordered clear** (T165, T166, T172, T173): with or after C5a, never before: with SNAP refused on the
+  guard, a clear would leave a datadir that can never hold a state again.
+
+**Decided by the user on 2026-11-14**, on beacon's proposal: `Finalized` is answered `-38002` (go-ethereum: the
+finalized block is not in the canonical chain); on PoS a block of a long branch found invalid moves the head back to
+the fork choice's last head (the consensus layer's head stays the validated one), where W4 (PoW, C4e) keeps the
+executed prefix; the designated-head arm (T170) moves to C4e, which edits the same `reorganise`; the armed ordered
+clear lands with C5a, not before.
+
+#### C4d part 0: a confirmation is no move, and `Corrupt` fails closed (2026-11-14)
+
+- **B-249**: `movesStarted` counts a move of the head under the state lock before its first batch is written. A
+  confirmation of the head as it is moves nothing and is not counted, and neither is a move refused before any write
+  (by its plan, or by its caller's rows). A build that overlaps any write of a move still sees the count change.
+- **`Corrupt` fails closed at the fork choice** (plan.md "C4b part 1"): `PathStateStorage.failClosed(why)` (through
+  `BlockchainWriter.failStateClosed`) marks the store as one that takes no further in-place write and gives out no
+  state until the node is started again, logged at ERROR; the fork choice answers `SYNCING` and does not set
+  `currentState`. Before, part 3b threw the refusal past the Engine API. Test mode's rewind still answers it as a
+  refused rewind with nothing changed (C4b part 4), since a test datadir is mended by the test.
+
+**The mutation run**: 6 mutants, all caught: a move not counted, counted at every batch, a confirmation counted; a
+corrupt record leaving the state open, thrown past the fork choice, a closed store taking writes. The count at every
+batch survived the first run; the one-block-a-batch case now counts its moves.
+
+**Read after code (beacon): APPROVE WITH CHANGES**, all taken. The count is under the moves lock at every access and
+counted once per move; `Corrupt` reaches the fork choice only from a real bad record or a codec fault (a prune, a
+commit in between or a test-mode wipe moves the epoch and is refused otherwise); the reconciliation at start reads no
+view; nothing changes on the hash layout. Taken: the count's wording (counted before its first batch is built, so a
+first batch refused while it is built is counted with nothing written, the safe side; one per move, so a reader pairs
+it with `moveInProgress`); `failClosed` takes no lock, so a write already past its check completes and none that
+starts after does; a genesis commit refuses a store that failed closed, and test mode's destruction of the state
+clears the fault with the state it was found in (a case); test mode's comment on `Corrupt` (it logs, and does not fail
+closed: a test datadir is the test's to mend). Recorded: the fault is kept in memory only, and nothing looks at the
+records again at the next start (B-252).
+
 ### Destructive change (C8a and C8b): the vault protocol blocks
 
 ```
