@@ -3164,3 +3164,14 @@ items:
     refs: []
     links: {}
     notes: "gorgoroth's bad mining.protocol threw from the main thread ('Exception in thread main', stderr only); the process stayed up (plain run killed by timeout at 60s), TUI showed 'Starting...' forever, nothing in the log. Fail loudly: log at ERROR, restore the terminal, exit non-zero."
+  - id: B-275
+    title: "pow_blocks_mined_total counts only eth_submitWork: blocks the internal miner seals are never counted (TUI shows blocks mined 0)"
+    priority: P2
+    status: open
+    area: tui
+    size: S
+    opened: 2026-11-14
+    refs: []
+    links:
+      spec: 029
+    notes: "dev-node, slice 5 run on gorgoroth: node mined blocks 1-23 itself, counter stayed 0. recordBlockMined is called from EthMiningService.submitWork only; Miner.handleMiningResult does not call it."
