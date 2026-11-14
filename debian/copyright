@@ -1,6 +1,6 @@
 Format: https://www.debian.org/doc/packaging-manuals/copyright-format/1.0/
 Upstream-Name: fukuii
-Upstream-Contact: Chippr Robotics <dev@chipprbots.com>
+Upstream-Contact: Chippr Robotics <info@chipprbots.com>
 Source: https://github.com/chippr-robotics/fukuii
 
 Files: *
