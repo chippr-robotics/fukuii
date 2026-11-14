@@ -2982,19 +2982,15 @@ items:
   - id: B-260
     title: Publish releases to the Launchpad PPA ppa:chipprbots/fukuii (noble, jammy)
     priority: P2
-    status: review
+    status: done
     area: ci
     size: M
     opened: 2026-11-14
+    closed: 2026-11-14
     refs: []
     links:
       prs: [1836]
       branch: feat/ppa-launchpad
-    claim:
-      by: dev-node
-      agent: claude-opus
-      since: 2026-11-14T16:05:34Z
-      heartbeat: 2026-11-14T16:14:42Z
     notes: "Signed source upload of the release tarball; key in the launchpad-ppa environment. User steps: bot LP account in ~chipprbots, register the key."
   - id: B-261
     title: RegularSync progress line reports a stale current/lag and rate=0.0/s on a PoS node that is at head via the Engine API
