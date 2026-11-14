@@ -402,6 +402,14 @@ Startup reconciliation, invariant **I1**. Let `best` be `BestBlockHash`.
    `BlockchainWriter.scala:185-190`), log `[STATE-ANCHOR] best pointer rewound` at WARN, and let the consensus client or the
    importer drive the node forward again.
 
+**As built (C4b part 4, 2026-11-13; the user's decision of 2026-11-14): rule 4 is the rule, and rules 2 and 3 are
+not built.** A block's commit and every
+batch of a head move write the rows, the anchor, the best block and the index in one write batch, under the state lock,
+after a check that the best block is the anchor, so the pointer is never committed apart from the state and rules 2 and
+3 have no crash to serve. A best block that is not the anchor comes from a defect, a datadir written before that check,
+or test mode's two-write reset; the anchor's state is what execution proved, and the blocks above it stay stored by hash
+(vault, forge; plan.md "C4b part 4").
+
 **Rule 4 is a startup rule only.** At runtime a refused move never rewinds the pointer to the anchor: on a PoW chain that
 would leave the node on the forked chain (forge, S0 item 3b). A runtime refusal returns a typed result and escalates (Part 2,
 D). Rule 4 is safe at startup because the node has not yet followed any fork choice since the crash.
