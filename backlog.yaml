@@ -2983,3 +2983,14 @@ items:
     links:
       spec: specs/029-tui-command-center
     notes: console/gfx/PixelLayer.images only grows while pixel mode stays on. At scale 4 the mascot's 28 frames are about 112 MB at the terminal; kitty's quota is about 320 MB, and an evicted image would stay 'known' and blank until the next clear.
+  - id: B-260
+    title: Publish releases to the Launchpad PPA ppa:chipprbots/fukuii (noble, jammy)
+    priority: P2
+    status: open
+    area: ci
+    size: M
+    opened: 2026-11-14
+    refs: []
+    links:
+      branch: feat/ppa-launchpad
+    notes: "Signed source upload of the release tarball; key in the launchpad-ppa environment. User steps: bot LP account in ~chipprbots, register the key."
