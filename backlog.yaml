@@ -2862,3 +2862,14 @@ items:
       spec: 018
     depends_on: [B-063]
     notes: plan.md C4b part 4 Recorded (forge). Today side execution is refused before saveBatch on the guard (BlockExecution refuseUnadopted).
+  - id: B-251
+    title: "Spec 018 C4b follow-up: a spec for StdNode.start's dispatch of the reconciliation at start and the hash layout's repairs"
+    priority: P3
+    status: open
+    area: tests
+    size: S
+    opened: 2026-11-14
+    refs: []
+    links:
+      spec: 018
+    notes: "plan.md C4b part 4: the call has no spec (the node is not started in unit tests). Cases: reconcileState on the unified layout; fixDatabase + repairBestBlockMapping on the hash layout; neither on a stamped datadir with the guard off."
