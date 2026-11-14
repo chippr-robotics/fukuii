@@ -3129,3 +3129,14 @@ items:
     refs: []
     links: {}
     notes: "Seen 2026-11-14 on an Ephemery side node with no CL: tx mined in 148073 stayed pending ~3 min, then left as 'expired unmined'. importBlock and announceAdopted call updateTxPool; the batch path does not (since Mantis). forge: check ETC/Mordor impact."
+  - id: B-271
+    title: "engine_newPayload never answers SYNCING: a payload with a missing parent or state is answered ACCEPTED (go-ethereum: SYNCING while it can extend a sync)"
+    priority: P3
+    status: open
+    area: engine-api
+    size: M
+    opened: 2026-11-14
+    refs: []
+    links:
+      spec: specs/029-tui-command-center
+    notes: "beacon, spec 029 slice 5 analysis. Consensus-visible: kept out of the B-193 counter fix. Check go-ethereum delayPayloadImport first."
