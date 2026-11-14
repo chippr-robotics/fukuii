@@ -2894,3 +2894,13 @@ items:
       spec: 018
     depends_on: [B-062]
     notes: "beacon, C4d part 0's read: failClosed (Corrupt at the fork choice) is not durable; nothing re-checks the changeset records at start."
+  - id: B-253
+    title: A move of the head drops only the head block's transactions from the pool and puts back none of a reversed block's
+    priority: P3
+    status: open
+    area: rpc
+    size: M
+    opened: 2026-11-14
+    refs: []
+    links: {}
+    notes: beacon, C4d part 2b's read; pre-existing on both layouts (promoteToCanonicalHead too). go-ethereum's txpool reset purges every block moved onto and re-injects the reversed blocks' transactions. Builds stay correct (executableAtParent filters stale ones).
