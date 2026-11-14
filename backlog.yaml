@@ -3097,21 +3097,17 @@ items:
   - id: B-269
     title: "Spec 029 slice 5: the RPC view (per-method figures, transports), the Engine Synchronization Monitor and the mining monitor"
     priority: P2
-    status: review
+    status: done
     area: tui
     size: L
     opened: 2026-11-14
+    closed: 2026-11-14
     refs: []
     links:
       prs: [1842]
       spec: specs/029-tui-command-center
       branch: ccr-452bbde8-2hrv25
     depends_on: [B-266]
-    claim:
-      by: cloud-ccr-452bbde8
-      agent: main
-      since: 2026-11-14T19:00:38Z
-      heartbeat: 2026-11-14T20:11:33Z
     notes: Tasks T073-T082. Fixes B-193 with it (Engine status counters). beacon and conduit analyse before code.
   - id: B-270
     title: Regular sync's batch import (BlockImporter.tryImportBlocks) never removes mined transactions from the pool
