@@ -2995,3 +2995,14 @@ items:
       since: 2026-11-14T16:05:34Z
       heartbeat: 2026-11-14T16:05:41Z
     notes: "Signed source upload of the release tarball; key in the launchpad-ppa environment. User steps: bot LP account in ~chipprbots, register the key."
+  - id: B-261
+    title: RegularSync progress line reports a stale current/lag and rate=0.0/s on a PoS node that is at head via the Engine API
+    priority: P3
+    status: open
+    area: sync
+    size: S
+    opened: 2026-11-14
+    refs: []
+    links:
+      spec: specs/028-builtin-ephemery-hoodi
+    notes: "Seen on the 028 S5 live Ephemery run 2026-11-14: current=146824 lag=392 while newPayload/FCU had head 147225. The counter only moves on RegularSync imports. Check the TUI's lag source too."
