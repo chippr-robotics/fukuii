@@ -2846,15 +2846,19 @@ items:
   - id: B-249
     title: "Spec 018 C4b follow-up: a confirmation of the head counts as a move (movesStarted, moving); C4d's payload builder and C4e's miner must not read one as a move"
     priority: P2
-    status: open
+    status: done
     area: storage
     size: S
     opened: 2026-11-14
+    closed: 2026-11-14
     refs: []
     links:
+      prs: [1830]
       spec: 018
     depends_on: [B-062]
-    notes: plan.md C4b part 3b Recorded (beacon). Either a fast path that does not count a move of nothing, or the readers tell them apart.
+    notes: |-
+      plan.md C4b part 3b Recorded (beacon). Either a fast path that does not count a move of nothing, or the readers tell them apart.
+      2026-11-14 done: C4d part 0
   - id: B-250
     title: "Spec 018 C4b follow-up: C4e stores a block it does not adopt by hash only, so I6 (index = the held block's ancestry) stays a defence"
     priority: P2
