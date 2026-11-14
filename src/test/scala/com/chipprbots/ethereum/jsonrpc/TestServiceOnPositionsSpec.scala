@@ -705,6 +705,21 @@ class TestServiceOnPositionsSpec
       onHashes.head.header.hash shouldBe firstBlock.header.hash
     }
 
+  // C4d part 0 (beacon): a state that failed closed takes no write, a new genesis included, until test mode destroys it;
+  // the fault belonged to the state that is gone.
+  it should "set a new genesis over a state that failed closed, and go on from it" taggedAs UnitTest in {
+    val rig = new Rig(guard = true)
+    rig.setChain(chainA) shouldBe Right(SetChainParamsResponse())
+    rig.mine(Seq(transfer(0, Address(42), 9000))) shouldBe Right(MineBlocksResponse())
+    rig.pathState.failClosed("a test's corrupt record")
+    rig.mine(Seq(transfer(1, Address(43), 1))).isLeft shouldBe true
+    rig.setChain(chainA) shouldBe Right(SetChainParamsResponse())
+    rig.pathState.hasFailedClosed shouldBe false
+    rig.head.header.number.value shouldBe 0
+    rig.mine(Seq(transfer(0, Address(42), 9000))) shouldBe Right(MineBlocksResponse())
+    rig.anchor shouldBe Some(rig.refOf(rig.head.header))
+  }
+
   // What a refusal is to the harness that drives these methods: the error of its request, through the controller that
   // every transport hands a request to. Not a fault thrown past it, and not the answer an invalid block gets.
   "The controller" should "answer what test mode refuses on the unified layout as the error of the request" taggedAs

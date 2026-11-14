@@ -34,8 +34,6 @@ import com.chipprbots.ethereum.db.storage.pathstate.ChangesetStorage
 import com.chipprbots.ethereum.db.storage.pathstate.HeadMovePlan
 import com.chipprbots.ethereum.db.storage.pathstate.PathStateStorage
 import com.chipprbots.ethereum.db.storage.pathstate.PathStateTestKit
-import com.chipprbots.ethereum.db.storage.pathstate.ReorgRefusal
-import com.chipprbots.ethereum.db.storage.pathstate.ReorgTooDeep
 import com.chipprbots.ethereum.db.storage.pathstate.StateUnavailable
 import com.chipprbots.ethereum.domain.Block
 import com.chipprbots.ethereum.domain.BlockHeader
@@ -459,6 +457,7 @@ class HeadMoveOnTheChainSpec extends ScalaTestWithActorTestKit with AnyFlatSpecL
           on.index shouldBe ancestry.map(_.header.hash.value).toVector
           on.disk shouldBe stateOf(header)
         }
+      val started = oneAtATime.movesStarted
       // refused at the first batch that applies a block: the two that reverse stand, down to the fork
       (the[StateUnavailable] thrownBy writer.moveHeadInPlace(
         chain.last.header,
@@ -471,6 +470,8 @@ class HeadMoveOnTheChainSpec extends ScalaTestWithActorTestKit with AnyFlatSpecL
         case moved: PathStateStorage.MoveOutcome.Moved => (moved.applied, moved.batches) shouldBe (3, 3)
         case other                                     => fail(s"not moved: $other")
       heldAt(chain.last.header, chain)
+      // one move each, however many batches it wrote (B-249)
+      oneAtATime.movesStarted shouldBe started + 2
     }
 
   // C4b part 3b: the fork choice moves the head through a move, under the state lock, or not at all.
@@ -592,7 +593,9 @@ class HeadMoveOnTheChainSpec extends ScalaTestWithActorTestKit with AnyFlatSpecL
       on.pathState.moveInProgress shouldBe false
     }
 
-  it should "throw a record that is not there, and not answer it as a head it has not got" taggedAs
+  // C4d part 0: a record that is not what it should be is this datadir's corruption: the state fails closed (no
+  // further in-place write, no state given out) and the fork choice is answered as one not followed.
+  it should "fail the state closed on a record that is not there, and answer the head as one not followed" taggedAs
     (UnitTest, ConsensusTest) in {
       val on = new Node
       val chain = blocks.take(4)
@@ -608,13 +611,36 @@ class HeadMoveOnTheChainSpec extends ScalaTestWithActorTestKit with AnyFlatSpecL
         )
       )
       val before = on.everything
-      (the[ReorgTooDeep] thrownBy on.node.forkChoiceManager.applyForkChoiceState(
-        choiceOf(chain(2), chain)
-      )).reason shouldBe
-        ReorgRefusal.Corrupt
+      on.node.forkChoiceManager.applyForkChoiceState(choiceOf(chain(2), chain)) shouldBe Left("SYNCING")
       on.everything shouldBe before
       on.node.forkChoiceManager.getHeadBlockHash shouldBe None
+      on.pathState.hasFailedClosed shouldBe true
+      // and nothing more is written in place: not the next block, not a confirmation of the head
+      an[org.scalatest.exceptions.TestFailedException] should be thrownBy on.imports(blocks(4))
+      on.node.forkChoiceManager.applyForkChoiceState(choiceOf(chain.last, chain)) shouldBe Left("SYNCING")
+      on.holds(chain.last.header, chain)
+      // closed until the node is started again (the fault is kept in memory only; B-252)
+      (the[StateUnavailable] thrownBy on.pathState.moveHead(
+        refOf(chain.last.header),
+        on.link,
+        on.headRows
+      )).reason should include("takes no write")
     }
+
+  // C4d part 0 (B-249): a confirmation of the head moves nothing, and is no move to whoever builds on the head.
+  it should "count a move that moves the head, and not a confirmation of it" taggedAs (UnitTest, ConsensusTest) in {
+    val on = new Node
+    val chain = blocks.take(4)
+    chain.foreach(on.imports)
+    val before = on.pathState.movesStarted
+    on.node.forkChoiceManager.applyForkChoiceState(choiceOf(chain.last, chain)) shouldBe Right(())
+    on.pathState.movesStarted shouldBe before
+    // nor one that is refused before anything is written
+    on.node.forkChoiceManager.applyForkChoiceState(choiceOf(chain(1), chain)) shouldBe Left("SYNCING")
+    on.pathState.movesStarted shouldBe before
+    on.move(chain(1).header)
+    on.pathState.movesStarted shouldBe before + 1
+  }
 
   // C4b part 4 (T150): the reconciliation at start. The block whose state is held wins, always (vault, forge): the
   // best block and the index are made its own, and nothing else is written.

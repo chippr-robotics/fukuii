@@ -72,11 +72,17 @@ final class PathStateStorage(
   @volatile private var moving = false
   private val movesBegun = new java.util.concurrent.atomic.AtomicLong(0L)
 
-  /** Set when a row read back after a write was not the row written: the store wrote other bytes than it was given.
-    * Nothing is written in place after that, by a commit or by a move, until the node is started again and its state
-    * looked at (plan.md "C4b: the move core": it never rolls back onto such a store).
+  /** Set when a row read back after a write was not the row written (the store wrote other bytes than it was given), or
+    * when a caller found this datadir's own records corrupt ([[failClosed]]). Nothing is written in place after that,
+    * by a commit or by a move, and no state is given out, until the node is started again and its state looked at
+    * (plan.md "C4b: the move core": it never rolls back onto such a store).
     */
   @volatile private var faulted: Option[String] = None
+
+  /** True from the first move of the head that moves it in the current call of [[moveHead]]: a move of nothing is not
+    * counted ([[movesStarted]]).
+    */
+  private var countedThisMove = false
 
   /** The executed blocks whose state is on no row (data-model 6.1), within their bounds (6.4). Nothing in the node
     * makes one yet.
@@ -590,6 +596,8 @@ final class PathStateStorage(
       require(other.dataSource eq dataSource, "a block and its state are written in one batch, to one data source")
     )
     require(genesis.number == 0, s"a genesis block is block 0, not ${genesis.number}")
+    // a store that failed closed takes no genesis either, unless its state was destroyed first (test mode)
+    refuseIfFaulted()
     lock.locked(
       s"genesis commit of block ${genesis.show}",
       nanos => told("the wait for the state lock")(settings.observer.lockWaited(nanos))
@@ -763,6 +771,8 @@ final class PathStateStorage(
           overlay.clear()
           window.set(None)
           indexes.clear()
+          // the state a fault was found in is gone with it: the next genesis is committed on a store that holds none
+          faulted = None
           deletes.map(_.toRemove.size).sum
     }
 
@@ -1037,14 +1047,28 @@ final class PathStateStorage(
         moves.unlock()
         adopting(holder)(body)
 
-  /** A store that wrote other bytes than it was given takes no write and gives out no state: a block executed on it
-    * could be judged invalid, and that verdict is kept by whoever is told it (beacon).
+  /** '''This store takes no further write''', and gives out no state, until the node is started again: a caller found
+    * this datadir's own changeset records corrupt (a plan refused `Corrupt`), and nothing is built over that (plan.md
+    * "C4b part 1": `Corrupt` fails closed at the Engine API, C4d). It is logged at ERROR; the escalation is C4d's.
+    *
+    * It takes no lock: a write already past its check under the state lock completes, and no write that starts after
+    * this does. It is kept in memory only; nothing looks at the records again at the next start (B-252).
+    */
+  def failClosed(why: String): Unit =
+    if faulted.isEmpty then
+      faulted = Some(why)
+      log.error(s"[STATE-MOVE] This node's state takes no further write and is not read: $why. Start the node again")
+
+  /** Whether this store has failed closed ([[failClosed]], or a row read back that was not the row written). */
+  def hasFailedClosed: Boolean = faulted.isDefined
+
+  /** A store that wrote other bytes than it was given, or that failed closed, takes no write and gives out no state: a
+    * block executed on it could be judged invalid, and that verdict is kept by whoever is told it (beacon).
     */
   private def refuseIfFaulted(): Unit =
     faulted.foreach { why =>
       throw new StateUnavailable(
-        s"this node's state takes no write and is not read: a row read back after a write was not the row written " +
-          s"($why). Start the node again"
+        s"this node's state takes no write and is not read: $why. Start the node again"
       )
     }
 
@@ -1087,8 +1111,13 @@ final class PathStateStorage(
     */
   def moveInProgress: Boolean = moving
 
-  /** How many moves of the head have begun. Who builds on the head reads it before and after: [[moveInProgress]] seen
-    * as false says nothing of a move that began the moment after (forge).
+  /** How many moves of the head have begun that move it: a confirmation of the head as it is, a move of nothing, is not
+    * one (B-249). One is counted under the state lock before its first batch is built, so a build that overlaps any of
+    * its writes sees the count change. A move refused before its first batch is built (by its plan, or by its caller's
+    * rows) is not counted; one whose first batch is refused while it is built is, with nothing written, which is the
+    * safe side. The count is one per move, not per batch: who builds on the head reads it before and after, and pairs
+    * it with [[moveInProgress]], since a build that starts between two batches of a move sees no change in it (forge,
+    * beacon).
     */
   def movesStarted: Long = movesBegun.get
 
@@ -1132,7 +1161,7 @@ final class PathStateStorage(
     // It may be long, and it waits: for a thread that may block (beacon).
     moves.lock()
     moving = true
-    movesBegun.incrementAndGet()
+    countedThisMove = false
     // the layers of each plan, held against eviction until the move is over
     val pin = new BranchPin(s"the move of the head to ${target.show}")
     try
@@ -1224,6 +1253,12 @@ final class PathStateStorage(
             extra.foreach(_.commit())
             Some(epoch)
           else
+            // counted under the lock, before its first batch is built: a confirmation of the head as it is moves
+            // nothing, and a move refused before this moved nothing either; neither is a move to whoever builds on the
+            // head (B-249)
+            if !countedThisMove then
+              countedThisMove = true
+              movesBegun.incrementAndGet()
             val wrote = writeChunk(chunk, extra, finalized)
             movedBy(chunk, wrote, last = at == chunks.size - 1)
             // after what is kept in memory has followed the disk: a store that failed its check is not left with the
@@ -1347,7 +1382,7 @@ final class PathStateStorage(
       .find((position, node) => rows.read(position).map(ByteString(_)) != node)
       .foreach { (position, _) =>
         val why = s"${position.show}, after the move to block ${chunk.head.show}"
-        faulted = Some(why)
+        faulted = Some(s"a row read back after a write was not the row written ($why)")
         log.error(
           s"[STATE-MOVE] The row at $why is not the row that was written. This node's state takes no further write."
         )

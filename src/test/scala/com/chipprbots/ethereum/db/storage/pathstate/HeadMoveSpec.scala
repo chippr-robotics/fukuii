@@ -453,10 +453,11 @@ class HeadMoveSpec extends AnyFlatSpec with Matchers with LayerChains with Plann
       )
       net.chain.state.moveInProgress shouldBe false
       net.holds(head)
-      // each move that began is counted, for who builds on the head and must know one began meanwhile
-      net.chain.state.movesStarted shouldBe started + 1
+      // a move is counted, for who builds on the head and must know one began meanwhile, once it writes: one refused
+      // before any write moved nothing, and is not (B-249)
+      net.chain.state.movesStarted shouldBe started
       net.moved(net.chain.first)
-      net.chain.state.movesStarted shouldBe started + 2
+      net.chain.state.movesStarted shouldBe started + 1
     }
 
   "A move to the block the disk holds" should "write the caller's rows and nothing else" taggedAs UnitTest in {
