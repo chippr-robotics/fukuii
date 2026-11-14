@@ -2802,19 +2802,15 @@ items:
   - id: B-246
     title: "Built-in ephemery/hoodi: Engine API is off by default (engine-api.enabled=false); runbook companion note wrongly says mining.protocol covers it"
     priority: P2
-    status: review
+    status: done
     area: ops
     size: S
     opened: 2026-11-13
+    closed: 2026-11-14
     refs: [B-236]
     links:
       prs: [1823]
       spec: specs/028-builtin-ephemery-hoodi
-    claim:
-      by: dev-node
-      agent: main
-      since: 2026-11-13T17:16:30Z
-      heartbeat: 2026-11-13T18:26:05Z
     notes: "Found in spec 028 S5 on dev-node 2026-11-13: fukuii ephemery started but nothing listened on 8551 until -Dfukuii.network.engine-api.enabled=true. Decide: enable it (and require jwt-secret-path) in conf/ephemery.conf + conf/hoodi.conf, or document it; fix docs/runbooks/ephemery.md line added in #1822."
   - id: B-247
     title: JdkHttpsTransportSpec 'refuse a proxy URL with credentials' fails where the JVM has https.proxyHost set
