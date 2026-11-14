@@ -3045,3 +3045,14 @@ items:
     refs: ["dev-node terminal gate of spec 029 slices 1-2, 2026-11-14"]
     links: {}
     notes: Seen on every start before the TUI takes the screen; predates spec 029.
+  - id: B-265
+    title: "TUI: with a root log level above INFO the Logs view and the TUI's own log lines are empty; consider a console-package level or say so on the Logs view"
+    priority: P3
+    status: open
+    area: tui
+    size: S
+    opened: 2026-11-14
+    refs: ["dev-node terminal gate, 2026-11-14"]
+    links:
+      spec: specs/029-tui-command-center
+    notes: LOGSLEVEL=ERROR (the Ephemery launch) drops 'TUI graphics ...' and every INFO line the Logs view would show.
