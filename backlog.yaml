@@ -744,19 +744,17 @@ items:
   - id: B-062
     title: "Spec 018 Track C C4d: the PoS arms (item 6f)"
     priority: P2
-    status: claimed
+    status: done
     area: storage
     size: M
     opened: 2026-11-07
+    closed: 2026-11-14
     refs: [018 C4d]
     links:
+      prs: [1843]
       spec: specs/018-storage-engine-consolidation
     depends_on: [B-061]
-    claim:
-      by: cloud-dc960fdc
-      agent: main
-      since: 2026-11-14T00:55:54Z
-      heartbeat: 2026-11-14T20:29:30Z
+    notes: "2026-11-14 done: C4d complete: parts 0-4b merged (#1830-#1833, #1838, #1840, #1841); close-out #1843. The escalation trigger (T163, T164, T174) and the ordered clear are C5a's (B-064), with beacon's design and the user's decisions in plan.md C4d part 5."
   - id: B-063
     title: "Spec 018 Track C C4e: the PoW arms (item 6g)"
     priority: P2
