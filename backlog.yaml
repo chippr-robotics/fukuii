@@ -3225,3 +3225,13 @@ items:
     refs: []
     links: {}
     notes: "forge, spec 029 slice 7 analysis. PoWMiningCoordinator StopMining returns Behaviors.stopped (PoWMiningCoordinator.scala:103-105); PoWMining.minerCoordinatorRef is never cleared and startMiningProcess runs once at boot (PoWMining.scala:71,107), so a later StartMining/SetMiningMode is dropped. Also nothing records whether the internal miner runs: EthMiningService.isMining is 'someone reported a hashrate recently' and lags both ways. Related: B-278. The TUI will refuse 'mining start' and say why, and treat 'mining stop' as lasting until restart."
+  - id: B-280
+    title: "Spec 029 slice 7: operator actions on the --tui dashboard (Ops view, dialogs by class, audit log, the admin functions made true)"
+    priority: P2
+    status: open
+    area: tui
+    size: L
+    opened: 2026-11-14
+    refs: []
+    links:
+      spec: 029
