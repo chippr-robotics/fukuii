@@ -2561,19 +2561,18 @@ items:
   - id: B-226
     title: "TuiKeysSpec escape-sequence tests: the escape drain's fixed 50 ms tail budget can flake on a starved CI runner"
     priority: P3
-    status: claimed
+    status: done
     area: tui
     size: S
     opened: 2026-11-12
+    closed: 2026-11-14
     refs: ["prism review of B-224, 2026-11-12"]
     links:
+      prs: [1835]
       spec: specs/027-tui-dashboard
-    claim:
-      by: cloud-ccr-452bbde8
-      agent: main
-      since: 2026-11-14T17:05:28Z
-      heartbeat: 2026-11-14T17:05:28Z
-    notes: "TuiKeysSpec.scala:177-179, 185-187, 201-204: the first checkInput waits 1000 ms, but drainEscape (Tui.scala:477, 494) gives the tail 50 ms; a pump stall between introducer and final byte leaves a tail char for the follow-up checkInput(50). Lower odds than B-224 (one write per sequence). Fix with the drain's injectable clock in these tests."
+    notes: |-
+      TuiKeysSpec.scala:177-179, 185-187, 201-204: the first checkInput waits 1000 ms, but drainEscape (Tui.scala:477, 494) gives the tail 50 ms; a pump stall between introducer and final byte leaves a tail char for the follow-up checkInput(50). Lower odds than B-224 (one write per sequence). Fix with the drain's injectable clock in these tests.
+      2026-11-14 done: The key decoder keeps an unfinished sequence across a quiet input for up to 1 s instead of dropping it after 50 ms, so a stalled tail is finished as part of its sequence, never read as keys.
   - id: B-227
     title: Ship Ephemery (bundled iteration + self-refresh at reset) and Hoodi as built-in networks
     priority: P2
