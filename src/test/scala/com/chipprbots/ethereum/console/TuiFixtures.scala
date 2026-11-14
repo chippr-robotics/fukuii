@@ -826,7 +826,7 @@ object TuiFixtures:
     StoreSize("canonical hash by number", Some(812 * MiB), Some(21_884_103L)),
     StoreSize("chain weights", Some(640 * MiB), Some(21_884_103L)),
     StoreSize("known peers", Some(2 * MiB), Some(1_912L)),
-    StoreSize("node state", Some(1 * MiB), Some(41L)),
+    StoreSize("node state", Some(12 * 1024L), Some(41L)),
     StoreSize("trie nodes by hash", Some(0L), Some(0L)),
     StoreSize("healing frontier (retired)", Some(0L), Some(0L)),
     StoreSize("frontier rebuild queue (legacy)", Some(0L), Some(0L)),
@@ -835,14 +835,14 @@ object TuiFixtures:
   )
 
   val markers: Vector[(String, String)] = Vector(
-    "State layout" -> "unified-v1",
-    "SNAP sync" -> "marked done (by SNAP or a checkpoint)",
-    "Heal invariant" -> "marked: every present node has its subtree",
+    "State layout" -> "unified path layout (path-live-1)",
+    "SNAP sync" -> "done (SNAP, pivot 21883000)",
+    "Heal invariant" -> "marked (SNAP walk: what is present has its subtree)",
     "Checkpoint import" -> "none",
     "Code scan" -> "not owed",
     "Audit pass" -> "clean at pivot 21883000",
-    "Reference counts" -> "exact",
-    "Chain weights" -> "every stored weight follows from its parent"
+    "Reference counts" -> "withdrawn by SNAP or checkpoint (pruning keeps trie nodes)",
+    "Chain weights" -> "marked (every weight follows from its parent)"
   )
 
   /** The database of a node at its head, read a second ago: nothing pending, the database not counting its cache's

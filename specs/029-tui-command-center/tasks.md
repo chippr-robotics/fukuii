@@ -512,7 +512,7 @@ Every slice ends with the same gate. The art (phase 0) is done and in the tree.
 
 - [x] T094 The per-slice gate; quickstart.md "Slice 6"; `vault`, `herald`, `prism` and `eye`; open the PR
 
-> As built (2026-11-14). After the slice: 1,464 tests in 57 suites of
+> As built (2026-11-14). After the slice: 1,470 tests in 57 suites of
 > `testOnly com.chipprbots.ethereum.console.* *Tui* *PeerScor*`. What differs from the tasks as written:
 >
 > - **T088, T083**: `vault` analysed before any code and reviewed after. `properties()` takes the read lock in the
@@ -551,6 +551,14 @@ Every slice ends with the same gate. The art (phase 0) is done and in the tree.
 > - **Reviews**: `vault` (two blockers, both fixed: the marker reads, the audit's dead reference), `herald` (the
 >   peer's Hello was not counted while this node's was), `prism` (two blockers, both fixed: the Overview's disk
 >   cell and the SNAP sample's age still read fixed constants; bars were drawn before the node had been read).
+> - **`eye`** ran the slice's suites on an export of the PR's commit: all pass, the goldens are stable over two runs,
+>   and the new lock and audit tests pass five times of five. It asked for the new views in the render benchmark,
+>   which are there now.
+> - **The terminal run** (dev-node, side instances): all eight steps of quickstart "Slice 6" pass. From it: the
+>   integrity marks are worded for a node that never ran SNAP (`vault` gave what each absent mark means; a datadir
+>   without the reference-count stamp prunes no trie node, and the row says so); a store under a mebibyte is drawn in
+>   kilobytes; a threshold of whole tebibytes is said in them; a configuration error names the key and the reason
+>   without the configuration's origin; a reading is "now" for two seconds, not five.
 > - **Also here**: B-275, found by the slice 5 terminal run: blocks sealed by the internal miner were never
 >   counted in `pow_blocks_mined_total` (`forge`).
 

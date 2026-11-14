@@ -64,3 +64,31 @@ class TuiRenderBenchmarkSpec extends AnyFlatSpec with Matchers:
     info(f"median frame() of a 160×48 Overview at the head, idle: $medianMs%.3f ms (p90 ${nanos(89) / 1e6}%.3f ms)")
     medianMs should be < AssertedMs
   }
+
+  // eye, slice 6 review: the System and Storage views and the health screen are timed too. Each render is of a state
+  // of its own, as each frame's is on a live node, so the health checks (worked out once a state) are worked out in
+  // every render, walking the System view's ten minutes of history.
+  for (name, fixture) <- Seq[(String, TuiState)](
+      "System" -> TuiFixtures.pressureEtc().withView(TuiView.System),
+      "Storage" -> TuiFixtures.resourcesSepolia().withView(TuiView.Storage),
+      "health screen" -> TuiFixtures
+        .pressureEtc()
+        .withView(TuiView.System)
+        .copy(screens = List(Screen.HealthDetail(Subsystem.Memory))),
+      "Overview with its health strip" -> TuiFixtures.pressureEtc()
+    )
+  do
+    s"A 160×48 frame of the $name" should "stay inside the render budget, median of 100" taggedAs (BenchmarkTest) in {
+      def fresh(i: Int): TuiState = fixture.copy(tick = i.toLong, motion = Motion.Reduced)
+      (1 to 500).foreach(i => renderer.render(fresh(i), 160, 48))
+      val nanos = (0 until 100).map { i =>
+        val state = fresh(i)
+        val started = System.nanoTime()
+        renderer.render(state, 160, 48)
+        System.nanoTime() - started
+      }.sorted
+      val medianMs = nanos(nanos.size / 2) / 1e6
+      val verdict = if medianMs < TargetMs then "within" else "OVER"
+      info(f"median render of a 160×48 $name: $medianMs%.3f ms (p90 ${nanos(89) / 1e6}%.3f ms), $verdict SC-003's 1 ms")
+      medianMs should be < AssertedMs
+    }

@@ -182,30 +182,50 @@ abstract class BaseNode extends Node:
     storagesInstance.dataSource match
       case rocks: RocksDbDataSource =>
         val appState = storagesInstance.storages.appStateStorage
-        // Each in words that say what the marker vouches for and no more (vault): none of them says the state is
-        // whole, and one that is absent says only that nothing vouches.
-        def markers(): Vector[(String, String)] = Vector(
-          "State layout" -> appState.getStateLayout().getOrElse("not stamped"),
-          "SNAP sync" -> (if appState.isSnapSyncDone() then "marked done (by SNAP or a checkpoint)"
-                          else "not marked done"),
-          "Heal invariant" -> (if appState.hasSnapHealInvariant() then "marked: every present node has its subtree"
-                               else "not marked: what is present is not vouched for"),
-          "Checkpoint import" -> appState
-            .getCheckpointImportInProgress()
-            .fold("none")(what => s"running or interrupted ($what)"),
-          "Code scan" -> appState.getSnapCodeScanOwed().fold("not owed")(why => s"owed: $why"),
-          "Audit pass" -> (
-            if appState.isSnapAuditOwed() then "a pass is owed"
-            else
-              appState.getSnapAuditCleanAnchor() match
-                case Some(AppStateStorage.AuditNoPivot) => "clean (checkpoint, no pivot)"
-                case Some(anchor)                       => s"clean at pivot $anchor"
-                case None => "none recorded (none owed until SNAP or a checkpoint finishes)"
-          ),
-          "Reference counts" -> (if appState.hasRefCountsExact() then "exact" else "not vouched for"),
-          "Chain weights" -> (if appState.hasChainWeightInvariant() then "every stored weight follows from its parent"
-                              else "not marked: one reconcile pass owed")
-        )
+        // Each in words that say what the marker is and what its absence costs, and no more (vault): none says the
+        // state is whole, and a marker that only a SNAP sync stamps is not a fault on a node that never ran one.
+        def markers(): Vector[(String, String)] =
+          val pivot = appState.getSnapSyncPivotBlock()
+          val snapDone = appState.isSnapSyncDone()
+          val snapState = snapDone || pivot.isDefined
+          Vector(
+            "State layout" -> appState.getStateLayout().fold("hash layout (default)")(v => s"unified path layout ($v)"),
+            "SNAP sync" -> ((snapDone, pivot) match
+              case (true, Some(n))  => s"done (SNAP, pivot $n)"
+              case (true, None)     => "done (checkpoint import)"
+              case (false, Some(n)) => s"not finished (SNAP state present, pivot $n)"
+              case (false, None)    => "not run (no SNAP state on this datadir)"
+            ),
+            "Heal invariant" -> (
+              if appState.hasSnapHealInvariant() then "marked (SNAP walk: what is present has its subtree)"
+              else if snapState then "not marked (SNAP state present; a repair pass is owed)"
+              else "not marked (a SNAP start stamps it; none has run)"
+            ),
+            "Checkpoint import" -> appState
+              .getCheckpointImportInProgress()
+              .fold("none")(what => s"running or interrupted ($what)"),
+            "Code scan" -> appState.getSnapCodeScanOwed().fold("not owed")(why => s"owed: $why"),
+            "Audit pass" -> (
+              if appState.isSnapAuditOwed() then "a pass is owed"
+              else
+                appState.getSnapAuditCleanAnchor() match
+                  case Some(AppStateStorage.AuditNoPivot) => "clean (checkpoint, no pivot)"
+                  case Some(anchor)                       => s"clean at pivot $anchor"
+                  case None => "none recorded (none owed until SNAP or a checkpoint finishes)"
+            ),
+            // Without the stamp a prune deletes no trie node: it prunes less, and the row says so.
+            "Reference counts" -> (
+              if appState.hasRefCountsExact() then "exact (genesis stamped; pruning may delete nodes)"
+              else if !appState.isDatadirCreatedUnderInvariant() then
+                "not stamped (older datadir: pruning keeps trie nodes)"
+              else if snapState then "withdrawn by SNAP or checkpoint (pruning keeps trie nodes)"
+              else "not stamped (genesis not exact: pruning keeps trie nodes)"
+            ),
+            "Chain weights" -> (
+              if appState.hasChainWeightInvariant() then "marked (every weight follows from its parent)"
+              else "not marked: one reconcile pass owed"
+            )
+          )
         def audit(): AuditReading =
           import org.apache.pekko.actor.typed.scaladsl.AskPattern.*
           given org.apache.pekko.util.Timeout = org.apache.pekko.util.Timeout(250.millis)

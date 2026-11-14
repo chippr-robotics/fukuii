@@ -81,6 +81,12 @@ class ResourceViewSpec extends AnyFlatSpec with Matchers with OptionValues with 
       storage = TuiFixtures.storageSample.copy(at = TuiFixtures.Now.minusSeconds(95))
     )
     row(in(TuiView.Storage)(s), "Size") should include("read 1m 35s ago")
+    // The database is read every five seconds: a reading three seconds old says so.
+    val recent = TuiFixtures.withResources(
+      TuiFixtures.syncedEtc(),
+      storage = TuiFixtures.storageSample.copy(at = TuiFixtures.Now.minusSeconds(3))
+    )
+    row(in(TuiView.Storage)(recent), "Size") should include("read 3s ago")
   }
 
   it should "say that hit rates are not counted where the database does not count them, and never draw a rate" taggedAs (
@@ -116,6 +122,12 @@ class ResourceViewSpec extends AnyFlatSpec with Matchers with OptionValues with 
     listed.head should include("1,204,118,220")
     listed.exists(_.startsWith("healing frontier")) shouldBe false
     listed.exists(_.startsWith("trie nodes by hash")) shouldBe false
+  }
+
+  it should "draw a store of a few kilobytes in kilobytes, not as nothing" taggedAs (UnitTest) in {
+    val small = rows(in(TuiView.Storage)(TuiFixtures.resourcesEtc())).find(_.trim.startsWith("node state ")).value
+    small should include(" 12K ")
+    (small should not).include(" 0M ")
   }
 
   it should "count the stores it has no rows for, and cut none" taggedAs (UnitTest) in {

@@ -317,6 +317,11 @@ class HealthSpec extends AnyFlatSpec with Matchers with OptionValues:
     moved.state shouldBe CheckState.Warn
     moved.threshold shouldBe "warn below 100G, error below 50G"
     Alerts.of(strict).map(_.text) shouldBe Seq("disk 60.0G free (warn < 100G)")
+    // A threshold in tebibytes is said in tebibytes, and one that is no whole number of either as sizes are drawn.
+    val huge = s.copy(thresholds = AlertThresholds.Default.copy(diskWarnBytes = 10L * 1024 * GiB))
+    check(huge, Subsystem.Disk, "free space").threshold shouldBe "warn below 10T, error below 5G"
+    val odd = s.copy(thresholds = AlertThresholds.Default.copy(diskWarnBytes = 30 * GiB + GiB / 2))
+    check(odd, Subsystem.Disk, "free space").threshold shouldBe "warn below 30.5G, error below 5G"
   }
 
   "The time a check has been in its state" should "run from the poll that first saw it, and start again when it changes" taggedAs (

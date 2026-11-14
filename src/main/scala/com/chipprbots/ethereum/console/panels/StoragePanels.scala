@@ -26,6 +26,13 @@ private[console] object StoragePanels:
 
   private def bytes(value: Option[Long], g: TuiGlyphs): String = value.fold(g.missing.text)(formatBytes)
 
+  /** A store's size: as [[formatBytes]] from a mebibyte, and in K or bytes under it, so that a store of a few kilobytes
+    * is not drawn as `0M` beside the count of the stores that are empty.
+    */
+  private def storeSize(value: Option[Long], g: TuiGlyphs): String = value.fold(g.missing.text) { size =>
+    if size >= 1024L * 1024 then formatBytes(size) else if size >= 1024 then s"${size / 1024}K" else s"${size}B"
+  }
+
   /** `+1.2G/h`, `-300M/h`: a database that compaction shrank grows at less than nothing. */
   private def growth(perHour: Double): String =
     val sign = if perHour < 0 then "-" else "+"
@@ -45,7 +52,8 @@ private[console] object StoragePanels:
       Seq(s"${bytes(s.sstBytes, g)} on disk") ++
         s.liveDataBytes.map(live => s"${formatBytes(live)} live (estimate)") ++
         s.growthPerHour.map(perHour => s"${growth(perHour)} over ${formatShort(span.getOrElse(0L))}") ++
-        Seq(if age <= 5 then "read now" else s"read ${formatShort(age)} ago"),
+        // The database is read every five seconds: the age is said from two, so a reading is not "now" for five.
+        Seq(if age <= 1 then "read now" else s"read ${formatShort(age)} ago"),
       w
     )
     val free = c.state.snapshot.flatMap(_.local.diskFree).filter(_ >= 0)
@@ -168,7 +176,7 @@ private[console] object StoragePanels:
         text(
           line(
             store.name,
-            bytes(store.sstBytes, g),
+            storeSize(store.sstBytes, g),
             store.keys.fold(g.missing.text)(formatNumber),
             share.getOrElse(g.missing.text)
           ),

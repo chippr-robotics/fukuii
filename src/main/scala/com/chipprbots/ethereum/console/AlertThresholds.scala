@@ -95,7 +95,9 @@ object AlertThresholds:
     */
   def fromConfig(tui: TypesafeConfig): AlertThresholds =
     def bad(key: String, why: String): Nothing =
-      throw new ConfigException.BadValue(tui.origin(), s"fukuii.tui.alerts.$key", why)
+      // Without the configuration's origin: "merge of system properties, tui.conf @ jar:…" in front of the key and
+      // the reason tells an operator nothing they can act on.
+      throw new ConfigException.BadValue(s"fukuii.tui.alerts.$key", why)
     def read[A](key: String, default: A)(get: String => A)(check: A => Option[String]): A =
       val path = s"alerts.$key"
       // A key set to null is not a key left out: it is a threshold the operator believes is set.
@@ -104,7 +106,12 @@ object AlertThresholds:
       else
         val value =
           try get(path)
-          catch case e: ConfigException => bad(key, Option(e.getMessage).getOrElse("not a valid value"))
+          catch
+            case e: ConfigException =>
+              // The library's own message names the origin and the path again before its reason: the reason is kept.
+              val said = Option(e.getMessage).getOrElse("not a valid value")
+              val mark = s"'$path': "
+              bad(key, if said.contains(mark) then said.drop(said.lastIndexOf(mark) + mark.length) else said)
         check(value).foreach(bad(key, _))
         value
     def duration(key: String, default: Duration): Duration =
@@ -118,7 +125,6 @@ object AlertThresholds:
     if tui.hasPath("alerts") then
       if tui.getValue("alerts").valueType() != com.typesafe.config.ConfigValueType.OBJECT then
         throw new ConfigException.BadValue(
-          tui.origin(),
           "fukuii.tui.alerts",
           s"it must be a block of thresholds: ${Keys.mkString(", ")}"
         )

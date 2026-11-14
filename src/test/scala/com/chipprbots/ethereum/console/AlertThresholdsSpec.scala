@@ -104,6 +104,15 @@ class AlertThresholdsSpec extends AnyFlatSpec with Matchers:
     for (alerts, key) <- cases do withClue(s"$alerts: ")(refused(alerts) should include(s"fukuii.tui.alerts.$key"))
   }
 
+  it should "say the key and the reason, without the configuration's origin in front" taggedAs (UnitTest) in {
+    val message = refused("disk-warn = lots")
+    message should startWith("Invalid value at 'fukuii.tui.alerts.disk-warn': ")
+    message should include("'lots'")
+    (message should not).include("String:")
+    // The path is said once.
+    message.split("alerts\\.disk-warn", -1).length shouldBe 2
+  }
+
   "An error that would begin above its warning" should "be refused: it would never be preceded by one" taggedAs (
     UnitTest
   ) in {

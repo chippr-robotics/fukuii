@@ -122,6 +122,15 @@ object Health:
 
   private def short(d: Duration): String = formatShort(d.getSeconds.max(0L))
 
+  /** A configured size as an operator writes one: `20G`, `10T`; one that is no whole number of either, as sizes are
+    * drawn elsewhere.
+    */
+  private def size(bytes: Long): String =
+    val gib = AlertThresholds.GiB
+    if bytes > 0 && bytes % (gib * 1024) == 0 then s"${bytes / (gib * 1024)}T"
+    else if bytes > 0 && bytes % gib == 0 then s"${bytes / gib}G"
+    else formatBytes(bytes)
+
   /** `minute` for the window once it is whole, and its length until then. */
   private def window(span: Duration): String = if span.getSeconds >= 59 then "minute" else short(span)
 
@@ -130,7 +139,6 @@ object Health:
     val snapshot = state.snapshot
     val now = state.now
     val limits = state.thresholds
-    val gib = AlertThresholds.GiB
     // The alert's own condition, as spec 027 wrote it: a node not read yet raises nothing.
     val peersKnown = snapshot.forall(_.peers.value.isDefined)
     // What a check may say it knows: nothing, before the node has been read.
@@ -243,13 +251,13 @@ object Health:
         Subsystem.Disk,
         "free space",
         s"${formatBytes(free)} free" + total.fold("")(t => s" of ${formatBytes(t)}"),
-        s"warn below ${limits.diskWarnBytes / gib}G, error below ${limits.diskErrorBytes / gib}G",
+        s"warn below ${size(limits.diskWarnBytes)}, error below ${size(limits.diskErrorBytes)}",
         headroom = total.map(t => (free - limits.diskWarnBytes).toDouble / (t - limits.diskWarnBytes)),
         alert =
           if free < limits.diskErrorBytes then
-            Some(Alert(Severity.Error, s"disk ${formatBytes(free)} free (error < ${limits.diskErrorBytes / gib}G)"))
+            Some(Alert(Severity.Error, s"disk ${formatBytes(free)} free (error < ${size(limits.diskErrorBytes)})"))
           else if free < limits.diskWarnBytes then
-            Some(Alert(Severity.Warn, s"disk ${formatBytes(free)} free (warn < ${limits.diskWarnBytes / gib}G)"))
+            Some(Alert(Severity.Warn, s"disk ${formatBytes(free)} free (warn < ${size(limits.diskWarnBytes)})"))
           else None
       )
     }

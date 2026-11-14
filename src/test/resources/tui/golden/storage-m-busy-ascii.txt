@@ -24,17 +24,17 @@
  [8] Logs         | canonical hash by number             812M        21,884,103             0.2%                        
  [9] Ops          | chain weights                        640M        21,884,103             0.2%                        
                   | known peers                            2M             1,912             0.0%                        
- graphics text    | node state                             1M                41             0.0%                        
+ graphics text    | node state                            12K                41             0.0%                        
                   |-----------------------------------------------------------------------------------------------------
                   | Integrity                                                                                           
                   | Audit   pass 2 . 412,880,114 nodes . 3 holes . 3 repaired . 0 unresolved . 91,204,118 accounts      
-                  | State layout          unified-v1                                                                    
-                  | SNAP sync             marked done (by SNAP or a checkpoint)                                         
-                  | Heal invariant        marked: every present node has its subtree                                    
+                  | State layout          unified path layout (path-live-1)                                             
+                  | SNAP sync             done (SNAP, pivot 21883000)                                                   
+                  | Heal invariant        marked (SNAP walk: what is present has its subtree)                           
                   | Checkpoint import     none                                                                          
                   | Code scan             owed: checkpoint import                                                       
                   | Audit pass            a pass is owed                                                                
-                  | Reference counts      exact                                                                         
-                  | Chain weights         every stored weight follows from its parent                                   
+                  | Reference counts      withdrawn by SNAP or checkpoint (pruning keeps trie nodes)                    
+                  | Chain weights         marked (every weight follows from its parent)                                 
                   | Not kept by this client: a freezer for old blocks (no history is expired).                          
  1-9 view  Enter open  Esc back  : prompt  / filter  ? help  p pause  r redraw  d detach  q quit                        

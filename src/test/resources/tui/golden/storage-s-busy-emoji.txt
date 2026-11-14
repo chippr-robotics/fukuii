@@ -19,6 +19,6 @@
  … 9 smaller stores not shown at this height                                    
 ────────────────────────────────────────────────────────────────────────────────
  Audit   pass 2 · 412,880,114 nodes · 3 holes · 3 repaired · 0 unresolved       
- State layout          unified-v1                                               
+ State layout          unified path layout (path-live-1)                        
  … 7 more marks not shown at this height                                        
  1-9 view  : prompt  / filter  ? help  p pause  r redraw  d detach  q quit      
