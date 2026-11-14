@@ -3099,7 +3099,7 @@ items:
   - id: B-269
     title: "Spec 029 slice 5: the RPC view (per-method figures, transports), the Engine Synchronization Monitor and the mining monitor"
     priority: P2
-    status: open
+    status: claimed
     area: tui
     size: L
     opened: 2026-11-14
@@ -3108,4 +3108,9 @@ items:
       spec: specs/029-tui-command-center
       branch: ccr-452bbde8-2hrv25
     depends_on: [B-266]
+    claim:
+      by: cloud-ccr-452bbde8
+      agent: main
+      since: 2026-11-14T19:00:38Z
+      heartbeat: 2026-11-14T19:00:38Z
     notes: Tasks T073-T082. Fixes B-193 with it (Engine status counters). beacon and conduit analyse before code.
