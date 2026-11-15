@@ -262,8 +262,9 @@ class SupportBundleSpec extends AnyFlatSpec with Matchers with OptionValues:
   it should "write for the owner alone, where the file system has such permissions" taggedAs (UnitTest) in {
     withTempDir { dataDir =>
       val target = SupportBundle.directory(dataDir, TuiFixtures.Now)
-      SupportBundle.write(target, files)
+      val ownerOnly = SupportBundle.write(target, files)
       if isPosix(dataDir) then
+        ownerOnly shouldBe true
         permissions(dataDir.resolve("support")) shouldBe "rwx------"
         permissions(target) shouldBe "rwx------"
         permissions(target.resolve("views")) shouldBe "rwx------"
@@ -275,22 +276,46 @@ class SupportBundleSpec extends AnyFlatSpec with Matchers with OptionValues:
     }
   }
 
-  it should "close a support directory that was open to others, and write over a bundle of the same second" taggedAs (
+  it should "have nothing but owner-only directories and files at every step of the writing" taggedAs (UnitTest) in {
+    withTempDir { dataDir =>
+      assume(isPosix(dataDir), "this file system has no owner-only permissions")
+      val target = SupportBundle.directory(dataDir, TuiFixtures.Now)
+      // What is on disk is looked at as each next file is asked for: while the bundle is still being written.
+      val seen = mutable.Buffer.empty[(String, String)]
+      def look(): Unit =
+        val there = Using.resource(Files.walk(dataDir.resolve("support")))(_.iterator().asScala.toVector)
+        there.foreach(path => seen += dataDir.relativize(path).toString.replace('\\', '/') -> permissions(path))
+      // A lazy list: `write` asks for each file only when it has written the one before.
+      val watched = files.iterator.map { f =>
+        if Files.exists(dataDir.resolve("support")) then look()
+        f
+      }.to(LazyList)
+      SupportBundle.write(target, watched) shouldBe true
+      look()
+      seen should not be empty
+      for (path, mode) <- seen do
+        withClue(s"$path: ") {
+          mode shouldBe (if path.endsWith(".txt") then "rw-------" else "rwx------")
+        }
+      seen.map(_._1) should contain("support/bundle-20261107-120000/views")
+    }
+  }
+
+  it should "not write over a bundle that is there: the second fails and the first is as it was" taggedAs (
     UnitTest
   ) in {
     withTempDir { dataDir =>
-      val support = dataDir.resolve("support")
       val target = SupportBundle.directory(dataDir, TuiFixtures.Now)
-      Files.createDirectories(target)
-      Files.write(target.resolve("README.txt"), "an older bundle".getBytes(StandardCharsets.UTF_8))
-      if isPosix(dataDir) then
-        Files.setPosixFilePermissions(support, PosixFilePermissions.fromString("rwxr-xr-x"))
-        Files.setPosixFilePermissions(target.resolve("README.txt"), PosixFilePermissions.fromString("rw-r--r--"))
-      SupportBundle.write(target, files)
-      new String(Files.readAllBytes(target.resolve("README.txt")), StandardCharsets.UTF_8) shouldBe file("README.txt")
-      if isPosix(dataDir) then
-        permissions(support) shouldBe "rwx------"
-        permissions(target.resolve("README.txt")) shouldBe "rw-------"
+      val first = Seq("README.txt" -> "the first bundle\n", "views/Ops.txt" -> "the first view\n")
+      SupportBundle.write(target, first)
+      a[java.nio.file.FileAlreadyExistsException] should be thrownBy SupportBundle.write(target, files)
+      new String(Files.readAllBytes(target.resolve("README.txt")), StandardCharsets.UTF_8) shouldBe "the first bundle\n"
+      new String(Files.readAllBytes(target.resolve("views/Ops.txt")), StandardCharsets.UTF_8) shouldBe
+        "the first view\n"
+      // Nothing of the second was added beside the first either.
+      val found = Using.resource(Files.walk(target))(_.iterator().asScala.filter(Files.isRegularFile(_)).toVector)
+      found.map(f => target.relativize(f).toString.replace('\\', '/')).toSet shouldBe first.map(_._1).toSet
+      if isPosix(dataDir) then permissions(target.resolve("README.txt")) shouldBe "rw-------"
     }
   }
 
@@ -298,35 +323,54 @@ class SupportBundleSpec extends AnyFlatSpec with Matchers with OptionValues:
 
   private val request = ActionRequest(Actions.Bundle.name)
 
-  "bundle" should "say the path, every file with its size, what it holds, and that it goes nowhere" taggedAs (
+  /** Inputs that fail the test when anything of the node is read. */
+  private val unread: SupportBundle.Inputs =
+    def never[A]: () => A = () => fail("a preview read the node")
+    SupportBundle.Inputs(never, never, never, never, never, never)
+
+  /** A size as the bundle says it. */
+  private def sized(bytes: Long): String =
+    if bytes >= 1024 * 1024 then f"${bytes / 1048576.0}%.1f MiB"
+    else if bytes >= 1024 then s"${bytes / 1024} KiB"
+    else s"$bytes B"
+
+  "bundle" should "say where it goes, the files it holds, what it holds, and that it goes nowhere" taggedAs (
     UnitTest
   ) in {
     withTempDir { dataDir =>
-      val handler = SupportBundle.handler(inputs(), () => Some(dataDir), () => TuiFixtures.Now)
+      // Nothing of the node is read for a preview, and not the time either: it is the same every time it is read.
+      val handler = SupportBundle.handler(unread, () => Some(dataDir), () => fail("a preview read the clock"))
       val p = handler.preview(request)
-      p.refusal shouldBe None
-      p.lines should have size 5
-      p.lines(0) shouldBe s"Writes ${files.size} files under ${dataDir.resolve("support/bundle-20261107-120000")}:"
-      // Every file is named, with its size.
-      for (name, _) <- files do p.lines(1) should include(s"$name (")
-      p.lines(1) should include(s"README.txt (${file("README.txt").getBytes(StandardCharsets.UTF_8).length} B)")
-      p.lines(1) should endWith(".")
-      p.lines.drop(2) shouldBe Vector(
-        "It holds peer addresses and this node's id. It holds no key, no JWT secret, no state and no chain data.",
-        "Secrets in the configuration are hidden. The files are readable by this node's user only.",
-        "It goes nowhere: sending it to anyone is up to you."
+      p shouldBe Preview(
+        Vector(
+          s"Writes a directory of text files, ${dataDir.resolve("support")}/bundle-<the time it is written>:",
+          "README.txt, build.txt, config.txt, logs.txt, alerts.txt, database.txt, threads.txt, memory.txt, " +
+            "and each view of the dashboard as views/<name>.txt.",
+          "It holds peer addresses and this node's id. It holds no key, no JWT secret, no state and no chain data.",
+          "Secrets in the configuration are hidden. The files are readable by this node's user only.",
+          "It goes nowhere: sending it to anyone is up to you."
+        )
       )
+      p.lines(1) shouldBe s"${SupportBundle.Holds}."
+      handler.preview(request).same(p) shouldBe true
+      // Every file a bundle has is one the preview names, the views by their pattern.
+      for (name, _) <- files do
+        withClue(s"$name: ") {
+          if name.startsWith("views/") then name should fullyMatch.regex("""views/[^/]+\.txt""")
+          else SupportBundle.Holds should include(name)
+        }
       // A preview writes nothing.
       Files.exists(dataDir.resolve("support")) shouldBe false
     }
   }
 
-  it should "name every file in the preview the runner publishes, where a line is bounded" taggedAs (UnitTest) in {
+  it should "name its files whole in the preview the runner publishes, where a line is bounded" taggedAs (UnitTest) in {
     withTempDir { dataDir =>
       val inline = new SameThread
+      val handler = SupportBundle.handler(inputs(), () => Some(dataDir), () => TuiFixtures.Now)
       val runner = new ActionRunner(
         Actions.all,
-        Map(Actions.Bundle.name -> SupportBundle.handler(inputs(), () => Some(dataDir), () => TuiFixtures.Now)),
+        Map(Actions.Bundle.name -> handler),
         clock = TuiFixtures.clock,
         audit = _ => (),
         previewThread = inline,
@@ -335,28 +379,57 @@ class SupportBundleSpec extends AnyFlatSpec with Matchers with OptionValues:
       )
       try
         runner.preview(request)
-        val published = runner.view.previews(request)
-        published.refusal shouldBe None
-        for (name, _) <- files do
-          withClue(s"$name: ") {
-            published.lines(1) should include(s"$name (")
-          }
-        // Not cut: the list ends as the handler ended it.
-        published.lines(1) should endWith(".")
+        // Not cut: every line is as the handler wrote it.
+        runner.view.previews(request) shouldBe handler.preview(request)
+        runner.view.previews(request).lines(1) shouldBe s"${SupportBundle.Holds}."
       finally runner.shutdown()
     }
   }
 
-  it should "write the bundle, say where, and say how far it is as it goes" taggedAs (UnitTest) in {
+  it should "write the bundle, say where and how large, and say how far it is as it goes" taggedAs (UnitTest) in {
     withTempDir { dataDir =>
       val handler = SupportBundle.handler(inputs(), () => Some(dataDir), () => TuiFixtures.Now)
       val progress = mutable.Buffer.empty[String]
       val target = dataDir.resolve("support/bundle-20261107-120000")
-      handler.run(request, progress += _) shouldBe Right(s"${files.size} files written to $target")
+      val result = handler.run(request, progress += _)
+      // The size it says is that of what it wrote.
+      val written = Using.resource(Files.walk(target))(_.iterator().asScala.filter(Files.isRegularFile(_)).toVector)
+      written should have size files.size.toLong
+      val posix = isPosix(dataDir)
+      result shouldBe Right(
+        s"${files.size} files (${sized(written.map(Files.size(_)).sum)}) written to $target" +
+          (if posix then "" else "; this file system has no owner-only permissions: the files have its defaults")
+      )
       progress shouldBe Seq("reading the node", s"writing ${files.size} files")
       Files.isRegularFile(target.resolve("README.txt")) shouldBe true
       Files.isRegularFile(target.resolve("views/Ops.txt")) shouldBe true
       (new String(Files.readAllBytes(target.resolve("config.txt")), StandardCharsets.UTF_8) should not).include(Marker)
+      if posix then
+        permissions(target) shouldBe "rwx------"
+        permissions(target.resolve("config.txt")) shouldBe "rw-------"
+    }
+  }
+
+  it should "fail the second of two bundles asked for in one second, and leave the first as it was" taggedAs (
+    UnitTest
+  ) in {
+    withTempDir { dataDir =>
+      val handler = SupportBundle.handler(inputs(), () => Some(dataDir), () => TuiFixtures.Now)
+      val target = dataDir.resolve("support/bundle-20261107-120000")
+      handler.run(request, _ => ()).isRight shouldBe true
+      val first = Using
+        .resource(Files.walk(target))(_.iterator().asScala.filter(Files.isRegularFile(_)).toVector)
+        .map(f => f -> Files.readAllBytes(f).toVector)
+      handler.run(request, _ => ()) shouldBe
+        Left(s"a bundle was already written to $target this second: nothing was written over")
+      for (path, bytes) <- first do
+        withClue(s"$path: ") {
+          Files.readAllBytes(path).toVector shouldBe bytes
+        }
+      // A second later it has a directory of its own.
+      val later = SupportBundle.handler(inputs(), () => Some(dataDir), () => TuiFixtures.Now.plusSeconds(1L))
+      later.run(request, _ => ()).isRight shouldBe true
+      Files.isDirectory(dataDir.resolve("support/bundle-20261107-120001")) shouldBe true
     }
   }
 
@@ -366,6 +439,8 @@ class SupportBundleSpec extends AnyFlatSpec with Matchers with OptionValues:
     handler.run(request, _ => ()) shouldBe Left("this node has no data directory to write under")
   }
 
+  // FAILS (reported): a file where the data directory should be makes `Files.createDirectories` throw
+  // FileAlreadyExistsException, which the handler takes for a bundle of the same second.
   it should "fail, saying where it could not write, when the data directory cannot hold it" taggedAs (UnitTest) in {
     withTempDir { dir =>
       // A file where the data directory should be: nothing can be made under it.
