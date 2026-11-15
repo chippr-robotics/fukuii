@@ -393,7 +393,11 @@ class ConsensusImpl(
     * never the branch's length). That is this node's own condition: the branch is not judged, and no block is reported
     * invalid. So is every fault of the state met on the way.
     *
-    * The branch a consensus layer designates (`!selectedByWeight`, never on ETC) is not adopted here yet: C4e part 5.
+    * The branch a consensus layer designates (`!selectedByWeight`, never on ETC; C4e part 5) is executed on layers as a
+    * heavier one is, and becomes the head by one move when the whole of it is valid and still leads to the head the
+    * consensus layer names. An invalid block of it leaves the head where it was (the hash layout makes the valid prefix
+    * the head). It is never committed in place here: a branch longer than the executed blocks kept, or one that forks
+    * below the views, is the fork choice's recovery's (`StateRecovery`), and is not judged.
     */
   private def reorganiseOnLayers(
       bestBlockNumber: BigInt,
@@ -418,29 +422,26 @@ class ConsensusImpl(
     val fork = locateFork(parentHash, newBranch.head.number.value - 1)
     val forkHeader =
       blockchainReader.getCanonicalHashByNumber(fork.number).flatMap(blockchainReader.getBlockHeaderByHash)
+    // which arm this is, for what is logged: the proof-of-work rule's, or the consensus layer's head (part 5)
+    val arm = if selectedByWeight then "A heavier branch" else "The consensus layer's branch"
+    // Both arms: a move back to the fork that would be refused is refused before anything is executed, and that
+    // holds the consensus layer's branch to the finalized block as it holds a heavier one to the records.
     val refusedUpFront: Option[StateFault] =
-      if !selectedByWeight then
-        Some(
-          new StateUnavailable(
-            s"the branch to block ${newBranch.last.number} is the consensus layer's and not a heavier one: it is " +
-              "followed through the Engine API on the unified state layout"
+      forkHeader match
+        case None =>
+          Some(
+            new StateUnavailable(s"the block the branch leaves the chain at, at height ${fork.number}, is not stored")
           )
-        )
-      else
-        forkHeader match
-          case None =>
-            Some(
-              new StateUnavailable(s"the block the branch leaves the chain at, at height ${fork.number}, is not stored")
-            )
-          case Some(header) => blockchainWriter.refusalOfMoveBackTo(header, blockchainReader)
+        case Some(header) => blockchainWriter.refusalOfMoveBackTo(header, blockchainReader)
     refusedUpFront match
       case Some(refused) =>
         refused match
           case corrupt: ReorgTooDeep if corrupt.reason == ReorgRefusal.Corrupt =>
             // this datadir's own records, not the depth of the fork: said as that (forge)
             log.error(
-              "[STATE-RECORDS-CORRUPT] A heavier branch [{}-{}] leaves the chain at block {}, and the changeset records " +
+              "[STATE-RECORDS-CORRUPT] {} [{}-{}] leaves the chain at block {}, and the changeset records " +
                 "that lead back to it are not what they should be: {}. Nothing was executed and nothing moved",
+              arm,
               newBranch.head.number,
               newBranch.last.number,
               fork.number,
@@ -448,8 +449,9 @@ class ConsensusImpl(
             )
           case tooDeep: ReorgTooDeep =>
             log.error(
-              "[STATE-REORG-TOO-DEEP] A heavier branch [{}-{}] leaves the chain at block {}, {} block(s) below the " +
+              "[STATE-REORG-TOO-DEEP] {} [{}-{}] leaves the chain at block {}, {} block(s) below the " +
                 "head {}: {}. Nothing was executed and nothing moved",
+              arm,
               newBranch.head.number,
               newBranch.last.number,
               fork.number,
@@ -522,6 +524,17 @@ class ConsensusImpl(
                       oldBlocksData,
                       accessLists,
                       notJudged
+                    )
+                  // The consensus layer's branch is not committed in place here: a branch longer than the executed
+                  // blocks kept is adopted by the fork choice's recovery (`StateRecovery`), which owns that for proof
+                  // of stake. A second adopter would write the same head beside it (beacon).
+                  case Some(_) if !selectedByWeight =>
+                    notJudged(
+                      new StateUnavailable(
+                        s"the consensus layer's branch [${newBranch.head.number}-${newBranch.last.number}] is not " +
+                          s"adopted from executed blocks kept beside the disk (${why.getMessage}): it is adopted by " +
+                          "the fork choice's recovery"
+                      )
                     )
                   case _ => notJudged(why)
               // the lost side parents, executed again: what was kept of them, or how it ended
@@ -605,6 +618,7 @@ class ConsensusImpl(
                         bestBlockWeight,
                         fork,
                         oldBlocksData,
+                        selectedByWeight,
                         notJudged
                       )
             }
@@ -805,6 +819,7 @@ class ConsensusImpl(
       bestBlockWeight: ChainWeight,
       fork: ForkPoint,
       oldBlocksData: List[BlockData],
+      selectedByWeight: Boolean,
       notJudged: StateFault => ConsensusResult
   ): ConsensusResult =
     val executed = outcome.executed
@@ -818,13 +833,51 @@ class ConsensusImpl(
       case Some(fault) => notJudged(fault)
       case None =>
         val executedWeight = executed.foldLeft(parentWeight)((w, b) => w.increase(b.block.header))
+        // Whether the head goes to what was executed. By weight (proof of work): when it outweighs the head, a valid
+        // prefix before an invalid block included (W4). By the consensus layer's head (part 5): only when the whole
+        // branch is valid and still leads to the head it names; an invalid block leaves the head where the consensus
+        // layer last had it (the user's decision of 2026-11-14), as nothing has moved yet.
+        // the head the consensus layer names now: what the move is admitted against, with no walk when it is the same
+        val namedAt = if selectedByWeight then None else designatedHead.flatMap(_.headBlockHash)
+        val stillNamed = selectedByWeight || leadsToDesignatedHead(newBranch)
+        val adopted =
+          if selectedByWeight then executedWeight > bestBlockWeight
+          else outcome.error.isEmpty && stillNamed
+        // The consensus layer has named another head while its branch was executed: nothing is wrong with this node
+        // or with the branch, whose blocks are valid and stay beside the head. Not a fault (beacon).
+        def superseded(): ConsensusResult =
+          log.info(
+            "REORG-SUPERSEDED: the consensus layer names another head; its branch [{}-{}] was executed and is kept " +
+              "beside the head {}",
+            newBranch.head.number,
+            newBranch.last.number,
+            bestBlockNumber
+          )
+          KeptCurrentBestBranch
         executed.lastOption match
-          case Some(tip) if executedWeight > bestBlockWeight =>
-            // the move, before the pin is released: the layers it applies are still held
+          // an invalid block is told whatever head is named now: what it is does not depend on that
+          case Some(_) if !stillNamed && outcome.error.isEmpty => superseded()
+          case Some(tip) if adopted                            =>
+            // the move, before the pin is released: the layers it applies are still held. For the consensus layer's
+            // branch it is refused before anything is written if another head was named meanwhile.
+            var refusedAsSuperseded = false
             val moved =
-              try blockchainWriter.moveHeadInPlace(tip.block.header, blockchainReader)
+              try
+                Some(
+                  blockchainWriter.moveHeadInPlace(
+                    tip.block.header,
+                    blockchainReader,
+                    admit = _ =>
+                      val another = !selectedByWeight &&
+                        designatedHead.flatMap(_.headBlockHash) != namedAt && !leadsToDesignatedHead(newBranch)
+                      refusedAsSuperseded = another
+                      Option.when(another)("the consensus layer names another head")
+                  )
+                )
               catch
-                case failed: StateFault =>
+                // refused as it was admitted: nothing was written
+                case _: StateFault if refusedAsSuperseded => None
+                case failed: StateFault                   =>
                   // a move of several batches may have written some: where the head is now is said, and the
                   // next attempt moves on from it
                   log.error(
@@ -834,25 +887,28 @@ class ConsensusImpl(
                     failed.getMessage
                   )
                   throw failed
-            log.info(
-              "REORG-SETTLE: fork={} oldHead={} tip={} executed={} ({})",
-              fork.number,
-              bestBlockNumber,
-              tip.block.number,
-              executed.size,
-              moved
-            )
+            moved match
+              case None => superseded()
+              case Some(moved) =>
+                log.info(
+                  "REORG-SETTLE: fork={} oldHead={} tip={} executed={} ({})",
+                  fork.number,
+                  bestBlockNumber,
+                  tip.block.number,
+                  executed.size,
+                  moved
+                )
+                reorganised(newBranch, oldBlocksData, executed, outcome.error)
           case Some(tip) =>
             log.warn(
-              "REORG-PARTIAL: executed blocks {}-{} do not outweigh the current head {}: it is kept, and their " +
-                "state stays beside it",
+              "REORG-PARTIAL: executed blocks {}-{} {} the current head {}: it is kept, and their state stays beside it",
               executed.head.block.number,
               tip.block.number,
+              if selectedByWeight then "do not outweigh" else "end before an invalid block and do not replace",
               bestBlockNumber
             )
-          case None => ()
-        val settled = executed.lastOption.exists(_ => executedWeight > bestBlockWeight)
-        reorganised(newBranch, if settled then oldBlocksData else Nil, executed, outcome.error)
+            reorganised(newBranch, Nil, executed, outcome.error)
+          case None => reorganised(newBranch, Nil, executed, outcome.error)
 
   // Execute-first reorganise — reference client pattern (go-ethereum/Besu/Nethermind).
   private def reorganiseOnTheHashLayout(
