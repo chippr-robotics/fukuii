@@ -97,7 +97,7 @@ whose slice has not landed shows what the dashboard already reads for it and one
 | `6` | Storage | The **database**: its size on disk, the estimate of what is live in it, how fast it grows, and when it was last read; whether **writes** are taken, held or refused; **compaction** pending and running and the bytes it has to rewrite; the **disk**; the block **cache** and, where the database counts them, its hit rate; the **stores** by size with their estimated key counts; the node's **integrity** marks and the background audit; and what this client does not keep |
 | `7` | System | The **health bars**, one a subsystem, selected with `Up`/`Down` and opened with `Enter`; then a **meter** a row, each a chart of the last ten minutes with the figure now and the highest: the process's uptime, CPU, heap, P2P bytes in and out, GC, threads, the machine's CPU and load, memory outside the heap, P2P messages in and out |
 | `8` `L` | Logs | The newest log lines (1,000 by default, INFO and above), with their time and level; `Up`/`Down` scroll a line, `-` and `+` a page, `/` filters by text |
-| `9` | Ops | Whether the TUI is read-only; the actions arrive with slice 7 |
+| `9` | Ops | The **actions**: each with its class and what it changes, those running, the last attempts and how they ended, and what the dashboard does not offer and why. `Up`/`Down` select one, `a` puts it at the prompt. See [Ops](#ops) |
 | `?` `H` `F1` | Help | Every key, and the legend of the glyph set on screen |
 
 ### Alert row
@@ -412,6 +412,76 @@ what they were (the per-method timer on `/metrics` is still recorded for success
   minutes once the dashboard has run that long. A rate not known yet is a gap. The history is the dashboard's own,
   kept from the gauges it already reads: it starts when the TUI does.
 
+### Ops
+
+The Ops view (`9`) is where the dashboard acts on the node. It lists every action with its class and what it
+changes, the actions that are running, the last attempts and how each ended, and what the dashboard does not offer,
+with the reason. `Up`/`Down` select an action and `a` puts it at the `:` prompt; every action can also be typed at
+the prompt from any view. The design is recorded in
+[OPS-004](../adr/operations/OPS-004-tui-operator-actions.md).
+
+Each action has a class, and the class sets how it is confirmed:
+
+| Class | Means | Confirmed by |
+|-------|-------|--------------|
+| Observe | Reads; changes nothing | Nothing: it runs |
+| Adjust | Changes a setting the opposite action puts back | A dialog with Cancel focused: `Tab` to Apply, then `Enter` |
+| Disrupt | Interrupts a peer, a server's callers, or reaches outside the node | A dialog answered with `Y` |
+| Halt | Ends something the process cannot start again | Typing `stop`, then `Enter` |
+
+A dialog shows a **preview** read from the node when it opens: the peer by id, client and address, the connections
+that will drop, the level a logger has now and will have. An action that cannot be done is refused in the preview,
+with the reason, and cannot be confirmed. If the preview changes while the dialog is open, the dialog starts again.
+`Esc` or `N` cancels. Pasted text confirms nothing. On a screen too small to show the whole preview the dialog says
+so and cannot be confirmed.
+
+| Command | Class | What it does |
+|---------|-------|--------------|
+| `config [filter]` | Observe | The effective configuration under `fukuii`, as `key = value`. A value whose key holds a secret (a password, a key, a secret, a token) is hidden, and a URL is shown without its credentials. `/` filters |
+| `tunables` | Observe | What changes without a restart, as it is now, and the command that changes each |
+| `deps` | Observe | Each subsystem, what it depends on, and its health |
+| `test-rpc` | Observe | Calls `web3_clientVersion` on each JSON-RPC endpoint this node has enabled, from the node itself, and says what answered and how long it took. For the Engine API it checks that a request with no token is refused |
+| `net` | Observe | The listening address, the address the node advertises, the external address last detected, by which step and how long ago, and how many peers dialled in |
+| `loglevel <level> [logger]` | Adjust | Sets a logger's level until the node restarts; the root logger when none is named. A name no logger has is refused, with the nearest names. `loglevel reset` returns every changed logger to what it was |
+| `maxpeers <n>` | Adjust | The limit on outgoing peers, until restart. The incoming limit is not changed here |
+| `peer trust <id>`, `peer untrust <id>` | Adjust | A trusted peer is exempt from pruning. A peer that dialled this node cannot be trusted by id: the node has no address to keep for it |
+| `threshold <name> <value>` | Adjust | Where an alert begins, for this session; the preview names the alerts that would fire or clear at once and the configuration line that makes it permanent. `threshold reset` returns to the configuration |
+| `peer add <enode>` | Disrupt | The node dials the peer and keeps dialling it |
+| `peer drop <id>` | Disrupt | Disconnects a peer and stops dialling it; it may dial back. `a` on a peer in the Peers view types this |
+| `peer block <address>`, `peer unblock <address>` | Disrupt | Refuses an IP address, in both directions, until restart, and disconnects the peers at it |
+| `coinbase <address>` (ETC) | Disrupt | The address blocks mined from now on pay |
+| `rpc stop <http or ws>`, `rpc start <http or ws>` | Disrupt | Stops a JSON-RPC server: HTTP requests in flight finish, WebSocket connections are closed at once and their subscriptions dropped. `rpc start` binds it again. Only a server that was enabled when the node started can be started: the dashboard enables nothing |
+| `dbcheck` | Disrupt | The start-up database check, run now: it reads every thousandth block's number-to-hash entry and header, reports what is missing, and stops nothing. On a node that took its state by SNAP, or takes its blocks from a consensus client, it says the check means nothing there |
+| `detect-ip` | Disrupt | Asks the gateway and outside services for this node's address, and reports it. They see this node's address. It changes nothing the node advertises |
+| `bundle` | Disrupt | Writes a support bundle under `<datadir>/support/`: see below |
+| `mining stop` (ETC) | Halt | Stops the node's own miner. It cannot be started again until the node restarts. `a` on the RPC view of a mining node types this |
+| `quit` | Halt | Stops the node: see `Q` under [Keyboard Commands](#keyboard-commands) |
+
+`mining start` is listed and always refused: this client cannot start a miner that was off when the node started,
+or start one again after it was stopped.
+
+**Not offered.** Starting or restarting the node (the dashboard runs inside it); restarting the Engine API server,
+peer discovery or sync; reloading configuration from file; creating a snapshot; compacting the database (it would
+hold the database's lock, and so stop block import, for as long as it ran); changing the pruning mode or the state
+scheme. The Ops view lists each with its reason.
+
+**The support bundle** is a directory of text files for whoever is asked to look at the node: the build, the
+effective configuration with every secret hidden, the dashboard's log lines, the alerts and health checks, every
+view as text, the database's figures, a thread dump, and memory and garbage-collector figures. It holds no key, no
+keystore, no JWT secret, no state and no chain data. It does hold peer addresses and this node's id. It is readable
+by the node's user only, and it goes nowhere: sending it to anyone is up to the operator.
+
+**The audit trail.** Every attempt, confirmed or not, writes one INFO line from the logger `fukuii.tui.ops`:
+
+```
+action=peer drop params=id=ab12cd34ef567890 outcome=confirmed by=tui
+action=rpc stop params=transport=http outcome=cancelled by=tui
+action=mining start params= outcome=refused: the built-in miner was off when the node started... by=tui
+```
+
+**Read-only.** With `fukuii.tui.read-only = true` (or `FUKUII_TUI_READ_ONLY` set) only the Observe actions run. The
+Ops view says so, and anything else is refused with one line and no dialog.
+
 ### Explorer
 
 `:block`, `:tx`, `:receipt` and `:account`, or `Enter` on a block of the observatory, open a screen with what the node
@@ -440,8 +510,9 @@ the same, so a link that delivers no arrow keys loses nothing.
 | `Page Up` `Page Down` | `-` `+` | A page up and down (Logs: older and newer lines) |
 | `Home` `End` | `<` `>` | The first and the last row |
 | `Enter` | | Open the selected row (a peer's details, a block, a transaction, a health bar's checks) |
+| `A` | | Act on the selection: on a peer, `peer drop` for it; on the RPC view of a mining node, `mining stop`; on the Ops view, the selected action. It fills the prompt and runs nothing until `Enter` and the action's own confirmation |
 | `Esc` | `Backspace` | Back; clear the view's filter |
-| `:` | | The prompt: a view's name, `peer` or `peer <id>`, `block <number, hash or latest>`, `tx <hash>`, `receipt <hash>`, `account <address>`, `glyphs emoji` or `glyphs ascii`, `graphics auto`, `pixel`, `block` or `text`, `art`, `detach`, `quit`, `help`. `Tab` completes, `Up`/`Down` walk the history |
+| `:` | | The prompt: a view's name, `peer` or `peer <id>`, `block <number, hash or latest>`, `tx <hash>`, `receipt <hash>`, `account <address>`, `glyphs emoji` or `glyphs ascii`, `graphics auto`, `pixel`, `block` or `text`, `art`, `detach`, `quit`, `help`, and every action of the [Ops](#ops) view. `Tab` completes, `Up`/`Down` walk the history |
 | `/` | | Filter the list on screen as you type (Peers, Logs). `Enter` keeps the filter, `Esc` clears it |
 | `?` | `H` `F1` | Help over the current view; any key but `Q`, `R` and `D` returns |
 | `L` | | Logs |
@@ -450,7 +521,7 @@ the same, so a link that delivers no arrow keys loses nothing.
 | `P` | | Pause or resume the motion (the frame counter stops; polling continues) |
 | `R` | | Redraw the display (on the Art screen: read the sprite sheets again first) |
 | `D` | | Detach: the TUI closes and standard logging returns; the node keeps running |
-| `Q` | | **Ask** to stop the node: a dialog says what stops with it; `Y` stops it, `N` or `Esc` cancels. Nothing else answers it, pasted text included |
+| `Q` | | **Ask** to stop the node: a dialog says what stops with it. Typing `stop` and then `Enter` stops it; `Esc` cancels. Nothing else answers it, pasted text included |
 | `Ctrl-C` | | Stop the node at once, as a signal |
 
 The startup splash lists the phases of the node's start (storage and genesis, the peer-to-peer network, the API
@@ -467,10 +538,11 @@ knows is a key, any other is nothing, so the tail of a sequence is never read as
 arrives marked as a paste (bracketed paste) and goes to the prompt or a filter only: it cannot open a view, move a
 selection or answer a dialog. That holds where the terminal marks pastes: nearly all do. On one that does not
 (`tmux paste-buffer` without `-p`, some serial consoles), pasted text is indistinguishable from typing, and its
-characters are keys: `d` in it detaches, and `q` asks to stop the node, which nothing in a paste can confirm but `y`.
+characters are keys: `d` in it detaches, and `q` asks to stop the node, which a paste confirms only if it goes on to
+spell `stop` and a newline.
 
-With `fukuii.tui.read-only = true` (or `FUKUII_TUI_READ_ONLY` set) `Q` does not offer to stop the node, and says so.
-`Ctrl-C` still stops it.
+With `fukuii.tui.read-only = true` (or `FUKUII_TUI_READ_ONLY` set) `Q` does not offer to stop the node, and says so;
+no action above Observe runs (see [Ops](#ops)). `Ctrl-C` still stops it.
 
 Commands are case-insensitive (both `q` and `Q` work).
 

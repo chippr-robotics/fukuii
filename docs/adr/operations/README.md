@@ -9,12 +9,14 @@ Operations ADRs use the format: `OPS-NNN-title.md` where NNN is a zero-padded se
 Examples:
 - `OPS-001-console-ui.md`
 - `OPS-002-logging-level-categorization.md`
+- `OPS-004-tui-operator-actions.md`
 
 ## Current ADRs
 
 - [OPS-001: Enhanced Console User Interface](OPS-001-console-ui.md) - Accepted
 - [OPS-002: Logging Level Categorization Standards](OPS-002-logging-level-categorization.md) - Accepted
 - [OPS-003: Migration from CLI Tools to Claude Code Skills](OPS-003-skill-based-operations.md) - Accepted
+- [OPS-004: Operator Actions in the Terminal Dashboard](OPS-004-tui-operator-actions.md) - Accepted
 
 ## Creating a New Operations ADR
 

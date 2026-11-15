@@ -75,6 +75,7 @@ Testing infrastructure, strategies, test suites, and quality assurance.
 Operational features, administration, monitoring, user interfaces, and deployment.
 - [OPS-001: Enhanced Console User Interface](operations/OPS-001-console-ui.md) - Accepted
 - [OPS-002: Logging Level Categorization Standards](operations/OPS-002-logging-level-categorization.md) - Accepted
+- [OPS-004: Operator Actions in the Terminal Dashboard](operations/OPS-004-tui-operator-actions.md) - Accepted
 
 [View all Operations ADRs →](operations/README.md)
 
