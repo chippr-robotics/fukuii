@@ -3358,3 +3358,14 @@ items:
       agent: main
       since: 2026-11-15T06:46:41Z
       heartbeat: 2026-11-15T07:39:40Z
+  - id: B-291
+    title: "A reorg that keeps a heavier prefix then meets an invalid block: the chain it left is not queued again, the pool not told"
+    priority: P2
+    status: open
+    area: consensus
+    size: M
+    opened: 2026-11-15
+    refs: []
+    links:
+      spec: 018
+    notes: "forge, C4e part 3 review Q4: BranchExecutionFailure on every layout and arm; with B-253"
