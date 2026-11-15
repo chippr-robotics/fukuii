@@ -3243,3 +3243,14 @@ items:
     links:
       spec: 029
     notes: "vault, spec 029 slice 7: compactRange holds dbLock.readLock for the whole native call while writes take the write lock, so a whole-database compaction stops block import for hours and cannot be cancelled. Shape: a separate compactionGuard RW lock; dbLock only for assureNotClosed and the handle; CompactRangeOptions.setExclusiveManualCompaction(false) and setCanceled; largest family first, guard released between families; close() cancels, then takes the guard's write lock, then dbLock's. Also fixes the cause for SnapStorageDoneStorage.compact and HealingFrontierStorage. Until then the dashboard lists compaction under 'not offered, and why' (a departure from spec 029 FR-054)."
+  - id: B-282
+    title: Publish releases to the Chocolatey community repository (fukuii package)
+    priority: P2
+    status: open
+    area: ci
+    size: M
+    opened: 2026-11-15
+    refs: []
+    links:
+      branch: feat/chocolatey
+    notes: Package downloads the release zip (sha256 from SHA256SUMS), depends on temurin25jre, shims bin\fukuii.bat. Key in env CHOCOLATEY_NUPKG (main only). First version waits for Chocolatey moderation.
