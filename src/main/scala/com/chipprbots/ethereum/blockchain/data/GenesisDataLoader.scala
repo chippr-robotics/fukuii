@@ -28,7 +28,6 @@ import com.chipprbots.ethereum.db.storage.StateStorage
 import com.chipprbots.ethereum.db.storage.StateStorage.GenesisDataLoad
 import com.chipprbots.ethereum.db.storage.pathstate.BlockRef
 import com.chipprbots.ethereum.db.storage.pathstate.PathStateStorage
-import com.chipprbots.ethereum.db.storage.pathstate.StateLayout
 import com.chipprbots.ethereum.domain.*
 import com.chipprbots.ethereum.jsonrpc.JsonMethodsImplicits
 import com.chipprbots.ethereum.mpt.MerklePatriciaTrie
@@ -431,23 +430,9 @@ object GenesisDataLoader:
     * exists, since this is the first thing that writes the stamp; the node's own guard at start is C5a's.
     */
   def layoutRefusal(pathLive: Boolean, stamp: Option[String], genesisStored: Boolean): Option[String] =
-    (pathLive, stamp) match
-      case (false, Some(found)) =>
-        Some(
-          s"This data directory holds its state in the unified layout (state.layout = '$found'), and " +
-            "fukuii.state.path-live is off: this build would read a state store that holds nothing of it. Turn " +
-            "fukuii.state.path-live on, or use another data directory."
-        )
-      case (true, Some(StateLayout.PathLive1)) => None
-      case (true, Some(other)) =>
-        Some(s"This data directory was written by a state layout this build does not know (state.layout = '$other').")
-      case (true, None) if genesisStored =>
-        Some(
-          "This data directory was written by an earlier storage layout and cannot be opened with " +
-            "fukuii.state.path-live on. Stop the node, move or delete the rocksdb directory under the data " +
-            "directory, and start again."
-        )
-      case _ => None
+    // the node's own guard at start (C5a) asks the same rule where the storages are built; here it is asked again by
+    // whoever loads a genesis without having built a node
+    com.chipprbots.ethereum.db.storage.StateLayoutGuard.refusal(pathLive, stamp, empty = !genesisStored)
 
   /** The hex digits of an address, as an allocation's key is padded to. */
   val AddressLength: Int = 40

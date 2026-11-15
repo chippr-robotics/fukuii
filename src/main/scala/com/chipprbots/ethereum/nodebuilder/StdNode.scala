@@ -99,9 +99,9 @@ abstract class BaseNode extends Node:
     // On the unified state layout the best block and the index are the held block's, made so before anything reads
     // them (spec 018 C4b part 4): the hash layout's two repairs trust the best block or the index, and would undo it.
     if blockchainReader.holdsStateInPlace then reconcileState()
-    // a datadir stamped for the unified layout, opened with the guard off, is refused by the genesis loader: nothing
-    // is repaired in it first (beacon)
-    else if storagesInstance.storages.appStateStorage.getStateLayout().isEmpty then
+    // A datadir stamped for the unified layout, opened with the guard off, never gets here: the layout guard refused
+    // it where the storages were built (spec 018 data-model 5.3), so nothing is repaired in it.
+    else
       fixDatabase()
       repairBestBlockMapping() // before any server binds, so no newPayload/FCU races the read-then-write
     loadGenesisData()
