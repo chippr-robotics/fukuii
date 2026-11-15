@@ -247,6 +247,16 @@ class PathNodeStorage(val dataSource: DataSource):
         if chunk.size < chunkRows then true else scan(chunk.last._1 :+ 0.toByte, rows, bytes)
     Option.when(scan(owner.toArray, 0L, 0L))(listed.result())
 
+  /** Up to `limit` rows of the account trie with a key in `[from, until)`, in key order: the hex-prefix path and the
+    * node. One seek and a short scan, for the hand-off's sample.
+    */
+  def accountRowsBetween(from: Array[Byte], until: Array[Byte], limit: Int): Vector[(Array[Byte], Array[Byte])] =
+    dataSource.scanRangeLimit(acctNs, from, until, limit).toVector
+
+  /** As [[accountRowsBetween]] for the storage tries: the owner followed by the hex-prefix path, and the node. */
+  def storageRowsBetween(from: Array[Byte], until: Array[Byte], limit: Int): Vector[(Array[Byte], Array[Byte])] =
+    dataSource.scanRangeLimit(storageNs, from, until, limit).toVector
+
   /** The updates that leave each of `positions` holding the node given for it, or no row for `None`: for a caller's
     * batch. A position is written once: the caller gives each at most once.
     */

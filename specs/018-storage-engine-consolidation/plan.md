@@ -3597,6 +3597,63 @@ finished. A kill is not a loss of power: it pins the order of the writes and wha
 write is on the disk. **The mutation run**: 14 mutants, 14 caught (one after a case was made to stand alone: a mark
 with an anchor and no sync said to be done).
 
+#### C5a part 4: the hand-off's sample, on the rows where they lie (2026-11-15)
+
+`PathHandoffSample` (T202, T196): the sample of spec 022 decision 11, which the copy made as it scanned every node
+and checked through the hash store. With no copy there is no scan and no second store. **Nothing calls it yet**: the
+hand-off of part 5 does, on a blocking thread, with the sync finished and nothing writing the rows.
+
+**How it samples**: by seeks at random keys (`PathNodeStorage.accountRowsBetween`, `storageRowsBetween`: one seek and
+a scan of at most 64 rows, with no fill of the block cache), 16 leaves a seek, so that a stratum is many short runs
+and not one subtree.
+- **Account leaves by the first nibble of their path**, 256 a nibble. A key is the hex-prefix form of a path, which
+  is not in the order of the paths: for each nibble the paths of an even length (`00 Nx ..`) and of an odd one
+  (`1N ..`) are two ranges, and both are sampled. The root (`00`) is read with nibble 0.
+- **Storage tries by the first nibble of their owner**, 16 a nibble: a seek lands on a row, and the row names its
+  owner.
+- **The largest of those tries**, 16 of them, 64 leaves each. Each trie sampled is sized by reading up to 1,024 of
+  its rows; one with fewer is known whole and its leaves are taken from what was read, one with more is sampled by
+  seeks inside it. **These are the largest of the tries the seeks landed on, never the largest of the chain**: a
+  seek finds an owner by the gap before it, not by its size, and the store has no count of an owner's rows. What is
+  kept of a sized trie is its size and the leaves to look up, never its rows (vault: 256 tries of 1,024 rows were
+  some 150 MB held to the end). Tries that reach the bound are of one size and are chosen among by lot.
+- **Leaves held in their parent**, met among the rows read to size a trie. A sync writes no such row (a node under 32
+  bytes is not asked for by hash, and a leaf that short lies deeper than a trie of hashed keys goes), so **on a
+  chain this stratum is empty and is no coverage**; it is kept for a store that has them.
+
+**How it checks**: each leaf is looked up from the state root through the rows, by position, each node checked
+against the hash its parent holds. That is what `PathMptStorage` does at the anchor, without an anchor: there is none
+before the hand-off's commit.
+
+**What stops a hand-off** (changed from the copy's sample, on vault's read after code):
+- a state root that is not in the rows;
+- **any hole**: a lookup that meets a row that is absent, or is another node than its parent names. The copy's
+  sample could not tell a hole from a leaf another pivot left, and let both by under 1%. A walk that comes down from
+  this root and does not find the row it wants is what the execution of a block meets, and at 4,096 samples a subtree
+  of 0.4% of the trie would have passed. **In a storage trie a hole is let by, and counted, only when the sync says
+  it left accounts out** (spec 022 D5: their storage is fetched when a block asks for it); a hole in the account
+  trie stops it always, and missing storage roots past the rate stop it then too;
+- leaves the root has no place for, past the rate (16 and more than 1%): each is harmless, a read never reaches it,
+  but that many say the rows are not this root's.
+A hand-off that is stopped goes back to healing, which finds the hole from the root. One that is let by with a hole
+stops the import of the first block that reads it, until the fetch by position of C5b.
+
+**Confirmed by vault**: the 32 ranges of the account family are a partition of it, and the bounds of the last nibble
+are right (`01` for the even paths, `20` for the odd); the byte after an owner is `00` or `1N`, never `ff`, so
+`owner ++ ff` ends an owner's rows; the scan closes its iterator, does not fill the cache, holds the read lock for
+one call and reads no more than its limit when it goes round to the start of a range. A seek into a region of point
+deletes passes over them one by one: once, at the hand-off.
+
+**Found by a test**: the end of the range of the odd paths of nibble 15 was `0x10 | 16`, an empty range (`+` binds
+before `|`).
+
+**Tests**: `PathHandoffSampleSpec` (31, on an in-memory store): the cases of `PathToHashExportCheckSpec`, and the
+strata at both lengths of path, a range read whole, the last key of the family, a trie past the bound, the lot among
+tries of one size, each rule that stops a hand-off alone and what `accountsLeftOut` lets by, and that nothing is
+written. `PathHandoffSampleItSpec`: the ranges on a real RocksDB, where a byte of `0xf0` sorts last. **The mutation
+run**: 26 mutants, 26 caught (three after a test was added: the even paths of the last nibble, an
+account hole met only on the way to a storage root, and rows left under an account with no storage).
+
 ### Destructive change (C8a and C8b): the vault protocol blocks
 
 ```
