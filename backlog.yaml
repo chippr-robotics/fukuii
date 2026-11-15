@@ -3506,3 +3506,15 @@ items:
       spec: 018
     depends_on: [B-064]
     notes: "Vault, C5a part 5a (2026-11-15). PathStateStorage.clearForResync keeps the old chain's headers, the index by number and the backfill cursors, and sets the best block to genesis. After an escalation for a chain that cannot be reached, heights in (fork, old best] name blocks of the chain that was left; a sync that follows would find its headers 'contiguous to the pivot' on the wrong chain, and getBlockHeaderByNumber above the new pivot answers old blocks. The escalation handler (C5a part 7) knows the common block: it must delete the index above it and set the header cursor back to it, in the clear's batch or before a sync starts; the hand-off (part 5b) writes the pivot's own number. Gate on arming the escalation. plan.md 'C5a part 5a'."
+  - id: B-304
+    title: "A hand-off's sample that keeps failing restarts the sync without a bound: count, metric, stop after three"
+    priority: P1
+    status: open
+    area: sync
+    size: S
+    opened: 2026-11-15
+    refs: []
+    links:
+      spec: 018
+    depends_on: [B-064]
+    notes: "Beacon, C5a part 5b (2026-11-15). On the unified layout a sample that stops the hand-off (PathHandoffSample.Stopped) sends HealingImpossible; SyncController restarts SNAP at a newer pivot, which heals and samples again. Nothing bounds the cycle: snapPivotFailedFinalization blocks only the same pivot, so a systematic failure repeats on every new one. SyncController counts consecutive sample failures, exposes a metric by reason, and after three logs an ERROR with the sample's counts and stops restarting on its own. The Stopped exception should carry the counts. Gate on lifting the refusals (C5a part 10). plan.md 'C5a part 5b'."
