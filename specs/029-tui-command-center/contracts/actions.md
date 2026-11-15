@@ -7,8 +7,9 @@ Rules that hold for all of them:
 
 - The function in "Carried out by" is the only implementation. Where it is an existing admin method's service
   function, the TUI calls that function in process (spec FR-052). No RPC namespace is needed or enabled.
-- The preview is built from live state when the dialog opens and rebuilt if that state changes before the operator
-  confirms (spec FR-050).
+- The preview is built from live state when the dialog opens and read again every poll. If what it says will change
+  is different, the dialog starts again and says so (spec FR-050). A figure that moves by itself (a peer's age, the
+  best block) is shown under the preview and does not restart the dialog.
 - Every attempt writes one INFO line from the logger `fukuii.tui.ops`:
   `action=<name> params=<…> outcome=<confirmed|cancelled|refused: reason|failed: reason> by=tui` (spec FR-051). An
   action that runs for long (`dbcheck`, `detect-ip`, `bundle`) also writes `outcome=started` when it is confirmed, so
@@ -55,7 +56,7 @@ Rules that hold for all of them:
 | `rpc start` | The address and port it will bind; the namespaces; a warning if a sensitive namespace would be reachable from another host. Refused for a transport that was not enabled at the start | New: `ServerLifecycle.start` | `rpc stop` |
 | `dbcheck` | What it reads; that it is the check run at start; that on finding an inconsistency it reports it and stops nothing; that it says nothing on a node that took its state by SNAP or takes its blocks from a consensus client | New: `StorageConsistencyChecker.scan`, which returns its result instead of ending the node | Nothing to undo |
 | `detect-ip` | The services it contacts, by host name, and that they will see this node's address; that it reports and changes nothing the node advertises | `ExternalIPDetector.detect` | Nothing to undo |
-| `bundle` | The path; every file it will write and its size; that it holds peer addresses and the node id; that it goes nowhere | New in `console/`: `SupportBundle` | Delete the file |
+| `bundle` | The directory; every file it will write; that it holds peer addresses and the node id; that it goes nowhere. The size is said when it is written | New in `console/`: `SupportBundle` | Delete the file |
 
 A support bundle holds: build information; the effective configuration, redacted; the log ring; the alerts and each
 health check with its state and since when; every view as text; the database's figures; a thread dump;

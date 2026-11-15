@@ -571,47 +571,89 @@ Every slice ends with the same gate. The art (phase 0) is done and in the tree.
 
 ### Tests first
 
-- [ ] T095 [P] [US7] `ActionsContractSpec`: the registry is exactly contracts/actions.md, row for row, with each row's
+- [x] T095 [P] [US7] `ActionsContractSpec`: the registry is exactly contracts/actions.md, row for row, with each row's
       class
-- [ ] T096 [P] [US7] `ActionDialogSpec`: confirmation by class; Cancel has the focus; a Halt needs the word; a stale
+- [x] T096 [P] [US7] `ActionDialogSpec`: confirmation by class; Cancel has the focus; a Halt needs the word; a stale
       preview refreshes and asks again; a dialog too small to show its preview cannot be confirmed; pasted input
       confirms nothing
-- [ ] T097 [P] [US7] One spec per action family (`LogLevelActionSpec`, `PeerActionsSpec`, `MiningActionsSpec`,
+- [x] T097 [P] [US7] One spec per action family (`LogLevelActionSpec`, `PeerActionsSpec`, `MiningActionsSpec`,
       `RpcServerActionsSpec`, `DatabaseActionsSpec`, `BundleActionSpec`): preview, run, cancel, the audit line, the
       same service function as the admin interface
-- [ ] T098 [P] [US7] `ReadOnlySpec`: with `read-only`, nothing above Observe runs and the Ops view says so
-- [ ] T099 [P] [US7] `RedactionSpec` and `SupportBundleSpec`: a marker planted in every secret-bearing key appears in
+- [x] T098 [P] [US7] `ReadOnlySpec`: with `read-only`, nothing above Observe runs and the Ops view says so
+- [x] T099 [P] [US7] `RedactionSpec` and `SupportBundleSpec`: a marker planted in every secret-bearing key appears in
       no frame and no bundle file; a path is shown; a URL loses its credentials; the bundle is owner-only (SC-012)
-- [ ] T100 [P] [US7] `JsonRpcHttpServerSpec` and `JsonRpcWsServerSpec`: stop, then start, then a request answers; stop
+- [x] T100 [P] [US7] `JsonRpcHttpServerSpec` and `JsonRpcWsServerSpec`: stop, then start, then a request answers; stop
       twice and start twice are harmless
-- [ ] T101 [P] [US7] `ActionRunnerSpec`: a long action shows progress, cannot be started twice, survives a view
+- [x] T101 [P] [US7] `ActionRunnerSpec`: a long action shows progress, cannot be started twice, survives a view
       change, reports its end, and never runs on the frame loop
-- [ ] T102 [P] [US7] Goldens: the Ops view on ETC and ETH; each class of dialog; the configuration view; "not
+- [x] T102 [P] [US7] Goldens: the Ops view on ETC and ETH; each class of dialog; the configuration view; "not
       offered, and why"
 
 ### Implementation
 
-- [ ] T103 [US7] `console/ops/Action.scala`, `Actions.scala`, `ActionRunner.scala`; the audit logger `fukuii.tui.ops`;
+- [x] T103 [US7] `console/ops/Action.scala`, `Actions.scala`, `ActionRunner.scala`; the audit logger `fukuii.tui.ops`;
       `StdNode.scala` builds the registry from the services it holds
-- [ ] T104 [P] [US7] The Adjust actions: log level (with the current levels and reset in `main/jsonrpc/AdminService.scala`),
+- [x] T104 [P] [US7] The Adjust actions: log level (with the current levels and reset in `main/jsonrpc/AdminService.scala`),
       peer limit, trust, thresholds
-- [ ] T105 [P] [US7] The peer and mining Disrupt actions; `a` on a peer and on the mining monitor
-- [ ] T106 [US7] `main/jsonrpc/server/http/JsonRpcHttpServer.scala` and `JsonRpcWsServer.scala` keep their binding and
+- [x] T105 [P] [US7] The peer and mining Disrupt actions; `a` on a peer and on the mining monitor
+- [x] T106 [US7] `main/jsonrpc/server/http/JsonRpcHttpServer.scala` and `JsonRpcWsServer.scala` keep their binding and
       gain `stop` and `start` (`conduit` reviews); the `rpc stop` and `rpc start` actions; a stopped server raises no
       alert
-- [ ] T107 [US7] `main/db/dataSource/RocksDbDataSource.scala` whole-database compaction and an entry to
+- [x] T107 [US7] `main/db/dataSource/RocksDbDataSource.scala` whole-database compaction and an entry to
       `StorageConsistencyChecker` that returns its result (`vault` reviews); the `compact` and `dbcheck` actions
-- [ ] T108 [P] [US7] `console/ops/Redaction.scala`, `ConfigView.scala`, `SupportBundle.scala`, `EndpointProbe.scala`;
+- [x] T108 [P] [US7] `console/ops/Redaction.scala`, `ConfigView.scala`, `SupportBundle.scala`, `EndpointProbe.scala`;
       `main/network/ExternalIPDetector.scala` keeps its last result; `config`, `tunables`, `deps`, `test-rpc`, `net`,
       `detect-ip`, `bundle`
-- [ ] T109 [US7] `quit` becomes a Halt with the typed word; its preview by family (FR-049, contracts/actions.md)
-- [ ] T110 [US7] `console/panels/OpsPanel.scala`; read-only enforcement in `ActionRunner`
-- [ ] T111 [US7] ADR under `docs/adr/`: the operator-action model (classes, one implementation per action, no RPC
+- [x] T109 [US7] `quit` becomes a Halt with the typed word; its preview by family (FR-049, contracts/actions.md)
+- [x] T110 [US7] `console/panels/OpsPanel.scala`; read-only enforcement in `ActionRunner`
+- [x] T111 [US7] ADR under `docs/adr/`: the operator-action model (classes, one implementation per action, no RPC
       exposure, the read-only switch)
 
 ### Gate
 
-- [ ] T112 The per-slice gate; quickstart.md "Slice 7"; `conduit`, `vault`, `prism` and `eye`; open the PR
+- [x] T112 The per-slice gate; quickstart.md "Slice 7"; `conduit`, `vault`, `prism` and `eye`; open the PR
+
+> As built (2026-11-15), #1847. What differs from the tasks as written:
+>
+> - **T107, FR-054**: `compact` is **not offered**. `vault` found that a whole-database compaction holds the data
+>   source's lock for its whole run, so the node would import nothing until it ended, for hours on a large database,
+>   with no way to stop it. It is listed in the Ops view under "not offered" with that reason; B-281 has the locking
+>   change that would make it safe. `dbcheck` is `StorageConsistencyChecker.scan`, which the start-up and periodic
+>   checks now call too. Two bugs in the check itself were left as they were, so that the start-up path did not
+>   change in this slice (B-285).
+> - **T105**: `forge` found that `miner_start` cannot start a miner that was off at the start or was stopped
+>   (B-278, B-279). `mining start` is therefore always refused, with the reason, and `mining stop` is a Halt: only a
+>   restart undoes it. A gauge, `pow_miner_running`, says whether the built-in miner runs; the mining panel and a
+>   health check read it.
+> - **T104, T105**: `admin_blockIP` recorded an address and blocked nothing (B-277). `herald` made it block: the
+>   address is refused on dial and on accept (`OperatorBlockingBlacklist`) and the peers at it are disconnected. An
+>   enode is validated before it reaches the peer manager, which threw on one with no node id. `prism` then found
+>   the dial guard compared addresses as text, so a compressed IPv6 literal passed, and that a maintained peer
+>   refused by a block was never dialled again after the unblock: both fixed. Discovery (UDP) is not blocked
+>   (B-288), and `blocked-ips` is still not read from the configuration (B-286).
+> - **T106**: `conduit` wrote `ServerLifecycle`, which both servers and the node's start use. Pekko's `terminate`
+>   does not close an upgraded WebSocket connection, so the WebSocket server closes its own through a kill switch
+>   replaced at each bind. A server stopped from the dashboard reads `stopped here` in the RPC view and raises no
+>   alert: no health rule reads a transport's listening state.
+> - **T103**: the registry is tied to the node in `nodebuilder/TuiActions.scala`, not in `StdNode.scala`, which only
+>   calls it. A handler takes functions, not services, so each is tested with plain functions.
+> - **T108**: what `ExternalIPDetector` found is kept in `NetworkAddressInfo` with the step that found it. `net` does
+>   not say the UPnP mapping's state: nothing records it (B-287). `detect-ip` reports and changes nothing the node
+>   advertises.
+> - **T110**: the panel file is `console/panels/OpsPanels.scala`.
+> - **T097, T099**: the specs of each action family were written against the finished code by a second pass that
+>   was told to leave a failing test for every defect and not to bend one. It left 18, for 15 defects, five of them
+>   ways a secret reached the support bundle or the configuration screen (a URL's password in a list, in a long
+>   value cut before its `@`, in a log line drawn in a view, an object under a secret key). All fixed.
+> - **`prism`, console**: a preview that held a live figure (a peer's age and score, the bundle's timestamp, the
+>   best block) changed every poll and restarted its dialog, so `peer trust` could not be confirmed. A preview now
+>   has its lines, which are compared, and its figures, which are shown and not compared; and a preview that did
+>   change is acknowledged by the first `y` before the second runs it. Also fixed: an action left "running" by an
+>   error its handler did not survive, a preview arriving after its dialog closed, secret key shapes the redaction
+>   missed, a quadratic regex on a long line, the bundle's permissions set after creation, and a miner alert raised
+>   before the miner had started.
+> - **Not done**: no action has a time limit of its own. Each node function it calls has one, but a handler that
+>   hung would hold the one action thread until the dashboard closed.
 
 ---
 
