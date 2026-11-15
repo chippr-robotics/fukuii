@@ -478,6 +478,43 @@ class BlockGeneratorSpec extends AnyFlatSpec with Matchers with Logger:
     fullBlock.body.transactionList shouldBe Seq(signedTransaction, nextTransaction)
     fullBlock.header.extraData shouldBe headerExtraData
 
+  // B-283 (spec 018 C5a part 2). The ommers of a block are checked against its six ancestors whole. A node that does not
+  // hold them (the bodies below a pivot it synced from) cannot show an ommer to be valid: it builds with none, as it does
+  // for ommers that are invalid. It threw before this was caught, and a miner had no work until the bodies arrived.
+  it should "build a block with no ommers when it does not hold the ancestors they are checked against" taggedAs (
+    UnitTest,
+    ConsensusTest
+  ) in new TestSetup:
+    import com.chipprbots.ethereum.consensus.mining.GetBlockHeaderByHash
+    import com.chipprbots.ethereum.consensus.mining.GetNBlocksBack
+    import com.chipprbots.ethereum.consensus.pow.validators.OmmersValidator
+    import com.chipprbots.ethereum.consensus.pow.validators.StdOmmersValidator
+    import com.chipprbots.ethereum.db.storage.pathstate.AncestorNotStored
+    var asked = 0
+    override lazy val validators: ValidatorsExecutor = ValidatorsExecutor(
+      powValidators.blockHeaderValidator,
+      new StdOmmersValidator(powValidators.blockHeaderValidator):
+        override def validate(
+            parentHash: ByteString,
+            blockNumber: BigInt,
+            ommers: Seq[BlockHeader],
+            getBlockHeaderByHash: GetBlockHeaderByHash,
+            getNBlocksBack: GetNBlocksBack
+        )(implicit
+            blockchainConfig: BlockchainConfig
+        ): Either[OmmersValidator.OmmersError, OmmersValidator.OmmersValid] =
+          asked += 1
+          throw new AncestorNotStored(6, 3, "the bodies below the pivot are not stored yet")
+    )
+    val offered: Seq[BlockHeader] = Seq(bestBlock.get.header)
+    val generator: TestBlockGenerator = blockGenerator
+    val built: Block = generator
+      .generateBlock(bestBlock.get, Nil, Address(testAddress), offered.asInstanceOf[generator.X], None)
+      .pendingBlock
+      .block
+    asked shouldBe 1
+    built.body.uncleNodesList shouldBe Nil
+
   it should "include transaction with higher gas price if nonce is the same" taggedAs (
     UnitTest,
     ConsensusTest

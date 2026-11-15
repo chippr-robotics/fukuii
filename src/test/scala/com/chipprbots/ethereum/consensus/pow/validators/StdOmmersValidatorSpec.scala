@@ -10,6 +10,8 @@ import org.scalatestplus.scalacheck.ScalaCheckPropertyChecks
 import com.chipprbots.ethereum.ObjectGenerators
 import com.chipprbots.ethereum.blockchain.sync.EphemBlockchainTestSetup
 import com.chipprbots.ethereum.consensus.pow.validators.OmmersValidator.OmmersError.*
+import com.chipprbots.ethereum.consensus.pow.validators.OmmersValidator.OmmersValid
+import com.chipprbots.ethereum.db.storage.pathstate.AncestorNotStored
 import com.chipprbots.ethereum.domain.Block
 import com.chipprbots.ethereum.domain.BlockBody
 import com.chipprbots.ethereum.domain.BlockHash
@@ -99,20 +101,64 @@ class StdOmmersValidatorSpec extends AnyFlatSpec with Matchers with ScalaCheckPr
       case Left(OmmerParentIsNotAncestorError) => succeed
       case err                                 => fail(err.toString)
 
-  it should "report failure if getNBlocksBack returns an empty list of ancestors" taggedAs (
+  // B-283 (spec 018 C5a part 2). With fewer ancestors than the rule reads, an ommer whose parent is one of the missing
+  // blocks reads as `OmmerParentIsNotAncestorError` and an ommer a missing block used reads as new: a valid block
+  // refused, or an invalid one accepted. This node not holding its own ancestors is no verdict on the block. This case
+  // pinned the verdict before, with no ancestor at all.
+  it should "give no verdict, and say it is this node's gap, when it is handed fewer ancestors than it checks against" taggedAs (
     UnitTest,
     ConsensusTest
   ) in new BlockUtils:
-    val getNBlocksBack: (ByteString, Int) => List[Block] = (_, _) => List.empty
-
-    ommersValidator.validateOmmersAncestors(
+    val none: (ByteString, Int) => List[Block] = (_, _) => List.empty
+    val missing: AncestorNotStored = the[AncestorNotStored] thrownBy ommersValidator.validateOmmersAncestors(
       ommersBlockParentHash,
       ommersBlockNumber,
       Seq(ommer1, ommerInvalidBranch),
-      getNBlocksBack
-    ) match
-      case Left(OmmerParentIsNotAncestorError) => succeed
-      case err                                 => fail(err.toString)
+      none
+    )
+    (missing.wanted, missing.found) shouldBe (6, 0)
+
+    // five of the six: an ommer whose parent is the missing one would read as no ancestor's child
+    val five: (ByteString, Int) => List[Block] = (_, _) => List(block92, block93, block94, block95, block96)
+    val short: AncestorNotStored = the[AncestorNotStored] thrownBy ommersValidator.validateOmmersAncestors(
+      ommersBlockParentHash,
+      ommersBlockNumber,
+      ommers,
+      five
+    )
+    (short.wanted, short.found) shouldBe (6, 5)
+
+  it should "check a block near the genesis against the ancestors there are" taggedAs (
+    UnitTest,
+    ConsensusTest
+  ) in new BlockUtils:
+    // block 3 has three ancestors, and that is all of them
+    var asked = 0
+    val three: (ByteString, Int) => List[Block] = (_, n) =>
+      asked = n
+      List(block94, block95, block96)
+    // judged, whatever the verdict on these ommers: three ancestors are not a gap
+    noException should be thrownBy ommersValidator.validateOmmersAncestors(
+      ommersBlockParentHash,
+      BigInt(3),
+      ommers,
+      three
+    )
+    asked shouldBe 3
+
+  it should "end, with no verdict, when the body of an ancestor is not stored" taggedAs (
+    UnitTest,
+    ConsensusTest
+  ) in new BlockUtils:
+    // as below a pivot the node synced from: the header is there and the body is not. The walk back used to go on for
+    // ever past it.
+    storagesInstance.storages.blockBodiesStorage.remove(block93.header.hash.value).commit()
+    val missing: AncestorNotStored = the[AncestorNotStored] thrownBy
+      ommersValidator.validate(ommersBlockParentHash, ommersBlockNumber, ommers, blockchainReader)
+    (missing.wanted, missing.found) shouldBe (6, 3)
+    // a block with no ommers reads no ancestor, and is judged as it was
+    ommersValidator.validate(ommersBlockParentHash, ommersBlockNumber, Nil, blockchainReader) shouldBe
+      Right(OmmersValid)
 
   it should "report failure if there is an ommer that is too old" taggedAs (UnitTest, ConsensusTest) in new BlockUtils:
     ommersValidator.validate(

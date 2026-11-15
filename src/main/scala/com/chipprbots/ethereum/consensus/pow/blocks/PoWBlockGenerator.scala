@@ -83,9 +83,15 @@ class PoWBlockGeneratorImpl(
       val blockNumber = pHeader.number + 1
       val parentHash = pHeader.hash
 
-      val ommers = validators.ommersValidator.validate(parentHash.value, blockNumber.value, x, blockchainReader) match
-        case Left(_)  => emptyX
-        case Right(_) => x
+      // A block this node builds has the ommers it can show to be valid, and none otherwise. That is its own choice
+      // and no rule of the chain: where it does not hold the ancestors they are checked against (B-283), it builds
+      // with none, as it does when they are invalid.
+      val ommers =
+        try
+          validators.ommersValidator.validate(parentHash.value, blockNumber.value, x, blockchainReader) match
+            case Left(_)  => emptyX
+            case Right(_) => x
+        catch case _: com.chipprbots.ethereum.db.storage.pathstate.AncestorNotStored => emptyX
 
       val prepared = prepareBlock(
         evmCodeStorage,
