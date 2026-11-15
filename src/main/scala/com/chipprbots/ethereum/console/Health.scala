@@ -360,14 +360,12 @@ object Health:
     */
   private def miningCheck(state: TuiState): Option[HealthCheck] =
     val mining = state.snapshot.flatMap(_.local.mining)
-    val stopped = mining.flatMap(_.minerRunning).contains(false)
+    val stopped = state.minerStopped.contains(true)
     if state.nodeSettings.miningEnabled && stopped then
       // The built-in miner was started with the node and is not running. Stopped from this dashboard, it is as the
       // operator left it and raises nothing; otherwise it failed, and nothing else on screen would say so. Either
       // way it starts again only with the node (spec 029, forge).
-      val here = state.actions.history.exists(r =>
-        r.request.action == ops.Actions.MiningStop.name && r.outcome.isInstanceOf[ops.ActionOutcome.Confirmed]
-      )
+      val here = state.minerStoppedHere
       Some(
         HealthCheck(
           Subsystem.Mining,

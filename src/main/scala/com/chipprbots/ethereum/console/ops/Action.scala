@@ -48,8 +48,17 @@ final case class ActionRequest(action: String, params: Vector[(String, String)] 
   *   the preview, a sentence a line
   * @param refusal
   *   the action cannot be run now, and why (a peer that is gone, a server already stopped): nothing confirms it
+  * @param figures
+  *   what the node reads now and will read differently a second later (an age, a score, a block number): shown under
+  *   the lines, and no part of whether the preview changed
   */
-final case class Preview(lines: Vector[String], refusal: Option[String] = None)
+final case class Preview(lines: Vector[String], refusal: Option[String] = None, figures: Vector[String] = Vector.empty):
+
+  /** Whether `other` says the same will change. The figures are left out: a peer's age or the best block's number
+    * moves every second, and a dialog that started again each time one did could never be confirmed (FR-050 asks
+    * again when what will change is different, not when a clock ticks).
+    */
+  def same(other: Preview): Boolean = lines == other.lines && refusal == other.refusal
 
 /** How an attempt ended (FR-051): what the audit line's `outcome` says. */
 enum ActionOutcome:

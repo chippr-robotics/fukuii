@@ -142,6 +142,8 @@ case class TuiState(
     selectedBlock: Option[String] = None,
     selectedTx: Option[String] = None,
     healthSince: Health.Since = Map.empty,
+    minerSeenRunning: Boolean = false,
+    minerStoppedHere: Boolean = false,
     actions: ops.ActionsView = ops.ActionsView(),
     selectedAction: Option[String] = None,
     selectedHealth: Option[Subsystem] = None
@@ -175,20 +177,36 @@ case class TuiState(
     * focus and nothing typed.
     */
   def withActions(view: ops.ActionsView): TuiState =
-    val merged = if view == actions then this else copy(actions = view)
+    // That the miner was stopped from here is kept apart from the history, which forgets its oldest attempts.
+    val stoppedHere = minerStoppedHere || view.history.exists(r =>
+      r.request.action == ops.Actions.MiningStop.name && r.outcome.isInstanceOf[ops.ActionOutcome.Confirmed]
+    )
+    val merged =
+      if view == actions && stoppedHere == minerStoppedHere then this
+      else copy(actions = view, minerStoppedHere = stoppedHere)
     merged.overlay match
       case Overlay.Dialog(c: DialogKind.Confirm) if c.request.action != ops.Actions.Quit.name =>
         view.previews.get(c.request) match
-          case Some(read) if !c.preview.contains(read) =>
+          // What will change is different: the dialog asks again from the start.
+          case Some(read) if !c.preview.exists(_.same(read)) =>
             merged.copy(overlay =
               Overlay.Dialog(
                 c.copy(preview = Some(read), focus = DialogFocus.Cancel, typed = "", changed = c.preview.isDefined)
               )
             )
+          // Only a figure moved: it is shown, and the dialog stays as the operator left it.
+          case Some(read) if !c.preview.contains(read) =>
+            merged.copy(overlay = Overlay.Dialog(c.copy(preview = Some(read))))
           case _ => merged
       case _ => merged
 
   /** The action whose confirmation is on screen, if one is: the runner reads its preview again every poll. */
+  /** Whether the built-in miner was running and is not any more: None while that is not known (no reading, or a
+    * miner that has not been seen running, which may only not have started yet).
+    */
+  def minerStopped: Option[Boolean] =
+    snapshot.flatMap(_.local.mining).flatMap(_.minerRunning).map(running => !running && minerSeenRunning)
+
   def confirming: Option[ops.ActionRequest] = overlay match
     case Overlay.Dialog(c: DialogKind.Confirm) => Some(c.request)
     case _                                     => None
@@ -325,7 +343,10 @@ case class TuiState(
         zeroPeersSince = zeroSince,
         scores = scores.next(status.local.peerScores),
         hashrateZeroSince = zeroHashrateSince,
-        clSeenSince = seenSince
+        clSeenSince = seenSince,
+        // The gauge reads 0 before the miner has started as well as after it stopped: only a miner that was seen
+        // running is one that stopped.
+        minerSeenRunning = minerSeenRunning || status.local.mining.flatMap(_.minerRunning).contains(true)
       )
     val caughtUp = bestBlock > 0 && !isSynchronized && next.isSynchronized
     val moved =

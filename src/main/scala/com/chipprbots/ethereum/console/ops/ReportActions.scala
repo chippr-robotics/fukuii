@@ -2,9 +2,6 @@ package com.chipprbots.ethereum.console.ops
 
 import java.net.InetAddress
 
-import scala.concurrent.Await
-import scala.concurrent.ExecutionContext
-import scala.concurrent.Future
 import scala.concurrent.duration.*
 import scala.util.Try
 
@@ -108,7 +105,7 @@ object ReportActions:
       mode: () => String,
       advertised: () => Option[String],
       configuredOff: () => Boolean = () => false
-  )(using ExecutionContext): ActionHandler =
+  ): ActionHandler =
     ActionHandler(
       _ =>
         Preview(
@@ -125,11 +122,18 @@ object ReportActions:
         ),
       (_, progress) =>
         progress("asking the gateway, then outside services")
-        Try(Await.result(Future(detect()), DetectTimeout)).toEither.left
-          .map {
-            case _: java.util.concurrent.TimeoutException => s"no answer within ${DetectTimeout.toSeconds} s"
-            case e                                        => Option(e.getMessage).getOrElse(e.toString)
-          }
+        // On a thread of its own, waited for with a bound: a probe that hangs is interrupted and its thread ends with
+        // its socket's own timeout, and no pool of the node's is left a worker short.
+        val found = new java.util.concurrent.atomic.AtomicReference[Option[Try[Option[InetAddress]]]](None)
+        val worker = new Thread(() => found.set(Some(Try(detect()))), "fukuii-tui-detect-ip")
+        worker.setDaemon(true)
+        worker.start()
+        worker.join(DetectTimeout.toMillis)
+        if worker.isAlive then worker.interrupt()
+        found
+          .get()
+          .toRight(s"no answer within ${DetectTimeout.toSeconds} s")
+          .flatMap(_.toEither.left.map(e => Option(e.getMessage).getOrElse(e.toString)))
           .flatMap {
             case Some(address) =>
               Right(

@@ -5,7 +5,6 @@ import java.nio.file.Paths
 import cats.effect.unsafe.IORuntime
 
 import scala.concurrent.Await
-import scala.concurrent.ExecutionContext
 import scala.concurrent.duration.*
 import scala.util.Try
 
@@ -66,8 +65,7 @@ object TuiActions:
 
   /** The actions of `node`, and why each one it does not offer is not offered. */
   def of(node: Node, configured: AlertThresholds)(using
-      IORuntime,
-      ExecutionContext
+      IORuntime
   ): ((() => TuiState) => Map[String, ActionHandler], Map[String, String]) =
     import AdminService.*
     val admin = node.adminService

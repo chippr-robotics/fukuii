@@ -95,7 +95,7 @@ private[console] object MiningPanel:
       val first = new AttributedStringBuilder()
       // Enabled at the start, and no longer running: stopped from here, or it failed. Either way it starts again
       // only with the node, and the row says so in place of "on".
-      if m.minerRunning.contains(false) then
+      if c.state.minerStopped.contains(true) then
         first.append(field("Mining", text("STOPPED until the node restarts", c.t.warn.bold()), c.t))
       else first.append(field("Mining", text("on", c.t.healthy.bold()), c.t))
       if c.tier == Tier.S then first.append(dot + hashrate, c.t.value)

@@ -58,11 +58,11 @@ private[console] object DialogBox:
     // Stopping the node keeps the question it has always asked; every other action is named with its class.
     val title =
       if c.request.action == ops.Actions.Quit.name then "Stop this node?" else s"${c.risk.label}: ${c.request.text}"
-    val changed = Option.when(c.changed)("What this said has changed since it was first shown: read it again.")
+    val changed = Option.when(c.changed)("What this said has changed since it was first shown: read it again, then answer.")
     val body = c.preview match
       case None                                => Seq("Reading what this would change…")
-      case Some(ops.Preview(lines, Some(why))) => lines ++ Seq(s"Cannot be run now: $why")
-      case Some(ops.Preview(lines, None))      => changed.toSeq ++ lines ++ spec.map(s => s"Undo: ${s.undo}.")
+      case Some(p) if p.refusal.isDefined => p.lines ++ p.refusal.map(why => s"Cannot be run now: $why")
+      case Some(p) => changed.toSeq ++ p.lines ++ p.figures ++ spec.map(s => s"Undo: ${s.undo}.")
     val keys = c.preview match
       case None                           => "Esc  cancel"
       case Some(p) if p.refusal.isDefined => "Esc  close"

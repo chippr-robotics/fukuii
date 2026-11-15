@@ -71,13 +71,19 @@ object PeerActions:
       s"enode://${lower(peer.id)}@${if host.contains(':') then s"[$host]" else host}:$port"
     }
 
-  /** A connected peer in a sentence: its id, client, address, direction, age and score. */
+  /** A connected peer in a sentence: its id, client, address and direction. Nothing in it moves while the peer stays
+    * connected: its age and its score are [[figures]].
+    */
   private def described(state: TuiState, peer: TuiPeer): String =
     val client = state.snapshot.flatMap(_.details).flatMap(_.value).flatMap(_.get(peer.id)).map(_.clientId)
+    s"${brief(peer.id)}${client.fold("")(c => s", $c")}, ${peer.address}, " +
+      s"${if peer.incoming then "it dialled us" else "we dialled it"}"
+
+  /** A connected peer's age and score now: what a preview shows and does not compare. */
+  private def figures(state: TuiState, peer: TuiPeer): Vector[String] =
     val age = formatShort(Duration.between(peer.connectedAt, state.now).getSeconds.max(0L))
     val score = state.peerScore(peer.id).fold("not scored yet")(s => String.format(Locale.ROOT, "score %.2f", s))
-    s"${brief(peer.id)}${client.fold("")(c => s", $c")}, ${peer.address}, " +
-      s"${if peer.incoming then "it dialled us" else "we dialled it"}, connected $age, $score"
+    Vector(s"Connected $age, $score.")
 
   private def refused(why: String): Preview = Preview(Vector.empty, Some(why))
 
@@ -104,12 +110,13 @@ object PeerActions:
             Preview(
               Vector(
                 s"Sets the limit on outgoing connections from ${now.outgoing} to $n.",
-                s"Incoming stays at ${now.incoming}, and no connection is closed: ${s.peerCount} peers are connected.",
+                s"Incoming stays at ${now.incoming}, and no connection is closed.",
                 s"New dials start only while fewer than ${now.minOutgoing} outgoing peers have handshaked.",
                 "Resets when the node restarts."
               ) ++ Option.when(n < now.minOutgoing)(
                 s"$n is under the ${now.minOutgoing} the node tries to keep: it will hold fewer outgoing peers than it looks for."
-              )
+              ),
+              figures = Vector(s"${s.peerCount} peers are connected now.")
             )
       ,
       (request, _) =>
@@ -136,7 +143,8 @@ object PeerActions:
                 "A trusted peer is exempt from the outgoing limit, from the pruning of incoming peers and from eviction; " +
                   "it is not exempt from the incoming cap.",
                 "The node dials it now. Resets when the node restarts."
-              )
+              ),
+              figures = figures(state(), peer)
             )
       ,
       (request, _) =>
@@ -162,7 +170,8 @@ object PeerActions:
                 s"Removes trust from ${connected(state(), id).fold(brief(id) + ", not connected now")(described(state(), _))}.",
                 "Trusted now: yes. After: no.",
                 "The connection stays open; the peer may later be pruned or evicted like any other."
-              )
+              ),
+              figures = connected(state(), id).fold(Vector.empty)(figures(state(), _))
             )
       ,
       (request, _) =>
@@ -185,10 +194,13 @@ object PeerActions:
                 found.fold("It is not connected now: the node dials it.")(p =>
                   s"It is connected now, at ${p.address}."
                 ),
-                "It is dialled again 5 s after every disconnect, and is exempt from the outgoing limit.",
-                s"${s.peerCount} peers are connected; the limit on outgoing connections is ${now.outgoing}.",
-                "Held until the node restarts."
-              )
+                "It is dialled again after every disconnect, and is exempt from the outgoing limit.",
+                s"The limit on outgoing connections is ${now.outgoing}.",
+                "Held until the node restarts.",
+                // The dialog's title is one row and an enode is longer: here it is whole.
+                s"The enode: $uri"
+              ),
+              figures = Vector(s"${s.peerCount} peers are connected now.")
             )
       ,
       (request, _) =>
@@ -212,7 +224,8 @@ object PeerActions:
                     s"Whether the node keeps it could not be read ($why): if it does, the node stops re-dialling it."
                 ,
                 "It may reconnect if discovery finds it again or it dials us; peer block keeps an address out."
-              )
+              ),
+              figures = figures(state(), peer)
             )
       ,
       (request, _) =>

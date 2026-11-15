@@ -71,7 +71,7 @@ object RpcServerActions:
                   s"It serves $served.",
                   s.openConnections()
                     .fold(
-                      "Its open connections are not counted by this server: in-flight requests finish, then every connection is closed within 3 s."
+                      "Its open connections are not counted by this server: in-flight requests finish, then every connection is closed."
                     )(n =>
                       s"$n open connection${if n == 1 then " is" else "s are"} closed at once and ${
                           if n == 1 then "its" else "their"

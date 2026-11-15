@@ -65,25 +65,47 @@ final class ActionRunner(
   /** What the frame loop reads. */
   def view: ActionsView = state.get
 
+  // The requests whose dialog is open, and those being read now.
+  private val wanted = java.util.concurrent.ConcurrentHashMap.newKeySet[ActionRequest]()
+  private val reading = java.util.concurrent.ConcurrentHashMap.newKeySet[ActionRequest]()
+
   /** Reads what `request` would change, off the frame loop, and publishes it. Asked again, it reads again: a dialog
     * that stays open asks every poll, so what it shows is never older than that (FR-050).
     */
   def preview(request: ActionRequest): Unit =
-    previewThread.execute { () =>
-      val read = refusal(request.action) match
-        case Some(why) => Preview(Vector.empty, Some(why))
-        case None =>
+    wanted.add(request)
+    // One read of a request at a time: a handler slower than the poll is not queued behind itself.
+    if reading.add(request) then
+      try
+        previewThread.execute { () =>
           try
-            val p = handlers(request.action).preview(request)
-            // A preview can quote a peer's client id or an address the operator typed: cleaned like any other
-            // text from outside the node.
-            Preview(p.lines.map(Sanitize.line(_)), p.refusal.map(Sanitize.line(_)))
-          catch case NonFatal(e) => Preview(Vector.empty, Some(s"the preview could not be read: ${reason(e)}"))
-      val _ = state.updateAndGet(v => v.copy(previews = v.previews.updated(request, read)))
-    }
+            val read = refusal(request.action) match
+              case Some(why) => Preview(Vector.empty, Some(why))
+              case None =>
+                handlers.get(request.action) match
+                  case None => Preview(Vector.empty, Some(CarriedOutByDashboard))
+                  case Some(handler) =>
+                    try
+                      val p = handler.preview(request)
+                      // A preview can quote a peer's client id or an address the operator typed: cleaned like any
+                      // other text from outside the node.
+                      Preview(p.lines.map(Sanitize.line(_)), p.refusal.map(Sanitize.line(_)), p.figures.map(Sanitize.line(_)))
+                    catch
+                      case NonFatal(e) => Preview(Vector.empty, Some(s"the preview could not be read: ${reason(e)}"))
+            // A dialog that closed while this was read does not get its preview back.
+            if wanted.contains(request) then
+              val _ = state.updateAndGet(v => v.copy(previews = v.previews.updated(request, read)))
+          finally
+            val _ = reading.remove(request)
+        }
+      catch
+        // The runner was shut down under a dialog still open: there is nothing to read with.
+        case _: java.util.concurrent.RejectedExecutionException =>
+          val _ = reading.remove(request)
 
   /** The dialog for `request` closed: its preview is not wanted any more. */
   def forget(request: ActionRequest): Unit =
+    val _ = wanted.remove(request)
     val _ = state.updateAndGet(v => v.copy(previews = v.previews - request))
 
   /** The operator cancelled `request`: said in the audit log, and nothing runs. */
@@ -107,15 +129,37 @@ final class ActionRunner(
           if added then v.copy(running = v.running :+ ActionActivity(request, at, "waiting to start")) else v
         }
         val observe = byName.get(request.action).exists(_.risk == RiskClass.Observe)
-        // An action already running is not started a second time (FR-057).
-        if !added then record(request, ActionOutcome.Refused(AlreadyRunning))
+        def ended(outcome: ActionOutcome): Unit =
+          val _ = state.updateAndGet(v => v.copy(running = v.running.filterNot(_.request == request)))
+          record(request, outcome)
+        // An action already running is not started a second time (FR-057). A reading asked for again while it is
+        // being read is not an attempt: its screen already says it is reading.
+        if !added then (if observe then () else record(request, ActionOutcome.Refused(AlreadyRunning)))
         else
-          (if observe then observeThread else actionThread).execute { () =>
-            progress(request, "running")
-            if byName.get(request.action).exists(s => LongRunning.contains(s.name)) then audit(line(request, "started"))
-            val outcome =
+          handlers.get(request.action) match
+            case None => ended(ActionOutcome.Refused(CarriedOutByDashboard))
+            case Some(handler) =>
               try
-                handlers(request.action).run(request, said => progress(request, said)) match
+                (if observe then observeThread else actionThread).execute(() => carryOut(request, handler, observe, ended))
+              catch
+                case _: java.util.concurrent.RejectedExecutionException =>
+                  ended(ActionOutcome.Failed("the dashboard is closing"))
+
+  private def carryOut(
+      request: ActionRequest,
+      handler: ActionHandler,
+      observe: Boolean,
+      ended: ActionOutcome => Unit
+  ): Unit =
+    // Whatever happens in the handler, the action stops being "running" and its end is recorded: an error the
+    // handler does not survive (an interrupt at shutdown, a stack overflow) included, and then thrown on.
+    var outcome: ActionOutcome = ActionOutcome.Failed("it ended without saying how")
+    try
+            progress(request, "running")
+            if LongRunning.contains(request.action) then audit(line(request, "started"))
+            outcome =
+              try
+                handler.run(request, said => progress(request, said)) match
                   case Right(result) if observe =>
                     // What it found is for its screen, a row a line; the audit line says only that it was read.
                     val lines = result.split('\n').toVector.map(Sanitize.line(_, ReportLineChars))
@@ -125,7 +169,11 @@ final class ActionRunner(
                     ActionOutcome.Confirmed(s"${lines.size} lines")
                   case Right(result) => ActionOutcome.Confirmed(Sanitize.line(result))
                   case Left(why)     => ActionOutcome.Failed(Sanitize.line(why))
-              catch case NonFatal(e) => ActionOutcome.Failed(reason(e))
+              catch
+                case NonFatal(e) => ActionOutcome.Failed(reason(e))
+                case e: Throwable =>
+                  outcome = ActionOutcome.Failed(reason(e))
+                  throw e
             // An Observe action that failed says so on its screen, where the operator is looking.
             outcome match
               case ActionOutcome.Failed(why) if observe =>
@@ -135,9 +183,7 @@ final class ActionRunner(
                   )
                 )
               case _ => ()
-            val _ = state.updateAndGet(v => v.copy(running = v.running.filterNot(_.request == request)))
-            record(request, outcome)
-          }
+    finally ended(outcome)
 
   private def progress(request: ActionRequest, said: String): Unit =
     val _ = state.updateAndGet(v =>
@@ -164,6 +210,7 @@ object ActionRunner:
 
   val ReadOnly: String = "the dashboard is read-only (fukuii.tui.read-only)"
   val AlreadyRunning: String = "it is already running"
+  val CarriedOutByDashboard: String = "the dashboard carries this out itself: there is nothing for the node to run"
 
   /** The longest row of a report: a configuration value can be long. */
   val ReportLineChars: Int = 400
@@ -192,8 +239,14 @@ object ActionRunner:
     * line is one line.
     */
   def line(request: ActionRequest, outcome: String): String =
+    // A value with a blank, a comma, a quote or `=` in it is quoted, so that no value can pass for a field of the line.
+    def written(value: String): String =
+      val clean = Sanitize.line(value)
+      if clean.exists(ch => ch == ' ' || ch == '=' || ch == ',' || ch == '"') then
+        "\"" + clean.replace("\\", "\\\\").replace("\"", "\\\"") + "\""
+      else clean
     val params =
-      if request.params.isEmpty then "-" else request.params.map((k, v) => s"$k=${Sanitize.line(v)}").mkString(",")
+      if request.params.isEmpty then "-" else request.params.map((k, v) => s"$k=${written(v)}").mkString(",")
     s"action=${request.action} params=$params outcome=${Sanitize.line(outcome)} by=tui"
 
   private def reason(e: Throwable): String = Sanitize.line(Option(e.getMessage).getOrElse(e.toString))

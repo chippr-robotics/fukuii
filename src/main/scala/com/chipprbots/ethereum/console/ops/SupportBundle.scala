@@ -52,7 +52,7 @@ object SupportBundle:
   /** A line of log with the credentials taken out of any URL in it: a log line is not a configuration value, and a URL
     * that was logged whole is the one way a secret known today could be in one.
     */
-  private[ops] def scrubbed(line: String): String = Redaction.withoutUserInfo(line)
+  private[ops] def scrubbed(line: String): String = Redaction.scrubbed(line)
 
   private def threads(): Seq[String] =
     ManagementFactory.getThreadMXBean
@@ -106,34 +106,48 @@ object SupportBundle:
   /** The directory a bundle made at `at` goes to, under the data directory. */
   def directory(dataDir: Path, at: Instant): Path = dataDir.resolve("support").resolve(s"bundle-${Stamp.format(at)}")
 
-  /** Writes `contents` under `dir`, for the owner alone where the file system has such permissions. */
-  private[ops] def write(dir: Path, contents: Seq[(String, String)]): Unit =
-    val posix = Try(Files.getFileStore(dir.getParent.getParent).supportsFileAttributeView("posix")).getOrElse(false)
-    def ownerOnly(path: Path, directory: Boolean): Unit =
-      if posix then
-        val _ = Files.setPosixFilePermissions(
-          path,
-          PosixFilePermissions.fromString(if directory then "rwx------" else "rw-------")
-        )
-    Files.createDirectories(dir)
-    ownerOnly(dir.getParent, directory = true)
-    ownerOnly(dir, directory = true)
+  /** Writes `contents` under `dir`, for the owner alone where the file system has such permissions: each directory
+    * and file is made with them, so nothing is readable by anyone else at any moment. Returns whether it has them: a
+    * file system without them (or one that would not say) gets the files with its defaults, and the result says so.
+    * A file that is already there is not written over: two bundles do not share a directory.
+    */
+  private[ops] def write(dir: Path, contents: Seq[(String, String)]): Boolean =
+    val dirOnly = PosixFilePermissions.asFileAttribute(PosixFilePermissions.fromString("rwx------"))
+    val fileOnly = PosixFilePermissions.asFileAttribute(PosixFilePermissions.fromString("rw-------"))
+    var ownerOnly = true
+    def directory(path: Path): Unit =
+      if !Files.isDirectory(path) then
+        Option(path.getParent).foreach(parent => if !Files.isDirectory(parent) then Files.createDirectories(parent))
+        try
+          val _ = Files.createDirectory(path, dirOnly)
+        catch
+          case _: UnsupportedOperationException =>
+            ownerOnly = false
+            val _ = Files.createDirectory(path)
+    directory(dir.getParent)
+    directory(dir)
     contents.foreach { (name, body) =>
       val file = dir.resolve(name)
-      if file.getParent != dir then
-        Files.createDirectories(file.getParent)
-        ownerOnly(file.getParent, directory = true)
-      // Made empty and owner-only first, written after: the content is never readable by anyone else.
-      val _ = Files.deleteIfExists(file)
-      Files.createFile(file)
-      ownerOnly(file, directory = false)
+      if file.getParent != dir then directory(file.getParent)
+      try
+        val _ = Files.createFile(file, fileOnly)
+      catch
+        case _: UnsupportedOperationException =>
+          ownerOnly = false
+          val _ = Files.createFile(file)
       val _ = Files.write(file, body.getBytes(StandardCharsets.UTF_8))
     }
+    ownerOnly
 
   private def size(bytes: Int): String =
     if bytes >= 1024 * 1024 then f"${bytes / 1048576.0}%.1f MiB"
     else if bytes >= 1024 then s"${bytes / 1024} KiB"
     else s"$bytes B"
+
+  /** The files a bundle holds, as its preview names them: the preview reads nothing of the node. */
+  val Holds: String =
+    "README.txt, build.txt, config.txt, logs.txt, alerts.txt, database.txt, threads.txt, memory.txt, " +
+      "and each view of the dashboard as views/<name>.txt"
 
   def handler(inputs: Inputs, dataDir: () => Option[Path], now: () => Instant): ActionHandler =
     ActionHandler(
@@ -141,14 +155,10 @@ object SupportBundle:
         dataDir() match
           case None => Preview(Vector.empty, Some("this node has no data directory to write under"))
           case Some(dir) =>
-            val at = now()
-            val contents = files(inputs, at)
             Preview(
               Vector(
-                s"Writes ${contents.size} files under ${directory(dir, at)}:",
-                contents
-                  .map((name, body) => s"$name (${size(body.getBytes(StandardCharsets.UTF_8).length)})")
-                  .mkString(", ") + ".",
+                s"Writes a directory of text files, ${dir.resolve("support")}/bundle-<the time it is written>:",
+                s"$Holds.",
                 "It holds peer addresses and this node's id. It holds no key, no JWT secret, no state and no chain data.",
                 "Secrets in the configuration are hidden. The files are readable by this node's user only.",
                 "It goes nowhere: sending it to anyone is up to you."
@@ -161,9 +171,18 @@ object SupportBundle:
           val target = directory(dir, at)
           progress("reading the node")
           val contents = files(inputs, at)
+          val bytes = contents.map(_._2.getBytes(StandardCharsets.UTF_8).length).sum
           progress(s"writing ${contents.size} files")
           Try(write(target, contents)).toEither.left
-            .map(e => s"could not write $target: ${Option(e.getMessage).getOrElse(e.toString)}")
-            .map(_ => s"${contents.size} files written to $target")
+            .map {
+              case _: java.nio.file.FileAlreadyExistsException =>
+                s"a bundle was already written to $target this second: nothing was written over"
+              case e => s"could not write $target: ${Option(e.getMessage).getOrElse(e.toString)}"
+            }
+            .map(ownerOnly =>
+              s"${contents.size} files (${size(bytes)}) written to $target" +
+                (if ownerOnly then ""
+                 else "; this file system has no owner-only permissions: the files have its defaults")
+            )
         }
     )

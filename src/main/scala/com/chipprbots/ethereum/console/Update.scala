@@ -118,7 +118,9 @@ object Update:
         (s.copy(overlay = Overlay.Dialog(DialogKind.Confirm(request, spec.risk, Some(preview)))), Nil)
       case Some(spec) =>
         (
-          s.copy(overlay = Overlay.Dialog(DialogKind.Confirm(request, spec.risk, s.actions.previews.get(request)))),
+          // Opened with no preview, whatever an earlier dialog for the same request left behind: what is confirmed
+          // is what was read for this dialog.
+          s.copy(overlay = Overlay.Dialog(DialogKind.Confirm(request, spec.risk, None))),
           Seq(Effect.Preview(request))
         )
 
@@ -345,7 +347,10 @@ object Update:
                 case _                                          => (s, Nil)
             case RiskClass.Disrupt =>
               key match
-                case Key.Char('y' | 'Y') if confirmable  => run
+                // A preview that changed under the operator is not confirmed by the key that was already on its way:
+                // the first y says it was read, the second runs it.
+                case Key.Char('y' | 'Y') if confirmable && c.changed => set(c.copy(changed = false))
+                case Key.Char('y' | 'Y') if confirmable              => run
                 case Key.Char('n' | 'N') | Key.Backspace => cancel
                 // Anything else neither confirms nor cancels.
                 case _ => (s, Nil)

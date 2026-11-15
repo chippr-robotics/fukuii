@@ -40,11 +40,12 @@ object DatabaseActions:
             val points = best / node.step.max(1) + 1
             Preview(
               Vector(
-                s"Reads the number-to-hash entry and the header of every ${node.step}th block up to $best: about ${points * 2} entries.",
+                s"Reads the number-to-hash entry and the header of every ${node.step}th block up to the best block.",
                 "It is the check the node runs when it starts.",
                 "It stops nothing and changes nothing: on finding a fault it reports it, here and in the log.",
                 "It reads beside block import, and takes seconds to tens of seconds."
-              )
+              ),
+              figures = Vector(s"The best block is $best now: about ${points * 2} entries.")
             )
       ,
       (_, progress) =>

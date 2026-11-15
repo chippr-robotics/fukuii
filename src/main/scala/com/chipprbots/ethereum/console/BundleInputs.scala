@@ -25,12 +25,12 @@ object BundleInputs:
         motion = Motion.Reduced,
         overlay = Overlay.None,
         splashUntilTick = None,
-        logs = state.logs.map(l => l.copy(text = Redaction.withoutUserInfo(l.text)))
+        logs = state.logs.map(l => l.copy(text = Redaction.scrubbed(l.text)))
       )
       .withView(view)
     renderer
       .render(still, Cols, Rows, TuiTheme.Mono)
-      .map(row => Redaction.withoutUserInfo(row.toString.replaceAll("\\s+$", "")))
+      .map(row => Redaction.scrubbed(row.toString.replaceAll("\\s+$", "")))
 
   /** The alert row's conditions, then each health check with its state and since when. */
   def alerts(state: TuiState): Seq[String] =
