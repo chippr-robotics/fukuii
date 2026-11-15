@@ -36,7 +36,7 @@ Rules that hold for all of them:
 | Action | Preview states | Carried out by | Undo |
 | --- | --- | --- | --- |
 | `loglevel` | The logger, the level it logs at now, the level set on it, and the level after. A name no logger has is refused, with the nearest names | `AdminService.changeLogLevel` (which is `AdminService.setLogLevel`); the levels from `AdminService.logLevel` and `changedLogLevels` beside it | `loglevel reset` returns every changed logger to the level it had before its first change |
-| `maxpeers` | The outgoing limit now and after, the connected count, and the peers that would be dropped; the incoming limit does not change here | `PeerManagerActor.SetMaxPeersCmd` via `AdminService.maxPeers` | Set the old value |
+| `maxpeers` | The outgoing limit now and after and the connected count; that no connection is closed and the incoming limit does not change; a warning when the new limit is under the count the node tries to keep | `PeerManagerActor.SetMaxPeersCmd` via `AdminService.maxPeers` | Set the old value |
 | `peer trust` | The peer's id, client and address; that a trusted peer is exempt from pruning. Refused for a peer that dialled this node: there is no enode to keep | `AdminService.addTrustedPeer` | `peer untrust` |
 | `peer untrust` | The peer's id; that it can be pruned again | `AdminService.removeTrustedPeer` | `peer trust` |
 | `threshold` | The threshold now and after; the alerts that would fire or clear at once; the configuration line that makes it permanent | `console/` only: the session's `AlertThresholds` | `threshold reset` |
@@ -85,4 +85,4 @@ Shown in the Ops view (spec FR-056).
 | Reload configuration from file | No key is re-read after start; `tunables` lists what changes at run time |
 | Create a snapshot | Spec 013 has no code |
 | Compact the database | A whole-database compaction holds the database's lock for its whole run: the node would import nothing until it ended, which on a large database may take hours and cannot be stopped. Offering it needs a change to how the data source locks (B-281). This departs from spec FR-054, which lists it |
-| Change the pruning mode or state scheme | Needs a restart, and for the scheme a resync |
+| Change the pruning mode or the state scheme | Needs a restart, and for the scheme a resync |

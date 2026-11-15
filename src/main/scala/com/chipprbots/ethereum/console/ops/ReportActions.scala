@@ -59,7 +59,8 @@ object ReportActions:
       detected: Option[String],
       detection: String,
       inbound: Int,
-      connected: Int
+      connected: Int,
+      peersUnread: Option[String] = None
   )
 
   def net(read: () => NetInfo): ActionHandler =
@@ -73,10 +74,12 @@ object ReportActions:
             s"Advertised  ${n.advertised.getOrElse("none yet: peers are told no address")}",
             s"Detection   ${n.detection}${n.detected.fold("")(how => s": $how")}",
             "UPnP        port mapping is not reported by this node (it is in the log at start)",
-            s"Inbound     ${n.inbound} of ${n.connected} connected peers dialled this node" +
-              (if n.inbound > 0 then ": it can be reached from outside"
-               else if n.connected > 0 then ": none has reached it from outside yet"
-               else ""),
+            n.peersUnread.fold(
+              s"Inbound     ${n.inbound} of ${n.connected} connected peers dialled this node" +
+                (if n.inbound > 0 then ": it can be reached from outside"
+                 else if n.connected > 0 then ": none has reached it from outside yet"
+                 else "")
+            )(why => s"Inbound     not known: the peers could not be read ($why)"),
             "Whether it can be reached is known only from peers that reach it: detect-ip asks outside services what address they see."
           ).mkString("\n")
         )
@@ -100,9 +103,12 @@ object ReportActions:
     *   whether the node's own detection is `automatic`, `configured` or `off`, for the sentence that says when what it
     *   advertises changes
     */
-  def detectIp(detect: () => Option[InetAddress], mode: () => String, advertised: () => Option[String])(using
-      ExecutionContext
-  ): ActionHandler =
+  def detectIp(
+      detect: () => Option[InetAddress],
+      mode: () => String,
+      advertised: () => Option[String],
+      configuredOff: () => Boolean = () => false
+  )(using ExecutionContext): ActionHandler =
     ActionHandler(
       _ =>
         Preview(
@@ -113,6 +119,8 @@ object ReportActions:
             s"It takes up to ${DetectTimeout.toSeconds} s, reports what it finds and changes nothing.",
             s"What the node advertises (${advertised().getOrElse("nothing yet")}) changes only when the node's own " +
               s"detection runs: that is ${mode()}."
+          ) ++ Option.when(configuredOff())(
+            "The node's own detection is off in its configuration: this asks the outside services all the same, once."
           )
         ),
       (_, progress) =>

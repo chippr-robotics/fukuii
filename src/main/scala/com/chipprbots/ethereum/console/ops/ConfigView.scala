@@ -30,11 +30,17 @@ object ConfigView:
     if o.lineNumber() > 0 then s"$short:${o.lineNumber()}" else short
 
   private def rendered(value: ConfigValue): String =
-    val text = value.valueType() match
+    value.valueType() match
       case ConfigValueType.STRING => String.valueOf(value.unwrapped())
       case ConfigValueType.NULL   => "null"
       case _                      => value.render(com.typesafe.config.ConfigRenderOptions.concise())
-    if text.length > MaxValueChars then text.take(MaxValueChars) + "…" else text
+
+  /** A value as it may be shown, then cut to [[MaxValueChars]]: the secrets are taken out of the whole value first, so
+    * that a cut never leaves half of one.
+    */
+  private[ops] def shown(key: String, value: String): String =
+    val safe = Redaction.show(key, value)
+    if safe.length > MaxValueChars then safe.take(MaxValueChars) + "…" else safe
 
   /** The rows, by key: `prefix.key = value   # origin`. A list or an object under a secret key is hidden whole. */
   def rows(config: Config, prefix: String = ""): Vector[String] =
@@ -45,7 +51,7 @@ object ConfigView:
       .map { entry =>
         // The library quotes a key that is not a plain word: the quotes are not part of its name.
         val key = (if prefix.isEmpty then "" else s"$prefix.") + entry.getKey.replace("\"", "")
-        s"$key = ${Redaction.show(key, rendered(entry.getValue))}   # ${origin(entry.getValue)}"
+        s"$key = ${shown(key, rendered(entry.getValue))}   # ${origin(entry.getValue)}"
       }
       .sorted
 

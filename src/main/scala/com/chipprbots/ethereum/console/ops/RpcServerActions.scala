@@ -53,10 +53,10 @@ object RpcServerActions:
   /** @param servers
     *   the servers of the transports that were enabled at start, by `http` and `ws`
     */
-  def handlers(servers: Map[String, Server]): Map[String, ActionHandler] =
+  def handlers(servers: Map[String, Server], absent: Map[String, String] = Map.empty): Map[String, ActionHandler] =
     def of(request: ActionRequest): Either[String, Server] =
       val transport = request.param("transport").getOrElse("")
-      servers.get(transport).toRight(missing(transport))
+      servers.get(transport).toRight(absent.getOrElse(transport, missing(transport)))
     Map(
       Actions.RpcStop.name -> ActionHandler(
         request =>

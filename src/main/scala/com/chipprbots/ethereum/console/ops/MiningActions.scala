@@ -50,19 +50,22 @@ object MiningActions:
 
   private def refused(why: String): Preview = Preview(Vector.empty, Some(why))
 
+  val NoMinerToStop: String = "this node was started with mining off: there is no miner to stop"
+
+  /** Why the built-in miner cannot be started from here, in the state the node is in. */
+  private def cannotStart(node: Node): String =
+    if !node.enabledAtStart then NoMinerToStart else if node.running() then AlreadyMining else CannotStartAgain
+
   def handlers(node: Node): Map[String, ActionHandler] = Map(
     // Never runs: there is no state of this node in which the built-in miner can be started from here. The dialog
     // says which of the three reasons holds.
     Actions.MiningStart.name -> ActionHandler(
-      _ =>
-        refused(
-          if !node.enabledAtStart then NoMinerToStart else if node.running() then AlreadyMining else CannotStartAgain
-        ),
-      (_, _) => Left(if !node.enabledAtStart then NoMinerToStart else CannotStartAgain)
+      _ => refused(cannotStart(node)),
+      (_, _) => Left(cannotStart(node))
     ),
     Actions.MiningStop.name -> ActionHandler(
       _ =>
-        if !node.enabledAtStart then refused("this node was started with mining off: there is no miner to stop")
+        if !node.enabledAtStart then refused(NoMinerToStop)
         else if !node.running() then refused(AlreadyStopped)
         else
           Preview(
@@ -75,7 +78,8 @@ object MiningActions:
           )
       ,
       (_, _) =>
-        if !node.running() then Left(AlreadyStopped)
+        if !node.enabledAtStart then Left(NoMinerToStop)
+        else if !node.running() then Left(AlreadyStopped)
         else node.stop().map(_ => "the built-in miner is stopped until the node restarts")
     ),
     Actions.Coinbase.name -> ActionHandler(

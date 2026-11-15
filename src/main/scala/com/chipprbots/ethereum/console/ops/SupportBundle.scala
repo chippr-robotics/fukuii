@@ -52,8 +52,7 @@ object SupportBundle:
   /** A line of log with the credentials taken out of any URL in it: a log line is not a configuration value, and a URL
     * that was logged whole is the one way a secret known today could be in one.
     */
-  private[ops] def scrubbed(line: String): String =
-    line.split(' ').map(Redaction.withoutUserInfo).mkString(" ")
+  private[ops] def scrubbed(line: String): String = Redaction.withoutUserInfo(line)
 
   private def threads(): Seq[String] =
     ManagementFactory.getThreadMXBean

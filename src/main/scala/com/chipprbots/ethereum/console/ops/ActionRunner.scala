@@ -53,7 +53,8 @@ final class ActionRunner(
       case None => Some(s"there is no action '$action'")
       case Some(spec) =>
         if readOnly && spec.risk != RiskClass.Observe then Some(ReadOnly)
-        else if !handlers.contains(action) then Some(unavailable.getOrElse(action, "not offered on this node"))
+        else if !handlers.contains(action) && !Own(action) then
+          Some(unavailable.getOrElse(action, "not offered on this node"))
         else None
 
   // What the Ops view says of each action that cannot be run here, from the start.
@@ -176,7 +177,12 @@ object ActionRunner:
   val MaxHistory: Int = 50
 
   /** The actions that take time: each writes a line when it starts as well as when it ends. */
-  val LongRunning: Set[String] = Set("compact", "dbcheck", "bundle", "detect-ip")
+  val LongRunning: Set[String] = Set(Actions.DbCheck.name, Actions.Bundle.name, Actions.DetectIp.name)
+
+  /** The actions the dashboard carries out itself, with no handler from the node: stopping the node is its own quit
+    * path, and the sprites, the dependencies and the lookups are screens of its own.
+    */
+  val Own: Set[String] = Set(Actions.Quit.name, Actions.Art.name, Actions.Deps.name, Actions.Lookup.name)
 
   private val logger = LoggerFactory.getLogger(AuditLogger)
 

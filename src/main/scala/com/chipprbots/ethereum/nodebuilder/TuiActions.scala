@@ -195,6 +195,15 @@ object TuiActions:
         )
       }
 
+    // A server that was enabled and could not be made (a TLS keystore that does not open): said as it is, not as a
+    // transport that was off.
+    val serversNotMade: Map[String, String] =
+      Option
+        .when(http.enabled)(node.maybeJsonRpcHttpServer)
+        .flatMap(_.left.toOption)
+        .map(why => "http" -> s"the HTTP server could not be made when the node started: $why")
+        .toMap
+
     // ---- the database check ---------------------------------------------------------------------------------------
     val appState = node.storagesInstance.storages.appStateStorage
     val database = DatabaseActions.Node(
@@ -237,7 +246,8 @@ object TuiActions:
       case ServerStatus.Listening(address) => Some(s"${address.getHostString}:${address.getPort}")
       case ServerStatus.NotListening       => None
     def netInfo: ReportActions.NetInfo =
-      val connected = run(admin.peers(AdminPeersRequest())).fold(_ => Nil, _.peers)
+      val peersRead = run(admin.peers(AdminPeersRequest())).map(_.peers)
+      val connected = peersRead.getOrElse(Nil)
       val found = node.networkAddressInfo.get
       val how = found.found.map { d =>
         val by = d.source match
@@ -255,7 +265,8 @@ object TuiActions:
         detected = how.orElse(found.atMillis.map(_ => "the last detection found no address")),
         detection = detection,
         inbound = connected.count(_.inbound),
-        connected = connected.size
+        connected = connected.size,
+        peersUnread = peersRead.left.toOption
       )
 
     // ---- the endpoints the endpoint test calls --------------------------------------------------------------------
@@ -358,17 +369,20 @@ object TuiActions:
       PeerActions.handlers(peers, state) ++
         Map(Actions.LogLevel.name -> LogLevelAction.handler(logLevels)) ++
         mining.fold(Map.empty[String, ActionHandler])(MiningActions.handlers) ++
-        RpcServerActions.handlers(servers) ++
+        RpcServerActions.handlers(servers, serversNotMade) ++
         DatabaseActions.handlers(database) ++
         Map(
           Actions.Config.name -> ConfigView.handler(() => node.instanceConfig.config, "fukuii"),
           Actions.Tunables.name -> ReportActions.tunables(() => tunables(state())),
           Actions.Net.name -> ReportActions.net(() => netInfo),
           Actions.TestRpc.name -> EndpointProbe.handler(() => endpoints),
+          // The operator asks for it: the whole detection runs, whatever the node's own is set to, and the preview
+          // says so where the node's own is off.
           Actions.DetectIp.name -> ReportActions.detectIp(
             () => ExternalIPDetector.detect(),
             () => detection,
-            () => advertised
+            () => advertised,
+            () => server.advertisedAddress.isEmpty && server.externalIpDetectionMode == DetectionMode.None
           )
         ) ++
         dataDir.map(dir =>

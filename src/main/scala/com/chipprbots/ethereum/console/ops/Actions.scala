@@ -206,13 +206,13 @@ object Actions:
     PeerBlock,
     PeerUnblock,
     MiningStart,
-    MiningStop,
     Coinbase,
     RpcStop,
     RpcStart,
     DbCheck,
     DetectIp,
     Bundle,
+    MiningStop,
     Quit
   )
 

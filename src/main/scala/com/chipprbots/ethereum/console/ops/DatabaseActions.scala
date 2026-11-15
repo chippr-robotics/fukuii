@@ -55,7 +55,10 @@ object DatabaseActions:
             val said =
               s"checked ${result.checked} sample points (every ${result.step}th block up to ${result.best}): " +
                 s"${result.missing} missing"
-            if result.missing == 0 then Right(said)
-            else Left(s"$said; the first: ${result.first.take(5).mkString(", ")}")
+            val first = if result.missing == 0 then "" else s"; the first: ${result.first.take(5).mkString(", ")}"
+            // A check that stopped early read only part of the database: its count is not the whole check's.
+            if result.cancelled then Left(s"cancelled before it had read every point: $said so far$first")
+            else if result.missing == 0 then Right(said)
+            else Left(s"$said$first")
     )
   )

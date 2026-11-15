@@ -58,11 +58,7 @@ object Commands:
   val MaxPeersCeiling: Int = 1000
 
   /** An IPv4 or IPv6 address written out, with no name in it: nothing here asks a name server. */
-  private[console] def isIpLiteral(text: String): Boolean =
-    val v4 = text.split('.')
-    (v4.length == 4 && v4.forall(p => p.nonEmpty && p.length <= 3 && p.forall(_.isDigit) && p.toInt <= 255)) ||
-    (text.contains(':') && text.count(_ == ':') >= 2 &&
-      text.forall(ch => Character.digit(ch, 16) >= 0 || ch == ':' || ch == '.') && text.length <= 45)
+  private[console] def isIpLiteral(text: String): Boolean = ops.PeerActions.canonical(text).isDefined
 
   /** `enode://<128 hex digits>@<host>:<port>`, with nothing missing: a peer manager handed one with no node id fails
     * inside itself (herald, slice 7).
@@ -96,6 +92,9 @@ object Commands:
           if isIpLiteral(address) then Command.Act(ActionRequest(spec.name, Vector("address" -> address)))
           else Command.Usage(s"usage: ${spec.usage}, the address written out (203.0.113.9), not a name")
         )
+      // A verb with nothing after it is not a peer's id: `peer add` alone would open a peer whose id starts "add".
+      case (Some(verb @ ("trust" | "untrust" | "drop" | "add" | "block" | "unblock")), None) =>
+        Actions.named(s"peer $verb").map(spec => Command.Usage(s"usage: ${spec.usage}"))
       case _ => None
 
   /** The commands that are actions, by their first word. None when `word` is none of them. */

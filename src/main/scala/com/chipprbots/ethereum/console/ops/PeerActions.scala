@@ -5,6 +5,7 @@ import java.util.Locale
 
 import com.chipprbots.ethereum.console.TuiPeer
 import com.chipprbots.ethereum.console.TuiState
+import com.chipprbots.ethereum.network.BlockedIPRegistry
 import com.chipprbots.ethereum.console.TuiText.formatShort
 
 /** The peer actions (spec 029 FR-054, contracts/actions.md): the limit on outgoing peers, trusting and untrusting,
@@ -80,6 +81,13 @@ object PeerActions:
 
   private def refused(why: String): Preview = Preview(Vector.empty, Some(why))
 
+  /** An address as the node writes it down, or None for what is no address written out. The block list holds
+    * addresses in this form ([[BlockedIPRegistry.canonical]]); no name is ever resolved.
+    */
+  def canonical(address: String): Option[String] = BlockedIPRegistry.canonical(address)
+
+  private def NotAnAddress(typed: String): String = s"'$typed' is not an IP address written out"
+
   val InboundRefusal: String =
     "it dialled us, so its listening port is not known: use peer add enode://<id>@<host>:<port> with the port it listens on"
 
@@ -100,8 +108,7 @@ object PeerActions:
                 s"New dials start only while fewer than ${now.minOutgoing} outgoing peers have handshaked.",
                 "Resets when the node restarts."
               ) ++ Option.when(n < now.minOutgoing)(
-                s"$n is under the $now.minOutgoing the node tries to keep: it will hold fewer outgoing peers than it looks for."
-                  .replace("$now.minOutgoing", now.minOutgoing.toString)
+                s"$n is under the ${now.minOutgoing} the node tries to keep: it will hold fewer outgoing peers than it looks for."
               )
             )
       ,
@@ -194,12 +201,16 @@ object PeerActions:
         connected(state(), id) match
           case None => refused(s"no connected peer has the id ${brief(id)} any more")
           case Some(peer) =>
-            val kept = node.limits().toOption.exists(_.maintained.map(lower).contains(lower(peer.id)))
             Preview(
               Vector(
                 s"Disconnects ${described(state(), peer)}.",
-                if kept then "It is a peer the node keeps: the node stops re-dialling it."
-                else "It is not a peer the node keeps: nothing else changes.",
+                node.limits() match
+                  case Right(now) if now.maintained.map(lower).contains(lower(peer.id)) =>
+                    "It is a peer the node keeps: the node stops re-dialling it."
+                  case Right(_) => "It is not a peer the node keeps: nothing else changes."
+                  case Left(why) =>
+                    s"Whether the node keeps it could not be read ($why): if it does, the node stops re-dialling it."
+                ,
                 "It may reconnect if discovery finds it again or it dials us; peer block keeps an address out."
               )
             )
@@ -212,13 +223,19 @@ object PeerActions:
     ),
     Actions.PeerBlock.name -> ActionHandler(
       request =>
-        val address = request.param("address").getOrElse("")
-        if node.blocked().contains(address) then refused(s"$address is already blocked")
-        else
-          val s = state()
-          val there =
-            s.snapshot.flatMap(_.peers.value).getOrElse(Nil).filter(p => hostPort(p.address).exists(_._1 == address))
-          Preview(
+        val typed = request.param("address").getOrElse("")
+        canonical(typed) match
+          case None                                            => refused(NotAnAddress(typed))
+          case Some(address) if node.blocked().contains(address) => refused(s"$address is already blocked")
+          case Some(address) =>
+            val s = state()
+            // The node writes an address one way and an operator may type it another: both are read before they
+            // are compared.
+            val there = s.snapshot
+              .flatMap(_.peers.value)
+              .getOrElse(Nil)
+              .filter(p => hostPort(p.address).flatMap(h => canonical(h._1)).contains(address))
+            Preview(
             Vector(
               s"Blocks $address until this node restarts: connections from it are refused, and the node will not dial it.",
               if there.isEmpty then "No connected peer is at that address now."
@@ -237,20 +254,22 @@ object PeerActions:
     ),
     Actions.PeerUnblock.name -> ActionHandler(
       request =>
-        val address = request.param("address").getOrElse("")
-        if !node.blocked().contains(address) then
-          refused(
-            s"$address is not blocked" +
-              (if node.blocked().isEmpty then "; no address is"
-               else s"; blocked now: ${node.blocked().toSeq.sorted.take(5).mkString(", ")}")
-          )
-        else
-          Preview(
-            Vector(
-              s"Removes the block on $address, and any automatic blacklisting of it.",
-              "It can connect and be dialled again."
+        val typed = request.param("address").getOrElse("")
+        canonical(typed) match
+          case None => refused(NotAnAddress(typed))
+          case Some(address) if !node.blocked().contains(address) =>
+            refused(
+              s"$address is not blocked" +
+                (if node.blocked().isEmpty then "; no address is"
+                 else s"; blocked now: ${node.blocked().toSeq.sorted.take(5).mkString(", ")}")
             )
-          )
+          case Some(address) =>
+            Preview(
+              Vector(
+                s"Removes the block on $address, and any automatic blacklisting of it.",
+                "It can connect and be dialled again; the peers the node keeps at it are dialled now."
+              )
+            )
       ,
       (request, _) =>
         val address = request.param("address").getOrElse("")

@@ -56,7 +56,17 @@ class TuiViewGoldenSpec extends AnyFlatSpec with Matchers with BeforeAndAfterAll
     ("peers", "filtering", after((Key.Char('3') +: Key.Char('/') +: typed("besu"))*)),
     ("prompt", "typing", after((Key.Char(':') +: typed("mem"))*)),
     ("prompt", "unknown", after((Key.Char(':') +: typed("mempol") :+ Key.Enter)*)),
-    ("quit", "asked", after(Key.Char('q')))
+    ("quit", "asked", after(Key.Char('q'))),
+    // Spec 029 slice 7: the Ops view with actions running and ended, on a node with no miner, a dialog of each class,
+    // a refused preview, a preview still being read, and an Observe action's screen.
+    ("ops", "busy", in(TuiView.Ops)(g => TuiFixtures.opsBusy(TuiFixtures.syncedEtc(g)))),
+    ("ops", "sepolia", in(TuiView.Ops)(g => TuiFixtures.opsNoMiner(TuiFixtures.sepoliaNearHead(g)))),
+    ("dialog", "adjust", g => TuiFixtures.asked(TuiFixtures.syncedEtc(g), "loglevel DEBUG", Some(TuiFixtures.LogLevelPreview))),
+    ("dialog", "disrupt", g => TuiFixtures.asked(TuiFixtures.syncedEtc(g), "rpc stop http", Some(TuiFixtures.RpcStopPreview))),
+    ("dialog", "halt", g => TuiFixtures.asked(TuiFixtures.syncedEtc(g), "mining stop", Some(TuiFixtures.MiningStopPreview), "st")),
+    ("dialog", "refused", g => TuiFixtures.asked(TuiFixtures.syncedEtc(g), "mining start", Some(TuiFixtures.MiningStartRefusal))),
+    ("dialog", "reading", g => TuiFixtures.asked(TuiFixtures.syncedEtc(g), "peer block 203.0.113.7", None)),
+    ("config", "filtered", g => TuiFixtures.configScreen(TuiFixtures.syncedEtc(g), "rpc"))
   ) ++ TuiFixtures.alerts.map((name, fixture) => ("overview", s"alert-$name", fixture))
 
   private def fileName(prefix: String, width: Int, height: Int, state: String, set: GlyphSet): String =

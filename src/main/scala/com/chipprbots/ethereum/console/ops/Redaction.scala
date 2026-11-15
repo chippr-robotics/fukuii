@@ -2,8 +2,6 @@ package com.chipprbots.ethereum.console.ops
 
 import java.util.Locale
 
-import scala.util.Try
-
 /** What may be shown of a configuration value (spec 029 FR-058, research §7.4): no secret reaches a frame or a file.
   *
   * A key is hidden when it is on the list of keys known to hold a secret, or when its name has a secret's word in it,
@@ -31,37 +29,37 @@ object Redaction:
   /** Keys that hold a URL which may carry credentials: shown without them. */
   val UrlKeys: Set[String] = Set("fukuii.sync.checkpoint-sync-url", "sync.checkpoint-sync-url")
 
-  private def last(key: String): String = key.split('.').lastOption.getOrElse(key).toLowerCase(Locale.ROOT)
+  private def holdsSecret(part: String): Boolean =
+    SecretWords.exists(part.contains) && !PathSuffixes.exists(part.endsWith)
 
-  /** Whether `key`'s value must not be shown. */
+  /** Whether `key`'s value must not be shown: its own name holds a secret's word, or the name of an object it is in
+    * does, so that everything under `jwt-secret { … }` is hidden whole.
+    */
   def isSecret(key: String): Boolean =
-    val name = last(key)
     val full = key.toLowerCase(Locale.ROOT)
-    SecretKeys.exists(k => full == k || full.endsWith("." + k)) ||
-    (SecretWords.exists(name.contains) && !PathSuffixes.exists(name.endsWith))
+    SecretKeys.exists(k => full == k || full.endsWith("." + k)) || full.split('.').exists(holdsSecret)
 
-  /** `value` as it may be shown for `key`: hidden if the key holds a secret; without its user-info if it is a URL that
-    * has any, whatever the key (a URL with credentials in it is a secret wherever it is written); else as it is.
+  /** `value` as it may be shown for `key`: hidden if the key holds a secret; without the user-info of any URL in it,
+    * whatever the key (a URL with credentials in it is a secret wherever it is written); else as it is.
     */
   def show(key: String, value: String): String =
     if isSecret(key) then Hidden else withoutUserInfo(value)
 
-  /** A URL without the `user:password@` in it; anything else unchanged. */
-  def withoutUserInfo(value: String): String =
-    val trimmed = value.trim
-    val at = trimmed.indexOf("://")
-    if at <= 0 || !trimmed.take(at).forall(c => c.isLetterOrDigit || c == '+' || c == '-' || c == '.') then value
-    else
-      Try(new java.net.URI(trimmed)).toOption.filter(_.getRawUserInfo != null) match
-        case Some(uri) =>
-          val authority = uri.getRawAuthority
-          val bare = authority.drop(authority.lastIndexOf('@') + 1)
-          trimmed.replaceFirst(java.util.regex.Pattern.quote(authority), java.util.regex.Matcher.quoteReplacement(bare))
-        case None =>
-          // Not a URL the JDK parses: cut the user-info by hand, between the scheme and the first '@' before any '/'.
-          val rest = trimmed.drop(at + 3)
-          val slash = rest.indexOf('/')
-          val host = if slash < 0 then rest else rest.take(slash)
-          val mark = host.lastIndexOf('@')
-          if mark < 0 then value
-          else trimmed.take(at + 3) + host.drop(mark + 1) + (if slash < 0 then "" else rest.drop(slash))
+  // A scheme, `://`, then everything up to the LAST `@` before the URL's path, a blank or a quote: a password may hold
+  // an `@` or a comma. It stops where a comma is followed by another URL, so that each URL of a list is taken alone.
+  private val UserInfo = """(?i)([a-z][a-z0-9+.\-]*)://((?:(?!,[a-z][a-z0-9+.\-]*://)[^/\s"'<>])*)@""".r
+
+  private val NodeId = "[0-9a-fA-F]{128}".r
+
+  /** `text` with the `user:password@` taken out of every URL in it, wherever in it the URL stands; anything else
+    * unchanged. An enode's node id stands where a user would and is no credential: it stays.
+    */
+  def withoutUserInfo(text: String): String =
+    UserInfo.replaceAllIn(
+      text,
+      m =>
+        java.util.regex.Matcher.quoteReplacement(
+          if m.group(1).equalsIgnoreCase("enode") && NodeId.pattern.matcher(m.group(2)).matches() then m.matched
+          else m.group(1) + "://"
+        )
+    )
