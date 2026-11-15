@@ -15,10 +15,9 @@ $packageArgs = @{
 }
 Install-ChocolateyZipPackage @packageArgs
 
-# The zip holds fukuii-<version>\{bin,lib,conf,kanela-agent}. The launcher is a .bat, which Chocolatey does not shim
-# by itself; shim it, and hide the other files so only fukuii is put on the PATH.
+# The zip holds fukuii-<version>\{bin,lib,conf,kanela-agent}. Put fukuii on the PATH through tools\fukuii.cmd, which
+# picks a Java 25 for bin\fukuii.bat (see it), and hide every .exe in the distribution from the automatic shimming.
 $appDir = Join-Path $toolsDir "fukuii-$version"
-$launcher = Join-Path $appDir 'bin\fukuii.bat'
-if (-not (Test-Path $launcher)) { throw "fukuii: $launcher is missing from the release zip" }
+if (-not (Test-Path (Join-Path $appDir 'bin\fukuii.bat'))) { throw "fukuii: bin\fukuii.bat is missing from the release zip" }
 Get-ChildItem -Path $appDir -Recurse -Include *.exe | ForEach-Object { New-Item "$($_.FullName).ignore" -Type File -Force | Out-Null }
-Install-BinFile -Name 'fukuii' -Path $launcher
+Install-BinFile -Name 'fukuii' -Path (Join-Path $toolsDir 'fukuii.cmd')
