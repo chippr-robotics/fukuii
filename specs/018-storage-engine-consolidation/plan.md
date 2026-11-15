@@ -3503,6 +3503,45 @@ that reads as empty with rows of the hash store in it, which the unified layout 
 RocksDB: a directory written with the guard off is refused as the storages are built with it on, can be opened again
 at once, and holds no row the refusal wrote.
 
+#### C5a part 2: the window below a block, and ommers a node cannot check (2026-11-15)
+
+**B-283, a change of verdict on both layouts.** The ommers of a block are checked against its six ancestors whole: an
+ommer's parent must be one of them, and an ommer must not be one any of them used. After a sync that began from a
+pivot the bodies below the pivot are not stored, and the validator's walk back either never ended (a body missing in
+the middle) or handed the rules a short list. On a short list a valid ommer reads as one whose parent is no ancestor,
+and an ommer used before reads as new: **a valid block refused, or an invalid one accepted.**
+- **Fewer ancestors than the rule reads is no verdict**: `AncestorNotStored`, a fault of this node's state, thrown by
+  `StdOmmersValidator`. A block with no ommers reads no ancestor and is judged as it was. A block near the genesis is
+  checked against the ancestors there are.
+- **It is taken for a fault on every path**: a batch (it was caught there already), a single block
+  (`ConsensusAdapter.evaluateBranchBlock`, where it was a failed IO and the block was dropped), and **a block this
+  node builds takes no ommers** (the two block generators), as it does for ommers that are invalid: it threw there,
+  and a miner on a node that had synced from a pivot would have had no work until the bodies came (forge's blocker).
+- The walk back ends at the first block that is not stored.
+- A test pinned the old verdict with no ancestor at all; it pins the fault now.
+
+**Read by forge against core-geth**: on a node that holds its whole chain nothing differs. core-geth reads seven
+ancestors and this reads six blocks, which is the same rule: the parents of P to P-5 are P-1 to P-6, and an ommer in
+the body of P-6 is too old to be offered. core-geth breaks off its walk at a missing ancestor and judges on what it
+has; a core-geth node always has them.
+
+**The window** (`AncestorWindow.check`, T204's check): the 256 headers below a block, each found **by the hash its
+child names** (a header of another height at that hash is no ancestor; the index is not asked, since `BLOCKHASH`
+falls back to it only where the walk breaks, and answers zero where that is empty); and on a proof-of-work chain the
+bodies of the block and the five below it, **the block's own among them** (the tasks said six below). It reads only,
+and says what is missing: the highest header, and each body.
+
+**Not in this part**: fetching what is missing and holding a hand-off for it (`ensure`). It goes with the hand-off
+commit. **Until it does, nothing fetches those bodies** (the backfill runs up from the genesis, and by default only
+after the state is complete), so a block with ommers right above a pivot waits for the backfill. Forge reads that as
+no worse than before in all but one case (an empty pivot body and an ommer one level down, which "worked" by a check
+that could not see a reused ommer). **B-301: the fetch on both layouts, at the hand-off and on the fault; no release
+between this part and that.** B-302: read a body only where the ancestor's ommers hash says it has ommers, as
+core-geth does, which leaves few bodies to wait for.
+
+**The mutation run**: 9 mutants, 8 caught; the ninth is the same in what it comes to (the walk ends without the
+guard added to it). The block builders and the single block each have a case, added with forge's review.
+
 ### Destructive change (C8a and C8b): the vault protocol blocks
 
 ```
