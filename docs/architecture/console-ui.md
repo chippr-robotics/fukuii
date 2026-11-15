@@ -84,8 +84,7 @@ ones that matter more; the header, the alert row and the footer always stay.
 Nine views, chosen with `1` to `9`, with `[` and `]`, or by name at the `:` prompt. From 100 columns and 32 rows a
 sidebar down the left lists them and marks the one on screen. Its top corner carries the icon of the chain family the
 node is on, Ethereum Classic's mark or Ethereum's, with the network's name, `PoW` or `PoS`, the chain id and `main
-network` or `test network` in words under it; its last row names the graphics mode. Spec 029 is building these out a slice at a time; a view
-whose slice has not landed shows what the dashboard already reads for it and one line naming what is to come.
+network` or `test network` in words under it; its last row names the graphics mode.
 
 | Key | View | What it shows |
 |-----|------|---------------|
@@ -629,15 +628,119 @@ Motion (the worm's ripple, the `[ACTIVE]` pulse, spinners, the splash and the fi
 
 `TuiSpec`, `TuiUpdaterSpec` and `TuiStatusProbeSpec` (under `src/test/.../console/`) drive the real classes against an in-memory xterm (`TuiTestTerminal`) and stub actors; `TuiRendererSpec` and `TuiStateSpec` cover layout and state.
 
-## Future Enhancements
+## Screens
 
-Potential improvements for future releases:
+Two frames as the dashboard draws them at 120×40 with the ASCII glyph set. They are the test suite's own reference
+frames (`src/test/resources/tui/golden/`), so they are what the code draws today. In pixel and block mode the badge,
+the chain's icon and the mascot are drawn as images over the same text; the concept images are in
+`specs/029-tui-command-center/mockups/` and the art in `specs/029-tui-command-center/art-preview/`.
 
-- **Transaction Pool**: Details of the pending transactions (the count and blob count are on the Overview)
-- **Mining Status**: Show mining statistics when enabled
-- **Configuration**: Terminal settings and color schemes
-- **Log Viewer**: Browse recent log entries in the UI
-- **Performance Metrics**: CPU, memory, disk usage
+The Chain view of an Ethereum Classic node at the head:
+
+```text
+ # FUKUII  etc (61) . PoW . head 21,884,102 . 41/50 peers . up 12d 7h                                             Chain
+------------------------------------------------------------------------------------------------------------------------
+ + no alerts
+                  | Peers   41/50 ##########  Block  21,884,102 (at head)                    Txpool  142
+                  | Sync    + at head
+                  |-----------------------------------------------------------------------------------------------------
+                  | Chain   etc . chain id 61 . PoW . forks by block number
+       ETC        |-----------------------------------------------------------------------------------------------------
+                  | Forks (block)
+                  |   + Frontier           block 0
+                  |   + Homestead          block 1,150,000
+ etc              |   + EIP-150            block 2,500,000
+ PoW . id 61      |   + EIP-155            block 3,000,000
+ main network     |   + EIP-160            block 3,000,000
+                  |   + DiffBomb-Pause     block 3,000,000
+ [1] Overview     |   + DiffBomb-Continue  block 5,000,000
+ [2] Chain        |   + DiffBomb-Removal   block 5,900,000
+ [3] Peers        |   + Atlantis           block 8,772,000
+ [4] Mempool      |   + Agharta            block 9,573,000
+ [5] RPC          |   + Phoenix            block 10,500,839
+ [6] Storage      |   + ECIP-1099          block 11,700,000
+ [7] System       |   + Magneto            block 13,189,133
+ [8] Logs         |   + Mystique           block 14,525,000
+ [9] Ops          |   + Spiral             block 19,250,000
+                  |   . Olympia            not scheduled on this network
+ graphics text    |
+                  |
+                  |
+                  |
+                  |
+                  |
+                  |
+                  |
+                  |
+                  |
+                  |
+                  |
+                  |
+                  |
+ 1-9 view  Enter open  Esc back  : prompt  / filter  ? help  p pause  r redraw  d detach  q quit
+```
+
+The Ops view with a database check running:
+
+```text
+ # FUKUII  etc (61) . PoW . head 21,884,102 . 41/50 peers . up 12d 7h                                               Ops
+------------------------------------------------------------------------------------------------------------------------
+ + no alerts
+                  | Peers   41/50 ##########  Block  21,884,102 (at head)                    Txpool  142
+                  | Sync    + at head
+                  |-----------------------------------------------------------------------------------------------------
+                  | Mode    actions allowed . each is confirmed in its dialog
+       ETC        | Running dbcheck . 42s . checked 12,000 of 21,480 sample points
+                  |-----------------------------------------------------------------------------------------------------
+                  | Actions 25, by what they can break . Up and Down select . Enter or a types one at the prompt
+                  |   Observe  config        the effective configuration, secrets hidden
+ etc              |   Observe  tunables      what changes without a restart, as it is now
+ PoW . id 61      |   Observe  deps          each subsystem, what it needs, its health
+ main network     |   Observe  test-rpc      calls each RPC endpoint here: answer and time
+                  |   Observe  net           listening and external addresses, inbound peers
+ [1] Overview     |   Observe  art           every sprite
+ [2] Chain        |   Observe  lookup        a block, a transaction, a receipt or an account
+ [3] Peers        |   Adjust   loglevel      a logger's level, until the node restarts
+ [4] Mempool      |   Adjust   maxpeers      the limit on outgoing peers, until restart
+ [5] RPC          |   Adjust   peer trust    a peer is trusted: exempt from pruning
+ [6] Storage      |   Adjust   peer untrust  a peer stops being trusted
+ [7] System       |   Adjust   threshold     where an alert begins, for this session
+ [8] Logs         |   Disrupt  peer add      the node dials a peer and keeps dialling it
+ [9] Ops          |   Disrupt  peer drop     a peer is disconnected; it may reconnect
+                  |   Disrupt  peer block    an address is refused until restart
+ graphics text    |   Disrupt  peer unblock  an address stops being refused
+                  |   Disrupt  mining start  the node's own miner starts (ETC)
+                  |   Disrupt  coinbase      the address mined blocks pay from now on (ETC)
+                  |   Disrupt  rpc stop      a JSON-RPC server stops; its connections drop
+                  |   Disrupt  rpc start     a server that was stopped here listens again
+                  |   Disrupt  dbcheck       the start's database check, run now; it reports
+                  |   Disrupt  detect-ip     asks outside services for this node's address
+                  |   Disrupt  bundle        writes a support bundle under the datadir
+                  |   Halt     mining stop   the node's own miner stops until restart (ETC)
+                  |   Halt     quit          the node process ends
+                  |-----------------------------------------------------------------------------------------------------
+                  | Last    4 attempts in this session, the newest first
+                  |   11:58:00Z  peer add enode=enode://ab12@203.0.113.7:30303  FAILED: the peer manager refused the ..
+                  |   … 3 older attempts not shown at this height
+ 1-9 view  Enter open  Esc back  : prompt  / filter  ? help  p pause  r redraw  d detach  q quit
+```
+
+## What changed from the first dashboard
+
+An operator who knew the dashboard of spec 027 will meet four differences:
+
+- **Nine views, not five.** `1` to `9`: Overview, Chain, Peers, Mempool, RPC, Storage, System, Logs, Ops.
+- **`Tab` moves between the panels of a view.** It used to move between views; `[` and `]` do that now.
+- **`Q` asks before it stops the node.** It used to stop it at once. `Ctrl-C` still does.
+- **Stopping takes the word.** The dialog `Q` opens is confirmed by typing `stop` and `Enter`, not by `Y`.
+
+## Not in the dashboard
+
+- Starting or restarting the node, reloading its configuration, compacting the database, creating a snapshot,
+  changing the pruning mode or the state scheme: the [Ops](#ops) view lists each with its reason.
+- Starting the built-in miner: this client cannot start one that was off or was stopped.
+- A time limit on an action of its own: each node function an action calls has one.
+- The state of a UPnP port mapping in `net`: the node does not record it.
 
 ## Troubleshooting
 
