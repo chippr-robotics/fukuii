@@ -3171,6 +3171,46 @@ way says where the head is. Recorded: `OmmersValidator.getNBlocksBack` does not 
 time, so its branches settle as soon as they are heavier), and a `BLOCKHASH` or ommer vector across a fork: the
 ethereum/tests fork vectors are part 2's gate.
 
+#### C4e part 2: the side blocks a branch stands on are executed again when their state is gone (2026-11-15)
+
+A forward layer lives in memory: a restart loses every one, and after it a side block is stored with no state. A
+branch that stands on such blocks (`fork.parentSideChain`: its parent's ancestors that are not of the head's chain)
+was not judged, and never would be: on a proof-of-work chain a heavier valid chain refused for good (forge: not to be
+left out before the guard is on for any Mordor node).
+- **They are executed again**, in `reorganiseOnLayers`, ahead of the branch and **under the branch's pin**, from the
+  lowest one whose state is not held up (what stands on it is not held either; looked for under the pin, so nothing
+  found held is evicted before it is used), each validated in full and on its own parent's stored chain weight, as
+  core-geth executes a side chain's ancestors again when their state is gone (it skips the seal; this does not). Inline
+  and not through `StateRecovery`, which is the Engine API's, on its own thread: here the layers must be the pin's.
+- **A side block that is not stored whole**, or with no chain weight under it, is a fault of this node's state: the
+  branch is not judged, and waits.
+- **A side block that was accepted before and fails now** says nothing of the branch: this node's state or its
+  configuration is not what it was. `[STATE-REEXEC-DIVERGED]` at ERROR; nothing is reported invalid and no peer is
+  blamed; the block is remembered (in memory, until the node is started again), and a branch that stands on it is
+  refused at once and **not queued again**, so it is not executed again and again to the same end. What it should
+  become is the escalation's, C5a.
+- The settle and what the importer is told count the branch's blocks only.
+
+**The mutation run**: 6 mutants, 4 caught (the lost blocks not executed again, executed on the wrong weight, a diverged
+block not remembered, and the answer of whether a state is held), 2 the same in what they come to (a missing body left
+to the execution to find; a branch on a diverged block executed once more to the same refusal). The first test of this
+part passed without the change: after a reorganisation the queue hands the old branch's blocks back, so the branch
+arrived whole; the case now empties the queue, as a restart does.
+
+**Read after code (forge): APPROVE WITH CHANGES**, taken: the look under the pin; a missing body said as that; the
+divergence with its tag, remembered, the branch dropped. Full validation of a block accepted before is sound: every
+lookup it makes is by hash, and no rule compares a timestamp with the clock. Recorded: a branch whose side parents
+with it are more than the pinned bytes loops on `BranchTooLarge` until part 3; the transactions of the side blocks
+executed again are not told to the pool as mined (as on the hash layout; with B-253).
+
+**The core-geth parity scenarios of `ReorgBlockhashParitySpec` now run on both layouts**, on one genesis loaded as
+the node loads one: a heavier branch that fails mid-way with a lighter prefix (the head and the index stay, and the
+next block's `BLOCKHASH` is the old chain's); **a heavier prefix before an invalid block becomes the head** (W4 on
+layers, the case part 1 could not make in test mode); and a reorganisation back onto an orphaned block across a
+restart, with `BLOCKHASH` read by the block that is executed before the index is settled. **Not run**: the
+ethereum/tests fork vectors (bcMultiChain, bcTotalDifficulty, bcForkStress), whose fixtures are not in this checkout:
+they are the gate before the guard is on for a node (B-289).
+
 ### Destructive change (C8a and C8b): the vault protocol blocks
 
 ```
