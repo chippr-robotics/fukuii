@@ -141,7 +141,17 @@ jobs:
           Import-Module "$env:ChocolateyInstall\helpers\chocolateyProfile.psm1"; refreshenv
           java -version
           fukuii cli --help
-          if ($LASTEXITCODE -ne 0) { throw "fukuii cli --help exited $LASTEXITCODE" }
+          if ($LASTEXITCODE -ne 0) {
+            $code = $LASTEXITCODE
+            # Show the java command the launcher built: a copy of fukuii.bat, next to it, that echoes the command
+            # instead of running it.
+            $bat = Join-Path $env:ChocolateyInstall "lib\fukuii\tools\fukuii-$env:VERSION\bin\fukuii.bat"
+            $echo = "$bat.echo.bat"
+            (Get-Content $bat) -replace '^"%_JAVACMD%" ', 'echo JAVA COMMAND: "%_JAVACMD%" ' | Set-Content -Encoding ascii $echo
+            cmd /c "`"$echo`" cli --help"
+            Remove-Item $echo
+            throw "fukuii cli --help exited $code"
+          }
           choco uninstall fukuii -y --no-progress
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           if (Get-Command fukuii -ErrorAction SilentlyContinue) { throw 'the fukuii shim survived the uninstall' }
