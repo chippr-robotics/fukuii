@@ -54,9 +54,9 @@ final case class ActionRequest(action: String, params: Vector[(String, String)] 
   */
 final case class Preview(lines: Vector[String], refusal: Option[String] = None, figures: Vector[String] = Vector.empty):
 
-  /** Whether `other` says the same will change. The figures are left out: a peer's age or the best block's number
-    * moves every second, and a dialog that started again each time one did could never be confirmed (FR-050 asks
-    * again when what will change is different, not when a clock ticks).
+  /** Whether `other` says the same will change. The figures are left out: a peer's age or the best block's number moves
+    * every second, and a dialog that started again each time one did could never be confirmed (FR-050 asks again when
+    * what will change is different, not when a clock ticks).
     */
   def same(other: Preview): Boolean = lines == other.lines && refusal == other.refusal
 

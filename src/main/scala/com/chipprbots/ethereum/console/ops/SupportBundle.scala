@@ -106,10 +106,10 @@ object SupportBundle:
   /** The directory a bundle made at `at` goes to, under the data directory. */
   def directory(dataDir: Path, at: Instant): Path = dataDir.resolve("support").resolve(s"bundle-${Stamp.format(at)}")
 
-  /** Writes `contents` under `dir`, for the owner alone where the file system has such permissions: each directory
-    * and file is made with them, so nothing is readable by anyone else at any moment. Returns whether it has them: a
-    * file system without them (or one that would not say) gets the files with its defaults, and the result says so.
-    * A file that is already there is not written over: two bundles do not share a directory.
+  /** Writes `contents` under `dir`, for the owner alone where the file system has such permissions: each directory and
+    * file is made with them, so nothing is readable by anyone else at any moment. Returns whether it has them: a file
+    * system without them (or one that would not say) gets the files with its defaults, and the result says so. A file
+    * that is already there is not written over: two bundles do not share a directory.
     */
   private[ops] def write(dir: Path, contents: Seq[(String, String)]): Boolean =
     val dirOnly = PosixFilePermissions.asFileAttribute(PosixFilePermissions.fromString("rwx------"))

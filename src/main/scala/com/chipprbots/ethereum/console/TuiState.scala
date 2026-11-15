@@ -201,8 +201,8 @@ case class TuiState(
       case _ => merged
 
   /** The action whose confirmation is on screen, if one is: the runner reads its preview again every poll. */
-  /** Whether the built-in miner was running and is not any more: None while that is not known (no reading, or a
-    * miner that has not been seen running, which may only not have started yet).
+  /** Whether the built-in miner was running and is not any more: None while that is not known (no reading, or a miner
+    * that has not been seen running, which may only not have started yet).
     */
   def minerStopped: Option[Boolean] =
     snapshot.flatMap(_.local.mining).flatMap(_.minerRunning).map(running => !running && minerSeenRunning)

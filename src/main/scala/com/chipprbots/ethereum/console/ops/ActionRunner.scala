@@ -89,7 +89,11 @@ final class ActionRunner(
                       val p = handler.preview(request)
                       // A preview can quote a peer's client id or an address the operator typed: cleaned like any
                       // other text from outside the node.
-                      Preview(p.lines.map(Sanitize.line(_)), p.refusal.map(Sanitize.line(_)), p.figures.map(Sanitize.line(_)))
+                      Preview(
+                        p.lines.map(Sanitize.line(_)),
+                        p.refusal.map(Sanitize.line(_)),
+                        p.figures.map(Sanitize.line(_))
+                      )
                     catch
                       case NonFatal(e) => Preview(Vector.empty, Some(s"the preview could not be read: ${reason(e)}"))
             // A dialog that closed while this was read does not get its preview back.
@@ -140,7 +144,9 @@ final class ActionRunner(
             case None => ended(ActionOutcome.Refused(CarriedOutByDashboard))
             case Some(handler) =>
               try
-                (if observe then observeThread else actionThread).execute(() => carryOut(request, handler, observe, ended))
+                (if observe then observeThread else actionThread).execute(() =>
+                  carryOut(request, handler, observe, ended)
+                )
               catch
                 case _: java.util.concurrent.RejectedExecutionException =>
                   ended(ActionOutcome.Failed("the dashboard is closing"))
@@ -155,34 +161,34 @@ final class ActionRunner(
     // handler does not survive (an interrupt at shutdown, a stack overflow) included, and then thrown on.
     var outcome: ActionOutcome = ActionOutcome.Failed("it ended without saying how")
     try
-            progress(request, "running")
-            if LongRunning.contains(request.action) then audit(line(request, "started"))
-            outcome =
-              try
-                handler.run(request, said => progress(request, said)) match
-                  case Right(result) if observe =>
-                    // What it found is for its screen, a row a line; the audit line says only that it was read.
-                    val lines = result.split('\n').toVector.map(Sanitize.line(_, ReportLineChars))
-                    val _ = state.updateAndGet(v =>
-                      v.copy(reports = v.reports.updated(request.action, ActionReport(lines, clock.instant())))
-                    )
-                    ActionOutcome.Confirmed(s"${lines.size} lines")
-                  case Right(result) => ActionOutcome.Confirmed(Sanitize.line(result))
-                  case Left(why)     => ActionOutcome.Failed(Sanitize.line(why))
-              catch
-                case NonFatal(e) => ActionOutcome.Failed(reason(e))
-                case e: Throwable =>
-                  outcome = ActionOutcome.Failed(reason(e))
-                  throw e
-            // An Observe action that failed says so on its screen, where the operator is looking.
-            outcome match
-              case ActionOutcome.Failed(why) if observe =>
-                val _ = state.updateAndGet(v =>
-                  v.copy(reports =
-                    v.reports.updated(request.action, ActionReport(Vector(s"could not be read: $why"), clock.instant()))
-                  )
-                )
-              case _ => ()
+      progress(request, "running")
+      if LongRunning.contains(request.action) then audit(line(request, "started"))
+      outcome =
+        try
+          handler.run(request, said => progress(request, said)) match
+            case Right(result) if observe =>
+              // What it found is for its screen, a row a line; the audit line says only that it was read.
+              val lines = result.split('\n').toVector.map(Sanitize.line(_, ReportLineChars))
+              val _ = state.updateAndGet(v =>
+                v.copy(reports = v.reports.updated(request.action, ActionReport(lines, clock.instant())))
+              )
+              ActionOutcome.Confirmed(s"${lines.size} lines")
+            case Right(result) => ActionOutcome.Confirmed(Sanitize.line(result))
+            case Left(why)     => ActionOutcome.Failed(Sanitize.line(why))
+        catch
+          case NonFatal(e) => ActionOutcome.Failed(reason(e))
+          case e: Throwable =>
+            outcome = ActionOutcome.Failed(reason(e))
+            throw e
+      // An Observe action that failed says so on its screen, where the operator is looking.
+      outcome match
+        case ActionOutcome.Failed(why) if observe =>
+          val _ = state.updateAndGet(v =>
+            v.copy(reports =
+              v.reports.updated(request.action, ActionReport(Vector(s"could not be read: $why"), clock.instant()))
+            )
+          )
+        case _ => ()
     finally ended(outcome)
 
   private def progress(request: ActionRequest, said: String): Unit =

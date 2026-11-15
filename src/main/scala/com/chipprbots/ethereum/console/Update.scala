@@ -351,7 +351,7 @@ object Update:
                 // the first y says it was read, the second runs it.
                 case Key.Char('y' | 'Y') if confirmable && c.changed => set(c.copy(changed = false))
                 case Key.Char('y' | 'Y') if confirmable              => run
-                case Key.Char('n' | 'N') | Key.Backspace => cancel
+                case Key.Char('n' | 'N') | Key.Backspace             => cancel
                 // Anything else neither confirms nor cancels.
                 case _ => (s, Nil)
             case RiskClass.Halt =>

@@ -97,10 +97,10 @@ object Redaction:
           )
       )
 
-  /** Text that is no configuration value (a log line, a row of a view), or a value under a key that holds no secret,
-    * as it may be written to a frame or a file: no URL keeps its credentials, no query string its token, and no
-    * `Bearer` its credentials. What a secret looks like when nothing names it (64 hex digits) cannot be told from a
-    * hash, and is left.
+  /** Text that is no configuration value (a log line, a row of a view), or a value under a key that holds no secret, as
+    * it may be written to a frame or a file: no URL keeps its credentials, no query string its token, and no `Bearer`
+    * its credentials. What a secret looks like when nothing names it (64 hex digits) cannot be told from a hash, and is
+    * left.
     */
   def scrubbed(text: String): String =
     val noUser = withoutUserInfo(text)
