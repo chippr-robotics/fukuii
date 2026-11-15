@@ -3469,3 +3469,14 @@ items:
     links:
       spec: 018
     notes: "forge, C4e part 6. (W3) announces and mined blocks clear the branch being resolved and move the fetcher forward: drop ImportNewBlock while resolving, keep resolvingBranchFrom. (W4) the strict pick's upper bound is this node's head: a heavier but shorter peer branch never completes it; bound by min(head, failed block). (f) a lighter branch refetched in a loop. (g) strict pick vs the 512 ready cap in archive. Tests not built: the one-recovery-per-block latch, the answer held until the import ends. The refusal arm is a stall until C5a escalates"
+  - id: B-301
+    title: Fetch the ancestor window's bodies at a hand-off and on an AncestorNotStored fault, on both layouts
+    priority: P1
+    status: open
+    area: sync
+    size: M
+    opened: 2026-11-15
+    refs: []
+    links:
+      spec: 018
+    notes: "forge W2, C5a part 2 (B-283). Nothing fetches bodies P-5..P after SNAP: the backfill runs up from genesis. (1) the hand-off's ensure fetches them by hash on BOTH layouts (C5a part 5); (2) the importer's state-fault arm, on AncestorNotStored, asks for the bodies AncestorWindow.check(parent) names (a restart into regular sync skips the hand-off). No release between C5a part 2 and part 5"
