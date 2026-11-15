@@ -3369,3 +3369,14 @@ items:
     links:
       spec: 018
     notes: "forge, C4e part 3 review Q4: BranchExecutionFailure on every layout and arm; with B-253"
+  - id: B-292
+    title: Fault-injection tests for reverse-then-commit at the pinned cap (fault after commits, failed move back, partial first move)
+    priority: P2
+    status: open
+    area: consensus
+    size: M
+    opened: 2026-11-15
+    refs: []
+    links:
+      spec: 018
+    notes: forge N2, C4e part 3; before fukuii.state.path-live is on by default
