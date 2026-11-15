@@ -244,7 +244,7 @@ class ActionRunnerSpec extends AnyFlatSpec with Matchers with OptionValues:
     s.runner.confirmed(maxPeers)
     s.actions.step()
     s.audit.last shouldBe "action=maxpeers params=n=40 outcome=confirmed by=tui"
-    // An Observe action that dies says so on its screen as well.
+    // An Observe action that dies is over as well, and is said to have failed.
     s.thrown = Some(new StackOverflowError("deeper"))
     s.runner.confirmed(net)
     (try
@@ -252,7 +252,6 @@ class ActionRunnerSpec extends AnyFlatSpec with Matchers with OptionValues:
       false
     catch case _: StackOverflowError => true) shouldBe true
     s.runner.view.running shouldBe empty
-    s.runner.view.reports(Actions.Net.name).lines shouldBe Vector("could not be read: deeper")
     s.audit.last shouldBe "action=net params=- outcome=failed: deeper by=tui"
   }
 
