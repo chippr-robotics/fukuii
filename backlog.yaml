@@ -3280,3 +3280,16 @@ items:
     refs: []
     links: {}
     notes: Recorded by forge at spec 018 C4e; pre-existing on both layouts; a decision, not a defect to fix silently.
+  - id: B-285
+    title: StorageConsistencyChecker never reads the best block's own entry, and best.intValue wraps past 2^31-1
+    priority: P3
+    status: open
+    area: storage
+    size: S
+    opened: 2026-11-15
+    refs: []
+    links:
+      spec: specs/029-tui-command-center
+    notes: |-
+      nodebuilder/tooling/StorageConsistencyChecker.scan: Range(0, best.intValue, step) excludes best and overflows for a best above Int.MaxValue.
+      Found by vault in spec 029 slice 7; left as it was so the start-up check's behaviour did not change in that PR.
