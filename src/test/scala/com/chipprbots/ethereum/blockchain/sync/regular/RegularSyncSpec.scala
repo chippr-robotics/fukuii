@@ -104,6 +104,87 @@ class RegularSyncSpec
   val onTopFixtureResource: Resource[IO, OnTopFixture] =
     Resource.make(IO(new OnTopFixture))(fixture => IO(fixture.shutdownFixture()))
 
+  /** An importer on the unified state layout that has started a fork recovery for block 15, with the head at block 20
+    * and the common block at 10: what it does next is the resolver's answer, which the test gives it.
+    */
+  abstract class ForkRecoveryOnTheUnifiedLayout(
+      name: String,
+      refusal: Option[com.chipprbots.ethereum.db.storage.pathstate.ReorgTooDeep] = None
+  ) extends Fixture:
+    val capturedBest: BigInt = testBlocks.last.number.value
+    val lca: BigInt = BigInt(10)
+    val lcaHeader: BlockHeader = testBlocks.find(_.number.value == lca).get.header
+
+    override lazy val blockchainReader: BlockchainReader = stub[BlockchainReader]
+    (() => blockchainReader.getBestBlockNumber).when().returns(capturedBest)
+    (() => blockchainReader.getSnapSyncPivotBlock).when().returns(None)
+    (blockchainReader.getBlockHeaderByNumber(_: BigInt)).when(lca).returns(Some(lcaHeader))
+    (blockchainReader.getBlockHeaderByNumber(_: BigInt)).when(BigInt(0)).returns(Some(BlockHelpers.genesis.header))
+    testBlocks.filter(b => b.number.value > lca).foreach { b =>
+      (blockchainReader.getCanonicalHashByNumber(_: BigInt)).when(b.number.value).returns(Some(b.hash))
+    }
+    val abandoned: java.util.concurrent.ConcurrentLinkedQueue[(BigInt, ByteString)] =
+      new java.util.concurrent.ConcurrentLinkedQueue()
+    private val recordingReorgState = new com.chipprbots.ethereum.consensus.ReorgStateHandler:
+      override def abandonBlockStates(blocks: Seq[(BigInt, ByteString)]): Unit = blocks.foreach(abandoned.add(_))
+      override def readoptBlockStates(blocks: Seq[(BigInt, ByteString)]): Unit = ()
+
+    override lazy val blockchainWriter: BlockchainWriter = stub[BlockchainWriter]
+    (() => blockchainWriter.holdsStateInPlace).when().returns(true)
+    (blockchainWriter.refusalOfMoveBackTo(_: BlockHeader, _: BlockchainReader)).when(*, *).returns(refusal)
+
+    val importerFetcher: TestProbe = TestProbe(s"$name-fork-fetcher")
+    val importerSupervisor: TestProbe = TestProbe(s"$name-fork-supervisor")
+    private val importerBroadcaster: TestProbe = TestProbe(s"$name-fork-broadcaster")
+    private val forkBlockTopic = testKit.spawn(
+      org.apache.pekko.actor.typed.pubsub.Topic[com.chipprbots.ethereum.jsonrpc.NewBlockImported](s"$name-fork-topic"),
+      s"$name-fork-topic"
+    )
+    val importer: TypedActorRef[BlockImporter.Command] = testKit.spawn(
+      BlockImporter.apply(
+        importerFetcher.ref.toTyped[BlockFetcher.FetchCommand],
+        consensusAdapter,
+        blockchainReader,
+        blockchainWriter,
+        stateStorage,
+        evmCodeStorage,
+        branchResolution,
+        syncConfig,
+        ommersPool.ref.toTyped[com.chipprbots.ethereum.ommers.OmmersPool.Command],
+        importerBroadcaster.ref,
+        pendingTransactionsManager.ref.toTyped[com.chipprbots.ethereum.transactions.PendingTransactionsManager.Command],
+        forkBlockTopic,
+        importerSupervisor.ref,
+        peerEventBus.ref,
+        networkPeerManager.ref,
+        blockchain,
+        blacklist,
+        this,
+        None,
+        recordingReorgState,
+        exhausts = exhausts,
+        importLock = importLock
+      ),
+      s"$name-fork-recovery-importer"
+    )
+    importerFetcher.expectMsgClass(3.seconds, classOf[BlockFetcher.Start])
+    importerSupervisor.expectMsgClass(3.seconds, classOf[RegularSync.ProgressProtocol.StartingFrom])
+    importer ! BlockImporter.StartForkRecovery(BigInt(15))
+
+    /** What the fetcher, and the supervisor, were sent that no assertion has taken yet: until neither is sent more. */
+    def toTheFetcher(): Seq[Any] = importerFetcher.receiveWhile(max = 2.seconds, idle = 300.millis) { case m => m }
+    def toTheSupervisor(): Seq[Any] = importerSupervisor.receiveWhile(max = 2.seconds, idle = 300.millis) { case m =>
+      m
+    }
+
+    /** Neither the index, nor the best block, nor a block's reference counts. */
+    def nothingMoved(): Unit =
+      (blockchainWriter
+        .setCanonicalChainHead(_: BigInt, _: com.chipprbots.ethereum.domain.BlockHash, _: BigInt))
+        .verify(*, *, *)
+        .never()
+      abandoned.isEmpty shouldBe true
+
   def sync[T <: Fixture](test: => T): Future[Assertion] =
     import scala.concurrent.ExecutionContext.Implicits.global
     Future {
@@ -476,6 +557,73 @@ class RegularSyncSpec
           abandonedByRewind.asScala.toList shouldBe
             testBlocks.filter(_.number.value > lca).map(b => (b.number.value, b.hash.value))
 
+          testKit.stop(importer)
+      )
+
+      // Spec 018 C4e part 6 (the user's decision of 2026-11-15): on the unified state layout fork recovery moves no
+      // state. The head stays, the fetcher is sent back to the common block, and the peer's branch is judged by weight
+      // when it arrives. As the case above, driven by the resolver's answer.
+      "send the fetcher back to the common block and move nothing, on the unified state layout" taggedAs (
+        UnitTest,
+        SyncTest
+      ) in sync(
+        new ForkRecoveryOnTheUnifiedLayout("lca"):
+          importer ! BlockImporter.BranchResolverMsg(
+            FastSyncBranchResolverActor.BranchResolvedSuccessful(lca, defaultPeer)
+          )
+          val invalidate: InvalidateBlocksFrom = importerFetcher.fishForSpecificMessage(5.seconds) {
+            case m: BlockFetcher.InvalidateBlocksFrom => m
+          }
+          invalidate.fromBlock shouldBe lca + 1
+          invalidate.toBlacklist shouldBe None
+          // the next pick spans the fork: from the common block up to the head, which has not moved
+          val pick: BlockFetcher.StrictPickBlocks = importerFetcher.fishForSpecificMessage(5.seconds) {
+            case m: BlockFetcher.StrictPickBlocks => m
+          }
+          (pick.from, pick.atLEastWith) shouldBe (lca + 1, capturedBest)
+          nothingMoved()
+          testKit.stop(importer)
+      )
+
+      "send the fetcher back below the head and move nothing when no common block was found, on the unified state layout" taggedAs (
+        UnitTest,
+        SyncTest
+      ) in sync(
+        new ForkRecoveryOnTheUnifiedLayout("blind"):
+          importer ! BlockImporter.BranchResolverMsg(FastSyncBranchResolverActor.BranchResolutionFailed.noCommonBlock)
+          val invalidate: InvalidateBlocksFrom = importerFetcher.fishForSpecificMessage(5.seconds) {
+            case m: BlockFetcher.InvalidateBlocksFrom => m
+          }
+          // max(head - 128, the SNAP pivot) + 1
+          invalidate.fromBlock shouldBe BigInt(1)
+          invalidate.toBlacklist shouldBe None
+          nothingMoved()
+          // nothing is escalated: a state that cannot be synced again from here is the escalation's (C5a)
+          toTheSupervisor().collect { case stuck: SyncProtocol.RegularSyncStuck => stuck } shouldBe Nil
+          testKit.stop(importer)
+      )
+
+      "leave the fetcher where it is when the head could not be moved back to the common block, on the unified state layout" taggedAs (
+        UnitTest,
+        SyncTest
+      ) in sync(
+        new ForkRecoveryOnTheUnifiedLayout(
+          "deep",
+          refusal = Some(
+            new com.chipprbots.ethereum.db.storage.pathstate.ReorgTooDeep(
+              com.chipprbots.ethereum.db.storage.pathstate.ReorgRefusal.Deep,
+              "below what the records reach"
+            )
+          )
+        ):
+          importer ! BlockImporter.BranchResolverMsg(
+            FastSyncBranchResolverActor.BranchResolvedSuccessful(lca, defaultPeer)
+          )
+          // it goes on picking from where it was: no block is fetched again from the common block
+          importerFetcher.fishForSpecificMessage(5.seconds) { case m: BlockFetcher.PickBlocks => m }
+          toTheFetcher().collect { case m: BlockFetcher.InvalidateBlocksFrom => m } shouldBe Nil
+          nothingMoved()
+          toTheSupervisor().collect { case stuck: SyncProtocol.RegularSyncStuck => stuck } shouldBe Nil
           testKit.stop(importer)
       )
 

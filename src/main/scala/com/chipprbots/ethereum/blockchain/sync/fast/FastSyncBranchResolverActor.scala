@@ -119,7 +119,11 @@ object FastSyncBranchResolverActor:
       blockchain: Blockchain,
       blockchainReader: BlockchainReader,
       blacklist: Blacklist,
-      syncConfig: SyncConfig
+      syncConfig: SyncConfig,
+      // Whether this node's own blocks above the common block are removed once it is found. Not on the unified state
+      // layout, where a block is not taken off the chain apart from its state: the caller only learns the block
+      // (spec 018 C4e part 6).
+      discardDiverged: Boolean
   ): Behavior[Command] =
     Behaviors.setup { context =>
       Behaviors.withTimers { timers =>
@@ -153,7 +157,8 @@ object FastSyncBranchResolverActor:
           branchLogic,
           new RecentBlocksSearch(blockchainReader),
           syncConfig.blockHeadersPerRequest,
-          handshakedPeersAdapter
+          handshakedPeersAdapter,
+          discardDiverged
         )
 
         // Immediate poll, then periodic poll for handshaked peers (replaces PeerListSupportNg's scheduleWithFixedDelay).
@@ -194,7 +199,8 @@ object FastSyncBranchResolverActor:
       branchLogic: BranchLogic,
       recentBlocksSearch: RecentBlocksSearch,
       recentHeadersSize: Int,
-      handshakedPeersAdapter: TypedActorRef[NetworkPeerManagerActor.HandshakedPeers]
+      handshakedPeersAdapter: TypedActorRef[NetworkPeerManagerActor.HandshakedPeers],
+      discardDiverged: Boolean
   ):
     import BinarySearchSupport.*
 
@@ -335,7 +341,7 @@ object FastSyncBranchResolverActor:
         case None => stopWithFailure(BranchResolutionFailed.blockHeaderNotFound(childHeader.number.value))
 
     private def finalizeBranchResolver(firstCommonBlockNumber: BigInt, masterPeer: Peer): Behavior[Command] =
-      branchLogic.discardBlocksAfter(firstCommonBlockNumber)
+      if discardDiverged then branchLogic.discardBlocksAfter(firstCommonBlockNumber)
       log.info(s"Branch resolution completed with first common block number [$firstCommonBlockNumber]")
       replyTo ! BranchResolvedSuccessful(highestCommonBlockNumber = firstCommonBlockNumber, masterPeer = masterPeer)
       Behaviors.stopped

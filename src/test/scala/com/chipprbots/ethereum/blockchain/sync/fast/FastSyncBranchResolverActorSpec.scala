@@ -105,6 +105,44 @@ class FastSyncBranchResolverActorSpec
         yield response).unsafeRunSync()
         assert(getBestPeers.contains(response.masterPeer))
 
+      // Spec 018 C4e part 6: on the unified state layout the caller asks for the common block only. No block is taken
+      // off this node's chain: its head stays, and the peer's branch is judged by weight when it arrives.
+      "the common block is found and this node's blocks above it are left, when the caller keeps them" taggedAs (
+        UnitTest,
+        SyncTest
+      ) in new TestSetup:
+        implicit override lazy val system: ActorSystem = self.system.classicSystem
+        implicit override lazy val ioRuntime: IORuntime = IORuntime.global
+
+        val sender: TestProbe = TestProbe("sender")
+        val commonBlocks: List[Block] = BlockHelpers.generateChain(5, BlockHelpers.genesis, block => block)
+        val blocksSaved: List[Block] = commonBlocks :++ BlockHelpers.generateChain(1, commonBlocks.last, block => block)
+        val blocksSavedInPeer: List[Block] =
+          commonBlocks :++ BlockHelpers.generateChain(2, commonBlocks.last, block => block)
+        val firstBatchBlockHeaders: List[Block] =
+          blocksSavedInPeer.slice(blocksSavedInPeer.size - syncConfig.blockHeadersPerRequest, blocksSavedInPeer.size)
+
+        saveBlocks(blocksSaved)
+        val networkPeerManager: ActorRef = createNetworkPeerManager(handshakedPeers, Map(1 -> firstBatchBlockHeaders))
+        val fastSyncBranchResolver: TypedActorRef[FastSyncBranchResolverActor.Command] =
+          creatFastSyncBranchResolver(
+            sender.ref,
+            networkPeerManager,
+            CacheBasedBlacklist.empty(BlacklistMaxElements),
+            discardDiverged = false
+          )
+
+        fastSyncBranchResolver ! StartBranchResolver
+        sender.expectMsgPF(branchResolutionTimeout) {
+          case r @ BranchResolvedSuccessful(num, _) if num == BigInt(5) => r
+        }
+        stopController(fastSyncBranchResolver)
+        // the block above the common one is this node's still, and its head
+        blockchainReader.getBestBlockNumber shouldBe blocksSaved.last.number.value
+        blockchainReader.getBlockByHash(blocksSaved.last.hash) shouldBe Some(blocksSaved.last)
+        blockchainReader.getBlockHeaderByNumber(blocksSaved.last.number.value).map(_.hash) shouldBe
+          Some(blocksSaved.last.hash)
+
       "The chain is repaired doing binary searching with the new master peer and then remove the last invalid blocks" - {
         "highest common block is in the middle" taggedAs (UnitTest, SyncTest) in new TestSetup:
           implicit override lazy val system: ActorSystem = self.system.classicSystem
@@ -306,7 +344,8 @@ class FastSyncBranchResolverActorSpec
     def creatFastSyncBranchResolver(
         fastSync: ActorRef,
         networkPeerManager: ActorRef,
-        blacklist: Blacklist
+        blacklist: Blacklist,
+        discardDiverged: Boolean = true
     ): TypedActorRef[FastSyncBranchResolverActor.Command] =
       self.testKit.spawn(
         FastSyncBranchResolverActor(
@@ -316,7 +355,8 @@ class FastSyncBranchResolverActorSpec
           blockchain = blockchain,
           blockchainReader = blockchainReader,
           blacklist = blacklist,
-          syncConfig = syncConfig
+          syncConfig = syncConfig,
+          discardDiverged = discardDiverged
         ),
         s"fast-sync-branch-resolver-${java.util.UUID.randomUUID()}"
       )
