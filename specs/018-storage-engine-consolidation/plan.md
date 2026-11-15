@@ -3734,6 +3734,68 @@ already queued. The spec's rig has one peer, which is busy with the first reques
 order of what is left cannot be seen; it matters for the importer's route (part 9), which asks while a backfill
 runs, and is to be pinned there.
 
+#### C5a part 5b: a sync ends by a sample of its rows and one write (2026-11-15)
+
+The sync's half of the hand-off (T201, T199, the rest of B-243). **It does not run yet**: the controller's
+`handoff` is `None` until a sync starts on the unified layout (part 10), which is also where the recovery scans and
+the audit of the hash store are held off.
+
+**Where the code is, and why.** The split of spec 016 keeps its modules off the stores: no batch is built in
+`snap/controller`, a capability holds abstract members only and does not grow without a justification, and the
+count of storage references there is a ratchet (`scripts/snap-split/verify.sh`). So what is written is the storage
+layer's, **`db/storage/pathstate/SyncHandoff`**: `sample` (part 4), `windowMissing` (part 2's check over the header
+and body stores, by hash) and `commit` (the pivot's header and its place in the index, its weight, the best block,
+the recoveries' flags, the owed scan taken off the books, the heal's marker removed when no clean decision stands,
+handed to `commitHandoff` of part 5a). The finalization module passes it the pivot, a weight and three booleans. The
+seam is a member of the finalization's own state (`SnapFinalizationState.handoff`), not of `StateIngest`.
+
+**The order on the unified layout** (`SnapFinalization`):
+1. **The sample**, off the actor's thread; the controller answers status and progress meanwhile, as during a
+   publish. It is remembered **for the pivot and its state root**: the write that hands off names a root, and it is
+   the one that was looked at, or the sample is made again (beacon). When it stops the hand-off
+   (`PathHandoffSample.Stopped`) the parent restarts the sync, which heals from the root; **anything else it fails
+   with is a store that failed, and is thrown**: healing again does not mend it (beacon).
+2. The header hold, as today.
+3. **The window below the pivot** (part 2): the hand-off holds while a header of the 256 below it, or on a chain
+   where blocks above it may have ommers a body of the pivot and the five below it, is not stored. The bodies are
+   asked of the chain download on every tick (part 5c). **"May have ommers" is the chain having no terminal total
+   difficulty, or the pivot having a difficulty** (forge, beacon: a pivot before the merge on a chain that has one).
+   **The hold is its own** (forge, beacon): once the headers are at the pivot every tick leaves the header hold, and
+   a hold that leaned on it began again each time. **It does not hold for ever**: unchanged for the header hold's
+   stall time, the download is started again, and the third time the sync is given up to the parent.
+4. **The weight**: where fork choice is by weight, only an exact one (the stored weight, or the parent's and the
+   pivot's difficulty). **An estimate is never written beside the anchor** (forge, T243 brought forward): the sync
+   is given up instead. After the merge an estimate is taken, as today.
+5. **One synced write** (`SyncHandoff.commit`). Nothing before it but the pivot's own body, kept, derived or left as
+   `applyPivotBodyCheck` always did.
+A pivot whose header is not stored is refused on this layout: the old route there set the best block by its number
+alone, which here would be a node with no state that says it is synced.
+
+**The hash layout's path is the same code, moved**: the tail of `finalizeSnapSync` into `finishOnTheHashLayout`, and
+what both layouts need into `pivotWeight`, `excludedAtHandOff`, `recoveryFlags`, `finishedHandOff`. Forge read it
+line by line: the same writes in the same order, each value read when it was, the same early exits.
+
+**Read after code: forge and beacon, no blocker.** Taken: the hold of its own and its bound; the exact weight; the
+test for ommers; the sample kept by root; a store's failure thrown. **B-304** (P1, a gate on part 10): a sample that
+keeps failing restarts the sync with no bound, since only the same pivot is refused a second time; the parent counts
+them, and stops after three. For later parts: the header download must overwrite what the pivot's bootstrap left in
+the index below the pivot (part 10, forge); the catch-up after a hand-off needs the headers above the pivot and the
+consensus client's last head, which is kept only in memory today (part 8, beacon).
+
+**A rule of the repository this part cannot meet from this session's branch**: `verify.sh` lets files under
+`snap/controller` change only on a branch named `refactor/snap-016-*`, `test/snap-016-*`, `fix/*` or `hotfix/*`.
+Under such a name it passes; the user decides how this part is pushed.
+
+**Tests**: `StateIngestDurabilitySpec` (T199; 16 on this layout): one synced write after the rows under `archive`
+and `basic`, and every prefix of the writes that has the sync done has the anchor and the root's row; the hold for a
+body and for a header, and the hand-off when they come; no body asked for after the merge, and bodies asked for
+below a pivot that has a difficulty; the bodies asked of the download on every tick and the hold begun once; the
+restarts and the giving up; an estimated weight refused, and taken after the merge; a sample of another root; a
+store's failure thrown; the marker removed in the same write; no header, no hand-off. `SyncHandoffSpec` (8): what
+the one write holds. The tables of the controller's messages have the two new ones. **The mutation run**: 23
+mutants, 23 caught (one after a test was added: the code of the sampled accounts is looked for in the node's own
+store).
+
 ### Destructive change (C8a and C8b): the vault protocol blocks
 
 ```
