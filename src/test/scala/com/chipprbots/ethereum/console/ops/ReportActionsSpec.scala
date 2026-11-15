@@ -3,7 +3,6 @@ package com.chipprbots.ethereum.console.ops
 import java.net.InetAddress
 
 import scala.collection.mutable
-import scala.concurrent.ExecutionContext
 
 import org.scalatest.OptionValues
 import org.scalatest.flatspec.AnyFlatSpec
@@ -130,7 +129,6 @@ class ReportActionsSpec extends AnyFlatSpec with Matchers with OptionValues:
   private val detect = ActionRequest(Actions.DetectIp.name)
 
   /** Runs the detector on the caller's thread: the handler has its answer when it asks for it. */
-  private given ExecutionContext = ExecutionContext.parasitic
 
   /** 203.0.113.9, made of its bytes: no name is looked up. */
   private val outside: InetAddress = InetAddress.getByAddress(Array(203.toByte, 0.toByte, 113.toByte, 9.toByte))
