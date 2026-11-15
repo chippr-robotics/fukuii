@@ -6,7 +6,7 @@
 Lifecycle, vocabulary and closure procedure: [docs/development/spec-lifecycle.md](../docs/development/spec-lifecycle.md). Directories are never moved or renumbered; the Spec Kit
 scripts allocate the next number from the highest `NNN-` prefix present here.
 
-**29 specs**: Draft 2, Planned 4, Active 9, Done 7, Superseded 5, Parked 2.
+**29 specs**: Draft 2, Planned 4, Active 8, Done 8, Superseded 5, Parked 2.
 
 ## Open
 
@@ -28,7 +28,6 @@ Tasks are `done / open` boxes in `tasks.md`; a closed spec keeps its boxes as th
 | [026](./026-follower-roles/spec.md) | Follower Roles — `replica` and `archive` | Planned | 2026-11-03 | — | 0 / 84 | — | Clarified 2026-10-31; plan, `StateReplay` and follower-RPC contracts, 84 tasks. Phase C on today's layout after 025's file sink; archive (GT-2) in phase D; blocked on 013 §11 rows 2/6/8 for the production seed. |
 | [027](./027-tui-dashboard/spec.md) | TUI Dashboard — "the worm goes to the brain" | Active | 2026-11-10 | — | 132 / 18 | `feat/027-s5-chain-panels` (`dev-node`, local session): slice 5 in PR; then the all-slices UAT (B-189) and Phase 7 closure | Slice 1 (worms, glyphs, tiers) merged as #1752, slice 4a (peer scoring) as #1782, slice 2 (tick, motion, non-blocking loop) as #1783 slice 3 (views, layout, alerts) as #1784 and slice 4 (log tail, peer details) as #1787; slice 5 (consensus-layer and mining panels) is the last, one PR each, from the plan and 150 tasks merged as #1742. The manual gate runs (T029, T057, T081, T106, T123, T149) are one UAT across all slices once they are code complete (user, 2026-11-09; backlog B-189). |
 | [028](./028-builtin-ephemery-hoodi/spec.md) | Ephemery and Hoodi as Built-in Networks | Active | 2026-11-12 | — | 79 / 15 | `feat/028-s4b-refresh` (S4b, in review); then S5 live checks (`dev-node`) | Built from the user's decisions of 2026-11-12: bundle Ephemery with a |
-| [029](./029-tui-command-center/spec.md) | TUI Command Center | Active | 2026-11-14 | — | 111 / 7 | `ccr-452bbde8-2hrv25` (cloud session, B-280): slice 7, operator actions | The spec, plan, tasks and art merged as #1820, slice 1 (input and navigation) as #1834, slice 2 (graphics) as #1835, slice 3 (chain) as #1837, slice 4 (mempool) as #1839, slice 5 (RPC, Engine API, mining) as #1842; slice 6 (storage, system, health) as #1844; slice 7 (operator actions) is in review as #1847. |
 
 ## Closed
 
@@ -48,3 +47,4 @@ Tasks are `done / open` boxes in `tasks.md`; a closed spec keeps its boxes as th
 | [015](./015-rocksdb-memory-budget/spec.md) | One Bounded RocksDB Memory Budget, With Memory Gauges | Done | 2026-10-30 | — | 10 / 2 | Implemented: `db.rocksdb.memory-budget` and the write-buffer/partitioned-filter options in `conf/base/db.conf`; superseded in the long run by spec 018 DC-10 once RocksDB is removed. |
 | [016](./016-snap-controller-split/spec.md) | Split SNAPSyncController and the SNAP Coordinators into Phase Modules | Done | 2026-10-30 | 0.10.x | 67 / 39 | Complete (R1 #1622; spec 020 OQ-4/5 record it). The 39 unticked boxes are the S0 pins, the per-slice checklist template and T054–T056; T056 (lighter WAL) is now spec 018 E3. |
 | [017](./017-state-capabilities-witnesses/spec.md) | State Capabilities and Execution Witnesses | Parked | 2026-11-06 | — | — | Waits for execution-specs to release `ExecutionWitness` (today only on the `projects/zkevm` branch, draft PR #2268); reopens with `/speckit-specify` from the 2026-11-06 review below. (stub). Approved as a stub by the user on 2026-10-11. **Revised 2026-10-11** after the user's |
+| [029](./029-tui-command-center/spec.md) | TUI Command Center | Done | 2026-11-15 | — | 113 / 5 | Seven slices merged: #1834 (input and navigation), #1835 (graphics), #1837 (chain), #1839 (mempool), #1842 (RPC, Engine API, mining), #1844 (storage, system, health), #1847 (operator actions); the spec, plan and art as #1820; the closing records as #1848. Two criteria are recorded as not met as written: FR-054's `compact` is not offered (B-281), and SC-013's file list (tasks.md, T117). |

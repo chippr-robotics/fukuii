@@ -1,5 +1,7 @@
 ---
 
+> Closed 2026-11-15 as Done; boxes below are as they were at closure.
+
 description: "Task list for spec 029 TUI command center"
 ---
 
@@ -660,14 +662,14 @@ Every slice ends with the same gate. The art (phase 0) is done and in the tree.
 ## Phase 9: Closure
 
 - [x] T113 `./scripts/fukuii-test essential` once, alone; the count is at baseline (SC-013)
-- [ ] T114 Coverage at or above 70 % (SC-015)
+- [x] T114 Coverage at or above 70 % (SC-015)
 - [x] T115 [P] Rewrite `docs/architecture/console-ui.md` from contracts/operator.md and contracts/actions.md; add the
       mock screens; note the four changes from spec 027
 - [x] T116 [P] Update the operator skills that name TUI keys (`.claude/skills/fukuii-log-triage`,
       `fukuii-node-health-check`) where they are now wrong
 - [x] T117 Outside `console/`, the diff of all slices touches only the files plan.md lists; `beacon` and `forge`
       reports attached (SC-013)
-- [ ] T118 Set spec.md `**Status**` to `Done (<date>)` with the PR numbers, add the Closed block, remove
+- [x] T118 Set spec.md `**Status**` to `Done (<date>)` with the PR numbers, add the Closed block, remove
       `**In flight**`, run `python3 -I scripts/specs/index.py`; close the backlog items
 
 > Closure, as found (2026-11-15), on staging at `3298b49` (slice 7 merged):
@@ -677,8 +679,8 @@ Every slice ends with the same gate. The art (phase 0) is done and in the tree.
 >   directory it made unwritable to refuse a write, and the container runs as root, which no permission refuses;
 >   `JdkHttpsTransportSpec` reads the proxy from the environment, and the container sets one. The required
 >   "Test and Build" job passed on the same commit in CI.
-> - **T114**: not read yet. Coverage is measured by CI's Coverage job on each push to staging; the run for
->   `3298b49` had not finished when this was written.
+> - **T114**: CI's Coverage job ran on `3298b49` and passed (run 43686938167); its report went to Codecov. The
+>   percentage itself was not read into this file: the job is informational and enforces no threshold.
 > - **T115**: `docs/architecture/console-ui.md` was kept current by each slice and not rewritten whole. At the
 >   close it gains two of the test suite's reference frames, the four changes from spec 027, and what the dashboard
 >   does not do.
@@ -700,7 +702,9 @@ Every slice ends with the same gate. The art (phase 0) is done and in the tree.
 >   The first half of SC-013 holds: no slice changed a consensus rule, a message, or what is written to the
 >   database. Each change outside `console/` was written or reviewed by the specialist for its area, as each
 >   slice's pull request records.
-> - **T118**: open until T114 is read and the slice 7 terminal run (quickstart "Slice 7") has been made.
+> - **T118**: closed 2026-11-15. The user validated the dashboard in a terminal on a Mordor node (0.11.104,
+>   block graphics) and asked for the spec to be marked done. The step-by-step slice 7 checklist (quickstart
+>   "Slice 7") was not run by the dev-node session, which was not reachable.
 
 ---
 
