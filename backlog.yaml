@@ -3293,3 +3293,16 @@ items:
     notes: |-
       nodebuilder/tooling/StorageConsistencyChecker.scan: Range(0, best.intValue, step) excludes best and overflows for a best above Int.MaxValue.
       Found by vault in spec 029 slice 7; left as it was so the start-up check's behaviour did not change in that PR.
+  - id: B-286
+    title: "The blocked-ips configuration key is documented on BlockedIPRegistry and never read: the list starts empty"
+    priority: P3
+    status: open
+    area: p2p
+    size: S
+    opened: 2026-11-15
+    refs: []
+    links:
+      spec: specs/029-tui-command-center
+    notes: |-
+      NodeBuilder builds BlockedIPRegistry(Set.empty). admin_blockIP and the TUI's peer block work since B-277, until restart only.
+      Read the key at start, validate each address with AdminService.canonicalIp, and say in the TUI's tunables that the block is configured.
