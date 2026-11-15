@@ -25,25 +25,28 @@ class OperatorBlockingBlacklistSpec extends AnyFlatSpec with Matchers:
   "OperatorBlockingBlacklist" should "answer an OperatorBlock from the registry alone" taggedAs (
     UnitTest,
     NetworkTest
-  ) in
-    new Setup:
-      blacklist.isBlacklisted(OperatorBlock("10.0.0.1")) shouldBe true
-      blacklist.isBlacklisted(OperatorBlock("10.0.0.2")) shouldBe false
-      // An automatic entry for the address is not an operator block.
-      underlying.add(PeerAddress("10.0.0.2"), 10.minutes, BlacklistReason.TcpSubsystemError)
-      blacklist.isBlacklisted(OperatorBlock("10.0.0.2")) shouldBe false
-      // A block made after the decorator was built counts at once.
-      registry.block("10.0.0.3") shouldBe true
-      blacklist.isBlacklisted(OperatorBlock("10.0.0.3")) shouldBe true
-      registry.unblock("10.0.0.3") shouldBe true
-      blacklist.isBlacklisted(OperatorBlock("10.0.0.3")) shouldBe false
+  ) in (new Setup:
+    blacklist.isBlacklisted(OperatorBlock("10.0.0.1")) shouldBe true
+    blacklist.isBlacklisted(OperatorBlock("10.0.0.2")) shouldBe false
+    // An automatic entry for the address is not an operator block.
+    underlying.add(PeerAddress("10.0.0.2"), 10.minutes, BlacklistReason.TcpSubsystemError)
+    blacklist.isBlacklisted(OperatorBlock("10.0.0.2")) shouldBe false
+    // A block made after the decorator was built counts at once.
+    registry.block("10.0.0.3") shouldBe true
+    blacklist.isBlacklisted(OperatorBlock("10.0.0.3")) shouldBe true
+    registry.unblock("10.0.0.3") shouldBe true
+    blacklist.isBlacklisted(OperatorBlock("10.0.0.3")) shouldBe false
+  )
 
-  it should "answer a PeerAddress from the registry or the underlying blacklist" taggedAs (UnitTest, NetworkTest) in
-    new Setup:
+  it should "answer a PeerAddress from the registry or the underlying blacklist" taggedAs (
+    UnitTest,
+    NetworkTest
+  ) in (new Setup:
       blacklist.isBlacklisted(PeerAddress("10.0.0.1")) shouldBe true // registry only
       blacklist.isBlacklisted(PeerAddress("10.0.0.2")) shouldBe false
       underlying.add(PeerAddress("10.0.0.2"), 10.minutes, BlacklistReason.TcpSubsystemError)
       blacklist.isBlacklisted(PeerAddress("10.0.0.2")) shouldBe true // underlying only
+  )
 
   it should "leave other ids to the underlying blacklist" taggedAs (UnitTest, NetworkTest) in new Setup:
     val peer: BlacklistId = PeerId("ab" * 64)

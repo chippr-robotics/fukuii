@@ -48,6 +48,7 @@ import com.chipprbots.ethereum.network.PeerEventBusActor.PublishCmd
 import com.chipprbots.ethereum.network.PeerEventBusActor.SubscribeCmd
 import com.chipprbots.ethereum.network.PeerEventBusActor.SubscriptionClassifier.PeerHandshaked
 import com.chipprbots.ethereum.network.PeerEventBusActor.SubscriptionClassifier.WrongNetworkPeersClassifier
+import com.chipprbots.ethereum.network.PeerManagerActor.AdminState
 import com.chipprbots.ethereum.network.PeerManagerActor.PeerAddress
 import com.chipprbots.ethereum.network.PeerManagerActor.PeerConfiguration
 import com.chipprbots.ethereum.network.PeerManagerActor.Peers
@@ -1269,7 +1270,8 @@ class PeerManagerSpec
     NetworkTest
   ) in new TestSetup:
     start()
-    val state = testKit.createTestProbe[PeerManagerActor.AdminState]()
+    val state: org.apache.pekko.actor.testkit.typed.scaladsl.TestProbe[AdminState] =
+      testKit.createTestProbe[PeerManagerActor.AdminState]()
     peerManager ! PeerManagerActor.GetAdminStateCmd(state.ref)
     val before: PeerManagerActor.AdminState = state.receiveMessage()
     before.maxOutgoingOverride shouldBe None

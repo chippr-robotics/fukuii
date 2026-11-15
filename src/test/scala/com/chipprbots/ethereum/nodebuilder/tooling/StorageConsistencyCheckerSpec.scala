@@ -2,10 +2,9 @@ package com.chipprbots.ethereum.nodebuilder.tooling
 
 import org.apache.pekko.util.ByteString
 
+import com.typesafe.scalalogging.Logger
 import org.scalatest.matchers.should.Matchers
 import org.scalatest.wordspec.AnyWordSpec
-
-import com.typesafe.scalalogging.Logger
 
 import com.chipprbots.ethereum.Fixtures
 import com.chipprbots.ethereum.db.dataSource.EphemDataSource

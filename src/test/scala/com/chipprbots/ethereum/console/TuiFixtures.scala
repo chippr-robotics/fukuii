@@ -827,7 +827,11 @@ object TuiFixtures:
             ops.ActionOutcome.Confirmed("ROOT logs at DEBUG"),
             at(900)
           ),
-          ops.ActionRecord(ops.ActionRequest("rpc stop", Vector("transport" -> "http")), ops.ActionOutcome.Cancelled, at(600)),
+          ops.ActionRecord(
+            ops.ActionRequest("rpc stop", Vector("transport" -> "http")),
+            ops.ActionOutcome.Cancelled,
+            at(600)
+          ),
           ops.ActionRecord(
             ops.ActionRequest("mining start"),
             ops.ActionOutcome.Refused(ops.MiningActions.NoMinerToStart),
@@ -865,7 +869,9 @@ object TuiFixtures:
       "fukuii.sync.do-snap-sync = true"
     )
     state
-      .withActions(ops.ActionsView(reports = Map(ops.Actions.Config.name -> ops.ActionReport(rows, state.now.minusSeconds(60)))))
+      .withActions(
+        ops.ActionsView(reports = Map(ops.Actions.Config.name -> ops.ActionReport(rows, state.now.minusSeconds(60))))
+      )
       .copy(screens = List(Screen.Config(filter, 0)))
 
   // ---- Storage, System and health (spec 029 slice 6) ---------------------------------------------------------------

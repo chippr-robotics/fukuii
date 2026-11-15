@@ -14,9 +14,9 @@ object BundleInputs:
 
   /** A view as rows of text: ASCII glyphs, no colour, no motion, no overlay, trailing blanks dropped.
     *
-    * A view draws log lines (the Logs view, the Overview's Recent strip), and a log line may hold a URL that was
-    * logged with its credentials. They are taken out of the log lines before the view is drawn, since a row cut for
-    * width could leave a password with no `@` after it to find it by, and out of the rows after, for anything else.
+    * A view draws log lines (the Logs view, the Overview's Recent strip), and a log line may hold a URL that was logged
+    * with its credentials. They are taken out of the log lines before the view is drawn, since a row cut for width
+    * could leave a password with no `@` after it to find it by, and out of the rows after, for anything else.
     */
   def view(renderer: TuiRenderer, state: TuiState, view: TuiView): Seq[String] =
     val still = state

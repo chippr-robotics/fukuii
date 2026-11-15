@@ -14,8 +14,8 @@ import org.apache.pekko.http.scaladsl.model.ws.Message
 import org.apache.pekko.http.scaladsl.model.ws.TextMessage
 import org.apache.pekko.http.scaladsl.server.Directives.*
 import org.apache.pekko.http.scaladsl.server.Route
-import org.apache.pekko.stream.Materializer
 import org.apache.pekko.stream.KillSwitches
+import org.apache.pekko.stream.Materializer
 import org.apache.pekko.stream.OverflowStrategy
 import org.apache.pekko.stream.SharedKillSwitch
 import org.apache.pekko.stream.scaladsl.Flow

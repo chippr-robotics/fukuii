@@ -34,6 +34,7 @@ import com.chipprbots.ethereum.network.Peer
 import com.chipprbots.ethereum.network.PeerActor
 import com.chipprbots.ethereum.network.PeerId
 import com.chipprbots.ethereum.network.PeerManagerActor
+import com.chipprbots.ethereum.network.PeerManagerActor.Command
 import com.chipprbots.ethereum.testing.Tags.*
 import com.chipprbots.ethereum.utils.Config
 import com.chipprbots.ethereum.utils.NodeStatus
@@ -274,14 +275,14 @@ class AdminServiceSpec extends AnyFlatSpec with Matchers with BeforeAndAfterAll:
     sentToPeerManager() shouldBe empty
 
   it should "send a good enode to the peer manager" taggedAs UnitTest in new FakePeerSetup():
-    val enode = s"enode://${goodId.toUpperCase}@1.2.3.4:30303?discport=30301"
+    val enode: String = s"enode://${goodId.toUpperCase}@1.2.3.4:30303?discport=30301"
     service.addPeer(AdminService.AdminAddPeerRequest(enode)).unsafeRunSync() shouldBe
       Right(AdminService.AdminAddPeerResponse(true))
     service.addTrustedPeer(AdminService.AdminAddTrustedPeerRequest(enode)).unsafeRunSync() shouldBe
       Right(AdminService.AdminAddTrustedPeerResponse(true))
     service.removeTrustedPeer(AdminService.AdminRemoveTrustedPeerRequest(enode)).unsafeRunSync() shouldBe
       Right(AdminService.AdminRemoveTrustedPeerResponse(true))
-    val sent = sentToPeerManager()
+    val sent: List[Command] = sentToPeerManager()
     sent.collect { case PeerManagerActor.AddMaintainedPeerCmd(uri, _) => uri.getHost } shouldBe List("1.2.3.4")
     sent.collect { case PeerManagerActor.AddTrustedPeerCmd(uri, _) => uri.getPort } shouldBe List(30303)
     sent.collect { case PeerManagerActor.RemoveTrustedPeerCmd(nodeId, _) => nodeId } shouldBe List(goodId)

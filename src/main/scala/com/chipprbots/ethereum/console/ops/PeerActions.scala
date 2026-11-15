@@ -5,8 +5,8 @@ import java.util.Locale
 
 import com.chipprbots.ethereum.console.TuiPeer
 import com.chipprbots.ethereum.console.TuiState
-import com.chipprbots.ethereum.network.BlockedIPRegistry
 import com.chipprbots.ethereum.console.TuiText.formatShort
+import com.chipprbots.ethereum.network.BlockedIPRegistry
 
 /** The peer actions (spec 029 FR-054, contracts/actions.md): the limit on outgoing peers, trusting and untrusting,
   * adding, dropping, and blocking and unblocking an address. Each is carried out by the admin service's own function
@@ -81,8 +81,8 @@ object PeerActions:
 
   private def refused(why: String): Preview = Preview(Vector.empty, Some(why))
 
-  /** An address as the node writes it down, or None for what is no address written out. The block list holds
-    * addresses in this form ([[BlockedIPRegistry.canonical]]); no name is ever resolved.
+  /** An address as the node writes it down, or None for what is no address written out. The block list holds addresses
+    * in this form ([[BlockedIPRegistry.canonical]]); no name is ever resolved.
     */
   def canonical(address: String): Option[String] = BlockedIPRegistry.canonical(address)
 
@@ -225,7 +225,7 @@ object PeerActions:
       request =>
         val typed = request.param("address").getOrElse("")
         canonical(typed) match
-          case None                                            => refused(NotAnAddress(typed))
+          case None                                              => refused(NotAnAddress(typed))
           case Some(address) if node.blocked().contains(address) => refused(s"$address is already blocked")
           case Some(address) =>
             val s = state()
@@ -236,16 +236,16 @@ object PeerActions:
               .getOrElse(Nil)
               .filter(p => hostPort(p.address).flatMap(h => canonical(h._1)).contains(address))
             Preview(
-            Vector(
-              s"Blocks $address until this node restarts: connections from it are refused, and the node will not dial it.",
-              if there.isEmpty then "No connected peer is at that address now."
-              else
-                s"${there.size} connected peer${if there.size == 1 then "" else "s"} at it " +
-                  s"(${there.map(p => brief(p.id)).mkString(", ")}) ${if there.size == 1 then "is" else "are"} disconnected now."
-              ,
-              "Discovery (UDP) packets to and from it are not blocked."
+              Vector(
+                s"Blocks $address until this node restarts: connections from it are refused, and the node will not dial it.",
+                if there.isEmpty then "No connected peer is at that address now."
+                else
+                  s"${there.size} connected peer${if there.size == 1 then "" else "s"} at it " +
+                    s"(${there.map(p => brief(p.id)).mkString(", ")}) ${if there.size == 1 then "is" else "are"} disconnected now."
+                ,
+                "Discovery (UDP) packets to and from it are not blocked."
+              )
             )
-          )
       ,
       (request, _) =>
         node
