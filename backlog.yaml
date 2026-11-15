@@ -3435,3 +3435,14 @@ items:
     links:
       spec: 018
     notes: "beacon, C4e part 5. (1) at the cap / below the views: store the rest by hash, StateRecovery.requestFor(ForkChoice) via a late-bound handle. (2) Finalized / too-deep refusal re-queues forever: no re-queue (as divergedParent), importer treats it as permanent, FCM puts requestedHead back on FinalizedReversed. (3) race test importer move vs confirmHeldHead/StateRecovery. (4) lost side parents told in the new branch. (5) hive engine Re-Org Sync suites on path-live"
+  - id: B-298
+    title: "SYNC-FORK on the hash layout: clamp the resolver's LCA, choose the master peer by weight, judge the peer's branch by weight"
+    priority: P1
+    status: open
+    area: sync
+    size: M
+    opened: 2026-11-15
+    refs: []
+    links:
+      spec: 018
+    notes: forge, C4e part 6 pre-code. The LCA arm has no depth clamp and the resolver discards before any weight comparison; needs its own consult. With B-248
