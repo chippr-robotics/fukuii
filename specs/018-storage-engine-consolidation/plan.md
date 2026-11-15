@@ -503,6 +503,7 @@ that owns it (the next section), and there is no round 3. The letters are the re
 - *Reconciliation (forge item 3b against 6.4).* Forge wrote that above the pinned bytes "the recorded reverse-then-commit fallback is
   taken". The design had `BranchTooLarge` (retryable, never invalid) as the default over the cap and reverse-then-commit as the
   recorded alternative, switched on only if M13 shows real branches above it. It stays that way; forge confirms at C4e.
+  *(Superseded by the user's decision 1 of 2026-11-12, reverse-then-commit as the rule at the cap; forge confirmed it at C4e, 2026-11-15.)*
 - *Hysteresis.* "N consecutive FCUs, or about 2 epochs" is one key, `escalation-refusals = 64`, which is 2 epochs at one
   `forkchoiceUpdated` per 12 s slot.
 - *EIP-8246 pass count.* Beacon asked for it on the ported harness; that harness is C3c, after C0, so C0 records the count on the pinned
@@ -3089,6 +3090,86 @@ is no reversal (it was, for a head below that height); the walk stops at the fir
 `startingBlock` is the fork (the old head could be above the tip); the safe tag's walk reads headers. Cases: a head
 beside the index below the finalized block (-38002), with the index's place emptied (SYNCING), a head whose parent is
 not known (SYNCING), and a finalized block the branch holds (the adoption goes on).
+
+### C4e: the PoW arms, as it is to be built (2026-11-15)
+
+Forge's decomposition, before code (C4e is forge-first). What the guard did, read in the code: the only way to a
+reorganisation in a running node is test mode (`test_importRawBlock`, `test_mineBlocks`); the first block of a heavier
+branch was refused before it ran (a block not adopted as it is executed), so the ethereum/tests fork vectors failed
+there. A chain import refuses side blocks without asking the fork choice, mining is refused at start, and regular
+sync's importer is not started on the guard (C5, C6).
+
+**The design is the user's decision 1 of 2026-11-12** (above, "Two decisions part 4 could not be designed without"):
+**execute first, on pinned layers; reverse-then-commit as the rule when the cap is hit.** It supersedes the
+reconciliation note under the S0 records ("`BranchTooLarge` is the default over the cap ... forge confirms at C4e") and
+the wording of T177 and T189: forge confirms that `BranchTooLarge` is never the last word for a heavier branch. Not
+reverse-then-commit always: a fork of one or two blocks is routine on ETC, and committing it in place would write the
+disk down and up, show readers a lighter head and open a generation pause each time; execute-first leaves the old head
+untouched when a branch turns out lighter or invalid, as core-geth keeps its head until a side chain's total difficulty
+exceeds it.
+
+The parts, in order, each mergeable alone:
+- **Part 1, the reorganisation on pinned layers**: a block not adopted as it is executed is staged apart and stored by
+  its hash only (I6, B-250); the settle is one move of the head; a refusal up front on the reverse depth; every fault of
+  the state is no verdict.
+- **Part 2, a side parent whose state is not held** (T180, T187): `fork.parentSideChain` blocks with neither layer nor
+  record are executed again before the branch (`StateRecovery`). **Not to be left out before the guard is on for any
+  Mordor node** (forge): layers are in memory, so after a restart a branch on a stored side block would be refused for
+  good.
+- **Part 3, the cap**: one in-place adoption core shared with `StateRecovery.adopt` (its failure policy: keep the
+  committed prefix when it is heavier, W4, for proof of work; back to the followed head for proof of stake), taken
+  when a branch's pinned layers would be more than they may (`BranchTooLarge`). The same warning as part 2.
+- **Part 4, deep moves in `archive`, the attempt-wide latch and the miners' readers** (T183, T184, T190): a miner reads
+  before and after it builds and discards a build a move overtook; the Engine API's builder builds on a named
+  parent's view and needs no pause.
+- **Part 5, the designated-head arm** (T170, T159's first half; beacon).
+- **Part 6, `SYNC-FORK`** (T181, T188). **The user's decision of 2026-11-15: no state is moved on fork detection.**
+  The importer's blind rewind lowers the best block and then adopts the peer's branch block by block, which skips the
+  weight rule, and core-geth never sets its head back on detecting a fork. The fetcher is reset from the common
+  ancestor and the reorganisation judges the branch by weight. The rewind's history (it unsticks a fetcher on an
+  unknown parent) is traced first, and that purpose kept.
+- **The PoW escalation** (T182's second half) **is folded into C5a with the PoS trigger** (the user's decision of
+  2026-11-15): there is nothing to escalate to before it. C4e says `[STATE-REORG-TOO-DEEP]` at ERROR.
+
+Recorded, not changed: on equal total difficulty core-geth prefers the lower block number, then chooses at random;
+fukuii keeps its head, on both layouts (B-284). ECIP-1017 rewards do not depend on the layout.
+
+#### C4e part 1: a heavier branch is executed on pinned layers and adopted by one move (2026-11-15)
+
+- **A block that is not adopted as it is executed** (`BlockExecution.executeAndCommit` with `adoptEachBlock = false`)
+  is, on the unified layout, staged apart, on the state of its parent wherever that is held, validated in full, then
+  **stored by its hash only** with its receipts, chain weight and access list, and its state kept as a forward layer
+  held by its branch's pin. Nothing writes the index of blocks by number but a move of the head (I6; B-250), and an
+  unadopted block has no transaction lookups. The refusal of such a block (`refuseUnadopted`) is gone.
+- **The reorganisation** (`ConsensusImpl.reorganiseOnLayers`; the hash layout's is the code it was, moved under its
+  own name). **Refused before a block runs** when the head cannot be moved back to the block the branch leaves the
+  chain at (deeper than the records reach, past the finalized block or the state's origin, records lost): this node's
+  own condition, the branch not judged, `[STATE-REORG-TOO-DEEP]` (`[STATE-RECORDS-CORRUPT]` for its own records).
+  Otherwise the branch is executed under one pin, and when what executed outweighs the old head (strictly, as before),
+  **one move of the head** takes the state, the best block and the index across, before the pin is released. A prefix
+  that does not outweigh it leaves the old head exactly as it was, its layers kept for the next attempt (W4 on layers:
+  nothing was committed, so there is nothing to take back). **On a fault of the state nothing moves**, whatever was
+  executed before it, a trie error included, and the whole branch waits to be tried again; so the importer is never
+  told of a fault with the head moved (B-242 cannot arise here).
+- It runs on a thread that may block: the move waits for the state lock and for a move under way.
+- The designated-head arm is refused as before, as this node's condition, until part 5.
+
+**The mutation run**: 10 mutants, all caught: a side block indexed by number, its receipts or its weight not stored,
+its layer not kept, the block staged in place, no refusal up front, the head not moved to a heavier branch or moved to
+a prefix that is not heavier, the hash layout taking the layers' arm, and the layer not its pin's (it survived the
+first run: a branch of five on a budget of two unpinned layers is its case).
+
+**Read before code and after (forge): APPROVE WITH CHANGES**, all taken. No lighter or invalid chain can become the
+head: the weight test is the hash layout's, an invalid block is never committed, and a recorded execution is reused
+only for a block that passed. A side block's header, ommers and `BLOCKHASH` resolve by parent hash, never by the index,
+and every block of the branch is stored by hash before the next runs, so the fallback to the index in
+`AncestorBlockHashes` is not reached. No lock cycle. Taken: a trie error is looked for before the weight test (it
+moved the head and then answered a fault); a refusal for corrupt records has its own tag; a move that stops part of the
+way says where the head is. Recorded: `OmmersValidator.getNBlocksBack` does not end when an ancestor's body is missing
+(B-283, on both layouts); holding the chain insert lock across the move before the Engine API shares this path.
+**Not covered**: a heavier prefix followed by an invalid block in one branch (test mode hands blocks over one at a
+time, so its branches settle as soon as they are heavier), and a `BLOCKHASH` or ommer vector across a fork: the
+ethereum/tests fork vectors are part 2's gate.
 
 ### Destructive change (C8a and C8b): the vault protocol blocks
 

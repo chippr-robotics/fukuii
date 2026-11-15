@@ -12,7 +12,11 @@ import com.chipprbots.ethereum.consensus.Consensus.*
 import com.chipprbots.ethereum.consensus.ConsensusImpl.ForkPoint
 import com.chipprbots.ethereum.consensus.engine.DesignatedHead
 import com.chipprbots.ethereum.consensus.engine.InvalidChainReporter
+import com.chipprbots.ethereum.db.storage.pathstate.BranchPin
+import com.chipprbots.ethereum.db.storage.pathstate.ReorgRefusal
+import com.chipprbots.ethereum.db.storage.pathstate.ReorgTooDeep
 import com.chipprbots.ethereum.db.storage.pathstate.StateFault
+import com.chipprbots.ethereum.db.storage.pathstate.StateUnavailable
 import com.chipprbots.ethereum.domain.Block
 import com.chipprbots.ethereum.domain.BlockAccessList
 import com.chipprbots.ethereum.domain.BlockHash
@@ -163,6 +167,10 @@ class ConsensusImpl(
     val consensusResult: IO[ConsensusResult] =
       if currentBestHeader.hash == branch.head.header.parentHash then
         IO.delay(importToTop(branch, currentBestBlockWeight, accessLists)).evalOn(blockExecutionScheduler.compute)
+      else if blockchainReader.holdsStateInPlace then
+        // on the unified layout a branch that is adopted moves the head with the state, under the state lock and
+        // behind any move under way: on a thread that may block (spec 018 C4e; forge)
+        IO.blocking(importToNewBranch(branch, currentBestHeader.number.value, currentBestBlockWeight, accessLists))
       else
         IO
           .delay(importToNewBranch(branch, currentBestHeader.number.value, currentBestBlockWeight, accessLists))
@@ -303,10 +311,12 @@ class ConsensusImpl(
       blocks: List[Block],
       parentWeight: ChainWeight,
       adoptEachBlock: Boolean,
-      accessLists: Map[ByteString, BlockAccessList]
+      accessLists: Map[ByteString, BlockAccessList],
+      pin: Option[BranchPin] = None
   )(implicit blockchainConfig: BlockchainConfig): BlockExecution.BatchOutcome =
     val (executed, error) =
-      if accessLists.isEmpty then blockExecution.executeAndValidateBlocks(blocks, parentWeight, adoptEachBlock)
+      if pin.isDefined then blockExecution.executeAndValidateBranch(blocks, parentWeight, accessLists, pin)
+      else if accessLists.isEmpty then blockExecution.executeAndValidateBlocks(blocks, parentWeight, adoptEachBlock)
       else blockExecution.executeAndValidateBlocksWithAccessLists(blocks, parentWeight, adoptEachBlock, accessLists)
     // A fault of this node's state is taken out of the errors here, once, so that no arm below that judges a block
     // by its error (and reports it invalid) can be handed one.
@@ -334,6 +344,179 @@ class ConsensusImpl(
   // `settleHead` then decides, after execution, which head the node keeps and makes the canonical index exactly that
   // head's ancestry (core-geth writeBlockAndSetHead + reorg()). Old blocks stay in the DB either way.
   private def reorganise(
+      bestBlockNumber: BigInt,
+      bestBlockWeight: ChainWeight,
+      newBranch: NonEmptyList[Block],
+      parentWeight: ChainWeight,
+      parentHash: BlockHash,
+      selectedByWeight: Boolean,
+      accessLists: Map[ByteString, BlockAccessList]
+  )(implicit
+      blockchainConfig: BlockchainConfig
+  ): ConsensusResult =
+    if blockchainReader.holdsStateInPlace then
+      reorganiseOnLayers(
+        bestBlockNumber,
+        bestBlockWeight,
+        newBranch,
+        parentWeight,
+        parentHash,
+        selectedByWeight,
+        accessLists
+      )
+    else
+      reorganiseOnTheHashLayout(
+        bestBlockNumber,
+        bestBlockWeight,
+        newBranch,
+        parentWeight,
+        parentHash,
+        selectedByWeight,
+        accessLists
+      )
+
+  /** The reorganisation on the unified state layout (spec 018 C4e; the user's decision of 2026-11-12, plan.md "C4a part
+    * 4"): execute first, on layers.
+    *
+    * The branch's blocks are executed apart, each kept as a forward layer beside the state the disk holds and stored by
+    * its hash only, with the layers held by one pin until the branch is settled. Nothing of the head moves meanwhile:
+    * its state, the best block and the index of blocks by number stay the old head's, as core-geth keeps its head until
+    * a side chain's total difficulty exceeds it. Then, when what was executed outweighs the old head, '''one move of
+    * the head''' takes the state, the best block and the index across (back along the records to the fork, forward over
+    * the layers; `BlockchainWriter.moveHeadInPlace`). An executed prefix that does not outweigh it (a block of the
+    * branch failed) leaves the old head exactly as it was, with the prefix's layers kept for the next attempt.
+    *
+    * '''Refused before anything is executed''' when the move back to the fork is not one this node can make: deeper
+    * than its changeset records reach, past the finalized block or the block its state began at (the reverse depth,
+    * never the branch's length). That is this node's own condition: the branch is not judged, and no block is reported
+    * invalid. So is every fault of the state met on the way.
+    *
+    * The branch a consensus layer designates (`!selectedByWeight`, never on ETC) is not adopted here yet: C4e part 5.
+    */
+  private def reorganiseOnLayers(
+      bestBlockNumber: BigInt,
+      bestBlockWeight: ChainWeight,
+      newBranch: NonEmptyList[Block],
+      parentWeight: ChainWeight,
+      parentHash: BlockHash,
+      selectedByWeight: Boolean,
+      accessLists: Map[ByteString, BlockAccessList]
+  )(implicit blockchainConfig: BlockchainConfig): ConsensusResult =
+    def notJudged(fault: StateFault): ConsensusResult =
+      log.warn(
+        "[STATE-FAULT] REORG blocks [{}-{}] not judged, this node's own state could not take them: {}",
+        newBranch.head.number,
+        newBranch.last.number,
+        fault.getMessage
+      )
+      // the whole branch waits to be tried again: what of it was executed is kept, by its layers, and is not executed
+      // twice
+      ConsensusStateFault(fault, Nil, newBranch.toList)
+
+    val fork = locateFork(parentHash, newBranch.head.number.value - 1)
+    val forkHeader =
+      blockchainReader.getCanonicalHashByNumber(fork.number).flatMap(blockchainReader.getBlockHeaderByHash)
+    val refusedUpFront: Option[StateFault] =
+      if !selectedByWeight then
+        Some(
+          new StateUnavailable(
+            s"the branch to block ${newBranch.last.number} is the consensus layer's and not a heavier one: it is " +
+              "followed through the Engine API on the unified state layout"
+          )
+        )
+      else
+        forkHeader match
+          case None =>
+            Some(
+              new StateUnavailable(s"the block the branch leaves the chain at, at height ${fork.number}, is not stored")
+            )
+          case Some(header) => blockchainWriter.refusalOfMoveBackTo(header, blockchainReader)
+    refusedUpFront match
+      case Some(refused) =>
+        refused match
+          case corrupt: ReorgTooDeep if corrupt.reason == ReorgRefusal.Corrupt =>
+            // this datadir's own records, not the depth of the fork: said as that (forge)
+            log.error(
+              "[STATE-RECORDS-CORRUPT] A heavier branch [{}-{}] leaves the chain at block {}, and the changeset records " +
+                "that lead back to it are not what they should be: {}. Nothing was executed and nothing moved",
+              newBranch.head.number,
+              newBranch.last.number,
+              fork.number,
+              corrupt.getMessage
+            )
+          case tooDeep: ReorgTooDeep =>
+            log.error(
+              "[STATE-REORG-TOO-DEEP] A heavier branch [{}-{}] leaves the chain at block {}, {} block(s) below the " +
+                "head {}: {}. Nothing was executed and nothing moved",
+              newBranch.head.number,
+              newBranch.last.number,
+              fork.number,
+              bestBlockNumber - fork.number,
+              bestBlockNumber,
+              tooDeep.getMessage
+            )
+          case _ => ()
+        notJudged(refused)
+      case None =>
+        val oldCanonical: List[(BigInt, BlockHash)] =
+          ((fork.number + 1) to bestBlockNumber).toList.flatMap(n =>
+            blockchainReader.getCanonicalHashByNumber(n).map(n -> _)
+          )
+        val oldBlocksData = collectOldBranch(oldCanonical)
+        try
+          blockchainWriter.withPinnedBranch(s"the reorganisation to block ${newBranch.last.number}") { pin =>
+            val outcome = executeBranch(newBranch.toList, parentWeight, adoptEachBlock = false, accessLists, pin)
+            val executed = outcome.executed
+            // a trie error on this layout is the node's own state's, never the block's: a fault like any other
+            val fault: Option[StateFault] = outcome.stateFault.orElse(outcome.error.collect { case MPTError(reason) =>
+              new StateUnavailable(s"a trie read failed during the execution of the branch: $reason")
+            })
+            fault match
+              // nothing is moved on a fault, whatever was executed before it: the old head stands, and the layers wait
+              // for the next attempt (so the importer is never told of a fault with the head moved; forge)
+              case Some(fault) => notJudged(fault)
+              case None =>
+                val executedWeight = executed.foldLeft(parentWeight)((w, b) => w.increase(b.block.header))
+                executed.lastOption match
+                  case Some(tip) if executedWeight > bestBlockWeight =>
+                    // the move, before the pin is released: the layers it applies are still held
+                    val moved =
+                      try blockchainWriter.moveHeadInPlace(tip.block.header, blockchainReader)
+                      catch
+                        case failed: StateFault =>
+                          // a move of several batches may have written some: where the head is now is said, and the
+                          // next attempt moves on from it
+                          log.error(
+                            "[STATE-FAULT] REORG: the move of the head to block {} stopped, and the best block is now {}: {}",
+                            tip.block.number,
+                            blockchainReader.getBestBlockNumber,
+                            failed.getMessage
+                          )
+                          throw failed
+                    log.info(
+                      "REORG-SETTLE: fork={} oldHead={} tip={} executed={} ({})",
+                      fork.number,
+                      bestBlockNumber,
+                      tip.block.number,
+                      executed.size,
+                      moved
+                    )
+                  case Some(tip) =>
+                    log.warn(
+                      "REORG-PARTIAL: executed blocks {}-{} do not outweigh the current head {}: it is kept, and their " +
+                        "state stays beside it",
+                      executed.head.block.number,
+                      tip.block.number,
+                      bestBlockNumber
+                    )
+                  case None => ()
+                val settled = executed.lastOption.exists(_ => executedWeight > bestBlockWeight)
+                reorganised(newBranch, if settled then oldBlocksData else Nil, executed, outcome.error)
+          }
+        catch case fault: StateFault => notJudged(fault)
+
+  // Execute-first reorganise — reference client pattern (go-ethereum/Besu/Nethermind).
+  private def reorganiseOnTheHashLayout(
       bestBlockNumber: BigInt,
       bestBlockWeight: ChainWeight,
       newBranch: NonEmptyList[Block],

@@ -1,0 +1,199 @@
+name: Chocolatey
+
+# Publishes a GitHub release to the Chocolatey community repository (https://community.chocolatey.org/packages/fukuii).
+#
+# The package (packaging/chocolatey) carries no binaries: its install script downloads the release's
+# fukuii-<version>.zip from GitHub and checks it against the SHA-256 that this workflow takes from the release's
+# SHA256SUMS.txt. Java 25 comes from the temurin25jre package. The packaging comes from this workflow's ref, not from the
+# release tag.
+#
+# The push key is the CHOCOLATEY_API secret of the CHOCOLATEY_NUPKG environment. The community repository moderates
+# every version before it is listed; the first version of a new package waits for a human moderator.
+
+on:
+  # A release created by release.yml's GITHUB_TOKEN does not emit a `release` event to other workflows, so follow
+  # the Release workflow instead and publish the newest full (non-pre-release) release it produced.
+  workflow_run:
+    workflows: ["Release"]
+    types: [completed]
+  # A change to the packaging is packed and installed on Windows (the newest full release), never pushed.
+  pull_request:
+    paths:
+      - "packaging/chocolatey/**"
+      - ".github/workflows/chocolatey.yml"
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Release version to publish, without the v (for example 0.11.0)"
+        required: true
+      push:
+        description: "Push to the community repository (false: pack and test only)"
+        type: boolean
+        default: true
+
+concurrency:
+  group: chocolatey
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  FEED: "https://community.chocolatey.org/api/v2"
+
+jobs:
+  prepare:
+    name: Pick the release
+    runs-on: ubuntu-24.04
+    if: github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success'
+    outputs:
+      version: ${{ steps.pick.outputs.version }}
+      sha256: ${{ steps.pick.outputs.sha256 }}
+      todo: ${{ steps.pick.outputs.todo }}
+    steps:
+      - name: Version, checksum, and whether Chocolatey has it already
+        id: pick
+        env:
+          GH_TOKEN: ${{ github.token }}
+          INPUT_VERSION: ${{ github.event.inputs.version }}
+        run: |
+          set -euo pipefail
+          if [ "${GITHUB_EVENT_NAME}" = "workflow_dispatch" ]; then
+            VERSION="${INPUT_VERSION#v}"
+          else
+            TAG=$(gh release list --repo "$GITHUB_REPOSITORY" --exclude-drafts --exclude-pre-releases --limit 1 \
+              --json tagName --jq '.[0].tagName')
+            VERSION="${TAG#v}"
+          fi
+          [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "not a release version: '$VERSION'"; exit 1; }
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+          # A release made before this workflow may lack the assets. Followed automatically that is not an error
+          # (or every later Release run would fail on it); dispatched by hand it is. A failed download of assets
+          # that do exist always fails the run.
+          ASSETS=$(gh release view "v$VERSION" --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets[].name')
+          for a in "fukuii-$VERSION.zip" SHA256SUMS.txt; do
+            if ! grep -qxF "$a" <<<"$ASSETS"; then
+              [ "${GITHUB_EVENT_NAME}" = "workflow_dispatch" ] && { echo "v$VERSION has no $a"; exit 1; }
+              echo "::notice::v$VERSION has no $a; nothing to publish"
+              echo "todo=false" >> "$GITHUB_OUTPUT"; exit 0
+            fi
+          done
+          mkdir -p dl && cd dl
+          gh release download "v$VERSION" --repo "$GITHUB_REPOSITORY" -p "fukuii-$VERSION.zip" -p SHA256SUMS.txt --clobber
+          # The download is checked here once, so the checksum written into the package is the release's own.
+          grep -E " \*?fukuii-$VERSION\.zip$" SHA256SUMS.txt > zip.sha256
+          sha256sum --check --strict zip.sha256
+          echo "sha256=$(cut -d' ' -f1 zip.sha256)" >> "$GITHUB_OUTPUT"
+
+          if [ "${GITHUB_EVENT_NAME}" = "pull_request" ]; then echo "todo=true" >> "$GITHUB_OUTPUT"; exit 0; fi
+          # Chocolatey refuses a version it already holds (listed, unlisted or in moderation): skip it rather than fail
+          # on every pre-release run of the Release workflow.
+          code=$(curl -s -o /dev/null -w '%{http_code}' --retry 3 "$FEED/Packages(Id='fukuii',Version='$VERSION')")
+          if [ "$code" = "200" ]; then
+            echo "fukuii $VERSION is already on Chocolatey"
+            echo "todo=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "todo=true" >> "$GITHUB_OUTPUT"
+          fi
+
+  package:
+    name: Pack and test on Windows
+    needs: prepare
+    if: needs.prepare.outputs.todo == 'true'
+    runs-on: windows-2025
+    env:
+      VERSION: ${{ needs.prepare.outputs.version }}
+      SHA256: ${{ needs.prepare.outputs.sha256 }}
+    steps:
+      - name: Checkout packaging
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+
+      - name: Fill in the version and checksum
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if ($env:SHA256 -notmatch '^[0-9a-f]{64}$') { throw "bad checksum '$env:SHA256'" }
+          $dir = 'packaging/chocolatey'
+          foreach ($f in @("$dir/fukuii.nuspec", "$dir/tools/chocolateyinstall.ps1", "$dir/tools/fukuii.cmd")) {
+            (Get-Content -Raw $f).Replace('__VERSION__', $env:VERSION).Replace('__SHA256__', $env:SHA256) |
+              Set-Content -NoNewline -Encoding utf8NoBOM $f
+          }
+          if (Select-String -Path "$dir/*.nuspec","$dir/tools/*.ps1","$dir/tools/*.cmd" -Pattern '__[A-Z0-9]+__') { throw 'a placeholder is left' }
+
+      - name: Pack
+        shell: pwsh
+        run: |
+          choco pack packaging/chocolatey/fukuii.nuspec --outputdirectory out
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          Get-ChildItem out
+
+      - name: Install from the package and run it
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          # Our package from ./out, its dependency (temurin25jre) from the community repository.
+          choco install fukuii --version $env:VERSION --source "'out;$env:FEED'" -y --no-progress
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          # temurin25jre puts java on the machine PATH; this session's PATH predates it. The runner's JAVA_HOME points
+          # at an older JDK on purpose here: tools\fukuii.cmd must still run fukuii on Java 25.
+          Import-Module "$env:ChocolateyInstall\helpers\chocolateyProfile.psm1"; refreshenv
+          "JAVA_HOME=$env:JAVA_HOME"
+          java -version
+          fukuii cli --help
+          if ($LASTEXITCODE -ne 0) {
+            $code = $LASTEXITCODE
+            # Show the java command the launcher built: a copy of fukuii.bat, next to it, that echoes the command
+            # instead of running it.
+            $bat = Join-Path $env:ChocolateyInstall "lib\fukuii\tools\fukuii-$env:VERSION\bin\fukuii.bat"
+            $echo = "$bat.echo.bat"
+            (Get-Content $bat) -replace '^"%_JAVACMD%" ', 'echo JAVA COMMAND: "%_JAVACMD%" ' | Set-Content -Encoding ascii $echo
+            cmd /c "`"$echo`" cli --help"
+            Remove-Item $echo
+            throw "fukuii cli --help exited $code"
+          }
+          # And with JAVA_HOME already a Java 25: the wrapper takes it as it is.
+          $jre25 = Get-ChildItem "$env:ProgramFiles\Eclipse Adoptium" -Directory -Filter 'jre-25*' | Select-Object -First 1
+          if (-not $jre25) { throw 'temurin25jre is not under Program Files\Eclipse Adoptium' }
+          $env:JAVA_HOME = $jre25.FullName
+          "JAVA_HOME=$env:JAVA_HOME"
+          fukuii cli --help | Select-Object -First 3
+          if ($LASTEXITCODE -ne 0) { throw "fukuii cli --help with a Java 25 JAVA_HOME exited $LASTEXITCODE" }
+          choco uninstall fukuii -y --no-progress
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          if (Get-Command fukuii -ErrorAction SilentlyContinue) { throw 'the fukuii shim survived the uninstall' }
+
+      - name: Keep the package for the push job
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: fukuii-nupkg
+          path: out/fukuii.${{ needs.prepare.outputs.version }}.nupkg
+          retention-days: 3
+
+  push:
+    name: Push to the community repository
+    needs: [prepare, package]
+    if: github.event_name == 'workflow_run' || (github.event_name == 'workflow_dispatch' && github.event.inputs.push == 'true')
+    runs-on: windows-2025
+    environment: CHOCOLATEY_NUPKG
+    env:
+      VERSION: ${{ needs.prepare.outputs.version }}
+    steps:
+      - name: Download the tested package
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
+        with:
+          name: fukuii-nupkg
+          path: out
+
+      - name: Push
+        shell: pwsh
+        env:
+          CHOCOLATEY_API: ${{ secrets.CHOCOLATEY_API }}
+        run: |
+          if (-not $env:CHOCOLATEY_API) { throw 'the CHOCOLATEY_NUPKG environment has no CHOCOLATEY_API secret' }
+          choco push "out/fukuii.$env:VERSION.nupkg" --source https://push.chocolatey.org/ --api-key $env:CHOCOLATEY_API
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          "## fukuii $env:VERSION pushed to Chocolatey" >> $env:GITHUB_STEP_SUMMARY
+          "Moderation comes next: https://community.chocolatey.org/packages/fukuii/$env:VERSION" >> $env:GITHUB_STEP_SUMMARY

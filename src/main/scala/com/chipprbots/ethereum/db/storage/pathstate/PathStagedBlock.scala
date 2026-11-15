@@ -93,7 +93,7 @@ final class PathStagedBlock(
     * @throws StateUnavailable
     *   when the parent's state is not held any more
     */
-  override def commitApart(blockNumber: BigInt, blockHash: ByteString): Unit =
+  override def commitApart(blockNumber: BigInt, blockHash: ByteString, pin: Option[BranchPin]): Unit =
     require(
       blockHash == block.hash && blockNumber == block.number,
       s"block ${block.show} was staged, and block $blockNumber is being committed"
@@ -103,7 +103,7 @@ final class PathStagedBlock(
       layer = None
       taken
     }
-    staged.foreach(state.commitOverlay(_, block))
+    staged.foreach(state.commitOverlay(_, block, pin))
 
   /** The block's state is in force: it is the anchor, or, for a block staged apart, its forward layer is kept. So a
     * payload delivered again while its first execution runs takes the execution recorded for it, not a second run
