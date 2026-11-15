@@ -3246,11 +3246,16 @@ items:
   - id: B-282
     title: Publish releases to the Chocolatey community repository (fukuii package)
     priority: P2
-    status: open
+    status: claimed
     area: ci
     size: M
     opened: 2026-11-15
     refs: []
     links:
       branch: feat/chocolatey
+    claim:
+      by: dev-node
+      agent: claude-opus
+      since: 2026-11-15T00:50:56Z
+      heartbeat: 2026-11-15T00:50:56Z
     notes: Package downloads the release zip (sha256 from SHA256SUMS), depends on temurin25jre, shims bin\fukuii.bat. Key in env CHOCOLATEY_NUPKG (main only). First version waits for Chocolatey moderation.
