@@ -3424,3 +3424,14 @@ items:
     links:
       spec: 018
     notes: "forge W2, C4e part 4: collectOldBranch loads every old block and receipt from the fork to the head before anything runs; GBs at tens of thousands of blocks. Gate before path-live is on for an archive node"
+  - id: B-297
+    title: "C5 gate: the consensus layer's branch beyond the forward layers is handed to StateRecovery, and a refused one is not retried without end"
+    priority: P1
+    status: open
+    area: consensus
+    size: L
+    opened: 2026-11-15
+    refs: []
+    links:
+      spec: 018
+    notes: "beacon, C4e part 5. (1) at the cap / below the views: store the rest by hash, StateRecovery.requestFor(ForkChoice) via a late-bound handle. (2) Finalized / too-deep refusal re-queues forever: no re-queue (as divergedParent), importer treats it as permanent, FCM puts requestedHead back on FinalizedReversed. (3) race test importer move vs confirmHeldHead/StateRecovery. (4) lost side parents told in the new branch. (5) hive engine Re-Org Sync suites on path-live"
