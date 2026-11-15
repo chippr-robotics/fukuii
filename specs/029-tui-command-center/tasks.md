@@ -659,16 +659,48 @@ Every slice ends with the same gate. The art (phase 0) is done and in the tree.
 
 ## Phase 9: Closure
 
-- [ ] T113 `./scripts/fukuii-test essential` once, alone; the count is at baseline (SC-013)
+- [x] T113 `./scripts/fukuii-test essential` once, alone; the count is at baseline (SC-013)
 - [ ] T114 Coverage at or above 70 % (SC-015)
-- [ ] T115 [P] Rewrite `docs/architecture/console-ui.md` from contracts/operator.md and contracts/actions.md; add the
+- [x] T115 [P] Rewrite `docs/architecture/console-ui.md` from contracts/operator.md and contracts/actions.md; add the
       mock screens; note the four changes from spec 027
-- [ ] T116 [P] Update the operator skills that name TUI keys (`.claude/skills/fukuii-log-triage`,
+- [x] T116 [P] Update the operator skills that name TUI keys (`.claude/skills/fukuii-log-triage`,
       `fukuii-node-health-check`) where they are now wrong
-- [ ] T117 Outside `console/`, the diff of all slices touches only the files plan.md lists; `beacon` and `forge`
+- [x] T117 Outside `console/`, the diff of all slices touches only the files plan.md lists; `beacon` and `forge`
       reports attached (SC-013)
 - [ ] T118 Set spec.md `**Status**` to `Done (<date>)` with the PR numbers, add the Closed block, remove
       `**In flight**`, run `python3 -I scripts/specs/index.py`; close the backlog items
+
+> Closure, as found (2026-11-15), on staging at `3298b49` (slice 7 merged):
+>
+> - **T113**: `./scripts/fukuii-test essential`, alone: 11,220 passed, 2 failed, 2 cancelled, in 876 suites. Both
+>   failures come from the container it ran in and are in code no slice touched: `KeyStoreImplSpec` expects a
+>   directory it made unwritable to refuse a write, and the container runs as root, which no permission refuses;
+>   `JdkHttpsTransportSpec` reads the proxy from the environment, and the container sets one. The required
+>   "Test and Build" job passed on the same commit in CI.
+> - **T114**: not read yet. Coverage is measured by CI's Coverage job on each push to staging; the run for
+>   `3298b49` had not finished when this was written.
+> - **T115**: `docs/architecture/console-ui.md` was kept current by each slice and not rewritten whole. At the
+>   close it gains two of the test suite's reference frames, the four changes from spec 027, and what the dashboard
+>   does not do.
+> - **T116**: neither skill names a TUI key; nothing in them was wrong.
+> - **T117, SC-013: not met as written.** The seven slices touched 25 files outside `console/` that plan.md does
+>   not list, and left 4 it lists untouched (`Fukuii.scala`, `EngineApiController.scala`,
+>   `JsonRpcControllerMetrics.scala`, `NetworkMetrics.scala`: their work went to the splash's own phases,
+>   `EngineCallLog`, `RpcCallStats` and `P2pTraffic`). The 25, by what needed them:
+>   - plain observation classes in place of registry-backed metrics (B-194): `consensus/engine/EngineCallLog`,
+>     `jsonrpc/RpcCallStats`, `network/P2pTraffic`, and their call sites `EngineApiService`, `JsonRpcController`,
+>     `JsonRpcIpcServer`, `RpcExposureCheck`, `PeerScoringManager`;
+>   - the mining panel and B-275: `consensus/pow/PoWMiningMetrics`, `PoWMiningCoordinator`, `miners/Miner`,
+>     `miners/EthashMiner` (a count and a gauge; no mining decision; `forge`);
+>   - the audit's status: `blockchain/sync/BackgroundAudit`;
+>   - slice 7's actions: `blockchain/sync/Blacklist`, `network/BlockedIPRegistry`, `network/PeerManagerActor`
+>     (B-277), `network/NetworkAddressInfo`, `network/ServerActor`, `jsonrpc/server/http/ServerLifecycle`,
+>     `InsecureJsonRpcHttpServer`, `SecureJsonRpcHttpServer`, `nodebuilder/NodeBuilder`, `nodebuilder/TuiActions`,
+>     `nodebuilder/tooling/PeriodicConsistencyCheck`, and `logback.xml` (the audit logger).
+>   The first half of SC-013 holds: no slice changed a consensus rule, a message, or what is written to the
+>   database. Each change outside `console/` was written or reviewed by the specialist for its area, as each
+>   slice's pull request records.
+> - **T118**: open until T114 is read and the slice 7 terminal run (quickstart "Slice 7") has been made.
 
 ---
 
