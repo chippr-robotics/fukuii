@@ -141,3 +141,31 @@ class RpcCallStatsSpec extends AnyFlatSpec with Matchers with OptionValues:
     classOf[RpcCallStats].getInterfaces.map(_.getName) should not contain
       "com.chipprbots.ethereum.metrics.MetricsContainer"
   }
+
+  "A server the operator stopped" should "be told apart from one that is not listening, and be listening again once started" taggedAs (
+    UnitTest
+  ) in {
+    val stats = new RpcCallStats
+    stats.snapshot.listening shouldBe empty
+    stats.snapshot.stopped shouldBe empty
+
+    stats.listening(RpcCallStats.Http, isListening = true)
+    stats.listening(RpcCallStats.Ws, isListening = false)
+    stats.snapshot.listening shouldBe Map(RpcCallStats.Http -> true, RpcCallStats.Ws -> false)
+    stats.snapshot.stopped shouldBe empty
+
+    // Stopped here: in `stopped`, and no longer in `listening` (the view must not say "NOT LISTENING").
+    stats.stopped(RpcCallStats.Http)
+    stats.snapshot.stopped shouldBe Set(RpcCallStats.Http)
+    stats.snapshot.listening shouldBe Map(RpcCallStats.Ws -> false)
+
+    // Started again.
+    stats.listening(RpcCallStats.Http, isListening = true)
+    stats.snapshot.stopped shouldBe empty
+    stats.snapshot.listening shouldBe Map(RpcCallStats.Http -> true, RpcCallStats.Ws -> false)
+
+    // A stop of a server that could not bind is still a stop; a name that is no transport is ignored.
+    stats.stopped(RpcCallStats.Ws)
+    stats.stopped("no such transport")
+    stats.snapshot.stopped shouldBe Set(RpcCallStats.Ws)
+  }

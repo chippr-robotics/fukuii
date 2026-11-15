@@ -695,6 +695,7 @@ object TuiStatusProbe:
           staleShares = read(PoWMiningMetrics.staleSharesTotal),
           getWork = getWork,
           getWorkPerMinute = perMinute,
+          minerRunning = Some(read(PoWMiningMetrics.minerRunning) == 1L),
           dag = dagSample(
             read(PoWMiningMetrics.dagEpoch),
             read(PoWMiningMetrics.dagPhase),
@@ -814,6 +815,7 @@ object TuiStatusProbe:
         val counts = counted.transports.find(_.name == name(t.kind))
         t.copy(
           listening = counted.listening.get(name(t.kind)),
+          stoppedHere = counted.stopped.contains(name(t.kind)),
           calls = counts.fold(0L)(_.calls),
           errors = counts.fold(0L)(_.errors)
         )

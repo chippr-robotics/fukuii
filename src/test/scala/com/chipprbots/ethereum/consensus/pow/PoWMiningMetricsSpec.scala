@@ -139,6 +139,42 @@ class PoWMiningMetricsSpec extends AnyFlatSpec with Matchers:
     for name <- names(added); suffix <- reserved do (name should not).endWith(suffix)
   }
 
+  // ---- spec 029 slice 7: the built-in miner's on/off ---------------------------------------------------------------
+
+  "The miner-running gauge" should "read 1 after the miner is recorded running, 0 after it is recorded stopped" taggedAs (
+    UnitTest
+  ) in {
+    try
+      metrics.recordMinerRunning(true)
+      read(metrics.minerRunning) shouldBe 1L
+      metrics.recordMinerRunning(true)
+      read(metrics.minerRunning) shouldBe 1L
+      metrics.recordMinerRunning(false)
+      read(metrics.minerRunning) shouldBe 0L
+    finally metrics.recordMinerRunning(false)
+  }
+
+  it should "be registered as app.pow_miner_running with no tag, a name no other mining gauge has" taggedAs (
+    UnitTest
+  ) in {
+    metrics.minerRunning.getId.getName shouldBe "app.pow_miner_running"
+    val found = metrics.metrics.registry.find(metrics.minerRunning.getId.getName).gauges()
+    found should have size 1
+    found.iterator().next().getId.getTags.isEmpty shouldBe true
+    names(existing ++ added) should not contain metrics.minerRunning.getId.getName
+  }
+
+  it should "leave the other mining gauges alone" taggedAs (UnitTest) in {
+    try
+      metrics.recordDagStarted(9L)
+      metrics.recordDagLoading(12)
+      metrics.updateHashrate(BigInt(77L))
+      metrics.recordMinerRunning(true)
+      dag shouldBe ((9L, 1L, 12L, 0L))
+      read(metrics.currentHashrate) shouldBe 77L
+    finally metrics.recordMinerRunning(false)
+  }
+
   // ---- the six existing gauges keep their names and their values ---------------------------------------------------
 
   "The existing gauges" should "keep their six names" taggedAs (UnitTest) in {

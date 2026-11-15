@@ -28,6 +28,7 @@ import com.chipprbots.ethereum.blockchain.data.GenesisDataLoader
 import com.chipprbots.ethereum.blockchain.sync.Blacklist
 import com.chipprbots.ethereum.blockchain.sync.BlockchainHostActor
 import com.chipprbots.ethereum.blockchain.sync.CacheBasedBlacklist
+import com.chipprbots.ethereum.blockchain.sync.OperatorBlockingBlacklist
 import com.chipprbots.ethereum.blockchain.sync.ScoringBlacklist
 import com.chipprbots.ethereum.blockchain.sync.SyncController
 import com.chipprbots.ethereum.consensus.Consensus
@@ -282,7 +283,15 @@ trait BlacklistBuilder:
 
   /** The node-wide blacklist; the scorer hears of every blacklisting of a peer (not of an address). */
   lazy val blacklist: Blacklist =
-    new ScoringBlacklist(CacheBasedBlacklist.empty(blacklistSize), peerScoringManager)
+    new OperatorBlockingBlacklist(
+      new ScoringBlacklist(CacheBasedBlacklist.empty(blacklistSize), peerScoringManager),
+      blockedIPRegistry
+    )
+
+  /** The addresses the operator blocked (`admin_blockIP`); the blacklist above refuses them. In memory: it lasts until
+    * the node restarts (the `blocked-ips` config is not read yet).
+    */
+  lazy val blockedIPRegistry: BlockedIPRegistry = new BlockedIPRegistry(Set.empty)
 
 trait NodeStatusBuilder:
 
@@ -539,10 +548,15 @@ trait ServerActorBuilder:
 
   lazy val networkConfig = instanceConfig.Network
 
+  /** What the server actor found out about the node's address (how, when): written by its detection, read by the
+    * dashboard (spec 029).
+    */
+  lazy val networkAddressInfo: NetworkAddressInfo = new NetworkAddressInfo
+
   lazy val server: org.apache.pekko.actor.typed.ActorRef[ServerActor.Command] =
     classicSystem.spawn(
       Behaviors
-        .supervise(ServerActor(nodeStatusHolder, peerManager, blacklist))
+        .supervise(ServerActor(nodeStatusHolder, peerManager, blacklist, networkAddressInfo))
         .onFailure[Throwable](SupervisorStrategy.restartWithBackoff(2.seconds, 60.seconds, 0.1)),
       "server"
     )
@@ -848,9 +862,7 @@ trait ApisBuilder extends ApisBase:
 
 trait AdminServiceBuilder:
   this: PeerManagerActorBuilder & NodeStatusBuilder & BlockchainBuilder & BlockchainConfigBuilder &
-    InstanceConfigProvider & ActorSystemBuilder & ConsensusBuilder & SyncControllerRefBuilder =>
-
-  lazy val blockedIPRegistry: BlockedIPRegistry = new BlockedIPRegistry(Set.empty)
+    InstanceConfigProvider & ActorSystemBuilder & ConsensusBuilder & SyncControllerRefBuilder & BlacklistBuilder =>
 
   lazy val adminService: AdminService = new AdminService(
     nodeStatusHolder,
@@ -870,7 +882,14 @@ trait AdminServiceBuilder:
           instanceConfig.config.getConfig("network.rpc.net").getDuration("peer-manager-timeout").toMillis.millis
         ),
         scheduler = classicSystem.toTyped.scheduler
+      ),
+    peerLimitsConfig = Some(
+      AdminService.PeerLimits(
+        minOutgoing = peerConfiguration.minOutgoingPeers,
+        maxOutgoing = peerConfiguration.maxOutgoingPeers,
+        maxIncoming = peerConfiguration.maxIncomingPeers
       )
+    )
   )(using classicSystem.toTyped.scheduler)
 
 trait TxPoolServiceBuilder:

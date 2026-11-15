@@ -734,6 +734,8 @@ enum TransportKind(val label: String):
   *   the sensitive namespaces it serves to other hosts (`RpcExposureCheck`'s rule); empty when none
   * @param calls
   *   the calls that came in on it, and of those the ones that failed
+  * @param stoppedHere
+  *   its server was stopped by the operator, from this dashboard (spec 029 FR-055): not a failure, and no alert
   */
 final case class TransportStatus(
     kind: TransportKind,
@@ -745,7 +747,8 @@ final case class TransportStatus(
     exposed: Seq[String] = Nil,
     calls: Long = 0L,
     errors: Long = 0L,
-    tls: Boolean = false
+    tls: Boolean = false,
+    stoppedHere: Boolean = false
 )
 
 /** How a transport tells one caller from another: not at all, by the Engine API's JWT secret, or by who may open the
@@ -953,6 +956,9 @@ final case class DagSample(epoch: Long, phase: DagPhase, progress: Int, loaded: 
   *   the DAG, once a build has started
   * @param history
   *   the hashrate and the work requests a minute over the last ten minutes, a point every five seconds, oldest first
+  * @param minerRunning
+  *   whether the node's built-in miner is mining, as its coordinator says (`pow_miner_running`); None where it was
+  *   not read. A miner that was stopped stays stopped until the node restarts
   */
 final case class MiningSample(
     coinbase: Option[String] = None,
@@ -963,7 +969,8 @@ final case class MiningSample(
     getWork: Long = 0L,
     getWorkPerMinute: Option[Long] = None,
     dag: Option[DagSample] = None,
-    history: Vector[MiningPoint] = Vector.empty
+    history: Vector[MiningPoint] = Vector.empty,
+    minerRunning: Option[Boolean] = None
 )
 
 /** The mining at one moment, for the mining monitor's charts (spec 029 FR-041). */

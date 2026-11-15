@@ -424,6 +424,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `.env` files.
 
 ### Added
+- **New metric `app_pow_miner_running` (spec 029 slice 7):** 1 while the built-in ETC miner is mining, 0 before it
+  starts, after `miner_stop`, and after its coordinator has stopped for any reason. `eth_mining` also counts external
+  miners and stays true for `miner-active-timeout` after a stop; this gauge does not. Mining itself is unchanged.
 - **Hoodi is a built-in network (spec 028 slice 1).** `fukuii hoodi` starts the Hoodi testnet (chain id 560048)
   from the shipped `conf/hoodi.conf` and `conf/base/chains/hoodi-chain.conf`, with no setup. The genesis hash fukuii
   computes (`0xbbe312868b376a3001692a646dd2d7d1e4406380dfd86b98aa8a34d1557c971b`, state root `0xda87d7f5...7576`) and the
@@ -467,6 +470,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   changes, so a client that does not select them sees the same output.
 
 ### Fixed
+- **`admin_blockIP` blocks the address (B-277).** It only added the address to a list that nothing read, so it blocked
+  nothing. The node now refuses inbound connections from the address, never dials it (any path: discovery, snap
+  redials, `admin_addPeer` and trusted peers, `net_connectToPeer`), and disconnects the peers connected from it when
+  the call is made. `admin_unblockIP` also clears an automatic blacklist entry for the address. The address must be an
+  IP literal (a host name is refused; IPv6 is kept in its canonical form). **Not blocked:** discovery (UDP) packets to
+  and from the address. The block lasts until the node restarts, and the `blocked-ips` setting is still not read.
+- **A bad enode URL no longer reaches the peer manager, and `admin_maxPeers` checks its range.** `admin_addPeer`,
+  `admin_addTrustedPeer` and `admin_removeTrustedPeer` read the node id from the URL inside the peer manager, so a URL
+  without one threw there and restarted the actor. They now refuse, with `false`, anything that is not `enode://` with
+  a 128-hex-digit node id, a host and a port in 1..65535 (a `?discport=` query is ignored). `admin_maxPeers` answers
+  an invalid-params error for a limit below 1 or above 1000.
 - **`pow_blocks_mined_total` counts the blocks fukuii's own Ethash miner seals (B-275).** It counted only blocks handed
   in by `eth_submitWork`, so a node mining with its internal miner showed 0 blocks mined in `/metrics` and on the
   `--tui` mining panel. Both paths now count a block when it is handed to the sync controller, before its import is

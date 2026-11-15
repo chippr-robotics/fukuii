@@ -153,9 +153,35 @@ trait JsonRpcHttpServer extends Json4sSupport with Logger:
       case _ => (StatusCodes.OK, jsonRpcResponse)
   }
 
-  /** Try to start JSON RPC server
+  /** The actor system the server binds in. */
+  def actorSystem: ActorSystem
+
+  /** Where the dashboard's RPC view is told whether the server is bound or was stopped; the node's own, and a test's
+    * own where a test does not want to touch it.
     */
-  /** Binds the HTTP server and returns the binding future.
+  protected def callStats: RpcCallStats = RpcCallStats.Node
+
+  /** How long `stop` gives requests in flight before it closes every connection. */
+  protected def stopDeadline: FiniteDuration = ServerLifecycle.DefaultHardDeadline
+
+  /** One bind of [[route]] on `config.interface:config.port`. It makes the binding and nothing else: the bound or
+    * stopped state is kept, and said to [[callStats]], by [[lifecycle]]. A server that cannot bind (a bad TLS
+    * context, an address in use) answers with a failed future, not a throw. A route-only test double that is never
+    * bound keeps this default, which says so.
+    */
+  protected def bind(): Future[Http.ServerBinding] =
+    Future.failed(new UnsupportedOperationException("this server is not bound by a real bind"))
+
+  /** The binding, kept: what stops this server and starts it again (`stop`, `start`), and whether it is bound
+    * (`isBound`, `boundAddress`). Spec 029 FR-052.
+    */
+  lazy val lifecycle: ServerLifecycle =
+    new ServerLifecycle(RpcCallStats.Http, () => bind(), callStats, stopDeadline)(using actorSystem.dispatcher)
+
+  /** Whether the server speaks TLS (`mode = https`), for the dashboard's previews. */
+  def isTls: Boolean = config.mode == "https"
+
+  /** Starts the server and returns the binding future: `lifecycle.start()` in the servers that bind.
     *
     * Returning the future rather than Unit is what lets a caller wait for the socket to be LISTENING rather than merely
     * for bind() to have been requested. StdNode does exactly that, so that "node started" means the JSON-RPC port

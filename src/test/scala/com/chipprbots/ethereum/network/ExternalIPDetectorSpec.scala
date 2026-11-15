@@ -361,3 +361,64 @@ class ExternalIPDetectorSpec extends AnyFlatSpec with Matchers:
     http.callCount shouldBe 1
     local.callCount shouldBe 1
   }
+
+  // ---------------------------------------------------------------------
+  // detectWithSource (spec 029): which step found the address
+  // ---------------------------------------------------------------------
+
+  "detectWithSource" should "tag each step of the cascade as the source of its address" taggedAs (
+    UnitTest,
+    NetworkTest
+  ) in {
+    val none = new CountingProbe(None)
+    val addr = Some(v4(8, 8, 8, 8))
+    val found = new CountingProbe(addr)
+
+    ExternalIPDetector.detectWithSource(DetectionMode.Full, found, none, none, none) shouldBe
+      Some(DetectedAddress(v4(8, 8, 8, 8), IpSource.Upnp))
+    ExternalIPDetector.detectWithSource(DetectionMode.Full, none, found, none, none) shouldBe
+      Some(DetectedAddress(v4(8, 8, 8, 8), IpSource.Stun))
+    ExternalIPDetector.detectWithSource(DetectionMode.Full, none, none, found, none) shouldBe
+      Some(DetectedAddress(v4(8, 8, 8, 8), IpSource.Https))
+    ExternalIPDetector.detectWithSource(DetectionMode.Full, none, none, none, found) shouldBe
+      Some(DetectedAddress(v4(8, 8, 8, 8), IpSource.Interface))
+  }
+
+  it should "reach only UPnP and the local interface in mode Upnp, and nothing in mode None" taggedAs (
+    UnitTest,
+    NetworkTest
+  ) in {
+    val none = new CountingProbe(None)
+    val stun = new CountingProbe(Some(v4(1, 2, 3, 4)))
+    val local = new CountingProbe(Some(v4(9, 9, 9, 9)))
+
+    ExternalIPDetector.detectWithSource(DetectionMode.Upnp, none, stun, stun, local) shouldBe
+      Some(DetectedAddress(v4(9, 9, 9, 9), IpSource.Interface))
+    stun.callCount shouldBe 0
+    ExternalIPDetector.detectWithSource(DetectionMode.None, stun, stun, stun, stun) shouldBe None
+    stun.callCount shouldBe 0
+  }
+
+  it should "agree with detect on the address, for every mode" taggedAs (UnitTest, NetworkTest) in {
+    val none = new CountingProbe(None)
+    val found = new CountingProbe(Some(v4(8, 8, 8, 8)))
+    DetectionMode.values.foreach { mode =>
+      ExternalIPDetector.detect(mode, none, found, none, none) shouldBe
+        ExternalIPDetector.detectWithSource(mode, none, found, none, none).map(_.address)
+    }
+  }
+
+  "NetworkAddressInfo" should "start empty and keep the last recorded detection, found or not" taggedAs (
+    UnitTest,
+    NetworkTest
+  ) in {
+    val info = new NetworkAddressInfo
+    info.get shouldBe NetworkAddressInfo.Snapshot.empty
+
+    val found = DetectedAddress(v4(8, 8, 8, 8), IpSource.Stun)
+    info.recordDetection(DetectionMode.Full, Some(found), 1000L)
+    info.get shouldBe NetworkAddressInfo.Snapshot(Some(DetectionMode.Full), Some(found), Some(1000L))
+
+    info.recordDetection(DetectionMode.Upnp, None, 2000L)
+    info.get shouldBe NetworkAddressInfo.Snapshot(Some(DetectionMode.Upnp), None, Some(2000L))
+  }

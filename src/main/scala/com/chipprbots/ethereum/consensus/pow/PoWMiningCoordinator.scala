@@ -2,6 +2,8 @@ package com.chipprbots.ethereum.consensus.pow
 
 import org.apache.pekko.actor.typed.ActorRef as TypedActorRef
 import org.apache.pekko.actor.typed.Behavior
+import org.apache.pekko.actor.typed.PostStop
+import org.apache.pekko.actor.typed.Signal
 import org.apache.pekko.actor.typed.scaladsl.AbstractBehavior
 import org.apache.pekko.actor.typed.scaladsl.ActorContext
 import org.apache.pekko.actor.typed.scaladsl.Behaviors
@@ -84,38 +86,60 @@ class PoWMiningCoordinator private (
       log.info("Received message {}", SetMiningMode(mode))
       switchMiningMode(mode)
 
-  private def handleMiningRecurrent(): Behavior[CoordinatorProtocol] = Behaviors.receiveMessage {
-    case SetMiningMode(mode) =>
-      log.info("Received message {}", SetMiningMode(mode))
-      switchMiningMode(mode)
+  // Spec 029 slice 7: whatever stops the coordinator (StopMining, a stop from outside, a failure), the miner-running
+  // gauge reads 0 afterwards. Pekko delivers PostStop to the behaviour current when the actor stopped, so each of the
+  // three behaviours carries the handler: this one before the first SetMiningMode, and the two below.
+  override def onSignal: PartialFunction[Signal, Behavior[CoordinatorProtocol]] = { case PostStop =>
+    PoWMiningMetrics.recordMinerRunning(false)
+    this
+  }
 
-    case MineNext =>
-      log.debug("Received message MineNext")
-      blockchainReader.getBestBlock
-        .fold {
-          log.error("Unable to get block for mining: blockchainReader.getBestBlock returned None")
-          context.self ! MineNext
-        } { block =>
-          mineWithEthash(block)
-        }
+  private def recordStoppedOnPostStop(
+      behavior: Behaviors.Receive[CoordinatorProtocol]
+  ): Behavior[CoordinatorProtocol] =
+    behavior.receiveSignal { case (_, PostStop) =>
+      PoWMiningMetrics.recordMinerRunning(false)
       Behaviors.same
+    }
 
-    case StopMining =>
-      log.info("Stopping PoWMiningCoordinator...")
-      Behaviors.stopped
-  }
+  private def handleMiningRecurrent(): Behavior[CoordinatorProtocol] =
+    recordStoppedOnPostStop(Behaviors.receiveMessage[CoordinatorProtocol] {
+      case SetMiningMode(mode) =>
+        log.info("Received message {}", SetMiningMode(mode))
+        switchMiningMode(mode)
 
-  private def handleMiningOnDemand(): Behavior[CoordinatorProtocol] = Behaviors.receiveMessage {
-    case SetMiningMode(mode) =>
+      case MineNext =>
+        log.debug("Received message MineNext")
+        blockchainReader.getBestBlock
+          .fold {
+            log.error("Unable to get block for mining: blockchainReader.getBestBlock returned None")
+            context.self ! MineNext
+          } { block =>
+            mineWithEthash(block)
+          }
+        Behaviors.same
+
+      case StopMining =>
+        log.info("Stopping PoWMiningCoordinator...")
+        PoWMiningMetrics.recordMinerRunning(false)
+        Behaviors.stopped
+    })
+
+  private def handleMiningOnDemand(): Behavior[CoordinatorProtocol] =
+    recordStoppedOnPostStop(Behaviors.receiveMessage[CoordinatorProtocol] { case SetMiningMode(mode) =>
       log.info("Received message {}", SetMiningMode(mode))
       switchMiningMode(mode)
-  }
+    })
 
   private def switchMiningMode(mode: MiningMode): Behavior[CoordinatorProtocol] = mode match
     case RecurrentMining =>
+      PoWMiningMetrics.recordMinerRunning(true)
       context.self ! MineNext
       handleMiningRecurrent()
-    case OnDemandMining => handleMiningOnDemand()
+    case OnDemandMining =>
+      // On-demand mining (tests only) mines nothing by itself: not "running", also after a switch from recurrent.
+      PoWMiningMetrics.recordMinerRunning(false)
+      handleMiningOnDemand()
 
   private def mineWithEthash(bestBlock: Block): Unit =
     log.debug("Mining with Ethash")

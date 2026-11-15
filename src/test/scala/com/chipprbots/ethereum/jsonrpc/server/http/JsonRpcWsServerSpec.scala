@@ -1,24 +1,34 @@
 package com.chipprbots.ethereum.jsonrpc.server.http
 
+import java.net.InetAddress
+import java.net.ServerSocket
+
+import org.apache.pekko.Done
 import org.apache.pekko.actor.testkit.typed.scaladsl.FishingOutcomes
 import org.apache.pekko.actor.testkit.typed.scaladsl.TestProbe
 import org.apache.pekko.actor.typed.scaladsl.adapter.*
+import org.apache.pekko.http.scaladsl.Http
 import org.apache.pekko.http.scaladsl.model.HttpRequest
 import org.apache.pekko.http.scaladsl.model.StatusCodes
 import org.apache.pekko.http.scaladsl.model.headers.HttpOrigin
 import org.apache.pekko.http.scaladsl.model.headers.Origin
 import org.apache.pekko.http.scaladsl.model.ws.Message
+import org.apache.pekko.http.scaladsl.model.ws.WebSocketRequest
 import org.apache.pekko.http.scaladsl.server.Route
 import org.apache.pekko.http.scaladsl.testkit.ScalatestRouteTest
 import org.apache.pekko.stream.scaladsl.Flow
+import org.apache.pekko.stream.scaladsl.Keep
 import org.apache.pekko.stream.scaladsl.Sink
 import org.apache.pekko.stream.scaladsl.Source
 
+import scala.concurrent.Await
+import scala.concurrent.Future
 import scala.concurrent.duration.*
 
 import org.scalatest.flatspec.AnyFlatSpec
 import org.scalatest.matchers.should.Matchers
 
+import com.chipprbots.ethereum.jsonrpc.RpcCallStats
 import com.chipprbots.ethereum.jsonrpc.SubscriptionManager
 import com.chipprbots.ethereum.jsonrpc.server.http.JsonRpcWsServer.JsonRpcWsServerConfig
 import com.chipprbots.ethereum.testing.Tags.*
@@ -154,3 +164,97 @@ class JsonRpcWsServerSpec extends AnyFlatSpec with Matchers with ScalatestRouteT
     expectAccepted(upgradeRequest("/", "https://dapp.example"))
     expectAccepted(upgradeRequest("/", "https://DAPP.example:8443"))
     expectAccepted(upgradeRequest("/", "http://app.example:3000"))
+
+  // ---- stop and start while the node runs (spec 029 FR-052, FR-055), on a real loopback port ----
+
+  private val Wait = 10.seconds
+
+  private def freePort(): Int =
+    val socket = new ServerSocket(0, 0, InetAddress.getLoopbackAddress)
+    try socket.getLocalPort
+    finally socket.close()
+
+  private class BoundFixture:
+    val stats = new RpcCallStats
+    val subscriptions: TestProbe[SubscriptionManager.Command] =
+      TestProbe[SubscriptionManager.Command]()(using system.toTyped)
+    private val portNumber = freePort()
+    private val config = new JsonRpcWsServerConfig:
+      override val enabled: Boolean = true
+      override val interface: String = "127.0.0.1"
+      override val port: Int = portNumber
+    val server: JsonRpcWsServer =
+      new JsonRpcWsServer(new MockableJsonRpcController, subscriptions.ref, config)(using system):
+        override protected def callStats: RpcCallStats = stats
+        override protected def stopDeadline: FiniteDuration = 1.second
+
+    /** A client that sends nothing and stays open; the future completes when the server ends the connection. */
+    def connect(): Future[Done] =
+      val clientFlow: Flow[Message, Message, Future[Done]] =
+        Flow.fromSinkAndSourceMat(Sink.ignore, Source.maybe[Message])(Keep.left)
+      val (upgraded, closed) =
+        Http().singleWebSocketRequest(WebSocketRequest(s"ws://127.0.0.1:$portNumber/"), clientFlow)
+      Await.result(upgraded, Wait).response.status shouldEqual StatusCodes.SwitchingProtocols
+      closed
+
+    def expectRegistered(): Unit =
+      subscriptions.fishForMessage(Wait) {
+        case _: SubscriptionManager.RegisterConnection => FishingOutcomes.complete
+        case _                                         => FishingOutcomes.continueAndIgnore
+      }
+      ()
+
+    def expectClosed(): Unit =
+      subscriptions.fishForMessage(Wait) {
+        case _: SubscriptionManager.ConnectionClosed => FishingOutcomes.complete
+        case _                                       => FishingOutcomes.continueAndIgnore
+      }
+      ()
+
+  "A stopped WebSocket server" should "close its connections and tell the SubscriptionManager, and register again once started" taggedAs (
+    UnitTest,
+    RPCTest
+  ) in {
+    val f = new BoundFixture
+    try
+      f.server.openConnections shouldBe 0
+      f.server.lifecycle.isBound shouldBe false
+      f.server.run()
+      Await.result(f.server.lifecycle.start(), Wait)
+      f.server.lifecycle.isBound shouldBe true
+      f.stats.snapshot.listening.get(RpcCallStats.Ws) shouldBe Some(true)
+
+      val first = f.connect()
+      f.expectRegistered()
+      f.server.openConnections shouldBe 1
+
+      Await.result(f.server.lifecycle.stop(), Wait)
+      // The client's stream ends (cleanly or not): the server closed the connection at the deadline at the latest.
+      println("DIAG after stop: openConnections=" + f.server.openConnections + " clientDone=" + first.isCompleted)
+      println("DIAG closed msg within 3s: " + scala.util.Try(f.subscriptions.fishForMessage(3.seconds) {
+        case _: SubscriptionManager.ConnectionClosed => FishingOutcomes.complete
+        case _                                       => FishingOutcomes.continueAndIgnore
+      }))
+      println("DIAG after wait: openConnections=" + f.server.openConnections + " clientDone=" + first.isCompleted + " " + first.value)
+      Await.ready(first, Wait)
+      f.expectClosed()
+      f.server.openConnections shouldBe 0
+      f.server.lifecycle.isBound shouldBe false
+      f.stats.snapshot.stopped should contain(RpcCallStats.Ws)
+      f.stats.snapshot.listening.get(RpcCallStats.Ws) shouldBe None
+
+      // Stopping again, and starting twice, change nothing.
+      Await.result(f.server.lifecycle.stop(), Wait)
+      Await.result(f.server.lifecycle.start(), Wait)
+      Await.result(f.server.lifecycle.start(), Wait)
+      f.stats.snapshot.stopped shouldBe empty
+
+      val second = f.connect()
+      f.expectRegistered()
+      f.server.openConnections shouldBe 1
+      second.isCompleted shouldBe false
+    finally Await.result(f.server.lifecycle.stop(), Wait)
+    // Whatever was left open is closed by the stop, and is no longer counted.
+    f.expectClosed()
+    f.server.openConnections shouldBe 0
+  }

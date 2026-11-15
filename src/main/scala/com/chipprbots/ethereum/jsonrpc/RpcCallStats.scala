@@ -50,7 +50,7 @@ final class RpcCallStats(
   // The transports are few and known: made here, so a call never adds one.
   private val transports: Map[String, Counted] = Transports.map(_ -> new Counted).toMap
   private val refused = new LongAdder
-  // 0: its server has not said; 1: bound and listening; 2: could not bind, or closed.
+  // 0: its server has not said; 1: bound and listening; 2: could not bind, or closed; 3: stopped by the operator.
   private val bound: Map[String, AtomicInteger] = Transports.map(_ -> new AtomicInteger(0)).toMap
 
   /** One call that ended: answered, answered with an error, or failed with an exception.
@@ -77,6 +77,13 @@ final class RpcCallStats(
     */
   def listening(transport: String, isListening: Boolean): Unit =
     try bound.get(transport).foreach(_.set(if isListening then 1 else 2))
+    catch case NonFatal(_) => ()
+
+  /** A transport's server was stopped by the operator (the dashboard's `rpc stop`): not a failure to bind, so the RPC
+    * view says "stopped here" and no alert is raised. A later [[listening]] (its `rpc start`) replaces it.
+    */
+  def stopped(transport: String): Unit =
+    try bound.get(transport).foreach(_.set(3))
     catch case NonFatal(_) => ()
 
   /** A request refused by the rate limit, before it reached any method. */
@@ -117,7 +124,8 @@ final class RpcCallStats(
         case 2 => Some(name -> false)
         case _ => None
     )
-    Snapshot(named ++ rest, Transports.map(t => of(t, transports(t))).toVector, refused.sum(), listens)
+    val stoppedHere = bound.collect { case (name, state) if state.get == 3 => name }.toSet
+    Snapshot(named ++ rest, Transports.map(t => of(t, transports(t))).toVector, refused.sum(), listens, stoppedHere)
 
 object RpcCallStats:
 
@@ -164,11 +172,15 @@ object RpcCallStats:
   /** @param rateLimited
     *   requests the rate limit refused
     * @param listening
-    *   by transport, whether its server is bound: absent for a server that has not been started
+    *   by transport, whether its server is bound: absent for a server that has not been started, and for one the
+    *   operator stopped (see `stopped`)
+    * @param stopped
+    *   the transports whose server the operator stopped (`rpc stop`) and has not started again
     */
   final case class Snapshot(
       methods: Vector[Counts],
       transports: Vector[Counts],
       rateLimited: Long,
-      listening: Map[String, Boolean] = Map.empty
+      listening: Map[String, Boolean] = Map.empty,
+      stopped: Set[String] = Set.empty
   )

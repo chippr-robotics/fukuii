@@ -32,6 +32,7 @@ import com.chipprbots.ethereum.blockchain.sync.Blacklist
 import com.chipprbots.ethereum.blockchain.sync.Blacklist.BlacklistId
 import com.chipprbots.ethereum.blockchain.sync.Blacklist.BlacklistReason
 import com.chipprbots.ethereum.blockchain.sync.CacheBasedBlacklist
+import com.chipprbots.ethereum.blockchain.sync.OperatorBlockingBlacklist
 import com.chipprbots.ethereum.blockchain.sync.ScoringBlacklist
 import com.chipprbots.ethereum.domain.Block
 import com.chipprbots.ethereum.domain.BlockBody
@@ -1182,6 +1183,71 @@ class PeerManagerSpec
     val dialled: TestPeer = createdPeerQueue.poll(3, java.util.concurrent.TimeUnit.SECONDS)
     dialled should not be null
     dialled.probe.expectMsgType[ConnectTo](3.seconds).uri shouldBe wrongUri
+
+  // ── Operator block (spec 029, B-277) and admin state ───────────────────────
+
+  /** A manager whose blacklist also honours the operator's block list, as the node builds it. */
+  trait OperatorBlockSetup extends TestSetup:
+    lazy val operatorRegistry: BlockedIPRegistry = new BlockedIPRegistry(Set("10.0.0.30"))
+    override lazy val managerBlacklist: Blacklist = new OperatorBlockingBlacklist(blacklist, operatorRegistry)
+
+  it should "not dial an operator-blocked address, explicitly or as a maintained peer, but dial another (B-277)" taggedAs (
+    UnitTest,
+    NetworkTest
+  ) in new OperatorBlockSetup:
+    start()
+    val blockedUri = new URI(s"enode://${"aa" * 64}@10.0.0.30:30303")
+    val maintainedBlockedUri = new URI(s"enode://${"ab" * 64}@10.0.0.30:30304")
+    val okUri = new URI(s"enode://${"bb" * 64}@10.0.0.31:30303")
+
+    peerManager ! PeerManagerActor.ConnectToPeerCmd(blockedUri, explicit = true)
+    peerManager ! PeerManagerActor.AddMaintainedPeerCmd(maintainedBlockedUri, discardReplyRef)
+    peerManager ! PeerManagerActor.ConnectToPeerCmd(okUri)
+
+    val dialled: TestPeer = createdPeerQueue.poll(3, java.util.concurrent.TimeUnit.SECONDS)
+    dialled should not be null
+    dialled.probe.expectMsgType[ConnectTo](3.seconds).uri shouldBe okUri
+    createdPeers.size shouldBe 1
+
+  it should "still dial an address that is only auto-blacklisted, on an explicit request (B-277)" taggedAs (
+    UnitTest,
+    NetworkTest
+  ) in new OperatorBlockSetup:
+    start()
+    blacklist.add(PeerAddress("10.0.0.32"), 10.minutes, BlacklistReason.TcpSubsystemError)
+    val uri = new URI(s"enode://${"cc" * 64}@10.0.0.32:30303")
+
+    peerManager ! PeerManagerActor.ConnectToPeerCmd(uri, explicit = true)
+
+    val dialled: TestPeer = createdPeerQueue.poll(3, java.util.concurrent.TimeUnit.SECONDS)
+    dialled should not be null
+    dialled.probe.expectMsgType[ConnectTo](3.seconds).uri shouldBe uri
+
+  it should "reply to GetAdminStateCmd with the override, the limit in force, and the trusted and maintained ids" taggedAs (
+    UnitTest,
+    NetworkTest
+  ) in new TestSetup:
+    start()
+    val state = testKit.createTestProbe[PeerManagerActor.AdminState]()
+    peerManager ! PeerManagerActor.GetAdminStateCmd(state.ref)
+    val before: PeerManagerActor.AdminState = state.receiveMessage()
+    before.maxOutgoingOverride shouldBe None
+    before.effectiveMaxOutgoing shouldBe peerConfiguration.maxOutgoingPeers
+    before.trustedNodeIds shouldBe empty
+    before.maintainedNodeIds shouldBe empty
+
+    peerManager ! PeerManagerActor.SetMaxPeersCmd(7, testKit.createTestProbe[SetMaxPeersResponse]().ref)
+    peerManager ! PeerManagerActor.AddTrustedPeerCmd(
+      new URI(s"enode://${"AA" * 64}@10.0.0.40:30303"),
+      testKit.createTestProbe[PeerManagerActor.AddTrustedPeerResponse]().ref
+    )
+    peerManager ! PeerManagerActor.AddMaintainedPeerCmd(new URI(s"enode://${"bb" * 64}@10.0.0.41:30303"), discardReplyRef)
+    peerManager ! PeerManagerActor.GetAdminStateCmd(state.ref)
+    val after: PeerManagerActor.AdminState = state.receiveMessage()
+    after.maxOutgoingOverride shouldBe Some(7)
+    after.effectiveMaxOutgoing shouldBe 7
+    after.trustedNodeIds shouldBe Set("aa" * 64)
+    after.maintainedNodeIds shouldBe Set("bb" * 64)
 
   // ── Genesis-head crawler eviction (spec 011) ───────────────────────────────
 

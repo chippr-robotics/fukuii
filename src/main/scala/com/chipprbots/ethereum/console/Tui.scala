@@ -253,14 +253,24 @@ class Tui(
     */
   private val actions = new AtomicReference(Option.empty[ops.ActionRunner])
 
-  /** Hands the TUI the actions it may run: `handlers` are called on threads of the runner's own, never on the frame
-    * loop or the polling thread. `unavailable` says why an action with no handler is not offered on this node. The
+  /** Hands the TUI the actions it may run: `handlers` (built with a way to read the dashboard's state, for the
+    * previews that name a peer as the Peers view shows it) are called on threads of the runner's own, never on the
+    * frame loop or the polling thread. `unavailable` says why an action with no handler is not offered on this node. The
     * thresholds' action is the dashboard's own and is added here.
     */
-  def setActions(handlers: Map[String, ops.ActionHandler], unavailable: Map[String, String] = Map.empty): Unit =
-    val own = Map(ops.Actions.Threshold.name -> ops.ThresholdAction.handler(() => state.get, modify))
-    val runner =
-      new ops.ActionRunner(ops.Actions.all, handlers ++ own, unavailable, readOnly = config.readOnly, clock = clock)
+  def setActions(
+      handlers: (() => TuiState) => Map[String, ops.ActionHandler],
+      unavailable: Map[String, String] = Map.empty
+  ): Unit =
+    val current = () => state.get
+    val own = Map(ops.Actions.Threshold.name -> ops.ThresholdAction.handler(current, modify))
+    val runner = new ops.ActionRunner(
+      ops.Actions.all,
+      handlers(current) ++ own,
+      unavailable,
+      readOnly = config.readOnly,
+      clock = clock
+    )
     actions.getAndSet(Some(runner)).foreach(_.shutdown())
 
   /** What the runner has published, into the state the next frame draws; and, while a confirmation is on screen, its

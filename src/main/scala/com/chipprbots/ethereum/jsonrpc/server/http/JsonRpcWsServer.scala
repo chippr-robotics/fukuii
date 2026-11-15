@@ -1,6 +1,7 @@
 package com.chipprbots.ethereum.jsonrpc.server.http
 
 import java.util.UUID
+import java.util.concurrent.atomic.AtomicInteger
 
 import org.apache.pekko.actor.ActorSystem
 import org.apache.pekko.actor.typed.ActorRef
@@ -14,7 +15,9 @@ import org.apache.pekko.http.scaladsl.model.ws.TextMessage
 import org.apache.pekko.http.scaladsl.server.Directives.*
 import org.apache.pekko.http.scaladsl.server.Route
 import org.apache.pekko.stream.Materializer
+import org.apache.pekko.stream.KillSwitches
 import org.apache.pekko.stream.OverflowStrategy
+import org.apache.pekko.stream.SharedKillSwitch
 import org.apache.pekko.stream.scaladsl.Flow
 import org.apache.pekko.stream.scaladsl.Sink
 import org.apache.pekko.stream.scaladsl.Source
@@ -23,10 +26,9 @@ import org.apache.pekko.util.Timeout
 import cats.effect.unsafe.IORuntime
 
 import scala.concurrent.ExecutionContext
+import scala.concurrent.Future
 import scala.concurrent.duration.*
 import scala.jdk.CollectionConverters.*
-import scala.util.Failure
-import scala.util.Success
 
 import com.typesafe.config.ConfigValueType
 import org.json4s.*
@@ -99,14 +101,44 @@ class JsonRpcWsServer(
       }
     }
 
+  /** Where the dashboard's RPC view is told whether the server is bound or was stopped; the node's own, and a test's
+    * own where a test does not want to touch it.
+    */
+  protected def callStats: RpcCallStats = RpcCallStats.Node
+
+  /** How long `stop` gives the open connections before it closes them: WebSocket connections are never finished, so
+    * every one open when `stop` is called is closed by this time.
+    */
+  protected def stopDeadline: FiniteDuration = ServerLifecycle.DefaultHardDeadline
+
+  /** The binding, kept: what stops this server and starts it again (`stop`, `start`), and whether it is bound
+    * (`isBound`, `boundAddress`). Spec 029 FR-052.
+    */
+  lazy val lifecycle: ServerLifecycle =
+    new ServerLifecycle(RpcCallStats.Ws, () => bind(), callStats, stopDeadline, () => closeConnections())
+
+  // Terminating the binding does not close an upgraded WebSocket connection (measured: it stays open, and counted, for
+  // as long as the client keeps it), so each connection's flow runs through the switch of the run it was opened in, and
+  // `stop` shuts that switch down. A run is one bind: `bind` makes the next run's switch, so a connection opened after a
+  // start is never closed by the previous stop.
+  @volatile private var connections: SharedKillSwitch = KillSwitches.shared("json-rpc-ws-connections")
+
+  private def closeConnections(): Unit = connections.shutdown()
+
+  private val openCount = new AtomicInteger(0)
+
+  /** The WebSocket connections open now (upgraded, and not yet closed), for the preview of `rpc stop ws`. */
+  def openConnections: Int = openCount.get()
+
   def run(): Unit =
+    // The outcome is logged, and said to the RPC view, by the lifecycle.
+    val _ = lifecycle.start()
+
+  private def bind(): Future[Http.ServerBinding] =
+    connections = KillSwitches.shared("json-rpc-ws-connections")
     val bindingF = Http(system).newServerAt(config.interface, config.port).bind(route)
-    bindingF.onComplete {
-      case Success(b)  => log.info(s"JSON RPC WS server listening on ${b.localAddress}")
-      case Failure(ex) => log.error("Cannot start JSON RPC WS server", ex)
-    }
-    // Whether it bound, for the dashboard's RPC view (spec 029 FR-039).
-    bindingF.onComplete(bound => RpcCallStats.Node.listening(RpcCallStats.Ws, bound.isSuccess))
+    bindingF.foreach(b => log.info(s"JSON RPC WS server listening on ${b.localAddress}"))
+    bindingF
 
   private def buildWsFlow(): Flow[Message, Message, Any] =
     val connId = UUID.randomUUID().toString
@@ -116,6 +148,9 @@ class JsonRpcWsServer(
       .queue[String](256, OverflowStrategy.dropHead)
       .preMaterialize()
 
+    // Counted where the connection is registered, before the manager hears of it, and uncounted once it ends: see the
+    // `watchTermination` below.
+    openCount.incrementAndGet()
     subscriptionManager ! RegisterConnection(connId, queue)
 
     // Inbound sink: parse JSON-RPC, route, push response to queue
@@ -129,10 +164,18 @@ class JsonRpcWsServer(
 
     val outboundMessages = outboundSource.map(TextMessage.Strict(_))
 
-    Flow
-      .fromSinkAndSourceCoupled(inboundSink, outboundMessages)
+    // Shut down by `stop`: it completes the inbound side, which ends the coupled flow, which makes the server send the
+    // close frame; `watchTermination` below then tells the manager.
+    val killSwitch = connections
+    Flow[Message]
+      .via(killSwitch.flow[Message])
+      .via(Flow.fromSinkAndSourceCoupled(inboundSink, outboundMessages))
       .watchTermination() { (mat, doneFuture) =>
-        doneFuture.onComplete(_ => subscriptionManager ! ConnectionClosed(connId))
+        doneFuture.onComplete { _ =>
+          // Before the message, so that whoever sees the connection closed sees it uncounted.
+          openCount.decrementAndGet()
+          subscriptionManager ! ConnectionClosed(connId)
+        }
         mat
       }
 

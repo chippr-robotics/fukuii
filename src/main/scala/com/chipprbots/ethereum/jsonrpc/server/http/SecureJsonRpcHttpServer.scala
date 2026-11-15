@@ -7,11 +7,7 @@ import org.apache.pekko.http.cors.scaladsl.model.HttpOriginMatcher
 import org.apache.pekko.http.scaladsl.ConnectionContext
 import org.apache.pekko.http.scaladsl.Http
 
-import scala.util.Failure
-import scala.util.Success
-
 import com.chipprbots.ethereum.jsonrpc.JsonRpcHealthChecker
-import com.chipprbots.ethereum.jsonrpc.RpcCallStats
 import com.chipprbots.ethereum.jsonrpc.graphql.GraphQLService
 import com.chipprbots.ethereum.jsonrpc.server.controllers.JsonRpcBaseController
 import com.chipprbots.ethereum.jsonrpc.server.http.JsonRpcHttpServer.JsonRpcHttpServerConfig
@@ -28,7 +24,9 @@ class SecureJsonRpcHttpServer(
     extends JsonRpcHttpServer
     with Logger:
 
-  def run(): scala.concurrent.Future[Http.ServerBinding] =
+  def run(): scala.concurrent.Future[Http.ServerBinding] = lifecycle.start()
+
+  override protected def bind(): scala.concurrent.Future[Http.ServerBinding] =
     given ec: scala.concurrent.ExecutionContext = actorSystem.dispatcher
 
     val maybeHttpsContext = getSSLContext().map(sslContext => ConnectionContext.httpsServer(sslContext))
@@ -38,18 +36,15 @@ class SecureJsonRpcHttpServer(
         val bindingResultF =
           Http(actorSystem).newServerAt(config.interface, config.port).enableHttps(httpsContext).bind(route)
 
-        bindingResultF.onComplete {
-          case Success(serverBinding) => log.info(s"JSON RPC HTTPS server listening on ${serverBinding.localAddress}")
-          case Failure(ex)            => log.error("Cannot start JSON HTTPS RPC server", ex)
-        }
-        // Whether it bound, for the dashboard's RPC view (spec 029 FR-039).
-        bindingResultF.onComplete(bound => RpcCallStats.Node.listening(RpcCallStats.Http, bound.isSuccess))
+        // The failure is logged by the lifecycle, and whether it bound is said to the RPC view there (spec 029 FR-039).
+        bindingResultF.foreach(serverBinding =>
+          log.info(s"JSON RPC HTTPS server listening on ${serverBinding.localAddress}")
+        )
 
         bindingResultF
       case Left(error) =>
-        log.error(s"Cannot start JSON HTTPS RPC server due to: $error")
-        // It will not listen: said for the dashboard's RPC view (spec 029 FR-039).
-        RpcCallStats.Node.listening(RpcCallStats.Http, isListening = false)
-        throw new IllegalStateException(error.reason)
+        // A failed future, not a throw: `rpc start` runs this on the dashboard's thread. The lifecycle logs it and says
+        // to the RPC view that it will not listen.
+        scala.concurrent.Future.failed(new IllegalStateException(error.reason))
 
   override def corsAllowedOrigins: HttpOriginMatcher = config.corsAllowedOrigins

@@ -47,6 +47,13 @@ object DetectionMode:
           "(expected one of: none, upnp, full)"
       )
 
+/** The step of the [[ExternalIPDetector]] cascade that found an address. */
+enum IpSource:
+  case Upnp, Stun, Https, Interface
+
+/** An address [[ExternalIPDetector.detectWithSource]] found, and the step that found it. */
+final case class DetectedAddress(address: InetAddress, source: IpSource)
+
 /** Detects this node's externally reachable IPv4 address via a best-effort cascade of independent probes, validating
   * every candidate before it is returned.
   *
@@ -98,10 +105,28 @@ object ExternalIPDetector extends Logger:
       httpProbe: () => Option[InetAddress] = () => tryHttp(),
       localInterfaceProbe: () => Option[InetAddress] = () => tryLocalInterface()
   ): Option[InetAddress] =
+    detectWithSource(mode, upnpProbe, stunProbe, httpProbe, localInterfaceProbe).map(_.address)
+
+  /** [[detect]], with the step that found the address (spec 029: the dashboard shows how the node's address was
+    * found). The probes run in the same order and stop at the first that answers.
+    */
+  def detectWithSource(
+      mode: DetectionMode = DetectionMode.Full,
+      upnpProbe: () => Option[InetAddress] = () => tryUpnp(),
+      stunProbe: () => Option[InetAddress] = () => tryStun(),
+      httpProbe: () => Option[InetAddress] = () => tryHttp(),
+      localInterfaceProbe: () => Option[InetAddress] = () => tryLocalInterface()
+  ): Option[DetectedAddress] =
+    def step(source: IpSource, probe: () => Option[InetAddress]): () => Option[DetectedAddress] =
+      () => probe().map(DetectedAddress(_, source))
+    val upnp = step(IpSource.Upnp, upnpProbe)
+    val stun = step(IpSource.Stun, stunProbe)
+    val https = step(IpSource.Https, httpProbe)
+    val iface = step(IpSource.Interface, localInterfaceProbe)
     mode match
       case DetectionMode.None => None
-      case DetectionMode.Upnp => upnpProbe().orElse(localInterfaceProbe())
-      case DetectionMode.Full => upnpProbe().orElse(stunProbe()).orElse(httpProbe()).orElse(localInterfaceProbe())
+      case DetectionMode.Upnp => upnp().orElse(iface())
+      case DetectionMode.Full => upnp().orElse(stun()).orElse(https()).orElse(iface())
 
   /** True only for an IPv4 address outside every reserved/private/documentation/multicast range. Never true for an IPv6
     * address. Checked as explicit prefix comparisons on the 32-bit value, not via `InetAddress`'s own
