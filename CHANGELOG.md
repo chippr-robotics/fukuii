@@ -424,6 +424,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `.env` files.
 
 ### Added
+- **The `--tui` dashboard can act on the node (spec 029 slice 7, ADR OPS-004).** The Ops view (`9`) lists the
+  actions; each can be typed at the `:` prompt from any view, and `a` acts on the selected peer, miner or action.
+  - **What it can do.** Read: `config [filter]` (the effective configuration, secrets hidden), `tunables`, `deps`,
+    `test-rpc`, `net`. Change: `loglevel <level> [logger]` and `loglevel reset`, `maxpeers <n>`, `peer trust`,
+    `peer untrust`, `threshold <name> <value>`, `peer add <enode>`, `peer drop <id>`, `peer block <address>`,
+    `peer unblock <address>`, `coinbase <address>` (ETC), `rpc stop|start <http|ws>`, `dbcheck`, `detect-ip`,
+    `bundle` (a support bundle under `<datadir>/support/`), `mining stop` (ETC).
+  - **How an action is confirmed** depends on what it can break: a reading runs at once; a setting that can be put
+    back asks in a dialog with Cancel focused; an action that interrupts a peer or a caller asks for `y`; an action
+    the process cannot undo asks for the word `stop`. Every dialog first shows what will change, read from the node,
+    and an action that cannot be done says why and cannot be confirmed. Pasted text confirms nothing.
+  - **Stopping the node from the TUI now takes the word.** `q` opens the dialog as before; `y` no longer stops the
+    node: type `stop` and press `Enter`. `Ctrl-C` is unchanged.
+  - **Nothing new is reachable from the network.** The actions call the node's own service functions in process: no
+    RPC method is added and no namespace is enabled. Each attempt writes one INFO line from the logger
+    `fukuii.tui.ops`. With `fukuii.tui.read-only = true` only the readings run.
+  - **Not offered:** `mining start` is always refused (this client cannot start a miner that was off or was
+    stopped), and compaction, snapshots, restarts and reloading configuration are listed in the Ops view with the
+    reason for each.
+- **The JSON-RPC HTTP and WebSocket servers can be stopped and started again in process (spec 029 slice 7).** Used
+  by the dashboard's `rpc stop` and `rpc start`; nothing calls it over RPC. On stop, HTTP requests in flight finish
+  and the WebSocket server closes its own connections and drops their subscriptions.
 - **New metric `app_pow_miner_running` (spec 029 slice 7):** 1 while the built-in ETC miner is mining, 0 before it
   starts, after `miner_stop`, and after its coordinator has stopped for any reason. `eth_mining` also counts external
   miners and stays true for `miner-active-timeout` after a stop; this gauge does not. Mining itself is unchanged.
