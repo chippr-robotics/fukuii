@@ -3402,3 +3402,14 @@ items:
     links:
       spec: 018
     notes: "forge, C4e part 4 pre-code: refuse with ask-again, not wait (BlockImportGate deadlock); needs beacon; C4e part 5 or C5a"
+  - id: B-295
+    title: "T183 remainder: a node killed during reverse-then-commit restarts on a valid head and adopts the heavier chain when offered again"
+    priority: P1
+    status: open
+    area: consensus
+    size: M
+    opened: 2026-11-15
+    refs: []
+    links:
+      spec: 018
+    notes: forge W3, C4e part 4. The 4,000-block archive reorg is pinned (ReorgBlockhashParitySpec); the kill mid-attempt and the re-adoption after restart are not. Gate before path-live is on for a Mordor archive node
