@@ -4,9 +4,13 @@
 
 **Created**: 2026-11-13
 
-**Status**: Active (2026-11-14). The spec, plan, tasks and art merged as #1820, slice 1 (input and navigation) as #1834, slice 2 (graphics) as #1835, slice 3 (chain) as #1837, slice 4 (mempool) as #1839, slice 5 (RPC, Engine API, mining) as #1842; slice 6 (storage, system, health) as #1844; slice 7 (operator actions) is in review as #1847.
+**Status**: Done (2026-11-15). Seven slices merged: #1834 (input and navigation), #1835 (graphics), #1837 (chain), #1839 (mempool), #1842 (RPC, Engine API, mining), #1844 (storage, system, health), #1847 (operator actions); the spec, plan and art as #1820; the closing records as #1848. Two criteria are recorded as not met as written: FR-054's `compact` is not offered (B-281), and SC-013's file list (tasks.md, T117).
 
-**In flight**: `ccr-452bbde8-2hrv25` (cloud session, B-280): slice 7, operator actions
+**Closed** (2026-11-15):
+- Reason: shipped, and validated in a terminal by the user on a Mordor node (0.11.104, block graphics).
+- Lives on in: `src/main/scala/com/chipprbots/ethereum/console/`, `nodebuilder/TuiActions.scala`, `docs/architecture/console-ui.md`, ADR `docs/adr/operations/OPS-004-tui-operator-actions.md`.
+- Open follow-ups: B-281 (compaction), B-285 to B-288, B-278, B-279, B-192; pixel mode was the user's own test.
+
 
 **Input**: The user's brief of 2026-11-13: "the tui has basic ascii graphics currently and no real input controls …
 we can use Kitty Graphics Protocol to build a vga inspired execution command center … a 1980s arcade-style Network
