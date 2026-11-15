@@ -15,6 +15,7 @@ import com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncController.*
 import com.chipprbots.ethereum.blockchain.sync.snap.actors.AccountRangeStats
 import com.chipprbots.ethereum.blockchain.sync.snap.actors.ByteCodeCoordinator
 import com.chipprbots.ethereum.blockchain.sync.snap.actors.StorageRangeCoordinator
+import com.chipprbots.ethereum.db.storage.PathHandoffSample
 import com.chipprbots.ethereum.network.PeerId
 import com.chipprbots.ethereum.network.p2p.messages.SNAP
 import com.chipprbots.ethereum.testing.Tags.*
@@ -124,6 +125,8 @@ class SNAPIdleTotalitySpec
     PathPublishProgress(1L, 1L),
     PathPublishDone(PathToHashExporter.Result(1L, 1L), 1L),
     PathPublishFailed(new RuntimeException("idle totality")),
+    HandoffSampleDone(PathHandoffSample.Result()),
+    HandoffSampleFailed(new RuntimeException("idle totality")),
     HealingServeRoot(BigInt(5), None),
     PivotStateUnservable(root, "idle totality", 1),
     ProgressAccountsSynced(0L),
@@ -149,7 +152,9 @@ class SNAPIdleTotalitySpec
     "HeaderHoldTick" -> Crashed,
     "PathPublishProgress" -> Crashed,
     "PathPublishDone" -> Crashed,
-    "PathPublishFailed" -> Crashed
+    "PathPublishFailed" -> Crashed,
+    "HandoffSampleDone" -> Crashed,
+    "HandoffSampleFailed" -> Crashed
   ).withDefaultValue(Alive)
 
   private def run(command: Command): Outcome =

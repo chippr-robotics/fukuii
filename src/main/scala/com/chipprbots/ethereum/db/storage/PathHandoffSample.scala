@@ -106,7 +106,23 @@ object PathHandoffSample:
       sampledCode: Int = 0,
       sampledCodeAbsent: Int = 0,
       sampleMillis: Long = 0L
-  )
+  ):
+    /** Lookups that met a hole in a storage trie: let by only where the sync left accounts out. */
+    def storageHoles: Int = sampledStorageRootsMissing + sampledMissing
+
+    /** What was looked at and what was found, for a log. */
+    def describe: String =
+      s"$sampledAccountLeaves account leaves looked up from the root ($sampledAccountMisses of another root); " +
+        s"$sampledStorageRoots storage tries ($sampledStorageRootsStale left behind, $sampledStorageRootsMissing " +
+        s"with no root); $sampledLargeTrieLeaves leaves of the largest of them and $sampledEmbedded held in their " +
+        s"parent ($sampledStale left behind, $sampledMissing at a hole); $sampledCodeAbsent of $sampledCode code " +
+        s"hashes absent; in $sampleMillis ms"
+
+  /** The sample stopped the hand-off: the rows are not the whole of the state at the root it was given. It is the
+    * sample's own verdict, and nothing else it throws is: a store that fails throws what it throws, and that is not a
+    * reason to heal again.
+    */
+  final class Stopped(message: String, cause: Throwable = null) extends IllegalStateException(message, cause)
 
   /** Whether lookups missed too often for that to be what another pivot left: more than 1% of them, and at least 16. */
   def tooManyMisses(misses: Int, sampled: Int): Boolean =
@@ -222,24 +238,24 @@ object PathHandoffSample:
     val at = s"at the state root ${hexOf(stateRoot.take(4).toArray)}"
     val accountHoles = leaves.holes + roots.unreachable + large.unreachable + embedded.unreachable
     if accountHoles > 0 then
-      throw new IllegalStateException(
+      throw new Stopped(
         s"The hand-off's sample failed: $accountHoles lookups $at met a row of the account trie that is absent or is " +
           "another node than its parent names"
       )
     if tooManyMisses(leaves.misses, leaves.sampled) then
-      throw new IllegalStateException(
+      throw new Stopped(
         s"The hand-off's sample failed: ${leaves.misses} of ${leaves.sampled} sampled account leaves not found (or " +
           s"different) $at"
       )
     val storageHoles = roots.missing + large.missing + embedded.missing
     if storageHoles > 0 && !accountsLeftOut then
-      throw new IllegalStateException(
+      throw new Stopped(
         s"The hand-off's sample failed: ${roots.missing} of ${roots.sampled} sampled storage tries have no root " +
           s"where their account $at names it, and ${large.missing + embedded.missing} lookups of a storage leaf met " +
           "a row that is absent or is another node, on a sync that left no account out"
       )
     if tooManyMisses(roots.missing, roots.sampled) then
-      throw new IllegalStateException(
+      throw new Stopped(
         s"The hand-off's sample failed: ${roots.missing} of ${roots.sampled} sampled storage tries have no root " +
           s"where their account $at names it: more than the accounts a sync leaves out"
       )
@@ -401,7 +417,7 @@ object PathHandoffSample:
       try rows.getAt(NibblePath.Empty, root.toArray)
       catch
         case e: MPTException =>
-          throw new IllegalStateException(
+          throw new Stopped(
             s"The hand-off's sample failed: the state root ${hexOf(root.take(4).toArray)} is not in the rows",
             e
           )

@@ -39,6 +39,7 @@ import com.chipprbots.ethereum.db.storage.FlatSlotStorage
 import com.chipprbots.ethereum.db.storage.MptStorage
 import com.chipprbots.ethereum.db.storage.PathNodeStorage
 import com.chipprbots.ethereum.db.storage.StateStorage
+import com.chipprbots.ethereum.db.storage.pathstate.SyncHandoff
 import com.chipprbots.ethereum.domain.BlockHeader
 import com.chipprbots.ethereum.domain.BlockchainReader
 import com.chipprbots.ethereum.domain.BlockchainWriter
@@ -152,6 +153,9 @@ private[snap] class StubSnapFinalizationState(
   def blockchainReader: BlockchainReader = chain.blockchainReader
   def blockchainWriter: BlockchainWriter = chain.blockchainWriter
   def pathNodeStorageOpt: Option[PathNodeStorage] = None
+
+  /** The unified state layout's hand-off (spec 018 C5a part 5): none, on the hash layout these stubs run. */
+  def handoff: Option[SyncHandoff] = None
 
   // StateIngest (spec 016 T055): forwards to the stores above, read on each call.
   val stateIngest: StateIngest = new ForwardingStateIngest(
