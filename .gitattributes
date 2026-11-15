@@ -26,3 +26,6 @@ src/test/resources/tui/golden/*.txt -whitespace
 *.dll binary
 *.so binary
 *.dylib binary
+# Windows batch files keep CRLF (cmd.exe misreads some LF-only scripts).
+*.cmd text eol=crlf
+*.bat text eol=crlf
