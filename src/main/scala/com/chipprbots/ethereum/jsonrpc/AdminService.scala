@@ -112,6 +112,104 @@ object AdminService:
 
   private val ValidLogLevels = Set("OFF", "ERROR", "WARN", "INFO", "DEBUG", "TRACE", "ALL")
 
+  // ---- the log levels as they are, and as they were (spec 029 FR-054) ------------------------------------------
+  // Read and reset in process, by the dashboard's `loglevel` action; none of this is routed over JSON-RPC.
+
+  /** A logger and its level: the one set on it, if any, and the one it logs at (its own, or the nearest ancestor's).
+    */
+  case class LoggerLevel(name: String, configured: Option[String], effective: String)
+
+  /** A logger whose level was changed since the node started: the level set on it before the first change (None: it
+    * inherited), the one it has now, and whether the change made the logger (no code had asked for it).
+    */
+  case class ChangedLogger(name: String, before: Option[String], now: String, createdByChange: Boolean)
+
+  /** Logback's state is the JVM's, so what was changed is kept for the JVM: by `admin_changeLogLevel`, by the
+    * dashboard, by whoever. A logger's first change is the one remembered: that is what a reset returns it to.
+    */
+  private val changedLoggers = new java.util.concurrent.ConcurrentHashMap[String, (Option[String], Boolean)]()
+
+  private def loggerContext: LoggerContext =
+    LoggerFactory.getILoggerFactory
+      .asInstanceOf[LoggerContext] // interop: SLF4J returns ILoggerFactory; Logback impl is always LoggerContext
+
+  /** `ROOT` for the root logger, whatever it was called by. */
+  private def loggerName(filter: String): String =
+    if filter.isEmpty || filter.equalsIgnoreCase(org.slf4j.Logger.ROOT_LOGGER_NAME) then
+      org.slf4j.Logger.ROOT_LOGGER_NAME
+    else filter
+
+  /** Whether a logger of this name exists: one some code asked for, or a package above one. A name that matches none
+    * is most likely mistyped, and logback would make a logger of it that nothing writes to.
+    */
+  def loggerExists(name: String): Boolean = loggerContext.exists(loggerName(name)) != null
+
+  /** The loggers whose name starts with `prefix` (all of them for an empty one), by name. */
+  def logLevels(prefix: String = ""): List[LoggerLevel] =
+    import scala.jdk.CollectionConverters.*
+    loggerContext.getLoggerList.asScala.toList
+      .filter(_.getName.startsWith(prefix))
+      .map(l => LoggerLevel(l.getName, Option(l.getLevel).map(_.toString), l.getEffectiveLevel.toString))
+      .sortBy(_.name)
+
+  /** One logger's level, if the logger exists. */
+  def logLevel(name: String): Option[LoggerLevel] =
+    Option(loggerContext.exists(loggerName(name)))
+      .map(l => LoggerLevel(l.getName, Option(l.getLevel).map(_.toString), l.getEffectiveLevel.toString))
+
+  /** The loggers changed since the node started, by name. */
+  def changedLogLevels: List[ChangedLogger] =
+    import scala.jdk.CollectionConverters.*
+    changedLoggers.asScala.toList
+      .map { case (name, (before, created)) =>
+        ChangedLogger(name, before, loggerContext.getLogger(name).getEffectiveLevel.toString, created)
+      }
+      .sortBy(_.name)
+
+  /** Returns every changed logger to the level it had before its first change: its own, or none, so that it inherits
+    * again. A logger the change made stays (logback removes none) and inherits. The context is not reset: that would
+    * take every appender off, the dashboard's log ring among them. Returns what it restored.
+    */
+  def resetLogLevels(): List[ChangedLogger] =
+    val restored = changedLogLevels
+    restored.foreach { changed =>
+      loggerContext.getLogger(changed.name).setLevel(changed.before.map(Level.toLevel).orNull)
+      val _ = changedLoggers.remove(changed.name)
+    }
+    restored
+
+  /** Remembers `name`'s level before it is first changed. Called before the level is set. */
+  private def rememberLevel(name: String): Unit =
+    val created = loggerContext.exists(name) == null
+    val before = Option(loggerContext.getLogger(name).getLevel).map(_.toString)
+    val _ = changedLoggers.putIfAbsent(name, (before, created))
+
+  private val adminLog = LoggerFactory.getLogger(classOf[AdminService])
+
+  /** What `admin_changeLogLevel` does (the service's method is this): the one function that sets a level, for the
+    * JSON-RPC method and for the dashboard alike (spec 029 FR-052).
+    */
+  def setLogLevel(req: AdminChangeLogLevelRequest): ServiceResponse[AdminChangeLogLevelResponse] = IO {
+    if !ValidLogLevels.contains(req.level) then Left(JsonRpcError.InvalidParams(s"Invalid log level: ${req.level}"))
+    else
+      try
+        val level = Level.toLevel(req.level)
+        val logFilters = req.logFilters.getOrElse(List(""))
+        logFilters.foreach { filter =>
+          val name = loggerName(filter)
+          // What it was before, so that a reset can put it back (spec 029 FR-054): whoever changes it.
+          rememberLevel(name)
+          val logger = loggerContext.getLogger(name)
+          adminLog.debug(s"Setting $name logging level to ${req.level}")
+          logger.setLevel(level)
+        }
+        Right(AdminChangeLogLevelResponse())
+      catch
+        case ex: Exception =>
+          adminLog.error(s"Failed to change log level to ${req.level}", ex)
+          Left(JsonRpcError.InternalError)
+  }
+
 class AdminService(
     nodeStatusHolder: AtomicReference[NodeStatus],
     peerManager: typed.ActorRef[PeerManagerActor.Command],
@@ -297,27 +395,8 @@ class AdminService(
     * LogConfigurator). Fukuii uses Logback (ch.qos.logback.classic). Different backends for each project's ecosystem;
     * runtime behaviour (dynamic per-logger level changes via SLF4J) is equivalent.
     */
-  def changeLogLevel(req: AdminChangeLogLevelRequest): ServiceResponse[AdminChangeLogLevelResponse] = IO {
-    if !ValidLogLevels.contains(req.level) then Left(JsonRpcError.InvalidParams(s"Invalid log level: ${req.level}"))
-    else
-      try
-        val ctx =
-          LoggerFactory.getILoggerFactory
-            .asInstanceOf[LoggerContext] // interop: SLF4J returns ILoggerFactory; Logback impl is always LoggerContext
-        val level = Level.toLevel(req.level)
-        val logFilters = req.logFilters.getOrElse(List(""))
-        logFilters.foreach { filter =>
-          val loggerName = if filter.isEmpty then org.slf4j.Logger.ROOT_LOGGER_NAME else filter
-          val logger = ctx.getLogger(loggerName)
-          log.debug(s"Setting $loggerName logging level to ${req.level}")
-          logger.setLevel(level)
-        }
-        Right(AdminChangeLogLevelResponse())
-      catch
-        case ex: Exception =>
-          log.error(s"Failed to change log level to ${req.level}", ex)
-          Left(JsonRpcError.InternalError)
-  }
+  def changeLogLevel(req: AdminChangeLogLevelRequest): ServiceResponse[AdminChangeLogLevelResponse] =
+    AdminService.setLogLevel(req)
 
   def getDatadir(@unused req: AdminDatadirRequest): ServiceResponse[AdminDatadirResponse] =
     IO.pure(Right(AdminDatadirResponse(datadir)))
