@@ -1,0 +1,42 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Chocolatey package for fukuii. .github/workflows/chocolatey.yml fills in __VERSION__ and packs it; the install
+     script downloads the release's fukuii-<version>.zip and checks it against the release's SHA256SUMS.txt. -->
+<package xmlns="http://schemas.microsoft.com/packaging/2015/06/nuspec.xsd">
+  <metadata>
+    <id>fukuii</id>
+    <version>__VERSION__</version>
+    <title>Fukuii</title>
+    <authors>Chippr Robotics</authors>
+    <owners>chipprbots</owners>
+    <projectUrl>https://github.com/chippr-robotics/fukuii</projectUrl>
+    <projectSourceUrl>https://github.com/chippr-robotics/fukuii</projectSourceUrl>
+    <packageSourceUrl>https://github.com/chippr-robotics/fukuii/tree/main/packaging/chocolatey</packageSourceUrl>
+    <docsUrl>https://docs.fukuii.com/</docsUrl>
+    <bugTrackerUrl>https://github.com/chippr-robotics/fukuii/issues</bugTrackerUrl>
+    <iconUrl>https://raw.githubusercontent.com/chippr-robotics/fukuii/main/docs/images/fukuii-hex-logo.png</iconUrl>
+    <licenseUrl>https://github.com/chippr-robotics/fukuii/blob/main/LICENSE</licenseUrl>
+    <requireLicenseAcceptance>false</requireLicenseAcceptance>
+    <releaseNotes>https://github.com/chippr-robotics/fukuii/releases/tag/v__VERSION__</releaseNotes>
+    <tags>fukuii ethereum ethereum-classic etc evm blockchain node execution-client cli foss</tags>
+    <summary>Scala execution client for Ethereum Classic and Ethereum</summary>
+    <description><![CDATA[
+Fukuii is an execution client written in Scala. It follows Ethereum Classic (ETC, Mordor) with proof of work, and
+Ethereum (mainnet, Sepolia, Hoodi, Ephemery) next to a consensus client over the Engine API.
+
+* ETC and ETH networks built in, selected by name: `fukuii etc`, `fukuii mordor`, `fukuii sepolia`, `fukuii hoodi`
+* SNAP and full sync
+* JSON-RPC, WebSocket, IPC and Engine API servers
+* Terminal dashboard: `fukuii mordor --tui`
+
+The package installs the release distribution under the Chocolatey lib folder and puts `fukuii` on the PATH. It needs
+Java 25, which it takes from the `temurin25jre` package. Data is kept under `%USERPROFILE%\.fukuii` and is left in
+place when the package is uninstalled.
+]]></description>
+    <dependencies>
+      <dependency id="temurin25jre" version="25.0.5" />
+    </dependencies>
+  </metadata>
+  <files>
+    <file src="tools\**" target="tools" />
+  </files>
+</package>
