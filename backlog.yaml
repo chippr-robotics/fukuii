@@ -3380,3 +3380,14 @@ items:
     links:
       spec: 018
     notes: forge N2, C4e part 3; before fukuii.state.path-live is on by default
+  - id: B-293
+    title: Miner readers of the head generation (MockedMiner, Ethash coordinator, eth_getWork) before the mining refusal is lifted on path-live
+    priority: P1
+    status: open
+    area: consensus
+    size: M
+    opened: 2026-11-15
+    refs: []
+    links:
+      spec: 018
+    notes: "C4e part 4 (forge): seqlock on PathStateStorage.headGeneration; discard before the nonce search only; with T184's miner legs. Gate: ConfigValidator and EthMiningService refusals are not lifted without it (C5)"
