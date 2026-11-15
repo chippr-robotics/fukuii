@@ -138,3 +138,25 @@ class StateMetricsSpec extends AnyFlatSpec with Matchers:
     StateMetrics.lockWaited(1234L)
     waits.count() shouldBe before + 1
   }
+
+  // spec 018 T174 (C5a part 6)
+  it should "count a trigger's verdict and an escalation under their kind, a suppressed one, and blocks executed again" taggedAs UnitTest in {
+    EscalationKind.values.foreach { kind =>
+      withClue(s"$kind: ") {
+        val triggers = counter("db.state.recovery.escalation.triggers", "kind", kind.text)
+        val made = counter("db.state.recovery.escalations", "kind", kind.text)
+        StateMetrics.escalationTriggered(kind)
+        StateMetrics.escalationTriggered(kind)
+        StateMetrics.escalated(kind)
+        counter("db.state.recovery.escalation.triggers", "kind", kind.text) shouldBe triggers + 2
+        counter("db.state.recovery.escalations", "kind", kind.text) shouldBe made + 1
+      }
+    }
+    val suppressed = registry.get(s"$prefix.db.state.recovery.escalations.suppressed").counter().count()
+    StateMetrics.escalationSuppressed()
+    registry.get(s"$prefix.db.state.recovery.escalations.suppressed").counter().count() shouldBe suppressed + 1
+
+    val again = registry.get(s"$prefix.db.state.recovery.reexecuted.blocks").counter().count()
+    StateMetrics.reexecuted(7)
+    registry.get(s"$prefix.db.state.recovery.reexecuted.blocks").counter().count() shouldBe again + 7
+  }

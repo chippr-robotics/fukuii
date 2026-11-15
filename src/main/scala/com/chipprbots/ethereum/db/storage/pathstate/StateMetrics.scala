@@ -83,6 +83,32 @@ object StateMetrics extends MetricsContainer with PathStateStorage.CommitObserve
       .map(reason => reason -> metrics.registry.counter(refusedName, "reason", reason.toString))
       .toMap
 
+  // The recovery of the state and its escalation (spec 018 T174; C5a part 6).
+  private val recoveryReexecuted = metrics.counter("db.state.recovery.reexecuted.blocks")
+  private val triggersName = s"${metrics.metricsPrefix}.db.state.recovery.escalation.triggers"
+  private val escalationTriggers: Map[EscalationKind, io.micrometer.core.instrument.Counter] =
+    EscalationKind.values.iterator.map(kind => kind -> metrics.registry.counter(triggersName, "kind", kind.text)).toMap
+  private val escalationsName = s"${metrics.metricsPrefix}.db.state.recovery.escalations"
+  private val escalations: Map[EscalationKind, io.micrometer.core.instrument.Counter] =
+    EscalationKind.values.iterator
+      .map(kind => kind -> metrics.registry.counter(escalationsName, "kind", kind.text))
+      .toMap
+  private val escalationsSuppressed = metrics.counter("db.state.recovery.escalations.suppressed")
+
+  /** Blocks executed again to bring the state to a head it was not at (a recovery, not an import). */
+  def reexecuted(blocks: Long): Unit = recoveryReexecuted.increment(blocks.toDouble)
+
+  /** A trigger's verdict was "give the state up", for this reason: counted each time it says so, acted on or not. */
+  def escalationTriggered(kind: EscalationKind): Unit = escalationTriggers(kind).increment()
+
+  /** The state was given up and a sync from scratch begun. */
+  def escalated(kind: EscalationKind): Unit = escalations(kind).increment()
+
+  /** A verdict that was not acted on: inside the cool-down after the last escalation, or for a branch that already
+    * caused one.
+    */
+  def escalationSuppressed(): Unit = escalationsSuppressed.increment()
+
   override def lockWaited(nanos: Long): Unit = lockWait.record(nanos, TimeUnit.NANOSECONDS)
 
   override def overlay(usage: OverlayUsage): Unit = overlayNow.set(usage)

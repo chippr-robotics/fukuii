@@ -166,7 +166,8 @@ class HeadMoveOnTheChainSpec extends ScalaTestWithActorTestKit with AnyFlatSpecL
     def engine(
         held: () => Option[ByteString],
         choices: com.chipprbots.ethereum.consensus.engine.ForkChoiceManager = node.forkChoiceManager,
-        recovery: Option[StateRecovery] = None
+        recovery: Option[StateRecovery] = None,
+        escalation: Option[com.chipprbots.ethereum.blockchain.sync.EscalationWatch] = None
     ): EngineApiService =
       given org.apache.pekko.actor.typed.Scheduler = system.scheduler
       new EngineApiService(
@@ -176,7 +177,8 @@ class HeadMoveOnTheChainSpec extends ScalaTestWithActorTestKit with AnyFlatSpecL
         choices,
         None,
         stateHeldInPlace = Some(held),
-        stateRecovery = recovery
+        stateRecovery = recovery,
+        escalationWatch = escalation
       )
 
     /** A recovery over this node's state, which keeps the tickets it hands out and the blocks it executes, in order, by
@@ -701,13 +703,22 @@ class HeadMoveOnTheChainSpec extends ScalaTestWithActorTestKit with AnyFlatSpecL
         )
       )
       val before = on.everything
-      on.node.forkChoiceManager.applyForkChoiceState(choiceOf(chain(2), chain)) shouldBe Left("SYNCING")
+      // not followed, and said for what it is: a fault of this node, which counts towards giving the state up (C5a
+      // part 6). The consensus client is answered SYNCING all the same
+      val refused = on.node.forkChoiceManager.applyForkChoiceState(choiceOf(chain(2), chain))
+      refused.left.toOption.exists(_.startsWith(ForkChoiceManager.LocalFault)) shouldBe true
       on.everything shouldBe before
       on.node.forkChoiceManager.getHeadBlockHash shouldBe None
       on.pathState.hasFailedClosed shouldBe true
       // and nothing more is written in place: not the next block, not a confirmation of the head
       an[org.scalatest.exceptions.TestFailedException] should be thrownBy on.imports(blocks(4))
-      on.node.forkChoiceManager.applyForkChoiceState(choiceOf(chain.last, chain)) shouldBe Left("SYNCING")
+      withClue("every fork choice refused while the state is closed says so: ") {
+        on.node.forkChoiceManager
+          .applyForkChoiceState(choiceOf(chain.last, chain))
+          .left
+          .toOption
+          .exists(_.startsWith(ForkChoiceManager.LocalFault)) shouldBe true
+      }
       on.holds(chain.last.header, chain)
       // closed until the node is started again (the fault is kept in memory only; B-252)
       (the[StateUnavailable] thrownBy on.pathState.moveHead(
@@ -883,8 +894,12 @@ class HeadMoveOnTheChainSpec extends ScalaTestWithActorTestKit with AnyFlatSpecL
 
   // C4d part 3 (T161, T169, T156): the stored blocks of a head whose state is no longer held are executed again, oldest
   // first, apart, on the recovery's own thread; the head is moved by the next fork choice, as for any executed payload.
-  private def recoveringEngine(on: Node, recovery: StateRecovery) =
-    val engine = on.engine(() => on.pathState.anchor.map(_.hash), recovery = Some(recovery))
+  private def recoveringEngine(
+      on: Node,
+      recovery: StateRecovery,
+      escalation: Option[com.chipprbots.ethereum.blockchain.sync.EscalationWatch] = None
+  ) =
+    val engine = on.engine(() => on.pathState.anchor.map(_.hash), recovery = Some(recovery), escalation = escalation)
     given cats.effect.unsafe.IORuntime = cats.effect.unsafe.IORuntime.global
     (
       (block: Block) => engine.newPayload(payloadOf(block)).unsafeRunSync(),
@@ -1164,6 +1179,58 @@ class HeadMoveOnTheChainSpec extends ScalaTestWithActorTestKit with AnyFlatSpecL
       recovery.outcomes shouldBe Seq(StateRecovery.Outcome.Recovered(1))
       statusOf(choose(side)) shouldBe PayloadStatus.Valid
       on.holds(side.header, chain.init :+ side)
+    }
+
+  // spec 018 C5a part 6: the Engine API tells the escalation's watch how each recovery a fork choice asked for ended.
+  it should "count each fork choice that names a head it cannot move to for a fault of its own, and say when the count is reached" taggedAs
+    (UnitTest, ConsensusTest) in {
+      import com.chipprbots.ethereum.blockchain.sync.EscalationTrigger
+      import com.chipprbots.ethereum.blockchain.sync.EscalationWatch
+      import com.chipprbots.ethereum.db.storage.pathstate.EscalationKind
+      val on = new Node
+      blocks.take(39).foreach(on.imports)
+      val told = new java.util.concurrent.LinkedBlockingQueue[EscalationKind]()
+      val said = new java.util.concurrent.LinkedBlockingQueue[String]()
+      // two refused fork choices in a row, whatever the time between them
+      val watch = new EscalationWatch(
+        new EscalationTrigger(refusals = 2),
+        () => System.currentTimeMillis(),
+        kind => told.put(kind),
+        (_, why) => said.put(why)
+      )
+      // a block executed before fails now: the fault is the node's, never the block's
+      val (forty, fortyOne) = (blocks(39), blocks(40))
+      val recovery = new on.Recovery(
+        maxBlocks = 1,
+        fails = block =>
+          Option.when(block.header.hash == forty.header.hash)(
+            BlockExecutionError.ValidationAfterExecError("a disk that returns another state")
+          )
+      )
+      val (newPayload, choose) = recoveringEngine(on, recovery, Some(watch))
+      Seq(forty, fortyOne).foreach(block => newPayload(block).status shouldBe PayloadStatus.Valid)
+      Seq(fortyOne, forty).foreach(block => on.writer.dropForwardLayer(block.header.hash.value))
+
+      statusOf(choose(fortyOne)) shouldBe PayloadStatus.Syncing
+      recovery.outcomes.last shouldBe a[StateRecovery.Outcome.LocalFault]
+      withClue("the first refusal waits: ")(told.isEmpty shouldBe true)
+
+      // a fork choice the node follows ends the run: the refusal after it is the first of a new one
+      statusOf(choose(blocks(38))) shouldBe PayloadStatus.Valid
+      statusOf(choose(fortyOne)) shouldBe PayloadStatus.Syncing
+      withClue("after a head that was followed: ")(told.isEmpty shouldBe true)
+      // and so does one that names an ancestor of the head, which is answered VALID and moves nothing
+      statusOf(choose(blocks(37))) shouldBe PayloadStatus.Valid
+      statusOf(choose(fortyOne)) shouldBe PayloadStatus.Syncing
+      withClue("after an ancestor of the head was named: ")(told.isEmpty shouldBe true)
+
+      // named again, inside the recovery's cool-down: it ends at once as it ended, and counts as a fork choice refused
+      statusOf(choose(fortyOne)) shouldBe PayloadStatus.Syncing
+      told.poll(60, java.util.concurrent.TimeUnit.SECONDS) shouldBe EscalationKind.LocalFault
+      Option(said.poll(60, java.util.concurrent.TimeUnit.SECONDS)).getOrElse("") should include("a fault of this node")
+      statusOf(choose(fortyOne)) shouldBe PayloadStatus.Syncing
+      told.poll(60, java.util.concurrent.TimeUnit.SECONDS) shouldBe EscalationKind.LocalFault
+      withClue("said once for the run: ")(said.isEmpty shouldBe true)
     }
 
   it should "execute nothing for a chain longer than it covers, a missing body, or a head below no held state, and not try such a head again at once" taggedAs

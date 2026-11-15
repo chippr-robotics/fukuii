@@ -209,19 +209,35 @@ class ForkChoiceManager(
       case unavailable: StateUnavailable if unavailable.heldTo.isDefined =>
         notMoved(unavailable.reason)
         Left(ForkChoiceManager.NotHeldHead + unavailable.reason)
-      case unavailable: StateUnavailable => notMoved(unavailable.reason)
+      // The head was not moved to, and no block of its chain is said to be held. That is many things: a move the fork
+      // choice does not make (down to an ancestor of the head), a node with no state yet, a state that has failed
+      // closed. Only the last is said for what it is, this node's fault: every fork choice refused while the state is
+      // closed counts towards giving it up (spec 018 C5a part 6). The others say nothing of whether the chain can be
+      // followed.
+      case unavailable: StateUnavailable =>
+        notMoved(unavailable.reason)
+        if blockchainWriter.stateFailedClosed then Left(ForkChoiceManager.LocalFault + unavailable.reason)
+        else Left("SYNCING")
       // A record that is not what it should be is this datadir's fault, not the fork choice's: the state fails closed
       // (no further in-place write, no state given out, ERROR) and the head is answered as one not followed (plan.md
       // "C4b part 1": `Corrupt` fails closed at the Engine API; the escalation is C4d's)
       case refused: ReorgTooDeep if refused.reason == ReorgRefusal.Corrupt =>
         blockchainWriter.failStateClosed(s"the changeset records are corrupt (${refused.getMessage})")
         notMoved(refused.getMessage)
+        Left(ForkChoiceManager.LocalFault + refused.getMessage)
       // a move that would reverse the finalized block: the fork choice is not consistent with what it finalized
       // (go-ethereum: "final block not in canonical chain"), answered -38002 and not SYNCING (the user's decision of
       // 2026-11-14)
       case refused: ReorgTooDeep if refused.reason == ReorgRefusal.Finalized =>
         log.warn(s"Fork choice head ${header.number.value} ${header.hashAsHexString} refused: ${refused.getMessage}")
         Left(ForkChoiceManager.FinalizedReversed + refused.getMessage)
+      // deeper than the records reach, past a record that is not whole, or below the block the state began at: the
+      // records that would take the state there are gone, and no wait brings them back
+      case refused: ReorgTooDeep
+          if refused.reason == ReorgRefusal.Deep || refused.reason == ReorgRefusal.Incomplete ||
+            refused.reason == ReorgRefusal.Pivot =>
+        notMoved(refused.getMessage)
+        Left(ForkChoiceManager.Unreachable + refused.getMessage)
       case refused: ReorgTooDeep => notMoved(refused.getMessage)
 
   /** Publish the CL head to the registered listener and record it as the requested head — **nothing else**.
@@ -272,6 +288,17 @@ object ForkChoiceManager:
     * not moved meanwhile (spec 018 C4d part 3).
     */
   val NotHeldHead: String = "NOT HELD: "
+
+  /** The start of what [[ForkChoiceManager.applyForkChoiceState]] answers for a head on a chain this node's state does
+    * not reach: deeper than its records, or below the block its state began at (spec 018 C5a part 6). Answered SYNCING
+    * to the consensus client, as any head not followed.
+    */
+  val Unreachable: String = "UNREACHABLE: "
+
+  /** The start of what [[ForkChoiceManager.applyForkChoiceState]] answers for a head not followed for a fault of this
+    * node: records that are corrupt, a state that has failed closed (spec 018 C5a part 6). Answered SYNCING.
+    */
+  val LocalFault: String = "LOCAL FAULT: "
 
   /** The hash a fork choice names when it names no block (a safe or finalized block before there is one). */
   val ZeroHash: ByteString = ByteString(new Array[Byte](32))
