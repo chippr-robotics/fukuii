@@ -3480,3 +3480,14 @@ items:
     links:
       spec: 018
     notes: "forge W2, C5a part 2 (B-283). Nothing fetches bodies P-5..P after SNAP: the backfill runs up from genesis. (1) the hand-off's ensure fetches them by hash on BOTH layouts (C5a part 5); (2) the importer's state-fault arm, on AncestorNotStored, asks for the bodies AncestorWindow.check(parent) names (a restart into regular sync skips the hand-off). No release between C5a part 2 and part 5"
+  - id: B-302
+    title: "Ommers: read an ancestor's body only where its ommers hash is not the empty one (core-geth VerifyUncles)"
+    priority: P2
+    status: open
+    area: evm
+    size: S
+    opened: 2026-11-15
+    refs: []
+    links:
+      spec: 018
+    notes: "forge W3, C5a part 2: same verdicts, far fewer bodies needed (headers P..P-5 for the parent rule; bodies P..P-4 with ommers for used-before). Consensus code, its own commit; AncestorWindow filters the same way"
