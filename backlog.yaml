@@ -3456,3 +3456,14 @@ items:
     refs: []
     links: {}
     notes: "forge, C4e part 6 pre-code: AddOmmers(blocks.head) on NoChainSwitch after a fetcher reset from the common ancestor; both layouts"
+  - id: B-300
+    title: "C5 gate: fork recovery with no rewind must not stall once the importer runs on path-live (announces, a shorter heavier branch, refetch loop)"
+    priority: P1
+    status: open
+    area: sync
+    size: L
+    opened: 2026-11-15
+    refs: []
+    links:
+      spec: 018
+    notes: "forge, C4e part 6. (W3) announces and mined blocks clear the branch being resolved and move the fetcher forward: drop ImportNewBlock while resolving, keep resolvingBranchFrom. (W4) the strict pick's upper bound is this node's head: a heavier but shorter peer branch never completes it; bound by min(head, failed block). (f) a lighter branch refetched in a loop. (g) strict pick vs the 512 ready cap in archive. Tests not built: the one-recovery-per-block latch, the answer held until the import ends. The refusal arm is a stall until C5a escalates"
