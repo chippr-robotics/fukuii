@@ -3211,6 +3211,52 @@ restart, with `BLOCKHASH` read by the block that is executed before the index is
 ethereum/tests fork vectors (bcMultiChain, bcTotalDifficulty, bcForkStress), whose fixtures are not in this checkout:
 they are the gate before the guard is on for a node (B-289).
 
+#### C4e part 3: at the pinned cap, the head is moved first and the branch committed in place (2026-11-15)
+
+A branch whose executed blocks would hold more than `pinned-max-bytes` ended in `BranchTooLarge`, the same answer
+however often it was tried: a node that cannot adopt the heaviest chain has left it. The user's decision 1 of
+2026-11-12 is built: **reverse-then-commit is the rule at the cap** (`ConsensusImpl.commitInPlaceAtTheCap`).
+- **Where it is taken**: when the execution under the pin ends in `BranchTooLarge`, in the lost side parents (part 2)
+  or in the branch, for a branch selected by weight. What was kept under the pin stays; the rest is what is still to
+  run.
+- **What it does**: with the changeset records above the fork held from retention
+  (`BlockchainWriter.withRecordsHeldAbove`), and still under the pin, the head is moved with the state to the block the
+  first remaining block stands on (the last block kept, whose layers the move applies; the fork, or a held side parent,
+  when none was), and each remaining block is executed, validated and committed in place as the head, by the commit an
+  import uses (`executeBranch(adoptEachBlock = true)`; it is `StateRecovery.commitEach`'s commit too, so no core had to
+  be extracted). The head leaves the old chain before the whole branch is known valid, and is on a chain of valid
+  blocks at every step.
+- **What is left as the head** (W4, the user's decision of 2026-11-14): what was committed stays when it outweighs the
+  old head strictly, as `settleOnLayers` keeps an executed prefix and core-geth moves its head as soon as a side block
+  outweighs it; otherwise the head is moved back to the old head along the records held, and the importer is told what
+  part 1 tells it for a lighter prefix. On a fault of this node's state it is moved back whatever was committed.
+- **A lost side parent that fails in place** is part 2's divergence: moved back, remembered, nothing told invalid.
+
+**Read after code (forge): no blocker; five warnings, taken.** Anything thrown after the first move takes the head back
+while the records are still held (a first move that stopped part of the way among it). A move back that fails is
+**said**: the answer is a fault that names where the head is, with the committed blocks of the branch as imported and
+the chain it left queued again. A whole branch that ran and does not outweigh the head it was selected over is a
+disagreement of the stored weights, no verdict. The head is checked at entry against the one the branch was weighed
+against. A fork that left retention between the refusal up front and the hold says `[STATE-REORG-TOO-DEEP]`. Forge
+confirms: the old head read by number is sound (nothing under the pin writes the index); the strict `>` is core-geth's
+and part 1's; a move back leaves no index row, best block or transaction lookup of the branch
+(`canonicalHeadUpdate`); the hash layout cannot reach this code.
+
+**Recorded, not changed here**:
+- between the in-place commits a miner or a reader can see a head that is later moved back: wasted work and a head that
+  goes backwards, no split. **Part 4's attempt-wide latch lands before the guard is on for a node that mines.**
+- on every layout and arm, a reorganisation that kept a heavier prefix and met an invalid block answers
+  `BranchExecutionFailure`: the chain it left is not queued again and the pool is not told of it (B-291).
+
+**The mutation run**: 11 mutants, 10 caught (the cap not taken in either phase, a lighter prefix left as the head, a
+heavier one moved back from, the commit without the move, the old blocks not reported, side parents counted as the
+branch's, the weight of the pinned part only, a side parent's failure told as the branch's, the head left moved by it),
+1 not reachable in a test of a few blocks (the records not held: retention deletes nothing that young).
+`ReorgBlockhashParitySpec` runs its three core-geth scenarios on two more variants: nothing kept under the pin (a cap
+of one byte; a lost side parent goes through it), and the cap met within the branch. **Not covered**: a fault after
+in-place commits, a move back that fails, a first move that stops part of the way (each needs a store that fails on
+demand; before the guard is on by default, B-292).
+
 ### Destructive change (C8a and C8b): the vault protocol blocks
 
 ```
