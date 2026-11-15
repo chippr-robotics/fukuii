@@ -94,6 +94,26 @@ final class PathStateStorage(
     */
   private var countedThisMove = false
 
+  // The head's generation (see [[headGeneration]]): even while the head is settled, odd while a move of it or an
+  // attempt that holds the records is open. `openAttempts` counts them all, whatever thread opened each: a fork
+  // choice's move inside an adoption only nests. The monitor is a leaf: nothing is locked with it held.
+  private val generation = new java.util.concurrent.atomic.AtomicLong(0L)
+  private val attempts = new Object
+  private var openAttempts = 0
+
+  private def openAttempt(): Unit = attempts.synchronized {
+    openAttempts += 1
+    if openAttempts == 1 then generation.incrementAndGet()
+    ()
+  }
+
+  private def closeAttempt(): Unit = attempts.synchronized {
+    openAttempts -= 1
+    if openAttempts == 0 then
+      generation.incrementAndGet()
+      attempts.notifyAll()
+  }
+
   /** The executed blocks whose state is on no row (data-model 6.1), within their bounds (6.4). Nothing in the node
     * makes one yet.
     */
@@ -1166,10 +1186,12 @@ final class PathStateStorage(
       }
       recordHolds.put(hold, above.number + 1)
     }
+    // the hold is the attempt: the head is not settled until it ends, whatever moves and commits it makes
+    openAttempt()
     try body
     finally
       recordHolds.remove(hold)
-      ()
+      closeAttempt()
 
   /** Whether a move of the head is under way: from its plan to its last batch, the time between two batches included.
     * The head then steps through blocks that are not the one the move ends on, and nothing should be built on them.
@@ -1185,6 +1207,37 @@ final class PathStateStorage(
     * beacon).
     */
   def movesStarted: Long = movesBegun.get
+
+  /** The generation of the head, for who builds a block on it (spec 018 C4e part 4, T190). Even while the head is
+    * settled; odd from the first batch of a move of the head to its end, and for the whole of an attempt that holds the
+    * records ([[withRecordsHeld]]): an adoption that moves the head to a branch and commits its blocks in place, and
+    * may move it back. The head then stands on blocks it may not stay on. It changes by two for each of them, however
+    * many batches, moves and commits it makes; a block committed on the head as it is does not change it, and neither
+    * does a confirmation or a move refused before its first batch.
+    *
+    * The rule for a builder (a sequence lock): read it settled before the head is read ([[awaitHeadSettled]]), build,
+    * read it again, and keep the build only if it is the same. [[moveInProgress]] and [[movesStarted]] are a move's own
+    * and say nothing of an attempt.
+    */
+  def headGeneration: Long = generation.get
+
+  /** The generation once the head is settled, waiting for at most `maxMillis` for a move or an attempt to end; none
+    * when one is still open then. Not to be asked from inside a move or an attempt: it would wait for itself.
+    */
+  def awaitHeadSettled(maxMillis: Long): Option[Long] =
+    val deadline = System.nanoTime() + maxMillis * 1000000L
+    attempts.synchronized {
+      @annotation.tailrec
+      def settled(): Option[Long] =
+        if openAttempts == 0 then Some(generation.get)
+        else
+          val left = (deadline - System.nanoTime()) / 1000000L
+          if left <= 0 then None
+          else
+            attempts.wait(left)
+            settled()
+      settled()
+    }
 
   /** '''Moves the head to `target`''': the disk's state becomes that block's, by the changeset records of the blocks
     * that are reversed and by the records or the layers of the blocks that are applied (spec 018 data-model 7.3,
@@ -1261,6 +1314,8 @@ final class PathStateStorage(
       overlayTold()
       outcome
     finally
+      // the generation is settled only once the move is whole, or has ended where it stopped
+      if countedThisMove then closeAttempt()
       moving = false
       moves.unlock()
 
@@ -1342,6 +1397,8 @@ final class PathStateStorage(
             // nothing, and a move refused before this moved nothing either; neither is a move to whoever builds on the
             // head (B-249)
             if !countedThisMove then
+              // opened before it is said to be: the end of the move closes what was opened, and nothing else
+              openAttempt()
               countedThisMove = true
               movesBegun.incrementAndGet()
             val wrote = writeChunk(chunk, rows, finalized)

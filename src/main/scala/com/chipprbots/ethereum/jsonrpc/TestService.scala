@@ -54,6 +54,13 @@ import com.chipprbots.ethereum.utils.ForkBlockNumbers
 import com.chipprbots.ethereum.utils.Logger
 
 object TestService:
+  /** How long a block that is mined waits for a move of the head, or an adoption in place, to end before it is built.
+    */
+  val HeadSettleWait: FiniteDuration = 30.seconds
+
+  /** How many times a block is built when the head is moved while it is built, before the request is refused. */
+  val BuildsOnAMovingHead: Int = 3
+
   case class GenesisParams(
       author: ByteString,
       difficulty: String,
@@ -179,6 +186,9 @@ class TestService(
 
   import TestService.*
   import com.chipprbots.ethereum.jsonrpc.AkkaTaskOps.*
+
+  /** How long a block that is mined waits for the head to be settled before it is built. */
+  protected def headSettleWait: FiniteDuration = TestService.HeadSettleWait
 
   private var etherbase: Address = miningConfig.coinbase
   private var accountHashWithAdresses: List[(ByteString, Address)] = List()
@@ -342,27 +352,25 @@ class TestService(
     // Deferred: each block is built on the head as it is when its turn comes. Read when this is defined, the head is
     // read once for the whole request, and `test_mineBlocks(n)` mined one block and n - 1 siblings of it.
     def mineBlock(): IO[Unit] =
-      IO.defer(
-        getBlockForMining(
-          blockchainReader.getBestBlock.getOrElse(throw new IllegalStateException("No best block found"))
-        )
-      ).flatMap { blockForMining =>
-        testModeComponentsProvider
-          .getConsensus(preimageCache)
-          .evaluateBranchBlock(blockForMining.block)
-      }.map { res =>
-        log.info("Block mining result: " + res)
-        pendingTransactionsManager ! PendingTransactionsManager.ClearPendingTransactions
-        blockTimestamp += 1
-        // On the unified state layout a block that is mined is committed with its state as the head, or it is not
-        // there at all: an answer that says it was mined when it was only queued would be found out a call later.
-        res match
-          case _: BlockImportedToTop => ()
-          // answered as the state fault it is, as when it was thrown out of the import
-          case BlockImportStateFault(fault, _)             => throw fault
-          case other if blockchainReader.holdsStateInPlace => throw new TestService.NotImportedToTheHead(other)
-          case _                                           => ()
-      }
+      builtOnTheSettledHead(TestService.BuildsOnAMovingHead)
+        .flatMap { blockForMining =>
+          testModeComponentsProvider
+            .getConsensus(preimageCache)
+            .evaluateBranchBlock(blockForMining.block)
+        }
+        .map { res =>
+          log.info("Block mining result: " + res)
+          pendingTransactionsManager ! PendingTransactionsManager.ClearPendingTransactions
+          blockTimestamp += 1
+          // On the unified state layout a block that is mined is committed with its state as the head, or it is not
+          // there at all: an answer that says it was mined when it was only queued would be found out a call later.
+          res match
+            case _: BlockImportedToTop => ()
+            // answered as the state fault it is, as when it was thrown out of the import
+            case BlockImportStateFault(fault, _)             => throw fault
+            case other if blockchainReader.holdsStateInPlace => throw new TestService.NotImportedToTheHead(other)
+            case _                                           => ()
+        }
 
     def doNTimesF(n: Int)(fn: IO[Unit]): IO[Unit] = fn.flatMap { _ =>
       if n <= 1 then IO.unit
@@ -500,6 +508,41 @@ class TestService(
       storage <- account.storage
       storageKey <- storage.keys
     do preimageCache.put(crypto.kec256(storageKey.bytes), storageKey)
+
+  /** A block built on the head, kept only when the head was settled for the whole of the build (spec 018 C4e part 4;
+    * [[BlockchainReader.awaitHeadSettled]]). While a move of the head or an adoption in place is open the head stands
+    * on blocks it may not stay on: the build waits for it to end, and one it overtook is built again on the head there
+    * is then. With the guard off the head is never stepped through and the first build is the one kept.
+    */
+  private def builtOnTheSettledHead(buildsLeft: Int): IO[PendingBlock] =
+    IO.blocking(blockchainReader.awaitHeadSettled(headSettleWait.toMillis)).flatMap {
+      case None =>
+        IO.raiseError(
+          new com.chipprbots.ethereum.db.storage.pathstate.StateUnavailable(
+            s"no block is built: the head is still being moved after ${headSettleWait.toSeconds} s"
+          )
+        )
+      case Some(settled) =>
+        IO.defer(
+          getBlockForMining(
+            blockchainReader.getBestBlock.getOrElse(throw new IllegalStateException("No best block found"))
+          )
+        ).flatMap { built =>
+          if blockchainReader.headGeneration == settled then IO.pure(built)
+          else if buildsLeft <= 1 then
+            IO.raiseError(
+              new com.chipprbots.ethereum.db.storage.pathstate.StateUnavailable(
+                s"no block is built: the head was moved during each of ${TestService.BuildsOnAMovingHead} builds"
+              )
+            )
+          else
+            log.info(
+              "The block built on block {} is not used: the head was moved while it was built. It is built again",
+              built.block.header.number.value - 1
+            )
+            builtOnTheSettledHead(buildsLeft - 1)
+        }
+    }
 
   private def getBlockForMining(parentBlock: Block): IO[PendingBlock] =
     given timeout: Timeout = Timeout(20.seconds)

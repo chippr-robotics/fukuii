@@ -10,6 +10,8 @@ import org.apache.pekko.util.ByteString
 
 import cats.effect.unsafe.IORuntime
 
+import scala.concurrent.duration.*
+
 import org.bouncycastle.crypto.AsymmetricCipherKeyPair
 import org.bouncycastle.util.encoders.Hex
 import org.scalatest.flatspec.AnyFlatSpecLike
@@ -205,6 +207,12 @@ class TestServiceOnPositionsSpec
       * arrive after a test has set the next: so the stub counts the order and keeps what it was given.
       */
     val pending = new AtomicReference[Seq[SignedTransaction]](Nil)
+
+    /** What is done each time a block that is built asks for the pending transactions: while it is built. */
+    val whenAsked = new AtomicReference[() => Unit](() => ())
+
+    /** How long a block that is mined waits for the head to be settled: the service's own when none. */
+    val settleWait = new AtomicReference[Option[FiniteDuration]](None)
     private val orders = new AtomicInteger(0)
     private val asked = testKit.createTestProbe[PendingTransactionsResponse]()
 
@@ -218,6 +226,7 @@ class TestServiceOnPositionsSpec
     private val manager: ActorRef[PendingTransactionsManager.Command] = testKit.spawn(
       Behaviors.receiveMessage[PendingTransactionsManager.Command] {
         case GetPendingTransactionsReq(replyTo) =>
+          whenAsked.get()()
           replyTo ! PendingTransactionsResponse(
             pending.get().map(tx => PendingTransaction(SignedTransactionWithSender(tx, sender), 0L))
           )
@@ -251,7 +260,8 @@ class TestServiceOnPositionsSpec
       storagesInstance.storages.transactionMappingStorage,
       node,
       system.scheduler
-    )(using IORuntime.global)
+    )(using IORuntime.global):
+      override protected def headSettleWait: FiniteDuration = settleWait.get().getOrElse(super.headSettleWait)
     val service: TestService = newService()
 
     def run[A](response: ServiceResponse[A]): Either[JsonRpcError, A] = response.unsafeRunSync()(using IORuntime.global)
@@ -897,6 +907,54 @@ class TestServiceOnPositionsSpec
       // and its state is the old head's: the next block of that chain is executed on it and becomes the head
       rig.importRaw(back(3)).isRight shouldBe true
       rig.head.header.hash shouldBe back(3).header.hash
+    }
+
+  it should "build a block on a settled head only: wait for an attempt on the head to end, build again one it overtook, and refuse when each build is overtaken" taggedAs
+    (UnitTest, ConsensusTest) in {
+      val rig = new Rig(guard = true)
+      rig.setChain(chainA) shouldBe Right(SetChainParamsResponse())
+      rig.mine(Nil) shouldBe Right(MineBlocksResponse())
+      val first = rig.head
+      // an attempt on the head, as an adoption in place is one: opened and ended while a block is built
+      def attempt(): Unit = rig.pathState.withRecordsHeld(rig.refOf(first.header))(())
+      val builds = new AtomicInteger(0)
+
+      // the first build is overtaken, the second is not: one block is mined, on the head, from the second build
+      rig.whenAsked.set(() => if builds.incrementAndGet() == 1 then attempt())
+      rig.mine(Nil) shouldBe Right(MineBlocksResponse())
+      builds.get() shouldBe 2
+      rig.head.header.parentHash shouldBe first.header.hash
+      val second = rig.head
+
+      // every build is overtaken: the request is refused after the builds it is allowed, and nothing is mined
+      builds.set(0)
+      rig.whenAsked.set { () =>
+        builds.incrementAndGet()
+        attempt()
+      }
+      val refused = rig.mine(Nil)
+      refused.left.map(_.message).left.getOrElse("mined") should include("the head was moved during each of")
+      builds.get() shouldBe TestService.BuildsOnAMovingHead
+      rig.head.header.hash shouldBe second.header.hash
+
+      // an attempt that is open when a block is asked for: it is not built, and the request is refused once it has
+      // waited as long as it may
+      builds.set(0)
+      rig.whenAsked.set { () =>
+        builds.incrementAndGet(); ()
+      }
+      rig.settleWait.set(Some(1.millis))
+      rig.pathState.withRecordsHeld(rig.refOf(first.header)) {
+        rig.mine(Nil).left.map(_.message).left.getOrElse("mined") should include("still being moved")
+      }
+      builds.get() shouldBe 0
+      rig.head.header.hash shouldBe second.header.hash
+
+      // and with the head settled again a block is mined on it
+      rig.settleWait.set(None)
+      rig.mine(Nil) shouldBe Right(MineBlocksResponse())
+      rig.head.header.parentHash shouldBe second.header.hash
+      builds.get() shouldBe 1
     }
 
   it should "leave the head and the datadir as they were when a heavier branch leaves the chain below what its records reach" taggedAs
