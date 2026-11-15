@@ -42,6 +42,19 @@ final class StateUnavailable(
     val heldTo: Option[BlockRef] = None
 ) extends StateFault(s"State unavailable: $reason")
 
+/** A block of this node's own chain that a rule needs is not stored whole: the ommers of a block are checked against
+  * the blocks of its six ancestors, and after a sync that began from a pivot the bodies below the pivot arrive later
+  * (spec 018 C5a part 2, B-283). It says nothing of the block being validated: with the ancestors short, a valid ommer
+  * reads as one whose parent is no ancestor, and an ommer used before reads as new. Retry once the block is stored.
+  *
+  * @param wanted
+  *   how many ancestors the rule needs
+  * @param found
+  *   how many of them this node has whole
+  */
+final class AncestorNotStored(val wanted: Int, val found: Int, detail: String)
+    extends StateFault(s"Of the $wanted ancestor block(s) the ommers are checked against, $found are stored: $detail")
+
 /** A view over forward layers met a node that is not the one its parent names, with the disk under it at rest: the
   * layers and the rows do not make up the state the view is of. It is no fault of a block and no stale read: reading
   * again finds the same. The layers are dropped and their blocks executed again. It is never taken for a corrupt row:

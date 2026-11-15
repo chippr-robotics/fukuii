@@ -26,6 +26,7 @@ import com.chipprbots.ethereum.consensus.Consensus.KeptCurrentBestBranch
 import com.chipprbots.ethereum.consensus.Consensus.SelectedNewBestBranch
 import com.chipprbots.ethereum.consensus.engine.InvalidChainReporter
 import com.chipprbots.ethereum.consensus.validators.BlockHeaderError.HeaderParentNotFoundError
+import com.chipprbots.ethereum.db.storage.pathstate.StateFault
 import com.chipprbots.ethereum.domain.Block
 import com.chipprbots.ethereum.domain.BlockAccessList
 import com.chipprbots.ethereum.domain.BlockHash
@@ -121,22 +122,31 @@ class ConsensusAdapter(
             if bestHeader.hash == block.header.parentHash then
               IO.pure(Right(BlockExecutionSuccess): Either[ValidationBeforeExecError, BlockExecutionSuccess])
             else doBlockPreValidation(block)
-          validated.flatMap {
-            // A block whose parent this node does not have is an orphan, not a failed import (B-007, #1683): nothing is
-            // wrong with it, the gap is ours, and the peer that sent it is not to blame. It was `UnknownParent` before
-            // ETCM-1058 replaced block import by consensus; as a `BlockImportFailed` it blacklisted an honest peer that
-            // announced a competing tip, and on a reorging chain that was a good peer lost each time. core-geth drops such
-            // a block with a debug line (`eth/fetcher/block_fetcher.go`, importBlocks: "Unknown parent of propagated block").
-            case Left(ValidationBeforeExecError(HeaderParentNotFoundError)) =>
-              log.debug("Block {} has no parent here: an orphan, not a failed import", block.idTag)
-              IO.pure(UnknownParent)
-            case Left(error) =>
-              IO.pure(BlockImportFailed(error.describe))
-            case Right(BlockExecutionSuccess) =>
-              enqueueAndGetBranch(block, bestHeader.number.value)
-                .map(forwardAndTranslateConsensusResult(_)) // a new branch was created so we give it to consensus
-                .getOrElse(IO.pure(BlockEnqueued)) // the block was not rooted so it was simply enqueued
-          }
+          // A fault of this node's own state met while the block was validated is no verdict on it (spec 018 C5a
+          // part 2, B-283: its ommers are checked against ancestors this node does not hold whole). It is told as a
+          // state fault, as when it is met in a batch, so that the importer tries the block again and blames no peer.
+          validated
+            .map(Right(_): Either[StateFault, Either[ValidationBeforeExecError, BlockExecutionSuccess]])
+            .recover { case fault: StateFault => Left(fault) }
+            .flatMap {
+              case Left(fault) =>
+                log.warn("Block {} was not judged, this node's own state could not: {}", block.idTag, fault.getMessage)
+                IO.pure(BlockImportStateFault(fault))
+              // A block whose parent this node does not have is an orphan, not a failed import (B-007, #1683): nothing is
+              // wrong with it, the gap is ours, and the peer that sent it is not to blame. It was `UnknownParent` before
+              // ETCM-1058 replaced block import by consensus; as a `BlockImportFailed` it blacklisted an honest peer that
+              // announced a competing tip, and on a reorging chain that was a good peer lost each time. core-geth drops such
+              // a block with a debug line (`eth/fetcher/block_fetcher.go`, importBlocks: "Unknown parent of propagated block").
+              case Right(Left(ValidationBeforeExecError(HeaderParentNotFoundError))) =>
+                log.debug("Block {} has no parent here: an orphan, not a failed import", block.idTag)
+                IO.pure(UnknownParent)
+              case Right(Left(error)) =>
+                IO.pure(BlockImportFailed(error.describe))
+              case Right(Right(BlockExecutionSuccess)) =>
+                enqueueAndGetBranch(block, bestHeader.number.value)
+                  .map(forwardAndTranslateConsensusResult(_)) // a new branch was created so we give it to consensus
+                  .getOrElse(IO.pure(BlockEnqueued)) // the block was not rooted so it was simply enqueued
+            }
       case None =>
         log.error("Couldn't find the current best block header")
         IO.pure(BlockImportFailed("Couldn't find the current best block header"))

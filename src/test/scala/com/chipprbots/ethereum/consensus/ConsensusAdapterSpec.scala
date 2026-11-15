@@ -355,6 +355,30 @@ class ConsensusAdapterSpec extends AnyFlatSpec with Matchers with ScalaFutures w
       _ shouldEqual BlockImportFailed(HeaderDifficultyError.toString)
     }
 
+  // B-283 (spec 018 C5a part 2): a fault of this node's own state met while a single block is validated is no verdict
+  // on the block. It was a failed IO before, logged as an unexpected failure with the block dropped.
+  it should "tell a block as not judged when this node's own state could not validate it" taggedAs (
+    UnitTest,
+    ConsensusTest
+  ) in new ImportBlockTestSetupImpl:
+    override lazy val validators: MockValidatorsAlwaysSucceed = new Mocks.MockValidatorsAlwaysSucceed:
+      override val blockHeaderValidator: BlockHeaderValidator = mock[BlockHeaderValidator]
+
+    val newBlock: Block = getBlock(number = bestNum + 1)
+    setBlockExists(newBlock, inChain = false, inQueue = false)
+    setBestBlock(bestBlock)
+    setChainWeightForBlock(bestBlock, currentWeight)
+
+    val gap = new com.chipprbots.ethereum.db.storage.pathstate.AncestorNotStored(6, 3, "the bodies are not stored yet")
+    (validators.blockHeaderValidator
+      .validate(_: BlockHeader, _: GetBlockHeaderByHash)(using _: BlockchainConfig))
+      .expects(newBlock.header, *, *)
+      .throwing(gap)
+
+    whenReady(consensusAdapter.evaluateBranchBlock(newBlock).unsafeToFuture()) {
+      _ shouldEqual com.chipprbots.ethereum.blockchain.sync.regular.BlockImportStateFault(gap)
+    }
+
   it should "correctly handle importing genesis block" taggedAs (
     UnitTest,
     ConsensusTest

@@ -40,8 +40,11 @@ trait OmmersValidator:
             _.filter(_.number != BlockNumber.Zero) // avoid trying to fetch parent of genesis
               .flatMap(block => blockchainReader.getBlockByHash(block.header.parentHash))
           )
-          .collect { case Some(block) => block }
+          // up to the first block that is not stored: a walk that skipped it would never end, since every block
+          // after a missing one is missing too (B-283). Fewer than `n` is for the caller to judge.
+          .takeWhile(_.isDefined)
           .take(n)
+          .flatten
           .toList
           .reverse
 

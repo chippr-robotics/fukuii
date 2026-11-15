@@ -10,6 +10,8 @@ import com.chipprbots.ethereum.consensus.pow.validators.OmmersValidator.OmmersVa
 import com.chipprbots.ethereum.consensus.validators.BlockHeaderError
 import com.chipprbots.ethereum.consensus.validators.BlockHeaderValid
 import com.chipprbots.ethereum.consensus.validators.BlockHeaderValidator
+import com.chipprbots.ethereum.db.storage.pathstate.AncestorNotStored
+import com.chipprbots.ethereum.domain.Block
 import com.chipprbots.ethereum.domain.BlockHash
 import com.chipprbots.ethereum.domain.BlockHeader
 import com.chipprbots.ethereum.utils.BlockchainConfig
@@ -173,13 +175,31 @@ class StdOmmersValidator(blockHeaderValidator: BlockHeaderValidator) extends Omm
       blockNumber: BigInt,
       getNBlocksBack: GetNBlocksBack
   ): Seq[BlockHeader] =
-    val numberOfBlocks = blockNumber.min(OmmerGenerationLimit).toInt
-    getNBlocksBack(parentHash, numberOfBlocks).map(_.header)
+    ancestorsOf(parentHash, blockNumber, getNBlocksBack).map(_.header)
 
   private def collectOmmersFromAncestors(
       parentHash: ByteString,
       blockNumber: BigInt,
       getNBlocksBack: GetNBlocksBack
   ): Seq[BlockHeader] =
-    val numberOfBlocks = blockNumber.min(OmmerGenerationLimit).toInt
-    getNBlocksBack(parentHash, numberOfBlocks).flatMap(_.body.uncleNodesList)
+    ancestorsOf(parentHash, blockNumber, getNBlocksBack).flatMap(_.body.uncleNodesList)
+
+  /** The blocks the ommers are checked against: the parent and the blocks before it, six of them or as many as there
+    * are down to the genesis. '''All of them, or no verdict''': with fewer, an ommer whose parent is one of the missing
+    * blocks reads as `OmmerParentIsNotAncestorError` and one a missing block used reads as new, so a valid block would
+    * be refused and an invalid one accepted. That is this node's own gap (the bodies below a SNAP pivot arrive after
+    * the hand-off), never the block's: it is thrown as a [[AncestorNotStored]], which an import takes for a fault of
+    * this node and tries again, in a batch and for a single block, and a block builder for a reason to take no ommers
+    * (B-283, forge).
+    */
+  @throws[AncestorNotStored]("when this node does not hold all of the ancestors whole")
+  private def ancestorsOf(parentHash: ByteString, blockNumber: BigInt, getNBlocksBack: GetNBlocksBack): Seq[Block] =
+    val wanted = blockNumber.min(OmmerGenerationLimit).toInt
+    val ancestors = getNBlocksBack(parentHash, wanted)
+    if ancestors.size < wanted then
+      throw new AncestorNotStored(
+        wanted,
+        ancestors.size,
+        s"block $blockNumber cannot be checked until the blocks below it are stored with their bodies"
+      )
+    ancestors
