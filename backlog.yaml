@@ -3319,3 +3319,16 @@ items:
     notes: |-
       contracts/actions.md listed UPnP state under net. NetworkAddressInfo keeps the detected address and its step, not the mapping's outcome.
       PortForwarder would have to record it.
+  - id: B-288
+    title: "Operator IP block does not reach discovery: UDP packets to and from a blocked address still flow"
+    priority: P3
+    status: open
+    area: p2p
+    size: M
+    opened: 2026-11-15
+    refs: []
+    links:
+      spec: specs/029-tui-command-center
+    notes: |-
+      B-277 blocks RLPx dial and accept through OperatorBlockingBlacklist. Discovery (scalanet) has no hook for it.
+      The TUI's peer block preview says so.
