@@ -76,7 +76,7 @@ class RpcServerActionsSpec extends AnyFlatSpec with Matchers with OptionValues:
       Vector(
         "Stops the HTTP server listening on 127.0.0.1:8546.",
         "It serves eth, web3, net, /health, /readiness.",
-        "Its open connections are not counted by this server: in-flight requests finish, then every connection is closed within 3 s.",
+        "Its open connections are not counted by this server: in-flight requests finish, then every connection is closed.",
         "Readiness and health probes on this port will fail, and anything supervising the node by that port may restart it.",
         "The Engine API is on its own port and is not affected."
       )

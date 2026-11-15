@@ -51,11 +51,12 @@ class DatabaseActionsSpec extends AnyFlatSpec with Matchers with OptionValues:
     // Every 1000th block up to 21,884,102 is 21,885 points, two entries each.
     new Fake().preview shouldBe Preview(
       Vector(
-        "Reads the number-to-hash entry and the header of every 1000th block up to 21884102: about 43770 entries.",
+        "Reads the number-to-hash entry and the header of every 1000th block up to the best block.",
         "It is the check the node runs when it starts.",
         "It stops nothing and changes nothing: on finding a fault it reports it, here and in the log.",
         "It reads beside block import, and takes seconds to tens of seconds."
-      )
+      ),
+      figures = Vector("The best block is 21884102 now: about 43770 entries.")
     )
   }
 

@@ -91,10 +91,11 @@ class PeerActionsSpec extends AnyFlatSpec with Matchers with OptionValues:
     preview(new Fake(), maxPeers("40")) shouldBe Preview(
       Vector(
         "Sets the limit on outgoing connections from 50 to 40.",
-        "Incoming stays at 30, and no connection is closed: 41 peers are connected.",
+        "Incoming stays at 30, and no connection is closed.",
         "New dials start only while fewer than 20 outgoing peers have handshaked.",
         "Resets when the node restarts."
-      )
+      ),
+      figures = Vector("41 peers are connected now.")
     )
   }
 
@@ -146,15 +147,36 @@ class PeerActionsSpec extends AnyFlatSpec with Matchers with OptionValues:
     preview(new Fake(), trust(outbound.id)) shouldBe Preview(
       Vector(
         s"Trusts ${short(outbound.id)}, besu/v24.1.2/linux-x86_64/openjdk-java-21, 203.0.113.11:30303, " +
-          "we dialled it, connected 4h 4m, score 0.58.",
+          "we dialled it.",
         "Trusted now: no. After: yes.",
         "A trusted peer is exempt from the outgoing limit, from the pruning of incoming peers and from eviction; " +
           "it is not exempt from the incoming cap.",
         "The node dials it now. Resets when the node restarts."
-      )
+      ),
+      figures = Vector("Connected 4h 4m, score 0.58.")
     )
     // The id as it was typed: in capitals, or with 0x before it.
     preview(new Fake(), trust("0x" + outbound.id.toUpperCase)).refusal shouldBe None
+  }
+
+  it should "say the same 30 s later: only the peer's age, a figure, has moved" taggedAs (UnitTest) in {
+    // Connected 3h 47m 32s ago: 30 s later its age reads a minute more.
+    val peer = connected(4)
+    peer.incoming shouldBe false
+    val first = preview(new Fake(), trust(peer.id))
+    val later = preview(new Fake(), trust(peer.id), synced.copy(now = synced.now.plusSeconds(30L)))
+    first.refusal shouldBe None
+    first.same(later) shouldBe true
+    later.lines shouldBe first.lines
+    later.refusal shouldBe first.refusal
+    first.figures should have size 1
+    first.figures.head should startWith("Connected 3h 47m, ")
+    later.figures should have size 1
+    later.figures.head should startWith("Connected 3h 48m, ")
+    later should not be first
+    // A preview that says something else is not the same one.
+    first.same(first.copy(lines = first.lines.init)) shouldBe false
+    first.same(first.copy(refusal = Some("it is gone"))) shouldBe false
   }
 
   it should "be refused for a peer that dialled this node: its listening port is not known" taggedAs (UnitTest) in {
@@ -211,14 +233,16 @@ class PeerActionsSpec extends AnyFlatSpec with Matchers with OptionValues:
     preview(trusting, untrust(outbound.id)) shouldBe Preview(
       Vector(
         s"Removes trust from ${short(outbound.id)}, besu/v24.1.2/linux-x86_64/openjdk-java-21, 203.0.113.11:30303, " +
-          "we dialled it, connected 4h 4m, score 0.58.",
+          "we dialled it.",
         "Trusted now: yes. After: no.",
         "The connection stays open; the peer may later be pruned or evicted like any other."
-      )
+      ),
+      figures = Vector("Connected 4h 4m, score 0.58.")
     )
-    // Trust is of a node, connected or not.
-    preview(trusting, untrust("0x" + stranger.toUpperCase)).lines.head shouldBe
-      "Removes trust from ab12cd34…, not connected now."
+    // Trust is of a node, connected or not: one that is not connected has no age and no score to show.
+    val gone = preview(trusting, untrust("0x" + stranger.toUpperCase))
+    gone.lines.head shouldBe "Removes trust from ab12cd34…, not connected now."
+    gone.figures shouldBe empty
   }
 
   it should "be refused for a peer that is not trusted, and when the trusted peers cannot be read" taggedAs (UnitTest) in {
@@ -245,10 +269,12 @@ class PeerActionsSpec extends AnyFlatSpec with Matchers with OptionValues:
       Vector(
         "Adds ab12cd34… at 198.51.100.7:30303 as a peer the node keeps.",
         "It is not connected now: the node dials it.",
-        "It is dialled again 5 s after every disconnect, and is exempt from the outgoing limit.",
-        "41 peers are connected; the limit on outgoing connections is 50.",
-        "Held until the node restarts."
-      )
+        "It is dialled again after every disconnect, and is exempt from the outgoing limit.",
+        "The limit on outgoing connections is 50.",
+        "Held until the node restarts.",
+        s"The enode: enode://$stranger@198.51.100.7:30303"
+      ),
+      figures = Vector("41 peers are connected now.")
     )
   }
 
@@ -291,13 +317,17 @@ class PeerActionsSpec extends AnyFlatSpec with Matchers with OptionValues:
     preview(new Fake(), drop(inbound.id)) shouldBe Preview(
       Vector(
         s"Disconnects ${short(inbound.id)}, CoreGeth/v1.12.19-stable-c2b6d2a5/linux-amd64/go1.21.5, 203.0.113.10:30303, " +
-          "it dialled us, connected 4h 10m, score 0.95.",
+          "it dialled us.",
         "It is not a peer the node keeps: nothing else changes.",
         "It may reconnect if discovery finds it again or it dials us; peer block keeps an address out."
-      )
+      ),
+      figures = Vector("Connected 4h 10m, score 0.95.")
     )
     // A peer the scorer has not seen yet says so.
-    preview(new Fake(), drop(unscored.id)).lines.head should endWith("not scored yet.")
+    val figures = preview(new Fake(), drop(unscored.id)).figures
+    figures should have size 1
+    figures.head should startWith("Connected ")
+    figures.head should endWith(", not scored yet.")
   }
 
   it should "say that the node stops re-dialling a peer it keeps" taggedAs (UnitTest) in {
