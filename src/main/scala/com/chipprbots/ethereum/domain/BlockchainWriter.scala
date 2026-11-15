@@ -507,6 +507,13 @@ class BlockchainWriter(
       case Some(state) => state.withPinnedBranch(name)(pin => body(Some(pin)))
       case None        => body(None)
 
+  /** Whether the state of `header`'s block is held on the unified layout, so that a block can be executed on it
+    * ([[PathStateStorage.stateAvailable]]: the block whose state the disk holds, one behind it that the records lead
+    * to, or one that forward layers lead to). Always on the hash layout, which says what it lacks as it reads.
+    */
+  def stateHeldInPlaceOf(header: BlockHeader): Boolean =
+    pathState.forall(_.stateAvailable(BlockRef(header.hash.value, header.number.value, header.stateRoot.value)))
+
   /** Why the head could not be moved back to `fork`, a block of the head's own chain, as things are
     * ([[PathStateStorage.refusalOfMoveTo]]). `None` on the hash layout.
     */

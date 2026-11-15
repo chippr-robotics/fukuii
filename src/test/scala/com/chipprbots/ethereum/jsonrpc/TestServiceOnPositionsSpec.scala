@@ -732,6 +732,122 @@ class TestServiceOnPositionsSpec
       }
     }
 
+  // C4e part 2 (T180, T187): the blocks a branch stands on, executed before as a side branch, whose state is gone.
+  it should "execute again the side blocks a heavier branch stands on when their state is not held, and adopt it" taggedAs
+    (UnitTest, ConsensusTest) in {
+      def sealedOn(parent: Option[Block], block: Block): Block =
+        block.copy(header =
+          block.header.copy(
+            parentHash = parent.fold(block.header.parentHash)(_.header.hash),
+            mixHash = BlockHash(ByteString(new Array[Byte](32))),
+            nonce = ByteString(new Array[Byte](8))
+          )
+        )
+      def chainOf(blocks: Int, etherbase: Int): Vector[Block] =
+        val miner = new Rig(guard = false)
+        miner.setChain(chainA) shouldBe Right(SetChainParamsResponse())
+        miner.run(miner.service.setEtherbase(SetEtherbaseRequest(Address(etherbase)))) shouldBe
+          Right(SetEtherbaseResponse())
+        (1 to blocks).foldLeft(Vector.empty[Block]) { (made, _) =>
+          miner.mine(Nil) shouldBe Right(MineBlocksResponse())
+          made :+ sealedOn(made.lastOption, miner.head)
+        }
+      val side = chainOf(4, 0xdead)
+      val back = chainOf(3, 0xbeef)
+      val pair = new Pair(chainA)
+      import pair.*
+      def both(block: Block): Unit =
+        Seq(onHashes, onPositions).foreach(rig =>
+          withClue(s"block ${block.number}: ")(rig.importRaw(block).isRight shouldBe true)
+        )
+      // the head goes to the side chain's first two blocks, then away from them to a heavier chain of three
+      side.take(2).foreach(both)
+      held()
+      back.foreach(both)
+      held()
+      onPositions.head.header.hash shouldBe back.last.header.hash
+      // as after a restart: the queue holds none of the blocks the node left (they are stored), and what it keeps of
+      // them is no state a block can be executed on
+      Seq(onHashes, onPositions).foreach(_.node.blockQueue.clear())
+      side.take(2).foreach(block => onPositions.blockchainWriter.dropForwardLayer(block.header.hash.value))
+      onPositions.blockchainWriter.stateHeldInPlaceOf(side(1).header) shouldBe false
+      // the side chain grows to four: its third block stands on the second, whose state is not held
+      both(side(2))
+      onPositions.head.header.hash shouldBe back.last.header.hash
+      both(side(3))
+      held()
+      onPositions.head.header.hash shouldBe side.last.header.hash
+      (1 to 4).foreach { n =>
+        onPositions.blockchainReader.getBlockHeaderByNumber(n).map(_.hash) shouldBe Some(side(n - 1).header.hash)
+      }
+      // the blocks executed again keep the weight they had: each on its own parent's
+      side.foreach { block =>
+        onPositions.blockchainReader.getChainWeightByHash(block.header.hash) shouldBe
+          onHashes.blockchainReader.getChainWeightByHash(block.header.hash)
+      }
+    }
+
+  it should "judge nothing, and move nothing, when a side block a branch stands on is not stored whole or fails when it is executed again" taggedAs
+    (UnitTest, ConsensusTest) in {
+      def sealedOn(parent: Option[Block], block: Block): Block =
+        block.copy(header =
+          block.header.copy(
+            parentHash = parent.fold(block.header.parentHash)(_.header.hash),
+            mixHash = BlockHash(ByteString(new Array[Byte](32))),
+            nonce = ByteString(new Array[Byte](8))
+          )
+        )
+      def chainOf(blocks: Int, etherbase: Int): Vector[Block] =
+        val miner = new Rig(guard = false)
+        miner.setChain(chainA) shouldBe Right(SetChainParamsResponse())
+        miner.run(miner.service.setEtherbase(SetEtherbaseRequest(Address(etherbase)))) shouldBe
+          Right(SetEtherbaseResponse())
+        (1 to blocks).foldLeft(Vector.empty[Block]) { (made, _) =>
+          miner.mine(Nil) shouldBe Right(MineBlocksResponse())
+          made :+ sealedOn(made.lastOption, miner.head)
+        }
+      val side = chainOf(4, 0xdead)
+      val back = chainOf(3, 0xbeef)
+      // the head on the side chain's first two blocks, then on a heavier chain of three; then, as after a restart, a
+      // queue that holds nothing and no state of the two blocks left
+      def left(): Rig =
+        val rig = new Rig(guard = true)
+        rig.setChain(chainA) shouldBe Right(SetChainParamsResponse())
+        (side.take(2) ++ back).foreach(block => rig.importRaw(block).isRight shouldBe true)
+        rig.head.header.hash shouldBe back.last.header.hash
+        rig.node.blockQueue.clear()
+        side.take(2).foreach(block => rig.blockchainWriter.dropForwardLayer(block.header.hash.value))
+        rig
+      val bodies = (rig: Rig) => rig.storagesInstance.storages.blockBodiesStorage
+
+      // the body of the first is gone
+      val unstored = left()
+      bodies(unstored).remove(side(0).header.hash.value).commit()
+      unstored.importRaw(side(2)).isRight shouldBe true
+      val before = unstored.rows
+      unstored.importRaw(side(3)).isLeft shouldBe true
+      unstored.head.header.hash shouldBe back.last.header.hash
+      unstored.rows shouldBe before
+
+      // the second is stored with a body that is not its header's: it fails when it is executed again. That is this
+      // node's own fault: the head stays, nothing is told invalid, and the branch is not tried again
+      val diverged = left()
+      bodies(diverged).put(side(1).header.hash.value, BlockBody(Nil, Seq(side(0).header))).commit()
+      diverged.importRaw(side(2)).isRight shouldBe true
+      val rows = diverged.rows
+      diverged.importRaw(side(3)).isLeft shouldBe true
+      diverged.head.header.hash shouldBe back.last.header.hash
+      diverged.rows shouldBe rows
+      diverged.node.blockQueue.isQueued(side(3).header.hash) shouldBe false
+      // offered again, it is refused at once, with nothing executed, and is not queued either
+      diverged.importRaw(side(3)).isLeft shouldBe true
+      diverged.head.header.hash shouldBe back.last.header.hash
+      diverged.rows shouldBe rows
+      diverged.node.blockQueue.isQueued(side(3).header.hash) shouldBe false
+      // where a branch whose side parent is only not stored whole waits to be tried again
+      unstored.node.blockQueue.isQueued(side(3).header.hash) shouldBe true
+    }
+
   it should "leave the head and the datadir as they were when a heavier branch leaves the chain below what its records reach" taggedAs
     (UnitTest, ConsensusTest) in {
       val other = new Rig(guard = false)

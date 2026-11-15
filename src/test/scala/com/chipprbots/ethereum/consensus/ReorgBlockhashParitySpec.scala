@@ -11,17 +11,20 @@ import org.scalatest.concurrent.ScalaFutures
 import org.scalatest.flatspec.AnyFlatSpec
 import org.scalatest.matchers.should.Matchers
 
-import com.chipprbots.ethereum.BlockHelpers
 import com.chipprbots.ethereum.NormalPatience
+import com.chipprbots.ethereum.blockchain.data.GenesisAccount
+import com.chipprbots.ethereum.blockchain.data.GenesisData
+import com.chipprbots.ethereum.blockchain.data.GenesisDataLoader
 import com.chipprbots.ethereum.blockchain.sync.EphemBlockchainTestSetup
 import com.chipprbots.ethereum.blockchain.sync.regular.BlockImportFailed
 import com.chipprbots.ethereum.blockchain.sync.regular.BlockImportResult
 import com.chipprbots.ethereum.blockchain.sync.regular.BlockImportedToTop
 import com.chipprbots.ethereum.blockchain.sync.regular.ChainReorganised
 import com.chipprbots.ethereum.crypto.generateKeyPair
+import com.chipprbots.ethereum.db.components.EphemDataSourceComponent
+import com.chipprbots.ethereum.db.components.Storages
 import com.chipprbots.ethereum.domain.*
 import com.chipprbots.ethereum.ledger.InMemoryWorldStateProxy
-import com.chipprbots.ethereum.mpt.MerklePatriciaTrie
 import com.chipprbots.ethereum.security.SecureRandomBuilder
 import com.chipprbots.ethereum.testing.Tags.*
 import com.chipprbots.ethereum.utils.BlockchainConfig
@@ -45,11 +48,14 @@ import com.chipprbots.ethereum.utils.BlockchainConfig
 class ReorgBlockhashParitySpec extends AnyFlatSpec with Matchers with ScalaFutures with NormalPatience:
   import ReorgBlockhashParitySpec.*
 
-  "A TD-winning reorg that fails mid-branch" should
-    "keep the heavier old head and index, so the next canonical block's BLOCKHASH matches core-geth" taggedAs (
+  // The reorganisation on the hash layout, and on the unified state layout, where a branch is executed on pinned layers
+  // and adopted by one move of the head (spec 018 C4e): the same answers, block for block.
+  for (layout, guard) <- Seq("the hash layout" -> false, "the unified layout" -> true) do
+    (s"A TD-winning reorg that fails mid-branch ($layout)" should
+      "keep the heavier old head and index, so the next canonical block's BLOCKHASH matches core-geth").taggedAs(
       UnitTest,
       ConsensusTest
-    ) in (new Fixture:
+    ) in (new Fixture(guard):
       // Canonical h1..h15 at difficulty 1000. Side branch s6..s13 forks after h5: s6..s12 at 1000, s13 at 5000 and
       // consensus-invalid (tampered stateRoot). Whole branch: 12000 > 10000 for h6..h15, so it is selected and executed;
       // the executed prefix s6..s12 is 7000 < 10000, so core-geth's head never leaves h15.
@@ -74,33 +80,33 @@ class ReorgBlockhashParitySpec extends AnyFlatSpec with Matchers with ScalaFutur
       // h8's hash. A side-branch hash here is a state-root mismatch and a valid canonical block rejected.
       node.importOne(h16) shouldBe a[BlockImportedToTop]
       node.bestHash shouldBe h16.hash
-      node.storedBlockhash(h16, slot = 16) shouldBe oldChain(7).hash.value
+      recorded(h16, slot = 16, oldChain(7).hash.value)
     )
 
-  it should "move the head to the executed prefix when it is heavier, and drop the old index above it" taggedAs (
-    UnitTest,
-    ConsensusTest
-  ) in new Fixture:
-    // Canonical h1..h15 at 1000. Side s6..s8 at 5000 each (15000 > 10000 for h6..h15), s9 invalid.
-    val oldChain: List[Block] = oracle.extendCanonical(oracle.genesis, 15, difficulty = 1000)
-    val sidePrefix: List[Block] = oracle.extendSide(oldChain(4), 3, difficulty = 5000, tag = 0x52)
-    val s9Invalid: Block = oracle.invalidChild(sidePrefix.last, difficulty = 5000)
-
-    node.importAll(oldChain) shouldBe a[BlockImportedToTop]
-    node.importAll(sidePrefix :+ s9Invalid) shouldBe a[BlockImportFailed]
-
-    // core-geth: writeBlockAndSetHead reorgs as soon as a side block outweighs the head, so the head is s8 and reorg()
-    // has deleted the canonical hashes of h9..h15.
-    node.bestHash shouldBe sidePrefix.last.hash
-    (6 to 8).foreach(n => node.indexed(n) shouldBe Some(sidePrefix(n - 6).hash))
-    (9 to 15).foreach(n => node.indexed(n) shouldBe None)
-    (1 to 5).foreach(n => node.indexed(n) shouldBe Some(oldChain(n - 1).hash))
-
-  "A reorg back onto a previously orphaned block" should
-    "rewrite the canonical index below the branch parent, so BLOCKHASH and the old branch match core-geth" taggedAs (
+    it should "move the head to the executed prefix when it is heavier, and drop the old index above it" taggedAs (
       UnitTest,
       ConsensusTest
-    ) in (new Fixture:
+    ) in new Fixture(guard):
+      // Canonical h1..h15 at 1000. Side s6..s8 at 5000 each (15000 > 10000 for h6..h15), s9 invalid.
+      val oldChain: List[Block] = oracle.extendCanonical(oracle.genesis, 15, difficulty = 1000)
+      val sidePrefix: List[Block] = oracle.extendSide(oldChain(4), 3, difficulty = 5000, tag = 0x52)
+      val s9Invalid: Block = oracle.invalidChild(sidePrefix.last, difficulty = 5000)
+
+      node.importAll(oldChain) shouldBe a[BlockImportedToTop]
+      node.importAll(sidePrefix :+ s9Invalid) shouldBe a[BlockImportFailed]
+
+      // core-geth: writeBlockAndSetHead reorgs as soon as a side block outweighs the head, so the head is s8 and reorg()
+      // has deleted the canonical hashes of h9..h15.
+      node.bestHash shouldBe sidePrefix.last.hash
+      (6 to 8).foreach(n => node.indexed(n) shouldBe Some(sidePrefix(n - 6).hash))
+      (9 to 15).foreach(n => node.indexed(n) shouldBe None)
+      (1 to 5).foreach(n => node.indexed(n) shouldBe Some(oldChain(n - 1).hash))
+
+    (s"A reorg back onto a previously orphaned block ($layout)" should
+      "rewrite the canonical index below the branch parent, so BLOCKHASH and the old branch match core-geth").taggedAs(
+      UnitTest,
+      ConsensusTest
+    ) in (new Fixture(guard):
       // The ordinary ETC uncle race, across a restart. Canonical a1..a10. b10, a heavier sibling of a10, arrives and
       // wins. The node restarts, losing the in-memory block queue that held the orphaned a10. Then a11 (child of a10)
       // arrives by NewBlock and outweighs b10. a10 is on disk with a chain weight, so the queue roots a11 directly on
@@ -129,11 +135,11 @@ class ReorgBlockhashParitySpec extends AnyFlatSpec with Matchers with ScalaFutur
         case other => fail(s"expected ChainReorganised, got $other")
       node.bestHash shouldBe a11.hash
       node.indexed(10) shouldBe Some(a10.hash)
-      node.storedBlockhash(a11, slot = 11) shouldBe a10.hash.value
+      recorded(a11, slot = 11, a10.hash.value)
 
       node.importOne(a12) shouldBe a[BlockImportedToTop]
       node.bestHash shouldBe a12.hash
-      node.storedBlockhash(a12, slot = 12) shouldBe a10.hash.value
+      recorded(a12, slot = 12, a10.hash.value)
     )
 
   "Chain-file import (hive consensus simulator path)" should
@@ -173,9 +179,19 @@ class ReorgBlockhashParitySpec extends AnyFlatSpec with Matchers with ScalaFutur
     node.bestHash shouldBe bChain.last.hash
     (1 to 3).foreach(n => node.indexed(n) shouldBe Some(bChain(n - 1).hash))
 
-  class Fixture:
+  class Fixture(guard: Boolean = false):
     val oracle = new Oracle
-    val node = new Node
+    val node = new Node(guard)
+
+    /** The block hash `block`'s execution recorded at `slot`, on the node under test: read from its state on the hash
+      * layout; on the unified layout the recorder's storage is the oracle's, root for root (the state root the block
+      * was accepted with commits to it either way).
+      */
+    def recorded(block: Block, slot: BigInt, expected: ByteString): Unit =
+      if !guard then node.storedBlockhash(block, slot) shouldBe expected
+      else
+        node.blockchainReader.accountAt(block.header, BlockhashRecorder).map(_.storageRoot) shouldBe
+          oracle.blockchainReader.accountAt(block.header, BlockhashRecorder).map(_.storageRoot)
 
   /** Both hosts on a chain whose terminal total difficulty is 0, as hive configures post-merge fixtures. */
   class PostMergeFixture:
@@ -248,7 +264,7 @@ class ReorgBlockhashParitySpec extends AnyFlatSpec with Matchers with ScalaFutur
         case Left(error) => throw new IllegalStateException(s"oracle could not seal block ${template.number}: $error")
 
   /** The node under test. */
-  class Node extends ChainHost:
+  class Node(guard: Boolean = false) extends ChainHost(guard):
     def importAll(blocks: List[Block]): BlockImportResult =
       consensusAdapter.evaluateBranch(NonEmptyList.fromListUnsafe(blocks)).unsafeRunSync()
 
@@ -280,36 +296,40 @@ class ReorgBlockhashParitySpec extends AnyFlatSpec with Matchers with ScalaFutur
 
   /** One ephemeral database with the shared genesis state installed. Real VM, real BlockExecution, real ConsensusImpl.
     */
-  abstract class ChainHost extends EphemBlockchainTestSetup:
+  abstract class ChainHost(guard: Boolean = false) extends EphemBlockchainTestSetup:
     implicit val runtime: IORuntime = IORuntime.global
 
+    override lazy val storagesInstance
+        : EphemDataSourceComponent & LocalPruningConfigBuilder & Storages.DefaultStorages =
+      new EphemDataSourceComponent
+        with LocalPruningConfigBuilder
+        with Storages.DefaultStorages
+        with com.chipprbots.ethereum.TestInstanceConfigProvider:
+        override protected def statePathLive: Boolean = guard
+
+    // one genesis for every host, loaded as the node loads one: as rows on the unified layout
     val genesis: Block =
-      val empty = InMemoryWorldStateProxy(
-        storagesInstance.storages.evmCodeStorage,
-        blockchain.getBackingMptStorage(0),
-        (_: BigInt) => None,
-        UInt256.Zero,
-        ByteString(MerklePatriciaTrie.EmptyRootHash),
-        noEmptyAccounts = false,
-        ethCompatibleStorage = true
-      )
-      val world = InMemoryWorldStateProxy.persistState(
-        empty
-          .saveAccount(SenderAddress, Account(balance = UInt256(BigInt(10).pow(20))))
-          .saveAccount(BlockhashRecorder, Account.empty())
-          .saveCode(BlockhashRecorder, BlockhashRecorderCode)
-      )
-      val header = BlockHelpers.defaultHeader.copy(
-        number = BlockNumber(0),
-        parentHash = BlockHash(ByteString(Array.fill[Byte](32)(0))),
-        difficulty = Difficulty(1000),
-        stateRoot = TrieRoot(world.stateRootHash),
-        gasUsed = GasAmount.Zero,
-        unixTimestamp = Timestamp(1000000)
-      )
-      val block = Block(header, BlockBody(Nil, Nil))
-      blockchainWriter.save(block, Nil, ChainWeight.zero.increase(header), saveAsBestBlock = true)
-      block
+      GenesisDataLoader
+        .over(blockchainReader, blockchainWriter, storagesInstance.storages)
+        .loadGenesisData(
+          GenesisData(
+            nonce = ByteString(new Array[Byte](8)),
+            mixHash = None,
+            difficulty = "0x3e8",
+            extraData = ByteString.empty,
+            gasLimit = "0xf4240",
+            coinbase = ByteString(new Array[Byte](20)),
+            timestamp = "0xf4240",
+            alloc = Map(
+              Hex.toHexString(SenderAddress.bytes.toArray) ->
+                GenesisAccount(None, UInt256(BigInt(10).pow(20)), None, None, None),
+              Hex.toHexString(BlockhashRecorder.bytes.toArray) ->
+                GenesisAccount(None, UInt256.Zero, Some(BlockhashRecorderCode), None, None)
+            )
+          )
+        )
+        .get
+      blockchainReader.getBlockByNumber(blockchainReader.getBestBranch, 0).get
 
 object ReorgBlockhashParitySpec extends SecureRandomBuilder:
   val SenderKeyPair: AsymmetricCipherKeyPair = generateKeyPair(secureRandom)

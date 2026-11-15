@@ -463,57 +463,166 @@ class ConsensusImpl(
             blockchainReader.getCanonicalHashByNumber(n).map(n -> _)
           )
         val oldBlocksData = collectOldBranch(oldCanonical)
-        try
-          blockchainWriter.withPinnedBranch(s"the reorganisation to block ${newBranch.last.number}") { pin =>
-            val outcome = executeBranch(newBranch.toList, parentWeight, adoptEachBlock = false, accessLists, pin)
-            val executed = outcome.executed
-            // a trie error on this layout is the node's own state's, never the block's: a fault like any other
-            val fault: Option[StateFault] = outcome.stateFault.orElse(outcome.error.collect { case MPTError(reason) =>
-              new StateUnavailable(s"a trie read failed during the execution of the branch: $reason")
-            })
-            fault match
-              // nothing is moved on a fault, whatever was executed before it: the old head stands, and the layers wait
-              // for the next attempt (so the importer is never told of a fault with the head moved; forge)
-              case Some(fault) => notJudged(fault)
-              case None =>
-                val executedWeight = executed.foldLeft(parentWeight)((w, b) => w.increase(b.block.header))
-                executed.lastOption match
-                  case Some(tip) if executedWeight > bestBlockWeight =>
-                    // the move, before the pin is released: the layers it applies are still held
-                    val moved =
-                      try blockchainWriter.moveHeadInPlace(tip.block.header, blockchainReader)
-                      catch
-                        case failed: StateFault =>
-                          // a move of several batches may have written some: where the head is now is said, and the
-                          // next attempt moves on from it
-                          log.error(
-                            "[STATE-FAULT] REORG: the move of the head to block {} stopped, and the best block is now {}: {}",
-                            tip.block.number,
-                            blockchainReader.getBestBlockNumber,
-                            failed.getMessage
-                          )
-                          throw failed
-                    log.info(
-                      "REORG-SETTLE: fork={} oldHead={} tip={} executed={} ({})",
-                      fork.number,
-                      bestBlockNumber,
-                      tip.block.number,
-                      executed.size,
-                      moved
+        // A block the branch stands on that failed when it was executed again: refused at once, and not queued again
+        // (below).
+        val diverged = fork.parentSideChain.collectFirst {
+          case (number, hash) if divergedParents.contains(hash) => number
+        }
+        if diverged.isDefined then
+          log.warn(
+            "[STATE-REEXEC-DIVERGED] REORG blocks [{}-{}] not judged: block {}, which the branch stands on, failed when " +
+              "it was executed again. The branch is dropped until the node is started again",
+            newBranch.head.number,
+            newBranch.last.number,
+            diverged.get
+          )
+          ConsensusStateFault(
+            new StateUnavailable(
+              s"block ${diverged.get}, which the branch stands on, failed when it was executed again"
+            ),
+            Nil,
+            Nil
+          )
+        else
+          try
+            blockchainWriter.withPinnedBranch(s"the reorganisation to block ${newBranch.last.number}") { pin =>
+              // The blocks the branch stands on that are not of the head's chain (executed earlier, as a side branch)
+              // and whose state is not held any more: a layer lives in memory, so a restart loses every one, and one
+              // that did not fit was never kept. They are stored, and are executed again here, ahead of the branch and
+              // under its pin, as core-geth executes a side chain's ancestors again when their state is gone (T180,
+              // T187). From the lowest one whose state is not held up: what stands on it is not held either. Looked for
+              // under the pin, so that nothing found held is evicted before it is used (forge).
+              val sideParents: Either[StateFault, List[Block]] =
+                fork.parentSideChain.foldRight[Either[StateFault, List[Block]]](Right(Nil)) {
+                  case ((number, hash), above) =>
+                    above.flatMap(blocks =>
+                      blockchainReader
+                        .getBlockByHash(hash)
+                        .toRight(
+                          new StateUnavailable(s"block $number, which the branch stands on, is not stored whole")
+                        )
+                        .map(_ :: blocks)
                     )
-                  case Some(tip) =>
-                    log.warn(
-                      "REORG-PARTIAL: executed blocks {}-{} do not outweigh the current head {}: it is kept, and their " +
-                        "state stays beside it",
-                      executed.head.block.number,
-                      tip.block.number,
-                      bestBlockNumber
-                    )
-                  case None => ()
-                val settled = executed.lastOption.exists(_ => executedWeight > bestBlockWeight)
-                reorganised(newBranch, if settled then oldBlocksData else Nil, executed, outcome.error)
-          }
-        catch case fault: StateFault => notJudged(fault)
+                }
+              val lost = sideParents.map(_.dropWhile(parent => blockchainWriter.stateHeldInPlaceOf(parent.header)))
+              val parentsFault: Option[StateFault] = lost match
+                case Left(missing) => Some(missing)
+                case Right(Nil)    => None
+                case Right(lostParents) =>
+                  log.info(
+                    "REORG: {} block(s) the branch stands on, {} to {}, are executed again: their state is not held",
+                    lostParents.size,
+                    lostParents.head.number,
+                    lostParents.last.number
+                  )
+                  blockchainReader.getChainWeightByHash(lostParents.head.header.parentHash) match
+                    case None =>
+                      Some(
+                        new StateUnavailable(
+                          s"the chain weight under block ${lostParents.head.number}, which the branch stands on, is not stored"
+                        )
+                      )
+                    case Some(weight) =>
+                      val parents = executeBranch(lostParents, weight, adoptEachBlock = false, Map.empty, pin)
+                      // A block that was executed and accepted before and fails now says nothing of the branch: this
+                      // node's own fault, or a changed configuration. It is not reported invalid and the branch is not
+                      // judged; it is remembered, so that the branch is not executed again and again to the same end
+                      // (until the escalation of C5a; forge).
+                      parents.stateFault.orElse(parents.error.map { error =>
+                        val failing = lostParents.drop(parents.executed.size).head
+                        divergedParents.add(failing.header.hash)
+                        log.error(
+                          "[STATE-REEXEC-DIVERGED] Block {} ({}), which this node executed and accepted before, fails " +
+                            "now that it is executed again: {}. It is not reported invalid: this node's state or its " +
+                            "configuration is not what it was",
+                          failing.number,
+                          failing.header.hash.toHexString,
+                          error.describe
+                        )
+                        new StateUnavailable(
+                          s"block ${failing.number}, which the branch stands on and was executed before, fails now: " +
+                            error.describe
+                        )
+                      })
+              parentsFault match
+                // a block it stands on failed when it was executed again: the branch is not queued again
+                case Some(fault) if fork.parentSideChain.exists((_, hash) => divergedParents.contains(hash)) =>
+                  ConsensusStateFault(fault, Nil, Nil)
+                case Some(fault) => notJudged(fault)
+                case None =>
+                  settleOnLayers(
+                    executeBranch(newBranch.toList, parentWeight, adoptEachBlock = false, accessLists, pin),
+                    newBranch,
+                    parentWeight,
+                    bestBlockNumber,
+                    bestBlockWeight,
+                    fork,
+                    oldBlocksData,
+                    notJudged
+                  )
+            }
+          catch case fault: StateFault => notJudged(fault)
+
+  // the blocks a branch stood on that failed when they were executed again (reorganiseOnLayers); in memory only
+  private val divergedParents = java.util.concurrent.ConcurrentHashMap.newKeySet[BlockHash]()
+
+  /** What a branch executed on layers comes to: the head moved to it, kept, or a fault ([[reorganiseOnLayers]]). */
+  private def settleOnLayers(
+      outcome: BlockExecution.BatchOutcome,
+      newBranch: NonEmptyList[Block],
+      parentWeight: ChainWeight,
+      bestBlockNumber: BigInt,
+      bestBlockWeight: ChainWeight,
+      fork: ForkPoint,
+      oldBlocksData: List[BlockData],
+      notJudged: StateFault => ConsensusResult
+  ): ConsensusResult =
+    val executed = outcome.executed
+    // a trie error on this layout is the node's own state's, never the block's: a fault like any other
+    val fault: Option[StateFault] = outcome.stateFault.orElse(outcome.error.collect { case MPTError(reason) =>
+      new StateUnavailable(s"a trie read failed during the execution of the branch: $reason")
+    })
+    fault match
+      // nothing is moved on a fault, whatever was executed before it: the old head stands, and the layers wait
+      // for the next attempt (so the importer is never told of a fault with the head moved; forge)
+      case Some(fault) => notJudged(fault)
+      case None =>
+        val executedWeight = executed.foldLeft(parentWeight)((w, b) => w.increase(b.block.header))
+        executed.lastOption match
+          case Some(tip) if executedWeight > bestBlockWeight =>
+            // the move, before the pin is released: the layers it applies are still held
+            val moved =
+              try blockchainWriter.moveHeadInPlace(tip.block.header, blockchainReader)
+              catch
+                case failed: StateFault =>
+                  // a move of several batches may have written some: where the head is now is said, and the
+                  // next attempt moves on from it
+                  log.error(
+                    "[STATE-FAULT] REORG: the move of the head to block {} stopped, and the best block is now {}: {}",
+                    tip.block.number,
+                    blockchainReader.getBestBlockNumber,
+                    failed.getMessage
+                  )
+                  throw failed
+            log.info(
+              "REORG-SETTLE: fork={} oldHead={} tip={} executed={} ({})",
+              fork.number,
+              bestBlockNumber,
+              tip.block.number,
+              executed.size,
+              moved
+            )
+          case Some(tip) =>
+            log.warn(
+              "REORG-PARTIAL: executed blocks {}-{} do not outweigh the current head {}: it is kept, and their " +
+                "state stays beside it",
+              executed.head.block.number,
+              tip.block.number,
+              bestBlockNumber
+            )
+          case None => ()
+        val settled = executed.lastOption.exists(_ => executedWeight > bestBlockWeight)
+        reorganised(newBranch, if settled then oldBlocksData else Nil, executed, outcome.error)
 
   // Execute-first reorganise — reference client pattern (go-ethereum/Besu/Nethermind).
   private def reorganiseOnTheHashLayout(
