@@ -772,7 +772,7 @@ items:
   - id: B-064
     title: "Spec 018 Track C C5a: hand-off without a copy, the layout guard and the ancestor window (item 10)"
     priority: P2
-    status: open
+    status: claimed
     area: storage
     size: L
     opened: 2026-11-07
@@ -780,6 +780,11 @@ items:
     links:
       spec: specs/018-storage-engine-consolidation
     depends_on: [B-063]
+    claim:
+      by: cloud-dc960fdc
+      agent: main
+      since: 2026-11-15T17:59:02Z
+      heartbeat: 2026-11-15T17:59:02Z
   - id: B-065
     title: "Spec 018 Track C C5b: the audit, on-demand fetch and recovery scans by position (item 10)"
     priority: P2
