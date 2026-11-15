@@ -3353,6 +3353,62 @@ with the old blocks told; an invalid block (head kept, reported, the prefix's la
 named by then; at the cap; another head named at each read; below the finalized block; and ETC's own (nothing bound,
 equal weight, kept).
 
+#### C4e part 6: fork recovery moves no state (2026-11-15)
+
+The user's decision of 2026-11-15, built: **on the unified layout the importer's fork recovery (`SYNC-FORK`) moves
+nothing.** T181 and T188 as written (clamp the blind rewind to the reach) are superseded: there is no rewind to clamp.
+
+**What the rewind was for, traced first** (forge; from the history on origin, the checkout being shallow, and with the
+pull request that brought it in not readable, so its motive is read from its diff):
+- 0.7.0 added the strikes and a blind `setCanonicalChainHead(max(best - 128, pivot))`: a node whose SNAP-synced head
+  was on a losing tip had a fetcher stuck on one block, and lowering the best block put the next fetch below the
+  fork. **The same change** moved the floor of an unknown branch from the best block to the SNAP pivot, which lets
+  the walk back go below the head by itself; and since #1683 a gap at that floor never reaches consensus.
+- 0.8.0 put a resolver in front of it, which finds the common block, with the blind rewind as the fallback. #1474
+  added the undo of the reference counts, #1705 the end of the import that started it.
+- **So the rewind's first purpose is gone.** The strikes fire today only for a batch whose parent is in the chain and
+  that fails in consensus: a chain weight that is missing, or an invalid block. Neither is a fork, and a rewind mends
+  neither. What is kept is its other half: the fetcher is sent back to a block that is known, and no peer is blamed.
+
+**What the path did on the guard**: the resolver's own removal of blocks threw, it stopped without an answer, the
+blind rewind threw in the importer, the importer stopped, and a new pipeline began again. I1 held; it was a loop of
+crashes, not a refusal.
+
+**As built** (`BlockImporter`, on the guard only; the hash layout is as it was):
+- **The resolver only finds the common block** (`discardDiverged`, now required of every caller): no block is taken
+  off this node's chain.
+- **With the common block**: the head stays; the fetcher is sent back to it; and the next pick spans the fork, from the
+  common block up to the head, so the whole of the peer's branch is weighed against the whole of this node's
+  (`BranchResolution`, then `reorganiseOnLayers`): adopted if it is the heavier, left if not. With the rewind the head
+  had become the common block and that comparison was never made; core-geth never sets its head back on a fork.
+- **A common block the head could not be moved back to** (the records' reach, the finalized block):
+  `[STATE-REORG-TOO-DEEP]` once, and the fetcher is not sent there. **That is a stall until C5a escalates**: the
+  fetcher goes on serving the branch that cannot be followed.
+- **No common block found**: the fetcher goes back as far as the rewind would have; nothing is written, and nothing is
+  escalated (a sync from scratch is refused on this layout until C5a).
+- **One recovery for a block**: nothing having been rewound, a block that fails for another reason fails again. It is
+  recovered for once; after that it is said, and its strikes start again, so that the peer serving it is dropped at
+  the third as on the hash layout.
+- **The resolver's answer is held until the import that started the recovery has ended**: that import sends the
+  fetcher back to the block that failed as it ends, and its end clears the branch being resolved; acted on before it,
+  the answer would be undone by both (forge; harmless on the hash layout, which has rewound by then).
+
+**Read after code (forge): no blocker; four warnings**, two taken (the held answer, the strikes), two for C5
+(**B-300, a gate on starting the importer on the guard**): announced and mined blocks clear the branch being resolved
+and move the fetcher on, which can keep a fork longer than a block time from ever being fetched whole; and the pick's
+upper bound is this node's head, which a heavier but shorter branch never reaches. With them: a lighter branch
+fetched again and again, and the pick against the fetcher's bound of 512 ready blocks in the archive mode.
+
+**Found on the way, on the hash layout, and not this slice's** (B-298, B-248): the resolver removes this node's blocks
+above the common block before the importer has read them and before any weight is compared; the common block it
+accepts has no bound, and the peer it asks is the one with the highest block, not the heaviest chain.
+
+**The mutation run**: 10 mutants, 9 caught. **Not pinned**: the one recovery for a block, and the held answer; each
+needs an import that really fails, several times (B-300). Pinned: the three ends of a recovery on the guard
+(`RegularSyncSpec`: nothing written, nothing abandoned, the fetcher sent where it should be or left, the pick that
+spans the fork, nothing escalated), the hash layout's rewind as it was, and a resolver that leaves this node's blocks
+and its head (`FastSyncBranchResolverActorSpec`).
+
 ### Destructive change (C8a and C8b): the vault protocol blocks
 
 ```
