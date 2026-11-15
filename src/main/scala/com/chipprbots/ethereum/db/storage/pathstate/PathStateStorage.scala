@@ -312,6 +312,16 @@ final class PathStateStorage(
       link: ByteString => Option[HeadMovePlan.Link]
   ): HeadMovePlan.Outcome = planMoveAfter(target, link, () => ())
 
+  /** Why the head could not be moved to `target` as things are, when the plan of that move is refused: asked before a
+    * branch is executed, so that a fork deeper than the records reach costs no execution (spec 018 C4e, the reverse
+    * depth and not the branch's length). `None` when the move is planned, and when a block on the way is not held: that
+    * is for the execution to find.
+    */
+  def refusalOfMoveTo(target: BlockRef, link: ByteString => Option[HeadMovePlan.Link]): Option[ReorgTooDeep] =
+    planMove(target, link) match
+      case HeadMovePlan.Outcome.Refused(reason, detail) => Some(new ReorgTooDeep(reason, detail))
+      case _                                            => None
+
   /** [[planMove]], and the size of each changeset record it read, by block hash: what a move cuts its batches by. */
   private def planMoveSized(
       target: BlockRef,

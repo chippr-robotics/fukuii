@@ -12,6 +12,7 @@ import com.chipprbots.ethereum.consensus.validators.std.StdBlockValidator.BlockE
 import com.chipprbots.ethereum.db.storage.EvmCodeStorage
 import com.chipprbots.ethereum.db.storage.SerializingMptStorage
 import com.chipprbots.ethereum.db.storage.StagedBlockState
+import com.chipprbots.ethereum.db.storage.pathstate.BranchPin
 import com.chipprbots.ethereum.db.storage.pathstate.StateFault
 import com.chipprbots.ethereum.domain.*
 import com.chipprbots.ethereum.ledger.BlockExecutionError.MissingParentError
@@ -88,21 +89,6 @@ class BlockExecution(
             case Left(_) => staged.discard()
           result
     })
-
-  /** On the unified state layout the importer commits a block in place or not at all: in the batch that makes it the
-    * best block (spec 018 data-model 7.1, and the scope of C3b). A block it executes without adopting it (a side
-    * branch, the blocks of a reorganisation) is refused here, before it runs, as a condition of this node's own state:
-    * never a verdict on the block (C4e routes them). A payload ahead of the head is kept as a forward layer instead
-    * (`executeAndValidateBlockFull`, C4d part 2a).
-    *
-    * @throws StateUnavailable
-    *   for such a block
-    */
-  private def refuseUnadopted(block: Block, staged: StagedBlockState, what: String): Unit =
-    if staged.commitsInPlace then
-      throw new com.chipprbots.ethereum.db.storage.pathstate.StateUnavailable(
-        s"block ${block.header.number.value} is $what, which the unified state layout cannot hold before its overlay"
-      )
 
   /** Times the block's database commit (one atomic batch since #1465), which `[IMPORT-TIMING]` ends before. */
   private def timedCommit[A](block: Block)(body: => A): A =
@@ -472,6 +458,18 @@ class BlockExecution(
   )(implicit blockchainConfig: BlockchainConfig): (List[BlockData], Option[BlockExecutionError]) =
     executeAndValidateBlocksWithAccessLists(blocks, parentChainWeight, adoptEachBlock, Map.empty)
 
+  /** The blocks of a branch under execution, none adopted as it is executed, with their forward layers on the unified
+    * layout held by the branch's `pin` until the branch is settled (spec 018 C4e). As
+    * [[executeAndValidateBlocksWithAccessLists]] with `adoptEachBlock = false` otherwise.
+    */
+  def executeAndValidateBranch(
+      blocks: List[Block],
+      parentChainWeight: ChainWeight,
+      suppliedBlockAccessLists: Map[ByteString, BlockAccessList],
+      pin: Option[BranchPin]
+  )(implicit blockchainConfig: BlockchainConfig): (List[BlockData], Option[BlockExecutionError]) =
+    executeAndValidateEach(blocks, parentChainWeight, adoptEachBlock = false, suppliedBlockAccessLists, pin)
+
   /** [[executeAndValidateBlocks]] for blocks that arrived with peer-supplied EIP-7928 lists.
     *
     * '''A batch has a third way to end''' (spec 018 Track C, C4b): this node's own state could not take the next block.
@@ -488,6 +486,15 @@ class BlockExecution(
       parentChainWeight: ChainWeight,
       adoptEachBlock: Boolean,
       suppliedBlockAccessLists: Map[ByteString, BlockAccessList]
+  )(implicit blockchainConfig: BlockchainConfig): (List[BlockData], Option[BlockExecutionError]) =
+    executeAndValidateEach(blocks, parentChainWeight, adoptEachBlock, suppliedBlockAccessLists, None)
+
+  private def executeAndValidateEach(
+      blocks: List[Block],
+      parentChainWeight: ChainWeight,
+      adoptEachBlock: Boolean,
+      suppliedBlockAccessLists: Map[ByteString, BlockAccessList],
+      pin: Option[BranchPin]
   )(implicit blockchainConfig: BlockchainConfig): (List[BlockData], Option[BlockExecutionError]) =
     @tailrec
     def go(
@@ -529,7 +536,8 @@ class BlockExecution(
                 parentWeight,
                 adoptEachBlock,
                 suppliedBlockAccessLists.get(blockToExecute.hash.value),
-                () => None
+                () => None,
+                pin
               )
             )
           catch case fault: StateFault => Left(fault)
@@ -554,15 +562,22 @@ class BlockExecution(
       parentWeight: ChainWeight,
       adoptEachBlock: Boolean,
       suppliedBlockAccessList: Option[BlockAccessList],
-      beforeCommit: () => Option[BlockExecutionError]
+      beforeCommit: () => Option[BlockExecutionError],
+      pin: Option[BranchPin] = None
   )(implicit blockchainConfig: BlockchainConfig): Either[BlockExecutionError, BlockData] =
     val blockHash = blockToExecute.header.hash.value
     // One execution + commit per block hash at a time, across the Engine API and this importer. A block the other
     // path already executed and committed (and that is still applied) is not executed again: its recorded
     // result is used and only the block's own records are written.
     ChainInsertLock.shared(BlockImportGate.withBlock(blockHash) {
-      val staged = blockchain.stageBlockState(blockToExecute.header)
-      if !adoptEachBlock then refuseUnadopted(blockToExecute, staged, "a block that is not adopted as it is executed")
+      // On the unified layout a block that is not adopted as it is executed (a side branch, the blocks of a
+      // reorganisation) is executed apart: its state is kept as a forward layer beside the state the disk holds, on
+      // the state of its parent wherever that is held, and the head moves to it only with the state, when its branch
+      // is settled (spec 018 C4e). Elsewhere it is staged as any block.
+      val apart = !adoptEachBlock && blockchainReader.holdsStateInPlace
+      val staged =
+        if apart then blockchain.stageBlockStateApart(blockToExecute.header)
+        else blockchain.stageBlockState(blockToExecute.header)
       val outcome =
         try
           BlockImportGate.alreadyExecuted(blockHash, staged) match
@@ -586,30 +601,55 @@ class BlockExecution(
         case Right(executed @ (receipts, _, blockAccessList)) =>
           val newWeight = parentWeight.increase(blockToExecute.header)
           val newBlockData = BlockData(blockToExecute, receipts, newWeight)
-          // ONE atomic write: the block, its receipts and weight, its access list, the state it wrote (trie
-          // nodes, reference counts, snapshots, death row) and, when adopting, the best-block pointer. A kill can
-          // no longer leave a block's state applied but the block not, and a block that failed above staged
-          // nothing at all.
-          val base = blockchainWriter.saveBatch(
-            newBlockData.block,
-            newBlockData.receipts,
-            newBlockData.weight,
-            saveAsBestBlock = adoptEachBlock
-          )
-          // EIP-7928: the list the block just validated against.
-          val withAccessList =
-            blockAccessList.fold(base)(bal =>
-              base.and(blockchainWriter.storeBlockAccessList(blockToExecute.header.hash, bal))
-            )
-          timedCommit(blockToExecute)(
-            staged.commitWith(blockToExecute.header.number.value, blockHash, Some(withAccessList))
-          )
-          BlockImportGate.record(blockHash, executed)
-          Right(newBlockData)
+          if apart then
+            // Stored by its hash only: on the unified layout the index of blocks by number is the ancestry of the
+            // block whose state is held, and only a move of the head writes it (I6, B-250). The block's own records
+            // first, then its layer, held by its branch's pin: a stop between the two leaves a stored block with no
+            // state, which is executed again.
+            val records = blockchainWriter
+              .storeBlockByHashOnly(blockToExecute)
+              .and(blockchainWriter.storeReceipts(blockToExecute.header.hash, receipts))
+              .and(blockchainWriter.storeChainWeight(blockToExecute.header.hash, newWeight))
+            blockAccessList
+              .fold(records)(bal => records.and(blockchainWriter.storeBlockAccessList(blockToExecute.header.hash, bal)))
+              .commit()
+            timedCommit(blockToExecute)(staged.commitApart(blockToExecute.header.number.value, blockHash, pin))
+            BlockImportGate.record(blockHash, executed)
+            Right(newBlockData)
+          else commitWithItsBlock(blockToExecute, newBlockData, blockAccessList, adoptEachBlock, staged, executed)
         case Left(executionError) =>
           staged.discard()
           Left(executionError)
     })
+
+  private def commitWithItsBlock(
+      blockToExecute: Block,
+      newBlockData: BlockData,
+      blockAccessList: Option[BlockAccessList],
+      adoptEachBlock: Boolean,
+      staged: StagedBlockState,
+      executed: BlockImportGate.Executed
+  ): Either[BlockExecutionError, BlockData] =
+    val blockHash = blockToExecute.header.hash.value
+    // ONE atomic write: the block, its receipts and weight, its access list, the state it wrote (trie nodes,
+    // reference counts, snapshots, death row) and, when adopting, the best-block pointer. A kill can no longer leave
+    // a block's state applied but the block not, and a block that failed above staged nothing at all.
+    val base = blockchainWriter.saveBatch(
+      newBlockData.block,
+      newBlockData.receipts,
+      newBlockData.weight,
+      saveAsBestBlock = adoptEachBlock
+    )
+    // EIP-7928: the list the block just validated against.
+    val withAccessList =
+      blockAccessList.fold(base)(bal =>
+        base.and(blockchainWriter.storeBlockAccessList(blockToExecute.header.hash, bal))
+      )
+    timedCommit(blockToExecute)(
+      staged.commitWith(blockToExecute.header.number.value, blockHash, Some(withAccessList))
+    )
+    BlockImportGate.record(blockHash, executed)
+    Right(newBlockData)
 
   /** One block onto the head, for an operator chain import holding [[ChainInsertLock.exclusive]], and for the adoption
     * of a long branch on the unified layout (`StateRecovery`, which holds it shared, as any import): the same

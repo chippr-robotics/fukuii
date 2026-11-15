@@ -37,7 +37,7 @@ block-store 1 src/main/scala/com/chipprbots/ethereum/blockchain/data/ChainImport
 # route the rest.
 head-writer 2 src/main/scala/com/chipprbots/ethereum/consensus/engine/ForkChoiceManager.scala HASH promoteToCanonicalHead on the hash layout's arm; MOVE moveHeadInPlace on the unified layout: the head moved with the state, up and across (C4d part 2b), never down to an ancestor
 block-store 1 src/main/scala/com/chipprbots/ethereum/consensus/engine/EngineApiService.scala HASH newPayload's storeBlock on the hash layout's arm; the unified layout stores an executed payload by hash only (C4d part 2a)
-head-writer 4 src/main/scala/com/chipprbots/ethereum/consensus/ConsensusImpl.scala REFUSED saveBestKnownBlocks and rewriteCanonicalIndex refuse on the unified layout (saveLastBlock writes nothing there; settleHead is reached only with executed blocks, which the layout refuses before executing: C4E)
+head-writer 5 src/main/scala/com/chipprbots/ethereum/consensus/ConsensusImpl.scala HASH saveBestKnownBlocks and rewriteCanonicalIndex, in settleHead and saveLastBlock, on the hash layout's arm only (reorganiseOnTheHashLayout; saveLastBlock writes nothing on the unified layout); MOVE moveHeadInPlace, the settle of a branch executed on layers (reorganiseOnLayers, C4e)
 block-store 1 src/main/scala/com/chipprbots/ethereum/jsonrpc/TestingService.scala HASH storeBlock on the hash layout's arm; the unified layout commits in place
 
 # Sync: not started on the unified layout (StdNode), SNAP refused (ConfigValidator).

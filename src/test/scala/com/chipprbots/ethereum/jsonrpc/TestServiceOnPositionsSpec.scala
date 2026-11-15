@@ -152,7 +152,9 @@ class TestServiceOnPositionsSpec
   final private class Rig(
       guard: Boolean,
       val source: EphemDataSource = EphemDataSource(),
-      inTestMode: Boolean = true
+      inTestMode: Boolean = true,
+      // how many executed blocks are kept beside the disk when no branch pins them: the configured count when none
+      forwardLayers: Option[Int] = None
   ) extends EphemBlockchainTestSetup:
 
     implicit override lazy val blockchainConfig: BlockchainConfig = BlockchainConfig(
@@ -177,6 +179,10 @@ class TestServiceOnPositionsSpec
         : EphemDataSourceComponent & LocalPruningConfigBuilder & Storages.DefaultStorages =
       new Shared with LocalPruningConfigBuilder with Storages.DefaultStorages with TestInstanceConfigProvider:
         override protected def statePathLive: Boolean = guard
+        override protected def stateConfig: com.chipprbots.ethereum.db.storage.pathstate.StateConfig =
+          val config =
+            com.chipprbots.ethereum.db.storage.pathstate.StateConfig(com.chipprbots.ethereum.utils.Config.config)
+          forwardLayers.fold(config)(layers => config.copy(overlay = config.overlay.copy(maxForwardLayers = layers)))
         // what a node in test mode is built with (`NodeBuilder`)
         override protected def stateMayBeDestroyed: Boolean = inTestMode
 
@@ -577,14 +583,15 @@ class TestServiceOnPositionsSpec
       rig.everything shouldBe before
     }
 
-  it should "keep a side block, and refuse the branch that outweighs the head with the datadir as it was" taggedAs
-    UnitTest in {
-      // a branch of two blocks beside the chain, mined by a node that pays another miner
+  // spec 018 C4e: a heavier branch is executed first, apart, and the head then moves to it with the state.
+  it should "keep a side block beside the head, and reorganise to the branch that outweighs it as the hash store does" taggedAs
+    (UnitTest, ConsensusTest) in {
+      // a branch of three blocks beside the chain, mined by a node that pays another miner
       val other = new Rig(guard = false)
       other.setChain(chainA) shouldBe Right(SetChainParamsResponse())
       other.run(other.service.setEtherbase(SetEtherbaseRequest(Address(0xdead)))) shouldBe Right(SetEtherbaseResponse())
       // A block mined in test mode carries no seal, and a block that is handed over as bytes has one: a mix hash and a
-      // nonce of their lengths. Nothing in test mode checks either, and the second block is built on the sealed first.
+      // nonce of their lengths. Nothing in test mode checks either, and each block is built on the sealed one before.
       def sealedOn(parent: Option[Block], block: Block): Block =
         block.copy(header =
           block.header.copy(
@@ -593,11 +600,13 @@ class TestServiceOnPositionsSpec
             nonce = ByteString(new Array[Byte](8))
           )
         )
-      other.mine(Nil) shouldBe Right(MineBlocksResponse())
+      other.mine(Seq(transfer(0, Address(77), 5))) shouldBe Right(MineBlocksResponse())
       val sideOne = sealedOn(None, other.head)
       other.mine(Nil) shouldBe Right(MineBlocksResponse())
       val sideTwo = sealedOn(Some(sideOne), other.head)
-      sideTwo.header.number.value shouldBe 2
+      other.mine(Nil) shouldBe Right(MineBlocksResponse())
+      val sideThree = sealedOn(Some(sideTwo), other.head)
+      sideThree.header.number.value shouldBe 3
       def hex(block: Block): String = "0x" + ByteStringUtils.hash2string(block.header.hash.value)
 
       val pair = new Pair(chainA)
@@ -612,21 +621,152 @@ class TestServiceOnPositionsSpec
       onPositions.head.header.hash shouldBe own.header.hash
       onPositions.everything shouldBe before
 
-      // its child makes the branch the heavier one. The hash store reorganises to it. The unified layout holds the
-      // state of the head alone: it says so, and nothing is written.
-      onHashes.importRaw(sideTwo) shouldBe Right(ImportRawBlockResponse(hex(sideTwo)))
-      onHashes.head.header.hash shouldBe sideTwo.header.hash
-      val refused = onPositions.importRaw(sideTwo)
-      refused.left.map(_.message).left.getOrElse("") should include(TestService.HeadStateOnly)
-      onPositions.everything shouldBe before
-      onPositions.head.header.hash shouldBe own.header.hash
-      onPositions.anchor shouldBe Some(onPositions.refOf(own.header))
+      // its child makes the branch the heavier one: both reorganise to it, and the unified layout holds its state as
+      // rows, with the best block and the index the branch's
+      Seq(onHashes, onPositions).foreach(_.importRaw(sideTwo) shouldBe Right(ImportRawBlockResponse(hex(sideTwo))))
+      held()
+      onPositions.head.header.hash shouldBe sideTwo.header.hash
+      onPositions.blockchainReader.getBlockHeaderByNumber(1).map(_.hash) shouldBe Some(sideOne.header.hash)
+      onPositions.blockchainReader.getBlockHeaderByNumber(2).map(_.hash) shouldBe Some(sideTwo.header.hash)
+      // the block it left is stored by its hash, with the record that leads back to it
+      onPositions.blockchainReader.getBlockByHash(own.header.hash) shouldBe Some(own)
+      new ChangesetStorage(onPositions.source).get(sideTwo.header.hash.value).map(_.isRight) shouldBe Some(true)
       onPositions.pathState.clock.atRest should not be empty
 
-      // and the chain goes on from its head
-      onPositions.mine(Seq(transfer(1, Address(43), 1))) shouldBe Right(MineBlocksResponse())
-      onPositions.head.header.parentHash shouldBe own.header.hash
-      onPositions.anchor shouldBe Some(onPositions.refOf(onPositions.head.header))
+      // the chain goes on from the new head, on both
+      Seq(onHashes, onPositions).foreach(_.importRaw(sideThree) shouldBe Right(ImportRawBlockResponse(hex(sideThree))))
+      held()
+      onPositions.head.header.hash shouldBe sideThree.header.hash
+      onPositions.blockchainReader.getBlockHeaderByNumber(3).map(_.hash) shouldBe Some(sideThree.header.hash)
+    }
+
+  it should "keep its head when a block of a heavier branch is invalid, with what was executed kept for the next attempt, and reorganise back" taggedAs
+    (UnitTest, ConsensusTest) in {
+      def sealedOn(parent: Option[Block], block: Block): Block =
+        block.copy(header =
+          block.header.copy(
+            parentHash = parent.fold(block.header.parentHash)(_.header.hash),
+            mixHash = BlockHash(ByteString(new Array[Byte](32))),
+            nonce = ByteString(new Array[Byte](8))
+          )
+        )
+      def chainOf(blocks: Int, etherbase: Int): Vector[Block] =
+        val miner = new Rig(guard = false)
+        miner.setChain(chainA) shouldBe Right(SetChainParamsResponse())
+        miner.run(miner.service.setEtherbase(SetEtherbaseRequest(Address(etherbase)))) shouldBe
+          Right(SetEtherbaseResponse())
+        (1 to blocks).foldLeft(Vector.empty[Block]) { (made, _) =>
+          miner.mine(Nil) shouldBe Right(MineBlocksResponse())
+          made :+ sealedOn(made.lastOption, miner.head)
+        }
+      def hex(block: Block): String = "0x" + ByteStringUtils.hash2string(block.header.hash.value)
+      val side = chainOf(2, 0xdead)
+      val back = chainOf(3, 0xbeef)
+
+      val pair = new Pair(chainA)
+      import pair.*
+      val own = step(Seq(transfer(0, Address(42), 9000)))
+      Seq(onHashes, onPositions).foreach(_.importRaw(side(0)) shouldBe Right(ImportRawBlockResponse(hex(side(0)))))
+      // the branch's second block names a state its execution does not leave: the branch is heavier by its headers, and
+      // what of it executes (its first block) is not
+      val bad = side(1).copy(header = side(1).header.copy(stateRoot = TrieRoot.Empty))
+      val rows = onPositions.rows
+      onPositions.importRaw(bad).isLeft shouldBe true
+      // the head, its state, the best block and the index are as they were; the first block's state is kept beside them
+      onPositions.head.header.hash shouldBe own.header.hash
+      onPositions.anchor shouldBe Some(onPositions.refOf(own.header))
+      onPositions.rows shouldBe rows
+      onPositions.blockchainReader.getBlockHeaderByNumber(1).map(_.hash) shouldBe Some(own.header.hash)
+      onPositions.pathState.holdsLayer(onPositions.refOf(side(0).header)) shouldBe true
+      onPositions.pathState.holdsLayer(onPositions.refOf(bad.header)) shouldBe false
+      // the branch as it is: adopted, on both; its first block waits in the queue, with its layer as it was kept
+      Seq(onHashes, onPositions).foreach(_.importRaw(side(1)) shouldBe Right(ImportRawBlockResponse(hex(side(1)))))
+      held()
+      onPositions.head.header.hash shouldBe side(1).header.hash
+
+      // and a third chain that outweighs it, from the genesis: across again, along the records of the two blocks left
+      back.foreach(block => Seq(onHashes, onPositions).foreach(_.importRaw(block).isRight shouldBe true))
+      held()
+      onPositions.head.header.hash shouldBe back.last.header.hash
+      (1 to 3).foreach { n =>
+        onPositions.blockchainReader.getBlockHeaderByNumber(n).map(_.hash) shouldBe Some(back(n - 1).header.hash)
+      }
+    }
+
+  it should "adopt a branch of more blocks than the forward layers hold unpinned: its layers are its pin's until it is settled" taggedAs
+    (UnitTest, ConsensusTest) in {
+      def sealedOn(parent: Option[Block], block: Block): Block =
+        block.copy(header =
+          block.header.copy(
+            parentHash = parent.fold(block.header.parentHash)(_.header.hash),
+            mixHash = BlockHash(ByteString(new Array[Byte](32))),
+            nonce = ByteString(new Array[Byte](8))
+          )
+        )
+      def chainOf(blocks: Int, etherbase: Int): Vector[Block] =
+        val miner = new Rig(guard = false)
+        miner.setChain(chainA) shouldBe Right(SetChainParamsResponse())
+        miner.run(miner.service.setEtherbase(SetEtherbaseRequest(Address(etherbase)))) shouldBe
+          Right(SetEtherbaseResponse())
+        (1 to blocks).foldLeft(Vector.empty[Block]) { (made, _) =>
+          miner.mine(Nil) shouldBe Right(MineBlocksResponse())
+          made :+ sealedOn(made.lastOption, miner.head)
+        }
+      val own = chainOf(4, 0xbeef)
+      val side = chainOf(5, 0xdead)
+      // two layers are kept unpinned: a branch of five is held whole by its pin, or its third block finds no room
+      val onHashes = new Rig(guard = false)
+      val onPositions = new Rig(guard = true, forwardLayers = Some(2))
+      Seq(onHashes, onPositions).foreach { rig =>
+        rig.setChain(chainA) shouldBe Right(SetChainParamsResponse())
+        own.foreach(block => rig.importRaw(block).isRight shouldBe true)
+        rig.head.header.hash shouldBe own.last.header.hash
+        // four blocks beside the head, no heavier: queued; the fifth makes the branch the heavier one
+        side.foreach(block => rig.importRaw(block).isRight shouldBe true)
+        rig.head.header.hash shouldBe side.last.header.hash
+      }
+      onPositions.anchor shouldBe Some(onPositions.refOf(side.last.header))
+      onPositions.rows shouldBe stateOf(onHashes, side.last.header)
+      (1 to 5).foreach { n =>
+        onPositions.blockchainReader.getBlockHeaderByNumber(n).map(_.hash) shouldBe Some(side(n - 1).header.hash)
+      }
+    }
+
+  it should "leave the head and the datadir as they were when a heavier branch leaves the chain below what its records reach" taggedAs
+    (UnitTest, ConsensusTest) in {
+      val other = new Rig(guard = false)
+      other.setChain(chainA) shouldBe Right(SetChainParamsResponse())
+      other.run(other.service.setEtherbase(SetEtherbaseRequest(Address(0xdead)))) shouldBe Right(SetEtherbaseResponse())
+      def sealedOn(parent: Option[Block], block: Block): Block =
+        block.copy(header =
+          block.header.copy(
+            parentHash = parent.fold(block.header.parentHash)(_.header.hash),
+            mixHash = BlockHash(ByteString(new Array[Byte](32))),
+            nonce = ByteString(new Array[Byte](8))
+          )
+        )
+      val side = (1 to 3).foldLeft(Vector.empty[Block]) { (made, _) =>
+        other.mine(Nil) shouldBe Right(MineBlocksResponse())
+        made :+ sealedOn(made.lastOption, other.head)
+      }
+      def hex(block: Block): String = "0x" + ByteStringUtils.hash2string(block.header.hash.value)
+
+      val pair = new Pair(chainA)
+      import pair.*
+      val first = step(Seq(transfer(0, Address(42), 9000)))
+      val second = step(Nil)
+      // the record of the head's first block is lost: the head cannot be moved back below it
+      onPositions.loseRecordOf(first)
+      onPositions.importRaw(side(0)) shouldBe Right(ImportRawBlockResponse(hex(side(0))))
+      onPositions.importRaw(side(1)) shouldBe Right(ImportRawBlockResponse(hex(side(1))))
+      val before = onPositions.everything
+      // the third makes the branch heavier: refused as this node's own condition, before a block of it is executed
+      val refused = onPositions.importRaw(side(2))
+      refused.left.map(_.message).left.getOrElse("") should include("Head move refused")
+      onPositions.everything shouldBe before
+      onPositions.head.header.hash shouldBe second.header.hash
+      onPositions.anchor shouldBe Some(onPositions.refOf(second.header))
+      side.foreach(block => onPositions.pathState.holdsLayer(onPositions.refOf(block.header)) shouldBe false)
     }
 
   it should "rewind to its head, to a block of its chain by moving its head back, and to its genesis" taggedAs

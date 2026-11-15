@@ -72,7 +72,19 @@ trait StagedBlockState:
     * the unified layout it is a forward layer beside the state the disk holds (spec 018 C4d part 2a), and the head does
     * not move.
     */
-  def commitApart(blockNumber: BigInt, blockHash: ByteString): Unit = commitWith(blockNumber, blockHash, None)
+  def commitApart(blockNumber: BigInt, blockHash: ByteString): Unit = commitApart(blockNumber, blockHash, None)
+
+  /** [[commitApart]] for a block of a branch under execution: on the unified layout its layer is held by the branch's
+    * pin until the branch is settled (spec 018 C4e). The other modes have no layers, and no pin to honour.
+    *
+    * @throws com.chipprbots.ethereum.db.storage.pathstate.BranchTooLarge
+    *   on the unified layout, when the branch's pinned layers would hold more than they may
+    */
+  def commitApart(
+      blockNumber: BigInt,
+      blockHash: ByteString,
+      @unused pin: Option[com.chipprbots.ethereum.db.storage.pathstate.BranchPin]
+  ): Unit = commitWith(blockNumber, blockHash, None)
 
   /** Whether committing this block moves the state on disk to it, in place (the unified layout, before its overlay).
     * Such a commit is only possible in the batch that makes the block the best block, so a block that is executed
