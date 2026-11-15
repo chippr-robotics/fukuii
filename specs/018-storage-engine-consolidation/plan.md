@@ -3654,6 +3654,58 @@ written. `PathHandoffSampleItSpec`: the ranges on a real RocksDB, where a byte o
 run**: 26 mutants, 26 caught (three after a test was added: the even paths of the last nibble, an
 account hole met only on the way to a storage root, and rows left under an account with no storage).
 
+#### C5a part 5a: a sync hands off in one synced write, with nothing copied (2026-11-15)
+
+Part 5 is in two: the store's half here, and the sync's finalization that calls it (5b). **Nothing calls it yet.**
+
+`PathStateStorage.commitHandoff(pivot, extra)` (T201's store half, T195, B-243's first half): the rows a sync wrote
+are the state of the pivot from here on. Under the lock of the moves and the state lock, as a barrier of the clock:
+- **one synced batch**: the caller's own updates (the pivot's header and weight, the best block, what the sync says
+  of its recoveries: 5b passes them), **the anchor**, **the block the state began at** (`state.origin`: no move of
+  the head goes below it, and a move below it is answered as below the pivot and not as too deep), and **that the
+  sync is done**. No row is written and no changeset record is made: nothing this node holds came before the pivot;
+- **it refuses a datadir that holds anything of a state**: an anchor (in memory or on disk), a changeset record, a
+  count of pruned records, the block a state began at, a finalized block, a sync that says it is done; **a datadir
+  with the mark of a clear** (below); one not stamped as this layout's; and a pivot whose state root is not the node
+  at the root of the account trie (for the root of the empty trie: when there are rows);
+- what memory holds of a state is dropped after the write, as a clear does.
+
+**What it does not vouch for**: that the rows are the whole of the pivot's state. It reads the one node a position
+store finds by its hash, under the lock; the rest is the sync's and the sample's (part 4), which 5b runs first.
+
+**Durability** (data-model 7.4, the barrier of DC-1 and 016 FR-044): the rows were written with no sync, into the one
+write-ahead log; the batch's synced write syncs the log up to itself, so the rows are on the disk before a recovered
+`SnapSyncDone` or anchor. That rests on two things, and neither is tested by a kill: that RocksDB recovers the log to
+a point in time (its default, which nothing here changes), and **that no write goes round the log**. There is none
+today (the only write options set are `setSync`), and **`scripts/check-wal-writes.sh` is a ratchet on it**: it fails
+on a write with the log turned off or a file of rows ingested, under any module's main sources
+(`WalWriteRatchetSpec` runs it in the test step).
+
+**Read after code (vault): no blocker, four warnings.**
+- **The mark of a clear is refused, not removed** (vault's own advice before code was to remove it in this batch). A
+  sync that ran over a clear that was not finished has written beside rows still due to be deleted, and with them the
+  flat copies of accounts and slots of the state that was cleared, **which no read checks by hash**; removing the
+  mark would erase the only record of it. A sync does not start while the mark is set (part 10), so a mark at a
+  hand-off is a fault before it. Taken.
+- **A pivot with the empty trie's root is handed off only over no rows**: rows there are another state's. Taken.
+- **A finalized block left on disk, and a sync that already says it is done, are refused**: the clear removes both,
+  so either says the clear did not run. Taken.
+- **After a clear for an escalation the index of blocks by number, and the header cursor, still name the old chain
+  above the fork** (the clear keeps the blocks and sets only the best block back). Not this part's: the store does
+  not know the fork, the escalation's handler does. **B-303, a gate on arming the escalation (part 7)**: the index
+  above the common block is deleted and the cursor set back to it before a sync starts; 5b writes the pivot's own
+  place in the index.
+Confirmed by vault: the order of the locks is the clear's and the move's; a barrier is the right move of the clock
+with no anchor before it (no view can have been made); the stamp is on every datadir that reaches a hand-off (the
+genesis commit stamps it, and a clear keeps it), and one with no stamp fails loudly.
+
+**Tests**: `HandoffCommitSpec` (17, on a store that records its writes): the one batch and what is in it, the state
+read where it lies and the next block committed on it in place, nothing changed when the batch fails, and each
+refusal alone. **`HandoffCrashItSpec`: a real RocksDB in a child JVM, killed on either side of the synced write**
+(T195): before it, no anchor, no origin, no sync done and no best block, and the hand-off is then made again; after
+it, all of them, the sample of part 4 finds every leaf from the root, and a view of the state reads. A kill is not a
+loss of power. `WalWriteRatchetSpec` (8). **The mutation run**: 18 mutants, 18 caught.
+
 ### Destructive change (C8a and C8b): the vault protocol blocks
 
 ```
