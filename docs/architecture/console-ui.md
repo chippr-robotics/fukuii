@@ -431,7 +431,9 @@ Each action has a class, and the class sets how it is confirmed:
 
 A dialog shows a **preview** read from the node when it opens: the peer by id, client and address, the connections
 that will drop, the level a logger has now and will have. An action that cannot be done is refused in the preview,
-with the reason, and cannot be confirmed. If the preview changes while the dialog is open, the dialog starts again.
+with the reason, and cannot be confirmed. The preview is read again every second: if what it says will change is
+different, the dialog starts again and says so, and a `Y` typed before that was read confirms nothing. A figure that
+moves by itself (a peer's age, the best block) is shown under the preview and restarts nothing.
 `Esc` or `N` cancels. Pasted text confirms nothing. On a screen too small to show the whole preview the dialog says
 so and cannot be confirmed.
 

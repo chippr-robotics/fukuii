@@ -129,7 +129,7 @@ Run these on a side instance, never on a node whose uptime matters: steps 6, 9 a
 5. `:test-rpc`: one row for each enabled endpoint, with what answered and how long it took; the Engine API row
    says an unauthenticated request was refused. `:net`: the listening address, what was detected and how.
 6. `:config jwt`: the path is shown, never the secret; `:config password` shows `<hidden>` for each. `:bundle`: the
-   preview lists the files and their sizes; `y`; under `<datadir>/support/bundle-<time>/`, `grep -r` for the JWT
+   preview lists the files; `y`; the result says how many were written and their size; under `<datadir>/support/bundle-<time>/`, `grep -r` for the JWT
    secret's hex and the node key finds neither, and `ls -l` shows the files readable by the owner only.
 7. `:dbcheck` on a node that synced block by block reports the points read and none missing; on a node that took
    its state by SNAP, or an Engine API node, it says why the check means nothing there. The dashboard stays
