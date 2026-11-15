@@ -23,6 +23,7 @@ import com.chipprbots.ethereum.consensus.validators.std.MptListValidator
 import com.chipprbots.ethereum.consensus.validators.std.StdBlockValidator
 import com.chipprbots.ethereum.consensus.validators.std.StdBlockValidator.BlockReceiptsHashError
 import com.chipprbots.ethereum.db.dataSource.DataSourceBatchUpdate
+import com.chipprbots.ethereum.db.storage.AncestorWindow
 import com.chipprbots.ethereum.db.storage.AppStateStorage
 import com.chipprbots.ethereum.domain.BlockBody
 import com.chipprbots.ethereum.domain.BlockHash
@@ -129,6 +130,9 @@ class ChainDownloader private (
 
   // Queues of block hashes needing bodies/receipts
   private var bodiesQueue: Vector[ByteString] = Vector.empty
+  // The bodies last asked for ahead of the rest (FetchBodies, and the window at a release): the scan passes over them,
+  // so none is queued twice. A handful.
+  private var askedAhead: Set[ByteString] = Set.empty
   private var receiptsQueue: Vector[ByteString] = Vector.empty
 
   // Track in-flight requests to limit concurrency. Body/receipt maps are keyed by PeerId (carried on
@@ -184,7 +188,30 @@ class ChainDownloader private (
     case ReleaseBodiesAndReceipts =>
       releaseBodiesAndReceipts()
       Some(Behaviors.same)
+    case FetchBodies(hashes) =>
+      fetchBodiesNow(hashes)
+      Some(Behaviors.same)
     case _ => None
+
+  /** Queues `hashes` at the front of the body queue, deferred or not, and dispatches soon: the bodies of the window
+    * below a pivot ([[ChainDownloader.FetchBodies]]). A hash is passed over when its header is not stored (a body is
+    * checked against its header), when its body is stored and fits its header, or when it is on its way already: so the
+    * same hashes can be sent again and again, as the tick of a hold does. One that is queued further back is moved to
+    * the front.
+    */
+  private def fetchBodiesNow(hashes: Seq[ByteString]): Unit =
+    val onTheirWay = bodyRequestPeers.valuesIterator.flatMap(_._2).toSet
+    val wanted = hashes.distinct.filter { hash =>
+      !onTheirWay.contains(hash) &&
+      blockchainReader.getBlockHeaderByHash(BlockHash(hash)).exists(header => !bodyStoredFor(header))
+    }
+    val atTheFront = bodiesQueue.take(wanted.size) == wanted.toVector
+    if wanted.nonEmpty && !atTheFront then
+      log.info("Chain download: {} bodies asked for ahead of the rest (the window below a pivot)", wanted.size)
+      val ahead = wanted.toSet
+      bodiesQueue = wanted.toVector ++ bodiesQueue.filterNot(ahead)
+      askedAhead = ahead
+      scheduleDispatch(200.millis)
 
   /** Stop deferring. Cheap by design: no walk over the chain. `bestHeaderNumber` is already live (every stored header
     * advanced it, and the header cursor with it), so release only records the window of headers still to be checked for
@@ -203,7 +230,26 @@ class ChainDownloader private (
         scanPos + 1,
         scanLimit
       )
+      // The window below the target first (spec 018 C5a, B-301): the scan runs up from the lowest block, so the bodies
+      // just below a pivot would come last, and the ommers of the first blocks above it are checked against them.
+      fetchBodiesNow(windowBelowTheTarget())
       scheduleDispatch(200.millis)
+
+  /** The hashes of the target block and of the five below it, by a walk of parent hashes, when blocks above the target
+    * may have ommers (its difficulty is not zero): the blocks whose bodies the check of ommers reads
+    * ([[com.chipprbots.ethereum.db.storage.AncestorWindow]]). Empty where the target's header is not stored.
+    */
+  private def windowBelowTheTarget(): Seq[ByteString] =
+    blockchainReader.getBlockHeaderByNumber(targetBlock).filter(_.difficulty.value > 0) match
+      case None => Nil
+      case Some(top) =>
+        Iterator
+          .iterate(Option(top))(_.flatMap(header => blockchainReader.getBlockHeaderByHash(header.parentHash)))
+          .take(AncestorWindow.OmmerGenerations)
+          .takeWhile(_.isDefined)
+          .flatten
+          .map(_.hash.value)
+          .toSeq
 
   /** Queue missing bodies/receipts for the next window of at most `QueueWindow` headers above `scanPos`, when either
     * queue is running low. Ascending, so the lowest missing block is dispatched first (see findBestStoredHeader).
@@ -223,7 +269,8 @@ class ChainDownloader private (
       while i <= end && !stop do
         blockchainReader.getBlockHeaderByNumber(i) match
           case Some(header) =>
-            if i > bodyFloor && !bodyStoredFor(header) then bodiesQueue :+= header.hash.value
+            if i > bodyFloor && !askedAhead.contains(header.hash.value) && !bodyStoredFor(header) then
+              bodiesQueue :+= header.hash.value
             if i > receiptFloor && !blockchainReader.hasReceipts(header.hash) then receiptsQueue :+= header.hash.value
             i += 1
           case None =>
@@ -1562,6 +1609,15 @@ object ChainDownloader:
   case class YieldToRegularSync(maxConcurrent: Int) extends Command
   // SNAP finalised: start fetching bodies and receipts (they were deferred at construction).
   case object ReleaseBodiesAndReceipts extends Command
+
+  /** Fetch the bodies of these blocks now, ahead of everything queued, while bodies are deferred too (spec 018 C5a,
+    * B-301). For the window below a pivot: a sync on the unified state layout hands off only once the bodies of the
+    * pivot and the five below it are stored, since the ommers of the first blocks above it are checked against them,
+    * and the backfill that would fetch them runs up from the genesis, after the hand-off. The headers must be stored: a
+    * body is checked against its header before it is kept. Sent as often as wanted: what is stored, queued or on its
+    * way is passed over.
+    */
+  final case class FetchBodies(hashes: Seq[ByteString]) extends Command
   case class GetProgress(replyTo: TypedActorRef[Progress]) extends Command
 
   /** Discard the stored headers above `forkPoint`, a header of the stored chain, and download them again from there:
