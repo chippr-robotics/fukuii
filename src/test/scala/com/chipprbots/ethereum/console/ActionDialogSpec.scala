@@ -206,12 +206,141 @@ class ActionDialogSpec extends AnyFlatSpec with Matchers with OptionValues:
       "",
       changed = true
     )
-    widgets.DialogBox.confirm(dialog(refreshed)).body.head should include("has changed since it was first shown")
+    widgets.DialogBox.confirm(dialog(refreshed)).body.head shouldBe
+      "What this said has changed since it was first shown: read it again, then answer."
     // The word half typed is gone too.
     val typing = press(previewed(run(synced, "mining stop")._1, stopMining), typed("sto")*)
     dialog(previewed(typing, stopMining, later)).typed shouldBe ""
     // The first preview to arrive is not a change.
     dialog(previewed(run(synced, "dbcheck")._1, dbCheck)).changed shouldBe false
+  }
+
+  // The figures of a preview move every second (a peer's age, the best block): they are shown, and are no change.
+  private val trusted = synced.orderedPeers.find(!_.incoming).value
+  private val trust = ActionRequest(Actions.PeerTrust.name, Vector("id" -> trusted.id))
+  private val trustRead = Preview(
+    Vector("Trusts 9e37b952…, 203.0.113.11:30303, we dialled it.", "Trusted now: no. After: yes."),
+    None,
+    Vector("Connected 4h 4m, score 0.58.")
+  )
+  private val ChangedSentence = "What this said has changed since it was first shown: read it again, then answer."
+
+  /** A peer-trust dialog with its preview read and the focus moved to Apply. */
+  private def trustOnApply: TuiState =
+    val (opened, effects) = run(synced, s"peer trust ${trusted.id.take(Update.PeerIdChars)}")
+    dialog(opened) shouldBe DialogKind.Confirm(trust, RiskClass.Adjust, None)
+    effects shouldBe Seq(Effect.Preview(trust))
+    val onApply = press(previewed(opened, trust, trustRead), Key.Tab)
+    dialog(onApply) shouldBe DialogKind.Confirm(trust, RiskClass.Adjust, Some(trustRead), DialogFocus.Apply)
+    onApply
+
+  "A preview whose figures alone moved" should "be shown, and leave the dialog as the operator left it" taggedAs (
+    UnitTest
+  ) in {
+    val onApply = trustOnApply
+    val ticked = trustRead.copy(figures = Vector("Connected 4h 5m, score 0.61."))
+    trustRead.same(ticked) shouldBe true
+    val moved = previewed(onApply, trust, ticked)
+    dialog(moved) shouldBe
+      DialogKind.Confirm(trust, RiskClass.Adjust, Some(ticked), DialogFocus.Apply, "", changed = false)
+    // The figure on screen is the new one, under the lines, and nothing says that anything changed.
+    val body = widgets.DialogBox.confirm(dialog(moved)).body
+    body.take(3) shouldBe trustRead.lines :+ "Connected 4h 5m, score 0.61."
+    body should not contain ChangedSentence
+    // Enter applies it: the operator had moved to Apply and nothing took that back.
+    val (after, effects) = Update(moved, Key.Enter, ctx)
+    after.overlay shouldBe Overlay.None
+    effects shouldBe Seq(Effect.Confirm(trust))
+    // However often the figures move.
+    val often = (1 to 20).foldLeft(onApply)((s, i) =>
+      previewed(s, trust, trustRead.copy(figures = Vector(s"Connected 4h ${4 + i}m, score 0.58.")))
+    )
+    dialog(often).focus shouldBe DialogFocus.Apply
+    dialog(often).changed shouldBe false
+    Update(often, Key.Enter, ctx)._2 shouldBe Seq(Effect.Confirm(trust))
+    // The word half typed for a Halt stays as well.
+    val halt = Preview(Vector("The built-in miner stops."), None, Vector("1.20 MH/s now."))
+    val typing = press(previewed(run(synced, "mining stop")._1, stopMining, halt), typed("sto")*)
+    val slower = previewed(typing, stopMining, halt.copy(figures = Vector("1.10 MH/s now.")))
+    dialog(slower).typed shouldBe "sto"
+    dialog(slower).changed shouldBe false
+    dialog(slower).preview shouldBe Some(halt.copy(figures = Vector("1.10 MH/s now.")))
+    Update(press(slower, Key.Char('p')), Key.Enter, ctx)._2 shouldBe Seq(Effect.Confirm(stopMining))
+  }
+
+  "A preview whose lines changed" should "take the focus back to Cancel and say that it changed" taggedAs (UnitTest) in {
+    val onApply = trustOnApply
+    val other = trustRead.copy(lines = trustRead.lines.updated(1, "Trusted now: yes. After: yes."))
+    trustRead.same(other) shouldBe false
+    val reset = previewed(onApply, trust, other)
+    dialog(reset) shouldBe
+      DialogKind.Confirm(trust, RiskClass.Adjust, Some(other), DialogFocus.Cancel, "", changed = true)
+    widgets.DialogBox.confirm(dialog(reset)).body.head shouldBe ChangedSentence
+    // Enter, on its way to Apply when the preview changed, now cancels.
+    cancels(reset, Key.Enter, trust)
+    // The same with figures that moved too, and with a preview that became a refusal.
+    val both = previewed(onApply, trust, other.copy(figures = Vector("Connected 4h 5m, score 0.58.")))
+    dialog(both).focus shouldBe DialogFocus.Cancel
+    dialog(both).changed shouldBe true
+    val refused = previewed(onApply, trust, Preview(Vector.empty, Some("no connected peer has the id 9e37b952… any more")))
+    dialog(refused).focus shouldBe DialogFocus.Cancel
+    dialog(refused).changed shouldBe true
+    Update(press(refused, Key.Tab), Key.Enter, ctx)._2 shouldBe empty
+    // Said to have changed, it stays so while only its figures move after.
+    val after = previewed(reset, trust, other.copy(figures = Vector("Connected 4h 6m, score 0.58.")))
+    dialog(after).changed shouldBe true
+    dialog(after).focus shouldBe DialogFocus.Cancel
+  }
+
+  "A Disrupt whose preview changed" should "take a first y as having read it, and run on the second" taggedAs (
+    UnitTest
+  ) in {
+    val read = Preview(
+      Vector("Reads the number-to-hash entry and the header of every 1000th block up to the best block."),
+      None,
+      Vector("The best block is 21884102 now: about 43770 entries.")
+    )
+    val asked = previewed(run(synced, "dbcheck")._1, dbCheck, read)
+    // A figure that moved is no change: y runs at once.
+    val ticked = previewed(asked, dbCheck, read.copy(figures = Vector("The best block is 21884103 now: about 43770 entries.")))
+    dialog(ticked).changed shouldBe false
+    Update(ticked, Key.Char('y'), ctx)._2 shouldBe Seq(Effect.Confirm(dbCheck))
+    // Its lines changed: the y that was on its way confirms nothing.
+    val other = read.copy(lines = Vector("Reads the number-to-hash entry and the header of every 500th block up to the best block."))
+    val changed = previewed(asked, dbCheck, other)
+    dialog(changed).changed shouldBe true
+    for yes <- Seq('y', 'Y') do
+      val (once, none) = Update(changed, Key.Char(yes), ctx)
+      none shouldBe empty
+      none should not contain Effect.Confirm(dbCheck)
+      dialog(once) shouldBe dialog(changed).copy(changed = false)
+      widgets.DialogBox.confirm(dialog(once)).body should not contain ChangedSentence
+      val (after, effects) = Update(once, Key.Char(yes), ctx)
+      after.overlay shouldBe Overlay.None
+      effects shouldBe Seq(Effect.Confirm(dbCheck))
+    // n and Esc cancel it as before, changed or not.
+    cancels(changed, Key.Char('n'), dbCheck)
+    cancels(changed, Key.Esc, dbCheck)
+    // It changes again after the first y: that y is taken back.
+    val again = previewed(Update(changed, Key.Char('y'), ctx)._1, dbCheck, read)
+    dialog(again).changed shouldBe true
+    Update(again, Key.Char('y'), ctx)._2 shouldBe empty
+  }
+
+  "A dialog opened again" should "start with no preview, whatever an earlier one for the same request left" taggedAs (
+    UnitTest
+  ) in {
+    val stale = synced.withActions(synced.actions.copy(previews = Map(maxPeers -> ready, dbCheck -> ready)))
+    stale.actions.previews.get(maxPeers) shouldBe Some(ready)
+    val (asked, effects) = run(stale, "maxpeers 40")
+    dialog(asked) shouldBe DialogKind.Confirm(maxPeers, RiskClass.Adjust, None)
+    effects shouldBe Seq(Effect.Preview(maxPeers))
+    // Nothing confirms it until its own preview is read.
+    Update(press(asked, Key.Tab), Key.Enter, ctx)._2 shouldBe empty
+    val (disrupt, asking) = run(stale, "dbcheck")
+    dialog(disrupt) shouldBe DialogKind.Confirm(dbCheck, RiskClass.Disrupt, None)
+    asking shouldBe Seq(Effect.Preview(dbCheck))
+    Update(disrupt, Key.Char('y'), ctx) shouldBe ((disrupt, Nil))
   }
 
   // ---- read-only (FR-053) -------------------------------------------------------------------------------------------

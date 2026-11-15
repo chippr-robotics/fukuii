@@ -343,3 +343,112 @@ class HealthSpec extends AnyFlatSpec with Matchers with OptionValues:
     back.healthSince(key) shouldBe (CheckState.Ok -> t0.plusSeconds(150))
     bar(back, Subsystem.Disk).state shouldBe CheckState.Ok
   }
+
+  // ---- the built-in miner (spec 029 slice 7) ------------------------------------------------------------------------
+
+  private val MinerAlert =
+    Alert(Severity.Warn, "mining is enabled and the built-in miner is not running: restart the node")
+
+  /** `s` after a poll that read the built-in miner as `running`, or could not read it. */
+  private def minerRead(s: TuiState, running: Option[Boolean]): TuiState =
+    val status = s.snapshot.value
+    s.withStatus(status.copy(local = status.local.copy(mining = Some(TuiFixtures.miningOn.copy(minerRunning = running)))))
+
+  private def builtInMiner(s: TuiState): Option[HealthCheck] =
+    Health.checks(s).find(c => c.subsystem == Subsystem.Mining && c.name == "built-in miner")
+
+  /** The runner's view after one more attempt, as the runner keeps it: the last 50. */
+  private def attempted(view: ops.ActionsView, request: ops.ActionRequest, outcome: ops.ActionOutcome): ops.ActionsView =
+    view.copy(history = (view.history :+ ops.ActionRecord(request, outcome, t0)).takeRight(ops.ActionRunner.MaxHistory))
+
+  private val stopMining = ops.ActionRequest(ops.Actions.MiningStop.name)
+
+  "The built-in miner's check" should "raise nothing for a miner that has not been seen running: it may only not have started yet" taggedAs (
+    UnitTest
+  ) in {
+    val mining = TuiFixtures.miningEtc()
+    mining.nodeSettings.miningEnabled shouldBe true
+    val notStarted = minerRead(minerRead(mining, Some(false)), Some(false))
+    notStarted.minerSeenRunning shouldBe false
+    notStarted.minerStopped shouldBe Some(false)
+    builtInMiner(notStarted) shouldBe None
+    Alerts.of(notStarted) should not contain MinerAlert
+    // The mining bar is the hashrate's, as on any mining node.
+    check(notStarted, Subsystem.Mining, "hashrate").alert shouldBe None
+    // A miner that could not be read is not known to have stopped either.
+    val unread = minerRead(mining, None)
+    unread.minerStopped shouldBe None
+    builtInMiner(unread) shouldBe None
+    // And one that runs has not stopped.
+    val running = minerRead(mining, Some(true))
+    running.minerSeenRunning shouldBe true
+    running.minerStopped shouldBe Some(false)
+    builtInMiner(running) shouldBe None
+  }
+
+  it should "warn when a miner that was seen running is not running any more" taggedAs (UnitTest) in {
+    val stopped = minerRead(minerRead(TuiFixtures.miningEtc(), Some(true)), Some(false))
+    stopped.minerSeenRunning shouldBe true
+    stopped.minerStopped shouldBe Some(true)
+    stopped.minerStoppedHere shouldBe false
+    val found = builtInMiner(stopped).value
+    found.alert shouldBe Some(MinerAlert)
+    found.state shouldBe CheckState.Warn
+    found.headroom shouldBe Some(0.0)
+    found.value shouldBe "not running, and not stopped from here; it starts again when the node restarts"
+    Alerts.of(stopped) should contain(MinerAlert)
+    bar(stopped, Subsystem.Mining).state shouldBe CheckState.Warn
+    // That it ran is not forgotten by a poll that could not read it.
+    val again = minerRead(minerRead(stopped, None), Some(false))
+    again.minerStopped shouldBe Some(true)
+    builtInMiner(again).value.alert shouldBe Some(MinerAlert)
+    // A node that does not mine has no such check, whatever the gauge reads.
+    val off = stopped.copy(nodeSettings = stopped.nodeSettings.copy(miningEnabled = false))
+    builtInMiner(off) shouldBe None
+    Alerts.of(off) should not contain MinerAlert
+  }
+
+  it should "raise nothing for a miner stopped from this dashboard, and only for one stopped from it" taggedAs (
+    UnitTest
+  ) in {
+    val stopped = minerRead(minerRead(TuiFixtures.miningEtc(), Some(true)), Some(false))
+    // A stop that was cancelled, refused or failed stopped nothing.
+    val tried = Seq(
+      ops.ActionOutcome.Cancelled,
+      ops.ActionOutcome.Refused("the dashboard is read-only (fukuii.tui.read-only)"),
+      ops.ActionOutcome.Failed("the miner did not answer")
+    ).foldLeft(stopped)((s, outcome) => s.withActions(attempted(s.actions, stopMining, outcome)))
+    tried.minerStoppedHere shouldBe false
+    builtInMiner(tried).value.alert shouldBe Some(MinerAlert)
+    // Nor did another action that was confirmed.
+    val other = tried.withActions(
+      attempted(tried.actions, ops.ActionRequest(ops.Actions.DbCheck.name), ops.ActionOutcome.Confirmed("clean"))
+    )
+    other.minerStoppedHere shouldBe false
+    val here = other.withActions(
+      attempted(other.actions, stopMining, ops.ActionOutcome.Confirmed("the built-in miner is stopped"))
+    )
+    here.minerStoppedHere shouldBe true
+    val found = builtInMiner(here).value
+    found.alert shouldBe None
+    found.state shouldBe CheckState.Ok
+    found.headroom shouldBe Some(1.0)
+    found.value shouldBe "stopped from this dashboard; it starts again when the node restarts"
+    Alerts.of(here) should not contain MinerAlert
+  }
+
+  it should "remember a stop from this dashboard after the history has forgotten it" taggedAs (UnitTest) in {
+    val stopped = minerRead(minerRead(TuiFixtures.miningEtc(), Some(true)), Some(false))
+    val here = stopped.withActions(
+      attempted(stopped.actions, stopMining, ops.ActionOutcome.Confirmed("the built-in miner is stopped"))
+    )
+    val net = ops.ActionRequest(ops.Actions.Net.name)
+    val later = (1 to 60).foldLeft(here)((s, i) =>
+      minerRead(s.withActions(attempted(s.actions, net, ops.ActionOutcome.Confirmed(s"$i lines"))), Some(false))
+    )
+    later.actions.history should have size ops.ActionRunner.MaxHistory.toLong
+    later.actions.history.map(_.request) should not contain stopMining
+    later.minerStoppedHere shouldBe true
+    builtInMiner(later).value.alert shouldBe None
+    Alerts.of(later) should not contain MinerAlert
+  }

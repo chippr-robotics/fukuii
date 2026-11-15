@@ -116,6 +116,13 @@ class ReportActionsSpec extends AnyFlatSpec with Matchers with OptionValues:
       "Inbound     0 of 41 connected peers dialled this node: none has reached it from outside yet"
   }
 
+  it should "say that the peers could not be read, in place of a count that was not" taggedAs (UnitTest) in {
+    val unread = reached.copy(inbound = 0, connected = 0, peersUnread = Some("no answer within 15 s"))
+    said(unread)(4) shouldBe "Inbound     not known: the peers could not be read (no answer within 15 s)"
+    // The other rows are as they were.
+    said(unread).patch(4, Nil, 1) shouldBe said(reached).patch(4, Nil, 1)
+  }
+
   it should "read the node again each time" taggedAs (UnitTest) in {
     var info = reached
     val handler = ReportActions.net(() => info)
@@ -127,8 +134,6 @@ class ReportActionsSpec extends AnyFlatSpec with Matchers with OptionValues:
   // ---- detect-ip ----------------------------------------------------------------------------------------------------
 
   private val detect = ActionRequest(Actions.DetectIp.name)
-
-  /** Runs the detector on the caller's thread: the handler has its answer when it asks for it. */
 
   /** 203.0.113.9, made of its bytes: no name is looked up. */
   private val outside: InetAddress = InetAddress.getByAddress(Array(203.toByte, 0.toByte, 113.toByte, 9.toByte))
@@ -162,6 +167,34 @@ class ReportActionsSpec extends AnyFlatSpec with Matchers with OptionValues:
     asked shouldBe 0
     detector(() => None, advertised = None, mode = "off").preview(detect).lines.last shouldBe
       "What the node advertises (nothing yet) changes only when the node's own detection runs: that is off."
+  }
+
+  it should "say so when the node's own detection is off in its configuration" taggedAs (UnitTest) in {
+    val off = ReportActions.detectIp(() => None, () => "off", () => None, () => true)
+    off.preview(detect).lines should have size 6
+    off.preview(detect).lines.last shouldBe
+      "The node's own detection is off in its configuration: this asks the outside services all the same, once."
+    // Without it, and by default, the line is not there.
+    ReportActions.detectIp(() => None, () => "off", () => None, () => false).preview(detect).lines should have size 5
+    detector(() => None).preview(detect).lines should have size 5
+  }
+
+  it should "run the detector on a daemon thread of its own, and have its answer when it returns" taggedAs (
+    UnitTest
+  ) in {
+    val caller = Thread.currentThread()
+    var on: Option[Thread] = None
+    val handler = detector { () =>
+      on = Some(Thread.currentThread())
+      Some(outside)
+    }
+    handler.run(detect, _ => ()).isRight shouldBe true
+    val worker = on.value
+    worker should not be caller
+    worker.getName shouldBe "fukuii-tui-detect-ip"
+    worker.isDaemon shouldBe true
+    // It is over by the time the action is: no thread is left behind by a detection that answered.
+    worker.isAlive shouldBe false
   }
 
   it should "say the address an outside service saw, beside the one the node advertises" taggedAs (UnitTest) in {
