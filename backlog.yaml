@@ -3332,3 +3332,15 @@ items:
     notes: |-
       B-277 blocks RLPx dial and accept through OperatorBlockingBlacklist. Discovery (scalanet) has no hook for it.
       The TUI's peer block preview says so.
+  - id: B-289
+    title: "Spec 018 C4e gate: run the ethereum/tests fork vectors (bcMultiChain, bcTotalDifficulty, bcForkStress, uncle races) in test mode on the unified layout"
+    priority: P1
+    status: open
+    area: storage
+    size: M
+    opened: 2026-11-15
+    refs: []
+    links:
+      spec: specs/018-storage-engine-consolidation
+    depends_on: [B-063]
+    notes: The ets fixtures are not checked out in the cloud container. Required before the guard is on for any Mordor node (forge). ReorgBlockhashParitySpec covers three core-geth parity scenarios on both layouts meanwhile.
