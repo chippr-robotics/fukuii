@@ -507,6 +507,16 @@ class BlockchainWriter(
       case Some(state) => state.withPinnedBranch(name)(pin => body(Some(pin)))
       case None        => body(None)
 
+  /** `body` with the changeset records of every block above `fork` kept from retention on the unified layout
+    * ([[PathStateStorage.withRecordsHeld]]): for an adoption that moves the head to a branch before the branch is
+    * settled, and may have to move it back. Just `body` on the hash layout.
+    */
+  def withRecordsHeldAbove[A](fork: BlockHeader)(body: => A): A =
+    pathState match
+      case Some(state) =>
+        state.withRecordsHeld(BlockRef(fork.hash.value, fork.number.value, fork.stateRoot.value))(body)
+      case None => body
+
   /** Whether the state of `header`'s block is held on the unified layout, so that a block can be executed on it
     * ([[PathStateStorage.stateAvailable]]: the block whose state the disk holds, one behind it that the records lead
     * to, or one that forward layers lead to). Always on the hash layout, which says what it lacks as it reads.
