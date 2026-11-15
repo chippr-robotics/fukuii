@@ -3260,3 +3260,13 @@ items:
       since: 2026-11-15T00:50:56Z
       heartbeat: 2026-11-15T00:51:08Z
     notes: Package downloads the release zip (sha256 from SHA256SUMS), depends on temurin25jre, shims bin\fukuii.bat. Key in env CHOCOLATEY_NUPKG (main only). First version waits for Chocolatey moderation.
+  - id: B-283
+    title: OmmersValidator.getNBlocksBack never terminates when an ancestor body is missing (Iterator.iterate collect take)
+    priority: P2
+    status: open
+    area: evm
+    size: S
+    opened: 2026-11-15
+    refs: []
+    links: {}
+    notes: Found by forge at spec 018 C4e part 1 review (OmmersValidator.scala:37-45). Pre-existing, both layouts.
