@@ -98,7 +98,11 @@ abstract class BaseNode extends Node:
     startMetricsClient()
     // On the unified state layout the best block and the index are the held block's, made so before anything reads
     // them (spec 018 C4b part 4): the hash layout's two repairs trust the best block or the index, and would undo it.
-    if blockchainReader.holdsStateInPlace then reconcileState()
+    if blockchainReader.holdsStateInPlace then
+      // a clear of the state that a kill interrupted is finished first: its rows are deleted before the state is
+      // looked at (spec 018 C5a part 3). It refuses a datadir that has the mark of one and a state.
+      finishPendingStateClear()
+      reconcileState()
     // A datadir stamped for the unified layout, opened with the guard off, never gets here: the layout guard refused
     // it where the storages were built (spec 018 data-model 5.3), so nothing is repaired in it.
     else
@@ -757,6 +761,16 @@ abstract class BaseNode extends Node:
     if jsonRpcConfig.ipcServerConfig.enabled then tryAndLogFailure(() => jsonRpcIpcServer.close())
     tryAndLogFailure(() => Metrics.get().close())
     tryAndLogFailure(() => storagesInstance.dataSource.close())
+
+  /** Finishes, at a start, a clear of the state for a sync from scratch that did not reach its end
+    * ([[com.chipprbots.ethereum.db.storage.pathstate.PathStateStorage.finishPendingClear]]).
+    */
+  def finishPendingStateClear(): Unit =
+    storagesInstance.storages.pathStateStorage.foreach { pathState =>
+      val genesis = blockchainReader.getBlockHeaderByNumber(0).map(_.hash.value)
+      if pathState.finishPendingClear(genesis) then
+        log.warn("[STATE-CLEAR] The state was being cleared for a sync from scratch when the node stopped: it is clear")
+    }
 
   /** The reconciliation at start of a datadir on the unified state layout ([[StateReconciliation]]): the best block and
     * the index of blocks by number made those of the block whose state the disk holds. It throws, and the node does not

@@ -19,8 +19,11 @@ import com.chipprbots.ethereum.db.dataSource.DataUpdate
 import com.chipprbots.ethereum.db.storage.AppStateStorage
 import com.chipprbots.ethereum.db.storage.DecodedNodeCache
 import com.chipprbots.ethereum.db.storage.MptStorage
+import com.chipprbots.ethereum.db.storage.Namespaces
 import com.chipprbots.ethereum.db.storage.PathNodeStorage
 import com.chipprbots.ethereum.db.storage.PrefetchNodeReader
+import com.chipprbots.ethereum.db.storage.SnapStorageDoneStorage
+import com.chipprbots.ethereum.db.storage.SnapSyncProgressStorage
 import com.chipprbots.ethereum.utils.LazyLogger
 
 /** The state of the unified layout (spec 018 Track C): the position-keyed rows of CF `t` and CF `u`, the anchor that
@@ -865,6 +868,130 @@ final class PathStateStorage(
         Option.when(removalOfTheState().isEmpty)(tooManyKeysToDestroy)
       }
 
+  /** Clears the state for a sync from scratch (spec 018 C5a part 3; data-model D.3, the ordered clear): for an
+    * escalation, when the chain cannot be followed from the state that is held or that state is at fault, and for the
+    * genesis state as SNAP starts. Outside test mode, on a datadir of any size, and the datadir stays the unified
+    * layout's.
+    *
+    * In this order, under the lock of the moves and the state lock:
+    *   1. one synced batch ([[AppStateStorage.stateClearBatch]]), written as a move of the clock to no state: the sync
+    *      is no longer done, the anchor and the state's other marks are removed, SNAP's record of its last run is
+    *      removed, the best block is the genesis, the escalation is recorded, and `state.reset-pending` is set. From
+    *      here the datadir holds no state, whatever is still in its rows: every view made before is stale, and none can
+    *      be made;
+    *   1. what is kept in memory of the state that is gone is dropped;
+    *   1. the rows and the changeset records are deleted, a range delete for each column family;
+    *   1. `state.reset-pending` is removed, synced: that write makes the range deletes before it durable with it, so
+    *      the mark never goes while a delete could be lost.
+    *
+    * A kill at any step: before the batch, nothing has changed; after it, the node starts with no anchor and with the
+    * mark, and [[finishPendingClear]] deletes the rows again before anything reads them; after the last step, a datadir
+    * SNAP starts on as on a new one. A batch that fails leaves the datadir and the anchor as they were.
+    *
+    * The caller's, and not checked here: nothing may be reading the rows through an iterator of its own (the audit, a
+    * hand-off sample, a walker: a view goes stale, an iterator of its own goes on reading rows that are gone); no
+    * import and no fork choice may be committing; it is not called from inside a hold of the records; and no sync may
+    * write rows until this has returned. If it throws after its first batch the mark is left set: nothing may sync
+    * until [[finishPendingClear]] has run.
+    *
+    * @param genesisHash
+    *   the block at height 0, which the best block is set back to
+    * @param atMillis
+    *   the wall clock now
+    * @param escalation
+    *   why, when this is an escalation: recorded for the cool-down between two of them
+    */
+  def clearForResync(genesisHash: ByteString, atMillis: Long, escalation: Option[StateEscalation]): Unit =
+    moves.lock()
+    try
+      lock.locked(
+        "a clear of the state for a sync from scratch",
+        nanos => told("the wait for the state lock")(settings.observer.lockWaited(nanos))
+      ) {
+        val begins: Seq[DataUpdate] = appState.stateClearBatch(genesisHash, atMillis, escalation).updates
+        clock.inFlightToNoState(dataSource.updateSync(begins))
+        // executed blocks kept beside a state that is gone are of no state, and neither is what was derived from its
+        // records, the fault that was found in it, or the block that was finalized on it
+        overlay.clear()
+        window.set(None)
+        indexes.clear()
+        faulted = None
+        named = None
+        deleteEveryRowAndRecord()
+        appState.removeStateResetPending().commitSync()
+      }
+    finally moves.unlock()
+
+  /** As SNAP starts on a datadir whose state is its genesis (spec 018 C5a part 3; data-model 5.4, T205): the genesis
+    * state is cleared, so that the sync writes its rows into families that hold none and the datadir reads as one it
+    * starts on new. True when it was. A datadir whose state is any other block's, or that has none, is left as it is:
+    * SNAP does not start over a state a node has followed the chain to, and a run that is resumed has no anchor.
+    *
+    * It is [[clearForResync]] with no escalation, mark and all: a kill between the batch and the range deletes leaves
+    * the mark, and the start finishes it ([[finishPendingClear]]). Deleting the rows first and the anchor after, as the
+    * data model had it, would leave a genesis anchor over rows that are gone if killed between the two (vault).
+    */
+  def clearGenesisStateForSync(genesis: BlockRef, atMillis: Long): Boolean =
+    val heldIsGenesis = anchor.contains(genesis)
+    if heldIsGenesis then clearForResync(genesis.hash, atMillis, escalation = None)
+    heldIsGenesis
+
+  /** At a start: finishes a clear that a kill interrupted ([[clearForResync]]), before anything reads the state. True
+    * when there was one.
+    *
+    * It refuses a datadir that has the mark and a state: an anchor, or a sync that says it is done. The clear's first
+    * batch removes both with the mark's own write, and the batch that ends a sync removes the mark with the anchor's,
+    * so the three together are no interrupted clear, and deleting the rows of a state that is in use would destroy it
+    * for nothing. The node does not start; an operator looks.
+    *
+    * @param genesisHash
+    *   the block at height 0, when the datadir has one: the best block is set back to it
+    */
+  @throws[IllegalStateException]("when the mark is set on a datadir that holds a state")
+  def finishPendingClear(genesisHash: Option[ByteString]): Boolean =
+    if !appState.isStateResetPending() then false
+    else
+      moves.lock()
+      try
+        lock.locked("the end of an interrupted clear of the state") {
+          if appState.getStateAnchor().isDefined || appState.isSnapSyncDone() then
+            throw new IllegalStateException(
+              s"${StateResetPending.Key} is set on a data directory that holds a state (an anchor, or a sync that is " +
+                "done): that is no interrupted clear, and its rows are not deleted. Take a copy of the data " +
+                "directory first. Then either restore it, or move its rocksdb directory away to sync again."
+            )
+          // A sync that ran with the mark still set (the clear failed after its first batch, and the node went on)
+          // has written its own record of what it downloaded, over rows that are deleted below: that record goes
+          // first, again, or the next sync would skip what it says is done (vault).
+          dataSource.updateSync(appState.stateClearRemovals(genesisHash).updates)
+          deleteEveryRowAndRecord()
+          appState.removeStateResetPending().commitSync()
+          log.warn("[STATE-CLEAR] A clear of the state that was interrupted has been finished: the rows are deleted")
+          true
+        }
+      finally moves.unlock()
+
+  // Every row of the account trie and of the storage tries and every changeset record, and with them what a sync
+  // kept that is of those rows and of no others: the ranges it had downloaded (by state root: a sync that pivots to a
+  // root it had been at would skip them over rows that are gone), the accounts it left out, the storage tries it
+  // marked done, the queue of its healing walk, and the flat copies of accounts and slots. A range delete each,
+  // whatever it holds. Not synced, and not in a batch: whoever calls this has set the mark, and writes synced after.
+  private def deleteEveryRowAndRecord()(using StateLockHeld): Unit =
+    val from = Array.emptyByteArray
+    // above every key of these families: the longest is a storage row's 32-byte owner and its path
+    val to = Array.fill[Byte](PathStateStorage.KeyBoundBytes)(0xff.toByte)
+    Seq(
+      Namespaces.StateChangesetNamespace,
+      Namespaces.StateTriePathNamespace,
+      Namespaces.StorageTriePathNamespace,
+      Namespaces.SnapSyncProgressNamespace,
+      Namespaces.BfsQueueNamespace,
+      Namespaces.FlatAccountNamespace,
+      Namespaces.FlatSlotNamespace
+    ).foreach(dataSource.deleteRange(_, from, to))
+    new SnapSyncProgressStorage(dataSource).clearExcluded()
+    new SnapStorageDoneStorage(dataSource).clear()
+
   /** The deletes of every row and every changeset key, or `None` when either is more than may be deleted in a batch. */
   private def removalOfTheState()(using StateLockHeld): Option[Seq[DataSourceUpdateOptimized]] =
     for
@@ -1691,6 +1818,9 @@ final class PathStateStorage(
         )
 
 object PathStateStorage:
+
+  /** A key above every key of the state's column families, in bytes of 0xff: the bound of a range delete of one. */
+  val KeyBoundBytes: Int = 128
 
   private val MaxFaultsShown = 3
 
