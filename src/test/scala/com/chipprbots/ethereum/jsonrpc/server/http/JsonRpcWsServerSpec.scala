@@ -188,10 +188,16 @@ class JsonRpcWsServerSpec extends AnyFlatSpec with Matchers with ScalatestRouteT
         override protected def callStats: RpcCallStats = stats
         override protected def stopDeadline: FiniteDuration = 1.second
 
-    /** A client that sends nothing and stays open; the future completes when the server ends the connection. */
-    def connect(): Future[Done] =
+    /** A client that sends nothing and stays open; the future completes when the server ends the connection.
+      *
+      * A well-behaved client (the default) ends its own side when the server closes: the flow is coupled, so the
+      * close frame is answered and the TCP connection ends. An unresponsive one reads the close frame and never
+      * answers it.
+      */
+    def connect(responsive: Boolean = true): Future[Done] =
       val clientFlow: Flow[Message, Message, Future[Done]] =
-        Flow.fromSinkAndSourceMat(Sink.ignore, Source.maybe[Message])(Keep.left)
+        if responsive then Flow.fromSinkAndSourceCoupledMat(Sink.ignore, Source.maybe[Message])(Keep.left)
+        else Flow.fromSinkAndSourceMat(Sink.ignore, Source.maybe[Message])(Keep.left)
       val (upgraded, closed) =
         Http().singleWebSocketRequest(WebSocketRequest(s"ws://127.0.0.1:$portNumber/"), clientFlow)
       Await.result(upgraded, Wait).response.status shouldEqual StatusCodes.SwitchingProtocols
@@ -229,13 +235,7 @@ class JsonRpcWsServerSpec extends AnyFlatSpec with Matchers with ScalatestRouteT
       f.server.openConnections shouldBe 1
 
       Await.result(f.server.lifecycle.stop(), Wait)
-      // The client's stream ends (cleanly or not): the server closed the connection at the deadline at the latest.
-      println("DIAG after stop: openConnections=" + f.server.openConnections + " clientDone=" + first.isCompleted)
-      println("DIAG closed msg within 3s: " + scala.util.Try(f.subscriptions.fishForMessage(3.seconds) {
-        case _: SubscriptionManager.ConnectionClosed => FishingOutcomes.complete
-        case _                                       => FishingOutcomes.continueAndIgnore
-      }))
-      println("DIAG after wait: openConnections=" + f.server.openConnections + " clientDone=" + first.isCompleted + " " + first.value)
+      // The server closed the connection: the client's stream ends, and the manager heard of it, within the deadline.
       Await.ready(first, Wait)
       f.expectClosed()
       f.server.openConnections shouldBe 0
@@ -257,4 +257,30 @@ class JsonRpcWsServerSpec extends AnyFlatSpec with Matchers with ScalatestRouteT
     // Whatever was left open is closed by the stop, and is no longer counted.
     f.expectClosed()
     f.server.openConnections shouldBe 0
+  }
+
+  it should "release the connection and its subscriptions at once even when the client never answers the close frame" taggedAs (
+    UnitTest,
+    RPCTest
+  ) in {
+    val f = new BoundFixture
+    try
+      Await.result(f.server.lifecycle.start(), Wait)
+      f.connect(responsive = false)
+      f.expectRegistered()
+      f.server.openConnections shouldBe 1
+
+      Await.result(f.server.lifecycle.stop(), Wait)
+      // The node's side is done whatever the client does: the manager has been told and nothing is counted.
+      f.expectClosed()
+      f.server.openConnections shouldBe 0
+      f.stats.snapshot.stopped should contain(RpcCallStats.Ws)
+
+      // A connection made after the next start is not closed by the stop before it.
+      Await.result(f.server.lifecycle.start(), Wait)
+      val next = f.connect()
+      f.expectRegistered()
+      f.server.openConnections shouldBe 1
+      next.isCompleted shouldBe false
+    finally Await.result(f.server.lifecycle.stop(), Wait)
   }

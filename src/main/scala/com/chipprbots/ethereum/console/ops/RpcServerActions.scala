@@ -72,7 +72,7 @@ object RpcServerActions:
                   s.openConnections().fold(
                     "Its open connections are not counted by this server: in-flight requests finish, then every connection is closed within 3 s."
                   )(n =>
-                    s"$n open connection${if n == 1 then "" else "s"} and ${if n == 1 then "its" else "their"} subscriptions drop within 3 s; clients must reconnect and resubscribe."
+                    s"$n open connection${if n == 1 then " is" else "s are"} closed at once and ${if n == 1 then "its" else "their"} subscriptions are dropped; clients must reconnect and resubscribe."
                   )
                 ) ++ Option.when(s.extras.nonEmpty)(
                   "Readiness and health probes on this port will fail, and anything supervising the node by that port may restart it."

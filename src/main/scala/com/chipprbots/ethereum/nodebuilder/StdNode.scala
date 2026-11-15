@@ -641,6 +641,10 @@ abstract class BaseNode extends Node:
             )
           }
       )
+      // Spec 029 slice 7: the operator's actions, each tied to the node's own function that carries it out. They run
+      // on threads of the dashboard's action runner.
+      val (tuiActions, tuiActionsNotOffered) = TuiActions.of(this, tui.config.alerts)
+      tui.setActions(tuiActions, tuiActionsNotOffered)
       // Spec 029 slice 3: the explorer's lookups, answered from the node's own stores on a worker thread of the TUI's.
       // The same reads the JSON-RPC block, transaction and account methods make; nothing is written.
       tui.setLookups(
