@@ -13,8 +13,8 @@ import com.chipprbots.ethereum.console.TuiFixtures
 import com.chipprbots.ethereum.testing.Tags.*
 
 /** The action runner (spec 029 FR-051, FR-053, FR-057, T101): what runs, what is refused, what the audit log says of
-  * each attempt, and that nothing runs on the caller's thread. Its threads are queues the test steps, so every order
-  * of events is the one the test chose.
+  * each attempt, and that nothing runs on the caller's thread. Its threads are queues the test steps, so every order of
+  * events is the one the test chose.
   */
 class ActionRunnerSpec extends AnyFlatSpec with Matchers with OptionValues:
 
@@ -51,7 +51,10 @@ class ActionRunnerSpec extends AnyFlatSpec with Matchers with OptionValues:
         Actions.MaxPeers.name -> handler,
         Actions.DbCheck.name -> handler,
         Actions.Net.name -> handler,
-        Actions.PeerDrop.name -> ActionHandler(_ => throw new IllegalStateException("no peers"), (_, _) => throw new IllegalStateException("gone\nsecond line"))
+        Actions.PeerDrop.name -> ActionHandler(
+          _ => throw new IllegalStateException("no peers"),
+          (_, _) => throw new IllegalStateException("gone\nsecond line")
+        )
       ),
       unavailable,
       readOnly,
@@ -148,7 +151,7 @@ class ActionRunnerSpec extends AnyFlatSpec with Matchers with OptionValues:
     s.actions.step()
     // An exception's message can hold anything: it is one clean line in the log.
     s.audit.last should startWith("action=peer drop params=id=ab outcome=failed: gone")
-    s.audit.last should not include "\n"
+    (s.audit.last should not).include("\n")
     s.runner.view.running shouldBe empty
   }
 
@@ -211,7 +214,9 @@ class ActionRunnerSpec extends AnyFlatSpec with Matchers with OptionValues:
     s.result = Left("the node status could not be read")
     s.runner.confirmed(net)
     s.observes.step()
-    s.runner.view.reports(Actions.Net.name).lines shouldBe Vector("could not be read: the node status could not be read")
+    s.runner.view.reports(Actions.Net.name).lines shouldBe Vector(
+      "could not be read: the node status could not be read"
+    )
   }
 
   "The audit line" should "be one line whatever a parameter holds, and name no more than the request" taggedAs (
@@ -219,7 +224,7 @@ class ActionRunnerSpec extends AnyFlatSpec with Matchers with OptionValues:
   ) in {
     val hostile = ActionRequest("peer add", Vector("enode" -> "enode://ab@host:1\noutcome=confirmed by=root"))
     val line = ActionRunner.line(hostile, "cancelled")
-    line should not include "\n"
+    (line should not).include("\n")
     line should startWith("action=peer add params=enode=enode://ab@host:1")
     line should endWith("outcome=cancelled by=tui")
     ActionRunner.line(ActionRequest("quit"), "confirmed") shouldBe "action=quit params=- outcome=confirmed by=tui"

@@ -125,8 +125,7 @@ class ActionDialogSpec extends AnyFlatSpec with Matchers with OptionValues:
       val (after, effects) = Update(asked, Key.Char(yes), ctx)
       after.overlay shouldBe Overlay.None
       effects shouldBe Seq(Effect.Confirm(dbCheck))
-    for no <- Seq(Key.Char('n'), Key.Char('N'), Key.Esc, Key.Backspace) do
-      cancels(asked, no, dbCheck)
+    for no <- Seq(Key.Char('n'), Key.Char('N'), Key.Esc, Key.Backspace) do cancels(asked, no, dbCheck)
     for other <- Seq(Key.Enter, Key.Tab, Key.Char('x'), Key.Char('1'), Key.Up) do
       Update(asked, other, ctx) shouldBe ((asked, Nil))
   }
@@ -157,7 +156,8 @@ class ActionDialogSpec extends AnyFlatSpec with Matchers with OptionValues:
       previewed(run(synced, "mining stop")._1, stopMining),
       press(synced, Key.Char('q'))
     )
-    for d <- dialogs; text <- Seq("y", "stop", "stop\n", "\ty\n", "n") do Update(d, Key.Paste(text), ctx) shouldBe ((d, Nil))
+    for d <- dialogs; text <- Seq("y", "stop", "stop\n", "\ty\n", "n") do
+      Update(d, Key.Paste(text), ctx) shouldBe ((d, Nil))
   }
 
   "An action that cannot be run now" should "say why and be confirmed by nothing" taggedAs (UnitTest) in {
@@ -198,7 +198,14 @@ class ActionDialogSpec extends AnyFlatSpec with Matchers with OptionValues:
     previewed(onApply, maxPeers) shouldBe onApply
     val later = Preview(Vector("Sets the limit on outgoing connections from 30 to 40."))
     val refreshed = previewed(onApply, maxPeers, later)
-    dialog(refreshed) shouldBe DialogKind.Confirm(maxPeers, RiskClass.Adjust, Some(later), DialogFocus.Cancel, "", changed = true)
+    dialog(refreshed) shouldBe DialogKind.Confirm(
+      maxPeers,
+      RiskClass.Adjust,
+      Some(later),
+      DialogFocus.Cancel,
+      "",
+      changed = true
+    )
     widgets.DialogBox.confirm(dialog(refreshed)).body.head should include("has changed since it was first shown")
     // The word half typed is gone too.
     val typing = press(previewed(run(synced, "mining stop")._1, stopMining), typed("sto")*)

@@ -79,8 +79,8 @@ object StorageConsistencyChecker:
     else None
 
   /** Samples every `step`th block number from 0 up to, but not including, `best`: the number must map to a hash and the
-    * hash must have a header. Pure apart from the reads; never stops at a miss. `onMiss` is called at each miss as it is
-    * found. `cancelled` is asked before each point.
+    * hash must have a header. Pure apart from the reads; never stops at a miss. `onMiss` is called at each miss as it
+    * is found. `cancelled` is asked before each point.
     */
   def scan(
       best: BigInt,
@@ -133,9 +133,8 @@ object StorageConsistencyChecker:
       blockNumberMappingStorage,
       blockHeadersStorage,
       step,
-      onMiss = { _ =>
+      onMiss = _ =>
         log.error("Database seems to be in inconsistent state, shutting down")
         shutdown()
-      }
     )
     ()

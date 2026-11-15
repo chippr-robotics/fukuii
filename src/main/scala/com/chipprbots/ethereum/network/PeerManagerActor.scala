@@ -77,8 +77,8 @@ object PeerManagerActor:
     */
   final case class GetAdminStateCmd(replyTo: typed.ActorRef[AdminState]) extends Command
 
-  /** Dials again the maintained peers at `ip` (canonical form). Sent when the operator unblocks the address: a dial
-    * the block refused ended that peer's retries, so nothing else would bring it back before a restart.
+  /** Dials again the maintained peers at `ip` (canonical form). Sent when the operator unblocks the address: a dial the
+    * block refused ended that peer's retries, so nothing else would bring it back before a restart.
     */
   final case class RedialMaintainedAtCmd(ip: String) extends Command
   final case class AdminState(
@@ -762,7 +762,9 @@ object PeerManagerActor:
       // compressed IPv6 literal, an IPv4-mapped one, a name): the host is asked as written, in its canonical form,
       // and as the address it resolved to.
       val operatorBlocked =
-        (Seq(host) ++ BlockedIPRegistry.canonical(host) ++ Option(remoteAddress.getAddress).map(_.getHostAddress)).distinct
+        (Seq(host) ++ BlockedIPRegistry.canonical(host) ++ Option(remoteAddress.getAddress).map(
+          _.getHostAddress
+        )).distinct
           .exists(h => blacklist.isBlacklisted(OperatorBlock(h)))
 
       validConnection match

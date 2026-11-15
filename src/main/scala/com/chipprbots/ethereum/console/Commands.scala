@@ -21,8 +21,8 @@ enum Command:
   /** `block`, `tx`, `receipt`, `account`: look it up and show it (spec 029 FR-028). */
   case Explore(query: LookupQuery)
 
-  /** An action that asks to be confirmed, or that needs no confirmation and runs (spec 029 FR-048). `peer` actions
-    * that name a connected peer carry what was typed of its id: [[Update]] finds the peer.
+  /** An action that asks to be confirmed, or that needs no confirmation and runs (spec 029 FR-048). `peer` actions that
+    * name a connected peer carry what was typed of its id: [[Update]] finds the peer.
     */
   case Act(request: ops.ActionRequest)
 
@@ -64,8 +64,8 @@ object Commands:
     (text.contains(':') && text.count(_ == ':') >= 2 &&
       text.forall(ch => Character.digit(ch, 16) >= 0 || ch == ':' || ch == '.') && text.length <= 45)
 
-  /** `enode://<128 hex digits>@<host>:<port>`, with nothing missing: a peer manager handed one with no node id
-    * fails inside itself (herald, slice 7).
+  /** `enode://<128 hex digits>@<host>:<port>`, with nothing missing: a peer manager handed one with no node id fails
+    * inside itself (herald, slice 7).
     */
   private[console] def isEnode(text: String): Boolean =
     scala.util
@@ -77,8 +77,8 @@ object Commands:
           Option(uri.getHost).exists(_.nonEmpty) && uri.getPort >= 1 && uri.getPort <= 65535
       )
 
-  /** `peer <verb> <argument>`: the actions on a peer. None when the words are not one of them, and `peer <id>` is
-    * the peer's details as before.
+  /** `peer <verb> <argument>`: the actions on a peer. None when the words are not one of them, and `peer <id>` is the
+    * peer's details as before.
     */
   private def peerAction(args: Seq[String]): Option[Command] =
     (args.headOption.map(_.toLowerCase(Locale.ROOT)), args.lift(1)) match
@@ -109,7 +109,8 @@ object Commands:
       case "net"      => Some(Command.Show(Screen.Net))
       case "loglevel" =>
         Some(first match
-          case Some("reset") if args.size == 1 => Command.Act(ActionRequest(Actions.LogLevel.name, Vector("reset" -> "all")))
+          case Some("reset") if args.size == 1 =>
+            Command.Act(ActionRequest(Actions.LogLevel.name, Vector("reset" -> "all")))
           case Some(level) if LogLevels.contains(level.toUpperCase(Locale.ROOT)) && args.size <= 2 =>
             Command.Act(
               ActionRequest(
@@ -128,10 +129,14 @@ object Commands:
         )
       case "threshold" =>
         Some(first match
-          case Some("reset") if args.size == 1 => Command.Act(ActionRequest(Actions.Threshold.name, Vector("reset" -> "all")))
+          case Some("reset") if args.size == 1 =>
+            Command.Act(ActionRequest(Actions.Threshold.name, Vector("reset" -> "all")))
           case Some(name) if AlertThresholds.Keys.contains(name) && args.size >= 2 =>
-            Command.Act(ActionRequest(Actions.Threshold.name, Vector("name" -> name, "value" -> args.tail.mkString(" "))))
-          case _ => Command.Usage(s"usage: ${Actions.Threshold.usage}; a name is one of ${AlertThresholds.Keys.mkString(", ")}")
+            Command.Act(
+              ActionRequest(Actions.Threshold.name, Vector("name" -> name, "value" -> args.tail.mkString(" ")))
+            )
+          case _ =>
+            Command.Usage(s"usage: ${Actions.Threshold.usage}; a name is one of ${AlertThresholds.Keys.mkString(", ")}")
         )
       case "mining" =>
         Some(first match

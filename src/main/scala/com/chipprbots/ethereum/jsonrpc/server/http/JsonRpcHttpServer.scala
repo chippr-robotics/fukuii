@@ -165,9 +165,9 @@ trait JsonRpcHttpServer extends Json4sSupport with Logger:
   protected def stopDeadline: FiniteDuration = ServerLifecycle.DefaultHardDeadline
 
   /** One bind of [[route]] on `config.interface:config.port`. It makes the binding and nothing else: the bound or
-    * stopped state is kept, and said to [[callStats]], by [[lifecycle]]. A server that cannot bind (a bad TLS
-    * context, an address in use) answers with a failed future, not a throw. A route-only test double that is never
-    * bound keeps this default, which says so.
+    * stopped state is kept, and said to [[callStats]], by [[lifecycle]]. A server that cannot bind (a bad TLS context,
+    * an address in use) answers with a failed future, not a throw. A route-only test double that is never bound keeps
+    * this default, which says so.
     */
   protected def bind(): Future[Http.ServerBinding] =
     Future.failed(new UnsupportedOperationException("this server is not bound by a real bind"))

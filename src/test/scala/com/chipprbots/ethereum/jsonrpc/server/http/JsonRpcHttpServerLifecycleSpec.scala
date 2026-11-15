@@ -153,12 +153,14 @@ class JsonRpcHttpServerLifecycleSpec extends AnyFlatSpec with Matchers with Befo
     val stats = new RpcCallStats
     def countedBind(): Future[Http.ServerBinding] =
       binds.incrementAndGet()
-      Http(system).newServerAt("127.0.0.1", 0).bind(org.apache.pekko.http.scaladsl.server.Route.toFunction(complete("ok"))(using system))
+      Http(system)
+        .newServerAt("127.0.0.1", 0)
+        .bind(org.apache.pekko.http.scaladsl.server.Route.toFunction(complete("ok"))(using system))
     val lifecycle = new ServerLifecycle(RpcCallStats.Http, () => countedBind(), stats, 1.second)
     try
       val first = lifecycle.start()
       val second = lifecycle.start()
-      second should be theSameInstanceAs first
+      (second should be).theSameInstanceAs(first)
       val binding = Await.result(first, Wait)
       Await.result(second, Wait).localAddress shouldBe binding.localAddress
       Await.result(lifecycle.start(), Wait).localAddress shouldBe binding.localAddress
@@ -174,7 +176,10 @@ class JsonRpcHttpServerLifecycleSpec extends AnyFlatSpec with Matchers with Befo
     val failing = new AtomicInteger(1)
     def failingOnceBind(): Future[Http.ServerBinding] =
       if failing.getAndSet(0) == 1 then Future.failed(new IllegalStateException("address in use"))
-      else Http(system).newServerAt("127.0.0.1", 0).bind(org.apache.pekko.http.scaladsl.server.Route.toFunction(complete("ok"))(using system))
+      else
+        Http(system)
+          .newServerAt("127.0.0.1", 0)
+          .bind(org.apache.pekko.http.scaladsl.server.Route.toFunction(complete("ok"))(using system))
     val lifecycle = new ServerLifecycle(RpcCallStats.Http, () => failingOnceBind(), stats, 1.second)
     try
       an[IllegalStateException] should be thrownBy Await.result(lifecycle.start(), Wait)

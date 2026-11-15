@@ -49,7 +49,9 @@ object BundleInputs:
           s"table readers (bytes): ${known(s.tableReaders)}",
           s"block cache hits: ${s.cache}",
           s"audit: ${s.audit}"
-        ) ++ s.stores.map(store => s"store ${store.name}: size ${known(store.sstBytes)} bytes, keys ${known(store.keys)}") ++
+        ) ++ s.stores.map(store =>
+          s"store ${store.name}: size ${known(store.sstBytes)} bytes, keys ${known(store.keys)}"
+        ) ++
           s.markers.map((name, value) => s"mark $name: $value")
 
   /** @param build
@@ -70,6 +72,7 @@ object BundleInputs:
       alerts = () => alerts(state()),
       views = () =>
         val now = state()
-        TuiView.values.toSeq.map(v => v.title -> view(renderer, now, v)),
+        TuiView.values.toSeq.map(v => v.title -> view(renderer, now, v))
+      ,
       database = () => database(state())
     )

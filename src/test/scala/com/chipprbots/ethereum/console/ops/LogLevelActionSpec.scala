@@ -43,10 +43,10 @@ class LogLevelActionSpec extends AnyFlatSpec with Matchers with OptionValues wit
     change = (level, logger) =>
       // The service's changeLogLevel needs no instance state: the object-level functions are what it calls.
       AdminServiceLevels.change(level, logger),
-    changed = () =>
-      AdminService.changedLogLevels.map(c => LogLevelAction.Changed(c.name, c.before, c.now, c.createdByChange)),
-    reset = () =>
-      AdminService.resetLogLevels().map(c => LogLevelAction.Changed(c.name, c.before, c.now, c.createdByChange))
+    changed =
+      () => AdminService.changedLogLevels.map(c => LogLevelAction.Changed(c.name, c.before, c.now, c.createdByChange)),
+    reset =
+      () => AdminService.resetLogLevels().map(c => LogLevelAction.Changed(c.name, c.before, c.now, c.createdByChange))
   )
   private val handler = LogLevelAction.handler(node)
 
@@ -79,13 +79,15 @@ class LogLevelActionSpec extends AnyFlatSpec with Matchers with OptionValues wit
 
   it should "warn that the root logger feeds the dashboard's own log view" taggedAs (UnitTest) in {
     handler.preview(set("OFF", "ROOT")).lines.last should include("the dashboard's own Logs view")
-    handler.preview(set("DEBUG", "ROOT")).lines.last should not include "Logs view"
+    (handler.preview(set("DEBUG", "ROOT")).lines.last should not).include("Logs view")
   }
 
   "Running it" should "set the level through the admin service, and remember what it was" taggedAs (UnitTest) in {
     handler.run(set("DEBUG", Child), _ => ()) shouldBe Right(s"$Child logs at DEBUG")
     ctx.getLogger(Child).getLevel shouldBe Level.DEBUG
-    AdminService.changedLogLevels shouldBe List(AdminService.ChangedLogger(Child, None, "DEBUG", createdByChange = false))
+    AdminService.changedLogLevels shouldBe List(
+      AdminService.ChangedLogger(Child, None, "DEBUG", createdByChange = false)
+    )
     // A second change keeps the first "before": that is what a reset returns to.
     handler.run(set("TRACE", Child), _ => ()) shouldBe Right(s"$Child logs at TRACE")
     AdminService.changedLogLevels.map(_.before) shouldBe List(None)
@@ -114,7 +116,9 @@ class LogLevelActionSpec extends AnyFlatSpec with Matchers with OptionValues wit
   private object AdminServiceLevels:
     def change(level: String, logger: String): Either[String, Unit] =
       AdminService
-        .setLogLevel(AdminService.AdminChangeLogLevelRequest(level, Some(List(if logger == "ROOT" then "" else logger))))
+        .setLogLevel(
+          AdminService.AdminChangeLogLevelRequest(level, Some(List(if logger == "ROOT" then "" else logger)))
+        )
         .unsafeRunSync()
         .left
         .map(_.message)

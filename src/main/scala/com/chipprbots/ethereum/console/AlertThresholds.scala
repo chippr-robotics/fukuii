@@ -99,7 +99,11 @@ object AlertThresholds:
       else s"$bytes"
     Seq(
       ("zero-peers-after", t => time(t.zeroPeersAfter), (to, from) => to.copy(zeroPeersAfter = from.zeroPeersAfter)),
-      ("low-peers-fraction", _.lowPeersFraction.toString, (to, from) => to.copy(lowPeersFraction = from.lowPeersFraction)),
+      (
+        "low-peers-fraction",
+        _.lowPeersFraction.toString,
+        (to, from) => to.copy(lowPeersFraction = from.lowPeersFraction)
+      ),
       ("stall-after", t => time(t.stallAfter), (to, from) => to.copy(stallAfter = from.stallAfter)),
       (
         "snap-sample-max-age",
@@ -125,23 +129,31 @@ object AlertThresholds:
         (to, from) => to.copy(hashrateZeroAfter = from.hashrateZeroAfter)
       ),
       ("reorg-depth", _.reorgDepth.toString, (to, from) => to.copy(reorgDepth = from.reorgDepth)),
-      ("heap-warn-fraction", _.heapWarnFraction.toString, (to, from) => to.copy(heapWarnFraction = from.heapWarnFraction)),
+      (
+        "heap-warn-fraction",
+        _.heapWarnFraction.toString,
+        (to, from) => to.copy(heapWarnFraction = from.heapWarnFraction)
+      ),
       ("gc-share-warn", _.gcShareWarn.toString, (to, from) => to.copy(gcShareWarn = from.gcShareWarn)),
       (
         "rpc-error-rate-warn",
         _.rpcErrorRateWarn.toString,
         (to, from) => to.copy(rpcErrorRateWarn = from.rpcErrorRateWarn)
       ),
-      ("write-stall", t => if t.writeStall then "true" else "false", (to, from) => to.copy(writeStall = from.writeStall))
+      (
+        "write-stall",
+        t => if t.writeStall then "true" else "false",
+        (to, from) => to.copy(writeStall = from.writeStall)
+      )
     )
 
   /** The value of `key` in `thresholds`, as `tui.conf` would write it; None for a key that is no threshold. */
   def show(thresholds: AlertThresholds, key: String): Option[String] =
     fields.collectFirst { case (`key`, read, _) => read(thresholds) }
 
-  /** `thresholds` with `key` set to `value`, read as `tui.conf` reads it: a Left says why it is no value for that
-    * key, in the words the node's start would use. The others are untouched, and so is the rule between the disk's
-    * two thresholds.
+  /** `thresholds` with `key` set to `value`, read as `tui.conf` reads it: a Left says why it is no value for that key,
+    * in the words the node's start would use. The others are untouched, and so is the rule between the disk's two
+    * thresholds.
     */
   def set(thresholds: AlertThresholds, key: String, value: String): Either[String, AlertThresholds] =
     fields.collectFirst { case (`key`, _, write) => write } match
@@ -154,9 +166,13 @@ object AlertThresholds:
             com.typesafe.config.ConfigFactory
               .parseString(s"alerts { $key = $quoted }")
               // The disk's error default would sit above a warning set lower than it: checked below, on the result.
-              .withFallback(com.typesafe.config.ConfigFactory.parseString(
-                if key == "disk-warn" then "alerts { disk-error = 1 }" else if key == "disk-error" then "alerts { disk-warn = 1024 PiB }" else ""
-              ))
+              .withFallback(
+                com.typesafe.config.ConfigFactory.parseString(
+                  if key == "disk-warn" then "alerts { disk-error = 1 }"
+                  else if key == "disk-error" then "alerts { disk-warn = 1024 PiB }"
+                  else ""
+                )
+              )
           )
           val next = write(thresholds, parsed)
           if next.diskErrorBytes > next.diskWarnBytes then

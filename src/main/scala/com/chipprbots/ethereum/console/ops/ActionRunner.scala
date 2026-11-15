@@ -12,18 +12,18 @@ import org.slf4j.LoggerFactory
 import com.chipprbots.ethereum.console.Sanitize
 
 /** Runs the operator's actions (spec 029 FR-051, FR-053, FR-057): previews on one daemon thread, the actions that
-  * change something on another, and the Observe actions on a third, so that a preview or a look at the configuration
-  * is never stuck behind an action that takes time, and none ever runs on the frame loop. The frame loop reads
-  * [[view]] and nothing else.
+  * change something on another, and the Observe actions on a third, so that a preview or a look at the configuration is
+  * never stuck behind an action that takes time, and none ever runs on the frame loop. The frame loop reads [[view]]
+  * and nothing else.
   *
-  * Every attempt ends in one INFO line from the logger [[ActionRunner.AuditLogger]]:
-  * `action=<name> params=<…> outcome=<confirmed|cancelled|refused|failed: reason> by=tui`. An action that takes time
-  * also writes one when it starts (`outcome=started`), so that a node made slow by a compaction says in its log when
-  * the compaction began and from where.
+  * Every attempt ends in one INFO line from the logger [[ActionRunner.AuditLogger]]: `action=<name> params=<…>
+  * outcome=<confirmed|cancelled|refused|failed: reason> by=tui`. An action that takes time also writes one when it
+  * starts (`outcome=started`), so that a node made slow by a compaction says in its log when the compaction began and
+  * from where.
   *
   * The rules no caller can get round are checked here, whatever the dialog allowed: an action above Observe does not
-  * run on a read-only dashboard; an action is not started while it is running; an action with no handler is not
-  * offered on this node.
+  * run on a read-only dashboard; an action is not started while it is running; an action with no handler is not offered
+  * on this node.
   *
   * @param handlers
   *   what carries each action out, by its name; an action with none is not offered here (`unavailable` says why)
@@ -90,8 +90,8 @@ final class ActionRunner(
     forget(request)
     record(request, ActionOutcome.Cancelled)
 
-  /** The operator confirmed `request`. It runs on the action thread, after whatever is running there; refused here,
-    * and said so, if it may not run or is already running.
+  /** The operator confirmed `request`. It runs on the action thread, after whatever is running there; refused here, and
+    * said so, if it may not run or is already running.
     */
   def confirmed(request: ActionRequest): Unit =
     forget(request)
@@ -107,13 +107,11 @@ final class ActionRunner(
         }
         val observe = byName.get(request.action).exists(_.risk == RiskClass.Observe)
         // An action already running is not started a second time (FR-057).
-        if !added then
-          record(request, ActionOutcome.Refused(AlreadyRunning))
+        if !added then record(request, ActionOutcome.Refused(AlreadyRunning))
         else
           (if observe then observeThread else actionThread).execute { () =>
             progress(request, "running")
-            if byName.get(request.action).exists(s => LongRunning.contains(s.name)) then
-              audit(line(request, "started"))
+            if byName.get(request.action).exists(s => LongRunning.contains(s.name)) then audit(line(request, "started"))
             val outcome =
               try
                 handlers(request.action).run(request, said => progress(request, said)) match
@@ -169,8 +167,8 @@ object ActionRunner:
   /** The longest row of a report: a configuration value can be long. */
   val ReportLineChars: Int = 400
 
-  /** An attempt that no runner saw (the dashboard has not been handed the node's services yet, or the action is
-    * `quit`, which needs none): written from the same logger, in the same form.
+  /** An attempt that no runner saw (the dashboard has not been handed the node's services yet, or the action is `quit`,
+    * which needs none): written from the same logger, in the same form.
     */
   def audited(request: ActionRequest, outcome: ActionOutcome): Unit = auditLine(line(request, outcome.word))
 

@@ -10,8 +10,8 @@ import com.chipprbots.ethereum.console.TuiText.formatShort
 /** The peer actions (spec 029 FR-054, contracts/actions.md): the limit on outgoing peers, trusting and untrusting,
   * adding, dropping, and blocking and unblocking an address. Each is carried out by the admin service's own function
   * (FR-052); each preview says what that function does and no more (herald, slice 7): the limit is on outgoing
-  * connections only, trusting dials, untrusting does not disconnect, a dropped peer may come back, and a block does
-  * not reach discovery's UDP.
+  * connections only, trusting dials, untrusting does not disconnect, a dropped peer may come back, and a block does not
+  * reach discovery's UDP.
   */
 object PeerActions:
 
@@ -87,8 +87,8 @@ object PeerActions:
     Actions.MaxPeers.name -> ActionHandler(
       request =>
         (request.param("n").flatMap(_.toIntOption), node.limits()) match
-          case (None, _)        => refused("usage: maxpeers <n>")
-          case (_, Left(why))   => refused(s"the peer manager's limits could not be read: $why")
+          case (None, _)      => refused("usage: maxpeers <n>")
+          case (_, Left(why)) => refused(s"the peer manager's limits could not be read: $why")
           case (Some(n), Right(now)) if n == now.outgoing =>
             refused(s"the limit on outgoing connections is already $n")
           case (Some(n), Right(now)) =>
@@ -114,8 +114,8 @@ object PeerActions:
       request =>
         val id = request.param("id").getOrElse("")
         (connected(state(), id), node.limits()) match
-          case (None, _)                => refused(s"no connected peer has the id ${brief(id)} any more")
-          case (_, Left(why))           => refused(s"the trusted peers could not be read: $why")
+          case (None, _)      => refused(s"no connected peer has the id ${brief(id)} any more")
+          case (_, Left(why)) => refused(s"the trusted peers could not be read: $why")
           case (Some(peer), Right(now)) if now.trusted.map(lower).contains(lower(peer.id)) =>
             refused(s"${brief(peer.id)} is already trusted")
           case (Some(peer), _) if peer.incoming => refused(InboundRefusal)
@@ -138,9 +138,10 @@ object PeerActions:
           case None                        => Left(s"no connected peer has the id ${brief(id)} any more")
           case Some(peer) if peer.incoming => Left(InboundRefusal)
           case Some(peer) =>
-            enode(peer).toRight(s"an enode cannot be made of ${peer.address}").flatMap(node.trust).map(_ =>
-              s"${brief(peer.id)} is trusted"
-            )
+            enode(peer)
+              .toRight(s"an enode cannot be made of ${peer.address}")
+              .flatMap(node.trust)
+              .map(_ => s"${brief(peer.id)} is trusted")
     ),
     Actions.PeerUntrust.name -> ActionHandler(
       request =>
@@ -174,7 +175,9 @@ object PeerActions:
             Preview(
               Vector(
                 s"Adds ${brief(id)} at ${uri.drop(uri.indexOf('@') + 1)} as a peer the node keeps.",
-                found.fold("It is not connected now: the node dials it.")(p => s"It is connected now, at ${p.address}."),
+                found.fold("It is not connected now: the node dials it.")(p =>
+                  s"It is connected now, at ${p.address}."
+                ),
                 "It is dialled again 5 s after every disconnect, and is exempt from the outgoing limit.",
                 s"${s.peerCount} peers are connected; the limit on outgoing connections is ${now.outgoing}.",
                 "Held until the node restarts."
@@ -213,7 +216,8 @@ object PeerActions:
         if node.blocked().contains(address) then refused(s"$address is already blocked")
         else
           val s = state()
-          val there = s.snapshot.flatMap(_.peers.value).getOrElse(Nil).filter(p => hostPort(p.address).exists(_._1 == address))
+          val there =
+            s.snapshot.flatMap(_.peers.value).getOrElse(Nil).filter(p => hostPort(p.address).exists(_._1 == address))
           Preview(
             Vector(
               s"Blocks $address until this node restarts: connections from it are refused, and the node will not dial it.",
@@ -227,7 +231,9 @@ object PeerActions:
           )
       ,
       (request, _) =>
-        node.block(request.param("address").getOrElse("")).map(written => s"$written is blocked until the node restarts")
+        node
+          .block(request.param("address").getOrElse(""))
+          .map(written => s"$written is blocked until the node restarts")
     ),
     Actions.PeerUnblock.name -> ActionHandler(
       request =>
@@ -235,7 +241,8 @@ object PeerActions:
         if !node.blocked().contains(address) then
           refused(
             s"$address is not blocked" +
-              (if node.blocked().isEmpty then "; no address is" else s"; blocked now: ${node.blocked().toSeq.sorted.take(5).mkString(", ")}")
+              (if node.blocked().isEmpty then "; no address is"
+               else s"; blocked now: ${node.blocked().toSeq.sorted.take(5).mkString(", ")}")
           )
         else
           Preview(

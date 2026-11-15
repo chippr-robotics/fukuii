@@ -169,7 +169,11 @@ class UpdateSpec extends AnyFlatSpec with Matchers:
   }
 
   it should "complete a command with Tab" taggedAs (UnitTest) in {
-    press(synced, Key.Char(':'), Key.Char('m'), Key.Char('e'), Key.Tab).overlay shouldBe Overlay.Prompt("mempool", 7, None)
+    press(synced, Key.Char(':'), Key.Char('m'), Key.Char('e'), Key.Tab).overlay shouldBe Overlay.Prompt(
+      "mempool",
+      7,
+      None
+    )
     // Several commands start with m now: Tab goes as far as they agree, which is no further.
     press(synced, Key.Char(':'), Key.Char('m'), Key.Tab).overlay shouldBe Overlay.Prompt("m", 1, None)
     press(synced, Key.Char(':'), Key.Char('l'), Key.Char('o'), Key.Char('g'), Key.Char('l'), Key.Tab).overlay shouldBe
@@ -243,7 +247,10 @@ class UpdateSpec extends AnyFlatSpec with Matchers:
     val (cancelled, said) = Update(asked, Key.Backspace, ctx)
     cancelled.overlay shouldBe Overlay.None
     said shouldBe Seq(Effect.CancelAction(TuiFixtures.Quit))
-    Update(asked, Key.Esc, ctx) shouldBe ((synced.copy(overlay = Overlay.None), Seq(Effect.CancelAction(TuiFixtures.Quit))))
+    Update(asked, Key.Esc, ctx) shouldBe ((
+      synced.copy(overlay = Overlay.None),
+      Seq(Effect.CancelAction(TuiFixtures.Quit))
+    ))
     // Esc cancels with the word half typed, too.
     Update(press(asked, typed("st")*), Key.Esc, ctx)._1.overlay shouldBe Overlay.None
   }

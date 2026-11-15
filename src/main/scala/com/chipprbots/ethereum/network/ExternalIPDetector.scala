@@ -107,8 +107,8 @@ object ExternalIPDetector extends Logger:
   ): Option[InetAddress] =
     detectWithSource(mode, upnpProbe, stunProbe, httpProbe, localInterfaceProbe).map(_.address)
 
-  /** [[detect]], with the step that found the address (spec 029: the dashboard shows how the node's address was
-    * found). The probes run in the same order and stop at the first that answers.
+  /** [[detect]], with the step that found the address (spec 029: the dashboard shows how the node's address was found).
+    * The probes run in the same order and stop at the first that answers.
     */
   def detectWithSource(
       mode: DetectionMode = DetectionMode.Full,

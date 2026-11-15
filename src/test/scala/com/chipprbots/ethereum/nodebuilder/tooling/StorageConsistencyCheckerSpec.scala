@@ -74,7 +74,14 @@ class StorageConsistencyCheckerSpec extends AnyWordSpec with Matchers:
     "stop when cancelled and say how far it got" taggedAs (UnitTest, DatabaseTest) in {
       val s = new Store; s.fill(20)
       var asked = 0
-      val r = scan(BigInt(20), s.nums, s.heads, step = 1, cancelled = () => { asked += 1; asked > 5 })
+      val r = scan(
+        BigInt(20),
+        s.nums,
+        s.heads,
+        step = 1,
+        cancelled = () =>
+          asked += 1; asked > 5
+      )
       r.cancelled shouldBe true
       r.checked shouldBe 5L
       r.total shouldBe 20L

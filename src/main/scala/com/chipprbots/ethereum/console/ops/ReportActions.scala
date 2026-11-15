@@ -29,7 +29,9 @@ object ReportActions:
         val valueCols = read.map(_._2.length).maxOption.getOrElse(0).min(60)
         Right(
           (Seq("These change while the node runs, and return to their configured values when it restarts.") ++
-            read.map((name, value, by) => s"${name.padTo(nameCols, ' ')}  ${value.padTo(valueCols, ' ')}  change with: $by"))
+            read.map((name, value, by) =>
+              s"${name.padTo(nameCols, ' ')}  ${value.padTo(valueCols, ' ')}  change with: $by"
+            ))
             .mkString("\n")
         )
     )
@@ -95,8 +97,8 @@ object ReportActions:
     * @param detect
     *   the node's own detection, the whole cascade; it blocks
     * @param mode
-    *   whether the node's own detection is `automatic`, `configured` or `off`, for the sentence that says when what
-    *   it advertises changes
+    *   whether the node's own detection is `automatic`, `configured` or `off`, for the sentence that says when what it
+    *   advertises changes
     */
   def detectIp(detect: () => Option[InetAddress], mode: () => String, advertised: () => Option[String])(using
       ExecutionContext

@@ -122,6 +122,7 @@ object Actions:
     Disrupt,
     "mining stop"
   )
+
   /** A Halt, not the Disrupt the contract first gave it: a miner stopped here cannot be started again while the node
     * runs (B-279), so mining stops until someone restarts the node from outside.
     */

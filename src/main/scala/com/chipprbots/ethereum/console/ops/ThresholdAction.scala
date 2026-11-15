@@ -4,10 +4,10 @@ import com.chipprbots.ethereum.console.AlertThresholds
 import com.chipprbots.ethereum.console.Alerts
 import com.chipprbots.ethereum.console.TuiState
 
-/** `threshold <name> <value>` and `threshold reset` (spec 029 FR-054, contracts/actions.md): where an alert begins,
-  * for this session of the dashboard. It changes nothing in the node: only the dashboard's own copy of the
-  * thresholds, which the alert row and the health bars read. The preview says the threshold now and after, the alerts
-  * that would fire or clear at once, and the line of configuration that makes it permanent.
+/** `threshold <name> <value>` and `threshold reset` (spec 029 FR-054, contracts/actions.md): where an alert begins, for
+  * this session of the dashboard. It changes nothing in the node: only the dashboard's own copy of the thresholds,
+  * which the alert row and the health bars read. The preview says the threshold now and after, the alerts that would
+  * fire or clear at once, and the line of configuration that makes it permanent.
   */
 object ThresholdAction:
 
@@ -45,7 +45,8 @@ object ThresholdAction:
               (if raised.isEmpty && cleared.isEmpty then Vector("No alert fires or clears with it now.")
                else
                  raised.map(text => s"Fires at once: $text.").toVector ++
-                   cleared.map(text => s"Clears at once: $text.").toVector) ++
+                   cleared.map(text => s"Clears at once: $text.").toVector
+              ) ++
               Vector(
                 "For this session of the dashboard only: the node, and a dashboard started later, keep the configured value."
               ) ++
@@ -62,6 +63,7 @@ object ThresholdAction:
         after(state().thresholds, configured, request).map { next =>
           modify(_.copy(thresholds = next))
           if request.param("reset").isDefined then "every threshold is as configured again"
-          else s"${request.param("name").getOrElse("")} is ${request.param("name").flatMap(AlertThresholds.show(next, _)).getOrElse("")}"
+          else
+            s"${request.param("name").getOrElse("")} is ${request.param("name").flatMap(AlertThresholds.show(next, _)).getOrElse("")}"
         }
     )

@@ -8,8 +8,8 @@ import scala.util.Try
   *
   * A key is hidden when it is on the list of keys known to hold a secret, or when its name has a secret's word in it,
   * so that a key added later is hidden before anyone thinks of it. A key that holds a PATH to a secret (a key file, a
-  * keystore directory, a password file) is shown: the path says where the secret is and is not the secret, and a
-  * file's contents are never read here. A URL is shown without its user-info.
+  * keystore directory, a password file) is shown: the path says where the secret is and is not the secret, and a file's
+  * contents are never read here. A URL is shown without its user-info.
   */
 object Redaction:
 
@@ -22,7 +22,8 @@ object Redaction:
   )
 
   /** A key whose last part has one of these words holds a secret, unless it is a path (see [[PathSuffixes]]). */
-  val SecretWords: Seq[String] = Seq("password", "passphrase", "secret", "token", "private-key", "privatekey", "mnemonic", "seed")
+  val SecretWords: Seq[String] =
+    Seq("password", "passphrase", "secret", "token", "private-key", "privatekey", "mnemonic", "seed")
 
   /** A key whose last part ends in one of these names a place, not a secret: it is shown. */
   val PathSuffixes: Seq[String] = Seq("-path", "-file", "-dir", "-directory", "path", "file", "dir")
@@ -62,4 +63,5 @@ object Redaction:
           val slash = rest.indexOf('/')
           val host = if slash < 0 then rest else rest.take(slash)
           val mark = host.lastIndexOf('@')
-          if mark < 0 then value else trimmed.take(at + 3) + host.drop(mark + 1) + (if slash < 0 then "" else rest.drop(slash))
+          if mark < 0 then value
+          else trimmed.take(at + 3) + host.drop(mark + 1) + (if slash < 0 then "" else rest.drop(slash))

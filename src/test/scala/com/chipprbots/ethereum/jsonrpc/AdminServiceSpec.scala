@@ -167,10 +167,11 @@ class AdminServiceSpec extends AnyFlatSpec with Matchers with BeforeAndAfterAll:
       Right(AdminBlockIPResponse(false))
 
   it should "refuse anything that is not an IP literal, block nothing, and send nothing to the peer manager" taggedAs UnitTest in new FakePeerSetup():
-    List("example.com", "", "  ", "1.2.3", "1.2.3.4.5", "01.2.3.4", "::zz", "fe80::1%eth0", "1.2.3.4:30303").foreach { raw =>
-      withClue(s"'$raw': ")(
-        service.blockIP(AdminService.AdminBlockIPRequest(raw)).unsafeRunSync() shouldBe a[Left[?, ?]]
-      )
+    List("example.com", "", "  ", "1.2.3", "1.2.3.4.5", "01.2.3.4", "::zz", "fe80::1%eth0", "1.2.3.4:30303").foreach {
+      raw =>
+        withClue(s"'$raw': ")(
+          service.blockIP(AdminService.AdminBlockIPRequest(raw)).unsafeRunSync() shouldBe a[Left[?, ?]]
+        )
     }
     registry.all shouldBe empty
     sentToPeerManager() shouldBe empty
@@ -324,13 +325,13 @@ class AdminServiceSpec extends AnyFlatSpec with Matchers with BeforeAndAfterAll:
         msg match
           case PeerManagerActor.GetPeersCmd(r) =>
             r ! PeerManagerActor.Peers(peers.map(_ -> PeerActor.Status.Handshaked).toMap)
-          case PeerManagerActor.AddMaintainedPeerCmd(_, r)  => r ! PeerManagerActor.AddMaintainedPeerResponse(true)
-          case PeerManagerActor.AddTrustedPeerCmd(_, r)     => r ! PeerManagerActor.AddTrustedPeerResponse(true)
-          case PeerManagerActor.RemoveTrustedPeerCmd(_, r)  => r ! PeerManagerActor.RemoveTrustedPeerResponse(true)
-          case PeerManagerActor.SetMaxPeersCmd(_, r)        => r ! PeerManagerActor.SetMaxPeersResponse(true)
-          case PeerManagerActor.GetAdminStateCmd(r)         => r ! fakeState
+          case PeerManagerActor.AddMaintainedPeerCmd(_, r)   => r ! PeerManagerActor.AddMaintainedPeerResponse(true)
+          case PeerManagerActor.AddTrustedPeerCmd(_, r)      => r ! PeerManagerActor.AddTrustedPeerResponse(true)
+          case PeerManagerActor.RemoveTrustedPeerCmd(_, r)   => r ! PeerManagerActor.RemoveTrustedPeerResponse(true)
+          case PeerManagerActor.SetMaxPeersCmd(_, r)         => r ! PeerManagerActor.SetMaxPeersResponse(true)
+          case PeerManagerActor.GetAdminStateCmd(r)          => r ! fakeState
           case PeerManagerActor.RemoveFromBlacklistCmd(_, r) => r ! PeerManagerActor.RemoveFromBlacklistResponse(true)
-          case _                                            => ()
+          case _                                             => ()
         Behaviors.same
       }
     )
@@ -348,8 +349,8 @@ class AdminServiceSpec extends AnyFlatSpec with Matchers with BeforeAndAfterAll:
       Some(AdminService.PeerLimits(minOutgoing = 10, maxOutgoing = 25, maxIncoming = 50))
     )
 
-    /** What the peer manager received, in order, once it has handled everything sent before (an ask is answered after the
-      * earlier messages), not counting the ask this makes.
+    /** What the peer manager received, in order, once it has handled everything sent before (an ask is answered after
+      * the earlier messages), not counting the ask this makes.
       */
     def sentToPeerManager(): List[PeerManagerActor.Command] =
       val probe = typedKit.createTestProbe[PeerManagerActor.AdminState]()
@@ -357,7 +358,6 @@ class AdminServiceSpec extends AnyFlatSpec with Matchers with BeforeAndAfterAll:
       probe.receiveMessage()
       import scala.jdk.CollectionConverters.*
       received.asScala.toList.dropRight(1)
-
 
   "AdminService.getDatadir" should "return configured datadir" taggedAs UnitTest in new TestSetup:
     val result: Either[JsonRpcError, AdminDatadirResponse] =

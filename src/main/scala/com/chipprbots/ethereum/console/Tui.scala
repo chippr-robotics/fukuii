@@ -248,15 +248,15 @@ class Tui(
   def setLookups(resolve: LookupQuery => Either[String, LookupResult]): Unit =
     lookups.getAndSet(Some(new Lookups(resolve, clock))).foreach(_.shutdown())
 
-  /** The action runner (spec 029 FR-047 to FR-057), once the node has handed the TUI what carries its actions out;
-    * none before, when only `quit` is offered, which needs nothing of the node.
+  /** The action runner (spec 029 FR-047 to FR-057), once the node has handed the TUI what carries its actions out; none
+    * before, when only `quit` is offered, which needs nothing of the node.
     */
   private val actions = new AtomicReference(Option.empty[ops.ActionRunner])
 
-  /** Hands the TUI the actions it may run: `handlers` (built with a way to read the dashboard's state, for the
-    * previews that name a peer as the Peers view shows it) are called on threads of the runner's own, never on the
-    * frame loop or the polling thread. `unavailable` says why an action with no handler is not offered on this node. The
-    * thresholds' action is the dashboard's own and is added here.
+  /** Hands the TUI the actions it may run: `handlers` (built with a way to read the dashboard's state, for the previews
+    * that name a peer as the Peers view shows it) are called on threads of the runner's own, never on the frame loop or
+    * the polling thread. `unavailable` says why an action with no handler is not offered on this node. The thresholds'
+    * action is the dashboard's own and is added here.
     */
   def setActions(
       handlers: (() => TuiState) => Map[String, ops.ActionHandler],

@@ -190,9 +190,8 @@ class JsonRpcWsServerSpec extends AnyFlatSpec with Matchers with ScalatestRouteT
 
     /** A client that sends nothing and stays open; the future completes when the server ends the connection.
       *
-      * A well-behaved client (the default) ends its own side when the server closes: the flow is coupled, so the
-      * close frame is answered and the TCP connection ends. An unresponsive one reads the close frame and never
-      * answers it.
+      * A well-behaved client (the default) ends its own side when the server closes: the flow is coupled, so the close
+      * frame is answered and the TCP connection ends. An unresponsive one reads the close frame and never answers it.
       */
     def connect(responsive: Boolean = true): Future[Done] =
       val clientFlow: Flow[Message, Message, Future[Done]] =

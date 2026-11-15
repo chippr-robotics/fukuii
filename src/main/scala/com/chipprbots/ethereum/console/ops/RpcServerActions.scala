@@ -1,9 +1,9 @@
 package com.chipprbots.ethereum.console.ops
 
-/** `rpc stop <http | ws>` and `rpc start <http | ws>` (spec 029 FR-055, contracts/actions.md): a JSON-RPC server
-  * stops listening and its connections drop, or one that was stopped here listens again. Only a transport that was
-  * enabled when the node started has a server to stop or start: the dashboard enables nothing (FR-052; conduit, slice
-  * 7), so a transport that was off stays off until the configuration says otherwise and the node restarts.
+/** `rpc stop <http | ws>` and `rpc start <http | ws>` (spec 029 FR-055, contracts/actions.md): a JSON-RPC server stops
+  * listening and its connections drop, or one that was stopped here listens again. Only a transport that was enabled
+  * when the node started has a server to stop or start: the dashboard enables nothing (FR-052; conduit, slice 7), so a
+  * transport that was off stays off until the configuration says otherwise and the node restarts.
   */
 object RpcServerActions:
 
@@ -61,26 +61,28 @@ object RpcServerActions:
       Actions.RpcStop.name -> ActionHandler(
         request =>
           of(request) match
-            case Left(why)                        => refused(why)
-            case Right(s) if !s.listening()       => refused(s"the ${s.label} server is not listening now")
+            case Left(why)                  => refused(why)
+            case Right(s) if !s.listening() => refused(s"the ${s.label} server is not listening now")
             case Right(s) =>
               val served = (s.namespaces ++ s.extras).mkString(", ")
               Preview(
                 Vector(
                   s"Stops the ${s.label} server listening on ${s.address}${if s.tls then " (TLS)" else ""}.",
                   s"It serves $served.",
-                  s.openConnections().fold(
-                    "Its open connections are not counted by this server: in-flight requests finish, then every connection is closed within 3 s."
-                  )(n =>
-                    s"$n open connection${if n == 1 then " is" else "s are"} closed at once and ${if n == 1 then "its" else "their"} subscriptions are dropped; clients must reconnect and resubscribe."
-                  )
+                  s.openConnections()
+                    .fold(
+                      "Its open connections are not counted by this server: in-flight requests finish, then every connection is closed within 3 s."
+                    )(n =>
+                      s"$n open connection${if n == 1 then " is" else "s are"} closed at once and ${
+                          if n == 1 then "its" else "their"
+                        } subscriptions are dropped; clients must reconnect and resubscribe."
+                    )
                 ) ++ Option.when(s.extras.nonEmpty)(
                   "Readiness and health probes on this port will fail, and anything supervising the node by that port may restart it."
                 ) ++ Vector("The Engine API is on its own port and is not affected.")
               )
         ,
-        (request, _) =>
-          of(request).flatMap(s => s.stop().map(_ => s"the ${s.label} server on ${s.address} is stopped"))
+        (request, _) => of(request).flatMap(s => s.stop().map(_ => s"the ${s.label} server on ${s.address} is stopped"))
       ),
       Actions.RpcStart.name -> ActionHandler(
         request =>
@@ -97,7 +99,6 @@ object RpcServerActions:
                 )
               )
         ,
-        (request, _) =>
-          of(request).flatMap(s => s.start().map(_ => s"the ${s.label} server listens on ${s.address}"))
+        (request, _) => of(request).flatMap(s => s.start().map(_ => s"the ${s.label} server listens on ${s.address}"))
       )
     )

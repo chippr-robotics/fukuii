@@ -49,7 +49,10 @@ class RedactionSpec extends AnyFlatSpec with Matchers:
   }
 
   "A setting that is not a secret" should "be shown as it is, whatever its name resembles" taggedAs (UnitTest) in {
-    Redaction.show("fukuii.keyStore.minimal-passphrase-length", "7") shouldBe Redaction.Hidden // by name: hidden is the safe side
+    Redaction.show(
+      "fukuii.keyStore.minimal-passphrase-length",
+      "7"
+    ) shouldBe Redaction.Hidden // by name: hidden is the safe side
     Redaction.show("fukuii.keyStore.allow-no-passphrase", "false") shouldBe Redaction.Hidden
     Redaction.show("fukuii.network.rpc.http.port", "8546") shouldBe "8546"
     Redaction.show("fukuii.datadir", "/var/lib/fukuii") shouldBe "/var/lib/fukuii"
@@ -60,10 +63,13 @@ class RedactionSpec extends AnyFlatSpec with Matchers:
   "A URL" should "be shown without its credentials, whatever key holds it" taggedAs (UnitTest) in {
     Redaction.show("fukuii.sync.checkpoint-sync-url", s"https://user:$Marker@checkpoints.example.org/etc") shouldBe
       "https://checkpoints.example.org/etc"
-    Redaction.show("fukuii.anything.url", s"http://$Marker@10.0.0.1:8080/path?q=1") shouldBe "http://10.0.0.1:8080/path?q=1"
+    Redaction.show(
+      "fukuii.anything.url",
+      s"http://$Marker@10.0.0.1:8080/path?q=1"
+    ) shouldBe "http://10.0.0.1:8080/path?q=1"
     Redaction.withoutUserInfo("https://checkpoints.example.org/etc") shouldBe "https://checkpoints.example.org/etc"
     // One the JDK does not parse still loses its credentials.
-    Redaction.withoutUserInfo(s"https://user:$Marker@host with space/x") should not include Marker
+    (Redaction.withoutUserInfo(s"https://user:$Marker@host with space/x") should not).include(Marker)
     // Not a URL: unchanged, an `@` or a colon in it or not.
     Redaction.withoutUserInfo("user@example.org") shouldBe "user@example.org"
     Redaction.withoutUserInfo("0.0.0.0:30303") shouldBe "0.0.0.0:30303"

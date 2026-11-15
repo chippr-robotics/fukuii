@@ -25,8 +25,8 @@ private[console] object DialogBox:
     */
   final case class Content(title: String, body: Seq[String], keys: String)
 
-  /** What stops with the node (spec 029 FR-049), by what this node is doing: the preview of `quit`. It names what
-    * this node is, not counts that change every second, so the dialog does not ask again while the operator reads it.
+  /** What stops with the node (spec 029 FR-049), by what this node is doing: the preview of `quit`. It names what this
+    * node is, not counts that change every second, so the dialog does not ask again while the operator reads it.
     */
   def quitLines(s: TuiState): Vector[String] =
     val cl = s.snapshot.flatMap(_.local.cl).isDefined
@@ -39,7 +39,9 @@ private[console] object DialogBox:
       Option.when(n.engineEnabled)("the Engine API")
     ).flatten
     Vector("The node process ends: block import stops and every peer is disconnected.") ++
-      Option.when(cl)("The consensus client loses its execution client: a validator on it misses duties until it is back.") ++
+      Option.when(cl)(
+        "The consensus client loses its execution client: a validator on it misses duties until it is back."
+      ) ++
       Option.when(mining)("Mining stops.") ++
       Option.when(served.nonEmpty)(s"Every RPC client loses its connection: ${served.mkString(", ")}.") ++
       Vector("The TUI cannot start the node again.")
@@ -58,13 +60,13 @@ private[console] object DialogBox:
       if c.request.action == ops.Actions.Quit.name then "Stop this node?" else s"${c.risk.label}: ${c.request.text}"
     val changed = Option.when(c.changed)("What this said has changed since it was first shown: read it again.")
     val body = c.preview match
-      case None                                       => Seq("Reading what this would change…")
-      case Some(ops.Preview(lines, Some(why)))        => lines ++ Seq(s"Cannot be run now: $why")
-      case Some(ops.Preview(lines, None))             => changed.toSeq ++ lines ++ spec.map(s => s"Undo: ${s.undo}.")
+      case None                                => Seq("Reading what this would change…")
+      case Some(ops.Preview(lines, Some(why))) => lines ++ Seq(s"Cannot be run now: $why")
+      case Some(ops.Preview(lines, None))      => changed.toSeq ++ lines ++ spec.map(s => s"Undo: ${s.undo}.")
     val keys = c.preview match
-      case None                              => "Esc  cancel"
-      case Some(p) if p.refusal.isDefined    => "Esc  close"
-      case Some(_) if !fits                  => "enlarge the terminal to read this before confirming      Esc  cancel"
+      case None                           => "Esc  cancel"
+      case Some(p) if p.refusal.isDefined => "Esc  close"
+      case Some(_) if !fits               => "enlarge the terminal to read this before confirming      Esc  cancel"
       case Some(_) =>
         c.risk match
           case RiskClass.Observe => "Enter  run      Esc  cancel"

@@ -33,7 +33,7 @@ object ConfigView:
     val text = value.valueType() match
       case ConfigValueType.STRING => String.valueOf(value.unwrapped())
       case ConfigValueType.NULL   => "null"
-      case _ => value.render(com.typesafe.config.ConfigRenderOptions.concise())
+      case _                      => value.render(com.typesafe.config.ConfigRenderOptions.concise())
     if text.length > MaxValueChars then text.take(MaxValueChars) + "…" else text
 
   /** The rows, by key: `prefix.key = value   # origin`. A list or an object under a secret key is hidden whole. */

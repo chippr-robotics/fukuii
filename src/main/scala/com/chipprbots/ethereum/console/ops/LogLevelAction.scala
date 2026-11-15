@@ -1,8 +1,8 @@
 package com.chipprbots.ethereum.console.ops
 
 /** `loglevel <level> [logger]` and `loglevel reset` (spec 029 FR-054, contracts/actions.md): a logger's level, until
-  * the node restarts. The level is set by the function `admin_changeLogLevel` runs (FR-052); what it was before is
-  * read beside it, and a reset returns every logger changed since the node started to that.
+  * the node restarts. The level is set by the function `admin_changeLogLevel` runs (FR-052); what it was before is read
+  * beside it, and a reset returns every logger changed since the node started to that.
   */
 object LogLevelAction:
 

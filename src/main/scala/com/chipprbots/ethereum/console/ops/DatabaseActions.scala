@@ -1,14 +1,14 @@
 package com.chipprbots.ethereum.console.ops
 
 /** `dbcheck` (spec 029 FR-054, contracts/actions.md): the database consistency check of the node's start, run now,
-  * reporting what it finds and stopping nothing. On a node where that check is not meaningful (one that synced by
-  * SNAP or takes its blocks from the Engine API has no headers below its pivot, by design) it is not run, and the
-  * dialog says why: it would report faults that are not faults (vault, slice 7).
+  * reporting what it finds and stopping nothing. On a node where that check is not meaningful (one that synced by SNAP
+  * or takes its blocks from the Engine API has no headers below its pivot, by design) it is not run, and the dialog
+  * says why: it would report faults that are not faults (vault, slice 7).
   */
 object DatabaseActions:
 
-  /** What the check found: the points it read, and the ones with no hash for their number or no header for their
-    * hash, the first of them named.
+  /** What the check found: the points it read, and the ones with no hash for their number or no header for their hash,
+    * the first of them named.
     */
   final case class Result(best: BigInt, step: Int, checked: Long, missing: Long, first: Seq[String], cancelled: Boolean)
 

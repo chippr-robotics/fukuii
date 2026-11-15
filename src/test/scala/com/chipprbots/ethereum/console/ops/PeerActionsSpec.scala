@@ -12,8 +12,8 @@ import com.chipprbots.ethereum.console.TuiPeer
 import com.chipprbots.ethereum.console.TuiState
 import com.chipprbots.ethereum.testing.Tags.*
 
-/** The peer actions (spec 029 FR-050, FR-052, FR-054, T097): what each preview says of the node as it is, every case
-  * in which it refuses, and that carrying one out calls the node's one function with the right argument and hands its
+/** The peer actions (spec 029 FR-050, FR-052, FR-054, T097): what each preview says of the node as it is, every case in
+  * which it refuses, and that carrying one out calls the node's one function with the right argument and hands its
   * failure back as it came.
   */
 class PeerActionsSpec extends AnyFlatSpec with Matchers with OptionValues:
@@ -30,7 +30,8 @@ class PeerActionsSpec extends AnyFlatSpec with Matchers with OptionValues:
 
   private def short(id: String): String = id.take(8) + "…"
 
-  private val limits = PeerActions.Limits(outgoing = 50, incoming = 30, minOutgoing = 20, trusted = Set.empty, maintained = Set.empty)
+  private val limits =
+    PeerActions.Limits(outgoing = 50, incoming = 30, minOutgoing = 20, trusted = Set.empty, maintained = Set.empty)
 
   /** The node's side: what it answers, and every call made of it, in order. */
   private class Fake(
@@ -183,7 +184,9 @@ class PeerActionsSpec extends AnyFlatSpec with Matchers with OptionValues:
     val portless = outbound.copy(address = "203.0.113.99")
     preview(new Fake(), trust(portless.id), withPeers(Seq(portless))) shouldBe
       Preview(Vector.empty, Some("an enode cannot be made of 203.0.113.99: use peer add with its enode"))
-    run(new Fake(), trust(portless.id), withPeers(Seq(portless))) shouldBe Left("an enode cannot be made of 203.0.113.99")
+    run(new Fake(), trust(portless.id), withPeers(Seq(portless))) shouldBe Left(
+      "an enode cannot be made of 203.0.113.99"
+    )
   }
 
   it should "hand the node the peer's enode, and hand its failure back unchanged" taggedAs (UnitTest) in {

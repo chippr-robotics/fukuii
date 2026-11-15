@@ -178,7 +178,7 @@ class TuiKeysSpec extends AnyFlatSpec with Matchers:
     frame should include("Stop this node?")
     // Stopping the node is a Halt: its word, then Enter (spec 029 FR-048, FR-049).
     frame should include("type stop then Enter")
-    frame should not include "y  stop the node"
+    (frame should not).include("y  stop the node")
     // The alert row is still the third row: the dialog covers body rows only.
     frame.linesIterator.drop(2).next() should include("no alerts")
   }

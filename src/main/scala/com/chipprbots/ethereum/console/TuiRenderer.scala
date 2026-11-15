@@ -76,8 +76,8 @@ class TuiRenderer(config: TuiConfig, art: ArtStore = ArtStore.Empty):
       InFlight.contains(state.connectionStatus) || dagBuilding(state) ||
       (state.graphics != GraphicsMode.Text && state.graphics != GraphicsMode.Block)
 
-  /** The body of a `w` by `height` screen: its columns beside the sidebar and its rows under the header, the rule
-    * and the alert row and above the footer. What [[Update]] needs to know whether a dialog can be read whole.
+  /** The body of a `w` by `height` screen: its columns beside the sidebar and its rows under the header, the rule and
+    * the alert row and above the footer. What [[Update]] needs to know whether a dialog can be read whole.
     */
   def bodySize(w: Int, height: Int): (Int, Int) =
     val side = if Sidebar.shown(w, height) then Sidebar.Cols + 1 else 0

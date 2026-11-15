@@ -76,8 +76,8 @@ final case class ActionRecord(request: ActionRequest, outcome: ActionOutcome, at
 final case class ActionReport(lines: Vector[String], at: Instant)
 
 /** What the frame loop reads of the actions (it reads, and never waits): the previews asked for, what is running, what
-  * has ended this session, newest last, what the Observe actions last found, by action, and why each action that is
-  * not offered on this node is not.
+  * has ended this session, newest last, what the Observe actions last found, by action, and why each action that is not
+  * offered on this node is not.
   */
 final case class ActionsView(
     previews: Map[ActionRequest, Preview] = Map.empty,
@@ -96,8 +96,8 @@ trait ActionHandler:
   /** What will change, read from the node now. */
   def preview(request: ActionRequest): Preview
 
-  /** Carries the action out. `progress` may be called with a sentence as it goes. A Left is why it failed; a Right
-    * says what happened: one sentence, or, for an Observe action, what it found, a row a line.
+  /** Carries the action out. `progress` may be called with a sentence as it goes. A Left is why it failed; a Right says
+    * what happened: one sentence, or, for an Observe action, what it found, a row a line.
     */
   def run(request: ActionRequest, progress: String => Unit): Either[String, String]
 

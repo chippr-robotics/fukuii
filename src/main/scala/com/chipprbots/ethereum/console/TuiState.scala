@@ -171,8 +171,8 @@ case class TuiState(
     selectedHealth.map(s => healthBars.indexWhere(_.subsystem == s)).filter(_ >= 0)
 
   /** What the action runner has published, and with it the preview of the dialog that is open (spec 029 FR-050): a
-    * preview that is not the one the dialog showed takes its place, and the dialog asks again from the start, Cancel
-    * in focus and nothing typed.
+    * preview that is not the one the dialog showed takes its place, and the dialog asks again from the start, Cancel in
+    * focus and nothing typed.
     */
   def withActions(view: ops.ActionsView): TuiState =
     val merged = if view == actions then this else copy(actions = view)
@@ -957,8 +957,8 @@ final case class DagSample(epoch: Long, phase: DagPhase, progress: Int, loaded: 
   * @param history
   *   the hashrate and the work requests a minute over the last ten minutes, a point every five seconds, oldest first
   * @param minerRunning
-  *   whether the node's built-in miner is mining, as its coordinator says (`pow_miner_running`); None where it was
-  *   not read. A miner that was stopped stays stopped until the node restarts
+  *   whether the node's built-in miner is mining, as its coordinator says (`pow_miner_running`); None where it was not
+  *   read. A miner that was stopped stays stopped until the node restarts
   */
 final case class MiningSample(
     coinbase: Option[String] = None,

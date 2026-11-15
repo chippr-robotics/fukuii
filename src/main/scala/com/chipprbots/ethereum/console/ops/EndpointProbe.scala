@@ -19,14 +19,14 @@ import javax.net.ssl.X509ExtendedTrustManager
 import scala.util.Try
 import scala.util.control.NonFatal
 
-/** `test-rpc` (spec 029 FR-054, contracts/actions.md): a client on the node's own listeners. For each enabled
-  * transport it asks `web3_clientVersion` and reports the answer and the time; for the Engine API it sends a request
-  * with no token and reports that it was refused, which is the answer a working Engine API gives. It never reads or
-  * sends the JWT secret.
+/** `test-rpc` (spec 029 FR-054, contracts/actions.md): a client on the node's own listeners. For each enabled transport
+  * it asks `web3_clientVersion` and reports the answer and the time; for the Engine API it sends a request with no
+  * token and reports that it was refused, which is the answer a working Engine API gives. It never reads or sends the
+  * JWT secret.
   *
-  * It is an Observe action, and it is not invisible: its calls are calls, counted on the RPC view like any other; on
-  * a node with the rate limit on it uses one request's worth of this machine's allowance; and the Engine check counts
-  * as one failed authentication. The report says so (conduit, slice 7).
+  * It is an Observe action, and it is not invisible: its calls are calls, counted on the RPC view like any other; on a
+  * node with the rate limit on it uses one request's worth of this machine's allowance; and the Engine check counts as
+  * one failed authentication. The report says so (conduit, slice 7).
   */
 object EndpointProbe:
 
@@ -49,10 +49,10 @@ object EndpointProbe:
 
   /** The host to dial for an endpoint bound to `host`: itself, or loopback for a wildcard. */
   private[ops] def dialled(host: String): String = host match
-    case "0.0.0.0" | ""                 => "127.0.0.1"
-    case "::" | "[::]" | "0:0:0:0:0:0:0:0" => "[::1]"
+    case "0.0.0.0" | ""                                => "127.0.0.1"
+    case "::" | "[::]" | "0:0:0:0:0:0:0:0"             => "[::1]"
     case v6 if v6.contains(':') && !v6.startsWith("[") => s"[$v6]"
-    case other                          => other
+    case other                                         => other
 
   private val Result = """"result"\s*:\s*"((?:[^"\\]|\\.)*)"""".r
   private val Code = """"code"\s*:\s*(-?\d+)""".r
@@ -62,11 +62,11 @@ object EndpointProbe:
     if status == 429 then "rate limited: the server refused this request as too soon after the last"
     else
       (Result.findFirstMatchIn(body), Code.findFirstMatchIn(body).map(_.group(1))) match
-        case (Some(m), _)       => s"answered ${m.group(1)}"
+        case (Some(m), _)        => s"answered ${m.group(1)}"
         case (_, Some("-32601")) => "answers, and web3 is not served on this transport"
-        case (_, Some(code))    => s"answered with error $code"
-        case _ if status != 200 => s"answered HTTP $status"
-        case _                  => "answered, and not with JSON-RPC"
+        case (_, Some(code))     => s"answered with error $code"
+        case _ if status != 200  => s"answered HTTP $status"
+        case _                   => "answered, and not with JSON-RPC"
 
   private def millis(startedNanos: Long): String =
     f"${(System.nanoTime() - startedNanos) / 1e6}%.1f ms"
@@ -74,14 +74,14 @@ object EndpointProbe:
   private def why(e: Throwable): String =
     val cause = Option(e.getCause).filter(_ => e.isInstanceOf[java.util.concurrent.CompletionException]).getOrElse(e)
     cause match
-      case _: java.net.ConnectException            => "nothing is listening there"
+      case _: java.net.ConnectException                 => "nothing is listening there"
       case _: java.net.http.HttpConnectTimeoutException => s"no connection within ${ConnectTimeout.toSeconds} s"
-      case _: java.net.http.HttpTimeoutException   => s"no answer within ${AnswerTimeout.toSeconds} s"
-      case _: java.util.concurrent.TimeoutException => s"no answer within ${AnswerTimeout.toSeconds} s"
-      case other                                   => Option(other.getMessage).getOrElse(other.toString)
+      case _: java.net.http.HttpTimeoutException        => s"no answer within ${AnswerTimeout.toSeconds} s"
+      case _: java.util.concurrent.TimeoutException     => s"no answer within ${AnswerTimeout.toSeconds} s"
+      case other                                        => Option(other.getMessage).getOrElse(other.toString)
 
-  /** A trust manager that accepts the node's own certificate, which is commonly self-signed, and keeps it to report.
-    * It verifies nothing, and the report says that it did not.
+  /** A trust manager that accepts the node's own certificate, which is commonly self-signed, and keeps it to report. It
+    * verifies nothing, and the report says that it did not.
     */
   final private class Recording extends X509ExtendedTrustManager:
     val seen = new AtomicReference(Option.empty[X509Certificate])
@@ -120,11 +120,13 @@ object EndpointProbe:
     val started = System.nanoTime()
     try
       val answer = post(c, s"${if tls then "https" else "http"}://${dialled(e.host)}:${e.port}/")
-      val certificate = trust.flatMap(_.seen.get).fold("")(cert =>
-        s"; TLS, certificate not verified by this test: ${cert.getSubjectX500Principal.getName}, " +
-          s"valid until ${cert.getNotAfter.toInstant.toString.take(10)}" +
-          (if cert.getSubjectX500Principal == cert.getIssuerX500Principal then ", self-signed" else "")
-      )
+      val certificate = trust
+        .flatMap(_.seen.get)
+        .fold("")(cert =>
+          s"; TLS, certificate not verified by this test: ${cert.getSubjectX500Principal.getName}, " +
+            s"valid until ${cert.getNotAfter.toInstant.toString.take(10)}" +
+            (if cert.getSubjectX500Principal == cert.getIssuerX500Principal then ", self-signed" else "")
+        )
       s"${verdict(answer.statusCode(), answer.body())} in ${millis(started)}$certificate"
     catch case NonFatal(failed) => s"FAILED: ${why(failed)}"
     finally Try(c.close())
@@ -140,7 +142,8 @@ object EndpointProbe:
         if last then answered.complete(text.toString)
         socket.request(1)
         null
-      override def onError(socket: WebSocket, error: Throwable): Unit = { val _ = answered.completeExceptionally(error) }
+      override def onError(socket: WebSocket, error: Throwable): Unit =
+        val _ = answered.completeExceptionally(error)
     try
       val socket = c
         .newWebSocketBuilder()
@@ -164,7 +167,8 @@ object EndpointProbe:
         socket.setSoTimeout(AnswerTimeout.toMillis.toInt)
         socket.getOutputStream.write((Request + "\n").getBytes(StandardCharsets.UTF_8))
         socket.getOutputStream.flush()
-        val reader = new java.io.BufferedReader(new java.io.InputStreamReader(socket.getInputStream, StandardCharsets.UTF_8))
+        val reader =
+          new java.io.BufferedReader(new java.io.InputStreamReader(socket.getInputStream, StandardCharsets.UTF_8))
         val line = Option(reader.readLine()).getOrElse("")
         s"${verdict(200, line)} in ${millis(started)}"
       finally Try(socket.close())
@@ -177,8 +181,8 @@ object EndpointProbe:
     try
       val answer = post(c, s"http://${dialled(e.host)}:${e.port}/")
       answer.statusCode() match
-        case 401 => s"refused a request with no token, as it must (401) in ${millis(started)}"
-        case 200 => "FAILED: it ANSWERED a request with no token: the Engine API is not authenticating"
+        case 401   => s"refused a request with no token, as it must (401) in ${millis(started)}"
+        case 200   => "FAILED: it ANSWERED a request with no token: the Engine API is not authenticating"
         case other => s"answered HTTP $other to a request with no token in ${millis(started)}"
     catch case NonFatal(failed) => s"FAILED: ${why(failed)}"
     finally Try(c.close())

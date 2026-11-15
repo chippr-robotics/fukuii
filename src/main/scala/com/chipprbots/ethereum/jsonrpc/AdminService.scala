@@ -120,10 +120,10 @@ object AdminService:
 
   private val NodeIdHex = "[0-9a-fA-F]{128}".r
 
-  /** One place that decides whether an enode URL may be sent to the peer manager: scheme `enode`, a user-info of exactly
-    * 128 hex digits (the node id, no `0x`), a non-empty host and a port in 1..65535. A `?discport=` query is ignored.
-    * The peer manager reads `uri.getUserInfo` unguarded, so a URL without a node id would throw inside the actor.
-    * Returns the URI, or why it is refused.
+  /** One place that decides whether an enode URL may be sent to the peer manager: scheme `enode`, a user-info of
+    * exactly 128 hex digits (the node id, no `0x`), a non-empty host and a port in 1..65535. A `?discport=` query is
+    * ignored. The peer manager reads `uri.getUserInfo` unguarded, so a URL without a node id would throw inside the
+    * actor. Returns the URI, or why it is refused.
     */
   def parseEnode(raw: String): Either[String, URI] =
     try
@@ -172,8 +172,8 @@ object AdminService:
       org.slf4j.Logger.ROOT_LOGGER_NAME
     else filter
 
-  /** Whether a logger of this name exists: one some code asked for, or a package above one. A name that matches none
-    * is most likely mistyped, and logback would make a logger of it that nothing writes to.
+  /** Whether a logger of this name exists: one some code asked for, or a package above one. A name that matches none is
+    * most likely mistyped, and logback would make a logger of it that nothing writes to.
     */
   def loggerExists(name: String): Boolean = loggerContext.exists(loggerName(name)) != null
 
@@ -526,10 +526,10 @@ class AdminService(
         Nil
       }
 
-  /** Unblocks an IP address. Where it was blocked by the operator, any automatic blacklist entry for it is cleared
-    * too, so that nothing keeps refusing it, and the maintained peers at it are dialled again (a dial the block
-    * refused ended their retries). An address that was not blocked is left as it is. The response is whether it was
-    * blocked by the operator.
+  /** Unblocks an IP address. Where it was blocked by the operator, any automatic blacklist entry for it is cleared too,
+    * so that nothing keeps refusing it, and the maintained peers at it are dialled again (a dial the block refused
+    * ended their retries). An address that was not blocked is left as it is. The response is whether it was blocked by
+    * the operator.
     */
   def unblockIP(req: AdminUnblockIPRequest): ServiceResponse[AdminUnblockIPResponse] =
     canonicalIp(req.ip) match
@@ -544,15 +544,15 @@ class AdminService(
         }
 
   private def clearAutomaticEntry(ip: String): IO[Unit] =
-          IO.defer(
-            peerManager.askForTyped[PeerManagerActor.RemoveFromBlacklistResponse](ref =>
-              PeerManagerActor.RemoveFromBlacklistCmd(PeerManagerActor.RemoveFromBlacklistRequest(ip), ref)
-            )
-          ).attempt
-            .map {
-              case Left(ex) => log.warn(s"Could not clear the blacklist entry of $ip: ${ex.getMessage}")
-              case Right(_) => ()
-            }
+    IO.defer(
+      peerManager.askForTyped[PeerManagerActor.RemoveFromBlacklistResponse](ref =>
+        PeerManagerActor.RemoveFromBlacklistCmd(PeerManagerActor.RemoveFromBlacklistRequest(ip), ref)
+      )
+    ).attempt
+      .map {
+        case Left(ex) => log.warn(s"Could not clear the blacklist entry of $ip: ${ex.getMessage}")
+        case Right(_) => ()
+      }
 
   def listBlockedIPs(@unused req: AdminListBlockedIPsRequest): ServiceResponse[AdminListBlockedIPsResponse] = IO {
     Right(AdminListBlockedIPsResponse(blockedIPRegistry.all.toList.sorted))
@@ -623,7 +623,7 @@ class AdminService(
         Left(JsonRpcError.InternalError)
       }
 
-  /** The configured connection limits, if the node gave them (spec 029 previews). The incoming limit and the minimum
-    * of outgoing peers are not in [[adminState]]: the actor holds them as configuration.
+  /** The configured connection limits, if the node gave them (spec 029 previews). The incoming limit and the minimum of
+    * outgoing peers are not in [[adminState]]: the actor holds them as configuration.
     */
   def peerLimits: Option[PeerLimits] = peerLimitsConfig

@@ -14,12 +14,12 @@ import scala.util.Try
 
 /** `bundle` (spec 029 FR-054, FR-058, contracts/actions.md): a directory of text files under the data directory for
   * whoever is asked to look at this node: the build, the effective configuration with every secret hidden, the
-  * dashboard's log lines, the alerts and the health checks, every view as text, the database's figures, a thread
-  * dump, and the memory and garbage-collector figures.
+  * dashboard's log lines, the alerts and the health checks, every view as text, the database's figures, a thread dump,
+  * and the memory and garbage-collector figures.
   *
-  * It holds no key, no keystore, no JWT secret, no state and no chain data. It does hold peer addresses and this
-  * node's id, and says so before it is written. It is written for the node's owner alone (owner-only permissions
-  * where the file system has them) and goes nowhere: nothing here sends anything.
+  * It holds no key, no keystore, no JWT secret, no state and no chain data. It does hold peer addresses and this node's
+  * id, and says so before it is written. It is written for the node's owner alone (owner-only permissions where the
+  * file system has them) and goes nowhere: nothing here sends anything.
   */
 object SupportBundle:
 
@@ -49,8 +49,8 @@ object SupportBundle:
 
   private val Stamp = DateTimeFormatter.ofPattern("yyyyMMdd-HHmmss").withZone(ZoneOffset.UTC)
 
-  /** A line of log with the credentials taken out of any URL in it: a log line is not a configuration value, and a
-    * URL that was logged whole is the one way a secret known today could be in one.
+  /** A line of log with the credentials taken out of any URL in it: a log line is not a configuration value, and a URL
+    * that was logged whole is the one way a secret known today could be in one.
     */
   private[ops] def scrubbed(line: String): String =
     line.split(' ').map(Redaction.withoutUserInfo).mkString(" ")
@@ -61,7 +61,9 @@ object SupportBundle:
       .toSeq
       .sortBy(_.getThreadName)
       .flatMap { t =>
-        s"\"${t.getThreadName}\" ${t.getThreadState}" +: t.getStackTrace.toSeq.take(40).map(frame => s"    at $frame") :+ ""
+        s"\"${t.getThreadName}\" ${t.getThreadState}" +: t.getStackTrace.toSeq
+          .take(40)
+          .map(frame => s"    at $frame") :+ ""
       }
 
   private def memory(): Seq[String] =
@@ -130,7 +132,9 @@ object SupportBundle:
     }
 
   private def size(bytes: Int): String =
-    if bytes >= 1024 * 1024 then f"${bytes / 1048576.0}%.1f MiB" else if bytes >= 1024 then s"${bytes / 1024} KiB" else s"$bytes B"
+    if bytes >= 1024 * 1024 then f"${bytes / 1048576.0}%.1f MiB"
+    else if bytes >= 1024 then s"${bytes / 1024} KiB"
+    else s"$bytes B"
 
   def handler(inputs: Inputs, dataDir: () => Option[Path], now: () => Instant): ActionHandler =
     ActionHandler(
@@ -143,7 +147,9 @@ object SupportBundle:
             Preview(
               Vector(
                 s"Writes ${contents.size} files under ${directory(dir, at)}:",
-                contents.map((name, body) => s"$name (${size(body.getBytes(StandardCharsets.UTF_8).length)})").mkString(", ") + ".",
+                contents
+                  .map((name, body) => s"$name (${size(body.getBytes(StandardCharsets.UTF_8).length)})")
+                  .mkString(", ") + ".",
                 "It holds peer addresses and this node's id. It holds no key, no JWT secret, no state and no chain data.",
                 "Secrets in the configuration are hidden. The files are readable by this node's user only.",
                 "It goes nowhere: sending it to anyone is up to you."

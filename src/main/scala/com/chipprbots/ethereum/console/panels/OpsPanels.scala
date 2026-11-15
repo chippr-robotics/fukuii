@@ -16,9 +16,9 @@ import com.chipprbots.ethereum.console.ops.Actions
 import com.chipprbots.ethereum.console.ops.RiskClass
 import com.chipprbots.ethereum.console.panels.Rows.*
 
-/** The Ops view (spec 029 FR-047 to FR-057): whether actions can run, what is running and how far it is, what the
-  * last attempts came to, every action with its class and what it changes, and what is not offered with the reason.
-  * And the screens the Observe actions fill: the configuration, the tunables, the endpoint test, the addresses, the
+/** The Ops view (spec 029 FR-047 to FR-057): whether actions can run, what is running and how far it is, what the last
+  * attempts came to, every action with its class and what it changes, and what is not offered with the reason. And the
+  * screens the Observe actions fill: the configuration, the tunables, the endpoint test, the addresses, the
   * dependencies.
   *
   * Nothing here runs anything. An action is typed at the prompt (`Enter` or `a` on its row types its name there) and
@@ -42,7 +42,10 @@ private[console] object OpsPanels:
         fit(
           field(
             "Mode",
-            text("READ-ONLY: only the Observe actions run (fukuii.tui.read-only); Ctrl-C still stops the node", c.t.warn.bold()),
+            text(
+              "READ-ONLY: only the Observe actions run (fukuii.tui.read-only); Ctrl-C still stops the node",
+              c.t.warn.bold()
+            ),
             c.t
           ),
           w,
@@ -58,7 +61,14 @@ private[console] object OpsPanels:
     val running = s.actions.running.map { a =>
       val elapsed = formatShort(Duration.between(a.since, s.now).getSeconds.max(0L))
       fit(
-        field("Running", text(TuiText.external(s"${a.request.text} ${c.g.dot.text} $elapsed ${c.g.dot.text} ${a.progress}", c.g), c.t.warn.bold()), c.t),
+        field(
+          "Running",
+          text(
+            TuiText.external(s"${a.request.text} ${c.g.dot.text} $elapsed ${c.g.dot.text} ${a.progress}", c.g),
+            c.t.warn.bold()
+          ),
+          c.t
+        ),
         w,
         c.g
       )
@@ -185,8 +195,8 @@ private[console] object OpsPanels:
   // ---- the screens the Observe actions fill -----------------------------------------------------------------------
 
   /** What an Observe action found: a title saying how much there is and how old it is, then its rows, the ones with
-    * `filter` in them, from row `scroll`. A row longer than the screen is cut with the ellipsis: a configuration
-    * value is words, and the whole of it is in the file it came from.
+    * `filter` in them, from row `scroll`. A row longer than the screen is cut with the ellipsis: a configuration value
+    * is words, and the whole of it is in the file it came from.
     */
   def report(c: Ctx, spec: ActionSpec, filter: String, scroll: Int): Seq[Panel] =
     val s = c.state
@@ -199,9 +209,11 @@ private[console] object OpsPanels:
       val parts = found match
         case None if reading => Seq("reading…")
         case None =>
-          Seq(s.actions.unavailable.get(spec.name).fold("not read yet: the node has not finished starting")(why =>
-            s"not on this node: $why"
-          ))
+          Seq(
+            s.actions.unavailable
+              .get(spec.name)
+              .fold("not read yet: the node has not finished starting")(why => s"not on this node: $why")
+          )
         case Some(r) =>
           val age = Duration.between(r.at, s.now).getSeconds.max(0L)
           Seq(s"${rows.size} rows") ++
@@ -259,10 +271,14 @@ private[console] object OpsPanels:
           c.g
         ) +: bars.flatMap { bar =>
           val needs = DependsOn.getOrElse(bar.subsystem, Nil).filter(d => bars.exists(_.subsystem == d))
-          val low = needs.filter(d => bars.exists(b => b.subsystem == d && (b.state == CheckState.Warn || b.state == CheckState.Error)))
+          val low = needs.filter(d =>
+            bars.exists(b => b.subsystem == d && (b.state == CheckState.Warn || b.state == CheckState.Error))
+          )
           val parts = Seq(
             if needs.isEmpty then "needs nothing else here" else s"needs ${needs.map(_.label).mkString(", ")}"
-          ) ++ Option.when(low.nonEmpty)(s"${low.map(_.label).mkString(", ")} raise${if low.size == 1 then "s" else ""} an alert") ++
+          ) ++ Option.when(low.nonEmpty)(
+            s"${low.map(_.label).mkString(", ")} raise${if low.size == 1 then "s" else ""} an alert"
+          ) ++
             bar.limiting.map(check => s"set by ${check.name}: ${check.value}")
           Seq(HealthPanel.barRow(c, bar, w), ObservatoryPanels.partsRow(c, "", parts.map(TuiText.external(_, c.g)), w))
         }

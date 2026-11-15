@@ -882,7 +882,8 @@ trait AdminServiceBuilder:
           instanceConfig.config.getConfig("network.rpc.net").getDuration("peer-manager-timeout").toMillis.millis
         ),
         scheduler = classicSystem.toTyped.scheduler
-      ),
+      )
+    ,
     peerLimitsConfig = Some(
       AdminService.PeerLimits(
         minOutgoing = peerConfiguration.minOutgoingPeers,

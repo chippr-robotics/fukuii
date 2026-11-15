@@ -44,8 +44,8 @@ import com.chipprbots.ethereum.utils.ServerStatus
   * contracts/actions.md): where an admin method exists, the action runs the service function that method runs, in
   * process. Nothing here enables an RPC namespace or adds a method anyone can reach over the network.
   *
-  * Every function handed over is called on a thread of the dashboard's action runner, never on its frame loop: each
-  * may block for as long as the service does.
+  * Every function handed over is called on a thread of the dashboard's action runner, never on its frame loop: each may
+  * block for as long as the service does.
   */
 object TuiActions:
 
@@ -87,7 +87,9 @@ object TuiActions:
         ),
       blocked = () => node.blockedIPRegistry.all,
       setMaxPeers = n =>
-        run(admin.maxPeers(AdminMaxPeersRequest(n))).flatMap(r => done(r.success, "the peer manager refused the limit")),
+        run(admin.maxPeers(AdminMaxPeersRequest(n))).flatMap(r =>
+          done(r.success, "the peer manager refused the limit")
+        ),
       trust = enode =>
         run(admin.addTrustedPeer(AdminAddTrustedPeerRequest(enode)))
           .flatMap(r => done(r.success, "the peer manager refused the enode")),
@@ -98,7 +100,9 @@ object TuiActions:
           .flatMap(uri => run(admin.removeTrustedPeer(AdminRemoveTrustedPeerRequest(uri.toString))))
           .flatMap(r => done(r.success, "the peer manager did not answer")),
       add = enode =>
-        run(admin.addPeer(AdminAddPeerRequest(enode))).flatMap(r => done(r.success, "the peer manager refused the enode")),
+        run(admin.addPeer(AdminAddPeerRequest(enode))).flatMap(r =>
+          done(r.success, "the peer manager refused the enode")
+        ),
       drop = (id, enode) =>
         enode
           .toRight(s"no enode can be made of the peer $id")
@@ -108,7 +112,8 @@ object TuiActions:
         run(admin.blockIP(AdminBlockIPRequest(ip)))
           .flatMap(r => done(r.success, "it was already blocked; the peers at it were disconnected again"))
           .map(_ => AdminService.canonicalIp(ip).getOrElse(ip)),
-      unblock = ip => run(admin.unblockIP(AdminUnblockIPRequest(ip))).flatMap(r => done(r.success, "it was not blocked"))
+      unblock =
+        ip => run(admin.unblockIP(AdminUnblockIPRequest(ip))).flatMap(r => done(r.success, "it was not blocked"))
     )
 
     // ---- log levels -----------------------------------------------------------------------------------------------
@@ -123,8 +128,8 @@ object TuiActions:
         ).map(_ => ()),
       changed = () =>
         AdminService.changedLogLevels.map(c => LogLevelAction.Changed(c.name, c.before, c.now, c.createdByChange)),
-      reset = () =>
-        AdminService.resetLogLevels().map(c => LogLevelAction.Changed(c.name, c.before, c.now, c.createdByChange))
+      reset =
+        () => AdminService.resetLogLevels().map(c => LogLevelAction.Changed(c.name, c.before, c.now, c.createdByChange))
     )
 
     // ---- mining (a proof-of-work node only) -----------------------------------------------------------------------
@@ -193,7 +198,8 @@ object TuiActions:
     // ---- the database check ---------------------------------------------------------------------------------------
     val appState = node.storagesInstance.storages.appStateStorage
     val database = DatabaseActions.Node(
-      notMeaningful = () => StorageConsistencyChecker.applicability(appState, node.engineApiConfig.enabled).map(_.reason),
+      notMeaningful =
+        () => StorageConsistencyChecker.applicability(appState, node.engineApiConfig.enabled).map(_.reason),
       best = () => appState.getBestBlockNumber(),
       step = StorageConsistencyChecker.DefaultStep,
       scan = progress =>
@@ -285,7 +291,8 @@ object TuiActions:
         (
           "log levels",
           AdminService.logLevel("ROOT").fold("root: not read")(l => s"root ${l.effective}") +
-            (if changed.isEmpty then ", none changed" else s", ${changed.size} changed: ${changed.map(c => s"${c.name} ${c.now}").mkString(", ")}"),
+            (if changed.isEmpty then ", none changed"
+             else s", ${changed.size} changed: ${changed.map(c => s"${c.name} ${c.now}").mkString(", ")}"),
           "loglevel <level> [logger], loglevel reset"
         ),
         (
@@ -295,7 +302,10 @@ object TuiActions:
         ),
         (
           "trusted peers",
-          peerState.fold(_ => "not read", l => if l.trusted.isEmpty then "none" else l.trusted.map(PeerActions.brief).mkString(", ")),
+          peerState.fold(
+            _ => "not read",
+            l => if l.trusted.isEmpty then "none" else l.trusted.map(PeerActions.brief).mkString(", ")
+          ),
           "peer trust <id>, peer untrust <id>"
         ),
         (
@@ -312,14 +322,22 @@ object TuiActions:
         Seq(
           (
             "built-in miner",
-            if !m.enabledAtStart then "off since the start" else if m.running() then "mining" else "stopped until the node restarts",
+            if !m.enabledAtStart then "off since the start"
+            else if m.running() then "mining"
+            else "stopped until the node restarts",
             "mining stop"
           ),
           ("coinbase", m.coinbase(), "coinbase <address>")
         )
-      ) ++ servers.toSeq.sortBy(_._1).map((key, s) =>
-        (s"${s.label} server", if s.listening() then s"listening on ${s.address}" else s"stopped (${s.address})", s"rpc stop $key, rpc start $key")
-      ) ++ Seq(
+      ) ++ servers.toSeq
+        .sortBy(_._1)
+        .map((key, s) =>
+          (
+            s"${s.label} server",
+            if s.listening() then s"listening on ${s.address}" else s"stopped (${s.address})",
+            s"rpc stop $key, rpc start $key"
+          )
+        ) ++ Seq(
         (
           "alert thresholds",
           if thresholds.isEmpty then "as configured" else thresholds.mkString(", "),
@@ -330,7 +348,10 @@ object TuiActions:
     val unavailable =
       (if proofOfWork then Map.empty[String, String]
        else
-         Seq(Actions.MiningStart, Actions.MiningStop, Actions.Coinbase).map(_.name -> MiningActions.NotProofOfWork).toMap) ++
+         Seq(Actions.MiningStart, Actions.MiningStop, Actions.Coinbase)
+           .map(_.name -> MiningActions.NotProofOfWork)
+           .toMap
+      ) ++
         Option.when(dataDir.isEmpty)(Actions.Bundle.name -> "this node has no data directory to write under")
 
     val handlers: (() => TuiState) => Map[String, ActionHandler] = state =>
@@ -344,7 +365,11 @@ object TuiActions:
           Actions.Tunables.name -> ReportActions.tunables(() => tunables(state())),
           Actions.Net.name -> ReportActions.net(() => netInfo),
           Actions.TestRpc.name -> EndpointProbe.handler(() => endpoints),
-          Actions.DetectIp.name -> ReportActions.detectIp(() => ExternalIPDetector.detect(), () => detection, () => advertised)
+          Actions.DetectIp.name -> ReportActions.detectIp(
+            () => ExternalIPDetector.detect(),
+            () => detection,
+            () => advertised
+          )
         ) ++
         dataDir.map(dir =>
           Actions.Bundle.name -> SupportBundle.handler(

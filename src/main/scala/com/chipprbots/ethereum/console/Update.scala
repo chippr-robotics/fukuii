@@ -99,9 +99,9 @@ object Update:
     case Action.Act     => actOnSelection(s)
 
   /** Asks for `request` (spec 029 FR-048): its dialog opens, Cancel in focus, and the action runner is asked what it
-    * would change. On a read-only dashboard nothing above Observe is offered: it says so, and the attempt is handed
-    * to the runner all the same, which refuses it in the audit log (FR-051, FR-053). Ctrl-C is a signal and stops the
-    * node regardless.
+    * would change. On a read-only dashboard nothing above Observe is offered: it says so, and the attempt is handed to
+    * the runner all the same, which refuses it in the audit log (FR-051, FR-053). Ctrl-C is a signal and stops the node
+    * regardless.
     */
   private def ask(s: TuiState, ctx: UpdateCtx, request: ops.ActionRequest): (TuiState, Seq[Effect]) =
     ops.Actions.named(request.action) match
@@ -139,8 +139,8 @@ object Update:
           case (None, TuiView.Peers) =>
             s.selectedPeerIndex.map(i => s"peer drop ${s.orderedPeers(i).id.take(PeerIdChars)}")
           case (None, TuiView.Rpc) if s.snapshot.exists(_.local.mining.isDefined) => Some("mining stop")
-          case (None, TuiView.Ops) => s.selectedAction.map(_ + " ")
-          case _                   => None
+          case (None, TuiView.Ops)                                                => s.selectedAction.map(_ + " ")
+          case _                                                                  => None
     (typed.fold(s)(text => s.copy(overlay = Overlay.Prompt(text, text.length, None))), Nil)
 
   /** As much of a peer's id as the prompt is given: enough to name one peer among those connected. */
@@ -304,10 +304,10 @@ object Update:
 
   // ---- the quit dialog ------------------------------------------------------------------------------------------
 
-  /** A confirmation's keys, by its class (spec 029 FR-048, contracts/operator.md). Nothing else is accepted, and
-    * pasted text is ignored whatever it holds (FR-009). An action is confirmed only with its preview on screen, whole,
-    * and saying it can be run: while the preview is being read, when it says the action cannot be run now, or on a
-    * screen too small to show it all, nothing confirms it.
+  /** A confirmation's keys, by its class (spec 029 FR-048, contracts/operator.md). Nothing else is accepted, and pasted
+    * text is ignored whatever it holds (FR-009). An action is confirmed only with its preview on screen, whole, and
+    * saying it can be run: while the preview is being read, when it says the action cannot be run now, or on a screen
+    * too small to show it all, nothing confirms it.
     */
   private def dialog(s: TuiState, kind: DialogKind, key: Key, ctx: UpdateCtx): (TuiState, Seq[Effect]) = kind match
     case c: DialogKind.Confirm =>
@@ -317,7 +317,11 @@ object Update:
       def cancel: (TuiState, Seq[Effect]) = (closed, Seq(Effect.CancelAction(c.request)))
       def run: (TuiState, Seq[Effect]) =
         if quit then (closed, Seq(Effect.Confirm(c.request), Effect.Quit))
-        else (closed.copy(notice = Some(s"${c.request.action}: started; the Ops view shows how it ends")), Seq(Effect.Confirm(c.request)))
+        else
+          (
+            closed.copy(notice = Some(s"${c.request.action}: started; the Ops view shows how it ends")),
+            Seq(Effect.Confirm(c.request))
+          )
       def set(next: DialogKind.Confirm): (TuiState, Seq[Effect]) = (s.copy(overlay = Overlay.Dialog(next)), Nil)
       val confirmable =
         c.preview.exists(_.refusal.isEmpty) && widgets.DialogBox.fits(c, ctx.bodyCols, ctx.bodyRows)
@@ -341,8 +345,8 @@ object Update:
                 case _                                          => (s, Nil)
             case RiskClass.Disrupt =>
               key match
-                case Key.Char('y' | 'Y') if confirmable            => run
-                case Key.Char('n' | 'N') | Key.Backspace           => cancel
+                case Key.Char('y' | 'Y') if confirmable  => run
+                case Key.Char('n' | 'N') | Key.Backspace => cancel
                 // Anything else neither confirms nor cancels.
                 case _ => (s, Nil)
             case RiskClass.Halt =>
@@ -352,7 +356,7 @@ object Update:
                 case Key.Backspace if c.typed.nonEmpty => set(c.copy(typed = c.typed.dropRight(1)))
                 case Key.Backspace                     => cancel
                 case Key.Enter if confirmable && c.typed.equalsIgnoreCase(ops.Actions.HaltWord) => run
-                case _ => (s, Nil)
+                case _                                                                          => (s, Nil)
 
   /** The most letters a Halt's dialog takes: the word is four. */
   private val HaltWordMax: Int = 12
@@ -402,8 +406,8 @@ object Update:
     case Screen.Net          => Some(ops.ActionRequest(ops.Actions.Net.name))
     case _                   => None
 
-  /** An action typed at the prompt. One that names a connected peer by the start of its id is asked for with the
-    * whole id of the one peer that starts so; an id that fits none, or several, is said and nothing is asked.
+  /** An action typed at the prompt. One that names a connected peer by the start of its id is asked for with the whole
+    * id of the one peer that starts so; an id that fits none, or several, is said and nothing is asked.
     */
   private def act(s: TuiState, ctx: UpdateCtx, request: ops.ActionRequest): (TuiState, Seq[Effect]) =
     val byPeer = Set(ops.Actions.PeerTrust.name, ops.Actions.PeerUntrust.name, ops.Actions.PeerDrop.name)
@@ -414,11 +418,13 @@ object Update:
         all.filter(_.id.toLowerCase(java.util.Locale.ROOT).stripPrefix("0x").startsWith(prefix)) match
           case Seq(peer) => ask(s, ctx, request.copy(params = Vector("id" -> peer.id)))
           // Trust is of a node, connected or not: a whole id that no connected peer has can still lose it.
-          case Seq() if request.action == ops.Actions.PeerUntrust.name && prefix.length == 128 &&
+          case Seq()
+              if request.action == ops.Actions.PeerUntrust.name && prefix.length == 128 &&
                 prefix.forall(ch => Character.digit(ch, 16) >= 0) =>
             ask(s, ctx, request.copy(params = Vector("id" -> prefix)))
-          case Seq()   => (s.copy(notice = Some(s"no connected peer's id starts with '$typed'")), Nil)
-          case several => (s.copy(notice = Some(s"${several.size} peers' ids start with '$typed': type more of it")), Nil)
+          case Seq() => (s.copy(notice = Some(s"no connected peer's id starts with '$typed'")), Nil)
+          case several =>
+            (s.copy(notice = Some(s"${several.size} peers' ids start with '$typed': type more of it")), Nil)
       case _ => ask(s, ctx, request)
 
   private def submit(s: TuiState, line: String, ctx: UpdateCtx): (TuiState, Seq[Effect]) =
@@ -449,7 +455,7 @@ object Update:
             case Seq() => (closed.copy(notice = Some(s"no connected peer's id starts with '$prefix'")), Nil)
             case several =>
               (closed.copy(notice = Some(s"${several.size} peers' ids start with '$prefix': type more of it")), Nil)
-        case Command.Act(request)   => act(closed.copy(helpOpen = false), ctx, request)
+        case Command.Act(request) => act(closed.copy(helpOpen = false), ctx, request)
         case Command.Show(screen) =>
           // An Observe action changes nothing and asks nothing: it runs as its screen opens.
           (closed.copy(helpOpen = false, screens = List(screen)), observed(screen).map(Effect.Confirm(_)).toSeq)

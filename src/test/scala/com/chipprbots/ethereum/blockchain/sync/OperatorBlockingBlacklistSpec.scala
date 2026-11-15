@@ -12,8 +12,8 @@ import com.chipprbots.ethereum.network.PeerId
 import com.chipprbots.ethereum.network.PeerManagerActor.PeerAddress
 import com.chipprbots.ethereum.testing.Tags.*
 
-/** Spec 029 / B-277: the operator's block list is part of the node-wide blacklist, and only an [[OperatorBlock]] tells a
-  * block from an automatic entry.
+/** Spec 029 / B-277: the operator's block list is part of the node-wide blacklist, and only an [[OperatorBlock]] tells
+  * a block from an automatic entry.
   */
 class OperatorBlockingBlacklistSpec extends AnyFlatSpec with Matchers:
 
@@ -22,7 +22,10 @@ class OperatorBlockingBlacklistSpec extends AnyFlatSpec with Matchers:
     val underlying: CacheBasedBlacklist = CacheBasedBlacklist.empty(100)
     val blacklist = new OperatorBlockingBlacklist(underlying, registry)
 
-  "OperatorBlockingBlacklist" should "answer an OperatorBlock from the registry alone" taggedAs (UnitTest, NetworkTest) in
+  "OperatorBlockingBlacklist" should "answer an OperatorBlock from the registry alone" taggedAs (
+    UnitTest,
+    NetworkTest
+  ) in
     new Setup:
       blacklist.isBlacklisted(OperatorBlock("10.0.0.1")) shouldBe true
       blacklist.isBlacklisted(OperatorBlock("10.0.0.2")) shouldBe false

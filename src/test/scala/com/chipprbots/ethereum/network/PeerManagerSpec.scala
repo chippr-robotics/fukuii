@@ -1282,7 +1282,10 @@ class PeerManagerSpec
       new URI(s"enode://${"AA" * 64}@10.0.0.40:30303"),
       testKit.createTestProbe[PeerManagerActor.AddTrustedPeerResponse]().ref
     )
-    peerManager ! PeerManagerActor.AddMaintainedPeerCmd(new URI(s"enode://${"bb" * 64}@10.0.0.41:30303"), discardReplyRef)
+    peerManager ! PeerManagerActor.AddMaintainedPeerCmd(
+      new URI(s"enode://${"bb" * 64}@10.0.0.41:30303"),
+      discardReplyRef
+    )
     peerManager ! PeerManagerActor.GetAdminStateCmd(state.ref)
     val after: PeerManagerActor.AdminState = state.receiveMessage()
     after.maxOutgoingOverride shouldBe Some(7)

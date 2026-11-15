@@ -360,7 +360,8 @@ final case class OperatorBlock(value: String) extends BlacklistId
 /** Spec 029 / B-277: makes the operator's block list ([[BlockedIPRegistry]]) part of the node-wide blacklist, so that
   * every place that asks `isBlacklisted(PeerAddress(host))` (inbound accept, discovery dials, snap redials) honours
   * `admin_blockIP`. An [[OperatorBlock]] is answered by the registry alone; a `PeerAddress` by the registry or the
-  * underlying blacklist. The registry is never evicted or shortened by the automatic entries the underlying cache takes.
+  * underlying blacklist. The registry is never evicted or shortened by the automatic entries the underlying cache
+  * takes.
   */
 final class OperatorBlockingBlacklist(underlying: Blacklist, registry: BlockedIPRegistry) extends Blacklist:
 

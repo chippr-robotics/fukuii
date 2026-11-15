@@ -38,8 +38,8 @@ class ActionsContractSpec extends AnyFlatSpec with Matchers with OptionValues:
       else found.init :+ (found.last._1 -> (found.last._2 :+ line))
     }
 
-  /** Every action of the contract with its class, in the contract's order: the rows under the four class headings
-    * whose first cell is a name in backticks.
+  /** Every action of the contract with its class, in the contract's order: the rows under the four class headings whose
+    * first cell is a name in backticks.
     */
   private val rows: Vector[(String, RiskClass)] =
     sections.flatMap { (heading, lines) =>
@@ -119,6 +119,22 @@ class ActionsContractSpec extends AnyFlatSpec with Matchers with OptionValues:
       }
     // What is not offered is no action of the registry.
     Actions.named("compact") shouldBe None
+  }
+
+  // FAILS (reported): the runner's list still has `compact`, which is no action: the contract and the registry dropped it.
+  "The actions that write a line when they start" should "be the ones the contract names, each an action" taggedAs (
+    UnitTest
+  ) in {
+    val Long = """.*action that runs for long \(([^)]*)\).*""".r
+    val named = contract.mkString(" ") match
+      case Long(list) => "`([^`]+)`".r.findAllMatchIn(list).map(_.group(1)).toSet
+      case _          => fail("the contract does not say which actions run for long")
+    named shouldBe Set("dbcheck", "detect-ip", "bundle")
+    for name <- ActionRunner.LongRunning do
+      withClue(s"$name: ") {
+        Actions.named(name) should not be empty
+      }
+    ActionRunner.LongRunning shouldBe named
   }
 
   // ---- what carries each action out ---------------------------------------------------------------------------------
