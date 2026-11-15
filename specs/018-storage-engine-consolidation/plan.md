@@ -3307,6 +3307,52 @@ consistent head on a block of the way, which is rule 4; the heavier chain is jud
 
 **The mutation run**: 12 mutants, 11 caught; the twelfth (who waits is not woken) is caught by a case added after it.
 
+#### C4e part 5: the consensus layer's branch is executed on layers and adopted by one move (2026-11-15)
+
+Beacon's cut, before code. **T170 as written is superseded**: "reverse to the fork, then a commit per block, no
+N-layer stack" was written before C4d part 4a, which made the proof-of-stake shape what it is now: payloads are
+executed as forward layers, the fork choice moves the head across them in one move, and an adoption in place beyond
+them is `StateRecovery`'s alone. A second in-place adopter in `ConsensusImpl` would write the same head beside it,
+block by block, while the consensus client sends a fork choice every slot.
+
+What the arm is: `ConsensusImpl` follows a branch that is not heavier when it leads to the head the consensus layer
+named (`leadsToDesignatedHead`). After the merge every block weighs the same, so it is the only way a proof-of-stake
+branch is reorganised here; never on ETC, where nothing is bound to the holder. **It cannot be reached on the guard
+before regular sync's importer runs there (C5)**: the Engine API never goes through `ConsensusImpl`, a chain import
+refuses side blocks, test mode has no consensus layer. It is built now as a branch of the code the weight arm runs,
+not a body of its own, and pinned through a `ConsensusImpl` with a head bound.
+
+- **The refusal up front holds both arms**: the consensus layer's branch that would move the head back below the
+  finalized block, or below what the records reach, is refused before a block of it is executed.
+- **The settle**: the head goes to the branch by one move only when **the whole of it is valid** and it **still
+  leads to the head the consensus layer names**, looked at again as the move is admitted, before anything is written
+  (the named hash is compared first; the walk of headers is made only when it changed). **An invalid block leaves the
+  head where the consensus layer last had it** (the user's decision of 2026-11-14), which costs nothing here, since
+  nothing has moved; the hash layout makes the valid prefix the head, and stays as it is. The invalid block is
+  reported, with its parent as the last valid block, whatever head is named by then.
+- **Another head named meanwhile** is no fault of this node and no verdict on the branch: `REORG-SUPERSEDED` at INFO,
+  the branch's blocks stay beside the head, and the importer is told the head was kept.
+- **At the cap, or with a fork below the views, it is not judged**: that adoption is the fork choice's recovery's.
+
+**Read after code (beacon): no blocker; four warnings.** Taken: an invalid block is told even when another head is
+named by then; "another head" is not a state fault; the walk is not repeated while the move's lock is held. Confirmed
+by beacon: the hash layout's arm and `settleHead` are untouched; the weight arm is as it was; a branch executes whole
+or ends in an error or a fault; a branch that ends on an ancestor of the named head moves the head there, as the hash
+layout and go-ethereum's chain insert do; the fork choice manager has no lock, so there is no order to invert.
+**go-ethereum's behaviour here was said from memory** (no clone in this checkout): to be checked against one before
+the rule is called its parity.
+
+**For C5 (B-297, a gate on starting regular sync on the guard)**: the hand-off at the cap to `StateRecovery`; a
+refusal for the finalized block or the depth is queued again without end while the consensus client keeps naming that
+head; a race test of the importer's move against the fork choice's; the lost side parents are not in what is told as
+the new branch (both arms); the hive engine reorganisation suites with the guard on.
+
+**The mutation run**: 9 mutants, 8 caught; the ninth (the named head not looked at again before the move) comes to
+the same answer, by the look as the move is admitted. `ReorgBlockhashParitySpec` holds the cases: adopted by one move
+with the old blocks told; an invalid block (head kept, reported, the prefix's layers kept), also when another head is
+named by then; at the cap; another head named at each read; below the finalized block; and ETC's own (nothing bound,
+equal weight, kept).
+
 ### Destructive change (C8a and C8b): the vault protocol blocks
 
 ```

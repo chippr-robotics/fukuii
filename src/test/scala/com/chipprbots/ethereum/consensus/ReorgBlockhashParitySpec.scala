@@ -20,9 +20,13 @@ import com.chipprbots.ethereum.blockchain.sync.regular.BlockImportFailed
 import com.chipprbots.ethereum.blockchain.sync.regular.BlockImportResult
 import com.chipprbots.ethereum.blockchain.sync.regular.BlockImportedToTop
 import com.chipprbots.ethereum.blockchain.sync.regular.ChainReorganised
+import com.chipprbots.ethereum.consensus.Consensus.*
+import com.chipprbots.ethereum.consensus.engine.DesignatedHead
+import com.chipprbots.ethereum.consensus.engine.InvalidChainReporter
 import com.chipprbots.ethereum.crypto.generateKeyPair
 import com.chipprbots.ethereum.db.components.EphemDataSourceComponent
 import com.chipprbots.ethereum.db.components.Storages
+import com.chipprbots.ethereum.db.storage.pathstate.FinalizedBlock
 import com.chipprbots.ethereum.db.storage.pathstate.StateConfig
 import com.chipprbots.ethereum.domain.*
 import com.chipprbots.ethereum.ledger.InMemoryWorldStateProxy
@@ -218,6 +222,171 @@ class ReorgBlockhashParitySpec extends AnyFlatSpec with Matchers with ScalaFutur
     node.importFile(aChain ++ bChain)
     node.bestHash shouldBe bChain.last.hash
     (1 to 3).foreach(n => node.indexed(n) shouldBe Some(bChain(n - 1).hash))
+
+  // The consensus layer's branch on the unified layout (spec 018 C4e part 5; T159's first half as beacon re-cut it):
+  // what regular sync's importer will ask of `ConsensusImpl` once it runs on that layout. After the merge every block
+  // weighs the same, so a branch is followed only because it leads to the head the consensus layer named.
+  "The consensus layer's branch (the unified layout)" should
+    "become the head by one move when every block of it is valid, with the blocks the head left told" taggedAs (
+      UnitTest,
+      ConsensusTest
+    ) in (new DesignatedFixture():
+      node.importAll(aChain) shouldBe a[BlockImportedToTop]
+      named.set(Some(bChain.last.hash.value))
+      evaluate(bChain) match
+        case SelectedNewBestBranch(oldBranch, newBranch, _) =>
+          oldBranch.map(_.hash) shouldBe aChain.drop(2).map(_.hash)
+          newBranch.map(_.hash) shouldBe bChain.map(_.hash)
+        case other => fail(s"not adopted: $other")
+      node.bestHash shouldBe bChain.last.hash
+      (3 to 6).foreach(n => node.indexed(n) shouldBe Some(bChain(n - 3).hash))
+      node.blockchainWriter.stateHeldInPlaceOf(bChain.last.header) shouldBe true
+      reported shouldBe Nil
+    )
+
+  it should "leave the head where the consensus layer last had it when a block of the branch is invalid, and report that block" taggedAs (
+    UnitTest,
+    ConsensusTest
+  ) in (new DesignatedFixture():
+    node.importAll(aChain) shouldBe a[BlockImportedToTop]
+    val invalid: Block = oracle.invalidChild(bChain(1), difficulty = 0)
+    named.set(Some(invalid.hash.value))
+    evaluate(bChain.take(2) :+ invalid) match
+      case BranchExecutionFailure(_, failing, _) => failing shouldBe invalid.hash.value
+      case other                                 => fail(s"not a failure of the branch: $other")
+    // not the valid prefix, which the hash layout makes the head: nothing has moved
+    node.bestHash shouldBe aChain.last.hash
+    (1 to 5).foreach(n => node.indexed(n) shouldBe Some(aChain(n - 1).hash))
+    reported shouldBe List(invalid.hash.value -> bChain(1).hash.value)
+    // what was executed is kept beside the disk for the next branch that stands on it
+    node.blockchainWriter.stateHeldInPlaceOf(bChain(1).header) shouldBe true
+  )
+
+  it should "report an invalid block of the branch whatever head the consensus layer names by then" taggedAs (
+    UnitTest,
+    ConsensusTest
+  ) in (new DesignatedFixture():
+    node.importAll(aChain) shouldBe a[BlockImportedToTop]
+    val invalid: Block = oracle.invalidChild(bChain(1), difficulty = 0)
+    val reads = new java.util.concurrent.atomic.AtomicInteger(0)
+    // the branch's head when it is selected, another once it has been executed
+    override def namedNow(): Option[ByteString] =
+      if reads.incrementAndGet() <= 1 then Some(invalid.hash.value) else Some(aChain.last.hash.value)
+    evaluate(bChain.take(2) :+ invalid) match
+      case BranchExecutionFailure(_, failing, _) => failing shouldBe invalid.hash.value
+      case other                                 => fail(s"not a failure of the branch: $other")
+    node.bestHash shouldBe aChain.last.hash
+    reported shouldBe List(invalid.hash.value -> bChain(1).hash.value)
+  )
+
+  it should "not be committed in place when it is longer than the executed blocks kept: that is the fork choice's recovery's" taggedAs (
+    UnitTest,
+    ConsensusTest
+  ) in (new DesignatedFixture(pinnedCap(1L)):
+    node.importAll(aChain) shouldBe a[BlockImportedToTop]
+    named.set(Some(bChain.last.hash.value))
+    evaluate(bChain) match
+      case ConsensusStateFault(fault, imported, _) =>
+        fault.getMessage should include("the fork choice's recovery")
+        imported shouldBe Nil
+      case other => fail(s"judged: $other")
+    node.bestHash shouldBe aChain.last.hash
+    (1 to 5).foreach(n => node.indexed(n) shouldBe Some(aChain(n - 1).hash))
+    reported shouldBe Nil
+  )
+
+  it should "not move the head when the consensus layer names another head while the branch is executed" taggedAs (
+    UnitTest,
+    ConsensusTest
+  ) in {
+    // the head is read when the branch is selected, twice when it is settled, and as the move is admitted
+    for readsOfTheBranchsHead <- 1 to 3 do
+      new DesignatedFixture():
+        node.importAll(aChain) shouldBe a[BlockImportedToTop]
+        val reads = new java.util.concurrent.atomic.AtomicInteger(0)
+        override def namedNow(): Option[ByteString] =
+          if reads.incrementAndGet() <= readsOfTheBranchsHead then Some(bChain.last.hash.value)
+          else Some(aChain.last.hash.value)
+        withClue(s"another head after $readsOfTheBranchsHead read(s): ") {
+          // no fault of this node and no verdict on the branch: its blocks are valid and stay beside the head
+          evaluate(bChain) shouldBe KeptCurrentBestBranch
+          node.blockchainWriter.stateHeldInPlaceOf(bChain.last.header) shouldBe true
+          reads.get() should be > readsOfTheBranchsHead
+          node.bestHash shouldBe aChain.last.hash
+          (1 to 5).foreach(n => node.indexed(n) shouldBe Some(aChain(n - 1).hash))
+          reported shouldBe Nil
+        }
+  }
+
+  it should "be refused before it is executed when it leaves the chain below the finalized block" taggedAs (
+    UnitTest,
+    ConsensusTest
+  ) in (new DesignatedFixture():
+    node.importAll(aChain) shouldBe a[BlockImportedToTop]
+    // the fork choice the node followed named block 4 finalized: the branch leaves the chain at block 2
+    node.blockchainWriter.moveHeadInPlace(
+      aChain.last.header,
+      node.blockchainReader,
+      finalized = Some(FinalizedBlock(4, aChain(3).hash.value))
+    )
+    named.set(Some(bChain.last.hash.value))
+    evaluate(bChain) shouldBe a[ConsensusStateFault]
+    node.bestHash shouldBe aChain.last.hash
+    node.blockchainWriter.stateHeldInPlaceOf(bChain.head.header) shouldBe false
+    reported shouldBe Nil
+  )
+
+  "A branch of the head's own weight on a proof-of-work chain (the unified layout)" should
+    "be kept beside the head: no consensus layer names a head there" taggedAs (UnitTest, ConsensusTest) in (
+      new Fixture(guard = true):
+        // as in production on ETC: the holder is there and nothing is bound to it
+        val unbound = new DesignatedHead.LateBound
+        val consensus = new ConsensusImpl(
+          node.blockchainReader,
+          node.blockchainWriter,
+          node.blockExecution,
+          None,
+          Some(unbound)
+        )
+        val aChain: List[Block] = oracle.extendCanonical(oracle.genesis, 5, difficulty = 1000)
+        val bChain: List[Block] = oracle.extendSide(aChain(1), 3, difficulty = 1000, tag = 0x75)
+        node.importAll(aChain) shouldBe a[BlockImportedToTop]
+        import node.blockchainConfig
+        import node.runtime
+        val kept: ConsensusResult = consensus.evaluateBranch(NonEmptyList.fromListUnsafe(bChain)).unsafeRunSync()
+        kept shouldBe KeptCurrentBestBranch
+        node.bestHash shouldBe aChain.last.hash
+    )
+
+  /** A node on the unified layout past the merge (a terminal total difficulty of 0), with a `ConsensusImpl` that has a
+    * head the consensus layer names and a reporter of invalid blocks, as the node builds one with the Engine API on.
+    * `aChain` is blocks 1 to 5; `bChain` leaves it after block 2 and is blocks 3 to 6.
+    */
+  class DesignatedFixture(tune: StateConfig => StateConfig = identity):
+    private val merged = (config: BlockchainConfig) => config.copy(terminalTotalDifficulty = Some(BigInt(0)))
+    val oracle: Oracle = new Oracle:
+      implicit override lazy val blockchainConfig: BlockchainConfig = merged(super.blockchainConfig)
+    val node: Node = new Node(guard = true, tune):
+      implicit override lazy val blockchainConfig: BlockchainConfig = merged(super.blockchainConfig)
+    val named = new java.util.concurrent.atomic.AtomicReference[Option[ByteString]](None)
+    def namedNow(): Option[ByteString] = named.get()
+    var reported: List[(ByteString, ByteString)] = Nil
+    private val reporter = new InvalidChainReporter:
+      override def reportInvalid(blockHash: ByteString, latestValidHash: ByteString): Unit =
+        reported :+= (blockHash -> latestValidHash)
+    val consensus = new ConsensusImpl(
+      node.blockchainReader,
+      node.blockchainWriter,
+      node.blockExecution,
+      Some(reporter),
+      Some(DesignatedHead(() => namedNow()))
+    )
+    val aChain: List[Block] = oracle.extendCanonical(oracle.genesis, 5, difficulty = 0)
+    val bChain: List[Block] = oracle.extendSide(aChain(1), 4, difficulty = 0, tag = 0x74)
+    def evaluate(branch: List[Block]): ConsensusResult =
+      import node.blockchainConfig
+      import node.runtime
+      consensus.evaluateBranch(NonEmptyList.fromListUnsafe(branch)).unsafeRunSync()
 
   class Fixture(guard: Boolean = false, cap: StateConfig => StateConfig = identity):
     val oracle = new Oracle
