@@ -381,7 +381,8 @@ class ActionRunnerSpec extends AnyFlatSpec with Matchers with OptionValues:
   it should "quote a value with a blank, an =, a comma or a quote in it, so that no value passes for a field" taggedAs (
     UnitTest
   ) in {
-    def written(value: String): String = ActionRunner.line(ActionRequest("peer block", Vector("address" -> value)), "cancelled")
+    def written(value: String): String =
+      ActionRunner.line(ActionRequest("peer block", Vector("address" -> value)), "cancelled")
     written("203.0.113.9") shouldBe "action=peer block params=address=203.0.113.9 outcome=cancelled by=tui"
     written("203.0.113.9 outcome=confirmed by=root") shouldBe
       """action=peer block params=address="203.0.113.9 outcome=confirmed by=root" outcome=cancelled by=tui"""

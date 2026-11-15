@@ -112,9 +112,8 @@ class MiningPanelSpec extends AnyFlatSpec with Matchers with BeforeAndAfterAll w
   ) in {
     def read(s: TuiState, running: Option[Boolean]): TuiState =
       s.withStatus(
-        s.snapshot.get.copy(local =
-          s.snapshot.get.local.copy(mining = Some(TuiFixtures.miningOn.copy(minerRunning = running)))
-        )
+        s.snapshot.get
+          .copy(local = s.snapshot.get.local.copy(mining = Some(TuiFixtures.miningOn.copy(minerRunning = running))))
       )
     def first(s: TuiState): String = drawn(s, s.snapshot.get.local.mining.get, 120, 40).head
     val notStarted = read(TuiFixtures.miningEtc(), Some(false))

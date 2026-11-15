@@ -286,10 +286,12 @@ class SupportBundleSpec extends AnyFlatSpec with Matchers with OptionValues:
         val there = Using.resource(Files.walk(dataDir.resolve("support")))(_.iterator().asScala.toVector)
         there.foreach(path => seen += dataDir.relativize(path).toString.replace('\\', '/') -> permissions(path))
       // A lazy list: `write` asks for each file only when it has written the one before.
-      val watched = files.iterator.map { f =>
-        if Files.exists(dataDir.resolve("support")) then look()
-        f
-      }.to(LazyList)
+      val watched = files.iterator
+        .map { f =>
+          if Files.exists(dataDir.resolve("support")) then look()
+          f
+        }
+        .to(LazyList)
       SupportBundle.write(target, watched) shouldBe true
       look()
       seen should not be empty

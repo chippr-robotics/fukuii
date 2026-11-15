@@ -352,13 +352,19 @@ class HealthSpec extends AnyFlatSpec with Matchers with OptionValues:
   /** `s` after a poll that read the built-in miner as `running`, or could not read it. */
   private def minerRead(s: TuiState, running: Option[Boolean]): TuiState =
     val status = s.snapshot.value
-    s.withStatus(status.copy(local = status.local.copy(mining = Some(TuiFixtures.miningOn.copy(minerRunning = running)))))
+    s.withStatus(
+      status.copy(local = status.local.copy(mining = Some(TuiFixtures.miningOn.copy(minerRunning = running))))
+    )
 
   private def builtInMiner(s: TuiState): Option[HealthCheck] =
     Health.checks(s).find(c => c.subsystem == Subsystem.Mining && c.name == "built-in miner")
 
   /** The runner's view after one more attempt, as the runner keeps it: the last 50. */
-  private def attempted(view: ops.ActionsView, request: ops.ActionRequest, outcome: ops.ActionOutcome): ops.ActionsView =
+  private def attempted(
+      view: ops.ActionsView,
+      request: ops.ActionRequest,
+      outcome: ops.ActionOutcome
+  ): ops.ActionsView =
     view.copy(history = (view.history :+ ops.ActionRecord(request, outcome, t0)).takeRight(ops.ActionRunner.MaxHistory))
 
   private val stopMining = ops.ActionRequest(ops.Actions.MiningStop.name)

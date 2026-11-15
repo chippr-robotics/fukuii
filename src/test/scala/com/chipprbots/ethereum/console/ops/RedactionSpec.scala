@@ -100,8 +100,22 @@ class RedactionSpec extends AnyFlatSpec with Matchers:
       "GET https://rpc.example.org/v1?token=<hidden>"
     Redaction.scrubbed(s"https://rpc.example.org/v1?chain=etc&api_key=$Marker&page=2") shouldBe
       "https://rpc.example.org/v1?chain=etc&api_key=<hidden>&page=2"
-    for name <- Seq("token", "access_token", "access-token", "api_key", "api-key", "apikey", "API_KEY", "key", "secret",
-        "sig", "signature", "password", "passwd", "auth")
+    for name <- Seq(
+        "token",
+        "access_token",
+        "access-token",
+        "api_key",
+        "api-key",
+        "apikey",
+        "API_KEY",
+        "key",
+        "secret",
+        "sig",
+        "signature",
+        "password",
+        "passwd",
+        "auth"
+      )
     do
       withClue(s"$name: ") {
         val first = Redaction.scrubbed(s"fetching https://example.org/x?$name=$Marker now")
@@ -157,7 +171,7 @@ class RedactionSpec extends AnyFlatSpec with Matchers:
   it should "read a long line with no URL in it once, not once from every character" taggedAs (UnitTest) in {
     // A hex blob as a log line can hold one: every character of it could start a URL's scheme.
     val blob = "0123456789abcdef" * 12_500
-    blob should have length 200_000L
+    (blob should have).length(200_000L)
     for line <- Seq(blob, s"payload=$blob", s"$blob://", s"see http://example.org/x $blob") do
       val started = System.nanoTime()
       val out = Redaction.scrubbed(line)

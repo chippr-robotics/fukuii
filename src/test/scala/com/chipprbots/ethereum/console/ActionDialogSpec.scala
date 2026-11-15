@@ -282,7 +282,8 @@ class ActionDialogSpec extends AnyFlatSpec with Matchers with OptionValues:
     val both = previewed(onApply, trust, other.copy(figures = Vector("Connected 4h 5m, score 0.58.")))
     dialog(both).focus shouldBe DialogFocus.Cancel
     dialog(both).changed shouldBe true
-    val refused = previewed(onApply, trust, Preview(Vector.empty, Some("no connected peer has the id 9e37b952… any more")))
+    val refused =
+      previewed(onApply, trust, Preview(Vector.empty, Some("no connected peer has the id 9e37b952… any more")))
     dialog(refused).focus shouldBe DialogFocus.Cancel
     dialog(refused).changed shouldBe true
     Update(press(refused, Key.Tab), Key.Enter, ctx)._2 shouldBe empty
@@ -302,11 +303,14 @@ class ActionDialogSpec extends AnyFlatSpec with Matchers with OptionValues:
     )
     val asked = previewed(run(synced, "dbcheck")._1, dbCheck, read)
     // A figure that moved is no change: y runs at once.
-    val ticked = previewed(asked, dbCheck, read.copy(figures = Vector("The best block is 21884103 now: about 43770 entries.")))
+    val ticked =
+      previewed(asked, dbCheck, read.copy(figures = Vector("The best block is 21884103 now: about 43770 entries.")))
     dialog(ticked).changed shouldBe false
     Update(ticked, Key.Char('y'), ctx)._2 shouldBe Seq(Effect.Confirm(dbCheck))
     // Its lines changed: the y that was on its way confirms nothing.
-    val other = read.copy(lines = Vector("Reads the number-to-hash entry and the header of every 500th block up to the best block."))
+    val other = read.copy(lines =
+      Vector("Reads the number-to-hash entry and the header of every 500th block up to the best block.")
+    )
     val changed = previewed(asked, dbCheck, other)
     dialog(changed).changed shouldBe true
     for yes <- Seq('y', 'Y') do
