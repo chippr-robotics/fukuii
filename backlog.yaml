@@ -3132,21 +3132,17 @@ items:
   - id: B-272
     title: "Spec 029 slice 6: the Storage and System views, health bars and configurable alert thresholds"
     priority: P2
-    status: review
+    status: done
     area: tui
     size: L
     opened: 2026-11-14
+    closed: 2026-11-15
     refs: []
     links:
       prs: [1844]
       spec: specs/029-tui-command-center
       branch: ccr-452bbde8-2hrv25
     depends_on: [B-269]
-    claim:
-      by: cloud-ccr-452bbde8
-      agent: main
-      since: 2026-11-14T20:22:13Z
-      heartbeat: 2026-11-14T21:53:03Z
     notes: Tasks T083-T094. vault and herald analysed before code (RocksDB properties read; RLPx byte counters).
   - id: B-273
     title: "Bundled gorgoroth.conf sets mining.protocol = \"ethash\", which MiningConfig rejects: fukuii gorgoroth cannot start"
