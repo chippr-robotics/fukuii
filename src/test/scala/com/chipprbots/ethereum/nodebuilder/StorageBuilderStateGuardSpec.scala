@@ -48,6 +48,57 @@ class StorageBuilderStateGuardSpec extends AnyFlatSpec with Matchers:
       builder.storagesInstance.dataSource.close()
       deleteTree(dir)
 
+  /** The production `StorageBuilder` over the data directory `dir`, with the guard `guard`. Not closed here. */
+  private def over(dir: Path, guard: Boolean): StorageBuilder & InstanceConfigProvider =
+    val config = ConfigFactory
+      .load()
+      .getConfig("fukuii")
+      .withValue("db.rocksdb.path", ConfigValueFactory.fromAnyRef(dir.toString))
+      .withValue("state.path-live", ConfigValueFactory.fromAnyRef(guard))
+    new StorageBuilder with InstanceConfigProvider:
+      override lazy val instanceConfig: InstanceConfig = new InstanceConfig(config, s"layout-$guard")
+
+  // Spec 018 C5a part 1 (T194, T203): the layout guard is asked where the storages are built, so that whoever takes
+  // them has passed it, and a directory it refuses is not held open.
+  "The storages of a node" should
+    "not be built over a data directory the other layout wrote, and be built over it again as it was written" taggedAs
+    (UnitTest, DatabaseTest) in {
+      import org.apache.pekko.util.ByteString
+      import com.chipprbots.ethereum.db.storage.StateLayoutGuard
+      import com.chipprbots.ethereum.domain.appstate.BlockInfo
+      val dir = Files.createTempDirectory("storage-builder-layout")
+      try
+        // the hash layout writes to it
+        val hashed = over(dir, guard = false)
+        hashed.storagesInstance.storages.appStateStorage
+          .putBestBlockInfo(BlockInfo(ByteString(Array.fill[Byte](32)(7)), 1000))
+          .commit()
+        hashed.storagesInstance.dataSource.close()
+
+        // with the guard on it is refused as the storages are built, and released: it can be opened again at once
+        val refused = intercept[StateLayoutGuard.Refused](over(dir, guard = true).storagesInstance)
+        refused.why should include("earlier storage layout")
+
+        val again = over(dir, guard = false)
+        again.storagesInstance.storages.appStateStorage.getBestBlockInfo().number shouldBe BigInt(1000)
+        // nothing was written by the refusal
+        again.storagesInstance.storages.appStateStorage.getStateLayout() shouldBe None
+        again.storagesInstance.dataSource.close()
+      finally deleteTree(dir)
+    }
+
+  it should "be built over a new directory with the guard on, which is left with no marker until a genesis is committed" taggedAs
+    (UnitTest, DatabaseTest) in {
+      val dir = Files.createTempDirectory("storage-builder-fresh")
+      try
+        for _ <- 1 to 2 do
+          val fresh = over(dir, guard = true)
+          fresh.storagesInstance.storages.pathStateStorage shouldBe defined
+          fresh.storagesInstance.storages.appStateStorage.getStateLayout() shouldBe None
+          fresh.storagesInstance.dataSource.close()
+      finally deleteTree(dir)
+    }
+
   "An instance with the guard on, in a process whose own configuration has it off" should
     "hold the position store and not advertise SNAP" taggedAs (UnitTest, DatabaseTest) in {
       // the process-wide configuration, which the storages read before

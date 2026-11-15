@@ -3409,6 +3409,100 @@ needs an import that really fails, several times (B-300). Pinned: the three ends
 spans the fork, nothing escalated), the hash layout's rewind as it was, and a resolver that leaves this node's blocks
 and its head (`FastSyncBranchResolverActorSpec`).
 
+### C5a: the hand-off, the layout guard and the escalation, as it is to be built (2026-11-15)
+
+Read before code by forge (ETC and the shared structure), beacon (proof of stake) and vault (the write order).
+
+**What the guard refuses today, which decides what C5a can run**: with `fukuii.state.path-live` on, the sync
+controller is never started, `do-snap-sync` and mining are refused at the configuration, SNAP is not advertised (and
+the capability is mutual), and ETC's SNAP is held to the hash scheme. The escalation trigger that C4d part 5 was to
+log was never built; the keys `state.recovery.escalation-refusals` and `escalation-cooldown` have no reader.
+
+**The user's decisions of 2026-11-15**:
+1. **C5a lifts the refusals of SNAP and of sync on the guard**, so that a hand-off runs live in this slice (forge and
+   beacon had recommended a seeded store, with the lifting as a later gated part). The gates that name the start of
+   the importer on the guard come into C5a with it and close before that part: B-297, B-300, and the fork vectors of
+   B-289. Mining was not asked and stays refused (B-293).
+2. **After a hand-off on proof of stake, the gap to the consensus client's head is closed by an adoption in place of
+   a straight extension of the anchor**, in chunks, under a bound of its own (`recovery.max-catch-up`, 8192); the 64
+   stays the bound of a side branch. The gap is at least 64 blocks by construction (the pivot is re-pegged to the
+   head less 64), so without this every hand-off would end `TooLong` and escalate (beacon).
+3. **The loop guard of a proof-of-work escalation is permanent for a branch**: keyed by the branch's first block above
+   the fork, persisted, ended by an operator only, said at ERROR with a metric. A different branch is a new
+   escalation. It is a knowing departure from the heaviest chain for a branch this node cannot follow.
+4. **What waits for 64**: the faults of this node (corrupt records, a block that fails when it is executed again).
+   **A chain that cannot be reached escalates at once.** The unit: on proof of stake, 64 `forkchoiceUpdated` in a row
+   that are refused, and no less than 64 slots of time; on proof of work, 64 blocks of growth of the branch that is
+   refused. One count, set back by any move of the head that succeeds.
+
+**Taken as the three read it, with no objection**:
+- the layout guard only reads; the stamp stays the genesis commit's (vault);
+- the ordered clear also sets back what SNAP keeps of its run (the pivot, the progress, the flags of a phase done,
+  the best block), in its one synced batch: left, a flag that says the accounts are done over rows that are gone lets
+  the next run skip them (vault, forge);
+- the clear deletes `state.origin`, `state.finalized` and `state.changeset.pruned-to`, and keeps `state.layout`
+  (beacon); the memory of the finalized block starts again with the first fork choice after the hand-off;
+- **before an escalation for a chain that cannot be reached, the branch's headers are validated** from the fork to
+  its tip and its weight worked out again (forge): the reorganisation refuses on the claimed difficulty before a
+  block is validated, so a forged branch that forks below the records would otherwise cost every such node a sync
+  from scratch every cool-down, for no work;
+- a body of an ancestor that is missing when ommers are validated is a fault of this node, not an invalid block; the
+  window below a pivot on ETC is the bodies of the pivot and the five below it (the tasks say six below), and the 256
+  hashes are checked by hash, not by the index (forge);
+- the floor of the pivot of an escalated sync on proof of work is the common block, never the old head, since a
+  heavier chain may be shorter (forge);
+- SNAP never starts over an anchor above the genesis, and `clearDoneOnStart` is refused on the guard (beacon).
+
+**The parts**, each mergeable alone:
+1. the layout guard and the order of a start (T194, T203);
+2. the ancestor window, and the ommers' ancestors that never end on a missing body (T198, T204, B-283);
+3. the clear: its keys, the batch, the ranges, the repeat at a start, the genesis clear (T165, T172, T197, T205);
+4. the hand-off sample (T202, T196);
+5. the hand-off commit, with the scans and the audit of the hash store held off (T201, T195, T199, B-243);
+6. the escalation's policy and its triggers on both chains, saying only (T163, T174, T182);
+7. the escalation armed: the handler, the cool-down, the loop guard, the validation of the headers (T164, T166, T173);
+8. the catch-up after a hand-off on proof of stake;
+9. the gates of the importer on the guard (B-297, B-300), and the fork vectors (B-289);
+10. the refusals lifted, and a hand-off run live;
+11. the measurements (T207 to T209).
+
+#### C5a part 1: the layout guard, where the storages are built (2026-11-15)
+
+`StateLayoutGuard` (T203), one rule for both chains and both directions of the guard:
+
+| the guard | the marker | the directory | |
+|---|---|---|---|
+| any | a value this build does not know | any | refused |
+| on | `path-live-1` | any | opened |
+| on | none | holds something | refused: written by an earlier layout |
+| on | none | empty | opened; the genesis commit that follows stamps it |
+| off | `path-live-1` | any | refused, and the flag is named |
+| off | none | any | opened: the hash layout's |
+
+- **It only reads.** T194 and data-model 5.3 say an empty directory is stamped by the guard. The stamp is written in
+  the genesis commit's batch, and that commit refuses a directory that has one: a guard that stamped first would
+  leave a node killed between the two unable to start (vault). "Empty" is no best block and no block at height 0.
+- **It is asked where the storages are built** (`StorageBuilder.storagesInstance`), with the instance's own value of
+  the guard, so whoever takes the storages has passed it: before the state is reconciled, before a repair of the best
+  block or the index, before the genesis is loaded, and in test mode. A directory it refuses is closed, not held.
+- The genesis loader's own refusal asks the same rule; the start no longer needs to look at the marker before its
+  repairs.
+
+**Read after code (vault): no blocker; one warning, taken.** The checkpoint export tool opens the data directory
+with a builder of its own and passed no guard: with the guard off over a directory of the unified layout it would
+have exported from a state store that holds nothing. It asks the same rule now (`StateLayoutGuard.checkOrClose`,
+which both openers use). Confirmed by vault: nothing writes a row between the open and the check (the storages and
+the path state storage are built by constructors that only read the anchor); the read of height 0 is the writer's
+key; every other consumer is handed its storages and opens nothing. Also taken: the refusal is what is thrown
+whatever the close of the directory does; a new directory opened twice with the guard on is pinned.
+**Recorded**: opening a directory creates the column families it lacks, a record in RocksDB's manifest and no row;
+the hash layout's genesis is not one batch, so a node killed between its state rows and its block leaves a directory
+that reads as empty with rows of the hash store in it, which the unified layout never reads.
+
+**The mutation run**: 7 mutants, 7 caught (before the review's changes, which a case each pins). Pinned on real
+RocksDB: a directory written with the guard off is refused as the storages are built with it on, can be opened again
+at once, and holds no row the refusal wrote.
+
 ### Destructive change (C8a and C8b): the vault protocol blocks
 
 ```

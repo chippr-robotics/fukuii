@@ -148,6 +148,17 @@ trait PruningConfigBuilder extends PruningModeComponent:
 trait StorageBuilder:
   self: InstanceConfigProvider =>
   lazy val storagesInstance: DataSourceComponent & StoragesComponent & PruningModeComponent =
+    val built = buildStorages()
+    // The layout guard (spec 018 data-model 5.3), here so that whoever takes the storages has passed it: before the
+    // state is reconciled, before a repair, before the genesis is loaded, and nothing was written to get here.
+    com.chipprbots.ethereum.db.storage.StateLayoutGuard.checkOrClose(
+      instanceConfig.statePathLive,
+      built.storages.appStateStorage,
+      built.storages.blockNumberMappingStorage
+    )(built.dataSource.close())
+    built
+
+  private def buildStorages(): DataSourceComponent & StoragesComponent & PruningModeComponent =
     instanceConfig.Db.dataSource match
       case "rocksdb" =>
         new RocksDbDataSourceComponent

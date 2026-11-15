@@ -120,11 +120,20 @@ object CheckpointCli extends Logger:
     override def instanceConfig: InstanceConfig = Config
     lazy val storagesInstance: RocksDbDataSourceComponent & InstanceConfigProvider & (PruningConfigBuilder &
       DefaultStorages) =
-      new RocksDbDataSourceComponent
+      val built = new RocksDbDataSourceComponent
         with PruningConfigBuilder
         with Storages.DefaultStorages
         with InstanceConfigProvider:
         override def instanceConfig: InstanceConfig = Config
+      // The layout guard, as a node asks it (spec 018 data-model 5.3): an export read from the state store the
+      // directory does not hold would be an empty archive, or a wrong one. The guard's value is the one these
+      // storages are built with.
+      com.chipprbots.ethereum.db.storage.StateLayoutGuard.checkOrClose(
+        com.chipprbots.ethereum.utils.StateLayoutConfig.pathLive,
+        built.storages.appStateStorage,
+        built.storages.blockNumberMappingStorage
+      )(built.dataSource.close())
+      built
 
   final private case class ExportArgs(
       block: Option[BigInt],
