@@ -56,7 +56,7 @@ object Actions:
     "loglevel <level> [logger] | loglevel reset",
     "a logger's level, until the node restarts",
     Adjust,
-    "loglevel reset returns every changed logger to its configured level"
+    "loglevel reset returns every changed logger to the level it had"
   )
   val MaxPeers: ActionSpec = ActionSpec(
     "maxpeers",

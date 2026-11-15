@@ -361,8 +361,10 @@ class CommandsSpec extends AnyFlatSpec with Matchers:
     Commands.parse("COMPACT") shouldBe answer
   }
 
-  "A peer action with nothing after it" should "be the peer's details, as `peer <id>` is" taggedAs (UnitTest) in {
-    // As coded: the verb is then read as the start of a peer's id. `add` is three hex digits.
+  "A peer action with nothing after it" should "say how it is used, and not open a peer whose id starts with the verb" taggedAs (
+    UnitTest
+  ) in {
+    // `add` is three hex digits: read as the start of an id it would open a peer.
     for verb <- Seq("trust", "untrust", "add", "drop", "block", "unblock") do
-      Commands.parse(s"peer $verb") shouldBe Command.OpenPeer(verb)
+      Commands.parse(s"peer $verb") shouldBe Command.Usage(s"usage: ${Actions.named(s"peer $verb").get.usage}")
   }

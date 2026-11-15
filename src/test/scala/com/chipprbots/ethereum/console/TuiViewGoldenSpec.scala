@@ -34,6 +34,9 @@ class TuiViewGoldenSpec extends AnyFlatSpec with Matchers with BeforeAndAfterAll
     )
   private def typed(text: String): Seq[Key] = text.map(Key.Char(_))
 
+  /** The synced ETC fixture, then `change`. */
+  private def synced(change: TuiState => TuiState): GlyphSet => TuiState = g => change(TuiFixtures.syncedEtc(g))
+
   /** (file prefix, state name, fixture) */
   private val goldens: Seq[(String, String, GlyphSet => TuiState)] = Seq(
     ("sync", "snap-storage", in(TuiView.Chain)(g => TuiFixtures.snapStorageMordor(g))),
@@ -61,22 +64,22 @@ class TuiViewGoldenSpec extends AnyFlatSpec with Matchers with BeforeAndAfterAll
     // a refused preview, a preview still being read, and an Observe action's screen.
     ("ops", "busy", in(TuiView.Ops)(g => TuiFixtures.opsBusy(TuiFixtures.syncedEtc(g)))),
     ("ops", "sepolia", in(TuiView.Ops)(g => TuiFixtures.opsNoMiner(TuiFixtures.sepoliaNearHead(g)))),
-    ("dialog", "adjust", g => TuiFixtures.asked(TuiFixtures.syncedEtc(g), "loglevel DEBUG", Some(TuiFixtures.LogLevelPreview))),
-    ("dialog", "disrupt", g => TuiFixtures.asked(TuiFixtures.syncedEtc(g), "rpc stop http", Some(TuiFixtures.RpcStopPreview))),
-    ("dialog", "halt", g => TuiFixtures.asked(TuiFixtures.syncedEtc(g), "mining stop", Some(TuiFixtures.MiningStopPreview), "st")),
-    ("dialog", "refused", g => TuiFixtures.asked(TuiFixtures.syncedEtc(g), "mining start", Some(TuiFixtures.MiningStartRefusal))),
-    ("dialog", "reading", g => TuiFixtures.asked(TuiFixtures.syncedEtc(g), "peer block 203.0.113.7", None)),
-    ("config", "filtered", g => TuiFixtures.configScreen(TuiFixtures.syncedEtc(g), "rpc"))
+    ("dialog", "adjust", synced(TuiFixtures.asked(_, "loglevel DEBUG", Some(TuiFixtures.LogLevelPreview)))),
+    ("dialog", "disrupt", synced(TuiFixtures.asked(_, "rpc stop http", Some(TuiFixtures.RpcStopPreview)))),
+    ("dialog", "halt", synced(TuiFixtures.asked(_, "mining stop", Some(TuiFixtures.MiningStopPreview), "st"))),
+    ("dialog", "refused", synced(TuiFixtures.asked(_, "mining start", Some(TuiFixtures.MiningStartRefusal)))),
+    ("dialog", "reading", synced(TuiFixtures.asked(_, "peer block 203.0.113.7", None))),
+    ("config", "filtered", synced(TuiFixtures.configScreen(_, "rpc")))
   ) ++ TuiFixtures.alerts.map((name, fixture) => ("overview", s"alert-$name", fixture))
 
   private def fileName(prefix: String, width: Int, height: Int, state: String, set: GlyphSet): String =
     s"$prefix-${Tier.of(width, height).toString.toLowerCase}-$state-${set.toString.toLowerCase}.txt"
 
-  "The view goldens" should "cover nineteen screens and four alert fixtures, three tiers, two glyph sets: 138 files" taggedAs (
+  "The view goldens" should "cover twenty-seven screens and four alert fixtures, three tiers, two glyph sets: 186 files" taggedAs (
     UnitTest
   ) in {
     val names = for (p, s, _) <- goldens; (w, h) <- sizes; set <- GlyphSet.values.toSeq yield fileName(p, w, h, s, set)
-    names.distinct should have size 138
+    names.distinct should have size 186
   }
 
   for (prefix, stateName, fixture) <- goldens; (width, height) <- sizes; set <- GlyphSet.values do

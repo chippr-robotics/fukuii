@@ -383,7 +383,7 @@ class PeerActionsSpec extends AnyFlatSpec with Matchers with OptionValues:
     preview(new Fake(blocked = Set("203.0.113.11")), unblock("203.0.113.11")) shouldBe Preview(
       Vector(
         "Removes the block on 203.0.113.11, and any automatic blacklisting of it.",
-        "It can connect and be dialled again."
+        "It can connect and be dialled again; the peers the node keeps at it are dialled now."
       )
     )
   }

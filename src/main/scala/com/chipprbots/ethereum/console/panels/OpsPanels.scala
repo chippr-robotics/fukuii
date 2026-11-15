@@ -106,14 +106,19 @@ private[console] object OpsPanels:
         case _: ActionOutcome.Failed  => c.t.error
         case _: ActionOutcome.Refused => c.t.warn.bold()
         case _                        => c.t.value
-      fit(text(TuiText.external(s" ${Clock.format(r.at)}Z  ${r.request.text}  ${said(r.outcome)}", c.g), look), w, c.g)
+      // The indent is the dashboard's own: text from outside is trimmed.
+      fit(
+        text("   " + TuiText.external(s"${Clock.format(r.at)}Z  ${r.request.text}  ${said(r.outcome)}", c.g), look),
+        w,
+        c.g
+      )
     }
     val room = (n - 1).max(0)
     if rows.size <= room then title +: rows
     else if room == 0 then Seq(title)
     else
       (title +: rows.take(room - 1)) :+ fit(
-        text(s" … ${rows.size - (room - 1)} older attempts not shown at this height", c.t.muted),
+        text(s"   … ${rows.size - (room - 1)} older attempts not shown at this height", c.t.muted),
         w,
         c.g
       )

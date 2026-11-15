@@ -1,0 +1,40 @@
+ ◆ FUKUII  etc (61) · PoW · head 21,884,102 · 41/50 peers · up 12d 7h                                          Overview 
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+ ✓ no alerts                                                                                                            
+                  │ Peers   41/50 ◆◆◆◆◆◆◆◆◆◆  Block  21,884,102 (at head)                    Txpool  142                
+                  │ RPC     :8545 on                                     Disk   388G free    JVM     3.4G / 8.0G heap   
+                  │─────────────────────────────────────────────────────────────────────────────────────────────────────
+                  │ Sync    ✓ at head                                                                                   
+       ETC        │   Blocks   🪱[COMPLETE ✓]🧠                                    21,884,102                           
+                  │─────────────────────────────────────────────────────────────────────────────────────────────────────
+                  │ Forks (block)                                                                                       
+                  │   Phoenix ✓ ─ ECIP-1099 ✓ ─ Magneto ✓ ─ Mystique ✓ ─ Spiral ✓ ════════▶ Olympia not scheduled       
+ etc              │   block 21,884,102 · Spiral since 19,250,000 · Olympia not scheduled on this network                
+ PoW · id 61      │─────────────────────────────────────────────────────────────────────────────────────────────────────
+ main network     │ Node    /var/lib/fukuii/etc · SNAP sync · archive pruning · 50 peers max · mining on                
+                  │ Health  P2P ████░ · Chain █████ · Disk █░░░░                                                        
+ [1] Overview     │─────────────────────────────────────────────────────────────────────────────────────────────────────
+ [2] Chain        │ Recent                                                                                              
+ [3] Peers        │ 11:59:00 WARN  Peer 0x9c0d…77 timed out on GetBlockHeaders, retrying                                
+ [4] Mempool      │               ──────────────────────────────────────────────────────────────────────                
+ [5] RPC          │               Disrupt: peer block address=203.0.113.7                                               
+ [6] Storage      │               Reading what this would change…                                                       
+ [7] System       │                                                                                                     
+ [8] Logs         │               Esc  cancel                                                                           
+ [9] Ops          │               ──────────────────────────────────────────────────────────────────────                
+                  │ 11:59:47 INFO  Imported block 21,884,102 0x6d21…1a0e with 14 txs in 22ms                            
+ graphics text    │ 11:59:52 INFO  Peers: 41 handshaked · 14 in · 27 out                                                
+                  │ 12:00:00 INFO  RegularSync: at head, block 21884102                                    at head      
+                  │                                                                                                     
+                  │                                                                                                     
+                  │                                                                                                     
+                  │                                                                                                     
+                  │                                                                                                     
+                  │                                                                                                     
+                  │                                                                                                     
+                  │                                                                                                     
+                  │                                                                                                     
+                  │                                                                                                     
+                  │                                                                                                     
+                  │                                                                                                     
+ a question is open: answer it, or Esc                                                                                  

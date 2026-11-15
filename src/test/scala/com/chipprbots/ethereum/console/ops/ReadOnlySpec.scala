@@ -163,7 +163,6 @@ class ReadOnlySpec extends AnyFlatSpec with Matchers with OptionValues:
     "peer block 203.0.113.9" -> request(Actions.PeerBlock, "address" -> "203.0.113.9"),
     "peer unblock 203.0.113.9" -> request(Actions.PeerUnblock, "address" -> "203.0.113.9"),
     "mining start" -> request(Actions.MiningStart),
-    "mining stop" -> request(Actions.MiningStop),
     "coinbase 0x1000000000000000000000000000000000000001" ->
       request(Actions.Coinbase, "address" -> "0x1000000000000000000000000000000000000001"),
     "rpc stop http" -> request(Actions.RpcStop, "transport" -> "http"),
@@ -171,6 +170,7 @@ class ReadOnlySpec extends AnyFlatSpec with Matchers with OptionValues:
     "dbcheck" -> request(Actions.DbCheck),
     "detect-ip" -> request(Actions.DetectIp),
     "bundle" -> request(Actions.Bundle),
+    "mining stop" -> request(Actions.MiningStop),
     "quit" -> request(Actions.Quit)
   )
 

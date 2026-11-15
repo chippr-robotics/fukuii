@@ -1,0 +1,40 @@
+ # FUKUII  etc (61) . PoW . head 21,884,102 . 41/50 peers . up 12d 7h                                          Overview 
+------------------------------------------------------------------------------------------------------------------------
+ + no alerts                                                                                                            
+                  | Peers   41/50 ##########  Block  21,884,102 (at head)                    Txpool  142                
+                  | RPC     :8545 on                                     Disk   388G free    JVM     3.4G / 8.0G heap   
+                  |-----------------------------------------------------------------------------------------------------
+                  | Sync    + at head                                                                                   
+       ETC        |   Blocks   ~o[COMPLETE +]@@                                    21,884,102                           
+                  |-----------------------------------------------------------------------------------------------------
+                  | Forks (block)                                                                                       
+                  |   Phoenix + - ECIP-1099 + - Magneto + - Mystique + - Spiral + ========> Olympia not scheduled       
+ etc              |   block 21,884,102 . Spiral since 19,250,000 . Olympia not scheduled on this network                
+ PoW . id 61      |-----------------------------------------------------------------------------------------------------
+ main network     | Node    /var/lib/fukuii/etc . SNAP sync . archive pruning . 50 peers max . mining on                
+                  | Health  P2P ####- . Chain ##### . Disk #----                                                        
+ [1] Overview     |               ----------------------------------------------------------------------                
+ [2] Chain        |               Disrupt: rpc stop transport=http                                                      
+ [3] Peers        |               The HTTP server on 127.0.0.1:8546 stops listening.                                    
+ [4] Mempool      |               It serves eth, net, web3. Nothing sensitive is served to other hosts.                 
+ [5] RPC          |               Its open connections are not counted by this server: in-flight                        
+ [6] Storage      |               requests finish, then every connection is closed within 3 s.                          
+ [7] System       |               Readiness and health probes on that port fail until rpc start http.                   
+ [8] Logs         |               Undo: rpc start.                                                                      
+ [9] Ops          |                                                                                                     
+                  |               y  run it      n or Esc  cancel                                                       
+ graphics text    |               ----------------------------------------------------------------------                
+                  | 12:00:00 INFO  RegularSync: at head, block 21884102                                    at head      
+                  |                                                                                                     
+                  |                                                                                                     
+                  |                                                                                                     
+                  |                                                                                                     
+                  |                                                                                                     
+                  |                                                                                                     
+                  |                                                                                                     
+                  |                                                                                                     
+                  |                                                                                                     
+                  |                                                                                                     
+                  |                                                                                                     
+                  |                                                                                                     
+ a question is open: answer it, or Esc                                                                                  

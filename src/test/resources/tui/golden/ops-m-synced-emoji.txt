@@ -25,13 +25,13 @@
                   │   Disrupt  peer block    an address is refused until restart                                        
  graphics text    │   Disrupt  peer unblock  an address stops being refused                                             
                   │   Disrupt  mining start  the node's own miner starts (ETC)                                          
-                  │   Halt     mining stop   the node's own miner stops until restart (ETC)                             
                   │   Disrupt  coinbase      the address mined blocks pay from now on (ETC)                             
                   │   Disrupt  rpc stop      a JSON-RPC server stops; its connections drop                              
                   │   Disrupt  rpc start     a server that was stopped here listens again                               
                   │   Disrupt  dbcheck       the start's database check, run now; it reports                            
                   │   Disrupt  detect-ip     asks outside services for this node's address                              
                   │   Disrupt  bundle        writes a support bundle under the datadir                                  
+                  │   Halt     mining stop   the node's own miner stops until restart (ETC)                             
                   │   Halt     quit          the node process ends                                                      
                   │─────────────────────────────────────────────────────────────────────────────────────────────────────
                   │ Last    no action has been attempted in this session                                                
