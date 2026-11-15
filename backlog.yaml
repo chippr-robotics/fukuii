@@ -2868,12 +2868,14 @@ items:
   - id: B-250
     title: "Spec 018 C4b follow-up: C4e stores a block it does not adopt by hash only, so I6 (index = the held block's ancestry) stays a defence"
     priority: P2
-    status: open
+    status: done
     area: storage
     size: S
     opened: 2026-11-14
+    closed: 2026-11-15
     refs: []
     links:
+      prs: [1846]
       spec: 018
     depends_on: [B-063]
     notes: plan.md C4b part 4 Recorded (forge). Today side execution is refused before saveBatch on the guard (BlockExecution refuseUnadopted).
