@@ -758,19 +758,17 @@ items:
   - id: B-063
     title: "Spec 018 Track C C4e: the PoW arms (item 6g)"
     priority: P2
-    status: claimed
+    status: done
     area: storage
     size: M
     opened: 2026-11-07
+    closed: 2026-11-15
     refs: [018 C4e]
     links:
+      prs: [1853]
       spec: specs/018-storage-engine-consolidation
     depends_on: [B-062]
-    claim:
-      by: cloud-dc960fdc
-      agent: main
-      since: 2026-11-14T21:29:32Z
-      heartbeat: 2026-11-15T17:28:35Z
+    notes: "2026-11-15 done: C4e complete: #1846, #1849, #1850, #1851, #1852, #1853. Gates carried: B-293, B-295, B-296, B-297, B-300"
   - id: B-064
     title: "Spec 018 Track C C5a: hand-off without a copy, the layout guard and the ancestor window (item 10)"
     priority: P2
