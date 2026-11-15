@@ -1,0 +1,24 @@
+ # FUKUII  sepolia (11155111) . PoS . up 3d 4h                          Storage 
+--------------------------------------------------------------------------------
+ + no alerts                                                                    
+ Peers   23/50 ##########         Block  7,412,009 -> 7,412,011 (-2)            
+ Sync    regular 99% . rate 0.08 blk/s . ETA 24s                                
+--------------------------------------------------------------------------------
+ Size    412G on disk . 390G live (estimate) . +2.1G/h over 10m 0s . read now   
+ Writes  accepted, held to 16M/s while flush and compaction catch up            
+ Compact 3 stores pending . 2 running . 41.0G to rewrite                        
+ Disk    1.2T free of 2.0T . the database is 20% of the disk . archive pruning  
+ Cache   block cache 1.4G of 2.0G (memtables 312M of it) . 97.1% hits           
+--------------------------------------------------------------------------------
+ Stores  13 of 18 hold data . 5 empty not listed                                
+ store                             on disk   keys (estimate)  of the database   
+ state trie by path                   141G     1,204,118,220            34.2%   
+ storage tries by path               96.0G       912,440,018            23.3%   
+ flat storage slots                  58.0G     1,480,220,114            14.1%   
+ bodies                              44.0G        21,884,103            10.7%   
+ … 9 smaller stores not shown at this height                                    
+--------------------------------------------------------------------------------
+ Audit   pass 2 . 412,880,114 nodes . 3 holes . 3 repaired . 0 unresolved       
+ State layout          unified path layout (path-live-1)                        
+ … 7 more marks not shown at this height                                        
+ 1-9 view  : prompt  / filter  ? help  p pause  r redraw  d detach  q quit      

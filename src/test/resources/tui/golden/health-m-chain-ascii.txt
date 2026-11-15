@@ -1,0 +1,40 @@
+ # FUKUII  sepolia (11155111) . PoS . head 7,412,009 . 23/50 peers . up 3d 4h                                    Health 
+------------------------------------------------------------------------------------------------------------------------
+ + no alerts                                                                                                            
+                  | Peers   23/50 ##########  Block  7,412,009 -> 7,412,011 (-2)             Txpool  1,204 (3 blob)     
+                  | Sync    regular 99% . rate 0.08 blk/s . ETA 24s                                                     
+                  |-----------------------------------------------------------------------------------------------------
+                  | Health  Chain    ########## 100%  set by sync controller                                            
+       ETH        |-----------------------------------------------------------------------------------------------------
+                  | sync controller  answering                                                                          
+                  |    ok for 12m 0s . error when it stops answering . 100% room                                        
+                  | head advancing  head 7,412,009 unchanged for an unknown time, 2 remain                              
+ sepolia          |    not known for 12m 0s . warn after 2m 0s unchanged with blocks remaining . no measure of room     
+ PoS              | A bar's colour is the alert row's: these are the rules the alert row reads.                         
+ id 11155111      |                                                                                                     
+ test network     |                                                                                                     
+                  |                                                                                                     
+ [1] Overview     |                                                                                                     
+ [2] Chain        |                                                                                                     
+ [3] Peers        |                                                                                                     
+ [4] Mempool      |                                                                                                     
+ [5] RPC          |                                                                                                     
+ [6] Storage      |                                                                                                     
+ [7] System       |                                                                                                     
+ [8] Logs         |                                                                                                     
+ [9] Ops          |                                                                                                     
+                  |                                                                                                     
+ graphics text    |                                                                                                     
+                  |                                                                                                     
+                  |                                                                                                     
+                  |                                                                                                     
+                  |                                                                                                     
+                  |                                                                                                     
+                  |                                                                                                     
+                  |                                                                                                     
+                  |                                                                                                     
+                  |                                                                                                     
+                  |                                                                                                     
+                  |                                                                                                     
+                  |                                                                                                     
+ 1-9 view  Enter open  Esc back  : prompt  / filter  ? help  p pause  r redraw  d detach  q quit                        

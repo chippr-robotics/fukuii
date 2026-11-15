@@ -23,7 +23,12 @@ private[console] object OverviewPanels:
     val middle =
       Seq(sync(c, c.tier.trackSlots)) ++ chainLayer(c) ++ forks(c) ++ Option.when(c.tier == Tier.L)(peers(c)).flatten
     // The mascot stands in the corner of the Recent strip: log lines are the rows that lose least by being narrower.
-    Seq(strips) ++ middle ++ node :+ Mascot.beside(c, LogsPanel.recent(c, "Recent", _ => true))
+    // The health strip (spec 029 FR-045), once the node has been read: under the Node row, or under its own rule
+    // where that row is off. It is below the sync's rows, which the top of the screen is kept for (SC-002).
+    val health = Option.when(c.state.snapshot.isDefined)(
+      Panel(0, 1, 5, (w, _) => Seq(HealthPanel.strip(c, w)), separated = node.isEmpty)
+    )
+    Seq(strips) ++ middle ++ node ++ health :+ Mascot.beside(c, LogsPanel.recent(c, "Recent", _ => true))
 
   /** The sync panel: SNAP's phase and five worm rows (and the chain download from tier M), or the Blocks worm. */
   def sync(c: Ctx, slots: Int, separated: Boolean = true): Panel =

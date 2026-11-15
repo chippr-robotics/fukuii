@@ -4,12 +4,12 @@
  Peers   41/50 ##########         Block  21,884,102 (at head)                   
  Sync    + at head                                                              
 --------------------------------------------------------------------------------
- Storage                                                                        
+ Size    the database has not been read yet                                     
  Disk    388G free                                                              
  Datadir /var/lib/fukuii/etc                                                    
  Pruning archive                                                                
---------------------------------------------------------------------------------
- Not built yet: database size, compaction, caches, the integrity audit          
+                                                                                
+                                                                                
                                                                                 
                                                                                 
                                                                                 

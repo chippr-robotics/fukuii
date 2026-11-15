@@ -33,7 +33,7 @@ private[console] object ClPanel:
     }
 
   private def rowCount(c: Ctx, cl: ClSample): Int =
-    if c.tier == Tier.S || cl.link(c.state.now) == ClLink.Waiting then 1 else 3
+    if c.tier == Tier.S || cl.link(c.state.now, c.state.thresholds.clSilentAfter) == ClLink.Waiting then 1 else 3
 
   /** How the first row names its calls: in full with their ages, in full without "ago"; by their short names (tier S);
     * or by their short names with no status, the last resort of a row that must also say its failed authentications.
@@ -43,10 +43,10 @@ private[console] object ClPanel:
 
   /** The panel's rows, each fitted to `w`. */
   def rows(c: Ctx, cl: ClSample, w: Int): Seq[AttributedString] =
-    val link = cl.link(c.state.now)
+    val link = cl.link(c.state.now, c.state.thresholds.clSilentAfter)
     val (word, style) = link match
       case ClLink.Waiting =>
-        val patient = c.state.uptimeSeconds <= ClSample.ClFirstCallGrace.getSeconds
+        val patient = c.state.uptimeSeconds <= c.state.thresholds.clFirstCallGrace.getSeconds
         ("waiting for its first forkchoiceUpdated", if patient then c.t.muted else c.t.warn.bold())
       case ClLink.Connected    => ("connected", c.t.healthy.bold())
       case ClLink.Disconnected => ("DISCONNECTED", c.t.error)

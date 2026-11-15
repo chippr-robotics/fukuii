@@ -1,0 +1,40 @@
+ # FUKUII  etc (61) . PoW . head 21,884,102 . 41/50 peers . up 12d 7h                                            System 
+------------------------------------------------------------------------------------------------------------------------
+ + no alerts                                                                                                            
+                  | Peers   41/50 ##########  Block  21,884,102 (at head)                    Txpool  142                
+                  | Sync    + at head                                                                                   
+                  |-----------------------------------------------------------------------------------------------------
+                  | Health  7 bars, no alert                                         room left before the nearest alert 
+       ETC        |   P2P      ########--  76%  peer count: 41 of 50 . warn below 25% of the limit                      
+                  |   Chain    ########## 100%  sync controller: answering . error when it stops answering              
+                  |   Mining   ########## 100%  hashrate: 48.2 MH/s . warn after 10m 0s at none with the DAG loaded     
+                  |   RPC      ##########  98%  failed calls: 3 of 1,204 in the last minute                             
+ etc              |   DB       ########## 100%  writes: accepted . warn when the database refuses writes                
+ PoW . id 61      |   Disk     ##--------  18%  free space: 388G free of 2.0T . warn below 20G, error below 5G          
+ main network     |   Memory   ######----  61%  heap: never under 35% of 8.0G in the last minute                        
+                  |-----------------------------------------------------------------------------------------------------
+ [1] Overview     | Process up 12d 7h . charts span 10m 0s . a point every 5s                                           
+ [2] Chain        | CPU     ............---..........  now 8% . highest 45% in 10m 0s . of 8 processors                 
+ [3] Peers        | Heap    -------------------------  now 3.4G of 8.0G . highest 3.7G in 10m 0s                        
+ [4] Mempool      | Net in  *#*##########*###*#*#####  now 1.9M/s . highest 2.0M/s in 10m 0s . 1.4T since the start     
+ [5] RPC          | Net out ###*##**##*###**##*##**##  now 575K/s . highest 619K/s in 10m 0s . 344G since the start     
+ [6] Storage      | GC      _________________________  now 1% of the time . highest 1% in 10m 0s . 2,114 pauses         
+ [7] System       | Threads #########################  now 148 . peak 171 since the start                               
+ [8] Logs         | Machine ::::::::::::-==::::::::::  now 24% . highest 52% in 10m 0s . load 1.84                      
+ [9] Ops          | NonHeap #########################  now 212M . highest 216M in 10m 0s                                
+                  | Msg in  *########################  now 212/s . highest 271/s in 10m 0s                              
+ graphics text    | Msg out *############*#*#########  now 113/s . highest 118/s in 10m 0s . 91,204,117 since the start 
+                  |                                                                                                     
+                  |                                                                                                     
+                  |                                                                                                     
+                  |                                                                                                     
+                  |                                                                                                     
+                  |                                                                                                     
+                  |                                                                                                     
+                  |                                                                                                     
+                  |                                                                                                     
+                  |                                                                                                     
+                  |                                                                                                     
+                  |                                                                                                     
+                  |                                                                                                     
+ 1-9 view  Enter open  Esc back  : prompt  / filter  ? help  p pause  r redraw  d detach  q quit                        

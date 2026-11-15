@@ -10,9 +10,10 @@ private[console] object Views:
     if c.state.helpOpen then HelpPanel.panels(c)
     else
       c.state.screen match
-        case Some(Screen.PeerDetail(id)) => PeerDetailPanel.panels(c, id)
-        case Some(Screen.Art(page))      => ArtPanel.panels(c, page)
-        case Some(Screen.Explore(q, at)) => ExplorerPanels.panels(c, q, at)
+        case Some(Screen.PeerDetail(id))  => PeerDetailPanel.panels(c, id)
+        case Some(Screen.HealthDetail(s)) => HealthPanel.detail(c, s)
+        case Some(Screen.Art(page))       => ArtPanel.panels(c, page)
+        case Some(Screen.Explore(q, at))  => ExplorerPanels.panels(c, q, at)
         case None =>
           c.state.view match
             case TuiView.Overview => OverviewPanels.panels(c)
@@ -20,7 +21,7 @@ private[console] object Views:
             case TuiView.Peers    => PeersPanel.panels(c)
             case TuiView.Mempool  => MempoolPanels.panels(c)
             case TuiView.Rpc      => RpcPanels.panels(c)
-            case TuiView.Storage  => StubPanels.storage(c)
-            case TuiView.System   => StubPanels.system(c)
+            case TuiView.Storage  => StoragePanels.panels(c)
+            case TuiView.System   => SystemPanels.panels(c)
             case TuiView.Logs     => LogsPanel.panels(c)
             case TuiView.Ops      => StubPanels.ops(c)

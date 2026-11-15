@@ -434,6 +434,26 @@ class TuiSpec extends AnyFlatSpec with Matchers:
 
   // prism, slice 2 review: a probe that hangs or dies left its last snapshot on screen, still Fresh, under frames that
   // kept moving. Read at the TUI's clock, a snapshot that no newer poll has replaced turns its sources Unresponsive.
+
+  "The uptime" should "count from the process's start, not from the dashboard's making" taggedAs (UnitTest) in {
+    val made = java.time.Instant.parse("2026-11-07T12:00:00Z")
+    val fixed = java.time.Clock.fixed(made, java.time.ZoneOffset.UTC)
+    def tui(started: () => Option[java.time.Instant]): Tui =
+      new Tui(
+        TuiTestTerminal.config,
+        () => throw new IllegalStateException("not a tty"),
+        clock = fixed,
+        processStartedAt = started
+      )
+    // The process started 90 minutes before the dashboard was made.
+    tui(() => Some(made.minusSeconds(5_400))).getState.uptimeSeconds shouldBe 5_400L
+    // A start the JVM cannot give, one after now, or a reading that throws: the dashboard's own making.
+    tui(() => None).getState.uptimeSeconds shouldBe 0L
+    tui(() => Some(made.plusSeconds(60))).getState.uptimeSeconds shouldBe 0L
+    tui(() => throw new IllegalStateException("no bean")).getState.uptimeSeconds shouldBe 0L
+    // This JVM gives its start, and it is not in the future.
+    Tui.jvmStart().get.isAfter(java.time.Instant.now()) shouldBe false
+  }
   it should "show the sources Unresponsive when no newer status poll arrives" taggedAs (UnitTest) in {
     val clock = new TuiFixtures.TestClock(TuiFixtures.Now)
     val tt = new TuiTestTerminal()

@@ -8,6 +8,7 @@ import java.nio.charset.StandardCharsets
 import java.nio.file.Path
 import java.time.Clock
 import java.time.Duration
+import java.time.Instant
 import java.util.concurrent.atomic.AtomicReference
 
 import scala.util.control.NonFatal
@@ -71,7 +72,8 @@ class Tui(
     processOutput: Terminal => Option[OutputStream] = Tui.processOutputOf,
     clock: Clock = Clock.systemUTC(),
     logRing: Option[TuiLogRingAppender] = None,
-    queryTimeoutMs: Long = TerminalQuery.TimeoutMillis
+    queryTimeoutMs: Long = TerminalQuery.TimeoutMillis,
+    processStartedAt: () => Option[Instant] = Tui.jvmStart
 ) extends Logger:
 
   private var terminal: Option[Terminal] = None
@@ -105,13 +107,17 @@ class Tui(
 
   private val state: AtomicReference[TuiState] =
     val started = clock.instant()
+    // The header's uptime is the node's, which is the process's: a dashboard made late in the start, or after it,
+    // does not count from its own making (spec 029 T091). A start the JVM puts after this clock's now (a test's
+    // clock, a clock that stepped back) is not a start to count from.
+    val begun = scala.util.Try(processStartedAt()).toOption.flatten.filterNot(_.isAfter(started)).getOrElse(started)
     new AtomicReference(
       TuiState.initial.copy(
         glyphs = config.glyphs,
         motion = config.motion,
-        reorgAlertDepth = config.reorgAlertDepth,
+        thresholds = config.alerts,
         splashUntilTick = Option.when(config.splashTicks > 0)(config.splashTicks),
-        startTime = started,
+        startTime = begun,
         now = started
       )
     )
@@ -659,6 +665,10 @@ object Tui:
     * user's scrollback.
     */
   private[console] val RestoreScreen = ResetColors + KeyDecoder.DisablePaste + ShowCursor + ExitAltScreen
+
+  /** When this JVM started, by the JVM. */
+  private[console] val jvmStart: () => Option[Instant] = () =>
+    Some(Instant.ofEpochMilli(java.lang.management.ManagementFactory.getRuntimeMXBean.getStartTime))
 
   /** Size used when the terminal cannot report one (some PTYs report 0x0). */
   private[console] val FallbackSize: (Int, Int) = (80, 24)

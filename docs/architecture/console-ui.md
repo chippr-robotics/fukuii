@@ -94,8 +94,8 @@ whose slice has not landed shows what the dashboard already reads for it and one
 | `3` | Peers | From 100×32 the **peer radar**: this node at the centre and a blip a peer, nearer the centre the faster it answers (rings under 100, 500 and 2,000 ms, then slower, then not measured yet), at an angle fixed by its node id, coloured by its score, shaped by its direction, bold for a second after it answers. No line joins two peers and there is no map: the node knows neither. Then each handshaked peer, highest score first: id, direction, client, best block, age; from M the address and the score, at L the score's trend. `Up`/`Down` select a peer, `Enter` opens its details (with its latency, answers and timeouts, protocol violations), `Esc` returns, `/` filters by id, address or client |
 | `4` | Mempool | The **pool** (pending, how full it is, blob transactions, the oldest, those sent from this node) and its **flow** (transactions arriving, mined and dropped a second over the last minute, and replacements); the **Mempool Radar**: the pending transactions in four tiers, urgent to low, by their fee against the fee this node would itself suggest, a bar and a count a tier and the fee each tier starts at; the **senders** with the most pending; what the pool **refused** by reason, **lost** (evicted for room, expired unmined, replaced) and **fetched** (announced, asked for, timed out) since the node started; and the **pending transactions**, best-paying first. `Up`/`Down` select one, `Enter` opens it in the explorer. On a chain with a base fee a fee here is a tip above it; on one without, a gas price. The view says this client keeps no queue: a transaction whose nonce leaves a gap is refused, not held. See [Mempool](#mempool) |
 | `5` | RPC | Each **transport** (HTTP, WebSocket, IPC, and the Engine API where the chain has one): whether it listens, where, the namespaces it serves, how a caller is authenticated, and the calls and failures that came in on it; a warning above them when a sensitive namespace is served to other hosts; the HTTP rate limit and how many requests it refused. On a node with a consensus client, the **Engine Synchronization Monitor**: the link and who is at its other end, the head, safe and finalized blocks, the last call of each kind, the payloads, failed authentications by reason, and the last calls as a log. On a node that mines, the **mining monitor** in the same place, with ten minutes of hashrate and work requests. Then every **method** called: its calls, its failures, its 50th, 95th and 99th percentile latency and its last call. See [RPC](#rpc) |
-| `6` | Storage | Disk free, the data directory, the pruning mode (the rest with slice 6) |
-| `7` | System | Heap, GC share, discovery counts (the rest with slice 6) |
+| `6` | Storage | The **database**: its size on disk, the estimate of what is live in it, how fast it grows, and when it was last read; whether **writes** are taken, held or refused; **compaction** pending and running and the bytes it has to rewrite; the **disk**; the block **cache** and, where the database counts them, its hit rate; the **stores** by size with their estimated key counts; the node's **integrity** marks and the background audit; and what this client does not keep |
+| `7` | System | The **health bars**, one a subsystem, selected with `Up`/`Down` and opened with `Enter`; then a **meter** a row, each a chart of the last ten minutes with the figure now and the highest: the process's uptime, CPU, heap, P2P bytes in and out, GC, threads, the machine's CPU and load, memory outside the heap, P2P messages in and out |
 | `8` `L` | Logs | The newest log lines (1,000 by default, INFO and above), with their time and level; `Up`/`Down` scroll a line, `-` and `+` a page, `/` filters by text |
 | `9` | Ops | Whether the TUI is read-only; the actions arrive with slice 7 |
 | `?` `H` `F1` | Help | Every key, and the legend of the glyph set on screen |
@@ -103,7 +103,12 @@ whose slice has not landed shows what the dashboard already reads for it and one
 ### Alert row
 
 The row under the header reads `✓ no alerts`, or a badge with the count (`✗ 2 errors`, `⚠ 1 warn`) and up to three
-conditions, errors first. It is never animated and every view has it.
+conditions, errors first: as many of the three as fit whole, so a condition is never cut in the middle of a figure,
+and the badge has counted the ones not listed. It is never animated and every view has it.
+
+Where each alert begins is a key of `fukuii.tui.alerts` (`conf/base/tui.conf` lists them with their defaults, the
+values below). A value that is no threshold, a key set to `null`, or a key that is none of them stops the node at
+start with an error that names the key: a threshold misspelt is one you believe is set.
 
 | Condition | Severity |
 |-----------|----------|
@@ -118,6 +123,88 @@ conditions, errors first. It is never animated and every view has it.
 | ETH: no `engine_forkchoiceUpdated` yet, 60 s after the node started (with the count of failed JWT checks, if any) | warning |
 | ETH: no `engine_newPayload` for more than 5 minutes while a peer, or the sync's target, is ahead of the node's head | warning |
 | ETC: mining on, the DAG loaded, and a reported hashrate of 0 for more than 10 minutes | warning |
+| The heap never under 90 % of its limit for a minute (`heap-warn-fraction`) | warning |
+| Garbage-collection pauses 20 % or more of the last minute (`gc-share-warn`) | warning |
+| 10 % or more of the last minute's JSON-RPC calls failed, with at least 20 calls in it (`rpc-error-rate-warn`) | warning |
+| The database refuses writes (`write-stall`; set it `false` for no alert) | warning |
+
+The heap and the collector are judged over the last minute of the System view's readings, and not before the
+dashboard has watched a minute: a healthy heap touches its limit between two collections, and one pause is a large
+share of one second. A dashboard set to poll slower than every fifteen seconds has too few readings in a minute and
+does not judge them. The database's alert outlasts a reading that goes stale: a database that refuses writes holds
+its writers, and the reading gives way to writers, so the reading that found it refusing may be the last for as long
+as it refuses; the alert then says how old that reading is. The minute, the ten minutes a reorg stays on the row and
+the 20 calls are fixed.
+
+### Health bars
+
+Each subsystem with an alert rule has a bar: P2P, Chain, the consensus-client link (ETH) or Mining (ETC), RPC, the
+database (`DB`), Disk and Memory. They are a strip under the Node row of the Overview, and a list at the top of the
+System view. The transaction pool and the CPU have no rule, so they have no bar: a bar is the room left before a
+threshold, and they have no threshold to leave room before.
+
+- **What a bar measures.** The room left before the nearest of its subsystem's thresholds: full with none of the
+  way gone, empty at the threshold. For a limit in time (no peers for 30 s) it is the share of the time not yet used;
+  for the disk it is the free space above the warning as a share of the disk above the warning; for the peer count,
+  the count above the warning's share of the limit. The bar's row names the check that sets it and what that check
+  reads: `Disk ██░░░░░░░░ 18%  free space: 388G free of 2.0T · warn below 20G, error below 5G`.
+- **Its colour is the alert row's.** A bar is yellow or red exactly when one of its checks raises that alert, and
+  green or dim otherwise: both are read from the same list of checks, so they cannot disagree. A bar that raises
+  an alert is empty. A dim bar of dots has no measure now (a source not read yet, a minute not yet watched): it is
+  never drawn empty or full.
+- **`Enter` on a bar** (System view) lists every check behind it, two rows each: what it watches and what it reads;
+  then its state and for how long it has been in it, where its alert begins, and the room it leaves. `Esc` returns
+  to the bar. The time in a state is counted from the poll that first saw it, since the dashboard started.
+- Before the node has been read once there are no bars.
+
+### Storage
+
+Every figure is RocksDB's own property or the node's own marker. The read never waits and holds nothing up: it is
+made only when no write holds the database, and otherwise the view keeps the last reading, whose age the `Size` row
+says (`read 1m 35s ago`). Under a long write the figures are of a while ago, and say so.
+
+- **Size.** `on disk` is every SST file the database still holds, without its write-ahead log; compare it with `du`
+  on the datadir's `rocksdb` directory. `live (estimate)` and each store's `keys (estimate)` are RocksDB's
+  estimates, read every half minute; a key estimate is wrong after a range delete. The growth is over the readings
+  kept (ten minutes of them), and is less than nothing after a compaction.
+- **Writes.** `accepted, not held`; `held to X/s` while RocksDB slows writers because flushes and compactions are
+  behind; `REFUSED` while it stops them. Refused is the alert; held is the database catching up, and is not.
+- **Compact.** How many stores want a compaction, how many compactions run, and RocksDB's estimate of the bytes
+  they have to rewrite.
+- **Cache.** The block cache's use and size. The memtables reserve their memory in it, so they are part of its use
+  and are shown as such. The hit rate is of the lookups between the last two readings, and is drawn only where the
+  database counts hits (`db.rocksdb.enable-statistics = true`); with it off the row says so.
+- **Stores.** One row a column family that holds data, the largest first, with its share of the database; the empty
+  ones are counted and not listed, and so are the ones a short terminal has no rows for.
+- **Integrity.** The node's own marks, in words that say what each vouches for and no more: the state layout,
+  whether SNAP (or a checkpoint) is marked done, the heal invariant, a checkpoint import running or interrupted, a
+  code scan or an audit pass owed, whether the reference counts are exact, and the chain-weight invariant. A mark
+  that only a SNAP sync stamps reads `not marked (a SNAP start stamps it; none has run)` on a node that never ran one:
+  that is not a fault. The reference counts' row is the one that costs something when it is not `exact`: without
+  that stamp a prune deletes no trie node, so the state's stores grow without reclaim, and the row says so. Then the
+  background audit, asked what it has walked: it counts nodes and does not know the whole until it ends, so there is
+  no percentage. Reading them writes nothing.
+- This client has no freezer for old blocks and expires no history; the view says so.
+
+### System
+
+The meters are the JVM's own beans and the node's own counts, a reading every five seconds, ten minutes of them. A
+figure the JVM does not give (a CPU load on a platform with no such bean) reads `not given by this JVM` and its
+chart is a gap: it is never drawn as nothing.
+
+- **Charts.** CPU, the machine's CPU, the heap and GC are drawn against their limit (all the processors, the heap's
+  maximum, all of the time), so a quiet node's chart is low. A figure with no limit of its own (bytes a second,
+  threads) is drawn against the highest reading kept, which the caption gives.
+- **CPU** is this process's share of all the machine's processors; **Machine** is every process's, with the
+  one-minute load average. **Process** is the JVM's uptime, which is the node's, not the dashboard's.
+- **GC** counts the collectors that pause the node; a concurrent collector's background work is not a pause.
+- **Net in / Net out, Msg in / Msg out** are what the node's RLPx connections carried, counted in this process:
+  bytes as they were handed to and read from the sockets (after framing, encryption and compression, handshakes
+  included, TCP and IP headers not), and devp2p messages decoded and encoded (each side's Hello included; a message
+  that could not be decoded is not one). A write counted and then refused by the socket stays counted. Discovery's
+  UDP, DNS discovery, the RPC servers and the consensus client's link are not in them. The rate is over the last
+  five seconds.
+- Where the terminal has not a row for each meter, the last row counts the ones not shown.
 
 ### Consensus layer and mining
 
@@ -349,10 +436,10 @@ the same, so a link that delivers no arrow keys loses nothing.
 | `1` … `9` | | Overview, Chain, Peers, Mempool, RPC, Storage, System, Logs, Ops |
 | `]` `[` | | The next and the previous view (wrap) |
 | `Tab` `Shift-Tab` | | The next and the previous panel of the view |
-| `Up` `Down` | `K` `J` | The row above and below (Peers: the selection; Logs: a line) |
+| `Up` `Down` | `K` `J` | The row above and below (Peers, Chain, Mempool: the selection; System: the health bar; Logs: a line) |
 | `Page Up` `Page Down` | `-` `+` | A page up and down (Logs: older and newer lines) |
 | `Home` `End` | `<` `>` | The first and the last row |
-| `Enter` | | Open the selected row (a peer's details) |
+| `Enter` | | Open the selected row (a peer's details, a block, a transaction, a health bar's checks) |
 | `Esc` | `Backspace` | Back; clear the view's filter |
 | `:` | | The prompt: a view's name, `peer` or `peer <id>`, `block <number, hash or latest>`, `tx <hash>`, `receipt <hash>`, `account <address>`, `glyphs emoji` or `glyphs ascii`, `graphics auto`, `pixel`, `block` or `text`, `art`, `detach`, `quit`, `help`. `Tab` completes, `Up`/`Down` walk the history |
 | `/` | | Filter the list on screen as you type (Peers, Logs). `Enter` keeps the filter, `Esc` clears it |

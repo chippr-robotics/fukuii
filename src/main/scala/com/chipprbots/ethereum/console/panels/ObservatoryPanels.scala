@@ -29,10 +29,7 @@ private[console] object ObservatoryPanels:
   def partsRow(c: Ctx, label: String, parts: Seq[String], w: Int): AttributedString =
     val dot = s" ${c.g.dot.text} "
     val room = w - 1 - (1 + FieldLabelCols)
-    val kept = parts.indices.reverse
-      .map(n => parts.take(n + 1))
-      .find(shown => new AttributedString(shown.mkString(dot)).columnLength() <= room)
-      .getOrElse(Nil)
+    val kept = wholeParts(parts, dot, room)
     TuiText.fitToWidth(field(label, text(kept.mkString(dot), c.t.value), c.t), w)
 
   /** Wei as gwei, to the digits that matter: `12.4 gwei`, `0.004 gwei`, and wei itself below a thousandth. */
@@ -139,15 +136,16 @@ private[console] object ObservatoryPanels:
 
   /** The whole of `values`, oldest on the left, in at most `cols` glyphs: where there are more values than glyphs, a
     * glyph is the highest of the values it stands for, so a peak is never lost. Each is drawn against the highest of
-    * all. All zeroes is a flat line at the bottom, not a full one; a value that is not known, or a glyph none of whose
-    * values is, is a gap.
+    * all, or against `full` where the values have a limit of their own (a share of the time, a heap's size), so that a
+    * steady low reading is drawn low and not as a full row. All zeroes is a flat line at the bottom, not a full one; a
+    * value that is not known, or a glyph none of whose values is, is a gap.
     */
-  def spark(values: Seq[Option[Long]], cols: Int, g: TuiGlyphs): String =
+  def spark(values: Seq[Option[Long]], cols: Int, g: TuiGlyphs, full: Option[Long] = None): String =
     val glyphs = levels(g)
     val width = cols.max(0).min(values.size)
     if width == 0 then ""
     else
-      val peak = values.flatten.maxOption.getOrElse(0L)
+      val peak = full.filter(_ > 0).getOrElse(values.flatten.maxOption.getOrElse(0L))
       (0 until width).map { i =>
         // The values from i/width to (i+1)/width of the way through.
         val from = i.toLong * values.size / width
@@ -155,7 +153,8 @@ private[console] object ObservatoryPanels:
         values.slice(from.toInt, until.toInt).flatten.maxOption match
           case None => ' '
           case Some(v) =>
-            if peak <= 0 then glyphs.head else glyphs(((v.max(0L).toDouble / peak) * (glyphs.length - 1)).round.toInt)
+            if peak <= 0 then glyphs.head
+            else glyphs(((v.max(0L).min(peak).toDouble / peak) * (glyphs.length - 1)).round.toInt)
       }.mkString
 
   /** One glyph a block, oldest on the left: how much of its gas limit the block used. */

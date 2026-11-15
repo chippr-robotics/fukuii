@@ -47,8 +47,8 @@ import com.typesafe.config.ConfigException
   *   the terminal is tmux or screen, by the environment ([[TuiEnv]]): it passes no pixels on, so `auto` draws blocks
   * @param utf8Locale
   *   the locale's encoding is UTF-8 ([[TuiEnv]]): block graphics need it
-  * @param reorgAlertDepth
-  *   a reorg at least this deep raises a warning (`fukuii.tui.alerts.reorg-depth`; spec 029 FR-026)
+  * @param alerts
+  *   where each alert begins (`fukuii.tui.alerts`; spec 029 FR-046)
   */
 final case class TuiConfig(
     updateIntervalMs: Long = TuiConfig.DefaultUpdateIntervalMs,
@@ -70,7 +70,7 @@ final case class TuiConfig(
     artDir: Option[String] = None,
     multiplexer: Boolean = false,
     utf8Locale: Boolean = true,
-    reorgAlertDepth: Int = Alerts.ReorgDepth
+    alerts: AlertThresholds = AlertThresholds.Default
 ):
   /** The motion the TUI starts with, and resumes after `p`. */
   def motion: Motion = if reducedMotion then Motion.Reduced else Motion.Full
@@ -152,7 +152,7 @@ final case class TuiSettings(
     readOnly: Boolean = false,
     graphics: GraphicsChoice = GraphicsChoice.Auto,
     artDir: Option[String] = None,
-    reorgAlertDepth: Int = Alerts.ReorgDepth
+    alerts: AlertThresholds = AlertThresholds.Default
 )
 
 object TuiSettings:
@@ -206,13 +206,6 @@ object TuiSettings:
               s"'$value' is not one of ${GraphicsChoice.Accepted}"
             )
           )
-    val reorgAlertDepth =
-      if !tui.hasPath("alerts.reorg-depth") then Alerts.ReorgDepth
-      else
-        val value = tui.getInt("alerts.reorg-depth")
-        if value < 1 then
-          throw new ConfigException.BadValue(tui.origin(), "fukuii.tui.alerts.reorg-depth", s"$value is below 1")
-        value
     val logRingSize =
       if !tui.hasPath("log-ring-size") then TuiConfig.DefaultLogRingSize
       else
@@ -235,5 +228,5 @@ object TuiSettings:
       readOnly = tui.hasPath("read-only") && tui.getBoolean("read-only"),
       graphics = graphics,
       artDir = Option.when(tui.hasPath("art-dir"))(tui.getString("art-dir").trim).filter(_.nonEmpty),
-      reorgAlertDepth = reorgAlertDepth
+      alerts = AlertThresholds.fromConfig(tui)
     )

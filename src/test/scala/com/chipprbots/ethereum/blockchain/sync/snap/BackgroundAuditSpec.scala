@@ -384,6 +384,63 @@ class BackgroundAuditSpec
     withClue("the anchor still owes another pass: ")(n.owes shouldBe true)
   }
 
+  // Spec 029 FR-043: the dashboard's Storage view asks the running audit what it has got to, through a reference that
+  // can ask nothing else. SyncController publishes the audit it starts and withdraws the one it stops.
+  it should "answer its status through the published reference, and be withdrawn when it is stopped" taggedAs UnitTest in {
+    val n = new Node
+    val root = populate(n)
+    val (_, hash) = deepStorageNode(n, root)
+    n.s.delete(hash)
+    n.head(10, root)
+    BackgroundAudit.statusRef shouldBe None
+    val audit = n.spawn()
+    BackgroundAudit.publish(Some(audit))
+    try
+      n.fetches.receiveMessage()
+      val asked = createTestProbe[BackgroundAudit.Status]()
+      BackgroundAudit.statusRef.get ! BackgroundAudit.GetStatus(asked.ref)
+      // What the audit says of itself directly is what the published reference gives.
+      asked.receiveMessage() shouldBe n.status(audit)
+      // The reference is typed to the one question: it accepts a status query and no other command.
+      val narrowed: ActorRef[BackgroundAudit.GetStatus] = BackgroundAudit.statusRef.get
+      narrowed.path shouldBe audit.path
+    finally
+      testKit.stop(audit)
+      BackgroundAudit.publish(None)
+    BackgroundAudit.statusRef shouldBe None
+  }
+
+  // vault: the audit ends by itself after a clean pass, which SyncController never hears of. It withdraws its own
+  // reference then, and only its own: a newer audit published in its place stays.
+  it should "withdraw its own reference when it stops, and leave a newer audit's in place" taggedAs UnitTest in {
+    val n = new Node
+    val root = populate(n)
+    val (_, hash) = deepStorageNode(n, root)
+    n.s.delete(hash)
+    n.head(10, root)
+    val first = n.spawn()
+    BackgroundAudit.publish(Some(first))
+    try
+      n.fetches.receiveMessage()
+      BackgroundAudit.statusRef.map(_.path) shouldBe Some(first.path)
+      val stopped = createTestProbe[Any]()
+      testKit.stop(first)
+      stopped.expectTerminated(first)
+      // Nobody told the publisher: the audit withdrew itself.
+      eventually(BackgroundAudit.statusRef shouldBe None)
+      // A second audit is published; then an older one's stop arrives late and must not clear it.
+      val second = n.spawn()
+      val late = n.spawn()
+      BackgroundAudit.publish(Some(second))
+      testKit.stop(late)
+      stopped.expectTerminated(late)
+      BackgroundAudit.statusRef.map(_.path) shouldBe Some(second.path)
+      testKit.stop(second)
+      stopped.expectTerminated(second)
+      eventually(BackgroundAudit.statusRef shouldBe None)
+    finally BackgroundAudit.publish(None)
+  }
+
   it should "set neither flag when a pass is stopped part way" taggedAs UnitTest in {
     val n = new Node
     val root = populate(n)

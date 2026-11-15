@@ -3090,46 +3090,6 @@ is no reversal (it was, for a head below that height); the walk stops at the fir
 beside the index below the finalized block (-38002), with the index's place emptied (SYNCING), a head whose parent is
 not known (SYNCING), and a finalized block the branch holds (the adoption goes on).
 
-#### C4d part 5: the escalation trigger, folded into C5a (2026-11-14)
-
-**The user's decision of 2026-11-14: folded into C5a**, where an escalation re-syncs the state. On the unified layout
-there is no SNAP until then (the sync controller stays idle on the guard), so a trigger built now could only log one
-ERROR and count itself suppressed; a node whose fork choices cannot be followed keeps answering SYNCING with a WARN for
-each, as it does today. C4d ends with part 4b; the ordered clear (part 6) was already C5a's.
-
-Beacon's design, read in the code before any was written, for C5a to build from:
-- **The strike's kind is kept to the Engine API.** The fork choice answers its refusals as strings today (`Deep`,
-  `Incomplete` and `Pivot` all come back "SYNCING", as does a state that failed closed): a typed
-  `ForkChoiceManager.follow(state): Either[Unfollowed, Unit]` (`NotHeld(heldTo)`, `Refused(reason)`, `FailedClosed`,
-  `Syncing`), with `applyForkChoiceState` its string answer, so its callers do not change. `NotAdopted` keeps the
-  `ReorgRefusal` that refused it, so a `Finalized` refusal inside an adoption is no strike.
-- **What strikes, in `forkchoiceUpdated`**: a move refused `Deep`, `Incomplete`, `Pivot` or `Corrupt`, and a state
-  failed closed; a head not held, or never executed, only when the last recovery a fork choice asked for ended
-  `TooLong`, `MissingHeader`, `MissingBody`, `NotAdopted` (not `Finalized`) or `LocalFault`. **Neutral**: an invalid or
-  unknown head, -38002, and any refusal while an adoption runs. **Reset**: a head followed or confirmed, an ancestor
-  answered VALID, a recovery `Recovered` or `Adopted`. A `newPayload` never strikes (data-model D.1 to be amended).
-- **The run**: one consecutive run of one kind, 64 long (`state.recovery.escalation-refusals`); a strike of another
-  kind restarts it, a reset ends it, so a consensus client that flips between heads costs nothing. A count per head
-  would never build up, as the consensus client names a new head each slot.
-- **The user's decisions for it (2026-11-14)**: the kinds are two coarse groups, *cannot be reached* (`Deep`, `Pivot`,
-  `Incomplete`, blocks missing or too long to recover) and *local fault* (`Corrupt`, a state failed closed, a block
-  executed before that fails now), so reasons that alternate within a group still escalate; `Corrupt` waits for 64 like
-  the rest; the cool-down (`state.recovery.escalation-cooldown`) is persisted, `state.escalation.last` in AppState
-  (when, head, kind, whether the escalation was taken; one dated ahead of the clock counts as inside the window; not
-  removed with the other state marks), so it survives a restart (T164), and vault reviews the key.
-- **Where it lives**: `blockchain/sync/EscalationTrigger.scala`, built on the unified layout only and handed to the
-  Engine API, not the fork choice manager (which serves the hash store and test mode too); its state under one lock,
-  the decision to fire inside it and the effects outside; the clock injected. A recovery's outcome reaches it through
-  its ticket. An escalation is a `StateEscalationRequested` to the sync controller, whose handler is the re-SNAP.
-- **Metrics** (T174): `db.state.recovery.reexecuted.blocks` from the recovery, through an observer it is handed;
-  `escalations{reason}` when one is taken; `escalations.suppressed{cause}` (`cool-down`, `loop-guard`); a gauge of the
-  strikes in the current run, in place of data-model 11's "below the hysteresis count" cause.
-- **The loop guard** (T164's second half: a branch that caused an escalation, offered again after the re-SNAP) needs a
-  re-SNAP to exist: C5a's with the rest.
-
-go-ethereum keeps no such count (beacon, from memory): its downloader chooses the sync mode each cycle and goes back to
-snap sync when the head has no state, so a fork choice is never refused that way.
-
 ### Destructive change (C8a and C8b): the vault protocol blocks
 
 ```

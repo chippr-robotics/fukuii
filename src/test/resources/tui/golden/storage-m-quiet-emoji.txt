@@ -1,0 +1,40 @@
+ ◆ FUKUII  etc (61) · PoW · head 21,884,102 · 41/50 peers · up 12d 7h                                           Storage 
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+ ✓ no alerts                                                                                                            
+                  │ Peers   41/50 ◆◆◆◆◆◆◆◆◆◆  Block  21,884,102 (at head)                    Txpool  142                
+                  │ Sync    ✓ at head                                                                                   
+                  │─────────────────────────────────────────────────────────────────────────────────────────────────────
+                  │ Size    412G on disk · 390G live (estimate) · +2.1G/h over 10m 0s · read now                        
+       ETC        │ Writes  accepted, not held                                                                          
+                  │ Compact none pending · none running                                                                 
+                  │ Disk    388G free of 2.0T · the database is 20% of the disk · archive pruning                       
+                  │ Cache   block cache 1.4G of 2.0G (memtables 312M of it)                                             
+ etc              │─────────────────────────────────────────────────────────────────────────────────────────────────────
+ PoW · id 61      │ Stores  13 of 18 hold data · 5 empty not listed                                                     
+ main network     │ store                             on disk   keys (estimate)  of the database                        
+                  │ state trie by path                   141G     1,204,118,220            34.2%                        
+ [1] Overview     │ storage tries by path               96.0G       912,440,018            23.3%                        
+ [2] Chain        │ flat storage slots                  58.0G     1,480,220,114            14.1%                        
+ [3] Peers        │ bodies                              44.0G        21,884,103            10.7%                        
+ [4] Mempool      │ receipts                            31.0G        21,884,103             7.5%                        
+ [5] RPC          │ flat accounts                       18.0G       214,882,019             4.4%                        
+ [6] Storage      │ headers                             11.0G        21,884,103             2.7%                        
+ [7] System       │ transaction index                    9.0G       188,204,771             2.2%                        
+ [8] Logs         │ contract code                        3.0G         1,204,882             0.7%                        
+ [9] Ops          │ canonical hash by number             812M        21,884,103             0.2%                        
+                  │ chain weights                        640M        21,884,103             0.2%                        
+ graphics text    │ known peers                            2M             1,912             0.0%                        
+                  │ node state                            12K                41             0.0%                        
+                  │─────────────────────────────────────────────────────────────────────────────────────────────────────
+                  │ Integrity                                                                                           
+                  │ Audit   not running now · it runs after a sync hands over                                           
+                  │ State layout          unified path layout (path-live-1)                                             
+                  │ SNAP sync             done (SNAP, pivot 21883000)                                                   
+                  │ Heal invariant        marked (SNAP walk: what is present has its subtree)                           
+                  │ Checkpoint import     none                                                                          
+                  │ Code scan             not owed                                                                      
+                  │ Audit pass            clean at pivot 21883000                                                       
+                  │ Reference counts      withdrawn by SNAP or checkpoint (pruning keeps trie nodes)                    
+                  │ Chain weights         marked (every weight follows from its parent)                                 
+                  │ Not kept by this client: a freezer for old blocks (no history is expired).                          
+ 1-9 view  Enter open  Esc back  : prompt  / filter  ? help  p pause  r redraw  d detach  q quit                        

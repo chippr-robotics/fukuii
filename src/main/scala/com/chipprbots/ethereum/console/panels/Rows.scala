@@ -63,6 +63,15 @@ private[console] object Rows:
   def field(label: String, value: AttributedString, t: TuiTheme, labelCols: Int = FieldLabelCols): AttributedString =
     concat(text(" " + label.padTo(labelCols, ' '), t.label), value)
 
+  /** As many of `parts`, in order, as fit `room` columns whole when joined by `dot`: the longest such run from the
+    * first, and none when even the first does not fit. No part is ever cut: a figure is drawn whole or not at all.
+    */
+  def wholeParts(parts: Seq[String], dot: String, room: Int): Seq[String] =
+    parts.indices.reverse
+      .map(n => parts.take(n + 1))
+      .find(shown => new AttributedString(shown.mkString(dot)).columnLength() <= room)
+      .getOrElse(Nil)
+
   /** [[TuiText.fit]], for the panels: rows cut with the ellipsis. */
   export TuiText.fit
 
@@ -158,9 +167,9 @@ private[console] object Rows:
   /** `412G free`, with the warn glyph below the alert row's threshold. */
   def diskValue(c: Ctx): AttributedString =
     local(c).diskFree.filter(_ >= 0) match
-      case Some(free) if free < Alerts.DiskErrorBytes =>
+      case Some(free) if free < c.state.thresholds.diskErrorBytes =>
         text(s"${formatBytes(free)} free ${c.g.error.text}", c.t.error)
-      case Some(free) if free < Alerts.DiskWarnBytes =>
+      case Some(free) if free < c.state.thresholds.diskWarnBytes =>
         text(s"${formatBytes(free)} free ${c.g.warn.text}", c.t.warn.bold())
       case Some(free) => text(s"${formatBytes(free)} free", c.t.value)
       case None       => text("?", c.t.muted)
@@ -267,7 +276,7 @@ private[console] object Rows:
   /** How old the SNAP sample is, when it is too old to trust (§2.3, the spec's stale-sample edge case). */
   def staleSnapSample(c: Ctx): Option[String] =
     c.state.snapSampleAge
-      .filter(_.compareTo(Alerts.SnapSampleMaxAge) > 0)
+      .filter(_.compareTo(c.state.thresholds.snapSampleMaxAge) > 0)
       .map(age => s"sample ${formatShort(age.getSeconds)} old")
 
   /** One line: the sync phase with its progress and ETA, or "at head", for the views that have no sync panel. */

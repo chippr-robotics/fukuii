@@ -4,12 +4,12 @@
                   │ Peers   41/50 ◆◆◆◆◆◆◆◆◆◆  Block  21,884,102 (at head)                    Txpool  142             Disk  388G free     JVM  3.4G / 8.0G heap  
                   │ Sync    ✓ at head                                                                                                                           
                   │─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
-                  │ System                                                                                                                                      
-       ETC        │ Heap    3.4G / 8.0G heap                                                                                                                    
-                  │ GC      0.3%                                                                                                                                
-                  │ Discover1,912 known · 14 pending · 3 blacklisted                                                                                            
+                  │ Health  3 bars, no alert                                                                                 room left before the nearest alert 
+       ETC        │   P2P      ████████░░  76%  peer count: 41 of 50 · warn below 25% of the limit                                                              
+                  │   Chain    ██████████ 100%  sync controller: answering · error when it stops answering                                                      
+                  │   Disk     ██░░░░░░░░  18%  free space: 388G free of 2.0T · warn below 20G, error below 5G                                                  
                   │─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
- etc              │ Not built yet: CPU, threads, network throughput, health bars                                                                                
+ etc              │ System  the process has not been read yet                                                                                                   
  PoW · id 61      │                                                                                                                                             
  main network     │                                                                                                                                             
                   │                                                                                                                                             

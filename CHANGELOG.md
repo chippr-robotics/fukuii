@@ -467,6 +467,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   changes, so a client that does not select them sees the same output.
 
 ### Fixed
+- **`pow_blocks_mined_total` counts the blocks fukuii's own Ethash miner seals (B-275).** It counted only blocks handed
+  in by `eth_submitWork`, so a node mining with its internal miner showed 0 blocks mined in `/metrics` and on the
+  `--tui` mining panel. Both paths now count a block when it is handed to the sync controller, before its import is
+  known; on the internal path `pow_last_mining_duration_ms` is the nonce search's time (still 0 after `eth_submitWork`).
+  The mocked miner (`MockedPow`, test mode) seals no PoW and is not counted. Metrics only: no block changes.
 - **SNAP progress no longer goes backwards in the log, in the log's worm block or on the `--tui` Overall worm
   (B-044).** The accounts percentage fell and climbed because the account-count estimate left out a range whose
   response was still being inserted (it counted the rest of that range as done); the storage percentage swung because it

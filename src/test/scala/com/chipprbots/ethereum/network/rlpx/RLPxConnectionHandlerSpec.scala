@@ -22,6 +22,7 @@ import org.scalatest.matchers.should.Matchers
 
 import com.chipprbots.ethereum.Timeouts
 import com.chipprbots.ethereum.WithActorSystemShutDown
+import com.chipprbots.ethereum.network.P2pTraffic
 import com.chipprbots.ethereum.network.PeerActor
 import com.chipprbots.ethereum.network.p2p.Message
 import com.chipprbots.ethereum.network.p2p.MessageDecoder
@@ -226,6 +227,97 @@ class RLPxConnectionHandlerSpec
   private def frameOf(code: Int, payload: Array[Byte]): Frame =
     Frame(Header(payload.length, 0, None, None), code, ByteString(payload))
 
+  // ---- Spec 029 FR-044: the bytes and messages a connection carried, counted for the dashboard ----------------------
+  // herald: the wire bytes pass two points, the bridge's read and the one write function, handshake included.
+
+  it should "count every byte the socket carried in and out, the handshake's too" taggedAs (UnitTest, NetworkTest) in (
+    new TestSetup:
+      traffic.snapshot shouldBe P2pTraffic.Snapshot(0, 0, 0, 0)
+      setupIncomingRLPxConnection()
+      settled()
+      // The handshake: the init packet and the Hello frames in, the response out. The peer's Hello is the one message
+      // decoded so far (herald: this node's own Hello is counted where it is written, so the peer's is counted too).
+      val handshakeOut: Long = ByteString("response data").length
+      traffic.snapshot shouldBe P2pTraffic.Snapshot(HandshakeIn, handshakeOut, 1, 0)
+
+      // A message out: its encoded bytes, and one message.
+      mockMessageCodec.encodeMessageHandler = Some(_ => ByteString("ping encoded"))
+      rlpxConnection ! RLPxConnectionHandler.SendMessage(Ping())
+      connection.expectMsg(Tcp.Write(ByteString("ping encoded"), RLPxConnectionHandler.Ack))
+      traffic.snapshot shouldBe P2pTraffic.Snapshot(HandshakeIn, handshakeOut + 12, 1, 1)
+  )
+
+  it should "count each queued message as it is written, and leave the write order unchanged" taggedAs (
+    UnitTest,
+    NetworkTest
+  ) in (
+    new TestSetup:
+      mockMessageCodec.encodeMessageHandler = Some(_ => ByteString("ping encoded"))
+      setupIncomingRLPxConnection()
+      settled()
+      val before: P2pTraffic.Snapshot = traffic.snapshot
+      // Three messages at once: one write in flight at a time, as before. Each is counted as it is written.
+      rlpxConnection ! RLPxConnectionHandler.SendMessage(Ping())
+      rlpxConnection ! RLPxConnectionHandler.SendMessage(Ping())
+      rlpxConnection ! RLPxConnectionHandler.SendMessage(Ping())
+      connection.expectMsg(Tcp.Write(ByteString("ping encoded"), RLPxConnectionHandler.Ack))
+      connection.expectNoMessage()
+      traffic.snapshot.bytesOut shouldBe before.bytesOut + 12
+      connection.reply(RLPxConnectionHandler.Ack)
+      connection.expectMsg(Tcp.Write(ByteString("ping encoded"), RLPxConnectionHandler.Ack))
+      connection.reply(RLPxConnectionHandler.Ack)
+      connection.expectMsg(Tcp.Write(ByteString("ping encoded"), RLPxConnectionHandler.Ack))
+      connection.expectNoMessage()
+      traffic.snapshot shouldBe before.copy(bytesOut = before.bytesOut + 36, messagesOut = before.messagesOut + 3)
+  )
+
+  it should "count each message decoded from a peer, and none for bytes that decode to no message" taggedAs (
+    UnitTest,
+    NetworkTest
+  ) in (
+    new TestSetup:
+      setupIncomingRLPxConnection()
+      settled()
+      val before: P2pTraffic.Snapshot = traffic.snapshot
+      // 40 bytes that hold two messages and one of a type nobody knows, which the connection skips and survives.
+      mockMessageCodec.readFramesHandler =
+        Some(_ => Seq(Right(Ping()), Left(MessageDecoder.UnknownMessageTypeError(0x7f, "unknown")), Right(Ping())))
+      incomingBridge ! Tcp.Received(ByteString(Array.fill[Byte](40)(1)))
+      rlpxConnectionParent.expectMsg(RLPxConnectionHandler.MessageReceived(Ping()))
+      rlpxConnectionParent.expectMsg(RLPxConnectionHandler.MessageReceived(Ping()))
+      traffic.snapshot shouldBe before.copy(bytesIn = before.bytesIn + 40, messagesIn = before.messagesIn + 2)
+      // Bytes that complete no message are bytes all the same.
+      mockMessageCodec.readFramesHandler = Some(_ => Nil)
+      incomingBridge ! Tcp.Received(ByteString(Array.fill[Byte](7)(1)))
+      rlpxConnectionParent.expectNoMessage()
+      traffic.snapshot shouldBe before.copy(bytesIn = before.bytesIn + 47, messagesIn = before.messagesIn + 2)
+  )
+
+  it should "count an outgoing connection's handshake, and what came back even when it is refused" taggedAs (
+    UnitTest,
+    NetworkTest
+  ) in (
+    new TestSetup:
+      rlpxConnection ! RLPxConnectionHandler.ConnectTo(uri)
+      tcpActorProbe.expectMsg(Tcp.Connect(inetAddress))
+      val initPacket: ByteString = ByteString("Init packet")
+      mockHandshaker.initiateHandler = Some(_ => initPacket -> mockHandshaker)
+      tcpActorProbe.reply(Tcp.Connected(inetAddress, inetAddress))
+      tcpActorProbe.expectMsgClass(classOf[Tcp.Register])
+      val outboundBridge: ActorRef = tcpActorProbe.lastSender
+      tcpActorProbe.expectMsg(Tcp.Write(initPacket, RLPxConnectionHandler.Ack))
+      traffic.snapshot shouldBe P2pTraffic.Snapshot(0, initPacket.length.toLong, 0, 0)
+
+      mockHandshaker.handleResponseMessageHandler = Some(_ => throw new Exception("MAC invalid"))
+      mockHandshaker.handleResponseMessageV4Handler = Some(_ => throw new Exception("MAC invalid"))
+      val data: ByteString = ByteString((0 until AuthHandshaker.ResponsePacketLength).map(_.toByte).toArray)
+      outboundBridge ! Tcp.Received(data)
+      // The connection fails as it did before the counters: the bytes were carried all the same.
+      rlpxConnectionParent.expectMsg(RLPxConnectionHandler.ConnectionFailed)
+      rlpxConnectionParent.expectTerminated(rlpxConnection)
+      traffic.snapshot shouldBe P2pTraffic.Snapshot(data.length.toLong, initPacket.length.toLong, 0, 0)
+  )
+
   "HelloCodec.extractHello" should "throw PreHelloDisconnect with the reason when the first frame is a Disconnect" taggedAs (
     UnitTest,
     NetworkTest
@@ -328,6 +420,16 @@ class RLPxConnectionHandlerSpec
         ByteString => Seq[Either[MessageDecoder.DecodingError, com.chipprbots.ethereum.network.p2p.Message]]
       ] = None
 
+      /** What the frames of a read decode to, in a handshaked connection (which reads frames, then decodes them). */
+      var readFramesHandler: Option[
+        Seq[Frame] => Seq[Either[MessageDecoder.DecodingError, com.chipprbots.ethereum.network.p2p.Message]]
+      ] = None
+
+      override def readFrames(
+          frames: Seq[Frame]
+      ): Seq[Either[MessageDecoder.DecodingError, com.chipprbots.ethereum.network.p2p.Message]] =
+        readFramesHandler.getOrElse(super.readFrames)(frames)
+
       override def encodeMessage(message: MessageSerializable): ByteString =
         encodeMessageHandler.getOrElse(super.encodeMessage)(message)
 
@@ -400,6 +502,23 @@ class RLPxConnectionHandlerSpec
       // unused
       override val waitForHandshakeTimeout: FiniteDuration = Timeouts.veryLongTimeout
 
+    /** This connection's own counters (spec 029 FR-044): no other test's connection moves them. */
+    lazy val traffic: P2pTraffic = new P2pTraffic
+
+    /** The bytes [[setupIncomingRLPxConnection]] sends in: the auth packet, and the frames after it. */
+    val HandshakeIn: Long = AuthHandshaker.InitiatePacketLength + (AuthHandshaker.InitiatePacketLength - 1)
+
+    /** Waits for what [[setupIncomingRLPxConnection]] left in flight: it returns once the connection is established,
+      * which is after the first of its two reads, and the parent is still to hear of the Hello.
+      */
+    def settled(): Unit =
+      rlpxConnectionParent.expectMsgClass(classOf[InitialHelloReceived])
+      awaitAssert(traffic.snapshot.bytesIn shouldBe HandshakeIn)
+
+    /** The bridge of the incoming connection [[setupIncomingRLPxConnection]] made: TCP events are injected through it.
+      */
+    var incomingBridge: ActorRef = scala.compiletime.uninitialized
+
     lazy val tcpActorProbe: TestProbe = TestProbe()
     lazy val rlpxConnectionParent: TestProbe = TestProbe()
     lazy val typedParent: org.apache.pekko.actor.typed.ActorRef[PeerActor.Command] =
@@ -413,7 +532,8 @@ class RLPxConnectionHandlerSpec
           rlpxConfiguration,
           _ => mockHelloExtractor,
           typedParent,
-          Some(tcpActorProbe.ref)
+          Some(tcpActorProbe.ref),
+          traffic
         )
       ),
       rlpxConnectionParent.ref
@@ -427,6 +547,7 @@ class RLPxConnectionHandlerSpec
       connection.expectMsgClass(classOf[Tcp.Register])
       // Bridge child registers with the connection; capture its ref to inject TCP events
       val bridge: ActorRef = connection.lastSender
+      incomingBridge = bridge
 
       // Configure stubFrameCodec to return empty Seq instead of null
       stubFrameCodec.readFrames.when(*).returns(Seq.empty)
