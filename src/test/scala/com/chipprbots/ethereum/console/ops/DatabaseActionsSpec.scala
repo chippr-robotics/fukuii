@@ -85,7 +85,7 @@ class DatabaseActionsSpec extends AnyFlatSpec with Matchers with OptionValues:
     )
   }
 
-  // FAILS (reported): `Result.cancelled` is never read. A scan that was cancelled part of the way is reported in the
+  // Was a defect, fixed: `Result.cancelled` is never read. A scan that was cancelled part of the way is reported in the
   // words of one that read every point and found nothing missing.
   it should "say that a scan was cancelled, and not report it as a whole check that found nothing" taggedAs (UnitTest) in {
     val cancelled = new Fake(found = Clean.copy(checked = 4_000L, cancelled = true)).run()

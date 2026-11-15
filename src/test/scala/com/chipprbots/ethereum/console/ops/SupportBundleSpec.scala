@@ -174,13 +174,13 @@ class SupportBundleSpec extends AnyFlatSpec with Matchers with OptionValues:
     )
   }
 
-  // FAILS (reported): the log file is scrubbed, and the views are not: the Logs view (and any view that shows the log's
+  // Was a defect, fixed: the log file is scrubbed, and the views are not: the Logs view (and any view that shows the log's
   // tail) is written as the screen draws it, with the URL whole.
   it should "hold a logged URL's password in no file at all" taggedAs (UnitTest) in {
     holding(LogPassword) shouldBe empty
   }
 
-  // FAILS (reported): a log line is scrubbed word by word, and a word is taken for a URL only when it starts with the
+  // Was a defect, fixed: a log line is scrubbed word by word, and a word is taken for a URL only when it starts with the
   // scheme. A URL written `url=https://…`, or in quotes or brackets, keeps its password.
   "A log line" should "lose the password of a URL however the URL is written into it" taggedAs (UnitTest) in {
     val url = s"https://operator:$LogPassword@checkpoints.example.org/etc"
@@ -213,7 +213,7 @@ class SupportBundleSpec extends AnyFlatSpec with Matchers with OptionValues:
       "see https://example.org/x and http://example.org/y"
   }
 
-  // FAILS (reported): an enode's node id stands where a URL has its user, so it is taken for a credential and cut. The
+  // Was a defect, fixed: an enode's node id stands where a URL has its user, so it is taken for a credential and cut. The
   // log file of a bundle then names no peer by its id, and the README says the bundle holds node ids.
   it should "keep the node id of an enode: it is public, and it is what names a peer" taggedAs (UnitTest) in {
     val enode = s"enode://${"ab12cd34" * 16}@203.0.113.9:30303"
@@ -441,8 +441,8 @@ class SupportBundleSpec extends AnyFlatSpec with Matchers with OptionValues:
     handler.run(request, _ => ()) shouldBe Left("this node has no data directory to write under")
   }
 
-  // FAILS (reported): a file where the data directory should be makes `Files.createDirectories` throw
-  // FileAlreadyExistsException, which the handler takes for a bundle of the same second.
+  // A file where the data directory should be makes `Files.createDirectories` throw FileAlreadyExistsException: that
+  // is not a bundle of the same second, and is not said as one.
   it should "fail, saying where it could not write, when the data directory cannot hold it" taggedAs (UnitTest) in {
     withTempDir { dir =>
       // A file where the data directory should be: nothing can be made under it.

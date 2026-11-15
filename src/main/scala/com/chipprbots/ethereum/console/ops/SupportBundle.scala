@@ -116,7 +116,13 @@ object SupportBundle:
     val fileOnly = PosixFilePermissions.asFileAttribute(PosixFilePermissions.fromString("rw-------"))
     var ownerOnly = true
     def directory(path: Path): Unit =
-      if !Files.isDirectory(path) then
+      // A directory that is already there (`support`, from an earlier bundle) is closed to others too, where the
+      // file system has such permissions: it lists the bundles' names.
+      if Files.isDirectory(path) then
+        try
+          val _ = Files.setPosixFilePermissions(path, PosixFilePermissions.fromString("rwx------"))
+        catch case _: UnsupportedOperationException => ownerOnly = false
+      else
         Option(path.getParent).foreach(parent => if !Files.isDirectory(parent) then Files.createDirectories(parent))
         try
           val _ = Files.createDirectory(path, dirOnly)
@@ -135,9 +141,14 @@ object SupportBundle:
         case _: UnsupportedOperationException =>
           ownerOnly = false
           val _ = Files.createFile(file)
+        // Only a file of the bundle itself: a path component that is no directory fails as any other error does.
+        case e: java.nio.file.FileAlreadyExistsException => throw new AlreadyWritten(e.getFile)
       val _ = Files.write(file, body.getBytes(StandardCharsets.UTF_8))
     }
     ownerOnly
+
+  /** A file of the bundle is already there: a bundle was written to this directory before. */
+  final private[ops] class AlreadyWritten(file: String) extends java.nio.file.FileAlreadyExistsException(file)
 
   private def size(bytes: Int): String =
     if bytes >= 1024 * 1024 then f"${bytes / 1048576.0}%.1f MiB"
@@ -175,7 +186,7 @@ object SupportBundle:
           progress(s"writing ${contents.size} files")
           Try(write(target, contents)).toEither.left
             .map {
-              case _: java.nio.file.FileAlreadyExistsException =>
+              case _: AlreadyWritten =>
                 s"a bundle was already written to $target this second: nothing was written over"
               case e => s"could not write $target: ${Option(e.getMessage).getOrElse(e.toString)}"
             }

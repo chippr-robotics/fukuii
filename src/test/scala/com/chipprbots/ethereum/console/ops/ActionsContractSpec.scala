@@ -74,7 +74,7 @@ class ActionsContractSpec extends AnyFlatSpec with Matchers with OptionValues:
     rows should have size Actions.all.size.toLong
   }
 
-  // FAILS (reported): `Actions.all` says it is "by class, then as the contract has them", and `mining stop`, a Halt,
+  // Was a defect, fixed: `Actions.all` says it is "by class, then as the contract has them", and `mining stop`, a Halt,
   // stands among the Disrupt actions.
   it should "list its actions by class, then as the contract has them" taggedAs (UnitTest) in {
     Actions.all.map(_.risk.ordinal) shouldBe sorted
@@ -121,7 +121,7 @@ class ActionsContractSpec extends AnyFlatSpec with Matchers with OptionValues:
     Actions.named("compact") shouldBe None
   }
 
-  // FAILS (reported): the runner's list still has `compact`, which is no action: the contract and the registry dropped it.
+  // Was a defect, fixed: the runner's list still has `compact`, which is no action: the contract and the registry dropped it.
   "The actions that write a line when they start" should "be the ones the contract names, each an action" taggedAs (
     UnitTest
   ) in {
@@ -161,7 +161,7 @@ class ActionsContractSpec extends AnyFlatSpec with Matchers with OptionValues:
       observeThread = inline
     )
 
-  // FAILS (reported): the runner calls an action with no handler "not offered on this node", and `quit`, `art`,
+  // Was a defect, fixed: the runner calls an action with no handler "not offered on this node", and `quit`, `art`,
   // `deps` and `lookup` never have one.
   "An action the dashboard carries out itself" should "not be called unavailable by the runner" taggedAs (UnitTest) in {
     val runner = runnerOfAWholeNode
@@ -169,7 +169,7 @@ class ActionsContractSpec extends AnyFlatSpec with Matchers with OptionValues:
     finally runner.shutdown()
   }
 
-  // FAILS (reported): the same, as the operator sees it.
+  // Was a defect, fixed: the same, as the operator sees it.
   it should "not be drawn as 'not on this node' in the Ops view" taggedAs (UnitTest) in {
     val runner = runnerOfAWholeNode
     try

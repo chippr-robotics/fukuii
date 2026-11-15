@@ -286,7 +286,7 @@ class CommandsSpec extends AnyFlatSpec with Matchers:
       }
   }
 
-  // FAILS (reported): anything made of hex digits and at least two colons is taken for an IPv6 address. Its dialog
+  // Was a defect, fixed: anything made of hex digits and at least two colons is taken for an IPv6 address. Its dialog
   // opens with a whole preview, and the action then fails in the node ("Not an IP address literal").
   it should "not be what is only made of an address's characters" taggedAs (UnitTest) in {
     for address <- Seq(":::", "1:2:3", "12345::1", "::g", "1:2:3:4:5:6:7:8:9", "2001:db8:::7")

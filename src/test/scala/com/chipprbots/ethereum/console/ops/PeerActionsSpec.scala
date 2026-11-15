@@ -99,7 +99,7 @@ class PeerActionsSpec extends AnyFlatSpec with Matchers with OptionValues:
     )
   }
 
-  // FAILS (reported): the sentence is written with `$now.minOutgoing` inside an interpolated string, which prints the
+  // Was a defect, fixed: the sentence is written with `$now.minOutgoing` inside an interpolated string, which prints the
   // whole `Limits(...)` and then ".minOutgoing"; the `.replace` after it finds nothing to replace.
   it should "warn, in a sentence, when the limit is under what the node tries to keep" taggedAs (UnitTest) in {
     val p = preview(new Fake(), maxPeers("10"))
@@ -335,7 +335,7 @@ class PeerActionsSpec extends AnyFlatSpec with Matchers with OptionValues:
     preview(keeping, drop(outbound.id)).lines(1) shouldBe "It is a peer the node keeps: the node stops re-dialling it."
   }
 
-  // FAILS (reported): with the peer manager unread the preview still states, as a fact, that the peer is not kept.
+  // Was a defect, fixed: with the peer manager unread the preview still states, as a fact, that the peer is not kept.
   it should "not say whether the peer is kept when the peer manager cannot be read" taggedAs (UnitTest) in {
     val unread = preview(new Fake(limits = Left("no answer within 15 s")), drop(outbound.id))
     unread.lines should not contain "It is not a peer the node keeps: nothing else changes."
@@ -382,7 +382,7 @@ class PeerActionsSpec extends AnyFlatSpec with Matchers with OptionValues:
     p.lines(1) shouldBe s"2 connected peers at it (${short(outbound.id)}, ${short(second.id)}) are disconnected now."
   }
 
-  // FAILS (reported): the peers at an address are found by comparing text, and the dashboard writes a peer's IPv6
+  // Was a defect, fixed: the peers at an address are found by comparing text, and the dashboard writes a peer's IPv6
   // address in full (`InetAddress.getHostAddress`) where an operator types it short.
   it should "find the peers at an IPv6 address however the address is written" taggedAs (UnitTest) in {
     val v6 = outbound.copy(address = "2001:db8:0:0:0:0:0:7:30303")
@@ -429,7 +429,7 @@ class PeerActionsSpec extends AnyFlatSpec with Matchers with OptionValues:
     )
   }
 
-  // FAILS (reported): the node writes an IPv6 address down in full; typed short, the same address is refused as "not
+  // Was a defect, fixed: the node writes an IPv6 address down in full; typed short, the same address is refused as "not
   // blocked", so it can be unblocked only by typing it as the node wrote it.
   it should "know a blocked IPv6 address however it is written" taggedAs (UnitTest) in {
     val blocking = new Fake(blocked = Set("2001:db8:0:0:0:0:0:7"))

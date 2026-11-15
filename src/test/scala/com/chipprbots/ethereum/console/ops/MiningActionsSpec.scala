@@ -80,7 +80,7 @@ class MiningActionsSpec extends AnyFlatSpec with Matchers with OptionValues:
     off(true, false).run(start) shouldBe Left(MiningActions.CannotStartAgain)
   }
 
-  // FAILS (reported): run on a node that is mining, it says the miner cannot be started "after a stop", where its own
+  // Was a defect, fixed: run on a node that is mining, it says the miner cannot be started "after a stop", where its own
   // preview says the miner is mining. No dialog can confirm it, so the sentence is never reached through the prompt.
   it should "fail with the reason its preview gave, in every state" taggedAs (UnitTest) in {
     for (enabled, running) <- Seq((false, false), (true, false), (true, true)) do
@@ -126,7 +126,7 @@ class MiningActionsSpec extends AnyFlatSpec with Matchers with OptionValues:
     stopped.calls shouldBe empty
   }
 
-  // FAILS (reported): run on a node started with mining off, it says the miner "starts again only when the node
+  // Was a defect, fixed: run on a node started with mining off, it says the miner "starts again only when the node
   // restarts", where its own preview says there is no miner to stop: a restart starts none.
   it should "fail with the reason its preview gave on a node that has no miner" taggedAs (UnitTest) in {
     val none = off(false, false)

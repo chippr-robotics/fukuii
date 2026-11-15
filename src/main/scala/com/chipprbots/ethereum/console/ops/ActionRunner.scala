@@ -180,6 +180,7 @@ final class ActionRunner(
           case e: Throwable =>
             outcome = ActionOutcome.Failed(reason(e))
             throw e
+    finally
       // An Observe action that failed says so on its screen, where the operator is looking.
       outcome match
         case ActionOutcome.Failed(why) if observe =>
@@ -189,7 +190,7 @@ final class ActionRunner(
             )
           )
         case _ => ()
-    finally ended(outcome)
+      ended(outcome)
 
   private def progress(request: ActionRequest, said: String): Unit =
     val _ = state.updateAndGet(v =>

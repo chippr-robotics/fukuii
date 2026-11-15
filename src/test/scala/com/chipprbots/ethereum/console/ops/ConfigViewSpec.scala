@@ -136,7 +136,7 @@ class ConfigViewSpec extends AnyFlatSpec with Matchers with OptionValues:
     )
   }
 
-  // FAILS (reported): `rows` says "a list or an object under a secret key is hidden whole", and only the last part of
+  // Was a defect, fixed: `rows` says "a list or an object under a secret key is hidden whole", and only the last part of
   // a key is looked at: the keys of an object under a secret key are shown.
   it should "be hidden whole when it is an object under a secret key" taggedAs (UnitTest) in {
     val all = rows(s"""engine.jwt-secret { value = "$Marker-1", encoding = "hex" }
@@ -168,7 +168,7 @@ class ConfigViewSpec extends AnyFlatSpec with Matchers with OptionValues:
     )
   }
 
-  // FAILS (reported): a list is rendered as one text, `["http://…"]`, which is not a URL, so the credentials of every
+  // Was a defect, fixed: a list is rendered as one text, `["http://…"]`, which is not a URL, so the credentials of every
   // URL in it are shown. `fukuii.mining.notify-urls` is such a list.
   it should "be shown without its credentials when it is one of a list" taggedAs (UnitTest) in {
     val all = rows(s"""mining.notify-urls = ["http://pool:$Marker@pool.example.org/work", "http://10.0.0.9/work"]""")
@@ -177,7 +177,7 @@ class ConfigViewSpec extends AnyFlatSpec with Matchers with OptionValues:
     all.head should include("pool.example.org/work")
   }
 
-  // FAILS (reported): the value is cut to its longest length before its credentials are looked for. Where the cut
+  // Was a defect, fixed: the value is cut to its longest length before its credentials are looked for. Where the cut
   // falls before the `@`, what is left has no user-info to find, and the start of the password is shown.
   it should "be shown without its credentials when it is longer than the longest value shown" taggedAs (UnitTest) in {
     val token = Marker * 12 // a bearer token as a password: 228 characters
