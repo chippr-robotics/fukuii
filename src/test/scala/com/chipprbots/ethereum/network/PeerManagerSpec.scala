@@ -1209,6 +1209,47 @@ class PeerManagerSpec
     dialled.probe.expectMsgType[ConnectTo](3.seconds).uri shouldBe okUri
     createdPeers.size shouldBe 1
 
+  it should "not dial a blocked address that the enode writes in another form (B-277)" taggedAs (
+    UnitTest,
+    NetworkTest
+  ) in new OperatorBlockSetup:
+    start()
+    // The list holds the canonical form; the enodes write the same addresses compressed and IPv4-mapped.
+    operatorRegistry.block(BlockedIPRegistry.canonical("2001:db8::1").get)
+    val compressed = new URI(s"enode://${"a1" * 64}@[2001:db8::1]:30303")
+    val mapped = new URI(s"enode://${"a2" * 64}@[::ffff:10.0.0.30]:30303")
+    val okUri = new URI(s"enode://${"bb" * 64}@10.0.0.31:30303")
+
+    peerManager ! PeerManagerActor.ConnectToPeerCmd(compressed, explicit = true)
+    peerManager ! PeerManagerActor.ConnectToPeerCmd(mapped, explicit = true)
+    peerManager ! PeerManagerActor.ConnectToPeerCmd(okUri)
+
+    val dialled: TestPeer = createdPeerQueue.poll(3, java.util.concurrent.TimeUnit.SECONDS)
+    dialled should not be null
+    dialled.probe.expectMsgType[ConnectTo](3.seconds).uri shouldBe okUri
+    createdPeers.size shouldBe 1
+
+  it should "dial a maintained peer again once its address is unblocked (B-277)" taggedAs (
+    UnitTest,
+    NetworkTest
+  ) in new OperatorBlockSetup:
+    start()
+    val maintained = new URI(s"enode://${"ab" * 64}@10.0.0.30:30304")
+    val okUri = new URI(s"enode://${"bb" * 64}@10.0.0.31:30303")
+
+    // Refused while the address is blocked: the dial that follows is the first one made.
+    peerManager ! PeerManagerActor.AddMaintainedPeerCmd(maintained, discardReplyRef)
+    peerManager ! PeerManagerActor.ConnectToPeerCmd(okUri)
+    val first: TestPeer = createdPeerQueue.poll(3, java.util.concurrent.TimeUnit.SECONDS)
+    first should not be null
+    first.probe.expectMsgType[ConnectTo](3.seconds).uri shouldBe okUri
+
+    operatorRegistry.unblock("10.0.0.30") shouldBe true
+    peerManager ! PeerManagerActor.RedialMaintainedAtCmd("10.0.0.30")
+    val second: TestPeer = createdPeerQueue.poll(3, java.util.concurrent.TimeUnit.SECONDS)
+    second should not be null
+    second.probe.expectMsgType[ConnectTo](3.seconds).uri shouldBe maintained
+
   it should "still dial an address that is only auto-blacklisted, on an explicit request (B-277)" taggedAs (
     UnitTest,
     NetworkTest

@@ -76,6 +76,11 @@ object PeerManagerActor:
     * the limit in force, the trusted node ids and the maintained node ids (lower-case hex, no `0x`).
     */
   final case class GetAdminStateCmd(replyTo: typed.ActorRef[AdminState]) extends Command
+
+  /** Dials again the maintained peers at `ip` (canonical form). Sent when the operator unblocks the address: a dial
+    * the block refused ended that peer's retries, so nothing else would bring it back before a restart.
+    */
+  final case class RedialMaintainedAtCmd(ip: String) extends Command
   final case class AdminState(
       maxOutgoingOverride: Option[Int],
       effectiveMaxOutgoing: Int,
@@ -593,6 +598,12 @@ object PeerManagerActor:
           peerEventBus ! PublishCmd(PeerEvent.MaintainedPeersChanged(maintainedPeersByNodeId.keySet))
           Some(connectWith(uri, connectedPeers))
 
+        case RedialMaintainedAtCmd(ip) =>
+          maintainedPeersByNodeId.values
+            .filter(uri => BlockedIPRegistry.canonical(bareHost(uri)).contains(ip))
+            .foreach(uri => context.self ! ConnectToPeerCmd(uri))
+          Some(Behaviors.same)
+
         case RemoveMaintainedPeerCmd(nodeId) =>
           maintainedPeersByNodeId = maintainedPeersByNodeId - nodeId.toLowerCase
           peerEventBus ! PublishCmd(PeerEvent.MaintainedPeersChanged(maintainedPeersByNodeId.keySet))
@@ -747,7 +758,12 @@ object PeerManagerActor:
       // An address the operator blocked (admin_blockIP) is never dialled, by any path, maintained and trusted peers and
       // explicit requests included: the block is the operator's call. Only OperatorBlock is asked, not PeerAddress:
       // an address that is merely auto-blacklisted still dials here (a maintained peer must reconnect).
-      val operatorBlocked = blacklist.isBlacklisted(OperatorBlock(host))
+      // The list holds addresses in their canonical form, and an enode may write the same address another way (a
+      // compressed IPv6 literal, an IPv4-mapped one, a name): the host is asked as written, in its canonical form,
+      // and as the address it resolved to.
+      val operatorBlocked =
+        (Seq(host) ++ BlockedIPRegistry.canonical(host) ++ Option(remoteAddress.getAddress).map(_.getHostAddress)).distinct
+          .exists(h => blacklist.isBlacklisted(OperatorBlock(h)))
 
       validConnection match
         case _ if operatorBlocked =>

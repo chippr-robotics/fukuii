@@ -203,12 +203,15 @@ class AdminServiceSpec extends AnyFlatSpec with Matchers with BeforeAndAfterAll:
     registry.all shouldBe empty
     sentToPeerManager().collect { case PeerManagerActor.RemoveFromBlacklistCmd(req, _) => req.address } shouldBe
       List("1.2.3.4")
+    sentToPeerManager().collect { case PeerManagerActor.RedialMaintainedAtCmd(ip) => ip } shouldBe List("1.2.3.4")
 
   it should "refuse a non-literal, and report false for an address that was not blocked" taggedAs UnitTest in new FakePeerSetup():
     service.unblockIP(AdminService.AdminUnblockIPRequest("example.com")).unsafeRunSync() shouldBe a[Left[?, ?]]
     sentToPeerManager() shouldBe empty
     service.unblockIP(AdminService.AdminUnblockIPRequest("9.9.9.9")).unsafeRunSync() shouldBe
       Right(AdminUnblockIPResponse(false))
+    // An address the operator did not block is left as it is: its automatic blacklist entry is not cleared.
+    sentToPeerManager() shouldBe empty
 
   // ---- enode validation: one place, before anything is sent to the actor --------------------------------------
 
@@ -281,20 +284,20 @@ class AdminServiceSpec extends AnyFlatSpec with Matchers with BeforeAndAfterAll:
 
   // ---- maxPeers range, admin state --------------------------------------------------------------------------
 
-  "AdminService.maxPeers" should "refuse a limit below 1 or above 1000 and send nothing" taggedAs UnitTest in new FakePeerSetup():
-    List(0, -1, 1001, Int.MaxValue, Int.MinValue).foreach { n =>
+  "AdminService.maxPeers" should "refuse a negative limit and send nothing" taggedAs UnitTest in new FakePeerSetup():
+    List(-1, Int.MinValue).foreach { n =>
       withClue(s"maxPeers($n): ")(
         service.maxPeers(AdminService.AdminMaxPeersRequest(n)).unsafeRunSync() shouldBe a[Left[?, ?]]
       )
     }
     sentToPeerManager() shouldBe empty
 
-  it should "pass the ends of the range, 1 and 1000, to the peer manager" taggedAs UnitTest in new FakePeerSetup():
-    service.maxPeers(AdminService.AdminMaxPeersRequest(1)).unsafeRunSync() shouldBe
+  it should "pass 0 and a large limit to the peer manager, as it always did" taggedAs UnitTest in new FakePeerSetup():
+    service.maxPeers(AdminService.AdminMaxPeersRequest(0)).unsafeRunSync() shouldBe
       Right(AdminService.AdminMaxPeersResponse(true))
-    service.maxPeers(AdminService.AdminMaxPeersRequest(1000)).unsafeRunSync() shouldBe
+    service.maxPeers(AdminService.AdminMaxPeersRequest(5000)).unsafeRunSync() shouldBe
       Right(AdminService.AdminMaxPeersResponse(true))
-    sentToPeerManager().collect { case PeerManagerActor.SetMaxPeersCmd(n, _) => n } shouldBe List(1, 1000)
+    sentToPeerManager().collect { case PeerManagerActor.SetMaxPeersCmd(n, _) => n } shouldBe List(0, 5000)
 
   "AdminService.adminState" should "return what the peer manager holds, and the configured limits" taggedAs UnitTest in new FakePeerSetup():
     service.adminState().unsafeRunSync() shouldBe Right(fakeState)

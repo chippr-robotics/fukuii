@@ -93,8 +93,10 @@ object TuiActions:
           .flatMap(r => done(r.success, "the peer manager refused the enode")),
       // The admin function takes an enode and uses its node id alone: the address in it is never dialled.
       untrust = id =>
-        run(admin.removeTrustedPeer(AdminRemoveTrustedPeerRequest(s"enode://$id@127.0.0.1:30303")))
-          .flatMap(r => done(r.success, "it was not trusted")),
+        AdminService
+          .parseEnode(s"enode://${id.stripPrefix("0x")}@127.0.0.1:30303")
+          .flatMap(uri => run(admin.removeTrustedPeer(AdminRemoveTrustedPeerRequest(uri.toString))))
+          .flatMap(r => done(r.success, "the peer manager did not answer")),
       add = enode =>
         run(admin.addPeer(AdminAddPeerRequest(enode))).flatMap(r => done(r.success, "the peer manager refused the enode")),
       drop = (id, enode) =>
@@ -156,7 +158,8 @@ object TuiActions:
         .left
         .map(e => Option(e.getMessage).getOrElse(e.toString))
     val servers = Map.empty[String, RpcServerActions.Server] ++
-      node.maybeJsonRpcHttpServer.toOption.filter(_ => http.enabled).map { server =>
+      // The server is asked for only where it was enabled: asking builds it.
+      Option.when(http.enabled)(node.maybeJsonRpcHttpServer).flatMap(_.toOption).map { server =>
         "http" -> RpcServerActions.Server(
           label = "HTTP",
           address = s"${http.interface}:${http.port}",

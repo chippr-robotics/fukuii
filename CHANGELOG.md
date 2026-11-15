@@ -473,14 +473,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`admin_blockIP` blocks the address (B-277).** It only added the address to a list that nothing read, so it blocked
   nothing. The node now refuses inbound connections from the address, never dials it (any path: discovery, snap
   redials, `admin_addPeer` and trusted peers, `net_connectToPeer`), and disconnects the peers connected from it when
-  the call is made. `admin_unblockIP` also clears an automatic blacklist entry for the address. The address must be an
+  the call is made. `admin_unblockIP` of a blocked address also clears its automatic blacklist entry and dials the
+  maintained peers at it again. The address must be an
   IP literal (a host name is refused; IPv6 is kept in its canonical form). **Not blocked:** discovery (UDP) packets to
   and from the address. The block lasts until the node restarts, and the `blocked-ips` setting is still not read.
-- **A bad enode URL no longer reaches the peer manager, and `admin_maxPeers` checks its range.** `admin_addPeer`,
+- **A bad enode URL no longer reaches the peer manager, and `admin_maxPeers` refuses a negative limit.** `admin_addPeer`,
   `admin_addTrustedPeer` and `admin_removeTrustedPeer` read the node id from the URL inside the peer manager, so a URL
   without one threw there and restarted the actor. They now refuse, with `false`, anything that is not `enode://` with
   a 128-hex-digit node id, a host and a port in 1..65535 (a `?discport=` query is ignored). `admin_maxPeers` answers
-  an invalid-params error for a limit below 1 or above 1000.
+  an invalid-params error for a negative limit; 0 and any larger number are accepted as before.
 - **`pow_blocks_mined_total` counts the blocks fukuii's own Ethash miner seals (B-275).** It counted only blocks handed
   in by `eth_submitWork`, so a node mining with its internal miner showed 0 blocks mined in `/metrics` and on the
   `--tui` mining panel. Both paths now count a block when it is handed to the sync controller, before its import is

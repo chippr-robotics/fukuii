@@ -118,9 +118,6 @@ object AdminService:
     */
   case class PeerLimits(minOutgoing: Int, maxOutgoing: Int, maxIncoming: Int)
 
-  /** The range `admin_maxPeers` accepts. */
-  val MaxPeersRange: Range = 1 to 1000
-
   private val NodeIdHex = "[0-9a-fA-F]{128}".r
 
   /** One place that decides whether an enode URL may be sent to the peer manager: scheme `enode`, a user-info of exactly
@@ -139,27 +136,14 @@ object AdminService:
       else Right(uri)
     catch case ex: java.net.URISyntaxException => Left(s"not a valid URL: ${ex.getReason}")
 
-  /** The canonical text of an IP address literal (an IPv4 dotted quad, or an IPv6 address as `getHostAddress` writes
-    * it, which is how the peer manager sees a remote address), or None for anything else, a host name included. Never
-    * resolves a name: IPv4 is parsed by [[ExternalIPDetector.parseIpv4Literal]], IPv6 is checked by the URL parser
-    * before the bracketed literal is handed to `InetAddress`.
+  /** The canonical text of an IP address literal, or None for anything else: [[BlockedIPRegistry.canonical]]. */
+  def canonicalIp(raw: String): Option[String] = BlockedIPRegistry.canonical(raw)
+
+  /** Text a caller sent, as it may be written to the log: bounded, with no control character (a newline in it would
+    * forge a log line).
     */
-  def canonicalIp(raw: String): Option[String] =
-    val text = raw.trim
-    if text.isEmpty then None
-    else
-      ExternalIPDetector
-        .parseIpv4Literal(text)
-        .map(_.getHostAddress)
-        .orElse {
-          val looksLikeIpv6 = text.contains(':') && text.forall(c => c.isLetterOrDigit || c == ':' || c == '.')
-          if !looksLikeIpv6 then None
-          else
-            try
-              // The URL parser checks the IPv6 syntax; the bracketed literal is then parsed by InetAddress without a lookup.
-              Option(new URI(s"//[$text]").getHost).map(java.net.InetAddress.getByName(_).getHostAddress)
-            catch case _: Exception => None
-        }
+  private[jsonrpc] def loggable(raw: String): String =
+    raw.take(200).map(c => if c.isControl then '?' else c)
 
   // ---- the log levels as they are, and as they were (spec 029 FR-054) ------------------------------------------
   // Read and reset in process, by the dashboard's `loglevel` action; none of this is routed over JSON-RPC.
@@ -404,7 +388,7 @@ class AdminService(
             Right(AdminAddPeerResponse(false))
           }
       case Left(why) =>
-        log.warn(s"Refused enode URL for admin_addPeer (${req.enodeUrl}): $why")
+        log.warn(s"Refused enode URL for admin_addPeer (${loggable(req.enodeUrl)}): $why")
         IO.pure(Right(AdminAddPeerResponse(false)))
 
   /** Besu AdminRemovePeer: peerNetwork.removeMaintainedConnectionPeer(peer) → boolean (wasRemoved). Removes from the
@@ -542,15 +526,24 @@ class AdminService(
         Nil
       }
 
-  /** Unblocks an IP address, and clears any automatic blacklist entry for it too, so that nothing keeps refusing it.
-    * The response is whether it was blocked by the operator.
+  /** Unblocks an IP address. Where it was blocked by the operator, any automatic blacklist entry for it is cleared
+    * too, so that nothing keeps refusing it, and the maintained peers at it are dialled again (a dial the block
+    * refused ended their retries). An address that was not blocked is left as it is. The response is whether it was
+    * blocked by the operator.
     */
   def unblockIP(req: AdminUnblockIPRequest): ServiceResponse[AdminUnblockIPResponse] =
     canonicalIp(req.ip) match
       case None => IO.pure(Left(JsonRpcError.InvalidParams(s"Not an IP address literal: ${req.ip}")))
       case Some(ip) =>
         IO(blockedIPRegistry.unblock(ip)).flatMap { removed =>
-          if removed then log.info(s"Unblocked IP: $ip")
+          if !removed then IO.pure(Right(AdminUnblockIPResponse(false)))
+          else
+            log.info(s"Unblocked IP: $ip")
+            peerManager ! PeerManagerActor.RedialMaintainedAtCmd(ip)
+            clearAutomaticEntry(ip).map(_ => Right(AdminUnblockIPResponse(true)))
+        }
+
+  private def clearAutomaticEntry(ip: String): IO[Unit] =
           IO.defer(
             peerManager.askForTyped[PeerManagerActor.RemoveFromBlacklistResponse](ref =>
               PeerManagerActor.RemoveFromBlacklistCmd(PeerManagerActor.RemoveFromBlacklistRequest(ip), ref)
@@ -560,8 +553,6 @@ class AdminService(
               case Left(ex) => log.warn(s"Could not clear the blacklist entry of $ip: ${ex.getMessage}")
               case Right(_) => ()
             }
-            .map(_ => Right(AdminUnblockIPResponse(removed)))
-        }
 
   def listBlockedIPs(@unused req: AdminListBlockedIPsRequest): ServiceResponse[AdminListBlockedIPsResponse] = IO {
     Right(AdminListBlockedIPsResponse(blockedIPRegistry.all.toList.sorted))
@@ -581,7 +572,7 @@ class AdminService(
             Right(AdminAddTrustedPeerResponse(false))
           }
       case Left(why) =>
-        log.warn(s"Refused enode URL for admin_addTrustedPeer (${req.enodeUrl}): $why")
+        log.warn(s"Refused enode URL for admin_addTrustedPeer (${loggable(req.enodeUrl)}): $why")
         IO.pure(Right(AdminAddTrustedPeerResponse(false)))
 
   /** core-geth admin_removeTrustedPeer: removes from trusted set; does NOT disconnect. Always returns true — mirrors
@@ -601,21 +592,16 @@ class AdminService(
             Right(AdminRemoveTrustedPeerResponse(false))
           }
       case Left(why) =>
-        log.warn(s"Refused enode URL for admin_removeTrustedPeer (${req.enodeUrl}): $why")
+        log.warn(s"Refused enode URL for admin_removeTrustedPeer (${loggable(req.enodeUrl)}): $why")
         IO.pure(Right(AdminRemoveTrustedPeerResponse(false)))
 
   /** core-geth admin_maxPeers: sets max connected peers at runtime. core-geth reference: eth/api_admin.go MaxPeers —
     * sets handler.maxPeers + p2pServer.MaxPeers.
     */
   def maxPeers(req: AdminMaxPeersRequest): ServiceResponse[AdminMaxPeersResponse] =
-    if !MaxPeersRange.contains(req.maxPeers) then
-      IO.pure(
-        Left(
-          JsonRpcError.InvalidParams(
-            s"maxPeers must be ${MaxPeersRange.head}..${MaxPeersRange.last}, got ${req.maxPeers}"
-          )
-        )
-      )
+    // A negative limit means nothing. 0 is accepted, as it always was: the node then dials no one.
+    if req.maxPeers < 0 then
+      IO.pure(Left(JsonRpcError.InvalidParams(s"maxPeers must not be negative, got ${req.maxPeers}")))
     else
       peerManager
         .askForTyped[PeerManagerActor.SetMaxPeersResponse](ref => PeerManagerActor.SetMaxPeersCmd(req.maxPeers, ref))
