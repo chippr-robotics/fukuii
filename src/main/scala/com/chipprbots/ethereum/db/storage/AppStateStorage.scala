@@ -82,6 +82,97 @@ class AppStateStorage(val dataSource: DataSource) extends TransactionalKeyValueS
       Nil
     )
 
+  /** The last time this datadir's state was cleared for a sync from scratch (spec 018 C5a), or none. A stored value
+    * this build cannot read throws ([[pathstate.StateEscalation.decode]]).
+    */
+  def getStateEscalationLast(): Option[pathstate.StateEscalation] =
+    get(Keys.StateEscalationLast).map(pathstate.StateEscalation.decode)
+
+  /** Whether a clear of the state was begun and not seen to its end: its rows may be there still, with no anchor over
+    * them ([[pathstate.StateResetPending]]).
+    */
+  def isStateResetPending(): Boolean = get(Keys.StateResetPending).isDefined
+
+  /** The update that says the rows of a cleared state are gone. Written synced, after the range deletes: a synced write
+    * makes what was written before it durable with it, so the mark never goes while a delete could be lost.
+    */
+  private[storage] def removeStateResetPending(): DataSourceBatchUpdate = remove(Keys.StateResetPending)
+
+  /** '''The one batch that begins a clear of the state''' on the unified layout (spec 018 C5a part 3; data-model D.3):
+    * for an escalation to a sync from scratch, and for the genesis state cleared as SNAP starts. It belongs to
+    * [[pathstate.PathStateStorage.clearForResync]], which writes it synced as a move of the state's clock, and to
+    * nothing else.
+    *
+    * In one write, so that no kill leaves a datadir that says its sync is done over a state with no anchor, or an
+    * anchor over rows that are being deleted:
+    *   - the sync is no longer done ([[clearSnapSyncDone]], and the flag fast sync left);
+    *   - the state's anchor, the block it began at, the finalized block named on it and the height its records were
+    *     pruned to are removed. '''The layout marker stays''': the directory is still the unified layout's;
+    *   - '''what SNAP keeps of its run is removed''': its pivot, its roots, its progress and resume point, its flags of
+    *     a phase done, the files it wrote. Left, a flag that says the accounts are complete over rows that are gone
+    *     lets the next run skip them (vault, forge); and the next run starts as on a new datadir, with no repair pass
+    *     owed;
+    *   - the best block is the genesis again, as on a datadir that has synced nothing. The headers, the bodies and the
+    *     index of the chain it had stay: they are of blocks, not of the state;
+    *   - the escalation, when there is one, and the mark that the rows are still to be deleted.
+    *
+    * @param genesisHash
+    *   the hash of the block at height 0, which the best block is set back to
+    */
+  private[storage] def stateClearBatch(
+      genesisHash: ByteString,
+      atMillis: Long,
+      escalation: Option[pathstate.StateEscalation]
+  ): DataSourceBatchUpdate =
+    val marked = escalation.foldLeft(put(Keys.StateResetPending, pathstate.StateResetPending.encode(atMillis))) {
+      (batch, last) => batch.and(put(Keys.StateEscalationLast, pathstate.StateEscalation.encode(last)))
+    }
+    stateClearRemovals(Some(genesisHash)).and(marked)
+
+  /** What [[stateClearBatch]] removes and sets back, without its marks: also what the end of an interrupted clear
+    * writes again before it deletes the rows ([[pathstate.PathStateStorage.finishPendingClear]]), since a sync that ran
+    * between the two with the mark still set has written its own record over rows that are then deleted. Writing it
+    * twice changes nothing.
+    */
+  private[storage] def stateClearRemovals(genesisHash: Option[ByteString]): DataSourceBatchUpdate =
+    val removed = update(
+      toRemove = Seq(
+        Keys.StateAnchor,
+        Keys.StateOrigin,
+        Keys.StateFinalized,
+        Keys.StateChangesetPrunedTo,
+        Keys.FastSyncDone,
+        Keys.SnapSyncPivotBlock,
+        Keys.SnapSyncMinPivotBlock,
+        Keys.SnapSyncStateRoot,
+        Keys.SnapSyncPivotHash,
+        Keys.SnapSyncProgress,
+        Keys.SnapAccountResumeCheckpoint,
+        Keys.SnapSyncBootstrapTarget,
+        Keys.SnapSyncAccountsComplete,
+        Keys.SnapSyncStorageComplete,
+        Keys.SnapSyncBytecodeComplete,
+        Keys.SnapSyncCodeHashesPath,
+        Keys.SnapSyncStorageFilePath,
+        Keys.SnapSyncStorageFileCount,
+        Keys.SnapSyncCodeHashesCount,
+        Keys.SnapSyncFinalizedRoot,
+        // what was owed or done for a state that is gone: a checkpoint import half made (left, the next sync takes
+        // the datadir for one that owes a repair pass), the recoveries after a sync, the code scan, and the count
+        // and the height of the times regular sync was stuck on it
+        Keys.CheckpointImportInProgress,
+        Keys.BytecodeRecoveryDone,
+        Keys.StorageRecoveryDone,
+        Keys.RecoveryProgress,
+        Keys.SnapCodeScanOwed,
+        Keys.RegularSyncStuckResnaps,
+        Keys.RegularSyncStuckBaseline
+      ),
+      toUpsert = Nil
+    )
+    val bestIsTheGenesis = genesisHash.fold(removed)(hash => removed.and(putBestBlockInfo(BlockInfo(hash, 0))))
+    clearSnapSyncDone().and(bestIsTheGenesis)
+
   /** The finalized block as the consensus client last named it with a fork choice this node followed (spec 018 C4d part
     * 1): what retention keeps above, and what a move of the head must not reverse, across a restart. `None` before one
     * was named, and on a datadir of the hash layout.
@@ -978,6 +1069,8 @@ object AppStateStorage:
     val StateAnchor = com.chipprbots.ethereum.db.storage.pathstate.StateAnchor.Key
     val StateOrigin = "state.origin"
     val StateFinalized = "state.finalized"
+    val StateEscalationLast = com.chipprbots.ethereum.db.storage.pathstate.StateEscalation.Key
+    val StateResetPending = com.chipprbots.ethereum.db.storage.pathstate.StateResetPending.Key
     val StateChangesetPrunedTo = "state.changeset.pruned-to"
     val StateLayout = com.chipprbots.ethereum.db.storage.pathstate.StateLayout.Key
     val ChainWeightInvariant = "chain.weight.invariant"
