@@ -538,8 +538,11 @@ class AdminService(
           if !removed then IO.pure(Right(AdminUnblockIPResponse(false)))
           else
             log.info(s"Unblocked IP: $ip")
-            peerManager ! PeerManagerActor.RedialMaintainedAtCmd(ip)
-            clearAutomaticEntry(ip).map(_ => Right(AdminUnblockIPResponse(true)))
+            // The block is lifted whatever the peer manager says: a failure to reach it is logged, as for the entry.
+            IO(peerManager ! PeerManagerActor.RedialMaintainedAtCmd(ip))
+              .handleError(ex => log.warn(s"Could not re-dial the maintained peers at $ip: ${ex.getMessage}"))
+              .flatMap(_ => clearAutomaticEntry(ip))
+              .map(_ => Right(AdminUnblockIPResponse(true)))
         }
 
   private def clearAutomaticEntry(ip: String): IO[Unit] =

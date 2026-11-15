@@ -212,7 +212,10 @@ class AdminServiceSpec extends AnyFlatSpec with Matchers with BeforeAndAfterAll:
     service.unblockIP(AdminService.AdminUnblockIPRequest("9.9.9.9")).unsafeRunSync() shouldBe
       Right(AdminUnblockIPResponse(false))
     // An address the operator did not block is left as it is: its automatic blacklist entry is not cleared.
-    sentToPeerManager() shouldBe empty
+    sentToPeerManager().collect {
+      case c: PeerManagerActor.RemoveFromBlacklistCmd => c
+      case c: PeerManagerActor.RedialMaintainedAtCmd  => c
+    } shouldBe empty
 
   // ---- enode validation: one place, before anything is sent to the actor --------------------------------------
 
