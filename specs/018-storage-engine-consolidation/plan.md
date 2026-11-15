@@ -3257,6 +3257,56 @@ of one byte; a lost side parent goes through it), and the cap met within the bra
 in-place commits, a move back that fails, a first move that stops part of the way (each needs a store that fails on
 demand; before the guard is on by default, B-292).
 
+#### C4e part 4: the head's generation, who builds on the head, and a fork below the views (2026-11-15)
+
+Forge's cut, before code: the latch, the one proof-of-work builder that can be reached on the guard, the deep-fork
+fix, and the text. Mining is refused at start on the guard and `eth_getWork` with it, so the readers of the miner, the
+Ethash coordinator and `eth_getWork` would be code nothing reaches: they go with the slice that lifts that refusal
+(**B-293, a gate on it**).
+
+- **The head's generation** (`PathStateStorage.headGeneration`, `awaitHeadSettled`; T190, which named `StateLock`):
+  even while the head is settled, odd from the first batch of a move of the head to its end and for the whole of an
+  attempt that holds the records (`withRecordsHeld`: `commitInPlaceAtTheCap` and `StateRecovery.adopt`'s in-place
+  arm, with every move and commit they make). One count of what is open, whatever thread opened it, so a fork
+  choice's move inside an adoption only nests. A block committed on the head as it is, a confirmation, and a move
+  refused before its first batch do not change it. `moveInProgress` and `movesStarted` stay a move's own (B-249; no
+  main code reads them).
+- **The rule for a builder** (a sequence lock): the generation is read settled **before** the head is read, the block
+  is built, and the build is kept only if the generation is the same. Built into `test_mineBlocks`
+  (`TestService.builtOnTheSettledHead`): it waits up to 30 s for the head to settle, builds again a block the head
+  overtook, three times at most, and refuses the request otherwise. A sealed block whose parent the head left is
+  never dropped: it is a side block, judged by weight. The Engine API's builder builds on a parent the consensus
+  client names, on a view that is that parent's or stale: no rule, as `BlockGeneratorSkeleton` has none (it builds on
+  the parent it is given). **For a miner the policy is to wait or arm again, not to refuse after 30 s** (forge): an
+  adoption in place of thousands of blocks is odd for as long as it runs.
+- **A fork below what a view reaches** (T183; the gap forge read and the first test confirmed). In the archive mode the
+  records lead further back than views do (`archive.view-reach`), and in the basic mode they can when the floor lags:
+  the refusal up front passed, the first block of the branch was to be executed on a view of the fork, and the answer
+  was `StateUnavailable` on every attempt. **The heaviest chain was never adopted.** Now, when the block the first
+  block to run stands on is the fork and its state is not held, part 3's reverse-then-commit is taken at once with
+  nothing pinned: the move goes to the fork by the records, in batches, with no view. Only for the fork: a side block
+  whose state was held a moment ago and is not now is no reason to move the head; the branch waits and the side block
+  is executed again.
+
+**Read after code (forge): no blocker; three warnings.** Taken: the route fires for the fork only; the generation is
+opened before the move says it is; no move back is tried when the first move wrote nothing. Confirmed by forge: the
+open and the close are balanced on every path and the monitor is a leaf; the close comes after the overlay is released
+and the observers are told, and the best block and the index are of the move's own batch, so who is woken reads the
+final head; the generation only grows and is bumped before the first write, so a build is never kept across an attempt.
+**Recorded**: an import onto an intermediate head during an attempt is not excluded (test mode only today; B-294,
+with beacon); a deep reorganisation loads the whole old chain with its receipts before it runs (**B-296, a gate before
+the guard is on for an archive node**).
+
+**T183 as it stands**: a reorganisation of **4,000 blocks** in the archive mode, with views that reach 2 blocks and
+moves of 3 blocks to a batch, is adopted through `ConsensusImpl` with the index and the state the branch's
+(`ReorgBlockhashParitySpec`, 4 s), and the three core-geth scenarios run on that configuration too. A move killed
+after a batch is pinned at the store (C4b part 2c). **Not built: a node killed during reverse-then-commit and started
+again** (B-295, a gate before the guard is on for a Mordor archive node). The task's "recovers by I1 rules 2 and 3" is
+out of date: every batch writes the anchor, the best block and the index together, so what a kill leaves is a
+consistent head on a block of the way, which is rule 4; the heavier chain is judged again when its blocks arrive.
+
+**The mutation run**: 12 mutants, 11 caught; the twelfth (who waits is not woken) is caught by a case added after it.
+
 ### Destructive change (C8a and C8b): the vault protocol blocks
 
 ```

@@ -497,6 +497,91 @@ class HeadMoveSpec extends AnyFlatSpec with Matchers with LayerChains with Plann
     // the fork point is behind the new head too
     net.chain.readThrough(net.chain.state.readOnlyBehind(ours(0), PathStateStorage.Reader.Rpc), ours(0))
 
+  "The generation of the head" should "be odd for the whole of a move that moves it and of an attempt that holds the records, and even otherwise" taggedAs
+    (UnitTest, ConsensusTest) in {
+      val net = new Net(CommitSettings(maxBlocksPerMove = 2))
+      val ours = grown(net.chain.first, fourBlocks)((p, txs) => net.inPlace(p, txs*))
+      val state = net.chain.state
+      val start = state.headGeneration
+      start % 2 shouldBe 0
+      state.awaitHeadSettled(0) shouldBe Some(start)
+
+      // a block committed on the head, a confirmation of the head, and a move refused before it wrote: not one
+      net.move(ours.last) shouldBe MoveOutcome.AlreadyThere
+      an[IllegalStateException] should be thrownBy net.move(
+        ours(0),
+        chunk =>
+          state.moveHead(ours.last, net.links.get, net.pointers)
+          net.pointers(chunk)
+      )
+      state.headGeneration shouldBe start
+
+      // a move in two batches: odd from its first batch's write, between the two, and settled once it is whole
+      var between = Vector.empty[Long]
+      net.move(
+        ours(0),
+        chunk =>
+          between :+= state.headGeneration
+          net.pointers(chunk)
+      )
+      between shouldBe Vector(start, start + 1)
+      state.headGeneration shouldBe start + 2
+
+      // an attempt: odd for its whole body, whatever moves and commits it makes, and one generation however many
+      state.withRecordsHeld(ours(0)) {
+        state.headGeneration shouldBe start + 3
+        state.awaitHeadSettled(1) shouldBe None
+        net.moved(net.chain.first)
+        state.headGeneration shouldBe start + 3
+        val theirs = grown(net.chain.first, branch.take(1))((p, txs) => net.inPlace(p, txs*))
+        net.anchor shouldBe theirs.last
+        state.headGeneration shouldBe start + 3
+      }
+      state.headGeneration shouldBe start + 4
+      state.awaitHeadSettled(0) shouldBe Some(start + 4)
+
+      // an attempt whose body throws is ended; one that is refused was never open
+      an[IllegalArgumentException] should be thrownBy
+        state.withRecordsHeld(net.anchor)(throw new IllegalArgumentException("the body"))
+      state.headGeneration shouldBe start + 6
+      // a move that fails after it wrote is ended where it stopped
+      val tip = net.inPlace(net.anchor, slots(carol, 7 -> 7))
+      val further = net.inPlace(tip, slots(carol, 8 -> 8))
+      val third = net.inPlace(further, slots(carol, 9 -> 9))
+      val fourth = net.inPlace(third, slots(carol, 10 -> 10))
+      val before = state.headGeneration
+      var batches = 0
+      an[IllegalArgumentException] should be thrownBy net.move(
+        tip,
+        chunk =>
+          batches += 1
+          if batches == 2 then throw new IllegalArgumentException("the second batch")
+          net.pointers(chunk)
+      )
+      // three blocks back in batches of two: the first batch was written
+      net.anchor should not be fourth
+      state.headGeneration shouldBe before + 2
+
+      // who waits for the head to be settled is woken when the attempt ends, with the generation it ends on
+      val waiting = new java.util.concurrent.CountDownLatch(1)
+      val woken = new java.util.concurrent.atomic.AtomicReference[Option[Long]](None)
+      val waiter = new Thread(() =>
+        waiting.countDown()
+        woken.set(state.awaitHeadSettled(60000))
+      )
+      val open = state.headGeneration
+      val began = System.nanoTime()
+      state.withRecordsHeld(net.anchor) {
+        waiter.start()
+        waiting.await()
+        // until it waits on the attempt: it is then woken by the attempt's end, not by its own time running out
+        while waiter.getState != Thread.State.TIMED_WAITING do Thread.onSpinWait()
+      }
+      waiter.join()
+      woken.get() shouldBe Some(open + 2)
+      (System.nanoTime() - began) / 1000000L should be < 30000L
+    }
+
   "A move in batches" should "leave the head, and the caller's pointer with it, on a block of its way after each batch; and say it is under way throughout" taggedAs
     (UnitTest, ConsensusTest) in {
       val net = new Net(CommitSettings(maxBlocksPerMove = 2))

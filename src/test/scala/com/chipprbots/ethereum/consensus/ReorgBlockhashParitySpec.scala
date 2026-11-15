@@ -54,11 +54,14 @@ class ReorgBlockhashParitySpec extends AnyFlatSpec with Matchers with ScalaFutur
   // And on the unified layout with a branch that holds more than the pinned layers may: the head is moved first and the
   // blocks are committed in place (C4e part 3), wholly (`1`: no block is kept under the pin) or from where the cap is
   // met (`MidCap`: the first blocks of a branch are kept, the rest are not).
-  for (layout, guard, cap) <- Seq(
-      ("the hash layout", false, None),
-      ("the unified layout", true, None),
-      ("the unified layout, nothing kept under the pin", true, Some(1L)),
-      ("the unified layout, the cap met within the branch", true, Some(MidCap))
+  // And in the archive mode with a fork below what a view reaches (C4e part 4): no block can be executed on a view of
+  // the fork, so the head is moved to it by the records and the branch committed in place.
+  for (layout, guard, cap) <- Seq[(String, Boolean, StateConfig => StateConfig)](
+      ("the hash layout", false, identity),
+      ("the unified layout", true, identity),
+      ("the unified layout, nothing kept under the pin", true, pinnedCap(1L)),
+      ("the unified layout, the cap met within the branch", true, pinnedCap(MidCap)),
+      ("the unified layout, an archive with the fork below its view reach", true, archiveOfShortViews)
     )
   do
     (s"A TD-winning reorg that fails mid-branch ($layout)" should
@@ -152,6 +155,33 @@ class ReorgBlockhashParitySpec extends AnyFlatSpec with Matchers with ScalaFutur
       recorded(a12, slot = 12, a10.hash.value)
     )
 
+  "A heavier branch that forks thousands of blocks below what a view reaches (the unified layout, an archive)" should
+    "be adopted: the head goes to the fork by the records, in batches, and the branch is committed in place" taggedAs (
+      UnitTest,
+      ConsensusTest
+    ) in (new Fixture(guard = true, archiveOfShortViews):
+      // The depth of the reorganisations ETC has seen (about 3,700 to 7,000 blocks in 2019 and 2020; T183).
+      // Canonical h1..h4020. The side chain leaves it after h20, 4,000 blocks below the head, where views reach 2
+      // and a move is written 3 blocks to a batch; with 4,001 blocks of the same difficulty it is the heavier.
+      val oldChain: List[Block] = oracle.extendCanonical(oracle.genesis, 4020, difficulty = 1000)
+      val side: List[Block] = oracle.extendSide(oldChain(19), 4001, difficulty = 1000, tag = 0x71)
+
+      node.importAll(oldChain) shouldBe a[BlockImportedToTop]
+      node.importAll(side) match
+        case ChainReorganised(oldBranch, newBranch, _) =>
+          oldBranch.map(_.hash) shouldBe oldChain.drop(20).map(_.hash)
+          newBranch.map(_.hash) shouldBe side.map(_.hash)
+        case other => fail(s"expected ChainReorganised, got $other")
+      node.bestHash shouldBe side.last.hash
+      (1 to 20).foreach(n => node.indexed(n) shouldBe Some(oldChain(n - 1).hash))
+      (21 to 4021).foreach(n => node.indexed(n) shouldBe Some(side(n - 21).hash))
+
+      // and its state is the branch's: the next block of it is executed on it and becomes the head
+      val next: Block = oracle.extendSide(side.last, 1, difficulty = 1000, tag = 0x72).head
+      node.importOne(next) shouldBe a[BlockImportedToTop]
+      node.bestHash shouldBe next.hash
+    )
+
   "Chain-file import (hive consensus simulator path)" should
     "apply TD fork choice instead of making the last block in the file the head" taggedAs (
       UnitTest,
@@ -189,7 +219,7 @@ class ReorgBlockhashParitySpec extends AnyFlatSpec with Matchers with ScalaFutur
     node.bestHash shouldBe bChain.last.hash
     (1 to 3).foreach(n => node.indexed(n) shouldBe Some(bChain(n - 1).hash))
 
-  class Fixture(guard: Boolean = false, cap: Option[Long] = None):
+  class Fixture(guard: Boolean = false, cap: StateConfig => StateConfig = identity):
     val oracle = new Oracle
     val node = new Node(guard, cap)
 
@@ -274,7 +304,7 @@ class ReorgBlockhashParitySpec extends AnyFlatSpec with Matchers with ScalaFutur
         case Left(error) => throw new IllegalStateException(s"oracle could not seal block ${template.number}: $error")
 
   /** The node under test. */
-  class Node(guard: Boolean = false, cap: Option[Long] = None) extends ChainHost(guard, cap):
+  class Node(guard: Boolean = false, cap: StateConfig => StateConfig = identity) extends ChainHost(guard, cap):
     def importAll(blocks: List[Block]): BlockImportResult =
       consensusAdapter.evaluateBranch(NonEmptyList.fromListUnsafe(blocks)).unsafeRunSync()
 
@@ -306,7 +336,8 @@ class ReorgBlockhashParitySpec extends AnyFlatSpec with Matchers with ScalaFutur
 
   /** One ephemeral database with the shared genesis state installed. Real VM, real BlockExecution, real ConsensusImpl.
     */
-  abstract class ChainHost(guard: Boolean = false, cap: Option[Long] = None) extends EphemBlockchainTestSetup:
+  abstract class ChainHost(guard: Boolean = false, cap: StateConfig => StateConfig = identity)
+      extends EphemBlockchainTestSetup:
     implicit val runtime: IORuntime = IORuntime.global
 
     override lazy val storagesInstance
@@ -317,8 +348,7 @@ class ReorgBlockhashParitySpec extends AnyFlatSpec with Matchers with ScalaFutur
         with com.chipprbots.ethereum.TestInstanceConfigProvider:
         override protected def statePathLive: Boolean = guard
         override protected def stateConfig: StateConfig =
-          val config = StateConfig(com.chipprbots.ethereum.utils.Config.config)
-          cap.fold(config)(bytes => config.copy(overlay = config.overlay.copy(pinnedMaxBytes = bytes)))
+          cap(StateConfig(com.chipprbots.ethereum.utils.Config.config))
 
     // one genesis for every host, loaded as the node loads one: as rows on the unified layout
     val genesis: Block =
@@ -347,6 +377,17 @@ class ReorgBlockhashParitySpec extends AnyFlatSpec with Matchers with ScalaFutur
 object ReorgBlockhashParitySpec extends SecureRandomBuilder:
   /** A cap on the pinned layers that a branch of these blocks meets after its first blocks. */
   val MidCap: Long = 3500L
+
+  def pinnedCap(bytes: Long)(config: StateConfig): StateConfig =
+    config.copy(overlay = config.overlay.copy(pinnedMaxBytes = bytes))
+
+  /** An archive whose views reach two blocks behind the head, and whose moves are written three blocks to a batch. */
+  def archiveOfShortViews(config: StateConfig): StateConfig =
+    config.copy(
+      pruning = config.pruning.copy(mode = StateConfig.Mode.Archive),
+      archiveViewReach = 2,
+      maxBlocksPerMoveBatch = 3
+    )
 
   val SenderKeyPair: AsymmetricCipherKeyPair = generateKeyPair(secureRandom)
   val SenderAddress: Address = Address(SenderKeyPair)

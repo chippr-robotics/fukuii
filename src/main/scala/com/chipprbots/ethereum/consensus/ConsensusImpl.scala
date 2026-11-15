@@ -508,11 +508,11 @@ class ConsensusImpl(
                 }
               val lost = sideParents.map(_.dropWhile(parent => blockchainWriter.stateHeldInPlaceOf(parent.header)))
               // what the cap is met with: the blocks already kept under the pin, and those still to run (C4e part 3)
-              def atTheCap(tooLarge: BranchTooLarge, pinned: List[BlockData], remaining: List[Block]): ConsensusResult =
+              def atTheCap(why: StateFault, pinned: List[BlockData], remaining: List[Block]): ConsensusResult =
                 forkHeader match
                   case Some(forkBlock) if selectedByWeight =>
                     commitInPlaceAtTheCap(
-                      tooLarge,
+                      why,
                       pinned,
                       remaining,
                       newBranch,
@@ -523,9 +523,30 @@ class ConsensusImpl(
                       accessLists,
                       notJudged
                     )
-                  case _ => notJudged(tooLarge)
+                  case _ => notJudged(why)
               // the lost side parents, executed again: what was kept of them, or how it ended
-              val parentsRun: Either[ConsensusResult, List[BlockData]] = lost match
+              // The block the first one to run stands on, when no block can be executed on its state: it is behind
+              // what a view reaches (in the archive mode the records lead further back than views do; C4e part 4).
+              // A move goes there by the records with no view, so the head is moved first and all is committed in
+              // place: a heavier chain that forks that deep is otherwise never adopted.
+              //
+              // Only when that block is the fork, which the refusal up front found the records lead to. A side block
+              // whose state was held a moment ago and is not now (its layer was evicted, or the answer could not be
+              // had) is no reason to move the head: the branch waits, and the side block is executed again (forge).
+              val notHeldUnder: Option[(BlockHeader, StateFault)] =
+                for
+                  toRun <- lost.toOption
+                  first <- (toRun ++ newBranch.toList).headOption
+                  on <- blockchainReader.getBlockHeaderByHash(first.header.parentHash)
+                  if !blockchainWriter.stateHeldInPlaceOf(on)
+                yield (
+                  on,
+                  new StateUnavailable(
+                    s"no block can be executed on the state of block ${on.number}, which block ${first.number} " +
+                      "stands on: it is not held, or is behind what a view of the state reaches"
+                  )
+                )
+              def lostParentsRun: Either[ConsensusResult, List[BlockData]] = lost match
                 case Left(missing) => Left(notJudged(missing))
                 case Right(Nil)    => Right(Nil)
                 case Right(lostParents) =>
@@ -563,6 +584,11 @@ class ConsensusImpl(
                         case (None, Some(error)) =>
                           Left(divergedParent(lostParents.drop(parents.executed.size).head, error))
                         case (None, None) => Right(parents.executed)
+              val parentsRun: Either[ConsensusResult, List[BlockData]] = notHeldUnder match
+                case Some((on, why)) if forkHeader.exists(_.hash == on.hash) =>
+                  Left(atTheCap(why, Nil, lost.toOption.toList.flatten ++ newBranch.toList))
+                case Some((_, why)) => Left(notJudged(why))
+                case None           => lostParentsRun
               parentsRun match
                 case Left(ended) => ended
                 case Right(parentsKept) =>
@@ -604,9 +630,11 @@ class ConsensusImpl(
       Nil
     )
 
-  /** A heavier branch whose pinned layers would hold more than they may: **reverse-then-commit** (the user's decision 1
-    * of 2026-11-12; spec 018 C4e part 3). `BranchTooLarge` is the same answer however often the branch is tried, and a
-    * node that cannot adopt the heaviest chain has left it.
+  /** A heavier branch that cannot be adopted from executed blocks kept beside the disk: **reverse-then-commit** (the
+    * user's decision 1 of 2026-11-12; spec 018 C4e parts 3 and 4). Either its pinned layers would hold more than they
+    * may (`BranchTooLarge`), or the block it is to be executed on is behind what a view of the state reaches (`why`
+    * says which). Each is the same answer however often the branch is tried, and a node that cannot adopt the heaviest
+    * chain has left it.
     *
     * With the changeset records above the fork held from retention, the head is moved with the state to the last block
     * kept under the pin (or to the block the first one stands on, when none was kept), and the blocks still to run are
@@ -619,7 +647,7 @@ class ConsensusImpl(
     * whatever was committed: nothing is left moved by a fault.
     */
   private def commitInPlaceAtTheCap(
-      tooLarge: BranchTooLarge,
+      why: StateFault,
       pinned: List[BlockData],
       remaining: List[Block],
       newBranch: NonEmptyList[Block],
@@ -645,11 +673,11 @@ class ConsensusImpl(
     (headNow, start) match
       case (Some(oldHead), Some((on, weightOn))) =>
         log.warn(
-          "REORG-AT-THE-CAP: the branch [{}-{}] holds more than the executed blocks kept beside the disk may ({}): the " +
+          "REORG-AT-THE-CAP: the branch [{}-{}] is not adopted from executed blocks kept beside the disk ({}): the " +
             "head is moved to block {} and its {} remaining block(s) are committed in place. The fork is block {}",
           newBranch.head.number,
           newBranch.last.number,
-          tooLarge.getMessage,
+          why.getMessage,
           on.number,
           remaining.size,
           forkBlock.number
@@ -743,7 +771,8 @@ class ConsensusImpl(
               // anything thrown here, a first move that stopped part of the way among it, would leave the head off
               // the old chain with the way back released: it goes back while the records are still held (forge)
               case NonFatal(thrown) =>
-                backToTheOldHead()
+                // not when the first move was refused before it wrote: the head is the old head still
+                if !blockchainReader.getBestBlockHeader.exists(_.hash == oldHead.hash) then backToTheOldHead()
                 throw thrown
           }
         catch
@@ -762,7 +791,7 @@ class ConsensusImpl(
         notJudged(
           new StateUnavailable(s"the head is no longer block $bestBlockNumber, which the branch was weighed against")
         )
-      case _ => notJudged(tooLarge)
+      case _ => notJudged(why)
 
   // the blocks a branch stood on that failed when they were executed again (reorganiseOnLayers); in memory only
   private val divergedParents = java.util.concurrent.ConcurrentHashMap.newKeySet[BlockHash]()

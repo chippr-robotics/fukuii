@@ -88,6 +88,18 @@ class BlockchainReader(
   /** The block whose state is held in place, by number and hash; `None` with the guard off or with no state yet. */
   def heldInPlace: Option[(BigInt, ByteString)] = pathState.flatMap(_.anchor).map(held => (held.number, held.hash))
 
+  /** The generation of the head once it is settled, for who builds a block on it
+    * ([[PathStateStorage.awaitHeadSettled]], spec 018 C4e part 4): read before the head is read. `Some(0)` with the
+    * guard off, where a head is never stepped through; none when a move of the head or an adoption in place is still
+    * open after `maxMillis`.
+    */
+  def awaitHeadSettled(maxMillis: Long): Option[Long] = pathState.fold(Option(0L))(_.awaitHeadSettled(maxMillis))
+
+  /** The generation of the head now ([[PathStateStorage.headGeneration]]): a build is kept only when it is the one read
+    * settled before the head was read. Always 0 with the guard off.
+    */
+  def headGeneration: Long = pathState.fold(0L)(_.headGeneration)
+
   /** The state at `root`, for serving it to a peer (SNAP); `None` when it is not served.
     *
     * Guard off, the read-only store whatever the root: the serve finds the root's node there or answers with nothing,
