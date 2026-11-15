@@ -3270,3 +3270,13 @@ items:
     refs: []
     links: {}
     notes: Found by forge at spec 018 C4e part 1 review (OmmersValidator.scala:37-45). Pre-existing, both layouts.
+  - id: B-284
+    title: "PoW tie rule: on equal total difficulty core-geth prefers the lower number then random; fukuii keeps its head (strict >)"
+    priority: P3
+    status: open
+    area: evm
+    size: S
+    opened: 2026-11-15
+    refs: []
+    links: {}
+    notes: Recorded by forge at spec 018 C4e; pre-existing on both layouts; a decision, not a defect to fix silently.
