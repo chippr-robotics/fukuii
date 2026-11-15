@@ -1,9 +1,8 @@
 ---
-
-> Closed 2026-11-15 as Done; boxes below are as they were at closure.
-
 description: "Task list for spec 029 TUI command center"
 ---
+
+> Closed 2026-11-15 as Done; boxes below are as they were at closure.
 
 # Tasks: TUI Command Center
 
