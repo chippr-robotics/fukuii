@@ -132,13 +132,17 @@ class MockedMinerOnPositionsSpec
       arrived shouldBe true
 
     /** The miner takes an order again: the run it was on has ended. Asked until it says so, for a run that ends on a
-      * failure that comes back on its own.
+      * failure that comes back on its own, from another thread: the bound is of time, not of how often it is asked. A
+      * count of asks is answered in a few milliseconds, and on a loaded machine the failure had not come back by then.
+      * Between two asks it waits on the probe of sync, which nothing may reach.
       */
     def takesOrders(): Unit =
-      val ordered = (1 to 40).exists { _ =>
+      val deadline = System.nanoTime() + 10.seconds.toNanos
+      var ordered = false
+      while !ordered && System.nanoTime() < deadline do
         miner ! Send(MineBlocks(1, withTransactions = false, None), asker.ref)
-        asker.receiveMessage() == MiningOrdered
-      }
+        ordered = asker.receiveMessage() == MiningOrdered
+        if !ordered then sync.expectNoMessage(10.millis)
       ordered shouldBe true
 
     /** One second of the miner's clock, and the miner seen to have dealt with it: it answers what it is doing. */
