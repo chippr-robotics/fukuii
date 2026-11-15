@@ -3267,13 +3267,16 @@ items:
   - id: B-283
     title: OmmersValidator.getNBlocksBack never terminates when an ancestor body is missing (Iterator.iterate collect take)
     priority: P2
-    status: open
+    status: done
     area: evm
     size: S
     opened: 2026-11-15
+    closed: 2026-11-15
     refs: []
     links: {}
-    notes: Found by forge at spec 018 C4e part 1 review (OmmersValidator.scala:37-45). Pre-existing, both layouts.
+    notes: |-
+      Found by forge at spec 018 C4e part 1 review (OmmersValidator.scala:37-45). Pre-existing, both layouts.
+      2026-11-15 done: C5a part 2: a missing ancestor is no verdict (AncestorNotStored); the walk ends
   - id: B-284
     title: "PoW tie rule: on equal total difficulty core-geth prefers the lower number then random; fukuii keeps its head (strict >)"
     priority: P3
