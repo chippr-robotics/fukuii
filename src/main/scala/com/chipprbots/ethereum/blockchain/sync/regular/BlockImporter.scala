@@ -94,6 +94,8 @@ object BlockImporter:
   // How far back to rewind the canonical chain index during fork recovery (SYNC-FORK path).
   // 128 blocks provides enough depth to cover common shallow forks without resyncing the
   // entire chain; deeper forks fall back to SNAP re-sync via RegularSyncStuck.
+  // On the unified state layout nothing is rewound (spec 018 C4e part 6): it is how far back the fetcher is sent when
+  // no common block was found.
   val MaxForkAncestryDepth: Int = 128
 
   /** Consecutive exhausted state-node fetches, towards [[StuckEscapeThreshold]]. One per regular-sync session:
@@ -179,7 +181,8 @@ object BlockImporter:
   private[regular] def distinctMissingCodesForTests: Int = missingCodes.size
 
   /** SYNC-FORK rewind of the canonical index to `target`, plus the reference-count undo of the blocks it
-    * un-canonicalises.
+    * un-canonicalises. '''The hash layout only''': on the unified state layout the head moves with the state and a fork
+    * is judged by weight, so fork recovery moves nothing there (spec 018 C4e part 6).
     *
     * `setCanonicalChainHead` deletes the index entries target+1..currentBest and moves best, but never touches state
     * bookkeeping: those blocks keep their applied `bd` records while no longer canonical, so under basic pruning the
@@ -437,6 +440,12 @@ final private class BlockImporterLogic(
   // An exhausted fetch that arrived while an import ran, for that import's ImportDone to act on (#1694).
   private var exhaustedDuringImport: Boolean = false
   private var unknownParentStrikes: Map[ByteString, Int] = Map.empty
+
+  // The blocks a fork recovery was already started for, on the unified state layout (spec 018 C4e part 6). Nothing is
+  // rewound there, so a block that fails for another reason than a fork (it is invalid, or a chain weight is missing)
+  // fails again after the recovery: it is recovered for once, and said as what it is after that. Cleared with the
+  // strikes when the block is imported.
+  private var forkRecoveredFor: Set[ByteString] = Set.empty
 
   /** The block the import last stopped at on a fault of this node's own state, and how often in a row (spec 018 Track
     * C, C4b): cleared by any block that is imported.
@@ -1123,6 +1132,7 @@ final private class BlockImporterLogic(
           case BlockImportedToTop(blockImportData) =>
             val importedNow = blockImportData.map(_.block)
             importedNow.foreach(b => unknownParentStrikes -= b.hash.value)
+            importedNow.foreach(b => forkRecoveredFor -= b.hash.value)
             val imported = importedNow.reverse ::: importedBlocks
             imported.headOption
               .foreach(b => supervisor ! ProgressProtocol.ImportedBlock(b.number.value, internally = false))
@@ -1130,6 +1140,7 @@ final private class BlockImporterLogic(
 
           case ChainReorganised(_, newBranch, _) =>
             newBranch.foreach(b => unknownParentStrikes -= b.hash.value)
+            newBranch.foreach(b => forkRecoveredFor -= b.hash.value)
             val imported = newBranch.reverse ::: importedBlocks
             imported.headOption
               .foreach(b => supervisor ! ProgressProtocol.ImportedBlock(b.number.value, internally = false))
@@ -1183,7 +1194,19 @@ final private class BlockImporterLogic(
                 BlacklistReason
                   .BlockImportError(s"import failure x$strikes on block ${failedBlock.header.hashAsHexString}")
               )
-            if strikes >= ForkDetectThreshold then
+            if strikes >= ForkDetectThreshold && forkRecoveredFor.contains(failedBlock.hash.value) then
+              // only on the unified state layout: nothing was rewound, so this is the same failure again
+              log.error(
+                "[SYNC-FORK] Block {} (hash={}) still fails after a fork recovery was made for it: no other is made " +
+                  "for it. Its strikes start again",
+                failedBlock.number,
+                failedBlock.header.hashAsHexString
+              )
+              // so that the peer that serves it is dropped again at the third, as on the hash layout, where the
+              // strikes start again at every recovery (forge)
+              unknownParentStrikes -= failedBlock.hash.value
+            else if strikes >= ForkDetectThreshold then
+              if blockchainWriter.holdsStateInPlace then forkRecoveredFor += failedBlock.hash.value
               val ourHashAtHeight = blockchainReader
                 .getBlockHeaderByNumber(failedBlock.number.value)
                 .map(h => ByteStringUtils.hash2string(h.hash.value))
@@ -1236,6 +1259,7 @@ final private class BlockImporterLogic(
   private def adoptedPrefix(adopted: List[BlockData], importedBlocks: List[Block]): List[Block] =
     val adoptedBlocks = adopted.map(_.block)
     adoptedBlocks.foreach(b => unknownParentStrikes -= b.hash.value)
+    adoptedBlocks.foreach(b => forkRecoveredFor -= b.hash.value)
     val imported = adoptedBlocks.reverse ::: importedBlocks
     if adoptedBlocks.nonEmpty then
       imported.headOption
@@ -1600,7 +1624,9 @@ final private class BlockImporterLogic(
         blockchain = blockchain,
         blockchainReader = blockchainReader,
         blacklist = blacklist,
-        syncConfig = syncConfig
+        syncConfig = syncConfig,
+        // on the unified state layout no block is taken off the chain here: the resolver only finds the common block
+        discardDiverged = !blockchainWriter.holdsStateInPlace
       )
     )
     // Watched: one that stopped without an answer left this importer in `resolvingFork` for good, where nothing else
@@ -1613,9 +1639,35 @@ final private class BlockImporterLogic(
       capturedBest: BigInt,
       snapPivot: BigInt,
       state: ImporterState,
-      resolver: TypedActorRef[FastSyncBranchResolverActor.Command]
+      resolver: TypedActorRef[FastSyncBranchResolverActor.Command],
+      // On the unified state layout only: the resolver's answer, held while the import that started the recovery is
+      // still running. The common block when it found one, none when it did not. That import sends the fetcher back
+      // to the block that failed as it ends, and its end clears the branch being resolved: acted on before it, the
+      // answer would be undone by both, and the block that failed would be fetched again and recovered for no more
+      // (forge). The hash layout has already rewound by then, and acts at once as it always has.
+      held: Option[Option[BigInt]] = None
   ): Behavior[Command] =
+    def holds: Boolean = blockchainWriter.holdsStateInPlace
+    // the answer, acted on: with the common block, or with none
+    def actOn(answer: Option[BigInt], state: ImporterState): Behavior[Command] = answer match
+      case Some(lca) => fetchFromTheCommonBlock(lca, capturedBest, snapPivot, state)
+      case None =>
+        blindRewind(capturedBest, snapPivot)
+        running(state.withoutDeferredBatches())
     Behaviors.receiveMessage {
+      // an answer is held already: the resolver's stop after it says nothing more
+      case BranchResolverStopped(stopped) if stopped == resolver && held.isDefined => Behaviors.same
+
+      case BranchResolverMsg(FastSyncBranchResolverActor.BranchResolvedSuccessful(lca, _)) if holds =>
+        if state.importing then resolvingFork(capturedBest, snapPivot, state, resolver, Some(Some(lca)))
+        else actOn(Some(lca), state)
+
+      case BranchResolverMsg(FastSyncBranchResolverActor.BranchResolutionFailed(_)) if holds && state.importing =>
+        resolvingFork(capturedBest, snapPivot, state, resolver, Some(None))
+
+      case BranchResolverStopped(stopped) if stopped == resolver && holds && state.importing =>
+        resolvingFork(capturedBest, snapPivot, state, resolver, Some(None))
+
       case BranchResolverMsg(FastSyncBranchResolverActor.BranchResolvedSuccessful(lca, _)) =>
         blockchainReader.getBlockHeaderByNumber(lca) match
           case Some(lcaHeader) =>
@@ -1659,18 +1711,92 @@ final private class BlockImporterLogic(
         // while this one still runs. If it does answer first, this ImportDone arrives in `running` and is handled
         // there as usual.
         exhaustedDuringImport = false
-        resolvingFork(
-          capturedBest,
-          snapPivot,
-          state.notImportingBlocks().branchResolved().withoutDeferredBatches(),
-          resolver
-        )
+        val ended = state.notImportingBlocks().branchResolved().withoutDeferredBatches()
+        held match
+          case Some(answer) => actOn(answer, ended)
+          case None         => resolvingFork(capturedBest, snapPivot, ended, resolver)
 
       case _ => Behaviors.same
     }
 
+  /** Fork recovery on the unified state layout, with the common block found (spec 018 C4e part 6; the user's decision
+    * of 2026-11-15): '''no state is moved'''. The head stays where it is, the fetcher is sent back to the common block,
+    * and the peer's branch is judged by weight against this node's own blocks above it when it arrives
+    * (`resolveBranch`, then `ConsensusImpl`'s reorganisation): adopted if it is the heavier, left if it is not.
+    * core-geth never sets its head back on finding a fork. What the rewind was for is kept: the fetcher is no longer
+    * stuck on the block that failed, and no peer is blamed.
+    *
+    * A common block the head could not be moved back to (below what the changeset records reach, or below the finalized
+    * block) is said once, and the fetcher is left where it is: this node goes on with its own chain, and what it should
+    * do about the chain it cannot reach is the escalation's (C5a).
+    */
+  private def fetchFromTheCommonBlock(
+      lca: BigInt,
+      capturedBest: BigInt,
+      snapPivot: BigInt,
+      state: ImporterState
+  ): Behavior[Command] =
+    unknownParentStrikes = Map.empty
+    val refusal: Option[String] = blockchainReader.getBlockHeaderByNumber(lca) match
+      case None            => Some(s"this node has no header at height $lca")
+      case Some(lcaHeader) => blockchainWriter.refusalOfMoveBackTo(lcaHeader, blockchainReader).map(_.getMessage)
+    refusal match
+      case Some(why) =>
+        log.error(
+          "[STATE-REORG-TOO-DEEP] SYNC-FORK: the peer's chain leaves this node's at block {}, {} block(s) below the " +
+            "head {}, and the head cannot be moved back there: {}. Nothing is fetched from there and nothing moved",
+          lca,
+          capturedBest - lca,
+          capturedBest,
+          why
+        )
+        running(state.withoutDeferredBatches())
+      case None =>
+        log.warning(
+          "[SYNC-FORK] The peer's chain leaves this node's at block {}: the fetcher goes back to it and the branch is " +
+            "judged by weight. The head stays at block {} (snapPivot={})",
+          lca,
+          capturedBest,
+          snapPivot
+        )
+        fetcher ! BlockFetcher.InvalidateBlocksFrom(
+          lca + 1,
+          "SYNC-FORK: fetch from the common block",
+          shouldBlacklist = false
+        )
+        // the next pick is from the common block up to the head, so that the whole of the peer's branch is weighed
+        // against the whole of this node's
+        selfRef ! PickBlocks
+        running(state.withoutDeferredBatches().resolvingBranch(lca + 1))
+
   private def blindRewind(capturedBest: BigInt, snapPivot: BigInt): Unit =
     val floor = (capturedBest - MaxForkAncestryDepth).max(snapPivot)
+    if blockchainWriter.holdsStateInPlace then
+      // No common block was found: the fetcher goes back as far as the rewind would have, and nothing is written
+      // (spec 018 C4e part 6). A fork deeper than that is refused by the reorganisation when its blocks arrive.
+      unknownParentStrikes = Map.empty
+      if blockchainReader.getBlockHeaderByNumber(floor).isDefined then
+        log.warning(
+          "[SYNC-FORK] No common block was found: the fetcher goes back to block {}. The head stays at block {} " +
+            "(snapPivot={})",
+          floor,
+          capturedBest,
+          snapPivot
+        )
+        fetcher ! BlockFetcher.InvalidateBlocksFrom(
+          floor + 1,
+          "SYNC-FORK: fetch from below the head",
+          shouldBlacklist = false
+        )
+      else
+        log.error(
+          "[SYNC-FORK] No common block was found and this node has no header at height {}: nothing is fetched again " +
+            "and nothing moved",
+          floor
+        )
+    else blindRewindOnTheHashLayout(capturedBest, snapPivot, floor)
+
+  private def blindRewindOnTheHashLayout(capturedBest: BigInt, snapPivot: BigInt, floor: BigInt): Unit =
     blockchainReader.getBlockHeaderByNumber(floor) match
       case Some(floorHeader) =>
         log.warning(

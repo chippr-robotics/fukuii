@@ -41,9 +41,9 @@ head-writer 7 src/main/scala/com/chipprbots/ethereum/consensus/ConsensusImpl.sca
 block-store 1 src/main/scala/com/chipprbots/ethereum/jsonrpc/TestingService.scala HASH storeBlock on the hash layout's arm; the unified layout commits in place
 
 # Sync: not started on the unified layout (StdNode), SNAP refused (ConfigValidator).
-head-writer 1 src/main/scala/com/chipprbots/ethereum/blockchain/sync/regular/BlockImporter.scala REFUSED setCanonicalChainHead (SYNC-FORK): refused on the unified layout, where the fork is resolved by weight (C4E)
+head-writer 1 src/main/scala/com/chipprbots/ethereum/blockchain/sync/regular/BlockImporter.scala HASH setCanonicalChainHead (SYNC-FORK rewind): the hash layout only; on the unified layout fork recovery moves nothing and the branch is judged by weight (fetchFromTheCommonBlock, C4e part 6)
 head-writer 2 src/main/scala/com/chipprbots/ethereum/blockchain/sync/fast/FastSyncBranchResolver.scala REFUSED discardBlocksAfter: removeBlock refuses on the unified layout
-head-writer 1 src/main/scala/com/chipprbots/ethereum/blockchain/sync/fast/FastSyncBranchResolverActor.scala REFUSED discardBlocksAfter, as above
+head-writer 1 src/main/scala/com/chipprbots/ethereum/blockchain/sync/fast/FastSyncBranchResolverActor.scala HASH discardBlocksAfter, only when the caller asks for it: the importer does not on the unified layout (discardDiverged, C4e part 6)
 best-pointer 1 src/main/scala/com/chipprbots/ethereum/blockchain/sync/snap/PivotAnchor.scala REFUSED reanchor refuses once there is a state anchor (PRE before it)
 head-writer 3 src/main/scala/com/chipprbots/ethereum/blockchain/sync/snap/PivotAnchor.scala REFUSED reanchor, its definitions: refused once there is a state anchor
 block-store 1 src/main/scala/com/chipprbots/ethereum/blockchain/sync/snap/PivotAnchor.scala REFUSED reanchor's storeBlockHeader, as above
