@@ -499,6 +499,25 @@ class BlockchainWriter(
     */
   def dropForwardLayer(blockHash: ByteString): Unit = pathState.foreach(_.dropLayer(blockHash))
 
+  /** `body` with a pin for one branch under execution on the unified layout ([[PathStateStorage.withPinnedBranch]]):
+    * the layers its blocks are kept as are held until `body` ends. `None` on the hash layout, which has no layers.
+    */
+  def withPinnedBranch[A](name: String)(body: Option[com.chipprbots.ethereum.db.storage.pathstate.BranchPin] => A): A =
+    pathState match
+      case Some(state) => state.withPinnedBranch(name)(pin => body(Some(pin)))
+      case None        => body(None)
+
+  /** Why the head could not be moved back to `fork`, a block of the head's own chain, as things are
+    * ([[PathStateStorage.refusalOfMoveTo]]). `None` on the hash layout.
+    */
+  def refusalOfMoveBackTo(
+      fork: BlockHeader,
+      reader: BlockchainReader
+  ): Option[com.chipprbots.ethereum.db.storage.pathstate.ReorgTooDeep] =
+    pathState.flatMap(
+      _.refusalOfMoveTo(BlockRef(fork.hash.value, fork.number.value, fork.stateRoot.value), reader.headerLink)
+    )
+
   /** The finalized block the state on the unified layout is held to ([[PathStateStorage.finalizedBlock]]). */
   def finalizedOfTheState: Option[FinalizedBlock] = pathState.flatMap(_.finalizedBlock)
 

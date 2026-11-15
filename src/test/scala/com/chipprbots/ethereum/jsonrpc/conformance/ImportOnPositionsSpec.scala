@@ -19,7 +19,6 @@ import com.chipprbots.ethereum.db.storage.pathstate.BlockDiff
 import com.chipprbots.ethereum.db.storage.pathstate.BlockRef
 import com.chipprbots.ethereum.db.storage.pathstate.ChangesetStorage
 import com.chipprbots.ethereum.db.storage.pathstate.PathStateTestKit
-import com.chipprbots.ethereum.db.storage.pathstate.StateUnavailable
 import com.chipprbots.ethereum.domain.Block
 import com.chipprbots.ethereum.domain.BlockHeader
 import com.chipprbots.ethereum.domain.ChainWeight
@@ -141,19 +140,26 @@ class ImportOnPositionsSpec extends ScalaTestWithActorTestKit with AnyFlatSpecLi
     }
 
   // dm 7.6: a path-live store has one writer, the staged commit.
-  it should "refuse a block executed with nothing staged, and one that is not adopted as it is executed, and keep a payload apart" taggedAs
+  it should "refuse a block executed with nothing staged, and keep one that is not adopted as it is executed apart, as a payload" taggedAs
     UnitTest in {
       given BlockchainConfig = onPositions.blockchainConfig
       val before = disk
       an[IllegalStateException] should be thrownBy execution.executeBlockNoValidation(blocks.head)
-      // a side branch, a reorganisation's blocks: executed, and adopted later or never. The batch ends on it as on a
-      // fault of this node's state, which it is, and not as on an error of the block (C4b): nothing was judged.
-      val unadopted = importOne(onPositions, execution, blocks.head, adopt = false) match
-        case (Nil, Some(BlockExecutionError.StateFaulted(fault: StateUnavailable))) => fault
-        case other => fail(s"the block that is not adopted was answered with $other")
-      unadopted.reason should include("not adopted")
-      // a payload ahead of the head: its state committed apart from the block, as a forward layer beside the state
-      // the disk holds (C4d part 2a): executed, and nothing on disk moved
+      // a side branch, a reorganisation's blocks: executed, and adopted later or never. Its state is kept as a forward
+      // layer beside the state the disk holds, and the block is stored by its hash only: the index of blocks by number
+      // is the ancestry of the block whose state is held, and only a move of the head writes it (C4e; I6)
+      importOne(onPositions, execution, blocks.head, adopt = false) match
+        case (List(kept), None) => kept.block.header.hash shouldBe blocks.head.header.hash
+        case other              => fail(s"the block that is not adopted was answered with $other")
+      pathState.view(refOf(blocks.head.header)).block shouldBe refOf(blocks.head.header)
+      onPositions.blockchainReader.getBlockByHash(blocks.head.header.hash) shouldBe Some(blocks.head)
+      onPositions.blockchainReader.getReceiptsByHash(blocks.head.header.hash) should not be empty
+      onPositions.blockchainReader.getChainWeightByHash(blocks.head.header.hash) should not be empty
+      onPositions.blockchainReader.getCanonicalHashByNumber(1) shouldBe None
+      disk shouldBe before
+      pathState.anchor shouldBe Some(refOf(genesis))
+      onPositions.blockchainReader.getBestBlockNumber shouldBe BigInt(0)
+      // a payload ahead of the head is kept the same way (C4d part 2a): delivered again, it is the layer it is
       execution.executeAndValidateBlock(blocks.head, alreadyValidated = true).isRight shouldBe true
       pathState.view(refOf(blocks.head.header)).block shouldBe refOf(blocks.head.header)
       disk shouldBe before
