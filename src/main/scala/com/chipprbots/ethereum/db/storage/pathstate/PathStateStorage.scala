@@ -12,6 +12,7 @@ import org.apache.pekko.util.ByteString
 import scala.jdk.CollectionConverters.*
 import scala.util.control.NonFatal
 
+import com.chipprbots.ethereum.crypto.kec256
 import com.chipprbots.ethereum.db.dataSource.DataSource
 import com.chipprbots.ethereum.db.dataSource.DataSourceBatchUpdate
 import com.chipprbots.ethereum.db.dataSource.DataSourceUpdateOptimized
@@ -733,6 +734,90 @@ final class PathStateStorage(
       )
     }
 
+  /** Commits the end of a sync from scratch (spec 018 C5a part 5; data-model 7.4): the rows the sync wrote are the
+    * state of `pivot` from here on. '''One batch''', synced: the caller's own updates (the pivot's header and weight,
+    * the best-block pointer, what the sync says of its recoveries), the anchor, the block the state began at, and that
+    * the sync is done. Nothing is copied and no row is written: the rows are there already, and the synced write makes
+    * every write before it durable with it (they are in the one log, and no write of this store goes round it).
+    *
+    * It is one of the writers that make an anchor where there was none, so it runs with no anchor, under the lock of
+    * the moves and the state lock, as a barrier of the clock: a view made before it is stale.
+    *
+    * There is no changeset record for the pivot: nothing this node holds came before it, and no move of the head goes
+    * below it ([[AppStateStorage.getStateOrigin]]).
+    *
+    * '''What it does not vouch for.''' That the rows are the whole of the pivot's state: only that the node at the root
+    * of the account trie is the one the pivot's state root names. The rest is the sync's, and the sample's
+    * ([[com.chipprbots.ethereum.db.storage.PathHandoffSample]]), which the caller runs first.
+    *
+    * @throws IllegalStateException
+    *   when the datadir already holds anything of a state: an anchor, a changeset record, a count of pruned records,
+    *   the block a state began at, a finalized block, or a sync that says it is done; when the mark of a clear is set
+    *   (the clear is finished first, [[finishPendingClear]]: its deletes take the flat copies of another state with
+    *   them, which no read checks by hash); when the datadir is not stamped as this layout's; or when the row at the
+    *   root of the account trie is not the node `pivot`'s state root names, or the root is the empty trie's and there
+    *   are rows
+    */
+  def commitHandoff(pivot: BlockRef, extra: Option[DataSourceBatchUpdate]): Unit =
+    extra.foreach(other =>
+      require(other.dataSource eq dataSource, "a block and its state are written in one batch, to one data source")
+    )
+    require(pivot.number > 0, "a sync hands off at a block above the genesis")
+    refuseIfFaulted()
+    moves.lock()
+    try
+      lock.locked(
+        s"the hand-off of a sync at block ${pivot.show}",
+        nanos => told("the wait for the state lock")(settings.observer.lockWaited(nanos))
+      ) {
+        val held = Seq(
+          clock.anchor.map(anchor => s"the state of block ${anchor.show}"),
+          appState.getStateAnchor().map(anchor => s"a state anchor on disk (${anchor.show})"),
+          Option.when(!changesets.isEmpty)("changeset records"),
+          appState.getChangesetPrunedTo().map(height => s"a count of pruned changesets ($height)"),
+          appState.getStateOrigin().map(origin => s"a state that began at block ${origin.show}"),
+          appState.getStateFinalized().map(block => s"a finalized block (${block.number})"),
+          Option.when(appState.isSnapSyncDone())("a sync that says it is done"),
+          Option.when(appState.isStateResetPending())(
+            s"the mark of a clear that was not finished (${StateResetPending.Key})"
+          )
+        ).flatten
+        if held.nonEmpty then
+          throw new IllegalStateException(
+            s"A sync cannot hand off at block ${pivot.show} on a data directory that already holds " +
+              held.mkString(", ")
+          )
+        if !appState.getStateLayout().contains(StateLayout.PathLive1) then
+          throw new IllegalStateException(
+            s"A sync cannot hand off at block ${pivot.show}: the data directory is not stamped as the unified " +
+              s"layout's (${appState.getStateLayout().fold("no stamp")(stamp => s"'$stamp'")})"
+          )
+        // The one node a position store finds by its hash alone. It is read here, under the lock, and not taken on
+        // the caller's word: an anchor over a root that is not there is a state no block can be executed on.
+        val rootIsTheOneNamed =
+          if pivot.stateRoot == BlockDiff.EmptyRoot then rows.isEmpty
+          else rows.read(PositionKey.AccountRoot).exists(node => ByteString(kec256(node)) == pivot.stateRoot)
+        if !rootIsTheOneNamed then
+          throw new IllegalStateException(
+            s"A sync cannot hand off at block ${pivot.show}: the row at the root of the account trie is not the " +
+              "node its state root names (for the root of the empty trie: there are rows)"
+          )
+
+        val updates: Seq[DataUpdate] =
+          extra.toSeq.flatMap(_.updates) ++
+            appState.snapSyncDone().updates ++
+            // the block this state began at: no move of the head goes below it
+            appState.putStateOrigin(pivot).updates ++
+            appState.putStateAnchor(pivot).updates
+        clock.inFlightBarrier(pivot)(dataSource.updateSync(updates))
+        // nothing was kept in memory of a datadir with no state; said again, so that it does not rest on that
+        overlay.clear()
+        window.set(None)
+        indexes.clear()
+        named = None
+      }
+    finally moves.unlock()
+
   /** A fresh layer over `parent`'s state for one execution of a block that builds on it.
     *
     * @throws StateUnavailable
@@ -940,9 +1025,9 @@ final class PathStateStorage(
     * when there was one.
     *
     * It refuses a datadir that has the mark and a state: an anchor, or a sync that says it is done. The clear's first
-    * batch removes both with the mark's own write, and the batch that ends a sync removes the mark with the anchor's,
-    * so the three together are no interrupted clear, and deleting the rows of a state that is in use would destroy it
-    * for nothing. The node does not start; an operator looks.
+    * batch removes both with the mark's own write, and a sync does not hand off while the mark is set
+    * ([[commitHandoff]]), so the three together are no interrupted clear, and deleting the rows of a state that is in
+    * use would destroy it for nothing. The node does not start; an operator looks.
     *
     * @param genesisHash
     *   the block at height 0, when the datadir has one: the best block is set back to it
