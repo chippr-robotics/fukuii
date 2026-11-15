@@ -3518,3 +3518,13 @@ items:
       spec: 018
     depends_on: [B-064]
     notes: "Beacon, C5a part 5b (2026-11-15). On the unified layout a sample that stops the hand-off (PathHandoffSample.Stopped) sends HealingImpossible; SyncController restarts SNAP at a newer pivot, which heals and samples again. Nothing bounds the cycle: snapPivotFailedFinalization blocks only the same pivot, so a systematic failure repeats on every new one. SyncController counts consecutive sample failures, exposes a metric by reason, and after three logs an ERROR with the sample's counts and stops restarting on its own. The Stopped exception should carry the counts. Gate on lifting the refusals (C5a part 10). plan.md 'C5a part 5b'."
+  - id: B-305
+    title: "Tests leave their RocksDB and work directories in the temp directory: 25 GB after a day of runs filled a session's disk"
+    priority: P2
+    status: open
+    area: ci
+    size: S
+    opened: 2026-11-15
+    refs: []
+    links: {}
+    notes: "Found 2026-11-15: a testEssential run died with 'No space left on device' after about 15 runs in one container. /tmp held 25 GB of directories no spec removed. The two largest per run are specs added in C4e (prefixes sync-fork-rewind-rocksdb and pow-prefix-reimport-rocksdb: a 75 MB RocksDB directory each, never deleted); then chain-io, fukuii-unique-codehashes-, fukuii-contract-storage-, snap-recovery-test, testdb, snap-good-peers and others. Each spec deletes what it creates (afterAll, or a kit that owns the directory); CI runners are fresh each run and do not see it."
