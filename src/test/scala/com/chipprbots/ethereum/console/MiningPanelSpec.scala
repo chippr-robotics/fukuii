@@ -107,6 +107,26 @@ class MiningPanelSpec extends AnyFlatSpec with Matchers with BeforeAndAfterAll w
       }
   }
 
+  it should "say STOPPED only of a miner that was seen running and is not: one not started yet is on" taggedAs (
+    UnitTest
+  ) in {
+    def read(s: TuiState, running: Option[Boolean]): TuiState =
+      s.withStatus(
+        s.snapshot.get
+          .copy(local = s.snapshot.get.local.copy(mining = Some(TuiFixtures.miningOn.copy(minerRunning = running))))
+      )
+    def first(s: TuiState): String = drawn(s, s.snapshot.get.local.mining.get, 120, 40).head
+    val notStarted = read(TuiFixtures.miningEtc(), Some(false))
+    first(notStarted).trim should startWith("Mining  on")
+    (first(notStarted) should not).include("STOPPED")
+    val running = read(notStarted, Some(true))
+    first(running).trim should startWith("Mining  on")
+    val stopped = read(running, Some(false))
+    first(stopped).trim should startWith("Mining  STOPPED until the node restarts")
+    // A poll that could not read the miner says nothing of it having stopped.
+    (first(read(stopped, None)) should not).include("STOPPED")
+  }
+
   it should "show on, the hashrate and the DAG in one row at tier S" taggedAs (UnitTest) in {
     val panel = miningRows(TuiFixtures.miningEtc(), 80, 24)
     panel should have size 1

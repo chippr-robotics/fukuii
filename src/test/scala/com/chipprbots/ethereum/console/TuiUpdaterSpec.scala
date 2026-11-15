@@ -91,8 +91,12 @@ class TuiUpdaterSpec extends AnyFlatSpec with Matchers with Eventually:
     ) { (updater, tui, tt) =>
       tt.press("q")
       tickWithin(updater) shouldBe true // q asks (spec 029 FR-049); the node is not stopped yet
-      tui.getState.overlay shouldBe Overlay.Dialog(DialogKind.Quit)
-      tt.press("y")
+      tui.getState.overlay shouldBe a[Overlay.Dialog]
+      // A Halt: its word, then Enter. Each key is a tick.
+      for letter <- ops.Actions.HaltWord do
+        tt.press(letter.toString)
+        tickWithin(updater) shouldBe true
+      tt.press("\r")
       tickWithin(updater) shouldBe false
       tickThread should not be null
       Await.result(quitThread.future, 5.seconds) should not be tickThread
@@ -112,7 +116,10 @@ class TuiUpdaterSpec extends AnyFlatSpec with Matchers with Eventually:
     try
       tt.press("q")
       tickWithin(updater) shouldBe true
-      tt.press("y")
+      for letter <- ops.Actions.HaltWord do
+        tt.press(letter.toString)
+        tickWithin(updater) shouldBe true
+      tt.press("\r")
       tickWithin(updater) shouldBe false
       val (screen, enabled) = Await.result(atExit.future, 5.seconds)
       screen should include(Tui.ExitAltScreen)
@@ -209,7 +216,7 @@ class TuiUpdaterSpec extends AnyFlatSpec with Matchers with Eventually:
   }
 
   // SC-004: at the 1000 ms pace a key is handled when it arrives, not at the next frame.
-  it should "dispatch 'q' and its 'y' within 500 ms at the 1000 ms pace" taggedAs (UnitTest) in {
+  it should "dispatch 'q' and its answer within 500 ms at the 1000 ms pace" taggedAs (UnitTest) in {
     val quitAt = Promise[Long]()
     val reads = new AtomicInteger(0)
     withUpdater(
@@ -225,8 +232,8 @@ class TuiUpdaterSpec extends AnyFlatSpec with Matchers with Eventually:
       eventually(timeout(5.seconds), interval(10.millis))(tt.readTimeouts should contain(1000L))
       tui.getState.motion shouldBe Motion.Reduced
       val pressed = System.nanoTime()
-      // Both keys in one write: the first opens the dialog, the second answers it, each handled as it is read.
-      tt.press("qy")
+      // All the keys in one write: the first opens the dialog, the rest answer it, each handled as it is read.
+      tt.press(s"q${ops.Actions.HaltWord}\r")
       val dispatched = Await.result(quitAt.future, 5.seconds)
       (dispatched - pressed) / 1_000_000L should be < 500L
     }

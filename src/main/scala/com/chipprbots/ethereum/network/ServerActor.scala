@@ -75,9 +75,21 @@ object ServerActor:
   def apply(
       nodeStatusHolder: AtomicReference[NodeStatus],
       peerManager: TypedActorRef[PeerManagerActor.Command],
-      blacklist: Blacklist
+      blacklist: Blacklist,
+      addressInfo: NetworkAddressInfo = new NetworkAddressInfo
   ): Behavior[Command] =
-    behavior(nodeStatusHolder, peerManager, blacklist, tcpManagerRef = None, detect = ExternalIPDetector.detect(_))
+    // Every real detection (the first one, and the periodic refresh) is recorded in `addressInfo`: which step found the
+    // address, and when. The detector is the production one; tests use `testApply` with their own stub.
+    behavior(
+      nodeStatusHolder,
+      peerManager,
+      blacklist,
+      tcpManagerRef = None,
+      detect = mode =>
+        val found = ExternalIPDetector.detectWithSource(mode)
+        addressInfo.recordDetection(mode, found, System.currentTimeMillis())
+        found.map(_.address)
+    )
 
   /** Test entry point: injects a TCP manager ref (a TestProbe) to avoid real port binding, and a stub detector so no
     * test ever reaches the real UPnP/STUN/HTTP cascade. `detect` has no default deliberately — every call site must

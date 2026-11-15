@@ -28,6 +28,7 @@ import org.bouncycastle.util.encoders.Hex
 
 import com.chipprbots.ethereum.blockchain.sync.Blacklist
 import com.chipprbots.ethereum.blockchain.sync.Blacklist.BlacklistId
+import com.chipprbots.ethereum.blockchain.sync.OperatorBlock
 import com.chipprbots.ethereum.network.PeerActor.Status.Handshaked
 import com.chipprbots.ethereum.network.PeerEventBusActor.*
 import com.chipprbots.ethereum.network.discovery.DiscoveryConfig
@@ -70,6 +71,22 @@ object PeerManagerActor:
   final case class RemoveTrustedPeerCmd(nodeId: String, replyTo: typed.ActorRef[RemoveTrustedPeerResponse])
       extends Command
   final case class SetMaxPeersCmd(n: Int, replyTo: typed.ActorRef[SetMaxPeersResponse]) extends Command
+
+  /** Reads the operator-set state of the peer manager (spec 029): the override of the outgoing limit, if one was set,
+    * the limit in force, the trusted node ids and the maintained node ids (lower-case hex, no `0x`).
+    */
+  final case class GetAdminStateCmd(replyTo: typed.ActorRef[AdminState]) extends Command
+
+  /** Dials again the maintained peers at `ip` (canonical form). Sent when the operator unblocks the address: a dial the
+    * block refused ended that peer's retries, so nothing else would bring it back before a restart.
+    */
+  final case class RedialMaintainedAtCmd(ip: String) extends Command
+  final case class AdminState(
+      maxOutgoingOverride: Option[Int],
+      effectiveMaxOutgoing: Int,
+      trustedNodeIds: Set[String],
+      maintainedNodeIds: Set[String]
+  )
 
   // Fire-and-forget wire messages forwarded by the shell:
   case object StartConnectingCmd extends Command
@@ -581,6 +598,12 @@ object PeerManagerActor:
           peerEventBus ! PublishCmd(PeerEvent.MaintainedPeersChanged(maintainedPeersByNodeId.keySet))
           Some(connectWith(uri, connectedPeers))
 
+        case RedialMaintainedAtCmd(ip) =>
+          maintainedPeersByNodeId.values
+            .filter(uri => BlockedIPRegistry.canonical(bareHost(uri)).contains(ip))
+            .foreach(uri => context.self ! ConnectToPeerCmd(uri))
+          Some(Behaviors.same)
+
         case RemoveMaintainedPeerCmd(nodeId) =>
           maintainedPeersByNodeId = maintainedPeersByNodeId - nodeId.toLowerCase
           peerEventBus ! PublishCmd(PeerEvent.MaintainedPeersChanged(maintainedPeersByNodeId.keySet))
@@ -607,6 +630,15 @@ object PeerManagerActor:
         case SetMaxPeersCmd(n, replyTo) =>
           maxOutgoingPeersOverride = Some(n)
           replyTo ! SetMaxPeersResponse(success = true)
+          Some(Behaviors.same)
+
+        case GetAdminStateCmd(replyTo) =>
+          replyTo ! AdminState(
+            maxOutgoingOverride = maxOutgoingPeersOverride,
+            effectiveMaxOutgoing = effectiveMaxOutgoing,
+            trustedNodeIds = trustedPeersByNodeId,
+            maintainedNodeIds = maintainedPeersByNodeId.keySet
+          )
           Some(Behaviors.same)
 
         case _ => None
@@ -723,8 +755,23 @@ object PeerManagerActor:
       // An operator's explicit request (admin_addPeer via maintained/trusted, net_connectToPeer, snap-server-peers)
       // overrides the exclusion; internal dial paths do not.
       val operatorRequested = isMaintainedOrTrusted || explicit
+      // An address the operator blocked (admin_blockIP) is never dialled, by any path, maintained and trusted peers and
+      // explicit requests included: the block is the operator's call. Only OperatorBlock is asked, not PeerAddress:
+      // an address that is merely auto-blacklisted still dials here (a maintained peer must reconnect).
+      // The list holds addresses in their canonical form, and an enode may write the same address another way (a
+      // compressed IPv6 literal, an IPv4-mapped one, a name): the host is asked as written, in its canonical form,
+      // and as the address it resolved to.
+      val operatorBlocked =
+        (Seq(host) ++ BlockedIPRegistry.canonical(host) ++ Option(remoteAddress.getAddress).map(
+          _.getHostAddress
+        )).distinct
+          .exists(h => blacklist.isBlacklisted(OperatorBlock(h)))
 
       validConnection match
+        case _ if operatorBlocked =>
+          log.info("Not dialling {}: its address is blocked by the operator (admin_blockIP)", uri)
+          Behaviors.same
+
         case Right(_) if excludedWrongNetwork && !operatorRequested =>
           // Known-nodes and other internal paths funnel here; discovery is also filtered in canConnectTo.
           log.debug("Not dialling {}: node is excluded as wrong-network", uri)

@@ -111,12 +111,36 @@ judged on enlarged renders and mock screens ([art-preview/](./art-preview/)).
 
 ## Slice 7: actions
 
-1. `9`. `:loglevel DEBUG`: the dialog shows before and after; apply; the log gains DEBUG lines and one
-   `fukuii.tui.ops` line. `:loglevel reset`.
-2. On Peers, `a` on a peer, disconnect: the preview names the peer; `y`; it is gone and may return.
-3. `:rpc stop http`, then `curl` fails; `:rpc start http`, then it answers.
-4. `:config jwt`: the path is shown, never the secret. `:bundle`: the preview lists the files; unpack the bundle and
-   search it for the JWT secret and the node key: neither is there.
-5. `q`: type `stop`. The node stops.
-6. `FUKUII_TUI_READ_ONLY=1`: every action above is refused, and the Ops view says the TUI is read-only.
-7. Paste `q`, a newline and `stop` into the window: the node keeps running.
+Run these on a side instance, never on a node whose uptime matters: steps 6, 9 and 10 stop things.
+
+1. `9`. The Ops view lists every action with its class. `:loglevel DEBUG`: the dialog shows the level now and after,
+   with Cancel focused; `Enter` alone cancels. Again, `Tab`, `Enter`: the log gains DEBUG lines and one
+   `fukuii.tui.ops` line with `outcome=confirmed`. `:loglevel reset` puts it back. `:loglevel DEBUG no.such.logger`
+   is refused and names the nearest loggers.
+2. On Peers, `a` on a peer: the prompt holds `peer drop <id>`. `Enter`: the preview names the peer, its client and
+   address; `y`; it is gone and may return. Check with `admin_peers` on another terminal if the namespace is on.
+3. `:peer block <address of a connected peer>`: the preview lists the peers at that address; `y`; they are gone and
+   do not return while the block stands (B-277: before this slice `admin_blockIP` blocked nothing).
+   `:peer unblock <address>`; the peer may return. `:tunables` shows the block while it stands.
+4. `:rpc stop http`: the preview names the address, the namespaces and what fails; `y`; `curl` to the port is
+   refused, and the RPC view says `stopped here`. `:rpc start http`; `curl` answers. With WebSocket enabled and a
+   client subscribed to `newHeads`: `:rpc stop ws` closes the client at once. `:rpc start ws` on a node started
+   with WebSocket off is refused and says the dashboard enables nothing.
+5. `:test-rpc`: one row for each enabled endpoint, with what answered and how long it took; the Engine API row
+   says an unauthenticated request was refused. `:net`: the listening address, what was detected and how.
+6. `:config jwt`: the path is shown, never the secret; `:config password` shows `<hidden>` for each. `:bundle`: the
+   preview lists the files; `y`; the result says how many were written and their size; under `<datadir>/support/bundle-<time>/`, `grep -r` for the JWT
+   secret's hex and the node key finds neither, and `ls -l` shows the files readable by the owner only.
+7. `:dbcheck` on a node that synced block by block reports the points read and none missing; on a node that took
+   its state by SNAP, or an Engine API node, it says why the check means nothing there. The dashboard stays
+   responsive while it runs, and the Ops view shows its progress.
+8. `:threshold disk-warn 500GiB` (above what is free): the preview names the alert that would fire; apply; the
+   alert row and the Disk bar change at once. `:threshold reset`.
+9. ETC node mining with its own miner: `a` on the RPC view, `Enter`: the dialog asks for the word. `y` does
+   nothing; `stop`, `Enter`: the miner stops, the mining panel says `STOPPED until the node restarts`, and
+   `:mining start` is refused with the reason. On an ETH node `:mining stop` says there is no miner.
+10. `q`: the dialog asks for the word. `y` does nothing. `stop`, `Enter`: the node stops.
+11. `FUKUII_TUI_READ_ONLY=1`: every action above but `config`, `tunables`, `deps`, `test-rpc` and `net` is refused
+    with one line and no dialog, and the Ops view says the dashboard is read-only.
+12. Paste `q`, a newline and `y` into the window: the node keeps running. 80×24: a dialog whose preview does not
+    fit says so and cannot be confirmed; widen the terminal and it can.

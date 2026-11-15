@@ -172,10 +172,13 @@ class TuiSpec extends AnyFlatSpec with Matchers:
     text should include("regular") // slice 3: the sync panel names the sync
   }
 
-  it should "keep running on 'q' then 'y' — quitting the node is the caller's job" taggedAs (UnitTest) in withTui() {
+  it should "keep running on 'q' then the word — quitting the node is the caller's job" taggedAs (UnitTest) in withTui() {
     (tui, _) =>
       tui.handleCommand('q') shouldBe TuiCommand.Continue // q asks (spec 029 FR-049)
-      tui.handleCommand('y') shouldBe TuiCommand.Quit
+      tui.handleCommand('y') shouldBe TuiCommand.Continue // a Halt is not answered with y
+      tui.handleKey(Key.Backspace) shouldBe TuiCommand.Continue // the y is taken back
+      TuiFixtures.HaltKeys.init.foreach(key => tui.handleKey(key) shouldBe TuiCommand.Continue)
+      tui.handleKey(Key.Enter) shouldBe TuiCommand.Quit
       tui.isEnabled shouldBe true
   }
 

@@ -756,6 +756,124 @@ object TuiFixtures:
       )
     )
 
+  // ---- Operator actions (spec 029 slice 7) -------------------------------------------------------------------------
+
+  val Quit: ops.ActionRequest = ops.ActionRequest(ops.Actions.Quit.name)
+
+  /** The dialog `q` opens on `state`: stopping the node is a Halt, and what stops with it is its preview. */
+  def quitDialog(state: TuiState): Overlay =
+    Overlay.Dialog(
+      DialogKind.Confirm(Quit, ops.RiskClass.Halt, Some(ops.Preview(widgets.DialogBox.quitLines(state))))
+    )
+
+  /** `state` with that dialog open. */
+  def askedToQuit(state: TuiState): TuiState = state.copy(overlay = quitDialog(state))
+
+  /** The keys that confirm a Halt: its word, then Enter. */
+  val HaltKeys: Seq[Key] = ops.Actions.HaltWord.map(Key.Char(_)) :+ Key.Enter
+
+  // ---- spec 029 slice 7: actions ----------------------------------------------------------------------------------
+
+  private val ActionCtx = UpdateCtx(page = 10, configuredMotion = Motion.Reduced)
+
+  /** `state` after `command` was typed at the prompt and Enter pressed, with the preview the runner would have read
+    * (None while it is being read), and `typed` typed into the dialog.
+    */
+  def asked(state: TuiState, command: String, preview: Option[ops.Preview], typed: String = ""): TuiState =
+    val keys = (Key.Char(':') +: command.map(Key.Char(_))) :+ Key.Enter
+    val open = keys.foldLeft(state)((s, k) => Update(s, k, ActionCtx)._1)
+    val request = open.confirming.getOrElse(sys.error(s"'$command' opened no dialog"))
+    val read = preview.fold(open)(p => open.withActions(open.actions.copy(previews = Map(request -> p))))
+    typed.foldLeft(read)((s, c) => Update(s, Key.Char(c), ActionCtx)._1)
+
+  val LogLevelPreview: ops.Preview = ops.Preview(
+    Vector(
+      "ROOT: logs at INFO now (set on it: INFO), DEBUG after.",
+      "Every logger with no level of its own follows it.",
+      "It lasts until the node restarts; loglevel reset puts it back."
+    ),
+    None
+  )
+  val RpcStopPreview: ops.Preview = ops.Preview(
+    Vector(
+      "The HTTP server on 127.0.0.1:8546 stops listening.",
+      "It serves eth, net, web3. Nothing sensitive is served to other hosts.",
+      "Its open connections are not counted by this server: in-flight requests finish, then every connection is closed within 3 s.",
+      "Readiness and health probes on that port fail until rpc start http."
+    ),
+    None
+  )
+  val MiningStopPreview: ops.Preview = ops.Preview(
+    Vector(
+      "The built-in miner stops: 1.20 MH/s now.",
+      "Blocks mined pay 0x1b7047b4338acf65be94c1a3e8c5c9338ad7d67c.",
+      "It cannot be started again until the node restarts."
+    ),
+    None
+  )
+  val MiningStartRefusal: ops.Preview = ops.Preview(Vector.empty, Some(ops.MiningActions.NoMinerToStart))
+
+  /** The Ops view with a check running, and attempts that ended each way. */
+  def opsBusy(state: TuiState): TuiState =
+    def at(secondsAgo: Long) = state.now.minusSeconds(secondsAgo)
+    state.withActions(
+      ops.ActionsView(
+        running = Vector(
+          ops.ActionActivity(ops.ActionRequest("dbcheck"), at(42), "checked 12,000 of 21,480 sample points")
+        ),
+        history = Vector(
+          ops.ActionRecord(
+            ops.ActionRequest("loglevel", Vector("level" -> "DEBUG")),
+            ops.ActionOutcome.Confirmed("ROOT logs at DEBUG"),
+            at(900)
+          ),
+          ops.ActionRecord(
+            ops.ActionRequest("rpc stop", Vector("transport" -> "http")),
+            ops.ActionOutcome.Cancelled,
+            at(600)
+          ),
+          ops.ActionRecord(
+            ops.ActionRequest("mining start"),
+            ops.ActionOutcome.Refused(ops.MiningActions.NoMinerToStart),
+            at(300)
+          ),
+          ops.ActionRecord(
+            ops.ActionRequest("peer add", Vector("enode" -> "enode://ab12@203.0.113.7:30303")),
+            ops.ActionOutcome.Failed("the peer manager refused the enode"),
+            at(120)
+          )
+        )
+      )
+    )
+
+  /** The Ops view of a node that takes its blocks from a consensus client: the mining actions are not on it. */
+  def opsNoMiner(state: TuiState): TuiState =
+    state.withActions(
+      ops.ActionsView(unavailable =
+        Seq(ops.Actions.MiningStart, ops.Actions.MiningStop, ops.Actions.Coinbase)
+          .map(_.name -> ops.MiningActions.NotProofOfWork)
+          .toMap
+      )
+    )
+
+  /** The configuration screen, read a minute ago, filtered. */
+  def configScreen(state: TuiState, filter: String): TuiState =
+    val rows = Vector(
+      "fukuii.datadir = /var/lib/fukuii/etc",
+      "fukuii.network.rpc.http.enabled = true",
+      "fukuii.network.rpc.http.interface = 127.0.0.1",
+      "fukuii.network.rpc.http.port = 8546",
+      "fukuii.network.rpc.http.certificate.password = <hidden>",
+      "fukuii.network.rpc.ws.enabled = false",
+      "fukuii.network.server-address.port = 30303",
+      "fukuii.sync.do-snap-sync = true"
+    )
+    state
+      .withActions(
+        ops.ActionsView(reports = Map(ops.Actions.Config.name -> ops.ActionReport(rows, state.now.minusSeconds(60))))
+      )
+      .copy(screens = List(Screen.Config(filter, 0)))
+
   // ---- Storage, System and health (spec 029 slice 6) ---------------------------------------------------------------
 
   private val MiB: Long = 1024L * 1024

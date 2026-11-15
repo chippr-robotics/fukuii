@@ -97,7 +97,7 @@ class TuiKeysSpec extends AnyFlatSpec with Matchers:
     withTui { (tui, _) =>
       tui.handleCommand('h')
       tui.handleCommand('q') shouldBe TuiCommand.Continue
-      tui.getState.overlay shouldBe Overlay.Dialog(DialogKind.Quit)
+      tui.getState.overlay shouldBe a[Overlay.Dialog]
     }
     withTui { (tui, _) =>
       tui.handleCommand('h')
@@ -176,21 +176,28 @@ class TuiKeysSpec extends AnyFlatSpec with Matchers:
     tui.render()
     val frame = TuiTestTerminal.visible(tt.lastFrame)
     frame should include("Stop this node?")
-    frame should include("y  stop the node")
+    // Stopping the node is a Halt: its word, then Enter (spec 029 FR-048, FR-049).
+    frame should include("type stop then Enter")
+    (frame should not).include("y  stop the node")
     // The alert row is still the third row: the dialog covers body rows only.
     frame.linesIterator.drop(2).next() should include("no alerts")
   }
 
-  it should "stop the node on y, and on nothing else" taggedAs (UnitTest) in {
+  it should "stop the node on its word and Enter, and on nothing else" taggedAs (UnitTest) in {
     withTui { (tui, _) =>
       tui.handleCommand('q')
-      for key <- Seq(Key.Enter, Key.Char('x'), Key.Char('q'), Key.Tab, Key.Paste("y"), Key.Paste("q\ny")) do
+      for key <- Seq(Key.Enter, Key.Tab, Key.Up, Key.Paste("stop"), Key.Paste("y"), Key.Paste("q\nstop\n")) do
         tui.handleKey(key) shouldBe TuiCommand.Continue
-        tui.getState.overlay shouldBe Overlay.Dialog(DialogKind.Quit)
-      tui.handleCommand('y') shouldBe TuiCommand.Quit
+        tui.getState.overlay shouldBe a[Overlay.Dialog]
+      // The old answer does nothing; letters that are not the word do not confirm.
+      tui.handleCommand('y') shouldBe TuiCommand.Continue
+      tui.handleKey(Key.Enter) shouldBe TuiCommand.Continue
+      tui.handleKey(Key.Backspace) shouldBe TuiCommand.Continue // takes the y back
+      TuiFixtures.HaltKeys.init.foreach(key => tui.handleKey(key) shouldBe TuiCommand.Continue)
+      tui.handleKey(Key.Enter) shouldBe TuiCommand.Quit
       tui.isEnabled shouldBe true // the caller restores the terminal, then exits
     }
-    for cancel <- Seq(Key.Char('n'), Key.Esc, Key.Backspace) do
+    for cancel <- Seq(Key.Esc, Key.Backspace) do
       withTui { (tui, _) =>
         tui.handleCommand('q')
         tui.handleKey(cancel) shouldBe TuiCommand.Continue
@@ -245,13 +252,14 @@ class TuiKeysSpec extends AnyFlatSpec with Matchers:
     widgets.DialogBox.wrap("short", 40) shouldBe Seq("short")
     // The quit dialog on a node with a consensus client: its longest sentence is whole at every width.
     val renderer = TuiRenderer(TuiConfig.default)
-    val asked = TuiFixtures.sepoliaNearHead().copy(overlay = Overlay.Dialog(DialogKind.Quit))
-    val cl = TuiFixtures.withLocal(asked, _.copy(cl = Some(TuiFixtures.clConnected)))
+    val cl = TuiFixtures.askedToQuit(
+      TuiFixtures.withLocal(TuiFixtures.sepoliaNearHead(), _.copy(cl = Some(TuiFixtures.clConnected)))
+    )
     for (w, h) <- Seq((80, 24), (120, 40), (160, 48)) do
       // The body rows without the sidebar columns, joined: a sentence may run over two of them.
       val text =
         TuiFixtures.panelRows(renderer.render(cl, w, h).map(_.toString), w, h).mkString(" ").replaceAll("\\s+", " ")
-      withClue(s"${w}x$h: ")(text should include("a validator on it misses duties."))
+      withClue(s"${w}x$h: ")(text should include("a validator on it misses duties until it is back."))
   }
 
   "The footer" should "list the keys for its tier" taggedAs (UnitTest) in {

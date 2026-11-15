@@ -294,6 +294,9 @@
     <!-- JSON-RPC - API server                                               -->
     <!-- =================================================================== -->
     <!-- Set to DEBUG for RPC request/response troubleshooting -->
+    <!-- The dashboard's audit trail (spec 029 FR-051): every operator action attempted from the TUI, confirmed,
+         cancelled, refused or failed, one INFO line each. Kept at INFO whatever the root level is. -->
+    <logger name="fukuii.tui.ops" level="INFO" />
     <logger name="com.chipprbots.ethereum.jsonrpc" level="ERROR" />
     <logger name="com.chipprbots.ethereum.jsonrpc.JsonRpcController" level="ERROR" />
     <logger name="com.chipprbots.ethereum.jsonrpc.server.http" level="ERROR" />

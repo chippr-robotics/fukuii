@@ -89,6 +89,97 @@ object AlertThresholds:
     "write-stall"
   )
 
+  /** Each key with how its threshold is read and written: one row a key, in [[Keys]]' order. */
+  private val fields: Seq[(String, AlertThresholds => String, (AlertThresholds, AlertThresholds) => AlertThresholds)] =
+    def time(d: Duration): String =
+      if d.toMillis % 60_000 == 0 && d.toMinutes > 0 then s"${d.toMinutes}m" else s"${d.getSeconds}s"
+    def size(bytes: Long): String =
+      if bytes % (GiB * 1024) == 0 then s"${bytes / (GiB * 1024)} TiB"
+      else if bytes % GiB == 0 then s"${bytes / GiB} GiB"
+      else s"$bytes"
+    Seq(
+      ("zero-peers-after", t => time(t.zeroPeersAfter), (to, from) => to.copy(zeroPeersAfter = from.zeroPeersAfter)),
+      (
+        "low-peers-fraction",
+        _.lowPeersFraction.toString,
+        (to, from) => to.copy(lowPeersFraction = from.lowPeersFraction)
+      ),
+      ("stall-after", t => time(t.stallAfter), (to, from) => to.copy(stallAfter = from.stallAfter)),
+      (
+        "snap-sample-max-age",
+        t => time(t.snapSampleMaxAge),
+        (to, from) => to.copy(snapSampleMaxAge = from.snapSampleMaxAge)
+      ),
+      ("disk-warn", t => size(t.diskWarnBytes), (to, from) => to.copy(diskWarnBytes = from.diskWarnBytes)),
+      ("disk-error", t => size(t.diskErrorBytes), (to, from) => to.copy(diskErrorBytes = from.diskErrorBytes)),
+      ("cl-silent-after", t => time(t.clSilentAfter), (to, from) => to.copy(clSilentAfter = from.clSilentAfter)),
+      (
+        "cl-first-call-grace",
+        t => time(t.clFirstCallGrace),
+        (to, from) => to.copy(clFirstCallGrace = from.clFirstCallGrace)
+      ),
+      (
+        "new-payload-silent-after",
+        t => time(t.newPayloadSilentAfter),
+        (to, from) => to.copy(newPayloadSilentAfter = from.newPayloadSilentAfter)
+      ),
+      (
+        "hashrate-zero-after",
+        t => time(t.hashrateZeroAfter),
+        (to, from) => to.copy(hashrateZeroAfter = from.hashrateZeroAfter)
+      ),
+      ("reorg-depth", _.reorgDepth.toString, (to, from) => to.copy(reorgDepth = from.reorgDepth)),
+      (
+        "heap-warn-fraction",
+        _.heapWarnFraction.toString,
+        (to, from) => to.copy(heapWarnFraction = from.heapWarnFraction)
+      ),
+      ("gc-share-warn", _.gcShareWarn.toString, (to, from) => to.copy(gcShareWarn = from.gcShareWarn)),
+      (
+        "rpc-error-rate-warn",
+        _.rpcErrorRateWarn.toString,
+        (to, from) => to.copy(rpcErrorRateWarn = from.rpcErrorRateWarn)
+      ),
+      (
+        "write-stall",
+        t => if t.writeStall then "true" else "false",
+        (to, from) => to.copy(writeStall = from.writeStall)
+      )
+    )
+
+  /** The value of `key` in `thresholds`, as `tui.conf` would write it; None for a key that is no threshold. */
+  def show(thresholds: AlertThresholds, key: String): Option[String] =
+    fields.collectFirst { case (`key`, read, _) => read(thresholds) }
+
+  /** `thresholds` with `key` set to `value`, read as `tui.conf` reads it: a Left says why it is no value for that key,
+    * in the words the node's start would use. The others are untouched, and so is the rule between the disk's two
+    * thresholds.
+    */
+  def set(thresholds: AlertThresholds, key: String, value: String): Either[String, AlertThresholds] =
+    fields.collectFirst { case (`key`, _, write) => write } match
+      case None => Left(s"there is no threshold '$key'; the thresholds are ${Keys.mkString(", ")}")
+      case Some(write) =>
+        try
+          // The one key, parsed alone, with the others at their defaults; then that one field taken from it.
+          val quoted = com.typesafe.config.ConfigUtil.quoteString(value)
+          val parsed = fromConfig(
+            com.typesafe.config.ConfigFactory
+              .parseString(s"alerts { $key = $quoted }")
+              // The disk's error default would sit above a warning set lower than it: checked below, on the result.
+              .withFallback(
+                com.typesafe.config.ConfigFactory.parseString(
+                  if key == "disk-warn" then "alerts { disk-error = 1 }"
+                  else if key == "disk-error" then "alerts { disk-warn = 1024 PiB }"
+                  else ""
+                )
+              )
+          )
+          val next = write(thresholds, parsed)
+          if next.diskErrorBytes > next.diskWarnBytes then
+            Left("the disk's error must begin at or below its warning (disk-error <= disk-warn)")
+          else Right(next)
+        catch case e: ConfigException => Left(Option(e.getMessage).getOrElse("not a valid value"))
+
   /** The thresholds in a `fukuii.tui` block. An absent key keeps its default. An invalid value, or a key under `alerts`
     * that is none of [[Keys]], fails with a [[ConfigException.BadValue]] that names the key: a threshold misspelt is
     * one the operator believes is set.

@@ -188,7 +188,7 @@ class GraphicsModeSpec extends AnyFlatSpec with Matchers with OptionValues with 
     val ctx = UpdateCtx(page = 10, configuredMotion = Motion.Full)
     for state <- Seq(
         TuiFixtures.syncedEtc().openHelp,
-        TuiFixtures.syncedEtc().copy(overlay = Overlay.Dialog(DialogKind.Quit)),
+        TuiFixtures.askedToQuit(TuiFixtures.syncedEtc()),
         TuiFixtures.syncedEtc().copy(notice = Some("said"))
       )
     do Update(state, Key.CellSize(10, 20), ctx) shouldBe (state, Nil)

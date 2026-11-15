@@ -139,7 +139,7 @@ class GraphicsRenderSpec extends AnyFlatSpec with Matchers with OptionValues wit
       renderer.frame(still(state).copy(graphics = pixel), w, h).regions.map(_.id)
     ids(TuiFixtures.syncedEtc(), 80, 24) shouldBe empty
     ids(TuiFixtures.syncedEtc().withView(TuiView.Peers), 160, 48) shouldBe Seq("network")
-    val asked = TuiFixtures.syncedEtc().copy(overlay = Overlay.Dialog(DialogKind.Quit))
+    val asked = TuiFixtures.askedToQuit(TuiFixtures.syncedEtc())
     ids(asked, 160, 48) shouldBe Seq("network")
     // And no cell moves when the question opens: only the mascot's own cells and the dialog's rows change.
     val before = renderer.render(still(TuiFixtures.syncedEtc()).copy(graphics = GraphicsMode.Block), 160, 48)

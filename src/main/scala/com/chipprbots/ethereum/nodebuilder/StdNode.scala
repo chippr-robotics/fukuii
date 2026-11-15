@@ -328,29 +328,28 @@ abstract class BaseNode extends Node:
 
   private def runDBConsistencyCheck(): Unit =
     val appState = storagesInstance.storages.appStateStorage
-    // Skip consistency check after SNAP sync — block headers 0..pivot don't exist yet.
-    // SNAP sync only stores the pivot block header; earlier headers are downloaded
-    // incrementally during regular sync's block-by-block import.
-    if appState.isSnapSyncDone() then
-      log.info("Skipping DB consistency check: SNAP sync stores only pivot block header, not full header chain")
-      // Bug 28: Skip when SNAP is mid-sync. AppStateStorage.bestBlock holds the pivot number
-      // whose header we have, but the block body was never persisted and the 0..pivot chain is
-      // incomplete. The consistency checker would see "best block hash not in block storage",
-      // log "Database seems to be in inconsistent state", and call shutdown — turning a recoverable
-      // mid-SNAP restart into an unrecoverable wipe-and-resync.
-    else if appState.isSnapSyncInProgress() then
-      log.info("Skipping DB consistency check: SNAP sync in progress (pivot header only, no full chain yet)")
-      // Skip consistency check in Engine API mode — optimistic imports store blocks
-      // at the chain tip without the full header chain from genesis.
-    else if engineApiConfig.enabled then
-      log.info("Skipping DB consistency check: Engine API mode uses optimistic block import")
-    else
-      StorageConsistencyChecker.checkStorageConsistency(
-        appState.getBestBlockNumber(),
-        storagesInstance.storages.blockNumberMappingStorage,
-        storagesInstance.storages.blockHeadersStorage,
-        shutdown
-      )(using log)
+    // Skip conditions live in StorageConsistencyChecker.applicability (shared with PeriodicConsistencyCheck):
+    // - after SNAP sync: block headers 0..pivot don't exist yet; SNAP stores only the pivot header, earlier headers
+    //   are downloaded incrementally during regular sync's block-by-block import.
+    // - Bug 28, SNAP mid-sync: AppStateStorage.bestBlock holds the pivot number whose header we have, but the block
+    //   body was never persisted and the 0..pivot chain is incomplete. The checker would log "Database seems to be in
+    //   inconsistent state" and call shutdown, turning a recoverable mid-SNAP restart into an unrecoverable
+    //   wipe-and-resync.
+    // - Engine API mode: optimistic imports store blocks at the chain tip without the full header chain from genesis.
+    StorageConsistencyChecker.applicability(appState, engineApiConfig.enabled) match
+      case Some(StorageConsistencyChecker.SkipReason.SnapDone) =>
+        log.info("Skipping DB consistency check: SNAP sync stores only pivot block header, not full header chain")
+      case Some(StorageConsistencyChecker.SkipReason.SnapInProgress) =>
+        log.info("Skipping DB consistency check: SNAP sync in progress (pivot header only, no full chain yet)")
+      case Some(StorageConsistencyChecker.SkipReason.EngineApi) =>
+        log.info("Skipping DB consistency check: Engine API mode uses optimistic block import")
+      case None =>
+        StorageConsistencyChecker.checkStorageConsistency(
+          appState.getBestBlockNumber(),
+          storagesInstance.storages.blockNumberMappingStorage,
+          storagesInstance.storages.blockHeadersStorage,
+          shutdown
+        )(using log)
 
   private def startPeerManager(): Unit = peerManager ! PeerManagerActor.StartConnectingCmd
 
@@ -642,6 +641,10 @@ abstract class BaseNode extends Node:
             )
           }
       )
+      // Spec 029 slice 7: the operator's actions, each tied to the node's own function that carries it out. They run
+      // on threads of the dashboard's action runner.
+      val (tuiActions, tuiActionsNotOffered) = TuiActions.of(this, tui.config.alerts)
+      tui.setActions(tuiActions, tuiActionsNotOffered)
       // Spec 029 slice 3: the explorer's lookups, answered from the node's own stores on a worker thread of the TUI's.
       // The same reads the JSON-RPC block, transaction and account methods make; nothing is written.
       tui.setLookups(

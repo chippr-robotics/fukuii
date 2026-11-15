@@ -100,6 +100,9 @@ private[console] object HealthPanel:
     }
     fit(concat(head, text(said, if bar.state == CheckState.Ok then c.t.value else look)), w, c.g)
 
+  /** A bar's row with nothing selected, for a screen that lists the bars beside something else. */
+  def barRow(c: Ctx, bar: HealthBar, w: Int): AttributedString = row(c, bar, selected = false, w)
+
   /** The System view's bars: a title and a row a bar where the panel has the rows, the rows alone where it has one
     * fewer, and the strip where it has less.
     */

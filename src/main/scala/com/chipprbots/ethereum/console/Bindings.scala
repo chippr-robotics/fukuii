@@ -11,6 +11,9 @@ enum Action:
   case OpenPrompt, OpenFilter
   case Help, Glyphs, Graphics, Pause, Redraw, Detach, AskQuit
 
+  /** `a`: the action that goes with the selected row. */
+  case Act
+
 /** One row of the key table: the keys, how Help names them, and what they do.
   *
   * @param label
@@ -47,7 +50,7 @@ object Bindings:
       Binding(
         chars(':'),
         ":",
-        "the prompt: a view's name, peer <id>, glyphs, graphics, art, detach, quit",
+        "the prompt: a view's name, peer <id>, an action (the Ops view lists them), detach, quit",
         Action.OpenPrompt
       ),
       Binding(chars('/'), "/", "filter the list on screen as you type", Action.OpenFilter),
@@ -58,6 +61,7 @@ object Bindings:
       Binding(chars('p'), "p", "pause or resume the motion (polling continues)", Action.Pause),
       Binding(chars('r'), "r", "redraw the screen", Action.Redraw),
       Binding(chars('d'), "d", "detach: the TUI closes, the node keeps running", Action.Detach),
+      Binding(chars('a'), "a", "an action on the selected row (a peer; mining, on the RPC view)", Action.Act),
       Binding(chars('q'), "q", "ask to stop the node (Ctrl-C stops it at once)", Action.AskQuit)
     )
 

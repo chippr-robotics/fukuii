@@ -360,27 +360,47 @@ object Health:
     */
   private def miningCheck(state: TuiState): Option[HealthCheck] =
     val mining = state.snapshot.flatMap(_.local.mining)
-    // The clock outlives a poll that could not read the metrics, and so does the alert.
-    Option.when(state.nodeSettings.miningEnabled && (mining.isDefined || state.hashrateZeroSince.isDefined)) {
-      val limits = state.thresholds
-      val silent = state.hashrateZeroSince.map(Duration.between(_, state.now))
-      HealthCheck(
-        Subsystem.Mining,
-        "hashrate",
-        silent match
-          case Some(s) => s"none reported for ${short(s)}"
-          case None =>
-            mining.fold("not read")(m =>
-              if m.dag.exists(_.loaded) then formatHashrate(m.hashrate) else "the DAG is not loaded yet"
-            )
-        ,
-        s"warn after ${short(limits.hashrateZeroAfter)} at none with the DAG loaded",
-        headroom = Some(silent.fold(1.0)(left(_, limits.hashrateZeroAfter))),
-        alert = silent
-          .filter(_.compareTo(limits.hashrateZeroAfter) > 0)
-          .map(s => Alert(Severity.Warn, s"mining on, no hashrate reported for ${formatShort(s.getSeconds)}"))
+    val stopped = state.minerStopped.contains(true)
+    if state.nodeSettings.miningEnabled && stopped then
+      // The built-in miner was started with the node and is not running. Stopped from this dashboard, it is as the
+      // operator left it and raises nothing; otherwise it failed, and nothing else on screen would say so. Either
+      // way it starts again only with the node (spec 029, forge).
+      val here = state.minerStoppedHere
+      Some(
+        HealthCheck(
+          Subsystem.Mining,
+          "built-in miner",
+          if here then "stopped from this dashboard; it starts again when the node restarts"
+          else "not running, and not stopped from here; it starts again when the node restarts",
+          "warn when it is enabled and not running, unless it was stopped from here",
+          headroom = Some(if here then 1.0 else 0.0),
+          alert = Option.when(!here)(
+            Alert(Severity.Warn, "mining is enabled and the built-in miner is not running: restart the node")
+          )
+        )
       )
-    }
+    else
+      // The clock outlives a poll that could not read the metrics, and so does the alert.
+      Option.when(state.nodeSettings.miningEnabled && (mining.isDefined || state.hashrateZeroSince.isDefined)) {
+        val limits = state.thresholds
+        val silent = state.hashrateZeroSince.map(Duration.between(_, state.now))
+        HealthCheck(
+          Subsystem.Mining,
+          "hashrate",
+          silent match
+            case Some(s) => s"none reported for ${short(s)}"
+            case None =>
+              mining.fold("not read")(m =>
+                if m.dag.exists(_.loaded) then formatHashrate(m.hashrate) else "the DAG is not loaded yet"
+              )
+          ,
+          s"warn after ${short(limits.hashrateZeroAfter)} at none with the DAG loaded",
+          headroom = Some(silent.fold(1.0)(left(_, limits.hashrateZeroAfter))),
+          alert = silent
+            .filter(_.compareTo(limits.hashrateZeroAfter) > 0)
+            .map(s => Alert(Severity.Warn, s"mining on, no hashrate reported for ${formatShort(s.getSeconds)}"))
+        )
+      }
 
   /** The heap and the collector (spec 029), over the last minute of the System view's history: the least the heap fell
     * to, and the collector's share of the time, from its total at the minute's two ends. Neither is judged unless the

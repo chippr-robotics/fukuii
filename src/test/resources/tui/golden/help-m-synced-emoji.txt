@@ -21,7 +21,7 @@
  [6] Storage      │   End >      the last row                                                                           
  [7] System       │   Enter      open the selected row                                                                  
  [8] Logs         │   Esc Bksp   back; clear a filter                                                                   
- [9] Ops          │   :          the prompt: a view's name, peer <id>, glyphs, graphics, art, detach, quit              
+ [9] Ops          │   :          the prompt: a view's name, peer <id>, an action (the Ops view lists them), detach, qu… 
                   │   /          filter the list on screen as you type                                                  
  graphics text    │   ? h F1     this help; any key but q, r and d returns                                              
                   │   g          switch the glyph set: emoji / ascii                                                    
@@ -29,12 +29,12 @@
                   │   p          pause or resume the motion (polling continues)                                         
                   │   r          redraw the screen                                                                      
                   │   d          detach: the TUI closes, the node keeps running                                         
+                  │   a          an action on the selected row (a peer; mining, on the RPC view)                        
                   │   q          ask to stop the node (Ctrl-C stops it at once)                                         
                   │   l          the Logs view                                                                          
                   │─────────────────────────────────────────────────────────────────────────────────────────────────────
                   │ Glyphs (emoji, g switches)                                                                          
                   │   🪱 worm (progress)   🧠 brain (done)   💤 stalled   ✓ done / active   ◆ peer   ⚠ warning          
                   │   ✗ error   ▶ next fork   · to come   💾 SNAP phase   ↑ ↓ → score trend   — no score yet            
-                  │                                                                                                     
                   │                                                                                                     
  1-9 view  Enter open  Esc back  : prompt  / filter  ? help  p pause  r redraw  d detach  q quit                        

@@ -1,0 +1,40 @@
+ # FUKUII  sepolia (11155111) . PoS . head 7,412,009 . 23/50 peers . up 3d 4h                                       Ops 
+------------------------------------------------------------------------------------------------------------------------
+ + no alerts                                                                                                            
+                  | Peers   23/50 ##########  Block  7,412,009 -> 7,412,011 (-2)             Txpool  1,204 (3 blob)     
+                  | Sync    regular 99% . rate 0.08 blk/s . ETA 24s                                                     
+                  |-----------------------------------------------------------------------------------------------------
+                  | Mode    actions allowed . each is confirmed in its dialog                                           
+       ETH        | Running nothing                                                                                     
+                  |-----------------------------------------------------------------------------------------------------
+                  | Actions 25, by what they can break . Up and Down select . Enter or a types one at the prompt        
+                  |   Observe  config        the effective configuration, secrets hidden                                
+ sepolia          |   Observe  tunables      what changes without a restart, as it is now                               
+ PoS              |   Observe  deps          each subsystem, what it needs, its health                                  
+ id 11155111      |   Observe  test-rpc      calls each RPC endpoint here: answer and time                              
+ test network     |   Observe  net           listening and external addresses, inbound peers                            
+                  |   Observe  art           every sprite                                                               
+ [1] Overview     |   Observe  lookup        a block, a transaction, a receipt or an account                            
+ [2] Chain        |   Adjust   loglevel      a logger's level, until the node restarts                                  
+ [3] Peers        |   Adjust   maxpeers      the limit on outgoing peers, until restart                                 
+ [4] Mempool      |   Adjust   peer trust    a peer is trusted: exempt from pruning                                     
+ [5] RPC          |   Adjust   peer untrust  a peer stops being trusted                                                 
+ [6] Storage      |   Adjust   threshold     where an alert begins, for this session                                    
+ [7] System       |   Disrupt  peer add      the node dials a peer and keeps dialling it                                
+ [8] Logs         |   Disrupt  peer drop     a peer is disconnected; it may reconnect                                   
+ [9] Ops          |   Disrupt  peer block    an address is refused until restart                                        
+                  |   Disrupt  peer unblock  an address stops being refused                                             
+ graphics text    |   Disrupt  mining start                                                                             
+                  |   Disrupt  coinbase                                                                                 
+                  |   Disrupt  rpc stop      a JSON-RPC server stops; its connections drop                              
+                  |   Disrupt  rpc start     a server that was stopped here listens again                               
+                  |   Disrupt  dbcheck       the start's database check, run now; it reports                            
+                  |   Disrupt  detect-ip     asks outside services for this node's address                              
+                  |   Disrupt  bundle        writes a support bundle under the datadir                                  
+                  |   Halt     mining stop                                                                              
+                  |   Halt     quit          the node process ends                                                      
+                  |-----------------------------------------------------------------------------------------------------
+                  | Last    no action has been attempted in this session                                                
+                  |-----------------------------------------------------------------------------------------------------
+                  | Not offered, and why                                                                                
+ 1-9 view  Enter open  Esc back  : prompt  / filter  ? help  p pause  r redraw  d detach  q quit                        

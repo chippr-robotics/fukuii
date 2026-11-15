@@ -33,6 +33,10 @@ object PoWMiningMetrics extends MetricsContainer:
   private val _dagProgress = new AtomicLong(0)
   private val _dagLoaded = new AtomicLong(0)
 
+  // Spec 029 slice 7: 1 while the built-in miner's coordinator is in recurrent mining, 0 otherwise. Written by
+  // `PoWMiningCoordinator` on its own thread, as an atomic set only (see the object's note above).
+  private val _minerRunning = new AtomicLong(0)
+
   // Note: Metrics.mkName adds "app_" prefix, so "pow_foo" becomes "app_pow_foo" in Prometheus
   val workRequestsTotal: Gauge =
     metrics.gauge("pow_getwork_total", () => _workRequestsTotal.get().toDouble)
@@ -70,6 +74,14 @@ object PoWMiningMetrics extends MetricsContainer:
   val dagLoaded: Gauge =
     metrics.gauge("pow_dag_loaded", () => _dagLoaded.get().toDouble)
 
+  /** 1 while the built-in miner's coordinator is mining (recurrent mode), 0 otherwise: before it starts, after
+    * `StopMining`, and after the coordinator has stopped for any reason. This is the internal miner's own state, not
+    * `eth_mining`, which also counts external miners and lags a stop by `miner-active-timeout`. The TUI reads it as it
+    * reads the other gauges.
+    */
+  val minerRunning: Gauge =
+    metrics.gauge("pow_miner_running", () => _minerRunning.get().toDouble)
+
   def recordGetWork(): Unit =
     _workRequestsTotal.incrementAndGet()
 
@@ -83,6 +95,12 @@ object PoWMiningMetrics extends MetricsContainer:
 
   def updateHashrate(hashrate: BigInt): Unit =
     _currentHashrate.set(hashrate.toLong)
+
+  /** The built-in miner's coordinator started (`true`) or stopped (`false`) mining. An atomic set and nothing else: it
+    * is called on the coordinator's thread, and in its `PostStop` handler, so it must not throw.
+    */
+  def recordMinerRunning(running: Boolean): Unit =
+    _minerRunning.set(if running then 1L else 0L)
 
   /** A DAG build starts for `epoch`: not loaded, no progress, the phase not yet known.
     *

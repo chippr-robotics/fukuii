@@ -53,6 +53,9 @@ private[console] object RpcPanels:
     */
   private def state(t: TransportStatus): String =
     if !t.enabled then "off"
+    // Stopped from this dashboard: said as that, not as a server that failed (spec 029 FR-055).
+    else if t.stoppedHere then
+      s"stopped here (rpc start ${if t.kind == TransportKind.Ws then "ws" else "http"} starts it)"
     else
       t.listening match
         case Some(true)  => "listening"

@@ -12,6 +12,11 @@ private[console] object Views:
       c.state.screen match
         case Some(Screen.PeerDetail(id))  => PeerDetailPanel.panels(c, id)
         case Some(Screen.HealthDetail(s)) => HealthPanel.detail(c, s)
+        case Some(Screen.Config(f, at))   => OpsPanels.report(c, ops.Actions.Config, f, at)
+        case Some(Screen.Tunables)        => OpsPanels.report(c, ops.Actions.Tunables, "", 0)
+        case Some(Screen.TestRpc)         => OpsPanels.report(c, ops.Actions.TestRpc, "", 0)
+        case Some(Screen.Net)             => OpsPanels.report(c, ops.Actions.Net, "", 0)
+        case Some(Screen.Deps)            => OpsPanels.deps(c)
         case Some(Screen.Art(page))       => ArtPanel.panels(c, page)
         case Some(Screen.Explore(q, at))  => ExplorerPanels.panels(c, q, at)
         case None =>
@@ -24,4 +29,4 @@ private[console] object Views:
             case TuiView.Storage  => StoragePanels.panels(c)
             case TuiView.System   => SystemPanels.panels(c)
             case TuiView.Logs     => LogsPanel.panels(c)
-            case TuiView.Ops      => StubPanels.ops(c)
+            case TuiView.Ops      => OpsPanels.panels(c)

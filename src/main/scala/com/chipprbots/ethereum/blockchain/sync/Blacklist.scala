@@ -10,8 +10,10 @@ import com.github.blemale.scaffeine.Scaffeine
 
 import com.chipprbots.ethereum.blockchain.sync.Blacklist.BlacklistReason.BlacklistReasonType
 import com.chipprbots.ethereum.consensus.validators.std.StdBlockValidator.BlockError
+import com.chipprbots.ethereum.network.BlockedIPRegistry
 import com.chipprbots.ethereum.network.NetworkMetrics
 import com.chipprbots.ethereum.network.PeerId
+import com.chipprbots.ethereum.network.PeerManagerActor
 import com.chipprbots.ethereum.network.PeerScoringManager
 import com.chipprbots.ethereum.network.p2p.messages.WireProtocol.Disconnect
 import com.chipprbots.ethereum.utils.Logger
@@ -346,6 +348,35 @@ final class ScoringBlacklist(underlying: Blacklist, scorer: PeerScoringManager) 
   override def remove(id: BlacklistId): Unit = underlying.remove(id)
 
   override def keys: Set[BlacklistId] = underlying.keys
+
+  override def reasonFor(id: BlacklistId): Option[BlacklistReasonType] = underlying.reasonFor(id)
+
+/** An address the operator blocked (`admin_blockIP`), as a blacklist id. Only [[OperatorBlockingBlacklist]] answers it,
+  * and only from the operator's registry: no automatic blacklisting writes it, so the connect path can tell a block
+  * from an auto-blacklist entry (a maintained peer that was only auto-blacklisted must still be dialled).
+  */
+final case class OperatorBlock(value: String) extends BlacklistId
+
+/** Spec 029 / B-277: makes the operator's block list ([[BlockedIPRegistry]]) part of the node-wide blacklist, so that
+  * every place that asks `isBlacklisted(PeerAddress(host))` (inbound accept, discovery dials, snap redials) honours
+  * `admin_blockIP`. An [[OperatorBlock]] is answered by the registry alone; a `PeerAddress` by the registry or the
+  * underlying blacklist. The registry is never evicted or shortened by the automatic entries the underlying cache
+  * takes.
+  */
+final class OperatorBlockingBlacklist(underlying: Blacklist, registry: BlockedIPRegistry) extends Blacklist:
+
+  override def isBlacklisted(id: BlacklistId): Boolean = id match
+    case OperatorBlock(host)                          => registry.isBlocked(host)
+    case address @ PeerManagerActor.PeerAddress(host) => registry.isBlocked(host) || underlying.isBlacklisted(address)
+    case other                                        => underlying.isBlacklisted(other)
+
+  override def add(id: BlacklistId, duration: FiniteDuration, reason: BlacklistReason): Unit =
+    underlying.add(id, duration, reason)
+
+  override def remove(id: BlacklistId): Unit = underlying.remove(id)
+
+  override def keys: Set[BlacklistId] =
+    underlying.keys ++ registry.all.map[BlacklistId](PeerManagerActor.PeerAddress(_))
 
   override def reasonFor(id: BlacklistId): Option[BlacklistReasonType] = underlying.reasonFor(id)
 

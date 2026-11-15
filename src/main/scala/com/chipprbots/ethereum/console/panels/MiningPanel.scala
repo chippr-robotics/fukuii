@@ -93,7 +93,11 @@ private[console] object MiningPanel:
       val dot = s" ${c.g.dot.text} "
       val hashrate = if m.hashrate > 0 then formatHashrate(m.hashrate) else "none reported"
       val first = new AttributedStringBuilder()
-      first.append(field("Mining", text("on", c.t.healthy.bold()), c.t))
+      // Enabled at the start, and no longer running: stopped from here, or it failed. Either way it starts again
+      // only with the node, and the row says so in place of "on".
+      if c.state.minerStopped.contains(true) then
+        first.append(field("Mining", text("STOPPED until the node restarts", c.t.warn.bold()), c.t))
+      else first.append(field("Mining", text("on", c.t.healthy.bold()), c.t))
       if c.tier == Tier.S then first.append(dot + hashrate, c.t.value)
       else m.coinbase.foreach(a => first.append(s"${dot}coinbase ${ClPanel.shortHex(a, c.g, head = 8)}", c.t.value))
       first.append(dot, c.t.value)
