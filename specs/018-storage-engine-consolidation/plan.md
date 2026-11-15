@@ -3542,6 +3542,61 @@ core-geth does, which leaves few bodies to wait for.
 **The mutation run**: 9 mutants, 8 caught; the ninth is the same in what it comes to (the walk ends without the
 guard added to it). The block builders and the single block each have a case, added with forge's review.
 
+#### C5a part 3: the state is cleared for a sync from scratch (2026-11-15)
+
+The ordered clear (T165, T172), which the user decided lands with C5a, and the genesis state cleared as a sync starts
+(T197, T205). **Nothing calls it yet**: the escalation that does is part 7, and a sync starts on the guard in part 10.
+
+`PathStateStorage.clearForResync`, under the lock of the moves and the state lock:
+1. **One synced batch**, written as a move of the clock to no state (`AppStateStorage.stateClearBatch`):
+   - the sync is no longer done, and the state's anchor, the block it began at, the finalized block and the height
+     its records were pruned to are removed. **`state.layout` stays**: the directory is the unified layout's still;
+   - **what SNAP keeps of its run is removed** (the user's decision): its pivot and roots, its progress and resume
+     point, its flags of a phase done, the paths of its files, and with them a checkpoint import half made, the
+     recoveries and the code scan that were owed or done, and the count of the times regular sync was stuck. Left, a
+     flag that says the accounts are complete over rows that are gone lets the next run skip them;
+   - the best block is the genesis again; the headers, bodies and index of the chain stay, they are of blocks;
+   - `state.escalation.last` records why (`v1:<millis>:<unreachable|local>:<head hash>:<head number>`), and
+     `state.reset-pending` marks that the rows are still to go.
+2. What is kept in memory of the state is dropped: after the batch, so that a batch that fails leaves memory and
+   disk the same.
+3. **A range delete of each column family**: the changeset records, the account trie and the storage tries; and what
+   a sync kept that is of those rows: the ranges it had downloaded (kept by state root: a sync that pivots to a root
+   it had been at would skip them), the queue of its healing walk, the flat copies of accounts and slots, the
+   accounts it left out and the storage tries it marked done.
+4. **`state.reset-pending` is removed, synced**: that write makes the deletes before it durable with it.
+
+**A start finishes a clear that was interrupted** (`finishPendingClear`, before the state is reconciled): it writes
+the batch's removals again, since a sync that ran with the mark still set has written its own record over rows about
+to be deleted; then the ranges; then the mark. **It refuses a datadir that has the mark and a state** (an anchor, or
+a sync that says it is done): the batch removes both with the mark's own write, so that is no interrupted clear, and
+deleting the rows of a state in use would destroy it for nothing.
+
+**The genesis state as a sync starts** (`clearGenesisStateForSync`) is the same clear with no escalation, when the
+state held is the genesis's. The data model's two steps (the rows, then the anchor) leave a genesis anchor over rows
+that are gone if killed between them, and the other order leaves rows no start would clear (vault).
+
+**Read after code (vault): three blockers, taken.** The ranges a sync had downloaded were not deleted; the accounts
+it left out were not; and an interrupted clear did not take a later sync's record away. Each is a way a sync would
+skip work over rows that are gone. Confirmed by vault: the best block as the genesis is right (every reader of the
+head during a sync assumes it); the order of the locks; the in-memory clears after the batch; a view made before the
+clear goes stale and never reads a wrong row; a synced write syncs every log not yet synced, so a delete cannot be
+lost while the mark's removal survives. **The caller's, and not checked here**: the audit and any walker with an
+iterator of its own are stopped first, and no import or fork choice is committing.
+
+**For the parts that follow**: the hand-off's batch removes `state.reset-pending` with the anchor's write (part 5); a
+sync does not start while the mark is set (part 10); after a clear the index of blocks by number still names the old
+chain's blocks above the genesis, with no state under them, until a hand-off rewrites it (part 5, and the head an
+RPC reports).
+
+**Tests**: `StateClearBatchSpec`, `ClearForResyncSpec` on a store that records its writes (what is left, the order,
+nothing changed when the first batch fails, a start after an interrupted clear, the two refusals each alone, a later
+sync's record, the genesis clear), and **`StateClearCrashItSpec`: a real RocksDB in a child JVM, killed at five
+points** (before the batch, after it, among the range deletes, before the mark's removal, after it), opened again and
+finished. A kill is not a loss of power: it pins the order of the writes and what each leaves, not that a synced
+write is on the disk. **The mutation run**: 14 mutants, 14 caught (one after a case was made to stand alone: a mark
+with an anchor and no sync said to be done).
+
 ### Destructive change (C8a and C8b): the vault protocol blocks
 
 ```
