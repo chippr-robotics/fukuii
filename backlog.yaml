@@ -3413,3 +3413,14 @@ items:
     links:
       spec: 018
     notes: forge W3, C4e part 4. The 4,000-block archive reorg is pinned (ReorgBlockhashParitySpec); the kill mid-attempt and the re-adoption after restart are not. Gate before path-live is on for a Mordor archive node
+  - id: B-296
+    title: "Bound what a deep reorganisation holds in memory: the old chain's blocks and receipts, the side parents, the executed list"
+    priority: P1
+    status: open
+    area: consensus
+    size: M
+    opened: 2026-11-15
+    refs: []
+    links:
+      spec: 018
+    notes: "forge W2, C4e part 4: collectOldBranch loads every old block and receipt from the fork to the head before anything runs; GBs at tens of thousands of blocks. Gate before path-live is on for an archive node"
