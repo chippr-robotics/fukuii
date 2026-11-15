@@ -3346,10 +3346,15 @@ items:
   - id: B-290
     title: "Spec 029 closure: essential tier at baseline, coverage, console-ui.md rewrite, operator skills, out-of-console diff audit, spec Done (T113-T118)"
     priority: P2
-    status: open
+    status: claimed
     area: tui
     size: M
     opened: 2026-11-15
     refs: []
     links:
       spec: specs/029-tui-command-center
+    claim:
+      by: cloud-ccr-452bbde8
+      agent: main
+      since: 2026-11-15T06:46:41Z
+      heartbeat: 2026-11-15T06:46:41Z
