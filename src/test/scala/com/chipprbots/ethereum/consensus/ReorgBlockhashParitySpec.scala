@@ -23,6 +23,7 @@ import com.chipprbots.ethereum.blockchain.sync.regular.ChainReorganised
 import com.chipprbots.ethereum.crypto.generateKeyPair
 import com.chipprbots.ethereum.db.components.EphemDataSourceComponent
 import com.chipprbots.ethereum.db.components.Storages
+import com.chipprbots.ethereum.db.storage.pathstate.StateConfig
 import com.chipprbots.ethereum.domain.*
 import com.chipprbots.ethereum.ledger.InMemoryWorldStateProxy
 import com.chipprbots.ethereum.security.SecureRandomBuilder
@@ -50,12 +51,21 @@ class ReorgBlockhashParitySpec extends AnyFlatSpec with Matchers with ScalaFutur
 
   // The reorganisation on the hash layout, and on the unified state layout, where a branch is executed on pinned layers
   // and adopted by one move of the head (spec 018 C4e): the same answers, block for block.
-  for (layout, guard) <- Seq("the hash layout" -> false, "the unified layout" -> true) do
+  // And on the unified layout with a branch that holds more than the pinned layers may: the head is moved first and the
+  // blocks are committed in place (C4e part 3), wholly (`1`: no block is kept under the pin) or from where the cap is
+  // met (`MidCap`: the first blocks of a branch are kept, the rest are not).
+  for (layout, guard, cap) <- Seq(
+      ("the hash layout", false, None),
+      ("the unified layout", true, None),
+      ("the unified layout, nothing kept under the pin", true, Some(1L)),
+      ("the unified layout, the cap met within the branch", true, Some(MidCap))
+    )
+  do
     (s"A TD-winning reorg that fails mid-branch ($layout)" should
       "keep the heavier old head and index, so the next canonical block's BLOCKHASH matches core-geth").taggedAs(
       UnitTest,
       ConsensusTest
-    ) in (new Fixture(guard):
+    ) in (new Fixture(guard, cap):
       // Canonical h1..h15 at difficulty 1000. Side branch s6..s13 forks after h5: s6..s12 at 1000, s13 at 5000 and
       // consensus-invalid (tampered stateRoot). Whole branch: 12000 > 10000 for h6..h15, so it is selected and executed;
       // the executed prefix s6..s12 is 7000 < 10000, so core-geth's head never leaves h15.
@@ -86,7 +96,7 @@ class ReorgBlockhashParitySpec extends AnyFlatSpec with Matchers with ScalaFutur
     it should "move the head to the executed prefix when it is heavier, and drop the old index above it" taggedAs (
       UnitTest,
       ConsensusTest
-    ) in new Fixture(guard):
+    ) in new Fixture(guard, cap):
       // Canonical h1..h15 at 1000. Side s6..s8 at 5000 each (15000 > 10000 for h6..h15), s9 invalid.
       val oldChain: List[Block] = oracle.extendCanonical(oracle.genesis, 15, difficulty = 1000)
       val sidePrefix: List[Block] = oracle.extendSide(oldChain(4), 3, difficulty = 5000, tag = 0x52)
@@ -106,7 +116,7 @@ class ReorgBlockhashParitySpec extends AnyFlatSpec with Matchers with ScalaFutur
       "rewrite the canonical index below the branch parent, so BLOCKHASH and the old branch match core-geth").taggedAs(
       UnitTest,
       ConsensusTest
-    ) in (new Fixture(guard):
+    ) in (new Fixture(guard, cap):
       // The ordinary ETC uncle race, across a restart. Canonical a1..a10. b10, a heavier sibling of a10, arrives and
       // wins. The node restarts, losing the in-memory block queue that held the orphaned a10. Then a11 (child of a10)
       // arrives by NewBlock and outweighs b10. a10 is on disk with a chain weight, so the queue roots a11 directly on
@@ -179,9 +189,9 @@ class ReorgBlockhashParitySpec extends AnyFlatSpec with Matchers with ScalaFutur
     node.bestHash shouldBe bChain.last.hash
     (1 to 3).foreach(n => node.indexed(n) shouldBe Some(bChain(n - 1).hash))
 
-  class Fixture(guard: Boolean = false):
+  class Fixture(guard: Boolean = false, cap: Option[Long] = None):
     val oracle = new Oracle
-    val node = new Node(guard)
+    val node = new Node(guard, cap)
 
     /** The block hash `block`'s execution recorded at `slot`, on the node under test: read from its state on the hash
       * layout; on the unified layout the recorder's storage is the oracle's, root for root (the state root the block
@@ -264,7 +274,7 @@ class ReorgBlockhashParitySpec extends AnyFlatSpec with Matchers with ScalaFutur
         case Left(error) => throw new IllegalStateException(s"oracle could not seal block ${template.number}: $error")
 
   /** The node under test. */
-  class Node(guard: Boolean = false) extends ChainHost(guard):
+  class Node(guard: Boolean = false, cap: Option[Long] = None) extends ChainHost(guard, cap):
     def importAll(blocks: List[Block]): BlockImportResult =
       consensusAdapter.evaluateBranch(NonEmptyList.fromListUnsafe(blocks)).unsafeRunSync()
 
@@ -296,7 +306,7 @@ class ReorgBlockhashParitySpec extends AnyFlatSpec with Matchers with ScalaFutur
 
   /** One ephemeral database with the shared genesis state installed. Real VM, real BlockExecution, real ConsensusImpl.
     */
-  abstract class ChainHost(guard: Boolean = false) extends EphemBlockchainTestSetup:
+  abstract class ChainHost(guard: Boolean = false, cap: Option[Long] = None) extends EphemBlockchainTestSetup:
     implicit val runtime: IORuntime = IORuntime.global
 
     override lazy val storagesInstance
@@ -306,6 +316,9 @@ class ReorgBlockhashParitySpec extends AnyFlatSpec with Matchers with ScalaFutur
         with Storages.DefaultStorages
         with com.chipprbots.ethereum.TestInstanceConfigProvider:
         override protected def statePathLive: Boolean = guard
+        override protected def stateConfig: StateConfig =
+          val config = StateConfig(com.chipprbots.ethereum.utils.Config.config)
+          cap.fold(config)(bytes => config.copy(overlay = config.overlay.copy(pinnedMaxBytes = bytes)))
 
     // one genesis for every host, loaded as the node loads one: as rows on the unified layout
     val genesis: Block =
@@ -332,6 +345,9 @@ class ReorgBlockhashParitySpec extends AnyFlatSpec with Matchers with ScalaFutur
       blockchainReader.getBlockByNumber(blockchainReader.getBestBranch, 0).get
 
 object ReorgBlockhashParitySpec extends SecureRandomBuilder:
+  /** A cap on the pinned layers that a branch of these blocks meets after its first blocks. */
+  val MidCap: Long = 3500L
+
   val SenderKeyPair: AsymmetricCipherKeyPair = generateKeyPair(secureRandom)
   val SenderAddress: Address = Address(SenderKeyPair)
   val Miner: Address = Address(0x6d696e)

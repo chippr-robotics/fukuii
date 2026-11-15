@@ -154,7 +154,9 @@ class TestServiceOnPositionsSpec
       val source: EphemDataSource = EphemDataSource(),
       inTestMode: Boolean = true,
       // how many executed blocks are kept beside the disk when no branch pins them: the configured count when none
-      forwardLayers: Option[Int] = None
+      forwardLayers: Option[Int] = None,
+      // how many bytes of executed blocks a branch may keep pinned: the configured count when none
+      pinnedCap: Option[Long] = None
   ) extends EphemBlockchainTestSetup:
 
     implicit override lazy val blockchainConfig: BlockchainConfig = BlockchainConfig(
@@ -182,7 +184,9 @@ class TestServiceOnPositionsSpec
         override protected def stateConfig: com.chipprbots.ethereum.db.storage.pathstate.StateConfig =
           val config =
             com.chipprbots.ethereum.db.storage.pathstate.StateConfig(com.chipprbots.ethereum.utils.Config.config)
-          forwardLayers.fold(config)(layers => config.copy(overlay = config.overlay.copy(maxForwardLayers = layers)))
+          val layered =
+            forwardLayers.fold(config)(layers => config.copy(overlay = config.overlay.copy(maxForwardLayers = layers)))
+          pinnedCap.fold(layered)(bytes => layered.copy(overlay = layered.overlay.copy(pinnedMaxBytes = bytes)))
         // what a node in test mode is built with (`NodeBuilder`)
         override protected def stateMayBeDestroyed: Boolean = inTestMode
 
@@ -846,6 +850,53 @@ class TestServiceOnPositionsSpec
       diverged.node.blockQueue.isQueued(side(3).header.hash) shouldBe false
       // where a branch whose side parent is only not stored whole waits to be tried again
       unstored.node.blockQueue.isQueued(side(3).header.hash) shouldBe true
+    }
+
+  it should "move its head back, and tell nothing invalid, when a side block a branch stands on fails as it is committed in place at the pinned cap" taggedAs
+    (UnitTest, ConsensusTest) in {
+      def sealedOn(parent: Option[Block], block: Block): Block =
+        block.copy(header =
+          block.header.copy(
+            parentHash = parent.fold(block.header.parentHash)(_.header.hash),
+            mixHash = BlockHash(ByteString(new Array[Byte](32))),
+            nonce = ByteString(new Array[Byte](8))
+          )
+        )
+      def chainOf(blocks: Int, etherbase: Int): Vector[Block] =
+        val miner = new Rig(guard = false)
+        miner.setChain(chainA) shouldBe Right(SetChainParamsResponse())
+        miner.run(miner.service.setEtherbase(SetEtherbaseRequest(Address(etherbase)))) shouldBe
+          Right(SetEtherbaseResponse())
+        (1 to blocks).foldLeft(Vector.empty[Block]) { (made, _) =>
+          miner.mine(Nil) shouldBe Right(MineBlocksResponse())
+          made :+ sealedOn(made.lastOption, miner.head)
+        }
+      val side = chainOf(4, 0xdead)
+      val back = chainOf(4, 0xbeef)
+      // no executed block is kept under a pin: a branch is committed in place, from the block it leaves the chain on
+      val rig = new Rig(guard = true, pinnedCap = Some(1L))
+      rig.setChain(chainA) shouldBe Right(SetChainParamsResponse())
+      (side.take(2) ++ back.take(3)).foreach(block => rig.importRaw(block).isRight shouldBe true)
+      rig.head.header.hash shouldBe back(2).header.hash
+      rig.node.blockQueue.clear()
+      side.take(2).foreach(block => rig.blockchainWriter.dropForwardLayer(block.header.hash.value))
+      // the second side block is stored with a body that is not its header's
+      rig.storagesInstance.storages.blockBodiesStorage
+        .put(side(1).header.hash.value, BlockBody(Nil, Seq(side(0).header)))
+        .commit()
+      rig.importRaw(side(2)).isRight shouldBe true
+      // the first side block is committed as the head, the second fails: the head is back where it was, and what is
+      // answered is this node's fault, not a block of the branch said to be invalid
+      rig.importRaw(side(3)).left.map(_.message).left.getOrElse("imported") should include("fails now")
+      rig.head.header.hash shouldBe back(2).header.hash
+      (1 to 3).foreach { n =>
+        rig.blockchainReader.getBlockHeaderByNumber(n).map(_.hash) shouldBe Some(back(n - 1).header.hash)
+      }
+      rig.blockchainReader.getBlockHeaderByNumber(4) shouldBe None
+      rig.node.blockQueue.isQueued(side(3).header.hash) shouldBe false
+      // and its state is the old head's: the next block of that chain is executed on it and becomes the head
+      rig.importRaw(back(3)).isRight shouldBe true
+      rig.head.header.hash shouldBe back(3).header.hash
     }
 
   it should "leave the head and the datadir as they were when a heavier branch leaves the chain below what its records reach" taggedAs

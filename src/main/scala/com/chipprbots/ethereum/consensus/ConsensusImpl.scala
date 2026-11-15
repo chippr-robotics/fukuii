@@ -7,12 +7,14 @@ import cats.effect.IO
 import cats.effect.unsafe.IORuntime
 
 import scala.annotation.tailrec
+import scala.util.control.NonFatal
 
 import com.chipprbots.ethereum.consensus.Consensus.*
 import com.chipprbots.ethereum.consensus.ConsensusImpl.ForkPoint
 import com.chipprbots.ethereum.consensus.engine.DesignatedHead
 import com.chipprbots.ethereum.consensus.engine.InvalidChainReporter
 import com.chipprbots.ethereum.db.storage.pathstate.BranchPin
+import com.chipprbots.ethereum.db.storage.pathstate.BranchTooLarge
 import com.chipprbots.ethereum.db.storage.pathstate.ReorgRefusal
 import com.chipprbots.ethereum.db.storage.pathstate.ReorgTooDeep
 import com.chipprbots.ethereum.db.storage.pathstate.StateFault
@@ -505,9 +507,27 @@ class ConsensusImpl(
                     )
                 }
               val lost = sideParents.map(_.dropWhile(parent => blockchainWriter.stateHeldInPlaceOf(parent.header)))
-              val parentsFault: Option[StateFault] = lost match
-                case Left(missing) => Some(missing)
-                case Right(Nil)    => None
+              // what the cap is met with: the blocks already kept under the pin, and those still to run (C4e part 3)
+              def atTheCap(tooLarge: BranchTooLarge, pinned: List[BlockData], remaining: List[Block]): ConsensusResult =
+                forkHeader match
+                  case Some(forkBlock) if selectedByWeight =>
+                    commitInPlaceAtTheCap(
+                      tooLarge,
+                      pinned,
+                      remaining,
+                      newBranch,
+                      forkBlock,
+                      bestBlockNumber,
+                      bestBlockWeight,
+                      oldBlocksData,
+                      accessLists,
+                      notJudged
+                    )
+                  case _ => notJudged(tooLarge)
+              // the lost side parents, executed again: what was kept of them, or how it ended
+              val parentsRun: Either[ConsensusResult, List[BlockData]] = lost match
+                case Left(missing) => Left(notJudged(missing))
+                case Right(Nil)    => Right(Nil)
                 case Right(lostParents) =>
                   log.info(
                     "REORG: {} block(s) the branch stands on, {} to {}, are executed again: their state is not held",
@@ -517,51 +537,232 @@ class ConsensusImpl(
                   )
                   blockchainReader.getChainWeightByHash(lostParents.head.header.parentHash) match
                     case None =>
-                      Some(
-                        new StateUnavailable(
-                          s"the chain weight under block ${lostParents.head.number}, which the branch stands on, is not stored"
+                      Left(
+                        notJudged(
+                          new StateUnavailable(
+                            s"the chain weight under block ${lostParents.head.number}, which the branch stands on, is not stored"
+                          )
                         )
                       )
                     case Some(weight) =>
                       val parents = executeBranch(lostParents, weight, adoptEachBlock = false, Map.empty, pin)
-                      // A block that was executed and accepted before and fails now says nothing of the branch: this
-                      // node's own fault, or a changed configuration. It is not reported invalid and the branch is not
-                      // judged; it is remembered, so that the branch is not executed again and again to the same end
-                      // (until the escalation of C5a; forge).
-                      parents.stateFault.orElse(parents.error.map { error =>
-                        val failing = lostParents.drop(parents.executed.size).head
-                        divergedParents.add(failing.header.hash)
-                        log.error(
-                          "[STATE-REEXEC-DIVERGED] Block {} ({}), which this node executed and accepted before, fails " +
-                            "now that it is executed again: {}. It is not reported invalid: this node's state or its " +
-                            "configuration is not what it was",
-                          failing.number,
-                          failing.header.hash.toHexString,
-                          error.describe
-                        )
-                        new StateUnavailable(
-                          s"block ${failing.number}, which the branch stands on and was executed before, fails now: " +
-                            error.describe
-                        )
-                      })
-              parentsFault match
-                // a block it stands on failed when it was executed again: the branch is not queued again
-                case Some(fault) if fork.parentSideChain.exists((_, hash) => divergedParents.contains(hash)) =>
-                  ConsensusStateFault(fault, Nil, Nil)
-                case Some(fault) => notJudged(fault)
-                case None =>
-                  settleOnLayers(
-                    executeBranch(newBranch.toList, parentWeight, adoptEachBlock = false, accessLists, pin),
-                    newBranch,
-                    parentWeight,
-                    bestBlockNumber,
-                    bestBlockWeight,
-                    fork,
-                    oldBlocksData,
-                    notJudged
-                  )
+                      (parents.stateFault, parents.error) match
+                        case (Some(tooLarge: BranchTooLarge), _) =>
+                          Left(
+                            atTheCap(
+                              tooLarge,
+                              parents.executed,
+                              lostParents.drop(parents.executed.size) ++ newBranch.toList
+                            )
+                          )
+                        case (Some(fault), _) => Left(notJudged(fault))
+                        // A block that was executed and accepted before and fails now says nothing of the branch: this
+                        // node's own fault, or a changed configuration. It is not reported invalid and the branch is
+                        // not judged; it is remembered, and the branch not queued again, so that it is not executed
+                        // again and again to the same end (until the escalation of C5a; forge).
+                        case (None, Some(error)) =>
+                          Left(divergedParent(lostParents.drop(parents.executed.size).head, error))
+                        case (None, None) => Right(parents.executed)
+              parentsRun match
+                case Left(ended) => ended
+                case Right(parentsKept) =>
+                  val outcome = executeBranch(newBranch.toList, parentWeight, adoptEachBlock = false, accessLists, pin)
+                  outcome.stateFault match
+                    case Some(tooLarge: BranchTooLarge) =>
+                      atTheCap(tooLarge, parentsKept ++ outcome.executed, newBranch.toList.drop(outcome.executed.size))
+                    case _ =>
+                      settleOnLayers(
+                        outcome,
+                        newBranch,
+                        parentWeight,
+                        bestBlockNumber,
+                        bestBlockWeight,
+                        fork,
+                        oldBlocksData,
+                        notJudged
+                      )
             }
           catch case fault: StateFault => notJudged(fault)
+
+  /** A block the branch stands on, executed and accepted before, that fails now: remembered, logged, and answered as a
+    * fault of this node with nothing to queue again.
+    */
+  private def divergedParent(failing: Block, error: BlockExecutionError): ConsensusResult =
+    divergedParents.add(failing.header.hash)
+    log.error(
+      "[STATE-REEXEC-DIVERGED] Block {} ({}), which this node executed and accepted before, fails now that it is " +
+        "executed again: {}. It is not reported invalid: this node's state or its configuration is not what it was",
+      failing.number,
+      failing.header.hash.toHexString,
+      error.describe
+    )
+    ConsensusStateFault(
+      new StateUnavailable(
+        s"block ${failing.number}, which the branch stands on and was executed before, fails now: ${error.describe}"
+      ),
+      Nil,
+      Nil
+    )
+
+  /** A heavier branch whose pinned layers would hold more than they may: **reverse-then-commit** (the user's decision 1
+    * of 2026-11-12; spec 018 C4e part 3). `BranchTooLarge` is the same answer however often the branch is tried, and a
+    * node that cannot adopt the heaviest chain has left it.
+    *
+    * With the changeset records above the fork held from retention, the head is moved with the state to the last block
+    * kept under the pin (or to the block the first one stands on, when none was kept), and the blocks still to run are
+    * executed, validated and committed in place, each as the head, as an import commits a block. So the head leaves the
+    * old chain before the whole branch is known to be valid: it is on a chain of valid blocks at every step.
+    *
+    * What is left as the head (forge W4; the user's decision of 2026-11-14): when a block fails, the blocks already
+    * committed stay the head if they outweigh the old head, as `settleOnLayers` keeps an executed prefix; otherwise the
+    * head is moved back to the old head along the records held. On a fault of this node's state it is moved back
+    * whatever was committed: nothing is left moved by a fault.
+    */
+  private def commitInPlaceAtTheCap(
+      tooLarge: BranchTooLarge,
+      pinned: List[BlockData],
+      remaining: List[Block],
+      newBranch: NonEmptyList[Block],
+      forkBlock: BlockHeader,
+      bestBlockNumber: BigInt,
+      bestBlockWeight: ChainWeight,
+      oldBlocksData: List[BlockData],
+      accessLists: Map[ByteString, BlockAccessList],
+      notJudged: StateFault => ConsensusResult
+  )(implicit blockchainConfig: BlockchainConfig): ConsensusResult =
+    val branchHashes = newBranch.toList.map(_.header.hash).toSet
+    val start: Option[(BlockHeader, ChainWeight)] =
+      for
+        first <- remaining.headOption
+        on <- blockchainReader.getBlockHeaderByHash(first.header.parentHash)
+        weight <- blockchainReader.getChainWeightByHash(on.hash)
+      yield (on, weight)
+    // the head as it is now, which must be the one the branch was weighed against: nothing else moved it meanwhile
+    val headNow = blockchainReader.getBestBlockHeader.filter { head =>
+      head.number.value == bestBlockNumber &&
+      blockchainReader.getBlockHeaderByNumber(bestBlockNumber).exists(_.hash == head.hash)
+    }
+    (headNow, start) match
+      case (Some(oldHead), Some((on, weightOn))) =>
+        log.warn(
+          "REORG-AT-THE-CAP: the branch [{}-{}] holds more than the executed blocks kept beside the disk may ({}): the " +
+            "head is moved to block {} and its {} remaining block(s) are committed in place. The fork is block {}",
+          newBranch.head.number,
+          newBranch.last.number,
+          tooLarge.getMessage,
+          on.number,
+          remaining.size,
+          forkBlock.number
+        )
+        // whether the head is the old head again: a move back that fails leaves it on a block of the branch
+        def backToTheOldHead(): Boolean =
+          try
+            blockchainWriter.moveHeadInPlace(oldHead, blockchainReader)
+            log.info("REORG-AT-THE-CAP: the head is back at block {}", oldHead.number)
+            true
+          catch
+            case failed: StateFault =>
+              log.error(
+                "[STATE-FAULT] REORG-AT-THE-CAP: the head could not be moved back to block {} and is left at block {}, " +
+                  "on a chain of valid blocks that does not outweigh the one it left: {}",
+                oldHead.number,
+                blockchainReader.getBestBlockNumber,
+                failed.getMessage
+              )
+              false
+        // What is answered when the head could not be moved back: where it is, said as a fault of this node. The
+        // blocks of the branch that were committed are its head; the chain it left and what was not run are queued.
+        def leftOnTheBranch(committedOfTheBranch: List[BlockData]): ConsensusResult =
+          val run = committedOfTheBranch.map(_.block.header.hash).toSet
+          ConsensusStateFault(
+            new StateUnavailable(
+              s"the head could not be moved back to block ${oldHead.number} and is at block " +
+                s"${blockchainReader.getBestBlockNumber}, on the branch [${newBranch.head.number}-${newBranch.last.number}]"
+            ),
+            committedOfTheBranch,
+            oldBlocksData.map(_.block) ++ newBranch.toList.filterNot(block => run(block.header.hash))
+          )
+        try
+          blockchainWriter.withRecordsHeldAbove(forkBlock) {
+            try
+              // the layers of what was kept are still the pin's: the move applies them
+              blockchainWriter.moveHeadInPlace(on, blockchainReader)
+              val committed = executeBranch(remaining, weightOn, adoptEachBlock = true, accessLists)
+              val all = pinned ++ committed.executed
+              val ofTheBranch = all.filter(data => branchHashes(data.block.header.hash))
+              val fault: Option[StateFault] =
+                committed.stateFault.orElse(committed.error.collect { case MPTError(reason) =>
+                  new StateUnavailable(s"a trie read failed during the execution of the branch: $reason")
+                })
+              val weight = all.lastOption.map(_.weight).getOrElse(weightOn)
+              // a block the branch stands on that fails now: as under the pin, this node's fault and not the branch's
+              val failedParent: Option[(Block, BlockExecutionError)] =
+                for
+                  error <- committed.error if fault.isEmpty
+                  failing <- remaining.drop(committed.executed.size).headOption if !branchHashes(failing.header.hash)
+                yield (failing, error)
+              (fault, failedParent) match
+                case (Some(fault), _) =>
+                  if backToTheOldHead() then notJudged(fault) else leftOnTheBranch(ofTheBranch)
+                case (None, Some((failing, error))) =>
+                  val diverged = divergedParent(failing, error)
+                  if backToTheOldHead() then diverged else leftOnTheBranch(ofTheBranch)
+                case _ if weight > bestBlockWeight =>
+                  log.info(
+                    "REORG-SETTLE: fork={} oldHead={} tip={} committedInPlace={}",
+                    forkBlock.number,
+                    bestBlockNumber,
+                    all.lastOption.fold(on.number.value)(_.block.number),
+                    committed.executed.size
+                  )
+                  reorganised(newBranch, oldBlocksData, ofTheBranch, committed.error)
+                case _ if committed.error.isEmpty =>
+                  // the whole branch ran and does not outweigh the head it was selected over: the weights stored
+                  // disagree with the selection, which is no verdict on the branch
+                  log.error(
+                    "[STATE-FAULT] REORG-AT-THE-CAP: the branch [{}-{}] was selected by its weight and, executed, does " +
+                      "not outweigh the old head {}: the chain weights stored do not agree",
+                    newBranch.head.number,
+                    newBranch.last.number,
+                    bestBlockNumber
+                  )
+                  if backToTheOldHead() then
+                    notJudged(new StateUnavailable("the weight of the branch, executed, disagrees with its selection"))
+                  else leftOnTheBranch(ofTheBranch)
+                case _ =>
+                  log.warn(
+                    "REORG-PARTIAL: what of the branch [{}-{}] is valid does not outweigh the old head {}: the head is " +
+                      "moved back to it",
+                    newBranch.head.number,
+                    newBranch.last.number,
+                    bestBlockNumber
+                  )
+                  if backToTheOldHead() then reorganised(newBranch, Nil, ofTheBranch, committed.error)
+                  else leftOnTheBranch(ofTheBranch)
+            catch
+              // anything thrown here, a first move that stopped part of the way among it, would leave the head off
+              // the old chain with the way back released: it goes back while the records are still held (forge)
+              case NonFatal(thrown) =>
+                backToTheOldHead()
+                throw thrown
+          }
+        catch
+          // the records above the fork left retention between the refusal up front and the hold
+          case deep: ReorgTooDeep =>
+            log.error(
+              "[STATE-REORG-TOO-DEEP] The branch [{}-{}] leaves the chain at block {}, below what the changeset records " +
+                "reach: {}",
+              newBranch.head.number,
+              newBranch.last.number,
+              forkBlock.number,
+              deep.getMessage
+            )
+            notJudged(deep)
+      case (None, _) =>
+        notJudged(
+          new StateUnavailable(s"the head is no longer block $bestBlockNumber, which the branch was weighed against")
+        )
+      case _ => notJudged(tooLarge)
 
   // the blocks a branch stood on that failed when they were executed again (reorganiseOnLayers); in memory only
   private val divergedParents = java.util.concurrent.ConcurrentHashMap.newKeySet[BlockHash]()
