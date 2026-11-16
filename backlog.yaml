@@ -3736,3 +3736,13 @@ items:
     links:
       prs: [1875]
     notes: "Seen on #1875 at 389f52c (OutOfMemoryError: Java heap space in scalac's backend, during the job's testOnly compile); passed on #1873. Reproduces locally on a full test compile with -Xmx4g; passes with 8 GB. Raise the job's sbt heap (-mem 6144 or more) or the .jvmopts default."
+  - id: B-322
+    title: "Hive rpc-compat (master, unpinned) gained cases fukuii fails: eth_call/estimateGas/createAccessList blob-fee-without-hashes and fork-inactive, eth_getProof"
+    priority: P2
+    status: open
+    area: rpc
+    size: M
+    opened: 2026-11-16
+    refs: []
+    links: {}
+    notes: "Seen 2026-11-16 23:37-23:41 on #1873 (f8d65b2, 11 of 307) and #1875 (7e5fe72, 16 of 318), neither touching RPC; the job was green on #1873 at 21:35. _hive-sim.yml clones hive at master, so the corpus moves under every PR (informational gate). Two things: fix the cases (conduit), and consider pinning hive_ref so a PR's check reflects the PR."
