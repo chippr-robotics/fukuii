@@ -3685,3 +3685,12 @@ items:
     refs: [B-297]
     links: {}
     notes: StateRecovery.walk stops only at a state a view reaches; queued again until the escalation
+  - id: B-317
+    title: A head refused -38002 is still published to SNAP as a pivot hint (publishBeaconHead)
+    priority: P2
+    status: open
+    area: sync
+    opened: 2026-11-16
+    refs: [B-297]
+    links: {}
+    notes: beacon, B-297 memo
