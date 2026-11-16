@@ -3537,7 +3537,7 @@ items:
       by: cloud-lane3
       agent: main
       since: 2026-11-16T20:16:04Z
-      heartbeat: 2026-11-16T21:25:04Z
+      heartbeat: 2026-11-16T22:42:44Z
     notes: "Beacon, C5a part 5b (2026-11-15). On the unified layout a sample that stops the hand-off (PathHandoffSample.Stopped) sends HealingImpossible; SyncController restarts SNAP at a newer pivot, which heals and samples again. Nothing bounds the cycle: snapPivotFailedFinalization blocks only the same pivot, so a systematic failure repeats on every new one. SyncController counts consecutive sample failures, exposes a metric by reason, and after three logs an ERROR with the sample's counts and stops restarting on its own. The Stopped exception should carry the counts. Gate on lifting the refusals (C5a part 10). plan.md 'C5a part 5b'."
   - id: B-305
     title: "Tests leave their RocksDB and work directories in the temp directory: 25 GB after a day of runs filled a session's disk"
@@ -3604,7 +3604,7 @@ items:
       by: cloud-lane3
       agent: main
       since: 2026-11-16T20:16:10Z
-      heartbeat: 2026-11-16T21:25:10Z
+      heartbeat: 2026-11-16T22:42:44Z
     notes: "Found 2026-11-16 while building B-307 (c1): fails alone and in the whole spec, on plain staging too; isSnapSyncAccountsComplete is false after the start. Not known whether CI runs it."
   - id: B-310
     title: "B-307 follow-ups: a failed pivot refresh does not feed the off-branch peers; network best is not filtered; rested header peers also rest for bodies"
@@ -3621,7 +3621,7 @@ items:
       by: cloud-lane3
       agent: main
       since: 2026-11-16T21:25:29Z
-      heartbeat: 2026-11-16T22:13:54Z
+      heartbeat: 2026-11-16T22:42:44Z
     notes: "forge, 2026-11-16, review of #1870 (c2): PivotRefresher ignores PivotBootstrapFailed.offBranch and has no time bound; currentNetworkBestFromSnapPeers (PivotSelector) is not filtered by OffBranchPeers; emptyHeaderPeers keeps a peer on another chain out of body and receipt requests for the same 10 minutes."
   - id: B-311
     title: "SyncController escalation tests left from B-307 (f): the audit stopped at a clear, backfill states re-delivering, a clear that throws"
@@ -3638,7 +3638,7 @@ items:
       by: cloud-lane3
       agent: main
       since: 2026-11-16T20:16:07Z
-      heartbeat: 2026-11-16T21:25:07Z
+      heartbeat: 2026-11-16T22:42:44Z
     notes: "Left of B-307 (f) after #1866 and #1870. The min pivot reaching the SNAP child is tested for the retry (SyncControllerSpec, MinPivotBlock(4001)); not for the first escalation."
   - id: B-312
     title: Cut v0.12.0 after C5a part 10, before the part 11 measurements (user, 2026-11-16)
@@ -3666,7 +3666,7 @@ items:
       by: cloud-lane3
       agent: main
       since: 2026-11-16T20:58:47Z
-      heartbeat: 2026-11-16T20:58:51Z
+      heartbeat: 2026-11-16T22:42:44Z
     notes: "Seen 2026-11-16 in a local essential run with three builds on 4 cores: PeerId(cooldown-peer-1) was not equal to cooldown-peer-2 (:744). The test sends RequestTimeout to the worker and PeerAvailable(peer2) to the coordinator back to back; the worker's report of the timeout can reach the coordinator after the second dispatch. Passes alone and in its spec. Fix the test's ordering (wait for the cooldown to be recorded) rather than the coordinator."
   - id: B-314
     title: "C5 gate: hive engine re-org suites with the guard on, once part 10 starts the importer there (B-297 item 5)"
