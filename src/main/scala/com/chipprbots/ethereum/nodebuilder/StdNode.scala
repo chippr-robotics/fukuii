@@ -102,6 +102,7 @@ abstract class BaseNode extends Node:
       // a clear of the state that a kill interrupted is finished first: its rows are deleted before the state is
       // looked at (spec 018 C5a part 3). It refuses a datadir that has the mark of one and a state.
       finishPendingStateClear()
+      forgetGivenUpBranchesIfAsked()
       reconcileState()
     // A datadir stamped for the unified layout, opened with the guard off, never gets here: the layout guard refused
     // it where the storages were built (spec 018 data-model 5.3), so nothing is repaired in it.
@@ -771,6 +772,20 @@ abstract class BaseNode extends Node:
       if pathState.finishPendingClear(genesis) then
         log.warn("[STATE-CLEAR] The state was being cleared for a sync from scratch when the node stopped: it is clear")
     }
+
+  /** The operator's switch that ends the loop guard of the escalations (spec 018 C5a part 7b): at a start, before
+    * anything syncs, since a clear writes the list back under locks this does not take.
+    */
+  def forgetGivenUpBranchesIfAsked(): Unit =
+    val appState = storagesInstance.storages.appStateStorage
+    com.chipprbots.ethereum.blockchain.sync.EscalationHandler.forgetGivenUpAtStart(
+      com.chipprbots.ethereum.db.storage.pathstate.StateConfig(instanceConfig.config).recovery.forgetGivenUpBranches,
+      () => appState.getStateEscalationGivenUp(),
+      () => appState.forgetGivenUpBranches().commitSync(),
+      log.warn(_),
+      () => appState.getStateEscalationLast(),
+      () => appState.forgetStateEscalationLast().commitSync()
+    ): Unit
 
   /** The reconciliation at start of a datadir on the unified state layout ([[StateReconciliation]]): the best block and
     * the index of blocks by number made those of the block whose state the disk holds. It throws, and the node does not

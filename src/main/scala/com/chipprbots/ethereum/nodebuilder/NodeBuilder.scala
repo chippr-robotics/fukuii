@@ -412,11 +412,26 @@ trait ConsensusBuilder:
         StateMetrics.escalationTriggered,
         (kind, why) =>
           escalationLog.error(
-            s"[STATE-ESCALATION] This node cannot follow the chain with the state it has (${kind.text}): $why. Its " +
-              "state would be given up for a sync from scratch; nothing is done about it yet (spec 018 C5a part 7)."
-          )
+            s"[STATE-ESCALATION] This node cannot follow the chain with the state it has (${kind.text}): $why. " +
+              "Whether its state is given up for a sync from scratch is the sync controller's to say, while it runs " +
+              "regular sync; a node whose sync controller was not started gives no state up."
+          ),
+        // handed on, never acted on here: it is told on the thread that fed the watch, inside the watch's monitor
+        request => escalationRequests.get().apply(request)
       )
     }
+
+  /** `state.recovery.escalation-cooldown`: the shortest time between two escalations. */
+  lazy val escalationCooldownMillis: Long =
+    com.chipprbots.ethereum.db.storage.pathstate.StateConfig(instanceConfig.config).recovery.escalationCooldown.toMillis
+
+  /** Where the watch's verdicts go (spec 018 C5a part 7b): to the sync controller, once there is one. Late bound: the
+    * watch is built with the consensus, the controller after it. Until it is bound a verdict is said and counted, and
+    * no more.
+    */
+  lazy val escalationRequests: java.util.concurrent.atomic.AtomicReference[
+    com.chipprbots.ethereum.blockchain.sync.EscalationWatch.Request => Unit
+  ] = new java.util.concurrent.atomic.AtomicReference(_ => ())
 
   private lazy val escalationLog =
     org.slf4j.LoggerFactory.getLogger("com.chipprbots.ethereum.blockchain.sync.EscalationWatch")
@@ -1301,6 +1316,41 @@ trait SyncControllerBuilder extends SyncControllerRefBuilder:
   // SyncController is Pekko Typed (Group ROOT, narrowed) — a `Behavior[Command]`. Spawned via
   // classicSystem.spawn so it lives in the Classic system's guardian tree while exposing a fully-Typed
   // ActorRef[Command]. All callers now hold a TypedActorRef[SyncController.Command] (OQ-5 kill, 8k-G).
+  /** What the sync controller gives the state up with, on the unified layout (spec 018 C5a part 7b): the handler over
+    * the guard, the clear, and the count.
+    */
+  lazy val stateEscalationPort: Option[SyncController.StateEscalationPort] =
+    storagesInstance.storages.pathStateStorage.map { pathState =>
+      import com.chipprbots.ethereum.blockchain.sync.EscalationGuard
+      import com.chipprbots.ethereum.blockchain.sync.EscalationHandler
+      import com.chipprbots.ethereum.blockchain.sync.EscalationWatch
+      import com.chipprbots.ethereum.db.storage.pathstate.EscalationKind
+      import com.chipprbots.ethereum.db.storage.pathstate.GivenUpBranch
+      import com.chipprbots.ethereum.db.storage.pathstate.StateEscalation
+      import com.chipprbots.ethereum.db.storage.pathstate.StateMetrics
+      val appState = storagesInstance.storages.appStateStorage
+      val escalationLog = org.slf4j.LoggerFactory.getLogger(classOf[EscalationHandler])
+      val handler = new EscalationHandler(
+        new EscalationGuard(
+          escalationCooldownMillis,
+          () => appState.getStateEscalationLast(),
+          () => appState.getStateEscalationGivenUp()
+        ),
+        hash =>
+          blockchainReader.getBlockHeaderByHash(com.chipprbots.ethereum.domain.BlockHash(hash)).map(_.number.value),
+        () => StateMetrics.escalationSuppressed(),
+        escalationLog.error(_),
+        escalationLog.warn(_)
+      )
+      new SyncController.StateEscalationPort:
+        def decide(request: EscalationWatch.Request, nowMillis: Long): EscalationHandler.Outcome =
+          handler.onRequest(request, nowMillis)
+        def clear(record: StateEscalation, givenUpFor: Option[GivenUpBranch]): Unit =
+          pathState.clearForResync(blockchainReader.genesisHeader.hash.value, record.atMillis, Some(record), givenUpFor)
+        def escalated(kind: EscalationKind): Unit = StateMetrics.escalated(kind)
+        def regularSyncStarted(): Unit = handler.reset()
+    }
+
   lazy val syncController: org.apache.pekko.actor.typed.ActorRef[SyncController.Command] =
     val ref = classicSystem
       .spawn(
@@ -1327,9 +1377,16 @@ trait SyncControllerBuilder extends SyncControllerRefBuilder:
           forkChoiceManagerForSync,
           reorgState = blockchain,
           txGossipGate = txGossipGate,
-          peerScoringManager = Some(peerScoringManager)
+          peerScoringManager = Some(peerScoringManager),
+          stateEscalation = stateEscalationPort
         ),
         "sync-controller"
+      )
+    if stateEscalationPort.isDefined then
+      escalationRequests.set(request =>
+        ref ! SyncController.WrappedSyncProtocol(
+          com.chipprbots.ethereum.blockchain.sync.SyncProtocol.StateEscalationRequested(request)
+        )
       )
     // §7c-D5: STOP-AND-ALERT — restart loses chain-sync progress and may trigger a re-org.
     classicSystem.spawn(

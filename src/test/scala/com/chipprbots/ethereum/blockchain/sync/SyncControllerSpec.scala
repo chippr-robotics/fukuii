@@ -579,6 +579,127 @@ class SyncControllerSpec
     }
   }
 
+  // Spec 018 C5a part 7b: the state given up. The handler decides; the controller stops the import, clears the state
+  // with the record of why, counts it, and syncs again, with the pivot no lower than the refused branch's first block.
+  private class EscalationPort(answers: EscalationHandler.Outcome*) extends SyncController.StateEscalationPort:
+    import com.chipprbots.ethereum.db.storage.pathstate.EscalationKind
+    import com.chipprbots.ethereum.db.storage.pathstate.GivenUpBranch
+    import com.chipprbots.ethereum.db.storage.pathstate.StateEscalation
+    private val left = new java.util.concurrent.ConcurrentLinkedQueue[EscalationHandler.Outcome]()
+    answers.foreach(left.add)
+    val asked = new java.util.concurrent.atomic.AtomicInteger(0)
+    val cleared = new java.util.concurrent.ConcurrentLinkedQueue[(StateEscalation, Option[GivenUpBranch], Boolean)]()
+    val counted = new java.util.concurrent.ConcurrentLinkedQueue[EscalationKind]()
+    def decide(request: EscalationWatch.Request, nowMillis: Long): EscalationHandler.Outcome =
+      asked.incrementAndGet()
+      Option(left.poll()).getOrElse(EscalationHandler.Outcome.Repeated)
+    def clear(record: StateEscalation, givenUpFor: Option[GivenUpBranch]): Unit =
+      cleared.add((record, givenUpFor, counted.isEmpty))
+    def escalated(kind: EscalationKind): Unit = counted.add(kind)
+    val regularSyncStarts = new java.util.concurrent.atomic.AtomicInteger(0)
+    def regularSyncStarted(): Unit =
+      regularSyncStarts.incrementAndGet(); ()
+
+  private def escalationRequest: SyncProtocol.StateEscalationRequested =
+    SyncProtocol.StateEscalationRequested(
+      EscalationWatch.Request(
+        com.chipprbots.ethereum.db.storage.pathstate.EscalationKind.Unreachable,
+        None,
+        None,
+        "the heavier branch [4001-4050] cannot be reached"
+      )
+    )
+
+  it should "give the state up when the escalation's handler says so: clear, count, and SNAP again (C5a part 7b)" taggedAs (
+    UnitTest,
+    SyncTest
+  ) in withTestSetup() { testSetup =>
+    import testSetup.*
+    import com.chipprbots.ethereum.db.storage.pathstate.EscalationKind
+    import com.chipprbots.ethereum.db.storage.pathstate.GivenUpBranch
+    import com.chipprbots.ethereum.db.storage.pathstate.StateEscalation
+    val record =
+      StateEscalation(1763236800000L, EscalationKind.Unreachable, ByteString(Array.fill[Byte](32)(0x21)), 4001)
+    val branch = GivenUpBranch(4001, record.headHash)
+    val port =
+      new EscalationPort(EscalationHandler.Outcome.Escalate(record, Some(branch), "a branch cannot be reached"))
+    stateEscalation = Some(port)
+    storagesInstance.storages.appStateStorage.fastSyncDone().commit()
+    syncController ! SyncController.WrappedSyncProtocol(SyncProtocol.Start)
+    regularSyncChild(testSetup)
+    val before = snapChildren(testSetup)
+
+    val errors = syncControllerErrorsDuring {
+      syncController ! SyncController.WrappedSyncProtocol(escalationRequest)
+      eventually {
+        someTimePasses()
+        assert((snapChildren(testSetup) -- before).nonEmpty)
+      }
+    }
+    // cleared once, with the record and the branch, and counted after the clear
+    port.cleared.toArray.toList shouldBe List((record, Some(branch), true))
+    port.counted.toArray.toList shouldBe List(EscalationKind.Unreachable)
+    errors.exists(_.contains("[STATE-ESCALATION]")) shouldBe true
+    // a verdict told again while the sync runs is not asked about: the state is being synced
+    syncController ! SyncController.WrappedSyncProtocol(escalationRequest)
+    someTimePasses()
+    port.asked.get() shouldBe 1
+    port.cleared.size() shouldBe 1
+  }
+
+  it should "leave regular sync as it is when the handler does not say to give the state up (C5a part 7b)" taggedAs (
+    UnitTest,
+    SyncTest
+  ) in withTestSetup() { testSetup =>
+    import testSetup.*
+    val port = new EscalationPort(
+      EscalationHandler.Outcome.Suppressed,
+      EscalationHandler.Outcome.Dropped,
+      EscalationHandler.Outcome.Unreadable
+    )
+    stateEscalation = Some(port)
+    storagesInstance.storages.appStateStorage.fastSyncDone().commit()
+    syncController ! SyncController.WrappedSyncProtocol(SyncProtocol.Start)
+    val running = regularSyncChild(testSetup)
+    // the handler is told that regular sync began, so that what it answered before is forgotten
+    port.regularSyncStarts.get() shouldBe 1
+    (1 to 4).foreach(_ => syncController ! SyncController.WrappedSyncProtocol(escalationRequest))
+    someTimePasses()
+    port.asked.get() shouldBe 4
+    port.cleared.size() shouldBe 0
+    port.counted.size() shouldBe 0
+    snapChildren(testSetup) shouldBe empty
+    regularSyncChild(testSetup) shouldBe running
+  }
+
+  it should "drop a verdict to give the state up while it was not started (C5a part 7b)" taggedAs (
+    UnitTest,
+    SyncTest
+  ) in withTestSetup() { testSetup =>
+    import testSetup.*
+    val port = new EscalationPort(EscalationHandler.Outcome.Suppressed)
+    stateEscalation = Some(port)
+    syncController ! SyncController.WrappedSyncProtocol(escalationRequest)
+    someTimePasses()
+    port.asked.get() shouldBe 0
+    port.cleared.size() shouldBe 0
+    syncController.children.exists(_.path.name.startsWith("snap-sync")) shouldBe false
+  }
+
+  it should "drop a verdict to give the state up on the hash layout (C5a part 7b)" taggedAs (
+    UnitTest,
+    SyncTest
+  ) in withTestSetup() { testSetup =>
+    import testSetup.*
+    storagesInstance.storages.appStateStorage.fastSyncDone().commit()
+    syncController ! SyncController.WrappedSyncProtocol(SyncProtocol.Start)
+    val running = regularSyncChild(testSetup)
+    syncController ! SyncController.WrappedSyncProtocol(escalationRequest)
+    someTimePasses()
+    snapChildren(testSetup) shouldBe empty
+    regularSyncChild(testSetup) shouldBe running
+  }
+
   // H3: a stored node no fetch repairs sent regular sync to SNAP, and the next SNAP back to the same node, with no cap.
   // The first two re-SNAPs in a row with no block imported between them go at once, as before. From the third, regular
   // sync keeps running (on ETC a stopped node imports nothing while it waits) and the re-SNAP is scheduled an hour on,
@@ -1870,10 +1991,14 @@ class SyncControllerSpec
           txGossipGate = txGossipGate,
           backgroundAuditEnabled = auditEnabled,
           // #1654: these fixtures store weights that do not follow from genesis; the pass would repair them.
-          chainWeightReconcileOn = false
+          chainWeightReconcileOn = false,
+          stateEscalation = stateEscalation
         )
       )
     )
+
+    /** What the controller gives the state up with (spec 018 C5a part 7b): set before the controller is first used. */
+    var stateEscalation: Option[SyncController.StateEscalationPort] = None
 
     /** The node's tx gossip gate, as NodeBuilder shares it between SyncController, the Engine API and the pool. */
     lazy val txGossipGate: com.chipprbots.ethereum.transactions.TxGossipGate =

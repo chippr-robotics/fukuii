@@ -101,6 +101,11 @@ class AppStateStorage(val dataSource: DataSource) extends TransactionalKeyValueS
     */
   def forgetGivenUpBranches(): DataSourceBatchUpdate = remove(Keys.StateEscalationGivenUp)
 
+  /** The update that removes the record of the last escalation: for the operator's switch, and only for a record that
+    * cannot be read (the cool-down is counted from one that can).
+    */
+  def forgetStateEscalationLast(): DataSourceBatchUpdate = remove(Keys.StateEscalationLast)
+
   /** Whether a clear of the state was begun and not seen to its end: its rows may be there still, with no anchor over
     * them ([[pathstate.StateResetPending]]).
     */

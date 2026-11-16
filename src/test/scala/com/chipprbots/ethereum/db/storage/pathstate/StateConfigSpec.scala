@@ -108,6 +108,7 @@ class StateConfigSpec extends AnyFlatSpec with Matchers:
       "recovery.max-blocks",
       "recovery.escalation-refusals",
       "recovery.escalation-cooldown",
+      "recovery.forget-given-up-branches",
       "reorg.max-depth"
     )
   }

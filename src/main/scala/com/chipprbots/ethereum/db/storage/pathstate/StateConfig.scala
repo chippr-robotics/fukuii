@@ -67,7 +67,12 @@ object StateConfig:
       maxLayerBytes: Long,
       maxViewAgeMoves: Int
   )
-  final case class Recovery(maxBlocks: Int, escalationRefusals: Int, escalationCooldown: FiniteDuration)
+  final case class Recovery(
+      maxBlocks: Int,
+      escalationRefusals: Int,
+      escalationCooldown: FiniteDuration,
+      forgetGivenUpBranches: Boolean = false
+  )
 
   enum ReorgDepth:
     /** The retention floor: what the changeset records cover. */
@@ -112,7 +117,8 @@ object StateConfig:
       recovery = Recovery(
         maxBlocks = state.getInt("recovery.max-blocks"),
         escalationRefusals = state.getInt("recovery.escalation-refusals"),
-        escalationCooldown = state.getDuration("recovery.escalation-cooldown").toScala
+        escalationCooldown = state.getDuration("recovery.escalation-cooldown").toScala,
+        forgetGivenUpBranches = state.getBoolean("recovery.forget-given-up-branches")
       ),
       reorgMaxDepth = reorgDepth(state)
     )

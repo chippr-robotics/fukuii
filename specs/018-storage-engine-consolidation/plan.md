@@ -3911,6 +3911,44 @@ throws before it writes, which the guard keeps a caller from.
 **Tests**: `EscalationGuardSpec` (8), `StateClearBatchSpec` (+4), `EscalationWatchSpec` (+1),
 `PowEscalationFeedSpec` (+3).
 
+#### C5a part 7b: the state given up (2026-11-16)
+
+The handler of an escalation and the controller's part in it. **It cannot fire yet**: a verdict is acted on by the
+sync controller while it runs regular sync, and on the guard the controller is not started before part 10.
+
+- **`EscalationHandler`** asks the guard (7a) for each verdict the watch tells, says what was decided and counts it,
+  and answers its owner: give the state up (with the record of the clear and, on proof of work, the branch), not now,
+  never for this branch, or not while a record cannot be read. **A verdict told again is answered once**: for a
+  branch on proof of work; on proof of stake for its kind, since the head named changes with every slot (beacon).
+  "Cannot be read" is looked at again after ten minutes. What it answered is forgotten when regular sync begins.
+- **A branch that was given up** is said at ERROR (`[STATE-ESCALATION-GIVEN-UP]`), with how an operator ends it, and
+  counted (`recovery.escalations.suppressed`).
+- **The sync controller** (T173, in part): `StateEscalationRequested` is asked about in the regular-sync states and
+  dropped in every other (a sync is already under way, or the controller was not started). An escalation is sent on
+  to itself as a restart, so that a backfill that still runs is stopped first; then the import is stopped, the audit
+  with it, **the state is cleared in its one synced batch with the record and the branch** (part 3), it is counted
+  (`recovery.escalations`), and SNAP starts, on proof of work with a pivot no lower than the first block of the
+  refused branch.
+- **A late import of the sync that was stopped cannot write over the cleared state** (forge, read after code): the
+  clear waits for a move of the head under way, and with no anchor a commit, a promotion and a kept layer are all
+  refused as a fault of the node; the best block and the index move only with the state.
+- **The operator's switch** `state.recovery.forget-given-up-branches`: at a start, before anything syncs, the list
+  of branches is removed, synced, and what was on it is said; so is a list, or a record of the last escalation, that
+  cannot be read. It is done at every start the switch is set for, and says to unset it each time (vault).
+- **The wiring**: the watch's verdicts reach the controller through a channel bound once the controller exists.
+
+**Gates on part 10, not in this part** (the plan had them on the arming, which is now part 10's lifting of the
+refusal to sync): B-303 (after a clear the index by number and the header cursor still name the chain that was
+left), B-306 (a branch MESS would refuse; the cheap rules of a header before its seal), T166, and **B-307**, what
+forge and beacon found the clear must also do before a sync runs on the guard: the recoveries that are queued or
+running are drained first, and what a recovery remembers of a failure with them (a `failClosed` after the clear
+would keep SNAP from ever handing off); the fork choice's memory of the old head is dropped (it gives refusals that
+count towards the next escalation); the pivot is on the refused branch, not only at its height (on ETC the heavier
+chain can be the shorter, and a pivot on the chain that was left drops the branch for good); the clear is taken off
+the controller's thread.
+
+**Tests**: `EscalationHandlerSpec` (10), `SyncControllerSpec` (+4), `StateConfigSpec` (the key).
+
 ### Destructive change (C8a and C8b): the vault protocol blocks
 
 ```
