@@ -3434,7 +3434,7 @@ items:
   - id: B-297
     title: "C5 gate: the consensus layer's branch beyond the forward layers is handed to StateRecovery, and a refused one is not retried without end"
     priority: P1
-    status: claimed
+    status: in-progress
     area: consensus
     size: L
     opened: 2026-11-15
@@ -3445,7 +3445,7 @@ items:
       by: cloud-lane2
       agent: main
       since: 2026-11-16T20:16:00Z
-      heartbeat: 2026-11-16T20:16:00Z
+      heartbeat: 2026-11-16T20:16:16Z
     notes: "beacon, C4e part 5. (1) at the cap / below the views: store the rest by hash, StateRecovery.requestFor(ForkChoice) via a late-bound handle. (2) Finalized / too-deep refusal re-queues forever: no re-queue (as divergedParent), importer treats it as permanent, FCM puts requestedHead back on FinalizedReversed. (3) race test importer move vs confirmHeldHead/StateRecovery. (4) lost side parents told in the new branch. (5) hive engine Re-Org Sync suites on path-live"
   - id: B-298
     title: "SYNC-FORK on the hash layout: clamp the resolver's LCA, choose the master peer by weight, judge the peer's branch by weight"
