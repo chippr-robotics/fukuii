@@ -3676,3 +3676,12 @@ items:
     refs: [B-297]
     links: {}
     notes: "forge, after B-297: unreachable today (importLock); B1's anchor check is on the CL arm only"
+  - id: B-316
+    title: The consensus layer's branch that forks below what a view reaches is adopted by no one (archive)
+    priority: P2
+    status: open
+    area: consensus
+    opened: 2026-11-16
+    refs: [B-297]
+    links: {}
+    notes: StateRecovery.walk stops only at a state a view reaches; queued again until the escalation
