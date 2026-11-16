@@ -36,13 +36,21 @@ class BlockValidation(
   def firstInvalidHeader(
       branch: List[Block]
   )(implicit blockchainConfig: BlockchainConfig): Option[(BlockHeader, String)] =
-    val inBranch = branch.iterator.map(block => block.header.hash.value -> block.header).toMap
+    firstInvalidHeaderOf(branch.map(_.header))
+
+  /** [[firstInvalidHeader]], of a branch known by its headers alone (B-300 g): the same rules, as only the headers are
+    * read.
+    */
+  def firstInvalidHeaderOf(
+      headers: List[BlockHeader]
+  )(implicit blockchainConfig: BlockchainConfig): Option[(BlockHeader, String)] =
+    val inBranch = headers.iterator.map(header => header.hash.value -> header).toMap
     def parentOf(hash: ByteString): Option[BlockHeader] =
       inBranch.get(hash).orElse(getBlockHeaderFromChainOrQueue(hash))
     def failedBy(
         check: BlockHeader => Either[Any, Any]
     ): Option[(BlockHeader, String)] =
-      branch.iterator.map(block => block.header -> check(block.header)).collectFirst { case (header, Left(error)) =>
+      headers.iterator.map(header => header -> check(header)).collectFirst { case (header, Left(error)) =>
         header -> error.toString
       }
     // The rules that cost nothing are checked on every header before the seal of any (forge, B-306): what a branch

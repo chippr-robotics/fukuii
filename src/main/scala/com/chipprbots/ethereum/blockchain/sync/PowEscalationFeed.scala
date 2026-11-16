@@ -71,41 +71,73 @@ final class PowEscalationFeed(
 
   /** `branch`, in the order of its blocks and as it was handed to consensus, was not judged: this node's state could
     * not take it. `firstInvalidHeader` says which header of a branch is not valid, and why, by every rule of a header,
-    * the seal with it; it is asked only for a branch that would be counted.
+    * the seal with it; it is asked only for a branch that would be counted. As [[notJudgedHeaders]], of its headers.
     */
   def notJudged(
       branch: List[Block],
       fault: StateFault,
       firstInvalidHeader: List[Block] => Option[(BlockHeader, String)]
   ): Unit =
+    // the headers are the branch's, in its order: what is validated is the branch itself
+    notJudgedHeaders(branch.map(_.header), fault, _ => firstInvalidHeader(branch))
+
+  /** A branch known by its `headers` alone, in their order, was refused before any of its blocks was fetched: regular
+    * sync could not fetch it whole, or the head could not be moved back to the block it leaves the chain at (B-300 g).
+    * Counted by the same guards as a branch handed to consensus ([[notJudged]]): heavier than the head, with headers
+    * that are valid, and not refused by MESS.
+    */
+  def notJudgedHeaders(
+      headers: List[BlockHeader],
+      fault: StateFault,
+      firstInvalidHeader: List[BlockHeader] => Option[(BlockHeader, String)]
+  ): Unit =
     // A post-merge branch (difficulty 0) is the Engine API's: this filter is also what keeps the consensus layer's
     // refusals (`RefusedForThisHead`, `HandedToRecovery`, B-297) out of the proof-of-work count
-    if branch.nonEmpty && branch.last.header.difficulty.value > 0 then
-      val name = s"[${branch.head.number}-${branch.last.number}]"
-      val weight = weightOf(branch.head.header.parentHash).map(branch.foldLeft(_)((w, b) => w.increase(b.header)))
-      (weight, headWeight()) match
+    if headers.nonEmpty && headers.last.difficulty.value > 0 then
+      val name = s"[${headers.head.number}-${headers.last.number}]"
+      (weighed(headers), headWeight()) match
         case (None, _) | (_, None) => note(s"branch $name is not counted: its weight, or the head's, is not stored")
         case (Some(of), Some(head)) if of <= head =>
           note(s"branch $name is not counted: it does not outweigh the head")
         case (Some(of), _) =>
-          firstInvalidHeader(branch) match
+          firstInvalidHeader(headers) match
             case Some((header, why)) =>
               note(s"branch $name is not counted: the header of its block ${header.number} is not valid ($why)")
             case None =>
-              val first = firstAboveFork(branch.head.header, headerOf, onTheChain)
+              val first = firstAboveFork(headers.head, headerOf, onTheChain)
               if messWouldRefuse(first, of) then
                 note(s"branch $name is not counted: the reorganisation to it is one MESS refuses (ECBP-1100)")
-              else counted(branch, name, of, first, fault)
+              else counted(headers, name, of, first, fault)
 
-  private def counted(branch: List[Block], name: String, of: ChainWeight, first: BlockHeader, fault: StateFault): Unit =
+  /** Whether the branch of `headers`, from the stored weight of the block it stands on, outweighs the head, by the
+    * weights a branch is counted by. False where either weight is not stored. It reads and says only: nothing is
+    * counted (B-300 g: a fetch of a branch's headers stops once they are enough).
+    */
+  def outweighsTheHead(headers: List[BlockHeader]): Boolean =
+    headers.nonEmpty && (for
+      of <- weighed(headers)
+      head <- headWeight()
+    yield of > head).contains(true)
+
+  // the chain weight at the last of `headers`, from the stored weight of the block the first stands on
+  private def weighed(headers: List[BlockHeader]): Option[ChainWeight] =
+    headers.headOption.flatMap(first => weightOf(first.parentHash)).map(headers.foldLeft(_)(_.increase(_)))
+
+  private def counted(
+      headers: List[BlockHeader],
+      name: String,
+      of: ChainWeight,
+      first: BlockHeader,
+      fault: StateFault
+  ): Unit =
     if refused.forall(_ < of) then refused = Some(of)
     val refusedBranch = EscalationWatch.Branch(
       GivenUpBranch(first.number.value, first.hash.value),
-      () => lineage(branch.map(_.header), headerOf)
+      () => lineage(headers, headerOf)
     )
     classify(fault) match
       case Refusal.Unreachable => watch.branchUnreachable(refusedBranch, name, fault.getMessage)
-      case Refusal.Fault       => watch.branchRefused(refusedBranch, branch.last.number.value, name, fault.getMessage)
+      case Refusal.Fault       => watch.branchRefused(refusedBranch, headers.last.number.value, name, fault.getMessage)
 
   // Whether the reorganisation to a branch of weight `of`, whose first block above the chain is `first`, is one MESS
   // refuses (forge, B-306). The head's header and the head's weight are read apart: they are of the same head because
@@ -206,11 +238,14 @@ object PowEscalationFeed:
     case Fault
 
   /** The table of data-model D.1 for proof of work. '''At once''' only where the move back to the fork is refused for
-    * its depth: below what the changeset records reach, across a block with no whole record, or below the block the
-    * state began at. Records that are corrupt are this datadir's fault and wait, as every other fault of the node does:
-    * a block that fails when it is executed again, a state that is held back after a failed write, a state that is not
-    * held. One that passes (the head moved under the branch) is gone at the next try, and the run with it.
+    * its depth: below what the changeset records reach, across a block with no whole record, below the block the state
+    * began at; or where the branch reaches further above the fork than regular sync can fetch whole. Records that are
+    * corrupt are this datadir's fault and wait, as every other fault of the node does: a block that fails when it is
+    * executed again, a state that is held back after a failed write, a state that is not held. One that passes (the
+    * head moved under the branch) is gone at the next try, and the run with it.
     */
   def classify(fault: StateFault): Refusal = fault match
+    // `Finalized` is Unreachable too, and never met on proof of work, which finalizes nothing. `BeyondTheFetch` is a
+    // branch regular sync cannot fetch whole, which no wait mends either (B-300 g)
     case deep: ReorgTooDeep if deep.reason != ReorgRefusal.Corrupt => Refusal.Unreachable
     case _                                                         => Refusal.Fault

@@ -60,13 +60,14 @@ class StateExceptionsSpec extends AnyFlatSpec with Matchers:
     (large.bytes, large.cap) shouldBe (300L, 256L)
   }
 
-  "A refused head move" should "be refused for one of five reasons" taggedAs UnitTest in {
+  "A refused head move" should "be refused for one of six reasons" taggedAs UnitTest in {
     ReorgRefusal.values.toSeq shouldBe Seq(
       ReorgRefusal.Deep,
       ReorgRefusal.Incomplete,
       ReorgRefusal.Pivot,
       ReorgRefusal.Finalized,
-      ReorgRefusal.Corrupt
+      ReorgRefusal.Corrupt,
+      ReorgRefusal.BeyondTheFetch
     )
   }
 

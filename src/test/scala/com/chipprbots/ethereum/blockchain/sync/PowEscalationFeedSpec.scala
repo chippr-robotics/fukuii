@@ -76,9 +76,23 @@ class PowEscalationFeedSpec extends AnyFlatSpec with Matchers:
         case block if invalid.contains(block.number.value) => block.header -> "a seal no one mined"
       }
     def refused(blocks: List[Block], fault: StateFault): Unit = feed.notJudged(blocks, fault, validation)
+    def headersValidation(headers: List[BlockHeader]): Option[(BlockHeader, String)] =
+      validated += 1
+      headers.collectFirst {
+        case header if invalid.contains(header.number.value) => header -> "a seal no one mined"
+      }
+    def refusedHeaders(headers: List[BlockHeader], fault: StateFault): Unit =
+      feed.notJudgedHeaders(headers, fault, headersValidation)
 
   "The classification of a refused branch" should "be at once only for a fork the state does not reach" taggedAs UnitTest in {
-    Seq(ReorgRefusal.Deep, ReorgRefusal.Incomplete, ReorgRefusal.Pivot).foreach { reason =>
+    // Finalized too, which proof of work never meets
+    Seq(
+      ReorgRefusal.Deep,
+      ReorgRefusal.Incomplete,
+      ReorgRefusal.Pivot,
+      ReorgRefusal.Finalized,
+      ReorgRefusal.BeyondTheFetch
+    ).foreach { reason =>
       withClue(s"$reason: ")(PowEscalationFeed.classify(new ReorgTooDeep(reason, "x")) shouldBe Refusal.Unreachable)
     }
     Seq[StateFault](
@@ -87,6 +101,101 @@ class PowEscalationFeedSpec extends AnyFlatSpec with Matchers:
       new StateUnavailable("held back after a write that failed"),
       new AncestorNotStored(6, 3, "bodies")
     ).foreach(fault => withClue(s"$fault: ")(PowEscalationFeed.classify(fault) shouldBe Refusal.Fault))
+  }
+
+  // B-300 (g): a branch refused before any of its blocks was fetched is known by its headers alone
+  "The proof-of-work feed, told of a branch by its headers" should "count it as it counts the same branch told by its blocks" taggedAs UnitTest in {
+    Seq[(String, Rig => Unit, StateFault)](
+      ("heavier, unreachable", _ => (), tooDeep),
+      ("heavier, a fault of this node", _ => (), corrupt),
+      ("lighter", rig => rig.head = Some(ChainWeight.totalDifficultyOnly(5000)), tooDeep),
+      ("with a header not valid", rig => rig.invalid = Some(6), tooDeep),
+      ("with no weight stored", rig => rig.forkWeight = None, tooDeep)
+    ).foreach { case (what, set, fault) =>
+      withClue(s"$what: ") {
+        val byBlocks = new Rig(refusals = 2)
+        val byHeaders = new Rig(refusals = 2)
+        set(byBlocks)
+        set(byHeaders)
+        Seq(3, 5).foreach { blocks =>
+          byBlocks.refused(branch(5, blocks), fault)
+          byHeaders.refusedHeaders(branch(5, blocks).map(_.header), fault)
+        }
+        byHeaders.escalated.toList shouldBe byBlocks.escalated.toList
+        byHeaders.said.toList shouldBe byBlocks.said.toList
+        byHeaders.left.toList shouldBe byBlocks.left.toList
+        refusedAt(byHeaders) shouldBe refusedAt(byBlocks)
+        byHeaders.validated shouldBe byBlocks.validated
+      }
+    }
+  }
+
+  it should "count nothing for headers that do not outweigh the head, nor for one that is not valid" taggedAs UnitTest in {
+    val rig = new Rig
+    rig.refusedHeaders(branch(5, 1, difficulty = 50).map(_.header), tooDeep)
+    rig.escalated shouldBe empty
+    rig.validated shouldBe 0
+    rig.left.last should include("does not outweigh")
+    rig.invalid = Some(7)
+    rig.refusedHeaders(branch(5, 3).map(_.header), tooDeep)
+    rig.escalated shouldBe empty
+    refusedAt(rig) shouldBe None
+    rig.left.last should (include("block 7").and(include("a seal no one mined")))
+    // and the same headers, all valid, are counted at once
+    rig.invalid = None
+    rig.refusedHeaders(branch(5, 3).map(_.header), tooDeep)
+    rig.escalated.toList shouldBe List(EscalationKind.Unreachable)
+    rig.said.head._2 should include("[5-7]")
+  }
+
+  it should "count nothing for headers whose reorganisation MESS refuses" taggedAs UnitTest in {
+    val escalated = mutable.ArrayBuffer.empty[EscalationKind]
+    val left = mutable.ArrayBuffer.empty[String]
+    var refuses = true
+    val fork = Fixtures.Blocks.ValidBlock.header
+      .copy(number = BlockNumber(4), unixTimestamp = com.chipprbots.ethereum.domain.Timestamp(1000L))
+    val head = Fixtures.Blocks.ValidBlock.header
+      .copy(number = BlockNumber(6), unixTimestamp = com.chipprbots.ethereum.domain.Timestamp(1026L))
+    val feed = new PowEscalationFeed(
+      new EscalationWatch(new EscalationTrigger(64), () => 0L, escalated += _, (_, _) => ()),
+      hash => Option.when(hash == forkHash)(ChainWeight.totalDifficultyOnly(1000)),
+      () => Some(ChainWeight.totalDifficultyOnly(1050)),
+      hash => Option.when(hash == forkHash.value)(fork),
+      _ => true,
+      Some(PowEscalationFeed.Mess(_ => true, () => Some(head), (_, _, _) => refuses)),
+      left += _
+    )
+    feed.notJudgedHeaders(branch(5, 3).map(_.header), tooDeep, _ => None)
+    escalated shouldBe empty
+    feed.refusedWeight shouldBe None
+    left.last should include("MESS")
+    refuses = false
+    feed.notJudgedHeaders(branch(5, 3).map(_.header), tooDeep, _ => None)
+    escalated.toList shouldBe List(EscalationKind.Unreachable)
+  }
+
+  it should "say whether headers outweigh the head by the weights it counts by, and count nothing for it" taggedAs UnitTest in {
+    val rig = new Rig
+    // 1000 + 50 is the head's own weight
+    rig.feed.outweighsTheHead(branch(5, 1, difficulty = 50).map(_.header)) shouldBe false
+    rig.feed.outweighsTheHead(branch(5, 1, difficulty = 51).map(_.header)) shouldBe true
+    rig.feed.outweighsTheHead(Nil) shouldBe false
+    rig.forkWeight = None
+    rig.feed.outweighsTheHead(branch(5, 3).map(_.header)) shouldBe false
+    rig.escalated shouldBe empty
+    rig.validated shouldBe 0
+    refusedAt(rig) shouldBe None
+  }
+
+  it should "say at once for a branch regular sync cannot fetch whole" taggedAs UnitTest in {
+    PowEscalationFeed.classify(new ReorgTooDeep(ReorgRefusal.BeyondTheFetch, "600 blocks above the fork")) shouldBe
+      Refusal.Unreachable
+    val rig = new Rig
+    rig.refusedHeaders(
+      branch(5, 3).map(_.header),
+      new ReorgTooDeep(ReorgRefusal.BeyondTheFetch, "600 blocks above the fork")
+    )
+    rig.escalated.toList shouldBe List(EscalationKind.Unreachable)
   }
 
   "The proof-of-work feed" should "say at once for a heavier branch, with valid headers, the state does not reach" taggedAs UnitTest in {

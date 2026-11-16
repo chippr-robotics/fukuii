@@ -238,6 +238,7 @@ class ForkChoiceManager(
             refused.reason == ReorgRefusal.Pivot =>
         notMoved(refused.getMessage)
         Left(ForkChoiceManager.Unreachable + refused.getMessage)
+      // `BeyondTheFetch` is said by proof-of-work regular sync only, never by a move of the head: not met here
       case refused: ReorgTooDeep => notMoved(refused.getMessage)
 
   /** Publish the CL head to the registered listener and record it as the requested head — **nothing else**.

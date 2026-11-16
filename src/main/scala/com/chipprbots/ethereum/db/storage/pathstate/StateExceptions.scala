@@ -93,6 +93,13 @@ enum ReorgRefusal:
     */
   case Corrupt
 
+  /** The branch reaches further above the block it leaves the chain at than the blocks the fetcher holds ready
+    * (`sync.max-ready-blocks-queue-size`), so it is never fetched whole and weighed (B-300 g; the user's decision of
+    * 2026-11-16). Said by regular sync on the unified layout before anything is asked of the state, and answered as
+    * `Deep` is: a sync of the state again. Never said by a move of the head itself.
+    */
+  case BeyondTheFetch
+
 /** A move of the head that was refused before anything was changed. */
 final class ReorgTooDeep(val reason: ReorgRefusal, detail: String)
     extends StateFault(s"Head move refused ($reason): $detail")

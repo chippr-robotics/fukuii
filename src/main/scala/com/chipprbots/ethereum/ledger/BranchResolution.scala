@@ -1,5 +1,7 @@
 package com.chipprbots.ethereum.ledger
 
+import org.apache.pekko.util.ByteString
+
 import cats.data.NonEmptyList
 
 import com.chipprbots.ethereum.consensus.engine.DesignatedHead
@@ -154,6 +156,15 @@ class BranchResolution(
       oldBlocks: List[Block],
       newHeaders: List[BlockHeader]
   ): Boolean =
+    newHeaders.lastOption.exists { proposedTip =>
+      messRejects(oldBlocks, newHeaders.map(_.difficulty.value).foldLeft(BigInt(0))(_ + _), proposedTip)
+    }
+
+  /** The same check for a proposed branch given by the difficulty of its blocks above the common block and by its tip:
+    * all the check reads of it. So that a branch this node holds only the tip's record of ([[BranchNotTaken]]) is
+    * judged by the one rule.
+    */
+  private def messRejects(oldBlocks: List[Block], proposedSubchainTD: BigInt, proposedTip: BlockHeader): Boolean =
     messConfig match
       case Some(config) if oldBlocks.nonEmpty && config.isActiveAtBlock(oldBlocks.last.header.number.value) =>
         val commonAncestorTimestamp = blockchainReader
@@ -165,7 +176,6 @@ class BranchResolution(
         val timeDeltaSeconds = math.max(0L, currentHeadTimestamp - commonAncestorTimestamp)
 
         val localSubchainTD = oldBlocks.map(_.header.difficulty.value).foldLeft(BigInt(0))(_ + _)
-        val proposedSubchainTD = newHeaders.map(_.difficulty.value).foldLeft(BigInt(0))(_ + _)
 
         val shouldReject = ArtificialFinality.shouldRejectReorg(timeDeltaSeconds, localSubchainTD, proposedSubchainTD)
 
@@ -178,7 +188,6 @@ class BranchResolution(
         val commonAncestorNumber = oldBlocks.head.header.number - 1
         val commonAncestorHash = oldBlocks.head.header.parentHash
         val currentHead = oldBlocks.last.header
-        val proposedTip = newHeaders.last
         val proposedSpanSeconds = math.max(0L, proposedTip.unixTimestamp - commonAncestorTimestamp)
 
         BlockMetrics.setMessGravity(tdrRatio)
@@ -207,11 +216,104 @@ class BranchResolution(
 
       case _ => false
 
+  /** The record of a side branch that was weighed against this node's chain and not taken (B-300 f; forge): what is
+    * needed to weigh it again when more of it arrives, without fetching it again. None when the headers hold no block
+    * that is not this node's, or the weight of the block they stand on is not stored.
+    */
+  def notTaken(headers: NonEmptyList[BlockHeader]): Option[BranchNotTaken] =
+    val headersList = headers.toList
+    val own = getTopBlocksFromNumber(headers.head.number.value)
+    val shared = own.zip(headersList).takeWhile { case (block, header) => block.header == header }.length
+    for
+      first <- headersList.drop(shared).headOption
+      parentWeight <- blockchainReader.getChainWeightByHash(first.parentHash)
+    yield
+      val side = headersList.drop(shared)
+      BranchNotTaken(
+        tip = side.last,
+        commonBlock = first.number.value - 1,
+        commonHash = first.parentHash.value,
+        weight = side.foldLeft(parentWeight)((weight, header) => weight.increase(header)),
+        difficultyAboveTheCommonBlock = side.map(_.difficulty.value).foldLeft(BigInt(0))(_ + _)
+      )
+
+  /** `headers` stand on the tip of a branch that was not taken: the branch with them, and whether it would be taken
+    * now. By the rules of [[compareBranch]]: heavier than this node's chain, and not refused by MESS. None when the
+    * headers do not stand on that tip or do not form a chain, and when the block the branch leaves this chain at is no
+    * longer on it (this chain has moved since): MESS would then be asked of another pair of branches (forge).
+    *
+    * Proof of work only: it is not asked on a chain that follows a consensus layer.
+    */
+  def extended(branch: BranchNotTaken, headers: NonEmptyList[BlockHeader]): Option[(BranchNotTaken, Boolean)] =
+    if headers.head.parentHash != branch.tip.hash || !doHeadersFormChain(headers) then None
+    else if !blockchainReader.getCanonicalHashByNumber(branch.commonBlock).exists(_.value == branch.commonHash) then
+      None
+    else
+      val longer = branch.copy(
+        tip = headers.last,
+        weight = headers.foldLeft(branch.weight)((weight, header) => weight.increase(header)),
+        difficultyAboveTheCommonBlock =
+          branch.difficultyAboveTheCommonBlock + headers.toList.map(_.difficulty.value).foldLeft(BigInt(0))(_ + _)
+      )
+      val own = getTopBlocksFromNumber(branch.commonBlock + 1)
+      // this node's head, or the common block where the head has come down to it
+      val ownWeight = blockchainReader.getChainWeightByHash(
+        own.lastOption.map(_.header.hash).getOrElse(com.chipprbots.ethereum.domain.BlockHash(branch.commonHash))
+      )
+      val taken = ownWeight.exists(longer.weight > _) &&
+        !messRejects(own, longer.difficultyAboveTheCommonBlock, longer.tip)
+      Some((longer, taken))
+
   private def getTopBlocksFromNumber(from: BigInt): List[Block] =
     val bestBranch = blockchainReader.getBestBranch
     (from to blockchainReader.getBestBlockNumber)
       .flatMap(nb => blockchainReader.getBlockByNumber(bestBranch, nb))
       .toList
+
+/** A side branch that was weighed and not taken, as [[BranchResolution.notTaken]] records it.
+  *
+  * @param tip
+  *   its highest block seen
+  * @param commonBlock
+  *   the number of the block it leaves this node's chain at
+  * @param commonHash
+  *   that block's hash
+  * @param weight
+  *   the chain weight at its tip
+  * @param difficultyAboveTheCommonBlock
+  *   the sum of the difficulties of its blocks, which MESS compares with this node's
+  */
+final case class BranchNotTaken(
+    tip: BlockHeader,
+    commonBlock: BigInt,
+    commonHash: ByteString,
+    weight: ChainWeight,
+    difficultyAboveTheCommonBlock: BigInt
+)
+
+/** The branches that were weighed and not taken, by the hash of their tip: the last `kept` remembered, the oldest
+  * forgotten first (B-300 f). A branch forgotten is fetched again from 64 blocks back, as before. Owned by one actor.
+  */
+final class BranchesNotTaken(kept: Int):
+  private var byTip: scala.collection.immutable.ListMap[ByteString, BranchNotTaken] =
+    scala.collection.immutable.ListMap.empty
+
+  /** Remembered under its tip; one remembered under that tip already is replaced, and counts as the newest. */
+  def remember(branch: BranchNotTaken): Unit =
+    byTip = (byTip - branch.tip.hash.value + (branch.tip.hash.value -> branch)).takeRight(kept)
+
+  /** The branch whose tip is `parentHash`, taken out: what follows it is weighed with it, and remembered anew if it is
+    * still not taken.
+    */
+  def take(parentHash: ByteString): Option[BranchNotTaken] =
+    val found = byTip.get(parentHash)
+    byTip -= parentHash
+    found
+
+  /** The branch whose tip is `parentHash`, left where it is. */
+  def get(parentHash: ByteString): Option[BranchNotTaken] = byTip.get(parentHash)
+
+  def size: Int = byTip.size
 
 sealed trait BranchResolutionResult
 
