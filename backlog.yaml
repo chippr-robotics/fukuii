@@ -3528,3 +3528,15 @@ items:
     refs: []
     links: {}
     notes: "Found 2026-11-15: a testEssential run died with 'No space left on device' after about 15 runs in one container. /tmp held 25 GB of directories no spec removed. The two largest per run are specs added in C4e (prefixes sync-fork-rewind-rocksdb and pow-prefix-reimport-rocksdb: a 75 MB RocksDB directory each, never deleted); then chain-io, fukuii-unique-codehashes-, fukuii-contract-storage-, snap-recovery-test, testdb, snap-good-peers and others. Each spec deletes what it creates (afterAll, or a kit that owns the directory); CI runners are fresh each run and do not see it."
+  - id: B-306
+    title: "The proof-of-work escalation feed: a branch MESS would refuse is not to be counted, and cheap header rules are checked before a seal (gate on C5a part 7)"
+    priority: P1
+    status: open
+    area: sync
+    size: S
+    opened: 2026-11-16
+    refs: []
+    links:
+      spec: 018
+    depends_on: [B-064]
+    notes: "forge, review of C5a part 6b. (1) A single announced block reaches consensus without BranchResolution's MESS check; a deep heavier branch spread that way is counted as unreachable at once. MESS is off on ETC today and returns with Olympia: PowEscalationFeed asks shouldMessReject before it counts. (2) The weight is weighed on claimed difficulties before a header is validated: validate the parent rules of every header, weigh again, then check seals; a header of an old epoch builds an Ethash cache that evicts the current one (EthashBlockHeaderValidator.powCaches holds 2)."
