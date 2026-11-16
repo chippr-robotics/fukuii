@@ -33,6 +33,15 @@ trait Consensus:
     val _ = accessLists
     evaluateBranch(block)
 
+  /** Whether `blocks` hang from the consensus layer's branch that was refused while the head is where it is (spec 018
+    * C5a, B-297): they are then refused with it, and remembered so that what stands on them is too. A batch that hangs
+    * from a refused block would otherwise read as an unknown branch, and send the fetcher back to fetch the refused
+    * branch again, without end. False by default, and always on a chain that follows no consensus layer.
+    */
+  def refusedWithTheirParent(blocks: NonEmptyList[Block]): Boolean =
+    val _ = blocks
+    false
+
 object Consensus:
   /* This return type for consensus is probably overcomplicated for now because some information is needed
    * to keep the compatibility with the current code (particularly for the block queue handling), and be able

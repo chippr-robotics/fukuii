@@ -42,6 +42,7 @@ import com.chipprbots.ethereum.crypto.kec256
 import com.chipprbots.ethereum.db.storage.BadEntryDelete
 import com.chipprbots.ethereum.db.storage.EvmCodeStorage
 import com.chipprbots.ethereum.db.storage.StateStorage
+import com.chipprbots.ethereum.db.storage.pathstate.RefusedForThisHead
 import com.chipprbots.ethereum.domain.*
 import com.chipprbots.ethereum.domain.BlockchainWriter
 import com.chipprbots.ethereum.jsonrpc.NewBlockImported
@@ -1078,6 +1079,18 @@ final private class BlockImporterLogic(
                 )
                 pendingStateNodeHash = None
                 ResolvingMissingNode(NonEmptyList(failedBlock, notImportedBlocks.tail), alreadyExhausted = true)
+              case BlockImportStateFault(refused: RefusedForThisHead, _) =>
+                // The consensus layer's branch, refused for what no attempt changes while the head is where it is
+                // (spec 018 C5a, B-297): fetched again it would be refused again, without end. The fetcher goes on, and
+                // what hangs from the branch is refused with it (`resolveBranch`). The escalation acts on a chain this
+                // node cannot follow; no peer is blamed.
+                log.warning(
+                  "[STATE-REFUSED-FOR-THIS-HEAD] block {} is not fetched again while the head is where it is: {}",
+                  notImportedBlocks.head.number,
+                  refused.cause.getMessage
+                )
+                stateFaultStreak = None
+                Running
               case BlockImportStateFault(fault, _) =>
                 // The state these blocks are to be executed on is not the one this node holds, or is no longer: the
                 // head moved under the batch, or could not be moved (spec 018 Track C, C4b). The blocks were not
@@ -1499,6 +1512,11 @@ final private class BlockImporterLogic(
       case NoChainSwitch =>
         // Add first block from branch as an ommer
         ommersPool ! AddOmmers(blocks.head.header)
+        Right(Nil)
+      // a batch that hangs from the consensus layer's branch refused while the head is where it is: refused with it, and
+      // not fetched from below (B-297)
+      case UnknownBranch if consensus.refusedWithTheirParent(blocks) =>
+        log.debug("Batch {}-{} hangs from a refused branch: dropped", blocks.head.number, blocks.last.number)
         Right(Nil)
       case UnknownBranch =>
         val currentBlock = blocks.head.number.value.min(bestKnownBlockNumber)

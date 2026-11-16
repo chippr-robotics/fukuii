@@ -158,6 +158,11 @@ class ConsensusAdapter(
         log.error("Couldn't find the current best block header")
         IO.pure(BlockImportFailed("Couldn't find the current best block header"))
 
+  /** [[Consensus.refusedWithTheirParent]]: whether `blocks` hang from the consensus layer's branch refused while the
+    * head is where it is (spec 018 C5a, B-297). Always false on a chain that follows no consensus layer.
+    */
+  def refusedWithTheirParent(blocks: NonEmptyList[Block]): Boolean = consensus.refusedWithTheirParent(blocks)
+
   def evaluateBranch(blocks: NonEmptyList[Block])(implicit
       blockExecutionScheduler: IORuntime,
       blockchainConfig: BlockchainConfig

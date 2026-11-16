@@ -374,6 +374,13 @@ trait ConsensusBuilder:
     */
   lazy val designatedHead: DesignatedHead.LateBound = new DesignatedHead.LateBound
 
+  /** Late-bound hand-off of the consensus layer's branch from `ConsensusImpl` to the fork choice's recovery (spec 018
+    * C5a, B-297). Same shape and reason as `designatedHead`; bound by `EngineApiBuilder.bindBranchHandOff()` only on a
+    * post-merge chain with the Engine API on and a recovery built (the unified layout). Unbound everywhere else.
+    */
+  lazy val branchHandOff: com.chipprbots.ethereum.consensus.engine.BranchHandOff.LateBound =
+    new com.chipprbots.ethereum.consensus.engine.BranchHandOff.LateBound
+
   lazy val consensus: Consensus =
     new ConsensusImpl(
       blockchainReader,
@@ -381,7 +388,8 @@ trait ConsensusBuilder:
       blockExecution,
       Some(invalidChainReporter),
       Some(designatedHead),
-      blockchain
+      blockchain,
+      Some(branchHandOff)
     )
 
   lazy val chainImporter: ChainImporter =
@@ -1181,6 +1189,17 @@ trait EngineApiBuilder extends Logger:
     else
       log.debug(
         "Not a post-merge chain with a live Engine API: p2p branch resolution keeps chain-weight fork choice"
+      )
+
+  /** Let `ConsensusImpl` hand the consensus layer's branch it does not adopt to the fork choice's recovery (B-297).
+    * Under the gate of [[bindDesignatedHead]], whose branch it is, and only where a recovery is built (the unified
+    * layout).
+    */
+  def bindBranchHandOff(): Unit =
+    if engineApiConfig.enabled && blockchainConfig.terminalTotalDifficulty.isDefined && stateRecovery.isDefined then
+      branchHandOff.bind((tip, why) => engineApiService.handOffBranch(tip, why))
+      log.info(
+        "Post-merge chain on the unified layout: the consensus layer's branch is handed to the fork choice's recovery"
       )
 
   /** The Engine API's authenticator, or `None` when the Engine API is off.

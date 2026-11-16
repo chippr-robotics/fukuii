@@ -394,6 +394,22 @@ class EngineApiService(
         }
     }
 
+  /** The consensus layer's branch handed over by the p2p import path (spec 018 C5a, B-297): a branch longer than the
+    * executed blocks kept beside the disk, or one that forks below what a view reaches, whose blocks are stored. Its
+    * tip is asked for as a fork choice asks for a head, through the same sink, and so is committed in place while the
+    * consensus client names it or a block its chain leads to. Not counted by the escalation's watch, which counts what
+    * the consensus client's fork choices come to: the next fork choice shares this recovery's ticket, and is counted
+    * once for it (beacon).
+    *
+    * @return
+    *   false when this node recovers no state (the hash layout)
+    */
+  def handOffBranch(tip: ByteString, why: String): Boolean =
+    stateRecovery.exists { recovery =>
+      recovery.requestFor(tip, recoverySink, why, com.chipprbots.ethereum.ledger.StateRecovery.Authority.ForkChoice)
+      true
+    }
+
   // the recoveries whose end the escalation's watch is told of: each once
   private val watchedRecoveries =
     java.util.concurrent.ConcurrentHashMap.newKeySet[com.chipprbots.ethereum.ledger.StateRecovery.Ticket]()
@@ -1016,6 +1032,8 @@ class EngineApiService(
           hexOf(forkChoiceState.headBlockHash),
           headHeader.map(_.number.value).getOrElse(BigInt(-1))
         )
+        // a fork choice that named it before, answered SYNCING, left it the head the import path follows (B-297)
+        forkChoiceManager.forgetRefused(forkChoiceState.headBlockHash)
         EngineApiMetrics.recordForkchoiceUpdated("INVALID")
         IO.pure(Left("invalid forkchoice state: the head's chain does not hold the finalized block"))
       else if headOptimistic then
@@ -1117,6 +1135,8 @@ class EngineApiService(
           case Left(refused) if refused.startsWith(ForkChoiceManager.FinalizedReversed) =>
             // the head's chain does not hold the block this node was told is finalized: -38002, nothing moved (after
             // the arm above: an ancestor of the head is VALID, whatever its walk back met; beacon)
+            // and it is not the head the import path follows (B-297)
+            forkChoiceManager.forgetRefused(forkChoiceState.headBlockHash)
             EngineApiMetrics.recordForkchoiceUpdated("INVALID")
             IO.pure(Left(s"invalid forkchoice state: ${refused.stripPrefix(ForkChoiceManager.FinalizedReversed)}"))
           case Left(refused) =>

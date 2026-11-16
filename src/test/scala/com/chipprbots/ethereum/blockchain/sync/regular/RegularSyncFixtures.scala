@@ -168,6 +168,10 @@ trait RegularSyncFixtures:
             .getOrElse(block.header.hash.value, IO.pure(BlockEnqueued))
             .flatTap(_ => importedBlocksSubject.publish1(block).void)
         }
+      // B-297: whether a batch hangs from a branch refused while the head stays; no by default
+      (adapter.refusedWithTheirParent(_: NonEmptyList[Block])).when(*).onCall { (blocks: NonEmptyList[Block]) =>
+        refusedWithTheirParent.get()(blocks)
+      }
       // Batch path: regular sync blocks via tryImportBlocks
       (adapter
         .evaluateBranch(_: NonEmptyList[Block])(using _: IORuntime, _: BlockchainConfig))
@@ -294,6 +298,10 @@ trait RegularSyncFixtures:
     protected val results: mutable.Map[ByteString, IO[BlockImportResult]] =
       mutable.Map[ByteString, IO[BlockImportResult]]()
     protected val importedBlocksSet: mutable.Set[Block] = mutable.Set[Block]()
+
+    /** What the adapter answers when the importer asks whether a batch hangs from a refused branch (B-297). */
+    protected val refusedWithTheirParent =
+      new java.util.concurrent.atomic.AtomicReference[NonEmptyList[Block] => Boolean](_ => false)
     private val importedBlocksTopicIO = Topic[IO, Block]
     private lazy val importedBlocksSubject = importedBlocksTopicIO.unsafeRunSync()
     val importedBlocks: Stream[IO, Block] = importedBlocksSubject.subscribe(100)

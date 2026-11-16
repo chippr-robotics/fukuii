@@ -97,6 +97,21 @@ enum ReorgRefusal:
 final class ReorgTooDeep(val reason: ReorgRefusal, detail: String)
     extends StateFault(s"Head move refused ($reason): $detail")
 
+/** The consensus layer's branch was refused for a reason no attempt changes while the head is where it is (spec 018
+  * C5a, B-297): a move back to its fork would reverse the finalized block or go deeper than the records reach, or a
+  * block it stands on failed when it was executed again. It is no verdict on the branch and no fault of a peer: the
+  * branch is not queued again, the importer does not fetch it again, and what the node does about a chain it cannot
+  * follow is the escalation's.
+  */
+final class RefusedForThisHead(val cause: StateFault)
+    extends StateFault(s"Refused while the head is where it is: ${cause.getMessage}")
+
+/** The consensus layer's branch is longer than the executed blocks kept beside the disk, or forks below what a view
+  * reaches, and was handed to the fork choice's recovery, which adopts it in place (spec 018 C5a, B-297). Nothing was
+  * judged; the branch's blocks are stored by their hash for the recovery.
+  */
+final class HandedToRecovery(detail: String) extends StateFault(s"Handed to the fork choice's recovery: $detail")
+
 /** A branch under execution holds more than the pinned-layer cap allows. Retryable, and never an invalid block. */
 final class BranchTooLarge(val bytes: Long, val cap: Long)
     extends StateFault(s"The branch under execution holds $bytes bytes of state changes, above the cap of $cap")

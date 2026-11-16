@@ -148,6 +148,8 @@ abstract class BaseNode extends Node:
     // to follow the CL's head before the first peer branch arrives. Also a no-op off a post-merge chain with a live
     // Engine API — see EngineApiBuilder.bindDesignatedHead.
     bindDesignatedHead()
+    // the consensus layer's branch the import path does not adopt goes to the fork choice's recovery (B-297)
+    bindBranchHandOff()
     warnOnExposedNamespaces()
     // Whichever port the supervisor probes for readiness must bind LAST, so that "that port accepts a connection"
     // implies the other one already does. hive decides per simulator which port it probes (libhive defaults to 8545;

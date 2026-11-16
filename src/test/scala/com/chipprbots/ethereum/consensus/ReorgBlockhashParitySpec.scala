@@ -21,15 +21,21 @@ import com.chipprbots.ethereum.blockchain.sync.regular.BlockImportResult
 import com.chipprbots.ethereum.blockchain.sync.regular.BlockImportedToTop
 import com.chipprbots.ethereum.blockchain.sync.regular.ChainReorganised
 import com.chipprbots.ethereum.consensus.Consensus.*
+import com.chipprbots.ethereum.consensus.engine.BranchHandOff
 import com.chipprbots.ethereum.consensus.engine.DesignatedHead
 import com.chipprbots.ethereum.consensus.engine.InvalidChainReporter
 import com.chipprbots.ethereum.crypto.generateKeyPair
 import com.chipprbots.ethereum.db.components.EphemDataSourceComponent
 import com.chipprbots.ethereum.db.components.Storages
 import com.chipprbots.ethereum.db.storage.pathstate.FinalizedBlock
+import com.chipprbots.ethereum.db.storage.pathstate.HandedToRecovery
+import com.chipprbots.ethereum.db.storage.pathstate.RefusedForThisHead
 import com.chipprbots.ethereum.db.storage.pathstate.StateConfig
 import com.chipprbots.ethereum.domain.*
+import com.chipprbots.ethereum.ledger.BlockExecutionError
 import com.chipprbots.ethereum.ledger.InMemoryWorldStateProxy
+import com.chipprbots.ethereum.ledger.StateRecovery
+import com.chipprbots.ethereum.ledger.StateRecovery.Sink
 import com.chipprbots.ethereum.security.SecureRandomBuilder
 import com.chipprbots.ethereum.testing.Tags.*
 import com.chipprbots.ethereum.utils.BlockchainConfig
@@ -148,7 +154,10 @@ class ReorgBlockhashParitySpec extends AnyFlatSpec with Matchers with ScalaFutur
         case ChainReorganised(oldBranch, newBranch, _) =>
           // Exactly the block that left the canonical chain — not the whole chain down to genesis.
           oldBranch.map(_.hash) shouldBe List(b10.hash)
-          newBranch.map(_.hash) shouldBe List(a11.hash)
+          // On the unified layout a10, the side block the branch stands on, is canonical again with it and is told as
+          // of the new branch, from the fork up, as go-ethereum's new chain is (B-297). The hash layout tells the
+          // branch alone, as it always did.
+          newBranch.map(_.hash) shouldBe (if guard then List(a10.hash, a11.hash) else List(a11.hash))
         case other => fail(s"expected ChainReorganised, got $other")
       node.bestHash shouldBe a11.hash
       node.indexed(10) shouldBe Some(a10.hash)
@@ -318,7 +327,7 @@ class ReorgBlockhashParitySpec extends AnyFlatSpec with Matchers with ScalaFutur
         }
   }
 
-  it should "be refused before it is executed when it leaves the chain below the finalized block" taggedAs (
+  it should "be refused before it is executed when it leaves the chain below the finalized block, and not queued or fetched again while the head stays" taggedAs (
     UnitTest,
     ConsensusTest
   ) in (new DesignatedFixture():
@@ -330,11 +339,153 @@ class ReorgBlockhashParitySpec extends AnyFlatSpec with Matchers with ScalaFutur
       finalized = Some(FinalizedBlock(4, aChain(3).hash.value))
     )
     named.set(Some(bChain.last.hash.value))
-    evaluate(bChain) shouldBe a[ConsensusStateFault]
+    // refused for this head (B-297): nothing to queue again, so the importer does not fetch it again
+    evaluate(bChain) match
+      case ConsensusStateFault(refused: RefusedForThisHead, imported, toEnqueue) =>
+        refused.cause.getMessage should include("Finalized")
+        (imported, toEnqueue) shouldBe (Nil, Nil)
+      case other => fail(s"not refused for this head: $other")
     node.bestHash shouldBe aChain.last.hash
     node.blockchainWriter.stateHeldInPlaceOf(bChain.head.header) shouldBe false
     reported shouldBe Nil
+    // stored by hash, with no weight: the next fork choice walks its chain down, and nothing reads it as executed
+    bChain.foreach { block =>
+      node.blockchainReader.getBlockByHash(block.hash) shouldBe Some(block)
+      node.blockchainReader.getChainWeightByHash(block.hash) shouldBe None
+    }
+    // what hangs from it is refused with it, and so is what hangs from that
+    val above: List[Block] = oracle.extendSide(bChain.last, 2, difficulty = 0, tag = 0x76)
+    evaluate(above.take(1)) match
+      case ConsensusStateFault(_: RefusedForThisHead, Nil, Nil) => ()
+      case other                                                => fail(s"not refused with its parent: $other")
+    consensus.refusedWithTheirParent(NonEmptyList.of(above(1))) shouldBe true
+    // a move of the head ends it
+    node.importAll(oracle.extendCanonical(aChain.last, 1, difficulty = 0)) shouldBe a[BlockImportedToTop]
+    consensus.refusedWithTheirParent(NonEmptyList.of(above(1))) shouldBe false
   )
+
+  it should "be handed, at the cap, to the fork choice's recovery, which commits it in place" taggedAs (
+    UnitTest,
+    ConsensusTest
+  ) in {
+    val handedOff = new java.util.concurrent.atomic.AtomicReference[Option[StateRecovery.Ticket]](None)
+    val late = new BranchHandOff.LateBound
+    new DesignatedFixture(pinnedCap(1L), Some(late)):
+      val recovery = new StateRecovery(
+        node.blockchainReader,
+        node.blockchainWriter,
+        node.blockExecution,
+        node.storagesInstance.storages.pathStateStorage.get,
+        maxBlocks = 2
+      )(using node.blockchainConfig)
+      val sink: Sink = new StateRecovery.Sink:
+        def executed(
+            block: Block,
+            receipts: Seq[Receipt],
+            accessList: Option[com.chipprbots.ethereum.domain.BlockAccessList]
+        ): Unit = ()
+        def rejected(block: Block, error: BlockExecutionError, above: List[Block]): Unit = fail("rejected")
+        override def requestedHead: Option[ByteString] = namedNow()
+      late.bind((tip, why) =>
+        handedOff.set(Some(recovery.requestFor(tip, sink, why, StateRecovery.Authority.ForkChoice)))
+        true
+      )
+      try
+        node.importAll(aChain) shouldBe a[BlockImportedToTop]
+        named.set(Some(bChain.last.hash.value))
+        evaluate(bChain) match
+          case ConsensusStateFault(_: HandedToRecovery, Nil, Nil) => ()
+          case other                                              => fail(s"not handed off: $other")
+        // nothing judged and nothing moved here; the branch is stored for the recovery
+        reported shouldBe Nil
+        bChain.foreach(block => node.blockchainReader.getBlockByHash(block.hash) shouldBe Some(block))
+        val ticket = handedOff.get.getOrElse(fail("no recovery was asked for"))
+        ticket.head shouldBe bChain.last.hash.value
+        ticket.outcome.get(60, java.util.concurrent.TimeUnit.SECONDS) shouldBe StateRecovery.Outcome.Adopted(4)
+        node.bestHash shouldBe bChain.last.hash
+        (3 to 6).foreach(n => node.indexed(n) shouldBe Some(bChain(n - 3).hash))
+      finally recovery.close()
+  }
+
+  it should "not move the head back when a fork choice moved it to the branch's tip meanwhile" taggedAs (
+    UnitTest,
+    ConsensusTest
+  ) in (new DesignatedFixture():
+    node.importAll(aChain) shouldBe a[BlockImportedToTop]
+    val reads = new java.util.concurrent.atomic.AtomicInteger(0)
+    // as the branch is settled, after its execution and before the import path's move: the fork choice's move to it
+    override def namedNow(): Option[ByteString] =
+      if reads.incrementAndGet() == 2 then
+        node.blockchainWriter.moveHeadInPlace(bChain.last.header, node.blockchainReader)
+      Some(bChain.last.hash.value)
+    evaluate(bChain) match
+      // the blocks are the head's chain; those the head left were that move's to tell
+      case SelectedNewBestBranch(Nil, newBranch, weights) =>
+        newBranch.map(_.hash) shouldBe bChain.map(_.hash)
+        weights.size shouldBe bChain.size
+      case other => fail(s"not told as the head's: $other")
+    node.bestHash shouldBe bChain.last.hash
+  )
+
+  it should "not take the head off a block it moved to meanwhile" taggedAs (UnitTest, ConsensusTest) in (
+    new DesignatedFixture():
+      node.importAll(aChain) shouldBe a[BlockImportedToTop]
+      val a6: Block = oracle.extendCanonical(aChain.last, 1, difficulty = 0).head
+      val reads = new java.util.concurrent.atomic.AtomicInteger(0)
+      // the head goes on to block 6 of its own chain while the branch is settled
+      override def namedNow(): Option[ByteString] =
+        if reads.incrementAndGet() == 2 then node.importAll(List(a6)) shouldBe a[BlockImportedToTop]
+        Some(bChain.last.hash.value)
+      evaluate(bChain) shouldBe KeptCurrentBestBranch
+      node.bestHash shouldBe a6.hash
+      node.blockchainWriter.stateHeldInPlaceOf(bChain.last.header) shouldBe true
+  )
+
+  it should "tell the side blocks it stands on as of the new branch" taggedAs (UnitTest, ConsensusTest) in (
+    new DesignatedFixture():
+      node.importAll(aChain) shouldBe a[BlockImportedToTop]
+      // blocks 3 and 4 of the branch, executed and kept beside the head: another head is named once they ran
+      @volatile var first = true
+      val reads = new java.util.concurrent.atomic.AtomicInteger(0)
+      override def namedNow(): Option[ByteString] =
+        if first then if reads.incrementAndGet() <= 1 then Some(bChain(1).hash.value) else Some(aChain.last.hash.value)
+        else Some(bChain.last.hash.value)
+      evaluate(bChain.take(2)) shouldBe KeptCurrentBestBranch
+      first = false
+      evaluate(bChain.drop(2)) match
+        case SelectedNewBestBranch(oldBranch, newBranch, weights) =>
+          oldBranch.map(_.hash) shouldBe aChain.drop(2).map(_.hash)
+          newBranch.map(_.hash) shouldBe bChain.map(_.hash)
+          weights shouldBe bChain.map(block => node.blockchainReader.getChainWeightByHash(block.hash).get)
+        case other => fail(s"not adopted: $other")
+      node.bestHash shouldBe bChain.last.hash
+  )
+
+  for (layout, cap) <- Seq[(String, StateConfig => StateConfig)](
+      ("on layers", identity),
+      ("at the cap", pinnedCap(1L))
+    )
+  do
+    s"A heavier branch on the unified layout ($layout)" should
+      "tell the side blocks it stands on as of the new branch, with their weights" taggedAs (
+        UnitTest,
+        ConsensusTest
+      ) in (new Fixture(guard = true, cap):
+        // a1..a5; then b3..b5, heavier, which leaves a3..a5 beside the head; then a6, a7 on a5, heavier again
+        val aChain: List[Block] = oracle.extendCanonical(oracle.genesis, 5, difficulty = 1000)
+        val bChain: List[Block] = oracle.extendSide(aChain(1), 3, difficulty = 2000, tag = 0x77)
+        val aMore: List[Block] = oracle.extendSide(aChain.last, 2, difficulty = 5000, tag = 0x78)
+        node.importAll(aChain) shouldBe a[BlockImportedToTop]
+        node.importAll(bChain) shouldBe a[ChainReorganised]
+        node.bestHash shouldBe bChain.last.hash
+        node.importAll(aMore) match
+          case ChainReorganised(oldBranch, newBranch, weights) =>
+            oldBranch.map(_.hash) shouldBe bChain.map(_.hash)
+            newBranch.map(_.hash) shouldBe (aChain.drop(2) ++ aMore).map(_.hash)
+            weights shouldBe newBranch.map(block => node.blockchainReader.getChainWeightByHash(block.hash).get)
+          case other => fail(s"not reorganised: $other")
+        node.bestHash shouldBe aMore.last.hash
+      )
 
   "A branch of the head's own weight on a proof-of-work chain (the unified layout)" should
     "be kept beside the head: no consensus layer names a head there" taggedAs (UnitTest, ConsensusTest) in (
@@ -362,7 +513,7 @@ class ReorgBlockhashParitySpec extends AnyFlatSpec with Matchers with ScalaFutur
     * head the consensus layer names and a reporter of invalid blocks, as the node builds one with the Engine API on.
     * `aChain` is blocks 1 to 5; `bChain` leaves it after block 2 and is blocks 3 to 6.
     */
-  class DesignatedFixture(tune: StateConfig => StateConfig = identity):
+  class DesignatedFixture(tune: StateConfig => StateConfig = identity, handOff: Option[BranchHandOff] = None):
     private val merged = (config: BlockchainConfig) => config.copy(terminalTotalDifficulty = Some(BigInt(0)))
     val oracle: Oracle = new Oracle:
       implicit override lazy val blockchainConfig: BlockchainConfig = merged(super.blockchainConfig)
@@ -379,7 +530,9 @@ class ReorgBlockhashParitySpec extends AnyFlatSpec with Matchers with ScalaFutur
       node.blockchainWriter,
       node.blockExecution,
       Some(reporter),
-      Some(DesignatedHead(() => namedNow()))
+      Some(DesignatedHead(() => namedNow())),
+      ReorgStateHandler.NoOp,
+      handOff
     )
     val aChain: List[Block] = oracle.extendCanonical(oracle.genesis, 5, difficulty = 0)
     val bChain: List[Block] = oracle.extendSide(aChain(1), 4, difficulty = 0, tag = 0x74)
