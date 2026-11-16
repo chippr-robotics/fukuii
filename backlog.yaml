@@ -3540,3 +3540,15 @@ items:
       spec: 018
     depends_on: [B-064]
     notes: "forge, review of C5a part 6b. (1) A single announced block reaches consensus without BranchResolution's MESS check; a deep heavier branch spread that way is counted as unreachable at once. MESS is off on ETC today and returns with Olympia: PowEscalationFeed asks shouldMessReject before it counts. (2) The weight is weighed on claimed difficulties before a header is validated: validate the parent rules of every header, weigh again, then check seals; a header of an old epoch builds an Ethash cache that evicts the current one (EthashBlockHeaderValidator.powCaches holds 2)."
+  - id: B-307
+    title: "Before a sync starts on the guard: what the escalation's clear must also do (recoveries, fork choice, pivot on the branch, off the controller's thread)"
+    priority: P1
+    status: open
+    area: sync
+    size: M
+    opened: 2026-11-16
+    refs: []
+    links:
+      spec: 018
+    depends_on: [B-064]
+    notes: "forge and beacon, review of C5a part 7b (2026-11-16). Gate on C5a part 10. (a) beacon: queued and running StateRecovery tasks, its cool-down map and the Engine's watchedRecoveries survive clearForResync; a recovery between in-place commits moves back against no anchor, and a failClosed after the clear sets faulted, which commitHandoff refuses: SNAP could never hand off. Add StateRecovery.reset() (drain as close() does, wait for the running task, clear failed/running) and call it first in the port's clear. (b) beacon: ForkChoiceManager.currentState keeps the old head; recoverySink.followedHead computes holdFrom from it, giving Pivot/UNREACHABLE refusals that count towards the next escalation: clear it in the port's clear. (c) forge: startSnapSync(minPivotBlock = first.number) bounds the pivot's height, not its chain; PivotSelector takes the highest peer block, and on ETC the heavier chain can be the shorter, so the pivot can land on the chain just left and the branch is then dropped for good: require the pivot header to descend from the given-up block (snapHeaderChainCheck) and persist the minimum pivot (the clear removes SnapSyncMinPivotBlock). (d) forge: the clear runs on the controller's thread behind a whole head move, then range deletes and two synced writes: run it with pipeToSelf on a blocking dispatcher in a clearing state that answers status. (e) beacon: an escalating flag so two queued requests cannot both answer Escalate. (f) untested: regularSync and the audit stopped before the clear; the min pivot reaching the SNAP child; the backfill states re-delivering; a clear that throws."
