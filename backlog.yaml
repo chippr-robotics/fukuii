@@ -3667,3 +3667,12 @@ items:
     refs: [B-297]
     links: {}
     notes: hive client has no switch for fukuii.state.path-live; needs one, and a host
+  - id: B-315
+    title: "Weight arm of reorganiseOnLayers: weigh again when the head moved between the comparison and the move"
+    priority: P2
+    status: open
+    area: consensus
+    opened: 2026-11-16
+    refs: [B-297]
+    links: {}
+    notes: "forge, after B-297: unreachable today (importLock); B1's anchor check is on the CL arm only"
