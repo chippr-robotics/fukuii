@@ -581,10 +581,18 @@ class ConsensusImpl(
                         s"the consensus layer's branch [${newBranch.head.number}-${newBranch.last.number}] is not " +
                           s"adopted from executed blocks kept beside the disk (${why.getMessage}): it is adopted by " +
                           "the fork choice's recovery"
-                      if branchHandOff.exists(_.isBound) then
+                      // Only a branch longer than the pinned layers may hold. One that forks below what a view reaches
+                      // is not handed off: the recovery's walk stops only at a state a view reaches, ends it as too
+                      // long, and would leave that answer cached for the consensus client's own fork choice to its
+                      // head (beacon, after code)
+                      if why.isInstanceOf[BranchTooLarge] && branchHandOff.exists(_.isBound) then
                         // its blocks stored by hash, for the recovery to read; not a weight, which only a block
                         // executed has (beacon)
                         storeByHashOnly(remaining)
+                        // and what hangs from it is set aside with it while the head stays: the recovery moves the
+                        // head when it has adopted it, and a branch fetched and executed again meanwhile would only
+                        // pin the layers the recovery needs (beacon, after code)
+                        rememberRefused(newBranch.toList, bestBlockHash)
                         handOffTip = Some(newBranch.last.hash.value)
                         log.info(
                           "REORG-HAND-OFF: {}; {} block(s) of it are stored by hash for the recovery",
@@ -692,7 +700,11 @@ class ConsensusImpl(
                         )
               }
             catch case fault: StateFault => notJudged(fault)
-          handOffTip.foreach { tip =>
+          // only when that is what was answered: a fault after it (the pin's release) queues the branch again instead
+          val handedOff = result match
+            case ConsensusStateFault(_: HandedToRecovery, _, _) => handOffTip
+            case _                                              => None
+          handedOff.foreach { tip =>
             val why = s"the consensus layer's branch [${newBranch.head.number}-${newBranch.last.number}] at the cap"
             if !branchHandOff.exists(_.handOff(tip, why)) then
               log.warn(
@@ -894,8 +906,8 @@ class ConsensusImpl(
     */
   private def sideParentsTold(fork: ForkPoint, executedHere: List[BlockData]): List[BlockData] =
     val byHash = executedHere.iterator.map(data => data.block.header.hash -> data).toMap
-    fork.parentSideChain.flatMap { case (_, hash) =>
-      byHash
+    fork.parentSideChain.flatMap { case (number, hash) =>
+      val told = byHash
         .get(hash)
         .orElse(
           for
@@ -903,6 +915,15 @@ class ConsensusImpl(
             weight <- blockchainReader.getChainWeightByHash(hash)
           yield BlockData(block, blockchainReader.getReceiptsByHash(hash).getOrElse(Nil), weight)
         )
+      // not met after a move that went through it: what is told then has a gap, said here (forge)
+      if told.isEmpty then
+        log.error(
+          "REORG: block {} ({}), which the branch stands on and is canonical now, is not stored whole with its weight, " +
+            "and is not told as of the new branch",
+          number,
+          hash.toHexString
+        )
+      told
     }
 
   /** The consensus layer's branch, refused for what no attempt changes while the head is where it is (B-297): its

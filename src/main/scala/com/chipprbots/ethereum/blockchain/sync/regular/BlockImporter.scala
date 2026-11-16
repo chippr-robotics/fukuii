@@ -14,7 +14,6 @@ import org.apache.pekko.util.ByteString
 import cats.data.NonEmptyList
 import cats.effect.IO
 import cats.effect.unsafe.IORuntime
-import cats.implicits.*
 
 import scala.compiletime.asMatchable
 import scala.concurrent.duration.*
@@ -42,6 +41,7 @@ import com.chipprbots.ethereum.crypto.kec256
 import com.chipprbots.ethereum.db.storage.BadEntryDelete
 import com.chipprbots.ethereum.db.storage.EvmCodeStorage
 import com.chipprbots.ethereum.db.storage.StateStorage
+import com.chipprbots.ethereum.db.storage.pathstate.HandedToRecovery
 import com.chipprbots.ethereum.db.storage.pathstate.RefusedForThisHead
 import com.chipprbots.ethereum.domain.*
 import com.chipprbots.ethereum.domain.BlockchainWriter
@@ -1079,15 +1079,16 @@ final private class BlockImporterLogic(
                 )
                 pendingStateNodeHash = None
                 ResolvingMissingNode(NonEmptyList(failedBlock, notImportedBlocks.tail), alreadyExhausted = true)
-              case BlockImportStateFault(refused: RefusedForThisHead, _) =>
-                // The consensus layer's branch, refused for what no attempt changes while the head is where it is
-                // (spec 018 C5a, B-297): fetched again it would be refused again, without end. The fetcher goes on, and
-                // what hangs from the branch is refused with it (`resolveBranch`). The escalation acts on a chain this
-                // node cannot follow; no peer is blamed.
+              case BlockImportStateFault(setAside @ (_: RefusedForThisHead | _: HandedToRecovery), _) =>
+                // The consensus layer's branch, refused for what no attempt changes while the head is where it is, or
+                // handed to the fork choice's recovery, which adopts it (spec 018 C5a, B-297): fetched again it would
+                // be refused again, without end, or executed again beside the recovery. The fetcher goes on, and what
+                // hangs from the branch is set aside with it (`resolveBranch`) until the head moves. The escalation
+                // acts on a chain this node cannot follow; no peer is blamed.
                 log.warning(
                   "[STATE-REFUSED-FOR-THIS-HEAD] block {} is not fetched again while the head is where it is: {}",
                   notImportedBlocks.head.number,
-                  refused.cause.getMessage
+                  setAside.getMessage
                 )
                 stateFaultStreak = None
                 Running
@@ -1432,7 +1433,10 @@ final private class BlockImporterLogic(
       supervisor ! ProgressProtocol.ImportedBlock(blocks.last.number.value, internally)
 
   private def broadcastBlocks(blocks: List[Block], weights: List[ChainWeight]): Unit =
-    val newBlocks = (blocks, weights).mapN(BlockToBroadcast.apply)
+    // each block with its own weight: `mapN` on two lists is every pairing of the two, which sent a NewBlock with another
+    // block's total difficulty whenever more than one block was told (forge, B-297, where a reorganisation tells the
+    // side blocks it stands on too)
+    val newBlocks = blocks.zip(weights).map((block, weight) => BlockToBroadcast(block, weight))
     broadcaster ! BroadcastBlocks(newBlocks)
 
   private def updateTxPool(blocksAdded: Seq[Block], blocksRemoved: Seq[Block]): Unit =

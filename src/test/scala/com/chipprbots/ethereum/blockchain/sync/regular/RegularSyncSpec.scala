@@ -1838,6 +1838,36 @@ class RegularSyncSpec
       )
     }
 
+    // B-297 (forge): a reorganisation on the unified layout tells the side blocks it stands on too. Each block is
+    // broadcast with its own total difficulty, never another block's: two lists combined by `mapN` were every pairing.
+    "broadcasting blocks told together" should {
+      "send each with its own total difficulty" in sync(new OnTopFixture:
+        val sideParent: Block = BlockHelpers.generateBlock(testBlocks.init.last)
+        val told: Block = BlockHelpers.generateBlock(sideParent)
+        override def newBlockResult: BlockImportResult =
+          ChainReorganised(
+            Nil,
+            List(sideParent, told),
+            List(ChainWeight.totalDifficultyOnly(1111), ChainWeight.totalDifficultyOnly(2222))
+          )
+        goToTop()
+
+        val peers: GetHandshakedPeersCmd = networkPeerManager.expectMsgType[GetHandshakedPeersCmd]
+        peers.replyTo ! HandshakedPeers(handshakedPeers)
+
+        regularSync ! SyncProtocol.MinedBlock(newBlock)
+
+        val sent: Set[(Block, BigInt)] = networkPeerManager
+          .receiveWhile(max = 5.seconds, idle = 1.second) {
+            case NetworkPeerManagerActor.SendMessageCmd(message, _) => message.underlyingMsg
+            case other                                              => other
+          }
+          .collect { case NewBlock(block, totalDifficulty) => (block, totalDifficulty) }
+          .toSet
+        sent shouldBe Set(sideParent -> BigInt(1111), told -> BigInt(2222))
+      )
+    }
+
     "broadcasting blocks" should {
       "send an ETH NewBlock message to broadcast newly imported blocks" in sync(
         new OnTopFixture:

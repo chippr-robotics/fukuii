@@ -8,10 +8,10 @@ import org.apache.pekko.util.ByteString
   * B-297).
   *
   * On the unified state layout `ConsensusImpl` executes the consensus layer's branch on layers and adopts it by one
-  * move. A branch longer than the executed blocks kept beside the disk, or one that forks below what a view reaches, is
-  * not committed in place there: that adoption is `StateRecovery`'s alone, which owns it for proof of stake (C4e part
-  * 5). With its blocks stored by hash, the branch is handed to that recovery here, as a fork choice that names its tip
-  * would hand it.
+  * move. A branch longer than the executed blocks kept beside the disk is not committed in place there: that adoption
+  * is `StateRecovery`'s alone, which owns it for proof of stake (C4e part 5). With its blocks stored by hash, the
+  * branch is handed to that recovery here, as a fork choice that names its tip would hand it. A branch that forks below
+  * what a view reaches is not: the recovery's walk does not reach its fork.
   *
   * Late-bound for the same reason as [[DesignatedHead.LateBound]]: `ConsensusImpl` is built before the Engine API that
   * owns the recovery and its sink. Bound only on a post-merge chain with the Engine API on and a recovery built (the

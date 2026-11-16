@@ -1095,10 +1095,13 @@ class EngineApiService(
         EngineApiMetrics.recordForkchoiceUpdated("INVALID")
         IO.pure(Left(msg))
       else if headHeader.isDefined && !isAncestorOrEqual(safeHash, forkChoiceState.headBlockHash, zeroHash) then
+        // as every -38002: a fork choice answered SYNCING before may have left it the head the import path follows
+        forkChoiceManager.forgetRefused(forkChoiceState.headBlockHash)
         EngineApiMetrics.recordForkchoiceUpdated("INVALID")
         IO.pure(Left("invalid forkchoice state: safe block is not an ancestor of head"))
       else if headHeader.isDefined && !isAncestorOrEqual(finalizedHash, forkChoiceState.headBlockHash, zeroHash)
       then
+        forkChoiceManager.forgetRefused(forkChoiceState.headBlockHash)
         EngineApiMetrics.recordForkchoiceUpdated("INVALID")
         IO.pure(Left("invalid forkchoice state: finalized block is not an ancestor of head"))
       else

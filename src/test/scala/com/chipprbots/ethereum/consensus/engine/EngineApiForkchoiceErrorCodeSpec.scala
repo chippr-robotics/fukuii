@@ -181,6 +181,28 @@ class EngineApiForkchoiceErrorCodeSpec extends AnyWordSpec with Matchers:
       response.error.map(_.code) shouldBe Some(InvalidForkchoiceState)
       blockchainReader.getBestBlockNumber shouldBe BigInt(0)
 
+    // spec 018 C5a, B-297: a head refused -38002 is not left the head the p2p import path follows, which a fork choice
+    // answered SYNCING before had made it
+    for (name, safe, finalized) <- Seq(("safe", true, false), ("finalized", false, true)) do
+      s"no longer have the import path follow a head refused because its $name block is not an ancestor of it" taggedAs (
+        UnitTest,
+        ConsensusTest
+      ) in new Setup:
+        val named = block1.header.hash.value
+        forkChoiceManager.notifyBeaconHead(
+          com.chipprbots.ethereum.consensus.engine.ForkChoiceState(named, named, named)
+        )
+        val other = side1.header.hash.value
+        val response: JsonRpcResponse = fcu(
+          3,
+          named,
+          safe = if safe then other else zero32,
+          finalized = if finalized then other else zero32,
+          payloadAttributes = Some(missingBeaconRoot)
+        )
+        response.error.map(_.code) shouldBe Some(InvalidForkchoiceState)
+        forkChoiceManager.getRequestedHeadBlockHash shouldBe None
+
     "answer the INVALID payload status, not -38003, when the head was invalidated" taggedAs (
       UnitTest,
       ConsensusTest

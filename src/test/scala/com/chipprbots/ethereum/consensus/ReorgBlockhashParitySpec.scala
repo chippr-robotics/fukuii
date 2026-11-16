@@ -407,6 +407,38 @@ class ReorgBlockhashParitySpec extends AnyFlatSpec with Matchers with ScalaFutur
       finally recovery.close()
   }
 
+  it should "set what hangs from it aside while the head stays, once it is handed off, and not hand off a fork below the views" taggedAs (
+    UnitTest,
+    ConsensusTest
+  ) in {
+    for (config, handedOff) <- Seq[(StateConfig => StateConfig, Boolean)](
+        (pinnedCap(1L), true),
+        (archiveOfShortViews, false)
+      )
+    do
+      val asked = new java.util.concurrent.ConcurrentLinkedQueue[ByteString]()
+      val recording: BranchHandOff = (tip, _) => asked.add(tip)
+      new DesignatedFixture(config, Some(recording)):
+        node.importAll(aChain) shouldBe a[BlockImportedToTop]
+        named.set(Some(bChain.last.hash.value))
+        val above: Block = oracle.extendSide(bChain.last, 1, difficulty = 0, tag = 0x79).head
+        withClue(s"handed off: $handedOff: ") {
+          evaluate(bChain) match
+            case ConsensusStateFault(_: HandedToRecovery, Nil, Nil) if handedOff =>
+              asked.toArray.toSeq shouldBe Seq(bChain.last.hash.value)
+              // nothing moved yet: the batch above the branch is set aside, not fetched from below
+              consensus.refusedWithTheirParent(NonEmptyList.of(above)) shouldBe true
+            // a fork below what a view reaches: the recovery's walk does not reach it (beacon). Queued again, as before
+            case ConsensusStateFault(fault, Nil, queued) if !handedOff =>
+              fault shouldNot be(a[HandedToRecovery])
+              queued.map(_.hash) shouldBe bChain.map(_.hash)
+              asked shouldBe empty
+              consensus.refusedWithTheirParent(NonEmptyList.of(above)) shouldBe false
+            case other => fail(s"not as expected: $other")
+          node.bestHash shouldBe aChain.last.hash
+        }
+  }
+
   it should "not move the head back when a fork choice moved it to the branch's tip meanwhile" taggedAs (
     UnitTest,
     ConsensusTest
