@@ -238,3 +238,135 @@ class PowEscalationFeedSpec extends AnyFlatSpec with Matchers:
     // and what it is known by is the cut, tip first, then what is stored under it
     requests.head.branch.get.lineage().map(_.number).toList shouldBe List[BigInt](10, 9, 8, 7, 6, 5)
   }
+
+  // forge, B-306: a block a peer announces reaches consensus without the fetcher's MESS check
+  "The proof-of-work feed, on a chain with MESS" should "not count a branch whose reorganisation MESS refuses" taggedAs UnitTest in {
+    val escalated = mutable.ArrayBuffer.empty[EscalationKind]
+    val left = mutable.ArrayBuffer.empty[String]
+    val asked = mutable.ArrayBuffer.empty[(Long, BigInt, BigInt)]
+    var active = true
+    var refuses = true
+    var forkStored = true
+    val fork = Fixtures.Blocks.ValidBlock.header
+      .copy(number = BlockNumber(4), unixTimestamp = com.chipprbots.ethereum.domain.Timestamp(1000L))
+    val head = Fixtures.Blocks.ValidBlock.header
+      .copy(number = BlockNumber(6), unixTimestamp = com.chipprbots.ethereum.domain.Timestamp(1026L))
+    val feed = new PowEscalationFeed(
+      new EscalationWatch(new EscalationTrigger(64), () => 0L, escalated += _, (_, _) => ()),
+      hash => Option.when(hash == forkHash)(ChainWeight.totalDifficultyOnly(1000)),
+      () => Some(ChainWeight.totalDifficultyOnly(1050)),
+      hash => Option.when(forkStored && hash == forkHash.value)(fork),
+      _ => true,
+      Some(
+        PowEscalationFeed.Mess(
+          _ => active,
+          () => Some(head),
+          (seconds, local, proposed) =>
+            asked += ((seconds, local, proposed)); refuses
+        )
+      ),
+      left += _
+    )
+    feed.notJudged(branch(5, 3), tooDeep, _ => None)
+    escalated shouldBe empty
+    feed.refusedWeight shouldBe None
+    left.last should include("MESS")
+    // what the rule weighed: the seconds from the shared block to the head, and each chain's weight above that block
+    asked.toList shouldBe List((26L, BigInt(50), BigInt(300)))
+
+    // in force, and what it weighs is not stored: nothing says the branch would pass
+    forkStored = false
+    feed.notJudged(branch(5, 3), tooDeep, _ => None)
+    escalated shouldBe empty
+    asked should have size 1
+
+    // a reorganisation the rule lets through is counted, and so is every branch where the rule is not in force
+    forkStored = true
+    refuses = false
+    feed.notJudged(branch(5, 3), tooDeep, _ => None)
+    escalated.toList shouldBe List(EscalationKind.Unreachable)
+    refuses = true
+    active = false
+    feed.notJudged(branch(5, 3), tooDeep, _ => None)
+    escalated should have size 2
+  }
+
+  // forge, after code: where the walk down the branch ends on a side block (its reach), the block under what it found
+  // is not the block the two chains share, and what would be weighed from it is not what the rule weighs
+  it should "not count a branch whose shared block it cannot name on the chain" taggedAs UnitTest in {
+    val escalated = mutable.ArrayBuffer.empty[EscalationKind]
+    val asked = mutable.ArrayBuffer.empty[(Long, BigInt, BigInt)]
+    // side blocks under the branch, more of them than the walk goes down, every one stored and none of the chain
+    val side = (0 until 1100).foldLeft(Vector.empty[BlockHeader]) { (made, i) =>
+      made :+ Fixtures.Blocks.ValidBlock.header.copy(
+        parentHash = made.lastOption.fold(BlockHash(ByteString(Array.fill[Byte](32)(3))))(_.hash),
+        number = BlockNumber(5000 + i)
+      )
+    }
+    val stored = side.map(header => header.hash.value -> header).toMap
+    var chainEndsAt: Option[BlockHeader] = None
+    val feed = new PowEscalationFeed(
+      new EscalationWatch(new EscalationTrigger(64), () => 0L, escalated += _, (_, _) => ()),
+      _ => Some(ChainWeight.totalDifficultyOnly(1000)),
+      () => Some(ChainWeight.totalDifficultyOnly(1050)),
+      stored.get,
+      header => chainEndsAt.exists(_ eq header),
+      Some(
+        PowEscalationFeed.Mess(
+          _ => true,
+          () => Some(Fixtures.Blocks.ValidBlock.header.copy(number = BlockNumber(7000))),
+          (seconds, local, proposed) =>
+            asked += ((seconds, local, proposed)); false
+        )
+      )
+    )
+    val refusedBranch = (0 until 3)
+      .foldLeft(List.empty[Block]) { (made, i) =>
+        val header = Fixtures.Blocks.ValidBlock.header.copy(
+          parentHash = made.headOption.fold(side.last.hash)(_.header.hash),
+          number = BlockNumber(6100 + i),
+          difficulty = Difficulty(100)
+        )
+        Block(header, BlockBody.empty) :: made
+      }
+      .reverse
+    feed.notJudged(refusedBranch, tooDeep, _ => None)
+    escalated shouldBe empty
+    asked shouldBe empty
+    // the same branch where the chain is met a few blocks under it: weighed, let through, and counted
+    chainEndsAt = Some(side(1095))
+    feed.notJudged(refusedBranch, tooDeep, _ => None)
+    asked should have size 1
+    escalated.toList shouldBe List(EscalationKind.Unreachable)
+  }
+
+  // forge: the feed and the fetcher's branch resolution are to refuse the same reorganisations
+  it should "weigh a reorganisation as the rule itself does" taggedAs UnitTest in {
+    import com.chipprbots.ethereum.consensus.mess.ArtificialFinality
+    def counted(headSeconds: Long, branchDifficulty: Int): Boolean =
+      val escalated = mutable.ArrayBuffer.empty[EscalationKind]
+      val fork = Fixtures.Blocks.ValidBlock.header
+        .copy(number = BlockNumber(4), unixTimestamp = com.chipprbots.ethereum.domain.Timestamp(1000L))
+      val head = Fixtures.Blocks.ValidBlock.header
+        .copy(number = BlockNumber(900), unixTimestamp = com.chipprbots.ethereum.domain.Timestamp(1000L + headSeconds))
+      val feed = new PowEscalationFeed(
+        new EscalationWatch(new EscalationTrigger(64), () => 0L, escalated += _, (_, _) => ()),
+        hash => Option.when(hash == forkHash)(ChainWeight.totalDifficultyOnly(1000)),
+        () => Some(ChainWeight.totalDifficultyOnly(2000)),
+        hash => Option.when(hash == forkHash.value)(fork),
+        _ => true,
+        Some(PowEscalationFeed.Mess(_ => true, () => Some(head), ArtificialFinality.shouldRejectReorg))
+      )
+      feed.notJudged(branch(5, 3, difficulty = branchDifficulty), tooDeep, _ => None)
+      escalated.nonEmpty
+    // the node's chain weighs 1000 above the shared block; the branch 3 x its difficulty
+    for
+      seconds <- Seq(10L, 3600L, 30000L)
+      difficulty <- Seq(340, 400, 4000, 12000)
+    do
+      val refused = ArtificialFinality.shouldRejectReorg(seconds, BigInt(1000), BigInt(3 * difficulty))
+      withClue(s"$seconds s, branch ${3 * difficulty}: ")(counted(seconds, difficulty) shouldBe !refused)
+    // and the rule does refuse some of these and let others through: the comparison is of both answers
+    ArtificialFinality.shouldRejectReorg(30000L, BigInt(1000), BigInt(1020)) shouldBe true
+    ArtificialFinality.shouldRejectReorg(10L, BigInt(1000), BigInt(1020)) shouldBe false
+  }

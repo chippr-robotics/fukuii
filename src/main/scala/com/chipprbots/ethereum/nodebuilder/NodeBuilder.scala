@@ -449,6 +449,14 @@ trait ConsensusBuilder:
             .collect { case com.chipprbots.ethereum.blockchain.sync.HeadChainWeight.Status.Exact(weight) => weight },
         hash => blockchainReader.getBlockHeaderByHash(com.chipprbots.ethereum.domain.BlockHash(hash)),
         header => blockchainReader.getCanonicalHashByNumber(header.number.value).contains(header.hash),
+        // where the chain has MESS: a branch it would refuse is no chain to follow (forge, B-306)
+        Option.when(blockchainConfig.messConfig.enabled)(
+          com.chipprbots.ethereum.blockchain.sync.PowEscalationFeed.Mess(
+            blockchainConfig.messConfig.isActiveAtBlock,
+            () => blockchainReader.getBestBlockHeader,
+            com.chipprbots.ethereum.consensus.mess.ArtificialFinality.shouldRejectReorg
+          )
+        ),
         left => escalationLog.debug("[STATE-ESCALATION] {}", left)
       )
     }

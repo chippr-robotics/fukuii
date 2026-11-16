@@ -44,6 +44,15 @@ class EngineApiHttpServerObservationSpec
     with Eventually
     with BeforeAndAfterAll:
 
+  // The note of a call is made by a callback of its own, beside the answer: a test waits for it. ScalaTest's own
+  // patience is 150 ms, which a loaded runner does not always give a callback (the suite failed once in CI, in a run of
+  // 890 suites, and passes alone); a note that never comes still fails, a few seconds later.
+  implicit override val patienceConfig: PatienceConfig =
+    PatienceConfig(
+      timeout = org.scalatest.time.Span(5, org.scalatest.time.Seconds),
+      interval = org.scalatest.time.Span(15, org.scalatest.time.Millis)
+    )
+
   private val secretHex = "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff"
   private val secret: Array[Byte] = secretHex.grouped(2).map(Integer.parseInt(_, 16).toByte).toArray
 
