@@ -307,9 +307,45 @@ private[sync] object PivotAnchor:
     * (forge).
     */
   def branchServed(appState: AppStateStorage): Unit =
-    scala.util.Try(appState.getPivotOnBranch()).toOption.flatten.filter(_.firstMissMillis.isDefined).foreach {
-      waiting =>
-        appState.putPivotOnBranch(waiting.copy(firstMissMillis = None)).commit()
+    branchServed(appState, servedAt = None)
+
+  /** As [[branchServed]], for a header taken at `servedAt`: only a header at or above the branch's height was asked for
+    * on the branch. Below it the bootstrap asks one header by number with no check of the branch (B-310, forge), and it
+    * says nothing of a peer on the branch.
+    */
+  def branchServed(appState: AppStateStorage, servedAt: Option[BigInt]): Unit =
+    scala.util
+      .Try(appState.getPivotOnBranch())
+      .toOption
+      .flatten
+      .filter(_.firstMissMillis.isDefined)
+      .filter(required => servedAt.forall(_ >= required.number))
+      .foreach(waiting => appState.putPivotOnBranch(waiting.copy(firstMissMillis = None)).commit())
+
+  /** The lowest pivot a refresh may take while a sync is bound to a branch (B-310, forge): the branch's first block. A
+    * pivot below it is of the blocks both chains have, and its bootstrap does not ask for the branch: a refresh that
+    * backtracked under it would end the requirement with a WARN at the end of the sync, never with the ERROR the user
+    * decided on.
+    */
+  def refreshFloor(appState: AppStateStorage): Option[BigInt] = requiredBranch(appState).map(_._1)
+
+  /** Whether the wait for a peer on the branch ([[BranchWaitMillis]]) has run out, where nothing else would look: a
+    * refresh that finds no peer to take a target from, when every peer left is one on another chain (B-310, forge). At
+    * its end the requirement is dropped.
+    *
+    * @return
+    *   why the requirement was dropped, when it was: said at ERROR by the caller
+    */
+  def waitExpired(appState: AppStateStorage, nowMillis: Long): Option[String] =
+    scala.util.Try(appState.getPivotOnBranch()).toOption.flatten.flatMap { required =>
+      required.firstMissMillis.filter(since => nowMillis - since >= BranchWaitMillis).flatMap { since =>
+        dropped(
+          appState,
+          s"for ${(nowMillis - since) / 60000} minutes no peer served the branch's block at block ${required.number}"
+        ) match
+          case BranchCheck.Dropped(why) => Some(why)
+          case _                        => None
+      }
     }
 
   /** The peers the pivot's bootstrap found on another chain than the branch (B-307 c2; forge's design). The target of a
@@ -323,8 +359,15 @@ private[sync] object PivotAnchor:
   final class OffBranchPeers:
     private var until: Map[com.chipprbots.ethereum.network.PeerId, Long] = Map.empty
 
-    def holds(peer: com.chipprbots.ethereum.network.PeerId, nowMillis: Long): Boolean =
-      until.get(peer).exists(_ > nowMillis)
+    /** Whether `peer` is left out of the choice of a target. Only while a sync is bound to a branch (B-310, forge): a
+      * requirement that ended elsewhere (the header download's gate, the check at the end of a sync, a hand-off) leaves
+      * no peer held.
+      */
+    def holds(appState: AppStateStorage, peer: com.chipprbots.ethereum.network.PeerId, nowMillis: Long): Boolean =
+      if requiredBranch(appState).isEmpty then
+        until = Map.empty
+        false
+      else until.get(peer).exists(_ > nowMillis)
 
     /** A bootstrap ended without the pivot's header. With peers on another chain among those it asked, they are left
       * out for a while, and the wait for a peer on the branch is begun or gone on with ([[BranchWaitMillis]], the same

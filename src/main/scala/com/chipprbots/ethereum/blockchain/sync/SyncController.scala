@@ -1625,7 +1625,8 @@ object SyncController:
           ctx.stop(headerBootstrap)
           ctx.stop(peersClient)
           // B-307: with a sync bound to a branch, this header came from a peer on it
-          if targetBlock != 0 then snap.PivotAnchor.branchServed(appStateStorage)
+          // (B-310: from a bootstrap at or above the branch's first block; below it, the branch was not asked for)
+          if targetBlock != 0 then snap.PivotAnchor.branchServed(appStateStorage, servedAt = Some(targetBlock))
           originalSnapSyncRef ! BootstrapComplete(Some(header))
           runningSnapSync(originalSnapSyncRef)
 

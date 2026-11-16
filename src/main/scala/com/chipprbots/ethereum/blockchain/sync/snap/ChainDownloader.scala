@@ -144,7 +144,8 @@ class ChainDownloader private (
   private var receiptRequestPeers: Map[PeerId, (Peer, Seq[ByteString])] = Map.empty
 
   // go-ethereum behavioural backoff: peers that returned empty headers are excluded from
-  // header dispatch (capacity-to-zero equivalent). Bodies/receipts/SNAP unaffected.
+  // header dispatch (capacity-to-zero equivalent). Bodies and SNAP unaffected; receipts too are not asked of them
+  // (B-310, forge): an empty receipts reply blacklists its peer, and a peer that lacks the headers lacks the receipts.
   // With `emptyHeaderBackoff` set (deferred-backfill mode) an entry expires after that period: an excluded peer is never
   // asked again, so nothing else would clear it, and one transient empty reply would otherwise exclude the peer for
   // good (stalling the header download on a small peer set). Unset keeps the original permanent exclusion.
@@ -558,8 +559,7 @@ class ChainDownloader private (
         headerRequestPeers.contains(peerId) ||
         bodyRequestPeers.contains(peerId) ||
         receiptRequestPeers.contains(peerId) ||
-        p.peer.nodeId.exists(snapServerPeerNodeIds.contains) ||
-        headerExcluded(peerId)
+        p.peer.nodeId.exists(snapServerPeerNodeIds.contains)
       }
 
       if available.isEmpty then
@@ -573,7 +573,9 @@ class ChainDownloader private (
         // Priority 1: Headers (if we haven't reached target yet)
         while slotsLeft > 0 && peerIdx < peers.size && bestHeaderNumber < targetBlock do
           val peerWithInfo = peers(peerIdx)
-          if !headerRequestPeers.contains(peerWithInfo.peer.id) then
+          // a peer at rest for headers (empty headers, or another chain at the branch's height) is passed over here
+          // only: its bodies are checked against the headers stored, and serve as well as any (B-310)
+          if !headerRequestPeers.contains(peerWithInfo.peer.id) && !headerExcluded(peerWithInfo.peer.id) then
             requestHeaders(peerWithInfo.peer)
             slotsLeft -= 1
             // Only one header request at a time to maintain sequential ordering
@@ -601,7 +603,8 @@ class ChainDownloader private (
           val peerId = peerWithInfo.peer.id
           if !headerRequestPeers.contains(peerId) &&
             !bodyRequestPeers.contains(peerId) &&
-            !receiptRequestPeers.contains(peerId)
+            !receiptRequestPeers.contains(peerId) &&
+            !headerExcluded(peerId)
           then
             requestReceipts(peerWithInfo)
             slotsLeft -= 1

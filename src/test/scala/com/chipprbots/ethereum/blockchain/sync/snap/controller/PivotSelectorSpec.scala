@@ -393,6 +393,12 @@ class PivotSelectorSpec extends AnyFlatSpec with Matchers:
 
   it should "choose the next target without the peers the bootstrap found on another chain than the branch" taggedAs UnitTest in {
     val h = new Harness(stepsWhileBootstrapping = true)
+    // a sync bound to a branch (only then is a peer held, B-310)
+    h.module.appStateStorage
+      .putPivotOnBranch(
+        com.chipprbots.ethereum.db.storage.pathstate.PivotOnBranch(9_000, ByteString(Array.fill[Byte](32)(0x21)))
+      )
+      .commit()
     // the chain that was left is the longer: its peer's height would put the target above every peer of the branch
     h.module.peers = Map(peer("left", 20_000), peer("branch", 10_000))
     h.kit.run(PivotBootstrapFailed(PivotHeaderBootstrap.NoPeerOnTheBranch, Set(PeerId("left"))))
@@ -401,6 +407,25 @@ class PivotSelectorSpec extends AnyFlatSpec with Matchers:
     h.startSteps() shouldBe false
 
     h.parent.receiveAll() shouldBe Seq(StartRegularSyncBootstrap(BigInt(10_000 - 64)))
+  }
+
+  // B-310 (forge): the network best a refresh, a resume's drift and a roll's window are measured by
+  it should "measure the network's best without the peers found on another chain than the branch (B-310)" taggedAs UnitTest in {
+    val h = new Harness(bootstrapping = true)
+    h.module.appStateStorage
+      .putPivotOnBranch(
+        com.chipprbots.ethereum.db.storage.pathstate.PivotOnBranch(9_000, ByteString(Array.fill[Byte](32)(0x21)))
+      )
+      .commit()
+    h.module.peers = Map(peer("left", 20_000), peer("branch", 10_000))
+    h.module.currentNetworkBestFromSnapPeers() shouldBe Some(BigInt(20_000))
+
+    h.kit.run(PivotBootstrapFailed(PivotHeaderBootstrap.NoPeerOnTheBranch, Set(PeerId("left"))))
+
+    h.module.currentNetworkBestFromSnapPeers() shouldBe Some(BigInt(10_000))
+    // and once the requirement has ended, every peer again
+    h.module.appStateStorage.removePivotOnBranch().commit()
+    h.module.currentNetworkBestFromSnapPeers() shouldBe Some(BigInt(20_000))
   }
 
   it should "keep the persisted bootstrap target after any other bootstrap failure" taggedAs UnitTest in {

@@ -250,6 +250,44 @@ class ChainDownloaderHeaderCheckSpec
     testKit.stop(rig.downloader)
   }
 
+  // B-310 (forge): a peer at rest for headers serves bodies as well as any; they are checked against the headers stored
+  it should "ask a peer at rest for headers for bodies, but not for headers" taggedAs (
+    UnitTest,
+    ConsensusTest
+  ) in {
+    val clock = new java.util.concurrent.atomic.AtomicLong(1_763_300_000_000L)
+    val rig = new Rig(
+      mordorCheck,
+      target = BigInt(256),
+      perRequest = 64,
+      deferred = true,
+      r => r.appState.putPivotOnBranch(PivotOnBranch(64, elsewhere)).commit(),
+      nowMs = () => clock.get()
+    )
+    // both peers serve another chain at the branch's height: both rest for headers
+    val first = rig.nextRequest()
+    first.answer(run(first.from, first.max))
+    val again = rig.nextRequest()
+    again.answer(run(again.from, again.max))
+    eventually(rig.appState.getPivotOnBranch().flatMap(_.firstMissMillis) shouldBe defined)
+
+    // a body the hand-off asks for, of a header that is stored
+    val stored = run(1, 1).head
+    rig.storage.blockchainWriter.storeBlockHeader(stored).commit()
+    rig.downloader ! ChainDownloader.FetchBodies(Seq(stored.hash.value))
+
+    val send = rig.networkPeerManager.fishForMessage(15.seconds) {
+      case s: NetworkPeerManagerActor.SendMessageCmd =>
+        s.message.underlyingMsg match
+          case _: ETHPackets.GetBlockBodies  => true
+          case _: ETHPackets.GetBlockHeaders => fail("a peer at rest for headers was asked for headers")
+          case _                             => false
+      case _ => false
+    }
+    Set(peerA, peerB) should contain(send.asInstanceOf[NetworkPeerManagerActor.SendMessageCmd].peerId)
+    testKit.stop(rig.downloader)
+  }
+
   it should "blame the peer, and begin no wait for the branch, when a header at the branch's height fails validation" taggedAs (
     UnitTest,
     ConsensusTest
