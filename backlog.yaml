@@ -3735,3 +3735,14 @@ items:
     links:
       spec: 018
     notes: "forge, pre-code review of B-310 (2026-11-16): SyncController matches Failed(reason, _) for the healing serve-root (~911) and the recent-root (~3131) bootstraps, and maybeStartHealingServeRootBootstrap picks its target from every snap peer's height (~1021). After an escalation for a branch these ask peers on another chain again. The actor's OffBranchPeers lives in the SNAP child; the parent needs a way to pass the peers on or a filter of its own. Also: currentNetworkBestFromSnapPeers (PivotSelector) does not filter forkAccepted, unlike its two siblings."
+  - id: B-321
+    title: "snap-synctest CI job: the sbt launcher runs out of heap (4 GB) compiling the test sources"
+    priority: P2
+    status: open
+    area: ci
+    size: S
+    opened: 2026-11-16
+    refs: []
+    links:
+      prs: [1875]
+    notes: "Seen on #1875 at 389f52c (OutOfMemoryError: Java heap space in scalac's backend, during the job's testOnly compile); passed on #1873. Reproduces locally on a full test compile with -Xmx4g; passes with 8 GB. Raise the job's sbt heap (-mem 6144 or more) or the .jvmopts default."
