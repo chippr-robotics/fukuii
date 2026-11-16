@@ -4258,14 +4258,17 @@ the broadcast pairing taken, the weight arm's admit left as a follow-up.
 **Left**: the consensus layer's branch that forks below what a view reaches is adopted by no one (B-316); a head refused
 -38002 is still published to SNAP as a pivot hint (B-317). **Not pinned** (B-318): a fault of the pin's release after a
 hand-off is decided (the hand-off is then not asked for); the `Deep`, `Incomplete` and `Pivot` refusals one by one (the
-finalized one is).
+finalized one is); a catch-up's move refused for a head ahead of it (an adoption's is).
 
 **Tests**: `ReorgBlockhashParitySpec` (+7: a hand-off adopted by a real recovery; a refusal not queued, what hangs
 from it refused, a move of the head ending it; set aside after a hand-off, and no hand-off below the views; the head
 moved to the tip, and to its own next block, meanwhile; the side blocks told on both arms, on layers and at the cap;
 one pin changed: the orphaned a10 is told with a11 on the unified layout), `HeadMoveOnTheChainSpec` (+1, two shapes;
 two cases extended), `RegularSyncSpec` (+2), `ForkChoiceManagerSpec` (+2), `EngineApiForkchoiceErrorCodeSpec` (+2).
-**The mutation run**: MUTATION_RESULT
+**The mutation run**: 24 rules broken one at a time, 22 caught. The two that survive are the not-pinned ones above: a
+catch-up's check of a head ahead of the block it moves to (its race needs a head that is not the block the catch-up
+stands on, which a hand-off's catch-up never has), and `Deep` taken out of the refusals that hold while the head stays
+(B-318).
 
 ### Destructive change (C8a and C8b): the vault protocol blocks
 
