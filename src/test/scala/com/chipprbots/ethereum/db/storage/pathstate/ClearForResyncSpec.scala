@@ -333,6 +333,78 @@ class ClearForResyncSpec extends AnyFlatSpec with Matchers:
       chain.reader.getBlockHeaderByHash(chain.head.hash) shouldBe Some(chain.head)
     }
 
+  // B-307: a sync whose headers were of another chain than the branch its pivot is to be on is begun again
+  "A sync begun again for the branch its pivot is to be on" should "lose what it wrote, with the attempt counted and no escalation recorded" taggedAs
+    UnitTest in {
+      val chain = downloaded()
+      val bound = PivotOnBranch(4, ByteString(Array.fill[Byte](32)(0x21)))
+      chain.appState
+        .putPivotOnBranch(bound)
+        .and(chain.appState.putSnapSyncPivotBlock(4))
+        .and(chain.appState.putSnapSyncStateRoot(chain.head.stateRoot.value))
+        .commit()
+      rowsLeft(chain.source).values.foreach(_ should be > 0)
+      chain.state.clearForBranchRetry(genesisHash, 5L) shouldBe Some(bound.copy(attempts = 1))
+      chain.appState.getPivotOnBranch() shouldBe Some(bound.copy(attempts = 1))
+      rowsLeft(chain.source) shouldBe Map("v" -> 0, "t" -> 0, "u" -> 0)
+      // the pivot is forgotten: a sync that resumed it would be on that chain again
+      chain.appState.getSnapSyncPivotBlock() shouldBe None
+      chain.appState.getSnapSyncStateRoot() shouldBe None
+      // the index names the chain the peers served above the block the branch stands on: those entries go, and the
+      // header download goes back under the branch
+      indexed(chain) shouldBe Seq(0, 1, 2, 3)
+      chain.appState.getBackfillBestHeader() shouldBe 3
+      chain.appState.getBackfillBestHeaderHash() shouldBe chain.hashesByNumber.get(3)
+      chain.appState.getStateEscalationLast() shouldBe None
+      chain.appState.isStateResetPending() shouldBe false
+      chain.appState.getStateResetTrim() shouldBe None
+      // the second miss counts on
+      chain.state.clearForBranchRetry(genesisHash, 6L) shouldBe Some(bound.copy(attempts = 2))
+    }
+
+  it should "clear nothing when no sync is bound" taggedAs UnitTest in {
+    val chain = downloaded()
+    val before = rowsLeft(chain.source)
+    chain.state.clearForBranchRetry(genesisHash, 5L) shouldBe None
+    rowsLeft(chain.source) shouldBe before
+    indexed(chain) shouldBe Seq(0, 1, 2, 3, 4)
+    chain.appState.getBackfillBestHeader() shouldBe 4
+  }
+
+  it should "go back to where the chain the peers served left the branch, when that is lower than the branch's first block" taggedAs
+    UnitTest in {
+      val chain = downloaded()
+      val headers = new com.chipprbots.ethereum.db.storage.BlockHeadersStorage(chain.source)
+      val served3 = headers.get(chain.hashesByNumber.get(3).get).get
+      // the branch's blocks 3 and 4 are stored by hash and not indexed: the chain the peers served left it above block 2
+      val branch3 = served3.copy(
+        parentHash = com.chipprbots.ethereum.domain.BlockHash(chain.hashesByNumber.get(2).get),
+        extraData = ByteString("the branch")
+      )
+      val branch4 = chain.head.copy(parentHash = branch3.hash)
+      headers.put(branch3.hash.value, branch3).and(headers.put(branch4.hash.value, branch4)).commit()
+      chain.appState.putPivotOnBranch(PivotOnBranch(4, branch4.hash.value)).commit()
+      chain.state.clearForBranchRetry(genesisHash, 5L).map(_.attempts) shouldBe Some(1)
+      indexed(chain) shouldBe Seq(0, 1, 2)
+      chain.appState.getBackfillBestHeader() shouldBe 2
+      chain.appState.getBackfillBestHeaderHash() shouldBe chain.hashesByNumber.get(2)
+    }
+
+  it should "be finished at the start that follows a kill, with the attempt counted once" taggedAs UnitTest in {
+    val source = new Recording
+    val chain = downloaded(source)
+    val bound = PivotOnBranch(4, ByteString(Array.fill[Byte](32)(0x21)))
+    chain.appState.putPivotOnBranch(bound).commit()
+    source.failing = Some("range")
+    an[IllegalStateException] should be thrownBy chain.state.clearForBranchRetry(genesisHash, 5L)
+    source.failing = None
+    chain.appState.isStateResetPending() shouldBe true
+    chain.state.finishPendingClear(Some(genesisHash)) shouldBe true
+    chain.appState.getPivotOnBranch() shouldBe Some(bound.copy(attempts = 1))
+    indexed(chain) shouldBe Seq(0, 1, 2, 3)
+    rowsLeft(source) shouldBe Map("v" -> 0, "t" -> 0, "u" -> 0)
+  }
+
   it should "lose, on proof of stake, what is above the block that was finalized, and with none everything above the genesis" taggedAs
     UnitTest in {
       val finalized = downloaded()

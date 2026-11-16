@@ -6,8 +6,10 @@ import org.scalatest.flatspec.AnyFlatSpec
 import org.scalatest.matchers.should.Matchers
 
 import com.chipprbots.ethereum.blockchain.sync.EphemBlockchainTestSetup
+import com.chipprbots.ethereum.blockchain.sync.snap.PivotAnchor.BranchCheck
 import com.chipprbots.ethereum.db.storage.AppStateStorage
 import com.chipprbots.ethereum.db.storage.pathstate.BlockRef
+import com.chipprbots.ethereum.db.storage.pathstate.PivotOnBranch
 import com.chipprbots.ethereum.domain.BlockHeader
 import com.chipprbots.ethereum.domain.TrieRoot
 import com.chipprbots.ethereum.domain.appstate.BlockInfo
@@ -312,3 +314,118 @@ class PivotAnchorSpec extends AnyFlatSpec with Matchers:
       )).getMessage should
         include("the state is held in place")
       (appState.getSnapSyncPivotBlock(), appState.getBestBlockInfo()) shouldBe before
+
+  // B-307 (forge's design; the user's decision of 2026-11-16): after an escalation for a branch, on a chain that
+  // chooses by weight, the pivot of the sync that follows is to be on the branch
+  private val branchAt8 = PivotOnBranch(8, headers(8).hash.value)
+
+  private def branchCheck(chain: Chain): PivotAnchor.BranchCheck =
+    PivotAnchor.branchCheck(chain.appState, chain.blockchainReader)
+
+  "The branch a sync is to take its pivot on" should "bind no sync when no escalation for a branch came before it" taggedAs UnitTest in new Chain:
+    downloaded(20)
+    branchCheck(this) shouldBe PivotAnchor.BranchCheck.NotRequired
+
+  it should "be found when the header download holds its first block at its height" taggedAs UnitTest in new Chain:
+    downloaded(20)
+    committed(headers(15))
+    appState.putPivotOnBranch(branchAt8).commit()
+    branchCheck(this) shouldBe PivotAnchor.BranchCheck.OnTheBranch(branchAt8)
+    // nothing is written: the requirement stands until the sync hands off
+    appState.getPivotOnBranch() shouldBe Some(branchAt8)
+    appState.getSnapSyncPivotBlock() shouldBe Some(BigInt(15))
+
+  it should "wait while the header download is below it" taggedAs UnitTest in new Chain:
+    downloaded(5)
+    appState.putPivotOnBranch(branchAt8).commit()
+    branchCheck(this) shouldBe a[PivotAnchor.BranchCheck.Undecided]
+    appState.getPivotOnBranch() shouldBe Some(branchAt8)
+
+  it should "be missed when the download holds another block there, and write nothing: the controller clears" taggedAs (
+    UnitTest,
+    ConsensusTest
+  ) in new Chain:
+    downloaded(20)
+    committed(headers(15))
+    // the branch's first block is another block at height 8 than the one the peers served
+    val elsewhere: PivotOnBranch = PivotOnBranch(8, ByteString(Array.fill(32)(0x77.toByte)))
+    appState.putPivotOnBranch(elsewhere).commit()
+    branchCheck(this) shouldBe PivotAnchor.BranchCheck.OffTheBranch(elsewhere, headers(8), 1)
+    // the attempt is counted by the clear, once the sync and its header download have stopped
+    appState.getPivotOnBranch() shouldBe Some(elsewhere)
+    appState.getSnapSyncPivotBlock() shouldBe Some(BigInt(15))
+    appState.getBackfillBestHeader() shouldBe 20
+
+  it should "not be told from the index of blocks by number, which the pivot bootstrap writes unvalidated" taggedAs (
+    UnitTest,
+    ConsensusTest
+  ) in new Chain:
+    // the index has a block at height 8, and the validated download cannot say which it holds there (no tip recorded)
+    downloaded(20, recordTip = false)
+    blockchainReader.getBlockHeaderByNumber(8) shouldBe Some(headers(8))
+    for bound <- Seq(branchAt8, PivotOnBranch(8, ByteString(Array.fill(32)(0x77.toByte)))) do
+      appState.putPivotOnBranch(bound).commit()
+      branchCheck(this) shouldBe a[PivotAnchor.BranchCheck.Undecided]
+      appState.getPivotOnBranch() shouldBe Some(bound)
+
+  it should "be dropped when its height is further below the download's tip than is walked back" taggedAs UnitTest in new Chain:
+    downloaded(20)
+    appState.putPivotOnBranch(branchAt8).commit()
+    appState.putBackfillBestHeader(BigInt(8) + PivotAnchor.MaxWalkBack + 1).commit()
+    branchCheck(this) shouldBe a[PivotAnchor.BranchCheck.Dropped]
+    branchCheck(this) shouldBe PivotAnchor.BranchCheck.NotRequired
+
+  it should "be dropped, and said, where the header download validates no chain below the pivot" taggedAs UnitTest in new Chain:
+    PivotAnchor.dropUnchecked(appState) shouldBe None
+    appState.putPivotOnBranch(branchAt8).commit()
+    PivotAnchor.dropUnchecked(appState).get should include("validates no chain")
+    appState.getPivotOnBranch() shouldBe None
+
+  it should "be dropped at the third sync that misses it, and the sync go on with the chain it has" taggedAs (
+    UnitTest,
+    ConsensusTest
+  ) in new Chain:
+    downloaded(20)
+    committed(headers(15))
+    val elsewhere: PivotOnBranch =
+      PivotOnBranch(8, ByteString(Array.fill(32)(0x77.toByte)), attempts = PivotOnBranch.MaxAttempts - 1)
+    appState.putPivotOnBranch(elsewhere).commit()
+    branchCheck(this) shouldBe a[PivotAnchor.BranchCheck.Dropped]
+    appState.getPivotOnBranch() shouldBe None
+    // this sync is not started again: its pivot and its download stay
+    appState.getSnapSyncPivotBlock() shouldBe Some(BigInt(15))
+    appState.getBackfillBestHeader() shouldBe 20
+    // and no sync after it is bound
+    branchCheck(this) shouldBe PivotAnchor.BranchCheck.NotRequired
+
+  it should "be missed twice before it is dropped" taggedAs UnitTest in new Chain:
+    val elsewhere: PivotOnBranch = PivotOnBranch(8, ByteString(Array.fill(32)(0x77.toByte)))
+    downloaded(20)
+    committed(headers(15))
+    val seen: IndexedSeq[BranchCheck] = (0 until PivotOnBranch.MaxAttempts).map { counted =>
+      // the clear between two syncs counts the attempt
+      appState.putPivotOnBranch(elsewhere.copy(attempts = counted)).commit()
+      branchCheck(this)
+    }
+    seen.take(2).map {
+      case PivotAnchor.BranchCheck.OffTheBranch(_, _, attempt) => attempt
+      case other                                               => fail(s"not a miss: $other")
+    } shouldBe Seq(1, 2)
+    seen.last shouldBe a[PivotAnchor.BranchCheck.Dropped]
+
+  it should "be dropped when its record cannot be read: no sync is held on what no one can read" taggedAs UnitTest in new Chain:
+    downloaded(20)
+    storagesInstance.dataSource.update(
+      Seq(
+        com.chipprbots.ethereum.db.dataSource.DataSourceUpdate(
+          com.chipprbots.ethereum.db.storage.Namespaces.AppStateNamespace,
+          Nil,
+          Seq(
+            scala.collection.immutable.ArraySeq.unsafeWrapArray(PivotOnBranch.Key.getBytes) ->
+              scala.collection.immutable.ArraySeq.unsafeWrapArray("v9:x".getBytes)
+          )
+        )
+      )
+    )
+    branchCheck(this) shouldBe a[PivotAnchor.BranchCheck.Dropped]
+    branchCheck(this) shouldBe PivotAnchor.BranchCheck.NotRequired

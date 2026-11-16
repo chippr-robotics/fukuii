@@ -99,6 +99,11 @@ object SyncProtocol:
     */
   case object HealingImpossible extends SyncProtocolMsg with SyncControllerReply
 
+  /** SNAP's header download followed another chain than the branch the pivot is to be on (B-307): the sync is stopped,
+    * what it wrote is cleared, and it is begun again.
+    */
+  case object PivotOffTheBranch extends SyncProtocolMsg with SyncControllerReply
+
   /** Sent by NetworkPeerManagerActor to SyncController when a TD-PROXY-GAP is detected at peer handshake.
     * SyncController uses the peer's STATUS-message TD and block number to interpolate and write the correct cumulative
     * TD for the current best block, replacing the genesis-proxy value stored by SNAP finalization when no ETH68 peers

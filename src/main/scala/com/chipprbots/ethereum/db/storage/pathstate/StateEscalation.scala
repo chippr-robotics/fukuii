@@ -108,6 +108,56 @@ object GivenUpBranches:
         )
         .toSet
 
+/** The branch the sync after a proof-of-work escalation is to take its pivot on (`state.escalation.pivot-on`; B-307,
+  * forge): the first block of the refused branch above the block it leaves the node's chain at. The pivot of a sync is
+  * chosen by height, and on a chain that chooses by weight the heavier chain can be the shorter: a pivot on the chain
+  * that was left would have the node sync that chain again, meet the branch again, and drop it for good.
+  *
+  * Written with the clear of the escalation; removed when a sync hands off, by a clear that is for no branch, and when
+  * the requirement is dropped: after [[PivotOnBranch.MaxAttempts]] syncs whose headers were of another chain, no peer
+  * serves the branch any more (the user's decision of 2026-11-16: drop it then, and say so at ERROR).
+  *
+  * @param attempts
+  *   how many syncs reached this height on another chain
+  * @param firstMissMillis
+  *   when no peer on the branch was first found, where peers are asked (the bound in time)
+  */
+final case class PivotOnBranch(
+    number: BigInt,
+    hash: ByteString,
+    attempts: Int = 0,
+    firstMissMillis: Option[Long] = None
+)
+
+object PivotOnBranch:
+  val Key: String = "state.escalation.pivot-on"
+
+  /** How many syncs may find another chain at the branch's height before the requirement is dropped. */
+  val MaxAttempts: Int = 3
+
+  private val HashHexLength = 64
+
+  def encode(pivot: PivotOnBranch): String =
+    s"v1:${pivot.number}:${Hex.toHexString(pivot.hash.toArray)}:${pivot.attempts}:" +
+      pivot.firstMissMillis.fold("-")(_.toString)
+
+  /** The requirement a stored value names; one this build cannot read throws, and whoever asks drops the requirement
+    * and says so: a sync is not held for ever on a record no one can read.
+    */
+  def decode(value: String): PivotOnBranch =
+    def malformed: Nothing = throw new IllegalStateException(s"$Key is not a v1 requirement: '$value'")
+    def digits(text: String): Boolean = text.nonEmpty && text.forall(_.isDigit)
+    value.split(':') match
+      case Array("v1", number, hash, attempts, first)
+          if digits(number) && digits(attempts) && hash.length == HashHexLength && (first == "-" || digits(first)) =>
+        PivotOnBranch(
+          BigInt(number),
+          Try(ByteString(Hex.decode(hash))).getOrElse(malformed),
+          Try(attempts.toInt).getOrElse(malformed),
+          Option.when(first != "-")(Try(first.toLong).getOrElse(malformed))
+        )
+      case _ => malformed
+
 /** The heights whose entries in the index of blocks by number are still to be deleted after a clear for an escalation
   * (`state.reset-trim-above`; B-303): above `commonBlock`, up to `upper`. Put in the synced batch that begins the
   * clear, removed, synced, with [[StateResetPending]], once the entries are deleted. A node started with it set deletes

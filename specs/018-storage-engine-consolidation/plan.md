@@ -3975,7 +3975,8 @@ fires before part 10 either.
 
 **Left of B-307**: the pivot of the sync that follows is to be on the refused branch, not only at its height
 (forge: on ETC the heavier chain can be the shorter, and a pivot on the chain that was left has the branch dropped
-for good). It is in SNAP's pivot selection, and it needs an answer for a branch no peer serves any more.
+for good). Its first slice is the section "the pivot of the sync after an escalation is on the refused branch"
+below.
 
 **Tests**: `HeadMoveOnTheChainSpec` (+2), `SyncControllerSpec` (+4), `EscalationHandlerSpec` (+1),
 `EscalationWatchSpec` (+1).
@@ -4044,7 +4045,8 @@ straight extension of the head, in chunks, under `recovery.max-catch-up` (8192);
   (beacon, after code).
 - **A block found invalid on the way leaves the head at the last valid block.** This departs from the user's rule of
   2026-11-14 (the head goes back to the one the consensus client validated): after a hand-off there is none above the
-  pivot, and the blocks under the head cannot be undone below the block the state began at. **Open to the user.**
+  pivot, and the blocks under the head cannot be undone below the block the state began at. **Decided by the user,
+  2026-11-16: the head stays at the last valid block.**
   The invalid block and every block of the chain above it, the head with them, are marked, so that the next fork
   choice is answered INVALID with the last valid block (beacon, after code: the blocks of the chunks not read were
   left unmarked, and the head would have been answered as a fault of this node for ever).
@@ -4058,6 +4060,53 @@ them. A gap is a header or a body that is not stored: it waits, and is filled by
 watch as one refusal (beacon's note: count the progress of the head as a move).
 
 **Tests**: `HeadMoveOnTheChainSpec` (+9), `StateConfigSpec` (the key).
+
+#### C5a, a gate on part 10: the pivot of the sync after an escalation is on the refused branch (B-307 c1) (2026-11-16)
+
+On proof of work a node gives its state up for a branch it could not judge. The sync that follows had its pivot no
+lower than the branch's first block, and nothing said the pivot was on the branch: peers that serve the chain the
+node left give a pivot of that chain, and the branch is given up for nothing.
+
+**Decided by the user, 2026-11-16**: the pivot is held to the branch; where the peers serve another chain the sync
+is begun again, and after a bounded number of attempts the requirement is dropped with an ERROR.
+
+- **The requirement is written down with the clear** (`state.escalation.pivot-on`: the branch's first block, its
+  number and hash, and the attempts counted), in the clear's first synced batch. A clear for no branch ends one an
+  earlier clear left. The hand-off of a sync removes it in its own write. Until then it is also the floor of every
+  sync's pivot, across restarts.
+- **Asked when SNAP's header download has reached the pivot, before the pivot is anchored**
+  (`PivotAnchor.branchCheck`): the header the validated download holds at the branch's height is the branch's
+  first block, or is not. Only the validated download is asked (forge): the index by number is also written by the
+  pivot bootstrap, with headers nothing validated.
+- **Another block there: the sync is begun again.** SNAP writes nothing; it tells the sync controller, which waits
+  until SNAP and its header download have stopped (vault, forge: a cursor written after the clear would put the next
+  sync back on the chain that was left), then clears what that sync wrote
+  (`PathStateStorage.clearForBranchRetry`): the rows, the pivot, the entries of the index by number above the block
+  the branch stands on, with the header download set back to that block, and the attempt counted, in the same synced
+  batch that begins the clear. It is the clear of an escalation without a new escalation: no record, no cool-down, and
+  a kill in the middle is finished at the next start. Where the chain the peers served left the branch lower than the
+  branch's first block, the branch's stored headers are walked down to the block the two share (forge).
+- **The third sync that finds another chain drops the requirement** (`PivotOnBranch.MaxAttempts = 3`), with an
+  ERROR (`[STATE-ESCALATION-PIVOT]`) and a counter, and goes on with the chain it has. The branch stays given up: the
+  node does not clear its state for it a second time, unless an operator starts it once with
+  `forget-given-up-branches`.
+- **What the download cannot say yet holds the hand-off** when the pivot is at or above the branch; a pivot under
+  the branch is of the blocks both chains have, and passes with a WARN. A branch further below the download's tip
+  than is walked back (65,536 headers), a record that cannot be read, and a chain whose header download validates no
+  chain below the pivot each drop the requirement with the same ERROR: never silently.
+- A pivot the consensus layer chose is not asked: on proof of stake the consensus client names the chain.
+
+**Left for the second slice (c2), a gate on part 10 with this one** (forge): the check runs at the end of a sync, so
+a miss costs a whole SNAP; c2 asks as soon as the header download passes the branch's height, steers the pivot's
+bootstrap to peers that serve the branch, and bounds the attempts in time (30 minutes) as well as in number. Part 10
+does not turn SNAP on under the guard before c2.
+
+**Not changed, and why** (vault's question): the rows a sync wrote on another chain are deleted by the clear, so
+nothing rests on healing over them.
+
+**Tests**: `PivotAnchorSpec` (+10), `ClearForResyncSpec` (+4), `StateClearBatchSpec` (+2), `SyncHandoffSpec` (+1),
+`SyncControllerSpec` (+1). Mutation run: 16 rules broken one at a time, 16 caught (one gap, the floor of the sync
+begun again, closed by a test).
 
 ### Destructive change (C8a and C8b): the vault protocol blocks
 

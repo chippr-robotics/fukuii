@@ -100,6 +100,14 @@ class SyncHandoffSpec extends AnyFlatSpec with Matchers:
     other.appState.isBytecodeRecoveryDone() shouldBe false
   }
 
+  // B-307: the sync after an escalation took its pivot where it was to; no sync after it is bound
+  it should "end the requirement that the pivot be on a branch" taggedAs UnitTest in {
+    val s = new Synced
+    s.appState.putPivotOnBranch(PivotOnBranch(4001, ByteString(Array.fill[Byte](32)(0x21)))).commit()
+    s.commit()
+    s.appState.getPivotOnBranch() shouldBe None
+  }
+
   it should "take the scan that was owed off the books" taggedAs UnitTest in {
     val s = new Synced
     s.appState.markSnapCodeScanOwed("a repair run").commit()

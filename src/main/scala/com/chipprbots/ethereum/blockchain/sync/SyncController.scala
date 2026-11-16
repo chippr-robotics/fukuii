@@ -119,6 +119,14 @@ object SyncController:
     /** The clear could not be begun: no verdict is asked about for a while. */
     def clearRefused(): Unit
 
+    /** Clears what a sync wrote whose headers were of another chain than the branch its pivot is to be on, and counts
+      * the attempt (B-307). Called once that sync has stopped; it returns when the rows are gone.
+      *
+      * @return
+      *   false when it could not be begun: nothing was cleared and nothing counted
+      */
+    def clearForBranchRetry(): Boolean
+
   /** Bulk bytecode recoveries (triggered by block import) allowed to finish with the triggering code still missing
     * before the node stops repeating the full trie scan on every restart.
     */
@@ -211,6 +219,9 @@ object SyncController:
       why: String
   ) extends Command
   // the clear of a state that is given up ended: done, not begun (a recovery was still running), or failed
+  private case object SnapStoppedForBranchRetry extends Command
+  private case class BranchRetryCleared(ended: scala.util.Try[Boolean]) extends Command
+
   private case class StateClearEnded(
       record: com.chipprbots.ethereum.db.storage.pathstate.StateEscalation,
       givenUpFor: Option[com.chipprbots.ethereum.db.storage.pathstate.GivenUpBranch],
@@ -815,7 +826,16 @@ object SyncController:
             abortHealingServeRootRequest("SNAP done (legacy) — leaving snap sync")
             startRegularSync()._2
 
-          case SyncProtocol.HealingImpossible =>
+          case SyncProtocol.PivotOffTheBranch if stateEscalation.isDefined =>
+            // The clear waits for the sync to have stopped, its header download with it (vault, forge): a cursor
+            // that download wrote after the clear would put the next sync back on the chain that was just left.
+            ctx.unwatch(snapSync)
+            ctx.watchWith(snapSync, SnapStoppedForBranchRetry)
+            ctx.stop(snapSync)
+            abortHealingServeRootRequest("the sync is begun again for the branch its pivot is to be on")
+            clearingForBranchRetry(stateEscalation.get)
+
+          case SyncProtocol.HealingImpossible | SyncProtocol.PivotOffTheBranch =>
             ctx.unwatch(snapSync) // §7c-D4: intentional stop — drop the critical death-watch first.
             ctx.stop(snapSync)
             // #1555: the pivot finalizeSnapSync just failed on is the persisted SNAP pivot (the lazy hand-offs anchor
@@ -1424,6 +1444,34 @@ object SyncController:
       }
     }
 
+    // B-307: SNAP is stopping, or has stopped and what it wrote is being cleared, before it is begun again with its
+    // pivot no lower than the branch. What arrives meanwhile was for the sync that is gone.
+    private def clearingForBranchRetry(port: StateEscalationPort): Behavior[Command] =
+      Behaviors.receive { (_, cmd) =>
+        unwrap(cmd) match
+          case SnapStoppedForBranchRetry =>
+            val blocking = ctx.system.dispatchers.lookup(DispatcherSelector.blocking())
+            ctx.pipeToSelf(scala.concurrent.Future(port.clearForBranchRetry())(using blocking))(BranchRetryCleared(_))
+            Behaviors.same
+          case BranchRetryCleared(scala.util.Success(cleared)) =>
+            if !cleared then
+              log.error(
+                "[STATE-ESCALATION-PIVOT] What the sync wrote was not cleared, and the attempt was not counted: the " +
+                  "sync is begun again over it."
+              )
+            startSnapSync(minPivotBlock = liveSnapPivotFloor())
+          case BranchRetryCleared(scala.util.Failure(failed)) =>
+            log.error(
+              "[STATE-ESCALATION-PIVOT] The clear of the state failed. The node stops syncing; restart it.",
+              failed
+            )
+            throw failed
+          case bh: ForkChoiceManager.BeaconHead =>
+            handleBeaconHead(bh, snapSyncOpt = None)
+            Behaviors.same
+          case _ => Behaviors.same
+      }
+
     /** Restart-style messages that mean the current sync strategy is being abandoned. Used by
       * `runningRegularSyncWithBackfill` to detect when it must terminate the lingering backfill actor before
       * delegating.
@@ -1785,13 +1833,18 @@ object SyncController:
       * `belowEscalationHint` would discard its download.
       */
     private def liveSnapPivotFloor(): Option[BigInt] =
-      appStateStorage.getSnapSyncMinPivotBlock().flatMap { floor =>
+      val stuck = appStateStorage.getSnapSyncMinPivotBlock().flatMap { floor =>
         if appStateStorage.isSnapSyncAccountsComplete() || appStateStorage.getSnapSyncPivotBlock().exists(_ >= floor)
         then
           appStateStorage.clearSnapSyncMinPivotBlock().commit()
           None
         else Some(floor)
       }
+      // The sync after an escalation for a branch takes its pivot no lower than the branch's first block (B-307). The
+      // clear of the escalation wrote it down, so a restart in the middle of that sync does not lose the floor; a
+      // record that cannot be read is no floor, and is dropped where the pivot is checked.
+      val onTheBranch = scala.util.Try(appStateStorage.getPivotOnBranch()).toOption.flatten.map(_.number)
+      (stuck.toList ++ onTheBranch.toList).maxOption
 
     /** spec 022 D6: the one-time clear of CF `g`, whatever this start goes on to do, since a node past SNAP holds the
       * old records too. A failure costs disk space, and the next start tries again. On an upgraded datadir the space

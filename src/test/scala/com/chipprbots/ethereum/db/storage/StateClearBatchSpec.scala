@@ -201,3 +201,48 @@ class StateClearBatchSpec extends AnyFlatSpec with Matchers:
     guard.decide(EscalationKind.Unreachable, Some(refused(gaveUp(4001, 0x22))), 200 * hour) shouldBe
       Decision.Act(EscalationKind.Unreachable, Some(gaveUp(4001, 0x22)))
   }
+
+  // B-307: the sync after an escalation for a branch takes its pivot on the branch
+  "The branch a sync is to take its pivot on" should "be written down with the clear of the escalation, and ended by a clear that is for no branch" taggedAs
+    UnitTest in {
+      import com.chipprbots.ethereum.db.storage.pathstate.PivotOnBranch
+      val appState = synced()
+      appState.getPivotOnBranch() shouldBe None
+      val first = StateEscalation(10L, EscalationKind.Unreachable, hash(0x21), 4001)
+      appState.stateClearBatch(genesis, 10L, Some(first), givenUpFor = Some(gaveUp(4001, 0x21))).commit()
+      appState.getPivotOnBranch() shouldBe Some(PivotOnBranch(4001, hash(0x21)))
+      // what an interrupted clear writes again does not take it away
+      appState.stateClearRemovals(Some(genesis)).commit()
+      appState.getPivotOnBranch() shouldBe Some(PivotOnBranch(4001, hash(0x21)))
+      // an escalation for another branch replaces it
+      appState.stateClearBatch(genesis, 11L, Some(first.copy(atMillis = 11L)), Some(gaveUp(4002, 0x22))).commit()
+      appState.getPivotOnBranch() shouldBe Some(PivotOnBranch(4002, hash(0x22)))
+      // an escalation for no branch (proof of stake), and a clear that is no escalation, end it
+      appState.stateClearBatch(genesis, 12L, Some(first.copy(atMillis = 12L))).commit()
+      appState.getPivotOnBranch() shouldBe None
+      appState.putPivotOnBranch(PivotOnBranch(4002, hash(0x22))).commit()
+      appState.stateClearBatch(genesis, 13L, None).commit()
+      appState.getPivotOnBranch() shouldBe None
+    }
+
+  it should "be read back as it was written, and be an error when it cannot be read" taggedAs UnitTest in {
+    import com.chipprbots.ethereum.db.storage.pathstate.PivotOnBranch
+    for pivot <- Seq(
+        PivotOnBranch(4001, hash(0x21)),
+        PivotOnBranch(7, hash(0xab), attempts = 2),
+        PivotOnBranch(BigInt("123456789012"), hash(1), attempts = 1, firstMissMillis = Some(1763236800123L))
+      )
+    do PivotOnBranch.decode(PivotOnBranch.encode(pivot)) shouldBe pivot
+    PivotOnBranch.encode(PivotOnBranch(7, hash(0xab), attempts = 2)) shouldBe s"v1:7:${"ab" * 32}:2:-"
+    for unreadable <- Seq(
+        "",
+        "v2:7:" + "ab" * 32 + ":0:-",
+        "v1:7:" + "ab" * 31 + ":0:-",
+        "v1:7:" + "zz" * 32 + ":0:-",
+        "v1:x:" + "ab" * 32 + ":0:-",
+        "v1:7:" + "ab" * 32 + ":x:-",
+        "v1:7:" + "ab" * 32 + ":0:y",
+        "v1:7:" + "ab" * 32 + ":0"
+      )
+    do withClue(s"'$unreadable': ")(an[IllegalStateException] should be thrownBy PivotOnBranch.decode(unreadable))
+  }
