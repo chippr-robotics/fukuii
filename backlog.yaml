@@ -3533,19 +3533,16 @@ items:
   - id: B-306
     title: "The proof-of-work escalation feed: a branch MESS would refuse is not to be counted, and cheap header rules are checked before a seal (gate on C5a part 7)"
     priority: P1
-    status: claimed
+    status: done
     area: sync
     size: S
     opened: 2026-11-16
+    closed: 2026-11-16
     refs: []
     links:
+      prs: [1868]
       spec: 018
     depends_on: [B-064]
-    claim:
-      by: cloud-dc960fdc
-      agent: main
-      since: 2026-11-16T12:07:59Z
-      heartbeat: 2026-11-16T12:07:59Z
     notes: "forge, review of C5a part 6b. (1) A single announced block reaches consensus without BranchResolution's MESS check; a deep heavier branch spread that way is counted as unreachable at once. MESS is off on ETC today and returns with Olympia: PowEscalationFeed asks shouldMessReject before it counts. (2) The weight is weighed on claimed difficulties before a header is validated: validate the parent rules of every header, weigh again, then check seals; a header of an old epoch builds an Ethash cache that evicts the current one (EthashBlockHeaderValidator.powCaches holds 2)."
   - id: B-307
     title: "Before a sync starts on the guard: what the escalation's clear must also do (recoveries, fork choice, pivot on the branch, off the controller's thread)"
