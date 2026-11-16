@@ -3609,18 +3609,19 @@ items:
   - id: B-310
     title: "B-307 follow-ups: a failed pivot refresh does not feed the off-branch peers; network best is not filtered; rested header peers also rest for bodies"
     priority: P2
-    status: claimed
+    status: review
     area: snap
     size: S
     opened: 2026-11-16
     refs: []
     links:
+      prs: [1875]
       spec: 018
     claim:
       by: cloud-lane3
       agent: main
       since: 2026-11-16T21:25:29Z
-      heartbeat: 2026-11-16T21:25:29Z
+      heartbeat: 2026-11-16T22:13:54Z
     notes: "forge, 2026-11-16, review of #1870 (c2): PivotRefresher ignores PivotBootstrapFailed.offBranch and has no time bound; currentNetworkBestFromSnapPeers (PivotSelector) is not filtered by OffBranchPeers; emptyHeaderPeers keeps a peer on another chain out of body and receipt requests for the same 10 minutes."
   - id: B-311
     title: "SyncController escalation tests left from B-307 (f): the audit stopped at a clear, backfill states re-delivering, a clear that throws"
