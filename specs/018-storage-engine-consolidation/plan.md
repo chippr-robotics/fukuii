@@ -4165,6 +4165,33 @@ top or the reorganisation, the real EVM and the real state-root check), and judg
 - **Where it runs**: the nightly (`ethereum-tests-nightly.yml`, `ethtest.*`); the pull-request gate names its
   integration specs one by one and does not name this one. The fixtures are the `ets/tests` submodule.
 
+#### C5a part 9b: an announced block does not end the fetching of a branch (B-300, in part) (2026-11-16)
+
+A gate on starting the importer on the guard, from forge's read of C4e part 6. On the unified layout a fork recovery
+moves nothing: the fetcher goes back to the common block, the branch is fetched whole and weighed against this node's
+own blocks. Two things were said then and never pinned, and one defect was left.
+
+- **Pinned, with no change of behaviour**: one fork recovery for a block that keeps failing (`RegularSyncSpec`: fifteen
+  failed imports of one block make one recovery, at the fifth; the peer that serves it is dropped at the third, the
+  eighth and the thirteenth, since the strikes start again at the recovery and at each fifth failure after it); and
+  the resolver's answer held until the import under way has ended (the import sends the fetcher back to the block
+  that failed as it ends, and only then is the fetcher sent to the common block and the pick made to span the fork).
+- **W3, fixed, on the unified layout only**: an announced block imported while a branch was being fetched ended the
+  resolution as its import ended, so the next pick was a plain one and the branch was never weighed whole; and an
+  announced tip whose parent this node lacks sent the fetcher off to it. Now no announced block is imported while a
+  branch is fetched (it is of that branch, or of this node's chain, and is served again), and only a batch's import
+  ends the resolution: a block mined here does not. The hash layout is as it was (its own path is B-298), which a
+  test pins.
+
+**Left of B-300**: W4 with (f), together (the pick's upper bound for a heavier branch that is the shorter; a lighter
+branch fetched again and again), which are fork choice and are reviewed by forge; and (g), the pick against the 512
+blocks the fetcher holds ready on an archive node, **which waits for the user**: bound the pick at what the fetcher
+holds, so that a fork deeper than that is refused and ends in the escalation, or raise what it holds while a branch
+is resolved.
+
+**Tests**: `RegularSyncSpec` (+4). **The mutation run**: 8 rules broken one at a time, 8 caught (two gaps closed by
+tests: a batch's import ends the resolution, and the hash layout is unchanged).
+
 ### Destructive change (C8a and C8b): the vault protocol blocks
 
 ```
