@@ -102,11 +102,13 @@ object SyncProtocol:
   /** The hand-off's sample of the rows a sync wrote stopped the hand-off on the unified state layout
     * ([[com.chipprbots.ethereum.db.storage.PathHandoffSample.Stopped]]): the rows are not the whole of the pivot's
     * state. SyncController restarts SNAP as for [[HealingImpossible]], and counts these: after
-    * [[HandoffSampleFailures.Bound]] in a row it stops restarting (B-304).
+    * [[HandoffSampleFailures.Bound]] since the last hand-off it stops restarting (B-304). `pivot` is the block whose
+    * state was sampled.
     */
   final case class HandoffSampleStopped(
       reason: com.chipprbots.ethereum.db.storage.PathHandoffSample.StopReason,
-      counts: com.chipprbots.ethereum.db.storage.PathHandoffSample.Result
+      counts: com.chipprbots.ethereum.db.storage.PathHandoffSample.Result,
+      pivot: BigInt
   ) extends SyncProtocolMsg
       with SyncControllerReply
 

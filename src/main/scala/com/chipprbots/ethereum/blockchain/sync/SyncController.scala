@@ -484,7 +484,7 @@ object SyncController:
     // after a process restart the recovery may resume on it once more, then the next failure records it again.
     private var snapPivotFailedFinalization: Option[BigInt] = None
 
-    // B-304: the hand-off's samples that stopped a sync in a row, since the last hand-off.
+    // B-304: the hand-off's samples that stopped a sync since the last hand-off.
     private val handoffSampleFailures = new HandoffSampleFailures
 
     // Whether SNAP should consume CL-driven pivot selection. Captured once at construction
@@ -840,23 +840,34 @@ object SyncController:
             abortHealingServeRootRequest("the sync is begun again for the branch its pivot is to be on")
             clearingForBranchRetry(stateEscalation.get)
 
-          case SyncProtocol.HandoffSampleStopped(reason, counts) =>
+          case SyncProtocol.HandoffSampleStopped(reason, counts, pivot) =>
             // B-304: a sample that keeps stopping the hand-off is not restarted for ever. Only the same pivot is refused
             // a second time, so a failure that is systematic would repeat on every newer pivot.
-            handoffSampleFailures.stopped(reason) match
+            handoffSampleFailures.stopped(reason, pivot) match
               case HandoffSampleFailures.Verdict.Restart(n) =>
                 log.warn(
-                  s"[HANDOFF] the hand-off's sample stopped the sync (${reason.text}), $n of " +
-                    s"${HandoffSampleFailures.Bound} in a row: restarting SNAP"
+                  s"[HANDOFF] the hand-off's sample stopped the sync at pivot $pivot (${reason.text}), $n of " +
+                    s"${HandoffSampleFailures.Bound} since the last hand-off: restarting SNAP"
+                )
+                restartSnapAfterFailedFinalization(snapSync)
+              case HandoffSampleFailures.Verdict.NotCounted(n) =>
+                log.warn(
+                  s"[HANDOFF] the hand-off's sample found no state root at pivot $pivot again, as at the last stop: " +
+                    "the head did not move to a root peers serve (#1555). Not counted " +
+                    s"($n of ${HandoffSampleFailures.Bound} since the last hand-off): restarting SNAP"
                 )
                 restartSnapAfterFailedFinalization(snapSync)
               case HandoffSampleFailures.Verdict.GiveUp(n) =>
                 ctx.unwatch(snapSync) // §7c-D4: intentional stop — drop the critical death-watch first.
                 ctx.stop(snapSync)
-                abortHealingServeRootRequest("the hand-off's sample stopped the sync too many times in a row")
+                abortHealingServeRootRequest("the hand-off's sample stopped the sync too many times")
+                val what =
+                  if reason == com.chipprbots.ethereum.db.storage.PathHandoffSample.StopReason.RootAbsent then
+                    "no counts: the root is absent"
+                  else counts.describe
                 log.error(
-                  s"[HANDOFF] the hand-off's sample stopped the sync $n times in a row, the last for ${reason.text} " +
-                    s"(${counts.describe}): the rows the sync writes are not the state of its pivot, and syncing " +
+                  s"[HANDOFF] the hand-off's sample stopped the sync $n times since the last hand-off, the last at " +
+                    s"pivot $pivot for ${reason.text} ($what): the rows the sync writes are not the state of its pivot, and syncing " +
                     "again does not mend that. Not restarting: the sync controller stops. A restart of the node " +
                     "begins the count again."
                 )
@@ -1778,7 +1789,10 @@ object SyncController:
 
         // SSC declared healing impossible during the pivot header bootstrap window — stale, drop.
         case SyncProtocol.HealingImpossible | _: SyncProtocol.HandoffSampleStopped =>
-          log.debug("HealingImpossible in runningPivotHeaderBootstrap — stale, dropping (bootstrap in progress).")
+          log.debug(
+            "HealingImpossible or HandoffSampleStopped in runningPivotHeaderBootstrap — stale, dropping (bootstrap in " +
+              "progress)."
+          )
           Behaviors.same
 
         // Stale HandshakedPeers reply from a GetHandshakedPeersCmd sent before this state transition.
@@ -1934,7 +1948,7 @@ object SyncController:
     private def clearSnapPivotFloor(): Unit =
       appStateStorage.clearSnapSyncMinPivotBlock().commit()
       snapPivotFailedFinalization = None // #1555: a finalized SNAP has no failed pivot left to avoid
-      handoffSampleFailures.handedOff() // B-304: the samples are counted in a row since the last hand-off
+      handoffSampleFailures.handedOff() // B-304: the samples are counted since the last hand-off
 
     /** Log-only: compare the stored SNAP state root with the SNAP pivot header and report whether the trie is there. */
     private def logSnapStateRootDiagnostic(): Unit =

@@ -4370,20 +4370,33 @@ its rows, not in one pivot's) would repeat on every pivot, each a whole heal, wi
   hole in the account trie, too many account leaves of another root, a hole in a storage trie on a sync that left no
   account out, too many storage tries with no root) and the counts made up to there (the `Result` a sample that
   passes returns).
-- **Its own message**: the finalization sends `HandoffSampleStopped(reason, counts)` to the sync controller in place
-  of `HealingImpossible`. Restarted as before for the first two; a stale one during a pivot bootstrap is dropped as
-  `HealingImpossible` is.
-- **Counted in a row** (`HandoffSampleFailures`, outside the split's modules): the third stops the restarts. The sync
-  controller logs an ERROR with the reason and the sample's counts and stops, as for a SNAP controller that crashed:
-  an operator restarts the node, which begins the count again (it is kept in memory). Samples of any reason count
-  together: a systematic fault need not stop each sample by the same rule.
+- **Its own message**: the finalization sends `HandoffSampleStopped(reason, counts, pivot)` to the sync controller in
+  place of `HealingImpossible`. Restarted as before for the first two; a stale one during a pivot bootstrap is dropped
+  as `HealingImpossible` is.
+- **Counted since the last hand-off** (`HandoffSampleFailures`, outside the split's modules): the third stops the
+  restarts. The sync controller logs an ERROR with the reason, the pivot and the sample's counts and stops, as for a
+  SNAP controller that crashed: an operator restarts the node, which begins the count again (it is kept in memory).
+  Samples of any reason count together: a systematic fault need not stop each sample by the same rule.
 - **A hand-off that was made begins it again** (`SnapSyncFinalized`); another reason a sync is restarted between two
-  samples does not, since it is no evidence that the rows are now whole.
+  samples does not, since it is no evidence that the rows are now whole. A sample that passes is not told to the
+  controller, so this is a count since the last hand-off, not of samples in a row (beacon, after code).
+- **A root absent again at the pivot of the last stop is not counted** (beacon, after code): it is a consensus client
+  frozen on a root no peer serves (#1555), a fault of the head and not of the rows, and three would stop a node for it.
+  On the hash layout #1555's check of the root runs before the publish; on this one the sample is the first to meet
+  it.
 - **Metrics**: `db.state.handoff.sample.stopped` by `reason`, and `db.state.handoff.sample.stopped.consecutive`.
 
 It cannot fire before part 10: `handoff` is `None` until a sync starts on the unified layout.
 
-**Tests**: `HandoffSampleFailuresSpec` (4), `PathHandoffSampleSpec` (each rule that stops a hand-off pins its reason,
+**Read after code (beacon): no blocker.** Taken: the count's wording and the root absent at the same pivot (above); a
+debug line that named only `HealingImpossible`; an ERROR for an absent root that printed zero counts. **For part 10**:
+on proof of stake, until spec 022's V1 and V2 land, every re-peg leaves holes by construction, so this bound stops a
+fresh Sepolia sync on the unified layout where today it loops: part 10 on ETH comes after 022's slices 1 and 2. The
+message carries the pivot and not the child that sent it, so a late one from a child being stopped would count against
+the next; the window is one sample's `pipeToSelf`. Left as follow-ups: a stopped controller does not answer
+`eth_syncing` (a final state that answers with the reason would serve operators better than a time-out).
+
+**Tests**: `HandoffSampleFailuresSpec` (5), `PathHandoffSampleSpec` (each rule that stops a hand-off pins its reason,
 and three their counts), `StateIngestDurabilitySpec` (the message, in place of `HealingImpossible`),
 `SyncControllerSpec` (+2: two restarts, then the controller stops with the ERROR; the count from one again after a
 hand-off).

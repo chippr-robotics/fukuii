@@ -569,13 +569,13 @@ class SyncControllerSpec
     val counts = PathHandoffSample.Result(sampledAccountLeaves = 4096, sampledMissing = 3)
     def sampleStopped(): Unit =
       syncController ! SyncController.WrappedSyncProtocol(
-        SyncProtocol.HandoffSampleStopped(PathHandoffSample.StopReason.StorageHole, counts)
+        SyncProtocol.HandoffSampleStopped(PathHandoffSample.StopReason.StorageHole, counts, BigInt(4000))
       )
 
     (1 to 2).foreach { n =>
       appState.snapSyncDone().commit()
       val warnings = syncControllerLogsDuring(ch.qos.logback.classic.Level.WARN)(sampleStopped())
-      withClue(s"sample $n: ")(warnings.exists(_.contains(s"$n of 3 in a row: restarting SNAP")) shouldBe true)
+      withClue(s"sample $n: ")(warnings.exists(_.contains(s"$n of 3 since the last hand-off: restarting SNAP")) shouldBe true)
       // restarted as for HealingImpossible: the done flag cleared and a SNAP of the next generation
       appState.isSnapSyncDone() shouldBe false
       val next = eventually {
@@ -590,11 +590,11 @@ class SyncControllerSpec
     val watcher = TestProbe()(using system)
     watcher.watch(syncController)
     val errors = syncControllerErrorsDuring(sampleStopped())
-    errors.exists(e => e.contains("3 times in a row") && e.contains(counts.describe)) shouldBe true
+    errors.exists(e => e.contains("3 times since the last hand-off") && e.contains(counts.describe)) shouldBe true
     watcher.expectTerminated(syncController)
   }
 
-  // B-304: the count is of samples in a row since the last hand-off
+  // B-304: the count is of samples since the last hand-off
   it should "count the hand-off's samples again from one after a hand-off was made" taggedAs (
     UnitTest,
     SyncTest
@@ -604,7 +604,11 @@ class SyncControllerSpec
     def sampleStopped(): List[String] =
       syncControllerLogsDuring(ch.qos.logback.classic.Level.WARN) {
         syncController ! SyncController.WrappedSyncProtocol(
-          SyncProtocol.HandoffSampleStopped(PathHandoffSample.StopReason.AccountHole, PathHandoffSample.Result())
+          SyncProtocol.HandoffSampleStopped(
+            PathHandoffSample.StopReason.AccountHole,
+            PathHandoffSample.Result(),
+            BigInt(4000)
+          )
         )
       }
     def snapRunning(): Unit =
@@ -614,9 +618,9 @@ class SyncControllerSpec
       }
     syncController ! SyncController.WrappedSyncProtocol(SyncProtocol.Start)
     snapRunning()
-    sampleStopped().exists(_.contains("1 of 3 in a row")) shouldBe true
+    sampleStopped().exists(_.contains("1 of 3 since the last hand-off")) shouldBe true
     snapRunning()
-    sampleStopped().exists(_.contains("2 of 3 in a row")) shouldBe true
+    sampleStopped().exists(_.contains("2 of 3 since the last hand-off")) shouldBe true
     awaitSnapStarted(syncController)
 
     // a hand-off, then a re-SNAP from regular sync: the next sample that stops it is the first in a row again
@@ -628,7 +632,7 @@ class SyncControllerSpec
       someTimePasses()
       assert((snapChildren(testSetup) -- backfill).nonEmpty)
     }
-    sampleStopped().exists(_.contains("1 of 3 in a row")) shouldBe true
+    sampleStopped().exists(_.contains("1 of 3 since the last hand-off")) shouldBe true
     syncController.underlying.isTerminated shouldBe false
   }
 

@@ -544,9 +544,10 @@ class StateIngestDurabilitySpec extends AnyFlatSpec with Matchers:
     stopped.module.pathPublish shouldBe None
     stopped.recording.writes.size shouldBe before
     stopped.flagSetAfter(before) shouldBe false
-    // B-304: its own message, with what stopped it and what was counted, so that the parent counts them in a row
+    // B-304: its own message, with what stopped it, what was counted and the pivot sampled, so that the parent counts
+    // them (and does not count a root absent again at the same pivot)
     stopped.parent.receiveAll() shouldBe Seq(
-      SyncProtocol.HandoffSampleStopped(PathHandoffSample.StopReason.StorageHole, counts)
+      SyncProtocol.HandoffSampleStopped(PathHandoffSample.StopReason.StorageHole, counts, pivot)
     )
   }
 
