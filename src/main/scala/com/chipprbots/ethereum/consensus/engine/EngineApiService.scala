@@ -375,7 +375,7 @@ class EngineApiService(
             ticket.outcome.whenComplete { (outcome, failure) =>
               watchedRecoveries.remove(ticket)
               try
-                if failure == null then watch.ended(outcome, hexOf(hash), askedIn)
+                if failure == null then watch.ended(outcome, hexOf(hash), askedIn, Some(hash))
                 else log.error("[STATE-ESCALATION] a recovery ended with no outcome", failure)
               catch
                 case scala.util.control.NonFatal(e) =>
@@ -1123,14 +1123,16 @@ class EngineApiService(
               escalationWatch.foreach(
                 _.refusedUnreachable(
                   hexOf(forkChoiceState.headBlockHash),
-                  refused.stripPrefix(ForkChoiceManager.Unreachable)
+                  refused.stripPrefix(ForkChoiceManager.Unreachable),
+                  Some(forkChoiceState.headBlockHash)
                 )
               )
             else if refused.startsWith(ForkChoiceManager.LocalFault) then
               escalationWatch.foreach(
                 _.refusedForAFault(
                   hexOf(forkChoiceState.headBlockHash),
-                  refused.stripPrefix(ForkChoiceManager.LocalFault)
+                  refused.stripPrefix(ForkChoiceManager.LocalFault),
+                  Some(forkChoiceState.headBlockHash)
                 )
               )
             EngineApiMetrics.recordForkchoiceUpdated("SYNCING")

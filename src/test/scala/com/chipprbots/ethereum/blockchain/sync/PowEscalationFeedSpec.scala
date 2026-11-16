@@ -11,6 +11,7 @@ import com.chipprbots.ethereum.Fixtures
 import com.chipprbots.ethereum.blockchain.sync.PowEscalationFeed.Refusal
 import com.chipprbots.ethereum.db.storage.pathstate.AncestorNotStored
 import com.chipprbots.ethereum.db.storage.pathstate.EscalationKind
+import com.chipprbots.ethereum.db.storage.pathstate.GivenUpBranch
 import com.chipprbots.ethereum.db.storage.pathstate.ReexecutionDiverged
 import com.chipprbots.ethereum.db.storage.pathstate.ReorgRefusal
 import com.chipprbots.ethereum.db.storage.pathstate.ReorgTooDeep
@@ -67,7 +68,7 @@ class PowEscalationFeedSpec extends AnyFlatSpec with Matchers:
       ),
       hash => if hash == forkHash then forkWeight else None,
       () => head,
-      left += _
+      note = left += _
     )
     def validation(blocks: List[Block]): Option[(BlockHeader, String)] =
       validated += 1
@@ -178,4 +179,62 @@ class PowEscalationFeedSpec extends AnyFlatSpec with Matchers:
     merged.escalated shouldBe empty
     merged.validated shouldBe 0
     merged.left shouldBe empty
+  }
+
+  // C5a part 7: the name of a branch, which the growth is counted under, and its blocks, which the loop guard knows it by
+  "The first block of a branch above its fork" should "be the block itself when it stands on the chain, else the lowest side block under it" taggedAs UnitTest in {
+    val side = branch(5, 4).map(_.header)
+    val stored = side.map(header => header.hash.value -> header).toMap
+    // the fork block is the chain's; the side blocks are not
+    val chain = Fixtures.Blocks.ValidBlock.header.copy(number = BlockNumber(4))
+    val headers: ByteString => Option[BlockHeader] =
+      hash => stored.get(hash).orElse(Option.when(hash == forkHash.value)(chain))
+    val onTheChain: BlockHeader => Boolean = _ eq chain
+    PowEscalationFeed.firstAboveFork(side.head, headers, onTheChain) shouldBe side.head
+    PowEscalationFeed.firstAboveFork(side.last, headers, onTheChain) shouldBe side.head
+    // a header that is not stored ends the walk at the lowest block found
+    PowEscalationFeed.firstAboveFork(side.last, headers.andThen(_.filterNot(_ eq side(1))), onTheChain) shouldBe side(2)
+    // and so does the reach
+    PowEscalationFeed.firstAboveFork(side.last, headers, onTheChain, reach = 1) shouldBe side(2)
+  }
+
+  "The blocks a branch is known by" should "be those refused, tip first, then the stored blocks under them" taggedAs UnitTest in {
+    val side = branch(5, 4).map(_.header)
+    val chain = Fixtures.Blocks.ValidBlock.header.copy(number = BlockNumber(4))
+    val stored = side.take(2).map(header => header.hash.value -> header).toMap + (forkHash.value -> chain)
+    val reads = mutable.ArrayBuffer.empty[ByteString]
+    val headers: ByteString => Option[BlockHeader] = hash =>
+      reads += hash; stored.get(hash)
+    // the two upper blocks were refused; the two under them are stored, and the fork block under those
+    val walk = PowEscalationFeed.lineage(side.drop(2), headers)
+    walk.take(2).map(_.number).toList shouldBe List[BigInt](8, 7)
+    // nothing is read before it is asked for
+    reads shouldBe empty
+    walk.map(_.number).toList shouldBe List[BigInt](6, 5, 4)
+    PowEscalationFeed.lineage(Nil, headers).toList shouldBe Nil
+  }
+
+  "The proof-of-work feed" should "count the growth of a branch under one name, whichever block a cut of it begins at" taggedAs UnitTest in {
+    val escalated = mutable.ArrayBuffer.empty[EscalationKind]
+    val requests = mutable.ArrayBuffer.empty[EscalationWatch.Request]
+    val whole = branch(5, 9, difficulty = 400)
+    val stored = whole.map(block => block.header.hash.value -> block.header).toMap
+    val weights = (forkHash -> ChainWeight.totalDifficultyOnly(1000)) ::
+      whole.zipWithIndex.map { case (block, i) => block.header.hash -> ChainWeight.totalDifficultyOnly(1400 + 400 * i) }
+    val feed = new PowEscalationFeed(
+      new EscalationWatch(new EscalationTrigger(4), () => 0L, escalated += _, (_, _) => (), requests += _),
+      weights.toMap.get,
+      () => Some(ChainWeight.totalDifficultyOnly(1050)),
+      // the blocks of the branch are stored, as side blocks; the block it stands on is the chain's and is not looked up
+      stored.get,
+      _ => false
+    )
+    feed.notJudged(whole.take(2), corrupt, _ => None) // tip 6
+    // a cut that begins higher on the same branch, as a batch fetched again does
+    feed.notJudged(whole.slice(3, 6), corrupt, _ => None) // tip 10: four blocks of growth
+    escalated.toList shouldBe List(EscalationKind.LocalFault)
+    val name = GivenUpBranch(5, whole.head.header.hash.value)
+    requests.map(_.branch.map(_.first)).toList shouldBe List(Some(name))
+    // and what it is known by is the cut, tip first, then what is stored under it
+    requests.head.branch.get.lineage().map(_.number).toList shouldBe List[BigInt](10, 9, 8, 7, 6, 5)
   }

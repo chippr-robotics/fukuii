@@ -985,15 +985,23 @@ final class PathStateStorage(
     *   the wall clock now
     * @param escalation
     *   why, when this is an escalation: recorded for the cool-down between two of them
+    * @param givenUpFor
+    *   on proof of work, the branch the escalation is for ([[GivenUpBranches]]): recorded in the same batch
     */
-  def clearForResync(genesisHash: ByteString, atMillis: Long, escalation: Option[StateEscalation]): Unit =
+  def clearForResync(
+      genesisHash: ByteString,
+      atMillis: Long,
+      escalation: Option[StateEscalation],
+      givenUpFor: Option[GivenUpBranch] = None
+  ): Unit =
     moves.lock()
     try
       lock.locked(
         "a clear of the state for a sync from scratch",
         nanos => told("the wait for the state lock")(settings.observer.lockWaited(nanos))
       ) {
-        val begins: Seq[DataUpdate] = appState.stateClearBatch(genesisHash, atMillis, escalation).updates
+        val begins: Seq[DataUpdate] =
+          appState.stateClearBatch(genesisHash, atMillis, escalation, givenUpFor).updates
         clock.inFlightToNoState(dataSource.updateSync(begins))
         // executed blocks kept beside a state that is gone are of no state, and neither is what was derived from its
         // records, the fault that was found in it, or the block that was finalized on it

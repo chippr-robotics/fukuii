@@ -10,6 +10,8 @@ import com.chipprbots.ethereum.db.dataSource.EphemDataSource
 import com.chipprbots.ethereum.db.storage.pathstate.BlockRef
 import com.chipprbots.ethereum.db.storage.pathstate.EscalationKind
 import com.chipprbots.ethereum.db.storage.pathstate.FinalizedBlock
+import com.chipprbots.ethereum.db.storage.pathstate.GivenUpBranch
+import com.chipprbots.ethereum.db.storage.pathstate.GivenUpBranches
 import com.chipprbots.ethereum.db.storage.pathstate.StateEscalation
 import com.chipprbots.ethereum.db.storage.pathstate.StateLayout
 import com.chipprbots.ethereum.domain.appstate.BlockInfo
@@ -121,4 +123,81 @@ class StateClearBatchSpec extends AnyFlatSpec with Matchers:
     again.stateClearBatch(genesis, 1L, Some(earlier)).commit()
     again.stateClearBatch(genesis, 2L, None).commit()
     again.getStateEscalationLast() shouldBe Some(earlier)
+  }
+
+  // C5a part 7: the loop guard of a proof-of-work escalation, recorded with the clear it belongs to
+  private def gaveUp(number: Int, byte: Int): GivenUpBranch = GivenUpBranch(number, hash(byte))
+
+  "The branches a state was given up for" should "be read back as they were written, and be an error when they cannot be read" taggedAs
+    UnitTest in {
+      for branches <- Seq(
+          Set.empty[GivenUpBranch],
+          Set(gaveUp(1, 1)),
+          Set(gaveUp(9, 0xab), gaveUp(2, 2), gaveUp(70000, 0x7f))
+        )
+      do GivenUpBranches.decode(GivenUpBranches.encode(branches)) shouldBe branches
+      GivenUpBranches.encode(Set(gaveUp(12, 0xcd), gaveUp(7, 0xab))) shouldBe s"v1:7:${"ab" * 32},12:${"cd" * 32}"
+      GivenUpBranches.encode(Set.empty) shouldBe "v1:"
+      for unreadable <- Seq(
+          "",
+          "v2:7:" + "ab" * 32,
+          "v1:" + "ab" * 32,
+          "v1:7:" + "ab" * 31,
+          "v1:7:" + "zz" * 32,
+          "v1:x:" + "ab" * 32,
+          "v1::" + "ab" * 32,
+          "v1:-7:" + "ab" * 32,
+          "v1:7:" + "ab" * 32 + ","
+        )
+      do withClue(s"'$unreadable': ")(an[IllegalStateException] should be thrownBy GivenUpBranches.decode(unreadable))
+    }
+
+  it should "be recorded in the batch of the clear, added to those before, and kept by every later clear" taggedAs UnitTest in {
+    val appState = synced()
+    appState.getStateEscalationGivenUp() shouldBe Set.empty
+    val first = StateEscalation(10L, EscalationKind.Unreachable, hash(0x21), 4001)
+    appState.stateClearBatch(genesis, 10L, Some(first), givenUpFor = Some(gaveUp(4001, 0x21))).commit()
+    appState.getStateEscalationGivenUp() shouldBe Set(gaveUp(4001, 0x21))
+    appState.getStateEscalationLast() shouldBe Some(first)
+    // a clear that is no escalation, and one for another branch: the list is not among what a clear removes (vault)
+    appState.stateClearBatch(genesis, 11L, None).commit()
+    appState.stateClearRemovals(Some(genesis)).commit()
+    appState.getStateEscalationGivenUp() shouldBe Set(gaveUp(4001, 0x21))
+    val second = StateEscalation(12L, EscalationKind.LocalFault, hash(0x22), 4002)
+    appState.stateClearBatch(genesis, 12L, Some(second), givenUpFor = Some(gaveUp(4002, 0x22))).commit()
+    appState.getStateEscalationGivenUp() shouldBe Set(gaveUp(4001, 0x21), gaveUp(4002, 0x22))
+    // an escalation on proof of stake gives up for no branch
+    appState.stateClearBatch(genesis, 13L, Some(second.copy(atMillis = 13L))).commit()
+    appState.getStateEscalationGivenUp() shouldBe Set(gaveUp(4001, 0x21), gaveUp(4002, 0x22))
+    // and only an operator ends it
+    appState.forgetGivenUpBranches().commit()
+    appState.getStateEscalationGivenUp() shouldBe Set.empty
+  }
+
+  it should "not be recorded by a clear that is no escalation" taggedAs UnitTest in {
+    val appState = synced()
+    an[IllegalArgumentException] should be thrownBy
+      appState.stateClearBatch(genesis, 10L, escalation = None, givenUpFor = Some(gaveUp(4001, 0x21)))
+  }
+
+  // T164: the cool-down survives a restart, and so does the list of branches
+  it should "be what the escalation's guard decides from after a restart" taggedAs UnitTest in {
+    import com.chipprbots.ethereum.blockchain.sync.EscalationGuard
+    import com.chipprbots.ethereum.blockchain.sync.EscalationGuard.Decision
+    import com.chipprbots.ethereum.blockchain.sync.EscalationWatch
+    def refused(name: GivenUpBranch): EscalationWatch.Branch = EscalationWatch.Branch(name, () => Iterator(name))
+    val hour = 3600000L
+    val source = EphemDataSource()
+    val escalation = StateEscalation(100 * hour, EscalationKind.Unreachable, hash(0x21), 4001)
+    new AppStateStorage(source)
+      .stateClearBatch(genesis, escalation.atMillis, Some(escalation), Some(gaveUp(4001, 0x21)))
+      .commit()
+    // another storage over the same rows
+    val read = new AppStateStorage(source)
+    val guard =
+      new EscalationGuard(6 * hour, () => read.getStateEscalationLast(), () => read.getStateEscalationGivenUp())
+    guard.decide(EscalationKind.LocalFault, None, 103 * hour) shouldBe Decision.CoolingDown(escalation, 106 * hour)
+    guard.decide(EscalationKind.Unreachable, Some(refused(gaveUp(4001, 0x21))), 200 * hour) shouldBe Decision.GivenUp
+    guard.decide(EscalationKind.Unreachable, Some(refused(gaveUp(4001, 0x22))), 200 * hour) shouldBe
+      Decision.Act(EscalationKind.Unreachable, Some(gaveUp(4001, 0x22)))
   }

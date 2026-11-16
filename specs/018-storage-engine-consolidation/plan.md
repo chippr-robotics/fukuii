@@ -3881,6 +3881,36 @@ header of an old epoch builds an Ethash cache that pushes the current one out.
 **Tests**: `PowEscalationFeedSpec` (8), `ConsensusAdapterEscalationSpec` (3), `BlockValidationHeadersSpec` (3),
 `EscalationTriggerSpec` (+1).
 
+#### C5a part 7a: whether an escalation is acted on (2026-11-16)
+
+Part 7 is in two: the decision and what it keeps here, the handler that clears and syncs again in 7b. **Nothing
+here fires**: no one asks the guard yet.
+
+- **`EscalationGuard`** (T164) decides, for a verdict, one of: act; not now (inside `escalation-cooldown` of
+  `state.escalation.last`, which the clear writes and a restart keeps); never, for this branch; not while a record
+  cannot be read. A branch given up is refused before the cool-down is looked at, so that what is permanent is not
+  said as six hours. A record dated after now holds until the clock reaches its end; no cool-down acts at once.
+- **The loop guard of proof of work** (the user's decision 3): `state.escalation.given-up`, a list of branches, each
+  its first block above the fork with its height. **Written in the batch of the clear** (`clearForResync(...,
+  givenUpFor)`): a branch recorded with no clear would never be escalated for, a clear with no branch recorded could
+  be repeated. It is not among what a clear removes. It applies to both kinds of verdict on proof of work: a fault
+  that has since been mended also waits for an operator.
+- **A branch is known again by any block of it** (forge, after code): the name of a branch is worked out from the
+  number index, which the sync after an escalation rewrites, so the same branch can be named by another block. The
+  guard walks the refused blocks from their tip down, then the stored blocks under them, as far as the lowest height
+  on the list, and asks whether any is on it.
+- **What a verdict is for goes with it**: the watch tells a `Request` (the kind, the head on proof of stake, the
+  branch on proof of work, why) each time the verdict is to escalate. The growth of a refused branch (6b) is counted
+  under the branch's name, the same for every cut of it.
+
+**For 7b** (forge, vault): the watch tells a request each time, so the handler drops repeats; the ERROR for a branch
+given up is not to be rate-limited away, and says an operator ends it; `forgetGivenUpBranches` is for a start only,
+before anything syncs, written synced, and either once or said each time; a clear with a list that cannot be read
+throws before it writes, which the guard keeps a caller from.
+
+**Tests**: `EscalationGuardSpec` (8), `StateClearBatchSpec` (+4), `EscalationWatchSpec` (+1),
+`PowEscalationFeedSpec` (+3).
+
 ### Destructive change (C8a and C8b): the vault protocol blocks
 
 ```
