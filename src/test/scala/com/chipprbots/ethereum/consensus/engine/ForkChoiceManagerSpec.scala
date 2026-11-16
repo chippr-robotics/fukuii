@@ -138,3 +138,20 @@ class ForkChoiceManagerSpec extends ScalaTestWithActorTestKit with AnyFlatSpecLi
     fcm.clear()
     fcm.getHeadBlockHash shouldBe None
     fcm.getRequestedHeadBlockHash shouldBe None
+
+  // spec 018 C5a, B-297: a head refused -38002 is not left as the head the p2p import path follows
+  it should "put the requested head back to the head last followed when a refused head is forgotten" taggedAs UnitTest in new Fixture:
+    fcm.applyForkChoiceState(ForkChoiceState(unknownHeadHash, unknownHeadHash, unknownHeadHash)) shouldBe Left(
+      "SYNCING"
+    )
+    fcm.getRequestedHeadBlockHash shouldBe Some(unknownHeadHash)
+    fcm.forgetRefused(unknownHeadHash)
+    // none was followed yet
+    fcm.getRequestedHeadBlockHash shouldBe None
+
+  it should "not forget a head named since the refused one" taggedAs UnitTest in new Fixture:
+    val newer: ByteString = ByteString(Array.fill(32)(0x77.toByte))
+    fcm.notifyBeaconHead(ForkChoiceState(unknownHeadHash, unknownHeadHash, unknownHeadHash))
+    fcm.notifyBeaconHead(ForkChoiceState(newer, newer, newer))
+    fcm.forgetRefused(unknownHeadHash)
+    fcm.getRequestedHeadBlockHash shouldBe Some(newer)

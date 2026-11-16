@@ -4192,6 +4192,84 @@ is resolved.
 **Tests**: `RegularSyncSpec` (+4). **The mutation run**: 8 rules broken one at a time, 8 caught (two gaps closed by
 tests: a batch's import ends the resolution, and the hash layout is unchanged).
 
+#### C5a, a gate on part 10: the consensus layer's branch beyond the forward layers, and a refused one (B-297) (2026-11-16)
+
+Beacon's five items from C4e part 5, read before code and after. On the unified layout, on proof of stake; ETC's arm
+is as it was but for what a reorganisation tells (below), which forge read. **Nothing here fires before part 10**: the
+importer does not run on the guard yet.
+
+**What was wrong.** The consensus layer's branch that met the cap was answered "adopted by the fork choice's recovery",
+and nothing handed it to the recovery: its blocks were never stored, so the recovery could not have read them, and it
+was queued again whole. A branch refused for the finalized block or for a depth the records do not reach was queued
+again whole as well, and the importer fetched it again at every round trip, for good while the consensus client named
+its head; the batch that hung from it read as an unknown branch and sent the fetcher back further. The importer's move
+of the head could take the head back down below a head a fork choice had confirmed meanwhile (beacon's B1), and an
+adoption's move could do the same to a head the importer had moved. And the side blocks a branch stood on, canonical
+again with it, were not told as of the new branch.
+
+- **The hand-off at the cap** (`BranchHandOff`, late-bound as `DesignatedHead` is; bound by
+  `NodeBuilder.bindBranchHandOff` on a post-merge chain with the Engine API on and a recovery built). The blocks of the
+  branch not stored yet are stored by hash, with no weight (only an executed block has one), and its tip is asked for
+  through `EngineApiService.handOffBranch`: `requestFor(tip, recoverySink, ForkChoice)`, as a fork choice asks, after
+  the pin is released, so that the recovery does not count the pinned layers as held and lose them as the pin goes.
+  **The tip, never the head named** (beacon): a failure of a recovery is remembered by its head, and one asked for the
+  named head with its bodies not stored would answer the consensus client's own fork choice with it. Not counted by the
+  escalation's watch, which counts what fork choices come to; the next fork choice shares the ticket. Answered
+  `HandedToRecovery`, with nothing to queue again. Unbound (every ETC network, the hash layout), it is answered as
+  before. **A fork below what a view reaches is not handed off** (beacon, after code): the recovery's walk stops only at
+  a state a view reaches, would end it as too long, and would leave that answer for the next fork choice.
+- **A refusal that holds while the head stays** (`RefusedForThisHead`): on the consensus layer's arm, a move back
+  refused for the finalized block, the depth, a record that is not whole or the block the state began at, and a side
+  block that fails when it is executed again. `Corrupt` is this datadir's fault and waits, as on proof of work. The
+  branch is stored by hash (so the next fork choice walks down to its fork, and is answered -38002 or counted as a
+  head that cannot be reached), remembered against the head (`ConsensusImpl`, 8,192 blocks at most), and not queued
+  again. **The importer does not fetch it again** (its own arm, no `InvalidateBlocksFrom`, no strike, `Running`), and a
+  batch that hangs from it is set aside with it (`Consensus.refusedWithTheirParent`, asked in `BlockImporter
+  .resolveBranch` before the unknown-branch arm, and in `importToNewBranch`): `BranchResolution` answers an unknown
+  branch for such a batch before consensus is asked, which beacon's memo had put in consensus. **Any move of the head
+  ends it**, the clear of an escalation and the recovery's adoption among them. A handed-off branch is set aside the
+  same way until the recovery has moved the head (beacon, after code: executed again meanwhile, it pins the layers the
+  recovery needs).
+- **The head a refused fork choice named is not the head the import path follows**
+  (`ForkChoiceManager.forgetRefused`): on every -38002, the requested head goes back to the head of the last fork
+  choice followed, only while it is still the refused one (by value: two refusals of one head are two `Option`s). With
+  none followed since a start, it is none, and the import path follows no consensus layer until the next fork choice.
+- **The race** (B1, beacon). The importer's move of the consensus layer's branch is admitted only from the head it was
+  weighed against: a head moved meanwhile past the tip is told as the head's own (`SelectedNewBestBranch` with nothing
+  left), any other move as superseded. An adoption's and a catch-up's move to the block their walk found held is
+  refused when the head is on the chain above it, or on a chain that stands on its tip (`AheadOfHeld`), answered
+  superseded with nothing moved back. The weight arm keeps its admit as it was (forge: on ETC the importer's lock
+  serialises every move; a follow-up, B-315, weighs it again there).
+- **The side blocks told** (both arms on the unified layout): every block of `fork.parentSideChain`, oldest first,
+  ahead of the branch, each with its own stored weight, in a reorganisation that ran with no error; on layers and at
+  the cap. The hash layout tells the branch alone, as ever. Forge, for ETC: right, as core-geth's new chain runs from
+  the fork up (a10's transactions leave the pool again). **Found with it, and fixed**: the importer broadcast every
+  pairing of the blocks told and their weights (`mapN` on two lists), so a NewBlock carried another block's total
+  difficulty whenever more than one block was told.
+
+**Item 5, the hive engine re-org suites with the guard on: not run.** The hive client has no switch for the guard, and
+on the guard the sync controller is not started before part 10, so the suites' p2p re-org cases cannot reach this code
+yet; and no network host was reachable from this session. Gated on part 10 (B-314).
+
+**Read after code**: beacon, no blocker, four warnings, all taken (the hand-off set aside; no hand-off below the
+views; a head above the tip; -38002 for a safe or finalized block that is not an ancestor); forge, no blocker for ETC,
+the broadcast pairing taken, the weight arm's admit left as a follow-up.
+
+**Left**: the consensus layer's branch that forks below what a view reaches is adopted by no one (B-316); a head refused
+-38002 is still published to SNAP as a pivot hint (B-317). **Not pinned** (B-318): a fault of the pin's release after a
+hand-off is decided (the hand-off is then not asked for); the `Deep`, `Incomplete` and `Pivot` refusals one by one (the
+finalized one is); a catch-up's move refused for a head ahead of it (an adoption's is).
+
+**Tests**: `ReorgBlockhashParitySpec` (+7: a hand-off adopted by a real recovery; a refusal not queued, what hangs
+from it refused, a move of the head ending it; set aside after a hand-off, and no hand-off below the views; the head
+moved to the tip, and to its own next block, meanwhile; the side blocks told on both arms, on layers and at the cap;
+one pin changed: the orphaned a10 is told with a11 on the unified layout), `HeadMoveOnTheChainSpec` (+1, two shapes;
+two cases extended), `RegularSyncSpec` (+2), `ForkChoiceManagerSpec` (+2), `EngineApiForkchoiceErrorCodeSpec` (+2).
+**The mutation run**: 24 rules broken one at a time, 22 caught. The two that survive are the not-pinned ones above: a
+catch-up's check of a head ahead of the block it moves to (its race needs a head that is not the block the catch-up
+stands on, which a hand-off's catch-up never has), and `Deep` taken out of the refusals that hold while the head stays
+(B-318).
+
 ### Destructive change (C8a and C8b): the vault protocol blocks
 
 ```

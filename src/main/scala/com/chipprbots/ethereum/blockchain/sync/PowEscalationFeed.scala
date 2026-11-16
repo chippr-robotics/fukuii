@@ -78,6 +78,8 @@ final class PowEscalationFeed(
       fault: StateFault,
       firstInvalidHeader: List[Block] => Option[(BlockHeader, String)]
   ): Unit =
+    // A post-merge branch (difficulty 0) is the Engine API's: this filter is also what keeps the consensus layer's
+    // refusals (`RefusedForThisHead`, `HandedToRecovery`, B-297) out of the proof-of-work count
     if branch.nonEmpty && branch.last.header.difficulty.value > 0 then
       val name = s"[${branch.head.number}-${branch.last.number}]"
       val weight = weightOf(branch.head.header.parentHash).map(branch.foldLeft(_)((w, b) => w.increase(b.header)))

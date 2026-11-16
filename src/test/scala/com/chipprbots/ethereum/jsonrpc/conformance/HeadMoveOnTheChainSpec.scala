@@ -855,6 +855,8 @@ class HeadMoveOnTheChainSpec extends ScalaTestWithActorTestKit with AnyFlatSpecL
       val before = on.everything
       choose(below, ForkChoiceManager.ZeroHash).left.toOption.getOrElse("") should startWith("invalid forkchoice state")
       on.everything shouldBe before
+      // and the head the import path follows is the one followed last, not the one refused (B-297)
+      on.node.forkChoiceManager.getRequestedHeadBlockHash shouldBe Some(side.header.hash.value)
       on.holds(side.header, chain :+ forty :+ side)
       on.source.offTheLock.toArray.toSeq shouldBe empty
     }
@@ -1821,6 +1823,49 @@ class HeadMoveOnTheChainSpec extends ScalaTestWithActorTestKit with AnyFlatSpecL
       on.holds(chain.last.header, chain)
     }
 
+  // B-297 (beacon): another writer, the import path's move of the consensus layer's branch, takes the head up the
+  // branch between the adoption's walk and its move. Moved to the block the walk found held, the head would go back down.
+  it should "not move the head back down when another writer took it up the branch, or past its tip, after its walk" taggedAs
+    (UnitTest, ConsensusTest) in {
+      // block 42, of the chain above the block the walk finds held (41); block 44, above the tip (43). Block 45 is
+      // Prague's, which these payloads do not carry
+      for to <- Seq(42, 44) do
+        val on = new Node
+        val chain = blocks.take(38)
+        chain.foreach(on.imports)
+        val recovery = new on.Recovery(maxBlocks = 1)
+        val (newPayload, _) = recoveringEngine(on, recovery)
+        val branch = blocks.slice(38, 44)
+        branch.take(3).foreach(block => newPayload(block).status shouldBe PayloadStatus.Valid)
+        branch.drop(3).foreach(block => on.writer.storeBlockByHashOnly(block).commit())
+        recovery.outcomes
+        val target = branch(to - 39)
+        // as the adoption looks whether it is still asked for, the blocks up to the target are executed and the head
+        // moved up to it
+        val moved = new java.util.concurrent.atomic.AtomicBoolean(false)
+        val racing = new StateRecovery.Sink:
+          def executed(
+              block: Block,
+              receipts: Seq[com.chipprbots.ethereum.domain.Receipt],
+              accessList: Option[com.chipprbots.ethereum.domain.BlockAccessList]
+          ): Unit = ()
+          def rejected(block: Block, error: BlockExecutionError, above: List[Block]): Unit = fail("rejected")
+          override def requestedHead: Option[ByteString] =
+            if !moved.getAndSet(true) then
+              branch.slice(3, to - 38).foreach(block => newPayload(block).status shouldBe PayloadStatus.Valid)
+              on.writer.moveHeadInPlace(target.header, on.reader)
+            Some(branch(5).header.hash.value)
+        withClue(s"the head moved to block $to: ") {
+          recovery
+            .requestFor(branch(4).header.hash.value, racing, "a test", StateRecovery.Authority.ForkChoice)
+            .outcome
+            .get(60, java.util.concurrent.TimeUnit.SECONDS) shouldBe StateRecovery.Outcome.Superseded
+          // nothing was moved back or committed: the head is where the other writer took it
+          recovery.adoptedBlocks shouldBe empty
+          on.holds(target.header, chain ++ branch.take(to - 38))
+        }
+    }
+
   // C5a part 8 (the user's decision of 2026-11-15): after a sync hands off the head is the pivot, and the consensus
   // client's head is a straight extension of it, longer than a branch is adopted over
 
@@ -2075,10 +2120,14 @@ class HeadMoveOnTheChainSpec extends ScalaTestWithActorTestKit with AnyFlatSpecL
     recovery.outcomes
     val before = on.everything
     val asked = recovery.tickets.size
+    // a fork choice that named it before, answered SYNCING, left it the head the import path follows
+    on.node.forkChoiceManager.notifyBeaconHead(choiceTo(side(4)))
     // the fork choice to its tip, a head never executed, is not consistent with the finalized block: -38002, and no
     // adoption is asked for (part 4b, the user's decision)
     choose(side(4)).left.toOption.getOrElse("") should startWith("invalid forkchoice state")
     recovery.tickets.size shouldBe asked
+    // which it is no longer (B-297): the import path follows the head followed last
+    on.node.forkChoiceManager.getRequestedHeadBlockHash shouldBe Some(chain.last.header.hash.value)
     // asked all the same, the adoption refuses before anything moves
     val named = new StateRecovery.Sink:
       def executed(

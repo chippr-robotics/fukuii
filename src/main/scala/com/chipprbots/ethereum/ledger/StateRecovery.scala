@@ -475,6 +475,9 @@ class StateRecovery(
               .flatMap(forkOf)
               .filter(_.number.value < fork.number.value)
               .getOrElse(fork)
+            // the head already on the branch, above `held`: another writer (the import path's move of the consensus
+            // layer's branch, B-297) took it there since the walk. Moved to `held` it would go back down
+            val ahead = aheadOfHeld(chain)
             if !asked() then Outcome.Superseded
             else
               // from the fork, where the chain the head leaves meets the branch, to the branch's tip (beacon)
@@ -489,11 +492,14 @@ class StateRecovery(
                         writer.moveHeadInPlace(
                           held,
                           reader,
-                          refuse = _ => Option.when(closed || !asked())("another head is named, or the node stops")
+                          refuse = _ => Option.when(closed || !asked())("another head is named, or the node stops"),
+                          admit = ahead.admit
                         )
                       None
                     catch
-                      case refused: StateFault =>
+                      // nothing was written: the head is past `held` on the branch, and the next fork choice goes on
+                      case _: StateFault if ahead.met => Some(Outcome.Superseded)
+                      case refused: StateFault        =>
                         // a move of more than one batch may have written some of them: the head goes back, unless
                         // the consensus client has named another head, whose fork choice moves it
                         if asked() && state.anchor != from then moveBack(sink, from)
@@ -572,6 +578,7 @@ class StateRecovery(
     if !asked() then Outcome.Superseded
     else
       adopting = Some(Progress(held.number.value, held.number.value, chain.last.number.value))
+      val ahead = aheadOfHeld(chain)
       try
         // the executed blocks kept beside the disk, up to the block the chain stands on, become the head first
         val refused =
@@ -580,13 +587,35 @@ class StateRecovery(
               writer.moveHeadInPlace(
                 held,
                 reader,
-                refuse = _ => Option.when(closed || !asked())("another head is named, or the node stops")
+                refuse = _ => Option.when(closed || !asked())("another head is named, or the node stops"),
+                admit = ahead.admit
               )
             None
           catch
+            case _: StateFault if ahead.met => Some(Outcome.Superseded)
             case fault: StateFault => Some(if asked() then Outcome.NotAdopted(fault.getMessage) else Outcome.Superseded)
         refused.getOrElse(next(chain, 0))
       finally adopting = None
+
+  /** The check, as a move to the block a chain stands on is admitted, that the head is not on that chain already, above
+    * it, nor on a chain that stands on its tip: another writer took it there after the walk (B-297, beacon). A move
+    * then would take the head back down, below a block it had reached; it is refused before anything is written, and
+    * `met` says so.
+    */
+  private def aheadOfHeld(chain: List[BlockHeader]): AheadOfHeld =
+    val tip = chain.last
+    // whether the block the head is at stands on the tip: followed down by its headers, at most as far as a new head of
+    // the consensus client's is followed down
+    def standsOnTheTip(anchor: BlockRef): Boolean =
+      @tailrec
+      def down(at: ByteString, left: Int): Boolean =
+        reader.getBlockHeaderByHash(BlockHash(at)) match
+          case Some(header) if header.number.value == tip.number.value => header.hash.value == tip.hash.value
+          case Some(header) if header.number.value > tip.number.value && left > 0 =>
+            down(header.parentHash.value, left - 1)
+          case _ => false
+      anchor.number > tip.number.value && down(anchor.hash, ExtendsSearch)
+    new AheadOfHeld(chain.iterator.map(_.hash.value).toSet, standsOnTheTip)
 
   /** Whether the consensus client still names `head`, or a block its chain leads to: a head that only extends the
     * branch does not stop its adoption, as go-ethereum goes on inserting a chain its new head extends (beacon).
@@ -849,6 +878,13 @@ object StateRecovery:
     BlockExecutionError.StateFaulted(
       new StateUnavailable("the adoption was stopped before the commit: another head is named, or the node stops")
     )
+
+  /** [[StateRecovery.aheadOfHeld]]'s check, and whether it refused a move. */
+  final private class AheadOfHeld(above: Set[ByteString], standsOnTheTip: BlockRef => Boolean):
+    @volatile var met: Boolean = false
+    val admit: com.chipprbots.ethereum.db.storage.pathstate.HeadMovePlan => Option[String] = plan =>
+      met = above(plan.anchor.hash) || standsOnTheTip(plan.anchor)
+      Option.when(met)(s"the head is at ${plan.anchor.show}, on the chain above the block it was to be moved to")
 
   sealed private trait Step
   private case object Moved extends Step

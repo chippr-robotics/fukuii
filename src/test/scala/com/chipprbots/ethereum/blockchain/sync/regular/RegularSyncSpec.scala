@@ -1533,6 +1533,52 @@ class RegularSyncSpec
           finally BlockImporter.exhaustBackoff = 5.minutes
       )
 
+      // Spec 018 C5a, B-297: the consensus layer's branch refused for what no attempt changes while the head stays (the
+      // finalized block, a depth the records do not reach). Fetched again it is refused again, without end: it is tried
+      // once, the fetcher goes on, what hangs from it is dropped with it, and nobody is blamed.
+      "not fetch again a branch refused while the head stays, nor what hangs from it: no peer blamed" taggedAs (
+        UnitTest,
+        SyncTest
+      ) in sync(
+        new Fixture:
+          val failingBlock: Block = testBlocksChunked.head.head
+          val attempts = new java.util.concurrent.atomic.AtomicInteger(0)
+          val askedAbout = new java.util.concurrent.ConcurrentLinkedQueue[BigInt]()
+          refusedWithTheirParent.set { blocks =>
+            askedAbout.add(blocks.head.number.value)
+            true
+          }
+          setImportResult(
+            failingBlock,
+            IO {
+              attempts.incrementAndGet()
+              BlockImportStateFault(
+                new com.chipprbots.ethereum.db.storage.pathstate.RefusedForThisHead(
+                  new com.chipprbots.ethereum.db.storage.pathstate.StateUnavailable("the finalized block")
+                )
+              )
+            }
+          )
+          peersClient.setAutoPilot(new PeersClientAutoPilot)
+
+          regularSync ! SyncProtocol.Start
+
+          awaitCond(attempts.get == 1, 15.seconds)
+          withClue("neither blacklisted nor evicted: ") {
+            peersClient
+              .receiveWhile(syncConfig.syncRetryInterval * 3) { case m => m }
+              .collect { case b: PeersClient.BlacklistPeer => b } shouldBe empty
+          }
+          // tried once: neither fetched again nor fetched from below by the batch that hangs from it, which is refused
+          // with it and never handed to consensus
+          withClue(s"asked about the batches from ${askedAbout.toArray.mkString(",")}: ") {
+            attempts.get shouldBe 1
+            askedAbout should not be empty
+            askedAbout.toArray.foreach(_.asInstanceOf[BigInt] should be > failingBlock.number.value)
+          }
+          importedBlocksSet.filter(_.number.value > failingBlock.number.value) shouldBe empty
+      )
+
       "recognise a block execution's trie error by the text it reaches the importer as" taggedAs (
         UnitTest,
         SyncTest
@@ -1789,6 +1835,36 @@ class RegularSyncSpec
               case _                                       => false
           case _ => false
         }
+      )
+    }
+
+    // B-297 (forge): a reorganisation on the unified layout tells the side blocks it stands on too. Each block is
+    // broadcast with its own total difficulty, never another block's: two lists combined by `mapN` were every pairing.
+    "broadcasting blocks told together" should {
+      "send each with its own total difficulty" in sync(new OnTopFixture:
+        val sideParent: Block = BlockHelpers.generateBlock(testBlocks.init.last)
+        val told: Block = BlockHelpers.generateBlock(sideParent)
+        override def newBlockResult: BlockImportResult =
+          ChainReorganised(
+            Nil,
+            List(sideParent, told),
+            List(ChainWeight.totalDifficultyOnly(1111), ChainWeight.totalDifficultyOnly(2222))
+          )
+        goToTop()
+
+        val peers: GetHandshakedPeersCmd = networkPeerManager.expectMsgType[GetHandshakedPeersCmd]
+        peers.replyTo ! HandshakedPeers(handshakedPeers)
+
+        regularSync ! SyncProtocol.MinedBlock(newBlock)
+
+        val sent: Set[(Block, BigInt)] = networkPeerManager
+          .receiveWhile(max = 5.seconds, idle = 1.second) {
+            case NetworkPeerManagerActor.SendMessageCmd(message, _) => message.underlyingMsg
+            case other                                              => other
+          }
+          .collect { case NewBlock(block, totalDifficulty) => (block, totalDifficulty) }
+          .toSet
+        sent shouldBe Set(sideParent -> BigInt(1111), told -> BigInt(2222))
       )
     }
 

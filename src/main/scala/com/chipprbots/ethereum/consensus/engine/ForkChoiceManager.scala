@@ -266,6 +266,23 @@ class ForkChoiceManager(
     )
     publishBeaconHead(newState.headBlockHash, maybeHeader)
 
+  /** A head the Engine API refused as inconsistent with the finalized block (-38002) is not the head the consensus
+    * layer asks for (spec 018 C5a, B-297): left as the requested head, the p2p import path would go on following its
+    * branch, which is refused at every attempt. The requested head goes back to the head of the last fork choice
+    * followed.
+    *
+    * Only while it is still `hash`: a fork choice that has named another head since is not overwritten. Compared by
+    * value, as two refused fork choices to the same head hold two different `Option`s.
+    */
+  def forgetRefused(hash: ByteString): Unit =
+    val now = requestedHead.updateAndGet(current =>
+      if current.contains(hash) then currentState.get().map(_.headBlockHash) else current
+    )
+    if !now.contains(hash) then
+      log.info(
+        s"Fork choice head ${ForkChoiceManager.hex(hash)} refused: the requested head is ${now.map(ForkChoiceManager.hex)}"
+      )
+
   /** Clear fork choice state (e.g., on shutdown or mode switch). */
   def clear(): Unit =
     currentState.set(None)
