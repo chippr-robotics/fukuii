@@ -3579,3 +3579,14 @@ items:
     links:
       spec: 018
     notes: "Found 2026-11-16 while building B-307 (c1): fails alone and in the whole spec, on plain staging too; isSnapSyncAccountsComplete is false after the start. Not known whether CI runs it."
+  - id: B-310
+    title: "B-307 follow-ups: a failed pivot refresh does not feed the off-branch peers; network best is not filtered; rested header peers also rest for bodies"
+    priority: P2
+    status: open
+    area: snap
+    size: S
+    opened: 2026-11-16
+    refs: []
+    links:
+      spec: 018
+    notes: "forge, 2026-11-16, review of #1870 (c2): PivotRefresher ignores PivotBootstrapFailed.offBranch and has no time bound; currentNetworkBestFromSnapPeers (PivotSelector) is not filtered by OffBranchPeers; emptyHeaderPeers keeps a peer on another chain out of body and receipt requests for the same 10 minutes."
