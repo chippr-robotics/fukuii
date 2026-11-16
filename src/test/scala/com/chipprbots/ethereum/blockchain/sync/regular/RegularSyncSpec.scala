@@ -109,7 +109,11 @@ class RegularSyncSpec
     */
   abstract class ForkRecoveryOnTheUnifiedLayout(
       name: String,
-      refusal: Option[com.chipprbots.ethereum.db.storage.pathstate.ReorgTooDeep] = None
+      refusal: Option[com.chipprbots.ethereum.db.storage.pathstate.ReorgTooDeep] = None,
+      // false: the recovery is left to the importer, which starts one when an import has failed often enough
+      recoveryStarted: Boolean = true,
+      // false: the same importer on the hash layout
+      unified: Boolean = true
   ) extends Fixture:
     val capturedBest: BigInt = testBlocks.last.number.value
     val lca: BigInt = BigInt(10)
@@ -130,7 +134,7 @@ class RegularSyncSpec
       override def readoptBlockStates(blocks: Seq[(BigInt, ByteString)]): Unit = ()
 
     override lazy val blockchainWriter: BlockchainWriter = stub[BlockchainWriter]
-    (() => blockchainWriter.holdsStateInPlace).when().returns(true)
+    (() => blockchainWriter.holdsStateInPlace).when().returns(unified)
     (blockchainWriter.refusalOfMoveBackTo(_: BlockHeader, _: BlockchainReader)).when(*, *).returns(refusal)
 
     val importerFetcher: TestProbe = TestProbe(s"$name-fork-fetcher")
@@ -169,7 +173,7 @@ class RegularSyncSpec
     )
     importerFetcher.expectMsgClass(3.seconds, classOf[BlockFetcher.Start])
     importerSupervisor.expectMsgClass(3.seconds, classOf[RegularSync.ProgressProtocol.StartingFrom])
-    importer ! BlockImporter.StartForkRecovery(BigInt(15))
+    if recoveryStarted then importer ! BlockImporter.StartForkRecovery(BigInt(15))
 
     /** What the fetcher, and the supervisor, were sent that no assertion has taken yet: until neither is sent more. */
     def toTheFetcher(): Seq[Any] = importerFetcher.receiveWhile(max = 2.seconds, idle = 300.millis) { case m => m }
@@ -184,6 +188,49 @@ class RegularSyncSpec
         .verify(*, *, *)
         .never()
       abandoned.isEmpty shouldBe true
+
+  /** An importer on the unified state layout whose every import of block 15 fails as an invalid block: the importer
+    * starts the fork recovery itself (B-300).
+    */
+  abstract class ImportThatKeepsFailingOnTheUnifiedLayout(name: String)
+      extends ForkRecoveryOnTheUnifiedLayout(name, recoveryStarted = false):
+    // a block of another chain at height 15: one of this node's own is dropped from a batch before it is imported
+    val failing: Block =
+      val own = testBlocks.find(_.number.value == 15).get
+      own.copy(header = own.header.copy(extraData = ByteString("of another chain")))
+    // what the importer says of its own block at that height when it detects the fork
+    (blockchainReader
+      .getBlockHeaderByNumber(_: BigInt))
+      .when(BigInt(15))
+      .returns(testBlocks.find(_.number.value == 15).map(_.header))
+    val imports = new java.util.concurrent.atomic.AtomicInteger(0)
+    val importsBegun = new java.util.concurrent.atomic.AtomicInteger(0)
+    // held while a test looks at the importer in the middle of an import
+    @volatile var holdTheImport: Option[java.util.concurrent.CountDownLatch] = None
+
+    override lazy val consensusAdapter: ConsensusAdapter = new ConsensusAdapter(null, null, null, null, null):
+      override def evaluateBranch(blocks: NonEmptyList[Block])(implicit
+          blockExecutionScheduler: IORuntime,
+          blockchainConfig: BlockchainConfig
+      ): IO[BlockImportResult] =
+        IO.blocking {
+          importsBegun.incrementAndGet()
+          holdTheImport.foreach(_.await(30, java.util.concurrent.TimeUnit.SECONDS))
+          imports.incrementAndGet()
+          BlockImportFailed("invalid")
+        }
+
+    override lazy val branchResolution: BranchResolution = new BranchResolution(blockchainReader):
+      override def resolveBranch(headers: NonEmptyList[BlockHeader]): BranchResolutionResult =
+        NewBetterBranch(Nil)
+
+    /** One more batch that is block 15 alone, and the import of it ended. */
+    def failOnce(): Unit =
+      val before = imports.get()
+      importer ! BlockImporter.FetcherResponse(BlockFetcher.PickedBlocks(NonEmptyList.one(failing)))
+      val deadline = System.nanoTime() + java.util.concurrent.TimeUnit.SECONDS.toNanos(30)
+      while imports.get() <= before && System.nanoTime() < deadline do Thread.onSpinWait()
+      imports.get() shouldBe before + 1
 
   def sync[T <: Fixture](test: => T): Future[Assertion] =
     import scala.concurrent.ExecutionContext.Implicits.global
@@ -600,6 +647,154 @@ class RegularSyncSpec
           nothingMoved()
           // nothing is escalated: a state that cannot be synced again from here is the escalation's (C5a)
           toTheSupervisor().collect { case stuck: SyncProtocol.RegularSyncStuck => stuck } shouldBe Nil
+          testKit.stop(importer)
+      )
+
+      // B-300 W3 (forge): an announced block imported while a branch is fetched ended the resolution, so the next
+      // pick was a plain one and the branch was never weighed whole
+      "import no announced block while a branch is fetched, and keep fetching the branch after a mined one, on the unified state layout" taggedAs (
+        UnitTest,
+        SyncTest
+      ) in sync(
+        new ForkRecoveryOnTheUnifiedLayout("announced"):
+          importer ! BlockImporter.BranchResolverMsg(
+            FastSyncBranchResolverActor.BranchResolvedSuccessful(lca, defaultPeer)
+          )
+          importerFetcher.fishForSpecificMessage(5.seconds) { case m: BlockFetcher.StrictPickBlocks => m }
+          val own = testBlocks.last
+          val announced: Block = own.copy(header = own.header.copy(extraData = ByteString("announced")))
+          importer ! BlockImporter.ImportNewBlock(announced, defaultPeer.id)
+          importer ! BlockImporter.PickBlocks
+          val afterTheAnnounce: BlockFetcher.StrictPickBlocks = importerFetcher.fishForSpecificMessage(5.seconds) {
+            case m: BlockFetcher.StrictPickBlocks => m
+          }
+          (afterTheAnnounce.from, afterTheAnnounce.atLEastWith) shouldBe (lca + 1, capturedBest)
+          importedBlocksSet.contains(announced) shouldBe false
+
+          // a block mined here is imported, and the branch is still the one being fetched when its import has ended
+          val mined: Block = own.copy(header = own.header.copy(extraData = ByteString("mined")))
+          importer ! BlockImporter.MinedBlock(mined)
+          val imported: Long = System.nanoTime() + java.util.concurrent.TimeUnit.SECONDS.toNanos(30)
+          while !importedBlocksSet.contains(mined) && System.nanoTime() < imported do Thread.onSpinWait()
+          importedBlocksSet.contains(mined) shouldBe true
+          toTheFetcher().collect { case m: BlockFetcher.PickBlocks => m } shouldBe Nil
+          importer ! BlockImporter.PickBlocks
+          val afterTheMined: BlockFetcher.StrictPickBlocks = importerFetcher.fishForSpecificMessage(5.seconds) {
+            case m: BlockFetcher.StrictPickBlocks => m
+          }
+          (afterTheMined.from, afterTheMined.atLEastWith) shouldBe (lca + 1, capturedBest)
+          nothingMoved()
+          testKit.stop(importer)
+      )
+
+      "end the resolution of a branch when a mined block's import ends, on the hash layout, as it always has" taggedAs (
+        UnitTest,
+        SyncTest
+      ) in sync(
+        new ForkRecoveryOnTheUnifiedLayout("hash-mined", recoveryStarted = false, unified = false):
+          // a batch whose parent this node does not know: the importer goes back and resolves the branch
+          override lazy val branchResolution: BranchResolution = new BranchResolution(blockchainReader):
+            override def resolveBranch(headers: NonEmptyList[BlockHeader]): BranchResolutionResult = UnknownBranch
+          val own = testBlocks.last
+          importer ! BlockImporter.FetcherResponse(BlockFetcher.PickedBlocks(NonEmptyList.one(own)))
+          importerFetcher.fishForSpecificMessage(5.seconds) { case m: BlockFetcher.StrictPickBlocks => m }
+          val mined: Block = own.copy(header = own.header.copy(extraData = ByteString("mined")))
+          importer ! BlockImporter.MinedBlock(mined)
+          val imported: Long = System.nanoTime() + java.util.concurrent.TimeUnit.SECONDS.toNanos(30)
+          while !importedBlocksSet.contains(mined) && System.nanoTime() < imported do Thread.onSpinWait()
+          importedBlocksSet.contains(mined) shouldBe true
+          // the pick that follows the mined block's import is a plain one
+          val picks: Seq[Any] = toTheFetcher().collect {
+            case m: BlockFetcher.PickBlocks       => m
+            case m: BlockFetcher.StrictPickBlocks => m
+          }
+          picks should not be empty
+          picks.collect { case m: BlockFetcher.StrictPickBlocks => m } shouldBe Nil
+          testKit.stop(importer)
+      )
+
+      // B-300 (forge): nothing is rewound on the unified layout, so the block that started a recovery fails again
+      // after it; without the latch every fifth failure would start another, for ever
+      "make one fork recovery for a block that keeps failing, and go on evicting the peer that serves it, on the unified state layout" taggedAs (
+        UnitTest,
+        SyncTest
+      ) in sync(
+        new ImportThatKeepsFailingOnTheUnifiedLayout("latch"):
+          var evictedAt: Vector[Int] = Vector.empty
+          var recoveries = 0
+          (1 to 15).foreach { failure =>
+            failOnce()
+            val sent = toTheFetcher()
+            if sent.exists(_.isInstanceOf[BlockFetcher.BlockImportFailed]) then evictedAt :+= failure
+            recoveries += sent.count {
+              case m: BlockFetcher.InvalidateBlocksFrom => m.fromBlock == lca + 1
+              case _                                    => false
+            }
+            if failure == 6 then
+              // the import of a batch ends the resolution, as it ends: the pick that follows is a plain one
+              sent.collect { case m: BlockFetcher.StrictPickBlocks => m } shouldBe Nil
+              sent.collect { case m: BlockFetcher.PickBlocks => m } should not be empty
+            if failure == 5 then
+              // the fifth failure started the recovery: the resolver's answer is given here
+              importer ! BlockImporter.BranchResolverMsg(
+                FastSyncBranchResolverActor.BranchResolvedSuccessful(lca, defaultPeer)
+              )
+              val invalidate: InvalidateBlocksFrom = importerFetcher.fishForSpecificMessage(5.seconds) {
+                case m: BlockFetcher.InvalidateBlocksFrom if m.fromBlock == lca + 1 => m
+              }
+              invalidate.toBlacklist shouldBe None
+              recoveries += 1
+              // the pick that follows spans the fork
+              val pick: BlockFetcher.StrictPickBlocks = importerFetcher.fishForSpecificMessage(5.seconds) {
+                case m: BlockFetcher.StrictPickBlocks => m
+              }
+              (pick.from, pick.atLEastWith) shouldBe (lca + 1, capturedBest)
+          }
+          // one recovery, at the fifth failure: the tenth and the fifteenth start none
+          recoveries shouldBe 1
+          // the peer that serves the block is dropped at every third failure, counted again from the recovery and
+          // from each fifth failure after it, where the strikes start again
+          evictedAt shouldBe Vector(3, 8, 13)
+          nothingMoved()
+          testKit.stop(importer)
+      )
+
+      // B-300 (forge): the import that starts a recovery sends the fetcher back to the block that failed as it ends,
+      // and its end clears the branch being resolved; an answer acted on before that would be undone by both
+      "hold the resolver's answer until the import under way has ended, on the unified state layout" taggedAs (
+        UnitTest,
+        SyncTest
+      ) in sync(
+        new ImportThatKeepsFailingOnTheUnifiedLayout("held"):
+          val release = new java.util.concurrent.CountDownLatch(1)
+          holdTheImport = Some(release)
+          importer ! BlockImporter.FetcherResponse(BlockFetcher.PickedBlocks(NonEmptyList.one(failing)))
+          val entered: Long = System.nanoTime() + java.util.concurrent.TimeUnit.SECONDS.toNanos(30)
+          while importsBegun.get() < 1 && System.nanoTime() < entered do Thread.onSpinWait()
+          importsBegun.get() shouldBe 1
+          // a recovery is started while that import runs, and the resolver answers at once
+          importer ! BlockImporter.StartForkRecovery(BigInt(15))
+          importer ! BlockImporter.BranchResolverMsg(
+            FastSyncBranchResolverActor.BranchResolvedSuccessful(lca, defaultPeer)
+          )
+          // nothing is done about the answer while the import runs
+          toTheFetcher().collect { case m: BlockFetcher.InvalidateBlocksFrom => m.fromBlock } shouldBe Nil
+          release.countDown()
+          // the import ends: it sends the fetcher back to the block that failed, and only then is the answer acted on
+          val rewinds: Seq[BigInt] = Seq(
+            importerFetcher.fishForSpecificMessage(5.seconds) { case m: BlockFetcher.InvalidateBlocksFrom =>
+              m.fromBlock
+            },
+            importerFetcher.fishForSpecificMessage(5.seconds) { case m: BlockFetcher.InvalidateBlocksFrom =>
+              m.fromBlock
+            }
+          )
+          rewinds shouldBe Seq(BigInt(15), lca + 1)
+          val pick: BlockFetcher.StrictPickBlocks = importerFetcher.fishForSpecificMessage(5.seconds) {
+            case m: BlockFetcher.StrictPickBlocks => m
+          }
+          (pick.from, pick.atLEastWith) shouldBe (lca + 1, capturedBest)
+          nothingMoved()
           testKit.stop(importer)
       )
 

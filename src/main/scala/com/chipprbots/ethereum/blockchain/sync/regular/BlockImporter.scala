@@ -508,6 +508,19 @@ final private class BlockImporterLogic(
 
       case _: MinedBlock => Behaviors.same
 
+      // On the unified state layout a fork recovery moves nothing: the branch is fetched whole, from the common block,
+      // and weighed against this node's own (spec 018 C4e part 6). An announced block imported meanwhile ended the
+      // resolution as its import ended, and one whose parent this node lacks sent the fetcher off to the announced
+      // tip: a fork longer than a block time was never fetched whole (B-300; forge). The block is not lost: it is of
+      // the branch being fetched, or of this node's chain, which the peers serve again.
+      case ImportNewBlock(block, _) if blockchainWriter.holdsStateInPlace && state.isResolvingBranch =>
+        log.debug(
+          "Announced block {} is not imported while the branch from block {} is fetched",
+          block.number,
+          state.resolvingBranchFrom.getOrElse(BigInt(0))
+        )
+        Behaviors.same
+
       case ImportNewBlock(block, peerId) if !state.importing =>
         importBlock(
           block,
@@ -527,7 +540,11 @@ final private class BlockImporterLogic(
         exhaustedDuringImport = false
         // Always Nil on a PoW chain (nothing is ever deferred there), which leaves every arm below as it was.
         val deferred = state.deferredBatches
-        val newState = state.notImportingBlocks().branchResolved().withoutDeferredBatches()
+        // On the unified layout only a batch's import ends the resolution of a branch: a block imported on its own
+        // (mined here) says nothing of the branch that is being fetched (B-300).
+        val keepsTheBranch = blockchainWriter.holdsStateInPlace && importType != DefaultBlockImport
+        val ended = state.notImportingBlocks().withoutDeferredBatches()
+        val newState = if keepsTheBranch then ended else ended.branchResolved()
         newBehavior match
           case Running =>
             // Oldest first, and ahead of the PickBlocks, so the batches reach importBlocks in fetch order. Each is then
