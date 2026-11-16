@@ -3630,3 +3630,15 @@ items:
       since: 2026-11-16T20:16:07Z
       heartbeat: 2026-11-16T20:16:07Z
     notes: "Left of B-307 (f) after #1866 and #1870. The min pivot reaching the SNAP child is tested for the retry (SyncControllerSpec, MinPivotBlock(4001)); not for the first escalation."
+  - id: B-312
+    title: Cut v0.12.0 after C5a part 10, before the part 11 measurements (user, 2026-11-16)
+    priority: P1
+    status: open
+    area: release
+    size: S
+    opened: 2026-11-16
+    refs: []
+    links:
+      spec: 018
+    depends_on: [B-064]
+    notes: "The measurements (T207-T209) run on the release. Release process: see docs/development and the release workflows."
