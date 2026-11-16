@@ -3497,7 +3497,7 @@ items:
   - id: B-303
     title: After a clear for an escalation, the index of blocks by number and the header cursor still name the old chain above the fork
     priority: P1
-    status: open
+    status: claimed
     area: storage
     size: M
     opened: 2026-11-15
@@ -3505,6 +3505,11 @@ items:
     links:
       spec: 018
     depends_on: [B-064]
+    claim:
+      by: cloud-dc960fdc
+      agent: main
+      since: 2026-11-16T07:28:26Z
+      heartbeat: 2026-11-16T07:28:26Z
     notes: "Vault, C5a part 5a (2026-11-15). PathStateStorage.clearForResync keeps the old chain's headers, the index by number and the backfill cursors, and sets the best block to genesis. After an escalation for a chain that cannot be reached, heights in (fork, old best] name blocks of the chain that was left; a sync that follows would find its headers 'contiguous to the pivot' on the wrong chain, and getBlockHeaderByNumber above the new pivot answers old blocks. The escalation handler (C5a part 7) knows the common block: it must delete the index above it and set the header cursor back to it, in the clear's batch or before a sync starts; the hand-off (part 5b) writes the pivot's own number. Gate on arming the escalation. plan.md 'C5a part 5a'."
   - id: B-304
     title: "A hand-off's sample that keeps failing restarts the sync without a bound: count, metric, stop after three"
