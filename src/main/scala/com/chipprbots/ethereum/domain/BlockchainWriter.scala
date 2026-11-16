@@ -493,6 +493,9 @@ class BlockchainWriter(
     */
   def failStateClosed(why: String): Unit = pathState.foreach(_.failClosed(why))
 
+  /** Whether the state on the unified layout has failed closed: it takes no write and gives none out. */
+  def stateFailedClosed: Boolean = pathState.exists(_.hasFailedClosed)
+
   /** Drops the forward layer of `blockHash` on the unified layout, with the layers built on it
     * ([[PathStateStorage.dropLayer]]): the block was found invalid after it was executed, and no fork choice may move
     * the head to it. Nothing on the hash layout.

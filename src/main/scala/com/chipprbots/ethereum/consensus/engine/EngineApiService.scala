@@ -57,7 +57,10 @@ class EngineApiService(
     // The recovery of a state that is no longer held (spec 018 C4d part 3): the stored blocks of a head whose state was
     // lost (a restart, a layer that did not fit) are executed again on a thread of its own, while the consensus client
     // is answered ACCEPTED or SYNCING. Only on the unified layout; `None` on the hash store and for specs.
-    stateRecovery: Option[com.chipprbots.ethereum.ledger.StateRecovery] = None
+    stateRecovery: Option[com.chipprbots.ethereum.ledger.StateRecovery] = None,
+    // What is made of each recovery a fork choice asked for (spec 018 C5a part 6): when the node cannot follow the
+    // head it is named, it says that its state is to be given up for a sync from scratch. It says only, for now.
+    escalationWatch: Option[com.chipprbots.ethereum.blockchain.sync.EscalationWatch] = None
 )(implicit blockchainConfig: BlockchainConfig, typedScheduler: org.apache.pekko.actor.typed.Scheduler)
     extends Logger:
 
@@ -359,7 +362,31 @@ class EngineApiService(
       authority: com.chipprbots.ethereum.ledger.StateRecovery.Authority =
         com.chipprbots.ethereum.ledger.StateRecovery.Authority.Payload
   ): Unit =
-    stateRecovery.foreach(_.requestFor(hash, recoverySink, why, authority))
+    stateRecovery.foreach { recovery =>
+      val ticket = recovery.requestFor(hash, recoverySink, why, authority)
+      // Only what a fork choice asked for is counted: the consensus client names a head with it, and a payload's
+      // recovery never moves the head. A recovery that is cooling down ends at once, with what it ended with last:
+      // each fork choice that names the head again counts once. Fork choices that find a recovery under way share its
+      // ticket, and count once for all of them: while it runs the node is at work on the head, not refusing it.
+      if authority == com.chipprbots.ethereum.ledger.StateRecovery.Authority.ForkChoice then
+        escalationWatch.foreach { watch =>
+          if watchedRecoveries.add(ticket) then
+            val askedIn = watch.currentRun
+            ticket.outcome.whenComplete { (outcome, failure) =>
+              watchedRecoveries.remove(ticket)
+              try
+                if failure == null then watch.ended(outcome, hexOf(hash), askedIn)
+                else log.error("[STATE-ESCALATION] a recovery ended with no outcome", failure)
+              catch
+                case scala.util.control.NonFatal(e) =>
+                  log.error("[STATE-ESCALATION] the end of a recovery could not be counted", e)
+            }
+        }
+    }
+
+  // the recoveries whose end the escalation's watch is told of: each once
+  private val watchedRecoveries =
+    java.util.concurrent.ConcurrentHashMap.newKeySet[com.chipprbots.ethereum.ledger.StateRecovery.Ticket]()
 
   /** Whether `head`'s chain, followed down by its stored headers, leaves out the finalized block this node was told of
     * last (spec 018 C4d part 4b). A chain whose headers run out above that height, or that is not followed that far,
@@ -1025,6 +1052,7 @@ class EngineApiService(
           hexOf(forkChoiceState.headBlockHash),
           bestBlockNumber
         )
+        escalationWatch.foreach(_.headMoved())
         EngineApiMetrics.recordForkchoiceUpdated("VALID")
         IO.pure(
           Right(
@@ -1066,6 +1094,7 @@ class EngineApiService(
               hexOf(forkChoiceState.headBlockHash),
               blockchainReader.getBestBlockNumber
             )
+            escalationWatch.foreach(_.headMoved())
             EngineApiMetrics.recordForkchoiceUpdated("VALID")
             IO.pure(
               Right(
@@ -1089,10 +1118,28 @@ class EngineApiService(
                 "forkchoiceUpdated to a head whose state is not held",
                 com.chipprbots.ethereum.ledger.StateRecovery.Authority.ForkChoice
               )
+            // a head that no recovery is asked for: the fork choice itself says why it was not followed (C5a part 6)
+            else if refused.startsWith(ForkChoiceManager.Unreachable) then
+              escalationWatch.foreach(
+                _.refusedUnreachable(
+                  hexOf(forkChoiceState.headBlockHash),
+                  refused.stripPrefix(ForkChoiceManager.Unreachable)
+                )
+              )
+            else if refused.startsWith(ForkChoiceManager.LocalFault) then
+              escalationWatch.foreach(
+                _.refusedForAFault(
+                  hexOf(forkChoiceState.headBlockHash),
+                  refused.stripPrefix(ForkChoiceManager.LocalFault)
+                )
+              )
             EngineApiMetrics.recordForkchoiceUpdated("SYNCING")
             IO.pure(Right(ForkchoiceUpdatedResponse(payloadStatus = PayloadStatusV1(Syncing))))
 
           case Right(()) =>
+            // the node follows the head it was named: whatever it could not follow before is behind it (the head is
+            // set even when the attributes that came with it are refused below)
+            escalationWatch.foreach(_.headMoved())
             // The head is set: go-ethereum's `api.eth.SetSynced()`, which opens tx gossip from peers (eth/catalyst/api.go,
             // after SetCanonical and before the finalized/safe updates and payload building).
             txGossipGate.foreach(_.markSynced("forkchoiceUpdated set the head"))

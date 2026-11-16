@@ -3796,6 +3796,53 @@ the one write holds. The tables of the controller's messages have the two new on
 mutants, 23 caught (one after a test was added: the code of the sampled accounts is looked for in the node's own
 store).
 
+#### C5a part 6a: a node says when it cannot follow the chain, on proof of stake (2026-11-16)
+
+Part 6 is in two: proof of stake here, proof of work in 6b. **It says only**: an ERROR line
+(`[STATE-ESCALATION]`) and a count (`db.state.recovery.escalation.triggers`, by kind). Nothing is cleared and no
+sync begins; the handler is part 7. On the unified layout only.
+
+- **`EscalationTrigger`** (T163), the user's decision of 2026-11-15: a head that cannot be reached is an escalation
+  at once; a fault of this node waits for 64 refused fork choices in a row **and** 64 slots from the first; on proof
+  of work (6b) for 64 blocks of growth of the branch that is refused. One count, begun again by any move of the head.
+- **`EscalationWatch`** feeds it and says when the verdict is to give the state up: counted each time, said once for
+  a run. A run is numbered: a recovery asked for before the head moved and ended after it is dropped (beacon).
+- **What the Engine API tells it**:
+  - how each recovery that a fork choice asked for ended. A recovery that is cooling down ends at once as it ended
+    last, so each fork choice that names the head again counts once; fork choices that find one under way share its
+    ticket and count once for all of them (beacon: while it runs the node is at work on the head, not refusing it);
+  - a fork choice refused where no recovery is asked for, which the fork choice manager now says for what it is:
+    `UNREACHABLE:` for a move deeper than the records reach, past a record that is not whole, or below the block the
+    state began at; `LOCAL FAULT:` for records that are corrupt and for every fork choice refused while the state is
+    failed closed. The consensus client is answered SYNCING as before;
+  - **a head that is followed**: the fork choice that sets the head, and the two that name an ancestor of it and
+    are answered VALID. Not a payload, which never moves the head.
+- **`StateMetrics`** (T174): `recovery.escalation.triggers` (now), `recovery.escalations` and
+  `recovery.escalations.suppressed` (for part 7), `recovery.reexecuted.blocks` (not yet counted: 6b).
+
+**What is "cannot be reached", as built** (beacon's read after code, three blockers, taken). Only what is known:
+more blocks than a recovery covers have no state held (`TooLong`), and the manager's three refusals above.
+**A branch that was not committed in place, and a header or a body of the head's chain that is not stored, wait**
+with the faults: a branch is not adopted for many reasons, a fault of the state among them, and the outcome does not
+say which; a block that is missing may be on its way. Counted as what may mend, they cost a node that cannot follow
+the chain some thirteen minutes; counted as what cannot, they would cost a node that can its state.
+
+**Found by the tests**: a plain "state not held" from the move of the head is also what a fork choice that names an
+ancestor of the head gets, so it is not read as a chain that cannot be reached; it says nothing unless the state has
+failed closed.
+
+**Not counted yet**: a layer that is inconsistent again and again ends a recovery as superseded, which says nothing
+(beacon). **Not tested at the Engine API**: the two prefixed refusals reaching the watch; the manager's answers and
+the watch's handling are each tested, the line between them is not (it needs a move across a missing record made
+through the Engine API). **For part 7** (beacon): the watch tells its verdict on the recovery's thread, inside its
+own monitor, so the handler takes the work to an actor and does not clear or close anything inline. The slot is
+taken as 12 s: no chain here says otherwise, and a shorter slot only lengthens the wait.
+
+**Tests**: `EscalationTriggerSpec` (9), `EscalationWatchSpec` (8), `StateMetricsSpec` (+1), and in
+`HeadMoveOnTheChainSpec`: each fork choice refused for a fault counts once, a head that is followed and an ancestor
+that is named begin the run again, corrupt records are answered as a fault. **The mutation run**: 13 mutants,
+13 caught.
+
 ### Destructive change (C8a and C8b): the vault protocol blocks
 
 ```

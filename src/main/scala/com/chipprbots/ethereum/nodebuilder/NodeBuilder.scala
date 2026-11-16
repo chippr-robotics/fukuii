@@ -1047,6 +1047,29 @@ trait EngineApiBuilder extends Logger:
       )(using blockchainConfig)
     }
 
+  /** The count of what the node could not follow, on the unified layout (spec 018 C5a part 6): 64 refused fork choices
+    * in a row for a fault of this node, and no less than 64 slots; at once for a chain that cannot be reached. '''It
+    * says only''': an ERROR line and a count. The handler that gives the state up is part 7.
+    */
+  lazy val escalationWatch: Option[com.chipprbots.ethereum.blockchain.sync.EscalationWatch] =
+    stateRecovery.map { _ =>
+      import com.chipprbots.ethereum.blockchain.sync.EscalationTrigger
+      import com.chipprbots.ethereum.blockchain.sync.EscalationWatch
+      import com.chipprbots.ethereum.db.storage.pathstate.StateMetrics
+      val refusals =
+        com.chipprbots.ethereum.db.storage.pathstate.StateConfig(instanceConfig.config).recovery.escalationRefusals
+      new EscalationWatch(
+        new EscalationTrigger(refusals, refusals * EscalationWatch.SlotMillis),
+        () => System.currentTimeMillis(),
+        StateMetrics.escalationTriggered,
+        (kind, why) =>
+          log.error(
+            s"[STATE-ESCALATION] This node cannot follow the chain with the state it has (${kind.text}): $why. Its " +
+              "state would be given up for a sync from scratch; nothing is done about it yet (spec 018 C5a part 7)."
+          )
+      )
+    }
+
   lazy val engineApiService: EngineApiService =
     given typedScheduler: org.apache.pekko.actor.typed.Scheduler = classicSystem.toTyped.scheduler
     new EngineApiService(
@@ -1061,7 +1084,8 @@ trait EngineApiBuilder extends Logger:
       reorgState = blockchain,
       txGossipGate = Some(txGossipGate),
       stateHeldInPlace = storagesInstance.storages.pathStateStorage.map(state => () => state.anchor.map(_.hash)),
-      stateRecovery = stateRecovery
+      stateRecovery = stateRecovery,
+      escalationWatch = escalationWatch
     )(using blockchainConfig, typedScheduler)
 
   // The controller's fork gates read the same schedule its service executes with (not the process-global config, which
