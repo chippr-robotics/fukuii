@@ -150,6 +150,25 @@ class ChainDownloader private (
   // good (stalling the header download on a small peer set). Unset keeps the original permanent exclusion.
   private var emptyHeaderPeers: Map[PeerId, Long] = Map.empty
 
+  /** After an escalation for a branch the sync's pivot is to be on that branch (B-307 c2): a response that holds
+    * another block at the branch's height is not stored, and its peer is not asked for headers for
+    * [[ChainDownloader.OffBranchHeaderBackoff]]. The peer is not blacklisted: it follows another chain, honestly.
+    */
+  private def offTheRequiredBranch(peer: Peer, usable: IndexedSeq[BlockHeader]): Boolean =
+    PivotAnchor.branchGate(appStateStorage, usable, nowMs()) match
+      case PivotAnchor.BranchGate.Pass => false
+      case PivotAnchor.BranchGate.Expired(why) =>
+        log.error(PivotAnchor.requirementDroppedText(why))
+        false
+      case PivotAnchor.BranchGate.Refuse(required, found) =>
+        log.warn(
+          s"${PivotAnchor.PivotOnBranchTag} Chain download: peer ${peer.id} serves ${found.hashAsHexString} at block " +
+            s"${required.number}, and the branch this node gave its state up for has another block there: nothing of " +
+            s"its response is stored, and it is not asked for headers for ${ChainDownloader.OffBranchHeaderBackoff}"
+        )
+        emptyHeaderPeers += peer.id -> (nowMs() + ChainDownloader.OffBranchHeaderBackoff.toMillis)
+        true
+
   private def headerExcluded(peerId: PeerId): Boolean =
     emptyHeaderPeers.get(peerId) match
       case Some(expiresAtMs) if expiresAtMs > nowMs() => true
@@ -869,7 +888,10 @@ class ChainDownloader private (
                       parentWeight = parentWeight.increase(header)
                       accepted += 1
 
-              val stored = if failure.isDefined && headerChainCheck.validatesChain then 0 else accepted
+              val valid = if failure.isDefined && headerChainCheck.validatesChain then 0 else accepted
+              // B-307: asked of the headers that passed, so that a header no chain has is its peer's fault and
+              // begins no wait for the branch (forge)
+              val stored = if valid > 0 && offTheRequiredBranch(peer, usable.take(valid)) then 0 else valid
               if stored > 0 then
                 val run = usable.take(stored)
                 val weights = run.scanLeft(tipWeight)((weight, header) => weight.increase(header)).tail
@@ -1590,6 +1612,13 @@ class ChainDownloader private (
     timers.startTimerWithFixedDelay(DispatchKey, Dispatch, interval)
 
 object ChainDownloader:
+
+  /** How long a peer that served another chain at the height of the branch a sync is bound to (B-307) is not asked for
+    * headers. Long enough that the other peers are asked first, short enough that a peer whose chain has since
+    * reorganized onto the branch is asked again within the wait ([[PivotAnchor.BranchWaitMillis]]).
+    */
+  val OffBranchHeaderBackoff: scala.concurrent.duration.FiniteDuration =
+    scala.concurrent.duration.FiniteDuration(10, java.util.concurrent.TimeUnit.MINUTES)
 
   /** Sealed inbound protocol. Classic parents (SyncController / SNAPSyncController) send the public cases via the
     * Classic co-existence bridge; co-existence mode delivers them to the typed mailbox and all arrive as `Command`.

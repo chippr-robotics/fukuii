@@ -90,6 +90,8 @@ final class SyncHandoff(
       .and(if storageRecoveryDone then appState.storageRecoveryDone() else appState.clearStorageRecoveryDone())
       .and(if bytecodeRecoveryDone then appState.bytecodeRecoveryDone() else appState.clearBytecodeRecoveryDone())
       .and(appState.clearSnapCodeScanOwed())
+      // the sync after an escalation took its pivot where it was to (B-307): the next sync is bound by nothing
+      .and(appState.removePivotOnBranch())
     val unmarked = !cleanDecision && appState.isSnapHealInvariantPresent()
     val batch = if unmarked then records.and(appState.clearSnapHealInvariant()) else records
     state.commitHandoff(BlockRef(hash, number, pivot.stateRoot.value), Some(batch))

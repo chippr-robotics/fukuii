@@ -106,6 +106,18 @@ class AppStateStorage(val dataSource: DataSource) extends TransactionalKeyValueS
     */
   def forgetStateEscalationLast(): DataSourceBatchUpdate = remove(Keys.StateEscalationLast)
 
+  /** The branch the sync after an escalation is to take its pivot on ([[pathstate.PivotOnBranch]]), or none. A stored
+    * value this build cannot read throws.
+    */
+  def getPivotOnBranch(): Option[pathstate.PivotOnBranch] =
+    get(Keys.PivotOnBranch).map(pathstate.PivotOnBranch.decode)
+
+  def putPivotOnBranch(pivot: pathstate.PivotOnBranch): DataSourceBatchUpdate =
+    put(Keys.PivotOnBranch, pathstate.PivotOnBranch.encode(pivot))
+
+  /** The update that ends the requirement: a sync handed off, or the requirement was dropped. */
+  def removePivotOnBranch(): DataSourceBatchUpdate = remove(Keys.PivotOnBranch)
+
   /** The entries of the index by number that a clear still has to delete ([[pathstate.StateResetTrim]]), or none. */
   def getStateResetTrim(): Option[pathstate.StateResetTrim] =
     get(Keys.StateResetTrim).map(pathstate.StateResetTrim.decode)
@@ -205,10 +217,15 @@ class AppStateStorage(val dataSource: DataSource) extends TransactionalKeyValueS
       atMillis: Long,
       escalation: Option[pathstate.StateEscalation],
       givenUpFor: Option[pathstate.GivenUpBranch] = None,
-      trim: Option[(pathstate.StateResetTrim, BigInt => Option[ByteString])] = None
+      trim: Option[(pathstate.StateResetTrim, BigInt => Option[ByteString])] = None,
+      retry: Option[pathstate.PivotOnBranch] = None
   ): DataSourceBatchUpdate =
     require(givenUpFor.isEmpty || escalation.isDefined, "a branch is given up for by an escalation only")
-    require(trim.isEmpty || escalation.isDefined, "the index by number is trimmed by an escalation only")
+    require(
+      trim.isEmpty || escalation.isDefined || retry.isDefined,
+      "the index by number is trimmed by an escalation, or by the sync that is begun again after one"
+    )
+    require(retry.isEmpty || escalation.isEmpty, "a sync begun again for its branch is no new escalation")
     val marked = escalation.foldLeft(put(Keys.StateResetPending, pathstate.StateResetPending.encode(atMillis))) {
       (batch, last) => batch.and(put(Keys.StateEscalationLast, pathstate.StateEscalation.encode(last)))
     }
@@ -217,9 +234,18 @@ class AppStateStorage(val dataSource: DataSource) extends TransactionalKeyValueS
         put(Keys.StateEscalationGivenUp, pathstate.GivenUpBranches.encode(getStateEscalationGivenUp() + branch))
       )
     }
+    // B-307: the sync that follows an escalation for a branch takes its pivot on the branch. A clear for no branch
+    // ends a requirement an earlier one left: the sync it begins is not bound by it.
+    // A sync that is begun again because its headers were of another chain keeps the requirement, as counted.
+    val required = retry match
+      case Some(counted) => recorded.and(putPivotOnBranch(counted))
+      case None =>
+        givenUpFor.fold(recorded.and(removePivotOnBranch())) { branch =>
+          recorded.and(putPivotOnBranch(pathstate.PivotOnBranch(branch.number, branch.hash)))
+        }
     // B-303: what is to be deleted of the index by number is written down here, and the header download's cursors are
     // set back, in the same write as the clear: a kill after it finds both, and deletes the entries at the next start
-    val trimmed = trim.foldLeft(recorded) { case (batch, (above, hashAt)) =>
+    val trimmed = trim.foldLeft(required) { case (batch, (above, hashAt)) =>
       batch
         .and(putStateResetTrim(above))
         .and(headerCursorsBackTo(above.commonBlock, hashAt))
@@ -1170,6 +1196,7 @@ object AppStateStorage:
     val StateEscalationGivenUp = com.chipprbots.ethereum.db.storage.pathstate.GivenUpBranches.Key
     val StateResetPending = com.chipprbots.ethereum.db.storage.pathstate.StateResetPending.Key
     val StateResetTrim = com.chipprbots.ethereum.db.storage.pathstate.StateResetTrim.Key
+    val PivotOnBranch = com.chipprbots.ethereum.db.storage.pathstate.PivotOnBranch.Key
     val StateChangesetPrunedTo = "state.changeset.pruned-to"
     val StateLayout = com.chipprbots.ethereum.db.storage.pathstate.StateLayout.Key
     val ChainWeightInvariant = "chain.weight.invariant"

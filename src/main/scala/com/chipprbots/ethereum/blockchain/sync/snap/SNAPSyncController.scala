@@ -1252,7 +1252,9 @@ object SNAPSyncController:
       pivotHeader: Option[BlockHeader] = None
   ) extends Command // Signal from SyncController that bootstrap is done
   final case class PivotBootstrapFailed(
-      reason: String
+      reason: String,
+      // the peers that follow another chain than the branch the pivot is to be on (B-307): PivotHeaderBootstrap.Failed
+      offBranch: Set[com.chipprbots.ethereum.network.PeerId] = Set.empty
   ) extends Command // Signal from SyncController that pivot header bootstrap exhausted retries
   // Internal commands (private[snap] so the SNAPSyncControllerImpl class — same package — can reference
   // them). Relocated from the Classic class body in Phase 2. All extend the sealed Command (same file).

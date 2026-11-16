@@ -611,6 +611,11 @@ class SyncControllerSpec
     val refusals = new java.util.concurrent.atomic.AtomicInteger(0)
     def clearRefused(): Unit =
       refusals.incrementAndGet(); ()
+    val branchRetries = new java.util.concurrent.atomic.AtomicInteger(0)
+    def clearForBranchRetry(): Boolean =
+      clearThreads.add(Thread.currentThread.getName)
+      branchRetries.incrementAndGet()
+      true
 
   private def escalationRequest: SyncProtocol.StateEscalationRequested =
     SyncProtocol.StateEscalationRequested(
@@ -657,6 +662,55 @@ class SyncControllerSpec
     someTimePasses()
     port.asked.get() shouldBe 1
     port.cleared.size() shouldBe 1
+  }
+
+  // B-307 (c): the sync after an escalation for a branch found another chain's headers under its pivot
+  it should "stop a SNAP sync that is off the branch its pivot is to be on, clear what it wrote, and SNAP again" taggedAs (
+    UnitTest,
+    SyncTest
+  ) in withTestSetup() { testSetup =>
+    import testSetup.*
+    import com.chipprbots.ethereum.db.storage.pathstate.EscalationKind
+    import com.chipprbots.ethereum.db.storage.pathstate.GivenUpBranch
+    import com.chipprbots.ethereum.db.storage.pathstate.StateEscalation
+    val record =
+      StateEscalation(1763236800000L, EscalationKind.Unreachable, ByteString(Array.fill[Byte](32)(0x21)), 4001)
+    val port = new EscalationPort(
+      EscalationHandler.Outcome
+        .Escalate(record, Some(GivenUpBranch(4001, record.headHash)), "a branch cannot be reached")
+    )
+    stateEscalation = Some(port)
+    storagesInstance.storages.appStateStorage.fastSyncDone().commit()
+    syncController ! SyncController.WrappedSyncProtocol(SyncProtocol.Start)
+    regularSyncChild(testSetup)
+    val before = snapChildren(testSetup)
+    syncController ! SyncController.WrappedSyncProtocol(escalationRequest)
+    eventually {
+      someTimePasses()
+      assert((snapChildren(testSetup) -- before).nonEmpty)
+    }
+    val first = snapChildren(testSetup)
+
+    // the requirement the clear of the escalation wrote down: the floor of every sync until one hands off
+    storagesInstance.storages.appStateStorage
+      .putPivotOnBranch(com.chipprbots.ethereum.db.storage.pathstate.PivotOnBranch(4001, record.headHash))
+      .commit()
+    val said = syncControllerLogsDuring(ch.qos.logback.classic.Level.INFO) {
+      syncController ! SyncController.WrappedSyncProtocol(SyncProtocol.PivotOffTheBranch)
+      eventually {
+        someTimePasses()
+        port.branchRetries.get() shouldBe 1
+        // the sync that was off the branch is gone, and another runs
+        assert((snapChildren(testSetup) -- first).nonEmpty)
+        assert((snapChildren(testSetup) & first).isEmpty)
+      }
+    }
+    // begun again with its pivot no lower than the branch's first block
+    said.exists(_.contains("MinPivotBlock(4001)")) shouldBe true
+    // off the controller's thread, as the clear of the escalation; and no second escalation is counted or recorded
+    port.clearThreads.toArray.toList.map(_.toString).exists(_.contains("blocking")) shouldBe true
+    port.cleared.size() shouldBe 1
+    port.counted.size() shouldBe 1
   }
 
   // B-307: a recovery of the state that is still executing a block keeps the clear from beginning
@@ -1341,6 +1395,67 @@ class SyncControllerSpec
     }
     storagesInstance.storages.appStateStorage.getSnapSyncBootstrapTarget() shouldBe Some(StrandedBest + 1)
     assert(!childNamed(testSetup, "regular-sync"))
+  }
+
+  // B-307 (c2): what the pivot's bootstrap found of the branch reaches the requirement and the SNAP controller
+  it should "end the wait for a peer on the branch when the pivot's bootstrap completes, and pass on the peers it found on another chain" taggedAs (
+    UnitTest,
+    SyncTest
+  ) in withRecoveryTestSetup() { testSetup =>
+    import testSetup.*
+    import com.chipprbots.ethereum.db.storage.pathstate.PivotOnBranch
+    val appState = storagesInstance.storages.appStateStorage
+    seedStrandedFastSync(testSetup)
+    appState
+      .putBestBlockNumber(StrandedBest)
+      .and(appState.putSnapSyncMinPivotBlock(StrandedBest + 1))
+      .commit()
+    answerPeerPollsWith(snapPeerAt(StrandedBest + 10))
+    syncController ! SyncController.WrappedSyncProtocol(SyncProtocol.Start)
+    eventually {
+      someTimePasses()
+      assert(childNamed(testSetup, "pivot-header-bootstrap"))
+    }
+    val bound = PivotOnBranch(StrandedBest + 1, ByteString(Array.fill[Byte](32)(0x21)))
+
+    // every peer at the target's height was on another chain: the SNAP controller is told which, and begins the wait
+    appState.putPivotOnBranch(bound).commit()
+    syncController ! SyncController.WrappedExternal(
+      PivotHeaderBootstrap.Failed(
+        PivotHeaderBootstrap.NoPeerOnTheBranch,
+        Set(com.chipprbots.ethereum.network.PeerId("on-the-other-chain"))
+      )
+    )
+    eventually {
+      someTimePasses()
+      assert(appState.getPivotOnBranch().exists(_.firstMissMillis.isDefined))
+    }
+  }
+
+  it should "end the wait for a peer on the branch when the pivot's bootstrap takes its header from one" taggedAs (
+    UnitTest,
+    SyncTest
+  ) in withRecoveryTestSetup() { testSetup =>
+    import testSetup.*
+    import com.chipprbots.ethereum.db.storage.pathstate.PivotOnBranch
+    val appState = storagesInstance.storages.appStateStorage
+    seedStrandedFastSync(testSetup)
+    appState
+      .putBestBlockNumber(StrandedBest)
+      .and(appState.putSnapSyncMinPivotBlock(StrandedBest + 1))
+      .commit()
+    answerPeerPollsWith(snapPeerAt(StrandedBest + 10))
+    syncController ! SyncController.WrappedSyncProtocol(SyncProtocol.Start)
+    eventually {
+      someTimePasses()
+      assert(childNamed(testSetup, "pivot-header-bootstrap"))
+    }
+    val bound = PivotOnBranch(StrandedBest + 1, ByteString(Array.fill[Byte](32)(0x21)))
+    appState.putPivotOnBranch(bound.copy(firstMissMillis = Some(7L))).commit()
+    syncController ! SyncController.WrappedExternal(
+      PivotHeaderBootstrap.Completed(StrandedBest + 1, baseBlockHeader.copy(number = BlockNumber(StrandedBest + 1)))
+    )
+    appState.getPivotOnBranch() shouldBe Some(bound)
   }
 
   it should "clear the pivot floor when SNAP finalizes" taggedAs (UnitTest, SyncTest) in withRecoveryTestSetup() {

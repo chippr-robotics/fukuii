@@ -95,6 +95,19 @@ object StateMetrics extends MetricsContainer with PathStateStorage.CommitObserve
       .toMap
   private val escalationsSuppressed = metrics.counter("db.state.recovery.escalations.suppressed")
 
+  private val pivotOffTheBranch = metrics.counter("db.state.recovery.pivot-requirement.attempts")
+  private val pivotRequirementEnded = metrics.counter("db.state.recovery.pivot-requirement.dropped")
+  private val pivotOffBranchResponses = metrics.counter("db.state.recovery.pivot-requirement.refused-responses")
+
+  /** A sync after an escalation found another chain at the height of the branch it was to take its pivot on. */
+  def pivotRequirementMissed(): Unit = pivotOffTheBranch.increment()
+
+  /** The header download did not store a response that held another block at the branch's height. */
+  def pivotRequirementRefused(): Unit = pivotOffBranchResponses.increment()
+
+  /** The requirement that a sync take its pivot on a branch was dropped: no peer served the branch. */
+  def pivotRequirementDropped(): Unit = pivotRequirementEnded.increment()
+
   /** Blocks executed again to bring the state to a head it was not at (a recovery, not an import). */
   def reexecuted(blocks: Long): Unit = recoveryReexecuted.increment(blocks.toDouble)
 

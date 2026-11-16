@@ -1383,6 +1383,10 @@ trait SyncControllerBuilder extends SyncControllerRefBuilder:
         def escalated(kind: EscalationKind): Unit = StateMetrics.escalated(kind)
         def regularSyncStarted(): Unit = handler.reset()
         def clearRefused(): Unit = handler.clearRefused(System.currentTimeMillis())
+        def clearForBranchRetry(): Boolean =
+          def clearNow(): Unit =
+            val _ = pathState.clearForBranchRetry(blockchainReader.genesisHeader.hash.value, System.currentTimeMillis())
+          stateRecoveryForSync.fold { clearNow(); true }(_.reset()(clearNow()))
     }
 
   lazy val syncController: org.apache.pekko.actor.typed.ActorRef[SyncController.Command] =

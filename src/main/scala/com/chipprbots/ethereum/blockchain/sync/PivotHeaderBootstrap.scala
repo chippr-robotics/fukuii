@@ -72,6 +72,8 @@ object PivotHeaderBootstrap:
   // Sent from the off-thread callback when an ancestry run is not the head's ancestry (AncestryProblem.Mismatch).
   final private case class AncestryRejected(peer: Option[Peer], reason: String, metricReason: String) extends Command
   final private case class Retry(reason: String) extends Command
+  // Branch mode: `peer` served `found` at the branch's height, and it is not the branch's block.
+  final private case class OffTheBranch(peer: Option[Peer], found: BlockHeader) extends Command
   final private case class Fetched(header: BlockHeader) extends Command
   // Ancestry mode: a run that reaches the pivot, stored with it (storeAncestry).
   final private case class FetchedAncestry(run: AncestryRun) extends Command
@@ -82,7 +84,15 @@ object PivotHeaderBootstrap:
     */
   sealed trait Reply
   final case class Completed(targetBlock: BigInt, header: BlockHeader) extends Reply
-  final case class Failed(reason: String) extends Reply
+
+  /** @param offBranch
+    *   the peers that served another block than the branch's at the branch's height ([[apply]]'s `branch`): they follow
+    *   another chain, and the caller chooses its next target without them
+    */
+  final case class Failed(reason: String, offBranch: Set[PeerId] = Set.empty) extends Reply
+
+  /** [[Failed.reason]] when every peer that could be asked follows another chain than the branch. */
+  val NoPeerOnTheBranch: String = "no peer that has the target serves the branch the pivot is to be on"
 
   /** The default `headerCheck`: every header that matches the target is accepted. */
   val AcceptAll: BlockHeader => Either[BlockHeaderError, BlockHeaderValid] = _ => Right(BlockHeaderValid)
@@ -191,7 +201,9 @@ object PivotHeaderBootstrap:
       maxRetryDelay: FiniteDuration = 10.seconds,
       waitForPeerDelay: FiniteDuration = 30.seconds,
       preferSnapPeers: Boolean = false,
-      headerCheck: BlockHeader => Either[BlockHeaderError, BlockHeaderValid] = AcceptAll
+      headerCheck: BlockHeader => Either[BlockHeaderError, BlockHeaderValid] = AcceptAll,
+      branch: Option[(BigInt, ByteString)] = None,
+      askTimeout: FiniteDuration = DefaultAskTimeout
   ): Behavior[Command] =
     behavior(
       peersClient,
@@ -205,7 +217,10 @@ object PivotHeaderBootstrap:
       maxRetryDelay,
       waitForPeerDelay,
       preferSnapPeers,
-      headerCheck
+      headerCheck,
+      askTimeout = askTimeout,
+      // a target under the branch is of the blocks both chains have: asked for as ever
+      branch = branch.filter(_._1 <= targetBlock)
     )
 
   /** Fetch by hash — the CL-driven post-merge path (#1207). Block number is unknown until the header arrives;
@@ -302,7 +317,8 @@ object PivotHeaderBootstrap:
       preferSnapPeers: Boolean,
       headerCheck: BlockHeader => Either[BlockHeaderError, BlockHeaderValid],
       ancestryDepth: Option[Int] = None,
-      askTimeout: FiniteDuration = DefaultAskTimeout
+      askTimeout: FiniteDuration = DefaultAskTimeout,
+      branch: Option[(BigInt, ByteString)] = None
   ): Behavior[Command] =
     Behaviors.setup { ctx =>
       Behaviors.withTimers { timers =>
@@ -322,7 +338,8 @@ object PivotHeaderBootstrap:
           preferSnapPeers,
           headerCheck,
           ancestryDepth,
-          askTimeout
+          askTimeout,
+          branch
         ).running()
       }
     }
@@ -343,7 +360,12 @@ object PivotHeaderBootstrap:
       headerCheck: BlockHeader => Either[BlockHeaderError, BlockHeaderValid],
       // Ancestry mode (applyAncestry): the header this many blocks below the head `targetHash`.
       ancestryDepth: Option[Int],
-      askTimeout: FiniteDuration
+      askTimeout: FiniteDuration,
+      // Branch mode (by number only; B-307 c2, forge's design): the first block of the branch the pivot is to be on, at
+      // or under the target. A peer is asked for its header at that height and its header at the target in one request,
+      // and the target's is taken only from a peer whose header at the branch's height is the branch's block. By number,
+      // since a peer answers by hash for any block it has stored, whichever chain it follows.
+      branch: Option[(BigInt, ByteString)]
   ):
 
     // Safe from any thread (the `peersClient ?` callbacks run off the actor thread).
@@ -367,6 +389,27 @@ object PivotHeaderBootstrap:
     // Headers `headerCheck` rejected. Once one has been, an empty pool ends the bootstrap instead of waiting: the peers
     // that claimed the target's height may be exactly the ones that served a rejected header.
     private var rejections: Int = 0
+    // Branch mode: the peers that follow another chain. They are not at fault and are not blacklisted.
+    private var offBranch: Set[PeerId] = Set.empty
+
+    // Branch mode's request: the peer's header at the branch's height, then its header at the target.
+    private def byNumberRequest(): ETHPackets.GetBlockHeaders = branch match
+      case Some((first, _)) if first < targetBlock =>
+        ETHPackets.GetBlockHeaders(
+          ETHPackets.nextRequestId,
+          Left(first),
+          maxHeaders = 2,
+          skip = targetBlock - first - 1,
+          reverse = false
+        )
+      case _ =>
+        ETHPackets.GetBlockHeaders(
+          ETHPackets.nextRequestId,
+          Left(targetBlock),
+          maxHeaders = 1,
+          skip = 0,
+          reverse = false
+        )
 
     private def currentRetryDelay: FiniteDuration =
       // Exponential backoff: initialRetryDelay * 2^(attempt-1), capped at maxRetryDelay
@@ -386,7 +429,7 @@ object PivotHeaderBootstrap:
       case Fetch =>
         attempt += 1
         if attempt > maxAttempts then
-          replyTo ! Failed(s"exhausted attempts ($maxAttempts) fetching pivot header $targetDesc")
+          replyTo ! Failed(s"exhausted attempts ($maxAttempts) fetching pivot header $targetDesc", offBranch)
           Behaviors.stopped
         else
           fetchOnce()
@@ -432,6 +475,28 @@ object PivotHeaderBootstrap:
         ctx.log.info("Scheduling pivot header retry in {} (attempt {}/{})", delay, attempt, maxAttempts)
         timers.startSingleTimer(Fetch, delay)
         Behaviors.same
+
+      case OffTheBranch(peerOpt, found) =>
+        // Not stored and no one blamed: the peer follows another chain. It is in `triedPeers`, so another is asked.
+        offBranch ++= peerOpt.map(_.id)
+        val peerDesc = peerOpt.map(_.id.value).getOrElse("?")
+        ctx.log.warn(
+          s"${snap.PivotAnchor.PivotOnBranchTag} pivot header bootstrap for $targetDesc: peer $peerDesc has " +
+            s"${found.idTag} at the height of the branch the pivot is to be on, which is another block; asking another"
+        )
+        ctx.self ! Retry(s"peer $peerDesc follows another chain than the branch")
+        Behaviors.same
+
+      case NoEligiblePeer if offBranch.nonEmpty =>
+        // Waiting for a fresh peer would wait for ever where the peers at the target's height all follow the other
+        // chain: the caller chooses the target again, without them.
+        ctx.log.warn(
+          s"${snap.PivotAnchor.PivotOnBranchTag} pivot header bootstrap for $targetDesc: no eligible peer left, and " +
+            s"${offBranch.size} of ${triedPeers.size} tried follow another chain than the branch; giving up so the " +
+            "target is chosen again"
+        )
+        replyTo ! Failed(NoPeerOnTheBranch, offBranch)
+        Behaviors.stopped
 
       case Rejected(peerOpt, header, error) =>
         // Not stored: blacklist the peer that served it (the shared sync blacklist, via PeersClient) and retry; the peer
@@ -523,8 +588,9 @@ object PivotHeaderBootstrap:
             skip = 0,
             reverse = true
           )
-        case None =>
+        case None if byHashMode =>
           ETHPackets.GetBlockHeaders(ETHPackets.nextRequestId, target, maxHeaders = 1, skip = 0, reverse = false)
+        case None => byNumberRequest()
 
       // Peer selection:
       //   By-number with preferSnapPeers (standard SNAP pivot bootstrap): BestSnapPeerWithMinBlockExcluding
@@ -551,7 +617,9 @@ object PivotHeaderBootstrap:
             // No SNAP peer available — try any peer with the target as fallback
             asyncLog.debug("No SNAP-capable peer for pivot header, falling back")
             val fallbackMsg =
-              ETHPackets.GetBlockHeaders(ETHPackets.nextRequestId, target, maxHeaders = 1, skip = 0, reverse = false)
+              if byHashMode then
+                ETHPackets.GetBlockHeaders(ETHPackets.nextRequestId, target, maxHeaders = 1, skip = 0, reverse = false)
+              else byNumberRequest()
             val fallbackSelector =
               if byHashMode then BestPeer else BestPeerWithMinBlockExcluding(targetBlock, triedPeers.toSet)
             peersClient.ask[PeersClient.ResponseMessage](replyTo =>
@@ -588,7 +656,16 @@ object PivotHeaderBootstrap:
             case (Some(_), Some(_)) if peerOpt.isEmpty && isFailed =>
               // The ask got no answer in time (not "no peer"): an attempt, and the next one asks again.
               ctx.self ! Retry("the request was not answered in time")
-            case _ => onHeader(peerOpt, headers.headOption, isFailed)
+            case _ =>
+              branch match
+                case Some((first, hash)) if headers.nonEmpty =>
+                  headers.find(_.number.value == first) match
+                    case Some(found) if found.hash.value != hash => ctx.self ! OffTheBranch(peerOpt, found)
+                    // on the branch: the header at the target, if the peer sent it; a peer that sent neither height
+                    // answered nothing of use, as an empty reply
+                    case Some(_) => onHeader(peerOpt, headers.find(matchesTarget), isFailed)
+                    case None    => onHeader(peerOpt, None, isFailed)
+                case _ => onHeader(peerOpt, headers.headOption, isFailed)
         }
 
     /** One header (by number or by hash), or none, from `peerOpt`. Runs on the ask callback's thread. */
@@ -603,6 +680,10 @@ object PivotHeaderBootstrap:
             s"received header (number=${header.number}, hash=${com.chipprbots.ethereum.utils.ByteStringUtils
                 .hash2string(header.hash.value)}) doesn't match target $targetDesc"
           )
+        case None if peerOpt.isEmpty && isFailed && branch.isDefined =>
+          // Branch mode: the ask was not answered in time, which is not "no peer left" (forge): with peers already
+          // found on another chain that would end the bootstrap while others were never asked.
+          ctx.self ! Retry("the request was not answered in time")
         case None if peerOpt.isDefined && isFailed =>
           // RequestFailed: peer explicitly rejected the request — consume an attempt and rotate.
           ctx.self ! Retry(s"peer ${peerOpt.get.id} request failed")

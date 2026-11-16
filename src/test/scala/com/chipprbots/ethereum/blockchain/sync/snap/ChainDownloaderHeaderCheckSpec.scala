@@ -26,6 +26,7 @@ import com.chipprbots.ethereum.blockchain.sync.EphemBlockchainTestSetup
 import com.chipprbots.ethereum.blockchain.sync.TestSyncConfig
 import com.chipprbots.ethereum.consensus.pow.validators.PoWBlockHeaderValidator
 import com.chipprbots.ethereum.db.storage.AppStateStorage
+import com.chipprbots.ethereum.db.storage.pathstate.PivotOnBranch
 import com.chipprbots.ethereum.domain.Block
 import com.chipprbots.ethereum.domain.BlockBody
 import com.chipprbots.ethereum.domain.BlockHeader
@@ -96,7 +97,8 @@ class ChainDownloaderHeaderCheckSpec
       prepare: Rig => Unit,
       genesisHeader: BlockHeader = genesis,
       // A restarted download shares the stores of the one before it.
-      val storage: EphemBlockchainTestSetup = new EphemBlockchainTestSetup {}
+      val storage: EphemBlockchainTestSetup = new EphemBlockchainTestSetup {},
+      nowMs: () => Long = () => System.currentTimeMillis()
   ):
     val appState: AppStateStorage = storage.storagesInstance.storages.appStateStorage
     val blacklist = new RecordingBlacklist
@@ -127,7 +129,8 @@ class ChainDownloaderHeaderCheckSpec
         blacklist = blacklist,
         deferBodiesAndReceipts = deferred,
         headerChainCheck = check,
-        sharedBlacklist = Some(shared)
+        sharedBlacklist = Some(shared),
+        nowMs = nowMs
       ),
       s"chain-downloader-header-check-${System.nanoTime()}"
     )
@@ -201,6 +204,109 @@ class ChainDownloaderHeaderCheckSpec
     // Each stored weight is the parent's plus the header's difficulty, from genesis.
     rig.storage.blockchainReader.getChainWeightByHash(fromGenesis(256).hash).map(_.totalDifficulty.value) shouldBe
       Some(fromGenesis.map(_.difficulty.value).sum)
+    rig.blacklist.added shouldBe empty
+    testKit.stop(rig.downloader)
+  }
+
+  // B-307 (c2; forge's design): after an escalation for a branch the sync's pivot is to be on the branch, and the
+  // first answer at the branch's height decides the chain every later header stands on
+  private val elsewhere = ByteString(Array.fill(32)(0x77.toByte))
+
+  it should "store nothing of a response that holds another block at the height of the branch the sync is bound to, and ask another peer" taggedAs (
+    UnitTest,
+    ConsensusTest
+  ) in {
+    val clock = new java.util.concurrent.atomic.AtomicLong(1_763_300_000_000L)
+    val rig = new Rig(
+      mordorCheck,
+      target = BigInt(256),
+      perRequest = 64,
+      deferred = true,
+      r => r.appState.putPivotOnBranch(PivotOnBranch(64, elsewhere)).commit(),
+      nowMs = () => clock.get()
+    )
+    val first = rig.nextRequest()
+    first.answer(run(first.from, first.max))
+
+    val again = rig.nextRequest()
+    again.from shouldBe BigInt(1) // the same range again,
+    again.peerId should not be first.peerId // from the other peer
+    rig.cursor shouldBe BigInt(0)
+    rig.storage.blockchainReader.getBlockHeaderByNumber(1) shouldBe None
+    // a peer on another chain is not at fault
+    rig.blacklist.added shouldBe empty
+    rig.shared.added shouldBe empty
+    // the wait for a peer that serves the branch began, and is written down
+    rig.appState.getPivotOnBranch() shouldBe Some(PivotOnBranch(64, elsewhere, firstMissMillis = Some(clock.get())))
+
+    // the other peer serves the same chain: refused too, and the wait is counted from the first
+    val began = clock.get()
+    clock.addAndGet(60_000)
+    again.answer(run(again.from, again.max))
+    eventually(rig.appState.getBackfillBestHeader() shouldBe BigInt(0))
+    rig.networkPeerManager.expectNoMessage(300.millis) // both are left alone for a while
+    rig.appState.getPivotOnBranch().flatMap(_.firstMissMillis) shouldBe Some(began)
+    rig.cursor shouldBe BigInt(0)
+    testKit.stop(rig.downloader)
+  }
+
+  it should "blame the peer, and begin no wait for the branch, when a header at the branch's height fails validation" taggedAs (
+    UnitTest,
+    ConsensusTest
+  ) in {
+    val rig = new Rig(
+      mordorCheck,
+      target = BigInt(256),
+      perRequest = 64,
+      deferred = true,
+      r => r.appState.putPivotOnBranch(PivotOnBranch(64, elsewhere)).commit()
+    )
+    val first = rig.nextRequest()
+    first.answer(run(first.from, first.max, at = Some(BigInt(64)), _.copy(difficulty = Difficulty(BigInt(1)))))
+    rig.nextRequest().peerId should not be first.peerId
+    rig.blacklist.added shouldBe Vector(first.peerId -> BlacklistReason.BlockHeaderValidationFailed)
+    rig.appState.getPivotOnBranch() shouldBe Some(PivotOnBranch(64, elsewhere))
+    testKit.stop(rig.downloader)
+  }
+
+  it should "store the branch's block from a peer that serves it, and end the wait" taggedAs (
+    UnitTest,
+    ConsensusTest
+  ) in {
+    val onTheBranch = PivotOnBranch(64, fromGenesis(64).hash.value, firstMissMillis = Some(5L))
+    val rig = new Rig(
+      mordorCheck,
+      target = BigInt(256),
+      perRequest = 64,
+      deferred = true,
+      r => r.appState.putPivotOnBranch(onTheBranch).commit()
+    )
+    val first = rig.nextRequest()
+    first.answer(run(first.from, first.max))
+    eventually(rig.cursor shouldBe BigInt(64))
+    // the requirement stands until the sync hands off; the wait is over
+    rig.appState.getPivotOnBranch() shouldBe Some(onTheBranch.copy(firstMissMillis = None))
+    testKit.stop(rig.downloader)
+  }
+
+  it should "end the requirement, and store what the peers serve, when none has served the branch for the whole wait" taggedAs (
+    UnitTest,
+    ConsensusTest
+  ) in {
+    val clock = new java.util.concurrent.atomic.AtomicLong(1_763_300_000_000L)
+    val waiting = PivotOnBranch(64, elsewhere, firstMissMillis = Some(clock.get() - PivotAnchor.BranchWaitMillis))
+    val rig = new Rig(
+      mordorCheck,
+      target = BigInt(256),
+      perRequest = 64,
+      deferred = true,
+      r => r.appState.putPivotOnBranch(waiting).commit(),
+      nowMs = () => clock.get()
+    )
+    val first = rig.nextRequest()
+    first.answer(run(first.from, first.max))
+    eventually(rig.cursor shouldBe BigInt(64))
+    rig.appState.getPivotOnBranch() shouldBe None
     rig.blacklist.added shouldBe empty
     testKit.stop(rig.downloader)
   }

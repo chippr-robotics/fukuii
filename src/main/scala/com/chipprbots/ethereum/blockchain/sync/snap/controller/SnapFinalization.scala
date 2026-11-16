@@ -68,6 +68,14 @@ private[snap] object SnapFinalization:
     */
   val ExactWeights: Set[String] = Set("REAL_DB_TD", "DERIVED_FROM_PARENT")
 
+  /** The log tag of the requirement that the sync after an escalation take its pivot on the refused branch (B-307). */
+  val PivotOnBranchTag: String = PivotAnchor.PivotOnBranchTag
+
+  def pivotRequirementDropped(why: String): String = PivotAnchor.requirementDroppedText(why)
+
+  /** How many syncs may find another chain at the branch's height before the requirement is dropped. */
+  val PivotOnBranchAttempts: Int = com.chipprbots.ethereum.db.storage.pathstate.PivotOnBranch.MaxAttempts
+
   /** How often the header download is started again for a window that does not fill, before the sync is given up. */
   val WindowHoldRestarts: Int = 3
 
@@ -263,7 +271,12 @@ private[snap] trait SnapFinalization extends FinalizationApi with ChainDownloadS
       // index is not consulted there: the pivot bootstrap writes it with headers nothing validated.
       val pivotHeaderOpt =
         if headerChainCheck.validatesChain then Some(anchoredPivotHeader(pivot))
-        else stateIngest.chainReader.getBlockHeaderByNumber(pivot)
+        else
+          if !headerChainCheck.trustsPinnedPivot then
+            PivotAnchor
+              .dropUnchecked(stateIngest)
+              .foreach(why => ctx.log.error(SnapFinalization.pivotRequirementDropped(why)))
+          stateIngest.chainReader.getBlockHeaderByNumber(pivot)
       pivotHeaderOpt match
         case Some(pivotHeader) =>
           // A5: Root match guard — snapStateRoot must equal pivotHeader.stateRoot before
@@ -791,6 +804,41 @@ private[snap] trait SnapFinalization extends FinalizationApi with ChainDownloadS
       leaveHeaderHold()
       syncController ! SyncProtocol.HealingImpossible
       break(Behaviors.same)
+    // After an escalation for a branch, on a chain that chooses by weight: the pivot is to be on the branch (B-307).
+    // Asked before the pivot is anchored to the download, which would pin a pivot of another chain.
+    if !headerChainCheck.trustsPinnedPivot then
+      PivotAnchor.branchCheck(stateIngest) match
+        case PivotAnchor.BranchCheck.OffTheBranch(required, found, attempt) =>
+          ctx.log.error(
+            s"${SnapFinalization.PivotOnBranchTag} The chain the peers served is not the branch this node gave its " +
+              s"state up for: at block ${required.number} the header download holds ${found.hash.value.toHex}, and " +
+              s"the branch's block is ${required.hash.toHex}. Sync $attempt of ${SnapFinalization.PivotOnBranchAttempts} " +
+              "that may end so: what this sync wrote is cleared, the header download goes back under the branch, and " +
+              "the sync starts again."
+          )
+          leaveHeaderHold()
+          syncController ! SyncProtocol.PivotOffTheBranch
+          break(Behaviors.same)
+        case PivotAnchor.BranchCheck.Dropped(why) =>
+          ctx.log.error(SnapFinalization.pivotRequirementDropped(why))
+        case PivotAnchor.BranchCheck.Undecided(required, reason) if pivot >= required.number =>
+          // the pivot may be on the branch or off it, and the download does not say which yet: nothing is anchored
+          if !anchorUndecidedLoggedFor.contains(pivot) then
+            anchorUndecidedLoggedFor = Some(pivot)
+            ctx.log.error(
+              s"${SnapFinalization.PivotOnBranchTag} SNAP finalisation at pivot $pivot cannot tell whether the header " +
+                s"download follows the branch whose first block is ${required.number} ($reason); holding until it can"
+            )
+          enterHeaderHold(pivot, holdKey, cursor)
+          break(Behaviors.same)
+        case PivotAnchor.BranchCheck.Undecided(required, _) =>
+          // a pivot under the branch is of the blocks both chains have: the branch is imported from it, block by block
+          ctx.log.warn(
+            s"${SnapFinalization.PivotOnBranchTag} The pivot at block $pivot is below block ${required.number}, the " +
+              "first block of the branch this node gave its state up for: it is on neither chain alone, and the sync " +
+              "goes on."
+          )
+        case PivotAnchor.BranchCheck.NotRequired | _: PivotAnchor.BranchCheck.OnTheBranch => ()
     PivotAnchor.check(stateIngest, pivot) match
       case PivotAnchor.Check.Anchored(header) =>
         headersReachedThePivot()

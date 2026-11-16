@@ -997,6 +997,28 @@ final class PathStateStorage(
       escalation: Option[StateEscalation],
       givenUpFor: Option[GivenUpBranch] = None
   ): Unit =
+    val _ = clearUnderTheLocks(genesisHash, atMillis, escalation, givenUpFor, again = false)
+
+  /** Clears the state once more, for a sync whose headers were of another chain than the branch its pivot is to be on
+    * ([[PivotOnBranch]], B-307): the rows that sync wrote, the entries it stored in the index of blocks by number above
+    * the block the branch stands on, and its pivot; the header download goes back to that block. One more attempt is
+    * counted, in the same synced write that begins the clear. No escalation is recorded: this is the one that was.
+    *
+    * As for [[clearForResync]], the caller has stopped the sync, and nothing writes rows until this has returned.
+    *
+    * @return
+    *   the requirement as counted, or none when no sync is bound (nothing is cleared then)
+    */
+  def clearForBranchRetry(genesisHash: ByteString, atMillis: Long): Option[PivotOnBranch] =
+    clearUnderTheLocks(genesisHash, atMillis, escalation = None, givenUpFor = None, again = true)
+
+  private def clearUnderTheLocks(
+      genesisHash: ByteString,
+      atMillis: Long,
+      escalation: Option[StateEscalation],
+      givenUpFor: Option[GivenUpBranch],
+      again: Boolean
+  ): Option[PivotOnBranch] =
     moves.lock()
     try
       lock.locked(
@@ -1004,20 +1026,33 @@ final class PathStateStorage(
         nanos => told("the wait for the state lock")(settings.observer.lockWaited(nanos))
       ) {
         val index = new BlockNumberMappingStorage(dataSource)
-        val trim = escalation.map(_ => (trimAbove(givenUpFor, index), (height: BigInt) => index.get(height)))
-        val begins: Seq[DataUpdate] =
-          appState.stateClearBatch(genesisHash, atMillis, escalation, givenUpFor, trim).updates
-        clock.inFlightToNoState(dataSource.updateSync(begins))
-        // executed blocks kept beside a state that is gone are of no state, and neither is what was derived from its
-        // records, the fault that was found in it, or the block that was finalized on it
-        overlay.clear()
-        window.set(None)
-        indexes.clear()
-        faulted = None
-        named = None
-        deleteEveryRowAndRecord()
-        deleteTheIndexAboveTheCommonBlock()
-        appState.removeStateResetTrim().and(appState.removeStateResetPending()).commitSync()
+        val retry =
+          if again then
+            appState
+              .getPivotOnBranch()
+              // the wait for a peer on the branch is of the sync that ended: the next one begins its own (forge)
+              .map(bound => bound.copy(attempts = bound.attempts + 1, firstMissMillis = None))
+          else None
+        if again && retry.isEmpty then None
+        else
+          val branch = retry.map(bound => GivenUpBranch(bound.number, bound.hash)).orElse(givenUpFor)
+          val trim = Option.when(escalation.isDefined || retry.isDefined)(
+            (trimAbove(branch, index), (height: BigInt) => index.get(height))
+          )
+          val begins: Seq[DataUpdate] =
+            appState.stateClearBatch(genesisHash, atMillis, escalation, givenUpFor, trim, retry).updates
+          clock.inFlightToNoState(dataSource.updateSync(begins))
+          // executed blocks kept beside a state that is gone are of no state, and neither is what was derived from its
+          // records, the fault that was found in it, or the block that was finalized on it
+          overlay.clear()
+          window.set(None)
+          indexes.clear()
+          faulted = None
+          named = None
+          deleteEveryRowAndRecord()
+          deleteTheIndexAboveTheCommonBlock()
+          appState.removeStateResetTrim().and(appState.removeStateResetPending()).commitSync()
+          retry
       }
     finally moves.unlock()
 
@@ -1032,7 +1067,7 @@ final class PathStateStorage(
   private def trimAbove(givenUpFor: Option[GivenUpBranch], index: BlockNumberMappingStorage): StateResetTrim =
     val upper = highestIndexedHeight()
     val known = givenUpFor
-      .map(_.number - 1)
+      .map(forkUnder(_, index))
       .orElse(appState.getStateFinalized().map(_.number))
       .getOrElse(BigInt(0))
       .max(0)
@@ -1052,6 +1087,20 @@ final class PathStateStorage(
           s"deleted from the genesis up to block $upper, and the headers are downloaded again."
       )
     StateResetTrim(common, upper)
+
+  // The block a branch leaves the indexed chain at: under its first block where that block's parent is the indexed
+  // one, as it is when the node's own chain was left for the branch. After a sync whose headers were of another chain
+  // the index is that chain's, which may have left the branch lower down (forge): then the branch's stored headers
+  // are walked down to the first whose parent the index has. A header that is not stored ends the walk where it is.
+  private def forkUnder(branch: GivenUpBranch, index: BlockNumberMappingStorage): BigInt =
+    val headers = new BlockHeadersStorage(dataSource)
+    @scala.annotation.tailrec
+    def walk(number: BigInt, hash: ByteString, left: Int): BigInt =
+      headers.get(hash) match
+        case Some(header) if left > 0 && number > 1 && !index.get(number - 1).contains(header.parentHash.value) =>
+          walk(number - 1, header.parentHash.value, left - 1)
+        case _ => number - 1
+    walk(branch.number, branch.hash, PathStateStorage.CommonBlockWalk)
 
   // the highest height the index by number may have an entry at, the stored header of a pivot named by hash with it
   private def highestIndexedHeight(): BigInt =

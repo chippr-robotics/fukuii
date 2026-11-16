@@ -7,6 +7,8 @@ import scala.annotation.tailrec
 import com.chipprbots.ethereum.blockchain.sync.snap.controller.StateIngest
 import com.chipprbots.ethereum.db.dataSource.DataSourceBatchUpdate
 import com.chipprbots.ethereum.db.storage.AppStateStorage
+import com.chipprbots.ethereum.db.storage.pathstate.PivotOnBranch
+import com.chipprbots.ethereum.db.storage.pathstate.StateMetrics
 import com.chipprbots.ethereum.domain.BlockHash
 import com.chipprbots.ethereum.domain.BlockHeader
 import com.chipprbots.ethereum.domain.BlockchainReader
@@ -180,6 +182,222 @@ private[sync] object PivotAnchor:
     chosen match
       case Some(header) => appState.putSnapSyncPivotHash(header.hash.value)
       case None         => appState.removeSnapSyncPivotHash()
+
+  /** What the header download says of the branch a sync is to take its pivot on (B-307). */
+  enum BranchCheck:
+    /** No sync is bound: no escalation for a branch came before this sync, or the requirement has ended. */
+    case NotRequired
+
+    /** The download holds the branch's first block at its height: the pivot above it is on the branch. */
+    case OnTheBranch(required: PivotOnBranch)
+
+    /** The download has not reached the branch's height, or what it holds there cannot be told yet. */
+    case Undecided(required: PivotOnBranch, reason: String)
+
+    /** The download holds another block at the branch's height: the chain the peers served is not the branch. Nothing
+      * is written here: the sync controller stops this sync, counts the attempt (`attempt` is the number it will have)
+      * and clears what the sync wrote
+      * ([[com.chipprbots.ethereum.db.storage.pathstate.PathStateStorage.clearForBranchRetry]]).
+      */
+    case OffTheBranch(required: PivotOnBranch, found: BlockHeader, attempt: Int)
+
+    /** The requirement is ended, and the sync goes on with the chain it has: it was missed once too often, its record
+      * could not be read, or the branch's height is further below the download's tip than is walked back.
+      */
+    case Dropped(why: String)
+
+  /** Whether the chain the header download follows is the branch the sync is to take its pivot on, and what is done
+    * about it when it is not (B-307; forge's design, the user's decision of 2026-11-16).
+    *
+    * Asked once the download has reached the pivot, '''before the pivot is anchored to the download''': anchored first,
+    * a pivot of another chain would be pinned.
+    */
+  def branchCheck(ingest: StateIngest): BranchCheck = branchCheck(ingest.appState, ingest.chainReader)
+
+  def branchCheck(appState: AppStateStorage, reader: BlockchainReader): BranchCheck =
+    scala.util.Try(appState.getPivotOnBranch()) match
+      case scala.util.Failure(unreadable) =>
+        dropped(appState, s"its record cannot be read (${unreadable.getMessage})")
+      case scala.util.Success(None)           => BranchCheck.NotRequired
+      case scala.util.Success(Some(required)) =>
+        // Only the validated download says it (forge): the index of blocks by number is also written by the pivot
+        // bootstrap, with headers nothing validated.
+        val cursor = appState.getBackfillBestHeader()
+        if cursor >= required.number && cursor - required.number > MaxWalkBack then
+          dropped(
+            appState,
+            s"block ${required.number} is ${cursor - required.number} blocks below the header download's tip, more " +
+              s"than the $MaxWalkBack walked back: what the download holds there cannot be told"
+          )
+        else
+          validatedHeaderAt(appState, reader, required.number) match
+            case Left(reason)                                      => BranchCheck.Undecided(required, reason)
+            case Right(found) if found.hash.value == required.hash => BranchCheck.OnTheBranch(required)
+            case Right(found) if required.attempts + 1 >= PivotOnBranch.MaxAttempts =>
+              StateMetrics.pivotRequirementMissed()
+              dropped(
+                appState,
+                s"${required.attempts + 1} syncs found another chain at block ${required.number} " +
+                  s"(this one found ${found.hash.value.toArray.take(4).map("%02x".format(_)).mkString})"
+              )
+            case Right(found) => BranchCheck.OffTheBranch(required, found, required.attempts + 1)
+
+  /** What the header download does with a response that holds the height of the branch a sync is bound to (B-307 c2;
+    * forge's design). Nothing in a sync follows the weight of a chain: the download asks one peer by number, and the
+    * first answer at the branch's height decides the chain every later header stands on. So the answer is looked at
+    * before it is stored.
+    */
+  enum BranchGate:
+    /** No sync is bound, the response does not hold the branch's height, or it holds the branch's first block. */
+    case Pass
+
+    /** The response holds another block at the branch's height: nothing of it is stored, and its peer is not asked for
+      * headers for a while. The peer is on another chain; it is not at fault.
+      */
+    case Refuse(required: PivotOnBranch, found: BlockHeader)
+
+    /** No peer has served the branch for [[BranchWaitMillis]]: the requirement is ended, and the response is stored. */
+    case Expired(why: String)
+
+  /** How long a header download waits below the branch for a peer that serves it, from the first response that was of
+    * another chain there (forge; the user's decision of 2026-11-16 bounds the attempts).
+    */
+  val BranchWaitMillis: Long = 30L * 60 * 1000
+
+  /** Asked by the header download of each run of headers it is about to store.
+    *
+    * The first response of another chain is written down with its time (`firstMissMillis`), so that a restart does not
+    * begin the wait again; the branch's block, once served, takes the time away.
+    */
+  def branchGate(appState: AppStateStorage, run: Seq[BlockHeader], nowMillis: Long): BranchGate =
+    scala.util.Try(appState.getPivotOnBranch()).toOption.flatten match
+      case None => BranchGate.Pass // a record that cannot be read is dropped, and said, where the pivot is checked
+      case Some(required) =>
+        run.find(_.number.value == required.number) match
+          case None => BranchGate.Pass
+          case Some(found) if found.hash.value == required.hash =>
+            if required.firstMissMillis.isDefined then
+              appState.putPivotOnBranch(required.copy(firstMissMillis = None)).commit()
+            BranchGate.Pass
+          case Some(found) =>
+            val since = required.firstMissMillis.getOrElse(nowMillis)
+            if nowMillis - since >= BranchWaitMillis then
+              dropped(
+                appState,
+                s"for ${(nowMillis - since) / 60000} minutes every peer asked for block ${required.number} served " +
+                  s"another block than the branch's (the last served ${found.hash.value.toArray.take(4).map("%02x".format(_)).mkString})"
+              ) match
+                case BranchCheck.Dropped(why) => BranchGate.Expired(why)
+                case _                        => BranchGate.Pass
+            else
+              if required.firstMissMillis.isEmpty then
+                appState.putPivotOnBranch(required.copy(firstMissMillis = Some(nowMillis))).commit()
+              StateMetrics.pivotRequirementRefused()
+              BranchGate.Refuse(required, found)
+
+  /** The branch a sync's pivot is to be on, as the pivot's bootstrap asks for it: its first block's number and hash. A
+    * record that cannot be read binds no bootstrap; it is dropped, and said, where the pivot is checked.
+    */
+  def requiredBranch(appState: AppStateStorage): Option[(BigInt, ByteString)] =
+    scala.util.Try(appState.getPivotOnBranch()).toOption.flatten.map(bound => (bound.number, bound.hash))
+
+  /** A peer served the branch: the wait for one ([[BranchWaitMillis]]) is over. Called when the pivot's bootstrap took
+    * its header from a peer on the branch; the header download does the same when it stores the branch's block. Left
+    * standing, a wait the bootstrap began would end the requirement at the download's first answer of another chain
+    * (forge).
+    */
+  def branchServed(appState: AppStateStorage): Unit =
+    scala.util.Try(appState.getPivotOnBranch()).toOption.flatten.filter(_.firstMissMillis.isDefined).foreach {
+      waiting =>
+        appState.putPivotOnBranch(waiting.copy(firstMissMillis = None)).commit()
+    }
+
+  /** The peers the pivot's bootstrap found on another chain than the branch (B-307 c2; forge's design). The target of a
+    * sync is the best height its peers claim: where the chain that was left is the longer, the target is above every
+    * peer of the branch, and only the other chain's peers are asked for its header. Leaving those out of the next
+    * choice lowers the target to a height the branch's peers have.
+    *
+    * In memory, each for [[OffBranchPeers.HeldMillis]]: a peer's chain may reorganize onto the branch. Owned by one
+    * actor.
+    */
+  final class OffBranchPeers:
+    private var until: Map[com.chipprbots.ethereum.network.PeerId, Long] = Map.empty
+
+    def holds(peer: com.chipprbots.ethereum.network.PeerId, nowMillis: Long): Boolean =
+      until.get(peer).exists(_ > nowMillis)
+
+    /** A bootstrap ended without the pivot's header. With peers on another chain among those it asked, they are left
+      * out for a while, and the wait for a peer on the branch is begun or gone on with ([[BranchWaitMillis]], the same
+      * wait the header download counts). At its end the requirement is dropped.
+      *
+      * @return
+      *   why the requirement was dropped, when it was: said at ERROR by the caller
+      */
+    def missed(
+        ingest: StateIngest,
+        offBranch: Set[com.chipprbots.ethereum.network.PeerId],
+        nowMillis: Long
+    ): Option[String] = missed(ingest.appState, offBranch, nowMillis)
+
+    def missed(
+        appState: AppStateStorage,
+        offBranch: Set[com.chipprbots.ethereum.network.PeerId],
+        nowMillis: Long
+    ): Option[String] =
+      until = until.filter(_._2 > nowMillis) ++ offBranch.map(_ -> (nowMillis + OffBranchPeers.HeldMillis))
+      if offBranch.isEmpty then None
+      else
+        scala.util.Try(appState.getPivotOnBranch()).toOption.flatten.flatMap { required =>
+          val since = required.firstMissMillis.getOrElse(nowMillis)
+          if nowMillis - since >= BranchWaitMillis then
+            until = Map.empty
+            dropped(
+              appState,
+              s"for ${(nowMillis - since) / 60000} minutes no peer that has the pivot's height served the branch's " +
+                s"block at block ${required.number}"
+            ) match
+              case BranchCheck.Dropped(why) => Some(why)
+              case _                        => None
+          else
+            if required.firstMissMillis.isEmpty then
+              appState.putPivotOnBranch(required.copy(firstMissMillis = Some(nowMillis))).commit()
+            StateMetrics.pivotRequirementRefused()
+            None
+        }
+
+  object OffBranchPeers:
+    val HeldMillis: Long = 10L * 60 * 1000
+
+  /** The log tag of the requirement that the sync after an escalation take its pivot on the refused branch (B-307). */
+  val PivotOnBranchTag: String = "[STATE-ESCALATION-PIVOT]"
+
+  /** What is said, at ERROR, when the requirement is ended without a sync on the branch. */
+  def requirementDroppedText(why: String): String =
+    s"$PivotOnBranchTag This node gave its state up to follow a branch, and the sync after it is no longer held to " +
+      s"that branch: $why. It syncs the chain the peers serve. The branch stays given up: if it is offered again and " +
+      "is the heavier, this node does not give its state up for it a second time. To let it, start the node once " +
+      "with -Dfukuii.state.recovery.forget-given-up-branches=true."
+
+  /** Ends the requirement where the header download cannot be asked at all: it validates no chain of headers below the
+    * pivot (forge). Said, never silent.
+    *
+    * @return
+    *   why it was ended, or none when no sync was bound
+    */
+  def dropUnchecked(ingest: StateIngest): Option[String] = dropUnchecked(ingest.appState)
+
+  def dropUnchecked(appState: AppStateStorage): Option[String] =
+    scala.util.Try(appState.getPivotOnBranch()) match
+      case scala.util.Success(None) => None
+      case _ =>
+        dropped(appState, "this chain's header download validates no chain of headers below the pivot") match
+          case BranchCheck.Dropped(why) => Some(why)
+          case _                        => None
+
+  private def dropped(appState: AppStateStorage, why: String): BranchCheck =
+    appState.removePivotOnBranch().commit()
+    StateMetrics.pivotRequirementDropped()
+    BranchCheck.Dropped(why)
 
   /** The header the validated download holds at `number`. With nothing downloaded (cursor 0) the chain is genesis
     * alone. When `number` is the download's target, the header it recorded there (`BackfillTargetHash`); otherwise the
