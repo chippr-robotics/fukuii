@@ -86,6 +86,28 @@ import com.chipprbots.ethereum.utils.NetworkType
   */
 object SyncController:
 
+  /** What the controller gives the state up with, on the unified layout (spec 018 C5a part 7b). None on the hash
+    * layout, and a request that arrives there is dropped.
+    */
+  trait StateEscalationPort:
+
+    /** What is to be done about a verdict to give the state up. */
+    def decide(request: EscalationWatch.Request, nowMillis: Long): EscalationHandler.Outcome
+
+    /** Clears the state for a sync from scratch, with the record of why, in the one synced batch that begins the clear.
+      * It returns when the rows are gone.
+      */
+    def clear(
+        record: com.chipprbots.ethereum.db.storage.pathstate.StateEscalation,
+        givenUpFor: Option[com.chipprbots.ethereum.db.storage.pathstate.GivenUpBranch]
+    ): Unit
+
+    /** Counts a state that was given up. */
+    def escalated(kind: com.chipprbots.ethereum.db.storage.pathstate.EscalationKind): Unit
+
+    /** Regular sync begins: what was answered for the verdicts of the sync before is forgotten. */
+    def regularSyncStarted(): Unit
+
   /** Bulk bytecode recoveries (triggered by block import) allowed to finish with the triggering code still missing
     * before the node stops repeating the full trie scan on every restart.
     */
@@ -170,6 +192,13 @@ object SyncController:
   // imported since, which drops the count and any re-SNAP waiting.
   private case class ResnapDue(blockNumber: BigInt) extends Command
   private case object ResnapCheck extends Command
+  // Spec 018 C5a part 7b: the state is to be given up. Sent by the controller to itself once the escalation's handler
+  // has said so, so that a backfill that still runs is stopped first, as for every other restart.
+  private case class StateEscalationDue(
+      record: com.chipprbots.ethereum.db.storage.pathstate.StateEscalation,
+      givenUpFor: Option[com.chipprbots.ethereum.db.storage.pathstate.GivenUpBranch],
+      why: String
+  ) extends Command
   private case class ResumerTerminated(ref: TypedActorRef[ChainDownloader.Command]) extends Command
   private case class BytecodeRecoveryTerminated(ref: TypedActorRef[BytecodeRecoveryActor.Command]) extends Command
   private case class StorageRecoveryTerminated(ref: TypedActorRef[StorageRecoveryActor.Command]) extends Command
@@ -267,7 +296,9 @@ object SyncController:
       chainWeightReconcileOn: Boolean = true,
       // Spec 027 slice 4a: the node's peer scorer, handed to every PeersClient and to the SNAP controller's request
       // tracker. Observation only; None where nothing scores (unit fixtures).
-      peerScoringManager: Option[PeerScoringManager] = None
+      peerScoringManager: Option[PeerScoringManager] = None,
+      // Spec 018 C5a part 7b: what a state is given up with. None on the hash layout.
+      stateEscalation: Option[StateEscalationPort] = None
   ): Behavior[Command] =
     Behaviors.setup { ctx =>
       Behaviors.withTimers { timers =>
@@ -299,7 +330,8 @@ object SyncController:
           txGossipGate,
           backgroundAuditEnabled,
           chainWeightReconcileOn,
-          peerScoringManager
+          peerScoringManager,
+          stateEscalation
         )
         impl.setup()
         impl.withPostStop(impl.idle())
@@ -343,7 +375,8 @@ object SyncController:
       txGossipGate: com.chipprbots.ethereum.transactions.TxGossipGate,
       backgroundAuditEnabled: Boolean,
       chainWeightReconcileOn: Boolean,
-      peerScoringManager: Option[PeerScoringManager]
+      peerScoringManager: Option[PeerScoringManager],
+      stateEscalation: Option[StateEscalationPort]
   ):
     // scalastyle:on parameter.number
 
@@ -615,7 +648,9 @@ object SyncController:
           // Buffer for the eventual SNAP startup; idle predates startSnapSync().
           handleBeaconHead(bh, snapSyncOpt = None)
           Behaviors.same
-        case _ => Behaviors.unhandled
+        // a controller that was not started gives no state up: said by the watch, and dropped here (beacon)
+        case _: SyncProtocol.StateEscalationRequested => Behaviors.same
+        case _                                        => Behaviors.unhandled
     }
 
     def runningSnapSync(snapSync: TypedActorRef[SNAPSyncController.Command]): Behavior[Command] = Behaviors.receive {
@@ -1082,6 +1117,39 @@ object SyncController:
           appStateStorage.clearBytecodeRecoveryDone().and(appStateStorage.clearRecoveryProgress()).commit()
           bulkCodeRecoveryTrigger = Some(codeHash)
           startRecovery(needBytecode = true, needStorage = false, scanRoot = recoveryScanRoot())
+        case SyncProtocol.StateEscalationRequested(request) =>
+          // The watch tells a verdict each time a fork choice or a branch is refused: the handler answers once for
+          // each, and says what it decided. Only an escalation changes anything here.
+          stateEscalation.map(_.decide(request, System.currentTimeMillis())) match
+            case Some(EscalationHandler.Outcome.Escalate(record, givenUpFor, why)) =>
+              ctx.self ! StateEscalationDue(record, givenUpFor, why)
+            case _ => ()
+          Behaviors.same
+        case StateEscalationDue(record, givenUpFor, why) =>
+          stateEscalation match
+            case None => Behaviors.same
+            case Some(port) =>
+              log.error(
+                "[STATE-ESCALATION] This node cannot follow the chain with the state it has ({}): {}. Its state is " +
+                  "given up: the import stops, the state is cleared, and it is synced again from the network. The " +
+                  "blocks it has stay. No other escalation follows before the cool-down " +
+                  "(state.recovery.escalation-cooldown) is over.",
+                record.kind.text,
+                why
+              )
+              pendingResnap = None
+              timers.cancel(ResnapDueKey)
+              timers.cancel(ResnapCheckKey)
+              ctx.stop(regularSync)
+              stopBackgroundAudit()
+              // The clear takes the state's locks, behind any import under way, and returns when the rows are gone: it
+              // also says the sync is no longer done and sets the best block back to the genesis, in its one batch.
+              port.clear(record, givenUpFor)
+              port.escalated(record.kind)
+              // On proof of work the pivot is taken no lower than the first block of the refused branch above its
+              // fork (the block the two chains have in common, plus one): never from the old head, since a heavier
+              // chain may be the shorter one (forge). A consensus client names its own head.
+              startSnapSync(minPivotBlock = givenUpFor.map(_.number))
         case SyncProtocol.RegularSyncStuck(blockNumber, missingHash) if pendingResnap.isDefined =>
           // The importer keeps retrying while a re-SNAP waits, and reports each new run of exhausts: nothing new.
           log.info(
@@ -1303,6 +1371,7 @@ object SyncController:
       case ResnapDue(blockNumber) =>
         pendingResnap.contains(blockNumber) && !importedSinceBaseline(blockchainReader.getBestBlockNumber)
       case _: SyncProtocol.MissingCodeNeedsBulkRecovery => true
+      case _: StateEscalationDue                        => true
       case _                                            => false
 
     /** H3: whether a block was imported since the re-SNAP count's baseline. No baseline (a re-SNAP runs) is no import.
@@ -1364,7 +1433,10 @@ object SyncController:
       case _: HealingServeRootTimeout    => true
       case _: ResnapDue                  => true
       case ResnapCheck                   => true
-      case _                             => false
+      // a state is given up from regular sync only: any other state of the controller is already syncing it
+      case _: SyncProtocol.StateEscalationRequested => true
+      case _: StateEscalationDue                    => true
+      case _                                        => false
 
     def runningPivotHeaderBootstrap(
         peersClient: TypedActorRef[PeersClient.Command],
@@ -2009,6 +2081,7 @@ object SyncController:
       */
     def startRegularSync(resumeBackfill: Boolean = true): (TypedActorRef[RegularSync.Command], Behavior[Command]) =
       syncGeneration += 1
+      stateEscalation.foreach(_.regularSyncStarted())
       txGossipGate.stateSyncFinished()
       // H3: while a re-SNAP count stands, imports are measured from a baseline. The first regular sync after a re-SNAP
       // sets it where it starts (SNAP's pivot is no import); any other start keeps it, so a restart forgets no import.

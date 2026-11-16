@@ -49,6 +49,12 @@ object SyncProtocol:
       extends SyncProtocolMsg
       with RegularSyncCommand
 
+  /** The escalation's watch found that this node cannot follow the chain with the state it has (spec 018 C5a part 7): a
+    * fork choice or a branch was refused once more. It is told each time; the controller asks whether the state is to
+    * be given up for it, and if so clears the state and syncs it again.
+    */
+  final case class StateEscalationRequested(request: EscalationWatch.Request) extends SyncProtocolMsg
+
   /** Block import found contract code missing from `EvmCodeStorage` (`MissingCodeException`) on a node whose state came
     * from SNAP. Fetching it one hash at a time costs a full re-execution of the block per contract, and a SNAP-synced
     * node can lack thousands. The controller stops regular sync, runs the bytecode recovery scan (every non-empty
