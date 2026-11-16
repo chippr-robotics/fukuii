@@ -3722,3 +3722,14 @@ items:
       prs: [1873]
       spec: 018
     notes: "beacon, review of #1873 (W1): Behaviors.stopped is the stop-and-alert pattern; eth_syncing, the admin and MCP status calls time out, and on PoS the Engine API answers SYNCING indefinitely. A terminal state that answers GetStatus with the reason and the sample's counts serves operators better."
+  - id: B-320
+    title: The healing serve-root and recent-root bootstraps drop PivotHeaderBootstrap.Failed.offBranch, and the healing one takes its target from unfiltered peer heights
+    priority: P2
+    status: open
+    area: snap
+    size: S
+    opened: 2026-11-16
+    refs: []
+    links:
+      spec: 018
+    notes: "forge, pre-code review of B-310 (2026-11-16): SyncController matches Failed(reason, _) for the healing serve-root (~911) and the recent-root (~3131) bootstraps, and maybeStartHealingServeRootBootstrap picks its target from every snap peer's height (~1021). After an escalation for a branch these ask peers on another chain again. The actor's OffBranchPeers lives in the SNAP child; the parent needs a way to pass the peers on or a filter of its own. Also: currentNetworkBestFromSnapPeers (PivotSelector) does not filter forkAccepted, unlike its two siblings."
