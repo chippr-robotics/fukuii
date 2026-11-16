@@ -18,6 +18,7 @@ import com.chipprbots.ethereum.db.storage.pathstate.BlockRef
 import com.chipprbots.ethereum.db.storage.pathstate.PathStateStorage
 import com.chipprbots.ethereum.db.storage.pathstate.ReorgTooDeep
 import com.chipprbots.ethereum.db.storage.pathstate.StateFault
+import com.chipprbots.ethereum.db.storage.pathstate.StateMetrics
 import com.chipprbots.ethereum.db.storage.pathstate.StateUnavailable
 import com.chipprbots.ethereum.domain.Block
 import com.chipprbots.ethereum.domain.BlockAccessList
@@ -312,6 +313,7 @@ class StateRecovery(
             case Right(Right(_)) if closed => Done(Outcome.Closed)
             case Right(Right((receipts, _, accessList))) =>
               sink.executed(block, receipts, accessList)
+              StateMetrics.reexecuted(1)
               // its state is held: as a layer, or, once a fork choice moved the head past it meanwhile, behind the anchor
               if state.stateAvailable(ref) then next(rest, executed + 1)
               else Done(Outcome.NotKept(ref))
@@ -461,6 +463,7 @@ class StateRecovery(
                 case Left(_) => Outcome.Superseded
                 case Right(Right(_)) =>
                   adopting = adopting.map(_.copy(current = block.header.number.value))
+                  StateMetrics.reexecuted(1)
                   next(rest, committed + 1)
                 case Right(Left(error)) if error eq Stopped =>
                   if closed then Outcome.Closed else Outcome.Superseded

@@ -333,7 +333,8 @@ trait BlockQueueBuilder:
   lazy val blockQueue: BlockQueue = BlockQueue(blockchainReader, syncConfig)
 
 trait ConsensusBuilder:
-  self: BlockchainBuilder & BlockQueueBuilder & MiningBuilder & ActorSystemBuilder & StorageBuilder =>
+  self: BlockchainBuilder & BlockQueueBuilder & MiningBuilder & ActorSystemBuilder & StorageBuilder &
+    BlockchainConfigBuilder & InstanceConfigProvider =>
 
   import com.chipprbots.ethereum.consensus.engine.DesignatedHead
   import com.chipprbots.ethereum.consensus.engine.InvalidChainReporter
@@ -394,6 +395,47 @@ trait ConsensusBuilder:
       )
     )
 
+  /** The count of what the node could not follow, on the unified layout (spec 018 C5a part 6): 64 refused fork choices
+    * in a row for a fault of this node, and no less than 64 slots; at once for a chain that cannot be reached. '''It
+    * says only''': an ERROR line and a count. The handler that gives the state up is part 7.
+    */
+  lazy val escalationWatch: Option[com.chipprbots.ethereum.blockchain.sync.EscalationWatch] =
+    storagesInstance.storages.pathStateStorage.map { _ =>
+      import com.chipprbots.ethereum.blockchain.sync.EscalationTrigger
+      import com.chipprbots.ethereum.blockchain.sync.EscalationWatch
+      import com.chipprbots.ethereum.db.storage.pathstate.StateMetrics
+      val refusals =
+        com.chipprbots.ethereum.db.storage.pathstate.StateConfig(instanceConfig.config).recovery.escalationRefusals
+      new EscalationWatch(
+        new EscalationTrigger(refusals, refusals * EscalationWatch.SlotMillis),
+        () => System.currentTimeMillis(),
+        StateMetrics.escalationTriggered,
+        (kind, why) =>
+          escalationLog.error(
+            s"[STATE-ESCALATION] This node cannot follow the chain with the state it has (${kind.text}): $why. Its " +
+              "state would be given up for a sync from scratch; nothing is done about it yet (spec 018 C5a part 7)."
+          )
+      )
+    }
+
+  private lazy val escalationLog =
+    org.slf4j.LoggerFactory.getLogger("com.chipprbots.ethereum.blockchain.sync.EscalationWatch")
+
+  /** What the import of proof-of-work blocks tells the watch (spec 018 C5a part 6b). */
+  lazy val powEscalationFeed: Option[com.chipprbots.ethereum.blockchain.sync.PowEscalationFeed] =
+    escalationWatch.map { watch =>
+      new com.chipprbots.ethereum.blockchain.sync.PowEscalationFeed(
+        watch,
+        blockchainReader.getChainWeightByHash,
+        // exact only: a head weighed from an estimate is outweighed by any block below it (forge)
+        () =>
+          blockchainReader.getBestBlockHeader
+            .map(com.chipprbots.ethereum.blockchain.sync.HeadChainWeight.classify(blockchainReader, _))
+            .collect { case com.chipprbots.ethereum.blockchain.sync.HeadChainWeight.Status.Exact(weight) => weight },
+        left => escalationLog.debug("[STATE-ESCALATION] {}", left)
+      )
+    }
+
   lazy val consensusAdapter: ConsensusAdapter =
     new ConsensusAdapter(
       consensus,
@@ -401,7 +443,8 @@ trait ConsensusBuilder:
       blockQueue,
       blockValidation,
       IORuntime.global,
-      Some(invalidChainReporter)
+      Some(invalidChainReporter),
+      powEscalationFeed
     )
 
 trait ForkResolverBuilder:
@@ -1045,29 +1088,6 @@ trait EngineApiBuilder extends Logger:
         // a fork choice's branch longer than that is committed in place, as far as `state.recovery.max-blocks` (C4d part 4)
         maxAdoptedBlocks = config.recovery.maxBlocks.max(layered)
       )(using blockchainConfig)
-    }
-
-  /** The count of what the node could not follow, on the unified layout (spec 018 C5a part 6): 64 refused fork choices
-    * in a row for a fault of this node, and no less than 64 slots; at once for a chain that cannot be reached. '''It
-    * says only''': an ERROR line and a count. The handler that gives the state up is part 7.
-    */
-  lazy val escalationWatch: Option[com.chipprbots.ethereum.blockchain.sync.EscalationWatch] =
-    stateRecovery.map { _ =>
-      import com.chipprbots.ethereum.blockchain.sync.EscalationTrigger
-      import com.chipprbots.ethereum.blockchain.sync.EscalationWatch
-      import com.chipprbots.ethereum.db.storage.pathstate.StateMetrics
-      val refusals =
-        com.chipprbots.ethereum.db.storage.pathstate.StateConfig(instanceConfig.config).recovery.escalationRefusals
-      new EscalationWatch(
-        new EscalationTrigger(refusals, refusals * EscalationWatch.SlotMillis),
-        () => System.currentTimeMillis(),
-        StateMetrics.escalationTriggered,
-        (kind, why) =>
-          log.error(
-            s"[STATE-ESCALATION] This node cannot follow the chain with the state it has (${kind.text}): $why. Its " +
-              "state would be given up for a sync from scratch; nothing is done about it yet (spec 018 C5a part 7)."
-          )
-      )
     }
 
   lazy val engineApiService: EngineApiService =

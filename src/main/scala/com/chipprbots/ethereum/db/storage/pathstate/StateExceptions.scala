@@ -65,6 +65,12 @@ final class LayerInconsistent(val block: BlockRef, detail: String)
       s"The executed blocks kept for the state at block ${block.show} do not make up that state: $detail"
     )
 
+/** A block this node executed and accepted before fails now that it is executed again: its state, or its configuration,
+  * is not what it was. It is no verdict on the block and no fault of a peer, and trying again finds the same: of the
+  * faults of a node it is the one that says the state it holds is not to be trusted (spec 018 C5a part 6).
+  */
+final class ReexecutionDiverged(detail: String) extends StateFault(s"A block executed before fails now: $detail")
+
 /** Why a move of the head was refused. */
 enum ReorgRefusal:
 

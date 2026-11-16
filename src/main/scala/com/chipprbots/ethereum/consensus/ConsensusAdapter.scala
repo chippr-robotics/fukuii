@@ -6,6 +6,9 @@ import cats.data.NonEmptyList
 import cats.effect.IO
 import cats.effect.unsafe.IORuntime
 
+import scala.util.control.NonFatal
+
+import com.chipprbots.ethereum.blockchain.sync.PowEscalationFeed
 import com.chipprbots.ethereum.blockchain.sync.regular.BlockEnqueued
 import com.chipprbots.ethereum.blockchain.sync.regular.BlockImportFailed
 import com.chipprbots.ethereum.blockchain.sync.regular.BlockImportFailedAt
@@ -53,7 +56,11 @@ class ConsensusAdapter(
     // class and on nothing else in the consensus package — can report the ONE case `ConsensusImpl` deliberately
     // refuses to classify: the gas-used mismatch, which needs `findMissingContractCode` to disambiguate and so can
     // only be decided in `BlockImporter`. `None` on ETC/Mordor/Gorgoroth.
-    invalidChainReporter: Option[InvalidChainReporter] = None
+    invalidChainReporter: Option[InvalidChainReporter] = None,
+    // What tells the escalation watch of proof-of-work branches this node's state could not take, and of heads that
+    // moved (spec 018 C5a part 6b). Here because every result of an import passes here, typed, with the branch it is
+    // of. `None` on the hash layout.
+    escalationFeed: Option[PowEscalationFeed] = None
 ) extends Logger:
 
   /** Report a block the import path has PROVEN consensus-invalid, so `engine_newPayload` / `engine_forkchoiceUpdated`
@@ -174,10 +181,12 @@ class ConsensusAdapter(
     (if accessLists.isEmpty then consensus.evaluateBranch(newBranch)
      else consensus.evaluateBranchWithAccessLists(newBranch, accessLists))
       .map {
-        case SelectedNewBestBranch(oldBranch, newBranch, weights) =>
+        case SelectedNewBestBranch(oldBranch, adopted, weights) =>
           oldBranch.foreach(blockQueue.enqueueBlock(_))
-          ChainReorganised(oldBranch, newBranch, weights)
+          toldOfTheHead(adopted.lastOption)
+          ChainReorganised(oldBranch, adopted, weights)
         case ExtendedCurrentBestBranch(blockImportData) =>
+          toldOfTheHead(blockImportData.lastOption.map(_.block))
           BlockImportedToTop(blockImportData)
         case ExtendedCurrentBestBranchPartially(
               blockImportData,
@@ -186,6 +195,7 @@ class ConsensusAdapter(
           blocksToEnqueue.foreach(blockQueue.enqueueBlock(_))
           blockQueue.removeSubtree(BlockHash(failingBlockHash))
           log.warn("extended best branch partially because of error: {}", error)
+          toldOfTheHead(blockImportData.lastOption.map(_.block))
           BlockImportedToTop(blockImportData)
         case KeptCurrentBestBranch =>
           newBranch.toList.foreach(blockQueue.enqueueBlock(_))
@@ -208,8 +218,27 @@ class ConsensusAdapter(
           // The blocks were not judged: they wait in the queue to be tried again, and none of them is dropped from it
           // as an invalid block's descendants are.
           blocksToEnqueue.foreach(blockQueue.enqueueBlock(_))
+          // the blocks of the batch that became the head before the fault moved it, and are no part of what is refused
+          toldOfTheHead(imported.lastOption.map(_.block))
+          toldTheFeed("a branch that was not judged")(
+            _.notJudged(newBranch.toList.drop(imported.size), fault, blockValidation.firstInvalidHeader)
+          )
           BlockImportStateFault(fault, imported)
       }
+
+  private def toldOfTheHead(head: Option[Block]): Unit =
+    head.foreach(block => toldTheFeed("a head that moved")(_.headMoved(block)))
+
+  /** The escalation's feed is told after the import is done, and says only: whatever goes wrong in it is logged, and
+    * the import's result stands (forge).
+    */
+  private def toldTheFeed(of: String)(tell: PowEscalationFeed => Unit): Unit =
+    escalationFeed.foreach { feed =>
+      try tell(feed)
+      catch
+        case NonFatal(failed) =>
+          log.error(s"[STATE-ESCALATION] The escalation's feed could not be told of $of; the import stands", failed)
+    }
 
   private def doBlockPreValidation(block: Block)(implicit
       blockchainConfig: BlockchainConfig

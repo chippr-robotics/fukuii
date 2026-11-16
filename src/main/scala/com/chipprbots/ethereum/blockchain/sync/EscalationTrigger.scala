@@ -32,7 +32,7 @@ final class EscalationTrigger(refusals: Int, minSpanMillis: Long = 0L):
 
   private var count: Int = 0
   private var firstAtMillis: Long = 0L
-  private var branchFirstSeenAt: Option[BigInt] = None
+  private var branch: Option[(Any, BigInt, BigInt)] = None
 
   /** How many refusals stand in the run that is open. */
   def refused: Int = count
@@ -49,23 +49,28 @@ final class EscalationTrigger(refusals: Int, minSpanMillis: Long = 0L):
     if count >= refusals && nowMillis - firstAtMillis >= minSpanMillis then Verdict.Escalate(EscalationKind.LocalFault)
     else Verdict.Waiting(count)
 
-  /** A branch was refused for a fault of this node when its tip was at `tipNumber` (proof of work). The run is of the
-    * branch's growth: it escalates when the tip is `refusals` blocks above where the run began. A tip that is lower
-    * than the run's first begins the run again there: it is another branch.
+  /** A branch was refused for a fault of this node when its tip was at `tipNumber` (proof of work). `standsOn` names
+    * the branch: the block its first refused block stands on. The run is of the branch's growth: it escalates when the
+    * highest tip seen is `refusals` blocks above the first.
+    *
+    * A lower tip of the same branch changes nothing (forge): a refused branch is fetched again a batch at a time, and
+    * the same branch is told with the tip of one batch and then with the tip a peer announced. Another block to stand
+    * on is another branch, and begins the run again.
     */
-  def localFaultOnBranch(tipNumber: BigInt): Verdict =
-    val first = branchFirstSeenAt.filter(_ <= tipNumber).getOrElse {
-      branchFirstSeenAt = Some(tipNumber)
-      tipNumber
-    }
-    count = (tipNumber - first).min(BigInt(Int.MaxValue)).toInt
-    if tipNumber - first >= refusals then Verdict.Escalate(EscalationKind.LocalFault) else Verdict.Waiting(count)
+  def localFaultOnBranch(standsOn: Any, tipNumber: BigInt): Verdict =
+    val (first, highest) = branch match
+      case Some((`standsOn`, first, highest)) => (first, highest.max(tipNumber))
+      case _                                  => (tipNumber, tipNumber)
+    branch = Some((standsOn, first, highest))
+    val grown = highest - first
+    count = grown.min(BigInt(Int.MaxValue)).toInt
+    if grown >= refusals then Verdict.Escalate(EscalationKind.LocalFault) else Verdict.Waiting(count)
 
   /** The head moved: whatever was refused before, the node follows the chain. */
   def headMoved(): Unit =
     count = 0
     firstAtMillis = 0L
-    branchFirstSeenAt = None
+    branch = None
 
 object EscalationTrigger:
 
