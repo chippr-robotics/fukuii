@@ -55,11 +55,13 @@ import com.chipprbots.ethereum.db.storage.CachedReferenceCountedStateStorage
 import com.chipprbots.ethereum.db.storage.EvmCodeStorage
 import com.chipprbots.ethereum.db.storage.FlatSlotStorage
 import com.chipprbots.ethereum.db.storage.MptStorage
+import com.chipprbots.ethereum.db.storage.PathHandoffSample
 import com.chipprbots.ethereum.db.storage.PathNodeStorage
 import com.chipprbots.ethereum.db.storage.RefCountTrust
 import com.chipprbots.ethereum.db.storage.SnapStorageDoneStorage
 import com.chipprbots.ethereum.db.storage.SnapSyncProgressStorage
 import com.chipprbots.ethereum.db.storage.StateStorage
+import com.chipprbots.ethereum.db.storage.pathstate.SyncHandoff
 import com.chipprbots.ethereum.domain.BlockHeader
 import com.chipprbots.ethereum.domain.BlockchainReader
 import com.chipprbots.ethereum.domain.BlockchainWriter
@@ -213,6 +215,10 @@ private class SNAPSyncControllerImpl(
 
   // Implements `SnapFinalizationState.sharedBlacklist`: the blacklist SyncController shares with the rest of sync.
   val sharedBlacklist: Blacklist = blacklist
+
+  // Implements `SnapFinalizationState.handoff`: none. A sync does not start on the unified state layout yet (spec 018
+  // C5a part 10 lifts that, and builds this from the node's path state storage).
+  val handoff: Option[SyncHandoff] = None
 
   // SNAP download progress storage (namespace 'p'). Shares the same RocksDB DataSource as
   // AppStateStorage but uses a dedicated namespace so progress survives crash-restart without
@@ -932,6 +938,11 @@ private class SNAPSyncControllerImpl(
         pathPublish = None
         syncController ! SyncProtocol.HealingImpossible
         Behaviors.same
+      // The hand-off's sample on the unified layout: in flight as the publish is (`pathPublish` marks either).
+      case HandoffSampleDone(result) =>
+        onHandoffSampleDone(result)
+      case HandoffSampleFailed(cause) =>
+        onHandoffSampleFailed(cause)
       case msg if pathPublish.isDefined && !msg.isInstanceOf[GetStatus] && !msg.isInstanceOf[GetProgress] =>
         Behaviors.same
       // Deferred-backfill hold (see enterHeaderHold): only the tick, status/progress and the downloader's reports run.
@@ -1363,6 +1374,11 @@ object SNAPSyncController:
   final case class PathPublishProgress(accountNodes: Long, storageNodes: Long) extends Command
   final case class PathPublishDone(result: PathToHashExporter.Result, millis: Long) extends Command
   final case class PathPublishFailed(cause: Throwable) extends Command
+
+  // The unified state layout (spec 018 C5a part 5): nothing is published; the rows are sampled from the pivot's root
+  // off the actor's thread (see PathHandoffSample), and these bring the outcome back.
+  final case class HandoffSampleDone(result: PathHandoffSample.Result) extends Command
+  final case class HandoffSampleFailed(cause: Throwable) extends Command
 
   /** spec 004 (Decoupled Heal Serve-Root) T011/T012: SNAPSyncController → SyncController (parent). During healing, ask
     * the parent to fetch a newest-servable canonical header (networkBest − RecentRootMarginBlocks) via its own

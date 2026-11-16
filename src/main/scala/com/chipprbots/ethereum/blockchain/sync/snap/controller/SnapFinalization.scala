@@ -20,8 +20,11 @@ import com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncController
 import com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncController.*
 import com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncController.SyncPhase.*
 import com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncMetrics
+import com.chipprbots.ethereum.db.storage.AncestorWindow
+import com.chipprbots.ethereum.db.storage.PathHandoffSample
 import com.chipprbots.ethereum.db.storage.RefCountTrust
 import com.chipprbots.ethereum.db.storage.StateStorage
+import com.chipprbots.ethereum.db.storage.pathstate.SyncHandoff
 import com.chipprbots.ethereum.domain.BlockHeader
 import com.chipprbots.ethereum.domain.ChainWeight
 import com.chipprbots.ethereum.utils.ByteStringUtils.toHex
@@ -42,6 +45,31 @@ private[snap] trait SnapFinalizationState:
 
   /** The node's shared sync blacklist; the header download adds a peer whose header failed validation to it. */
   def sharedBlacklist: Blacklist
+
+  /** How this sync ends on the unified state layout (spec 018 Track C, C5a part 5), where nothing is copied: the rows
+    * it wrote are the state. `None` on the hash layout, where the state is published to the hash store or was written
+    * there.
+    */
+  def handoff: Option[SyncHandoff]
+
+/** Whether each recovery is complete at a hand-off, and what that was decided on. */
+final private[snap] case class RecoveryFlags(
+    bytecodeComplete: Boolean,
+    storageComplete: Boolean,
+    accountsExcluded: Boolean,
+    codeExcluded: Boolean,
+    codeScanOwed: Option[String]
+)
+
+private[snap] object SnapFinalization:
+
+  /** The sources of a pivot's weight that are exact ([[HeadChainWeight.classify]]): the stored weight, and the parent's
+    * plus the pivot's difficulty. Every other is an estimate.
+    */
+  val ExactWeights: Set[String] = Set("REAL_DB_TD", "DERIVED_FROM_PARENT")
+
+  /** How often the header download is started again for a window that does not fill, before the sync is given up. */
+  val WindowHoldRestarts: Int = 3
 
 private[snap] trait FinalizationApi:
   def completeSnapSync(): Behavior[Command]
@@ -79,6 +107,15 @@ private[snap] trait SnapFinalization extends FinalizationApi with ChainDownloadS
   private var rewoundForPins: Set[ByteString] = Set.empty
   // The pivot whose Path-scheme publish completed (onPathPublishDone), so the hold tick re-enters finalisation past it.
   private var pathPublishedFor: Option[BigInt] = None
+  // The unified state layout: the pivot and the state root the hand-off's sample passed for. By the root, and not by
+  // the pivot's number alone: the write that hands off names a root, and it must be the one that was looked at.
+  private var sampledFor: Option[(BigInt, ByteString)] = None
+  // The unified state layout: the pivot the hand-off is held for until the window below it is stored, what was missing
+  // when it was last looked at and when that last changed, and how often the header download was restarted for it.
+  private var windowHeldFor: Option[ByteString] = None
+  private var windowLastMissing: String = ""
+  private var windowLastChangeMs: Long = 0L
+  private var windowRestarts: Int = 0
 
   def completed(): Behavior[Command] =
     Behaviors
@@ -190,10 +227,19 @@ private[snap] trait SnapFinalization extends FinalizationApi with ChainDownloadS
     finalizeSnapSync(pivot, pathPublished = pathPublishedFor.contains(pivot))
 
   private def leaveHeaderHold(): Unit =
+    // every hold ends here, the hand-off's hold for the window below the pivot with it (the unified state layout)
+    windowHeldFor = None
+    windowRestarts = 0
     if headerHold.isDefined then
       headerHold = None
       timers.cancel(SNAPSyncController.HeaderHoldTimerKey)
       ctx.log.info("Header download reached the pivot; finalising SNAP")
+
+  /** The headers have reached the pivot, which every tick finds again from then on: the header hold ends, unless the
+    * hand-off is held for the window below the pivot, whose tick it then is ([[holdForTheWindow]]).
+    */
+  private def headersReachedThePivot(): Unit =
+    if windowHeldFor.isEmpty then leaveHeaderHold()
 
   /** During the hold, state is complete and regular sync has not started, so every peer is free: the downloader gets
     * `chain-download-boosted-concurrent-requests` instead of the SNAP-era budget, and its dispatch tick drops from 2 s
@@ -243,7 +289,15 @@ private[snap] trait SnapFinalization extends FinalizationApi with ChainDownloadS
           // block can read the pivot state. The scan is long (the whole state), so it runs on a blocking-dispatcher
           // Future and this actor keeps serving status/progress queries (`syncing` serves them while `pathPublish` is set); it re-enters here with
           // `pathPublished = true` once PathPublishDone arrives. Hash scheme (ETC) never enters this branch.
-          if stateIngest.pathNodes.isDefined && !pathPublished then
+          // The unified state layout (spec 018 C5a part 5): nothing is published. The rows the sync wrote are the state a
+          // block is executed on, so they are sampled from the pivot's root where they lie, off this thread; the
+          // controller serves status and progress meanwhile, as during a publish, and `HandoffSampleDone` re-enters
+          // here. Whether it has passed is asked of this pivot's root, whatever the caller says of a publish.
+          if handoff.isDefined && !sampledFor.contains((pivot, pivotHeader.stateRoot.value)) then
+            startHandoffSample(pivot, pivotHeader.stateRoot.value)
+            break(Behaviors.same)
+
+          if handoff.isEmpty && stateIngest.pathNodes.isDefined && !pathPublished then
             // #1555: never start the whole-state publish when the pivot root's node is stored nowhere: its verification
             // cannot pass, so escalate now instead of after 6-12 minutes of scanning. SyncController's restart then
             // heals at a newer pivot (PoS) rather than this one.
@@ -278,201 +332,427 @@ private[snap] trait SnapFinalization extends FinalizationApi with ChainDownloadS
             if cursor < pivot then
               enterHeaderHold(pivot, pivotHeader.hash.value, cursor)
               break(Behaviors.same)
-            else leaveHeaderHold()
+            else headersReachedThePivot()
 
-          val pivotHash = pivotHeader.hash
+          // The unified state layout: the window below the pivot, and then one write. Nothing after this line is the
+          // hash layout's on that route.
+          if handoff.isDefined then
+            if !handOffOnPositions(pivot, pivotHeader) then break(Behaviors.same)
+          else finishOnTheHashLayout(pivot, pivotHeader)
 
-          // Write the pivot header with its number→hash mapping (PivotHeaderBootstrap stored the header, but a pivot
-          // refresh can have stored it by another path). The BODY is never invented here (CQ-020-07): this used to
-          // write `BlockBody.empty`, which overwrote the body a newPayload had already stored for a CL-chosen pivot
-          // (Ephemery 137,594 lost its 16 withdrawals) and, because ChainDownloader fetches only ABSENT bodies, was
-          // never replaced. Keep a stored body that validates; derive it only when the header commits to an empty one;
-          // otherwise leave it absent (the backfill target includes the pivot, so it is fetched and validated there).
-          // A body-less best block is a state the readers already handle (getBestBlockHeader, #1201).
-          stateIngest.chainWriter.storeBlockHeader(pivotHeader).commit()
-          applyPivotBodyCheck(pivotHeader)
-
-          // Store a ChainWeight so fork choice can weigh new blocks; every block above the pivot inherits it (#1654).
-          // REAL_DB_TD only when the stored weight is exact (HeadChainWeight.classify): the parent's weight clears the
-          // plausibility floor and the pivot's is the parent's plus its difficulty. The hold above guarantees that: the
-          // downloader stores every header from genesis with its parent's weight plus its difficulty, in the same batch
-          // as the cursor. Without the hold:
-          //   - Derivable (the parent's weight is plausible, the pivot's is absent or not parent + difficulty): write the
-          //     exact value. What was stored is PivotSelector's selection-time estimate.
-          //   - NoExact (the parent has no plausible weight): an ESTIMATE, in this order: the selection-time estimate if
-          //     it exceeds 1000x the genesis TD (which rejects a genesis or block-number proxy), a peer interpolation now,
-          //     the block-number proxy. Before #1654 the first of these was logged as REAL_DB_TD.
-          //   - NoExact on a chain that was PoS from genesis (Platåberget), even with the hold: the floor rejects every
-          //     weight there, and at genesis difficulty 0 the 1000x check is `> 0`, so the cascade above replaced the
-          //     header download's exact 0 with the pivot number. The genesis weight is exact at every height: it goes
-          //     first (#1654).
-          val genesisBlockTD: BigInt = stateIngest.chainReader
-            .getChainWeightByHash(stateIngest.chainReader.genesisHeader.hash)
-            .map(_.totalDifficulty.value)
-            .getOrElse(stateIngest.chainReader.genesisHeader.difficulty.value)
-          val reader = stateIngest.chainReader
-          val (finalTD, tdSource) =
-            HeadChainWeight.classify(reader, pivotHeader) match
-              case HeadChainWeight.Status.Exact(stored) => (stored.totalDifficulty.value, "REAL_DB_TD")
-              case HeadChainWeight.Status.Derivable(_, exact) =>
-                (exact.totalDifficulty.value, "DERIVED_FROM_PARENT")
-              case HeadChainWeight.Status.NoExact =>
-                HeadChainWeight
-                  .posFromGenesisWeight(terminalTotalDifficulty, reader)
-                  .map(w => (w.totalDifficulty.value, "GENESIS_WEIGHT"))
-                  .orElse(
-                    reader
-                      .getChainWeightByHash(pivotHash)
-                      .map(_.totalDifficulty.value)
-                      .filter(_ > genesisBlockTD * BigInt(1000))
-                      .map(td => (td, "PIVOT_SELECTION_ESTIMATE"))
-                  )
-                  .orElse(calibratePivotTD(pivotHeader).map(td => (td, "PEER_INTERPOLATED_TD")))
-                  .getOrElse((pivot.max(genesisBlockTD), "BLOCK_NUMBER_PROXY"))
-          ctx.log.info("SNAP finalize pivot TD: block={} td={} source={}", pivot, finalTD, tdSource)
-          stateIngest.chainWriter
-            .storeChainWeight(
-              pivotHash,
-              ChainWeight.totalDifficultyOnly(finalTD)
-            )
-            .commit()
-
-          // Set best block info with BOTH hash and number (putBestBlockNumber only
-          // sets the number, leaving getBestBlockInfo().hash empty).
-          stateIngest.appState
-            .putBestBlockInfo(
-              com.chipprbots.ethereum.domain.appstate.BlockInfo(pivotHash.value, pivot)
-            )
-            .commit()
-
-          // D4: snapSyncDone written AFTER pivot header and best-block info are stored.
-          // Pivot data is written first so a crash between writes leaves the node in a
-          // recoverable state (D3 startup gate detects SnapSyncDone=true with unreachable
-          // root and restarts SNAP). Mirrors Besu SnapSyncStatePersistenceManager ordering.
-          //
-          // All three completion flags (snapSyncDone + bytecodeRecoveryDone + storageRecoveryDone)
-          // are written atomically in a single fsync-backed commit. A crash before this call
-          // leaves all flags absent → startup retries SNAP. A crash after → all flags present
-          // → startup proceeds directly to regular sync. There is no inconsistent half-written
-          // state. commitSync() flushes the OS write buffer to disk before returning, eliminating
-          // the ~5-30s dirty-writeback window that previously caused spurious SNAP-RECOVERY.
-          //
-          // `bytecodeRecoveryDone` is the claim "no account's bytecode is missing". Healing delivered accounts whose
-          // bytecode may still be absent (a peer would not serve it within the wait): leave the flag unset so the
-          // next start's recovery scan finds them. Previously it was set unconditionally, which is how a node came to
-          // hold accounts with a codeHash and no code, forever.
-          dropHealedCodeNowPresent()
-          // spec 022 D5: what the excluded set still says at a lazy hand-off. Each flag claims only its own kind of entry,
-          // and a set that cannot be read claims nothing.
-          val progress = stateIngest.snapProgress
-          val appState = stateIngest.appState
-          val (accountsExcluded, codeExcluded) =
-            try (progress.hasExcludedAccounts, progress.hasExcludedCode)
-            catch
-              case scala.util.control.NonFatal(e) =>
-                ctx.log.error("[HEAL-EXCLUDED] Could not read the excluded set at finalisation: neither flag is set", e)
-                (true, true)
-          // Durability barrier (#1581). Under pruning.mode=inmemory the ingested (and Path-published) trie nodes live only
-          // in the node cache, not in the WAL; flush them to the data source BEFORE the flags, so the flags' synced
-          // commit (which syncs the WAL up to and including itself) cannot be recovered without the state it claims.
-          // A no-op under archive and basic pruning, which write through. The WAL is on, so no memtable flush is needed.
-          stateIngest.stateTries.forcePersist(StateStorage.SnapSyncFinalization)
-          // spec 022 T043: a hand-off with no clean full walk of this root behind it, whichever route brought it here, takes
-          // a marker stamped earlier. From here regular sync fetches what is missing on demand, one node at a time, each
-          // present over children that may be absent. Before the flags: a crash in between only resumes SNAP unmarked.
-          // spec 022 5d: a coordinator's clean decision on this root keeps it too, walk or no walk. It sets that record on
-          // the clean route alone, so every hand-off still takes the marker here.
-          if !stateRoot.exists(r => r.value == healingCleanWalkRoot.get() || r.value == healingDecidedRoot.get()) &&
-            appState.isSnapHealInvariantPresent()
-          then
-            ctx.log.warn("[HEAL-INVARIANT] Handing off with no clean decision on this root: marker removed")
-            stateIngest.appState.clearSnapHealInvariant().commitSync()
-          // spec 022 T050a: a repair run, or a run that lost track, owes the recovery scan what no walk can vouch for, and
-          // the flags say nothing of what it lost, so it withholds both: a failed task-file sweep is exactly the case where
-          // unfinished accounts were never recorded, so an empty excluded set does not show them complete (forge W1). It
-          // costs no second scan: the one pass looks at both.
-          //
-          // Read here, just before the batch that clears it, because `lostTrack` runs on other actors' threads and one
-          // landing between this read and that batch is cleared unseen. That leaves a few instructions. It does not close
-          // it: the key has no compare-and-clear. A key that cannot be read counts as owed.
-          val codeScanOwed =
-            try appState.getSnapCodeScanOwed()
-            catch
-              case scala.util.control.NonFatal(e) =>
-                ctx.log.error("[HEAL-INVARIANT] Could not read whether a code scan is owed: taking it as owed", e)
-                Some("the key could not be read")
-          val bytecodeComplete =
-            SNAPSyncController.bytecodeRecoveryComplete(healedCodeHashes.size, bytecodeForceCompleted) &&
-              !codeExcluded && codeScanOwed.isEmpty
-          val storageComplete = !accountsExcluded && codeScanOwed.isEmpty
-          // The set stays: it is the only record of those accounts, and only a cycle that starts from nothing wipes it.
-          // Withheld is written, not left out: a datadir SNAP has been through before can hold `true` from that cycle.
-          // The scan's debt moves to these flags here, in one write, so nothing charges a later cycle for it.
-          val storageFlag =
-            if storageComplete then appState.storageRecoveryDone() else appState.clearStorageRecoveryDone()
-          val codeFlag =
-            if bytecodeComplete then appState.bytecodeRecoveryDone() else appState.clearBytecodeRecoveryDone()
-          appState.snapSyncDone().and(storageFlag).and(codeFlag).and(appState.clearSnapCodeScanOwed()).commitSync()
-
-          if !bytecodeComplete then
-            ctx.log.warn(
-              s"[HEAL-CODE] bytecode incomplete at finalisation (healed-account codeHashes missing: " +
-                s"${healedCodeHashes.size}, bytecode phase force-completed: $bytecodeForceCompleted, " +
-                s"code entries: $codeExcluded, scan owed: ${codeScanOwed.getOrElse("no")}) — " +
-                "bytecodeRecoveryDone NOT set"
-            )
-          if !storageComplete then
-            ctx.log.warn(
-              s"[HEAL-EXCLUDED] storage not shown complete at finalisation (account entries: $accountsExcluded, " +
-                s"scan owed: ${codeScanOwed.getOrElse("no")}) — storageRecoveryDone NOT set"
-            )
-
-          ctx.log.info(s"SNAP sync completed successfully at block $pivot (hash=${pivotHash.value.take(8).toHex})")
+        case None if handoff.isDefined =>
+          // The unified state layout has no hand-off without the pivot's header: the state's anchor names the block,
+          // and a best block with no anchor is a node with no state that says it is synced. Not the fallback below.
+          ctx.log.error(
+            s"[HANDOFF] the header of pivot $pivot is not stored: the sync cannot hand off. Escalating to " +
+              "SyncController for a SNAP restart."
+          )
+          leaveHeaderHold()
+          syncController ! SyncProtocol.HealingImpossible
+          break(Behaviors.same)
 
         case None =>
           // Fallback: shouldn't happen since PivotHeaderBootstrap stored the header
           ctx.log.warn(s"Pivot header for block $pivot not found in storage — setting best block number only")
           stateIngest.appState.putBestBlockNumber(pivot).commit()
 
-      progressMonitor.complete()
-      ctx.log.info(progressMonitor.currentProgress.toString)
-      currentPhase = Completed
+      finishedHandOff(pivot)
+    }
 
-      // Cancel SNAP-only schedules before handing off so eviction tickers / stagnation checks stop
-      // affecting peers while regular sync runs. Stop state-sync child coordinators too — they don't
-      // self-stop on completion and would otherwise retain completed task buffers and worker actors
-      // for the full background-backfill window. The chain downloader child is intentionally NOT stopped.
-      stopSnapOnlySchedules()
-      stopStateSyncChildren()
+  /** The anchor and the flags of a sync that ends on the hash layout: the pivot's header, weight and best block, each
+    * its own write, and then the flags in one synced commit.
+    */
+  private def finishOnTheHashLayout(pivot: BigInt, pivotHeader: BlockHeader): Unit =
+    val pivotHash = pivotHeader.hash
 
-      // SNAP is done: no account resume can follow. Drop the checkpoint and every superseded contract task file,
-      // keeping only the files the accounts-complete recovery path was handed (conservative; they are not re-read).
-      stateIngest.appState.removeSnapAccountResumeCheckpoint().commit()
-      releaseHeldResumeCheckpoint()
-      sweepSupersededTaskFiles(keep = accountsCompleteTaskFilePaths, reason = "SNAP complete")
+    // Write the pivot header with its number→hash mapping (PivotHeaderBootstrap stored the header, but a pivot
+    // refresh can have stored it by another path). The BODY is never invented here (CQ-020-07): this used to
+    // write `BlockBody.empty`, which overwrote the body a newPayload had already stored for a CL-chosen pivot
+    // (Ephemery 137,594 lost its 16 withdrawals) and, because ChainDownloader fetches only ABSENT bodies, was
+    // never replaced. Keep a stored body that validates; derive it only when the header commits to an empty one;
+    // otherwise leave it absent (the backfill target includes the pivot, so it is fetched and validated there).
+    // A body-less best block is a state the readers already handle (getBestBlockHeader, #1201).
+    stateIngest.chainWriter.storeBlockHeader(pivotHeader).commit()
+    applyPivotBodyCheck(pivotHeader)
 
-      // Phase 1 of the handshake: tell the parent that pivot/state is anchored. Parent starts RegularSync.
-      syncController ! SnapSyncFinalized(pivot)
+    // Store a ChainWeight so fork choice can weigh new blocks; every block above the pivot inherits it (#1654).
+    // REAL_DB_TD only when the stored weight is exact (HeadChainWeight.classify): the parent's weight clears the
+    // plausibility floor and the pivot's is the parent's plus its difficulty. The hold above guarantees that: the
+    // downloader stores every header from genesis with its parent's weight plus its difficulty, in the same batch
+    // as the cursor. Without the hold:
+    //   - Derivable (the parent's weight is plausible, the pivot's is absent or not parent + difficulty): write the
+    //     exact value. What was stored is PivotSelector's selection-time estimate.
+    //   - NoExact (the parent has no plausible weight): an ESTIMATE, in this order: the selection-time estimate if
+    //     it exceeds 1000x the genesis TD (which rejects a genesis or block-number proxy), a peer interpolation now,
+    //     the block-number proxy. Before #1654 the first of these was logged as REAL_DB_TD.
+    //   - NoExact on a chain that was PoS from genesis (Platåberget), even with the hold: the floor rejects every
+    //     weight there, and at genesis difficulty 0 the 1000x check is `> 0`, so the cascade above replaced the
+    //     header download's exact 0 with the pivot number. The genesis weight is exact at every height: it goes
+    //     first (#1654).
+    val (finalTD, tdSource) = pivotWeight(pivot, pivotHeader)
+    ctx.log.info("SNAP finalize pivot TD: block={} td={} source={}", pivot, finalTD, tdSource)
+    stateIngest.chainWriter
+      .storeChainWeight(
+        pivotHash,
+        ChainWeight.totalDifficultyOnly(finalTD)
+      )
+      .commit()
 
-      // Deferred backfill: bodies and receipts start only now that the state is complete (no-op unless the switch is on).
-      releaseDeferredBodiesAndReceipts()
+    // Set best block info with BOTH hash and number (putBestBlockNumber only
+    // sets the number, leaving getBestBlockInfo().hash empty).
+    stateIngest.appState
+      .putBestBlockInfo(
+        com.chipprbots.ethereum.domain.appstate.BlockInfo(pivotHash.value, pivot)
+      )
+      .commit()
 
-      val backfillStillRunning =
-        snapSyncConfig.chainDownloadEnabled && chainDownloader.isDefined && !chainDownloadComplete
+    // D4: snapSyncDone written AFTER pivot header and best-block info are stored.
+    // Pivot data is written first so a crash between writes leaves the node in a
+    // recoverable state (D3 startup gate detects SnapSyncDone=true with unreachable
+    // root and restarts SNAP). Mirrors Besu SnapSyncStatePersistenceManager ordering.
+    //
+    // All three completion flags (snapSyncDone + bytecodeRecoveryDone + storageRecoveryDone)
+    // are written atomically in a single fsync-backed commit. A crash before this call
+    // leaves all flags absent → startup retries SNAP. A crash after → all flags present
+    // → startup proceeds directly to regular sync. There is no inconsistent half-written
+    // state. commitSync() flushes the OS write buffer to disk before returning, eliminating
+    // the ~5-30s dirty-writeback window that previously caused spurious SNAP-RECOVERY.
+    //
+    // `bytecodeRecoveryDone` is the claim "no account's bytecode is missing". Healing delivered accounts whose
+    // bytecode may still be absent (a peer would not serve it within the wait): leave the flag unset so the
+    // next start's recovery scan finds them. Previously it was set unconditionally, which is how a node came to
+    // hold accounts with a codeHash and no code, forever.
+    dropHealedCodeNowPresent()
+    // spec 022 D5: what the excluded set still says at a lazy hand-off. Each flag claims only its own kind of entry,
+    // and a set that cannot be read claims nothing.
+    val appState = stateIngest.appState
+    val (accountsExcluded, codeExcluded) = excludedAtHandOff()
+    // Durability barrier (#1581). Under pruning.mode=inmemory the ingested (and Path-published) trie nodes live only
+    // in the node cache, not in the WAL; flush them to the data source BEFORE the flags, so the flags' synced
+    // commit (which syncs the WAL up to and including itself) cannot be recovered without the state it claims.
+    // A no-op under archive and basic pruning, which write through. The WAL is on, so no memtable flush is needed.
+    stateIngest.stateTries.forcePersist(StateStorage.SnapSyncFinalization)
+    // spec 022 T043: a hand-off with no clean full walk of this root behind it, whichever route brought it here, takes
+    // a marker stamped earlier. From here regular sync fetches what is missing on demand, one node at a time, each
+    // present over children that may be absent. Before the flags: a crash in between only resumes SNAP unmarked.
+    // spec 022 5d: a coordinator's clean decision on this root keeps it too, walk or no walk. It sets that record on
+    // the clean route alone, so every hand-off still takes the marker here.
+    if !stateRoot.exists(r => r.value == healingCleanWalkRoot.get() || r.value == healingDecidedRoot.get()) &&
+      appState.isSnapHealInvariantPresent()
+    then
+      ctx.log.warn("[HEAL-INVARIANT] Handing off with no clean decision on this root: marker removed")
+      appState.clearSnapHealInvariant().commitSync()
+    // spec 022 T050a: a repair run, or a run that lost track, owes the recovery scan what no walk can vouch for, and
+    // the flags say nothing of what it lost, so it withholds both: a failed task-file sweep is exactly the case where
+    // unfinished accounts were never recorded, so an empty excluded set does not show them complete (forge W1). It
+    // costs no second scan: the one pass looks at both.
+    //
+    // Read here, just before the batch that clears it, because `lostTrack` runs on other actors' threads and one
+    // landing between this read and that batch is cleared unseen. That leaves a few instructions. It does not close
+    // it: the key has no compare-and-clear. A key that cannot be read counts as owed.
+    val completion = recoveryFlags(accountsExcluded, codeExcluded)
+    // The set stays: it is the only record of those accounts, and only a cycle that starts from nothing wipes it.
+    // Withheld is written, not left out: a datadir SNAP has been through before can hold `true` from that cycle.
+    // The scan's debt moves to these flags here, in one write, so nothing charges a later cycle for it.
+    val storageFlag =
+      if completion.storageComplete then appState.storageRecoveryDone() else appState.clearStorageRecoveryDone()
+    val codeFlag =
+      if completion.bytecodeComplete then appState.bytecodeRecoveryDone() else appState.clearBytecodeRecoveryDone()
+    appState.snapSyncDone().and(storageFlag).and(codeFlag).and(appState.clearSnapCodeScanOwed()).commitSync()
 
-      if backfillStillRunning then
-        ctx.log.info(
-          s"SNAP state finalised at pivot=$pivot. Starting regular sync; chain backfill continues in background."
+    warnOfWhatIsWithheld(completion)
+
+    ctx.log.info(s"SNAP sync completed successfully at block $pivot (hash=${pivotHash.value.take(8).toHex})")
+
+  // ---- the hand-off on the unified state layout (spec 018 C5a part 5) ----
+
+  /** The sample of the rows from the pivot's root, on the blocking dispatcher. As for the publish, `pathPublish` marks
+    * it in flight and `syncing` serves only status, progress and its outcome meanwhile: the state is complete, and
+    * nothing that could arrive should change it under the sample.
+    */
+  private def startHandoffSample(pivot: BigInt, pivotRoot: ByteString): Unit =
+    val ending = handoff.getOrElse(throw new IllegalStateException("startHandoffSample on the hash layout"))
+    // Whether the sync left accounts out: a hole in their storage is then expected, and is fetched when a block asks.
+    val (accountsLeftOut, _) = excludedAtHandOff()
+    val blockingEc = ctx.system.dispatchers.lookup(org.apache.pekko.actor.typed.DispatcherSelector.blocking())
+    ctx.log.info(
+      s"[HANDOFF] sampling the state of pivot $pivot from its root where the sync wrote it: nothing is copied " +
+        s"(accounts left out: $accountsLeftOut)"
+    )
+    pathPublish = Some((pivot, pivotRoot))
+    val work = scala.concurrent.Future {
+      ending.sample(pivotRoot, accountsLeftOut)
+    }(using blockingEc)
+    ctx.pipeToSelf(work) {
+      case scala.util.Success(result) => HandoffSampleDone(result)
+      case scala.util.Failure(cause)  => HandoffSampleFailed(cause)
+    }
+
+  /** The sample passed: finalisation again, past it (called from `syncing`). */
+  private[snap] def onHandoffSampleDone(result: PathHandoffSample.Result): Behavior[Command] =
+    ctx.log.info(s"[HANDOFF] sample done: ${result.describe}")
+    if result.storageHoles > 0 then
+      ctx.log.warn(
+        s"[HANDOFF] ${result.storageHoles} sampled lookups met a hole in the storage of an account this sync left " +
+          "out: it is fetched when a block reads it"
+      )
+    pathPublish match
+      case Some((pivot, root)) =>
+        pathPublish = None
+        sampledFor = Some((pivot, root))
+        finalizeSnapSync(pivot, pathPublished = true)
+      case None =>
+        ctx.log.warn("[HANDOFF] HandoffSampleDone with no sample in flight: ignored")
+        Behaviors.same
+
+  /** The sample did not pass. When it is the sample's own verdict ([[PathHandoffSample.Stopped]]: the rows are not the
+    * whole of the pivot's state) the parent restarts the sync, which heals from the root and finds what the sample met.
+    * Anything else is a store that failed under the sample: healing again does not mend it, and it is thrown.
+    */
+  private[snap] def onHandoffSampleFailed(cause: Throwable): Behavior[Command] =
+    pathPublish = None
+    cause match
+      case stopped: PathHandoffSample.Stopped =>
+        ctx.log.error("[HANDOFF] the sample of the state stopped the hand-off: escalating for a SNAP restart", stopped)
+        syncController ! SyncProtocol.HealingImpossible
+        Behaviors.same
+      case other =>
+        ctx.log.error("[HANDOFF] the sample of the state could not be made: the store failed under it", other)
+        throw other
+
+  /** The end of a sync on the unified state layout: the window below the pivot, then '''one synced write''' of the
+    * pivot's header and weight, the best block, the recoveries' flags, the state's anchor and that the sync is done
+    * ([[SyncHandoff.commit]]). False when it holds for the window: the hold's tick comes back here.
+    *
+    * No block is executed above the pivot until the headers of the 256 blocks below it are stored, and on a
+    * proof-of-work chain the bodies of the pivot and the five below it ([[AncestorWindow]]): `BLOCKHASH` and the check
+    * of ommers read them, and a node that lacks them refuses a valid block.
+    */
+  private def handOffOnPositions(pivot: BigInt, pivotHeader: BlockHeader): Boolean =
+    val ending = handoff.getOrElse(throw new IllegalStateException("handOffOnPositions on the hash layout"))
+    val pivotHash = pivotHeader.hash
+    // Blocks above the pivot may have ommers where the chain has no terminal total difficulty, and where it has one
+    // that the pivot is still below (a difficulty that is not zero): their ommers are checked against bodies.
+    val proofOfWork = terminalTotalDifficulty.isEmpty || pivotHeader.difficulty.value > 0
+    // The pivot's own body is one of the window's: kept when it validates, derived when the header commits to an
+    // empty one, never invented (CQ-020-07).
+    applyPivotBodyCheck(pivotHeader)
+    val missing = ending.windowMissing(pivotHeader, proofOfWork)
+    if !missing.isEmpty then
+      holdForTheWindow(pivot, pivotHash.value, missing)
+      false
+    else
+      leaveHeaderHold()
+      val (finalTD, tdSource) = pivotWeight(pivot, pivotHeader)
+      ctx.log.info("SNAP finalize pivot TD: block={} td={} source={}", pivot, finalTD, tdSource)
+      if proofOfWork && !SnapFinalization.ExactWeights.contains(tdSource) then
+        // The heaviest chain is chosen by this number, for every block above the pivot. An estimate is never written
+        // beside the state's anchor: the header download gives the exact weight, and without it the sync is not done.
+        ctx.log.error(
+          s"[HANDOFF] the weight of pivot $pivot is an estimate ($tdSource) on a chain whose fork choice is by " +
+            "weight: the sync cannot hand off. Escalating to SyncController for a SNAP restart."
         )
-        // Yield peer slots to regular sync — backfill keeps a small budget.
-        chainDownloader.tell(ChainDownloader.YieldToRegularSync(snapSyncConfig.chainBackfillConcurrentRequests))
-        completedWithBackfill()
+        syncController ! SyncProtocol.HealingImpossible
+        false
       else
-        // No backfill in flight — emit Done immediately. Parent poison-pills this actor.
+        dropHealedCodeNowPresent()
+        val (accountsExcluded, codeExcluded) = excludedAtHandOff()
+        val completion = recoveryFlags(accountsExcluded, codeExcluded)
+        // One synced write. What the sync wrote before it is in the same log, and is on the disk with it. A hand-off
+        // with no clean decision on this root takes the heal's marker away in it (spec 022 T043).
+        val unmarked = ending.commit(
+          pivotHeader,
+          ChainWeight.totalDifficultyOnly(finalTD),
+          storageRecoveryDone = completion.storageComplete,
+          bytecodeRecoveryDone = completion.bytecodeComplete,
+          cleanDecision =
+            stateRoot.exists(r => r.value == healingCleanWalkRoot.get() || r.value == healingDecidedRoot.get())
+        )
+        if unmarked then ctx.log.warn("[HEAL-INVARIANT] Handed off with no clean decision on this root: marker removed")
+        warnOfWhatIsWithheld(completion)
+        ctx.log.info(
+          s"SNAP sync completed at block $pivot (hash=${pivotHash.value.take(8).toHex}) on the unified state layout: " +
+            "the rows the sync wrote are the state, and nothing was copied"
+        )
+        true
+
+  /** Holds the hand-off until the window below the pivot is stored: the header hold's tick runs finalisation again.
+    *
+    * The hold is this function's own (`windowHeldFor`): once the headers have reached the pivot every tick finds that
+    * again ([[headersReachedThePivot]]), and a hold that leaned on the header hold alone would begin again each time.
+    * The headers are the header download's to fetch, so it is pointed at the pivot; the bodies are asked of it by hash
+    * on every tick, which it passes over when they are stored or on their way ([[ChainDownloader.FetchBodies]]).
+    *
+    * '''It does not hold for ever.''' When what is missing has not changed for the header hold's stall time, the
+    * download is started again; the third time, the sync is given up to the parent, which restarts it.
+    */
+  private def holdForTheWindow(pivot: BigInt, pivotHash: ByteString, missing: AncestorWindow.Missing): Unit =
+    val now = System.currentTimeMillis()
+    val what = missing.describe
+    if !windowHeldFor.contains(pivotHash) then
+      ctx.log.info(
+        s"Holding the hand-off at pivot $pivot: the node does not hold $what, which the first blocks above the " +
+          "pivot read"
+      )
+      windowHeldFor = Some(pivotHash)
+      windowLastMissing = what
+      windowLastChangeMs = now
+      windowRestarts = 0
+      lastHeaderHoldWarnMs = now
+      if chainDownloader.isEmpty then startChainDownloader()
+      chainDownloader.tell(ChainDownloader.UpdateTarget(pivot))
+      chainDownloader.tell(ChainDownloader.Resume)
+    else if what != windowLastMissing then
+      windowLastMissing = what
+      windowLastChangeMs = now
+    else if now - windowLastChangeMs >= snapSyncConfig.headerHoldStallTimeout.toMillis then
+      windowRestarts += 1
+      windowLastChangeMs = now
+      if windowRestarts >= SnapFinalization.WindowHoldRestarts then
+        ctx.log.error(
+          s"[HANDOFF] the hand-off at pivot $pivot is held for $what, which has not changed through " +
+            s"$windowRestarts restarts of the header download: escalating to SyncController for a SNAP restart"
+        )
+        leaveHeaderHold()
+        syncController ! SyncProtocol.HealingImpossible
+      else
+        ctx.log.error(
+          s"[HANDOFF] the hand-off at pivot $pivot is held for $what, unchanged for " +
+            s"${snapSyncConfig.headerHoldStallTimeout.toSeconds}s: restarting the chain downloader"
+        )
         chainDownloader.stop()
-        syncController ! Done
-        completed()
-    } // end boundary
+        startChainDownloader()
+        chainDownloader.tell(ChainDownloader.UpdateTarget(pivot))
+    else if now - lastHeaderHoldWarnMs >= SNAPSyncController.HeaderHoldWarnIntervalMs then
+      lastHeaderHoldWarnMs = now
+      ctx.log.warn(s"The hand-off at pivot $pivot is still held: the node does not hold $what")
+    if windowHeldFor.isDefined then
+      if missing.bodies.nonEmpty then
+        chainDownloader.tell(ChainDownloader.FetchBodies(missing.bodies.map(_.hash.value)))
+      // the tick that comes back here is the header hold's: it runs while `headerHold` is set
+      if headerHold.isEmpty then
+        timers.startTimerWithFixedDelay(
+          SNAPSyncController.HeaderHoldTimerKey,
+          HeaderHoldTick,
+          SNAPSyncController.HeaderHoldTickInterval
+        )
+      headerHold = Some(pivotHash)
+
+  /** The pivot's total difficulty and where it came from: every block above the pivot inherits it (#1654). */
+  private def pivotWeight(pivot: BigInt, pivotHeader: BlockHeader): (BigInt, String) =
+    val pivotHash = pivotHeader.hash
+    val genesisBlockTD: BigInt = stateIngest.chainReader
+      .getChainWeightByHash(stateIngest.chainReader.genesisHeader.hash)
+      .map(_.totalDifficulty.value)
+      .getOrElse(stateIngest.chainReader.genesisHeader.difficulty.value)
+    val reader = stateIngest.chainReader
+    HeadChainWeight.classify(reader, pivotHeader) match
+      case HeadChainWeight.Status.Exact(stored) => (stored.totalDifficulty.value, "REAL_DB_TD")
+      case HeadChainWeight.Status.Derivable(_, exact) =>
+        (exact.totalDifficulty.value, "DERIVED_FROM_PARENT")
+      case HeadChainWeight.Status.NoExact =>
+        HeadChainWeight
+          .posFromGenesisWeight(terminalTotalDifficulty, reader)
+          .map(w => (w.totalDifficulty.value, "GENESIS_WEIGHT"))
+          .orElse(
+            reader
+              .getChainWeightByHash(pivotHash)
+              .map(_.totalDifficulty.value)
+              .filter(_ > genesisBlockTD * BigInt(1000))
+              .map(td => (td, "PIVOT_SELECTION_ESTIMATE"))
+          )
+          .orElse(calibratePivotTD(pivotHeader).map(td => (td, "PEER_INTERPOLATED_TD")))
+          .getOrElse((pivot.max(genesisBlockTD), "BLOCK_NUMBER_PROXY"))
+
+  /** What the excluded set still says at a hand-off (spec 022 D5): whether accounts, and whether code, were left out. A
+    * set that cannot be read claims nothing: both.
+    */
+  private def excludedAtHandOff(): (Boolean, Boolean) =
+    val progress = stateIngest.snapProgress
+    try (progress.hasExcludedAccounts, progress.hasExcludedCode)
+    catch
+      case scala.util.control.NonFatal(e) =>
+        ctx.log.error("[HEAL-EXCLUDED] Could not read the excluded set at finalisation: neither flag is set", e)
+        (true, true)
+
+  /** Read just before the batch that clears the owed scan: see the note on `codeScanOwed` below. */
+  private def recoveryFlags(accountsExcluded: Boolean, codeExcluded: Boolean): RecoveryFlags =
+    val appState = stateIngest.appState
+    val codeScanOwed =
+      try appState.getSnapCodeScanOwed()
+      catch
+        case scala.util.control.NonFatal(e) =>
+          ctx.log.error("[HEAL-INVARIANT] Could not read whether a code scan is owed: taking it as owed", e)
+          Some("the key could not be read")
+    val bytecodeComplete =
+      SNAPSyncController.bytecodeRecoveryComplete(healedCodeHashes.size, bytecodeForceCompleted) &&
+        !codeExcluded && codeScanOwed.isEmpty
+    val storageComplete = !accountsExcluded && codeScanOwed.isEmpty
+    RecoveryFlags(
+      bytecodeComplete,
+      storageComplete,
+      accountsExcluded,
+      codeExcluded,
+      codeScanOwed
+    )
+
+  private def warnOfWhatIsWithheld(completion: RecoveryFlags): Unit =
+    import completion.*
+    if !bytecodeComplete then
+      ctx.log.warn(
+        s"[HEAL-CODE] bytecode incomplete at finalisation (healed-account codeHashes missing: " +
+          s"${healedCodeHashes.size}, bytecode phase force-completed: $bytecodeForceCompleted, " +
+          s"code entries: $codeExcluded, scan owed: ${codeScanOwed.getOrElse("no")}) — " +
+          "bytecodeRecoveryDone NOT set"
+      )
+    if !storageComplete then
+      ctx.log.warn(
+        s"[HEAL-EXCLUDED] storage not shown complete at finalisation (account entries: $accountsExcluded, " +
+          s"scan owed: ${codeScanOwed.getOrElse("no")}) — storageRecoveryDone NOT set"
+      )
+
+  /** What follows the anchor on either layout: the sync's own actors are stopped, the parent is told, and the chain
+    * backfill is released.
+    */
+  private def finishedHandOff(pivot: BigInt): Behavior[Command] =
+    progressMonitor.complete()
+    ctx.log.info(progressMonitor.currentProgress.toString)
+    currentPhase = Completed
+
+    // Cancel SNAP-only schedules before handing off so eviction tickers / stagnation checks stop
+    // affecting peers while regular sync runs. Stop state-sync child coordinators too — they don't
+    // self-stop on completion and would otherwise retain completed task buffers and worker actors
+    // for the full background-backfill window. The chain downloader child is intentionally NOT stopped.
+    stopSnapOnlySchedules()
+    stopStateSyncChildren()
+
+    // SNAP is done: no account resume can follow. Drop the checkpoint and every superseded contract task file,
+    // keeping only the files the accounts-complete recovery path was handed (conservative; they are not re-read).
+    stateIngest.appState.removeSnapAccountResumeCheckpoint().commit()
+    releaseHeldResumeCheckpoint()
+    sweepSupersededTaskFiles(keep = accountsCompleteTaskFilePaths, reason = "SNAP complete")
+
+    // Phase 1 of the handshake: tell the parent that pivot/state is anchored. Parent starts RegularSync.
+    syncController ! SnapSyncFinalized(pivot)
+
+    // Deferred backfill: bodies and receipts start only now that the state is complete (no-op unless the switch is on).
+    releaseDeferredBodiesAndReceipts()
+
+    val backfillStillRunning =
+      snapSyncConfig.chainDownloadEnabled && chainDownloader.isDefined && !chainDownloadComplete
+
+    if backfillStillRunning then
+      ctx.log.info(
+        s"SNAP state finalised at pivot=$pivot. Starting regular sync; chain backfill continues in background."
+      )
+      // Yield peer slots to regular sync — backfill keeps a small budget.
+      chainDownloader.tell(ChainDownloader.YieldToRegularSync(snapSyncConfig.chainBackfillConcurrentRequests))
+      completedWithBackfill()
+    else
+      // No backfill in flight — emit Done immediately. Parent poison-pills this actor.
+      chainDownloader.stop()
+      syncController ! Done
+      completed()
 
   /** The pivot header for finalisation where the header download validates the chain (proof of work). Holds while the
     * download is below the pivot (the deferred backfill's hold), then compares the persisted pivot with the header the
@@ -513,7 +793,7 @@ private[snap] trait SnapFinalization extends FinalizationApi with ChainDownloadS
       break(Behaviors.same)
     PivotAnchor.check(stateIngest, pivot) match
       case PivotAnchor.Check.Anchored(header) =>
-        leaveHeaderHold()
+        headersReachedThePivot()
         header
       case PivotAnchor.Check.Diverged(downloaded, pinnedHash, persistedRoot) if headerChainCheck.trustsPinnedPivot =>
         if pinnedHash.contains(downloaded.hash.value) then
