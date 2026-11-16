@@ -575,7 +575,9 @@ class SyncControllerSpec
     (1 to 2).foreach { n =>
       appState.snapSyncDone().commit()
       val warnings = syncControllerLogsDuring(ch.qos.logback.classic.Level.WARN)(sampleStopped())
-      withClue(s"sample $n: ")(warnings.exists(_.contains(s"$n of 3 since the last hand-off: restarting SNAP")) shouldBe true)
+      withClue(s"sample $n: ")(
+        warnings.exists(_.contains(s"$n of 3 since the last hand-off: restarting SNAP")) shouldBe true
+      )
       // restarted as for HealingImpossible: the done flag cleared and a SNAP of the next generation
       appState.isSnapSyncDone() shouldBe false
       val next = eventually {

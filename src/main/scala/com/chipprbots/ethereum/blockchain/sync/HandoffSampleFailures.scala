@@ -2,8 +2,8 @@ package com.chipprbots.ethereum.blockchain.sync
 
 import com.chipprbots.ethereum.db.storage.PathHandoffSample
 
-/** The hand-off's samples that stopped a sync since the last hand-off, on the unified state layout (B-304, spec 018
-  * C5a part 5b).
+/** The hand-off's samples that stopped a sync since the last hand-off, on the unified state layout (B-304, spec 018 C5a
+  * part 5b).
   *
   * A sample that stops the hand-off restarts SNAP at a newer pivot, which heals and samples again. Only the same pivot
   * is refused a second time, so a failure that is systematic (a fault of the sync's writes, not of one pivot) would
