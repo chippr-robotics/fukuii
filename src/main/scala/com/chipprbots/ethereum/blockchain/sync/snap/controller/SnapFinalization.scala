@@ -69,13 +69,9 @@ private[snap] object SnapFinalization:
   val ExactWeights: Set[String] = Set("REAL_DB_TD", "DERIVED_FROM_PARENT")
 
   /** The log tag of the requirement that the sync after an escalation take its pivot on the refused branch (B-307). */
-  val PivotOnBranchTag: String = "[STATE-ESCALATION-PIVOT]"
+  val PivotOnBranchTag: String = PivotAnchor.PivotOnBranchTag
 
-  def pivotRequirementDropped(why: String): String =
-    s"$PivotOnBranchTag This node gave its state up to follow a branch, and the sync after it is no longer held to " +
-      s"that branch: $why. It syncs the chain the peers serve. The branch stays given up: if it is offered again and " +
-      "is the heavier, this node does not give its state up for it a second time. To let it, start the node once " +
-      "with -Dfukuii.state.recovery.forget-given-up-branches=true."
+  def pivotRequirementDropped(why: String): String = PivotAnchor.requirementDroppedText(why)
 
   /** How many syncs may find another chain at the branch's height before the requirement is dropped. */
   val PivotOnBranchAttempts: Int = com.chipprbots.ethereum.db.storage.pathstate.PivotOnBranch.MaxAttempts

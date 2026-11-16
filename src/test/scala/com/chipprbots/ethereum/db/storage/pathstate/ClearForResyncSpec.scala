@@ -339,7 +339,8 @@ class ClearForResyncSpec extends AnyFlatSpec with Matchers:
       val chain = downloaded()
       val bound = PivotOnBranch(4, ByteString(Array.fill[Byte](32)(0x21)))
       chain.appState
-        .putPivotOnBranch(bound)
+        // the sync that ended had waited for a peer on the branch: the next one begins its own wait
+        .putPivotOnBranch(bound.copy(firstMissMillis = Some(3L)))
         .and(chain.appState.putSnapSyncPivotBlock(4))
         .and(chain.appState.putSnapSyncStateRoot(chain.head.stateRoot.value))
         .commit()

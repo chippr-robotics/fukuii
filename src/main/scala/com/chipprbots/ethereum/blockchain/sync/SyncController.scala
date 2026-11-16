@@ -722,7 +722,9 @@ object SyncController:
                         replyTo = pivotBootstrapAdapter,
                         syncConfig,
                         preferSnapPeers = true,
-                        headerCheck = snapPivotHeaderCheck
+                        headerCheck = snapPivotHeaderCheck,
+                        // B-307: after an escalation for a branch, the pivot's header is taken from a peer on it
+                        branch = snap.PivotAnchor.requiredBranch(appStateStorage)
                       )
                     )
                     // PivotHeaderBootstrap must keep retrying until the pivot header arrives — no cap.
@@ -916,7 +918,7 @@ object SyncController:
             healingServeRootRequester = None
             Behaviors.same
 
-          case PivotHeaderBootstrap.Failed(reason) if healingServeRootRequester.isDefined =>
+          case PivotHeaderBootstrap.Failed(reason, _) if healingServeRootRequester.isDefined =>
             log.warn(s"[HEAL-SERVE-ROOT] Serve-root bootstrap failed ($reason). Replying None (serve root kept).")
             stopHealingServeRootBootstrap()
             healingServeRootRequester.foreach(_ ! SNAPSyncController.HealingServeRoot(0, None))
@@ -1008,7 +1010,9 @@ object SyncController:
                     recentBlock,
                     replyTo = pivotBootstrapAdapter,
                     syncConfig,
-                    preferSnapPeers = true
+                    preferSnapPeers = true,
+                    // B-307: this header is stored with its entry in the index by number, as the pivot's is
+                    branch = snap.PivotAnchor.requiredBranch(appStateStorage)
                   )
                 )
                 // PivotHeaderBootstrap must keep retrying until the pivot header arrives — no cap.
@@ -1576,14 +1580,16 @@ object SyncController:
           )
           ctx.stop(headerBootstrap)
           ctx.stop(peersClient)
+          // B-307: with a sync bound to a branch, this header came from a peer on it
+          if targetBlock != 0 then snap.PivotAnchor.branchServed(appStateStorage)
           originalSnapSyncRef ! BootstrapComplete(Some(header))
           runningSnapSync(originalSnapSyncRef)
 
-        case PivotHeaderBootstrap.Failed(reason) =>
+        case PivotHeaderBootstrap.Failed(reason, offBranch) =>
           log.warn(s"Pivot header bootstrap failed (reason: $reason). Notifying SNAP sync controller.")
           ctx.stop(headerBootstrap)
           ctx.stop(peersClient)
-          originalSnapSyncRef ! PivotBootstrapFailed(reason)
+          originalSnapSyncRef ! PivotBootstrapFailed(reason, offBranch)
           runningSnapSync(originalSnapSyncRef)
 
         case msg: SyncProtocol.GetStatus =>
@@ -1629,7 +1635,8 @@ object SyncController:
                       replyTo = pivotBootstrapAdapter,
                       syncConfig,
                       preferSnapPeers = true,
-                      headerCheck = snapPivotHeaderCheck
+                      headerCheck = snapPivotHeaderCheck,
+                      branch = snap.PivotAnchor.requiredBranch(appStateStorage)
                     )
                   )
                   // PivotHeaderBootstrap must keep retrying until the pivot header arrives — no cap.
@@ -3086,7 +3093,7 @@ object SyncController:
           recentRootRequester = None
           Behaviors.same
 
-        case PivotHeaderBootstrap.Failed(reason) if recentRootRequester.isDefined =>
+        case PivotHeaderBootstrap.Failed(reason, _) if recentRootRequester.isDefined =>
           log.warn(s"Recovery recent-root bootstrap failed ($reason). Declining the roll; abandon path will run.")
           stopRecentRootBootstrap()
           recentRootRequester.foreach(_ ! StorageRecoveryActor.RecentRoot(0, None))
@@ -3160,7 +3167,9 @@ object SyncController:
                     recentBlock,
                     replyTo = pivotBootstrapAdapter,
                     syncConfig,
-                    preferSnapPeers = true
+                    preferSnapPeers = true,
+                    // B-307: this header is stored with its entry in the index by number, as the pivot's is
+                    branch = snap.PivotAnchor.requiredBranch(appStateStorage)
                   )
                 )
                 // PivotHeaderBootstrap must keep retrying until the pivot header arrives — no cap.

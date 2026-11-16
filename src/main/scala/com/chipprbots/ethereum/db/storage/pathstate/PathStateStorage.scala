@@ -1027,7 +1027,12 @@ final class PathStateStorage(
       ) {
         val index = new BlockNumberMappingStorage(dataSource)
         val retry =
-          if again then appState.getPivotOnBranch().map(bound => bound.copy(attempts = bound.attempts + 1)) else None
+          if again then
+            appState
+              .getPivotOnBranch()
+              // the wait for a peer on the branch is of the sync that ended: the next one begins its own (forge)
+              .map(bound => bound.copy(attempts = bound.attempts + 1, firstMissMillis = None))
+          else None
         if again && retry.isEmpty then None
         else
           val branch = retry.map(bound => GivenUpBranch(bound.number, bound.hash)).orElse(givenUpFor)

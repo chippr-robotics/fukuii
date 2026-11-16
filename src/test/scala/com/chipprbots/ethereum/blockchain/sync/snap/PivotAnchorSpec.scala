@@ -413,6 +413,83 @@ class PivotAnchorSpec extends AnyFlatSpec with Matchers:
     } shouldBe Seq(1, 2)
     seen.last shouldBe a[PivotAnchor.BranchCheck.Dropped]
 
+  // B-307 (c2): what the header download does with a response at the branch's height
+  it should "let through a response that does not hold its height, or holds its first block" taggedAs UnitTest in new Chain:
+    PivotAnchor.branchGate(appState, headers.slice(1, 20), 100L) shouldBe PivotAnchor.BranchGate.Pass
+    appState.putPivotOnBranch(branchAt8).commit()
+    PivotAnchor.branchGate(appState, headers.slice(1, 8), 100L) shouldBe PivotAnchor.BranchGate.Pass
+    PivotAnchor.branchGate(appState, headers.slice(9, 20), 100L) shouldBe PivotAnchor.BranchGate.Pass
+    PivotAnchor.branchGate(appState, headers.slice(1, 20), 100L) shouldBe PivotAnchor.BranchGate.Pass
+    appState.getPivotOnBranch() shouldBe Some(branchAt8)
+
+  it should "refuse a response that holds another block at its height, for a wait that is counted from the first" taggedAs (
+    UnitTest,
+    ConsensusTest
+  ) in new Chain:
+    val elsewhere: PivotOnBranch = PivotOnBranch(8, ByteString(Array.fill(32)(0x77.toByte)))
+    appState.putPivotOnBranch(elsewhere).commit()
+    val began = 1_763_300_000_000L
+    PivotAnchor.branchGate(appState, headers.slice(1, 20), began) shouldBe
+      PivotAnchor.BranchGate.Refuse(elsewhere, headers(8))
+    appState.getPivotOnBranch() shouldBe Some(elsewhere.copy(firstMissMillis = Some(began)))
+    val later: Long = began + PivotAnchor.BranchWaitMillis - 1
+    PivotAnchor.branchGate(appState, headers.slice(1, 20), later) shouldBe a[PivotAnchor.BranchGate.Refuse]
+    appState.getPivotOnBranch().flatMap(_.firstMissMillis) shouldBe Some(began)
+    // the whole wait with no peer on the branch: the requirement is ended, and the response goes through
+    PivotAnchor.branchGate(appState, headers.slice(1, 20), later + 1) shouldBe a[PivotAnchor.BranchGate.Expired]
+    appState.getPivotOnBranch() shouldBe None
+    PivotAnchor.branchGate(appState, headers.slice(1, 20), later + 2) shouldBe PivotAnchor.BranchGate.Pass
+
+  it should "end the wait when a peer serves its first block" taggedAs UnitTest in new Chain:
+    appState.putPivotOnBranch(branchAt8.copy(attempts = 1, firstMissMillis = Some(7L))).commit()
+    PivotAnchor.branchGate(appState, headers.slice(1, 20), 100L) shouldBe PivotAnchor.BranchGate.Pass
+    appState.getPivotOnBranch() shouldBe Some(branchAt8.copy(attempts = 1))
+
+  it should "end the wait when the pivot's bootstrap takes its header from a peer on it" taggedAs UnitTest in new Chain:
+    PivotAnchor.branchServed(appState) // no sync is bound: nothing to end
+    appState.getPivotOnBranch() shouldBe None
+    appState.putPivotOnBranch(branchAt8.copy(attempts = 2, firstMissMillis = Some(7L))).commit()
+    PivotAnchor.branchServed(appState)
+    appState.getPivotOnBranch() shouldBe Some(branchAt8.copy(attempts = 2))
+    // so the header download's first answer of another chain begins a wait of its own
+    val elsewhere: PivotOnBranch = PivotOnBranch(8, ByteString(Array.fill(32)(0x77.toByte)), firstMissMillis = Some(7L))
+    appState.putPivotOnBranch(elsewhere).commit()
+    PivotAnchor.branchServed(appState)
+    PivotAnchor.branchGate(appState, headers.slice(1, 20), 7L + PivotAnchor.BranchWaitMillis) shouldBe
+      a[PivotAnchor.BranchGate.Refuse]
+
+  // B-307 (c2): the peers the pivot's bootstrap found on another chain
+  it should "leave the peers on another chain out of the choice of a target for a while, and bound the wait for one on the branch" taggedAs (
+    UnitTest,
+    ConsensusTest
+  ) in new Chain:
+    import com.chipprbots.ethereum.network.PeerId
+    val peers = new PivotAnchor.OffBranchPeers
+    val (a, b) = (PeerId("a"), PeerId("b"))
+    val began = 1_763_300_000_000L
+    PivotAnchor.requiredBranch(appState) shouldBe None
+    // no sync is bound: nothing is counted
+    peers.missed(appState, Set(a), began) shouldBe None
+    peers.holds(a, began) shouldBe true
+    peers.holds(a, began + PivotAnchor.OffBranchPeers.HeldMillis) shouldBe false
+    peers.holds(b, began) shouldBe false
+
+    appState.putPivotOnBranch(branchAt8).commit()
+    PivotAnchor.requiredBranch(appState) shouldBe Some((BigInt(8), headers(8).hash.value))
+    // a bootstrap that failed for another reason begins no wait
+    peers.missed(appState, Set.empty, began) shouldBe None
+    appState.getPivotOnBranch() shouldBe Some(branchAt8)
+    // the first with peers on another chain begins it
+    peers.missed(appState, Set(b), began) shouldBe None
+    appState.getPivotOnBranch() shouldBe Some(branchAt8.copy(firstMissMillis = Some(began)))
+    peers.missed(appState, Set(b), began + PivotAnchor.BranchWaitMillis - 1) shouldBe None
+    appState.getPivotOnBranch().flatMap(_.firstMissMillis) shouldBe Some(began)
+    // the whole wait: the requirement is dropped, and every peer is asked again
+    peers.missed(appState, Set(a, b), began + PivotAnchor.BranchWaitMillis).get should include("no peer")
+    appState.getPivotOnBranch() shouldBe None
+    peers.holds(a, began + PivotAnchor.BranchWaitMillis) shouldBe false
+    peers.holds(b, began + PivotAnchor.BranchWaitMillis) shouldBe false
+
   it should "be dropped when its record cannot be read: no sync is held on what no one can read" taggedAs UnitTest in new Chain:
     downloaded(20)
     storagesInstance.dataSource.update(

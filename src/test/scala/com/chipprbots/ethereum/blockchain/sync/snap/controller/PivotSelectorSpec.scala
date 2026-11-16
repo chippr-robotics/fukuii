@@ -208,7 +208,11 @@ class PivotSelectorSpec extends AnyFlatSpec with Matchers:
     override val dataSource: com.chipprbots.ethereum.db.dataSource.EphemDataSource = counting
 
   /** The module on its stub, the kit that runs it, and the peer manager inbox. */
-  final private class Harness(bootstrapping: Boolean = false):
+  /** @param stepsWhileBootstrapping
+    *   the module is in `bootstrapping`, and [[Harness.call]] still runs its function on the module (a message handled
+    *   by `bootstrapping` first, then a step of the start that follows it)
+    */
+  final private class Harness(bootstrapping: Boolean = false, stepsWhileBootstrapping: Boolean = false):
     /** Counts the batches that reach the data source (a `DataSourceBatchUpdate.commit` is one). */
     val dataSourceBatches = new java.util.concurrent.atomic.AtomicInteger(0)
     private val countingDataSource = new com.chipprbots.ethereum.db.dataSource.EphemDataSource(Map.empty):
@@ -227,12 +231,23 @@ class PivotSelectorSpec extends AnyFlatSpec with Matchers:
           with com.chipprbots.ethereum.db.components.Storages.DefaultStorages
           with com.chipprbots.ethereum.TestInstanceConfigProvider
     private var action: () => Unit = () => ()
+    private var armed = false
     private var captured: StubPivotSelectorState & PivotSelector = null
     val kit: BehaviorTestKit[Command] = BehaviorTestKit(Behaviors.setup[Command] { ctx =>
       Behaviors.withTimers { timers =>
         captured = new StubPivotSelectorState(ctx, timers, SNAPSyncConfig(), peerManager.ref, chain) with PivotSelector
         captured.syncControllerRef = Some(parent.ref)
-        if bootstrapping then captured.bootstrapping()
+        if stepsWhileBootstrapping then
+          val inner = org.apache.pekko.actor.typed.Behavior.start(captured.bootstrapping(), ctx)
+          Behaviors.receive { (context, message) =>
+            if armed then
+              armed = false
+              action()
+            else
+              val _ = org.apache.pekko.actor.typed.Behavior.interpretMessage(inner, context, message)
+            Behaviors.same
+          }
+        else if bootstrapping then captured.bootstrapping()
         else
           Behaviors.receiveMessage { _ =>
             action()
@@ -245,6 +260,7 @@ class PivotSelectorSpec extends AnyFlatSpec with Matchers:
     /** Run `f` on the module while the kit processes a message. */
     def call(f: StubPivotSelectorState & PivotSelector => Unit): Unit =
       action = () => f(module)
+      armed = true
       kit.run(PollHandshakedPeers)
 
     /** Run `startSnapSync`'s two pivot steps under a boundary of the core's type, as `startSnapSync` does: the Label
@@ -357,6 +373,34 @@ class PivotSelectorSpec extends AnyFlatSpec with Matchers:
     h.module.appStateStorage.getSnapSyncBootstrapTarget() shouldBe None
     h.module.bootstrapRetryCount shouldBe 1
     h.scheduledTimers() shouldBe Seq(("bootstrap-check", RetrySnapSyncStart, 4.seconds))
+  }
+
+  // B-307 (forge): resumed, the same target asks the same peers of the other chain again
+  it should "forget the persisted bootstrap target when every peer at its height was on another chain than the branch" taggedAs UnitTest in {
+    val h = new Harness(bootstrapping = true)
+    h.module.appStateStorage.putSnapSyncBootstrapTarget(BigInt(500)).commit()
+
+    h.kit.run(
+      PivotBootstrapFailed(
+        PivotHeaderBootstrap.NoPeerOnTheBranch,
+        Set(com.chipprbots.ethereum.network.PeerId("on-the-other-chain"))
+      )
+    )
+
+    h.module.appStateStorage.getSnapSyncBootstrapTarget() shouldBe None
+    h.module.bootstrapRetryCount shouldBe 1
+  }
+
+  it should "choose the next target without the peers the bootstrap found on another chain than the branch" taggedAs UnitTest in {
+    val h = new Harness(stepsWhileBootstrapping = true)
+    // the chain that was left is the longer: its peer's height would put the target above every peer of the branch
+    h.module.peers = Map(peer("left", 20_000), peer("branch", 10_000))
+    h.kit.run(PivotBootstrapFailed(PivotHeaderBootstrap.NoPeerOnTheBranch, Set(PeerId("left"))))
+    h.parent.receiveAll()
+
+    h.startSteps() shouldBe false
+
+    h.parent.receiveAll() shouldBe Seq(StartRegularSyncBootstrap(BigInt(10_000 - 64)))
   }
 
   it should "keep the persisted bootstrap target after any other bootstrap failure" taggedAs UnitTest in {

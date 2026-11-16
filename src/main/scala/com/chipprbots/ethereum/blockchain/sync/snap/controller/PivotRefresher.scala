@@ -256,7 +256,7 @@ private[snap] trait PivotRefresher
   private[snap] lazy val pivotRefreshBootstrapFailedArms: PartialFunction[Command, Behavior[Command]] = {
     // Handle pivot header bootstrap failure. Instead of recalculating from network-best (which advances
     // the pivot to a block peers don't have yet), backtrack by pivotBlockOffset blocks (Besu pattern).
-    case PivotBootstrapFailed(reason) if pendingPivotRefresh.isDefined =>
+    case PivotBootstrapFailed(reason, _) if pendingPivotRefresh.isDefined =>
       val (pendingPivot, originalReason) = pendingPivotRefresh.get
       pendingPivotRefresh = None
       timers.cancel(PivotBootstrapRetryKey)

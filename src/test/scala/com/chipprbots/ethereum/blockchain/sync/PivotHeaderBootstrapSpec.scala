@@ -62,14 +62,17 @@ class PivotHeaderBootstrapSpec extends ScalaTestWithActorTestKit() with AnyFlatS
       retryDelay: FiniteDuration = 50.millis,
       waitForPeerDelay: FiniteDuration = 50.millis,
       preferSnapPeers: Boolean = false,
-      headerCheck: BlockHeader => Either[BlockHeaderError, BlockHeaderValid] = PivotHeaderBootstrap.AcceptAll
+      headerCheck: BlockHeader => Either[BlockHeaderError, BlockHeaderValid] = PivotHeaderBootstrap.AcceptAll,
+      branch: Option[(BigInt, ByteString)] = None,
+      target: BigInt = targetBlock,
+      askTimeout: FiniteDuration = 15.seconds
   ): ActorRef =
     testKit
       .spawn(
         PivotHeaderBootstrap(
           peersClient = peersClientProbe.ref.toTyped[PeersClient.Command],
           blockchainWriter = writer,
-          targetBlock = targetBlock,
+          targetBlock = target,
           replyTo = parentProbe.ref,
           syncConfig = null,
           maxAttempts = maxAttempts,
@@ -77,7 +80,9 @@ class PivotHeaderBootstrapSpec extends ScalaTestWithActorTestKit() with AnyFlatS
           maxRetryDelay = retryDelay,
           waitForPeerDelay = waitForPeerDelay,
           preferSnapPeers = preferSnapPeers,
-          headerCheck = headerCheck
+          headerCheck = headerCheck,
+          branch = branch,
+          askTimeout = askTimeout
         )
       )
       .toClassic
@@ -287,6 +292,128 @@ class PivotHeaderBootstrapSpec extends ScalaTestWithActorTestKit() with AnyFlatS
       .replyTo ! PeersClient.NoSuitablePeer
 
     parent.expectMsg(3.seconds, PivotHeaderBootstrap.Failed(PivotHeaderBootstrap.ExhaustedAfterRejection))
+  }
+
+  // B-307 (c2; forge's design): after an escalation for a branch, the pivot's header is taken only from a peer whose
+  // chain holds the branch's first block
+  private val branchFirst: BlockHeader = Fixtures.Blocks.Block3125369.header.copy(number = BlockNumber(900))
+  private val otherAt900: BlockHeader = branchFirst.copy(extraData = ByteString("the chain that was left"))
+  private val theBranch: Option[(BigInt, ByteString)] = Some((BigInt(900), branchFirst.hash.value))
+
+  private def headersRequest(peersClient: TestProbe): PeersClient.Request[ETHPackets.GetBlockHeaders] =
+    peersClient.expectMsgType[PeersClient.Request[ETHPackets.GetBlockHeaders]](3.seconds)
+
+  it should "ask a peer for its block at the branch's height and at the target in one request, and take the target's from a peer on the branch" taggedAs (
+    UnitTest,
+    ConsensusTest
+  ) in {
+    val peersClient = TestProbe()
+    val parent = TestProbe()
+    mkBootstrap(peersClient, parent, preferSnapPeers = true, branch = theBranch)
+    val asked = headersRequest(peersClient)
+    asked.message match
+      case ETHPackets.GetBlockHeaders(_, block, maxHeaders, skip, reverse) =>
+        // the header at 900, then 99 skipped, then the header at 1000
+        (block, maxHeaders, skip, reverse) shouldBe (Left(BigInt(900)), BigInt(2), BigInt(99), false)
+    asked.replyTo ! PeersClient.Response(testPeer, ETHPackets.BlockHeaders(BigInt(0), Seq(branchFirst, correctHeader)))
+    parent.expectMsg(3.seconds, PivotHeaderBootstrap.Completed(targetBlock, correctHeader))
+  }
+
+  it should "take nothing from a peer that has another block at the branch's height, blame no one, and ask another" taggedAs (
+    UnitTest,
+    ConsensusTest
+  ) in {
+    val peersClient = TestProbe()
+    val parent = TestProbe()
+    mkBootstrap(peersClient, parent, maxAttempts = 3, preferSnapPeers = true, branch = theBranch)
+    headersRequest(peersClient).replyTo !
+      PeersClient.Response(testPeer, ETHPackets.BlockHeaders(BigInt(0), Seq(otherAt900, correctHeader)))
+    val retry = headersRequest(peersClient) // no BlacklistPeer came before it
+    retry.peerSelector shouldBe PeersClient.BestSnapPeerWithMinBlockExcluding(targetBlock, Set(testPeer.id))
+    retry.replyTo ! PeersClient.Response(testPeer2, ETHPackets.BlockHeaders(BigInt(0), Seq(branchFirst, correctHeader)))
+    parent.expectMsg(3.seconds, PivotHeaderBootstrap.Completed(targetBlock, correctHeader))
+  }
+
+  it should "give up, naming the peers on another chain, when no other peer has the target" taggedAs (
+    UnitTest,
+    ConsensusTest
+  ) in {
+    val peersClient = TestProbe()
+    val parent = TestProbe()
+    mkBootstrap(peersClient, parent, maxAttempts = 3, preferSnapPeers = true, branch = theBranch)
+    headersRequest(peersClient).replyTo !
+      PeersClient.Response(testPeer, ETHPackets.BlockHeaders(BigInt(0), Seq(otherAt900, correctHeader)))
+    // the branch's peers are below the target: neither the SNAP selector nor its fallback finds one
+    headersRequest(peersClient).replyTo ! PeersClient.NoSuitablePeer
+    val fallback = headersRequest(peersClient)
+    fallback.message.asInstanceOf[ETHPackets.GetBlockHeaders].block shouldBe Left(BigInt(900))
+    fallback.replyTo ! PeersClient.NoSuitablePeer
+    parent.expectMsg(3.seconds, PivotHeaderBootstrap.Failed(PivotHeaderBootstrap.NoPeerOnTheBranch, Set(testPeer.id)))
+  }
+
+  it should "ask for one header where the target is the branch's first block, and as ever where it is below it" taggedAs (
+    UnitTest,
+    ConsensusTest
+  ) in {
+    // the target is the branch's first block: one header, which must be the branch's
+    val peersClient = TestProbe()
+    val parent = TestProbe()
+    mkBootstrap(peersClient, parent, maxAttempts = 3, preferSnapPeers = true, branch = theBranch, target = 900)
+    val asked = headersRequest(peersClient)
+    asked.message match
+      case ETHPackets.GetBlockHeaders(_, block, maxHeaders, skip, _) =>
+        (block, maxHeaders, skip) shouldBe (Left(BigInt(900)), BigInt(1), BigInt(0))
+    asked.replyTo ! PeersClient.Response(testPeer, ETHPackets.BlockHeaders(BigInt(0), Seq(otherAt900)))
+    headersRequest(peersClient).replyTo ! PeersClient.Response(
+      testPeer2,
+      ETHPackets.BlockHeaders(BigInt(0), Seq(branchFirst))
+    )
+    parent.expectMsg(3.seconds, PivotHeaderBootstrap.Completed(BigInt(900), branchFirst))
+
+    // a target under the branch is of the blocks both chains have
+    val below = TestProbe()
+    val belowParent = TestProbe()
+    mkBootstrap(below, belowParent, preferSnapPeers = true, branch = Some((BigInt(2000), ByteString("x"))))
+    val plain = headersRequest(below)
+    plain.message match
+      case ETHPackets.GetBlockHeaders(_, block, maxHeaders, skip, _) =>
+        (block, maxHeaders, skip) shouldBe (Left(targetBlock), BigInt(1), BigInt(0))
+    plain.replyTo ! PeersClient.Response(testPeer, ETHPackets.BlockHeaders(BigInt(0), Seq(correctHeader)))
+    belowParent.expectMsg(3.seconds, PivotHeaderBootstrap.Completed(targetBlock, correctHeader))
+  }
+
+  it should "ask again, not give up, when a request is not answered in time after a peer was found on another chain" taggedAs UnitTest in {
+    val peersClient = TestProbe()
+    val parent = TestProbe()
+    mkBootstrap(
+      peersClient,
+      parent,
+      maxAttempts = 4,
+      preferSnapPeers = true,
+      branch = theBranch,
+      askTimeout = 300.millis
+    )
+    headersRequest(peersClient).replyTo !
+      PeersClient.Response(testPeer, ETHPackets.BlockHeaders(BigInt(0), Seq(otherAt900, correctHeader)))
+    // the ask is not answered at all: PeersClient's own reply never comes, and the ask times out naming no peer
+    headersRequest(peersClient)
+    headersRequest(peersClient).replyTo !
+      PeersClient.Response(testPeer2, ETHPackets.BlockHeaders(BigInt(0), Seq(branchFirst, correctHeader)))
+    parent.expectMsg(3.seconds, PivotHeaderBootstrap.Completed(targetBlock, correctHeader))
+  }
+
+  it should "treat a peer on the branch that did not send the target's header as one that sent nothing" taggedAs UnitTest in {
+    val peersClient = TestProbe()
+    val parent = TestProbe()
+    mkBootstrap(peersClient, parent, maxAttempts = 3, preferSnapPeers = true, branch = theBranch)
+    headersRequest(peersClient).replyTo ! PeersClient.Response(
+      testPeer,
+      ETHPackets.BlockHeaders(BigInt(0), Seq(branchFirst))
+    )
+    // no attempt consumed, no one named off the branch: another peer is asked
+    headersRequest(peersClient).replyTo !
+      PeersClient.Response(testPeer2, ETHPackets.BlockHeaders(BigInt(0), Seq(branchFirst, correctHeader)))
+    parent.expectMsg(3.seconds, PivotHeaderBootstrap.Completed(targetBlock, correctHeader))
   }
 
   it should "still wait for a fresh peer when no peer is eligible and no header was rejected" taggedAs UnitTest in {

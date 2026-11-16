@@ -1397,6 +1397,67 @@ class SyncControllerSpec
     assert(!childNamed(testSetup, "regular-sync"))
   }
 
+  // B-307 (c2): what the pivot's bootstrap found of the branch reaches the requirement and the SNAP controller
+  it should "end the wait for a peer on the branch when the pivot's bootstrap completes, and pass on the peers it found on another chain" taggedAs (
+    UnitTest,
+    SyncTest
+  ) in withRecoveryTestSetup() { testSetup =>
+    import testSetup.*
+    import com.chipprbots.ethereum.db.storage.pathstate.PivotOnBranch
+    val appState = storagesInstance.storages.appStateStorage
+    seedStrandedFastSync(testSetup)
+    appState
+      .putBestBlockNumber(StrandedBest)
+      .and(appState.putSnapSyncMinPivotBlock(StrandedBest + 1))
+      .commit()
+    answerPeerPollsWith(snapPeerAt(StrandedBest + 10))
+    syncController ! SyncController.WrappedSyncProtocol(SyncProtocol.Start)
+    eventually {
+      someTimePasses()
+      assert(childNamed(testSetup, "pivot-header-bootstrap"))
+    }
+    val bound = PivotOnBranch(StrandedBest + 1, ByteString(Array.fill[Byte](32)(0x21)))
+
+    // every peer at the target's height was on another chain: the SNAP controller is told which, and begins the wait
+    appState.putPivotOnBranch(bound).commit()
+    syncController ! SyncController.WrappedExternal(
+      PivotHeaderBootstrap.Failed(
+        PivotHeaderBootstrap.NoPeerOnTheBranch,
+        Set(com.chipprbots.ethereum.network.PeerId("on-the-other-chain"))
+      )
+    )
+    eventually {
+      someTimePasses()
+      assert(appState.getPivotOnBranch().exists(_.firstMissMillis.isDefined))
+    }
+  }
+
+  it should "end the wait for a peer on the branch when the pivot's bootstrap takes its header from one" taggedAs (
+    UnitTest,
+    SyncTest
+  ) in withRecoveryTestSetup() { testSetup =>
+    import testSetup.*
+    import com.chipprbots.ethereum.db.storage.pathstate.PivotOnBranch
+    val appState = storagesInstance.storages.appStateStorage
+    seedStrandedFastSync(testSetup)
+    appState
+      .putBestBlockNumber(StrandedBest)
+      .and(appState.putSnapSyncMinPivotBlock(StrandedBest + 1))
+      .commit()
+    answerPeerPollsWith(snapPeerAt(StrandedBest + 10))
+    syncController ! SyncController.WrappedSyncProtocol(SyncProtocol.Start)
+    eventually {
+      someTimePasses()
+      assert(childNamed(testSetup, "pivot-header-bootstrap"))
+    }
+    val bound = PivotOnBranch(StrandedBest + 1, ByteString(Array.fill[Byte](32)(0x21)))
+    appState.putPivotOnBranch(bound.copy(firstMissMillis = Some(7L))).commit()
+    syncController ! SyncController.WrappedExternal(
+      PivotHeaderBootstrap.Completed(StrandedBest + 1, baseBlockHeader.copy(number = BlockNumber(StrandedBest + 1)))
+    )
+    appState.getPivotOnBranch() shouldBe Some(bound)
+  }
+
   it should "clear the pivot floor when SNAP finalizes" taggedAs (UnitTest, SyncTest) in withRecoveryTestSetup() {
     testSetup =>
       import testSetup.*

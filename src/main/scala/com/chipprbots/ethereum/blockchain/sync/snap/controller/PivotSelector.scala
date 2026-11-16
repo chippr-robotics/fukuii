@@ -72,6 +72,9 @@ private[snap] trait PivotSelector extends PivotSelectionApi with PivotBestBlockA
   // Post-merge: the `engine-api-required = false` warning (the peers' best block is not used as the pivot) is logged once.
   private var peerPivotFallbackRefused: Boolean = false
 
+  // B-307: the peers that follow another chain than the branch the pivot is to be on, for a while each.
+  private lazy val offBranchPeers = new PivotAnchor.OffBranchPeers
+
   def bootstrapping(): Behavior[Command] =
     Behaviors
       .receiveMessage[Command] {
@@ -325,13 +328,20 @@ private[snap] trait PivotSelector extends PivotSelectionApi with PivotBestBlockA
           )
           Behaviors.same
 
-        case PivotBootstrapFailed(reason) =>
+        case PivotBootstrapFailed(reason, offBranch) =>
           ctx.log.warn(s"Pivot header bootstrap failed during initial startup: $reason")
+          // B-307: the peers that follow another chain than the branch the pivot is to be on are left out of the next
+          // choice of a target, which lowers it to a height the branch's peers have; for a bounded wait.
+          offBranchPeers
+            .missed(stateIngest, offBranch, System.currentTimeMillis())
+            .foreach(why => ctx.log.error(PivotAnchor.requirementDroppedText(why)))
           // After a rejected header left no eligible peer, the next start chooses the target again from the peers that
           // remain: the persisted target came from the claims of peers that are now blacklisted, and resuming it would
           // ask for the same height.
-          if reason == PivotHeaderBootstrap.ExhaustedAfterRejection then
-            stateIngest.appState.clearSnapSyncBootstrapTarget().commit()
+          // And after every peer at the target's height was found on another chain than the branch (B-307; forge):
+          // resumed, the same target would ask the same peers again, and the choice that leaves them out never run.
+          if reason == PivotHeaderBootstrap.ExhaustedAfterRejection || reason == PivotHeaderBootstrap.NoPeerOnTheBranch
+          then stateIngest.appState.clearSnapSyncBootstrapTarget().commit()
           bootstrapRetryCount += 1
           checkBootstrapRetryTimeout(s"bootstrap failed: $reason") match
             case Some(b) => b
@@ -658,6 +668,7 @@ private[snap] trait PivotSelector extends PivotSelectionApi with PivotBestBlockA
         .filter(p => p.peerInfo.remoteStatus.supportsSnap && p.peerInfo.forkAccepted)
         .filter(_.peerInfo.maxBlockNumber > 0)
         .filter(p => bootstrapPivotBlock == 0 || p.peerInfo.maxBlockNumber >= bootstrapPivotBlock)
+        .filter(p => !offBranchPeers.holds(p.peer.id, System.currentTimeMillis()))
 
     val networkBestBlockOpt =
       snapPeersForPivot
