@@ -869,7 +869,6 @@ object SyncController:
             log.debug("SNAP sync in progress")
             Behaviors.same
 
-
           case bh: ForkChoiceManager.BeaconHead =>
             handleBeaconHead(bh, snapSyncOpt = Some(snapSync))
             Behaviors.same
