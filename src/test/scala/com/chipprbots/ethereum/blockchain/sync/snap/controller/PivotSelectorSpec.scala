@@ -349,6 +349,25 @@ class PivotSelectorSpec extends AnyFlatSpec with Matchers:
     h.module.syncingEntries shouldBe 0
   }
 
+  // B-310: the peers on another chain than the branch do not make the branch's pivot stale
+  it should "judge a bootstrapped pivot's freshness without the peers found on another chain than the branch (B-310)" taggedAs UnitTest in {
+    val h = new Harness(bootstrapping = true)
+    h.module.appStateStorage
+      .putPivotOnBranch(
+        com.chipprbots.ethereum.db.storage.pathstate.PivotOnBranch(pivot, ByteString(Array.fill[Byte](32)(0x21)))
+      )
+      .commit()
+    h.module.peers = Map(peer("ahead", pivot + 10_000), peer("branch", pivot + 10))
+    h.kit.run(PivotBootstrapFailed(PivotHeaderBootstrap.NoPeerOnTheBranch, Set(PeerId("ahead"))))
+    h.module.blockchainWriter.storeChainWeight(header.hash, ChainWeight.totalDifficultyOnly(BigInt(7))).commit()
+
+    h.kit.run(BootstrapComplete(Some(header)))
+
+    // committed: the peer that is far ahead follows another chain
+    h.module.snapSyncStarts shouldBe 0
+    h.module.pivotBlock shouldBe Some(pivot)
+  }
+
   it should "back off after a failed initial bootstrap and retry the start on RetrySnapSyncStart" taggedAs UnitTest in {
     val h = new Harness(bootstrapping = true)
 
