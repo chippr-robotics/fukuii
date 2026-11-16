@@ -3590,3 +3590,14 @@ items:
     links:
       spec: 018
     notes: "forge, 2026-11-16, review of #1870 (c2): PivotRefresher ignores PivotBootstrapFailed.offBranch and has no time bound; currentNetworkBestFromSnapPeers (PivotSelector) is not filtered by OffBranchPeers; emptyHeaderPeers keeps a peer on another chain out of body and receipt requests for the same 10 minutes."
+  - id: B-311
+    title: "SyncController escalation tests left from B-307 (f): the audit stopped at a clear, backfill states re-delivering, a clear that throws"
+    priority: P2
+    status: open
+    area: sync
+    size: S
+    opened: 2026-11-16
+    refs: []
+    links:
+      spec: 018
+    notes: "Left of B-307 (f) after #1866 and #1870. The min pivot reaching the SNAP child is tested for the retry (SyncControllerSpec, MinPivotBlock(4001)); not for the first escalation."
