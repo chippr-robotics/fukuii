@@ -47,6 +47,9 @@ import com.chipprbots.ethereum.domain.ChainWeight
   * @param onTheChain
   *   whether a header is the chain's block at its height. With `headerOf`, what a branch is named from
   *   ([[PowEscalationFeed.firstAboveFork]]): the same for every cut of the branch, and what the loop guard keeps
+  * @param mess
+  *   the rule that refuses a reorganisation whose branch has not the weight its depth asks for (ECBP-1100), where the
+  *   chain has it
   * @param note
   *   told what was left out of the count, and why
   */
@@ -56,6 +59,7 @@ final class PowEscalationFeed(
     headWeight: () => Option[ChainWeight],
     headerOf: ByteString => Option[BlockHeader] = _ => None,
     onTheChain: BlockHeader => Boolean = _ => true,
+    mess: Option[PowEscalationFeed.Mess] = None,
     note: String => Unit = _ => ()
 ):
   import PowEscalationFeed.*
@@ -86,16 +90,46 @@ final class PowEscalationFeed(
             case Some((header, why)) =>
               note(s"branch $name is not counted: the header of its block ${header.number} is not valid ($why)")
             case None =>
-              if refused.forall(_ < of) then refused = Some(of)
               val first = firstAboveFork(branch.head.header, headerOf, onTheChain)
-              val refusedBranch = EscalationWatch.Branch(
-                GivenUpBranch(first.number.value, first.hash.value),
-                () => lineage(branch.map(_.header), headerOf)
-              )
-              classify(fault) match
-                case Refusal.Unreachable => watch.branchUnreachable(refusedBranch, name, fault.getMessage)
-                case Refusal.Fault =>
-                  watch.branchRefused(refusedBranch, branch.last.number.value, name, fault.getMessage)
+              if messWouldRefuse(first, of) then
+                note(s"branch $name is not counted: the reorganisation to it is one MESS refuses (ECBP-1100)")
+              else counted(branch, name, of, first, fault)
+
+  private def counted(branch: List[Block], name: String, of: ChainWeight, first: BlockHeader, fault: StateFault): Unit =
+    if refused.forall(_ < of) then refused = Some(of)
+    val refusedBranch = EscalationWatch.Branch(
+      GivenUpBranch(first.number.value, first.hash.value),
+      () => lineage(branch.map(_.header), headerOf)
+    )
+    classify(fault) match
+      case Refusal.Unreachable => watch.branchUnreachable(refusedBranch, name, fault.getMessage)
+      case Refusal.Fault       => watch.branchRefused(refusedBranch, branch.last.number.value, name, fault.getMessage)
+
+  // Whether the reorganisation to a branch of weight `of`, whose first block above the chain is `first`, is one MESS
+  // refuses (forge, B-306). The head's header and the head's weight are read apart: they are of the same head because
+  // the feed is told of one import at a time, after it is done (ConsensusAdapter). A batch that the fetcher resolves is never handed to consensus when it is; a block a peer
+  // announces is, and without this a deep branch spread that way would be counted as the chain to follow. Where the
+  // rule is in force and what it weighs is not stored, the branch is not counted either: nothing says it would pass.
+  private def messWouldRefuse(first: BlockHeader, of: ChainWeight): Boolean =
+    mess.exists { rule =>
+      rule.head().exists { head =>
+        rule.activeAt(head.number.value) && {
+          val weighed = for
+            fork <- headerOf(first.parentHash.value)
+            // the block the two chains share is of the node's chain. Where the walk down the branch ended on a side
+            // block (its reach), what would be weighed is not what the rule weighs: the branch is not counted (forge)
+            if onTheChain(fork)
+            forkWeight <- weightOf(first.parentHash)
+            headWeight <- headWeight()
+          yield rule.refuses(
+            math.max(0L, head.unixTimestamp - fork.unixTimestamp),
+            headWeight.totalDifficulty.value - forkWeight.totalDifficulty.value,
+            of.totalDifficulty.value - forkWeight.totalDifficulty.value
+          )
+          weighed.getOrElse(true)
+        }
+      }
+    }
 
   /** Proof-of-work blocks became the head: by extension, or by a reorganisation. */
   def headMoved(newHead: Block): Unit =
@@ -109,6 +143,22 @@ final class PowEscalationFeed(
         watch.headMoved()
 
 object PowEscalationFeed:
+
+  /** The rule that refuses a reorganisation whose branch has not the weight its depth asks for (MESS, ECBP-1100).
+    *
+    * @param activeAt
+    *   whether the rule is in force at a height of the head
+    * @param head
+    *   the head's header
+    * @param refuses
+    *   whether a reorganisation is refused: the seconds from the block the chains share to the head, the weight of the
+    *   node's chain above that block, and the weight of the branch above it
+    */
+  final case class Mess(
+      activeAt: BigInt => Boolean,
+      head: () => Option[BlockHeader],
+      refuses: (Long, BigInt, BigInt) => Boolean
+  )
 
   /** The first block of the branch `block` is of above the block the branch leaves the chain at: `block` itself when it
     * stands on a block of the chain, else the lowest of the blocks under it that are not of the chain. A block whose

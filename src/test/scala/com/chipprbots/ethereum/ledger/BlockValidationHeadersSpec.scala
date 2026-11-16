@@ -80,3 +80,45 @@ class BlockValidationHeadersSpec extends AnyFlatSpec with Matchers:
       .map(_._1.number.value) shouldBe
       Some(BigInt(5))
   }
+
+  // forge, B-306: a header is cheap to write with any difficulty and a seal no one mined; a seal is costly to check
+  it should "check the rules that cost nothing on every header before the seal of any" taggedAs UnitTest in {
+    import com.chipprbots.ethereum.consensus.validators.BlockHeaderValidatorSkeleton
+    class Skeleton(badRules: Option[BigInt], badSeal: Option[BigInt]) extends EphemBlockchainTestSetup:
+      val checks: mutable.ArrayBuffer[String] = mutable.ArrayBuffer.empty
+      override lazy val validators: Mocks.MockValidatorsAlwaysSucceed = new Mocks.MockValidatorsAlwaysSucceed:
+        override val blockHeaderValidator: BlockHeaderValidator = new BlockHeaderValidatorSkeleton:
+          override def validateParentRules(blockHeader: BlockHeader, parentHeader: BlockHeader)(implicit
+              blockchainConfig: BlockchainConfig
+          ): Either[BlockHeaderError, BlockHeaderValid] =
+            checks += s"rules:${blockHeader.number.value}"
+            if badRules.contains(blockHeader.number.value) then Left(HeaderDifficultyError) else Right(BlockHeaderValid)
+          override protected def validateEvenMore(blockHeader: BlockHeader)(implicit
+              blockchainConfig: BlockchainConfig
+          ): Either[BlockHeaderError, BlockHeaderValid] =
+            checks += s"seal:${blockHeader.number.value}"
+            if badSeal.contains(blockHeader.number.value) then Left(HeaderParentNotFoundError)
+            else Right(BlockHeaderValid)
+      val validation = new BlockValidation(mining, blockchainReader, blockQueue)
+      val fork: BlockHeader = Fixtures.Blocks.ValidBlock.header.copy(number = BlockNumber(4))
+      blockchainWriter.storeBlockHeader(fork).commit()
+      val branch: List[Block] =
+        (0 until 3)
+          .foldLeft(List.empty[Block]) { (made, i) =>
+            val header = Fixtures.Blocks.ValidBlock.header
+              .copy(parentHash = made.headOption.fold(fork.hash)(_.header.hash), number = BlockNumber(5 + i))
+            Block(header, BlockBody.empty) :: made
+          }
+          .reverse
+      def found: Option[BigInt] = validation.firstInvalidHeader(branch)(using blockchainConfig).map(_._1.number.value)
+
+    // the last header's difficulty is not what its parent gives: no seal is checked, of any header
+    val cheap = new Skeleton(badRules = Some(7), badSeal = None)
+    cheap.found shouldBe Some(BigInt(7))
+    cheap.checks.toList shouldBe List("rules:5", "rules:6", "rules:7")
+
+    // the rules hold: then each header as an import validates it, the seal with it, up to the first that fails
+    val withSeals = new Skeleton(badRules = None, badSeal = Some(6))
+    withSeals.found shouldBe Some(BigInt(6))
+    withSeals.checks.toList shouldBe List("rules:5", "rules:6", "rules:7", "rules:5", "seal:5", "rules:6", "seal:6")
+  }

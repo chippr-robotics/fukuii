@@ -4007,6 +4007,24 @@ chain that was left, state root and all.
 
 **Tests**: `ClearForResyncSpec` (+12).
 
+#### C5a, a gate on part 10: what the proof-of-work feed does not count (B-306) (2026-11-16)
+
+Two notes forge left on part 6b, to close before a verdict can cost a node its state.
+
+- **A branch MESS would refuse is not counted** (ECBP-1100). The fetcher's branch resolution never hands such a
+  branch to consensus; a block a peer announces goes round it, and a deep branch spread that way would have been
+  counted as the chain to follow. The feed weighs the reorganisation as the rule does: the seconds from the block
+  the chains share to the head, and each chain's weight above that block. Where the rule is in force and what it
+  weighs is not stored, or the shared block cannot be named on the chain, the branch is not counted: a branch left
+  out only delays a verdict. MESS is off on ETC today and returns with Olympia.
+- **The rules of a header that cost nothing are checked on every header before the seal of any.** What a branch
+  weighs is in its headers' difficulties, and a header is cheap to write with any difficulty and a seal no one
+  mined. With every difficulty checked against its parent first, a seal is verified only on a branch whose weight is
+  what it says. Forge's bound, after code: on ETC a difficulty rises by about a 2048th a block, so a batch of 50 can
+  outweigh the head only from some 51 blocks below it, and no header of an old epoch gets as far as its seal.
+
+**Tests**: `PowEscalationFeedSpec` (+3), `BlockValidationHeadersSpec` (+1).
+
 ### Destructive change (C8a and C8b): the vault protocol blocks
 
 ```

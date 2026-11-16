@@ -3,6 +3,8 @@ package com.chipprbots.ethereum.ledger
 import org.apache.pekko.util.ByteString
 
 import com.chipprbots.ethereum.consensus.mining.Mining
+import com.chipprbots.ethereum.consensus.validators.BlockHeaderError.HeaderParentNotFoundError
+import com.chipprbots.ethereum.consensus.validators.BlockHeaderValidatorSkeleton
 import com.chipprbots.ethereum.domain.Block
 import com.chipprbots.ethereum.domain.BlockHash
 import com.chipprbots.ethereum.domain.BlockHeader
@@ -37,9 +39,24 @@ class BlockValidation(
     val inBranch = branch.iterator.map(block => block.header.hash.value -> block.header).toMap
     def parentOf(hash: ByteString): Option[BlockHeader] =
       inBranch.get(hash).orElse(getBlockHeaderFromChainOrQueue(hash))
-    branch.iterator
-      .map(block => block.header -> mining.validators.blockHeaderValidator.validate(block.header, parentOf))
-      .collectFirst { case (header, Left(error)) => header -> error.toString }
+    def failedBy(
+        check: BlockHeader => Either[Any, Any]
+    ): Option[(BlockHeader, String)] =
+      branch.iterator.map(block => block.header -> check(block.header)).collectFirst { case (header, Left(error)) =>
+        header -> error.toString
+      }
+    // The rules that cost nothing are checked on every header before the seal of any (forge, B-306): what a branch
+    // weighs is in its headers' difficulties, and a header is cheap to write with any difficulty and a seal no one
+    // mined. With the difficulties checked first, a seal is verified only on a branch whose weight is what it says.
+    val cheapRules = mining.validators.blockHeaderValidator match
+      case rules: BlockHeaderValidatorSkeleton =>
+        failedBy(header =>
+          parentOf(header.parentHash.value)
+            .toRight(HeaderParentNotFoundError)
+            .flatMap(rules.validateParentRules(header, _))
+        )
+      case _ => None
+    cheapRules.orElse(failedBy(header => mining.validators.blockHeaderValidator.validate(header, parentOf)))
 
   private def getBlockHeaderFromChainOrQueue(hash: ByteString): Option[BlockHeader] =
     blockchainReader
