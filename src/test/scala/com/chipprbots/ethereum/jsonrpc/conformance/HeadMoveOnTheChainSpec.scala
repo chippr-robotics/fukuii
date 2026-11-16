@@ -1349,6 +1349,96 @@ class HeadMoveOnTheChainSpec extends ScalaTestWithActorTestKit with AnyFlatSpecL
       recovery.inFlight shouldBe 0
     }
 
+  // B-307 (beacon, review of C5a part 7b): before the state is cleared for a sync from scratch
+  it should "be reset around a clear: those waiting are ended, the one under way ends after its block, and it takes recoveries again" taggedAs
+    (UnitTest, ConsensusTest) in {
+      val on = new Node
+      blocks.take(39).foreach(on.imports)
+      val engine = on.engine(() => on.pathState.anchor.map(_.hash))
+      Seq(blocks(39), blocks(40)).foreach { block =>
+        engine.newPayload(payloadOf(block)).unsafeRunSync()(using cats.effect.unsafe.IORuntime.global)
+        on.writer.dropForwardLayer(block.header.hash.value)
+      }
+      val entered = new java.util.concurrent.CountDownLatch(1)
+      val release = new java.util.concurrent.CountDownLatch(1)
+      val recovery = new on.Recovery(
+        maxBlocks = 8,
+        fails = _ =>
+          entered.countDown()
+          release.await(60, java.util.concurrent.TimeUnit.SECONDS)
+          None
+      )
+      val sink = new StateRecovery.Sink:
+        def executed(
+            block: Block,
+            receipts: Seq[com.chipprbots.ethereum.domain.Receipt],
+            accessList: Option[com.chipprbots.ethereum.domain.BlockAccessList]
+        ): Unit = ()
+        def rejected(block: Block, error: BlockExecutionError, above: List[Block]): Unit = ()
+      val head = blocks(40).header.hash.value
+      val running = recovery.requestFor(head, sink, "a test")
+      entered.await(60, java.util.concurrent.TimeUnit.SECONDS) shouldBe true
+      val waiting = recovery.requestFor(unknownHash(1), sink, "a test")
+
+      // the one under way does not end in the time given: nothing is run, and recoveries are taken as before
+      var ran = 0
+      recovery.reset(scala.concurrent.duration.DurationInt(200).millis)(ran += 1) shouldBe false
+      ran shouldBe 0
+      // those that waited were ended all the same
+      waiting.outcome.get(60, java.util.concurrent.TimeUnit.SECONDS) shouldBe StateRecovery.Outcome.Closed
+      recovery.isClosed shouldBe false
+
+      // with the time it needs: what is run inside sees no recovery running, and one asked for meanwhile is refused
+      val inside = new java.util.concurrent.atomic.AtomicReference[(Int, StateRecovery.Outcome)]()
+      val resetting = new Thread(() =>
+        recovery.reset() {
+          ran += 1
+          inside.set((recovery.inFlight, recovery.requestFor(unknownHash(2), sink, "meanwhile").outcome.get()))
+        }: Unit
+      )
+      resetting.start()
+      release.countDown()
+      resetting.join(60000)
+      running.outcome.get(60, java.util.concurrent.TimeUnit.SECONDS) shouldBe StateRecovery.Outcome.Closed
+      ran shouldBe 1
+      inside.get() shouldBe ((0, StateRecovery.Outcome.Closed))
+      // block 41 was not executed: the recovery ended after the block it was on
+      recovery.executedBlocks shouldBe Seq(BigInt(40))
+      // and it is not stopped: the same head is recovered now
+      recovery.isClosed shouldBe false
+      recovery.requestFor(head, sink, "after").outcome.get(60, java.util.concurrent.TimeUnit.SECONDS) should not be
+        StateRecovery.Outcome.Closed
+    }
+
+  it should "forget, at a reset, the heads whose recovery failed" taggedAs (UnitTest, ConsensusTest) in {
+    val on = new Node
+    blocks.take(39).foreach(on.imports)
+    val recovery = new on.Recovery(maxBlocks = 8)
+    val sink = new StateRecovery.Sink:
+      def executed(
+          block: Block,
+          receipts: Seq[com.chipprbots.ethereum.domain.Receipt],
+          accessList: Option[com.chipprbots.ethereum.domain.BlockAccessList]
+      ): Unit = ()
+      def rejected(block: Block, error: BlockExecutionError, above: List[Block]): Unit = ()
+    // a head whose header is not stored yet: its recovery fails
+    val head = blocks(40).header.hash.value
+    recovery.requestFor(head, sink, "a test").outcome.get(60, java.util.concurrent.TimeUnit.SECONDS) shouldBe
+      a[StateRecovery.Outcome.MissingHeader]
+    // its blocks arrive; inside the cool-down the head is answered as it ended, without a look
+    val engine = on.engine(() => on.pathState.anchor.map(_.hash))
+    Seq(blocks(39), blocks(40)).foreach { block =>
+      engine.newPayload(payloadOf(block)).unsafeRunSync()(using cats.effect.unsafe.IORuntime.global)
+      on.writer.dropForwardLayer(block.header.hash.value)
+    }
+    recovery.requestFor(head, sink, "again").outcome.get(60, java.util.concurrent.TimeUnit.SECONDS) shouldBe
+      a[StateRecovery.Outcome.MissingHeader]
+    recovery.reset()(()) shouldBe true
+    // after the reset it is looked at again, and recovered
+    recovery.requestFor(head, sink, "after the reset").outcome.get(60, java.util.concurrent.TimeUnit.SECONDS) shouldBe
+      a[StateRecovery.Outcome.Recovered]
+  }
+
   it should "execute no further block once it is stopping, after the one it finished" taggedAs
     (UnitTest, ConsensusTest) in {
       val on = new Node

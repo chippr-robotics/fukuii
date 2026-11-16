@@ -177,3 +177,17 @@ class EscalationWatchSpec extends AnyFlatSpec with Matchers:
     )
     requests.last.why should include("a corrupt record")
   }
+
+  // beacon: the refusals counted are of the state that was given up; left, the trigger is armed at the hand-off
+  it should "begin its count again when the state is cleared" taggedAs UnitTest in {
+    val rig = new Rig
+    (1 to 63).foreach(_ => rig.refusedOnce(Outcome.LocalFault("x")))
+    val asked = rig.watch.currentRun
+    rig.watch.stateCleared()
+    rig.watch.currentRun should not be asked
+    (1 to 63).foreach(_ => rig.refusedOnce(Outcome.LocalFault("x")))
+    rig.escalated shouldBe empty
+    rig.clock += Slot
+    rig.refusedOnce(Outcome.LocalFault("x"))
+    rig.escalated.toList shouldBe List(EscalationKind.LocalFault)
+  }

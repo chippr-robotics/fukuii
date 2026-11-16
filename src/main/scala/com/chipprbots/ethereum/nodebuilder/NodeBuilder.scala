@@ -1313,6 +1313,11 @@ trait SyncControllerBuilder extends SyncControllerRefBuilder:
     */
   def forkChoiceManagerForSync: Option[com.chipprbots.ethereum.consensus.engine.ForkChoiceManager] = None
 
+  /** The recovery of a state that is no longer held, where the node has one: reset around a clear of the state (spec
+    * 018 C5a, B-307). Overridden with the fork choice manager, where the Engine API is built.
+    */
+  def stateRecoveryForSync: Option[com.chipprbots.ethereum.ledger.StateRecovery] = None
+
   // SyncController is Pekko Typed (Group ROOT, narrowed) — a `Behavior[Command]`. Spawned via
   // classicSystem.spawn so it lives in the Classic system's guardian tree while exposing a fully-Typed
   // ActorRef[Command]. All callers now hold a TypedActorRef[SyncController.Command] (OQ-5 kill, 8k-G).
@@ -1340,15 +1345,33 @@ trait SyncControllerBuilder extends SyncControllerRefBuilder:
           blockchainReader.getBlockHeaderByHash(com.chipprbots.ethereum.domain.BlockHash(hash)).map(_.number.value),
         () => StateMetrics.escalationSuppressed(),
         escalationLog.error(_),
-        escalationLog.warn(_)
+        escalationLog.warn(_),
+        EscalationHandler.RefusedClearHoldsMillis.min(escalationCooldownMillis)
       )
       new SyncController.StateEscalationPort:
         def decide(request: EscalationWatch.Request, nowMillis: Long): EscalationHandler.Outcome =
           handler.onRequest(request, nowMillis)
-        def clear(record: StateEscalation, givenUpFor: Option[GivenUpBranch]): Unit =
-          pathState.clearForResync(blockchainReader.genesisHeader.hash.value, record.atMillis, Some(record), givenUpFor)
+        def clear(record: StateEscalation, givenUpFor: Option[GivenUpBranch]): Boolean =
+          // With no recovery running and none taken (beacon, B-307): one between two blocks it commits in place would
+          // move the head back over a state that is gone, and one that then fails the state closed would keep the
+          // sync that follows from ever handing off. The head the fork choice followed is of the state given up: left,
+          // a recovery works out what to hold from it, and is refused as a chain that cannot be reached.
+          def clearNow(): Unit =
+            pathState.clearForResync(
+              blockchainReader.genesisHeader.hash.value,
+              record.atMillis,
+              Some(record),
+              givenUpFor
+            )
+            // after the clear, not before (beacon): a fork choice that lands in between would name again, for the hours
+            // of the sync, a head whose state is then deleted
+            forkChoiceManagerForSync.foreach(_.clear())
+            // the refusals counted so far are of the state that is gone: the count begins again with the sync
+            escalationWatch.foreach(_.stateCleared())
+          stateRecoveryForSync.fold { clearNow(); true }(_.reset()(clearNow()))
         def escalated(kind: EscalationKind): Unit = StateMetrics.escalated(kind)
         def regularSyncStarted(): Unit = handler.reset()
+        def clearRefused(): Unit = handler.clearRefused(System.currentTimeMillis())
     }
 
   lazy val syncController: org.apache.pekko.actor.typed.ActorRef[SyncController.Command] =
@@ -1594,6 +1617,8 @@ trait Node
   // post-merge chains. Closes #1207.
   override def forkChoiceManagerForSync: Option[com.chipprbots.ethereum.consensus.engine.ForkChoiceManager] =
     Some(forkChoiceManager)
+
+  override def stateRecoveryForSync: Option[com.chipprbots.ethereum.ledger.StateRecovery] = stateRecovery
 
   // execution-apis `testing_*` block-production namespace. Constructed here because this is the
   // only assembly point where EngineApiBuilder (engineApiService, forkChoiceManager) and the

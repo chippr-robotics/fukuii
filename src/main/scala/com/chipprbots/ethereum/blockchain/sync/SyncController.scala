@@ -86,6 +86,9 @@ import com.chipprbots.ethereum.utils.NetworkType
   */
 object SyncController:
 
+  /** How many messages wait while a state that is given up is cleared. */
+  private val ClearingStashSize = 256
+
   /** What the controller gives the state up with, on the unified layout (spec 018 C5a part 7b). None on the hash
     * layout, and a request that arrives there is dropped.
     */
@@ -95,18 +98,26 @@ object SyncController:
     def decide(request: EscalationWatch.Request, nowMillis: Long): EscalationHandler.Outcome
 
     /** Clears the state for a sync from scratch, with the record of why, in the one synced batch that begins the clear.
-      * It returns when the rows are gone.
+      * It returns when the rows are gone. Before it, what the node keeps of the state that is given up is dropped: the
+      * recoveries that wait or run, and the head the fork choice followed (B-307).
+      *
+      * @return
+      *   false when it could not be begun (a recovery was still executing a block): nothing was cleared and nothing
+      *   recorded, and the next verdict is decided as if this one had not been
       */
     def clear(
         record: com.chipprbots.ethereum.db.storage.pathstate.StateEscalation,
         givenUpFor: Option[com.chipprbots.ethereum.db.storage.pathstate.GivenUpBranch]
-    ): Unit
+    ): Boolean
 
     /** Counts a state that was given up. */
     def escalated(kind: com.chipprbots.ethereum.db.storage.pathstate.EscalationKind): Unit
 
     /** Regular sync begins: what was answered for the verdicts of the sync before is forgotten. */
     def regularSyncStarted(): Unit
+
+    /** The clear could not be begun: no verdict is asked about for a while. */
+    def clearRefused(): Unit
 
   /** Bulk bytecode recoveries (triggered by block import) allowed to finish with the triggering code still missing
     * before the node stops repeating the full trie scan on every restart.
@@ -198,6 +209,12 @@ object SyncController:
       record: com.chipprbots.ethereum.db.storage.pathstate.StateEscalation,
       givenUpFor: Option[com.chipprbots.ethereum.db.storage.pathstate.GivenUpBranch],
       why: String
+  ) extends Command
+  // the clear of a state that is given up ended: done, not begun (a recovery was still running), or failed
+  private case class StateClearEnded(
+      record: com.chipprbots.ethereum.db.storage.pathstate.StateEscalation,
+      givenUpFor: Option[com.chipprbots.ethereum.db.storage.pathstate.GivenUpBranch],
+      cleared: scala.util.Try[Boolean]
   ) extends Command
   private case class ResumerTerminated(ref: TypedActorRef[ChainDownloader.Command]) extends Command
   private case class BytecodeRecoveryTerminated(ref: TypedActorRef[BytecodeRecoveryActor.Command]) extends Command
@@ -1137,19 +1154,13 @@ object SyncController:
                 record.kind.text,
                 why
               )
-              pendingResnap = None
-              timers.cancel(ResnapDueKey)
-              timers.cancel(ResnapCheckKey)
-              ctx.stop(regularSync)
-              stopBackgroundAudit()
-              // The clear takes the state's locks, behind any import under way, and returns when the rows are gone: it
-              // also says the sync is no longer done and sets the best block back to the genesis, in its one batch.
-              port.clear(record, givenUpFor)
-              port.escalated(record.kind)
-              // On proof of work the pivot is taken no lower than the first block of the refused branch above its
-              // fork (the block the two chains have in common, plus one): never from the old head, since a heavier
-              // chain may be the shorter one (forge). A consensus client names its own head.
-              startSnapSync(minPivotBlock = givenUpFor.map(_.number))
+              // The clear takes the state's locks, behind any import under way, then deletes the rows and writes
+              // synced twice: off this thread (forge), so that the controller answers meanwhile.
+              val blocking = ctx.system.dispatchers.lookup(DispatcherSelector.blocking())
+              ctx.pipeToSelf(scala.concurrent.Future(port.clear(record, givenUpFor))(using blocking))(
+                StateClearEnded(record, givenUpFor, _)
+              )
+              clearingState(regularSync, port)
         case SyncProtocol.RegularSyncStuck(blockNumber, missingHash) if pendingResnap.isDefined =>
           // The importer keeps retrying while a re-SNAP waits, and reports each new run of exhausts: nothing new.
           log.info(
@@ -1358,6 +1369,61 @@ object SyncController:
             handleRegularSyncMsg(regularSync, m)
       }
 
+    /** While a state that is given up is cleared (spec 018 C5a part 7b, B-307). The import still runs, and what it
+      * tries is refused as a fault of this node once the anchor is gone: it is stopped when the clear has ended, so
+      * that a clear that could not begin leaves regular sync as it was.
+      *
+      * The status is answered, and a head the consensus client names is kept for the pivot of the sync that follows. A
+      * second verdict is dropped: one state is given up at a time. Everything else waits (beacon): what regular sync is
+      * told while the clear runs (that its actor ended, that code is missing) is told once, and dropped here it would
+      * leave a regular sync that resumes without it. It is handed on when the clear could not begin, and dropped with
+      * the sync that is given up when it could.
+      */
+    private def clearingState(
+        regularSync: TypedActorRef[RegularSync.Command],
+        port: StateEscalationPort
+    ): Behavior[Command] = Behaviors.withStash(SyncController.ClearingStashSize) { waiting =>
+      Behaviors.receive { (_, cmd) =>
+        unwrap(cmd) match
+          case StateClearEnded(record, givenUpFor, scala.util.Success(true)) =>
+            waiting.clear()
+            pendingResnap = None
+            timers.cancel(ResnapDueKey)
+            timers.cancel(ResnapCheckKey)
+            ctx.stop(regularSync)
+            stopBackgroundAudit()
+            port.escalated(record.kind)
+            // On proof of work the pivot is taken no lower than the first block of the refused branch above its fork
+            // (the block the two chains have in common, plus one): never from the old head, since a heavier chain may
+            // be the shorter one (forge). A consensus client names its own head.
+            startSnapSync(minPivotBlock = givenUpFor.map(_.number))
+          case StateClearEnded(_, _, scala.util.Success(false)) =>
+            log.error(
+              "[STATE-ESCALATION] The state was not cleared: a recovery of the state was still executing a block. " +
+                "Nothing was given up and nothing recorded; regular sync goes on, and no verdict is asked about for a while."
+            )
+            port.clearRefused()
+            waiting.unstashAll(runningRegularSync(regularSync))
+          case StateClearEnded(_, _, scala.util.Failure(failed)) =>
+            // A clear that began and did not end leaves its mark: the node finishes it at its next start, before
+            // anything reads the state. It does not go on over rows that are half gone.
+            log.error("[STATE-ESCALATION] The clear of the state failed. The node stops syncing; restart it.", failed)
+            throw failed
+          case msg: SyncProtocol.GetStatus =>
+            regularSync ! msg
+            Behaviors.same
+          case bh: ForkChoiceManager.BeaconHead =>
+            handleBeaconHead(bh, snapSyncOpt = None)
+            Behaviors.same
+          case _: SyncProtocol.StateEscalationRequested | _: StateEscalationDue => Behaviors.same
+          case _ =>
+            if waiting.isFull then
+              log.warn("A message was dropped while the state is cleared: {}", cmd.getClass.getSimpleName)
+            else waiting.stash(cmd)
+            Behaviors.same
+      }
+    }
+
     /** Restart-style messages that mean the current sync strategy is being abandoned. Used by
       * `runningRegularSyncWithBackfill` to detect when it must terminate the lingering backfill actor before
       * delegating.
@@ -1436,6 +1502,7 @@ object SyncController:
       // a state is given up from regular sync only: any other state of the controller is already syncing it
       case _: SyncProtocol.StateEscalationRequested => true
       case _: StateEscalationDue                    => true
+      case _: StateClearEnded                       => true
       case _                                        => false
 
     def runningPivotHeaderBootstrap(

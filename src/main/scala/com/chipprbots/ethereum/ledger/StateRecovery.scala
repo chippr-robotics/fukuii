@@ -78,7 +78,15 @@ class StateRecovery(
   require(maxBlocks > 0, s"a recovery covers at least one block, not $maxBlocks")
   require(maxAdoptedBlocks >= maxBlocks, s"an adoption covers no fewer blocks than a recovery ($maxBlocks)")
 
-  @volatile private var closed = false
+  @volatile private var shut = false
+
+  // a reset under way ([[reset]]): as stopping, for the recoveries that wait and the one that runs, and then over
+  @volatile private var draining = false
+
+  private def closed: Boolean = shut || draining
+
+  // requests are taken under its read lock; a reset begins under its write lock
+  private val taking = new java.util.concurrent.locks.ReentrantReadWriteLock()
 
   // by head and by what asked: a fork choice's recovery is not the payload's under way for the same head, which keeps
   // layers only, and runs after it
@@ -117,6 +125,13 @@ class StateRecovery(
     *   the recovery of `head`: a new one, the one under way, or one that is done already
     */
   def requestFor(head: ByteString, sink: Sink, why: String, authority: Authority = Authority.Payload): Ticket =
+    // taken or refused as one step against a reset: a request that saw no reset is in the queue before the reset drains
+    // it, and one that comes after sees it (beacon)
+    taking.readLock().lock()
+    try requestNow(head, sink, why, authority)
+    finally taking.readLock().unlock()
+
+  private def requestNow(head: ByteString, sink: Sink, why: String, authority: Authority): Ticket =
     if closed then Ticket.done(head, Outcome.Closed)
     else
       coolingDown(head, authority) match
@@ -163,7 +178,7 @@ class StateRecovery(
     * [[Outcome.Closed]]. Before the data source closes.
     */
   def close(): Unit =
-    closed = true
+    shut = true
     executor.shutdown()
     val waiting = new java.util.ArrayList[Runnable]()
     executor.getQueue.drainTo(waiting)
@@ -173,6 +188,60 @@ class StateRecovery(
     }
     if !executor.awaitTermination(CloseWait.toMillis, TimeUnit.MILLISECONDS) then
       log.warn(s"[STATE-RECOVERY] A recovery was still executing a block ${CloseWait} after the node began to stop")
+
+  /** Before the state is cleared for a sync from scratch (spec 018 C5a, B-307; beacon): the recoveries that wait are
+    * answered [[Outcome.Closed]], the one under way ends after the block it is executing, and what was remembered of
+    * the heads whose recovery failed is forgotten. Then recoveries are taken again.
+    *
+    * Left to run, a recovery between two blocks it commits in place would move the head back over a state that is gone,
+    * and one that then fails the state closed would keep the sync that follows from ever handing off. What is
+    * remembered of a failure is of the state that is given up.
+    *
+    * '''The state is cleared inside''' (`whileNoneRuns`), with no recovery running and none taken: one asked for
+    * meanwhile is answered [[Outcome.Closed]], as while the node stops. After it, a recovery finds no state and ends as
+    * one that could not be done, which is what the node says while it syncs.
+    *
+    * @param whileNoneRuns
+    *   run once no recovery runs, and before any is taken again; not run when the one under way did not end in time
+    * @return
+    *   false when the recovery under way was still executing a block after `wait`: nothing was run
+    */
+  def reset(wait: FiniteDuration = CloseWait)(whileNoneRuns: => Unit): Boolean =
+    if shut then
+      whileNoneRuns
+      true
+    else
+      taking.writeLock().lock()
+      try draining = true
+      finally taking.writeLock().unlock()
+      try
+        val waiting = new java.util.ArrayList[Runnable]()
+        executor.getQueue.drainTo(waiting)
+        waiting.forEach {
+          case recovery: Recovery => recovery.closedBeforeItRan()
+          case _                  => ()
+        }
+        // one thread: what is submitted now runs when the recovery under way has ended
+        val ended =
+          try
+            executor.submit((() => ()): Runnable).get(wait.toMillis, TimeUnit.MILLISECONDS)
+            true
+          catch
+            case _: java.util.concurrent.TimeoutException => false
+            case _: RejectedExecutionException            => shut
+        if !ended then
+          log.warn(s"[STATE-RECOVERY] A recovery was still executing a block $wait after a reset was asked for")
+          false
+        else if !running.isEmpty then
+          // not met: no request is taken since the reset began, those that waited were ended, the one that ran has
+          log.error(s"[STATE-RECOVERY] ${running.size} recoveries are still listed after a reset: nothing is cleared")
+          false
+        else
+          failed.synchronized(failed.clear())
+          adopting = None
+          whileNoneRuns
+          true
+      finally draining = false
 
   /** One block's execution, as `engine_newPayload` executes a payload whose parent's state is held: its state is kept
     * as a forward layer. A test stands here.

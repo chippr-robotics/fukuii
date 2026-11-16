@@ -34,15 +34,31 @@ final class EscalationHandler(
     numberOf: ByteString => Option[BigInt],
     suppressed: () => Unit,
     error: String => Unit,
-    warn: String => Unit
+    warn: String => Unit,
+    refusedClearHoldsMillis: Long = EscalationHandler.RefusedClearHoldsMillis
 ):
   import EscalationHandler.*
 
   // what was answered last for a subject, and until when it stands (a cool-down ends; the others do not)
   private var answered: Map[Subject, (Outcome, Long)] = Map.empty
 
+  // no escalation is answered before this: a clear that could not be begun is not tried again with every verdict
+  private var heldUntil: Long = Long.MinValue
+
+  /** The clear an escalation asked for could not be begun, at `nowMillis`: a recovery of the state was still executing
+    * a block after the wait, which says it is stuck. Nothing was cleared and nothing recorded, so the guard would say
+    * "act" to the next verdict, a slot later, and to each after it: each would hold a thread for the whole wait and
+    * refuse recoveries meanwhile (beacon). No verdict is asked about for a while.
+    */
+  def clearRefused(nowMillis: Long): Unit =
+    heldUntil = nowMillis + refusedClearHoldsMillis
+    suppressed()
+
   /** What the owner is to do about `request`, told at `nowMillis`. */
   def onRequest(request: EscalationWatch.Request, nowMillis: Long): Outcome =
+    if nowMillis < heldUntil then Outcome.Repeated else decided(request, nowMillis)
+
+  private def decided(request: EscalationWatch.Request, nowMillis: Long): Outcome =
     // On proof of stake the head named changes with every slot: a verdict is of the node, whichever head it was met
     // at, and is answered once for its kind (beacon). On proof of work it is of a branch.
     val subject: Subject =
@@ -162,6 +178,9 @@ object EscalationHandler:
               "done at every start."
           )
           true
+
+  /** How long no verdict is asked about after a clear that could not be begun. */
+  val RefusedClearHoldsMillis: Long = 10 * 60 * 1000L
 
   /** How long "the record cannot be read" stands before it is looked at, and said, again: a read that failed once may
     * not fail the next time, and one that keeps failing is not to be said with every slot.

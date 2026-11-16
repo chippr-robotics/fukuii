@@ -86,6 +86,9 @@ final class EscalationWatch(
   /** The head is where the consensus client named it: a fork choice answered VALID, however it came to be. */
   def headMoved(): Unit = synchronized(moved())
 
+  /** The state was cleared for a sync from scratch: what was counted is of a state that is gone. */
+  def stateCleared(): Unit = synchronized(moved())
+
   private def moved(): Unit =
     trigger.headMoved()
     saying = None

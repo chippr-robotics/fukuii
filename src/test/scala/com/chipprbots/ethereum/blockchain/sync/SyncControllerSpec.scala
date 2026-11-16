@@ -593,12 +593,24 @@ class SyncControllerSpec
     def decide(request: EscalationWatch.Request, nowMillis: Long): EscalationHandler.Outcome =
       asked.incrementAndGet()
       Option(left.poll()).getOrElse(EscalationHandler.Outcome.Repeated)
-    def clear(record: StateEscalation, givenUpFor: Option[GivenUpBranch]): Unit =
+    @volatile var clears = true
+    // held while a test looks at the controller in the middle of a clear
+    @volatile var holdTheClear: Option[java.util.concurrent.CountDownLatch] = None
+    @volatile var clearFails: Option[RuntimeException] = None
+    val clearThreads = new java.util.concurrent.ConcurrentLinkedQueue[String]()
+    def clear(record: StateEscalation, givenUpFor: Option[GivenUpBranch]): Boolean =
+      clearThreads.add(Thread.currentThread.getName)
+      holdTheClear.foreach(_.await(60, java.util.concurrent.TimeUnit.SECONDS))
+      clearFails.foreach(throw _)
       cleared.add((record, givenUpFor, counted.isEmpty))
+      clears
     def escalated(kind: EscalationKind): Unit = counted.add(kind)
     val regularSyncStarts = new java.util.concurrent.atomic.AtomicInteger(0)
     def regularSyncStarted(): Unit =
       regularSyncStarts.incrementAndGet(); ()
+    val refusals = new java.util.concurrent.atomic.AtomicInteger(0)
+    def clearRefused(): Unit =
+      refusals.incrementAndGet(); ()
 
   private def escalationRequest: SyncProtocol.StateEscalationRequested =
     SyncProtocol.StateEscalationRequested(
@@ -645,6 +657,146 @@ class SyncControllerSpec
     someTimePasses()
     port.asked.get() shouldBe 1
     port.cleared.size() shouldBe 1
+  }
+
+  // B-307: a recovery of the state that is still executing a block keeps the clear from beginning
+  it should "go on with regular sync, and count nothing, when the state could not be cleared (C5a part 7b)" taggedAs (
+    UnitTest,
+    SyncTest
+  ) in withTestSetup() { testSetup =>
+    import testSetup.*
+    import com.chipprbots.ethereum.db.storage.pathstate.EscalationKind
+    import com.chipprbots.ethereum.db.storage.pathstate.StateEscalation
+    val record = StateEscalation(1763236800000L, EscalationKind.LocalFault, ByteString(Array.fill[Byte](32)(5)), 7000)
+    val port = new EscalationPort(EscalationHandler.Outcome.Escalate(record, None, "a fault"))
+    port.clears = false
+    stateEscalation = Some(port)
+    storagesInstance.storages.appStateStorage.fastSyncDone().commit()
+    syncController ! SyncController.WrappedSyncProtocol(SyncProtocol.Start)
+    val running = regularSyncChild(testSetup)
+    val errors = syncControllerErrorsDuring {
+      syncController ! SyncController.WrappedSyncProtocol(escalationRequest)
+      eventually {
+        someTimePasses()
+        port.cleared.size() shouldBe 1
+      }
+    }
+    someTimePasses()
+    errors.exists(_.contains("was not cleared")) shouldBe true
+    port.counted.size() shouldBe 0
+    port.refusals.get() shouldBe 1
+    snapChildren(testSetup) shouldBe empty
+    regularSyncChild(testSetup) shouldBe running
+  }
+
+  // B-307 (forge): the clear waits for a move of the head, deletes ranges and writes synced: off the controller's thread
+  it should "clear off its own thread, answer meanwhile, and give up one state at a time (C5a part 7b)" taggedAs (
+    UnitTest,
+    SyncTest
+  ) in withTestSetup() { testSetup =>
+    import testSetup.*
+    import com.chipprbots.ethereum.db.storage.pathstate.EscalationKind
+    import com.chipprbots.ethereum.db.storage.pathstate.StateEscalation
+    val record = StateEscalation(1763236800000L, EscalationKind.LocalFault, ByteString(Array.fill[Byte](32)(5)), 7000)
+    val escalate = EscalationHandler.Outcome.Escalate(record, None, "a fault")
+    val port = new EscalationPort(escalate, escalate)
+    val release = new java.util.concurrent.CountDownLatch(1)
+    port.holdTheClear = Some(release)
+    stateEscalation = Some(port)
+    storagesInstance.storages.appStateStorage.fastSyncDone().commit()
+    syncController ! SyncController.WrappedSyncProtocol(SyncProtocol.Start)
+    val running = regularSyncChild(testSetup)
+    try
+      syncController ! SyncController.WrappedSyncProtocol(escalationRequest)
+      eventually {
+        someTimePasses()
+        port.clearThreads.size() shouldBe 1
+      }
+      // the clear is held: the controller is not, and the import is not stopped before the clear has ended
+      port.clearThreads.peek() should not be Thread.currentThread.getName
+      regularSyncChild(testSetup) shouldBe running
+      snapChildren(testSetup) shouldBe empty
+      // a second verdict meanwhile is not asked about
+      syncController ! SyncController.WrappedSyncProtocol(escalationRequest)
+      someTimePasses()
+      port.asked.get() shouldBe 1
+    finally release.countDown()
+    eventually {
+      someTimePasses()
+      assert(snapChildren(testSetup).nonEmpty)
+    }
+    port.cleared.size() shouldBe 1
+    port.counted.size() shouldBe 1
+  }
+
+  // beacon: what regular sync is told while the clear runs is told once; dropped, the sync that resumes never hears it
+  it should "hand on, when the clear could not begin, what arrived while it ran (C5a part 7b)" taggedAs (
+    UnitTest,
+    SyncTest
+  ) in withTestSetup() { testSetup =>
+    import testSetup.*
+    import com.chipprbots.ethereum.db.storage.pathstate.EscalationKind
+    import com.chipprbots.ethereum.db.storage.pathstate.StateEscalation
+    val record = StateEscalation(1763236800000L, EscalationKind.LocalFault, ByteString(Array.fill[Byte](32)(5)), 7000)
+    val port = new EscalationPort(EscalationHandler.Outcome.Escalate(record, None, "a fault"))
+    port.clears = false
+    val release = new java.util.concurrent.CountDownLatch(1)
+    port.holdTheClear = Some(release)
+    stateEscalation = Some(port)
+    storagesInstance.storages.appStateStorage.fastSyncDone().commit()
+    syncController ! SyncController.WrappedSyncProtocol(SyncProtocol.Start)
+    regularSyncChild(testSetup)
+    val before = snapChildren(testSetup)
+    try
+      syncController ! SyncController.WrappedSyncProtocol(escalationRequest)
+      eventually {
+        someTimePasses()
+        port.clearThreads.size() shouldBe 1
+      }
+      // a second verdict meanwhile is dropped, not kept for later: it is of the clear that is under way
+      syncController ! SyncController.WrappedSyncProtocol(escalationRequest)
+      // regular sync reports itself stuck while the clear is held: not acted on now, and not lost
+      syncController ! SyncController.WrappedSyncProtocol(SyncProtocol.RegularSyncStuck(BigInt(500), "deadbeef"))
+      someTimePasses()
+      snapChildren(testSetup) shouldBe before
+    finally release.countDown()
+    // the clear could not begin: regular sync goes on, and the report is acted on then (a re-SNAP)
+    eventually {
+      someTimePasses()
+      assert((snapChildren(testSetup) -- before).nonEmpty)
+    }
+    port.counted.size() shouldBe 0
+    port.refusals.get() shouldBe 1
+    port.asked.get() shouldBe 1
+  }
+
+  it should "stop, and start no sync, when the clear of the state fails (C5a part 7b)" taggedAs (
+    UnitTest,
+    SyncTest
+  ) in withTestSetup() { testSetup =>
+    import testSetup.*
+    import com.chipprbots.ethereum.db.storage.pathstate.EscalationKind
+    import com.chipprbots.ethereum.db.storage.pathstate.StateEscalation
+    val record = StateEscalation(1763236800000L, EscalationKind.LocalFault, ByteString(Array.fill[Byte](32)(5)), 7000)
+    val port = new EscalationPort(EscalationHandler.Outcome.Escalate(record, None, "a fault"))
+    port.clearFails = Some(new IllegalStateException("the disk is full"))
+    stateEscalation = Some(port)
+    storagesInstance.storages.appStateStorage.fastSyncDone().commit()
+    syncController ! SyncController.WrappedSyncProtocol(SyncProtocol.Start)
+    regularSyncChild(testSetup)
+    val errors = syncControllerErrorsDuring {
+      syncController ! SyncController.WrappedSyncProtocol(escalationRequest)
+      eventually {
+        someTimePasses()
+        port.clearThreads.size() shouldBe 1
+      }
+      eventually {
+        someTimePasses()
+        syncController.underlying.isTerminated shouldBe true
+      }
+    }
+    errors.exists(_.contains("The clear of the state failed")) shouldBe true
+    port.counted.size() shouldBe 0
   }
 
   it should "leave regular sync as it is when the handler does not say to give the state up (C5a part 7b)" taggedAs (
