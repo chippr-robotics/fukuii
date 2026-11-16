@@ -3949,6 +3949,37 @@ the controller's thread.
 
 **Tests**: `EscalationHandlerSpec` (10), `SyncControllerSpec` (+4), `StateConfigSpec` (the key).
 
+#### C5a, a gate on part 10: what the clear of an escalation also does (B-307, in part) (2026-11-16)
+
+What forge and beacon found, reading part 7b, that the clear must do before a sync runs on the guard. Nothing here
+fires before part 10 either.
+
+- **No recovery runs, and none is taken, while the state is cleared** (`StateRecovery.reset`). Those that wait are
+  ended, the one under way ends after the block it is executing, what was remembered of the heads whose recovery
+  failed is forgotten, and the clear runs inside. Left to run, a recovery between two blocks it commits in place
+  would move the head back over a state that is gone, and one that then fails the state closed would keep the sync
+  that follows from ever handing off. A request is taken or refused as one step against a reset (beacon, after
+  code): without that, one that saw no reset could be queued after the drain and run over the cleared state.
+- **A recovery that does not end in two minutes is stuck**: the clear is not begun, nothing is recorded, regular
+  sync goes on, and **no verdict is asked about for ten minutes** (or the cool-down, if shorter). Asked again with
+  every slot, each try would hold a thread for the whole wait and refuse recoveries meanwhile (beacon).
+- **The head the fork choice followed is forgotten, after the clear** (beacon): before it, a fork choice landing in
+  between would name again, for the hours of the sync, a head whose state is then deleted. Nothing reads its absence
+  as a chain before its merge.
+- **The watch's count begins again** with the clear: the refusals counted are of the state that is gone.
+- **The clear runs off the controller's thread** (forge), in a state of its own: the status is answered, a head the
+  consensus client names is kept for the pivot, a second verdict is dropped (one state is given up at a time), and
+  everything else waits, to be handed on if the clear could not begin and dropped with the sync if it could. The
+  import is stopped once the clear has ended, not before. A clear that fails stops the controller: the node finishes
+  it at its next start.
+
+**Left of B-307**: the pivot of the sync that follows is to be on the refused branch, not only at its height
+(forge: on ETC the heavier chain can be the shorter, and a pivot on the chain that was left has the branch dropped
+for good). It is in SNAP's pivot selection, and it needs an answer for a branch no peer serves any more.
+
+**Tests**: `HeadMoveOnTheChainSpec` (+2), `SyncControllerSpec` (+4), `EscalationHandlerSpec` (+1),
+`EscalationWatchSpec` (+1).
+
 ### Destructive change (C8a and C8b): the vault protocol blocks
 
 ```

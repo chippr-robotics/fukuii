@@ -155,6 +155,25 @@ class EscalationHandlerSpec extends AnyFlatSpec with Matchers:
     rig.handler.onRequest(fault, 106 * Hour + 1) shouldBe Outcome.Suppressed
   }
 
+  // beacon: a clear that could not begin says a recovery is stuck; tried again with every slot it holds a thread each time
+  it should "ask about no verdict for a while after a clear that could not be begun" taggedAs UnitTest in {
+    val rig = new Rig
+    rig.handler.onRequest(onStake(), 100 * Hour) shouldBe a[Outcome.Escalate]
+    rig.handler.clearRefused(100 * Hour)
+    rig.suppressed shouldBe 1
+    // nothing was recorded, so the guard would say "act": it is not asked
+    rig.handler.onRequest(onStake(), 100 * Hour + 12000) shouldBe Outcome.Repeated
+    rig.handler.onRequest(
+      onWork(),
+      100 * Hour + EscalationHandler.RefusedClearHoldsMillis - 1
+    ) shouldBe Outcome.Repeated
+    // regular sync beginning again does not end the hold
+    rig.handler.reset()
+    rig.handler.onRequest(onStake(), 100 * Hour + 24000) shouldBe Outcome.Repeated
+    rig.handler
+      .onRequest(onStake(), 100 * Hour + EscalationHandler.RefusedClearHoldsMillis) shouldBe a[Outcome.Escalate]
+  }
+
   "The operator's switch" should "forget the branches at a start, synced, and say which" taggedAs UnitTest in {
     var listed: Set[GivenUpBranch] = Set(first, GivenUpBranch(9000, hash(0x55)))
     var removed = 0
