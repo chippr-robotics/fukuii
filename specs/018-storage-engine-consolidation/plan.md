@@ -3209,7 +3209,7 @@ next block's `BLOCKHASH` is the old chain's); **a heavier prefix before an inval
 layers, the case part 1 could not make in test mode); and a reorganisation back onto an orphaned block across a
 restart, with `BLOCKHASH` read by the block that is executed before the index is settled. **Not run**: the
 ethereum/tests fork vectors (bcMultiChain, bcTotalDifficulty, bcForkStress), whose fixtures are not in this checkout:
-they are the gate before the guard is on for a node (B-289).
+they are the gate before the guard is on for a node (B-289). **Run since, on both layouts: C5a part 9a.**
 
 #### C4e part 3: at the pinned cap, the head is moved first and the branch committed in place (2026-11-15)
 
@@ -4144,6 +4144,26 @@ requests is also left out of body and receipt requests for the same 10 minutes.
 `PivotSelectorSpec` (+2), `SyncControllerSpec` (+2), `ClearForResyncSpec` (one case extended). Mutation run: 24 rules
 broken one at a time, 24 caught (three gaps closed by tests: the selector's filter, and the controller's two lines of
 wiring).
+
+#### C5a part 9a: the ethereum/tests fork vectors on the unified layout (B-289) (2026-11-16)
+
+The gate forge set before the guard is on for a proof-of-work node: the fixtures whose blocks form more than one
+chain. `ForkChoiceBlockchainTestsSpec` (the integration suite) delivers each block, in file order, through the
+production import path (`ConsensusAdapter.evaluateBranchBlock`: the block queue, the branch's weight, the import to the
+top or the reorganisation, the real EVM and the real state-root check), and judges the fixture's `lastblockhash` and
+`postState`. It ran on the hash layout only.
+
+- **Each category now runs on both layouts.** On the unified layout the pre-state is loaded as a node loads a
+  genesis, as rows (`GenesisDataLoader`), and the block the loader builds must be the fixture's genesis block, hash for
+  hash; a branch is executed on pinned layers and the head is moved to it in place. The post-state is read from the
+  head's state through `BlockchainReader.stateAt`, whichever layout holds it. A case fails loudly if its node is not on
+  the layout it is named for.
+- **Result, on both layouts alike** (Istanbul and Berlin, the forks whose rules Phoenix and Magneto adopt):
+  bcMultiChainTest 14 of 14 (16 reorganisations in 10 cases), bcTotalDifficultyTest 22 of 22 (20 in 18),
+  bcForkStressTest 4 of 4 (6 in 2), bcRandomBlockhashTest 192 of 192; and the uncle categories, added with this part,
+  bcUncleTest 16 of 16 and bcUncleSpecialTests 16 of 16.
+- **Where it runs**: the nightly (`ethereum-tests-nightly.yml`, `ethtest.*`); the pull-request gate names its
+  integration specs one by one and does not name this one. The fixtures are the `ets/tests` submodule.
 
 ### Destructive change (C8a and C8b): the vault protocol blocks
 
