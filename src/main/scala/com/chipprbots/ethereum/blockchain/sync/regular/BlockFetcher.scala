@@ -82,6 +82,11 @@ class BlockFetcher(
   // Who the last fetch handed to it answers to: a fetch it stops holding is answered as exhausted.
   private var stateNodeReplyTo: Option[ActorRef[FetchResponse]] = None
 
+  // The fetches of ancestor bodies running, by their child, with who each answers to and what it asked for (B-301).
+  private var ancestorBodiesFetches
+      : Map[ActorRef[AncestorBodiesFetcher.Command], (ActorRef[FetchResponse], Seq[BlockHeader])] = Map.empty
+  private var ancestorBodiesFetcherSpawns: Long = 0L
+
   private def spawnStateNodeFetcher(): ActorRef[StateNodeFetcher.StateNodeFetcherCommand] =
     val name =
       if stateNodeFetcherSpawns == 0 then "state-node-fetcher" else s"state-node-fetcher-$stateNodeFetcherSpawns"
@@ -455,6 +460,35 @@ class BlockFetcher(
         )
         Behaviors.same
 
+      // Bodies of blocks already on this node's chain, wanted by the importer (B-301). Fetched by a child of their own
+      // and answered to the importer directly: they are no part of the blocks this fetcher queues, and a body that
+      // arrived as ReceivedBodies outside a fetch of its own would be taken for one of the waiting headers'.
+      case FetchAncestorBodies(headers, replyTo) =>
+        ancestorBodiesFetcherSpawns += 1
+        val child = context.spawn(
+          AncestorBodiesFetcher(peersClient, syncConfig, headers, context.self),
+          s"ancestor-bodies-fetcher-$ancestorBodiesFetcherSpawns"
+        )
+        context.watchWith(child, AncestorBodiesFetcherStopped(child))
+        ancestorBodiesFetches += child -> (replyTo, headers)
+        log.debug("Fetching the bodies of {} ancestor blocks", headers.size)
+        Behaviors.same
+
+      case AncestorBodiesFetched(child, requested, bodies) =>
+        ancestorBodiesFetches.get(child).foreach((replyTo, _) => replyTo ! FetchedAncestorBodies(requested, bodies))
+        ancestorBodiesFetches -= child
+        context.stop(child)
+        Behaviors.same
+
+      case AncestorBodiesFetcherStopped(child) =>
+        // Stopped before it reported, so it failed: the fetch is answered as one that found nothing.
+        ancestorBodiesFetches.get(child).foreach { (replyTo, requested) =>
+          log.error("The fetch of {} ancestor bodies stopped before it ended: it is answered as empty", requested.size)
+          replyTo ! FetchedAncestorBodies(requested, Nil)
+        }
+        ancestorBodiesFetches -= child
+        Behaviors.same
+
       case AdaptedMessageFromEventBus(NewBlockHashes(hashes), _) =>
         log.debug("Received NewBlockHashes numbers {}", hashes.map(_.number).mkString(", "))
         val newState = state.validateNewBlockHashes(hashes) match
@@ -779,6 +813,24 @@ object BlockFetcher:
   final case class ReceivedHeaders(peer: Peer, headers: Seq[BlockHeader]) extends FetchCommand
   final case class ReceivedBodies(peer: Peer, bodies: Seq[BlockBody]) extends FetchCommand
 
+  /** Fetch the bodies of these blocks, whose headers this node stores (B-301): answered with one
+    * [[FetchedAncestorBodies]], holding only the bodies that are the ones their headers commit to.
+    */
+  final case class FetchAncestorBodies(headers: Seq[BlockHeader], replyTo: ActorRef[FetchResponse]) extends FetchCommand
+  final private[regular] case class AncestorBodiesFetched(
+      child: ActorRef[AncestorBodiesFetcher.Command],
+      requested: Seq[BlockHeader],
+      bodies: Seq[(BlockHeader, BlockBody)]
+  ) extends FetchCommand
+  final private[regular] case class AncestorBodiesFetcherStopped(child: ActorRef[AncestorBodiesFetcher.Command])
+      extends FetchCommand
+
   sealed trait FetchResponse
   final case class PickedBlocks(blocks: NonEmptyList[Block]) extends FetchResponse
   final case class FetchedStateNode(stateNode: ETHPackets.NodeData) extends FetchResponse
+
+  /** The answer to a [[FetchAncestorBodies]]: the headers it asked for, and the bodies found that match their headers,
+    * each with its header. Empty when no peer served any.
+    */
+  final case class FetchedAncestorBodies(requested: Seq[BlockHeader], bodies: Seq[(BlockHeader, BlockBody)])
+      extends FetchResponse
