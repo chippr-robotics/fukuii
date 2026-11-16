@@ -3739,13 +3739,16 @@ items:
   - id: B-322
     title: "Hive rpc-compat (master, unpinned) gained cases fukuii fails: eth_call/estimateGas/createAccessList blob-fee-without-hashes and fork-inactive, eth_getProof"
     priority: P2
-    status: open
+    status: dropped
     area: rpc
     size: M
     opened: 2026-11-16
+    closed: 2026-11-16
     refs: []
     links: {}
-    notes: "Seen 2026-11-16 23:37-23:41 on #1873 (f8d65b2, 11 of 307) and #1875 (7e5fe72, 16 of 318), neither touching RPC; the job was green on #1873 at 21:35. _hive-sim.yml clones hive at master, so the corpus moves under every PR (informational gate). Two things: fix the cases (conduit), and consider pinning hive_ref so a PR's check reflects the PR."
+    notes: |-
+      Seen 2026-11-16 23:37-23:41 on #1873 (f8d65b2, 11 of 307) and #1875 (7e5fe72, 16 of 318), neither touching RPC; the job was green on #1873 at 21:35. _hive-sim.yml clones hive at master, so the corpus moves under every PR (informational gate). Two things: fix the cases (conduit), and consider pinning hive_ref so a PR's check reflects the PR.
+      2026-11-16 dropped: duplicate of B-323 (the orchestrator's, same hive-drift cases); my note there: hive is cloned at master in _hive-sim.yml, so consider pinning hive_ref
   - id: B-323
     title: "rpc-compat on hive master fails 16 tests since 2026-11-16 23:30: blob-fee-without-hashes, fork-inactive, eth_getProof key cases"
     priority: P1
