@@ -15,6 +15,7 @@ import com.chipprbots.ethereum.consensus.engine.DesignatedHead
 import com.chipprbots.ethereum.consensus.engine.InvalidChainReporter
 import com.chipprbots.ethereum.db.storage.pathstate.BranchPin
 import com.chipprbots.ethereum.db.storage.pathstate.BranchTooLarge
+import com.chipprbots.ethereum.db.storage.pathstate.ReexecutionDiverged
 import com.chipprbots.ethereum.db.storage.pathstate.ReorgRefusal
 import com.chipprbots.ethereum.db.storage.pathstate.ReorgTooDeep
 import com.chipprbots.ethereum.db.storage.pathstate.StateFault
@@ -481,7 +482,7 @@ class ConsensusImpl(
             diverged.get
           )
           ConsensusStateFault(
-            new StateUnavailable(
+            new ReexecutionDiverged(
               s"block ${diverged.get}, which the branch stands on, failed when it was executed again"
             ),
             Nil,
@@ -637,7 +638,7 @@ class ConsensusImpl(
       error.describe
     )
     ConsensusStateFault(
-      new StateUnavailable(
+      new ReexecutionDiverged(
         s"block ${failing.number}, which the branch stands on and was executed before, fails now: ${error.describe}"
       ),
       Nil,

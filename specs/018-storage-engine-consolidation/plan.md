@@ -3843,6 +3843,44 @@ taken as 12 s: no chain here says otherwise, and a shorter slot only lengthens t
 that is named begin the run again, corrupt records are answered as a fault. **The mutation run**: 13 mutants,
 13 caught.
 
+#### C5a part 6b: a node says when it cannot follow the chain, on proof of work (2026-11-16)
+
+The same verdict as 6a, fed from the import of proof-of-work blocks. **It says only.** On the unified layout only.
+
+- **Where it is fed**: `ConsensusAdapter`, where every result of an import passes, typed, with the branch it is of.
+  The importer is not touched. `PowEscalationFeed` is told of a branch that was not judged (`ConsensusStateFault`) and
+  of a head that moved (an extension, a reorganisation, the blocks of a batch adopted before a fault). Blocks with no
+  difficulty (a chain after its merge) are the Engine API's (6a).
+- **Only a branch that outweighs the head, with headers that are valid, is counted** (forge). A refusal is met before
+  a block of the branch is validated, on what its headers claim. `BlockValidation.firstInvalidHeader` validates each
+  header as an import does, the seal with it, against a parent in the branch or in what is stored; it is asked only
+  for a branch that outweighs the head. What stands under the branch was executed before its weight was stored, so a
+  branch that is counted is work that was spent.
+- **The weights are to be exact** (forge, a blocker for part 7 as first built): a head weighed from an estimate at a
+  pivot is outweighed by any block below it. A hand-off on a chain that chooses by weight refuses an estimate (5b),
+  and the feed is given no weight for a head whose stored weight is not its parent's plus its own difficulty.
+- **The table**: at once for a move back that is refused for its depth (`ReorgTooDeep` Deep, Incomplete, Pivot);
+  every other fault of the node waits for 64 blocks of growth of the branch. A block that fails when it is executed
+  again is now its own fault, `ReexecutionDiverged` (it was a plain `StateUnavailable`).
+- **The growth of a branch** is of the highest tip seen, for the branch named by the block its first refused block
+  stands on (forge): a refused branch is fetched again a batch at a time, with the tip of the batch, and told again
+  with the tip a peer announced. By the tip alone a long branch never grew, and a lower cut began the run again.
+- **A move of the head ends the run only when the head is no lighter than the branch refused.** This narrows the
+  user's "any move of the head that succeeds" for proof of work: on a chain that is split the lighter side grows too,
+  and a node kept on it by its own fault would never say so. Open to the user to overrule.
+- **It never fails an import** (forge): the feed is told inside the result of an import, after the head has moved;
+  whatever goes wrong in it is logged and the result stands.
+- `recovery.reexecuted.blocks` (T174) is counted: each block a recovery executes again or commits in place.
+
+**Before part 7 arms it** (forge, B-306): a branch that MESS (ECBP-1100) would refuse is not to be counted. Batches
+go through `BranchResolution`, which does not hand such a branch to consensus; a single announced block does not.
+MESS is off on ETC today and returns with Olympia. And the seal of the first header is checked on what the last
+header claims: the cheap rules of every header are to be checked, and the weight weighed again, before a seal is; a
+header of an old epoch builds an Ethash cache that pushes the current one out.
+
+**Tests**: `PowEscalationFeedSpec` (8), `ConsensusAdapterEscalationSpec` (3), `BlockValidationHeadersSpec` (3),
+`EscalationTriggerSpec` (+1).
+
 ### Destructive change (C8a and C8b): the vault protocol blocks
 
 ```

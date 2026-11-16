@@ -57,6 +57,21 @@ final class EscalationWatch(
     told(trigger.localFault(now()), s"head $head is not followed, for a fault of this node: $why")
   }
 
+  /** On proof of work: a branch heavier than the head, with headers that are valid, was refused where no wait mends it
+    * (it leaves the chain below what the state reaches).
+    */
+  def branchUnreachable(branch: String, why: String): Unit = synchronized {
+    told(trigger.unreachable(), s"the heavier branch $branch cannot be reached: $why")
+  }
+
+  /** On proof of work: a branch heavier than the head, with headers that are valid, was not adopted for a fault of this
+    * node, with its tip at `tip`. `standsOn` names the branch: the block its first refused block stands on. What is
+    * counted is how far the branch grows while it is refused.
+    */
+  def branchRefused(standsOn: Any, tip: BigInt, branch: String, why: String): Unit = synchronized {
+    told(trigger.localFaultOnBranch(standsOn, tip), s"the heavier branch $branch is not followed: $why")
+  }
+
   /** The head is where the consensus client named it: a fork choice answered VALID, however it came to be. */
   def headMoved(): Unit = synchronized(moved())
 

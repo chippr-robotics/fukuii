@@ -76,25 +76,39 @@ class EscalationTriggerSpec extends AnyFlatSpec with Matchers:
 
   it should "wait on proof of work for 64 blocks of growth of the refused branch, however often it is offered" taggedAs UnitTest in {
     val trigger = proofOfWork
-    trigger.localFaultOnBranch(1000) shouldBe Verdict.Waiting(0)
-    (1 to 500).foreach(_ => trigger.localFaultOnBranch(1000) shouldBe Verdict.Waiting(0))
-    trigger.localFaultOnBranch(1063) shouldBe Verdict.Waiting(63)
-    trigger.localFaultOnBranch(1064) shouldBe Verdict.Escalate(EscalationKind.LocalFault)
+    trigger.localFaultOnBranch("a", 1000) shouldBe Verdict.Waiting(0)
+    (1 to 500).foreach(_ => trigger.localFaultOnBranch("a", 1000) shouldBe Verdict.Waiting(0))
+    trigger.localFaultOnBranch("a", 1063) shouldBe Verdict.Waiting(63)
+    trigger.localFaultOnBranch("a", 1064) shouldBe Verdict.Escalate(EscalationKind.LocalFault)
   }
 
-  it should "begin again on proof of work when the head moves, and when a lower branch is the one refused" taggedAs UnitTest in {
+  it should "begin again on proof of work when the head moves, and when another branch is the one refused" taggedAs UnitTest in {
     val trigger = proofOfWork
-    trigger.localFaultOnBranch(1000)
-    trigger.localFaultOnBranch(1050) shouldBe Verdict.Waiting(50)
+    trigger.localFaultOnBranch("a", 1000)
+    trigger.localFaultOnBranch("a", 1050) shouldBe Verdict.Waiting(50)
     trigger.headMoved()
-    trigger.localFaultOnBranch(1060) shouldBe Verdict.Waiting(0)
-    trigger.localFaultOnBranch(1123) shouldBe Verdict.Waiting(63)
+    trigger.localFaultOnBranch("a", 1060) shouldBe Verdict.Waiting(0)
+    trigger.localFaultOnBranch("a", 1123) shouldBe Verdict.Waiting(63)
 
-    withClue("a tip below where the run began is another branch: ") {
-      trigger.localFaultOnBranch(900) shouldBe Verdict.Waiting(0)
-      trigger.localFaultOnBranch(963) shouldBe Verdict.Waiting(63)
-      trigger.localFaultOnBranch(964) shouldBe Verdict.Escalate(EscalationKind.LocalFault)
+    withClue("a branch that stands on another block is another branch: ") {
+      trigger.localFaultOnBranch("b", 1123) shouldBe Verdict.Waiting(0)
+      trigger.localFaultOnBranch("b", 1186) shouldBe Verdict.Waiting(63)
+      trigger.localFaultOnBranch("b", 1187) shouldBe Verdict.Escalate(EscalationKind.LocalFault)
     }
+  }
+
+  // forge: a refused branch is fetched again a batch at a time, and told again with the tip a peer announced
+  it should "count the highest tip of a branch, whichever cut of it is told" taggedAs UnitTest in {
+    val trigger = proofOfWork
+    trigger.localFaultOnBranch("a", 1049) shouldBe Verdict.Waiting(0)
+    trigger.localFaultOnBranch("a", 1100) shouldBe Verdict.Waiting(51)
+    // the batch again, with its lower tip: nothing is lost and nothing begins again
+    trigger.localFaultOnBranch("a", 1049) shouldBe Verdict.Waiting(51)
+    trigger.localFaultOnBranch("a", 1112) shouldBe Verdict.Waiting(63)
+    trigger.localFaultOnBranch("a", 1049) shouldBe Verdict.Waiting(63)
+    trigger.localFaultOnBranch("a", 1113) shouldBe Verdict.Escalate(EscalationKind.LocalFault)
+    // and it stays said while the branch stands refused
+    trigger.localFaultOnBranch("a", 1049) shouldBe Verdict.Escalate(EscalationKind.LocalFault)
   }
 
   it should "refuse a count of no refusals and a span of time that is negative" taggedAs UnitTest in {
