@@ -108,6 +108,39 @@ object GivenUpBranches:
         )
         .toSet
 
+/** The heights whose entries in the index of blocks by number are still to be deleted after a clear for an escalation
+  * (`state.reset-trim-above`; B-303): above `commonBlock`, up to `upper`. Put in the synced batch that begins the
+  * clear, removed, synced, with [[StateResetPending]], once the entries are deleted. A node started with it set deletes
+  * them again before anything syncs.
+  *
+  * The chain the node was on above the block it has in common with the chain it is to follow is the chain it left: left
+  * in the index, a sync takes its headers for stored, and a height answers with a block of it.
+  *
+  * @param commonBlock
+  *   the highest block the two chains are known to share: every entry above it goes
+  * @param upper
+  *   the highest height that may have an entry
+  */
+final case class StateResetTrim(commonBlock: BigInt, upper: BigInt)
+
+object StateResetTrim:
+  val Key: String = "state.reset-trim-above"
+
+  def encode(trim: StateResetTrim): String = s"v1:${trim.commonBlock}:${trim.upper}"
+
+  /** The trim a stored value names; one this build cannot read throws, and the node does not start over it. */
+  def decode(value: String): StateResetTrim =
+    def digits(text: String): Boolean = text.nonEmpty && text.forall(_.isDigit)
+    value.split(':') match
+      case Array("v1", common, upper) if digits(common) && digits(upper) =>
+        StateResetTrim(BigInt(common), BigInt(upper))
+      case _ =>
+        throw new IllegalStateException(
+          s"$Key is not a v1 trim: '$value'. It says which entries of the index of blocks by number a clear of the " +
+            "state still has to delete, and the node does not start without knowing. Take a copy of the data " +
+            "directory; then either restore it from a backup, or move its rocksdb directory away to sync again."
+        )
+
 /** The mark that a clear of the state was begun and its rows may not all be gone yet (`state.reset-pending`): put in
   * the synced batch that begins the clear, removed, synced, once the rows are deleted. A node started with it set
   * deletes the rows again before anything reads them.

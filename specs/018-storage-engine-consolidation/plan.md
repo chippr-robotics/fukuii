@@ -3980,6 +3980,33 @@ for good). It is in SNAP's pivot selection, and it needs an answer for a branch 
 **Tests**: `HeadMoveOnTheChainSpec` (+2), `SyncControllerSpec` (+4), `EscalationHandlerSpec` (+1),
 `EscalationWatchSpec` (+1).
 
+#### C5a, a gate on part 10: the index by number after a clear for an escalation (B-303) (2026-11-16)
+
+The clear keeps the blocks and takes the state. It also kept the index of blocks by number and the header
+download's cursors as they were, and above the block the node's chain shares with the chain it is to follow those
+name the chain that was left. What that breaks (vault's map, before code): the header download trusts its cursor,
+resumes above the old tip, and refuses every header of the other chain, since none stands on the tip it remembers;
+the pivot's selection takes "the header this node has at the pivot's height", which on ETC can be a block of the
+chain that was left, state root and all.
+
+- **The block the two chains share**: on proof of work, the block under the first block of the refused branch; on
+  proof of stake, the block that was finalized on the state that is given up; with neither, the genesis. Lowered to
+  a block whose weight is stored (the download works out each weight from the parent's), as far as 4096 blocks and
+  then to the genesis, said at WARN.
+- **In the clear's first synced batch**: what is to be deleted of the index is written down
+  (`state.reset-trim-above`: the shared block and the highest height that may have an entry), and the header
+  download's cursors are set back to the shared block, with the hash of the block there, and its target removed. A
+  cursor that was lower stays; one at a height the index has nothing at goes to zero.
+- **The entries are deleted one by one**, in chunks of 10,000, after the state's rows: the keys of the index are
+  not in the order of the heights, so no range says "above a height" (vault). Then the record and the mark of the
+  clear are removed in one synced write.
+- **A start after a kill finishes it**: the cursors are set back again and the entries deleted again, up to what a
+  sync that ran meanwhile has reached (vault, after code). A record that cannot be read stops the start.
+- The headers, bodies and weights of the chain that was left stay, by their hashes. A clear that is no escalation
+  (the genesis state, as SNAP starts) trims nothing.
+
+**Tests**: `ClearForResyncSpec` (+12).
+
 ### Destructive change (C8a and C8b): the vault protocol blocks
 
 ```
