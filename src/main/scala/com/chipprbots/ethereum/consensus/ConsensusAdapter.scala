@@ -231,6 +231,31 @@ class ConsensusAdapter(
           BlockImportStateFault(fault, imported)
       }
 
+  /** A proof-of-work branch, known by its `headers` from the block above the one it leaves the chain at, that regular
+    * sync refused before any of its blocks was fetched (B-300 g): it reaches further above that block than the fetcher
+    * holds, or the head cannot be moved back there. Told to the escalation's feed, as a branch this node's state could
+    * not take is ([[PowEscalationFeed.notJudgedHeaders]]), and with the header validation of an import.
+    *
+    * To be called under the import lock: the feed reads the head's weight, and is told one import at a time.
+    */
+  def branchOutOfReach(headers: List[BlockHeader], fault: StateFault)(implicit
+      blockchainConfig: BlockchainConfig
+  ): Unit =
+    toldTheFeed("a branch out of reach")(_.notJudgedHeaders(headers, fault, blockValidation.firstInvalidHeaderOf))
+
+  /** Whether the branch of `headers` outweighs the head, by the weights the escalation's feed counts a branch by
+    * ([[PowEscalationFeed.outweighsTheHead]]). False with no feed, and where the weights cannot be read: a fetch of the
+    * branch's headers then goes on to its other ends (B-300 g).
+    */
+  def branchOutweighsTheHead(headers: List[BlockHeader]): Boolean =
+    escalationFeed.exists { feed =>
+      try feed.outweighsTheHead(headers)
+      catch
+        case NonFatal(failed) =>
+          log.warn("[STATE-ESCALATION] The weight of a branch out of reach could not be read", failed)
+          false
+    }
+
   private def toldOfTheHead(head: Option[Block]): Unit =
     head.foreach(block => toldTheFeed("a head that moved")(_.headMoved(block)))
 

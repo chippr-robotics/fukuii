@@ -43,6 +43,8 @@ import com.chipprbots.ethereum.db.storage.EvmCodeStorage
 import com.chipprbots.ethereum.db.storage.StateStorage
 import com.chipprbots.ethereum.db.storage.pathstate.HandedToRecovery
 import com.chipprbots.ethereum.db.storage.pathstate.RefusedForThisHead
+import com.chipprbots.ethereum.db.storage.pathstate.ReorgRefusal
+import com.chipprbots.ethereum.db.storage.pathstate.ReorgTooDeep
 import com.chipprbots.ethereum.domain.*
 import com.chipprbots.ethereum.domain.BlockchainWriter
 import com.chipprbots.ethereum.jsonrpc.NewBlockImported
@@ -53,6 +55,7 @@ import com.chipprbots.ethereum.mpt.MerklePatriciaTrie.MissingCodeException
 import com.chipprbots.ethereum.mpt.MerklePatriciaTrie.MissingNodeException
 import com.chipprbots.ethereum.mpt.MerklePatriciaTrie.MissingStorageNodeException
 import com.chipprbots.ethereum.network.NetworkPeerManagerActor
+import com.chipprbots.ethereum.network.Peer
 import com.chipprbots.ethereum.network.PeerEventBusActor.Command as PeerEventBusCommand
 import com.chipprbots.ethereum.network.PeerId
 import com.chipprbots.ethereum.network.p2p.messages.ETHPackets.NodeData
@@ -209,6 +212,37 @@ object BlockImporter:
   private[regular] case object SyncRetryTick extends Command
   private[regular] val RetryKey = "BlockImporterRetry"
 
+  // What holds the import lock while a branch out of reach is told to the escalation's feed (B-300 g).
+  private[regular] val BranchOutOfReachHolder: String = "the escalation of a branch out of reach"
+
+  /** The most headers of a branch out of reach fetched for the escalation (B-300 g; forge). The fetch stops as soon as
+    * they outweigh the head, so this bounds only a branch that never does, or whose weight cannot be read: enough to
+    * outweigh any head this node could have reached by following the chain since the block the branch leaves it at,
+    * where that block is far below the head (a refusal for depth), without holding millions of headers, and
+    * seal-checking them under the import lock while imports wait.
+    */
+  val MaxBranchHeadersFetched: Int = 8192
+
+  // The name of the one fetch of a branch's headers an importer has at a time (B-300 g).
+  private[regular] val BranchHeadersFetchName: String = "branch-headers-fetch"
+
+  // forge, B-300 g: how many times in a row a branch not taken may be refused beyond the fetch at the same block,
+  // before that is said at ERROR. The fork recovery it starts can find its common block elsewhere, or none, and the
+  // branch is then remembered, weighed and refused again.
+  val BeyondTheFetchRepeatsWarnAt: Int = 3
+
+  /** The block a branch not taken was last refused beyond the fetch at, and how many times in a row it was that one. */
+  final private[regular] class BeyondTheFetchRefusals:
+    private var last: Option[BigInt] = None
+    private var count: Int = 0
+
+    /** One more refusal of a branch that leaves this chain at `commonBlock`: how many in a row have left it there. */
+    def record(commonBlock: BigInt): Int = synchronized {
+      count = if last.contains(commonBlock) then count + 1 else 1
+      last = Some(commonBlock)
+      count
+    }
+
   // Above this many batches deferred behind one running import (post-merge only), BlockImporter warns: see the
   // deferral arm in `running`.
   private[regular] val DeferredBatchesWarnThreshold: Int = 5
@@ -324,7 +358,19 @@ object BlockImporter:
   case class ImportDone(newBehavior: NewBehavior, blockImportType: BlockImportType) extends Command
   case object PickBlocks extends Command
   case object PrintStatus extends Command
-  case class StartForkRecovery(failedBlockNumber: BigInt) extends Command
+
+  /** @param beyondTheFetch
+    *   the branch not taken that started the recovery, which has become the heavier and reaches further above the block
+    *   it leaves this chain at than the fetcher holds (B-300 g). None: a block that failed, as ever.
+    */
+  case class StartForkRecovery(failedBlockNumber: BigInt, beyondTheFetch: Option[BranchBeyondTheFetch] = None)
+      extends Command
+
+  /** A branch that was not taken, and has become the heavier, whose tip is more blocks above the block it leaves this
+    * chain at than the fetcher holds ready (B-300 g). It cannot be fetched whole, and no peer is known for it: the fork
+    * recovery it starts finds one, and refuses the branch when the common block it finds is `commonBlock`.
+    */
+  final case class BranchBeyondTheFetch(commonBlock: BigInt, tip: BigInt)
   final private[regular] case class FetcherResponse(r: BlockFetcher.FetchResponse) extends Command
   final private[regular] case class BranchResolverMsg(r: FastSyncBranchResolverActor.BranchResolverResponse)
       extends Command
@@ -353,7 +399,11 @@ object BlockImporter:
     */
   case class ResolvingMissingNode(blocksToRetry: NonEmptyList[Block], alreadyExhausted: Boolean = false)
       extends NewBehavior
-  case class ResolvingBranch(from: BigInt) extends NewBehavior
+
+  /** How many branches that were not taken are remembered (B-300 f). */
+  val BranchesNotTakenKept: Int = 16
+
+  case class ResolvingBranch(from: BigInt, upTo: Option[BigInt] = None) extends NewBehavior
 
   sealed trait BlockImportType:
     def recordMetric(nanos: Long): Unit
@@ -375,15 +425,19 @@ object BlockImporter:
   case class ImporterState(
       importing: Boolean,
       resolvingBranchFrom: Option[BigInt],
-      deferredBatches: List[NonEmptyList[Block]] = Nil
+      deferredBatches: List[NonEmptyList[Block]] = Nil,
+      // The block the fetched branch is to reach before it is weighed, where that is not this node's head: on the
+      // unified layout, the block whose import started the recovery (B-300 W4). None: the head, as ever.
+      resolvingBranchTo: Option[BigInt] = None
   ):
     def importingBlocks(): ImporterState = copy(importing = true)
 
     def notImportingBlocks(): ImporterState = copy(importing = false)
 
-    def resolvingBranch(from: BigInt): ImporterState = copy(resolvingBranchFrom = Some(from))
+    def resolvingBranch(from: BigInt, upTo: Option[BigInt] = None): ImporterState =
+      copy(resolvingBranchFrom = Some(from), resolvingBranchTo = upTo)
 
-    def branchResolved(): ImporterState = copy(resolvingBranchFrom = None)
+    def branchResolved(): ImporterState = copy(resolvingBranchFrom = None, resolvingBranchTo = None)
 
     def isResolvingBranch: Boolean = resolvingBranchFrom.isDefined
 
@@ -456,6 +510,8 @@ final private class BlockImporterLogic(
   private val orphanAnnounces = new OrphanAnnounceStrikes
   // How many times in a row the pivot floor sent the fetcher back to the same block (forge, B-007).
   private val floorGapRewinds = new FloorGapRewinds
+  // How many times in a row a branch not taken was refused beyond the fetch at the same block (forge, B-300 g).
+  private val beyondTheFetchRefusals = new BeyondTheFetchRefusals
   private val BadBlockEvictionThreshold = 3
   private val ForkDetectThreshold = 5
 
@@ -608,8 +664,8 @@ final private class BlockImporterLogic(
         catch case _: Exception => ()
         Behaviors.same
 
-      case StartForkRecovery(failedBlockNumber: BigInt) =>
-        handleForkRecovery(failedBlockNumber, state)
+      case StartForkRecovery(failedBlockNumber, beyondTheFetch) =>
+        handleForkRecovery(failedBlockNumber, beyondTheFetch, state)
 
       case _ => Behaviors.same
     }
@@ -771,14 +827,20 @@ final private class BlockImporterLogic(
         // Sent here, not from the import: there it would reach `running`, which does not wait on a node.
         if alreadyExhausted then selfRef ! FetcherResponse(BlockFetcher.FetchedStateNode(NodeData(Nil)))
         resolvingMissingNode(blocksToRetry, blockImportType)(state)
-      case ResolvingBranch(from) =>
+      case ResolvingBranch(from, upTo) =>
         timers.startTimerWithFixedDelay(RetryKey, SyncRetryTick, syncConfig.syncRetryInterval)
-        running(state.resolvingBranch(from))
+        running(state.resolvingBranch(from, upTo))
 
   private def pickBlocks(state: ImporterState): Unit =
     val msg = state.resolvingBranchFrom.fold[BlockFetcher.FetchCommand](
       BlockFetcher.PickBlocks(syncConfig.blocksBatchSize, fetcherResponseAdapter)
-    )(from => BlockFetcher.StrictPickBlocks(from, bestKnownBlockNumber, fetcherResponseAdapter))
+    ) { from =>
+      // A branch that is the heavier and the shorter never reaches this node's head: asked for up to the head, the
+      // pick was never answered (B-300 W4; forge). It is asked for up to the block that was seen of it, which was
+      // bounded where it was set.
+      val upTo = state.resolvingBranchTo.getOrElse(bestKnownBlockNumber)
+      BlockFetcher.StrictPickBlocks(from, upTo, fetcherResponseAdapter)
+    }
 
     fetcher ! msg
 
@@ -798,7 +860,7 @@ final private class BlockImporterLogic(
       }
       .flatMap {
         case Right(blocksToImport) => handleBlocksImport(blocksToImport)
-        case Left(resolvingFrom)   => IO.pure(ResolvingBranch(resolvingFrom))
+        case Left(resolvingFrom)   => IO.delay(ResolvingBranch(resolvingFrom, takeBranchUpTo()))
       },
     blockImportType
   )(state)
@@ -1462,8 +1524,30 @@ final private class BlockImporterLogic(
     running(state.importingBlocks())
 
   // Either block from which we try resolve branch or list of blocks to be imported
+  // B-300 (f), on the unified layout: the side branches that were weighed and not taken, by the hash of their tip. In
+  // memory, the last few: a branch forgotten is fetched again from 64 blocks back, as before.
+  private val branchesNotTaken = new BranchesNotTaken(BlockImporter.BranchesNotTakenKept)
+  // the block a branch that is to be fetched whole is asked for up to: set by resolveBranch, taken as it is acted on
+  private var branchUpTo: Option[BigInt] = None
+
+  private def takeBranchUpTo(): Option[BigInt] =
+    val upTo = branchUpTo
+    branchUpTo = None
+    upTo
+
+  /** The branch not taken that `blocks` stand on, that branch with them, and whether it would be taken now. */
+  private def continuesABranchNotTaken(
+      blocks: NonEmptyList[Block]
+  ): Option[(BranchNotTaken, BranchNotTaken, Boolean)] =
+    for
+      branch <- branchesNotTaken.get(blocks.head.header.parentHash.value)
+      (longer, taken) <- branchResolution.extended(branch, blocks.map(_.header))
+    yield (branch, longer, taken)
+
   private def resolveBranch(blocks: NonEmptyList[Block]): Either[BigInt, List[Block]] =
-    branchResolution.resolveBranch(blocks.map(_.header)) match
+    val resolution = branchResolution.resolveBranch(blocks.map(_.header))
+    lazy val continuation = continuesABranchNotTaken(blocks)
+    resolution match
       case NewBetterBranch(oldBranch) =>
         // PoW only (#1592): drop the leading blocks that ARE our canonical chain, as core-geth's insertChain skips
         // known canonical blocks below the head. After a rewind the fetcher re-serves from below the head, so the batch
@@ -1516,12 +1600,77 @@ final private class BlockImporterLogic(
       case NoChainSwitch =>
         // Add first block from branch as an ommer
         ommersPool ! AddOmmers(blocks.head.header)
+        // On the unified layout the blocks of a branch that is not taken are not stored, so the batch that follows
+        // hangs from a block this node does not know: remembered here, it is weighed with what follows (B-300 f). The
+        // one guard of the memo: elsewhere nothing is remembered, so nothing is found.
+        if blockchainWriter.holdsStateInPlace && !branchResolution.followsConsensusLayer then
+          branchResolution.notTaken(blocks.map(_.header)).foreach(branchesNotTaken.remember)
         Right(Nil)
       // a batch that hangs from the consensus layer's branch refused while the head is where it is: refused with it, and
       // not fetched from below (B-297)
       case UnknownBranch if consensus.refusedWithTheirParent(blocks) =>
         log.debug("Batch {}-{} hangs from a refused branch: dropped", blocks.head.number, blocks.last.number)
         Right(Nil)
+      case UnknownBranch if continuation.isDefined =>
+        // asked once: its answer counts MESS's verdicts in the metrics (forge)
+        val (branch, longer, taken) = continuation.get
+        val _ = branchesNotTaken.take(branch.tip.hash.value)
+        if taken && longer.tip.number.value - branch.commonBlock > syncConfig.maxReadyBlocksQueueSize then
+          // Heavier, and further above the block it leaves this chain at than the fetcher holds ready: a pick of it
+          // whole is never answered (B-300 g). Nothing of it is fetched. No peer is known for it, so a fork recovery
+          // finds one: one that serves this branch leaves this chain at the same block, and the recovery refuses the
+          // branch and escalates it with that peer's headers.
+          log.error(
+            "[STATE-REORG-TOO-DEEP] SYNC-FORK: the branch that leaves this chain at block {} has become the heavier at " +
+              "block {}, {} block(s) above it, more than the {} the fetcher holds ready: it is not fetched, and a fork " +
+              "recovery is started to find a peer that serves it",
+            branch.commonBlock,
+            longer.tip.number,
+            longer.tip.number.value - branch.commonBlock,
+            syncConfig.maxReadyBlocksQueueSize
+          )
+          val repeats = beyondTheFetchRefusals.record(branch.commonBlock)
+          if repeats == BeyondTheFetchRepeatsWarnAt then
+            log.error(
+              "[STATE-REORG-TOO-DEEP] SYNC-FORK: the branch that leaves this chain at block {} has been refused beyond " +
+                "the fetch {} times in a row: the fork recoveries it starts do not find a peer that serves it",
+              branch.commonBlock,
+              repeats
+            )
+          selfRef ! StartForkRecovery(
+            blocks.head.number.value,
+            Some(BranchBeyondTheFetch(branch.commonBlock, longer.tip.number.value))
+          )
+          Right(Nil)
+        else if taken then
+          // The branch has become the heavier: it is fetched whole, once, from the block it leaves this chain at, and
+          // judged as any branch is, MESS with it.
+          log.warning(
+            "[SYNC-FORK] The branch that leaves this chain at block {} has become the heavier at block {}: it is " +
+              "fetched from there",
+            branch.commonBlock,
+            longer.tip.number
+          )
+          fetcher ! BlockFetcher.InvalidateBlocksFrom(
+            branch.commonBlock + 1,
+            "SYNC-FORK: a branch that was not taken has become the heavier",
+            shouldBlacklist = false
+          )
+          // up to its tip, above the head where it is: heavier only with its tip, it read as the lighter without it, and
+          // was remembered and sent for again (forge)
+          branchUpTo = Some(longer.tip.number.value)
+          Left(branch.commonBlock + 1)
+        else
+          // Still not the heavier (or refused by MESS): nothing is imported, nothing fetched again, and the fetcher
+          // goes on above it. Going back for it was a loop: the same blocks, the same answer (forge).
+          log.debug(
+            "Blocks {} to {} continue a branch that is not taken (it leaves this chain at block {})",
+            blocks.head.number,
+            blocks.last.number,
+            branch.commonBlock
+          )
+          branchesNotTaken.remember(longer)
+          Right(Nil)
       case UnknownBranch =>
         val currentBlock = blocks.head.number.value.min(bestKnownBlockNumber)
         // Use the stored SNAP sync pivot as the reorg floor, matching go-ethereum's
@@ -1646,7 +1795,11 @@ final private class BlockImporterLogic(
       }
       .nextOption()
 
-  private def handleForkRecovery(failedBlockNumber: BigInt, state: ImporterState): Behavior[Command] =
+  private def handleForkRecovery(
+      failedBlockNumber: BigInt,
+      beyondTheFetch: Option[BranchBeyondTheFetch],
+      state: ImporterState
+  ): Behavior[Command] =
     val capturedBest = bestKnownBlockNumber
     val snapPivot = blockchainReader.getSnapSyncPivotBlock.getOrElse(BigInt(0))
     log.warning(
@@ -1672,9 +1825,11 @@ final private class BlockImporterLogic(
     // moves it on (#1705). It answers before it stops, and the stop is delivered after that answer.
     ctx.watchWith(resolverRef, BranchResolverStopped(resolverRef))
     resolverRef ! FastSyncBranchResolverActor.StartBranchResolver
-    resolvingFork(capturedBest, snapPivot, state, resolverRef)
+    resolvingFork(failedBlockNumber, beyondTheFetch, capturedBest, snapPivot, state, resolverRef)
 
   private def resolvingFork(
+      failedBlockNumber: BigInt,
+      beyondTheFetch: Option[BranchBeyondTheFetch],
       capturedBest: BigInt,
       snapPivot: BigInt,
       state: ImporterState,
@@ -1683,13 +1838,15 @@ final private class BlockImporterLogic(
       // still running. The common block when it found one, none when it did not. That import sends the fetcher back
       // to the block that failed as it ends, and its end clears the branch being resolved: acted on before it, the
       // answer would be undone by both, and the block that failed would be fetched again and recovered for no more
-      // (forge). The hash layout has already rewound by then, and acts at once as it always has.
-      held: Option[Option[BigInt]] = None
+      // (forge). The hash layout has already rewound by then, and acts at once as it always has. The common block comes
+      // with the peer it was found against (B-300 g).
+      held: Option[Option[(BigInt, Peer)]] = None
   ): Behavior[Command] =
     def holds: Boolean = blockchainWriter.holdsStateInPlace
     // the answer, acted on: with the common block, or with none
-    def actOn(answer: Option[BigInt], state: ImporterState): Behavior[Command] = answer match
-      case Some(lca) => fetchFromTheCommonBlock(lca, capturedBest, snapPivot, state)
+    def actOn(answer: Option[(BigInt, Peer)], state: ImporterState): Behavior[Command] = answer match
+      case Some((lca, masterPeer)) =>
+        fetchFromTheCommonBlock(lca, masterPeer, failedBlockNumber, beyondTheFetch, capturedBest, snapPivot, state)
       case None =>
         blindRewind(capturedBest, snapPivot)
         running(state.withoutDeferredBatches())
@@ -1697,15 +1854,25 @@ final private class BlockImporterLogic(
       // an answer is held already: the resolver's stop after it says nothing more
       case BranchResolverStopped(stopped) if stopped == resolver && held.isDefined => Behaviors.same
 
-      case BranchResolverMsg(FastSyncBranchResolverActor.BranchResolvedSuccessful(lca, _)) if holds =>
-        if state.importing then resolvingFork(capturedBest, snapPivot, state, resolver, Some(Some(lca)))
-        else actOn(Some(lca), state)
+      // the peer the common block was found against is kept: the branch's headers are that peer's (B-300 g)
+      case BranchResolverMsg(FastSyncBranchResolverActor.BranchResolvedSuccessful(lca, masterPeer)) if holds =>
+        if state.importing then
+          resolvingFork(
+            failedBlockNumber,
+            beyondTheFetch,
+            capturedBest,
+            snapPivot,
+            state,
+            resolver,
+            Some(Some((lca, masterPeer)))
+          )
+        else actOn(Some((lca, masterPeer)), state)
 
       case BranchResolverMsg(FastSyncBranchResolverActor.BranchResolutionFailed(_)) if holds && state.importing =>
-        resolvingFork(capturedBest, snapPivot, state, resolver, Some(None))
+        resolvingFork(failedBlockNumber, beyondTheFetch, capturedBest, snapPivot, state, resolver, Some(None))
 
       case BranchResolverStopped(stopped) if stopped == resolver && holds && state.importing =>
-        resolvingFork(capturedBest, snapPivot, state, resolver, Some(None))
+        resolvingFork(failedBlockNumber, beyondTheFetch, capturedBest, snapPivot, state, resolver, Some(None))
 
       case BranchResolverMsg(FastSyncBranchResolverActor.BranchResolvedSuccessful(lca, _)) =>
         blockchainReader.getBlockHeaderByNumber(lca) match
@@ -1753,7 +1920,7 @@ final private class BlockImporterLogic(
         val ended = state.notImportingBlocks().branchResolved().withoutDeferredBatches()
         held match
           case Some(answer) => actOn(answer, ended)
-          case None         => resolvingFork(capturedBest, snapPivot, ended, resolver)
+          case None => resolvingFork(failedBlockNumber, beyondTheFetch, capturedBest, snapPivot, ended, resolver)
 
       case _ => Behaviors.same
     }
@@ -1765,48 +1932,111 @@ final private class BlockImporterLogic(
     * core-geth never sets its head back on finding a fork. What the rewind was for is kept: the fetcher is no longer
     * stuck on the block that failed, and no peer is blamed.
     *
-    * A common block the head could not be moved back to (below what the changeset records reach, or below the finalized
-    * block) is said once, and the fetcher is left where it is: this node goes on with its own chain, and what it should
-    * do about the chain it cannot reach is the escalation's (C5a).
+    * A branch is refused, and the fetcher left where it is, when the head could not be moved back to the common block
+    * (below what the changeset records reach, or below the finalized block), and when the branch reaches further above
+    * the common block than the fetcher holds ready: the strict pick that weighs it whole is never answered (B-300 g;
+    * the user's decision of 2026-11-16). This node goes on with its own chain, and the refused branch's headers are
+    * fetched from `masterPeer`, the peer the common block was found against, for the escalation, which clears the state
+    * and syncs it again ([[escalateOutOfReach]]).
     */
   private def fetchFromTheCommonBlock(
       lca: BigInt,
+      masterPeer: Peer,
+      failedBlockNumber: BigInt,
+      beyondTheFetch: Option[BranchBeyondTheFetch],
       capturedBest: BigInt,
       snapPivot: BigInt,
       state: ImporterState
   ): Behavior[Command] =
     unknownParentStrikes = Map.empty
-    val refusal: Option[String] = blockchainReader.getBlockHeaderByNumber(lca) match
-      case None            => Some(s"this node has no header at height $lca")
-      case Some(lcaHeader) => blockchainWriter.refusalOfMoveBackTo(lcaHeader, blockchainReader).map(_.getMessage)
-    refusal match
-      case Some(why) =>
+    // how far above the common block the branch reaches: this node's head, or the tip of the branch not taken that
+    // started the recovery, where the common block found is the one that branch leaves this chain at
+    val reach = beyondTheFetch.filter(_.commonBlock == lca).fold(capturedBest)(_.tip.max(capturedBest))
+    blockchainReader.getBlockHeaderByNumber(lca) match
+      case None =>
+        // nothing to weigh a branch from, and nothing to escalate it with
         log.error(
           "[STATE-REORG-TOO-DEEP] SYNC-FORK: the peer's chain leaves this node's at block {}, {} block(s) below the " +
-            "head {}, and the head cannot be moved back there: {}. Nothing is fetched from there and nothing moved",
+            "head {}, and this node has no header at that height. Nothing is fetched from there and nothing moved",
           lca,
           capturedBest - lca,
-          capturedBest,
-          why
+          capturedBest
         )
         running(state.withoutDeferredBatches())
-      case None =>
-        log.warning(
-          "[SYNC-FORK] The peer's chain leaves this node's at block {}: the fetcher goes back to it and the branch is " +
-            "judged by weight. The head stays at block {} (snapPivot={})",
-          lca,
-          capturedBest,
-          snapPivot
-        )
-        fetcher ! BlockFetcher.InvalidateBlocksFrom(
-          lca + 1,
-          "SYNC-FORK: fetch from the common block",
-          shouldBlacklist = false
-        )
-        // the next pick is from the common block up to the head, so that the whole of the peer's branch is weighed
-        // against the whole of this node's
-        selfRef ! PickBlocks
-        running(state.withoutDeferredBatches().resolvingBranch(lca + 1))
+      case Some(lcaHeader) =>
+        val refused: Option[ReorgTooDeep] = blockchainWriter
+          .refusalOfMoveBackTo(lcaHeader, blockchainReader)
+          .orElse(Option.when(reach - lca > syncConfig.maxReadyBlocksQueueSize) {
+            new ReorgTooDeep(
+              ReorgRefusal.BeyondTheFetch,
+              s"the branch reaches ${reach - lca} block(s) above block $lca, more than the " +
+                s"${syncConfig.maxReadyBlocksQueueSize} the fetcher holds ready, and is never fetched whole"
+            )
+          })
+        refused match
+          case Some(fault) =>
+            log.error(
+              "[STATE-REORG-TOO-DEEP] SYNC-FORK: the peer's chain leaves this node's at block {}, below the head {}, " +
+                "and is refused: {}. Nothing is fetched from there and nothing moved; the branch's headers are asked " +
+                "of peer {} for the escalation",
+              lca,
+              capturedBest,
+              fault.getMessage,
+              masterPeer.id
+            )
+            escalateOutOfReach(lcaHeader, reach, masterPeer, fault)
+            running(state.withoutDeferredBatches())
+          case None =>
+            log.warning(
+              "[SYNC-FORK] The peer's chain leaves this node's at block {}: the fetcher goes back to it and the branch " +
+                "is judged by weight. The head stays at block {} (snapPivot={})",
+              lca,
+              capturedBest,
+              snapPivot
+            )
+            fetcher ! BlockFetcher.InvalidateBlocksFrom(
+              lca + 1,
+              "SYNC-FORK: fetch from the common block",
+              shouldBlacklist = false
+            )
+            // the next pick is from the common block up to the block that failed, or to the head where that is lower:
+            // what was seen of the peer's branch, which may be the shorter of the two (B-300 W4). What the peer has
+            // above it is fetched after, and weighed with it (the branches this node did not take are remembered).
+            selfRef ! PickBlocks
+            running(
+              state.withoutDeferredBatches().resolvingBranch(lca + 1, upTo = Some(failedBlockNumber.min(capturedBest)))
+            )
+
+  /** The headers of a branch refused at `lcaHeader`, asked of `peer` (B-300 g): until they outweigh the head, or as
+    * many as the branch's reach above the common block and two requests more, and no more than
+    * [[MaxBranchHeadersFetched]]. Told to the escalation's feed under the import lock, which counts the branch only if
+    * it outweighs the head with valid headers. A request that fails, times out, or is answered with headers that are
+    * not the branch's tells it nothing. One fetch at a time: a refusal while one runs starts none.
+    */
+  private def escalateOutOfReach(lcaHeader: BlockHeader, reach: BigInt, peer: Peer, fault: ReorgTooDeep): Unit =
+    if ctx.child(BranchHeadersFetchName).isDefined then
+      log.warning(
+        "[STATE-ESCALATION] The headers of a branch out of reach are already being fetched: none are asked for the " +
+          "branch that leaves this chain at block {}",
+        lcaHeader.number
+      )
+    else
+      val wanted =
+        ((reach - lcaHeader.number.value) + 2 * syncConfig.blockHeadersPerRequest).min(MaxBranchHeadersFetched)
+      ctx.spawn(
+        BranchHeadersFetch(
+          peer,
+          lcaHeader,
+          wanted,
+          syncConfig.blockHeadersPerRequest,
+          syncConfig.peerResponseTimeout,
+          networkPeerManager,
+          peerEventBus,
+          consensus.branchOutweighsTheHead,
+          headers => importLock.guardAs(BranchOutOfReachHolder)(IO.delay(consensus.branchOutOfReach(headers, fault)))
+        ),
+        BranchHeadersFetchName
+      ): Unit
 
   private def blindRewind(capturedBest: BigInt, snapPivot: BigInt): Unit =
     val floor = (capturedBest - MaxForkAncestryDepth).max(snapPivot)

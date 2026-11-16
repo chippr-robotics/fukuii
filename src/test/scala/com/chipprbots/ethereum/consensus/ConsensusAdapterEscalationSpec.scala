@@ -84,6 +84,11 @@ class ConsensusAdapterEscalationSpec extends AnyFlatSpec with Matchers:
       )(implicit blockchainConfig: BlockchainConfig): Option[(BlockHeader, String)] =
         validated += branch.map(_.number.value)
         None
+      override def firstInvalidHeaderOf(
+          headers: List[BlockHeader]
+      )(implicit blockchainConfig: BlockchainConfig): Option[(BlockHeader, String)] =
+        validated += headers.map(_.number.value)
+        None
     val adapter = new ConsensusAdapter(consensus, null, null, validation, IORuntime.global, None, Some(feed))
     def imported(blocks: NonEmptyList[Block]): Any = adapter.evaluateBranch(blocks).unsafeRunSync()
 
@@ -131,4 +136,18 @@ class ConsensusAdapterEscalationSpec extends AnyFlatSpec with Matchers:
     val moved = new Rig(blocks => ExtendedCurrentBestBranch(blocks.toList.map(data)))
     moved.broken = true
     moved.imported(branch(5, 3)) shouldBe a[BlockImportedToTop]
+  }
+
+  // B-300 (g): a branch regular sync refused before fetching it is told by its headers, validated as an import's are
+  it should "tell the feed of a branch out of reach, by its headers, with the header validation of an import" taggedAs UnitTest in {
+    val beyond = new ReorgTooDeep(ReorgRefusal.BeyondTheFetch, "600 blocks above the fork")
+    val rig = new Rig(_ => throw new IllegalStateException("nothing is imported"))
+    rig.adapter.branchOutOfReach(branch(5, 3).toList.map(_.header), beyond)
+    rig.validated.toList shouldBe List(List(BigInt(5), BigInt(6), BigInt(7)))
+    rig.escalated.toList shouldBe List(EscalationKind.Unreachable)
+    // and whatever goes wrong in the feed is logged, not thrown
+    val broken = new Rig(_ => throw new IllegalStateException("nothing is imported"))
+    broken.broken = true
+    broken.adapter.branchOutOfReach(branch(5, 3).toList.map(_.header), beyond)
+    broken.escalated shouldBe empty
   }

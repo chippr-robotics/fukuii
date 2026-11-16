@@ -377,6 +377,121 @@ class BranchResolutionSpec
   // TTD). Behaviour is deliberately NOT changed here; if either assertion ever flips, the change needs a forge review.
   // ─────────────────────────────────────────────────────────────────────────
 
+  // B-300 (f) (forge): on the unified layout the blocks of a branch that is not taken are not stored, so what follows it
+  // hangs from a block this node does not know. The branch is remembered by its tip and weighed with what follows.
+  "A branch that was weighed and not taken" should {
+
+    "be remembered by its tip, its common block, its weight and its difficulty, and weighed again with what follows" taggedAs (
+      UnitTest,
+      StateTest
+    ) in new MessTestSetup:
+      // this node's chain is read once for each question asked below
+      (1 to 5).foreach { _ =>
+        setBestBlockNumber(10)
+        setBlockByNumber(10, Some(oldBlock))
+      }
+      setChainWeightByHash(commonParentHash, ChainWeight.zero)
+      setChainWeightByHash(oldBlock.header.hash.value, ChainWeight.zero.increase(oldBlock.header))
+
+      // this node's own block is no side branch
+      branchResolution.notTaken(NonEmptyList.one(oldBlock.header)) shouldBe None
+
+      // a block at the head's height with half its difficulty: not taken
+      val side10: BlockHeader = getBlock(number = 10, difficulty = 50, parent = commonParentHash).header
+      val branch: BranchNotTaken = branchResolution.notTaken(NonEmptyList.one(side10)).get
+      branch shouldBe
+        BranchNotTaken(side10, BigInt(9), commonParentHash, ChainWeight.zero.increase(side10), BigInt(50))
+      // the block it leaves this chain at is on it still
+      blockchainReader.getCanonicalHashByNumber
+        .expects(BigInt(9))
+        .anyNumberOfTimes()
+        .returning(Some(BlockHash(commonParentHash)))
+
+      // with the next block it is still the lighter: 80 against this node's 100
+      val side11: BlockHeader = getBlock(number = 11, difficulty = 30, parent = side10.hash.value).header
+      val (longer, takenAt11) = branchResolution.extended(branch, NonEmptyList.one(side11)).get
+      takenAt11 shouldBe false
+      (longer.tip, longer.commonBlock, longer.difficultyAboveTheCommonBlock) shouldBe (side11, BigInt(9), BigInt(80))
+      longer.weight shouldBe ChainWeight.zero.increase(side10).increase(side11)
+
+      // of the same weight as this node's chain it is not taken either: strictly heavier, as compareBranch asks
+      val side11Even: BlockHeader = getBlock(number = 11, difficulty = 50, parent = side10.hash.value).header
+      branchResolution.extended(branch, NonEmptyList.one(side11Even)).map(_._2) shouldBe Some(false)
+
+      // and with the one after it is the heavier: 110
+      val side12: BlockHeader = getBlock(number = 12, difficulty = 30, parent = side11.hash.value).header
+      val (longest, takenAt12) = branchResolution.extended(longer, NonEmptyList.one(side12)).get
+      takenAt12 shouldBe true
+      longest.difficultyAboveTheCommonBlock shouldBe BigInt(110)
+
+      // headers that do not stand on its tip say nothing of it
+      branchResolution.extended(branch, NonEmptyList.one(side12)) shouldBe None
+
+    "not be taken while MESS refuses it, however much heavier, and be taken once MESS lets it" taggedAs (
+      UnitTest,
+      StateTest,
+      ConsensusTest
+    ) in new MessTestSetup:
+      (1 to 3).foreach { _ =>
+        setBestBlockNumber(10)
+        setBlockByNumber(10, Some(oldBlock))
+      }
+      setChainWeightByHash(commonParentHash, ChainWeight.zero)
+      setChainWeightByHash(oldBlock.header.hash.value, ChainWeight.zero.increase(oldBlock.header))
+      branchResolution.messConfig = Some(ETCMessConfig)
+
+      val side10: BlockHeader = getBlock(number = 10, difficulty = 50, parent = commonParentHash).header
+      val branch: BranchNotTaken = branchResolution.notTaken(NonEmptyList.one(side10)).get
+      blockchainReader.getCanonicalHashByNumber
+        .expects(BigInt(9))
+        .anyNumberOfTimes()
+        .returning(Some(BlockHash(commonParentHash)))
+
+      // 200 against 100 is the heavier, and below the antigravity threshold (25600 < 34100): refused, as compareBranch
+      // refuses a branch of that difficulty
+      expectAncestorHeader()
+      val side11: BlockHeader = getBlock(number = 11, difficulty = 150, parent = side10.hash.value).header
+      val (longer, takenAt11) = branchResolution.extended(branch, NonEmptyList.one(side11)).get
+      takenAt11 shouldBe false
+
+      // 500 meets it (64000 > 34100)
+      expectAncestorHeader()
+      val side12: BlockHeader = getBlock(number = 12, difficulty = 300, parent = side11.hash.value).header
+      branchResolution.extended(longer, NonEmptyList.one(side12)).map(_._2) shouldBe Some(true)
+  }
+
+  "The branches not taken that are remembered" should {
+    "keep the last ones, forget the oldest first, and give a branch up when what follows it is weighed" taggedAs UnitTest in new MessTestSetup:
+      def branch(tag: Int): BranchNotTaken =
+        val tip = defaultHeader.copy(number = BlockNumber(100 + tag), extraData = ByteString(s"tip $tag"))
+        BranchNotTaken(tip, BigInt(99), randomHash(), ChainWeight.totalDifficultyOnly(tag), BigInt(tag))
+      val remembered = new BranchesNotTaken(kept = 2)
+      val (first, second, third) = (branch(1), branch(2), branch(3))
+      Seq(first, second, third).foreach(remembered.remember)
+      remembered.size shouldBe 2
+      remembered.get(first.tip.hash.value) shouldBe None
+      remembered.get(second.tip.hash.value) shouldBe Some(second)
+      // the same tip again counts as the newest
+      remembered.remember(second)
+      remembered.remember(branch(4))
+      remembered.get(third.tip.hash.value) shouldBe None
+      remembered.get(second.tip.hash.value) shouldBe Some(second)
+      // taken out once what follows it is weighed: not found a second time
+      remembered.take(second.tip.hash.value) shouldBe Some(second)
+      remembered.take(second.tip.hash.value) shouldBe None
+      remembered.size shouldBe 1
+  }
+
+  "A branch that was not taken, once the block it leaves this chain at is off it" should {
+    "say nothing: MESS would be asked of another pair of branches" taggedAs (UnitTest, StateTest) in new MessTestSetup:
+      val side10: BlockHeader = getBlock(number = 10, difficulty = 50, parent = commonParentHash).header
+      val branch: BranchNotTaken =
+        BranchNotTaken(side10, BigInt(9), commonParentHash, ChainWeight.zero.increase(side10), BigInt(50))
+      blockchainReader.getCanonicalHashByNumber.expects(BigInt(9)).returning(Some(BlockHash(randomHash())))
+      val side11: BlockHeader = getBlock(number = 11, difficulty = 1000, parent = side10.hash.value).header
+      branchResolution.extended(branch, NonEmptyList.one(side11)) shouldBe None
+  }
+
   "BranchResolution with MESS enabled AND a designated head (misconfigured PoW chain)" should {
 
     "ACCEPT a LOWER-TD branch the designated head points at — the PoS arm overrides the TD rule" taggedAs (

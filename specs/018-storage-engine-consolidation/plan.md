@@ -4270,6 +4270,62 @@ catch-up's check of a head ahead of the block it moves to (its race needs a head
 stands on, which a hand-off's catch-up never has), and `Deep` taken out of the refusals that hold while the head stays
 (B-318).
 
+#### C5a part 9c: a heavier branch that is the shorter, and a lighter one fetched again and again (B-300, in part) (2026-11-16)
+
+The rest of forge's read of C4e part 6 that is not (g). On the unified layout a fork recovery sends the fetcher to the
+common block and picks the branch whole before it is weighed (part 9b); nothing of a branch that is not taken is
+stored.
+
+- **W4, a heavier branch that is the shorter**: the pick's upper bound was this node's head, which such a branch never
+  reaches, so the pick was never answered. It is now the block whose import started the recovery, or the head where
+  that is lower (`ImporterState.resolvingBranchTo`, set where the recovery begins). The path that goes back for an
+  unknown branch keeps the head as its bound, and the hash layout is unchanged.
+- **(f), a lighter branch fetched again and again**: weighed and not taken, nothing of it was stored, so the next batch
+  hung from a block this node did not know, the fetcher went 64 blocks back, and the same answer came again, for ever.
+  Now the branch is remembered (`BranchResolution.notTaken`: its tip, the block it leaves this chain at with that
+  block's hash, its weight, and the difficulty of its blocks above the common block; the last 16, in memory). A batch
+  that stands on a remembered tip is weighed with it (`BranchResolution.extended`), by the rules `compareBranch`
+  applies: strictly heavier than this chain, and not refused by MESS, whose check is the one function both ask
+  (`messRejects`, which the old check now calls with the same inputs). Still not taken: the batch is dropped, the
+  record grows, and the fetcher goes on above it. Taken: the fetcher goes back once to the common block and the branch
+  is picked up to its tip, above the head where it is, and judged again as any branch is.
+- **After code (forge)**: a remembered branch says nothing once the block it leaves this chain at is no longer on it,
+  since MESS would then be asked of another pair of branches; MESS is asked once for a batch, so that its verdicts are
+  counted once in the metrics; and a branch that is the heavier only with its tip is fetched up to that tip, or it
+  read as the lighter without it and was sent for again.
+- The escalation's feed hears what it heard: neither a remembered branch nor a dropped batch reaches consensus, and a
+  branch that is taken reaches it as any branch does. A branch forgotten (evicted, or after a restart) is fetched again
+  from 64 blocks back, as before.
+
+- **(g), a fork deeper than the fetcher holds** (decided by the user, 2026-11-16: refuse it and let the escalation clear
+  and re-sync the node). The fetcher pauses at `max-ready-blocks-queue-size` (512) blocks ready, so on an archive node a
+  fork whose common block lies further below the head was never picked whole, and regular sync stalled. Now
+  `fetchFromTheCommonBlock` refuses it (`ReorgRefusal.BeyondTheFetch`), after the refusal for a move back below what
+  the records reach, and the fetcher is not sent back. The same holds for a remembered branch that has become the
+  heavier and reaches further than that from its common block: it starts a fork recovery, which finds a peer for it.
+- **Both refusals now reach the escalation** (forge, before code: neither did; announced blocks of the branch resolve
+  as an unknown parent, not as a fault of this node, and the walk back reached the feed only for forks the fetcher could
+  hold). The branch's headers are asked of the peer the common block was resolved against
+  (`BranchHeadersFetch`, one request at a time), and given to the feed under the import lock
+  (`ConsensusAdapter.branchOutOfReach` → `PowEscalationFeed.notJudgedHeaders`), whose guards are the ones a branch
+  handed to consensus meets, since `notJudged` now calls it: heavier than the head, every header valid, the seal with
+  it (`BlockValidation.firstInvalidHeaderOf`), not refused by MESS, and the given-up branch named by its first block
+  above the fork. An answer that is not the branch's next headers, a timeout, or no header at the common block
+  escalates nothing; a shorter answer than asked is weighed as it is, so that a heavier branch that is the shorter is
+  escalated too.
+
+**Tests**: `BranchResolutionSpec` (+4: the record and its growth, MESS on it, a record off this chain, the memo of
+the last 16), `RegularSyncSpec` (+5: the bound above the head, a branch not taken and then taken, one taken only with
+its tip above the head, none remembered on a chain that follows a consensus layer, the hash layout as it was; the
+expected bound of the existing fork-recovery tests changed from the head to the block that failed). The fork-choice
+fixtures (part 9a) pass on both layouts. **The mutation run**: 29 rules broken one at a time; 25 caught by tests, 2 by
+the compiler, 2 equivalent (the bound's field cleared at the end of a resolution, which is always set again before it
+is read; a record left under its old tip once it has grown, which is harmless and ages out). The first run found six
+gaps, closed by tests and by moving the memo into `BranchesNotTaken`, with the guards of the memo reduced to one. For (g):
+`RegularSyncSpec` (+11), `BranchHeadersFetchSpec` (new, 7), `PowEscalationFeedSpec` (+5), `ConsensusAdapterEscalationSpec`
+(+1); 13 rules broken, 11 caught by tests and 2 by the compiler, after five gaps (the reach of a remembered branch, both
+ways; the cap on the headers asked for; the two links an answer must keep) were closed by tests.
+
 ### Destructive change (C8a and C8b): the vault protocol blocks
 
 ```
