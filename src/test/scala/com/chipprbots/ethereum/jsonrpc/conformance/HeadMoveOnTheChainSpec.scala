@@ -1401,6 +1401,11 @@ class HeadMoveOnTheChainSpec extends ScalaTestWithActorTestKit with AnyFlatSpecL
         }: Unit
       )
       resetting.start()
+      // The recovery under way is released only once the reset has begun. Released before it, the recovery goes on to
+      // block 41 and ends as recovered, which a slow machine showed (CI, 2026-11-16).
+      val begun = System.nanoTime() + java.util.concurrent.TimeUnit.SECONDS.toNanos(60)
+      while !recovery.isResetting && System.nanoTime() < begun do Thread.onSpinWait()
+      recovery.isResetting shouldBe true
       release.countDown()
       resetting.join(60000)
       running.outcome.get(60, java.util.concurrent.TimeUnit.SECONDS) shouldBe StateRecovery.Outcome.Closed

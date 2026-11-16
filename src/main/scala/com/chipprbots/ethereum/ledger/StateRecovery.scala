@@ -183,6 +183,9 @@ class StateRecovery(
   /** Whether it is stopping, or has stopped: no recovery is taken, and none executes another block. */
   def isClosed: Boolean = closed
 
+  /** Whether a [[reset]] is under way: no recovery is taken, and the one that runs ends after its block. */
+  def isResetting: Boolean = draining
+
   /** Stops: a recovery under way ends after the block it is executing, and those that wait are answered
     * [[Outcome.Closed]]. Before the data source closes.
     */
