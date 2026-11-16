@@ -3645,11 +3645,16 @@ items:
   - id: B-313
     title: AccountRangeCoordinatorSpec 'not dispatch a task to a peer still in cooldown' races under CPU load
     priority: P2
-    status: open
+    status: claimed
     area: snap
     size: S
     opened: 2026-11-16
     refs: []
     links:
       spec: 018
+    claim:
+      by: cloud-lane3
+      agent: main
+      since: 2026-11-16T20:58:47Z
+      heartbeat: 2026-11-16T20:58:47Z
     notes: "Seen 2026-11-16 in a local essential run with three builds on 4 cores: PeerId(cooldown-peer-1) was not equal to cooldown-peer-2 (:744). The test sends RequestTimeout to the worker and PeerAvailable(peer2) to the coordinator back to back; the worker's report of the timeout can reach the coordinator after the second dispatch. Passes alone and in its spec. Fix the test's ordering (wait for the cooldown to be recorded) rather than the coordinator."
