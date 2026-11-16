@@ -3590,13 +3590,18 @@ items:
   - id: B-309
     title: SyncControllerSpec 'leave SNAP's resume alone once SNAP has taken over' fails on staging b9578b4b7 under testOnly (cloud container)
     priority: P2
-    status: open
+    status: claimed
     area: sync
     size: S
     opened: 2026-11-16
     refs: []
     links:
       spec: 018
+    claim:
+      by: cloud-lane3
+      agent: main
+      since: 2026-11-16T20:16:10Z
+      heartbeat: 2026-11-16T20:16:10Z
     notes: "Found 2026-11-16 while building B-307 (c1): fails alone and in the whole spec, on plain staging too; isSnapSyncAccountsComplete is false after the start. Not known whether CI runs it."
   - id: B-310
     title: "B-307 follow-ups: a failed pivot refresh does not feed the off-branch peers; network best is not filtered; rested header peers also rest for bodies"
