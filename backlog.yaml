@@ -3342,7 +3342,7 @@ items:
   - id: B-289
     title: "Spec 018 C4e gate: run the ethereum/tests fork vectors (bcMultiChain, bcTotalDifficulty, bcForkStress, uncle races) in test mode on the unified layout"
     priority: P1
-    status: open
+    status: claimed
     area: storage
     size: M
     opened: 2026-11-15
@@ -3350,6 +3350,11 @@ items:
     links:
       spec: specs/018-storage-engine-consolidation
     depends_on: [B-063]
+    claim:
+      by: cloud-dc960fdc
+      agent: main
+      since: 2026-11-16T17:15:03Z
+      heartbeat: 2026-11-16T17:15:03Z
     notes: The ets fixtures are not checked out in the cloud container. Required before the guard is on for any Mordor node (forge). ReorgBlockhashParitySpec covers three core-geth parity scenarios on both layouts meanwhile.
   - id: B-290
     title: "Spec 029 closure: essential tier at baseline, coverage, console-ui.md rewrite, operator skills, out-of-console diff audit, spec Done (T113-T118)"
