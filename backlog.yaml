@@ -3694,3 +3694,11 @@ items:
     refs: [B-297]
     links: {}
     notes: beacon, B-297 memo
+  - id: B-318
+    title: "B-297 polish: pin Deep/Incomplete/Pivot refusals one by one; a fault of the pin release after a hand-off; a head past the tip told as ChainReorganised again"
+    priority: P3
+    status: open
+    area: consensus
+    opened: 2026-11-16
+    refs: [B-297]
+    links: {}
