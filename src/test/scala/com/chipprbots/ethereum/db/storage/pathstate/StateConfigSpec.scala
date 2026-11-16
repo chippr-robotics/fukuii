@@ -38,7 +38,8 @@ class StateConfigSpec extends AnyFlatSpec with Matchers:
     )
     config.maxBlocksPerMoveBatch shouldBe 256
     config.archiveViewReach shouldBe 1024
-    config.recovery shouldBe StateConfig.Recovery(maxBlocks = 64, escalationRefusals = 64, escalationCooldown = 6.hours)
+    config.recovery shouldBe
+      StateConfig.Recovery(maxBlocks = 64, escalationRefusals = 64, escalationCooldown = 6.hours, maxCatchUp = 8192)
     config.reorgMaxDepth shouldBe ReorgDepth.Floor
   }
 
@@ -109,6 +110,7 @@ class StateConfigSpec extends AnyFlatSpec with Matchers:
       "recovery.escalation-refusals",
       "recovery.escalation-cooldown",
       "recovery.forget-given-up-branches",
+      "recovery.max-catch-up",
       "reorg.max-depth"
     )
   }

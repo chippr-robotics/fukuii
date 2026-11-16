@@ -1434,10 +1434,10 @@ peer is not blacklisted. Four parts, all required:
      idempotent, so a crash anywhere in step 3 repeats it; and a plain mid-SNAP restart, which has no such key, keeps its
      healed rows.
 4. **While the re-SNAP runs** there is no anchor, so every in-place writer refuses (7.0), `newPayload` answers ACCEPTED and
-   `forkchoiceUpdated` SYNCING (6.3.2), and block generation is off. Healing after an escalation can meet a node with the
-   right hash over a changed child where a recreated trie overwrote part of a tombstone-skipped dead trie (forge R2.3 note 3);
-   that is the class spec 022 accepted for Path re-pegs (an absence, never a wrong root; the audit repairs it), and one test
-   pins it. Tests: induce each trigger (EG-14); a flip-flop of 63 refusals does not escalate; a second trigger inside the
+   `forkchoiceUpdated` SYNCING (6.3.2), and block generation is off. Healing after an escalation meets no row of the
+   state that was given up: part 3 deletes every row of CF `t` and `u` first, the dead tries that a tombstone left with
+   them (as built, C5a part 3; an earlier text here had healing meet such a row, forge R2.3 note 3, and T166 was to pin
+   it: it cannot arise). Tests: induce each trigger (EG-14); a flip-flop of 63 refusals does not escalate; a second trigger inside the
    cool-down does not; the loop guard drops a re-offered branch; a kill at every step of part 3 recovers to a clean SNAP.
 
 **Invariants between the disk layer, the changesets and the best pointer.**
