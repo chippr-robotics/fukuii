@@ -3705,3 +3705,15 @@ items:
     opened: 2026-11-16
     refs: [B-297]
     links: {}
+  - id: B-319
+    title: "A sync controller stopped by the hand-off's bound (B-304) does not answer eth_syncing: a final state that answers with the reason"
+    priority: P3
+    status: open
+    area: sync
+    size: S
+    opened: 2026-11-16
+    refs: []
+    links:
+      prs: [1873]
+      spec: 018
+    notes: "beacon, review of #1873 (W1): Behaviors.stopped is the stop-and-alert pattern; eth_syncing, the admin and MCP status calls time out, and on PoS the Engine API answers SYNCING indefinitely. A terminal state that answers GetStatus with the reason and the sample's counts serves operators better."
