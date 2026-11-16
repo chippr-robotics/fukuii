@@ -713,8 +713,14 @@ class AccountRangeCoordinatorSpec extends ScalaTestWithActorTestKit() with AnyFl
     val snapSyncController = testKit.createTestProbe[SNAPSyncController.Command]()
     val peerProbe1 = testKit.createTestProbe[Any]()
     val peerProbe2 = testKit.createTestProbe[Any]()
-    val peer1 = PeerTestHelpers.createTestPeer("cooldown-peer-1", peerProbe1.ref.toClassic)
-    val peer2 = PeerTestHelpers.createTestPeer("cooldown-peer-2", peerProbe2.ref.toClassic)
+    // B-313: two hosts. The helper gives every peer one address, and a peer announced from an address another peer has
+    // is taken for that peer reconnecting, which evicts the first: what kept peer1 out was that, not its cooldown.
+    val peer1 = PeerTestHelpers
+      .createTestPeer("cooldown-peer-1", peerProbe1.ref.toClassic)
+      .copy(remoteAddress = new java.net.InetSocketAddress("127.0.0.1", 30301))
+    val peer2 = PeerTestHelpers
+      .createTestPeer("cooldown-peer-2", peerProbe2.ref.toClassic)
+      .copy(remoteAddress = new java.net.InetSocketAddress("127.0.0.2", 30302))
 
     val coordinator = arcProps(
       stateRoot = root,
@@ -730,18 +736,33 @@ class AccountRangeCoordinatorSpec extends ScalaTestWithActorTestKit() with AnyFl
     coordinator ! AccountRangeCoordinator.PeerAvailable(peer1)
 
     val sendMsg1 = networkPeerManager.expectMessageType[NetworkPeerManagerActor.SendMessageCmd]
+    sendMsg1.peerId shouldBe peer1.id
     val reqId1 = sendMsg1.message.asInstanceOf[GetAccountRangeEnc].underlyingMsg.requestId
     val worker1 = resolveWorkerChild(coordinator)
 
-    // peer1 times out — enters cooldown via recordPeerCooldown.
-    worker1 ! AccountRangeCoordinator.RequestTimeout(reqId1)
-
-    // peer2 connects after peer1 enters cooldown.
+    // B-313: peer2 is known to the coordinator before peer1's failure reaches it, and takes the other task. In the other
+    // order the rule is not this one: with peer1 the only peer it knows, the eligible-set floor revives the cooling peer
+    // so that the download does not stall (AccountTaskLifecycle.tryRedispatchPendingTasks). The worker reports the
+    // timeout to the coordinator on its own, so a test that sent both back to back raced the two.
     coordinator ! AccountRangeCoordinator.PeerAvailable(peer2)
-
-    // The requeued task should be dispatched to peer2, NOT to the cooling peer1.
     val sendMsg2 = networkPeerManager.expectMessageType[NetworkPeerManagerActor.SendMessageCmd]
     sendMsg2.peerId shouldBe peer2.id
+
+    // peer1 times out: it enters cooldown, and its task is requeued. Seen through the coordinator's own count, so
+    // nothing below runs before the failure has reached it.
+    worker1 ! AccountRangeCoordinator.RequestTimeout(reqId1)
+    val stats = testKit.createTestProbe[AccountRangeStats]()
+    eventually {
+      coordinator ! AccountRangeCoordinator.AccountGetProgress(stats.ref)
+      val now = stats.expectMessageType[AccountRangeStats]
+      now.tasksPending shouldBe 1
+      now.tasksActive shouldBe 1
+    }
+
+    // The requeued task is not sent to the cooling peer1 (peer2 is busy with its own), nor when peer1 is announced again
+    // while it cools
+    coordinator ! AccountRangeCoordinator.PeerAvailable(peer1)
+    networkPeerManager.expectNoMessage(500.millis)
   }
 
   // ── Resume durability (StackTrie path, observable via dispatch behaviour) ──
