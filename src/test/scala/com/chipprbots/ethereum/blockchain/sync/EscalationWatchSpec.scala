@@ -21,8 +21,8 @@ class EscalationWatchSpec extends AnyFlatSpec with Matchers:
 
   private class Rig(refusals: Int = 64):
     var clock = 0L
-    val escalated = mutable.ArrayBuffer.empty[EscalationKind]
-    val said = mutable.ArrayBuffer.empty[(EscalationKind, String)]
+    val escalated: mutable.ArrayBuffer[EscalationKind] = mutable.ArrayBuffer.empty
+    val said: mutable.ArrayBuffer[(EscalationKind, String)] = mutable.ArrayBuffer.empty
     val watch = new EscalationWatch(
       new EscalationTrigger(refusals, refusals * Slot),
       () => clock,
