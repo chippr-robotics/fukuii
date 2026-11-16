@@ -1,5 +1,7 @@
 -Xms1g
--Xmx4g
+# 6g: the root's test sources (991 files) no longer compile in 4g (OOM in the backend on CI and locally,
+# staging included at the margin; B-297, PR #1874)
+-Xmx6g
 -XX:ReservedCodeCacheSize=1024m
 -XX:MaxMetaspaceSize=1g
 -Xss4M
