@@ -3706,6 +3706,34 @@ refusal alone. **`HandoffCrashItSpec`: a real RocksDB in a child JVM, killed on 
 it, all of them, the sample of part 4 finds every leaf from the root, and a view of the state reads. A kill is not a
 loss of power. `WalWriteRatchetSpec` (8). **The mutation run**: 18 mutants, 18 caught.
 
+#### C5a part 5c: the bodies below a pivot are fetched (2026-11-15)
+
+The first half of B-301. Nothing fetched the bodies of a pivot and the five below it after a sync: bodies are held
+back until the state is complete, and the backfill then runs up from the genesis, so the blocks whose bodies the
+ommers of the first blocks above the pivot are checked against came last. On the unified layout the hand-off holds
+for them (part 5b), and would hold for ever.
+
+In the chain download (`ChainDownloader`, which is not one of the split's modules):
+- **`FetchBodies(hashes)`**: these bodies now, at the front of the queue, while bodies are held back too. A hash is
+  passed over when its header is not stored (a body is checked against its header before it is kept), when its body
+  is stored and fits its header, or when it is on its way: so the tick of a hold sends the same hashes again and
+  again. One that is queued further back is moved to the front (found by the mutation run: it was passed over). The
+  hand-off's hold of part 5b sends it.
+- **At `ReleaseBodiesAndReceipts`, on either layout, the target and the five below it go first**, by a walk of parent
+  hashes from the target, where blocks above it may have ommers (the target's difficulty is not zero). The scan that
+  follows passes over them, so none is queued twice. This is what the hash layout's hand-off gets: it releases at
+  once and does not hold.
+
+**Left of B-301**: the importer's arm for `AncestorNotStored` asks for the bodies the window names (a node started
+again into regular sync has no hand-off to fetch them); with part 9's work on the importer.
+
+**Tests**: `ChainDownloaderSpec` (+5): a body asked for while bodies are held back and no other; nothing asked twice
+(on its way, stored, no header); the window first at a release, six blocks of it, and none where the target has no
+difficulty. **The mutation run**: 8 mutants, 7 caught. **Not pinned**: that a body asked for goes ahead of bodies
+already queued. The spec's rig has one peer, which is busy with the first request by the time a queue exists, so the
+order of what is left cannot be seen; it matters for the importer's route (part 9), which asks while a backfill
+runs, and is to be pinned there.
+
 ### Destructive change (C8a and C8b): the vault protocol blocks
 
 ```
