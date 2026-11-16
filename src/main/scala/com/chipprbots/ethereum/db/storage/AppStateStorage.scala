@@ -88,6 +88,19 @@ class AppStateStorage(val dataSource: DataSource) extends TransactionalKeyValueS
   def getStateEscalationLast(): Option[pathstate.StateEscalation] =
     get(Keys.StateEscalationLast).map(pathstate.StateEscalation.decode)
 
+  /** The branches a proof-of-work node gave its state up for ([[pathstate.GivenUpBranches]]), or none. A stored value
+    * this build cannot read throws.
+    */
+  def getStateEscalationGivenUp(): Set[pathstate.GivenUpBranch] =
+    get(Keys.StateEscalationGivenUp).fold(Set.empty[pathstate.GivenUpBranch])(pathstate.GivenUpBranches.decode)
+
+  /** The update an operator ends the loop guard with: every branch given up may be escalated for again. '''At a start
+    * only, before anything syncs, and written synced''' (vault, forge): a clear reads the list and writes it back under
+    * the state's locks, which this does not take, and an unsynced removal that a kill loses would bring the list back
+    * with nothing said.
+    */
+  def forgetGivenUpBranches(): DataSourceBatchUpdate = remove(Keys.StateEscalationGivenUp)
+
   /** Whether a clear of the state was begun and not seen to its end: its rows may be there still, with no anchor over
     * them ([[pathstate.StateResetPending]]).
     */
@@ -114,20 +127,33 @@ class AppStateStorage(val dataSource: DataSource) extends TransactionalKeyValueS
     *     owed;
     *   - the best block is the genesis again, as on a datadir that has synced nothing. The headers, the bodies and the
     *     index of the chain it had stay: they are of blocks, not of the state;
-    *   - the escalation, when there is one, and the mark that the rows are still to be deleted.
+    *   - the escalation, when there is one, the branch it gives the state up for, when it is for one, and the mark that
+    *     the rows are still to be deleted. In the same write as the clear: a branch recorded with no clear would never
+    *     be escalated for, and a clear with no branch recorded could be repeated for it.
     *
     * @param genesisHash
     *   the hash of the block at height 0, which the best block is set back to
+    * @param givenUpFor
+    *   on proof of work, the branch the state is given up for: its first block above the block it leaves the chain at.
+    *   The list it is added to is read here, and '''a list that cannot be read throws''' before anything is written:
+    *   the escalation's guard says no to such a list, so a caller that asked the guard does not get here with one
     */
   private[storage] def stateClearBatch(
       genesisHash: ByteString,
       atMillis: Long,
-      escalation: Option[pathstate.StateEscalation]
+      escalation: Option[pathstate.StateEscalation],
+      givenUpFor: Option[pathstate.GivenUpBranch] = None
   ): DataSourceBatchUpdate =
+    require(givenUpFor.isEmpty || escalation.isDefined, "a branch is given up for by an escalation only")
     val marked = escalation.foldLeft(put(Keys.StateResetPending, pathstate.StateResetPending.encode(atMillis))) {
       (batch, last) => batch.and(put(Keys.StateEscalationLast, pathstate.StateEscalation.encode(last)))
     }
-    stateClearRemovals(Some(genesisHash)).and(marked)
+    val recorded = givenUpFor.foldLeft(marked) { (batch, branch) =>
+      batch.and(
+        put(Keys.StateEscalationGivenUp, pathstate.GivenUpBranches.encode(getStateEscalationGivenUp() + branch))
+      )
+    }
+    stateClearRemovals(Some(genesisHash)).and(recorded)
 
   /** What [[stateClearBatch]] removes and sets back, without its marks: also what the end of an interrupted clear
     * writes again before it deletes the rows ([[pathstate.PathStateStorage.finishPendingClear]]), since a sync that ran
@@ -1070,6 +1096,7 @@ object AppStateStorage:
     val StateOrigin = "state.origin"
     val StateFinalized = "state.finalized"
     val StateEscalationLast = com.chipprbots.ethereum.db.storage.pathstate.StateEscalation.Key
+    val StateEscalationGivenUp = com.chipprbots.ethereum.db.storage.pathstate.GivenUpBranches.Key
     val StateResetPending = com.chipprbots.ethereum.db.storage.pathstate.StateResetPending.Key
     val StateChangesetPrunedTo = "state.changeset.pruned-to"
     val StateLayout = com.chipprbots.ethereum.db.storage.pathstate.StateLayout.Key

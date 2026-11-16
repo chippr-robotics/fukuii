@@ -61,6 +61,53 @@ object StateEscalation:
         )
       case _ => malformed
 
+/** The branches a proof-of-work node gave its state up for (`state.escalation.given-up`; the user's decision of
+  * 2026-11-15): each named by its first block above the block it leaves the chain at, with its height. A branch that is
+  * here and still cannot be followed after the sync that its escalation began is never escalated for again: the node
+  * stays on the chain it has, knowingly, until an operator removes the entry.
+  *
+  * A branch is known again by '''any block of it that is, or stands on, a block named here''' (forge): what the number
+  * index says of the chain changes with the sync that follows an escalation, and a name worked out from it again would
+  * not be the same. The height is what ends that walk: nothing below the lowest height named here is on a branch that
+  * was given up.
+  *
+  * Written in one place: the synced batch that begins the clear, with the escalation it belongs to. It stays through
+  * every clear and every sync ('''it is not among what a clear removes''', and must not be put there). One entry for an
+  * escalation, and no more than one escalation in a cool-down: it does not grow to matter.
+  */
+final case class GivenUpBranch(number: BigInt, hash: ByteString)
+
+object GivenUpBranches:
+  val Key: String = "state.escalation.given-up"
+
+  private val Version = "v1"
+  private val HashHexLength = 64
+
+  def encode(branches: Set[GivenUpBranch]): String =
+    val listed = branches.toList
+      .sortBy(branch => (branch.number, Hex.toHexString(branch.hash.toArray)))
+      .map(branch => s"${branch.number}:${Hex.toHexString(branch.hash.toArray)}")
+    s"$Version:${listed.mkString(",")}"
+
+  /** The branches a stored value names. A value this build cannot read throws: whoever asks takes it for "every branch
+    * was given up", never for none, since "none" would let a node clear its state for the same branch again and again.
+    */
+  def decode(value: String): Set[GivenUpBranch] =
+    def malformed: Nothing = throw new IllegalStateException(s"$Key is not a $Version list of branches: '$value'")
+    if !value.startsWith(s"$Version:") then malformed
+    val listed = value.drop(Version.length + 1)
+    if listed.isEmpty then Set.empty
+    else
+      listed
+        .split(",", -1)
+        .iterator
+        .map(_.split(':') match
+          case Array(number, hash) if number.nonEmpty && number.forall(_.isDigit) && hash.length == HashHexLength =>
+            GivenUpBranch(BigInt(number), Try(ByteString(Hex.decode(hash))).getOrElse(malformed))
+          case _ => malformed
+        )
+        .toSet
+
 /** The mark that a clear of the state was begun and its rows may not all be gone yet (`state.reset-pending`): put in
   * the synced batch that begins the clear, removed, synced, once the rows are deleted. A node started with it set
   * deletes the rows again before anything reads them.

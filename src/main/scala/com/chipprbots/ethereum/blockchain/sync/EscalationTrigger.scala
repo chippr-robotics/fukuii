@@ -49,19 +49,19 @@ final class EscalationTrigger(refusals: Int, minSpanMillis: Long = 0L):
     if count >= refusals && nowMillis - firstAtMillis >= minSpanMillis then Verdict.Escalate(EscalationKind.LocalFault)
     else Verdict.Waiting(count)
 
-  /** A branch was refused for a fault of this node when its tip was at `tipNumber` (proof of work). `standsOn` names
-    * the branch: the block its first refused block stands on. The run is of the branch's growth: it escalates when the
-    * highest tip seen is `refusals` blocks above the first.
+  /** A branch was refused for a fault of this node when its tip was at `tipNumber` (proof of work). `name` names the
+    * branch: its first block above the block it leaves the chain at, the same for every cut of it. The run is of the
+    * branch's growth: it escalates when the highest tip seen is `refusals` blocks above the first.
     *
     * A lower tip of the same branch changes nothing (forge): a refused branch is fetched again a batch at a time, and
-    * the same branch is told with the tip of one batch and then with the tip a peer announced. Another block to stand
-    * on is another branch, and begins the run again.
+    * the same branch is told with the tip of one batch and then with the tip a peer announced. Another name is another
+    * branch, and begins the run again.
     */
-  def localFaultOnBranch(standsOn: Any, tipNumber: BigInt): Verdict =
+  def localFaultOnBranch(name: Any, tipNumber: BigInt): Verdict =
     val (first, highest) = branch match
-      case Some((`standsOn`, first, highest)) => (first, highest.max(tipNumber))
-      case _                                  => (tipNumber, tipNumber)
-    branch = Some((standsOn, first, highest))
+      case Some((`name`, first, highest)) => (first, highest.max(tipNumber))
+      case _                              => (tipNumber, tipNumber)
+    branch = Some((name, first, highest))
     val grown = highest - first
     count = grown.min(BigInt(Int.MaxValue)).toInt
     if grown >= refusals then Verdict.Escalate(EscalationKind.LocalFault) else Verdict.Waiting(count)

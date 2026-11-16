@@ -432,6 +432,8 @@ trait ConsensusBuilder:
           blockchainReader.getBestBlockHeader
             .map(com.chipprbots.ethereum.blockchain.sync.HeadChainWeight.classify(blockchainReader, _))
             .collect { case com.chipprbots.ethereum.blockchain.sync.HeadChainWeight.Status.Exact(weight) => weight },
+        hash => blockchainReader.getBlockHeaderByHash(com.chipprbots.ethereum.domain.BlockHash(hash)),
+        header => blockchainReader.getCanonicalHashByNumber(header.number.value).contains(header.hash),
         left => escalationLog.debug("[STATE-ESCALATION] {}", left)
       )
     }

@@ -1,5 +1,8 @@
 package com.chipprbots.ethereum.blockchain.sync
 
+import org.apache.pekko.util.ByteString
+
+import com.chipprbots.ethereum.db.storage.pathstate.GivenUpBranch
 import com.chipprbots.ethereum.db.storage.pathstate.ReorgRefusal
 import com.chipprbots.ethereum.db.storage.pathstate.ReorgTooDeep
 import com.chipprbots.ethereum.db.storage.pathstate.StateFault
@@ -39,6 +42,11 @@ import com.chipprbots.ethereum.domain.ChainWeight
   *   the chain weight stored for a block, by its hash
   * @param headWeight
   *   the chain weight of the head
+  * @param headerOf
+  *   a stored header, by its hash
+  * @param onTheChain
+  *   whether a header is the chain's block at its height. With `headerOf`, what a branch is named from
+  *   ([[PowEscalationFeed.firstAboveFork]]): the same for every cut of the branch, and what the loop guard keeps
   * @param note
   *   told what was left out of the count, and why
   */
@@ -46,6 +54,8 @@ final class PowEscalationFeed(
     watch: EscalationWatch,
     weightOf: BlockHash => Option[ChainWeight],
     headWeight: () => Option[ChainWeight],
+    headerOf: ByteString => Option[BlockHeader] = _ => None,
+    onTheChain: BlockHeader => Boolean = _ => true,
     note: String => Unit = _ => ()
 ):
   import PowEscalationFeed.*
@@ -77,10 +87,15 @@ final class PowEscalationFeed(
               note(s"branch $name is not counted: the header of its block ${header.number} is not valid ($why)")
             case None =>
               if refused.forall(_ < of) then refused = Some(of)
+              val first = firstAboveFork(branch.head.header, headerOf, onTheChain)
+              val refusedBranch = EscalationWatch.Branch(
+                GivenUpBranch(first.number.value, first.hash.value),
+                () => lineage(branch.map(_.header), headerOf)
+              )
               classify(fault) match
-                case Refusal.Unreachable => watch.branchUnreachable(name, fault.getMessage)
+                case Refusal.Unreachable => watch.branchUnreachable(refusedBranch, name, fault.getMessage)
                 case Refusal.Fault =>
-                  watch.branchRefused(branch.head.header.parentHash, branch.last.number.value, name, fault.getMessage)
+                  watch.branchRefused(refusedBranch, branch.last.number.value, name, fault.getMessage)
 
   /** Proof-of-work blocks became the head: by extension, or by a reorganisation. */
   def headMoved(newHead: Block): Unit =
@@ -94,6 +109,41 @@ final class PowEscalationFeed(
         watch.headMoved()
 
 object PowEscalationFeed:
+
+  /** The first block of the branch `block` is of above the block the branch leaves the chain at: `block` itself when it
+    * stands on a block of the chain, else the lowest of the blocks under it that are not of the chain. A block whose
+    * header is not stored ends the walk, as does `reach` blocks: the name is then of the lowest block found. The loop
+    * guard does not rest on the name being the same after a sync ([[lineage]]).
+    *
+    * @param headerOf
+    *   a stored header, by its hash
+    * @param onTheChain
+    *   whether a header is the chain's block at its height
+    */
+  def firstAboveFork(
+      block: BlockHeader,
+      headerOf: ByteString => Option[BlockHeader],
+      onTheChain: BlockHeader => Boolean,
+      reach: Int = 1024
+  ): BlockHeader =
+    @scala.annotation.tailrec
+    def down(at: BlockHeader, left: Int): BlockHeader =
+      if left == 0 then at
+      else
+        headerOf(at.parentHash.value) match
+          case Some(parent) if !onTheChain(parent) => down(parent, left - 1)
+          case _                                   => at
+    down(block, reach)
+
+  /** The blocks of a refused branch from its tip down, then the stored blocks under them, each read as it is asked for:
+    * what a branch is known again by ([[com.chipprbots.ethereum.db.storage.pathstate.GivenUpBranches]]). It ends where
+    * a header is not stored; whoever walks it stops sooner.
+    */
+  def lineage(branch: List[BlockHeader], headerOf: ByteString => Option[BlockHeader]): Iterator[GivenUpBranch] =
+    val under = branch.headOption.iterator.flatMap { lowest =>
+      Iterator.unfold(lowest.parentHash.value)(hash => headerOf(hash).map(header => (header, header.parentHash.value)))
+    }
+    (branch.reverseIterator ++ under).map(header => GivenUpBranch(header.number.value, header.hash.value))
 
   /** What a refusal of a branch says to the trigger. */
   enum Refusal:

@@ -1,7 +1,10 @@
 package com.chipprbots.ethereum.blockchain.sync
 
+import org.apache.pekko.util.ByteString
+
 import com.chipprbots.ethereum.blockchain.sync.EscalationTrigger.Verdict
 import com.chipprbots.ethereum.db.storage.pathstate.EscalationKind
+import com.chipprbots.ethereum.db.storage.pathstate.GivenUpBranch
 import com.chipprbots.ethereum.ledger.StateRecovery.Outcome
 
 /** What a node on the unified state layout makes of each recovery a fork choice asked for (spec 018 C5a part 6): it
@@ -18,12 +21,16 @@ import com.chipprbots.ethereum.ledger.StateRecovery.Outcome
   *   told the kind, each time the verdict is to escalate
   * @param said
   *   told the kind and why, the first time of a run: until the head moves again
+  * @param request
+  *   told each time the verdict is to escalate, with what it is for: the handler's (part 7), which decides whether it
+  *   is acted on. It is told inside the watch's monitor, on the thread that fed the watch, and is to hand the work on
   */
 final class EscalationWatch(
     trigger: EscalationTrigger,
     now: () => Long,
     escalate: EscalationKind => Unit,
-    said: (EscalationKind, String) => Unit
+    said: (EscalationKind, String) => Unit,
+    request: EscalationWatch.Request => Unit = _ => ()
 ):
   import EscalationWatch.*
 
@@ -38,38 +45,42 @@ final class EscalationWatch(
   /** A recovery that a fork choice asked for, in the run `askedIn`, ended with `outcome`, for the head `head` names (a
     * few hex digits). Dropped when the head has moved since it was asked for, unless it is itself that move.
     */
-  def ended(outcome: Outcome, head: String, askedIn: Long): Unit = synchronized {
+  def ended(outcome: Outcome, head: String, askedIn: Long, hash: Option[ByteString] = None): Unit = synchronized {
     classify(outcome) match
       case Signal.HeadMoved        => moved()
       case _ if askedIn != run     => ()
       case Signal.Nothing          => ()
-      case Signal.Unreachable(why) => told(trigger.unreachable(), s"head $head cannot be reached: $why")
-      case Signal.Waits(why)       => told(trigger.localFault(now()), s"head $head is not followed: $why")
+      case Signal.Unreachable(why) => told(trigger.unreachable(), s"head $head cannot be reached: $why", hash, None)
+      case Signal.Waits(why)       => told(trigger.localFault(now()), s"head $head is not followed: $why", hash, None)
   }
 
   /** A fork choice was refused where no recovery is asked for: its head is on a chain the state does not reach. */
-  def refusedUnreachable(head: String, why: String): Unit = synchronized {
-    told(trigger.unreachable(), s"head $head cannot be reached: $why")
+  def refusedUnreachable(head: String, why: String, hash: Option[ByteString] = None): Unit = synchronized {
+    told(trigger.unreachable(), s"head $head cannot be reached: $why", hash, None)
   }
 
   /** A fork choice was refused where no recovery is asked for, for a fault of this node. */
-  def refusedForAFault(head: String, why: String): Unit = synchronized {
-    told(trigger.localFault(now()), s"head $head is not followed, for a fault of this node: $why")
+  def refusedForAFault(head: String, why: String, hash: Option[ByteString] = None): Unit = synchronized {
+    told(trigger.localFault(now()), s"head $head is not followed, for a fault of this node: $why", hash, None)
   }
 
   /** On proof of work: a branch heavier than the head, with headers that are valid, was refused where no wait mends it
-    * (it leaves the chain below what the state reaches).
+    * (it leaves the chain below what the state reaches). `of` is the branch.
     */
-  def branchUnreachable(branch: String, why: String): Unit = synchronized {
-    told(trigger.unreachable(), s"the heavier branch $branch cannot be reached: $why")
+  def branchUnreachable(of: Branch, branch: String, why: String): Unit = synchronized {
+    told(trigger.unreachable(), s"the heavier branch $branch cannot be reached: $why", None, Some(of))
   }
 
   /** On proof of work: a branch heavier than the head, with headers that are valid, was not adopted for a fault of this
-    * node, with its tip at `tip`. `standsOn` names the branch: the block its first refused block stands on. What is
-    * counted is how far the branch grows while it is refused.
+    * node, with its tip at `tip`. What is counted is how far the branch grows while it is refused, under its name.
     */
-  def branchRefused(standsOn: Any, tip: BigInt, branch: String, why: String): Unit = synchronized {
-    told(trigger.localFaultOnBranch(standsOn, tip), s"the heavier branch $branch is not followed: $why")
+  def branchRefused(of: Branch, tip: BigInt, branch: String, why: String): Unit = synchronized {
+    told(
+      trigger.localFaultOnBranch(of.first.hash, tip),
+      s"the heavier branch $branch is not followed: $why",
+      None,
+      Some(of)
+    )
   }
 
   /** The head is where the consensus client named it: a fork choice answered VALID, however it came to be. */
@@ -80,15 +91,36 @@ final class EscalationWatch(
     saying = None
     run += 1
 
-  private def told(verdict: Verdict, why: String): Unit = verdict match
-    case Verdict.Waiting(_) => ()
-    case Verdict.Escalate(kind) =>
-      escalate(kind)
-      if !saying.contains(kind) then
-        saying = Some(kind)
-        said(kind, why)
+  private def told(verdict: Verdict, why: String, head: Option[ByteString], branch: Option[Branch]): Unit =
+    verdict match
+      case Verdict.Waiting(_) => ()
+      case Verdict.Escalate(kind) =>
+        escalate(kind)
+        request(Request(kind, head, branch, why))
+        if !saying.contains(kind) then
+          saying = Some(kind)
+          said(kind, why)
 
 object EscalationWatch:
+
+  /** A verdict to give the state up, with what it is for.
+    *
+    * @param head
+    *   on proof of stake, the head the consensus client named and the node could not follow
+    * @param branch
+    *   on proof of work, the refused branch: its first block above the block it leaves the chain at
+    */
+  final case class Request(kind: EscalationKind, head: Option[ByteString], branch: Option[Branch], why: String)
+
+  /** A branch that was refused, on proof of work.
+    *
+    * @param first
+    *   its name: its first block above the block it leaves the chain at, as the number index has the chain now
+    * @param lineage
+    *   its blocks from the tip of what was refused down, then the stored blocks under them: what a branch is known
+    *   again by, whatever the number index says. Walked only as far as it is needed
+    */
+  final case class Branch(first: GivenUpBranch, lineage: () => Iterator[GivenUpBranch])
 
   /** A slot of the consensus layer: the least time a run of refused fork choices lasts is so many of them. */
   val SlotMillis: Long = 12000L

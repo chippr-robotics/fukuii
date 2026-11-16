@@ -154,3 +154,26 @@ class EscalationWatchSpec extends AnyFlatSpec with Matchers:
       rig.said should have size 2
     }
   }
+
+  // C5a part 7: what a verdict is for goes with it, for the handler that decides whether it is acted on
+  it should "tell each verdict with what it is for: a head on proof of stake, a branch on proof of work" taggedAs UnitTest in {
+    val requests = mutable.ArrayBuffer.empty[EscalationWatch.Request]
+    val watch =
+      new EscalationWatch(new EscalationTrigger(2, 0L), () => 0L, _ => (), (_, _) => (), requests += _)
+    val head = ByteString(Array.fill[Byte](32)(5))
+    val name = com.chipprbots.ethereum.db.storage.pathstate.GivenUpBranch(5, ByteString(Array.fill[Byte](32)(6)))
+    val first = EscalationWatch.Branch(name, () => Iterator(name))
+    watch.refusedUnreachable("0505", "below the block the state began at", Some(head))
+    watch.ended(Outcome.TooLong("far"), "0505", watch.currentRun, Some(head))
+    watch.branchUnreachable(first, "[5-7]", "200 blocks below the head")
+    // a fault waits: nothing is told before the count is reached
+    watch.branchRefused(first, 10, "[5-10]", "a corrupt record")
+    watch.branchRefused(first, 12, "[5-12]", "a corrupt record")
+    requests.map(r => (r.kind, r.head, r.branch)).toList shouldBe List(
+      (EscalationKind.Unreachable, Some(head), None),
+      (EscalationKind.Unreachable, Some(head), None),
+      (EscalationKind.Unreachable, None, Some(first)),
+      (EscalationKind.LocalFault, None, Some(first))
+    )
+    requests.last.why should include("a corrupt record")
+  }
