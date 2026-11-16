@@ -356,18 +356,37 @@ private[sync] object PivotAnchor:
     * In memory, each for [[OffBranchPeers.HeldMillis]]: a peer's chain may reorganize onto the branch. Owned by one
     * actor.
     */
-  final class OffBranchPeers:
+  final class OffBranchPeers(appStateOf: () => AppStateStorage):
     private var until: Map[com.chipprbots.ethereum.network.PeerId, Long] = Map.empty
 
     /** Whether `peer` is left out of the choice of a target. Only while a sync is bound to a branch (B-310, forge): a
       * requirement that ended elsewhere (the header download's gate, the check at the end of a sync, a hand-off) leaves
       * no peer held.
       */
-    def holds(appState: AppStateStorage, peer: com.chipprbots.ethereum.network.PeerId, nowMillis: Long): Boolean =
-      if requiredBranch(appState).isEmpty then
+    def holds(peer: com.chipprbots.ethereum.network.PeerId, nowMillis: Long): Boolean =
+      if requiredBranch(appStateOf()).isEmpty then
         until = Map.empty
         false
       else until.get(peer).exists(_ > nowMillis)
+
+    /** [[PivotAnchor.refreshFloor]] of this actor's store. */
+    def refreshFloor: Option[BigInt] = PivotAnchor.refreshFloor(appStateOf())
+
+    /** Whether the network's best, measured without the peers held, is under the branch's first block: no peer left can
+      * serve a pivot on the branch (B-310, forge). The wait for one is begun, so that [[waitExpired]] can end it:
+      * nothing else would, since no bootstrap is asked.
+      */
+    def belowTheBranch(networkBest: BigInt, nowMillis: Long): Boolean =
+      val appState = appStateOf()
+      scala.util.Try(appState.getPivotOnBranch()).toOption.flatten.filter(networkBest < _.number) match
+        case Some(required) =>
+          if required.firstMissMillis.isEmpty then
+            appState.putPivotOnBranch(required.copy(firstMissMillis = Some(nowMillis))).commit()
+          true
+        case None => false
+
+    /** [[PivotAnchor.waitExpired]] of this actor's store. */
+    def waitExpired(nowMillis: Long): Option[String] = PivotAnchor.waitExpired(appStateOf(), nowMillis)
 
     /** A bootstrap ended without the pivot's header. With peers on another chain among those it asked, they are left
       * out for a while, and the wait for a peer on the branch is begun or gone on with ([[BranchWaitMillis]], the same
@@ -376,17 +395,8 @@ private[sync] object PivotAnchor:
       * @return
       *   why the requirement was dropped, when it was: said at ERROR by the caller
       */
-    def missed(
-        ingest: StateIngest,
-        offBranch: Set[com.chipprbots.ethereum.network.PeerId],
-        nowMillis: Long
-    ): Option[String] = missed(ingest.appState, offBranch, nowMillis)
-
-    def missed(
-        appState: AppStateStorage,
-        offBranch: Set[com.chipprbots.ethereum.network.PeerId],
-        nowMillis: Long
-    ): Option[String] =
+    def missed(offBranch: Set[com.chipprbots.ethereum.network.PeerId], nowMillis: Long): Option[String] =
+      val appState = appStateOf()
       until = until.filter(_._2 > nowMillis) ++ offBranch.map(_ -> (nowMillis + OffBranchPeers.HeldMillis))
       if offBranch.isEmpty then None
       else
@@ -409,6 +419,9 @@ private[sync] object PivotAnchor:
         }
 
   object OffBranchPeers:
+    /** The peers of the actor that owns `ingest`: its store is read when asked, as the controller reads it. */
+    def of(ingest: StateIngest): OffBranchPeers = new OffBranchPeers(() => ingest.appState)
+
     val HeldMillis: Long = 10L * 60 * 1000
 
   /** The log tag of the requirement that the sync after an escalation take its pivot on the refused branch (B-307). */

@@ -86,8 +86,7 @@ private[snap] trait PivotRefresher
     with PivotProbeResponseApi:
   self: PivotRefresherState & SnapSharedState & SnapControllerEnv & CoordinatorHandles & PhaseFlags & LifecycleApi &
     PeerPoolApi & PivotSelectionApi & OffBranchPeersApi & PivotBestBlockApi & ProbeTargetApi & FinalizationApi &
-    ChainDownloadStartApi &
-    LazyHandoffApi & StagnationResetApi =>
+    ChainDownloadStartApi & LazyHandoffApi & StagnationResetApi =>
 
   private lazy val MaxProbeAttempts: Int = 5 // 5 × 30s = 150s max deferral before forced roll
   private lazy val MaxConsecutivePivotRefreshes = 10
@@ -265,9 +264,9 @@ private[snap] trait PivotRefresher
       // B-310: the peers this refresh found on another chain than the branch are left out of the next target, and the
       // wait for one on the branch is counted, as for the bootstrap at the start (bounded: BranchWaitMillis)
       offBranchPeers
-        .missed(stateIngest.appState, offBranch, System.currentTimeMillis())
+        .missed(offBranch, System.currentTimeMillis())
         .foreach(why => ctx.log.error(PivotAnchor.requirementDroppedText(why)))
-      val floor = PivotAnchor.refreshFloor(stateIngest.appState)
+      val floor = offBranchPeers.refreshFloor
       if reason == PivotHeaderBootstrap.NoPeerOnTheBranch || floor.exists(backtrackedPivot < _) then
         // B-310 (forge): a backtrack asks the same peers by number, and under the branch's first block asks with no
         // check of the branch at all. Choose the target again, without the peers on another chain, in 5 s.
@@ -428,12 +427,6 @@ private[snap] trait PivotRefresher
       pivotUnservable: Boolean = false
   ): Unit =
     ctx.log.info(s"Refreshing pivot in-place: $reason")
-    // B-310 (forge): with every peer left one on another chain no target is found, and nothing else would end the wait
-    // for a peer on the branch
-    if !isPoSChain then
-      PivotAnchor
-        .waitExpired(stateIngest.appState, System.currentTimeMillis())
-        .foreach(why => ctx.log.error(PivotAnchor.requirementDroppedText(why)))
 
     // CL-anchored pivot selection for post-merge chains (geth's BeaconSync pattern).
     // Mirrors what startSnapSync does at line 1769 — the CL hint represents authoritative
@@ -537,12 +530,21 @@ private[snap] trait PivotRefresher
           // froze the ETC pivot on 2026-06-01 — peers emit "not indexed" for the tip root.
           // NOTE: the post-merge (CL-anchored) branch above has the same latent issue at
           // offset=0; deferred — it fires rarely and has its own freshness-floor handling.
+          // B-310 (forge): no peer left under the branch's first block can serve a pivot on it: no target, and the wait
+          // for one is begun
+          .filterNot(networkBest => offBranchPeers.belowTheBranch(networkBest, System.currentTimeMillis()))
           .map(networkBest => networkBest - BigInt(snapSyncConfig.pivotBlockOffset).max(SnapServeWindowMargin))
-          // B-310: never under the branch's first block while a sync is bound to it
-          .map(target => PivotAnchor.refreshFloor(stateIngest.appState).fold(target)(target.max))
+          // B-310: and a target is never under the branch's first block while a sync is bound to it
+          .map(target => offBranchPeers.refreshFloor.fold(target)(target.max))
           .filter(_ > 0)
 
     if newPivotOpt.isEmpty then
+      // B-310 (forge): a refresh with no target asks no peer, so nothing else ends the wait for a peer on the branch.
+      // Only here: with a target, its bootstrap ends the wait itself (a peer on the branch, or the peers it missed).
+      if !isPoSChain then
+        offBranchPeers
+          .waitExpired(System.currentTimeMillis())
+          .foreach(why => ctx.log.error(PivotAnchor.requirementDroppedText(why)))
       // #1374 T014 (Moving-Root Delta Heal — bounded re-peg last-resort). Under `movingRootDeltaHeal`, a re-peg
       // during StateHealing that finds NO suitable served root counts against a budget; once exhausted, take the SAME
       // fail-SAFE lazy-heal handoff the (now-rare) HealingRootUnservable signal uses — completeSnapSync() → on-demand

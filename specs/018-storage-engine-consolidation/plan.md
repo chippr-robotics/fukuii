@@ -4437,27 +4437,41 @@ ERROR the user decided on.
 - **It does not backtrack** when the bootstrap found no peer on the branch, nor to a block under the branch's first
   one: the pivot is chosen again in 5 s, without those peers. A backtrack by number asked the same peers again.
 - **A refresh's target is never under the branch's first block** (`PivotAnchor.refreshFloor`) on a chain that picks
-  it from the peers. A pivot that is at the branch's first block is checked on it.
-- **A refresh that finds no target at all** (every peer left is one on another chain) ends the wait when it has run
-  out (`PivotAnchor.waitExpired`): nothing else would, since a bootstrap is never asked.
+  it from the peers. A pivot that is at the branch's first block is checked on it. **Where every peer left is under
+  that block, there is no target** (forge, after code: the bootstrap would wait for a peer at that height for ever, with
+  no clock running), and the wait for a peer on the branch is begun.
+- **A refresh that finds no target** ends the wait when it has run out (`PivotAnchor.waitExpired`): nothing else would,
+  since no bootstrap is asked. **Only then** (forge, after code): a refresh with a target leaves the wait to its
+  bootstrap, which ends it on a peer on the branch or counts the peers it missed; asked first, a wait the header download
+  began would have been ended by a refresh that asked no one.
 - **A bootstrap under the branch does not end the wait** (`branchServed` with the height it served).
 - **A peer is held only while a sync is bound to a branch** (forge): a requirement that ended at the download's gate,
   at the end of a sync or at a hand-off left peers held for up to ten minutes.
 - **Both measures of the network's best leave held peers out**: a peer on another chain says nothing of the branch's
   head, for a refresh's target, a resume's drift or a roll's window. With none left the best is none, and the wait
   above bounds it.
-- **A peer at rest for headers is asked for bodies** (both causes: empty headers, and another chain at the branch's
-  height): a body is checked against the header stored, and its hash came from a header that passed the branch's gate.
-  **Not for receipts** (forge): an empty receipts reply blacklists its peer, which would blame a peer that follows
-  another chain honestly, and a peer that has no headers to give has no receipts either. The comment that said bodies
-  and receipts were unaffected while the code kept both from it now says what the code does.
+- **A peer at rest for headers is still left out of body and receipt requests: the third follow-up is declined**
+  (forge, after code). An empty reply to either blacklists its peer (`EmptyBlockBodies`), which would blame a peer that
+  follows another chain honestly, and a peer that has not the headers above the fork has not their bodies or receipts
+  either. A rest is ten minutes, and the bodies the hand-off waits for are of the branch, which such a peer cannot serve.
+  The comment that said bodies and receipts were unaffected now says what the code does.
 
 **Left (forge), B-320**: the healing serve-root and recent-root bootstraps drop the peers they found on another chain,
 and the healing one takes its target from every peer's height; `currentNetworkBestFromSnapPeers` does not filter
 `forkAccepted`, unlike its siblings.
 
-**Tests**: `PivotAnchorSpec` (+4, one case changed: with no sync bound, no peer is held), `PivotRefresherSpec` (+5),
-`PivotSelectorSpec` (+1, one case binds a requirement), `ChainDownloaderHeaderCheckSpec` (+1).
+**Not in the split's count**: the peers are built from the `StateIngest` (`OffBranchPeers.of`), and the floor, the
+wait and the hold are asked of them, so the controller's modules name no store (`verify.sh`: 535, unchanged).
+
+**Read after code (forge): no blocker.** Taken: no target under the branch, and the wait asked only of a refresh with
+no target (above); the bodies (above). Noted: a refresh whose bootstrap fails for another reason with its backtrack
+under the floor is retried every 5 s with no clock of its own (each try is a whole bootstrap with its back-off); the
+held peers are read from the store once a peer.
+
+**Tests**: `PivotAnchorSpec` (+4, one case changed: with no sync bound, no peer is held), `PivotRefresherSpec` (+7),
+`PivotSelectorSpec` (+2, one case binds a requirement), `SyncControllerSpec` (+1). **The mutation run**: 13 rules
+broken one at a time, 13 caught; two only after tests were added (the bootstrap's freshness, the controller's height
+for `branchServed`). (The downloader's three were run on the split that was then withdrawn.)
 
 ### Destructive change (C8a and C8b): the vault protocol blocks
 

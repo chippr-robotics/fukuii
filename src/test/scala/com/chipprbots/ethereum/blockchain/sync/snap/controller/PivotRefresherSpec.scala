@@ -173,7 +173,7 @@ private[snap] class StubPivotRefresherState(
   var networkBest: Option[BigInt] = None
   def currentNetworkBestFromSnapPeers(): Option[BigInt] = networkBest
   lazy val offBranchPeers: com.chipprbots.ethereum.blockchain.sync.snap.PivotAnchor.OffBranchPeers =
-    new com.chipprbots.ethereum.blockchain.sync.snap.PivotAnchor.OffBranchPeers
+    new com.chipprbots.ethereum.blockchain.sync.snap.PivotAnchor.OffBranchPeers(() => appStateStorage)
   val bestBlockUpdates: mutable.ArrayBuffer[(BlockHeader, BigInt)] = mutable.ArrayBuffer.empty
   def updateBestBlockForPivot(header: BlockHeader, pivotBlockNumber: BigInt): Unit =
     bestBlockUpdates += ((header, pivotBlockNumber))
@@ -335,12 +335,14 @@ class PivotRefresherSpec extends AnyFlatSpec with Matchers:
     h.module.pendingPivotRefresh = Some((BigInt(500), "stale pivot"))
     val elsewhere = com.chipprbots.ethereum.network.PeerId("other-chain")
 
-    h.call(m => m.pivotRefreshBootstrapFailedArms(PivotBootstrapFailed(PivotHeaderBootstrap.NoPeerOnTheBranch, Set(elsewhere))))
+    h.call(m =>
+      m.pivotRefreshBootstrapFailedArms(PivotBootstrapFailed(PivotHeaderBootstrap.NoPeerOnTheBranch, Set(elsewhere)))
+    )
 
     h.module.pendingPivotRefresh shouldBe None
     // chosen again without them, not asked again of them by number
     h.scheduledTimers() shouldBe Seq(("pivot-bootstrap-retry", RetryPivotRefresh, 5.seconds))
-    h.module.offBranchPeers.holds(h.module.appStateStorage, elsewhere, System.currentTimeMillis()) shouldBe true
+    h.module.offBranchPeers.holds(elsewhere, System.currentTimeMillis()) shouldBe true
     // and the wait for a peer on the branch is begun
     h.module.appStateStorage.getPivotOnBranch().flatMap(_.firstMissMillis) shouldBe defined
   }
@@ -387,6 +389,32 @@ class PivotRefresherSpec extends AnyFlatSpec with Matchers:
 
     h.module.appStateStorage.getPivotOnBranch() shouldBe None
     h.scheduledTimers() shouldBe Seq(("pivot-bootstrap-retry", RetryPivotRefresh, 30.seconds))
+  }
+
+  // forge, after code: a refresh with a target ends the wait through its own bootstrap, not before it asks anyone
+  it should "leave a wait that ran out to the bootstrap of a refresh that has a target (B-310)" taggedAs UnitTest in {
+    val h = new Harness()
+    val began = System.currentTimeMillis() - com.chipprbots.ethereum.blockchain.sync.snap.PivotAnchor.BranchWaitMillis
+    bindToBranchAt(h, 300, firstMiss = Some(began))
+    h.module.networkBest = Some(BigInt(500))
+
+    h.call(m => m.refreshPivotInPlace("stale pivot"))
+
+    h.module.appStateStorage.getPivotOnBranch().flatMap(_.firstMissMillis) shouldBe Some(began)
+    h.parent.receiveAll() shouldBe Seq(StartRegularSyncBootstrap(BigInt(500 - 64)))
+  }
+
+  // forge, after code: no peer left can serve a pivot on the branch; without the wait, nothing would ever end it
+  it should "take no target when every peer left is under the branch, and begin the wait for one (B-310)" taggedAs UnitTest in {
+    val h = new Harness()
+    bindToBranchAt(h, 480)
+    h.module.networkBest = Some(BigInt(470))
+
+    h.call(m => m.refreshPivotInPlace("stale pivot"))
+
+    h.parent.hasMessages shouldBe false
+    h.scheduledTimers() shouldBe Seq(("pivot-bootstrap-retry", RetryPivotRefresh, 30.seconds))
+    h.module.appStateStorage.getPivotOnBranch().flatMap(_.firstMissMillis) shouldBe defined
   }
 
   it should "take a refresh's target no lower than the branch's first block (B-310)" taggedAs UnitTest in {

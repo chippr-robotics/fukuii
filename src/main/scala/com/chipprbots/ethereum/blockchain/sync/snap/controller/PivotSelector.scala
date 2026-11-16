@@ -83,7 +83,7 @@ private[snap] trait PivotSelector
   private var peerPivotFallbackRefused: Boolean = false
 
   // B-307: the peers that follow another chain than the branch the pivot is to be on, for a while each.
-  lazy val offBranchPeers: PivotAnchor.OffBranchPeers = new PivotAnchor.OffBranchPeers
+  lazy val offBranchPeers: PivotAnchor.OffBranchPeers = PivotAnchor.OffBranchPeers.of(stateIngest)
 
   def bootstrapping(): Behavior[Command] =
     Behaviors
@@ -123,7 +123,7 @@ private[snap] trait PivotSelector
                 .filter(_.peerInfo.maxBlockNumber > 0)
                 .filter(p => bootstrapPivot == 0 || p.peerInfo.maxBlockNumber >= bootstrapPivot)
                 // B-310: a peer on another chain than the branch has no height the branch's pivot can be judged by
-                .filter(p => !offBranchPeers.holds(stateIngest.appState, p.peer.id, System.currentTimeMillis()))
+                .filter(p => !offBranchPeers.holds(p.peer.id, System.currentTimeMillis()))
 
             snapPeersForPivot
               .sortBy(_.peerInfo.maxBlockNumber)(using bigIntReverseOrdering)
@@ -345,7 +345,7 @@ private[snap] trait PivotSelector
           // B-307: the peers that follow another chain than the branch the pivot is to be on are left out of the next
           // choice of a target, which lowers it to a height the branch's peers have; for a bounded wait.
           offBranchPeers
-            .missed(stateIngest, offBranch, System.currentTimeMillis())
+            .missed(offBranch, System.currentTimeMillis())
             .foreach(why => ctx.log.error(PivotAnchor.requirementDroppedText(why)))
           // After a rejected header left no eligible peer, the next start chooses the target again from the peers that
           // remain: the persisted target came from the claims of peers that are now blacklisted, and resuming it would
@@ -443,7 +443,7 @@ private[snap] trait PivotSelector
       .filter(p => bootstrapPivotBlock == 0 || p.peerInfo.maxBlockNumber >= bootstrapPivotBlock)
       // B-310 (forge): a peer on another chain than the branch the pivot is to be on is no measure of the branch's
       // head, for a refresh's target, a resume's drift or a roll's window
-      .filter(p => !offBranchPeers.holds(stateIngest.appState, p.peer.id, System.currentTimeMillis()))
+      .filter(p => !offBranchPeers.holds(p.peer.id, System.currentTimeMillis()))
       .sortBy(_.peerInfo.maxBlockNumber)(using bigIntReverseOrdering)
       .headOption
       .map(_.peerInfo.maxBlockNumber)
@@ -683,7 +683,7 @@ private[snap] trait PivotSelector
         .filter(p => p.peerInfo.remoteStatus.supportsSnap && p.peerInfo.forkAccepted)
         .filter(_.peerInfo.maxBlockNumber > 0)
         .filter(p => bootstrapPivotBlock == 0 || p.peerInfo.maxBlockNumber >= bootstrapPivotBlock)
-        .filter(p => !offBranchPeers.holds(stateIngest.appState, p.peer.id, System.currentTimeMillis()))
+        .filter(p => !offBranchPeers.holds(p.peer.id, System.currentTimeMillis()))
 
     val networkBestBlockOpt =
       snapPeersForPivot

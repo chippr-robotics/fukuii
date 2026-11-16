@@ -464,46 +464,46 @@ class PivotAnchorSpec extends AnyFlatSpec with Matchers:
     ConsensusTest
   ) in new Chain:
     import com.chipprbots.ethereum.network.PeerId
-    val peers = new PivotAnchor.OffBranchPeers
+    val peers = new PivotAnchor.OffBranchPeers(() => appState)
     val (a, b) = (PeerId("a"), PeerId("b"))
     val began = 1_763_300_000_000L
     PivotAnchor.requiredBranch(appState) shouldBe None
     // no sync is bound: nothing is counted, and no peer is held (B-310)
-    peers.missed(appState, Set(a), began) shouldBe None
-    peers.holds(appState, a, began) shouldBe false
+    peers.missed(Set(a), began) shouldBe None
+    peers.holds(a, began) shouldBe false
 
     appState.putPivotOnBranch(branchAt8).commit()
     PivotAnchor.requiredBranch(appState) shouldBe Some((BigInt(8), headers(8).hash.value))
     // a bootstrap that failed for another reason begins no wait
-    peers.missed(appState, Set.empty, began) shouldBe None
+    peers.missed(Set.empty, began) shouldBe None
     appState.getPivotOnBranch() shouldBe Some(branchAt8)
     // the first with peers on another chain begins it, and holds them for a while
-    peers.missed(appState, Set(b), began) shouldBe None
-    peers.holds(appState, b, began) shouldBe true
-    peers.holds(appState, b, began + PivotAnchor.OffBranchPeers.HeldMillis) shouldBe false
-    peers.holds(appState, a, began) shouldBe false
+    peers.missed(Set(b), began) shouldBe None
+    peers.holds(b, began) shouldBe true
+    peers.holds(b, began + PivotAnchor.OffBranchPeers.HeldMillis) shouldBe false
+    peers.holds(a, began) shouldBe false
     appState.getPivotOnBranch() shouldBe Some(branchAt8.copy(firstMissMillis = Some(began)))
-    peers.missed(appState, Set(b), began + PivotAnchor.BranchWaitMillis - 1) shouldBe None
+    peers.missed(Set(b), began + PivotAnchor.BranchWaitMillis - 1) shouldBe None
     appState.getPivotOnBranch().flatMap(_.firstMissMillis) shouldBe Some(began)
     // the whole wait: the requirement is dropped, and every peer is asked again
-    peers.missed(appState, Set(a, b), began + PivotAnchor.BranchWaitMillis).get should include("no peer")
+    peers.missed(Set(a, b), began + PivotAnchor.BranchWaitMillis).get should include("no peer")
     appState.getPivotOnBranch() shouldBe None
-    peers.holds(appState, a, began + PivotAnchor.BranchWaitMillis) shouldBe false
-    peers.holds(appState, b, began + PivotAnchor.BranchWaitMillis) shouldBe false
+    peers.holds(a, began + PivotAnchor.BranchWaitMillis) shouldBe false
+    peers.holds(b, began + PivotAnchor.BranchWaitMillis) shouldBe false
 
   // B-310 (forge): the download's gate, the check at the end of a sync and a hand-off also end a requirement
   it should "hold no peer once the requirement has ended elsewhere" taggedAs (UnitTest, ConsensusTest) in new Chain:
     import com.chipprbots.ethereum.network.PeerId
-    val peers = new PivotAnchor.OffBranchPeers
+    val peers = new PivotAnchor.OffBranchPeers(() => appState)
     val began = 1_763_300_000_000L
     appState.putPivotOnBranch(branchAt8).commit()
-    peers.missed(appState, Set(PeerId("b")), began) shouldBe None
-    peers.holds(appState, PeerId("b"), began + 1) shouldBe true
+    peers.missed(Set(PeerId("b")), began) shouldBe None
+    peers.holds(PeerId("b"), began + 1) shouldBe true
     appState.removePivotOnBranch().commit()
-    peers.holds(appState, PeerId("b"), began + 2) shouldBe false
+    peers.holds(PeerId("b"), began + 2) shouldBe false
     // and a requirement written again does not bring back what the last one held
     appState.putPivotOnBranch(branchAt8).commit()
-    peers.holds(appState, PeerId("b"), began + 3) shouldBe false
+    peers.holds(PeerId("b"), began + 3) shouldBe false
 
   // B-310 (forge): a refresh never takes, nor backtracks to, a pivot under the branch's first block
   "The floor of a refresh" should "be the branch's first block while a sync is bound, and nothing otherwise" taggedAs (
