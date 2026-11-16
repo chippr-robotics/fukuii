@@ -3746,3 +3746,13 @@ items:
     refs: []
     links: {}
     notes: "Seen 2026-11-16 23:37-23:41 on #1873 (f8d65b2, 11 of 307) and #1875 (7e5fe72, 16 of 318), neither touching RPC; the job was green on #1873 at 21:35. _hive-sim.yml clones hive at master, so the corpus moves under every PR (informational gate). Two things: fix the cases (conduit), and consider pinning hive_ref so a PR's check reflects the PR."
+  - id: B-323
+    title: "rpc-compat on hive master fails 16 tests since 2026-11-16 23:30: blob-fee-without-hashes, fork-inactive, eth_getProof key cases"
+    priority: P1
+    status: open
+    area: jsonrpc
+    size: M
+    opened: 2026-11-16
+    refs: []
+    links: {}
+    notes: "#1876 passed rpc-compat at 23:08 UTC on the same code; from ~23:30 #1873, #1875 (11 failures) and #1878 (16) fail it with unrelated diffs. hive_ref is master in _hive-sim.yml, so the suite floats: upstream added or changed tests. Real compliance gaps to fix (conduit); also consider pinning hive_ref so PR CI does not drift."
