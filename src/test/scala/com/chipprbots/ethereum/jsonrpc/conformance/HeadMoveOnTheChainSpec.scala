@@ -189,8 +189,12 @@ class HeadMoveOnTheChainSpec extends ScalaTestWithActorTestKit with AnyFlatSpecL
         fails: Block => Option[BlockExecutionError] = _ => None,
         after: (Block, Seq[com.chipprbots.ethereum.domain.Receipt]) => Unit = (_, _) => (),
         // C4d part 4: before a block is committed in place, and whether it was
-        adopting: Block => Unit = _ => ()
-    ) extends StateRecovery(reader, writer, execution, pathState, maxBlocks):
+        adopting: Block => Unit = _ => (),
+        // C5a part 8: how far a branch is adopted, how far an extension is caught up over, how many blocks at a time
+        maxAdopted: Int = StateRecovery.DefaultMaxAdoptedBlocks,
+        catchUp: Int = 0,
+        chunk: Int = StateRecovery.CatchUpChunk
+    ) extends StateRecovery(reader, writer, execution, pathState, maxBlocks, maxAdopted.max(maxBlocks), catchUp, chunk):
       val adopted = new java.util.concurrent.ConcurrentLinkedQueue[BigInt]()
       override protected def adoptBlock(
           block: Block,
@@ -1811,6 +1815,240 @@ class HeadMoveOnTheChainSpec extends ScalaTestWithActorTestKit with AnyFlatSpecL
       on.everything shouldBe before
       on.holds(chain.last.header, chain)
     }
+
+  // C5a part 8 (the user's decision of 2026-11-15): after a sync hands off the head is the pivot, and the consensus
+  // client's head is a straight extension of it, longer than a branch is adopted over
+
+  /** A node at block 20, with blocks 21 to `upTo` stored by their hashes and never executed, as payloads the consensus
+    * client sent while the node synced.
+    */
+  private def handedOff(upTo: Int = 44): Node =
+    val on = new Node
+    blocks.take(20).foreach(on.imports)
+    blocks.slice(20, upTo).foreach(block => on.writer.storeBlockByHashOnly(block).commit())
+    on
+
+  "A straight extension of the head, longer than a branch is adopted over" should "be caught up over in place, a chunk at a time, for a fork choice to its tip" taggedAs
+    (UnitTest, ConsensusTest) in {
+      val on = handedOff()
+      val recovery = new on.Recovery(maxBlocks = 1, maxAdopted = 4, catchUp = 30, chunk = 5)
+      val (_, choose) = recoveringEngine(on, recovery)
+      // 24 blocks above the head: SYNCING, and committed in place one by one
+      statusOf(choose(blocks(43))) shouldBe PayloadStatus.Syncing
+      recovery.outcomes.last shouldBe StateRecovery.Outcome.Adopted(24)
+      recovery.adoptedBlocks shouldBe (21 to 44).map(BigInt(_))
+      on.holds(blocks(43).header, blocks.take(44))
+      // the next fork choice confirms the head
+      statusOf(choose(blocks(43))) shouldBe PayloadStatus.Valid
+    }
+
+  it should "be a head that cannot be reached when it is longer than the catch-up covers" taggedAs (
+    UnitTest,
+    ConsensusTest
+  ) in {
+    val on = handedOff()
+    val recovery = new on.Recovery(maxBlocks = 1, maxAdopted = 4, catchUp = 10)
+    val (_, choose) = recoveringEngine(on, recovery)
+    val before = on.everything
+    statusOf(choose(blocks(43))) shouldBe PayloadStatus.Syncing
+    recovery.outcomes.last shouldBe a[StateRecovery.Outcome.TooLong]
+    recovery.adoptedBlocks shouldBe empty
+    on.everything shouldBe before
+    // and as far as a branch is adopted when no catch-up is configured: the bound of before
+    val none = handedOff()
+    val asBefore = new none.Recovery(maxBlocks = 1, maxAdopted = 4)
+    asBefore.maxCatchUp shouldBe 4
+    val (_, chooseNone) = recoveringEngine(none, asBefore)
+    statusOf(chooseNone(blocks(43))) shouldBe PayloadStatus.Syncing
+    asBefore.outcomes.last shouldBe a[StateRecovery.Outcome.TooLong]
+  }
+
+  it should "leave the head at the last valid block when a block of it is invalid: there is no head to go back to" taggedAs
+    (UnitTest, ConsensusTest) in {
+      val on = handedOff(upTo = 30)
+      // block 31 names another state than its execution leaves; 32 stands on it
+      val bad = blocks(30).pipe(b => b.copy(header = b.header.copy(stateRoot = TrieRoot.Empty)))
+      on.writer.storeBlockByHashOnly(bad).commit()
+      val recovery = new on.Recovery(maxBlocks = 1, maxAdopted = 4, catchUp = 30, chunk = 5)
+      val (_, choose) = recoveringEngine(on, recovery)
+      statusOf(choose(bad)) shouldBe PayloadStatus.Syncing
+      recovery.outcomes.last shouldBe a[StateRecovery.Outcome.Invalid]
+      // blocks 21 to 30 are the head's chain now, and stay: nothing is moved back
+      recovery.adoptedBlocks shouldBe (21 to 30).map(BigInt(_))
+      on.holds(blocks(29).header, blocks.take(30))
+      val chosen = choose(bad).toOption.get.payloadStatus
+      chosen.status shouldBe PayloadStatus.Invalid
+      chosen.latestValidHash shouldBe Some(blocks(29).header.hash.value)
+    }
+
+  it should "stop at a block whose body is not stored, and keep what it committed" taggedAs (
+    UnitTest,
+    ConsensusTest
+  ) in {
+    val on = handedOff(upTo = 30)
+    // block 31 has its header and no body; 32 to 44 are whole
+    on.writer.storeBlockHeaderByHashOnly(blocks(30).header).commit()
+    blocks.slice(31, 44).foreach(block => on.writer.storeBlockByHashOnly(block).commit())
+    val recovery = new on.Recovery(maxBlocks = 1, maxAdopted = 4, catchUp = 30, chunk = 5)
+    val (_, choose) = recoveringEngine(on, recovery)
+    statusOf(choose(blocks(43))) shouldBe PayloadStatus.Syncing
+    recovery.outcomes.last shouldBe StateRecovery.Outcome.MissingBody(refOf(blocks(30).header))
+    // two chunks of five were committed; the third was not begun
+    recovery.adoptedBlocks shouldBe (21 to 30).map(BigInt(_))
+    on.holds(blocks(29).header, blocks.take(30))
+  }
+
+  it should "stop before its next commit when the consensus client names a head its chain does not lead to" taggedAs
+    (UnitTest, ConsensusTest) in {
+      val on = handedOff()
+      // a block of another chain, stored: one whose header is not stored yet would not stop a catch-up
+      val beside = blocks(20).pipe(b => b.copy(header = b.header.copy(extraData = ByteString("beside".getBytes))))
+      on.writer.storeBlockByHashOnly(beside).commit()
+      val elsewhere = new java.util.concurrent.atomic.AtomicBoolean(false)
+      val recovery = new on.Recovery(
+        maxBlocks = 1,
+        maxAdopted = 4,
+        catchUp = 30,
+        chunk = 5,
+        // once block 27 is to be committed, the consensus client is on another chain
+        adopting = block => if block.header.number.value == 27 then elsewhere.set(true)
+      )
+      val named = new StateRecovery.Sink:
+        def executed(
+            block: Block,
+            receipts: Seq[com.chipprbots.ethereum.domain.Receipt],
+            accessList: Option[com.chipprbots.ethereum.domain.BlockAccessList]
+        ): Unit = ()
+        def rejected(block: Block, error: BlockExecutionError, above: List[Block]): Unit = fail("rejected")
+        override def requestedHead: Option[ByteString] =
+          Some(if elsewhere.get() then beside.header.hash.value else blocks(43).header.hash.value)
+      recovery
+        .requestFor(blocks(43).header.hash.value, named, "a test", StateRecovery.Authority.ForkChoice)
+        .outcome
+        .get(60, java.util.concurrent.TimeUnit.SECONDS) shouldBe StateRecovery.Outcome.Superseded
+      // block 27 was committed (it was already asked for when the head changed); the blocks above it were not
+      on.pathState.anchor.map(_.number) should (be(Some(BigInt(27))).or(be(Some(BigInt(26)))))
+      recovery.adoptedBlocks.max should be <= BigInt(27)
+    }
+
+  it should "go on from the head at the fork choice that follows a stop" taggedAs (UnitTest, ConsensusTest) in {
+    val on = handedOff(upTo = 30)
+    on.writer.storeBlockHeaderByHashOnly(blocks(30).header).commit()
+    blocks.slice(31, 44).foreach(block => on.writer.storeBlockByHashOnly(block).commit())
+    val first = new on.Recovery(maxBlocks = 1, maxAdopted = 4, catchUp = 30, chunk = 5)
+    statusOf(recoveringEngine(on, first)._2(blocks(43))) shouldBe PayloadStatus.Syncing
+    first.outcomes.last shouldBe a[StateRecovery.Outcome.MissingBody]
+    // the body arrives; as after a restart, another recovery over the same datadir
+    on.writer.storeBlockByHashOnly(blocks(30)).commit()
+    val second = new on.Recovery(maxBlocks = 1, maxAdopted = 4, catchUp = 30, chunk = 5)
+    statusOf(recoveringEngine(on, second)._2(blocks(43))) shouldBe PayloadStatus.Syncing
+    second.outcomes.last shouldBe StateRecovery.Outcome.Adopted(14)
+    on.holds(blocks(43).header, blocks.take(44))
+  }
+
+  // beacon, after code: the blocks of the chunks not read yet stand on the invalid block too
+  it should "answer INVALID for the head when a block far below it is invalid, with the last valid block" taggedAs
+    (UnitTest, ConsensusTest) in {
+      val on = handedOff(upTo = 30)
+      // block 31 names another state than its execution leaves; the blocks above it, to 44, stand on it
+      val bad = blocks(30).pipe(b => b.copy(header = b.header.copy(stateRoot = TrieRoot.Empty)))
+      val above = blocks.slice(31, 44).foldLeft(Vector(bad)) { (made, block) =>
+        made :+ block.copy(header = block.header.copy(parentHash = made.last.header.hash))
+      }
+      above.foreach(block => on.writer.storeBlockByHashOnly(block).commit())
+      val recovery = new on.Recovery(maxBlocks = 1, maxAdopted = 4, catchUp = 30, chunk = 5)
+      val (_, choose) = recoveringEngine(on, recovery)
+      val head = above.last
+      statusOf(choose(head)) shouldBe PayloadStatus.Syncing
+      recovery.outcomes.last shouldBe a[StateRecovery.Outcome.Invalid]
+      on.holds(blocks(29).header, blocks.take(30))
+      // the head is ten blocks above the invalid one, in a chunk that was never read: it is known invalid all the same
+      val chosen = choose(head).toOption.get.payloadStatus
+      chosen.status shouldBe PayloadStatus.Invalid
+      chosen.latestValidHash shouldBe Some(blocks(29).header.hash.value)
+    }
+
+  it should "go on when the consensus client names a head that stands on its tip, and one it has not sent the block of" taggedAs
+    (UnitTest, ConsensusTest) in {
+      Seq[(String, Node => ByteString)](
+        (
+          "a head on its tip",
+          on =>
+            on.writer.storeBlockByHashOnly(blocks(44)).commit(); blocks(44).header.hash.value
+        ),
+        ("a head whose header is not stored", _ => unknownHash(6))
+      ).foreach { (what, later) =>
+        withClue(s"$what: ") {
+          val on = handedOff()
+          val next = later(on)
+          val moved = new java.util.concurrent.atomic.AtomicBoolean(false)
+          val recovery = new on.Recovery(
+            maxBlocks = 1,
+            maxAdopted = 4,
+            catchUp = 30,
+            chunk = 5,
+            adopting = block => if block.header.number.value == 27 then moved.set(true)
+          )
+          val named = new StateRecovery.Sink:
+            def executed(
+                block: Block,
+                receipts: Seq[com.chipprbots.ethereum.domain.Receipt],
+                accessList: Option[com.chipprbots.ethereum.domain.BlockAccessList]
+            ): Unit = ()
+            def rejected(block: Block, error: BlockExecutionError, above: List[Block]): Unit = fail("rejected")
+            override def requestedHead: Option[ByteString] =
+              Some(if moved.get() then next else blocks(43).header.hash.value)
+          recovery
+            .requestFor(blocks(43).header.hash.value, named, "a test", StateRecovery.Authority.ForkChoice)
+            .outcome
+            .get(60, java.util.concurrent.TimeUnit.SECONDS) shouldBe StateRecovery.Outcome.Adopted(24)
+          on.holds(blocks(43).header, blocks.take(44))
+        }
+      }
+    }
+
+  it should "begin from an executed block kept beside the disk, made the head first" taggedAs (
+    UnitTest,
+    ConsensusTest
+  ) in {
+    val on = new Node
+    blocks.take(39).foreach(on.imports)
+    val recovery = new on.Recovery(maxBlocks = 1, maxAdopted = 2, catchUp = 30, chunk = 3)
+    val (newPayload, choose) = recoveringEngine(on, recovery)
+    // block 40 is executed and kept as a layer; 41 to 44 are stored and never executed: more than a branch is adopted
+    // over, and a straight extension of the head by way of the layer
+    newPayload(blocks(39)).status shouldBe PayloadStatus.Valid
+    on.pathState.isApplied(blocks(39).header.hash.value) shouldBe false
+    blocks.slice(40, 44).foreach(block => on.writer.storeBlockByHashOnly(block).commit())
+    statusOf(choose(blocks(43))) shouldBe PayloadStatus.Syncing
+    recovery.outcomes.last shouldBe StateRecovery.Outcome.Adopted(4)
+    recovery.adoptedBlocks shouldBe (41 to 44).map(BigInt(_))
+    on.holds(blocks(43).header, blocks.take(44))
+  }
+
+  // the 64 stays the bound of a branch (the user's decision): only a straight extension is caught up over
+  it should "not be taken for a branch that leaves the chain, however far a catch-up covers" taggedAs (
+    UnitTest,
+    ConsensusTest
+  ) in {
+    val on = new Node
+    blocks.take(39).foreach(on.imports)
+    // five blocks beside the chain, from block 38: stored, never executed, and longer than a branch is adopted over
+    val first = blocks(38).pipe(b => b.copy(header = b.header.copy(extraData = ByteString("beside".getBytes))))
+    val side = blocks.slice(39, 43).foldLeft(Vector(first)) { (made, block) =>
+      made :+ block.copy(header = block.header.copy(parentHash = made.last.header.hash))
+    }
+    side.foreach(block => on.writer.storeBlockByHashOnly(block).commit())
+    val recovery = new on.Recovery(maxBlocks = 1, maxAdopted = 2, catchUp = 30, chunk = 3)
+    val (_, choose) = recoveringEngine(on, recovery)
+    val before = on.everything
+    statusOf(choose(side.last)) shouldBe PayloadStatus.Syncing
+    recovery.outcomes.last match
+      case StateRecovery.Outcome.TooLong(why) => why should include("no extension")
+      case other                              => fail(s"not a head that cannot be reached: $other")
+    recovery.adoptedBlocks shouldBe empty
+    on.everything shouldBe before
+  }
 
   it should "move nothing when it would reverse the finalized block" taggedAs (UnitTest, ConsensusTest) in {
     val on = tightNode

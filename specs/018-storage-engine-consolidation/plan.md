@@ -4025,6 +4025,40 @@ Two notes forge left on part 6b, to close before a verdict can cost a node its s
 
 **Tests**: `PowEscalationFeedSpec` (+3), `BlockValidationHeadersSpec` (+1).
 
+#### C5a part 8: the catch-up after a hand-off, on proof of stake (2026-11-16)
+
+A sync hands off at a pivot, and the consensus client's head is above it by 64 blocks at least. A fork choice's
+recovery walked 64 blocks down and no further, so every hand-off ended in a head that could not be reached, which is
+an escalation at once: a loop. The user's decision of 2026-11-15: the gap is closed by an adoption in place of a
+straight extension of the head, in chunks, under `recovery.max-catch-up` (8192); the 64 stays the bound of a branch.
+
+- **What is a straight extension**: the block the walk finds a state at is the block the disk holds the state of, or
+  stands on it by executed blocks kept beside the disk. Nothing of the node's chain is left.
+- **The walk of a fork choice's recovery goes as far as the catch-up covers.** A chain of no more than 64 blocks
+  takes the paths it took. A longer one is caught up over when it is an extension, and is a head that cannot be
+  reached when it is not, or when it is longer than the catch-up covers.
+- **`catchUp`** commits the blocks in place one by one, reading 256 bodies at a time (thousands at once do not fit
+  a heap). It holds no records and moves nothing back. It stops when the consensus client names a head its chain does
+  not lead to, or the node stops; what was committed stays. A body that is not stored ends it there, and the next
+  fork choice goes on from the head. A head the consensus client names before it has sent its block does not stop it
+  (beacon, after code).
+- **A block found invalid on the way leaves the head at the last valid block.** This departs from the user's rule of
+  2026-11-14 (the head goes back to the one the consensus client validated): after a hand-off there is none above the
+  pivot, and the blocks under the head cannot be undone below the block the state began at. **Open to the user.**
+  The invalid block and every block of the chain above it, the head with them, are marked, so that the next fork
+  choice is answered INVALID with the last valid block (beacon, after code: the blocks of the chunks not read were
+  left unmarked, and the head would have been answered as a fault of this node for ever).
+- A restart goes on from where it was: each block is committed in the batch that makes it the head.
+
+**Where the blocks come from** (beacon's map): a sync stores nothing above its pivot; `engine_newPayload` stores by
+hash each payload whose parent it does not know, so a node that ran with its consensus client through the sync has
+them. A gap is a header or a body that is not stored: it waits, and is filled by the importer on the guard (part 9).
+
+**Not done**: a catch-up that commits thousands of blocks and then meets a body that is not stored is counted by the
+watch as one refusal (beacon's note: count the progress of the head as a move).
+
+**Tests**: `HeadMoveOnTheChainSpec` (+9), `StateConfigSpec` (the key).
+
 ### Destructive change (C8a and C8b): the vault protocol blocks
 
 ```

@@ -69,6 +69,9 @@ class StateRecovery(
     state: PathStateStorage,
     val maxBlocks: Int,
     val maxAdoptedBlocks: Int = StateRecovery.DefaultMaxAdoptedBlocks,
+    // how many blocks a straight extension of the head may be caught up over; none beyond an adoption when it is less
+    catchUpBlocks: Int = 0,
+    catchUpChunk: Int = StateRecovery.CatchUpChunk,
     queueSize: Int = StateRecovery.QueueSize,
     coolDown: FiniteDuration = StateRecovery.CoolDown
 )(implicit blockchainConfig: BlockchainConfig)
@@ -77,6 +80,12 @@ class StateRecovery(
 
   require(maxBlocks > 0, s"a recovery covers at least one block, not $maxBlocks")
   require(maxAdoptedBlocks >= maxBlocks, s"an adoption covers no fewer blocks than a recovery ($maxBlocks)")
+  require(catchUpChunk > 0, s"a catch-up commits at least one block at a time, not $catchUpChunk")
+
+  /** How many blocks a fork choice's recovery walks down, at most: as far as a straight extension of the head is caught
+    * up over (`state.recovery.max-catch-up`), and no less than a branch is adopted over.
+    */
+  val maxCatchUp: Int = catchUpBlocks.max(maxAdoptedBlocks)
 
   @volatile private var shut = false
 
@@ -284,13 +293,27 @@ class StateRecovery(
       ticket.finish(outcome)
 
   private def recover(head: ByteString, sink: Sink, why: String, authority: Authority, walksLeft: Int): Outcome =
-    // a fork choice walks as far as a branch is adopted; a payload, as far as its blocks are kept as layers
-    val reach = if authority == Authority.ForkChoice then maxAdoptedBlocks else maxBlocks
+    // a fork choice walks as far as an extension of the head is caught up over; a payload, as far as its blocks are
+    // kept as layers
+    val reach = if authority == Authority.ForkChoice then maxCatchUp else maxBlocks
     walk(head, reach) match
       case Left(outcome) =>
         logEnd(head, why, outcome)
         outcome
       case Right((_, Nil)) => Outcome.AlreadyHeld
+      case Right((held, chain)) if authority == Authority.ForkChoice && chain.size > maxAdoptedBlocks =>
+        // Beyond what a branch is adopted over (C5a part 8; the user's decision of 2026-11-15): only a straight
+        // extension of the head, which is what stands between a sync's hand-off and the consensus client's head.
+        // A branch that leaves the chain keeps its bound: its way back is kept in records, which reach that far.
+        val outcome =
+          if extendsTheHead(held) then catchUp(head, held, chain, sink, why)
+          else
+            Outcome.TooLong(
+              s"${chain.size} blocks below the head ${hex(head)} have no state held, more than the " +
+                s"$maxAdoptedBlocks a branch is adopted over, and they are no extension of this node's head"
+            )
+        logEnd(head, why, outcome)
+        outcome
       case Right((held, chain))
           if authority == Authority.ForkChoice &&
             chain.size + state.heldDepth(refOf(held)).getOrElse(0) > maxBlocks =>
@@ -485,6 +508,83 @@ class StateRecovery(
     logEnd(head, why, outcome)
     outcome
 
+  /** Whether the chain above `held`, a block whose state is held, is a straight extension of the head: `held` is the
+    * block the disk holds the state of, or stands on it by executed blocks kept beside the disk. No block of the node's
+    * chain is left, and nothing is moved back.
+    */
+  private def extendsTheHead(held: BlockHeader): Boolean =
+    forkOf(held).exists(fork => state.isApplied(fork.hash.value))
+
+  /** The catch-up after a sync's hand-off, on proof of stake (spec 018 C5a part 8; the user's decision of 2026-11-15):
+    * the blocks between the head and the head the consensus client names, a straight extension, committed in place one
+    * by one, a chunk of bodies at a time, as far as `state.recovery.max-catch-up`. A hand-off leaves the head at the
+    * pivot, at least 64 blocks below the consensus client's by construction: without this every hand-off would end in a
+    * head that cannot be reached, and in a sync from scratch again.
+    *
+    * It differs from the adoption of a branch ([[adopt]]) where a branch needs what an extension does not:
+    *   - '''no records are held and nothing is moved back'''. Nothing of the node's chain is left. A block found
+    *     invalid on the way, or a fault of this node, leaves the head at the last block committed, which is the last
+    *     valid block of the chain: after a hand-off there is no head the consensus client validated to go back to, and
+    *     the blocks under the head cannot be undone below the block the state began at (beacon). The invalid block and
+    *     what stands on it are handed to the [[Sink]], as ever;
+    *   - '''the bodies are read a chunk at a time''': thousands of blocks at once do not fit a heap.
+    *
+    * It stops when the consensus client names a head that the chain does not lead to, or the node stops; what was
+    * committed stays. A header or a body that is not stored ends it there: the blocks are asked for elsewhere, and the
+    * next fork choice goes on from the head.
+    */
+  private def catchUp(head: ByteString, held: BlockHeader, chain: List[BlockHeader], sink: Sink, why: String): Outcome =
+    log.info(
+      s"[STATE-RECOVERY] Catching up ${chain.size} block(s) in place, ${chain.head.number.value} to " +
+        s"${chain.last.number.value}, for head ${hex(head)} ($why): a straight extension of the head, $catchUpChunk " +
+        "blocks at a time"
+    )
+    // A head the consensus client names whose header is not stored yet does not stop a catch-up (beacon): the fork
+    // choice manager records the head it is told before it looks for its header, as when the consensus client is ahead
+    // of the payloads it has sent. A straight extension of the head has nothing to undo, whichever head comes next.
+    val asked = () =>
+      stillAsked(head, sink) ||
+        sink.requestedHead.exists(requested => reader.getBlockHeaderByHash(BlockHash(requested)).isEmpty)
+    @tailrec
+    def next(left: List[BlockHeader], committed: Int): Outcome =
+      if left.isEmpty then Outcome.Adopted(committed)
+      else if closed then Outcome.Closed
+      else if !asked() then Outcome.Superseded
+      else
+        val (chunk, rest) = left.splitAt(catchUpChunk)
+        bodiesOf(chunk) match
+          case Left(missing) => missing
+          case Right(blocks) =>
+            commitEach(head, blocks, sink, Some(asked)) match
+              case Outcome.Adopted(count)              => next(rest, committed + count)
+              case invalid @ Outcome.Invalid(found, _) =>
+                // The blocks of the chunk above it were handed to the sink with it. Those of the chunks not read yet,
+                // the head among them, stand on it too (beacon): left unmarked, the next fork choice to the head
+                // would find a block of its chain gone, and be answered as a fault of this node for ever.
+                chunk
+                  .find(_.hash.value == found.hash)
+                  .foreach(block => sink.rejectedAbove(block.parentHash.value, rest))
+                invalid
+              case other => other
+    if !asked() then Outcome.Superseded
+    else
+      adopting = Some(Progress(held.number.value, held.number.value, chain.last.number.value))
+      try
+        // the executed blocks kept beside the disk, up to the block the chain stands on, become the head first
+        val refused =
+          try
+            if !state.isApplied(held.hash.value) then
+              writer.moveHeadInPlace(
+                held,
+                reader,
+                refuse = _ => Option.when(closed || !asked())("another head is named, or the node stops")
+              )
+            None
+          catch
+            case fault: StateFault => Some(if asked() then Outcome.NotAdopted(fault.getMessage) else Outcome.Superseded)
+        refused.getOrElse(next(chain, 0))
+      finally adopting = None
+
   /** Whether the consensus client still names `head`, or a block its chain leads to: a head that only extends the
     * branch does not stop its adoption, as go-ethereum goes on inserting a chain its new head extends (beacon).
     */
@@ -507,8 +607,13 @@ class StateRecovery(
   /** The blocks, each committed in place as the head, in order, while the consensus client still names `head` or a
     * block its chain leads to.
     */
-  private def commitEach(head: ByteString, blocks: List[Block], sink: Sink): Outcome =
-    def stillAsked: Boolean = this.stillAsked(head, sink)
+  private def commitEach(
+      head: ByteString,
+      blocks: List[Block],
+      sink: Sink,
+      asked: Option[() => Boolean] = None
+  ): Outcome =
+    def stillAsked: Boolean = asked.fold(this.stillAsked(head, sink))(_())
     @tailrec
     def next(left: List[Block], committed: Int): Outcome =
       left match
@@ -619,6 +724,9 @@ object StateRecovery:
   /** How many blocks an adoption covers at most, by default: `state.recovery.max-blocks`, whose default it is. */
   val DefaultMaxAdoptedBlocks: Int = 64
 
+  /** How many blocks' bodies a catch-up reads at a time: as many as a move of the head writes in a batch. */
+  val CatchUpChunk: Int = 256
+
   /** How far down a branch's chain the block it leaves the held chain at is looked for, at most. */
   private val ForkSearch = 65_536
 
@@ -669,6 +777,11 @@ object StateRecovery:
       * block. A node that started again knows them from no payload.
       */
     def rejected(block: Block, error: BlockExecutionError, above: List[Block]): Unit
+
+    /** More blocks that stand on a block that was [[rejected]], known by their headers only: those of a catch-up's
+      * chunks that were not read. `latestValid` is the parent of the block that was rejected.
+      */
+    def rejectedAbove(latestValid: ByteString, above: List[BlockHeader]): Unit = ()
 
   enum Outcome:
     /** The head's state is held: `executed` blocks were executed for it. */

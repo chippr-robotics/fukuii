@@ -351,6 +351,16 @@ class EngineApiService(
           blockchainWriter.removeBlockByHash(invalid.header.hash).commit()
         }
 
+      // the rest of a catch-up's chain above a block that was rejected: marked and removed as those are (C5a part 8)
+      override def rejectedAbove(
+          latestValid: ByteString,
+          above: List[com.chipprbots.ethereum.domain.BlockHeader]
+      ): Unit =
+        above.foreach { invalid =>
+          markInvalidRecursive(invalid.hash.value, latestValid)
+          blockchainWriter.removeBlockByHash(invalid.hash).commit()
+        }
+
   /** Has the state of the head `hash` names recovered, when this node recovers states: the stored blocks of its chain
     * above the highest one whose state is held are executed again, apart (spec 018 C4d part 3). Asked by a fork choice
     * that names the head, a branch longer than the forward layers may hold is committed in place, the head moved with

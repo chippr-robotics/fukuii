@@ -1111,7 +1111,10 @@ trait EngineApiBuilder extends Logger:
         state,
         maxBlocks = layered,
         // a fork choice's branch longer than that is committed in place, as far as `state.recovery.max-blocks` (C4d part 4)
-        maxAdoptedBlocks = config.recovery.maxBlocks.max(layered)
+        maxAdoptedBlocks = config.recovery.maxBlocks.max(layered),
+        // a straight extension of the head, as after a sync's hand-off, as far as `state.recovery.max-catch-up` (C5a
+        // part 8)
+        catchUpBlocks = config.recovery.maxCatchUp
       )(using blockchainConfig)
     }
 

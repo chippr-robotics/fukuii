@@ -71,7 +71,8 @@ object StateConfig:
       maxBlocks: Int,
       escalationRefusals: Int,
       escalationCooldown: FiniteDuration,
-      forgetGivenUpBranches: Boolean = false
+      forgetGivenUpBranches: Boolean = false,
+      maxCatchUp: Int = 0
   )
 
   enum ReorgDepth:
@@ -118,7 +119,8 @@ object StateConfig:
         maxBlocks = state.getInt("recovery.max-blocks"),
         escalationRefusals = state.getInt("recovery.escalation-refusals"),
         escalationCooldown = state.getDuration("recovery.escalation-cooldown").toScala,
-        forgetGivenUpBranches = state.getBoolean("recovery.forget-given-up-branches")
+        forgetGivenUpBranches = state.getBoolean("recovery.forget-given-up-branches"),
+        maxCatchUp = state.getInt("recovery.max-catch-up")
       ),
       reorgMaxDepth = reorgDepth(state)
     )
