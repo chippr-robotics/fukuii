@@ -534,12 +534,20 @@ class StateIngestDurabilitySpec extends AnyFlatSpec with Matchers:
     stopped.module.pathPublish = Some((pivot, stopped.root))
     val before = stopped.recording.writes.size
 
-    stopped.call(_.onHandoffSampleFailed(new PathHandoffSample.Stopped("a hole")))
+    val counts = PathHandoffSample.Result(sampledAccountLeaves = 4096, sampledStorageRoots = 256, sampledMissing = 2)
+    stopped.call(
+      _.onHandoffSampleFailed(
+        new PathHandoffSample.Stopped("a hole", PathHandoffSample.StopReason.StorageHole, counts)
+      )
+    )
 
     stopped.module.pathPublish shouldBe None
     stopped.recording.writes.size shouldBe before
     stopped.flagSetAfter(before) shouldBe false
-    stopped.parent.receiveAll() shouldBe Seq(SyncProtocol.HealingImpossible)
+    // B-304: its own message, with what stopped it and what was counted, so that the parent counts them in a row
+    stopped.parent.receiveAll() shouldBe Seq(
+      SyncProtocol.HandoffSampleStopped(PathHandoffSample.StopReason.StorageHole, counts)
+    )
   }
 
   it should "throw what a store that failed under the sample threw: healing again does not mend it" taggedAs UnitTest in {

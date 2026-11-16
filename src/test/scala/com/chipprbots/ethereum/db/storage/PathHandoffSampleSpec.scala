@@ -181,8 +181,9 @@ class PathHandoffSampleSpec extends AnyFlatSpec with Matchers:
     s.account(Seq(1), LeafNode(nibbles(63, 1), accountBytes(code = Some(ByteString(kec256(Array[Byte](3)))))))
 
     Seq(false, true).foreach { leftOut =>
-      val thrown = the[IllegalStateException] thrownBy s.sample(root, accountsLeftOut = leftOut)
+      val thrown = the[PathHandoffSample.Stopped] thrownBy s.sample(root, accountsLeftOut = leftOut)
       thrown.getMessage should include("a row of the account trie")
+      thrown.reason shouldBe PathHandoffSample.StopReason.AccountHole
     }
   }
 
@@ -194,9 +195,10 @@ class PathHandoffSampleSpec extends AnyFlatSpec with Matchers:
     val leaf = LeafNode(nibbles(63, 1), accountBytes(Some(ByteString(storageRoot.hash))))
     val root = ByteString(s.account(Seq(), branch(1 -> leaf)).hash)
 
-    val thrown = the[IllegalStateException] thrownBy s.sample(root, accountsLeftOut = true)
+    val thrown = the[PathHandoffSample.Stopped] thrownBy s.sample(root, accountsLeftOut = true)
     thrown.getMessage should include("1 lookups")
     thrown.getMessage should include("a row of the account trie")
+    thrown.reason shouldBe PathHandoffSample.StopReason.AccountHole
   }
 
   it should "count rows left under an account that has no storage as stale: it names no root to look for" taggedAs UnitTest in {
@@ -310,9 +312,13 @@ class PathHandoffSampleSpec extends AnyFlatSpec with Matchers:
 
   it should "stop a hand-off over a storage root that is not where its account names it" taggedAs UnitTest in {
     val s = new State
-    val thrown = the[IllegalStateException] thrownBy s.sample(stateOfATrieWithNoRoot(s))
+    val thrown = the[PathHandoffSample.Stopped] thrownBy s.sample(stateOfATrieWithNoRoot(s))
     thrown.getMessage should include("1 of 1 sampled storage tries have no root")
     thrown.getMessage should include("left no account out")
+    // B-304: what stopped it, and what was counted, go with it to the parent
+    thrown.reason shouldBe PathHandoffSample.StopReason.StorageHole
+    thrown.counts.sampledStorageRoots shouldBe 1
+    thrown.counts.sampledStorageRootsMissing shouldBe 1
   }
 
   it should "count it, and let the hand-off go on, when the sync left accounts out" taggedAs UnitTest in {
@@ -334,8 +340,10 @@ class PathHandoffSampleSpec extends AnyFlatSpec with Matchers:
     wrong.hash should not be inner.hash
     s.storage(owner(1), toInner, wrong)
 
-    val thrown = the[IllegalStateException] thrownBy s.sample(root)
+    val thrown = the[PathHandoffSample.Stopped] thrownBy s.sample(root)
     thrown.getMessage should include("3 lookups of a storage leaf")
+    thrown.reason shouldBe PathHandoffSample.StopReason.StorageHole
+    thrown.counts.sampledMissing shouldBe 3
 
     val result = s.sample(root, accountsLeftOut = true)
     withClue("the two leaves under the wrong row, one of them twice: ")(result.sampledMissing shouldBe 3)
@@ -453,8 +461,9 @@ class PathHandoffSampleSpec extends AnyFlatSpec with Matchers:
     s.account(Seq(2), elsewhere)
 
     Seq(false, true).foreach { leftOut =>
-      val thrown = the[IllegalStateException] thrownBy s.sample(ByteString(root.hash), accountsLeftOut = leftOut)
+      val thrown = the[PathHandoffSample.Stopped] thrownBy s.sample(ByteString(root.hash), accountsLeftOut = leftOut)
       thrown.getMessage should include("1 lookups")
+      thrown.reason shouldBe PathHandoffSample.StopReason.AccountHole
       thrown.getMessage should include("a row of the account trie that is absent or is another node")
     }
   }
@@ -464,8 +473,9 @@ class PathHandoffSampleSpec extends AnyFlatSpec with Matchers:
     val (root, _) = stateWithStorage(s)
     s.paths.deleteAccountNode(Array[Byte](1))
 
-    val thrown = the[IllegalStateException] thrownBy s.sample(root, accountsLeftOut = true)
+    val thrown = the[PathHandoffSample.Stopped] thrownBy s.sample(root, accountsLeftOut = true)
     thrown.getMessage should include("a row of the account trie")
+    thrown.reason shouldBe PathHandoffSample.StopReason.AccountHole
   }
 
   /** `count` leaves in the rows at accounts no root has. */
@@ -485,8 +495,11 @@ class PathHandoffSampleSpec extends AnyFlatSpec with Matchers:
     val s = new State
     val (root, _) = stateWithStorage(s)
     staleLeaves(s, 16)
-    val thrown = the[IllegalStateException] thrownBy s.sample(root)
+    val thrown = the[PathHandoffSample.Stopped] thrownBy s.sample(root)
     thrown.getMessage should include("16 of 17")
+    thrown.reason shouldBe PathHandoffSample.StopReason.AccountMisses
+    thrown.counts.sampledAccountLeaves shouldBe 17
+    thrown.counts.sampledAccountMisses shouldBe 16
   }
 
   /** `count` accounts at the root, each naming a storage root that its trie's root row is not. */
@@ -509,8 +522,10 @@ class PathHandoffSampleSpec extends AnyFlatSpec with Matchers:
   it should "fail loudly when 16 are, and more than 1% of those sampled: more than a sync leaves out" taggedAs UnitTest in {
     val s = new State
     val root = stateOfBrokenTries(s, 16)
-    val thrown = the[IllegalStateException] thrownBy s.sample(root, accountsLeftOut = true)
+    val thrown = the[PathHandoffSample.Stopped] thrownBy s.sample(root, accountsLeftOut = true)
     thrown.getMessage should include("16 of 16 sampled storage tries")
+    thrown.reason shouldBe PathHandoffSample.StopReason.StorageRootMisses
+    thrown.counts.sampledStorageRootsMissing shouldBe 16
     thrown.getMessage should include("more than the accounts a sync leaves out")
   }
 
@@ -526,7 +541,8 @@ class PathHandoffSampleSpec extends AnyFlatSpec with Matchers:
   "The hand-off's sample of a root that is not there" should "fail loudly, whatever the rate" taggedAs UnitTest in {
     val s = new State
     stateWithStorage(s)
-    an[IllegalStateException] should be thrownBy s.sample(ByteString(kec256(Array[Byte](1, 2, 3))))
+    val thrown = the[PathHandoffSample.Stopped] thrownBy s.sample(ByteString(kec256(Array[Byte](1, 2, 3))))
+    thrown.reason shouldBe PathHandoffSample.StopReason.RootAbsent
   }
 
   "The hand-off's sample of rows that are not there at all" should "fail on the root, and not find an empty state" taggedAs UnitTest in {

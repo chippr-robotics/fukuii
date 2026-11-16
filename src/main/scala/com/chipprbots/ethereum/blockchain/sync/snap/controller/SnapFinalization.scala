@@ -526,8 +526,13 @@ private[snap] trait SnapFinalization extends FinalizationApi with ChainDownloadS
     pathPublish = None
     cause match
       case stopped: PathHandoffSample.Stopped =>
-        ctx.log.error("[HANDOFF] the sample of the state stopped the hand-off: escalating for a SNAP restart", stopped)
-        syncController ! SyncProtocol.HealingImpossible
+        ctx.log.error(
+          s"[HANDOFF] the sample of the state stopped the hand-off (${stopped.reason.text}; ${stopped.counts.describe})" +
+            ": escalating for a SNAP restart",
+          stopped
+        )
+        // its own message, so that the parent counts the samples in a row and does not restart for ever (B-304)
+        syncController ! SyncProtocol.HandoffSampleStopped(stopped.reason, stopped.counts)
         Behaviors.same
       case other =>
         ctx.log.error("[HANDOFF] the sample of the state could not be made: the store failed under it", other)

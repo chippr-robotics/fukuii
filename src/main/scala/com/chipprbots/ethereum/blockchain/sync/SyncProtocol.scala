@@ -99,6 +99,17 @@ object SyncProtocol:
     */
   case object HealingImpossible extends SyncProtocolMsg with SyncControllerReply
 
+  /** The hand-off's sample of the rows a sync wrote stopped the hand-off on the unified state layout
+    * ([[com.chipprbots.ethereum.db.storage.PathHandoffSample.Stopped]]): the rows are not the whole of the pivot's
+    * state. SyncController restarts SNAP as for [[HealingImpossible]], and counts these: after
+    * [[HandoffSampleFailures.Bound]] in a row it stops restarting (B-304).
+    */
+  final case class HandoffSampleStopped(
+      reason: com.chipprbots.ethereum.db.storage.PathHandoffSample.StopReason,
+      counts: com.chipprbots.ethereum.db.storage.PathHandoffSample.Result
+  ) extends SyncProtocolMsg
+      with SyncControllerReply
+
   /** SNAP's header download followed another chain than the branch the pivot is to be on (B-307): the sync is stopped,
     * what it wrote is cleared, and it is begun again.
     */

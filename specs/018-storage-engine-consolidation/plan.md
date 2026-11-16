@@ -4360,6 +4360,56 @@ the block tried again at once, no peer blamed, nothing fetched when a header in 
 a fork recovery; a lost answer), `BlockFetcherSpec` (+2: a round trip with a body that is not its header's, and the
 matching in order).
 
+#### C5a, a gate on part 10: a hand-off's sample that keeps failing does not restart the sync for ever (B-304) (2026-11-16)
+
+Beacon's note on part 5b. A sample that stops the hand-off restarts SNAP at a newer pivot, which heals and samples
+again. Only the same pivot is refused a second time, so a failure that is systematic (a fault in how the sync writes
+its rows, not in one pivot's) would repeat on every pivot, each a whole heal, with nothing said but a WARN each time.
+
+- **What stopped it goes with it**: `PathHandoffSample.Stopped` carries the rule (`StopReason`: the root absent, a
+  hole in the account trie, too many account leaves of another root, a hole in a storage trie on a sync that left no
+  account out, too many storage tries with no root) and the counts made up to there (the `Result` a sample that
+  passes returns).
+- **Its own message**: the finalization sends `HandoffSampleStopped(reason, counts)` to the sync controller in place
+  of `HealingImpossible`. Restarted as before for the first two; a stale one during a pivot bootstrap is dropped as
+  `HealingImpossible` is.
+- **Counted in a row** (`HandoffSampleFailures`, outside the split's modules): the third stops the restarts. The sync
+  controller logs an ERROR with the reason and the sample's counts and stops, as for a SNAP controller that crashed:
+  an operator restarts the node, which begins the count again (it is kept in memory). Samples of any reason count
+  together: a systematic fault need not stop each sample by the same rule.
+- **A hand-off that was made begins it again** (`SnapSyncFinalized`); another reason a sync is restarted between two
+  samples does not, since it is no evidence that the rows are now whole.
+- **Metrics**: `db.state.handoff.sample.stopped` by `reason`, and `db.state.handoff.sample.stopped.consecutive`.
+
+It cannot fire before part 10: `handoff` is `None` until a sync starts on the unified layout.
+
+**Tests**: `HandoffSampleFailuresSpec` (4), `PathHandoffSampleSpec` (each rule that stops a hand-off pins its reason,
+and three their counts), `StateIngestDurabilitySpec` (the message, in place of `HealingImpossible`),
+`SyncControllerSpec` (+2: two restarts, then the controller stops with the ERROR; the count from one again after a
+hand-off).
+
+#### C5a, a gate on part 10: the escalation's tests left from B-307 (B-311), and task #68 (B-309) (2026-11-16)
+
+Tests only; no behaviour changes. **The escalation in the sync controller** (`SyncControllerSpec`, +3):
+- the import and the audit are stopped once the clear has ended, not before (a clear that could not begin leaves them
+  as they were), and the SNAP of the first escalation is told its pivot is no lower than the branch's first block (the
+  retry's was pinned by c1, the first escalation's was not);
+- a verdict that arrives while SNAP's backfill still runs stops the backfill first and is handed on to regular sync,
+  which gives the state up;
+- the clear that begins a sync again for the branch (c1) fails: the controller stops and begins no sync over rows half
+  cleared, as it does when the escalation's own clear fails (that case was pinned by 7b).
+The backfill that resumes on its own at a start (`runningRegularSyncWithStandaloneBackfill`) takes the same arm and
+is not pinned separately.
+
+**Task #68** (B-309), `SyncControllerSpec` "leave SNAP's resume alone once SNAP has taken over the best block of an
+upgraded node", which failed on staging and was on the SNAP SyncTest job's allow-list (spec 016 FR-033): **the test's,
+not the code's**. It seeded the accounts done with no storage or code-hash task file, and SNAP's resume rightly
+restarts the accounts phase over a task file that is lost (a lost file must not complete its phase), clearing the flag
+the test then read. The seed now carries both files, empty with a count of zero (a chain with no contracts). Not
+CI-invisible: the test is `SyncTest`, outside `testEssential`, and the SyncTest job tolerated it by name. It passes, so
+the entry is removed as spec 016 T007 says (a passing entry is a stale list); the allow-list is empty, and its pin
+(`test_synctest_report.py`) says so.
+
 ### Destructive change (C8a and C8b): the vault protocol blocks
 
 ```
