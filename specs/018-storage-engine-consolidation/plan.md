@@ -4423,6 +4423,42 @@ CI-invisible: the test is `SyncTest`, outside `testEssential`, and the SyncTest 
 the entry is removed as spec 016 T007 says (a passing entry is a stale list); the allow-list is empty, and its pin
 (`test_synctest_report.py`) says so.
 
+#### C5a, a gate on part 10: a refresh after an escalation stays on the branch (B-310) (2026-11-16)
+
+Forge's follow-ups to c2 (review of #1870), designed with forge before code. Its read found a worse case than the
+three it had left: **a refresh that backtracked under the branch's first block took a pivot with no check of the
+branch** (the bootstrap asks for the branch only at or above its height), ended the wait for a peer on it as if one
+had served it, and the check at the end of the sync then passed it with a WARN: the requirement ended without the
+ERROR the user decided on.
+
+- **A failed refresh feeds the peers on another chain** to the actor's one `OffBranchPeers` (shared now by the
+  selection and the refresh, through `OffBranchPeersApi`), and begins or goes on with the 30-minute wait: its end drops
+  the requirement with the ERROR, as at the start.
+- **It does not backtrack** when the bootstrap found no peer on the branch, nor to a block under the branch's first
+  one: the pivot is chosen again in 5 s, without those peers. A backtrack by number asked the same peers again.
+- **A refresh's target is never under the branch's first block** (`PivotAnchor.refreshFloor`) on a chain that picks
+  it from the peers. A pivot that is at the branch's first block is checked on it.
+- **A refresh that finds no target at all** (every peer left is one on another chain) ends the wait when it has run
+  out (`PivotAnchor.waitExpired`): nothing else would, since a bootstrap is never asked.
+- **A bootstrap under the branch does not end the wait** (`branchServed` with the height it served).
+- **A peer is held only while a sync is bound to a branch** (forge): a requirement that ended at the download's gate,
+  at the end of a sync or at a hand-off left peers held for up to ten minutes.
+- **Both measures of the network's best leave held peers out**: a peer on another chain says nothing of the branch's
+  head, for a refresh's target, a resume's drift or a roll's window. With none left the best is none, and the wait
+  above bounds it.
+- **A peer at rest for headers is asked for bodies** (both causes: empty headers, and another chain at the branch's
+  height): a body is checked against the header stored, and its hash came from a header that passed the branch's gate.
+  **Not for receipts** (forge): an empty receipts reply blacklists its peer, which would blame a peer that follows
+  another chain honestly, and a peer that has no headers to give has no receipts either. The comment that said bodies
+  and receipts were unaffected while the code kept both from it now says what the code does.
+
+**Left (forge), B-320**: the healing serve-root and recent-root bootstraps drop the peers they found on another chain,
+and the healing one takes its target from every peer's height; `currentNetworkBestFromSnapPeers` does not filter
+`forkAccepted`, unlike its siblings.
+
+**Tests**: `PivotAnchorSpec` (+4, one case changed: with no sync bound, no peer is held), `PivotRefresherSpec` (+5),
+`PivotSelectorSpec` (+1, one case binds a requirement), `ChainDownloaderHeaderCheckSpec` (+1).
+
 ### Destructive change (C8a and C8b): the vault protocol blocks
 
 ```
