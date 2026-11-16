@@ -106,6 +106,59 @@ class AppStateStorage(val dataSource: DataSource) extends TransactionalKeyValueS
     */
   def forgetStateEscalationLast(): DataSourceBatchUpdate = remove(Keys.StateEscalationLast)
 
+  /** The entries of the index by number that a clear still has to delete ([[pathstate.StateResetTrim]]), or none. */
+  def getStateResetTrim(): Option[pathstate.StateResetTrim] =
+    get(Keys.StateResetTrim).map(pathstate.StateResetTrim.decode)
+
+  /** The highest height the index by number may have an entry at: the best block, and what a sync's header download
+    * reached or aimed at.
+    */
+  def highestIndexedHeight(numberOf: ByteString => Option[BigInt] = _ => None): BigInt =
+    Seq(
+      getBestBlockNumber(),
+      getBackfillBestHeader(),
+      getBackfillTarget(),
+      getSnapSyncPivotBlock().getOrElse(BigInt(0)),
+      // a pivot's header is stored, with its place in the index, before the pivot's number is written down: the
+      // target it was fetched for, and the header its hash names, say where (vault)
+      getSnapSyncBootstrapTarget().getOrElse(BigInt(0)),
+      getSnapSyncPivotHash().flatMap(numberOf).getOrElse(BigInt(0))
+    ).max
+
+  /** The update that sets what the header download keeps of its run back to `commonBlock` (B-303; vault): its cursors
+    * no higher than it, with the hash of the block there, and no target. Left as they were after a clear for an
+    * escalation, the download resumes above the chain that was left and refuses every header of the chain it is to
+    * follow, since none stands on the tip it remembers.
+    *
+    * @param hashAt
+    *   the index of blocks by number
+    */
+  private[storage] def headerCursorsBackTo(
+      commonBlock: BigInt,
+      hashAt: BigInt => Option[ByteString]
+  ): DataSourceBatchUpdate =
+    val reached = getBackfillBestHeader().min(commonBlock)
+    // a cursor at a height the index has nothing at is no place to go on from: the download begins again (vault)
+    val (header, tip) = hashAt(reached) match
+      case Some(hash) => (reached, putBackfillBestHeaderHash(hash))
+      case None       => (BigInt(0), remove(Keys.BackfillBestHeaderHash))
+    putBackfillBestHeader(header)
+      .and(tip)
+      .and(putBackfillBestBody(getBackfillBestBody().min(header)))
+      .and(putBackfillBestReceipt(getBackfillBestReceipt().min(header)))
+      .and(update(toRemove = Seq(Keys.BackfillTarget, Keys.BackfillTargetHash), toUpsert = Nil))
+
+  /** The update that says the entries of [[pathstate.StateResetTrim]] are deleted. Written synced, with
+    * [[removeStateResetPending]].
+    */
+  private[storage] def removeStateResetTrim(): DataSourceBatchUpdate = remove(Keys.StateResetTrim)
+
+  /** The update that records what a clear is to delete of the index by number: with the clear's first batch, and again
+    * when an interrupted clear is finished, with the heights a sync has reached since.
+    */
+  private[storage] def putStateResetTrim(trim: pathstate.StateResetTrim): DataSourceBatchUpdate =
+    put(Keys.StateResetTrim, pathstate.StateResetTrim.encode(trim))
+
   /** Whether a clear of the state was begun and not seen to its end: its rows may be there still, with no anchor over
     * them ([[pathstate.StateResetPending]]).
     */
@@ -132,6 +185,10 @@ class AppStateStorage(val dataSource: DataSource) extends TransactionalKeyValueS
     *     owed;
     *   - the best block is the genesis again, as on a datadir that has synced nothing. The headers, the bodies and the
     *     index of the chain it had stay: they are of blocks, not of the state;
+    *   - for an escalation, '''what is to be deleted of the index of blocks by number'''
+    *     ([[pathstate.StateResetTrim]]), and the header download's cursors set back to the block the two chains share
+    *     (B-303). The headers, the bodies and the weights of the chain that was left stay, by their hashes: they are of
+    *     blocks, and nothing reads them as the chain;
     *   - the escalation, when there is one, the branch it gives the state up for, when it is for one, and the mark that
     *     the rows are still to be deleted. In the same write as the clear: a branch recorded with no clear would never
     *     be escalated for, and a clear with no branch recorded could be repeated for it.
@@ -147,9 +204,11 @@ class AppStateStorage(val dataSource: DataSource) extends TransactionalKeyValueS
       genesisHash: ByteString,
       atMillis: Long,
       escalation: Option[pathstate.StateEscalation],
-      givenUpFor: Option[pathstate.GivenUpBranch] = None
+      givenUpFor: Option[pathstate.GivenUpBranch] = None,
+      trim: Option[(pathstate.StateResetTrim, BigInt => Option[ByteString])] = None
   ): DataSourceBatchUpdate =
     require(givenUpFor.isEmpty || escalation.isDefined, "a branch is given up for by an escalation only")
+    require(trim.isEmpty || escalation.isDefined, "the index by number is trimmed by an escalation only")
     val marked = escalation.foldLeft(put(Keys.StateResetPending, pathstate.StateResetPending.encode(atMillis))) {
       (batch, last) => batch.and(put(Keys.StateEscalationLast, pathstate.StateEscalation.encode(last)))
     }
@@ -158,7 +217,14 @@ class AppStateStorage(val dataSource: DataSource) extends TransactionalKeyValueS
         put(Keys.StateEscalationGivenUp, pathstate.GivenUpBranches.encode(getStateEscalationGivenUp() + branch))
       )
     }
-    stateClearRemovals(Some(genesisHash)).and(recorded)
+    // B-303: what is to be deleted of the index by number is written down here, and the header download's cursors are
+    // set back, in the same write as the clear: a kill after it finds both, and deletes the entries at the next start
+    val trimmed = trim.foldLeft(recorded) { case (batch, (above, hashAt)) =>
+      batch
+        .and(putStateResetTrim(above))
+        .and(headerCursorsBackTo(above.commonBlock, hashAt))
+    }
+    stateClearRemovals(Some(genesisHash)).and(trimmed)
 
   /** What [[stateClearBatch]] removes and sets back, without its marks: also what the end of an interrupted clear
     * writes again before it deletes the rows ([[pathstate.PathStateStorage.finishPendingClear]]), since a sync that ran
@@ -1103,6 +1169,7 @@ object AppStateStorage:
     val StateEscalationLast = com.chipprbots.ethereum.db.storage.pathstate.StateEscalation.Key
     val StateEscalationGivenUp = com.chipprbots.ethereum.db.storage.pathstate.GivenUpBranches.Key
     val StateResetPending = com.chipprbots.ethereum.db.storage.pathstate.StateResetPending.Key
+    val StateResetTrim = com.chipprbots.ethereum.db.storage.pathstate.StateResetTrim.Key
     val StateChangesetPrunedTo = "state.changeset.pruned-to"
     val StateLayout = com.chipprbots.ethereum.db.storage.pathstate.StateLayout.Key
     val ChainWeightInvariant = "chain.weight.invariant"

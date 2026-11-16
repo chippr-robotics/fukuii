@@ -142,7 +142,8 @@ class ClearForResyncSpec extends AnyFlatSpec with Matchers:
       (first should not).include("state.layout")
       // the rows and the records, then what a sync kept that is of them: its ranges, its walk's queue, the flat
       // copies, the accounts it left out and the storage tries it marked done (two ranges of the application state)
-      source.writes.tail shouldBe ClearRanges :+ "synced[-state.reset-pending]"
+      // and, for an escalation, the entries of the index by number above the block the chains share (B-303)
+      source.writes.tail shouldBe ClearRanges :+ "batch[]" :+ "synced[-state.reset-pending,-state.reset-trim-above]"
     }
 
   it should "change nothing when its first batch fails" taggedAs UnitTest in {
@@ -212,7 +213,7 @@ class ClearForResyncSpec extends AnyFlatSpec with Matchers:
       source.writes.head should startWith("synced[")
       source.writes.head should include("-SnapSyncAccountsComplete")
       (source.writes.head should not).include("state.reset-pending")
-      source.writes.tail shouldBe ClearRanges :+ "synced[-state.reset-pending]"
+      source.writes.tail shouldBe ClearRanges :+ "batch[]" :+ "synced[-state.reset-pending,-state.reset-trim-above]"
       rowsLeft(source) shouldBe Map("v" -> 0, "t" -> 0, "u" -> 0)
       chain.appState.isStateResetPending() shouldBe false
       chain.appState.getStateEscalationLast() shouldBe Some(escalation)
@@ -282,3 +283,244 @@ class ClearForResyncSpec extends AnyFlatSpec with Matchers:
       rowsLeft(source) shouldBe before
       chain.appState.isStateResetPending() shouldBe true
   }
+
+  // B-303 (vault): after a clear for an escalation the index of blocks by number and the header download's cursors
+  // named the chain that was left, above the block it shares with the chain the node is to follow
+
+  /** The chain of [[followed]] (blocks 1 to 4) over a genesis that is indexed, with a weight stored for each block up
+    * to `weighedTo` and a header download that reached its head.
+    */
+  private def downloaded(source: EphemDataSource = EphemDataSource(), weighedTo: Int = 4): CanonicalChainOnPositions =
+    val chain = followed(source)
+    chain.hashesByNumber.put(0, genesisHash).commit()
+    val weights = new com.chipprbots.ethereum.db.storage.ChainWeightStorage(chain.source)
+    (0 to weighedTo).foreach { height =>
+      val hash = chain.hashesByNumber.get(height).get
+      weights.put(hash, com.chipprbots.ethereum.domain.ChainWeight.totalDifficultyOnly(100 + height)).commit()
+    }
+    chain.appState
+      .putBackfillBestHeader(4)
+      .and(chain.appState.putBackfillBestHeaderHash(chain.head.hash.value))
+      .and(chain.appState.putBackfillBestBody(4))
+      .and(chain.appState.putBackfillBestReceipt(1))
+      .and(chain.appState.putBackfillTarget(4))
+      .and(chain.appState.putBackfillTargetHash(chain.head.hash.value))
+      .commit()
+    chain
+
+  private def indexed(chain: CanonicalChainOnPositions, upTo: Int = 8): Seq[Int] =
+    (0 to upTo).filter(height => chain.hashesByNumber.get(height).isDefined)
+
+  private def refused(first: Int): GivenUpBranch = GivenUpBranch(first, ByteString(Array.fill[Byte](32)(0x21)))
+
+  "The index of blocks by number, at a clear for an escalation" should "lose every height above the block the refused branch stands on, and the header download go back to it" taggedAs
+    UnitTest in {
+      val chain = downloaded()
+      val shared = chain.hashesByNumber.get(3).get
+      indexed(chain) shouldBe Seq(0, 1, 2, 3, 4)
+      // the branch leaves the chain above block 3: its first block is at height 4
+      chain.state.clearForResync(genesisHash, escalation.atMillis, Some(escalation), Some(refused(4)))
+      indexed(chain) shouldBe Seq(0, 1, 2, 3)
+      chain.appState.getBackfillBestHeader() shouldBe 3
+      chain.appState.getBackfillBestHeaderHash() shouldBe Some(shared)
+      chain.appState.getBackfillBestBody() shouldBe 3
+      // a cursor that was lower stays where it was
+      chain.appState.getBackfillBestReceipt() shouldBe 1
+      chain.appState.getBackfillTarget() shouldBe 0
+      chain.appState.getBackfillTargetHash() shouldBe None
+      chain.appState.getStateResetTrim() shouldBe None
+      // the blocks of the chain that was left are the node's still, by their hashes
+      chain.reader.getBlockHeaderByHash(chain.head.hash) shouldBe Some(chain.head)
+    }
+
+  it should "lose, on proof of stake, what is above the block that was finalized, and with none everything above the genesis" taggedAs
+    UnitTest in {
+      val finalized = downloaded()
+      finalized.appState.putStateFinalized(FinalizedBlock(1, finalized.hashesByNumber.get(1).get)).commit()
+      finalized.state.clearForResync(genesisHash, escalation.atMillis, Some(escalation))
+      indexed(finalized) shouldBe Seq(0, 1)
+      finalized.appState.getBackfillBestHeader() shouldBe 1
+
+      val none = downloaded()
+      none.state.clearForResync(genesisHash, escalation.atMillis, Some(escalation))
+      indexed(none) shouldBe Seq(0)
+      none.appState.getBackfillBestHeader() shouldBe 0
+      none.appState.getBackfillBestHeaderHash() shouldBe Some(genesisHash)
+    }
+
+  it should "go down to a block whose weight is stored: the header download stores nothing on one that has none" taggedAs UnitTest in {
+    val chain = downloaded(weighedTo = 1)
+    chain.state.clearForResync(genesisHash, escalation.atMillis, Some(escalation), Some(refused(4)))
+    indexed(chain) shouldBe Seq(0, 1)
+    chain.appState.getBackfillBestHeader() shouldBe 1
+  }
+
+  it should "lose what a header download stored above the best block, a chunk at a time" taggedAs UnitTest in {
+    val source = new Recording
+    val chain = downloaded(source)
+    // a sync was under way when the node gave its state up: headers above the best block, and a target far above
+    val stale = ByteString(Array.fill[Byte](32)(0x44))
+    Seq(5, 6, 7, 20001)
+      .foldLeft(chain.appState.putBackfillBestHeader(7))((batch, height) =>
+        batch.and(chain.hashesByNumber.put(height, stale))
+      )
+      .and(chain.appState.putBackfillTarget(2 * PathStateStorage.IndexTrimChunk + 5))
+      .commit()
+    source.writes = Vector.empty
+    chain.state.clearForResync(genesisHash, escalation.atMillis, Some(escalation), Some(refused(4)))
+    indexed(chain) shouldBe Seq(0, 1, 2, 3)
+    chain.hashesByNumber.get(20001) shouldBe None
+    // heights 4 to 20005 in chunks of 10000: three writes, between the range deletes and the last synced write
+    source.writes.count(_ == "batch[]") shouldBe 3
+    source.writes.last shouldBe "synced[-state.reset-pending,-state.reset-trim-above]"
+  }
+
+  it should "lose what the header download stored above the best block when only its cursor says how far" taggedAs UnitTest in {
+    val chain = downloaded()
+    val stale = ByteString(Array.fill[Byte](32)(0x44))
+    // the cursor is at 7; the best block and the target are at 4
+    Seq(5, 6, 7)
+      .foldLeft(chain.appState.putBackfillBestHeader(7))((batch, height) =>
+        batch.and(chain.hashesByNumber.put(height, stale))
+      )
+      .commit()
+    chain.state.clearForResync(genesisHash, escalation.atMillis, Some(escalation), Some(refused(4)))
+    indexed(chain) shouldBe Seq(0, 1, 2, 3)
+  }
+
+  it should "be left as it is by a clear that is no escalation" taggedAs UnitTest in {
+    val chain = downloaded()
+    chain.state.clearForResync(genesisHash, 1L, None)
+    indexed(chain) shouldBe Seq(0, 1, 2, 3, 4)
+    chain.appState.getBackfillBestHeader() shouldBe 4
+    chain.appState.getBackfillTarget() shouldBe 4
+  }
+
+  it should "be trimmed at the start that follows a kill, with what a sync stored meanwhile" taggedAs UnitTest in {
+    val source = new Recording
+    val chain = downloaded(source)
+    source.failing = Some("range")
+    an[IllegalStateException] should be thrownBy
+      chain.state.clearForResync(genesisHash, escalation.atMillis, Some(escalation), Some(refused(4)))
+    source.failing = None
+    // the first batch is written: what is to be deleted is recorded, the cursors are back, the entries are still there
+    chain.appState.getStateResetTrim() shouldBe Some(StateResetTrim(3, 4))
+    chain.appState.getBackfillBestHeader() shouldBe 3
+    indexed(chain) shouldBe Seq(0, 1, 2, 3, 4)
+    // the node went on, and a header download stored a header above the shared block and moved its cursor
+    chain.hashesByNumber
+      .put(4, ByteString(Array.fill[Byte](32)(0x55)))
+      .and(chain.appState.putBackfillBestHeader(4))
+      .and(chain.appState.putBackfillTarget(4))
+      .commit()
+
+    val again = new PathStateStorage(new PathNodeStorage(source), chain.appState)
+    again.finishPendingClear(Some(genesisHash)) shouldBe true
+    indexed(chain) shouldBe Seq(0, 1, 2, 3)
+    chain.appState.getBackfillBestHeader() shouldBe 3
+    chain.appState.getBackfillBestHeaderHash() shouldBe chain.hashesByNumber.get(3)
+    chain.appState.getBackfillTarget() shouldBe 0
+    chain.appState.getStateResetTrim() shouldBe None
+    chain.appState.isStateResetPending() shouldBe false
+  }
+
+  // vault, after code: a sync that ran between a clear's first batch and the start that finishes it stores entries above
+  // what the clear wrote down
+  it should "lose, at the start that follows a kill, what a sync stored above the heights the clear wrote down" taggedAs UnitTest in {
+    val source = new Recording
+    val chain = downloaded(source)
+    source.failing = Some("range")
+    an[IllegalStateException] should be thrownBy
+      chain.state.clearForResync(genesisHash, escalation.atMillis, Some(escalation), Some(refused(4)))
+    source.failing = None
+    chain.appState.getStateResetTrim() shouldBe Some(StateResetTrim(3, 4))
+    val stale = ByteString(Array.fill[Byte](32)(0x55))
+    Seq(4, 5, 6, 7)
+      .foldLeft(chain.appState.putBackfillBestHeader(6))((batch, height) =>
+        batch.and(chain.hashesByNumber.put(height, stale))
+      )
+      // a pivot's header at 7, stored with its place in the index before the pivot's number is written down
+      .and(chain.appState.putSnapSyncBootstrapTarget(7))
+      .commit()
+    new PathStateStorage(new PathNodeStorage(source), chain.appState)
+      .finishPendingClear(Some(genesisHash)) shouldBe true
+    indexed(chain) shouldBe Seq(0, 1, 2, 3)
+    chain.appState.getStateResetTrim() shouldBe None
+  }
+
+  it should "reach as high as a pivot whose header is stored, by the target it was fetched for or by its hash" taggedAs UnitTest in {
+    val byTarget = downloaded()
+    val stale = ByteString(Array.fill[Byte](32)(0x66))
+    byTarget.hashesByNumber.put(8, stale).and(byTarget.appState.putSnapSyncBootstrapTarget(8)).commit()
+    byTarget.state.clearForResync(genesisHash, escalation.atMillis, Some(escalation), Some(refused(4)))
+    indexed(byTarget) shouldBe Seq(0, 1, 2, 3)
+
+    val byHash = downloaded()
+    val pivot = byHash.headerOf(8, byHash.head.stateRoot.value, salt = 9)
+    byHash.headersByHash
+      .put(pivot.hash.value, pivot)
+      .and(byHash.hashesByNumber.put(8, pivot.hash.value))
+      .and(byHash.appState.putSnapSyncPivotHash(pivot.hash.value))
+      .commit()
+    byHash.state.clearForResync(genesisHash, escalation.atMillis, Some(escalation), Some(refused(4)))
+    indexed(byHash) shouldBe Seq(0, 1, 2, 3)
+  }
+
+  it should "begin the header download again where the index has nothing at its cursor" taggedAs UnitTest in {
+    val chain = downloaded()
+    // the cursor says 2, and the index has no block there
+    chain.hashesByNumber.remove(2).and(chain.appState.putBackfillBestHeader(2)).commit()
+    chain.state.clearForResync(genesisHash, escalation.atMillis, Some(escalation), Some(refused(4)))
+    chain.appState.getBackfillBestHeader() shouldBe 0
+    chain.appState.getBackfillBestHeaderHash() shouldBe None
+    chain.appState.getBackfillBestBody() shouldBe 0
+    chain.appState.getBackfillBestReceipt() shouldBe 0
+  }
+
+  it should "leave a cursor that was below the shared block where it was" taggedAs UnitTest in {
+    val chain = downloaded()
+    chain.appState
+      .putBackfillBestHeader(2)
+      .and(chain.appState.putBackfillBestHeaderHash(chain.hashesByNumber.get(2).get))
+      .and(chain.appState.putBackfillBestBody(2))
+      .commit()
+    chain.state.clearForResync(genesisHash, escalation.atMillis, Some(escalation), Some(refused(4)))
+    chain.appState.getBackfillBestHeader() shouldBe 2
+    chain.appState.getBackfillBestHeaderHash() shouldBe chain.hashesByNumber.get(2)
+    chain.appState.getBackfillBestBody() shouldBe 2
+  }
+
+  it should "not start over a record of the trim that cannot be read" taggedAs UnitTest in {
+    val source = new Recording
+    val chain = downloaded(source)
+    source.failing = Some("range")
+    an[IllegalStateException] should be thrownBy
+      chain.state.clearForResync(genesisHash, escalation.atMillis, Some(escalation), Some(refused(4)))
+    source.failing = None
+    source.update(
+      Seq(
+        DataSourceUpdate(
+          Namespaces.AppStateNamespace,
+          Nil,
+          Seq(
+            scala.collection.immutable.ArraySeq.unsafeWrapArray(StateResetTrim.Key.getBytes) ->
+              scala.collection.immutable.ArraySeq.unsafeWrapArray("v9:1".getBytes)
+          )
+        )
+      )
+    )
+    val refusedStart = the[IllegalStateException] thrownBy
+      new PathStateStorage(new PathNodeStorage(source), chain.appState).finishPendingClear(Some(genesisHash))
+    refusedStart.getMessage should include("state.reset-trim-above")
+    // nothing was deleted: the mark stands for the start that follows a mend
+    chain.appState.isStateResetPending() shouldBe true
+    indexed(chain) shouldBe Seq(0, 1, 2, 3, 4)
+  }
+
+  "The record of what a clear deletes of the index" should "be read back as it was written, and be an error when it cannot be read" taggedAs
+    UnitTest in {
+      StateResetTrim.decode(StateResetTrim.encode(StateResetTrim(2, 20005))) shouldBe StateResetTrim(2, 20005)
+      StateResetTrim.encode(StateResetTrim(0, 7)) shouldBe "v1:0:7"
+      for unreadable <- Seq("", "v2:0:7", "v1:0", "v1:x:7", "v1:0:-7", "v1::7")
+      do withClue(s"'$unreadable': ")(an[IllegalStateException] should be thrownBy StateResetTrim.decode(unreadable))
+    }

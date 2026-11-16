@@ -18,6 +18,9 @@ import com.chipprbots.ethereum.db.dataSource.DataSourceBatchUpdate
 import com.chipprbots.ethereum.db.dataSource.DataSourceUpdateOptimized
 import com.chipprbots.ethereum.db.dataSource.DataUpdate
 import com.chipprbots.ethereum.db.storage.AppStateStorage
+import com.chipprbots.ethereum.db.storage.BlockHeadersStorage
+import com.chipprbots.ethereum.db.storage.BlockNumberMappingStorage
+import com.chipprbots.ethereum.db.storage.ChainWeightStorage
 import com.chipprbots.ethereum.db.storage.DecodedNodeCache
 import com.chipprbots.ethereum.db.storage.MptStorage
 import com.chipprbots.ethereum.db.storage.Namespaces
@@ -1000,8 +1003,10 @@ final class PathStateStorage(
         "a clear of the state for a sync from scratch",
         nanos => told("the wait for the state lock")(settings.observer.lockWaited(nanos))
       ) {
+        val index = new BlockNumberMappingStorage(dataSource)
+        val trim = escalation.map(_ => (trimAbove(givenUpFor, index), (height: BigInt) => index.get(height)))
         val begins: Seq[DataUpdate] =
-          appState.stateClearBatch(genesisHash, atMillis, escalation, givenUpFor).updates
+          appState.stateClearBatch(genesisHash, atMillis, escalation, givenUpFor, trim).updates
         clock.inFlightToNoState(dataSource.updateSync(begins))
         // executed blocks kept beside a state that is gone are of no state, and neither is what was derived from its
         // records, the fault that was found in it, or the block that was finalized on it
@@ -1011,9 +1016,70 @@ final class PathStateStorage(
         faulted = None
         named = None
         deleteEveryRowAndRecord()
-        appState.removeStateResetPending().commitSync()
+        deleteTheIndexAboveTheCommonBlock()
+        appState.removeStateResetTrim().and(appState.removeStateResetPending()).commitSync()
       }
     finally moves.unlock()
+
+  /** What a clear for an escalation deletes of the index of blocks by number (B-303; vault's design).
+    *
+    * '''The block the two chains share''': on proof of work, the block under the first block of the refused branch; on
+    * proof of stake, the block that was finalized on the state that is given up, which no chain the consensus client
+    * names leaves; where neither is known, the genesis. It is taken no higher than the index reaches, and lowered to a
+    * block whose weight is stored, as far as [[PathStateStorage.CommonBlockWalk]] blocks and then to the genesis: the
+    * header download works out each header's weight from its parent's, and stores nothing on a block that has none.
+    */
+  private def trimAbove(givenUpFor: Option[GivenUpBranch], index: BlockNumberMappingStorage): StateResetTrim =
+    val upper = highestIndexedHeight()
+    val known = givenUpFor
+      .map(_.number - 1)
+      .orElse(appState.getStateFinalized().map(_.number))
+      .getOrElse(BigInt(0))
+      .max(0)
+      .min(upper)
+    val weights = new ChainWeightStorage(dataSource)
+    def weighed(height: BigInt): Boolean = index.get(height).exists(weights.get(_).isDefined)
+    val common = Iterator
+      .iterate(known)(_ - 1)
+      .take(PathStateStorage.CommonBlockWalk)
+      .takeWhile(_ > 0)
+      .find(weighed)
+      .getOrElse(BigInt(0))
+    if common == 0 && known > 0 then
+      log.warn(
+        s"[STATE-CLEAR] No block with a stored weight within ${PathStateStorage.CommonBlockWalk} blocks below block " +
+          s"$known, which the chain that was left shares with the one to follow: the index of blocks by number is " +
+          s"deleted from the genesis up to block $upper, and the headers are downloaded again."
+      )
+    StateResetTrim(common, upper)
+
+  // the highest height the index by number may have an entry at, the stored header of a pivot named by hash with it
+  private def highestIndexedHeight(): BigInt =
+    val headers = new BlockHeadersStorage(dataSource)
+    appState.highestIndexedHeight(hash => headers.get(hash).map(_.number.value))
+
+  // The entries of the index by number that [[StateResetTrim]] names, deleted a chunk at a time: the keys of the index
+  // are not in the order of the heights, so no range delete says "above a height" (vault). Deleting one that is not
+  // there changes nothing, so it is repeated whole after a kill. Not synced: whoever calls this writes synced after.
+  private def deleteTheIndexAboveTheCommonBlock()(using StateLockHeld): Unit =
+    appState.getStateResetTrim().foreach { trim =>
+      val index = new BlockNumberMappingStorage(dataSource)
+      val heights = trim.upper - trim.commonBlock
+      if heights > PathStateStorage.IndexTrimSaid then
+        log.info(
+          s"[STATE-CLEAR] Deleting the index of blocks by number above block ${trim.commonBlock}: $heights heights"
+        )
+      Iterator
+        .iterate(trim.commonBlock + 1)(_ + PathStateStorage.IndexTrimChunk)
+        .takeWhile(_ <= trim.upper)
+        .zipWithIndex
+        .foreach { (from, chunk) =>
+          val to = (from + PathStateStorage.IndexTrimChunk - 1).min(trim.upper)
+          index.update(toRemove = (from to to), toUpsert = Nil).commit()
+          if chunk > 0 && chunk % PathStateStorage.IndexTrimSaidEvery == 0 then
+            log.info(s"[STATE-CLEAR] The index of blocks by number is deleted up to block $to of ${trim.upper}")
+        }
+    }
 
   /** As SNAP starts on a datadir whose state is its genesis (spec 018 C5a part 3; data-model 5.4, T205): the genesis
     * state is cleared, so that the sync writes its rows into families that hold none and the datadir reads as one it
@@ -1056,9 +1122,21 @@ final class PathStateStorage(
           // A sync that ran with the mark still set (the clear failed after its first batch, and the node went on)
           // has written its own record of what it downloaded, over rows that are deleted below: that record goes
           // first, again, or the next sync would skip what it says is done (vault).
-          dataSource.updateSync(appState.stateClearRemovals(genesisHash).updates)
+          // and so with the header download's cursors, where the clear trims the index by number (B-303): a sync that
+          // ran meanwhile stored headers above the block the chains share, whose entries are deleted below
+          val index = new BlockNumberMappingStorage(dataSource)
+          // What a sync reached since is read before the write that takes its record away (vault): the entries it
+          // stored above what the clear wrote down are of the same chain that was left, or stand on it.
+          val reached = highestIndexedHeight()
+          val again = appState.getStateResetTrim().foldLeft(appState.stateClearRemovals(genesisHash)) { (batch, trim) =>
+            batch
+              .and(appState.putStateResetTrim(trim.copy(upper = trim.upper.max(reached))))
+              .and(appState.headerCursorsBackTo(trim.commonBlock, index.get(_)))
+          }
+          dataSource.updateSync(again.updates)
           deleteEveryRowAndRecord()
-          appState.removeStateResetPending().commitSync()
+          deleteTheIndexAboveTheCommonBlock()
+          appState.removeStateResetTrim().and(appState.removeStateResetPending()).commitSync()
           log.warn("[STATE-CLEAR] A clear of the state that was interrupted has been finished: the rows are deleted")
           true
         }
@@ -1914,6 +1992,16 @@ object PathStateStorage:
 
   /** A key above every key of the state's column families, in bytes of 0xff: the bound of a range delete of one. */
   val KeyBoundBytes: Int = 128
+
+  /** How far down a clear looks, from the block the two chains are known to share, for one whose weight is stored. */
+  val CommonBlockWalk: Int = 4096
+
+  /** How many entries of the index by number a clear deletes in one write. */
+  val IndexTrimChunk: Int = 10000
+
+  /** From how many heights a trim of the index is said, and after how many chunks its progress. */
+  val IndexTrimSaid: Int = 100000
+  val IndexTrimSaidEvery: Int = 100
 
   private val MaxFaultsShown = 3
 
