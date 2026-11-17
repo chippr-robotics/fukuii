@@ -3785,3 +3785,13 @@ items:
     links:
       spec: 018
     notes: "forge W1 on #1880: healAtNewerPivot takes its target from the CL head; PoW waits for the 4096-block drift check. Not seen in the Mordor gate."
+  - id: B-327
+    title: "RegularSyncSpec: pin a missing trie node on path-live (no FetchStateNode, nothing written to CF n) and missing code fetched by hash"
+    priority: P3
+    status: open
+    area: sync
+    opened: 2026-11-17
+    refs: []
+    links:
+      spec: 018
+    notes: "forge W3 on #1880; the conversion is pinned in ConsensusAdapterEscalationSpec only"
