@@ -782,8 +782,32 @@ def cmd_prune(tr: Tracker, a) -> None:
     if a.before and not DATE_RE.match(a.before):
         raise BacklogError(f"--before must be a date YYYY-MM-DD, got {a.before!r}")
 
+    def needed(items: list[dict], pool: list[dict]) -> set[str]:
+        """Ids that `items` depend on, transitively through `pool`: every one must stay in backlog.yaml, because a
+        backlog.py that predates the archive validates depends_on against backlog.yaml alone."""
+        by_id = {i["id"]: i for i in pool}
+        out, todo = set(), [d for i in items for d in i.get("depends_on") or []]
+        while todo:
+            d = todo.pop()
+            if d not in out:
+                out.add(d)
+                todo += (by_id.get(d) or {}).get("depends_on") or []
+        return out
+
     def pick(doc):
-        return [i for i in doc["items"] if i["status"] in TERMINAL and (not a.before or str(i["closed"]) < a.before)]
+        live = [i for i in doc["items"] if i["status"] not in TERMINAL]
+        keep = needed(live, doc["items"])
+        return [i for i in doc["items"] if i["status"] in TERMINAL and i["id"] not in keep
+                and (not a.before or str(i["closed"]) < a.before)]
+
+    def restore(doc):
+        """Bring back archived items that something in backlog.yaml depends on (archives made before this rule)."""
+        keep = needed(doc["items"], doc["items"] + (doc.get("archived") or []))
+        back = [i for i in doc.get("archived") or [] if i["id"] in keep]
+        if back:
+            doc["archived"] = [i for i in doc["archived"] if i["id"] not in keep]
+            doc["items"] = sorted(doc["items"] + back, key=lambda i: int(ID_RE.match(i["id"]).group(1)))
+        return back
 
     if a.dry_run:
         _, doc = tr.read(True)
@@ -794,13 +818,20 @@ def cmd_prune(tr: Tracker, a) -> None:
         return
 
     def fn(doc):
+        back = restore(doc)
         moved = pick(doc)
-        if not moved:
+        if not moved and not back:
             return None
+        if not moved:
+            ids = " ".join(i["id"] for i in back)
+            return (f"tracker: restore {len(back)} archived items a live item depends on, by {by}\n\n{ids}",
+                    f"restored {len(back)} items to {FILE} (live items depend on them)")
         ids = {i["id"] for i in moved}
         doc["items"] = [i for i in doc["items"] if i["id"] not in ids]
         doc["archived"] = sorted((doc.get("archived") or []) + moved, key=lambda i: int(ID_RE.match(i["id"]).group(1)))
         cut = f" closed before {a.before}" if a.before else ""
+        if back:
+            cut += f"; restored {len(back)} that live items depend on"
         return (f"tracker: prune {len(moved)} closed items{cut} to {ARCHIVE} by {by}\n\n" + " ".join(sorted(ids)),
                 f"moved {len(moved)} closed items to {ARCHIVE}; {len(doc['items'])} remain in {FILE}")
 
