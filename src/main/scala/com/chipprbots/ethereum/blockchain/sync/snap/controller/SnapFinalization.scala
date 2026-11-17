@@ -485,16 +485,12 @@ private[snap] trait SnapFinalization extends FinalizationApi with ChainDownloadS
     */
   private def startHandoffSample(pivot: BigInt, pivotRoot: ByteString): Unit =
     val ending = handoff.getOrElse(throw new IllegalStateException("startHandoffSample on the hash layout"))
-    // read here, not through `excludedAtHandOff`, so that a set that cannot be read is told as that (beacon)
-    val (accountsLeftOut, readFailed) =
-      try (stateIngest.snapProgress.hasExcludedAccounts, false)
-      catch
-        case scala.util.control.NonFatal(e) =>
-          ctx.log.error(
-            "[HEAL-EXCLUDED] Could not read the excluded set at the hand-off: taken as accounts left out",
-            e
-          )
-          (true, true)
+    // a set that cannot be read is told as that, not only as accounts left out (beacon)
+    val (accountsLeftOut, readFailed) = excludedRead() match
+      case Right((accounts, _)) => (accounts, false)
+      case Left(e) =>
+        ctx.log.error("[HEAL-EXCLUDED] Could not read the excluded set at the hand-off: taken as accounts left out", e)
+        (true, true)
     if accountsLeftOut then
       // The user's decision of 2026-11-17 (spec 018 C5a part 10): on this layout nothing fetches the storage of an
       // account the sync left out once it has handed off (the only fetch writes the hash-keyed store), so the first
@@ -706,12 +702,17 @@ private[snap] trait SnapFinalization extends FinalizationApi with ChainDownloadS
     * set that cannot be read claims nothing: both.
     */
   private def excludedAtHandOff(): (Boolean, Boolean) =
-    val progress = stateIngest.snapProgress
-    try (progress.hasExcludedAccounts, progress.hasExcludedCode)
-    catch
-      case scala.util.control.NonFatal(e) =>
+    excludedRead() match
+      case Right(read) => read
+      case Left(e) =>
         ctx.log.error("[HEAL-EXCLUDED] Could not read the excluded set at finalisation: neither flag is set", e)
         (true, true)
+
+  /** Whether the excluded set has accounts, and code; or why it could not be read. */
+  private def excludedRead(): Either[Throwable, (Boolean, Boolean)] =
+    val progress = stateIngest.snapProgress
+    try Right((progress.hasExcludedAccounts, progress.hasExcludedCode))
+    catch case scala.util.control.NonFatal(e) => Left(e)
 
   /** Read just before the batch that clears the owed scan: see the note on `codeScanOwed` below. */
   private def recoveryFlags(accountsExcluded: Boolean, codeExcluded: Boolean): RecoveryFlags =
