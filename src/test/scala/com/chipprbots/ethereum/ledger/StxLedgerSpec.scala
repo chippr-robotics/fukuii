@@ -229,6 +229,9 @@ class StxLedgerSpec extends AnyFlatSpec with Matchers with Logger:
     UnitTest,
     StateTest
   ) in new ScenarioSetup:
+    // a blob message needs Cancun: without it preCheck refuses the type first
+    implicit override lazy val blockchainConfig: BlockchainConfig =
+      scenarioConfig.copy(forkTimestamps = ForkTimestamps(cancunTimestamp = Some(0L)))
     val blobHash: BlobVersionedHash = BlobVersionedHash(ByteString(Hex.decode("01" + "00" * 31)))
     val blobCall: BlobTransaction = BlobTransaction(
       chainId = 3,
@@ -344,7 +347,9 @@ class StxLedgerSpec extends AnyFlatSpec with Matchers with Logger:
 // scalastyle:off magic.number line.size.limit
 trait ScenarioSetup extends EphemBlockchainTestSetup:
 
-  implicit override lazy val blockchainConfig: BlockchainConfig = BlockchainConfig(
+  implicit override lazy val blockchainConfig: BlockchainConfig = scenarioConfig
+
+  lazy val scenarioConfig: BlockchainConfig = BlockchainConfig(
     forkBlockNumbers = ForkBlockNumbers.Empty.copy(
       eip155BlockNumber = 0,
       eip161BlockNumber = 0,

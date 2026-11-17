@@ -55,6 +55,13 @@ object ProofService:
         case (Some(value), None) => EmptyStorageProof(StorageProofKey(position), value)
         case (None, None)        => EmptyStorageValueProof(StorageProofKey(position))
 
+    /** `sp` for the key the request named: the proof is of the slot, the response echoes the request's own key. */
+    def withKey(sp: StorageProof, key: StorageProofKey): StorageProof = sp match
+      case p: StorageValueProof      => p.copy(key = key)
+      case p: EmptyStorageValue      => p.copy(key = key)
+      case p: EmptyStorageProof      => p.copy(key = key)
+      case p: EmptyStorageValueProof => p.copy(key = key)
+
     def asRlpSerializedNode(node: MptNode): ByteString =
       // Use cached RLP encoding if available (preserves original storage bytes)
       node.cachedRlpEncoded.map(ByteString(_)).getOrElse(ByteString(MptTraversals.encodeNode(node)))
@@ -77,8 +84,15 @@ object ProofService:
     val proof: Seq[ByteString] = Seq.empty[MptNode].map(asRlpSerializedNode)
   case class StorageValueProof(key: StorageProofKey, value: BigInt, proof: Seq[ByteString]) extends StorageProof
 
-  /** The key used to get the storage slot in its account tree */
-  case class StorageProofKey(v: BigInt) extends AnyVal
+  /** The key used to get the storage slot in its account tree.
+    *
+    * @param v
+    *   the slot
+    * @param fixed32
+    *   the request named the slot with 63 or 64 hex digits, and the response gives it back as 32 bytes; any other key
+    *   is returned as a minimal quantity (execution-apis `eth_getProof`, geth)
+    */
+  case class StorageProofKey(v: BigInt, fixed32: Boolean = false)
 
   /** The merkle proofs of the specified account connecting them to the blockhash of the block specified.
     *
@@ -176,17 +190,25 @@ class EthProofService(
       // The account, its proof and its storage proofs come from one state: a proof is of one block.
       StateRead
         .at(blockchainReader, header) { state =>
-          for
-            account <- Either.fromOption(
-              blockchainReader.accountIn(state, header, address),
-              noAccount(address, blockNumber)
-            )
-            accountProof <- Either.fromOption(
+          for accountProof <- Either.fromOption(
               blockchainReader.accountProofIn(state, header, address).map(_.map(asRlpSerializedNode)),
               noAccountProof(address, blockNumber)
             )
-            storageProof = getStorageProof(state, address, account, storageKeys)
-          yield ProofAccount(account, accountProof, storageProof, address)
+          yield blockchainReader.accountIn(state, header, address) match
+            case Some(account) =>
+              ProofAccount(account, accountProof, getStorageProof(state, address, account, storageKeys), address)
+            // geth: an account that does not exist is proved absent by the account proof; its hashes are zero and each
+            // storage entry is 0 with an empty proof
+            case None =>
+              ProofAccount(
+                address = address,
+                accountProof = accountProof,
+                balance = BigInt(0),
+                codeHash = ZeroHash,
+                nonce = UInt256(0),
+                storageHash = ZeroHash,
+                storageProof = storageKeys.toList.map(ProofService.EmptyStorageValueProof(_))
+              )
         }
         .flatten
     }
@@ -201,18 +223,19 @@ class EthProofService(
   ): Seq[StorageProof] =
     storageKeys.toList
       .map { storageKey =>
-        blockchain
-          .getStorageProofAt(
+        StorageProof.withKey(
+          blockchain.getStorageProofAt(
             state = state,
             address = address,
             storageRoot = account.storageRoot.value,
             position = storageKey.v,
             ethCompatibleStorage = ethCompatibleStorage
-          )
+          ),
+          storageKey
+        )
       }
 
-  private def noAccount(address: Address, blockNumber: BigInt): JsonRpcError =
-    JsonRpcError.LogicError(s"No account found for Address [${address.toString}] blockNumber [${blockNumber.toString}]")
+  private val ZeroHash: ByteString = ByteString(new Array[Byte](32))
 
   private def noAccountProof(address: Address, blockNumber: BigInt): JsonRpcError =
     JsonRpcError.LogicError(s"No account proof for Address [${address.toString}] blockNumber [${blockNumber.toString}]")

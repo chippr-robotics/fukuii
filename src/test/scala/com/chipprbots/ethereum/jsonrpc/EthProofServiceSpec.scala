@@ -9,6 +9,7 @@ import com.softwaremill.diffx.scalatest.DiffMatcher
 import org.bouncycastle.util.encoders.Hex
 import org.scalactic.TypeCheckedTripleEquals
 import org.scalamock.scalatest.MockFactory
+import org.scalatest.EitherValues
 import org.scalatest.OptionValues
 import org.scalatest.concurrent.ScalaFutures
 import org.scalatest.flatspec.AnyFlatSpecLike
@@ -38,6 +39,7 @@ class EthProofServiceSpec
     with Matchers
     with ScalaFutures
     with OptionValues
+    with EitherValues
     with MockFactory
     with NormalPatience
     with TypeCheckedTripleEquals
@@ -87,15 +89,85 @@ class EthProofServiceSpec
       p should not be empty
     }
 
-  "EthProofService" should "return an error when the proof is requested for non-existing account" taggedAs (
+  "EthProofService" should "prove a non-existing account absent, with zero hashes and empty storage proofs (get-account-proof-missing-account)" taggedAs (
     UnitTest,
     RPCTest
   ) in new TestSetup:
     val wrongAddress: Address = Address(666)
-    val result: Either[JsonRpcError, GetProofResponse] =
-      fetchProof(wrongAddress, storageKeys, blockNumber).unsafeRunSync()
-    result.isLeft shouldBe true
-    result.fold(l => l.message should include("No account found for Address"), r => r)
+    val keys: Seq[StorageProofKey] = Seq(StorageProofKey(0), StorageProofKey(1, fixed32 = true))
+    val result: ProofAccount = fetchProof(wrongAddress, keys, blockNumber).unsafeRunSync().value.proofAccount
+    result.address shouldBe wrongAddress
+    // the proof of absence starts at the state root, as any account proof does
+    result.accountProof should not be empty
+    ByteString(crypto.kec256(result.accountProof.head.toArray[Byte])) shouldBe ByteString(mpt.getRootHash)
+    result.balance shouldBe BigInt(0)
+    result.nonce shouldBe UInt256(0)
+    result.codeHash shouldBe ByteString(new Array[Byte](32))
+    result.storageHash shouldBe ByteString(new Array[Byte](32))
+    // one entry per key, in request order, each keeping the key as requested
+    result.storageProof.map(sp => (sp.key, sp.value, sp.proof)) shouldBe
+      Seq((keys.head, BigInt(0), Seq.empty), (keys(1), BigInt(0), Seq.empty))
+
+  "EthProofService" should "answer each storage key with the key as the request wrote it" taggedAs (
+    UnitTest,
+    RPCTest
+  ) in new TestSetup:
+    val keys: Seq[StorageProofKey] = Seq(StorageProofKey(key), StorageProofKey(key, fixed32 = true))
+    val result: ProofAccount = fetchProof(address, keys, blockNumber).unsafeRunSync().value.proofAccount
+    result.storageProof.map(_.key) shouldBe keys
+    result.storageProof.map(_.value) shouldBe Seq(BigInt(value), BigInt(value))
+
+  "eth_getProof storage keys" should "decode as geth does (get-storage-proof-key-*, -invalid-key*)" taggedAs (
+    UnitTest,
+    RPCTest
+  ) in {
+    import org.json4s.JsonAST.*
+    val addr = "0x7dcd17433742f4c0ca53122ab541d0ba67fc27df"
+    def decode(key: String): Either[JsonRpcError, Seq[StorageProofKey]] =
+      EthProofJsonMethodsImplicits.eth_getProof
+        .decodeJson(Some(JArray(List(JString(addr), JArray(List(JString(key))), JString("latest")))))
+        .map(_.storageKeys)
+    def keyOf(digits: Int): String = "0x" + "0" * (digits - 1) + "1"
+    // 0x and 0x00 are slot 0; a short key keeps no width; 63 and 64 digits are 32 bytes
+    decode("0x") shouldBe Right(Seq(StorageProofKey(0)))
+    decode("0x0") shouldBe Right(Seq(StorageProofKey(0)))
+    decode("0x00") shouldBe Right(Seq(StorageProofKey(0)))
+    decode("0x01") shouldBe Right(Seq(StorageProofKey(1)))
+    decode(keyOf(62)) shouldBe Right(Seq(StorageProofKey(1)))
+    decode(keyOf(63)) shouldBe Right(Seq(StorageProofKey(1, fixed32 = true)))
+    decode(keyOf(64)) shouldBe Right(Seq(StorageProofKey(1, fixed32 = true)))
+    // 65 digits is 33 bytes
+    val tooLong = keyOf(66)
+    decode(tooLong) shouldBe Left(
+      JsonRpcError(-32602, s"storage key too long (want at most 32 bytes): \"$tooLong\"", None)
+    )
+    decode("0xzz") shouldBe Left(JsonRpcError(-32602, "invalid hex in storage key: \"0xzz\"", None))
+  }
+
+  "eth_getProof storage keys" should "encode as 32 bytes when written with 63 or 64 digits, else as a quantity" taggedAs (
+    UnitTest,
+    RPCTest
+  ) in {
+    import org.json4s.JsonAST.*
+    import org.json4s.jvalue2monadic
+    val proof = ProofAccount(
+      Address(1),
+      Seq(ByteString(1)),
+      BigInt(0),
+      ByteString(new Array[Byte](32)),
+      UInt256(0),
+      ByteString(new Array[Byte](32)),
+      Seq(
+        ProofService.EmptyStorageValueProof(StorageProofKey(0)),
+        ProofService.EmptyStorageValueProof(StorageProofKey(1)),
+        ProofService.EmptyStorageValueProof(StorageProofKey(1, fixed32 = true))
+      )
+    )
+    val json = EthProofJsonMethodsImplicits.eth_getProof.encodeJson(GetProofResponse(proof))
+    val entries = (json \ "storageProof").children
+    val keys = entries.map(e => e \ "key")
+    keys shouldBe List(JString("0x0"), JString("0x1"), JString("0x" + "00" * 31 + "01"))
+  }
 
   "EthProofService" should "return the proof with empty value for non-existing storage key" taggedAs (
     UnitTest,
