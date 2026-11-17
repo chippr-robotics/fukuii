@@ -22,10 +22,10 @@ sprint, and a PR to `staging` carrying only the agent-file edits that won a
 blind A/B test.
 
 ```
-1 REVIEW ──▶ 2 GENERALIZE ──▶ 3 PROBE + PROPOSE ──▶ 4 A/B ──▶ 5 ITERATE ──▶ 6 LAND
-  PRs,         tasks + gold      baseline on the        A=HEAD    winner is the    retro, suite,
-  lineage,     answers           new suite; edits       B=cand.   new baseline;    ledger, agent
-  lint                           with evidence          blind     ≤3 rounds        edits, PR
+1 REVIEW ──▶ 2 GENERALIZE ──▶ 3 PROBE + PROPOSE ──▶ 4 A/B ──▶ 5 ITERATE ──▶ 6 LAND ──▶ 7 BACKLOG
+  PRs,         tasks + gold      baseline on the        A=HEAD    winner is the    retro, suite,     review, close
+  lineage,     answers           new suite; edits       B=cand.   new baseline;    ledger, agent     merged, prune,
+  lint                           with evidence          blind     ≤3 rounds        edits, PR     carry-over
 ```
 
 Everything runs from the repo root. Scripts are in
