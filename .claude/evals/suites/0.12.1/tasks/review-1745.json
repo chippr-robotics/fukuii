@@ -11,7 +11,8 @@
  "prompt": "Startup with --tui froze for ~30 s on WSL2 because DNS discovery trees were walked on main during config load. The uncommitted change moves the walk off main into PeerDiscoveryManager, parallel and bounded, and fixes TXT joining. Please review it before merge.",
  "expected": {
   "files": [
-   "src/main/scala/com/chipprbots/ethereum/network/discovery/DnsDiscovery.scala"
+   "src/main/scala/com/chipprbots/ethereum/network/discovery/DnsDiscovery.scala",
+   "src/main/scala/com/chipprbots/ethereum/network/discovery/DiscoveryConfig.scala"
   ],
   "review_sha": "4dc5abb99cc6c5547a7301e7466559cd1346b496",
   "gold_summary": "Pre-existing gap the change carries forward: the walk trusts every TXT record: no root signature check against the enrtree:// key, no check that a branch/ENR entry hashes to its label, no ENR (EIP-778) signature check, link entries skipped; DNS-sourced ENRs go straight to candidates and discv4 addNode. go-ethereum p2p/dnsdisc verifies all of these.",
@@ -31,8 +32,7 @@
   "#1745",
   "#1746",
   "97cb89e8e",
-  "Eip1459",
-  "DnsTreeFixture"
+  "Eip1459"
  ],
  "sprint": "0.12.1",
  "budget_usd": 3,

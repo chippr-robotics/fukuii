@@ -31,7 +31,6 @@
  "leak_markers": [
   "#1735",
   "a8fe855cb",
-  "#1727",
   "BigBits",
   "Uint64Bits"
  ],

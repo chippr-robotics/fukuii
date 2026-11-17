@@ -1,0 +1,41 @@
+{
+ "id": "review-1823",
+ "agent": "beacon",
+ "chain": "ETH",
+ "source_prs": [
+  1823
+ ],
+ "base_sha": "8b82e132cb5dda02a238d5aff0bf30b416cdfd4d",
+ "prompt": "Review the uncommitted change: the Engine API is on by default for proof-of-stake chains, with a persistent JWT secret created in the datadir.",
+ "expected": {
+  "review_sha": "b4ef0c0638a36867e8ef8f3a1e481af6bacb758a",
+  "review_ref": "pull/1823/head",
+  "files": [
+   "src/main/scala/com/chipprbots/ethereum/consensus/engine/JwtSecretFile.scala",
+   "src/main/scala/com/chipprbots/ethereum/nodebuilder/NodeBuilder.scala"
+  ],
+  "must_not": [],
+  "gold_summary": "The JWT secret is validated after P2P has started, so a bad secret leaves a half-started node; an Engine API bind failure is not fatal; the rename-based creation can replace an existing secret or follow a symlink; explicit secret paths are under-validated (format, permissions)."
+ },
+ "rubric": [
+  "Start-up order: secret validated after other services start (half-started node)",
+  "Engine API bind failure not treated as fatal",
+  "Secret creation can replace an existing file or follow a symlink",
+  "Explicit secret path format/permission validation is weak"
+ ],
+ "protocol": [
+  "beacon: Engine API semantics; compare go-ethereum",
+  "read-only: no edits"
+ ],
+ "leak_markers": [
+  "#1823",
+  "6622c229d",
+  "EngineApiStartupRefusal",
+  "createLink"
+ ],
+ "sprint": "0.12.1",
+ "type": "review",
+ "read_only": true,
+ "budget_usd": 3,
+ "timeout_s": 2400
+}

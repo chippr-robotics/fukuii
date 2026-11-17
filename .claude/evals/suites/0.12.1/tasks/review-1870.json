@@ -23,10 +23,9 @@
  },
  "rubric": [
   "Notes the bootstrap's branch check is skipped when the target is below the branch's first block",
-  "Traces the pivot-refresh failure path (PivotRefresher) backtracking by number with no floor at the branch",
+  "Connects the PivotRefresher backtrack (pendingPivot - pivotBlockOffset, no floor) to the bootstrap's skipped branch check, so a refresh can land below the branch and be fetched unchecked",
   "Shows that branchServed is called for any non-zero target, so a bootstrap below the branch ends the wait",
   "Concludes the requirement can end with only the finalisation WARN, not the ERROR",
-  "Notes the refresh path drops the bootstrap's off-branch peers",
   "Proposes a floor and conditioning branchServed on the served height"
  ],
  "protocol": [
@@ -42,9 +41,8 @@
   "belowTheBranch",
   "waitExpired",
   "OffBranchPeersApi",
-  "servedAt",
-  "B-310",
-  "B-307"
+  "servedAt = Some",
+  "B-310"
  ],
  "sprint": "0.12.1",
  "budget_usd": 3,

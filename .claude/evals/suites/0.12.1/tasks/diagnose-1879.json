@@ -17,14 +17,14 @@
    "src/main/scala/com/chipprbots/ethereum/jsonrpc/EthInfoService.scala",
    "src/main/scala/com/chipprbots/ethereum/ledger/StxLedger.scala"
   ],
-  "gold_summary": "getProofAccount turns a missing account into a LogicError (Either.fromOption(accountIn, noAccount)); geth proves absence: it returns the account proof with zero balance, nonce, codeHash and storageHash, and each storage key as 0 with an empty proof. Storage keys are parsed loosely and echoed as the slot rather than the request's key form (geth decodeHash: 63-64 hex digits echoed as 32 bytes, otherwise a minimal quantity). CallTxBuilder/StxLedger do not refuse maxFeePerBlobGas without blob hashes, or a tx type the block's fork does not admit (needs the chain's TxTypeGate: forBlock on ETC, timestamp on ETH). EthInfoService createAccessList hashes the refused tx with its access list instead of geth's unsigned legacy-type hash, and does not fill the nonce from state.",
+  "gold_summary": "getProofAccount turns a missing account into a LogicError (Either.fromOption(accountIn, noAccount)); geth proves absence: it returns the account proof with zero balance, nonce, codeHash and storageHash, and each storage key as 0 with an empty proof. Storage keys are parsed loosely and echoed as the slot rather than the request's key form (geth decodeHash: 63-64 hex digits echoed as 32 bytes, otherwise a minimal quantity). The call path accepts an accessList at a block where EIP-2930 is not active (CallTxBuilder: 'accessList: accepted everywhere'), where geth's preCheck refuses 'transaction type not supported: access list tx (sender ..)'; blob/set-code fields are refused in CallTxBuilder with fukuii's -32602 wording instead of geth's preCheck message; maxFeePerBlobGas without blobVersionedHashes is not refused (geth CallDefaults -32000). Fix moves the fork-type refusal into StxLedger.callPreCheck via TxTypeGate.activeTypes (forBlock on ETC, timestamp on ETH). EthInfoService createAccessList hashes the refused tx with its access list instead of geth's unsigned legacy-type hash, and does not fill the nonce from state.",
   "must_not": []
  },
  "rubric": [
   "Locates the missing-account error in EthProofService.getProofAccount (Either.fromOption over accountIn with noAccount)",
   "States geth's behaviour: a proof of absence with zeroed fields and empty storage proofs, not an error",
   "Identifies the storage-key parse/echo mismatch in the eth_getProof decoder",
-  "Identifies the missing tx-type-for-fork and blob-fee-without-hashes checks in the call path (CallTxBuilder or StxLedger)",
+  "Identifies that an accessList at a pre-EIP-2930 block is accepted (or blob/set-code refused with non-geth wording) where geth's state-transition preCheck refuses the type, and that maxFeePerBlobGas without blobVersionedHashes is not refused",
   "Keeps ETC on block-number fork gating (does not propose a timestamp-only gate for ETC)"
  ],
  "protocol": [
@@ -37,7 +37,7 @@
   "7e2a3d29a",
   "B-323",
   "withKey",
-  "fixed32",
+  "fixed32 =",
   "refusedTxHash"
  ],
  "sprint": "0.12.1",

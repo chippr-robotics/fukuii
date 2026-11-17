@@ -25,6 +25,9 @@ ROUTE: <comma-separated agent names, only when the task asks which agent(s) shou
 VERDICT: <one line>
 """
 
+REVIEW_PATHS = [".", ":(exclude)specs", ":(exclude)docs", ":(exclude)*.md", ":(exclude).claude",
+                ":(exclude).specify", ":(exclude).local"]
+
 ENV = """
 
 # Trial environment
@@ -94,10 +97,21 @@ def main():
     snapshot(repo, task["base_sha"], work)
 
     if task["type"] == "review":  # the change under review sits uncommitted in the tree
-        d = sh(["git", "-C", repo, "diff", "--binary", task["base_sha"], exp["review_sha"]])
+        # review_sha may be a PR's pre-review head, absent from a fresh clone: fetch it by its ref
+        if sh(["git", "-C", repo, "cat-file", "-e", exp["review_sha"] + "^{commit}"]).returncode and exp.get("review_ref"):
+            sh(["git", "-C", repo, "fetch", "-q", "origin", exp["review_ref"]])
+        # Code only by default: a PR's spec/plan/docs edits often state the very findings under test
+        # (seen in the 0.12.1 retro). A task can widen this with expected.review_paths.
+        paths = exp.get("review_paths", REVIEW_PATHS)
+        d = sh(["git", "-C", repo, "diff", "--binary", task["base_sha"], exp["review_sha"], "--", *paths])
         ap_ = sh(["git", "apply", "--whitespace=nowarn"], cwd=work, inp=d.stdout)
         if ap_.returncode:
             sys.exit("review diff did not apply: " + ap_.stderr.decode())
+
+    # A leak marker already in what the trial is given would flag an honest trial: drop it, and say so.
+    inert = [m for m in task.get("leak_markers", [])
+             if m and sh(["git", "grep", "-q", "-F", "--untracked", m], cwd=work).returncode == 0]
+    markers = [m for m in task.get("leak_markers", []) if m not in inert]
 
     def tree_state():  # what the agent found vs what it left: any difference is an edit
         st = sh(["git", "status", "--porcelain", "--untracked-files=all"], cwd=work).stdout
@@ -126,7 +140,7 @@ def main():
 
     tool_inputs = json.dumps([c.get("input") for e in events if e.get("type") == "assistant"
                               for c in e.get("message", {}).get("content", []) if c.get("type") == "tool_use"])
-    leaks = [p for p in task.get("leak_markers", []) if p and p in tool_inputs]
+    leaks = [p for p in markers if p in tool_inputs]  # what it searched or read, not what it proposes
     leaks += re.findall(r"github\.com/[^\"\s]*/pull/\d+", tool_inputs)
 
     edited = tree_state() != before
@@ -151,7 +165,7 @@ def main():
                turns=res.get("num_turns"), wall_s=round(time.time() - t0),
                result=text, files=field("FILES"), route=field("ROUTE"),
                verdict=(re.search(r"^VERDICT:\s*(.*)$", blk, re.M) or [None, ""])[1],
-               contract_ok=bool(blk), leaks=sorted(set(leaks)), worktree_changes=changed[:200],
+               contract_ok=bool(blk), leaks=sorted(set(leaks)), inert_markers=inert, worktree_changes=changed[:200],
                edited=edited, readonly_violation=readonly and edited,
                check=check)
     json.dump(rec, open(os.path.join(out, "trials", key + ".json"), "w"), indent=1)

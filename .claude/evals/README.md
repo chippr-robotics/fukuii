@@ -45,7 +45,9 @@ recall. A retro reviewer rejects such an edit.
     "gold_summary": "What the real fix found and changed, for the grader only.",
     "must_not": ["forTimestamp"],     // literal strings that disqualify an answer
     "route": ["forge", "beacon"],     // route tasks: the exact set
-    "review_sha": "<sha>",            // review tasks: the change applied uncommitted on base_sha
+    "review_sha": "<sha>",            // review tasks: the change applied uncommitted on base_sha;
+                                      // prefer the PR's pre-review head (the squash already holds the fixes)
+    "review_ref": "pull/NNNN/head",   // fetched when review_sha is not in the clone
     "tests_from_sha": "<sha>",        // implement tasks: where the PR's tests come from
     "test_paths": ["src/test/scala/.../FooSpec.scala"],
     "check_cmd": "sbt 'testOnly *FooSpec'",

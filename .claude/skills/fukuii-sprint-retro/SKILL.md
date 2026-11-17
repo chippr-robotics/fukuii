@@ -113,7 +113,7 @@ Pick tasks stratified, not by convenience:
 
 | Type | Source | The agent is asked to | Gold |
 |---|---|---|---|
-| `review` | each lineage originator (first) | review the uncommitted change (the originating PR's diff is applied to the snapshot) | the defect the later fix found |
+| `review` | DEFECT lineage originators; PRs whose reviewers found blockers | review the uncommitted change: the originator's diff, or a PR's **pre-review head** (`git fetch origin pull/N/head`; base = its merge-base), since the squash already holds the review fixes | the defect the later fix or the reviewer found |
 | `diagnose` | fix PRs | find the root cause of a symptom, read-only | the fix's files and cause |
 | `impact` | feat PRs, consensus first | produce the impact analysis before implementing | the files the PR touched; the invariants it had to keep |
 | `route` | a sample of PRs, all areas | name the agent(s) to take the work, given only the agent descriptions | the owning agents |
@@ -134,6 +134,11 @@ compare", not "good analysis"). `protocol` lists the agent-file and CLAUDE.md
 rules the trial must keep (e.g. `forge`: impact analysis before any edit;
 `eye`: no source edits; consensus: `forBlock` on ETC paths). `must_not` lists
 literal strings whose presence in the answer is disqualifying.
+
+`run_trial.py` applies a review diff **code only** (`specs/`, `docs/`, `*.md`, `.claude/` excluded,
+widen with `expected.review_paths`): a PR's plan or spec edits often record the very review findings
+under test. It also drops any leak marker already present in what the trial is given (reported as
+`inert_markers`), but pick markers that only the fix introduced.
 
 **Check each task with a second agent** (not the author): give it the task file
 and the base snapshot path and ask (a) is it answerable from the snapshot
