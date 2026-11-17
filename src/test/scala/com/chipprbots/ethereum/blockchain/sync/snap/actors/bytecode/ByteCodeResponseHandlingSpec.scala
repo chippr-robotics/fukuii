@@ -343,7 +343,8 @@ class ByteCodeResponseHandlingSpec extends ScalaTestWithActorTestKit() with AnyF
     val failingCodes = new TestEvmCodeStorage():
       override def put(key: ByteString, value: ByteString): DataSourceBatchUpdate =
         throw new RuntimeException("injected code write failure")
-    val m = new StubByteCodeResponseHandlingState(failingCodes, controller.ref) with ByteCodeResponseHandling
+    val m = new StubByteCodeResponseHandlingState(failingCodes, controller.ref, new SNAPRequestTracker())
+      with ByteCodeResponseHandling
     val worker = TestInbox[ByteCodeWorker.Command]()
     val c = code(1)
     inFlight(m, Seq(kec256(c)), worker.ref, peer("p1"))
