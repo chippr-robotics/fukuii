@@ -25,6 +25,7 @@ import scala.util.control.NonFatal
 import com.chipprbots.ethereum.blockchain.sync.Blacklist
 import com.chipprbots.ethereum.blockchain.sync.Blacklist.BlacklistReason
 import com.chipprbots.ethereum.blockchain.sync.PeersClient
+import com.chipprbots.ethereum.blockchain.sync.StoredBodyCheck
 import com.chipprbots.ethereum.blockchain.sync.SyncController
 import com.chipprbots.ethereum.blockchain.sync.SyncProtocol
 import com.chipprbots.ethereum.blockchain.sync.fast.FastSyncBranchResolverActor
@@ -38,9 +39,11 @@ import com.chipprbots.ethereum.consensus.ConsensusAdapter
 import com.chipprbots.ethereum.consensus.ReorgStateHandler
 import com.chipprbots.ethereum.consensus.engine.InvalidChainReporter
 import com.chipprbots.ethereum.crypto.kec256
+import com.chipprbots.ethereum.db.storage.AncestorWindow
 import com.chipprbots.ethereum.db.storage.BadEntryDelete
 import com.chipprbots.ethereum.db.storage.EvmCodeStorage
 import com.chipprbots.ethereum.db.storage.StateStorage
+import com.chipprbots.ethereum.db.storage.pathstate.AncestorNotStored
 import com.chipprbots.ethereum.db.storage.pathstate.HandedToRecovery
 import com.chipprbots.ethereum.db.storage.pathstate.RefusedForThisHead
 import com.chipprbots.ethereum.db.storage.pathstate.ReorgRefusal
@@ -92,6 +95,11 @@ object BlockImporter:
   // How often an importer still waiting for the import lock to start says so (beacon, #1705). A variable only so a spec
   // can shorten it.
   private[regular] var lockWaitWarnInterval: FiniteDuration = 30.seconds
+
+  // How long a fetch of ancestor bodies holds the one slot for it before a lost answer is assumed and the bodies are asked
+  // for again (B-301). A fetch makes at most three requests, each bounded by the peer response timeout and its back-off.
+  // A variable only so a spec can shorten it.
+  private[regular] var ancestorBodiesFetchDeadline: FiniteDuration = 10.minutes
   private[regular] case object LockWaitTick extends Command
   private[regular] val LockWaitKey = "BlockImporterLockWait"
 
@@ -379,6 +387,20 @@ object BlockImporter:
   // The best block, read under the import lock as the importer starts; or the failure to read it.
   final private[regular] case class StartFrom(bestBlock: BigInt) extends Command
   final private[regular] case class StartFailed(error: Throwable) extends Command
+  // Sent by an import that met AncestorNotStored to the importer itself, so the fetch is asked for on its own thread:
+  // the bodies of `headers` are what is missing of the window below block `number` (B-301).
+  final private[regular] case class AncestorBodiesWanted(
+      blockHash: ByteString,
+      number: BigInt,
+      headers: List[BlockHeader]
+  ) extends Command
+  // The bodies of a fetch of ancestor bodies, written under the import lock: the headers of those stored, or the failure
+  // of the write. `forBlock`: the block whose fetch it answered, when it was the one in flight.
+  final private[regular] case class AncestorBodiesStored(
+      forBlock: Option[ByteString],
+      requested: Seq[BlockHeader],
+      stored: Try[Seq[BlockHeader]]
+  ) extends Command
 
   sealed trait NewBehavior
   case object Running extends NewBehavior
@@ -506,6 +528,21 @@ final private class BlockImporterLogic(
     * C, C4b): cleared by any block that is imported.
     */
   private var stateFaultStreak: Option[(ByteString, Int)] = None
+
+  /** The fetch of ancestor bodies in flight (B-301): the block whose import wanted them, the hashes asked for, and when
+    * (`System.nanoTime`). One at a time, freed by its answer in every behaviour, or, if the answer is lost, by
+    * [[BlockImporter.ancestorBodiesFetchDeadline]]. Read and written on the actor's thread only.
+    */
+  private var ancestorBodiesFetch: Option[(ByteString, Seq[BlockHash], Long)] = None
+
+  /** The block whose ancestor bodies were stored when it could not be tried again at once: an import ran, or the
+    * importer waited on something else. The next ImportDone in `running` acts on it if the streak of state faults is
+    * that block's, and drops it either way. Read and written on the actor's thread only.
+    */
+  private var ancestorBodiesStoredFor: Option[ByteString] = None
+
+  // The missing header below an ommers window last warned of, so it is warned of once (B-301). Written on import threads.
+  private val warnedHeaderBelowWindow = new java.util.concurrent.atomic.AtomicReference[Option[BlockHash]](None)
   // Orphan announcements per peer, in a row (B-007): a peer is blacklisted for them only after a bounded number.
   private val orphanAnnounces = new OrphanAnnounceStrikes
   // How many times in a row the pivot floor sent the fetcher back to the same block (forge, B-007).
@@ -591,9 +628,16 @@ final private class BlockImporterLogic(
       case _: ImportNewBlock => Behaviors.same
 
       case ImportDone(reported, importType) =>
+        // Ancestor bodies stored for the block this streak is of while it could not be tried at once: that block is
+        // tried again at once, and its streak starts over, whatever this import ended in (B-301). Bodies stored for
+        // another block say nothing of this import, and are dropped.
+        val bodiesArrived = ancestorBodiesStoredFor.filter(hash => stateFaultStreak.exists(_._1 == hash))
+        ancestorBodiesStoredFor = None
+        bodiesArrived.foreach(clearStateFaultStreak)
         val newBehavior = reported match
-          case r: ResolvingMissingNode if exhaustedDuringImport => r.copy(alreadyExhausted = true)
-          case other                                            => other
+          case r: ResolvingMissingNode if exhaustedDuringImport     => r.copy(alreadyExhausted = true)
+          case BackingOffAfterStateFault if bodiesArrived.isDefined => RunningAfterFetcherRewind
+          case other                                                => other
         exhaustedDuringImport = false
         // Always Nil on a PoW chain (nothing is ever deferred there), which leaves every arm below as it was.
         val deferred = state.deferredBatches
@@ -634,6 +678,27 @@ final private class BlockImporterLogic(
             if deferred.nonEmpty then
               log.debug("Deferred batches dropped: count={} reason=missing-state-node", deferred.size)
         nextBehavior(newBehavior, importType, newState)
+
+      case wanted: AncestorBodiesWanted =>
+        fetchAncestorBodies(wanted)
+        Behaviors.same
+
+      case FetcherResponse(BlockFetcher.FetchedAncestorBodies(requested, bodies)) =>
+        ancestorBodiesFetched(requested, bodies)
+        Behaviors.same
+
+      case stored: AncestorBodiesStored =>
+        ancestorBodiesWritten(stored).foreach { blockHash =>
+          if state.importing then ancestorBodiesStoredFor = Some(blockHash)
+          else
+            // The fetcher was rewound when the block faulted: picked again now, it serves that block, which is tried
+            // at once rather than at the end of a back-off.
+            ancestorBodiesStoredFor = None
+            clearStateFaultStreak(blockHash)
+            timers.startTimerWithFixedDelay(RetryKey, SyncRetryTick, syncConfig.syncRetryInterval)
+            selfRef ! PickBlocks
+        }
+        Behaviors.same
 
       case PickBlocks if !state.importing =>
         pickBlocks(state)
@@ -752,8 +817,176 @@ final private class BlockImporterLogic(
         // user's decision of 2026-11-02).
         importBlocks(blocksToRetry, blockImportType)(state)
 
+      // A fetch of ancestor bodies asked for before this wait is answered here too, or it would be in flight for good.
+      // The bodies are stored; what that means for the block that wanted them is left for `running`.
+      case wanted: AncestorBodiesWanted =>
+        fetchAncestorBodies(wanted)
+        Behaviors.same
+
+      case FetcherResponse(BlockFetcher.FetchedAncestorBodies(requested, bodies)) =>
+        ancestorBodiesFetched(requested, bodies)
+        Behaviors.same
+
+      case stored: AncestorBodiesStored =>
+        ancestorBodiesWritten(stored).foreach(blockHash => ancestorBodiesStoredFor = Some(blockHash))
+        Behaviors.same
+
       case _ => Behaviors.same
     }
+
+  /** If `fault` is a window of ancestors this node does not hold whole below `block`, what of it is missing is looked
+    * up, and the bodies, if that is what is missing, are asked for (B-301). The ommers of a PoW block are checked
+    * against its parent and the five blocks below it, header and body; after a SNAP sync the bodies may not be stored,
+    * and nothing else fetches them when the node was restarted straight into regular sync. Called on the import's
+    * thread: it only reads, and asks the importer, on its own thread, for the fetch.
+    *
+    * A header missing from that window is logged and nothing is fetched: a body cannot be checked without its header. A
+    * header missing further down, which the ommers' check does not read, does not stop the fetch.
+    */
+  private def wantAncestorBodiesOn(fault: Throwable, block: Block): Unit =
+    fault match
+      case _: AncestorNotStored =>
+        def headerByHash(hash: BlockHash): Option[BlockHeader] =
+          Option(blockchainReader.getBlockHeaderByHash(hash)).flatten
+        def bodyByHash(hash: BlockHash): Option[BlockBody] = Option(blockchainReader.getBlockBodyByHash(hash)).flatten
+        headerByHash(block.header.parentHash) match
+          case None =>
+            // The parent may be in the queue of blocks not yet on the chain, where the ommers' check finds it, and
+            // this lookup does not: the window is not looked up here.
+            log.warning(
+              "[ANCESTOR-BODIES] block {}: its parent {} is not on this node's chain, so the bodies below it are not " +
+                "looked up and none is fetched",
+              block.number,
+              ByteStringUtils.hash2string(block.header.parentHash.value)
+            )
+          case Some(parent) =>
+            val missing = AncestorWindow.check(parent, proofOfWork = true, headerByHash, bodyByHash)
+            val windowFloor = parent.number.value - (AncestorWindow.OmmerGenerations - 1)
+            // Below the window the ommers' check reads nothing, but BLOCKHASH reads 256 blocks back: said once.
+            missing.header.filter((number, _) => number < windowFloor).foreach { (number, hash) =>
+              if warnedHeaderBelowWindow.getAndSet(Some(hash)) != Some(hash) then
+                log.warning(
+                  "[ANCESTOR-BODIES] the header of block {} ({}), below the window the ommers of block {} are checked " +
+                    "against, is not stored: BLOCKHASH cannot reach past it",
+                  number,
+                  hash.toHexString,
+                  block.number
+                )
+            }
+            missing.header match
+              case Some((number, _)) if number >= windowFloor =>
+                log.error(
+                  "[ANCESTOR-BODIES] block {} cannot have its ommers checked: of the blocks below it this node lacks " +
+                    "{}, so no body is fetched",
+                  block.number,
+                  missing.describe
+                )
+              case _ if missing.bodies.nonEmpty =>
+                selfRef ! AncestorBodiesWanted(block.hash.value, block.number.value, missing.bodies)
+              case _ =>
+                log.debug("[ANCESTOR-BODIES] the bodies below block {} are all stored now", block.number)
+      case _ => ()
+
+  /** Asks the fetcher for the bodies `wanted` names, unless a fetch is in flight already. */
+  private def fetchAncestorBodies(wanted: AncestorBodiesWanted): Unit =
+    val now = System.nanoTime()
+    ancestorBodiesFetch match
+      case Some((blockHash, _, since)) if now - since < ancestorBodiesFetchDeadline.toNanos =>
+        log.debug(
+          "[ANCESTOR-BODIES] the bodies below block {} are not asked for: a fetch for block {} is in flight",
+          wanted.number,
+          ByteStringUtils.hash2string(blockHash)
+        )
+      case lost =>
+        lost.foreach((blockHash, _, _) =>
+          log.warning(
+            "[ANCESTOR-BODIES] the fetch for block {} was not answered within {}s: its answer is taken as lost",
+            ByteStringUtils.hash2string(blockHash),
+            ancestorBodiesFetchDeadline.toSeconds
+          )
+        )
+        log.warning(
+          "[ANCESTOR-BODIES] block {} cannot have its ommers checked until the bodies of blocks {} are stored: " +
+            "fetching them",
+          wanted.number,
+          wanted.headers.map(_.number).mkString(", ")
+        )
+        ancestorBodiesFetch = Some((wanted.blockHash, wanted.headers.map(_.hash), now))
+        fetcher ! BlockFetcher.FetchAncestorBodies(wanted.headers, fetcherResponseAdapter)
+
+  /** The answer to a fetch of ancestor bodies: it frees the slot if it is the fetch in flight, and has the bodies
+    * written under the import lock ([[writeAncestorBodies]]), which an import holds while it moves the chain. The
+    * outcome comes back as [[BlockImporter.AncestorBodiesStored]].
+    */
+  private def ancestorBodiesFetched(requested: Seq[BlockHeader], bodies: Seq[(BlockHeader, BlockBody)]): Unit =
+    val forBlock = ancestorBodiesFetch.collect {
+      case (blockHash, hashes, _) if hashes == requested.map(_.hash) => blockHash
+    }
+    if forBlock.isDefined then ancestorBodiesFetch = None
+    if bodies.isEmpty then selfRef ! AncestorBodiesStored(forBlock, requested, Success(Nil))
+    else
+      ctx.pipeToSelf(
+        importLock
+          .guardAs("the store of fetched ancestor bodies")(IO.blocking(writeAncestorBodies(bodies)))
+          .unsafeToFuture()
+      )(stored => AncestorBodiesStored(forBlock, requested, stored))
+
+  /** Stores the bodies that are the ones their stored headers commit to, and returns their headers. Run under the
+    * import lock, so no import moves the chain meanwhile.
+    *
+    * Each body is checked here, where it is written, whoever sent it: its header must be the one stored under its hash
+    * now (a reorganisation may have taken it off), and the body the one that header commits to
+    * ([[StoredBodyCheck.mismatch]]: transactions root, ommers hash, withdrawals root, and the rest of
+    * `validateHeaderAndBody`). A body that fails is not stored.
+    */
+  private def writeAncestorBodies(bodies: Seq[(BlockHeader, BlockBody)]): Seq[BlockHeader] =
+    val matching = bodies.filter { (header, body) =>
+      val headerStored = Option(blockchainReader.getBlockHeaderByHash(header.hash)).flatten.contains(header)
+      val mismatch = StoredBodyCheck.mismatch(header, body)
+      if !headerStored then
+        log.error("[ANCESTOR-BODIES] a body for block {} is not stored: its header is not this node's", header.number)
+      mismatch.foreach(reason =>
+        log.error("[ANCESTOR-BODIES] a body for block {} is not stored: {}", header.number, reason)
+      )
+      headerStored && mismatch.isEmpty
+    }
+    if matching.nonEmpty then
+      matching
+        .map((header, body) => blockchainWriter.storeBlockBody(header.hash, body))
+        .reduce(_.and(_))
+        .commit()
+    matching.map(_._1)
+
+  /** What was stored of a fetch of ancestor bodies, said; the block that wanted them, when some were stored for it. A
+    * write that failed fails the importer: RegularSync replaces the pipeline.
+    */
+  private def ancestorBodiesWritten(outcome: AncestorBodiesStored): Option[ByteString] =
+    val stored = outcome.stored.get
+    outcome.forBlock match
+      case Some(blockHash) if stored.nonEmpty =>
+        log.info(
+          "[ANCESTOR-BODIES] stored the bodies of blocks {} ({} of {} asked for): block {} is tried again",
+          stored.map(_.number).mkString(", "),
+          stored.size,
+          outcome.requested.size,
+          ByteStringUtils.hash2string(blockHash)
+        )
+        Some(blockHash)
+      case Some(blockHash) =>
+        log.warning(
+          "[ANCESTOR-BODIES] no peer served the bodies of blocks {}: block {} is tried again as before",
+          outcome.requested.map(_.number).mkString(", "),
+          ByteStringUtils.hash2string(blockHash)
+        )
+        None
+      case None =>
+        if stored.nonEmpty then
+          log.info("[ANCESTOR-BODIES] stored the bodies of blocks {}", stored.map(_.number).mkString(", "))
+        None
+
+  /** The streak of state faults is of `blockHash` no more: its next fault is the first. */
+  private def clearStateFaultStreak(blockHash: ByteString): Unit =
+    stateFaultStreak = stateFaultStreak.filterNot(_._1 == blockHash)
 
   /** The first state. Takes the import lock, so an import that a stopped importer left running has ended, and only then
     * reads the best block to start from (#1705, beacon): read before, it could be a head that import was still moving.
@@ -1166,6 +1399,7 @@ final private class BlockImporterLogic(
                   }
                   .getOrElse(0) + 1
                 stateFaultStreak = Some((failedBlock.hash.value, streak))
+                wantAncestorBodiesOn(fault, failedBlock)
                 fetcher ! BlockFetcher.InvalidateBlocksFrom(
                   failedBlock.number.value,
                   "this node's state could not take the block",
@@ -1412,7 +1646,9 @@ final private class BlockImporterLogic(
           case UnknownParent => announcedBy.foreach(handleOrphanAnnounce(block, _))
           // Not judged, so nothing is said of it to the fetcher or of the peer that announced it; what was adopted
           // before the fault is announced as any imported blocks are.
-          case BlockImportStateFault(_, adopted)                     => announceAdopted(adopted, internally)
+          case BlockImportStateFault(fault, adopted) =>
+            announceAdopted(adopted, internally)
+            wantAncestorBodiesOn(fault, block)
           case BlockEnqueued | DuplicateBlock | BlockImportFailed(_) => ()
         }
         // A block that shows the announced block's parent was here clears the peer's orphan strikes. A duplicate shows
@@ -1921,6 +2157,20 @@ final private class BlockImporterLogic(
         held match
           case Some(answer) => actOn(answer, ended)
           case None => resolvingFork(failedBlockNumber, beyondTheFetch, capturedBest, snapPivot, ended, resolver)
+
+      // A fetch of ancestor bodies is answered here too, or its slot would stay taken for good (forge, B-301). The
+      // bodies are stored; what that means for the block that wanted them is left for `running`.
+      case wanted: AncestorBodiesWanted =>
+        fetchAncestorBodies(wanted)
+        Behaviors.same
+
+      case FetcherResponse(BlockFetcher.FetchedAncestorBodies(requested, bodies)) =>
+        ancestorBodiesFetched(requested, bodies)
+        Behaviors.same
+
+      case stored: AncestorBodiesStored =>
+        ancestorBodiesWritten(stored).foreach(blockHash => ancestorBodiesStoredFor = Some(blockHash))
+        Behaviors.same
 
       case _ => Behaviors.same
     }

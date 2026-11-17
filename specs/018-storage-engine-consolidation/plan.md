@@ -4326,6 +4326,40 @@ gaps, closed by tests and by moving the memo into `BranchesNotTaken`, with the g
 (+1); 13 rules broken, 11 caught by tests and 2 by the compiler, after five gaps (the reach of a remembered branch, both
 ways; the cap on the headers asked for; the two links an answer must keep) were closed by tests.
 
+#### C5a part 9d: the bodies below a block with ommers are fetched when they are not stored (B-301) (2026-11-16)
+
+The rest of B-301 (forge's W2). A block with ommers is checked against the six blocks below it, headers and bodies
+(`StdOmmersValidator.ancestorsOf`). After a SNAP sync those bodies are fetched by the hand-off (part 5c); a node started
+again straight into regular sync has no hand-off, the backfill runs up from the genesis, and the check met a body that
+was not stored: `AncestorNotStored`, a fault of this node's own, on both layouts. The importer fetched the block again
+and, from the third time, waited five minutes between tries, for ever: nothing fetched the bodies.
+
+- **On `AncestorNotStored`** (the batch and the single-block path) the importer asks what is missing of the window
+  under the failed block's parent (`AncestorWindow.check`, proof of work): a header missing inside the six blocks the
+  check reads fetches nothing and is said at ERROR; one missing below them only at WARN, once, since `BLOCKHASH` cannot
+  reach past it. The missing bodies are asked for once (`BlockFetcher.FetchAncestorBodies`), one fetch at a time for the
+  importer, by a child of the fetcher (`AncestorBodiesFetcher`: `GetBlockBodies`, at most three requests, each to a
+  peer not yet asked). The answer goes to the importer alone, never through the fetcher's own bodies.
+- **A body is stored only if it is its header's**: `StoredBodyCheck.mismatch` (the shape, the transactions root, the
+  ommers hash, the withdrawals root, the size, the blob gas), in the child as it matches bodies to the requested headers
+  in order, and again where it is written. A peer whose body matches none of the headers asked for is blacklisted; a
+  peer that leaves one out is not.
+- **The write is under the import lock** (forge, after code): the header stored under each hash is read again there,
+  so a reorganisation in an import under way cannot leave a body without its header, nor point a transaction's
+  location at a block that is not on the chain. Then the block's run of faults is cleared and it is tried again at
+  once.
+- **No answer stays lost** (forge, after code): an answer that arrives while a fork is resolved is taken there; one that
+  never arrives frees the fetch after ten minutes. The escalation is told of the fault as before: what peers never serve
+  still ends there.
+
+**Not done**: the backfill that resumes after a restart does not ask for the window first; the window that matters is
+below the best block, which can lie far above the backfill's target, and the importer now covers the case.
+
+**Tests**: `RegularSyncSpec` (+4: one fetch for exactly the missing bodies and none twice; the matching bodies stored,
+the block tried again at once, no peer blamed, nothing fetched when a header in the window is missing; an answer during
+a fork recovery; a lost answer), `BlockFetcherSpec` (+2: a round trip with a body that is not its header's, and the
+matching in order).
+
 ### Destructive change (C8a and C8b): the vault protocol blocks
 
 ```

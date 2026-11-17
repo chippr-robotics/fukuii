@@ -388,6 +388,87 @@ class RegularSyncSpec
       while resolved.get() <= before && System.nanoTime() < deadline do Thread.onSpinWait()
       resolved.get() shouldBe before + 1
 
+  /** An importer whose every import of block 15 is refused because the window its ommers are checked against is not
+    * stored whole (B-301): the headers of blocks 9 to 14 are stored, each committing to an empty body, and of their
+    * bodies only those of blocks 13 and 14. With `windowHeaderMissing`, the header of block 11 is not stored either.
+    * Nothing below block 9 is stored, which the ommers' check does not read.
+    */
+  abstract class AncestorBodiesMissing(name: String, windowHeaderMissing: Boolean = false)
+      extends ForkRecoveryOnTheUnifiedLayout(name, recoveryStarted = false):
+    val emptyBody: BlockBody = BlockBody(Nil, Nil)
+    val window: List[Block] =
+      testBlocks.filter(b => b.number.value >= 9 && b.number.value <= 14).foldLeft(List.empty[Block]) { (built, own) =>
+        val parent = built.lastOption.map(_.hash).getOrElse(own.header.parentHash)
+        val header = own.header.copy(
+          parentHash = parent,
+          transactionsRoot = TrieRoot(BlockHeader.EmptyMpt),
+          ommersHash = com.chipprbots.ethereum.domain.BlockHash(BlockHeader.EmptyOmmers)
+        )
+        built :+ Block(header, emptyBody)
+      }
+    def windowBlock(number: Int): Block = window.find(_.number.value == number).get
+    val failing: Block =
+      val own = testBlocks.find(_.number.value == 15).get
+      own.copy(header = own.header.copy(parentHash = window.last.hash))
+    window
+      .filterNot(b => windowHeaderMissing && b.number.value == 11)
+      .foreach(b =>
+        (blockchainReader
+          .getBlockHeaderByHash(_: com.chipprbots.ethereum.domain.BlockHash))
+          .when(b.hash)
+          .returns(Some(b.header))
+      )
+    window
+      .filter(_.number.value >= 13)
+      .foreach(b =>
+        (blockchainReader
+          .getBlockBodyByHash(_: com.chipprbots.ethereum.domain.BlockHash))
+          .when(b.hash)
+          .returns(Some(b.body))
+      )
+    (blockchainWriter
+      .storeBlockBody(_: com.chipprbots.ethereum.domain.BlockHash, _: BlockBody))
+      .when(*, *)
+      .returns(
+        com.chipprbots.ethereum.db.dataSource.DataSourceBatchUpdate(
+          com.chipprbots.ethereum.db.dataSource.EphemDataSource(),
+          Array.empty
+        )
+      )
+    val imports = new java.util.concurrent.atomic.AtomicInteger(0)
+
+    override lazy val consensusAdapter: ConsensusAdapter = new ConsensusAdapter(null, null, null, null, null):
+      override def evaluateBranch(blocks: NonEmptyList[Block])(implicit
+          blockExecutionScheduler: IORuntime,
+          blockchainConfig: BlockchainConfig
+      ): IO[BlockImportResult] =
+        IO {
+          imports.incrementAndGet()
+          BlockImportStateFault(
+            new com.chipprbots.ethereum.db.storage.pathstate.AncestorNotStored(6, 2, "the bodies below are not stored")
+          )
+        }
+
+    override lazy val branchResolution: BranchResolution = new BranchResolution(blockchainReader):
+      override def resolveBranch(headers: NonEmptyList[BlockHeader]): BranchResolutionResult =
+        NewBetterBranch(Nil)
+
+    /** One more batch that is block 15 alone, and the import of it ended. */
+    def failOnce(): Unit =
+      val before = imports.get()
+      importer ! BlockImporter.FetcherResponse(BlockFetcher.PickedBlocks(NonEmptyList.one(failing)))
+      val deadline = System.nanoTime() + java.util.concurrent.TimeUnit.SECONDS.toNanos(30)
+      while imports.get() <= before && System.nanoTime() < deadline do Thread.onSpinWait()
+      imports.get() shouldBe before + 1
+
+    /** Nobody was blamed for block 15: no peer is blacklisted, and the fetcher was never told to blame one. */
+    def noPeerBlamed(sentToTheFetcher: Seq[Any]): Unit =
+      blacklist.keys shouldBe empty
+      sentToTheFetcher.collect {
+        case m: BlockFetcher.InvalidateBlocksFrom if m.toBlacklist.isDefined => m
+        case m: BlockFetcher.BlockImportFailed                               => m
+      } shouldBe empty
+
   def sync[T <: Fixture](test: => T): Future[Assertion] =
     import scala.concurrent.ExecutionContext.Implicits.global
     Future {
@@ -2179,6 +2260,135 @@ class RegularSyncSpec
             askedAbout.toArray.foreach(_.asInstanceOf[BigInt] should be > failingBlock.number.value)
           }
           importedBlocksSet.filter(_.number.value > failingBlock.number.value) shouldBe empty
+      )
+
+      // B-301: after a SNAP sync the bodies of the six blocks below a block may not be stored, and a node restarted
+      // straight into regular sync has no hand-off to fetch them. The importer fetches them itself.
+      "fetch the bodies missing below a block whose ommers cannot be checked, store those that match, and try the block again at once" taggedAs (
+        UnitTest,
+        SyncTest
+      ) in sync(
+        new AncestorBodiesMissing("ancestor-bodies"):
+          // the wait between two spaced-out tries: longer than this test
+          BlockImporter.exhaustBackoff = 1.hour
+          try
+            failOnce()
+            val fetch: BlockFetcher.FetchAncestorBodies = importerFetcher.fishForSpecificMessage(5.seconds) {
+              case m: BlockFetcher.FetchAncestorBodies => m
+            }
+            withClue("exactly the bodies missing of the parent's window, highest first: ") {
+              fetch.headers.map(_.number.value) shouldBe Seq(12, 11, 10, 9).map(BigInt(_))
+              fetch.headers shouldBe Seq(12, 11, 10, 9).map(windowBlock(_).header)
+            }
+            // Twice more while the fetch is in flight, the second into the back-off: no second request.
+            failOnce()
+            failOnce()
+            val meanwhile = toTheFetcher()
+            withClue("one request in flight: ") {
+              meanwhile.collect { case m: BlockFetcher.FetchAncestorBodies => m } shouldBe empty
+            }
+            noPeerBlamed(meanwhile)
+
+            // Three bodies that are the ones their headers commit to, and one that is not.
+            val wrong = BlockBody(testBlocks.head.body.transactionList, Nil)
+            fetch.replyTo ! BlockFetcher.FetchedAncestorBodies(
+              fetch.headers,
+              Seq(
+                windowBlock(12).header -> emptyBody,
+                windowBlock(11).header -> wrong,
+                windowBlock(10).header -> emptyBody,
+                windowBlock(9).header -> emptyBody
+              )
+            )
+            withClue("tried again at once, not at the end of the back-off: ") {
+              importerFetcher.fishForSpecificMessage(5.seconds) { case _: BlockFetcher.PickBlocks => true }
+            }
+            // The streak started over, and the fetch is no longer in flight: the next fault is a first one, and asks
+            // again for what is still missing (the stub's stored bodies do not change).
+            failOnce()
+            val after = toTheFetcher()
+            after.collect { case m: BlockFetcher.FetchAncestorBodies => m } should have size 1
+            withClue("not backed off: ") {
+              after.collect { case m: BlockFetcher.PickBlocks => m } should not be empty
+            }
+            noPeerBlamed(after)
+            // Verified last: ScalaMock refuses a call to a stub after a verify.
+            Seq(12, 10, 9).foreach { number =>
+              (blockchainWriter
+                .storeBlockBody(_: com.chipprbots.ethereum.domain.BlockHash, _: BlockBody))
+                .verify(windowBlock(number).hash, emptyBody)
+                .once()
+            }
+            withClue("a body that is not the one its header commits to is not stored: ") {
+              (blockchainWriter
+                .storeBlockBody(_: com.chipprbots.ethereum.domain.BlockHash, _: BlockBody))
+                .verify(windowBlock(11).hash, *)
+                .never()
+            }
+          finally BlockImporter.exhaustBackoff = 5.minutes
+      )
+
+      "fetch no body below a block whose ommers cannot be checked when a header of that window is missing" taggedAs (
+        UnitTest,
+        SyncTest
+      ) in sync(
+        new AncestorBodiesMissing("ancestor-header", windowHeaderMissing = true):
+          failOnce()
+          val sent: Seq[Any] = toTheFetcher()
+          sent.collect { case m: BlockFetcher.FetchAncestorBodies => m } shouldBe empty
+          withClue("fetched again from the block, as before: ") {
+            sent.collect { case m: BlockFetcher.InvalidateBlocksFrom => m.fromBlock } shouldBe Seq(BigInt(15))
+          }
+          noPeerBlamed(sent)
+          (blockchainWriter
+            .storeBlockBody(_: com.chipprbots.ethereum.domain.BlockHash, _: BlockBody))
+            .verify(*, *)
+            .never()
+      )
+
+      // forge, B-301 B1: a fork recovery's behaviour dropped the answer, and the one slot for a fetch stayed taken for
+      // good: every later fault only logged a fetch in flight, and the endless back-off was back.
+      "free the slot of a fetch of ancestor bodies whose answer arrives during a fork recovery, and store the bodies" taggedAs (
+        UnitTest,
+        SyncTest
+      ) in sync(
+        new AncestorBodiesMissing("ancestor-bodies-fork"):
+          failOnce()
+          val fetch: BlockFetcher.FetchAncestorBodies = importerFetcher.fishForSpecificMessage(5.seconds) {
+            case m: BlockFetcher.FetchAncestorBodies => m
+          }
+          importer ! BlockImporter.StartForkRecovery(failing.number.value)
+          fetch.replyTo ! BlockFetcher.FetchedAncestorBodies(fetch.headers, Seq(windowBlock(12).header -> emptyBody))
+          importer ! BlockImporter.BranchResolverMsg(FastSyncBranchResolverActor.BranchResolutionFailed.noCommonBlock)
+          importerFetcher.fishForSpecificMessage(5.seconds) { case _: BlockFetcher.InvalidateBlocksFrom => true }
+          toTheFetcher()
+
+          failOnce()
+          withClue("the slot is free, so the next fault fetches again: ") {
+            toTheFetcher().collect { case m: BlockFetcher.FetchAncestorBodies => m } should have size 1
+          }
+          (blockchainWriter
+            .storeBlockBody(_: com.chipprbots.ethereum.domain.BlockHash, _: BlockBody))
+            .verify(windowBlock(12).hash, emptyBody)
+            .once()
+          testKit.stop(importer)
+      )
+
+      // forge, B-301 B1: an answer that never comes holds the slot only until the deadline.
+      "ask again for ancestor bodies when the fetch in flight is not answered within the deadline" taggedAs (
+        UnitTest,
+        SyncTest
+      ) in sync(
+        new AncestorBodiesMissing("ancestor-bodies-lost"):
+          BlockImporter.ancestorBodiesFetchDeadline = 1.millis
+          try
+            failOnce()
+            importerFetcher.fishForSpecificMessage(5.seconds) { case m: BlockFetcher.FetchAncestorBodies => m }
+            failOnce()
+            // the unanswered fetch no longer holds the slot: the second fault asks again (waited for, not sampled in a
+            // quiet window, which a loaded machine can outlast)
+            importerFetcher.fishForSpecificMessage(5.seconds) { case m: BlockFetcher.FetchAncestorBodies => m }
+          finally BlockImporter.ancestorBodiesFetchDeadline = 10.minutes
       )
 
       "recognise a block execution's trie error by the text it reaches the importer as" taggedAs (
