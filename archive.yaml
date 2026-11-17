@@ -1,0 +1,1442 @@
+# fukuii shared backlog: closed items (done, dropped) that `backlog.py prune` moved out of backlog.yaml.
+# Their ids stay taken. The Tracker page still counts them (scope, done, recently done). Do not hand-edit.
+version: 1
+items:
+  - id: B-001
+    title: "H3: corrupt stored nodes and code read as missing, not as invalid blocks; re-SNAP cap"
+    priority: P1
+    status: done
+    area: storage
+    size: L
+    opened: 2026-11-04
+    closed: 2026-11-08
+    refs: [H3, CHASE A deleteIfCorrupt, CHASE A BlockchainReader:78]
+    links:
+      prs: [1747, 1749, 1753]
+      branch: fix/h3-keccak-on-read
+    notes: vault and beacon approved with nits; their fixes are folded in. newPayload keeps ACCEPTED on MPTError (geth parity).
+  - id: B-002
+    title: "#1654 PR B: ChainWeightReconcile, a one-time recompute of stored TD from genesis behind a marker"
+    priority: P1
+    status: done
+    area: sync
+    size: L
+    opened: 2026-11-07
+    closed: 2026-11-08
+    refs: ["#1654-B", "#1654 b3", H6(2)]
+    links:
+      issues: [1654]
+      prs: [1751, 1762, 1769]
+      branch: fix/1654b-chain-weight-reconcile
+    notes: |-
+      Reviewers forge, vault, beacon. Lock order ImportLock -> ChainInsertLock.
+      Continuation on fukuii-fc: .local/docs/continuations/forge-1654b-reconcile.md
+  - id: B-003
+    title: "Shared backlog tracker: backlog.py, the Tracker docs page, publish workflows, constitution Principle VIII"
+    priority: P1
+    status: done
+    area: tooling
+    size: M
+    opened: 2026-11-08
+    closed: 2026-11-08
+    refs: []
+    links:
+      prs: [1748]
+      branch: chore/backlog-tracker
+    notes: The page goes live once the tooling reaches main (gh-pages deploys from main).
+  - id: B-004
+    title: "#1654 PR C: on PoS chains write the peer TD unscaled (difficulty 0) in TD calibration"
+    priority: P1
+    status: done
+    area: sync
+    size: S
+    opened: 2026-11-05
+    closed: 2026-11-09
+    refs: ["#1654-C", H6(1)]
+    links:
+      issues: [1654]
+      prs: [1772]
+    notes: beacon. Check that PR B's ChainWeightSeed covers H6(2) (seed-chain-weights seeds the head only).
+  - id: B-006
+    title: "#1727 section 2+: eth_simulateV1 parity with geth v1.17.9 (190 of 815 cases differ), PRs by class"
+    priority: P1
+    status: done
+    area: rpc
+    size: L
+    opened: 2026-11-07
+    closed: 2026-11-09
+    refs: ["#1727 §2", backlog 2]
+    links:
+      issues: [1727]
+      prs: [1778]
+    notes: conduit; the precompile-reason fix (vm/) and the ECIP-1017 reward fix need forge and beacon.
+  - id: B-007
+    title: "H4: regular sync blacklists peers for UNKNOWN_PARENT right after SNAP hand-off on a reorging PoW chain"
+    priority: P1
+    status: done
+    area: p2p
+    size: M
+    opened: 2026-11-04
+    closed: 2026-11-08
+    refs: [H4, CHASE A3]
+    links:
+      issues: [1683]
+      prs: [1755, 1757]
+    notes: "herald. T062 Mordor: 33 peers blacklisted in 24 h; peer count drifted 13 -> ~7."
+  - id: B-019
+    title: SyncControllerSpec:967 "leave SNAP's resume alone…" fails on every run (SyncTest-tagged, so CI never runs it)
+    priority: P2
+    status: done
+    area: tests
+    size: S
+    opened: 2026-11-07
+    closed: 2026-11-17
+    refs: [SyncTest sweep 2026-11-07]
+    links:
+      prs: [1873]
+    notes: |-
+      Seeds AccountsComplete with no task-file path, so taskFilesUnusable clears the flags. Also decide which tier runs SyncTest.
+      2026-11-17 done: 0.12.1 retro: fixed by #1873 (B-309), the test seeds the task files
+  - id: B-027
+    title: VM error-text parity with geth/core-geth for eth_call and eth_estimateGas errors
+    priority: P2
+    status: done
+    area: rpc
+    size: M
+    opened: 2026-11-05
+    closed: 2026-11-17
+    refs: [H10, CHASE D]
+    links:
+      prs: [1777]
+    notes: |-
+      conduit + forge (needs ProgramError detail). Cosmetic for hive, which redacts messages.
+      2026-11-17 done: 0.12.1 retro: #1777 (VM/call texts) and #1778 (precompile reasons); remaining texts are B-137, B-171, B-172
+  - id: B-038
+    title: "Spec 027 slice 1: worms, glyphs, tiers"
+    priority: P2
+    status: done
+    area: tui
+    size: M
+    opened: 2026-11-07
+    closed: 2026-11-08
+    refs: ["#1490"]
+    links:
+      prs: [1752]
+      spec: specs/027-tui-dashboard
+      branch: feat/027-s1-worms
+    notes: prism; eye.
+  - id: B-039
+    title: "Spec 027 slice 2: tick, motion, non-blocking loop"
+    priority: P2
+    status: done
+    area: tui
+    size: M
+    opened: 2026-11-07
+    closed: 2026-11-10
+    refs: []
+    links:
+      prs: [1783]
+      spec: specs/027-tui-dashboard
+      branch: feat/027-s2-motion
+    depends_on: [B-038]
+    notes: |-
+      2026-11-09 in-progress: Code done on feat/027-s2-motion (2026-11-09); prism review, then PR.
+      2026-11-09 review: PR #1783: prism (3 rounds) + eye passed.
+      2026-11-10 done: Merged as b971c9dae. Manual gates (T057) move to the UAT item B-189.
+  - id: B-040
+    title: "Spec 027 slice 3: views, layout, alerts"
+    priority: P2
+    status: done
+    area: tui
+    size: M
+    opened: 2026-11-07
+    closed: 2026-11-10
+    refs: []
+    links:
+      prs: [1784]
+      spec: specs/027-tui-dashboard
+      branch: feat/027-s3-views
+    depends_on: [B-039]
+    notes: |-
+      2026-11-10 review: PR #1784: prism (3 rounds) + eye passed; merge after the B-044 PR.
+      2026-11-10 done: Merged as 1aa158894. T081 manual run moves to UAT B-189. Follow-up B-192.
+  - id: B-041
+    title: "Spec 027 slice 4a: peer scoring wired (PeerScoringManager, scores through NetworkMetrics)"
+    priority: P2
+    status: done
+    area: p2p
+    size: M
+    opened: 2026-11-07
+    closed: 2026-11-09
+    refs: [D-1 (a)]
+    links:
+      prs: [1782]
+      spec: specs/027-tui-dashboard
+      branch: feat/027-s4a-peer-scoring
+    notes: |-
+      2026-11-09 in-progress: Code done; prism review fixes in progress; T149 Mordor run pending.
+      2026-11-09 review: PR #1782: prism + eye passed; T149 deferred to the all-slices UAT.
+      2026-11-09 done: Merged as d89867c50. T149's manual Mordor run moves to the spec 027 UAT item.
+  - id: B-042
+    title: "Spec 027 slice 4: logs and rich peers"
+    priority: P2
+    status: done
+    area: tui
+    size: M
+    opened: 2026-11-07
+    closed: 2026-11-11
+    refs: []
+    links:
+      prs: [1787]
+      spec: specs/027-tui-dashboard
+      branch: feat/027-s4-logs-peers
+    depends_on: [B-040, B-041]
+    notes: |-
+      2026-11-11 review: PR #1787: prism (3 rounds) + eye; ring race fixed (gate 3x 605/0).
+      2026-11-11 done: Merged. T106 manual run moves to UAT B-189. Follow-ups B-195, B-196, B-199.
+  - id: B-043
+    title: "Spec 027 slice 5: per-chain panels (ETH CL and Engine API; ETC mining)"
+    priority: P2
+    status: done
+    area: tui
+    size: M
+    opened: 2026-11-07
+    closed: 2026-11-11
+    refs: []
+    links:
+      prs: [1789]
+      spec: specs/027-tui-dashboard
+      branch: feat/027-s5-chain-panels
+    depends_on: [B-042]
+    notes: |-
+      beacon (ETH half) and forge (ETC half) review.
+      2026-11-11 review: PR #1789: beacon + forge (no consensus change, on sonnet: opus weekly limit), prism, eye 1035/0 x2.
+      2026-11-11 done: Merged. T123 (Sepolia + Mordor runs, /metrics scrape) moves to UAT B-189. Follow-ups B-193, B-194, B-200, B-201, B-202.
+  - id: B-044
+    title: "TUI display defects: SNAP progress goes backwards, \"no target yet\" during SNAP, duplicated Accounts/rate lines"
+    priority: P2
+    status: done
+    area: tui
+    size: S
+    opened: 2026-11-07
+    closed: 2026-11-10
+    refs: [027 live check 2026-11-07]
+    links:
+      prs: [1783, 1785]
+      spec: specs/027-tui-dashboard
+    notes: |-
+      2026-11-10 in-progress: TUI part merged in #1783 (b971c9dae); SyncProgressMonitor part in progress on fix/b044-snap-progress.
+      2026-11-10 review: PR #1785 (SyncProgressMonitor part): prism 3 rounds + eye passed; merges before #1784.
+      2026-11-10 done: TUI part #1783, monitor part #1785 (ba2361acf), dashboard rows #1784. Follow-ups B-190, B-191.
+  - id: B-045
+    title: "TUI lifecycle defects: ERROR loop after Ctrl-C, checkInput swallows errors, banner holds the lock, StdNode makes a Tui"
+    priority: P2
+    status: done
+    area: tui
+    size: S
+    opened: 2026-11-07
+    closed: 2026-11-10
+    refs: ["#1744 follow-up"]
+    links:
+      prs: [1783]
+      spec: specs/027-tui-dashboard
+    notes: |-
+      2026-11-09 in-progress: Code done on feat/027-s2-motion (2026-11-09); prism review, then PR.
+      2026-11-09 review: PR #1783: prism (3 rounds) + eye passed.
+      2026-11-10 done: Merged as b971c9dae. Manual gates (T057) move to the UAT item B-189.
+  - id: B-054
+    title: "Spec 018 Track C C1: the trie reports positions (item 8a)"
+    priority: P2
+    status: done
+    area: storage
+    size: L
+    opened: 2026-11-07
+    closed: 2026-11-11
+    refs: [018 C1]
+    links:
+      prs: [1788]
+      spec: specs/018-storage-engine-consolidation
+    depends_on: [B-053]
+    notes: "2026-11-11 in-progress: C1 starts on the frozen golden vectors and oracle list (tasks.md: C1 needs only T014/T015); T025/T026/T033 need the pinned jar and stay open."
+  - id: B-055
+    title: "Spec 018 Track C C2a: the position store's read side (item 8b)"
+    priority: P2
+    status: done
+    area: storage
+    size: L
+    opened: 2026-11-07
+    closed: 2026-11-11
+    refs: [018 C2a]
+    links:
+      prs: [1791, 1792]
+      spec: specs/018-storage-engine-consolidation
+    depends_on: [B-054]
+    notes: "2026-11-11 done: C2a merged in two PRs: #1791 (owner threading, wrappers on the decorator, position mirror) and #1792 (the pathstate read side behind the guard). T045's call-site switch moved to T093; T049 and T050's figures wait for C0 (B-203); T026's ethereum/tests half is B-207."
+  - id: B-056
+    title: "Spec 018 Track C C2b: every reader can be handed the position store (item 8c)"
+    priority: P2
+    status: done
+    area: storage
+    size: L
+    opened: 2026-11-07
+    closed: 2026-11-11
+    refs: [018 C2b]
+    links:
+      prs: [1799]
+      spec: specs/018-storage-engine-consolidation
+    depends_on: [B-055]
+    notes: "2026-11-11 done: C2b complete: #1796 (ratchet), #1797 (RPC readers), #1798 (SNAP serving), #1799 (walkers). Pinned-jar halves wait for C0 (B-207, B-212)."
+  - id: B-057
+    title: "Spec 018 Track C C3a: the changeset record and CF v (item 6a)"
+    priority: P2
+    status: done
+    area: storage
+    size: M
+    opened: 2026-11-07
+    closed: 2026-11-11
+    refs: [018 C3a]
+    links:
+      prs: [1793]
+      spec: specs/018-storage-engine-consolidation
+    depends_on: [B-056]
+    notes: "2026-11-11 done: C3a merged as #1793. T074's DC-14 figures wait for C0 (B-203). The user's decisions of 2026-11-11 (512 blocks without finality, one downgrade barrier, snap1 off under the guard) are recorded in a follow-up."
+  - id: B-058
+    title: "Spec 018 Track C C3b: the staged commit, the state lock and the canonical in-place commit (item 6b)"
+    priority: P2
+    status: done
+    area: storage
+    size: L
+    opened: 2026-11-07
+    closed: 2026-11-11
+    refs: [018 C3b]
+    links:
+      prs: [1800]
+      spec: specs/018-storage-engine-consolidation
+    depends_on: [B-057]
+    notes: "2026-11-11 done: C3b complete in one PR: staged layer, canonical commit, retention, metrics, and the wiring into block execution. Guard serves linear import only until C4. T075 recorded values and T098-T100 wait for C0 (B-203)."
+  - id: B-059
+    title: "Spec 018 Track C C3c: proposer view, bypass writers, genesis commit and the ported harnesses (item 6b')"
+    priority: P2
+    status: done
+    area: storage
+    size: L
+    opened: 2026-11-07
+    closed: 2026-11-12
+    refs: [018 C3c]
+    links:
+      prs: [1805]
+      spec: specs/018-storage-engine-consolidation
+    depends_on: [B-058]
+    notes: "2026-11-12 done: C3c complete in its linear subset: genesis commit (#1801), proposer view (#1802), lenient import (#1803), fixture replays and canary (#1804), test mode (#1805). Deferred: B-219, B-220."
+  - id: B-060
+    title: "Spec 018 Track C C4a: the overlay (item 6c)"
+    priority: P2
+    status: done
+    area: storage
+    size: L
+    opened: 2026-11-07
+    closed: 2026-11-13
+    refs: [018 C4a]
+    links:
+      prs: [1815]
+      spec: specs/018-storage-engine-consolidation
+    depends_on: [B-059]
+    notes: "2026-11-13 done: C4a, the overlay, in seven PRs: #1806 (forward layers), #1807 (reverse index), #1808 (bounds), #1809 (ordering, stress, M3), #1811 (SNAP serves the window), #1813 (what a reader behind the head may cost), #1815 (JSON-RPC and GraphQL behind the head, reads in flight bounded). Non-head state is readable and bounded; nothing moves the head yet. T135's DC-14 figures stay open with the other slices' (B-203). SNAP stays unadvertised until the node follows the head (C4d, C4e)."
+  - id: B-061
+    title: "Spec 018 Track C C4b: the move core (item 6d)"
+    priority: P2
+    status: done
+    area: storage
+    size: L
+    opened: 2026-11-07
+    closed: 2026-11-14
+    refs: [018 C4b]
+    links:
+      prs: [1829]
+      spec: specs/018-storage-engine-consolidation
+    depends_on: [B-060]
+    notes: "2026-11-14 done: C4b complete: #1816 (part 0), #1818 (1), #1824 (2a), #1825 (2b), #1826 (2c), #1827 (3a), #1828 (3b), #1829 (4). Follow-ups added."
+  - id: B-062
+    title: "Spec 018 Track C C4d: the PoS arms (item 6f)"
+    priority: P2
+    status: done
+    area: storage
+    size: M
+    opened: 2026-11-07
+    closed: 2026-11-14
+    refs: [018 C4d]
+    links:
+      prs: [1843]
+      spec: specs/018-storage-engine-consolidation
+    depends_on: [B-061]
+    notes: "2026-11-14 done: C4d complete: parts 0-4b merged (#1830-#1833, #1838, #1840, #1841); close-out #1843. The escalation trigger (T163, T164, T174) and the ordered clear are C5a's (B-064), with beacon's design and the user's decisions in plan.md C4d part 5."
+  - id: B-063
+    title: "Spec 018 Track C C4e: the PoW arms (item 6g)"
+    priority: P2
+    status: done
+    area: storage
+    size: M
+    opened: 2026-11-07
+    closed: 2026-11-15
+    refs: [018 C4e]
+    links:
+      prs: [1853]
+      spec: specs/018-storage-engine-consolidation
+    depends_on: [B-062]
+    notes: "2026-11-15 done: C4e complete: #1846, #1849, #1850, #1851, #1852, #1853. Gates carried: B-293, B-295, B-296, B-297, B-300"
+  - id: B-071
+    title: "#1655 part 2: Ephemery staking (partial withdrawal matched geth; exit request next, then the write-up)"
+    priority: P2
+    status: done
+    area: ops
+    size: M
+    opened: 2026-11-07
+    closed: 2026-11-11
+    refs: [handoff §4]
+    links:
+      issues: [1655]
+      prs: [1786]
+    notes: |-
+      2026-11-10 review: Sweep matched geth (block 122552, 834.07 ETH). Runbook PR #1786; close #1655 when it merges.
+      2026-11-11 done: Sweep matched geth (block 122552). Runbook section 5 merged (#1786); validator client stopped. #1655 to close.
+  - id: B-111
+    title: Match SNAP bytecode responses against the requested code hashes
+    priority: P2
+    status: done
+    area: snap
+    opened: 2026-09-27
+    closed: 2026-11-17
+    refs: [N-002]
+    links: {}
+    notes: |-
+      SNAPRequestTracker.scala:225. Check whether bytecode handling verifies them already.
+      2026-11-17 done: 0.12.1 retro: already in place, ByteCodeResponseHandling.validateReturnedCodes checks returned codes against the requested hashes
+  - id: B-120
+    title: "Constitution enforcement map: add Principle VIII rows (Gate Integrity C8 fails every PR until merged)"
+    priority: P0
+    status: done
+    area: ci
+    size: S
+    opened: 2026-11-08
+    closed: 2026-11-08
+    refs: [B-003]
+    links:
+      prs: [1750]
+      branch: docs/constitution-enforcement-viii
+    notes: "#1748 amended the constitution without the enforcement-map entry; C8 blocks all PRs to staging."
+  - id: B-124
+    title: "Spec 027: give the resolved TuiConfig glyph choice its own type"
+    priority: P3
+    status: done
+    area: tui
+    size: S
+    opened: 2026-11-08
+    closed: 2026-11-10
+    refs: [prism review of 027 slice 1]
+    links:
+      prs: [1783]
+      spec: specs/027-tui-dashboard
+      branch: feat/027-s2-motion
+    depends_on: [B-038]
+    notes: |-
+      2026-11-09 in-progress: Code done on feat/027-s2-motion (2026-11-09); prism review, then PR.
+      2026-11-09 review: PR #1783: prism (3 rounds) + eye passed.
+      2026-11-10 done: Merged as b971c9dae. Manual gates (T057) move to the UAT item B-189.
+  - id: B-127
+    title: "1727 PR1: simulate result shape (yParity on typed only, INVALID text, empty returnData on error)"
+    priority: P1
+    status: done
+    area: rpc
+    size: S
+    opened: 2026-11-08
+    closed: 2026-11-08
+    refs: [B-006]
+    links:
+      issues: [1727]
+      prs: [1754]
+      spec: .local/docs/planning/1727-s2-design
+      branch: fix/1727-simulate-result-shape
+    notes: "Plan: conduit 2026-11-08; user decisions: case-insensitive keys; class G this sprint."
+  - id: B-128
+    title: "1727 PR2: simulate override decoding via CallOverridesJson, case-insensitive keys, beaconRoot"
+    priority: P1
+    status: done
+    area: rpc
+    size: M
+    opened: 2026-11-08
+    closed: 2026-11-09
+    refs: [B-006]
+    links:
+      issues: [1727]
+      prs: [1770]
+      spec: .local/docs/planning/1727-s2-design
+      branch: fix/1727-simulate-override-decoding
+    notes: "Plan: conduit 2026-11-08; user decisions: case-insensitive keys; class G this sprint."
+  - id: B-129
+    title: "1727 PR3: precompile overrides (active set incl 0x0a, entry disables, last move wins); shared with eth_call"
+    priority: P1
+    status: done
+    area: rpc
+    size: M
+    opened: 2026-11-08
+    closed: 2026-11-09
+    refs: [B-006]
+    links:
+      issues: [1727]
+      prs: [1771]
+      spec: .local/docs/planning/1727-s2-design
+      branch: fix/1727-simulate-precompile-overrides
+    notes: "Plan: conduit 2026-11-08; user decisions: case-insensitive keys; class G this sprint."
+  - id: B-130
+    title: "1727 PR4: maxUsedGas = peak gas before refund (+ Prague calldata floor); beacon glance"
+    priority: P2
+    status: done
+    area: rpc
+    size: S
+    opened: 2026-11-08
+    closed: 2026-11-09
+    refs: [B-006]
+    links:
+      issues: [1727]
+      prs: [1773]
+      spec: .local/docs/planning/1727-s2-design
+      branch: fix/1727-simulate-max-used-gas
+    notes: "Plan: conduit 2026-11-08; user decisions: case-insensitive keys; class G this sprint."
+  - id: B-131
+    title: "1727 PR5: simulated system calls: empty system contract error; moved precompiles; beacon"
+    priority: P2
+    status: done
+    area: rpc
+    size: S
+    opened: 2026-11-08
+    closed: 2026-11-09
+    refs: [B-006]
+    links:
+      issues: [1727]
+      prs: [1774]
+      spec: .local/docs/planning/1727-s2-design
+      branch: fix/1727-simulate-system-contracts
+    notes: "Plan: conduit 2026-11-08; user decisions: case-insensitive keys; class G this sprint."
+  - id: B-132
+    title: "1727 PR6: ETC simulated blocks pay ECIP-1017 era reward + Olympia treasury, PoW predicate; forge"
+    priority: P2
+    status: done
+    area: rpc
+    size: M
+    opened: 2026-11-08
+    closed: 2026-11-09
+    refs: [B-006]
+    links:
+      issues: [1727]
+      prs: [1776]
+      spec: .local/docs/planning/1727-s2-design
+      branch: fix/1727-simulate-etc-reward
+    notes: "Plan: conduit 2026-11-08; user decisions: case-insensitive keys; class G this sprint."
+  - id: B-133
+    title: "1727 PR7: VM error-text parity (precompile reasons, stack counts, EIP-7823 OutOfGas); vm/, forge+beacon"
+    priority: P2
+    status: done
+    area: evm
+    size: L
+    opened: 2026-11-08
+    closed: 2026-11-09
+    refs: [B-006]
+    links:
+      issues: [1727]
+      prs: [1778]
+      spec: .local/docs/planning/1727-s2-design
+      branch: fix/1727-simulate-vm-error-texts
+    notes: "Plan: conduit 2026-11-08; user decisions: case-insensitive keys; class G this sprint."
+  - id: B-134
+    title: "1727 PR7b: precompile failure reasons (failureReason per contract, geth text on both chains)"
+    priority: P2
+    status: done
+    area: evm
+    size: M
+    opened: 2026-11-08
+    closed: 2026-11-09
+    refs: [B-133]
+    links:
+      issues: [1727]
+      prs: [1778]
+      branch: fix/1727-simulate-precompile-reasons
+    depends_on: [B-133]
+    notes: "forge impact analysis 2026-11-08; exec stays Option; reasons only via CallErrors. PR7 (B-133) is now 7a: stack counts, create split, transfer pre-check, ETC shortfall."
+  - id: B-135
+    title: "BLS/KZG precompiles turn a missing native library into a precompile FAILURE: consensus split on a misconfigured node"
+    priority: P1
+    status: done
+    area: evm
+    size: S
+    opened: 2026-11-08
+    closed: 2026-11-08
+    refs: []
+    links:
+      prs: [1763, 1767]
+    notes: "forge (B-133 analysis): blsNativeOp PrecompiledContracts:656,674 and the KZG catch :782. Must fail loudly (refuse to start / crash), never return a result."
+  - id: B-145
+    title: Audit TLS and mTLS on every fukuii listener for zero-trust deployments (user requirement 2026-11-08)
+    priority: P1
+    status: done
+    area: ops
+    size: M
+    opened: 2026-11-08
+    closed: 2026-11-08
+    refs: []
+    links: {}
+    notes: |-
+      Audit by conduit on dev-node (v0.11.0 code + live host); gaps become implementation items for fukuii-fc.
+      2026-11-08 done: Audit done 2026-11-08: findings in #1756; follow-ups B-146..B-150 (B-150 private).
+  - id: B-152
+    title: Security hardening batch from the 2026-11-08 audit (4 items; details private until published)
+    priority: P0
+    status: done
+    area: security
+    size: M
+    opened: 2026-11-08
+    closed: 2026-11-08
+    refs: []
+    links:
+      prs: [1765]
+    notes: Neutral placeholder per Principle VIII. Owner fukuii-fc.
+  - id: B-153
+    title: "BLS12-381 differential: eth_pairings (current) vs gnark vs blst over EIP-2537 vectors and edge corpus"
+    priority: P1
+    status: done
+    area: evm
+    size: M
+    opened: 2026-11-08
+    closed: 2026-11-08
+    refs: [B-151]
+    links:
+      prs: [1764]
+    notes: "beacon B-151 analysis: eth_pairings is abandoned upstream; any disagreement means live Linux nodes may compute EIP-2537 wrong, escalate. Test-scope only."
+  - id: B-154
+    title: "Per-transport RPC namespaces: HTTP/WS default eth,net,web3,fukuii; IPC all; miner_* to an opt-in miner namespace"
+    priority: P1
+    status: done
+    area: rpc
+    size: M
+    opened: 2026-11-08
+    closed: 2026-11-09
+    refs: []
+    links:
+      prs: [1768]
+    notes: "User decision 2026-11-08: geth parity. conduit. Lands after #1760/#1761."
+  - id: B-160
+    title: SNAP pivot header checks on ETC bootstrap/refresh paths (details in private notes)
+    priority: P1
+    status: done
+    area: sync
+    size: M
+    opened: 2026-11-09
+    closed: 2026-11-09
+    refs: []
+    links:
+      prs: [1775]
+    notes: From forge review of B-004, 2026-11-09. forge then herald.
+  - id: B-165
+    title: "ETH SNAP header chain: TTD-chain check mode (link-only pre-merge, PoS validate post-merge, transition rule); authenticate refreshed pivots from the CL head hash"
+    priority: P1
+    status: done
+    area: sync
+    size: M
+    opened: 2026-11-09
+    closed: 2026-11-09
+    refs: [B-160]
+    links:
+      prs: [1780]
+    notes: beacon plan 2026-11-09, details in private notes. Not TransitionBlockHeaderValidator as is (no ETH difficulty-bomb schedule).
+  - id: B-167
+    title: "PoW block generation cannot produce a valid ETC Olympia block: no base fee in the prepared header; treasury paid against gasUsed 0"
+    priority: P1
+    status: done
+    area: consensus
+    size: M
+    opened: 2026-11-09
+    closed: 2026-11-09
+    refs: [B-132]
+    links:
+      prs: [1779]
+    notes: "forge 2026-11-09, read from code only: consensus/blocks/BlockGeneratorSkeleton.scala:42-68 defaultPrepareHeader never sets baseFee; prepareBlock pays the treasury against header gasUsed still 0 (:61, :100 → BlockPreparator.prepareBlock), so a mined Olympia block lacks a base fee and its state root omits the treasury credit that import adds. Must be fixed before Olympia is scheduled. Spec 018 EG-6 would catch it. forge then beacon."
+  - id: B-168
+    title: "eth_simulateV1 on ETC: first Olympia block header shape keys off the parent base fee; next base fee skips the 1 gwei floor"
+    priority: P2
+    status: dropped
+    area: rpc
+    size: S
+    opened: 2026-11-09
+    closed: 2026-11-09
+    refs: [B-132]
+    links: {}
+    notes: |-
+      forge 2026-11-09: EthSimulateService.buildBlockHeader checks parentHeader.baseFee.isDefined, but geth decides by the block number; computeNextBaseFee uses the ETH formula, not BaseFeeCalculator, so with validation: true on ETC the 1 gwei floor and the first-Olympia initial base fee are skipped.
+      2026-11-09 dropped: User decision 2026-11-09: Olympia is deferred; ETH EIP-1559 is the only implementation that matters; no Olympia-specific changes to fukuii.
+  - id: B-178
+    title: ECIP-1111 (published 2026-09-08) credits the base fee per transaction; fukuii credits baseFee*gasUsed once, at block finalization
+    priority: P1
+    status: dropped
+    area: consensus
+    size: M
+    opened: 2026-11-09
+    closed: 2026-11-09
+    refs: [B-167]
+    links: {}
+    notes: |-
+      ethereumclassic/ECIPs 2e1d632323: credit inside each tx after the tip, block-level credit MUST NOT. fukuii BlockRewards.creditBaseFeeToTreasury and Besu-fork OlympiaBlockProcessor are block-level; roots differ when a tx reads BALANCE(vault) mid-block. User decision first; forge.
+      2026-11-09 dropped: User decision 2026-11-09: keep the per-block treasury credit in fukuii; amend the ECIP-1111 text instead (B-183).
+  - id: B-179
+    title: BaseFeeCalculator applies the MIN_BASE_FEE floor only on the decrease path; ECIP-1111 requires it on every path, fork block included
+    priority: P2
+    status: dropped
+    area: consensus
+    size: S
+    opened: 2026-11-09
+    closed: 2026-11-09
+    refs: [B-167]
+    links: {}
+    notes: |-
+      Equivalent while floor == INITIAL_BASE_FEE == 1 gwei; ECIP-1111 vector MIN_BASE_FEE > INITIAL_BASE_FEE would fail. ECIP also wants INITIAL_BASE_FEE in chain config (code constant today). forge.
+      2026-11-09 dropped: User decision 2026-11-09: Olympia is deferred; ETH EIP-1559 is the only implementation that matters; no Olympia-specific changes to fukuii.
+  - id: B-183
+    title: "Propose an ECIP-1111 text amendment: the treasury credit is once per block, not per transaction"
+    priority: P1
+    status: dropped
+    area: spec
+    size: S
+    opened: 2026-11-09
+    closed: 2026-11-09
+    refs: [B-178]
+    links: {}
+    notes: |-
+      User decision 2026-11-09. Published text (ethereumclassic/ECIPs 2e1d632323, 2026-09-08) requires a per-transaction credit and forbids a block-level one; fukuii and the Besu fork credit per block. State roots differ if a tx reads the vault balance mid-block. Owner: user (ECIP PR); fukuii keeps per-block.
+      2026-11-09 dropped: User decision 2026-11-09: Olympia is deferred; ETH EIP-1559 is the only implementation that matters; no Olympia-specific changes to fukuii.
+  - id: B-184
+    title: "Remove Olympia-only parts merged in #1776 and #1779 (simulate treasury credit, simulate ETC-Olympia EIP-2935, Olympia tests and wording)"
+    priority: P1
+    status: done
+    area: evm
+    size: S
+    opened: 2026-11-09
+    closed: 2026-11-09
+    refs: [B-167]
+    links:
+      prs: [1781]
+    notes: "User decision 2026-11-09: Olympia deferred; ETH EIP-1559 is the only implementation that matters. Keep the generic import parity and the ETH London base fee for PoW-mined blocks; do not touch import code that predates these PRs."
+  - id: B-193
+    title: "Engine API metrics mislabel: ACCEPTED counted as INVALID, engine_newpayload_syncing never moves, dedup/early returns unrecorded"
+    priority: P3
+    status: done
+    area: engine
+    size: S
+    opened: 2026-11-10
+    closed: 2026-11-14
+    refs: ["beacon pre-flight, 027 slice 5, 2026-11-10"]
+    links:
+      prs: [1842]
+    notes: EngineApiMetrics.scala:61 case _ folds ACCEPTED (EngineApiService.scala:747) into INVALID; no caller passes SYNCING; newPayload returns at :385/:411/:448 record nothing; FCU INVALID also covers -38002/-38003. Additive fix only; beacon owns.
+  - id: B-196
+    title: "PendingTransactionsManager: a pool-size query message for the TUI (GetPendingTransactionsReq copies the whole pool per poll)"
+    priority: P3
+    status: done
+    area: txpool
+    size: S
+    opened: 2026-11-10
+    closed: 2026-11-14
+    refs: ["prism review of 027 slice 4, 2026-11-10"]
+    links:
+      prs: [1839]
+    notes: PendingTransactionsManager.scala:811-816 runs cleanUp() and copies the pool to answer the TUI's once-a-second size read.
+  - id: B-201
+    title: TUI Forks detail row is cut mid-timestamp at 100 columns on an ETH node (tier M minimum)
+    priority: P3
+    status: done
+    area: tui
+    size: S
+    opened: 2026-11-11
+    closed: 2026-11-14
+    refs: ["prism review of 027 slice 5, 2026-11-10"]
+    links:
+      prs: [1835]
+      spec: specs/027-tui-dashboard
+    notes: |-
+      console/panels/ForkRows at 100x32: slice 5's 100-column CL goldens hold the panel rows only because the full frame fails TuiGoldenLintSpec on this row. Fix the row, then add a full-frame 100x32 golden.
+      2026-11-14 done: The row was fixed in #1834 (a detail that does not fit is dropped whole); the full-frame 100x32 goldens are in #1835.
+  - id: B-208
+    title: "Spec 018: record the user's decisions of 2026-11-11; changeset retention without a finalized block is 512; the C2b pre-code record"
+    priority: P2
+    status: done
+    area: storage
+    size: S
+    opened: 2026-11-11
+    closed: 2026-11-11
+    refs: []
+    links:
+      prs: [1795]
+      spec: specs/018-storage-engine-consolidation
+    notes: |-
+      Decisions: merge C3a; 512 blocks of changesets where there is no finalized block (ETC); every new column family of the track in the release that first ships v; snap1 not advertised with the guard on until the overlay serves the window.
+      2026-11-11 done: Merged as #1795 (93c198cb6): state.retention.without-finality = 512; the four decisions of 2026-11-11 and the C2b pre-code record are in plan.md.
+  - id: B-222
+    title: "Spec 018 C4a part 4: two decisions before the overlay is wired (a heavier branch above pinned-max-bytes; more than 32 payloads ahead of a forkchoiceUpdated)"
+    priority: P1
+    status: done
+    area: storage
+    size: S
+    opened: 2026-11-12
+    closed: 2026-11-12
+    refs: []
+    links:
+      prs: [1809]
+      spec: specs/018-storage-engine-consolidation
+    depends_on: [B-060]
+    notes: |-
+      plan.md, 'C4a part 3', 'Two questions part 4 cannot be designed without'. The user decides; forge and beacon raised them.
+      2026-11-12 done: Decided by the user, 2026-11-12: (1) reverse-then-commit when the pinned cap is hit, moved back by the records if the branch fails; lands with C4b's head move. (2) the bounds stay; blocks whose state is not held are executed again at the forkchoiceUpdated. Recorded in plan.md, 'C4a part 3'.
+  - id: B-223
+    title: "Flaky: TuiUpdaterSpec 'run the quit hook off the updater thread on q' gives a key press one 20 ms frame to arrive"
+    priority: P2
+    status: done
+    area: tests
+    size: S
+    opened: 2026-11-12
+    closed: 2026-11-17
+    refs: []
+    links:
+      prs: [1809, 1810]
+    notes: |-
+      CI run 43247554050: 'true was not equal to false (TuiUpdaterSpec.scala:84)'. The key is written to a pipe and reaches the reader on JLine's pump thread; one tick waits one pace (20 ms in TuiTestTerminal.config) for it.
+      Fix: tick until it answers false (eventually), here and at :102 and the 'd' case; passes 3/3 locally.
+      2026-11-17 done: 0.12.1 retro: fixed with its duplicate B-224 in #1810
+  - id: B-224
+    title: "TuiUpdaterSpec key tests race the 20 ms test pace on a loaded CI runner (failed PR #1809)"
+    priority: P1
+    status: done
+    area: tui
+    size: S
+    opened: 2026-11-12
+    closed: 2026-11-12
+    refs: ["PR #1809 CI run 43247554050 attempt 1"]
+    links:
+      prs: [1810]
+      spec: specs/027-tui-dashboard
+    notes: |-
+      'should run the quit hook off the updater thread on q' failed at TuiUpdaterSpec.scala:84: tt.press then one tick whose key read waits only the 20 ms test pace; JLine's input pump can take longer on a loaded runner, so the read expires and tick returns true. Same pattern at :101 and :117.
+      2026-11-12 review: Test-only fix: keyConfig 5 s pace for the 3 press-then-tick tests; 5x 19/0; prism OK.
+  - id: B-226
+    title: "TuiKeysSpec escape-sequence tests: the escape drain's fixed 50 ms tail budget can flake on a starved CI runner"
+    priority: P3
+    status: done
+    area: tui
+    size: S
+    opened: 2026-11-12
+    closed: 2026-11-14
+    refs: ["prism review of B-224, 2026-11-12"]
+    links:
+      prs: [1835]
+      spec: specs/027-tui-dashboard
+    notes: |-
+      TuiKeysSpec.scala:177-179, 185-187, 201-204: the first checkInput waits 1000 ms, but drainEscape (Tui.scala:477, 494) gives the tail 50 ms; a pump stall between introducer and final byte leaves a tail char for the follow-up checkInput(50). Lower odds than B-224 (one write per sequence). Fix with the drain's injectable clock in these tests.
+      2026-11-14 done: The key decoder keeps an unfinished sequence across a quiet input for up to 1 s instead of dropping it after 50 ms, so a stalled tail is finished as part of its sequence, never read as keys.
+  - id: B-231
+    title: "028 S1: Hoodi as a built-in network (chain config, genesis, fork ids, DNS anchor)"
+    priority: P2
+    status: done
+    area: ops
+    size: M
+    opened: 2026-11-12
+    closed: 2026-11-13
+    refs: [B-227]
+    links:
+      prs: [1814]
+      spec: specs/028-builtin-ephemery-hoodi
+      branch: feat/028-s1-hoodi
+    notes: "2026-11-12 in-progress: implementer running (sonnet) in ~/work/e028-s1"
+  - id: B-232
+    title: "028 S2: Ephemery release rules in Scala; ephemery-fetch --from-dir; fetch-genesis.sh delegates"
+    priority: P2
+    status: done
+    area: ops
+    size: L
+    opened: 2026-11-12
+    closed: 2026-11-13
+    refs: [B-227]
+    links:
+      prs: [1819]
+      spec: specs/028-builtin-ephemery-hoodi
+      branch: feat/028-s2-release-lib
+  - id: B-233
+    title: "028 S3: bundled Ephemery iteration, startup selection, exit 75 at the reset"
+    priority: P2
+    status: done
+    area: ops
+    size: L
+    opened: 2026-11-12
+    closed: 2026-11-13
+    refs: [B-227]
+    links:
+      prs: [1821]
+      spec: specs/028-builtin-ephemery-hoodi
+      branch: feat/028-s3-bundle
+    notes: "2026-11-13 in-progress: S3 implementer (sonnet) in ~/work/e028-s3, stacked on feat/028-s2-release-lib"
+  - id: B-234
+    title: "028 S4a: strict HTTPS release transport and tar reader"
+    priority: P2
+    status: done
+    area: ops
+    size: M
+    opened: 2026-11-12
+    closed: 2026-11-13
+    refs: [B-227]
+    links:
+      prs: [1817]
+      spec: specs/028-builtin-ephemery-hoodi
+      branch: feat/028-s4a-transport
+    notes: "2026-11-12 in-progress: implementer running (sonnet) in ~/work/e028-s4a"
+  - id: B-235
+    title: "028 S4b: Ephemery refresh after a reset, CL testnet dir, fetch-genesis.sh exec wrapper"
+    priority: P2
+    status: done
+    area: ops
+    size: L
+    opened: 2026-11-12
+    closed: 2026-11-13
+    refs: [B-227]
+    links:
+      prs: [1822]
+      spec: specs/028-builtin-ephemery-hoodi
+      branch: feat/028-s4b-refresh
+    notes: "2026-11-13 in-progress: S4b implementer (sonnet) in ~/work/e028-s4b, stacked on S3 da8055e3dc"
+  - id: B-244
+    title: "Spec 029: TUI command center (pixel graphics over the Kitty protocol, key input, chain / mempool / RPC / storage views, operator actions): spec and research"
+    priority: P2
+    status: done
+    area: tui
+    size: M
+    opened: 2026-11-13
+    closed: 2026-11-14
+    refs: []
+    links:
+      prs: [1820]
+      spec: specs/029-tui-command-center
+      branch: ccr-452bbde8-2hrv25
+    notes: User brief of 2026-11-13. Builds on spec 027; the plan and tasks follow the clarification answers.
+  - id: B-246
+    title: "Built-in ephemery/hoodi: Engine API is off by default (engine-api.enabled=false); runbook companion note wrongly says mining.protocol covers it"
+    priority: P2
+    status: done
+    area: ops
+    size: S
+    opened: 2026-11-13
+    closed: 2026-11-14
+    refs: [B-236]
+    links:
+      prs: [1823]
+      spec: specs/028-builtin-ephemery-hoodi
+    notes: "Found in spec 028 S5 on dev-node 2026-11-13: fukuii ephemery started but nothing listened on 8551 until -Dfukuii.network.engine-api.enabled=true. Decide: enable it (and require jwt-secret-path) in conf/ephemery.conf + conf/hoodi.conf, or document it; fix docs/runbooks/ephemery.md line added in #1822."
+  - id: B-249
+    title: "Spec 018 C4b follow-up: a confirmation of the head counts as a move (movesStarted, moving); C4d's payload builder and C4e's miner must not read one as a move"
+    priority: P2
+    status: done
+    area: storage
+    size: S
+    opened: 2026-11-14
+    closed: 2026-11-14
+    refs: []
+    links:
+      prs: [1830]
+      spec: 018
+    depends_on: [B-062]
+    notes: |-
+      plan.md C4b part 3b Recorded (beacon). Either a fast path that does not count a move of nothing, or the readers tell them apart.
+      2026-11-14 done: C4d part 0
+  - id: B-250
+    title: "Spec 018 C4b follow-up: C4e stores a block it does not adopt by hash only, so I6 (index = the held block's ancestry) stays a defence"
+    priority: P2
+    status: done
+    area: storage
+    size: S
+    opened: 2026-11-14
+    closed: 2026-11-15
+    refs: []
+    links:
+      prs: [1846]
+      spec: 018
+    depends_on: [B-063]
+    notes: plan.md C4b part 4 Recorded (forge). Today side execution is refused before saveBatch on the guard (BlockExecution refuseUnadopted).
+  - id: B-254
+    title: "Spec 029 slice 1: TUI input and navigation (key decoder, update function, focus, prompt, filters, nine views, q asks)"
+    priority: P2
+    status: done
+    area: tui
+    size: L
+    opened: 2026-11-14
+    closed: 2026-11-14
+    refs: []
+    links:
+      prs: [1834]
+      spec: specs/029-tui-command-center
+    depends_on: [B-244]
+    notes: tasks.md T005-T028. Closes B-226 (the escape drain).
+  - id: B-257
+    title: "Spec 029 slice 2a: TUI graphics modes (pixel, block, text), network icon, mascot, :art"
+    priority: P2
+    status: done
+    area: tui
+    size: L
+    opened: 2026-11-14
+    closed: 2026-11-14
+    refs: []
+    links:
+      prs: [1835]
+      spec: specs/029-tui-command-center
+      branch: ccr-452bbde8-2hrv25
+    notes: tasks T029-T045, T047, T048. Slice 2b (theme T046, splash T049, charts T050) and the manual gate T052 stay open.
+  - id: B-258
+    title: "Spec 029 slice 2b: the command-center theme, the splash with the badge and real start-up phases, chart primitives"
+    priority: P2
+    status: done
+    area: tui
+    size: M
+    opened: 2026-11-14
+    closed: 2026-11-14
+    refs: []
+    links:
+      prs: [1835]
+      spec: specs/029-tui-command-center
+    depends_on: [B-257]
+    notes: tasks T046, T049, T050 (charts wait for slice 3's first chart).
+  - id: B-260
+    title: Publish releases to the Launchpad PPA ppa:chipprbots/fukuii (noble, jammy)
+    priority: P2
+    status: done
+    area: ci
+    size: M
+    opened: 2026-11-14
+    closed: 2026-11-14
+    refs: []
+    links:
+      prs: [1836]
+      branch: feat/ppa-launchpad
+    notes: "Signed source upload of the release tarball; key in the launchpad-ppa environment. User steps: bot LP account in ~chipprbots, register the key."
+  - id: B-262
+    title: "Spec 029 slice 3: the Chain view (head, Block Observatory, fees, reorgs), the explorer and the peer radar"
+    priority: P2
+    status: done
+    area: tui
+    size: L
+    opened: 2026-11-14
+    closed: 2026-11-14
+    refs: []
+    links:
+      prs: [1837]
+      spec: specs/029-tui-command-center
+      branch: ccr-452bbde8-2hrv25
+    notes: tasks T053-T064
+  - id: B-266
+    title: "Spec 029 slice 4: the Mempool view (pool, flow, Mempool Radar, counters, pending transactions in the explorer) and the pool's counters"
+    priority: P2
+    status: done
+    area: tui
+    size: L
+    opened: 2026-11-14
+    closed: 2026-11-14
+    refs: []
+    links:
+      prs: [1839]
+      spec: specs/029-tui-command-center
+      branch: ccr-452bbde8-2hrv25
+    depends_on: [B-262]
+    notes: Tasks T065-T072. Closes B-196 with it (GetPoolSizeReq).
+  - id: B-269
+    title: "Spec 029 slice 5: the RPC view (per-method figures, transports), the Engine Synchronization Monitor and the mining monitor"
+    priority: P2
+    status: done
+    area: tui
+    size: L
+    opened: 2026-11-14
+    closed: 2026-11-14
+    refs: []
+    links:
+      prs: [1842]
+      spec: specs/029-tui-command-center
+      branch: ccr-452bbde8-2hrv25
+    depends_on: [B-266]
+    notes: Tasks T073-T082. Fixes B-193 with it (Engine status counters). beacon and conduit analyse before code.
+  - id: B-272
+    title: "Spec 029 slice 6: the Storage and System views, health bars and configurable alert thresholds"
+    priority: P2
+    status: done
+    area: tui
+    size: L
+    opened: 2026-11-14
+    closed: 2026-11-15
+    refs: []
+    links:
+      prs: [1844]
+      spec: specs/029-tui-command-center
+      branch: ccr-452bbde8-2hrv25
+    depends_on: [B-269]
+    notes: Tasks T083-T094. vault and herald analysed before code (RocksDB properties read; RLPx byte counters).
+  - id: B-275
+    title: "pow_blocks_mined_total counts only eth_submitWork: blocks the internal miner seals are never counted (TUI shows blocks mined 0)"
+    priority: P2
+    status: done
+    area: tui
+    size: S
+    opened: 2026-11-14
+    closed: 2026-11-15
+    refs: []
+    links:
+      prs: [1844]
+      spec: 029
+    notes: "dev-node, slice 5 run on gorgoroth: node mined blocks 1-23 itself, counter stayed 0. recordBlockMined is called from EthMiningService.submitWork only; Miner.handleMiningResult does not call it."
+  - id: B-276
+    title: SyncControllerSpec 'leave SNAP's resume alone once SNAP has taken over the best block' fails on staging (e5c62b0) in a cloud container
+    priority: P2
+    status: done
+    area: sync
+    size: S
+    opened: 2026-11-14
+    closed: 2026-11-17
+    refs: []
+    links:
+      prs: [1873]
+    notes: |-
+      Fails 5 of 5 here, on a clean clone of staging and on the slice 6 branch alike; passed in CI on #1842. With WARN logging: 'Recovery: persisted task file unusable while its phase is incomplete (storage: <none persisted> unusable=true; codeHashes: <none persisted> unusable=true)' clears accounts-complete, and the test then asserts it is still set. The test seeds accounts-complete with no storage-task file path, which SnapResumePlanner's storageTaskFileUnusable treats as unusable; so the assertion holds only if it runs before the recovery does. Likely a race the test wins in CI. Not from spec 029.
+      2026-11-17 done: 0.12.1 retro: same test as B-309, fixed in #1873
+  - id: B-277
+    title: "admin_blockIP / admin_unblockIP change nothing: BlockedIPRegistry is read by no network code, so a 'blocked' address still connects"
+    priority: P1
+    status: done
+    area: p2p
+    size: M
+    opened: 2026-11-14
+    closed: 2026-11-15
+    refs: []
+    links:
+      prs: [1847]
+    notes: "Found mapping services for spec 029 slice 7. AdminService.blockIP only calls blockedIPRegistry.block(ip) (no IP validation either); BlockedIPRegistry is referenced by AdminService and NodeBuilder only: discovery, ServerActor and RLPx never consult it. An operator who blocks an abusive address believes it is blocked. The working mechanism is the peer manager's Blacklist (AddToBlacklistCmd, net_* blacklist methods). The fukuii-security-hardening skill documents IP blocking as working."
+  - id: B-280
+    title: "Spec 029 slice 7: operator actions on the --tui dashboard (Ops view, dialogs by class, audit log, the admin functions made true)"
+    priority: P2
+    status: done
+    area: tui
+    size: L
+    opened: 2026-11-14
+    closed: 2026-11-15
+    refs: []
+    links:
+      prs: [1847]
+      spec: 029
+  - id: B-282
+    title: Publish releases to the Chocolatey community repository (fukuii package)
+    priority: P2
+    status: done
+    area: ci
+    size: M
+    opened: 2026-11-15
+    closed: 2026-11-17
+    refs: []
+    links:
+      prs: [1845]
+      branch: feat/chocolatey
+    notes: |-
+      Package downloads the release zip (sha256 from SHA256SUMS), depends on temurin25jre, shims bin\fukuii.bat. Key in env CHOCOLATEY_NUPKG (main only). First version waits for Chocolatey moderation.
+      2026-11-17 done: 0.12.1 retro: #1845 merged (Backlog: B-282); dev-node's review claim had expired
+  - id: B-283
+    title: OmmersValidator.getNBlocksBack never terminates when an ancestor body is missing (Iterator.iterate collect take)
+    priority: P2
+    status: done
+    area: evm
+    size: S
+    opened: 2026-11-15
+    closed: 2026-11-15
+    refs: []
+    links: {}
+    notes: |-
+      Found by forge at spec 018 C4e part 1 review (OmmersValidator.scala:37-45). Pre-existing, both layouts.
+      2026-11-15 done: C5a part 2: a missing ancestor is no verdict (AncestorNotStored); the walk ends
+  - id: B-289
+    title: "Spec 018 C4e gate: run the ethereum/tests fork vectors (bcMultiChain, bcTotalDifficulty, bcForkStress, uncle races) in test mode on the unified layout"
+    priority: P1
+    status: done
+    area: storage
+    size: M
+    opened: 2026-11-15
+    closed: 2026-11-16
+    refs: []
+    links:
+      prs: [1871]
+      spec: specs/018-storage-engine-consolidation
+    depends_on: [B-063]
+    notes: The ets fixtures are not checked out in the cloud container. Required before the guard is on for any Mordor node (forge). ReorgBlockhashParitySpec covers three core-geth parity scenarios on both layouts meanwhile.
+  - id: B-290
+    title: "Spec 029 closure: essential tier at baseline, coverage, console-ui.md rewrite, operator skills, out-of-console diff audit, spec Done (T113-T118)"
+    priority: P2
+    status: done
+    area: tui
+    size: M
+    opened: 2026-11-15
+    closed: 2026-11-15
+    refs: []
+    links:
+      prs: [1854]
+      spec: specs/029-tui-command-center
+  - id: B-293
+    title: Miner readers of the head generation (MockedMiner, Ethash coordinator, eth_getWork) before the mining refusal is lifted on path-live
+    priority: P1
+    status: done
+    area: consensus
+    size: M
+    opened: 2026-11-15
+    closed: 2026-11-17
+    refs: []
+    links:
+      prs: [1882]
+      spec: 018
+    notes: "C4e part 4 (forge): seqlock on PathStateStorage.headGeneration; discard before the nonce search only; with T184's miner legs. Gate: ConfigValidator and EthMiningService refusals are not lifted without it (C5)"
+  - id: B-297
+    title: "C5 gate: the consensus layer's branch beyond the forward layers is handed to StateRecovery, and a refused one is not retried without end"
+    priority: P1
+    status: done
+    area: consensus
+    size: L
+    opened: 2026-11-15
+    closed: 2026-11-16
+    refs: []
+    links:
+      prs: [1874]
+      spec: 018
+    notes: "beacon, C4e part 5. (1) at the cap / below the views: store the rest by hash, StateRecovery.requestFor(ForkChoice) via a late-bound handle. (2) Finalized / too-deep refusal re-queues forever: no re-queue (as divergedParent), importer treats it as permanent, FCM puts requestedHead back on FinalizedReversed. (3) race test importer move vs confirmHeldHead/StateRecovery. (4) lost side parents told in the new branch. (5) hive engine Re-Org Sync suites on path-live"
+  - id: B-300
+    title: "C5 gate: fork recovery with no rewind must not stall once the importer runs on path-live (announces, a shorter heavier branch, refetch loop)"
+    priority: P1
+    status: done
+    area: sync
+    size: L
+    opened: 2026-11-15
+    closed: 2026-11-16
+    refs: []
+    links:
+      prs: [1876]
+      spec: 018
+    notes: "forge, C4e part 6. (W3) announces and mined blocks clear the branch being resolved and move the fetcher forward: drop ImportNewBlock while resolving, keep resolvingBranchFrom. (W4) the strict pick's upper bound is this node's head: a heavier but shorter peer branch never completes it; bound by min(head, failed block). (f) a lighter branch refetched in a loop. (g) strict pick vs the 512 ready cap in archive. Tests not built: the one-recovery-per-block latch, the answer held until the import ends. The refusal arm is a stall until C5a escalates"
+  - id: B-301
+    title: Fetch the ancestor window's bodies at a hand-off and on an AncestorNotStored fault, on both layouts
+    priority: P1
+    status: done
+    area: sync
+    size: M
+    opened: 2026-11-15
+    closed: 2026-11-17
+    refs: []
+    links:
+      prs: [1878]
+      spec: 018
+    notes: "forge W2, C5a part 2 (B-283). Nothing fetches bodies P-5..P after SNAP: the backfill runs up from genesis. (1) the hand-off's ensure fetches them by hash on BOTH layouts (C5a part 5); (2) the importer's state-fault arm, on AncestorNotStored, asks for the bodies AncestorWindow.check(parent) names (a restart into regular sync skips the hand-off). No release between C5a part 2 and part 5"
+  - id: B-303
+    title: After a clear for an escalation, the index of blocks by number and the header cursor still name the old chain above the fork
+    priority: P1
+    status: done
+    area: storage
+    size: M
+    opened: 2026-11-15
+    closed: 2026-11-16
+    refs: []
+    links:
+      prs: [1867]
+      spec: 018
+    depends_on: [B-064]
+    notes: "Vault, C5a part 5a (2026-11-15). PathStateStorage.clearForResync keeps the old chain's headers, the index by number and the backfill cursors, and sets the best block to genesis. After an escalation for a chain that cannot be reached, heights in (fork, old best] name blocks of the chain that was left; a sync that follows would find its headers 'contiguous to the pivot' on the wrong chain, and getBlockHeaderByNumber above the new pivot answers old blocks. The escalation handler (C5a part 7) knows the common block: it must delete the index above it and set the header cursor back to it, in the clear's batch or before a sync starts; the hand-off (part 5b) writes the pivot's own number. Gate on arming the escalation. plan.md 'C5a part 5a'."
+  - id: B-304
+    title: "A hand-off's sample that keeps failing restarts the sync without a bound: count, metric, stop after three"
+    priority: P1
+    status: done
+    area: sync
+    size: S
+    opened: 2026-11-15
+    closed: 2026-11-17
+    refs: []
+    links:
+      prs: [1873]
+      spec: 018
+    depends_on: [B-064]
+    notes: "Beacon, C5a part 5b (2026-11-15). On the unified layout a sample that stops the hand-off (PathHandoffSample.Stopped) sends HealingImpossible; SyncController restarts SNAP at a newer pivot, which heals and samples again. Nothing bounds the cycle: snapPivotFailedFinalization blocks only the same pivot, so a systematic failure repeats on every new one. SyncController counts consecutive sample failures, exposes a metric by reason, and after three logs an ERROR with the sample's counts and stops restarting on its own. The Stopped exception should carry the counts. Gate on lifting the refusals (C5a part 10). plan.md 'C5a part 5b'."
+  - id: B-306
+    title: "The proof-of-work escalation feed: a branch MESS would refuse is not to be counted, and cheap header rules are checked before a seal (gate on C5a part 7)"
+    priority: P1
+    status: done
+    area: sync
+    size: S
+    opened: 2026-11-16
+    closed: 2026-11-16
+    refs: []
+    links:
+      prs: [1868]
+      spec: 018
+    depends_on: [B-064]
+    notes: "forge, review of C5a part 6b. (1) A single announced block reaches consensus without BranchResolution's MESS check; a deep heavier branch spread that way is counted as unreachable at once. MESS is off on ETC today and returns with Olympia: PowEscalationFeed asks shouldMessReject before it counts. (2) The weight is weighed on claimed difficulties before a header is validated: validate the parent rules of every header, weigh again, then check seals; a header of an old epoch builds an Ethash cache that evicts the current one (EthashBlockHeaderValidator.powCaches holds 2)."
+  - id: B-307
+    title: "Before a sync starts on the guard: what the escalation's clear must also do (recoveries, fork choice, pivot on the branch, off the controller's thread)"
+    priority: P1
+    status: done
+    area: sync
+    size: M
+    opened: 2026-11-16
+    closed: 2026-11-16
+    refs: []
+    links:
+      prs: [1870]
+      spec: 018
+    depends_on: [B-064]
+    notes: "forge and beacon, review of C5a part 7b (2026-11-16). Gate on C5a part 10. (a) beacon: queued and running StateRecovery tasks, its cool-down map and the Engine's watchedRecoveries survive clearForResync; a recovery between in-place commits moves back against no anchor, and a failClosed after the clear sets faulted, which commitHandoff refuses: SNAP could never hand off. Add StateRecovery.reset() (drain as close() does, wait for the running task, clear failed/running) and call it first in the port's clear. (b) beacon: ForkChoiceManager.currentState keeps the old head; recoverySink.followedHead computes holdFrom from it, giving Pivot/UNREACHABLE refusals that count towards the next escalation: clear it in the port's clear. (c) forge: startSnapSync(minPivotBlock = first.number) bounds the pivot's height, not its chain; PivotSelector takes the highest peer block, and on ETC the heavier chain can be the shorter, so the pivot can land on the chain just left and the branch is then dropped for good: require the pivot header to descend from the given-up block (snapHeaderChainCheck) and persist the minimum pivot (the clear removes SnapSyncMinPivotBlock). (d) forge: the clear runs on the controller's thread behind a whole head move, then range deletes and two synced writes: run it with pipeToSelf on a blocking dispatcher in a clearing state that answers status. (e) beacon: an escalating flag so two queued requests cannot both answer Escalate. (f) untested: regularSync and the audit stopped before the clear; the min pivot reaching the SNAP child; the backfill states re-delivering; a clear that throws."
+  - id: B-308
+    title: "Before SNAP runs on the guard on ETC: it writes the position families, never the hash-keyed store the clear leaves"
+    priority: P1
+    status: done
+    area: snap
+    size: M
+    opened: 2026-11-16
+    closed: 2026-11-17
+    refs: []
+    links:
+      prs: [1880]
+      spec: 018
+    depends_on: [B-064]
+    notes: |-
+      forge, 2026-11-16 (while confirming T166 is not applicable). SyncController.scala ~646-650 still holds ETC's SNAP to StorageScheme.Hash, and no code under blockchain/sync refers to PathStateStorage: the hand-off (SyncHandoff) is not wired into the controller yet (C5a part 10). PathStateStorage.clearForResync range-deletes CF t, u, v, the SNAP progress, the healing queue and the flat copies; it does not clear CF n (hash-keyed nodes) nor HealingFrontierNamespace, which the unified layout holds empty. If a SNAP on the guard wrote CF n, a clear for an escalation would leave stale hash-keyed nodes that the sync after it takes for present. Part 10 must make SNAP on the guard write positions only on both chains, and assert CF n is empty at a clear (or clear it too). Gate on C5a part 10.
+      2026-11-17 blocked: Design done with forge and vault (lane 3); waiting on the orchestrator: Q1 refuse CF n writes on the guard now / in part 10 / never; Q2 (user) FR-020 narrowed to the hash layout; Q3 (user) a Mordor Path sync gate on part 10; and who codes it. Lane 3's sends to the orchestrator are refused (trusted-device check).
+  - id: B-309
+    title: SyncControllerSpec 'leave SNAP's resume alone once SNAP has taken over' fails on staging b9578b4b7 under testOnly (cloud container)
+    priority: P2
+    status: done
+    area: sync
+    size: S
+    opened: 2026-11-16
+    closed: 2026-11-17
+    refs: []
+    links:
+      prs: [1873]
+      spec: 018
+    notes: "Found 2026-11-16 while building B-307 (c1): fails alone and in the whole spec, on plain staging too; isSnapSyncAccountsComplete is false after the start. Not known whether CI runs it."
+  - id: B-310
+    title: "B-307 follow-ups: a failed pivot refresh does not feed the off-branch peers; network best is not filtered; rested header peers also rest for bodies"
+    priority: P2
+    status: done
+    area: snap
+    size: S
+    opened: 2026-11-16
+    closed: 2026-11-17
+    refs: []
+    links:
+      prs: [1875]
+      spec: 018
+    notes: "forge, 2026-11-16, review of #1870 (c2): PivotRefresher ignores PivotBootstrapFailed.offBranch and has no time bound; currentNetworkBestFromSnapPeers (PivotSelector) is not filtered by OffBranchPeers; emptyHeaderPeers keeps a peer on another chain out of body and receipt requests for the same 10 minutes."
+  - id: B-311
+    title: "SyncController escalation tests left from B-307 (f): the audit stopped at a clear, backfill states re-delivering, a clear that throws"
+    priority: P2
+    status: done
+    area: sync
+    size: S
+    opened: 2026-11-16
+    closed: 2026-11-17
+    refs: []
+    links:
+      prs: [1873]
+      spec: 018
+    notes: "Left of B-307 (f) after #1866 and #1870. The min pivot reaching the SNAP child is tested for the retry (SyncControllerSpec, MinPivotBlock(4001)); not for the first escalation."
+  - id: B-312
+    title: Cut v0.12.0 after C5a part 10, before the part 11 measurements (user, 2026-11-16)
+    priority: P1
+    status: done
+    area: release
+    size: S
+    opened: 2026-11-16
+    closed: 2026-11-17
+    refs: []
+    links:
+      prs: [1883]
+      spec: 018
+    depends_on: [B-064]
+    notes: "The measurements (T207-T209) run on the release. Release process: see docs/development and the release workflows."
+  - id: B-313
+    title: AccountRangeCoordinatorSpec 'not dispatch a task to a peer still in cooldown' races under CPU load
+    priority: P2
+    status: done
+    area: snap
+    size: S
+    opened: 2026-11-16
+    closed: 2026-11-16
+    refs: []
+    links:
+      prs: [1877]
+      spec: 018
+    notes: "Seen 2026-11-16 in a local essential run with three builds on 4 cores: PeerId(cooldown-peer-1) was not equal to cooldown-peer-2 (:744). The test sends RequestTimeout to the worker and PeerAvailable(peer2) to the coordinator back to back; the worker's report of the timeout can reach the coordinator after the second dispatch. Passes alone and in its spec. Fix the test's ordering (wait for the cooldown to be recorded) rather than the coordinator."
+  - id: B-321
+    title: "snap-synctest CI job: the sbt launcher runs out of heap (4 GB) compiling the test sources"
+    priority: P2
+    status: done
+    area: ci
+    size: S
+    opened: 2026-11-16
+    closed: 2026-11-17
+    refs: []
+    links:
+      prs: [1875, 1874]
+    notes: |-
+      Seen on #1875 at 389f52c (OutOfMemoryError: Java heap space in scalac's backend, during the job's testOnly compile); passed on #1873. Reproduces locally on a full test compile with -Xmx4g; passes with 8 GB. Raise the job's sbt heap (-mem 6144 or more) or the .jvmopts default.
+      2026-11-17 done: 0.12.1 retro: #1874 raised .jvmopts to -Xmx6g for this OOM; re-open if snap-synctest OOMs again
+  - id: B-322
+    title: "Hive rpc-compat (master, unpinned) gained cases fukuii fails: eth_call/estimateGas/createAccessList blob-fee-without-hashes and fork-inactive, eth_getProof"
+    priority: P2
+    status: dropped
+    area: rpc
+    size: M
+    opened: 2026-11-16
+    closed: 2026-11-16
+    refs: []
+    links: {}
+    notes: |-
+      Seen 2026-11-16 23:37-23:41 on #1873 (f8d65b2, 11 of 307) and #1875 (7e5fe72, 16 of 318), neither touching RPC; the job was green on #1873 at 21:35. _hive-sim.yml clones hive at master, so the corpus moves under every PR (informational gate). Two things: fix the cases (conduit), and consider pinning hive_ref so a PR's check reflects the PR.
+      2026-11-16 dropped: duplicate of B-323 (the orchestrator's, same hive-drift cases); my note there: hive is cloned at master in _hive-sim.yml, so consider pinning hive_ref
+  - id: B-323
+    title: "rpc-compat on hive master fails 16 tests since 2026-11-16 23:30: blob-fee-without-hashes, fork-inactive, eth_getProof key cases"
+    priority: P1
+    status: done
+    area: jsonrpc
+    size: M
+    opened: 2026-11-16
+    closed: 2026-11-17
+    refs: []
+    links:
+      prs: [1879]
+    notes: "#1876 passed rpc-compat at 23:08 UTC on the same code; from ~23:30 #1873, #1875 (11 failures) and #1878 (16) fail it with unrelated diffs. hive_ref is master in _hive-sim.yml, so the suite floats: upstream added or changed tests. Real compliance gaps to fix (conduit); also consider pinning hive_ref so PR CI does not drift."
+  - id: B-325
+    title: "C5a part 10: the refusals of SNAP and sync lifted on path-live, the sync controller started there, and a hand-off run live"
+    priority: P1
+    status: done
+    area: sync
+    opened: 2026-11-17
+    closed: 2026-11-17
+    refs: [B-064]
+    links:
+      prs: [1880]
+    notes: |-
+      design first (beacon, forge, vault); gates B-304, B-308, B-310, B-311; mining stays refused (B-293); live runs Mordor + Sepolia after merge
+      2026-11-17 blocked: design pushed on design/018-c5a-part10 (8fe8845); waits for the main session and the user's 4 decisions; code after B-304/B-308/B-310/B-311
+      2026-11-17 released by cloud-lane2: design pushed on design/018-c5a-part10 (8fe8845); the main session owns part 10's PR and the next step
+  - id: B-330
+    title: "MockedMiner on real positions: a build that overlaps an adoption in place is built again, not sent (B-293 test leg)"
+    priority: P3
+    status: done
+    area: tests
+    opened: 2026-11-17
+    closed: 2026-11-17
+    refs: []
+    links:
+      prs: [1882]
+      spec: 018
+    notes: |-
+      forge's pre-code consult on B-293; MockedMinerSpec mocks the reader with the guard off
+      2026-11-17 done: 0.12.1 retro: MockedMinerOnPositionsSpec on real positions in #1882
