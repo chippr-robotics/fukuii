@@ -3823,3 +3823,13 @@ items:
     refs: []
     links:
       spec: 018
+  - id: B-330
+    title: "MockedMiner on real positions: a build that overlaps an adoption in place is built again, not sent (B-293 test leg)"
+    priority: P3
+    status: open
+    area: tests
+    opened: 2026-11-17
+    refs: []
+    links:
+      spec: 018
+    notes: forge's pre-code consult on B-293; MockedMinerSpec mocks the reader with the guard off
