@@ -283,8 +283,10 @@ not fixed (it is B-005's bug), so B-023 no longer closes it; B-171 takes P2 when
 - **Retitled (partial work merged):** B-020, B-023, B-073, B-092, B-095, B-194, B-219, B-220, B-241, B-328.
 - **depends_on:** B-014, B-079 → B-069; B-076 → B-070. (B-050–B-052 already chain through B-049.)
 
-**Final:** 215 items in `backlog.yaml` (208 open, 4 blocked, 3 held), 118 in `archive.yaml`;
-P1 14, P2 93, P3 108. P1s: B-005, B-009, B-053, B-073, B-146, B-148, B-150, B-151, B-274, B-295,
+**Final:** 215 items not done (208 open, 4 blocked, 3 held); 103 closed items in `archive.yaml`, and 15
+closed items kept in `backlog.yaml` because live items depend on them (a pre-archive `backlog.py` checks
+`depends_on` against `backlog.yaml` alone — the first prune broke `add` on other hosts until they were
+restored); P1 14, P2 93, P3 108. P1s: B-005, B-009, B-053, B-073, B-146, B-148, B-150, B-151, B-274, B-295,
 B-296, B-298, B-314, B-332.
 
 ### Decisions the reviewers proposed (for the record)
