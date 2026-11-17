@@ -849,7 +849,14 @@ class ConsensusImpl(
                     all.lastOption.fold(on.number.value)(_.block.number),
                     committed.executed.size
                   )
-                  reorganised(newBranch, oldBlocksData, ofTheBranch, committed.error, sideParentsTold(fork, all))
+                  reorganised(
+                    newBranch,
+                    oldBlocksData,
+                    ofTheBranch,
+                    committed.error,
+                    sideParentsTold(fork, all),
+                    adopted = true
+                  )
                 case _ if committed.error.isEmpty =>
                   // the whole branch ran and does not outweigh the head it was selected over: the weights stored
                   // disagree with the selection, which is no verdict on the branch
@@ -1080,7 +1087,7 @@ class ConsensusImpl(
                   executed.size,
                   moved
                 )
-                reorganised(newBranch, oldBlocksData, executed, outcome.error, sideParents)
+                reorganised(newBranch, oldBlocksData, executed, outcome.error, sideParents, adopted = true)
           case Some(tip) =>
             log.warn(
               "REORG-PARTIAL: executed blocks {}-{} {} the current head {}: it is kept, and their state stays beside it",
@@ -1123,7 +1130,8 @@ class ConsensusImpl(
     val outcome = executeBranch(newBranch.toList, parentWeight, adoptEachBlock = false, accessLists)
     val (executedBlocks, maybeError) = (outcome.executed, outcome.error)
 
-    settleHead(executedBlocks, parentWeight, bestBlockNumber, bestBlockWeight, fork, oldCanonical, selectedByWeight)
+    val adopted =
+      settleHead(executedBlocks, parentWeight, bestBlockNumber, bestBlockWeight, fork, oldCanonical, selectedByWeight)
 
     outcome.stateFault match
       case Some(fault) =>
@@ -1147,18 +1155,22 @@ class ConsensusImpl(
             executedBlocks.length
           )
         ConsensusStateFault(fault, Nil, newBranch.toList.drop(executedBlocks.length))
-      case None => reorganised(newBranch, oldBlocksData, executedBlocks, maybeError)
+      case None => reorganised(newBranch, oldBlocksData, executedBlocks, maybeError, adopted = adopted)
 
   /** @param sideParents
     *   the blocks the branch stands on that became canonical with it (on the unified layout; B-297), oldest first: told
     *   as of the new branch, ahead of it, when the whole branch was adopted
+    * @param adopted
+    *   whether the executed blocks became the head: a prefix that outweighed it, before a block of the branch was found
+    *   invalid, is told as the reorganisation it is (B-291)
     */
   private def reorganised(
       newBranch: NonEmptyList[Block],
       oldBlocksData: List[BlockData],
       executedBlocks: List[BlockData],
       maybeError: Option[BlockExecutionError],
-      sideParents: List[BlockData] = Nil
+      sideParents: List[BlockData] = Nil,
+      adopted: Boolean = false
   ): ConsensusResult =
     maybeError match
       case None =>
@@ -1189,11 +1201,22 @@ class ConsensusImpl(
         // Side-chain case. `failingBlock.header.parentHash` is a validated but (until this batch) non-canonical
         // block — precisely the latestValidHash hive's invalid-ancestor tests assert on.
         reportIfProvenInvalid(failingBlock, error, unexecuted.tail)
-        BranchExecutionFailure(
-          executedBlocks.map(_.block),
-          failingBlock.hash.value,
-          s"$ReorganiseFailurePrefix$error"
-        )
+        if adopted && executedBlocks.nonEmpty then
+          // B-291 (forge): the valid prefix outweighed the head and is the head now. The blocks it replaced left the
+          // canonical chain, and are queued again as a reorganisation's are; whoever follows the head is told of it.
+          val told = sideParents ++ executedBlocks
+          SelectedNewBestBranchPartially(
+            oldBlocksData.map(_.block),
+            told.map(_.block),
+            told.map(_.weight),
+            BranchExecutionFailure(Nil, failingBlock.hash.value, s"$ReorganiseFailurePrefix$error")
+          )
+        else
+          BranchExecutionFailure(
+            executedBlocks.map(_.block),
+            failingBlock.hash.value,
+            s"$ReorganiseFailurePrefix$error"
+          )
 
   /** Is the tip of this candidate branch on the path to the head the consensus layer designated?
     *
@@ -1228,6 +1251,8 @@ class ConsensusImpl(
       case ExtendedCurrentBestBranch(blockImportData) =>
         blockImportData.foreach(blockData => BlockMetrics.measure(blockData.block, blockchainReader.getBlockByHash))
       case SelectedNewBestBranch(_, newBranch, _) =>
+        newBranch.foreach(block => BlockMetrics.measure(block, blockchainReader.getBlockByHash))
+      case SelectedNewBestBranchPartially(_, newBranch, _, _) =>
         newBranch.foreach(block => BlockMetrics.measure(block, blockchainReader.getBlockByHash))
       case ConsensusErrorDueToMissingNode(_, _, adopted) =>
         adopted.foreach(blockData => BlockMetrics.measure(blockData.block, blockchainReader.getBlockByHash))
@@ -1264,7 +1289,8 @@ class ConsensusImpl(
       fork: ForkPoint,
       oldCanonical: List[(BigInt, BlockHash)],
       selectedByWeight: Boolean
-  ): Unit =
+  ): Boolean =
+    var adopted = false
     executedBlocks.lastOption.foreach { last =>
       val tip = last.block
       // A block this batch executed that the index ALSO named at its height before execution is not a displaced block:
@@ -1287,6 +1313,7 @@ class ConsensusImpl(
         selectedByWeight
       )
       if !selectedByWeight then
+        adopted = true
         blockchainWriter.saveBestKnownBlocks(tip.hash, tip.number.value)
         // The head moved to the new branch, so the old head's blocks above the fork point left the canonical chain with
         // their reference-count changes applied: take them back out, and put back an already-executed side parent the
@@ -1299,6 +1326,7 @@ class ConsensusImpl(
         // it does not depend on the executor having filled the weight in.
         val executedWeight = executedBlocks.foldLeft(parentWeight)((w, b) => w.increase(b.block.header))
         if executedWeight > oldBestWeight then
+          adopted = true
           blockchainWriter.rewriteCanonicalIndex(
             put = fork.parentSideChain,
             remove = ((tip.number.value + 1) to oldBestNumber).toList,
@@ -1334,6 +1362,7 @@ class ConsensusImpl(
             executedBlocks.map(b => (b.block.number.value, b.block.hash)).filterNot(id => oldCanonical.contains(id))
           reorgState.abandonBlockStates(sideBlocks.map { case (n, h) => (n, h.value) })
     }
+    adopted
 
   /** Where a branch whose parent is `parentHash` leaves the canonical chain.
     *

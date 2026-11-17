@@ -20,6 +20,7 @@ import com.chipprbots.ethereum.consensus.Consensus.ExtendedCurrentBestBranch
 import com.chipprbots.ethereum.consensus.Consensus.ExtendedCurrentBestBranchPartially
 import com.chipprbots.ethereum.consensus.Consensus.KeptCurrentBestBranch
 import com.chipprbots.ethereum.consensus.Consensus.SelectedNewBestBranch
+import com.chipprbots.ethereum.consensus.Consensus.SelectedNewBestBranchPartially
 import com.chipprbots.ethereum.consensus.engine.DesignatedHead
 import com.chipprbots.ethereum.domain.Block
 import com.chipprbots.ethereum.domain.BlockAccessList
@@ -117,8 +118,9 @@ class ConsensusImplSpec extends AnyFlatSpec with Matchers with ScalaFutures with
     // first block succeeds, second fails
     setFailingBlock(newBetterBranch(1))
 
+    // B-291: the prefix that became the head is told as a reorganisation, with the failure
     whenReady(consensus.evaluateBranch(NonEmptyList.fromListUnsafe(newBetterBranch)).unsafeToFuture()) {
-      _ shouldBe a[BranchExecutionFailure]
+      _ shouldBe a[SelectedNewBestBranchPartially]
     }
     // chain advances to the first successful block, not reverted to pre-reorg tip
     blockchainReader.getBestBlock shouldBe Some(newBetterBranch.head)
@@ -273,8 +275,13 @@ class ConsensusImplSpec extends AnyFlatSpec with Matchers with ScalaFutures with
     holder.bind(DesignatedHead(() => Some(equalTdBranch.last.hash.value)))
     setFailingBlock(equalTdBranch(1))
 
+    // B-291: the prefix that became the head is told as the reorganisation it is, with the blocks it replaced
     whenReady(consensusWith(Some(holder)).evaluateBranch(NonEmptyList.fromListUnsafe(equalTdBranch)).unsafeToFuture()) {
-      _ shouldBe a[BranchExecutionFailure]
+      case SelectedNewBestBranchPartially(oldBranch, newBranch, _, BranchExecutionFailure(Nil, failing, _)) =>
+        oldBranch shouldBe List(initialChain(3), initialChain(4))
+        newBranch shouldBe List(equalTdBranch.head)
+        failing shouldBe equalTdBranch(1).hash.value
+      case other => fail(s"not a partial reorganisation: $other")
     }
     blockchainReader.getBestBlock shouldBe Some(equalTdBranch.head)
 
@@ -304,6 +311,31 @@ class ConsensusImplSpec extends AnyFlatSpec with Matchers with ScalaFutures with
     blockchainReader.getBlockHeaderByNumber(initialChain(3).number.value).map(_.hash) shouldBe Some(
       initialChain(3).hash
     )
+
+  // B-291 (forge, C4e part 3 Q4): a weight-selected reorganisation whose valid prefix outweighs the head adopts it, and
+  // then meets an invalid block. The blocks it replaced are told, to be queued again and their transactions put back,
+  // and the head's followers are told of the new head; before, it was answered as a failure that enqueued the prefix.
+  it should "tell a reorganisation whose heavier prefix became the head before an invalid block as one" taggedAs (
+    UnitTest,
+    ConsensusTest
+  ) in new ConsensusSetup:
+    val branch: List[Block] = BlockHelpers.generateChain(
+      2,
+      initialChain(2),
+      b => b.copy(header = b.header.copy(difficulty = Difficulty(10000000)))
+    )
+    setFailingBlock(branch(1))
+
+    whenReady(consensus.evaluateBranch(NonEmptyList.fromListUnsafe(branch)).unsafeToFuture()) {
+      case SelectedNewBestBranchPartially(oldBranch, newBranch, weights, BranchExecutionFailure(Nil, failing, error)) =>
+        oldBranch shouldBe List(initialChain(3), initialChain(4))
+        newBranch shouldBe List(branch.head)
+        weights should have size 1
+        failing shouldBe branch(1).hash.value
+        error should startWith(Consensus.ReorganiseFailurePrefix)
+      case other => fail(s"not a partial reorganisation: $other")
+    }
+    blockchainReader.getBestBlock shouldBe Some(branch.head)
 
   it should "adopt the validated prefix when a later block hits a missing node, and return the error for that block only" taggedAs (
     UnitTest,
@@ -440,21 +472,22 @@ class ConsensusImplSpec extends AnyFlatSpec with Matchers with ScalaFutures with
 
     val reorg: List[Block] = heavier(initialChain(2))
     setFailingBlockWith(reorg(1), localStateFault)
+    // the prefix before the failing block outweighs the head and became it (B-291): the failure rides with it
     whenReady(consensus.evaluateBranch(NonEmptyList.fromListUnsafe(reorg)).unsafeToFuture()) {
-      case BranchExecutionFailure(_, _, error) =>
+      case SelectedNewBestBranchPartially(_, _, _, BranchExecutionFailure(_, _, error)) =>
         error should startWith(Consensus.ReorganiseFailurePrefix)
         Consensus.isLocalStateFault(error) shouldBe true
-      case other => fail(s"expected BranchExecutionFailure, got $other")
+      case other => fail(s"expected a partial reorganisation, got $other")
     }
 
     withClue("a block that fails validation is still the block's fault: ") {
       val invalid = heavier(initialChain(1))
       setFailingBlockWith(invalid(1), ValidationAfterExecError("Block has invalid state root"))
       whenReady(consensus.evaluateBranch(NonEmptyList.fromListUnsafe(invalid)).unsafeToFuture()) {
-        case BranchExecutionFailure(_, _, error) =>
+        case SelectedNewBestBranchPartially(_, _, _, BranchExecutionFailure(_, _, error)) =>
           error should startWith(Consensus.ReorganiseFailurePrefix)
           Consensus.isLocalStateFault(error) shouldBe false
-        case other => fail(s"expected BranchExecutionFailure, got $other")
+        case other => fail(s"expected a partial reorganisation, got $other")
       }
     }
 

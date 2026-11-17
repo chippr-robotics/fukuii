@@ -27,6 +27,7 @@ import com.chipprbots.ethereum.consensus.Consensus.ExtendedCurrentBestBranch
 import com.chipprbots.ethereum.consensus.Consensus.ExtendedCurrentBestBranchPartially
 import com.chipprbots.ethereum.consensus.Consensus.KeptCurrentBestBranch
 import com.chipprbots.ethereum.consensus.Consensus.SelectedNewBestBranch
+import com.chipprbots.ethereum.consensus.Consensus.SelectedNewBestBranchPartially
 import com.chipprbots.ethereum.consensus.engine.InvalidChainReporter
 import com.chipprbots.ethereum.consensus.validators.BlockHeaderError.HeaderParentNotFoundError
 import com.chipprbots.ethereum.db.storage.pathstate.HeldStateIncomplete
@@ -200,6 +201,19 @@ class ConsensusAdapter(
       .map {
         case SelectedNewBestBranch(oldBranch, adopted, weights) =>
           oldBranch.foreach(blockQueue.enqueueBlock(_))
+          toldOfTheHead(adopted.lastOption)
+          ChainReorganised(oldBranch, adopted, weights)
+        case SelectedNewBestBranchPartially(
+              oldBranch,
+              adopted,
+              weights,
+              BranchExecutionFailure(_, failingBlockHash, error)
+            ) =>
+          // B-291: as a reorganisation that went through, and as a partial extension's failure: the invalid block's
+          // descendants leave the queue
+          oldBranch.foreach(blockQueue.enqueueBlock(_))
+          blockQueue.removeSubtree(BlockHash(failingBlockHash))
+          log.warn("reorganised onto a branch partially because of error: {}", error)
           toldOfTheHead(adopted.lastOption)
           ChainReorganised(oldBranch, adopted, weights)
         case ExtendedCurrentBestBranch(blockImportData) =>

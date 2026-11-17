@@ -68,6 +68,16 @@ object Consensus:
   case class SelectedNewBestBranch(oldBranch: List[Block], newBranch: List[Block], weights: List[ChainWeight])
       extends ConsensusResult
 
+  /** The new branch was selected, was not an extension of the best branch, and did not execute completely: what of it
+    * was executed outweighed the best branch and replaced it, and a later block of it failed (B-291).
+    */
+  case class SelectedNewBestBranchPartially(
+      oldBranch: List[Block],
+      newBranch: List[Block],
+      weights: List[ChainWeight],
+      failureBranch: BranchExecutionFailure
+  ) extends ConsensusResult
+
   /** The proposed new branch was not better than the current best one. */
   case object KeptCurrentBestBranch extends ConsensusResult
 
