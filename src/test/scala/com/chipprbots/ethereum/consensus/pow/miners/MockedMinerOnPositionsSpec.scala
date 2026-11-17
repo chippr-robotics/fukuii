@@ -69,11 +69,16 @@ class MockedMinerOnPositionsSpec
     @volatile var held: Block = origin
     @volatile var builds: Vector[(BlockHash, Option[InMemoryWorldStateProxy])] = Vector.empty
 
+    /** The head's generation (spec 018 B-293), as the test moves it; `duringBuild` runs inside each build. */
+    @volatile var generation: Long = 0L
+    @volatile var duringBuild: () => Unit = () => ()
+
     /** What a build of a child of the block with this hash answers; a block, or the fault it meets. */
     @volatile var answers: Map[BlockHash, List[Either[Throwable, Block]]] = Map.empty
 
     val reader: BlockchainReader = mock[BlockchainReader]
     (() => reader.holdsStateInPlace).expects().returns(true).anyNumberOfTimes()
+    (() => reader.headGeneration).expects().onCall(() => generation).anyNumberOfTimes()
     (() => reader.getBestBlock).expects().onCall(() => Some(origin)).anyNumberOfTimes()
     reader.isHeldInPlace.expects(*).onCall((hash: ByteString) => held.header.hash.value == hash).anyNumberOfTimes()
     (() => reader.heldInPlace)
@@ -87,6 +92,7 @@ class MockedMinerOnPositionsSpec
       .expects(*, *, *, *)
       .onCall { (parent: Block, _: Boolean, inherited: Option[InMemoryWorldStateProxy], _: BlockchainConfig) =>
         builds :+= (parent.header.hash -> inherited)
+        duringBuild()
         answers.getOrElse(parent.header.hash, Nil) match
           case Left(fault) :: rest =>
             answers += parent.header.hash -> rest
@@ -151,7 +157,43 @@ class MockedMinerOnPositionsSpec
       miner ! Send(MineBlocks(1, withTransactions = false, None), asker.ref)
       asker.receiveMessage()
 
-  "The mocked miner on the unified layout" should "build the next block on the state its parent's import left, and wait for it" taggedAs
+  // spec 018 B-293 (forge): a build that a move of the head overtook is not sent; the parent's state is looked at again
+  "The mocked miner on the unified layout" should "build again, not send, a block whose build a move of the head overtook" taggedAs
+    (UnitTest, ConsensusTest) in {
+      val rig = new Rig
+      val first = childOf(origin)
+      rig.answers = Map(origin.header.hash -> List(Right(first)))
+      // the first build is overtaken: an adoption in place is opened and ended while it runs
+      var overtaken = false
+      rig.duringBuild = () =>
+        if !overtaken then
+          overtaken = true
+          rig.generation += 2
+
+      rig.order(1)
+      rig.mined(first)
+      withClue("built twice, the first not sent: ")(
+        rig.builds.map(_._1) shouldBe Vector(origin.header.hash, origin.header.hash)
+      )
+    }
+
+  it should "wait, building nothing, while a move of the head is open" taggedAs (UnitTest, ConsensusTest) in {
+    val rig = new Rig
+    val first = childOf(origin)
+    rig.answers = Map(origin.header.hash -> List(Right(first)))
+    rig.generation = 1L
+
+    rig.order(1)
+    rig.tick() shouldBe MinerIsWorking
+    rig.builds shouldBe empty
+    rig.sync.expectNoMessage(50.millis)
+
+    rig.generation = 2L
+    rig.minedWithinTicks(first)
+    rig.builds.map(_._1) shouldBe Vector(origin.header.hash)
+  }
+
+  it should "build the next block on the state its parent's import left, and wait for it" taggedAs
     (UnitTest, ConsensusTest) in {
       val rig = new Rig
       val first = childOf(origin)

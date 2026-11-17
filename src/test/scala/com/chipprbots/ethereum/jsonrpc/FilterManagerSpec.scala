@@ -312,6 +312,8 @@ class FilterManagerSpec
     val topics: Seq[Seq[ByteString]] = Seq(Seq(), Seq(ByteString(Hex.decode("4567"))))
 
     (() => blockchainReader.getBestBlockNumber).expects().returning(3)
+    // the hash layout's pending block (on the unified layout "pending" is the head, spec 018 B-293)
+    (() => blockchainReader.holdsStateInPlace).expects().returning(false).anyNumberOfTimes()
 
     val createProbe: org.apache.pekko.actor.testkit.typed.scaladsl.TestProbe[NewFilterResponse] =
       testKit.createTestProbe[NewFilterResponse]()

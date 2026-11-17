@@ -25,6 +25,9 @@ object RegularSyncMetrics extends MetricsContainer:
     metrics.registry.gauge("regularsync.block.bestKnown.number.gauge", new AtomicDouble(0d))
   final private val BlocksImportedCounter =
     metrics.registry.counter("regularsync.blocks.imported.total")
+  // a block this node mined, dropped because an import was under way (spec 018 B-293, forge)
+  final private val MinedBlocksDroppedCounter =
+    metrics.registry.counter("regularsync.mined.dropped.total")
 
   final private val BranchReorgTotalCounter =
     metrics.registry.counter("regularsync.reorg.total")
@@ -99,6 +102,7 @@ object RegularSyncMetrics extends MetricsContainer:
   def setCurrentBlock(blockNumber: BigInt): Unit = CurrentBlockGauge.set(blockNumber.toDouble)
   def setBestKnownNetworkBlock(blockNumber: BigInt): Unit = BestKnownNetworkBlockGauge.set(blockNumber.toDouble)
   def incrementBlocksImported(): Unit = BlocksImportedCounter.increment()
+  def incrementMinedBlocksDropped(): Unit = MinedBlocksDroppedCounter.increment()
   def incrementReorgTotal(): Unit = BranchReorgTotalCounter.increment()
   def incrementBranchResolutionRounds(): Unit = BranchResolutionRoundsCounter.increment()
   def setLastReorgDepth(n: Int): Unit = ReorgLastDepth.set(n.toDouble)
