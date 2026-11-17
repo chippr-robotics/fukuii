@@ -2502,19 +2502,14 @@ items:
   - id: B-328
     title: Seed db.state.anchor.number from the anchor at open (path-live)
     priority: P3
-    status: review
+    status: done
     area: metrics
     opened: 2026-11-17
+    closed: 2026-11-17
     refs: []
     links:
       prs: [1887]
       spec: 018
-    claim:
-      by: cloud-dc960fdc
-      agent: main
-      since: 2026-11-17T18:05:49Z
-      heartbeat: 2026-11-17T18:42:09Z
-      branch: fix/018-b328-anchor-metric
   - id: B-329
     title: "Mutation pass over C5a part 10 (#1880): PathLiveSync, the guard arms in SyncController, the hand-off's index and cursor trim, HandoffsHeldForExcluded"
     priority: P2
