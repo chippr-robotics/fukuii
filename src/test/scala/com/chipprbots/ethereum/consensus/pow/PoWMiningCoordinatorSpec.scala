@@ -56,6 +56,91 @@ class PoWMiningCoordinatorSpec
     with org.scalamock.scalatest.MockFactory:
 
   "PoWMinerCoordinator actor" - {
+    // Spec 029 slice 7: `app_pow_miner_running`, the internal miner's own on/off for the TUI. These tests come first in
+    // the suite, so no coordinator another test left stopping can write the process-wide flag while they read it. Each
+    // waits for its coordinator to terminate and leaves the flag at 0.
+    "the miner-running gauge" - {
+      def running: Long = PoWMiningMetrics.minerRunning.value().toLong
+
+      "reads 1 once recurrent mining has started, and 0 after StopMining" taggedAs (
+        UnitTest,
+        ConsensusTest
+      ) in new TestSetup:
+        override def coordinatorName: String = s"MinerRunningStop-${System.nanoTime()}"
+        val probe: TestProbe = TestProbe()
+        val testMiner = new InstantMiner(blockCreator, sync.ref, ethMiningService)
+        override val coordinator: org.apache.pekko.actor.typed.ActorRef[CoordinatorProtocol] = testKit.spawn(
+          PoWMiningCoordinator(
+            sync.ref,
+            ethMiningService,
+            blockCreator,
+            blockchainReader,
+            this,
+            minerOpt = Some(testMiner)
+          ),
+          coordinatorName
+        )
+        probe.watch(coordinator.ref.toClassic)
+        (() => blockchainReader.getBestBlock).expects().returns(Some(parentBlock)).anyNumberOfTimes()
+        setBlockForMining(parentBlock)
+        PoWMiningMetrics.recordMinerRunning(false)
+
+        coordinator ! SetMiningMode(RecurrentMining)
+        // A mined block means the coordinator handled SetMiningMode, which writes the flag before its first MineNext.
+        sync.expectMsgType[SyncController.WrappedSyncProtocol](Timeouts.veryLongTimeout).msg shouldBe a[MinedBlock]
+        running shouldBe 1L
+
+        coordinator ! StopMining
+        probe.expectTerminated(coordinator.ref.toClassic)
+        running shouldBe 0L
+
+      "reads 0 after the coordinator is stopped from outside while mining" taggedAs (
+        UnitTest,
+        ConsensusTest
+      ) in new TestSetup:
+        override def coordinatorName: String = s"MinerRunningKilled-${System.nanoTime()}"
+        val testMiner = new InstantMiner(blockCreator, sync.ref, ethMiningService)
+        override val coordinator: org.apache.pekko.actor.typed.ActorRef[CoordinatorProtocol] = testKit.spawn(
+          PoWMiningCoordinator(
+            sync.ref,
+            ethMiningService,
+            blockCreator,
+            blockchainReader,
+            this,
+            minerOpt = Some(testMiner)
+          ),
+          coordinatorName
+        )
+        (() => blockchainReader.getBestBlock).expects().returns(Some(parentBlock)).anyNumberOfTimes()
+        setBlockForMining(parentBlock)
+        PoWMiningMetrics.recordMinerRunning(false)
+
+        coordinator ! SetMiningMode(RecurrentMining)
+        sync.expectMsgType[SyncController.WrappedSyncProtocol](Timeouts.veryLongTimeout).msg shouldBe a[MinedBlock]
+        running shouldBe 1L
+
+        // No StopMining: only the PostStop handler of the recurrent behaviour can clear the flag. `stop` returns once
+        // the actor has terminated, and PostStop runs before that.
+        testKit.stop(coordinator, Timeouts.veryLongTimeout)
+        running shouldBe 0L
+
+      "reads 0 after a coordinator that fails before it was told to mine has stopped" taggedAs (
+        UnitTest,
+        ConsensusTest
+      ) in new TestSetup:
+        override def coordinatorName: String = s"MinerRunningFailed-${System.nanoTime()}"
+        val probe: TestProbe = TestProbe()
+        probe.watch(coordinator.ref.toClassic)
+        // Set by the test, so that only the initial behaviour's PostStop handler can bring it back to 0.
+        PoWMiningMetrics.recordMinerRunning(true)
+
+        LoggingTestKit.error("StopMining").expect {
+          coordinator ! StopMining
+        }
+        probe.expectTerminated(coordinator.ref.toClassic)
+        running shouldBe 0L
+    }
+
     "should throw exception when starting with other message than StartMining(mode)" taggedAs (
       UnitTest,
       ConsensusTest,
@@ -227,7 +312,11 @@ class PoWMiningCoordinatorSpec
     override lazy val mockBlockGenerator: PoWBlockGenerator = mock[PoWBlockGenerator]
     override lazy val mockEthMiningService: EthMiningService = mock[EthMiningService]
     override lazy val mockEvmCodeStorage: EvmCodeStorage = mock[EvmCodeStorage]
-    override lazy val mockMptStorage: MptStorage = mock[MptStorage]
+    // A world asks its storage for the account trie's view of it: a hash-keyed store answers with itself.
+    override lazy val mockMptStorage: MptStorage =
+      val storage = mock[MptStorage]
+      storage.forOwner.expects(*).anyNumberOfTimes().returning(storage)
+      storage
 
     override lazy val mining: PoWMining = buildPoWConsensus().withBlockGenerator(blockGenerator)
 

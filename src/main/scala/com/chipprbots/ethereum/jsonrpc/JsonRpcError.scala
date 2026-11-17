@@ -67,6 +67,22 @@ object JsonRpcError extends JsonMethodsImplicits:
   val NodeNotFound: JsonRpcError = executionError(List(EthCustomError.DoesntExist("State node")))
   val BlockNotFound: JsonRpcError = executionError(List(EthCustomError.DoesntExist("Block")))
 
+  // What a client is told on the unified state layout when a block's state cannot be read (spec 018 Track C). None of
+  // them is an execution error (code 3), which clients take for a revert.
+
+  /** The state of the block is not held: it is pruned, too far behind the head, or of no block of the chain. Asking
+    * again does not change it. The words are those go-ethereum answers a pruned state with.
+    */
+  val StateNotHeld: JsonRpcError =
+    JsonRpcError(-32000, "missing trie node: the state of that block is not held", None)
+
+  /** The state is held and is not handed out right now: as many reads behind the head as may be are in flight. */
+  val StateBusy: JsonRpcError =
+    JsonRpcError(-32005, "too many reads of states behind the head are in flight, ask again", None)
+
+  /** The chain moved on under the read each time it was made. */
+  val StateMoved: JsonRpcError = JsonRpcError(-32005, "the state moved while it was read, ask again", None)
+
   // Custom errors based on proposal https://eth.wiki/json-rpc/json-rpc-error-codes-improvement-proposal
   sealed abstract class EthCustomError private (val code: Int, val message: String)
   object EthCustomError:

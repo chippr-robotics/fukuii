@@ -30,7 +30,6 @@ import com.chipprbots.ethereum.blockchain.sync.BackgroundAudit
 import com.chipprbots.ethereum.blockchain.sync.PeersClient
 import com.chipprbots.ethereum.blockchain.sync.TestSyncConfig
 import com.chipprbots.ethereum.blockchain.sync.regular.BlockFetcher.FetchedStateNode
-import com.chipprbots.ethereum.blockchain.sync.regular.ImportCounterAccess
 import com.chipprbots.ethereum.blockchain.sync.regular.StateNodeFetcher
 import com.chipprbots.ethereum.blockchain.sync.snap.heal.AuditBadEntries
 import com.chipprbots.ethereum.blockchain.sync.snap.heal.AuditCounters
@@ -238,7 +237,6 @@ class BackgroundAuditSpec
     val bytes = unwrappedBytes(n, hash)
     n.s.delete(hash)
     n.head(10, root)
-    val exhaustsBefore = ImportCounterAccess.survivedExhausts
 
     val (audit, found) = logsOf {
       val audit = n.spawn(fetcher = wire.fetcher)
@@ -282,7 +280,7 @@ class BackgroundAuditSpec
     val stored = n.s.nodes.get(hash).get
     StoredNodeTestAccess.references(stored) shouldBe RepairedNodeReferences
     unwrappedBytes(n, hash).toSeq shouldBe bytes.toSeq
-    ImportCounterAccess.survivedExhausts shouldBe exhaustsBefore
+    // Import's exhaust count is out of the audit's reach: it belongs to a regular-sync session, not a global (#1705).
 
     withClue("a pass that repaired is not clean, and another comes after the backoff: ") {
       n.s.app.getSnapAuditCleanAnchor() shouldBe None
@@ -309,6 +307,46 @@ class BackgroundAuditSpec
     lines(said, Level.INFO).exists(l => l.contains("ended clean") && l.contains("nodes=")) shouldBe true
     lines(said, Level.WARN) shouldBe empty
     n.fetches.expectNoMessage(50.millis)
+  }
+
+  it should "owe exactly one more pass to a datadir that already holds a clean anchor (#1692)" taggedAs UnitTest in {
+    val n = new Node
+    val root = populate(n)
+    n.head(10, root)
+    n.ended(n.spawn())
+    n.s.app.getSnapAuditCleanAnchor() shouldBe Some("5")
+    n.owes shouldBe false
+    withClue("the record a finished pass leaves, which the forced one must not resume from: ") {
+      n.s.progress.readAuditBadEntries() shouldBe defined
+    }
+
+    // The first start of a binary with the fix: one synced write takes the anchor, the audit's record and its place.
+    n.s.app.forceAuditPassOnce() shouldBe true
+    n.s.app.getSnapAuditCleanAnchor() shouldBe None
+    n.s.progress.readAuditBadEntries() shouldBe None
+    n.s.progress.readAuditCursors() shouldBe None
+    n.owes shouldBe true
+    BackgroundAudit.gate(enabled = true, n.s.state, n.s.app) shouldBe BackgroundAudit.Gate.Run
+
+    // It runs a full pass and ends clean.
+    n.ended(n.spawn())
+    n.s.app.getSnapAuditCleanAnchor() shouldBe Some("5")
+    n.owes shouldBe false
+
+    withClue("and a later start owes nothing more: ") {
+      n.s.app.forceAuditPassOnce() shouldBe false
+      n.s.app.getSnapAuditCleanAnchor() shouldBe Some("5")
+      n.owes shouldBe false
+      BackgroundAudit.gate(enabled = true, n.s.state, n.s.app) shouldBe BackgroundAudit.Gate.NotOwed
+    }
+  }
+
+  it should "not owe a pass to a datadir that never finished SNAP when the key is set" taggedAs UnitTest in {
+    val n = new Node
+    n.s.app.clearSnapSyncDone().commit()
+    n.s.app.forceAuditPassOnce() shouldBe true
+    n.owes shouldBe false
+    n.s.app.forceAuditPassOnce() shouldBe false
   }
 
   it should "say where it has got to, in the numbers an operator needs" taggedAs UnitTest in {
@@ -344,6 +382,63 @@ class BackgroundAuditSpec
     n.s.app.isStorageRecoveryDone() shouldBe true
     n.s.app.getSnapAuditCleanAnchor() shouldBe None
     withClue("the anchor still owes another pass: ")(n.owes shouldBe true)
+  }
+
+  // Spec 029 FR-043: the dashboard's Storage view asks the running audit what it has got to, through a reference that
+  // can ask nothing else. SyncController publishes the audit it starts and withdraws the one it stops.
+  it should "answer its status through the published reference, and be withdrawn when it is stopped" taggedAs UnitTest in {
+    val n = new Node
+    val root = populate(n)
+    val (_, hash) = deepStorageNode(n, root)
+    n.s.delete(hash)
+    n.head(10, root)
+    BackgroundAudit.statusRef shouldBe None
+    val audit = n.spawn()
+    BackgroundAudit.publish(Some(audit))
+    try
+      n.fetches.receiveMessage()
+      val asked = createTestProbe[BackgroundAudit.Status]()
+      BackgroundAudit.statusRef.get ! BackgroundAudit.GetStatus(asked.ref)
+      // What the audit says of itself directly is what the published reference gives.
+      asked.receiveMessage() shouldBe n.status(audit)
+      // The reference is typed to the one question: it accepts a status query and no other command.
+      val narrowed: ActorRef[BackgroundAudit.GetStatus] = BackgroundAudit.statusRef.get
+      narrowed.path shouldBe audit.path
+    finally
+      testKit.stop(audit)
+      BackgroundAudit.publish(None)
+    BackgroundAudit.statusRef shouldBe None
+  }
+
+  // vault: the audit ends by itself after a clean pass, which SyncController never hears of. It withdraws its own
+  // reference then, and only its own: a newer audit published in its place stays.
+  it should "withdraw its own reference when it stops, and leave a newer audit's in place" taggedAs UnitTest in {
+    val n = new Node
+    val root = populate(n)
+    val (_, hash) = deepStorageNode(n, root)
+    n.s.delete(hash)
+    n.head(10, root)
+    val first = n.spawn()
+    BackgroundAudit.publish(Some(first))
+    try
+      n.fetches.receiveMessage()
+      BackgroundAudit.statusRef.map(_.path) shouldBe Some(first.path)
+      val stopped = createTestProbe[Any]()
+      testKit.stop(first)
+      stopped.expectTerminated(first)
+      // Nobody told the publisher: the audit withdrew itself.
+      eventually(BackgroundAudit.statusRef shouldBe None)
+      // A second audit is published; then an older one's stop arrives late and must not clear it.
+      val second = n.spawn()
+      val late = n.spawn()
+      BackgroundAudit.publish(Some(second))
+      testKit.stop(late)
+      stopped.expectTerminated(late)
+      BackgroundAudit.statusRef.map(_.path) shouldBe Some(second.path)
+      testKit.stop(second)
+      stopped.expectTerminated(second)
+      eventually(BackgroundAudit.statusRef shouldBe None)
+    finally BackgroundAudit.publish(None)
   }
 
   it should "set neither flag when a pass is stopped part way" taggedAs UnitTest in {
@@ -640,7 +735,6 @@ class BackgroundAuditSpec
     val (_, hash) = deepStorageNode(n, root)
     n.s.delete(hash)
     n.head(10, root)
-    val exhaustsBefore = ImportCounterAccess.survivedExhausts
 
     val requests = createTestProbe[PeersClient.Request[?]]()
     val client = testKit.spawn(Behaviors.receiveMessage[PeersClient.Command] {
@@ -666,7 +760,8 @@ class BackgroundAuditSpec
 
     val st = n.awaitBackoff(audit)
     st.counters.unresolved shouldBe 1
-    ImportCounterAccess.survivedExhausts shouldBe exhaustsBefore
+    // Not the counter: import's exhaust count belongs to a regular-sync session, which the audit holds no reference to
+    // (#1705). Nor import's fetcher: the audit's fetch went to its own.
   }
 
   // Import's blacklist is a CacheBasedBlacklist, and every one of those sets a shared gauge and bumps shared counters. So

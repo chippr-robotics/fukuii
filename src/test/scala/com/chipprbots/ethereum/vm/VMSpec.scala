@@ -77,7 +77,9 @@ class VMSpec extends AnyWordSpec with ScalaCheckPropertyChecks with Matchers:
         )
         val result: ProgramResult[MockWorldState, MockStorage] = vm.run(context)
 
-        result.error shouldBe Some(OutOfGas)
+        // #1727: named as go-ethereum's ErrMaxCodeSizeExceeded; the halt is OutOfGas's, all gas consumed
+        result.error shouldBe Some(MaxCodeSizeExceeded)
+        result.gasRemaining shouldBe 0
 
         val context1: PC = getContext(
           inputData = initCode(contractCode),
@@ -86,7 +88,8 @@ class VMSpec extends AnyWordSpec with ScalaCheckPropertyChecks with Matchers:
         )
         val result1: ProgramResult[MockWorldState, MockStorage] = vm.run(context1)
 
-        result1.error shouldBe Some(OutOfGas)
+        result1.error shouldBe Some(MaxCodeSizeExceeded)
+        result1.gasRemaining shouldBe 0
 
       "fail to create contract in case of address conflict (non-empty code)" taggedAs (
         UnitTest,

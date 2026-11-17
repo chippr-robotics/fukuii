@@ -6,6 +6,7 @@ import cats.effect.IO
 import cats.implicits.*
 
 import com.chipprbots.ethereum.consensus.blocks.BlockGenerator
+import com.chipprbots.ethereum.db.storage.MptStorage
 import com.chipprbots.ethereum.domain.Account
 import com.chipprbots.ethereum.domain.Address
 import com.chipprbots.ethereum.domain.Block
@@ -54,6 +55,13 @@ object ProofService:
         case (Some(value), None) => EmptyStorageProof(StorageProofKey(position), value)
         case (None, None)        => EmptyStorageValueProof(StorageProofKey(position))
 
+    /** `sp` for the key the request named: the proof is of the slot, the response echoes the request's own key. */
+    def withKey(sp: StorageProof, key: StorageProofKey): StorageProof = sp match
+      case p: StorageValueProof      => p.copy(key = key)
+      case p: EmptyStorageValue      => p.copy(key = key)
+      case p: EmptyStorageProof      => p.copy(key = key)
+      case p: EmptyStorageValueProof => p.copy(key = key)
+
     def asRlpSerializedNode(node: MptNode): ByteString =
       // Use cached RLP encoding if available (preserves original storage bytes)
       node.cachedRlpEncoded.map(ByteString(_)).getOrElse(ByteString(MptTraversals.encodeNode(node)))
@@ -76,8 +84,15 @@ object ProofService:
     val proof: Seq[ByteString] = Seq.empty[MptNode].map(asRlpSerializedNode)
   case class StorageValueProof(key: StorageProofKey, value: BigInt, proof: Seq[ByteString]) extends StorageProof
 
-  /** The key used to get the storage slot in its account tree */
-  case class StorageProofKey(v: BigInt) extends AnyVal
+  /** The key used to get the storage slot in its account tree.
+    *
+    * @param v
+    *   the slot
+    * @param fixed32
+    *   the request named the slot with 63 or 64 hex digits, and the response gives it back as 32 bytes; any other key
+    *   is returned as a minimal quantity (execution-apis `eth_getProof`, geth)
+    */
+  case class StorageProofKey(v: BigInt, fixed32: Boolean = false)
 
   /** The merkle proofs of the specified account connecting them to the blockhash of the block specified.
     *
@@ -170,38 +185,57 @@ class EthProofService(
       storageKeys: Seq[StorageProofKey],
       block: BlockParam
   ): IO[Either[JsonRpcError, ProofAccount]] = IO {
-    for
-      blockNumber <- resolveBlock(block).map(_.block.number.value)
-      account <- Either.fromOption(
-        blockchainReader.getAccount(blockchainReader.getBestBranch, address, blockNumber),
-        noAccount(address, blockNumber)
-      )
-      accountProof <- Either.fromOption(
-        blockchainReader
-          .getAccountProof(blockchainReader.getBestBranch, address, blockNumber)
-          .map(_.map(asRlpSerializedNode)),
-        noAccountProof(address, blockNumber)
-      )
-      storageProof = getStorageProof(account, storageKeys)
-    yield ProofAccount(account, accountProof, storageProof, address)
+    resolveBlock(block).map(_.block.header).flatMap { header =>
+      val blockNumber = header.number.value
+      // The account, its proof and its storage proofs come from one state: a proof is of one block.
+      StateRead
+        .at(blockchainReader, header) { state =>
+          for accountProof <- Either.fromOption(
+              blockchainReader.accountProofIn(state, header, address).map(_.map(asRlpSerializedNode)),
+              noAccountProof(address, blockNumber)
+            )
+          yield blockchainReader.accountIn(state, header, address) match
+            case Some(account) =>
+              ProofAccount(account, accountProof, getStorageProof(state, address, account, storageKeys), address)
+            // geth: an account that does not exist is proved absent by the account proof; its hashes are zero and each
+            // storage entry is 0 with an empty proof
+            case None =>
+              ProofAccount(
+                address = address,
+                accountProof = accountProof,
+                balance = BigInt(0),
+                codeHash = ZeroHash,
+                nonce = UInt256(0),
+                storageHash = ZeroHash,
+                storageProof = storageKeys.toList.map(ProofService.EmptyStorageValueProof(_))
+              )
+        }
+        .flatten
+    }
   }
 
+  /** The proofs of `storageKeys` in the storage of `address`, whose account in `state` is `account`. */
   def getStorageProof(
+      state: MptStorage,
+      address: Address,
       account: Account,
       storageKeys: Seq[StorageProofKey]
   ): Seq[StorageProof] =
     storageKeys.toList
       .map { storageKey =>
-        blockchain
-          .getStorageProofAt(
-            rootHash = account.storageRoot.value,
+        StorageProof.withKey(
+          blockchain.getStorageProofAt(
+            state = state,
+            address = address,
+            storageRoot = account.storageRoot.value,
             position = storageKey.v,
             ethCompatibleStorage = ethCompatibleStorage
-          )
+          ),
+          storageKey
+        )
       }
 
-  private def noAccount(address: Address, blockNumber: BigInt): JsonRpcError =
-    JsonRpcError.LogicError(s"No account found for Address [${address.toString}] blockNumber [${blockNumber.toString}]")
+  private val ZeroHash: ByteString = ByteString(new Array[Byte](32))
 
   private def noAccountProof(address: Address, blockNumber: BigInt): JsonRpcError =
     JsonRpcError.LogicError(s"No account proof for Address [${address.toString}] blockNumber [${blockNumber.toString}]")
@@ -230,8 +264,13 @@ class EthProofService(
       case BlockParam.Latest    => getLatestBlock().map(ResolvedBlock(_, pendingState = None))
       case BlockParam.Safe      => getLatestBlock().map(ResolvedBlock(_, pendingState = None))
       case BlockParam.Finalized => getLatestBlock().map(ResolvedBlock(_, pendingState = None))
-      case BlockParam.Pending =>
-        blockGenerator.getPendingBlockAndState
+      case BlockParam.Pending   =>
+        // On the unified state layout the pending block's state is held nowhere: the block was built on a layer that
+        // was dropped, and only the state of the head is on disk. So "pending" is the head there, which is what it
+        // is on any node with no pending block. With the guard off it is the block the generator last built.
+        Option
+          .unless(blockchainReader.holdsStateInPlace)(blockGenerator.getPendingBlockAndState)
+          .flatten
           .map(pb => ResolvedBlock(pb.pendingBlock.block, pendingState = Some(pb.worldState)))
           .map(Right.apply)
           .getOrElse(resolveBlock(BlockParam.Latest)) // Default behavior in other clients

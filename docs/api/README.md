@@ -131,11 +131,13 @@ Fukuii organizes JSON-RPC methods into namespaces:
 
 For production deployments:
 
-1. **Disable dangerous namespaces**:
+1. **Keep dangerous namespaces off**: HTTP and WebSocket serve only `eth`, `net`, `web3` and `fukuii` unless you list
+   more, so `personal`, `debug`, `admin`, `qa`, `test` stay off by default. Narrow further if you do not need
+   `fukuii`:
    ```hocon
    fukuii.network.rpc {
      http {
-       apis = "eth,web3,net"  # Exclude personal, debug, test, qa
+       apis = "eth,web3,net"
      }
    }
    ```
@@ -297,11 +299,12 @@ fukuii.network.rpc {
 }
 ```
 
-**Solution**: Check that the namespace is enabled in configuration:
+**Solution**: Check that the namespace is enabled for the transport you call (`rpc_modules` lists what it serves).
+HTTP and WebSocket serve `eth`, `net`, `web3` and `fukuii` by default; opt in to the namespace you need:
 ```hocon
 fukuii.network.rpc {
   http {
-    apis = "eth,web3,net,personal"  # Add required namespaces
+    apis = "eth,net,web3,fukuii,personal"  # Add required namespaces (ws.apis and ipc.apis work the same way)
   }
 }
 ```

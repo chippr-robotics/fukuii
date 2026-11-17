@@ -52,7 +52,8 @@ class MerklePatriciaTrieSuite extends AnyFunSuite with ScalaCheckPropertyChecks 
     forAll(keyValueListGen()) { (keyValueList: Seq[(Int, Int)]) =>
       // given
       val trie = addEveryKeyValuePair(keyValueList)
-      val unfoldedTrie = MptTraversals.parseTrieIntoMemory(HashNode(trie.getRootHash), emptyEphemNodeStorage)
+      val unfoldedTrie = com.chipprbots.ethereum.mpt.MptVisitors.MptConstructionVisitor
+        .parseTrieIntoMemory(HashNode(trie.getRootHash), emptyEphemNodeStorage)
 
       // when
       val collapsed = MptTraversals.collapseTrie(unfoldedTrie)
@@ -69,7 +70,8 @@ class MerklePatriciaTrieSuite extends AnyFunSuite with ScalaCheckPropertyChecks 
   test("PatriciaTrie encoding decoding", UnitTest, MPTTest) {
     forAll(keyValueListGen()) { (keyValueList: Seq[(Int, Int)]) =>
       val trie = addEveryKeyValuePair(keyValueList)
-      val unfoldedTrieNode = MptTraversals.parseTrieIntoMemory(HashNode(trie.getRootHash), emptyEphemNodeStorage)
+      val unfoldedTrieNode = com.chipprbots.ethereum.mpt.MptVisitors.MptConstructionVisitor
+        .parseTrieIntoMemory(HashNode(trie.getRootHash), emptyEphemNodeStorage)
 
       // when
       val encoded = MptTraversals.encodeNode(unfoldedTrieNode)

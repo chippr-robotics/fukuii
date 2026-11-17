@@ -6,6 +6,10 @@ import org.apache.pekko.actor.typed.ActorRef as TypedActorRef
 import org.apache.pekko.util.ByteString
 
 import com.chipprbots.ethereum.consensus.ReorgStateHandler
+import com.chipprbots.ethereum.db.storage.pathstate.FinalizedBlock
+import com.chipprbots.ethereum.db.storage.pathstate.ReorgRefusal
+import com.chipprbots.ethereum.db.storage.pathstate.ReorgTooDeep
+import com.chipprbots.ethereum.db.storage.pathstate.StateUnavailable
 import com.chipprbots.ethereum.domain.BlockHash
 import com.chipprbots.ethereum.domain.BlockHeader
 import com.chipprbots.ethereum.domain.BlockchainReader
@@ -110,6 +114,8 @@ class ForkChoiceManager(
     if maybeHeader.isEmpty then
       log.info(s"Fork choice head ${newState.headBlockHash} not known yet (SYNCING)")
       Left("SYNCING")
+    else if blockchainWriter.holdsStateInPlace then
+      maybeHeader.fold[Either[String, Unit]](Left("SYNCING"))(confirmHeldHead(newState, _))
     else
       log.info(
         s"Fork choice updated: head=${newState.headBlockHash}, " +
@@ -129,6 +135,111 @@ class ForkChoiceManager(
       }
 
       Right(())
+
+  /** The fork choice on the unified state layout (spec 018 C4b part 3b), where the head moves with the state or not at
+    * all: through [[BlockchainWriter.moveHeadInPlace]], never [[BlockchainWriter.promoteToCanonicalHead]], which
+    * refuses there.
+    *
+    * `EngineApiService.forkchoiceUpdated` lets through only a head that is the block whose state is held, and a commit
+    * of the next block in place may land between that look and this write. So the head is confirmed by a move of
+    * nothing, written under the state lock against the anchor it was planned from: a commit that landed first makes it
+    * a move back, which is refused, and the best block stays on the block just committed (beacon, plan.md "C4b part 3"
+    * T145). Since C4d part 2b a fork choice moves the head up a chain of executed blocks, or across a fork along the
+    * changeset records and the other branch's executed blocks ([[BlockchainWriter.moveHeadInPlace]]), and never down to
+    * an ancestor of the head, which go-ethereum skips too. The reference counts of the hash store are not touched: the
+    * changeset records are what the unified layout keeps of a block it leaves.
+    *
+    * `currentState` is set only when the head was confirmed: it is read as the head that was executed and applied.
+    *
+    * @return
+    *   `Left("SYNCING")` when the head was not followed, and nothing was written (its state is not held: a block whose
+    *   executed state was not kept, or a fork beyond the records; or an ancestor of the head); when the plan found the
+    *   records corrupt, the state has failed closed too. `Left` starting [[ForkChoiceManager.FinalizedReversed]] when
+    *   the move would reverse the finalized block
+    */
+  private def confirmHeldHead(newState: ForkChoiceState, header: BlockHeader): Either[String, Unit] =
+    def notMoved(why: String): Either[String, Unit] =
+      log.warn(s"Fork choice head ${header.number.value} ${header.hashAsHexString} not applied (SYNCING): $why")
+      Left("SYNCING")
+    // the finalized block it names, by its header (the Engine API has found it on the head's chain); the zero hash
+    // names none, and leaves the one named before (C4d part 1)
+    val finalized =
+      Option.when(newState.finalizedBlockHash != ForkChoiceManager.ZeroHash)(newState.finalizedBlockHash).flatMap {
+        hash =>
+          val named = blockchainReader
+            .getBlockHeaderByHash(BlockHash(hash))
+            .map(finalizedHeader => FinalizedBlock(finalizedHeader.number.value, finalizedHeader.hash.value))
+          if named.isEmpty then
+            log.warn(
+              s"Fork choice names finalized block ${ForkChoiceManager.hex(hash)}, whose header is not stored: the one named before is kept"
+            )
+          named.foreach { block =>
+            // taken, as go-ethereum's SetFinalized takes it: on the held state's chain it only loosens what is kept
+            blockchainWriter.finalizedOfTheState.filter(_.number > block.number).foreach { before =>
+              log.warn(
+                s"Fork choice names finalized block ${block.number}, below the one named before (${before.number})"
+              )
+            }
+          }
+          named
+      }
+    try
+      val moved = blockchainWriter.moveHeadInPlace(
+        header,
+        blockchainReader,
+        finalized = finalized,
+        // up a chain of executed blocks, or across a fork along the records and the executed blocks of the other
+        // branch; never down to an ancestor of the head, which go-ethereum skips too ("Ignoring beacon update to old
+        // head"): the Engine API answers that one VALID, and moves nothing (C4d part 2b)
+        admit = plan =>
+          Option.when(plan.forward.isEmpty && plan.reverse.nonEmpty)(
+            s"block ${header.number.value} is an ancestor of the head (${plan.anchor.show}): the head is not moved down " +
+              "to follow a fork choice"
+          )
+      )
+      log.info(
+        s"Fork choice updated: head=${newState.headBlockHash} ($moved), " +
+          s"safe=${newState.safeBlockHash}, finalized=${newState.finalizedBlockHash}"
+      )
+      currentState.set(Some(newState))
+      Right(())
+    catch
+      // a block on the way up has no state held, and the chain is held up to `heldTo`: the Engine API has the blocks
+      // above it executed again (C4d part 3), and answers SYNCING meanwhile
+      case unavailable: StateUnavailable if unavailable.heldTo.isDefined =>
+        notMoved(unavailable.reason)
+        Left(ForkChoiceManager.NotHeldHead + unavailable.reason)
+      // The head was not moved to, and no block of its chain is said to be held. That is many things: a move the fork
+      // choice does not make (down to an ancestor of the head), a node with no state yet, a state that has failed
+      // closed. Only the last is said for what it is, this node's fault: every fork choice refused while the state is
+      // closed counts towards giving it up (spec 018 C5a part 6). The others say nothing of whether the chain can be
+      // followed.
+      case unavailable: StateUnavailable =>
+        notMoved(unavailable.reason)
+        if blockchainWriter.stateFailedClosed then Left(ForkChoiceManager.LocalFault + unavailable.reason)
+        else Left("SYNCING")
+      // A record that is not what it should be is this datadir's fault, not the fork choice's: the state fails closed
+      // (no further in-place write, no state given out, ERROR) and the head is answered as one not followed (plan.md
+      // "C4b part 1": `Corrupt` fails closed at the Engine API; the escalation is C4d's)
+      case refused: ReorgTooDeep if refused.reason == ReorgRefusal.Corrupt =>
+        blockchainWriter.failStateClosed(s"the changeset records are corrupt (${refused.getMessage})")
+        notMoved(refused.getMessage)
+        Left(ForkChoiceManager.LocalFault + refused.getMessage)
+      // a move that would reverse the finalized block: the fork choice is not consistent with what it finalized
+      // (go-ethereum: "final block not in canonical chain"), answered -38002 and not SYNCING (the user's decision of
+      // 2026-11-14)
+      case refused: ReorgTooDeep if refused.reason == ReorgRefusal.Finalized =>
+        log.warn(s"Fork choice head ${header.number.value} ${header.hashAsHexString} refused: ${refused.getMessage}")
+        Left(ForkChoiceManager.FinalizedReversed + refused.getMessage)
+      // deeper than the records reach, past a record that is not whole, or below the block the state began at: the
+      // records that would take the state there are gone, and no wait brings them back
+      case refused: ReorgTooDeep
+          if refused.reason == ReorgRefusal.Deep || refused.reason == ReorgRefusal.Incomplete ||
+            refused.reason == ReorgRefusal.Pivot =>
+        notMoved(refused.getMessage)
+        Left(ForkChoiceManager.Unreachable + refused.getMessage)
+      // `BeyondTheFetch` is said by proof-of-work regular sync only, never by a move of the head: not met here
+      case refused: ReorgTooDeep => notMoved(refused.getMessage)
 
   /** Publish the CL head to the registered listener and record it as the requested head — **nothing else**.
     *
@@ -156,6 +267,23 @@ class ForkChoiceManager(
     )
     publishBeaconHead(newState.headBlockHash, maybeHeader)
 
+  /** A head the Engine API refused as inconsistent with the finalized block (-38002) is not the head the consensus
+    * layer asks for (spec 018 C5a, B-297): left as the requested head, the p2p import path would go on following its
+    * branch, which is refused at every attempt. The requested head goes back to the head of the last fork choice
+    * followed.
+    *
+    * Only while it is still `hash`: a fork choice that has named another head since is not overwritten. Compared by
+    * value, as two refused fork choices to the same head hold two different `Option`s.
+    */
+  def forgetRefused(hash: ByteString): Unit =
+    val now = requestedHead.updateAndGet(current =>
+      if current.contains(hash) then currentState.get().map(_.headBlockHash) else current
+    )
+    if !now.contains(hash) then
+      log.info(
+        s"Fork choice head ${ForkChoiceManager.hex(hash)} refused: the requested head is ${now.map(ForkChoiceManager.hex)}"
+      )
+
   /** Clear fork choice state (e.g., on shutdown or mode switch). */
   def clear(): Unit =
     currentState.set(None)
@@ -167,6 +295,34 @@ class ForkChoiceManager(
     }
 
 object ForkChoiceManager:
+
+  /** The start of what [[ForkChoiceManager.applyForkChoiceState]] answers for a fork choice whose head would reverse
+    * the finalized block: an inconsistent fork choice state, not one this node has yet to sync.
+    */
+  val FinalizedReversed: String = "FINALIZED: "
+
+  /** The start of what [[ForkChoiceManager.applyForkChoiceState]] answers for a fork choice whose head's chain is held
+    * up to a block below it, and whose blocks above that have no state held: they are executed again, and the head is
+    * not moved meanwhile (spec 018 C4d part 3).
+    */
+  val NotHeldHead: String = "NOT HELD: "
+
+  /** The start of what [[ForkChoiceManager.applyForkChoiceState]] answers for a head on a chain this node's state does
+    * not reach: deeper than its records, or below the block its state began at (spec 018 C5a part 6). Answered SYNCING
+    * to the consensus client, as any head not followed.
+    */
+  val Unreachable: String = "UNREACHABLE: "
+
+  /** The start of what [[ForkChoiceManager.applyForkChoiceState]] answers for a head not followed for a fault of this
+    * node: records that are corrupt, a state that has failed closed (spec 018 C5a part 6). Answered SYNCING.
+    */
+  val LocalFault: String = "LOCAL FAULT: "
+
+  /** The hash a fork choice names when it names no block (a safe or finalized block before there is one). */
+  val ZeroHash: ByteString = ByteString(new Array[Byte](32))
+
+  private[engine] def hex(hash: ByteString): String =
+    com.chipprbots.ethereum.utils.Hex.toHexString(hash.toArray).take(16)
 
   /** Notification sent by [[ForkChoiceManager]] to its registered listener whenever the CL pushes a fork choice via
     * engine_forkchoiceUpdated. Carries both the head hash (always) and the locally-stored header (when we already have

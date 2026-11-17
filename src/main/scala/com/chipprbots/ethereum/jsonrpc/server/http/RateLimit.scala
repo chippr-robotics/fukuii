@@ -17,10 +17,11 @@ import org.json4s.Serialization
 import org.json4s.native
 
 import com.chipprbots.ethereum.jsonrpc.JsonRpcError
+import com.chipprbots.ethereum.jsonrpc.RpcCallStats
 import com.chipprbots.ethereum.jsonrpc.serialization.JsonSerializers
 import com.chipprbots.ethereum.jsonrpc.server.http.JsonRpcHttpServer.RateLimitConfig
 
-class RateLimit(config: RateLimitConfig) extends Directive0 with Json4sSupport:
+class RateLimit(config: RateLimitConfig, stats: RpcCallStats = RpcCallStats.Node) extends Directive0 with Json4sSupport:
 
   implicit override val serialization: Serialization = native.Serialization
   implicit override val formats: Formats = DefaultFormats + JsonSerializers.RpcErrorJsonSerializer
@@ -61,6 +62,8 @@ class RateLimit(config: RateLimitConfig) extends Directive0 with Json4sSupport:
     if config.enabled then
       extractClientIP { ip =>
         if isBelowRateLimit(ip) then
+          // Counted for the dashboard (spec 029 FR-039); it cannot throw, and the refusal is what it was.
+          stats.rateLimited()
           val err = JsonRpcError.RateLimitError(minInterval)
           complete((StatusCodes.TooManyRequests, err))
         else f.apply(())

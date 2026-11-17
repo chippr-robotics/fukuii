@@ -269,7 +269,6 @@ abstract class CommonFakePeer(peerName: String, fakePeerCustomConfig: FakePeerCu
     system.spawn(
       BlockchainHostActor(
         blockchainReader,
-        storagesInstance.storages.evmCodeStorage,
         peerConf,
         peerEventBus,
         etcPeerManager,

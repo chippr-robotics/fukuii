@@ -1,0 +1,24 @@
+ ◆ FUKUII  etc (61) · PoW · up 12d 7h                                     Block 
+────────────────────────────────────────────────────────────────────────────────
+ ✓ no alerts                                                                    
+ Block   3,125,369                                                              
+                                                                                
+   number     3,125,369                                                         
+   hash                                                                         
+   0x8fda1f865bd3000d7a226009b296f0ba403dbbbdec12a7ea54a971a0e1fd6ad5           
+   time       2017-02-03T14:12:45Z (3563d 21h ago)                              
+   gas        84,000 of 4,699,996 (2%)                                          
+   size       1.0 kB                                                            
+   difficulty 14,005,986,920,576                                                
+   contents   4 transactions · 0 uncles                                         
+                                                                                
+   Enter opens the selected row                                                 
+   parent    0x8345d132564b3660aa5f27c9415310634b50dbc92579c65a0825d9a255227a71 
+   by        0xdf7d7e053933b5cc24372f878c90e62dadad5d42                         
+   tx 0      0xaf854c57c64191827d1c80fc50f716f824508973e12e4d4c60d270520ce72edb 
+   tx 1      0xf3e33ba2cb400221476fa4025afd95a13907734c38a4a8dff4b7d860ee5adc8f 
+   tx 2      0x202359a4c0b0f11ca07d44fdeb3502ffe91c86ad4a9af47c27f11b23653339f2 
+   tx 3      0x067bd4b1a9d37ff932473212856262d59f999935a4a357faf71b1d7e276b762b 
+                                                                                
+                                                                                
+ 1-9 view  : prompt  / filter  ? help  p pause  r redraw  d detach  q quit      

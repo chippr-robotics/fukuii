@@ -84,6 +84,7 @@ class EthTxServiceAdmissionSpec
       headGasLimit: BigInt = 30_000_000,
       noHead: Boolean = false,
       stateMissing: Boolean = false,
+      stateNotHeld: Boolean = false,
       rpc: RpcTxSubmission = RpcTxSubmission.Default
   ):
     val pool: TestProbe[PendingTransactionsManager.Command] = createTestProbe[PendingTransactionsManager.Command]()
@@ -98,11 +99,13 @@ class EthTxServiceAdmissionSpec
 
     private val reader: BlockchainReader = new BlockchainReader(null, null, null, null, null, null, null, null):
       override def getBestBlockHeader: Option[BlockHeader] = Option.unless(noHead)(head)
-      override def getAccountAtStateRoot(
-          @scala.annotation.unused stateRoot: ByteString,
+      override def accountAt(
+          @scala.annotation.unused header: BlockHeader,
           address: Address
       ): Option[Account] =
         if stateMissing then throw new MissingNodeException(ByteString(1, 2, 3))
+        else if stateNotHeld then
+          throw new com.chipprbots.ethereum.db.storage.pathstate.StateUnavailable("the state of the head is not held")
         else accounts.get(address)
 
     val service: EthTxService =
@@ -505,6 +508,15 @@ class EthTxServiceAdmissionSpec
     res.left.map(_.message.startsWith("cannot validate transaction: state at head 9000000 is not available")) shouldBe
       Left(true)
     missing.pool.expectNoMessage(100.millis)
+
+    // On the unified layout a state can also be not held (spec 018 Track C): the same answer, and nothing admitted.
+    val notHeld = new Fixture(sepolia, 9_000_000, sepoliaPrague, stateNotHeld = true)
+    val refused = notHeld.submit(sign(dynamicFeeTx(id), k, Some(id)))
+    refused.left.map(_.code) shouldBe Left(-32000)
+    refused.left.map(
+      _.message.startsWith("cannot validate transaction: state at head 9000000 is not available")
+    ) shouldBe Left(true)
+    notHeld.pool.expectNoMessage(100.millis)
   }
 
   // ---------------------------------------------------------------------------------------------------------------

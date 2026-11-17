@@ -185,3 +185,6 @@ object InvalidChainReporter:
         reason.contains(StdValidators.HeaderGasContradictsEmptyTxListMarker)
       case MissingParentError | _: MPTError =>
         false
+      // this node's state could not take the block: the block was not judged at all (spec 018 Track C, C4b)
+      case _: StateFaulted =>
+        false

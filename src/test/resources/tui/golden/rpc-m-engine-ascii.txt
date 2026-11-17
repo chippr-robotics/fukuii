@@ -1,0 +1,40 @@
+ # FUKUII  sepolia (11155111) . PoS . head 7,412,009 . 23/50 peers . up 3d 4h                                       RPC 
+------------------------------------------------------------------------------------------------------------------------
+ + no alerts                                                                                                            
+                  | Peers   23/50 ##########  Block  7,412,009 -> 7,412,011 (-2)             Txpool  1,204 (3 blob)     
+                  | Sync    regular 99% . rate 0.08 blk/s . ETA 24s                                                     
+                  |-----------------------------------------------------------------------------------------------------
+                  | HTTP    listening . 127.0.0.1:8546 . no authentication . 121,340 calls . 241 failed                 
+       ETH        | WS      off                                                                                         
+                  | IPC     listening . /var/lib/fukuii/etc/fukuii.ipc . restricted to the socket file's owner          
+                  | Engine  listening . 127.0.0.1:8551 . authenticated by JWT . 1,204 eth, net and web3 calls passed on 
+                  | Limit   off                                                                                         
+ sepolia          |-----------------------------------------------------------------------------------------------------
+ PoS              | Link    connected . EL --o--------- CL . Lighthouse v7.1.0 (cfb1f733) . 23 methods offered          
+ id 11155111      | Blocks  head 7,412,011 . safe 7,411,977 (34 behind) . finalized 7,411,945 (66 behind)               
+ test network     | Calls   newPayload 3s ago VALID 253 ms . forkchoiceUpdated 3s ago VALID 6.20 ms                     
+                  | Payload 184,203 received (VALID 184,199, ACCEPTED 4, INVALID 0) . 31 built                          
+ [1] Overview     |-----------------------------------------------------------------------------------------------------
+ [2] Chain        | Methods 8 called . 121,568 calls . 245 failed . slowest at p99 eth_getLogs 1.24 s                   
+ [3] Peers        |   method                      calls   failed       p50       p95       p99         last             
+ [4] Mempool      |   eth_blockNumber            91,204        0   0.31 ms   0.84 ms   2.10 ms       1s ago             
+ [5] RPC          |   eth_getBalance             18,422        3   1.90 ms   6.20 ms   14.8 ms       2s ago             
+ [6] Storage      |   eth_call                    9,310      212   8.40 ms   41.0 ms    212 ms       2s ago             
+ [7] System       |   eth_getLogs                 1,204       17   96.0 ms    840 ms    1.24 s      40s ago             
+ [8] Logs         |   eth_getBlockByNumber          880        0   2.40 ms   9.10 ms   31.0 ms       5s ago             
+ [9] Ops          |   eth_chainId                   412        0   0.12 ms   0.20 ms   0.41 ms   3m 10s ago             
+                  |   eth_sendRawTransaction         96        4   3.10 ms   12.0 ms   28.0 ms   1m 15s ago             
+ graphics text    |   net_version                    31        0  <0.10 ms   0.14 ms   0.20 ms    1h 1m ago             
+                  |-----------------------------------------------------------------------------------------------------
+                  | Log     the last 42 of 184,322 calls . newest first . times in UTC                                  
+                  |   answered  method                      told              took      block                           
+                  |   11:59:57  engine_forkchoiceUpdatedV3  VALID          6.20 ms          -                           
+                  |   11:59:56  engine_newPayloadV4         VALID           253 ms  7,412,011                           
+                  |   11:59:45  engine_forkchoiceUpdatedV3  VALID          5.20 ms          -                           
+                  |   11:59:44  engine_newPayloadV4         VALID           216 ms  7,412,010                           
+                  |   11:59:33  engine_forkchoiceUpdatedV3  VALID          4.20 ms          -                           
+                  |   11:59:32  engine_newPayloadV4         VALID           269 ms  7,412,009                           
+                  |   11:59:21  engine_forkchoiceUpdatedV3  VALID          3.20 ms          -                           
+                  |   11:59:20  engine_newPayloadV4         VALID           232 ms  7,412,008                           
+                  |   11:59:09  engine_forkchoiceUpdatedV3  VALID          6.20 ms          -                           
+ 1-9 view  Enter open  Esc back  : prompt  / filter  ? help  p pause  r redraw  d detach  q quit                        

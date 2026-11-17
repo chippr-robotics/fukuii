@@ -15,6 +15,14 @@ import com.chipprbots.ethereum.vm.ProgramError
   * @param stateGasUsed
   *   EIP-8037 `tx_state_gas` — this transaction's contribution to the block's STATE dimension. Zero on every
   *   pre-Amsterdam path.
+  * @param maxUsedGas
+  *   go-ethereum's `ExecutionResult.MaxUsedGas` (core/state_transition.go `settleGas`): the gas this transaction had
+  *   used at its peak, before any refund — `tx.gas - gas_left - state_gas_reservoir` — raised to the calldata floor
+  *   from EIP-7623 on (ETH Prague, ETC Olympia). Never below `gasUsed`. Set by `BlockPreparator.executeTransaction` and
+  *   `executeTransactionForSimulation`, and read only by eth_simulateV1, which reports it as `maxUsedGas`. Nothing that
+  *   executes, charges, refunds, builds a receipt or computes a root reads it: block import and block building take
+  *   `gasUsed`, `executionGasUsed` and `stateGasUsed` and ignore this. 0 on the bare-VM RPC paths
+  *   (`StxLedger.simulateTransaction*`), which do no settlement and whose callers do not read it.
   */
 case class TxResult(
     worldState: InMemoryWorldStateProxy,
@@ -23,5 +31,6 @@ case class TxResult(
     vmReturnData: ByteString,
     vmError: Option[ProgramError],
     executionGasUsed: BigInt = 0,
-    stateGasUsed: BigInt = 0
+    stateGasUsed: BigInt = 0,
+    maxUsedGas: BigInt = 0
 )

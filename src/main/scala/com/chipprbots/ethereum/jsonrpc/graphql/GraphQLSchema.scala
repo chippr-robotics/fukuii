@@ -2,6 +2,7 @@ package com.chipprbots.ethereum.jsonrpc.graphql
 
 import org.apache.pekko.util.ByteString
 
+import cats.effect.IO
 import cats.effect.unsafe.IORuntime
 
 import scala.concurrent.Future
@@ -20,6 +21,7 @@ import sangria.schema.fields
 
 import com.chipprbots.ethereum.consensus.engine.BlobGasUtils
 import com.chipprbots.ethereum.crypto.kec256
+import com.chipprbots.ethereum.db.storage.MptStorage
 import com.chipprbots.ethereum.domain.AccessListItem
 import com.chipprbots.ethereum.domain.Address
 import com.chipprbots.ethereum.domain.BlobTransaction
@@ -45,11 +47,12 @@ import com.chipprbots.ethereum.domain.Withdrawal
 import com.chipprbots.ethereum.jsonrpc.BlockParam
 import com.chipprbots.ethereum.jsonrpc.EthInfoService
 import com.chipprbots.ethereum.jsonrpc.JsonRpcError
+import com.chipprbots.ethereum.jsonrpc.StateRead
 import com.chipprbots.ethereum.jsonrpc.TxArgs
 import com.chipprbots.ethereum.jsonrpc.graphql.GraphQLScalars.*
 import com.chipprbots.ethereum.jsonrpc.graphql.GraphQLTypes.*
 import com.chipprbots.ethereum.ledger.InMemoryWorldStateProxy
-import com.chipprbots.ethereum.ledger.TxResult
+import com.chipprbots.ethereum.ledger.StxLedger
 import com.chipprbots.ethereum.mpt.MerklePatriciaTrie.MissingNodeException
 import com.chipprbots.ethereum.rlp
 import com.chipprbots.ethereum.rlp.RLPList
@@ -186,7 +189,7 @@ object GraphQLSchema:
     ctx.blockchainReader.getBlockByNumber(ctx.blockchainReader.getBestBranch, blockNumber).map { b =>
       InMemoryWorldStateProxy(
         ctx.evmCodeStorage,
-        ctx.blockchain.getBackingMptStorage(b.header.number.value),
+        ctx.blockchainReader.stateAt(b.header),
         (n: BigInt) => ctx.blockchainReader.getBlockHeaderByNumber(n).map(_.hash.value),
         ctx.blockchainConfig.accountStartNonce,
         b.header.stateRoot.value,
@@ -313,16 +316,19 @@ object GraphQLSchema:
     * reaches the client. One difference: geth's `UsedGas` is never below the calldata floor (EIP-7623 / EIP-7976) and
     * this is the gas execution took. A successful frame keeps the estimate of the same message as `gasUsed`. A
     * pre-check failure is null.
+    *
+    * A pre-Homestead creation that cannot pay its code deposit is failed too, as go-ethereum's `ErrCodeStoreOutOfGas`
+    * makes it there: status 0 with the frame's output and gas.
     */
   private def callResult(
-      call: Either[JsonRpcError, TxResult],
+      call: Either[JsonRpcError, StxLedger.CallOutcome],
       gas: Either[JsonRpcError, EthInfoService.EstimateGasResponse]
   ): Option[GCallResult] =
-    (call, gas) match
-      case (Right(r), _) if r.vmError.isDefined => Some(GCallResult(r.vmReturnData, r.gasUsed.toLong, 0L))
-      case (Right(r), Right(gasResp))           => Some(GCallResult(r.vmReturnData, gasResp.gas.toLong, 1L))
-      case (Right(r), Left(_))                  => Some(GCallResult(r.vmReturnData, 0L, 1L))
-      case (Left(_), _)                         => None
+    (call.map(o => (o.txResult, o.txResult.vmError.isDefined || o.codeDepositShortfall)), gas) match
+      case (Right((r, true)), _)            => Some(GCallResult(r.vmReturnData, r.gasUsed.toLong, 0L))
+      case (Right((r, false)), Right(resp)) => Some(GCallResult(r.vmReturnData, resp.gas.toLong, 1L))
+      case (Right((r, false)), Left(_))     => Some(GCallResult(r.vmReturnData, 0L, 1L))
+      case (Left(_), _)                     => None
 
   // cast: dynamic GraphQL argument map returns Any; callers supply the expected type A
   private def asOption[A](v: Any): Option[A] = v match
@@ -421,9 +427,11 @@ object GraphQLSchema:
           "code",
           BytesType,
           resolve = c =>
-            worldStateAt(c.ctx, c.value.blockNumber)
-              .map(_.getCode(Address(c.value.address)))
-              .getOrElse(ByteString.empty)
+            stateRead {
+              worldStateAt(c.ctx, c.value.blockNumber)
+                .map(_.getCode(Address(c.value.address)))
+                .getOrElse(ByteString.empty)
+            }
         ),
         Field(
           "storage",
@@ -432,9 +440,11 @@ object GraphQLSchema:
           resolve = c =>
             val slotBytes = c.arg(SlotArg)
             val slotBigInt = BigInt(1, slotBytes.toArray[Byte])
-            resolveAccount(c.ctx, c.value.address, c.value.blockNumber) match
-              case Some(acct) =>
+            stateRead(resolveAccountIn(c.ctx, c.value.address, c.value.blockNumber) match
+              case Some((state, acct)) =>
                 val v = c.ctx.blockchain.getAccountStorageAt(
+                  state,
+                  Address(c.value.address),
                   acct.storageRoot.value,
                   slotBigInt,
                   c.ctx.blockchainConfig.ethCompatibleStorage
@@ -447,6 +457,7 @@ object GraphQLSchema:
                 ByteString(padded)
               case None =>
                 ByteString(new Array[Byte](32))
+            )
         )
       )
   )
@@ -456,9 +467,43 @@ object GraphQLSchema:
       address: ByteString,
       blockNumber: BigInt
   ): Option[com.chipprbots.ethereum.domain.Account] =
+    stateRead(resolveAccountIn(ctx, address, blockNumber).map(_._2))
+
+  /** A field's read of a block's state: in one scope of reads (the state of a block behind the head is handed out in no
+    * other way), run again on a fresh state when the state moved under it, and, when it cannot be read, an error of the
+    * field in the words a JSON-RPC caller is told. Everything that reads through the state is done inside it.
+    */
+  /** A field that executes on a block's state through a service (`call`, `estimateGas`): run again from the start when
+    * the state moved under it, and, when the state cannot be read, an error of the field in the words a JSON-RPC caller
+    * is told. Never the value a field gives for an error of the call itself: a gas estimate of 0 for a state that was
+    * not read would be a wrong answer.
+    */
+  private def executing[A](run: IO[Either[JsonRpcError, A]]): IO[Either[JsonRpcError, A]] =
+    StateRead.request(run).flatMap {
+      case Left(error) if StateRead.isStateError(error) => IO.raiseError(GraphQLUserError(error.message))
+      case answered                                     => IO.pure(answered)
+    }
+
+  private def stateRead[A](read: => A): A =
+    StateRead.attempting(read).fold(error => throw GraphQLUserError(error.message), identity)
+
+  /** The account at `address` in the state of the canonical block `blockNumber`, with that state: its storage is read
+    * from the state the account was read from. `None` when there is no such block, no such account, or the state cannot
+    * be read.
+    */
+  private def resolveAccountIn(
+      ctx: GraphQLContext,
+      address: ByteString,
+      blockNumber: BigInt
+  ): Option[(MptStorage, com.chipprbots.ethereum.domain.Account)] =
     try
-      ctx.blockchainReader
-        .getAccount(ctx.blockchainReader.getBestBranch, Address(address), blockNumber)
+      for
+        header <- ctx.blockchainReader.getBlockHeaderByNumber(blockNumber)
+        state = ctx.blockchainReader.stateAt(header)
+        account <- ctx.blockchainReader.accountIn(state, header, Address(address))
+      yield (state, account)
+    // A state that is not held, or that moved under the read, is NOT caught here: answering it with no account would
+    // report a zero balance for an account that has one. It surfaces as an error of the field, as it does for `code`.
     catch case _: MissingNodeException => None
 
   // ---------------------------------------------------------------------------
@@ -789,8 +834,8 @@ object GraphQLSchema:
           resolve = c =>
             val callTx = toTxArgs(c.arg(CallDataArg))
             val req = EthInfoService.CallRequest(callTx, BlockParam.WithNumber(c.value.number))
-            val io = c.ctx.ethInfoService.callOutcome(req)
-            val estGasIo = c.ctx.ethInfoService.estimateGas(req)
+            val io = executing(c.ctx.ethInfoService.callOutcome(req))
+            val estGasIo = executing(c.ctx.ethInfoService.estimateGas(req))
             val fut: Future[Option[GCallResult]] = (for
               callE <- io
               gasE <- estGasIo
@@ -804,8 +849,7 @@ object GraphQLSchema:
           resolve = c =>
             val callTx = toTxArgs(c.arg(CallDataArg))
             val req = EthInfoService.CallRequest(callTx, BlockParam.WithNumber(c.value.number))
-            c.ctx.ethInfoService
-              .estimateGas(req)
+            executing(c.ctx.ethInfoService.estimateGas(req))
               .map {
                 case Right(r) => r.gas.toLong
                 case Left(_)  => 0L
@@ -875,8 +919,8 @@ object GraphQLSchema:
             val callTx = toTxArgs(c.arg(CallDataArg))
             val req = EthInfoService.CallRequest(callTx, BlockParam.Pending)
             val fut = (for
-              callE <- c.ctx.ethInfoService.callOutcome(req)
-              gasE <- c.ctx.ethInfoService.estimateGas(req)
+              callE <- executing(c.ctx.ethInfoService.callOutcome(req))
+              gasE <- executing(c.ctx.ethInfoService.estimateGas(req))
             yield callResult(callE, gasE)).unsafeToFuture()
             fut
         ),
@@ -887,8 +931,7 @@ object GraphQLSchema:
           resolve = c =>
             val callTx = toTxArgs(c.arg(CallDataArg))
             val req = EthInfoService.CallRequest(callTx, BlockParam.Pending)
-            c.ctx.ethInfoService
-              .estimateGas(req)
+            executing(c.ctx.ethInfoService.estimateGas(req))
               .map {
                 case Right(r) => r.gas.toLong
                 case Left(_)  => 0L
@@ -1137,7 +1180,8 @@ object GraphQLSchema:
               val currentNonce =
                 try
                   reader
-                    .getAccount(reader.getBestBranch, sender, bestNum)
+                    .getBlockHeaderByNumber(bestNum)
+                    .flatMap(head => reader.accountAt(head, sender))
                     .map(_.nonce.toBigInt)
                     .getOrElse(c.ctx.blockchainConfig.accountStartNonce.toBigInt)
                 catch case _: MissingNodeException => c.ctx.blockchainConfig.accountStartNonce.toBigInt

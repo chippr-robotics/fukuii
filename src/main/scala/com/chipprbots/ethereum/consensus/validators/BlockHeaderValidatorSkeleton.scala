@@ -51,6 +51,18 @@ trait BlockHeaderValidatorSkeleton extends BlockHeaderValidator:
       blockchainConfig: BlockchainConfig
   ): Either[BlockHeaderError, BlockHeaderValid] =
     for
+      _ <- validateParentRules(blockHeader, parentHeader)
+      _ <- validateEvenMore(blockHeader)
+    yield BlockHeaderValid
+
+  /** Every check [[validate]] makes, in the same order, except the consensus-specific hook `validateEvenMore` (on PoW,
+    * the Ethash seal), which [[validate]] runs last. For a header chain whose seals are checked on a sample and every
+    * other rule on every header (the SNAP header download); block import always runs [[validate]].
+    */
+  def validateParentRules(blockHeader: BlockHeader, parentHeader: BlockHeader)(implicit
+      blockchainConfig: BlockchainConfig
+  ): Either[BlockHeaderError, BlockHeaderValid] =
+    for
       // NOTE how we include everything except PoW (which is deferred to `validateEvenMore`),
       //      and that difficulty validation is in effect abstract (due to `difficulty`).
       _ <- validateExtraData(blockHeader)
@@ -62,7 +74,6 @@ trait BlockHeaderValidatorSkeleton extends BlockHeaderValidator:
       _ <- validateExtraFields(blockHeader)
       _ <- validateBaseFee(blockHeader, parentHeader)
       _ <- validateBlobGasAgainstParent(blockHeader, parentHeader)
-      _ <- validateEvenMore(blockHeader)
     yield BlockHeaderValid
 
   /** EIP-4844 / EIP-7691: validate blobGasUsed ≤ MAX_BLOB_GAS_PER_BLOCK, is a multiple of GAS_PER_BLOB, and

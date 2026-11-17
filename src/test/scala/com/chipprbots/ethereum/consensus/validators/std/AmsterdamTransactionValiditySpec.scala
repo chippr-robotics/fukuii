@@ -38,7 +38,7 @@ class AmsterdamTransactionValiditySpec extends AnyFlatSpec with Matchers with Am
       header: BlockHeader,
       config: BlockchainConfig
   ): Either[SignedTransactionError, SignedTransactionValid] =
-    val upfront = UInt256(stx.tx.gasLimit.value * BigInt(1_000_000_000))
+    val upfront = stx.tx.gasLimit.value * BigInt(1_000_000_000)
     StdSignedTransactionValidator.validate(stx, sender, header, upfront, 0)(using config)
 
   /** 1,000 non-zero bytes to an EOA, zero value. Amsterdam: intrinsic 15,000 + 16,000 = 31,000, floor 15,000 + 64,000 =

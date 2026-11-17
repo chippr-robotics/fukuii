@@ -50,24 +50,25 @@ case class PeriodicConsistencyCheck(
   import PeriodicConsistencyCheck.*
 
   def check(): Behavior[ConsistencyCheck] = Behaviors.receiveMessage { case Tick =>
-    // Match the skip conditions in StdNode.runDBConsistencyCheck: the post-SNAP best block
+    // The skip conditions are StorageConsistencyChecker.applicability, shared with StdNode.runDBConsistencyCheck: the post-SNAP best block
     // points to a pivot header without the full 0..pivot chain, the mid-SNAP state is even
     // more partial (Bug 28), and Engine API mode uses optimistic imports that don't fill in
     // the chain from genesis. All three would misfire the shutdown.
-    if appStateStorage.isSnapSyncDone() then
-      log.debug("Skipping periodic consistency check: SNAP sync stores only pivot block header")
-    else if appStateStorage.isSnapSyncInProgress() then
-      log.debug("Skipping periodic consistency check: SNAP sync in progress")
-    else if engineApiEnabled then
-      log.debug("Skipping periodic consistency check: Engine API mode uses optimistic block import")
-    else
-      log.debug("Running a storage consistency check")
-      StorageConsistencyChecker.checkStorageConsistency(
-        appStateStorage.getBestBlockNumber(),
-        blockNumberMappingStorage,
-        blockHeadersStorage,
-        shutdown
-      )(using log)
+    StorageConsistencyChecker.applicability(appStateStorage, engineApiEnabled) match
+      case Some(StorageConsistencyChecker.SkipReason.SnapDone) =>
+        log.debug("Skipping periodic consistency check: SNAP sync stores only pivot block header")
+      case Some(StorageConsistencyChecker.SkipReason.SnapInProgress) =>
+        log.debug("Skipping periodic consistency check: SNAP sync in progress")
+      case Some(StorageConsistencyChecker.SkipReason.EngineApi) =>
+        log.debug("Skipping periodic consistency check: Engine API mode uses optimistic block import")
+      case None =>
+        log.debug("Running a storage consistency check")
+        StorageConsistencyChecker.checkStorageConsistency(
+          appStateStorage.getBestBlockNumber(),
+          blockNumberMappingStorage,
+          blockHeadersStorage,
+          shutdown
+        )(using log)
     tick(timers)
     Behaviors.same
   }

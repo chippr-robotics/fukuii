@@ -2,19 +2,19 @@ package com.chipprbots.ethereum.db.storage
 
 import org.apache.pekko.util.ByteString
 
+import scala.annotation.unused
 import scala.util.control.NonFatal
 
 import com.chipprbots.ethereum.db.dataSource.RocksDbDataSource.RocksDbDataSourceClosedException
 import com.chipprbots.ethereum.db.dataSource.RocksDbDataSource.RocksDbDataSourceException
 import com.chipprbots.ethereum.db.storage.NodeStorage.NodeEncoded
-import com.chipprbots.ethereum.mpt.HashNode
 import com.chipprbots.ethereum.mpt.MerklePatriciaTrie.CorruptNodeException
 import com.chipprbots.ethereum.mpt.MerklePatriciaTrie.MissingNodeException
 import com.chipprbots.ethereum.mpt.MerklePatriciaTrie.MissingRootNodeException
 import com.chipprbots.ethereum.mpt.MptNode
 import com.chipprbots.ethereum.mpt.MptTraversals
+import com.chipprbots.ethereum.mpt.NibblePath
 import com.chipprbots.ethereum.mpt.NodesKeyValueStorage
-import com.chipprbots.ethereum.mpt.NullNode
 import com.chipprbots.ethereum.utils.Logger
 
 trait MptStorage:
@@ -23,9 +23,12 @@ trait MptStorage:
   def persist(): Unit
 
   /** Batch point-lookup: returns one `Option[MptNode]` per hash. `None` means the node is not locally held (a healing
-    * target). The default delegates to sequential [[get]] calls; [[SerializingMptStorage]] overrides via
-    * [[NodesKeyValueStorage.multiGet]] which in turn hits RocksDB `multiGetAsList` when backed by
-    * [[RocksDbDataSource]].
+    * target). The default runs [[get]] per hash and reads every failure as `None`: a corrupt entry, and a failing read,
+    * look absent there. [[SerializingMptStorage]] overrides it with one batched raw read
+    * ([[NodesKeyValueStorage.multiGetRaw]]: RocksDB's `multiGetAsList`, without filling the block cache) and throws
+    * [[CorruptNodeException]] for an entry that is not the node its hash names (H3), naming its key, failing the batch.
+    * A caller that must tell a corrupt entry from an absent one, without failing the batch, reads [[rawNodes]] and
+    * judges each entry with `NodeFault`.
     */
   def multiGetNodes(hashes: Seq[Array[Byte]]): Seq[Option[MptNode]] =
     hashes.map(h => scala.util.Try(get(h)).toOption)
@@ -50,6 +53,49 @@ trait MptStorage:
   def storeRawNodes(nodes: Seq[(ByteString, Array[Byte])]): Unit =
     throw new UnsupportedOperationException("Raw node storage not supported by this implementation")
 
+  // The members below let a trie tell its storage WHERE a node sits (spec 018, Track C). A hash-keyed storage has no
+  // use for that and inherits the defaults, which are the calls it has always received. A position-keyed storage
+  // overrides them.
+
+  /** The node `hash` names, which sits at `path` in the trie being read. The trie reads every node this way. */
+  def getAt(@unused path: NibblePath, hash: Array[Byte]): MptNode = get(hash)
+
+  /** This storage for the one trie `owner` names: `None` for the account trie, `Some(keccak256(address))` for that
+    * account's storage trie. A trie's paths start at its own root, so a position-keyed storage needs the owner to tell
+    * two tries apart. A hash-keyed storage does not.
+    */
+  def forOwner(@unused owner: Option[ByteString]): MptStorage = this
+
+  /** The storage trie of `owner` is being replaced whole: its account was removed, or its storage cleared. */
+  def resetOwner(@unused owner: ByteString): Unit = ()
+
+  /** Whether a node is stored once whatever trie holds it. True of a hash-keyed storage: two accounts with one storage
+    * root share that trie's nodes, so a trie found whole under one account is whole under the other. False of a
+    * position-keyed storage: each account has a trie of its own, and the second can be missing while the first is whole
+    * (spec 022 V3). A walk that skips a storage trie because it has seen its root must ask this first.
+    */
+  def nodesSharedAcrossTries: Boolean = true
+
+  /** [[updateNodesInStorage]] with positions.
+    *
+    * `replaced` names every node of the trie as it was that lay on the path of the change: the list
+    * [[updateNodesInStorage]] takes, in the same order, each node with its position.
+    *
+    * `absorbed` names the nodes a removal merged into their parent (an extension or a leaf whose last sibling went).
+    * They no longer exist at their position, and they are not in `replaced`: the trie has never reported them. A
+    * hash-keyed storage counts references by the removals it is told of, so the default passes on `replaced` alone, and
+    * such a storage is told exactly what it was told before positions existed.
+    */
+  def updateNodesAt(
+      newRoot: Option[MptNode],
+      replaced: Seq[(NibblePath, MptNode)],
+      @unused absorbed: Seq[(NibblePath, MptNode)]
+  ): Option[MptNode] =
+    updateNodesInStorage(newRoot, replaced.map(_._2))
+
+  /** [[rawNodes]] for nodes named by position and hash. */
+  def rawNodesAt(requests: Seq[(NibblePath, ByteString)]): Seq[RawNodeRead] = rawNodes(requests.map(_._2))
+
 class SerializingMptStorage(storage: NodesKeyValueStorage, val executionCache: Option[DecodedNodeCache] = None)
     extends MptStorage:
 
@@ -66,6 +112,12 @@ class SerializingMptStorage(storage: NodesKeyValueStorage, val executionCache: O
     * missing node, instead of whatever decoding it threw: what is wrong is this store, never the block being executed.
     * The read and the unwrap of the store's own format (basic pruning's reference-count wrapper) are inside the check;
     * a failing database is not, and goes through as it is, since a disk error called corrupt could end as a delete.
+    *
+    * Keccak first (H3), judged by [[NodeFault]] as the walks and the deletes judge it: bytes that do not hash to their
+    * key are never decoded. Only a junk value that is no list was caught before; a list under the wrong hash decoded,
+    * and execution read a wrong account or slot from it, so an honest block failed its state root and its peer was
+    * blamed. Every read that reaches the store pays for one hash: block execution reads through the decoded-node cache
+    * ([[cachedForExecution]]), so only its misses do.
     */
   override def get(nodeId: Array[Byte]): MptNode =
     val key = ByteString(nodeId)
@@ -73,13 +125,10 @@ class SerializingMptStorage(storage: NodesKeyValueStorage, val executionCache: O
       storage.get(key) match
         case None => throw new MissingRootNodeException(key)
         case Some(nodeEncoded) =>
-          MptStorage.decodeNode(nodeEncoded, nodeId) match
-            // A stored node is a list. The one bare value stored under its own hash is the empty trie's root (0x80
-            // under keccak(0x80)), so these two shapes are checked against the key, and only they are: good data never
-            // reaches the hash on this hot path. Junk that parses as a list is not caught here.
-            case NullNode | _: HashNode if !StateStorage.hashesTo(key, nodeEncoded) =>
-              throw SerializingMptStorage.corrupt(key, "decodes to a bare value that does not hash to its key")
-            case node => node
+          if NodeFault.provablyBad(key, RawNodeRead.Bytes(nodeEncoded)) then
+            throw SerializingMptStorage.corrupt(key, NodeFault.BadKeccak.describe)
+          // Bytes that hash to their key and do not decode throw here, a corrupt node with what decoding threw.
+          MptStorage.decodeNode(nodeEncoded, nodeId)
     catch
       case e: MissingNodeException             => throw e
       case e: RocksDbDataSourceException       => throw e
@@ -96,13 +145,29 @@ class SerializingMptStorage(storage: NodesKeyValueStorage, val executionCache: O
   override def persist(): Unit =
     storage.persist()
 
+  /** As [[get]], for a batch: `None` for an absent node, the node for a good one. An entry that is not its node (one
+    * that does not unwrap, or bytes that fail keccak, H3) throws [[CorruptNodeException]] naming its key, and so does
+    * bytes that pass keccak and do not decode; before, a wrapper that did not unwrap threw a raw decode error for the
+    * whole batch, with no key, and a list under the wrong hash was returned as a node. Read per entry, without filling
+    * the block cache, as the walks read.
+    */
   override def multiGetNodes(hashes: Seq[Array[Byte]]): Seq[Option[MptNode]] =
     if hashes.isEmpty then Seq.empty
     else
-      storage
-        .multiGet(hashes.map(ByteString(_)))
-        .zip(hashes)
-        .map { case (rawOpt, hash) => rawOpt.map(enc => MptStorage.decodeNode(enc, hash)) }
+      val keys = hashes.map(ByteString(_))
+      storage.multiGetRaw(keys).lazyZip(keys).lazyZip(hashes).map { (raw, key, nodeId) =>
+        raw match
+          case RawNodeRead.Absent => None
+          case RawNodeRead.Undecodable =>
+            throw SerializingMptStorage.corrupt(key, s"stored wrapper ${NodeFault.Undecodable.describe}")
+          case RawNodeRead.Bytes(nodeEncoded) =>
+            if NodeFault.provablyBad(key, raw) then
+              throw SerializingMptStorage.corrupt(key, NodeFault.BadKeccak.describe)
+            try Some(MptStorage.decodeNode(nodeEncoded, nodeId))
+            catch
+              case NonFatal(e) =>
+                throw SerializingMptStorage.corrupt(key, s"${e.getClass.getSimpleName}: ${e.getMessage}", Some(e))
+      }
 
   override def rawNodes(hashes: Seq[ByteString]): Seq[RawNodeRead] =
     if hashes.isEmpty then Seq.empty else storage.multiGetRaw(hashes)

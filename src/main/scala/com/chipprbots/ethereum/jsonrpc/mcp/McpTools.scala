@@ -207,10 +207,12 @@ object SetEtherbaseTool:
 
   def execute(): IO[String] =
     IO.pure(s"""Etherbase (Coinbase) Configuration:
-      |  Method: eth_setEtherbase
+      |  Method: miner_setEtherbase (eth_setEtherbase is a deprecated alias)
       |  Description: Sets the coinbase address for mining rewards
-      |  Usage: Send JSON-RPC request with method "eth_setEtherbase" and address parameter
-      |  Example: {"jsonrpc":"2.0","method":"eth_setEtherbase","params":["0x1234..."],"id":1}
+      |  Usage: Send JSON-RPC request with method "miner_setEtherbase" and address parameter
+      |  Example: {"jsonrpc":"2.0","method":"miner_setEtherbase","params":["0x1234..."],"id":1}
+      |  Requires: the `miner` namespace, which HTTP and WebSocket do not serve unless it is listed in
+      |            fukuii.network.rpc.http.apis (or ws.apis); IPC serves it by default
       |  Note: Changes take effect immediately for newly generated blocks""".stripMargin)
 
 object MiningRpcSummaryTool:
@@ -228,6 +230,10 @@ object MiningRpcSummaryTool:
       |  miner_start -> Start mining (params: optional thread count)
       |  miner_stop -> Stop mining
       |  miner_getStatus -> Get mining status (isMining, coinbase, hashRate)
+      |  miner_setEtherbase -> Set the coinbase (etherbase) address
+      |
+      |The miner_* methods need the `miner` namespace, which HTTP and WebSocket do not serve unless it is listed in
+      |fukuii.network.rpc.http.apis (or ws.apis); IPC serves it by default. The eth_* methods are served by default.
       |""".stripMargin)
 
 // --- Blockchain Query Tools (new) ---
@@ -320,7 +326,9 @@ object GetAccountTool:
       val addrBytes = org.bouncycastle.util.encoders.Hex.decode(addrStr.stripPrefix("0x"))
       val address = Address(org.apache.pekko.util.ByteString(addrBytes))
       val blockNum = deps.blockchainReader.getBestBlockNumber
-      val accountOpt = deps.blockchainReader.getAccount(deps.blockchainReader.getBestBranch, address, blockNum)
+      val accountOpt = deps.blockchainReader.getBlockHeaderByNumber(blockNum).flatMap { head =>
+        deps.blockchainReader.accountAt(head, address)
+      }
       accountOpt match
         case Some(account) =>
           val balanceEtc = BigDecimal(account.balance.toBigInt) / BigDecimal("1000000000000000000")

@@ -14,6 +14,11 @@ description: >-
 Read `../CONVENTIONS.md` first. ETC is PoW/Ethash — mining is real here (never on
 ETH-mainnet PoS networks). Status reads are 🟢; `miner_start`/`miner_stop`/
 `miner_setEtherbase` are 🟡 (confirm — they change block production and rewards).
+The `miner_*` methods need the `miner` namespace: opt-in over HTTP and WebSocket
+(`network.rpc.http.apis = "eth,net,web3,fukuii,miner"`), on by default over IPC —
+check `rpc_modules` first. `eth_mining`, `eth_hashrate`, `eth_coinbase` and the
+external-miner methods stay in `eth`. `eth_setEtherbase` is a deprecated alias of
+`miner_setEtherbase` (served only where `miner` is enabled).
 
 ## When to use
 - Start or stop block production without restarting the node.

@@ -13,6 +13,8 @@ import scala.concurrent.duration.*
 
 import com.chipprbots.ethereum.blockchain.sync.SyncController
 import com.chipprbots.ethereum.blockchain.sync.snap.ByteCodeTask
+import com.chipprbots.ethereum.blockchain.sync.snap.HeaderChainCheck
+import com.chipprbots.ethereum.blockchain.sync.snap.PivotAnchor
 import com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncController
 import com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncController.*
 import com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncController.SyncPhase.*
@@ -37,6 +39,11 @@ private[snap] trait HealingOrchestratorState:
   var coordinatorGeneration: Long
   def healedCodeHashes: mutable.LinkedHashSet[ByteString]
   def isPoSChain: Boolean
+
+  /** The check the header download applies (HeaderChainCheck.forChain); its trustsPinnedPivot says how the in-memory
+    * pivot is pinned, as it says how SNAP finalisation anchors it.
+    */
+  def headerChainCheck: HeaderChainCheck
   def ec: ExecutionContext
   def trieNodesCachedInMemory: Boolean
 
@@ -316,7 +323,9 @@ private[snap] trait HealingOrchestrator
     */
   private def persistHealedAnchorSync(): Unit =
     val anchors = pivotBlock.map(stateIngest.appState.putSnapSyncPivotBlock).toSeq ++
-      stateRoot.map(r => stateIngest.appState.putSnapSyncStateRoot(r.value))
+      stateRoot.map(r => stateIngest.appState.putSnapSyncStateRoot(r.value)) ++
+      (for b <- pivotBlock; r <- stateRoot
+      yield PivotAnchor.pinFor(stateIngest, b, r.value, chosenByConsensusLayer = headerChainCheck.trustsPinnedPivot))
     anchors.reduceOption(_.and(_)).foreach(_.commitSync())
 
   // The frontier-rebuild BFS queue, always `Some` (the coordinator falls back to an in-memory queue only on `None`).
@@ -634,7 +643,11 @@ private[snap] trait HealingOrchestrator
         r.value.toHex.take(16),
         reason
       )
-      stateIngest.appState.putSnapSyncPivotBlock(b).and(stateIngest.appState.putSnapSyncStateRoot(r.value)).commit()
+      stateIngest.appState
+        .putSnapSyncPivotBlock(b)
+        .and(stateIngest.appState.putSnapSyncStateRoot(r.value))
+        .and(PivotAnchor.pinFor(stateIngest, b, r.value, chosenByConsensusLayer = headerChainCheck.trustsPinnedPivot))
+        .commit()
 
   /** Forget the healed codeHashes and the bytecode force-complete: a restart starts a fresh sync. */
   def resetHealedCodeHold(): Unit =

@@ -2,6 +2,8 @@ package com.chipprbots.ethereum.consensus
 
 import org.apache.pekko.util.ByteString
 
+import cats.data.NonEmptyList
+
 import scala.concurrent.duration.*
 import scala.language.postfixOps
 
@@ -20,6 +22,7 @@ import com.chipprbots.ethereum.blockchain.sync.regular.BlockImportFailed
 import com.chipprbots.ethereum.blockchain.sync.regular.BlockImportedToTop
 import com.chipprbots.ethereum.blockchain.sync.regular.ChainReorganised
 import com.chipprbots.ethereum.blockchain.sync.regular.DuplicateBlock
+import com.chipprbots.ethereum.blockchain.sync.regular.UnknownParent
 import com.chipprbots.ethereum.consensus.mining.*
 import com.chipprbots.ethereum.consensus.validators.*
 import com.chipprbots.ethereum.consensus.validators.BlockHeaderError.HeaderDifficultyError
@@ -89,6 +92,8 @@ class ConsensusAdapterSpec extends AnyFlatSpec with Matchers with ScalaFutures w
       .expects(*, *, *, true)
       .returning(com.chipprbots.ethereum.db.dataSource.DataSourceBatchUpdate(storagesInstance.dataSource))
     blockchainWriter.saveBestKnownBlocks.expects(*, *).returning(())
+    // the pointer is written after a batch only where it does not move with the state (spec 018 Track C, C4b)
+    (() => blockchainReader.holdsStateInPlace).expects().anyNumberOfTimes().returning(false)
 
     blockQueue.enqueueBlock.expects(block, bestNum).returning(Some(Leaf(hash, newWeight)))
     blockQueue.getBranch.expects(BlockHash(hash), true).returning(List(block))
@@ -135,7 +140,9 @@ class ConsensusAdapterSpec extends AnyFlatSpec with Matchers with ScalaFutures w
     blockchainReader.getBlockHeaderByHash.expects(*).anyNumberOfTimes().returning(Some(block.header))
     blockchainReader.getBlockHeaderByNumber.expects(*).anyNumberOfTimes().returning(Some(block.header))
     blockchain.stageBlockState.expects(*).returning(StagedBlockState.direct(mptStorage))
-    mptStorage.get.expects(*).returning(mptNode)
+    // The world asks for the account trie's view of the storage, which for a hash-keyed store is the store itself.
+    mptStorage.forOwner.expects(None).returning(mptStorage)
+    mptStorage.getAt.expects(*, *).returning(mptNode)
 
     blockQueue.removeSubtree.expects(*)
 
@@ -310,9 +317,25 @@ class ConsensusAdapterSpec extends AnyFlatSpec with Matchers with ScalaFutures w
       .expects(newBlock.header, *, *)
       .returning(Left(HeaderParentNotFoundError))
 
-    whenReady(consensusAdapter.evaluateBranchBlock(newBlock).unsafeToFuture())(
-      _ shouldEqual BlockImportFailed("UNKNOWN_PARENT: parent header not found")
-    )
+    // Not a failed import (B-007): the block is not wrong, this node lacks its parent, and the peer is not to blame.
+    // This is what the importer reads to fetch the branch instead of blacklisting the peer that announced it.
+    whenReady(consensusAdapter.evaluateBranchBlock(newBlock).unsafeToFuture())(_ shouldEqual UnknownParent)
+
+  it should "report a branch whose parent has no stored weight as an orphan, not as a failed import" taggedAs (
+    UnitTest,
+    ConsensusTest
+  ) in new EphemBlockchain:
+    // What ConsensusImpl answers when the branch does not extend the best block and its parent is not in the database:
+    // right after SNAP hand-off, a batch that starts above the best block (#1683).
+    val best: Block = getBlock(bestNum)
+    blockchainWriter.save(best, Nil, ChainWeight.totalDifficultyOnly(best.header.difficulty.value + 999), true)
+    val orphan: Block = getBlock(bestNum + 3) // a random parent: nobody here has it
+
+    val adapter: ConsensusAdapter = blockImportWithMockedBlockExecution(mock[BlockExecution])
+    whenReady(adapter.evaluateBranch(NonEmptyList.one(orphan)).unsafeToFuture())(_ shouldEqual UnknownParent)
+
+    // Kept in the queue, as a branch that cannot be rooted always was.
+    blockQueue.isQueued(orphan.hash) shouldBe true
 
   it should "validate blocks prior to import" taggedAs (UnitTest, ConsensusTest) in new ImportBlockTestSetupImpl:
     override lazy val validators: MockValidatorsAlwaysSucceed = new Mocks.MockValidatorsAlwaysSucceed:
@@ -330,6 +353,30 @@ class ConsensusAdapterSpec extends AnyFlatSpec with Matchers with ScalaFutures w
 
     whenReady(consensusAdapter.evaluateBranchBlock(newBlock).unsafeToFuture()) {
       _ shouldEqual BlockImportFailed(HeaderDifficultyError.toString)
+    }
+
+  // B-283 (spec 018 C5a part 2): a fault of this node's own state met while a single block is validated is no verdict
+  // on the block. It was a failed IO before, logged as an unexpected failure with the block dropped.
+  it should "tell a block as not judged when this node's own state could not validate it" taggedAs (
+    UnitTest,
+    ConsensusTest
+  ) in new ImportBlockTestSetupImpl:
+    override lazy val validators: MockValidatorsAlwaysSucceed = new Mocks.MockValidatorsAlwaysSucceed:
+      override val blockHeaderValidator: BlockHeaderValidator = mock[BlockHeaderValidator]
+
+    val newBlock: Block = getBlock(number = bestNum + 1)
+    setBlockExists(newBlock, inChain = false, inQueue = false)
+    setBestBlock(bestBlock)
+    setChainWeightForBlock(bestBlock, currentWeight)
+
+    val gap = new com.chipprbots.ethereum.db.storage.pathstate.AncestorNotStored(6, 3, "the bodies are not stored yet")
+    (validators.blockHeaderValidator
+      .validate(_: BlockHeader, _: GetBlockHeaderByHash)(using _: BlockchainConfig))
+      .expects(newBlock.header, *, *)
+      .throwing(gap)
+
+    whenReady(consensusAdapter.evaluateBranchBlock(newBlock).unsafeToFuture()) {
+      _ shouldEqual com.chipprbots.ethereum.blockchain.sync.regular.BlockImportStateFault(gap)
     }
 
   it should "correctly handle importing genesis block" taggedAs (

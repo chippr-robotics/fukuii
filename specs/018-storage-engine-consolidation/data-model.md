@@ -110,6 +110,23 @@ final class BlockDiff(
 )
 ```
 
+*(C2a part 2 as built, 2026-11-11.)* `PositionKey` landed with the read side, ahead of the rest of this unit (C3a), as
+`PositionKey(owner: Option[ByteString], hp: ByteString)` in `pathstate/PositionKey.scala`: `hp` is `HP(path)`
+(`NibblePath.key`). Held encoded, two keys are equal when they name the same position, which the opaque array could not
+give (C1), and `rowKey` is the row's key in its column family with nothing encoded twice (`hp` in `t`, `owner ++ hp` in
+`u`). The record's byte layout (section 4) is unchanged: it never depended on the Scala type.
+
+*(C1, 2026-11-11.)* `NibblePath` is an array underneath, so it compares by identity: `PositionKey` as written above would
+give two equal positions two different `Map` keys. C3a keys `changes` by the store key instead (`NibblePath.key`, the
+`HexPrefix` bytes as a `ByteString`, with the owner in front for a storage trie) or gives `PositionKey` equality by
+content. C1's test oracle keys its rows by `NibblePath.key`.
+
+*(C3a as built, 2026-11-11.)* `BlockDiff` is a case class whose `byHash` is derived (the keccak of each `next`), and
+`Change` holds `ByteString`s, so two diffs compare by content. `BlockDiff.validate` holds the writer's rules that can be
+read off a diff: rules 2 and 4, a tombstone with no entries, and one more that forge asked for, **the root rule**: the entry
+at the account trie's root has a prior that hashes to `preStateRoot` and a next that hashes to `postStateRoot` (an empty
+trie has no row), and it is there exactly when the two roots differ. Rule 5 cannot be read off a diff.
+
 Rules. A writer MUST enforce them. The codec (4.2) checks **structure only** (version, kind, flags, sort order, uniqueness,
 presence flags, CRC); rules 2, 4 and 5 are writer assertions, checked by the writer's own property tests and by a debug
 `BlockDiff.validate`, so a golden vector may legitimately hold any bytes the structure allows.
@@ -198,6 +215,14 @@ presence flags, CRC); rules 2, 4 and 5 are writer assertions, checked by the wri
 | `blockHash ++ kind` | 33 | The record. `kind = 0x01` is the local (trie-node undo) part. Kind `0x02` is reserved for the exportable semantic write set of amendment #2 / spec 025: it will be stored under `blockHash ++ 0x02`, so adding it rewrites nothing. "Keyed by block hash" (FR-010) holds: the hash is the 32-byte prefix, and siblings never collide. |
 | `0x00 ++ number(8, BE)` | 9 | Height index. The value is the concatenation of the 32-byte hashes that have a record at that height. The length differs from a record key, so the two never collide. Used only to prune (4.5). |
 
+*(C3a as built, 2026-11-11.)* **The two kinds of key are told apart by length on a point read, and not at all on a range
+scan.** A record key whose block hash begins with a zero byte sorts among the height keys or before them, and on a
+proof-of-work chain that is every block: an ETC mainnet hash begins with about six zero bytes, so every record key of ETC
+sorts before the height key of any height above 2^24. A scan "for the lowest height" would walk those records first, values
+included (`RocksDbDataSource.scanRange` materialises both). So `ChangesetStorage` has no scan: it prunes by point reads of the
+heights it is given, and its caller (the retention policy, C3b) keeps the height it has pruned up to. The keys themselves
+are unchanged.
+
 ### 4.2 Value layout, kind 1, version 1
 
 All integers are big-endian; `uvarint` is LEB128, at most 9 bytes.
@@ -233,6 +258,14 @@ byte; a `blockHash` that differs from the key; keys unsorted or repeated; an ent
 entries; trailing bytes; a CRC mismatch. It does **not** check the inline rule or `prior != next` (3, rules 2 and 4): those are
 writer assertions. A reader that meets a tombstone returns "incomplete" to its caller, who refuses the move (`ReorgTooDeep`,
 reason `incomplete`) or the view (`StateUnavailable`); it is never an error in itself.
+
+*(C3a as built, 2026-11-11.)* Four more refusals, each of something no writer produces, so that **a record the reader accepts
+re-encodes to the bytes it was read from**: a `uvarint` written in more bytes than its value needs (or in more than nine); a
+`present` byte other than 0 or 1; a tag other than 1 or 2; and a key that is no row key of its column family (no path at all,
+a storage key no longer than its 32-byte owner, or a path that is not a non-leaf hex-prefix path: a first nibble above 1, or
+an even-length flag with a non-zero pad nibble). A record that ends early is refused as truncated. None of them changes a
+byte of the three vectors. The order of the checks is: the version, alone (another version may lay out everything after it
+differently); the kind and the flags; the CRC; then the fields.
 
 ### 4.3 Golden vectors
 
@@ -305,6 +338,13 @@ batch, which also absorbs a floor that moved). Because pruning is point deletes 
 `deleteRange` and is idempotent**: a crash before the batch leaves the records, and the next batch removes them. Tombstones
 (4.2) follow the same floor. `archive` keeps every record (4.6); `inmemory` is retired.
 
+*(User decision, 2026-11-11.)* **Where there is no finalized block the floor is `state.retention.without-finality`, 512 blocks,
+not `pruning.history`.** That is every ETC and Mordor node, and an ETH node whose consensus client has not reported a
+finalized block yet. The arithmetic above gave them 64. A proof-of-work chain can be reorganised to any depth its attackers
+pay for (ETC by 3,000 to 7,000 blocks in 2020; MESS returns only with Olympia), and a reorganisation deeper than the floor is
+refused and the state synced again. So: `retained = clamp(finalized ? anchor - finalized + finality-margin :
+without-finality, pruning.history, max-blocks)`. The cost is one record per block kept, 512 against 64.
+
 ### 4.6 The two pruning modes on the unified layout (both chains)
 
 `basic` and `archive`. **`pruning.mode = "inmemory"` is retired** (user decision, 2026-11-06, which reverses the earlier "keep all
@@ -361,6 +401,14 @@ Startup reconciliation, invariant **I1**. Let `best` be `BestBlockHash`.
 4. Otherwise: rewind the best-block pointer and the canonical index to the anchor (`BlockchainWriter.setCanonicalChainHead`,
    `BlockchainWriter.scala:185-190`), log `[STATE-ANCHOR] best pointer rewound` at WARN, and let the consensus client or the
    importer drive the node forward again.
+
+**As built (C4b part 4, 2026-11-13; the user's decision of 2026-11-14): rule 4 is the rule, and rules 2 and 3 are
+not built.** A block's commit and every
+batch of a head move write the rows, the anchor, the best block and the index in one write batch, under the state lock,
+after a check that the best block is the anchor, so the pointer is never committed apart from the state and rules 2 and
+3 have no crash to serve. A best block that is not the anchor comes from a defect, a datadir written before that check,
+or test mode's two-write reset; the anchor's state is what execution proved, and the blocks above it stay stored by hash
+(vault, forge; plan.md "C4b part 4").
 
 **Rule 4 is a startup rule only.** At runtime a refused move never rewinds the pointer to the anchor: on a PoW chain that
 would leave the node on the forked chain (forge, S0 item 3b). A runtime refusal returns a typed result and escalates (Part 2,
@@ -519,6 +567,13 @@ Today's `BufferedNodeStorage` is content-addressed, which is why these work now.
 execution and drops it at commit or discard; the forward layer that survives keeps only the `next` nodes' bytes (for `get(hash)`,
 section 9).
 
+*(C2a part 2 as built, 2026-11-11.)* The by-hash half of the layer exists from C2a, not C3b: `PathMptStorage.throwaway(view)`
+keeps what the tries of one execution write in `byHash` and asks it before the view. beacon found, before code, that the
+readers C2b converts cannot wait for C3b: every execution on a view persists after each transaction
+(`BlockPreparator.scala:656-660`, `StxLedger.scala:725-735`, `EthSimulateService.scala:311`) and reads the new root back.
+`PathMptStorage.readOnly(view)` has no layer and refuses every update. C3b adds `changes` and `resets` to the same layer for a
+block that commits; nothing here is torn out.
+
 The head's own view has no layers, so a read is one verified point read. A sibling of the head has `forwardChain = [S]` or
 empty, plus a one-block reverse index. The view for a root is found through `byRoot`: forward layers first, then the canonical
 window built from headers, the same set `NetworkPeerManagerActor.refreshFreshRootCache` builds (lines 1112-1123).
@@ -552,6 +607,14 @@ created, and the disk moved by another thread, before the view finishes.
   `max-view-age-moves` (default 8) throws `StaleStateViewException`.
 - **"The anchor view" is decided at read time:** `view.block == the current anchor` and the epoch is even and unchanged since
   the view was created. It is not "the view's anchor at creation".
+- *(C2a part 2 as built, 2026-11-11.)* The reader's half of this protocol is `StateClock` (`epoch`, `anchor`,
+  `movesBetween(from, to)`), and `StateMoveLog` is the clock with the log: `publish(move)` puts the move in the log and then
+  makes the epoch odd, `settled()` makes it even and moves the anchor. **A move is logged under the odd epoch it set**, so a
+  reader that samples that odd epoch finds the move in flight (beacon; pinned in `StateViewSpec`). A read that finds the epoch
+  odd and no logged move touching its position keeps the row it read. Whether a mismatching row is corrupt or stale is decided
+  **after** the row is read: decided before, a batch that commits in between has its new bytes called corrupt (pinned by a
+  test that fails when the order is swapped). A view is made by `awaitRest()`, which waits on the log's monitor for the one
+  batch in flight. Nothing in the node calls `publish` until C3b's commit, under the state lock (7.0).
 
 Classification when the bytes at `(owner, path)` do not match what the parent expects:
 
@@ -632,6 +695,26 @@ waits for the longest running execution. The epoch protocol is recommended and t
 Total overlay hard cap, excluding pinned layers: **256 MiB** (`state.overlay.max-bytes`). These are first guesses; section 13
 lists what to measure.
 
+*(C4a part 4b-1 as built, 2026-11-12.)* What is resident behind the anchor is **a reverse index per (anchor, block)**, not
+decoded records: at most four an execution built and four a reader built, in the reverse half of `max-bytes`, least recently
+used first to go, and a reader's never in an execution's place (`ReverseIndexCache`). All of them go when the anchor moves.
+`resident-reverse-blocks` is not read. A reader (a peer served a state, a JSON-RPC call) builds at most two indexes at once
+per kind of reader and is told to ask again beyond that; an execution is not limited; whoever asks for an index that is being
+built is given that one. A view reaches `state.retention.max-blocks` behind the anchor in the basic mode and
+`state.archive.view-reach` in the archive mode. **Not bounded here**: an index that is no longer kept lives as long as the
+views that read through it, so the layer that serves reads behind the head bounds how many run at once (C4a part 4b-2).
+
+*(C4a part 4b-2 as built, 2026-11-12.)* **The reads behind the head that are in flight are bounded too.** A caller that is
+not served one request at a time (the JSON-RPC, GraphQL) is handed the state of a block behind the anchor only inside a
+`ReadScope`, the calling thread's, which says when the reader is done; a scope is counted once for each block it reads
+behind the anchor, four may be counted at once (`maxReadsBehindHead`, a constant until M5), and one more is refused and
+told to ask again. So what readers hold is the kept indexes within their pool, two builds for each kind of reader, and four
+reads in flight of at most one index each while the caller keeps one world of a block within reach (a replay does; a scope
+is counted once for a block however often it takes it). A caller in no scope reads the anchor's state and no other. A peer
+is served through a door of its own, one request at a time. Over RPC a state that cannot be read is one of three errors,
+none of them an execution error: not held (`-32000`, `missing trie node`), not handed out right now (`-32005`), moved under
+every view of it (`-32005`).
+
 **Why branches are pinned (forge, S0 item 3a).** `reorganise` executes the whole new branch with `adoptEachBlock = false`
 (`ConsensusImpl.scala:325-326`) and settles only after the last block (`:328`), so every block of the branch is a live forward
 layer at once. A batch is up to 50 blocks (`blocks-batch-size = 50`, `sync.conf:351`) and BlockQueue can hold branches up to
@@ -657,7 +740,8 @@ refused, because refusing a shallow fork on length would escalate to a re-SNAP (
 - *PoW, heavier by weight* (`selectedByWeight`): keeps execute-first, so `REORG-PARTIAL` (an executed prefix that does not
   outweigh the head) leaves the old head untouched. It uses pinned layers. If M10 and M13 show real ETC branches above the
   pinned cap, the fallback is **reverse-then-commit with rollback from records** (the old branch's records make the move back
-  cheap), recorded here and not the default.
+  cheap), recorded here and not the default. **Decided 2026-11-12 (user): it is the rule when the pinned cap is hit**,
+  with the disk moved back by the records if the branch then fails; it lands with the head move (`plan.md`, "C4a part 3").
 - *PoS designated-head arm* (`!selectedByWeight`, `ConsensusImpl.scala:453-460`): this arm already moves best to the last
   executed block whatever happens, so it does **no overlay stack at all**: one reverse move to the fork point, then a
   canonical commit block by block. No N-layer pin, no N-block batch (beacon, S0 item 3g).
@@ -858,15 +942,30 @@ list-trie store):**
    `path :+ i`; an extension's next is `path ++ sharedKey`; a temporary node built when a leaf splits sits at the same `path`
    as the node it replaces. To avoid an array copy per level on the ETC hot path, the path is an immutable cons list that is
    materialised only when a position-store `getAt` needs the bytes (spec 007's allocation budget).
+   *(C1 as built, 2026-11-11; forge and beacon signed the deviation.)* `put`, `remove` and `fix` thread the nibble array
+   itself: at the depths a trie has, one array is the size of one list cell (24 bytes to depth 8, 32 to depth 16), and
+   these methods already copy the remaining key at every level. The lazy list is used where it does pay, in the
+   collapse: `TriePosition` gives each of a branch's sixteen children a position and builds the nibbles of the few
+   that are new and stored. Measured figures: `baselines/m7-c1.md`. A temporary node of a partial-prefix split sits at
+   `path ++ sharedPrefix`, below the extension that takes the old node's place, not at `path`.
 2. Every old node that is **replaced or absorbed** is reported as `(path, node)`: the nodes on the mutation path, and the child
    `fix` merges into its parent (the extension-into-extension case at `MerklePatriciaTrie.scala:595` and the extension-into-leaf
    case at `:597`). `fix` also *resolves* the child of an extension at `:591` when that child is a branch and stays: `:599`
    returns `node` with the `HashNode` intact. That live branch is **not** reported; reporting "every node resolved" would list
    it as vanished and the forward apply would delete it (S0 item 1b).
+   *(C1 as built, 2026-11-11; found by forge and beacon before code.)* **Absorbed nodes are reported apart from replaced
+   ones.** The hash-keyed store counts references by the removals it is told of, and the trie has never told it of an
+   absorbed node. Had the absorbed node joined the replaced list, the default of section 9 would have passed it to
+   `updateNodesInStorage` and basic pruning would have decremented, and in time deleted, a node it keeps today. So
+   `remove` returns two lists and `updateNodesAt` takes two (section 9). A node is reported as absorbed exactly when the
+   extension held its **hash**: an embedded child has no row, and a child built by this removal was never stored.
 3. `MptTraversals.collapseTrieAt(node, rootPath)`: the same traversal and the same `capNode` calls, so the same bytes and
    hashes, but each stored node is reported as `(path, hash, rlp)`. The root is always reported (as `collapseTrie` does today).
    Unchanged subtrees keep their cached encoding (`parsedRlp`) and are not visited, so they produce no writes.
-4. `MptStorage.updateNodesAt(newRoot, removedOld)` computes the block-local change set into the staged layer (6.1). For each
+   *(C1 as built.)* One code path: `NodeCapper.capNodeAt` is `capNode` with the position noted beside a stored node, and
+   the visitors of `collapseTrie` carry no position at all (no field, no allocation). A test holds the two collapses to
+   the same nodes in the same order.
+4. `MptStorage.updateNodesAt(newRoot, replaced, absorbed)` computes the block-local change set into the staged layer (6.1). For each
    position, `stored(rlp, path) = rlp.length >= 32 || path.isEmpty`. The prior is fixed at the **first event** that touches the
    position in the block (3, rule 1): the old stored node that event reports, or **None** if the first event is a write with no
    old node there; later old-node reports at that position are intermediates and are ignored. The next is the last new stored
@@ -927,19 +1026,39 @@ trait MptStorage:
   def getAt(path: NibblePath, hash: Array[Byte]): MptNode = get(hash)                  // default: the hash-keyed store
   def forOwner(owner: Option[ByteString]): MptStorage = this
   def resetOwner(owner: ByteString): Unit = ()                                         // 3, rule 6: the staged layer records it
-  def updateNodesAt(newRoot: Option[MptNode], removedOld: Seq[(NibblePath, MptNode)]): Option[MptNode] =
-    updateNodesInStorage(newRoot, removedOld.map(_._2))
+  def updateNodesAt(newRoot: Option[MptNode],
+                    replaced: Seq[(NibblePath, MptNode)],          // the nodes on the path of the change: today's list, same order
+                    absorbed: Seq[(NibblePath, MptNode)]           // merged into their parent by `fix`; never passed to a hash-keyed store
+                   ): Option[MptNode] =
+    updateNodesInStorage(newRoot, replaced.map(_._2))              // C1, 2026-11-11: was one list, `removedOld` (section 8 item 2)
   def rawNodesAt(requests: Seq[(NibblePath, ByteString)]): Seq[RawNodeRead] = rawNodes(requests.map(_._2))
 ```
 
 - **A decorator sees every read** (user decision 6). Every read, position-addressed or not, goes through an `MptStorage` method
   that carries the hash (`get(hash)` or `getAt(path, hash)`), and a decorator that wraps `forOwner`'s result sees the scoped
-  reads too. To make a forgotten member impossible, the seven implementors (`SerializingMptStorage`, `PrefetchNodeReader`,
+  reads too. *(C1 as built, 2026-11-11.)* `MptStorageDecorator` makes `get` and `getAt` final over one hook, `read(hash, path)`,
+  and `updateNodesInStorage` and `updateNodesAt` final over another, `update(newRoot, removals)`: a wrapper that overrode `get`
+  alone would be bypassed by a trie that reads with `getAt`, and one that withheld removals in `updateNodesInStorage` alone
+  would hand them on through `updateNodesAt` (forge and beacon, C1 review). **C2a (T041):** `AppendOnlyMptStorage`,
+  `ReplayMptStorage` and `RetainingMptStorage` override `update` with `removals.none`; `CachingMptStorage`, `PrefetchNodeReader`
+  and the `contextStorage` wrapper override `read`; each gets a test that a positioned call goes through its override.
+  To make a forgotten member impossible, the seven implementors (`SerializingMptStorage`, `PrefetchNodeReader`,
   `CachingMptStorage`, `GenesisDataLoader.AppendOnlyMptStorage` at `:288`, the anonymous `contextStorage` in
   `InMemoryWorldStateProxy.scala:309`, `StxLedger.ReplayMptStorage` at `:703`, `EthSimulateService.RetainingMptStorage` at `:144`)
   that wrap another storage derive from a new `MptStorageDecorator` that forwards every member, including a wrapped `forOwner`
   and `resetOwner`. A forgotten `getAt` would fall back to `get(hash)` and throw on a position store (loud), and the decorator
   base makes it a compile-time fact.
+  *(C2a part 1 as built, 2026-11-11.)* Six of the seven derive from the base: `SerializingMptStorage` wraps a
+  `NodesKeyValueStorage`, not another `MptStorage`, and stays as it is. The `contextStorage` wrapper is the named class
+  `InMemoryWorldStateProxy.AccountStorageNodes`. `PrefetchNodeReader.forOwner` gives a reader on the **same** budget and the
+  same counts (a block's prefetch is one budget, however many tries it reads), and its `resetOwner` throws like its other
+  writes: it is a read-only view of the parent state (beacon).
+- **A batch read is not an execution read** (C2a, T041). `multiGetNodes`, `rawNodes` and `rawNodesAt` pass through a decorator
+  as they are and do not meet its `read` hook. Their only callers are SNAP (`ContractWorkCarry`), healing
+  (`FrontierRebuildBfs`, `HealResponseProcessing`) and the background audit (`BackgroundAudit`), each on the state storage's
+  own `SerializingMptStorage`; no world, replay or simulation reads a node through them. So a cache, a budget or a recorder
+  in front of execution misses nothing by not seeing them. The C2b ratchet (T062) lists the three members with these four
+  callers, so a new caller is a reviewed decision; the spec 017 recorder (parked) relies on this line.
 - **The spec 017 recorder, when it exists, is a decorator with three rules** (S0 item 9). (a) It sits **above**
   `CachingMptStorage` and `DecodedNodeCache`: a cache hit short-circuits `get` and `getAt`, so a recorder below the cache would
   miss reads. (b) It records **parent-state reads only**: nodes the block itself created (served from `StagedLayer.byHash`, 6.2),
@@ -951,6 +1070,10 @@ trait MptStorage:
   cannot find an arbitrary node by hash. The only peers that ask for arbitrary hashes use `GetNodeData`, which eth/67 removed;
   fukuii negotiates eth/68 and eth/69, so `BlockchainHostActor.scala:137` answers the root and overlay nodes and nothing else,
   at no cost to either chain's peers.
+- **A batch of hashes is refused, not answered "absent"** (C2a part 2). The trait's defaults for `multiGetNodes` and `rawNodes`
+  loop over `get(hash)`, which on a position store would report nearly every node absent, and their callers read "absent" as
+  "fetch it" (healing) or "it is gone" (the audit). `PathMptStorage` throws on both. `rawNodesAt` answers by position, one
+  view read per request; its batched form without block-cache fill arrives with the audit's conversion (Part 2, E).
 - **Every hash-only reader is converted or shown not to read state, and a grep ratchet enforces it** (C2b). Beyond the SNAP serve
   walkers and `BlockImporter.scala:706`, `SyncController.scala:1985`, `SnapServer.scala:68-77`, the ratchet covers:
   `LeafWalkVisitor.scala:19`, `PathTrackingLeafWalkVisitor.scala:42-44`, `ShardEnumerator.scala:46`,
@@ -959,6 +1082,13 @@ trait MptStorage:
   is not a state reader (an ephemeral list trie, a test).
 - **No new import in the stateless closure.** `NibblePath` lives in `mpt/`; the new members have defaults; a witness-backed
   storage (017 FR-005) inherits them unchanged.
+- **`db.storage` and `db.storage.pathstate` know each other** (C2a part 2; beacon). `pathstate` is built on `db.storage`
+  (`MptStorage`, `PathNodeStorage`, `AppStateStorage`), and two files of `db.storage` name `pathstate` types:
+  `AppStateStorage` (`BlockRef`, for the anchor) and `PrefetchNodeReader` (`StateFault`, to stop on one). Neither is in the
+  stateless closure. The cycle ends with the Hash scheme (C8b), when the path state storage is the state storage.
+- **Whether a state is held is asked of `PathStateStorage.stateAvailable`, never of `get(root)`** (beacon, C2a part 2).
+  `get(hash)` answers "missing" for any hash that is not the view's own root, which is right, and which a caller probing with
+  a root would take for a state hole and report (6.3.2 forbids that for a storage condition). The ratchet of C2b covers it.
 
 ---
 
@@ -979,6 +1109,7 @@ fukuii.state {
   retention {
     finality-margin = 16                     # blocks kept above a consensus client's finalized block (4.5)
     max-blocks = 512                         # bound on the retention floor
+    without-finality = 512                   # blocks kept where there is no finalized block: a proof-of-work chain (user, 2026-11-11)
   }
   overlay {
     max-bytes = 268435456                    # forward layers + resident reverse diffs, excluding pinned layers (a guess until M1, M2)
@@ -1024,8 +1155,10 @@ them fails at start with a message naming the deleted key. `pruning.history` kee
 | `app.db.state.overlay.forward.layers`, `.bytes` | gauge | forward layers and their size |
 | `app.db.state.overlay.reverse.resident`, `.bytes` | gauge | resident reverse diffs |
 | `app.db.state.overlay.evictions` | counter | by pool |
+| `app.db.state.overlay.reverse.builds`, `.build.bytes`, `.refused` | counter, summary, counter | reverse indexes built, their size, and readers told to ask again because as many as their kind may build were being built (C4a part 4b-1) |
 | `app.db.state.view.stale` | counter | `StaleStateViewException` thrown, by caller (execution, rpc, snap-serve, prefetch) |
 | `app.db.state.view.retries` | counter | executions retried after a stale view |
+| `app.db.state.view.behind.refused` | counter | reads behind the head refused because as many as may be were in flight (C4a part 4b-2) |
 | `app.db.state.move.seconds` | timer | `moveHead`, by direction and block count |
 | `app.db.state.reorg.refused` | counter | `ReorgTooDeep` and `StateUnavailable`, by reason |
 | `app.db.state.verify.mismatch` | counter | position mismatches, by class (stale, corrupt, absent) |
@@ -1301,10 +1434,10 @@ peer is not blacklisted. Four parts, all required:
      idempotent, so a crash anywhere in step 3 repeats it; and a plain mid-SNAP restart, which has no such key, keeps its
      healed rows.
 4. **While the re-SNAP runs** there is no anchor, so every in-place writer refuses (7.0), `newPayload` answers ACCEPTED and
-   `forkchoiceUpdated` SYNCING (6.3.2), and block generation is off. Healing after an escalation can meet a node with the
-   right hash over a changed child where a recreated trie overwrote part of a tombstone-skipped dead trie (forge R2.3 note 3);
-   that is the class spec 022 accepted for Path re-pegs (an absence, never a wrong root; the audit repairs it), and one test
-   pins it. Tests: induce each trigger (EG-14); a flip-flop of 63 refusals does not escalate; a second trigger inside the
+   `forkchoiceUpdated` SYNCING (6.3.2), and block generation is off. Healing after an escalation meets no row of the
+   state that was given up: part 3 deletes every row of CF `t` and `u` first, the dead tries that a tombstone left with
+   them (as built, C5a part 3; an earlier text here had healing meet such a row, forge R2.3 note 3, and T166 was to pin
+   it: it cannot arise). Tests: induce each trigger (EG-14); a flip-flop of 63 refusals does not escalate; a second trigger inside the
    cool-down does not; the loop guard drops a re-offered branch; a kill at every step of part 3 recovers to a clean SNAP.
 
 **Invariants between the disk layer, the changesets and the best pointer.**

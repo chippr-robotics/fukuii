@@ -1,0 +1,40 @@
+ # FUKUII  etc (61) . PoW . head 21,884,102 . 41/50 peers . up 12d 7h                                             Chain 
+------------------------------------------------------------------------------------------------------------------------
+ + no alerts                                                                                                            
+                  | Peers   41/50 ##########  Block  21,884,102 (at head)                    Txpool  142                
+                  | Sync    + at head                                                                                   
+                  |-----------------------------------------------------------------------------------------------------
+                  | Chain   etc . chain id 61 . PoW . forks by block number                                             
+       ETC        |-----------------------------------------------------------------------------------------------------
+                  | Forks (block)                                                                                       
+                  |   + Frontier           block 0                                                                      
+                  |   + Homestead          block 1,150,000                                                              
+ etc              |   + EIP-150            block 2,500,000                                                              
+ PoW . id 61      |   + EIP-155            block 3,000,000                                                              
+ main network     |   + EIP-160            block 3,000,000                                                              
+                  |   + DiffBomb-Pause     block 3,000,000                                                              
+ [1] Overview     |   + DiffBomb-Continue  block 5,000,000                                                              
+ [2] Chain        |   + DiffBomb-Removal   block 5,900,000                                                              
+ [3] Peers        |   + Atlantis           block 8,772,000                                                              
+ [4] Mempool      |   + Agharta            block 9,573,000                                                              
+ [5] RPC          |   + Phoenix            block 10,500,839                                                             
+ [6] Storage      |   + ECIP-1099          block 11,700,000                                                             
+ [7] System       |   + Magneto            block 13,189,133                                                             
+ [8] Logs         |   + Mystique           block 14,525,000                                                             
+ [9] Ops          |   + Spiral             block 19,250,000                                                             
+                  |   . Olympia            not scheduled on this network                                                
+ graphics text    |                                                                                                     
+                  |                                                                                                     
+                  |                                                                                                     
+                  |                                                                                                     
+                  |                                                                                                     
+                  |                                                                                                     
+                  |                                                                                                     
+                  |                                                                                                     
+                  |                                                                                                     
+                  |                                                                                                     
+                  |                                                                                                     
+                  |                                                                                                     
+                  |                                                                                                     
+                  |                                                                                                     
+ 1-9 view  Enter open  Esc back  : prompt  / filter  ? help  p pause  r redraw  d detach  q quit                        

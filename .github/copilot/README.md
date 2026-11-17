@@ -139,7 +139,8 @@ curl -X POST http://localhost:8545 \
 3. Verify port 8545 is accessible: `netstat -an | grep 8545`
 
 ### Tools not appearing
-1. Ensure `"mcp"` is in your `fukuii.network.rpc.apis` configuration
+1. Ensure `mcp` is in the apis list of the endpoint you use, e.g. `fukuii.network.rpc.http.apis = "eth,net,web3,fukuii,mcp"`
+   (HTTP and WebSocket serve `eth`, `net`, `web3` and `fukuii` by default)
 2. Restart Fukuii after configuration changes
 3. Check logs for any MCP-related errors
 

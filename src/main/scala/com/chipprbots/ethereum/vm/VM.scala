@@ -415,7 +415,16 @@ class VM[W <: WorldStateProxy[W, S], S <: Storage[S]](
           // Code size too big or code storage causes out-of-gas with exceptionalFailedCodeDeposit enabled.
           // The frame itself completed normally, so `ProgramState.toResult` did NOT roll its state gas
           // back — this is the one exit where the rollback has to be applied after the fact.
-          result.copy(error = Some(OutOfGas), gasRemaining = 0).withStateGasRestoredToBaseline
+          //
+          // Both are the same exceptional halt; only the error's name tells them apart, for the RPC. When both
+          // hold, it is go-ethereum's (core/vm/evm.go `initNewContract`), on ETC as on ETH: Amsterdam checks the
+          // size before it charges the deposit, every fork before it charges first. (core-geth checks the size
+          // first on every fork; #1727 takes go-ethereum's order for both chains.)
+          val error: ProgramError =
+            if config.amsterdamEnabled then if maxCodeSizeExceeded then MaxCodeSizeExceeded else CodeStoreOutOfGas
+            else if codeStoreOutOfGas then CodeStoreOutOfGas
+            else MaxCodeSizeExceeded
+          result.copy(error = Some(error), gasRemaining = 0).withStateGasRestoredToBaseline
         else if codeStoreOutOfGas && !config.exceptionalFailedCodeDeposit then
           // Code storage causes out-of-gas with exceptionalFailedCodeDeposit disabled. Pre-Homestead only,
           // and pre-Amsterdam by construction: the frame keeps its gas and its state, and no code is stored.
@@ -429,11 +438,15 @@ class VM[W <: WorldStateProxy[W, S], S <: Storage[S]](
           // go-ethereum reaches the same end state by a different route: `core/vm/evm.go create()` does set
           // `err = ErrCodeStoreOutOfGas` unconditionally, but `core/vm/instructions.go opCreate` then throws
           // it away — "if the ruleset is frontier we must ignore this error and pretend the operation was
-          // successful" — so it never reaches the caller's stack value, the child's state, or the top-level
-          // `vmerr`. Setting `error` here and relying on downstream consumers to un-set it is the shape that
-          // produced a silent ETC consensus divergence on blocks 0-1,149,999 (reverted; see git history).
+          // successful" — so a nested CREATE's caller never sees it: not on its stack value, not in the child's
+          // state, not in the transaction's `vmerr`. A top-level creation does return it as the message's `vmerr`
+          // (core/state_transition.go `executeCreate`), with the gas and the state kept; no consensus rule reads it
+          // there (a pre-Byzantium receipt carries a state root, not a status). Setting `error` here and relying on
+          // downstream consumers to un-set it is the shape that produced a silent ETC consensus divergence on
+          // blocks 0-1,149,999 (reverted; see git history).
           //
-          // `codeDepositShortfall` carries the fact to gas ESTIMATION only. No consensus path reads it.
+          // `codeDepositShortfall` carries the fact to the RPC only: gas estimation, and a message call's outcome,
+          // which reports it as go-ethereum's top-level `vmerr` (StxLedger.CallOutcome). No consensus path reads it.
           result.copy(codeDepositShortfall = true)
         else
           // Code storage succeeded

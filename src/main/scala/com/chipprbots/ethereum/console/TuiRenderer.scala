@@ -4,341 +4,265 @@ import org.jline.utils.AttributedString
 import org.jline.utils.AttributedStringBuilder
 import org.jline.utils.AttributedStyle
 
-/** Rendering logic for terminal output.
+import com.chipprbots.ethereum.console.TuiText.fitToWidth
+import com.chipprbots.ethereum.console.TuiText.formatNumber
+import com.chipprbots.ethereum.console.TuiText.formatShort
+import com.chipprbots.ethereum.console.gfx.ArtStore
+import com.chipprbots.ethereum.console.gfx.GraphicRegion
+import com.chipprbots.ethereum.console.panels.Ctx
+import com.chipprbots.ethereum.console.panels.Views
+import com.chipprbots.ethereum.console.widgets.Art
+import com.chipprbots.ethereum.console.widgets.DialogBox
+import com.chipprbots.ethereum.console.widgets.Sidebar
+
+/** The TUI's compositor (spec 027 research §7.3): the header band, its separator and the alert row on top, the view's
+  * panels laid out by [[Layout]], and the footer on the last row.
   *
-  * This class handles all the visual rendering of the TUI, including formatting of text, progress bars, status
-  * indicators, and the overall layout.
+  * The renderer is a function of (state, width, height, theme): the glyph set, the view and the frame counter `tick`
+  * are the state's, every style is the theme's, and the size picks the [[Tier]] (spec 027 FR-003, FR-004). It reads no
+  * clock and no random source, so one state always draws one frame.
+  *
+  * @param art
+  *   the sprite sheets (spec 029 FR-060); with none, every graphic region shows its words
   */
-class TuiRenderer(config: TuiConfig):
+class TuiRenderer(config: TuiConfig, art: ArtStore = ArtStore.Empty):
 
-  /** Build the complete display content.
-    *
-    * The result is exactly `height` lines (for `height > 0`), each exactly `width` columns, so that drawing it from the
-    * home position never scrolls or wraps the terminal. When the content is taller than the terminal, the body is
-    * truncated and the footer with the keyboard commands is kept on the last line.
-    */
-  def render(state: TuiState, width: Int, height: Int): Seq[AttributedString] =
+  import TuiRenderer.*
+
+  /** The complete display: exactly `height` lines (for `height > 0`) of exactly `width` columns. */
+  def render(state: TuiState, width: Int, height: Int, theme: TuiTheme = TuiTheme.Ansi16): Seq[AttributedString] =
     val w = Math.max(width, 1)
-    val body = renderBody(state, w)
-    val footer = createFooter(w)
-    val header = Seq(createHeader(w), createSeparator(w))
+    state.splashCover(height) match
+      case Some(_) => Splash.render(state, w, height, theme, config.showLogo, art)
+      case None    => dashboard(state, w, height, theme)._1
 
-    // Logo only when it fits without pushing anything off screen.
-    val logo =
-      if config.showLogo && width > 80 && header.size + TuiRenderer.LogoLines + 1 + body.size + 1 <= height then
-        val buf = scala.collection.mutable.ArrayBuffer[AttributedString]()
-        addSmallLogo(buf, w)
-        buf += createSeparator(w)
-        buf.toSeq
-      else Seq.empty
+  /** The frame, and whether it moves with `tick`: the frame loop paces itself by it (Q1).
+    *
+    * Drawing it from the home position never scrolls or wraps the terminal. When the content is taller than the
+    * terminal, the panels that matter least give up their rows first, and the footer with the keys stays on the last
+    * line. While the splash is on screen its rows replace the dashboard's, all of them, or all but the top `k` during
+    * the hand-over (§3.7). A dashboard frame moves when one of the next [[Lookahead]] ticks draws it differently: only
+    * rows on screen count, and the celebration counts while it runs.
+    */
+  def frame(state: TuiState, width: Int, height: Int, theme: TuiTheme = TuiTheme.Ansi16): Frame =
+    val w = Math.max(width, 1)
+    state.splashCover(height) match
+      case Some(_) =>
+        val (lines, regions) = Splash.frame(state, w, height, theme, config.showLogo, art)
+        Frame(lines, moving(state), regions.filter(_ => state.graphics != GraphicsMode.Block))
+      case None =>
+        val drawn = dashboard(state, w, height, theme)
+        // The next `Lookahead` ticks: a worm at cell 2 draws its ripple at cells 1, 0, 0, so ticks 1 and 2 (mod 3) draw
+        // alike and one tick's lookahead would drop the loop to 1 fps for a beat. The later renders run only then.
+        def differsAt(ahead: Long) = dashboard(state.copy(tick = state.tick + ahead), w, height, theme) != drawn
+        def nextDiffers = (1L to Lookahead).exists(differsAt)
+        Frame(drawn._1, moving(state) && (state.catchup.isDefined || (mayMove(state) && nextDiffers)), drawn._2)
 
-    val content = header ++ logo ++ body
-    val lines =
-      if height <= 0 then content :+ footer
+  /** How many ticks ahead a frame is compared: the ripple's period less one, since the ripple is the one animation that
+    * draws the same frame at consecutive ticks (the pulse and the spinner change at every tick).
+    */
+  private val Lookahead: Long = (WormBar.RipplePeriod - 1).toLong
+
+  /** Whether anything at all can move: only under full motion. */
+  private def moving(state: TuiState): Boolean = state.motion == Motion.Full
+
+  /** Whether any row could move: SNAP's worm rows, a syncing Blocks worm, a spinner beside an in-flight status, the
+    * spinner of a DAG that is being built; and in pixel mode a sprite, whose frames follow the tick (spec 029 FR-019).
+    * A node with none of them (at its head, connected, idle, in block or text mode) is not drawn a second time to find
+    * out, which halves the frame loop's render cost at the 1 s pace.
+    */
+  private def mayMove(state: TuiState): Boolean =
+    state.snapSyncState.isDefined || (state.bestBlock > 0 && !state.isSynchronized) ||
+      InFlight.contains(state.connectionStatus) || dagBuilding(state) ||
+      (state.graphics != GraphicsMode.Text && state.graphics != GraphicsMode.Block)
+
+  /** The body of a `w` by `height` screen: its columns beside the sidebar and its rows under the header, the rule and
+    * the alert row and above the footer. What [[Update]] needs to know whether a dialog can be read whole.
+    */
+  def bodySize(w: Int, height: Int): (Int, Int) =
+    val side = if Sidebar.shown(w, height) then Sidebar.Cols + 1 else 0
+    val above = height - 1
+    val top = if above >= 3 || height <= 0 then 3 else if above == 2 then 2 else if above == 1 then 1 else 0
+    (w - side, if height <= 0 then 0 else above - top)
+
+  /** The mining panel draws a spinner beside a DAG that is not yet loaded (`MiningPanel`). */
+  private def dagBuilding(state: TuiState): Boolean =
+    state.nodeSettings.miningEnabled && state.snapshot.exists(_.local.mining.exists(_.dag.exists(!_.loaded)))
+
+  /** Header, separator, alert row, the view's panels, footer (FR-002), and the graphic regions among them (spec 029
+    * FR-012). On a terminal too short for all four fixed rows the separator goes first, then the header; the alert row
+    * stays above the footer down to two rows.
+    */
+  private def dashboard(
+      state: TuiState,
+      w: Int,
+      height: Int,
+      theme: TuiTheme
+  ): (Seq[AttributedString], Seq[GraphicRegion]) =
+    val g = TuiGlyphs.of(state.glyphs)
+    // The header and the footer span the screen and take its tier. The body is what the sidebar leaves, and its panels
+    // take the tier of that width, so a panel is never drawn for more columns than it gets (spec 029 FR-006).
+    val frame = Ctx(state, Tier.of(w, height), g, theme, config, art)
+    val side = if Sidebar.shown(w, height) then Sidebar.Cols + 1 else 0
+    val bodyCols = w - side
+    val header = createHeader(frame, w)
+    val alert = Alerts.row(state, w, g, theme)
+    val footer = createFooter(frame, w)
+    val above = height - 1
+    val top =
+      if above >= 3 || height <= 0 then Seq(header, frame.separator(w), alert)
+      else if above == 2 then Seq(header, alert)
+      else if above == 1 then Seq(alert)
+      else Nil
+    val bodyRows = if height <= 0 then 0 else above - top.size
+    val c = Ctx(state, Tier.of(bodyCols, height), g, theme, config, art, Some(frame.tier), Some(bodyRows))
+    val views = Views.panels(c)
+    val panels = Layout.render(views, bodyCols, bodyRows, c.separator(bodyCols))
+    // A dialog replaces rows of the body only: the alert row stays above it (spec 029 FR-048).
+    val asked = state.overlay match
+      case Overlay.Dialog(confirm: DialogKind.Confirm) =>
+        DialogBox.over(panels, DialogBox.confirm(confirm, DialogBox.fits(confirm, bodyCols, bodyRows)), bodyCols, c)
+      case _ => panels
+    val body =
+      if side == 0 then asked
       else
-        val fitted = content.take(height - 1)
-        val padding = Seq.fill(height - 1 - fitted.size)(new AttributedString(" " * w))
-        (fitted ++ padding) :+ footer
+        Layout.columns(
+          Sidebar.rows(frame, bodyRows),
+          asked,
+          Sidebar.Cols,
+          bodyCols,
+          new AttributedString(g.divider.text, theme.muted)
+        )
+    // The regions, from the screen's corner: the sidebar's under the fixed rows, the body's right of the sidebar. One
+    // that is drawn as words (text mode, a sprite the art has not) is no picture, and is not listed.
+    val regions =
+      (if side == 0 then Nil else Sidebar.regions(frame, bodyRows).map(_.shift(top.size, 0))) ++
+        Layout.regions(views, bodyCols, bodyRows).map(_.shift(top.size, side))
+    // Every row is already exactly `w` columns: Layout fits the body, and the fixed rows are fitted where they are made.
+    ((top ++ body) :+ footer, regions.filter(Art.pictured(frame, _)))
 
-    lines.map(fitToWidth(_, w))
-
-  /** Concatenate styled fragments, keeping styles as attributes (not embedded escape codes). */
-  private def concat(parts: AttributedString*): AttributedString =
+  /** ` ◆ FUKUII etc (61) · PoW · up 1h 23m … Overview `; from tier M the head and the peers, at tier L the version
+    * (§3.1). In the accent style; during the celebration's flash (frames 2–6, §3.8) in the flash style.
+    */
+  private def createHeader(c: Ctx, width: Int): AttributedString =
+    val s = c.state
+    val style = if s.headerFlash then flashStyle(c.t) else c.t.accent
+    val peers =
+      if s.connectionStatus.startsWith("Unresponsive") then "peers ?" else s"${s.peerCount}/${s.maxPeers} peers"
+    val parts =
+      Seq(s.chain.fold(s.networkName)(ch => s"${s.networkName} (${ch.chainId})")) ++
+        s.chain.map(_.family.label) ++
+        (if c.tier == Tier.S then Nil else Seq(s"head ${formatNumber(s.currentBlock)}", peers)) ++
+        Seq(s"up ${formatShort(s.uptimeSeconds)}") ++
+        (if c.tier == Tier.L then
+           s.chain.map(_.version).filter(_.nonEmpty).map(v => if v.startsWith("v") then v else s"v$v")
+         else None)
+    val left = new AttributedString(s" ${c.g.diamond.text} FUKUII  ${parts.mkString(s" ${c.g.dot.text} ")}", style)
+    val right = new AttributedString(s"${s.viewTitle} ", style)
+    val gap = width - left.columnLength() - right.columnLength()
     val sb = new AttributedStringBuilder()
-    parts.foreach(p => sb.append(p))
-    sb.toAttributedString
+    sb.append(left)
+    if gap >= 1 then
+      sb.append(" " * gap, style)
+      sb.append(right)
+    else sb.append(" " * width.max(0), style)
+    fitToWidth(sb.toAttributedString, width)
 
-  /** Truncate or pad a line to exactly `width` terminal columns. */
-  private def fitToWidth(line: AttributedString, width: Int): AttributedString =
-    val columns = line.columnLength()
-    if columns > width then line.columnSubSequence(0, width)
-    else if columns < width then
-      val sb = new AttributedStringBuilder()
-      sb.append(line)
-      sb.append(" " * (width - columns))
-      sb.toAttributedString
-    else line
+  /** The last row (spec 029 FR-006, FR-007): the prompt or the filter while one is being typed; else what the last
+    * command had to say; else the keys, more of them the wider the screen. Help lists them all.
+    */
+  private def createFooter(c: Ctx, width: Int): AttributedString =
+    c.state.overlay match
+      case Overlay.Prompt(text, cursor, _) =>
+        inputLine(c, ":", text, cursor, "Enter run  Tab complete  Esc close", width)
+      case Overlay.Filter(text) => inputLine(c, "/", text, text.length, "Enter keep  Esc clear", width)
+      case Overlay.Dialog(_)    => band(c, " a question is open: answer it, or Esc", width)
+      case Overlay.None =>
+        c.state.notice match
+          case Some(notice) =>
+            fitToWidth(
+              new AttributedString(s" ${c.g.warn.text} ${TuiText.external(notice, c.g)}", c.t.warn.bold()),
+              width
+            )
+          case None => band(c, FooterKeys(c.tier), width)
 
-  private def renderBody(state: TuiState, width: Int): Seq[AttributedString] =
-    val lines = scala.collection.mutable.ArrayBuffer[AttributedString]()
+  /** A row of text on the accent band. */
+  private def band(c: Ctx, text: String, width: Int): AttributedString =
+    val line = new AttributedString(text, c.t.accent)
+    val sb = new AttributedStringBuilder()
+    sb.append(line)
+    sb.append(" " * (width - line.columnLength()).max(0), c.t.accent)
+    fitToWidth(sb.toAttributedString, width)
 
-    // Network & Connection section
-    lines += createSectionHeader("NETWORK & CONNECTION", width)
-    lines += createInfoLine("Network", state.networkName.toUpperCase, width)
-    lines += createStatusLine("Connection", state.connectionStatus, width)
-    lines += createPeerStatusLine(state.peerCount, state.maxPeers, width)
-    lines += createSeparator(width)
+  /** A line being typed: the mark, the text with its cursor in reverse video, and the keys that end it. When the text
+    * is longer than the row, its start scrolls off so that the cursor stays on screen.
+    */
+  private def inputLine(c: Ctx, mark: String, text: String, cursor: Int, keys: String, width: Int): AttributedString =
+    val hint = s"  $keys "
+    val room = (width - 1 - mark.length - (if width >= 60 then hint.length else 0) - 1).max(1)
+    val from = (cursor - room + 1).max(0)
+    val shown = text.slice(from, from + room)
+    val at = cursor - from
+    val sb = new AttributedStringBuilder()
+    sb.append(s" $mark", c.t.healthy.bold())
+    sb.append(shown.take(at), c.t.value)
+    sb.append(shown.slice(at, at + 1).padTo(1, ' '), c.t.value.inverse())
+    sb.append(shown.drop(at + 1), c.t.value)
+    val typed = sb.toAttributedString
+    if width < 60 then fitToWidth(typed, width)
+    else
+      val out = new AttributedStringBuilder()
+      out.append(fitToWidth(typed, width - hint.length))
+      out.append(hint, c.t.muted)
+      fitToWidth(out.toAttributedString, width)
 
-    // Blockchain section
-    lines += createSectionHeader("BLOCKCHAIN", width)
-    lines += createInfoLine("Current Block", formatNumber(state.currentBlock), width)
-    lines += createInfoLine(
-      "Best Block",
-      if state.bestBlock > 0 then formatNumber(state.bestBlock) else "unknown",
-      width
-    )
-    lines += createInfoLine("Sync Status", state.syncStatus, width)
-
-    if !state.isSynchronized && state.bestBlock > 0 then
-      if config.showProgressBar then lines += createProgressBar("Sync Progress", state.syncProgress, width)
-      lines += createInfoLine("Blocks Remaining", formatNumber(state.blocksRemaining), width)
-
-      state.estimatedSyncTimeSeconds.foreach { seconds =>
-        lines += createInfoLine("Est. Sync Time", formatDuration(seconds), width)
-      }
-      state.syncSpeedBlocksPerSec.foreach { speed =>
-        lines += createInfoLine("Sync Speed", f"$speed%.2f blocks/sec", width)
-      }
-    else if state.isSynchronized then lines += createInfoLine("Status", "✓ SYNCHRONIZED", width)
-
-    lines += createSeparator(width)
-
-    // SNAP Sync section (if active)
-    state.snapSyncState.foreach { snapState =>
-      lines += createSectionHeader("SNAP SYNC", width)
-      lines += createInfoLine("Phase", snapState.phaseDescription, width)
-
-      if config.showProgressBar && snapState.phaseProgress > 0 then
-        lines += createProgressBar(s"${snapState.phase} Progress", snapState.phaseProgress.toDouble, width)
-
-      // Overall progress bar
-      if config.showProgressBar then lines += createProgressBar("Overall Progress", snapState.overallProgress, width)
-
-      // Show primary metric for current phase
-      val (metricName, metricValue, metricRate) = snapState.primaryMetric
-      lines += createInfoLine(metricName, formatNumber(metricValue), width)
-      lines += createInfoLine("Current Rate", f"${metricRate.toInt} $metricName/sec", width)
-
-      // Show detailed metrics
-      if snapState.accountsSynced > 0 then
-        lines += createInfoLine(
-          "Accounts",
-          f"${formatNumber(snapState.accountsSynced)} @ ${snapState.recentAccountsPerSec.toInt}/s",
-          width
-        )
-      if snapState.bytecodesDownloaded > 0 then
-        lines += createInfoLine(
-          "Bytecodes",
-          f"${formatNumber(snapState.bytecodesDownloaded)} @ ${snapState.recentBytecodesPerSec.toInt}/s",
-          width
-        )
-      if snapState.storageSlotsSynced > 0 then
-        lines += createInfoLine(
-          "Storage Slots",
-          f"${formatNumber(snapState.storageSlotsSynced)} @ ${snapState.recentSlotsPerSec.toInt}/s",
-          width
-        )
-      if snapState.nodesHealed > 0 then
-        lines += createInfoLine(
-          "Nodes Healed",
-          f"${formatNumber(snapState.nodesHealed)} @ ${snapState.recentNodesPerSec.toInt}/s",
-          width
-        )
-
-      // ETA if available
-      snapState.etaSeconds.foreach { eta =>
-        lines += createInfoLine("ETA", formatDuration(eta), width)
-      }
-
-      lines += createInfoLine("Elapsed", formatDuration(snapState.elapsedSeconds.toLong), width)
-      lines += createSeparator(width)
-    }
-
-    // Node Settings section (if enabled)
-    if config.showNodeSettings && state.nodeSettings.network.nonEmpty then
-      lines += createSectionHeader("NODE SETTINGS", width)
-      lines += createInfoLine("Data Dir", state.nodeSettings.dataDir, width)
-      lines += createInfoLine("Sync Mode", state.nodeSettings.syncMode, width)
-      lines += createInfoLine("Pruning", state.nodeSettings.pruningMode, width)
-      lines += createInfoLine("Max Peers", state.nodeSettings.maxPeers.toString, width)
-      if state.nodeSettings.rpcEnabled then
-        lines += createInfoLine("JSON-RPC", s"Enabled (port ${state.nodeSettings.rpcPort})", width)
-      else lines += createInfoLine("JSON-RPC", "Disabled", width)
-      if state.nodeSettings.miningEnabled then lines += createInfoLine("Mining", "Enabled", width)
-      else lines += createInfoLine("Mining", "Disabled", width)
-      lines += createSeparator(width)
-
-    // Runtime section
-    lines += createSectionHeader("RUNTIME", width)
-    lines += createInfoLine("Uptime", formatDuration(state.uptimeSeconds), width)
-    lines += createSeparator(width)
-
-    lines.toSeq
-
-  /** Render the startup banner. */
-  def renderStartupBanner(width: Int): Seq[AttributedString] =
-    val banner = Seq(
-      "",
-      "    ___________  ____  ____",
-      "   / ____/ __ \\/ __ \\/ __ \\",
-      "  / /_  / / / / / / / / / /",
-      " / __/ / /_/ / /_/ / /_/ /",
-      "/_/    \\____/\\____/\\____/",
-      "",
-      "     FUKUII EVM CLIENT",
-      "",
-      "    Initializing...",
-      ""
-    )
-
-    val greenStyle = AttributedStyle.DEFAULT.foreground(AttributedStyle.GREEN).bold()
-
-    banner.map { line =>
-      val centered = " " * Math.max(0, (width - line.length) / 2) + line
-      fitToWidth(new AttributedString(centered, greenStyle), Math.max(width, 1))
-    }
-
-  private def createHeader(width: Int): AttributedString =
-    val title = " ◆ FUKUII ETHEREUM CLIENT ◆ "
-    val padding = Math.max(0, (width - title.length) / 2)
-    val paddedTitle = " " * padding + title + " " * (width - padding - title.length)
-    new AttributedString(
-      paddedTitle,
-      AttributedStyle.DEFAULT
-        .foreground(AttributedStyle.BLACK)
-        .background(AttributedStyle.GREEN)
-        .bold()
-    )
-
-  private def createSectionHeader(title: String, width: Int): AttributedString =
-    val header = s" ● $title"
-    val paddedHeader = header + " " * Math.max(0, width - header.length)
-    new AttributedString(
-      paddedHeader,
-      AttributedStyle.DEFAULT.foreground(AttributedStyle.GREEN).bold()
-    )
-
-  private def createInfoLine(label: String, value: String, width: Int): AttributedString =
-    val labelStyle = AttributedStyle.DEFAULT.foreground(AttributedStyle.CYAN)
-    val valueStyle = AttributedStyle.DEFAULT.foreground(AttributedStyle.WHITE).bold()
-
-    val labelPart = new AttributedString(s"   $label: ", labelStyle)
-    val valuePart = new AttributedString(value, valueStyle)
-
-    val combinedLength = labelPart.columnLength() + valuePart.columnLength()
-    val padding = " " * Math.max(0, width - combinedLength)
-    concat(labelPart, valuePart, new AttributedString(padding))
-
-  private def createProgressBar(label: String, percentage: Double, width: Int): AttributedString =
-    val labelStyle = AttributedStyle.DEFAULT.foreground(AttributedStyle.CYAN)
-    val barWidth = Math.max(0, Math.min(40, width - 30))
-    // Clamp percentage to 0-100 range to prevent negative empty bar width
-    val clampedPercentage = Math.max(0.0, Math.min(100.0, percentage))
-    val filled = Math.min(((clampedPercentage / 100.0) * barWidth).toInt, barWidth)
-    val empty = barWidth - filled
-
-    val labelPart = new AttributedString(s"   $label: ", labelStyle)
-    val barStyle = AttributedStyle.DEFAULT.foreground(AttributedStyle.GREEN).bold()
-    val emptyStyle = AttributedStyle.DEFAULT.foreground(AttributedStyle.WHITE)
-
-    val filledBar = new AttributedString("█" * filled, barStyle)
-    val emptyBar = new AttributedString("░" * empty, emptyStyle)
-    val percentText =
-      new AttributedString(f" $percentage%.2f%%", AttributedStyle.DEFAULT.foreground(AttributedStyle.WHITE).bold())
-
-    val combinedLength =
-      labelPart.columnLength() + filledBar.columnLength() + emptyBar.columnLength() + percentText.columnLength()
-    val padding = " " * Math.max(0, width - combinedLength)
-    concat(labelPart, filledBar, emptyBar, percentText, new AttributedString(padding))
-
-  private def createStatusLine(label: String, status: String, width: Int): AttributedString =
-    val labelStyle = AttributedStyle.DEFAULT.foreground(AttributedStyle.CYAN)
-    val statusStyle = status.toLowerCase match
-      case s if s.contains("connected") || s.contains("running") =>
-        AttributedStyle.DEFAULT.foreground(AttributedStyle.GREEN).bold()
-      case s if s.contains("starting") || s.contains("initializing") =>
-        AttributedStyle.DEFAULT.foreground(AttributedStyle.YELLOW).bold()
-      case s if s.contains("error") || s.contains("failed") =>
-        AttributedStyle.DEFAULT.foreground(AttributedStyle.RED).bold()
-      case _ =>
-        AttributedStyle.DEFAULT.foreground(AttributedStyle.WHITE).bold()
-
-    val labelPart = new AttributedString(s"   $label: ", labelStyle)
-    val statusPart = new AttributedString(s"● $status", statusStyle)
-
-    val combinedLength = labelPart.columnLength() + statusPart.columnLength()
-    val padding = " " * Math.max(0, width - combinedLength)
-    concat(labelPart, statusPart, new AttributedString(padding))
-
-  private def createPeerStatusLine(count: Int, max: Int, width: Int): AttributedString =
-    val labelStyle = AttributedStyle.DEFAULT.foreground(AttributedStyle.CYAN)
-    val peerStyle =
-      if count == 0 then AttributedStyle.DEFAULT.foreground(AttributedStyle.RED).bold()
-      else if count < max / 2 then AttributedStyle.DEFAULT.foreground(AttributedStyle.YELLOW).bold()
-      else AttributedStyle.DEFAULT.foreground(AttributedStyle.GREEN).bold()
-
-    val labelPart = new AttributedString("   Peers: ", labelStyle)
-    val peerText = s"$count / $max"
-    val peerPart = new AttributedString(peerText, peerStyle)
-
-    // Add visual indicator
-    val indicator = if count > 0 then " ◆" * Math.min(count, 10) else ""
-    val indicatorPart = new AttributedString(indicator, peerStyle)
-
-    val combinedLength = labelPart.columnLength() + peerPart.columnLength() + indicatorPart.columnLength()
-    val padding = " " * Math.max(0, width - combinedLength)
-    concat(labelPart, peerPart, indicatorPart, new AttributedString(padding))
-
-  private def createSeparator(width: Int): AttributedString =
-    new AttributedString(
-      "─" * width,
-      AttributedStyle.DEFAULT.foreground(AttributedStyle.GREEN)
-    )
-
-  private def createFooter(width: Int): AttributedString =
-    val footer = " Commands: [Q]uit | [R]efresh | [D]isable UI "
-    val paddedFooter = footer + " " * Math.max(0, width - footer.length)
-    new AttributedString(
-      paddedFooter,
-      AttributedStyle.DEFAULT
-        .foreground(AttributedStyle.BLACK)
-        .background(AttributedStyle.GREEN)
-    )
-
-  private def addSmallLogo(lines: scala.collection.mutable.ArrayBuffer[AttributedString], width: Int): Unit =
-    val logo = Seq(
-      "                 --                ",
-      "               .=+#+.              ",
-      "              .+++*#*.             ",
-      "             :++++*###-            ",
-      "           .=+++++*####+.          ",
-      "          .=++++++*#####+.         ",
-      "         :++++++++*#######:        ",
-      "        :+++++++++*########-       ",
-      "       =++++++++++*#########+      ",
-      "     .++++++++++++*##########*.    ",
-      "   .:+++++++++++++*############:   ",
-      "   -++++++++++++++*#############=  "
-    )
-
-    val greenStyle = AttributedStyle.DEFAULT.foreground(AttributedStyle.GREEN).bold()
-
-    logo.foreach { line =>
-      val centered = " " * Math.max(0, (width - line.length) / 2) + line
-      val padded = centered + " " * Math.max(0, width - centered.length)
-      lines += new AttributedString(padded, greenStyle)
-    }
-
-  private def formatNumber(n: Long): String =
-    "%,d".format(n)
-
-  private def formatDuration(seconds: Long): String =
-    val days = seconds / 86400
-    val hours = (seconds % 86400) / 3600
-    val minutes = (seconds % 3600) / 60
-    val secs = seconds % 60
-
-    if days > 0 then s"${days}d ${hours}h ${minutes}m"
-    else if hours > 0 then s"${hours}h ${minutes}m ${secs}s"
-    else if minutes > 0 then s"${minutes}m ${secs}s"
-    else s"${secs}s"
+/** A rendered frame, and whether it moves with `tick` (the frame loop's pace, Q1).
+  *
+  * @param regions
+  *   the rectangles of cells that hold a picture (spec 029 FR-012), from the screen's top-left corner. In block mode
+  *   the picture is in `lines` already; in pixel mode the frame writer shows an image over the region's blank cells
+  */
+final case class Frame(lines: Seq[AttributedString], animated: Boolean, regions: Seq[GraphicRegion] = Nil)
 
 object TuiRenderer:
+  /** The footer's keys by tier: the essentials at S, more as the screen widens. Every key is in Help. */
+  private[console] def FooterKeys(tier: Tier): String = tier match
+    case Tier.S => " 1-9 view  : prompt  / filter  ? help  p pause  r redraw  d detach  q quit"
+    case Tier.M => " 1-9 view  Enter open  Esc back  : prompt  / filter  ? help  p pause  r redraw  d detach  q quit"
+    case Tier.L =>
+      " 1-9 view  [ ] next view  Up Down select  Enter open  Esc back  : prompt  / filter  ? help  v graphics  " +
+        "p pause  r redraw  d detach  q quit"
+
+  /** Connection statuses that are waiting for something, each with the word the Peers cell shows: a spinner turns
+    * beside it (§4.2).
+    */
+  private[console] val InFlight: Map[String, String] =
+    Map("Initializing" -> "initializing", "Starting node..." -> "starting", "Searching for peers" -> "searching")
+
+  /** The header band's flash: the accent's colour as its background, in bold, so it reads in every palette. */
+  private[console] def flashStyle(t: TuiTheme): AttributedStyle = t.healthy.bold().inverse()
+
   /** Create a renderer with default configuration. */
   def default: TuiRenderer = new TuiRenderer(TuiConfig.default)
 
-  /** Height of the ASCII-art logo block. */
-  private[console] val LogoLines: Int = 12
-
   /** Create a renderer with the specified configuration. */
   def apply(config: TuiConfig): TuiRenderer = new TuiRenderer(config)
+
+  /** A renderer that draws `art`. */
+  def apply(config: TuiConfig, art: ArtStore): TuiRenderer = new TuiRenderer(config, art)
+
+  /** The 12-line logo. */
+  private[console] val SmallLogo: Seq[String] = Seq(
+    "                 --                ",
+    "               .=+#+.              ",
+    "              .+++*#*.             ",
+    "             :++++*###-            ",
+    "           .=+++++*####+.          ",
+    "          .=++++++*#####+.         ",
+    "         :++++++++*#######:        ",
+    "        :+++++++++*########-       ",
+    "       =++++++++++*#########+      ",
+    "     .++++++++++++*##########*.    ",
+    "   .:+++++++++++++*############:   ",
+    "   -++++++++++++++*#############=  "
+  )

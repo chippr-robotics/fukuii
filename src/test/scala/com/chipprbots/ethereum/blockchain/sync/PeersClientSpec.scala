@@ -3,10 +3,16 @@ package com.chipprbots.ethereum.blockchain.sync
 import java.net.InetSocketAddress
 
 import org.apache.pekko.actor.ActorSystem
+import org.apache.pekko.actor.testkit.typed.scaladsl.ActorTestKit
+import org.apache.pekko.actor.testkit.typed.scaladsl.TestProbe as TypedTestProbe
+import org.apache.pekko.actor.typed.ActorRef as TypedActorRef
 import org.apache.pekko.actor.typed.scaladsl.adapter.*
 import org.apache.pekko.testkit.TestProbe
 import org.apache.pekko.util.ByteString
 
+import scala.concurrent.duration.*
+
+import org.scalatest.BeforeAndAfterAll
 import org.scalatest.flatspec.AnyFlatSpec
 import org.scalatest.matchers.should.Matchers
 import org.scalatest.prop.TableFor3
@@ -14,17 +20,27 @@ import org.scalatestplus.scalacheck.ScalaCheckPropertyChecks
 
 import com.chipprbots.ethereum.blockchain.sync.PeerListSupportNg.PeerWithInfo
 import com.chipprbots.ethereum.domain.ChainWeight
+import com.chipprbots.ethereum.network.NetworkPeerManagerActor
 import com.chipprbots.ethereum.network.NetworkPeerManagerActor.PeerInfo
 import com.chipprbots.ethereum.network.NetworkPeerManagerActor.RemoteStatus
 import com.chipprbots.ethereum.network.Peer
 import com.chipprbots.ethereum.network.PeerActor
+import com.chipprbots.ethereum.network.PeerEventBusActor
 import com.chipprbots.ethereum.network.PeerId
+import com.chipprbots.ethereum.network.PeerScoringManager
 import com.chipprbots.ethereum.network.p2p.messages.Capability
+import com.chipprbots.ethereum.network.p2p.messages.ETHPackets
 import com.chipprbots.ethereum.testing.Tags.*
 
-class PeersClientSpec extends AnyFlatSpec with Matchers with ScalaCheckPropertyChecks:
+class PeersClientSpec extends AnyFlatSpec with Matchers with ScalaCheckPropertyChecks with BeforeAndAfterAll:
 
   import Peers.*
+
+  private val testKit: ActorTestKit = ActorTestKit()
+
+  override protected def afterAll(): Unit =
+    testKit.shutdownTestKit()
+    super.afterAll()
 
   "PeerClient" should "determine the best peer based on total difficulty" taggedAs (
     UnitTest
@@ -141,6 +157,93 @@ class PeersClientSpec extends AnyFlatSpec with Matchers with ScalaCheckPropertyC
       BigInt(10_789_531),
       exclude = Set(peer1.id)
     ) shouldEqual None
+  }
+
+  // ---- spec 027 slice 4a: PeersClient feeds the peer scorer -------------------------------------------------------
+
+  private def newScorer(): PeerScoringManager =
+    new PeerScoringManager(java.time.Clock.fixed(java.time.Instant.EPOCH, java.time.ZoneOffset.UTC))
+
+  "PeersClient peer scoring" should "record a response with the time the request took" taggedAs UnitTest in {
+    val scorer = newScorer()
+    PeersClient.recordPeerScore(scorer, PeerRequestHandler.ResponseReceived(1, peer1, "response", timeTaken = 250L))
+
+    val score = scorer.getScore(peer1.id)
+    score.responsesReceived shouldBe 1
+    score.averageLatencyMs shouldBe Some(250.0)
+    score.requestsTimedOut shouldBe 0
+    scorer.getAllScores.keySet shouldBe Set(peer1.id)
+  }
+
+  it should "record a timeout when the request timed out" taggedAs UnitTest in {
+    val scorer = newScorer()
+    PeersClient.recordPeerScore(scorer, PeerRequestHandler.RequestFailed(1, peer1, "request timeout"))
+
+    val score = scorer.getScore(peer1.id)
+    score.requestsTimedOut shouldBe 1
+    score.responsesReceived shouldBe 0
+  }
+
+  it should "record nothing when the connection closed, which is not the peer's fault" taggedAs UnitTest in {
+    val scorer = newScorer()
+    PeersClient.recordPeerScore(scorer, PeerRequestHandler.RequestFailed(1, peer1, "connection closed"))
+    PeersClient.recordPeerScore(scorer, PeerRequestHandler.RequestFailed(2, peer1, "any other reason"))
+
+    scorer.getAllScores shouldBe empty
+  }
+
+  /** The real PeersClient and PeerRequestHandler on a probe peer manager and a real event bus. */
+  private class ScoredClient(responseTimeout: FiniteDuration):
+    val scorer: PeerScoringManager = newScorer()
+    val peerManager: TypedTestProbe[NetworkPeerManagerActor.Command] =
+      testKit.createTestProbe[NetworkPeerManagerActor.Command]()
+    val bus: TypedActorRef[PeerEventBusActor.Command] =
+      testKit.spawn(PeerEventBusActor.behavior(), s"peers-client-bus-${java.util.UUID.randomUUID()}")
+    val replies: TypedTestProbe[PeersClient.ResponseMessage] = testKit.createTestProbe[PeersClient.ResponseMessage]()
+    private val syncConfig = new TestSyncConfig {}.defaultSyncConfig.copy(peerResponseTimeout = responseTimeout)
+    val client: TypedActorRef[PeersClient.Command] = testKit.spawn(
+      PeersClient.behavior(peerManager.ref, bus, CacheBasedBlacklist.empty(10), syncConfig, Some(scorer)),
+      s"peers-client-${java.util.UUID.randomUUID()}"
+    )
+    // PeersClient asks for the handshaked peers when it starts; the reply is queued before any request below.
+    peerManager.expectMessageType[NetworkPeerManagerActor.GetHandshakedPeersCmd].replyTo !
+      NetworkPeerManagerActor.HandshakedPeers(Map(peer1 -> peerInfo(100)))
+
+    val request: ETHPackets.GetBlockHeaders = ETHPackets.GetBlockHeaders(7, Left(1), 1, 0, reverse = false)
+    client ! PeersClient.Request.create(request, PeersClient.BestPeer)(using
+      ETHPackets.GetBlockHeaders.GetBlockHeadersEnc(_)
+    )(replies.ref)
+    // The handler subscribes to the bus before it sends the request, so a reply published after this is delivered.
+    peerManager.expectMessageType[NetworkPeerManagerActor.SendMessageCmd]
+
+  it should "score the peer that answered a real request" taggedAs UnitTest in {
+    val f = new ScoredClient(responseTimeout = 30.seconds)
+    f.bus ! PeerEventBusActor.PublishCmd(
+      PeerEventBusActor.PeerEvent.MessageFromPeer(ETHPackets.BlockHeaders(7, Seq.empty), peer1.id)
+    )
+    f.replies.expectMessageType[PeersClient.Response[?]]
+
+    val score = f.scorer.getScore(peer1.id)
+    score.responsesReceived shouldBe 1
+    score.averageLatencyMs should not be empty
+    score.requestsTimedOut shouldBe 0
+  }
+
+  it should "score the peer that let a real request time out" taggedAs UnitTest in {
+    val f = new ScoredClient(responseTimeout = 300.millis)
+    f.replies.expectMessageType[PeersClient.RequestFailed](10.seconds)
+
+    val score = f.scorer.getScore(peer1.id)
+    score.requestsTimedOut shouldBe 1
+    score.responsesReceived shouldBe 0
+  }
+
+  it should "not score the peer whose connection closed during a real request" taggedAs UnitTest in {
+    val f = new ScoredClient(responseTimeout = 30.seconds)
+    f.bus ! PeerEventBusActor.PublishCmd(PeerEventBusActor.PeerEvent.PeerDisconnected(peer1.id))
+    f.replies.expectMessageType[PeersClient.RequestFailed](10.seconds)
+
+    f.scorer.getAllScores shouldBe empty
   }
 
   object Peers:

@@ -52,9 +52,10 @@ class BlockImportGateSpec extends AnyFlatSpec with Matchers:
         with Storages.DefaultStorages
         with com.chipprbots.ethereum.TestInstanceConfigProvider
     val bs = comp.storages
+    bs.appStateStorage.markRefCountsExact().commit() // #1692: a fresh datadir, as the genesis load stamps it
     val reader: BlockchainReader = BlockchainReader(bs)
     val writer: BlockchainWriter = BlockchainWriter(bs)
-    val stateStorage = new ReferenceCountedStateStorage(bs.nodeStorage, history)
+    val stateStorage = new ReferenceCountedStateStorage(bs.nodeStorage, history, nodesMayBeDeleted = () => true)
     val chain: BlockchainImpl = new BlockchainImpl(
       bs.blockHeadersStorage,
       bs.blockBodiesStorage,

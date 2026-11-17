@@ -13,23 +13,30 @@ import com.chipprbots.ethereum.vm.*
 object CallErrors:
 
   /** A VM error as go-ethereum's `core/vm/errors.go` spells it: eth_call's -32000 message, eth_estimateGas's for a
-    * non-gas failure at the ceiling, and the `error` member of eth_createAccessList.
+    * non-gas failure at the ceiling, the `error` member of eth_createAccessList, and the `error.message` of an
+    * eth_simulateV1 call (#1727; it printed a sign-extended opcode byte and the lower-cased case-class name before).
     *
-    * Not used by eth_simulateV1, which keeps its own wording (its output is an rpc-compat oracle; S4).
+    * A stack error carries go-ethereum's counts and a failed code deposit its own name (#1727 PR 7a). A failed
+    * precompile is the error its go-ethereum `Run` returns ("invalid input length", "point is not on curve", ...),
+    * which the precompile states for its input (`PrecompiledContract.failureReason`, #1727 PR 7b). `InvalidCall` still
+    * falls to the case-class name: it carries no reason, and stays a case object (see `vm.ProgramError`).
     */
   def vmErrorMessage(error: ProgramError): String = error match
-    case RevertOccurs => "execution reverted"
-    case OutOfGas     => "out of gas"
+    case RevertOccurs                             => "execution reverted"
+    case OutOfGas                                 => "out of gas"
+    case PreCompiledContractFail(contract, input) => contract.failureReason(input)
     // geth `ErrInvalidOpCode`: "invalid opcode: " + `OpCode.String()`. Not the operand form ("DUPN (operand: 0x..)")
     // geth prints for a bad EIP-8024 immediate: InvalidOpCode does not carry the operand.
     case InvalidOpCode(code)                  => s"invalid opcode: ${opCodeName(code)}"
     case OpCodeNotAvailableInStaticContext(_) => "write protection"
     case InvalidJump(_)                       => "invalid jump destination"
-    case StackOverflow                        => "stack limit reached 1024 (1023)"
-    case StackUnderflow                       => "stack underflow"
+    case StackOverflow(len, limit)            => s"stack limit reached $len ($limit)"
+    case StackUnderflow(len, required)        => s"stack underflow ($len <=> $required)"
     case ReturnDataOverflow                   => "return data out of bounds"
     case InvalidCode                          => "invalid code: must not begin with 0xef"
     case InitCodeSizeLimit                    => "max initcode size exceeded"
+    case MaxCodeSizeExceeded                  => "max code size exceeded"
+    case CodeStoreOutOfGas                    => "contract creation code storage out of gas"
     case other                                => other.toString.toLowerCase
 
   /** go-ethereum `OpCode.String()` (`core/vm/opcodes.go`): the name in geth's `opCodeToString`, whether or not the

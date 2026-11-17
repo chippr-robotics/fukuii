@@ -5,21 +5,43 @@ import java.nio.file.Paths
 import java.nio.file.StandardOpenOption
 import java.util.logging.LogManager
 
+import com.typesafe.config.ConfigException
 import com.typesafe.config.ConfigFactory
 import org.rocksdb
 
+import com.chipprbots.ethereum.console.FukuiiBanner
 import com.chipprbots.ethereum.console.Tui
 import com.chipprbots.ethereum.console.TuiConfig
+import com.chipprbots.ethereum.console.TuiEnv
+import com.chipprbots.ethereum.ephemery.EphemeryResetWatchdog
+import com.chipprbots.ethereum.ephemery.EphemeryResolver
+import com.chipprbots.ethereum.ephemery.StartupDeps
 import com.chipprbots.ethereum.nodebuilder.ChainTool
+import com.chipprbots.ethereum.nodebuilder.EngineApiStartupRefusal
 import com.chipprbots.ethereum.nodebuilder.StdNode
 import com.chipprbots.ethereum.nodebuilder.TestNode
 import com.chipprbots.ethereum.utils.Config
 import com.chipprbots.ethereum.utils.JvmFlagGuard
 import com.chipprbots.ethereum.utils.Logger
+import com.chipprbots.ethereum.vm.NativeBackends
 
 object Fukuii extends Logger:
-  def main(args: Array[String]): Unit =
+  def main(args: Array[String]): Unit = run(args, StartupDeps.production)
+
+  /** Starts the node. `deps` is what `App.run` was given: the Ephemery reset watchdog takes its clock and its exit from
+    * it, so a test can drive both.
+    */
+  def run(args: Array[String], deps: StartupDeps): Unit =
+    // The resolver's report is written after the log files are truncated below. If startup throws before that (the
+    // configuration fails to load), it is written here instead; `flushReport` writes it once.
+    try start(args, deps)
+    finally EphemeryResolver.flushReport()
+
+  private def start(args: Array[String], deps: StartupDeps): Unit =
     LogManager.getLogManager().reset(); // disable java.util.logging, ie. in legacy parts of jupnp
+
+    // A thread that dies of a missing precompile backend halts the node; any other VirtualMachineError is logged (B-135).
+    FatalErrors.installUncaughtHandler()
 
     // Redirect all JVM temp files to the configured tmpdir (defaults to <datadir>/tmp).
     // Prevents root SSD from filling up during SNAP sync — RocksDB JNI .so extraction,
@@ -36,6 +58,9 @@ object Fukuii extends Logger:
     // Placed here — after tmpdir is set, before any log.info() call — so the truncation notice
     // is the first line in each file and nothing from the current process is missed.
     if chainToolCommand.isEmpty then truncateLogs()
+
+    // The Ephemery resolver ran before this, and its report would have been truncated away: it is written now.
+    EphemeryResolver.flushReport()
 
     // Check for --tui flag to enable console UI (disabled by default)
     val enableConsoleUI = args.contains("--tui") && chainToolCommand.isEmpty
@@ -58,19 +83,20 @@ object Fukuii extends Logger:
       configErrors.foreach(err => log.error("Configuration error: {}", err))
       System.exit(1)
 
-    if Config.blockchains.blockchainConfig.forkTimestamps.cancunTimestamp.isDefined then
-      log.info("Cancun fork detected — loading KZG trusted setup for EIP-4844 point-evaluation precompile")
+    // The native libraries behind the precompiles of every configured fork (BLS12-381 from ETH Prague or ETC Olympia,
+    // KZG from ETH Cancun or ETC Olympia). A missing one would make this node compute different results from the
+    // network, so it must not start without them (B-135).
+    val nativeBackends = NativeBackends.required(Config.blockchains.blockchainConfig)
+
+    if nativeBackends.contains(NativeBackends.Backend.Kzg) then
+      log.info("A configured fork runs the EIP-4844 point-evaluation precompile — loading the KZG trusted setup")
       // A malformed/wrong-format trusted setup makes the native c-kzg loader over-read and
       // double-free, crashing the JVM with an UNCATCHABLE SIGSEGV (the try/catch below cannot
       // save us). Pre-validate the resource in pure JVM-land — the only place we can guard —
       // and refuse the native call if the layout does not match the c-kzg-4844 v2 (PeerDAS)
-      // format. On failure the node still boots; precompile 0x0A simply reverts every call.
+      // format. On failure the self-check below stops the node.
       if !kzgTrustedSetupIsValid(KzgTrustedSetupResource) then
-        log.error(
-          "KZG trusted setup {} failed format pre-validation — skipping native load. " +
-            "Point-evaluation precompile (0x0A) will revert all calls.",
-          KzgTrustedSetupResource
-        )
+        log.error("KZG trusted setup {} failed format pre-validation — skipping native load", KzgTrustedSetupResource)
       else
         try
           ethereum.ckzg4844.CKZG4844JNI.loadNativeLibrary()
@@ -81,17 +107,36 @@ object Fukuii extends Logger:
           )
           log.info("KZG trusted setup loaded successfully")
         catch
-          case e: Exception =>
-            log.error(
-              "Failed to load KZG trusted setup — point-evaluation precompile (0x0A) will revert all calls: {}",
-              e.getMessage
-            )
+          case e: (Exception | LinkageError) =>
+            log.error("Failed to load the KZG native library or trusted setup: {}", e.toString)
+
+    val nativeBackendErrors = NativeBackends.selfCheck(nativeBackends)
+    if nativeBackendErrors.nonEmpty then
+      nativeBackendErrors.foreach(err => log.error("Native backend check failed: {}", err))
+      System.exit(1)
+    else if nativeBackends.nonEmpty then
+      log.info("Native precompile backends checked: {}", nativeBackends.map(_.library).mkString("; "))
+    // From here on, a precompile that finds its backend missing halts the node where it finds it. Installed after the
+    // self-check, whose probes report a missing backend instead of halting.
+    FatalErrors.installCallTimeHalt()
 
     // Take over the terminal only after configuration has been validated: the TUI suppresses console logging, and a
     // configuration error must reach the user's screen.
     if enableConsoleUI then
-      val tui = Tui.getInstance(TuiConfig.default)
-      // Register the restore hook first, so the terminal leaves raw mode / the alternate screen on any exit path.
+      // `fukuii.tui` with the NO_COLOR / FUKUII_TUI_* overrides. A bad environment value is a warning (the configured
+      // value applies); a bad `fukuii.tui` value stops the node, like any other configuration error.
+      val tuiEnv = TuiEnv.system()
+      tuiEnv.warnings.foreach(warning => log.warn(warning))
+      val tuiConfig =
+        try TuiConfig.load(Config.config, tuiEnv)
+        catch
+          case e: ConfigException =>
+            log.error("Configuration error: {}", e.getMessage)
+            sys.exit(1)
+      val tui = Tui.getInstance(tuiConfig)
+      // Register the restore hook first, so the terminal leaves raw mode / the alternate screen on any exit path. `q`
+      // restores before it exits; this hook covers Ctrl-C and SIGTERM, including when JLine's hook closes the terminal
+      // first (Tui.shutdown then writes the reset to the process output).
       Runtime.getRuntime.addShutdownHook(new Thread(() => tui.shutdown(), "TuiRestore"))
       if tui.initialize() then
         tui.updateNetwork(Config.blockchains.network)
@@ -113,7 +158,18 @@ object Fukuii extends Logger:
         new TestNode
       else new StdNode
 
-    node.start()
+    try node.start()
+    catch
+      case refusal: EngineApiStartupRefusal =>
+        // The terminal first, so the message is not lost in the alternate screen, then the message once, with no trace.
+        Tui.current.foreach(_.shutdown())
+        System.err.println(refusal.getMessage)
+        log.error(refusal.getMessage)
+        sys.exit(1)
+
+    // An Ephemery iteration ends at its reset: exit 75 for a supervisor to restart (managed), or only warn (an
+    // operator's prepared directory, or `exit-at-reset = false`). Nothing is armed on any other network.
+    EphemeryResetWatchdog.startFor(Config.config, deps)
 
   private def truncateLogs(): Unit =
     import scala.util.Try
@@ -191,76 +247,4 @@ object Fukuii extends Logger:
         finally in.close()
 
   private def printBanner(): Unit =
-    val banner = """
-                                                                                                                                 
-                                                                                                                                 
-                                                                                                                                 
-                                                                                                                                 
-                                                                                                                                 
-                                                            ›ízzzzzí›                                                            
-                                                         ›zzzzzízzzzzzz›                                                         
-                                                      —ízzzízzzzzÏ6zzzzzzz—                                                      
-                                                   —zzzzzzzzzzízzÏÅgÅGzzzzzzz—                                                   
-                                   6ÆÅgggÆg     {zzzzzzízzzzízzzzzz6Å6ÆÏzzzzzzzí—                                                
-                                 ÆÏ ›í———{—{GÅÏzzzzízzzzzzzzzzzíízzzÏÆüÆüzzzízzzzzz{                                             
-                               üÅ ————{—{{—{——GgzzzzzzzzzíízzzzzzzzzzügüÅíízzzzzzzzzzí{                                          
-                               Æ›{{{—züÞÇüz{í{{6ÅzzzzzzzzzzzzízzzzzzzzgÇGÞzzzzzzzzzzzzzízz                                       
-                              6Þ———{zÅüzz6Æüí———ÞÞzzzzzzzzzzízzííízzzz6G6gzzzzízzzzzzzzzzzzzíÇÅÅÇügÅÆÆ{                          
-                              ÆííízzüÆzzzzzÅ6{——{Æzzzzzzzzzzzzzíízzzzíüg6gzzzzzzzzz{ízzzízGÅÇ6gÅ6                                
-                             Æg ›————ÞÆzzzzGGí{—{Åüzzzzzízzízzzízzízzz6G6gzzzzzzízzzzzzzÆgÏÅÅzzzzzz                              
-                         ÏÆG— ————————6ÅzzíGG{———Åüzzzzí{ízzzzzzzzzzzíGÞÞGzzzzzzzzzzzzÅGÏÅÞzzzzízzzzzí                           
-                       —Åí›—————{—{{———ÅÇzzgÇ{—{íÆzzzzzíízzzízízzzzízzÆÏÅüzzí{{zzzzzÞÅÏÅÞzzzzzzzzzzízzzzz                        
-                     zÏÅ —6Ç————{—Åz{——6gzÏÆí———G6zzízzízzzzzzzÏ6ÇÞÞÇGg6gzzzzzzzízÏÆüÞÅzzzzzzzízzzzzzzízzzzz                     
-                 ›zízzÅ6›{ÆÆ—{———{ÇÆ{——gÞíÅü———ÏÅzzzzzzzzzGÅÆGÏg—››››——íGÆÆÅGzzzzÇÅüÅÏzízzízzzzzzízzízzízzzzzzz—                 
-                zzzzzzÆ6—————{—{—z————{ÆÏÏÆÏíí{g6zzzzzÏgÆÇ——{ÞÏ{í{í{{íÏí{{—›—6ÅÅÅÞÞgzzzzzzzzzzzízzzzzzzzzzzzzzzzz                
-                zzzzzzüÅ—{——{ÆÆÅGÆí——{ÅÏzGÞí———gÇzízÏÅÅ{—ízzgí{íííí{› ›{ííííí{zÆüÆÆ6zzzzzzzzízí{{zízzzzzzzízzzzzz                
-                zzzzzzíüÆÏ———{ÅÇÅ{{—GÆzízÞGÏ——{{ÅÇígÅ{{zzzÏGííí{íí{—  {í{ííííÇÅüÆüíGÆ6zízzzzzzzíízzzzzzzzzzzzzzzz                
-                zzzzízzzz6ÅÅÇÏÏÏ6GÆGzízzzzÆüü{—{—ÏgÆÆÅÇzzzígíííí{{{{  ››››{íüÞÆGüz{ííÆgzzzzzzzzzzzzzzzízízzzzzzzz                
-                zzzzzzzzzzzzzzzzzzzzzzzízzüÆüÏ{—í{——{zg6zzzzÞíí{   — ›—›—{{íízzí{{í{{íÆGzzízízzzzzzzzzzzzzzzízzzz                
-                zzzzzzzzzzzzzzzzízzzzzzzzzzzGÅ6ÏÏzíííüÆÏzzzGíí{{—›— ›{ííííí{í{íííííí{{íÆÏzzzzzzzzzzzzízzzzzzzzzzz                
-                zízzzzzzzzzízzízzzzzzzzzzzzízzüÅÆGÇ6ggÏzzzÏ6í{   › ›{ííí{{ííÞG6ÏzÏÇÅÞí{ÆÅzzzzízzzzzzzzzízzzzzzzzz                
-                zzzzíííí{zzzzzzzzzzzíízí{ízzzííÅ6zzzÏGÆgÏzÇíí{í{{› {{{{{ííÏíííí{íí{í{gÞ6Åzzzzzz{{zzzzzzzzzzzzzzzz                
-                zzzzzzzzzzízzzzzzzzzzzzzízzzízGÅízÏÅÆÆÆÆÆÅÏíí{í{—    ›{ííííÏGgÅgÇ{íí{íÞÅÅzzzzízzzzzzzzzzzzzzzzzzz                
-                zzzzzzzzzzzzzízzí{zzzzzzzzzzzzÆízÏÆÆÆÆ6  üÆÞ{ííí{ ›{{íííííGÆgÅÆÆÆÆÆG{í{íÆgzzzzzzzzzzzzzízzízzzzzzz                
-                zízzízzzzzzzzzzízízzzzízzíízz6Æ{zgÆÆÆ{  gÆg{í{{{›{ííí{íÏÆÞ   6ÆÆÆÅgGí{{ÅGzíízzzzzzzízzzzíííízzzzz                
-                zzzzzzzzízzzzízzzzzzízzzzízzzÇÆ—zÆÆÆÆÆÆÆÆÆÞí{íí{íííííízÆÆ6   ÆÆÆÆÅGg{í{ÆGzzzzízzzzzzzzzzzzízzzzzz                
-                zzzzzzízzzzzzzííüÇÞ6zzzzzzzzz6Æ{zÅÅÆÆÆÆÆÆÆÏíí{íííí{{{íÇÆÆÆÆÆÆÆÆÆÆGGg{{íÆüízzzzízzzzzzzízzzzzzzzíz                
-                zzzízzzzízzzzgÆÆÆz››gÆüzzzzzzzÅzzÇÆgÆÆÆÞÆÇ{{{{ííí{íí{íÞÆÆÆÆÆÆÆÆÆgÞÅüí{ÞÅzzzzzííízzízzzzzzízzízzzz                
-                zízzzízzzíÏÅÅí›{ííÅí{›ÅÅzzízzz6ÆÏz6ÆÅgÅÆÏííííí{íííí{í{6ÆÆÆÆÆÆGÅGÞÅÞííÏÆzzzzízzzzzzzzzzzzzzzzzzzzz                
-                zzzzzzzízÅÅ››í{{íí6Ïí{—GÆzzzzzzÇÆ6zzzGííííííí{íí{í{ííí{GÅgÅÅgÞÞGÅü{í6Æüzzzzzzzzzzzzzízzzzzzzzzízz                
-                zzzzzzíÏÆz›íí{í{{íÏ6ííí{GÆzízzzzzÅÆ6ÞÏííí{Þgü{{zÇÅÅÞíí{íígÆÆÆÆGí{{ÏgÅzzzzzzzzzzzízízzzzízzzzzzízz                
-                zzzzzz6Å—›{íí{íí{íÅGíííííggzzízzzzzüÅÞíííízÅGÅG666ÇGííííííí{{íízüÞÆÇzzzzzzzzÞgGzzzzzzízíízzzzzzzz                
-                zzzzzüÅ››ííí{íí{íÅÅüí{í{í{Å6zzzízzzzzÅgí{í{ÇgÏÏÏÏÏÅí{íí{zÏÏüüüÇÅÅÇzzzzzzzzÅÅ{zÆzízzzzzz{{zzzzzzzz                
-                zzzzzÆz›íí{{{íííÅÆgüz{íííííÆÏzzízzzzzzÞÆÇííízÅÆÆÅüí{{ízüüGÅÆÆÅüzzzzzzzzzÅÆ—zügÅzzzzzízízzzzzzzzzz                
-                zzízGg›{{ííí{íÅgzÇÆüüíí{{{{6Æzzzí{ízzzzzÇÆÅÞüí{íízzÏüÇgÆÅÅgzzzzzzzzzzzÇÅííüüüÅzzzzíízzzzzzzzzzzzz                
-                zzzzÆz—{í{{íÏüÆ6íÞÆüüí{íííí{gGzzzzzzzzí6ÆÅÆÅÞgÆÅÅÅÅÅgGGGGÆgÞÞÅÅzzzzzzÆG{üüüüGÆzzzzízzzzzzízzzzzzz                
-                zzzÏÅ›í{íí{6GÅÅGÏÆüüüüí{{{íí{ÅÏzzzzzízgGÇggÏüüÆÆÅgGggÅÆÅGüü6ÇÇGgzzzÏÆzzüüüüüÆzzzzzzzzííízízzzzzzz                
-                zzzÏÅ›íííüÆüÏzzízzÅÅüüÏíííííí6ÆzzzzÇÅÅÆÇÇÆíííÏÞgÞGGÞGÅGüüÏÇÆGGÆgzzÇÅ{Ïüüüü6ÅgzzzzzzzGÆüÅÏzzzzzzzz                
-                zzzÏÆ›{{zÅzzízzzízÆÅ6üüz{íííííg6GÆgzüüÆÞgÞíí{ííGzüüíííí{{ÏÅ6Ïz6ÆzÞÅ{üüüüÇÇÞÅzzízíÏÅg—›{Åüzzzzzzíz                
-                zzzzÆGííÆÞzzzízzzíÅgüüüüÏ{{í{í6ÆÏ{{ízüügÆü{í{{Þ{í{íí{ííííÆÇ66ÅÆÆgÅzüüüÇÇÇÇÆzzzzÅÆ6Åg{{íÅzzízzzzzz                
-                zzzzzÆzzÅízízzzízzzzÞÆGüüüzíí{6ÇÅzÏüüGÆÞÅüííízÇ{ííí{ííí{ÏÆGÞg{ízÆ6üü6ÇÇÇÇÆüügÆ6››—{íÞÞÏÆzzzz{ízzz                
-                zízzzÏÆÇÅzzízzzzízzzzíGÆÇüüüü6ÅüÆ6ÅÆGzzzÞgíí{Çz{ííííí{{zÅÇgÆÅÏ{ízÆÇ6ÇÇÇÞÆÆgí››ÏÆííí{{6ÆGízzzzzzzz                
-                zzzízízgÆzzzízzzzzzzzzzzÏÅÆÅÅggÆÅüzzzzzzzÇÅ6zGz{ííí{í{ÞGÇÇÞÅggÏíízÆÅÆÆÇ—››—{í{ííÞÞíííüÆzzzzzzzzzz                
-                zzzzzzzzzzzzzzí{ízzzízzzzzzzzízzzzzzzízzzzüÆÇÇÇGÅgÞGÅGÇÇÇGÅÇÇgÅüÏízÆz{ízÇzííí{íí{6ÞÏüÅÇzzzzzzzzzz                
-                  ízzzzízzzzzzzzzzíízzzzzzzzzzzÏÅÅÆgzzzízzzggÇÇÇÇÇÇÅÇÇÇÇÆÅGÇÇÇÞÆÅGgÅÅ{{íííÇí{{ííí{ÅüÅÅzzzzzzzzí                  
-                     zzzzzzzzzzígÆÆÆÆÆÆÆÆÆÆÆÆÆÆÆÆÅÅÆÆÆÆÆÆÆÆÆÆÆÆgÆÆÆÆÆÆÆÆÆÆÆÆÅÆÆÆÆÆÆÆÆÆÆÆÆÆÆÆÆÆÆÆüüGÅÅzzzzzzí                     
-                        {zzízzzzÆÅ         Æ—   gÆÆÆ   zÆÇ   ÇÆÆü    Æg   ›ÆÆÆÏ   ÆÆÇ   ÆÆÅ   zÆÆüÅgzzzz{                        
-                           ízzízÆÅ        ›Æ—   gÆÆÆ   zÆÇ   ÇÆz   ›ÆÆg   ›ÆÆÆÏ   ÆÆÇ   ÆÆÅ   zÆÆÆÞzzí                           
-                              ízÆÅ   GÆÆÆÆÆÆ—   gÆÆÆ   zÆÇ   Ç{   {ÆÆÆg   ›ÆÆÆÏ   ÆÆÇ   ÆÆÅ   zÆÆzí                              
-                                ÆÅ   —íí{ÏÆÆ—   gÆÆÆ   zÆÇ       zÆÆÆÆg   ›ÆÆÆÏ   ÆÆÇ   ÆÆÅ   ÏÆÆ                                
-                                ÆÅ        ÆÆ—   gÆÆÆ   zÆÇ       6ÆÆÆÆg   ›ÆÆÆÏ   ÆÆÇ   ÆÆÅ   zÆÆ                                
-                                ÆÅ   GÅÅÅÅÆÆ—   gÆÆÆ   zÆÇ   6    ÏÆÆÆg   ›ÆÆÆÏ   ÆÆÇ   ÆÆÅ   zÆÆ                                
-                                ÆÅ   GÆÅÏÏGÆÏ   zÆÆz   6ÆÇ   ÇÆ    íÆÆÆ    GÆg    ÆÆÇ   ÆÆÅ   zÆÆ                                
-                                ÆÅ   GÆg   ÆÆ         —ÆÆÇ   ÇÆÆ›   ›ÆÆÇ         GÆÆÇ   ÆÆÅ   zÆÆ                                
-                                ÆÆGGGÅÆÏ    ÅÆÆGÇÏÏÇGÆÆÆÆÆÞÞGÅÆÆÆGGGGÅÆÆÆgÞüÏüÞÅÆÆÆÆÅGGGÆÆÆGGGÆÆÅ                                
-                                 í666ü        zÇGggggÞzzzÞGGGGÏzüGÆGGGÞÇüGgÅÅgG6—   z666Ï —ü66ü›                                 
-                                                      —zzzzzzzzzzzÆíí6gzzz—                                                      
-                                                          zzzzzzzzgÇÏÆÏ›                                                         
-                                                             ízzzzzÅÅÞ                                                           
-                                                                                                                                 
-                                                                                                                                 
-                                                                                                                                 
-                                                                                                                                 
-                                                                                                                                 """
-
-    log.info(banner)
+    log.info(FukuiiBanner.Text)

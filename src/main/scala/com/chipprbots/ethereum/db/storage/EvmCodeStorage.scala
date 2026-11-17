@@ -24,6 +24,11 @@ class EvmCodeStorage(val dataSource: DataSource) extends TransactionalKeyValueSt
   /** Code read by the EVM, from a bounded cache of what this storage returned earlier. Code is immutable under its
     * hash, and only a successful read is remembered, so an absent code is still reported as absent every time (the
     * missing-code checks and SNAP recovery use [[get]], which never consults the cache).
+    *
+    * A read that reaches the store checks the bytes against their hash first (H3, review beacon). Bytes that do not
+    * hash to it are not that code: they are reported as absent and never cached, so execution throws the missing-code
+    * error and import fetches the code (#1694), where before they ran, the block failed its receipts or state root, and
+    * the Engine API answered INVALID. Only a cache miss pays for the hash, and code is cached.
     */
   private val cacheOwner = EvmCodeStorage.owners.incrementAndGet()
   private def cacheKey(hash: CodeHash) = EvmCodeStorage.CacheKey(cacheOwner, hash)
@@ -38,6 +43,7 @@ class EvmCodeStorage(val dataSource: DataSource) extends TransactionalKeyValueSt
       // through ArraySeq and `ByteString(code.toArray)`, two further copies of up to 64 KB per miss).
       val read = dataSource
         .getOptimizedNoFill(namespace, hash.toArray)
+        .filter(bytes => EvmCodeStorage.isTheCode(hash, bytes))
         .map(ByteString.fromArrayUnsafe)
       read.foreach { code =>
         EvmCodeStorage.shared.put(cacheKey(hash), code)
@@ -55,7 +61,8 @@ class EvmCodeStorage(val dataSource: DataSource) extends TransactionalKeyValueSt
     if EvmCodeStorage.shared.getOrNull(key) != null then EvmCodeStorage.PrefetchOutcome.AlreadyCached
     else
       dataSource.getOptimizedNoFill(namespace, hash.toArray) match
-        case None => EvmCodeStorage.PrefetchOutcome.Absent
+        case None                                                  => EvmCodeStorage.PrefetchOutcome.Absent
+        case Some(bytes) if !EvmCodeStorage.isTheCode(hash, bytes) => EvmCodeStorage.PrefetchOutcome.Absent
         case Some(bytes) =>
           val code = ByteString.fromArrayUnsafe(bytes)
           EvmCodeStorage.sizes.put(key, Integer.valueOf(code.length))
@@ -91,6 +98,13 @@ class EvmCodeStorage(val dataSource: DataSource) extends TransactionalKeyValueSt
     */
   def multiGetNoFill(hashes: Seq[CodeHash]): Seq[Option[Code]] =
     dataSource.multiGetOptimizedNoFill(namespace, hashes.map(_.toArray)).map(_.map(ByteString.fromArrayUnsafe))
+
+  /** Test seam (H3): `code` in the execution caches under `hash`, as a read before the hash check could leave it. No
+    * read caches bytes that fail their hash now, so this is how the evictions in [[repairCode]] stay pinned.
+    */
+  private[storage] def cacheForExecution(hash: CodeHash, code: Code): Unit =
+    EvmCodeStorage.shared.put(cacheKey(hash), code)
+    EvmCodeStorage.sizes.put(cacheKey(hash), Integer.valueOf(code.length))
 
   /** The background audit's write (spec 022 decision 1): `code` goes in only if `hash` is absent or holds bytes that
     * fail their hash. No lock: nothing counts references to code, and two writers of one hash write the same bytes. The
@@ -131,7 +145,20 @@ class EvmCodeStorage(val dataSource: DataSource) extends TransactionalKeyValueSt
       result.map { case (key, value) => (ByteString.fromArrayUnsafe(key), ByteString.fromArrayUnsafe(value)) }
     }
 
-object EvmCodeStorage:
+object EvmCodeStorage extends com.chipprbots.ethereum.utils.Logger:
+
+  /** Whether `bytes` are the code `hash` names. Bytes that are not are logged at ERROR the first time a hash is met:
+    * corrupt code on disk is a failure an operator acts on.
+    */
+  private[storage] def isTheCode(hash: CodeHash, bytes: Array[Byte]): Boolean =
+    val matches = java.util.Arrays.equals(kec256(bytes), hash.toArray)
+    if !matches && SerializingMptStorage.firstReport(hash) then
+      log.error(
+        s"[CORRUPT-CODE] Stored code ${com.chipprbots.ethereum.utils.ByteStringUtils.hash2string(hash)} does not hash " +
+          "to its key: it reads as missing code until it is replaced, and import fetches it"
+      )
+    matches
+
   /** A cached code belongs to the storage that read it, so one database's code never answers for another's (a missing
     * code must stay missing for the storage that lacks it, however many storages share the cache).
     */

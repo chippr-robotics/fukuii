@@ -63,6 +63,64 @@ class PrecompiledContractsSpec extends AnyFunSuite with Matchers with ScalaCheck
       warmStorage = Set.empty
     )
 
+  // #1727 PR 3 (B-129): how eth_call, eth_estimateGas, eth_createAccessList and eth_simulateV1 hand a precompile that a
+  // state override deleted or moved to the EVM, through `ProgramContext.precompileRelocations` (source -> new address).
+  // The jsonrpc layer relies on these three shapes; a change to `getContract` must keep them.
+  test("a relocation from an address to itself removes the precompile there", UnitTest, VMTest) {
+    val input = ByteString(Hex.decode("aabbccdd"))
+    val identity = PrecompiledContracts.IdAddr
+    val removed = Map(identity -> identity)
+
+    val plain = buildContext(identity, input)
+    PrecompiledContracts.isDefinedAt(plain) shouldBe true
+    vm.run(plain).returnData shouldEqual input
+
+    val gone = plain.copy(precompileRelocations = removed)
+    PrecompiledContracts.isDefinedAt(gone) shouldBe false
+    vm.run(gone).returnData shouldEqual ByteString.empty
+
+    // the other precompiles are untouched
+    val sha = buildContext(PrecompiledContracts.Sha256Addr, input).copy(precompileRelocations = removed)
+    PrecompiledContracts.isDefinedAt(sha) shouldBe true
+    vm.run(sha).returnData shouldEqual sha256(input)
+  }
+
+  test("a relocation moves the precompile to the new address and leaves its own address empty", UnitTest, VMTest) {
+    val input = ByteString(Hex.decode("aabbccdd"))
+    val identity = PrecompiledContracts.IdAddr
+    val target = Address(0x1d00)
+    val moved = Map(identity -> target)
+
+    val atTarget = buildContext(target, input).copy(precompileRelocations = moved)
+    PrecompiledContracts.isDefinedAt(atTarget) shouldBe true
+    vm.run(atTarget).returnData shouldEqual input
+
+    val atSource = buildContext(identity, input).copy(precompileRelocations = moved)
+    PrecompiledContracts.isDefinedAt(atSource) shouldBe false
+    vm.run(atSource).returnData shouldEqual ByteString.empty
+  }
+
+  test(
+    "a target that several precompiles moved to answers as its last claimant; every source is gone",
+    UnitTest,
+    VMTest
+  ) {
+    // what EthSimulateService.applyStateOverrides builds for `0x02 -> T` and `0x04 -> T`: the later source (0x04)
+    // keeps its move, the earlier one is a self-entry, so the reverse lookup of T has exactly one claimant
+    val input = ByteString(Hex.decode("aabbccdd"))
+    val target = Address(0x1d00)
+    val relocations = Map(
+      PrecompiledContracts.Sha256Addr -> PrecompiledContracts.Sha256Addr,
+      PrecompiledContracts.IdAddr -> target
+    )
+
+    def run(at: Address) = buildContext(at, input).copy(precompileRelocations = relocations)
+    PrecompiledContracts.isDefinedAt(run(target)) shouldBe true
+    vm.run(run(target)).returnData shouldEqual input
+    PrecompiledContracts.isDefinedAt(run(PrecompiledContracts.Sha256Addr)) shouldBe false
+    PrecompiledContracts.isDefinedAt(run(PrecompiledContracts.IdAddr)) shouldBe false
+  }
+
   test("ECDSARECOVER", UnitTest, VMTest) {
     val keyPair = generateKeyPair(secureRandom)
     val bytesGen = Generators.getByteStringGen(1, 128)

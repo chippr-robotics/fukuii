@@ -39,6 +39,7 @@ import com.chipprbots.ethereum.db.storage.EvmCodeStorage
 import com.chipprbots.ethereum.db.storage.FlatSlotStorage
 import com.chipprbots.ethereum.db.storage.MptStorage
 import com.chipprbots.ethereum.db.storage.PathNodeStorage
+import com.chipprbots.ethereum.db.storage.RawNodeRead
 import com.chipprbots.ethereum.db.storage.SnapStorageDoneStorage
 import com.chipprbots.ethereum.db.storage.SnapSyncProgressStorage
 import com.chipprbots.ethereum.db.storage.StateStorage
@@ -82,7 +83,8 @@ private class StubHealResponseProcessingState(
     with FrontierWriteApi
     with HealDispatchApi
     with PathVerifiedRlpApi
-    with PathPresenceApi:
+    with PathPresenceApi
+    with CorruptEntryApi:
 
   // HealResponseProcessingState
   var stateRoot: ByteString = ByteString(Array.fill[Byte](32)(7))
@@ -176,17 +178,34 @@ private class StubHealResponseProcessingState(
     else if stalePaths.contains(pathset) then PathPresence.Mismatch
     else PathPresence.Absent
 
+  // CorruptEntryApi (H3): what the core's delete answers, and each hash it was asked to delete. A delete that clears an
+  // entry takes it out of the store's corrupt entries, as the store's own delete would.
+  var corruptDelete: TrieNodeHealingCoordinator.CorruptDelete = TrieNodeHealingCoordinator.CorruptDelete.Cleared
+  val corruptDeletes: mutable.Buffer[ByteString] = mutable.Buffer.empty
+  def deleteCorruptEntry(hash: ByteString): TrieNodeHealingCoordinator.CorruptDelete =
+    corruptDeletes += hash
+    if corruptDelete == TrieNodeHealingCoordinator.CorruptDelete.Cleared then mptStorage.corrupt.remove(hash): Unit
+    corruptDelete
+
   private def notReached(member: String): Nothing =
     throw new UnsupportedOperationException(s"HealResponseProcessing read $member")
 
-/** A test trie store whose next `failReads` batched reads throw (a storage read failure, spec 022 review forge W1). */
+/** A test trie store whose next `failReads` batched reads throw (a storage read failure, spec 022 review forge W1), and
+  * whose raw reads find `corrupt`'s entries (H3): stored, and not the node their hash names.
+  */
 final private class ReadFailingMptStorage extends TestMptStorage:
   @volatile var failReads: Int = 0
-  override def multiGetNodes(hashes: Seq[Array[Byte]]): Seq[Option[MptNode]] =
+  val corrupt: mutable.Map[ByteString, RawNodeRead] = mutable.Map.empty
+  private def failIfAsked(): Unit =
     if failReads > 0 then
       failReads -= 1
       throw new RuntimeException("injected node read failure")
+  override def multiGetNodes(hashes: Seq[Array[Byte]]): Seq[Option[MptNode]] =
+    failIfAsked()
     super.multiGetNodes(hashes)
+  override def rawNodes(hashes: Seq[ByteString]): Seq[RawNodeRead] =
+    failIfAsked()
+    hashes.map(hash => corrupt.getOrElse(hash, super.rawNodes(Seq(hash)).head))
 
 /** Spec 016 C-H5 stub test (FR-016 (b), T075): `HealResponseProcessing` mixed into a stub of its state interface, the
   * coordinator environment and the interfaces it calls. The cases drive a served response through `handleResponse` and
@@ -609,6 +628,41 @@ class HealResponseProcessingSpec extends ScalaTestWithActorTestKit with AnyFlatS
     pns.readAccountNode(Array[Byte](4)) shouldBe None // never written where the newer node is expected
     m.totalNodesHealed shouldBe 0
     m.pendingTasks.toSeq shouldBe Seq(current) // only the newer fetch
+  }
+
+  // ---- H3: a corrupt child of a served node --------------------------------------------------------------------------
+
+  /** A branch served with two hash children: one absent, one stored and corrupt (a wrapper that does not unwrap). The
+    * core's delete answers `outcome`.
+    */
+  private def corruptChild(
+      outcome: TrieNodeHealingCoordinator.CorruptDelete
+  ): (StubHealResponseProcessingState, ByteString, ByteString) =
+    val h = new Harness()
+    val m = h.module
+    m.corruptDelete = outcome
+    val absent = ByteString(kec256(ByteString("h3/absent-child").toArray))
+    val corrupt = ByteString(kec256(ByteString("h3/corrupt-child").toArray))
+    m.mptStorage.corrupt(corrupt) = RawNodeRead.Undecodable
+    val parent = branchOf(0 -> absent, 1 -> corrupt)
+    h.respond(1, peer("p1"), Seq(HealingEntry(Seq(emptyPath), hashOf(parent))), Seq(bytes(parent)))
+    (m, absent, corrupt)
+
+  it should "delete a corrupt child of a served node, and fetch it as a missing child (H3)" taggedAs UnitTest in {
+    val (m, absent, corrupt) = corruptChild(TrieNodeHealingCoordinator.CorruptDelete.Cleared)
+    m.corruptDeletes shouldBe Seq(corrupt)
+    m.pendingTasks.toSeq.map(_.hash).toSet shouldBe Set(absent, corrupt)
+  }
+
+  it should "not fetch a corrupt child the store keeps, or whose delete threw: no fetch would replace it (H3)" taggedAs UnitTest in {
+    Seq(TrieNodeHealingCoordinator.CorruptDelete.Kept, TrieNodeHealingCoordinator.CorruptDelete.Retry).foreach {
+      outcome =>
+        withClue(s"$outcome: ") {
+          val (m, absent, corrupt) = corruptChild(outcome)
+          m.corruptDeletes shouldBe Seq(corrupt)
+          m.pendingTasks.toSeq.map(_.hash) shouldBe Seq(absent)
+        }
+    }
   }
 
   // ---- spec 022 slice 2 review: a served node whose children cannot be found (eye F2, forge W1, vault note 5) ------

@@ -15,7 +15,6 @@ import com.chipprbots.ethereum.domain.BlockchainWriter
 import com.chipprbots.ethereum.domain.UInt256
 import com.chipprbots.ethereum.ledger.BlockValidation
 import com.chipprbots.ethereum.ledger.VMImpl
-import com.chipprbots.ethereum.nodebuilder.TestNode
 
 /** Provides a ledger or consensus instances with modifiable blockchain config (used in test mode). */
 class TestModeComponentsProvider(
@@ -26,7 +25,7 @@ class TestModeComponentsProvider(
     validationExecutionContext: IORuntime,
     miningConfig: MiningConfig,
     vm: VMImpl,
-    node: TestNode
+    node: TestModeNode
 ):
 
   def getConsensus(

@@ -17,6 +17,8 @@ import com.chipprbots.ethereum.db.storage.NodeStorage
 import com.chipprbots.ethereum.db.storage.PrefetchNodeReader
 import com.chipprbots.ethereum.db.storage.SerializingMptStorage
 import com.chipprbots.ethereum.db.storage.StateStorage
+import com.chipprbots.ethereum.db.storage.pathstate.BlockRef
+import com.chipprbots.ethereum.db.storage.pathstate.StaleStateViewException
 import com.chipprbots.ethereum.domain.Account
 import com.chipprbots.ethereum.domain.Address
 import com.chipprbots.ethereum.domain.BlockAccessList
@@ -98,6 +100,17 @@ class BalPrefetcherSpec extends AnyFlatSpec with Matchers:
     val reads = new AtomicInteger
     override def get(nodeId: Array[Byte]): MptNode =
       reads.incrementAndGet()
+      inner.get(nodeId)
+    override def updateNodesInStorage(newRoot: Option[MptNode], toRemove: Seq[MptNode]): Option[MptNode] =
+      inner.updateNodesInStorage(newRoot, toRemove)
+    override def persist(): Unit = inner.persist()
+
+  /** Reads `inner` for its first `healthyReads` reads, then fails every read as a view gone stale does. */
+  final private class GoesStale(inner: MptStorage, healthyReads: Int) extends MptStorage:
+    private val reads = new AtomicInteger
+    override def get(nodeId: Array[Byte]): MptNode =
+      if reads.incrementAndGet() > healthyReads then
+        throw new StaleStateViewException(BlockRef(ByteString.empty, 1, ByteString.empty), 0, 2, "the disk moved on")
       inner.get(nodeId)
     override def updateNodesInStorage(newRoot: Option[MptNode], toRemove: Seq[MptNode]): Option[MptNode] =
       inner.updateNodesInStorage(newRoot, toRemove)
@@ -238,6 +251,39 @@ class BalPrefetcherSpec extends AnyFlatSpec with Matchers:
     second.accounts shouldBe first.accounts
     second.nodes shouldBe first.nodes
     first.accounts should be <= 4000L
+  }
+
+  // Spec 018 Track C (C2a): on the position-keyed store the parent state is read through a view, and a view can go
+  // stale under a prefetch. That is a StateFault, which is not an MPTException: the per-read catches do not see it,
+  // and the task's own catch must. Nothing may reach the block's execution, and the run must stop reading.
+  it should "end the run and let nothing escape when the parent state's view goes stale under it" taggedAs (
+    UnitTest,
+    StateTest
+  ) in {
+    val f = new Fixture
+    val reader =
+      PrefetchNodeReader.stoppingOnFault(new GoesStale(f.mpt, healthyReads = 3), Some(f.cache), 1L << 26, _ => ())
+    val run = BalPrefetcher
+      .start(
+        Some(f.bal),
+        Some(f.bal.hash),
+        BigInt(60000000),
+        1,
+        f.root,
+        Some(reader),
+        f.evm,
+        true,
+        new BalPrefetcher.Run.NodeKeys
+      )
+      .get
+    run.awaitIdle(30000) shouldBe true
+    val stats = run.finish()
+    stats.errors should not be 0
+    stats.stoppedEarly shouldBe true
+    reader.exhausted shouldBe true
+    // only what was read before the fault was loaded, and so only that can be in the cache
+    stats.nodes shouldBe 3
+    f.cache.entries should be <= 3
   }
 
   it should "stop issuing state reads once its share of the node cache is spent" taggedAs (UnitTest, StateTest) in {

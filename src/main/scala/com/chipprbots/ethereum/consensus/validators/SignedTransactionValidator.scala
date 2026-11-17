@@ -5,12 +5,15 @@ import scala.annotation.unused
 import com.chipprbots.ethereum.domain.*
 import com.chipprbots.ethereum.utils.BlockchainConfig
 
+/** `upfrontGasCost` is the balance the sender must hold before execution, as an unbounded integer: it is never reduced
+  * mod 2^256, so a cost too large for any balance arrives as exactly that and is rejected (go-ethereum `buyGas`).
+  */
 trait SignedTransactionValidator:
   def validate(
       stx: SignedTransaction,
       senderAccount: Account,
       blockHeader: BlockHeader,
-      upfrontGasCost: UInt256,
+      upfrontGasCost: BigInt,
       accumGasUsed: BigInt
   )(implicit blockchainConfig: BlockchainConfig): Either[SignedTransactionError, SignedTransactionValid]
 
@@ -24,7 +27,7 @@ trait SignedTransactionValidator:
       stx: SignedTransaction,
       senderAccount: Account,
       blockHeader: BlockHeader,
-      upfrontGasCost: UInt256,
+      upfrontGasCost: BigInt,
       accumGasUsed: BigInt,
       @unused accumExecutionGas: BigInt,
       @unused accumStateGas: BigInt
@@ -63,7 +66,7 @@ object SignedTransactionError:
     override def toString: String =
       s"INTRINSIC_GAS_TOO_LOW: intrinsic execution gas ($intrinsicGas) or calldata floor ($floorGas) " +
         s"exceeds TX_MAX_GAS_LIMIT ($cap)"
-  case class TransactionSenderCantPayUpfrontCostError(upfrontCost: UInt256, senderBalance: UInt256)
+  case class TransactionSenderCantPayUpfrontCostError(upfrontCost: BigInt, senderBalance: UInt256)
       extends SignedTransactionError:
     override def toString: String =
       s"INSUFFICIENT_ACCOUNT_FUNDS: upfrontcost ($upfrontCost) > sender balance ($senderBalance)"

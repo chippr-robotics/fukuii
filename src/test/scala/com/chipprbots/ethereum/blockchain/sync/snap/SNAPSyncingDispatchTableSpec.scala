@@ -16,6 +16,7 @@ import com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncController.*
 import com.chipprbots.ethereum.blockchain.sync.snap.actors.AccountRangeStats
 import com.chipprbots.ethereum.blockchain.sync.snap.actors.ByteCodeCoordinator
 import com.chipprbots.ethereum.blockchain.sync.snap.actors.StorageRangeCoordinator
+import com.chipprbots.ethereum.db.storage.PathHandoffSample
 import com.chipprbots.ethereum.network.PeerId
 import com.chipprbots.ethereum.network.p2p.messages.SNAP
 import com.chipprbots.ethereum.testing.Tags.*
@@ -75,6 +76,7 @@ class SNAPSyncingDispatchTableSpec
     "TrieNodesResponse" -> TrieNodesResponse(SNAP.TrieNodes(BigInt(9104), Seq.empty)),
     "ChainDownloaderProgress" -> ChainDownloaderProgress(BigInt(1), BigInt(1), BigInt(1), BigInt(2)),
     "ChainDownloaderDone" -> ChainDownloaderDone,
+    "ChainDownloaderRewound" -> ChainDownloaderRewound(BigInt(1)),
     "HeaderHoldTick" -> HeaderHoldTick,
     "WrappedHandshakedPeers" -> WrappedHandshakedPeers(Map.empty),
     "WrappedPeerDisconnected" -> WrappedPeerDisconnected(PeerId("s0d-table")),
@@ -134,6 +136,11 @@ class SNAPSyncingDispatchTableSpec
     "PathPublishProgress" -> PathPublishProgress(1L, 1L),
     "PathPublishDone" -> PathPublishDone(PathToHashExporter.Result(1L, 1L), 1L),
     "PathPublishFailed" -> PathPublishFailed(new RuntimeException("s0d table")),
+    "HandoffSampleDone" -> HandoffSampleDone(PathHandoffSample.Result()),
+    // the sample's own verdict: anything else it fails with is thrown, as a store that failed
+    "HandoffSampleFailed" -> HandoffSampleFailed(
+      new PathHandoffSample.Stopped("s0d table", PathHandoffSample.StopReason.AccountHole, PathHandoffSample.Result())
+    ),
     "HealingServeRoot" -> HealingServeRoot(BigInt(5), None),
     "PivotStateUnservable" -> PivotStateUnservable(root, "s0d table", 1),
     "ProgressAccountsSynced" -> ProgressAccountsSynced(0L),

@@ -474,7 +474,7 @@ private[snap] trait DownloadSupervisor extends AccountRangeStartApi with ByteCod
       if count > 0 then
         consecutivePivotRefreshes = 0
         if criticalFailureCount > 0 then
-          val currentTotal = progressMonitor.currentProgress.accountsSynced
+          val currentTotal = progressMonitor.getAccountsSynced
           if currentTotal - accountsAtLastCriticalFailure >= AccountProgressResetThreshold then
             ctx.log.info(
               s"Resetting criticalFailureCount ($criticalFailureCount -> 0): " +

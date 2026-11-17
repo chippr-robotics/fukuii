@@ -18,11 +18,13 @@ import org.scalatest.flatspec.AnyFlatSpec
 import org.scalatest.matchers.should.Matchers
 
 import com.chipprbots.ethereum.blockchain.sync.Blacklist
+import com.chipprbots.ethereum.blockchain.sync.CacheBasedBlacklist
 import com.chipprbots.ethereum.blockchain.sync.EphemBlockchainTestSetup
 import com.chipprbots.ethereum.blockchain.sync.PeerListSupportNg
 import com.chipprbots.ethereum.blockchain.sync.SyncProtocol
 import com.chipprbots.ethereum.blockchain.sync.TestSyncConfig
 import com.chipprbots.ethereum.blockchain.sync.snap.ChainDownloader
+import com.chipprbots.ethereum.blockchain.sync.snap.HeaderChainCheck
 import com.chipprbots.ethereum.blockchain.sync.snap.PathToHashExporter
 import com.chipprbots.ethereum.blockchain.sync.snap.SNAPRequestTracker
 import com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncConfig
@@ -37,6 +39,8 @@ import com.chipprbots.ethereum.db.storage.FlatSlotStorage
 import com.chipprbots.ethereum.db.storage.MptStorage
 import com.chipprbots.ethereum.db.storage.PathNodeStorage
 import com.chipprbots.ethereum.db.storage.StateStorage
+import com.chipprbots.ethereum.db.storage.pathstate.SyncHandoff
+import com.chipprbots.ethereum.domain.BlockHeader
 import com.chipprbots.ethereum.domain.BlockchainReader
 import com.chipprbots.ethereum.domain.BlockchainWriter
 import com.chipprbots.ethereum.domain.TrieRoot
@@ -53,12 +57,14 @@ final private[snap] case class ChainDownloaderCall(
     maxConcurrentRequests: Int,
     requestTimeout: FiniteDuration,
     deferBodiesAndReceipts: Boolean,
-    emptyHeaderBackoff: Option[FiniteDuration]
+    emptyHeaderBackoff: Option[FiniteDuration],
+    headerChainCheck: HeaderChainCheck = HeaderChainCheck.LinkOnly
 )
 
 /** Records each ChainDownloader the module builds and returns a behaviour that ignores everything. */
 final private[snap] class RecordingChainDownloaderFactory extends ChildFactories:
   val calls: mutable.ArrayBuffer[ChainDownloaderCall] = mutable.ArrayBuffer.empty
+  val sharedBlacklists: mutable.ArrayBuffer[Option[Blacklist]] = mutable.ArrayBuffer.empty
 
   override def chainDownloader(
       blockchainReader: BlockchainReader,
@@ -75,14 +81,18 @@ final private[snap] class RecordingChainDownloaderFactory extends ChildFactories
       cursorScanCap: Long,
       deferBodiesAndReceipts: Boolean,
       emptyHeaderBackoff: Option[FiniteDuration],
-      nowMs: () => Long
+      nowMs: () => Long,
+      headerChainCheck: HeaderChainCheck,
+      sharedBlacklist: Option[Blacklist]
   ): Behavior[ChainDownloader.Command] =
+    sharedBlacklists += sharedBlacklist
     calls += ChainDownloaderCall(
       replyTo,
       maxConcurrentRequests,
       requestTimeout,
       deferBodiesAndReceipts,
-      emptyHeaderBackoff
+      emptyHeaderBackoff,
+      headerChainCheck
     )
     Behaviors.ignore
 
@@ -119,6 +129,9 @@ private[snap] class StubSnapFinalizationState(
   var pathPublish: Option[(BigInt, ByteString)] = None
   var coordinatorGeneration: Long = 0
   val healedCodeHashes: mutable.LinkedHashSet[ByteString] = mutable.LinkedHashSet.empty
+  def terminalTotalDifficulty: Option[BigInt] = None
+  var headerChainCheck: HeaderChainCheck = HeaderChainCheck.LinkOnly
+  val sharedBlacklist: Blacklist = CacheBasedBlacklist.empty(100)
 
   // SnapSharedState
   var pivotBlock: Option[BigInt] = None
@@ -140,6 +153,9 @@ private[snap] class StubSnapFinalizationState(
   def blockchainReader: BlockchainReader = chain.blockchainReader
   def blockchainWriter: BlockchainWriter = chain.blockchainWriter
   def pathNodeStorageOpt: Option[PathNodeStorage] = None
+
+  /** The unified state layout's hand-off (spec 018 C5a part 5): none, on the hash layout these stubs run. */
+  def handoff: Option[SyncHandoff] = None
 
   // StateIngest (spec 016 T055): forwards to the stores above, read on each call.
   val stateIngest: StateIngest = new ForwardingStateIngest(
@@ -173,7 +189,7 @@ private[snap] class StubSnapFinalizationState(
   def dropHealedCodeNowPresent(): Unit = healedCodeDrops += 1
   def queueHealedCode(codeHashes: Seq[ByteString]): Unit = healedCodeQueued += codeHashes
   def peersToDownloadFrom: Map[PeerId, PeerListSupportNg.PeerWithInfo] = Map.empty
-  def calibratePivotTD(pivotBlockNumber: BigInt): Option[BigInt] = None
+  def calibratePivotTD(pivot: BlockHeader): Option[BigInt] = None
   var stops: Int = 0
   def onStop(): Unit = stops += 1
   def stopSnapOnlySchedules(): Unit = notUsed("stopSnapOnlySchedules")
@@ -321,6 +337,72 @@ class SnapFinalizationSpec extends AnyFlatSpec with Matchers:
     h.parent.receiveAll() shouldBe Seq(SyncProtocol.HealingImpossible)
   }
 
+  /** A stamped datadir whose hand-off is at `root`, with the invariant marker standing or not. */
+  private def stampedHandOff(h: Harness, root: ByteString, markerStands: Boolean): Unit =
+    h.module.stateRoot = Some(TrieRoot(root))
+    h.module.appStateStorage.markDatadirCreated(countsExact = true).commitSync()
+    if markerStands then h.module.appStateStorage.stampSnapHealInvariant().commitSync()
+
+  it should "take the reference-count stamp away before a Path publish of a lazy hand-off writes (#1692)" taggedAs UnitTest in {
+    val h = new Harness()
+    val root = ByteString(Array.fill[Byte](32)(3))
+    stampedHandOff(h, root, markerStands = true)
+    // The marker stands, but no walk and no decision vouches for this root: the path store may have holes.
+    h.module.healingCleanWalkRoot.get() shouldBe null
+    h.module.healingDecidedRoot.get() shouldBe null
+
+    h.call(_.withdrawRefCountStampForPublish())
+
+    h.module.appStateStorage.hasRefCountsExact() shouldBe false
+  }
+
+  it should "take the stamp away when the root was decided but the invariant marker is gone (#1692)" taggedAs UnitTest in {
+    val h = new Harness()
+    val root = ByteString(Array.fill[Byte](32)(4))
+    stampedHandOff(h, root, markerStands = false)
+    h.module.healingDecidedRoot.set(root)
+
+    h.call(_.withdrawRefCountStampForPublish())
+
+    h.module.appStateStorage.hasRefCountsExact() shouldBe false
+  }
+
+  it should "keep the stamp for a Path publish of a clean hand-off: a decision on this root and the marker standing (#1692)" taggedAs UnitTest in {
+    val h = new Harness()
+    val root = ByteString(Array.fill[Byte](32)(5))
+    stampedHandOff(h, root, markerStands = true)
+    h.module.healingDecidedRoot.set(root)
+
+    h.call(_.withdrawRefCountStampForPublish())
+
+    h.module.appStateStorage.hasRefCountsExact() shouldBe true
+  }
+
+  it should "keep it for a clean walk of this root too, and take it for a clean walk of another (#1692)" taggedAs UnitTest in {
+    val walked = new Harness()
+    val root = ByteString(Array.fill[Byte](32)(6))
+    stampedHandOff(walked, root, markerStands = true)
+    walked.module.healingCleanWalkRoot.set(root)
+    walked.call(_.withdrawRefCountStampForPublish())
+    walked.module.appStateStorage.hasRefCountsExact() shouldBe true
+
+    val other = new Harness()
+    stampedHandOff(other, root, markerStands = true)
+    other.module.healingCleanWalkRoot.set(ByteString(Array.fill[Byte](32)(7)))
+    other.call(_.withdrawRefCountStampForPublish())
+    other.module.appStateStorage.hasRefCountsExact() shouldBe false
+  }
+
+  it should "leave a datadir with no stamp as it is: an old Path datadir keeps every node and writes nothing (#1692)" taggedAs UnitTest in {
+    val h = new Harness()
+    h.module.stateRoot = Some(TrieRoot(ByteString(Array.fill[Byte](32)(8))))
+
+    h.call(_.withdrawRefCountStampForPublish())
+
+    h.module.appStateStorage.hasRefCountsExact() shouldBe false
+    h.module.appStateStorage.isDatadirCreatedUnderInvariant() shouldBe false
+  }
+
   it should "record the end of the background backfill, stop the downloader and answer Done" taggedAs UnitTest in {
     val h = new Harness(behaviour = Some(_.completedWithBackfill()))
     val downloader = TestInbox[ChainDownloader.Command]()
@@ -348,4 +430,178 @@ class SnapFinalizationSpec extends AnyFlatSpec with Matchers:
 
     h.module.healedCodeQueued shouldBe empty
     h.kit.retrieveAllEffects().collect { case t: Effect.TimerScheduled[?] => t.key } shouldBe empty
+  }
+
+  it should "give the ChainDownloader the header check and the shared sync blacklist" taggedAs UnitTest in {
+    val h = new Harness(SNAPSyncConfig())
+    h.module.pivotBlock = Some(pivot)
+    val check = new HeaderChainCheck.Validated(
+      com.chipprbots.ethereum.consensus.pow.validators.PoWBlockHeaderValidator,
+      com.chipprbots.ethereum.blockchain.sync.snap.PowHeaderFixtures.mordorConfig
+    )
+    h.module.headerChainCheck = check
+
+    h.call(_.startChainDownloader())
+
+    h.factories.calls.map(_.headerChainCheck).toSeq shouldBe Seq(check)
+    h.factories.sharedBlacklists.toSeq shouldBe Seq(Some(h.module.sharedBlacklist))
+  }
+
+  // ── A pivot the consensus layer chose (post-merge: HeaderChainCheck.trustsPinnedPivot) ─────────────────────────────
+
+  private val chainHeaders: IndexedSeq[BlockHeader] =
+    com.chipprbots.ethereum.blockchain.sync.snap.PowHeaderFixtures.fromGenesis.take(21) // blocks 0..20
+  private val PinnedAt = BigInt(15)
+  private val otherRoot = TrieRoot(ByteString(Array.fill[Byte](32)(0x5a)))
+
+  /** The download holds blocks 0..20 with its tip and its target (block 15) recorded; the consensus layer's pivot at 15
+    * is on a chain that parts from it above block 12 (stored by hash, as the CL's blocks are), and is pinned. Returns
+    * that pinned header.
+    */
+  private def postMergeDivergence(h: Harness, pinTheFork: Boolean = true): BlockHeader =
+    val writer = h.module.blockchainWriter
+    val appState = h.module.appStateStorage
+    chainHeaders.foreach(header => writer.storeBlockHeader(header).commit())
+    appState
+      .putBackfillBestHeader(20)
+      .and(appState.putBackfillBestHeaderHash(chainHeaders(20).hash.value))
+      .and(appState.putBackfillTargetHash(chainHeaders(15).hash.value))
+      .commit()
+    val fork = (13 to 15)
+      .scanLeft(chainHeaders(12)) { (parent, n) =>
+        chainHeaders(n).copy(parentHash = parent.hash, stateRoot = otherRoot)
+      }
+      .tail
+    fork.foreach(header =>
+      writer
+        .storeBlockByHashOnly(
+          com.chipprbots.ethereum.domain.Block(header, com.chipprbots.ethereum.domain.BlockBody.empty)
+        )
+        .commit()
+    )
+    val pinned = fork.last
+    val commit = appState.putSnapSyncPivotBlock(PinnedAt).and(appState.putSnapSyncStateRoot(otherRoot.value))
+    (if pinTheFork then commit.and(appState.putSnapSyncPivotHash(pinned.hash.value)) else commit).commit()
+    h.module.pivotBlock = Some(PinnedAt)
+    h.module.stateRoot = Some(otherRoot)
+    h.module.headerChainCheck = new HeaderChainCheck.ProofOfStake(
+      com.chipprbots.ethereum.blockchain.sync.snap.PosHeaderFixtures.sepoliaConfig,
+      BigInt(0)
+    )
+    pinned
+
+  private def rewindsSent(h: Harness): Seq[BlockHeader] =
+    h.kit.childInbox[ChainDownloader.Command]("chain-downloader-1").receiveAll().collect {
+      case ChainDownloader.RewindTo(forkPoint, _) => forkPoint
+    }
+
+  "SnapFinalization of a pivot the consensus layer chose" should "rewind the header download to the fork point, not re-anchor" taggedAs (
+    UnitTest,
+    com.chipprbots.ethereum.testing.Tags.ConsensusTest
+  ) in {
+    val h = new Harness()
+    val pinned = postMergeDivergence(h)
+
+    h.call(_.finalizeSnapSync(PinnedAt))
+
+    rewindsSent(h) shouldBe Seq(chainHeaders(12))
+    h.module.headerHold shouldBe defined
+    h.parent.hasMessages shouldBe false
+    // The pinned pivot stays the pivot: the downloaded chain's header is never made the pivot.
+    h.module.appStateStorage.getSnapSyncPivotHash() shouldBe Some(pinned.hash.value)
+    h.module.appStateStorage.getSnapSyncStateRoot() shouldBe Some(otherRoot.value)
+  }
+
+  it should "hold without checking again while the rewind is not applied, and keep holding once it is" taggedAs UnitTest in {
+    val h = new Harness()
+    postMergeDivergence(h)
+    h.call(_.finalizeSnapSync(PinnedAt))
+    rewindsSent(h) shouldBe Seq(chainHeaders(12))
+
+    h.call(_.finalizeSnapSync(PinnedAt))
+    rewindsSent(h) shouldBe empty
+
+    h.call(_.onHeaderDownloadRewound(BigInt(12)))
+    h.parent.hasMessages shouldBe false
+    h.module.headerHold shouldBe defined
+  }
+
+  it should "restart SNAP, still without re-anchoring, when the same pinned pivot diverges again after its rewind" taggedAs (
+    UnitTest,
+    com.chipprbots.ethereum.testing.Tags.ConsensusTest
+  ) in {
+    val h = new Harness()
+    val pinned = postMergeDivergence(h)
+    h.call(_.finalizeSnapSync(PinnedAt))
+    h.call(_.onHeaderDownloadRewound(BigInt(12)))
+
+    // The download came back with the same chain (this stub's downloader stores nothing, so the records are as before).
+    h.call(_.finalizeSnapSync(PinnedAt))
+    rewindsSent(h) shouldBe Seq(chainHeaders(12), chainHeaders(12))
+    h.parent.hasMessages shouldBe false // not before the rewind is applied
+
+    h.call(_.onHeaderDownloadRewound(BigInt(12)))
+    h.parent.receiveAll() shouldBe Seq(SyncProtocol.HealingImpossible)
+    h.module.headerHold shouldBe None
+    h.module.appStateStorage.getSnapSyncPivotHash() shouldBe Some(pinned.hash.value)
+  }
+
+  it should "rewind to genesis when the pinned pivot's stored ancestry has no header in common with the download" taggedAs UnitTest in {
+    val h = new Harness()
+    val pinned = postMergeDivergence(h)
+    // The fork's block 14 is not stored: the walk down from the pinned pivot stops above the fork point.
+    h.module.blockchainWriter.removeBlockByHash(pinned.parentHash).commit()
+
+    h.call(_.finalizeSnapSync(PinnedAt))
+
+    rewindsSent(h).map(_.number.value) shouldBe Seq(BigInt(0))
+  }
+
+  it should "restart SNAP, keeping the download, when the pinned header itself is not stored" taggedAs UnitTest in {
+    val h = new Harness()
+    val pinned = postMergeDivergence(h)
+    h.module.blockchainWriter.removeBlockByHash(pinned.hash).commit()
+
+    h.call(_.finalizeSnapSync(PinnedAt))
+
+    h.parent.receiveAll() shouldBe Seq(SyncProtocol.HealingImpossible)
+    h.factories.calls shouldBe empty // no hold, no rewind
+    h.module.appStateStorage.getBackfillBestHeader() shouldBe BigInt(20)
+  }
+
+  // A rewind sent to a downloader that the hold's stall watchdog then restarts may never be applied: it does not count
+  // toward the second divergence that restarts SNAP.
+  it should "not count a rewind that was never reported applied" taggedAs UnitTest in {
+    // A zero stall timeout: every hold tick restarts the downloader, dropping the rewind in flight.
+    val h = new Harness(SNAPSyncConfig(headerHoldStallTimeout = Duration.Zero))
+    postMergeDivergence(h)
+
+    h.call(_.finalizeSnapSync(PinnedAt)) // diverged: rewind sent
+    h.call(_.finalizeSnapSync(PinnedAt)) // the stall restart drops it
+    h.call(_.finalizeSnapSync(PinnedAt)) // diverged again: a first rewind, as far as anyone knows
+    h.call(_.onHeaderDownloadRewound(BigInt(12)))
+
+    h.parent.hasMessages shouldBe false
+    h.module.headerHold shouldBe defined
+  }
+
+  it should "restart SNAP when no pinned hash can name the pivot" taggedAs UnitTest in {
+    val h = new Harness()
+    postMergeDivergence(h, pinTheFork = false)
+
+    h.call(_.finalizeSnapSync(PinnedAt))
+
+    h.parent.receiveAll() shouldBe Seq(SyncProtocol.HealingImpossible)
+    h.factories.calls shouldBe empty // no rewind, no hold
+  }
+
+  it should "restart SNAP when the download reached the pinned pivot but the persisted state root is another" taggedAs UnitTest in {
+    val h = new Harness()
+    postMergeDivergence(h)
+    h.module.appStateStorage.putSnapSyncPivotHash(chainHeaders(15).hash.value).commit() // the downloaded header
+
+    h.call(_.finalizeSnapSync(PinnedAt))
+
+    h.parent.receiveAll() shouldBe Seq(SyncProtocol.HealingImpossible)
+    h.factories.calls shouldBe empty
   }

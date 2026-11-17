@@ -65,3 +65,107 @@ class SNAPSyncMetricsSpec extends AnyFlatSpec with Matchers:
     SNAPSyncMetrics.setHealingInflationRatio(3.5)
     gaugeValue("snapsync.healing.inflation_ratio.gauge") shouldBe 3.5 +- 1e-9
   }
+
+  // Spec 027 T040: the TUI ages the SNAP sample on its own clock, so it needs the time the sample was recorded.
+  it should "report the latest progress with the time measure recorded it, and leave latestProgress unchanged" taggedAs UnitTest in {
+    val progress = SyncProgress(
+      phase = SNAPSyncController.SyncPhase.AccountRangeSync,
+      accountsSynced = 1,
+      bytecodesDownloaded = 0,
+      storageSlotsSynced = 0,
+      nodesHealed = 0,
+      elapsedSeconds = 1,
+      phaseElapsedSeconds = 1,
+      accountsPerSec = 1,
+      bytecodesPerSec = 0,
+      slotsPerSec = 0,
+      nodesPerSec = 0,
+      recentAccountsPerSec = 1,
+      recentBytecodesPerSec = 0,
+      recentSlotsPerSec = 0,
+      recentNodesPerSec = 0,
+      phaseProgress = 1,
+      estimatedTotalAccounts = 100,
+      estimatedTotalBytecodes = 0,
+      estimatedTotalSlots = 0,
+      startTime = 0,
+      phaseStartTime = 0
+    )
+    val before = System.currentTimeMillis()
+    SNAPSyncMetrics.measure(progress)
+    val after = System.currentTimeMillis()
+    val sample = SNAPSyncMetrics.latestSample
+    sample.map(_._1) shouldBe Some(progress)
+    sample.get._2 should ((be >= before).and(be <= after))
+    SNAPSyncMetrics.latestProgress(maxAgeMillis = 60_000L) shouldBe Some(progress)
+    SNAPSyncMetrics.latestSample shouldBe sample // reading does not move it
+  }
+
+  // Spec 027 T064: the TUI's Sync view reads the request counters, the timeouts and the snap-capable peers.
+  it should "read back the request, failure and timeout counters and the snap-capable peers from the registry" taggedAs UnitTest in {
+    def counter(name: String): Double =
+      val c = Metrics.get().registry.find(s"${Metrics.get().metricsPrefix}.$name").counter()
+      c should not be null
+      c.count()
+    val before = Seq(
+      SNAPSyncMetrics.accountRangeRequests,
+      SNAPSyncMetrics.accountRangeFailures,
+      SNAPSyncMetrics.storageRangeRequests,
+      SNAPSyncMetrics.storageRangeFailures,
+      SNAPSyncMetrics.bytecodeRequests,
+      SNAPSyncMetrics.bytecodeFailures,
+      SNAPSyncMetrics.healingRequests,
+      SNAPSyncMetrics.healingFailures,
+      SNAPSyncMetrics.requestTimeouts,
+      SNAPSyncMetrics.peersBlacklisted
+    )
+    SNAPSyncMetrics.incrementAccountRangeRequests()
+    SNAPSyncMetrics.incrementAccountRangeRequests()
+    SNAPSyncMetrics.incrementAccountRangeFailures()
+    SNAPSyncMetrics.incrementStorageRangeRequests()
+    SNAPSyncMetrics.incrementStorageRangeFailures()
+    SNAPSyncMetrics.incrementBytecodeRequests()
+    SNAPSyncMetrics.incrementBytecodeFailures()
+    SNAPSyncMetrics.incrementHealingRequests()
+    SNAPSyncMetrics.incrementHealingFailures()
+    SNAPSyncMetrics.incrementRequestTimeout()
+    SNAPSyncMetrics.incrementPeerBlacklisted()
+    SNAPSyncMetrics.setSnapCapablePeers(9)
+
+    val after = Seq(
+      SNAPSyncMetrics.accountRangeRequests,
+      SNAPSyncMetrics.accountRangeFailures,
+      SNAPSyncMetrics.storageRangeRequests,
+      SNAPSyncMetrics.storageRangeFailures,
+      SNAPSyncMetrics.bytecodeRequests,
+      SNAPSyncMetrics.bytecodeFailures,
+      SNAPSyncMetrics.healingRequests,
+      SNAPSyncMetrics.healingFailures,
+      SNAPSyncMetrics.requestTimeouts,
+      SNAPSyncMetrics.peersBlacklisted
+    )
+    after.zip(before).map((a, b) => a - b) shouldBe Seq(2L, 1L, 1L, 1L, 1L, 1L, 1L, 1L, 1L, 1L)
+    SNAPSyncMetrics.snapCapablePeers shouldBe 9L
+
+    SNAPSyncMetrics.accountRangeRequests.toDouble shouldBe counter("snapsync.accounts.requests.total")
+    SNAPSyncMetrics.accountRangeFailures.toDouble shouldBe counter("snapsync.accounts.requests.failed")
+    SNAPSyncMetrics.storageRangeRequests.toDouble shouldBe counter("snapsync.storage.requests.total")
+    SNAPSyncMetrics.storageRangeFailures.toDouble shouldBe counter("snapsync.storage.requests.failed")
+    SNAPSyncMetrics.bytecodeRequests.toDouble shouldBe counter("snapsync.bytecodes.requests.total")
+    SNAPSyncMetrics.bytecodeFailures.toDouble shouldBe counter("snapsync.bytecodes.requests.failed")
+    SNAPSyncMetrics.healingRequests.toDouble shouldBe counter("snapsync.healing.requests.total")
+    SNAPSyncMetrics.healingFailures.toDouble shouldBe counter("snapsync.healing.requests.failed")
+    SNAPSyncMetrics.requestTimeouts.toDouble shouldBe counter("snapsync.requests.timeouts.total")
+    SNAPSyncMetrics.peersBlacklisted.toDouble shouldBe counter("snapsync.peers.blacklisted.total")
+    gaugeValue("snapsync.peers.capable.gauge") shouldBe 9.0 +- 1e-9
+  }
+
+  // prism, slice 3 review: the TUI shows the pivot as the target while SNAP runs.
+  it should "read back the pivot block number it was given" taggedAs UnitTest in {
+    val saved = SNAPSyncMetrics.pivotBlockNumber
+    try
+      SNAPSyncMetrics.setPivotBlockNumber(BigInt(9_118_000))
+      SNAPSyncMetrics.pivotBlockNumber shouldBe 9_118_000L
+      gaugeValue("snapsync.pivot.block.number.gauge") shouldBe 9_118_000.0 +- 1e-9
+    finally SNAPSyncMetrics.setPivotBlockNumber(BigInt(saved)) // the gauge is process-wide
+  }

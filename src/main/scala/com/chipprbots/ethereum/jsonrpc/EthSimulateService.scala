@@ -2,8 +2,6 @@ package com.chipprbots.ethereum.jsonrpc
 
 import org.apache.pekko.util.ByteString
 
-import cats.effect.IO
-
 import scala.collection.mutable
 import scala.util.boundary
 import scala.util.boundary.break
@@ -15,6 +13,7 @@ import com.chipprbots.ethereum.crypto.kec256
 import com.chipprbots.ethereum.db.dataSource.EphemDataSource
 import com.chipprbots.ethereum.db.storage.EvmCodeStorage
 import com.chipprbots.ethereum.db.storage.MptStorage
+import com.chipprbots.ethereum.db.storage.MptStorageDecorator
 import com.chipprbots.ethereum.db.storage.StateStorage
 import com.chipprbots.ethereum.domain.*
 import com.chipprbots.ethereum.domain.BlockHeader.HeaderExtraFields.*
@@ -30,6 +29,7 @@ import com.chipprbots.ethereum.utils.Logger
 import com.chipprbots.ethereum.vm.AmsterdamGas
 import com.chipprbots.ethereum.vm.BlockAccessRecorder
 import com.chipprbots.ethereum.vm.EvmConfig
+import com.chipprbots.ethereum.vm.PrecompiledContracts
 
 object EthSimulateService:
 
@@ -44,7 +44,9 @@ object EthSimulateService:
       blobBaseFee: Option[BigInt] = None,
       difficulty: Option[BigInt] = None,
       // EIP-4895: the block's withdrawals (go-ethereum BlockOverrides.Withdrawals); read from Shanghai on
-      withdrawals: Option[Seq[Withdrawal]] = None
+      withdrawals: Option[Seq[Withdrawal]] = None,
+      // EIP-4788: the block's parent beacon block root (go-ethereum BlockOverrides.BeaconRoot); read from Cancun on
+      beaconRoot: Option[ByteString] = None
   )
 
   case class StateOverride(
@@ -77,7 +79,7 @@ object EthSimulateService:
       status: BigInt,
       returnData: ByteString,
       gasUsed: BigInt,
-      maxUsedGas: BigInt, // Gas used before refunds
+      maxUsedGas: BigInt, // Peak gas before refunds, raised to the EIP-7623 floor from Prague (geth MaxUsedGas)
       logs: Seq[TxLog],
       error: Option[SimulateError] = None
   )
@@ -113,7 +115,17 @@ object EthSimulateService:
   val TransferEventTopic: ByteString = ByteString(kec256("Transfer(address,address,uint256)".getBytes))
   val EthTransferAddress: Address = Address("0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee")
 
+  // The request limits of go-ethereum v1.17.9 (internal/ethapi/simulate.go:48-58). Each is refused with -38026
+  // `clientLimitExceededError`, before any block is built.
+
+  /** `maxSimulateBlocks`: the blocks one request simulates, the gap blocks between block overrides included. */
   val MaxBlockStateCalls = 256
+
+  /** `maxSimulateCallsPerBlock`. */
+  val MaxCallsPerBlock = 5000
+
+  /** `maxSimulateTotalCalls`: the calls of all the request's blocks. */
+  val MaxTotalCalls = 10000
 
   /** EIP-2681: the largest account nonce, 2^64 - 1. */
   val MaxNonce: BigInt = BigInt("18446744073709551615")
@@ -141,15 +153,12 @@ object EthSimulateService:
     * starting world must stay readable. Nodes are content-addressed: keeping them changes no root and no hash. Nothing
     * reaches the database either way; the wrapped store is the read-only one.
     */
-  final private class RetainingMptStorage(underlying: MptStorage) extends MptStorage:
-    override def get(nodeId: Array[Byte]): com.chipprbots.ethereum.mpt.MptNode = underlying.get(nodeId)
-    override def updateNodesInStorage(
+  final private[jsonrpc] class RetainingMptStorage(protected val underlying: MptStorage) extends MptStorageDecorator:
+    override protected def decorate(scoped: MptStorage): MptStorage = new RetainingMptStorage(scoped)
+    override protected def update(
         newRoot: Option[com.chipprbots.ethereum.mpt.MptNode],
-        toRemove: Seq[com.chipprbots.ethereum.mpt.MptNode]
-    ): Option[com.chipprbots.ethereum.mpt.MptNode] = underlying.updateNodesInStorage(newRoot, Nil)
-    override def persist(): Unit = underlying.persist()
-    override def multiGetNodes(hashes: Seq[Array[Byte]]): Seq[Option[com.chipprbots.ethereum.mpt.MptNode]] =
-      underlying.multiGetNodes(hashes)
+        removals: MptStorageDecorator.Removals
+    ): Option[com.chipprbots.ethereum.mpt.MptNode] = super.update(newRoot, removals.none)
 
   /** The address a contract creation by `sender` at account nonce `nonce` deploys to (yellow paper equation 82), as
     * [[com.chipprbots.ethereum.vm.WorldStateProxy.createAddress]] derives it after the nonce increment.
@@ -187,66 +196,86 @@ object EthSimulateService:
       .map { case (c, h) => if c.isLetter && Character.digit(h, 16) >= 8 then c.toUpper else c }
       .mkString
 
+  /** The addresses of the precompiles `header`'s block has: go-ethereum's `vm.ActivePrecompiledContracts(rules)`
+    * (api.go:769 for eth_call, :940 for eth_estimateGas, simulate.go:558-563 for each simulated block). It is read from
+    * the `PrecompiledContracts.getContracts` the EVM dispatches on, so a state override can name exactly the
+    * precompiles the block runs: 0x0a (KZG) from Cancun, BLS12-381 from Prague, P256VERIFY from Osaka (ETC: from
+    * Olympia), and none of a later fork.
+    *
+    * `header` is the block the call runs in with its block overrides applied: geth builds the rules from the overridden
+    * block context (`blockCtx.BlockNumber`, `blockCtx.Time`).
+    */
+  def activePrecompiles(header: BlockHeader)(using blockchainConfig: BlockchainConfig): Set[Address] =
+    val evmConfig = EvmConfig.forBlock(header.number.value, header.unixTimestamp, blockchainConfig)
+    PrecompiledContracts.getContracts(evmConfig, header).keySet
+
   /** Applies execution-apis state overrides (balance, nonce, code, state, stateDiff, movePrecompileToAddress) to
-    * `world` and returns it with the precompile relocations. eth_simulateV1's implementation, shared with eth_call and
-    * eth_estimateGas (go-ethereum uses its one `override.StateOverride.Apply` for all three).
+    * `world` and returns it with the precompile relocations. eth_simulateV1's implementation, shared with eth_call,
+    * eth_estimateGas and eth_createAccessList (go-ethereum uses its one `override.StateOverride.Apply` for all of them,
+    * and for each simulated block). `activePrecompiles` is the `precompiles` map `Apply` is given
+    * ([[activePrecompiles]]); eth_createAccessList gives it none, as geth's `AccessList` does (`Apply(db, nil)`,
+    * api.go:1366), so there every move is `is not a precompile` and nothing is deleted.
+    *
+    * The precompile rules are `Apply`'s (override.go:60-127), the entries taken in address order:
+    *   - `movePrecompileToAddress` on an address that is not an active precompile is `account <EIP-55> is not a
+    *     precompile`, and to a key of the override set (the precompile's own address included) `account <EIP-55> is
+    *     already overridden`. Both are -32000, and the first one in address order is the one reported.
+    *     (override.go:72-74, "has already been overridden by a precompile", cannot be reached: a target is never a key
+    *     of the set.)
+    *   - ANY entry at an active precompile's address deletes that precompile (:92-94): a balance, nonce, code or
+    *     storage override, an empty override and a null one alike. Code at that address then runs as an ordinary
+    *     account's.
+    *   - Of several moves to one target the last in address order wins (:89 assigns the target's map entry again), and
+    *     every source is deleted all the same.
+    *
+    * The relocations are what `PrecompiledContracts.getContract` reads, keyed by the address that was a precompile:
+    *   - `a -> t`, t != a: the precompile of `a` now answers at `t` and not at `a`;
+    *   - `a -> a`: the precompile of `a` is deleted and answers nowhere, the encoding of a deletion. That is also what
+    *     a move that lost its target to a later one becomes.
+    *
+    * Each block of a simulation, and each call, starts from the block's own precompiles: a move or deletion does not
+    * outlive the block it is in (geth builds `precompiles` per block, simulate.go:366).
     */
   def applyStateOverrides(
       world: InMemoryWorldStateProxy,
       overrides: Map[Address, StateOverride],
-      existingRelocations: Map[Address, Address],
+      activePrecompiles: Set[Address],
       accountStartNonce: UInt256
   ): Either[JsonRpcError, (InMemoryWorldStateProxy, Map[Address, Address])] = boundary {
     var w = world
-    var relocations = existingRelocations
 
-    // First pass: validate movePrecompileToAddress and detect collisions
-    val allPrecompiles = Set(
-      Address(1),
-      Address(2),
-      Address(3),
-      Address(4),
-      Address(5),
-      Address(6),
-      Address(7),
-      Address(8),
-      Address(9),
-      Address(0x0b),
-      Address(0x0c),
-      Address(0x0d),
-      Address(0x0e),
-      Address(0x0f),
-      Address(0x10),
-      Address(0x11),
-      Address(0x100)
-    )
-    val pendingMoves = scala.collection.mutable.ArrayBuffer[(Address, Address)]()
     // go-ethereum's StateOverride.Apply (internal/ethapi/override/override.go:60-127) walks the accounts in address
     // order, so a request with several faults reports the same one. Its errors are plain `fmt.Errorf`s: -32000.
     val sortedOverrides = overrides.toSeq.sortBy { case (address, _) => BigInt(1, address.bytes.toArray) }
     for (address, ov) <- sortedOverrides do
       ov.movePrecompileToAddress.foreach { targetAddr =>
-        if !allPrecompiles.contains(address) then
-          break(Left(JsonRpcError.LogicError(s"account ${address.toString} is not a precompile")))
+        // override.go:81-83; the address is printed as `addr.Hex()`, EIP-55
+        if !activePrecompiles.contains(address) then
+          break(Left(JsonRpcError.LogicError(s"account ${checksumAddress(address)} is not a precompile")))
         // override.go:84-88: "Refuse to move a precompile to an address that has been or will be overridden" — any
         // key of this override set, the precompile's own address included (not the -38022 of the execution-apis
         // vector, which moves a non-precompile and so stops at the check above).
         if overrides.contains(targetAddr) then
           break(Left(JsonRpcError.LogicError(s"account ${checksumAddress(targetAddr)} is already overridden")))
-        pendingMoves += (address -> targetAddr)
       }
       // override.go:108-110, after the account's nonce, code and balance are set (the error discards them all)
       if ov.state.isDefined && ov.stateDiff.isDefined then
         break(
           Left(JsonRpcError.LogicError(s"account ${checksumAddress(address)} has both 'state' and 'stateDiff'"))
         )
-    // Two precompiles moving to the same target is ambiguous — geth silently
-    // drops the colliding moves rather than erroring (matches the
-    // ethSimulate-move-two-accounts-to-same-38023 testdata expected response).
-    val targetCounts = pendingMoves.groupBy(_._2).view.mapValues(_.size).toMap
-    pendingMoves.foreach { case (src, tgt) =>
-      if targetCounts.getOrElse(tgt, 0) <= 1 then relocations = relocations + (src -> tgt)
+
+    // override.go:89, in address order: the last move to a target is the one the target keeps
+    val lastClaimant: Map[Address, Address] = sortedOverrides.foldLeft(Map.empty[Address, Address]) {
+      case (claimants, (source, ov)) =>
+        ov.movePrecompileToAddress.fold(claimants)(target => claimants.updated(target, source))
     }
+    // override.go:92-94: every entry at an active precompile's address deletes it. A move was checked above to be at one,
+    // so `source -> target` where it won the target, `source -> source` (deleted, answering nowhere) otherwise.
+    val relocations: Map[Address, Address] = sortedOverrides.collect {
+      case (source, ov) if activePrecompiles.contains(source) =>
+        val kept = ov.movePrecompileToAddress.filter(target => lastClaimant.get(target).contains(source))
+        source -> kept.getOrElse(source)
+    }.toMap
 
     // Second pass: apply overrides — only modify state when something other than
     // movePrecompileToAddress is set; the precompile move is purely a routing
@@ -316,11 +345,13 @@ class EthSimulateService(
   given bcConfig: BlockchainConfig = blockchainConfig
 
   def ethSimulate(req: EthSimulateRequest): ServiceResponse[EthSimulateResponse] =
-    IO {
-      doSimulate(req)
-    }.recover { case _: MissingNodeException =>
-      Left(JsonRpcError.NodeNotFound)
-    }
+    StateRead
+      .reading {
+        doSimulate(req)
+      }
+      .recover { case _: MissingNodeException =>
+        Left(JsonRpcError.NodeNotFound)
+      }
 
   private def doSimulate(req: EthSimulateRequest): Either[JsonRpcError, EthSimulateResponse] = boundary {
     // go-ethereum SimulateV1 (internal/ethapi/api.go:886-887): no blocks to simulate is `invalidParamsError{"empty
@@ -328,15 +359,23 @@ class EthSimulateService(
     // geth's nil slice is.)
     if req.blockStateCalls.isEmpty then break(Left(JsonRpcError.InvalidParams("empty input")))
 
-    // Validate blockStateCalls count
+    // The request limits, checked before anything is resolved or built (api.go:888-899): -38026, geth's wording.
     if req.blockStateCalls.size > MaxBlockStateCalls then
-      break(
-        Left(
-          JsonRpcError.SimulateClientLimitExceeded(
-            s"too many block state calls: ${req.blockStateCalls.size} > $MaxBlockStateCalls"
+      break(Left(JsonRpcError.SimulateClientLimitExceeded("too many blocks")))
+    var totalCalls = 0
+    for bsc <- req.blockStateCalls do
+      val callCount = bsc.calls.fold(0)(_.size)
+      if callCount > MaxCallsPerBlock then
+        break(
+          Left(
+            JsonRpcError.SimulateClientLimitExceeded(s"too many calls in block: $callCount > $MaxCallsPerBlock")
           )
         )
-      )
+      totalCalls += callCount // at most 256 blocks of at most 5000 calls: no overflow
+      if totalCalls > MaxTotalCalls then
+        break(
+          Left(JsonRpcError.SimulateClientLimitExceeded(s"too many calls: $totalCalls > $MaxTotalCalls"))
+        )
 
     // Resolve base block
     val baseBlock = resolveBlock(req.blockTag) match
@@ -358,7 +397,9 @@ class EthSimulateService(
     val evmConfig = EvmConfig.forBlock(baseBlock.header.number.value, baseBlock.header.unixTimestamp, blockchainConfig)
     var world = InMemoryWorldStateProxy(
       evmCodeStorage = evmCodeStorage,
-      mptStorage = new RetainingMptStorage(blockchain.getReadOnlyMptStorage()),
+      // One scratch state of the base block for the whole request: each simulated block reads the root the one
+      // before it persisted, which is no header's root, so the blocks have to share the storage that holds it.
+      mptStorage = new RetainingMptStorage(blockchainReader.scratchStateAt(baseBlock.header)),
       getBlockHashByNumber =
         (n: BigInt) => simulatedBlockHashes.get(n).orElse(blockchainReader.getBlockHeaderByNumber(n).map(_.hash.value)),
       accountStartNonce = blockchainConfig.accountStartNonce,
@@ -376,28 +417,24 @@ class EthSimulateService(
     // (including auto-generated gap blocks).
     var inheritedFeeRecipient: Option[Address] = None
 
-    // Pre-compute total blocks including gap-filling to validate against limit
-    var totalBlocks = 0
-    var prevNum = baseBlock.header.number.value
-    for bsc <- req.blockStateCalls do
-      val targetNum = bsc.blockOverrides.flatMap(_.number).getOrElse(prevNum + 1)
-      totalBlocks += (targetNum - prevNum).toInt
-      prevNum = targetNum
-    if totalBlocks > MaxBlockStateCalls then
-      break(
-        Left(
-          JsonRpcError.SimulateClientLimitExceeded(
-            s"too many blocks (including gaps): $totalBlocks > $MaxBlockStateCalls"
-          )
-        )
-      )
-
     for (blockStateCall, _) <- req.blockStateCalls.zipWithIndex do
       val targetNumber = blockStateCall.blockOverrides.flatMap(_.number).getOrElse((parentHeader.number + 1).value)
 
       // Generate gap-filling empty blocks if the target number is ahead.
       // Gap blocks inherit the persistent feeRecipient if one was set earlier.
+      // validateBlockOrdering has refused every target more than MaxBlockStateCalls past the base block (as big
+      // integers), so this loop builds at most MaxBlockStateCalls - 1 blocks over the whole request. The guard makes
+      // that a fact of this loop rather than of a check elsewhere: a loop that builds blocks without bound is a denial
+      // of service (#1727), and a violation fails the request loudly instead of wedging the node.
       while (parentHeader.number + 1).value < targetNumber do
+        if blockResults.size >= MaxBlockStateCalls then
+          log.error(
+            "eth_simulateV1 gap loop refused: built={} limit={} target={}",
+            blockResults.size,
+            MaxBlockStateCalls,
+            targetNumber
+          )
+          break(Left(JsonRpcError.InternalError))
         val gapOverrides = inheritedFeeRecipient.map(fr => BlockOverrides(feeRecipient = Some(fr)))
         val gapResult = buildAndFinalizeBlock(
           parentHeader,
@@ -407,7 +444,6 @@ class EthSimulateService(
           req.validation,
           req.traceTransfers,
           nonceMap,
-          Map.empty,
           globalAccumGas,
           world,
           simulatedBlockHashes
@@ -441,7 +477,6 @@ class EthSimulateService(
         req.validation,
         req.traceTransfers,
         nonceMap,
-        Map.empty,
         globalAccumGas,
         world,
         simulatedBlockHashes
@@ -470,7 +505,6 @@ class EthSimulateService(
       validation: Boolean,
       traceTransfers: Boolean,
       nonceMap: mutable.Map[Address, BigInt],
-      existingRelocations: Map[Address, Address],
       globalGasOffset: BigInt,
       initialWorld: InMemoryWorldStateProxy,
       @annotation.unused simulatedBlockHashes: mutable.Map[BigInt, ByteString]
@@ -480,9 +514,11 @@ class EthSimulateService(
     // Build simulated block header
     val simHeader = buildBlockHeader(parentHeader, blockOverrides, validation)
     // execution-apis BlockOverrides: a client that supports `difficulty` MUST reject it with -32602 for a block after
-    // the merge (post-merge difficulty is 0). Post-merge here means the header is not the HefEmpty (pre-London PoW) shape,
-    // the only one buildBlockHeader gives a non-zero difficulty.
-    if blockOverrides.exists(_.difficulty.isDefined) && simHeader.extraFields != BlockHeader.HeaderExtraFields.HefEmpty
+    // the merge (post-merge difficulty is 0). go-ethereum makeHeaders (simulate.go:667-669) refuses it where the
+    // difficulty the block would get without it is zero (see inheritedDifficulty). An ETC block, which never merges,
+    // takes it at every fork, Olympia's included.
+    if blockOverrides.exists(_.difficulty.isDefined) &&
+      inheritedDifficulty(parentHeader, simHeader.number, simHeader.unixTimestamp).value == 0
     then
       break(
         Left(
@@ -505,10 +541,11 @@ class EthSimulateService(
       // Apply EIP-2935: store parent block hash in history storage
       if blockchainConfig.isPragueTimestamp(simHeader.unixTimestamp) then world = applyEip2935(simHeader, world)
 
-    // Apply state overrides and build precompile relocations
-    var precompileRelocations = existingRelocations
+    // Apply state overrides and build precompile relocations. The precompiles are this block's own: go-ethereum builds
+    // them per block from the block's header (simulate.go:366), so a move or a deletion lasts for its block only.
+    var precompileRelocations = Map.empty[Address, Address]
     stateOverrides.foreach { overrides =>
-      applyStateOverrides(world, overrides, precompileRelocations) match
+      applyStateOverrides(world, overrides, activePrecompiles(simHeader), blockchainConfig.accountStartNonce) match
         case Right((newWorld, newRelocations)) =>
           world = newWorld
           precompileRelocations = newRelocations
@@ -521,7 +558,13 @@ class EthSimulateService(
     if amsterdam then
       val beforePreamble = InMemoryWorldStateProxy.persistState(world)
       val preambleReads = new BlockAccessRecorder
-      val afterPreamble = SimulatedBlockSystemCalls.amsterdamPreamble(simHeader, beforePreamble, Some(preambleReads))
+      val afterPreamble =
+        SimulatedBlockSystemCalls.amsterdamPreamble(
+          simHeader,
+          beforePreamble,
+          Some(preambleReads),
+          precompileRelocations
+        )
       accessList.foreach(_.addIndex(0L, preambleReads, beforePreamble, afterPreamble))
       world = afterPreamble
 
@@ -559,11 +602,20 @@ class EthSimulateService(
 
     // Amsterdam: the post-execution phase of a real block, at block access index n + 1 — the withdrawals and then the
     // EIP-7002 / EIP-7251 / EIP-8282 request system calls — and the requestsHash computed from what they and the
-    // EIP-6110 deposit logs return.
+    // EIP-6110 deposit logs return. As in go-ethereum's PostExecution (simulate.go:499-502 returns its error as it is), a
+    // request contract with no code ends the whole simulation with -32000 `failed to process <queue>: empty system
+    // contract: no code at <address>`, which a state override that clears its code causes; and the calls run on this
+    // block's precompiles, so a move or a deletion reaches them as it reaches a call.
     val amsterdamRequestsHash: Option[ByteString] =
       if !amsterdam then None
       else
-        SimulatedBlockSystemCalls.requests(simHeader, world, receipts, Some(postExecutionReads)) match
+        SimulatedBlockSystemCalls.requests(
+          simHeader,
+          world,
+          receipts,
+          Some(postExecutionReads),
+          precompileRelocations
+        ) match
           case Left(err) => break(Left(JsonRpcError.LogicError(err)))
           case Right((afterRequests, requests)) =>
             val persisted = InMemoryWorldStateProxy.persistState(afterRequests)
@@ -571,28 +623,17 @@ class EthSimulateService(
             world = persisted
             Some(BlockExecution.computeRequestsHash(requests))
 
-    // Pre-merge: pay the static block reward (5/3/2 ETH per Byzantium/Constantinople)
-    // to the miner. Geth's eth_simulateV1 reflects the reward in the simulated
-    // stateRoot, so simulated pre-merge blocks must too. Post-merge blocks have no
-    // reward — execution layer pays nothing, withdrawals come from the CL.
-    val isPoW = simHeader.extraFields match
-      case HefEmpty => true
-      case _: HefPostOlympia | _: HefPostShanghai | _: HefPostCancun | _: HefPostPrague | _: HefPostAmsterdam =>
-        false
-    if isPoW then
-      val reward = blockchainConfig.monetaryPolicyConfig.firstEraBlockReward
-      val byzantiumReward = blockchainConfig.monetaryPolicyConfig.firstEraReducedBlockReward
-      val constantinopleReward = blockchainConfig.monetaryPolicyConfig.firstEraConstantinopleReducedBlockReward
-      val n = simHeader.number.value
-      val byzantium = blockchainConfig.forkBlockNumbers.byzantiumBlockNumber
-      val constantinople = blockchainConfig.forkBlockNumbers.constantinopleBlockNumber
-      val finalReward =
-        if n >= constantinople then constantinopleReward
-        else if n >= byzantium then byzantiumReward
-        else reward
-      val minerAddr = Address(simHeader.beneficiary)
-      val acct = world.getAccount(minerAddr).getOrElse(Account.empty(blockchainConfig.accountStartNonce))
-      world = world.saveAccount(minerAddr, acct.increaseBalance(UInt256(finalReward)))
+    // EIP-8037: an Amsterdam header's gasUsed is the larger of the block's execution gas and state gas, not the receipts'
+    // sum ("Gas after Amsterdam"). Before Amsterdam the execution counter IS the receipts' sum.
+    val headerGasUsed =
+      if amsterdam then executed.executionGasUsed.max(executed.stateGasUsed) else executed.receiptGasUsed
+
+    // The block's miner reward, by the code block import credits it with (BlockRewards.payMinerAndOmmers).
+    // go-ethereum's processBlock calls the engine's Finalize (simulate.go:511), and the beacon engine pays ethash's
+    // reward for a header with a difficulty and nothing for one without (consensus/beacon IsPoSHeader). So: ECIP-1017's
+    // era reward on ETC; on ETH before the merge, the Frontier, Byzantium or Constantinople reward; after it, nothing.
+    // A simulated block has no ommers.
+    if simHeader.difficulty.value != 0 then world = BlockRewards.payMinerAndOmmers(simHeader, Nil, world)
 
     // Compute Merkle roots
     val transactionsRoot = computeTransactionsRoot(txs)
@@ -627,10 +668,6 @@ class EthSimulateService(
           requestsHash = amsterdamRequestsHash.getOrElse(a.requestsHash)
         )
       case other => other
-    // EIP-8037: an Amsterdam header's gasUsed is the larger of the block's execution gas and state gas, not the receipts'
-    // sum ("Gas after Amsterdam"). Before Amsterdam the execution counter IS the receipts' sum.
-    val headerGasUsed =
-      if amsterdam then executed.executionGasUsed.max(executed.stateGasUsed) else executed.receiptGasUsed
     val finalHeader = simHeader.copy(
       stateRoot = TrieRoot(stateRoot),
       transactionsRoot = TrieRoot(transactionsRoot),
@@ -667,7 +704,8 @@ class EthSimulateService(
       blockStateCalls: Seq[BlockStateCall],
       baseHeader: BlockHeader
   ): Either[JsonRpcError, Unit] = boundary {
-    var prevNumber = baseHeader.number.value
+    val baseNumber = baseHeader.number.value
+    var prevNumber = baseNumber
     // uint64 bit pattern -> unsigned BigInt (not BigInt(...toLong), which sign-extends timestamps
     // >= 2^63 into negative values and corrupts every ordering/gap comparison below).
     var prevTimestamp = baseHeader.unixTimestamp.toUnsignedBigInt
@@ -685,6 +723,14 @@ class EthSimulateService(
             )
           )
         )
+
+      // simulate.go:592-594 (sanitizeChain), after the order check and before the timestamp's: `Number - base.Number`
+      // over 256 is -38026 "too many blocks". The numbers are strictly increasing here, so this is the request's whole
+      // block count, the gap blocks included. A BigInt on purpose (#1727): the override is up to 256 bits wide, and a
+      // narrowing to Int before this comparison let a gap of 2^32 + 1 count as 1 block and then build 2^32 of them. This
+      // runs before the gap blocks are built, so it is the bound on that loop.
+      if targetNumber - baseNumber > MaxBlockStateCalls then
+        break(Left(JsonRpcError.SimulateClientLimitExceeded("too many blocks")))
 
       // Compute the minimum timestamp for the target block number
       // Gap blocks each take 12 seconds, so the minimum is prevTimestamp + gapBlocks * 12
@@ -720,6 +766,19 @@ class EthSimulateService(
     Right(())
   }
 
+  /** The difficulty a simulated block gets without a `difficulty` override, as go-ethereum's makeHeaders gives it
+    * (simulate.go:661-666): the previous block's (the base block's for the first simulated block), or zero for a block
+    * after the merge (`BlockchainConfig.isPostMerge`, geth's `IsPostMerge`). A block with a difficulty is paid the
+    * proof-of-work reward (buildAndFinalizeBlock) and reads it with DIFFICULTY.
+    *
+    * The chain decides, through its configuration: an ETC chain never merges, so every ETC block keeps a proof-of-work
+    * difficulty, its Olympia blocks included; on ETH a block before the merge keeps the parent's (a London-era block
+    * included), and one after it, or on a post-merge parent, has zero. This used to be read from the header's shape,
+    * which gave every block with a base fee zero, an ETC Olympia block among them.
+    */
+  private def inheritedDifficulty(parentHeader: BlockHeader, number: BlockNumber, timestamp: Timestamp): Difficulty =
+    if blockchainConfig.isPostMerge(number.value, timestamp) then Difficulty.Zero else parentHeader.difficulty
+
   private def buildBlockHeader(
       parentHeader: BlockHeader,
       overrides: Option[BlockOverrides],
@@ -738,10 +797,16 @@ class EthSimulateService(
       if !validation then BigInt(0)
       else computeNextBaseFee(parentHeader)
     )
-    val parentBeaconBlockRoot = ByteString(new Array[Byte](32)) // Zero for simulated blocks
+    // go-ethereum makeHeaders (simulate.go:654-660): from Cancun on, the block's parent beacon block root is the
+    // `beaconRoot` override, and zero without one. Before Cancun the header has no such field, so the override is not
+    // read.
+    val parentBeaconBlockRoot = ov.beaconRoot.getOrElse(ByteString(new Array[Byte](32)))
 
     // Determine the fork era for the header based on the block's timestamp
     // This handles both pre-merge blocks and fork boundary crossings
+    // `Timestamp` is a uint64 held in a Long, so this narrowing is the representation, not a loss: an override is a
+    // hexutil.Uint64 (decoded to at most 2^64 - 1), and the default is the parent's time + 12, which wraps at 2^64 as
+    // go-ethereum's `prevTimestamp + timestampIncrement` does.
     val ts = Timestamp(timestamp.toLong)
     // EIP-4844: simulated block's excessBlobGas derives from parent per spec.
     val simulatedExcessBlobGas =
@@ -796,10 +861,10 @@ class EthSimulateService(
       else if parentHeader.baseFee.isDefined then HefPostOlympia(baseFee) // Post-London but pre-Shanghai
       else HefEmpty // Pre-London
 
-    // Pre-merge blocks have non-zero difficulty
-    val difficulty: Difficulty = extraFields match
-      case HefEmpty => ov.difficulty.map(Difficulty(_)).getOrElse(parentHeader.difficulty) // PoW: override or inherit
-      case _        => Difficulty.Zero // Post-merge
+    // The difficulty: the `difficulty` override, or the one the block inherits (see inheritedDifficulty).
+    // buildAndFinalizeBlock refuses an override where the inherited difficulty is zero.
+    val difficulty: Difficulty =
+      ov.difficulty.map(Difficulty(_)).getOrElse(inheritedDifficulty(parentHeader, number, ts))
 
     BlockHeader(
       parentHash = parentHeader.hash,
@@ -819,13 +884,6 @@ class EthSimulateService(
       nonce = ByteString(new Array[Byte](8)),
       extraFields = extraFields
     )
-
-  private def applyStateOverrides(
-      world: InMemoryWorldStateProxy,
-      overrides: Map[Address, StateOverride],
-      existingRelocations: Map[Address, Address]
-  ): Either[JsonRpcError, (InMemoryWorldStateProxy, Map[Address, Address])] =
-    EthSimulateService.applyStateOverrides(world, overrides, existingRelocations, blockchainConfig.accountStartNonce)
 
   /** The call as the transaction the simulated block carries. go-ethereum (internal/ethapi): `sanitizeCall` fills the
     * nonce and gas (simulate.go:439-456), `CallDefaults` the rest (transaction_args.go:401-450), and the block gets
@@ -1186,7 +1244,7 @@ class EthSimulateService(
 
       // Execute transaction
       val accessRecorder = accessList.map(_ => new BlockAccessRecorder)
-      val TxResult(newWorld, gasUsed, logs, returnData, vmError, txExecutionGas, txStateGas) =
+      val TxResult(newWorld, gasUsed, logs, returnData, vmError, txExecutionGas, txStateGas, maxUsedGas) =
         blockPreparator.executeTransactionForSimulation(
           stx,
           sender,
@@ -1321,24 +1379,23 @@ class EthSimulateService(
             status = BigInt(0),
             returnData = ByteString.empty,
             gasUsed = gasUsed,
-            maxUsedGas = gasUsed,
+            maxUsedGas = maxUsedGas,
             logs = Seq.empty,
             error = Some(SimulateError(3, msg, Some(returnData)))
           )
         case Some(err) =>
-          // Map VM error names to geth-compatible lowercase messages
-          val baseMsg = err match
-            case com.chipprbots.ethereum.vm.OutOfGas            => "out of gas"
-            case com.chipprbots.ethereum.vm.InvalidOpCode(code) => s"invalid opcode: 0x${code.toInt.toHexString}"
-            case other                                          => other.toString.toLowerCase
+          // simulate.go:471: the error is `result.Err.Error()`, spelled as core/vm/errors.go spells it
+          val baseMsg = CallErrors.vmErrorMessage(err)
           // simulate.go:470-474: a clamped call's VM error (not a revert) says the gas was clamped
           val errMsg =
             if gasCapped then baseMsg + " (gas limit was capped by the RPC server's global gas cap)" else baseMsg
+          // simulate.go:463 reads `result.Return()`, which is nil whenever `Err != nil` (state_transition.go:55-60): a
+          // failed call has no return data, a creation that returned code and then failed its deposit included.
           SimulateCallResult(
             status = BigInt(0),
-            returnData = returnData,
+            returnData = ByteString.empty,
             gasUsed = gasUsed,
-            maxUsedGas = gasUsed,
+            maxUsedGas = maxUsedGas,
             logs = Seq.empty,
             error = Some(SimulateError(-32015, errMsg))
           )
@@ -1347,7 +1404,7 @@ class EthSimulateService(
             status = BigInt(1),
             returnData = returnData,
             gasUsed = gasUsed,
-            maxUsedGas = gasUsed,
+            maxUsedGas = maxUsedGas,
             logs = allLogs
           )
       callResults += callResult
@@ -1478,6 +1535,9 @@ class EthSimulateService(
       val payload = bytes.drop(4)
       val offset = BigInt(1, payload.slice(0, 32))
       if offset != 32 then break(None)
-      val length = BigInt(1, payload.slice(32, 64)).toInt
-      if length < 0 || 64 + length > payload.length then break(None)
-      scala.util.Try(new String(payload.slice(64, 64 + length), "UTF-8")).toOption
+      // The length is a uint256 the contract chose: compared as a BigInt, so 2^32 + 5 is not 5 and 2^31 - 32 does not
+      // overflow `64 + length`. Only a length inside the payload is narrowed (#1727).
+      val length = BigInt(1, payload.slice(32, 64))
+      if length + 64 > payload.length then break(None)
+      val end = 64 + length.toInt
+      scala.util.Try(new String(payload.slice(64, end), "UTF-8")).toOption

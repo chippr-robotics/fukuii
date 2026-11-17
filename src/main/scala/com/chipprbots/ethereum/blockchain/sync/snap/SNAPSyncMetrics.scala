@@ -62,6 +62,17 @@ object SNAPSyncMetrics extends MetricsContainer:
       .register(metrics.registry)
       .increment()
 
+  /** One block header rejected by the SNAP header checks: `reason` is the rule it failed
+    * (`HeaderChainCheck.rejectionReason`, or `ParentLink`) and `phase` where (`HeaderChainCheck.Phase`).
+    */
+  def incrementHeaderRejected(reason: String, phase: String): Unit =
+    Counter
+      .builder("chain.header.rejected")
+      .tag("reason", reason)
+      .tag("phase", phase)
+      .register(metrics.registry)
+      .increment()
+
   // ===== Sync Phase Metrics =====
 
   /** Current SNAP sync phase (0=Idle, 1=AccountRange, 2=ByteCode, 3=ByteCode+Storage, 4=Storage, 5=StateHealing,
@@ -414,6 +425,23 @@ object SNAPSyncMetrics extends MetricsContainer:
   /** Update current phase time in seconds */
   def setPhaseTime(seconds: Double): Unit = PhaseTimeSecondsGauge.set(seconds)
 
+  // ===== Read-only views for the TUI (spec 027 T074: the Sync view's request counters; additive, nothing else reads them)
+
+  def accountRangeRequests: Long = AccountRangeRequestsCounter.count().toLong
+  def accountRangeFailures: Long = AccountRangeFailuresCounter.count().toLong
+  def bytecodeRequests: Long = BytecodeRequestsCounter.count().toLong
+  def bytecodeFailures: Long = BytecodeFailuresCounter.count().toLong
+  def storageRangeRequests: Long = StorageRangeRequestsCounter.count().toLong
+  def storageRangeFailures: Long = StorageRangeFailuresCounter.count().toLong
+  def healingRequests: Long = HealingRequestsCounter.count().toLong
+  def healingFailures: Long = HealingFailuresCounter.count().toLong
+  def requestTimeouts: Long = RequestTimeoutsCounter.count().toLong
+  def peersBlacklisted: Long = PeerBlacklistCounter.count().toLong
+  def snapCapablePeers: Long = SnapCapablePeersGauge.get
+
+  /** The pivot block number last set ([[setPivotBlockNumber]]), 0 before SNAP chooses one. */
+  def pivotBlockNumber: Long = PivotBlockNumberGauge.get.toLong
+
   @volatile private var latest: Option[(SyncProgress, Long)] = None
 
   /** The most recent progress passed to [[measure]], if recorded within `maxAgeMillis` — read by the TUI, which has no
@@ -421,6 +449,11 @@ object SNAPSyncMetrics extends MetricsContainer:
     */
   def latestProgress(maxAgeMillis: Long): Option[SyncProgress] =
     latest.collect { case (p, at) if System.currentTimeMillis() - at <= maxAgeMillis => p }
+
+  /** The most recent progress passed to [[measure]] and when it was recorded, in epoch milliseconds, from one read: the
+    * TUI ages the sample against its own clock (spec 027 research §6).
+    */
+  def latestSample: Option[(SyncProgress, Long)] = latest
 
   /** Record full sync progress from SyncProgress object */
   def measure(progress: SyncProgress): Unit =

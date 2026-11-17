@@ -26,6 +26,7 @@ import scala.util.Try
 
 import org.bouncycastle.util.encoders.Hex
 
+import com.chipprbots.ethereum.network.P2pTraffic
 import com.chipprbots.ethereum.network.PeerActor
 import com.chipprbots.ethereum.network.handshaker.HelloExchangeState
 import com.chipprbots.ethereum.network.p2p.EthereumMessageDecoder
@@ -232,7 +233,8 @@ object RLPxConnectionHandler:
   private class OutboundTcpBridge(
       tcpManager: ClassicActorRef,
       remoteAddress: InetSocketAddress,
-      typedSelf: ActorRef[Command]
+      typedSelf: ActorRef[Command],
+      traffic: P2pTraffic
   ) extends ClassicActor:
 
     override def preStart(): Unit = tcpManager ! Tcp.Connect(remoteAddress)
@@ -253,7 +255,10 @@ object RLPxConnectionHandler:
     }
 
     private def active(connectionRef: ClassicActorRef): ClassicActor.Receive = {
-      case Tcp.Received(data)              => typedSelf ! TcpReceived(data)
+      case Tcp.Received(data) =>
+        // Every byte the socket carried in, handshake included: one add a read, counted for the dashboard.
+        traffic.received(data.length)
+        typedSelf ! TcpReceived(data)
       case Ack                             => typedSelf ! TcpAckReceived
       case Tcp.CommandFailed(_: Tcp.Write) => typedSelf ! TcpWriteFailed
       case event: Tcp.ConnectionClosed     => typedSelf ! TcpClosed(event)
@@ -269,7 +274,8 @@ object RLPxConnectionHandler:
 
   private class InboundTcpBridge(
       connectionRef: ClassicActorRef,
-      typedSelf: ActorRef[Command]
+      typedSelf: ActorRef[Command],
+      traffic: P2pTraffic
   ) extends ClassicActor:
 
     override def preStart(): Unit =
@@ -277,7 +283,9 @@ object RLPxConnectionHandler:
       context.watch(connectionRef)
 
     override def receive: ClassicActor.Receive = {
-      case Tcp.Received(data)              => typedSelf ! TcpReceived(data)
+      case Tcp.Received(data) =>
+        traffic.received(data.length)
+        typedSelf ! TcpReceived(data)
       case Ack                             => typedSelf ! TcpAckReceived
       case Tcp.CommandFailed(_: Tcp.Write) => typedSelf ! TcpWriteFailed
       case event: Tcp.ConnectionClosed     => typedSelf ! TcpClosed(event)
@@ -318,7 +326,9 @@ object RLPxConnectionHandler:
       rlpxConfiguration: RLPxConfiguration,
       extractorFactory: Secrets => HelloCodec,
       parent: ActorRef[PeerActor.Command],
-      tcpManagerForTest: Option[ClassicActorRef] = None
+      tcpManagerForTest: Option[ClassicActorRef] = None,
+      // Where this connection's bytes and messages are counted for the dashboard (spec 029 FR-044): the node's own.
+      traffic: P2pTraffic = P2pTraffic.Node
   ): Behavior[Command] = Behaviors.setup { context =>
     val peerId: String = parent.path.name
     val tcpManager: ClassicActorRef = tcpManagerForTest.getOrElse(IO(Tcp)(using context.system.classicSystem))
@@ -331,7 +341,8 @@ object RLPxConnectionHandler:
       parent,
       peerId,
       tcpManager,
-      context
+      context,
+      traffic
     ).waitingForCommand()
   }
 
@@ -355,7 +366,8 @@ object RLPxConnectionHandler:
       parent: ActorRef[PeerActor.Command],
       peerId: String,
       tcpManager: ClassicActorRef,
-      context: ActorContext[Command]
+      context: ActorContext[Command],
+      traffic: P2pTraffic
   ):
     import AuthHandshaker.{InitiatePacketLength, ResponsePacketLength}
 
@@ -374,6 +386,8 @@ object RLPxConnectionHandler:
       )
 
     private def bridgeWrite(bridge: ClassicActorRef, data: ByteString): Unit =
+      // Every byte handed to the socket passes here, the handshake's too: one add a write, counted for the dashboard.
+      traffic.sent(data.length)
       bridge.tell(Tcp.Write(data, Ack), context.self.toClassic)
 
     private def increaseSeqNumber(n: Int): Int = if n == Int.MaxValue then 0 else n + 1
@@ -390,13 +404,13 @@ object RLPxConnectionHandler:
 
     private def spawnOutboundBridge(remoteAddress: InetSocketAddress): ClassicActorRef =
       context.actorOf(
-        Props(new OutboundTcpBridge(tcpManager, remoteAddress, context.self)),
+        Props(new OutboundTcpBridge(tcpManager, remoteAddress, context.self, traffic)),
         "tcp-bridge"
       )
 
     private def spawnInboundBridge(connection: ClassicActorRef): ClassicActorRef =
       context.actorOf(
-        Props(new InboundTcpBridge(connection, context.self)),
+        Props(new InboundTcpBridge(connection, context.self, traffic)),
         "tcp-bridge"
       )
 
@@ -480,6 +494,7 @@ object RLPxConnectionHandler:
 
     private def processMessage(messageTry: Either[DecodingError, Message]): Unit = messageTry match
       case Right(message) =>
+        traffic.messageReceived()
         parent ! MessageReceived(message)
 
       case Left(ex: UnknownMessageTypeError) =>
@@ -607,6 +622,8 @@ object RLPxConnectionHandler:
     ): Behavior[Command] =
       Try(extractor.readHello(data)) match
         case Failure(PreHelloDisconnect(reason)) =>
+          // The peer's Disconnect was a message decoded like any other.
+          traffic.messageReceived()
           log.info(
             "[RLPx] Peer {} refused the connection before Hello: reason 0x{} ({})",
             peerId,
@@ -622,6 +639,9 @@ object RLPxConnectionHandler:
           stopping()
 
         case Success(Some((hello, restFrames))) =>
+          // The peer's Hello is a message too, as this node's own is where it is written: it is counted before the
+          // capabilities are compared, so a Hello this node then refuses was still received.
+          traffic.messageReceived()
           log.debug(
             "[RLPx] Extracted Hello message from peer {}, protocol version: {}, capabilities: {}",
             peerId,
@@ -884,6 +904,7 @@ object RLPxConnectionHandler:
     ): Behavior[Command] = Behaviors.receiveMessage {
       case SendMessage(h: HelloEnc) =>
         val out = extractor.writeHello(h)
+        traffic.messageSent()
         bridgeWrite(bridge, out)
         log.debug("[RLPx] Hello write queued for peer {}", peerId)
         val timeout = schedule(rlpxConfiguration.waitForTcpAckTimeout, AckTimeout(seqNumber))
@@ -957,6 +978,7 @@ object RLPxConnectionHandler:
           peerId
         )
         val out = writeUncompressedHello(h, messageCodec)
+        traffic.messageSent()
         bridgeWrite(bridge, out)
         val timeout = schedule(rlpxConfiguration.waitForTcpAckTimeout, AckTimeout(seqNumber))
         handshaked(
@@ -1052,6 +1074,7 @@ object RLPxConnectionHandler:
             override def toShortString: String = messageToSend.toShortString
 
       val out = messageCodec.encodeMessage(serializableToEncode)
+      traffic.messageSent()
       val msgType = messageToSend.underlyingMsg.getClass.getSimpleName
       log.debug(
         "SEND_MSG: peer={}, type={}, codes={}, seqNum={}",

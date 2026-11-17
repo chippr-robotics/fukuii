@@ -77,6 +77,17 @@ case class BlockchainConfig(
   def isPoS(totalDifficulty: BigInt): Boolean =
     terminalTotalDifficulty.exists(ttd => totalDifficulty >= ttd)
 
+  /** go-ethereum's `ChainConfig.IsPostMerge` (params/config.go, v1.17.9): a block at `blockNumber` and `timestamp` is
+    * taken to be after the merge on a chain merged at genesis (terminal total difficulty 0), from the merge netsplit
+    * block, or from Shanghai. A fact of the configuration, for a block that has no header to ask yet (eth_simulateV1
+    * building one); block import asks the header (`BlockHeader.isPoS`). False on every ETC chain: none declares a
+    * terminal total difficulty, a netsplit block (`Long.MaxValue` when absent) or a Shanghai timestamp.
+    */
+  def isPostMerge(blockNumber: BigInt, timestamp: Timestamp): Boolean =
+    terminalTotalDifficulty.contains(BigInt(0)) ||
+      blockNumber >= forkBlockNumbers.mergeNetsplitBlockNumber ||
+      isShanghaiTimestamp(timestamp)
+
   def isShanghaiTimestamp(timestamp: Timestamp): Boolean =
     forkTimestamps.shanghaiTimestamp.exists(ts => timestamp.isAtOrAfter(ts))
 
@@ -329,8 +340,16 @@ object BlockchainConfig:
     val networkType: NetworkType =
       Try(NetworkType.fromString(blockchainConfig.getString("network-type"))).getOrElse(NetworkType.ETC)
 
+    // A negative terminal TD fails here, outside the Try (#1654): it is a uint256 (EIP-3675), and
+    // HeadChainWeight.posFromGenesis would read one as "PoS from genesis" on any chain.
     val terminalTotalDifficulty: Option[BigInt] =
-      Try(BigInt(blockchainConfig.getString("terminal-total-difficulty"))).toOption
+      Try(BigInt(blockchainConfig.getString("terminal-total-difficulty"))).toOption.map { ttd =>
+        if ttd < 0 then
+          throw new IllegalArgumentException(
+            s"terminal-total-difficulty = $ttd: a terminal total difficulty cannot be negative (EIP-3675: a uint256)"
+          )
+        ttd
+      }
 
     val depositContractAddress: Option[Address] =
       Try(Address(blockchainConfig.getString("deposit-contract-address"))).toOption

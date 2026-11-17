@@ -199,6 +199,79 @@ class PathNodeStorage(val dataSource: DataSource):
       .drain
       .unsafeRunSync()
 
+  // ---- reads by position (spec 018 Track C) ----
+
+  /** The node stored at `position`, or `None` when no row is there. The key is used as it is, never encoded again: it
+    * holds the bytes [[writeAccountNode]] and [[writeStorageNode]] write (the hex-prefix path, after the owner for a
+    * storage trie). One point read that fills the block cache, as a read on the execution path should. A closed or
+    * failing database throws what it throws: neither is an absent row.
+    */
+  def read(position: com.chipprbots.ethereum.db.storage.pathstate.PositionKey): Option[Array[Byte]] =
+    dataSource.getOptimized(if position.owner.isEmpty then acctNs else storageNs, position.rowKey)
+
+  /** The rows of the storage trie of `owner`, in key order, or `None` when there are more than `maxRows` of them or
+    * they hold more than `maxBytes`: a seek and a forward scan of CF `u` from the owner's first key (spec 018
+    * data-model 3.6). It lists the rows that are there, whatever trie they once made up, so a trie with a hole in it is
+    * listed like any other.
+    *
+    * The scan is made a chunk at a time, each from the key after the last one read. One long scan would hold the data
+    * source's read lock from end to end, and a writer queued behind it holds back every other reader. It reads one
+    * consistent set of rows only while nothing writes this owner's rows in between, which is the caller's to see to:
+    * the canonical commit calls it under the state lock.
+    *
+    * The scan ends before `owner ++ 0xff`. Every row of the owner sorts below that: the byte after the owner is the
+    * first of a hex-prefix path that is not a leaf's, `0x00` or `0x1X`. And every row of another owner sorts outside
+    * it.
+    */
+  def storageRows(
+      owner: ByteString,
+      maxRows: Int,
+      maxBytes: Long = Long.MaxValue,
+      chunkRows: Int = PathNodeStorage.StorageRowsChunk
+  ): Option[Seq[(pathstate.PositionKey, ByteString)]] =
+    require(owner.length == pathstate.PositionKey.OwnerLength, "the owner of a storage trie is a 32-byte account hash")
+    require(chunkRows > 0, "a chunk of the scan holds at least one row")
+    val until = owner.toArray :+ 0xff.toByte
+    val listed = Vector.newBuilder[(pathstate.PositionKey, ByteString)]
+    @annotation.tailrec
+    def scan(from: Array[Byte], rowsSoFar: Long, bytesSoFar: Long): Boolean =
+      val chunk = dataSource.scanRangeLimit(storageNs, from, until, chunkRows).toVector
+      val rows = rowsSoFar + chunk.size
+      val bytes = bytesSoFar + chunk.iterator.map((key, node) => key.length.toLong + node.length).sum
+      if rows > maxRows || bytes > maxBytes then false
+      else
+        chunk.foreach { (key, node) =>
+          listed += pathstate.PositionKey(Some(owner), ByteString(key).drop(owner.length)) -> ByteString(node)
+        }
+        // a chunk that is not full was the last; the next begins at the first key after the last one read
+        if chunk.size < chunkRows then true else scan(chunk.last._1 :+ 0.toByte, rows, bytes)
+    Option.when(scan(owner.toArray, 0L, 0L))(listed.result())
+
+  /** Up to `limit` rows of the account trie with a key in `[from, until)`, in key order: the hex-prefix path and the
+    * node. One seek and a short scan, for the hand-off's sample.
+    */
+  def accountRowsBetween(from: Array[Byte], until: Array[Byte], limit: Int): Vector[(Array[Byte], Array[Byte])] =
+    dataSource.scanRangeLimit(acctNs, from, until, limit).toVector
+
+  /** As [[accountRowsBetween]] for the storage tries: the owner followed by the hex-prefix path, and the node. */
+  def storageRowsBetween(from: Array[Byte], until: Array[Byte], limit: Int): Vector[(Array[Byte], Array[Byte])] =
+    dataSource.scanRangeLimit(storageNs, from, until, limit).toVector
+
+  /** The updates that leave each of `positions` holding the node given for it, or no row for `None`: for a caller's
+    * batch. A position is written once: the caller gives each at most once.
+    */
+  def rowUpdates(positions: Iterable[(pathstate.PositionKey, Option[ByteString])]): Seq[DataSourceUpdateOptimized] =
+    val (ofAccounts, ofStorage) = positions.toSeq.partition(_._1.owner.isEmpty)
+    def updates(namespace: IndexedSeq[Byte], rows: Seq[(pathstate.PositionKey, Option[ByteString])]) =
+      Option.when(rows.nonEmpty)(
+        DataSourceUpdateOptimized(
+          namespace,
+          toRemove = rows.collect { case (position, None) => position.rowKey },
+          toUpsert = rows.collect { case (position, Some(node)) => position.rowKey -> node.toArray }
+        )
+      )
+    updates(acctNs, ofAccounts).toSeq ++ updates(storageNs, ofStorage)
+
   // ---- internals ----
 
   private def encodePath(nibbles: Array[Byte]): Array[Byte] =
@@ -213,6 +286,40 @@ class PathNodeStorage(val dataSource: DataSource):
       ByteString(1.toByte) ++ o ++ ByteString(encodePath(nibbles))
     )
 
+  /** The removal of every row of both column families, by its key, for one batch; `None` when they hold more than
+    * `maxRows` rows, which is no state to delete this way. For the destruction of a small state as a whole (test mode's
+    * new genesis): a range delete is not part of a batch, and would leave a moment with the rows gone and the anchor
+    * still there.
+    */
+  def removalOfEveryRow(maxRows: Long): Option[Seq[DataSourceUpdateOptimized]] =
+    val accounts = keysOf(acctNs, maxRows + 1)
+    val storage = keysOf(storageNs, maxRows + 1 - accounts.size)
+    Option.when(accounts.size.toLong + storage.size <= maxRows)(
+      Seq(acctNs -> accounts, storageNs -> storage).collect {
+        case (namespace, keys) if keys.nonEmpty => DataSourceUpdateOptimized(namespace, toRemove = keys, toUpsert = Nil)
+      }
+    )
+
+  /** The first `limit` keys of a column family, bare (see [[foreachChunk]] on the namespace byte). */
+  private def keysOf(ns: IndexedSeq[Byte], limit: Long): Vector[Array[Byte]] =
+    import cats.effect.unsafe.implicits.global
+    val strip = if dataSource.isInstanceOf[com.chipprbots.ethereum.db.dataSource.EphemDataSource] then ns.length else 0
+    dataSource
+      .iterate(ns)
+      .take(limit.max(0L))
+      .map {
+        case Right((key, _)) => key.drop(strip)
+        case Left(err)       => throw new IllegalStateException("Path node iteration failed", err.ex)
+      }
+      .compile
+      .toVector
+      .unsafeRunSync()
+
   private def hasAnyEntry(ns: IndexedSeq[Byte]): Boolean =
     import cats.effect.unsafe.implicits.global
     dataSource.iterate(ns).take(1).compile.last.unsafeRunSync().isDefined
+
+object PathNodeStorage:
+
+  /** How many rows one step of [[PathNodeStorage.storageRows]] reads under the data source's read lock. */
+  val StorageRowsChunk: Int = 8192

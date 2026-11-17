@@ -1,0 +1,24 @@
+ # FUKUII  etc (61) . PoW . up 12d 7h                                    Health 
+--------------------------------------------------------------------------------
+ ! 4 warns   heap above 93% of 8.0G for a minute (warn at 90%)                  
+ Peers   41/50 ##########         Block  21,884,102 (at head)                   
+ Sync    + at head                                                              
+--------------------------------------------------------------------------------
+ Health  Memory   ----------   0%  set by heap                                  
+--------------------------------------------------------------------------------
+ heap  never under 93% of 8.0G in the last minute                               
+    WARN for 3m 4s . warn when above 90% for a minute . 0% room                 
+ garbage collection  25% of the last minute in pauses                           
+    WARN for 3m 4s . warn at 20% of the time . 0% room                          
+ A bar's colour is the alert row's: these are the rules the alert row reads.    
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+ 1-9 view  : prompt  / filter  ? help  p pause  r redraw  d detach  q quit      

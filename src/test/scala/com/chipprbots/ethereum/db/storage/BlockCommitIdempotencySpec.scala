@@ -32,7 +32,8 @@ class BlockCommitIdempotencySpec extends AnyFlatSpec with Matchers:
   class Setup:
     val dataSource: EphemDataSource = EphemDataSource()
     val nodeStorage = new NodeStorage(dataSource)
-    val stateStorage = new ReferenceCountedStateStorage(nodeStorage, history, 8L * 1024 * 1024)
+    val stateStorage =
+      new ReferenceCountedStateStorage(nodeStorage, history, 8L * 1024 * 1024, nodesMayBeDeleted = () => true)
 
     def genesis(): ByteString =
       val storage = stateStorage.getBackingStorage(0)

@@ -1,0 +1,40 @@
+ ◆ FUKUII  etc (61) · PoW · head 21,884,102 · 41/50 peers · up 12d 7h                                           Mempool 
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+ ✓ no alerts                                                                                                            
+                  │ Peers   41/50 ◆◆◆◆◆◆◆◆◆◆  Block  21,884,102 (at head)                    Txpool  142                
+                  │ Sync    ✓ at head                                                                                   
+                  │─────────────────────────────────────────────────────────────────────────────────────────────────────
+                  │ Pool    142 pending · 3% of 4,096 · oldest 14m 59s · 5 sent from this node                          
+       ETC        │ Flow    3.4 in/s · 2.9 mined/s · 0.1 dropped/s · 7 replaced in the 3m 12s watched                   
+                  │─────────────────────────────────────────────────────────────────────────────────────────────────────
+                  │ Radar   gas prices against the price this node would suggest, 1.00 gwei                             
+                  │   urgent  █████████████████░░░░░░░      36   from 3.00 gwei                                         
+ etc              │   high    ████████████████████████      52   from 1.50 gwei                                         
+ PoW · id 61      │   normal  ██████████████████░░░░░░      38   from 0.5 gwei                                          
+ main network     │   low     ███████░░░░░░░░░░░░░░░░░      16   below 0.5 gwei                                         
+                  │─────────────────────────────────────────────────────────────────────────────────────────────────────
+ [1] Overview     │ Senders 0x2c87…0003 7 · 0x51e2…0000 7 · 0x8e50…0002 7 · 0xf019…0001 7 · 0x072c…0006 6               
+ [2] Chain        │ Refused Underpriced 1,204 · AlreadyKnown 311 · NonceTooLow 58 · NonceTooFarAhead 4                  
+ [3] Peers        │ Lost    evicted for room 12 · expired unmined 96 · replaced 41                                      
+ [4] Mempool      │ Fetch   announced 184,220 · asked for 9,310 · timed out 27                                          
+ [5] RPC          │ Queue   not kept by this client · a transaction whose nonce leaves a gap is refused, not held       
+ [6] Storage      │─────────────────────────────────────────────────────────────────────────────────────────────────────
+ [7] System       │ Pending best-paying first · Up Down select, Enter open                                              
+ [8] Logs         │   hash         from           nonce  gas price         age  kind                                    
+ [9] Ops          │   0x6885…0043  0x4c65…0015       42  4.00 gwei     14m 33s                                          
+                  │   0x5fb4…0036  0x439a…0008       42  3.95 gwei     11m 44s                                          
+ graphics text    │   0xd10a…0086  0x0ff7…0013       45  3.95 gwei      14m 4s                                          
+                  │   0x56e2…0029  0x71c0…0012       41  3.90 gwei      8m 55s                                          
+                  │   0xc839…0079  0x072c…0006       45  3.90 gwei     11m 15s  local                                   
+                  │   0x4e11…001c  0x68f5…0005       41  3.85 gwei       6m 6s                                          
+                  │   0xbf67…006c  0x3552…0010       44  3.85 gwei      8m 26s                                          
+                  │   0x4540…000f  0x971b…000f       40  3.80 gwei      3m 17s                                          
+                  │   0xb696…005f  0x2c87…0003       44  3.80 gwei      5m 37s                                          
+                  │   0x3c6f…0002  0x8e50…0002       40  3.75 gwei         28s                                          
+                  │   0xadc5…0052  0x5aad…000d       43  3.75 gwei      2m 48s                                          
+                  │   0xa4f4…0045  0x51e2…0000       43  3.70 gwei     14m 59s                                          
+                  │   0x0d79…0088  0x4c65…0015       45  3.65 gwei     14m 30s                                          
+                  │   0x9c23…0038  0x8008…000a       42  3.65 gwei     12m 10s                                          
+                  │   0x04a7…007b  0x439a…0008       45  3.60 gwei     11m 41s                                          
+                  │   0x9351…002b  0xae2e…0014       41  3.60 gwei      9m 21s                                          
+ 1-9 view  Enter open  Esc back  : prompt  / filter  ? help  p pause  r redraw  d detach  q quit                        

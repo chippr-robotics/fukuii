@@ -31,7 +31,10 @@ class EthashMiner(
     dagManager: EthashDAGManager,
     blockCreator: PoWBlockCreator,
     syncController: TypedActorRef[com.chipprbots.ethereum.blockchain.sync.SyncController.Command],
-    ethMiningService: EthMiningService
+    ethMiningService: EthMiningService,
+    // spec 018 B-293: the head is read, and the block built on it, under the head's generation; none builds on the
+    // block it is handed, as unit suites do
+    settledHead: Option[SettledHeadBuild] = None
 )(implicit scheduler: IORuntime)
     extends Miner
     with Logger:
@@ -41,21 +44,30 @@ class EthashMiner(
   def processMining(
       bestBlock: Block
   )(implicit blockchainConfig: BlockchainConfig): Future[CoordinatorProtocol] =
-    log.debug("Starting mining with parent block {}", bestBlock.number)
-    blockCreator
-      .getBlockForMining(bestBlock)
-      .map { case PendingBlockAndState(PendingBlock(block, _), _) =>
-        val blockNumber = block.header.number
-        val (startTime, miningResult) = doMining(blockNumber.toLong, block)
-
-        submitHashRate(ethMiningService, System.nanoTime() - startTime, miningResult)
-        handleMiningResult(miningResult, syncController, block)
+    val built = settledHead.fold(blockCreator.getBlockForMining(bestBlock).map(made => Right((bestBlock, made))))(
+      _(blockCreator.getBlockForMining(_))
+    )
+    built
+      .map {
+        case Left(why) =>
+          // before the nonce search, so no work is lost (forge): the coordinator asks again at once
+          log.info("No block is mined this turn: {}", why)
+          PoWMiningCoordinator.MiningUnsuccessful
+        case Right((parent, PendingBlockAndState(PendingBlock(block, _), _))) =>
+          log.debug("Mining on parent block {}", parent.number)
+          minedOn(block)
       }
       .handleError { ex =>
         log.error("Error occurred while mining: ", ex)
         PoWMiningCoordinator.MiningUnsuccessful
       }
       .unsafeToFuture()
+
+  private def minedOn(block: Block)(implicit blockchainConfig: BlockchainConfig): CoordinatorProtocol =
+    val (startTime, miningResult) = doMining(block.header.number.toLong, block)
+    val elapsedNanos = System.nanoTime() - startTime
+    submitHashRate(ethMiningService, elapsedNanos, miningResult)
+    handleMiningResult(miningResult, syncController, block, elapsedNanos / 1_000_000L)
 
   private def doMining(blockNumber: Long, block: Block)(implicit
       blockchainConfig: BlockchainConfig

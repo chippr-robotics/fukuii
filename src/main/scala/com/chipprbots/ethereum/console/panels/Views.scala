@@ -1,0 +1,32 @@
+package com.chipprbots.ethereum.console.panels
+
+import com.chipprbots.ethereum.console.*
+
+/** The panels on screen (spec 027 research §7.3, spec 029 FR-005, FR-006): Help when it is open, else the screen opened
+  * over the view, else the view.
+  */
+private[console] object Views:
+  def panels(c: Ctx): Seq[Panel] =
+    if c.state.helpOpen then HelpPanel.panels(c)
+    else
+      c.state.screen match
+        case Some(Screen.PeerDetail(id))  => PeerDetailPanel.panels(c, id)
+        case Some(Screen.HealthDetail(s)) => HealthPanel.detail(c, s)
+        case Some(Screen.Config(f, at))   => OpsPanels.report(c, ops.Actions.Config, f, at)
+        case Some(Screen.Tunables)        => OpsPanels.report(c, ops.Actions.Tunables, "", 0)
+        case Some(Screen.TestRpc)         => OpsPanels.report(c, ops.Actions.TestRpc, "", 0)
+        case Some(Screen.Net)             => OpsPanels.report(c, ops.Actions.Net, "", 0)
+        case Some(Screen.Deps)            => OpsPanels.deps(c)
+        case Some(Screen.Art(page))       => ArtPanel.panels(c, page)
+        case Some(Screen.Explore(q, at))  => ExplorerPanels.panels(c, q, at)
+        case None =>
+          c.state.view match
+            case TuiView.Overview => OverviewPanels.panels(c)
+            case TuiView.Chain    => ChainPanel.panels(c)
+            case TuiView.Peers    => PeersPanel.panels(c)
+            case TuiView.Mempool  => MempoolPanels.panels(c)
+            case TuiView.Rpc      => RpcPanels.panels(c)
+            case TuiView.Storage  => StoragePanels.panels(c)
+            case TuiView.System   => SystemPanels.panels(c)
+            case TuiView.Logs     => LogsPanel.panels(c)
+            case TuiView.Ops      => OpsPanels.panels(c)

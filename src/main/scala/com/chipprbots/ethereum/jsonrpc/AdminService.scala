@@ -112,6 +112,136 @@ object AdminService:
 
   private val ValidLogLevels = Set("OFF", "ERROR", "WARN", "INFO", "DEBUG", "TRACE", "ALL")
 
+  /** The connection limits of the node as configured (`network.peer`): `maxOutgoing` is what `admin_maxPeers` changes
+    * at runtime, `maxIncoming` it does not touch, `minOutgoing` is the count below which discovery starts dials.
+    */
+  case class PeerLimits(minOutgoing: Int, maxOutgoing: Int, maxIncoming: Int)
+
+  private val NodeIdHex = "[0-9a-fA-F]{128}".r
+
+  /** One place that decides whether an enode URL may be sent to the peer manager: scheme `enode`, a user-info of
+    * exactly 128 hex digits (the node id, no `0x`), a non-empty host and a port in 1..65535. A `?discport=` query is
+    * ignored. The peer manager reads `uri.getUserInfo` unguarded, so a URL without a node id would throw inside the
+    * actor. Returns the URI, or why it is refused.
+    */
+  def parseEnode(raw: String): Either[String, URI] =
+    try
+      val uri = new URI(raw.trim)
+      if !"enode".equalsIgnoreCase(uri.getScheme) then Left("the scheme must be enode://")
+      else if !Option(uri.getUserInfo).exists(id => NodeIdHex.pattern.matcher(id).matches()) then
+        Left("the node id must be exactly 128 hex digits")
+      else if Option(uri.getHost).forall(_.stripPrefix("[").stripSuffix("]").isEmpty) then Left("the host is missing")
+      else if uri.getPort < 1 || uri.getPort > 65535 then Left("the port must be 1..65535")
+      else Right(uri)
+    catch case ex: java.net.URISyntaxException => Left(s"not a valid URL: ${ex.getReason}")
+
+  /** The canonical text of an IP address literal, or None for anything else: [[BlockedIPRegistry.canonical]]. */
+  def canonicalIp(raw: String): Option[String] = BlockedIPRegistry.canonical(raw)
+
+  /** Text a caller sent, as it may be written to the log: bounded, with no control character (a newline in it would
+    * forge a log line).
+    */
+  private[jsonrpc] def loggable(raw: String): String =
+    raw.take(200).map(c => if c.isControl then '?' else c)
+
+  // ---- the log levels as they are, and as they were (spec 029 FR-054) ------------------------------------------
+  // Read and reset in process, by the dashboard's `loglevel` action; none of this is routed over JSON-RPC.
+
+  /** A logger and its level: the one set on it, if any, and the one it logs at (its own, or the nearest ancestor's).
+    */
+  case class LoggerLevel(name: String, configured: Option[String], effective: String)
+
+  /** A logger whose level was changed since the node started: the level set on it before the first change (None: it
+    * inherited), the one it has now, and whether the change made the logger (no code had asked for it).
+    */
+  case class ChangedLogger(name: String, before: Option[String], now: String, createdByChange: Boolean)
+
+  /** Logback's state is the JVM's, so what was changed is kept for the JVM: by `admin_changeLogLevel`, by the
+    * dashboard, by whoever. A logger's first change is the one remembered: that is what a reset returns it to.
+    */
+  private val changedLoggers = new java.util.concurrent.ConcurrentHashMap[String, (Option[String], Boolean)]()
+
+  private def loggerContext: LoggerContext =
+    LoggerFactory.getILoggerFactory
+      .asInstanceOf[LoggerContext] // interop: SLF4J returns ILoggerFactory; Logback impl is always LoggerContext
+
+  /** `ROOT` for the root logger, whatever it was called by. */
+  private def loggerName(filter: String): String =
+    if filter.isEmpty || filter.equalsIgnoreCase(org.slf4j.Logger.ROOT_LOGGER_NAME) then
+      org.slf4j.Logger.ROOT_LOGGER_NAME
+    else filter
+
+  /** Whether a logger of this name exists: one some code asked for, or a package above one. A name that matches none is
+    * most likely mistyped, and logback would make a logger of it that nothing writes to.
+    */
+  def loggerExists(name: String): Boolean = loggerContext.exists(loggerName(name)) != null
+
+  /** The loggers whose name starts with `prefix` (all of them for an empty one), by name. */
+  def logLevels(prefix: String = ""): List[LoggerLevel] =
+    import scala.jdk.CollectionConverters.*
+    loggerContext.getLoggerList.asScala.toList
+      .filter(_.getName.startsWith(prefix))
+      .map(l => LoggerLevel(l.getName, Option(l.getLevel).map(_.toString), l.getEffectiveLevel.toString))
+      .sortBy(_.name)
+
+  /** One logger's level, if the logger exists. */
+  def logLevel(name: String): Option[LoggerLevel] =
+    Option(loggerContext.exists(loggerName(name)))
+      .map(l => LoggerLevel(l.getName, Option(l.getLevel).map(_.toString), l.getEffectiveLevel.toString))
+
+  /** The loggers changed since the node started, by name. */
+  def changedLogLevels: List[ChangedLogger] =
+    import scala.jdk.CollectionConverters.*
+    changedLoggers.asScala.toList
+      .map { case (name, (before, created)) =>
+        ChangedLogger(name, before, loggerContext.getLogger(name).getEffectiveLevel.toString, created)
+      }
+      .sortBy(_.name)
+
+  /** Returns every changed logger to the level it had before its first change: its own, or none, so that it inherits
+    * again. A logger the change made stays (logback removes none) and inherits. The context is not reset: that would
+    * take every appender off, the dashboard's log ring among them. Returns what it restored.
+    */
+  def resetLogLevels(): List[ChangedLogger] =
+    val restored = changedLogLevels
+    restored.foreach { changed =>
+      loggerContext.getLogger(changed.name).setLevel(changed.before.map(Level.toLevel).orNull)
+      val _ = changedLoggers.remove(changed.name)
+    }
+    restored
+
+  /** Remembers `name`'s level before it is first changed. Called before the level is set. */
+  private def rememberLevel(name: String): Unit =
+    val created = loggerContext.exists(name) == null
+    val before = Option(loggerContext.getLogger(name).getLevel).map(_.toString)
+    val _ = changedLoggers.putIfAbsent(name, (before, created))
+
+  private val adminLog = LoggerFactory.getLogger(classOf[AdminService])
+
+  /** What `admin_changeLogLevel` does (the service's method is this): the one function that sets a level, for the
+    * JSON-RPC method and for the dashboard alike (spec 029 FR-052).
+    */
+  def setLogLevel(req: AdminChangeLogLevelRequest): ServiceResponse[AdminChangeLogLevelResponse] = IO {
+    if !ValidLogLevels.contains(req.level) then Left(JsonRpcError.InvalidParams(s"Invalid log level: ${req.level}"))
+    else
+      try
+        val level = Level.toLevel(req.level)
+        val logFilters = req.logFilters.getOrElse(List(""))
+        logFilters.foreach { filter =>
+          val name = loggerName(filter)
+          // What it was before, so that a reset can put it back (spec 029 FR-054): whoever changes it.
+          rememberLevel(name)
+          val logger = loggerContext.getLogger(name)
+          adminLog.debug(s"Setting $name logging level to ${req.level}")
+          logger.setLevel(level)
+        }
+        Right(AdminChangeLogLevelResponse())
+      catch
+        case ex: Exception =>
+          adminLog.error(s"Failed to change log level to ${req.level}", ex)
+          Left(JsonRpcError.InternalError)
+  }
+
 class AdminService(
     nodeStatusHolder: AtomicReference[NodeStatus],
     peerManager: typed.ActorRef[PeerManagerActor.Command],
@@ -122,7 +252,9 @@ class AdminService(
     blockedIPRegistry: BlockedIPRegistry,
     chainImporter: ChainImporter,
     // The node's sync status, read before admin_importChain: SyncController's GetStatus.
-    syncStatus: () => IO[SyncProtocol.Status]
+    syncStatus: () => IO[SyncProtocol.Status],
+    // The configured connection limits, for the dashboard's previews; None where they are not known (tests).
+    peerLimitsConfig: Option[AdminService.PeerLimits] = None
 )(implicit scheduler: typed.Scheduler)
     extends Logger:
   import AdminService.*
@@ -243,18 +375,19 @@ class AdminService(
     * PeerManagerActor tracks the maintained set and schedules reconnects on disconnect.
     */
   def addPeer(req: AdminAddPeerRequest): ServiceResponse[AdminAddPeerResponse] =
-    try
-      val uri = new URI(req.enodeUrl)
-      peerManager
-        .askForTyped[PeerManagerActor.AddMaintainedPeerResponse](ref => PeerManagerActor.AddMaintainedPeerCmd(uri, ref))
-        .map(r => Right(AdminAddPeerResponse(r.wasAdded)))
-        .handleError { ex =>
-          log.error(s"Failed to add peer: ${req.enodeUrl}", ex)
-          Right(AdminAddPeerResponse(false))
-        }
-    catch
-      case ex: Exception =>
-        log.error(s"Failed to parse enode URL: ${req.enodeUrl}", ex)
+    parseEnode(req.enodeUrl) match
+      case Right(uri) =>
+        peerManager
+          .askForTyped[PeerManagerActor.AddMaintainedPeerResponse](ref =>
+            PeerManagerActor.AddMaintainedPeerCmd(uri, ref)
+          )
+          .map(r => Right(AdminAddPeerResponse(r.wasAdded)))
+          .handleError { ex =>
+            log.error(s"Failed to add peer: ${req.enodeUrl}", ex)
+            Right(AdminAddPeerResponse(false))
+          }
+      case Left(why) =>
+        log.warn(s"Refused enode URL for admin_addPeer (${loggable(req.enodeUrl)}): $why")
         IO.pure(Right(AdminAddPeerResponse(false)))
 
   /** Besu AdminRemovePeer: peerNetwork.removeMaintainedConnectionPeer(peer) → boolean (wasRemoved). Removes from the
@@ -297,27 +430,8 @@ class AdminService(
     * LogConfigurator). Fukuii uses Logback (ch.qos.logback.classic). Different backends for each project's ecosystem;
     * runtime behaviour (dynamic per-logger level changes via SLF4J) is equivalent.
     */
-  def changeLogLevel(req: AdminChangeLogLevelRequest): ServiceResponse[AdminChangeLogLevelResponse] = IO {
-    if !ValidLogLevels.contains(req.level) then Left(JsonRpcError.InvalidParams(s"Invalid log level: ${req.level}"))
-    else
-      try
-        val ctx =
-          LoggerFactory.getILoggerFactory
-            .asInstanceOf[LoggerContext] // interop: SLF4J returns ILoggerFactory; Logback impl is always LoggerContext
-        val level = Level.toLevel(req.level)
-        val logFilters = req.logFilters.getOrElse(List(""))
-        logFilters.foreach { filter =>
-          val loggerName = if filter.isEmpty then org.slf4j.Logger.ROOT_LOGGER_NAME else filter
-          val logger = ctx.getLogger(loggerName)
-          log.debug(s"Setting $loggerName logging level to ${req.level}")
-          logger.setLevel(level)
-        }
-        Right(AdminChangeLogLevelResponse())
-      catch
-        case ex: Exception =>
-          log.error(s"Failed to change log level to ${req.level}", ex)
-          Left(JsonRpcError.InternalError)
-  }
+  def changeLogLevel(req: AdminChangeLogLevelRequest): ServiceResponse[AdminChangeLogLevelResponse] =
+    AdminService.setLogLevel(req)
 
   def getDatadir(@unused req: AdminDatadirRequest): ServiceResponse[AdminDatadirResponse] =
     IO.pure(Right(AdminDatadirResponse(datadir)))
@@ -379,17 +493,68 @@ class AdminService(
         }
     }
 
-  def blockIP(req: AdminBlockIPRequest): ServiceResponse[AdminBlockIPResponse] = IO {
-    val added = blockedIPRegistry.block(req.ip)
-    if added then log.info(s"Blocked IP: ${req.ip}")
-    Right(AdminBlockIPResponse(added))
-  }
+  /** Blocks an IP address (B-277): the node refuses inbound connections from it, does not dial it (any path, maintained
+    * and trusted peers included) and disconnects the peers connected from it now. Discovery (UDP) packets are not
+    * blocked. The block lasts until the node restarts. The address must be an IP literal (never resolved); it is kept
+    * in its canonical form. The response is whether the address was newly blocked.
+    */
+  def blockIP(req: AdminBlockIPRequest): ServiceResponse[AdminBlockIPResponse] =
+    canonicalIp(req.ip) match
+      case None => IO.pure(Left(JsonRpcError.InvalidParams(s"Not an IP address literal: ${req.ip}")))
+      case Some(ip) =>
+        IO(blockedIPRegistry.block(ip)).flatMap { added =>
+          if added then log.info(s"Blocked IP: $ip")
+          disconnectPeersAt(ip).map(_ => Right(AdminBlockIPResponse(added)))
+        }
 
-  def unblockIP(req: AdminUnblockIPRequest): ServiceResponse[AdminUnblockIPResponse] = IO {
-    val removed = blockedIPRegistry.unblock(req.ip)
-    if removed then log.info(s"Unblocked IP: ${req.ip}")
-    Right(AdminUnblockIPResponse(removed))
-  }
+  /** Disconnects every peer connected from `ip` (canonical form), by the same command `admin_removePeer` uses. A
+    * failure to reach the peer manager is logged: the block stands, and refuses the next connection anyway.
+    */
+  private def disconnectPeersAt(ip: String): IO[List[com.chipprbots.ethereum.network.PeerId]] =
+    IO.defer(peerManager.askForTyped[PeerManagerActor.Peers](PeerManagerActor.GetPeersCmd(_)))
+      .map { peersResult =>
+        val atAddress = peersResult.peers.keys.toList.filter { peer =>
+          Option(peer.remoteAddress.getAddress).map(_.getHostAddress).contains(ip) ||
+          canonicalIp(peer.remoteAddress.getHostString).contains(ip)
+        }
+        atAddress.foreach(peer => peerManager ! PeerManagerActor.DisconnectPeerFireAndForgetCmd(peer.id))
+        atAddress.map(_.id)
+      }
+      .handleError { ex =>
+        log.warn(s"Could not disconnect the peers at $ip: ${ex.getMessage}")
+        Nil
+      }
+
+  /** Unblocks an IP address. Where it was blocked by the operator, any automatic blacklist entry for it is cleared too,
+    * so that nothing keeps refusing it, and the maintained peers at it are dialled again (a dial the block refused
+    * ended their retries). An address that was not blocked is left as it is. The response is whether it was blocked by
+    * the operator.
+    */
+  def unblockIP(req: AdminUnblockIPRequest): ServiceResponse[AdminUnblockIPResponse] =
+    canonicalIp(req.ip) match
+      case None => IO.pure(Left(JsonRpcError.InvalidParams(s"Not an IP address literal: ${req.ip}")))
+      case Some(ip) =>
+        IO(blockedIPRegistry.unblock(ip)).flatMap { removed =>
+          if !removed then IO.pure(Right(AdminUnblockIPResponse(false)))
+          else
+            log.info(s"Unblocked IP: $ip")
+            // The block is lifted whatever the peer manager says: a failure to reach it is logged, as for the entry.
+            IO(peerManager ! PeerManagerActor.RedialMaintainedAtCmd(ip))
+              .handleError(ex => log.warn(s"Could not re-dial the maintained peers at $ip: ${ex.getMessage}"))
+              .flatMap(_ => clearAutomaticEntry(ip))
+              .map(_ => Right(AdminUnblockIPResponse(true)))
+        }
+
+  private def clearAutomaticEntry(ip: String): IO[Unit] =
+    IO.defer(
+      peerManager.askForTyped[PeerManagerActor.RemoveFromBlacklistResponse](ref =>
+        PeerManagerActor.RemoveFromBlacklistCmd(PeerManagerActor.RemoveFromBlacklistRequest(ip), ref)
+      )
+    ).attempt
+      .map {
+        case Left(ex) => log.warn(s"Could not clear the blacklist entry of $ip: ${ex.getMessage}")
+        case Right(_) => ()
+      }
 
   def listBlockedIPs(@unused req: AdminListBlockedIPsRequest): ServiceResponse[AdminListBlockedIPsResponse] = IO {
     Right(AdminListBlockedIPsResponse(blockedIPRegistry.all.toList.sorted))
@@ -399,49 +564,68 @@ class AdminService(
     * core-geth node/api.go AddTrustedPeer returning (true, nil).
     */
   def addTrustedPeer(req: AdminAddTrustedPeerRequest): ServiceResponse[AdminAddTrustedPeerResponse] =
-    try
-      val uri = new URI(req.enodeUrl)
-      peerManager
-        .askForTyped[PeerManagerActor.AddTrustedPeerResponse](ref => PeerManagerActor.AddTrustedPeerCmd(uri, ref))
-        .map(r => Right(AdminAddTrustedPeerResponse(r.success)))
-        .handleError { ex =>
-          log.error(s"Failed to add trusted peer: ${req.enodeUrl}", ex)
-          Right(AdminAddTrustedPeerResponse(false))
-        }
-    catch
-      case ex: Exception =>
-        log.error(s"Failed to parse enode URL: ${req.enodeUrl}", ex)
+    parseEnode(req.enodeUrl) match
+      case Right(uri) =>
+        peerManager
+          .askForTyped[PeerManagerActor.AddTrustedPeerResponse](ref => PeerManagerActor.AddTrustedPeerCmd(uri, ref))
+          .map(r => Right(AdminAddTrustedPeerResponse(r.success)))
+          .handleError { ex =>
+            log.error(s"Failed to add trusted peer: ${req.enodeUrl}", ex)
+            Right(AdminAddTrustedPeerResponse(false))
+          }
+      case Left(why) =>
+        log.warn(s"Refused enode URL for admin_addTrustedPeer (${loggable(req.enodeUrl)}): $why")
         IO.pure(Right(AdminAddTrustedPeerResponse(false)))
 
   /** core-geth admin_removeTrustedPeer: removes from trusted set; does NOT disconnect. Always returns true — mirrors
     * core-geth node/api.go RemoveTrustedPeer returning (true, nil).
     */
   def removeTrustedPeer(req: AdminRemoveTrustedPeerRequest): ServiceResponse[AdminRemoveTrustedPeerResponse] =
-    try
-      val uri = new URI(req.enodeUrl)
-      val targetNodeId = Option(uri.getUserInfo).map(_.toLowerCase).getOrElse("")
-      peerManager
-        .askForTyped[PeerManagerActor.RemoveTrustedPeerResponse](ref =>
-          PeerManagerActor.RemoveTrustedPeerCmd(targetNodeId, ref)
-        )
-        .map(r => Right(AdminRemoveTrustedPeerResponse(r.success)))
-        .handleError { ex =>
-          log.error(s"Failed to remove trusted peer: ${req.enodeUrl}", ex)
-          Right(AdminRemoveTrustedPeerResponse(false))
-        }
-    catch
-      case ex: Exception =>
-        log.error(s"Failed to parse enode URL: ${req.enodeUrl}", ex)
+    parseEnode(req.enodeUrl) match
+      case Right(uri) =>
+        val targetNodeId = uri.getUserInfo.toLowerCase
+        peerManager
+          .askForTyped[PeerManagerActor.RemoveTrustedPeerResponse](ref =>
+            PeerManagerActor.RemoveTrustedPeerCmd(targetNodeId, ref)
+          )
+          .map(r => Right(AdminRemoveTrustedPeerResponse(r.success)))
+          .handleError { ex =>
+            log.error(s"Failed to remove trusted peer: ${req.enodeUrl}", ex)
+            Right(AdminRemoveTrustedPeerResponse(false))
+          }
+      case Left(why) =>
+        log.warn(s"Refused enode URL for admin_removeTrustedPeer (${loggable(req.enodeUrl)}): $why")
         IO.pure(Right(AdminRemoveTrustedPeerResponse(false)))
 
   /** core-geth admin_maxPeers: sets max connected peers at runtime. core-geth reference: eth/api_admin.go MaxPeers —
     * sets handler.maxPeers + p2pServer.MaxPeers.
     */
   def maxPeers(req: AdminMaxPeersRequest): ServiceResponse[AdminMaxPeersResponse] =
+    // A negative limit means nothing. 0 is accepted, as it always was: the node then dials no one.
+    if req.maxPeers < 0 then
+      IO.pure(Left(JsonRpcError.InvalidParams(s"maxPeers must not be negative, got ${req.maxPeers}")))
+    else
+      peerManager
+        .askForTyped[PeerManagerActor.SetMaxPeersResponse](ref => PeerManagerActor.SetMaxPeersCmd(req.maxPeers, ref))
+        .map(r => Right(AdminMaxPeersResponse(r.success)))
+        .handleError { ex =>
+          log.error(s"Failed to set max peers to ${req.maxPeers}", ex)
+          Right(AdminMaxPeersResponse(false))
+        }
+
+  /** The operator-set state of the peer manager: the override of the outgoing limit and the limit in force, the trusted
+    * node ids and the maintained node ids (spec 029). Read-only, not routed over JSON-RPC.
+    */
+  def adminState(): ServiceResponse[PeerManagerActor.AdminState] =
     peerManager
-      .askForTyped[PeerManagerActor.SetMaxPeersResponse](ref => PeerManagerActor.SetMaxPeersCmd(req.maxPeers, ref))
-      .map(r => Right(AdminMaxPeersResponse(r.success)))
+      .askForTyped[PeerManagerActor.AdminState](PeerManagerActor.GetAdminStateCmd(_))
+      .map[Either[JsonRpcError, PeerManagerActor.AdminState]](state => Right(state))
       .handleError { ex =>
-        log.error(s"Failed to set max peers to ${req.maxPeers}", ex)
-        Right(AdminMaxPeersResponse(false))
+        log.error("Failed to read the peer manager's admin state", ex)
+        Left(JsonRpcError.InternalError)
       }
+
+  /** The configured connection limits, if the node gave them (spec 029 previews). The incoming limit and the minimum of
+    * outgoing peers are not in [[adminState]]: the actor holds them as configuration.
+    */
+  def peerLimits: Option[PeerLimits] = peerLimitsConfig

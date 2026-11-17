@@ -236,7 +236,11 @@ class MockedMinerSpec
     override lazy val mockBlockGenerator: PoWBlockGenerator = mock[PoWBlockGenerator]
     override lazy val mockEthMiningService: EthMiningService = mock[EthMiningService]
     override lazy val mockEvmCodeStorage: EvmCodeStorage = mock[EvmCodeStorage]
-    override lazy val mockMptStorage: MptStorage = mock[MptStorage]
+    // A world asks its storage for the account trie's view of it: a hash-keyed store answers with itself.
+    override lazy val mockMptStorage: MptStorage =
+      val storage = mock[MptStorage]
+      storage.forOwner.expects(*).anyNumberOfTimes().returning(storage)
+      storage
 
     val miner: typed.ActorRef[MockedMiner.Command] =
       testKit.spawn(
@@ -254,6 +258,8 @@ class MockedMinerSpec
 
     // Allow getBestBlock to be called 0 or more times since some tests use getBlockByHash instead
     (() => blockchainReader.getBestBlock).expects().returns(Some(origin)).anyNumberOfTimes()
+    // The hash store: no block's state is held in place, and the miner chains the worlds of its builds as it did.
+    (() => blockchainReader.holdsStateInPlace).expects().returns(false).anyNumberOfTimes()
 
     // Implement abstract expectation methods
     // NOTE: MockedMiner tests use createBlockForMining() which doesn't call this method,

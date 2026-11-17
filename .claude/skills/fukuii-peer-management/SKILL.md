@@ -12,7 +12,11 @@ description: >-
 # Fukuii peer management
 
 Read `../CONVENTIONS.md` first. `admin_peers`/`admin_nodeInfo` are 🟢; the
-add/remove/trust/maxPeers calls are 🟡 (confirm before executing).
+add/remove/trust/maxPeers calls are 🟡 (confirm before executing). `admin_*` is opt-in
+over HTTP: check `rpc_modules` first (CONVENTIONS §2). The peer methods that carry a
+`net_` name (`net_listPeers`, `net_connectToPeer`, `net_disconnectPeer`, `net_nodeInfo`,
+the blacklist ones) are served with the `admin` namespace too, so they are no fallback:
+without `admin`, only `net_peerCount` and `net_listening` answer.
 
 ## When to use
 - Low/zero peer count, node "isolated", sync starved for peers.
@@ -35,8 +39,8 @@ Network, RPC port, datadir. Target peer enode URI(s) for any write. CONVENTIONS 
   on any chain.
 - Known peers persist in `~/.fukuii/<network>/knownNodes.json`.
 - `admin_*` peer methods have `net_*` equivalents that also exist
-  (`net_listPeers`, `net_connectToPeer`, `net_disconnectPeer`) — use whichever
-  the deployment enables.
+  (`net_listPeers`, `net_connectToPeer`, `net_disconnectPeer`) — both families
+  need the `admin` namespace, so use whichever name your tooling already uses.
 
 ## Procedure
 1. **Inspect** (🟢) — `admin_peers` (or `mcp_peer_list`) for current peers;

@@ -12,7 +12,6 @@ import org.scalatestplus.scalacheck.ScalaCheckPropertyChecks
 import com.chipprbots.ethereum.db.dataSource.EphemDataSource
 import com.chipprbots.ethereum.db.storage.*
 import com.chipprbots.ethereum.mpt.MerklePatriciaTrie.defaultByteArraySerializable
-import com.chipprbots.ethereum.mpt.MptVisitors.LeafWalkVisitor
 import com.chipprbots.ethereum.mpt.MptVisitors.PathTrackingLeafWalkVisitor
 import com.chipprbots.ethereum.testing.Tags.*
 
@@ -41,7 +40,10 @@ class ShardEnumeratorSpec extends AnyFunSuite with ScalaCheckPropertyChecks:
   /** All leaf values reachable from a (possibly inline) shard root, in any order. */
   private def shardLeafValues(root: MptNode, storage: MptStorage): Seq[String] =
     val acc = mutable.ArrayBuffer.empty[String]
-    MptTraversals.dispatch(root, new LeafWalkVisitor(storage, leaf => acc += leaf.value.toArray.mkString(",")))
+    MptTraversals.dispatch(
+      root,
+      new PathTrackingLeafWalkVisitor(storage, ByteString.empty, (_, leaf) => acc += leaf.value.toArray.mkString(","))
+    )
     acc.toSeq
 
   /** Full account keys (prefix + subtree path) reconstructed across all shards. */

@@ -3,6 +3,8 @@ package com.chipprbots.ethereum.ledger
 import org.apache.pekko.util.ByteString
 
 import com.chipprbots.ethereum.consensus.mining.Mining
+import com.chipprbots.ethereum.consensus.validators.BlockHeaderError.HeaderParentNotFoundError
+import com.chipprbots.ethereum.consensus.validators.BlockHeaderValidatorSkeleton
 import com.chipprbots.ethereum.domain.Block
 import com.chipprbots.ethereum.domain.BlockHash
 import com.chipprbots.ethereum.domain.BlockHeader
@@ -26,6 +28,43 @@ class BlockValidation(
       getBlockHeaderByHash = getBlockHeaderFromChainOrQueue,
       getNBlocksBack = getNBlocksBackFromChainOrQueue
     )
+
+  /** The headers of `branch`, each validated against its parent as an import validates it, the seal with it: the first
+    * that fails, with why. A parent is looked for in the branch, then in what is stored and queued. Nothing is executed
+    * and nothing is written.
+    */
+  def firstInvalidHeader(
+      branch: List[Block]
+  )(implicit blockchainConfig: BlockchainConfig): Option[(BlockHeader, String)] =
+    firstInvalidHeaderOf(branch.map(_.header))
+
+  /** [[firstInvalidHeader]], of a branch known by its headers alone (B-300 g): the same rules, as only the headers are
+    * read.
+    */
+  def firstInvalidHeaderOf(
+      headers: List[BlockHeader]
+  )(implicit blockchainConfig: BlockchainConfig): Option[(BlockHeader, String)] =
+    val inBranch = headers.iterator.map(header => header.hash.value -> header).toMap
+    def parentOf(hash: ByteString): Option[BlockHeader] =
+      inBranch.get(hash).orElse(getBlockHeaderFromChainOrQueue(hash))
+    def failedBy(
+        check: BlockHeader => Either[Any, Any]
+    ): Option[(BlockHeader, String)] =
+      headers.iterator.map(header => header -> check(header)).collectFirst { case (header, Left(error)) =>
+        header -> error.toString
+      }
+    // The rules that cost nothing are checked on every header before the seal of any (forge, B-306): what a branch
+    // weighs is in its headers' difficulties, and a header is cheap to write with any difficulty and a seal no one
+    // mined. With the difficulties checked first, a seal is verified only on a branch whose weight is what it says.
+    val cheapRules = mining.validators.blockHeaderValidator match
+      case rules: BlockHeaderValidatorSkeleton =>
+        failedBy(header =>
+          parentOf(header.parentHash.value)
+            .toRight(HeaderParentNotFoundError)
+            .flatMap(rules.validateParentRules(header, _))
+        )
+      case _ => None
+    cheapRules.orElse(failedBy(header => mining.validators.blockHeaderValidator.validate(header, parentOf)))
 
   private def getBlockHeaderFromChainOrQueue(hash: ByteString): Option[BlockHeader] =
     blockchainReader

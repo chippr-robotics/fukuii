@@ -1,0 +1,24 @@
+ # FUKUII  etc (61) . PoW . up 12d 7h                                  Overview 
+--------------------------------------------------------------------------------
+ + no alerts                                                                    
+ Peers   41/50 ##########         Block  21,884,102 (at head)                   
+ RPC     :8545 on                 Disk   388G free       Txpool  142            
+--------------------------------------------------------------------------------
+ Sync    + at head                                                              
+     ----------------------------------------------------------------------     
+     Disrupt: rpc stop transport=http                                           
+     The HTTP server on 127.0.0.1:8546 stops listening.                         
+     It serves eth, net, web3. Nothing sensitive is served to other hosts.      
+     Its open connections are not counted by this server: in-flight             
+     requests finish, then every connection is closed within 3 s.               
+     Readiness and health probes on that port fail until rpc start http.        
+     Undo: rpc start.                                                           
+                                                                                
+     y  run it      n or Esc  cancel                                            
+     ----------------------------------------------------------------------     
+ 11:59:47 INFO  Imported block 21,884,102 0x6d21..1a0e with 14 txs in 22ms      
+ 11:59:52 INFO  Peers: 41 handshaked . 14 in . 27 out                           
+ 12:00:00 INFO  RegularSync: at head, block 21884102                            
+                                                                                
+                                                                                
+ a question is open: answer it, or Esc                                          

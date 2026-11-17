@@ -5,7 +5,12 @@
 This runbook covers network management operations for Fukuii nodes, including peer management, blacklist operations, and network hygiene best practices.
 
 **Target Audience**: Node operators, DevOps engineers  
-**Prerequisites**: Running Fukuii node with JSON-RPC enabled  
+**Prerequisites**: Running Fukuii node with JSON-RPC enabled, and the `admin` namespace enabled for the endpoint you
+call: every `net_*` method in this runbook (`net_listPeers`, `net_connectToPeer`, `net_disconnectPeer`,
+`net_listBlacklistedPeers`, `net_addToBlacklist`, `net_removeFromBlacklist`) is served with `admin`, under its `net_`
+name. HTTP and WebSocket do not serve `admin` by default; add it with
+`fukuii.network.rpc.http.apis = "eth,net,web3,fukuii,admin"` and keep that endpoint on `localhost`. IPC serves it by
+default. Without it these calls answer `-32601 Method not found`.  
 **Difficulty**: Intermediate
 
 ## Table of Contents

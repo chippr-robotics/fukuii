@@ -1,0 +1,491 @@
+package com.chipprbots.ethereum.console
+
+/** What [[Update]] needs beside the state and the key.
+  *
+  * @param page
+  *   the rows a list shows: how far Page Up and Page Down move
+  * @param configuredMotion
+  *   the motion `p` resumes to
+  * @param readOnly
+  *   no operator action can run (spec 029 FR-053): `q` does not offer to stop the node
+  * @param bodyCols
+  *   the columns and
+  * @param bodyRows
+  *   the rows a dialog is drawn in: one whose preview they cannot show whole cannot be confirmed (FR-048)
+  */
+final case class UpdateCtx(
+    page: Int,
+    configuredMotion: Motion,
+    readOnly: Boolean = false,
+    bodyCols: Int = Int.MaxValue,
+    bodyRows: Int = Int.MaxValue
+)
+
+/** What a key does (spec 029 FR-003 to FR-010): a pure function from the state and the key to the next state and the
+  * effects [[Tui]] is to run. Every key the TUI understands passes through here, so every key is tested without a
+  * terminal.
+  *
+  * The key goes to the open overlay if there is one (a dialog, the prompt, a filter being typed); else, with Help open,
+  * `q`, `r` and `d` keep their meaning and any other key closes it; else it is looked up in [[Bindings.Global]]. Pasted
+  * text reaches the prompt and a filter only: it can open nothing and confirm nothing (FR-009).
+  */
+object Update:
+
+  /** The longest line the prompt or a filter takes. */
+  val MaxLine: Int = 256
+
+  /** The lines the prompt remembers. */
+  val MaxHistory: Int = 100
+
+  def apply(state: TuiState, key: Key, ctx: UpdateCtx): (TuiState, Seq[Effect]) = key match
+    // A report of the terminal, not a key: it changes nothing here, not even the notice on screen.
+    case _: Key.CellSize => (state, Nil)
+    case _               => keyed(state, key, ctx)
+
+  private def keyed(state: TuiState, key: Key, ctx: UpdateCtx): (TuiState, Seq[Effect]) =
+    val s = state.copy(notice = None)
+    s.overlay match
+      case Overlay.Dialog(kind)   => dialog(s, kind, key, ctx)
+      case prompt: Overlay.Prompt => typing(s, prompt, key, ctx)
+      case Overlay.Filter(text)   => filtering(s, text, key)
+      case Overlay.None =>
+        key match
+          case _: Key.Paste => (s, Nil)
+          case _ =>
+            Bindings.actionFor(key) match
+              case Some(action) if !s.helpOpen || KeptInHelp.contains(action) => run(s, action, ctx)
+              case _ if s.helpOpen                                            => (s.closeHelp, Nil)
+              case _                                                          => (s, Nil)
+
+  /** What keeps its meaning while Help is open; any other key closes Help. */
+  private val KeptInHelp: Set[Action] = Set(Action.AskQuit, Action.Redraw, Action.Detach)
+
+  private def run(s: TuiState, action: Action, ctx: UpdateCtx): (TuiState, Seq[Effect]) = action match
+    case Action.OpenView(view) => (s.withView(view), Nil)
+    case Action.NextView       => (s.nextView, Nil)
+    case Action.PreviousView   => (s.previousView, Nil)
+    // Every view has one panel that takes keys for now; the later slices of spec 029 add the ones Tab moves between.
+    case Action.FocusNext | Action.FocusPrevious => (s, Nil)
+    case Action.Up                               => (move(s, ctx, -1), Nil)
+    case Action.Down                             => (move(s, ctx, 1), Nil)
+    case Action.PageUp                           => (move(s, ctx, -ctx.page.max(1)), Nil)
+    case Action.PageDown                         => (move(s, ctx, ctx.page.max(1)), Nil)
+    case Action.First                            => (move(s, ctx, Int.MinValue), Nil)
+    case Action.Last                             => (move(s, ctx, Int.MaxValue), Nil)
+    case Action.Left | Action.Right              => (s, Nil)
+    case Action.Open                             => open(s)
+    case Action.Back                             => back(s)
+    case Action.OpenPrompt                       => (s.copy(overlay = Overlay.Prompt("", 0, None)), Nil)
+    case Action.OpenFilter =>
+      if s.screen.isEmpty && !s.helpOpen && Filterable.contains(s.view) then
+        (s.copy(overlay = Overlay.Filter(s.filters.getOrElse(s.view, ""))), Nil)
+      else (s, Nil)
+    case Action.Help     => (s.openHelp, Nil)
+    case Action.Glyphs   => (s.toggleGlyphs, Nil)
+    case Action.Graphics => (s, Seq(Effect.CycleGraphics))
+    case Action.Pause    => (s.togglePause(ctx.configuredMotion), Nil)
+    // On the Art screen `r` reads the sheets again first: how a replacement sheet is tried (contracts/art.md).
+    case Action.Redraw =>
+      s.screen match
+        case Some(Screen.Art(_)) => (s, Seq(Effect.ReloadArt, Effect.Redraw))
+        // On an explorer screen `r` reads the node again first: what is shown is of the moment it was read.
+        case Some(Screen.Explore(query, _)) => (s, Seq(Effect.RefreshLookup(query), Effect.Redraw))
+        // On a screen an Observe action fills, `r` runs it again: what is shown is of the moment it was read.
+        case Some(screen) if observed(screen).isDefined =>
+          (s, observed(screen).map(Effect.Confirm(_)).toSeq :+ Effect.Redraw)
+        case _ => (s, Seq(Effect.Redraw))
+    case Action.Detach  => (s, Seq(Effect.Detach))
+    case Action.AskQuit => ask(s, ctx, ops.ActionRequest(ops.Actions.Quit.name))
+    case Action.Act     => actOnSelection(s)
+
+  /** Asks for `request` (spec 029 FR-048): its dialog opens, Cancel in focus, and the action runner is asked what it
+    * would change. On a read-only dashboard nothing above Observe is offered: it says so, and the attempt is handed to
+    * the runner all the same, which refuses it in the audit log (FR-051, FR-053). Ctrl-C is a signal and stops the node
+    * regardless.
+    */
+  private def ask(s: TuiState, ctx: UpdateCtx, request: ops.ActionRequest): (TuiState, Seq[Effect]) =
+    ops.Actions.named(request.action) match
+      case None => (s.copy(notice = Some(s"there is no action '${request.action}'")), Nil)
+      case Some(spec) if ctx.readOnly && spec.risk != ops.RiskClass.Observe =>
+        val said = if spec == ops.Actions.Quit then ReadOnlyNotice else readOnlyNotice(spec.name)
+        (s.copy(notice = Some(said)), Seq(Effect.Confirm(request)))
+      case Some(spec) if s.actions.isRunning(spec.name) =>
+        (s.copy(notice = Some(s"${spec.name} is already running: the Ops view shows how far it is")), Nil)
+      // What stops with the node is known here, from what the dashboard already reads: `q` is answered at once, and
+      // needs nothing of the node's services, which a node that is still starting has not handed over.
+      case Some(spec) if spec == ops.Actions.Quit =>
+        val preview = ops.Preview(widgets.DialogBox.quitLines(s))
+        (s.copy(overlay = Overlay.Dialog(DialogKind.Confirm(request, spec.risk, Some(preview)))), Nil)
+      case Some(spec) =>
+        (
+          // Opened with no preview, whatever an earlier dialog for the same request left behind: what is confirmed
+          // is what was read for this dialog.
+          s.copy(overlay = Overlay.Dialog(DialogKind.Confirm(request, spec.risk, None))),
+          Seq(Effect.Preview(request))
+        )
+
+  val ReadOnlyNotice: String = "read-only: the TUI cannot stop the node; Ctrl-C does"
+
+  def readOnlyNotice(action: String): String = s"read-only: the TUI cannot run '$action' (fukuii.tui.read-only)"
+
+  /** `a`: the prompt, with the action that goes with the selected row typed and not yet entered. On the Peers view,
+    * dropping the selected peer (the operator changes the word to trust or block); on the RPC view of a node that
+    * mines, stopping the miner. Nothing runs before the dialog the prompt's Enter opens.
+    */
+  private def actOnSelection(s: TuiState): (TuiState, Seq[Effect]) =
+    val typed =
+      if s.helpOpen then None
+      else
+        (s.screen, s.view) match
+          case (Some(Screen.PeerDetail(id)), _) => Some(s"peer drop ${id.take(PeerIdChars)}")
+          case (None, TuiView.Peers) =>
+            s.selectedPeerIndex.map(i => s"peer drop ${s.orderedPeers(i).id.take(PeerIdChars)}")
+          case (None, TuiView.Rpc) if s.snapshot.exists(_.local.mining.isDefined) => Some("mining stop")
+          case (None, TuiView.Ops)                                                => s.selectedAction.map(_ + " ")
+          case _                                                                  => None
+    (typed.fold(s)(text => s.copy(overlay = Overlay.Prompt(text, text.length, None))), Nil)
+
+  /** As much of a peer's id as the prompt is given: enough to name one peer among those connected. */
+  val PeerIdChars: Int = 16
+
+  /** The views whose list `/` filters. */
+  val Filterable: Set[TuiView] = Set(TuiView.Peers, TuiView.Logs)
+
+  /** The selection, or the scroll, of the list on screen moves by `by` rows: negative is up. `Int.MinValue` and
+    * `Int.MaxValue` are the first and the last row.
+    */
+  private def move(s: TuiState, ctx: UpdateCtx, by: Int): TuiState =
+    if s.helpOpen then s
+    else if s.screen.isDefined then
+      s.screens match
+        // An explorer screen: the selection moves among the rows that lead somewhere.
+        case Screen.Explore(query, selected) :: under =>
+          val last = (panels.ExplorerPanels.linkCount(s, query) - 1).max(0)
+          val to = by match
+            case Int.MinValue => 0
+            case Int.MaxValue => last
+            case _            => (selected.toLong + by).max(0L).min(last.toLong).toInt
+          s.copy(screens = Screen.Explore(query, to) :: under)
+        // The Art screen's pages wrap, so a page is counted and never clamped here: the art says how many there are.
+        case Screen.Config(filter, scroll) :: under =>
+          // The screen clamps the scroll to what it has: here it only never goes above the first row.
+          val to = by match
+            case Int.MinValue => 0
+            case Int.MaxValue => Int.MaxValue / 2
+            case _            => (scroll.toLong + by).max(0L).min(Int.MaxValue / 2).toInt
+          s.copy(screens = Screen.Config(filter, to) :: under)
+        case Screen.Art(page) :: under =>
+          val to = by match
+            case Int.MinValue => 0
+            case Int.MaxValue => -1
+            case _            => page + by.sign
+          s.copy(screens = Screen.Art(to) :: under)
+        case _ => s
+    else
+      s.view match
+        case TuiView.Peers =>
+          val peers = s.orderedPeers
+          if peers.isEmpty then s
+          else
+            val last = peers.size - 1
+            val target = by match
+              case Int.MinValue => 0
+              case Int.MaxValue => last
+              // With nothing selected, the first move selects the first row.
+              case _ => s.selectedPeerIndex.fold(0)(i => (i.toLong + by).max(0L).min(last.toLong).toInt)
+            s.copy(selectedPeer = Some(peers(target).id))
+        case TuiView.Chain =>
+          // The Block Observatory's rows, newest first. The selection is a block's hash: new blocks do not move it.
+          val blocks = s.observedBlocks
+          if blocks.isEmpty then s
+          else
+            val last = blocks.size - 1
+            val target = by match
+              case Int.MinValue => 0
+              case Int.MaxValue => last
+              case _            => s.selectedBlockIndex.fold(0)(i => (i.toLong + by).max(0L).min(last.toLong).toInt)
+            s.copy(selectedBlock = Some(blocks(target).hash))
+        case TuiView.Mempool =>
+          // The pending transactions, best-paying first. The selection is a hash: the list moving under it does not
+          // move it, and it is gone when its transaction leaves the pool.
+          val txs = s.pendingTxs
+          if txs.isEmpty then s
+          else
+            val last = txs.size - 1
+            val target = by match
+              case Int.MinValue => 0
+              case Int.MaxValue => last
+              case _            => s.selectedTxIndex.fold(0)(i => (i.toLong + by).max(0L).min(last.toLong).toInt)
+            s.copy(selectedTx = Some(txs(target).hash))
+        case TuiView.System =>
+          // The health bars. The selection is a subsystem: a bar that appears above it does not move it.
+          val bars = s.healthBars
+          if bars.isEmpty then s
+          else
+            val last = bars.size - 1
+            val target = by match
+              case Int.MinValue => 0
+              case Int.MaxValue => last
+              case _            => s.selectedHealthIndex.fold(0)(i => (i.toLong + by).max(0L).min(last.toLong).toInt)
+            s.copy(selectedHealth = Some(bars(target).subsystem))
+        case TuiView.Ops =>
+          // The actions, in the order the view lists them.
+          val all = ops.Actions.all
+          val last = all.size - 1
+          val target = by match
+            case Int.MinValue => 0
+            case Int.MaxValue => last
+            case _            => s.selectedActionIndex.fold(0)(i => (i.toLong + by).max(0L).min(last.toLong).toInt)
+          s.copy(selectedAction = Some(all(target).name))
+        case TuiView.Logs =>
+          // Up is older: the scroll counts lines back from the newest.
+          by match
+            case Int.MinValue => s.scrollLogs(s.visibleLogs.size, ctx.page)
+            case Int.MaxValue => s.copy(logScroll = 0)
+            case _            => s.scrollLogs(-by, ctx.page)
+        case _ => s
+
+  /** Enter: the selected row opens. A peer's details; a block of the observatory; on an explorer screen, the row's own
+    * lookup (a block's transaction, a transaction's receipt, an address).
+    */
+  private def open(s: TuiState): (TuiState, Seq[Effect]) =
+    if s.helpOpen then (s, Nil)
+    else
+      s.screens match
+        case Screen.Explore(query, selected) :: _ =>
+          panels.ExplorerPanels.target(s, query, selected).fold((s, Seq.empty[Effect]))(explore(s, _))
+        case _ :: _ => (s, Nil)
+        case Nil =>
+          s.view match
+            case TuiView.Peers =>
+              (
+                s.selectedPeerIndex.fold(s)(i =>
+                  s.copy(screens = Screen.PeerDetail(s.orderedPeers(i).id) :: s.screens)
+                ),
+                Nil
+              )
+            case TuiView.Chain =>
+              s.selectedBlockIndex.fold((s, Seq.empty[Effect]))(i =>
+                explore(s, LookupQuery.BlockByHash(s.observedBlocks(i).hash))
+              )
+            // A pending transaction opens like a mined one (spec 029 FR-036).
+            case TuiView.Mempool =>
+              s.selectedTxIndex.fold((s, Seq.empty[Effect]))(i => explore(s, LookupQuery.Tx(s.pendingTxs(i).hash)))
+            // An action opens the prompt with its name typed: nothing runs before Enter there, and its dialog.
+            case TuiView.Ops => actOnSelection(s)
+            // A health bar opens every check behind it (spec 029 FR-045).
+            case TuiView.System =>
+              (
+                s.selectedHealthIndex.fold(s)(i =>
+                  s.copy(screens = Screen.HealthDetail(s.healthBars(i).subsystem) :: s.screens)
+                ),
+                Nil
+              )
+            case _ => (s, Nil)
+
+  /** Opens the explorer's screen for `query`, and has the worker read it (spec 029 FR-028, FR-029). */
+  private def explore(s: TuiState, query: LookupQuery): (TuiState, Seq[Effect]) =
+    (s.copy(screens = Screen.Explore(query, 0) :: s.screens), Seq(Effect.Lookup(query)))
+
+  /** Esc: the screen on top closes, and a lookup of its that is still running is not wanted any more; with no screen
+    * open, the view's filter is cleared.
+    */
+  private def back(s: TuiState): (TuiState, Seq[Effect]) =
+    s.screens match
+      case Screen.Explore(query, _) :: under =>
+        val running = s.lookupOf(query).exists(_.isInstanceOf[LookupState.Running])
+        // The screen under it may show the same lookup: then it is still wanted.
+        val wanted = under.exists {
+          case Screen.Explore(other, _) => other == query
+          case _                        => false
+        }
+        (s.copy(screens = under), if running && !wanted then Seq(Effect.CancelLookup(query)) else Nil)
+      case _ :: under => (s.copy(screens = under), Nil)
+      case Nil =>
+        if s.filterOf(s.view).nonEmpty then (s.copy(filters = s.filters - s.view, logScroll = 0), Nil) else (s, Nil)
+
+  // ---- the quit dialog ------------------------------------------------------------------------------------------
+
+  /** A confirmation's keys, by its class (spec 029 FR-048, contracts/operator.md). Nothing else is accepted, and pasted
+    * text is ignored whatever it holds (FR-009). An action is confirmed only with its preview on screen, whole, and
+    * saying it can be run: while the preview is being read, when it says the action cannot be run now, or on a screen
+    * too small to show it all, nothing confirms it.
+    */
+  private def dialog(s: TuiState, kind: DialogKind, key: Key, ctx: UpdateCtx): (TuiState, Seq[Effect]) = kind match
+    case c: DialogKind.Confirm =>
+      import ops.RiskClass
+      val closed = s.copy(overlay = Overlay.None)
+      val quit = c.request.action == ops.Actions.Quit.name
+      def cancel: (TuiState, Seq[Effect]) = (closed, Seq(Effect.CancelAction(c.request)))
+      def run: (TuiState, Seq[Effect]) =
+        if quit then (closed, Seq(Effect.Confirm(c.request), Effect.Quit))
+        else
+          (
+            closed.copy(notice = Some(s"${c.request.action}: started; the Ops view shows how it ends")),
+            Seq(Effect.Confirm(c.request))
+          )
+      def set(next: DialogKind.Confirm): (TuiState, Seq[Effect]) = (s.copy(overlay = Overlay.Dialog(next)), Nil)
+      val confirmable =
+        c.preview.exists(_.refusal.isEmpty) && widgets.DialogBox.fits(c, ctx.bodyCols, ctx.bodyRows)
+      key match
+        case _: Key.Paste => (s, Nil)
+        case Key.Esc      => cancel
+        case _ =>
+          c.risk match
+            case RiskClass.Observe =>
+              key match
+                case Key.Enter if confirmable => run
+                case Key.Backspace            => cancel
+                case _                        => (s, Nil)
+            case RiskClass.Adjust =>
+              key match
+                case Key.Tab | Key.BackTab | Key.Left | Key.Right =>
+                  set(c.copy(focus = if c.focus == DialogFocus.Cancel then DialogFocus.Apply else DialogFocus.Cancel))
+                case Key.Enter if c.focus == DialogFocus.Cancel => cancel
+                case Key.Enter if confirmable                   => run
+                case Key.Backspace                              => cancel
+                case _                                          => (s, Nil)
+            case RiskClass.Disrupt =>
+              key match
+                // A preview that changed under the operator is not confirmed by the key that was already on its way:
+                // the first y says it was read, the second runs it.
+                case Key.Char('y' | 'Y') if confirmable && c.changed => set(c.copy(changed = false))
+                case Key.Char('y' | 'Y') if confirmable              => run
+                case Key.Char('n' | 'N') | Key.Backspace             => cancel
+                // Anything else neither confirms nor cancels.
+                case _ => (s, Nil)
+            case RiskClass.Halt =>
+              key match
+                case Key.Char(ch) if ch.isLetter && c.typed.length < HaltWordMax => set(c.copy(typed = c.typed + ch))
+                // Backspace takes back a letter; with none typed it is Back, as everywhere.
+                case Key.Backspace if c.typed.nonEmpty => set(c.copy(typed = c.typed.dropRight(1)))
+                case Key.Backspace                     => cancel
+                case Key.Enter if confirmable && c.typed.equalsIgnoreCase(ops.Actions.HaltWord) => run
+                case _                                                                          => (s, Nil)
+
+  /** The most letters a Halt's dialog takes: the word is four. */
+  private val HaltWordMax: Int = 12
+
+  // ---- the prompt -----------------------------------------------------------------------------------------------
+
+  private def typing(s: TuiState, p: Overlay.Prompt, key: Key, ctx: UpdateCtx): (TuiState, Seq[Effect]) =
+    def edited(text: String, cursor: Int): (TuiState, Seq[Effect]) =
+      (s.copy(overlay = Overlay.Prompt(text.take(MaxLine), cursor.min(MaxLine).min(text.length).max(0), None)), Nil)
+    def insert(t: String) = edited(p.text.take(p.cursor) + t + p.text.drop(p.cursor), p.cursor + t.length)
+    key match
+      case Key.Char(c)  => insert(c.toString)
+      case Key.Paste(t) => insert(t)
+      case Key.Backspace =>
+        if p.text.isEmpty then (s.copy(overlay = Overlay.None), Nil)
+        else if p.cursor == 0 then (s, Nil)
+        else edited(p.text.take(p.cursor - 1) + p.text.drop(p.cursor), p.cursor - 1)
+      case Key.Left  => (s.copy(overlay = p.copy(cursor = (p.cursor - 1).max(0))), Nil)
+      case Key.Right => (s.copy(overlay = p.copy(cursor = (p.cursor + 1).min(p.text.length))), Nil)
+      case Key.Home  => (s.copy(overlay = p.copy(cursor = 0)), Nil)
+      case Key.End   => (s.copy(overlay = p.copy(cursor = p.text.length)), Nil)
+      case Key.Tab =>
+        val done = Commands.complete(p.text)
+        edited(done, done.length)
+      case Key.Up =>
+        val at = p.historyAt.fold(s.promptHistory.size - 1)(_ - 1)
+        if at < 0 || s.promptHistory.isEmpty then (s, Nil)
+        else
+          val line = s.promptHistory(at)
+          (s.copy(overlay = Overlay.Prompt(line, line.length, Some(at))), Nil)
+      case Key.Down =>
+        p.historyAt match
+          case Some(at) if at + 1 < s.promptHistory.size =>
+            val line = s.promptHistory(at + 1)
+            (s.copy(overlay = Overlay.Prompt(line, line.length, Some(at + 1))), Nil)
+          case Some(_) => (s.copy(overlay = Overlay.Prompt("", 0, None)), Nil)
+          case None    => (s, Nil)
+      case Key.Esc   => (s.copy(overlay = Overlay.None), Nil)
+      case Key.Enter => submit(s, p.text, ctx)
+      case _         => (s, Nil)
+
+  /** The Observe action behind a screen, if it has one: what reads what the screen shows. */
+  def observed(screen: Screen): Option[ops.ActionRequest] = screen match
+    case Screen.Config(_, _) => Some(ops.ActionRequest(ops.Actions.Config.name))
+    case Screen.Tunables     => Some(ops.ActionRequest(ops.Actions.Tunables.name))
+    case Screen.TestRpc      => Some(ops.ActionRequest(ops.Actions.TestRpc.name))
+    case Screen.Net          => Some(ops.ActionRequest(ops.Actions.Net.name))
+    case _                   => None
+
+  /** An action typed at the prompt. One that names a connected peer by the start of its id is asked for with the whole
+    * id of the one peer that starts so; an id that fits none, or several, is said and nothing is asked.
+    */
+  private def act(s: TuiState, ctx: UpdateCtx, request: ops.ActionRequest): (TuiState, Seq[Effect]) =
+    val byPeer = Set(ops.Actions.PeerTrust.name, ops.Actions.PeerUntrust.name, ops.Actions.PeerDrop.name)
+    request.param("id") match
+      case Some(typed) if byPeer.contains(request.action) =>
+        val prefix = typed.toLowerCase(java.util.Locale.ROOT).stripPrefix("0x")
+        val all = s.copy(filters = s.filters - TuiView.Peers).orderedPeers
+        all.filter(_.id.toLowerCase(java.util.Locale.ROOT).stripPrefix("0x").startsWith(prefix)) match
+          case Seq(peer) => ask(s, ctx, request.copy(params = Vector("id" -> peer.id)))
+          // Trust is of a node, connected or not: a whole id that no connected peer has can still lose it.
+          case Seq()
+              if request.action == ops.Actions.PeerUntrust.name && prefix.length == 128 &&
+                prefix.forall(ch => Character.digit(ch, 16) >= 0) =>
+            ask(s, ctx, request.copy(params = Vector("id" -> prefix)))
+          case Seq() => (s.copy(notice = Some(s"no connected peer's id starts with '$typed'")), Nil)
+          case several =>
+            (s.copy(notice = Some(s"${several.size} peers' ids start with '$typed': type more of it")), Nil)
+      case _ => ask(s, ctx, request)
+
+  private def submit(s: TuiState, line: String, ctx: UpdateCtx): (TuiState, Seq[Effect]) =
+    val text = line.trim
+    val history =
+      if text.isEmpty || s.promptHistory.lastOption.contains(text) then s.promptHistory
+      else (s.promptHistory :+ text).takeRight(MaxHistory)
+    val closed = s.copy(overlay = Overlay.None, promptHistory = history)
+    if text.isEmpty then (closed, Nil)
+    else
+      Commands.parse(text) match
+        case Command.OpenView(view) => (closed.withView(view), Nil)
+        case Command.OpenPeer(prefix) =>
+          val all = closed.copy(filters = closed.filters - TuiView.Peers).orderedPeers
+          all.filter(
+            _.id.toLowerCase(java.util.Locale.ROOT).startsWith(prefix.toLowerCase(java.util.Locale.ROOT))
+          ) match
+            case Seq(peer) =>
+              val shown = closed.withView(TuiView.Peers)
+              (
+                shown.copy(
+                  filters = shown.filters - TuiView.Peers,
+                  selectedPeer = Some(peer.id),
+                  screens = List(Screen.PeerDetail(peer.id))
+                ),
+                Nil
+              )
+            case Seq() => (closed.copy(notice = Some(s"no connected peer's id starts with '$prefix'")), Nil)
+            case several =>
+              (closed.copy(notice = Some(s"${several.size} peers' ids start with '$prefix': type more of it")), Nil)
+        case Command.Act(request) => act(closed.copy(helpOpen = false), ctx, request)
+        case Command.Show(screen) =>
+          // An Observe action changes nothing and asks nothing: it runs as its screen opens.
+          (closed.copy(helpOpen = false, screens = List(screen)), observed(screen).map(Effect.Confirm(_)).toSeq)
+        case Command.Detach         => (closed, Seq(Effect.Detach))
+        case Command.Help           => (closed.openHelp, Nil)
+        case Command.Glyphs(set)    => (closed.copy(glyphs = set), Nil)
+        case Command.Graphics(to)   => (closed, Seq(Effect.SetGraphics(to)))
+        case Command.Art            => (closed.copy(helpOpen = false, screens = List(Screen.Art(0))), Nil)
+        case Command.Explore(query) => explore(closed.copy(helpOpen = false), query)
+        case Command.Usage(message) => (closed.copy(notice = Some(message)), Nil)
+        case Command.Unknown(word, nearest) =>
+          val hint = if nearest.isEmpty then "; ? lists the keys" else s"; did you mean ${nearest.mkString(", ")}?"
+          (closed.copy(notice = Some(s"no command '$word'$hint")), Nil)
+
+  // ---- a filter being typed -------------------------------------------------------------------------------------
+
+  /** The filter applies as it is typed. Enter keeps it; Esc clears it. */
+  private def filtering(s: TuiState, text: String, key: Key): (TuiState, Seq[Effect]) =
+    def to(next: String): (TuiState, Seq[Effect]) =
+      val kept = next.take(MaxLine)
+      (s.copy(overlay = Overlay.Filter(kept), filters = s.filters.updated(s.view, kept), logScroll = 0), Nil)
+    key match
+      case Key.Char(c)   => to(text + c)
+      case Key.Paste(t)  => to(text + t)
+      case Key.Backspace => if text.isEmpty then (s.copy(overlay = Overlay.None), Nil) else to(text.dropRight(1))
+      case Key.Enter     => (s.copy(overlay = Overlay.None), Nil)
+      case Key.Esc       => (s.copy(overlay = Overlay.None, filters = s.filters - s.view, logScroll = 0), Nil)
+      case _             => (s, Nil)

@@ -20,6 +20,8 @@ Scala 3.x LTS, Pekko 1.6.0). Your domain is the `pekko-stream` layer: graph cons
 materialization, backpressure, and stream-actor integration. You do not touch consensus code,
 actor migration, or networking protocols — those belong to forge/beacon, loom, and herald.
 
+Before starting a work item, claim it in the shared backlog (`.claude/agent-protocols/backlog-tracker.md`); keep its status current.
+
 ## Reference repos
 
 ```bash

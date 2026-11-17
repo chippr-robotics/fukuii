@@ -33,7 +33,7 @@ Config keys in `network.engine-api` (see `src/main/resources/conf/base/network.c
 | Key | Default | Notes |
 | :-- | :-- | :-- |
 | `network.engine-api.enabled` | `false` | Must be `true` for ETH/Sepolia |
-| `network.engine-api.interface` | `"localhost"` | Use `"0.0.0.0"` when CL is on another host/container |
+| `network.engine-api.interface` | `"localhost"` | `"0.0.0.0"` only inside a container whose 8551 stays on the compose network (not published); a CL on another host needs a private network, firewall or TLS proxy |
 | `network.engine-api.port` | `8551` | Standard authrpc port |
 | `network.engine-api.jwt-secret-path` | (none — dev mode) | MUST be set in production |
 
@@ -54,12 +54,19 @@ If `jwt-secret-path` is omitted, Fukuii generates a random in-memory secret
    ```hocon
    network.engine-api {
      enabled = true
-     interface = "localhost"      # Use "0.0.0.0" for Docker/cross-host
+     interface = "localhost"      # same host; Docker: see below
      port = 8551
      jwt-secret-path = "/path/to/jwt.hex"
    }
    ```
    Do not hand-edit `base/network.conf` — override in your operator config only.
+
+   In Docker Compose, set `interface = "0.0.0.0"` inside the container and do not
+   publish 8551; the CL dials the service name on the compose network
+   (`ops/barad-dur/sepolia/` is the worked example). For a CL on another host,
+   keep 8551 on a private network or VPN, firewalled to the CL's address, or put a
+   TLS-terminating proxy in front: the JWT authenticates calls but does not
+   encrypt them.
 
 3. **Restart Fukuii** (🔴) — the Engine API server starts at port 8551.
    Check logs for the Engine API listening message.
@@ -94,7 +101,7 @@ If `jwt-secret-path` is omitted, Fukuii generates a random in-memory secret
 
 ## Gotchas
 - **JWT must match byte-for-byte** — regenerating on one side without updating the other breaks authentication immediately.
-- **`interface = "localhost"` for same-host; `"0.0.0.0"` for Docker/cross-host** — wrong interface means the CL can't reach the EL.
+- **`interface = "localhost"` for same-host; `"0.0.0.0"` inside a container, with 8551 left unpublished** — wrong interface means the CL can't reach the EL. Never put 8551 on a public interface: a cross-host CL goes over a private network, a firewall rule or a TLS proxy.
 - **Omitting `jwt-secret-path`** is development mode only — a random in-memory secret is generated and no real CL can connect.
 - **CL must itself be synced** to drive the EL — if the CL is not at the chain tip, the EL will follow it (or not advance).
 - This skill covers the EL (Fukuii) side only. For CL setup and operation, refer to the CL client's own documentation.

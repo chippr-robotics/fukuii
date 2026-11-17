@@ -97,12 +97,17 @@ class EngineApiMissingCodeSpec extends AnyWordSpec with Matchers:
       Some(pendingTxManager)
     )(using blockchainConfig, typedScheduler)
 
+    /** The call's gas limit. 21000 leaves the contract no gas to run on, so its code changes nothing the block commits
+      * to; a test that needs the code to matter gives it more.
+      */
+    def callGas: BigInt = 21000
+
     val callTx: SignedTransaction =
       SignedTransaction.sign(
         LegacyTransaction(
           nonce = 0,
           gasPrice = GasPrice(BigInt("30000000000")),
-          gasLimit = GasAmount(21000),
+          gasLimit = GasAmount(callGas),
           receivingAddress = Some(contract),
           value = 0,
           payload = ByteString.empty
@@ -181,6 +186,8 @@ class EngineApiMissingCodeSpec extends AnyWordSpec with Matchers:
     def holesOf(kind: String): Double =
       Option(Metrics.get().registry.find("engine.state.hole").tag("kind", kind).counter()).fold(0d)(_.count())
     def restoreCode(): Unit = evmCodes.put(codeHash.value, code).commit()
+    // Bytes that are not the code under its hash; dropCode first, which evicts the execution cache's copy.
+    def corruptCode(bytes: ByteString): Unit = evmCodes.put(codeHash.value, bytes).commit()
 
     def toPayload(block: Block): ExecutionPayload =
       import com.chipprbots.ethereum.network.p2p.messages.ETHPackets.SignedTransactions.*
@@ -342,6 +349,35 @@ class EngineApiMissingCodeSpec extends AnyWordSpec with Matchers:
       fcu.toOption.map(_.payloadStatus.status) should not be Some(Invalid)
   }
 
+  // H3, review beacon: bytecode stored under the contract's code hash that is not that code (PUSH1 0 under STOP's hash)
+  // ran as it was: the call used 3 gas more than the block says, and the engine answered INVALID for a valid block.
+  // Checked against its hash on a cache miss, it is missing code: the block waits for it.
+  "engine_newPayload for a block that calls a contract whose stored bytecode is not its code" should {
+
+    "answer ACCEPTED/SYNCING, never INVALID, and VALID once the code is repaired (H3)" taggedAs (
+      UnitTest,
+      ConsensusTest
+    ) in new Setup:
+      override def callGas: BigInt = 50_000 // gas to run on, so the code that runs shows in the gas used
+      val block1: Block = buildBlock1()
+      dropCode()
+      corruptCode(ByteString(Array[Byte](0x60, 0x00)))
+
+      val status: PayloadStatusV1 = engineApi.newPayload(toPayload(block1)).unsafeRunSync()
+
+      withClue(s"status=${status.status} validationError=${status.validationError}: ") {
+        (status.status == Accepted || status.status == Syncing) shouldBe true
+      }
+      status.latestValidHash shouldBe None
+      engineApi.invalidBlocksSnapshot shouldBe empty
+
+      dropCode()
+      restoreCode()
+      val repaired: PayloadStatusV1 = engineApi.newPayload(toPayload(block1)).unsafeRunSync()
+      withClue(s"validationError=${repaired.validationError}: ")(repaired.status shouldBe Valid)
+      engineApi.invalidBlocksSnapshot shouldBe empty
+  }
+
   // spec 022 T062, beacon: the sender's account leaf in the parent state holds 0x80, which decodes to an empty value.
   // It read as "no account" before, so newPayload executed this valid block against a sender with no balance, found it
   // invalid, removed it and recorded the verdict. A stored entry that is not its node is a missing node now: the block
@@ -378,6 +414,44 @@ class EngineApiMissingCodeSpec extends AnyWordSpec with Matchers:
       }
 
       nodes.put(senderLeaf, good)
+      val repaired: PayloadStatusV1 = engineApi.newPayload(toPayload(block1)).unsafeRunSync()
+      withClue(s"validationError=${repaired.validationError}: ")(repaired.status shouldBe Valid)
+      engineApi.invalidBlocksSnapshot shouldBe empty
+
+    // H3 case (c), review beacon N3: the sender's leaf stored again with a smaller balance, a valid node under the wrong
+    // hash. It decoded and was believed: execution ran this valid block against a sender who could not pay, and the
+    // engine answered INVALID. Read keccak first, it is a missing node: the block waits for its state.
+    "answer ACCEPTED/SYNCING for a valid node under the wrong hash, and VALID once repaired (H3)" taggedAs (
+      UnitTest,
+      ConsensusTest
+    ) in new Setup:
+      val block1: Block = buildBlock1()
+      val nodes = storagesInstance.storages.nodeStorage
+      val senderLeaf: LeafNode =
+        MerklePatriciaTrie[Address, Account](genesisHeader.stateRoot.value.toArray, blockchain.getBackingMptStorage(0))(
+          using
+          Address.hashedAddressEncoder,
+          Account.accountSerializer
+        ).getProof(sender).flatMap(_.lastOption) match
+          case Some(leaf: LeafNode) => leaf
+          case other                => fail(s"no account leaf for the sender: $other")
+      val leafHash: ByteString = ByteString(senderLeaf.hash)
+      val good: Array[Byte] = nodes.get(leafHash).getOrElse(fail("the sender's leaf is not stored by its hash"))
+      val poor: Account = Account(senderLeaf.value).get.copy(balance = UInt256.Zero)
+      nodes.put(
+        leafHash,
+        com.chipprbots.ethereum.mpt.MptTraversals
+          .encodeNode(LeafNode(senderLeaf.key, ByteString(Account.accountSerializer.toBytes(poor))))
+      ): Unit
+
+      val status: PayloadStatusV1 = engineApi.newPayload(toPayload(block1)).unsafeRunSync()
+
+      withClue(s"status=${status.status} validationError=${status.validationError}: ") {
+        (status.status == Accepted || status.status == Syncing) shouldBe true
+      }
+      engineApi.invalidBlocksSnapshot shouldBe empty
+
+      nodes.put(leafHash, good): Unit
       val repaired: PayloadStatusV1 = engineApi.newPayload(toPayload(block1)).unsafeRunSync()
       withClue(s"validationError=${repaired.validationError}: ")(repaired.status shouldBe Valid)
       engineApi.invalidBlocksSnapshot shouldBe empty

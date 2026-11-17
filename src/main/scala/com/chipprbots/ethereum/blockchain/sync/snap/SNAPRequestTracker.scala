@@ -10,6 +10,7 @@ import scala.concurrent.duration.*
 
 import com.chipprbots.ethereum.blockchain.sync.PeerRateTracker
 import com.chipprbots.ethereum.network.Peer
+import com.chipprbots.ethereum.network.PeerScoringManager
 import com.chipprbots.ethereum.network.p2p.messages.SNAP.*
 import com.chipprbots.ethereum.utils.Logger
 
@@ -23,11 +24,15 @@ import com.chipprbots.ethereum.utils.Logger
   *   - Adaptive timeout via PeerRateTracker (port of geth's msgrate)
   *   - Response validation and matching
   *   - Peer management for SNAP requests
+  *   - Feeds the peer scorer, if given one (spec 027 slice 4a): a response with its round-trip time when a request is
+  *     completed with at least one item, a timeout when a request expires. Observation only: nothing in the tracker
+  *     reads a score.
   */
 class SNAPRequestTracker(
     // Monotonic: a wall-clock (NTP) step must not look like a process stall. Only differences are ever used.
     nowMs: () => Long = () => System.nanoTime() / 1_000_000L,
-    stallPolicy: SNAPRequestTracker.StallPolicy = SNAPRequestTracker.StallPolicy.Default
+    stallPolicy: SNAPRequestTracker.StallPolicy = SNAPRequestTracker.StallPolicy.Default,
+    scorer: Option[PeerScoringManager] = None
 )(implicit scheduler: Scheduler)
     extends Logger:
 
@@ -147,36 +152,43 @@ class SNAPRequestTracker(
   ): Cancellable =
     val scheduledAtMs = nowMs()
     scheduler.scheduleOnce(delay) {
-      synchronized {
-        pendingRequests.get(requestId).foreach { req =>
-          val now = nowMs()
-          val latenessMs = now - scheduledAtMs - delay.toMillis
-          // Note: after a grace the request clock restarts at the stall's end, so a reply arriving in the grace window
-          // is rated on its post-stall latency only (the peer's rate sample is not inflated by the stall).
-          if !graceGranted && stallPolicy.isStall(latenessMs) then
-            log.warn(
-              s"SNAP request ${req.requestType} timer for request ID $requestId fired ${latenessMs}ms late — " +
-                s"process stall, granting ${stallPolicy.grace.toMillis}ms grace instead of timing out peer ${req.peer.id}"
-            )
-            pendingRequests.put(
-              requestId,
-              req.copy(
-                timestamp = now,
-                timeoutTask = Some(armTimeout(requestId, stallPolicy.grace, onTimeout, ownerDecidesTimeout, true))
+      // The request this timer expired, if it did: scored after the lock is released (see `scoreTimeout`), and
+      // whatever `onTimeout` did: the request is gone from the tracker once it is expired, so the peer's timeout stands
+      // even if the owner's callback throws.
+      var expired: Option[PendingRequest] = None
+      try
+        synchronized {
+          pendingRequests.get(requestId).foreach { req =>
+            val now = nowMs()
+            val latenessMs = now - scheduledAtMs - delay.toMillis
+            // Note: after a grace the request clock restarts at the stall's end, so a reply arriving in the grace window
+            // is rated on its post-stall latency only (the peer's rate sample is not inflated by the stall).
+            if !graceGranted && stallPolicy.isStall(latenessMs) then
+              log.warn(
+                s"SNAP request ${req.requestType} timer for request ID $requestId fired ${latenessMs}ms late — " +
+                  s"process stall, granting ${stallPolicy.grace.toMillis}ms grace instead of timing out peer ${req.peer.id}"
               )
-            )
-          else if ownerDecidesTimeout then
-            // Leave the request pending: the owner's mailbox may already hold the reply (see expireRequest).
-            log.debug(
-              s"SNAP request ${req.requestType} timer for request ID $requestId fired after ${delay.toSeconds}s — " +
-                s"owner decides the timeout"
-            )
-            onTimeout
-          else
-            expire(requestId, req, delay)
-            onTimeout
+              pendingRequests.put(
+                requestId,
+                req.copy(
+                  timestamp = now,
+                  timeoutTask = Some(armTimeout(requestId, stallPolicy.grace, onTimeout, ownerDecidesTimeout, true))
+                )
+              )
+            else if ownerDecidesTimeout then
+              // Leave the request pending: the owner's mailbox may already hold the reply (see expireRequest).
+              log.debug(
+                s"SNAP request ${req.requestType} timer for request ID $requestId fired after ${delay.toSeconds}s — " +
+                  s"owner decides the timeout"
+              )
+              onTimeout
+            else
+              expire(requestId, req, delay)
+              expired = Some(req)
+              onTimeout
+          }
         }
-      }
+      finally expired.foreach(scoreTimeout)
     }
 
   /** Expire a request the owner has decided timed out: forget it, slash the peer's rate capacity and count the failure.
@@ -194,13 +206,16 @@ class SNAPRequestTracker(
     * timer only schedules `revertStorageRequest` on the sync loop, and a response that reaches `OnStorage` first is
     * still matched against `storageReqs`.
     */
-  def expireRequest(requestId: BigInt): Option[PendingRequest] = synchronized {
-    pendingRequests.get(requestId).map { req =>
-      req.timeoutTask.foreach(_.cancel())
-      expire(requestId, req, Duration.Zero)
-      req
+  def expireRequest(requestId: BigInt): Option[PendingRequest] =
+    val expired = synchronized {
+      pendingRequests.get(requestId).map { req =>
+        req.timeoutTask.foreach(_.cancel())
+        expire(requestId, req, Duration.Zero)
+        req
+      }
     }
-  }
+    expired.foreach(scoreTimeout)
+    expired
 
   private def expire(requestId: BigInt, req: PendingRequest, delay: FiniteDuration): Unit =
     val elapsed = nowMs() - req.timestamp
@@ -215,6 +230,13 @@ class SNAPRequestTracker(
     SNAPSyncMetrics.incrementRequestTimeout()
     recordFailureMetric(req.requestType)
     pendingRequests.remove(requestId)
+
+  /** Score a request that expired. `expire` is the one place a request times out, for the timer's own expiry and for
+    * the owner's [[expireRequest]] alike, and both callers score it here, after they have released the tracker's lock:
+    * the scorer's throttled export snapshots every tracked peer, which is not work to do while requests wait on it.
+    */
+  private def scoreTimeout(req: PendingRequest): Unit =
+    scorer.foreach(_.recordTimeout(req.peer.id))
 
   /** Check if a request is pending
     *
@@ -247,24 +269,34 @@ class SNAPRequestTracker(
     * @return
     *   the completed request if it was pending
     */
-  def completeRequest(requestId: BigInt, responseItems: Int = 1): Option[PendingRequest] = synchronized {
-    pendingRequests.remove(requestId).map { request =>
-      // Cancel timeout
-      request.timeoutTask.foreach(_.cancel())
-      val elapsed = nowMs() - request.timestamp
+  def completeRequest(requestId: BigInt, responseItems: Int = 1): Option[PendingRequest] =
+    val completed = synchronized {
+      pendingRequests.remove(requestId).map { request =>
+        // Cancel timeout
+        request.timeoutTask.foreach(_.cancel())
+        val elapsed = nowMs() - request.timestamp
 
-      // Record measurement in rate tracker
-      val msgType = requestTypeToMsgType(request.requestType)
-      rateTracker.update(request.peer.id.value, msgType, elapsed, responseItems)
-      recordDownloadTime(request.requestType, elapsed)
+        // Record measurement in rate tracker
+        val msgType = requestTypeToMsgType(request.requestType)
+        rateTracker.update(request.peer.id.value, msgType, elapsed, responseItems)
+        recordDownloadTime(request.requestType, elapsed)
 
-      log.debug(
-        s"SNAP request ${request.requestType} completed for request ID $requestId " +
-          s"(took ${elapsed}ms, items=$responseItems, timeout=${rateTracker.targetTimeout().toSeconds}s)"
-      )
+        log.debug(
+          s"SNAP request ${request.requestType} completed for request ID $requestId " +
+            s"(took ${elapsed}ms, items=$responseItems, timeout=${rateTracker.targetTimeout().toSeconds}s)"
+        )
+        (request, elapsed)
+      }
+    }
+    completed.map { case (request, elapsed) =>
+      // Scored after the lock is released: the scorer's throttled export snapshots every tracked peer.
+      // Only a reply that carried something is the peer answering. Requesters that abandon a request (the pivot refresh,
+      // a peer that disconnected, a coordinator that drained its tasks) complete it with 0 items to forget it, and an
+      // empty range with no proof passes 0 too; neither earns the peer a response. The sites that record a real reply
+      // pass at least 1. The size of the reply is not known here; the byte count is not part of the score.
+      if responseItems > 0 then scorer.foreach(_.recordResponse(request.peer.id, bytes = 0L, latencyMs = elapsed))
       request
     }
-  }
 
   /** Forget a pending request and cancel its timeout WITHOUT recording any rate or failure metric. For a requester that
     * is abandoning or stopping, where the peer did nothing wrong (unlike [[completeRequest]], whose zero-item form

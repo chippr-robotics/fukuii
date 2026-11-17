@@ -15,6 +15,7 @@ import com.chipprbots.ethereum.NormalPatience
 import com.chipprbots.ethereum.blockchain.sync.EphemBlockchainTestSetup
 import com.chipprbots.ethereum.consensus.Consensus.BranchExecutionFailure
 import com.chipprbots.ethereum.consensus.Consensus.ConsensusErrorDueToMissingNode
+import com.chipprbots.ethereum.consensus.Consensus.ConsensusStateFault
 import com.chipprbots.ethereum.consensus.Consensus.ExtendedCurrentBestBranch
 import com.chipprbots.ethereum.consensus.Consensus.ExtendedCurrentBestBranchPartially
 import com.chipprbots.ethereum.consensus.Consensus.KeptCurrentBestBranch
@@ -333,6 +334,77 @@ class ConsensusImplSpec extends AnyFlatSpec with Matchers with ScalaFutures with
       case ConsensusErrorDueToMissingNode(_, _, imported) => imported shouldBe Nil
       case other => fail(s"expected ConsensusErrorDueToMissingNode, got $other")
     }
+    blockchainReader.getBestBlock shouldBe Some(initialBestBlock)
+
+  // Spec 018 Track C, C4b: a fault of this node's own state ends a batch as a result of its own. The blocks before it
+  // are adopted, the rest are handed back to be tried again, and no block is reported invalid: none was judged.
+  private def stateFault = BlockExecutionError.StateFaulted(
+    new com.chipprbots.ethereum.db.storage.pathstate.StateUnavailable("the head moved under the batch")
+  )
+
+  it should "adopt the prefix and hand the rest back when a block meets a fault of this node's state, and report nothing" taggedAs (
+    UnitTest,
+    ConsensusTest
+  ) in new ConsensusSetup:
+    val branch: List[Block] = BlockHelpers.generateChain(4, initialBestBlock)
+    val fault: BlockExecutionError.StateFaulted = stateFault
+    setFailingBlockWith(branch(2), fault)
+    var reported: List[ByteString] = Nil
+    val reporter: com.chipprbots.ethereum.consensus.engine.InvalidChainReporter =
+      (blockHash: ByteString, _: ByteString) => reported ::= blockHash
+    val reporting = new ConsensusImpl(blockchainReader, blockchainWriter, blockExecution, Some(reporter), None)
+
+    whenReady(reporting.evaluateBranch(NonEmptyList.fromListUnsafe(branch)).unsafeToFuture()) {
+      case ConsensusStateFault(met, imported, toEnqueue) =>
+        (met should be).theSameInstanceAs(fault.fault)
+        imported.map(_.block) shouldBe branch.take(2)
+        toEnqueue shouldBe branch.drop(2)
+      case other => fail(s"expected ConsensusStateFault, got $other")
+    }
+    blockchainReader.getBestBlock shouldBe Some(branch(1))
+    reported shouldBe Nil
+
+  it should "adopt nothing when the FIRST block of the branch meets a fault of this node's state" taggedAs (
+    UnitTest,
+    ConsensusTest
+  ) in new ConsensusSetup:
+    val branch: List[Block] = BlockHelpers.generateChain(2, initialBestBlock)
+    setFailingBlockWith(branch.head, stateFault)
+
+    whenReady(consensus.evaluateBranch(NonEmptyList.fromListUnsafe(branch)).unsafeToFuture()) {
+      case ConsensusStateFault(_, imported, toEnqueue) =>
+        imported shouldBe Nil
+        toEnqueue shouldBe branch
+      case other => fail(s"expected ConsensusStateFault, got $other")
+    }
+    blockchainReader.getBestBlock shouldBe Some(initialBestBlock)
+
+  it should "answer a reorganisation that meets a fault of this node's state as that, and not as a branch that failed" taggedAs (
+    UnitTest,
+    ConsensusTest
+  ) in new ConsensusSetup:
+    // a branch from below the head that outweighs it
+    val branch: List[Block] = BlockHelpers.generateChain(
+      3,
+      initialChain(2),
+      b => b.copy(header = b.header.copy(difficulty = Difficulty(10000000)))
+    )
+    // at the first block of the branch: where a branch that is not adopted as it is executed is refused today
+    setFailingBlockWith(branch.head, stateFault)
+    var reported: List[ByteString] = Nil
+    val reporter: com.chipprbots.ethereum.consensus.engine.InvalidChainReporter =
+      (blockHash: ByteString, _: ByteString) => reported ::= blockHash
+    val reporting = new ConsensusImpl(blockchainReader, blockchainWriter, blockExecution, Some(reporter), None)
+
+    whenReady(reporting.evaluateBranch(NonEmptyList.fromListUnsafe(branch)).unsafeToFuture()) {
+      case ConsensusStateFault(_, imported, toEnqueue) =>
+        // nothing of the branch was executed, and all of it is handed back
+        imported shouldBe Nil
+        toEnqueue shouldBe branch
+      case other => fail(s"expected ConsensusStateFault, got $other")
+    }
+    reported shouldBe Nil
+    // the head and the index are as they were
     blockchainReader.getBestBlock shouldBe Some(initialBestBlock)
 
   // spec 022 T062: the importer tells this node's own state fault from a bad block by the text that reaches it, and

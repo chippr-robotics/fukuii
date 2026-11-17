@@ -899,6 +899,44 @@ class NetworkPeerManagerSpec extends AnyFlatSpec with Matchers:
     peer1Probe.expectNoMessage(200.millis)
     calibrationTarget.expectNoMessage(100.millis)
 
+  it should "#1654 TD-PROXY-GAP: neither recalibrate nor disconnect while the chain-weight marker stands" taggedAs (
+    UnitTest,
+    NetworkTest
+  ) in new TdProxyGapSetup:
+    expectInitialSubscriptions()
+    val holder: ActorRef = newReaderHolder()
+    expectInitialSubscriptions()
+    val calibrationTarget: TestProbe = TestProbe()
+    holder ! RegisterChainWeightCalibrationTargetCmd(
+      calibrationTarget.ref.toTyped[com.chipprbots.ethereum.blockchain.sync.SyncProtocol.CalibrateChainWeightFromPeer]
+    )
+    // A chain PoS from genesis: our head's weight (1) is under the plausibility floor at every height, so `classify`
+    // never calls it exact. The marker says every stored canonical weight is exact from genesis.
+    setBestBlock(baseBlock)
+    storagesInstance.storages.appStateStorage.markChainWeightInvariant().commit()
+
+    handshakeHighTdPeer(holder)
+
+    peer1Probe.expectNoMessage(200.millis)
+    calibrationTarget.expectNoMessage(100.millis)
+
+  it should "#1654 TD-PROXY-GAP: survive our weight of 0 (a chain PoS from genesis with terminal TD 0)" taggedAs (
+    UnitTest,
+    NetworkTest
+  ) in (new TdProxyGapSetup:
+    override val ourWeight: BigInt = BigInt(0)
+    expectInitialSubscriptions()
+    val holder: ActorRef = newReaderHolder()
+    expectInitialSubscriptions()
+    setBestBlock(baseBlock)
+
+    handshakeHighTdPeer(holder)
+
+    // The ratio used to divide by our weight: the actor threw and, unsupervised, stopped. It answers after the handshake.
+    holder ! PeerInfoRequestCmd(peer1.id, requestSender.ref)
+    requestSender.expectMsgType[PeerInfoResponse].peerInfo shouldBe defined
+  )
+
   trait TestSetupWithSnapSync extends TestSetup:
     val snapSyncController: TestProbe = TestProbe()
 

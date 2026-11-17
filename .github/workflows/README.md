@@ -7,6 +7,7 @@ This directory contains the GitHub Actions workflows for continuous integration,
 ### 📖 Documentation Workflow (`gh-pages.yml`)
 
 **Triggers:** Push to main/master/develop branches (docs changes), Pull Requests (build only), Manual dispatch
+(also from the `tracker` branch's `tracker-publish.yml` after each backlog change), hourly schedule
 
 **Purpose:** Deploys documentation from the `docs/` folder to GitHub Pages
 
@@ -14,15 +15,23 @@ This directory contains the GitHub Actions workflows for continuous integration,
 
 **Steps:**
 1. Checks out code
-2. Configures GitHub Pages
-3. Builds documentation with Jekyll
-4. Deploys to GitHub Pages (on push only, not PRs)
+2. Renders the Tracker page (`docs/development/tracker/`) from `backlog.yaml` on the `tracker` branch with
+   `scripts/backlog/backlog.py render`; the committed placeholder stays if the branch is missing or the render fails
+3. Builds documentation with MkDocs (`mkdocs build --strict`)
+4. Deploys to GitHub Pages (from main only: push, dispatch or schedule; not PRs)
 
 **Notes:**
 - Documentation is kept in the same branch as code for AI agents to consume
 - Pull requests only build documentation (for validation) but do not deploy
 - Uses the GitHub Pages deployment API for modern, artifact-based deployment
-- Jekyll configuration is in `docs/_config.yml`
+- MkDocs configuration is in `mkdocs.yml`
+
+### 📋 Backlog workflows (`backlog-tools.yml`, `backlog-link.yml`)
+
+- `backlog-tools.yml`: self-tests of `scripts/backlog/` on PRs that touch it.
+- `backlog-link.yml`: warns (never fails) when a PR body has no `Backlog: B-0xx` line (constitution Principle VIII).
+- The `tracker` branch carries its own `tracker-publish.yml`: on each push it checks `backlog.yaml` and dispatches
+  `gh-pages.yml` on main.
 
 ---
 

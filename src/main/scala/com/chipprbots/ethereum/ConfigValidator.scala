@@ -55,7 +55,74 @@ object ConfigValidator extends Logger:
 
     val errors = List.newBuilder[String]
     checkPortClash(config, errors)
+    errors ++= stateGuardErrors(config)
+    errors ++= ephemeryErrors(config)
     errors.result()
+
+  /** The bounds of `ephemery.refresh-timeout` (spec 028 SC-002): 10 s to 300 s. Fatal, like any configuration error. */
+  def ephemeryErrors(config: TypesafeConfig): List[String] =
+    if !config.hasPath("ephemery.refresh-timeout") then Nil
+    else
+      val limits = (java.time.Duration.ofSeconds(10), java.time.Duration.ofSeconds(300))
+      try
+        val timeout = config.getDuration("ephemery.refresh-timeout")
+        Option
+          .when(timeout.compareTo(limits._1) < 0 || timeout.compareTo(limits._2) > 0)(
+            s"fukuii.ephemery.refresh-timeout is $timeout; it must be between 10 seconds and 300 seconds"
+          )
+          .toList
+      catch
+        case e: com.typesafe.config.ConfigException =>
+          List(s"fukuii.ephemery.refresh-timeout is not a duration: ${e.getMessage}")
+
+  /** What `config` (a `fukuii` block) asks for that the in-development guard of the unified state layout (spec 018
+    * Track C) cannot do yet. Fatal: the node would start and not do what it was asked.
+    *
+    * A SNAP sync runs on the guard since C5a part 10: it hands its state off onto the unified layout, and SNAP is
+    * advertised. Mining runs on it since B-293: the miners read the head under its generation, and build again on the
+    * head a move leaves (`SettledHeadBuild`). What is still refused:
+    *
+    * Checkpoint sync. Its import writes the hash-keyed store and says the sync is done, with no anchor on this layout:
+    * the node would say it is synced and hold no state (until C5c).
+    *
+    * `sync.snap-sync.storage-scheme = hash`, asked for. A SNAP sync on the guard writes the position families, which
+    * the hand-off samples and commits, with the path scheme on every network (ETC's and Mordor's fallback to hash
+    * included); the hash scheme writes the hash-keyed store, which this layout never reads, so every hand-off would
+    * stop.
+    *
+    * The chain file imported at start is taken since C3c: block by block onto the head, with a block that is not built
+    * on the head refused until the overlay. So a file that ends on a side chain (the multi-chain and uncle-race vectors
+    * of ethereum/tests) ends on another head there: taking the key is not parity with the hash store on such files.
+    *
+    * Test mode is taken since C3c too, and it is not parity either. A block beside the head is queued and never
+    * reorganised to (`test_importRawBlock` of the block that makes a branch the heavier one is answered with an error);
+    * `test_rewindToBlock` goes to the head or to the genesis and no block between them; and `debug_storageRangeAt` and
+    * `debug_accountRange` answer at the head alone. Each waits for the overlay and the head move (C4a, C4b).
+    * `test_setChainParams` destroys the state the chain before it left: a node in test mode is the only one whose
+    * position store can do that.
+    */
+  def stateGuardErrors(config: TypesafeConfig): List[String] =
+    def on(key: String): Boolean = config.hasPath(key) && config.getBoolean(key)
+    def set(key: String): Boolean = config.hasPath(key) && config.getString(key).trim.nonEmpty
+    val guard = "fukuii.state.path-live = true (the in-development guard of the unified state layout) cannot run with "
+    if !on("state.path-live") then Nil
+    else
+      List(
+        Option.when(set("sync.checkpoint-sync-file") || set("sync.checkpoint-sync-url"))(
+          guard + "fukuii.sync.checkpoint-sync-file or fukuii.sync.checkpoint-sync-url: a checkpoint is imported " +
+            "into the hash-keyed store, which this layout does not read, and the node would say it is synced with no " +
+            "state (spec 018 C5c). Leave both empty; a SNAP sync (fukuii.sync.do-snap-sync = true) syncs this node."
+        ),
+        Option.when(
+          config.hasPath("sync.snap-sync.storage-scheme") &&
+            config.getString("sync.snap-sync.storage-scheme").trim.equalsIgnoreCase("hash")
+        )(
+          guard + "fukuii.sync.snap-sync.storage-scheme = hash: a SNAP sync on this layout writes the position " +
+            "families its hand-off commits, and the hash scheme writes the hash-keyed store, which this layout never " +
+            "reads, so the sync would never hand off. Remove the key: the guard syncs with the path scheme on every " +
+            "network."
+        )
+      ).flatten
 
   /** One warning for each removed fast-sync key that `config` (a `fukuii` block) still sets. */
   def removedKeyWarnings(config: TypesafeConfig): List[String] =

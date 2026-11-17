@@ -332,7 +332,7 @@ class PersonalService(
       case None          => Left(AccountLocked)
 
   private def getAccount(address: Address, head: BlockHeader): Option[Account] =
-    blockchainReader.getAccount(blockchainReader.getBestBranch, address, head.number.value)
+    blockchainReader.accountAt(head, address)
 
   private def getMessageToSign(message: ByteString) =
     val prefixed: Array[Byte] =

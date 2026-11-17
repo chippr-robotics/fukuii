@@ -40,6 +40,16 @@ trait TransactionalKeyValueStorage[K, V]:
     */
   def containsKey(key: K): Boolean = dataSource.get(namespace, keySerializer(key)).isDefined
 
+  /** [[get]] for many keys in one batched lookup, one result per key in order, without filling the block cache: for a
+    * long walk that reads each key once (`DataSource.multiGetOptimizedNoFill`). Same key bytes as [[get]].
+    */
+  def getManyNoFill(keys: Seq[K]): Seq[Option[V]] =
+    if keys.isEmpty then Seq.empty
+    else
+      dataSource
+        .multiGetOptimizedNoFill(namespace, keys.map(k => keySerializer(k).toArray))
+        .map(_.map(bytes => valueDeserializer(ArraySeq.unsafeWrapArray(bytes))))
+
   /** This function creates a batch of updates to the KeyValueStorage by deleting, updating and inserting new
     * (key-value) pairs in the current namespace. The batch should be committed atomically.
     */

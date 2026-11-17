@@ -14,8 +14,8 @@ object SyncProtocol:
   trait SyncControllerReply
 
   /** All direct subtypes are defined in this file — sealed is now valid (W17 fix). Direct subtypes: Start, GetStatus,
-    * MinedBlock, RegularSyncStuck, BlockFetcherStopped, NewCanonicalHead, FetcherStatusTick, PrintStatusTick,
-    * ProgressProtocol (all in this file).
+    * MinedBlock, RegularSyncStuck, MissingCodeNeedsBulkRecovery, PipelineComponentStopped, RestartPipeline,
+    * NewCanonicalHead, FetcherStatusTick, PrintStatusTick, ProgressProtocol (all in this file).
     */
   sealed trait RegularSyncCommand
 
@@ -49,6 +49,12 @@ object SyncProtocol:
       extends SyncProtocolMsg
       with RegularSyncCommand
 
+  /** The escalation's watch found that this node cannot follow the chain with the state it has (spec 018 C5a part 7): a
+    * fork choice or a branch was refused once more. It is told each time; the controller asks whether the state is to
+    * be given up for it, and if so clears the state and syncs it again.
+    */
+  final case class StateEscalationRequested(request: EscalationWatch.Request) extends SyncProtocolMsg
+
   /** Block import found contract code missing from `EvmCodeStorage` (`MissingCodeException`) on a node whose state came
     * from SNAP. Fetching it one hash at a time costs a full re-execution of the block per contract, and a SNAP-synced
     * node can lack thousands. The controller stops regular sync, runs the bytecode recovery scan (every non-empty
@@ -59,11 +65,15 @@ object SyncProtocol:
       extends SyncProtocolMsg
       with RegularSyncCommand
 
-  /** Delivered to RegularSync via watchWith when BlockFetcher terminates (RF-2 Option A). RegularSync re-spawns both
-    * BlockFetcher and BlockImporter: BlockImporter holds a captured fetcher ref in its constructor, so it must be
-    * replaced together with BlockFetcher to avoid a dead-letter sink.
+  /** Delivered to RegularSync via watchWith when the BlockFetcher (`component` "block-fetcher") or the BlockImporter
+    * ("block-importer") of its fetch-and-import pipeline `epoch` terminates. RegularSync stops the rest of that
+    * pipeline and starts a new one after a backoff: the importer holds the fetcher's ref and starts it, so the two are
+    * replaced together. One about a pipeline already replaced is ignored (#1705).
     */
-  case object BlockFetcherStopped extends RegularSyncCommand
+  final case class PipelineComponentStopped(epoch: Int, component: String) extends RegularSyncCommand
+
+  /** RegularSync's backoff timer: start a new pipeline in place of the stopped pipeline `epoch` (#1705). */
+  final case class RestartPipeline(epoch: Int) extends RegularSyncCommand
 
   /** Signals that the CL canonical head has advanced (PoS / post-merge chains only).
     *
@@ -88,6 +98,33 @@ object SyncProtocol:
     * class recovery: abort finalization rather than commit a broken state.
     */
   case object HealingImpossible extends SyncProtocolMsg with SyncControllerReply
+
+  /** The hand-off's sample of the rows a sync wrote stopped the hand-off on the unified state layout
+    * ([[com.chipprbots.ethereum.db.storage.PathHandoffSample.Stopped]]): the rows are not the whole of the pivot's
+    * state. SyncController restarts SNAP as for [[HealingImpossible]], and counts these: after
+    * [[HandoffSampleFailures.Bound]] since the last hand-off it stops restarting (B-304). `pivot` is the block whose
+    * state was sampled.
+    */
+  final case class HandoffSampleStopped(
+      reason: com.chipprbots.ethereum.db.storage.PathHandoffSample.StopReason,
+      counts: com.chipprbots.ethereum.db.storage.PathHandoffSample.Result,
+      pivot: BigInt
+  ) extends SyncProtocolMsg
+      with SyncControllerReply
+
+  /** On the unified state layout, a sync that left accounts out does not hand off (spec 018 C5a part 10, the user's
+    * decision 1): SyncController restarts SNAP as for [[HealingImpossible]], which heals from the durable excluded set,
+    * and counts these since the last hand-off ([[HandoffsHeldForExcluded]]). `readFailed` when the excluded set could
+    * not be read, which is taken as accounts left out.
+    */
+  final case class HandoffHeldForExcluded(pivot: BigInt, readFailed: Boolean)
+      extends SyncProtocolMsg
+      with SyncControllerReply
+
+  /** SNAP's header download followed another chain than the branch the pivot is to be on (B-307): the sync is stopped,
+    * what it wrote is cleared, and it is begun again.
+    */
+  case object PivotOffTheBranch extends SyncProtocolMsg with SyncControllerReply
 
   /** Sent by NetworkPeerManagerActor to SyncController when a TD-PROXY-GAP is detected at peer handshake.
     * SyncController uses the peer's STATUS-message TD and block number to interpolate and write the correct cumulative

@@ -334,7 +334,9 @@ fukuii enterprise -Dconfig.file=/opt/fukuii/enterprise-node.conf
    }
    ```
 
-3. **TLS/HTTPS for RPC**:
+3. **TLS/HTTPS for RPC**: generate this node's own keystore and password, for example
+   `tls/gen-cert.sh --out-dir /opt/fukuii/tls --name keystore --san DNS:fukuii-1.internal,IP:192.168.2.10`
+   (writes `keystore.p12`, `keystore.password` and `keystore.crt`), or use a CA-issued certificate:
    ```hocon
    network {
      rpc {
@@ -343,7 +345,7 @@ fukuii enterprise -Dconfig.file=/opt/fukuii/enterprise-node.conf
          certificate {
            keystore-path = "/opt/fukuii/tls/keystore.p12"
            keystore-type = "pkcs12"
-           password-file = "/opt/fukuii/tls/password"
+           password-file = "/opt/fukuii/tls/keystore.password"
          }
        }
      }

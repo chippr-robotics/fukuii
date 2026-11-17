@@ -171,6 +171,14 @@ final class PendingAnnouncements(
       })
     reassigned.view.mapValues(_.toSeq).toMap
 
+  private var unanswered: Long = 0L
+
+  /** Every request that went unanswered past the fetch timeout since this was made, whether its hash then moved to
+    * another announcer or was forgotten for want of one. Counted for the dashboard (spec 029 FR-034); nothing here
+    * reads it.
+    */
+  def unansweredRequests: Long = unanswered
+
   /** Requests unanswered for longer than the fetch timeout: each requester loses its claim on the hash (it is not asked
     * again), and the hash moves to the next alternate. A hash with no alternate left is forgotten. Returns the requests
     * to send, by peer.
@@ -186,6 +194,7 @@ final class PendingAnnouncements(
       else
         val hash = oldest.getKey
         inFlight.remove(hash)
+        unanswered += 1
         val entry = entries.get(hash)
         if entry != null then
           entry.requestedFrom.foreach { stale =>

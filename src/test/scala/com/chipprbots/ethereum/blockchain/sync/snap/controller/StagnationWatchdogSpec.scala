@@ -40,6 +40,7 @@ import com.chipprbots.ethereum.db.storage.FlatSlotStorage
 import com.chipprbots.ethereum.db.storage.MptStorage
 import com.chipprbots.ethereum.db.storage.PathNodeStorage
 import com.chipprbots.ethereum.db.storage.StateStorage
+import com.chipprbots.ethereum.domain.BlockHeader
 import com.chipprbots.ethereum.domain.BlockchainReader
 import com.chipprbots.ethereum.domain.BlockchainWriter
 import com.chipprbots.ethereum.domain.ChainWeight
@@ -132,7 +133,7 @@ private[snap] class StubStagnationWatchdogState(
   def handshakedPeers: Map[PeerId, PeerListSupportNg.PeerWithInfo] = peers
   var downloadPeers: Map[PeerId, PeerListSupportNg.PeerWithInfo] = Map.empty
   def peersToDownloadFrom: Map[PeerId, PeerListSupportNg.PeerWithInfo] = downloadPeers
-  def calibratePivotTD(pivotBlockNumber: BigInt): Option[BigInt] = notUsed("calibratePivotTD")
+  def calibratePivotTD(pivot: BlockHeader): Option[BigInt] = notUsed("calibratePivotTD")
   val criticalFailures: mutable.ArrayBuffer[String] = mutable.ArrayBuffer.empty
   var criticalFailureLimitReached: Boolean = false
   def recordCriticalFailure(reason: String): Boolean =

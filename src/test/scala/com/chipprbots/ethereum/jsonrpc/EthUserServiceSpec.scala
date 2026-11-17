@@ -34,7 +34,11 @@ class EthUserServiceSpec
 
   it should "handle getCode request" taggedAs (UnitTest, RPCTest) in new TestSetup:
     val address: Address = Address(ByteString(Hex.decode("abbb6bebfa05aa13e908eaa492bd7a8343760477")))
-    storagesInstance.storages.evmCodeStorage.put(ByteString("code hash"), ByteString("code code code")).commit()
+    // Code is stored under its own keccak hash, as every real writer stores it: since H3 a stored code entry that
+    // does not hash to its key reads as missing code.
+    val code: ByteString = ByteString("code code code")
+    val codeHash: ByteString = ByteString(crypto.kec256(code.toArray[Byte]))
+    storagesInstance.storages.evmCodeStorage.put(codeHash, code).commit()
 
     import MerklePatriciaTrie.defaultByteArraySerializable
 
@@ -42,7 +46,7 @@ class EthUserServiceSpec
       MerklePatriciaTrie[Array[Byte], Account](storagesInstance.storages.stateStorage.getBackingStorage(0))
         .put(
           crypto.kec256(address.bytes.toArray[Byte]),
-          Account(0, UInt256(0), TrieRoot(ByteString("")), CodeHash(ByteString("code hash")))
+          Account(0, UInt256(0), TrieRoot(ByteString("")), CodeHash(codeHash))
         )
 
     val newBlockHeader: BlockHeader = blockToRequest.header.copy(stateRoot = TrieRoot(ByteString(mpt.getRootHash)))
@@ -52,7 +56,7 @@ class EthUserServiceSpec
 
     val response: ServiceResponse[GetCodeResponse] = ethUserService.getCode(GetCodeRequest(address, BlockParam.Latest))
 
-    response.unsafeRunSync() shouldEqual Right(GetCodeResponse(ByteString("code code code")))
+    response.unsafeRunSync() shouldEqual Right(GetCodeResponse(code))
 
   it should "handle getBalance request" taggedAs (UnitTest, RPCTest) in new TestSetup:
     val address: Address = Address(ByteString(Hex.decode("abbb6bebfa05aa13e908eaa492bd7a8343760477")))
@@ -75,6 +79,48 @@ class EthUserServiceSpec
       ethUserService.getBalance(GetBalanceRequest(address, BlockParam.Latest))
 
     response.unsafeRunSync() shouldEqual Right(GetBalanceResponse(123))
+
+  // Spec 018 Track C, C2b. The account was read by block NUMBER, through the canonical index, so a request by hash for
+  // a side block was answered from the canonical block at that height. It is read by the header now.
+  it should "answer a request by hash for a side block from that block's state, not the canonical block's" taggedAs (
+    UnitTest,
+    RPCTest
+  ) in new TestSetup:
+    val address: Address = Address(ByteString(Hex.decode("abbb6bebfa05aa13e908eaa492bd7a8343760477")))
+
+    import MerklePatriciaTrie.defaultByteArraySerializable
+
+    def stateWithBalance(balance: Int): TrieRoot = TrieRoot(
+      ByteString(
+        MerklePatriciaTrie[Array[Byte], Account](storagesInstance.storages.stateStorage.getBackingStorage(0))
+          .put(
+            crypto.kec256(address.bytes.toArray[Byte]),
+            Account(0, UInt256(balance), TrieRoot(ByteString("")), CodeHash(ByteString("code hash")))
+          )
+          .getRootHash
+      )
+    )
+
+    val canonical: Block = blockToRequest.copy(header = blockToRequest.header.copy(stateRoot = stateWithBalance(123)))
+    val side: Block = blockToRequest.copy(
+      header = blockToRequest.header.copy(stateRoot = stateWithBalance(456), extraData = ByteString("a side block"))
+    )
+    side.number shouldBe canonical.number
+    side.hash should not be canonical.hash
+
+    // the side block first, so that the index of block numbers ends on the canonical one
+    blockchainWriter.storeBlock(side).commit()
+    blockchainWriter.storeBlock(canonical).commit()
+    blockchainWriter.saveBestKnownBlocks(canonical.hash, canonical.number.value)
+    blockchainReader.getBlockHeaderByNumber(canonical.number.value).map(_.hash) shouldBe Some(canonical.hash)
+
+    def balanceAt(block: BlockParam): Either[JsonRpcError, GetBalanceResponse] =
+      ethUserService.getBalance(GetBalanceRequest(address, block)).unsafeRunSync()
+
+    balanceAt(BlockParam.WithHash(side.hash.value)) shouldEqual Right(GetBalanceResponse(456))
+    balanceAt(BlockParam.WithHash(canonical.hash.value)) shouldEqual Right(GetBalanceResponse(123))
+    balanceAt(BlockParam.WithNumber(canonical.number.value)) shouldEqual Right(GetBalanceResponse(123))
+    balanceAt(BlockParam.Latest) shouldEqual Right(GetBalanceResponse(123))
 
   it should "handle MissingNodeException when getting balance" taggedAs (UnitTest, RPCTest) in new TestSetup:
     val address: Address = Address(ByteString(Hex.decode("abbb6bebfa05aa13e908eaa492bd7a8343760477")))

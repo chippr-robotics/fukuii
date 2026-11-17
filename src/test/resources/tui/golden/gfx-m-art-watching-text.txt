@@ -1,0 +1,40 @@
+ ◆ FUKUII  etc (61) · PoW · head 21,884,102 · 41/50 peers · up 12d 7h                                               Art 
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+ ✓ no alerts                                                                                                            
+                  │ Art   mascot · watching · 32 x 16 cells · 2 frames (0 for 15, 1 for 1) · 3 of 19 · text             
+                  │   Up Down another pose   v another mode   r read the sheets again   Esc back                        
+                  │                                                                                                     
+                  │                                                                                                     
+       ETC        │                                                                                                     
+                  │                                                                                                     
+                  │                                                                                                     
+                  │                                                                                                     
+ etc              │                                                                                                     
+ PoW · id 61      │                                                                                                     
+ main network     │                                                                                                     
+                  │        mascot watching 0                                                                            
+ [1] Overview     │                                                                                                     
+ [2] Chain        │                                                                                                     
+ [3] Peers        │                                                                                                     
+ [4] Mempool      │                                                                                                     
+ [5] RPC          │                                                                                                     
+ [6] Storage      │                                                                                                     
+ [7] System       │                                                                                                     
+ [8] Logs         │                                                                                                     
+ [9] Ops          │                                                                                                     
+                  │                                                                                                     
+ graphics text    │                                                                                                     
+                  │                                                                                                     
+                  │                                                                                                     
+                  │                                                                                                     
+                  │                                                                                                     
+                  │                                                                                                     
+                  │                                                                                                     
+                  │                                                                                                     
+                  │                                                                                                     
+                  │                                                                                                     
+                  │                                                                                                     
+                  │                                                                                                     
+                  │                                                                                                     
+                  │                                                                                                     
+ 1-9 view  Enter open  Esc back  : prompt  / filter  ? help  p pause  r redraw  d detach  q quit                        

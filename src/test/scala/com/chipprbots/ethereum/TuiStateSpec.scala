@@ -147,37 +147,140 @@ class TuiStateSpec extends AnyFlatSpec with Matchers:
     state.connectionStatus shouldBe "Initializing"
   }
 
+  // Spec 027 C-3, T039: no wall clock. Every duration is measured on the state's `now`, the time of the last snapshot.
+  private val now = java.time.Instant.parse("2026-11-07T12:00:00Z")
+  private val at = TuiState(startTime = now, now = now)
+
   it should "measure sync speed from the first observed block, not from genesis" taggedAs (UnitTest) in {
-    val start = java.time.Instant.now().minusSeconds(100)
     // A node restarted at block 15M that imported 1,000 blocks in 100 s syncs at 10 blocks/s, not 150,000.
-    val state = TuiState.initial
-      .copy(syncBaseline = Some(SyncBaseline(15_000_000L, start)))
+    val state = at
+      .copy(syncBaseline = Some(SyncBaseline(15_000_000L, now.minusSeconds(100))))
       .withBlockInfo(15_001_000L, 15_002_000L)
-    state.syncSpeedBlocksPerSec.get shouldBe 10.0 +- 0.5
-    state.estimatedSyncTimeSeconds.get shouldBe 100L +- 5L
+    state.syncSpeedBlocksPerSec shouldBe Some(10.0)
+    state.estimatedSyncTimeSeconds shouldBe Some(100L)
   }
 
-  it should "record the first non-zero block as the speed baseline" taggedAs (UnitTest) in {
-    val s0 = TuiState.initial.withBlockInfo(0, 100)
+  it should "record the first non-zero block as the speed baseline, at the state's now" taggedAs (UnitTest) in {
+    val s0 = at.withBlockInfo(0, 100)
     s0.syncBaseline shouldBe None
     val s1 = s0.withBlockInfo(10, 100)
-    s1.syncBaseline.map(_.block) shouldBe Some(10L)
-    s1.withBlockInfo(20, 100).syncBaseline.map(_.block) shouldBe Some(10L)
-    // A rewind resets the baseline rather than producing a negative speed.
-    s1.withBlockInfo(5, 100).syncBaseline.map(_.block) shouldBe Some(5L)
+    s1.syncBaseline shouldBe Some(SyncBaseline(10L, now))
+    s1.copy(now = now.plusSeconds(5)).withBlockInfo(20, 100).syncBaseline shouldBe Some(SyncBaseline(10L, now))
+  }
+
+  // C-3: the reset on a rewind that TuiState.scala:69-72 did with Instant.now() now uses the snapshot's time.
+  it should "reset the baseline at the snapshot's time when the chain moves backwards" taggedAs (UnitTest) in {
+    val s1 = at.withBlockInfo(10, 100)
+    val later = now.plusSeconds(30)
+    s1.copy(now = later).withBlockInfo(5, 100).syncBaseline shouldBe Some(SyncBaseline(5L, later))
   }
 
   it should "not estimate before the minimum observation window" taggedAs (UnitTest) in {
-    val state = TuiState.initial.withBlockInfo(10, 100).withBlockInfo(50, 100)
+    val state = at.withBlockInfo(10, 100).copy(now = now.plusSeconds(10)).withBlockInfo(50, 100)
     state.syncSpeedBlocksPerSec shouldBe None
     state.estimatedSyncTimeSeconds shouldBe None
+    val after = state.copy(now = now.plusSeconds(20))
+    after.syncSpeedBlocksPerSec shouldBe Some(2.0) // 40 blocks in 20 s
+    after.estimatedSyncTimeSeconds shouldBe Some(25L)
+  }
+
+  it should "measure uptime from its start to its now" taggedAs (UnitTest) in {
+    at.copy(now = now.plusSeconds(3_725)).uptimeSeconds shouldBe 3_725L
+    at.uptimeSeconds shouldBe 0L
+    TuiState.initial.uptimeSeconds shouldBe 0L // no snapshot, no start: nothing to measure
+  }
+
+  it should "take its now from each snapshot" taggedAs (UnitTest) in {
+    val polled = at.withStatus(TuiFixtures.snapshot(current = 10, best = 20, now = now.plusSeconds(61)))
+    polled.now shouldBe now.plusSeconds(61)
+    polled.uptimeSeconds shouldBe 61L
+    polled.syncBaseline shouldBe Some(SyncBaseline(10L, now.plusSeconds(61)))
+  }
+
+  it should "start in the emoji glyph set" taggedAs (UnitTest) in {
+    TuiState.initial.glyphs shouldBe GlyphSet.Emoji
   }
 
   it should "apply a node status snapshot" taggedAs (UnitTest) in {
-    val state = TuiState.initial.withStatus(NodeStatusSnapshot("Connected", 4, 25, 10, 20, "Syncing"))
-    (state.connectionStatus, state.peerCount, state.maxPeers) shouldBe (("Connected", 4, 25))
+    val state = TuiState.initial.withStatus(TuiFixtures.snapshot(current = 10, best = 20, peers = 4))
+    (state.connectionStatus, state.peerCount, state.maxPeers) shouldBe (("Connected", 4, 50))
     (state.currentBlock, state.bestBlock, state.syncStatus) shouldBe ((10L, 20L, "Syncing"))
     state.snapSyncState shouldBe None
+  }
+
+  it should "start the frame counter at 0 with full motion and no splash or celebration" taggedAs (UnitTest) in {
+    val s = TuiState.initial
+    (s.tick, s.motion, s.splashUntilTick, s.celebrationStartedTick, s.celebrated) shouldBe
+      ((0L, Motion.Full, None, None, false))
+    s.lastAdvanceAt shouldBe None
+  }
+
+  // ---- Spec 027 slice 4 (T088): the score history and its trend, computed here; the log tail --------------------------
+
+  private def scored(takenAt: java.time.Instant, scores: (String, Double)*): NodeStatusSnapshot =
+    TuiFixtures
+      .snapshot(current = 10, best = 10)
+      .copy(local = LocalSample(peerScores = Some(PeerScores(takenAt, scores.toMap))))
+
+  private val t0 = TuiFixtures.Now.minusSeconds(20)
+  private val t1 = TuiFixtures.Now.minusSeconds(10)
+
+  "TuiState's score trend" should "be the sign of the change from the previous published snapshot (T088)" taggedAs (
+    UnitTest
+  ) in {
+    val s = TuiState.initial
+      .withStatus(scored(t0, "a" -> 0.500, "b" -> 0.600, "c" -> 0.700))
+      .withStatus(scored(t1, "a" -> 0.520, "b" -> 0.580, "c" -> 0.7001, "d" -> 0.400))
+    s.scoreTrend("a") shouldBe Some(Trend.Up)
+    s.scoreTrend("b") shouldBe Some(Trend.Down)
+    s.scoreTrend("c") shouldBe Some(Trend.Steady) // under the 0.001 the column shows
+    s.scoreTrend("d") shouldBe None // no earlier score to compare with
+    s.peerScore("a") shouldBe Some(0.520)
+  }
+
+  it should "move on only when the scorer publishes a new snapshot, not on every poll" taggedAs (UnitTest) in {
+    val s = TuiState.initial
+      .withStatus(scored(t0, "a" -> 0.500))
+      .withStatus(scored(t1, "a" -> 0.520))
+    // The probe reads the same published snapshot every second until the next one: the trend holds.
+    val again = s.withStatus(scored(t1, "a" -> 0.520)).withStatus(scored(t1, "a" -> 0.520))
+    again.scoreTrend("a") shouldBe Some(Trend.Up)
+    again.scores.previous.map(_.takenAt) shouldBe Some(t0)
+  }
+
+  it should "give no score for a peer missing from the snapshot, never zero (Q5)" taggedAs (UnitTest) in {
+    val s = TuiState.initial.withStatus(scored(t0, "a" -> 0.5))
+    s.peerScore("z") shouldBe None
+    s.scoreTrend("z") shouldBe None
+    TuiState.initial.peerScore("a") shouldBe None
+  }
+
+  "TuiState's log tail" should "follow the newest lines, and keep a scrolled view on the same lines as new ones arrive" taggedAs (
+    UnitTest
+  ) in {
+    def lines(from: Int, to: Int) =
+      (from to to).map(i => LogLine(i.toLong, "12:00:00", "INFO", "x", s"line $i")).toVector
+    val s = TuiState.initial.withLogs(lines(0, 99))
+    s.logScroll shouldBe 0
+    val back = s.scrollLogs(30, page = 20)
+    back.logScroll shouldBe 30
+    back.withLogs(lines(5, 104)).logScroll shouldBe 35 // five newer lines: the same lines stay on screen
+    back.scrollLogs(-50, page = 20).logScroll shouldBe 0
+    back.scrollLogs(500, page = 20).logScroll shouldBe 80 // the oldest page at the top, no further
+    TuiState.initial.scrollLogs(10, page = 20).logScroll shouldBe 0 // nothing to scroll
+  }
+
+  it should "move a whole page on the first + after new lines anchored a view past the oldest page" taggedAs (
+    UnitTest
+  ) in {
+    def lines(from: Int, to: Int) =
+      (from to to).map(i => LogLine(i.toLong, "12:00:00", "INFO", "x", s"line $i")).toVector
+    // Scrolled to the oldest page (80 of 100 with a page of 20), then 15 newer lines keep the same lines on screen: the
+    // scroll passes the bound the next key works against.
+    val anchored = TuiState.initial.withLogs(lines(0, 99)).scrollLogs(80, page = 20).withLogs(lines(15, 114))
+    anchored.logScroll shouldBe 95
+    // `+` is a page newer than what is on screen, the oldest page (bound 80): 60, not 75.
+    anchored.scrollLogs(-20, page = 20).logScroll shouldBe 60
   }
 
 /** Tests for NodeSettings. */

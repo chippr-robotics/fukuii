@@ -40,10 +40,17 @@ class SNAPHealLoopSpec
   private val PathHeal =
     SNAPSyncConfig(deferredMerkleization = false, movingRootDeltaHeal = true, storageScheme = StorageScheme.Path)
 
+  private def clHeadHeader(head: BigInt) = Fixtures.Blocks.Genesis.header.copy(number = BlockNumber(head))
+
   private def clHint(f: SnapControllerFixture, snap: ActorRef[SNAPSyncController.Command], head: BigInt): Unit =
-    val header = Fixtures.Blocks.Genesis.header.copy(number = BlockNumber(head))
+    val header = clHeadHeader(head)
     snap ! SNAPSyncController.CLPivotHint(header.hash.value, Some(header))
     f.awaitProcessed(snap)
+
+  /** The post-merge pivot fetch for the header `depth` below the CL head at `head` (its ancestry is not stored here).
+    */
+  private def ancestryOf(head: BigInt, depth: BigInt): SNAPSyncController.StartPivotAncestryBootstrap =
+    SNAPSyncController.StartPivotAncestryBootstrap(clHeadHeader(head).hash.value, depth.toInt)
 
   /** Everything the parent receives within `quiet` of silence. */
   private def drainParent(
@@ -246,17 +253,19 @@ class SNAPHealLoopSpec
       val f = new SnapControllerFixture(testKit)
       startRecovery(f, isPoS = true, failed = Some(Pivot), clHead = Some(Pivot + PivotOffset))
 
-      val target = Pivot + PivotOffset - Margin
-      drainParent(f) should contain(SNAPSyncController.StartRegularSyncBootstrap(target))
+      // The target, clHead - margin, is the CL head's ancestor `margin` blocks down, walked back from its hash.
+      val parentGot = drainParent(f)
+      parentGot should contain(ancestryOf(Pivot + PivotOffset, Margin))
+      parentGot.collect { case m: SNAPSyncController.StartRegularSyncBootstrap => m } shouldBe empty
       healingSpawns(f) shouldBe empty
-      f.appStateStorage.getSnapSyncBootstrapTarget() shouldBe Some(target)
+      f.appStateStorage.getSnapSyncBootstrapTarget() shouldBe None
     }
 
   it should "heal at the normal CL target when the CL head has advanced" taggedAs UnitTest in {
     val f = new SnapControllerFixture(testKit)
     startRecovery(f, isPoS = true, failed = Some(Pivot), clHead = Some(Pivot + 200))
 
-    drainParent(f) should contain(SNAPSyncController.StartRegularSyncBootstrap(Pivot + 200 - PivotOffset))
+    drainParent(f) should contain(ancestryOf(Pivot + 200, PivotOffset))
     healingSpawns(f) shouldBe empty
   }
 
@@ -267,7 +276,10 @@ class SNAPHealLoopSpec
       startRecovery(f, isPoS = true, failed = Some(Pivot), clHead = Some(Pivot + Margin))
       log.awaitLine("no newer pivot is available yet")
     }
-    drainParent(f).collect { case m: SNAPSyncController.StartRegularSyncBootstrap => m } shouldBe empty
+    drainParent(f).collect {
+      case m: SNAPSyncController.StartRegularSyncBootstrap   => m
+      case m: SNAPSyncController.StartPivotAncestryBootstrap => m
+    } shouldBe empty
     healingSpawns(f) shouldBe empty
   }
 
@@ -283,7 +295,7 @@ class SNAPHealLoopSpec
     val clHead = Pivot + SNAPSyncConfig().maxPivotStalenessBlocks + 100
     startRecovery(f, isPoS = true, failed = None, clHead = Some(clHead))
 
-    drainParent(f) should contain(SNAPSyncController.StartRegularSyncBootstrap(clHead - PivotOffset))
+    drainParent(f) should contain(ancestryOf(clHead, PivotOffset))
     healingSpawns(f) shouldBe empty
   }
 

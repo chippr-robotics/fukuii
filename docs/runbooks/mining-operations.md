@@ -68,6 +68,13 @@ mining {
 
 ### Via RPC (Recommended)
 
+The `miner_*` methods are in the `miner` namespace, which HTTP and WebSocket do not serve by default (IPC does). Enable
+it for the endpoint you call, for example `fukuii.network.rpc.http.apis = "eth,net,web3,fukuii,miner"`, and keep that
+endpoint on `localhost`: the node logs a warning at startup when `miner` is enabled on a non-loopback HTTP or WebSocket
+endpoint. Without it these calls answer `-32601 Method not found`. The read-only queries (`eth_mining`, `eth_hashrate`,
+`eth_coinbase`) and the external-miner methods (`eth_getWork`, `eth_submitWork`, `eth_submitHashrate`) stay in `eth`
+and work with the defaults.
+
 Start mining without restarting the node using the `miner_start` RPC endpoint:
 
 ```bash

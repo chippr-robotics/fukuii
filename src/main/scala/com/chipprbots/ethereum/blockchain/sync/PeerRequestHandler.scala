@@ -26,6 +26,15 @@ object PeerRequestHandler:
 
   // ---- Shared result types ----
 
+  /** The `reason` of a [[RequestFailed]] when the peer did not answer in time. The peer's doing: PeersClient scores it.
+    */
+  val RequestTimeoutReason: String = "request timeout"
+
+  /** The `reason` of a [[RequestFailed]] when the connection closed before the answer. Not scored: the peer may have
+    * been fine, and a closed connection is the peer manager's business.
+    */
+  val ConnectionClosedReason: String = "connection closed"
+
   sealed trait Result:
     def requestId: Int
   final case class RequestFailed(requestId: Int, peer: Peer, reason: String) extends Result
@@ -126,7 +135,7 @@ object PeerRequestHandler:
               Long.box(responseTimeout.toMillis)
             )
             cleanup()
-            replyTo ! RequestFailed(requestId, peer, "request timeout")
+            replyTo ! RequestFailed(requestId, peer, RequestTimeoutReason)
             Behaviors.stopped
 
           case PeerLeftCmd(peerId) if peerId == peer.id =>
@@ -138,7 +147,7 @@ object PeerRequestHandler:
               Long.box(elapsed)
             )
             cleanup()
-            replyTo ! RequestFailed(requestId, peer, "connection closed")
+            replyTo ! RequestFailed(requestId, peer, ConnectionClosedReason)
             Behaviors.stopped
 
           case PeerLeftCmd(_) =>

@@ -28,9 +28,12 @@ import org.scalatest.matchers.should.Matchers
 import org.scalatestplus.scalacheck.ScalaCheckDrivenPropertyChecks
 
 import com.chipprbots.ethereum.Fixtures
+import com.chipprbots.ethereum.blockchain.sync.Blacklist
 import com.chipprbots.ethereum.blockchain.sync.Blacklist.BlacklistId
 import com.chipprbots.ethereum.blockchain.sync.Blacklist.BlacklistReason
 import com.chipprbots.ethereum.blockchain.sync.CacheBasedBlacklist
+import com.chipprbots.ethereum.blockchain.sync.OperatorBlockingBlacklist
+import com.chipprbots.ethereum.blockchain.sync.ScoringBlacklist
 import com.chipprbots.ethereum.domain.Block
 import com.chipprbots.ethereum.domain.BlockBody
 import com.chipprbots.ethereum.domain.BlockHeader
@@ -45,6 +48,7 @@ import com.chipprbots.ethereum.network.PeerEventBusActor.PublishCmd
 import com.chipprbots.ethereum.network.PeerEventBusActor.SubscribeCmd
 import com.chipprbots.ethereum.network.PeerEventBusActor.SubscriptionClassifier.PeerHandshaked
 import com.chipprbots.ethereum.network.PeerEventBusActor.SubscriptionClassifier.WrongNetworkPeersClassifier
+import com.chipprbots.ethereum.network.PeerManagerActor.AdminState
 import com.chipprbots.ethereum.network.PeerManagerActor.PeerAddress
 import com.chipprbots.ethereum.network.PeerManagerActor.PeerConfiguration
 import com.chipprbots.ethereum.network.PeerManagerActor.Peers
@@ -58,6 +62,7 @@ import com.chipprbots.ethereum.network.p2p.messages.ETHPackets.NewBlock
 import com.chipprbots.ethereum.network.p2p.messages.WireProtocol.Disconnect
 import com.chipprbots.ethereum.testing.Tags.*
 import com.chipprbots.ethereum.utils.Config
+import com.chipprbots.ethereum.utils.MockClock
 
 import Arbitrary.arbitrary
 
@@ -1052,6 +1057,12 @@ class PeerManagerSpec
     /** Spec 012: remembered snap peers. None unless a test mixes in [[SnapGoodSetup]]. */
     lazy val snapGoodPeersStore: Option[SnapGoodPeers] = None
 
+    /** Spec 027 slice 4a: the scorer the manager feeds. None unless a test mixes in [[ScoringSetup]]. */
+    lazy val peerScoringManager: Option[PeerScoringManager] = None
+
+    /** The blacklist the manager is given: [[blacklist]], or a decorator over it that records through a scorer. */
+    lazy val managerBlacklist: Blacklist = blacklist
+
     val peerFactory: (
         org.apache.pekko.actor.typed.scaladsl.ActorContext[PeerManagerActor.Command],
         InetSocketAddress,
@@ -1112,9 +1123,10 @@ class PeerManagerSpec
           peerStatistics.ref.toTyped[PeerStatisticsActor.Command],
           peerFactory,
           discoveryConfig,
-          blacklist,
+          managerBlacklist,
           Some(testScheduler),
-          snapGoodPeersStore
+          snapGoodPeersStore,
+          peerScoringManager
         ),
         s"pma-${java.util.UUID.randomUUID()}",
         typed.DispatcherSelector.fromConfig(org.apache.pekko.testkit.CallingThreadDispatcher.Id)
@@ -1172,6 +1184,116 @@ class PeerManagerSpec
     val dialled: TestPeer = createdPeerQueue.poll(3, java.util.concurrent.TimeUnit.SECONDS)
     dialled should not be null
     dialled.probe.expectMsgType[ConnectTo](3.seconds).uri shouldBe wrongUri
+
+  // ── Operator block (spec 029, B-277) and admin state ───────────────────────
+
+  /** A manager whose blacklist also honours the operator's block list, as the node builds it. */
+  trait OperatorBlockSetup extends TestSetup:
+    lazy val operatorRegistry: BlockedIPRegistry = new BlockedIPRegistry(Set("10.0.0.30"))
+    override lazy val managerBlacklist: Blacklist = new OperatorBlockingBlacklist(blacklist, operatorRegistry)
+
+  it should "not dial an operator-blocked address, explicitly or as a maintained peer, but dial another (B-277)" taggedAs (
+    UnitTest,
+    NetworkTest
+  ) in new OperatorBlockSetup:
+    start()
+    val blockedUri = new URI(s"enode://${"aa" * 64}@10.0.0.30:30303")
+    val maintainedBlockedUri = new URI(s"enode://${"ab" * 64}@10.0.0.30:30304")
+    val okUri = new URI(s"enode://${"bb" * 64}@10.0.0.31:30303")
+
+    peerManager ! PeerManagerActor.ConnectToPeerCmd(blockedUri, explicit = true)
+    peerManager ! PeerManagerActor.AddMaintainedPeerCmd(maintainedBlockedUri, discardReplyRef)
+    peerManager ! PeerManagerActor.ConnectToPeerCmd(okUri)
+
+    val dialled: TestPeer = createdPeerQueue.poll(3, java.util.concurrent.TimeUnit.SECONDS)
+    dialled should not be null
+    dialled.probe.expectMsgType[ConnectTo](3.seconds).uri shouldBe okUri
+    createdPeers.size shouldBe 1
+
+  it should "not dial a blocked address that the enode writes in another form (B-277)" taggedAs (
+    UnitTest,
+    NetworkTest
+  ) in new OperatorBlockSetup:
+    start()
+    // The list holds the canonical form; the enodes write the same addresses compressed and IPv4-mapped.
+    operatorRegistry.block(BlockedIPRegistry.canonical("2001:db8::1").get)
+    val compressed = new URI(s"enode://${"a1" * 64}@[2001:db8::1]:30303")
+    val mapped = new URI(s"enode://${"a2" * 64}@[::ffff:10.0.0.30]:30303")
+    val okUri = new URI(s"enode://${"bb" * 64}@10.0.0.31:30303")
+
+    peerManager ! PeerManagerActor.ConnectToPeerCmd(compressed, explicit = true)
+    peerManager ! PeerManagerActor.ConnectToPeerCmd(mapped, explicit = true)
+    peerManager ! PeerManagerActor.ConnectToPeerCmd(okUri)
+
+    val dialled: TestPeer = createdPeerQueue.poll(3, java.util.concurrent.TimeUnit.SECONDS)
+    dialled should not be null
+    dialled.probe.expectMsgType[ConnectTo](3.seconds).uri shouldBe okUri
+    createdPeers.size shouldBe 1
+
+  it should "dial a maintained peer again once its address is unblocked (B-277)" taggedAs (
+    UnitTest,
+    NetworkTest
+  ) in new OperatorBlockSetup:
+    start()
+    val maintained = new URI(s"enode://${"ab" * 64}@10.0.0.30:30304")
+    val okUri = new URI(s"enode://${"bb" * 64}@10.0.0.31:30303")
+
+    // Refused while the address is blocked: the dial that follows is the first one made.
+    peerManager ! PeerManagerActor.AddMaintainedPeerCmd(maintained, discardReplyRef)
+    peerManager ! PeerManagerActor.ConnectToPeerCmd(okUri)
+    val first: TestPeer = createdPeerQueue.poll(3, java.util.concurrent.TimeUnit.SECONDS)
+    first should not be null
+    first.probe.expectMsgType[ConnectTo](3.seconds).uri shouldBe okUri
+
+    operatorRegistry.unblock("10.0.0.30") shouldBe true
+    peerManager ! PeerManagerActor.RedialMaintainedAtCmd("10.0.0.30")
+    val second: TestPeer = createdPeerQueue.poll(3, java.util.concurrent.TimeUnit.SECONDS)
+    second should not be null
+    second.probe.expectMsgType[ConnectTo](3.seconds).uri shouldBe maintained
+
+  it should "still dial an address that is only auto-blacklisted, on an explicit request (B-277)" taggedAs (
+    UnitTest,
+    NetworkTest
+  ) in new OperatorBlockSetup:
+    start()
+    blacklist.add(PeerAddress("10.0.0.32"), 10.minutes, BlacklistReason.TcpSubsystemError)
+    val uri = new URI(s"enode://${"cc" * 64}@10.0.0.32:30303")
+
+    peerManager ! PeerManagerActor.ConnectToPeerCmd(uri, explicit = true)
+
+    val dialled: TestPeer = createdPeerQueue.poll(3, java.util.concurrent.TimeUnit.SECONDS)
+    dialled should not be null
+    dialled.probe.expectMsgType[ConnectTo](3.seconds).uri shouldBe uri
+
+  it should "reply to GetAdminStateCmd with the override, the limit in force, and the trusted and maintained ids" taggedAs (
+    UnitTest,
+    NetworkTest
+  ) in new TestSetup:
+    start()
+    val state: org.apache.pekko.actor.testkit.typed.scaladsl.TestProbe[AdminState] =
+      testKit.createTestProbe[PeerManagerActor.AdminState]()
+    peerManager ! PeerManagerActor.GetAdminStateCmd(state.ref)
+    val before: PeerManagerActor.AdminState = state.receiveMessage()
+    before.maxOutgoingOverride shouldBe None
+    before.effectiveMaxOutgoing shouldBe peerConfiguration.maxOutgoingPeers
+    before.trustedNodeIds shouldBe empty
+    before.maintainedNodeIds shouldBe empty
+
+    peerManager ! PeerManagerActor.SetMaxPeersCmd(7, testKit.createTestProbe[SetMaxPeersResponse]().ref)
+    peerManager ! PeerManagerActor.AddTrustedPeerCmd(
+      new URI(s"enode://${"AA" * 64}@10.0.0.40:30303"),
+      testKit.createTestProbe[PeerManagerActor.AddTrustedPeerResponse]().ref
+    )
+    peerManager ! PeerManagerActor.AddMaintainedPeerCmd(
+      new URI(s"enode://${"bb" * 64}@10.0.0.41:30303"),
+      discardReplyRef
+    )
+    peerManager ! PeerManagerActor.GetAdminStateCmd(state.ref)
+    val after: PeerManagerActor.AdminState = state.receiveMessage()
+    after.maxOutgoingOverride shouldBe Some(7)
+    after.effectiveMaxOutgoing shouldBe 7
+    after.trustedNodeIds shouldBe Set("aa" * 64)
+    after.maintainedNodeIds shouldBe Set("bb" * 64)
 
   // ── Genesis-head crawler eviction (spec 011) ───────────────────────────────
 
@@ -1363,6 +1485,113 @@ class PeerManagerSpec
     val requestSender: TestProbe = TestProbe()
     peerManager ! PeerManagerActor.GetPeersCmd(requestSender.ref)
     requestSender.expectMsgClass(classOf[Peers]).peers.keys.flatMap(_.nodeId) should not contain goneNodeId
+
+  // ── Peer scoring (spec 027 slice 4a) ───────────────────────────────────────
+
+  /** A manager that feeds a scorer on a fixed clock, with a recording exporter; its blacklist records through it. */
+  trait ScoringSetup extends TestSetup:
+    lazy val scoringClock: MockClock = new MockClock(1_800_000_000_000L)
+    lazy val publishedSnapshots: java.util.concurrent.CopyOnWriteArrayList[PeerScoreSnapshot] =
+      new java.util.concurrent.CopyOnWriteArrayList[PeerScoreSnapshot]()
+    private def recordSnapshot(snapshot: PeerScoreSnapshot): Unit =
+      publishedSnapshots.add(snapshot); ()
+    lazy val scorer: PeerScoringManager = new PeerScoringManager(scoringClock, 64, recordSnapshot)
+    override lazy val peerScoringManager: Option[PeerScoringManager] = Some(scorer)
+    override lazy val managerBlacklist: Blacklist = new ScoringBlacklist(blacklist, scorer)
+
+  it should "record a successful handshake under the node id in hex" taggedAs (
+    UnitTest,
+    NetworkTest
+  ) in new ScoringSetup:
+    start()
+    handleInitialNodesDiscovery()
+    val TestPeer(outbound, outboundProbe) = createdPeers.head
+    val ConnectTo(uri) = outboundProbe.expectMsgClass(classOf[PeerActor.ConnectTo])
+    val hex: String = uri.getUserInfo
+    val nodeId: ByteString = ByteString(Hex.decode(hex))
+    scorer.getAllScores shouldBe empty
+
+    peerManager ! PeerManagerActor.PeerEventReceived(
+      PeerEvent.PeerHandshakeSuccessful(outbound.copy(id = PeerId(hex), nodeId = Some(nodeId)), initialPeerInfo)
+    )
+
+    eventually {
+      scorer.getAllScores.keySet shouldBe Set(PeerId(hex))
+      scorer.getScore(PeerId(hex)).successfulHandshakes shouldBe 1
+    }
+
+  it should "record the handshake of a peer whose actor has already terminated: it did handshake" taggedAs (
+    UnitTest,
+    NetworkTest
+  ) in new ScoringSetup:
+    start()
+    handleInitialNodesDiscovery()
+    val TestPeer(gone, goneProbe) = createdPeers.head
+    val ConnectTo(goneUri) = goneProbe.expectMsgClass(classOf[PeerActor.ConnectTo])
+    val goneHex: String = goneUri.getUserInfo
+    val watcher: TestProbe = TestProbe()
+    watcher.watch(goneProbe.ref)
+    goneProbe.ref ! PoisonPill
+    watcher.expectTerminated(goneProbe.ref)
+    peerEventBus.fishForMessage(3.seconds, "waiting for the pending peer's PeerDisconnected") {
+      case PublishCmd(PeerDisconnected(id)) => id == PeerId(goneProbe.ref.path.name)
+      case _                                => false
+    }
+
+    peerManager ! PeerManagerActor.PeerEventReceived(
+      PeerEvent.PeerHandshakeSuccessful(
+        gone.copy(id = PeerId(goneHex), nodeId = Some(ByteString(Hex.decode(goneHex)))),
+        initialPeerInfo
+      )
+    )
+
+    eventually(scorer.getScore(PeerId(goneHex)).successfulHandshakes shouldBe 1)
+
+  it should "publish the score snapshot on the 10 s status refresh" taggedAs (
+    UnitTest,
+    NetworkTest
+  ) in new ScoringSetup:
+    start()
+    handleInitialNodesDiscovery()
+    val TestPeer(outbound, outboundProbe) = createdPeers.head
+    val ConnectTo(uri) = outboundProbe.expectMsgClass(classOf[PeerActor.ConnectTo])
+    val hex: String = uri.getUserInfo
+    peerManager ! PeerManagerActor.PeerEventReceived(
+      PeerEvent.PeerHandshakeSuccessful(
+        outbound.copy(id = PeerId(hex), nodeId = Some(ByteString(Hex.decode(hex)))),
+        initialPeerInfo
+      )
+    )
+    // the handshake is the scorer's first update, so it published once, throttled to once a second of its clock
+    eventually(publishedSnapshots.size shouldBe 1)
+
+    testScheduler.timePasses(
+      10.seconds
+    ) // the manager's own tick, with no event and no time passing on the scorer's clock
+
+    eventually {
+      publishedSnapshots.size shouldBe 2
+      publishedSnapshots.get(1).scores.keySet shouldBe Set(PeerId(hex))
+    }
+
+  it should "record nothing when it blacklists a peer by address" taggedAs (UnitTest, NetworkTest) in new ScoringSetup:
+    start()
+    handleInitialNodesDiscovery()
+    createdPeers(1).probe.expectMsgClass(classOf[PeerActor.ConnectTo])
+    peerManager ! PeerManagerActor.HandlePeerConnectionCmd(incomingConnection1.ref, incomingPeerAddress1)
+    val peer: Peer = Peer(
+      PeerId("peer"),
+      incomingPeerAddress1,
+      createdPeers(2).probe.ref.toTyped[PeerActor.Command],
+      incomingConnection = true
+    )
+
+    peerManager ! PeerManagerActor.PeerClosedConnectionCmd(peer.remoteAddress.getHostString, Disconnect.Reasons.Other)
+
+    eventually {
+      blacklist.isBlacklisted(PeerAddress(peer.remoteAddress.getHostString)) shouldBe true
+    }
+    scorer.getAllScores shouldBe empty
 
   // ── Remembered good snap peers (spec 012) ──────────────────────────────────
 

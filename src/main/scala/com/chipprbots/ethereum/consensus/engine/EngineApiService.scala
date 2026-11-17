@@ -16,6 +16,7 @@ import com.chipprbots.ethereum.domain.*
 import com.chipprbots.ethereum.domain.BlockHeader.HeaderExtraFields.*
 import com.chipprbots.ethereum.domain.Withdrawal.*
 import com.chipprbots.ethereum.ledger.BlockExecution
+import com.chipprbots.ethereum.ledger.ChainInsertLock
 import com.chipprbots.ethereum.mpt.ByteArraySerializable
 import com.chipprbots.ethereum.network.p2p.messages.ETHPackets.SignedTransactions.*
 import com.chipprbots.ethereum.rlp.encode as rlpEncode
@@ -48,9 +49,29 @@ class EngineApiService(
       com.chipprbots.ethereum.consensus.ReorgStateHandler.NoOp,
     // Marked synced by every forkchoiceUpdated that sets the head, as go-ethereum calls SetSynced() there; that is what
     // lets the pool take transactions from peers. None for specs; the node passes its gate.
-    txGossipGate: Option[com.chipprbots.ethereum.transactions.TxGossipGate] = None
+    txGossipGate: Option[com.chipprbots.ethereum.transactions.TxGossipGate] = None,
+    // The unified state layout before its overlay (spec 018 C3b): the hash of the block whose state the disk holds,
+    // which is the only block the head can be. `None` on the hash store, and for specs; the node passes its path
+    // state storage's anchor.
+    stateHeldInPlace: Option[() => Option[ByteString]] = None,
+    // The recovery of a state that is no longer held (spec 018 C4d part 3): the stored blocks of a head whose state was
+    // lost (a restart, a layer that did not fit) are executed again on a thread of its own, while the consensus client
+    // is answered ACCEPTED or SYNCING. Only on the unified layout; `None` on the hash store and for specs.
+    stateRecovery: Option[com.chipprbots.ethereum.ledger.StateRecovery] = None,
+    // What is made of each recovery a fork choice asked for (spec 018 C5a part 6): when the node cannot follow the
+    // head it is named, it says that its state is to be given up for a sync from scratch. It says only, for now.
+    escalationWatch: Option[com.chipprbots.ethereum.blockchain.sync.EscalationWatch] = None
 )(implicit blockchainConfig: BlockchainConfig, typedScheduler: org.apache.pekko.actor.typed.Scheduler)
     extends Logger:
+
+  // The gate for a head on the unified layout and the layout itself are wired apart: they must agree, or an executed
+  // payload would be indexed by number on that layout, and the fork choice's head left ungated (beacon, C4d part 2a).
+  // (a spec's stand-in service, which overrides what it answers, may be built with no writer at all)
+  require(
+    Option(blockchainWriter).forall(writer => stateHeldInPlace.isDefined == writer.holdsStateInPlace),
+    "the Engine API is told the block whose state is held exactly when the state is held in place"
+  )
+  require(stateRecovery.isEmpty || stateHeldInPlace.isDefined, "a state is recovered only on the unified layout")
 
   import org.apache.pekko.util.Timeout
   import scala.concurrent.duration.*
@@ -215,7 +236,7 @@ class EngineApiService(
   // chain through an optimistically-accepted descendant.
   private val acceptedChildrenByParent =
     new java.util.concurrent.ConcurrentHashMap[ByteString, java.util.Set[ByteString]]()
-  private val zeroHash = ByteString(new Array[Byte](32))
+  private val zeroHash = ForkChoiceManager.ZeroHash
 
   /** Mark `hash` as INVALID and recursively invalidate every optimistically-accepted descendant. All descendants
     * inherit the same `latestValidHash`.
@@ -283,15 +304,156 @@ class EngineApiService(
     * seeded by some path that skipped weights (and this method, applied from the next block on, cannot repair history);
     * a fabricated weight would be a worse answer than an absent one on a chain where the number still means something.
     */
-  private def storeChainWeightFor(block: Block, parentHeader: Option[BlockHeader]): Unit =
-    parentHeader.flatMap(p => blockchainReader.getChainWeightByHash(p.hash)) match
-      case Some(parentWeight) =>
-        blockchainWriter.storeChainWeight(block.header.hash, parentWeight.increase(block.header)).commit()
-      case None =>
-        log.debug(
-          "[ENGINE-API] no stored ChainWeight for the parent of block {} — not writing one for the child either",
-          block.number
+  /** What is kept of a block that was executed, besides the block and its state: its receipts, its EIP-7928 access list
+    * and its chain weight. For a payload `newPayload` executed, and for a block a recovery executed again.
+    */
+  private def keepExecuted(
+      block: Block,
+      parentHeader: Option[BlockHeader],
+      receipts: Seq[Receipt],
+      blockAccessList: Option[BlockAccessList]
+  ): Unit =
+    blockchainWriter.storeReceipts(block.header.hash, receipts).commit()
+    // EIP-7928: execution produced this list and validated the header against it (the CL's bytes hash to the same
+    // commitment), so it is the list to keep and to serve.
+    blockAccessList.foreach(bal => blockchainWriter.storeBlockAccessList(block.header.hash, bal).commit())
+    storeChainWeightFor(block, parentHeader)
+
+  /** What a recovery does with the blocks it executes: what `newPayload` does with an executed payload, and with one
+    * that fails a rule of consensus (spec 018 C4d part 3). The block is stored by its hash already.
+    */
+  private val recoverySink: com.chipprbots.ethereum.ledger.StateRecovery.Sink =
+    new com.chipprbots.ethereum.ledger.StateRecovery.Sink:
+      def executed(block: Block, receipts: Seq[Receipt], accessList: Option[BlockAccessList]): Unit =
+        keepExecuted(
+          block,
+          blockchainReader.getBlockHeaderByHash(BlockHash(block.header.parentHash.value)),
+          receipts,
+          accessList
         )
+
+      // an adoption goes on while the consensus client names its head, and a branch that fails takes the head back to
+      // the last one followed (C4d part 4)
+      override def requestedHead: Option[ByteString] = forkChoiceManager.getRequestedHeadBlockHash
+      override def followedHead: Option[ByteString] = forkChoiceManager.getHeadBlockHash
+
+      def rejected(
+          block: Block,
+          error: com.chipprbots.ethereum.ledger.BlockExecutionError,
+          above: List[Block]
+      ): Unit =
+        log.warn("[ENGINE-API] block #{} executed again: INVALID reason={}", block.number, error.describe)
+        // its parent's state was held or executed: the latest valid block, of it and of every block that stands on it.
+        // Those of the head's chain are marked here: after a restart no payload of theirs is remembered (beacon)
+        val latestValid = block.header.parentHash.value
+        (block :: above).foreach { invalid =>
+          markInvalidRecursive(invalid.header.hash.value, latestValid)
+          blockchainWriter.removeBlockByHash(invalid.header.hash).commit()
+        }
+
+      // the rest of a catch-up's chain above a block that was rejected: marked and removed as those are (C5a part 8)
+      override def rejectedAbove(
+          latestValid: ByteString,
+          above: List[com.chipprbots.ethereum.domain.BlockHeader]
+      ): Unit =
+        above.foreach { invalid =>
+          markInvalidRecursive(invalid.hash.value, latestValid)
+          blockchainWriter.removeBlockByHash(invalid.hash).commit()
+        }
+
+  /** Has the state of the head `hash` names recovered, when this node recovers states: the stored blocks of its chain
+    * above the highest one whose state is held are executed again, apart (spec 018 C4d part 3). Asked by a fork choice
+    * that names the head, a branch longer than the forward layers may hold is committed in place, the head moved with
+    * it (C4d part 4); asked for a payload, never.
+    */
+  private def recoverStateOf(
+      hash: ByteString,
+      why: String,
+      authority: com.chipprbots.ethereum.ledger.StateRecovery.Authority =
+        com.chipprbots.ethereum.ledger.StateRecovery.Authority.Payload
+  ): Unit =
+    // With no state held, a sync from scratch runs (spec 018 C5a part 10, beacon C5): there is nothing to recover from,
+    // and a walk from no anchor would end as a fault, or as a chain that cannot be reached, and be counted.
+    if stateHeldInPlace.forall(_().isDefined) then
+      stateRecovery.foreach { recovery =>
+        val ticket = recovery.requestFor(hash, recoverySink, why, authority)
+        // Only what a fork choice asked for is counted: the consensus client names a head with it, and a payload's
+        // recovery never moves the head. A recovery that is cooling down ends at once, with what it ended with last:
+        // each fork choice that names the head again counts once. Fork choices that find a recovery under way share its
+        // ticket, and count once for all of them: while it runs the node is at work on the head, not refusing it.
+        if authority == com.chipprbots.ethereum.ledger.StateRecovery.Authority.ForkChoice then
+          escalationWatch.foreach { watch =>
+            if watchedRecoveries.add(ticket) then
+              val askedIn = watch.currentRun
+              ticket.outcome.whenComplete { (outcome, failure) =>
+                watchedRecoveries.remove(ticket)
+                try
+                  if failure == null then watch.ended(outcome, hexOf(hash), askedIn, Some(hash))
+                  else log.error("[STATE-ESCALATION] a recovery ended with no outcome", failure)
+                catch
+                  case scala.util.control.NonFatal(e) =>
+                    log.error("[STATE-ESCALATION] the end of a recovery could not be counted", e)
+              }
+          }
+      }
+
+  /** The consensus layer's branch handed over by the p2p import path (spec 018 C5a, B-297): a branch longer than the
+    * executed blocks kept beside the disk, or one that forks below what a view reaches, whose blocks are stored. Its
+    * tip is asked for as a fork choice asks for a head, through the same sink, and so is committed in place while the
+    * consensus client names it or a block its chain leads to. Not counted by the escalation's watch, which counts what
+    * the consensus client's fork choices come to: the next fork choice shares this recovery's ticket, and is counted
+    * once for it (beacon).
+    *
+    * @return
+    *   false when this node recovers no state (the hash layout)
+    */
+  def handOffBranch(tip: ByteString, why: String): Boolean =
+    stateRecovery.exists { recovery =>
+      recovery.requestFor(tip, recoverySink, why, com.chipprbots.ethereum.ledger.StateRecovery.Authority.ForkChoice)
+      true
+    }
+
+  // the recoveries whose end the escalation's watch is told of: each once
+  private val watchedRecoveries =
+    java.util.concurrent.ConcurrentHashMap.newKeySet[com.chipprbots.ethereum.ledger.StateRecovery.Ticket]()
+
+  /** Whether `head`'s chain, followed down by its stored headers, leaves out the finalized block this node was told of
+    * last (spec 018 C4d part 4b). A chain whose headers run out above that height, or that is not followed that far,
+    * says nothing: no.
+    */
+  private def reversesTheFinalized(head: Option[BlockHeader]): Boolean =
+    (head, blockchainWriter.finalizedOfTheState) match
+      case (Some(top), Some(finalized)) =>
+        @scala.annotation.tailrec
+        def down(at: BlockHeader, left: Int): Boolean =
+          if at.number.value < finalized.number then
+            // below the finalized block the index is its ancestry: another block named there is a reversal, and an
+            // empty place says nothing (a consensus client resyncing from an older checkpoint; beacon)
+            blockchainReader.getBlockHeaderByNumber(at.number.value).exists(_.hash != at.hash)
+          else if at.number.value == finalized.number then at.hash.value != finalized.hash
+          // a block of the index at or above the finalized height: the chain from here down is the head's, which holds it
+          else if blockchainReader.getCanonicalHashByNumber(at.number.value).contains(at.hash) then false
+          else if left == 0 then false
+          else
+            blockchainReader.getBlockHeaderByHash(BlockHash(at.parentHash.value)) match
+              case Some(parent) => down(parent, left - 1)
+              case None         => false
+        down(top, EngineApiService.FinalizedSearch)
+      case _ => false
+
+  private def storeChainWeightFor(block: Block, parentHeader: Option[BlockHeader]): Unit =
+    // #1654: the parent's weight is read and the child's written under the chain insert lock (shared), so the
+    // chain-weight repair's final step, which holds it exclusively, never sets its marker between the two.
+    ChainInsertLock.shared {
+      parentHeader.flatMap(p => blockchainReader.getChainWeightByHash(p.hash)) match
+        case Some(parentWeight) =>
+          blockchainWriter.storeChainWeight(block.header.hash, parentWeight.increase(block.header)).commit()
+        case None =>
+          log.debug(
+            "[ENGINE-API] no stored ChainWeight for the parent of block {} — not writing one for the child either",
+            block.number
+          )
+    }
 
   /** The one-way entry point the p2p import path uses to put a block into `invalidBlocks`.
     *
@@ -616,11 +778,23 @@ class EngineApiService(
                     blockchainConfig.isPragueTimestamp(block.header.unixTimestamp) &&
                       suppliedRequests != derivedRequests
                   if requestsMismatch then
-                    // The block executed and its state is committed (applied); it will never be canonical.
-                    reorgState.abandonBlockStates(Seq((block.header.number.value, block.header.hash.value)))
                     val lvh = parentHeader.map(_.hash.value).getOrElse(zeroHash)
-                    blockchainWriter.removeBlockByHash(BlockHash(payload.blockHash)).commit()
-                    markInvalidRecursive(payload.blockHash, lvh)
+                    if stateHeldInPlace.isDefined then
+                      // The unified layout kept its state as a forward layer: the block is marked invalid first, so a
+                      // fork choice that comes in between finds it so, and then its layer, with what stands on it, and
+                      // the recorded execution go (spec 018 C4d part 2a; beacon).
+                      markInvalidRecursive(payload.blockHash, lvh)
+                      // under the block's own gate, as the record it forgets is made under it
+                      com.chipprbots.ethereum.ledger.BlockImportGate.withBlock(block.header.hash.value) {
+                        blockchainWriter.dropForwardLayer(block.header.hash.value)
+                        com.chipprbots.ethereum.ledger.BlockImportGate.forget(block.header.hash.value)
+                      }
+                      blockchainWriter.removeBlockByHash(BlockHash(payload.blockHash)).commit()
+                    else
+                      // The block executed and its state is committed (applied); it will never be canonical.
+                      reorgState.abandonBlockStates(Seq((block.header.number.value, block.header.hash.value)))
+                      blockchainWriter.removeBlockByHash(BlockHash(payload.blockHash)).commit()
+                      markInvalidRecursive(payload.blockHash, lvh)
                     executionErrorReason.set(
                       Some(
                         s"INVALID_REQUESTS: executionRequests mismatch " +
@@ -647,7 +821,12 @@ class EngineApiService(
                     } && blockchainReader
                       .getBlockHeaderByNumber(block.header.number.value)
                       .forall(_.hash == block.header.hash)
-                    if extendsCanonical then blockchainWriter.storeBlock(block).commit()
+                    // On the unified layout an executed payload is stored by its hash only, whatever its parent: the index
+                    // of blocks by number is the ancestry of the block whose state is held, and moves with the state,
+                    // in a fork choice's move of the head (spec 018 C4d part 2a; beacon). Its state is a forward layer,
+                    // not a reference count to take back out.
+                    if stateHeldInPlace.isDefined then blockchainWriter.storeBlockByHashOnly(block).commit()
+                    else if extendsCanonical then blockchainWriter.storeBlock(block).commit()
                     else
                       blockchainWriter.storeBlockByHashOnly(block).commit()
                       // A side payload is executed but not canonical: take its reference-count changes back out NOW,
@@ -655,13 +834,7 @@ class EngineApiService(
                       // replaced is live there), so left applied it pushes them to zero references and the prune
                       // deletes them. A forkchoiceUpdated that adopts it puts the changes back (ForkChoiceManager).
                       reorgState.abandonBlockStates(Seq((block.header.number.value, block.header.hash.value)))
-                    blockchainWriter.storeReceipts(block.header.hash, receipts).commit()
-                    // EIP-7928: execution produced this list and validated the header against it (the CL's bytes
-                    // hash to the same commitment), so it is the list to keep and to serve.
-                    blockAccessList.foreach(bal =>
-                      blockchainWriter.storeBlockAccessList(block.header.hash, bal).commit()
-                    )
-                    storeChainWeightFor(block, parentHeader)
+                    keepExecuted(block, parentHeader, receipts, blockAccessList)
                     // NB: do NOT remove txs from the pool here. A newPayload'd block is stored
                     // but not yet canonical (no FCU has advanced bestBlock); the same txs must
                     // remain available for an alternative sibling payload on the same parent
@@ -671,7 +844,8 @@ class EngineApiService(
                       "[ENGINE-API] newPayload #{}: EXECUTED OK (txs={} sidechain={} requests={} headerStateRoot={}...)",
                       payload.blockNumber,
                       block.body.numberOfTxs,
-                      !extendsCanonical,
+                      // on the unified layout every executed payload is a forward layer until a fork choice moves to it
+                      if stateHeldInPlace.isDefined then "layer" else (!extendsCanonical).toString,
                       derivedRequests.size,
                       block.header.stateRoot.value.take(8).map("%02x".format(_)).mkString
                     )
@@ -682,7 +856,8 @@ class EngineApiService(
                         com.chipprbots.ethereum.ledger.BlockExecutionError.MissingParentError =>
                       // Missing state, or a parent this node has not: it cannot be judged, so the block is stored by hash
                       // and answered ACCEPTED below. For missing state, regular sync's importer fetches it and runs the block
-                      // when it reaches it (#1694).
+                      // when it reaches it (#1694); on the unified layout it fetches missing code only, and a node missing
+                      // from the held state is a fault of this node (spec 018 C5a part 10, beacon).
                       error match
                         case com.chipprbots.ethereum.ledger.BlockExecutionError.MPTError(hole) =>
                           stateHoles.report(payload.blockNumber, hole, parentHeader.map(_.stateRoot.value))
@@ -702,6 +877,11 @@ class EngineApiService(
                 // Missing state nodes: as above.
                 stateHoles.report(payload.blockNumber, hole, parentHeader.map(_.stateRoot.value))
                 log.warn("[ENGINE-API] newPayload #{}: MPT error, not executed", payload.blockNumber)
+                None
+              case unavailable: com.chipprbots.ethereum.db.storage.pathstate.StateFault =>
+                // A condition of this node's own state, said as that: the payload is kept and answered ACCEPTED
+                // below, never INVALID (spec 018 data-model 6.3.2).
+                log.info("[ENGINE-API] newPayload #{}: not executed: {}", payload.blockNumber, unavailable.getMessage)
                 None
               case e: Exception =>
                 log.warn("[ENGINE-API] newPayload #{}: error={}, not executed", payload.blockNumber, e.getMessage)
@@ -739,6 +919,9 @@ class EngineApiService(
               )
               .add(payload.blockHash)
             log.info("[ENGINE-API] newPayload #{}: ACCEPTED (not executed)", payload.blockNumber)
+            // on the unified layout a parent that is stored and whose state is not held has it again by the execution
+            // of its chain: then this payload's (C4d part 3). The payload is stored first, as the recovery reads it.
+            if parentKnown then recoverStateOf(payload.blockHash, s"newPayload #${payload.blockNumber}")
             EngineApiMetrics.recordNewPayload("ACCEPTED", payload.blockNumber.toLong, payload.timestamp)
             PayloadStatusV1(Accepted)
       // end headerInvalid else
@@ -781,7 +964,7 @@ class EngineApiService(
   ): IO[Either[String, ForkchoiceUpdatedResponse]] = IO.defer {
     // Check invalid/unvalidated blocks BEFORE applying fork choice state
     // (applyForkChoiceState calls promoteToCanonicalHead, which would make the block canonical)
-    val zeroHash = ByteString(new Array[Byte](32))
+    val zeroHash = ForkChoiceManager.ZeroHash
 
     if invalidBlocks.containsKey(forkChoiceState.headBlockHash) then
       val latestValid = Option(invalidBlocks.get(forkChoiceState.headBlockHash))
@@ -843,6 +1026,20 @@ class EngineApiService(
         forkChoiceManager.notifyBeaconHead(forkChoiceState)
         EngineApiMetrics.recordForkchoiceUpdated("SYNCING")
         IO.pure(Right(ForkchoiceUpdatedResponse(payloadStatus = PayloadStatusV1(Syncing))))
+      else if headOptimistic && stateHeldInPlace.isDefined && reversesTheFinalized(headHeader) then
+        // On the unified layout a head never executed has its branch adopted in place, which is refused, with nothing
+        // moved, where it would reverse the finalized block the node was told of: such a fork choice is not consistent
+        // with what it finalized, and is answered so, -38002, as the fork choice answers one it plans (C4d part 4b,
+        // the user's decision of 2026-11-14), and not SYNCING for good
+        log.warn(
+          "[ENGINE-API] forkchoiceUpdated names {} #{}, whose chain does not hold the finalized block: -38002",
+          hexOf(forkChoiceState.headBlockHash),
+          headHeader.map(_.number.value).getOrElse(BigInt(-1))
+        )
+        // a fork choice that named it before, answered SYNCING, left it the head the import path follows (B-297)
+        forkChoiceManager.forgetRefused(forkChoiceState.headBlockHash)
+        EngineApiMetrics.recordForkchoiceUpdated("INVALID")
+        IO.pure(Left("invalid forkchoice state: the head's chain does not hold the finalized block"))
       else if headOptimistic then
         // Same rationale as the unknown-head case: drive ForkChoiceManager so SNAP sync
         // can re-pivot on the freshest CL head while we're still optimistically caught up.
@@ -859,6 +1056,14 @@ class EngineApiService(
         // SYNCING|INVALID, and (b) exposed the unexecuted block via eth_getBlockByHash
         // (EthBlocksService `isExposed`), breaking invalid_payload.go:258.
         forkChoiceManager.notifyBeaconHead(forkChoiceState)
+        // on the unified layout the stored blocks that lead to it are executed, apart, when they lead to a state that is
+        // held (C4d part 3)
+        if headHeader.exists(h => blockchainReader.getBlockHeaderByHash(BlockHash(h.parentHash.value)).isDefined) then
+          recoverStateOf(
+            forkChoiceState.headBlockHash,
+            "forkchoiceUpdated to a head never executed",
+            com.chipprbots.ethereum.ledger.StateRecovery.Authority.ForkChoice
+          )
         EngineApiMetrics.recordForkchoiceUpdated("SYNCING")
         IO.pure(Right(ForkchoiceUpdatedResponse(payloadStatus = PayloadStatusV1(Syncing))))
       else if blockFullyStored && headHeader.exists(_.number.value < bestBlockNumber) then
@@ -879,6 +1084,7 @@ class EngineApiService(
           hexOf(forkChoiceState.headBlockHash),
           bestBlockNumber
         )
+        escalationWatch.foreach(_.headMoved())
         EngineApiMetrics.recordForkchoiceUpdated("VALID")
         IO.pure(
           Right(
@@ -893,21 +1099,86 @@ class EngineApiService(
         EngineApiMetrics.recordForkchoiceUpdated("INVALID")
         IO.pure(Left(msg))
       else if headHeader.isDefined && !isAncestorOrEqual(safeHash, forkChoiceState.headBlockHash, zeroHash) then
+        // as every -38002: a fork choice answered SYNCING before may have left it the head the import path follows
+        forkChoiceManager.forgetRefused(forkChoiceState.headBlockHash)
         EngineApiMetrics.recordForkchoiceUpdated("INVALID")
         IO.pure(Left("invalid forkchoice state: safe block is not an ancestor of head"))
       else if headHeader.isDefined && !isAncestorOrEqual(finalizedHash, forkChoiceState.headBlockHash, zeroHash)
       then
+        forkChoiceManager.forgetRefused(forkChoiceState.headBlockHash)
         EngineApiMetrics.recordForkchoiceUpdated("INVALID")
         IO.pure(Left("invalid forkchoice state: finalized block is not an ancestor of head"))
       else
+        // On the unified state layout the fork choice confirms the head under the state lock, through a move of the
+        // head, and may wait there behind a move under way: on a thread that may block (beacon, spec 018 C4b part 3b).
+        // The hash store's runs where it always ran.
+        val applied: IO[Either[String, Unit]] =
+          if stateHeldInPlace.isDefined then IO.blocking(forkChoiceManager.applyForkChoiceState(forkChoiceState))
+          else IO.pure(forkChoiceManager.applyForkChoiceState(forkChoiceState))
 
-        forkChoiceManager.applyForkChoiceState(forkChoiceState) match
-          case Left(_) =>
-            // Head not known — return SYNCING so CL knows we need newPayload
+        applied.flatMap {
+          case Left(_) if stateHeldInPlace.isDefined && isNowAnAncestorOfTheHead(headHeader) =>
+            // The head was the block whose state is held when it was looked at, and the next block was committed in
+            // place before the fork choice was written: the head it names is now a VALID ancestor of the canonical
+            // head, which is answered as the branch above answers one (execution-apis paris.md engine_forkchoiceUpdatedV1
+            // point 2; go-ethereum "Ignoring beacon update to old head"). Nothing was written, and no payload is built.
+            log.info(
+              "[ENGINE-API] forkchoiceUpdated names #{} {}, which a block committed in place since made an ancestor of " +
+                "the head #{}: head kept, no payload built",
+              headHeader.map(_.number.value).getOrElse(BigInt(-1)),
+              hexOf(forkChoiceState.headBlockHash),
+              blockchainReader.getBestBlockNumber
+            )
+            escalationWatch.foreach(_.headMoved())
+            EngineApiMetrics.recordForkchoiceUpdated("VALID")
+            IO.pure(
+              Right(
+                ForkchoiceUpdatedResponse(
+                  payloadStatus = PayloadStatusV1(Valid, latestValidHash = Some(forkChoiceState.headBlockHash)),
+                  payloadId = None
+                )
+              )
+            )
+          case Left(refused) if refused.startsWith(ForkChoiceManager.FinalizedReversed) =>
+            // the head's chain does not hold the block this node was told is finalized: -38002, nothing moved (after
+            // the arm above: an ancestor of the head is VALID, whatever its walk back met; beacon)
+            // and it is not the head the import path follows (B-297)
+            forkChoiceManager.forgetRefused(forkChoiceState.headBlockHash)
+            EngineApiMetrics.recordForkchoiceUpdated("INVALID")
+            IO.pure(Left(s"invalid forkchoice state: ${refused.stripPrefix(ForkChoiceManager.FinalizedReversed)}"))
+          case Left(refused) =>
+            // Head not known — return SYNCING so CL knows we need newPayload. On the unified layout a head whose chain is
+            // held only up to a block below it has the blocks above that executed again meanwhile (C4d part 3).
+            if refused.startsWith(ForkChoiceManager.NotHeldHead) then
+              recoverStateOf(
+                forkChoiceState.headBlockHash,
+                "forkchoiceUpdated to a head whose state is not held",
+                com.chipprbots.ethereum.ledger.StateRecovery.Authority.ForkChoice
+              )
+            // a head that no recovery is asked for: the fork choice itself says why it was not followed (C5a part 6)
+            else if refused.startsWith(ForkChoiceManager.Unreachable) then
+              escalationWatch.foreach(
+                _.refusedUnreachable(
+                  hexOf(forkChoiceState.headBlockHash),
+                  refused.stripPrefix(ForkChoiceManager.Unreachable),
+                  Some(forkChoiceState.headBlockHash)
+                )
+              )
+            else if refused.startsWith(ForkChoiceManager.LocalFault) then
+              escalationWatch.foreach(
+                _.refusedForAFault(
+                  hexOf(forkChoiceState.headBlockHash),
+                  refused.stripPrefix(ForkChoiceManager.LocalFault),
+                  Some(forkChoiceState.headBlockHash)
+                )
+              )
             EngineApiMetrics.recordForkchoiceUpdated("SYNCING")
             IO.pure(Right(ForkchoiceUpdatedResponse(payloadStatus = PayloadStatusV1(Syncing))))
 
           case Right(()) =>
+            // the node follows the head it was named: whatever it could not follow before is behind it (the head is
+            // set even when the attributes that came with it are refused below)
+            escalationWatch.foreach(_.headMoved())
             // The head is set: go-ethereum's `api.eth.SetSynced()`, which opens tx gossip from peers (eth/catalyst/api.go,
             // after SetCanonical and before the finalized/safe updates and payload building).
             txGossipGate.foreach(_.markSynced("forkchoiceUpdated set the head"))
@@ -1007,9 +1278,12 @@ class EngineApiService(
                       // served. What reached the pool since is picked up by engine_getPayload (resolvePayload).
                       val alreadyBuilding =
                         Option(pendingPayloadTimestamps.get(id)).exists(System.nanoTime() - _ <= PayloadTtlNs)
-                      val build: IO[Unit] =
+                      // `None` unless a fault of this node's own state stopped the build (the unified layout: the
+                      // parent's state is no longer held), and then the reason. Any other failure is logged and is
+                      // `None` too, as it was: the id is handed out, and getPayload has nothing for it.
+                      val build: IO[Option[String]] =
                         if alreadyBuilding then
-                          IO(log.debug("Payload {} is already being built; not restarting it", hexOf(id)))
+                          IO(log.debug("Payload {} is already being built; not restarting it", hexOf(id))).as(None)
                         else
                           pendingPoolTransactions.flatMap { pool =>
                             IO {
@@ -1022,6 +1296,11 @@ class EngineApiService(
                                 PayloadBuildProcess(parent, attrs, poolTxHashes(pool), System.nanoTime())
                               )
                               servedPayloads.remove(id)
+                              // Noted for the dashboard (spec 029 FR-040): two atomic writes, which cannot throw.
+                              EngineCallLog.Node.payloadBuilt(
+                                payload.built.block.header.number.toLong,
+                                payload.built.block.body.transactionList.size
+                              )
                               log.info(
                                 "Built payload {} for block {} (baseFee={}, parent={}, fork={}, requests={})",
                                 hexOf(id),
@@ -1031,29 +1310,58 @@ class EngineApiService(
                                 forkNameAt(payload.built.block.header.unixTimestamp),
                                 payload.built.executionRequests.size
                               )
-                            }.handleError { e =>
-                              log.error("Failed to build payload: {}", e.getMessage)
+                              Option.empty[String]
+                            }.handleError {
+                              case fault: com.chipprbots.ethereum.db.storage.pathstate.StateFault
+                                  if stateHeldInPlace.isDefined =>
+                                // The head is set and stays set; no payload was built, none is stored, and the
+                                // consensus client is told so where an id would be one getPayload cannot serve.
+                                // go-ethereum answers a BuildPayload that fails the same way (eth/catalyst/api.go:
+                                // `valid(nil), engine.InvalidPayloadAttributes.With(err)`).
+                                log.warn(
+                                  "[ENGINE-API] forkchoiceUpdated: no payload built on block {}: {}",
+                                  parent.header.number,
+                                  fault.getMessage
+                                )
+                                EngineCallLog.Node.payloadBuildFailed()
+                                Some(s"no payload could be built on the head: ${fault.getMessage}")
+                              case e =>
+                                log.error("Failed to build payload: {}", e.getMessage)
+                                EngineCallLog.Node.payloadBuildFailed()
+                                None
                             }
                           }
                       build
-                        .map { _ =>
-                          EngineApiMetrics.recordForkchoiceUpdated("VALID")
-                          Right(
-                            ForkchoiceUpdatedResponse(
-                              payloadStatus =
-                                PayloadStatusV1(Valid, latestValidHash = Some(forkChoiceState.headBlockHash)),
-                              payloadId = Some(id)
+                        .map {
+                          case Some(unbuilt) =>
+                            EngineApiMetrics.recordForkchoiceUpdated("INVALID")
+                            Left("ATTR:" + unbuilt)
+                          case None =>
+                            EngineApiMetrics.recordForkchoiceUpdated("VALID")
+                            Right(
+                              ForkchoiceUpdatedResponse(
+                                payloadStatus =
+                                  PayloadStatusV1(Valid, latestValidHash = Some(forkChoiceState.headBlockHash)),
+                                payloadId = Some(id)
+                              )
                             )
-                          )
                         }
           // closes: parentOpt match
           // closes: payloadAttributes match
           // end else (invalidAttrs check)
           // end else (safe/finalized check)
           // end case Right
+        }
       // end else (blockFullyStored check)
     // end else (invalidBlocks check)
   }
+
+  /** Whether `head` is canonical at its height and below the best block: a VALID ancestor of the canonical head. */
+  private def isNowAnAncestorOfTheHead(head: Option[BlockHeader]): Boolean =
+    head.exists { header =>
+      header.number.value < blockchainReader.getBestBlockNumber &&
+      blockchainReader.getBlockHeaderByNumber(header.number.value).exists(_.hash == header.hash)
+    }
 
   /** Mempool selection for a proposer build on `parent` at `timestamp`, in go-ethereum's miner order:
     *   1. chain-ID filter;
@@ -1182,8 +1490,10 @@ class EngineApiService(
               case Some(sender) =>
                 val expected = nextNonce.getOrElseUpdate(
                   sender,
+                  // by the parent's header: the hash store's read-only buffer at its root with the guard off, a view
+                  // of the parent on the unified layout, where a fault of the state is the build's to answer
                   blockchainReader
-                    .getAccountAtStateRoot(parent.stateRoot.value, sender)
+                    .accountAt(parent, sender)
                     .map(_.nonce.toBigInt)
                     .getOrElse(blockchainConfig.accountStartNonce.toBigInt)
                 )
@@ -1283,9 +1593,9 @@ class EngineApiService(
     * `testing_*` namespace both go through here, so a payload produced by one can never disagree with the other on
     * header field derivation (withdrawalsRoot, excessBlobGas, requestsHash, bloom, roots).
     *
-    * Side-effect free with respect to the canonical chain: nothing is stored, no head moves. `executeForProposer` does
-    * write trie nodes to the backing MPT storage (see BlockExecution.buildInitialWorld), but writes no block, receipt,
-    * or number->hash mapping.
+    * Side-effect free with respect to the canonical chain: nothing is stored, no head moves. On the hash store
+    * `executeForProposer` does write trie nodes to the backing MPT storage (see BlockExecution.buildInitialWorld); on
+    * the unified state layout it writes none. Neither writes a block, a receipt or a number->hash mapping.
     *
     * @param transactions
     *   exactly the transactions to include, in order. Caller does the mempool selection.
@@ -1336,6 +1646,13 @@ class EngineApiService(
     */
   private val LenientBuildRetries = 8
 
+  /** Times a lenient build is made again because the view of its parent's state went stale under it (the unified state
+    * layout). A view goes stale when the state on disk has moved on further than the log of moves reaches, so a fresh
+    * one of the same parent is there only while that parent's state is still held; when it is not, the fresh view is
+    * refused and the build ends with that.
+    */
+  private val StaleViewRebuilds = 3
+
   private def executeProposerBlock(
       block: Block
   ): Either[com.chipprbots.ethereum.ledger.BlockExecutionError, ProposerExecution] =
@@ -1360,6 +1677,10 @@ class EngineApiService(
     *
     * Only when even the empty payload cannot be executed does it still fall back to that old shape — empty now — so
     * forkchoiceUpdated keeps answering with a payloadId.
+    *
+    * On the unified state layout a fault of this node's own state is neither of those: "missing state" there is a state
+    * that is not held, and nothing can be built on it. It is thrown from here, past both fallbacks (a view that went
+    * stale is first tried again on a fresh one), and the first build answers that no payload was built.
     */
   private def buildLeniently(
       parent: Block,
@@ -1369,11 +1690,27 @@ class EngineApiService(
       gasLimit: GasAmount
   ): BuiltBlock =
     import com.chipprbots.ethereum.ledger.BlockExecutionError.TxsExecutionError
+    import com.chipprbots.ethereum.db.storage.pathstate.StaleStateViewException
+    // One attempt, with a view that went stale under it (the unified layout) caught as a value: the attempt is made
+    // again on a fresh view, with the list it had. Any other fault of this node's own state is thrown through, past
+    // both fallbacks below: neither the empty payload nor a block sealed over its parent's state root can be built
+    // on a state that is not held, and the caller answers that no payload was built.
+    def attemptOn(txs: Seq[SignedTransaction]) =
+      try Right(sealProposerBlock(parent, attrs, txs, extraData, gasLimit)(executeProposerBlock))
+      catch case stale: StaleStateViewException => Left(stale)
     @scala.annotation.tailrec
-    def attempt(txs: Seq[SignedTransaction], retriesLeft: Int): BuiltBlock =
-      sealProposerBlock(parent, attrs, txs, extraData, gasLimit)(executeProposerBlock) match
-        case Right(built) => built
-        case Left(TxsExecutionError(failed, before, reason)) =>
+    def attempt(txs: Seq[SignedTransaction], retriesLeft: Int, freshViewsLeft: Int): BuiltBlock =
+      attemptOn(txs) match
+        case Left(stale) if freshViewsLeft > 0 =>
+          log.info(
+            "Proposer build on block {}: the view of its parent's state went stale ({}); building again on a fresh one",
+            parent.header.number,
+            stale.getMessage
+          )
+          attempt(txs, retriesLeft, freshViewsLeft - 1)
+        case Left(stale)         => throw stale
+        case Right(Right(built)) => built
+        case Right(Left(TxsExecutionError(failed, before, reason))) =>
           val failedAt = txs.indexWhere(_.hash == failed.hash)
           val remaining =
             if failedAt < 0 then Nil
@@ -1405,16 +1742,16 @@ class EngineApiService(
             remaining.size,
             txs.size
           )
-          attempt(remaining, retriesLeft - 1)
-        case Left(other) if txs.nonEmpty =>
+          attempt(remaining, retriesLeft - 1, freshViewsLeft)
+        case Right(Left(other)) if txs.nonEmpty =>
           log.warn(
             "Proposer build on block {}: execution failed for a reason no transaction explains ({}); building the " +
               "empty payload instead",
             parent.header.number,
             other.describe
           )
-          attempt(Nil, retriesLeft)
-        case Left(other) =>
+          attempt(Nil, retriesLeft, freshViewsLeft)
+        case Right(Left(other)) =>
           log.error(
             "Proposer build on block {}: even the empty payload failed to execute ({}); sealing it over the " +
               "parent's state root",
@@ -1427,7 +1764,7 @@ class EngineApiService(
           sealProposerBlock(parent, attrs, Nil, extraData, gasLimit)(_ =>
             Right(ProposerExecution(Nil, BigInt(0), parent.header.stateRoot.value, Nil, None))
           ).fold(err => throw new IllegalStateException(s"sealing without execution failed: $err"), identity)
-    attempt(transactions, LenientBuildRetries)
+    attempt(transactions, LenientBuildRetries, StaleViewRebuilds)
 
   /** What block execution hands the proposer's header derivation. */
   final private case class ProposerExecution(
@@ -2362,6 +2699,11 @@ object BlobGasUtils:
     BlobParams.fakeExponential(factor, numerator, denominator)
 
 object EngineApiService:
+
+  /** How far down a head never executed its chain is followed to the finalized block's height, at most: one header read
+    * each (spec 018 C4d part 4b).
+    */
+  val FinalizedSearch: Int = 1_024
 
   /** How long engine_getPayload may spend bringing a payload up to date with the pool (`resolvePayload`) before it
     * serves the payload as built. The CL waits 1 s for engine_getPayload (execution-apis common.md, "Timeouts"); half

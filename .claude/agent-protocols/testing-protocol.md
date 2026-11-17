@@ -137,6 +137,21 @@ sbt testVM
 
 ---
 
+## Golden files (TUI, spec 027)
+
+`TuiGoldenSpec` compares rendered frames with `src/test/resources/tui/golden/*.txt`. The files are generated, never
+edited by hand. Tests run in a forked JVM, so a `-D` on the sbt command line does not reach them; set the flag in
+the test JVM's options:
+
+```bash
+sbt 'set Test / javaOptions += "-Dtui.golden.update=true"' "testOnly *TuiGoldenSpec"
+```
+
+Then review the diff of the regenerated files: a changed golden is a changed screen. The TUI gate is
+`sbt "testOnly com.chipprbots.ethereum.console.* *Tui*"` (`*Tui*` alone misses console specs whose names lack it).
+
+---
+
 ## Format commands
 
 | Command | What it does | When to use |

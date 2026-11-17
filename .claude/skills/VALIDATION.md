@@ -49,9 +49,12 @@ drifted from the code. The skills use the **code's** truth and flag the drift:
    some runbooks/MCP examples show. CONVENTIONS and skills use 8546.
 2. **P2P port** — both server and discovery default to **`30303`**; the peering
    runbook's `9076` is stale. Corrected in `fukuii-peer-management`.
-3. **MCP namespace** — `mcp` is **not** in the default
-   `network.rpc.apis = "eth,web3,net,personal,fukuii,debug,qa,admin"`; it must be
-   added to use the in-process MCP tools. Documented in CONVENTIONS.
+3. **RPC namespaces** — HTTP and WebSocket serve only `eth,net,web3,fukuii` by
+   default (`network.rpc.http.apis` / `ws.apis`, each falling back to
+   `network.rpc.apis`); IPC serves every production namespace (`ipc.apis`).
+   `admin`, `personal`, `debug`, `qa` and `mcp` are opt-in over HTTP, so the
+   skills that call `admin_*` or the MCP tools check `rpc_modules` first.
+   Documented in CONVENTIONS.
 4. **RPC TLS keys** — the node uses a **nested** `network.rpc.http.certificate {
    keystore-path, keystore-type, password-file }` block (default
    `certificate = null`), **not** the flat `certificate-keystore-path` form

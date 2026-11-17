@@ -248,5 +248,6 @@ With multiple developers:
 - Each user story should be independently completable and testable
 - Verify tests fail before implementing
 - Commit after each task or logical group
+- Each slice or PR is an item in the shared backlog (`B-0xx`); claim it before starting (constitution Principle VIII)
 - Stop at any checkpoint to validate story independently
 - Avoid: vague tasks, same file conflicts, cross-story dependencies that break independence

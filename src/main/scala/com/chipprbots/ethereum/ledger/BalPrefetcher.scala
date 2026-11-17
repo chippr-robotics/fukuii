@@ -190,7 +190,8 @@ object BalPrefetcher extends Logger:
       val valid =
         committedHash.contains(bal.hash) && bal.validateFor(transactionCount, gasLimit).isRight
       if valid then
-        val accountTrie = MerklePatriciaTrie[Address, Account](parentStateRoot.toArray[Byte], reader)(using
+        val accountTrie = MerklePatriciaTrie[Address, Account](parentStateRoot.toArray[Byte], reader.forOwner(None))(
+          using
           Address.hashedAddressEncoder,
           Account.accountSerializer
         )
@@ -223,14 +224,16 @@ object BalPrefetcher extends Logger:
           if acc.codeHash != Account.EmptyCodeHash && seenCodes.add(codeHash) then submit(readCode(codeHash))
           if slotKeys.nonEmpty && acc.storageRoot != Account.EmptyStorageRootHash then
             val root = acc.storageRoot.value
-            slotKeys.grouped(batchSize).foreach(batch => submit(readSlots(root, batch)))
+            slotKeys.grouped(batchSize).foreach(batch => submit(readSlots(address, root, batch)))
         }
       catch case _: MerklePatriciaTrie.MPTException => errors.incrementAndGet()
 
-    private def readSlots(root: ByteString, keys: Seq[BigInt]): Unit =
+    private def readSlots(address: Address, root: ByteString, keys: Seq[BigInt]): Unit =
+      // This account's storage trie, in a storage that keeps tries apart (see InMemoryWorldStateProxy.storageOwner)
+      val nodes = reader.forOwner(Some(InMemoryWorldStateProxy.storageOwner(address)))
       val trie =
-        if ethCompatibleStorage then domain.EthereumUInt256Mpt.storageMpt(root, reader)
-        else domain.ArbitraryIntegerMpt.storageMpt(root, reader)
+        if ethCompatibleStorage then domain.EthereumUInt256Mpt.storageMpt(root, nodes)
+        else domain.ArbitraryIntegerMpt.storageMpt(root, nodes)
       val it = keys.iterator
       while it.hasNext && !stop do
         try

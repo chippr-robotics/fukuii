@@ -28,6 +28,7 @@ import org.bouncycastle.util.encoders.Hex
 
 import com.chipprbots.ethereum.blockchain.sync.Blacklist
 import com.chipprbots.ethereum.blockchain.sync.Blacklist.BlacklistId
+import com.chipprbots.ethereum.blockchain.sync.OperatorBlock
 import com.chipprbots.ethereum.network.PeerActor.Status.Handshaked
 import com.chipprbots.ethereum.network.PeerEventBusActor.*
 import com.chipprbots.ethereum.network.discovery.DiscoveryConfig
@@ -70,6 +71,22 @@ object PeerManagerActor:
   final case class RemoveTrustedPeerCmd(nodeId: String, replyTo: typed.ActorRef[RemoveTrustedPeerResponse])
       extends Command
   final case class SetMaxPeersCmd(n: Int, replyTo: typed.ActorRef[SetMaxPeersResponse]) extends Command
+
+  /** Reads the operator-set state of the peer manager (spec 029): the override of the outgoing limit, if one was set,
+    * the limit in force, the trusted node ids and the maintained node ids (lower-case hex, no `0x`).
+    */
+  final case class GetAdminStateCmd(replyTo: typed.ActorRef[AdminState]) extends Command
+
+  /** Dials again the maintained peers at `ip` (canonical form). Sent when the operator unblocks the address: a dial the
+    * block refused ended that peer's retries, so nothing else would bring it back before a restart.
+    */
+  final case class RedialMaintainedAtCmd(ip: String) extends Command
+  final case class AdminState(
+      maxOutgoingOverride: Option[Int],
+      effectiveMaxOutgoing: Int,
+      trustedNodeIds: Set[String],
+      maintainedNodeIds: Set[String]
+  )
 
   // Fire-and-forget wire messages forwarded by the shell:
   case object StartConnectingCmd extends Command
@@ -155,7 +172,8 @@ object PeerManagerActor:
       discoveryConfig: DiscoveryConfig,
       blacklist: Blacklist,
       externalSchedulerOpt: Option[Scheduler] = None,
-      snapGoodPeers: Option[SnapGoodPeers] = None
+      snapGoodPeers: Option[SnapGoodPeers] = None,
+      peerScoringManager: Option[PeerScoringManager] = None
   ): Behavior[Command] =
     Behaviors.setup { context =>
       new Impl(
@@ -169,6 +187,7 @@ object PeerManagerActor:
         blacklist,
         externalSchedulerOpt,
         snapGoodPeers,
+        peerScoringManager,
         context
       ).waitingForStart()
     }
@@ -186,6 +205,7 @@ object PeerManagerActor:
       val blacklist: Blacklist,
       externalSchedulerOpt: Option[Scheduler],
       snapGoodPeers: Option[SnapGoodPeers],
+      peerScoringManager: Option[PeerScoringManager],
       context: TypedActorContext[Command]
   ):
 
@@ -578,6 +598,12 @@ object PeerManagerActor:
           peerEventBus ! PublishCmd(PeerEvent.MaintainedPeersChanged(maintainedPeersByNodeId.keySet))
           Some(connectWith(uri, connectedPeers))
 
+        case RedialMaintainedAtCmd(ip) =>
+          maintainedPeersByNodeId.values
+            .filter(uri => BlockedIPRegistry.canonical(bareHost(uri)).contains(ip))
+            .foreach(uri => context.self ! ConnectToPeerCmd(uri))
+          Some(Behaviors.same)
+
         case RemoveMaintainedPeerCmd(nodeId) =>
           maintainedPeersByNodeId = maintainedPeersByNodeId - nodeId.toLowerCase
           peerEventBus ! PublishCmd(PeerEvent.MaintainedPeersChanged(maintainedPeersByNodeId.keySet))
@@ -604,6 +630,15 @@ object PeerManagerActor:
         case SetMaxPeersCmd(n, replyTo) =>
           maxOutgoingPeersOverride = Some(n)
           replyTo ! SetMaxPeersResponse(success = true)
+          Some(Behaviors.same)
+
+        case GetAdminStateCmd(replyTo) =>
+          replyTo ! AdminState(
+            maxOutgoingOverride = maxOutgoingPeersOverride,
+            effectiveMaxOutgoing = effectiveMaxOutgoing,
+            trustedNodeIds = trustedPeersByNodeId,
+            maintainedNodeIds = maintainedPeersByNodeId.keySet
+          )
           Some(Behaviors.same)
 
         case _ => None
@@ -720,8 +755,23 @@ object PeerManagerActor:
       // An operator's explicit request (admin_addPeer via maintained/trusted, net_connectToPeer, snap-server-peers)
       // overrides the exclusion; internal dial paths do not.
       val operatorRequested = isMaintainedOrTrusted || explicit
+      // An address the operator blocked (admin_blockIP) is never dialled, by any path, maintained and trusted peers and
+      // explicit requests included: the block is the operator's call. Only OperatorBlock is asked, not PeerAddress:
+      // an address that is merely auto-blacklisted still dials here (a maintained peer must reconnect).
+      // The list holds addresses in their canonical form, and an enode may write the same address another way (a
+      // compressed IPv6 literal, an IPv4-mapped one, a name): the host is asked as written, in its canonical form,
+      // and as the address it resolved to.
+      val operatorBlocked =
+        (Seq(host) ++ BlockedIPRegistry.canonical(host) ++ Option(remoteAddress.getAddress).map(
+          _.getHostAddress
+        )).distinct
+          .exists(h => blacklist.isBlacklisted(OperatorBlock(h)))
 
       validConnection match
+        case _ if operatorBlocked =>
+          log.info("Not dialling {}: its address is blocked by the operator (admin_blockIP)", uri)
+          Behaviors.same
+
         case Right(_) if excludedWrongNetwork && !operatorRequested =>
           // Known-nodes and other internal paths funnel here; discovery is also filtered in canConnectTo.
           log.debug("Not dialling {}: node is excluded as wrong-network", uri)
@@ -757,6 +807,8 @@ object PeerManagerActor:
 
         case RefreshPeerStatuses =>
           refreshPeerStatusCache(connectedPeers)
+          // The scorer's own export is throttled and event-driven; this tick lets the recency decay show without one.
+          peerScoringManager.foreach(_.publish())
           Some(Behaviors.same)
 
         case PeerStatusCacheUpdated(statuses) =>
@@ -972,6 +1024,9 @@ object PeerManagerActor:
         connectedPeers: ConnectedPeers
     ): Behavior[Command] =
       val host = handshakedPeer.remoteAddress.getHostString
+      // The handshake succeeded whatever the manager does with the peer next (stale, excluded, too many, duplicate), so
+      // it is scored first. `handshakedPeer.id` is the hex node id, the id the other scorer events use (PeerActor).
+      peerScoringManager.foreach(_.recordSuccessfulHandshake(handshakedPeer.id))
       consecutiveTcpFailures.remove(host)
       // Track snap-capability per host so the blacklist paths can retain scarce snap peers (see snapCapableHosts).
       // A fresh handshake also proves the host is useful again, so reset its lenient-blacklist flap counter.
@@ -1251,7 +1306,8 @@ object PeerManagerActor:
       knownNodesManager: typed.ActorRef[KnownNodesManager.Command],
       handshaker: Handshaker[R],
       authHandshaker: AuthHandshaker,
-      capabilities: List[Capability]
+      capabilities: List[Capability],
+      peerScoringManager: Option[PeerScoringManager] = None
   ): (TypedActorContext[Command], InetSocketAddress, Boolean) => typed.ActorRef[PeerActor.Command] =
     (ctx, address, incomingConnection) =>
       val id: String = sanitizeActorPathElement(address.toString)
@@ -1267,7 +1323,8 @@ object PeerManagerActor:
               eventBus,
               knownNodesManager,
               incomingConnection,
-              initHandshaker = handshaker
+              initHandshaker = handshaker,
+              peerScoringManager = peerScoringManager
             )
           )
           .onFailure[Throwable](

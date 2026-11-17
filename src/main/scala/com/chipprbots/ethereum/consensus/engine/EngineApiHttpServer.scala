@@ -39,7 +39,9 @@ import com.chipprbots.ethereum.utils.Logger
 class EngineApiHttpServer(
     controller: EngineApiController,
     jwtAuth: JwtAuthenticator,
-    config: EngineApiHttpServer.Config
+    config: EngineApiHttpServer.Config,
+    // Where each call is noted once it has ended, for the dashboard (spec 029 FR-040): the node's own.
+    calls: EngineCallLog = EngineCallLog.Node
 ) extends Logger:
 
   // Dedicated ActorSystem isolated from the main node's peer-management dispatchers.
@@ -99,6 +101,7 @@ class EngineApiHttpServer(
     (pathEndOrSingleSlash & post) {
       jwtAuth.authenticate { _ =>
         entity(as[String]) { body =>
+          val startedNanos = System.nanoTime()
           val response =
             try
               val json = parse(body)
@@ -119,6 +122,7 @@ class EngineApiHttpServer(
                     HttpResponse(entity = HttpEntity(ContentTypes.`application/json`, jsonStr))
                   }
                 case _ =>
+                  calls.observeUnreadable(startedNanos)
                   Future.successful(
                     HttpResponse(
                       StatusCodes.BadRequest,
@@ -128,6 +132,7 @@ class EngineApiHttpServer(
             catch
               case e: Exception =>
                 log.error(s"Engine API parse error: ${e.getMessage}")
+                calls.observeUnreadable(startedNanos)
                 Future.successful(
                   HttpResponse(
                     StatusCodes.BadRequest,
@@ -140,6 +145,7 @@ class EngineApiHttpServer(
     }
 
   private def processRequest(json: JValue): Future[JsonRpcResponse] =
+    val startedNanos = System.nanoTime()
     val method = (json \ "method").extractOpt[String].getOrElse("unknown")
     try
       log.debug(s"Engine API request: method=$method")
@@ -152,14 +158,22 @@ class EngineApiHttpServer(
         ,
         id = (json \ "id").extractOpt[JValue]
       )
-      controller.handleRequest(request).unsafeToFuture().recover { case e: Exception =>
+      val answer = controller.handleRequest(request).unsafeToFuture().recover { case e: Exception =>
         log.error(s"Engine API handler error: ${e.getMessage}")
         JsonRpcResponse("2.0", None, Some(JsonRpcError.InternalError), request.id.getOrElse(JNull))
       }
+      // Noted for the dashboard (spec 029 FR-040, FR-042) by a callback of its own beside the answer, not chained in
+      // front of it: the future handed back is the one the handler made. The note runs on this server's dispatcher
+      // once that future has a value, just before or just after the answer is rendered, and waits for nothing: it
+      // is constant work of under a microsecond (`EngineCallLogBenchmark`). `observe` cannot throw.
+      answer.onComplete(result => calls.observe(method, json, result, startedNanos))
+      answer
     catch
       case e: Exception =>
         log.error(s"Engine API request decode error for method=$method: ${e.getMessage}", e)
-        Future.successful(JsonRpcResponse("2.0", None, Some(JsonRpcError.InternalError), JNull))
+        val failed = JsonRpcResponse("2.0", None, Some(JsonRpcError.InternalError), JNull)
+        calls.observe(method, json, scala.util.Success(failed), startedNanos)
+        Future.successful(failed)
 
   private def responseToJson(resp: JsonRpcResponse): JValue =
     val resultField: List[(String, JValue)] = resp.result.map(r => "result" -> r).toList
@@ -175,6 +189,11 @@ class EngineApiHttpServer(
 
   def start(): Future[Http.ServerBinding] =
     val bindFuture = Http().newServerAt(config.interface, config.port).bind(route)
+    // Whether it bound, for the dashboard's RPC view (spec 029 FR-039).
+    bindFuture.onComplete(bound =>
+      com.chipprbots.ethereum.jsonrpc.RpcCallStats.Node
+        .listening(com.chipprbots.ethereum.jsonrpc.RpcCallStats.Engine, bound.isSuccess)
+    )
     bindFuture.foreach { binding =>
       bindingOpt = Some(binding)
       log.info(

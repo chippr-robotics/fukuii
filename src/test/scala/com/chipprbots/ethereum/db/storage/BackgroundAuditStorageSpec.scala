@@ -46,7 +46,8 @@ class BackgroundAuditStorageSpec extends AnyFlatSpec with Matchers with Eventual
   private class Basic:
     val source: EphemDataSource = EphemDataSource()
     val nodes: NodeStorage = new NodeStorage(source)
-    val state: ReferenceCountedStateStorage = new ReferenceCountedStateStorage(nodes, 64, 1024L * 1024)
+    val state: ReferenceCountedStateStorage =
+      new ReferenceCountedStateStorage(nodes, 64, 1024L * 1024, nodesMayBeDeleted = () => true)
     def stored(hash: NodeHash): StoredNode = storedNodeFromBytes(nodes.get(hash).get)
     def put(hash: NodeHash, bytes: Array[Byte], refs: Int): Unit =
       nodes.put(hash, storedNodeToBytes(StoredNode(ByteString(bytes), refs, 1)))
@@ -124,6 +125,22 @@ class BackgroundAuditStorageSpec extends AnyFlatSpec with Matchers with Eventual
     b.stored(hashOf(good)).lastUsedByBlock shouldBe BigInt(1)
   }
 
+  it should "keep the count of a node a late on-demand fetch writes again, where saveNode sets it back to one (#1692)" taggedAs UnitTest in {
+    val b = new Basic
+    val good = nodeBytes(1)
+    b.put(hashOf(good), good, 2)
+    // What the importer's on-demand fetch writes when the fetched node is already there: repairNode finds it valid.
+    b.state.repairNode(hashOf(good), good, 77) shouldBe RepairOutcome.AlreadyValid
+    b.stored(hashOf(good)).references shouldBe 2
+
+    // The blind upsert the importer used to make: one reference, whatever the node had. At two positions that is one
+    // short, and the first block to drop one of them sends the node to a death row while the other still uses it.
+    b.state.saveNode(hashOf(good), good, 77)
+    withClue("this is why BlockImporter no longer calls it: ") {
+      b.stored(hashOf(good)).references shouldBe 1
+    }
+  }
+
   it should "overwrite bytes that fail their hash, and never lower the count they had" taggedAs UnitTest in {
     val b = new Basic
     val good = nodeBytes(1)
@@ -166,11 +183,20 @@ class BackgroundAuditStorageSpec extends AnyFlatSpec with Matchers with Eventual
     b.stored(hashOf(good)).references shouldBe 3
   }
 
+  /** A bad node in the execution cache, as a read before H3 left one there: the store's read now refuses bytes that
+    * fail their hash, so none can be read in, and the eviction is pinned on one put there directly.
+    */
+  private def cacheBadNode(backing: SerializingMptStorage, hash: ByteString, bytes: Array[Byte]): Unit =
+    val cache = backing.executionCache.get
+    cache.putIfCurrent(hash, MptStorage.decodeNode(bytes, hash.toArray), cache.generation)
+
   it should "evict the decoded node, so execution stops reading what it replaced" taggedAs UnitTest in {
     val b = new Basic
     val good = nodeBytes(1)
-    val execution = b.state.getBackingStorage(0).asInstanceOf[SerializingMptStorage].cachedForExecution
+    val backing = b.state.getBackingStorage(0).asInstanceOf[SerializingMptStorage]
+    val execution = backing.cachedForExecution
     b.put(hashOf(good), nodeBytes(2), 1)
+    cacheBadNode(backing, hashOf(good), nodeBytes(2))
     execution.get(hashOf(good).toArray).encode.toSeq shouldBe nodeBytes(2).toSeq // the bad node, cached
 
     b.state.repairNode(hashOf(good), good, 77) shouldBe RepairOutcome.Written
@@ -234,6 +260,8 @@ class BackgroundAuditStorageSpec extends AnyFlatSpec with Matchers with Eventual
     val hash = hashOf(bytes.toArray)
     val corrupt = ByteString(nodeBytes(2) ++ nodeBytes(2))
     code.put(hash, corrupt).commit()
+    code.getForExecution(hash) shouldBe None // a read refuses it (H3), so it is put in the caches directly
+    code.cacheForExecution(hash, corrupt)
     code.getForExecution(hash) shouldBe Some(corrupt) // the execution caches now remember it
     code.getSizeForExecution(hash) shouldBe Some(corrupt.length)
 
@@ -389,9 +417,11 @@ class BackgroundAuditStorageSpec extends AnyFlatSpec with Matchers with Eventual
   it should "evict the decoded node, so execution finds it absent and not bad" taggedAs UnitTest in {
     val b = new Basic
     val failing = hashOf(nodeBytes(1))
-    val execution = b.state.getBackingStorage(0).asInstanceOf[SerializingMptStorage].cachedForExecution
+    val backing = b.state.getBackingStorage(0).asInstanceOf[SerializingMptStorage]
+    val execution = backing.cachedForExecution
     b.put(failing, nodeBytes(2), 9)
-    execution.get(failing.toArray)
+    cacheBadNode(backing, failing, nodeBytes(2))
+    execution.get(failing.toArray).encode.toSeq shouldBe nodeBytes(2).toSeq // the bad node, cached
 
     b.state.deleteBadNode(failing, reachedByRoot) shouldBe BadEntryDelete.Deleted
 

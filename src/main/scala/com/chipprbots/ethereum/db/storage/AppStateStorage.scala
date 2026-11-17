@@ -42,6 +42,312 @@ class AppStateStorage(val dataSource: DataSource) extends TransactionalKeyValueS
   def putBestBlockNumber(bestBlockNumber: BigInt): DataSourceBatchUpdate =
     put(Keys.BestBlockNumber, bestBlockNumber.toString)
 
+  /** The block whose state the position-keyed trie store holds (spec 018 data-model 5.1), or `None` when the datadir
+    * has no such anchor. A stored value this build cannot read throws: an unreadable anchor is not an absent one.
+    */
+  def getStateAnchor(): Option[pathstate.BlockRef] = get(Keys.StateAnchor).map(pathstate.StateAnchor.decode)
+
+  /** The update that sets the state anchor. It belongs in the same batch as the rows it describes, and that batch is
+    * written as a move of the state's clock (`pathstate.StateMoveLog.inFlight`), which is why only the path state
+    * storage may build it. An anchor written past the clock would leave views of a block the disk no longer holds
+    * looking current, and every row they then met would be called corrupt (`AppStateAnchorRatchetSpec`).
+    */
+  private[storage] def putStateAnchor(block: pathstate.BlockRef): DataSourceBatchUpdate =
+    put(Keys.StateAnchor, pathstate.StateAnchor.encode(block))
+
+  /** The layout stamp of this datadir (spec 018 data-model 5.2): present, with the one value this build knows, when its
+    * state lives in the position-keyed rows under a state anchor. A datadir of the hash layout has none.
+    */
+  def getStateLayout(): Option[String] = get(Keys.StateLayout)
+
+  /** The update that stamps the datadir as the unified layout's. It belongs in the batch that first gives the datadir a
+    * state anchor, which only the path state storage builds.
+    */
+  private[storage] def putStateLayout(): DataSourceBatchUpdate =
+    put(Keys.StateLayout, pathstate.StateLayout.PathLive1)
+
+  /** The height the changeset records have been pruned up to (spec 018 data-model 4.5): every height below it has had
+    * its records deleted, or never had one. `None` on a datadir no block has been committed to in place. The records
+    * cannot be scanned for their lowest height (data-model 4.1), so this is the only thing that knows it.
+    */
+  def getChangesetPrunedTo(): Option[BigInt] = get(Keys.StateChangesetPrunedTo).map(BigInt(_))
+
+  /** The removal of everything that says this datadir holds a state on the unified layout: the anchor, the layout stamp
+    * and the count of pruned changeset records. It belongs in the batch that deletes every row and every record, and
+    * nowhere else: [[pathstate.PathStateStorage.destroyStateForNewGenesis]], which only test mode may call.
+    */
+  private[storage] def removeStateMarks(): DataSourceBatchUpdate =
+    update(
+      Seq(Keys.StateAnchor, Keys.StateOrigin, Keys.StateLayout, Keys.StateChangesetPrunedTo, Keys.StateFinalized),
+      Nil
+    )
+
+  /** The last time this datadir's state was cleared for a sync from scratch (spec 018 C5a), or none. A stored value
+    * this build cannot read throws ([[pathstate.StateEscalation.decode]]).
+    */
+  def getStateEscalationLast(): Option[pathstate.StateEscalation] =
+    get(Keys.StateEscalationLast).map(pathstate.StateEscalation.decode)
+
+  /** The branches a proof-of-work node gave its state up for ([[pathstate.GivenUpBranches]]), or none. A stored value
+    * this build cannot read throws.
+    */
+  def getStateEscalationGivenUp(): Set[pathstate.GivenUpBranch] =
+    get(Keys.StateEscalationGivenUp).fold(Set.empty[pathstate.GivenUpBranch])(pathstate.GivenUpBranches.decode)
+
+  /** The update an operator ends the loop guard with: every branch given up may be escalated for again. '''At a start
+    * only, before anything syncs, and written synced''' (vault, forge): a clear reads the list and writes it back under
+    * the state's locks, which this does not take, and an unsynced removal that a kill loses would bring the list back
+    * with nothing said.
+    */
+  def forgetGivenUpBranches(): DataSourceBatchUpdate = remove(Keys.StateEscalationGivenUp)
+
+  /** The update that removes the record of the last escalation: for the operator's switch, and only for a record that
+    * cannot be read (the cool-down is counted from one that can).
+    */
+  def forgetStateEscalationLast(): DataSourceBatchUpdate = remove(Keys.StateEscalationLast)
+
+  /** The branch the sync after an escalation is to take its pivot on ([[pathstate.PivotOnBranch]]), or none. A stored
+    * value this build cannot read throws.
+    */
+  def getPivotOnBranch(): Option[pathstate.PivotOnBranch] =
+    get(Keys.PivotOnBranch).map(pathstate.PivotOnBranch.decode)
+
+  def putPivotOnBranch(pivot: pathstate.PivotOnBranch): DataSourceBatchUpdate =
+    put(Keys.PivotOnBranch, pathstate.PivotOnBranch.encode(pivot))
+
+  /** The update that ends the requirement: a sync handed off, or the requirement was dropped. */
+  def removePivotOnBranch(): DataSourceBatchUpdate = remove(Keys.PivotOnBranch)
+
+  /** The entries of the index by number that a clear still has to delete ([[pathstate.StateResetTrim]]), or none. */
+  def getStateResetTrim(): Option[pathstate.StateResetTrim] =
+    get(Keys.StateResetTrim).map(pathstate.StateResetTrim.decode)
+
+  /** The highest height the index by number may have an entry at: the best block, and what a sync's header download
+    * reached or aimed at.
+    */
+  def highestIndexedHeight(numberOf: ByteString => Option[BigInt] = _ => None): BigInt =
+    Seq(
+      getBestBlockNumber(),
+      getBackfillBestHeader(),
+      getBackfillTarget(),
+      getSnapSyncPivotBlock().getOrElse(BigInt(0)),
+      // a pivot's header is stored, with its place in the index, before the pivot's number is written down: the
+      // target it was fetched for, and the header its hash names, say where (vault)
+      getSnapSyncBootstrapTarget().getOrElse(BigInt(0)),
+      getSnapSyncPivotHash().flatMap(numberOf).getOrElse(BigInt(0))
+    ).max
+
+  /** The update that sets what the header download keeps of its run back to `commonBlock` (B-303; vault): its cursors
+    * no higher than it, with the hash of the block there, and no target. Left as they were after a clear for an
+    * escalation, the download resumes above the chain that was left and refuses every header of the chain it is to
+    * follow, since none stands on the tip it remembers.
+    *
+    * @param hashAt
+    *   the index of blocks by number
+    */
+  private[storage] def headerCursorsBackTo(
+      commonBlock: BigInt,
+      hashAt: BigInt => Option[ByteString]
+  ): DataSourceBatchUpdate =
+    val reached = getBackfillBestHeader().min(commonBlock)
+    // a cursor at a height the index has nothing at is no place to go on from: the download begins again (vault)
+    val (header, tip) = hashAt(reached) match
+      case Some(hash) => (reached, putBackfillBestHeaderHash(hash))
+      case None       => (BigInt(0), remove(Keys.BackfillBestHeaderHash))
+    putBackfillBestHeader(header)
+      .and(tip)
+      .and(putBackfillBestBody(getBackfillBestBody().min(header)))
+      .and(putBackfillBestReceipt(getBackfillBestReceipt().min(header)))
+      .and(update(toRemove = Seq(Keys.BackfillTarget, Keys.BackfillTargetHash), toUpsert = Nil))
+
+  /** The update that takes the header download's cursors no higher than the pivot a sync hands off at (spec 018 C5a
+    * part 10, forge): an earlier, higher pivot's target left above it would be resumed from where the index no longer
+    * has an entry, and download every header again from the genesis, writing entries above the head as it goes. The
+    * target stays, at the pivot, so the bodies below it are still backfilled; nothing is written for a cursor at or
+    * below it.
+    */
+  def backfillCursorsAtMost(pivot: BigInt, pivotHash: ByteString): DataSourceBatchUpdate =
+    val target =
+      if getBackfillTarget() > pivot then putBackfillTarget(pivot).and(putBackfillTargetHash(pivotHash))
+      else update(toRemove = Nil, toUpsert = Nil)
+    val header =
+      if getBackfillBestHeader() > pivot then
+        putBackfillBestHeader(pivot)
+          .and(putBackfillBestHeaderHash(pivotHash))
+          .and(putBackfillBestBody(getBackfillBestBody().min(pivot)))
+          .and(putBackfillBestReceipt(getBackfillBestReceipt().min(pivot)))
+      else update(toRemove = Nil, toUpsert = Nil)
+    target.and(header)
+
+  /** The update that says the entries of [[pathstate.StateResetTrim]] are deleted. Written synced, with
+    * [[removeStateResetPending]].
+    */
+  private[storage] def removeStateResetTrim(): DataSourceBatchUpdate = remove(Keys.StateResetTrim)
+
+  /** The update that records what a clear is to delete of the index by number: with the clear's first batch, and again
+    * when an interrupted clear is finished, with the heights a sync has reached since.
+    */
+  private[storage] def putStateResetTrim(trim: pathstate.StateResetTrim): DataSourceBatchUpdate =
+    put(Keys.StateResetTrim, pathstate.StateResetTrim.encode(trim))
+
+  /** Whether a clear of the state was begun and not seen to its end: its rows may be there still, with no anchor over
+    * them ([[pathstate.StateResetPending]]).
+    */
+  def isStateResetPending(): Boolean = get(Keys.StateResetPending).isDefined
+
+  /** The update that says the rows of a cleared state are gone. Written synced, after the range deletes: a synced write
+    * makes what was written before it durable with it, so the mark never goes while a delete could be lost.
+    */
+  private[storage] def removeStateResetPending(): DataSourceBatchUpdate = remove(Keys.StateResetPending)
+
+  /** '''The one batch that begins a clear of the state''' on the unified layout (spec 018 C5a part 3; data-model D.3):
+    * for an escalation to a sync from scratch, and for the genesis state cleared as SNAP starts. It belongs to
+    * [[pathstate.PathStateStorage.clearForResync]], which writes it synced as a move of the state's clock, and to
+    * nothing else.
+    *
+    * In one write, so that no kill leaves a datadir that says its sync is done over a state with no anchor, or an
+    * anchor over rows that are being deleted:
+    *   - the sync is no longer done ([[clearSnapSyncDone]], and the flag fast sync left);
+    *   - the state's anchor, the block it began at, the finalized block named on it and the height its records were
+    *     pruned to are removed. '''The layout marker stays''': the directory is still the unified layout's;
+    *   - '''what SNAP keeps of its run is removed''': its pivot, its roots, its progress and resume point, its flags of
+    *     a phase done, the files it wrote. Left, a flag that says the accounts are complete over rows that are gone
+    *     lets the next run skip them (vault, forge); and the next run starts as on a new datadir, with no repair pass
+    *     owed;
+    *   - the best block is the genesis again, as on a datadir that has synced nothing. The headers, the bodies and the
+    *     index of the chain it had stay: they are of blocks, not of the state;
+    *   - for an escalation, '''what is to be deleted of the index of blocks by number'''
+    *     ([[pathstate.StateResetTrim]]), and the header download's cursors set back to the block the two chains share
+    *     (B-303). The headers, the bodies and the weights of the chain that was left stay, by their hashes: they are of
+    *     blocks, and nothing reads them as the chain;
+    *   - the escalation, when there is one, the branch it gives the state up for, when it is for one, and the mark that
+    *     the rows are still to be deleted. In the same write as the clear: a branch recorded with no clear would never
+    *     be escalated for, and a clear with no branch recorded could be repeated for it.
+    *
+    * @param genesisHash
+    *   the hash of the block at height 0, which the best block is set back to
+    * @param givenUpFor
+    *   on proof of work, the branch the state is given up for: its first block above the block it leaves the chain at.
+    *   The list it is added to is read here, and '''a list that cannot be read throws''' before anything is written:
+    *   the escalation's guard says no to such a list, so a caller that asked the guard does not get here with one
+    */
+  private[storage] def stateClearBatch(
+      genesisHash: ByteString,
+      atMillis: Long,
+      escalation: Option[pathstate.StateEscalation],
+      givenUpFor: Option[pathstate.GivenUpBranch] = None,
+      trim: Option[(pathstate.StateResetTrim, BigInt => Option[ByteString])] = None,
+      retry: Option[pathstate.PivotOnBranch] = None
+  ): DataSourceBatchUpdate =
+    require(givenUpFor.isEmpty || escalation.isDefined, "a branch is given up for by an escalation only")
+    require(
+      trim.isEmpty || escalation.isDefined || retry.isDefined,
+      "the index by number is trimmed by an escalation, or by the sync that is begun again after one"
+    )
+    require(retry.isEmpty || escalation.isEmpty, "a sync begun again for its branch is no new escalation")
+    val marked = escalation.foldLeft(put(Keys.StateResetPending, pathstate.StateResetPending.encode(atMillis))) {
+      (batch, last) => batch.and(put(Keys.StateEscalationLast, pathstate.StateEscalation.encode(last)))
+    }
+    val recorded = givenUpFor.foldLeft(marked) { (batch, branch) =>
+      batch.and(
+        put(Keys.StateEscalationGivenUp, pathstate.GivenUpBranches.encode(getStateEscalationGivenUp() + branch))
+      )
+    }
+    // B-307: the sync that follows an escalation for a branch takes its pivot on the branch. A clear for no branch
+    // ends a requirement an earlier one left: the sync it begins is not bound by it.
+    // A sync that is begun again because its headers were of another chain keeps the requirement, as counted.
+    val required = retry match
+      case Some(counted) => recorded.and(putPivotOnBranch(counted))
+      case None =>
+        givenUpFor.fold(recorded.and(removePivotOnBranch())) { branch =>
+          recorded.and(putPivotOnBranch(pathstate.PivotOnBranch(branch.number, branch.hash)))
+        }
+    // B-303: what is to be deleted of the index by number is written down here, and the header download's cursors are
+    // set back, in the same write as the clear: a kill after it finds both, and deletes the entries at the next start
+    val trimmed = trim.foldLeft(required) { case (batch, (above, hashAt)) =>
+      batch
+        .and(putStateResetTrim(above))
+        .and(headerCursorsBackTo(above.commonBlock, hashAt))
+    }
+    stateClearRemovals(Some(genesisHash)).and(trimmed)
+
+  /** What [[stateClearBatch]] removes and sets back, without its marks: also what the end of an interrupted clear
+    * writes again before it deletes the rows ([[pathstate.PathStateStorage.finishPendingClear]]), since a sync that ran
+    * between the two with the mark still set has written its own record over rows that are then deleted. Writing it
+    * twice changes nothing.
+    */
+  private[storage] def stateClearRemovals(genesisHash: Option[ByteString]): DataSourceBatchUpdate =
+    val removed = update(
+      toRemove = Seq(
+        Keys.StateAnchor,
+        Keys.StateOrigin,
+        Keys.StateFinalized,
+        Keys.StateChangesetPrunedTo,
+        Keys.FastSyncDone,
+        Keys.SnapSyncPivotBlock,
+        Keys.SnapSyncMinPivotBlock,
+        Keys.SnapSyncStateRoot,
+        Keys.SnapSyncPivotHash,
+        Keys.SnapSyncProgress,
+        Keys.SnapAccountResumeCheckpoint,
+        Keys.SnapSyncBootstrapTarget,
+        Keys.SnapSyncAccountsComplete,
+        Keys.SnapSyncStorageComplete,
+        Keys.SnapSyncBytecodeComplete,
+        Keys.SnapSyncCodeHashesPath,
+        Keys.SnapSyncStorageFilePath,
+        Keys.SnapSyncStorageFileCount,
+        Keys.SnapSyncCodeHashesCount,
+        Keys.SnapSyncFinalizedRoot,
+        // what was owed or done for a state that is gone: a checkpoint import half made (left, the next sync takes
+        // the datadir for one that owes a repair pass), the recoveries after a sync, the code scan, and the count
+        // and the height of the times regular sync was stuck on it
+        Keys.CheckpointImportInProgress,
+        Keys.BytecodeRecoveryDone,
+        Keys.StorageRecoveryDone,
+        Keys.RecoveryProgress,
+        Keys.SnapCodeScanOwed,
+        Keys.RegularSyncStuckResnaps,
+        Keys.RegularSyncStuckBaseline
+      ),
+      toUpsert = Nil
+    )
+    val bestIsTheGenesis = genesisHash.fold(removed)(hash => removed.and(putBestBlockInfo(BlockInfo(hash, 0))))
+    clearSnapSyncDone().and(bestIsTheGenesis)
+
+  /** The finalized block as the consensus client last named it with a fork choice this node followed (spec 018 C4d part
+    * 1): what retention keeps above, and what a move of the head must not reverse, across a restart. `None` before one
+    * was named, and on a datadir of the hash layout.
+    */
+  def getStateFinalized(): Option[pathstate.FinalizedBlock] =
+    get(Keys.StateFinalized).map(pathstate.FinalizedBlock.decode)
+
+  /** The update that sets [[getStateFinalized]]. It belongs in the batch of the move of the head that follows the fork
+    * choice that named the block, which only the path state storage builds: a fork choice that was refused names
+    * nothing.
+    */
+  private[storage] def putStateFinalized(block: pathstate.FinalizedBlock): DataSourceBatchUpdate =
+    put(Keys.StateFinalized, pathstate.FinalizedBlock.encode(block))
+
+  /** The block this datadir's state on the unified layout began at (spec 018 plan.md "C4b: the move core"): its
+    * genesis, or the block a sync or an imported checkpoint left the state of. No state before it was ever here, so no
+    * move of the head goes below it. `None` on a datadir of the hash layout, and on one whose anchor was made before
+    * this was kept.
+    */
+  def getStateOrigin(): Option[pathstate.BlockRef] = get(Keys.StateOrigin).map(pathstate.StateAnchor.decode)
+
+  /** The update that sets [[getStateOrigin]]. It belongs in the batch that gives the datadir a state anchor where it
+    * had none, which only the path state storage builds.
+    */
+  private[storage] def putStateOrigin(block: pathstate.BlockRef): DataSourceBatchUpdate =
+    put(Keys.StateOrigin, pathstate.StateAnchor.encode(block))
+
+  /** The update that moves [[getChangesetPrunedTo]]. It belongs in the batch that deletes the records below it, which
+    * is the canonical commit's.
+    */
+  private[storage] def putChangesetPrunedTo(height: BigInt): DataSourceBatchUpdate =
+    put(Keys.StateChangesetPrunedTo, height.toString)
+
   /** Whether fast sync finished on this node. Fast sync was removed and nothing in the node sets this flag any more; a
     * database that fast sync completed earlier still carries it. `SyncController` reads it in two places: to tell a
     * stranded fast sync from a finished one, and, with SNAP on and not done, to send a node where fast sync finished
@@ -186,6 +492,22 @@ class AppStateStorage(val dataSource: DataSource) extends TransactionalKeyValueS
   def snapAuditAnchor(): String =
     getSnapSyncPivotBlock().fold(AppStateStorage.AuditNoPivot)(_.toString)
 
+  /** #1692: owe this datadir one more full audit pass, once. Before the fix, pruning on a store SNAP or a checkpoint
+    * filled could delete a node another position still used, and a clean pass the audit finished earlier says nothing
+    * of a hole that appeared after it. So the clean anchor goes, with the audit's place and its record of bad entries
+    * (a pass resumed from before the upgrade would skip what it had already walked), and the key that says this was
+    * done goes in the same write: a crash leaves all of it or none, and a start that finds the key owes no more. True
+    * when it forced a pass.
+    */
+  def forceAuditPassOnce(): Boolean =
+    if get(Keys.SnapAuditForcedOnce).isDefined then false
+    else
+      update(
+        toRemove = Seq(Keys.SnapAuditCleanAnchor),
+        toUpsert = Seq(Keys.SnapAuditForcedOnce -> RefCountsMarkerValue)
+      ).and(SnapSyncProgressStorage.forgetAudit(dataSource)).commitSync()
+      true
+
   /** A node SNAP or a checkpoint finished owes one clean pass per anchor, and one pass of any kind while a recovery
     * flag is down: a flag says a pass ran, and the audit is what pays it (decision 14), so with the anchor matching and
     * a flag down, as after a bulk recovery that left it, nothing else would. A node that never finished either owes
@@ -210,7 +532,11 @@ class AppStateStorage(val dataSource: DataSource) extends TransactionalKeyValueS
     */
   def beginCheckpointImport(stateRoot: ByteString, startMs: Long): DataSourceBatchUpdate =
     update(
-      toRemove = Seq(Keys.SnapHealInvariant, Keys.SnapAuditCleanAnchor),
+      // #1692: the archive holds each node once, so a node two positions use is counted once. Basic pruning would then
+      // delete nodes by a count that is too low, so the stamp goes in the same write as the first of them, on any scheme.
+      // #1654: the importer stores the archive's weight for the checkpoint block, trusted and not derived from
+      // genesis, so the chain-weight marker goes too; `ChainWeightReconcile` checks it once the headers below are in.
+      toRemove = Seq(Keys.SnapHealInvariant, Keys.SnapAuditCleanAnchor, Keys.RefCountsExact, Keys.ChainWeightInvariant),
       toUpsert = Seq(Keys.CheckpointImportInProgress -> s"${Hex.toHexString(stateRoot.toArray)}:$startMs")
     ).and(SnapSyncProgressStorage.forgetAudit(dataSource))
 
@@ -235,6 +561,92 @@ class AppStateStorage(val dataSource: DataSource) extends TransactionalKeyValueS
   /** The genesis has just been stored for the first time. */
   def markDatadirCreatedUnderInvariant(): DataSourceBatchUpdate =
     put(Keys.SnapHealDatadirCreated, SnapHealDatadirCreatedVersion)
+
+  // ========================================
+  // Whether basic pruning may delete by reference count (#1692)
+  // ========================================
+  //
+  // A node's count is the number of positions that emitted it. Block import emits once per position, so its counts are
+  // exact. A writer that skips a node already present (SNAP heal and resume, the checkpoint importer, an old fast sync)
+  // leaves counts too low, and pruning then deletes a node another position still uses. So prune deletes no trie node
+  // unless this datadir has been exact since it was created, on either scheme. One key says so: the genesis write sets
+  // it, when the genesis counts every position, and nothing sets it again. It is taken away, in a synced write before
+  // the first write that could count a node short: a Hash SNAP start, a checkpoint import, and a Path publish of a
+  // hand-off that is not clean. Counts can go negative, so a stamp set again after a stretch without pruning could meet
+  // a live node at zero in a death row. A datadir an older binary made has no stamp, and keeps every trie node.
+
+  /** Whether the stamp "every count here is exact" stands. Only the genesis write sets it (see [[markDatadirCreated]]).
+    */
+  def hasRefCountsExact(): Boolean =
+    get(Keys.RefCountsExact).contains(RefCountsMarkerValue)
+
+  /** The stamp, for the write that stores the genesis. */
+  def markRefCountsExact(): DataSourceBatchUpdate =
+    put(Keys.RefCountsExact, RefCountsMarkerValue)
+
+  /** Take the stamp away. Commit with `commitSync`, before the first node a de-duplicating writer puts in. */
+  def clearRefCountsExact(): DataSourceBatchUpdate =
+    remove(Keys.RefCountsExact)
+
+  /** The write that follows a datadir's genesis being stored for the first time: who created it, and, when
+    * `countsExact`, that its counts are exact. One write, so a crash cannot leave one without the other. `countsExact`
+    * is what the genesis load says (`GenesisDataLoader.countsExact`): a genesis that puts a shared subtree under two
+    * accounts counts it once, and its datadir is left unstamped. A crash between the genesis and this write leaves a
+    * datadir with no stamp, which only costs it the reclaiming of dead nodes.
+    *
+    * It also sets the chain-weight marker (#1654): the only stored weight is the genesis's own difficulty, and import
+    * derives every later one from its parent. A crash before this write costs one `ChainWeightReconcile` pass.
+    */
+  def markDatadirCreated(countsExact: Boolean): DataSourceBatchUpdate =
+    val created = markDatadirCreatedUnderInvariant().and(markChainWeightInvariant())
+    if countsExact then created.and(markRefCountsExact()) else created
+
+  // ========================================
+  // Stored chain weights (#1654)
+  // ========================================
+  //
+  // Fork choice compares stored weights (`ConsensusImpl.importToNewBranch`, `BlockQueue`), so one weight that does not
+  // follow from its parent's is a jump that every fork branching below it is weighed across. The marker says there is
+  // none: every stored weight on the canonical chain is the genesis weight plus the difficulties of the blocks after
+  // genesis up to it, as import writes it (parent + difficulty). It is set by the genesis write, by a SNAP hand-off that
+  // began on an exact chain and ends on an exact pivot weight (`ChainWeightReconcile.atSnapHandOff`), and by
+  // `ChainWeightReconcile` once it has checked or repaired every
+  // canonical weight. It is taken away by a SNAP start (the pivot carries an estimate until the headers reach it), a
+  // checkpoint import (the archive's weight is trusted, not derived), an operator seed, and any estimate written over a
+  // weight. A datadir an older binary made has no marker, and gets one reconcile pass.
+
+  /** Whether every stored canonical weight is the genesis weight plus the difficulties up to its block. */
+  def hasChainWeightInvariant(): Boolean =
+    get(Keys.ChainWeightInvariant).contains(ChainWeightInvariantVersion)
+
+  def markChainWeightInvariant(): DataSourceBatchUpdate =
+    put(Keys.ChainWeightInvariant, ChainWeightInvariantVersion)
+
+  def clearChainWeightInvariant(): DataSourceBatchUpdate =
+    remove(Keys.ChainWeightInvariant)
+
+  /** Set at a SNAP start that found the marker standing (or a datadir with no header above genesis), and kept across
+    * restarts of that SNAP: only then may its hand-off set the marker again (`ChainWeightReconcile.atSnapHandOff`).
+    * Removed at the hand-off and at any regular-sync start.
+    */
+  def isChainWeightSnapPending(): Boolean =
+    get(Keys.ChainWeightSnapPending).contains(ChainWeightInvariantVersion)
+
+  def markChainWeightSnapPending(): DataSourceBatchUpdate =
+    put(Keys.ChainWeightSnapPending, ChainWeightInvariantVersion)
+
+  def clearChainWeightSnapPending(): DataSourceBatchUpdate =
+    remove(Keys.ChainWeightSnapPending)
+
+  /** `ChainWeightReconcile`'s saved place, in its own encoding (`ChainWeightReconcile.Progress`). */
+  def getChainWeightReconcileProgress(): Option[String] =
+    get(Keys.ChainWeightReconcileProgress)
+
+  def putChainWeightReconcileProgress(encoded: String): DataSourceBatchUpdate =
+    put(Keys.ChainWeightReconcileProgress, encoded)
+
+  def removeChainWeightReconcileProgress(): DataSourceBatchUpdate =
+    remove(Keys.ChainWeightReconcileProgress)
 
   /** True when SNAP sync has started but has not yet completed — i.e., the node is mid-SNAP.
     *
@@ -282,6 +694,26 @@ class AppStateStorage(val dataSource: DataSource) extends TransactionalKeyValueS
 
   def putBulkBytecodeRecoveryFailures(count: Int): DataSourceBatchUpdate =
     put(Keys.BulkBytecodeRecoveryFailures, count.toString)
+
+  /** H3: SNAP re-syncs regular sync has asked for in a row, with no block imported in between. Read by SyncController's
+    * `RegularSyncStuck` handler, which waits before a re-SNAP from the third on.
+    */
+  def regularSyncStuckResnaps(): Int =
+    get(Keys.RegularSyncStuckResnaps).flatMap(v => scala.util.Try(v.toInt).toOption).getOrElse(0)
+
+  /** H3: the best block an import is measured from: the best block at the last `RegularSyncStuck` that did not re-SNAP
+    * at once, or where the first regular sync after a re-SNAP started. `None` while a re-SNAP runs (its pivot is not an
+    * import), and when nothing was ever stuck.
+    */
+  def resnapBaseline(): Option[BigInt] =
+    get(Keys.RegularSyncStuckBaseline).flatMap(v => scala.util.Try(BigInt(v)).toOption)
+
+  /** The count and its baseline, in one batch, so a restart never finds one without the other. */
+  def putRegularSyncStuck(count: Int, baseline: Option[BigInt]): DataSourceBatchUpdate =
+    val counted = put(Keys.RegularSyncStuckResnaps, count.toString)
+    baseline.fold(counted.and(remove(Keys.RegularSyncStuckBaseline)))(b =>
+      counted.and(put(Keys.RegularSyncStuckBaseline, b.toString))
+    )
 
   /** Check if storage recovery scan has completed (Bug 20 hardening) */
   def isStorageRecoveryDone(): Boolean =
@@ -385,6 +817,20 @@ class AppStateStorage(val dataSource: DataSource) extends TransactionalKeyValueS
     */
   def putSnapSyncStateRoot(stateRoot: ByteString): DataSourceBatchUpdate =
     put(Keys.SnapSyncStateRoot, Hex.toHexString(stateRoot.toArray))
+
+  /** The hash of the header the SNAP pivot was taken from: written in the same batch as `SnapSyncPivotBlock` and
+    * `SnapSyncStateRoot` wherever a pivot is committed. Finalisation compares it with the header the validated header
+    * download holds at the pivot's number. Absent on a datadir whose pivot was committed before this key existed, and
+    * where the committed pivot's header could not be identified; finalisation then compares the state root only.
+    */
+  def getSnapSyncPivotHash(): Option[ByteString] =
+    get(Keys.SnapSyncPivotHash).map(v => ByteString(Hex.decode(v)))
+
+  def putSnapSyncPivotHash(hash: ByteString): DataSourceBatchUpdate =
+    put(Keys.SnapSyncPivotHash, Hex.toHexString(hash.toArray))
+
+  def removeSnapSyncPivotHash(): DataSourceBatchUpdate =
+    remove(Keys.SnapSyncPivotHash)
 
   /** Get the SNAP sync progress (optional - for progress persistence across restarts)
     *
@@ -593,6 +1039,32 @@ class AppStateStorage(val dataSource: DataSource) extends TransactionalKeyValueS
   def putBackfillBestHeader(n: BigInt): DataSourceBatchUpdate =
     put(Keys.BackfillBestHeader, n.toString)
 
+  /** Hash of the header at `BackfillBestHeader`, the tip of the header chain `ChainDownloader` stored: written in the
+    * same batch as the cursor whenever the download stores headers. The download continues from this header, and SNAP
+    * finalisation finds the downloaded chain's header at the pivot from it by parent hash, so neither depends on the
+    * number→hash index, which other writers (the pivot bootstrap) also update. A value that does not name a stored
+    * header at the cursor's height is stale; readers check that. Absent on a datadir whose headers were stored before
+    * this key existed.
+    */
+  def getBackfillBestHeaderHash(): Option[ByteString] =
+    get(Keys.BackfillBestHeaderHash).map(v => ByteString(Hex.decode(v)))
+
+  def putBackfillBestHeaderHash(hash: ByteString): DataSourceBatchUpdate =
+    put(Keys.BackfillBestHeaderHash, Hex.toHexString(hash.toArray))
+
+  /** Hash of the header `ChainDownloader` stored at its target block (`BackfillTarget`, the SNAP pivot), written in the
+    * batch that stores it. SNAP finalisation reads the downloaded chain's header at the pivot from it, without walking
+    * back from the tip; readers check the header's number. Removed when the download starts again from genesis.
+    */
+  def getBackfillTargetHash(): Option[ByteString] =
+    get(Keys.BackfillTargetHash).map(v => ByteString(Hex.decode(v)))
+
+  def putBackfillTargetHash(hash: ByteString): DataSourceBatchUpdate =
+    put(Keys.BackfillTargetHash, Hex.toHexString(hash.toArray))
+
+  def removeBackfillTargetHash(): DataSourceBatchUpdate =
+    remove(Keys.BackfillTargetHash)
+
   /** Highest block number N such that every block from 1 to N has a `storeBlockBody` commit on disk — a verified
     * contiguous prefix (`ChainDownloader.advanceBodyCursor`, #33), not merely the highest individual body that has ever
     * been stored (bodies land out of order across concurrent peers). May lag the header cursor.
@@ -629,6 +1101,8 @@ class AppStateStorage(val dataSource: DataSource) extends TransactionalKeyValueS
       toRemove = Seq(
         Keys.BackfillTarget,
         Keys.BackfillBestHeader,
+        Keys.BackfillBestHeaderHash,
+        Keys.BackfillTargetHash,
         Keys.BackfillBestBody,
         Keys.BackfillBestReceipt
       ),
@@ -684,6 +1158,12 @@ object AppStateStorage:
   /** [[getSnapAuditCleanAnchor]]'s value on a node with no SNAP pivot. */
   val AuditNoPivot: Value = "no-pivot"
 
+  /** The value of `state.refcounts.exact` and `snap.heal.auditForcedOnce`: the keys say it by being there. */
+  val RefCountsMarkerValue: Value = "1"
+
+  /** The value of `chain.weight.invariant` (#1654). A later rule writes another, and older marks do not stand. */
+  val ChainWeightInvariantVersion: Value = "1"
+
   object Keys:
     val BestBlockNumber = "BestBlockNumber"
     val BestBlockHash = "BestBlockHash"
@@ -696,11 +1176,14 @@ object AppStateStorage:
     val SnapSyncPivotBlock = "SnapSyncPivotBlock"
     val SnapSyncMinPivotBlock = "SnapSyncMinPivotBlock"
     val SnapSyncStateRoot = "SnapSyncStateRoot"
+    val SnapSyncPivotHash = "SnapSyncPivotHash"
     val SnapSyncProgress = "SnapSyncProgress"
     val SnapAccountResumeCheckpoint = "SnapAccountResumeCheckpoint"
     val SnapSyncBootstrapTarget = "SnapSyncBootstrapTarget"
     val BytecodeRecoveryDone = "BytecodeRecoveryDone"
     val BulkBytecodeRecoveryFailures = "BulkBytecodeRecoveryFailures"
+    val RegularSyncStuckResnaps = "RegularSyncStuckResnaps"
+    val RegularSyncStuckBaseline = "RegularSyncStuckBaseline"
     val StorageRecoveryDone = "StorageRecoveryDone"
     val RecoveryProgress = "RecoveryProgress"
     val SnapSyncAccountsComplete = "SnapSyncAccountsComplete"
@@ -713,6 +1196,8 @@ object AppStateStorage:
     val SnapSyncFinalizedRoot = "SnapSyncFinalizedRoot"
     val BackfillTarget = "BackfillTarget"
     val BackfillBestHeader = "BackfillBestHeader"
+    val BackfillBestHeaderHash = "BackfillBestHeaderHash"
+    val BackfillTargetHash = "BackfillTargetHash"
     val BackfillBestBody = "BackfillBestBody"
     val BackfillBestReceipt = "BackfillBestReceipt"
     val SnapHealInvariant = "snap.heal.invariant"
@@ -721,3 +1206,18 @@ object AppStateStorage:
     val SnapHealDatadirCreated = "snap.heal.datadirCreated"
     val SnapCodeScanOwed = "snap.heal.codeScanOwed"
     val SnapAuditCleanAnchor = "snap.heal.auditCleanAnchor"
+    val SnapAuditForcedOnce = "snap.heal.auditForcedOnce"
+    val RefCountsExact = "state.refcounts.exact"
+    val StateAnchor = com.chipprbots.ethereum.db.storage.pathstate.StateAnchor.Key
+    val StateOrigin = "state.origin"
+    val StateFinalized = "state.finalized"
+    val StateEscalationLast = com.chipprbots.ethereum.db.storage.pathstate.StateEscalation.Key
+    val StateEscalationGivenUp = com.chipprbots.ethereum.db.storage.pathstate.GivenUpBranches.Key
+    val StateResetPending = com.chipprbots.ethereum.db.storage.pathstate.StateResetPending.Key
+    val StateResetTrim = com.chipprbots.ethereum.db.storage.pathstate.StateResetTrim.Key
+    val PivotOnBranch = com.chipprbots.ethereum.db.storage.pathstate.PivotOnBranch.Key
+    val StateChangesetPrunedTo = "state.changeset.pruned-to"
+    val StateLayout = com.chipprbots.ethereum.db.storage.pathstate.StateLayout.Key
+    val ChainWeightInvariant = "chain.weight.invariant"
+    val ChainWeightReconcileProgress = "chain.weight.reconcileProgress"
+    val ChainWeightSnapPending = "chain.weight.snapPending"

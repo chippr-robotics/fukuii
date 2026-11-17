@@ -99,6 +99,101 @@ class RocksDbDataSource(
       try if isClosed then None else read
       finally dbLock.readLock().unlock()
 
+  /** What the `--tui` dashboard's Storage view shows of this database (spec 029 FR-043): its size on disk, each column
+    * family's, whether compaction is wanted or running and how much waits, whether writes are stopped or slowed, the
+    * memory it holds, and the block cache's hits where statistics are on.
+    *
+    * It never waits and holds nobody up ([[whileFree]]). The read lock is TRIED, in the form that does not queue: it is
+    * taken at once unless a write holds the lock, and otherwise this returns `None` at once. (The timed form
+    * [[withMetricsReadLock]] uses honours the queue, so it fails for as long as one writer waits behind a long read: a
+    * compaction, which is when this is most wanted.) The lock is held for a bounded number of in-memory property reads
+    * and no I/O, so a writer or `close()` that arrives meanwhile waits that long and no longer. `None` too once the
+    * database is closed: no freed native handle is touched, and none is kept past the lock.
+    *
+    * A property this RocksDB cannot give is `None` for that figure alone, and is logged the first time; it is never a
+    * zero.
+    *
+    * @param withEstimates
+    *   also read each family's estimated key count and the estimated live data size: heavier (the live size goes over
+    *   the file list under RocksDB's own mutex), so the caller asks for them less often
+    */
+  def properties(withEstimates: Boolean = false): Option[RocksDbProperties] =
+    whileFree {
+      def read(name: String)(value: => Long): Option[Long] =
+        try Some(value)
+        catch
+          case NonFatal(e) =>
+            if propertyFailures.add(name) then log.warn("RocksDB property {} could not be read: {}", name, e.toString)
+            None
+      // Summed over the column families; a database-wide property is read once, or it would be counted a family
+      // a time.
+      def aggregated(name: String): Option[Long] = read(name)(db.getAggregatedLongProperty(name))
+      def databaseWide(name: String): Option[Long] = read(name)(db.getLongProperty(name))
+      val stores = nameSpaces.map { namespace =>
+        val handle = handles.get(namespace)
+        def of(name: String): Option[Long] = handle.flatMap(h => read(name)(db.getLongProperty(h, name)))
+        RocksDbStoreProperties(
+          namespace,
+          // The same measure as the whole database's below, so the families' sizes sum to it.
+          sstBytes = of("rocksdb.total-sst-files-size"),
+          keys = if withEstimates then of("rocksdb.estimate-num-keys") else None
+        )
+      }
+      val cache =
+        // The configuration says whether statistics are on: a database with them on and nothing read yet has
+        // counts of zero, which is not the same as having none.
+        if !rocksDbConfig.enableStatistics then RocksDbCacheHits.Off
+        else
+          statistics.fold(RocksDbCacheHits.Off: RocksDbCacheHits) { stats =>
+            RocksDbCacheHits.On(
+              hit = stats.getTickerCount(TickerType.BLOCK_CACHE_HIT),
+              miss = stats.getTickerCount(TickerType.BLOCK_CACHE_MISS),
+              indexFilterHit = stats.getTickerCount(TickerType.BLOCK_CACHE_INDEX_HIT) +
+                stats.getTickerCount(TickerType.BLOCK_CACHE_FILTER_HIT),
+              indexFilterMiss = stats.getTickerCount(TickerType.BLOCK_CACHE_INDEX_MISS) +
+                stats.getTickerCount(TickerType.BLOCK_CACHE_FILTER_MISS)
+            )
+          }
+      RocksDbProperties(
+        sstBytes = aggregated("rocksdb.total-sst-files-size"),
+        liveDataBytes = if withEstimates then aggregated("rocksdb.estimate-live-data-size") else None,
+        stores = stores,
+        compactionPending = aggregated("rocksdb.compaction-pending"),
+        pendingCompactionBytes = aggregated("rocksdb.estimate-pending-compaction-bytes"),
+        runningCompactions = databaseWide("rocksdb.num-running-compactions"),
+        writeStopped = databaseWide("rocksdb.is-write-stopped").map(_ != 0L),
+        delayedWriteRate = databaseWide("rocksdb.actual-delayed-write-rate"),
+        blockCacheUsage = memory.cache.getUsage,
+        blockCacheCapacity = memory.budget.cacheCapacity,
+        memTables = aggregated("rocksdb.cur-size-all-mem-tables"),
+        tableReaders = aggregated("rocksdb.estimate-table-readers-mem"),
+        cache = cache
+      )
+    }
+
+  /** Runs `read` only if no write holds the database now, and while none can begin: `None`, at once, when a write holds
+    * it or it is closed.
+    *
+    * The read lock is tried in the form that does not queue, and held while `read` runs. A thread that holds the read
+    * lock takes it again without waiting, whatever is queued, so reads of this data source made inside `read` (point
+    * gets, [[properties]]) do not wait behind a writer that queued meanwhile: outside it, such a read queues behind a
+    * writer that itself waits for a long read to end (a compaction holds the read lock for its whole length), which is
+    * minutes. `read` must be short: a writer, or `close()`, waits for it. One that throws is logged once and is `None`.
+    */
+  def whileFree[A](read: => A): Option[A] =
+    val lock = dbLock.readLock()
+    if !lock.tryLock() then None
+    else
+      try if isClosed then None else Some(read)
+      catch
+        case NonFatal(e) =>
+          if propertyFailures.add("read") then log.warn("RocksDB could not be read for the dashboard: {}", e.toString)
+          None
+      finally lock.unlock()
+
+  /** The properties whose read has failed: each is logged once. */
+  private val propertyFailures: java.util.Set[String] = java.util.concurrent.ConcurrentHashMap.newKeySet[String]()
+
   /** Flush every column family's memtables to SST files and wait for it. Test support: `close()` does not flush
     * WAL-backed memtables, so a test that needs data in SST files (in a given table format) must call this first.
     */
@@ -460,6 +555,8 @@ class RocksDbDataSource(
     * in it.
     */
   override def clear(): Unit =
+    // Test support: the handles are swapped here without the write lock, so nothing may read this data source (the
+    // dashboard's `properties` included) while a test clears it.
     destroy()
     log.debug(s"About to create new DataSource for path: ${rocksDbConfig.path}")
     val opened = createDB(rocksDbConfig, nameSpaces.tail)
@@ -607,6 +704,60 @@ trait RocksDbConfig:
   // and are only worth enabling to diagnose a slow heal walk.
   val enableStatistics: Boolean = false
 
+/** One column family as the dashboard's Storage view shows it (spec 029 FR-043).
+  *
+  * @param sstBytes
+  *   the bytes of its SST files, obsolete ones not yet deleted among them, as the whole database's are counted; `None`
+  *   where RocksDB could not say
+  * @param keys
+  *   RocksDB's estimate of its keys, read only when estimates were asked for; an estimate, and wrong after a range
+  *   delete
+  */
+final case class RocksDbStoreProperties(namespace: Namespace, sstBytes: Option[Long], keys: Option[Long])
+
+/** The block cache's hits and misses since the database was opened, where statistics are on. */
+sealed trait RocksDbCacheHits
+object RocksDbCacheHits:
+
+  /** `db.rocksdb.enable-statistics` is off: nothing is counted. */
+  case object Off extends RocksDbCacheHits
+
+  /** Counted: a count of zero is a count. */
+  final case class On(hit: Long, miss: Long, indexFilterHit: Long, indexFilterMiss: Long) extends RocksDbCacheHits
+
+/** The database as the dashboard's Storage view shows it (spec 029 FR-043): see [[RocksDbDataSource.properties]]. A
+  * figure RocksDB could not give is `None`.
+  *
+  * @param sstBytes
+  *   every SST file still held, obsolete ones not yet deleted among them: the database's size on disk, without its
+  *   write-ahead log
+  * @param liveDataBytes
+  *   RocksDB's estimate of the live data, read only when estimates were asked for
+  * @param compactionPending
+  *   how many column families want a compaction
+  * @param pendingCompactionBytes
+  *   the bytes compaction has to rewrite to catch up
+  * @param writeStopped
+  *   RocksDB is refusing writes until compaction catches up
+  * @param delayedWriteRate
+  *   bytes a second RocksDB is holding writes to; 0 when it is not slowing them
+  */
+final case class RocksDbProperties(
+    sstBytes: Option[Long],
+    liveDataBytes: Option[Long],
+    stores: Seq[RocksDbStoreProperties],
+    compactionPending: Option[Long],
+    pendingCompactionBytes: Option[Long],
+    runningCompactions: Option[Long],
+    writeStopped: Option[Boolean],
+    delayedWriteRate: Option[Long],
+    blockCacheUsage: Long,
+    blockCacheCapacity: Long,
+    memTables: Option[Long],
+    tableReaders: Option[Long],
+    cache: RocksDbCacheHits
+)
+
 /** Native memory held by one RocksDB instance (spec 015). All values are bytes.
   *
   * `blockCacheUsage` includes the memtable reservation charged by the WriteBufferManager, so it overlaps `memTables`.
@@ -689,7 +840,7 @@ object RocksDbDataSource extends Logger:
 
   /** The rocksdb implementation acquires a lock from the operating system to prevent misuse
     */
-  private val dbLock = new ReentrantReadWriteLock()
+  private[dataSource] val dbLock = new ReentrantReadWriteLock()
 
   /** Longest a metrics read waits for the DB read lock before giving up (spec 015). */
   private[dataSource] val MetricsLockWaitMs: Long = 100L

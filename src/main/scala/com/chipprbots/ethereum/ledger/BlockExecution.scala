@@ -12,6 +12,8 @@ import com.chipprbots.ethereum.consensus.validators.std.StdBlockValidator.BlockE
 import com.chipprbots.ethereum.db.storage.EvmCodeStorage
 import com.chipprbots.ethereum.db.storage.SerializingMptStorage
 import com.chipprbots.ethereum.db.storage.StagedBlockState
+import com.chipprbots.ethereum.db.storage.pathstate.BranchPin
+import com.chipprbots.ethereum.db.storage.pathstate.StateFault
 import com.chipprbots.ethereum.domain.*
 import com.chipprbots.ethereum.ledger.BlockExecutionError.MissingParentError
 import com.chipprbots.ethereum.mpt.MerklePatriciaTrie.MPTException
@@ -61,7 +63,10 @@ class BlockExecution(
     val hash = block.header.hash.value
     // One execution + commit per block hash at a time, across the Engine API and the regular-sync importer.
     ChainInsertLock.shared(BlockImportGate.withBlock(hash) {
-      val staged = blockchain.stageBlockState(block.header.number.value)
+      val staged = blockchain.stageBlockStateApart(block.header)
+      // This path commits a block's state apart from the block: the block is stored, and the head moved, by the caller
+      // afterwards. On the unified layout the state is kept as a forward layer beside the state the disk holds, and
+      // only a fork choice moves the head to it (spec 018 C4d part 2a).
       BlockImportGate.alreadyExecuted(hash, staged) match
         case Some(done) => Right(done.asTuple)
         case None =>
@@ -79,7 +84,7 @@ class BlockExecution(
             // Accepted: its state goes to the database (nobody else commits it here). Rejected: it leaves nothing
             // behind.
             case Right(executed) =>
-              timedCommit(block)(staged.commitWith(block.header.number.value, hash, None))
+              timedCommit(block)(staged.commitApart(block.header.number.value, hash))
               BlockImportGate.record(hash, executed)
             case Left(_) => staged.discard()
           result
@@ -232,11 +237,11 @@ class BlockExecution(
     * executionRequests populated. No pre- or post-execution validation against the header is performed — caller is
     * responsible for filling in header fields (stateRoot, receiptsRoot, gasUsed, requestsHash, etc.) from the result.
     *
-    * Executes against a read-only-backed WorldStateProxy so tx effects do NOT persist to RocksDB. A proposer block is
-    * speculative until the CL promotes it via `forkchoiceUpdated(head=hash(block))`; leaking its state would cause a
-    * subsequent `newPayload` for the same slot (e.g. a tampered sibling) to fail with stale nonces / balances instead
-    * of the expected stateRoot / receiptsRoot mismatch. Matches the read-only pattern used by `eth_call`,
-    * `eth_estimateGas`, and `debug_traceTransaction`.
+    * Where what it persists goes depends on the state layout; see [[buildInitialWorld]]. On the hash store the trie
+    * nodes reach the store, by their hashes, where the import of the same block finds them already written. On the
+    * unified layout they go to a layer of this execution's own and are dropped with it: nothing is written but contract
+    * code, which is kept by its hash on both. Either way no block, receipt or head is written here, and a block that
+    * was built is executed again when it is imported.
     */
   def executeForProposer(
       block: Block
@@ -305,9 +310,8 @@ class BlockExecution(
             collectDepositRequests(execResult.receipts)
           else Right(None)
         ).leftMap(BlockExecutionError.ValidationAfterExecError.apply)
-        // State root hash needs to be up-to-date for validateBlockAfterExecution. In proposer mode the
-        // backing MPT storage is read-only, so persistState computes the trie hash in-memory without
-        // writing to RocksDB — exactly what we want for a speculative payload.
+        // State root hash needs to be up-to-date for validateBlockAfterExecution. For a proposer this is also where
+        // the root its header will carry is computed; where the nodes go is buildInitialWorld's storage.
         worldPersisted = ImportProfile.finalPersist(InMemoryWorldStateProxy.persistState(worldAfterSystemCalls))
       yield
         for
@@ -371,10 +375,17 @@ class BlockExecution(
     // roots diverged for reasons we haven't fully isolated (likely buffered-node read ordering
     // inside SerializingMptStorage/MerklePatriciaTrie). Use the writable backing in both modes;
     // we still get idempotence because the MPT hash is deterministic given the same inputs.
-    val _ = isProposer
+    //
+    // On the unified layout a proposer has a storage of its own: the parent's state under a layer that is dropped
+    // with it (spec 018 C3c). It is the storage import executes the same block on, less the record of what changed,
+    // so the divergence above has no counterpart there; `ProposerOnPositionsSpec` holds a build to the block that
+    // import commits. With the guard off there is none, and the store is the one it was.
     InMemoryWorldStateProxy(
       evmCodeStorage = evmCodeStorage,
-      staged.fold(blockchain.getBackingMptStorage(block.header.number.value))(_.storage) match
+      staged
+        .map(_.storage)
+        .orElse(if isProposer then blockchainReader.proposerStateOn(parentHeader) else None)
+        .getOrElse(blockchain.getBackingMptStorage(block.header.number.value)) match
         // Execution alone reads through the decoded-node cache; see DecodedNodeCache.
         case serializing: SerializingMptStorage => serializing.cachedForExecution
         case other                              => other,
@@ -406,28 +417,7 @@ class BlockExecution(
       initialWorld: InMemoryWorldStateProxy,
       accessList: Option[BlockAccessListBuilder]
   )(implicit blockchainConfig: BlockchainConfig): Either[BlockExecutionError.TxsExecutionError, BlockResult] =
-    val worldAfterDao = blockchainConfig.daoForkConfig match
-      case Some(daoForkConfig) if daoForkConfig.isDaoForkBlock(blockHeaderNumber) =>
-        drainDaoForkAccounts(initialWorld, daoForkConfig)
-      case _ => initialWorld
-
-    val inputWorld =
-      if blockchainConfig.isAmsterdamTimestamp(block.header.unixTimestamp) then
-        // Amsterdam: EIP-4788 and EIP-2935 run as real system calls (see `applyAmsterdamPreambleSystemCalls`), which
-        // share EIP-7928 block access index 0.
-        val preambleReads = accessList.map(_ => new BlockAccessRecorder)
-        val afterPreamble = BlockExecution.applyAmsterdamPreambleSystemCalls(block.header, worldAfterDao, preambleReads)
-        for
-          builder <- accessList
-          reads <- preambleReads
-        do builder.addIndex(0L, reads, worldAfterDao, afterPreamble)
-        afterPreamble
-      else
-        // EIP-4788: Store parent beacon block root in system contract (post-Cancun)
-        val worldAfterBeaconRoot = applyEip4788(block, worldAfterDao)
-
-        // EIP-2935: Store parent block hash in history storage contract
-        applyEip2935(block, worldAfterBeaconRoot)
+    val inputWorld = BlockExecution.applyBlockPreamble(block, blockHeaderNumber, initialWorld, accessList)
 
     val hashAsHexString = block.header.hashAsHexString
     val transactionList = block.body.transactionList
@@ -441,123 +431,6 @@ class BlockExecution(
       case Left(error) =>
         log.debug(s"Not all txs from block $hashAsHexString were executed correctly, due to ${error.describe}")
     blockTxsExecResult
-
-  /** EIP-4788: Store the parent beacon block root in the beacon root system contract.
-    *
-    * Post-Cancun, the parentBeaconBlockRoot from the CL is stored at the beacon root contract address
-    * (0x000F3df6D732807Ef1319fB7B8bB8522d0Beac02) before executing transactions. The contract stores: timestamp → root
-    * at slot (timestamp % HISTORY_BUFFER_LENGTH), and root at slot (timestamp % HISTORY_BUFFER_LENGTH +
-    * HISTORY_BUFFER_LENGTH).
-    */
-  private def applyEip4788(
-      block: Block,
-      world: InMemoryWorldStateProxy
-  )(implicit blockchainConfig: BlockchainConfig): InMemoryWorldStateProxy =
-    import BlockExecution.*
-    // Only apply post-Cancun (when parentBeaconBlockRoot is present)
-    block.header.parentBeaconBlockRoot match
-      case Some(beaconRoot) if blockchainConfig.isCancunTimestamp(block.header.unixTimestamp) =>
-        // toUInt256, NOT UInt256(_.toLong): the latter sign-extends, so a 2^64-1 timestamp
-        // becomes 2^256-1 and lands at ring index 511 instead of 4095 — AND stores that
-        // wrong value in the slot, which test_beacon_root_equal_to_timestamp reads back.
-        val timestamp = block.header.unixTimestamp.toUInt256
-        val timestampIdx = timestamp.mod(UInt256(BeaconRootHistoryBufferLength))
-        val rootIdx = timestampIdx + UInt256(BeaconRootHistoryBufferLength)
-
-        // EIP-4788: "if no code exists at BEACON_ROOTS_ADDRESS, the call must fail silently".
-        // The client MUST NOT deploy the contract itself. It is deployed like any other contract,
-        // by the pre-signed Nick's-method transaction from 0x0B799C86a49DEeb90402691F1041aa3AF2d3C875
-        // (EIP-4788 "Deployment"), which is part of the chain history on mainnet and every public
-        // testnet. go-ethereum performs a SYSTEM_ADDRESS call with value 0; under EIP-158 a call
-        // to a non-existent account with zero value returns immediately and creates nothing
-        // (core/vm/evm.go Call), so an absent contract produces NO state change at all.
-        //
-        // Seeding code + nonce here produced a state-root divergence on any chain whose genesis
-        // does not pre-allocate the account: fukuii wrote an account (nonce=1, codeHash) plus two
-        // storage slots that the reference client does not have. Observed on hive
-        // ethereum/graphql, whose testGenesis.json allocates only one account while block 34
-        // carries parentBeaconBlockRoot (first block past cancunTime).
-        //
-        // The direct storage write below (instead of an EVM system call) is the optimisation the
-        // EIP explicitly permits: "Clients may decide to omit an explicit EVM call and directly
-        // set the storage values." It is only valid when the canonical contract is the one
-        // deployed there, which is why the code-presence guard is a hard precondition.
-        if world.getCode(BeaconRootContractAddress).isEmpty then world
-        else
-          val storage = world.getStorage(BeaconRootContractAddress)
-          val s1 = storage.store(timestampIdx.toBigInt, timestamp.toBigInt)
-          val s2 = s1.store(rootIdx.toBigInt, UInt256(beaconRoot.value).toBigInt)
-          world.saveStorage(BeaconRootContractAddress, s2)
-
-      case _ => world
-
-  /** EIP-2935: Deploy history storage contract at fork block and store parent block hash.
-    *
-    * At the Olympia activation block, deploys the history storage contract (sets nonce=1 and code). At every
-    * post-Olympia block, writes the parent hash to storage slot (blockNumber - 1) % HistoryServeWindow.
-    */
-  private def applyEip2935(
-      block: Block,
-      world: InMemoryWorldStateProxy
-  )(implicit blockchainConfig: BlockchainConfig): InMemoryWorldStateProxy =
-    import BlockExecution.*
-    val blockNumber = block.header.number.value
-    // EIP-2935 activates at Prague on ETH chains (timestamp fork), or at Olympia on ETC chains (block number fork).
-    val pragueActive = blockchainConfig.isPragueTimestamp(block.header.unixTimestamp)
-    val etcOlympiaActive = blockchainConfig.networkType == com.chipprbots.ethereum.utils.NetworkType.ETC &&
-      blockNumber >= blockchainConfig.forkBlockNumbers.olympiaBlockNumber
-    if !pragueActive && !etcOlympiaActive then world
-    // ETH (Prague): EIP-2935 "if no code exists at HISTORY_STORAGE_ADDRESS, the call must fail silently".
-    // Exactly as for EIP-4788 (see applyEip4788), the client MUST NOT deploy the contract itself: on ETH it is
-    // deployed by a regular transaction, and go-ethereum's ProcessParentBlockHash is a SYSTEM_ADDRESS call with
-    // value 0, which under EIP-158 returns without creating anything when the account does not exist. Self-deploying
-    // here wrote an account (nonce 1, code) plus a slot the reference does not have, and forked the state root of
-    // the first Prague block on any chain that deploys the contract in-chain rather than in genesis (EEST
-    // test_system_contract_deployment[CancunToPragueAtTime15k-deploy_after_fork / deploy_on_fork_block]).
-    else if !etcOlympiaActive && world.getCode(HistoryStorageAddress).isEmpty then world
-    else
-      // ETC (Olympia, ECIP-1112): the history contract IS deployed by the client at activation, so deploy it here
-      // if absent (genesis may pre-deploy it). Code presence is the sole guard. Tying deployment to
-      // isActivationBlock caused IllegalStateException when processing a post-activation block on a fresh world:
-      // the account was absent so getStorage threw.
-      val w1 = if world.getCode(HistoryStorageAddress).isEmpty then
-        val account = world
-          .getAccount(HistoryStorageAddress)
-          .getOrElse(Account.empty(blockchainConfig.accountStartNonce))
-          .copy(nonce = UInt256(1))
-        world
-          .saveAccount(HistoryStorageAddress, account)
-          .saveCode(HistoryStorageAddress, HistoryStorageCode)
-      else world
-
-      // Store parent hash at slot (blockNumber - 1) % HistoryServeWindow
-      val parentHashValue = UInt256(block.header.parentHash.value)
-      val slot = (blockNumber - 1) % HistoryServeWindow
-      val storage = w1.getStorage(HistoryStorageAddress)
-      val updatedStorage = storage.store(slot, parentHashValue.toBigInt)
-      w1.saveStorage(HistoryStorageAddress, updatedStorage)
-
-  /** This function updates worldState transferring balance from drainList accounts to refundContract address
-    *
-    * @param worldState
-    *   initial world state
-    * @param daoForkConfig
-    *   dao fork configuration with drainList and refundContract config
-    * @return
-    *   updated world state proxy
-    */
-  private def drainDaoForkAccounts(
-      worldState: InMemoryWorldStateProxy,
-      daoForkConfig: DaoForkConfig
-  ): InMemoryWorldStateProxy =
-    daoForkConfig.refundContract match
-      case Some(refundContractAddress) =>
-        daoForkConfig.drainList.foldLeft(worldState) { (ws, address) =>
-          ws.getAccount(address)
-            .map(account => ws.transfer(from = address, to = refundContractAddress, account.balance))
-            .getOrElse(ws)
-        }
-      case None => worldState
 
   /** Executes and validates a list of blocks, storing the results in the blockchain.
     *
@@ -585,12 +458,43 @@ class BlockExecution(
   )(implicit blockchainConfig: BlockchainConfig): (List[BlockData], Option[BlockExecutionError]) =
     executeAndValidateBlocksWithAccessLists(blocks, parentChainWeight, adoptEachBlock, Map.empty)
 
-  /** [[executeAndValidateBlocks]] for blocks that arrived with peer-supplied EIP-7928 lists. */
+  /** The blocks of a branch under execution, none adopted as it is executed, with their forward layers on the unified
+    * layout held by the branch's `pin` until the branch is settled (spec 018 C4e). As
+    * [[executeAndValidateBlocksWithAccessLists]] with `adoptEachBlock = false` otherwise.
+    */
+  def executeAndValidateBranch(
+      blocks: List[Block],
+      parentChainWeight: ChainWeight,
+      suppliedBlockAccessLists: Map[ByteString, BlockAccessList],
+      pin: Option[BranchPin]
+  )(implicit blockchainConfig: BlockchainConfig): (List[BlockData], Option[BlockExecutionError]) =
+    executeAndValidateEach(blocks, parentChainWeight, adoptEachBlock = false, suppliedBlockAccessLists, pin)
+
+  /** [[executeAndValidateBlocks]] for blocks that arrived with peer-supplied EIP-7928 lists.
+    *
+    * '''A batch has a third way to end''' (spec 018 Track C, C4b): this node's own state could not take the next block.
+    * The state the block is to be executed on is not the one the disk holds, or is no longer (another writer moved it
+    * between two blocks of the batch), or the view it was read through went stale. That says nothing about the block,
+    * and nothing about the peer that sent it. It is returned as [[BlockExecutionError.StateFaulted]], which is no
+    * verdict: the blocks before it are adopted, each in its own atomic write, exactly as a shorter batch would have
+    * left them; the block the fault was met at wrote nothing, and neither it nor the blocks after it were judged. So
+    * the batch stops there: executing on would be executing on a state that is not held. A caller tells the two endings
+    * apart with [[BlockExecution.BatchOutcome.of]].
+    */
   def executeAndValidateBlocksWithAccessLists(
       blocks: List[Block],
       parentChainWeight: ChainWeight,
       adoptEachBlock: Boolean,
       suppliedBlockAccessLists: Map[ByteString, BlockAccessList]
+  )(implicit blockchainConfig: BlockchainConfig): (List[BlockData], Option[BlockExecutionError]) =
+    executeAndValidateEach(blocks, parentChainWeight, adoptEachBlock, suppliedBlockAccessLists, None)
+
+  private def executeAndValidateEach(
+      blocks: List[Block],
+      parentChainWeight: ChainWeight,
+      adoptEachBlock: Boolean,
+      suppliedBlockAccessLists: Map[ByteString, BlockAccessList],
+      pin: Option[BranchPin]
   )(implicit blockchainConfig: BlockchainConfig): (List[BlockData], Option[BlockExecutionError]) =
     @tailrec
     def go(
@@ -622,20 +526,30 @@ class BlockExecution(
         // single @tailrec loop on one thread, each iteration's `blockchainWriter.save`
         // completes before the next begins, and `executeBlock` already resolves the parent
         // header from the same storage at BlockExecution.scala:104-106.
-        val step = executeAndCommit(
-          blockToExecute,
-          parentWeight,
-          adoptEachBlock,
-          suppliedBlockAccessLists.get(blockToExecute.hash.value),
-          () => None
-        )
+        // A fault of the state is no verdict on the block: it is kept apart from the block's own errors, so that
+        // nothing downstream can take the one for the other.
+        val step: Either[StateFault, Either[BlockExecutionError, BlockData]] =
+          try
+            Right(
+              executeAndCommit(
+                blockToExecute,
+                parentWeight,
+                adoptEachBlock,
+                suppliedBlockAccessLists.get(blockToExecute.hash.value),
+                () => None,
+                pin
+              )
+            )
+          catch case fault: StateFault => Left(fault)
         step match
-          case Right(newBlockData) =>
+          case Right(Right(newBlockData)) =>
             blockchain.saveBlockState(blockToExecute.header.number.value)
             blockchainReader.recordBlockDifficulty(blockToExecute.header.difficulty)
             go(newBlockData :: executedBlocksDecOrder, remainingBlocksIncOrder.tail, newBlockData.weight)
-          case Left(executionError) =>
+          case Right(Left(executionError)) =>
             (executedBlocksDecOrder.reverse, Some(executionError))
+          case Left(fault) =>
+            (executedBlocksDecOrder.reverse, Some(BlockExecutionError.StateFaulted(fault)))
 
     go(List.empty[BlockData], blocks, parentChainWeight)
 
@@ -648,14 +562,22 @@ class BlockExecution(
       parentWeight: ChainWeight,
       adoptEachBlock: Boolean,
       suppliedBlockAccessList: Option[BlockAccessList],
-      beforeCommit: () => Option[BlockExecutionError]
+      beforeCommit: () => Option[BlockExecutionError],
+      pin: Option[BranchPin] = None
   )(implicit blockchainConfig: BlockchainConfig): Either[BlockExecutionError, BlockData] =
     val blockHash = blockToExecute.header.hash.value
     // One execution + commit per block hash at a time, across the Engine API and this importer. A block the other
     // path already executed and committed (and that is still applied) is not executed again: its recorded
     // result is used and only the block's own records are written.
     ChainInsertLock.shared(BlockImportGate.withBlock(blockHash) {
-      val staged = blockchain.stageBlockState(blockToExecute.header.number.value)
+      // On the unified layout a block that is not adopted as it is executed (a side branch, the blocks of a
+      // reorganisation) is executed apart: its state is kept as a forward layer beside the state the disk holds, on
+      // the state of its parent wherever that is held, and the head moves to it only with the state, when its branch
+      // is settled (spec 018 C4e). Elsewhere it is staged as any block.
+      val apart = !adoptEachBlock && blockchainReader.holdsStateInPlace
+      val staged =
+        if apart then blockchain.stageBlockStateApart(blockToExecute.header)
+        else blockchain.stageBlockState(blockToExecute.header)
       val outcome =
         try
           BlockImportGate.alreadyExecuted(blockHash, staged) match
@@ -679,35 +601,61 @@ class BlockExecution(
         case Right(executed @ (receipts, _, blockAccessList)) =>
           val newWeight = parentWeight.increase(blockToExecute.header)
           val newBlockData = BlockData(blockToExecute, receipts, newWeight)
-          // ONE atomic write: the block, its receipts and weight, its access list, the state it wrote (trie
-          // nodes, reference counts, snapshots, death row) and, when adopting, the best-block pointer. A kill can
-          // no longer leave a block's state applied but the block not, and a block that failed above staged
-          // nothing at all.
-          val base = blockchainWriter.saveBatch(
-            newBlockData.block,
-            newBlockData.receipts,
-            newBlockData.weight,
-            saveAsBestBlock = adoptEachBlock
-          )
-          // EIP-7928: the list the block just validated against.
-          val withAccessList =
-            blockAccessList.fold(base)(bal =>
-              base.and(blockchainWriter.storeBlockAccessList(blockToExecute.header.hash, bal))
-            )
-          timedCommit(blockToExecute)(
-            staged.commitWith(blockToExecute.header.number.value, blockHash, Some(withAccessList))
-          )
-          BlockImportGate.record(blockHash, executed)
-          Right(newBlockData)
+          if apart then
+            // Stored by its hash only: on the unified layout the index of blocks by number is the ancestry of the
+            // block whose state is held, and only a move of the head writes it (I6, B-250). The block's own records
+            // first, then its layer, held by its branch's pin: a stop between the two leaves a stored block with no
+            // state, which is executed again.
+            val records = blockchainWriter
+              .storeBlockByHashOnly(blockToExecute)
+              .and(blockchainWriter.storeReceipts(blockToExecute.header.hash, receipts))
+              .and(blockchainWriter.storeChainWeight(blockToExecute.header.hash, newWeight))
+            blockAccessList
+              .fold(records)(bal => records.and(blockchainWriter.storeBlockAccessList(blockToExecute.header.hash, bal)))
+              .commit()
+            timedCommit(blockToExecute)(staged.commitApart(blockToExecute.header.number.value, blockHash, pin))
+            BlockImportGate.record(blockHash, executed)
+            Right(newBlockData)
+          else commitWithItsBlock(blockToExecute, newBlockData, blockAccessList, adoptEachBlock, staged, executed)
         case Left(executionError) =>
           staged.discard()
           Left(executionError)
     })
 
-  /** One block onto the head, for an operator chain import holding [[ChainInsertLock.exclusive]]: the same execution,
-    * validation and atomic commit (with the head pointer) as [[executeAndValidateBlocks]], plus `beforeCommit`, checked
-    * after validation and immediately before the commit, so a head that moved meanwhile (a consensus client's
-    * forkchoiceUpdated is not under the lock) fails the block instead of being overwritten.
+  private def commitWithItsBlock(
+      blockToExecute: Block,
+      newBlockData: BlockData,
+      blockAccessList: Option[BlockAccessList],
+      adoptEachBlock: Boolean,
+      staged: StagedBlockState,
+      executed: BlockImportGate.Executed
+  ): Either[BlockExecutionError, BlockData] =
+    val blockHash = blockToExecute.header.hash.value
+    // ONE atomic write: the block, its receipts and weight, its access list, the state it wrote (trie nodes,
+    // reference counts, snapshots, death row) and, when adopting, the best-block pointer. A kill can no longer leave
+    // a block's state applied but the block not, and a block that failed above staged nothing at all.
+    val base = blockchainWriter.saveBatch(
+      newBlockData.block,
+      newBlockData.receipts,
+      newBlockData.weight,
+      saveAsBestBlock = adoptEachBlock
+    )
+    // EIP-7928: the list the block just validated against.
+    val withAccessList =
+      blockAccessList.fold(base)(bal =>
+        base.and(blockchainWriter.storeBlockAccessList(blockToExecute.header.hash, bal))
+      )
+    timedCommit(blockToExecute)(
+      staged.commitWith(blockToExecute.header.number.value, blockHash, Some(withAccessList))
+    )
+    BlockImportGate.record(blockHash, executed)
+    Right(newBlockData)
+
+  /** One block onto the head, for an operator chain import holding [[ChainInsertLock.exclusive]], and for the adoption
+    * of a long branch on the unified layout (`StateRecovery`, which holds it shared, as any import): the same
+    * execution, validation and atomic commit (with the head pointer) as [[executeAndValidateBlocks]], plus
+    * `beforeCommit`, checked after validation and immediately before the commit, so a head that moved meanwhile (a
+    * consensus client's forkchoiceUpdated is not under the lock) fails the block instead of being overwritten.
     */
   def executeAndAdoptBlockIf(
       block: Block,
@@ -835,14 +783,81 @@ class BlockExecution(
 
 object BlockExecution:
 
+  /** How a batch of blocks ended ([[BlockExecution.executeAndValidateBlocksWithAccessLists]]), with the fault of this
+    * node's own state told apart from an error of the block.
+    *
+    * @param executed
+    *   the blocks that were executed, validated and committed, in order: a prefix of the batch
+    * @param error
+    *   why the block after them is not accepted, when it was judged and failed
+    * @param stateFault
+    *   why the block after them could not be executed or committed, when the fault is this node's own state's: the
+    *   block was not judged. Never set together with `error`
+    */
+  final case class BatchOutcome(
+      executed: List[BlockData],
+      error: Option[BlockExecutionError],
+      stateFault: Option[StateFault]
+  )
+
+  object BatchOutcome:
+    /** What a batch returned, with a [[BlockExecutionError.StateFaulted]] taken out of the errors: after this nothing
+      * that judges a block by its error can be handed a fault of the state.
+      */
+    def of(executed: List[BlockData], error: Option[BlockExecutionError]): BatchOutcome = error match
+      case Some(BlockExecutionError.StateFaulted(fault)) => BatchOutcome(executed, None, Some(fault))
+      case judged                                        => BatchOutcome(executed, judged, None)
+
+  /** What [[requestSystemCalls]] does with a request contract that has no code when its turn comes.
+    *
+    * The two policies are the two consumers. Block execution cannot reach an empty contract at all
+    * (`BlockExecution.requireRequestPredeploysPresent` has already made such a block invalid, on the codeHash), so its
+    * `Skip` is only the guard for the direct callers (tests, proposer paths). eth_simulateV1 has no such earlier check
+    * and runs go-ethereum's `processRequestsSystemCall`, which fails the block.
+    */
+  private[ledger] enum EmptyRequestContract:
+    /** Go on to the next contract, and add nothing to the requests. */
+    case Skip
+
+    /** Fail with go-ethereum's `failed to process <queue>: empty system contract: no code at <EIP-55 address>`. */
+    case Fail
+
+  /** go-ethereum's name for the queue a request type comes from, as `PostExecution` words its error (`failed to process
+    * withdrawal queue: ...`, state_processor.go:211, :215, :222, :225).
+    */
+  private def requestQueueName(requestType: Int): String = requestType match
+    case WithdrawalRequestType     => "withdrawal queue"
+    case ConsolidationRequestType  => "consolidation queue"
+    case BuilderDepositRequestType => "builder deposit queue"
+    case BuilderExitRequestType    => "builder exit queue"
+    case other                     => s"request type 0x${other.toHexString}"
+
+  /** go-ethereum `processRequestsSystemCall`'s refusal of a request contract with no code (state_processor.go:470-472:
+    * `empty system contract: no code at %v`), under the wrapper `PostExecution` gives it. `%v` of a `common.Address` is
+    * its EIP-55 form (types.go `Format`), and the code size is read from the world the earlier calls left.
+    */
+  private def emptyRequestContractError(queueAddr: Address, requestType: Int): String =
+    val queue = requestQueueName(requestType)
+    s"failed to process $queue: empty system contract: no code at ${StxLedger.checksum(queueAddr)}"
+
   /** The body of `BlockExecution.processPragueSystemCallsChecked` (see there), on a header rather than a block, so that
     * eth_simulateV1 runs the very same EIP-7002 / EIP-7251 / EIP-8282 system calls a real block does
     * ([[SimulatedBlockSystemCalls]]). Moved here unchanged; block execution delegates to it.
+    *
+    * The two trailing parameters are eth_simulateV1's, and their defaults are block execution's, so a real block runs
+    * exactly as before:
+    *   - `precompileRelocations`: the block's precompile relocations (`a -> t` moved, `a -> a` deleted, as
+    *     [[SimulationOverrides]] and `EthSimulateService.applyStateOverrides` give them). go-ethereum runs these calls
+    *     on the same EVM, with the same overridden precompile set, as the block's transactions (simulate.go:403-409),
+    *     so a contract the call reaches sees the moved or deleted precompile as a transaction would.
+    *   - `emptyContract`: see [[EmptyRequestContract]].
     */
   private[ledger] def requestSystemCalls(
       header: BlockHeader,
       world: InMemoryWorldStateProxy,
-      accessRecorder: Option[BlockAccessRecorder]
+      accessRecorder: Option[BlockAccessRecorder],
+      precompileRelocations: Map[Address, Address] = Map.empty,
+      emptyContract: EmptyRequestContract = EmptyRequestContract.Skip
   )(implicit blockchainConfig: BlockchainConfig): Either[String, (InMemoryWorldStateProxy, Seq[ByteString])] =
     if !blockchainConfig.isPragueTimestamp(header.unixTimestamp) then Right((world, Nil))
     else
@@ -871,7 +886,15 @@ object BlockExecution:
           // makes the call, which reads the target as any call does. All four share block access index n + 1.
           accessRecorder.foreach(BlockExecution.recordSystemCallTarget(w, queueAddr, _))
           val context =
-            BlockExecution.systemCallContext(header, w, queueAddr, ByteString.empty, evmConfig, accessRecorder)
+            BlockExecution.systemCallContext(
+              header,
+              w,
+              queueAddr,
+              ByteString.empty,
+              evmConfig,
+              accessRecorder,
+              precompileRelocations
+            )
           val vm = new com.chipprbots.ethereum.vm.VM[InMemoryWorldStateProxy, InMemoryWorldStateProxyStorage]
           val result = vm.run(context)
           result.error match
@@ -882,6 +905,10 @@ object BlockExecution:
               // EIP-7685 request bytes = single-byte type prefix || raw system-call returndata.
               // Empty returndata (no queued requests) means no bytes are emitted for this type.
               if result.returnData.nonEmpty then outputs += ByteString(Array(requestType.toByte)) ++ result.returnData
+        else if failure.isEmpty && emptyContract == EmptyRequestContract.Fail then
+          // Here `code` is empty. go-ethereum checks the code size of each contract on the world the calls before it left,
+          // before it touches the contract (state_processor.go:470), so nothing is recorded for the access list.
+          failure = Some(emptyRequestContractError(queueAddr, requestType))
       failure.toLeft((w, outputs.toSeq))
 
   /** The body of `BlockExecution.collectDepositRequests` (see there), shared with eth_simulateV1. Moved here unchanged.
@@ -980,6 +1007,9 @@ object BlockExecution:
     *
     * Pre-Amsterdam (ETH Prague/Osaka) the reservoir is 0 and the context is the one the EIP-7002/7251 calls always had.
     * ETC never builds one: its only system-contract write, EIP-2935 at Olympia, is a direct storage write.
+    *
+    * `precompileRelocations` is eth_simulateV1's (see [[requestSystemCalls]]); empty, as every real block has it, the
+    * context is what it was.
     */
   def systemCallContext(
       header: BlockHeader,
@@ -987,7 +1017,8 @@ object BlockExecution:
       target: Address,
       input: ByteString,
       evmConfig: EvmConfig,
-      accessRecorder: Option[BlockAccessRecorder] = None
+      accessRecorder: Option[BlockAccessRecorder] = None,
+      precompileRelocations: Map[Address, Address] = Map.empty
   ): ProgramContext[InMemoryWorldStateProxy, InMemoryWorldStateProxyStorage] =
     val stateGasReservoir = if evmConfig.amsterdamEnabled then AmsterdamGas.SystemCallStateGasReservoir else BigInt(0)
     ProgramContext[InMemoryWorldStateProxy, InMemoryWorldStateProxyStorage](
@@ -1008,6 +1039,7 @@ object BlockExecution:
       originalWorld = world,
       warmAddresses = Set(target),
       warmStorage = Set.empty,
+      precompileRelocations = precompileRelocations,
       stateGasReservoir = stateGasReservoir,
       initialStateGasReservoir = stateGasReservoir,
       accessRecorder = accessRecorder
@@ -1026,10 +1058,160 @@ object BlockExecution:
     recorder.recordAccount(target)
     SetCodeTransaction.parseDelegation(world.getCode(target)).foreach(recorder.recordAccount)
 
+  /** A block's state changes before its first transaction, in block import's order: the DAO fork block's drain; then,
+    * from Amsterdam, the EIP-4788 / EIP-2935 system calls (EIP-7928 block access index 0), and before it the direct
+    * storage writes of EIP-4788 (ETH from Cancun) and EIP-2935 (ETH from Prague, ETC from Olympia).
+    *
+    * One function for block import (`executeBlockTransactions`) and block building (`BlockPreparator.prepareBlock`), so
+    * the state a miner builds a block on is the state import executes it on.
+    */
+  private[ethereum] def applyBlockPreamble(
+      block: Block,
+      blockHeaderNumber: BigInt,
+      initialWorld: InMemoryWorldStateProxy,
+      accessList: Option[BlockAccessListBuilder]
+  )(implicit blockchainConfig: BlockchainConfig): InMemoryWorldStateProxy =
+    val worldAfterDao = blockchainConfig.daoForkConfig match
+      case Some(daoForkConfig) if daoForkConfig.isDaoForkBlock(blockHeaderNumber) =>
+        drainDaoForkAccounts(initialWorld, daoForkConfig)
+      case _ => initialWorld
+
+    if blockchainConfig.isAmsterdamTimestamp(block.header.unixTimestamp) then
+      // Amsterdam: EIP-4788 and EIP-2935 run as real system calls (see `applyAmsterdamPreambleSystemCalls`), which
+      // share EIP-7928 block access index 0.
+      val preambleReads = accessList.map(_ => new BlockAccessRecorder)
+      val afterPreamble = applyAmsterdamPreambleSystemCalls(block.header, worldAfterDao, preambleReads)
+      for
+        builder <- accessList
+        reads <- preambleReads
+      do builder.addIndex(0L, reads, worldAfterDao, afterPreamble)
+      afterPreamble
+    else
+      // EIP-4788: Store parent beacon block root in system contract (post-Cancun)
+      val worldAfterBeaconRoot = applyEip4788(block, worldAfterDao)
+
+      // EIP-2935: Store parent block hash in history storage contract
+      applyEip2935(block, worldAfterBeaconRoot)
+
+  /** EIP-4788: Store the parent beacon block root in the beacon root system contract.
+    *
+    * Post-Cancun, the parentBeaconBlockRoot from the CL is stored at the beacon root contract address
+    * (0x000F3df6D732807Ef1319fB7B8bB8522d0Beac02) before executing transactions. The contract stores: timestamp → root
+    * at slot (timestamp % HISTORY_BUFFER_LENGTH), and root at slot (timestamp % HISTORY_BUFFER_LENGTH +
+    * HISTORY_BUFFER_LENGTH).
+    */
+  private def applyEip4788(
+      block: Block,
+      world: InMemoryWorldStateProxy
+  )(implicit blockchainConfig: BlockchainConfig): InMemoryWorldStateProxy =
+    // Only apply post-Cancun (when parentBeaconBlockRoot is present)
+    block.header.parentBeaconBlockRoot match
+      case Some(beaconRoot) if blockchainConfig.isCancunTimestamp(block.header.unixTimestamp) =>
+        // toUInt256, NOT UInt256(_.toLong): the latter sign-extends, so a 2^64-1 timestamp
+        // becomes 2^256-1 and lands at ring index 511 instead of 4095 — AND stores that
+        // wrong value in the slot, which test_beacon_root_equal_to_timestamp reads back.
+        val timestamp = block.header.unixTimestamp.toUInt256
+        val timestampIdx = timestamp.mod(UInt256(BeaconRootHistoryBufferLength))
+        val rootIdx = timestampIdx + UInt256(BeaconRootHistoryBufferLength)
+
+        // EIP-4788: "if no code exists at BEACON_ROOTS_ADDRESS, the call must fail silently".
+        // The client MUST NOT deploy the contract itself. It is deployed like any other contract,
+        // by the pre-signed Nick's-method transaction from 0x0B799C86a49DEeb90402691F1041aa3AF2d3C875
+        // (EIP-4788 "Deployment"), which is part of the chain history on mainnet and every public
+        // testnet. go-ethereum performs a SYSTEM_ADDRESS call with value 0; under EIP-158 a call
+        // to a non-existent account with zero value returns immediately and creates nothing
+        // (core/vm/evm.go Call), so an absent contract produces NO state change at all.
+        //
+        // Seeding code + nonce here produced a state-root divergence on any chain whose genesis
+        // does not pre-allocate the account: fukuii wrote an account (nonce=1, codeHash) plus two
+        // storage slots that the reference client does not have. Observed on hive
+        // ethereum/graphql, whose testGenesis.json allocates only one account while block 34
+        // carries parentBeaconBlockRoot (first block past cancunTime).
+        //
+        // The direct storage write below (instead of an EVM system call) is the optimisation the
+        // EIP explicitly permits: "Clients may decide to omit an explicit EVM call and directly
+        // set the storage values." It is only valid when the canonical contract is the one
+        // deployed there, which is why the code-presence guard is a hard precondition.
+        if world.getCode(BeaconRootContractAddress).isEmpty then world
+        else
+          val storage = world.getStorage(BeaconRootContractAddress)
+          val s1 = storage.store(timestampIdx.toBigInt, timestamp.toBigInt)
+          val s2 = s1.store(rootIdx.toBigInt, UInt256(beaconRoot.value).toBigInt)
+          world.saveStorage(BeaconRootContractAddress, s2)
+
+      case _ => world
+
+  /** EIP-2935: Deploy history storage contract at fork block and store parent block hash.
+    *
+    * At the Olympia activation block, deploys the history storage contract (sets nonce=1 and code). At every
+    * post-Olympia block, writes the parent hash to storage slot (blockNumber - 1) % HistoryServeWindow.
+    */
+  private def applyEip2935(
+      block: Block,
+      world: InMemoryWorldStateProxy
+  )(implicit blockchainConfig: BlockchainConfig): InMemoryWorldStateProxy =
+    val blockNumber = block.header.number.value
+    // EIP-2935 activates at Prague on ETH chains (timestamp fork), or at Olympia on ETC chains (block number fork).
+    val pragueActive = blockchainConfig.isPragueTimestamp(block.header.unixTimestamp)
+    val etcOlympiaActive = blockchainConfig.networkType == com.chipprbots.ethereum.utils.NetworkType.ETC &&
+      blockNumber >= blockchainConfig.forkBlockNumbers.olympiaBlockNumber
+    if !pragueActive && !etcOlympiaActive then world
+    // ETH (Prague): EIP-2935 "if no code exists at HISTORY_STORAGE_ADDRESS, the call must fail silently".
+    // Exactly as for EIP-4788 (see applyEip4788), the client MUST NOT deploy the contract itself: on ETH it is
+    // deployed by a regular transaction, and go-ethereum's ProcessParentBlockHash is a SYSTEM_ADDRESS call with
+    // value 0, which under EIP-158 returns without creating anything when the account does not exist. Self-deploying
+    // here wrote an account (nonce 1, code) plus a slot the reference does not have, and forked the state root of
+    // the first Prague block on any chain that deploys the contract in-chain rather than in genesis (EEST
+    // test_system_contract_deployment[CancunToPragueAtTime15k-deploy_after_fork / deploy_on_fork_block]).
+    else if !etcOlympiaActive && world.getCode(HistoryStorageAddress).isEmpty then world
+    else
+      // ETC (Olympia, ECIP-1112): the history contract IS deployed by the client at activation, so deploy it here
+      // if absent (genesis may pre-deploy it). Code presence is the sole guard. Tying deployment to
+      // isActivationBlock caused IllegalStateException when processing a post-activation block on a fresh world:
+      // the account was absent so getStorage threw.
+      val w1 = if world.getCode(HistoryStorageAddress).isEmpty then
+        val account = world
+          .getAccount(HistoryStorageAddress)
+          .getOrElse(Account.empty(blockchainConfig.accountStartNonce))
+          .copy(nonce = UInt256(1))
+        world
+          .saveAccount(HistoryStorageAddress, account)
+          .saveCode(HistoryStorageAddress, HistoryStorageCode)
+      else world
+
+      // Store parent hash at slot (blockNumber - 1) % HistoryServeWindow
+      val parentHashValue = UInt256(block.header.parentHash.value)
+      val slot = (blockNumber - 1) % HistoryServeWindow
+      val storage = w1.getStorage(HistoryStorageAddress)
+      val updatedStorage = storage.store(slot, parentHashValue.toBigInt)
+      w1.saveStorage(HistoryStorageAddress, updatedStorage)
+
+  /** This function updates worldState transferring balance from drainList accounts to refundContract address
+    *
+    * @param worldState
+    *   initial world state
+    * @param daoForkConfig
+    *   dao fork configuration with drainList and refundContract config
+    * @return
+    *   updated world state proxy
+    */
+  private def drainDaoForkAccounts(
+      worldState: InMemoryWorldStateProxy,
+      daoForkConfig: DaoForkConfig
+  ): InMemoryWorldStateProxy =
+    daoForkConfig.refundContract match
+      case Some(refundContractAddress) =>
+        daoForkConfig.drainList.foldLeft(worldState) { (ws, address) =>
+          ws.getAccount(address)
+            .map(account => ws.transfer(from = address, to = refundContractAddress, account.balance))
+            .getOrElse(ws)
+        }
+      case None => worldState
+
   /** Amsterdam: the EIP-4788 and EIP-2935 block preamble as execution-specs `apply_body` runs it — two
     * `process_unchecked_system_transaction` calls from SYSTEM_ADDRESS, the beacon roots contract with the parent beacon
     * block root, then the history contract with the parent hash — instead of the direct storage writes of the
-    * `BlockExecution` class's `applyEip4788` / `applyEip2935`.
+    * pre-Amsterdam `applyEip4788` / `applyEip2935` above.
     *
     * The direct writes are the shortcut EIP-4788 permits ("clients may decide to omit an explicit EVM call and directly
     * set the storage values"), and they give the same storage only while the canonical contracts are the code at those
@@ -1046,16 +1228,27 @@ object BlockExecution:
     *
     * Here in the companion rather than on the class so that block execution and the trace replays of an Amsterdam block
     * (`StxLedger.advanceWorldToTx`) run one and the same preamble.
+    *
+    * `precompileRelocations` is eth_simulateV1's (see [[requestSystemCalls]]); block execution and the trace replays
+    * leave it empty.
     */
   private[ledger] def applyAmsterdamPreambleSystemCalls(
       header: BlockHeader,
       world: InMemoryWorldStateProxy,
-      accessRecorder: Option[BlockAccessRecorder]
+      accessRecorder: Option[BlockAccessRecorder],
+      precompileRelocations: Map[Address, Address] = Map.empty
   )(implicit blockchainConfig: BlockchainConfig): InMemoryWorldStateProxy =
     val afterBeaconRoot = header.parentBeaconBlockRoot.fold(world) { root =>
-      uncheckedSystemCall(header, world, BeaconRootContractAddress, root.value, accessRecorder)
+      uncheckedSystemCall(header, world, BeaconRootContractAddress, root.value, accessRecorder, precompileRelocations)
     }
-    uncheckedSystemCall(header, afterBeaconRoot, HistoryStorageAddress, header.parentHash.value, accessRecorder)
+    uncheckedSystemCall(
+      header,
+      afterBeaconRoot,
+      HistoryStorageAddress,
+      header.parentHash.value,
+      accessRecorder,
+      precompileRelocations
+    )
 
   /** execution-specs `process_unchecked_system_transaction`: a SYSTEM_ADDRESS call to `target`, whose failure is
     * ignored — the call's state changes are dropped and the block stays valid. No code at `target` means nothing to run
@@ -1066,7 +1259,8 @@ object BlockExecution:
       world: InMemoryWorldStateProxy,
       target: Address,
       input: ByteString,
-      accessRecorder: Option[BlockAccessRecorder]
+      accessRecorder: Option[BlockAccessRecorder],
+      precompileRelocations: Map[Address, Address]
   )(implicit blockchainConfig: BlockchainConfig): InMemoryWorldStateProxy =
     // EIP-7928: the target is read even when it has no code (execution-specs `create_evm` resolves its code first;
     // EEST `bal_4788_absent_contract`), and its reads stay when the call fails
@@ -1075,7 +1269,7 @@ object BlockExecution:
     if world.getCode(target).isEmpty then world
     else
       val evmConfig = EvmConfig.forBlock(header.number.value, header.unixTimestamp, blockchainConfig)
-      val context = systemCallContext(header, world, target, input, evmConfig, accessRecorder)
+      val context = systemCallContext(header, world, target, input, evmConfig, accessRecorder, precompileRelocations)
       val result =
         new com.chipprbots.ethereum.vm.VM[InMemoryWorldStateProxy, InMemoryWorldStateProxyStorage].run(context)
       if result.error.isDefined then world else InMemoryWorldStateProxy.persistState(result.world)
@@ -1178,6 +1372,14 @@ object BlockExecutionError:
   final case class MPTError(error: MPTException) extends BlockExecutionError:
     def describe: String = error.toString
 
+  /** '''No error of the block.''' This node's own state could not take it (spec 018 Track C, C4b): the block was not
+    * executed, or was executed and not committed, and nothing was judged. It ends a batch the way an error does and is
+    * carried here for that; whoever reads it must not take it for a verdict ([[BlockExecution.BatchOutcome.of]] takes
+    * it out).
+    */
+  final case class StateFaulted(fault: StateFault) extends BlockExecutionError:
+    def describe: String = s"this node's state could not take the block: ${fault.getMessage}"
+
 /** The chain insert lock: go-ethereum's `chainmu`, for the one writer that is not part of the node's own import paths.
   *
   * Every path that executes and commits a block (the Engine API's `newPayload`, regular sync, branch imports) holds it
@@ -1200,6 +1402,18 @@ object ChainInsertLock:
     lock.writeLock().lock()
     try body
     finally lock.writeLock().unlock()
+
+  /** [[exclusive]], if the lock can be had within `wait`; `None` otherwise. For a caller that must not park (an actor's
+    * thread: the operator's chain-weight seeds, #1654).
+    */
+  def tryExclusive[A](wait: scala.concurrent.duration.FiniteDuration)(body: => A): Option[A] =
+    if lock.writeLock().tryLock(wait.toNanos, java.util.concurrent.TimeUnit.NANOSECONDS) then
+      try Some(body)
+      finally lock.writeLock().unlock()
+    else None
+
+  /** Whether this thread holds the lock [[exclusive]]ly. For assertions (`ChainWeightReconcile`'s finish, #1654). */
+  def heldExclusivelyByCurrentThread: Boolean = lock.isWriteLockedByCurrentThread
 
 /** Serialises block execution + commit per block hash, across every path that executes blocks (the Engine API's
   * `newPayload` and the regular-sync importer).
@@ -1256,6 +1470,13 @@ object BlockImportGate:
   def alreadyExecuted(blockHash: ByteString, staged: StagedBlockState): Option[Result] =
     val known = remembered.synchronized(Option(remembered.get(blockHash)))
     known.filter(_ => staged.isBlockApplied(blockHash))
+
+  /** Forget the execution recorded for `blockHash`: the block was found invalid after it was executed (a payload's
+    * requests that are not those its execution derived), and what was recorded is no answer for it (spec 018 C4d part
+    * 2a). Call under [[withBlock]], or where no execution of the block can be under way.
+    */
+  def forget(blockHash: ByteString): Unit =
+    remembered.synchronized { remembered.remove(blockHash); () }
 
   /** Remember a committed execution for a waiter on the same hash. Call under [[withBlock]]. */
   def record(blockHash: ByteString, executed: Executed): Unit =

@@ -31,9 +31,11 @@ class OpCodeFunSpec extends AnyFunSuite with OpCodeTesting with Matchers with Sc
     op.execute(stateIn).copy(gas = stateIn.gas, gasRefund = stateIn.gasRefund)
 
   def withStackVerification(op: OpCode, stateIn: PS, stateOut: PS)(body: => Any): Any =
-    if stateIn.stack.size < op.delta then stateOut shouldEqual stateIn.withError(StackUnderflow).halt
+    if stateIn.stack.size < op.delta then
+      stateOut shouldEqual stateIn.withError(StackUnderflow(stateIn.stack.size, op.delta)).halt
     else if stateIn.stack.size - op.delta + op.alpha > stateIn.stack.maxSize then
-      stateOut shouldEqual stateIn.withError(StackOverflow).halt
+      stateOut shouldEqual
+        stateIn.withError(StackOverflow(stateIn.stack.size, stateIn.stack.maxSize + op.delta - op.alpha)).halt
     else
       if stateOut.error.isEmpty then
         val expectedStackSize = stateIn.stack.size - op.delta + op.alpha

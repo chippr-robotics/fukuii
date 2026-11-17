@@ -1,0 +1,24 @@
+ ◆ FUKUII  etc (61) · PoW · up 12d 7h                                      Logs 
+────────────────────────────────────────────────────────────────────────────────
+ ✓ no alerts                                                                    
+ Peers   41/50 ◆◆◆◆◆◆◆◆◆◆         Block  21,884,102 (at head)                   
+ Sync    ✓ at head                                                              
+────────────────────────────────────────────────────────────────────────────────
+ Logs   5 of 13 lines match 'imported', INFO and above · newest at the bottom … 
+ 11:58:47 INFO  Imported block 21,884,098 0x1f09…88a1 with 17 txs in 26ms       
+ 11:59:04 INFO  Imported block 21,884,099 0x7ab2…d4c7 with 6 txs in 14ms        
+ 11:59:17 INFO  Imported block 21,884,100 0x3301…2e9d with 21 txs in 31ms       
+ 11:59:34 INFO  Imported block 21,884,101 0x9b0c…ff31 with 9 txs in 17ms        
+ 11:59:47 INFO  Imported block 21,884,102 0x6d21…1a0e with 14 txs in 22ms       
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+ 1-9 view  : prompt  / filter  ? help  p pause  r redraw  d detach  q quit      

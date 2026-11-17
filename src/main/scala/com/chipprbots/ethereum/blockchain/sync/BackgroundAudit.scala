@@ -37,11 +37,11 @@ import com.chipprbots.ethereum.blockchain.sync.snap.heal.AuditPosition
 import com.chipprbots.ethereum.blockchain.sync.snap.heal.AuditReader
 import com.chipprbots.ethereum.blockchain.sync.snap.heal.AuditThrottle
 import com.chipprbots.ethereum.blockchain.sync.snap.heal.AuditWalk
-import com.chipprbots.ethereum.blockchain.sync.snap.heal.NodeFault
 import com.chipprbots.ethereum.crypto.kec256
 import com.chipprbots.ethereum.db.storage.AppStateStorage
 import com.chipprbots.ethereum.db.storage.BadEntryDelete
 import com.chipprbots.ethereum.db.storage.EvmCodeStorage
+import com.chipprbots.ethereum.db.storage.NodeFault
 import com.chipprbots.ethereum.db.storage.RawNodeRead
 import com.chipprbots.ethereum.db.storage.RepairOutcome
 import com.chipprbots.ethereum.db.storage.SnapSyncProgressStorage
@@ -78,6 +78,26 @@ object BackgroundAudit:
     * is ERROR and `blockchain.sync` has no entry of its own. `BackgroundAuditSpec` reads the shipped file to pin this.
     */
   val LoggerName: String = "com.chipprbots.ethereum.blockchain.sync.SyncController.BackgroundAudit"
+
+  /** The audit that is running, as far as its status may be asked of it (spec 029 FR-043, for the `--tui` dashboard's
+    * Storage view): a reference narrowed to [[GetStatus]], which answers from the actor's own fields and reads nothing.
+    * Whoever holds it can ask what the audit has got to and can tell it nothing else. `SyncController` publishes the
+    * audit it starts and withdraws the one it stops, and an audit that stops by itself (a clean last pass, or its
+    * supervisor giving up) withdraws itself, so the reference is the current audit's or none.
+    */
+  private val running = new java.util.concurrent.atomic.AtomicReference(Option.empty[ActorRef[GetStatus]])
+
+  /** The running audit, to ask its status of; none while no audit runs. */
+  def statusRef: Option[ActorRef[GetStatus]] = running.get
+
+  /** Called by `SyncController` where it starts and stops the audit. */
+  private[sync] def publish(audit: Option[ActorRef[Command]]): Unit = running.set(audit.map(_.narrow[GetStatus]))
+
+  /** An audit that has stopped withdraws itself, and only itself: `SyncController` may already have published the audit
+    * it started in this one's place, and that one stays.
+    */
+  private def withdraw(stopped: ActorRef[Command]): Unit =
+    val _ = running.updateAndGet(current => if current.contains(stopped.narrow[GetStatus]) then None else current)
 
   /** Under `fukuii.sync`; `sync.conf` ships it as `true`. */
   val EnabledPath: String = "snap-sync.background-audit.enabled"
@@ -342,7 +362,9 @@ object BackgroundAudit:
             )
             Behaviors.same
         }
-        .receiveSignal { case (_, PostStop | PreRestart) =>
+        .receiveSignal { case (_, signal @ (PostStop | PreRestart)) =>
+          // Stopped for good: nobody is left to ask. A restart keeps the same reference, which answers again.
+          if signal == PostStop then withdraw(ctx.self)
           generation = generations.incrementAndGet() // anything still running reports to nobody (decision 9)
           if !waitingForNextPass && anchor.nonEmpty then
             log.info(

@@ -39,10 +39,15 @@ class EIP7825GasCapSpec
   val senderAddress: Address = Address(senderKeys)
   val senderAccount: Account = Account(nonce = 0, balance = UInt256(BigInt("1000000000000000000000")))
 
+  /** The post-Olympia header's base fee. The transactions pay exactly it, so EIP-1559's `gasPrice >= baseFee` holds and
+    * the gas cap is the only rule under test.
+    */
+  val baseFee: BigInt = BigInt(1000000000)
+
   def makeTx(gasLimit: BigInt): SignedTransaction =
     val tx = LegacyTransaction(
       nonce = 0,
-      gasPrice = GasPrice(1),
+      gasPrice = GasPrice(baseFee),
       gasLimit = GasAmount(gasLimit),
       receivingAddress = Address(1),
       value = 0,
@@ -51,7 +56,7 @@ class EIP7825GasCapSpec
     SignedTransaction.sign(tx, senderKeys, Some(config.chainId.value))
 
   def makeHeader(number: BigInt): BlockHeader =
-    val extraFields = if number >= olympiaBlock then HefPostOlympia(BigInt(1000000000)) else HefEmpty
+    val extraFields = if number >= olympiaBlock then HefPostOlympia(baseFee) else HefEmpty
     Fixtures.Blocks.ValidBlock.header.copy(
       number = BlockNumber(number),
       gasLimit = GasAmount(BigInt(100_000_000)),
@@ -62,7 +67,7 @@ class EIP7825GasCapSpec
   "EIP-7825" should "reject tx with gas > 2^24 post-Olympia" taggedAs (OlympiaTest, ConsensusTest) in {
     val stx = makeTx(BigInt(16_777_217))
     val header = makeHeader(olympiaBlock)
-    val upfrontCost = UInt256(stx.tx.gasLimit.value * stx.tx.gasPrice.value)
+    val upfrontCost = stx.tx.gasLimit.value * stx.tx.gasPrice.value
 
     val result = StdSignedTransactionValidator.validate(stx, senderAccount, header, upfrontCost, 0)
     result shouldBe a[Left[?, ?]]
@@ -72,7 +77,7 @@ class EIP7825GasCapSpec
   it should "accept tx at exactly 2^24 (16,777,216) post-Olympia" taggedAs (OlympiaTest, ConsensusTest) in {
     val stx = makeTx(BigInt(16_777_216))
     val header = makeHeader(olympiaBlock)
-    val upfrontCost = UInt256(stx.tx.gasLimit.value * stx.tx.gasPrice.value)
+    val upfrontCost = stx.tx.gasLimit.value * stx.tx.gasPrice.value
 
     val result = StdSignedTransactionValidator.validate(stx, senderAccount, header, upfrontCost, 0)
     result shouldBe a[Right[?, ?]]
@@ -81,7 +86,7 @@ class EIP7825GasCapSpec
   it should "accept tx > 2^24 pre-Olympia" taggedAs (OlympiaTest, ConsensusTest) in {
     val stx = makeTx(BigInt(50_000_000))
     val header = makeHeader(olympiaBlock - 1)
-    val upfrontCost = UInt256(stx.tx.gasLimit.value * stx.tx.gasPrice.value)
+    val upfrontCost = stx.tx.gasLimit.value * stx.tx.gasPrice.value
 
     val result = StdSignedTransactionValidator.validate(stx, senderAccount, header, upfrontCost, 0)
     result shouldBe a[Right[?, ?]]

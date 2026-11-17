@@ -21,7 +21,7 @@ import org.slf4j.LoggerFactory
 import com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncConfig
 import com.chipprbots.ethereum.blockchain.sync.snap.controller.StateIngest
 import com.chipprbots.ethereum.db.storage.EvmCodeStorage
-import com.chipprbots.ethereum.db.storage.StateStorage
+import com.chipprbots.ethereum.db.storage.MptStorage
 import com.chipprbots.ethereum.domain.Account
 import com.chipprbots.ethereum.domain.CodeHash
 import com.chipprbots.ethereum.mpt.*
@@ -49,6 +49,9 @@ object BytecodeRecoveryActor:
 
   sealed trait Command
   private case class ScanResult(missingCodeHashes: Seq[ByteString]) extends Command
+
+  /** The scan could not run (the root is not in the store, the store failed, the state moved under it). */
+  private case object ScanFailed extends Command
   private case class CheckAbandon(progressSeq: Long) extends Command
   private case object CoordinatorTerminated extends Command
   // SyncController forwards peer-available events here; BCA re-forwards to BCC
@@ -62,14 +65,20 @@ object BytecodeRecoveryActor:
   // (no SNAPSyncController exists during recovery — SyncController acts as the routing relay).
   private[sync] case class ForwardByteCodesResponse(msg: ByteCodes) extends Command
 
+  /** What this actor tells SyncController when it is over. */
+  sealed trait SyncControllerMsg
+
   /** Sent to SyncController when recovery is complete (or skipped) */
-  case object RecoveryComplete
+  case object RecoveryComplete extends SyncControllerMsg
+
+  /** Sent in its place when the scan could not run: recovery is over for this run, and nothing is settled by it. */
+  case object RecoveryNotRun extends SyncControllerMsg
 
   def apply(
       stateRoot: ByteString,
       stateIngest: StateIngest,
       networkPeerManager: TypedActorRef[NetworkPeerManagerActor.Command],
-      syncController: TypedActorRef[RecoveryComplete.type],
+      syncController: TypedActorRef[SyncControllerMsg],
       pivotBlockNumber: BigInt,
       snapSyncConfig: SNAPSyncConfig
   ): Behavior[Command] = scanning(
@@ -90,7 +99,7 @@ object BytecodeRecoveryActor:
       stateRoot: ByteString,
       stateIngest: StateIngest,
       networkPeerManager: TypedActorRef[NetworkPeerManagerActor.Command],
-      syncController: TypedActorRef[RecoveryComplete.type],
+      syncController: TypedActorRef[SyncControllerMsg],
       pivotBlockNumber: BigInt,
       snapSyncConfig: SNAPSyncConfig,
       missing: Seq[ByteString]
@@ -110,7 +119,7 @@ object BytecodeRecoveryActor:
       stateRoot: ByteString,
       stateIngest: StateIngest,
       networkPeerManager: TypedActorRef[NetworkPeerManagerActor.Command],
-      syncController: TypedActorRef[RecoveryComplete.type],
+      syncController: TypedActorRef[SyncControllerMsg],
       pivotBlockNumber: BigInt,
       snapSyncConfig: SNAPSyncConfig,
       preloaded: Option[Seq[ByteString]] = None,
@@ -130,7 +139,7 @@ object BytecodeRecoveryActor:
       stateRoot: ByteString,
       stateIngest: StateIngest,
       networkPeerManager: TypedActorRef[NetworkPeerManagerActor.Command],
-      syncController: TypedActorRef[RecoveryComplete.type],
+      syncController: TypedActorRef[SyncControllerMsg],
       pivotBlockNumber: BigInt,
       snapSyncConfig: SNAPSyncConfig,
       preloaded: Option[Seq[ByteString]],
@@ -150,9 +159,8 @@ object BytecodeRecoveryActor:
             Future(
               scanForMissingBytecodes(
                 stateRoot,
-                stateIngest.stateTries,
+                stateIngest.stateTries.getBackingStorage(pivotBlockNumber),
                 stateIngest.bytecode,
-                pivotBlockNumber,
                 ctx.log
               )
             )(using ctx.executionContext)
@@ -160,9 +168,22 @@ object BytecodeRecoveryActor:
             case Success(result) => ScanResult(result)
             case Failure(ex) =>
               asyncLog.error("Bytecode recovery scan failed", ex)
-              ScanResult(Seq.empty)
+              ScanFailed
           }
       Behaviors.receiveMessage {
+        case ScanFailed =>
+          // A scan that could not run has looked at nothing, so it settles nothing. It was taken as a scan that found
+          // nothing missing, and recovery was marked done for good on a state nobody had read. The flag is left
+          // unwritten: the next start scans again, and regular sync fetches what it reaches on demand, as after a
+          // combined scan that could not run (`SyncController.recoveryCouldNotRun`).
+          ctx.log.error(
+            "Bytecode recovery: the scan could not run (logged above), so nothing is settled by it. The recovery " +
+              "flag is not written and the next start scans again."
+          )
+          RecoveryMetrics.setBytecodePhase(RecoveryMetrics.PhaseIdle)
+          syncController ! RecoveryNotRun
+          Behaviors.stopped
+
         case ScanResult(missing) =>
           if missing.isEmpty then
             ctx.log.info("Bytecode recovery: all contract bytecodes present. Marking recovery complete.")
@@ -219,7 +240,7 @@ object BytecodeRecoveryActor:
       ctx: ActorContext[Command],
       coordinator: org.apache.pekko.actor.typed.ActorRef[snap.actors.ByteCodeCoordinator.Command],
       expectedCount: Int,
-      syncController: TypedActorRef[RecoveryComplete.type],
+      syncController: TypedActorRef[SyncControllerMsg],
       stateIngest: StateIngest,
       snapSyncConfig: SNAPSyncConfig
   ): Behavior[Command] =
@@ -303,16 +324,16 @@ object BytecodeRecoveryActor:
       }
     }
 
-  private def scanForMissingBytecodes(
+  private[sync] def scanForMissingBytecodes(
       stateRoot: ByteString,
-      stateStorage: StateStorage,
+      mptStorage: MptStorage,
       evmCodeStorage: EvmCodeStorage,
-      pivotBlockNumber: BigInt,
       log: Logger
   ): Seq[ByteString] =
     RecoveryMetrics.setBytecodePhase(RecoveryMetrics.PhaseScanning)
-    val mptStorage = stateStorage.getBackingStorage(pivotBlockNumber)
-    val rootNode = mptStorage.get(stateRoot.toArray)
+    // the account trie, each node read at the path that leads to it (spec 018 Track C)
+    val accountTrie = mptStorage.forOwner(None)
+    val rootNode = accountTrie.getAt(NibblePath.Empty, stateRoot.toArray)
 
     val missing = mutable.ArrayBuffer.empty[ByteString]
     val seen = mutable.HashSet.empty[ByteString]
@@ -336,7 +357,7 @@ object BytecodeRecoveryActor:
             if evmCodeStorage.get(account.codeHash.value).isEmpty then missing += account.codeHash.value
         case Failure(_) => // Skip malformed account RLP
     try
-      val visitor = new LeafWalkVisitor(mptStorage, onLeaf)
+      val visitor = new PathTrackingLeafWalkVisitor(accountTrie, ByteString.empty, (_, leaf) => onLeaf(leaf))
       MptTraversals.dispatch(rootNode, visitor)
     catch
       case e: MerklePatriciaTrie.MPTException =>

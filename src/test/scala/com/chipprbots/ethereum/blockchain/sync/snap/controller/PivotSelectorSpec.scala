@@ -23,8 +23,12 @@ import org.scalatest.matchers.should.Matchers
 import com.chipprbots.ethereum.Fixtures
 import com.chipprbots.ethereum.blockchain.sync.EphemBlockchainTestSetup
 import com.chipprbots.ethereum.blockchain.sync.PeerListSupportNg
+import com.chipprbots.ethereum.blockchain.sync.PivotHeaderBootstrap
 import com.chipprbots.ethereum.blockchain.sync.SyncProtocol
 import com.chipprbots.ethereum.blockchain.sync.TestSyncConfig
+import com.chipprbots.ethereum.blockchain.sync.snap.HeaderChainCheck
+import com.chipprbots.ethereum.blockchain.sync.snap.PosHeaderFixtures
+import com.chipprbots.ethereum.blockchain.sync.snap.PowHeaderFixtures
 import com.chipprbots.ethereum.blockchain.sync.snap.SNAPRequestTracker
 import com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncConfig
 import com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncController
@@ -32,6 +36,7 @@ import com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncController.*
 import com.chipprbots.ethereum.blockchain.sync.snap.SnapIntakeBudget
 import com.chipprbots.ethereum.blockchain.sync.snap.StateValidator
 import com.chipprbots.ethereum.blockchain.sync.snap.SyncProgressMonitor
+import com.chipprbots.ethereum.consensus.pow.validators.PoWBlockHeaderValidator
 import com.chipprbots.ethereum.db.components.EphemDataSourceComponent
 import com.chipprbots.ethereum.db.storage.AppStateStorage
 import com.chipprbots.ethereum.db.storage.EvmCodeStorage
@@ -45,6 +50,7 @@ import com.chipprbots.ethereum.domain.BlockHeader
 import com.chipprbots.ethereum.domain.BlockchainReader
 import com.chipprbots.ethereum.domain.BlockchainWriter
 import com.chipprbots.ethereum.domain.ChainWeight
+import com.chipprbots.ethereum.domain.Difficulty
 import com.chipprbots.ethereum.domain.TrieRoot
 import com.chipprbots.ethereum.network.NetworkPeerManagerActor
 import com.chipprbots.ethereum.network.NetworkPeerManagerActor.PeerInfo
@@ -91,6 +97,9 @@ private[snap] class StubPivotSelectorState(
   var bootstrapRetryCount: Int = 0
   var posChain: Boolean = false
   def isPoSChain: Boolean = posChain
+  var ttd: Option[BigInt] = None
+  def terminalTotalDifficulty: Option[BigInt] = ttd
+  var headerChainCheck: HeaderChainCheck = HeaderChainCheck.LinkOnly
   val bigIntReverseOrdering: Ordering[BigInt] = Ordering[BigInt].reverse
   def BootstrapCheckKey: String = "bootstrap-check"
   val forwardedPeerEvents: mutable.ArrayBuffer[Command] = mutable.ArrayBuffer.empty
@@ -141,7 +150,7 @@ private[snap] class StubPivotSelectorState(
   // Callee Api traits
   var peers: Map[PeerId, PeerListSupportNg.PeerWithInfo] = Map.empty
   def peersToDownloadFrom: Map[PeerId, PeerListSupportNg.PeerWithInfo] = peers
-  def calibratePivotTD(pivotBlockNumber: BigInt): Option[BigInt] = None
+  def calibratePivotTD(pivot: BlockHeader): Option[BigInt] = None
   def handshakedPeers: Map[PeerId, PeerListSupportNg.PeerWithInfo] = peers
   def handleHandshakedPeersBootstrapReactivity(peers: Map[Peer, PeerInfo]): Unit =
     notUsed("handleHandshakedPeersBootstrapReactivity")
@@ -199,7 +208,11 @@ class PivotSelectorSpec extends AnyFlatSpec with Matchers:
     override val dataSource: com.chipprbots.ethereum.db.dataSource.EphemDataSource = counting
 
   /** The module on its stub, the kit that runs it, and the peer manager inbox. */
-  final private class Harness(bootstrapping: Boolean = false):
+  /** @param stepsWhileBootstrapping
+    *   the module is in `bootstrapping`, and [[Harness.call]] still runs its function on the module (a message handled
+    *   by `bootstrapping` first, then a step of the start that follows it)
+    */
+  final private class Harness(bootstrapping: Boolean = false, stepsWhileBootstrapping: Boolean = false):
     /** Counts the batches that reach the data source (a `DataSourceBatchUpdate.commit` is one). */
     val dataSourceBatches = new java.util.concurrent.atomic.AtomicInteger(0)
     private val countingDataSource = new com.chipprbots.ethereum.db.dataSource.EphemDataSource(Map.empty):
@@ -218,12 +231,23 @@ class PivotSelectorSpec extends AnyFlatSpec with Matchers:
           with com.chipprbots.ethereum.db.components.Storages.DefaultStorages
           with com.chipprbots.ethereum.TestInstanceConfigProvider
     private var action: () => Unit = () => ()
+    private var armed = false
     private var captured: StubPivotSelectorState & PivotSelector = null
     val kit: BehaviorTestKit[Command] = BehaviorTestKit(Behaviors.setup[Command] { ctx =>
       Behaviors.withTimers { timers =>
         captured = new StubPivotSelectorState(ctx, timers, SNAPSyncConfig(), peerManager.ref, chain) with PivotSelector
         captured.syncControllerRef = Some(parent.ref)
-        if bootstrapping then captured.bootstrapping()
+        if stepsWhileBootstrapping then
+          val inner = org.apache.pekko.actor.typed.Behavior.start(captured.bootstrapping(), ctx)
+          Behaviors.receive { (context, message) =>
+            if armed then
+              armed = false
+              action()
+            else
+              val _ = org.apache.pekko.actor.typed.Behavior.interpretMessage(inner, context, message)
+            Behaviors.same
+          }
+        else if bootstrapping then captured.bootstrapping()
         else
           Behaviors.receiveMessage { _ =>
             action()
@@ -236,6 +260,7 @@ class PivotSelectorSpec extends AnyFlatSpec with Matchers:
     /** Run `f` on the module while the kit processes a message. */
     def call(f: StubPivotSelectorState & PivotSelector => Unit): Unit =
       action = () => f(module)
+      armed = true
       kit.run(PollHandshakedPeers)
 
     /** Run `startSnapSync`'s two pivot steps under a boundary of the core's type, as `startSnapSync` does: the Label
@@ -324,6 +349,25 @@ class PivotSelectorSpec extends AnyFlatSpec with Matchers:
     h.module.syncingEntries shouldBe 0
   }
 
+  // B-310: the peers on another chain than the branch do not make the branch's pivot stale
+  it should "judge a bootstrapped pivot's freshness without the peers found on another chain than the branch (B-310)" taggedAs UnitTest in {
+    val h = new Harness(bootstrapping = true)
+    h.module.appStateStorage
+      .putPivotOnBranch(
+        com.chipprbots.ethereum.db.storage.pathstate.PivotOnBranch(pivot, ByteString(Array.fill[Byte](32)(0x21)))
+      )
+      .commit()
+    h.module.peers = Map(peer("ahead", pivot + 10_000), peer("branch", pivot + 10))
+    h.kit.run(PivotBootstrapFailed(PivotHeaderBootstrap.NoPeerOnTheBranch, Set(PeerId("ahead"))))
+    h.module.blockchainWriter.storeChainWeight(header.hash, ChainWeight.totalDifficultyOnly(BigInt(7))).commit()
+
+    h.kit.run(BootstrapComplete(Some(header)))
+
+    // committed: the peer that is far ahead follows another chain
+    h.module.snapSyncStarts shouldBe 0
+    h.module.pivotBlock shouldBe Some(pivot)
+  }
+
   it should "back off after a failed initial bootstrap and retry the start on RetrySnapSyncStart" taggedAs UnitTest in {
     val h = new Harness(bootstrapping = true)
 
@@ -336,6 +380,80 @@ class PivotSelectorSpec extends AnyFlatSpec with Matchers:
     h.kit.run(RetrySnapSyncStart)
 
     h.module.snapSyncStarts shouldBe 1
+  }
+
+  it should "forget the persisted bootstrap target when the bootstrap found no eligible peer after a rejected header" taggedAs UnitTest in {
+    val h = new Harness(bootstrapping = true)
+    h.module.appStateStorage.putSnapSyncBootstrapTarget(BigInt(500)).commit()
+
+    h.kit.run(PivotBootstrapFailed(PivotHeaderBootstrap.ExhaustedAfterRejection))
+
+    // The next start chooses the target again from the peers that remain.
+    h.module.appStateStorage.getSnapSyncBootstrapTarget() shouldBe None
+    h.module.bootstrapRetryCount shouldBe 1
+    h.scheduledTimers() shouldBe Seq(("bootstrap-check", RetrySnapSyncStart, 4.seconds))
+  }
+
+  // B-307 (forge): resumed, the same target asks the same peers of the other chain again
+  it should "forget the persisted bootstrap target when every peer at its height was on another chain than the branch" taggedAs UnitTest in {
+    val h = new Harness(bootstrapping = true)
+    h.module.appStateStorage.putSnapSyncBootstrapTarget(BigInt(500)).commit()
+
+    h.kit.run(
+      PivotBootstrapFailed(
+        PivotHeaderBootstrap.NoPeerOnTheBranch,
+        Set(com.chipprbots.ethereum.network.PeerId("on-the-other-chain"))
+      )
+    )
+
+    h.module.appStateStorage.getSnapSyncBootstrapTarget() shouldBe None
+    h.module.bootstrapRetryCount shouldBe 1
+  }
+
+  it should "choose the next target without the peers the bootstrap found on another chain than the branch" taggedAs UnitTest in {
+    val h = new Harness(stepsWhileBootstrapping = true)
+    // a sync bound to a branch (only then is a peer held, B-310)
+    h.module.appStateStorage
+      .putPivotOnBranch(
+        com.chipprbots.ethereum.db.storage.pathstate.PivotOnBranch(9_000, ByteString(Array.fill[Byte](32)(0x21)))
+      )
+      .commit()
+    // the chain that was left is the longer: its peer's height would put the target above every peer of the branch
+    h.module.peers = Map(peer("left", 20_000), peer("branch", 10_000))
+    h.kit.run(PivotBootstrapFailed(PivotHeaderBootstrap.NoPeerOnTheBranch, Set(PeerId("left"))))
+    h.parent.receiveAll()
+
+    h.startSteps() shouldBe false
+
+    h.parent.receiveAll() shouldBe Seq(StartRegularSyncBootstrap(BigInt(10_000 - 64)))
+  }
+
+  // B-310 (forge): the network best a refresh, a resume's drift and a roll's window are measured by
+  it should "measure the network's best without the peers found on another chain than the branch (B-310)" taggedAs UnitTest in {
+    val h = new Harness(bootstrapping = true)
+    h.module.appStateStorage
+      .putPivotOnBranch(
+        com.chipprbots.ethereum.db.storage.pathstate.PivotOnBranch(9_000, ByteString(Array.fill[Byte](32)(0x21)))
+      )
+      .commit()
+    h.module.peers = Map(peer("left", 20_000), peer("branch", 10_000))
+    h.module.currentNetworkBestFromSnapPeers() shouldBe Some(BigInt(20_000))
+
+    h.kit.run(PivotBootstrapFailed(PivotHeaderBootstrap.NoPeerOnTheBranch, Set(PeerId("left"))))
+
+    h.module.currentNetworkBestFromSnapPeers() shouldBe Some(BigInt(10_000))
+    // and once the requirement has ended, every peer again
+    h.module.appStateStorage.removePivotOnBranch().commit()
+    h.module.currentNetworkBestFromSnapPeers() shouldBe Some(BigInt(20_000))
+  }
+
+  it should "keep the persisted bootstrap target after any other bootstrap failure" taggedAs UnitTest in {
+    val h = new Harness(bootstrapping = true)
+    h.module.appStateStorage.putSnapSyncBootstrapTarget(BigInt(500)).commit()
+
+    h.kit.run(PivotBootstrapFailed("no header"))
+
+    h.module.appStateStorage.getSnapSyncBootstrapTarget() shouldBe Some(BigInt(500))
   }
 
   it should "give up into dormant mode on the tenth failed bootstrap, without another retry" taggedAs UnitTest in {
@@ -507,6 +625,100 @@ class PivotSelectorSpec extends AnyFlatSpec with Matchers:
     h.module.pivotBlock shouldBe None
   }
 
+  // ── Post-merge: the pivot is the CL head's, never a block number the peers name ─────────────────────────────────
+
+  it should "not take the SNAP peers' best block on a post-merge chain once cl-wait-timeout passes with engine-api-required off" taggedAs UnitTest in {
+    val h = new Harness()
+    h.module.posChain = true
+    h.module.peers = Map(peer("snap", 10_000))
+    h.module.syncConfig.engineApiRequired shouldBe false
+    h.module.clHintArrivedAtMs =
+      Some(System.currentTimeMillis() - (h.module.syncConfig.clWaitTimeout + 1.minute).toMillis)
+
+    h.startSteps() shouldBe false
+
+    h.parent.hasMessages shouldBe false
+    h.module.pivotBlock shouldBe None
+    h.module.appStateStorage.getSnapSyncBootstrapTarget() shouldBe None
+    h.scheduledTimers() shouldBe Seq(("bootstrap-check", RetrySnapSyncStart, 5.seconds))
+  }
+
+  private val sepoliaTtd = BigInt("17000000000000000")
+
+  it should "not commit a CL head that fails the post-merge header checks, and try again" taggedAs UnitTest in {
+    val h = new Harness()
+    h.module.posChain = true
+    h.module.headerChainCheck = new HeaderChainCheck.ProofOfStake(PosHeaderFixtures.sepoliaConfig, sepoliaTtd)
+    val withNonce = PosHeaderFixtures.sepoliaRun.last.copy(nonce = ByteString(Array.fill[Byte](8)(1)))
+    h.module.clPivotHint = Some(CLPivotHint(withNonce.hash.value, Some(withNonce)))
+
+    h.startSteps() shouldBe false
+
+    h.module.pivotBlock shouldBe None
+    h.module.appStateStorage.getSnapSyncPivotBlock() shouldBe None
+    h.module.accountRangeStarts shouldBe empty
+    h.scheduledTimers() shouldBe Seq(("bootstrap-check", RetrySnapSyncStart, 5.seconds))
+  }
+
+  it should "commit a real CL head that passes them, pinning its hash" taggedAs UnitTest in {
+    val h = new Harness()
+    h.module.posChain = true
+    h.module.headerChainCheck = new HeaderChainCheck.ProofOfStake(PosHeaderFixtures.sepoliaConfig, sepoliaTtd)
+    val head = PosHeaderFixtures.sepoliaRun.last
+    h.module.clPivotHint = Some(CLPivotHint(head.hash.value, Some(head)))
+    h.module.blockchainWriter.storeChainWeight(head.hash, ChainWeight.totalDifficultyOnly(BigInt(7))).commit()
+
+    h.startSteps() shouldBe false
+
+    h.module.pivotBlock shouldBe Some(head.number.value)
+    h.module.appStateStorage.getSnapSyncPivotHash() shouldBe Some(head.hash.value)
+    h.module.accountRangeStarts shouldBe Seq(head.stateRoot)
+  }
+
+  it should "not resume a bootstrap target by number on a post-merge chain" taggedAs UnitTest in {
+    val h = new Harness()
+    h.module.posChain = true
+    h.module.appStateStorage.putSnapSyncBootstrapTarget(BigInt(500)).commit()
+
+    h.startSteps() shouldBe false
+
+    h.module.appStateStorage.getSnapSyncBootstrapTarget() shouldBe None
+    h.parent.hasMessages shouldBe false
+    h.scheduledTimers() shouldBe Seq(("bootstrap-check", RetrySnapSyncStart, 5.seconds))
+  }
+
+  it should "refresh from the CL head, not fetch a backtracked block by number, on a post-merge chain" taggedAs UnitTest in {
+    val h = new Harness()
+    h.module.posChain = true
+    h.module.currentPhase = SyncPhase.AccountRangeSync
+
+    h.call(m => m.retryBootstrapAtBlockArms(RetryBootstrapAtBlock(BigInt(777))))
+
+    h.parent.hasMessages shouldBe false
+    h.module.pendingPivotRefresh shouldBe None
+    h.module.pivotRefreshCommits shouldBe empty
+    h.kit.selfInbox().receiveAll() shouldBe Seq(RetryPivotRefresh)
+  }
+
+  it should "not judge a bootstrapped CL-anchored pivot by the SNAP peers' heights on a post-merge chain" taggedAs UnitTest in {
+    val h = new Harness(bootstrapping = true)
+    h.module.posChain = true
+    // A peer claims a head far beyond the staleness bound: on proof of work that re-selects the pivot.
+    h.module.peers = Map(peer("snap", pivot + 1_000_000))
+    val posPivot = header.copy(
+      difficulty = Difficulty.Zero,
+      nonce = ByteString(new Array[Byte](8)),
+      ommersHash = com.chipprbots.ethereum.domain.BlockHash(BlockHeader.EmptyOmmers),
+      extraFields = BlockHeader.HeaderExtraFields.HefEmpty
+    )
+    h.module.blockchainWriter.storeChainWeight(posPivot.hash, ChainWeight.totalDifficultyOnly(BigInt(7))).commit()
+
+    h.kit.run(BootstrapComplete(Some(posPivot)))
+
+    h.module.snapSyncStarts shouldBe 0
+    h.module.pivotBlock shouldBe Some(pivot)
+  }
+
   it should "retry a backtracked bootstrap: header fetch when it is not stored, in-place commit when it is" taggedAs UnitTest in {
     val h = new Harness()
     h.module.currentPhase = SyncPhase.AccountRangeSync
@@ -550,4 +762,60 @@ class PivotSelectorSpec extends AnyFlatSpec with Matchers:
     h.module.blockchainReader.getBlockHeaderByHash(header.hash) shouldBe Some(header)
     h.module.blockchainReader.getChainWeightByHash(header.hash).map(_.totalDifficulty.value) shouldBe Some(BigInt(7))
     h.module.appStateStorage.getBestBlockNumber() shouldBe pivot
+  }
+
+  // #1654: Platåberget (terminal TD 0, genesis difficulty 0). Every block's weight is the genesis weight; the rest of
+  // the cascade stored the block-number proxy (`td = pivot`), or a peer estimate over a stale stored value.
+  it should "store the genesis weight for the pivot on a chain that was PoS from genesis" taggedAs UnitTest in {
+    val h = new Harness()
+    val posGenesis = Fixtures.Blocks.Genesis.header.copy(difficulty = Difficulty.Zero)
+    h.module.blockchainWriter
+      .storeBlockHeader(posGenesis)
+      .and(h.module.blockchainWriter.storeChainWeight(posGenesis.hash, ChainWeight.zero))
+      .commit()
+    val postMergePivot = header.copy(difficulty = Difficulty.Zero)
+    // A stale value at the pivot (an earlier selection's proxy) is not kept either.
+    h.module.blockchainWriter.storeChainWeight(postMergePivot.hash, ChainWeight.totalDifficultyOnly(pivot)).commit()
+    h.module.ttd = Some(BigInt(0))
+
+    h.call(m => m.updateBestBlockForPivot(postMergePivot, pivot))
+
+    h.module.blockchainReader.getChainWeightByHash(postMergePivot.hash) shouldBe Some(ChainWeight.zero)
+    h.module.appStateStorage.getBestBlockNumber() shouldBe pivot
+  }
+
+  it should "commit the pivot header's hash with its number and state root, in the same batch" taggedAs UnitTest in {
+    val h = new Harness(bootstrapping = true)
+    h.module.blockchainWriter.storeChainWeight(header.hash, ChainWeight.totalDifficultyOnly(BigInt(7))).commit()
+
+    h.kit.run(BootstrapComplete(Some(header)))
+
+    h.module.appStateStorage.getSnapSyncPivotBlock() shouldBe Some(pivot)
+    h.module.appStateStorage.getSnapSyncPivotHash() shouldBe Some(header.hash.value)
+  }
+
+  it should "not commit a bootstrapped pivot header whose seal fails, on a proof-of-work chain, and re-select" taggedAs UnitTest in {
+    val h = new Harness(bootstrapping = true)
+    h.module.headerChainCheck = new HeaderChainCheck.Validated(PoWBlockHeaderValidator, PowHeaderFixtures.mordorConfig)
+    val badSeal = PowHeaderFixtures.fromGenesis(50).copy(nonce = ByteString(Array.fill(8)(1.toByte)))
+
+    h.kit.run(BootstrapComplete(Some(badSeal)))
+
+    h.module.snapSyncStarts shouldBe 1
+    h.module.pivotBlock shouldBe None
+    h.module.appStateStorage.getSnapSyncPivotBlock() shouldBe None
+    h.module.accountRangeStarts shouldBe empty
+  }
+
+  it should "commit a bootstrapped pivot header that passes the header-only rules on a proof-of-work chain" taggedAs UnitTest in {
+    val h = new Harness(bootstrapping = true)
+    h.module.headerChainCheck = new HeaderChainCheck.Validated(PoWBlockHeaderValidator, PowHeaderFixtures.mordorConfig)
+    val real = PowHeaderFixtures.fromGenesis(50)
+    h.module.blockchainWriter.storeChainWeight(real.hash, ChainWeight.totalDifficultyOnly(BigInt(7))).commit()
+
+    h.kit.run(BootstrapComplete(Some(real)))
+
+    h.module.snapSyncStarts shouldBe 0
+    h.module.pivotBlock shouldBe Some(BigInt(50))
+    h.module.appStateStorage.getSnapSyncPivotHash() shouldBe Some(real.hash.value)
   }

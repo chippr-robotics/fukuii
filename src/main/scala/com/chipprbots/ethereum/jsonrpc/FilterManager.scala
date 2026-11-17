@@ -217,7 +217,9 @@ object FilterManager:
       val toBlockNumber = resolveBlockNumber(filter.toBlock.getOrElse(BlockParam.Latest), bestBlockNumber)
       val logs = recur(fromBlockNumber, toBlockNumber, Nil)
 
-      if filter.toBlock.contains(BlockParam.Pending) then
+      // On the unified layout "pending" is the head, as ResolveBlock has it: a cached build may be one a miner threw away
+      // for a move of the head, or built on a head that has moved since (spec 018 B-293, forge)
+      if filter.toBlock.contains(BlockParam.Pending) && !blockchainReader.holdsStateInPlace then
         logs ++ blockGenerator.getPendingBlock.map(p => getLogsFromBlock(filter, p.block, p.receipts)).getOrElse(Nil)
       else logs
 

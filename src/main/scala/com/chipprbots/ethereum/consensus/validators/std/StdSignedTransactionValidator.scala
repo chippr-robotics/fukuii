@@ -26,7 +26,7 @@ object StdSignedTransactionValidator extends SignedTransactionValidator:
     * @param blockHeader
     *   Container block
     * @param upfrontGasCost
-    *   The upfront gas cost of the tx
+    *   The upfront cost of the tx, unbounded (not reduced mod 2^256)
     * @param accumGasUsed
     *   Total amount of gas spent prior this transaction within the container block
     * @return
@@ -36,7 +36,7 @@ object StdSignedTransactionValidator extends SignedTransactionValidator:
       stx: SignedTransaction,
       senderAccount: Account,
       blockHeader: BlockHeader,
-      upfrontGasCost: UInt256,
+      upfrontGasCost: BigInt,
       accumGasUsed: BigInt
   )(implicit blockchainConfig: BlockchainConfig): Either[SignedTransactionError, SignedTransactionValid] =
     // One counter stands for all three. That is exact before Amsterdam — the execution dimension IS the receipt sum and
@@ -52,7 +52,7 @@ object StdSignedTransactionValidator extends SignedTransactionValidator:
       stx: SignedTransaction,
       senderAccount: Account,
       blockHeader: BlockHeader,
-      upfrontGasCost: UInt256,
+      upfrontGasCost: BigInt,
       accumGasUsed: BigInt,
       accumExecutionGas: BigInt,
       accumStateGas: BigInt
@@ -116,9 +116,14 @@ object StdSignedTransactionValidator extends SignedTransactionValidator:
         )
       case _ => Right(SignedTransactionValid)
 
-  /** EIP-1559: reject txs whose maxFeePerGas cannot cover the block's baseFee, and reject txs where
-    * maxPriorityFeePerGas > maxFeePerGas. Applies to all dynamic-fee transaction variants (type 2 / 3 / 4). Legacy and
-    * Type-1 txs are post-paid at tx.gasPrice.
+  /** EIP-1559: once the block carries a base fee, every transaction must be willing to pay it.
+    *   - Types 2, 3 and 4: reject maxPriorityFeePerGas > maxFeePerGas, and maxFeePerGas < baseFee.
+    *   - Types 0 and 1: the gas price is the fee cap (EIP-1559 normalises it to max_fee_per_gas =
+    *     max_priority_fee_per_gas = gas_price), so gasPrice < baseFee is rejected the same way.
+    *
+    * go-ethereum's and core-geth's `preCheck` return ErrFeeCapTooLow for both, `GasFeeCap` being the gas price for
+    * types 0 and 1; the execution-spec tests name it INSUFFICIENT_MAX_FEE_PER_GAS. A header carries a base fee from
+    * London on ETH and from Olympia on ETC, so the header itself gates the rule.
     */
   private def validateMaxFeeAgainstBaseFee(
       stx: SignedTransaction,
@@ -133,7 +138,16 @@ object StdSignedTransactionValidator extends SignedTransactionValidator:
         Some((sct.maxFeePerGas, sct.maxPriorityFeePerGas))
       case _ => None
     feeFields match
-      case None => Right(SignedTransactionValid)
+      case None =>
+        // Types 0 and 1: the gas price is the fee cap.
+        blockHeader.baseFee match
+          case Some(baseFee) if stx.tx.gasPrice.value < baseFee =>
+            Left(
+              TransactionSyntaxError(
+                s"INSUFFICIENT_MAX_FEE_PER_GAS: gasPrice (${stx.tx.gasPrice.value}) < baseFee ($baseFee)"
+              )
+            )
+          case _ => Right(SignedTransactionValid)
       case Some((maxFee, prio)) =>
         val baseFee = blockHeader.baseFee.getOrElse(BigInt(0))
         if prio > maxFee then Left(TransactionSyntaxError(s"maxPriorityFeePerGas ($prio) > maxFeePerGas ($maxFee)"))
@@ -357,18 +371,22 @@ object StdSignedTransactionValidator extends SignedTransactionValidator:
 
   /** Validates the sender account balance contains at least the cost required in up-front payment.
     *
+    * The comparison is on unbounded integers, as go-ethereum's and core-geth's `buyGas` make it: a cost that needs more
+    * than 256 bits is insufficient funds ("required balance exceeds 256 bits"), never a value reduced mod 2^256. A
+    * balance is at most 2^256 - 1, so `balance >= cost` rejects every such cost on its own.
+    *
     * @param senderBalance
     *   Balance of the sender of the tx
     * @param upfrontCost
-    *   Upfront cost of the transaction tx
+    *   Upfront cost of the transaction tx, unbounded
     * @return
     *   Either the validated transaction or a TransactionSenderCantPayUpfrontCostError
     */
   private def validateAccountHasEnoughGasToPayUpfrontCost(
       senderBalance: UInt256,
-      upfrontCost: UInt256
+      upfrontCost: BigInt
   ): Either[SignedTransactionError, SignedTransactionValid] =
-    if senderBalance >= upfrontCost then Right(SignedTransactionValid)
+    if senderBalance.toBigInt >= upfrontCost then Right(SignedTransactionValid)
     else Left(TransactionSenderCantPayUpfrontCostError(upfrontCost, senderBalance))
 
   /** EIP-7825: Validates that the transaction gas limit does not exceed the per-tx cap (2^24 = 16.77M). Active on ETC

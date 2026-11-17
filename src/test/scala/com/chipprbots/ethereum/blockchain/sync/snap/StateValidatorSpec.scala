@@ -215,7 +215,8 @@ class StateValidatorSpec extends AnyFlatSpec with Matchers:
     */
   private class BasicPrunedState(accounts: Int):
     val nodes: NodeStorage = new NodeStorage(EphemDataSource())
-    val mpt: MptStorage = new ReferenceCountedStateStorage(nodes, 64, 0L).getBackingStorage(0)
+    val mpt: MptStorage =
+      new ReferenceCountedStateStorage(nodes, 64, 0L, nodesMayBeDeleted = () => true).getBackingStorage(0)
     val storageRoot: ByteString = ByteString(
       (0 until 64)
         .foldLeft(MerklePatriciaTrie[ByteString, ByteString](mpt)) { (trie, i) =>

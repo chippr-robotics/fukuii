@@ -55,37 +55,21 @@ object EthSimulateJsonMethodsImplicits extends JsonMethodsImplicits:
 
       private def decodeBlockStateCall(obj: JObject): Either[JsonRpcError, BlockStateCall] =
         boundary:
-          val blockOverrides = (obj \ "blockOverrides") match
-            case bo: JObject =>
-              unknownKey(bo, KnownBlockOverrideKeys) match
-                case Some(k) =>
-                  break(Left(InvalidParams(s"invalid argument 0: unknown field \"$k\" in block override")))
-                case None =>
-                  decodeBlockOverrides(bo) match
-                    case Right(ov) => Some(ov)
-                    case Left(err) => break(Left(err))
-            case _ => None
+          // go-ethereum's simBlock fields match case-insensitively, as encoding/json matches them, and the last match in
+          // document order wins (simulate.go:73-108). The overrides decode as CallOverridesJson decodes them (geth's
+          // hexutil rules and checkOverrideKeys); the payload is params[0], so errors read "invalid argument 0: ...".
+          def field(name: String): JValue =
+            obj.obj.reverseIterator.collectFirst { case (k, v) if k.equalsIgnoreCase(name) => v }.getOrElse(JNothing)
 
-          val stateOverrides = (obj \ "stateOverrides") match
-            case JObject(fields) =>
-              val parsed = fields.map {
-                case (addrHex, value: JObject) =>
-                  extractAddress(JString(addrHex)) match
-                    case Right(addr) =>
-                      unknownKey(value, KnownStateOverrideKeys) match
-                        case Some(k) =>
-                          Left(
-                            InvalidParams(s"invalid argument 0: unknown field \"$k\" in state override for $addrHex")
-                          )
-                        case None => decodeStateOverride(value, addrHex).map(ov => (addr, ov))
-                    case Left(_) => Left(InvalidParams(s"invalid address: $addrHex"))
-                case (k, _) => Left(InvalidParams(s"invalid state override entry: $k"))
-              }
-              if parsed.exists(_.isLeft) then break(parsed.collectFirst { case Left(e) => Left(e) }.get)
-              Some(parsed.collect { case Right((k, v)) => (k, v) }.toMap)
-            case _ => None
+          val blockOverrides = CallOverridesJson.decodeSimulateBlockOverrides(field("blockOverrides"), 0) match
+            case Right(ov) => ov
+            case Left(err) => break(Left(err))
 
-          val calls = (obj \ "calls") match
+          val stateOverrides = CallOverridesJson.decodeSimulateStateOverrides(field("stateOverrides"), 0) match
+            case Right(ov) => ov
+            case Left(err) => break(Left(err))
+
+          val calls = field("calls") match
             case JArray(items) =>
               val parsed = items.map {
                 // execution-apis GenericTransaction, decoded as strictly as go-ethereum's TransactionArgs: a malformed
@@ -102,168 +86,6 @@ object EthSimulateJsonMethodsImplicits extends JsonMethodsImplicits:
             case _                => break(Left(InvalidParams("invalid argument 0: calls must be an array")))
 
           Right(BlockStateCall(blockOverrides, stateOverrides, calls))
-
-      // execution-apis: "A client MUST reject a key that it does not support with error code -32602." The key sets
-      // are the schema's (src/schemas/execute.yaml); `difficulty` is accepted here and rejected post-merge by the
-      // service, which knows the simulated block's era.
-      private val KnownBlockOverrideKeys =
-        Set(
-          "number",
-          "time",
-          "gasLimit",
-          "feeRecipient",
-          "prevRandao",
-          "baseFeePerGas",
-          "blobBaseFee",
-          "withdrawals",
-          "difficulty"
-        )
-      private val KnownStateOverrideKeys =
-        Set("balance", "nonce", "code", "state", "stateDiff", "movePrecompileToAddress")
-
-      private def unknownKey(obj: JObject, known: Set[String]): Option[String] =
-        obj.obj.collectFirst { case (k, _) if !known.contains(k) => k }
-
-      // The override fields are decoded as strictly as go-ethereum's JSON unmarshalling of BlockOverrides and
-      // OverrideAccount: a value that is not the field's type is -32602 (invalid argument 0), never a silently absent
-      // override. (#1660 item 13: the same rule TxArgsJson applies to the calls.)
-      private def decodeBlockOverrides(obj: JObject): Either[JsonRpcError, BlockOverrides] =
-        val what = "block override"
-        for
-          number <- optQty(obj, "number", what)
-          time <- optQty(obj, "time", what)
-          gasLimit <- optQty(obj, "gasLimit", what)
-          feeRecipient <- optAddress(obj, "feeRecipient", what)
-          prevRandao <- optBytes(obj, "prevRandao", what)
-          baseFeePerGas <- optQty(obj, "baseFeePerGas", what)
-          blobBaseFee <- optQty(obj, "blobBaseFee", what)
-          difficulty <- optQty(obj, "difficulty", what)
-          withdrawals <- optWithdrawals(obj, "withdrawals", what)
-        yield BlockOverrides(
-          number = number,
-          time = time,
-          gasLimit = gasLimit,
-          feeRecipient = feeRecipient,
-          prevRandao = prevRandao,
-          baseFeePerGas = baseFeePerGas,
-          blobBaseFee = blobBaseFee,
-          difficulty = difficulty,
-          withdrawals = withdrawals
-        )
-
-      private def decodeStateOverride(obj: JObject, addrHex: String): Either[JsonRpcError, StateOverride] =
-        val what = s"state override for $addrHex"
-        for
-          balance <- optQty(obj, "balance", what)
-          nonce <- optQty(obj, "nonce", what)
-          code <- optBytes(obj, "code", what)
-          state <- decodeStorageMap(obj, "state", what)
-          stateDiff <- decodeStorageMap(obj, "stateDiff", what)
-          move <- optAddress(obj, "movePrecompileToAddress", what)
-        yield StateOverride(
-          balance = balance,
-          nonce = nonce,
-          code = code,
-          state = state,
-          stateDiff = stateDiff,
-          movePrecompileToAddress = move
-        )
-
-      private def invalid(field: String, what: String, value: JValue): JsonRpcError =
-        InvalidParams(
-          s"invalid argument 0: invalid $field in $what: ${org.json4s.native.JsonMethods.compact(org.json4s.native.JsonMethods.render(value))}"
-        )
-
-      private def isHexDigits(s: String): Boolean =
-        s.forall(c => (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F'))
-
-      // hexutil.Bytes: a 0x prefix is required (or the empty string) and the digits are in pairs
-      private def hexBytes(hex: String): Option[Array[Byte]] =
-        val clean = hex.stripPrefix("0x").stripPrefix("0X")
-        Option.when((hex.isEmpty || clean.length != hex.length) && clean.length % 2 == 0 && isHexDigits(clean))(
-          org.bouncycastle.util.encoders.Hex.decode(clean)
-        )
-
-      // A quantity: the digits are any length (an odd count is padded), as the decoder always accepted
-      private def hexToBigInt(hex: String): Option[BigInt] =
-        val clean = hex.stripPrefix("0x").stripPrefix("0X")
-        if clean.isEmpty then Some(BigInt(0))
-        else Option.when(isHexDigits(clean))(BigInt(clean, 16))
-
-      private def decodeStorageMap(
-          obj: JObject,
-          field: String,
-          what: String
-      ): Either[JsonRpcError, Option[Map[BigInt, BigInt]]] =
-        (obj \ field) match
-          case JObject(fields) =>
-            val entries = fields.map {
-              case (keyHex, v @ JString(valueHex)) =>
-                (hexToBigInt(keyHex), hexToBigInt(valueHex)) match
-                  case (Some(k), Some(x)) => Right((k, x))
-                  case _                  => Left(invalid(field, what, JObject(keyHex -> v)))
-              case (keyHex, v) => Left(invalid(field, what, JObject(keyHex -> v)))
-            }
-            entries.collectFirst { case Left(e) => e } match
-              case Some(e) => Left(e)
-              case None    => Right(Some(entries.collect { case Right(kv) => kv }.toMap))
-          case JNothing | JNull => Right(None)
-          case other            => Left(invalid(field, what, other))
-
-      private def optQty(obj: JObject, field: String, what: String): Either[JsonRpcError, Option[BigInt]] =
-        (obj \ field) match
-          case JNothing | JNull => Right(None)
-          case v @ JString(s) =>
-            hexToBigInt(s) match
-              case Some(n) => Right(Some(n))
-              case None    => Left(invalid(field, what, v))
-          case other => Left(invalid(field, what, other))
-
-      private def optBytes(obj: JObject, field: String, what: String): Either[JsonRpcError, Option[ByteString]] =
-        (obj \ field) match
-          case JNothing | JNull => Right(None)
-          case v @ JString(s) =>
-            hexBytes(s) match
-              case Some(b) => Right(Some(ByteString(b)))
-              case None    => Left(invalid(field, what, v))
-          case other => Left(invalid(field, what, other))
-
-      private def optAddress(obj: JObject, field: String, what: String): Either[JsonRpcError, Option[Address]] =
-        (obj \ field) match
-          case JNothing | JNull => Right(None)
-          case v @ JString(s)   =>
-            // common.Address: 0x and exactly 20 bytes
-            if s.length == 42 && (s.startsWith("0x") || s.startsWith("0X")) && isHexDigits(s.drop(2)) then
-              extractAddress(v) match
-                case Right(a) => Right(Some(a))
-                case Left(_)  => Left(invalid(field, what, v))
-            else Left(invalid(field, what, v))
-          case other => Left(invalid(field, what, other))
-
-      // go-ethereum types.Withdrawal's JSON: index, validatorIndex, amount are uint64 quantities, address an address
-      private def optWithdrawals(
-          obj: JObject,
-          field: String,
-          what: String
-      ): Either[JsonRpcError, Option[Seq[Withdrawal]]] =
-        (obj \ field) match
-          case JNothing | JNull => Right(None)
-          case JArray(items) =>
-            val decoded = items.map {
-              case w: JObject =>
-                for
-                  index <- optQty(w, "index", what).flatMap(_.toRight(invalid("withdrawals.index", what, w)))
-                  validatorIndex <- optQty(w, "validatorIndex", what)
-                    .flatMap(_.toRight(invalid("withdrawals.validatorIndex", what, w)))
-                  address <- optAddress(w, "address", what).flatMap(_.toRight(invalid("withdrawals.address", what, w)))
-                  amount <- optQty(w, "amount", what).flatMap(_.toRight(invalid("withdrawals.amount", what, w)))
-                yield Withdrawal(index, validatorIndex, address, amount)
-              case other => Left(invalid(field, what, other))
-            }
-            decoded.collectFirst { case Left(e) => e } match
-              case Some(e) => Left(e)
-              case None    => Right(Some(decoded.collect { case Right(w) => w }))
-          case other => Left(invalid(field, what, other))
 
       // --- Encoder ---
       override def encodeJson(t: EthSimulateResponse): JValue =
@@ -362,6 +184,11 @@ object EthSimulateJsonMethodsImplicits extends JsonMethodsImplicits:
           case _ => Some(com.chipprbots.ethereum.utils.Config.blockchains.blockchainConfig.chainId.value)
         val sender = senderAddr.bytes
         val effectiveGasPrice = com.chipprbots.ethereum.domain.Transaction.effectiveGasPrice(tx, header.baseFee)
+        // go-ethereum newRPCTransaction (internal/ethapi/api.go) sets `yParity` for the typed transactions only; a
+        // legacy transaction carries v, r and s alone.
+        val yParityField = tx match
+          case _: com.chipprbots.ethereum.domain.LegacyTransaction => Nil
+          case _                                                   => List("yParity" -> encodeAsHex(BigInt(0)))
         val baseFields = List(
           "blockHash" -> encodeAsHex(blockHash),
           "blockNumber" -> encodeAsHex(header.number.value),
@@ -379,9 +206,8 @@ object EthSimulateJsonMethodsImplicits extends JsonMethodsImplicits:
           "value" -> encodeAsHex(tx.value),
           "v" -> encodeAsHex(BigInt(0)),
           "r" -> encodeAsHex(BigInt(0)),
-          "s" -> encodeAsHex(BigInt(0)),
-          "yParity" -> encodeAsHex(BigInt(0))
-        )
+          "s" -> encodeAsHex(BigInt(0))
+        ) ::: yParityField
         val chainIdField = chainId.map(c => "chainId" -> encodeAsHex(c)).toList
         val maxFeeFields = tx match
           case t: com.chipprbots.ethereum.domain.BlobTransaction =>

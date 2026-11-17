@@ -39,7 +39,11 @@ import com.chipprbots.ethereum.blockchain.sync.regular.RegularSync
 import com.chipprbots.ethereum.consensus.Consensus
 import com.chipprbots.ethereum.consensus.ConsensusAdapter
 import com.chipprbots.ethereum.crypto.kec256
+import com.chipprbots.ethereum.db.storage.RepairOutcome
 import com.chipprbots.ethereum.db.storage.StateStorage
+import com.chipprbots.ethereum.db.storage.pathstate.ReorgRefusal
+import com.chipprbots.ethereum.db.storage.pathstate.ReorgTooDeep
+import com.chipprbots.ethereum.db.storage.pathstate.StateFault
 import com.chipprbots.ethereum.domain.*
 import com.chipprbots.ethereum.domain.BlockHeaderImplicits.*
 import com.chipprbots.ethereum.ledger.*
@@ -62,6 +66,7 @@ import com.chipprbots.ethereum.network.PeerEventBusActor.PeerEvent.MessageFromPe
 import com.chipprbots.ethereum.network.PeerEventBusActor.PeerSelector
 import com.chipprbots.ethereum.network.PeerEventBusActor.SubscribeCmd
 import com.chipprbots.ethereum.network.PeerEventBusActor.SubscriptionClassifier.MessageClassifier
+import com.chipprbots.ethereum.network.PeerId
 import com.chipprbots.ethereum.network.p2p.messages.Capability
 import com.chipprbots.ethereum.network.p2p.messages.Codes
 import com.chipprbots.ethereum.network.p2p.messages.ETHPackets
@@ -102,6 +107,367 @@ class RegularSyncSpec
   // OnTop variant resource with the same teardown (used by the "return SyncDone when on top" test).
   val onTopFixtureResource: Resource[IO, OnTopFixture] =
     Resource.make(IO(new OnTopFixture))(fixture => IO(fixture.shutdownFixture()))
+
+  /** An importer on the unified state layout that has started a fork recovery for block 15, with the head at block 20
+    * and the common block at 10: what it does next is the resolver's answer, which the test gives it.
+    */
+  abstract class ForkRecoveryOnTheUnifiedLayout(
+      name: String,
+      refusal: Option[ReorgTooDeep] = None,
+      // false: the recovery is left to the importer, which starts one when an import has failed often enough
+      recoveryStarted: Boolean = true,
+      // false: the same importer on the hash layout
+      unified: Boolean = true,
+      // the block whose import started the recovery
+      failedAt: BigInt = BigInt(15),
+      // how many blocks the fetcher holds ready, where not the default (B-300 g)
+      readyBlocks: Option[Int] = None,
+      // false: this node has no header at the common block
+      lcaHeaderStored: Boolean = true
+  ) extends Fixture:
+    // the branches told to the escalation as out of reach, by an adapter that records them, and who held the import
+    // lock as each was (B-300 g)
+    val outOfReach: java.util.concurrent.ConcurrentLinkedQueue[
+      (List[BlockHeader], StateFault, Option[String])
+    ] = new java.util.concurrent.ConcurrentLinkedQueue()
+
+    override lazy val syncConfig: SyncConfig = defaultSyncConfig.copy(
+      blockHeadersPerRequest = 2,
+      blockBodiesPerRequest = 2,
+      blockFetcherTickInterval = 60.seconds,
+      peerResponseTimeout = 1.second,
+      maxReadyBlocksQueueSize = readyBlocks.getOrElse(defaultSyncConfig.maxReadyBlocksQueueSize)
+    )
+
+    val capturedBest: BigInt = testBlocks.last.number.value
+    val lca: BigInt = BigInt(10)
+    val lcaHeader: BlockHeader = testBlocks.find(_.number.value == lca).get.header
+
+    override lazy val blockchainReader: BlockchainReader = stub[BlockchainReader]
+    (() => blockchainReader.getBestBlockNumber).when().returns(capturedBest)
+    (() => blockchainReader.getSnapSyncPivotBlock).when().returns(None)
+    (blockchainReader.getBlockHeaderByNumber(_: BigInt)).when(lca).returns(Option.when(lcaHeaderStored)(lcaHeader))
+    (blockchainReader.getBlockHeaderByNumber(_: BigInt)).when(BigInt(0)).returns(Some(BlockHelpers.genesis.header))
+    testBlocks.filter(b => b.number.value > lca).foreach { b =>
+      (blockchainReader.getCanonicalHashByNumber(_: BigInt)).when(b.number.value).returns(Some(b.hash))
+    }
+    val abandoned: java.util.concurrent.ConcurrentLinkedQueue[(BigInt, ByteString)] =
+      new java.util.concurrent.ConcurrentLinkedQueue()
+    private val recordingReorgState = new com.chipprbots.ethereum.consensus.ReorgStateHandler:
+      override def abandonBlockStates(blocks: Seq[(BigInt, ByteString)]): Unit = blocks.foreach(abandoned.add(_))
+      override def readoptBlockStates(blocks: Seq[(BigInt, ByteString)]): Unit = ()
+
+    override lazy val blockchainWriter: BlockchainWriter = stub[BlockchainWriter]
+    (() => blockchainWriter.holdsStateInPlace).when().returns(unified)
+    (blockchainWriter.refusalOfMoveBackTo(_: BlockHeader, _: BlockchainReader)).when(*, *).returns(refusal)
+
+    val importerFetcher: TestProbe = TestProbe(s"$name-fork-fetcher")
+    val importerSupervisor: TestProbe = TestProbe(s"$name-fork-supervisor")
+    private val importerBroadcaster: TestProbe = TestProbe(s"$name-fork-broadcaster")
+    private val forkBlockTopic = testKit.spawn(
+      org.apache.pekko.actor.typed.pubsub.Topic[com.chipprbots.ethereum.jsonrpc.NewBlockImported](s"$name-fork-topic"),
+      s"$name-fork-topic"
+    )
+    val importer: TypedActorRef[BlockImporter.Command] = testKit.spawn(
+      BlockImporter.apply(
+        importerFetcher.ref.toTyped[BlockFetcher.FetchCommand],
+        consensusAdapter,
+        blockchainReader,
+        blockchainWriter,
+        stateStorage,
+        evmCodeStorage,
+        branchResolution,
+        syncConfig,
+        ommersPool.ref.toTyped[com.chipprbots.ethereum.ommers.OmmersPool.Command],
+        importerBroadcaster.ref,
+        pendingTransactionsManager.ref.toTyped[com.chipprbots.ethereum.transactions.PendingTransactionsManager.Command],
+        forkBlockTopic,
+        importerSupervisor.ref,
+        peerEventBus.ref,
+        networkPeerManager.ref,
+        blockchain,
+        blacklist,
+        this,
+        None,
+        recordingReorgState,
+        exhausts = exhausts,
+        importLock = importLock
+      ),
+      s"$name-fork-recovery-importer"
+    )
+    importerFetcher.expectMsgClass(3.seconds, classOf[BlockFetcher.Start])
+    importerSupervisor.expectMsgClass(3.seconds, classOf[RegularSync.ProgressProtocol.StartingFrom])
+    if recoveryStarted then importer ! BlockImporter.StartForkRecovery(failedAt)
+
+    /** What the fetcher, and the supervisor, were sent that no assertion has taken yet: until neither is sent more. */
+    def toTheFetcher(): Seq[Any] = importerFetcher.receiveWhile(max = 2.seconds, idle = 300.millis) { case m => m }
+    def toTheSupervisor(): Seq[Any] = importerSupervisor.receiveWhile(max = 2.seconds, idle = 300.millis) { case m =>
+      m
+    }
+
+    /** Neither the index, nor the best block, nor a block's reference counts. */
+    def nothingMoved(): Unit =
+      (blockchainWriter
+        .setCanonicalChainHead(_: BigInt, _: com.chipprbots.ethereum.domain.BlockHash, _: BigInt))
+        .verify(*, *, *)
+        .never()
+      abandoned.isEmpty shouldBe true
+
+    /** An adapter that records the branches told to it as out of reach, and imports nothing. */
+    def recordingOutOfReach(): ConsensusAdapter = new ConsensusAdapter(null, null, null, null, null):
+      override def branchOutOfReach(
+          headers: List[BlockHeader],
+          fault: StateFault
+      )(implicit blockchainConfig: BlockchainConfig): Unit =
+        outOfReach.add((headers, fault, importLock.heldBy)): Unit
+
+    /** `count` headers of a side branch that leaves this node's chain at `from`, of more difficulty than its blocks. */
+    def sideBranch(from: BlockHeader, count: Int): Vector[BlockHeader] =
+      (1 to count).foldLeft(Vector.empty[BlockHeader]) { (made, i) =>
+        val parent = made.lastOption.getOrElse(from)
+        made :+ from.copy(
+          parentHash = parent.hash,
+          number = BlockNumber(from.number.value + i),
+          difficulty = Difficulty(parent.difficulty.value * 2),
+          extraData = ByteString(s"of the side branch $i")
+        )
+      }
+
+    /** The next request for headers sent to a peer: the request, the peer, and where its answer is to go. */
+    def headersAsked(): (ETHGetBlockHeaders, PeerId, TypedActorRef[PeerEvent]) =
+      val (request, peer) = networkPeerManager.fishForSpecificMessage(5.seconds) {
+        case NetworkPeerManagerActor.SendMessageCmd(message, peer)
+            if message.underlyingMsg.isInstanceOf[ETHGetBlockHeaders] =>
+          (message.underlyingMsg.asInstanceOf[ETHGetBlockHeaders], peer)
+      }
+      val answerTo = peerEventBus.fishForSpecificMessage(5.seconds) {
+        case SubscribeCmd(MessageClassifier(codes, _), subscriber) if codes.contains(Codes.BlockHeadersCode) =>
+          subscriber
+      }
+      (request, peer, answerTo)
+
+    /** Every request for headers answered from `branch`, which stands on block `from`, until one is answered short. */
+    def answerFrom(branch: Vector[BlockHeader], from: BigInt): Seq[ETHGetBlockHeaders] =
+      @scala.annotation.tailrec
+      def go(asked: Vector[ETHGetBlockHeaders]): Vector[ETHGetBlockHeaders] =
+        val (request, peer, answerTo) = headersAsked()
+        val first = request.block.left.toOption.get
+        val answer = branch.slice((first - from - 1).toInt, (first - from - 1 + request.maxHeaders).toInt)
+        answerTo ! MessageFromPeer(BlockHeaders(request.requestId, answer), peer)
+        if answer.size < request.maxHeaders then asked :+ request else go(asked :+ request)
+      go(Vector.empty)
+
+    /** The branches told to the escalation, once `count` have been: until then, waited for. */
+    def toldOutOfReach(
+        count: Int
+    ): List[(List[BlockHeader], StateFault, Option[String])] =
+      val deadline = System.nanoTime() + java.util.concurrent.TimeUnit.SECONDS.toNanos(10)
+      while outOfReach.size < count && System.nanoTime() < deadline do Thread.onSpinWait()
+      import scala.jdk.CollectionConverters.*
+      outOfReach.asScala.toList
+
+  /** An importer on the unified state layout whose every import of block 15 fails as an invalid block: the importer
+    * starts the fork recovery itself (B-300).
+    */
+  abstract class ImportThatKeepsFailingOnTheUnifiedLayout(name: String)
+      extends ForkRecoveryOnTheUnifiedLayout(name, recoveryStarted = false):
+    // a block of another chain at height 15: one of this node's own is dropped from a batch before it is imported
+    val failing: Block =
+      val own = testBlocks.find(_.number.value == 15).get
+      own.copy(header = own.header.copy(extraData = ByteString("of another chain")))
+    // what the importer says of its own block at that height when it detects the fork
+    (blockchainReader
+      .getBlockHeaderByNumber(_: BigInt))
+      .when(BigInt(15))
+      .returns(testBlocks.find(_.number.value == 15).map(_.header))
+    val imports = new java.util.concurrent.atomic.AtomicInteger(0)
+    val importsBegun = new java.util.concurrent.atomic.AtomicInteger(0)
+    // held while a test looks at the importer in the middle of an import
+    @volatile var holdTheImport: Option[java.util.concurrent.CountDownLatch] = None
+
+    override lazy val consensusAdapter: ConsensusAdapter = new ConsensusAdapter(null, null, null, null, null):
+      // a proof-of-work chain: no consensus layer refuses a branch (B-297)
+      override def refusedWithTheirParent(blocks: NonEmptyList[Block]): Boolean = false
+      override def evaluateBranch(blocks: NonEmptyList[Block])(implicit
+          blockExecutionScheduler: IORuntime,
+          blockchainConfig: BlockchainConfig
+      ): IO[BlockImportResult] =
+        IO.blocking {
+          importsBegun.incrementAndGet()
+          holdTheImport.foreach(_.await(30, java.util.concurrent.TimeUnit.SECONDS))
+          imports.incrementAndGet()
+          BlockImportFailed("invalid")
+        }
+
+    override lazy val branchResolution: BranchResolution = new BranchResolution(blockchainReader):
+      override def resolveBranch(headers: NonEmptyList[BlockHeader]): BranchResolutionResult =
+        NewBetterBranch(Nil)
+
+    /** One more batch that is block 15 alone, and the import of it ended. */
+    def failOnce(): Unit =
+      val before = imports.get()
+      importer ! BlockImporter.FetcherResponse(BlockFetcher.PickedBlocks(NonEmptyList.one(failing)))
+      val deadline = System.nanoTime() + java.util.concurrent.TimeUnit.SECONDS.toNanos(30)
+      while imports.get() <= before && System.nanoTime() < deadline do Thread.onSpinWait()
+      imports.get() shouldBe before + 1
+
+  /** An importer whose branch resolution is scripted for a side branch from block 15: its first block is weighed and
+    * not taken; the block after it leaves it not taken; the one after that makes it the heavier (B-300 f).
+    */
+  abstract class BranchNotTakenFixture(
+      name: String,
+      unified: Boolean,
+      takenAt: Int = 17,
+      // a chain that follows a consensus layer: the consensus client names the head, and no branch is weighed here
+      followsConsensusLayer: Boolean = false,
+      readyBlocks: Option[Int] = None
+  ) extends ForkRecoveryOnTheUnifiedLayout(name, recoveryStarted = false, unified = unified, readyBlocks = readyBlocks):
+    val imports = new java.util.concurrent.atomic.AtomicInteger(0)
+    val resolved = new java.util.concurrent.atomic.AtomicInteger(0)
+
+    private val sideBlocks: Map[Int, Block] =
+      (15 to 22).foldLeft(Map.empty[Int, Block]) { (built, number) =>
+        // above this node's head (block 20) the branch's blocks are made from its head's
+        val own = testBlocks
+          .find(_.number.value == number)
+          .getOrElse(testBlocks.last.copy(header = testBlocks.last.header.copy(number = BlockNumber(number))))
+        val parent = built.get(number - 1).map(_.header.hash).getOrElse(own.header.parentHash)
+        built.updated(
+          number,
+          own.copy(header = own.header.copy(parentHash = parent, extraData = ByteString("of the side branch")))
+        )
+      }
+    def side(number: Int): Block = sideBlocks(number)
+
+    private def record(tip: Int): BranchNotTaken =
+      BranchNotTaken(
+        side(tip).header,
+        BigInt(14),
+        testBlocks.find(_.number.value == 14).get.hash.value,
+        ChainWeight.totalDifficultyOnly(tip),
+        BigInt(tip)
+      )
+
+    override lazy val consensusAdapter: ConsensusAdapter = new ConsensusAdapter(null, null, null, null, null):
+      // a proof-of-work chain: no consensus layer refuses a branch (B-297)
+      override def refusedWithTheirParent(blocks: NonEmptyList[Block]): Boolean = false
+      override def evaluateBranch(blocks: NonEmptyList[Block])(implicit
+          blockExecutionScheduler: IORuntime,
+          blockchainConfig: BlockchainConfig
+      ): IO[BlockImportResult] =
+        IO { imports.incrementAndGet(); BlockImportedToTop(Nil) }
+      override def branchOutOfReach(
+          headers: List[BlockHeader],
+          fault: StateFault
+      )(implicit blockchainConfig: BlockchainConfig): Unit =
+        outOfReach.add((headers, fault, importLock.heldBy)): Unit
+
+    override lazy val branchResolution: BranchResolution = new BranchResolution(
+      blockchainReader,
+      Option.when(followsConsensusLayer)(com.chipprbots.ethereum.consensus.engine.DesignatedHead(() => None))
+    ):
+      override def resolveBranch(headers: NonEmptyList[BlockHeader]): BranchResolutionResult =
+        resolved.incrementAndGet()
+        if headers.head.hash == side(15).header.hash then NoChainSwitch else UnknownBranch
+      override def notTaken(headers: NonEmptyList[BlockHeader]): Option[BranchNotTaken] =
+        Option.when(headers.head.hash == side(15).header.hash)(record(15))
+      override def extended(
+          branch: BranchNotTaken,
+          headers: NonEmptyList[BlockHeader]
+      ): Option[(BranchNotTaken, Boolean)] =
+        Option.when(headers.head.parentHash == branch.tip.hash) {
+          val tip = headers.last.number.value.toInt
+          (record(tip), tip >= takenAt)
+        }
+
+    /** One batch that is `block` alone, and the importer has resolved it. */
+    def deliver(block: Block): Unit =
+      val before = resolved.get()
+      importer ! BlockImporter.FetcherResponse(BlockFetcher.PickedBlocks(NonEmptyList.one(block)))
+      val deadline = System.nanoTime() + java.util.concurrent.TimeUnit.SECONDS.toNanos(30)
+      while resolved.get() <= before && System.nanoTime() < deadline do Thread.onSpinWait()
+      resolved.get() shouldBe before + 1
+
+  /** An importer whose every import of block 15 is refused because the window its ommers are checked against is not
+    * stored whole (B-301): the headers of blocks 9 to 14 are stored, each committing to an empty body, and of their
+    * bodies only those of blocks 13 and 14. With `windowHeaderMissing`, the header of block 11 is not stored either.
+    * Nothing below block 9 is stored, which the ommers' check does not read.
+    */
+  abstract class AncestorBodiesMissing(name: String, windowHeaderMissing: Boolean = false)
+      extends ForkRecoveryOnTheUnifiedLayout(name, recoveryStarted = false):
+    val emptyBody: BlockBody = BlockBody(Nil, Nil)
+    val window: List[Block] =
+      testBlocks.filter(b => b.number.value >= 9 && b.number.value <= 14).foldLeft(List.empty[Block]) { (built, own) =>
+        val parent = built.lastOption.map(_.hash).getOrElse(own.header.parentHash)
+        val header = own.header.copy(
+          parentHash = parent,
+          transactionsRoot = TrieRoot(BlockHeader.EmptyMpt),
+          ommersHash = com.chipprbots.ethereum.domain.BlockHash(BlockHeader.EmptyOmmers)
+        )
+        built :+ Block(header, emptyBody)
+      }
+    def windowBlock(number: Int): Block = window.find(_.number.value == number).get
+    val failing: Block =
+      val own = testBlocks.find(_.number.value == 15).get
+      own.copy(header = own.header.copy(parentHash = window.last.hash))
+    window
+      .filterNot(b => windowHeaderMissing && b.number.value == 11)
+      .foreach(b =>
+        (blockchainReader
+          .getBlockHeaderByHash(_: com.chipprbots.ethereum.domain.BlockHash))
+          .when(b.hash)
+          .returns(Some(b.header))
+      )
+    window
+      .filter(_.number.value >= 13)
+      .foreach(b =>
+        (blockchainReader
+          .getBlockBodyByHash(_: com.chipprbots.ethereum.domain.BlockHash))
+          .when(b.hash)
+          .returns(Some(b.body))
+      )
+    (blockchainWriter
+      .storeBlockBody(_: com.chipprbots.ethereum.domain.BlockHash, _: BlockBody))
+      .when(*, *)
+      .returns(
+        com.chipprbots.ethereum.db.dataSource.DataSourceBatchUpdate(
+          com.chipprbots.ethereum.db.dataSource.EphemDataSource(),
+          Array.empty
+        )
+      )
+    val imports = new java.util.concurrent.atomic.AtomicInteger(0)
+
+    override lazy val consensusAdapter: ConsensusAdapter = new ConsensusAdapter(null, null, null, null, null):
+      override def evaluateBranch(blocks: NonEmptyList[Block])(implicit
+          blockExecutionScheduler: IORuntime,
+          blockchainConfig: BlockchainConfig
+      ): IO[BlockImportResult] =
+        IO {
+          imports.incrementAndGet()
+          BlockImportStateFault(
+            new com.chipprbots.ethereum.db.storage.pathstate.AncestorNotStored(6, 2, "the bodies below are not stored")
+          )
+        }
+
+    override lazy val branchResolution: BranchResolution = new BranchResolution(blockchainReader):
+      override def resolveBranch(headers: NonEmptyList[BlockHeader]): BranchResolutionResult =
+        NewBetterBranch(Nil)
+
+    /** One more batch that is block 15 alone, and the import of it ended. */
+    def failOnce(): Unit =
+      val before = imports.get()
+      importer ! BlockImporter.FetcherResponse(BlockFetcher.PickedBlocks(NonEmptyList.one(failing)))
+      val deadline = System.nanoTime() + java.util.concurrent.TimeUnit.SECONDS.toNanos(30)
+      while imports.get() <= before && System.nanoTime() < deadline do Thread.onSpinWait()
+      imports.get() shouldBe before + 1
+
+    /** Nobody was blamed for block 15: no peer is blacklisted, and the fetcher was never told to blame one. */
+    def noPeerBlamed(sentToTheFetcher: Seq[Any]): Unit =
+      blacklist.keys shouldBe empty
+      sentToTheFetcher.collect {
+        case m: BlockFetcher.InvalidateBlocksFrom if m.toBlacklist.isDefined => m
+        case m: BlockFetcher.BlockImportFailed                               => m
+      } shouldBe empty
 
   def sync[T <: Fixture](test: => T): Future[Assertion] =
     import scala.concurrent.ExecutionContext.Implicits.global
@@ -341,12 +707,14 @@ class RegularSyncSpec
                   networkPeerManager.ref,
                   blockchain,
                   blacklist,
-                  this
+                  this,
+                  exhausts = exhausts,
+                  importLock = importLock
                 ),
                 s"test-importer-depth-$depth"
               )
 
-            importer ! BlockImporter.Start
+            // Started as it is spawned (#1705).
             importerFetcher.expectMsgClass(3.seconds, classOf[BlockFetcher.Start])
             importerSupervisor.expectMsgClass(3.seconds, classOf[RegularSync.ProgressProtocol.StartingFrom])
 
@@ -434,12 +802,14 @@ class RegularSyncSpec
                 blacklist,
                 this,
                 None,
-                recordingReorgState
+                recordingReorgState,
+                exhausts = exhausts,
+                importLock = importLock
               ),
               "test-fork-recovery-importer"
             )
 
-          importer ! BlockImporter.Start
+          // Started as it is spawned (#1705).
           importerFetcher.expectMsgClass(3.seconds, classOf[BlockFetcher.Start])
           importerSupervisor.expectMsgClass(3.seconds, classOf[RegularSync.ProgressProtocol.StartingFrom])
 
@@ -471,6 +841,667 @@ class RegularSyncSpec
           abandonedByRewind.asScala.toList shouldBe
             testBlocks.filter(_.number.value > lca).map(b => (b.number.value, b.hash.value))
 
+          testKit.stop(importer)
+      )
+
+      // Spec 018 C4e part 6 (the user's decision of 2026-11-15): on the unified state layout fork recovery moves no
+      // state. The head stays, the fetcher is sent back to the common block, and the peer's branch is judged by weight
+      // when it arrives. As the case above, driven by the resolver's answer.
+      "send the fetcher back to the common block and move nothing, on the unified state layout" taggedAs (
+        UnitTest,
+        SyncTest
+      ) in sync(
+        new ForkRecoveryOnTheUnifiedLayout("lca"):
+          importer ! BlockImporter.BranchResolverMsg(
+            FastSyncBranchResolverActor.BranchResolvedSuccessful(lca, defaultPeer)
+          )
+          val invalidate: InvalidateBlocksFrom = importerFetcher.fishForSpecificMessage(5.seconds) {
+            case m: BlockFetcher.InvalidateBlocksFrom => m
+          }
+          invalidate.fromBlock shouldBe lca + 1
+          invalidate.toBlacklist shouldBe None
+          // the next pick spans the fork: from the common block up to the block that failed (B-300 W4)
+          val pick: BlockFetcher.StrictPickBlocks = importerFetcher.fishForSpecificMessage(5.seconds) {
+            case m: BlockFetcher.StrictPickBlocks => m
+          }
+          (pick.from, pick.atLEastWith) shouldBe (lca + 1, BigInt(15))
+          nothingMoved()
+          testKit.stop(importer)
+      )
+
+      // B-300 W4 (forge): asked for up to this node's head, a branch that is the heavier and the shorter was never
+      // picked; asked for above the head, the pick would wait for blocks no rule says the peer has
+      "pick the fetched branch up to the block that failed, and no higher than the head, on the unified state layout" taggedAs (
+        UnitTest,
+        SyncTest
+      ) in sync(
+        new ForkRecoveryOnTheUnifiedLayout("above-the-head", failedAt = BigInt(30)):
+          importer ! BlockImporter.BranchResolverMsg(
+            FastSyncBranchResolverActor.BranchResolvedSuccessful(lca, defaultPeer)
+          )
+          val pick: BlockFetcher.StrictPickBlocks = importerFetcher.fishForSpecificMessage(5.seconds) {
+            case m: BlockFetcher.StrictPickBlocks => m
+          }
+          (pick.from, pick.atLEastWith) shouldBe (lca + 1, capturedBest)
+          testKit.stop(importer)
+      )
+
+      "send the fetcher back below the head and move nothing when no common block was found, on the unified state layout" taggedAs (
+        UnitTest,
+        SyncTest
+      ) in sync(
+        new ForkRecoveryOnTheUnifiedLayout("blind"):
+          importer ! BlockImporter.BranchResolverMsg(FastSyncBranchResolverActor.BranchResolutionFailed.noCommonBlock)
+          val invalidate: InvalidateBlocksFrom = importerFetcher.fishForSpecificMessage(5.seconds) {
+            case m: BlockFetcher.InvalidateBlocksFrom => m
+          }
+          // max(head - 128, the SNAP pivot) + 1
+          invalidate.fromBlock shouldBe BigInt(1)
+          invalidate.toBlacklist shouldBe None
+          nothingMoved()
+          // nothing is escalated: a state that cannot be synced again from here is the escalation's (C5a)
+          toTheSupervisor().collect { case stuck: SyncProtocol.RegularSyncStuck => stuck } shouldBe Nil
+          testKit.stop(importer)
+      )
+
+      // B-300 W3 (forge): an announced block imported while a branch is fetched ended the resolution, so the next
+      // pick was a plain one and the branch was never weighed whole
+      "import no announced block while a branch is fetched, and keep fetching the branch after a mined one, on the unified state layout" taggedAs (
+        UnitTest,
+        SyncTest
+      ) in sync(
+        new ForkRecoveryOnTheUnifiedLayout("announced"):
+          importer ! BlockImporter.BranchResolverMsg(
+            FastSyncBranchResolverActor.BranchResolvedSuccessful(lca, defaultPeer)
+          )
+          importerFetcher.fishForSpecificMessage(5.seconds) { case m: BlockFetcher.StrictPickBlocks => m }
+          val own = testBlocks.last
+          val announced: Block = own.copy(header = own.header.copy(extraData = ByteString("announced")))
+          importer ! BlockImporter.ImportNewBlock(announced, defaultPeer.id)
+          importer ! BlockImporter.PickBlocks
+          val afterTheAnnounce: BlockFetcher.StrictPickBlocks = importerFetcher.fishForSpecificMessage(5.seconds) {
+            case m: BlockFetcher.StrictPickBlocks => m
+          }
+          (afterTheAnnounce.from, afterTheAnnounce.atLEastWith) shouldBe (lca + 1, BigInt(15))
+          importedBlocksSet.contains(announced) shouldBe false
+
+          // a block mined here is imported, and the branch is still the one being fetched when its import has ended
+          val mined: Block = own.copy(header = own.header.copy(extraData = ByteString("mined")))
+          importer ! BlockImporter.MinedBlock(mined)
+          val imported: Long = System.nanoTime() + java.util.concurrent.TimeUnit.SECONDS.toNanos(30)
+          while !importedBlocksSet.contains(mined) && System.nanoTime() < imported do Thread.onSpinWait()
+          importedBlocksSet.contains(mined) shouldBe true
+          toTheFetcher().collect { case m: BlockFetcher.PickBlocks => m } shouldBe Nil
+          importer ! BlockImporter.PickBlocks
+          val afterTheMined: BlockFetcher.StrictPickBlocks = importerFetcher.fishForSpecificMessage(5.seconds) {
+            case m: BlockFetcher.StrictPickBlocks => m
+          }
+          (afterTheMined.from, afterTheMined.atLEastWith) shouldBe (lca + 1, BigInt(15))
+          nothingMoved()
+          testKit.stop(importer)
+      )
+
+      "end the resolution of a branch when a mined block's import ends, on the hash layout, as it always has" taggedAs (
+        UnitTest,
+        SyncTest
+      ) in sync(
+        new ForkRecoveryOnTheUnifiedLayout("hash-mined", recoveryStarted = false, unified = false):
+          // a batch whose parent this node does not know: the importer goes back and resolves the branch
+          override lazy val branchResolution: BranchResolution = new BranchResolution(blockchainReader):
+            override def resolveBranch(headers: NonEmptyList[BlockHeader]): BranchResolutionResult = UnknownBranch
+          val own = testBlocks.last
+          importer ! BlockImporter.FetcherResponse(BlockFetcher.PickedBlocks(NonEmptyList.one(own)))
+          importerFetcher.fishForSpecificMessage(5.seconds) { case m: BlockFetcher.StrictPickBlocks => m }
+          val mined: Block = own.copy(header = own.header.copy(extraData = ByteString("mined")))
+          importer ! BlockImporter.MinedBlock(mined)
+          val imported: Long = System.nanoTime() + java.util.concurrent.TimeUnit.SECONDS.toNanos(30)
+          while !importedBlocksSet.contains(mined) && System.nanoTime() < imported do Thread.onSpinWait()
+          importedBlocksSet.contains(mined) shouldBe true
+          // the pick that follows the mined block's import is a plain one
+          val picks: Seq[Any] = toTheFetcher().collect {
+            case m: BlockFetcher.PickBlocks       => m
+            case m: BlockFetcher.StrictPickBlocks => m
+          }
+          picks should not be empty
+          picks.collect { case m: BlockFetcher.StrictPickBlocks => m } shouldBe Nil
+          testKit.stop(importer)
+      )
+
+      // B-300 (f) (forge): a lighter branch was fetched again and again: nothing of it is stored, so the batch that
+      // follows it hung from an unknown block, the fetcher went 64 blocks back, and the same answer came again
+      "go on above a branch that is not taken, and fetch it whole once it has become the heavier, on the unified state layout" taggedAs (
+        UnitTest,
+        SyncTest
+      ) in sync(
+        new BranchNotTakenFixture("not-taken", unified = true):
+          // the branch's first block: weighed, and not taken
+          deliver(side(15))
+          toTheFetcher().collect { case m: BlockFetcher.InvalidateBlocksFrom => m } shouldBe Nil
+          // what follows stands on it: still not the heavier, so nothing is fetched again and the pick goes on
+          deliver(side(16))
+          val afterTheSecond: Seq[Any] = toTheFetcher()
+          afterTheSecond.collect { case m: BlockFetcher.InvalidateBlocksFrom => m } shouldBe Nil
+          afterTheSecond.collect { case m: BlockFetcher.PickBlocks => m } should not be empty
+          // with the third it is the heavier: fetched whole from the block it leaves this chain at, up to its tip
+          deliver(side(17))
+          val invalidate: InvalidateBlocksFrom = importerFetcher.fishForSpecificMessage(5.seconds) {
+            case m: BlockFetcher.InvalidateBlocksFrom => m
+          }
+          (invalidate.fromBlock, invalidate.toBlacklist) shouldBe (BigInt(15), None)
+          val pick: BlockFetcher.StrictPickBlocks = importerFetcher.fishForSpecificMessage(5.seconds) {
+            case m: BlockFetcher.StrictPickBlocks => m
+          }
+          (pick.from, pick.atLEastWith) shouldBe (BigInt(15), BigInt(17))
+          imports.get() shouldBe 0
+          nothingMoved()
+          testKit.stop(importer)
+      )
+
+      // forge: a branch that is the heavier only with its tip, above this node's head, fetched up to the head, read as
+      // the lighter without its tip, and was remembered and sent for again
+      "fetch a branch that has become the heavier up to its tip, above the head, on the unified state layout" taggedAs (
+        UnitTest,
+        SyncTest
+      ) in sync(
+        new BranchNotTakenFixture("not-taken-above", unified = true, takenAt = 22):
+          deliver(side(15))
+          (16 to 21).foreach(number => deliver(side(number)))
+          toTheFetcher().collect { case m: BlockFetcher.InvalidateBlocksFrom => m } shouldBe Nil
+          deliver(side(22))
+          importerFetcher.fishForSpecificMessage(5.seconds) { case m: BlockFetcher.InvalidateBlocksFrom => m }
+          val pick: BlockFetcher.StrictPickBlocks = importerFetcher.fishForSpecificMessage(5.seconds) {
+            case m: BlockFetcher.StrictPickBlocks => m
+          }
+          (pick.from, pick.atLEastWith) shouldBe (BigInt(15), BigInt(22))
+          testKit.stop(importer)
+      )
+
+      // B-300 (g): a branch not taken that becomes the heavier further above its common block than the fetcher holds
+      // is not fetched; the fork recovery it starts finds a peer, refuses it there, and escalates it
+      "refuse a branch not taken that has become the heavier beyond the fetch, and escalate it, on the unified state layout" taggedAs (
+        UnitTest,
+        SyncTest
+      ) in sync(
+        // 17 - 14 = 3 blocks above the block the branch leaves this chain at: one more than the fetcher holds
+        new BranchNotTakenFixture("taken-beyond", unified = true, readyBlocks = Some(2)):
+          val commonHeader: BlockHeader = testBlocks.find(_.number.value == 14).get.header
+          (blockchainReader.getBlockHeaderByNumber(_: BigInt)).when(BigInt(14)).returns(Some(commonHeader))
+          deliver(side(15))
+          deliver(side(16))
+          toTheFetcher()
+          deliver(side(17))
+          // nothing of it is fetched
+          toTheFetcher().collect {
+            case m: BlockFetcher.InvalidateBlocksFrom => m
+            case m: BlockFetcher.StrictPickBlocks     => m
+          } shouldBe Nil
+          // the recovery it started is answered with the block the branch leaves this chain at
+          importer ! BlockImporter.BranchResolverMsg(
+            FastSyncBranchResolverActor.BranchResolvedSuccessful(BigInt(14), defaultPeer)
+          )
+          val branch: Vector[BlockHeader] = (15 to 22).map(side(_).header).toVector
+          answerFrom(branch, BigInt(14)).head.block shouldBe Left(BigInt(15))
+          val told: List[(List[BlockHeader], StateFault, Option[String])] = toldOutOfReach(1)
+          told.map(_._1) shouldBe List(branch.toList)
+          told.head._2
+            .asInstanceOf[ReorgTooDeep]
+            .reason shouldBe ReorgRefusal.BeyondTheFetch
+          toTheFetcher().collect { case m: BlockFetcher.InvalidateBlocksFrom => m } shouldBe Nil
+          imports.get() shouldBe 0
+          nothingMoved()
+          testKit.stop(importer)
+      )
+
+      // the reach of a branch not taken is its tip, above this node's head where it is: here only the tip is further
+      // above the common block (22 - 14 = 8) than the fetcher holds (7); the head is not (20 - 14 = 6)
+      "measure a branch not taken that was refused beyond the fetch from its tip above the head, on the unified state layout" taggedAs (
+        UnitTest,
+        SyncTest
+      ) in sync(
+        new BranchNotTakenFixture("taken-tip", unified = true, takenAt = 22, readyBlocks = Some(7)):
+          val commonHeader: BlockHeader = testBlocks.find(_.number.value == 14).get.header
+          (blockchainReader.getBlockHeaderByNumber(_: BigInt)).when(BigInt(14)).returns(Some(commonHeader))
+          (15 to 21).foreach(number => deliver(side(number)))
+          toTheFetcher()
+          deliver(side(22))
+          // nothing of it is fetched; the recovery it starts is answered with the block it leaves this chain at
+          toTheFetcher().collect {
+            case m: BlockFetcher.InvalidateBlocksFrom => m
+            case m: BlockFetcher.StrictPickBlocks     => m
+          } shouldBe Nil
+          importer ! BlockImporter.BranchResolverMsg(
+            FastSyncBranchResolverActor.BranchResolvedSuccessful(BigInt(14), defaultPeer)
+          )
+          // refused there too, and escalated: its headers are asked for from the block above the common block
+          headersAsked()._1.block shouldBe Left(BigInt(15))
+          toTheFetcher().collect { case m: BlockFetcher.InvalidateBlocksFrom => m } shouldBe Nil
+          nothingMoved()
+          testKit.stop(importer)
+      )
+
+      // the recovery a branch not taken starts can find its common block elsewhere: that fork is not the remembered
+      // branch, and is measured from this node's head. At block 18 it is 2 blocks below the head, within the 3 the
+      // fetcher holds, though the remembered tip (22) is 4 above it
+      "measure the fork a refused branch's recovery finds at another block from the head, and fetch it as usual, on the unified state layout" taggedAs (
+        UnitTest,
+        SyncTest
+      ) in sync(
+        new BranchNotTakenFixture("taken-elsewhere", unified = true, takenAt = 22, readyBlocks = Some(3)):
+          val otherCommon: BlockHeader = testBlocks.find(_.number.value == 18).get.header
+          (blockchainReader.getBlockHeaderByNumber(_: BigInt)).when(BigInt(18)).returns(Some(otherCommon))
+          (15 to 21).foreach(number => deliver(side(number)))
+          toTheFetcher()
+          deliver(side(22))
+          toTheFetcher().collect { case m: BlockFetcher.InvalidateBlocksFrom => m } shouldBe Nil
+          importer ! BlockImporter.BranchResolverMsg(
+            FastSyncBranchResolverActor.BranchResolvedSuccessful(BigInt(18), defaultPeer)
+          )
+          val invalidate: InvalidateBlocksFrom = importerFetcher.fishForSpecificMessage(5.seconds) {
+            case m: BlockFetcher.InvalidateBlocksFrom => m
+          }
+          (invalidate.fromBlock, invalidate.toBlacklist) shouldBe (BigInt(19), None)
+          val pick: BlockFetcher.StrictPickBlocks = importerFetcher.fishForSpecificMessage(5.seconds) {
+            case m: BlockFetcher.StrictPickBlocks => m
+          }
+          (pick.from, pick.atLEastWith) shouldBe (BigInt(19), capturedBest)
+          networkPeerManager
+            .receiveWhile(max = 1.second, idle = 300.millis) { case m => m }
+            .collect { case m: NetworkPeerManagerActor.SendMessageCmd => m } shouldBe Nil
+          outOfReach.isEmpty shouldBe true
+          testKit.stop(importer)
+      )
+
+      "fetch a branch not taken that has become the heavier at exactly the reach of the fetcher, as before, on the unified state layout" taggedAs (
+        UnitTest,
+        SyncTest
+      ) in sync(
+        new BranchNotTakenFixture("taken-at-the-cap", unified = true, readyBlocks = Some(3)):
+          deliver(side(15))
+          deliver(side(16))
+          toTheFetcher()
+          deliver(side(17))
+          val invalidate: InvalidateBlocksFrom = importerFetcher.fishForSpecificMessage(5.seconds) {
+            case m: BlockFetcher.InvalidateBlocksFrom => m
+          }
+          invalidate.fromBlock shouldBe BigInt(15)
+          val pick: BlockFetcher.StrictPickBlocks = importerFetcher.fishForSpecificMessage(5.seconds) {
+            case m: BlockFetcher.StrictPickBlocks => m
+          }
+          (pick.from, pick.atLEastWith) shouldBe (BigInt(15), BigInt(17))
+          outOfReach.isEmpty shouldBe true
+          testKit.stop(importer)
+      )
+
+      "remember no branch on a chain that follows a consensus layer, on the unified state layout" taggedAs (
+        UnitTest,
+        SyncTest
+      ) in sync(
+        new BranchNotTakenFixture("not-taken-pos", unified = true, followsConsensusLayer = true):
+          deliver(side(15))
+          toTheFetcher()
+          deliver(side(16))
+          // nothing was remembered: the batch is an unknown branch, and the fetcher goes back for it
+          importerFetcher.fishForSpecificMessage(5.seconds) { case m: BlockFetcher.InvalidateBlocksFrom => m }
+          testKit.stop(importer)
+      )
+
+      "go back for an unknown branch as it always has, on the hash layout" taggedAs (UnitTest, SyncTest) in sync(
+        new BranchNotTakenFixture("not-taken-hash", unified = false):
+          deliver(side(15))
+          toTheFetcher()
+          deliver(side(16))
+          // 16 - branch-resolution-request-size, no lower than the genesis
+          val invalidate: InvalidateBlocksFrom = importerFetcher.fishForSpecificMessage(5.seconds) {
+            case m: BlockFetcher.InvalidateBlocksFrom => m
+          }
+          invalidate.fromBlock shouldBe (BigInt(16) - syncConfig.branchResolutionRequestSize).max(0)
+          testKit.stop(importer)
+      )
+
+      // B-300 (forge): nothing is rewound on the unified layout, so the block that started a recovery fails again
+      // after it; without the latch every fifth failure would start another, for ever
+      "make one fork recovery for a block that keeps failing, and go on evicting the peer that serves it, on the unified state layout" taggedAs (
+        UnitTest,
+        SyncTest
+      ) in sync(
+        new ImportThatKeepsFailingOnTheUnifiedLayout("latch"):
+          var evictedAt: Vector[Int] = Vector.empty
+          var recoveries = 0
+          (1 to 15).foreach { failure =>
+            failOnce()
+            val sent = toTheFetcher()
+            if sent.exists(_.isInstanceOf[BlockFetcher.BlockImportFailed]) then evictedAt :+= failure
+            recoveries += sent.count {
+              case m: BlockFetcher.InvalidateBlocksFrom => m.fromBlock == lca + 1
+              case _                                    => false
+            }
+            if failure == 6 then
+              // the import of a batch ends the resolution, as it ends: the pick that follows is a plain one
+              sent.collect { case m: BlockFetcher.StrictPickBlocks => m } shouldBe Nil
+              sent.collect { case m: BlockFetcher.PickBlocks => m } should not be empty
+            if failure == 5 then
+              // the fifth failure started the recovery: the resolver's answer is given here
+              importer ! BlockImporter.BranchResolverMsg(
+                FastSyncBranchResolverActor.BranchResolvedSuccessful(lca, defaultPeer)
+              )
+              val invalidate: InvalidateBlocksFrom = importerFetcher.fishForSpecificMessage(5.seconds) {
+                case m: BlockFetcher.InvalidateBlocksFrom if m.fromBlock == lca + 1 => m
+              }
+              invalidate.toBlacklist shouldBe None
+              recoveries += 1
+              // the pick that follows spans the fork
+              val pick: BlockFetcher.StrictPickBlocks = importerFetcher.fishForSpecificMessage(5.seconds) {
+                case m: BlockFetcher.StrictPickBlocks => m
+              }
+              (pick.from, pick.atLEastWith) shouldBe (lca + 1, BigInt(15))
+          }
+          // one recovery, at the fifth failure: the tenth and the fifteenth start none
+          recoveries shouldBe 1
+          // the peer that serves the block is dropped at every third failure, counted again from the recovery and
+          // from each fifth failure after it, where the strikes start again
+          evictedAt shouldBe Vector(3, 8, 13)
+          nothingMoved()
+          testKit.stop(importer)
+      )
+
+      // B-300 (forge): the import that starts a recovery sends the fetcher back to the block that failed as it ends,
+      // and its end clears the branch being resolved; an answer acted on before that would be undone by both
+      "hold the resolver's answer until the import under way has ended, on the unified state layout" taggedAs (
+        UnitTest,
+        SyncTest
+      ) in sync(
+        new ImportThatKeepsFailingOnTheUnifiedLayout("held"):
+          val release = new java.util.concurrent.CountDownLatch(1)
+          holdTheImport = Some(release)
+          importer ! BlockImporter.FetcherResponse(BlockFetcher.PickedBlocks(NonEmptyList.one(failing)))
+          val entered: Long = System.nanoTime() + java.util.concurrent.TimeUnit.SECONDS.toNanos(30)
+          while importsBegun.get() < 1 && System.nanoTime() < entered do Thread.onSpinWait()
+          importsBegun.get() shouldBe 1
+          // a recovery is started while that import runs, and the resolver answers at once
+          importer ! BlockImporter.StartForkRecovery(BigInt(15))
+          importer ! BlockImporter.BranchResolverMsg(
+            FastSyncBranchResolverActor.BranchResolvedSuccessful(lca, defaultPeer)
+          )
+          // nothing is done about the answer while the import runs
+          toTheFetcher().collect { case m: BlockFetcher.InvalidateBlocksFrom => m.fromBlock } shouldBe Nil
+          release.countDown()
+          // the import ends: it sends the fetcher back to the block that failed, and only then is the answer acted on
+          val rewinds: Seq[BigInt] = Seq(
+            importerFetcher.fishForSpecificMessage(5.seconds) { case m: BlockFetcher.InvalidateBlocksFrom =>
+              m.fromBlock
+            },
+            importerFetcher.fishForSpecificMessage(5.seconds) { case m: BlockFetcher.InvalidateBlocksFrom =>
+              m.fromBlock
+            }
+          )
+          rewinds shouldBe Seq(BigInt(15), lca + 1)
+          val pick: BlockFetcher.StrictPickBlocks = importerFetcher.fishForSpecificMessage(5.seconds) {
+            case m: BlockFetcher.StrictPickBlocks => m
+          }
+          (pick.from, pick.atLEastWith) shouldBe (lca + 1, BigInt(15))
+          nothingMoved()
+          testKit.stop(importer)
+      )
+
+      "leave the fetcher where it is when the head could not be moved back to the common block, on the unified state layout" taggedAs (
+        UnitTest,
+        SyncTest
+      ) in sync(
+        new ForkRecoveryOnTheUnifiedLayout(
+          "deep",
+          refusal = Some(
+            new ReorgTooDeep(
+              ReorgRefusal.Deep,
+              "below what the records reach"
+            )
+          )
+        ):
+          importer ! BlockImporter.BranchResolverMsg(
+            FastSyncBranchResolverActor.BranchResolvedSuccessful(lca, defaultPeer)
+          )
+          // it goes on picking from where it was: no block is fetched again from the common block
+          importerFetcher.fishForSpecificMessage(5.seconds) { case m: BlockFetcher.PickBlocks => m }
+          toTheFetcher().collect { case m: BlockFetcher.InvalidateBlocksFrom => m } shouldBe Nil
+          nothingMoved()
+          toTheSupervisor().collect { case stuck: SyncProtocol.RegularSyncStuck => stuck } shouldBe Nil
+          testKit.stop(importer)
+      )
+
+      // B-300 (g) (the user's decision of 2026-11-16): a branch whose common block is further below the head than the
+      // fetcher holds ready is never picked whole. It is refused, and escalated with the master peer's headers
+      "refuse a branch beyond the fetch and escalate it with the master peer's headers, on the unified state layout" taggedAs (
+        UnitTest,
+        SyncTest
+      ) in sync(
+        // the head is 10 blocks above the common block: one more than the fetcher holds
+        new ForkRecoveryOnTheUnifiedLayout("beyond", readyBlocks = Some(9)):
+          override lazy val consensusAdapter: ConsensusAdapter = recordingOutOfReach()
+          val branch: Vector[BlockHeader] = sideBranch(lcaHeader, 12)
+          importer ! BlockImporter.BranchResolverMsg(
+            FastSyncBranchResolverActor.BranchResolvedSuccessful(lca, defaultPeer)
+          )
+          val asked: Seq[ETHGetBlockHeaders] = answerFrom(branch, lca)
+          // asked of the master peer, from the block above the common block, a request at a time
+          asked.map(_.block) shouldBe (0 until asked.size).map(i => Left(lca + 1 + 2 * i))
+          asked.map(_.maxHeaders).distinct shouldBe Seq(BigInt(2))
+          val told: List[(List[BlockHeader], StateFault, Option[String])] = toldOutOfReach(1)
+          told.map(_._1) shouldBe List(branch.toList)
+          val fault: ReorgTooDeep = told.head._2.asInstanceOf[ReorgTooDeep]
+          fault.reason shouldBe ReorgRefusal.BeyondTheFetch
+          // told under the import lock
+          told.head._3 shouldBe Some(BlockImporter.BranchOutOfReachHolder)
+          // nothing was fetched from the common block, and the importer goes on picking from where it was
+          toTheFetcher().collect {
+            case m: BlockFetcher.InvalidateBlocksFrom => m
+            case m: BlockFetcher.StrictPickBlocks     => m
+          } shouldBe Nil
+          importer ! BlockImporter.PickBlocks
+          importerFetcher.fishForSpecificMessage(5.seconds) { case m: BlockFetcher.PickBlocks => m }
+          nothingMoved()
+          toTheSupervisor().collect { case stuck: SyncProtocol.RegularSyncStuck => stuck } shouldBe Nil
+          testKit.stop(importer)
+      )
+
+      "ask for the branch's reach above the common block and two requests more, and no more, on the unified state layout" taggedAs (
+        UnitTest,
+        SyncTest
+      ) in sync(
+        new ForkRecoveryOnTheUnifiedLayout("beyond-wanted", readyBlocks = Some(9)):
+          override lazy val consensusAdapter: ConsensusAdapter = recordingOutOfReach()
+          // the peer has more than is asked for
+          val branch: Vector[BlockHeader] = sideBranch(lcaHeader, 40)
+          importer ! BlockImporter.BranchResolverMsg(
+            FastSyncBranchResolverActor.BranchResolvedSuccessful(lca, defaultPeer)
+          )
+          // (20 - 10) + 2 * 2 headers, two at a time; the last request answered whole ends the fetch
+          (1 to 7).foreach { _ =>
+            val (request, peer, answerTo) = headersAsked()
+            val first = request.block.left.toOption.get
+            answerTo ! MessageFromPeer(
+              BlockHeaders(request.requestId, branch.slice((first - lca - 1).toInt, (first - lca + 1).toInt)),
+              peer
+            )
+          }
+          toldOutOfReach(1).map(_._1) shouldBe List(branch.take(14).toList)
+          networkPeerManager
+            .receiveWhile(max = 1.second, idle = 300.millis) { case m => m }
+            .collect { case m: NetworkPeerManagerActor.SendMessageCmd => m } shouldBe Nil
+          testKit.stop(importer)
+      )
+
+      // forge, B-300 g: at most MaxBranchHeadersFetched headers, however far above the common block the branch reaches.
+      // Here the reach and two requests more are 10 + 2 x 4096, above the cap: two requests of 4096 make the cap
+      "fetch no more of a branch's headers than the most it is to fetch, on the unified state layout" taggedAs (
+        UnitTest,
+        SyncTest
+      ) in sync(
+        new ForkRecoveryOnTheUnifiedLayout("capped", readyBlocks = Some(9)):
+          override lazy val syncConfig: SyncConfig = defaultSyncConfig.copy(
+            blockHeadersPerRequest = BlockImporter.MaxBranchHeadersFetched / 2,
+            blockBodiesPerRequest = 2,
+            blockFetcherTickInterval = 60.seconds,
+            peerResponseTimeout = 1.second,
+            maxReadyBlocksQueueSize = 9
+          )
+          override lazy val consensusAdapter: ConsensusAdapter = recordingOutOfReach()
+          // the peer has more than the cap, of one difficulty
+          val branch: Vector[BlockHeader] =
+            (1 to BlockImporter.MaxBranchHeadersFetched + 100).foldLeft(Vector.empty[BlockHeader]) { (made, i) =>
+              made :+ lcaHeader.copy(
+                parentHash = made.lastOption.getOrElse(lcaHeader).hash,
+                number = BlockNumber(lca + i),
+                extraData = ByteString(s"of the side branch $i")
+              )
+            }
+          importer ! BlockImporter.BranchResolverMsg(
+            FastSyncBranchResolverActor.BranchResolvedSuccessful(lca, defaultPeer)
+          )
+          val asked: Seq[ETHGetBlockHeaders] = (1 to 2).map { _ =>
+            val (request, peer, answerTo) = headersAsked()
+            val first = request.block.left.toOption.get
+            answerTo ! MessageFromPeer(
+              BlockHeaders(
+                request.requestId,
+                branch.slice((first - lca - 1).toInt, (first - lca - 1 + request.maxHeaders).toInt)
+              ),
+              peer
+            )
+            request
+          }
+          asked.map(_.maxHeaders).sum shouldBe BigInt(BlockImporter.MaxBranchHeadersFetched)
+          toldOutOfReach(1).map(_._1.size) shouldBe List(BlockImporter.MaxBranchHeadersFetched)
+          // and no third request
+          networkPeerManager
+            .receiveWhile(max = 1.second, idle = 300.millis) { case m => m }
+            .collect { case m: NetworkPeerManagerActor.SendMessageCmd => m } shouldBe Nil
+          testKit.stop(importer)
+      )
+
+      "fetch a branch at exactly the reach of the fetcher from the common block, as before, on the unified state layout" taggedAs (
+        UnitTest,
+        SyncTest
+      ) in sync(
+        new ForkRecoveryOnTheUnifiedLayout("at-the-cap", readyBlocks = Some(10)):
+          override lazy val consensusAdapter: ConsensusAdapter = recordingOutOfReach()
+          importer ! BlockImporter.BranchResolverMsg(
+            FastSyncBranchResolverActor.BranchResolvedSuccessful(lca, defaultPeer)
+          )
+          val invalidate: InvalidateBlocksFrom = importerFetcher.fishForSpecificMessage(5.seconds) {
+            case m: BlockFetcher.InvalidateBlocksFrom => m
+          }
+          (invalidate.fromBlock, invalidate.toBlacklist) shouldBe (lca + 1, None)
+          val pick: BlockFetcher.StrictPickBlocks = importerFetcher.fishForSpecificMessage(5.seconds) {
+            case m: BlockFetcher.StrictPickBlocks => m
+          }
+          (pick.from, pick.atLEastWith) shouldBe (lca + 1, BigInt(15))
+          // no header is asked of any peer
+          networkPeerManager
+            .receiveWhile(max = 1.second, idle = 300.millis) { case m => m }
+            .collect { case m: NetworkPeerManagerActor.SendMessageCmd => m } shouldBe Nil
+          outOfReach.isEmpty shouldBe true
+          nothingMoved()
+          testKit.stop(importer)
+      )
+
+      "escalate a branch whose common block the head could not be moved back to, as the same refusal, on the unified state layout" taggedAs (
+        UnitTest,
+        SyncTest
+      ) in sync(
+        new ForkRecoveryOnTheUnifiedLayout(
+          "deep-escalated",
+          refusal = Some(
+            new ReorgTooDeep(
+              ReorgRefusal.Deep,
+              "below what the records reach"
+            )
+          )
+        ):
+          override lazy val consensusAdapter: ConsensusAdapter = recordingOutOfReach()
+          val branch: Vector[BlockHeader] = sideBranch(lcaHeader, 12)
+          importer ! BlockImporter.BranchResolverMsg(
+            FastSyncBranchResolverActor.BranchResolvedSuccessful(lca, defaultPeer)
+          )
+          answerFrom(branch, lca).head.block shouldBe Left(lca + 1)
+          val told: List[(List[BlockHeader], StateFault, Option[String])] = toldOutOfReach(1)
+          told.map(_._1) shouldBe List(branch.toList)
+          // the refusal itself is the fault told, not its message
+          val refused: Option[ReorgTooDeep] = blockchainWriter.refusalOfMoveBackTo(lcaHeader, blockchainReader)
+          (told.head._2 eq refused.get) shouldBe true
+          toTheFetcher().collect { case m: BlockFetcher.InvalidateBlocksFrom => m } shouldBe Nil
+          nothingMoved()
+          testKit.stop(importer)
+      )
+
+      "escalate nothing when this node has no header at the common block, and go on picking, on the unified state layout" taggedAs (
+        UnitTest,
+        SyncTest
+      ) in sync(
+        new ForkRecoveryOnTheUnifiedLayout("no-header", readyBlocks = Some(9), lcaHeaderStored = false):
+          override lazy val consensusAdapter: ConsensusAdapter = recordingOutOfReach()
+          importer ! BlockImporter.BranchResolverMsg(
+            FastSyncBranchResolverActor.BranchResolvedSuccessful(lca, defaultPeer)
+          )
+          importer ! BlockImporter.PickBlocks
+          importerFetcher.fishForSpecificMessage(5.seconds) { case m: BlockFetcher.PickBlocks => m }
+          toTheFetcher().collect { case m: BlockFetcher.InvalidateBlocksFrom => m } shouldBe Nil
+          networkPeerManager
+            .receiveWhile(max = 1.second, idle = 300.millis) { case m => m }
+            .collect { case m: NetworkPeerManagerActor.SendMessageCmd => m } shouldBe Nil
+          outOfReach.isEmpty shouldBe true
+          nothingMoved()
+          testKit.stop(importer)
+      )
+
+      "escalate nothing when the request for the branch's headers times out, and go on picking, on the unified state layout" taggedAs (
+        UnitTest,
+        SyncTest
+      ) in sync(
+        new ForkRecoveryOnTheUnifiedLayout("timeout", readyBlocks = Some(9)):
+          override lazy val consensusAdapter: ConsensusAdapter = recordingOutOfReach()
+          importer ! BlockImporter.BranchResolverMsg(
+            FastSyncBranchResolverActor.BranchResolvedSuccessful(lca, defaultPeer)
+          )
+          val (request, peer, answerTo) = headersAsked()
+          // not answered: the request gives up after the peer response timeout, and stops listening for the answer
+          peerEventBus.fishForSpecificMessage(10.seconds) {
+            case com.chipprbots.ethereum.network.PeerEventBusActor.UnsubscribeAllCmd(subscriber)
+                if subscriber == answerTo =>
+              ()
+          }
+          // an answer that comes after it is not taken
+          answerTo ! MessageFromPeer(BlockHeaders(request.requestId, sideBranch(lcaHeader, 12)), peer)
+          importer ! BlockImporter.PickBlocks
+          importerFetcher.fishForSpecificMessage(5.seconds) { case m: BlockFetcher.PickBlocks => m }
+          networkPeerManager
+            .receiveWhile(max = 1.second, idle = 300.millis) { case m => m }
+            .collect { case m: NetworkPeerManagerActor.SendMessageCmd => m } shouldBe Nil
+          outOfReach.isEmpty shouldBe true
+          toTheFetcher().collect { case m: BlockFetcher.InvalidateBlocksFrom => m } shouldBe Nil
+          nothingMoved()
+          testKit.stop(importer)
+      )
+
+      // forge, B-300 g: each refused recovery would otherwise start a fetch of its own
+      "start no second fetch of a branch's headers while one runs, on the unified state layout" taggedAs (
+        UnitTest,
+        SyncTest
+      ) in sync(
+        new ForkRecoveryOnTheUnifiedLayout("one-fetch", readyBlocks = Some(9)):
+          override lazy val consensusAdapter: ConsensusAdapter = recordingOutOfReach()
+          importer ! BlockImporter.BranchResolverMsg(
+            FastSyncBranchResolverActor.BranchResolvedSuccessful(lca, defaultPeer)
+          )
+          headersAsked()._1.block shouldBe Left(lca + 1)
+          // not answered: a second recovery is refused the same way while the first fetch waits
+          importer ! BlockImporter.StartForkRecovery(BigInt(15))
+          importer ! BlockImporter.BranchResolverMsg(
+            FastSyncBranchResolverActor.BranchResolvedSuccessful(lca, defaultPeer)
+          )
+          networkPeerManager
+            .receiveWhile(max = 700.millis, idle = 300.millis) { case m => m }
+            .collect { case m: NetworkPeerManagerActor.SendMessageCmd => m } shouldBe Nil
+          toTheFetcher().collect { case m: BlockFetcher.InvalidateBlocksFrom => m } shouldBe Nil
+          outOfReach.isEmpty shouldBe true
           testKit.stop(importer)
       )
 
@@ -887,6 +1918,12 @@ class RegularSyncSpec
         override lazy val blockchain: BlockchainImpl = BlockchainImpl(storagesInstance.storages, blockchainReader)
         // The importer walks the storage trie through this; the fixture's own is a stub that reads nothing.
         override val stateStorage: StateStorage = storagesInstance.storages.stateStorage
+        // These tests are about a storage hole, not about branch resolution. The reader above answers the genesis hash
+        // with the parent header below, which no real chain does, so real resolution reads the first batch as an unknown
+        // branch; what imported it was the pivot floor's direct import, which now takes only a batch that continues the
+        // chain (B-007). Resolution is settled here instead: the batch extends the head.
+        override lazy val branchResolution: BranchResolution = stub[BranchResolution]
+        branchResolution.resolveBranch.when(*).returns(NewBetterBranch(Nil))
 
         def holeAt(hash: ByteString): Unit =
           setImportResult(
@@ -912,7 +1949,7 @@ class RegularSyncSpec
         }
         // Located, so the fetch is waited on: nothing counts as exhausted at once (forge, #1694).
         TestProbe().expectNoMessage(500.millis)
-        ImportCounterAccess.survivedExhausts shouldBe 0
+        exhausts.get shouldBe 0
       )
 
       "ask no peer for a storage hole that cannot be located, and back off as after an exhausted fetch" taggedAs (
@@ -931,7 +1968,7 @@ class RegularSyncSpec
 
         regularSync ! SyncProtocol.Start
 
-        awaitCond(ImportCounterAccess.survivedExhausts == 1, 10.seconds)
+        awaitCond(exhausts.get == 1, 10.seconds)
         val asked: Seq[Object] = peersClient.receiveWhile(2.seconds) { case m => m }
         asked.collect {
           case r @ PeersClient.Request(_: GetNodeData, _, _, _)  => r
@@ -958,7 +1995,7 @@ class RegularSyncSpec
               case PeersClient.Request(GetNodeData(hash :: Nil), _, _, _) if hash == failingBlock.hash.value => true
             }
             TestProbe().expectNoMessage(2.seconds) // twenty retry ticks
-            ImportCounterAccess.survivedExhausts shouldBe 0
+            exhausts.get shouldBe 0
           finally BlockImporter.resolvingRetryInterval = 30.seconds
       )
 
@@ -989,11 +2026,11 @@ class RegularSyncSpec
             }
             // The first import has ended; its retry starts 100 ms later and runs for 2 s.
             TestProbe().expectNoMessage(1.second)
-            ImportCounterAccess.survivedExhausts shouldBe 0
+            exhausts.get shouldBe 0
             system.actorSelection(s"${regularSync.path}/block-importer-*") !
               BlockImporter.FetcherResponse(BlockFetcher.FetchedStateNode(NodeData(Nil)))
 
-            awaitCond(ImportCounterAccess.survivedExhausts == 1, 5.seconds)
+            awaitCond(exhausts.get == 1, 5.seconds)
             succeed
           finally BlockImporter.resolvingRetryInterval = 30.seconds
       )
@@ -1013,7 +2050,7 @@ class RegularSyncSpec
                   if number == failingBlock.number.value =>
                 true
             }
-            ImportCounterAccess.survivedExhausts shouldBe 0
+            exhausts.get shouldBe 0
           finally BlockImporter.exhaustBackoff = 5.minutes
       )
 
@@ -1027,7 +2064,7 @@ class RegularSyncSpec
 
             regularSync ! SyncProtocol.Start
 
-            awaitCond(ImportCounterAccess.survivedExhausts == 1, 10.seconds)
+            awaitCond(exhausts.get == 1, 10.seconds)
             // The audit fills the hole during the backoff, so the next try imports the block.
             setImportResult(
               failingBlock,
@@ -1037,7 +2074,7 @@ class RegularSyncSpec
                 )
               )
             )
-            awaitCond(ImportCounterAccess.survivedExhausts == 0, 10.seconds)
+            awaitCond(exhausts.get == 0, 10.seconds)
             supervisor.receiveWhile(500.millis) { case m => m }.collect {
               case s @ SyncController.WrappedSyncProtocol(_: SyncProtocol.RegularSyncStuck) => s
             } shouldBe empty
@@ -1129,7 +2166,7 @@ class RegularSyncSpec
                   if number == failingBlock.number.value =>
                 true
             }
-            ImportCounterAccess.survivedExhausts shouldBe 0
+            exhausts.get shouldBe 0
             withClue("neither blacklisted nor evicted: ") {
               peersClient.receiveWhile(500.millis) { case m => m }.collect { case b: PeersClient.BlacklistPeer =>
                 b
@@ -1137,6 +2174,221 @@ class RegularSyncSpec
                 empty
             }
           finally BlockImporter.exhaustBackoff = 5.minutes
+      )
+
+      // Spec 018 Track C, C4b: the state a block was to be executed on was moved from under the batch by another
+      // writer, or is not held. The block was not judged. It is fetched and tried again, and nobody is blamed for it.
+      "try a block again that this node's state could not take, and space the tries out from the third: no peer blamed" taggedAs (
+        UnitTest,
+        SyncTest
+      ) in sync(
+        new Fixture:
+          val failingBlock: Block = testBlocksChunked.head.head
+          val attempts = new java.util.concurrent.atomic.AtomicInteger(0)
+          // the wait between two spaced-out tries: longer than this test
+          BlockImporter.exhaustBackoff = 1.hour
+          try
+            setImportResult(
+              failingBlock,
+              IO {
+                attempts.incrementAndGet()
+                BlockImportStateFault(
+                  new com.chipprbots.ethereum.db.storage.pathstate.StateUnavailable("the head moved under the batch")
+                )
+              }
+            )
+            peersClient.setAutoPilot(new PeersClientAutoPilot)
+
+            regularSync ! SyncProtocol.Start
+
+            // tried, fetched again and tried again at the importer's usual pace (the pick sent at once after a rewind
+            // finds the fetcher emptied; the retry tick brings the next): three times, as often as a failed block is
+            // tried before its peer is evicted
+            awaitCond(attempts.get == 3, 15.seconds)
+            // Then the tries are spaced out. Over three of the importer's usual retry intervals, in which a block
+            // that is tried at the usual pace is tried again, none comes; and nobody is blacklisted or evicted.
+            withClue("neither blacklisted nor evicted: ") {
+              peersClient
+                .receiveWhile(syncConfig.syncRetryInterval * 3) { case m => m }
+                .collect { case b: PeersClient.BlacklistPeer => b } shouldBe empty
+            }
+            attempts.get shouldBe 3
+          finally BlockImporter.exhaustBackoff = 5.minutes
+      )
+
+      // Spec 018 C5a, B-297: the consensus layer's branch refused for what no attempt changes while the head stays (the
+      // finalized block, a depth the records do not reach). Fetched again it is refused again, without end: it is tried
+      // once, the fetcher goes on, what hangs from it is dropped with it, and nobody is blamed.
+      "not fetch again a branch refused while the head stays, nor what hangs from it: no peer blamed" taggedAs (
+        UnitTest,
+        SyncTest
+      ) in sync(
+        new Fixture:
+          val failingBlock: Block = testBlocksChunked.head.head
+          val attempts = new java.util.concurrent.atomic.AtomicInteger(0)
+          val askedAbout = new java.util.concurrent.ConcurrentLinkedQueue[BigInt]()
+          refusedWithTheirParent.set { blocks =>
+            askedAbout.add(blocks.head.number.value)
+            true
+          }
+          setImportResult(
+            failingBlock,
+            IO {
+              attempts.incrementAndGet()
+              BlockImportStateFault(
+                new com.chipprbots.ethereum.db.storage.pathstate.RefusedForThisHead(
+                  new com.chipprbots.ethereum.db.storage.pathstate.StateUnavailable("the finalized block")
+                )
+              )
+            }
+          )
+          peersClient.setAutoPilot(new PeersClientAutoPilot)
+
+          regularSync ! SyncProtocol.Start
+
+          awaitCond(attempts.get == 1, 15.seconds)
+          withClue("neither blacklisted nor evicted: ") {
+            peersClient
+              .receiveWhile(syncConfig.syncRetryInterval * 3) { case m => m }
+              .collect { case b: PeersClient.BlacklistPeer => b } shouldBe empty
+          }
+          // tried once: neither fetched again nor fetched from below by the batch that hangs from it, which is refused
+          // with it and never handed to consensus
+          withClue(s"asked about the batches from ${askedAbout.toArray.mkString(",")}: ") {
+            attempts.get shouldBe 1
+            askedAbout should not be empty
+            askedAbout.toArray.foreach(_.asInstanceOf[BigInt] should be > failingBlock.number.value)
+          }
+          importedBlocksSet.filter(_.number.value > failingBlock.number.value) shouldBe empty
+      )
+
+      // B-301: after a SNAP sync the bodies of the six blocks below a block may not be stored, and a node restarted
+      // straight into regular sync has no hand-off to fetch them. The importer fetches them itself.
+      "fetch the bodies missing below a block whose ommers cannot be checked, store those that match, and try the block again at once" taggedAs (
+        UnitTest,
+        SyncTest
+      ) in sync(
+        new AncestorBodiesMissing("ancestor-bodies"):
+          // the wait between two spaced-out tries: longer than this test
+          BlockImporter.exhaustBackoff = 1.hour
+          try
+            failOnce()
+            val fetch: BlockFetcher.FetchAncestorBodies = importerFetcher.fishForSpecificMessage(5.seconds) {
+              case m: BlockFetcher.FetchAncestorBodies => m
+            }
+            withClue("exactly the bodies missing of the parent's window, highest first: ") {
+              fetch.headers.map(_.number.value) shouldBe Seq(12, 11, 10, 9).map(BigInt(_))
+              fetch.headers shouldBe Seq(12, 11, 10, 9).map(windowBlock(_).header)
+            }
+            // Twice more while the fetch is in flight, the second into the back-off: no second request.
+            failOnce()
+            failOnce()
+            val meanwhile = toTheFetcher()
+            withClue("one request in flight: ") {
+              meanwhile.collect { case m: BlockFetcher.FetchAncestorBodies => m } shouldBe empty
+            }
+            noPeerBlamed(meanwhile)
+
+            // Three bodies that are the ones their headers commit to, and one that is not.
+            val wrong = BlockBody(testBlocks.head.body.transactionList, Nil)
+            fetch.replyTo ! BlockFetcher.FetchedAncestorBodies(
+              fetch.headers,
+              Seq(
+                windowBlock(12).header -> emptyBody,
+                windowBlock(11).header -> wrong,
+                windowBlock(10).header -> emptyBody,
+                windowBlock(9).header -> emptyBody
+              )
+            )
+            withClue("tried again at once, not at the end of the back-off: ") {
+              importerFetcher.fishForSpecificMessage(5.seconds) { case _: BlockFetcher.PickBlocks => true }
+            }
+            // The streak started over, and the fetch is no longer in flight: the next fault is a first one, and asks
+            // again for what is still missing (the stub's stored bodies do not change).
+            failOnce()
+            val after = toTheFetcher()
+            after.collect { case m: BlockFetcher.FetchAncestorBodies => m } should have size 1
+            withClue("not backed off: ") {
+              after.collect { case m: BlockFetcher.PickBlocks => m } should not be empty
+            }
+            noPeerBlamed(after)
+            // Verified last: ScalaMock refuses a call to a stub after a verify.
+            Seq(12, 10, 9).foreach { number =>
+              (blockchainWriter
+                .storeBlockBody(_: com.chipprbots.ethereum.domain.BlockHash, _: BlockBody))
+                .verify(windowBlock(number).hash, emptyBody)
+                .once()
+            }
+            withClue("a body that is not the one its header commits to is not stored: ") {
+              (blockchainWriter
+                .storeBlockBody(_: com.chipprbots.ethereum.domain.BlockHash, _: BlockBody))
+                .verify(windowBlock(11).hash, *)
+                .never()
+            }
+          finally BlockImporter.exhaustBackoff = 5.minutes
+      )
+
+      "fetch no body below a block whose ommers cannot be checked when a header of that window is missing" taggedAs (
+        UnitTest,
+        SyncTest
+      ) in sync(
+        new AncestorBodiesMissing("ancestor-header", windowHeaderMissing = true):
+          failOnce()
+          val sent: Seq[Any] = toTheFetcher()
+          sent.collect { case m: BlockFetcher.FetchAncestorBodies => m } shouldBe empty
+          withClue("fetched again from the block, as before: ") {
+            sent.collect { case m: BlockFetcher.InvalidateBlocksFrom => m.fromBlock } shouldBe Seq(BigInt(15))
+          }
+          noPeerBlamed(sent)
+          (blockchainWriter
+            .storeBlockBody(_: com.chipprbots.ethereum.domain.BlockHash, _: BlockBody))
+            .verify(*, *)
+            .never()
+      )
+
+      // forge, B-301 B1: a fork recovery's behaviour dropped the answer, and the one slot for a fetch stayed taken for
+      // good: every later fault only logged a fetch in flight, and the endless back-off was back.
+      "free the slot of a fetch of ancestor bodies whose answer arrives during a fork recovery, and store the bodies" taggedAs (
+        UnitTest,
+        SyncTest
+      ) in sync(
+        new AncestorBodiesMissing("ancestor-bodies-fork"):
+          failOnce()
+          val fetch: BlockFetcher.FetchAncestorBodies = importerFetcher.fishForSpecificMessage(5.seconds) {
+            case m: BlockFetcher.FetchAncestorBodies => m
+          }
+          importer ! BlockImporter.StartForkRecovery(failing.number.value)
+          fetch.replyTo ! BlockFetcher.FetchedAncestorBodies(fetch.headers, Seq(windowBlock(12).header -> emptyBody))
+          importer ! BlockImporter.BranchResolverMsg(FastSyncBranchResolverActor.BranchResolutionFailed.noCommonBlock)
+          importerFetcher.fishForSpecificMessage(5.seconds) { case _: BlockFetcher.InvalidateBlocksFrom => true }
+          toTheFetcher()
+
+          failOnce()
+          withClue("the slot is free, so the next fault fetches again: ") {
+            toTheFetcher().collect { case m: BlockFetcher.FetchAncestorBodies => m } should have size 1
+          }
+          (blockchainWriter
+            .storeBlockBody(_: com.chipprbots.ethereum.domain.BlockHash, _: BlockBody))
+            .verify(windowBlock(12).hash, emptyBody)
+            .once()
+          testKit.stop(importer)
+      )
+
+      // forge, B-301 B1: an answer that never comes holds the slot only until the deadline.
+      "ask again for ancestor bodies when the fetch in flight is not answered within the deadline" taggedAs (
+        UnitTest,
+        SyncTest
+      ) in sync(
+        new AncestorBodiesMissing("ancestor-bodies-lost"):
+          BlockImporter.ancestorBodiesFetchDeadline = 1.millis
+          try
+            failOnce()
+            importerFetcher.fishForSpecificMessage(5.seconds) { case m: BlockFetcher.FetchAncestorBodies => m }
+            failOnce()
+            // the unanswered fetch no longer holds the slot: the second fault asks again (waited for, not sampled in a
+            // quiet window, which a loaded machine can outlast)
+            importerFetcher.fishForSpecificMessage(5.seconds) { case m: BlockFetcher.FetchAncestorBodies => m }
+          finally BlockImporter.ancestorBodiesFetchDeadline = 10.minutes
       )
 
       "recognise a block execution's trie error by the text it reaches the importer as" taggedAs (
@@ -1191,7 +2443,7 @@ class RegularSyncSpec
               blockExecutionScheduler: IORuntime,
               blockchainConfig: BlockchainConfig
           ): IO[BlockImportResult] =
-            if saveNodeWasCalled then
+            if repairNodeWasCalled then
               reimportedAfterSave = true
               IO.pure(BlockImportedToTop(Nil))
             else IO.pure(BlockImportFailedDueToMissingNode(new MissingNodeException(failingBlock.hash.value)))
@@ -1203,7 +2455,8 @@ class RegularSyncSpec
         peersClient.setAutoPilot(new PeersClientAutoPilot)
 
         @volatile var reimportedAfterSave: Boolean = false
-        var saveNodeWasCalled: Boolean = false
+        @volatile var repairNodeWasCalled: Boolean = false
+        @volatile var saveNodeWasCalled: Boolean = false
         val nodeData: List[ByteString] = List(ByteString(failingBlock.header.toBytes: Array[Byte]))
 
         override val stateStorage: StateStorage = new StateStorage:
@@ -1211,18 +2464,24 @@ class RegularSyncSpec
           override def getReadOnlyStorage: com.chipprbots.ethereum.db.storage.MptStorage = ???
           override def onBlockSave(bn: BigInt, currentBestSavedBlock: BigInt)(f: () => Unit): Unit = ()
           override def onBlockRollback(bn: BigInt, currentBestSavedBlock: BigInt)(f: () => Unit): Unit = ()
+          // #1692: the importer repairs the node (never lowering a count it finds); a blind saveNode is the old path.
           override def saveNode(nodeHash: ByteString, nodeEncoded: Array[Byte], bn: BigInt): Unit =
+            saveNodeWasCalled = true
+          override def canRepairNodes: Boolean = true
+          override def repairNode(nodeHash: ByteString, nodeEncoded: Array[Byte], bn: BigInt): RepairOutcome =
             val expectedNode = nodeData.head
             nodeHash should be(kec256(expectedNode))
             nodeEncoded should be(expectedNode.toArray)
             bn should be(failingBlock.number)
-            saveNodeWasCalled = true
+            repairNodeWasCalled = true
+            RepairOutcome.Written
           override def getNode(nodeHash: ByteString): Option[com.chipprbots.ethereum.mpt.MptNode] = None
           override def forcePersist(reason: StateStorage.FlushSituation): Boolean = true
 
         regularSync ! SyncProtocol.Start
 
-        awaitCond(saveNodeWasCalled)
+        awaitCond(repairNodeWasCalled)
+        saveNodeWasCalled shouldBe false
         // The importer must resume the import as soon as the node arrives, not wait out the 30 s ResolvingMissingNode
         // SyncRetryTick (which stays only as a fallback). The bound is far below that tick.
         awaitCond(reimportedAfterSave, 10.seconds)
@@ -1388,6 +2647,36 @@ class RegularSyncSpec
               case _                                       => false
           case _ => false
         }
+      )
+    }
+
+    // B-297 (forge): a reorganisation on the unified layout tells the side blocks it stands on too. Each block is
+    // broadcast with its own total difficulty, never another block's: two lists combined by `mapN` were every pairing.
+    "broadcasting blocks told together" should {
+      "send each with its own total difficulty" in sync(new OnTopFixture:
+        val sideParent: Block = BlockHelpers.generateBlock(testBlocks.init.last)
+        val told: Block = BlockHelpers.generateBlock(sideParent)
+        override def newBlockResult: BlockImportResult =
+          ChainReorganised(
+            Nil,
+            List(sideParent, told),
+            List(ChainWeight.totalDifficultyOnly(1111), ChainWeight.totalDifficultyOnly(2222))
+          )
+        goToTop()
+
+        val peers: GetHandshakedPeersCmd = networkPeerManager.expectMsgType[GetHandshakedPeersCmd]
+        peers.replyTo ! HandshakedPeers(handshakedPeers)
+
+        regularSync ! SyncProtocol.MinedBlock(newBlock)
+
+        val sent: Set[(Block, BigInt)] = networkPeerManager
+          .receiveWhile(max = 5.seconds, idle = 1.second) {
+            case NetworkPeerManagerActor.SendMessageCmd(message, _) => message.underlyingMsg
+            case other                                              => other
+          }
+          .collect { case NewBlock(block, totalDifficulty) => (block, totalDifficulty) }
+          .toSet
+        sent shouldBe Set(sideParent -> BigInt(1111), told -> BigInt(2222))
       )
     }
 

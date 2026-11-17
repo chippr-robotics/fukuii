@@ -1,7 +1,11 @@
 package com.chipprbots.ethereum
 
+import scala.jdk.CollectionConverters.*
+
+import ch.qos.logback.classic.Logger as LogbackLogger
 import org.scalatest.flatspec.AnyFlatSpec
 import org.scalatest.matchers.should.Matchers
+import org.slf4j.LoggerFactory
 
 import com.chipprbots.ethereum.console.*
 import com.chipprbots.ethereum.testing.Tags.*
@@ -74,4 +78,26 @@ class TuiLogSuppressorSpec extends AnyFlatSpec with Matchers:
 
     suppressor.restoreConsoleLogs()
     suppressor.isConsoleSuppressed shouldBe false
+  }
+
+  // Spec 027 SC-009, C-11: the TUI's log ring is a separate appender, attached once the console is suppressed and
+  // detached before it is restored; the suppressor never sees it, and the root logger ends as it began.
+  it should "leave the root logger's appenders as they were around the TUI's log ring (spec 027 SC-009)" taggedAs (
+    UnitTest
+  ) in {
+    val root = LoggerFactory.getLogger(org.slf4j.Logger.ROOT_LOGGER_NAME).asInstanceOf[LogbackLogger]
+    def names: List[String] = root.iteratorForAppenders().asScala.map(_.getName).toList.sorted
+    val before = names
+    val suppressor = TuiLogSuppressor()
+    val ring = TuiLogRingAppender.of(TuiConfig.default)
+
+    suppressor.suppressConsoleLogs()
+    ring.attach()
+    names should contain(TuiLogRingAppender.Name)
+    ring.detach()
+    suppressor.suppressedAppenderNames should not contain TuiLogRingAppender.Name
+    suppressor.restoreConsoleLogs()
+
+    names shouldBe before
+    ring.isStarted shouldBe false
   }

@@ -30,15 +30,15 @@ class BlockPreparator(
 
   // NOTE We need a lazy val here, not a plain val, otherwise a mocked BlockChainConfig
   //      in some irrelevant test can throw an exception.
-  private[ledger] def blockRewardCalculator(implicit blockchainConfig: BlockchainConfig) = new BlockRewardCalculator(
-    blockchainConfig.monetaryPolicyConfig,
-    blockchainConfig.forkBlockNumbers.byzantiumBlockNumber,
-    blockchainConfig.forkBlockNumbers.constantinopleBlockNumber
-  )
+  private[ledger] def blockRewardCalculator(implicit blockchainConfig: BlockchainConfig): BlockRewardCalculator =
+    BlockRewards.calculator
 
   /** This function updates the state in order to pay rewards based on YP section 11.3:
     *   1. Miner receives 100% of the block reward 2. Miner receives a reward for the inclusion of ommers 3. Ommer
     *      miners receive a reward for their inclusion in this block
+    *
+    * From Olympia, ECIP-1111's treasury credit comes first. The rewards themselves are [[BlockRewards.payProofOfWork]];
+    * eth_simulateV1 pays its miner and ommer part, [[BlockRewards.payMinerAndOmmers]].
     *
     * @param block
     *   the block being processed
@@ -55,81 +55,32 @@ class BlockPreparator(
     // BlockExecution.processWithdrawals after payBlockReward returns; applying them here
     // too would double-credit every withdrawal and break state-root validation.
     if block.header.isPoS then worldStateProxy
-    else
-      val blockNumber = block.header.number.value
-      val minerRewardForBlock = blockRewardCalculator.calculateMiningRewardForBlock(blockNumber)
-      val minerRewardForOmmers =
-        blockRewardCalculator.calculateMiningRewardForOmmers(blockNumber, block.body.uncleNodesList.size)
-      val minerAddress = Address(block.header.beneficiary)
+    else BlockRewards.payProofOfWork(block.header, block.body.uncleNodesList, worldStateProxy)
 
-      val minerReward = minerRewardForOmmers + minerRewardForBlock
-
-      // ECIP-1111: Treasury credit BEFORE miner/ommer rewards (spec order per ECIP-1111)
-      val worldAfterTreasury = creditBaseFeeToTreasury(block.header, blockchainConfig.treasuryAddress, worldStateProxy)
-
-      val worldAfterPayingBlockReward = increaseAccountBalance(minerAddress, UInt256(minerReward))(worldAfterTreasury)
-      log.debug("Paying block {} reward of {} to miner with address {}", blockNumber, minerReward, minerAddress)
-
-      block.body.uncleNodesList.foldLeft(worldAfterPayingBlockReward) { (ws, ommer) =>
-        val ommerAddress = Address(ommer.beneficiary)
-        val ommerReward = blockRewardCalculator.calculateOmmerRewardForInclusion(blockNumber, ommer.number.value)
-
-        log.debug(
-          "Paying block {} reward of {} to ommer with account address {}",
-          blockNumber,
-          ommerReward,
-          ommerAddress
-        )
-        increaseAccountBalance(ommerAddress, UInt256(ommerReward))(ws)
-      }
-
-  /** ECIP-1111: Credit baseFee * gasUsed to treasury. Applied BEFORE miner and ommer rewards per ECIP-1111 spec. */
-  private def creditBaseFeeToTreasury(
-      blockHeader: BlockHeader,
-      treasuryAddress: Address,
-      world: InMemoryWorldStateProxy
-  )(implicit blockchainConfig: BlockchainConfig): InMemoryWorldStateProxy =
-    val isOlympiaActivated = blockHeader.number.value >= blockchainConfig.forkBlockNumbers.olympiaBlockNumber
-    if !isOlympiaActivated then world
-    else
-      if treasuryAddress == Address(0) && blockchainConfig.networkType == com.chipprbots.ethereum.utils.NetworkType.ETC
-      then
-        throw new IllegalStateException(
-          s"OLYMPIA SAFETY: treasury address is zero at block ${blockHeader.number}. " +
-            "Set treasury-address in chain config before activating Olympia."
-        )
-
-      blockHeader.baseFee match
-        case Some(baseFee) if baseFee > 0 && blockHeader.gasUsed > GasAmount.Zero && treasuryAddress != Address(0) =>
-          val treasuryCredit = baseFee * blockHeader.gasUsed.value
-          log.debug(
-            "Crediting baseFee revenue {} (baseFee={} * gasUsed={}) to treasury {}",
-            treasuryCredit,
-            baseFee,
-            blockHeader.gasUsed,
-            treasuryAddress
-          )
-          increaseAccountBalance(treasuryAddress, UInt256(treasuryCredit))(world)
-        case _ => world
-
-  /** v0 ≡ Tg (Tx gas limit) * Tp (Tx gas price). See YP equation number (68)
+  /** v0 ≡ Tg (Tx gas limit) * Tp (Tx gas price). See YP equation number (68). `tx.gasPrice` is `maxFeePerGas` for the
+    * dynamic-fee types, the price go-ethereum's `buyGas` checks the balance against.
+    *
+    * Unbounded: never reduced mod 2^256 (see [[calculateUpfrontCost]]).
     *
     * @param tx
     *   Target transaction
     * @return
     *   Upfront cost
     */
-  private[ledger] def calculateUpfrontGas(tx: Transaction): UInt256 = UInt256(tx.gasLimit.value * tx.gasPrice.value)
+  private[ledger] def calculateUpfrontGas(tx: Transaction): BigInt = tx.gasLimit.value * tx.gasPrice.value
 
   /** v0 ≡ Tg (Tx gas limit) * Tp (Tx gas price) + Tv (Tx value). See YP equation number (65)
     *
+    * Unbounded, as go-ethereum's and core-geth's `buyGas` compute it: the balance check compares this exact figure, so
+    * a cost that does not fit 256 bits is insufficient funds rather than a value reduced mod 2^256.
+    *
     * @param tx
     *   Target transaction
     * @return
     *   Upfront cost
     */
-  private[ledger] def calculateUpfrontCost(tx: Transaction): UInt256 =
-    UInt256(calculateUpfrontGas(tx) + tx.value)
+  private[ledger] def calculateUpfrontCost(tx: Transaction): BigInt =
+    calculateUpfrontGas(tx) + tx.value
 
   /** Increments account nonce by 1 stated in YP equation (69) and Pays the upfront Tx gas calculated as TxGasPrice *
     * TxGasLimit from balance. YP equation (68). Per EIP-4844, blob-gas cost is ALSO part of the upfront cost deducted
@@ -173,6 +124,11 @@ class BlockPreparator(
     // balance computed with effectiveGasPrice, matching geth/nethermind.
     // Surfaces on hive `bcEIP1559/burnVerify_Cancun` which reads BALANCE inside
     // the contract to verify the burn invariant.
+    //
+    // On block execution this cannot wrap: the validator has already required, unbounded, a
+    // balance of at least gasLimit * gasPrice (maxFeePerGas for the dynamic-fee types) + value +
+    // blob gas * maxFeePerBlobGas, and effectiveGasPrice <= that price and the blob base fee
+    // <= maxFeePerBlobGas, so upfrontTotal <= balance.
     val effectiveGasPrice = Transaction.effectiveGasPrice(stx.tx, blockHeader.baseFee)
     val executionUpfront = (stx.tx.gasLimit * effectiveGasPrice).value
     val upfrontTotal = executionUpfront + blobGasCost
@@ -192,7 +148,7 @@ class BlockPreparator(
     val account = worldStateProxy.getGuaranteedAccount(senderAddress)
     worldStateProxy.saveAccount(
       senderAddress,
-      account.increaseBalance(-calculateUpfrontGas(stx.tx)).increaseNonce()
+      account.increaseBalance(UInt256(-calculateUpfrontGas(stx.tx))).increaseNonce()
     )
 
   /** EIP-4844: Deduct blob gas cost from sender after execution. The blob gas is burned (not paid to miner). Uses
@@ -631,12 +587,19 @@ class BlockPreparator(
     // EIP-7778 is why the execution term is computed BEFORE refunds: refunds must not reduce the gas
     // counted toward the block limit, though they still reduce what the sender pays above.
     val txStateGas: BigInt = resultWithAuthRefund.evmStateGasUsed
+    // EIP-8037 `tx_gas_used_before_refund`, hoisted out of the Amsterdam branch below with its expression unchanged.
+    val gasUsedBeforeRefund: BigInt =
+      gasLimit.value - resultWithAuthRefund.gasRemaining - resultWithAuthRefund.stateGasReservoir
     val txExecutionGas: BigInt =
       if !evmConfigForTx.amsterdamEnabled then executionGasToPayToMiner.value
-      else
-        val gasUsedBeforeRefund =
-          gasLimit.value - resultWithAuthRefund.gasRemaining - resultWithAuthRefund.stateGasReservoir
-        (gasUsedBeforeRefund - txStateGas).max(floorDataGas)
+      else (gasUsedBeforeRefund - txStateGas).max(floorDataGas)
+
+    // go-ethereum `settleGas`: `peakUsed = gasUsedBeforeRefund`, then `max(peakUsed, floorDataGas)` from Prague. The
+    // floor applies on exactly the condition `executionGasToPayToMiner` charges it on, so `maxUsedGas >= gasUsed`
+    // always. Report-only: nothing below this line reads it, and only TxResult carries it out (eth_simulateV1).
+    val maxUsedGas: BigInt =
+      if eip7623Active || evmConfigForTx.amsterdamEnabled then gasUsedBeforeRefund.max(floorDataGas)
+      else gasUsedBeforeRefund
 
     val totalGasToRefund = gasLimit - executionGasToPayToMiner
 
@@ -656,6 +619,10 @@ class BlockPreparator(
     // (post-EIP-1559: NOT maxFeePerGas — see comment there). So the refund only
     // needs to return the unused portion: (gasLimit - executionGas) * effectiveGasPrice.
     // No maxFee overpay to undo.
+    //
+    // Neither this refund nor the miner's fee below can exceed gasLimit * effectiveGasPrice, which
+    // the unbounded balance check has already bounded by the sender's balance, so the two
+    // `.toUInt256` conversions are exact on every transaction block execution admits.
     val refundAmount = totalGasToRefund.value * gasPrice
     val refundGasFn = pay(senderAddress, refundAmount.toUInt256, withTouch = false)
     // EIP-1559: miner receives only the priority fee (effectiveGasPrice - baseFee).
@@ -737,7 +704,8 @@ class BlockPreparator(
       result.returnData,
       result.error,
       executionGasUsed = txExecutionGas,
-      stateGasUsed = txStateGas
+      stateGasUsed = txStateGas,
+      maxUsedGas = maxUsedGas
     )
 
   /** The EIP-7702 authorization phase of one transaction, before its top-level frame (go-ethereum `execute` ->
@@ -917,18 +885,17 @@ class BlockPreparator(
         )
 
       case Seq(stx, otherStxs*) =>
-        // EIP-4844: upfront balance check must include blob-gas cost too —
-        // otherwise a sender pre-funded with exactly gasLimit*maxFee + blobCost
-        // passes the check but underflows when the upfront deduction runs.
-        val blobGasCost = stx.tx match
+        // EIP-4844: the balance check reserves the blob gas at the transaction's cap, maxFeePerBlobGas, just as it
+        // reserves execution gas at maxFeePerGas (EIP-4844 `max_total_fee`, go-ethereum `buyGas` `blobBalanceCheck`).
+        // The debit in updateSenderAccountBeforeExecution charges the block's blob base fee instead, which
+        // validateMaxFeePerBlobGas holds at or below the cap, so the debit never exceeds what is reserved here.
+        val blobGasReserved = stx.tx match
           case bt: com.chipprbots.ethereum.domain.BlobTransaction =>
-            val blobGasUsed = BigInt(bt.blobVersionedHashes.size) * BigInt(131072)
-            val blobBaseFee = blockHeader.excessBlobGas
-              .map(eg => BlobGasUtils.getBlobGasPrice(eg, blockHeader.unixTimestamp, blockchainConfig))
-              .getOrElse(BigInt(1))
-            blobGasUsed * blobBaseFee
+            BigInt(bt.blobVersionedHashes.size) * BigInt(131072) * bt.maxFeePerBlobGas
           case _ => BigInt(0)
-        val upfrontCost = UInt256(calculateUpfrontCost(stx.tx).toBigInt + blobGasCost)
+        // Unbounded, never reduced mod 2^256: go-ethereum / core-geth `buyGas` reject a required balance that does
+        // not fit 256 bits as insufficient funds, and the validator compares this exact figure with the balance.
+        val upfrontCost: BigInt = calculateUpfrontCost(stx.tx) + blobGasReserved
         val senderAddress = SignedTransaction.getSender(stx)
 
         val accountDataOpt = senderAddress
@@ -958,7 +925,7 @@ class BlockPreparator(
         validatedStx match
           case Right((account, address)) =>
             val accessRecorder = accessList.map(_ => new BlockAccessRecorder)
-            val TxResult(newWorld, gasUsed, logs, _, vmError, txExecutionGas, txStateGas) =
+            val TxResult(newWorld, gasUsed, logs, _, vmError, txExecutionGas, txStateGas, _) =
               ImportProfile.tx(
                 executeTransaction(stx, address, blockHeader, world.saveAccount(address, account), accessRecorder)
               )
@@ -1051,7 +1018,9 @@ class BlockPreparator(
       initialWorldStateBeforeExecution.getOrElse(
         InMemoryWorldStateProxy(
           evmCodeStorage = evmCodeStorage,
-          mptStorage = blockchain.getReadOnlyMptStorage(),
+          // On the unified layout, the parent's state under a layer of this build's own (spec 018 C3c); with the
+          // guard off, the buffer over the hash store it always was.
+          mptStorage = blockchainReader.proposerStateOn(parent).getOrElse(blockchain.getReadOnlyMptStorage()),
           // Mined blocks must answer BLOCKHASH exactly as every importer will: by the ancestry of the block being
           // built (core-geth GetHashFn), not by the canonical index. See AncestorBlockHashes.
           getBlockHashByNumber = AncestorBlockHashes.forBlock(block.header, blockchainReader),
@@ -1062,11 +1031,19 @@ class BlockPreparator(
         )
       )
 
-    val prepared = executePreparedTransactions(block.body.transactionList, initialWorld, block.header)
+    // What block import does before the first transaction (the DAO fork block's drain, EIP-4788, EIP-2935), by the
+    // function import runs, so the block is built on the state import executes it on.
+    val preambleWorld =
+      BlockExecution.applyBlockPreamble(block, block.header.number.value, initialWorld, accessList = None)
+    val prepared = executePreparedTransactions(block.body.transactionList, preambleWorld, block.header)
 
     prepared match
       case (execResult @ BlockResult(resultingWorldStateProxy, _, _, _, _, _), txExecuted) =>
-        val worldToPersist = payBlockReward(block, resultingWorldStateProxy)
+        // The rewards are paid on the header the block will be sealed with, as import pays them. A block being built
+        // arrives with gasUsed still 0 (BlockGeneratorSkeleton fills it in from this result afterwards), and block
+        // validation holds the sealed header's gasUsed equal to the gas executed, so the header carries that here.
+        val sealedHeader = block.header.copy(gasUsed = GasAmount(execResult.gasUsed))
+        val worldToPersist = payBlockReward(block.copy(header = sealedHeader), resultingWorldStateProxy)
         val worldPersisted = InMemoryWorldStateProxy.persistState(worldToPersist)
         PreparedBlock(
           block.copy(body = block.body.copy(transactionList = txExecuted)),

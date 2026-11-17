@@ -25,7 +25,7 @@ class ReferenceCountedStatePruningSpec extends AnyFlatSpec with Matchers:
   class Setup:
     val dataSource: EphemDataSource = EphemDataSource()
     val nodeStorage = new NodeStorage(dataSource)
-    val stateStorage = new ReferenceCountedStateStorage(nodeStorage, history)
+    val stateStorage = new ReferenceCountedStateStorage(nodeStorage, history, nodesMayBeDeleted = () => true)
 
     /** Executes one block on top of `parentRoot`: rewrites `touched` keys, returns the new root. */
     def execute(bn: Int, parentRoot: ByteString, touched: Seq[Int], tag: String): ByteString =

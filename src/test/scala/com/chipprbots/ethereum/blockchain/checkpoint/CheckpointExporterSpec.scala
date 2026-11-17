@@ -20,6 +20,7 @@ import com.chipprbots.ethereum.blockchain.checkpoint.CheckpointImporter.ImportRe
 import com.chipprbots.ethereum.blockchain.sync.EphemBlockchainTestSetup
 import com.chipprbots.ethereum.crypto
 import com.chipprbots.ethereum.db.storage.MptStorage
+import com.chipprbots.ethereum.db.storage.pathstate.PathStateTestKit.ChosenState
 import com.chipprbots.ethereum.domain.Account
 import com.chipprbots.ethereum.domain.Block
 import com.chipprbots.ethereum.domain.BlockBody
@@ -44,6 +45,95 @@ class CheckpointExporterSpec
     with BeforeAndAfterEach:
 
   "CheckpointExporter" should {
+
+    // Spec 018 Track C, C2b (T059): the export reads every node at its position. The archive is format v1 still, a list
+    // of nodes by hash, so on a hash store its bytes are what they were: frozen here from the code before the change,
+    // for a state with extensions 4 and 62 nibbles long, nodes embedded in their parents, and one storage trie that two
+    // accounts hold.
+    "write, for a state with long extensions, embedded nodes and a shared storage trie, the bytes it wrote before it read by position" taggedAs UnitTest in new Setup:
+      chosenAtBlock100()
+      val archive: Path = tmpRoot.resolve("chosen.checkpoint")
+      val result: ExportResult = sourceExporter.exportArchive(BigInt(100), archive).value
+      result.bytecodesExported shouldBe 3
+      (result.nodesExported, sha256(Files.readAllBytes(archive))) shouldBe FrozenChosenArchive
+
+    // The same state as rows of the position store, where each account has a storage trie of its own. The archive is
+    // of nodes by hash, so it is the same file: each distinct node once, the shared trie read under one account.
+    "write the same bytes from a position store" taggedAs UnitTest in new Setup:
+      val chosen: ChosenState = chosenAtBlock100()
+      val archive: Path = tmpRoot.resolve("chosen-positions.checkpoint")
+      val result: ExportResult = exporterOnPositions(chosen).exportArchive(BigInt(100), archive).value
+      (result.nodesExported, sha256(Files.readAllBytes(archive))) shouldBe FrozenChosenArchive
+
+    // The position store holds the state of one block. Another block's is not a hole to report node by node: the
+    // export is refused, before a file is opened.
+    "refuse a block whose state the position store does not hold, and leave no file" taggedAs UnitTest in new Setup:
+      val chosen: ChosenState = chosenAtBlock100()
+      val archive: Path = tmpRoot.resolve("not-held.checkpoint")
+      // block 99 of the same chain: its header and its weight are stored, and the disk holds block 100's state
+      val header99: BlockHeader = sourceReader.getBlockHeaderByNumber(BigInt(99)).value
+      sourceWriter.storeChainWeight(header99.hash, ChainWeight.totalDifficultyOnly(chainTd(99))).commit()
+      exporterOnPositions(chosen)
+        .exportArchive(BigInt(99), archive)
+        .left
+        .value shouldBe a[CheckpointExporter.StateNotHeld]
+      Files.exists(archive) shouldBe false
+
+    // An account's storage trie is found, on a position store, by the hash the account is kept under: 32 bytes. An
+    // account with storage under any other key names no trie. The export says the account trie is corrupt, where the
+    // store would have thrown.
+    "say the account trie is corrupt when an account with storage is kept under a key that is not 32 bytes, on a position store" taggedAs UnitTest in new Setup:
+      import com.chipprbots.ethereum.mpt.byteStringSerializer
+      val chosen: ChosenState = chosenAtBlock100()
+      val short: ByteString = com.chipprbots.ethereum.db.storage.pathstate.PathStateTestKit.chosenKey("ab", 1).take(31)
+      val root: ByteString = ByteString(
+        MerklePatriciaTrie[ByteString, Account](sourceStorages.storages.stateStorage.getBackingStorage(0))
+          .put(short, chosen.accounts.toMap.apply(chosen.holder))
+          .getRootHash
+      )
+      // block 101 carries that state; the position store holds its account trie
+      val header101: BlockHeader = storeHeaderChain(sourceWriter, 101, root).last
+      sourceWriter.storeChainWeight(header101.hash, ChainWeight.totalDifficultyOnly(chainTd(101))).commit()
+      val onPositions: BlockchainReader = readerOnRows(root, chosen.load, BigInt(101), accountTrieOnly = true, identity)
+      val refused: ExportError =
+        new CheckpointExporter(sourceStorages.storages.evmCodeStorage, onPositions, chainId = 1L)
+          .exportArchive(BigInt(101), tmpRoot.resolve("short-key.checkpoint"))
+          .left
+          .value
+      refused shouldBe CheckpointExporter.CorruptAccountKey(short)
+      // a hash store reads the trie by its root, as it always did
+      sourceExporter
+        .exportArchive(BigInt(101), tmpRoot.resolve("short-key-hashes.checkpoint"))
+        .value shouldBe a[ExportResult]
+
+    // An export holds one view across every read. When import moves the disk on under it, a read says so. That is not
+    // a trie node that is missing, which is what a damaged state would be reported as.
+    "say the state moved, and not that a node is missing, wherever the disk moves under an export" taggedAs UnitTest in new Setup:
+      import com.chipprbots.ethereum.db.storage.pathstate.PathStateTestKit.StaleAfter
+      val chosen: ChosenState = chosenAtBlock100()
+      def exportWith(healthy: Int, name: String): (Either[ExportError, ExportResult], Int) =
+        var handed: Option[StaleAfter] = None
+        val reader = readerOnPositions(
+          chosen,
+          state =>
+            val stale = new StaleAfter(state, healthy)
+            handed = Some(stale)
+            stale
+        )
+        val result = new CheckpointExporter(sourceStorages.storages.evmCodeStorage, reader, chainId = 1L)
+          .exportArchive(BigInt(100), tmpRoot.resolve(name))
+        (result, handed.map(_.readsAsked).getOrElse(0))
+
+      val (whole, reads) = exportWith(Int.MaxValue, "whole.checkpoint")
+      whole.value.nodesExported shouldBe FrozenChosenArchive._1
+      // one read for each node written: a node is read once, and a trie another account also holds is not read again
+      reads shouldBe FrozenChosenArchive._1.toInt
+      (0 until reads).foreach { healthy =>
+        withClue(s"the state moved after $healthy of $reads reads: ") {
+          exportWith(healthy, s"moved-$healthy.checkpoint")._1.left.value shouldBe a[CheckpointExporter.StateNotHeld]
+        }
+      }
+      exportWith(reads, "moved-after.checkpoint")._1.value shouldBe a[ExportResult]
 
     "round-trip a small state through export → import yielding identical trie nodes" taggedAs UnitTest in new Setup:
       // Bytecodes referenced by accounts
@@ -103,7 +193,6 @@ class CheckpointExporterSpec
       // Export
       val outputPath: Path = tmpRoot.resolve("export.checkpoint")
       val exporter = new CheckpointExporter(
-        sourceStorages.storages.stateStorage,
         sourceStorages.storages.evmCodeStorage,
         sourceReader,
         chainId = 1337L
@@ -156,7 +245,6 @@ class CheckpointExporterSpec
 
     "fail cleanly when the requested block is missing" taggedAs UnitTest in new Setup:
       val exporter = new CheckpointExporter(
-        sourceStorages.storages.stateStorage,
         sourceStorages.storages.evmCodeStorage,
         sourceReader,
         chainId = 1L
@@ -194,7 +282,6 @@ class CheckpointExporterSpec
       // Export — must NOT throw MPTException(Invalid Node) when nodes are wrapped.
       val outputPath: Path = tmpRoot.resolve("export.checkpoint")
       val exporter = new CheckpointExporter(
-        sourceStorages.storages.stateStorage,
         sourceStorages.storages.evmCodeStorage,
         sourceReader,
         chainId = 1L
@@ -318,6 +405,15 @@ class CheckpointExporterSpec
     try walk.iterator.asScala.toSeq.reverse.foreach(p => Files.deleteIfExists(p))
     finally walk.close()
 
+  private def sha256(bytes: Array[Byte]): String =
+    java.security.MessageDigest.getInstance("SHA-256").digest(bytes).map("%02x".format(_)).mkString
+
+  /** The nodes exported and the SHA-256 of the archive, for `ChosenState` at block 100 of the spec's header chain: from
+    * the exporter as it was before it read by position (#1797, 2026-11-11).
+    */
+  private val FrozenChosenArchive: (Long, String) =
+    (36L, "d44625066f0491215d261d756ef310b54e1af7e826e96ae0fa56b828ab8c7c0b")
+
   private trait Setup extends EphemBlockchainTestSetup:
     val sourceStorages = getNewStorages
     val targetStorages = getNewStorages
@@ -333,11 +429,68 @@ class CheckpointExporterSpec
         .put(crypto.kec256(Hex.decode("33" * 20)), Account(nonce = UInt256(1), balance = UInt256(1)))
       ByteString(trie.getRootHash)
     lazy val sourceExporter: CheckpointExporter = new CheckpointExporter(
-      sourceStorages.storages.stateStorage,
       sourceStorages.storages.evmCodeStorage,
       sourceReader,
       chainId = 1L
     )
+
+    /** `ChosenState` on the source's hash store, as the state of block 100 of a stored header chain. */
+    def chosenAtBlock100(): ChosenState =
+      val chosen = new ChosenState(
+        sourceStorages.storages.stateStorage.getBackingStorage(0),
+        sourceStorages.storages.evmCodeStorage
+      )
+      val header: BlockHeader = storeHeaderChain(sourceWriter, 100, chosen.root).last
+      sourceWriter.storeChainWeight(header.hash, ChainWeight.totalDifficultyOnly(chainTd(100))).commit()
+      chosen
+
+    /** The source's chain, read by a reader whose state is a position store that holds block 100's: the rows of
+      * `chosen`, copied from the hash store. `handing` stands between the reader and whoever takes a state from it.
+      */
+    def readerOnPositions(chosen: ChosenState, handing: MptStorage => MptStorage = identity): BlockchainReader =
+      readerOnRows(chosen.root, chosen.load, BigInt(100), accountTrieOnly = false, handing)
+
+    /** The same for any state on the source's hash store, as the state of block `number`. With `accountTrieOnly` the
+      * storage tries are left out: for a state one of whose accounts has no owner to be written under.
+      */
+    def readerOnRows(
+        root: ByteString,
+        load: Array[Byte] => Array[Byte],
+        number: BigInt,
+        accountTrieOnly: Boolean,
+        handing: MptStorage => MptStorage
+    ): BlockchainReader =
+      import com.chipprbots.ethereum.db.dataSource.EphemDataSource
+      import com.chipprbots.ethereum.db.storage.AppStateStorage
+      import com.chipprbots.ethereum.db.storage.PathNodeStorage
+      import com.chipprbots.ethereum.db.storage.pathstate.BlockRef
+      import com.chipprbots.ethereum.db.storage.pathstate.PathStateStorage
+      import com.chipprbots.ethereum.db.storage.pathstate.PathStateTestKit
+      import com.chipprbots.ethereum.mpt.PositionTestKit.RawTrieWalk
+      val header = sourceReader.getBlockHeaderByNumber(number).value
+      val rows = EphemDataSource()
+      PathStateTestKit.seedPositions(
+        rows,
+        if accountTrieOnly then Map(Option.empty[ByteString] -> RawTrieWalk.storedPositions(root.toArray, load))
+        else RawTrieWalk.statePositions(root.toArray, load),
+        BlockRef(header.hash.value, header.number.value, header.stateRoot.value)
+      )
+      val s = sourceStorages.storages
+      new BlockchainReader(
+        s.blockHeadersStorage,
+        s.blockBodiesStorage,
+        s.blockNumberMappingStorage,
+        s.stateStorage,
+        s.receiptStorage,
+        s.appStateStorage,
+        s.chainWeightStorage,
+        s.blockAccessListStorage,
+        Some(new PathStateStorage(new PathNodeStorage(rows), new AppStateStorage(rows)))
+      ):
+        override def stateAt(of: BlockHeader): MptStorage = handing(super.stateAt(of))
+
+    def exporterOnPositions(chosen: ChosenState): CheckpointExporter =
+      new CheckpointExporter(sourceStorages.storages.evmCodeStorage, readerOnPositions(chosen), chainId = 1L)
 
   /** Source uses BasicPruning so trie nodes go through ReferenceCountNodeStorage's ref-count wrapping — the path that
     * exposed Bug 33. Target stays ArchivePruning (matches the default `Setup`).

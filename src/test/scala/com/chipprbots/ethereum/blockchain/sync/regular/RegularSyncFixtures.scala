@@ -99,6 +99,10 @@ trait RegularSyncFixtures:
 
     val stateStorage: StateStorage = stub[StateStorage]
     val evmCodeStorage: EvmCodeStorage = stub[EvmCodeStorage]
+    // The session's exhaust count, handed to `regularSync` and through it to every importer it spawns.
+    val exhausts: BlockImporter.ExhaustCount = new BlockImporter.ExhaustCount
+    // This fixture's node's one import lock, as SyncController's: `regularSync` and any importer a test spawns share it.
+    val importLock: ImportLock = ImportLock()
 
     // testKit.spawn (anonymous): RegularSyncSpec shares one testKit-owned ActorSystem across all
     // fixtures, so a fixed actor name would collide with InvalidActorNameException on the second
@@ -138,7 +142,9 @@ trait RegularSyncFixtures:
             .toTyped[com.chipprbots.ethereum.transactions.PendingTransactionsManager.Command],
           blockTopic,
           this,
-          supervisor.ref.toTyped[SyncController.Command]
+          supervisor.ref.toTyped[SyncController.Command],
+          importLock = importLock,
+          exhausts = exhausts
         ),
         org.apache.pekko.actor.typed.Props.empty
           .withDispatcherFromConfig("pekko.actor.default-dispatcher")
@@ -162,6 +168,10 @@ trait RegularSyncFixtures:
             .getOrElse(block.header.hash.value, IO.pure(BlockEnqueued))
             .flatTap(_ => importedBlocksSubject.publish1(block).void)
         }
+      // B-297: whether a batch hangs from a branch refused while the head stays; no by default
+      (adapter.refusedWithTheirParent(_: NonEmptyList[Block])).when(*).onCall { (blocks: NonEmptyList[Block]) =>
+        refusedWithTheirParent.get()(blocks)
+      }
       // Batch path: regular sync blocks via tryImportBlocks
       (adapter
         .evaluateBranch(_: NonEmptyList[Block])(using _: IORuntime, _: BlockchainConfig))
@@ -288,6 +298,10 @@ trait RegularSyncFixtures:
     protected val results: mutable.Map[ByteString, IO[BlockImportResult]] =
       mutable.Map[ByteString, IO[BlockImportResult]]()
     protected val importedBlocksSet: mutable.Set[Block] = mutable.Set[Block]()
+
+    /** What the adapter answers when the importer asks whether a batch hangs from a refused branch (B-297). */
+    protected val refusedWithTheirParent =
+      new java.util.concurrent.atomic.AtomicReference[NonEmptyList[Block] => Boolean](_ => false)
     private val importedBlocksTopicIO = Topic[IO, Block]
     private lazy val importedBlocksSubject = importedBlocksTopicIO.unsafeRunSync()
     val importedBlocks: Stream[IO, Block] = importedBlocksSubject.subscribe(100)
@@ -468,6 +482,10 @@ trait RegularSyncFixtures:
 
     val newBlock: Block = BlockHelpers.generateBlock(testBlocks.last)
 
+    /** What the node answers to the announced `newBlock`: imported to the top, unless a test says otherwise. */
+    def newBlockResult: BlockImportResult =
+      BlockImportedToTop(List(BlockData(newBlock, Nil, ChainWeight.totalDifficultyOnly(newBlock.number.value))))
+
     override lazy val consensusAdapter: ConsensusAdapter = stub[ConsensusAdapter]
 
     var blockFetcher: TypedActorRef[PeerEvent] = uninitialized
@@ -484,9 +502,7 @@ trait RegularSyncFixtures:
       .onCall { (block, _, _) =>
         if block == newBlock then
           importedNewBlock = true
-          IO.pure(
-            BlockImportedToTop(List(BlockData(newBlock, Nil, ChainWeight.totalDifficultyOnly(newBlock.number.value))))
-          )
+          IO.pure(newBlockResult)
         else
           if block == testBlocks.last then importedLastTestBlock = true
           IO.pure(BlockImportedToTop(Nil))

@@ -120,7 +120,7 @@ class TreasuryBaseFeeSpec extends AnyFlatSpec with Matchers with MockFactory:
     val baseFee: BigInt = BigInt(1000000000)
     val block: Block = makeBlock(olympiaBlock, gasUsed = 21000, Some(baseFee))
 
-    // ECIP-1112 OLYMPIA SAFETY (BlockPreparator.creditBaseFeeToTreasury): a zero treasury
+    // ECIP-1112 OLYMPIA SAFETY (BlockRewards.creditBaseFeeToTreasury): a zero treasury
     // address post-Olympia is a misconfiguration — the base fee would otherwise be silently
     // mis-credited. The guard fails loudly instead of burning, so payBlockReward must throw.
     val ex: IllegalStateException = intercept[IllegalStateException] {

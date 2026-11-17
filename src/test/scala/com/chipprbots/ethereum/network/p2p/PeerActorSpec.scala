@@ -41,6 +41,7 @@ import com.chipprbots.ethereum.network.PeerActor.Status.Handshaked
 import com.chipprbots.ethereum.network.PeerActor.StatusResponse
 import com.chipprbots.ethereum.network.PeerManagerActor.FastSyncHostConfiguration
 import com.chipprbots.ethereum.network.PeerManagerActor.PeerConfiguration
+import com.chipprbots.ethereum.network.handshaker.Handshaker
 import com.chipprbots.ethereum.network.handshaker.NetworkHandshaker
 import com.chipprbots.ethereum.network.handshaker.NetworkHandshakerConfiguration
 import com.chipprbots.ethereum.network.p2p.messages.Capability
@@ -222,6 +223,109 @@ class PeerActorSpec extends ScalaTestWithActorTestKit(ManualTime.config) with An
     connSpy.expectNoMessage()
     handshakeEvents.expectNoMessage()
     knownNodesManager.expectNoMessage()
+
+  // ── Spec 027 slice 4a: the scorer is fed from the peer actor's own events ────────────────────────────────────
+
+  /** A PeerActor that feeds `scorer`, with a probe for its rlpx connection. */
+  private class ScoredPeer(handshaker: Handshaker[PeerInfo], peerConf: PeerConfiguration):
+    val scorer = new PeerScoringManager(java.time.Clock.fixed(java.time.Instant.EPOCH, java.time.ZoneOffset.UTC))
+    val rlpx: TestProbe[RLPxConnectionHandler.Command] = testKit.createTestProbe[RLPxConnectionHandler.Command]()
+    val bus: ActorRef[PeerEventBusActor.Command] =
+      testKit.spawn(PeerEventBusActor.behavior(), s"peer-event-bus-${java.util.UUID.randomUUID()}")
+    val handshakeEvents: TestProbe[PeerEventBusActor.PeerEvent] = testKit.createTestProbe()
+    bus ! PeerEventBusActor.SubscribeCmd(PeerEventBusActor.SubscriptionClassifier.PeerHandshaked, handshakeEvents.ref)
+    val knownNodes: TestProbe[KnownNodesManager.Command] = testKit.createTestProbe()
+    val peer: ActorRef[PeerActor.Command] = testKit.spawn(
+      PeerActor.apply(
+        new InetSocketAddress("127.0.0.1", 0),
+        _ => rlpx.ref,
+        peerConf,
+        bus,
+        knownNodes.ref,
+        false,
+        handshaker,
+        Some(scorer)
+      )
+    )
+    val id: PeerId = PeerId(Hex.toHexString(remoteNodeId.toArray))
+
+    def connect(): Unit =
+      peer ! PeerActor.ConnectTo(new URI("encode://localhost:9000"))
+      rlpx.expectMessageType[RLPxConnectionHandler.ConnectTo]
+      peer ! RLPxConnectionHandler.ConnectionEstablished(remoteNodeId)
+
+  private def acceptingHandshaker(networkId: Long): Handshaker[PeerInfo] =
+    Mocks.MockHandshakerAlwaysSucceeds(
+      RemoteStatus(
+        capability = Capability.ETH68,
+        networkId = networkId,
+        chainWeight = ChainWeight.totalDifficultyOnly(BigInt(1000000)),
+        bestHash = ByteString("blockhash"),
+        genesisHash = Fixtures.Blocks.Genesis.header.hash.value
+      ),
+      0,
+      false
+    )
+
+  it should "record a failed handshake under the hex of the remote node id" taggedAs (
+    UnitTest,
+    NetworkTest
+  ) in new NodeStatusSetup:
+    val p = new ScoredPeer(Mocks.MockHandshakerAlwaysFails(Reasons.UselessPeer), peerConf)
+    p.connect()
+    // the handshaker has failed, so the actor sends its Disconnect; the failure is recorded before that frame
+    p.rlpx.expectMessageType[RLPxConnectionHandler.SendMessage]
+
+    p.scorer.getAllScores.keySet shouldBe Set(p.id)
+    p.scorer.getScore(p.id).failedHandshakes shouldBe 1
+    p.scorer.getScore(p.id).successfulHandshakes shouldBe 0
+
+  it should "record a protocol violation when told to disconnect a handshaked peer for BreachOfProtocol" taggedAs (
+    UnitTest,
+    NetworkTest
+  ) in new NodeStatusSetup:
+    val p = new ScoredPeer(acceptingHandshaker(peerConf.networkId), peerConf)
+    p.connect()
+    p.handshakeEvents.expectMessageType[PeerEventBusActor.PeerEvent.PeerHandshakeSuccessful[PeerInfo]]
+    p.scorer.getAllScores shouldBe empty // the manager records the handshake; the actor only records what goes wrong
+
+    p.peer ! PeerActor.DisconnectPeer(Reasons.BreachOfProtocol)
+    p.rlpx.expectMessageType[RLPxConnectionHandler.SendMessage]
+
+    p.scorer.getAllScores.keySet shouldBe Set(p.id)
+    p.scorer.getScore(p.id).protocolViolations shouldBe 1
+
+  it should "record nothing when a handshaked peer is disconnected for another reason" taggedAs (
+    UnitTest,
+    NetworkTest
+  ) in new NodeStatusSetup:
+    val p = new ScoredPeer(acceptingHandshaker(peerConf.networkId), peerConf)
+    p.connect()
+    p.handshakeEvents.expectMessageType[PeerEventBusActor.PeerEvent.PeerHandshakeSuccessful[PeerInfo]]
+
+    p.peer ! PeerActor.DisconnectPeer(Reasons.UselessPeer)
+    p.rlpx.expectMessageType[RLPxConnectionHandler.SendMessage]
+
+    p.scorer.getAllScores shouldBe empty
+
+  it should "record a protocol violation when a handshaked peer sends an invalid BlockRangeUpdate" taggedAs (
+    UnitTest,
+    NetworkTest
+  ) in new NodeStatusSetup:
+    val p = new ScoredPeer(acceptingHandshaker(peerConf.networkId), peerConf)
+    p.connect()
+    p.handshakeEvents.expectMessageType[PeerEventBusActor.PeerEvent.PeerHandshakeSuccessful[PeerInfo]]
+
+    p.peer ! RLPxConnectionHandler.MessageReceived(
+      ETHPackets.BlockRangeUpdate(
+        earliestBlock = 10,
+        latestBlock = 5,
+        latestBlockHash = ByteString(Array.fill(32)(1.toByte))
+      )
+    )
+    p.rlpx.expectMessageType[RLPxConnectionHandler.SendMessage]
+
+    p.scorer.getScore(p.id).protocolViolations shouldBe 1
 
   it should "successfully connect to ETC peer" taggedAs (UnitTest, NetworkTest) in new TestSetup:
     val uri = new URI(s"enode://${Hex.toHexString(remoteNodeId.toArray[Byte])}@localhost:9000")

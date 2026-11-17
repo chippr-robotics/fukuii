@@ -1,6 +1,7 @@
 package com.chipprbots.ethereum.utils
 
 import com.typesafe.config.ConfigFactory
+import com.typesafe.config.ConfigValueFactory
 import org.scalatest.flatspec.AnyFlatSpec
 import org.scalatest.matchers.should.Matchers
 
@@ -127,6 +128,33 @@ class ChainConfigValidationSpec extends AnyFlatSpec with Matchers:
     mordorConfig.forkBlockNumbers.difficultyBombPauseBlockNumber shouldBe 0
     mordorConfig.forkBlockNumbers.difficultyBombContinueBlockNumber shouldBe 0
     mordorConfig.forkBlockNumbers.difficultyBombRemovalBlockNumber shouldBe 0
+  }
+
+  // ===== terminal-total-difficulty (#1654) =====
+
+  /** Shipped chain configs, assembled as at runtime (see `ChainConfigMatrixSpec`). */
+  private lazy val shippedRoot = ConfigFactory.parseResources("conf/base/blockchains.conf").atPath("fukuii").resolve()
+
+  "terminal-total-difficulty" should "load as configured: none on ETC and Mordor, Sepolia's, and Platåberget's 0" taggedAs (
+    UnitTest,
+    ConsensusTest
+  ) in {
+    etcConfig.terminalTotalDifficulty shouldBe None
+    mordorConfig.terminalTotalDifficulty shouldBe None
+    BlockchainConfig
+      .fromRawConfig(shippedRoot.getConfig("fukuii.blockchains.sepolia"))
+      .terminalTotalDifficulty shouldBe Some(BigInt("17000000000000000"))
+    BlockchainConfig
+      .fromRawConfig(shippedRoot.getConfig("fukuii.blockchains.plataberget"))
+      .terminalTotalDifficulty shouldBe Some(BigInt(0))
+  }
+
+  it should "fail the config load, naming the key and the value, when negative" taggedAs (UnitTest, ConsensusTest) in {
+    val raw = shippedRoot
+      .getConfig("fukuii.blockchains.plataberget")
+      .withValue("terminal-total-difficulty", ConfigValueFactory.fromAnyRef("-1"))
+    val e = the[IllegalArgumentException] thrownBy BlockchainConfig.fromRawConfig(raw)
+    e.getMessage should include("terminal-total-difficulty = -1")
   }
 
 // scalastyle:on magic.number

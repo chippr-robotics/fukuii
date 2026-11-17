@@ -96,8 +96,11 @@ class PeerListHelper(
         val isMaintained = peerWithInfo.peer.nodeId.exists { nodeId =>
           maintainedNodeIdHexes.contains(Hex.toHexString(nodeId.toArray))
         }
+        // A maintained (static or trusted) peer is not blacklisted for a transient fault, but is for a failed request in
+        // regular sync, and for a block header that failed validation.
         val skipBlacklist = isMaintained && (reason match
           case _: BlacklistReason.RegularSyncRequestFailed => false
+          case BlacklistReason.BlockHeaderValidationFailed => false
           case _                                           => true
         )
         if skipBlacklist then log.debug("Skipping blacklist for maintained peer {} (reason: {})", peerId, reason)

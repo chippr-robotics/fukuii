@@ -19,6 +19,8 @@ import com.chipprbots.ethereum.blockchain.sync.snap.actors.AccountRangeCoordinat
 import com.chipprbots.ethereum.blockchain.sync.snap.actors.AccountRangeCoordinator.CheckCompletion
 import com.chipprbots.ethereum.blockchain.sync.snap.actors.AccountRangeCoordinator.ContractEntrySize
 import com.chipprbots.ethereum.blockchain.sync.snap.actors.AccountRangeCoordinator.ReplayCarriedContracts
+import com.chipprbots.ethereum.db.storage.NodeFault
+import com.chipprbots.ethereum.db.storage.RawNodeRead
 import com.chipprbots.ethereum.domain.Account
 import com.chipprbots.ethereum.mpt.MerklePatriciaTrie
 
@@ -117,9 +119,12 @@ private[actors] trait ContractWorkCarry extends ContractWorkCarryApi with Contra
         val storageTasks = storageScheme match
           case StorageScheme.Hash if unfinished.nonEmpty =>
             val roots = unfinished.map(_.storageRoot).distinct
+            // Stored, and its bytes hash to it (NodeFault, H3): a root that is not its node replays as a task, and the
+            // heal walk deletes it. Raw: nothing is decoded, and one bad entry fails nothing else (multiGetNodes threw
+            // for the whole batch, which failed the coordinator, and its restarts, the same way).
             val present = roots
-              .zip(mptStorage.multiGetNodes(roots.map(_.toArray)))
-              .collect { case (root, Some(_)) => root }
+              .zip(mptStorage.rawNodes(roots))
+              .collect { case (root, raw: RawNodeRead.Bytes) if !NodeFault.provablyBad(root, raw) => root }
               .toSet
             unfinished.filterNot(t => present.contains(t.storageRoot))
           case _ => unfinished

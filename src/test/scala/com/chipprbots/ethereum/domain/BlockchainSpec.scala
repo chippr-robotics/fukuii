@@ -127,7 +127,7 @@ class BlockchainSpec
     // unhappy path
     val wrongAddress: Address = Address(666)
     val retrievedAccountProofWrong: Option[Vector[MptNode]] =
-      blockchainReader.getAccountProof(blockchainReader.getBestBranch, wrongAddress, headerWithAcc.number.value)
+      blockchainReader.accountProofIn(blockchainReader.stateAt(headerWithAcc), headerWithAcc, wrongAddress)
     // the account doesn't exist, so we can't retrieve it, but we do receive a proof of non-existence with a full path of nodes that we iterated
     retrievedAccountProofWrong.isDefined shouldBe true
     retrievedAccountProofWrong.size shouldBe 1
@@ -135,7 +135,7 @@ class BlockchainSpec
 
     // happy path
     val retrievedAccountProof: Option[Vector[MptNode]] =
-      blockchainReader.getAccountProof(blockchainReader.getBestBranch, address, headerWithAcc.number.value)
+      blockchainReader.accountProofIn(blockchainReader.stateAt(headerWithAcc), headerWithAcc, address)
     retrievedAccountProof.isDefined shouldBe true
     retrievedAccountProof.map { proof =>
       MptProofVerifier.verifyProof(mptWithAcc.getRootHash, address, proof) shouldBe ValidProof
@@ -164,7 +164,7 @@ class BlockchainSpec
 
     val wrongAddress: Address = Address(666)
     val retrievedAccountProofWrong: Option[Vector[MptNode]] =
-      blockchainReader.getAccountProof(blockchainReader.getBestBranch, wrongAddress, headerWithAcc.number.value)
+      blockchainReader.accountProofIn(blockchainReader.stateAt(headerWithAcc), headerWithAcc, wrongAddress)
 
     // EIP-1186 proof of non-inclusion: the account doesn't exist, but we still receive a
     // non-empty walk — every node visited on the way to the divergence. In this trie the

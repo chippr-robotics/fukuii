@@ -1,0 +1,40 @@
+ # FUKUII  etc (61) . PoW . head 21,884,102 . 41/50 peers . up 12d 7h                                          Overview 
+------------------------------------------------------------------------------------------------------------------------
+ + no alerts                                                                                                            
+                  | Peers   41/50 ##########  Block  21,884,102 (at head)                    Txpool  142                
+                  | RPC     :8545 on                                     Disk   388G free    JVM     3.4G / 8.0G heap   
+                  |-----------------------------------------------------------------------------------------------------
+                  | Sync    + at head                                                                                   
+       ETC        |   Blocks   ~o[COMPLETE +]@@                                    21,884,102                           
+                  |-----------------------------------------------------------------------------------------------------
+                  | Forks (block)                                                                                       
+                  |   Phoenix + - ECIP-1099 + - Magneto + - Mystique + - Spiral + ========> Olympia not scheduled       
+ etc              |   block 21,884,102 . Spiral since 19,250,000 . Olympia not scheduled on this network                
+ PoW . id 61      |-----------------------------------------------------------------------------------------------------
+ main network     | Node    /var/lib/fukuii/etc . SNAP sync . archive pruning . 50 peers max . mining on                
+                  | Health  P2P ####- . Chain ##### . Disk #----                                                        
+ [1] Overview     |               ----------------------------------------------------------------------                
+ [2] Chain        |               Stop this node?                                                                       
+ [3] Peers        |               The node process ends: block import stops and every peer is                           
+ [4] Mempool      |               disconnected.                                                                         
+ [5] RPC          |               Mining stops.                                                                         
+ [6] Storage      |               Every RPC client loses its connection: HTTP.                                          
+ [7] System       |               The TUI cannot start the node again.                                                  
+ [8] Logs         |               Undo: start the node again, from outside the dashboard.                               
+ [9] Ops          |                                                                                                     
+                  |               type stop then Enter: _      Esc  cancel                                              
+ graphics text    |               ----------------------------------------------------------------------                
+                  | 12:00:00 INFO  RegularSync: at head, block 21884102                                    at head      
+                  |                                                                                                     
+                  |                                                                                                     
+                  |                                                                                                     
+                  |                                                                                                     
+                  |                                                                                                     
+                  |                                                                                                     
+                  |                                                                                                     
+                  |                                                                                                     
+                  |                                                                                                     
+                  |                                                                                                     
+                  |                                                                                                     
+                  |                                                                                                     
+ a question is open: answer it, or Esc                                                                                  

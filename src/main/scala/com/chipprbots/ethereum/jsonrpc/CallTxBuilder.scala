@@ -93,7 +93,8 @@ object CallTxBuilder:
     * @param gas
     *   the message's gas limit ([[callGas]] / [[estimateGasCeiling]])
     * @param precompileRelocations
-    *   `movePrecompileToAddress` state overrides, already applied to the world
+    *   the precompiles the state overrides moved or deleted, as `EthSimulateService.applyStateOverrides` returns them
+    *   (`a -> t` moved, `a -> a` deleted); the world already has the overrides applied
     * @param skipExecutionGasCap
     *   true for eth_call and the trace calls, false for eth_estimateGas and eth_createAccessList (see
     *   `StxLedger.CallOptions`)
@@ -109,6 +110,7 @@ object CallTxBuilder:
   )(using blockchainConfig: BlockchainConfig): Either[JsonRpcError, CallMessage] =
     val header = applyBlockOverrides(target, blockOverrides)
     for
+      _ <- checkBlobFeeWithoutHashes(args)
       _ <- checkSetCodeWithBlobs(args)
       _ <- checkChainId(args)
       _ <- checkLondon(args, header)
@@ -117,10 +119,11 @@ object CallTxBuilder:
       val (price, feeCap, tip) = fees(args, header.baseFee)
       val dynamic = header.baseFee.isDefined && args.gasPrice.isEmpty && args.hasDynamicFee
       // geth CallDefaults: a blob message without maxFeePerBlobGas gets 0, and a 0 cap lowers the blob base fee to 0
+      // (a maxFeePerBlobGas without blob hashes never gets here: checkBlobFeeWithoutHashes)
       val blobFeeCap = args.maxFeePerBlobGas.getOrElse(BigInt(0))
-      val blobFeeCapGiven = args.maxFeePerBlobGas.isDefined || args.blobVersionedHashes.isDefined
       val blobBaseFeeOverride =
-        if blobFeeCapGiven && blobFeeCap == 0 then Some(BigInt(0)) else blockOverrides.flatMap(_.blobBaseFee)
+        if args.blobVersionedHashes.isDefined && blobFeeCap == 0 then Some(BigInt(0))
+        else blockOverrides.flatMap(_.blobBaseFee)
 
       val chainId = blockchainConfig.chainId.value
       val nonce = args.nonce.getOrElse(BigInt(0)) // no nonce check in a call (SkipNonceChecks); only the hash sees it
@@ -157,6 +160,15 @@ object CallTxBuilder:
       Left(JsonRpcError.LogicError("maxFeePerGas and maxPriorityFeePerGas are not valid before London is active"))
     else Right(())
 
+  /** go-ethereum `CallDefaults`: "maxFeePerBlobGas specified without blobVersionedHashes" (-32000), at every fork and
+    * on every block, whether or not Cancun is active there (execution-apis
+    * `call-blob-fee-without-hashes[-before-cancun]`).
+    */
+  private[jsonrpc] def checkBlobFeeWithoutHashes(args: TxArgs): Either[JsonRpcError, Unit] =
+    if args.maxFeePerBlobGas.isDefined && args.blobVersionedHashes.isEmpty then
+      Left(JsonRpcError.LogicError("maxFeePerBlobGas specified without blobVersionedHashes"))
+    else Right(())
+
   /** A set-code (EIP-7702) transaction carries no blobs: blob fields together with an authorizationList describe no
     * transaction type, so they are refused (-32602) rather than one of them being dropped. go-ethereum's message would
     * carry both; fukuii refuses, by the fail-loudly rule (S1's precedent).
@@ -189,38 +201,34 @@ object CallTxBuilder:
         Left(TxArgsError.ChainIdMismatch(have.value, blockchainConfig.chainId.value).toLogicError)
       case _ => Right(())
 
-  /** Typed fields the target block cannot execute are refused, -32602 (fukuii rule; see the per-chain notes below).
+  /** An explicit `type` that the target block cannot execute is refused, -32602 (fukuii rule: geth's call path never
+    * reads `type`, and a type fukuii would silently run as another is refused by the fail-loudly rule, same precedent
+    * as S1's gasPrice + accessList rule). `TxTypeGate.activeTypes` is the one per-chain source of truth for which types
+    * a block admits.
     *
-    * geth has no such check on its call path: it never reads `type`, and it hands blob hashes and authorizations to a
-    * VM that may not implement them (BLOBHASH is an invalid opcode before Cancun, delegations are not followed before
-    * Prague). That silently returns something other than what the caller asked for, which the fail-loudly rule this
-    * codebase follows does not allow (same precedent as S1's gasPrice + accessList rule). So:
-    *   - an explicit `type` that is not active at the block (`TxTypeGate.activeTypes`): refused;
-    *   - blobVersionedHashes before Cancun (every ETC block; ETH before Cancun): refused;
-    *   - authorizationList where EIP-7702 is not active (ETC before Olympia, ETH before Prague): refused;
-    *   - maxFeePerGas / maxPriorityFeePerGas at a block without a base fee (ETC before Olympia, ETH before London):
-    *     -32000 "maxFeePerGas and maxPriorityFeePerGas are not valid before London is active", geth's `CallDefaults`
-    *     error ([[checkLondon]], which runs first);
-    *   - accessList: accepted everywhere, as geth accepts it (before Berlin warmth is not priced, so it is inert).
+    * The fields of a type that is not active are not checked here: geth hands them to `core.ApplyMessage`, whose
+    * `preCheck` answers "transaction type not supported: access list tx | blob tx | setcode tx (sender ..)" and which
+    * every endpoint wraps in its own message (execution-apis `call-fork-inactive-*`, `create-al-fork-inactive`,
+    * `estimate-fork-inactive-access-list`). That is `StxLedger.callPreCheck`, which sees the same synthetic message:
+    *   - accessList where EIP-2930 is not active (ETH before Berlin, ETC before Magneto);
+    *   - blobVersionedHashes before Cancun (every ETC block);
+    *   - authorizationList where EIP-7702 is not active (ETC before Olympia, ETH before Prague).
+    *
+    * maxFeePerGas / maxPriorityFeePerGas at a block without a base fee (ETC before Olympia, ETH before London) are
+    * -32000 "maxFeePerGas and maxPriorityFeePerGas are not valid before London is active", geth's `CallDefaults` error
+    * ([[checkLondon]], which runs first).
     */
   private[jsonrpc] def checkActive(args: TxArgs, header: BlockHeader)(using
       blockchainConfig: BlockchainConfig
   ): Either[JsonRpcError, Unit] =
-    // the one per-chain source of truth for which types a block admits (S0, transactions/TxAdmission.scala)
-    val active = TxTypeGate.activeTypes(header)
-    val required: List[(Byte, Boolean)] = List(
-      args.txType.getOrElse(TxArgs.LegacyType) -> true,
-      TxArgs.BlobType -> args.blobVersionedHashes.isDefined,
-      TxArgs.SetCodeType -> args.authorizationList.isDefined
-    )
-    required.collectFirst { case (t, true) if !active.contains(t) => t } match
-      case Some(t) =>
-        Left(
-          JsonRpcError.InvalidParams(
-            s"transaction type not supported: type ${t & 0xff} not active at block ${header.number.value}"
-          )
+    val t = args.txType.getOrElse(TxArgs.LegacyType)
+    if TxTypeGate.activeTypes(header).contains(t) then Right(())
+    else
+      Left(
+        JsonRpcError.InvalidParams(
+          s"transaction type not supported: type ${t & 0xff} not active at block ${header.number.value}"
         )
-      case None => Right(())
+      )
 
   /** geth `BlockOverrides.Apply` on the block context, here on a copy of the header. A number or time override moves
     * the fork rules with it, as geth's `ChainConfig.Rules(blockCtx.BlockNumber, ..., blockCtx.Time)` does. A base fee

@@ -1,54 +1,42 @@
 #!/usr/bin/make -f
-# Debian rules file for fukuii
+# Debian rules for fukuii (Launchpad PPA).
+#
+# Launchpad builders have no network, and sbt is not in the Ubuntu archive, so fukuii is not compiled here. The
+# source package's upstream tarball IS the released distribution (fukuii-<version>.tgz from the GitHub release,
+# checked against its SHA256SUMS by .github/workflows/launchpad-ppa.yml): bin/, lib/, conf/, kanela-agent/. These
+# rules only lay it out.
 
 export DH_VERBOSE = 1
-
-# Set HOME for sbt to work properly
-export HOME := $(CURDIR)/debian/home
 
 %:
 	dh $@
 
-override_dh_auto_clean:
-	rm -rf target project/target project/project/target
-	rm -rf debian/home
+override_dh_auto_clean override_dh_auto_configure override_dh_auto_build override_dh_auto_test:
+	@:
 
-override_dh_auto_build:
-	mkdir -p $(HOME)/.sbt $(HOME)/.ivy2 $(HOME)/.cache
-	sbt dist
-	cd target/universal && unzip fukuii-*.zip
+# The jars are the released artifacts byte for byte; do not rewrite them.
+override_dh_strip_nondeterminism:
+	@:
 
 override_dh_auto_install:
-	install -d debian/fukuii/usr/share/fukuii
-	install -d debian/fukuii/usr/bin
-	install -d debian/fukuii/etc/fukuii
-	install -d debian/fukuii/var/lib/fukuii
-	install -d debian/fukuii/usr/share/doc/fukuii
-	
-	# Install application files
-	cp -r target/universal/fukuii-*/lib debian/fukuii/usr/share/fukuii/
-	cp -r target/universal/fukuii-*/bin debian/fukuii/usr/share/fukuii/
-	
-	# Install configuration files
-	cp -r target/universal/fukuii-*/conf/* debian/fukuii/etc/fukuii/
-	
-	# application.ini carries the launcher's default JVM flags (heap, G1,
-	# MaxDirectMemorySize, OOM-exit). The launcher finds it via the
-	# /usr/share/fukuii/conf -> /etc/fukuii symlink (see debian/fukuii.links).
-	# The shipped default heap-dump path is the Docker one (/app/data/logs);
-	# point it at the package's state directory instead.
+	install -d debian/fukuii/usr/share/fukuii debian/fukuii/usr/bin debian/fukuii/etc/fukuii \
+	    debian/fukuii/usr/share/doc/fukuii
+	# The launcher (bin/fukuii) resolves lib/, kanela-agent/ (the -javaagent it always adds) and conf/ next to bin/.
+	cp -r lib bin kanela-agent debian/fukuii/usr/share/fukuii/
+	# Windows launchers have no use in a .deb.
+	rm -f debian/fukuii/usr/share/fukuii/bin/*.bat
+	cp -r conf/. debian/fukuii/etc/fukuii/
+	# application.ini carries the launcher's default JVM flags (heap, G1, MaxDirectMemorySize, OOM-exit); the
+	# launcher finds it via the /usr/share/fukuii/conf -> /etc/fukuii link (debian/fukuii.links). The shipped
+	# heap-dump path is the Docker one. The node runs as whichever user starts it, so point it at a directory every
+	# user can write (the JVM names the file java_pid<pid>.hprof).
 	test -f debian/fukuii/etc/fukuii/application.ini
-	sed -i 's|^-J-XX:HeapDumpPath=.*|-J-XX:HeapDumpPath=/var/lib/fukuii/heapdump.hprof|' \
+	sed -i 's|^-J-XX:HeapDumpPath=.*|-J-XX:HeapDumpPath=/var/tmp|' \
 	    debian/fukuii/etc/fukuii/application.ini
-	grep -q '^-J-XX:HeapDumpPath=/var/lib/fukuii/' debian/fukuii/etc/fukuii/application.ini
-	
-	# Install wrapper script
+	grep -q '^-J-XX:HeapDumpPath=/var/tmp$$' debian/fukuii/etc/fukuii/application.ini
+	test -f debian/fukuii/usr/share/fukuii/kanela-agent/kanela-agent-*.jar
 	install -m 755 debian/fukuii-wrapper.sh debian/fukuii/usr/bin/fukuii
-	
-	# Install documentation
-	cp README.md debian/fukuii/usr/share/doc/fukuii/
-	cp LICENSE debian/fukuii/usr/share/doc/fukuii/
-	cp NOTICE debian/fukuii/usr/share/doc/fukuii/
+	cp RELEASE debian/fukuii/usr/share/doc/fukuii/
 
 override_dh_fixperms:
 	dh_fixperms

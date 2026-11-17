@@ -59,7 +59,9 @@ class SnapServingActorSpec extends AnyFlatSpec with Matchers with MockFactory wi
       peerEventBus: TestProbe,
       evmCodeStorageOpt: Option[com.chipprbots.ethereum.db.storage.EvmCodeStorage] = None,
       mptStorageOpt: Option[com.chipprbots.ethereum.db.storage.MptStorage] = None,
-      blockchainReader: Option[BlockchainReader] = None
+      blockchainReader: Option[BlockchainReader] = None,
+      // the state served for a root; by default `mptStorageOpt`, whatever the root
+      stateForRoot: Option[ByteString => Option[com.chipprbots.ethereum.db.storage.MptStorage]] = None
   ): ActorRef = system
     .spawn(
       NetworkPeerManagerActor.behavior(
@@ -69,7 +71,7 @@ class SnapServingActorSpec extends AnyFlatSpec with Matchers with MockFactory wi
         forkResolverOpt = None,
         initialSnapSyncControllerOpt = None,
         evmCodeStorageOpt = evmCodeStorageOpt,
-        mptStorageOpt = mptStorageOpt,
+        stateForRoot = stateForRoot.getOrElse(_ => mptStorageOpt),
         blockchainReader = blockchainReader,
         isPoWChain = false
       ),
@@ -250,4 +252,289 @@ class SnapServingActorSpec extends AnyFlatSpec with Matchers with MockFactory wi
     resp.requestId shouldBe BigInt(99)
     resp.accounts shouldBe empty
     resp.proof shouldBe empty
+  }
+
+  // ── Spec 018 Track C (C2b): the state a request is served from is asked for by the request's root ─────────
+  //
+  // On the unified layout a state is a view of a block, and which block the disk holds moves. So the handlers ask
+  // for the state of the root each request names, when the request arrives, and a root that is not served is
+  // answered with the empty response.
+
+  it should "ask for the state of the root each request names, and answer a root that is not served with nothing" taggedAs (
+    UnitTest,
+    SyncTest
+  ) in {
+    import com.chipprbots.ethereum.db.storage.pathstate.PathStateTestKit.*
+    val pm = TestProbe("pm-by-root")
+    val eb = TestProbe("eb-by-root")
+    val hashed = new HashedState
+    val otherRoot = kec256(ByteString("a root that is not served"))
+    val asked = scala.collection.mutable.ArrayBuffer.empty[ByteString]
+    val actor = makeActor(
+      pm,
+      eb,
+      stateForRoot = Some { root =>
+        asked += root
+        Option.when(root == hashed.root)(hashed.nodes)
+      }
+    )
+    val aliceHash = owner(alice)
+    val rootPath = ByteString(Array[Byte](0x00))
+
+    def accounts(root: ByteString): AccountRange =
+      actor ! PeerEventCmd(MessageFromPeer(GetAccountRange(BigInt(1), root, zeroHash, maxHash, bigBudget), testPeer))
+      nextSend(pm).message.underlyingMsg.asInstanceOf[AccountRange]
+    def slots(root: ByteString): StorageRanges =
+      actor ! PeerEventCmd(
+        MessageFromPeer(GetStorageRanges(BigInt(2), root, Seq(aliceHash), zeroHash, maxHash, bigBudget), testPeer)
+      )
+      nextSend(pm).message.underlyingMsg.asInstanceOf[StorageRanges]
+    def nodes(root: ByteString): TrieNodes =
+      actor ! PeerEventCmd(
+        MessageFromPeer(
+          GetTrieNodes(BigInt(3), root, Seq(Seq(rootPath), Seq(aliceHash, rootPath)), bigBudget),
+          testPeer
+        )
+      )
+      nextSend(pm).message.underlyingMsg.asInstanceOf[TrieNodes]
+
+    accounts(hashed.root).accounts should have size (4 + crowd.size)
+    slots(hashed.root).slots.map(_.size) shouldBe Seq(manySlots.size)
+    nodes(hashed.root).nodes.map(_.nonEmpty) shouldBe Seq(true, true)
+
+    accounts(otherRoot) shouldBe AccountRange(BigInt(1), Seq.empty, Seq.empty)
+    slots(otherRoot) shouldBe StorageRanges(BigInt(2), Seq.empty, Seq.empty)
+    nodes(otherRoot) shouldBe TrieNodes(BigInt(3), Seq.empty)
+
+    asked.toSeq shouldBe Seq.fill(3)(hashed.root) ++ Seq.fill(3)(otherRoot)
+  }
+
+  // The handler of GetStorageRanges looks each account's storage root up itself and hands the lookup to the server.
+  // It took any failure of that lookup as "no such account", which is sent as an account with no storage. When the
+  // disk has moved away from the state being read that is false, and a peer that checks it against the account it
+  // holds drops this node. The whole request is answered with nothing, wherever the move falls: in the lookup of the
+  // first account, of a later one, or in the walk of a storage trie.
+
+  it should "answer GetStorageRanges with nothing wherever the state moves, the lookup of every account's storage root included" taggedAs (
+    UnitTest,
+    SyncTest
+  ) in {
+    import com.chipprbots.ethereum.db.storage.pathstate.PathStateTestKit.*
+    val pm = TestProbe("pm-stale-lookup")
+    val eb = TestProbe("eb-stale-lookup")
+    val hashed = new HashedState
+    val state =
+      new java.util.concurrent.atomic.AtomicReference[com.chipprbots.ethereum.db.storage.MptStorage](hashed.nodes)
+    val actor = makeActor(pm, eb, stateForRoot = Some(_ => Some(state.get)))
+    def ask(): StorageRanges =
+      actor ! PeerEventCmd(
+        MessageFromPeer(
+          GetStorageRanges(BigInt(7), hashed.root, Seq(owner(alice), owner(carol)), zeroHash, maxHash, bigBudget),
+          testPeer
+        )
+      )
+      nextSend(pm).message.underlyingMsg.asInstanceOf[StorageRanges]
+
+    val counted = new StaleAfter(hashed.nodes, healthy = Int.MaxValue)
+    state.set(counted)
+    val whole = ask()
+    whole.slots.map(_.size) shouldBe Seq(manySlots.size, otherSlots.size)
+    val reads = counted.readsAsked
+    reads should be > 10
+
+    (0 until reads).foreach { healthy =>
+      state.set(new StaleAfter(hashed.nodes, healthy))
+      withClue(s"the state moved after $healthy of $reads reads: ") {
+        ask() shouldBe StorageRanges(BigInt(7), Seq.empty, Seq.empty)
+      }
+    }
+    state.set(new StaleAfter(hashed.nodes, reads))
+    ask() shouldBe whole
+  }
+
+  // The three handlers on the state the chain reader hands out with the guard on: the position store's view of the
+  // block the disk holds, for that block's root and no other, while the block is within the served window.
+
+  it should "serve the root the position store holds through the chain reader, and stop once it is out of the window" taggedAs (
+    UnitTest,
+    SyncTest
+  ) in {
+    import com.chipprbots.ethereum.db.storage.PathNodeStorage
+    import com.chipprbots.ethereum.db.storage.pathstate.PathStateStorage
+    import com.chipprbots.ethereum.db.storage.pathstate.PathStateTestKit.*
+    val pm = TestProbe("pm-guard-on")
+    val eb = TestProbe("eb-guard-on")
+    val hashed = new HashedState
+    val source = EphemDataSource()
+    seed(source, hashed, block(1, hashed.root))
+    val appState = new AppStateStorage(source)
+    appState.putBestBlockNumber(1).commit()
+    // the headers and their index by number are what a root is looked up in: none is stored but for the block the
+    // disk holds, which is known without them
+    val reader = new BlockchainReader(
+      new com.chipprbots.ethereum.db.storage.BlockHeadersStorage(source),
+      null,
+      new com.chipprbots.ethereum.db.storage.BlockNumberMappingStorage(source),
+      null,
+      null,
+      appState,
+      null,
+      null,
+      Some(new PathStateStorage(new PathNodeStorage(source), appState))
+    )
+    val actor = makeActor(pm, eb, stateForRoot = Some(reader.stateForRoot))
+    val aliceHash = owner(alice)
+    val rootPath = ByteString(Array[Byte](0x00))
+    val paths = Seq(Seq(rootPath), Seq(aliceHash, rootPath))
+
+    def accounts(root: ByteString): AccountRange =
+      actor ! PeerEventCmd(MessageFromPeer(GetAccountRange(BigInt(1), root, zeroHash, maxHash, bigBudget), testPeer))
+      nextSend(pm).message.underlyingMsg.asInstanceOf[AccountRange]
+    def slots(root: ByteString): StorageRanges =
+      actor ! PeerEventCmd(
+        MessageFromPeer(GetStorageRanges(BigInt(2), root, Seq(aliceHash), zeroHash, maxHash, bigBudget), testPeer)
+      )
+      nextSend(pm).message.underlyingMsg.asInstanceOf[StorageRanges]
+    def nodes(root: ByteString): TrieNodes =
+      actor ! PeerEventCmd(MessageFromPeer(GetTrieNodes(BigInt(3), root, paths, bigBudget), testPeer))
+      nextSend(pm).message.underlyingMsg.asInstanceOf[TrieNodes]
+
+    // what the server answers from the same state on a hash store
+    accounts(hashed.root) shouldBe SnapServer.serveAccountRange(
+      1,
+      hashed.root,
+      zeroHash,
+      maxHash,
+      bigBudget,
+      hashed.nodes
+    )
+    slots(hashed.root) shouldBe SnapServer.serveStorageRanges(
+      2,
+      hashed.root,
+      Seq(aliceHash),
+      zeroHash,
+      maxHash,
+      bigBudget,
+      hashed.nodes,
+      SnapServer.storageRootOf(hashed.root, hashed.nodes)
+    )
+    nodes(hashed.root) shouldBe SnapServer.serveTrieNodes(3, hashed.root, paths, bigBudget, hashed.nodes)
+    accounts(hashed.root).accounts should have size (4 + crowd.size)
+
+    val otherRoot = kec256(ByteString("a root the disk does not hold"))
+    accounts(otherRoot) shouldBe AccountRange(BigInt(1), Seq.empty, Seq.empty)
+    slots(otherRoot) shouldBe StorageRanges(BigInt(2), Seq.empty, Seq.empty)
+    nodes(otherRoot) shouldBe TrieNodes(BigInt(3), Seq.empty)
+
+    // the head moves on past the window: the block the disk holds is no longer one a syncing peer may ask about
+    appState.putBestBlockNumber(1 + BlockchainReader.ServedRootWindow + 1).commit()
+    accounts(hashed.root) shouldBe AccountRange(BigInt(1), Seq.empty, Seq.empty)
+    slots(hashed.root) shouldBe StorageRanges(BigInt(2), Seq.empty, Seq.empty)
+    nodes(hashed.root) shouldBe TrieNodes(BigInt(3), Seq.empty)
+  }
+
+  // Spec 018 Track C, C4a part 4. With the overlay the position store reads the state of a block behind the one the
+  // disk holds, through its changeset records. So a peer is served every root of the window, by all three requests,
+  // and the answer is the one the same state gives on a hash store, proofs included.
+
+  it should "serve the root of a canonical block behind the one the disk holds, by each request, as a hash store serves it" taggedAs (
+    UnitTest,
+    SyncTest
+  ) in {
+    import com.chipprbots.ethereum.db.storage.pathstate.CanonicalChainOnPositions
+    import com.chipprbots.ethereum.db.storage.pathstate.PathStateTestKit.*
+    val pm = TestProbe("pm-behind")
+    val eb = TestProbe("eb-behind")
+    val chain = new CanonicalChainOnPositions()
+    // alice's storage changes in every block: a storage trie behind the head is not the head's
+    (1 to 4).foreach { n =>
+      chain.next(withSlots(alice, Seq(n -> (100 + n), (n + 40) -> n)), withSlots(bob, Seq(n -> 0)))
+    }
+    val actor = makeActor(pm, eb, stateForRoot = Some(chain.reader.stateForRoot))
+    val aliceHash = owner(alice)
+    val rootPath = ByteString(Array[Byte](0x00))
+    val paths = Seq(Seq(rootPath), Seq(aliceHash, rootPath))
+
+    def accounts(root: ByteString): AccountRange =
+      actor ! PeerEventCmd(MessageFromPeer(GetAccountRange(BigInt(1), root, zeroHash, maxHash, bigBudget), testPeer))
+      nextSend(pm).message.underlyingMsg.asInstanceOf[AccountRange]
+    def slots(root: ByteString): StorageRanges =
+      actor ! PeerEventCmd(
+        MessageFromPeer(GetStorageRanges(BigInt(2), root, Seq(aliceHash), zeroHash, maxHash, bigBudget), testPeer)
+      )
+      nextSend(pm).message.underlyingMsg.asInstanceOf[StorageRanges]
+    def nodes(root: ByteString): TrieNodes =
+      actor ! PeerEventCmd(MessageFromPeer(GetTrieNodes(BigInt(3), root, paths, bigBudget), testPeer))
+      nextSend(pm).message.underlyingMsg.asInstanceOf[TrieNodes]
+
+    val reference = chain.hashed.nodes
+    val served = chain.headers.map(_.stateRoot.value)
+    served.distinct should have size served.size
+    served.foreach { root =>
+      withClue(s"the root of block ${chain.headers.find(_.stateRoot.value == root).get.number.value}: ") {
+        val accountsServed = accounts(root)
+        accountsServed shouldBe SnapServer.serveAccountRange(1, root, zeroHash, maxHash, bigBudget, reference)
+        accountsServed.accounts should not be empty
+        val slotsServed = slots(root)
+        slotsServed shouldBe SnapServer.serveStorageRanges(
+          2,
+          root,
+          Seq(aliceHash),
+          zeroHash,
+          maxHash,
+          bigBudget,
+          reference,
+          SnapServer.storageRootOf(root, reference)
+        )
+        slotsServed.slots.flatten should not be empty
+        nodes(root) shouldBe SnapServer.serveTrieNodes(3, root, paths, bigBudget, reference)
+      }
+    }
+    // the storage tries of two blocks are two answers
+    slots(served.head) should not be slots(served.last)
+
+    // a root of no canonical block: an executed block kept beside the chain, and a root nobody has
+    val beside = chain.beside(chain.head, salt = 1)(withSlots(alice, Seq(9 -> 9)))
+    Seq(beside.stateRoot.value, kec256(ByteString("a root nobody holds"))).foreach { root =>
+      accounts(root) shouldBe AccountRange(BigInt(1), Seq.empty, Seq.empty)
+      slots(root) shouldBe StorageRanges(BigInt(2), Seq.empty, Seq.empty)
+      nodes(root) shouldBe TrieNodes(BigInt(3), Seq.empty)
+    }
+  }
+
+  // A request is answered whatever happens while its state is being found: a handler that threw would take the actor
+  // through a restart with the peer still waiting, for every other peer's requests too.
+
+  it should "answer each request with nothing, and stay up, when the state of its root cannot be handed out" taggedAs (
+    UnitTest,
+    SyncTest
+  ) in {
+    val pm = TestProbe("pm-no-state")
+    val eb = TestProbe("eb-no-state")
+    val (root, storage) = buildAccountTrie(6)
+    val broken = new java.util.concurrent.atomic.AtomicBoolean(true)
+    val actor = makeActor(
+      pm,
+      eb,
+      stateForRoot = Some { _ =>
+        if broken.get then throw new IllegalStateException("the store is closing") else Some(storage)
+      }
+    )
+    def accounts(): AccountRange =
+      actor ! PeerEventCmd(MessageFromPeer(GetAccountRange(BigInt(1), root, zeroHash, maxHash, bigBudget), testPeer))
+      nextSend(pm).message.underlyingMsg.asInstanceOf[AccountRange]
+
+    accounts() shouldBe AccountRange(BigInt(1), Seq.empty, Seq.empty)
+    actor ! PeerEventCmd(
+      MessageFromPeer(GetStorageRanges(BigInt(2), root, Seq(zeroHash), zeroHash, maxHash, bigBudget), testPeer)
+    )
+    nextSend(pm).message.underlyingMsg shouldBe StorageRanges(BigInt(2), Seq.empty, Seq.empty)
+    actor ! PeerEventCmd(
+      MessageFromPeer(GetTrieNodes(BigInt(3), root, Seq(Seq(ByteString(Array[Byte](0x00)))), bigBudget), testPeer)
+    )
+    nextSend(pm).message.underlyingMsg shouldBe TrieNodes(BigInt(3), Seq.empty)
+
+    // the same actor serves the next request
+    broken.set(false)
+    accounts().accounts should have size 6
   }

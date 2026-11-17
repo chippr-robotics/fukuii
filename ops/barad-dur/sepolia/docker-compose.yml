@@ -46,10 +46,12 @@ services:
     # automatically by the JVM regardless of how it's invoked.
     environment:
       <<: *fukuii-jvm-defaults
+    # JSON-RPC is published on the host's loopback only; reach it from elsewhere through an
+    # SSH tunnel or an authenticating TLS proxy. The Engine API (8551) is not published: the
+    # CL reaches it as fukuii-sepolia:8551 on sepolia-network.
     ports:
-      - "8555:8545"       # JSON-RPC HTTP
-      - "8556:8546"       # JSON-RPC WebSocket
-      - "8561:8551"       # Engine API (authrpc)
+      - "127.0.0.1:8555:8545"  # JSON-RPC HTTP
+      - "127.0.0.1:8556:8546"  # JSON-RPC WebSocket
       - "30306:30306/tcp" # P2P TCP
       - "30306:30306/udp" # P2P Discovery
       - "9097:9095"       # Metrics

@@ -112,7 +112,6 @@ class TypedCallPathSpec
 
     lazy val ledger: StxLedger =
       new StxLedger(
-        blockchain,
         blockchainReader,
         storagesInstance.storages.evmCodeStorage,
         mining.blockPreparator,
@@ -174,14 +173,18 @@ class TypedCallPathSpec
 
     def call(args: TxArgs, overrides: Option[BlockOverrides] = None): Either[String, TxResult] =
       val m = message(args, overrides)
-      ledger.simulateCall(m.stx, m.header, None, m.options, None).left.map(_.message)
+      ledger
+        .simulateCall(m.stx, m.header, ledger.callWorld(head, m.header), m.options, None)
+        .left
+        .map(_.message)
+        .map(_.txResult)
 
     def output(args: TxArgs, overrides: Option[BlockOverrides] = None): ByteString =
       call(args, overrides).value.vmReturnData
 
     def estimate(args: TxArgs, gas: BigInt = 1_000_000): Either[StxLedger.CallEstimateFailure, BigInt] =
       val m = message(args.copy(gas = Some(GasAmount(gas))), skipExecutionGasCap = false)
-      ledger.estimateCallGas(m.stx, m.header, None, m.options)
+      ledger.estimateCallGas(m.stx, m.header, ledger.callWorld(head, m.header), m.options)
 
     // syncController / scheduler / keyStore are never reached by the call methods (every request names `from`)
     lazy val service = new EthInfoService(
@@ -211,7 +214,9 @@ class TypedCallPathSpec
       for gp <- List(BigInt(0), BigInt(9)) do
         val m = message(args(SlotReader, _.copy(gasPrice = Some(GasPrice(gp)))))
         m.stx.tx.tx shouldBe a[LegacyTransaction]
-        val viaCall = ledger.simulateCall(m.stx, m.header, None, m.options, None).value
+        val outcome = ledger.simulateCall(m.stx, m.header, ledger.callWorld(head, m.header), m.options, None).value
+        outcome.codeDepositShortfall shouldBe false
+        val viaCall = outcome.txResult
         val viaTx = ledger.simulateTransaction(m.stx, m.header, None)
         (viaCall.gasUsed, viaCall.vmReturnData, viaCall.vmError, viaCall.logs) shouldBe
           (viaTx.gasUsed, viaTx.vmReturnData, viaTx.vmError, viaTx.logs)
@@ -219,7 +224,7 @@ class TypedCallPathSpec
 
         val t1 = new CallTracer()
         val t2 = new CallTracer()
-        ledger.simulateCall(m.stx, m.header, None, m.options, Some(t1))
+        ledger.simulateCall(m.stx, m.header, ledger.callWorld(head, m.header), m.options, Some(t1))
         ledger.simulateTransactionWithTracer(m.stx, m.header, None, t2)
         t1.getResult shouldBe t2.getResult
     )
@@ -229,7 +234,7 @@ class TypedCallPathSpec
     RPCTest
   ) in new Node:
     val m: CallMessage = message(args(SlotReader, _.copy(gas = Some(GasAmount(1_000_000)))))
-    ledger.estimateCallGas(m.stx, m.header, None, m.options).value shouldBe
+    ledger.estimateCallGas(m.stx, m.header, ledger.callWorld(head, m.header), m.options).value shouldBe
       ledger.binarySearchGasEstimation(m.stx, m.header, None)
 
   // ── Fees (geth ToMessage) ──────────────────────────────────────────────────────────────────────────────────────
@@ -359,10 +364,10 @@ class TypedCallPathSpec
         BlockParam.Latest,
         stateOverrides = Some(Map(funds, Probe -> StateOverride(code = Some(NumberEchoCode))))
       )
-      // without the balance override the sender cannot pay 100,000 * 9
-      service.call(req.copy(stateOverrides = None)).unsafeRunSync().left.value.message should startWith(
-        "insufficient funds"
-      )
+      // without the balance override the sender cannot pay 100,000 * 9 (wrapped as go-ethereum's eth_call wraps it)
+      service.call(req.copy(stateOverrides = None)).unsafeRunSync().left.value.message shouldBe
+        "err: insufficient funds for gas * price + value: address 0x000000000000000000000000000000000000dEaD " +
+        "have 0 want 900000 (supplied gas 100000)"
       service.call(req).unsafeRunSync().value shouldBe CallResponse(word(46))
       // and with a block override on top
       service
@@ -464,14 +469,14 @@ class TypedCallPathSpec
       .applyStateOverrides(
         ledger.worldAt(head),
         Map(invalid -> over, spin -> StateOverride(code = Some(code("5b600056")))),
-        Map(),
+        Set.empty,
         UInt256.Zero
       )
       .value
       ._1
     def est(to: Address): Either[CallEstimateFailure, BigInt] =
       val m = message(args(to, _.copy(gas = Some(GasAmount(100000)))), skipExecutionGasCap = false)
-      ledger.estimateCallGas(m.stx, m.header, Some(overridden), m.options)
+      ledger.estimateCallGas(m.stx, m.header, overridden, m.options)
     est(invalid).left.value shouldBe StxLedger.CallEstimateFailure.Failed(
       com.chipprbots.ethereum.vm.InvalidOpCode(0xfe.toByte)
     )
@@ -502,13 +507,12 @@ class TypedCallPathSpec
   "CallTxBuilder" should "refuse an authorizationList together with blob fields" taggedAs (UnitTest, RPCTest) in {
     given BlockchainConfig = preAmsterdamConfig
     val hash = BlobVersionedHash(ByteString(Hex.decode("01" + "ab" * 31)))
-    for blob <- List[TxArgs => TxArgs](
-        _.copy(blobVersionedHashes = Some(List(hash))),
-        _.copy(maxFeePerBlobGas = Some(1))
-      )
-    do
-      val a = blob(args(Probe, _.copy(authorizationList = Some(Nil))))
-      CallTxBuilder.build(a, osakaHeader, None, Address(0), 100000, Map(), true).left.value.code shouldBe -32602
+    val a = args(Probe, _.copy(authorizationList = Some(Nil), blobVersionedHashes = Some(List(hash))))
+    CallTxBuilder.build(a, osakaHeader, None, Address(0), 100000, Map(), true).left.value.code shouldBe -32602
+    // a blob fee cap with no hashes is geth's CallDefaults error, which comes first
+    val b = args(Probe, _.copy(authorizationList = Some(Nil), maxFeePerBlobGas = Some(1)))
+    CallTxBuilder.build(b, osakaHeader, None, Address(0), 100000, Map(), true).left.value shouldBe
+      JsonRpcError(-32000, "maxFeePerBlobGas specified without blobVersionedHashes", None)
   }
 
   "callPreCheck" should "refuse more than six blobs from Osaka and oversized initcode (EIP-3860)" taggedAs (
@@ -556,7 +560,7 @@ class TypedCallPathSpec
           gasEcho -> StateOverride(code = Some(code("5a60005260206000f3"))),
           burner -> StateOverride(code = Some(code("5b5a620f4240106000570" + "0")))
         ),
-        Map(),
+        Set.empty,
         UInt256.Zero
       )
       .value
@@ -564,12 +568,15 @@ class TypedCallPathSpec
     val txMax: BigInt = BigInt(1 << 24)
     def gasSeen(skip: Boolean): BigInt =
       val m = message(args(gasEcho, _.copy(gas = Some(GasAmount(20_000_000)))), skipExecutionGasCap = skip)
-      BigInt(1, ledger.simulateCall(m.stx, m.header, Some(overridden), m.options, None).value.vmReturnData.toArray)
+      BigInt(
+        1,
+        ledger.simulateCall(m.stx, m.header, overridden, m.options, None).value.txResult.vmReturnData.toArray
+      )
     gasSeen(skip = true) should be > txMax
     gasSeen(skip = false) should be < txMax
     // a call that burns more than TX_MAX_GAS_LIMIT of execution gas succeeds
     val m: CallMessage = message(args(burner, _.copy(gas = Some(GasAmount(20_000_000)))), skipExecutionGasCap = true)
-    val burnt: TxResult = ledger.simulateCall(m.stx, m.header, Some(overridden), m.options, None).value
+    val burnt: TxResult = ledger.simulateCall(m.stx, m.header, overridden, m.options, None).value.txResult
     burnt.vmError shouldBe None
     burnt.gasUsed should be > txMax
 
@@ -704,7 +711,9 @@ class TypedCallPathSpec
     needed should be > BigInt(250_000)
     // 47,880 is the EIP-7976 calldata floor, 21,000 + 420 bytes * 64, refused before the frame runs. It is where the
     // live eth_call "started succeeding": every limit at or above it ran out of gas and was reported as "0x".
-    rpc(47_879).left.value.message shouldBe "insufficient gas for floor data gas cost: have 47879, want 47880"
+    // (wrapped as go-ethereum's applyMessageWithEVM wraps every error ApplyMessage returns)
+    rpc(47_879).left.value.message shouldBe
+      "err: insufficient gas for floor data gas cost: have 47879, want 47880 (supplied gas 47879)"
     for gas <- List(BigInt(47_880), BigInt(60_000), BigInt(100_000), BigInt(250_000), needed - 1) do
       withClue(s"gas $gas: ") {
         rpc(gas) shouldBe Left(JsonRpcError(-32000, "out of gas", None))
@@ -715,17 +724,22 @@ class TypedCallPathSpec
 
   // ── ETC: per-chain gating ──────────────────────────────────────────────────────────────────────────────────────
 
-  "CallTxBuilder on ETC before Olympia" should "refuse blob hashes, authorizations and an explicit type 0x2" taggedAs (
+  "CallTxBuilder on ETC before Olympia" should "refuse an explicit type 0x2 and leave blob hashes and authorizations to preCheck" taggedAs (
     UnitTest,
     RPCTest
-  ) in {
+  ) in (new Node(etcConfig, etcHeader):
     given BlockchainConfig = etcConfig
-    def build(a: TxArgs) = CallTxBuilder.build(a, etcHeader, None, Address(0), 100000, Map(), false)
-    val hash = BlobVersionedHash(ByteString(Hex.decode("01" + "ab" * 31)))
-    build(args(Probe, _.copy(blobVersionedHashes = Some(List(hash))))).left.value.code shouldBe -32602
-    build(args(Probe, _.copy(authorizationList = Some(Nil)))).left.value.message should include("type 4 not active")
+    def build(a: TxArgs): Either[JsonRpcError, CallMessage] =
+      CallTxBuilder.build(a, etcHeader, None, Address(0), 100000, Map(), false)
+    val hash: BlobVersionedHash = BlobVersionedHash(ByteString(Hex.decode("01" + "ab" * 31)))
     build(args(Probe, _.copy(txType = Some(2)))).left.value.message should include("type 2 not active")
-  }
+    // geth's ApplyMessage refuses these: ErrTxTypeNotSupported, as it does on an ETH block before the fork
+    val from: String = EthSimulateService.checksumAddress(senderAddress)
+    call(args(Probe, _.copy(blobVersionedHashes = Some(List(hash))))).left.value shouldBe
+      s"transaction type not supported: blob tx (sender $from)"
+    call(args(Probe, _.copy(authorizationList = Some(Nil)))).left.value shouldBe
+      s"transaction type not supported: setcode tx (sender $from)"
+  )
 
   it should "refuse maxFeePerGas / maxPriorityFeePerGas with go-ethereum's pre-London CallDefaults error" taggedAs (
     UnitTest,
@@ -766,6 +780,113 @@ class TypedCallPathSpec
       .tx
       .tx shouldBe a[TransactionWithAccessList]
   }
+
+  // ── Fork boundaries: execution-apis fixtures (geth-generated) ───────────────────────────────────────────────────────
+
+  // the fixtures' sender and recipient (tests/eth_call/call-fork-inactive-*, create-al-fork-inactive)
+  private val FixtureFrom = Address(ByteString(Hex.decode("0c2c51a0990aee1d73c1228de158688341557508")))
+  private val FixtureTo = Address(ByteString(Hex.decode("0100000000000000000000000000000000000000")))
+  private val FixtureFromChecksummed = "0x0c2c51a0990AeE1d73C1228de158688341557508"
+  private def fixtureCall(extra: TxArgs => TxArgs = identity): TxArgs =
+    extra(TxArgs(from = Some(FixtureFrom), to = Some(FixtureTo)))
+
+  // Berlin at 100: block 46 is before it. Cancun at 60 and Prague at 120: timestamp 30 is before Cancun, 100 before Prague
+  private val preBerlinConfig: BlockchainConfig =
+    preAmsterdamConfig.withUpdatedForkBlocks(_.copy(berlinBlockNumber = BigInt(100)))
+  private val preCancunHeader: BlockHeader = preAmsterdamHeader(46, 30)
+  private val prePragueHeader: BlockHeader = preAmsterdamHeader(46, 100)
+  private val gasCapped = BigInt(50000000)
+
+  private def callError(node: Node, a: TxArgs): JsonRpcError =
+    node.service.call(CallRequest(a, BlockParam.Latest)).unsafeRunSync().left.value
+  private def estimateError(node: Node, a: TxArgs): JsonRpcError =
+    node.service.estimateGas(CallRequest(a, BlockParam.Latest)).unsafeRunSync().left.value
+  private def accessListError(node: Node, a: TxArgs): JsonRpcError =
+    node.service.createAccessList(CreateAccessListRequest(a, BlockParam.Latest)).unsafeRunSync().left.value
+
+  "a message with maxFeePerBlobGas and no blobVersionedHashes" should "be -32000 on every block and endpoint (call-blob-fee-without-hashes)" taggedAs (
+    UnitTest,
+    RPCTest
+  ) in {
+    val expected = JsonRpcError(-32000, "maxFeePerBlobGas specified without blobVersionedHashes", None)
+    // after Cancun (latest) and before it (call-blob-fee-without-hashes-before-cancun)
+    for header <- List(osakaHeader, preCancunHeader) do
+      val node = new Node(header = header)
+      val a = fixtureCall(_.copy(maxFeePerBlobGas = Some(1)))
+      callError(node, a) shouldBe expected
+      estimateError(node, a) shouldBe expected
+      accessListError(node, a) shouldBe expected
+  }
+
+  "eth_call with an access list before Berlin" should "be geth's ErrTxTypeNotSupported wrapped as eth_call wraps it (call-fork-inactive-access-list)" taggedAs (
+    UnitTest,
+    RPCTest
+  ) in (new Node(preBerlinConfig):
+    callError(this, fixtureCall(_.copy(accessList = Some(Nil)))) shouldBe JsonRpcError(
+      -32000,
+      s"err: transaction type not supported: access list tx (sender $FixtureFromChecksummed) (supplied gas $gasCapped)",
+      None
+    )
+    // the same list on a block after Berlin runs
+    new Node().service
+      .call(CallRequest(fixtureCall(_.copy(accessList = Some(Nil))), BlockParam.Latest))
+      .unsafeRunSync()
+      .isRight shouldBe true
+  )
+
+  "eth_call with an authorization list before Prague" should "be ErrTxTypeNotSupported: setcode tx (call-fork-inactive-authorization-list)" taggedAs (
+    UnitTest,
+    RPCTest
+  ) in (new Node(header = prePragueHeader):
+    val auth: SetCodeAuthorization =
+      SetCodeAuthorization(BigInt(0), FixtureTo, BigInt(0), BigInt(0), BigInt(0), BigInt(0))
+    callError(this, fixtureCall(_.copy(authorizationList = Some(List(auth))))) shouldBe JsonRpcError(
+      -32000,
+      s"err: transaction type not supported: setcode tx (sender $FixtureFromChecksummed) (supplied gas $gasCapped)",
+      None
+    )
+  )
+
+  "eth_call with blob hashes before Cancun" should "be ErrTxTypeNotSupported: blob tx (call-fork-inactive-blob-hashes)" taggedAs (
+    UnitTest,
+    RPCTest
+  ) in (new Node(header = preCancunHeader):
+    val hash: BlobVersionedHash = BlobVersionedHash(ByteString(Hex.decode("01" + "00" * 31)))
+    callError(this, fixtureCall(_.copy(blobVersionedHashes = Some(List(hash))))) shouldBe JsonRpcError(
+      -32000,
+      s"err: transaction type not supported: blob tx (sender $FixtureFromChecksummed) (supplied gas $gasCapped)",
+      None
+    )
+  )
+
+  "eth_estimateGas with an access list before Berlin" should "be wrapped as failed with <gas> gas (estimate-fork-inactive-access-list)" taggedAs (
+    UnitTest,
+    RPCTest
+  ) in (new Node(preBerlinConfig):
+    // the ceiling is the requested gas (the fixture asks for none: the block's 100,000,000 capped to 50,000,000)
+    estimateError(
+      this,
+      fixtureCall(_.copy(accessList = Some(Nil), gas = Some(GasAmount(1_000_000))))
+    ) shouldBe JsonRpcError(
+      -32000,
+      s"failed with 1000000 gas: transaction type not supported: access list tx (sender $FixtureFromChecksummed)",
+      None
+    )
+  )
+
+  "eth_createAccessList before Berlin" should "name the legacy hash of the refused transaction (create-al-fork-inactive)" taggedAs (
+    UnitTest,
+    RPCTest
+  ) in (new Node(preBerlinConfig):
+    // 0x93eac2a3...: keccak256 of the unsigned legacy transaction [nonce 0, price 0, gas 50,000,000, to, 0, "", 0, 0, 0],
+    // the hash in the fixture; computed outside fukuii
+    accessListError(this, fixtureCall()) shouldBe JsonRpcError(
+      -32000,
+      "failed to apply transaction: 0x93eac2a3162cccff521f874514811d908ea25414cbf11b0fd9bfe4f17f908381 " +
+        s"err: transaction type not supported: access list tx (sender $FixtureFromChecksummed)",
+      None
+    )
+  )
 
   // ── JSON: params and overrides ─────────────────────────────────────────────────────────────────────────────────
 

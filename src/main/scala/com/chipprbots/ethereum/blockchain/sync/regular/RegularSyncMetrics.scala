@@ -1,8 +1,11 @@
 package com.chipprbots.ethereum.blockchain.sync.regular
 
+import java.util.concurrent.atomic.AtomicReference
+
 import scala.concurrent.duration.NANOSECONDS
 
 import com.google.common.util.concurrent.AtomicDouble
+import io.micrometer.core.instrument.Gauge
 import io.micrometer.core.instrument.Timer
 
 import com.chipprbots.ethereum.metrics.MetricsContainer
@@ -22,6 +25,9 @@ object RegularSyncMetrics extends MetricsContainer:
     metrics.registry.gauge("regularsync.block.bestKnown.number.gauge", new AtomicDouble(0d))
   final private val BlocksImportedCounter =
     metrics.registry.counter("regularsync.blocks.imported.total")
+  // a block this node mined, dropped because an import was under way (spec 018 B-293, forge)
+  final private val MinedBlocksDroppedCounter =
+    metrics.registry.counter("regularsync.mined.dropped.total")
 
   final private val BranchReorgTotalCounter =
     metrics.registry.counter("regularsync.reorg.total")
@@ -30,6 +36,65 @@ object RegularSyncMetrics extends MetricsContainer:
   final private val ReorgLastDepth = new AtomicDouble(0d)
   metrics.registry.gauge("regularsync.reorg.last.depth.gauge", ReorgLastDepth)
 
+  // #1705: fetch-and-import pipelines replaced, tagged with the component whose stop caused it.
+  final private val PipelineRestartsCounter = "regularsync.pipeline.restarts.total"
+
+  // H3: SNAP re-syncs regular sync asked for in a row with no block imported in between, and re-SNAPs that waited.
+  final private val ConsecutiveResnaps = new AtomicDouble(0d)
+  metrics.registry.gauge("regularsync.resnap.consecutive.gauge", ConsecutiveResnaps)
+  final private val ResnapBackoffsCounter = metrics.registry.counter("regularsync.resnap.backoff.total")
+  // B-007 (#1683): blocks, announced or fetched in a batch, whose parent this node lacks, and what came of them.
+  final private val OrphanBlocksCounter = "regularsync.orphan.blocks.total"
+
+  // B-007 (forge, N1): the pivot floor sent the fetcher back to the same block several times in a row.
+  final private val PivotFloorGapRepeatsCounter =
+    metrics.registry.counter("regularsync.pivot.floor.gap.repeats.total")
+
+  // #1705 (beacon): how long a starting importer has waited for the import lock so far; 0 while none waits.
+  final private val ImportLockWaitSeconds = new AtomicDouble(0d)
+  metrics.registry.gauge("regularsync.import.lock.wait.seconds.gauge", ImportLockWaitSeconds)
+
+  /** The last import that put blocks on the chain: how many, and how long the consensus call took. */
+  final case class LastImport(blocks: Int, nanos: Long)
+
+  // Spec 027 (C-7): the last import's duration, timed in BlockImporter around the consensus call (not in ConsensusImpl),
+  // for the TUI's Sync view and for /metrics. 0 until the first import.
+  final private val lastImportRef = new AtomicReference[Option[LastImport]](None)
+  Gauge
+    .builder(
+      "regularsync.import.last.duration.seconds.gauge",
+      lastImportRef,
+      (ref: AtomicReference[Option[LastImport]]) => ref.get().fold(0d)(_.nanos / 1e9)
+    )
+    .description(
+      "How long the last block import's consensus call took, for one block or a batch. Read separately from " +
+        "regularsync.import.last.blocks.gauge at scrape time, so the two can briefly pair adjacent imports."
+    )
+    .register(metrics.registry)
+  // The duration is for the whole call, so it needs the block count beside it: 61 ms for one block and for 128 differ.
+  // The two gauges read the same value at different instants of a scrape, so an import between the reads pairs the
+  // count of one import with the duration of the next; the TUI reads both from one `LastImport` and has no such pair.
+  Gauge
+    .builder(
+      "regularsync.import.last.blocks.gauge",
+      lastImportRef,
+      (ref: AtomicReference[Option[LastImport]]) => ref.get().fold(0d)(_.blocks.toDouble)
+    )
+    .description(
+      "How many blocks the last block import's consensus call put on the chain. Read separately from " +
+        "regularsync.import.last.duration.seconds.gauge at scrape time, so the two can briefly pair adjacent imports."
+    )
+    .register(metrics.registry)
+
+  /** Called by BlockImporter after a consensus call that imported `blocks` blocks, taking `nanos`. */
+  def recordLastImport(blocks: Int, nanos: Long): Unit = lastImportRef.set(Some(LastImport(blocks, nanos)))
+
+  /** The last import BlockImporter timed, if any. Safe to read from any thread. */
+  def lastImport: Option[LastImport] = lastImportRef.get()
+
+  /** Back to "no import yet": for tests, which share this process-wide value. */
+  private[ethereum] def clearLastImport(): Unit = lastImportRef.set(None)
+
   def recordMinedBlockPropagationTimer(nanos: Long): Unit = MinedBlockPropagationTimer.record(nanos, NANOSECONDS)
   def recordImportNewBlockPropagationTimer(nanos: Long): Unit = NewBlockPropagationTimer.record(nanos, NANOSECONDS)
   def recordDefaultBlockPropagationTimer(nanos: Long): Unit = DefaultBlockPropagationTimer.record(nanos, NANOSECONDS)
@@ -37,6 +102,27 @@ object RegularSyncMetrics extends MetricsContainer:
   def setCurrentBlock(blockNumber: BigInt): Unit = CurrentBlockGauge.set(blockNumber.toDouble)
   def setBestKnownNetworkBlock(blockNumber: BigInt): Unit = BestKnownNetworkBlockGauge.set(blockNumber.toDouble)
   def incrementBlocksImported(): Unit = BlocksImportedCounter.increment()
+  def incrementMinedBlocksDropped(): Unit = MinedBlocksDroppedCounter.increment()
   def incrementReorgTotal(): Unit = BranchReorgTotalCounter.increment()
   def incrementBranchResolutionRounds(): Unit = BranchResolutionRoundsCounter.increment()
   def setLastReorgDepth(n: Int): Unit = ReorgLastDepth.set(n.toDouble)
+
+  /** `component`: "block-fetcher" or "block-importer". */
+  def incrementPipelineRestarts(component: String): Unit =
+    metrics.registry.counter(PipelineRestartsCounter, "component", component).increment()
+
+  /** `source`: "announce" (a NewBlock) or "batch" (fetched). `outcome`: "branch-fetch" (the fetcher goes back for the
+    * parent, no one blamed) or "blacklisted" (the peer kept announcing blocks whose parent never arrived).
+    */
+  def incrementOrphanBlocks(source: String, outcome: String): Unit =
+    metrics.registry.counter(OrphanBlocksCounter, "source", source, "outcome", outcome).increment()
+
+  def incrementPivotFloorGapRepeats(): Unit = PivotFloorGapRepeatsCounter.increment()
+  private[regular] def pivotFloorGapRepeatsTotal: Double = PivotFloorGapRepeatsCounter.count()
+
+  def setImportLockWaitSeconds(seconds: Double): Unit = ImportLockWaitSeconds.set(seconds)
+
+  def setConsecutiveResnaps(count: Int): Unit = ConsecutiveResnaps.set(count.toDouble)
+  def incrementResnapBackoffs(): Unit = ResnapBackoffsCounter.increment()
+  private[sync] def consecutiveResnaps: Double = ConsecutiveResnaps.get
+  private[regular] def importLockWaitSeconds: Double = ImportLockWaitSeconds.get

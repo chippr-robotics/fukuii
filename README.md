@@ -80,6 +80,8 @@ One binary, every major EVM network:
 
 - **ETC Mainnet** — full PoW node with SNAP sync
 - **Ethereum Mainnet** — full PoS execution layer via Engine API
+- **Hoodi** — Ethereum testnet (chain id 560048), built in: `fukuii hoodi`. See [the Hoodi runbook](docs/runbooks/hoodi.md)
+- **Ephemery** — the testnet that resets every 28 days, built in: `fukuii ephemery`. A restarted node fetches the next iteration itself. See [the Ephemery runbook](docs/runbooks/ephemery.md)
 - **Sepolia, Platåberget** — Ethereum testnets, with Glamsterdam (Amsterdam) support from v0.9.0. Platåberget is the public Glamsterdam testnet; Sepolia activates Amsterdam on 2026-10-06 13:53:36 UTC
 - **Mordor** — ETC testnet
 - **Private and consortium chains** — custom genesis, no source modification required
@@ -191,7 +193,7 @@ schedules.
 
 ### JSON-RPC and API Surface
 
-Broad namespace coverage across `eth_`, `debug_`, `trace_`, `txpool_`, `admin_`, `personal_`, `miner_`, `net_`, `web3_`, and `engine_` — the API breadth production operators expect.
+Broad namespace coverage across `eth_`, `debug_`, `trace_`, `txpool_`, `admin_`, `personal_`, `miner_`, `net_`, `web3_`, and `engine_` — the API breadth production operators expect. As in go-ethereum, HTTP and WebSocket serve only `eth`, `net`, `web3` and `fukuii` until you opt in to more (`fukuii.network.rpc.http.apis`, `ws.apis`; `ipc.apis` for IPC, which serves every production namespace by default).
 
 - **HTTP and WebSocket** — both transports on configurable ports. WebSocket supports `eth_subscribe` for real-time block headers, logs, and pending transaction subscriptions. `debug_traceChain` streams results over WebSocket.
 - **GraphQL** — full block, transaction, account, and log queries via the `/graphql` endpoint
@@ -204,7 +206,7 @@ Broad namespace coverage across `eth_`, `debug_`, `trace_`, `txpool_`, `admin_`,
 
 Operations teams query node state through Claude or GPT directly — no custom dashboards required. Compliance teams pull reorg history on demand. Infrastructure teams automate capacity planning through natural language.
 
-Fukuii is the first EVM execution client with a functional MCP server — built into the JSON-RPC API, not bolted on. Enable by adding `"mcp"` to `fukuii.network.rpc.apis`. Works with any MCP-compatible AI assistant on port 8545.
+Fukuii is the first EVM execution client with a functional MCP server — built into the JSON-RPC API, not bolted on. Enable by adding `mcp` to the transport's list, e.g. `fukuii.network.rpc.http.apis = "eth,net,web3,fukuii,mcp"`. Works with any MCP-compatible AI assistant on port 8545.
 
 **Operational** — node status, sync progress, peer list, fork history, chain config
 

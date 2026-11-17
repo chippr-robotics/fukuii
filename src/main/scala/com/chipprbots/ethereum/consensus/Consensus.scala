@@ -7,6 +7,7 @@ import cats.effect.IO
 import cats.effect.unsafe.IORuntime
 
 import com.chipprbots.ethereum.consensus.Consensus.ConsensusResult
+import com.chipprbots.ethereum.db.storage.pathstate.StateFault
 import com.chipprbots.ethereum.domain.Block
 import com.chipprbots.ethereum.domain.BlockAccessList
 import com.chipprbots.ethereum.domain.ChainWeight
@@ -31,6 +32,15 @@ trait Consensus:
   )(implicit blockExecutionScheduler: IORuntime, blockchainConfig: BlockchainConfig): IO[ConsensusResult] =
     val _ = accessLists
     evaluateBranch(block)
+
+  /** Whether `blocks` hang from the consensus layer's branch that was refused while the head is where it is (spec 018
+    * C5a, B-297): they are then refused with it, and remembered so that what stands on them is too. A batch that hangs
+    * from a refused block would otherwise read as an unknown branch, and send the fetcher back to fetch the refused
+    * branch again, without end. False by default, and always on a chain that follows no consensus layer.
+    */
+  def refusedWithTheirParent(blocks: NonEmptyList[Block]): Boolean =
+    val _ = blocks
+    false
 
 object Consensus:
   /* This return type for consensus is probably overcomplicated for now because some information is needed
@@ -84,10 +94,37 @@ object Consensus:
   def isLocalStateFault(error: String): Boolean =
     error.startsWith(MptErrorText) || error.startsWith(ReorganiseFailurePrefix + MptErrorText)
 
+  /** What a [[ConsensusError]] starts with when the branch hangs from a block whose weight is not stored, that is, a
+    * block this node does not have (B-007, #1683). One constant for the text written
+    * (`ConsensusImpl.importToNewBranch`) and the text read ([[isUnknownParent]]), as [[ReorganiseFailurePrefix]] is, so
+    * that a reworded copy cannot put the blame for it back on a peer.
+    */
+  val UnknownParentErrorPrefix: String = "Could not get weight for parent block "
+
+  /** True when a branch failed for want of its parent: a gap on this node's side. Nothing is wrong with the blocks, nor
+    * with the peer that sent them, and the branch is to be fetched, not penalised.
+    */
+  def isUnknownParent(error: String): Boolean = error.startsWith(UnknownParentErrorPrefix)
+
   /** An error external the the blocks in the branch occured, which prevents the branch from being executed. Usually
     * this is due to an inconsistency in the database.
     */
   case class ConsensusError(blockToEnqueue: List[Block], err: String) extends ConsensusResult
+
+  /** This node's own state could not take a block of the branch (spec 018 Track C, C4b): the state the block is to be
+    * executed on is not held, or is no longer, or the head could not be moved to it. '''Nothing is wrong with the
+    * block, nor with the peer that sent it''': no block is reported invalid for it and no peer is penalised, and the
+    * blocks that were not executed are tried again.
+    *
+    * `imported` is the prefix of the batch that was adopted before the fault, as for
+    * [[ConsensusErrorDueToMissingNode]]: those blocks are the node's head already. `blocksToEnqueue` are the blocks
+    * that were not executed, the one the fault was met at first.
+    */
+  case class ConsensusStateFault(
+      fault: StateFault,
+      imported: List[BlockData] = Nil,
+      blocksToEnqueue: List[Block] = Nil
+  ) extends ConsensusResult
 
   /** A block hit a missing state node. `imported` is the prefix of the batch that executed and validated BEFORE it:
     * those blocks are already adopted (state and best block), exactly as a successful shorter batch would have left

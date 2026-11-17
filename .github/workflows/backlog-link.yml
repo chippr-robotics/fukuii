@@ -1,0 +1,36 @@
+# Backlog link (warn-only)
+#
+# Constitution Principle VIII: a PR names the shared-backlog item it closes or advances with a `Backlog: B-0xx` line
+# in its body. This check only warns (an annotation and a step-summary line); it never fails a PR. It skips PRs
+# opened by bots and version-bump PRs. The body reaches the shell as an environment variable, never as code.
+
+name: Backlog Link
+
+on:
+  pull_request:
+    types:
+      - opened
+      - edited
+      - reopened
+      - synchronize
+
+permissions: {}
+
+jobs:
+  backlog-link:
+    if: >-
+      github.event.pull_request.user.type != 'Bot'
+      && !startsWith(github.event.pull_request.title, 'chore: bump version')
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - name: Look for a Backlog line in the PR body
+        env:
+          BODY: ${{ github.event.pull_request.body }}
+        run: |
+          if printf '%s\n' "$BODY" | grep -Eiq 'Backlog\**:\**[[:space:]]*B-[0-9]+'; then
+            echo "Backlog line found."
+          else
+            echo "::warning title=No backlog item::Add a 'Backlog: B-0xx' line to the PR body (constitution Principle VIII, .claude/agent-protocols/backlog-tracker.md)."
+            echo "No \`Backlog: B-0xx\` line in the PR body (warning only; see constitution Principle VIII)." >> "$GITHUB_STEP_SUMMARY"
+          fi

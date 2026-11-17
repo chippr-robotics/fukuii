@@ -34,6 +34,10 @@ import com.chipprbots.ethereum.testing.Tags.*
   * every failing test with its first divergence. `EEST_MIN_TESTS` fails the run when fewer tests were replayed, so a
   * partially fetched corpus cannot pass as a smaller one. Each variable also has a `-Deest.*` system property form.
   *
+  * `EEST_POSITIONS=1` puts an [[EestPositionMirror]] on every fixture (spec 018 Track C, T026): a read or an update a
+  * position-keyed store would have refused, or rows that differ from the state a block left, is a divergence of that
+  * fixture, prefixed `positions:`. The report then says how much the mirror saw.
+  *
   * With no corpus configured the test is canceled, not passed: a conformance claim needs the corpus to have run. With
   * `EEST_MIN_TESTS` set (CI, eest-amsterdam.yml) a missing corpus fails instead, so the gate cannot pass on nothing.
   */
@@ -44,12 +48,38 @@ class EestFixtureCorpusSpec extends AnyFlatSpec with Matchers:
 
   private case class Outcome(file: String, test: String, divergences: Seq[String])
 
+  private val mirrorPositions: Boolean = setting("POSITIONS").exists(v => v != "0" && v != "false")
+
+  /** What the position mirrors saw, summed over the fixtures. */
+  private object mirrored:
+    val fixtures, units, rejected, updates, reads, resets, storedResets, readsAfterReset =
+      new java.util.concurrent.atomic.AtomicLong
+    def add(observer: EestPositionMirror): Unit =
+      fixtures.incrementAndGet()
+      units.addAndGet(observer.unitsKept)
+      rejected.addAndGet(observer.unitsDropped)
+      updates.addAndGet(observer.mirror.updates)
+      reads.addAndGet(observer.readsChecked)
+      resets.addAndGet(observer.mirror.resets)
+      storedResets.addAndGet(observer.mirror.resetsOfStoredTries)
+      readsAfterReset.addAndGet(observer.mirror.readsOfResetTries)
+    def line: String =
+      s"positions mirrored on $fixtures fixtures: $units units kept, $rejected blocks rejected, $updates trie " +
+        s"updates applied, $reads reads checked, $resets storage tries reset ($storedResets of them held rows, " +
+        s"$readsAfterReset reads of one after its reset)"
+
   /** Every error is a divergence of that one fixture, fatal ones included: a StackOverflowError from a 1024-deep call
     * chain or a LinkageError from a native precompile would otherwise escape `Try`, kill the worker and silently drop
     * the rest of its file from the count.
     */
   private def replayOne(t: JValue): Seq[String] =
-    try EestBlockchainReplay.replay(t)
+    try
+      if !mirrorPositions then EestBlockchainReplay.replay(t)
+      else
+        val observer = EestPositionMirror.forFixture(t)
+        val divergences = EestBlockchainReplay.replay(t, observer)
+        mirrored.add(observer)
+        divergences ++ observer.findings.map(found => s"positions: $found")
     catch
       case e: Throwable =>
         if sys.env.contains("EEST_TRACE") then e.printStackTrace()
@@ -125,13 +155,14 @@ class EestFixtureCorpusSpec extends AnyFlatSpec with Matchers:
     val report = Seq(
       s"execution-specs blockchain_test replay: $root${filter.fold("")(f => s" (filter $f)")}",
       f"${all.size} tests in ${files.size} files, ${all.size - failed.size} passed, ${failed.size} failed, $seconds%.0f s",
+      if mirrorPositions then mirrored.line else "positions not mirrored (EEST_POSITIONS)",
       "",
       "passed / total by directory:"
     ) ++ byGroup ++ Seq("", "failures (first divergence):") ++
       failed.map(o => s"  ${o.file} :: ${o.test}\n      ${o.divergences.head}")
     Option(reportPath.getParent).foreach(Files.createDirectories(_))
     Files.write(reportPath, report.asJava)
-    info(report.take(4 + byGroup.size).mkString("\n"))
+    info(report.take(5 + byGroup.size).mkString("\n"))
 
     setting("MIN_TESTS").map(_.toInt).foreach { min =>
       withClue(s"only ${all.size} tests replayed where EEST_MIN_TESTS=$min: the corpus is incomplete. ") {

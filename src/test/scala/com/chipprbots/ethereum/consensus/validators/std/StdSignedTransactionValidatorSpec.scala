@@ -95,7 +95,7 @@ class StdSignedTransactionValidatorSpec extends AnyFlatSpec with Matchers:
       stx = stx,
       senderAccount = senderAccount,
       blockHeader = blockHeader,
-      upfrontGasCost = UInt256(0),
+      upfrontGasCost = BigInt(0),
       accumGasUsed = BigInt(0)
     )
 

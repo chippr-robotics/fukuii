@@ -32,8 +32,12 @@ import com.chipprbots.ethereum.blockchain.sync.regular.BlockFetcher.InvalidateBl
 import com.chipprbots.ethereum.blockchain.sync.regular.BlockFetcher.PickBlocks
 import com.chipprbots.ethereum.blockchain.sync.regular.BlockImporter
 import com.chipprbots.ethereum.domain.Block
+import com.chipprbots.ethereum.domain.BlockBody
+import com.chipprbots.ethereum.domain.BlockHash
+import com.chipprbots.ethereum.domain.BlockHeader
 import com.chipprbots.ethereum.domain.BlockNumber
 import com.chipprbots.ethereum.domain.HeadersSeq
+import com.chipprbots.ethereum.domain.TrieRoot
 import com.chipprbots.ethereum.network.Peer
 import com.chipprbots.ethereum.network.PeerEventBusActor.PeerSelector
 import com.chipprbots.ethereum.network.PeerEventBusActor.SubscribeCmd
@@ -399,32 +403,88 @@ class BlockFetcherSpec
       }
       testKit.stop(blockFetcher)
 
-    // P9: context.watchWith — ChildStopped is delivered as a typed FetchCommand instead of Terminated
-    "should continue processing after receiving ChildStopped from a watched child" taggedAs (
+    // B-301: the bodies of ancestor blocks the importer lacks. Only a body that is the one its header commits to comes
+    // back; a peer whose answer holds one that is not is blacklisted, and the bodies still wanted are asked of another.
+    "should answer a fetch of ancestor bodies with only the bodies that match their headers" taggedAs (
       UnitTest,
       SyncTest
     ) in new TestSetup:
       startFetcher()
+      val replyTo: org.apache.pekko.actor.testkit.typed.scaladsl.TestProbe[FetchResponse] =
+        createTestProbe[FetchResponse]()
+      val Seq(first, second) = ancestorHeaders(2)
+      blockFetcher ! BlockFetcher.FetchAncestorBodies(Seq(first, second), replyTo.ref)
 
-      // Drain the initial in-flight GetBlockHeaders request and reply with empty headers so
-      // inFlightHeaders returns to 0 (the slot must be free before TickFetch can dispatch again).
-      val initReplyTo: ActorRef[PeersClient.ResponseMessage] = peersClient.expectMsgPF() {
-        case PeersClient.Request(msg: ETHPackets.GetBlockHeaders, _, _, replyTo) if msg.block == Left(1) =>
-          replyTo
+      def bodiesRequest(): (Seq[ByteString], PeersClient.PeerSelector, ActorRef[PeersClient.ResponseMessage]) =
+        peersClient.fishForSpecificMessage() {
+          case PeersClient.Request(msg: ETHPackets.GetBlockBodies, selector, _, replyTo) =>
+            (msg.hashes, selector, replyTo)
+        }
+
+      val (asked, firstSelector, answer) = bodiesRequest()
+      asked shouldBe Seq(first.hash.value, second.hash.value)
+      firstSelector shouldBe PeersClient.BestPeer
+      // the first is the one its header commits to; the second is a block's body with a transaction and an ommer
+      answer ! PeersClient.Response(
+        fakePeer,
+        ETHPackets.BlockBodies(BigInt(0), Seq(BlockBody(Nil, Nil), firstBlocksBatch.head.body))
+      )
+      peersClient.fishForSpecificMessage() {
+        case BlacklistPeer(id, BlacklistReason.BlockBodiesNotMatchingHeaders) if id == fakePeer.id => true
       }
-      initReplyTo ! PeersClient.Response(fakePeer, ETHPackets.BlockHeaders(BigInt(0), List.empty))
+      // asked again for the second alone, of a peer that has not answered; then a third time, and no more
+      val (askedAgain, againSelector, answerAgain) = bodiesRequest()
+      askedAgain shouldBe Seq(second.hash.value)
+      againSelector shouldBe PeersClient.ExcludingPeers(Set(fakePeer.id))
+      answerAgain ! PeersClient.Response(fakePeer, ETHPackets.BlockBodies(BigInt(0), Nil))
+      val (_, _, answerLast) = bodiesRequest()
+      answerLast ! PeersClient.Response(fakePeer, ETHPackets.BlockBodies(BigInt(0), Nil))
 
-      // Inject ChildStopped directly — simulates watchWith delivery when a child terminates.
-      // The fetcher must absorb the message without crashing (Behaviors.same).
-      blockFetcher ! BlockFetcher.ChildStopped("headers-fetcher")
-
-      // Fetcher must remain alive and responsive: TickFetch re-evaluates dispatch and sends
-      // another GetBlockHeaders when the slot is available.
-      blockFetcher ! BlockFetcher.TickFetch
-      peersClient.expectMsgPF() {
-        case PeersClient.Request(msg: ETHPackets.GetBlockHeaders, _, _, _) if msg.block == Left(1) => ()
+      replyTo.expectMessage(
+        5.seconds,
+        BlockFetcher.FetchedAncestorBodies(Seq(first, second), Seq(first -> BlockBody(Nil, Nil)))
+      )
+      withClue("the requests are spent: ") {
+        peersClient.receiveWhile(500.millis) { case m => m }.collect {
+          case r @ PeersClient.Request(_: ETHPackets.GetBlockBodies, _, _, _) => r
+        } shouldBe empty
       }
       testKit.stop(blockFetcher)
+
+    "should match ancestor bodies to their headers in order, passing over a header whose body was left out" taggedAs (
+      UnitTest,
+      SyncTest
+    ) in new TestSetup:
+      val Seq(a, b, c) = ancestorHeaders(3)
+      val empty: BlockBody = BlockBody(Nil, Nil)
+      val wrong = firstBlocksBatch.head.body
+      AncestorBodiesFetcher.matchBodies(Seq(a, b, c), Seq(empty, empty)) shouldBe (Vector(a -> empty, b -> empty), None)
+      AncestorBodiesFetcher.matchBodies(Seq(a, b, c), Nil) shouldBe (Vector.empty, None)
+      withClue("a body that is none of those asked for ends the match: ") {
+        AncestorBodiesFetcher.matchBodies(Seq(a, b), Seq(empty, wrong, empty)) shouldBe (
+          Vector(a -> empty),
+          Some(wrong)
+        )
+        AncestorBodiesFetcher.matchBodies(Seq(a), Seq(empty, empty)) shouldBe (Vector(a -> empty), Some(empty))
+      }
+
+    // #1705. The test this replaces sent a made-up ChildStopped while the real child lived, and asserted that fetching
+    // went on: it held the bug in place. A child that really stops takes its request with it, still counted in flight,
+    // so nothing was dispatched again. The fetcher stops instead, and RegularSync replaces the pipeline
+    // (RegularSyncPipelineSpec).
+    for child <- Seq("headers-fetcher", "bodies-fetcher") do
+      s"should stop when its $child stops, so regular sync replaces the pipeline (#1705)" taggedAs (
+        UnitTest,
+        SyncTest
+      ) in new TestSetup:
+        startFetcher()
+        peersClient.expectMsgPF() {
+          case PeersClient.Request(msg: ETHPackets.GetBlockHeaders, _, _, _) if msg.block == Left(1) => ()
+        }
+        testKit.system.classicSystem.actorSelection(blockFetcher.path / child) ! org.apache.pekko.actor.PoisonPill
+
+        // Watching an actor that has already stopped still delivers Terminated
+        createTestProbe[BlockFetcher.FetchCommand]().expectTerminated(blockFetcher, 5.seconds)
   }
 
   trait TestSetup extends TestSyncConfig:
@@ -477,6 +537,17 @@ class BlockFetcherSpec
 
     val firstBlocksBatch: List[Block] =
       BlockHelpers.generateChain(syncConfig.blockHeadersPerRequest, FixtureBlocks.Genesis.block)
+
+    /** Headers of `n` blocks, each committing to an empty body. */
+    def ancestorHeaders(n: Int): Seq[BlockHeader] =
+      BlockHelpers
+        .generateChain(n, FixtureBlocks.Genesis.block)
+        .map(
+          _.header.copy(
+            transactionsRoot = TrieRoot(BlockHeader.EmptyMpt),
+            ommersHash = BlockHash(BlockHeader.EmptyOmmers)
+          )
+        )
 
     // Saved reply addresses for the two parallel follow-ups BlockFetcher emits after
     // the first headers response: GetBlockBodies and GetBlockHeaders(block=

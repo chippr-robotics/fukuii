@@ -42,7 +42,7 @@ class Eip7623FloorValiditySpec extends AnyFlatSpec with Matchers with AmsterdamF
       header: BlockHeader,
       config: BlockchainConfig
   ): Either[SignedTransactionError, SignedTransactionValid] =
-    val upfront = UInt256(stx.tx.gasLimit.value * BigInt(1_000_000_000))
+    val upfront = stx.tx.gasLimit.value * BigInt(1_000_000_000)
     StdSignedTransactionValidator.validate(stx, senderAccount, header, upfront, 0)(using config)
 
   /** 1,000 non-zero bytes to an EOA: intrinsic 21,000 + 16,000 = 37,000; EIP-7623 floor 21,000 + 4,000 x 10 = 61,000.

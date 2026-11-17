@@ -4,8 +4,12 @@ import com.chipprbots.ethereum.db.cache.AppCaches
 import com.chipprbots.ethereum.db.cache.LruCache
 import com.chipprbots.ethereum.db.storage.*
 import com.chipprbots.ethereum.db.storage.NodeStorage.NodeHash
+import com.chipprbots.ethereum.db.storage.pathstate.PathStateStorage
+import com.chipprbots.ethereum.db.storage.pathstate.StateConfig
+import com.chipprbots.ethereum.db.storage.pathstate.StateMetrics
 import com.chipprbots.ethereum.db.storage.pruning.PruningMode
 import com.chipprbots.ethereum.utils.Config
+import com.chipprbots.ethereum.utils.StateLayoutConfig
 
 object Storages:
 
@@ -15,6 +19,21 @@ object Storages:
   trait DefaultStorages extends StoragesComponent:
 
     dataSourcesComp: DataSourceComponent & PruningModeComponent =>
+
+    /** Whether the unified state layout's storage is built (spec 018 Track C, in-development guard). A def, read while
+      * `storages` is being built.
+      */
+    protected def statePathLive: Boolean = StateLayoutConfig.pathLive
+
+    /** Whether the state of this datadir may be destroyed for a new genesis: test mode, and nothing else (spec 018
+      * Track C, C3c). See `PathStateStorage.destroyStateForNewGenesis`.
+      */
+    protected def stateMayBeDestroyed: Boolean = false
+
+    /** The `state` section the unified layout runs on. Read only when the guard is on: reading it refuses `pruning.mode
+      * \= "inmemory"`, which has no place on that layout.
+      */
+    protected def stateConfig: StateConfig = StateConfig(Config.config)
 
     override val storages: Storages = new DefaultStorages(pruningMode)
 
@@ -59,5 +78,27 @@ object Storages:
           new LruCache[NodeHash, HeapEntry](
             Config.inMemoryPruningNodeCacheConfig,
             Some(CachedReferenceCountedStorage.saveOnlyNotificationHandler(nodeStorage))
-          )
+          ),
+          // Whether the datadir's counts are proven exact, read at each prune so a SNAP start in this process takes
+          // effect on the next one (#1692). A datadir with no stamp deletes no trie node.
+          () => RefCountTrust.nodesMayBeDeleted(appStateStorage)
         )
+
+      // After `appStateStorage`, which it reads the state anchor from. Built only with the guard on: with it off this
+      // object graph is what it was before the track.
+      override val pathStateStorage: Option[PathStateStorage] =
+        Option.when(statePathLive) {
+          val config = stateConfig
+          new PathStateStorage(
+            new PathNodeStorage(dataSource),
+            appStateStorage,
+            config.overlay.maxViewAgeMoves,
+            // No finalized block is named yet: nothing follows a consensus client on this layout before the overlay
+            // (C4d), and without one the floor is the larger, `state.retention.without-finality`.
+            PathStateStorage.CommitSettings
+              .of(config, finalized = () => None, observer = StateMetrics)
+              // test mode sets a new genesis on one datadir before each test, which on this layout means destroying
+              // the state it holds; nothing else may
+              .copy(allowsStateDestruction = stateMayBeDestroyed)
+          )
+        }

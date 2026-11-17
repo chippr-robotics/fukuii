@@ -160,9 +160,12 @@ class TxGossipTrackingSpec extends AnyFlatSpec with Matchers:
     ann.timedOut() shouldBe empty // the new request has its own full timeout
     clock.now = 10.seconds.toMillis + 2
     ann.timedOut() shouldBe Map(peerC -> Seq(h(1)))
+    ann.unansweredRequests shouldBe 2
     clock.now = 15.seconds.toMillis + 3
     ann.timedOut() shouldBe empty // nobody left to ask
     ann.size shouldBe 0
+    // The last request timed out too, though it moved nowhere: three peers were asked and none answered.
+    ann.unansweredRequests shouldBe 3
   }
 
   it should "stop timing out a request once its hash is delivered" taggedAs UnitTest in {
@@ -174,4 +177,5 @@ class TxGossipTrackingSpec extends AnyFlatSpec with Matchers:
     clock.now = 1.minute.toMillis
     ann.timedOut() shouldBe empty
     ann.removePeer(peerB) shouldBe empty
+    ann.unansweredRequests shouldBe 0 // a delivered hash's request did not go unanswered
   }

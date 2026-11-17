@@ -29,7 +29,7 @@ Fukuii is a full EVM execution layer implementation that:
 - **Executes the EVM**: Runs the Ethereum Virtual Machine with support for the full current EIP set (base fee, blob transactions, withdrawals, beacon root, execution requests, transient storage) and the full ETC fork schedule
 - **Synchronizes with the network**: SNAP / fast / regular sync over devp2p for PoW chains; optimistic block import via Engine API `engine_newPayload` for PoS chains
 - **Supports pluggable consensus**: Ethash PoW for ETC mainnet and Mordor; Engine API-driven PoS for Ethereum mainnet and Sepolia; architected for future PoA, OP-style derivation, ZK verification, and checkpoint-based sidechains
-- **Provides JSON-RPC API**: Exposes standard Ethereum JSON-RPC (`eth_*`, `net_*`, `web3_*`, `debug_*`, `trace_*`, `admin_*`, `txpool_*`, `personal_*`) plus the Engine API (`engine_*` on JWT-authenticated authrpc, default port 8551) and MCP 2025-11-25 for agentic AI control
+- **Provides JSON-RPC API**: Exposes standard Ethereum JSON-RPC (`eth_*`, `net_*`, `web3_*`, `debug_*`, `trace_*`, `admin_*`, `txpool_*`, `personal_*`; HTTP and WebSocket serve only `eth`, `net`, `web3` and `fukuii` until you opt in, IPC serves all of them) plus the Engine API (`engine_*` on JWT-authenticated authrpc, default port 8551) and MCP 2025-11-25 for agentic AI control
 - **Manages peer connections**: Discovers, connects to, and communicates with other nodes via RLPx over devp2p, with current ETH wire protocol and SNAP capability support
 
 ### Supported Networks

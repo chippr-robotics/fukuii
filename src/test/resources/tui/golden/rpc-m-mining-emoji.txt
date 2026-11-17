@@ -1,0 +1,40 @@
+ ◆ FUKUII  etc (61) · PoW · head 21,884,102 · 41/50 peers · up 12d 7h                                               RPC 
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+ ✓ no alerts                                                                                                            
+                  │ Peers   41/50 ◆◆◆◆◆◆◆◆◆◆  Block  21,884,102 (at head)                    Txpool  142                
+                  │ Sync    ✓ at head                                                                                   
+                  │─────────────────────────────────────────────────────────────────────────────────────────────────────
+                  │ HTTP    listening · 127.0.0.1:8546 · no authentication · 121,340 calls · 241 failed                 
+       ETC        │ WS      off                                                                                         
+                  │ IPC     listening · /var/lib/fukuii/etc/fukuii.ipc · restricted to the socket file's owner          
+                  │ Limit   off                                                                                         
+                  │─────────────────────────────────────────────────────────────────────────────────────────────────────
+ etc              │ Mining  on · coinbase 0x4f2a0b9c…c91e · DAG epoch 364 ✓ loaded                                      
+ PoW · id 61      │   Hashrate 48.2 MH/s · blocks mined 3 (last 2h 14m ago) · stale 0 · getWork 1,204 (20/min)          
+ main network     │   Rate     ▅▆▆▇▆▆▇▆▇▇▆▇▆▆▇▇▇▇▇▇▇▇▇▇█▇▇█▇▇█▇██▇█▇██▇█▇▇  now 48.2 MH/s · highest 65.1 MH/s in 9m 55s 
+                  │   Work     ▆▇█▇█▇█▇▇█▇█▇█▇▇▆█▆█▇█▇▇█▇█▇█▇▇█▇█▇█▇▇▆█▇█▇█▇▇█▇█  now 20/min · highest 31/min in 9m 55s 
+ [1] Overview     │─────────────────────────────────────────────────────────────────────────────────────────────────────
+ [2] Chain        │ Methods 8 called · 121,568 calls · 245 failed · slowest at p99 eth_getLogs 1.24 s                   
+ [3] Peers        │   method                      calls   failed       p50       p95       p99         last             
+ [4] Mempool      │   eth_blockNumber            91,204        0   0.31 ms   0.84 ms   2.10 ms       1s ago             
+ [5] RPC          │   eth_getBalance             18,422        3   1.90 ms   6.20 ms   14.8 ms       2s ago             
+ [6] Storage      │   eth_call                    9,310      212   8.40 ms   41.0 ms    212 ms       2s ago             
+ [7] System       │   eth_getLogs                 1,204       17   96.0 ms    840 ms    1.24 s      40s ago             
+ [8] Logs         │   eth_getBlockByNumber          880        0   2.40 ms   9.10 ms   31.0 ms       5s ago             
+ [9] Ops          │   eth_chainId                   412        0   0.12 ms   0.20 ms   0.41 ms   3m 10s ago             
+                  │   eth_sendRawTransaction         96        4   3.10 ms   12.0 ms   28.0 ms   1m 15s ago             
+ graphics text    │   net_version                    31        0  <0.10 ms   0.14 ms   0.20 ms    1h 1m ago             
+                  │   (no such method)                9        9  <0.10 ms  <0.10 ms   0.17 ms    1d 0h ago             
+                  │                                                                                                     
+                  │                                                                                                     
+                  │                                                                                                     
+                  │                                                                                                     
+                  │                                                                                                     
+                  │                                                                                                     
+                  │                                                                                                     
+                  │                                                                                                     
+                  │                                                                                                     
+                  │                                                                                                     
+                  │                                                                                                     
+                  │                                                                                                     
+ 1-9 view  Enter open  Esc back  : prompt  / filter  ? help  p pause  r redraw  d detach  q quit                        

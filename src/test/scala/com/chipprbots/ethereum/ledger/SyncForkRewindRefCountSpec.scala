@@ -77,6 +77,7 @@ class SyncForkRewindRefCountSpec extends AnyFlatSpec with Matchers:
         with Storages.DefaultStorages
         with com.chipprbots.ethereum.TestInstanceConfigProvider
     val bs = comp.storages
+    bs.appStateStorage.markRefCountsExact().commit() // #1692: a fresh datadir, as the genesis load stamps it
     val reader: BlockchainReader = BlockchainReader(bs)
     val writer: BlockchainWriter = BlockchainWriter(bs)
 
@@ -112,7 +113,7 @@ class SyncForkRewindRefCountSpec extends AnyFlatSpec with Matchers:
       bs.chainWeightStorage,
       bs.transactionMappingStorage,
       bs.appStateStorage,
-      new ReferenceCountedStateStorage(bs.nodeStorage, history),
+      new ReferenceCountedStateStorage(bs.nodeStorage, history, nodesMayBeDeleted = () => true),
       reader
     )
     val reorgConsensus = new ConsensusImpl(reader, writer, new SimExecution(chain), reorgState = chain)

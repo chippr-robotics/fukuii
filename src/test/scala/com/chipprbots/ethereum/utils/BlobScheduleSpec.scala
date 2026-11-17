@@ -61,7 +61,7 @@ class BlobScheduleSpec extends AnyFlatSpec with Matchers:
   "the shipped mainnet, Sepolia and Platåberget chain confs" should "resolve to the pre-#1637 blob parameters at every fork boundary" taggedAs (
     UnitTest
   ) in {
-    Seq("eth", "sepolia", "plataberget").foreach { name =>
+    Seq("eth", "sepolia", "plataberget", "hoodi").foreach { name =>
       val c = shippedChain(name)
       c.blobSchedule shouldBe BlobSchedule.GethDefaults
       assertLegacyEquivalent(name, c)
@@ -80,6 +80,17 @@ class BlobScheduleSpec extends AnyFlatSpec with Matchers:
     sepolia.blobParamsAt(Timestamp(1761017184L)) shouldBe Some(BlobParams(10, 15, BigInt(8346193)))
     sepolia.blobParamsAt(Timestamp(1761607008L)) shouldBe Some(BlobParams(14, 21, BigInt(11684671)))
     sepolia.blobParamsAt(Timestamp(1791294816L)) shouldBe Some(BlobParams(14, 21, BigInt(11684671))) // Amsterdam
+  }
+
+  they should "give Hoodi the same schedule as Sepolia at Hoodi's own fork timestamps" taggedAs (UnitTest) in {
+    // go-ethereum params.HoodiChainConfig / eth-clients/hoodi genesis blobSchedule: byte-identical to Sepolia's.
+    val hoodi = shippedChain("hoodi")
+    hoodi.blobSchedule shouldBe shippedChain("sepolia").blobSchedule
+    hoodi.blobParamsAt(Timestamp(1742212800L)) shouldBe Some(BlobParams(3, 6, BigInt(3338477))) // genesis, Cancun
+    hoodi.blobParamsAt(Timestamp(1742999832L)) shouldBe Some(BlobParams(6, 9, BigInt(5007716))) // Prague
+    hoodi.blobParamsAt(Timestamp(1761677592L)) shouldBe Some(BlobParams(6, 9, BigInt(5007716))) // Osaka inherits
+    hoodi.blobParamsAt(Timestamp(1762365720L)) shouldBe Some(BlobParams(10, 15, BigInt(8346193))) // BPO1
+    hoodi.blobParamsAt(Timestamp(1762955544L)) shouldBe Some(BlobParams(14, 21, BigInt(11684671))) // BPO2
   }
 
   "the shipped hive chain conf" should "resolve to the pre-#1637 values under any fork schedule hive can set" taggedAs (

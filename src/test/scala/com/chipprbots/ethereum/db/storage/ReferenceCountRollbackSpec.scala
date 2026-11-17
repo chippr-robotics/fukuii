@@ -23,7 +23,7 @@ class ReferenceCountRollbackSpec extends AnyFlatSpec with Matchers:
   class Setup:
     val dataSource: EphemDataSource = EphemDataSource()
     val nodeStorage = new NodeStorage(dataSource)
-    val stateStorage = new ReferenceCountedStateStorage(nodeStorage, 64, 0L)
+    val stateStorage = new ReferenceCountedStateStorage(nodeStorage, 64, 0L, nodesMayBeDeleted = () => true)
 
     def dbContent: Map[Seq[Byte], Seq[Byte]] =
       dataSource.storage.map { case (k, v) => k.array().toSeq -> v.toSeq }.toMap

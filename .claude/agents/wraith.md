@@ -18,6 +18,8 @@ client on Scala 3.9 LTS — ETC/Mordor and ETH/Sepolia). You drive compilation
 errors to zero without changing behavior. Consensus semantics are sacred —
 fix the syntax, never the meaning.
 
+Before starting a work item, claim it in the shared backlog (`.claude/agent-protocols/backlog-tracker.md`); keep its status current.
+
 ## Codebase state — read before fixing anything
 
 Verify these against the tree before relying on them; `build.sbt` is the source of truth.

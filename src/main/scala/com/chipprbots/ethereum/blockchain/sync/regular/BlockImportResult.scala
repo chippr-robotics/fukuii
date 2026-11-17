@@ -2,6 +2,7 @@ package com.chipprbots.ethereum.blockchain.sync.regular
 
 import org.apache.pekko.util.ByteString
 
+import com.chipprbots.ethereum.db.storage.pathstate.StateFault
 import com.chipprbots.ethereum.domain.Block
 import com.chipprbots.ethereum.domain.ChainWeight
 import com.chipprbots.ethereum.ledger.BlockData
@@ -45,5 +46,15 @@ final class BlockImportFailedAt(message: String, val failingBlockHash: ByteStrin
   */
 case class BlockImportFailedDueToMissingNode(reason: MissingNodeException, imported: List[BlockData] = Nil)
     extends BlockImportResult
+
+/** This node's own state could not take a block of the batch (spec 018 Track C, C4b): see
+  * [[com.chipprbots.ethereum.consensus.Consensus.ConsensusStateFault]]. `imported` is the prefix that was adopted
+  * before it and is accounted for like any imported blocks; the blocks after it were not judged and are tried again.
+  *
+  * A result of its own and no [[BlockImportFailed]]: a failed import is a strike against the block and, in the end,
+  * against the peer that sent it, and a fault of this node's state must reach neither. Being a case of its own, every
+  * place that tells the results apart has to say what it does with it.
+  */
+case class BlockImportStateFault(fault: StateFault, imported: List[BlockData] = Nil) extends BlockImportResult
 
 case object UnknownParent extends BlockImportResult

@@ -42,6 +42,14 @@ import com.chipprbots.ethereum.transactions.TransactionPicker
 
 object EthMiningService:
 
+  /** What `eth_getWork` answers while the head is moved and no block could be built on a settled one (spec 018 B-293):
+    * geth's and core-geth's words for work not there yet, which pool software takes as passing.
+    */
+  val NoWorkYet: String = "no mining work available yet"
+
+  /** How long `eth_getWork` waits for a move of the head to end: pools ask again within a second or so (forge). */
+  val WorkSettleWaitMillis: Long = 1000L
+
   case class GetMiningRequest()
   case class GetMiningResponse(isMining: Boolean)
 
@@ -109,44 +117,66 @@ class EthMiningService(
       GetMiningResponse(isMining)
     }
 
-  def getWork(@unused req: GetWorkRequest): ServiceResponse[GetWorkResponse] =
+  // The work is built on the head read under its generation (spec 018 B-293): on the unified layout a move of the head
+  // in place steps it through blocks it may not stay on, and work built on one of them would be wasted.
+  private val settledHead =
+    new com.chipprbots.ethereum.consensus.pow.miners.SettledHeadBuild(
+      blockchainReader,
+      EthMiningService.WorkSettleWaitMillis,
+      com.chipprbots.ethereum.consensus.pow.miners.SettledHeadBuild.Builds
+    )
+
+  def getWork(req: GetWorkRequest): ServiceResponse[GetWorkResponse] = workFor(req)
+
+  def submitWork(req: SubmitWorkRequest): ServiceResponse[SubmitWorkResponse] = workSubmitted(req)
+
+  private def workFor(@unused req: GetWorkRequest): ServiceResponse[GetWorkResponse] =
     mining.ifEthash { ethash =>
       PoWMiningMetrics.recordGetWork()
       reportActive()
-      blockchainReader.getBestBlock match
-        case Some(block) =>
-          (getOmmersFromPool(block.hash.value), getTransactionsFromPool).parMapN { case (ommers, pendingTxs) =>
-            val blockGenerator = ethash.blockGenerator
-            val PendingBlockAndState(pb, _) = blockGenerator.generateBlock(
-              block,
-              pendingTxs.pendingTransactions.map(_.stx.tx),
-              coinbaseProvider.get(),
-              ommers.headers,
-              None
+      // the ommers and the transactions are those of the parent the build is made on (forge)
+      settledHead { parent =>
+        (getOmmersFromPool(parent.hash.value), getTransactionsFromPool).parMapN { case (ommers, pendingTxs) =>
+          ethash.blockGenerator.generateBlock(
+            parent,
+            pendingTxs.pendingTransactions.map(_.stx.tx),
+            coinbaseProvider.get(),
+            ommers.headers,
+            None
+          )
+        }
+      }.map {
+        case Left(why) =>
+          log.info("No work is given: {}", why)
+          Left(JsonRpcError.LogicError(EthMiningService.NoWorkYet))
+        case Right((_, PendingBlockAndState(pb, _))) =>
+          val powHeaderHash = ByteString(kec256(BlockHeader.getEncodedWithoutNonce(pb.block.header)))
+          val dagSeed = EthashUtils
+            .seed(
+              pb.block.header.number.value.toLong,
+              blockchainConfig.forkBlockNumbers.ecip1099BlockNumber.toLong
             )
-            val powHeaderHash = ByteString(kec256(BlockHeader.getEncodedWithoutNonce(pb.block.header)))
-            val dagSeed = EthashUtils
-              .seed(
-                pb.block.header.number.value.toLong,
-                blockchainConfig.forkBlockNumbers.ecip1099BlockNumber.toLong
-              )
-            val target = ByteString((BigInt(2).pow(256) / pb.block.header.difficulty.value).toByteArray)
-            val blockNumber = pb.block.header.number.value
-            val workResponse = GetWorkResponse(powHeaderHash, dagSeed, target, blockNumber)
-            val notifyUrls = ethash.config.generic.notifyUrls
-            if notifyUrls.nonEmpty then
-              WorkNotifier.notify(
-                notifyUrls,
-                WorkNotifier.WorkPackage(powHeaderHash, dagSeed, target, blockNumber)
-              )(using system)
-            Right(workResponse)
-          }
-        case None =>
+          val target = ByteString((BigInt(2).pow(256) / pb.block.header.difficulty.value).toByteArray)
+          val blockNumber = pb.block.header.number.value
+          val workResponse = GetWorkResponse(powHeaderHash, dagSeed, target, blockNumber)
+          // only for work that is kept
+          val notifyUrls = ethash.config.generic.notifyUrls
+          if notifyUrls.nonEmpty then
+            WorkNotifier.notify(
+              notifyUrls,
+              WorkNotifier.WorkPackage(powHeaderHash, dagSeed, target, blockNumber)
+            )(using system)
+          Right(workResponse)
+      }.handleErrorWith {
+        // only the missing best block (forge): another fault of the build is raised as it was
+        case _: com.chipprbots.ethereum.consensus.pow.miners.SettledHeadBuild.NoBestBlock =>
           log.error("Getting current best block failed")
           IO.pure(Left(JsonRpcError.InternalError))
+        case other => IO.raiseError(other)
+      }
     }(IO.pure(Left(JsonRpcError.MiningIsNotEthash)))
 
-  def submitWork(req: SubmitWorkRequest): ServiceResponse[SubmitWorkResponse] =
+  private def workSubmitted(req: SubmitWorkRequest): ServiceResponse[SubmitWorkResponse] =
     mining.ifEthash[ServiceResponse[SubmitWorkResponse]] { ethash =>
       reportActive()
       IO {
@@ -250,7 +280,7 @@ class EthMiningService(
   def setEtherbase(req: SetEtherbaseRequest): ServiceResponse[SetEtherbaseResponse] =
     ifEthash(req) { request =>
       coinbaseProvider.update(request.address)
-      log.info("Updated miner coinbase via eth_setEtherbase to {}", request.address)
+      log.info("Updated miner coinbase to {}", request.address)
       SetEtherbaseResponse(success = true)
     }
 

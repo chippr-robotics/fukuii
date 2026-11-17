@@ -48,17 +48,18 @@ class InstanceConfig(val config: TypesafeConfig, val instanceId: String = "defau
   val networkProtocols: NetworkProtocolConfig =
     NetworkProtocolConfig.fromConfig(config.getConfig("network.protocols"))
 
-  val supportedCapabilities: List[Capability] =
-    val p = networkProtocols
-    List(
-      Option.when(p.eth68)(Capability.ETH68),
-      Option.when(p.eth69)(Capability.ETH69),
-      Option.when(p.eth70)(Capability.ETH70),
-      Option.when(p.eth71)(Capability.ETH71),
-      Option.when(p.eth72)(Capability.ETH72),
-      Option.when(p.snap1)(Capability.SNAP1),
-      Option.when(p.snap2)(Capability.SNAP2)
-    ).flatten
+  /** `state.path-live`, the in-development guard of the unified state layout (spec 018 Track C), as this instance has
+    * it. The instance's storages are built from the same value (`StorageBuilder`), so what a node advertises follows
+    * what its storage can serve.
+    */
+  val statePathLive: Boolean = config.hasPath("state.path-live") && config.getBoolean("state.path-live")
+
+  /** SNAP is advertised with the guard on too, since spec 018 C5a part 10 (the user's decision of 2026-11-17, which
+    * ends that of 2026-11-11 as it said it would): the node follows the network's head from the hand-off, so the roots
+    * a syncing peer asks about are its own, and the position store serves the roots of the blocks behind its head (spec
+    * 018 C4a). The capability is mutual: a node that did not advertise it could not sync by SNAP either.
+    */
+  val supportedCapabilities: List[Capability] = networkProtocols.capabilities()
 
   // Startup validation — runs at construction; warns on misconfigured combinations but does not abort.
   locally {

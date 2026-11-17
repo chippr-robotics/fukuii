@@ -4,7 +4,8 @@ import com.chipprbots.ethereum.domain.Address
 
 /** eth_simulateV1's per-call execution overrides, as `EthSimulateService` hands them to
   * [[BlockPreparator.executeTransactionForSimulation]]:
-  *   - `precompileRelocations`: the `movePrecompileToAddress` state overrides, source address to new address;
+  *   - `precompileRelocations`: the precompiles the state overrides moved or deleted, keyed by the precompile's own
+  *     address: `a -> t` moves it to `t`, and `a -> a` deletes it (it answers nowhere);
   *   - `traceTransfers`: every value transfer also emits a synthetic Transfer log;
   *   - `blobBaseFeeOverride`: `blockOverrides.blobBaseFee`, the blob gas price the sender is charged;
   *   - `skipExecutionGasCap`: `validation` is off, so on an Amsterdam block the whole gas limit is execution gas, not

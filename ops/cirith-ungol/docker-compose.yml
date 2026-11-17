@@ -20,8 +20,9 @@ services:
     networks:
       - fukuii-cirith-ungol
     ports:
-      - "18545:8545"
-      - "18546:8546"
+      # JSON-RPC on the host's loopback only
+      - "127.0.0.1:18545:8545"
+      - "127.0.0.1:18546:8546"
       - "30304:30304/tcp"
       - "30304:30304/udp"
     volumes:
@@ -68,10 +69,10 @@ services:
     # depends_on:
     #   - coregeth
     ports:
-      # JSON-RPC HTTP (offset to avoid Barad-dûr conflict on 8545)
-      - "8553:8545"
-      # JSON-RPC WebSocket (offset to avoid Barad-dûr conflict on 8546)
-      - "8552:8546"
+      # JSON-RPC HTTP on the host's loopback (offset to avoid Barad-dûr conflict on 8545)
+      - "127.0.0.1:8553:8545"
+      # JSON-RPC WebSocket on the host's loopback (offset to avoid Barad-dûr conflict on 8546)
+      - "127.0.0.1:8552:8546"
       # P2P networking — TCP + UDP on same port (standard geth convention)
       - "30305:30303/tcp"
       - "30305:30303/udp"

@@ -457,8 +457,9 @@ sudo systemctl stop fukuii
 sudo systemctl start fukuii
 ```
 
-Online, from a running node (geth-compatible `admin_exportChain(file, first?, last?)`; the `admin` API must be
-enabled):
+Online, from a running node (geth-compatible `admin_exportChain(file, first?, last?)`; the `admin` namespace must be
+enabled for the transport you call: it is on by default over IPC and off over HTTP and WebSocket, where you opt in with
+`fukuii.network.rpc.http.apis = "eth,net,web3,fukuii,admin"`):
 
 ```bash
 curl -s -X POST -H 'Content-Type: application/json' localhost:8546 \

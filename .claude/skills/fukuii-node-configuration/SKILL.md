@@ -22,7 +22,7 @@ Read `../CONVENTIONS.md` first. Almost every config change needs a restart → �
 ## Config model
 - HOCON, layered: base fragments in `src/main/resources/conf/base/*.conf`
   (`network.conf`, `sync.conf`, `mining.conf`, `db.conf`, …) composed per network
-  (`etc.conf`, `mordor.conf`, `sepolia.conf`, …). Operators override via their own
+  (`etc.conf`, `mordor.conf`, `sepolia.conf`, `hoodi.conf`, …). Operators override via their own
   `conf/fukuii.conf` and `-Dconfig.file=`.
 - Templates worth reading: `conf/enterprise-template.conf`,
   `src/universal/custom-config-example.conf`.
@@ -30,7 +30,7 @@ Read `../CONVENTIONS.md` first. Almost every config change needs a restart → �
 ## High-value keys (verified)
 | Concern | Key(s) |
 | :-- | :-- |
-| RPC namespaces | `network.rpc.apis` (default `eth,web3,net,personal,fukuii,debug,qa,admin`; add `mcp` for MCP tools) |
+| RPC namespaces | `network.rpc.http.apis`, `network.rpc.ws.apis`, `network.rpc.ipc.apis`; each falls back to `network.rpc.apis`. Defaults: HTTP and WebSocket `eth,net,web3,fukuii`; IPC `eth,net,web3,fukuii,personal,debug,admin,miner,txpool,trace`. `personal`, `debug`, `admin`, `miner`, `qa`, `txpool`, `trace` and `mcp` are opt-in over HTTP (🟡 config change; a warning is logged at startup when a sensitive one is enabled on a non-loopback HTTP/WS endpoint) |
 | RPC bind/port | `network.rpc.http.{interface,port,mode}` (default `localhost:8546`, `http`) |
 | Sync strategy | `sync.do-snap-sync`: SNAP when true, regular sync from genesis when false (ETC/Mordor — EL manages sync directly). Fast sync was removed; `do-fast-sync` is ignored with a warning |
 | Rapid sync | `sync.checkpoint-sync-file` / `-url` (→ `fukuii-checkpoint-service`; ETC/Mordor only) |

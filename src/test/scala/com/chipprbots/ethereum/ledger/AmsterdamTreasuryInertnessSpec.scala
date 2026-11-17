@@ -20,7 +20,7 @@ import com.chipprbots.ethereum.vm.EvmConfig
 
 /** T036 — ECIP-1111's treasury credit, asserted inert under Amsterdam rather than argued inert.
   *
-  * `BlockPreparator.creditBaseFeeToTreasury` computes `baseFee * blockHeader.gasUsed`. Under EIP-8037 that header field
+  * `BlockRewards.creditBaseFeeToTreasury` computes `baseFee * blockHeader.gasUsed`. Under EIP-8037 that header field
   * stops being a total and becomes `max(block_execution_gas_used, block_state_gas_used)`, so on an Amsterdam block the
   * treasury would be credited against the bottleneck dimension rather than the gas the senders actually paid. ETC never
   * activates Amsterdam, so this cannot happen — but "cannot happen" is exactly the reasoning that let the EIP-1559

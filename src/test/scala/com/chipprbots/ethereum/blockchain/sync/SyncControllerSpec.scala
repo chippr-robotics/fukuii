@@ -551,6 +551,93 @@ class SyncControllerSpec
     }
   }
 
+  // B-304: a sample that keeps stopping the hand-off restarts SNAP twice, and the third time the controller stops.
+  it should "restart SNAP for the hand-off's first two samples that stop it, and stop on the third" taggedAs (
+    UnitTest,
+    SyncTest
+  ) in withRecoveryTestSetup() { testSetup =>
+    import testSetup.*
+    import com.chipprbots.ethereum.db.storage.PathHandoffSample
+    val appState = storagesInstance.storages.appStateStorage
+    syncController ! SyncController.WrappedSyncProtocol(SyncProtocol.Start)
+    def snapChild(): String =
+      eventually {
+        someTimePasses()
+        syncController.children.find(_.path.name.startsWith("snap-sync")).get.path.name
+      }
+    var current = snapChild()
+    val counts = PathHandoffSample.Result(sampledAccountLeaves = 4096, sampledMissing = 3)
+    def sampleStopped(): Unit =
+      syncController ! SyncController.WrappedSyncProtocol(
+        SyncProtocol.HandoffSampleStopped(PathHandoffSample.StopReason.StorageHole, counts, BigInt(4000))
+      )
+
+    (1 to 2).foreach { n =>
+      appState.snapSyncDone().commit()
+      val warnings = syncControllerLogsDuring(ch.qos.logback.classic.Level.WARN)(sampleStopped())
+      withClue(s"sample $n: ")(
+        warnings.exists(_.contains(s"$n of 3 since the last hand-off: restarting SNAP")) shouldBe true
+      )
+      // restarted as for HealingImpossible: the done flag cleared and a SNAP of the next generation
+      appState.isSnapSyncDone() shouldBe false
+      val next = eventually {
+        someTimePasses()
+        val name = snapChild()
+        name should not be current
+        name
+      }
+      current = next
+    }
+
+    val watcher = TestProbe()(using system)
+    watcher.watch(syncController)
+    val errors = syncControllerErrorsDuring(sampleStopped())
+    errors.exists(e => e.contains("3 times since the last hand-off") && e.contains(counts.describe)) shouldBe true
+    watcher.expectTerminated(syncController)
+  }
+
+  // B-304: the count is of samples since the last hand-off
+  it should "count the hand-off's samples again from one after a hand-off was made" taggedAs (
+    UnitTest,
+    SyncTest
+  ) in withRecoveryTestSetup() { testSetup =>
+    import testSetup.*
+    import com.chipprbots.ethereum.db.storage.PathHandoffSample
+    def sampleStopped(): List[String] =
+      syncControllerLogsDuring(ch.qos.logback.classic.Level.WARN) {
+        syncController ! SyncController.WrappedSyncProtocol(
+          SyncProtocol.HandoffSampleStopped(
+            PathHandoffSample.StopReason.AccountHole,
+            PathHandoffSample.Result(),
+            BigInt(4000)
+          )
+        )
+      }
+    def snapRunning(): Unit =
+      eventually {
+        someTimePasses()
+        assert(syncController.children.exists(_.path.name.startsWith("snap-sync")))
+      }
+    syncController ! SyncController.WrappedSyncProtocol(SyncProtocol.Start)
+    snapRunning()
+    sampleStopped().exists(_.contains("1 of 3 since the last hand-off")) shouldBe true
+    snapRunning()
+    sampleStopped().exists(_.contains("2 of 3 since the last hand-off")) shouldBe true
+    awaitSnapStarted(syncController)
+
+    // a hand-off, then a re-SNAP from regular sync: the next sample that stops it is the first in a row again
+    syncController ! SyncController.WrappedExternal(SNAPSyncController.SnapSyncFinalized(BigInt(1)))
+    regularSyncChild(testSetup)
+    val backfill = snapChildren(testSetup)
+    syncController ! SyncController.WrappedSyncProtocol(SyncProtocol.RegularSyncStuck(BigInt(500), "deadbeef"))
+    eventually {
+      someTimePasses()
+      assert((snapChildren(testSetup) -- backfill).nonEmpty)
+    }
+    sampleStopped().exists(_.contains("1 of 3 since the last hand-off")) shouldBe true
+    syncController.underlying.isTerminated shouldBe false
+  }
+
   it should "clear sync flags and restart SNAP with minPivotBlock when RegularSyncStuck is received (SC-4)" taggedAs (
     UnitTest,
     SyncTest
@@ -577,6 +664,803 @@ class SyncControllerSpec
       someTimePasses()
       assert(syncController.children.exists(_.path.name.startsWith("snap-sync")))
     }
+  }
+
+  // Spec 018 C5a part 7b: the state given up. The handler decides; the controller stops the import, clears the state
+  // with the record of why, counts it, and syncs again, with the pivot no lower than the refused branch's first block.
+  private class EscalationPort(answers: EscalationHandler.Outcome*) extends SyncController.StateEscalationPort:
+    import com.chipprbots.ethereum.db.storage.pathstate.EscalationKind
+    import com.chipprbots.ethereum.db.storage.pathstate.GivenUpBranch
+    import com.chipprbots.ethereum.db.storage.pathstate.StateEscalation
+    private val left = new java.util.concurrent.ConcurrentLinkedQueue[EscalationHandler.Outcome]()
+    answers.foreach(left.add)
+    val asked = new java.util.concurrent.atomic.AtomicInteger(0)
+    val cleared = new java.util.concurrent.ConcurrentLinkedQueue[(StateEscalation, Option[GivenUpBranch], Boolean)]()
+    val counted = new java.util.concurrent.ConcurrentLinkedQueue[EscalationKind]()
+    def decide(request: EscalationWatch.Request, nowMillis: Long): EscalationHandler.Outcome =
+      asked.incrementAndGet()
+      Option(left.poll()).getOrElse(EscalationHandler.Outcome.Repeated)
+    @volatile var clears = true
+    // held while a test looks at the controller in the middle of a clear
+    @volatile var holdTheClear: Option[java.util.concurrent.CountDownLatch] = None
+    @volatile var clearFails: Option[RuntimeException] = None
+    val clearThreads = new java.util.concurrent.ConcurrentLinkedQueue[String]()
+    def clear(record: StateEscalation, givenUpFor: Option[GivenUpBranch]): Boolean =
+      clearThreads.add(Thread.currentThread.getName)
+      holdTheClear.foreach(_.await(60, java.util.concurrent.TimeUnit.SECONDS))
+      clearFails.foreach(throw _)
+      cleared.add((record, givenUpFor, counted.isEmpty))
+      clears
+    def escalated(kind: EscalationKind): Unit = counted.add(kind)
+    val regularSyncStarts = new java.util.concurrent.atomic.AtomicInteger(0)
+    def regularSyncStarted(): Unit =
+      regularSyncStarts.incrementAndGet(); ()
+    val refusals = new java.util.concurrent.atomic.AtomicInteger(0)
+    def clearRefused(): Unit =
+      refusals.incrementAndGet(); ()
+    val branchRetries = new java.util.concurrent.atomic.AtomicInteger(0)
+    @volatile var branchRetryFails: Option[RuntimeException] = None
+    def clearForBranchRetry(): Boolean =
+      clearThreads.add(Thread.currentThread.getName)
+      branchRetries.incrementAndGet()
+      branchRetryFails.foreach(throw _)
+      true
+
+  private def escalationRequest: SyncProtocol.StateEscalationRequested =
+    SyncProtocol.StateEscalationRequested(
+      EscalationWatch.Request(
+        com.chipprbots.ethereum.db.storage.pathstate.EscalationKind.Unreachable,
+        None,
+        None,
+        "the heavier branch [4001-4050] cannot be reached"
+      )
+    )
+
+  it should "give the state up when the escalation's handler says so: clear, count, and SNAP again (C5a part 7b)" taggedAs (
+    UnitTest,
+    SyncTest
+  ) in withTestSetup() { testSetup =>
+    import testSetup.*
+    import com.chipprbots.ethereum.db.storage.pathstate.EscalationKind
+    import com.chipprbots.ethereum.db.storage.pathstate.GivenUpBranch
+    import com.chipprbots.ethereum.db.storage.pathstate.StateEscalation
+    val record =
+      StateEscalation(1763236800000L, EscalationKind.Unreachable, ByteString(Array.fill[Byte](32)(0x21)), 4001)
+    val branch = GivenUpBranch(4001, record.headHash)
+    val port =
+      new EscalationPort(EscalationHandler.Outcome.Escalate(record, Some(branch), "a branch cannot be reached"))
+    stateEscalation = Some(port)
+    storagesInstance.storages.appStateStorage.fastSyncDone().commit()
+    syncController ! SyncController.WrappedSyncProtocol(SyncProtocol.Start)
+    regularSyncChild(testSetup)
+    val before = snapChildren(testSetup)
+
+    val errors = syncControllerErrorsDuring {
+      syncController ! SyncController.WrappedSyncProtocol(escalationRequest)
+      eventually {
+        someTimePasses()
+        assert((snapChildren(testSetup) -- before).nonEmpty)
+      }
+    }
+    // cleared once, with the record and the branch, and counted after the clear
+    port.cleared.toArray.toList shouldBe List((record, Some(branch), true))
+    port.counted.toArray.toList shouldBe List(EscalationKind.Unreachable)
+    errors.exists(_.contains("[STATE-ESCALATION]")) shouldBe true
+    // a verdict told again while the sync runs is not asked about: the state is being synced
+    syncController ! SyncController.WrappedSyncProtocol(escalationRequest)
+    someTimePasses()
+    port.asked.get() shouldBe 1
+    port.cleared.size() shouldBe 1
+  }
+
+  // B-307 (c): the sync after an escalation for a branch found another chain's headers under its pivot
+  it should "stop a SNAP sync that is off the branch its pivot is to be on, clear what it wrote, and SNAP again" taggedAs (
+    UnitTest,
+    SyncTest
+  ) in withTestSetup() { testSetup =>
+    import testSetup.*
+    import com.chipprbots.ethereum.db.storage.pathstate.EscalationKind
+    import com.chipprbots.ethereum.db.storage.pathstate.GivenUpBranch
+    import com.chipprbots.ethereum.db.storage.pathstate.StateEscalation
+    val record =
+      StateEscalation(1763236800000L, EscalationKind.Unreachable, ByteString(Array.fill[Byte](32)(0x21)), 4001)
+    val port = new EscalationPort(
+      EscalationHandler.Outcome
+        .Escalate(record, Some(GivenUpBranch(4001, record.headHash)), "a branch cannot be reached")
+    )
+    stateEscalation = Some(port)
+    storagesInstance.storages.appStateStorage.fastSyncDone().commit()
+    syncController ! SyncController.WrappedSyncProtocol(SyncProtocol.Start)
+    regularSyncChild(testSetup)
+    val before = snapChildren(testSetup)
+    syncController ! SyncController.WrappedSyncProtocol(escalationRequest)
+    eventually {
+      someTimePasses()
+      assert((snapChildren(testSetup) -- before).nonEmpty)
+    }
+    val first = snapChildren(testSetup)
+
+    // the requirement the clear of the escalation wrote down: the floor of every sync until one hands off
+    storagesInstance.storages.appStateStorage
+      .putPivotOnBranch(com.chipprbots.ethereum.db.storage.pathstate.PivotOnBranch(4001, record.headHash))
+      .commit()
+    val said = syncControllerLogsDuring(ch.qos.logback.classic.Level.INFO) {
+      syncController ! SyncController.WrappedSyncProtocol(SyncProtocol.PivotOffTheBranch)
+      eventually {
+        someTimePasses()
+        port.branchRetries.get() shouldBe 1
+        // the sync that was off the branch is gone, and another runs
+        assert((snapChildren(testSetup) -- first).nonEmpty)
+        assert((snapChildren(testSetup) & first).isEmpty)
+      }
+    }
+    // begun again with its pivot no lower than the branch's first block
+    said.exists(_.contains("MinPivotBlock(4001)")) shouldBe true
+    // off the controller's thread, as the clear of the escalation; and no second escalation is counted or recorded
+    port.clearThreads.toArray.toList.map(_.toString).exists(_.contains("blocking")) shouldBe true
+    port.cleared.size() shouldBe 1
+    port.counted.size() shouldBe 1
+  }
+
+  // B-307: a recovery of the state that is still executing a block keeps the clear from beginning
+  it should "go on with regular sync, and count nothing, when the state could not be cleared (C5a part 7b)" taggedAs (
+    UnitTest,
+    SyncTest
+  ) in withTestSetup() { testSetup =>
+    import testSetup.*
+    import com.chipprbots.ethereum.db.storage.pathstate.EscalationKind
+    import com.chipprbots.ethereum.db.storage.pathstate.StateEscalation
+    val record = StateEscalation(1763236800000L, EscalationKind.LocalFault, ByteString(Array.fill[Byte](32)(5)), 7000)
+    val port = new EscalationPort(EscalationHandler.Outcome.Escalate(record, None, "a fault"))
+    port.clears = false
+    stateEscalation = Some(port)
+    storagesInstance.storages.appStateStorage.fastSyncDone().commit()
+    syncController ! SyncController.WrappedSyncProtocol(SyncProtocol.Start)
+    val running = regularSyncChild(testSetup)
+    val errors = syncControllerErrorsDuring {
+      syncController ! SyncController.WrappedSyncProtocol(escalationRequest)
+      eventually {
+        someTimePasses()
+        port.cleared.size() shouldBe 1
+      }
+    }
+    someTimePasses()
+    errors.exists(_.contains("was not cleared")) shouldBe true
+    port.counted.size() shouldBe 0
+    port.refusals.get() shouldBe 1
+    snapChildren(testSetup) shouldBe empty
+    regularSyncChild(testSetup) shouldBe running
+  }
+
+  // B-307 (forge): the clear waits for a move of the head, deletes ranges and writes synced: off the controller's thread
+  it should "clear off its own thread, answer meanwhile, and give up one state at a time (C5a part 7b)" taggedAs (
+    UnitTest,
+    SyncTest
+  ) in withTestSetup() { testSetup =>
+    import testSetup.*
+    import com.chipprbots.ethereum.db.storage.pathstate.EscalationKind
+    import com.chipprbots.ethereum.db.storage.pathstate.StateEscalation
+    val record = StateEscalation(1763236800000L, EscalationKind.LocalFault, ByteString(Array.fill[Byte](32)(5)), 7000)
+    val escalate = EscalationHandler.Outcome.Escalate(record, None, "a fault")
+    val port = new EscalationPort(escalate, escalate)
+    val release = new java.util.concurrent.CountDownLatch(1)
+    port.holdTheClear = Some(release)
+    stateEscalation = Some(port)
+    storagesInstance.storages.appStateStorage.fastSyncDone().commit()
+    syncController ! SyncController.WrappedSyncProtocol(SyncProtocol.Start)
+    val running = regularSyncChild(testSetup)
+    try
+      syncController ! SyncController.WrappedSyncProtocol(escalationRequest)
+      eventually {
+        someTimePasses()
+        port.clearThreads.size() shouldBe 1
+      }
+      // the clear is held: the controller is not, and the import is not stopped before the clear has ended
+      port.clearThreads.peek() should not be Thread.currentThread.getName
+      regularSyncChild(testSetup) shouldBe running
+      snapChildren(testSetup) shouldBe empty
+      // a second verdict meanwhile is not asked about
+      syncController ! SyncController.WrappedSyncProtocol(escalationRequest)
+      someTimePasses()
+      port.asked.get() shouldBe 1
+    finally release.countDown()
+    eventually {
+      someTimePasses()
+      assert(snapChildren(testSetup).nonEmpty)
+    }
+    port.cleared.size() shouldBe 1
+    port.counted.size() shouldBe 1
+  }
+
+  // beacon: what regular sync is told while the clear runs is told once; dropped, the sync that resumes never hears it
+  it should "hand on, when the clear could not begin, what arrived while it ran (C5a part 7b)" taggedAs (
+    UnitTest,
+    SyncTest
+  ) in withTestSetup() { testSetup =>
+    import testSetup.*
+    import com.chipprbots.ethereum.db.storage.pathstate.EscalationKind
+    import com.chipprbots.ethereum.db.storage.pathstate.StateEscalation
+    val record = StateEscalation(1763236800000L, EscalationKind.LocalFault, ByteString(Array.fill[Byte](32)(5)), 7000)
+    val port = new EscalationPort(EscalationHandler.Outcome.Escalate(record, None, "a fault"))
+    port.clears = false
+    val release = new java.util.concurrent.CountDownLatch(1)
+    port.holdTheClear = Some(release)
+    stateEscalation = Some(port)
+    storagesInstance.storages.appStateStorage.fastSyncDone().commit()
+    syncController ! SyncController.WrappedSyncProtocol(SyncProtocol.Start)
+    regularSyncChild(testSetup)
+    val before = snapChildren(testSetup)
+    try
+      syncController ! SyncController.WrappedSyncProtocol(escalationRequest)
+      eventually {
+        someTimePasses()
+        port.clearThreads.size() shouldBe 1
+      }
+      // a second verdict meanwhile is dropped, not kept for later: it is of the clear that is under way
+      syncController ! SyncController.WrappedSyncProtocol(escalationRequest)
+      // regular sync reports itself stuck while the clear is held: not acted on now, and not lost
+      syncController ! SyncController.WrappedSyncProtocol(SyncProtocol.RegularSyncStuck(BigInt(500), "deadbeef"))
+      someTimePasses()
+      snapChildren(testSetup) shouldBe before
+    finally release.countDown()
+    // the clear could not begin: regular sync goes on, and the report is acted on then (a re-SNAP)
+    eventually {
+      someTimePasses()
+      assert((snapChildren(testSetup) -- before).nonEmpty)
+    }
+    port.counted.size() shouldBe 0
+    port.refusals.get() shouldBe 1
+    port.asked.get() shouldBe 1
+  }
+
+  it should "stop, and start no sync, when the clear of the state fails (C5a part 7b)" taggedAs (
+    UnitTest,
+    SyncTest
+  ) in withTestSetup() { testSetup =>
+    import testSetup.*
+    import com.chipprbots.ethereum.db.storage.pathstate.EscalationKind
+    import com.chipprbots.ethereum.db.storage.pathstate.StateEscalation
+    val record = StateEscalation(1763236800000L, EscalationKind.LocalFault, ByteString(Array.fill[Byte](32)(5)), 7000)
+    val port = new EscalationPort(EscalationHandler.Outcome.Escalate(record, None, "a fault"))
+    port.clearFails = Some(new IllegalStateException("the disk is full"))
+    stateEscalation = Some(port)
+    storagesInstance.storages.appStateStorage.fastSyncDone().commit()
+    syncController ! SyncController.WrappedSyncProtocol(SyncProtocol.Start)
+    regularSyncChild(testSetup)
+    val errors = syncControllerErrorsDuring {
+      syncController ! SyncController.WrappedSyncProtocol(escalationRequest)
+      eventually {
+        someTimePasses()
+        port.clearThreads.size() shouldBe 1
+      }
+      eventually {
+        someTimePasses()
+        syncController.underlying.isTerminated shouldBe true
+      }
+    }
+    errors.exists(_.contains("The clear of the state failed")) shouldBe true
+    port.counted.size() shouldBe 0
+  }
+
+  // B-311: the import and the audit are stopped once the clear has ended, and the min pivot reaches the SNAP child
+  it should "stop regular sync and the audit when the clear has ended, and start SNAP no lower than the branch (B-311)" taggedAs (
+    UnitTest,
+    SyncTest
+  ) in withAuditOn() { testSetup =>
+    import testSetup.*
+    import com.chipprbots.ethereum.db.storage.pathstate.EscalationKind
+    import com.chipprbots.ethereum.db.storage.pathstate.GivenUpBranch
+    import com.chipprbots.ethereum.db.storage.pathstate.StateEscalation
+    val record =
+      StateEscalation(1763236800000L, EscalationKind.Unreachable, ByteString(Array.fill[Byte](32)(0x21)), 4001)
+    val port = new EscalationPort(
+      EscalationHandler.Outcome.Escalate(record, Some(GivenUpBranch(4001, record.headHash)), "a branch")
+    )
+    val release = new java.util.concurrent.CountDownLatch(1)
+    port.holdTheClear = Some(release)
+    stateEscalation = Some(port)
+    seedSnapDoneWithScannableRoot(testSetup)
+    syncController ! SyncController.WrappedSyncProtocol(SyncProtocol.Start)
+    val running = regularSyncChild(testSetup)
+    val audit = auditName(testSetup).getOrElse(fail("the audit is not running"))
+
+    val said = syncControllerLogsDuring(ch.qos.logback.classic.Level.INFO) {
+      try
+        syncController ! SyncController.WrappedSyncProtocol(escalationRequest)
+        eventually {
+          someTimePasses()
+          port.clearThreads.size() shouldBe 1
+        }
+        // not before the clear has ended: a clear that could not begin leaves them as they were
+        regularSyncChild(testSetup) shouldBe running
+        auditName(testSetup) shouldBe Some(audit)
+      finally release.countDown()
+      eventually {
+        someTimePasses()
+        assert(snapChildren(testSetup).nonEmpty)
+      }
+    }
+    childIsGone(testSetup, running)
+    childIsGone(testSetup, audit)
+    auditName(testSetup) shouldBe None
+    // the SNAP of the first escalation is told its pivot is no lower than the branch's first block
+    said.exists(_.contains("MinPivotBlock(4001)")) shouldBe true
+    port.counted.size() shouldBe 1
+  }
+
+  // B-311: a verdict that arrives while SNAP's backfill still runs stops the backfill, and is handed on to regular sync
+  it should "stop SNAP's backfill first, then give the state up, when the verdict arrives during the backfill (B-311)" taggedAs (
+    UnitTest,
+    SyncTest
+  ) in withRecoveryTestSetup() { testSetup =>
+    import testSetup.*
+    import com.chipprbots.ethereum.db.storage.pathstate.EscalationKind
+    import com.chipprbots.ethereum.db.storage.pathstate.StateEscalation
+    val record = StateEscalation(1763236800000L, EscalationKind.LocalFault, ByteString(Array.fill[Byte](32)(5)), 7000)
+    val port = new EscalationPort(EscalationHandler.Outcome.Escalate(record, None, "a fault"))
+    stateEscalation = Some(port)
+    syncController ! SyncController.WrappedSyncProtocol(SyncProtocol.Start)
+    awaitSnapStarted(syncController)
+    // SNAP hands over to regular sync and keeps running as the chain's backfill
+    syncController ! SyncController.WrappedExternal(SNAPSyncController.SnapSyncFinalized(BigInt(1)))
+    regularSyncChild(testSetup)
+    val backfill = snapChildren(testSetup)
+    backfill should not be empty
+
+    syncController ! SyncController.WrappedSyncProtocol(escalationRequest)
+    eventually {
+      someTimePasses()
+      port.cleared.size() shouldBe 1
+      // the backfill is gone, and the SNAP of the sync from scratch runs
+      assert((snapChildren(testSetup) & backfill).isEmpty)
+      assert(snapChildren(testSetup).nonEmpty)
+    }
+    port.asked.get() shouldBe 1
+    port.counted.size() shouldBe 1
+  }
+
+  // B-311: the clear that begins a sync again for the branch fails: the controller stops, as for the escalation's clear
+  it should "stop, and start no sync, when the clear for the branch's retry fails (B-311)" taggedAs (
+    UnitTest,
+    SyncTest
+  ) in withTestSetup() { testSetup =>
+    import testSetup.*
+    import com.chipprbots.ethereum.db.storage.pathstate.EscalationKind
+    import com.chipprbots.ethereum.db.storage.pathstate.GivenUpBranch
+    import com.chipprbots.ethereum.db.storage.pathstate.StateEscalation
+    val record =
+      StateEscalation(1763236800000L, EscalationKind.Unreachable, ByteString(Array.fill[Byte](32)(0x21)), 4001)
+    val port = new EscalationPort(
+      EscalationHandler.Outcome.Escalate(record, Some(GivenUpBranch(4001, record.headHash)), "a branch")
+    )
+    stateEscalation = Some(port)
+    storagesInstance.storages.appStateStorage.fastSyncDone().commit()
+    syncController ! SyncController.WrappedSyncProtocol(SyncProtocol.Start)
+    regularSyncChild(testSetup)
+    val before = snapChildren(testSetup)
+    syncController ! SyncController.WrappedSyncProtocol(escalationRequest)
+    eventually {
+      someTimePasses()
+      assert((snapChildren(testSetup) -- before).nonEmpty)
+    }
+    val first = snapChildren(testSetup)
+    port.branchRetryFails = Some(new IllegalStateException("the disk is full"))
+
+    val errors = syncControllerErrorsDuring {
+      syncController ! SyncController.WrappedSyncProtocol(SyncProtocol.PivotOffTheBranch)
+      eventually {
+        someTimePasses()
+        syncController.underlying.isTerminated shouldBe true
+      }
+    }
+    errors.exists(_.contains("[STATE-ESCALATION-PIVOT] The clear of the state failed")) shouldBe true
+    port.branchRetries.get() shouldBe 1
+    // no sync was begun over rows half cleared
+    (snapChildren(testSetup) -- first) shouldBe empty
+  }
+
+  it should "leave regular sync as it is when the handler does not say to give the state up (C5a part 7b)" taggedAs (
+    UnitTest,
+    SyncTest
+  ) in withTestSetup() { testSetup =>
+    import testSetup.*
+    val port = new EscalationPort(
+      EscalationHandler.Outcome.Suppressed,
+      EscalationHandler.Outcome.Dropped,
+      EscalationHandler.Outcome.Unreadable
+    )
+    stateEscalation = Some(port)
+    storagesInstance.storages.appStateStorage.fastSyncDone().commit()
+    syncController ! SyncController.WrappedSyncProtocol(SyncProtocol.Start)
+    val running = regularSyncChild(testSetup)
+    // the handler is told that regular sync began, so that what it answered before is forgotten
+    port.regularSyncStarts.get() shouldBe 1
+    (1 to 4).foreach(_ => syncController ! SyncController.WrappedSyncProtocol(escalationRequest))
+    someTimePasses()
+    port.asked.get() shouldBe 4
+    port.cleared.size() shouldBe 0
+    port.counted.size() shouldBe 0
+    snapChildren(testSetup) shouldBe empty
+    regularSyncChild(testSetup) shouldBe running
+  }
+
+  it should "drop a verdict to give the state up while it was not started (C5a part 7b)" taggedAs (
+    UnitTest,
+    SyncTest
+  ) in withTestSetup() { testSetup =>
+    import testSetup.*
+    val port = new EscalationPort(EscalationHandler.Outcome.Suppressed)
+    stateEscalation = Some(port)
+    syncController ! SyncController.WrappedSyncProtocol(escalationRequest)
+    someTimePasses()
+    port.asked.get() shouldBe 0
+    port.cleared.size() shouldBe 0
+    syncController.children.exists(_.path.name.startsWith("snap-sync")) shouldBe false
+  }
+
+  it should "drop a verdict to give the state up on the hash layout (C5a part 7b)" taggedAs (
+    UnitTest,
+    SyncTest
+  ) in withTestSetup() { testSetup =>
+    import testSetup.*
+    storagesInstance.storages.appStateStorage.fastSyncDone().commit()
+    syncController ! SyncController.WrappedSyncProtocol(SyncProtocol.Start)
+    val running = regularSyncChild(testSetup)
+    syncController ! SyncController.WrappedSyncProtocol(escalationRequest)
+    someTimePasses()
+    snapChildren(testSetup) shouldBe empty
+    regularSyncChild(testSetup) shouldBe running
+  }
+
+  // H3: a stored node no fetch repairs sent regular sync to SNAP, and the next SNAP back to the same node, with no cap.
+  // The first two re-SNAPs in a row with no block imported between them go at once, as before. From the third, regular
+  // sync keeps running (on ETC a stopped node imports nothing while it waits) and the re-SNAP is scheduled an hour on,
+  // doubling each time; an import meanwhile drops it.
+
+  // ── Spec 018 C5a part 10: a sync on the unified state layout ─────────────────────────────────────────────────────
+
+  /** What the port answers before SNAP, and what it was asked; the hand-off itself is never reached here. */
+  private class GuardPort(answers: SyncController.SnapStartOnGuard*) extends SyncController.PathLiveSyncPort:
+    val asked = new java.util.concurrent.atomic.AtomicInteger(0)
+    val askedOn = new java.util.concurrent.ConcurrentLinkedQueue[String]()
+    val handedOffs = new java.util.concurrent.atomic.AtomicInteger(0)
+    // no SNAP child here reaches its finalisation, the one reader of the hand-off
+    def handoff: com.chipprbots.ethereum.db.storage.pathstate.SyncHandoff = null
+    def beforeSnap(): SyncController.SnapStartOnGuard =
+      askedOn.add(Thread.currentThread.getName)
+      val n = asked.incrementAndGet()
+      answers(math.min(n, answers.size) - 1)
+    def handedOff(): Unit = handedOffs.incrementAndGet(): Unit
+
+  "On the unified state layout, SyncController" should "ask the port before SNAP, off its own thread, and begin SNAP when it says so" taggedAs (
+    UnitTest,
+    SyncTest
+  ) in withRecoveryTestSetup() { testSetup =>
+    import testSetup.*
+    val port = new GuardPort(SyncController.SnapStartOnGuard.Begin(clearedGenesis = true))
+    pathLiveSync = Some(port)
+    syncController ! SyncController.WrappedSyncProtocol(SyncProtocol.Start)
+    eventually {
+      someTimePasses()
+      assert(snapChildren(testSetup).nonEmpty)
+    }
+    port.asked.get() shouldBe 1
+    withClue("on the blocking dispatcher: ")((port.askedOn.peek() should not).include("sync-dispatcher"))
+  }
+
+  it should "run regular sync on the state that is held when the port refuses SNAP, and say so" taggedAs (
+    UnitTest,
+    SyncTest
+  ) in withRecoveryTestSetup() { testSetup =>
+    import testSetup.*
+    val port = new GuardPort(SyncController.SnapStartOnGuard.Refused("this node holds the state of block 9"))
+    pathLiveSync = Some(port)
+    val errors = syncControllerErrorsDuring {
+      syncController ! SyncController.WrappedSyncProtocol(SyncProtocol.Start)
+      regularSyncChild(testSetup)
+    }
+    snapChildren(testSetup) shouldBe empty
+    errors.exists(e => e.contains("[STATE-PATH-LIVE]") && e.contains("block 9")) shouldBe true
+  }
+
+  it should "not re-SNAP a regular sync that is stuck, and leave it running" taggedAs (UnitTest, SyncTest) in
+    withRecoveryTestSetup() { testSetup =>
+      import testSetup.*
+      val port = new GuardPort(SyncController.SnapStartOnGuard.Begin(clearedGenesis = false))
+      pathLiveSync = Some(port)
+      storagesInstance.storages.appStateStorage.fastSyncDone().commit()
+      syncController ! SyncController.WrappedSyncProtocol(SyncProtocol.Start)
+      val running = regularSyncChild(testSetup)
+      val errors = stuckReport(testSetup)
+      someTimePasses()
+      snapChildren(testSetup) shouldBe empty
+      port.asked.get() shouldBe 0
+      regularSyncChild(testSetup) shouldBe running
+      errors.exists(_.contains("no SNAP re-sync starts over the state that is held")) shouldBe true
+      storagesInstance.storages.appStateStorage.regularSyncStuckResnaps() shouldBe 0
+    }
+
+  it should "go to regular sync after a sync that is done, with no recovery scan, no audit and no bulk code recovery" taggedAs (
+    UnitTest,
+    SyncTest
+  ) in withRecoveryTestSetup() { testSetup =>
+    import testSetup.*
+    pathLiveSync = Some(new GuardPort(SyncController.SnapStartOnGuard.Begin(clearedGenesis = false)))
+    // a recovery flag down: on the hash layout the start runs the scan (the case above)
+    seedSnapDoneWithScannableRoot(testSetup)
+    syncController ! SyncController.WrappedSyncProtocol(SyncProtocol.Start)
+    val running = regularSyncChild(testSetup)
+    assert(!childNamed(testSetup, "combined-recovery-scan"))
+    assert(!childNamed(testSetup, "background-audit"))
+    syncController ! SyncController.WrappedSyncProtocol(
+      SyncProtocol.MissingCodeNeedsBulkRecovery(500, ByteString(Array.fill[Byte](32)(3)))
+    )
+    someTimePasses()
+    assert(!childNamed(testSetup, "bytecode-recovery"))
+    regularSyncChild(testSetup) shouldBe running
+  }
+
+  it should "tell the port of a hand-off, so that the escalation's count begins with it" taggedAs (
+    UnitTest,
+    SyncTest
+  ) in
+    withRecoveryTestSetup() { testSetup =>
+      import testSetup.*
+      val port = new GuardPort(SyncController.SnapStartOnGuard.Begin(clearedGenesis = false))
+      pathLiveSync = Some(port)
+      syncController ! SyncController.WrappedSyncProtocol(SyncProtocol.Start)
+      awaitSnapStarted(syncController)
+      syncController ! SyncController.WrappedExternal(SNAPSyncController.SnapSyncFinalized(BigInt(1)))
+      regularSyncChild(testSetup)
+      port.handedOffs.get() shouldBe 1
+    }
+
+  it should "ask again after a while when the port says not yet, keeping what arrived meanwhile" taggedAs (
+    UnitTest,
+    SyncTest
+  ) in withRecoveryTestSetup() { testSetup =>
+    import testSetup.*
+    val port = new GuardPort(
+      SyncController.SnapStartOnGuard.Wait("a recovery was executing a block"),
+      SyncController.SnapStartOnGuard.Begin(clearedGenesis = true)
+    )
+    pathLiveSync = Some(port)
+    syncController ! SyncController.WrappedSyncProtocol(SyncProtocol.Start)
+    eventually {
+      someTimePasses()
+      port.asked.get() shouldBe 1
+    }
+    snapChildren(testSetup) shouldBe empty
+    assert(!childNamed(testSetup, "regular-sync"))
+    timePasses(SyncController.SnapStartRecheckDelay)
+    eventually {
+      someTimePasses()
+      assert(snapChildren(testSetup).nonEmpty)
+    }
+    port.asked.get() shouldBe 2
+  }
+
+  // the user's decision 1 (2026-11-17): healing goes on, each time; from the third in a row it is an ERROR (beacon)
+  it should "restart SNAP for each hand-off held for accounts left out, and say so louder from the third" taggedAs (
+    UnitTest,
+    SyncTest
+  ) in withRecoveryTestSetup() { testSetup =>
+    import testSetup.*
+    pathLiveSync = Some(new GuardPort(SyncController.SnapStartOnGuard.Begin(clearedGenesis = false)))
+    syncController ! SyncController.WrappedSyncProtocol(SyncProtocol.Start)
+    awaitSnapStarted(syncController)
+    def held(): List[String] =
+      val before = snapChildren(testSetup)
+      syncControllerLogsDuring(ch.qos.logback.classic.Level.WARN) {
+        syncController ! SyncController.WrappedSyncProtocol(SyncProtocol.HandoffHeldForExcluded(BigInt(7), false))
+        eventually {
+          someTimePasses()
+          assert((snapChildren(testSetup) -- before).nonEmpty)
+        }
+      }.filter(_.contains("not handing off at pivot 7"))
+    held().exists(_.contains("1 in a row")) shouldBe true
+    held().exists(_.contains("2 in a row")) shouldBe true
+    syncControllerErrorsDuring(held(): Unit).exists(_.contains("3 in a row")) shouldBe true
+  }
+
+  "The hand-offs held for accounts left out" should "be counted since the last hand-off" taggedAs UnitTest in {
+    val held = new HandoffsHeldForExcluded
+    (held.held(), held.held()) shouldBe (1, 2)
+    held.handedOff()
+    held.held() shouldBe 1
+  }
+
+  /** The regular-sync child running now: the latest generation (a stopped one can still be listed a moment). */
+  private def regularSyncChild(testSetup: TestSetup): String =
+    eventually {
+      testSetup.someTimePasses()
+      testSetup.syncController.children
+        .map(_.path.name)
+        .filter(_.startsWith("regular-sync-"))
+        .maxBy(_.stripPrefix("regular-sync-").toIntOption.getOrElse(-1))
+    }
+
+  private def snapChildren(testSetup: TestSetup): Set[String] =
+    testSetup.syncController.children.map(_.path.name).filter(_.startsWith("snap-sync")).toSet
+
+  private def stuckReport(testSetup: TestSetup): List[String] =
+    syncControllerErrorsDuring {
+      testSetup.syncController ! SyncController.WrappedSyncProtocol(
+        SyncProtocol.RegularSyncStuck(BigInt(500), "deadbeef")
+      )
+    }
+
+  it should "re-SNAP at once twice in a row, then keep regular sync running and re-SNAP an hour later (H3)" taggedAs (
+    UnitTest,
+    SyncTest
+  ) in withTestSetup() { testSetup =>
+    import testSetup.*
+    val appState = storagesInstance.storages.appStateStorage
+    appState.fastSyncDone().commit()
+    syncController ! SyncController.WrappedSyncProtocol(SyncProtocol.Start)
+
+    /** Regular sync reports itself stuck, the re-SNAP starts at once, and SNAP hands back to regular sync. */
+    def stuckAndResnapped(): List[String] =
+      regularSyncChild(testSetup)
+      val before = snapChildren(testSetup)
+      val errors = stuckReport(testSetup)
+      eventually {
+        someTimePasses()
+        assert((snapChildren(testSetup) -- before).nonEmpty)
+      }
+      appState.snapSyncDone().commit() // what a finalisation has written by the time it says so
+      syncController ! SyncController.WrappedExternal(SNAPSyncController.SnapSyncFinalized(BigInt(1)))
+      errors
+
+    val atOnce = stuckAndResnapped() ++ stuckAndResnapped()
+    val running = regularSyncChild(testSetup)
+    val snapsBefore = snapChildren(testSetup)
+    val third = stuckReport(testSetup)
+
+    withClue("the first two re-SNAPs go at once: ")(atOnce.filter(_.contains("[SYNC-STUCK]")) shouldBe empty)
+    third.count(_.contains("[SYNC-STUCK]")) shouldBe 1
+    third.filter(_.contains("[SYNC-STUCK]")).head should (include("60 min").and(include("Regular sync keeps running")))
+    appState.regularSyncStuckResnaps() shouldBe 3
+    appState.resnapBaseline() shouldBe Some(appState.getBestBlockNumber())
+    withClue("regular sync keeps running, and no SNAP starts yet: ") {
+      timePasses(59.minutes)
+      syncController.children.map(_.path.name) should contain(running)
+      snapChildren(testSetup) shouldBe snapsBefore
+    }
+
+    timePasses(2.minutes)
+    eventually {
+      someTimePasses()
+      assert((snapChildren(testSetup) -- snapsBefore).nonEmpty)
+    }
+    withClue("the SNAP's pivot is no import: the next regular sync sets the baseline: ") {
+      appState.resnapBaseline() shouldBe None
+    }
+  }
+
+  it should "count re-SNAPs from what is stored, so a restart forgets no count, and say so on the gauge (H3)" taggedAs (
+    UnitTest,
+    SyncTest
+  ) in withTestSetup() { testSetup =>
+    import testSetup.*
+    val appState = storagesInstance.storages.appStateStorage
+    appState.fastSyncDone().and(appState.putRegularSyncStuck(2, Some(appState.getBestBlockNumber()))).commit()
+    syncController ! SyncController.WrappedSyncProtocol(SyncProtocol.Start)
+    val running = regularSyncChild(testSetup)
+
+    val errors = stuckReport(testSetup)
+
+    appState.regularSyncStuckResnaps() shouldBe 3
+    com.chipprbots.ethereum.blockchain.sync.regular.RegularSyncMetrics.consecutiveResnaps shouldBe 3d
+    errors.count(_.contains("[SYNC-STUCK]")) shouldBe 1
+    syncController.children.map(_.path.name) should contain(running)
+    snapChildren(testSetup) shouldBe empty
+  }
+
+  // review vault 2: imports are measured from a stored baseline, not from where regular sync last started, which each of
+  // its many restarts moved, so a healthy node that restarted could still climb to the backoff.
+  it should "start the re-SNAP count over after a block is imported, across a restart of regular sync (H3)" taggedAs (
+    UnitTest,
+    SyncTest
+  ) in withTestSetup() { testSetup =>
+    import testSetup.*
+    val appState = storagesInstance.storages.appStateStorage
+    val best = appState.getBestBlockNumber()
+    appState.fastSyncDone().and(appState.putRegularSyncStuck(2, Some(best))).commit()
+    syncController ! SyncController.WrappedSyncProtocol(SyncProtocol.Start)
+    val first = regularSyncChild(testSetup)
+    appState.putBestBlockNumber(best + 5).commit() // regular sync imported blocks
+    system.stop(syncController.children.find(_.path.name == first).get) // and then restarted
+    eventually {
+      someTimePasses()
+      assert(syncController.children.exists(c => c.path.name.startsWith("regular-sync") && c.path.name != first))
+    }
+
+    val errors = stuckReport(testSetup)
+
+    appState.regularSyncStuckResnaps() shouldBe 1
+    errors.filter(_.contains("[SYNC-STUCK]")) shouldBe empty
+    eventually {
+      someTimePasses()
+      assert(snapChildren(testSetup).nonEmpty)
+    }
+  }
+
+  it should "drop a scheduled re-SNAP and zero the gauge once a block is imported while it waits (H3)" taggedAs (
+    UnitTest,
+    SyncTest
+  ) in withTestSetup() { testSetup =>
+    import testSetup.*
+    val appState = storagesInstance.storages.appStateStorage
+    val best = appState.getBestBlockNumber()
+    appState.fastSyncDone().and(appState.putRegularSyncStuck(2, Some(best))).commit()
+    syncController ! SyncController.WrappedSyncProtocol(SyncProtocol.Start)
+    regularSyncChild(testSetup)
+    stuckReport(testSetup).count(_.contains("[SYNC-STUCK]")) shouldBe 1
+
+    appState.putBestBlockNumber(best + 1).commit() // regular sync imported a block
+    timePasses(SyncController.ResnapCheckInterval + 1.second)
+
+    appState.regularSyncStuckResnaps() shouldBe 0
+    com.chipprbots.ethereum.blockchain.sync.regular.RegularSyncMetrics.consecutiveResnaps shouldBe 0d
+    timePasses(2.hours)
+    snapChildren(testSetup) shouldBe empty
+  }
+
+  // review: a re-SNAP whose wait ended while a bulk code recovery ran had its ResnapDue dropped there, and the wait
+  // state stayed: every later stuck was taken for a repeat of a re-SNAP still waiting, with no timer left to start it.
+  it should "schedule a re-SNAP again when the last one's wait ended mid-recovery (H3)" taggedAs (
+    UnitTest,
+    SyncTest
+  ) in withRecoveryTestSetup() { testSetup =>
+    import testSetup.*
+    val sc = new BulkScenario(testSetup)
+    networkPeerManager.setAutoPilot(
+      new AutoPilot: // no peers: the recovery waits for one, and gives up only after 10 min with none
+        override def run(sender: ActorRef, msg: Any): AutoPilot =
+          msg.asMatchable match
+            case NetworkPeerManagerActor.GetHandshakedPeersCmd(replyTo) => replyTo ! HandshakedPeers(Map.empty)
+            case _                                                      => ()
+          this
+    )
+    sc.appState.putRegularSyncStuck(2, Some(sc.appState.getBestBlockNumber())).commit()
+    sc.startRegularSync()
+    stuckReport(testSetup).count(_.contains("[SYNC-STUCK]")) shouldBe 1 // the third in a row: the re-SNAP waits
+
+    timePasses(57.minutes) // regular sync runs most of the wait
+    syncController ! SyncController.WrappedSyncProtocol(
+      SyncProtocol.MissingCodeNeedsBulkRecovery(500, sc.codeHashes.head)
+    )
+    val recovery = eventually {
+      someTimePasses()
+      syncController.children.map(_.path.name).find(_.startsWith("bytecode-recovery")).get
+    }
+    timePasses(4.minutes) // the wait ends during the recovery, which drops the re-SNAP's message
+    withClue("the recovery still runs, and no SNAP started: ") {
+      syncController.children.map(_.path.name) should contain(recovery)
+      snapChildren(testSetup) shouldBe empty
+    }
+
+    system.stop(syncController.children.find(_.path.name == recovery).get) // the recovery ends
+    eventually {
+      someTimePasses()
+      assert(syncController.children.exists(_.path.name.startsWith("regular-sync")))
+    }
+
+    withClue("the next stuck schedules a re-SNAP, the fourth in a row: ") {
+      stuckReport(testSetup).count(_.contains("[SYNC-STUCK]")) shouldBe 1
+      sc.appState.regularSyncStuckResnaps() shouldBe 4
+    }
+  }
+
+  it should "let two re-SNAPs in a row go at once, then wait an hour, doubling, up to a day (resnapBackoff, H3)" taggedAs (
+    UnitTest,
+    SyncTest
+  ) in {
+    import scala.concurrent.duration.*
+    (1 to 10).map(SyncController.resnapBackoff) shouldBe
+      Seq(Duration.Zero, Duration.Zero, 1.hour, 2.hours, 4.hours, 8.hours, 16.hours, 24.hours, 24.hours, 24.hours)
+    SyncController.resnapBackoff(10000) shouldBe 24.hours
   }
 
   // ── Startup sync mode, and databases from before fast sync was removed ───────────────────────────────────────
@@ -872,6 +1756,95 @@ class SyncControllerSpec
     assert(!childNamed(testSetup, "regular-sync"))
   }
 
+  // B-307 (c2): what the pivot's bootstrap found of the branch reaches the requirement and the SNAP controller
+  it should "end the wait for a peer on the branch when the pivot's bootstrap completes, and pass on the peers it found on another chain" taggedAs (
+    UnitTest,
+    SyncTest
+  ) in withRecoveryTestSetup() { testSetup =>
+    import testSetup.*
+    import com.chipprbots.ethereum.db.storage.pathstate.PivotOnBranch
+    val appState = storagesInstance.storages.appStateStorage
+    seedStrandedFastSync(testSetup)
+    appState
+      .putBestBlockNumber(StrandedBest)
+      .and(appState.putSnapSyncMinPivotBlock(StrandedBest + 1))
+      .commit()
+    answerPeerPollsWith(snapPeerAt(StrandedBest + 10))
+    syncController ! SyncController.WrappedSyncProtocol(SyncProtocol.Start)
+    eventually {
+      someTimePasses()
+      assert(childNamed(testSetup, "pivot-header-bootstrap"))
+    }
+    val bound = PivotOnBranch(StrandedBest + 1, ByteString(Array.fill[Byte](32)(0x21)))
+
+    // every peer at the target's height was on another chain: the SNAP controller is told which, and begins the wait
+    appState.putPivotOnBranch(bound).commit()
+    syncController ! SyncController.WrappedExternal(
+      PivotHeaderBootstrap.Failed(
+        PivotHeaderBootstrap.NoPeerOnTheBranch,
+        Set(com.chipprbots.ethereum.network.PeerId("on-the-other-chain"))
+      )
+    )
+    eventually {
+      someTimePasses()
+      assert(appState.getPivotOnBranch().exists(_.firstMissMillis.isDefined))
+    }
+  }
+
+  it should "end the wait for a peer on the branch when the pivot's bootstrap takes its header from one" taggedAs (
+    UnitTest,
+    SyncTest
+  ) in withRecoveryTestSetup() { testSetup =>
+    import testSetup.*
+    import com.chipprbots.ethereum.db.storage.pathstate.PivotOnBranch
+    val appState = storagesInstance.storages.appStateStorage
+    seedStrandedFastSync(testSetup)
+    appState
+      .putBestBlockNumber(StrandedBest)
+      .and(appState.putSnapSyncMinPivotBlock(StrandedBest + 1))
+      .commit()
+    answerPeerPollsWith(snapPeerAt(StrandedBest + 10))
+    syncController ! SyncController.WrappedSyncProtocol(SyncProtocol.Start)
+    eventually {
+      someTimePasses()
+      assert(childNamed(testSetup, "pivot-header-bootstrap"))
+    }
+    val bound = PivotOnBranch(StrandedBest + 1, ByteString(Array.fill[Byte](32)(0x21)))
+    appState.putPivotOnBranch(bound.copy(firstMissMillis = Some(7L))).commit()
+    syncController ! SyncController.WrappedExternal(
+      PivotHeaderBootstrap.Completed(StrandedBest + 1, baseBlockHeader.copy(number = BlockNumber(StrandedBest + 1)))
+    )
+    appState.getPivotOnBranch() shouldBe Some(bound)
+  }
+
+  // B-310 (forge): under the branch's first block the bootstrap asks one header by number, with no check of the branch
+  it should "not end the wait for a peer on the branch when the pivot's bootstrap took a header under the branch" taggedAs (
+    UnitTest,
+    SyncTest
+  ) in withRecoveryTestSetup() { testSetup =>
+    import testSetup.*
+    import com.chipprbots.ethereum.db.storage.pathstate.PivotOnBranch
+    val appState = storagesInstance.storages.appStateStorage
+    seedStrandedFastSync(testSetup)
+    appState
+      .putBestBlockNumber(StrandedBest)
+      .and(appState.putSnapSyncMinPivotBlock(StrandedBest + 1))
+      .commit()
+    answerPeerPollsWith(snapPeerAt(StrandedBest + 10))
+    syncController ! SyncController.WrappedSyncProtocol(SyncProtocol.Start)
+    eventually {
+      someTimePasses()
+      assert(childNamed(testSetup, "pivot-header-bootstrap"))
+    }
+    // the branch begins one block above the header the bootstrap was asked for
+    val waiting = PivotOnBranch(StrandedBest + 2, ByteString(Array.fill[Byte](32)(0x21)), firstMissMillis = Some(7L))
+    appState.putPivotOnBranch(waiting).commit()
+    syncController ! SyncController.WrappedExternal(
+      PivotHeaderBootstrap.Completed(StrandedBest + 1, baseBlockHeader.copy(number = BlockNumber(StrandedBest + 1)))
+    )
+    appState.getPivotOnBranch() shouldBe Some(waiting)
+  }
+
   it should "clear the pivot floor when SNAP finalizes" taggedAs (UnitTest, SyncTest) in withRecoveryTestSetup() {
     testSetup =>
       import testSetup.*
@@ -972,10 +1945,22 @@ class SyncControllerSpec
     seedStrandedFastSync(testSetup)
     // SNAP already picked the stranded block as its pivot and finished its accounts there (updateBestBlockForPivot sets
     // best = pivot). A floor of best + 1 would reject that pivot and discard the account download.
-    storagesInstance.storages.appStateStorage
+    // B-309: with the task files its storage and bytecode phases resume from. Without them SNAP's own resume restarts
+    // the accounts phase (a lost task file must not complete its phase), which is not what this case is about.
+    val appState = storagesInstance.storages.appStateStorage
+    val storageTasks = java.nio.file.Files.createTempFile("b309-storage-tasks", ".bin")
+    val codeHashes = java.nio.file.Files.createTempFile("b309-code-hashes", ".bin")
+    storageTasks.toFile.deleteOnExit()
+    codeHashes.toFile.deleteOnExit()
+    appState
       .putSnapSyncPivotBlock(StrandedBest)
-      .and(storagesInstance.storages.appStateStorage.putSnapSyncStateRoot(ByteString(Array.fill[Byte](32)(0x66))))
-      .and(storagesInstance.storages.appStateStorage.putSnapSyncAccountsComplete(true))
+      .and(appState.putSnapSyncStateRoot(ByteString(Array.fill[Byte](32)(0x66))))
+      .and(appState.putSnapSyncAccountsComplete(true))
+      // a chain with no contracts: zero entries, and the count says so
+      .and(appState.putSnapSyncStorageFilePath(storageTasks.toString))
+      .and(appState.putSnapSyncStorageFileCount(Some(0L)))
+      .and(appState.putSnapSyncCodeHashesPath(codeHashes.toString))
+      .and(appState.putSnapSyncCodeHashesCount(Some(0L)))
       .commit()
 
     syncController ! SyncController.WrappedSyncProtocol(SyncProtocol.Start)
@@ -1670,10 +2655,20 @@ class SyncControllerSpec
           this,
           externalSchedulerOpt = Some(system.scheduler),
           txGossipGate = txGossipGate,
-          backgroundAuditEnabled = auditEnabled
+          backgroundAuditEnabled = auditEnabled,
+          // #1654: these fixtures store weights that do not follow from genesis; the pass would repair them.
+          chainWeightReconcileOn = false,
+          stateEscalation = stateEscalation,
+          pathLiveSync = pathLiveSync
         )
       )
     )
+
+    /** What the controller gives the state up with (spec 018 C5a part 7b): set before the controller is first used. */
+    var stateEscalation: Option[SyncController.StateEscalationPort] = None
+
+    /** A sync on the unified layout (spec 018 C5a part 10): set before the controller is first used. */
+    var pathLiveSync: Option[SyncController.PathLiveSyncPort] = None
 
     /** The node's tx gossip gate, as NodeBuilder shares it between SyncController, the Engine API and the pool. */
     lazy val txGossipGate: com.chipprbots.ethereum.transactions.TxGossipGate =
@@ -1703,7 +2698,9 @@ class SyncControllerSpec
           syncConfig,
           this,
           externalSchedulerOpt = Some(system.scheduler),
-          backgroundAuditEnabled = auditEnabled
+          backgroundAuditEnabled = auditEnabled,
+          // #1654: these fixtures store weights that do not follow from genesis; the pass would repair them.
+          chainWeightReconcileOn = false
         )
       )
     )
@@ -1723,6 +2720,9 @@ class SyncControllerSpec
 
     def someTimePasses(): Unit =
       testScheduler.timePasses(3000.millis)
+
+    def timePasses(duration: FiniteDuration): Unit =
+      testScheduler.timePasses(duration)
 
     /** Answer every peer poll SyncController's children make with `peers`. */
     def answerPeerPollsWith(peers: Map[Peer, PeerInfo]): Unit =
@@ -1798,7 +2798,9 @@ class SyncControllerSpec
           chainConfigBuilder,
           forkChoiceManagerOpt = Some(forkChoiceManager),
           externalSchedulerOpt = Some(system.scheduler),
-          backgroundAuditEnabled = auditEnabled
+          backgroundAuditEnabled = auditEnabled,
+          // #1654: these fixtures store weights that do not follow from genesis; the pass would repair them.
+          chainWeightReconcileOn = false
         )
       )
     )

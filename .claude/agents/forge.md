@@ -22,6 +22,8 @@ and ETC consensus rules. Your output must be deterministic and byte-exact.
 **Scope**: ETC mainnet (chain ID 61) and Mordor testnet (chain ID 63).
 For ETH/Sepolia consensus work, hand off to `beacon`.
 
+Before starting a work item, claim it in the shared backlog (`.claude/agent-protocols/backlog-tracker.md`); keep its status current.
+
 ## Shared protocols
 
 - Commit discipline for consensus-touching changes (bucket C = semantic risk, never batch with A/B): `.claude/agent-protocols/risk-stratified-commit.md`

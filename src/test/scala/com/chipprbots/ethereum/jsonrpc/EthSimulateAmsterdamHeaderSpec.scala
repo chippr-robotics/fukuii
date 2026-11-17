@@ -39,13 +39,15 @@ class EthSimulateAmsterdamHeaderSpec extends AnyFlatSpec with Matchers with Amst
   private val emptyRoot: ByteString = ByteString(MerklePatriciaTrie.EmptyRootHash)
 
   /** The access list of a call-less Amsterdam block on this empty state: the EIP-4788 and EIP-2935 system calls read
-    * their targets at index 0 even with no code there (EEST `bal_4788_absent_contract`), and change nothing; the
-    * request predeploys have no code, so the post-execution phase records nothing.
+    * their targets at index 0 even with no code there (EEST `bal_4788_absent_contract`), and change nothing; the four
+    * request contracts ([[RequestContractStubs]]: a simulated Amsterdam block fails without them) are read at index n +
+    * 1 and change nothing. The accounts are in address order, as `BlockAccessListBuilder` puts them.
     */
   private val systemCallTargetsOnlyHash: ByteString = BlockAccessList(
-    Seq(BlockExecution.HistoryStorageAddress, BlockExecution.BeaconRootContractAddress).map(
-      AccountChanges(_, Nil, Nil, Nil, Nil, Nil)
-    )
+    (Seq(BlockExecution.HistoryStorageAddress, BlockExecution.BeaconRootContractAddress) ++
+      RequestContractStubs.Addresses)
+      .sortWith((a, b) => java.util.Arrays.compareUnsigned(a.bytes.toArray, b.bytes.toArray) < 0)
+      .map(AccountChanges(_, Nil, Nil, Nil, Nil, Nil))
   ).hash
   private val zero32: ByteString = ByteString(Array.fill[Byte](32)(0))
 
@@ -82,10 +84,19 @@ class EthSimulateAmsterdamHeaderSpec extends AnyFlatSpec with Matchers with Amst
       config
     )
 
-    /** One simulated block, at `timestamp` when given (the base block's + 12 otherwise), with no calls. */
+    /** One simulated block, at `timestamp` when given (the base block's + 12 otherwise), with no calls. An Amsterdam
+      * block gets the four request contracts a real chain has ([[RequestContractStubs]]).
+      */
     def simulate(timestamp: Option[Long] = None): EthSimulateResponse =
+      val at = timestamp.getOrElse(baseTimestamp + 12)
+      val requestContracts = Option.when(config.isAmsterdamTimestamp(Timestamp(at)))(RequestContractStubs.overrides)
       val request = EthSimulateRequest(
-        Seq(BlockStateCall(blockOverrides = Some(BlockOverrides(time = timestamp.map(BigInt(_))))))
+        Seq(
+          BlockStateCall(
+            blockOverrides = Some(BlockOverrides(time = timestamp.map(BigInt(_)))),
+            stateOverrides = requestContracts
+          )
+        )
       )
       service.ethSimulate(request).unsafeRunSync().fold(err => fail(s"eth_simulateV1 failed: $err"), identity)
 

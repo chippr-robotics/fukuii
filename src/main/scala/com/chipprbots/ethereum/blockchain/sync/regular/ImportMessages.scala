@@ -7,6 +7,7 @@ import org.apache.pekko.event.Logging.LogLevel
 import org.apache.pekko.event.Logging.WarningLevel
 import org.apache.pekko.util.ByteString
 
+import com.chipprbots.ethereum.db.storage.pathstate.StateFault
 import com.chipprbots.ethereum.domain.Block
 import com.chipprbots.ethereum.mpt.MerklePatriciaTrie.MissingNodeException
 import com.chipprbots.ethereum.network.PeerId
@@ -35,6 +36,11 @@ sealed abstract class ImportMessages(block: Block):
       case ChainReorganised(oldBranch, newBranch, _)    => reorganisedChain(oldBranch, newBranch)
       case BlockImportFailed(error)                     => importFailed(error)
       case BlockImportFailedDueToMissingNode(reason, _) => missingStateNode(reason)
+      case BlockImportStateFault(fault, _)              => stateFault(fault)
+
+  /** The block was not judged: this node's own state could not take it (spec 018 Track C, C4b). */
+  def stateFault(fault: StateFault): LogEntry =
+    (WarningLevel, s"Block $number was not executed, this node's state could not take it: ${fault.getMessage}")
 
 object ImportMessages:
   type LogEntry = (LogLevel, String)

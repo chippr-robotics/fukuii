@@ -1,5 +1,7 @@
 package com.chipprbots.ethereum.nodebuilder
 
+import java.util.concurrent.atomic.AtomicReference
+
 import org.apache.pekko.actor.typed.ActorSystem
 import org.apache.pekko.actor.typed.SupervisorStrategy
 import org.apache.pekko.actor.typed.scaladsl.Behaviors
@@ -12,19 +14,40 @@ import scala.util.Failure
 import scala.util.Success
 import scala.util.Try
 
+import com.chipprbots.ethereum.blockchain.sync.BackgroundAudit
 import com.chipprbots.ethereum.blockchain.sync.StoredBodyCheck
 import com.chipprbots.ethereum.blockchain.sync.StoredBodyRepair
 import com.chipprbots.ethereum.blockchain.sync.SyncController
 import com.chipprbots.ethereum.blockchain.sync.SyncProtocol
 import com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncMetrics
 import com.chipprbots.ethereum.consensus.mining.StdMiningBuilder
+import com.chipprbots.ethereum.consensus.pow.PoWMiningMetrics
+import com.chipprbots.ethereum.console.AuditReading
+import com.chipprbots.ethereum.console.AuditSample
+import com.chipprbots.ethereum.console.ChainFacts
+import com.chipprbots.ethereum.console.ChainLookups
+import com.chipprbots.ethereum.console.ChainReads
+import com.chipprbots.ethereum.console.ForkChoiceHashes
 import com.chipprbots.ethereum.console.NodeSettings
+import com.chipprbots.ethereum.console.NodeStatusSnapshot
+import com.chipprbots.ethereum.console.StartupPhase
+import com.chipprbots.ethereum.console.StorageRead
+import com.chipprbots.ethereum.console.StorageReader
+import com.chipprbots.ethereum.console.StorageSample
+import com.chipprbots.ethereum.console.StorageSources
 import com.chipprbots.ethereum.console.Tui
-import com.chipprbots.ethereum.console.TuiConfig
+import com.chipprbots.ethereum.console.TuiProbeThread
 import com.chipprbots.ethereum.console.TuiStatusProbe
 import com.chipprbots.ethereum.console.TuiUpdater
 import com.chipprbots.ethereum.db.dataSource.RocksDbCacheMetrics
+import com.chipprbots.ethereum.db.dataSource.RocksDbDataSource
+import com.chipprbots.ethereum.db.storage.AppStateStorage
 import com.chipprbots.ethereum.domain.BestMappingRepair
+import com.chipprbots.ethereum.domain.BlockHash
+import com.chipprbots.ethereum.domain.SignedTransaction
+import com.chipprbots.ethereum.domain.StateReconciliation
+import com.chipprbots.ethereum.forkid.ForkId
+import com.chipprbots.ethereum.jsonrpc.server.RpcExposureCheck
 import com.chipprbots.ethereum.metrics.Metrics
 import com.chipprbots.ethereum.metrics.MetricsConfig
 import com.chipprbots.ethereum.network.PeerManagerActor
@@ -33,8 +56,12 @@ import com.chipprbots.ethereum.network.StaticNodesLoader
 import com.chipprbots.ethereum.network.discovery.PeerDiscoveryManager
 import com.chipprbots.ethereum.nodebuilder.tooling.PeriodicConsistencyCheck
 import com.chipprbots.ethereum.nodebuilder.tooling.StorageConsistencyChecker
+import com.chipprbots.ethereum.transactions.PendingTransactionsManager
+import com.chipprbots.ethereum.transactions.TxPoolMetrics
+import com.chipprbots.ethereum.utils.BuildInfo
 import com.chipprbots.ethereum.utils.Config
 import com.chipprbots.ethereum.utils.Hex
+import com.chipprbots.ethereum.utils.NetworkType
 
 /** A standard node is everything Ethereum prescribes except the mining algorithm, which is plugged in dynamically.
   *
@@ -46,20 +73,48 @@ import com.chipprbots.ethereum.utils.Hex
   */
 abstract class BaseNode extends Node:
 
-  private var tuiUpdater: Option[TuiUpdater] = None
+  // Set on the thread that starts the node, read by the shutdown hook's.
+  @volatile private var tuiUpdater: Option[TuiUpdater] = None
+  @volatile private var tuiProbe: Option[TuiProbeThread] = None
+
+  /** The TUI's latest status snapshot: [[TuiProbeThread]] publishes it, the frame loop reads it (spec 027 FR-011). */
+  private val tuiSnapshots = new AtomicReference[Option[NodeStatusSnapshot]](None)
 
   // Secondary ActorSystem hosting the periodic DB consistency check (see startPeriodicDBConsistencyCheck).
   // Retained so shutdown() can terminate it — otherwise its dispatcher threads outlive node death.
   private var periodicConsistencyCheckSystem: Option[ActorSystem[?]] = None
 
   def start(): Unit =
+    // Phase -1 (B-246): the Engine API's JWT secret is resolved before anything starts. A refused file is an
+    // EngineApiStartupRefusal here, which the caller turns into one clear line and exit 1, not a stack trace from
+    // phase 3 with P2P and discovery already up.
+    StdNode.failIfRefused(engineApiJwtAuthenticator)
+
+    // Phase 0: the TUI's frames, so its splash and "starting node" move while the node starts. The probe that feeds it
+    // starts in phase 6, once the actors it asks exist.
+    startTuiFrames()
+
     // Phase 1: Essential initialization (must complete before anything else)
     startMetricsClient()
-    fixDatabase()
-    repairBestBlockMapping() // before any server binds, so no newPayload/FCU races the read-then-write
+    // On the unified state layout the best block and the index are the held block's, made so before anything reads
+    // them (spec 018 C4b part 4): the hash layout's two repairs trust the best block or the index, and would undo it.
+    if blockchainReader.holdsStateInPlace then
+      // a clear of the state that a kill interrupted is finished first: its rows are deleted before the state is
+      // looked at (spec 018 C5a part 3). It refuses a datadir that has the mark of one and a state.
+      refuseSnapRepairOnTheGuard()
+      finishPendingStateClear()
+      forgetGivenUpBranchesIfAsked()
+      reconcileState()
+    // A datadir stamped for the unified layout, opened with the guard off, never gets here: the layout guard refused
+    // it where the storages were built (spec 018 data-model 5.3), so nothing is repaired in it.
+    else
+      fixDatabase()
+      repairBestBlockMapping() // before any server binds, so no newPayload/FCU races the read-then-write
     loadGenesisData()
     repairStoredBodies() // after genesis is loaded, before the sync controller reads the backfill cursors
     importChainData() // Must complete before APIs so queries return chain data
+    refuseRegularSyncFromGenesisOnTheGuard() // after the genesis and a chain file: what they leave is what syncs
+    tuiStarted(StartupPhase.Storage)
 
     // Phase 2: P2P networking — bind discovery + TCP server BEFORE the user-facing
     // APIs come up. Hive's client readiness check is on the RPC port (8545); if we
@@ -71,6 +126,7 @@ abstract class BaseNode extends Node:
     startPortForwarding()
     startPeerManager()
     startDiscoveryManager()
+    tuiStarted(StartupPhase.Network)
 
     // Phase 3: API servers (user-facing, ready as early as possible).
     // The Engine API (8551) and ETH JSON-RPC (8545) both bind here, each awaited, in the order chosen further
@@ -94,6 +150,9 @@ abstract class BaseNode extends Node:
     // to follow the CL's head before the first peer branch arrives. Also a no-op off a post-merge chain with a live
     // Engine API — see EngineApiBuilder.bindDesignatedHead.
     bindDesignatedHead()
+    // the consensus layer's branch the import path does not adopt goes to the fork choice's recovery (B-297)
+    bindBranchHandOff()
+    warnOnExposedNamespaces()
     // Whichever port the supervisor probes for readiness must bind LAST, so that "that port accepts a connection"
     // implies the other one already does. hive decides per simulator which port it probes (libhive defaults to 8545;
     // the `ethereum/sync` sink node overrides it to 8551), so a fixed order is always wrong for one of them — see
@@ -106,17 +165,146 @@ abstract class BaseNode extends Node:
       startJsonRpcHttpServer()
     startJsonRpcWsServer()
     startJsonRpcIpcServer()
+    tuiStarted(StartupPhase.Api)
 
     // Phase 5: Background work
     startSyncController()
     startMining()
+    tuiStarted(StartupPhase.Sync)
 
     // Phase 6: Non-critical maintenance
     runDBConsistencyCheck()
     startPeriodicDBConsistencyCheck()
     startTuiUpdater()
+    tuiStarted(StartupPhase.Checks)
+
+  /** The Storage view's reader (spec 029 FR-043), on a node whose database is RocksDB; none on any other.
+    *
+    * The properties are read without waiting (`RocksDbDataSource.properties`). The markers are point reads of the node
+    * state store, which on their own would queue behind a writer for as long as a compaction runs: they are made inside
+    * the same hold of the database as the properties (`whileFree`), where they wait for nothing, and no more than every
+    * half minute. None of them writes; `forceAuditPassOnce` and the like are not among them. The audit is asked what it
+    * has got to, and waited for a quarter of a second on the probe's thread; one that stopped by itself has withdrawn
+    * its reference, so nothing is asked of it.
+    */
+  private def tuiStorageReader(): () => Option[StorageSample] =
+    storagesInstance.dataSource match
+      case rocks: RocksDbDataSource =>
+        val appState = storagesInstance.storages.appStateStorage
+        // Each in words that say what the marker is and what its absence costs, and no more (vault): none says the
+        // state is whole, and a marker that only a SNAP sync stamps is not a fault on a node that never ran one.
+        def markers(): Vector[(String, String)] =
+          val pivot = appState.getSnapSyncPivotBlock()
+          val snapDone = appState.isSnapSyncDone()
+          val snapState = snapDone || pivot.isDefined
+          Vector(
+            "State layout" -> appState.getStateLayout().fold("hash layout (default)")(v => s"unified path layout ($v)"),
+            "SNAP sync" -> ((snapDone, pivot) match
+              case (true, Some(n))  => s"done (SNAP, pivot $n)"
+              case (true, None)     => "done (checkpoint import)"
+              case (false, Some(n)) => s"not finished (SNAP state present, pivot $n)"
+              case (false, None)    => "not run (no SNAP state on this datadir)"
+            ),
+            "Heal invariant" -> (
+              if appState.hasSnapHealInvariant() then "marked (SNAP walk: what is present has its subtree)"
+              else if snapState then "not marked (SNAP state present; a repair pass is owed)"
+              else "not marked (a SNAP start stamps it; none has run)"
+            ),
+            "Checkpoint import" -> appState
+              .getCheckpointImportInProgress()
+              .fold("none")(what => s"running or interrupted ($what)"),
+            "Code scan" -> appState.getSnapCodeScanOwed().fold("not owed")(why => s"owed: $why"),
+            "Audit pass" -> (
+              if appState.isSnapAuditOwed() then "a pass is owed"
+              else
+                appState.getSnapAuditCleanAnchor() match
+                  case Some(AppStateStorage.AuditNoPivot) => "clean (checkpoint, no pivot)"
+                  case Some(anchor)                       => s"clean at pivot $anchor"
+                  case None => "none recorded (none owed until SNAP or a checkpoint finishes)"
+            ),
+            // Without the stamp a prune deletes no trie node: it prunes less, and the row says so.
+            "Reference counts" -> (
+              if appState.hasRefCountsExact() then "exact (genesis stamped; pruning may delete nodes)"
+              else if !appState.isDatadirCreatedUnderInvariant() then
+                "not stamped (older datadir: pruning keeps trie nodes)"
+              else if snapState then "withdrawn by SNAP or checkpoint (pruning keeps trie nodes)"
+              else "not stamped (genesis not exact: pruning keeps trie nodes)"
+            ),
+            "Chain weights" -> (
+              if appState.hasChainWeightInvariant() then "marked (every weight follows from its parent)"
+              else "not marked: one reconcile pass owed"
+            )
+          )
+        def audit(): AuditReading =
+          import org.apache.pekko.actor.typed.scaladsl.AskPattern.*
+          given org.apache.pekko.util.Timeout = org.apache.pekko.util.Timeout(250.millis)
+          given org.apache.pekko.actor.typed.Scheduler = system.scheduler
+          BackgroundAudit.statusRef.fold(AuditReading.NotRunning) { ref =>
+            Try(Await.result(ref.ask[BackgroundAudit.Status](BackgroundAudit.GetStatus(_)), 250.millis)) match
+              case Success(status) =>
+                AuditReading.Running(
+                  AuditSample(
+                    pass = status.pass,
+                    nodes = status.counters.nodes,
+                    accounts = status.counters.accounts,
+                    holes = status.counters.holes,
+                    repaired = status.counters.repaired,
+                    unresolved = status.counters.unresolved,
+                    paused = status.paused,
+                    waitingForNextPass = status.waitingForNextPass,
+                    elapsed = java.time.Duration.ofMillis(status.counters.elapsedMillis)
+                  )
+                )
+              case Failure(_) => AuditReading.NoAnswer
+          }
+        TuiStatusProbe.LocalSources.storageReader(
+          StorageSources(
+            // One hold of the database for both: the markers' point reads never queue behind a writer.
+            read = (withEstimates, withMarkers) =>
+              rocks
+                .whileFree(rocks.properties(withEstimates).map(StorageRead(_, Option.when(withMarkers)(markers()))))
+                .flatten,
+            storeName = StorageReader.storeName,
+            audit = audit
+          )
+        )
+      case _ => () => None
+
+  /** The pool's transaction with `hash`, for the TUI's explorer: one ask of the pending transactions manager, waited
+    * for at most a second on the caller's thread (the TUI's lookup worker, never the frame loop).
+    */
+  private def pendingFromPool(hash: ByteString): Option[ChainLookups.Pending] =
+    import org.apache.pekko.actor.typed.scaladsl.AskPattern.*
+    given org.apache.pekko.util.Timeout = org.apache.pekko.util.Timeout(1.second)
+    given org.apache.pekko.actor.typed.Scheduler = system.scheduler
+    val asked = pendingTransactionsManagerTyped.ask[PendingTransactionsManager.PendingTransactionsResponse](
+      PendingTransactionsManager.GetPendingTransactionsReq(_)
+    )
+    // A pool that does not answer is not a pool without the transaction: the lookup fails with the reason, and the
+    // explorer shows it.
+    val pool =
+      try Await.result(asked, 1.second)
+      catch
+        case _: java.util.concurrent.TimeoutException =>
+          throw new IllegalStateException("the transaction is not in a block, and the pool did not answer within 1 s")
+    pool.pendingTransactions
+      .find(_.stx.tx.hash.value == hash)
+      .map(p => ChainLookups.Pending(p.stx.tx, p.stx.senderAddress, p.addTimestamp, p.receivedFromLocalSource))
+
+  /** Tells the TUI, if there is one, that `phase` of the start has completed: its splash marks the phase done (spec 029
+    * FR-020). Display only; it changes nothing the node does, and a node without `--tui` has no TUI to tell.
+    */
+  private def tuiStarted(phase: StartupPhase): Unit = Tui.current.foreach(_.startupDone(phase))
 
   private def startMetricsClient(): Unit =
+    // The dashboard's in-process counters are made here, at start-up and outside any IO, so that no request is the
+    // first to touch them (B-194: an initialiser that fails on a request's path is fatal to every IO runtime).
+    // Making them reads no configuration and registers nothing.
+    val _ = (
+      com.chipprbots.ethereum.jsonrpc.RpcCallStats.Node,
+      com.chipprbots.ethereum.consensus.engine.EngineCallLog.Node,
+      TxPoolMetrics.Node
+    )
     val metricsConfig = MetricsConfig(instanceConfig.config)
     Metrics.configure(metricsConfig, instanceConfig.instanceId) match
       case Success(_) =>
@@ -149,29 +337,28 @@ abstract class BaseNode extends Node:
 
   private def runDBConsistencyCheck(): Unit =
     val appState = storagesInstance.storages.appStateStorage
-    // Skip consistency check after SNAP sync — block headers 0..pivot don't exist yet.
-    // SNAP sync only stores the pivot block header; earlier headers are downloaded
-    // incrementally during regular sync's block-by-block import.
-    if appState.isSnapSyncDone() then
-      log.info("Skipping DB consistency check: SNAP sync stores only pivot block header, not full header chain")
-      // Bug 28: Skip when SNAP is mid-sync. AppStateStorage.bestBlock holds the pivot number
-      // whose header we have, but the block body was never persisted and the 0..pivot chain is
-      // incomplete. The consistency checker would see "best block hash not in block storage",
-      // log "Database seems to be in inconsistent state", and call shutdown — turning a recoverable
-      // mid-SNAP restart into an unrecoverable wipe-and-resync.
-    else if appState.isSnapSyncInProgress() then
-      log.info("Skipping DB consistency check: SNAP sync in progress (pivot header only, no full chain yet)")
-      // Skip consistency check in Engine API mode — optimistic imports store blocks
-      // at the chain tip without the full header chain from genesis.
-    else if engineApiConfig.enabled then
-      log.info("Skipping DB consistency check: Engine API mode uses optimistic block import")
-    else
-      StorageConsistencyChecker.checkStorageConsistency(
-        appState.getBestBlockNumber(),
-        storagesInstance.storages.blockNumberMappingStorage,
-        storagesInstance.storages.blockHeadersStorage,
-        shutdown
-      )(using log)
+    // Skip conditions live in StorageConsistencyChecker.applicability (shared with PeriodicConsistencyCheck):
+    // - after SNAP sync: block headers 0..pivot don't exist yet; SNAP stores only the pivot header, earlier headers
+    //   are downloaded incrementally during regular sync's block-by-block import.
+    // - Bug 28, SNAP mid-sync: AppStateStorage.bestBlock holds the pivot number whose header we have, but the block
+    //   body was never persisted and the 0..pivot chain is incomplete. The checker would log "Database seems to be in
+    //   inconsistent state" and call shutdown, turning a recoverable mid-SNAP restart into an unrecoverable
+    //   wipe-and-resync.
+    // - Engine API mode: optimistic imports store blocks at the chain tip without the full header chain from genesis.
+    StorageConsistencyChecker.applicability(appState, engineApiConfig.enabled) match
+      case Some(StorageConsistencyChecker.SkipReason.SnapDone) =>
+        log.info("Skipping DB consistency check: SNAP sync stores only pivot block header, not full header chain")
+      case Some(StorageConsistencyChecker.SkipReason.SnapInProgress) =>
+        log.info("Skipping DB consistency check: SNAP sync in progress (pivot header only, no full chain yet)")
+      case Some(StorageConsistencyChecker.SkipReason.EngineApi) =>
+        log.info("Skipping DB consistency check: Engine API mode uses optimistic block import")
+      case None =>
+        StorageConsistencyChecker.checkStorageConsistency(
+          appState.getBestBlockNumber(),
+          storagesInstance.storages.blockNumberMappingStorage,
+          storagesInstance.storages.blockHeadersStorage,
+          shutdown
+        )(using log)
 
   private def startPeerManager(): Unit = peerManager ! PeerManagerActor.StartConnectingCmd
 
@@ -203,13 +390,19 @@ abstract class BaseNode extends Node:
   private lazy val readinessPort: Option[Int] =
     Try(instanceConfig.config.getInt("network.readiness-port")).toOption
 
-  private def startSyncController(): Unit =
-    syncController ! SyncController.WrappedSyncProtocol(SyncProtocol.Start)
+  // On the unified state layout too since spec 018 C5a part 10: a SNAP sync hands its state off onto it, and the
+  // overlay follows side branches and reorganisations from there.
+  private def startSyncController(): Unit = syncController ! SyncController.WrappedSyncProtocol(SyncProtocol.Start)
 
   private def startMining(): Unit =
     // A node that produces blocks takes transactions from peers: core-geth's StartMining calls
     // `enableSyncedFeatures()` for the same reason, or a miner held behind the gate would mine empty blocks.
-    if mining.config.generic.miningEnabled then txGossipGate.markSynced("block production is enabled")
+    if mining.config.generic.miningEnabled then
+      txGossipGate.markSynced("block production is enabled")
+      // The DAG gauges are written from the mining thread (EthashDAGManager), inside loops whose failure paths
+      // delete and regenerate the DAG file. Initialise the metrics object here, after startMetricsClient and before
+      // that thread exists, so that a failed initialiser surfaces at start-up and not on it (spec 027 slice 5, M2).
+      val _ = PoWMiningMetrics
     mining.startProtocol(this)
 
   private def startDiscoveryManager(): Unit = peerDiscoveryManagerTyped ! PeerDiscoveryManager.Start
@@ -245,25 +438,99 @@ abstract class BaseNode extends Node:
                 s"${jsonRpcConfig.httpServerConfig.port}",
               ex
             )
-      case Left(error) if jsonRpcConfig.httpServerConfig.enabled => log.error(error)
-      case _                                                     => // Nothing
+      case Left(error) if jsonRpcConfig.httpServerConfig.enabled =>
+        log.error(error)
+        // No server was made: it will not listen, and the dashboard's RPC view says so (spec 029 FR-039).
+        com.chipprbots.ethereum.jsonrpc.RpcCallStats.Node
+          .listening(com.chipprbots.ethereum.jsonrpc.RpcCallStats.Http, isListening = false)
+      case _ => // Nothing
+  /** The JSON-RPC transports as the dashboard's RPC view lists them (spec 029 FR-039): from the node's configuration,
+    * with each one's exposure worked out once by the start-up warning's own rule. The Engine API is listed where it is
+    * on, or where the chain is one it serves.
+    */
+  private def tuiRpcTransports: Seq[com.chipprbots.ethereum.console.TransportStatus] =
+    import com.chipprbots.ethereum.console.TransportAuth
+    import com.chipprbots.ethereum.console.TransportKind
+    import com.chipprbots.ethereum.console.TransportStatus
+    val http = jsonRpcConfig.httpServerConfig
+    val ws = jsonRpcConfig.wsServerConfig
+    val ipc = jsonRpcConfig.ipcServerConfig
+    def exposed(name: String, key: String, enabled: Boolean, interface: String, apis: Seq[String]): Seq[String] =
+      RpcExposureCheck.exposedNamespaces(RpcExposureCheck.Transport(name, key, enabled, interface, apis))
+    val engine = Option.when(engineApiConfig.enabled || blockchainConfig.networkType == NetworkType.ETH)(
+      TransportStatus(
+        TransportKind.Engine,
+        engineApiConfig.enabled,
+        None,
+        s"${engineApiConfig.interface}:${engineApiConfig.port}",
+        Seq("engine", "eth", "net", "web3"),
+        TransportAuth.Jwt
+      )
+    )
+    Seq(
+      TransportStatus(
+        TransportKind.Http,
+        http.enabled,
+        None,
+        s"${http.interface}:${http.port}",
+        jsonRpcConfig.httpApis,
+        TransportAuth.None,
+        exposed("HTTP", "http", http.enabled, http.interface, jsonRpcConfig.httpApis),
+        tls = http.mode == "https"
+      ),
+      TransportStatus(
+        TransportKind.Ws,
+        ws.enabled,
+        None,
+        s"${ws.interface}:${ws.port}",
+        jsonRpcConfig.wsApis,
+        TransportAuth.None,
+        exposed("WebSocket", "ws", ws.enabled, ws.interface, jsonRpcConfig.wsApis)
+      ),
+      TransportStatus(
+        TransportKind.Ipc,
+        ipc.enabled,
+        None,
+        ipc.socketFile,
+        jsonRpcConfig.ipcApis,
+        TransportAuth.SocketFile
+      )
+    ) ++ engine
+
+  /** The least time between two HTTP requests from one address, where the rate is limited. */
+  private def tuiRateLimit: Option[java.time.Duration] =
+    val limit = jsonRpcConfig.httpServerConfig.rateLimit
+    Option.when(limit.enabled)(java.time.Duration.ofMillis(limit.minRequestInterval.toMillis))
+
+  /** Logs a warning for each HTTP or WebSocket endpoint that serves personal, debug, admin, qa or miner while bound to
+    * an address that is not loopback. IPC is not checked: its socket is protected by file permissions.
+    */
+  private def warnOnExposedNamespaces(): Unit =
+    val http = jsonRpcConfig.httpServerConfig
+    val ws = jsonRpcConfig.wsServerConfig
+    RpcExposureCheck
+      .warnings(
+        Seq(
+          RpcExposureCheck.Transport("HTTP", "http", http.enabled, http.interface, jsonRpcConfig.httpApis),
+          RpcExposureCheck.Transport("WebSocket", "ws", ws.enabled, ws.interface, jsonRpcConfig.wsApis)
+        )
+      )
+      .foreach(warning => log.warn(warning))
+
   private def startJsonRpcWsServer(): Unit =
     if jsonRpcConfig.wsServerConfig.enabled then jsonRpcWsServer.run()
 
   private def startJsonRpcIpcServer(): Unit =
     if jsonRpcConfig.ipcServerConfig.enabled then jsonRpcIpcServer.run()
 
+  /** With the Engine API enabled the node needs a consensus client to follow a post-merge chain, so a port it cannot
+    * bind is fatal: a node that logs it and runs on would look healthy and never sync.
+    */
   private def startEngineApiServer(): Unit =
     maybeEngineApiServer.foreach { server =>
-      try
-        val binding = scala.concurrent.Await.result(
-          server.start(),
-          scala.concurrent.duration.Duration(10, "seconds")
-        )
-        log.info(s"Engine API server bound to ${binding.localAddress}")
-      catch
-        case ex: Exception =>
-          log.error(s"Engine API server failed to start on ${engineApiConfig.interface}:${engineApiConfig.port}", ex)
+      StdNode.awaitEngineApiBind(server.start(), engineApiConfig.interface, engineApiConfig.port, 10.seconds) match
+        case Right(binding) => log.info(s"Engine API server bound to ${binding.localAddress}")
+        case Left(message)  => throw StdNode.startupRefusal(message)
     }
 
   def startPeriodicDBConsistencyCheck(): Unit =
@@ -285,22 +552,143 @@ abstract class BaseNode extends Node:
         )
       )
 
+  /** The TUI's frame loop, before anything else starts: the splash is a view of it (spec 027 FR-013). */
+  private def startTuiFrames(): Unit =
+    // Tui.current, never getInstance(): a node started without --tui has no TUI, and asking must not make one (B-045).
+    Tui.current.filter(_.isEnabled).foreach { tui =>
+      // `q` restores the terminal, then exits the JVM; the shutdown hook (ShutdownHooks) runs this node's shutdown(),
+      // which stops the updater. The restore cannot wait for the TuiRestore hook: JLine's hook may close the terminal
+      // first, leaving the user's shell in the alternate screen with the cursor hidden.
+      val quit = TuiUpdater.restoreThenQuit(tui, () => sys.exit(0))
+      // The settings Fukuii.main loaded (`fukuii.tui` plus the environment) when it built the TUI.
+      val updater = TuiUpdater(tui, tui.config, () => tuiSnapshots.get, Config.blockchains.network, quit)
+      // The chain's identity, from the configuration alone, before the first frame: the sidebar's icon and the header
+      // name the network while the node is still starting. Display only: the fork configuration is read, never
+      // changed (spec 027 FR-017).
+      tui.updateChain(ChainFacts.from(blockchainConfig, BuildInfo.version))
+      tuiUpdater = Some(updater)
+      updater.start()
+    }
+
+  /** The TUI's status poll, on its own thread, once the actors it asks exist (spec 027 FR-011). */
   private def startTuiUpdater(): Unit =
-    val tui = Tui.getInstance()
-    if tui.isEnabled then
-      log.info("Starting TUI updater")
-      tui.updateNodeSettings(tuiNodeSettings())
+    Tui.current.filter(_.isEnabled).foreach { tui =>
+      log.info("Starting TUI status probe")
+      val settings = tuiNodeSettings()
+      tui.updateNodeSettings(settings)
+      // Spec 027 slice 5. The consensus-layer panel exists on a post-merge chain with a live Engine API, the gate that
+      // binds the designated head (`bindDesignatedHead`): an ETC node, even one with an Engine API for `testing_*`, has
+      // none and no engine series. The mining panel exists on ETC. Each reading is a thunk the probe thread calls: the
+      // fork choice through one read of the manager's state (the manager itself is not handed to the TUI, whose
+      // listener slot is the SNAP pivot's feed), the safe and finalized numbers by header lookup, and the coinbase
+      // from the same provider `eth_coinbase` and `eth_getWork` answer from.
+      val consensusLayerPanel = engineApiConfig.enabled && blockchainConfig.terminalTotalDifficulty.isDefined
+      val local = TuiStatusProbe.LocalSources.node(
+        dataDir = Option(settings.dataDir).filter(_.nonEmpty).map(new java.io.File(_)),
+        // Only ETH's fork timeline stands on a timestamp; ETC's stands on the block number, so no header is read.
+        headTimestamp =
+          if blockchainConfig.networkType == NetworkType.ETH then
+            () => blockchainReader.getBestBlockHeader.map(_.unixTimestamp.toLong)
+          else () => None,
+        cl =
+          if consensusLayerPanel then
+            TuiStatusProbe.LocalSources.clReader(
+              forkChoice = () =>
+                forkChoiceManager.getState
+                  .map(s => ForkChoiceHashes(s.headBlockHash, s.safeBlockHash, s.finalizedBlockHash)),
+              headerNumber = hash => blockchainReader.getBlockHeaderByHash(BlockHash(hash)).map(_.number.toLong)
+            )
+          else () => None,
+        mining =
+          if blockchainConfig.networkType == NetworkType.ETC then
+            TuiStatusProbe.LocalSources.miningReader(coinbase = () => coinbaseProvider.get().toString)
+          else () => None,
+        // Spec 029 slice 3: the head and its ancestors, read by hash on the probe's thread, a bounded number a poll.
+        // The same lookups the JSON-RPC block methods make; display only.
+        chain = Some(
+          new ChainReads.Source(
+            bestHeader = () => blockchainReader.getBestBlockHeader,
+            headerByHash = blockchainReader.getBlockHeaderByHash,
+            bodyByHash = blockchainReader.getBlockBodyByHash
+          )
+        ),
+        // Spec 029 slice 4, the Mempool view. The fee is the oracle's, which `eth_maxPriorityFeePerGas` answers with
+        // (a gas price on a chain with no base fee), cached by head. A transaction that left the pool is looked up in
+        // the transaction index to tell mined from dropped. Display only.
+        suggestedFee = () => Some(gasPriceOracle.suggestTipCap()),
+        isMined = hash =>
+          ChainReads
+            .bytes(hash)
+            .exists(b => storagesInstance.storages.transactionMappingStorage.get(b.toIndexedSeq).isDefined),
+        poolCapacity = txPoolConfig.txPoolSize,
+        poolCounters = () => Some(TxPoolMetrics.Node.snapshot),
+        // Spec 029 slice 5, the RPC view: the transports as configured, and what their servers counted.
+        rpc = TuiStatusProbe.LocalSources.rpcReader(tuiRpcTransports, tuiRateLimit),
+        // Spec 029 slice 6, the System and Storage views: this JVM's own beans and the RLPx byte counts; the
+        // database's properties, read without waiting, and the node's markers. Display only: nothing is written.
+        system = TuiStatusProbe.LocalSources.systemReader(),
+        storage = tuiStorageReader(),
+        // The fork id the handshake tells a peer (EIP-2124, EIP-6122), computed the same way, for display.
+        forkId = () =>
+          blockchainReader.getBestBlockHeader.map { head =>
+            val genesis = blockchainReader.genesisHeader
+            val id = ForkId.create(genesis.hash.value, genesis.unixTimestamp.toLong, blockchainConfig)(
+              head.number.value,
+              head.unixTimestamp.toLong
+            )
+            f"0x${id.hash.toLong}%08x" + id.next.fold("")(next =>
+              s", next ${ForkId.knownSentinels.getOrElse(next, next.toString)}"
+            )
+          }
+      )
+      // Spec 029 slice 7: the operator's actions, each tied to the node's own function that carries it out. They run
+      // on threads of the dashboard's action runner.
+      val (tuiActions, tuiActionsNotOffered) = TuiActions.of(this, tui.config.alerts)
+      tui.setActions(tuiActions, tuiActionsNotOffered)
+      // Spec 029 slice 3: the explorer's lookups, answered from the node's own stores on a worker thread of the TUI's.
+      // The same reads the JSON-RPC block, transaction and account methods make; nothing is written.
+      tui.setLookups(
+        new ChainLookups(
+          bestHeader = () => blockchainReader.getBestBlockHeader,
+          headerByNumber = blockchainReader.getBlockHeaderByNumber,
+          headerByHash = blockchainReader.getBlockHeaderByHash,
+          bodyByHash = blockchainReader.getBlockBodyByHash,
+          receiptsByHash = blockchainReader.getReceiptsByHash,
+          txLocation = hash =>
+            storagesInstance.storages.transactionMappingStorage
+              .get(hash.toIndexedSeq)
+              .map(location => (location.blockHash, location.txIndex)),
+          accountAt = blockchainReader.accountAt,
+          codeSize = hash => storagesInstance.storages.evmCodeStorage.get(hash).map(_.size),
+          sender = stx => SignedTransaction.getSender(stx)(using blockchainConfig),
+          // A pending transaction opens too (FR-036): the pool is asked, on the lookup worker's thread, with a bound.
+          pending = hash => pendingFromPool(hash)
+        )
+      )
+      // The genesis block is loaded by now: its hash completes the chain's identity (spec 029 FR-027).
+      tui.updateChain(
+        ChainFacts
+          .from(blockchainConfig, BuildInfo.version)
+          .copy(genesisHash = Some(ChainReads.hex(blockchainReader.genesisHeader.hash.value)))
+      )
       val probe = new TuiStatusProbe(
         peerManager,
         syncController,
         () => blockchainReader.getBestBlockNumber,
         peerConfiguration.maxOutgoingPeers + peerConfiguration.maxIncomingPeers,
-        () => SNAPSyncMetrics.latestProgress(TuiStatusProbe.SnapProgressMaxAgeMillis)
+        () => SNAPSyncMetrics.latestSample,
+        local = local,
+        // Spec 027 slice 4: each peer's client id and best block, and the txpool; asked in the same bounded wait.
+        networkPeerManager = Some(networkPeerManager),
+        txPool = Some(pendingTransactionsManagerTyped),
+        // The whole pool is read only while the Mempool view is on screen (FR-037).
+        poolWanted = () => tui.wantsPool
       )(using system.scheduler)
-      // `q` exits the JVM; the shutdown hook (ShutdownHooks) runs this node's shutdown(), which stops the updater.
-      val updater = TuiUpdater(tui, TuiConfig.default, probe, Config.blockchains.network, () => sys.exit(0))
-      tuiUpdater = Some(updater)
-      updater.start()
+      // Polling ends with the TUI: after `d`, a lost terminal or a failed key read, nothing reads the snapshots.
+      val thread = new TuiProbeThread(probe, tui.config.statusPollIntervalMs, tuiSnapshots, () => tui.isEnabled)
+      tuiProbe = Some(thread)
+      thread.start()
+    }
 
   private def tuiNodeSettings(): NodeSettings =
     val c = instanceConfig.config
@@ -313,7 +701,12 @@ abstract class BaseNode extends Node:
       maxPeers = peerConfiguration.maxOutgoingPeers + peerConfiguration.maxIncomingPeers,
       rpcEnabled = opt(c.getBoolean("network.rpc.http.enabled")).getOrElse(false),
       rpcPort = opt(c.getInt("network.rpc.http.port")).getOrElse(0),
-      miningEnabled = opt(c.getBoolean("mining.mining-enabled")).getOrElse(false)
+      miningEnabled = opt(c.getBoolean("mining.mining-enabled")).getOrElse(false),
+      wsEnabled = opt(c.getBoolean("network.rpc.ws.enabled")).getOrElse(false),
+      wsPort = opt(c.getInt("network.rpc.ws.port")).getOrElse(0),
+      ipcEnabled = opt(c.getBoolean("network.rpc.ipc.enabled")).getOrElse(false),
+      engineEnabled = opt(c.getBoolean("network.engine-api.enabled")).getOrElse(false),
+      enginePort = opt(c.getInt("network.engine-api.port")).getOrElse(0)
     )
 
   override def shutdown: () => Unit = () =>
@@ -321,8 +714,9 @@ abstract class BaseNode extends Node:
       case Failure(e) => log.warn("Error while shutting down...", e)
       case Success(_) =>
 
+    tryAndLogFailure(() => tuiProbe.foreach(_.stop()))
     tryAndLogFailure(() => tuiUpdater.foreach(_.stop()))
-    tryAndLogFailure(() => Tui.getInstance().shutdown())
+    tryAndLogFailure(() => Tui.current.foreach(_.shutdown()))
     tryAndLogFailure(() => peerDiscoveryManagerTyped ! PeerDiscoveryManager.Stop)
     tryAndLogFailure(() => mining.stopProtocol())
     // Stop the Engine API server first: it owns its own Http() binding (port 8551) on a dedicated
@@ -335,6 +729,9 @@ abstract class BaseNode extends Node:
           case _                                            => engineServer.stopSync()
       }
     )
+    // The recovery of a state that is no longer held stops once nothing can ask for one, and before the data source
+    // closes: one under way ends after the block it is executing (spec 018 C4d part 3).
+    tryAndLogFailure(() => stateRecovery.foreach(_.close()))
     // Discovery's own runtime goes once the Stop sent above has released the service (UDP socket, feeder), and before
     // the actor system that hosts PeerDiscoveryManager is terminated (task #52).
     tryAndLogFailure(() => shutdownDiscoveryIoRuntime(10.seconds))
@@ -360,6 +757,74 @@ abstract class BaseNode extends Node:
     if jsonRpcConfig.ipcServerConfig.enabled then tryAndLogFailure(() => jsonRpcIpcServer.close())
     tryAndLogFailure(() => Metrics.get().close())
     tryAndLogFailure(() => storagesInstance.dataSource.close())
+
+  /** `-Dfukuii.snap.clearDoneOnStart` on the unified state layout (spec 018 C5a part 10): refused, and the node does
+    * not start. It re-runs SNAP's healing over a state the node holds, on the hash-keyed store, which this layout never
+    * reads; a SNAP sync here never starts over a state. The validator does not see a system property, so it is here.
+    */
+  def refuseSnapRepairOnTheGuard(): Unit =
+    com.chipprbots.ethereum.blockchain.sync.PathLiveSync
+      .snapRepairRefusal(System.getProperty("fukuii.snap.clearDoneOnStart", "false").toBoolean)
+      .foreach(why => throw new IllegalStateException(why))
+
+  /** A node on the unified state layout that would run regular sync from its genesis (spec 018 C5a part 10, the user's
+    * decision of 2026-11-17): refused, and the node does not start
+    * ([[com.chipprbots.ethereum.blockchain.sync.PathLiveSync.regularSyncFromGenesisRefusal]]).
+    */
+  def refuseRegularSyncFromGenesisOnTheGuard(): Unit =
+    storagesInstance.storages.pathStateStorage.foreach { pathState =>
+      val appState = storagesInstance.storages.appStateStorage
+      com.chipprbots.ethereum.blockchain.sync.PathLiveSync
+        .regularSyncFromGenesisRefusal(
+          doSnapSync = syncConfig.doSnapSync,
+          testMode = Config.testmode,
+          anchor = pathState.anchor,
+          syncStarted = appState.isSnapSyncDone() || appState.getSnapSyncPivotBlock().isDefined
+        )
+        .foreach(why => throw new IllegalStateException(why))
+    }
+
+  /** Finishes, at a start, a clear of the state for a sync from scratch that did not reach its end
+    * ([[com.chipprbots.ethereum.db.storage.pathstate.PathStateStorage.finishPendingClear]]).
+    */
+  def finishPendingStateClear(): Unit =
+    storagesInstance.storages.pathStateStorage.foreach { pathState =>
+      val genesis = blockchainReader.getBlockHeaderByNumber(0).map(_.hash.value)
+      if pathState.finishPendingClear(genesis) then
+        log.warn("[STATE-CLEAR] The state was being cleared for a sync from scratch when the node stopped: it is clear")
+    }
+
+  /** The operator's switch that ends the loop guard of the escalations (spec 018 C5a part 7b): at a start, before
+    * anything syncs, since a clear writes the list back under locks this does not take.
+    */
+  def forgetGivenUpBranchesIfAsked(): Unit =
+    val appState = storagesInstance.storages.appStateStorage
+    com.chipprbots.ethereum.blockchain.sync.EscalationHandler.forgetGivenUpAtStart(
+      com.chipprbots.ethereum.db.storage.pathstate.StateConfig(instanceConfig.config).recovery.forgetGivenUpBranches,
+      () => appState.getStateEscalationGivenUp(),
+      () => appState.forgetGivenUpBranches().commitSync(),
+      log.warn(_),
+      () => appState.getStateEscalationLast(),
+      () => appState.forgetStateEscalationLast().commitSync()
+    ): Unit
+
+  /** The reconciliation at start of a datadir on the unified state layout ([[StateReconciliation]]): the best block and
+    * the index of blocks by number made those of the block whose state the disk holds. It throws, and the node does not
+    * start, on a datadir it cannot mend.
+    */
+  def reconcileState(): Unit =
+    storagesInstance.storages.pathStateStorage.foreach { pathState =>
+      StateReconciliation.run(
+        storagesInstance.storages.appStateStorage,
+        pathState,
+        blockchainReader,
+        blockchainWriter,
+        testMode = Config.testmode
+      ) match
+        case StateReconciliation.Outcome.Consistent(anchor) =>
+          log.info("State reconciled at start: the best block is the block whose state is held ({})", anchor.show)
+        case other => log.info("State reconciliation at start: {}", other)
+    }
 
   /** Restores the number->hash entry at the best block's height if an earlier version rewrote the best block's header
     * (SNAP startup) and left the index naming the forged copy. See [[BlockchainWriter.repairBestBlockNumberMapping]].
@@ -443,6 +908,40 @@ class StdNode(
 
 object StdNode:
 
+  /** The refusal to start, for the caller (`Fukuii.run`, or one instance of the multi-instance runtime) to report. */
+  def startupRefusal(message: String): EngineApiStartupRefusal = new EngineApiStartupRefusal(message)
+
+  /** Forces the Engine API secret and throws [[EngineApiStartupRefusal]] if it is refused. */
+  def failIfRefused(thunk: => Any): Unit =
+    engineApiRefusal(thunk).foreach(m => throw startupRefusal(m))
+
+  /** The message of a refused Engine API secret, if the secret is refused (B-246). `thunk` forces it. */
+  def engineApiRefusal(thunk: => Any): Option[String] =
+    try
+      val _ = thunk
+      None
+    catch
+      case e @ (_: IllegalStateException | _: java.io.IOException | _: IllegalArgumentException) =>
+        Some(e.getMessage)
+
+  /** Waits for the Engine API bind. A failure, or no answer in `timeout`, is a message naming the address and the key
+    * to change, for the caller to log before it exits.
+    */
+  def awaitEngineApiBind[A](
+      bind: scala.concurrent.Future[A],
+      interface: String,
+      port: Int,
+      timeout: scala.concurrent.duration.FiniteDuration
+  ): Either[String, A] =
+    try Right(scala.concurrent.Await.result(bind, timeout))
+    catch
+      case scala.util.control.NonFatal(e) =>
+        Left(
+          s"Refusing to start: the Engine API cannot bind $interface:$port (${e.getClass.getSimpleName}: ${e.getMessage}). " +
+            "The consensus client could never reach this node, which would not sync. Free the port, or set " +
+            "network.engine-api.port (each instance on one host needs its own)."
+        )
+
   /** Should the Engine API bind after the ETH JSON-RPC server rather than before it?
     *
     * Only when the readiness probe targets the Engine API port. hive's `ethereum/sync` simulator probes 8551 on the
@@ -452,3 +951,9 @@ object StdNode:
     */
   def engineApiBindsLast(readinessPort: Option[Int], engineApiPort: Int): Boolean =
     readinessPort.contains(engineApiPort)
+
+/** The node cannot start, for a reason the operator can fix: a refused Engine API secret file, or an Engine API port it
+  * cannot bind. It carries only the operator-facing message, no cause and no stack trace, which the caller prints and
+  * logs once before it exits 1 (B-246).
+  */
+final class EngineApiStartupRefusal(message: String) extends RuntimeException(message, null, false, false)

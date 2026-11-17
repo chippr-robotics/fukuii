@@ -1,0 +1,48 @@
+ ◆ FUKUII  etc (61) · PoW · head 21,884,102 · 41/50 peers · up 12d 7h · v0.11.0                                                                             Ops 
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+ ✓ no alerts                                                                                                                                                    
+                  │ Peers   41/50 ◆◆◆◆◆◆◆◆◆◆  Block  21,884,102 (at head)                    Txpool  142             Disk  388G free     JVM  3.4G / 8.0G heap  
+                  │ Sync    ✓ at head                                                                                                                           
+                  │─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+                  │ Mode    actions allowed · each is confirmed in its dialog · every attempt is logged by fukuii.tui.ops                                       
+       ETC        │ Running nothing                                                                                                                             
+                  │─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+                  │ Actions 25, by what they can break · Up and Down select · Enter or a types one at the prompt                                                
+                  │   Observe  config        the effective configuration, secrets hidden                                                                        
+ etc              │   Observe  tunables      what changes without a restart, as it is now                                                                       
+ PoW · id 61      │   Observe  deps          each subsystem, what it needs, its health                                                                          
+ main network     │   Observe  test-rpc      calls each RPC endpoint here: answer and time                                                                      
+                  │   Observe  net           listening and external addresses, inbound peers                                                                    
+ [1] Overview     │   Observe  art           every sprite                                                                                                       
+ [2] Chain        │   Observe  lookup        a block, a transaction, a receipt or an account                                                                    
+ [3] Peers        │   Adjust   loglevel      a logger's level, until the node restarts                                                                          
+ [4] Mempool      │   Adjust   maxpeers      the limit on outgoing peers, until restart                                                                         
+ [5] RPC          │   Adjust   peer trust    a peer is trusted: exempt from pruning                                                                             
+ [6] Storage      │   Adjust   peer untrust  a peer stops being trusted                                                                                         
+ [7] System       │   Adjust   threshold     where an alert begins, for this session                                                                            
+ [8] Logs         │   Disrupt  peer add      the node dials a peer and keeps dialling it                                                                        
+ [9] Ops          │   Disrupt  peer drop     a peer is disconnected; it may reconnect                                                                           
+                  │   Disrupt  peer block    an address is refused until restart                                                                                
+ graphics text    │   Disrupt  peer unblock  an address stops being refused                                                                                     
+                  │   Disrupt  mining start  the node's own miner starts (ETC)                                                                                  
+                  │   Disrupt  coinbase      the address mined blocks pay from now on (ETC)                                                                     
+                  │   Disrupt  rpc stop      a JSON-RPC server stops; its connections drop                                                                      
+                  │   Disrupt  rpc start     a server that was stopped here listens again                                                                       
+                  │   Disrupt  dbcheck       the start's database check, run now; it reports                                                                    
+                  │   Disrupt  detect-ip     asks outside services for this node's address                                                                      
+                  │   Disrupt  bundle        writes a support bundle under the datadir                                                                          
+                  │   Halt     mining stop   the node's own miner stops until restart (ETC)                                                                     
+                  │   Halt     quit          the node process ends                                                                                              
+                  │─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+                  │ Last    no action has been attempted in this session                                                                                        
+                  │─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+                  │ Not offered, and why                                                                                                                        
+                  │ Start the node, restart the node: the dashboard runs inside the node's process                                                              
+                  │ Restart the Engine API server, peer discovery or sync: none can be stopped and started again without ending the process                     
+                  │ Reload configuration from file: no key is read again after the start; `tunables` lists what changes while it runs                           
+                  │ Create a snapshot: this client has no snapshots (spec 013 has no code)                                                                      
+                  │ Compact the database: it holds the database lock for its whole run, so the node would import nothing until it ended, which on a large data… 
+                  │ Change the pruning mode or the state scheme: needs a restart, and for the scheme a resync                                                   
+                  │                                                                                                                                             
+                  │                                                                                                                                             
+ 1-9 view  [ ] next view  Up Down select  Enter open  Esc back  : prompt  / filter  ? help  v graphics  p pause  r redraw  d detach  q quit                     

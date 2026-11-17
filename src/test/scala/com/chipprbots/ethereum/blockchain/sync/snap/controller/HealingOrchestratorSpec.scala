@@ -24,6 +24,7 @@ import org.scalatest.matchers.should.Matchers
 import com.chipprbots.ethereum.blockchain.sync.PeerListSupportNg
 import com.chipprbots.ethereum.blockchain.sync.SyncProtocol
 import com.chipprbots.ethereum.blockchain.sync.snap.ChildSpawn
+import com.chipprbots.ethereum.blockchain.sync.snap.HeaderChainCheck
 import com.chipprbots.ethereum.blockchain.sync.snap.RecordingChildFactories
 import com.chipprbots.ethereum.blockchain.sync.snap.SNAPRequestTracker
 import com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncConfig
@@ -44,6 +45,7 @@ import com.chipprbots.ethereum.db.storage.MptStorage
 import com.chipprbots.ethereum.db.storage.PathNodeStorage
 import com.chipprbots.ethereum.db.storage.StateStorage
 import com.chipprbots.ethereum.domain.Account
+import com.chipprbots.ethereum.domain.BlockHeader
 import com.chipprbots.ethereum.domain.BlockchainReader
 import com.chipprbots.ethereum.domain.BlockchainWriter
 import com.chipprbots.ethereum.domain.TrieRoot
@@ -146,6 +148,7 @@ private[snap] class StubHealingOrchestratorState(
   var coordinatorGeneration: Long = 0
   val healedCodeHashes: mutable.LinkedHashSet[ByteString] = mutable.LinkedHashSet.empty
   def isPoSChain: Boolean = false
+  var headerChainCheck: HeaderChainCheck = HeaderChainCheck.LinkOnly
   def ec: ExecutionContext = ExecutionContext.parasitic
   var trieNodesCachedInMemory: Boolean = false
 
@@ -166,7 +169,9 @@ private[snap] class StubHealingOrchestratorState(
   val flatSlotStorage: FlatSlotStorage = new FlatSlotStorage(dataSource)
   def validatorFactory: MptStorage => StateValidator = notUsed("validatorFactory")
   def snapValidationEc: ExecutionContext = notUsed("snapValidationEc")
-  def blockchainReader: BlockchainReader = notUsed("blockchainReader")
+  // The healing anchors read the stored pivot header to pin its hash (PivotAnchor.pinFor); none is stored here.
+  lazy val blockchainReader: BlockchainReader =
+    new com.chipprbots.ethereum.blockchain.sync.EphemBlockchainTestSetup {}.blockchainReader
   def blockchainWriter: BlockchainWriter = notUsed("blockchainWriter")
   def peerEventBus: ActorRef[PeerEventBusActor.Command] = notUsed("peerEventBus")
   var pathNodeStorageOpt: Option[PathNodeStorage] = None
@@ -200,7 +205,7 @@ private[snap] class StubHealingOrchestratorState(
     mptStorageRequests += pivotBlockNumber
     mptStorage
   def peersToDownloadFrom: Map[PeerId, PeerListSupportNg.PeerWithInfo] = Map.empty
-  def calibratePivotTD(pivotBlockNumber: BigInt): Option[BigInt] = notUsed("calibratePivotTD")
+  def calibratePivotTD(pivot: BlockHeader): Option[BigInt] = notUsed("calibratePivotTD")
   def snapServingPeers(): List[Peer] = Nil
   var snapServerSchedulerStarts: Int = 0
   def startSnapServerPeersScheduler(): Unit = snapServerSchedulerStarts += 1

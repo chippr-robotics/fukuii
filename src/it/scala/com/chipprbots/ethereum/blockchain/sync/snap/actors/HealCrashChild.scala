@@ -44,6 +44,7 @@ import com.chipprbots.ethereum.db.storage.Namespaces
 import com.chipprbots.ethereum.db.storage.NodeStorage
 import com.chipprbots.ethereum.db.storage.NodeStorage.NodeHash
 import com.chipprbots.ethereum.db.storage.PathNodeStorage
+import com.chipprbots.ethereum.db.storage.RawNodeRead
 import com.chipprbots.ethereum.db.storage.SnapSyncProgressStorage
 import com.chipprbots.ethereum.db.storage.StateStorage
 import com.chipprbots.ethereum.db.storage.pruning.BasicPruning
@@ -127,7 +128,7 @@ object HealCrashChild:
     else
       val dataSource = new HookedDataSource(rocks, gate)
       val nodeStorage = new NodeStorage(dataSource)
-      val stateStorage = StateStorage(pruning, nodeStorage, nodeCache(nodeStorage))
+      val stateStorage = StateStorage(pruning, nodeStorage, nodeCache(nodeStorage), () => true)
       val mpt: MptStorage =
         val backing = stateStorage.getBackingStorage(1)
         if scheme == StorageScheme.Hash then new HookedMptStorage(backing, gate, oldTrie.nodes.map(_.hash).toSet)
@@ -437,6 +438,7 @@ final class HookedMptStorage(underlying: MptStorage, gate: KillGate, oldTrie: Se
     underlying.updateNodesInStorage(newRoot, toRemove)
   def persist(): Unit = underlying.persist()
   override def multiGetNodes(hashes: Seq[Array[Byte]]): Seq[Option[MptNode]] = underlying.multiGetNodes(hashes)
+  override def rawNodes(hashes: Seq[ByteString]): Seq[RawNodeRead] = underlying.rawNodes(hashes)
   override def storeRawNodes(nodes: Seq[(ByteString, Array[Byte])]): Unit =
     gate.onCommitWrite(nodes.size, onlyOldTrie = nodes.forall(node => oldTrie(node._1)))(() =>
       underlying.storeRawNodes(nodes)

@@ -185,7 +185,7 @@ class AmsterdamPrecompileStateGasSpec extends AnyFlatSpec with Matchers with Ams
     )
     val result = execute(stx, header, block45World, amsterdamConfig)
 
-    result.vmError shouldBe Some(PreCompiledContractFail)
+    result.vmError shouldBe Some(PreCompiledContractFail(PrecompiledContracts.Bn128Add, stx.tx.payload))
     result.stateGasUsed shouldBe BigInt(0)
     result.gasUsed shouldBe AmsterdamGas.TxMaxGasLimit
     result.worldState.getAccount(PrecompiledContracts.Bn128AddAddr) shouldBe None

@@ -5,7 +5,7 @@
         [--expect-suite NAME ...] [--sbt-exit N] [--sbt-log FILE] [--summary FILE]
 
 Failed and errored test cases are collected as `<suite> :: <test name>` (suite is
-the simple class name) and compared with the allow-list (one entry: task #68).
+the simple class name) and compared with the allow-list (empty since B-309 fixed task #68).
 Exit 1 when:
   * no report was produced, or an --expect-suite has no report;
   * a failed test is not on the allow-list;
@@ -141,7 +141,7 @@ def render(counts, errs) -> str:
         t, p, i, f = counts[suite]
         lines.append(f"| {suite} | {t} | {p} | {i} | {f} |")
     lines.append("")
-    lines.append("**Result: FAIL**" if errs else "**Result: PASS** (the only failure, if any, is the allow-listed task #68)")
+    lines.append("**Result: FAIL**" if errs else "**Result: PASS** (the only failures, if any, are the allow-listed ones)")
     for e in errs:
         lines.append(f"- {e}")
     return "\n".join(lines) + "\n"

@@ -15,6 +15,7 @@ import org.scalatest.time.Span
 import com.chipprbots.ethereum.blockchain.sync.PeerRateTracker
 import com.chipprbots.ethereum.domain.Account
 import com.chipprbots.ethereum.network.Peer
+import com.chipprbots.ethereum.network.PeerScoringManager
 import com.chipprbots.ethereum.network.p2p.messages.SNAP.*
 import com.chipprbots.ethereum.testing.PeerTestHelpers.*
 import com.chipprbots.ethereum.testing.Tags.*
@@ -566,6 +567,138 @@ class SNAPRequestTrackerSpec extends ScalaTestWithActorTestKit() with AnyFlatSpe
       probeFired.get() shouldBe 1
     }
     fired.get() shouldBe 0
+  }
+
+  // ---- spec 027 slice 4a: the tracker feeds the peer scorer ---------------------------------------------------------
+
+  private class ScoredTracker:
+    val nowMs = new java.util.concurrent.atomic.AtomicLong(1000L)
+    val scorer = new PeerScoringManager(java.time.Clock.fixed(java.time.Instant.EPOCH, java.time.ZoneOffset.UTC))
+    val tracker = new SNAPRequestTracker(nowMs = () => nowMs.get, scorer = Some(scorer))
+    val peer: Peer = createTestPeer("scored-snap-peer", TestProbe().ref)
+
+  it should "record a response with the elapsed time when a request completes" taggedAs UnitTest in {
+    val f = new ScoredTracker
+    val requestId = f.tracker.generateRequestId()
+    f.tracker.trackRequest(requestId, f.peer, SNAPRequestTracker.RequestType.GetAccountRange) {}
+    f.nowMs.set(1250L)
+
+    f.tracker.completeRequest(requestId, responseItems = 3) shouldBe defined
+
+    val score = f.scorer.getScore(f.peer.id)
+    score.responsesReceived shouldBe 1
+    score.averageLatencyMs shouldBe Some(250.0)
+    score.requestsTimedOut shouldBe 0
+  }
+
+  it should "record nothing when a request is completed with no items: that is how an abandoned request is forgotten" taggedAs
+    UnitTest in {
+      // TrieNodeHealingCoordinator (pivot refresh, every ~12 min), AccountRangeWorker and ByteCodeWorker complete the
+      // requests they abandon with completeRequest(id, 0). A peer that disconnected has not answered.
+      val f = new ScoredTracker
+      val requestId = f.tracker.generateRequestId()
+      f.tracker.trackRequest(requestId, f.peer, SNAPRequestTracker.RequestType.GetTrieNodes) {}
+      f.nowMs.set(1250L)
+
+      f.tracker.completeRequest(requestId, 0) shouldBe defined
+
+      f.tracker.isPending(requestId) shouldBe false
+      f.scorer.getAllScores shouldBe empty
+    }
+
+  it should "record a response when a request is completed with one item or more, and with the default" taggedAs
+    UnitTest in {
+      val f = new ScoredTracker
+      val requestIds = (1 to 3).map(_ => f.tracker.generateRequestId())
+      requestIds.foreach(id => f.tracker.trackRequest(id, f.peer, SNAPRequestTracker.RequestType.GetByteCodes) {})
+      f.nowMs.set(1100L)
+
+      f.tracker.completeRequest(requestIds(0), 1) shouldBe defined
+      f.tracker.completeRequest(requestIds(1), 40) shouldBe defined
+      f.tracker.completeRequest(requestIds(2)) shouldBe defined // the default is one item
+
+      f.scorer.getScore(f.peer.id).responsesReceived shouldBe 3
+    }
+
+  it should "record nothing when completing a request that is not pending" taggedAs UnitTest in {
+    val f = new ScoredTracker
+    f.tracker.completeRequest(BigInt(99)) shouldBe None
+    f.scorer.getAllScores shouldBe empty
+  }
+
+  it should "record nothing when a request is cancelled" taggedAs UnitTest in {
+    val f = new ScoredTracker
+    val requestId = f.tracker.generateRequestId()
+    f.tracker.trackRequest(requestId, f.peer, SNAPRequestTracker.RequestType.GetByteCodes) {}
+    f.tracker.cancelRequest(requestId)
+    f.scorer.getAllScores shouldBe empty
+  }
+
+  it should "record a timeout when the armed timeout fires" taggedAs UnitTest in {
+    val f = new ScoredTracker
+    val fired = new java.util.concurrent.CountDownLatch(1)
+    val requestId = f.tracker.generateRequestId()
+    f.tracker.trackRequest(requestId, f.peer, SNAPRequestTracker.RequestType.GetStorageRanges, timeout = 50.millis) {
+      fired.countDown()
+    }
+    fired.await(10, java.util.concurrent.TimeUnit.SECONDS) shouldBe true
+
+    // The callback runs under the tracker's lock and the timeout is scored just after it is released.
+    eventually(timeout(Span(10000, Millis))) {
+      f.scorer.getScore(f.peer.id).requestsTimedOut shouldBe 1
+    }
+    f.scorer.getScore(f.peer.id).responsesReceived shouldBe 0
+  }
+
+  it should "score the timeout even when the owner's callback throws" taggedAs UnitTest in {
+    val f = new ScoredTracker
+    val fired = new java.util.concurrent.CountDownLatch(1)
+    val requestId = f.tracker.generateRequestId()
+    f.tracker.trackRequest(requestId, f.peer, SNAPRequestTracker.RequestType.GetAccountRange, timeout = 50.millis) {
+      fired.countDown()
+      throw new IllegalStateException("the owner's callback failed")
+    }
+    fired.await(10, java.util.concurrent.TimeUnit.SECONDS) shouldBe true
+
+    // The request was expired before the callback ran, so the peer's timeout stands whatever the callback did.
+    eventually(timeout(Span(10000, Millis))) {
+      f.scorer.getScore(f.peer.id).requestsTimedOut shouldBe 1
+    }
+    f.tracker.isPending(requestId) shouldBe false
+  }
+
+  it should "leave the decision to the owner when it owns the timeout: the timer records nothing, expireRequest does" taggedAs
+    UnitTest in {
+      val f = new ScoredTracker
+      val fired = new java.util.concurrent.CountDownLatch(1)
+      val requestId = f.tracker.generateRequestId()
+      f.tracker.trackRequest(
+        requestId,
+        f.peer,
+        SNAPRequestTracker.RequestType.GetTrieNodes,
+        timeout = 50.millis,
+        ownerDecidesTimeout = true
+      )(fired.countDown())
+      fired.await(10, java.util.concurrent.TimeUnit.SECONDS) shouldBe true
+
+      // The reply may still be in the owner's mailbox: the peer is not blamed yet.
+      f.tracker.isPending(requestId) shouldBe true
+      f.scorer.getAllScores shouldBe empty
+
+      f.tracker.expireRequest(requestId) shouldBe defined
+      f.scorer.getScore(f.peer.id).requestsTimedOut shouldBe 1
+
+      // A second expiry finds nothing: the timeout is recorded once.
+      f.tracker.expireRequest(requestId) shouldBe None
+      f.scorer.getScore(f.peer.id).requestsTimedOut shouldBe 1
+    }
+
+  it should "work without a scorer, as before" taggedAs UnitTest in {
+    val tracker = new SNAPRequestTracker()
+    val peer = createTestPeer("unscored-snap-peer", TestProbe().ref)
+    val requestId = tracker.generateRequestId()
+    tracker.trackRequest(requestId, peer, SNAPRequestTracker.RequestType.GetAccountRange) {}
+    tracker.completeRequest(requestId) shouldBe defined
   }
 
 /** A Seq whose random access fails the test: the ordering checks must walk a response sequentially, so that they stay

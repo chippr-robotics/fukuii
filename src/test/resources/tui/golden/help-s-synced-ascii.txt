@@ -1,0 +1,24 @@
+ # FUKUII  etc (61) . PoW . up 12d 7h                                      Help 
+--------------------------------------------------------------------------------
+ + no alerts                                                                    
+ Peers   41/50 ##########         Block  21,884,102 (at head)                   
+ Sync    + at head                                                              
+--------------------------------------------------------------------------------
+ Keys                                                                           
+   1-5        1 Overview  2 Chain  3 Peers  4 Mempool  5 RPC                    
+   6-9        6 Storage  7 System  8 Logs  9 Ops                                
+   ]          the next view (wraps)                                             
+   [          the previous view (wraps)                                         
+   Tab        the next panel of the view                                        
+   Shift-Tab  the previous panel of the view                                    
+   Up k       the row above                                                     
+   Down j     the row below                                                     
+   Left ,     across, to the left                                               
+   Right .    across, to the right                                              
+   PgUp -     a page up (Logs: older lines)                                     
+   PgDn +     a page down (Logs: newer lines)                                   
+   Home <     the first row                                                     
+--------------------------------------------------------------------------------
+ Glyphs (ascii, g switches)                                                     
+   ~o worm (progress)   @@ brain (done)   z  stalled   + done / active   # peer 
+ 1-9 view  : prompt  / filter  ? help  p pause  r redraw  d detach  q quit      

@@ -1,0 +1,24 @@
+ ◆ FUKUII  sepolia (11155111) · PoS · up 3d 4h                           Health 
+────────────────────────────────────────────────────────────────────────────────
+ ✓ no alerts                                                                    
+ Peers   23/50 ◆◆◆◆◆◆◆◆◆◆         Block  7,412,009 → 7,412,011 (−2)             
+ Sync    regular 99% · rate 0.08 blk/s · ETA 24s                                
+────────────────────────────────────────────────────────────────────────────────
+ Health  Chain    ██████████ 100%  set by sync controller                       
+────────────────────────────────────────────────────────────────────────────────
+ sync controller  answering                                                     
+    ok for 12m 0s · error when it stops answering · 100% room                   
+ head advancing  head 7,412,009 unchanged for an unknown time, 2 remain         
+    not known for 12m 0s · warn after 2m 0s unchanged with blocks remaining     
+ A bar's colour is the alert row's: these are the rules the alert row reads.    
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+ 1-9 view  : prompt  / filter  ? help  p pause  r redraw  d detach  q quit      

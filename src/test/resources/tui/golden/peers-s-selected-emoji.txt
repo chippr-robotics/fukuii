@@ -1,0 +1,24 @@
+ ◆ FUKUII  etc (61) · PoW · up 12d 7h                                     Peers 
+────────────────────────────────────────────────────────────────────────────────
+ ✓ no alerts                                                                    
+ Peers   41/50 ◆◆◆◆◆◆◆◆◆◆         Block  21,884,102 (at head)                   
+ Sync    ✓ at head                                                              
+────────────────────────────────────────────────────────────────────────────────
+ Peers   41 handshaked of 50 max · 14 in · 27 out                               
+   id          dir  client                best        age                       
+   0x0000…a1   in   CoreGeth/v1.12.19     21,884,102  4h 10m                    
+   0x11a2…9b   out  besu/v24.1.2          21,884,100  1h 43m                    
+   0x1a73…98   in   Nethermind/v1.25.4    21,884,102  30m 57s                   
+   0x1715…16   out  CoreGeth/v1.12.19     21,884,100  3h 41m                    
+   0x1fe6…13   in   fukuii/v0.11.0        21,884,102  2h 28m                    
+   0x28b7…10   out  besu/v24.1.2          21,884,101  1h 15m                    
+   0x2e2b…8b   out  CoreGeth/v1.12.19     21,884,101  3h 13m                    
+   0x36fc…88   out  fukuii/v0.11.0        21,884,100  2h 0m                     
+   0x3fcd…85   in   besu/v24.1.2          21,884,102  47m 48s                   
+   0x3c6f…03   out  Geth/v1.13.5          21,884,100  3h 58m                    
+   0x4540…00   in   CoreGeth/v1.12.19     21,884,102  2h 45m                    
+   0x4e11…fd   out  fukuii/v0.11.0        21,884,101  1h 32m                    
+   0x5384…78   out  Geth/v1.13.5          21,884,101  3h 30m                    
+   0x6526…72   in   fukuii/v0.11.0        21,884,102  1h 4m                     
+   + 27 more                                                                    
+ 1-9 view  : prompt  / filter  ? help  p pause  r redraw  d detach  q quit      

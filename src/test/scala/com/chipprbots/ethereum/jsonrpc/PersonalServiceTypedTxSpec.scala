@@ -427,14 +427,11 @@ class PersonalServiceTypedTxSpec
     val blockchainReader: BlockchainReader = mock[BlockchainReader]
     (() => blockchainReader.getBestBranch).expects().returning(EmptyBranch).anyNumberOfTimes()
     (() => blockchainReader.getBestBlock).expects().returning(Some(Block(head, BlockBody.empty))).anyNumberOfTimes()
-    blockchainReader.getAccount
-      .expects(*, address, head.number.value)
-      .returning(Some(Account(UInt256(accountNonce), UInt256(BigInt(10).pow(20)))))
-      .anyNumberOfTimes()
 
     implicit val oracleCfg: BlockchainConfig = config
     (() => blockchainReader.getBestBlockHeader).expects().returning(Some(head)).anyNumberOfTimes()
-    blockchainReader.getAccountAtStateRoot
+    // the account at the head, read by its header: by the personal service and by the transaction service
+    blockchainReader.accountAt
       .expects(*, address)
       .returning(Some(Account(UInt256(accountNonce), UInt256(BigInt(10).pow(20)))))
       .anyNumberOfTimes()

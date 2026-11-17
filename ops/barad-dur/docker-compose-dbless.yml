@@ -40,8 +40,8 @@ services:
     ports:
       - "${KONG_PROXY_HTTP_PORT:-8000}:8000"   # Kong proxy HTTP
       - "${KONG_PROXY_HTTPS_PORT:-8443}:8443" # Kong proxy HTTPS
-      - "${KONG_ADMIN_HTTP_PORT:-8001}:8001"   # Kong Admin API HTTP
-      - "${KONG_ADMIN_HTTPS_PORT:-8444}:8444" # Kong Admin API HTTPS
+      - "127.0.0.1:${KONG_ADMIN_HTTP_PORT:-8001}:8001"   # Kong Admin API HTTP (host loopback only)
+      - "127.0.0.1:${KONG_ADMIN_HTTPS_PORT:-8444}:8444" # Kong Admin API HTTPS (host loopback only)
     volumes:
       - ./kong.yml:/etc/kong/kong.yml:ro
     networks:
@@ -59,8 +59,8 @@ services:
     container_name: fukuii-primary
     restart: unless-stopped
     ports:
-      - "${FUKUII_PRIMARY_RPC_PORT:-8545}:8545"     # JSON-RPC HTTP (internal)
-      - "${FUKUII_PRIMARY_WS_PORT:-8546}:8546"       # JSON-RPC WebSocket (internal)
+      - "127.0.0.1:${FUKUII_PRIMARY_RPC_PORT:-8545}:8545"     # JSON-RPC HTTP (host loopback only)
+      - "127.0.0.1:${FUKUII_PRIMARY_WS_PORT:-8546}:8546"       # JSON-RPC WebSocket (host loopback only)
       - "${FUKUII_PRIMARY_P2P_PORT:-30303}:30303"   # P2P
       - "${FUKUII_PRIMARY_METRICS_PORT:-9095}:9095" # Metrics
     volumes:
@@ -83,8 +83,8 @@ services:
     container_name: fukuii-secondary
     restart: unless-stopped
     ports:
-      - "${FUKUII_SECONDARY_RPC_PORT:-8547}:8545"     # JSON-RPC HTTP (internal)
-      - "${FUKUII_SECONDARY_WS_PORT:-8548}:8546"       # JSON-RPC WebSocket (internal)
+      - "127.0.0.1:${FUKUII_SECONDARY_RPC_PORT:-8547}:8545"     # JSON-RPC HTTP (host loopback only)
+      - "127.0.0.1:${FUKUII_SECONDARY_WS_PORT:-8548}:8546"       # JSON-RPC WebSocket (host loopback only)
       - "${FUKUII_SECONDARY_P2P_PORT:-30304}:30303"   # P2P
       - "${FUKUII_SECONDARY_METRICS_PORT:-9096}:9095" # Metrics
     volumes:

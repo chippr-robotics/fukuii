@@ -1197,7 +1197,11 @@ class InvariantMarkerSpec extends ScalaTestWithActorTestKit() with AnyFlatSpecLi
     source.batches.toSeq.map(_._1) shouldBe Seq(true)
     source.batches.head._2.toSet shouldBe Set(
       Op(AppNs, delete = true, key(Keys.SnapHealInvariant)),
-      Op(AppNs, delete = false, key(Keys.CheckpointImportInProgress))
+      Op(AppNs, delete = false, key(Keys.CheckpointImportInProgress)),
+      // #1692: the same write stops pruning from deleting by reference count, as the archive counts a shared node once.
+      Op(AppNs, delete = true, key(Keys.RefCountsExact)),
+      // #1654: and takes the chain-weight marker away, as the archive's weight for its block is trusted, not derived.
+      Op(AppNs, delete = true, key(Keys.ChainWeightInvariant))
     ) ++ auditForgotten
     source.forget()
     appState.stampSnapHealInvariant().commitSync()

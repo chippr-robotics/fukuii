@@ -591,19 +591,24 @@ class SNAPLazyHealAnchorSpec extends ScalaTestWithActorTestKit() with AnyFlatSpe
 
       snap ! SNAPSyncController.HealingAllPeersStateless
       awaitProcessed(snap)
+      // clHead - margin is the CL head's ancestor `margin` blocks down: fetched by walking back from the head's hash.
+      val clHeadHash: ByteString =
+        Fixtures.Blocks.Genesis.header.copy(number = BlockNumber(pivot0 + PivotOffset)).hash.value
       parent.fishForMessage(10.seconds) {
-        case SNAPSyncController.StartRegularSyncBootstrap(n) if n == pivot0 + PivotOffset - ServeWindowMargin =>
+        case SNAPSyncController.StartPivotAncestryBootstrap(h, d) if h == clHeadHash && d == ServeWindowMargin.toInt =>
           FishingOutcomes.complete
-        case SNAPSyncController.StartRegularSyncBootstrap(n) => FishingOutcomes.fail(s"unexpected re-peg target $n")
-        case SNAPSyncController.SnapSyncFinalized(_)         => FishingOutcomes.fail("lazy handoff instead of a re-peg")
-        case SyncProtocol.HealingImpossible                  => FishingOutcomes.fail("unexpected HealingImpossible")
-        case _                                               => FishingOutcomes.continueAndIgnore
+        case m: SNAPSyncController.StartPivotAncestryBootstrap => FishingOutcomes.fail(s"unexpected re-peg $m")
+        case m: SNAPSyncController.StartRegularSyncBootstrap   => FishingOutcomes.fail(s"a re-peg by number: $m")
+        case SNAPSyncController.SnapSyncFinalized(_) => FishingOutcomes.fail("lazy handoff instead of a re-peg")
+        case SyncProtocol.HealingImpossible          => FishingOutcomes.fail("unexpected HealingImpossible")
+        case _                                       => FishingOutcomes.continueAndIgnore
       }
     )
 
   // #1555 fix (a), the counted replay: a "stateless" attempt that found no target arms a counted RetryPivotRefresh;
   // its replay must keep the unservable fallback, so once a snap peer advertises a newer tip it re-pegs to the capped
-  // peer tip - margin.
+  // peer tip - margin. Post-merge the pivot is the CL head's ancestor, so the peer tip leads the CL head by the margin
+  // at most: the re-peg is to the CL head itself (depth 0).
   it should "keep the unservable-pivot fallback on the counted RetryPivotRefresh replay (#1555)" taggedAs UnitTest in new Fixture:
     val pivot0: BigInt = BigInt(2_000)
     storeGenesis()
@@ -619,9 +624,11 @@ class SNAPLazyHealAnchorSpec extends ScalaTestWithActorTestKit() with AnyFlatSpe
     // No target yet (CL at pivot + margin, no snap peer): counted, arms the replay.
     snap ! SNAPSyncController.HealingAllPeersStateless
     awaitProcessed(snap)
-    // A snap peer now advertises 2_100: capped at clHead + 128 = 2_178, minus margin = 2_050. The peer-poll reply
-    // crosses a classic-actor messageAdapter hop, so retry until it has landed (a replay that still sees no peer is
-    // counted and re-armed with the same unservable provenance, well inside the 10-attempt budget).
+    // A snap peer now advertises 2_100: capped at clHead + margin = 2_100, minus margin = 2_050, the CL head. The
+    // peer-poll reply crosses a classic-actor messageAdapter hop, so retry until it has landed (a replay that still sees
+    // no peer is counted and re-armed with the same unservable provenance, well inside the 10-attempt budget).
+    val clHeadHash: ByteString =
+      Fixtures.Blocks.Genesis.header.copy(number = BlockNumber(pivot0 + ServeWindowMargin)).hash.value
     peers.set(peersAt(height = 2_100, snap = true))
     eventually {
       snap ! SNAPSyncController.PollHandshakedPeers
@@ -630,7 +637,7 @@ class SNAPLazyHealAnchorSpec extends ScalaTestWithActorTestKit() with AnyFlatSpe
       snap ! SNAPSyncController.RetryPivotRefresh
       awaitProcessed(snap)
       parent.fishForMessage(1.second) {
-        case SNAPSyncController.StartRegularSyncBootstrap(n) if n == BigInt(2_050) => FishingOutcomes.complete
+        case SNAPSyncController.StartPivotAncestryBootstrap(h, 0) if h == clHeadHash => FishingOutcomes.complete
         case SNAPSyncController.SnapSyncFinalized(_) => FishingOutcomes.fail("lazy handoff instead of a re-peg")
         case _                                       => FishingOutcomes.continueAndIgnore
       }
@@ -739,8 +746,14 @@ class SNAPLazyHealAnchorSpec extends ScalaTestWithActorTestKit() with AnyFlatSpe
     // One counted attempt (stalled CL): count 1, arms a COUNTED timer.
     snap ! SNAPSyncController.HealingAllPeersStateless
     awaitProcessed(snap)
-    // CL advances: the next attempt re-pegs successfully (pivot0 -> pivot1) and must reset the provenance.
-    val advanced: BlockHeader = Fixtures.Blocks.Genesis.header.copy(number = BlockNumber(pivot1 + PivotOffset))
+    // CL advances: the next attempt re-pegs successfully (pivot0 -> pivot1) and must reset the provenance. The CL head is
+    // pivot1 + offset, and its ancestry down to pivot1 is stored by hash (as newPayload stores the CL's blocks), so the
+    // re-peg walks back to pivot1 locally.
+    val clChain: Seq[BlockHeader] = (1 to PivotOffset.toInt).scanLeft(posHeader) { (parent, i) =>
+      Fixtures.Blocks.Genesis.header.copy(number = BlockNumber(pivot1 + i), parentHash = parent.hash)
+    }
+    clChain.tail.foreach(h => blockchainWriter.storeBlockByHashOnly(Block(h, BlockBody.empty)).commit())
+    val advanced: BlockHeader = clChain.last
     snap ! SNAPSyncController.CLPivotHint(advanced.hash.value, Some(advanced))
     snap ! SNAPSyncController.HealingAllPeersStateless
     awaitProcessed(snap)

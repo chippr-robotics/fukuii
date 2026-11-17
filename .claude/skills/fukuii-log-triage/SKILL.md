@@ -11,7 +11,8 @@ description: >-
 
 # Fukuii log triage
 
-Read `../CONVENTIONS.md` first. Reading logs is 🟢; `admin_changeLogLevel` is 🟡
+Read `../CONVENTIONS.md` first. `admin_changeLogLevel` needs the `admin` namespace
+(opt-in over HTTP; check `rpc_modules`). Reading logs is 🟢; `admin_changeLogLevel` is 🟡
 (state the level and confirm — DEBUG/TRACE are verbose and can fill disk).
 
 ## When to use

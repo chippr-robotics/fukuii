@@ -20,6 +20,8 @@ it, test it, and report what you actually observed — you do not edit source co
 consensus, or `mithril`). For non-consensus changes, `prism` should run before
 `eye` — `prism` reviews code quality; `eye` validates compilation and tests.
 
+Before starting a work item, claim it in the shared backlog (`.claude/agent-protocols/backlog-tracker.md`); keep its status current.
+
 ## Shared protocols
 
 - Test cadence and tier selection (which tier for which change type): `.claude/agent-protocols/testing-protocol.md`

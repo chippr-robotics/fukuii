@@ -6,6 +6,7 @@ import cats.effect.IO
 
 import com.chipprbots.ethereum.consensus.mining.Mining
 import com.chipprbots.ethereum.db.storage.EvmCodeStorage
+import com.chipprbots.ethereum.db.storage.MptStorage
 import com.chipprbots.ethereum.domain.*
 import com.chipprbots.ethereum.ledger.InMemoryWorldStateProxy
 import com.chipprbots.ethereum.mpt.MerklePatriciaTrie.MissingNodeException
@@ -45,17 +46,19 @@ class EthUserService(
 
   def getCode(req: GetCodeRequest): ServiceResponse[GetCodeResponse] =
     IO {
-      resolveBlock(req.block).map { case ResolvedBlock(block, _) =>
-        val world = InMemoryWorldStateProxy(
-          evmCodeStorage,
-          blockchain.getBackingMptStorage(block.header.number.value),
-          (number: BigInt) => blockchainReader.getBlockHeaderByNumber(number).map(_.hash.value),
-          blockchainConfig.accountStartNonce,
-          block.header.stateRoot.value,
-          noEmptyAccounts = false,
-          ethCompatibleStorage = blockchainConfig.ethCompatibleStorage
-        )
-        GetCodeResponse(world.getCode(req.address))
+      resolveBlock(req.block).flatMap { case ResolvedBlock(block, _) =>
+        StateRead.at(blockchainReader, block.header) { state =>
+          val world = InMemoryWorldStateProxy(
+            evmCodeStorage,
+            state,
+            (number: BigInt) => blockchainReader.getBlockHeaderByNumber(number).map(_.hash.value),
+            blockchainConfig.accountStartNonce,
+            block.header.stateRoot.value,
+            noEmptyAccounts = false,
+            ethCompatibleStorage = blockchainConfig.ethCompatibleStorage
+          )
+          GetCodeResponse(world.getCode(req.address))
+        }
       }
     }.recover { case _: MissingNodeException =>
       Left(JsonRpcError.NodeNotFound)
@@ -67,9 +70,15 @@ class EthUserService(
     }
 
   def getStorageAt(req: GetStorageAtRequest): ServiceResponse[GetStorageAtResponse] =
-    withAccount(req.address, req.block) { account =>
+    withAccountIn(req.address, req.block) { (state, account) =>
       GetStorageAtResponse(
-        blockchain.getAccountStorageAt(account.storageRoot.value, req.position, blockchainConfig.ethCompatibleStorage)
+        blockchain.getAccountStorageAt(
+          state,
+          req.address,
+          account.storageRoot.value,
+          req.position,
+          blockchainConfig.ethCompatibleStorage
+        )
       )
     }
 
@@ -88,31 +97,49 @@ class EthUserService(
     */
   def getStorageValues(req: GetStorageValuesRequest): ServiceResponse[GetStorageValuesResponse] =
     IO {
-      resolveBlock(req.block).map { case ResolvedBlock(block, _) =>
-        val values = req.entries.map { entry =>
-          val account = blockchainReader
-            .getAccount(blockchainReader.getBestBranch, entry.address, block.header.number.value)
-            .getOrElse(Account.empty(blockchainConfig.accountStartNonce))
-          val slotValues = entry.slots.map { position =>
-            blockchain.getAccountStorageAt(account.storageRoot.value, position, blockchainConfig.ethCompatibleStorage)
-          }
-          entry.rawAddress -> slotValues
-        }.toMap
-        GetStorageValuesResponse(values)
+      resolveBlock(req.block).flatMap { case ResolvedBlock(block, _) =>
+        // one state for every account and slot of the request
+        StateRead.at(blockchainReader, block.header) { state =>
+          val values = req.entries.map { entry =>
+            val account = blockchainReader
+              .accountIn(state, block.header, entry.address)
+              .getOrElse(Account.empty(blockchainConfig.accountStartNonce))
+            val slotValues = entry.slots.map { position =>
+              blockchain.getAccountStorageAt(
+                state,
+                entry.address,
+                account.storageRoot.value,
+                position,
+                blockchainConfig.ethCompatibleStorage
+              )
+            }
+            entry.rawAddress -> slotValues
+          }.toMap
+          GetStorageValuesResponse(values)
+        }
       }
     }.recover { case _: MissingNodeException =>
       Left(JsonRpcError.NodeNotFound)
     }
 
   private def withAccount[T](address: Address, blockParam: BlockParam)(makeResponse: Account => T): ServiceResponse[T] =
+    withAccountIn(address, blockParam)((_, account) => makeResponse(account))
+
+  /** A response made from the account at `address` in the block's state, and from that same state: an account's storage
+    * is read from the state the account was read from.
+    */
+  private def withAccountIn[T](address: Address, blockParam: BlockParam)(
+      makeResponse: (MptStorage, Account) => T
+  ): ServiceResponse[T] =
     IO {
-      resolveBlock(blockParam)
-        .map { case ResolvedBlock(block, _) =>
-          blockchainReader
-            .getAccount(blockchainReader.getBestBranch, address, block.header.number.value)
+      resolveBlock(blockParam).flatMap { case ResolvedBlock(block, _) =>
+        StateRead.at(blockchainReader, block.header) { state =>
+          val account = blockchainReader
+            .accountIn(state, block.header, address)
             .getOrElse(Account.empty(blockchainConfig.accountStartNonce))
+          makeResponse(state, account)
         }
-        .map(makeResponse)
+      }
     }.recover { case _: MissingNodeException =>
       Left(JsonRpcError.NodeNotFound)
     }

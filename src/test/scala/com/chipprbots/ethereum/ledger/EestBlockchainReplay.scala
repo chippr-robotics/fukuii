@@ -14,6 +14,12 @@ import com.chipprbots.ethereum.blockchain.sync.EphemBlockchainTestSetup
 import com.chipprbots.ethereum.consensus.mining.Protocol
 import com.chipprbots.ethereum.consensus.pow.validators.ValidatorsExecutor
 import com.chipprbots.ethereum.consensus.validators.Validators
+import com.chipprbots.ethereum.db.storage.MptStorage
+import com.chipprbots.ethereum.db.storage.NodeStorage.NodeEncoded
+import com.chipprbots.ethereum.db.storage.NodeStorage.NodeHash
+import com.chipprbots.ethereum.db.storage.SerializingMptStorage
+import com.chipprbots.ethereum.db.storage.StagedBlockState
+import com.chipprbots.ethereum.db.storage.StateStorage
 import com.chipprbots.ethereum.domain.*
 import com.chipprbots.ethereum.domain.Block.toBlock
 import com.chipprbots.ethereum.utils.BlobSchedule
@@ -186,12 +192,332 @@ object EestBlockchainReplay:
       if diffs.isEmpty then " (content equals the fixture's JSON list)"
       else diffs.take(6).mkString(" | vs fixture JSON: ", "; ", if diffs.size > 6 then s"; +${diffs.size - 6}" else "")
 
-  private class Env extends EphemBlockchainTestSetup:
+  private[ethereum] class Env extends EphemBlockchainTestSetup:
     override lazy val validators: Validators = ValidatorsExecutor(Protocol.EngineApi)
     override lazy val vm: VMImpl = new VMImpl
 
+  /** Sees the trie-node storage a replay runs on, and where each unit of state changes begins and ends: the genesis
+    * load, then each block. The default sees nothing and changes nothing.
+    */
+  trait StorageObserver:
+    /** The storage a world of the replay is built over, given the one it would have been built over. */
+    def wrap(storage: MptStorage): MptStorage = storage
+    def genesisStarting(): Unit = ()
+    def blockStarting(): Unit = ()
+
+    /** The unit that began last has ended. `stateRoot` is the state it left when it was accepted, and `None` when it
+      * was rejected. `load` finds a trie node of the replay's store by hash.
+      */
+    def ended(stateRoot: Option[ByteString], load: Array[Byte] => Array[Byte]): Unit = ()
+
+  private object Unobserved extends StorageObserver
+
+  /** `delegate`, with the storage the genesis load builds into seen by `observer`. */
+  final private class ObservedGenesisStorage(delegate: StateStorage, observer: StorageObserver) extends StateStorage:
+    override def getBackingStorage(bn: BigInt): MptStorage = delegate.getBackingStorage(bn)
+    override def getReadOnlyStorage: MptStorage = observer.wrap(delegate.getReadOnlyStorage)
+    override def onBlockSave(bn: BigInt, currentBestSavedBlock: BigInt)(updateBestBlocksData: () => Unit): Unit =
+      delegate.onBlockSave(bn, currentBestSavedBlock)(updateBestBlocksData)
+    override def onBlockRollback(bn: BigInt, currentBestSavedBlock: BigInt)(updateBestBlocksData: () => Unit): Unit =
+      delegate.onBlockRollback(bn, currentBestSavedBlock)(updateBestBlocksData)
+    override def saveNode(nodeHash: NodeHash, nodeEncoded: NodeEncoded, bn: BigInt): Unit =
+      delegate.saveNode(nodeHash, nodeEncoded, bn)
+    override def forcePersist(reason: StateStorage.FlushSituation): Boolean = delegate.forcePersist(reason)
+
+  /** The genesis a fixture starts from: its `pre` accounts under the header fields of its genesis block. */
+  private def genesisData(t: JValue, gh: BlockHeader): GenesisData =
+    val JObject(pre) = t \ "pre": @unchecked
+    val alloc = pre.map { case (address, acc) =>
+      val code = ByteString(hx(str(acc \ "code")))
+      val JObject(storage) = acc \ "storage": @unchecked
+      address.stripPrefix("0x") -> GenesisAccount(
+        precompiled = None,
+        balance = UInt256(bi(str(acc \ "balance"))),
+        code = Option.when(code.nonEmpty)(code),
+        nonce = Some(UInt256(bi(str(acc \ "nonce")))),
+        storage = Option.when(storage.nonEmpty)(storage.map { case (k, v) =>
+          UInt256(bi(k)) -> UInt256(bi(str(v)))
+        }.toMap)
+      )
+    }.toMap
+    GenesisData(
+      nonce = gh.nonce,
+      mixHash = Some(gh.mixHash.value),
+      difficulty = gh.difficulty.value.toString,
+      extraData = gh.extraData,
+      gasLimit = gh.gasLimit.value.toString,
+      coinbase = gh.beneficiary,
+      timestamp = gh.unixTimestamp.toString,
+      alloc = alloc,
+      baseFeePerGas = gh.baseFee.map(_.toString),
+      excessBlobGas = gh.excessBlobGas.map(_.toString),
+      blobGasUsed = gh.blobGasUsed.map(_.toString)
+    )
+
   /** Replays one fixture and returns its divergences from the release; empty means the fixture passes. */
-  def replay(t: JValue): Seq[String] =
+  def replay(t: JValue): Seq[String] = replay(t, Unobserved)
+
+  /** Loads the genesis of fixture `t` into `env`'s datadir by the node's own loader, under the fixture's own genesis
+    * header: on the hash store as a node stores a genesis there, on the unified state layout as the genesis commit
+    * (spec 018 Track C, C3c). The loader builds the state from the fixture's `pre`; the header is the fixture's when
+    * its state root is that state's, and `Left` says so when it is not.
+    */
+  private[ethereum] def loadFixtureGenesis(env: EphemBlockchainTestSetup, t: JValue, genesis: Block)(using
+      BlockchainConfig
+  ): Either[String, Unit] =
+    val gh = genesis.header
+    val storages = env.storagesInstance.storages
+    val loader = new GenesisDataLoader(
+      env.blockchainReader,
+      env.blockchainWriter,
+      storages.evmCodeStorage,
+      storages.stateStorage,
+      countsExact => storages.appStateStorage.markDatadirCreated(countsExact).commitSync(),
+      storages.pathStateStorage,
+      () => storages.appStateStorage.getStateLayout()
+    ):
+      override protected def prepareHeader(data: GenesisData, root: Array[Byte])(implicit
+          blockchainConfig: BlockchainConfig
+      ): BlockHeader =
+        if ByteString(root) == gh.stateRoot.value then gh else super.prepareHeader(data, root)
+    loader.loadGenesisData(genesisData(t, gh)).toEither.left.map(e => s"the genesis was not loaded: $e").flatMap { _ =>
+      env.blockchainReader.getBlockByNumber(env.blockchainReader.getBestBranch, 0) match
+        case Some(stored) if stored.header.hash == gh.hash && stored.body == genesis.body => Right(())
+        case Some(stored) if stored.header.hash == gh.hash => Left("the genesis body stored is not the fixture's")
+        case Some(stored) => Left(s"genesis state root ${stored.header.stateRoot} != ${gh.stateRoot}")
+        case None         => Left("no genesis block was stored")
+    }
+
+  /** What says a datadir is NOT one the unified state layout wrote alone and left whole: nodes in the hash store, no
+    * layout stamp or another's, no state anchor, or an anchor that is not the head. Empty for a datadir a replay on
+    * positions leaves; the harness canary (T110) holds that a run on the hash store is seen by it.
+    */
+  private[ethereum] def notOnPositions(env: EphemBlockchainTestSetup): Seq[String] =
+    import com.chipprbots.ethereum.db.storage.pathstate.PathStateTestKit
+    val storages = env.storagesInstance.storages
+    Seq(
+      Option.when(PathStateTestKit.hashStoreRows(env.storagesInstance.dataSource).nonEmpty)(
+        "the hash store was written to"
+      ),
+      Option.unless(
+        storages.appStateStorage
+          .getStateLayout()
+          .contains(com.chipprbots.ethereum.db.storage.pathstate.StateLayout.PathLive1)
+      )(
+        "the datadir has no layout stamp"
+      ),
+      storages.appStateStorage.getStateAnchor() match
+        case None => Some("the datadir has no state anchor")
+        // the state on disk and the head move in one batch: an anchor that is not the head is a state left behind
+        case Some(anchor) =>
+          Option.unless(env.blockchainReader.getBestBlockHeader.exists(_.hash.value == anchor.hash))(
+            s"the state anchor ${anchor.show} is not the head"
+          )
+    ).flatten
+
+  /** What [[replayOnPositions]] saw of one fixture. */
+  final case class OnPositions(
+      divergences: Seq[String],
+      blocksKept: Int,
+      blocksRejected: Int,
+      positionsChanged: Int,
+      storageRowsDeleted: Int,
+      storageTriesEmptied: Int,
+      tombstones: Int
+  )
+
+  /** [[Env]] over a data source of the caller's, on the hash store or, with `guard`, on the unified state layout. */
+  private[ethereum] class EnvOver(source: com.chipprbots.ethereum.db.dataSource.EphemDataSource, guard: Boolean)
+      extends Env:
+    import com.chipprbots.ethereum.db.components.EphemDataSourceComponent
+    import com.chipprbots.ethereum.db.components.Storages
+    private trait Shared extends EphemDataSourceComponent:
+      override val dataSource: com.chipprbots.ethereum.db.dataSource.EphemDataSource = source
+    override lazy val storagesInstance
+        : EphemDataSourceComponent & LocalPruningConfigBuilder & Storages.DefaultStorages =
+      new Shared
+        with LocalPruningConfigBuilder
+        with Storages.DefaultStorages
+        with com.chipprbots.ethereum.TestInstanceConfigProvider:
+        override protected def statePathLive: Boolean = guard
+
+  /** Replays one fixture '''on the unified state layout''' (spec 018 Track C, C3b), through the node's import path:
+    * `BlockExecution.executeAndValidateBlocks`, which stages each block over its parent's state and commits it in one
+    * batch with the block.
+    *
+    * The genesis is committed by the node's loader, under the fixture's own genesis header ([[loadFixtureGenesis]]): no
+    * node of the state is written to the hash store, at the genesis or after it. After every block the fixture keeps,
+    * the rows of CF `t` and CF `u` must be exactly the block's state: a walk of the raw nodes from the header's state
+    * root, finding each node among the rows by its hash, says which row belongs at which position, and the disk must
+    * hold those rows and no other. Then the block's changeset record is held to take the rows back to what they were
+    * before it. A block the fixture rejects must leave rows, anchor and best block as they were.
+    */
+  def replayOnPositions(t: JValue): OnPositions =
+    import com.chipprbots.ethereum.crypto.kec256
+    import com.chipprbots.ethereum.db.dataSource.EphemDataSource
+    import com.chipprbots.ethereum.db.storage.PathNodeStorage
+    import com.chipprbots.ethereum.db.storage.pathstate.BlockRef
+    import com.chipprbots.ethereum.db.storage.pathstate.ChangesetStorage
+    import com.chipprbots.ethereum.db.storage.pathstate.PathStateTestKit
+    import com.chipprbots.ethereum.mpt.PositionTestKit.RawTrieWalk
+
+    type Disk = (Map[ByteString, ByteString], Map[ByteString, ByteString])
+    def refOf(header: BlockHeader): BlockRef = BlockRef(header.hash.value, header.number.value, header.stateRoot.value)
+    def none(divergence: String): OnPositions = OnPositions(Seq(divergence), 0, 0, 0, 0, 0, 0)
+
+    val source = EphemDataSource()
+    // The node on the unified layout, from an empty datadir.
+    val env = new EnvOver(source, guard = true)
+    val chainId = (t \ "config" \ "chainid").toOption.map(v => bi(str(v))).getOrElse(BigInt(1))
+    configFor(env.blockchainConfig, str(t \ "network"), chainId).flatMap(withFixtureBlobSchedule(_, t)) match
+      case Left(unmodelled) => none(unmodelled)
+      case Right(config) =>
+        given BlockchainConfig = config
+        val genesis = hx(str(t \ "genesisRLP")).toBlock
+        val gh = genesis.header
+        val loaded = loadFixtureGenesis(env, t, genesis)
+        if loaded.isLeft then none(loaded.left.toOption.get)
+        else if !env.storagesInstance.storages.pathStateStorage.flatMap(_.anchor).contains(refOf(gh)) then
+          none("the genesis commit did not leave the genesis as the anchor")
+        else
+          val pathState = env.storagesInstance.storages.pathStateStorage.get
+          val rows = new PathNodeStorage(source)
+          val records = new ChangesetStorage(source)
+          val blockValidation = new BlockValidation(env.mining, env.blockchainReader, env.blockQueue)
+          val blockExecution = new BlockExecution(
+            env.blockchain,
+            env.blockchainReader,
+            env.blockchainWriter,
+            env.storagesInstance.storages.evmCodeStorage,
+            env.mining.blockPreparator,
+            blockValidation
+          )
+          def disk: Disk = PathStateTestKit.allRows(rows)
+
+          /** What the disk must hold for the state at `root`, each node found among the rows by its hash. */
+          def stateOnDisk(root: ByteString, held: Disk): Either[String, Disk] =
+            val byHash =
+              (held._1.valuesIterator ++ held._2.valuesIterator).map(n => ByteString(kec256(n.toArray)) -> n).toMap
+            Try(
+              RawTrieWalk.statePositions(
+                root.toArray,
+                hash =>
+                  byHash
+                    .getOrElse(ByteString(hash), throw new NoSuchElementException("a node of the state has no row"))
+                    .toArray
+              )
+            ).toEither.left.map(e => s"the state cannot be walked from the rows: $e").map { positions =>
+              (
+                positions.getOrElse(None, Map.empty),
+                positions
+                  .collect { case (Some(owner), trie) => trie.map((hp, node) => (owner ++ hp) -> node) }
+                  .flatten
+                  .toMap
+              )
+            }
+
+          // The genesis commit is trusted for nothing: the rows it left must be the genesis state, each of its nodes
+          // and no other. A row missing here could hide behind a block the fixture expects to be rejected.
+          val genesisFault: Option[String] =
+            stateOnDisk(gh.stateRoot.value, disk).fold(
+              fault => Some(s"genesis: $fault"),
+              state => Option.when(state != disk)("genesis: the rows are not the genesis state")
+            )
+
+          var kept, rejected, positionsChanged, storageRowsDeleted, storageTriesEmptied, tombstones = 0
+          val JArray(blocks) = t \ "blocks": @unchecked
+          val divergences = blocks.zipWithIndex.flatMap { case (b, i) =>
+            val expectException = (b \ "expectException").toOption.map(str)
+            val before = disk
+            val anchorBefore = pathState.anchor
+            val bestBefore = env.blockchainReader.getBestBlockHeader.map(_.hash)
+            val outcome: Either[String, Block] =
+              Try(hx(str(b \ "rlp")).toBlock).toEither.left.map(e => s"undecodable: $e").flatMap { block =>
+                val weight =
+                  env.blockchainReader.getChainWeightByHash(block.header.parentHash).getOrElse(ChainWeight.zero)
+                blockExecution.executeAndValidateBlocks(List(block), weight, adoptEachBlock = true) match
+                  case (List(_), None)  => Right(block)
+                  case (_, Some(error)) => Left(error.describe)
+                  case (other, None)    => Left(s"imported ${other.size} blocks of one")
+              }
+            (outcome, expectException) match
+              case (Right(block), None) =>
+                kept += 1
+                val header = block.header
+                val now = disk
+                val record = records.get(header.hash.value).flatMap(_.toOption)
+                val reversed: Option[Disk] = record.map { diff =>
+                  diff.changes.foldLeft(now) { case ((accounts, storage), (position, change)) =>
+                    val key = ByteString(position.rowKey)
+                    if position.owner.isEmpty then
+                      (change.prior.fold(accounts - key)(n => accounts + (key -> n)), storage)
+                    else (accounts, change.prior.fold(storage - key)(n => storage + (key -> n)))
+                  }
+                }
+                record.foreach { diff =>
+                  positionsChanged += diff.changes.size
+                  tombstones += (if diff.incomplete then 1 else 0)
+                  storageRowsDeleted += diff.changes.count((p, c) => p.owner.isDefined && c.next.isEmpty)
+                  storageTriesEmptied += diff.changes.count((p, c) =>
+                    p.owner.isDefined && p.path.length == 0 && c.next.isEmpty
+                  )
+                }
+                Seq(
+                  stateOnDisk(header.stateRoot.value, now).fold(
+                    Some(_),
+                    state =>
+                      Option.when(state != now)(
+                        s"the rows are not the block's state: ${(now._1.keySet ++ now._2.keySet).diff(state._1.keySet ++ state._2.keySet).size} rows too many, " +
+                          s"${(state._1.keySet ++ state._2.keySet).diff(now._1.keySet ++ now._2.keySet).size} missing"
+                      )
+                  ),
+                  Option.when(!pathState.anchor.contains(refOf(header)))(
+                    s"the anchor is ${pathState.anchor.map(_.show)}"
+                  ),
+                  Option.when(!env.blockchainReader.getBestBlockHeader.map(_.hash).contains(header.hash))(
+                    "the best block is not the block"
+                  ),
+                  Option.when(record.isEmpty)("no changeset record"),
+                  record.flatMap(diff =>
+                    Option.when(diff.validate.nonEmpty)(s"the record: ${diff.validate.mkString("; ")}")
+                  ),
+                  record.flatMap(diff =>
+                    Option.when(!diff.incomplete && !reversed.contains(before))(
+                      "the record does not take the rows back"
+                    )
+                  )
+                ).flatten.map(d => s"block[$i] (number ${header.number}): $d")
+              case (Left(_), Some(_)) =>
+                rejected += 1
+                Seq(
+                  Option.when(disk != before)("a rejected block changed the rows"),
+                  Option.when(pathState.anchor != anchorBefore)("a rejected block moved the anchor"),
+                  Option.when(env.blockchainReader.getBestBlockHeader.map(_.hash) != bestBefore)(
+                    "a rejected block moved the best block"
+                  )
+                ).flatten.map(d => s"block[$i]: $d")
+              case (Right(_), Some(ex)) => Seq(s"block[$i] accepted, fixture expects $ex")
+              case (Left(err), None)    => Seq(s"block[$i] rejected: $err")
+          }
+          val head = env.blockchainReader.getBestBlock.map(b => "0x" + Hex.toHexString(b.header.hash.value.toArray))
+          val expectedHead = str(t \ "lastblockhash")
+          // one writer of the state, and not the hash store's (data-model 7.6)
+          OnPositions(
+            genesisFault.toSeq ++ divergences ++ notOnPositions(env) ++
+              (if head.contains(expectedHead) then Nil else Seq(s"head $head != $expectedHead")),
+            kept,
+            rejected,
+            positionsChanged,
+            storageRowsDeleted,
+            storageTriesEmptied,
+            tombstones
+          )
+
+  /** [[replay]] with `observer` on the storage of the genesis load and of every block's execution. Each world is still
+    * built by the production code, over the storage it would have used with the observer's in front.
+    */
+  def replay(t: JValue, observer: StorageObserver): Seq[String] =
+    val observed = observer ne Unobserved
     val env = new Env
     import env.{blockQueue, blockchain, blockchainReader, blockchainWriter, mining, storagesInstance}
     val chainId = (t \ "config" \ "chainid").toOption.map(v => bi(str(v))).getOrElse(BigInt(1))
@@ -201,42 +527,18 @@ object EestBlockchainReplay:
         given BlockchainConfig = config
 
         val genesis = hx(str(t \ "genesisRLP")).toBlock
-        val JObject(pre) = t \ "pre": @unchecked
-        val alloc = pre.map { case (address, acc) =>
-          val code = ByteString(hx(str(acc \ "code")))
-          val JObject(storage) = acc \ "storage": @unchecked
-          address.stripPrefix("0x") -> GenesisAccount(
-            precompiled = None,
-            balance = UInt256(bi(str(acc \ "balance"))),
-            code = Option.when(code.nonEmpty)(code),
-            nonce = Some(UInt256(bi(str(acc \ "nonce")))),
-            storage = Option.when(storage.nonEmpty)(storage.map { case (k, v) =>
-              UInt256(bi(k)) -> UInt256(bi(str(v)))
-            }.toMap)
-          )
-        }.toMap
         val gh = genesis.header
+        val stateStorage = storagesInstance.storages.stateStorage
+        def loadNode(hash: Array[Byte]): Array[Byte] = stateStorage.getReadOnlyStorage.get(hash).encode
+        observer.genesisStarting()
         new GenesisDataLoader(
           blockchainReader,
           blockchainWriter,
           storagesInstance.storages.evmCodeStorage,
-          storagesInstance.storages.stateStorage
-        ).loadGenesisData(
-          GenesisData(
-            nonce = gh.nonce,
-            mixHash = Some(gh.mixHash.value),
-            difficulty = gh.difficulty.value.toString,
-            extraData = gh.extraData,
-            gasLimit = gh.gasLimit.value.toString,
-            coinbase = gh.beneficiary,
-            timestamp = gh.unixTimestamp.toString,
-            alloc = alloc,
-            baseFeePerGas = gh.baseFee.map(_.toString),
-            excessBlobGas = gh.excessBlobGas.map(_.toString),
-            blobGasUsed = gh.blobGasUsed.map(_.toString)
-          )
-        ).get
+          if observed then new ObservedGenesisStorage(stateStorage, observer) else stateStorage
+        ).loadGenesisData(genesisData(t, gh)).get
         val loadedRoot = blockchainReader.getBlockHeaderByNumber(0).map(_.stateRoot)
+        observer.ended(loadedRoot.filter(_ == gh.stateRoot).map(_.value), loadNode)
         if !loadedRoot.contains(gh.stateRoot) then Seq(s"genesis state root $loadedRoot != ${gh.stateRoot}")
         else
           // The loader's header omits fields the fixture's genesis carries (e.g. parentBeaconBlockRoot); the STATE is
@@ -244,17 +546,47 @@ object EestBlockchainReplay:
           blockchainWriter.save(genesis, Nil, ChainWeight.zero.increase(gh), saveAsBestBlock = true)
 
           val blockValidation = new BlockValidation(mining, blockchainReader, blockQueue)
-          val blockExecution = new BlockExecution(
-            blockchain,
-            blockchainReader,
-            blockchainWriter,
-            storagesInstance.storages.evmCodeStorage,
-            mining.blockPreparator,
-            blockValidation
-          )
+          val blockExecution =
+            if !observed then
+              new BlockExecution(
+                blockchain,
+                blockchainReader,
+                blockchainWriter,
+                storagesInstance.storages.evmCodeStorage,
+                mining.blockPreparator,
+                blockValidation
+              )
+            else
+              new BlockExecution(
+                blockchain,
+                blockchainReader,
+                blockchainWriter,
+                storagesInstance.storages.evmCodeStorage,
+                mining.blockPreparator,
+                blockValidation
+              ):
+                // The storage is the one the production method picks, decoded-node cache included, with the
+                // observer's in front of it. The world itself is built by the production method.
+                override protected def buildInitialWorld(
+                    block: Block,
+                    parentHeader: BlockHeader,
+                    isProposer: Boolean,
+                    staged: Option[StagedBlockState]
+                )(implicit blockchainConfig: BlockchainConfig): InMemoryWorldStateProxy =
+                  val storage =
+                    staged.fold(blockchain.getBackingMptStorage(block.header.number.value))(_.storage) match
+                      case serializing: SerializingMptStorage => serializing.cachedForExecution
+                      case other                              => other
+                  super.buildInitialWorld(
+                    block,
+                    parentHeader,
+                    isProposer,
+                    Some(StagedBlockState.direct(observer.wrap(storage)))
+                  )
           val JArray(blocks) = t \ "blocks": @unchecked
           val blockDivergences = blocks.zipWithIndex.flatMap { case (b, i) =>
             val expectException = (b \ "expectException").toOption.map(str)
+            observer.blockStarting()
             // An invalid block's RLP need not decode (INCORRECT_BLOCK_FORMAT): failing to decode is a rejection.
             val outcome: Either[String, (Block, Seq[Receipt])] =
               Try(hx(str(b \ "rlp")).toBlock).toEither.left.map(e => s"undecodable: $e").flatMap { block =>
@@ -276,6 +608,11 @@ object EestBlockchainReplay:
                   }
                 }
               }
+            // A block is kept exactly when it is accepted and the fixture expects that, the first case below.
+            observer.ended(
+              outcome.toOption.filter(_ => expectException.isEmpty).map((block, _) => block.header.stateRoot.value),
+              loadNode
+            )
             (outcome, expectException) match
               case (Right((block, receipts)), None) =>
                 val w = blockchainReader.getChainWeightByHash(block.header.parentHash).getOrElse(ChainWeight.zero)

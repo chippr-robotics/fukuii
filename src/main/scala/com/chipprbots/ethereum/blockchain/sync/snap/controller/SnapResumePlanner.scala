@@ -9,10 +9,12 @@ import scala.concurrent.ExecutionContext
 import scala.concurrent.duration.*
 import scala.util.Try
 
+import com.chipprbots.ethereum.blockchain.sync.PivotHeaderBootstrap
 import com.chipprbots.ethereum.blockchain.sync.snap.AccountResumeCheckpoint
 import com.chipprbots.ethereum.blockchain.sync.snap.AccountTask
 import com.chipprbots.ethereum.blockchain.sync.snap.ContractTaskFiles
 import com.chipprbots.ethereum.blockchain.sync.snap.GatedTaskFileReplay
+import com.chipprbots.ethereum.blockchain.sync.snap.PivotAnchor
 import com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncController
 import com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncController.*
 import com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncController.SyncPhase.*
@@ -206,10 +208,12 @@ private[snap] trait SnapResumePlanner
 
   /** `recoverAccountsComplete`'s #1555 branch (PoS, every download phase complete): heal at a pivot newer than
     * `excluded` instead of resuming on the saved one. Like the drift branch's "all phases complete" case, the data
-    * phases are marked complete and the new pivot's header is bootstrapped by number, so `bootstrapping`'s
-    * `BootstrapComplete` commits it and goes straight to `StateHealing`. With no newer target yet (CL head and snap
-    * peers not ahead), retry the start in 30 s; every retry re-enters this branch, because the saved pivot is still the
-    * excluded one.
+    * phases are marked complete, and `bootstrapping`'s `BootstrapComplete` commits the new pivot and goes straight to
+    * `StateHealing`. The new pivot is the CL head's ancestor at the target's depth, walked back from the CL head by
+    * parent hash (through stored headers, else one reverse request from the head's hash), so the peers' tip may lead
+    * the CL head by the serve-window margin only and the target is never above the CL head. With no newer target yet
+    * (CL head and snap peers not ahead), retry the start in 30 s; every retry re-enters this branch, because the saved
+    * pivot is still the excluded one.
     */
   private def healAtNewerPivot(excluded: BigInt, reason: String)(using
       scala.util.boundary.Label[Behavior[Command]]
@@ -218,28 +222,42 @@ private[snap] trait SnapResumePlanner
     accountsComplete = true
     storagePhaseComplete = true
     bytecodePhaseComplete = true
-    val clHead = clPivotHint.flatMap(_.knownHeader).map(_.number.value)
+    val clHeadHeader =
+      clPivotHint.flatMap(h => h.knownHeader.orElse(PivotAnchor.storedHeader(stateIngest, h.headHash)))
+    val clHead = clHeadHeader.map(_.number.value)
     val peerBest = currentNetworkBestFromSnapPeers()
+    // The peers' tip may lead the CL head by the margin only, so the target is never above the CL head.
     val target = clHead.flatMap(h =>
       SNAPSyncController.healPivotAfterExcluded(
         excluded,
         h,
         peerBest,
         snapSyncConfig.pivotBlockOffset,
-        SnapServeWindowMargin
+        SnapServeWindowMargin,
+        maxPeerTipLead = SnapServeWindowMargin
       )
     )
-    target match
-      case Some(t) =>
+    (target, clPivotHint, clHeadHeader) match
+      case (Some(t), Some(hint), Some(head)) =>
+        val wanted = (head.number.value - t).max(BigInt(0))
+        val depth = wanted.min(BigInt(PivotHeaderBootstrap.MaxAncestryDepth)).toInt
+        // This branch runs once per SNAP start, so the clamp note is logged once.
+        val clamped =
+          if wanted > depth then
+            s"; sync.snap-sync.pivot-block-offset = ${snapSyncConfig.pivotBlockOffset} is deeper than one ancestry " +
+              "request reaches"
+          else ""
         ctx.log.warn(
           s"Recovery: not resuming healing on pivot $excluded ($reason). All data phases are complete; healing at " +
-            s"pivot $t instead (CL head=${clHead.getOrElse("?")}, snap peer best=${peerBest.getOrElse("none")}). " +
-            "Fetching its header."
+            s"pivot ${head.number.value - depth} instead ($depth below the CL head ${head.idTag}$clamped)."
         )
-        stateIngest.appState.putSnapSyncBootstrapTarget(t).commit()
-        syncController ! StartRegularSyncBootstrap(t)
+        PivotAnchor.storedAncestor(stateIngest, hint.headHash, depth) match
+          case Some(pivot) =>
+            ctx.self ! BootstrapComplete(Some(pivot))
+          case None =>
+            syncController ! StartPivotAncestryBootstrap(hint.headHash, depth)
         break(bootstrapping())
-      case None =>
+      case _ =>
         ctx.log.warn(
           s"Recovery: not resuming healing on pivot $excluded ($reason), and no newer pivot is available yet " +
             s"(CL head=${clHead.getOrElse("unknown")}, snap peer best=${peerBest.getOrElse("none")}). Retrying in 30s."

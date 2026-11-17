@@ -25,6 +25,8 @@ Checks, in order:
   C11 README badges must point at workflows that exist (FR-027)
   C12 docs must not claim verification for a non-required suite (FR-026)
   C13 the generated status doc must be current (FR-025)
+  C14 every `blocked_by` entry must name a declared waiver
+  C15 no keystore, private key or `.env` file is committed (constitution VI.1)
 
 Exit 0 = clean (warnings allowed). Exit 1 = at least one failure.
 """
@@ -413,6 +415,101 @@ def check_blocked_by(doc: dict) -> None:
                             f"{', '.join(sorted(known)) or '(none)'}")
 
 
+# Keystore containers and key files, by extension. A key inside one is a secret whatever
+# password protects it, so the file is rejected without being opened.
+KEYSTORE_SUFFIXES = (".p12", ".pfx", ".jks", ".jceks", ".bks", ".keystore", ".key")
+
+# Web3 secret-storage files (`UTC--<time>--<address>`, as geth and fukuii name them).
+WEB3_KEYSTORE_PREFIX = "UTC--"
+
+# A PEM private-key block of any kind: PKCS#8, RSA, EC, DSA, OpenSSH, encrypted, PGP.
+PEM_PRIVATE_KEY = re.compile(rb"-----BEGIN (?:[A-Z0-9]+ )*PRIVATE KEY(?: BLOCK)?-----")
+
+# Known-public test fixtures: accounts of throwaway test networks, published with the tests
+# that use them. Each entry is an exact path, never a pattern, and a new one needs a reviewer
+# to agree that the key is public.
+KEY_MATERIAL_FIXTURES = frozenset({
+    # Pre-funded accounts of the RpcTest private network (src/rpcTest/README.md).
+    "src/rpcTest/resources/privateNetConfig/keystore/"
+    "UTC--2018-05-30T07-16-33.631Z--316158e265fa708c623cc3094b2bb5889e0f5ca5",
+    "src/rpcTest/resources/privateNetConfig/keystore/"
+    "UTC--2018-05-30T07-16-58.64Z--b9ec69316a8810db91c36de79c4f1e785f2c35fc",
+    "src/rpcTest/resources/privateNetConfig/keystore/"
+    "UTC--2018-05-30T07-17-03.455Z--488c10c91771d3b3c25f63b6414309b119baacb5",
+    "src/rpcTest/resources/privateNetConfig/keystore/"
+    "UTC--2018-06-01T10-10-01.852779Z--03010360ebbb7f49362a2c650a67661d464e2089",
+    # Private-network accounts behind the txExecTest fixtures; the passphrase is published in
+    # src/it/resources/txExecTest/documentation/readme.md.
+    "src/it/resources/txExecTest/documentation/keys/Morden/"
+    "UTC--2017-03-30T13-06-44Z--a9d65fec-d670-1470-9ba1-72b7c3d662f8",
+    "src/it/resources/txExecTest/documentation/keys/Morden/"
+    "UTC--2017-03-30T15-27-28Z--301e308a-bd95-4334-9b13-b12bc21d2876",
+    "src/it/resources/txExecTest/documentation/keys/Morden/"
+    "UTC--2017-04-03T13-49-13Z--c703a1ec-96ea-305a-717f-3a65269c472d",
+})
+
+
+def tracked_files() -> list[str] | None:
+    """Repository-relative paths of the files under version control.
+
+    Read from the git index in a checkout, which is what CI runs on. A tree without `.git` (the
+    self-test sandbox is a plain copy) is walked instead. None means git could not list the index.
+    """
+    if (REPO / ".git").exists():
+        p = subprocess.run(["git", "-C", str(REPO), "ls-files", "-z"], capture_output=True)
+        if p.returncode != 0:
+            return None
+        return [f for f in p.stdout.decode("utf-8", "surrogateescape").split("\0") if f]
+    found = []
+    for dirpath, dirnames, filenames in os.walk(REPO):
+        dirnames[:] = [d for d in dirnames if d != ".git"]
+        for name in filenames:
+            found.append((Path(dirpath) / name).relative_to(REPO).as_posix())
+    return found
+
+
+def key_material_kind(rel: str) -> str | None:
+    """What kind of key material the tracked file `rel` is, or None if it is none."""
+    name = rel.rsplit("/", 1)[-1]
+    low = name.lower()
+    if low.endswith(KEYSTORE_SUFFIXES):
+        return "a keystore or key file"
+    if name.startswith(WEB3_KEYSTORE_PREFIX):
+        return "a Web3 account keystore"
+    if low == ".env" or (low.startswith(".env.") and not low.endswith(".example")):
+        return "an environment file (only `*.example` templates are committed)"
+    path = REPO / rel
+    if path.is_symlink() or not path.is_file():
+        return None  # a link's target is checked under its own path; a gitlink is not ours
+    if PEM_PRIVATE_KEY.search(path.read_bytes()):
+        return "a file holding a PEM private-key block"
+    return None
+
+
+def check_key_material() -> None:
+    """C15 (constitution VI.1) — no keystore, private key or `.env` file is committed.
+
+    A keystore or key belongs to one deployment and is generated there (`tls/gen-cert.sh` for the
+    RPC server certificate, `fukuii cli` for node and account keys).
+    """
+    files = tracked_files()
+    if files is None:
+        fail("C15", "`git ls-files` failed, so committed key material cannot be ruled out.")
+        return
+    for rel in files:
+        if rel in KEY_MATERIAL_FIXTURES:
+            continue
+        try:
+            kind = key_material_kind(rel)
+        except OSError as e:
+            fail("C15", f"`{rel}` could not be read ({e}), so it cannot be ruled out as key material.")
+            continue
+        if kind:
+            fail("C15", f"`{rel}` is {kind}. Keys, keystores and credentials are generated per "
+                        "deployment and never committed (constitution VI.1). A known-public test "
+                        "fixture is listed by path in KEY_MATERIAL_FIXTURES.")
+
+
 def main() -> int:
     if not GATES.exists():
         print(f"::error::{GATES} not found.", file=sys.stderr)
@@ -427,6 +524,7 @@ def main() -> int:
     check_claims(gates)
     check_status_doc()
     check_blocked_by(doc)
+    check_key_material()
 
     summary_lines = ["### Gate Integrity", ""]
     tiers: dict[str, int] = {}

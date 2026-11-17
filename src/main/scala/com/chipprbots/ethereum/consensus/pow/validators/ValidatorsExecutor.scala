@@ -76,6 +76,10 @@ object ValidatorsExecutor:
       new StdOmmersValidator(blockHeaderValidator)
     )
 
+  // For tests only, as the one above: the same validators with the ommers' validator given.
+  def apply(blockHeaderValidator: BlockHeaderValidator, ommersValidator: OmmersValidator): ValidatorsExecutor =
+    new StdValidatorsExecutor(StdBlockValidator, blockHeaderValidator, StdSignedTransactionValidator, ommersValidator)
+
   def validateBlockBeforeExecution(
       self: ValidatorsExecutor,
       block: Block,

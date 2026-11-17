@@ -6,8 +6,8 @@ import org.apache.pekko.util.ByteString
 
 import scala.annotation.unused
 import scala.concurrent.duration.FiniteDuration
+import scala.util.control.NonFatal
 
-import com.chipprbots.ethereum.blockchain.sync.codec.MptNodeCodecs.*
 import com.chipprbots.ethereum.crypto.kec256
 import com.chipprbots.ethereum.db.cache.LruCache
 import com.chipprbots.ethereum.db.cache.MapCache
@@ -65,6 +65,32 @@ trait StagedBlockState:
       case (Some(state), None)        => state.commit()
       case (None, Some(other))        => other.commit()
       case (None, None)               => ()
+
+  /** Commit this block's state apart from the block, for a block executed without being adopted (a payload ahead of the
+    * head, a side branch): its state is kept beside the head, and the block itself is stored by its caller. On the
+    * modes that write a block's state with no head behind it, that is [[commitWith]] with nothing else in the batch. On
+    * the unified layout it is a forward layer beside the state the disk holds (spec 018 C4d part 2a), and the head does
+    * not move.
+    */
+  def commitApart(blockNumber: BigInt, blockHash: ByteString): Unit = commitApart(blockNumber, blockHash, None)
+
+  /** [[commitApart]] for a block of a branch under execution: on the unified layout its layer is held by the branch's
+    * pin until the branch is settled (spec 018 C4e). The other modes have no layers, and no pin to honour.
+    *
+    * @throws com.chipprbots.ethereum.db.storage.pathstate.BranchTooLarge
+    *   on the unified layout, when the branch's pinned layers would hold more than they may
+    */
+  def commitApart(
+      blockNumber: BigInt,
+      blockHash: ByteString,
+      @unused pin: Option[com.chipprbots.ethereum.db.storage.pathstate.BranchPin]
+  ): Unit = commitWith(blockNumber, blockHash, None)
+
+  /** Whether committing this block moves the state on disk to it, in place (the unified layout, before its overlay).
+    * Such a commit is only possible in the batch that makes the block the best block, so a block that is executed
+    * without being adopted cannot be staged this way: its caller asks, and refuses before the block runs.
+    */
+  def commitsInPlace: Boolean = false
 
   /** True when this block's state changes are committed and in force right now (committed, not undone). Only the mode
     * that keeps per-block undo records can say so; the others answer false, which makes callers execute.
@@ -137,7 +163,15 @@ trait StateStorage:
   def onBlocksReadopted(blocks: Seq[(BigInt, ByteString)]): Unit = ()
 
   def saveNode(nodeHash: NodeHash, nodeEncoded: NodeEncoded, bn: BigInt): Unit
-  def getNode(nodeHash: NodeHash): Option[MptNode]
+
+  /** The node stored under `nodeHash`, read as every other trie read is (`SerializingMptStorage.get`: keccak first,
+    * through this mode's own format): `None` when it is absent, or when what is stored is not that node, which is
+    * logged once as a corrupt node. For the chain reader's `getMptNodeByHash`, which once decoded the bytes itself,
+    * with no hash check (H3, CHASE row 45). The GetNodeData server, its other caller, is gone (spec 018 Track C, C2b).
+    */
+  def getNode(nodeHash: NodeHash): Option[MptNode] =
+    try Some(getReadOnlyStorage.get(nodeHash.toArray))
+    catch case _: com.chipprbots.ethereum.mpt.MerklePatriciaTrie.MissingNodeException => None
   def forcePersist(reason: FlushSituation): Boolean
 
   /** Whether [[repairNode]] works on this storage (spec 022 T053). */
@@ -201,9 +235,6 @@ class ArchiveStateStorage(private val nodeStorage: NodeStorage) extends StateSto
   override def saveNode(nodeHash: NodeHash, nodeEncoded: NodeEncoded, bn: BigInt): Unit =
     nodeStorage.put(nodeHash, nodeEncoded)
 
-  override def getNode(nodeHash: NodeHash): Option[MptNode] =
-    nodeStorage.get(nodeHash).map(_.toMptNode)
-
   override def canRepairNodes: Boolean = true
 
   /** No lock: an archive store keeps no counts, and two writers of one hash write the same bytes. */
@@ -219,8 +250,9 @@ class ArchiveStateStorage(private val nodeStorage: NodeStorage) extends StateSto
     */
   override def deleteBadNode(nodeHash: NodeHash, stillReached: () => Boolean): BadEntryDelete =
     def kept: Option[BadEntryDelete] = nodeStorage.get(nodeHash) match
-      case None                                               => Some(BadEntryDelete.NoLongerBad)
-      case Some(raw) if StateStorage.hashesTo(nodeHash, raw)  => Some(BadEntryDelete.NoLongerBad)
+      case None => Some(BadEntryDelete.NoLongerBad)
+      case Some(raw) if !NodeFault.provablyBad(nodeHash, RawNodeRead.Bytes(raw)) =>
+        Some(BadEntryDelete.NoLongerBad)
       case Some(raw) if StateStorage.wrapsNode(nodeHash, raw) => Some(BadEntryDelete.PassesKeccakElsewhere)
       case _                                                  => None
     StateStorage.deleteUnless(kept, stillReached) { () =>
@@ -231,13 +263,44 @@ object ReferenceCountedStateStorage extends com.chipprbots.ethereum.utils.Logger
   /** One block commit (and one prune) at a time: the duplicate check reads the record the previous commit writes. */
   private[storage] val commitLock = new Object
   private[storage] def warnDuplicate(msg: String): Unit = log.warn(msg)
+  private[storage] def warnTrustUnreadable(e: Throwable): Unit =
+    log.error("Could not tell whether reference counts can be trusted; this prune keeps every trie node (#1692)", e)
+  private[storage] def sayKeepingNodes(): Unit =
+    log.info(
+      "Pruning keeps every trie node: this datadir's reference counts are not proven exact (SNAP, a checkpoint import, " +
+        "an old fast sync or an older binary filled it), and a node one position still uses could be deleted by a count " +
+        "that is too low (#1692). Death rows, snapshot rows and undo records are still pruned. Dead nodes are kept " +
+        "until the datadir is re-synced; db.pruning.retained.bytes counts them."
+    )
 
+/** @param nodesMayBeDeleted
+  *   asked at each prune whether it may delete trie nodes (#1692, see [[RefCountTrust]]). The default says no: a caller
+  *   that vouches for the counts of its store passes `() => true`. A throw is read as no.
+  */
 class ReferenceCountedStateStorage(
     private val nodeStorage: NodeStorage,
     private val pruningHistory: BigInt,
-    decodedNodeCacheBytes: Long = com.chipprbots.ethereum.utils.StateReadCacheConfig.decodedNodeCacheBytes
+    decodedNodeCacheBytes: Long = com.chipprbots.ethereum.utils.StateReadCacheConfig.decodedNodeCacheBytes,
+    nodesMayBeDeleted: () => Boolean = () => false
 ) extends StateStorage:
   override def forcePersist(reason: FlushSituation): Boolean = true
+
+  @volatile private var saidKeepingNodes: Boolean = false
+
+  /** Whether a prune or a rollback may delete trie nodes right now. Read each time, not once: SNAP can start in this
+    * process and take the answer away. A read that fails answers no, and says so.
+    */
+  private def deletionAllowed(): Boolean =
+    val allowed =
+      try nodesMayBeDeleted()
+      catch
+        case NonFatal(e) =>
+          ReferenceCountedStateStorage.warnTrustUnreadable(e)
+          false
+    if !allowed && !saidKeepingNodes then
+      saidKeepingNodes = true
+      ReferenceCountedStateStorage.sayKeepingNodes()
+    allowed
 
   /** Decoded trie nodes for block execution (see [[DecodedNodeCache]]); owned here because this is where nodes are
     * deleted, and the deletions evict from it.
@@ -272,12 +335,15 @@ class ReferenceCountedStateStorage(
       case Some(done) if done < target => done + 1
       case _                           => target
     var blockToPrune = from
+    // Asked once for the whole catch-up, and only when there is a height to prune.
+    lazy val deleteNodes = deletionAllowed()
     while blockToPrune <= target do
       val removed =
         ReferenceCountNodeStorage.pruneReporting(
           blockToPrune,
           nodeStorage,
-          inMemory = blockToPrune > currentBestSavedBlock
+          inMemory = blockToPrune > currentBestSavedBlock,
+          deleteNodes = deleteNodes
         )
       // Evict AFTER the delete. A concurrent reader (Engine API newPayload runs without the regular-sync importer's
       // serialisation) may still re-read a node just before the delete; DecodedNodeCache.putIfCurrent drops such an
@@ -287,7 +353,12 @@ class ReferenceCountedStateStorage(
     if lastPruned.forall(_ < target) then lastPruned = Some(target)
 
   override def onBlockRollback(bn: BigInt, currentBestSavedBlock: BigInt)(updateBestBlocksData: () => Unit): Unit =
-    val removed = ReferenceCountNodeStorage.rollbackReporting(bn, nodeStorage, inMemory = bn > currentBestSavedBlock)
+    val removed = ReferenceCountNodeStorage.rollbackReporting(
+      bn,
+      nodeStorage,
+      inMemory = bn > currentBestSavedBlock,
+      deleteNodes = deletionAllowed()
+    )
     // As in onBlockSave: evict after the rollback has deleted; racing inserts are dropped by putIfCurrent.
     decodedNodes.foreach(_.evict(removed))
     updateBestBlocksData()
@@ -362,9 +433,6 @@ class ReferenceCountedStateStorage(
   override def saveNode(nodeHash: NodeHash, nodeEncoded: NodeEncoded, bn: BigInt): Unit =
     new FastSyncNodeStorage(nodeStorage, bn).update(Nil, Seq(nodeHash -> nodeEncoded))
 
-  override def getNode(nodeHash: NodeHash): Option[MptNode] =
-    new FastSyncNodeStorage(nodeStorage, 0).get(nodeHash).map(_.toMptNode)
-
   override def canRepairNodes: Boolean = true
 
   /** Under [[ReferenceCountedStateStorage.commitLock]], so no block commit changes a count between this re-check and
@@ -397,8 +465,9 @@ class ReferenceCountedStateStorage(
     */
   override def deleteBadNode(nodeHash: NodeHash, stillReached: () => Boolean): BadEntryDelete =
     def kept: Option[BadEntryDelete] = nodeStorage.get(nodeHash) match
-      case None                                                   => Some(BadEntryDelete.NoLongerBad)
-      case Some(raw) if StateStorage.unwrapsToNode(nodeHash, raw) => Some(BadEntryDelete.NoLongerBad)
+      case None => Some(BadEntryDelete.NoLongerBad)
+      case Some(raw) if !NodeFault.provablyBad(nodeHash, StateStorage.unwrapped(raw)) =>
+        Some(BadEntryDelete.NoLongerBad)
       case Some(raw) if StateStorage.hashesTo(nodeHash, raw) || StateStorage.wrapsNode(nodeHash, raw) =>
         Some(BadEntryDelete.PassesKeccakElsewhere)
       case _ => None
@@ -446,28 +515,19 @@ class CachedReferenceCountedStateStorage(
   override def saveNode(nodeHash: NodeHash, nodeEncoded: NodeEncoded, bn: BigInt): Unit =
     nodeStorage.put(nodeHash, HeapEntry.toBytes(HeapEntry(nodeEncoded, 1, bn)))
 
-  override def getNode(nodeHash: NodeHash): Option[MptNode] =
-    lruCache
-      .get(nodeHash)
-      .map(_.nodeEncoded.toMptNode)
-      .orElse(
-        nodeStorage
-          .get(nodeHash)
-          .map(enc => HeapEntry.fromBytes(enc).nodeEncoded.toMptNode)
-      )
-
 object StateStorage:
 
   /** Whether `encoded` is the node stored under `hash`. */
   private[storage] def hashesTo(hash: NodeHash, encoded: Array[Byte]): Boolean =
     java.util.Arrays.equals(kec256(encoded), hash.toArray)
 
-  /** Whether `stored` is basic pruning's wrapper around the node stored under `hash`. */
-  private[storage] def unwrapsToNode(hash: NodeHash, stored: Array[Byte]): Boolean =
+  /** What basic pruning's reads make of the wrapper `stored`: the node's bytes, or [[RawNodeRead.Undecodable]] when it
+    * does not unwrap, as `ReferenceCountNodeStorage.multiGetRaw` reads it.
+    */
+  private[storage] def unwrapped(stored: Array[Byte]): RawNodeRead =
     scala.util
       .Try(encoding.storedNodeFromBytes(stored))
-      .toOption
-      .exists(node => hashesTo(hash, node.nodeEncoded.toArray))
+      .fold(_ => RawNodeRead.Undecodable, node => RawNodeRead.Bytes(node.nodeEncoded.toArray))
 
   /** Whether `stored` holds the node stored under `hash`, in a wrapper whose counters may be past reading. Not a whole
     * wrapper a store can use, but those bytes pass keccak, so they are never deleted (the user's rule, 2026-11-01).
@@ -490,14 +550,20 @@ object StateStorage:
         }
     }
 
+  /** @param nodesMayBeDeleted
+    *   under basic pruning, asked at each prune whether it may delete trie nodes (see [[RefCountTrust]]). The default
+    *   says no.
+    */
   def apply(
       pruningMode: PruningMode,
       nodeStorage: NodeStorage,
-      lruCache: LruCache[NodeHash, HeapEntry]
+      lruCache: LruCache[NodeHash, HeapEntry],
+      nodesMayBeDeleted: () => Boolean = () => false
   ): StateStorage =
     pruningMode match
-      case ArchivePruning                   => new ArchiveStateStorage(nodeStorage)
-      case pruning.BasicPruning(history)    => new ReferenceCountedStateStorage(nodeStorage, history)
+      case ArchivePruning => new ArchiveStateStorage(nodeStorage)
+      case pruning.BasicPruning(history) =>
+        new ReferenceCountedStateStorage(nodeStorage, history, nodesMayBeDeleted = nodesMayBeDeleted)
       case pruning.InMemoryPruning(history) => new CachedReferenceCountedStateStorage(nodeStorage, history, lruCache)
 
   def getReadOnlyStorage(source: EphemDataSource): MptStorage =
@@ -518,7 +584,8 @@ object StateStorage:
     val cachedNodeStorage = new CachedNodeStorage(nodeStorage, MapCache.createTestCache(testCacheSize))
 
     (
-      StateStorage(pruningMode, nodeStorage, new LruCache[NodeHash, HeapEntry](testCacheConfig)),
+      // A test store holds only what the test wrote, by emission: its counts are exact, so it deletes by them.
+      StateStorage(pruningMode, nodeStorage, new LruCache[NodeHash, HeapEntry](testCacheConfig), () => true),
       nodeStorage,
       cachedNodeStorage
     )

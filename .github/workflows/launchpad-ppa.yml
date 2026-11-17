@@ -1,152 +1,243 @@
 name: Launchpad PPA
 
+# Publishes a GitHub release to the Launchpad PPA ppa:chipprbots/fukuii
+# (https://launchpad.net/~chipprbots/+archive/ubuntu/fukuii).
+#
+# Launchpad builds from SOURCE packages only, on builders with no network, and sbt is not in the Ubuntu archive. So
+# fukuii is not compiled on Launchpad: the source package's upstream tarball is the released distribution
+# fukuii-<version>.tgz, byte for byte, checked against the release's SHA256SUMS.txt, and debian/rules only lays it
+# out. The packaging (debian/) comes from this workflow's ref, not from the release tag, so an older release can be
+# published with current packaging.
+#
+# Signing: the key and its passphrase are secrets of the protected `launchpad-ppa` environment
+# (LAUNCHPAD_GPG_PRIVATE_KEY, LAUNCHPAD_GPG_PASSPHRASE). The key is registered on the bot Launchpad account,
+# a member of ~chipprbots. It is imported into a throwaway GnuPG home per job, used through loopback pinentry, and
+# deleted when the job ends.
+
 on:
-  release:
-    types: [published]
+  # A release created by release.yml's GITHUB_TOKEN does not emit a `release` event to other workflows, so follow
+  # the Release workflow instead and publish the newest full (non-pre-release) release it produced.
+  workflow_run:
+    workflows: ["Release"]
+    types: [completed]
   workflow_dispatch:
     inputs:
       version:
-        description: 'Version to publish (e.g., 0.1.71)'
+        description: "Release version to publish, without the v (for example 0.11.0)"
         required: true
+      series:
+        description: "Ubuntu series, space-separated"
+        required: false
+        default: "noble jammy"
+      revision:
+        description: "Debian revision; raise it to re-publish the same version (Launchpad never accepts a version twice)"
+        required: false
+        default: "1"
+
+concurrency:
+  group: launchpad-ppa
+  cancel-in-progress: false
+
+permissions:
+  contents: read
 
 env:
-  PPA_NAME: chippr-robotics/fukuii
-  PACKAGE_NAME: fukuii
+  PPA_API: "https://api.launchpad.net/1.0/~chipprbots/+archive/ubuntu/fukuii"
+  DEFAULT_SERIES: "noble jammy"
 
 jobs:
-  publish-to-launchpad:
-    name: Publish to Launchpad PPA (${{ matrix.ubuntu_series }})
-    runs-on: ubuntu-latest
-    # Only publish for full releases (not pre-releases from patch builds)
-    if: github.event_name == 'workflow_dispatch' || !github.event.release.prerelease
-    permissions:
-      contents: read
-    strategy:
-      fail-fast: false
-      matrix:
-        ubuntu_series: [jammy, noble]
-    
+  prepare:
+    name: Fetch and verify the release
+    runs-on: ubuntu-24.04
+    if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
+    outputs:
+      todo: ${{ steps.version.outputs.series != '[]' }}
+      version: ${{ steps.version.outputs.version }}
+      series: ${{ steps.version.outputs.series }}
+      revision: ${{ steps.version.outputs.revision }}
+      orig_sha256: ${{ steps.fetch.outputs.orig_sha256 }}
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v5
-        with:
-          submodules: recursive
-          fetch-depth: 0
-      
       - name: Determine version
         id: version
+        env:
+          GH_TOKEN: ${{ github.token }}
+          INPUT_VERSION: ${{ github.event.inputs.version }}
+          INPUT_SERIES: ${{ github.event.inputs.series }}
+          INPUT_REVISION: ${{ github.event.inputs.revision }}
         run: |
-          if [ "${{ github.event_name }}" = "release" ]; then
-            # Extract version from release tag (remove 'v' prefix)
-            VERSION="${{ github.event.release.tag_name }}"
-            VERSION="${VERSION#v}"
+          set -euo pipefail
+          if [ "${GITHUB_EVENT_NAME}" = "workflow_dispatch" ]; then
+            VERSION="${INPUT_VERSION#v}"
+            SERIES="${INPUT_SERIES:-$DEFAULT_SERIES}"
+            REVISION="${INPUT_REVISION:-1}"
           else
-            VERSION="${{ github.event.inputs.version }}"
+            TAG=$(gh release list --repo "$GITHUB_REPOSITORY" --exclude-drafts --exclude-pre-releases --limit 1 \
+              --json tagName --jq '.[0].tagName')
+            VERSION="${TAG#v}"
+            SERIES="$DEFAULT_SERIES"
+            REVISION="1"
           fi
-          echo "version=$VERSION" >> $GITHUB_OUTPUT
-          echo "Version: $VERSION"
-      
-      - name: Install build dependencies
+          [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "not a release version: '$VERSION'"; exit 1; }
+          [[ "$REVISION" =~ ^[0-9]+$ ]] || { echo "revision must be a number: '$REVISION'"; exit 1; }
+          for s in $SERIES; do [[ "$s" =~ ^(jammy|noble|questing)$ ]] || { echo "unsupported series: $s"; exit 1; }; done
+          # A release made before the PPA existed may lack the assets. Followed automatically, that is not an
+          # error (or every later Release run would fail on it); dispatched by hand, it is.
+          ASSETS=$(gh release view "v$VERSION" --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets[].name')
+          for a in "fukuii-$VERSION.tgz" SHA256SUMS.txt; do
+            if ! grep -qxF "$a" <<<"$ASSETS"; then
+              [ "${GITHUB_EVENT_NAME}" = "workflow_dispatch" ] && { echo "v$VERSION has no $a"; exit 1; }
+              echo "::notice::v$VERSION has no $a; nothing to publish"
+              SERIES=""
+            fi
+          done
+          # Launchpad never accepts a version twice, even after deletion, and the Release workflow runs for every
+          # pre-release too. So drop each series that already holds this exact version; with none left, stop here.
+          # getPublishedSources returns every status (Pending, Published, Superseded, Deleted, Obsolete). An upload
+          # still in Launchpad's queue is not listed yet; a second upload in that window is rejected by mail.
+          TODO=""
+          for s in $SERIES; do
+            DEB_VERSION="$VERSION-$REVISION~${s}1"
+            FOUND=$(curl -fsS --retry 3 -G "$PPA_API" --data-urlencode ws.op=getPublishedSources \
+              --data-urlencode source_name=fukuii --data-urlencode exact_match=true \
+              --data-urlencode "version=$DEB_VERSION" | jq -r '.total_size')
+            if [ "$FOUND" != "0" ]; then
+              echo "$DEB_VERSION is already in the PPA; skipping $s"
+            else
+              TODO="$TODO $s"
+            fi
+          done
+          SERIES_JSON=$(printf '%s\n' $TODO | jq -R 'select(length > 0)' | jq -cs .)
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "series=$SERIES_JSON" >> "$GITHUB_OUTPUT"
+          echo "revision=$REVISION" >> "$GITHUB_OUTPUT"
+          echo "fukuii $VERSION (revision $REVISION): uploading for [${TODO# }]"
+
+      - name: Download and verify the release tarball
+        id: fetch
+        if: steps.version.outputs.series != '[]'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          mkdir -p dl && cd dl
+          gh release download "v$VERSION" --repo "$GITHUB_REPOSITORY" -p "fukuii-$VERSION.tgz" -p "SHA256SUMS.txt"
+          grep -E " \*?fukuii-$VERSION\.tgz$" SHA256SUMS.txt > tgz.sha256
+          sha256sum --check --strict tgz.sha256
+          # SHA256SUMS.txt comes from the same release, so this catches corruption, not a tampered release.
+          # The upstream tarball of the source package is the released tarball itself.
+          mv "fukuii-$VERSION.tgz" "fukuii_$VERSION.orig.tar.gz"
+          echo "orig_sha256=$(cut -d' ' -f1 tgz.sha256)" >> "$GITHUB_OUTPUT"
+
+      - name: Keep the upstream tarball for the upload jobs
+        if: steps.version.outputs.series != '[]'
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: fukuii-orig-${{ steps.version.outputs.version }}
+          path: dl/fukuii_${{ steps.version.outputs.version }}.orig.tar.gz
+          retention-days: 3
+
+  upload:
+    name: Upload to the PPA (${{ matrix.series }})
+    needs: prepare
+    if: needs.prepare.outputs.todo == 'true'
+    runs-on: ubuntu-24.04
+    environment: launchpad-ppa
+    strategy:
+      fail-fast: false
+      max-parallel: 1
+      matrix:
+        series: ${{ fromJSON(needs.prepare.outputs.series) }}
+    env:
+      VERSION: ${{ needs.prepare.outputs.version }}
+      REVISION: ${{ needs.prepare.outputs.revision }}
+      ORIG_SHA256: ${{ needs.prepare.outputs.orig_sha256 }}
+      SERIES: ${{ matrix.series }}
+      PPA_INCOMING: "~chipprbots/ubuntu/fukuii/"
+      DEBFULLNAME: "Chippr Robotics"
+      DEBEMAIL: "info@chipprbots.com"
+    steps:
+      - name: Checkout packaging
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+
+      - name: Download the upstream tarball
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
+        with:
+          name: fukuii-orig-${{ needs.prepare.outputs.version }}
+          path: work
+
+      - name: Install packaging tools
         run: |
           sudo apt-get update
-          sudo apt-get install -y \
-            debhelper \
-            devscripts \
-            dput \
-            gnupg2 \
-            dpkg-dev \
-            fakeroot
-      
-      - name: Import GPG key
+          sudo apt-get install -y --no-install-recommends debhelper devscripts dput gnupg
+
+      - name: Build the source package
+        run: |
+          set -euo pipefail
+          cd work
+          # The key signs what is here, so check it again rather than trust the artifact store.
+          echo "$ORIG_SHA256  fukuii_$VERSION.orig.tar.gz" | sha256sum --check --strict
+          tar xzf "fukuii_$VERSION.orig.tar.gz"
+          test -d "fukuii-$VERSION"
+          rm -rf "fukuii-$VERSION/debian"
+          cp -r "$GITHUB_WORKSPACE/debian" "fukuii-$VERSION/"
+          cd "fukuii-$VERSION"
+          dch --newversion "$VERSION-$REVISION~${SERIES}1" --distribution "$SERIES" --force-distribution \
+            "Release $VERSION. See https://github.com/chippr-robotics/fukuii/releases/tag/v$VERSION"
+          # Source only; -sa includes the upstream tarball in every upload (each series' first upload of a version
+          # needs it, and Launchpad accepts the identical file again).
+          dpkg-buildpackage -S -sa -d -us -uc
+
+      - name: Sign
         env:
           GPG_PRIVATE_KEY: ${{ secrets.LAUNCHPAD_GPG_PRIVATE_KEY }}
-        run: |
-          # Import the GPG private key
-          echo "$GPG_PRIVATE_KEY" | gpg --batch --import
-          
-          # Get the key ID and verify import was successful
-          GPG_KEY_ID=$(gpg --list-secret-keys --keyid-format=long | grep sec | head -1 | awk '{print $2}' | cut -d'/' -f2)
-          if [ -z "$GPG_KEY_ID" ]; then
-            echo "Error: Failed to import GPG key"
-            exit 1
-          fi
-          echo "GPG_KEY_ID=$GPG_KEY_ID" >> $GITHUB_ENV
-          echo "Successfully imported GPG key: $GPG_KEY_ID"
-      
-      - name: Update changelog for Ubuntu series
-        run: |
-          VERSION="${{ steps.version.outputs.version }}"
-          SERIES="${{ matrix.ubuntu_series }}"
-          TIMESTAMP=$(date -R)
-          
-          # Use dch (debchange) to properly update the changelog
-          # First, set the distribution to the target series
-          DEBEMAIL="dev@chipprbots.com" DEBFULLNAME="Chippr Robotics" \
-            dch --newversion "${VERSION}-1~${SERIES}1" \
-                --distribution "${SERIES}" \
-                --force-distribution \
-                "Release version ${VERSION}. See https://github.com/chippr-robotics/fukuii/releases/tag/v${VERSION}"
-      
-      - name: Build source package
-        env:
           GPG_PASSPHRASE: ${{ secrets.LAUNCHPAD_GPG_PASSPHRASE }}
         run: |
-          # Set up GPG agent for signing
-          export GPG_TTY=$(tty)
-          
-          # Start GPG agent and verify it's running
-          gpg-agent --daemon --allow-preset-passphrase 2>/dev/null || {
-            echo "Note: GPG agent may already be running"
-          }
-          
-          # Verify GPG key is available for signing
-          if ! gpg --list-secret-keys "$GPG_KEY_ID" > /dev/null 2>&1; then
-            echo "Error: GPG key $GPG_KEY_ID not found"
-            exit 1
-          fi
-          
-          # Create the source package
-          # Using -S for source-only (required for PPA), -sa to include orig tarball
-          dpkg-buildpackage -S -sa -k"$GPG_KEY_ID"
-      
-      - name: Configure dput for Launchpad
+          set -euo pipefail
+          [ -n "$GPG_PRIVATE_KEY" ] && [ -n "$GPG_PASSPHRASE" ] || { echo "launchpad-ppa signing secrets are not set"; exit 1; }
+          export GNUPGHOME="$RUNNER_TEMP/gnupg"
+          install -d -m 700 "$GNUPGHOME"
+          # dput verifies the signature before uploading, so the Upload step needs this keyring too.
+          echo "GNUPGHOME=$GNUPGHOME" >> "$GITHUB_ENV"
+          (umask 077; printf '%s' "$GPG_PASSPHRASE" > "$RUNNER_TEMP/gpg-pass")
+          printf '%s\n' "$GPG_PRIVATE_KEY" | gpg --batch --quiet --import
+          FPR=$(gpg --batch --with-colons --list-secret-keys | awk -F: '/^fpr:/ {print $10; exit}')
+          [ -n "$FPR" ] || { echo "no secret key imported"; exit 1; }
+          # Our own key in a throwaway keyring: trust it, so dput's signature check reports it valid.
+          echo "$FPR:6:" | gpg --batch --quiet --import-ownertrust
+          echo "Signing with $FPR"
+          CHANGES="work/fukuii_$VERSION-$REVISION~${SERIES}1_source.changes"
+          debsign -k"$FPR" -p"gpg --batch --pinentry-mode loopback --passphrase-file $RUNNER_TEMP/gpg-pass" "$CHANGES"
+          gpg --batch --verify "$CHANGES"
+          gpg --batch --verify "work/fukuii_$VERSION-$REVISION~${SERIES}1.dsc"
+
+      - name: Upload
         run: |
-          mkdir -p ~/.dput
-          cat > ~/.dput.cf << EOF
-          [fukuii-ppa]
+          set -euo pipefail
+          cat > "$HOME/.dput.cf" <<DPUT
+          [chipprbots-ppa]
           fqdn = ppa.launchpad.net
           method = ftp
-          incoming = ~${{ env.PPA_NAME }}/ubuntu/
+          incoming = $PPA_INCOMING
           login = anonymous
           allow_unsigned_uploads = 0
-          EOF
-      
-      - name: Upload to Launchpad PPA
+          DPUT
+          dput chipprbots-ppa "work/fukuii_$VERSION-$REVISION~${SERIES}1_source.changes"
+          {
+            echo "## fukuii $VERSION uploaded for $SERIES"
+            echo ""
+            echo "Launchpad builds it next: https://launchpad.net/~chipprbots/+archive/ubuntu/fukuii/+packages"
+            echo ""
+            echo '```bash'
+            echo "sudo add-apt-repository ppa:chipprbots/fukuii"
+            echo "sudo apt-get install fukuii"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Remove the signing material
+        if: always()
         run: |
-          VERSION="${{ steps.version.outputs.version }}"
-          SERIES="${{ matrix.ubuntu_series }}"
-          
-          # Upload the source package to Launchpad
-          cd ..
-          dput fukuii-ppa fukuii_${VERSION}-1~${SERIES}1_source.changes
-      
-      - name: Summary
-        run: |
-          VERSION="${{ steps.version.outputs.version }}"
-          SERIES="${{ matrix.ubuntu_series }}"
-          
-          echo "## Launchpad PPA Upload Complete 📦" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "**Version:** ${VERSION}" >> $GITHUB_STEP_SUMMARY
-          echo "**Ubuntu Series:** ${SERIES}" >> $GITHUB_STEP_SUMMARY
-          echo "**PPA:** ppa:${{ env.PPA_NAME }}" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "### Installation" >> $GITHUB_STEP_SUMMARY
-          echo "\`\`\`bash" >> $GITHUB_STEP_SUMMARY
-          echo "sudo add-apt-repository ppa:${{ env.PPA_NAME }}" >> $GITHUB_STEP_SUMMARY
-          echo "sudo apt-get update" >> $GITHUB_STEP_SUMMARY
-          echo "sudo apt-get install fukuii" >> $GITHUB_STEP_SUMMARY
-          echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "⚠️ Note: Build may take some time on Launchpad. Check status at:" >> $GITHUB_STEP_SUMMARY
-          echo "https://launchpad.net/~${{ env.PPA_NAME }}/+archive/ubuntu/fukuii" >> $GITHUB_STEP_SUMMARY
+          GNUPGHOME="$RUNNER_TEMP/gnupg" gpgconf --kill gpg-agent || true
+          rm -rf "$RUNNER_TEMP/gnupg" "$RUNNER_TEMP/gpg-pass"

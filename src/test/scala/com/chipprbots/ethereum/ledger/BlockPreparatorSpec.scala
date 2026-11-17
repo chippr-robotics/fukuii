@@ -28,8 +28,10 @@ import com.chipprbots.ethereum.domain.BlockHeader.HeaderExtraFields.HefPostCancu
 import com.chipprbots.ethereum.ledger.VMImpl
 import com.chipprbots.ethereum.testing.Tags.*
 import com.chipprbots.ethereum.utils.BlockchainConfig
+import com.chipprbots.ethereum.vm.CodeStoreOutOfGas
 import com.chipprbots.ethereum.vm.InvalidJump
 import com.chipprbots.ethereum.vm.InvalidOpCode
+import com.chipprbots.ethereum.vm.MaxCodeSizeExceeded
 import com.chipprbots.ethereum.vm.OutOfGas
 import com.chipprbots.ethereum.vm.ProgramError
 import com.chipprbots.ethereum.vm.RevertOccurs
@@ -227,8 +229,11 @@ class BlockPreparatorSpec extends AnyWordSpec with Matchers with ScalaCheckPrope
       (Some(InvalidOpCode(1)), 0),
       (Some(OutOfGas), 0),
       (Some(InvalidJump(23)), 0),
-      (Some(StackOverflow), 0),
-      (Some(StackUnderflow), 0),
+      (Some(StackOverflow(1024, 1023)), 0),
+      (Some(StackUnderflow(0, 2)), 0),
+      // #1727: the two code-deposit failures, OutOfGas before they had names, clear the logs as it does
+      (Some(MaxCodeSizeExceeded), 0),
+      (Some(CodeStoreOutOfGas), 0),
       (None, defaultsLogs.size)
     )
 
@@ -297,7 +302,7 @@ class BlockPreparatorSpec extends AnyWordSpec with Matchers with ScalaCheckPrope
               stx: SignedTransaction,
               senderAccount: Account,
               blockHeader: BlockHeader,
-              upfrontGasCost: UInt256,
+              upfrontGasCost: BigInt,
               accumGasUsed: BigInt
           )(implicit blockchainConfig: BlockchainConfig): Either[SignedTransactionError, SignedTransactionValid] =
             if stx.tx.receivingAddress.contains(Address(42)) then Right(SignedTransactionValid)
@@ -345,7 +350,7 @@ class BlockPreparatorSpec extends AnyWordSpec with Matchers with ScalaCheckPrope
               stx: SignedTransaction,
               senderAccount: Account,
               blockHeader: BlockHeader,
-              upfrontGasCost: UInt256,
+              upfrontGasCost: BigInt,
               accumGasUsed: BigInt
           )(implicit blockchainConfig: BlockchainConfig): Either[SignedTransactionError, SignedTransactionValid] =
             Left(TransactionSignatureError)

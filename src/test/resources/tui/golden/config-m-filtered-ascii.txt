@@ -1,0 +1,40 @@
+ # FUKUII  etc (61) . PoW . head 21,884,102 . 41/50 peers . up 12d 7h                                            Config 
+------------------------------------------------------------------------------------------------------------------------
+ + no alerts                                                                                                            
+                  | Peers   41/50 ##########  Block  21,884,102 (at head)                    Txpool  142                
+                  | Sync    + at head                                                                                   
+                  |-----------------------------------------------------------------------------------------------------
+                  | config  8 rows . 5 with 'rpc' . read 1m 0s ago . r reads again . Esc returns                        
+       ETC        |-----------------------------------------------------------------------------------------------------
+                  | fukuii.network.rpc.http.enabled = true                                                              
+                  | fukuii.network.rpc.http.interface = 127.0.0.1                                                       
+                  | fukuii.network.rpc.http.port = 8546                                                                 
+ etc              | fukuii.network.rpc.http.certificate.password = <hidden>                                             
+ PoW . id 61      | fukuii.network.rpc.ws.enabled = false                                                               
+ main network     |                                                                                                     
+                  |                                                                                                     
+ [1] Overview     |                                                                                                     
+ [2] Chain        |                                                                                                     
+ [3] Peers        |                                                                                                     
+ [4] Mempool      |                                                                                                     
+ [5] RPC          |                                                                                                     
+ [6] Storage      |                                                                                                     
+ [7] System       |                                                                                                     
+ [8] Logs         |                                                                                                     
+ [9] Ops          |                                                                                                     
+                  |                                                                                                     
+ graphics text    |                                                                                                     
+                  |                                                                                                     
+                  |                                                                                                     
+                  |                                                                                                     
+                  |                                                                                                     
+                  |                                                                                                     
+                  |                                                                                                     
+                  |                                                                                                     
+                  |                                                                                                     
+                  |                                                                                                     
+                  |                                                                                                     
+                  |                                                                                                     
+                  |                                                                                                     
+                  |                                                                                                     
+ 1-9 view  Enter open  Esc back  : prompt  / filter  ? help  p pause  r redraw  d detach  q quit                        

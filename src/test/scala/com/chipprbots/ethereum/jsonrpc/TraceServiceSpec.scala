@@ -168,11 +168,13 @@ class TraceServiceSpec
         saveAsBestBlock = true
       )
 
+      // The world of a call is taken from the block's own header, and handed to the call (spec 018 Track C)
+      (mockLedger.callWorld).expects(*, *).anyNumberOfTimes().returning(null)
       // The call path is StxLedger.simulateCall (#1629 S3), which carries the typed message and its pre-checks
       (mockLedger.simulateCall)
         .expects(*, *, *, *, *)
         .anyNumberOfTimes()
-        .returning(Right(null.asInstanceOf[TxResult]))
+        .returning(Right(StxLedger.CallOutcome(null.asInstanceOf[TxResult], codeDepositShortfall = false)))
 
       val callTx: TxArgs = TxArgs()
       val result: Either[JsonRpcError, TraceCallResponse] = service

@@ -43,6 +43,14 @@ class AppSpec extends AnyFlatSpec with Matchers:
 
   behavior.of("App argument parsing")
 
+  it should "select the ephemery network for `cli ephemery-fetch`, and no network for any other cli command" taggedAs (
+    UnitTest
+  ) in {
+    determineNetworkArg(Array("cli", "ephemery-fetch", "--from-dir", "x")) shouldBe Some("ephemery")
+    determineNetworkArg(Array("cli", "generate-private-key")) shouldBe None
+    determineNetworkArg(Array("cli")) shouldBe None
+  }
+
   it should "recognize 'public' as a modifier" taggedAs (UnitTest) in {
     getIsModifierMethod.invoke(App, "public").asInstanceOf[Boolean] shouldBe true
     getIsModifierMethod.invoke(App, "etc").asInstanceOf[Boolean] shouldBe false

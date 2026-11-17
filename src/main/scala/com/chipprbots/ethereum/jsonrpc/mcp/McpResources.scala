@@ -77,6 +77,7 @@ object NodeConfigResource:
         case id if id == BigInt(1)           => "ethereum"; case id if id == BigInt(61)     => "etc"
         case id if id == BigInt(63)          => "mordor"; case id if id == BigInt(11155111) => "sepolia"
         case id if id == BigInt(7091047534L) => "plataberget"
+        case id if id == BigInt(560048)      => "hoodi"
         case id                              => s"chain-$id"
       }",
       |  "accountStartNonce": ${cfg.accountStartNonce},
@@ -190,8 +191,10 @@ object MiningRpcResource:
       |    {"method": "eth_submitHashrate", "description": "Submit external hashrate for monitoring", "params": ["hashrate", "id"]},
       |    {"method": "miner_start", "description": "Start mining", "params": ["threadCount (optional)"]},
       |    {"method": "miner_stop", "description": "Stop mining", "params": []},
-      |    {"method": "miner_getStatus", "description": "Get mining status", "params": []}
-      |  ]
+      |    {"method": "miner_getStatus", "description": "Get mining status", "params": []},
+      |    {"method": "miner_setEtherbase", "description": "Set the coinbase (etherbase) address", "params": ["address"]}
+      |  ],
+      |  "note": "miner_* methods need the miner namespace to be enabled for the endpoint (not served over HTTP and WebSocket by default)"
       |}""".stripMargin)
 
 object LatestBlockResource:
@@ -293,7 +296,9 @@ object AccountByAddressResource:
       val addrBytes = org.bouncycastle.util.encoders.Hex.decode(addrStr.stripPrefix("0x"))
       val address = Address(org.apache.pekko.util.ByteString(addrBytes))
       val blockNum = deps.blockchainReader.getBestBlockNumber
-      val accountOpt = deps.blockchainReader.getAccount(deps.blockchainReader.getBestBranch, address, blockNum)
+      val accountOpt = deps.blockchainReader.getBlockHeaderByNumber(blockNum).flatMap { head =>
+        deps.blockchainReader.accountAt(head, address)
+      }
       accountOpt match
         case Some(account) =>
           val balanceEtc = BigDecimal(account.balance.toBigInt) / BigDecimal("1000000000000000000")

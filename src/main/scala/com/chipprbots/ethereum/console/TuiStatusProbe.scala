@@ -1,77 +1,320 @@
 package com.chipprbots.ethereum.console
 
+import java.io.File
+import java.lang.management.ManagementFactory
+import java.time.Clock
+import java.time.Instant
+import java.util.concurrent.TimeoutException
+
 import org.apache.pekko.actor.typed.ActorRef
 import org.apache.pekko.actor.typed.Scheduler
 import org.apache.pekko.actor.typed.scaladsl.AskPattern.*
+import org.apache.pekko.util.ByteString
 import org.apache.pekko.util.Timeout
 
 import scala.concurrent.Await
+import scala.concurrent.ExecutionContext
+import scala.concurrent.Future
 import scala.concurrent.duration.*
+import scala.jdk.CollectionConverters.*
+import scala.util.Failure
+import scala.util.Success
 import scala.util.Try
+
+import io.micrometer.core.instrument.Gauge
 
 import com.chipprbots.ethereum.blockchain.sync.SyncController
 import com.chipprbots.ethereum.blockchain.sync.SyncProtocol
+import com.chipprbots.ethereum.blockchain.sync.regular.RegularSyncMetrics
 import com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncController.SyncPhase
+import com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncMetrics
 import com.chipprbots.ethereum.blockchain.sync.snap.SyncProgress
+import com.chipprbots.ethereum.consensus.engine.EngineApiMetrics
+import com.chipprbots.ethereum.consensus.engine.EngineCall
+import com.chipprbots.ethereum.consensus.engine.EngineCallLog
+import com.chipprbots.ethereum.consensus.pow.PoWMiningMetrics
+import com.chipprbots.ethereum.domain.BlobTransaction
+import com.chipprbots.ethereum.domain.Transaction
+import com.chipprbots.ethereum.jsonrpc.RpcCallStats
+import com.chipprbots.ethereum.network.NetworkMetrics
+import com.chipprbots.ethereum.network.NetworkPeerManagerActor
+import com.chipprbots.ethereum.network.P2pTraffic
+import com.chipprbots.ethereum.network.Peer
 import com.chipprbots.ethereum.network.PeerManagerActor
+import com.chipprbots.ethereum.network.PeerScoreSnapshot
+import com.chipprbots.ethereum.transactions.PendingTransactionsManager
+import com.chipprbots.ethereum.transactions.TxPoolMetrics
+import com.chipprbots.ethereum.utils.Logger
 
 /** Polls the running node for the TUI: handshaked peers from the peer manager, sync status from the sync controller
-  * (the same query `net_peerCount` and `eth_syncing` answer), the local best block, and the latest SNAP progress.
+  * (the same query `net_peerCount` and `eth_syncing` answer), each peer's client id and best block from the network
+  * peer manager, the txpool, the local best block, and the latest SNAP progress.
   *
-  * Runs on the TUI updater thread — the blocking `Await`s never touch an actor or dispatcher thread. A slow or dead
-  * actor degrades one field to an "unresponsive" marker instead of freezing the display.
+  * All asks start together and share one bounded wait (`wait`, 500 ms), so a poll takes at most one wait however many
+  * actors are slow (FR-011). Each source gets its own freshness ([[Sourced]]): a source that misses the wait shows its
+  * last answer as Stale, or Unresponsive if it never answered or failed.
+  *
+  * Runs on the [[TuiProbeThread]] — the blocking wait never touches an actor or dispatcher thread, nor the frame loop.
+  * Not thread-safe: one thread polls it, and it keeps the previous snapshot to tell Stale from Unresponsive.
+  *
+  * @param snapSample
+  *   the SNAP monitor's latest progress and when it was recorded, in epoch milliseconds
+  *   (`SNAPSyncMetrics.latestSample`): shown while younger than [[TuiStatusProbe.SnapProgressMaxAgeMillis]]
+  * @param clock
+  *   the time of each snapshot. The TUI ages snapshots against its own clock (`Tui`'s `clock`), so the two must agree:
+  *   both default to the system UTC clock
+  * @param local
+  *   what to read on the node itself, without an actor: disk, JVM, discovery table, head timestamp, SNAP counters, peer
+  *   scores, the last import
+  * @param networkPeerManager
+  *   asked `GetHandshakedPeersCmd` for each peer's client id and best block; None asks nothing
+  * @param txPool
+  *   asked `GetPoolSizeReq` for the txpool's size and blob count, which copies nothing; and `GetPendingTransactionsReq`
+  *   for the whole pool while `poolWanted` says the Mempool view is on screen (spec 029 FR-037). None asks nothing
+  * @param poolWanted
+  *   whether the Mempool view is on screen: the only time the whole pool is read
   */
 class TuiStatusProbe(
     peerManager: ActorRef[PeerManagerActor.Command],
     syncController: ActorRef[SyncController.Command],
     bestBlockNumber: () => BigInt,
     maxPeers: Int,
-    snapProgress: () => Option[SyncProgress],
-    askTimeout: FiniteDuration = TuiStatusProbe.DefaultAskTimeout
+    snapSample: () => Option[(SyncProgress, Long)],
+    wait: FiniteDuration = TuiStatusProbe.DefaultAskTimeout,
+    clock: Clock = Clock.systemUTC(),
+    local: TuiStatusProbe.LocalSources = TuiStatusProbe.LocalSources(),
+    networkPeerManager: Option[ActorRef[NetworkPeerManagerActor.Command]] = None,
+    txPool: Option[ActorRef[PendingTransactionsManager.Command]] = None,
+    poolWanted: () => Boolean = () => false
 )(using scheduler: Scheduler)
-    extends (() => NodeStatusSnapshot):
+    extends (() => NodeStatusSnapshot)
+    with Logger:
 
-  private given Timeout = Timeout(askTimeout)
+  import TuiStatusProbe.*
+
+  // Longer than the wait, so an actor that is merely slow misses the wait (Stale) instead of failing it.
+  private given Timeout = Timeout(wait * 2)
+
+  private var previous: Option[NodeStatusSnapshot] = None
+
+  /** The cumulative GC time at the previous poll, and when: the GC share is the difference over the interval. */
+  private var previousGc: Option[(Long, Instant)] = None
+
+  /** The local readings that have failed since they last succeeded: each failure is logged once, at DEBUG. */
+  private var failingReads: Set[String] = Set.empty
 
   def apply(): NodeStatusSnapshot =
-    val peers = Try(
-      Await.result(peerManager.ask[PeerManagerActor.Peers](PeerManagerActor.GetPeersCmd(_)), askTimeout).handshaked.size
+    val peersAsk = settled(peerManager.ask[PeerManagerActor.Peers](PeerManagerActor.GetPeersCmd(_)))
+    val syncAsk = settled(
+      syncController.ask[SyncProtocol.Status](r => SyncController.WrappedSyncProtocol(SyncProtocol.GetStatus(r)))
     )
-    val sync = Try(
-      Await.result(
-        syncController.ask[SyncProtocol.Status](r => SyncController.WrappedSyncProtocol(SyncProtocol.GetStatus(r))),
-        askTimeout
+    val detailsAsk = networkPeerManager.map(ref =>
+      settled(ref.ask[NetworkPeerManagerActor.HandshakedPeers](NetworkPeerManagerActor.GetHandshakedPeersCmd(_)))
+    )
+    // The whole pool only while the Mempool view is on screen, and at most once a second however often the probe
+    // polls; a count, which copies nothing, otherwise (FR-037).
+    val asked = clock.instant()
+    val wanted = read("whether the Mempool view is on screen")(Some(poolWanted())).getOrElse(false)
+    if wanted != poolWasWanted then
+      log.debug(
+        if wanted then "TUI reads the whole pool each poll: the Mempool view is on screen"
+        else "TUI no longer reads the whole pool: the Mempool view is not on screen"
       )
+      poolWasWanted = wanted
+    if !wanted then lastPool = None
+    val wholePool = wanted && lastPool.forall(p => java.time.Duration.between(p.at, asked).compareTo(MinPoolRead) >= 0)
+    val poolAsk = txPool
+      .filter(_ => wholePool)
+      .map(ref =>
+        settled(
+          ref.ask[PendingTransactionsManager.PendingTransactionsResponse](
+            PendingTransactionsManager.GetPendingTransactionsReq(_)
+          )
+        )
+      )
+    val txpoolAsk = txPool
+      .filter(_ => !wholePool)
+      .map(ref => settled(ref.ask[PendingTransactionsManager.PoolSize](PendingTransactionsManager.GetPoolSizeReq(_))))
+    // One wait for all: the asks run concurrently, and whatever has not answered by the deadline missed this poll.
+    // The node-local readings are taken meanwhile, so they add nothing to the poll unless they outlast the wait.
+    val deadline = wait.fromNow
+    val localSample = readLocal(clock.instant())
+    (Seq(peersAsk, syncAsk) ++ detailsAsk ++ txpoolAsk ++ poolAsk).foreach(ask =>
+      Try(Await.ready(ask, deadline.timeLeft.max(Duration.Zero)))
     )
+
+    val now = clock.instant()
     val localBest = Try(bestBlockNumber().toLong).getOrElse(0L)
-
-    val (current, best, syncStatus) =
-      sync.fold(_ => (localBest, 0L, "Unresponsive (sync controller)"), TuiStatusProbe.describe(_, localBest))
-
-    val snap = sync.toOption
-      .filter(_.syncing)
-      .flatMap(_ => snapProgress())
-      .filter(p => TuiStatusProbe.ActiveSnapPhases.contains(p.phase))
-      .map(TuiStatusProbe.toSnapSyncState)
-
-    NodeStatusSnapshot(
-      connectionStatus = peers.fold(
-        _ => "Unresponsive (peer manager)",
-        n => if n > 0 then "Connected" else "Searching for peers"
-      ),
-      peerCount = peers.getOrElse(0),
-      maxPeers = maxPeers,
-      currentBlock = current,
-      bestBlock = best,
-      syncStatus = syncStatus,
-      snapSync = snap
+    val missed = s"no reply within ${wait.toMillis}ms"
+    val peers = Sourced.next(previous.map(_.peers), poll(peersAsk)(_.handshaked.map(tuiPeer)), now, missed)
+    val sync = Sourced.next(previous.map(_.sync), poll(syncAsk)(sample(_, localBest, now)), now, missed)
+    val details =
+      detailsAsk.map(ask => Sourced.next(previous.flatMap(_.details), poll(ask)(peerDetails), now, missed))
+    // The pool in full, observed: what arrived and left since the last poll that read it. A poll that did not read
+    // it (too soon after the last, or the pool did not answer) shows the last reading, which says when it was read,
+    // for as long as the observer would still compare against it; then the view says it is reading again.
+    val wholeRead = poolAsk.flatMap { ask =>
+      poll(ask)(identity) match
+        case Sourced.Poll.Answered(response) => Some(observePool(response, localSample, now))
+        case _                               => None
+    }
+    if wholeRead.isDefined then lastPool = wholeRead
+    val pool = Option
+      .when(wanted)(lastPool)
+      .flatten
+      .filter(p => java.time.Duration.between(p.at, now).compareTo(PoolObserver.MaxGap) <= 0)
+    val counted = txpoolAsk.map(ask => poll(ask)(size => TxpoolSample(size.size, size.blobs, Some(size.capacity))))
+    // The count is the full read's own when the pool was read whole, so the header never asks twice.
+    val fromPool = poolAsk.map(ask =>
+      poll(ask)(response => txpoolSample(response).copy(capacity = Option(local.poolCapacity).filter(_ > 0)))
     )
+    val txpool = counted.orElse(fromPool).map(Sourced.next(previous.flatMap(_.txpool), _, now, missed))
+    val snapshot = NodeStatusSnapshot(now, maxPeers, localBest, peers, sync, localSample, details, txpool, pool)
+    previous = Some(snapshot)
+    snapshot
+
+  /** A reading of the node: one that fails is left empty, and logged at DEBUG the first time it fails after it last
+    * succeeded; none fails the poll.
+    */
+  private def read[A](name: String)(f: => Option[A]): Option[A] =
+    Try(f) match
+      case Success(value) =>
+        failingReads -= name
+        value
+      case Failure(e) =>
+        if !failingReads.contains(name) then
+          log.debug("TUI could not read {}: {}", name, Option(e.getMessage).getOrElse(e.toString))
+        failingReads += name
+        None
+
+  /** The node-local readings (research §6). */
+  private def readLocal(at: Instant): LocalSample =
+    val gcMillis = read("the GC time")(local.gcMillis())
+    val gcShare = for
+      total <- gcMillis
+      (before, previousAt) <- previousGc
+      wall = java.time.Duration.between(previousAt, at).toMillis
+      if wall > 0
+    yield ((total - before).max(0L).toDouble / wall).min(1.0)
+    previousGc = gcMillis.map(_ -> at)
+    LocalSample(
+      diskFree = read("the disk free")(local.dataDir.map(local.usableSpace)),
+      // A file system that cannot say its size answers 0.
+      diskTotal = read("the disk size")(local.dataDir.map(local.totalSpace)).filter(_ > 0),
+      jvm = read("the heap")(local.heap()).map((used, max) => JvmSample(used, max, gcShare)),
+      discovery = read("the discovery counts")(local.discovery()),
+      headTimestamp = read("the head timestamp")(local.headTimestamp()),
+      snapCounters = read("the SNAP counters")(local.snapCounters()),
+      snapPivot = read("the SNAP pivot")(local.snapPivot()),
+      peerScores = read("the peer scores")(local.peerScores()),
+      lastImport = read("the last import")(local.lastImport()),
+      cl = read("the consensus layer")(local.cl()),
+      mining = read("the mining metrics")(local.mining()),
+      chain = local.chain.flatMap(source => read("the chain")(Some(observeHead(source, at)))),
+      forkId = read("the fork id")(local.forkId()),
+      poolCounters = read("the pool's counters")(local.poolCounters()),
+      rpc = read("the RPC figures")(local.rpc()),
+      system = read("the process and the machine")(local.system()),
+      storage = read("the database")(local.storage())
+    )
+
+  /** What the pool observer has seen (spec 029 FR-031): kept on the probe's thread, moved on by each poll that reads
+    * the pool whole.
+    */
+  private var poolObserver: PoolObserver.State = PoolObserver.State()
+
+  /** The last whole reading of the pool while the Mempool view has been on screen, and whether it was on screen at the
+    * last poll.
+    */
+  private var lastPool: Option[PoolSample] = None
+  private var poolWasWanted: Boolean = false
+
+  /** One poll of the whole pool ([[PoolObserver]]): each pending transaction's tip against the head's base fee, what
+    * became of the ones that left, and the node's own fee suggestion to sort them by.
+    */
+  private def observePool(
+      response: PendingTransactionsManager.PendingTransactionsResponse,
+      sample: LocalSample,
+      at: Instant
+  ): PoolSample =
+    val head = sample.chain.flatMap(_.head)
+    val baseFee = head.flatMap(_.baseFee)
+    val current = response.pendingTransactions.map(poolTx(_, baseFee))
+    // On a node whose head is read but was not this poll, a tip cannot be told from a gas price: no tier is drawn
+    // rather than every transaction put in a tier it may not belong to.
+    val suggested =
+      if local.chain.isDefined && head.isEmpty then None else read("the suggested fee")(local.suggestedFee())
+    val (next, observed) =
+      PoolObserver.observe(
+        poolObserver,
+        current,
+        // An index that cannot be read says nothing: the departure is counted as not told apart, never as dropped.
+        hash => read("the transaction index")(Some(local.isMined(hash))),
+        suggested,
+        local.poolCapacity,
+        at
+      )
+    poolObserver = next
+    observed
+
+  /** What the head observer has seen (spec 029 FR-023): kept on the probe's thread, moved on by each poll. */
+  private var headObserver: HeadObserver.State = HeadObserver.State()
+
+  /** One poll of the head: a bounded walk from it back to a block already seen ([[HeadObserver]]). */
+  private def observeHead(source: ChainReads.Source, at: Instant): ChainSample =
+    headObserver = HeadObserver.observe(
+      headObserver,
+      source.head(at, headObserver.recent.lastOption.map(_.hash)),
+      (hash, withBody) => source.block(hash, withBody, at),
+      at,
+      local.observatoryBlocks
+    )
+    headObserver.sample
+
+  /** The sync status as the TUI reads it, with the SNAP progress while SNAP is running: a sample of an active phase,
+    * young enough to show. "Syncing (SNAP)" needs a sample from the monitor's last two rounds. The sample's time is
+    * kept at any age: the alert row warns when it is too old to show (§2.3), so the time outlives the sample. One read
+    * of the sample, so its progress and its time agree.
+    */
+  private def sample(status: SyncProtocol.Status, localBest: Long, now: Instant): SyncSample =
+    val latest = Option
+      .when(status.syncing)(Try(snapSample()).toOption.flatten)
+      .flatten
+      .map((progress, at) => (progress, Instant.ofEpochMilli(at)))
+      .filter((progress, _) => ActiveSnapPhases.contains(progress.phase))
+    val snap = latest.filter((_, at) => ageMillis(at, now) <= SnapProgressMaxAgeMillis)
+    val fresh = snap.exists((_, at) => ageMillis(at, now) <= SnapStatusMaxAgeMillis)
+    val (current, best, description) = describe(status, localBest, snapSampleFresh = fresh)
+    SyncSample(
+      current,
+      best,
+      description,
+      snap.map((p, _) => toSnapSyncState(p)),
+      latest.map(_._2),
+      snapRunning = latest.exists((_, at) => ageMillis(at, now) <= SnapRunningMaxAgeMillis)
+    )
+
+  private def ageMillis(at: Instant, now: Instant): Long = java.time.Duration.between(at, now).toMillis
 
 object TuiStatusProbe:
   val DefaultAskTimeout: FiniteDuration = 500.millis
 
   /** How long a SNAP progress sample stays displayable. SyncProgressMonitor samples every 30 s. */
   val SnapProgressMaxAgeMillis: Long = 90_000L
+
+  /** How long SNAP counts as running after its latest sample of a running phase: ten of the monitor's 30 s rounds.
+    *
+    * The monitor samples every 30 s while SNAP runs and publishes a final `Completed` sample when it finishes, so a
+    * sample that stops arriving means SNAP stopped without one, as an in-process abort does before regular sync takes
+    * over. Between 90 s and this age the SNAP rows stay on screen, marked with their age, and the alert row warns;
+    * after it, both go. The sync controller's block target is not consulted.
+    */
+  val SnapRunningMaxAgeMillis: Long = 300_000L
+
+  /** How young a SNAP sample must be to call the sync "Syncing (SNAP)": the monitor's last two rounds of 30 s
+    * (`SyncProgressMonitor.startPeriodicLogging`). Two poll intervals would be shorter than one round.
+    */
+  val SnapStatusMaxAgeMillis: Long = 60_000L
 
   private val ActiveSnapPhases: Set[SyncPhase] = Set(
     SyncPhase.AccountRangeSync,
@@ -81,13 +324,570 @@ object TuiStatusProbe:
     SyncPhase.ChainDownloadCompletion
   )
 
-  /** Map a sync status to (current block, best known block or 0 if unknown, description). */
-  private[console] def describe(status: SyncProtocol.Status, localBest: Long): (Long, Long, String) = status match
+  /** What the probe reads on the node itself, each read injectable for tests (spec 027 T065). The defaults read
+    * nothing; [[LocalSources.node]] reads the running node.
+    *
+    * @param dataDir
+    *   the datadir, whose file system's free space the disk reading is
+    * @param usableSpace
+    *   bytes usable on a directory's file system
+    * @param heap
+    *   the JVM's (used, max) heap bytes
+    * @param gcMillis
+    *   the JVM's cumulative GC time, all collectors
+    * @param headTimestamp
+    *   the best block header's timestamp, Unix seconds
+    * @param cl
+    *   the consensus layer as the Engine API saw it ([[LocalSources.clReader]]); a thunk that reads nothing keeps the
+    *   consensus-layer panel off the screen, which is how an ETC node has none
+    * @param mining
+    *   the mining metrics ([[LocalSources.miningReader]]); a thunk that reads nothing keeps the mining panel off the
+    *   screen, which is how an ETH node has none
+    * @param chain
+    *   the node's blocks, for the head observer (spec 029 FR-023); None reads no block
+    * @param observatoryBlocks
+    *   the newest blocks the observer keeps
+    * @param forkId
+    *   the fork id at the head, as the node tells it to its peers
+    * @param suggestedFee
+    *   the fee the node itself would suggest: a tip on a chain with a base fee, a gas price on one without
+    * @param isMined
+    *   whether the node's transaction index holds this hash: it is in a block the node imported
+    * @param poolCapacity
+    *   the most the transaction pool holds
+    * @param poolCounters
+    *   the transaction pool's counters
+    * @param rpc
+    *   the JSON-RPC servers' transports and per-method figures ([[LocalSources.rpcReader]])
+    */
+  final case class LocalSources(
+      dataDir: Option[File] = None,
+      usableSpace: File => Long = _.getUsableSpace,
+      totalSpace: File => Long = _.getTotalSpace,
+      heap: () => Option[(Long, Long)] = () => None,
+      gcMillis: () => Option[Long] = () => None,
+      discovery: () => Option[DiscoverySample] = () => None,
+      headTimestamp: () => Option[Long] = () => None,
+      snapCounters: () => Option[SnapCounters] = () => None,
+      snapPivot: () => Option[Long] = () => None,
+      peerScores: () => Option[PeerScores] = () => None,
+      lastImport: () => Option[ImportSample] = () => None,
+      cl: () => Option[ClSample] = () => None,
+      mining: () => Option[MiningSample] = () => None,
+      chain: Option[ChainReads.Source] = None,
+      observatoryBlocks: Int = HeadObserver.MaxWalk,
+      forkId: () => Option[String] = () => None,
+      suggestedFee: () => Option[BigInt] = () => None,
+      isMined: String => Boolean = _ => false,
+      poolCapacity: Int = 0,
+      poolCounters: () => Option[TxPoolMetrics.Snapshot] = () => None,
+      rpc: () => Option[RpcSample] = () => None,
+      system: () => Option[SystemSample] = () => None,
+      storage: () => Option[StorageSample] = () => None
+  )
+
+  object LocalSources:
+
+    /** The running node's readings: the datadir's disk, this JVM, `NetworkMetrics`, `SNAPSyncMetrics` (counters and
+      * pivot), the best header's timestamp through `headTimestamp`, and the Engine API and the mining metrics through
+      * `cl` and `mining`, which the caller builds for the chain it runs (nothing for the other chain's).
+      */
+    def node(
+        dataDir: Option[File],
+        headTimestamp: () => Option[Long],
+        cl: () => Option[ClSample] = () => None,
+        mining: () => Option[MiningSample] = () => None,
+        chain: Option[ChainReads.Source] = None,
+        forkId: () => Option[String] = () => None,
+        suggestedFee: () => Option[BigInt] = () => None,
+        isMined: String => Boolean = _ => false,
+        poolCapacity: Int = 0,
+        poolCounters: () => Option[TxPoolMetrics.Snapshot] = () => None,
+        rpc: () => Option[RpcSample] = () => None,
+        system: () => Option[SystemSample] = () => None,
+        storage: () => Option[StorageSample] = () => None
+    ): LocalSources =
+      LocalSources(
+        rpc = rpc,
+        system = system,
+        storage = storage,
+        chain = chain,
+        forkId = forkId,
+        suggestedFee = suggestedFee,
+        isMined = isMined,
+        poolCapacity = poolCapacity,
+        poolCounters = poolCounters,
+        dataDir = dataDir,
+        heap = jvmHeap,
+        gcMillis = jvmGcMillis,
+        discovery = networkDiscovery,
+        headTimestamp = headTimestamp,
+        snapCounters = snapMetrics,
+        snapPivot = snapPivotBlock,
+        peerScores = networkScores,
+        lastImport = regularSyncImport,
+        cl = cl,
+        mining = mining
+      )
+
+    /** The consensus layer as the Engine API saw it (spec 027 E1-E3): the metrics' last calls, counts and failed
+      * authentications, and the last executed fork choice through `forkChoice` (read once a poll, which is one atomic
+      * read in the node: the probe is handed no `ForkChoiceManager`, which could be told to change the fork choice, or
+      * to change who hears of it). A safe or finalized hash is looked up through `headerNumber` once and remembered, so
+      * a poll costs no storage read while they stand; a zero hash, which the consensus layer sends before it has one,
+      * is no block, and a header the node does not have yet is tried again next poll.
+      *
+      * Only the probe thread calls it: it keeps the two remembered numbers without a lock.
+      */
+    def clReader(
+        forkChoice: () => Option[ForkChoiceHashes],
+        headerNumber: ByteString => Option[Long],
+        calls: () => EngineCallLog.Snapshot = () => EngineCallLog.Node.snapshot
+    ): () => Option[ClSample] =
+      new ClReader(forkChoice, headerNumber, calls)
+
+    /** The JSON-RPC servers (spec 029 FR-038, FR-039): `transports` as the node's configuration has them (each one's
+      * exposure is `RpcExposureCheck`'s rule, worked out once by the caller), joined each poll with what the servers
+      * counted. Display only: it reads counters and is handed nothing that serves a request.
+      */
+    def rpcReader(
+        transports: Seq[TransportStatus],
+        rateLimit: Option[java.time.Duration],
+        stats: () => RpcCallStats.Snapshot = () => RpcCallStats.Node.snapshot,
+        clock: Clock = Clock.systemUTC()
+    ): () => Option[RpcSample] =
+      new RpcReader(transports, rateLimit, stats, clock)
+
+    /** This JVM and its machine, and the RLPx traffic the node counted (spec 029 FR-044). Only the probe thread calls
+      * it.
+      */
+    def systemReader(
+        traffic: () => P2pTraffic.Snapshot = () => P2pTraffic.Node.snapshot,
+        clock: Clock = Clock.systemUTC()
+    ): () => Option[SystemSample] =
+      new SystemReader(SystemSources.jvm(traffic), clock)
+
+    /** The database and its disk (spec 029 FR-043), through reads the caller hands over. Only the probe thread calls
+      * it.
+      */
+    def storageReader(sources: StorageSources, clock: Clock = Clock.systemUTC()): () => Option[StorageSample] =
+      new StorageReader(sources, clock)
+
+    /** The mining metrics (spec 027 M1, M2), and the coinbase through `coinbase`: the node's own `CoinbaseProvider`, so
+      * what `eth_coinbase` answers is what shows, and nothing that can change it is handed over. It reads gauges, and
+      * calls no `EthMiningService` method: those prune hashrates, mark the miner active, or build a block.
+      *
+      * Only the probe thread calls it: it keeps the last minute of `eth_getWork` counts without a lock.
+      */
+    def miningReader(coinbase: () => String, clock: Clock = Clock.systemUTC()): () => Option[MiningSample] =
+      new MiningReader(coinbase, clock)
+
+    /** The peer scores slice 4a last published to `NetworkMetrics` (Q5: the export, not the scorer). */
+    def networkScores(): Option[PeerScores] = TuiStatusProbe.peerScores(NetworkMetrics.peerScores)
+
+    /** The last import regular sync timed (`RegularSyncMetrics`, C-7). */
+    def regularSyncImport(): Option[ImportSample] =
+      RegularSyncMetrics.lastImport.map(last => ImportSample(last.blocks, java.time.Duration.ofNanos(last.nanos)))
+
+    /** The SNAP pivot's block number, once SNAP has chosen one. */
+    def snapPivotBlock(): Option[Long] = Some(SNAPSyncMetrics.pivotBlockNumber).filter(_ > 0)
+
+    def jvmHeap(): Option[(Long, Long)] =
+      val heap = ManagementFactory.getMemoryMXBean.getHeapMemoryUsage
+      Some((heap.getUsed, if heap.getMax > 0 then heap.getMax else Runtime.getRuntime.maxMemory))
+
+    /** The pausing collectors' total time; a collector that cannot tell (-1) adds nothing. */
+    def jvmGcMillis(): Option[Long] =
+      Some(
+        pausingGcMillis(
+          ManagementFactory.getGarbageCollectorMXBeans.asScala.toSeq.map(b => b.getName -> b.getCollectionTime)
+        )
+      )
+
+    /** The collection time of the collectors that pause the application. G1's `G1 Concurrent GC` (and ZGC's and
+      * Shenandoah's `… Cycles` beans) count the wall time of work that runs beside it, which is not a pause.
+      */
+    private[console] def pausingGcMillis(collectors: Seq[(String, Long)]): Long =
+      collectors.collect { case (name, millis) if pausingCollector(name) => millis.max(0L) }.sum
+
+    /** Whether a collector bean counts pauses, by its name. */
+    private[console] def pausingCollector(name: String): Boolean =
+      !name.contains("Concurrent") && !name.contains("Cycles")
+
+    def networkDiscovery(): Option[DiscoverySample] =
+      Some(
+        DiscoverySample(
+          NetworkMetrics.DiscoveredPeersSize.get,
+          NetworkMetrics.PendingPeersSize.get,
+          NetworkMetrics.BlacklistedPeersSize.get
+        )
+      )
+
+    def snapMetrics(): Option[SnapCounters] =
+      Some(
+        SnapCounters(
+          accountRequests = SNAPSyncMetrics.accountRangeRequests,
+          accountFailures = SNAPSyncMetrics.accountRangeFailures,
+          storageRequests = SNAPSyncMetrics.storageRangeRequests,
+          storageFailures = SNAPSyncMetrics.storageRangeFailures,
+          bytecodeRequests = SNAPSyncMetrics.bytecodeRequests,
+          bytecodeFailures = SNAPSyncMetrics.bytecodeFailures,
+          healingRequests = SNAPSyncMetrics.healingRequests,
+          healingFailures = SNAPSyncMetrics.healingFailures,
+          timeouts = SNAPSyncMetrics.requestTimeouts,
+          snapCapablePeers = SNAPSyncMetrics.snapCapablePeers,
+          blacklisted = SNAPSyncMetrics.peersBlacklisted
+        )
+      )
+
+  /** The reader [[LocalSources.clReader]] returns. A header lookup that fails costs that block's number and nothing
+    * else: the calls and the counts, which the panel and the disconnection alert stand on, are read from metrics that
+    * cannot fail, and one broken storage read must not take them off the screen.
+    */
+  final private class ClReader(
+      forkChoice: () => Option[ForkChoiceHashes],
+      headerNumber: ByteString => Option[Long],
+      calls: () => EngineCallLog.Snapshot
+  ) extends (() => Option[ClSample])
+      with Logger:
+
+    private var headNumber: Option[(ByteString, Long)] = None
+
+    private var safe: Option[(ByteString, Long)] = None
+    private var finalized: Option[(ByteString, Long)] = None
+    private var head: Option[(ByteString, String)] = None
+    private var lookupFailing = false
+
+    private def lookup(hash: ByteString): Option[Long] =
+      Try(headerNumber(hash)) match
+        case Success(number) =>
+          lookupFailing = false
+          number
+        case Failure(e) =>
+          if !lookupFailing then
+            log.debug("TUI could not look a block up: {}", Option(e.getMessage).getOrElse(e.toString))
+          lookupFailing = true
+          None
+
+    private def resolve(hash: ByteString, remembered: Option[(ByteString, Long)]): Option[(ByteString, Long)] =
+      if hash.forall(_ == 0) then None // empty, or 32 zero bytes: the consensus layer has no such block yet
+      else remembered.filter(_._1 == hash).orElse(lookup(hash).map(hash -> _))
+
+    /** The head as `0x` and its hex, made again only when the head moves: a poll a second would otherwise build the
+      * same 66 characters on every one.
+      */
+    private def headHex(hash: ByteString): String =
+      head.filter(_._1 == hash).map(_._2).getOrElse {
+        val text = "0x" + hex(hash)
+        head = Some(hash -> text)
+        text
+      }
+
+    def apply(): Option[ClSample] =
+      val fork = forkChoice()
+      safe = fork.flatMap(f => resolve(f.safe, safe))
+      finalized = fork.flatMap(f => resolve(f.finalized, finalized))
+      headNumber = fork.flatMap(f => resolve(f.head, headNumber))
+      // The call log (spec 029 FR-040): what a consensus client sent is cut and cleaned where it is kept, and
+      // passes the screen's one sanitiser here all the same.
+      val log = calls()
+      // A status is the node's own string, but it reaches the screen through the one sanitiser all the same.
+      def call(c: EngineCall) = ClCall(Instant.ofEpochMilli(c.atMs), Sanitize.line(Option(c.status).getOrElse("")))
+      Some(
+        ClSample(
+          forkchoiceUpdated = EngineApiMetrics.lastForkchoiceUpdated.map(call),
+          newPayload = EngineApiMetrics.lastNewPayload.map(call),
+          payloads = PayloadCounts(
+            total = EngineApiMetrics.newPayloadTotal.value().toLong,
+            valid = EngineApiMetrics.newPayloadValid.value().toLong,
+            syncing = EngineApiMetrics.newPayloadSyncing.value().toLong,
+            accepted = EngineApiMetrics.newPayloadAccepted.value().toLong,
+            // Each status has its own count since B-193: the invalid count is the INVALID answers alone.
+            invalid = EngineApiMetrics.newPayloadInvalid.value().toLong
+          ),
+          authFailures = EngineApiMetrics.authFailures.value().toLong,
+          head = fork.map(f => headHex(f.head)),
+          safe = safe.map(_._2),
+          finalized = finalized.map(_._2),
+          headNumber = headNumber.map(_._2),
+          client = log.identity.map(i =>
+            ClClient(Sanitize.line(i.code), Sanitize.line(i.name), Sanitize.line(i.version), Sanitize.line(i.commit))
+          ),
+          capabilities = log.capabilities,
+          calls = log.calls.map(k =>
+            EngineCallLine(
+              Instant.ofEpochMilli(k.atMs),
+              Sanitize.line(k.method),
+              k.status.map(Sanitize.line(_)),
+              java.time.Duration.ofNanos(k.nanos.max(0L)),
+              k.blockNumber
+            )
+          ),
+          callsTotal = log.total,
+          authReasons = log.authFailures.map((reason, n) => reason.label -> n),
+          builds = PayloadBuilds(
+            log.payloadsBuilt,
+            log.payloadBuildsFailed,
+            log.lastBuild.map(b => BuiltPayload(Instant.ofEpochMilli(b.atMs), b.blockNumber, b.transactions))
+          )
+        )
+      )
+
+  private def hex(bytes: ByteString): String = bytes.iterator.map(b => f"${b & 0xff}%02x").mkString
+
+  /** The reader [[LocalSources.rpcReader]] returns: the figures as counted, and the calls of the last minute from the
+    * totals it keeps of that minute's polls. Only the probe thread calls it.
+    */
+  final private class RpcReader(
+      transports: Seq[TransportStatus],
+      rateLimit: Option[java.time.Duration],
+      stats: () => RpcCallStats.Snapshot,
+      clock: Clock
+  ) extends (() => Option[RpcSample]):
+    private var totals: Vector[(Instant, Long, Long)] = Vector.empty
+
+    def apply(): Option[RpcSample] =
+      val at = clock.instant()
+      val counted = stats()
+      val calls = counted.transports.map(_.calls).sum
+      val errors = counted.transports.map(_.errors).sum
+      // A clock that stepped back, or totals that fell (they never do in one process), say nothing of the minute.
+      if totals.lastOption.exists((before, c, e) => before.isAfter(at) || c > calls || e > errors) then
+        totals = Vector.empty
+      totals = (totals :+ (at, calls, errors)).dropWhile(p =>
+        java.time.Duration.between(p._1, at).compareTo(RpcRecentWindow) > 0
+      )
+      val recent = totals.headOption.collect {
+        case (from, c, e) if java.time.Duration.between(from, at).compareTo(RpcRecentMinSpan) >= 0 =>
+          RpcWindow(calls - c, errors - e, java.time.Duration.between(from, at))
+      }
+      Some(TuiStatusProbe.rpcSample(transports, rateLimit, counted).copy(recent = recent))
+
+  /** The reader [[LocalSources.miningReader]] returns. */
+  final private class MiningReader(coinbase: () => String, clock: Clock) extends (() => Option[MiningSample]):
+
+    private val getWorkWindow = new RateWindow()
+
+    /** The monitor's history (spec 029 FR-041): kept here, on the probe's thread, from the gauges every poll reads. */
+    private var history: Vector[MiningPoint] = Vector.empty
+
+    private def read(gauge: Gauge): Long = gauge.value().toLong
+
+    // The DAG gauges are read epoch first and loaded last, and that order is load-bearing: it pairs with
+    // `PoWMiningMetrics.recordDagStarted` writing the epoch last, so a poll never sees "epoch N+1, loaded".
+    def apply(): Option[MiningSample] =
+      val getWork = read(PoWMiningMetrics.workRequestsTotal)
+      val minedAt = read(PoWMiningMetrics.lastBlockMinedAt)
+      val hashrate = read(PoWMiningMetrics.currentHashrate)
+      val perMinute = getWorkWindow.add(clock.millis(), getWork)
+      val at = clock.instant()
+      // A point every five seconds, ten minutes of them. A clock that stepped back starts the history again.
+      if history.lastOption.exists(_.at.isAfter(at)) then history = Vector.empty
+      if history.lastOption.forall(last => java.time.Duration.between(last.at, at).compareTo(MiningHistoryStep) >= 0)
+      then history = (history :+ MiningPoint(at, hashrate, perMinute)).takeRight(MiningHistoryPoints)
+      Some(
+        MiningSample(
+          history = history,
+          coinbase = Some(coinbase()),
+          hashrate = hashrate,
+          blocksMined = read(PoWMiningMetrics.blocksMinedTotal),
+          lastMinedAt = Option.when(minedAt > 0)(Instant.ofEpochSecond(minedAt)),
+          staleShares = read(PoWMiningMetrics.staleSharesTotal),
+          getWork = getWork,
+          getWorkPerMinute = perMinute,
+          minerRunning = Some(read(PoWMiningMetrics.minerRunning) == 1L),
+          dag = dagSample(
+            read(PoWMiningMetrics.dagEpoch),
+            read(PoWMiningMetrics.dagPhase),
+            read(PoWMiningMetrics.dagProgress),
+            read(PoWMiningMetrics.dagLoaded)
+          )
+        )
+      )
+
+  /** The DAG the gauges describe: none before the first build starts (epoch `-1`), else its epoch, its phase (0 not yet
+    * known, 1 loading, 2 generating), its percent held to 0 to 100, and whether it is loaded.
+    */
+  private[console] def dagSample(epoch: Long, phase: Long, progress: Long, loaded: Long): Option[DagSample] =
+    Option.when(epoch >= 0)(
+      DagSample(
+        epoch,
+        phase match
+          case 1L => DagPhase.Loading
+          case 2L => DagPhase.Generating
+          case _  => DagPhase.Pending,
+        progress.max(0L).min(100L).toInt,
+        loaded != 0L
+      )
+    )
+
+  /** A counter's rate over the last minute, per minute, from the readings it is given: none until two are at least
+    * `minSpan` apart, and it starts over when the counter goes backwards (a restarted node) or the clock does. Not
+    * thread-safe.
+    */
+  final private[console] class RateWindow(window: Long = 60_000L, minSpan: Long = 5_000L):
+    private var samples: Vector[(Long, Long)] = Vector.empty
+
+    /** The rate at `atMs`, per minute, with the counter at `total`. */
+    def add(atMs: Long, total: Long): Option[Long] =
+      // A counter that went backwards is a restarted node; a newest reading later than this one is a clock that stepped
+      // back. Either way the readings held say nothing about what comes next.
+      if samples.lastOption.exists(last => last._2 > total || last._1 > atMs) then samples = Vector.empty
+      samples = (samples :+ (atMs -> total)).dropWhile(_._1 < atMs - window)
+      val (oldestAt, oldestTotal) = samples.head
+      val span = atMs - oldestAt
+      Option.when(span >= minSpan)((total - oldestTotal) * 60_000L / span)
+
+  /** A handshaked peer as the TUI shows it: `GetPeersCmd`'s id, address, direction and connection time. */
+  private[console] def tuiPeer(p: Peer): TuiPeer =
+    val address = p.remoteAddress
+    val host = Option(address.getAddress).fold(address.getHostString)(_.getHostAddress)
+    TuiPeer(p.id.value, s"$host:${address.getPort}", p.incomingConnection, Instant.ofEpochMilli(p.createTimeMillis))
+
+  /** A published score snapshot by peer id; None before slice 4a's scorer has published one. */
+  def peerScores(snapshot: PeerScoreSnapshot): Option[PeerScores] =
+    Option.when(snapshot.takenAt != PeerScoreSnapshot.empty.takenAt || snapshot.scores.nonEmpty)(
+      PeerScores(
+        snapshot.takenAt,
+        snapshot.scores.map((id, score) => id.value -> score),
+        snapshot.details.map((id, d) =>
+          id.value -> PeerStats(d.latencyMs, d.responses, d.timeouts, d.violations, d.lastSeen)
+        )
+      )
+    )
+
+  /** Each handshaked peer's client id, sanitised as it is read (C-16), and best block, by peer id. */
+  private[console] def peerDetails(handshaked: NetworkPeerManagerActor.HandshakedPeers): Map[String, PeerDetails] =
+    handshaked.peers.map { (peer, info) =>
+      peer.id.value -> PeerDetails(
+        Sanitize.line(info.remoteStatus.remoteClientId),
+        info.maxBlockNumber.min(BigInt(Long.MaxValue)).toLong
+      )
+    }
+
+  /** A pending transaction as the Mempool view shows it: its tip is what it offers above `baseFee`, the head's; on a
+    * chain with no base fee, its gas price.
+    */
+  private[console] def poolTx(p: PendingTransactionsManager.PendingTransaction, baseFee: Option[BigInt]): PoolTx =
+    val tx = p.stx.tx.tx
+    val price = Transaction.effectiveGasPrice(tx, baseFee)
+    PoolTx(
+      ChainReads.hex(p.stx.tx.hash.value),
+      ChainReads.hex(p.stx.senderAddress.bytes),
+      tx.nonce,
+      (price - baseFee.getOrElse(BigInt(0))).max(0),
+      tx.gasPrice.value,
+      tx.isInstanceOf[BlobTransaction],
+      p.receivedFromLocalSource,
+      Instant.ofEpochMilli(p.addTimestamp)
+    )
+
+  /** The pending transactions, and how many carry a blob sidecar: the sidecars the pool holds, one per blob transaction
+    * (`blobTxNetworkBytes`, research §6).
+    */
+  private[console] def txpoolSample(response: PendingTransactionsManager.PendingTransactionsResponse): TxpoolSample =
+    TxpoolSample(response.pendingTransactions.size, response.blobTxNetworkBytes.size)
+
+  /** An ask as a future that never fails: its outcome is the value. */
+  private def settled[A](ask: Future[A]): Future[Try[A]] = ask.transform(Success(_))(using ExecutionContext.parasitic)
+
+  /** The mining monitor's history: a point every five seconds, 120 of them. */
+  val MiningHistoryStep: java.time.Duration = java.time.Duration.ofSeconds(5)
+  val MiningHistoryPoints: Int = 120
+
+  /** The JSON-RPC servers as the RPC view shows them: each transport of the node's configuration with what its server
+    * counted and whether it said it is bound, and each method called, most called first.
+    */
+  private[console] def rpcSample(
+      transports: Seq[TransportStatus],
+      rateLimit: Option[java.time.Duration],
+      counted: RpcCallStats.Snapshot
+  ): RpcSample =
+    def name(kind: TransportKind): String = kind match
+      case TransportKind.Http   => RpcCallStats.Http
+      case TransportKind.Ws     => RpcCallStats.Ws
+      case TransportKind.Ipc    => RpcCallStats.Ipc
+      case TransportKind.Engine => RpcCallStats.Engine
+    def quantile(latency: com.chipprbots.ethereum.metrics.LatencyHistogram.Snapshot, p: Double): Option[Quantile] =
+      latency.percentile(p).map(nanos => Quantile(java.time.Duration.ofNanos(nanos), latency.belowRange(p)))
+    RpcSample(
+      transports = transports.map { t =>
+        val counts = counted.transports.find(_.name == name(t.kind))
+        t.copy(
+          listening = counted.listening.get(name(t.kind)),
+          stoppedHere = counted.stopped.contains(name(t.kind)),
+          calls = counts.fold(0L)(_.calls),
+          errors = counts.fold(0L)(_.errors)
+        )
+      }.toVector,
+      methods = counted.methods.map(m =>
+        MethodStats(
+          // A method's name is a caller's text: it is cut where it is kept, and cleaned here.
+          Sanitize.line(m.name),
+          m.calls,
+          m.errors,
+          quantile(m.latency, 0.50),
+          quantile(m.latency, 0.95),
+          quantile(m.latency, 0.99),
+          Option.when(m.lastAtMillis > 0)(Instant.ofEpochMilli(m.lastAtMillis))
+        )
+      ),
+      rateLimit = rateLimit,
+      rateLimited = counted.rateLimited
+    )
+
+  /** The window the RPC view's recent calls are taken over, and the least of it the reader must have watched before it
+    * says anything of them.
+    */
+  val RpcRecentWindow: java.time.Duration = java.time.Duration.ofSeconds(60)
+  val RpcRecentMinSpan: java.time.Duration = java.time.Duration.ofSeconds(10)
+
+  /** The least time between two whole readings of the pool (spec 029 FR-037: at most once a second), less the timer's
+    * own jitter, so that a probe polling every second reads it every poll.
+    */
+  val MinPoolRead: java.time.Duration = java.time.Duration.ofMillis(950)
+
+  /** The longest failure reason the TUI shows. */
+  val MaxReasonChars: Int = 120
+
+  /** A failure as the alert row shows it: its message (or its class), through the one sanitiser for text from outside
+    * the node ([[Sanitize.line]]: an exception message can carry anything, peer data included), at most
+    * [[MaxReasonChars]] code points.
+    */
+  private[console] def reason(e: Throwable): String =
+    Sanitize.line(Option(e.getMessage).filter(_.nonEmpty).getOrElse(e.getClass.getSimpleName), MaxReasonChars)
+
+  /** What one ask got by the end of the shared wait. An ask timeout is a miss, not a failure. */
+  private[console] def poll[A, B](ask: Future[Try[A]])(f: A => B): Sourced.Poll[B] =
+    ask.value.flatMap(_.toOption) match
+      case Some(Success(a))                          => Sourced.Poll.Answered(f(a))
+      case None | Some(Failure(_: TimeoutException)) => Sourced.Poll.Missed
+      case Some(Failure(e))                          => Sourced.Poll.Failed(reason(e))
+
+  /** Map a sync status to (current block, best known block or 0 if unknown, description).
+    *
+    * While SNAP runs the sync controller reports no block target (`SyncController` answers `GetStatus` itself in
+    * `runningSnapSync`, with a target of 0), so a 0 target with a SNAP sample in hand is SNAP at work, not a sync
+    * waiting for its target (B-044).
+    *
+    * @param snapSampleFresh
+    *   the SNAP monitor has a sample of an active phase from its last two rounds ([[SnapStatusMaxAgeMillis]]): enough
+    *   to say "Syncing (SNAP)". Not [[SyncSample.snapRunning]], whose window is longer
+    */
+  private[console] def describe(
+      status: SyncProtocol.Status,
+      localBest: Long,
+      snapSampleFresh: Boolean
+  ): (Long, Long, String) = status match
     case SyncProtocol.Status.Syncing(_, blocks, stateNodes) =>
       val target = blocks.target.toLong
       val current = if blocks.current > 0 then blocks.current.toLong else localBest
       val state = stateNodes.filter(_.nonEmpty).map(p => f" (state ${p.current}%,d / ${p.target}%,d)").getOrElse("")
-      (current, target, if target > 0 then s"Syncing$state" else "Syncing (no target yet)")
+      val description =
+        if target > 0 then s"Syncing$state"
+        else if snapSampleFresh then "Syncing (SNAP)"
+        else "Syncing (no target yet)"
+      (current, target, description)
     case SyncProtocol.Status.SyncDone   => (localBest, localBest, "Synced")
     case SyncProtocol.Status.NotSyncing => (localBest, 0L, "Not syncing")
 
@@ -108,7 +908,16 @@ object TuiStatusProbe:
       recentSlotsPerSec = p.recentSlotsPerSec,
       recentNodesPerSec = p.recentNodesPerSec,
       phaseProgress = p.phaseProgress,
+      overall = p.globalProgress,
       estimatedTotalAccounts = p.estimatedTotalAccounts,
       estimatedTotalBytecodes = p.estimatedTotalBytecodes,
-      estimatedTotalSlots = p.estimatedTotalSlots
+      estimatedTotalSlots = p.estimatedTotalSlots,
+      storageContractsCompleted = p.storageContractsCompleted,
+      storageContractsTotal = p.storageContractsTotal,
+      chainHeaders = p.chainHeaders,
+      chainBodies = p.chainBodies,
+      chainReceipts = p.chainReceipts,
+      chainTarget = p.chainTarget,
+      bytecodeComplete = p.bytecodeComplete,
+      phaseElapsedSeconds = p.phaseElapsedSeconds
     )

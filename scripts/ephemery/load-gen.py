@@ -9,8 +9,8 @@ Purpose
     optionally EIP-4844 blob transactions (0x3, off by default). Python 3 standard library only.
 
 Node configuration needed (checked against src/main/resources/conf/base/network.conf)
-    fukuii.network.rpc.http.apis = "eth,web3,net,personal"     # base default already is
-                                   "eth,web3,net,personal,fukuii,debug,qa,admin"
+    fukuii.network.rpc.http.apis = "eth,net,web3,fukuii,personal"   # `personal` is NOT in the default
+                                   # ("eth,net,web3,fukuii"); add it on the transport this script uses
     fukuii.network.rpc.http.enabled = true, interface = "localhost" (default), port 8556 on Ephemery.
     Passphrase length must be >= fukuii.keystore.minimal-passphrase-length (7).
 

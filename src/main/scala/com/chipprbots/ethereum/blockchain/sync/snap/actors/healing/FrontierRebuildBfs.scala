@@ -15,6 +15,7 @@ import com.chipprbots.ethereum.blockchain.sync.snap.StorageScheme
 import com.chipprbots.ethereum.blockchain.sync.snap.actors.GcPressureSampler
 import com.chipprbots.ethereum.blockchain.sync.snap.actors.TrieNodeHealingCoordinator
 import com.chipprbots.ethereum.blockchain.sync.snap.actors.TrieNodeHealingCoordinator.Command
+import com.chipprbots.ethereum.blockchain.sync.snap.actors.TrieNodeHealingCoordinator.FrontierCorruptFound
 import com.chipprbots.ethereum.blockchain.sync.snap.actors.TrieNodeHealingCoordinator.FrontierRebuilt
 import com.chipprbots.ethereum.blockchain.sync.snap.actors.TrieNodeHealingCoordinator.FrontierWalkFailed
 import com.chipprbots.ethereum.blockchain.sync.snap.actors.TrieNodeHealingCoordinator.HealingCheckCompletion
@@ -23,6 +24,39 @@ import com.chipprbots.ethereum.blockchain.sync.snap.heal.WalkCancelled
 import com.chipprbots.ethereum.blockchain.sync.snap.heal.WalkLease
 import com.chipprbots.ethereum.db.storage.BfsEntry
 import com.chipprbots.ethereum.db.storage.BfsQueueStorage
+import com.chipprbots.ethereum.db.storage.NodeFault
+import com.chipprbots.ethereum.db.storage.RawNodeRead
+import com.chipprbots.ethereum.mpt.MptNode
+
+/** What the frontier walk makes of one entry it reads (S-1). */
+private[healing] enum WalkRead:
+  /** The node, whose children the walk follows. */
+  case Found(node: MptNode)
+
+  /** Not stored: a missing node, emitted for healing. */
+  case Missing
+
+  /** Stored, and provably not the node its hash names: emitted for the core to delete before it is healed. A missing
+    * node to the walk, which never follows what such an entry points at.
+    */
+  case Corrupt
+
+  /** Stored, and not followed: bytes that pass keccak but are no trie node (a peer would serve the same bytes), or a
+    * corrupt entry the store keeps. A skip, so the walk proves nothing for the invariant marker.
+    */
+  case Unfollowable
+
+private[healing] object WalkRead:
+
+  /** A Hash-scheme entry, judged by `NodeFault`, keccak first. `unrepairable` names the corrupt entries the core could
+    * not delete: emitted again, each would keep every later pass dirty, and the gate walking again, for good.
+    */
+  def ofHash(hash: ByteString, raw: RawNodeRead, unrepairable: ByteString => Boolean): WalkRead =
+    NodeFault.check(hash, raw) match
+      case Right(node)                                                        => Found(node)
+      case Left(NodeFault.Absent)                                             => Missing
+      case Left(_) if NodeFault.provablyBad(hash, raw) && !unrepairable(hash) => Corrupt
+      case Left(_)                                                            => Unfollowable
 
 /** The coordinator state `FrontierRebuildBfs` reads and writes (spec 016 C-H2, research.md R14b). The core's behaviour
   * arms and the code C-H3…C-H5 will move touch them too, or rule (d) keeps them in the core, so the Impl keeps them as
@@ -34,13 +68,15 @@ import com.chipprbots.ethereum.db.storage.BfsQueueStorage
   * read here: the multi-seed launcher that read it is gone (spec 022 slice 6c), and the one launcher tags a walk's
   * batches with its seed. The rest are immutable vals rule (d) keeps in the core: `bfsQueue` (the walk's level queue,
   * `stateIngest.bfsQueue` or an in-memory fallback, built once with the coordinator), the two dispatchers, the emission
-  * batch size and the walk's caps.
+  * batch size and the walk's caps. `unrepairableNodes` (S-1) is the concurrent set the core adds a corrupt entry to
+  * when the store keeps it; the walk's threads read it, and count such an entry as a skip instead of a missing node.
   */
 private[actors] trait FrontierRebuildBfsState:
   def stateRoot: ByteString
   var verificationBFSRunning: Boolean
   var currentWalk: Option[Long]
   def walkSkips: AtomicLong
+  def unrepairableNodes: java.util.Set[ByteString]
   def bfsQueue: BfsQueueStorage
   def healingWriterEc: ExecutionContext
   def healingReaderEc: ExecutionContext
@@ -65,11 +101,12 @@ private[actors] trait FrontierRebuildApi:
 
 /** TrieNodeHealingCoordinator's frontier-rebuild walk (spec 016 C-H2, coordinator-characterization.md §3.4): the
   * multi-seed level-order BFS over the locally stored trie (`rebuildFrontierBFS`), which reads each level from the BFS
-  * queue in chunks, reads the nodes (a batched content-addressed `multiGetNodes` under Hash, a path-verified read under
-  * Path), emits every missing node as `FrontierRebuilt` behind the backpressure wait, and enqueues present children for
-  * the next level; its launcher (`startFrontierBFS`, from one seed), which runs it on the healing writer dispatcher and
-  * routes completion or failure; and the per-scheme de-dup keys of its bounded visited set. It performs no state writes
-  * besides the scratch BFS queue. The coordinator core keeps the behaviour arms that launch it and handle its output
+  * queue in chunks, reads the nodes (a batched content-addressed raw read under Hash, each entry judged keccak first by
+  * `NodeFault`, S-1; a path-verified read under Path), emits every missing node as `FrontierRebuilt` and every corrupt
+  * one as `FrontierCorruptFound` behind the backpressure wait, and enqueues present children for the next level; its
+  * launcher (`startFrontierBFS`, from one seed), which runs it on the healing writer dispatcher and routes completion
+  * or failure; and the per-scheme de-dup keys of its bounded visited set. It performs no state writes besides the
+  * scratch BFS queue. The coordinator core keeps the behaviour arms that launch it and handle its output
   * (`frontierRebuildArms`) and the verification launchers that reuse it.
   */
 private[actors] trait FrontierRebuildBfs extends FrontierRebuildApi:
@@ -77,7 +114,7 @@ private[actors] trait FrontierRebuildBfs extends FrontierRebuildApi:
 
   /** Rebuild the healing frontier from locally-stored trie nodes using level-order BFS.
     *
-    * Issues one `multiGetNodes` per chunk (BfsChunkSize = 50K) instead of one get per node. Level queue is persisted to
+    * Issues one batched read per chunk (BfsChunkSize = 50K) instead of one get per node. Level queue is persisted to
     * the `BfsQueueNamespace` CF so memory is O(chunk_size) ≈ 4 MB, eliminating the OOM that the previous ArrayBuffer
     * caused at L7 (~73M entries × 175 B/tuple).
     *
@@ -91,8 +128,8 @@ private[actors] trait FrontierRebuildBfs extends FrontierRebuildApi:
     * traversal: each seed's HP-encoded `startPathset` re-anchors the walk at that node and the unchanged per-child
     * nibble arithmetic extends it into that subtree. For a single-element `seeds` this is byte-identical to the prior
     * single-seed walk (same visited set, level expansion, child-path arithmetic, FrontierRebuilt emission,
-    * backpressure). The walk performs NO state writes — it is a pure local read (`multiGetNodes`) that emits
-    * `FrontierRebuilt` for missing nodes.
+    * backpressure). The walk performs NO state writes — it is a pure local read that emits `FrontierRebuilt` for
+    * missing nodes and `FrontierCorruptFound` for corrupt ones, which the core deletes before they are healed (S-1).
     */
   private def rebuildFrontierBFS(
       seeds: Seq[(ByteString, Seq[ByteString], Boolean)],
@@ -136,6 +173,8 @@ private[actors] trait FrontierRebuildBfs extends FrontierRebuildApi:
 
     val visitedCount = new java.util.concurrent.atomic.AtomicLong(0L)
     val frontierCount = new java.util.concurrent.atomic.AtomicLong(0L)
+    // S-1: of `frontierCount`, the entries emitted as corrupt (stored, and provably not the node).
+    val corruptCount = new java.util.concurrent.atomic.AtomicLong(0L)
 
     // spec 022 T043: this walk descends every present child and the storage trie of every account leaf, with nothing to
     // stop it: the spec 005 subtree records went with CF `g` (D6). So a clean end is the repair pass the invariant marker
@@ -157,9 +196,10 @@ private[actors] trait FrontierRebuildBfs extends FrontierRebuildApi:
     // Windowed GC-pressure sampler: baseline captured at walk start; sampled per level.
     val gcSampler = new GcPressureSampler()
 
-    // Process a sub-range [subFrom, subTo) of the current level; returns frontier entries.
-    def processSubRange(subFrom: Long, subTo: Long, levelIndex: Int): Seq[HealingEntry] =
+    // Process a sub-range [subFrom, subTo) of the current level; returns its missing entries and its corrupt ones.
+    def processSubRange(subFrom: Long, subTo: Long, levelIndex: Int): (Seq[HealingEntry], Seq[HealingEntry]) =
       val subFrontier = mutable.Buffer.empty[HealingEntry]
+      val subCorrupt = mutable.Buffer.empty[HealingEntry]
 
       // Time the queue-read (chunk fetch) per chunk WITHOUT changing iteration semantics: drive the lazy
       // iterator explicitly and time only the production of each chunk (one nanoTime pair per chunk fetch,
@@ -175,20 +215,30 @@ private[actors] trait FrontierRebuildBfs extends FrontierRebuildApi:
         if !hasNext then moreChunks = false
         else
           val trieReadStart = System.nanoTime()
-          // Hash scheme: the original batched, content-addressed multiGetNodes (unchanged). Path scheme: PathNodeStorage
-          // is keyed by PATH, not hash, so a hash-keyed batch lookup can never find a Path-scheme node. Each entry
-          // carries its own pathset (it was enqueued with it), so read it at THAT path and count it present only if the
-          // stored bytes hash to the entry's hash (`readPathVerifiedNode`). Without this the walk read an empty
-          // hash-keyed store, reported the very first node missing, and never descended into a present trie.
-          val results: Seq[Option[com.chipprbots.ethereum.mpt.MptNode]] = storageScheme match
+          // Hash scheme: one batched, content-addressed raw read per chunk, in which one entry that cannot be read fails
+          // that entry and not the batch, each judged by `NodeFault`, keccak first (S-1, `WalkRead.ofHash`). It was a
+          // decoding `multiGetNodes`: a wrapper that did not unwrap threw for the whole chunk, bytes that did not decode
+          // threw too, both failing the walk, and an entry that decoded under the wrong hash was believed. Path scheme:
+          // PathNodeStorage is keyed by PATH, not hash, so a hash-keyed batch lookup can never find a Path-scheme node.
+          // Each entry carries its own pathset (it was enqueued with it), so read it at THAT path and count it present
+          // only if the stored bytes hash to the entry's hash (`readPathVerifiedNode`). Without this the walk read an
+          // empty hash-keyed store, reported the very first node missing, and never descended into a present trie.
+          val results: Seq[WalkRead] = storageScheme match
             case StorageScheme.Hash =>
-              mptStorage.multiGetNodes(chunk.map(_.hash))
+              val hashes = chunk.map(e => ByteString(e.hash))
+              hashes.zip(mptStorage.rawNodes(hashes)).map { case (hash, raw) =>
+                WalkRead.ofHash(hash, raw, h => unrepairableNodes.contains(h))
+              }
             case StorageScheme.Path =>
-              chunk.map(e => readPathVerifiedNode(ByteString(e.hash), e.pathset.map(ByteString(_))))
+              chunk.map(e =>
+                readPathVerifiedNode(ByteString(e.hash), e.pathset.map(ByteString(_))) match
+                  case Some(node) => WalkRead.Found(node)
+                  case None       => WalkRead.Missing
+              )
           trieReadNanos.addAndGet(System.nanoTime() - trieReadStart)
           val nextBuf = mutable.ArrayBuffer[(Array[Byte], Seq[Array[Byte]], Boolean)]()
 
-          chunk.zip(results).foreach { case (entry, nodeOpt) =>
+          chunk.zip(results).foreach { case (entry, read) =>
             val v = visitedCount.incrementAndGet()
             if v % 100_000 == 0 then
               asyncLog.info(
@@ -200,12 +250,26 @@ private[actors] trait FrontierRebuildBfs extends FrontierRebuildApi:
             val pathset = entry.pathset.map(ByteString(_))
             val nibbles = HexPrefix.decode(pathset.last.toArray)._1
 
-            nodeOpt match
-              case None =>
+            read match
+              case WalkRead.Missing =>
                 subFrontier += HealingEntry(pathset, ByteString(entry.hash))
                 frontierCount.incrementAndGet()
 
-              case Some(node) =>
+              case WalkRead.Corrupt =>
+                // S-1: a missing node to this walk, so it is no clean pass. The core deletes it before it is healed, and
+                // nothing below it is believed.
+                subCorrupt += HealingEntry(pathset, ByteString(entry.hash))
+                frontierCount.incrementAndGet()
+                corruptCount.incrementAndGet()
+
+              case WalkRead.Unfollowable =>
+                walkSkips.incrementAndGet()
+                asyncLog.debug(
+                  s"[HEAL-BFS] Cannot follow ${Hex.toHexString(entry.hash.take(4))}: it passes its hash but is no trie " +
+                    "node, or it is corrupt and the store keeps it — skipping"
+                )
+
+              case WalkRead.Found(node) =>
                 try
                   node match
                     case branch: BranchNode =>
@@ -282,7 +346,7 @@ private[actors] trait FrontierRebuildBfs extends FrontierRebuildApi:
             queueWriteNanos.addAndGet(System.nanoTime() - writeStart)
         // end else (non-empty chunk)
       // end while (moreChunks)
-      subFrontier.toSeq
+      (subFrontier.toSeq, subCorrupt.toSeq)
 
     stopIfCancelled()
     queue.clear()
@@ -296,7 +360,7 @@ private[actors] trait FrontierRebuildBfs extends FrontierRebuildApi:
     while levelStart < levelEnd do
       val levelSize = levelEnd - levelStart
 
-      val allFrontier: Seq[HealingEntry] =
+      val (allFrontier, allCorrupt) =
         if effectiveParallelism <= 1 || levelSize <= TrieNodeHealingCoordinator.BfsChunkSize.toLong then
           processSubRange(levelStart, levelEnd, levelIndex)
         else
@@ -319,8 +383,15 @@ private[actors] trait FrontierRebuildBfs extends FrontierRebuildApi:
           val futures = subRanges.map { case (from, to) =>
             Future(processSubRange(from, to, levelIndex))(using healingReaderEc)
           }
-          scala.concurrent.blocking(TrieNodeHealingCoordinator.awaitSubRanges(futures)).flatten
+          val parts = scala.concurrent.blocking(TrieNodeHealingCoordinator.awaitSubRanges(futures))
+          (parts.flatMap(_._1), parts.flatMap(_._2))
 
+      // S-1: the corrupt entries, which the core deletes before it queues them for healing, then the missing ones.
+      allCorrupt.grouped(FrontierBatchSize).foreach { batch =>
+        awaitFrontierDrain(cancelled)
+        stopIfCancelled()
+        selfRef ! FrontierCorruptFound(batch, walkRoot)
+      }
       allFrontier.grouped(FrontierBatchSize).foreach { batch =>
         awaitFrontierDrain(cancelled) // pause the walk if the healing backlog is over the high-water mark
         stopIfCancelled()
@@ -375,6 +446,12 @@ private[actors] trait FrontierRebuildBfs extends FrontierRebuildApi:
     asyncLog.info(
       s"[HEAL-BFS] Complete: ${visitedCount.get()} nodes across $levelIndex levels, $totalMissing missing nodes identified"
     )
+    val corrupt = corruptCount.get()
+    if corrupt > 0 then
+      asyncLog.error(
+        s"[HEAL-BFS] $corrupt of those missing nodes were stored, and are not the node their hash names: they are " +
+          "deleted before they are healed (S-1)"
+      )
     val skips = walkSkips.get()
     if skips > 0 then
       asyncLog.warn(
@@ -475,9 +552,10 @@ private[actors] trait FrontierRebuildBfs extends FrontierRebuildApi:
     currentWalk = Some(walk)
     walkSkips.set(0L)
     val running = Future {
-      val missingEmitted =
+      // The missing-node count, or why the walk ended without one: what it threw, or `None` when it was cancelled.
+      val outcome: Either[Option[Throwable], Long] =
         try
-          Some(
+          Right(
             rebuildFrontierBFS(
               seeds,
               walkRoot,
@@ -492,23 +570,23 @@ private[actors] trait FrontierRebuildBfs extends FrontierRebuildApi:
             asyncLog.info(
               s"[HEAL-BFS] Frontier walk $walk cancelled: the coordinator incarnation that launched it ended"
             )
-            None
+            Left(None)
           case scala.util.control.NonFatal(e) =>
             // Never call onComplete() on failure — that would count as a clean pass of a walk that did NOT cover the
             // full state. Reset flags through the actor instead so a fresh walk can be started.
             asyncLog.error("[HEAL-BFS] Frontier walk FAILED before completion — sending FrontierWalkFailed", e)
-            None
+            Left(Some(e))
         finally walkLease.release(walk)
-      missingEmitted match
-        case Some(missing) => onComplete(walk, missing)
-        case None          => selfRef ! FrontierWalkFailed(walk)
+      outcome match
+        case Right(missing) => onComplete(walk, missing)
+        case Left(cause)    => selfRef ! FrontierWalkFailed(walk, cause)
     }(using healingWriterEc)
     // spec 022 review vault: an executor that refuses the body (it is shutting down) fails this Future without running a
     // line of it, and the lease would stay taken for the life of the process. Parasitic: that executor refuses this too.
     running.failed.foreach { e =>
       asyncLog.error(s"[HEAL-BFS] Frontier walk $walk did not run", e)
       walkLease.release(walk)
-      selfRef ! FrontierWalkFailed(walk)
+      selfRef ! FrontierWalkFailed(walk, Some(e))
     }(using ExecutionContext.parasitic)
 
   // ---- frontier-walk de-dup keys -----------------------------------------------------------------------------------

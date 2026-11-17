@@ -15,6 +15,7 @@ import com.chipprbots.ethereum.domain.BlockHash
 import com.chipprbots.ethereum.domain.Blockchain
 import com.chipprbots.ethereum.domain.BlockchainReader
 import com.chipprbots.ethereum.domain.SignedTransactionWithSender
+import com.chipprbots.ethereum.ledger.InMemoryWorldStateProxy
 import com.chipprbots.ethereum.ledger.StxLedger
 import com.chipprbots.ethereum.ledger.TxResult
 import com.chipprbots.ethereum.mpt.MerklePatriciaTrie.MissingNodeException
@@ -117,12 +118,14 @@ class DebugTracingService(
     stxLedger: StxLedger,
     transactionMappingStorage: TransactionMappingStorage,
     // go-ethereum --rpc.gascap, as for eth_call (TraceCall runs CallDefaults with the backend's RPCGasCap)
-    gasCap: BigInt = CallTxBuilder.DefaultGasCap
+    gasCap: BigInt = CallTxBuilder.DefaultGasCap,
+    // the rules of the chain the blocks are replayed under: the node's, unless a caller serves another chain
+    chainConfig: BlockchainConfig = Config.blockchains.blockchainConfig
 ) extends ResolveBlock:
 
   import DebugTracingService.*
 
-  implicit private val blockchainConfig: BlockchainConfig = Config.blockchains.blockchainConfig
+  implicit private val blockchainConfig: BlockchainConfig = chainConfig
 
   /** Implements debug_traceTransaction.
     *
@@ -137,32 +140,34 @@ class DebugTracingService(
     *      chosen tracer 5. Return tracer.getResult
     */
   def traceTransaction(req: TraceTransactionRequest): ServiceResponse[TraceTransactionResponse] =
-    IO {
-      for
-        location <- transactionMappingStorage
-          .get(req.txHash)
-          .toRight(JsonRpcError.LogicError("Transaction not found"))
-        TransactionLocation(blockHash, txIndex) = location
-        block <- blockchainReader
-          .getBlockByHash(BlockHash(blockHash))
-          .toRight(JsonRpcError.LogicError(s"Block not found for hash ${blockHash.toHex}"))
-        parentHeader <- blockchainReader
-          .getBlockHeaderByHash(block.header.parentHash)
-          .toRight(JsonRpcError.LogicError("Parent block not found"))
-        stxs = SignedTransactionWithSender.getSignedTransactionsOfBlock(block.header, block.body.transactionList)
-        _ <- Either.cond(
-          txIndex >= 0 && txIndex < stxs.length,
-          (),
-          JsonRpcError.InvalidParams(s"Transaction index $txIndex out of range")
-        )
-        targetStx = stxs(txIndex)
-        world = stxLedger.advanceWorldToTx(block.header, stxs, txIndex, parentHeader.stateRoot.value)
-        tracer = selectTracer(req.config, Some(world))
-        _ = stxLedger.replayTransaction(targetStx, block.header, world, Some(tracer))
-      yield TraceTransactionResponse(tracer.getResult)
-    }.recover { case _: MissingNodeException =>
-      Left(JsonRpcError.NodeNotFound)
-    }
+    StateRead
+      .reading {
+        for
+          location <- transactionMappingStorage
+            .get(req.txHash)
+            .toRight(JsonRpcError.LogicError("Transaction not found"))
+          TransactionLocation(blockHash, txIndex) = location
+          block <- blockchainReader
+            .getBlockByHash(BlockHash(blockHash))
+            .toRight(JsonRpcError.LogicError(s"Block not found for hash ${blockHash.toHex}"))
+          parentHeader <- blockchainReader
+            .getBlockHeaderByHash(block.header.parentHash)
+            .toRight(JsonRpcError.LogicError("Parent block not found"))
+          stxs = SignedTransactionWithSender.getSignedTransactionsOfBlock(block.header, block.body.transactionList)
+          _ <- Either.cond(
+            txIndex >= 0 && txIndex < stxs.length,
+            (),
+            JsonRpcError.InvalidParams(s"Transaction index $txIndex out of range")
+          )
+          targetStx = stxs(txIndex)
+          world = stxLedger.advanceWorldToTx(block.header, stxs, txIndex, parentHeader)
+          tracer = selectTracer(req.config, Some(world))
+          _ = stxLedger.replayTransaction(targetStx, block.header, world, Some(tracer))
+        yield TraceTransactionResponse(tracer.getResult)
+      }
+      .recover { case _: MissingNodeException =>
+        Left(JsonRpcError.NodeNotFound)
+      }
 
   /** Implements debug_traceCall.
     *
@@ -172,15 +177,17 @@ class DebugTracingService(
     * core-geth reference: api.go TraceCall() → traceTx().
     */
   def traceCall(req: TraceCallRequest): ServiceResponse[TraceCallResponse] =
-    IO {
-      for
-        resolved <- resolveBlock(req.block)
-        tracer = selectTracer(req.config, resolved.pendingState)
-        _ <- runTracedCall(req.call, resolved, tracer)
-      yield TraceCallResponse(tracer.getResult)
-    }.recover { case _: MissingNodeException =>
-      Left(JsonRpcError.NodeNotFound)
-    }
+    StateRead
+      .reading {
+        for
+          resolved <- resolveBlock(req.block)
+          tracer = selectTracer(req.config, resolved.pendingState)
+          _ <- runTracedCall(req.call, resolved, tracer)
+        yield TraceCallResponse(tracer.getResult)
+      }
+      .recover { case _: MissingNodeException =>
+        Left(JsonRpcError.NodeNotFound)
+      }
 
   /** Implements debug_traceCallMany.
     *
@@ -190,21 +197,23 @@ class DebugTracingService(
     * Besu does not implement this method; core-geth alignment only.
     */
   def traceCallMany(req: TraceCallManyRequest): ServiceResponse[TraceCallManyResponse] =
-    IO {
-      for resolved <- resolveBlock(req.block)
-      yield
-        // Execute calls sequentially. World state is not threaded (each call sees
-        // the block's state), matching core-geth TraceCallMany behaviour.
-        val results: Seq[JValue] = req.calls.map { case (callTx, config) =>
-          val tracer = selectTracer(config, resolved.pendingState)
-          runTracedCall(callTx, resolved, tracer)
-            .map(_ => tracer.getResult)
-            .getOrElse(org.json4s.JNull)
-        }
-        TraceCallManyResponse(results)
-    }.recover { case _: MissingNodeException =>
-      Left(JsonRpcError.NodeNotFound)
-    }
+    StateRead
+      .reading {
+        for resolved <- resolveBlock(req.block)
+        yield
+          // Execute calls sequentially. World state is not threaded (each call sees
+          // the block's state), matching core-geth TraceCallMany behaviour.
+          val results: Seq[JValue] = req.calls.map { case (callTx, config) =>
+            val tracer = selectTracer(config, resolved.pendingState)
+            runTracedCall(callTx, resolved, tracer)
+              .map(_ => tracer.getResult)
+              .getOrElse(org.json4s.JNull)
+          }
+          TraceCallManyResponse(results)
+      }
+      .recover { case _: MissingNodeException =>
+        Left(JsonRpcError.NodeNotFound)
+      }
 
   /** Implements debug_traceBlockByHash.
     *
@@ -214,16 +223,18 @@ class DebugTracingService(
     * core-geth reference: api.go traceBlock() — calls traceTx() per transaction.
     */
   def traceBlockByHash(req: TraceBlockByHashRequest): ServiceResponse[TraceBlockByHashResponse] =
-    IO {
-      for
-        block <- blockchainReader
-          .getBlockByHash(BlockHash(req.blockHash))
-          .toRight(JsonRpcError.LogicError(s"Block not found for hash ${req.blockHash.toHex}"))
-        result <- traceAllTxsInBlock(block, req.config)
-      yield TraceBlockByHashResponse(result)
-    }.recover { case _: MissingNodeException =>
-      Left(JsonRpcError.NodeNotFound)
-    }
+    StateRead
+      .reading {
+        for
+          block <- blockchainReader
+            .getBlockByHash(BlockHash(req.blockHash))
+            .toRight(JsonRpcError.LogicError(s"Block not found for hash ${req.blockHash.toHex}"))
+          result <- traceAllTxsInBlock(block, req.config)
+        yield TraceBlockByHashResponse(result)
+      }
+      .recover { case _: MissingNodeException =>
+        Left(JsonRpcError.NodeNotFound)
+      }
 
   /** Implements debug_traceBlockByNumber.
     *
@@ -232,14 +243,16 @@ class DebugTracingService(
     * core-geth reference: api.go TraceBlockByNumber() → traceBlock().
     */
   def traceBlockByNumber(req: TraceBlockByNumberRequest): ServiceResponse[TraceBlockByNumberResponse] =
-    IO {
-      for
-        resolved <- resolveBlock(req.block)
-        result <- traceAllTxsInBlock(resolved.block, req.config)
-      yield TraceBlockByNumberResponse(result)
-    }.recover { case _: MissingNodeException =>
-      Left(JsonRpcError.NodeNotFound)
-    }
+    StateRead
+      .reading {
+        for
+          resolved <- resolveBlock(req.block)
+          result <- traceAllTxsInBlock(resolved.block, req.config)
+        yield TraceBlockByNumberResponse(result)
+      }
+      .recover { case _: MissingNodeException =>
+        Left(JsonRpcError.NodeNotFound)
+      }
 
   // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -260,7 +273,7 @@ class DebugTracingService(
         val stxs = SignedTransactionWithSender.getSignedTransactionsOfBlock(block.header, block.body.transactionList)
         if stxs.isEmpty then Seq.empty
         else
-          var currentWorld = stxLedger.advanceWorldToTx(block.header, stxs, 0, parentHeader.stateRoot.value)
+          var currentWorld = stxLedger.advanceWorldToTx(block.header, stxs, 0, parentHeader)
           val resultsBuf = scala.collection.mutable.ArrayBuffer[TxTraceResult]()
           stxs.foreach { stx =>
             val tracer = selectTracer(config, Some(currentWorld))
@@ -332,38 +345,40 @@ class DebugTracingService(
     * and persisted), so each root is the state root block execution reached after that transaction.
     */
   def intermediateRoots(req: IntermediateRootsRequest): ServiceResponse[IntermediateRootsResponse] =
-    IO {
-      for
-        block <- blockchainReader
-          .getBlockByHash(BlockHash(req.blockHash))
-          .toRight(JsonRpcError.LogicError(s"Block not found for hash ${req.blockHash.toHex}"))
-        _ <- Either.cond(
-          block.header.number.value > 0,
-          (),
-          JsonRpcError.LogicError("Genesis block is not traceable")
-        )
-        parentHeader <- blockchainReader
-          .getBlockHeaderByHash(block.header.parentHash)
-          .toRight(JsonRpcError.LogicError("Parent block header not found"))
-        stxs = SignedTransactionWithSender.getSignedTransactionsOfBlock(block.header, block.body.transactionList)
-        roots =
-          if stxs.isEmpty then Seq.empty
-          else
-            // Chain world states tx-by-tx and capture state root after each finalization.
-            // On tx error: return partial result (same as core-geth — errors on canon blocks are rare).
-            var currentWorld = stxLedger.advanceWorldToTx(block.header, stxs, 0, parentHeader.stateRoot.value)
-            val rootBuf = scala.collection.mutable.ArrayBuffer[ByteString]()
-            stxs.foreach { stx =>
-              val txResult = stxLedger.replayTransaction(stx, block.header, currentWorld, tracer = None)
-              // stateRootHash computes the MPT root of the in-memory trie (equivalent to IntermediateRoot)
-              rootBuf += txResult.worldState.stateRootHash
-              currentWorld = txResult.worldState
-            }
-            rootBuf.toSeq
-      yield IntermediateRootsResponse(roots)
-    }.recover { case _: MissingNodeException =>
-      Left(JsonRpcError.NodeNotFound)
-    }
+    StateRead
+      .reading {
+        for
+          block <- blockchainReader
+            .getBlockByHash(BlockHash(req.blockHash))
+            .toRight(JsonRpcError.LogicError(s"Block not found for hash ${req.blockHash.toHex}"))
+          _ <- Either.cond(
+            block.header.number.value > 0,
+            (),
+            JsonRpcError.LogicError("Genesis block is not traceable")
+          )
+          parentHeader <- blockchainReader
+            .getBlockHeaderByHash(block.header.parentHash)
+            .toRight(JsonRpcError.LogicError("Parent block header not found"))
+          stxs = SignedTransactionWithSender.getSignedTransactionsOfBlock(block.header, block.body.transactionList)
+          roots =
+            if stxs.isEmpty then Seq.empty
+            else
+              // Chain world states tx-by-tx and capture state root after each finalization.
+              // On tx error: return partial result (same as core-geth — errors on canon blocks are rare).
+              var currentWorld = stxLedger.advanceWorldToTx(block.header, stxs, 0, parentHeader)
+              val rootBuf = scala.collection.mutable.ArrayBuffer[ByteString]()
+              stxs.foreach { stx =>
+                val txResult = stxLedger.replayTransaction(stx, block.header, currentWorld, tracer = None)
+                // stateRootHash computes the MPT root of the in-memory trie (equivalent to IntermediateRoot)
+                rootBuf += txResult.worldState.stateRootHash
+                currentWorld = txResult.worldState
+              }
+              rootBuf.toSeq
+        yield IntermediateRootsResponse(roots)
+      }
+      .recover { case _: MissingNodeException =>
+        Left(JsonRpcError.NodeNotFound)
+      }
 
   /** Returns traced results for all blocks in [fromBlock+1, toBlock], one entry per block. Used by debug_traceChain
     * (streaming via WebSocket).
@@ -389,12 +404,14 @@ class DebugTracingService(
             blockchainReader.getBlockHeaderByHash(block.header.parentHash).map { parentHeader =>
               val stxs =
                 SignedTransactionWithSender.getSignedTransactionsOfBlock(block.header, block.body.transactionList)
-              val traces = stxs.zipWithIndex.map { case (stx, txIndex) =>
-                val world = stxLedger.advanceWorldToTx(block.header, stxs, txIndex, parentHeader.stateRoot.value)
+              // One scope of reads for each block of the range: the state the block is traced on is its parent's,
+              // which is behind the head, and is held for this block and no longer.
+              val traces = StateRead.scoped(stxs.zipWithIndex.map { case (stx, txIndex) =>
+                val world = stxLedger.advanceWorldToTx(block.header, stxs, txIndex, parentHeader)
                 val tracer = selectTracer(config, Some(world))
                 stxLedger.replayTransaction(stx, block.header, world, Some(tracer))
                 tracer.getResult
-              }
+              })
               TraceChainBlockResult(block.header.number.value, block.header.hash.value, traces)
             }
           }
@@ -403,6 +420,12 @@ class DebugTracingService(
     }.recover { case _: MissingNodeException =>
       Left(JsonRpcError.NodeNotFound)
     }
+
+  /** The world a call runs on: the pending block's, or the state of the resolved block, taken by that block's own
+    * header. The message's header, which the call runs under, is not the header of any block.
+    */
+  private def callWorld(resolved: ResolvedBlock, msg: CallTxBuilder.CallMessage): InMemoryWorldStateProxy =
+    resolved.pendingState.getOrElse(stxLedger.callWorld(stateOf = resolved.block.header, executing = msg.header))
 
   /** The message a trace call runs (go-ethereum `eth/tracers/api.go` `TraceCall`: `CallDefaults` with the RPC gas cap,
     * `ToMessage`, the base fee lowered to 0 for a zero-price message), built by the same [[CallTxBuilder]] as eth_call.
@@ -432,7 +455,7 @@ class DebugTracingService(
     for
       msg <- buildCallMessage(callTx, resolved.block)
       r <- stxLedger
-        .simulateCall(msg.stx, msg.header, resolved.pendingState, msg.options, Some(tracer))
+        .simulateCall(msg.stx, msg.header, callWorld(resolved, msg), msg.options, Some(tracer))
         .left
         .map(e => JsonRpcError.LogicError(e.message))
-    yield r
+    yield r.txResult

@@ -168,6 +168,7 @@ nav:
       - Branch Protection: development/branch-protection.md
       - Codespaces: development/codespaces.md
       - Spec Lifecycle: development/spec-lifecycle.md
+      - Tracker: development/tracker/index.md
     - Testing:
       - testing/README.md
       - Test Tagging Guide: testing/TEST_TAGGING_GUIDE.md
@@ -227,6 +228,7 @@ nav:
         - adr/operations/README.md
         - Console UI: adr/operations/OPS-001-console-ui.md
         - Logging Levels: adr/operations/OPS-002-logging-level-categorization.md
+        - TUI Operator Actions: adr/operations/OPS-004-tui-operator-actions.md
       - Protocols:
         - SNAP Protocol Infra: adr/protocols/ADR-SNAP-001-protocol-infrastructure.md
         - SNAP Integration: adr/protocols/ADR-SNAP-002-integration-architecture.md

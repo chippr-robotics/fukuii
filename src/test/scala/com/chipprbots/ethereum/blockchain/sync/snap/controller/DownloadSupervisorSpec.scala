@@ -49,6 +49,7 @@ import com.chipprbots.ethereum.db.storage.PathNodeStorage
 import com.chipprbots.ethereum.db.storage.SnapStorageDoneStorage
 import com.chipprbots.ethereum.db.storage.SnapSyncProgressStorage
 import com.chipprbots.ethereum.db.storage.StateStorage
+import com.chipprbots.ethereum.domain.BlockHeader
 import com.chipprbots.ethereum.domain.BlockchainReader
 import com.chipprbots.ethereum.domain.BlockchainWriter
 import com.chipprbots.ethereum.domain.ChainWeight
@@ -165,7 +166,7 @@ private[snap] class StubDownloadSupervisorState(
   // Callee Api traits
   var downloadPeers: Map[PeerId, PeerListSupportNg.PeerWithInfo] = Map.empty
   def peersToDownloadFrom: Map[PeerId, PeerListSupportNg.PeerWithInfo] = downloadPeers
-  def calibratePivotTD(pivotBlockNumber: BigInt): Option[BigInt] = notUsed("calibratePivotTD")
+  def calibratePivotTD(pivot: BlockHeader): Option[BigInt] = notUsed("calibratePivotTD")
   var servingPeers: List[Peer] = Nil
   def snapServingPeers(): List[Peer] = servingPeers
   var snapServerSchedulerStarts: Int = 0

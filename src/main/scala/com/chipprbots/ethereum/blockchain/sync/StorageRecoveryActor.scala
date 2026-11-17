@@ -24,6 +24,7 @@ import com.chipprbots.ethereum.blockchain.sync.snap.StorageScheme
 import com.chipprbots.ethereum.blockchain.sync.snap.StorageTask
 import com.chipprbots.ethereum.blockchain.sync.snap.actors
 import com.chipprbots.ethereum.blockchain.sync.snap.controller.StateIngest
+import com.chipprbots.ethereum.db.storage.MptStorage
 import com.chipprbots.ethereum.db.storage.SnapSyncProgressStorage
 import com.chipprbots.ethereum.db.storage.StateStorage
 import com.chipprbots.ethereum.domain.Account
@@ -54,6 +55,9 @@ object StorageRecoveryActor:
 
   sealed trait Command
   private case class ScanResult(missingStorage: Seq[(ByteString, ByteString)]) extends Command
+
+  /** The scan could not run (the root is not in the store, the store failed, the state moved under it). */
+  private case object ScanFailed extends Command
   // Delayed self-ping for Bug 30b abandon path. Carries the progress counter current at arm time;
   // if progressSeq still matches on fire, nothing moved and we give up.
   private[sync] case class CheckAbandon(progressAtSchedule: Long) extends Command
@@ -82,6 +86,9 @@ object StorageRecoveryActor:
 
   /** Sent to SyncController when recovery is complete (or skipped) */
   case object RecoveryComplete extends SyncControllerMsg
+
+  /** Sent in its place when the scan could not run: recovery is over for this run, and nothing is settled by it. */
+  case object RecoveryNotRun extends SyncControllerMsg
 
   /** Recovery → SyncController: the saved pivot root has aged out of every peer's snapshot serve window, so storage
     * downloads are returning empty. Please fetch a RECENT canonical header from a peer and reply with [[RecentRoot]] so
@@ -184,16 +191,29 @@ object StorageRecoveryActor:
               s"(stateRoot=${stateRoot.take(4).toArray.map("%02x".format(_)).mkString}...)"
           )
           ctx.pipeToSelf(
-            Future(scanForMissingStorage(stateRoot, stateIngest.stateTries, pivotBlockNumber, ctx.log))(using
-              ctx.executionContext
-            )
+            Future(
+              scanForMissingStorage(stateRoot, stateIngest.stateTries.getBackingStorage(pivotBlockNumber), ctx.log)
+            )(using ctx.executionContext)
           ) {
             case Success(result) => ScanResult(result)
             case Failure(ex) =>
               asyncLog.error("Storage recovery scan failed", ex)
-              ScanResult(Seq.empty)
+              ScanFailed
           }
       Behaviors.receiveMessage {
+        case ScanFailed =>
+          // A scan that could not run has looked at nothing, so it settles nothing. It was taken as a scan that found
+          // nothing missing, and recovery was marked done for good on a state nobody had read. The flag is left
+          // unwritten: the next start scans again, and regular sync fetches what it reaches on demand, as after a
+          // combined scan that could not run (`SyncController.recoveryCouldNotRun`).
+          ctx.log.error(
+            "Storage recovery: the scan could not run (logged above), so nothing is settled by it. The recovery flag " +
+              "is not written and the next start scans again."
+          )
+          RecoveryMetrics.setStoragePhase(RecoveryMetrics.PhaseIdle)
+          syncController ! RecoveryNotRun
+          Behaviors.stopped
+
         case ScanResult(missing) =>
           if missing.isEmpty then
             ctx.log.info("Storage recovery: all contract storage tries present. Marking recovery complete.")
@@ -447,13 +467,24 @@ object StorageRecoveryActor:
       log: Logger
   ): Unit =
     val mptStorage = stateStorage.getBackingStorage(pivotBlockNumber)
-    val residual = missing.count { case (_, storageRoot) =>
+    val residual =
       try
-        mptStorage.get(storageRoot.toArray)
-        false
-      catch case _: MerklePatriciaTrie.MPTException => true
-    }
-    if residual == 0 then log.info(s"Storage recovery: all ${missing.size} contract storage tries present on disk.")
+        missing.count { case (accountHash, storageRoot) =>
+          try
+            mptStorage.forOwner(Some(accountHash)).getAt(NibblePath.Empty, storageRoot.toArray)
+            false
+          catch case _: MerklePatriciaTrie.MPTException => true
+        }
+      catch
+        case fault: com.chipprbots.ethereum.db.storage.pathstate.StateFault =>
+          // a log only: the state moved under it, which is not a gap and not a reason to stop
+          log.warn(
+            s"Storage recovery: the closing check of what is still missing could not read the state: ${fault.getMessage}"
+          )
+          -1
+    if residual < 0 then ()
+    else if residual == 0 then
+      log.info(s"Storage recovery: all ${missing.size} contract storage tries present on disk.")
     else
       log.warn(
         s"Storage recovery finishing: ${missing.size - residual} of ${missing.size} storage gaps filled, " +
@@ -461,15 +492,17 @@ object StorageRecoveryActor:
           s"these on-demand via GetTrieNodes when block execution reaches them."
       )
 
-  private def scanForMissingStorage(
+  private[sync] def scanForMissingStorage(
       stateRoot: ByteString,
-      stateStorage: StateStorage,
-      pivotBlockNumber: BigInt,
+      mptStorage: MptStorage,
       log: Logger
   ): Seq[(ByteString, ByteString)] =
     RecoveryMetrics.setStoragePhase(RecoveryMetrics.PhaseScanning)
-    val mptStorage = stateStorage.getBackingStorage(pivotBlockNumber)
-    val rootNode = mptStorage.get(stateRoot.toArray)
+    // Every read says where it is (spec 018 Track C): the account trie under no owner, each storage root under its
+    // account. Whether a storage trie seen under one account stands for another's is the store's to say.
+    val accountTrie = mptStorage.forOwner(None)
+    val shared = mptStorage.nodesSharedAcrossTries
+    val rootNode = accountTrie.getAt(NibblePath.Empty, stateRoot.toArray)
 
     val missing = mutable.ArrayBuffer.empty[(ByteString, ByteString)]
     val seenRoots = mutable.HashSet.empty[ByteString]
@@ -491,16 +524,17 @@ object StorageRecoveryActor:
         case Success(account) =>
           if account.storageRoot != Account.EmptyStorageRootHash then
             contractCount += 1
-            if !seenRoots.contains(account.storageRoot.value) then
-              seenRoots += account.storageRoot.value
+            val trie = CombinedRecoveryScan.storageTrieKey(shared, accountHash, account.storageRoot.value)
+            if !seenRoots.contains(trie) then
+              seenRoots += trie
               checkedCount += 1
-              try mptStorage.get(account.storageRoot.toArray)
+              try mptStorage.forOwner(Some(accountHash)).getAt(NibblePath.Empty, account.storageRoot.toArray)
               catch
                 case _: MerklePatriciaTrie.MPTException =>
                   missing += ((accountHash, account.storageRoot.value))
         case Failure(_) => // Skip malformed account RLP
     try
-      val visitor = new PathTrackingLeafWalkVisitor(mptStorage, ByteString.empty, onLeaf)
+      val visitor = new PathTrackingLeafWalkVisitor(accountTrie, ByteString.empty, onLeaf)
       MptTraversals.dispatch(rootNode, visitor)
     catch
       case e: MerklePatriciaTrie.MPTException =>

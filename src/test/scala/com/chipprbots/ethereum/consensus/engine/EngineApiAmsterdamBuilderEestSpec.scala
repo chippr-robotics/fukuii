@@ -73,6 +73,29 @@ class EngineApiAmsterdamBuilderEestSpec extends AnyFlatSpec with Matchers:
     rebuilt.sum shouldBe 14
   }
 
+  // Spec 018 Track C, C3c: the same fixtures on the unified state layout. The genesis is committed there by the node's
+  // loader, each block is built on a view of its parent's state, and the block that was built is then imported: so
+  // the builder is held to the fixture's hash and to import, and the run is seen to have left a datadir the unified
+  // layout wrote alone.
+  it should "do the same on the unified state layout, each block then imported" taggedAs (UnitTest, ConsensusTest) in {
+    KzgTestSetup.ensureLoaded()
+    val source = Source.fromResource("eest-regression/amsterdam-builder.json")
+    val fixtures =
+      try
+        parse(source.mkString) match
+          case JObject(tests) => tests
+          case other          => fail(s"not a fixture file: ${other.getClass}")
+      finally source.close()
+
+    fixtures should have size 8
+    val rebuilt = fixtures.map { case (name, t) =>
+      val outcome = EestBuilderReplay.rebuild(t, onPositions = true)
+      withClue(s"$name: ")(outcome.divergences shouldBe empty)
+      outcome.blocksRebuilt
+    }
+    rebuilt.sum shouldBe 14
+  }
+
   it should "reproduce execution-specs' block hash for every block of a configured corpus" taggedAs (
     EthereumTest,
     SlowTest,

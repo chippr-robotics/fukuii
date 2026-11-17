@@ -55,14 +55,18 @@ import com.chipprbots.ethereum.db.storage.CachedReferenceCountedStateStorage
 import com.chipprbots.ethereum.db.storage.EvmCodeStorage
 import com.chipprbots.ethereum.db.storage.FlatSlotStorage
 import com.chipprbots.ethereum.db.storage.MptStorage
+import com.chipprbots.ethereum.db.storage.PathHandoffSample
 import com.chipprbots.ethereum.db.storage.PathNodeStorage
+import com.chipprbots.ethereum.db.storage.RefCountTrust
 import com.chipprbots.ethereum.db.storage.SnapStorageDoneStorage
 import com.chipprbots.ethereum.db.storage.SnapSyncProgressStorage
 import com.chipprbots.ethereum.db.storage.StateStorage
+import com.chipprbots.ethereum.db.storage.pathstate.SyncHandoff
 import com.chipprbots.ethereum.domain.BlockHeader
 import com.chipprbots.ethereum.domain.BlockchainReader
 import com.chipprbots.ethereum.domain.BlockchainWriter
 import com.chipprbots.ethereum.domain.TrieRoot
+import com.chipprbots.ethereum.network.PeerScoringManager
 import com.chipprbots.ethereum.network.p2p.messages.Capability
 import com.chipprbots.ethereum.network.p2p.messages.SNAP
 import com.chipprbots.ethereum.utils.ByteStringUtils.toHex
@@ -98,7 +102,19 @@ private class SNAPSyncControllerImpl(
     intakeBudgetOverride: Option[SnapIntakeBudget] = None,
     // #1555: the pivot whose finalization failed in the previous SNAP controller (SyncController's HealingImpossible
     // restart), or None. On PoS, the accounts-complete recovery will not resume healing at or below it.
-    val failedFinalizationPivot: Option[BigInt] = None
+    val failedFinalizationPivot: Option[BigInt] = None,
+    // Test seam (#1654): the terminal total difficulty the pivot-weight writes read. None (production) reads the
+    // process-global chain config. Independent of isPoSChainOverride.
+    terminalTotalDifficultyOverride: Option[BigInt] = None,
+    // How the header download checks headers (HeaderChainCheck.forChain; SyncController passes the chain's). Implements
+    // the state traits' `headerChainCheck` members.
+    val headerChainCheck: HeaderChainCheck = HeaderChainCheck.LinkOnly,
+    // Spec 027 slice 4a: the node's peer scorer, fed by the request tracker. Observation only; None where nothing
+    // scores (unit suites).
+    peerScoringManager: Option[PeerScoringManager] = None,
+    // Implements `SnapFinalizationState.handoff` (spec 018 C5a part 10): the end of a sync on the unified state layout,
+    // built from the node's path state storage when the guard is on. None on the hash layout.
+    val handoff: Option[SyncHandoff] = None
 )(implicit val ec: ExecutionContext)
     extends CoordinatorHandles
     with PhaseFlags
@@ -200,6 +216,9 @@ private class SNAPSyncControllerImpl(
 
   val bigIntReverseOrdering: Ordering[BigInt] = Ordering[BigInt].reverse
 
+  // Implements `SnapFinalizationState.sharedBlacklist`: the blacklist SyncController shares with the rest of sync.
+  val sharedBlacklist: Blacklist = blacklist
+
   // SNAP download progress storage (namespace 'p'). Shares the same RocksDB DataSource as
   // AppStateStorage but uses a dedicated namespace so progress survives crash-restart without
   // interfering with other state. Replaces AppStateStorage's plain-text SnapSyncProgress entry
@@ -207,6 +226,7 @@ private class SNAPSyncControllerImpl(
   val snapProgressStorage = new SnapSyncProgressStorage(appStateStorage.dataSource)
 
   ctx.log.info("SNAPSyncController started with shared blacklist (cross-mode penalty propagation enabled)")
+  ctx.log.info("SNAP header download check: {}", headerChainCheck.description)
 
   // Writable MptStorage, lazily created when pivot block number is known.
   // Uses getBackingStorage(pivotBlockNumber) to ensure nodes are tagged with the
@@ -295,8 +315,16 @@ private class SNAPSyncControllerImpl(
       com.chipprbots.ethereum.utils.Config.blockchains.blockchainConfig.terminalTotalDifficulty.isDefined
     )
 
+  // #1654: read by the pivot-weight writes (PivotSelector, SnapFinalization) and the pivot estimate (SnapPeerPool).
+  // None on ETC and Mordor; on a chain that was PoS from genesis (Platåberget, 0) every block's weight is the genesis
+  // weight.
+  val terminalTotalDifficulty: Option[BigInt] =
+    terminalTotalDifficultyOverride.orElse(
+      com.chipprbots.ethereum.utils.Config.blockchains.blockchainConfig.terminalTotalDifficulty
+    )
+
   // The hubs implement `SnapSharedState` (spec 016 T041a).
-  val requestTracker: SNAPRequestTracker = new SNAPRequestTracker()(using scheduler)
+  val requestTracker: SNAPRequestTracker = new SNAPRequestTracker(scorer = peerScoringManager)(using scheduler)
 
   var currentPhase: SyncPhase = Idle
 
@@ -506,10 +534,19 @@ private class SNAPSyncControllerImpl(
     * initial `idle` behavior. Called from `apply()`.
     */
   def start(): Behavior[Command] =
+    // #1692, before anything of this run is written: on the Hash scheme SNAP's writers skip a node that is already
+    // there, so a node one position still uses can end with a count too low, and pruning must stop deleting by count.
+    // The stamp goes in a synced write, so a node on disk from this run implies the stamp is gone.
+    val startAppState = stateIngest.appState
+    if RefCountTrust.withdrawAtSnapStart(startAppState, snapSyncConfig.storageScheme == StorageScheme.Hash) then
+      ctx.log.info(
+        "[PRUNING] SNAP starts on the Hash scheme: pruning keeps every trie node from here, as reference counts " +
+          "are not exact after it (#1692). Death rows and snapshot rows are still pruned."
+      )
     checkStorageSchemeMismatch()
     logHealInvariant(
       HealInvariant.atSnapStart(
-        stateIngest.appState,
+        startAppState,
         stateIngest.pathNodes,
         HealInvariant.canHold(
           snapSyncConfig.storageScheme,
@@ -645,6 +682,8 @@ private class SNAPSyncControllerImpl(
         case _: ChainDownloaderProgress =>
           ctx.log.debug("Dropping stale ChainDownloaderProgress in idle"); Behaviors.same
         case ChainDownloaderDone => ctx.log.debug("Dropping stale ChainDownloaderDone in idle"); Behaviors.same
+        case _: ChainDownloaderRewound =>
+          ctx.log.debug("Dropping stale ChainDownloaderRewound in idle"); Behaviors.same
 
         // ── Syncing-state retry timers (stale after sync stops) ───────────────────────
         case RetrySnapSyncStart       => ctx.log.debug("Dropping stale RetrySnapSyncStart in idle"); Behaviors.same
@@ -898,13 +937,20 @@ private class SNAPSyncControllerImpl(
         pathPublish = None
         syncController ! SyncProtocol.HealingImpossible
         Behaviors.same
+      // The hand-off's sample on the unified layout: in flight as the publish is (`pathPublish` marks either).
+      case HandoffSampleDone(result) =>
+        onHandoffSampleDone(result)
+      case HandoffSampleFailed(cause) =>
+        onHandoffSampleFailed(cause)
       case msg if pathPublish.isDefined && !msg.isInstanceOf[GetStatus] && !msg.isInstanceOf[GetProgress] =>
         Behaviors.same
       // Deferred-backfill hold (see enterHeaderHold): only the tick, status/progress and the downloader's reports run.
       case HeaderHoldTick =>
-        if headerHold.isDefined then
-          pivotBlock.map(p => finalizeSnapSync(p, pathPublished = true)).getOrElse(Behaviors.same)
+        if headerHold.isDefined then pivotBlock.map(onHeaderHoldTick).getOrElse(Behaviors.same)
         else Behaviors.same
+      // The header download applied a rewind the hold asked for (a pivot the consensus layer chose).
+      case ChainDownloaderRewound(forkPoint) =>
+        onHeaderDownloadRewound(forkPoint)
       case msg
           if headerHold.isDefined && !msg.isInstanceOf[GetStatus] && !msg.isInstanceOf[GetProgress] &&
             !msg.isInstanceOf[ChainDownloaderProgress] && msg != ChainDownloaderDone =>
@@ -1137,6 +1183,8 @@ object SNAPSyncController:
       targetBlock: BigInt
   ) extends Command
   private[snap] case object ChainDownloaderDone extends Command
+  // ChainDownloader.Rewound, the reply to a ChainDownloader.RewindTo that SNAP finalisation sent.
+  final private[snap] case class ChainDownloaderRewound(forkPoint: BigInt) extends Command
   private[snap] case object HeaderHoldTick extends Command
 
   // ── Group: Peer-event wrappers (OQ-3 — PeerListHelper bridge) ──────────────
@@ -1184,6 +1232,13 @@ object SNAPSyncController:
     * but not its block number — `PivotHeaderBootstrap` then fetches by `GetBlockHeaders(Right(hash))`. Closes #1207.
     */
   final case class StartRegularSyncBootstrapByHash(headHash: ByteString) extends SyncProtocol.SyncControllerReply
+
+  /** Post-merge chains: the pivot header `depth` blocks below the consensus layer's head `headHash`, fetched by walking
+    * back from that head (`PivotHeaderBootstrap.applyAncestry`), so the pivot is the head's ancestor whichever peer
+    * serves it. Answered like the other bootstraps, with `BootstrapComplete` or `PivotBootstrapFailed`.
+    */
+  final case class StartPivotAncestryBootstrap(headHash: ByteString, depth: Int)
+      extends SyncProtocol.SyncControllerReply
   // Two-phase handshake with SyncController:
   //   1. SnapSyncFinalized(pivot) — pivot/state anchored, regular sync can start.
   //      SyncController starts RegularSync but does NOT poison-pill SNAPSyncController.
@@ -1196,7 +1251,9 @@ object SNAPSyncController:
       pivotHeader: Option[BlockHeader] = None
   ) extends Command // Signal from SyncController that bootstrap is done
   final case class PivotBootstrapFailed(
-      reason: String
+      reason: String,
+      // the peers that follow another chain than the branch the pivot is to be on (B-307): PivotHeaderBootstrap.Failed
+      offBranch: Set[com.chipprbots.ethereum.network.PeerId] = Set.empty
   ) extends Command // Signal from SyncController that pivot header bootstrap exhausted retries
   // Internal commands (private[snap] so the SNAPSyncControllerImpl class — same package — can reference
   // them). Relocated from the Classic class body in Phase 2. All extend the sealed Command (same file).
@@ -1318,6 +1375,11 @@ object SNAPSyncController:
   final case class PathPublishProgress(accountNodes: Long, storageNodes: Long) extends Command
   final case class PathPublishDone(result: PathToHashExporter.Result, millis: Long) extends Command
   final case class PathPublishFailed(cause: Throwable) extends Command
+
+  // The unified state layout (spec 018 C5a part 5): nothing is published; the rows are sampled from the pivot's root
+  // off the actor's thread (see PathHandoffSample), and these bring the outcome back.
+  final case class HandoffSampleDone(result: PathHandoffSample.Result) extends Command
+  final case class HandoffSampleFailed(cause: Throwable) extends Command
 
   /** spec 004 (Decoupled Heal Serve-Root) T011/T012: SNAPSyncController → SyncController (parent). During healing, ask
     * the parent to fetch a newest-servable canonical header (networkBest − RecentRootMarginBlocks) via its own
@@ -1472,7 +1534,14 @@ object SNAPSyncController:
       childFactories: ChildFactories = ChildFactories.production,
       heapWatchdogStart: HeapWatchdogStart = HeapWatchdogStart.production,
       intakeBudgetOverride: Option[SnapIntakeBudget] = None,
-      failedFinalizationPivot: Option[BigInt] = None
+      failedFinalizationPivot: Option[BigInt] = None,
+      terminalTotalDifficultyOverride: Option[BigInt] = None,
+      // The header download's check for this chain (HeaderChainCheck.forChain). Parent-link only by default, which is
+      // what suites that drive SNAP with synthetic headers need; production passes the chain's check.
+      headerChainCheck: HeaderChainCheck = HeaderChainCheck.LinkOnly,
+      peerScoringManager: Option[PeerScoringManager] = None,
+      // Spec 018 C5a part 10: the hand-off onto the unified state layout. None on the hash layout.
+      handoff: Option[SyncHandoff] = None
   )(implicit ec: ExecutionContext): Behavior[Command] =
     Behaviors.setup[Command] { ctx =>
       Behaviors.withTimers[Command] { timers =>
@@ -1497,7 +1566,11 @@ object SNAPSyncController:
           childFactories,
           heapWatchdogStart,
           intakeBudgetOverride,
-          failedFinalizationPivot
+          failedFinalizationPivot,
+          terminalTotalDifficultyOverride,
+          headerChainCheck,
+          peerScoringManager,
+          handoff
         ).start() // #1378: start() arms the 5s PollHandshakedPeers timer that populates the
         //          controller's peerListHelper. Calling startSnapSync() directly bypasses it,
         //          leaving snapPeersForPivot permanently empty → pivot never selected.
@@ -1588,8 +1661,12 @@ case class SNAPSyncConfig(
     headerHoldStallTimeout: FiniteDuration = 5.minutes,
     // When true, the chain downloader fetches headers only while SNAP state sync runs: bodies and receipts are held
     // until the state is finalised, so historical-body writes never compete with account/storage/bytecode/healing
-    // writes for disk IO. Off by default; the post-merge ETH chain configs turn it on. The pivot header and the
-    // CL-anchored header chain are fetched by PivotHeaderBootstrap, not by the chain downloader, so they are unaffected.
+    // writes for disk IO, and finalisation waits for the headers to reach the pivot, so the pivot's total difficulty is
+    // the exact accumulated one (#1654). The pivot header and the CL-anchored header chain are fetched by
+    // PivotHeaderBootstrap, not by the chain downloader, so they are unaffected. On for every chain in base/sync.conf,
+    // when the key is absent (fromConfig) and in SyncController's fallback when the config cannot be loaded. This
+    // constructor default stays off, as `heapWatchdogEnabled`'s does: suites that drive finalisation through a stub
+    // downloader have no header cursor to wait for, and SNAPDeferredBackfillSpec covers the hold.
     deferChainBackfillUntilStateComplete: Boolean = false,
     chainDownloadTimeout: FiniteDuration = 10.seconds,
     minSnapPeers: Int = 3,
@@ -1780,7 +1857,7 @@ object SNAPSyncConfig:
       deferChainBackfillUntilStateComplete =
         if snapConfig.hasPath("defer-chain-backfill-until-state-complete") then
           snapConfig.getBoolean("defer-chain-backfill-until-state-complete")
-        else false,
+        else true,
       chainDownloadTimeout =
         if snapConfig.hasPath("chain-download-timeout") then
           snapConfig.getDuration("chain-download-timeout").toMillis.millis

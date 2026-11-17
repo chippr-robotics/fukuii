@@ -481,6 +481,24 @@ class EthMiningServiceSpec
 
     response shouldBe Symbol("right")
 
+  // Spec 018 B-293: the miners read the head under its generation, so mining is taken on the unified layout. With no
+  // head to build on, as on this empty datadir, getWork answers as on the hash layout.
+  it should "start the miner, and give work as on the hash layout, on the unified state layout" taggedAs (
+    UnitTest,
+    RPCTest
+  ) in new TestSetup:
+    import com.chipprbots.ethereum.db.components.EphemDataSourceComponent
+    import com.chipprbots.ethereum.db.components.Storages
+    override lazy val storagesInstance
+        : EphemDataSourceComponent & LocalPruningConfigBuilder & Storages.DefaultStorages =
+      new EphemDataSourceComponent with LocalPruningConfigBuilder with Storages.DefaultStorages:
+        override protected def statePathLive: Boolean = true
+
+    blockchainReader.holdsStateInPlace shouldBe true
+    ethMiningService.startMiner(StartMinerRequest()).unsafeRunSync() shouldEqual Right(StartMinerResponse(true))
+    // no best block on an empty datadir: no block is generated, and the answer is the hash layout's
+    ethMiningService.getWork(GetWorkRequest()).unsafeRunSync() shouldBe Left(JsonRpcError.InternalError)
+
   // NOTE TestSetup uses Ethash consensus; check `consensusConfig`.
   class TestSetup(implicit system: ActorSystem) extends EphemBlockchainTestSetup with ApisBuilder:
     val blockGenerator: PoWBlockGenerator = mock[PoWBlockGenerator]

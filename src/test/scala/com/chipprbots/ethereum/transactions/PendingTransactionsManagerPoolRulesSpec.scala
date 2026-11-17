@@ -100,9 +100,13 @@ class PendingTransactionsManagerPoolRulesSpec
         ) { case (trie, (address, account)) => trie.put(crypto.kec256(address.toArray), account) }
         .getRootHash
     private val best = Block(head.copy(stateRoot = TrieRoot(ByteString(stateRoot))), BlockBody.empty)
-    private val reader: BlockchainReader = new BlockchainReader(null, null, null, null, null, null, null, null):
+    // The reader holds the state: the pool reads the best block's accounts through it (`stateAt`).
+    private val reader: BlockchainReader = new BlockchainReader(null, null, null, stateStorage, null, null, null, null):
       override def getBestBlockHeader: Option[BlockHeader] = Some(best.header)
       override def getBestBlock: Option[Block] = Some(best)
+
+    /** This pool's own counters (spec 029 FR-034): no other suite's pool moves them. */
+    val metrics = new TxPoolMetrics
 
     val ref: ActorRef[Command] = spawn(
       PendingTransactionsManager(
@@ -113,9 +117,15 @@ class PendingTransactionsManagerPoolRulesSpec
         spawn(Topic[NewPendingTransaction](s"pending-${java.util.UUID.randomUUID()}")),
         blockchainReader = reader,
         stateStorage = if state.isEmpty then null else stateStorage,
-        chainConfig = cfg
+        chainConfig = cfg,
+        metrics = metrics
       )
     )
+
+    def size: PoolSize =
+      val probe = createTestProbe[PoolSize]()
+      ref ! GetPoolSizeReq(probe.ref)
+      probe.receiveMessage(5.seconds)
 
     def submit(stx: SignedTransaction, account: Account): Either[Rejection, Unit] =
       val probe = createTestProbe[Either[Rejection, Unit]]()
@@ -161,6 +171,38 @@ class PendingTransactionsManagerPoolRulesSpec
     SignedTransaction.sign(tx, k, Some(cfg.chainId.value))
 
   // ---------------------------------------------------------------------------------------------------------------
+
+  // Spec 029 FR-034, FR-037: the pool counts what it refuses and replaces, and answers its size without a copy.
+  // Counting changes no result: each case below is one the tests after it already pin.
+  "the pool's counters" should "move by one for a refusal and a replacement, and change no answer" taggedAs UnitTest in {
+    val pool = new Pool(sepolia, pragueHead)
+    import pool.given
+    val k = newKey()
+    val stx = signed(dynamic(sepolia), k)
+    pool.metrics.snapshot shouldBe TxPoolMetrics.Snapshot(Map.empty, 0, 0, 0, 0, 0, 0)
+    pool.submit(stx, funded()) shouldBe Right(())
+    pool.metrics.snapshot.rejected shouldBe empty
+    pool.submit(stx, funded()).left.map(_.message) shouldBe Left("already known")
+    pool.metrics.snapshot.rejected shouldBe Map("AlreadyKnown" -> 1L)
+    // The same nonce with both caps raised by the bump takes its place: one replacement.
+    val better = signed(dynamic(sepolia, maxFee = 4 * Gwei, tip = 2 * Gwei), k)
+    pool.submit(better, funded()) shouldBe Right(())
+    pool.metrics.snapshot.replaced shouldBe 1L
+    pool.metrics.snapshot.rejected shouldBe Map("AlreadyKnown" -> 1L)
+    pool.pooled shouldBe Seq(better)
+  }
+
+  "the pool's size" should "be answered without its transactions: the count, the blob count and the capacity" taggedAs UnitTest in {
+    val pool = new Pool(sepolia, pragueHead)
+    import pool.given
+    pool.size shouldBe PoolSize(0, 0, pool.size.capacity)
+    pool.size.capacity should be > 0
+    pool.submit(signed(dynamic(sepolia), newKey()), funded()) shouldBe Right(())
+    pool.submit(signed(dynamic(sepolia), newKey()), funded()) shouldBe Right(())
+    val size = pool.size
+    (size.size, size.blobs) shouldBe (2, 0)
+    size.size shouldBe pool.pooled.size
+  }
 
   "a local submission on ETH" should "be refused as already known when the same tx is pooled" taggedAs UnitTest in {
     val pool = new Pool(sepolia, pragueHead)

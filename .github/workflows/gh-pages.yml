@@ -11,8 +11,15 @@
 #
 # Triggers:
 # - Push to main/master/develop branches (docs changes)
-# - Manual dispatch for ad-hoc deployments
+# - Manual dispatch for ad-hoc deployments; the `tracker` branch's tracker-publish.yml dispatches this workflow on
+#   main after every claim or status change, so the Tracker page follows the shared backlog within minutes
+# - Hourly schedule: a backstop for the Tracker page (stale-claim badges age even when nothing is pushed)
 # - Pull requests (build only, no deploy - for validation)
+#
+# The Tracker page (docs/development/tracker/) is rendered at build time from backlog.yaml on the `tracker` branch by
+# scripts/backlog/backlog.py. The committed index.md is a placeholder that the render overwrites; if the branch is
+# missing or the render fails, the placeholder stays and the build goes on (the failure shows as a warning here and
+# as a failed check on the tracker branch's own workflow).
 
 name: Deploy Documentation to GitHub Pages
 
@@ -31,7 +38,10 @@ on:
       - 'docs/**'
       - 'mkdocs.yml'
       - 'requirements-docs.txt'
+      - 'scripts/backlog/**'
       - '.github/workflows/gh-pages.yml'
+  schedule:
+    - cron: '23 * * * *'
   workflow_dispatch:
 
 # Sets permissions of the GITHUB_TOKEN to allow deployment to GitHub Pages
@@ -71,6 +81,15 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements-docs.txt
 
+      - name: Render the Tracker page from the tracker branch
+        run: |
+          if git ls-remote --exit-code --heads origin tracker >/dev/null; then
+            python3 -I scripts/backlog/backlog.py render --out docs/development/tracker \
+              || echo "::warning title=Tracker::render failed; the Tracker page keeps its placeholder"
+          else
+            echo "::notice title=Tracker::origin has no tracker branch; the Tracker page keeps its placeholder"
+          fi
+
       - name: Build documentation
         run: mkdocs build --strict
 
@@ -83,10 +102,12 @@ jobs:
           path: site
 
   deploy:
-    # Only deploy on push to main — the github-pages environment protection rules
+    # Only deploy from main — the github-pages environment protection rules
     # restrict deploys to main, so develop/master pushes would always fail this step.
-    # Skipping (success) on non-main pushes is the cleanest match for that policy.
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    # Skipping (success) on non-main refs is the cleanest match for that policy.
+    # A push, a manual or tracker dispatch run on main, and the hourly schedule (which runs on main) deploy;
+    # pull requests only build.
+    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}

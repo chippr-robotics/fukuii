@@ -80,14 +80,18 @@ class EphemeryGenesisSpec extends AnyFlatSpec with Matchers:
 
   private class Env extends EphemBlockchainTestSetup
 
-  "the shipped conf/ephemery.conf" should "select the ephemery network, engine-api and the script's default dir" taggedAs (
+  "the shipped conf/ephemery.conf" should "select the ephemery network and engine-api, with no default custom-chains-dir" taggedAs (
     UnitTest
   ) in {
     val conf = ConfigFactory.load(ConfigFactory.parseResources("conf/ephemery.conf"))
     conf.getString("fukuii.blockchains.network") shouldBe "ephemery"
     conf.getString("fukuii.mining.protocol") shouldBe "engine-api"
-    conf.getString("fukuii.blockchains.custom-chains-dir") shouldBe
-      s"${System.getProperty("user.home")}/.fukuii/ephemery-network/current/chains"
+    // The startup resolver chooses the iteration; the directory counts only when an operator sets it (spec 028 R5).
+    conf.hasPath("fukuii.blockchains.custom-chains-dir") shouldBe false
+    conf.getBoolean("fukuii.ephemery.refresh") shouldBe true
+    conf.getString("fukuii.ephemery.source") shouldBe "https://github.com/ephemery-testnet/ephemery-genesis"
+    conf.getDuration("fukuii.ephemery.refresh-timeout").getSeconds shouldBe 60L
+    conf.getBoolean("fukuii.ephemery.exit-at-reset") shouldBe true
   }
 
   it should "resolve the ephemery chain once custom-chains-dir points at a generated iteration" taggedAs (UnitTest) in {
@@ -98,11 +102,23 @@ class EphemeryGenesisSpec extends AnyFlatSpec with Matchers:
       com.chipprbots.ethereum.domain.ChainId(BigInt(ChainId))
   }
 
-  it should "fail loudly, naming the fix, when no iteration has been generated" taggedAs (UnitTest) in {
+  it should "name the directory and whether it exists, for a network that is not configured (FR-023)" taggedAs (
+    UnitTest
+  ) in {
+    // Ephemery never reaches this error: the resolver gives it an iteration first. Any other unknown network does.
     val missing = new File(fixtureDir, "does-not-exist").getAbsolutePath
-    val ex = intercept[NoSuchElementException](blockchainsFor("ephemery", missing))
-    ex.getMessage should include("'ephemery' is not configured")
-    ex.getMessage should include("fetch-genesis.sh")
+    val absent = intercept[NoSuchElementException](blockchainsFor("nowhere", missing))
+    absent.getMessage should include("'nowhere' is not configured")
+    absent.getMessage should include(s"<custom-chains-dir>/nowhere-chain.conf; that directory is $missing")
+    absent.getMessage should include("(it does not exist)")
+
+    val noFile = intercept[NoSuchElementException](blockchainsFor("nowhere", fixtureDir))
+    noFile.getMessage should include(s"that directory is $fixtureDir (it has no nowhere-chain.conf)")
+
+    val unset = intercept[NoSuchElementException](
+      BlockchainsConfig(ConfigFactory.empty().withValue("network", ConfigValueFactory.fromAnyRef("nowhere")))
+    )
+    unset.getMessage should include("fukuii.blockchains.custom-chains-dir is not set")
   }
 
   "the generated ephemery-164 chain config" should "carry the iteration's chain and network ids" taggedAs (

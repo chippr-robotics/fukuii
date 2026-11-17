@@ -43,40 +43,507 @@ The console UI is useful when:
 
 ## Display Layout
 
+Every view has the same frame: the header band (network, chain id, PoW or PoS, uptime and the view's name; from
+100×32 also the head block and the peers, from 140×45 the version), a separator, the **alert row**, the view's panels,
+and the footer with the keys. The Overview at 80×24, regular sync (from the golden file
+`src/test/resources/tui/golden/overview-s-regular-emoji.txt`):
+
 ```
-┌────────────────────────────────────────────────────────────────┐
-│             ◆ FUKUII ETHEREUM CLIENT ◆                         │
-├────────────────────────────────────────────────────────────────┤
-│                    [Ethereum Classic Logo]                     │
-├────────────────────────────────────────────────────────────────┤
-│ ● NETWORK & CONNECTION                                         │
-│   Network: ETHEREUM CLASSIC                                    │
-│   Connection: ● Connected                                      │
-│   Peers: 25 / 50 ◆◆◆◆◆◆◆◆◆◆                                   │
-├────────────────────────────────────────────────────────────────┤
-│ ● BLOCKCHAIN                                                   │
-│   Current Block: 15,234,567                                    │
-│   Best Block: 15,234,890                                       │
-│   Sync Status: Syncing                                         │
-│   Sync Progress: [████████████████░░░░░░] 98.45%              │
-│   Blocks Remaining: 323                                        │
-│   Est. Sync Time: 2m 15s                                       │
-│   Sync Speed: 2.35 blocks/sec                                  │
-├────────────────────────────────────────────────────────────────┤
-│ ● RUNTIME                                                      │
-│   Uptime: 1h 23m 45s                                           │
-├────────────────────────────────────────────────────────────────┤
-│ Commands: [Q]uit | [R]efresh | [D]isable UI                   │
-└────────────────────────────────────────────────────────────────┘
+ ◆ FUKUII  etc (61) · PoW · up 9m 0s                                   Overview
+────────────────────────────────────────────────────────────────────────────────
+ ✓ no alerts
+ Peers   23/50 ◆◆◆◆◆◆◆◆◆◆         Block  18,402,113 → 21,884,102 (−3,481,989)
+ RPC     :8545 on                 Disk   1.2T free       Txpool  142
+────────────────────────────────────────────────────────────────────────────────
+ Sync    regular                                 rate 184.37 blk/s · ETA 5h 14m
+   Blocks   [===============🪱....]🧠 84%   18,402,113 / 21,884,102
+────────────────────────────────────────────────────────────────────────────────
+ Forks   Mystique ✓ ════════════════════════▶ Spiral @ 19,250,000 (847.9K away)
+────────────────────────────────────────────────────────────────────────────────
+ Node    …/fukuii/etc · Full sync · archive pruning · 50 peers max · mining off
+────────────────────────────────────────────────────────────────────────────────
+ Recent
+ 11:59:25 INFO  [====================🪱]🧠 100% — RegularSync
+ 11:59:30 ERROR Cannot decode a message from 203.0.113.40:30303
+ 11:59:34 INFO  Imported block 21,884,101 0x9b0c…ff31 with 9 txs in 17ms
+ 11:59:47 INFO  Imported block 21,884,102 0x6d21…1a0e with 14 txs in 22ms
+ 11:59:52 INFO  Peers: 41 handshaked · 14 in · 27 out
+ 12:00:00 INFO  RegularSync: at head, block 21884102
+
+
+
+ 1-9 view  : prompt  / filter  ? help  p pause  r redraw  d detach  q quit
 ```
+
+The Recent strip at the bottom is the newest log lines (6 at tier S). Sizes: below 100 columns or 32 rows is tier S,
+from 100×32 tier M, from 140×45 tier L; each view fills its tier. A panel that does not fit gives up its rows to the
+ones that matter more; the header, the alert row and the footer always stay.
+
+### Views
+
+Nine views, chosen with `1` to `9`, with `[` and `]`, or by name at the `:` prompt. From 100 columns and 32 rows a
+sidebar down the left lists them and marks the one on screen. Its top corner carries the icon of the chain family the
+node is on, Ethereum Classic's mark or Ethereum's, with the network's name, `PoW` or `PoS`, the chain id and `main
+network` or `test network` in words under it; its last row names the graphics mode.
+
+| Key | View | What it shows |
+|-----|------|---------------|
+| `1` | Overview | Peers and blocks, the txpool, endpoints, disk and heap (GC and discovery at L), the sync (SNAP's five worm rows or the Blocks worm, with ETA), the consensus layer (ETH) or the mining (ETC), the forks, the node's settings; at L the top 8 peers by score; the Recent strip of the newest log lines |
+| `2` | Chain | While the node is syncing, the sync's panels lead (the worm rows, SNAP's rates and phase timeline, a regular sync's session and lag). Then the **head** (number, hash, age, transactions, gas, size, base fee; the miner and difficulty on ETC, the fee recipient and slot on ETH) and the rate blocks arrive at; the chain's identity (chain id, network id, genesis hash, fork id) and its forks; the **fees** (base fee and tips, or gas prices on a chain with no base fee); the **reorgs** since the TUI started; and the **Block Observatory**: the newest blocks the node has seen, the gas each used as a chart and as a table. `Up`/`Down` select a block, `Enter` opens it |
+| `3` | Peers | From 100×32 the **peer radar**: this node at the centre and a blip a peer, nearer the centre the faster it answers (rings under 100, 500 and 2,000 ms, then slower, then not measured yet), at an angle fixed by its node id, coloured by its score, shaped by its direction, bold for a second after it answers. No line joins two peers and there is no map: the node knows neither. Then each handshaked peer, highest score first: id, direction, client, best block, age; from M the address and the score, at L the score's trend. `Up`/`Down` select a peer, `Enter` opens its details (with its latency, answers and timeouts, protocol violations), `Esc` returns, `/` filters by id, address or client |
+| `4` | Mempool | The **pool** (pending, how full it is, blob transactions, the oldest, those sent from this node) and its **flow** (transactions arriving, mined and dropped a second over the last minute, and replacements); the **Mempool Radar**: the pending transactions in four tiers, urgent to low, by their fee against the fee this node would itself suggest, a bar and a count a tier and the fee each tier starts at; the **senders** with the most pending; what the pool **refused** by reason, **lost** (evicted for room, expired unmined, replaced) and **fetched** (announced, asked for, timed out) since the node started; and the **pending transactions**, best-paying first. `Up`/`Down` select one, `Enter` opens it in the explorer. On a chain with a base fee a fee here is a tip above it; on one without, a gas price. The view says this client keeps no queue: a transaction whose nonce leaves a gap is refused, not held. See [Mempool](#mempool) |
+| `5` | RPC | Each **transport** (HTTP, WebSocket, IPC, and the Engine API where the chain has one): whether it listens, where, the namespaces it serves, how a caller is authenticated, and the calls and failures that came in on it; a warning above them when a sensitive namespace is served to other hosts; the HTTP rate limit and how many requests it refused. On a node with a consensus client, the **Engine Synchronization Monitor**: the link and who is at its other end, the head, safe and finalized blocks, the last call of each kind, the payloads, failed authentications by reason, and the last calls as a log. On a node that mines, the **mining monitor** in the same place, with ten minutes of hashrate and work requests. Then every **method** called: its calls, its failures, its 50th, 95th and 99th percentile latency and its last call. See [RPC](#rpc) |
+| `6` | Storage | The **database**: its size on disk, the estimate of what is live in it, how fast it grows, and when it was last read; whether **writes** are taken, held or refused; **compaction** pending and running and the bytes it has to rewrite; the **disk**; the block **cache** and, where the database counts them, its hit rate; the **stores** by size with their estimated key counts; the node's **integrity** marks and the background audit; and what this client does not keep |
+| `7` | System | The **health bars**, one a subsystem, selected with `Up`/`Down` and opened with `Enter`; then a **meter** a row, each a chart of the last ten minutes with the figure now and the highest: the process's uptime, CPU, heap, P2P bytes in and out, GC, threads, the machine's CPU and load, memory outside the heap, P2P messages in and out |
+| `8` `L` | Logs | The newest log lines (1,000 by default, INFO and above), with their time and level; `Up`/`Down` scroll a line, `-` and `+` a page, `/` filters by text |
+| `9` | Ops | The **actions**: each with its class and what it changes, those running, the last attempts and how they ended, and what the dashboard does not offer and why. `Up`/`Down` select one, `a` puts it at the prompt. See [Ops](#ops) |
+| `?` `H` `F1` | Help | Every key, and the legend of the glyph set on screen |
+
+### Alert row
+
+The row under the header reads `✓ no alerts`, or a badge with the count (`✗ 2 errors`, `⚠ 1 warn`) and up to three
+conditions, errors first: as many of the three as fit whole, so a condition is never cut in the middle of a figure,
+and the badge has counted the ones not listed. It is never animated and every view has it.
+
+Where each alert begins is a key of `fukuii.tui.alerts` (`conf/base/tui.conf` lists them with their defaults, the
+values below). A value that is no threshold, a key set to `null`, or a key that is none of them stops the node at
+start with an error that names the key: a threshold misspelt is one you believe is set.
+
+| Condition | Severity |
+|-----------|----------|
+| No handshaked peer for more than 30 s | error |
+| The peer manager or the sync controller does not answer | error |
+| The current block has not moved for 2 minutes while blocks remain | warning |
+| The SNAP progress sample is older than 90 s while SNAP runs | warning |
+| A reorg at least 3 blocks deep in the last 10 minutes (`fukuii.tui.alerts.reorg-depth`) | warning |
+| Disk free on the datadir below 20G (below 5G: error) | warning / error |
+| Fewer peers than a quarter of the maximum (the peer count itself turns yellow below half) | warning |
+| ETH: no `engine_forkchoiceUpdated` for more than 60 s, after one has been heard | error |
+| ETH: no `engine_forkchoiceUpdated` yet, 60 s after the node started (with the count of failed JWT checks, if any) | warning |
+| ETH: no `engine_newPayload` for more than 5 minutes while a peer, or the sync's target, is ahead of the node's head | warning |
+| ETC: mining on, the DAG loaded, and a reported hashrate of 0 for more than 10 minutes | warning |
+| The heap never under 90 % of its limit for a minute (`heap-warn-fraction`) | warning |
+| Garbage-collection pauses 20 % or more of the last minute (`gc-share-warn`) | warning |
+| 10 % or more of the last minute's JSON-RPC calls failed, with at least 20 calls in it (`rpc-error-rate-warn`) | warning |
+| The database refuses writes (`write-stall`; set it `false` for no alert) | warning |
+
+The heap and the collector are judged over the last minute of the System view's readings, and not before the
+dashboard has watched a minute: a healthy heap touches its limit between two collections, and one pause is a large
+share of one second. A dashboard set to poll slower than every fifteen seconds has too few readings in a minute and
+does not judge them. The database's alert outlasts a reading that goes stale: a database that refuses writes holds
+its writers, and the reading gives way to writers, so the reading that found it refusing may be the last for as long
+as it refuses; the alert then says how old that reading is. The minute, the ten minutes a reorg stays on the row and
+the 20 calls are fixed.
+
+### Health bars
+
+Each subsystem with an alert rule has a bar: P2P, Chain, the consensus-client link (ETH) or Mining (ETC), RPC, the
+database (`DB`), Disk and Memory. They are a strip under the Node row of the Overview, and a list at the top of the
+System view. The transaction pool and the CPU have no rule, so they have no bar: a bar is the room left before a
+threshold, and they have no threshold to leave room before.
+
+- **What a bar measures.** The room left before the nearest of its subsystem's thresholds: full with none of the
+  way gone, empty at the threshold. For a limit in time (no peers for 30 s) it is the share of the time not yet used;
+  for the disk it is the free space above the warning as a share of the disk above the warning; for the peer count,
+  the count above the warning's share of the limit. The bar's row names the check that sets it and what that check
+  reads: `Disk ██░░░░░░░░ 18%  free space: 388G free of 2.0T · warn below 20G, error below 5G`.
+- **Its colour is the alert row's.** A bar is yellow or red exactly when one of its checks raises that alert, and
+  green or dim otherwise: both are read from the same list of checks, so they cannot disagree. A bar that raises
+  an alert is empty. A dim bar of dots has no measure now (a source not read yet, a minute not yet watched): it is
+  never drawn empty or full.
+- **`Enter` on a bar** (System view) lists every check behind it, two rows each: what it watches and what it reads;
+  then its state and for how long it has been in it, where its alert begins, and the room it leaves. `Esc` returns
+  to the bar. The time in a state is counted from the poll that first saw it, since the dashboard started.
+- Before the node has been read once there are no bars.
+
+### Storage
+
+Every figure is RocksDB's own property or the node's own marker. The read never waits and holds nothing up: it is
+made only when no write holds the database, and otherwise the view keeps the last reading, whose age the `Size` row
+says (`read 1m 35s ago`). Under a long write the figures are of a while ago, and say so.
+
+- **Size.** `on disk` is every SST file the database still holds, without its write-ahead log; compare it with `du`
+  on the datadir's `rocksdb` directory. `live (estimate)` and each store's `keys (estimate)` are RocksDB's
+  estimates, read every half minute; a key estimate is wrong after a range delete. The growth is over the readings
+  kept (ten minutes of them), and is less than nothing after a compaction.
+- **Writes.** `accepted, not held`; `held to X/s` while RocksDB slows writers because flushes and compactions are
+  behind; `REFUSED` while it stops them. Refused is the alert; held is the database catching up, and is not.
+- **Compact.** How many stores want a compaction, how many compactions run, and RocksDB's estimate of the bytes
+  they have to rewrite.
+- **Cache.** The block cache's use and size. The memtables reserve their memory in it, so they are part of its use
+  and are shown as such. The hit rate is of the lookups between the last two readings, and is drawn only where the
+  database counts hits (`db.rocksdb.enable-statistics = true`); with it off the row says so.
+- **Stores.** One row a column family that holds data, the largest first, with its share of the database; the empty
+  ones are counted and not listed, and so are the ones a short terminal has no rows for.
+- **Integrity.** The node's own marks, in words that say what each vouches for and no more: the state layout,
+  whether SNAP (or a checkpoint) is marked done, the heal invariant, a checkpoint import running or interrupted, a
+  code scan or an audit pass owed, whether the reference counts are exact, and the chain-weight invariant. A mark
+  that only a SNAP sync stamps reads `not marked (a SNAP start stamps it; none has run)` on a node that never ran one:
+  that is not a fault. The reference counts' row is the one that costs something when it is not `exact`: without
+  that stamp a prune deletes no trie node, so the state's stores grow without reclaim, and the row says so. Then the
+  background audit, asked what it has walked: it counts nodes and does not know the whole until it ends, so there is
+  no percentage. Reading them writes nothing.
+- This client has no freezer for old blocks and expires no history; the view says so.
+
+### System
+
+The meters are the JVM's own beans and the node's own counts, a reading every five seconds, ten minutes of them. A
+figure the JVM does not give (a CPU load on a platform with no such bean) reads `not given by this JVM` and its
+chart is a gap: it is never drawn as nothing.
+
+- **Charts.** CPU, the machine's CPU, the heap and GC are drawn against their limit (all the processors, the heap's
+  maximum, all of the time), so a quiet node's chart is low. A figure with no limit of its own (bytes a second,
+  threads) is drawn against the highest reading kept, which the caption gives.
+- **CPU** is this process's share of all the machine's processors; **Machine** is every process's, with the
+  one-minute load average. **Process** is the JVM's uptime, which is the node's, not the dashboard's.
+- **GC** counts the collectors that pause the node; a concurrent collector's background work is not a pause.
+- **Net in / Net out, Msg in / Msg out** are what the node's RLPx connections carried, counted in this process:
+  bytes as they were handed to and read from the sockets (after framing, encryption and compression, handshakes
+  included, TCP and IP headers not), and devp2p messages decoded and encoded (each side's Hello included; a message
+  that could not be decoded is not one). A write counted and then refused by the socket stays counted. Discovery's
+  UDP, DNS discovery, the RPC servers and the consensus client's link are not in them. The rate is over the last
+  five seconds.
+- Where the terminal has not a row for each meter, the last row counts the ones not shown.
+
+### Consensus layer and mining
+
+Two rows of the Overview exist for one chain family each, and each only where the status probe read its source:
+
+**Consensus layer (ETH, with the Engine API on a post-merge chain).** At 80×24 one row: the link and the last
+`forkchoiceUpdated` and `newPayload`, each with its age and the status the node answered. From 100×32 three rows: the
+same with the full method names; the head hash (first and last four digits), the safe and the finalized block numbers
+(`—` while the consensus layer has named none, or the node does not have the block's header yet), and the JWT
+authentication failures when there are any; and the payload counts.
+
+```
+ Consensus layer 🔗 connected · forkchoiceUpdated 4s ago (VALID) · newPayload 4s ago (VALID)
+   head 0x7b3e…a91c   safe 7,411,977   finalized 7,411,945
+   payloads 184,203 (VALID 184,199 · ACCEPTED 4 · INVALID 0)
+```
+
+At 80×24 it is one row, `CL      connected · forkchoice 4s (VALID) · payload 4s (VALID)`. The link is `waiting` (for
+its first `forkchoiceUpdated`) until that call comes, `connected` while the last is no more than 60 s old, and
+`DISCONNECTED` after that, with the age of the last call of each method. At the narrowest tier M, 100 columns, a
+`DISCONNECTED` row would be cut in the middle of a status, so it drops "ago". A panel with no second row (waiting, or
+at 80×24) says its failed JWT checks on the first (`· 3 auth failures`): a secret that does not match leaves the
+consensus layer waiting for ever, and the warning's text says how many (`no CL yet: no forkchoiceUpdated in 1m 5s (3
+JWT failures)`). The golden files `cl-{s,m,l}-{connected,waiting,disconnected}-{emoji,ascii}.txt` and
+`cl-m-100x32-disconnected-{emoji,ascii}.txt` have the states. The counts are the node's own, each status under its own count: until B-193 `engine_newpayload_invalid` counted an
+ACCEPTED payload (stored, not executed), and any status it did not know, with the INVALID ones; it now counts INVALID
+answers alone, and `engine_newpayload_accepted` the ACCEPTED ones. SYNCING is shown only when something counted it (no
+caller records one: this node answers a payload it cannot yet execute ACCEPTED).
+A payload the node already held is answered VALID without being recorded, so "last newPayload" does not move for it,
+which is why the newPayload alert needs a peer ahead of the node's head. With none recorded at all it counts from when
+the consensus layer was first seen, or from the node's start if that is later, so a consensus layer that attaches to a
+node that has been up for an hour is not measured against the hour.
+
+**Mining (ETC).** With the internal miner off, one row: `Mining  off`. `mining-enabled` gates the internal CPU miner
+only: `eth_getWork` and `eth_submitHashrate` still serve ethminer and pools, so a node that is being asked for work
+reads `Mining  off (internal) · external: 48.2 MH/s · getWork 1,204 (20/min)` (`none reported` when work is asked for
+and no hashrate has been submitted). With mining on, at 80×24 one row (hashrate and DAG); from
+100×32 two: the coinbase and the DAG, then the hashrate, blocks mined (and when the last was), stale shares and the
+`eth_getWork` count with its rate over the last minute.
+
+```
+ Mining  on · coinbase 0x4f2a0b9c…c91e · DAG epoch 364 ✓ loaded
+   Hashrate 48.2 MH/s · blocks mined 3 (last 2h 14m ago) · stale 0 · getWork 1,204 (20/min)
+```
+
+At 80×24 it is `Mining  on · 48.2 MH/s · DAG epoch 364 ✓ loaded`. The golden files
+`mining-{s,m,l}-{on,dag,off,no-hashrate}-{emoji,ascii}.txt` have the DAG being generated, mining off, and the warning.
+
+The DAG's epoch is the ECIP-1099 epoch (block number over 60,000 after Thanos): 364 at block 21.9M, where tools that
+count 30,000-block epochs say 731. A DAG that is being built shows its phase (`preparing` while the cache is made,
+`loading` from its file, `generating`), its percent and a spinner, the one thing in either panel that moves; under
+reduced motion or pause the spinner is a still dot. The hashrate is the last one submitted (`eth_submitHashrate`, or
+the internal miner); it never falls when a miner goes quiet, and a miner that never submits one shows `none reported`.
+The hashrate alert starts counting only once the DAG is loaded, as nothing is submitted while it is built. The panel
+has nothing of Olympia, a treasury or a base fee: Olympia is deferred on every chain.
+
+New series, read by the panel and exported on `/metrics` beside the ones that were there: `app_engine_newpayload_accepted`,
+`app_engine_auth_failures`, and `app_pow_dag_epoch` (`-1` before the first build), `app_pow_dag_phase` (0 not yet known,
+1 loading, 2 generating), `app_pow_dag_progress` and `app_pow_dag_loaded`. None of them has a tag.
+
+### Log tail and Recent strips
+
+The Logs view and the Recent strips read an appender of the TUI's own, `TUI-LOG-RING`, on the root logger: a
+lock-free ring of the newest `fukuii.tui.log-ring-size` lines (1000, at most 10,000) at `fukuii.tui.log-level` and
+above (`INFO`). A logger's own level in `logback.xml` applies first, so `DEBUG` shows only what the loggers already log at DEBUG. The
+ring is attached after the console appenders are suppressed and detached before they are restored, through the same
+teardown ladder that gives the terminal back, so the console and the log file get what they got before; if it cannot
+be attached, the TUI does not start and standard logging stays.
+
+The Overview's Recent strip shows the newest 6 lines at S, 10 at M and fills the rest of the screen at L. The Sync
+view's Recent (sync) strip keeps only the loggers under `com.chipprbots.ethereum.blockchain.sync`.
+
+### Peers columns
+
+| Tier | Columns |
+|------|---------|
+| S | id, direction, client, best block, age |
+| M | id, direction, address, client, best block, score, age |
+| L | id, direction, address, client, best block, score, trend, age (the Overview's top-8 table leaves out the address) |
+
+The client is the name and version from the peer's Hello (`CoreGeth/v1.12.19`), and the best block comes from the
+network peer manager (`GetHandshakedPeersCmd`). The score is the one `PeerScoringManager` last published to
+`NetworkMetrics` (three decimals); a peer with no score yet shows `—`, never 0. The trend compares it with the scores
+published before, at the same three decimals: `↑`, `↓` or `→`.
+
+Text that comes from outside the node (a client id, a log line, a failure's reason) is cleaned before it is drawn:
+escape sequences, control characters, zero-width and direction-override characters are removed, a multi-line text
+keeps its first line and an ellipsis, and the length is capped at 512 characters. With the ASCII glyph set it is drawn
+in ASCII only, in the same columns.
+
+### Graphics
+
+The TUI draws its pictures (the network icon, the mascot) in one of three modes over the same layout. A picture has
+the same cells in every mode, and nothing is only a picture: what it shows is also in the frame's text.
+
+| Mode | How it draws | Where |
+|------|--------------|-------|
+| `pixel` | Images, with the Kitty graphics protocol | A terminal that answers the protocol's query and reports its cell size: kitty, Ghostty |
+| `block` | The same art in half-block character cells, in the 256-colour palette | Any 256-colour terminal with a UTF-8 locale; tmux and screen |
+| `text` | No art: the words that stand for each picture | `NO_COLOR`, fewer than 256 colours |
+
+Pixel and block mode draw the text in the command-center colours, which are the palette the art is drawn in; text
+mode keeps the colours the terminal's depth chose (16, 256 or none).
+
+`fukuii.tui.graphics = auto` (the default) asks the terminal once at start, for at most half a second, and picks
+`pixel` if it answers, else `block`; under tmux or screen it picks `block` without asking. `FUKUII_TUI_GRAPHICS`
+overrides the setting, `V` switches while the TUI runs, and `:graphics <mode>` sets one by name. Asking for `pixel` on
+a terminal that cannot draw it gives `block`, and the footer and the log say why.
+
+The **mascot** stands in the corner of the Overview's Recent strip from 100×32 (the large one from 140×45, where the
+strip has the rows). It is a status lamp, and the words under it say the same: `starting`, `syncing`, `at head`,
+`warning`, `error`, `stalled`, and `synced` for the one celebration. It moves only in pixel mode under full motion;
+`P` and reduced motion stop it. Every image is removed from the terminal when the TUI leaves, by `Q`, `D`, Ctrl-C or
+a lost terminal.
+
+`:art` shows every sprite, a pose a page (`Up`/`Down` turn the page), in the mode on screen.
+`fukuii.tui.art-dir` (or `FUKUII_TUI_ART_DIR`) names a directory of sprite sheets to use instead of the shipped ones;
+`R` on the Art screen reads them again. A sheet that breaks
+[the contract](https://github.com/chippr-robotics/fukuii/blob/staging/specs/029-tui-command-center/contracts/art.md)
+is named in the log and on the Art screen and left out; its picture is drawn as words.
+
+### Mempool
+
+The pool is read whole only while the Mempool view itself is on screen (not under Help, nor under a screen opened
+over it, such as a transaction in the explorer), and at most once a second however short
+`status-poll-interval-ms` is. At every other time the dashboard asks the pool for its size alone, which copies
+nothing, so watching the node costs the pool nothing it would notice. The first frame after `4` therefore shows the
+count and says the pool is being read; the tiers, the flow and the list arrive with the next poll. A poll the pool
+does not answer keeps the last reading on screen, which says how old it is from three seconds; after five the view
+says it is reading again. With DEBUG logging the node logs one line when the whole-pool reading starts and one when
+it stops.
+
+- **The Mempool Radar** is the row labelled `Radar` and the four bars under it, one a tier.
+- **Tiers.** A transaction's fee is measured against the fee the node's own gas-price oracle would suggest
+  (`eth_maxPriorityFeePerGas` on a chain with a base fee, `eth_gasPrice` on one without): *low* is under half of it,
+  *normal* from half to one and a half times, *high* up to three times, *urgent* above that. The tier counts sum to
+  the pending count. The boundaries are in gwei however small the fees are. While the node has no fee to suggest,
+  no tier is drawn.
+- **Flow.** From one poll to the next the dashboard sees which transactions arrived and which left. One that left
+  while another from its sender with its nonce is pending was *replaced*; of the rest, one the node's transaction
+  index now holds was *mined*, and the others were *dropped*. At most 500 departures are looked up a poll; when more
+  leave at once (a full block out of a full pool) the rest are looked up in the next polls, and the row says how
+  many still wait, so the mined rate is late then, not low. A departure the index could not answer for is counted
+  as never told apart, not as dropped. The rates are over the last minute and need five seconds of watching;
+  before that the row says it is measuring. The replacements count from when the watch began, and the row says how
+  long ago that is: the watch starts again when the view is opened, or when the pool has gone unread for more than
+  five seconds.
+- **What the flow can and cannot see.** A transaction is counted as mined when it has left the pool and the index
+  holds it. The view reports what the pool does: where the pool keeps a transaction that a block already holds,
+  it is still pending here, and when the pool later lets it expire it counts under *expired unmined*, not as
+  mined. A node that follows the chain by regular sync without a consensus client does this today (B-270: the
+  batch import path does not tell the pool which transactions it imported), so on such a node *mined/s* reads low
+  and *expired unmined* reads high.
+- **Counters.** Refusals are named by the admission rule that refused (`Underpriced`, `AlreadyKnown`, `NonceTooLow`,
+  …). They count since the node started, whether or not the dashboard was looking. They are a lower bound: a peer's
+  transaction whose sender has no account, or whose nonce is not the next after the sender's pending ones, is
+  dropped without a named rule and is not counted. *Asked for* counts a hash a request, so a transaction asked of a
+  second peer after the first did not answer is two; *timed out* counts every request nobody answered.
+- **A pending transaction** opens like a mined one, by `Enter` on its row or `:tx <hash>`: the explorer reads the
+  node's index first and then the pool, and says which it found. A pending transaction has no receipt, and the
+  explorer says so. If the pool does not answer within a second the lookup fails and says that; it never reports a
+  transaction as absent because the pool was slow.
+
+### RPC
+
+Every figure on this view is the node's own count since it started, kept in process. Counting changes nothing a
+caller sees: each call is noted once it has ended, by code that cannot fail the call, and the Prometheus series are
+what they were (the per-method timer on `/metrics` is still recorded for successful calls only).
+
+- **Transports.** `listening` is what the server itself said when it bound its address; an enabled server that has
+  not said so is `enabled, not bound yet`, and one that said it could not bind, or that it closed, is
+  `NOT LISTENING`. HTTP and
+  WebSocket have no authentication of their own (HTTPS encrypts and authenticates no caller), IPC is restricted to
+  its socket file's owner, and the Engine API is authenticated by its JWT secret. The Engine row's calls are the
+  ones it passed on to JSON-RPC; its own are the monitor's. The exposure warning is the start-up warning's own rule: an enabled HTTP or WebSocket
+  endpoint that is not bound to loopback and serves `personal`, `debug`, `admin`, `qa`, `miner`, `test` or
+  `testing`.
+- **Methods.** A call is counted under its method and its transport, timed from the request to its answer, whether
+  it succeeded, was answered with an error, or failed. A method the node does not have is counted under `(no such
+  method)` whatever it was called, so a client that asks for names that do not exist fills no table; past 256
+  distinct methods the rest count under `(other methods)`. A percentile is read from a histogram of 72 buckets from
+  100 µs to 60 s and is within 10 % of the true value; one under 100 µs reads `<0.10 ms`. The time is from the request
+  reaching the controller to its answer being ready: writing the answer to the socket is not in it.
+- **What is not a call here.** `eth_subscribe` and `eth_unsubscribe`, which the WebSocket server answers itself; a
+  request the rate limit refused (counted on the `Limit` row instead); an IPC call cut off by its five-minute
+  timeout; and a handler that fails before it has started its work, which the node's own exception counter does
+  not see either. A call whose client went away is still counted: the node finishes it. Each element of a batch is
+  a call of its own, and the batch as a whole is not counted; with the rate limit on, a batch is refused outright
+  and is counted nowhere. The Engine transport's figures are the `eth_`, `net_` and `web3_` calls that came through
+  the Engine API's port; its `engine_` calls are the monitor's.
+- **The Engine Synchronization Monitor.** The marker on the link (`EL ───●──────── CL`) stands at the count of
+  calls: it moves one place for each call that arrived and stays where it is while none does. The consensus
+  client's name and version are what it sent in its own `engine_getClientVersionV1` call, cut to 64 characters and
+  stripped of control characters; until it has, the row says it has not said. `told` in the log is what the
+  consensus client was told: a payload status for `newPayload` and `forkchoiceUpdated`, `error <code>` for an error
+  answer, nothing for a method that answers neither. The log holds the last 256 calls. `built` counts the payloads
+  built at a `forkchoiceUpdated`; one built again with the pool of the moment when `getPayload` asks is not counted,
+  and may hold other transactions than the last-built figure says. A failed authentication is
+  counted under one of seven reasons (no bearer token, not a JWT, wrong signature, unsupported algorithm, no `iat`,
+  `iat` too far from now, malformed), never under anything the request carried. Noting a call takes about a third
+  of a microsecond, beside the answer and not in front of it (`EngineCallLogBenchmark`).
+- **The mining monitor.** The hashrate and the `eth_getWork` requests a minute, a reading about every five seconds,
+  120 of them. Each chart spans every reading kept, however few glyphs it has room for (a glyph is the highest of
+  the readings it stands for), against the highest of them all, and its caption says how long they span: about ten
+  minutes once the dashboard has run that long. A rate not known yet is a gap. The history is the dashboard's own,
+  kept from the gauges it already reads: it starts when the TUI does.
+
+### Ops
+
+The Ops view (`9`) is where the dashboard acts on the node. It lists every action with its class and what it
+changes, the actions that are running, the last attempts and how each ended, and what the dashboard does not offer,
+with the reason. `Up`/`Down` select an action and `a` puts it at the `:` prompt; every action can also be typed at
+the prompt from any view. The design is recorded in
+[OPS-004](../adr/operations/OPS-004-tui-operator-actions.md).
+
+Each action has a class, and the class sets how it is confirmed:
+
+| Class | Means | Confirmed by |
+|-------|-------|--------------|
+| Observe | Reads; changes nothing | Nothing: it runs |
+| Adjust | Changes a setting the opposite action puts back | A dialog with Cancel focused: `Tab` to Apply, then `Enter` |
+| Disrupt | Interrupts a peer, a server's callers, or reaches outside the node | A dialog answered with `Y` |
+| Halt | Ends something the process cannot start again | Typing `stop`, then `Enter` |
+
+A dialog shows a **preview** read from the node when it opens: the peer by id, client and address, the connections
+that will drop, the level a logger has now and will have. An action that cannot be done is refused in the preview,
+with the reason, and cannot be confirmed. The preview is read again every second: if what it says will change is
+different, the dialog starts again and says so, and a `Y` typed before that was read confirms nothing. A figure that
+moves by itself (a peer's age, the best block) is shown under the preview and restarts nothing.
+`Esc` or `N` cancels. Pasted text confirms nothing. On a screen too small to show the whole preview the dialog says
+so and cannot be confirmed.
+
+| Command | Class | What it does |
+|---------|-------|--------------|
+| `config [filter]` | Observe | The effective configuration under `fukuii`, as `key = value`. A value whose key holds a secret (a password, a key, a secret, a token) is hidden, and a URL is shown without its credentials. `/` filters |
+| `tunables` | Observe | What changes without a restart, as it is now, and the command that changes each |
+| `deps` | Observe | Each subsystem, what it depends on, and its health |
+| `test-rpc` | Observe | Calls `web3_clientVersion` on each JSON-RPC endpoint this node has enabled, from the node itself, and says what answered and how long it took. For the Engine API it checks that a request with no token is refused |
+| `net` | Observe | The listening address, the address the node advertises, the external address last detected, by which step and how long ago, and how many peers dialled in |
+| `loglevel <level> [logger]` | Adjust | Sets a logger's level until the node restarts; the root logger when none is named. A name no logger has is refused, with the nearest names. `loglevel reset` returns every changed logger to what it was |
+| `maxpeers <n>` | Adjust | The limit on outgoing peers, until restart. The incoming limit is not changed here |
+| `peer trust <id>`, `peer untrust <id>` | Adjust | A trusted peer is exempt from pruning. A peer that dialled this node cannot be trusted by id: the node has no address to keep for it |
+| `threshold <name> <value>` | Adjust | Where an alert begins, for this session; the preview names the alerts that would fire or clear at once and the configuration line that makes it permanent. `threshold reset` returns to the configuration |
+| `peer add <enode>` | Disrupt | The node dials the peer and keeps dialling it |
+| `peer drop <id>` | Disrupt | Disconnects a peer and stops dialling it; it may dial back. `a` on a peer in the Peers view types this |
+| `peer block <address>`, `peer unblock <address>` | Disrupt | Refuses an IP address, in both directions, until restart, and disconnects the peers at it |
+| `coinbase <address>` (ETC) | Disrupt | The address blocks mined from now on pay |
+| `rpc stop <http or ws>`, `rpc start <http or ws>` | Disrupt | Stops a JSON-RPC server: HTTP requests in flight finish, WebSocket connections are closed at once and their subscriptions dropped. `rpc start` binds it again. Only a server that was enabled when the node started can be started: the dashboard enables nothing |
+| `dbcheck` | Disrupt | The start-up database check, run now: it reads every thousandth block's number-to-hash entry and header, reports what is missing, and stops nothing. On a node that took its state by SNAP, or takes its blocks from a consensus client, it says the check means nothing there |
+| `detect-ip` | Disrupt | Asks the gateway and outside services for this node's address, and reports it. They see this node's address. It changes nothing the node advertises |
+| `bundle` | Disrupt | Writes a support bundle under `<datadir>/support/`: see below |
+| `mining stop` (ETC) | Halt | Stops the node's own miner. It cannot be started again until the node restarts. `a` on the RPC view of a mining node types this |
+| `quit` | Halt | Stops the node: see `Q` under [Keyboard Commands](#keyboard-commands) |
+
+`mining start` is listed and always refused: this client cannot start a miner that was off when the node started,
+or start one again after it was stopped.
+
+**Not offered.** Starting or restarting the node (the dashboard runs inside it); restarting the Engine API server,
+peer discovery or sync; reloading configuration from file; creating a snapshot; compacting the database (it would
+hold the database's lock, and so stop block import, for as long as it ran); changing the pruning mode or the state
+scheme. The Ops view lists each with its reason.
+
+**The support bundle** is a directory of text files for whoever is asked to look at the node: the build, the
+effective configuration with every secret hidden, the dashboard's log lines, the alerts and health checks, every
+view as text, the database's figures, a thread dump, and memory and garbage-collector figures. It holds no key, no
+keystore, no JWT secret, no state and no chain data. It does hold peer addresses and this node's id. It is readable
+by the node's user only, and it goes nowhere: sending it to anyone is up to the operator.
+
+**The audit trail.** Every attempt, confirmed or not, writes one INFO line from the logger `fukuii.tui.ops`:
+
+```
+action=peer drop params=id=ab12cd34ef567890 outcome=confirmed by=tui
+action=rpc stop params=transport=http outcome=cancelled by=tui
+action=mining start params= outcome=refused: the built-in miner was off when the node started... by=tui
+```
+
+**Read-only.** With `fukuii.tui.read-only = true` (or `FUKUII_TUI_READ_ONLY` set) only the Observe actions run. The
+Ops view says so, and anything else is refused with one line and no dialog.
+
+### Explorer
+
+`:block`, `:tx`, `:receipt` and `:account`, or `Enter` on a block of the observatory, open a screen with what the node
+holds: a block's header and transactions, a transaction, its receipt with its own gas and its logs, an account's
+balance, nonce and code size at the head. The rows that lead somewhere (a block's parent and transactions, a
+transaction's receipt and addresses, a receipt's logs) can be selected with `Up`/`Down` and opened with `Enter`;
+`Esc` goes back to the row it was opened from. A hash is always shown whole. What a screen shows is of the
+moment it was read (an account's balance is the head's of then): `R` reads the node again.
+
+The reading is done on a thread of the TUI's own, never on the one that draws: a lookup that takes more than two
+seconds says so, and `Esc` cancels it. What the node does not have is said in words: a block before the SNAP pivot
+has no body, a transaction that is not in the index was not imported by this node, an account cannot be read where
+the node does not hold the head's state.
 
 ## Keyboard Commands
 
-| Key | Action |
-|-----|--------|
-| `Q` | Quit the application |
-| `R` | Refresh/redraw the display |
-| `D` | Disable the console UI (switch to standard logging) |
+The same table Help draws (`Bindings.Global`). Every key that is an escape sequence has a single character that does
+the same, so a link that delivers no arrow keys loses nothing.
+
+| Key | Also | Action |
+|-----|------|--------|
+| `1` … `9` | | Overview, Chain, Peers, Mempool, RPC, Storage, System, Logs, Ops |
+| `]` `[` | | The next and the previous view (wrap) |
+| `Tab` `Shift-Tab` | | The next and the previous panel of the view |
+| `Up` `Down` | `K` `J` | The row above and below (Peers, Chain, Mempool: the selection; System: the health bar; Logs: a line) |
+| `Page Up` `Page Down` | `-` `+` | A page up and down (Logs: older and newer lines) |
+| `Home` `End` | `<` `>` | The first and the last row |
+| `Enter` | | Open the selected row (a peer's details, a block, a transaction, a health bar's checks) |
+| `A` | | Act on the selection: on a peer, `peer drop` for it; on the RPC view of a mining node, `mining stop`; on the Ops view, the selected action. It fills the prompt and runs nothing until `Enter` and the action's own confirmation |
+| `Esc` | `Backspace` | Back; clear the view's filter |
+| `:` | | The prompt: a view's name, `peer` or `peer <id>`, `block <number, hash or latest>`, `tx <hash>`, `receipt <hash>`, `account <address>`, `glyphs emoji` or `glyphs ascii`, `graphics auto`, `pixel`, `block` or `text`, `art`, `detach`, `quit`, `help`, and every action of the [Ops](#ops) view. `Tab` completes, `Up`/`Down` walk the history |
+| `/` | | Filter the list on screen as you type (Peers, Logs). `Enter` keeps the filter, `Esc` clears it |
+| `?` | `H` `F1` | Help over the current view; any key but `Q`, `R` and `D` returns |
+| `L` | | Logs |
+| `G` | | Switch the glyph set (emoji / ASCII); no column moves |
+| `V` | | Switch the graphics mode: pixel, block, text, as far as the terminal can; no text moves |
+| `P` | | Pause or resume the motion (the frame counter stops; polling continues) |
+| `R` | | Redraw the display (on the Art screen: read the sprite sheets again first) |
+| `D` | | Detach: the TUI closes and standard logging returns; the node keeps running |
+| `Q` | | **Ask** to stop the node: a dialog says what stops with it. Typing `stop` and then `Enter` stops it; `Esc` cancels. Nothing else answers it, pasted text included |
+| `Ctrl-C` | | Stop the node at once, as a signal |
+
+The startup splash lists the phases of the node's start (storage and genesis, the peer-to-peer network, the API
+servers, sync, the consistency checks), each marked done when the node reports it complete; its worm bar is the share
+of them done, and the row beside it names the phase under way. Nothing in it is timed: a node that takes long in a
+phase shows that phase. In pixel and block mode the badge stands where the logo does in text mode.
+
+When its time is over the dashboard takes the whole screen in one frame. Any key skips the startup splash, and does nothing else. A change of view cancels the catch-up celebration. Opening
+the Logs view shows its newest lines; while it is scrolled back, new lines arriving keep the lines on screen where
+they are.
+
+An arrow or a function key is an escape sequence. The TUI reads a sequence whole before deciding what it is: one it
+knows is a key, any other is nothing, so the tail of a sequence is never read as keys. Text pasted into the terminal
+arrives marked as a paste (bracketed paste) and goes to the prompt or a filter only: it cannot open a view, move a
+selection or answer a dialog. That holds where the terminal marks pastes: nearly all do. On one that does not
+(`tmux paste-buffer` without `-p`, some serial consoles), pasted text is indistinguishable from typing, and its
+characters are keys: `d` in it detaches, and `q` asks to stop the node, which a paste confirms only if it goes on to
+spell `stop` and a newline.
+
+With `fukuii.tui.read-only = true` (or `FUKUII_TUI_READ_ONLY` set) `Q` does not offer to stop the node, and says so;
+no action above Observe runs (see [Ops](#ops)). `Ctrl-C` still stops it.
 
 Commands are case-insensitive (both `q` and `Q` work).
 
@@ -133,33 +600,147 @@ All TUI code lives in `com.chipprbots.ethereum.console`:
 | Component | Role |
 |-----------|------|
 | `Tui` | Owns the terminal: raw mode, alternate screen, frame drawing, key input, teardown. Refuses dumb/non-TTY terminals so escape codes never land in a log stream. |
-| `TuiRenderer` | Pure function `TuiState × width × height → lines`. Every frame is exactly `height` rows of exactly `width` columns, so drawing it never scrolls or wraps; the command footer always stays on the bottom row. |
+| `TuiRenderer` | The compositor, a pure function `TuiState × width × height → lines`: header band, separator, alert row, the view's panels through `Layout`, footer. Every frame is exactly `height` rows of exactly `width` columns, so drawing it never scrolls or wraps; the footer always stays on the bottom row. |
 | `TuiState` | Immutable view model. Sync speed/ETA are measured from the first block the TUI observed (not from genesis). |
-| `TuiStatusProbe` | Polls the node: handshaked peers (`PeerManagerActor.GetPeersCmd`, same as `net_peerCount`), sync status (`SyncProtocol.GetStatus`, same as `eth_syncing`), local best block, and the latest SNAP progress sample. A slow actor shows as "Unresponsive" rather than freezing the display. |
-| `TuiUpdater` | Daemon thread looping poll → render → wait up to `updateIntervalMs` for a key. The key wait is the frame pacing. |
+| `TuiStatusProbe` | One poll of the node: handshaked peers with their id, address, direction and connection time (`PeerManagerActor.GetPeersCmd`, same as `net_peerCount`), sync status (`SyncProtocol.GetStatus`, same as `eth_syncing`), local best block, the latest SNAP progress sample, each peer's client id and best block (`NetworkPeerManagerActor.GetHandshakedPeersCmd`) and the txpool's size and blob count (`PendingTransactionsManager.GetPendingTransactionsReq`). All asks start together and share one 500 ms wait. It also reads, without an actor (`LocalSources`): disk free on the datadir, the JVM heap and GC time, `NetworkMetrics`' discovery counts and peer scores, the best header's timestamp, `SNAPSyncMetrics`' request counters and `RegularSyncMetrics`' last import; a failed reading leaves only its own field empty. |
+| `Sourced` | Each polled source's freshness: `Fresh`, `Stale` (it missed a wait; its last answer is kept), `Unresponsive` (it never answered, failed, or has been silent for 5 s). A slow actor degrades its own line only. |
+| `TuiProbeThread` | Daemon thread running the probe every `status-poll-interval-ms` and publishing the snapshot; it stops with the TUI. |
+| `TuiUpdater` | Daemon frame loop: count a frame (`tick`), take the latest snapshot, render, then wait for a key at the frame's pace: `animation-interval-ms` (250 ms) while anything on screen moves, 1 s otherwise. The key wait is the pacing, so a key is handled as it arrives. A frame equal to the last is not written. |
+| `Splash` | The startup splash, a view of the same renderer: the FUKUII logo by terminal size (`FukuiiBanner`, the literal the startup log prints) or the badge sprite, and the phases of the start as `StdNode.start` reports them (`StartupPhase`); skipped by any key. |
 | `TuiLogSuppressor` | Detaches the console appender while the TUI is active (file logging continues). |
+| `TuiLogRingAppender` | The log tail: an appender of its own on the root logger, a lock-free ring of the newest lines, sanitised on capture. Attached after the console is suppressed and detached before it is restored, through `Tui`'s teardown ladder. |
+| `Sanitize`, `TuiText.external` | Text from outside the node (client ids, log lines, failure reasons): no escape sequence or control character, one line, capped at 512 characters; at most four times that is read, whatever the text's length, so a peer's 16 MiB client id costs no more than a short one; ASCII only under the ASCII glyph set. |
+| `TuiView` | The views and their keys; Help is a flag over the current view (`TuiState.helpOpen`). |
+| `Layout`, `Panel` | Each view is a list of panels with minimum rows, preferred rows and a priority. `Layout.allocate` gives minimums in priority order (a panel whose minimum no longer fits is not drawn), then preferred rows, then the fill panel takes the rest; `Layout.columns` puts two row lists side by side, measured by columns. |
+| `panels/` | The panels of each view: `OverviewPanels`, `SyncPanels`, `PeersPanel`, `ChainPanel`, `LogsPanel` (with the Recent strips), `HelpPanel`, with shared rows (`Rows`, `ForkRows`). |
+| `Alerts` | The alert row's conditions, thresholds and severities (spec 027 research §2.3), measured on the snapshot's clock. |
+| `ChainFacts` | Chain id, PoW/PoS (from `networkType`) and the fork timeline (ETC: `MilestoneLog` names by block; ETH: `ForkTimestamps` by time), read for display only. |
 
 ### Lifecycle
 
 1. `Fukuii.main` sees `--tui`, validates config (errors are still printed to the console), then initializes the TUI and registers a JVM shutdown hook that restores the terminal.
-2. `StdNode.start()` → `startTuiUpdater()` wires the probe and starts the updater.
-3. `Q` exits the JVM; the node's shutdown hook stops the updater and restores the terminal. `D` restores the terminal and console logging and the node keeps running. `Ctrl-C` behaves as without the TUI.
+2. `StdNode.start()` starts the frame loop first (`startTuiFrames()`), so the splash moves while the node starts, then, once the actors it asks exist, the probe thread (`startTuiUpdater()`).
+3. `Q` restores the terminal, then exits the JVM; the node's shutdown hook stops the updater. `D` restores the terminal and console logging and the node keeps running. `Ctrl-C` behaves as without the TUI; the restore hook leaves the alternate screen even when JLine's own shutdown hook has closed the terminal first (JVM hooks run in no order), by writing the reset sequence to the process output.
+
+Motion (the worm's ripple, the `[ACTIVE]` pulse, spinners, the splash and the first catch-up's celebration) comes only from the frame counter; the renderer reads no clock. Settings under `fukuii.tui` (`conf/base/tui.conf`): `glyphs`, `animation-interval-ms`, `status-poll-interval-ms`, `reduced-motion`, `splash-ms`, `log-ring-size` and `log-level`; the environment overrides are `NO_COLOR`, `FUKUII_TUI_GLYPHS`, `FUKUII_TUI_MOTION` (`full` or `reduced`) and `FUKUII_TUI_NO_SPLASH`. Spec 027's closing task rewrites this page for the full dashboard.
 
 ### Testing
 
 `TuiSpec`, `TuiUpdaterSpec` and `TuiStatusProbeSpec` (under `src/test/.../console/`) drive the real classes against an in-memory xterm (`TuiTestTerminal`) and stub actors; `TuiRendererSpec` and `TuiStateSpec` cover layout and state.
 
-## Future Enhancements
+## Screens
 
-Potential improvements for future releases:
+Two frames as the dashboard draws them at 120×40 with the ASCII glyph set. They are the test suite's own reference
+frames (`src/test/resources/tui/golden/`), so they are what the code draws today. In pixel and block mode the badge,
+the chain's icon and the mascot are drawn as images over the same text; the concept images are in
+`specs/029-tui-command-center/mockups/` and the art in `specs/029-tui-command-center/art-preview/`.
 
-- **Additional Views**: Toggle between different information panels (logs, peers, transactions)
-- **Detailed Peer Info**: Show individual peer details
-- **Transaction Pool**: Display pending transaction count and details
-- **Mining Status**: Show mining statistics when enabled
-- **Configuration**: Terminal settings and color schemes
-- **Log Viewer**: Browse recent log entries in the UI
-- **Performance Metrics**: CPU, memory, disk usage
+The Chain view of an Ethereum Classic node at the head:
+
+```text
+ # FUKUII  etc (61) . PoW . head 21,884,102 . 41/50 peers . up 12d 7h                                             Chain
+------------------------------------------------------------------------------------------------------------------------
+ + no alerts
+                  | Peers   41/50 ##########  Block  21,884,102 (at head)                    Txpool  142
+                  | Sync    + at head
+                  |-----------------------------------------------------------------------------------------------------
+                  | Chain   etc . chain id 61 . PoW . forks by block number
+       ETC        |-----------------------------------------------------------------------------------------------------
+                  | Forks (block)
+                  |   + Frontier           block 0
+                  |   + Homestead          block 1,150,000
+ etc              |   + EIP-150            block 2,500,000
+ PoW . id 61      |   + EIP-155            block 3,000,000
+ main network     |   + EIP-160            block 3,000,000
+                  |   + DiffBomb-Pause     block 3,000,000
+ [1] Overview     |   + DiffBomb-Continue  block 5,000,000
+ [2] Chain        |   + DiffBomb-Removal   block 5,900,000
+ [3] Peers        |   + Atlantis           block 8,772,000
+ [4] Mempool      |   + Agharta            block 9,573,000
+ [5] RPC          |   + Phoenix            block 10,500,839
+ [6] Storage      |   + ECIP-1099          block 11,700,000
+ [7] System       |   + Magneto            block 13,189,133
+ [8] Logs         |   + Mystique           block 14,525,000
+ [9] Ops          |   + Spiral             block 19,250,000
+                  |   . Olympia            not scheduled on this network
+ graphics text    |
+                  |
+                  |
+                  |
+                  |
+                  |
+                  |
+                  |
+                  |
+                  |
+                  |
+                  |
+                  |
+                  |
+ 1-9 view  Enter open  Esc back  : prompt  / filter  ? help  p pause  r redraw  d detach  q quit
+```
+
+The Ops view with a database check running:
+
+```text
+ # FUKUII  etc (61) . PoW . head 21,884,102 . 41/50 peers . up 12d 7h                                               Ops
+------------------------------------------------------------------------------------------------------------------------
+ + no alerts
+                  | Peers   41/50 ##########  Block  21,884,102 (at head)                    Txpool  142
+                  | Sync    + at head
+                  |-----------------------------------------------------------------------------------------------------
+                  | Mode    actions allowed . each is confirmed in its dialog
+       ETC        | Running dbcheck . 42s . checked 12,000 of 21,480 sample points
+                  |-----------------------------------------------------------------------------------------------------
+                  | Actions 25, by what they can break . Up and Down select . Enter or a types one at the prompt
+                  |   Observe  config        the effective configuration, secrets hidden
+ etc              |   Observe  tunables      what changes without a restart, as it is now
+ PoW . id 61      |   Observe  deps          each subsystem, what it needs, its health
+ main network     |   Observe  test-rpc      calls each RPC endpoint here: answer and time
+                  |   Observe  net           listening and external addresses, inbound peers
+ [1] Overview     |   Observe  art           every sprite
+ [2] Chain        |   Observe  lookup        a block, a transaction, a receipt or an account
+ [3] Peers        |   Adjust   loglevel      a logger's level, until the node restarts
+ [4] Mempool      |   Adjust   maxpeers      the limit on outgoing peers, until restart
+ [5] RPC          |   Adjust   peer trust    a peer is trusted: exempt from pruning
+ [6] Storage      |   Adjust   peer untrust  a peer stops being trusted
+ [7] System       |   Adjust   threshold     where an alert begins, for this session
+ [8] Logs         |   Disrupt  peer add      the node dials a peer and keeps dialling it
+ [9] Ops          |   Disrupt  peer drop     a peer is disconnected; it may reconnect
+                  |   Disrupt  peer block    an address is refused until restart
+ graphics text    |   Disrupt  peer unblock  an address stops being refused
+                  |   Disrupt  mining start  the node's own miner starts (ETC)
+                  |   Disrupt  coinbase      the address mined blocks pay from now on (ETC)
+                  |   Disrupt  rpc stop      a JSON-RPC server stops; its connections drop
+                  |   Disrupt  rpc start     a server that was stopped here listens again
+                  |   Disrupt  dbcheck       the start's database check, run now; it reports
+                  |   Disrupt  detect-ip     asks outside services for this node's address
+                  |   Disrupt  bundle        writes a support bundle under the datadir
+                  |   Halt     mining stop   the node's own miner stops until restart (ETC)
+                  |   Halt     quit          the node process ends
+                  |-----------------------------------------------------------------------------------------------------
+                  | Last    4 attempts in this session, the newest first
+                  |   11:58:00Z  peer add enode=enode://ab12@203.0.113.7:30303  FAILED: the peer manager refused the ..
+                  |   … 3 older attempts not shown at this height
+ 1-9 view  Enter open  Esc back  : prompt  / filter  ? help  p pause  r redraw  d detach  q quit
+```
+
+## What changed from the first dashboard
+
+An operator who knew the dashboard of spec 027 will meet four differences:
+
+- **Nine views, not five.** `1` to `9`: Overview, Chain, Peers, Mempool, RPC, Storage, System, Logs, Ops.
+- **`Tab` moves between the panels of a view.** It used to move between views; `[` and `]` do that now.
+- **`Q` asks before it stops the node.** It used to stop it at once. `Ctrl-C` still does.
+- **Stopping takes the word.** The dialog `Q` opens is confirmed by typing `stop` and `Enter`, not by `Y`.
+
+## Not in the dashboard
+
+- Starting or restarting the node, reloading its configuration, compacting the database, creating a snapshot,
+  changing the pruning mode or the state scheme: the [Ops](#ops) view lists each with its reason.
+- Starting the built-in miner: this client cannot start one that was off or was stopped.
+- A time limit on an action of its own: each node function an action calls has one.
+- The state of a UPnP port mapping in `net`: the node does not record it.
 
 ## Troubleshooting
 
@@ -218,3 +799,4 @@ nohup ./bin/fukuii etc > fukuii.log 2>&1 &
 - [First Start Guide](../runbooks/first-start.md)
 - [Operations Runbooks](../runbooks/README.md)
 - [Metrics & Monitoring](../operations/metrics-and-monitoring.md)
+- Spec 027, TUI dashboard (`specs/027-tui-dashboard/` in the repository) — planned views, alert row, glyph sets and per-chain panels

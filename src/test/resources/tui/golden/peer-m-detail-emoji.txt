@@ -1,0 +1,40 @@
+ ◆ FUKUII  etc (61) · PoW · head 21,884,102 · 41/50 peers · up 12d 7h                                              Peer 
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+ ✓ no alerts                                                                                                            
+                  │ Peers   41/50 ◆◆◆◆◆◆◆◆◆◆  Block  21,884,102 (at head)                    Txpool  142                
+                  │ Sync    ✓ at head                                                                                   
+                  │─────────────────────────────────────────────────────────────────────────────────────────────────────
+                  │ Peer   Esc returns to the list                                                                      
+       ETC        │ Id      11a29b9b11a29b9b11a29b9b11a29b9b11a29b9b11a29b9b11a29b9b11a29b9b                            
+                  │         11a29b9b11a29b9b11a29b9b11a29b9b11a29b9b11a29b9b11a29b9b11a29b9b                            
+                  │ Address 203.0.113.36:30303                                                                          
+                  │ Dir     outbound: this node dialled it                                                              
+ etc              │ Age     connected 1h 43m ago                                                                        
+ PoW · id 61      │ Client  besu/v24.1.2/linux-x86_64/openjdk-java-21                                                   
+ main network     │ Best    21,884,100                                                                                  
+                  │ Score   0.930 ↓ falling                                                                             
+ [1] Overview     │ Latency 1,918 ms, the running average of its answers                                                
+ [2] Chain        │ Answers 118 answered, 2 timed out                                                                   
+ [3] Peers        │ Faults  no protocol violation                                                                       
+ [4] Mempool      │ Seen    last answered 31s ago                                                                       
+ [5] RPC          │                                                                                                     
+ [6] Storage      │                                                                                                     
+ [7] System       │                                                                                                     
+ [8] Logs         │                                                                                                     
+ [9] Ops          │                                                                                                     
+                  │                                                                                                     
+ graphics text    │                                                                                                     
+                  │                                                                                                     
+                  │                                                                                                     
+                  │                                                                                                     
+                  │                                                                                                     
+                  │                                                                                                     
+                  │                                                                                                     
+                  │                                                                                                     
+                  │                                                                                                     
+                  │                                                                                                     
+                  │                                                                                                     
+                  │                                                                                                     
+                  │                                                                                                     
+                  │                                                                                                     
+ 1-9 view  Enter open  Esc back  : prompt  / filter  ? help  p pause  r redraw  d detach  q quit                        

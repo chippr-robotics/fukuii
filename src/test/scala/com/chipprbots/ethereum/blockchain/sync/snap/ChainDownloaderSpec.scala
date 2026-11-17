@@ -274,6 +274,7 @@ class ChainDownloaderSpec
     val info = PeerInfo(status, status.chainWeight, forkAccepted = true, BigInt(1000), status.bestHash)
     val downloader = testKit.spawn(
       ChainDownloader(
+        headerChainCheck = HeaderChainCheck.LinkOnly,
         blockchainReader = storage.blockchainReader,
         blockchainWriter = storage.blockchainWriter,
         appStateStorage = storage.storagesInstance.storages.appStateStorage,
@@ -317,6 +318,139 @@ class ChainDownloaderSpec
     sent.message.underlyingMsg match
       case ETHPackets.GetBlockBodies(_, hashes) => hashes shouldBe Seq(header.hash.value)
       case other => fail(s"expected the deferred body to be requested on release, got $other")
+
+    testKit.stop(ps.downloader)
+  }
+
+  // spec 018 C5a (B-301): the window below a pivot. A sync that hands off on the unified state layout holds until the
+  // bodies of the pivot and the five below it are stored; nothing else fetches them while bodies are deferred.
+  it should "fetch the bodies it is asked for while bodies are deferred, and no other" taggedAs UnitTest in {
+    val first = BlockHelpers.generateBlock(BlockHelpers.genesis)
+    val second = BlockHelpers.generateBlock(first).header
+    val ps = peerSetup(
+      deferBodiesAndReceipts = true,
+      st =>
+        st.blockchainWriter.storeBlockHeader(first.header).and(st.blockchainWriter.storeBlockHeader(second)).commit()
+        st.storagesInstance.storages.appStateStorage.putBackfillBestHeader(BigInt(2)).commit()
+    )
+
+    ps.downloader ! ChainDownloader.Start(BigInt(2))
+    ps.downloader ! ChainDownloader.BoostConcurrency(4) // forces a synchronous dispatch
+    expectProgress(ps.downloader)
+    ps.networkPeerManager.msgAvailable shouldBe false
+
+    ps.downloader ! ChainDownloader.FetchBodies(Seq(second.hash.value))
+
+    val sent = ps.networkPeerManager.expectMsgType[NetworkPeerManagerActor.SendMessageCmd](5.seconds)
+    sent.message.underlyingMsg match
+      case ETHPackets.GetBlockBodies(_, hashes) => hashes shouldBe Seq(second.hash.value)
+      case other                                => fail(s"expected the body asked for to be requested, got $other")
+    withClue("the body of the block below it stays deferred: ") {
+      expectProgress(ps.downloader)
+      ps.networkPeerManager.msgAvailable shouldBe false
+    }
+
+    testKit.stop(ps.downloader)
+  }
+
+  it should "not ask again for a body that is on its way, that is stored, or whose header it does not hold" taggedAs UnitTest in {
+    val first = BlockHelpers.generateBlock(BlockHelpers.genesis)
+    val second = BlockHelpers.generateBlock(first).header
+    val unknown = ByteString(Array.fill[Byte](32)(9))
+    val ps = peerSetup(
+      deferBodiesAndReceipts = true,
+      st =>
+        // the first block whole, the second's header alone
+        st.blockchainWriter.storeBlock(first).and(st.blockchainWriter.storeBlockHeader(second)).commit()
+        st.storagesInstance.storages.appStateStorage.putBackfillBestHeader(BigInt(2)).commit()
+    )
+
+    ps.downloader ! ChainDownloader.Start(BigInt(2))
+    ps.downloader ! ChainDownloader.FetchBodies(Seq(second.hash.value, first.header.hash.value, unknown))
+    val sent = ps.networkPeerManager.expectMsgType[NetworkPeerManagerActor.SendMessageCmd](5.seconds)
+    sent.message.underlyingMsg match
+      case ETHPackets.GetBlockBodies(_, hashes) => hashes shouldBe Seq(second.hash.value)
+      case other                                => fail(s"expected one body to be requested, got $other")
+
+    // asked again while the request is in flight, as a hold's tick does
+    ps.downloader ! ChainDownloader.FetchBodies(Seq(second.hash.value, first.header.hash.value, unknown))
+    ps.downloader ! ChainDownloader.BoostConcurrency(4) // a dispatch: nothing is queued for it
+    withClue("the body on its way is not queued a second time: ")(expectProgress(ps.downloader).bodiesQueued shouldBe 0)
+    ps.networkPeerManager.msgAvailable shouldBe false
+
+    testKit.stop(ps.downloader)
+  }
+
+  it should "fetch the bodies of the target and the five below it first when bodies are released" taggedAs UnitTest in {
+    val chain =
+      Iterator.iterate(BlockHelpers.generateBlock(BlockHelpers.genesis))(BlockHelpers.generateBlock).take(9).toVector
+    chain.last.header.difficulty.value should be > BigInt(0)
+    val ps = peerSetup(
+      deferBodiesAndReceipts = true,
+      st =>
+        chain.foreach(block => st.blockchainWriter.storeBlockHeader(block.header).commit())
+        st.storagesInstance.storages.appStateStorage.putBackfillBestHeader(BigInt(9)).commit()
+    )
+
+    ps.downloader ! ChainDownloader.Start(BigInt(9))
+    ps.downloader ! ChainDownloader.ReleaseBodiesAndReceipts
+
+    val sent = ps.networkPeerManager.expectMsgType[NetworkPeerManagerActor.SendMessageCmd](5.seconds)
+    sent.message.underlyingMsg match
+      case ETHPackets.GetBlockBodies(_, hashes) =>
+        // a request takes five bodies (the test's batch): the window from the top, before any block from the bottom
+        hashes shouldBe chain.takeRight(5).reverse.map(_.header.hash.value)
+      case other => fail(s"expected bodies to be requested on release, got $other")
+
+    testKit.stop(ps.downloader)
+  }
+
+  it should "count the target and five below it as the window: the sixth is fetched before the lowest block" taggedAs UnitTest in {
+    val chain =
+      Iterator.iterate(BlockHelpers.generateBlock(BlockHelpers.genesis))(BlockHelpers.generateBlock).take(9).toVector
+    val ps = peerSetup(
+      deferBodiesAndReceipts = true,
+      st =>
+        // blocks 5 to 9 whole; of blocks 1 to 4 the headers alone. The window below 9 reaches down to 4.
+        chain.take(4).foreach(block => st.blockchainWriter.storeBlockHeader(block.header).commit())
+        chain.drop(4).foreach(block => st.blockchainWriter.storeBlock(block).commit())
+        st.storagesInstance.storages.appStateStorage.putBackfillBestHeader(BigInt(9)).commit()
+    )
+
+    ps.downloader ! ChainDownloader.Start(BigInt(9))
+    ps.downloader ! ChainDownloader.ReleaseBodiesAndReceipts
+
+    val sent = ps.networkPeerManager.expectMsgType[NetworkPeerManagerActor.SendMessageCmd](5.seconds)
+    sent.message.underlyingMsg match
+      case ETHPackets.GetBlockBodies(_, hashes) =>
+        hashes shouldBe (chain(3) +: chain.take(3)).map(_.header.hash.value)
+      case other => fail(s"expected bodies to be requested on release, got $other")
+
+    testKit.stop(ps.downloader)
+  }
+
+  it should "fetch from the lowest block at a release where the target has no difficulty: no ommers are checked above it" taggedAs UnitTest in {
+    val chain = BlockHelpers
+      .generateChain(
+        9,
+        BlockHelpers.genesis,
+        block => block.copy(header = block.header.copy(difficulty = com.chipprbots.ethereum.domain.Difficulty.Zero))
+      )
+      .toVector
+    val ps = peerSetup(
+      deferBodiesAndReceipts = true,
+      st =>
+        chain.foreach(block => st.blockchainWriter.storeBlockHeader(block.header).commit())
+        st.storagesInstance.storages.appStateStorage.putBackfillBestHeader(BigInt(9)).commit()
+    )
+
+    ps.downloader ! ChainDownloader.Start(BigInt(9))
+    ps.downloader ! ChainDownloader.ReleaseBodiesAndReceipts
+
+    val sent = ps.networkPeerManager.expectMsgType[NetworkPeerManagerActor.SendMessageCmd](5.seconds)
+    sent.message.underlyingMsg match
+      case ETHPackets.GetBlockBodies(_, hashes) => hashes shouldBe chain.take(5).map(_.header.hash.value)
+      case other                                => fail(s"expected bodies to be requested on release, got $other")
 
     testKit.stop(ps.downloader)
   }
@@ -564,6 +698,7 @@ class ChainDownloaderSpec
     val downloader: TypedActorRef[ChainDownloader.Command] = testKit
       .spawn(
         ChainDownloader(
+          headerChainCheck = HeaderChainCheck.LinkOnly,
           blockchainReader = storage.blockchainReader,
           blockchainWriter = storage.blockchainWriter,
           appStateStorage = appStateStorage,
@@ -663,6 +798,7 @@ class ChainDownloaderSpec
     val downloader: TypedActorRef[ChainDownloader.Command] = testKit
       .spawn(
         ChainDownloader(
+          headerChainCheck = HeaderChainCheck.LinkOnly,
           blockchainReader = storage.blockchainReader,
           blockchainWriter = storage.blockchainWriter,
           appStateStorage = appStateStorage,
@@ -778,6 +914,7 @@ class ChainDownloaderSpec
     val downloader: TypedActorRef[ChainDownloader.Command] = testKit
       .spawn(
         ChainDownloader(
+          headerChainCheck = HeaderChainCheck.LinkOnly,
           blockchainReader = storage.blockchainReader,
           blockchainWriter = storage.blockchainWriter,
           appStateStorage = appStateStorage,
@@ -929,6 +1066,7 @@ class ChainDownloaderSpec
     val downloader1: TypedActorRef[ChainDownloader.Command] = testKit
       .spawn(
         ChainDownloader(
+          headerChainCheck = HeaderChainCheck.LinkOnly,
           blockchainReader = storage.blockchainReader,
           blockchainWriter = storage.blockchainWriter,
           appStateStorage = appStateStorage,
@@ -1005,6 +1143,7 @@ class ChainDownloaderSpec
     val downloader2: TypedActorRef[ChainDownloader.Command] = testKit
       .spawn(
         ChainDownloader(
+          headerChainCheck = HeaderChainCheck.LinkOnly,
           blockchainReader = storage.blockchainReader,
           blockchainWriter = storage.blockchainWriter,
           appStateStorage = appStateStorage,
@@ -1089,6 +1228,7 @@ class ChainDownloaderSpec
     val downloader: TypedActorRef[ChainDownloader.Command] = testKit
       .spawn(
         ChainDownloader(
+          headerChainCheck = HeaderChainCheck.LinkOnly,
           blockchainReader = storage.blockchainReader,
           blockchainWriter = storage.blockchainWriter,
           appStateStorage = appStateStorage,
@@ -1183,6 +1323,7 @@ class ChainDownloaderSpec
     val downloader: TypedActorRef[ChainDownloader.Command] = testKit
       .spawn(
         ChainDownloader(
+          headerChainCheck = HeaderChainCheck.LinkOnly,
           blockchainReader = storage.blockchainReader,
           blockchainWriter = storage.blockchainWriter,
           appStateStorage = appStateStorage,
@@ -1292,6 +1433,7 @@ class ChainDownloaderSpec
     val downloader: TypedActorRef[ChainDownloader.Command] = testKit
       .spawn(
         ChainDownloader(
+          headerChainCheck = HeaderChainCheck.LinkOnly,
           blockchainReader = storage.blockchainReader,
           blockchainWriter = storage.blockchainWriter,
           appStateStorage = appStateStorage,
@@ -1419,6 +1561,7 @@ class ChainDownloaderSpec
     val downloader: TypedActorRef[ChainDownloader.Command] = testKit
       .spawn(
         ChainDownloader(
+          headerChainCheck = HeaderChainCheck.LinkOnly,
           blockchainReader = storage.blockchainReader,
           blockchainWriter = storage.blockchainWriter,
           appStateStorage = appStateStorage,
@@ -1521,6 +1664,7 @@ class ChainDownloaderSpec
     val downloader: TypedActorRef[ChainDownloader.Command] = testKit
       .spawn(
         ChainDownloader(
+          headerChainCheck = HeaderChainCheck.LinkOnly,
           blockchainReader = storage.blockchainReader,
           blockchainWriter = storage.blockchainWriter,
           appStateStorage = appStateStorage,
@@ -1638,6 +1782,7 @@ class ChainDownloaderSpec
     val downloader: TypedActorRef[ChainDownloader.Command] = testKit
       .spawn(
         ChainDownloader(
+          headerChainCheck = HeaderChainCheck.LinkOnly,
           blockchainReader = storage.blockchainReader,
           blockchainWriter = storage.blockchainWriter,
           appStateStorage = appStateStorage,
@@ -1773,6 +1918,7 @@ class ChainDownloaderSpec
     val downloader: TypedActorRef[ChainDownloader.Command] = testKit
       .spawn(
         ChainDownloader(
+          headerChainCheck = HeaderChainCheck.LinkOnly,
           blockchainReader = storage.blockchainReader,
           blockchainWriter = storage.blockchainWriter,
           appStateStorage = appStateStorage,
@@ -1889,6 +2035,7 @@ class ChainDownloaderSpec
     val downloader: TypedActorRef[ChainDownloader.Command] = testKit
       .spawn(
         ChainDownloader(
+          headerChainCheck = HeaderChainCheck.LinkOnly,
           blockchainReader = storage.blockchainReader,
           blockchainWriter = storage.blockchainWriter,
           appStateStorage = appStateStorage,
@@ -2106,6 +2253,7 @@ class ChainDownloaderSpec
     val downloader: TypedActorRef[ChainDownloader.Command] = testKit
       .spawn(
         ChainDownloader(
+          headerChainCheck = HeaderChainCheck.LinkOnly,
           blockchainReader = storage.blockchainReader,
           blockchainWriter = storage.blockchainWriter,
           appStateStorage = appStateStorage,
@@ -2180,10 +2328,16 @@ class ChainDownloaderSpec
       .expects(BigInt(1))
       .returning(None)
       .anyNumberOfTimes()
+    // The tip the download would extend (block 0 here): looked up when it starts.
+    blockchainReader.getBlockHeaderByNumber
+      .expects(BigInt(0))
+      .returning(None)
+      .anyNumberOfTimes()
 
     val downloader: TypedActorRef[ChainDownloader.Command] = testKit
       .spawn(
         ChainDownloader(
+          headerChainCheck = HeaderChainCheck.LinkOnly,
           blockchainReader = blockchainReader,
           blockchainWriter = blockchainWriter,
           appStateStorage = appStateStorage,
