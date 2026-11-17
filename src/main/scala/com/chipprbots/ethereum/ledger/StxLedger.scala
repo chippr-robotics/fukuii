@@ -19,10 +19,12 @@ import com.chipprbots.ethereum.domain.SetCodeAuthorization
 import com.chipprbots.ethereum.domain.SetCodeTransaction
 import com.chipprbots.ethereum.domain.SignedTransactionWithSender
 import com.chipprbots.ethereum.domain.Transaction
+import com.chipprbots.ethereum.domain.TransactionWithAccessList
 import com.chipprbots.ethereum.domain.TransactionWithDynamicFee
 import com.chipprbots.ethereum.domain.UInt256
 import com.chipprbots.ethereum.mpt.MptNode
 import com.chipprbots.ethereum.nodebuilder.BlockchainConfigBuilder
+import com.chipprbots.ethereum.transactions.TxTypeGate
 import com.chipprbots.ethereum.vm.CodeStoreOutOfGas
 import com.chipprbots.ethereum.vm.EvmConfig
 import com.chipprbots.ethereum.vm.ExecutionTracer
@@ -344,7 +346,12 @@ class StxLedger(
       hi <- affordableCeiling(stx, world1)
       stxHi = withGas(stx, hi)
       _ <- callPreCheck(stxHi, blockHeader, world1, options).left.map { e =>
-        if e.gasShortfall then PreCheck(s"gas required exceeds allowance ($hi)") else PreCheck(e.message)
+        // the refusal of a type the block does not admit comes back as "failed with %d gas: %w" (execution-apis
+        // estimate-fork-inactive-access-list); the other refusals keep geth's bare message
+        if e.gasShortfall then PreCheck(s"gas required exceeds allowance ($hi)")
+        else if e.message.startsWith(StxLedger.TypeNotSupportedPrefix) then
+          PreCheck(s"failed with $hi gas: ${e.message}")
+        else PreCheck(e.message)
       }
       atHi = runCallFrame(stxHi, blockHeader, world1, options, tracer = None)._1
       // gasestimator.Estimate (gasestimator.go:139-143): a failure at the ceiling that is not out-of-gas is the answer
@@ -477,6 +484,19 @@ class StxLedger(
             )
           else Right(())
         case _ => Right(())
+      // a type this block does not admit (state_transition.go preCheck: ErrTxTypeNotSupported), after London and before
+      // the blob and set-code checks, as geth orders them. The message is the access list / blob / set-code message
+      // carried by the synthetic transaction, whose type CallTxBuilder chose from the fields the caller gave.
+      _ <-
+        val active = TxTypeGate.activeTypes(blockHeader)
+        val unsupported: Option[String] = tx match
+          case _: TransactionWithAccessList if !active.contains(Transaction.Type01) => Some("access list tx")
+          case _: BlobTransaction if !active.contains(Transaction.Type03)           => Some("blob tx")
+          case _: SetCodeTransaction if !active.contains(Transaction.Type04)        => Some("setcode tx")
+          case _                                                                    => None
+        unsupported.fold[Either[StxLedger.CallPreCheckError, Unit]](Right(()))(name =>
+          Left(E(s"${StxLedger.TypeNotSupportedPrefix}: $name (sender $address)"))
+        )
       _ <- tx match
         case bt: BlobTransaction =>
           val badVersion = bt.blobVersionedHashes.zipWithIndex.collectFirst {
@@ -718,6 +738,9 @@ object StxLedger:
 
     /** Failed at the highest gas tried for a reason other than gas (geth returns `result.Err`). -32000. */
     case Failed(error: ProgramError)
+
+  /** geth `core.ErrTxTypeNotSupported`. */
+  val TypeNotSupportedPrefix: String = "transaction type not supported"
 
   /** EIP-7594 (Osaka) per-transaction blob limit, go-ethereum `params.BlobTxMaxBlobs`. */
   val BlobTxMaxBlobs: Int = 6

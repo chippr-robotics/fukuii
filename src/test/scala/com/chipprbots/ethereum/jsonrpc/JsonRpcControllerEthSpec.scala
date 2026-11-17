@@ -892,8 +892,12 @@ class JsonRpcControllerEthSpec
 
     val expectedDecodedRequest: GetProofRequest = GetProofRequest(
       address = Address(address),
-      storageKeys =
-        List(StorageProofKey(BigInt("39309028074332508661983559455579427211983204215636056653337583610388178777121"))),
+      storageKeys = List(
+        StorageProofKey(
+          BigInt("39309028074332508661983559455579427211983204215636056653337583610388178777121"),
+          fixed32 = true
+        )
+      ),
       blockNumber = BlockParam.Latest
     )
     val expectedEncodedResponse: GetProofResponse = GetProofResponse(

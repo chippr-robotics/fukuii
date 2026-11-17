@@ -15,6 +15,7 @@ import com.chipprbots.ethereum.blockchain.sync.SyncProtocol
 import com.chipprbots.ethereum.blockchain.sync.SyncProtocol.Status
 import com.chipprbots.ethereum.blockchain.sync.SyncProtocol.Status.Progress
 import com.chipprbots.ethereum.consensus.mining.Mining
+import com.chipprbots.ethereum.crypto.ECDSASignature
 import com.chipprbots.ethereum.domain.*
 import com.chipprbots.ethereum.forkid.ForkId
 import com.chipprbots.ethereum.jsonrpc.AkkaTaskOps.*
@@ -520,8 +521,12 @@ class EthInfoService(
             blockchainConfig
           )
           sender = first.stx.senderAddress
-          excluded = accessListExclusions(req.tx, sender, first.header, world)
-          result <- accessListFixedPoint(req.tx, header, gas, world, relocations, excluded)
+          // geth `AccessList` reads the sender's nonce from the state when the call gives none; only the hash that a
+          // refused run reports sees it
+          args = req.tx
+            .copy(nonce = req.tx.nonce.orElse(Some(world.getAccount(sender).fold(BigInt(0))(_.nonce.toBigInt))))
+          excluded = accessListExclusions(args, sender, first.header, world)
+          result <- accessListFixedPoint(args, header, gas, world, relocations, excluded)
         yield result
       }
       .recover { case _: MissingNodeException =>
@@ -547,7 +552,7 @@ class EthInfoService(
         r <- stxLedger
           .simulateCall(msg.stx, msg.header, world, msg.options, Some(tracer))
           .left
-          .map(e => JsonRpcError.LogicError(s"failed to apply transaction: ${msg.stx.tx.hash.toHex} err: ${e.message}"))
+          .map(e => JsonRpcError.LogicError(s"failed to apply transaction: ${refusedTxHash(msg)} err: ${e.message}"))
       yield (msg, r)
       step match
         case Left(e) => Left(e)
@@ -564,6 +569,18 @@ class EthInfoService(
           Left(JsonRpcError.LogicError(s"access list did not converge after $MaxAccessListIterations runs"))
         case Right(_) => loop(tracer, iteration + 1)
     loop(new AccessListTracer(args.accessList.getOrElse(Nil), excluded), 0)
+
+  /** The hash geth names in "failed to apply transaction": `args.ToTransaction(types.LegacyTxType).Hash()`, the hash of
+    * the unsigned transaction of the call's own type. An access list alone does not change that type (the execution-
+    * apis `create-al-fork-inactive` hash is the legacy one, though the refused message carries the list), so the list
+    * the loop adds is left out; a dynamic-fee, blob or set-code message is hashed as it is.
+    */
+  private def refusedTxHash(msg: CallTxBuilder.CallMessage): String =
+    msg.stx.tx.tx match
+      case t: TransactionWithAccessList =>
+        val legacy = LegacyTransaction(t.nonce, t.gasPrice, t.gasLimit, t.receivingAddress, t.value, t.payload)
+        "0x" + SignedTransaction(legacy, ECDSASignature(0, 0, 0)).hash.toHex
+      case _ => "0x" + msg.stx.tx.hash.toHex
 
   /** geth `AccessList`: the sender, the recipient (or the created contract), the active precompiles and the authorities
     * of the call's authorization list.
