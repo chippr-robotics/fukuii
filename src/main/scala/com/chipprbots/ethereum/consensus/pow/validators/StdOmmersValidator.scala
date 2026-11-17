@@ -4,6 +4,7 @@ import org.apache.pekko.util.ByteString
 
 import com.chipprbots.ethereum.consensus.mining.GetBlockHeaderByHash
 import com.chipprbots.ethereum.consensus.mining.GetNBlocksBack
+import com.chipprbots.ethereum.consensus.mining.OmmerAncestor
 import com.chipprbots.ethereum.consensus.pow.validators.OmmersValidator.OmmersError
 import com.chipprbots.ethereum.consensus.pow.validators.OmmersValidator.OmmersError.*
 import com.chipprbots.ethereum.consensus.pow.validators.OmmersValidator.OmmersValid
@@ -11,7 +12,6 @@ import com.chipprbots.ethereum.consensus.validators.BlockHeaderError
 import com.chipprbots.ethereum.consensus.validators.BlockHeaderValid
 import com.chipprbots.ethereum.consensus.validators.BlockHeaderValidator
 import com.chipprbots.ethereum.db.storage.pathstate.AncestorNotStored
-import com.chipprbots.ethereum.domain.Block
 import com.chipprbots.ethereum.domain.BlockHash
 import com.chipprbots.ethereum.domain.BlockHeader
 import com.chipprbots.ethereum.utils.BlockchainConfig
@@ -20,6 +20,11 @@ class StdOmmersValidator(blockHeaderValidator: BlockHeaderValidator) extends Omm
 
   val OmmerGenerationLimit: Int = 6 // Stated on section 11.1, eq. (143) of the YP
   val OmmerSizeLimit: Int = 2
+
+  /** How many ancestors' bodies the used-before rule reads, at most: see [[collectOmmersFromAncestors]]. A test reads
+    * all six, the rule before B-302, to pin that the verdicts are the same.
+    */
+  protected def usedBeforeDepth: Int = OmmerGenerationLimit - 1
 
   /** This method allows validating the ommers of a Block. It performs the following validations (stated on section 11.1
     * of the YP):
@@ -177,23 +182,44 @@ class StdOmmersValidator(blockHeaderValidator: BlockHeaderValidator) extends Omm
   ): Seq[BlockHeader] =
     ancestorsOf(parentHash, blockNumber, getNBlocksBack).map(_.header)
 
+  /** The ommers the ancestors used that an ommer of this block could be (B-302, forge W3). An ommer of block `N` has
+    * its parent among `N - 2` down to `N - 7`, so it is of a height from `N - 6` to `N - 1`; an ancestor `A` used
+    * ommers of heights `A - 6` to `A - 1`. Only the ancestors from `N - 1` down to `N - 5` can have used one of a
+    * height this block's could have: their bodies are read, where they have ommers at all, and the sixth's is not. An
+    * ommer is a whole header, equal only to itself, so the verdicts are the ones a read of all six bodies gives.
+    */
   private def collectOmmersFromAncestors(
       parentHash: ByteString,
       blockNumber: BigInt,
       getNBlocksBack: GetNBlocksBack
   ): Seq[BlockHeader] =
-    ancestorsOf(parentHash, blockNumber, getNBlocksBack).flatMap(_.body.uncleNodesList)
+    val ancestors = ancestorsOf(parentHash, blockNumber, getNBlocksBack)
+    ancestors.filter(_.header.number.value >= blockNumber - usedBeforeDepth).flatMap { ancestor =>
+      ancestor.ommers.getOrElse(
+        throw new AncestorNotStored(
+          ancestors.size,
+          ancestors.count(_.ommers.isDefined),
+          s"block $blockNumber cannot be checked until the body of block ${ancestor.header.number}, which has " +
+            "ommers, is stored"
+        )
+      )
+    }
 
   /** The blocks the ommers are checked against: the parent and the blocks before it, six of them or as many as there
-    * are down to the genesis. '''All of them, or no verdict''': with fewer, an ommer whose parent is one of the missing
-    * blocks reads as `OmmerParentIsNotAncestorError` and one a missing block used reads as new, so a valid block would
-    * be refused and an invalid one accepted. That is this node's own gap (the bodies below a SNAP pivot arrive after
-    * the hand-off), never the block's: it is thrown as a [[AncestorNotStored]], which an import takes for a fault of
-    * this node and tries again, in a batch and for a single block, and a block builder for a reason to take no ommers
-    * (B-283, forge).
+    * are down to the genesis, by their headers; the bodies are read only where the rules need them
+    * ([[collectOmmersFromAncestors]]). '''All of them, or no verdict''': with fewer, an ommer whose parent is one of
+    * the missing blocks reads as `OmmerParentIsNotAncestorError` and one a missing block used reads as new, so a valid
+    * block would be refused and an invalid one accepted. That is this node's own gap (the bodies below a SNAP pivot
+    * arrive after the hand-off), never the block's: it is thrown as a [[AncestorNotStored]], which an import takes for
+    * a fault of this node and tries again, in a batch and for a single block, and a block builder for a reason to take
+    * no ommers (B-283, forge).
     */
-  @throws[AncestorNotStored]("when this node does not hold all of the ancestors whole")
-  private def ancestorsOf(parentHash: ByteString, blockNumber: BigInt, getNBlocksBack: GetNBlocksBack): Seq[Block] =
+  @throws[AncestorNotStored]("when this node does not hold the headers of all of the ancestors")
+  private def ancestorsOf(
+      parentHash: ByteString,
+      blockNumber: BigInt,
+      getNBlocksBack: GetNBlocksBack
+  ): Seq[OmmerAncestor] =
     val wanted = blockNumber.min(OmmerGenerationLimit).toInt
     val ancestors = getNBlocksBack(parentHash, wanted)
     if ancestors.size < wanted then

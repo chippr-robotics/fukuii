@@ -843,9 +843,10 @@ final private class BlockImporterLogic(
 
   /** If `fault` is a window of ancestors this node does not hold whole below `block`, what of it is missing is looked
     * up, and the bodies, if that is what is missing, are asked for (B-301). The ommers of a PoW block are checked
-    * against its parent and the five blocks below it, header and body; after a SNAP sync the bodies may not be stored,
-    * and nothing else fetches them when the node was restarted straight into regular sync. Called on the import's
-    * thread: it only reads, and asks the importer, on its own thread, for the fetch.
+    * against the headers of its parent and the five blocks below it, and the bodies of the nearest five that have
+    * ommers (B-302); after a SNAP sync the bodies may not be stored, and nothing else fetches them when the node was
+    * restarted straight into regular sync. Called on the import's thread: it only reads, and asks the importer, on its
+    * own thread, for the fetch.
     *
     * A header missing from that window is logged and nothing is fetched: a body cannot be checked without its header. A
     * header missing further down, which the ommers' check does not read, does not stop the fetch.
