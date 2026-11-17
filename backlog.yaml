@@ -506,7 +506,7 @@ items:
   - id: B-072
     title: "Re-validate #1727's eth_simulateV1 fixes against geth on Ephemery (the simulate-165 harness)"
     priority: P2
-    status: claimed
+    status: open
     area: rpc
     size: M
     opened: 2026-11-07
@@ -514,12 +514,9 @@ items:
     links:
       issues: [1727]
     depends_on: [B-006]
-    claim:
-      by: dev-node
-      agent: main
-      since: 2026-11-07T00:00:00Z
-      heartbeat: 2026-11-09T18:55:42Z
-    notes: Ask on the PR and dev-node runs its jar; SIM_DANGEROUS=1 gates two cases that wedge an unfixed node.
+    notes: |-
+      Ask on the PR and dev-node runs its jar; SIM_DANGEROUS=1 gates two cases that wedge an unfixed node.
+      2026-11-17 released by cloud-retro (expired claim of dev-node): claim expired (heartbeat 2026-11-09), no work recorded
   - id: B-073
     title: "Mordor testing and gates: checkpoint archive to the NAS, T062-style gate runs for the unified layout (path-live, C6)"
     priority: P1
