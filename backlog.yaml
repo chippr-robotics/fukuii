@@ -2544,21 +2544,18 @@ items:
   - id: B-332
     title: "SNAP bytecode replies complete with 0 items: the coordinator's release ends a valid reply, so no peer credit and the rate tracker sees 0"
     priority: P1
-    status: review
+    status: done
     area: snap
     opened: 2026-11-17
+    closed: 2026-11-17
     refs: []
     links:
       prs: [1883, 1889]
       spec: "027"
       branch: fix/snap-b332-bytecode-credit
-    claim:
-      by: cloud-retro
-      agent: herald
-      since: 2026-11-17T17:51:51Z
-      heartbeat: 2026-11-17T18:09:02Z
-      branch: fix/snap-b332-bytecode-credit
-    notes: "Copilot on #1883, verified: forwardResponse routes SNAP.ByteCodes to the coordinator, so ByteCodeWorker's ByteCodesResponseMsg arm is dead in production; since #1782 (spec 027 slice 4a). In v0.12.0; fix in 0.12.1"
+    notes: |-
+      Copilot on #1883, verified: forwardResponse routes SNAP.ByteCodes to the coordinator, so ByteCodeWorker's ByteCodesResponseMsg arm is dead in production; since #1782 (spec 027 slice 4a). In v0.12.0; fix in 0.12.1
+      2026-11-17 done: Merged 2026-11-17; the coordinator completes a validated ByteCodes reply with its item count
   - id: B-333
     title: "Sprint retro skill (fukuii-sprint-retro) and the 0.12.1 retro: agent evals, A/B-tested agent edits, backlog prune"
     priority: P2
