@@ -51,6 +51,7 @@ object NodeStatusResource:
           )
         case SyncProtocol.Status.SyncDone   => (false, """"synced"""")
         case SyncProtocol.Status.NotSyncing => (false, """"not_syncing"""")
+        case SyncProtocol.Status.Stopped(_) => (false, """"stopped"""")
       s"""{
         |  "running": true,
         |  "syncing": $syncing,
@@ -137,6 +138,16 @@ object SyncStatusResource:
             |  "mode": "idle",
             |  "bestBlock": $bestBlock,
             |  "status": "not_syncing"
+            |}""".stripMargin
+          case SyncProtocol.Status.Stopped(reason) =>
+            s"""{
+            |  "syncing": false,
+            |  "mode": "stopped",
+            |  "bestBlock": $bestBlock,
+            |  "status": "stopped",
+            |  "reason": ${org.json4s.native.JsonMethods.compact(
+                org.json4s.native.JsonMethods.render(org.json4s.JString(reason))
+              )}
             |}""".stripMargin
       }
 

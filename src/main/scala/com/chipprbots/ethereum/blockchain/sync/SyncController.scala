@@ -757,6 +757,18 @@ object SyncController:
         case _                                        => Behaviors.unhandled
     }
 
+    /** A sync that stopped for good (B-319, beacon on #1873): its children are stopped, and it answers what asks after
+      * the sync with why, so that `eth_syncing`, the admin and MCP status calls say so rather than time out. Everything
+      * else is dropped: nothing is synced until the node is started again.
+      */
+    def stoppedFor(reason: String): Behavior[Command] = Behaviors.receive { (_, cmd) =>
+      unwrap(cmd) match
+        case msg: SyncProtocol.GetStatus =>
+          msg.replyTo ! SyncProtocol.Status.Stopped(reason)
+          Behaviors.same
+        case _ => Behaviors.same
+    }
+
     def runningSnapSync(snapSync: TypedActorRef[SNAPSyncController.Command]): Behavior[Command] = Behaviors.receive {
       (_, cmd) =>
         val msg = unwrap(cmd)
@@ -946,7 +958,10 @@ object SyncController:
                     "again does not mend that. Not restarting: the sync controller stops. A restart of the node " +
                     "begins the count again."
                 )
-                Behaviors.stopped
+                stoppedFor(
+                  s"the hand-off's sample stopped the sync $n times since the last hand-off, the last at pivot " +
+                    s"$pivot for ${reason.text} ($what); restart the node to sync again"
+                )
 
           case SyncProtocol.HealingImpossible | SyncProtocol.PivotOffTheBranch =>
             restartSnapAfterFailedFinalization(snapSync)

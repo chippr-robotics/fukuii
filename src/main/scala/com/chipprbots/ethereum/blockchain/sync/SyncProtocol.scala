@@ -138,6 +138,7 @@ object SyncProtocol:
       case Status.Syncing(_, _, _) => true
       case Status.NotSyncing       => false
       case Status.SyncDone         => false
+      case Status.Stopped(_)       => false
 
     def notSyncing: Boolean = !syncing
   object Status:
@@ -154,3 +155,6 @@ object SyncProtocol:
 
     case object NotSyncing extends Status
     case object SyncDone extends Status
+
+    /** The sync stopped and will not go on until the node is started again (B-319): why, for the operator. */
+    final case class Stopped(reason: String) extends Status
