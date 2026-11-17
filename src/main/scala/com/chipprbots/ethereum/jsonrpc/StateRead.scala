@@ -1,6 +1,8 @@
 package com.chipprbots.ethereum.jsonrpc
 
 import cats.effect.IO
+import cats.effect.SyncIO
+import cats.effect.std.Semaphore
 
 import scala.annotation.tailrec
 
@@ -82,8 +84,22 @@ object StateRead extends Logger:
     */
   def scoped[A](body: => A): A = ReadScope.run(body)
 
-  /** `IO { scoped { body } }`: for the synchronous body of a method that takes a block's state and executes on it. */
-  def reading[A](body: => A): IO[A] = IO(scoped(body))
+  /** How many [[reading]] bodies run at once: one per core. A trace or a simulation runs for seconds, and on the
+    * blocking pool, which has no bound of its own; a body beyond these waits for a permit, and is not refused.
+    */
+  val ReadingPermits: Int = math.max(2, Runtime.getRuntime.availableProcessors)
+
+  private lazy val readingPermits: Semaphore[IO] = Semaphore.in[SyncIO, IO](ReadingPermits.toLong).unsafeRunSync()
+
+  /** The permits free, or, when negative, how many bodies wait for one: for a test. */
+  private[jsonrpc] def readingPermitsCount: IO[Long] = readingPermits.count
+
+  /** `scoped { body }` on a thread of the blocking pool, holding one of [[ReadingPermits]] permits: for the synchronous
+    * body of a method that takes a block's state and executes on it. The body runs for as long as an execution or a
+    * trace does, which on the compute pool would hold back block import; all of it runs on one thread, which the scope
+    * is ([[scoped]]).
+    */
+  def reading[A](body: => A): IO[A] = readingPermits.permit.surround(IO.blocking(scoped(body)))
 
   /** A whole request that executes on a block's state and changes nothing but its answer (`eth_call`, a simulation, a
     * trace). It builds a world and holds it across many reads, so no single read can be run again on its own: when the
