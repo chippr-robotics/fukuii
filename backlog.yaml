@@ -3579,6 +3579,12 @@ items:
     links:
       spec: 018
     depends_on: [B-064]
+    claim:
+      by: cloud-dc960fdc
+      agent: main
+      since: 2026-11-17T03:42:34Z
+      heartbeat: 2026-11-17T03:42:34Z
+      branch: fix/018-c5a-part10
     notes: |-
       forge, 2026-11-16 (while confirming T166 is not applicable). SyncController.scala ~646-650 still holds ETC's SNAP to StorageScheme.Hash, and no code under blockchain/sync refers to PathStateStorage: the hand-off (SyncHandoff) is not wired into the controller yet (C5a part 10). PathStateStorage.clearForResync range-deletes CF t, u, v, the SNAP progress, the healing queue and the flat copies; it does not clear CF n (hash-keyed nodes) nor HealingFrontierNamespace, which the unified layout holds empty. If a SNAP on the guard wrote CF n, a clear for an escalation would leave stale hash-keyed nodes that the sync after it takes for present. Part 10 must make SNAP on the guard write positions only on both chains, and assert CF n is empty at a clear (or clear it too). Gate on C5a part 10.
       2026-11-17 blocked: Design done with forge and vault (lane 3); waiting on the orchestrator: Q1 refuse CF n writes on the guard now / in part 10 / never; Q2 (user) FR-020 narrowed to the hash layout; Q3 (user) a Mordor Path sync gate on part 10; and who codes it. Lane 3's sends to the orchestrator are refused (trusted-device check).
