@@ -254,7 +254,7 @@ class AmsterdamTraceReplaySpec extends AnyFlatSpec with Matchers with AmsterdamF
       val before: InMemoryWorldStateProxy = ledger.advanceWorldToTx(header, stxs, 1, parentHeader)
       ledger.replayTransaction(stxs(1), header, before, tracer = None).worldState.getCode(Address(authority)) shouldBe
         addressToDelegation(Stop)
-      ledger.simulateTransaction(stxs(1), header, Some(before)).worldState.getCode(Address(authority)) shouldBe
+      ledger.simulateTransaction(stxs(1), header, before).worldState.getCode(Address(authority)) shouldBe
         ByteString.empty
     )
 
@@ -282,7 +282,7 @@ class AmsterdamTraceReplaySpec extends AnyFlatSpec with Matchers with AmsterdamF
     val stxs: Seq[SignedTransactionWithSender] = withSenders(txs)
     val world: InMemoryWorldStateProxy = ledger.advanceWorldToTx(header, stxs, 0, parentHeader)
     ledger.replayTransaction(stxs.head, header, world, tracer = None).gasUsed shouldBe BigInt(79000)
-    ledger.simulateTransaction(stxs.head, header, Some(world)).gasUsed shouldBe BigInt(31000)
+    ledger.simulateTransaction(stxs.head, header, world).gasUsed shouldBe BigInt(31000)
 
   // ── Before Amsterdam, and ETC: the bare VM, as before ───────────────────────
 
@@ -300,7 +300,7 @@ class AmsterdamTraceReplaySpec extends AnyFlatSpec with Matchers with AmsterdamF
       stxs.foreach { stx =>
         sameResult(
           ledger.replayTransaction(stx, osaka, parent, tracer = None),
-          ledger.simulateTransaction(stx, osaka, Some(parent))
+          ledger.simulateTransaction(stx, osaka, parent)
         )
       }
       // The floor-bound call reports its execution gas, not the floor, as every pre-Amsterdam replay did.
@@ -317,6 +317,6 @@ class AmsterdamTraceReplaySpec extends AnyFlatSpec with Matchers with AmsterdamF
       ).head
       sameResult(
         ledger.replayTransaction(stx, etcHeader, parent, tracer = None),
-        ledger.simulateTransaction(stx, etcHeader, Some(parent))
+        ledger.simulateTransaction(stx, etcHeader, parent)
       )
     )
