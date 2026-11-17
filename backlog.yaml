@@ -2056,18 +2056,19 @@ items:
   - id: B-251
     title: "Spec 018 C4b follow-up: a spec for StdNode.start's dispatch of the reconciliation at start and the hash layout's repairs"
     priority: P3
-    status: claimed
+    status: review
     area: tests
     size: S
     opened: 2026-11-14
     refs: []
     links:
+      prs: [1899]
       spec: 018
     claim:
       by: cloud-dc960fdc
       agent: main
       since: 2026-11-17T19:27:56Z
-      heartbeat: 2026-11-17T19:27:56Z
+      heartbeat: 2026-11-17T19:28:00Z
     notes: "plan.md C4b part 4: the call has no spec (the node is not started in unit tests). Cases: reconcileState on the unified layout; fixDatabase + repairBestBlockMapping on the hash layout; neither on a stamped datadir with the guard off."
   - id: B-252
     title: "Spec 018 C4d follow-up: a state that failed closed is closed in memory only; persist the fault, or check the records at start"
