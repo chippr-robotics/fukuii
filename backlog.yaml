@@ -2382,13 +2382,18 @@ items:
   - id: B-302
     title: "Ommers: read an ancestor's body only where its ommers hash is not the empty one (core-geth VerifyUncles)"
     priority: P2
-    status: open
+    status: claimed
     area: evm
     size: S
     opened: 2026-11-15
     refs: []
     links:
       spec: 018
+    claim:
+      by: cloud-dc960fdc
+      agent: main
+      since: 2026-11-17T19:01:56Z
+      heartbeat: 2026-11-17T19:01:56Z
     notes: "forge W3, C5a part 2: same verdicts, far fewer bodies needed (headers P..P-5 for the parent rule; bodies P..P-4 with ommers for used-before). Consensus code, its own commit; AncestorWindow filters the same way"
   - id: B-305
     title: "Tests leave their RocksDB and work directories in the temp directory: 25 GB after a day of runs filled a session's disk"
