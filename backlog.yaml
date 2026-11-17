@@ -3852,12 +3852,18 @@ items:
   - id: B-333
     title: "Sprint retro skill (fukuii-sprint-retro) and the 0.12.1 retro: agent evals, A/B-tested agent edits, backlog prune"
     priority: P2
-    status: open
+    status: claimed
     area: tooling
     size: M
     opened: 2026-11-17
     refs: []
     links:
       prs: [1884]
+      branch: ccr-b2ff2f3b-cb6s76
+    claim:
+      by: cloud-retro
+      agent: main
+      since: 2026-11-17T16:32:55Z
+      heartbeat: 2026-11-17T16:32:55Z
       branch: ccr-b2ff2f3b-cb6s76
     notes: "Retro: .claude/evals/suites/0.12.1/retro.md"
