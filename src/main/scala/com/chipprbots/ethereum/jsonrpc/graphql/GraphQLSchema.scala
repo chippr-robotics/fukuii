@@ -1178,12 +1178,15 @@ object GraphQLSchema:
               val reader = c.ctx.blockchainReader
               val bestNum = reader.getBestBlockNumber
               val currentNonce =
+                // in a scope of reads (spec 018, B-238): the disk may have moved past the best block read above
                 try
-                  reader
-                    .getBlockHeaderByNumber(bestNum)
-                    .flatMap(head => reader.accountAt(head, sender))
-                    .map(_.nonce.toBigInt)
-                    .getOrElse(c.ctx.blockchainConfig.accountStartNonce.toBigInt)
+                  stateRead(
+                    reader
+                      .getBlockHeaderByNumber(bestNum)
+                      .flatMap(head => reader.accountAt(head, sender))
+                      .map(_.nonce.toBigInt)
+                      .getOrElse(c.ctx.blockchainConfig.accountStartNonce.toBigInt)
+                  )
                 catch case _: MissingNodeException => c.ctx.blockchainConfig.accountStartNonce.toBigInt
 
               if stx.tx.nonce < currentNonce then throw GraphQLDataFetchingError.nonceTooLow("sendRawTransaction")

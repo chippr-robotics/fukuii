@@ -53,12 +53,22 @@ object StateRead extends Logger:
     * state moved under it.
     */
   def attempting[A](read: => A): Either[JsonRpcError, A] =
-    @tailrec def attempt(left: Int): Either[JsonRpcError, A] =
-      val outcome: Option[Either[JsonRpcError, A]] =
+    attemptingFor(read).left.map((fault, attempts) => unavailable(fault, attempts))
+
+  /** [[attempting]], for a read whose answer is a value and not an `Either` (inside the `map` of an `IO`): what still
+    * cannot be read after the retries is thrown, and the controllers answer it as [[unavailable]] says.
+    */
+  def attemptingOrThrow[A](read: => A): A =
+    attemptingFor(read).fold((fault, _) => throw fault, identity)
+
+  /** `read` in a scope, run again on a stale view; the fault it ends on, with the number of attempts made. */
+  private def attemptingFor[A](read: => A): Either[(StateFault, Int), A] =
+    @tailrec def attempt(left: Int): Either[(StateFault, Int), A] =
+      val outcome: Option[Either[(StateFault, Int), A]] =
         try Some(Right(scoped(read)))
         catch
           case _: StaleStateViewException if left > 1 => None
-          case fault: StateFault                      => Some(Left(unavailable(fault, Attempts - left + 1)))
+          case fault: StateFault                      => Some(Left((fault, Attempts - left + 1)))
       outcome match
         case Some(answer) => answer
         case None         => attempt(left - 1)
