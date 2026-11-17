@@ -1602,7 +1602,7 @@ items:
   - id: B-203
     title: "Spec 018 C1 gates that wait for C0's pinned jar: M7 on the Mordor range (T033), roots against the jar (T025), DC-14 figures (T034)"
     priority: P2
-    status: open
+    status: blocked
     area: storage
     size: S
     opened: 2026-11-11
@@ -1612,9 +1612,9 @@ items:
       spec: specs/018-storage-engine-consolidation
     depends_on: [B-053]
     notes: |-
-      2026-11-11 in-progress: dev-node: Mordor full sync from genesis on v0.11.47 (C1), export 0..~1.1M, strict import with v0.11.46 vs v0.11.47 (M7 stand-in on real blocks). Oracle jar choice (T002) stays the user's.
       2026-11-11 review: Live Mordor check passed: v0.11.47 synced to 1,110,015, 0 errors; strict import 0-1.1M passes on 0.11.46 (7413s) and 0.11.47 (7440s). Write-up in baselines/m7-c1.md. T033 gate still needs pinned jar + IMPORT-TIMING/JFR.
       2026-11-17 released by cloud-retro (expired claim of dev-node): claim expired (heartbeat 2026-11-11); #1794 recorded the live check, T033/T025/T034 wait for B-053
+      2026-11-17 blocked: waits for B-053 (C0 pinned oracle jar, user's T002)
   - id: B-204
     title: "MerklePatriciaTrie.getFromHash decodes every node twice: about 50 KB allocated per get on a 50k-key trie"
     priority: P3
