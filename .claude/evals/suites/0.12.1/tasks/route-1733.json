@@ -1,0 +1,38 @@
+{
+ "id": "route-1733",
+ "chain": "both",
+ "source_prs": [
+  1733
+ ],
+ "base_sha": "aab5d55e56529f6dabc570cbd61f5ec3dfb6e246",
+ "prompt": "Our block import's upfront balance check for transactions seems looser than geth/core-geth: the cost can wrap at 256 bits, blob txs aren't reserved at maxFeePerBlobGas, and legacy txs priced under the base fee are accepted. Who should own bringing this in line with the reference clients, and in what order?",
+ "expected": {
+  "route": [
+   "forge",
+   "beacon"
+  ],
+  "gold_summary": "Consensus change in ledger/BlockPreparator + tx validator on both chains: forge for ETC forks, beacon for types 2-4/EIP-4844/7702.",
+  "files": [],
+  "must_not": []
+ },
+ "rubric": [
+  "Classifies it as consensus-critical under the Consensus-Critical Change Protocol (impact analysis before code)",
+  "Names both chains and gives forge ETC, beacon ETH (blob/EIP-1559 types)",
+  "Does not route to conduit/vault/prism as owners"
+ ],
+ "leak_markers": [
+  "#1733",
+  "buyGas",
+  "INSUFFICIENT_MAX_FEE_PER_GAS"
+ ],
+ "sprint": "0.12.1",
+ "type": "route",
+ "agent": "router",
+ "read_only": true,
+ "budget_usd": 2,
+ "timeout_s": 900,
+ "protocol": [
+  "read-only: no edits",
+  "CLAUDE.md routing rules and the Consensus-Critical Change Protocol"
+ ]
+}

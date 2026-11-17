@@ -1,0 +1,37 @@
+{
+ "id": "route-1814",
+ "chain": "ETH",
+ "source_prs": [
+  1814
+ ],
+ "base_sha": "bca36bdfb87aedd79e9153b87d17a783d6a4f878",
+ "prompt": "Make `fukuii hoodi` work out of the box like `fukuii sepolia`: chain config, genesis, fork schedule, bootnodes. Who should own it?",
+ "expected": {
+  "route": [
+   "beacon"
+  ],
+  "gold_summary": "New ETH chain: chain id, timestamp forks, genesis import and fork-id are beacon's; ETC untouched.",
+  "files": [],
+  "must_not": []
+ },
+ "rubric": [
+  "beacon owns chain id/fork schedule/genesis hash checks",
+  "Mentions verifying genesis hash and fork-id against the reference",
+  "Does not make forge an owner (ETC untouched)"
+ ],
+ "leak_markers": [
+  "#1814",
+  "hoodi-chain.conf",
+  "all.hoodi.ethdisco.net"
+ ],
+ "sprint": "0.12.1",
+ "type": "route",
+ "agent": "router",
+ "read_only": true,
+ "budget_usd": 2,
+ "timeout_s": 900,
+ "protocol": [
+  "read-only: no edits",
+  "CLAUDE.md routing rules and the Consensus-Critical Change Protocol"
+ ]
+}
