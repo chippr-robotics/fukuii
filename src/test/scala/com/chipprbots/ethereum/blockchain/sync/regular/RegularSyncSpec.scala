@@ -818,7 +818,7 @@ class RegularSyncSpec
 
           // Inject the resolver's success reply directly (simulating BranchResolvedSuccessful).
           importer ! BlockImporter.BranchResolverMsg(
-            FastSyncBranchResolverActor.BranchResolvedSuccessful(lca, masterPeer)
+            FastSyncBranchResolverActor.BranchResolvedSuccessful(lca, masterPeer)()
           )
 
           // The importer must invalidate the fetcher's blocks from lca + 1 (resolver-driven rollback).
@@ -853,7 +853,7 @@ class RegularSyncSpec
       ) in sync(
         new ForkRecoveryOnTheUnifiedLayout("lca"):
           importer ! BlockImporter.BranchResolverMsg(
-            FastSyncBranchResolverActor.BranchResolvedSuccessful(lca, defaultPeer)
+            FastSyncBranchResolverActor.BranchResolvedSuccessful(lca, defaultPeer)()
           )
           val invalidate: InvalidateBlocksFrom = importerFetcher.fishForSpecificMessage(5.seconds) {
             case m: BlockFetcher.InvalidateBlocksFrom => m
@@ -877,7 +877,7 @@ class RegularSyncSpec
       ) in sync(
         new ForkRecoveryOnTheUnifiedLayout("above-the-head", failedAt = BigInt(30)):
           importer ! BlockImporter.BranchResolverMsg(
-            FastSyncBranchResolverActor.BranchResolvedSuccessful(lca, defaultPeer)
+            FastSyncBranchResolverActor.BranchResolvedSuccessful(lca, defaultPeer)()
           )
           val pick: BlockFetcher.StrictPickBlocks = importerFetcher.fishForSpecificMessage(5.seconds) {
             case m: BlockFetcher.StrictPickBlocks => m
@@ -912,7 +912,7 @@ class RegularSyncSpec
       ) in sync(
         new ForkRecoveryOnTheUnifiedLayout("announced"):
           importer ! BlockImporter.BranchResolverMsg(
-            FastSyncBranchResolverActor.BranchResolvedSuccessful(lca, defaultPeer)
+            FastSyncBranchResolverActor.BranchResolvedSuccessful(lca, defaultPeer)()
           )
           importerFetcher.fishForSpecificMessage(5.seconds) { case m: BlockFetcher.StrictPickBlocks => m }
           val own = testBlocks.last
@@ -1037,7 +1037,7 @@ class RegularSyncSpec
           } shouldBe Nil
           // the recovery it started is answered with the block the branch leaves this chain at
           importer ! BlockImporter.BranchResolverMsg(
-            FastSyncBranchResolverActor.BranchResolvedSuccessful(BigInt(14), defaultPeer)
+            FastSyncBranchResolverActor.BranchResolvedSuccessful(BigInt(14), defaultPeer)()
           )
           val branch: Vector[BlockHeader] = (15 to 22).map(side(_).header).toVector
           answerFrom(branch, BigInt(14)).head.block shouldBe Left(BigInt(15))
@@ -1070,7 +1070,7 @@ class RegularSyncSpec
             case m: BlockFetcher.StrictPickBlocks     => m
           } shouldBe Nil
           importer ! BlockImporter.BranchResolverMsg(
-            FastSyncBranchResolverActor.BranchResolvedSuccessful(BigInt(14), defaultPeer)
+            FastSyncBranchResolverActor.BranchResolvedSuccessful(BigInt(14), defaultPeer)()
           )
           // refused there too, and escalated: its headers are asked for from the block above the common block
           headersAsked()._1.block shouldBe Left(BigInt(15))
@@ -1094,7 +1094,7 @@ class RegularSyncSpec
           deliver(side(22))
           toTheFetcher().collect { case m: BlockFetcher.InvalidateBlocksFrom => m } shouldBe Nil
           importer ! BlockImporter.BranchResolverMsg(
-            FastSyncBranchResolverActor.BranchResolvedSuccessful(BigInt(18), defaultPeer)
+            FastSyncBranchResolverActor.BranchResolvedSuccessful(BigInt(18), defaultPeer)()
           )
           val invalidate: InvalidateBlocksFrom = importerFetcher.fishForSpecificMessage(5.seconds) {
             case m: BlockFetcher.InvalidateBlocksFrom => m
@@ -1182,7 +1182,7 @@ class RegularSyncSpec
             if failure == 5 then
               // the fifth failure started the recovery: the resolver's answer is given here
               importer ! BlockImporter.BranchResolverMsg(
-                FastSyncBranchResolverActor.BranchResolvedSuccessful(lca, defaultPeer)
+                FastSyncBranchResolverActor.BranchResolvedSuccessful(lca, defaultPeer)()
               )
               val invalidate: InvalidateBlocksFrom = importerFetcher.fishForSpecificMessage(5.seconds) {
                 case m: BlockFetcher.InvalidateBlocksFrom if m.fromBlock == lca + 1 => m
@@ -1220,7 +1220,7 @@ class RegularSyncSpec
           // a recovery is started while that import runs, and the resolver answers at once
           importer ! BlockImporter.StartForkRecovery(BigInt(15))
           importer ! BlockImporter.BranchResolverMsg(
-            FastSyncBranchResolverActor.BranchResolvedSuccessful(lca, defaultPeer)
+            FastSyncBranchResolverActor.BranchResolvedSuccessful(lca, defaultPeer)()
           )
           // nothing is done about the answer while the import runs
           toTheFetcher().collect { case m: BlockFetcher.InvalidateBlocksFrom => m.fromBlock } shouldBe Nil
@@ -1257,7 +1257,7 @@ class RegularSyncSpec
           )
         ):
           importer ! BlockImporter.BranchResolverMsg(
-            FastSyncBranchResolverActor.BranchResolvedSuccessful(lca, defaultPeer)
+            FastSyncBranchResolverActor.BranchResolvedSuccessful(lca, defaultPeer)()
           )
           // it goes on picking from where it was: no block is fetched again from the common block
           importerFetcher.fishForSpecificMessage(5.seconds) { case m: BlockFetcher.PickBlocks => m }
@@ -1278,7 +1278,7 @@ class RegularSyncSpec
           override lazy val consensusAdapter: ConsensusAdapter = recordingOutOfReach()
           val branch: Vector[BlockHeader] = sideBranch(lcaHeader, 12)
           importer ! BlockImporter.BranchResolverMsg(
-            FastSyncBranchResolverActor.BranchResolvedSuccessful(lca, defaultPeer)
+            FastSyncBranchResolverActor.BranchResolvedSuccessful(lca, defaultPeer)()
           )
           val asked: Seq[ETHGetBlockHeaders] = answerFrom(branch, lca)
           // asked of the master peer, from the block above the common block, a request at a time
@@ -1311,7 +1311,7 @@ class RegularSyncSpec
           // the peer has more than is asked for
           val branch: Vector[BlockHeader] = sideBranch(lcaHeader, 40)
           importer ! BlockImporter.BranchResolverMsg(
-            FastSyncBranchResolverActor.BranchResolvedSuccessful(lca, defaultPeer)
+            FastSyncBranchResolverActor.BranchResolvedSuccessful(lca, defaultPeer)()
           )
           // (20 - 10) + 2 * 2 headers, two at a time; the last request answered whole ends the fetch
           (1 to 7).foreach { _ =>
@@ -1354,7 +1354,7 @@ class RegularSyncSpec
               )
             }
           importer ! BlockImporter.BranchResolverMsg(
-            FastSyncBranchResolverActor.BranchResolvedSuccessful(lca, defaultPeer)
+            FastSyncBranchResolverActor.BranchResolvedSuccessful(lca, defaultPeer)()
           )
           val asked: Seq[ETHGetBlockHeaders] = (1 to 2).map { _ =>
             val (request, peer, answerTo) = headersAsked()
@@ -1384,7 +1384,7 @@ class RegularSyncSpec
         new ForkRecoveryOnTheUnifiedLayout("at-the-cap", readyBlocks = Some(10)):
           override lazy val consensusAdapter: ConsensusAdapter = recordingOutOfReach()
           importer ! BlockImporter.BranchResolverMsg(
-            FastSyncBranchResolverActor.BranchResolvedSuccessful(lca, defaultPeer)
+            FastSyncBranchResolverActor.BranchResolvedSuccessful(lca, defaultPeer)()
           )
           val invalidate: InvalidateBlocksFrom = importerFetcher.fishForSpecificMessage(5.seconds) {
             case m: BlockFetcher.InvalidateBlocksFrom => m
@@ -1419,7 +1419,7 @@ class RegularSyncSpec
           override lazy val consensusAdapter: ConsensusAdapter = recordingOutOfReach()
           val branch: Vector[BlockHeader] = sideBranch(lcaHeader, 12)
           importer ! BlockImporter.BranchResolverMsg(
-            FastSyncBranchResolverActor.BranchResolvedSuccessful(lca, defaultPeer)
+            FastSyncBranchResolverActor.BranchResolvedSuccessful(lca, defaultPeer)()
           )
           answerFrom(branch, lca).head.block shouldBe Left(lca + 1)
           val told: List[(List[BlockHeader], StateFault, Option[String])] = toldOutOfReach(1)
@@ -1439,7 +1439,7 @@ class RegularSyncSpec
         new ForkRecoveryOnTheUnifiedLayout("no-header", readyBlocks = Some(9), lcaHeaderStored = false):
           override lazy val consensusAdapter: ConsensusAdapter = recordingOutOfReach()
           importer ! BlockImporter.BranchResolverMsg(
-            FastSyncBranchResolverActor.BranchResolvedSuccessful(lca, defaultPeer)
+            FastSyncBranchResolverActor.BranchResolvedSuccessful(lca, defaultPeer)()
           )
           importer ! BlockImporter.PickBlocks
           importerFetcher.fishForSpecificMessage(5.seconds) { case m: BlockFetcher.PickBlocks => m }
@@ -1459,7 +1459,7 @@ class RegularSyncSpec
         new ForkRecoveryOnTheUnifiedLayout("timeout", readyBlocks = Some(9)):
           override lazy val consensusAdapter: ConsensusAdapter = recordingOutOfReach()
           importer ! BlockImporter.BranchResolverMsg(
-            FastSyncBranchResolverActor.BranchResolvedSuccessful(lca, defaultPeer)
+            FastSyncBranchResolverActor.BranchResolvedSuccessful(lca, defaultPeer)()
           )
           val (request, peer, answerTo) = headersAsked()
           // not answered: the request gives up after the peer response timeout, and stops listening for the answer
@@ -1489,13 +1489,13 @@ class RegularSyncSpec
         new ForkRecoveryOnTheUnifiedLayout("one-fetch", readyBlocks = Some(9)):
           override lazy val consensusAdapter: ConsensusAdapter = recordingOutOfReach()
           importer ! BlockImporter.BranchResolverMsg(
-            FastSyncBranchResolverActor.BranchResolvedSuccessful(lca, defaultPeer)
+            FastSyncBranchResolverActor.BranchResolvedSuccessful(lca, defaultPeer)()
           )
           headersAsked()._1.block shouldBe Left(lca + 1)
           // not answered: a second recovery is refused the same way while the first fetch waits
           importer ! BlockImporter.StartForkRecovery(BigInt(15))
           importer ! BlockImporter.BranchResolverMsg(
-            FastSyncBranchResolverActor.BranchResolvedSuccessful(lca, defaultPeer)
+            FastSyncBranchResolverActor.BranchResolvedSuccessful(lca, defaultPeer)()
           )
           networkPeerManager
             .receiveWhile(max = 700.millis, idle = 300.millis) { case m => m }

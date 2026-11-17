@@ -13,5 +13,6 @@ object BlockImporterRewindAccess:
       reorgState: ReorgStateHandler,
       target: BigInt,
       targetHash: BlockHash,
-      currentBest: BigInt
-  ): Unit = BlockImporter.rewindCanonicalChain(reader, writer, reorgState, target, targetHash, currentBest)
+      currentBest: BigInt,
+      discarded: Seq[(BigInt, org.apache.pekko.util.ByteString)] = Nil
+  ): Unit = BlockImporter.rewindCanonicalChain(reader, writer, reorgState, target, targetHash, currentBest, discarded)

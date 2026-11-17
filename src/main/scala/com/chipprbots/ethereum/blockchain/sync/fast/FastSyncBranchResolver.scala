@@ -1,5 +1,7 @@
 package com.chipprbots.ethereum.blockchain.sync.fast
 
+import org.apache.pekko.util.ByteString
+
 import cats.data.NonEmptyList
 
 import com.chipprbots.ethereum.domain.BlockHeader
@@ -15,15 +17,20 @@ trait FastSyncBranchResolver:
   protected def blockchain: Blockchain
   protected def blockchainReader: BlockchainReader
 
-  def discardBlocksAfter(lastValidBlock: BigInt): Unit =
+  /** Removes the blocks above `lastValidBlock`, from the best down. Returns each block it removed, by number and hash,
+    * read before its entry of the index by number is removed (B-248): the import's rewind undoes their reference
+    * counts, and could not find them in the index after this.
+    */
+  def discardBlocksAfter(lastValidBlock: BigInt): Seq[(BigInt, ByteString)] =
     discardBlocks(lastValidBlock, blockchainReader.getBestBlockNumber)
 
-  private def discardBlocks(fromBlock: BigInt, toBlock: BigInt): Unit =
+  private def discardBlocks(fromBlock: BigInt, toBlock: BigInt): Seq[(BigInt, ByteString)] =
     val blocksToBeRemoved = childOf(fromBlock).to(toBlock).reverse.toList
-    blocksToBeRemoved.foreach { toBeRemoved =>
-      blockchainReader
-        .getBlockHeaderByNumber(toBeRemoved)
-        .foreach(header => blockchain.removeBlock(header.hash))
+    blocksToBeRemoved.flatMap { toBeRemoved =>
+      blockchainReader.getBlockHeaderByNumber(toBeRemoved).map { header =>
+        blockchain.removeBlock(header.hash)
+        (header.number.value, header.hash.value)
+      }
     }
 
 object FastSyncBranchResolver:

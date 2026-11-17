@@ -75,8 +75,14 @@ object FastSyncBranchResolverActor:
   // ----- Replies to the caller (`replyTo`) -----
 
   sealed trait BranchResolverResponse
-  final case class BranchResolvedSuccessful(highestCommonBlockNumber: BigInt, masterPeer: Peer)
-      extends BranchResolverResponse
+
+  /** @param discarded
+    *   the blocks the resolver removed above the common block (hash layout), by number and hash, read before their
+    *   entries of the index were removed: the import undoes their reference counts (B-248). Not part of the extractor.
+    */
+  final case class BranchResolvedSuccessful(highestCommonBlockNumber: BigInt, masterPeer: Peer)(
+      val discarded: Seq[(BigInt, org.apache.pekko.util.ByteString)] = Nil
+  ) extends BranchResolverResponse
 
   import BranchResolutionFailed.*
   final case class BranchResolutionFailed(failure: BranchResolutionFailure) extends BranchResolverResponse
@@ -341,9 +347,11 @@ object FastSyncBranchResolverActor:
         case None => stopWithFailure(BranchResolutionFailed.blockHeaderNotFound(childHeader.number.value))
 
     private def finalizeBranchResolver(firstCommonBlockNumber: BigInt, masterPeer: Peer): Behavior[Command] =
-      if discardDiverged then branchLogic.discardBlocksAfter(firstCommonBlockNumber)
+      val discarded = if discardDiverged then branchLogic.discardBlocksAfter(firstCommonBlockNumber) else Nil
       log.info(s"Branch resolution completed with first common block number [$firstCommonBlockNumber]")
-      replyTo ! BranchResolvedSuccessful(highestCommonBlockNumber = firstCommonBlockNumber, masterPeer = masterPeer)
+      replyTo ! BranchResolvedSuccessful(highestCommonBlockNumber = firstCommonBlockNumber, masterPeer = masterPeer)(
+        discarded
+      )
       Behaviors.stopped
 
     /** On fatal errors (and to prevent trying forever) signal the caller and let it decide whether to retry. */

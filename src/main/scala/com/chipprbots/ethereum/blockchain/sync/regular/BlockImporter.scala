@@ -208,12 +208,16 @@ object BlockImporter:
       reorgState: ReorgStateHandler,
       target: BigInt,
       targetHash: BlockHash,
-      currentBest: BigInt
+      currentBest: BigInt,
+      // what the branch resolver removed above the common block before this ran (B-248): their entries of the index are
+      // gone, so they are not found by number here
+      discarded: Seq[(BigInt, ByteString)] = Nil
   ): Unit =
-    val abandoned: Seq[(BigInt, ByteString)] =
+    val indexed: Seq[(BigInt, ByteString)] =
       if currentBest > target then
         ((target + 1) to currentBest).flatMap(n => reader.getCanonicalHashByNumber(n).map(h => (n, h.value)))
       else Nil
+    val abandoned = (indexed ++ discarded.filter(_._1 > target)).distinctBy(_._1).sortBy(_._1)
     writer.setCanonicalChainHead(target, targetHash, currentBest)
     if abandoned.nonEmpty then reorgState.abandonBlockStates(abandoned)
 
@@ -2119,7 +2123,7 @@ final private class BlockImporterLogic(
       case BranchResolverStopped(stopped) if stopped == resolver && holds && state.importing =>
         resolvingFork(failedBlockNumber, beyondTheFetch, capturedBest, snapPivot, state, resolver, Some(None))
 
-      case BranchResolverMsg(FastSyncBranchResolverActor.BranchResolvedSuccessful(lca, _)) =>
+      case BranchResolverMsg(resolved @ FastSyncBranchResolverActor.BranchResolvedSuccessful(lca, _)) =>
         blockchainReader.getBlockHeaderByNumber(lca) match
           case Some(lcaHeader) =>
             log.info(
@@ -2127,7 +2131,7 @@ final private class BlockImporterLogic(
               lca,
               capturedBest
             )
-            rewindCanonicalChain(lca, lcaHeader.hash, capturedBest)
+            rewindCanonicalChain(lca, lcaHeader.hash, capturedBest, resolved.discarded)
             unknownParentStrikes = Map.empty
             fetcher ! BlockFetcher.InvalidateBlocksFrom(
               lca + 1,
@@ -2343,8 +2347,21 @@ final private class BlockImporterLogic(
         )
         supervisor ! SyncProtocol.RegularSyncStuck(floor, s"no header at fork recovery floor $floor")
 
-  private def rewindCanonicalChain(target: BigInt, targetHash: BlockHash, currentBest: BigInt): Unit =
-    BlockImporter.rewindCanonicalChain(blockchainReader, blockchainWriter, reorgState, target, targetHash, currentBest)
+  private def rewindCanonicalChain(
+      target: BigInt,
+      targetHash: BlockHash,
+      currentBest: BigInt,
+      discarded: Seq[(BigInt, ByteString)] = Nil
+  ): Unit =
+    BlockImporter.rewindCanonicalChain(
+      blockchainReader,
+      blockchainWriter,
+      reorgState,
+      target,
+      targetHash,
+      currentBest,
+      discarded
+    )
 
   private def bestKnownBlockNumber: BigInt = blockchainReader.getBestBlockNumber
 
