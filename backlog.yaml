@@ -885,12 +885,15 @@ items:
   - id: B-107
     title: Make chain reorg discards (discardBlocksAfter, discardBlocks) atomic Blockchain operations
     priority: P2
-    status: open
+    status: dropped
     area: sync
     opened: 2026-09-27
+    closed: 2026-11-17
     refs: [A-001]
     links: {}
-    notes: FastSync.scala no longer exists; FastSyncBranchResolver does. Re-scope.
+    notes: |-
+      FastSync.scala no longer exists; FastSyncBranchResolver does. Re-scope.
+      2026-11-17 dropped: merged into B-248: same FastSyncBranchResolver.discardBlocksAfter
   - id: B-108
     title: A structured fork registry for the EVM config instead of 16+ fork block numbers
     priority: P3
