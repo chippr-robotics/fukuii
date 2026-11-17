@@ -164,3 +164,54 @@ other writer — while the severity rule did (the lock hold became must-fix in b
 placement. vault has no review procedure; the new rules sat among coding iron rules.
 
 Full table: `runs/0.12.1/r1/score.md` (not tracked).
+
+## A/B round 2
+
+A = round 1's winners (forge, prism, herald, vault, beacon from B; conduit from `HEAD`); B changes two
+agents only. vault B adds a "When reviewing a change" procedure (list the stores written, grep and paste
+every writer with its lock, worst-case lock hold, zero/empty edges, proof behind each marker, rate by
+consequence). conduit B keeps only the factual and scope edits (package tree, file count, the stale test
+baseline removed, the JWT split) and drops the behavioural rules. Round-1 trials whose agent file is
+unchanged were reused as A; route tasks ran fresh on both arms (the router differs).
+
+| Agent | Wins A / B / tie | Verdict |
+|---|---|---|
+| vault | 0 / 3 / 1 | **ACCEPT B** — diagnose-1753 reached 10/10 once; review-1769 6 → 6 and 5 → 8 |
+| conduit | 3 / 0 / 1 | **KEEP A**, and a new hard failure: with "JWT handling" in conduit's description the router added beacon to an RPC-decoding task (route-1770) |
+
+conduit has two KEEP A in a row, so its edits are dropped. The loop stops here: the other agents won
+round 1 outright and a third round was not worth the plan usage. The open items below seed the next retro.
+
+## Verdicts
+
+| Agent | Verdict | Landed |
+|---|---|---|
+| forge | ACCEPTED (round 1) | chain-following review checklist; Critical includes losing the chain; protocol links; `extvm/` removed |
+| prism | ACCEPTED (round 1) | tests read, inputs traced to origin, severity for stalls/DoS/lost updates/every-run defects, re-review rules, thread ownership, wider trust boundary, TUI scope |
+| herald | ACCEPTED (round 1) | untrusted ingest rule, "When reviewing" section, peer credit/blame scope, ETH70/71 EIPs corrected |
+| vault | ACCEPTED (round 2) | scope incl. unified layout, real package tree, rule 6 corrected (children before parent), key-verified reads, locks, restarts, bounds, review procedure |
+| beacon | ACCEPTED (round 1) | scope incl. new ETH chains, Engine API + JWT, chain-following; start-order/default-on/secret-file checks; chain ids and Amsterdam |
+| conduit | NO CHANGE | both candidates rejected |
+| eye, loom, flow, mithril, wraith | NOT TESTED | no tasks this sprint |
+
+Cost: 96 trials ≈ $30 at API prices, 52 blind grades and the review/checker subagents on top — on a
+subscription login, plan usage, not billing.
+
+## Open items (seeds for the next retro)
+
+- **conduit**: still names files that do not exist (`JsonRpcHttpsServer`, `JsonRpcWebsocketServer`,
+  `GraphQLHttpRoute`, `controllers/…`), "79 files" (97) and a stale test baseline. The factual fix lost
+  only through its description edit; next time, test the package-tree fix without touching the
+  description.
+- **route-1757**: every arm in both rounds left forge out of a peer-blame fix on a PoW chain's import
+  errors, or added vault. Either the gold is too strict or the routing rule for "consensus import errors
+  without a validity change" is unclear in CLAUDE.md.
+- **Unmoved scores**: review-1782 (herald, 4–6 of 10), review-1787 (prism, 7–8 of 12), review-1769
+  (vault, 5–8 of 10).
+- **Not tested, recommended**: eye (testEssential "<5 min" is 24 min; missing `pp`, `formatCheck` and six
+  tag aliases; repeat concurrency suites); loom (test count 3,519 → 7,219; SSC 5,178 → 1,944 LOC;
+  `ResourceHealthMonitor`); flow (routed to WebSocket stream graphs); a thread-lifecycle protocol;
+  testing-protocol.md: wall-clock assertions and failing-first.
+- **Harness**: `.claude/repo-references/` is absent in a trial snapshot, so every "compare with geth"
+  rule ran on memory; 018 Track C squash bodies record no reviews (only `plan.md`). The next retro should
+  add `impact` and `implement` tasks (none this sprint).

@@ -30,6 +30,7 @@ Before starting a work item, claim it in the shared backlog (`.claude/agent-prot
 - Logging and metrics standards for consensus code: `.claude/agent-protocols/logging-standards.md`
 - Inline cleanup scope — consensus files are **flag-only**, never fix in-line: `.claude/agent-protocols/inline-cleanup.md`
 - Compiler warning ratchet: `.claude/agent-protocols/warning-ratchet.md`
+- Consensus change order and routing: `.claude/agent-protocols/consensus-change-protocol.md`; block builders reach import's code: `.claude/agent-protocols/proposer-import-parity.md`; ancestry by hash, not index: `.claude/agent-protocols/ancestry-not-index.md`
 
 **Contributing protocols**: If you encounter a recurring consensus pattern during a session — a missing invariant check, a serialization footgun, a fork-dispatch trap — write it to `.claude/agent-protocols/<name>.md` and note it in `working-docs/CHASE-QUEUE.md`. Protocol development is part of the work; don't leave hard-won knowledge in comments.
 
@@ -46,8 +47,32 @@ not a code edit:
 4. Only then implement, in small verified steps, or review the proposed diff.
 
 If you are reviewing a diff, report findings by severity: **Critical (breaks
-consensus / must fix)**, **Warning (risky / should fix)**, **Note**. Cite the
-exact file:line and the spec or reference-client behavior it must match.
+consensus, or stops the node following the chain / must fix)**, **Warning
+(risky / should fix)**, **Note**. Cite the exact file:line and the spec or
+reference-client behavior it must match. Review beyond the diff: follow each
+changed entry point to its callers and consumers, including pre-existing code
+the change now relies on.
+
+### Chain-following review (sync, fork choice, pivots, escalation)
+
+A node that stops following the chain fails as surely as one with a wrong state
+root. For changes to import, branch resolution, pivots or escalation:
+
+- Fork choice is by total difficulty, not height. Walk every branch-handling path
+  with peer branches that differ from ours in height and in total difficulty, in
+  every combination, not only the common one.
+- For every wait, pick or request conditioned on reaching a bound (a height, a
+  count, availability), name what answers it and what ends it if the bound is
+  never reached. A wait that can fail to complete is **Critical**, even if no
+  consensus rule is broken and even if the path is not live yet.
+- A branch, peer or pivot that was weighed and rejected must not be requested
+  again without new information.
+- When a guard applies only on one side of a threshold, list every path that can
+  produce a value on the other side (backtracks, retries, refreshes, restarts,
+  pre-existing callers outside the diff) and check each one re-applies the guard
+  or is refused. A side effect that clears a pending requirement must depend on
+  the guard having run, not on the path having been taken.
+- SNAP phases, files and reviewers: `.claude/agent-protocols/snap-sync.md`.
 
 ## Reference clients
 
@@ -140,9 +165,6 @@ ECIP-1017 block-reward schedule (20% reduction every 5M blocks):
   `BlockExecution.scala` (559 LOC), `BlockPreparator.scala`, `StxLedger.scala`,
   `BlockValidation.scala`, `BlockRewardCalculator.scala`. Applies ECIP-1017 block rewards
   and ECIP-1111 basefee→Treasury routing. Treat with the same care as vm/.
-- extvm: `src/main/scala/com/chipprbots/ethereum/extvm/` — **HIBERNATED. Do not modify.**
-  IOHK/Mantis experimental gRPC bridge to external EVM. Upstream archived September 2021.
-  All tests `@Ignored`. Default `vm.mode = "internal"`. Deletion is deferred, per the CHASE-QUEUE `DEFER` convention (see `dead-code-review.md`).
 
 ## Hard constraints
 
