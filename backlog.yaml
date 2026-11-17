@@ -2664,3 +2664,13 @@ items:
     links:
       spec: 030-zero-trust-tls
     notes: "Found in B-148: SecureRandomBuilder.rawFukuiiConfig is global; same multi-instance shape as the SSL config fix."
+  - id: B-340
+    title: "Hive engine/cancun/prague/osaka run on B-005's branch: newPayload SYNCING vs ACCEPTED on missing-ancestor and syncing cases"
+    priority: P2
+    status: open
+    area: engine-api
+    opened: 2026-11-17
+    refs: []
+    links:
+      spec: none
+    notes: beacon-b005. B-005 changes unexecuted newPayload answers (SYNCING on canonical parent or requested head). Unit-tested only; no hive run in the container. Check Invalid Missing Ancestor Syncing ReOrg, Invalid NewPayload Syncing=True, Re-Org Sync.
