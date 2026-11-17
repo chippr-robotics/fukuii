@@ -1799,14 +1799,17 @@ items:
   - id: B-221
     title: "SNAPCoordinatorGoneSpec failed once on CI (PR #1805, run 43158234872): passes 3/3 locally; same family as B-020"
     priority: P2
-    status: open
+    status: dropped
     area: tests
     size: S
     opened: 2026-11-12
+    closed: 2026-11-17
     refs: []
     links: {}
     depends_on: [B-020]
-    notes: Test and Build, JDK 25, 2026-11-12. One test of the spec failed in a full testEssential on CI; the PR's diff has no SNAP or sync file. Name the failing case from the run's test-results artifact, then make its waits deterministic with the others of B-020.
+    notes: |-
+      Test and Build, JDK 25, 2026-11-12. One test of the spec failed in a full testEssential on CI; the PR's diff has no SNAP or sync file. Name the failing case from the run's test-results artifact, then make its waits deterministic with the others of B-020.
+      2026-11-17 dropped: merged into B-020: SNAPCoordinatorGoneSpec is one of its flakes
   - id: B-225
     title: "fukuii ephemery: the not-configured error should name the custom-chains-dir it searched and the FUKUII_CONF_DIR launch"
     priority: P3
