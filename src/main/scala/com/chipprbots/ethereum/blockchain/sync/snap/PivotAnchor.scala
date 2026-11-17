@@ -388,6 +388,12 @@ private[sync] object PivotAnchor:
     /** [[PivotAnchor.waitExpired]] of this actor's store. */
     def waitExpired(nowMillis: Long): Option[String] = PivotAnchor.waitExpired(appStateOf(), nowMillis)
 
+    /** Leaves `offBranch` out for a while, and counts nothing towards the wait for a peer on the branch: for a
+      * bootstrap that is not the pivot's (B-320), whose miss is no verdict on the requirement.
+      */
+    def hold(offBranch: Set[com.chipprbots.ethereum.network.PeerId], nowMillis: Long): Unit =
+      until = until.filter(_._2 > nowMillis) ++ offBranch.map(_ -> (nowMillis + OffBranchPeers.HeldMillis))
+
     /** A bootstrap ended without the pivot's header. With peers on another chain among those it asked, they are left
       * out for a while, and the wait for a peer on the branch is begun or gone on with ([[BranchWaitMillis]], the same
       * wait the header download counts). At its end the requirement is dropped.
