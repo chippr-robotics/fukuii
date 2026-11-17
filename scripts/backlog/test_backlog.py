@@ -331,5 +331,104 @@ class RenderTests(GitCase):
         self.assertNotIn(b"\r", (outs[0] / "index.md").read_bytes())
 
 
+class PruneTests(GitCase):
+    def initial(self) -> dict:
+        return doc(
+            item(1, status="done", closed="2026-11-02", links={"prs": [10]}),
+            item(2, status="dropped", closed="2026-11-07", notes="2026-11-07 dropped: superseded"),
+            item(3, depends_on=["B-001"]),
+            item(4, status="done", closed="2026-11-07"),
+            item(5),
+        )
+
+    def archive(self) -> list:
+        return backlog.parse_archive(
+            self.git("--git-dir", str(self.origin), "cat-file", "blob", "tracker:archive.yaml"))
+
+    def test_prune_moves_closed_items_and_keeps_their_ids_taken(self):
+        a = self.clone("a")
+        r = self.cli(a, "prune", by="fc")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        # B-001 is done but B-003 depends on it: it stays, so a pre-archive backlog.py still validates the file
+        self.assertEqual([i["id"] for i in self.remote()["items"]], ["B-001", "B-003", "B-005"])
+        self.assertEqual([i["id"] for i in self.archive()], ["B-002", "B-004"])
+        self.assertEqual(backlog.validate(self.remote()), [])  # backlog.yaml alone: what an older CLI checks
+        self.assertIn("prune 2 closed items", self.last_message())
+        # the next id is not one of the archived ones, and an archived id cannot be claimed
+        self.assertEqual(self.cli(a, "add", "--title", "new", "--priority", "P3", "--area", "ci", by="fc").returncode, 0)
+        self.assertEqual(self.remote()["items"][-1]["id"], "B-006")
+        r = self.cli(a, "claim", "B-002", "--agent", "forge", by="fc")
+        self.assertEqual(r.returncode, 3, r.stderr)
+        self.assertIn("archived", r.stderr)
+        # show and list --all still find them; check counts both files
+        self.assertIn("B-002", self.cli(a, "show", "B-002").stdout)
+        self.assertIn("B-004", self.cli(a, "list", "--all").stdout)
+        r = self.cli(a, "check")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("2 archived", r.stdout)
+
+    def test_prune_before_a_date_and_dry_run(self):
+        a = self.clone("a")
+        r = self.cli(a, "prune", "--before", "2026-11-08", "--dry-run", by="fc")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("B-002", r.stdout)
+        self.assertNotIn("B-001", r.stdout)  # done, but B-003 depends on it
+        self.assertEqual(len(self.remote()["items"]), 5)  # a dry run writes nothing
+        # B-001 is the only item closed before 11-05 and it is needed, so nothing moves
+        self.assertIn("nothing to prune", self.cli(a, "prune", "--before", "2026-11-05", by="fc").stdout)
+        self.assertFalse(self.git("--git-dir", str(self.origin), "ls-tree", "tracker", "archive.yaml").strip())
+        self.assertEqual(self.cli(a, "prune", "--before", "2026-11-08", by="fc").returncode, 0)
+        self.assertEqual([i["id"] for i in self.archive()], ["B-002", "B-004"])
+        self.assertIn("nothing to prune", self.cli(a, "prune", by="fc").stdout)
+
+    def test_a_later_write_keeps_the_archive_and_the_counts_hold(self):
+        a = self.clone("a")
+        before = backlog.counts(self.remote())
+        self.assertEqual(self.cli(a, "prune", by="fc").returncode, 0)
+        self.assertEqual(self.cli(a, "claim", "B-005", "--agent", "forge", by="fc").returncode, 0)
+        self.assertEqual(len(self.archive()), 2)
+        merged = dict(self.remote(), archived=self.archive())
+        self.assertEqual(backlog.counts(merged), before)  # scope and done unchanged by a prune
+
+    def test_prune_restores_archived_items_a_live_item_depends_on(self):
+        # an archive written before the rule: B-001 archived while B-003 depends on it
+        d = self.initial()
+        d["items"] = [i for i in d["items"] if i["id"] != "B-001"]
+        with open(self.seed / "archive.yaml", "w", encoding="utf-8", newline="\n") as f:
+            f.write(backlog.dump_archive([item(1, status="done", closed="2026-11-02", links={"prs": [10]})]))
+        self.git("-C", str(self.seed), "add", "archive.yaml")
+        self.publish(d, "2026-11-07T10:00:00Z")
+        self.assertTrue(backlog.validate(self.remote()))  # an older CLI would refuse every write here
+        a = self.clone("a")
+        r = self.cli(a, "prune", by="fc")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(backlog.validate(self.remote()), [])
+        self.assertIn("B-001", [i["id"] for i in self.remote()["items"]])
+        self.assertNotIn("B-001", [i["id"] for i in self.archive()])
+        self.assertIn("restored 1", self.last_message())
+
+    def test_prune_keeps_the_whole_dependency_chain(self):
+        # B-003 (open) -> B-001 (done) -> B-002 (dropped): both closed items stay, B-004 moves
+        d = self.initial()
+        next(i for i in d["items"] if i["id"] == "B-001")["depends_on"] = ["B-002"]
+        self.publish(d, "2026-11-07T10:00:00Z")
+        a = self.clone("a")
+        self.assertEqual(self.cli(a, "prune", by="fc").returncode, 0)
+        self.assertEqual([i["id"] for i in self.archive()], ["B-004"])
+        self.assertEqual(backlog.validate(self.remote()), [])
+
+    def test_check_rejects_a_bad_archive(self):
+        d = self.tmp / "b.yaml"
+        d.write_text(backlog.dump(doc(item(1), item(2))))
+        arch = self.tmp / "a.yaml"
+        arch.write_text(backlog.dump_archive([item(2, status="done", closed="2026-11-02"),
+                                              item(3, status="open")]))
+        r = subprocess.run([sys.executable, "-I", str(BACKLOG), "check", "--file", str(d), "--archive-file", str(arch)],
+                           capture_output=True, text=True, env=self.env)
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("duplicate id", r.stderr)
+        self.assertIn("only done or dropped items are archived", r.stderr)
+
+
 if __name__ == "__main__":
     unittest.main()

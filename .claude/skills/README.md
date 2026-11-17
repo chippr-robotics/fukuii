@@ -63,6 +63,12 @@ pairing; they do **not** apply to ETC/Mordor (PoW, no CL).
 | `fukuii-dependency-audit`    | Audit all library versions; flag stale, CVE-affected, or non-LTS deps | `build.sbt`, endoflife.date, CVE feeds |
 | `fukuii-tech-debt-inventory` | Inventory technical debt: deprecated APIs, suppressed warnings, TODO/FIXME, scalafmt violations | Source scan + scapegoat report |
 
+## Release — agent improvement
+
+| Skill | Workflow | Backing source |
+| :--- | :--- | :--- |
+| `fukuii-sprint-retro` | At each minor/patch release: review the sprint's PRs, turn them into an agent eval suite with gold answers, propose agent-file edits, and keep only the ones that win a blind A/B test against this and every earlier sprint's suite | `.claude/evals/` (suites, ledger), `.claude/agents/` |
+
 ## Spec Kit — Bug triage
 
 Three-step structured bug triage. Artifacts land in `.specify/bugs/<slug>/`

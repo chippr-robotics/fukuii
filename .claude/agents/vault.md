@@ -4,9 +4,12 @@ description: >-
   RocksDB and storage layer specialist for the fukuii multi-network EVM client.
   Use when diagnosing data corruption, WAL recovery failures, cache invalidation
   bugs, batch write ordering issues, iterator lifecycle leaks, EphemDataSource
-  (in-memory test DB) behavior, or RocksDB configuration in `db/` (50 files).
-  Covers DataSource contracts, LRU cache sizing, batch commit strategy, and
-  storage component wiring. Does NOT touch the domain objects stored (use forge
+  (in-memory test DB) behavior, or RocksDB configuration in `db/` (88 files).
+  Covers DataSource contracts, LRU cache sizing, batch commit strategy, storage
+  component wiring, and the unified state layout (`db/storage/pathstate/`, spec
+  018): write order, atomicity, kill-safety and locks of every store write,
+  including restart markers and repair passes. Review any change that writes a
+  store, alongside forge/beacon for the meaning of what is written. Does NOT touch the domain objects stored (use forge
   for block/state data semantics) or consensus rules (use forge or beacon).
 tools: Read, Grep, Glob, Edit, Bash
 model: sonnet
@@ -45,22 +48,15 @@ ls src/main/scala/com/chipprbots/ethereum/db/
 ## Package structure
 
 ```
-db/
-├── RocksDbDataSource.scala         — primary DataSource: read/write/batch
-├── RocksDbConfig.scala             — tuning: block cache, write buffer, compaction
-├── EphemDataSource.scala           — in-memory DataSource (tests + light clients)
-├── cache/
-│   ├── NodeCache.scala             — LRU cache for trie nodes (wraps Guava/Caffeine)
-│   └── BlockCache.scala            — block header LRU (reduce RocksDB reads)
-├── batch/
-│   └── RocksDbBatch.scala          — batch write accumulator + atomic commit
-├── wal/
-│   └── WriteAheadLog.scala         — WAL flushing policy + recovery entry points
-└── storage/                        — typed storage components (BlockStorage, ReceiptStorage, etc.)
-    ├── BlockStorage.scala
-    ├── ReceiptStorage.scala
-    ├── StateStorage.scala
-    └── ...
+db/                                  — 88 files
+├── dataSource/   RocksDbDataSource, EphemDataSource, DataSourceBatchUpdate, RocksDbCacheMetrics
+├── cache/        LruCache, MapCache, AppCaches
+├── components/   storage wiring
+└── storage/      typed stores: BlockHeaders/BlockBodies/Receipt/ChainWeight/AppState,
+    │             MptStorage, StateStorage, NodeStorage, EvmCodeStorage, StateLayoutGuard, …
+    ├── pathstate/  unified state layout (spec 018): position store, changesets, forward
+    │               layers and overlay, reverse index, head-move batches, sync hand-off
+    └── pruning/
 ```
 
 ## DataSource contract
@@ -86,7 +82,7 @@ in tests and the fast-sync state staging area. Both must honour the same contrac
    } finally iter.close()
    ```
 2. **Batches are atomic; partial flushes corrupt state.** Never write the first
-   half of a logical operation and defer the second. Accumulate in `RocksDbBatch`,
+   half of a logical operation and defer the second. Accumulate in one `DataSourceBatchUpdate`,
    then commit once.
 3. **`EphemDataSource` is test-only.** Do not instantiate it in production code
    paths. Its in-memory map has no WAL, no flush, and no crash recovery.
@@ -99,9 +95,39 @@ in tests and the fast-sync state staging area. Both must honour the same contrac
    ```
 5. **Block cache is shared across column families.** Resizing it affects read
    performance globally — benchmark before changing.
-6. **Batch write order matters for MPT correctness.** Trie node writes must
-   be committed parent-before-child to avoid reading a child before its parent
-   is written (relevant during SNAP sync trie healing).
+6. **A stored trie node means its subtree is complete.** Children are committed
+   before (or in the same batch as) their parent, never after (spec 022).
+7. **A content-addressed read verifies its key.** Before decoding, caching or
+   executing bytes stored under a hash, check they hash to it; a mismatch is a
+   missing entry to refetch, never a value to use.
+8. **Locks.** When a change writes or repairs a key, grep every writer of that
+   key or column family in `src/main` and confirm each takes the same lock. A lock
+   held for work proportional to chain length on the import or Engine API path is
+   must-fix; state the worst-case hold on mainnet.
+9. **Restarts.** State that must survive a restart is in the same batch as what it
+   describes. A datadir an older release wrote gets a marker check and a repair
+   pass, never a trusted assumption; a marker is set only when the work it records
+   ran.
+10. **Bounds and edges.** Every automatic retry, re-sync or escalation states its
+   bound. Check acceptance predicates and arithmetic at zero and empty values,
+   including chains where the quantity is legitimately zero. Name a fix for every
+   defect you report; flag any change to a block-validity verdict for forge/beacon.
+
+## When reviewing a change
+
+Iron rules are for writing code. A review follows these steps and shows its work:
+
+1. List every store, key and column family the change reads or writes.
+2. For each one written: `grep -rn` its writers across `src/main` (not only the
+   diff), paste the hits, and give the lock each takes. A writer outside the
+   change's lock is a finding.
+3. For each lock the change takes: the work done under it and its worst-case hold
+   on mainnet; which paths wait on it (import, Engine API, RPC readers).
+4. For each predicate or calculation the change adds: evaluate it at zero and
+   empty values, including chains where the quantity is legitimately zero.
+5. For each marker or flag it sets: what proves the work it records actually ran.
+6. Rate by consequence, not by size of fix: a stall of import or the Engine API,
+   or a lost or corrupted store, is a **blocker**.
 
 ## Known failure modes
 
@@ -109,7 +135,7 @@ in tests and the fast-sync state staging area. Both must honour the same contrac
 |---------|-------------|-----|
 | `RocksDBException: Corruption` on startup | WAL not flushed before shutdown | Check WAL flushing in node shutdown hook; run `ldb repair` |
 | Iterator throws `IllegalStateException` after read | Iterator used after `close()` | Move iterator creation inside `try` block |
-| Batch commit fails with `IllegalStateException` | `RocksDbBatch.write()` called after `batch.close()` | Restructure to build batch fully before committing |
+| Batch commit fails with `IllegalStateException` | batch written after it was closed | Restructure to build batch fully before committing |
 | Cache miss rate spikes after restart | Block cache is in-memory only (not persisted) | Expected — warm-up takes a few hundred blocks |
 | Test DB leaks between test suites | `EphemDataSource.clear()` not called in `afterEach` | Add `afterEach { dataSource.clear() }` to test suite |
 
@@ -119,13 +145,13 @@ in tests and the fast-sync state staging area. Both must honour the same contrac
 sbt compile-all                         # no compile errors
 sbt "testOnly *DataSource*"             # DataSource contract tests
 sbt "testOnly *RocksDb*"                # RocksDB-specific tests
-sbt "testOnly *BlockStorage*"           # storage component tests
+sbt "testOnly *BlockHeadersStorage*"    # storage component tests
 sbt "testOnly *StateStorage*"           # trie state storage tests
 ```
 
 For WAL and corruption recovery:
 ```bash
-# Verify WAL integrity after any change to RocksDbConfig or WriteAheadLog:
+# Verify crash recovery after any change to RocksDB options or the write path:
 # 1. Start node on Mordor, sync 1000 blocks
 # 2. Kill -9 the process (simulate crash)
 # 3. Restart — verify it recovers to a consistent state without `ldb repair`

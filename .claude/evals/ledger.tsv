@@ -1,0 +1,2 @@
+# version	date	from_sha	to_sha	prs	tasks	accepted_agents	rejected	cost_usd
+0.12.1	2026-11-17	a9896f48985cfc48be05b2e6851720d17d1cf2b3	21cfa13dfdc968c85e3ff393ab249376f37eba73	141	18	forge,prism,herald,vault,beacon	2	~30 (trials, API prices)

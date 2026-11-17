@@ -25,8 +25,9 @@ Usage, from anywhere inside a fukuii clone (set FUKUII_NODE once per host, e.g. 
     backlog.py release B-012 [--reason "..."]
     backlog.py done B-012 [--pr 1750]
     backlog.py drop B-012 --reason "..."
+    backlog.py prune [--before 2026-11-17] [--dry-run]  (closed items move to archive.yaml; ids stay taken)
     backlog.py render --out DIR
-    backlog.py check [--file backlog.yaml]
+    backlog.py check [--file backlog.yaml [--archive-file archive.yaml]]
 
 Exit codes: 0 done; 1 error (git, network, an invalid backlog); 2 usage; 3 refused (another holder, not the holder,
 or a transition the rules forbid). A refused claim prints who holds the item and since when.
@@ -56,6 +57,7 @@ except ImportError:  # pragma: no cover - depends on the host
 
 SCHEMA_VERSION = 1
 FILE = "backlog.yaml"
+ARCHIVE = "archive.yaml"  # closed items `prune` moved out of FILE; their ids stay taken
 REPO_URL = "https://github.com/chippr-robotics/fukuii"
 PROTOCOL = ".claude/agent-protocols/backlog-tracker.md"
 MAX_TRIES = 5
@@ -87,7 +89,12 @@ HEADER = (
     "# fukuii shared backlog (schema version 1). Rendered at https://docs.fukuii.com/development/tracker/\n"
     "# Change it with scripts/backlog/backlog.py on staging (claim, status, done, ...); README.md has the protocol.\n"
     "# Hand edits in the GitHub web UI are fine: keep the schema (backlog.py check), never delete or reuse an id\n"
-    "# (drop the item instead). Comments other than this header are not kept when the tool rewrites the file.\n"
+    "# (drop the item instead; `backlog.py prune` moves closed items to archive.yaml). Comments other than this\n"
+    "# header are not kept when the tool rewrites the file.\n"
+)
+ARCHIVE_HEADER = (
+    "# fukuii shared backlog: closed items (done, dropped) that `backlog.py prune` moved out of backlog.yaml.\n"
+    "# Their ids stay taken. The Tracker page still counts them (scope, done, recently done). Do not hand-edit.\n"
 )
 
 
@@ -260,6 +267,23 @@ def dump(doc: dict) -> str:
     return text
 
 
+def dump_archive(items: list[dict]) -> str:
+    out = [ARCHIVE_HEADER.rstrip("\n"), f"version: {SCHEMA_VERSION}", "items:" if items else "items: []"]
+    for it in items:
+        out += _item_lines(it)
+    text = "\n".join(out) + "\n"
+    if parse(text, ARCHIVE) != {"version": SCHEMA_VERSION, "items": items}:
+        raise BacklogError("internal error: the YAML writer does not round-trip the archive; nothing was written")
+    return text
+
+
+def parse_archive(text: str, where: str = ARCHIVE) -> list:
+    doc = parse(text, where)
+    if doc.get("version") != SCHEMA_VERSION or set(doc) - {"version", "items"} or not isinstance(doc.get("items"), list):
+        raise BacklogError(f"{where}: must hold exactly version: {SCHEMA_VERSION} and an items list")
+    return doc["items"]
+
+
 # ---------------------------------------------------------------------------------------------------- validation
 
 
@@ -385,7 +409,7 @@ def validate(doc: dict) -> list[str]:
     exp = doc.get("expiry_hours")
     if not (isinstance(exp, int) and not isinstance(exp, bool) and exp > 0):
         errs.append(f"expiry_hours must be a positive integer, got {exp!r}")
-    extra = sorted(set(doc) - {"version", "expiry_hours", "items"})
+    extra = sorted(set(doc) - {"version", "expiry_hours", "items", "archived"})
     if extra:
         errs.append(f"unknown top-level keys {extra}")
     items = doc.get("items")
@@ -404,6 +428,20 @@ def validate(doc: dict) -> list[str]:
                 errs.append(f"{it['id']}: duplicate id (items[{ids[it['id']]}] and items[{n}])")
             else:
                 ids[it["id"]] = n
+    archived = doc.get("archived") or []
+    for n, it in enumerate(archived):
+        where = it.get("id") if isinstance(it, dict) and isinstance(it.get("id"), str) else f"{ARCHIVE} items[{n}]"
+        if not isinstance(it, dict):
+            errs.append(f"{where}: must be a mapping")
+            continue
+        errs += [f"{where} ({ARCHIVE}): {msg}" for msg in check_item(it)]
+        if it.get("status") not in TERMINAL:
+            errs.append(f"{where} ({ARCHIVE}): only done or dropped items are archived, got {it.get('status')!r}")
+        if isinstance(it.get("id"), str):
+            if it["id"] in ids:
+                errs.append(f"{it['id']}: duplicate id ({FILE} and {ARCHIVE}, or twice in {ARCHIVE})")
+            else:
+                ids[it["id"]] = -1
     for it in items:
         if isinstance(it, dict) and isinstance(it.get("depends_on"), list):
             for d in it["depends_on"]:
@@ -466,6 +504,19 @@ class Tracker:
     def text_at(self, rev: str) -> str:
         return self.g.run("cat-file", "blob", f"{rev}:{FILE}")
 
+    def archive_at(self, rev: str) -> list | None:
+        """The archived items at rev, or None when the branch has no archive yet."""
+        if self.g.proc("cat-file", "-e", f"{rev}:{ARCHIVE}").returncode != 0:
+            return None
+        return parse_archive(self.g.run("cat-file", "blob", f"{rev}:{ARCHIVE}"), f"{self.ref}:{ARCHIVE}")
+
+    def doc_at(self, rev: str, where: str | None = None) -> dict:
+        doc = parse(self.text_at(rev), where or f"{self.ref}:{FILE}")
+        archived = self.archive_at(rev)
+        if archived is not None:
+            doc["archived"] = archived
+        return doc
+
     def read(self, fetch: bool) -> tuple[str, dict]:
         if fetch:
             try:
@@ -475,7 +526,7 @@ class Tracker:
                     raise
                 print(f"warning: {e}; showing the local copy {self.ref}", file=sys.stderr)
         tip = self.tip()
-        return tip, parse(self.text_at(tip), f"{self.ref}:{FILE}")
+        return tip, self.doc_at(tip)
 
     def _identity_env(self, by: str) -> dict | None:
         """The configured identity if there is one; otherwise a synthetic one naming the node."""
@@ -486,19 +537,15 @@ class Tracker:
         return dict(self.g.env, GIT_AUTHOR_NAME=name, GIT_AUTHOR_EMAIL=email, GIT_COMMITTER_NAME=name,
                     GIT_COMMITTER_EMAIL=email)
 
-    def commit(self, base: str, text: str, message: str, by: str) -> str:
-        blob = self.g.run("hash-object", "-w", "--stdin", input=text).strip()
+    def commit(self, base: str, text: str, message: str, by: str, archive: str | None = None) -> str:
+        files = {FILE: text} if archive is None else {FILE: text, ARCHIVE: archive}
+        blobs = {n: self.g.run("hash-object", "-w", "--stdin", input=t).strip() for n, t in files.items()}
         entries = [e for e in self.g.run("ls-tree", "-z", base).split("\0") if e]
-        tree_in, found = [], False
+        tree_in = []
         for e in entries:
             meta, name = e.split("\t", 1)
-            if name == FILE:
-                tree_in.append(f"100644 blob {blob}\t{FILE}")
-                found = True
-            else:
-                tree_in.append(e)
-        if not found:
-            tree_in.append(f"100644 blob {blob}\t{FILE}")
+            tree_in.append(f"100644 blob {blobs.pop(name)}\t{name}" if name in blobs else e)
+        tree_in += [f"100644 blob {b}\t{n}" for n, b in blobs.items()]
         tree = self.g.run("mktree", "-z", input="\0".join(tree_in) + "\0").strip()
         return self.g.run("commit-tree", tree, "-p", base, "-F", "-", input=message,
                           env=self._identity_env(by)).strip()
@@ -520,7 +567,7 @@ class Tracker:
         for attempt in range(1, MAX_TRIES + 1):
             self.fetch()
             base = self.tip()
-            doc = parse(self.text_at(base), f"{self.remote}/{self.branch}:{FILE}")
+            doc = self.doc_at(base, f"{self.remote}/{self.branch}:{FILE}")
             errs = validate(doc)
             if errs:
                 raise BacklogError(f"{FILE} on {self.remote}/{self.branch} ({base[:9]}) is invalid; fix it first "
@@ -532,7 +579,8 @@ class Tracker:
             errs = validate(doc)
             if errs:
                 raise BacklogError("refusing to write an invalid backlog:\n  " + "\n  ".join(errs))
-            commit = self.commit(base, dump(doc), message, by)
+            archive = dump_archive(doc["archived"]) if "archived" in doc else None
+            commit = self.commit(base, dump(doc), message, by, archive)
             if self.push(commit, base):
                 return summary
             if attempt < MAX_TRIES:
@@ -554,6 +602,8 @@ def find(doc: dict, iid: str) -> dict:
     for it in doc["items"]:
         if it.get("id") == iid:
             return it
+    if any(it.get("id") == iid for it in doc.get("archived") or []):
+        raise Refused(f"{iid} is closed and archived ({ARCHIVE}); `show` prints it")
     raise BacklogError(f"no item {iid} in the backlog")
 
 
@@ -726,13 +776,75 @@ def cmd_drop(tr: Tracker, a) -> None:
     _close(tr, a, "dropped", a.reason)
 
 
+def cmd_prune(tr: Tracker, a) -> None:
+    """Move closed items out of the working backlog into the archive. Ids stay taken; the page still counts them."""
+    by = need_by(a)
+    if a.before and not DATE_RE.match(a.before):
+        raise BacklogError(f"--before must be a date YYYY-MM-DD, got {a.before!r}")
+
+    def needed(items: list[dict], pool: list[dict]) -> set[str]:
+        """Ids that `items` depend on, transitively through `pool`: every one must stay in backlog.yaml, because a
+        backlog.py that predates the archive validates depends_on against backlog.yaml alone."""
+        by_id = {i["id"]: i for i in pool}
+        out, todo = set(), [d for i in items for d in i.get("depends_on") or []]
+        while todo:
+            d = todo.pop()
+            if d not in out:
+                out.add(d)
+                todo += (by_id.get(d) or {}).get("depends_on") or []
+        return out
+
+    def pick(doc):
+        live = [i for i in doc["items"] if i["status"] not in TERMINAL]
+        keep = needed(live, doc["items"])
+        return [i for i in doc["items"] if i["status"] in TERMINAL and i["id"] not in keep
+                and (not a.before or str(i["closed"]) < a.before)]
+
+    def restore(doc):
+        """Bring back archived items that something in backlog.yaml depends on (archives made before this rule)."""
+        keep = needed(doc["items"], doc["items"] + (doc.get("archived") or []))
+        back = [i for i in doc.get("archived") or [] if i["id"] in keep]
+        if back:
+            doc["archived"] = [i for i in doc["archived"] if i["id"] not in keep]
+            doc["items"] = sorted(doc["items"] + back, key=lambda i: int(ID_RE.match(i["id"]).group(1)))
+        return back
+
+    if a.dry_run:
+        _, doc = tr.read(True)
+        moved = pick(doc)
+        for it in moved:
+            print(f"{it['id']:6} {it['status']:8} {it['closed']}  {it['title'][:80]}")
+        print(f"(dry run: {len(moved)} of {len(doc['items'])} items would move to {ARCHIVE})", file=sys.stderr)
+        return
+
+    def fn(doc):
+        back = restore(doc)
+        moved = pick(doc)
+        if not moved and not back:
+            return None
+        if not moved:
+            ids = " ".join(i["id"] for i in back)
+            return (f"tracker: restore {len(back)} archived items a live item depends on, by {by}\n\n{ids}",
+                    f"restored {len(back)} items to {FILE} (live items depend on them)")
+        ids = {i["id"] for i in moved}
+        doc["items"] = [i for i in doc["items"] if i["id"] not in ids]
+        doc["archived"] = sorted((doc.get("archived") or []) + moved, key=lambda i: int(ID_RE.match(i["id"]).group(1)))
+        cut = f" closed before {a.before}" if a.before else ""
+        if back:
+            cut += f"; restored {len(back)} that live items depend on"
+        return (f"tracker: prune {len(moved)} closed items{cut} to {ARCHIVE} by {by}\n\n" + " ".join(sorted(ids)),
+                f"moved {len(moved)} closed items to {ARCHIVE}; {len(doc['items'])} remain in {FILE}")
+
+    print(tr.mutate(fn, by) or "nothing to prune")
+
+
 def cmd_add(tr: Tracker, a) -> None:
     by = need_by(a)
     if a.opened and not _date_ok(a.opened):
         raise BacklogError(f"--opened must be a date YYYY-MM-DD, got {a.opened!r}")
 
     def fn(doc):
-        nums = [int(ID_RE.match(i["id"]).group(1)) for i in doc["items"]]
+        nums = [int(ID_RE.match(i["id"]).group(1)) for i in doc["items"] + (doc.get("archived") or [])]
         iid = f"B-{max(nums, default=0) + 1:03d}"
         it = {"id": iid, "title": a.title, "priority": a.priority, "status": "open", "area": a.area}
         if a.size:
@@ -769,7 +881,7 @@ def _holder(it: dict, exp: int, now: dt.datetime) -> str:
 def cmd_list(tr: Tracker, a) -> None:
     _, doc = tr.read(not a.no_fetch)
     now, exp = now_utc(), doc["expiry_hours"]
-    rows = doc["items"]
+    rows = doc["items"] + (doc.get("archived") or [] if a.all or a.status else [])
     if a.status:
         rows = [i for i in rows if i.get("status") in a.status]
     elif not a.all:
@@ -790,7 +902,8 @@ def cmd_list(tr: Tracker, a) -> None:
 
 def cmd_show(tr: Tracker, a) -> None:
     _, doc = tr.read(not a.no_fetch)
-    it = find(doc, norm_id(a.id))
+    iid = norm_id(a.id)
+    it = next((i for i in doc.get("archived") or [] if i.get("id") == iid), None) or find(doc, iid)
     print("\n".join(l[4:] for l in _item_lines(it)))
     if it.get("claim"):
         print(f"# {describe_claim(it['claim'], doc['expiry_hours'], now_utc())}")
@@ -802,6 +915,8 @@ def cmd_check(tr: Tracker | None, a) -> None:
         if b"\r" in raw:
             raise BacklogError(f"{a.file}: has CR characters; use LF line endings")
         doc = parse(raw.decode("utf-8"), a.file)
+        if a.archive_file:
+            doc["archived"] = parse_archive(Path(a.archive_file).read_text(encoding="utf-8"), a.archive_file)
         where = a.file
     else:
         tip, doc = tr.read(not a.no_fetch)
@@ -813,14 +928,15 @@ def cmd_check(tr: Tracker | None, a) -> None:
         raise BacklogError(f"{where}: {len(errs)} problem(s)")
     c = counts(doc)
     by_status = ", ".join(f"{s} {sum(i['status'] == s for i in doc['items'])}" for s in STATUSES)
-    print(f"OK {where}: {len(doc['items'])} items ({by_status}); {c['open']} not done")
+    arch = f"; {len(doc['archived'])} archived" if doc.get("archived") else ""
+    print(f"OK {where}: {len(doc['items'])} items ({by_status}){arch}; {c['open']} not done")
 
 
 # -------------------------------------------------------------------------------------------------------- render
 
 
 def counts(doc: dict) -> dict:
-    items = [i for i in doc.get("items") or [] if isinstance(i, dict)]
+    items = [i for i in (doc.get("items") or []) + (doc.get("archived") or []) if isinstance(i, dict)]
     live = [i for i in items if i.get("status") not in TERMINAL]
     return {
         "open": len(live),
@@ -840,7 +956,7 @@ def history(tr: Tracker, tip: str) -> dict[str, dict]:
     out = {}
     for d in sorted(last):
         try:
-            out[d] = counts(parse(tr.text_at(last[d])))
+            out[d] = counts(tr.doc_at(last[d]))
         except BacklogError:
             continue
     return out
@@ -1008,10 +1124,11 @@ def render_page(doc: dict, rows, svg: str, now: dt.datetime, source: str, repo: 
     live = [i for i in items if i["status"] not in TERMINAL]
     claimed = sorted((i for i in items if i.get("claim")), key=lambda i: (i["claim"]["since"], i["id"]))
     stale = [i for i in claimed if claim_state(i["claim"], exp, now)[0]]
-    recent = sorted((i for i in items if i["status"] == "done"
+    closed = items + (doc.get("archived") or [])
+    recent = sorted((i for i in closed if i["status"] == "done"
                      and (today - dt.date.fromisoformat(i["closed"])).days <= RECENT_DAYS),
                     key=lambda i: (i["closed"], i["id"]), reverse=True)
-    dropped_recent = sum(1 for i in items if i["status"] == "dropped"
+    dropped_recent = sum(1 for i in closed if i["status"] == "dropped"
                          and (today - dt.date.fromisoformat(i["closed"])).days <= RECENT_DAYS)
     L = [
         "<!-- Generated by scripts/backlog/backlog.py render from backlog.yaml on the tracker branch. Do not edit:",
@@ -1025,7 +1142,8 @@ def render_page(doc: dict, rows, svg: str, now: dt.datetime, source: str, repo: 
         f"**{len(live)} not done**: {sum(i['status'] in HELD for i in live)} held "
         f"({len(stale)} stale), {sum(i['status'] == 'blocked' for i in live)} blocked, "
         f"{sum(i['status'] == 'open' for i in live)} open and unclaimed. "
-        f"**{len(recent)} done** in the last {RECENT_DAYS} days. {len(items)} items in all.",
+        f"**{len(recent)} done** in the last {RECENT_DAYS} days. {len(closed)} items in all"
+        + (f", {len(closed) - len(items)} of them closed and archived." if len(closed) > len(items) else "."),
         "",
         "| Status | P0 | P1 | P2 | P3 | Total |",
         "| --- | ---: | ---: | ---: | ---: | ---: |",
@@ -1231,6 +1349,11 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--force", action="store_true", help="drop over someone else's EXPIRED claim")
     s.set_defaults(fn=cmd_drop)
 
+    s = sub.add_parser("prune", parents=[common], help=f"move done and dropped items to {ARCHIVE} (ids stay taken)")
+    s.add_argument("--before", help="only items closed before YYYY-MM-DD (default: every closed item)")
+    s.add_argument("--dry-run", action="store_true", help="list what would move; write nothing")
+    s.set_defaults(fn=cmd_prune)
+
     s = sub.add_parser("render", parents=[common, reader], help="write the Tracker page (index.md, burndown.svg)")
     s.add_argument("--out", required=True)
     s.add_argument("--file", help="render a local backlog.yaml instead of the branch (no history)")
@@ -1240,6 +1363,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     s = sub.add_parser("check", parents=[common, reader], help="validate the schema (the branch, or --file)")
     s.add_argument("--file")
+    s.add_argument("--archive-file", help=f"with --file: the {ARCHIVE} to check with it")
     s.set_defaults(fn=cmd_check)
     return p
 

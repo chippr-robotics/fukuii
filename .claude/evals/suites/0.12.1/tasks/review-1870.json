@@ -1,0 +1,50 @@
+{
+ "id": "review-1870",
+ "type": "review",
+ "agent": "forge",
+ "chain": "ETC",
+ "source_prs": [
+  1870,
+  1875
+ ],
+ "base_sha": "aef281fbd5b0f705fd163f025d234f065cd314ee",
+ "read_only": true,
+ "prompt": "On proof of work, a node gives its state up for a branch it could not judge, and the clear writes the branch's first block down as a requirement on the SNAP sync that follows. This uncommitted change holds that sync to the branch: at the end, the header at the branch's height is compared with the branch's block, with a restart up to three times; the header download stores no other chain's block there; the pivot header is taken only from a peer on the branch; peers on another chain are left out of the next target; and the wait for a peer on the branch is bounded at 30 minutes, after which the requirement is dropped with an ERROR. Review it: can a sync end up off the branch, or the requirement end, without that ERROR?",
+ "expected": {
+  "files": [
+   "src/main/scala/com/chipprbots/ethereum/blockchain/sync/snap/controller/PivotRefresher.scala",
+   "src/main/scala/com/chipprbots/ethereum/blockchain/sync/snap/PivotAnchor.scala",
+   "src/main/scala/com/chipprbots/ethereum/blockchain/sync/SyncController.scala",
+   "src/main/scala/com/chipprbots/ethereum/blockchain/sync/snap/controller/PivotSelector.scala"
+  ],
+  "review_sha": "62d7ca3def602057fb40d1cf38259f6bfacf9faf",
+  "must_not": [],
+  "gold_summary": "PivotHeaderBootstrap applies the branch check only when the branch's first block is at or below the target (branch.filter(_._1 <= targetBlock)). A pivot refresh whose bootstrap fails backtracks by number (pendingPivot - pivotBlockOffset) with no floor at the branch's first block and ignores the off-branch peers it reported. A backtracked target below the branch is fetched with no branch check, and SyncController calls PivotAnchor.branchServed for any targetBlock != 0, which ends the 30-minute wait as if the branch had been served. The end-of-sync check then sees a pivot below the branch and only WARNs, so the requirement ends without the ERROR. Fix: no backtrack under the branch's first block; refresh targets floored at the branch; branchServed only when the served height is at or above the branch; the refresh feeds the shared off-branch peer set."
+ },
+ "rubric": [
+  "Notes the bootstrap's branch check is skipped when the target is below the branch's first block",
+  "Connects the PivotRefresher backtrack (pendingPivot - pivotBlockOffset, no floor) to the bootstrap's skipped branch check, so a refresh can land below the branch and be fetched unchecked",
+  "Shows that branchServed is called for any non-zero target, so a bootstrap below the branch ends the wait",
+  "Concludes the requirement can end with only the finalisation WARN, not the ERROR",
+  "Proposes a floor and conditioning branchServed on the served height"
+ ],
+ "protocol": [
+  "forge: findings by severity with file:line",
+  "read-only: no edits",
+  "ETC paths use forBlock(), never forTimestamp()"
+ ],
+ "leak_markers": [
+  "#1870",
+  "#1875",
+  "ff2eb0d93",
+  "refreshFloor",
+  "belowTheBranch",
+  "waitExpired",
+  "OffBranchPeersApi",
+  "servedAt = Some",
+  "B-310"
+ ],
+ "sprint": "0.12.1",
+ "budget_usd": 3,
+ "timeout_s": 2400
+}
