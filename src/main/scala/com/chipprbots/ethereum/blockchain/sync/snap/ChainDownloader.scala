@@ -1643,10 +1643,10 @@ object ChainDownloader:
 
   /** Fetch the bodies of these blocks now, ahead of everything queued, while bodies are deferred too (spec 018 C5a,
     * B-301). For the window below a pivot: a sync on the unified state layout hands off only once the bodies of the
-    * pivot and the five below it are stored, since the ommers of the first blocks above it are checked against them,
-    * and the backfill that would fetch them runs up from the genesis, after the hand-off. The headers must be stored: a
-    * body is checked against its header before it is kept. Sent as often as wanted: what is stored, queued or on its
-    * way is passed over.
+    * pivot and the four below it that have ommers are stored, since the ommers of the first blocks above it are checked
+    * against them, and the backfill that would fetch them runs up from the genesis, after the hand-off. The headers
+    * must be stored: a body is checked against its header before it is kept. Sent as often as wanted: what is stored,
+    * queued or on its way is passed over.
     */
   final case class FetchBodies(hashes: Seq[ByteString]) extends Command
   case class GetProgress(replyTo: TypedActorRef[Progress]) extends Command

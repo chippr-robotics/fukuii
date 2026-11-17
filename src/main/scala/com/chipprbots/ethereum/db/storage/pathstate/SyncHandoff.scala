@@ -47,8 +47,8 @@ final class SyncHandoff(
 
   /** What the node does not hold of the window below `pivot` ([[AncestorWindow.check]]): the headers of the 256 blocks
     * below it, each found by the hash its child names, and on a proof-of-work chain the bodies of the pivot and the
-    * five below it. `BLOCKHASH` and the check of ommers read them in the first blocks above the pivot, so a sync does
-    * not hand off while any is missing.
+    * four below it that have ommers. `BLOCKHASH` and the check of ommers read them in the first blocks above the pivot,
+    * so a sync does not hand off while any is missing.
     */
   def windowMissing(pivot: BlockHeader, proofOfWork: Boolean): AncestorWindow.Missing =
     AncestorWindow.check(pivot, proofOfWork, hash => headers.get(hash.value), hash => bodies.get(hash.value))

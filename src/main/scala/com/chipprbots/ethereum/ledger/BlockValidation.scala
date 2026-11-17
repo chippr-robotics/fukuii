@@ -3,6 +3,7 @@ package com.chipprbots.ethereum.ledger
 import org.apache.pekko.util.ByteString
 
 import com.chipprbots.ethereum.consensus.mining.Mining
+import com.chipprbots.ethereum.consensus.mining.OmmerAncestor
 import com.chipprbots.ethereum.consensus.validators.BlockHeaderError.HeaderParentNotFoundError
 import com.chipprbots.ethereum.consensus.validators.BlockHeaderValidatorSkeleton
 import com.chipprbots.ethereum.domain.Block
@@ -71,28 +72,33 @@ class BlockValidation(
       .getBlockHeaderByHash(BlockHash(hash))
       .orElse(blockQueue.getBlockByHash(BlockHash(hash)).map(_.header))
 
-  private def getNBlocksBackFromChainOrQueue(hash: ByteString, n: Int): List[Block] =
-    val queuedBlocks = blockQueue.getBranch(BlockHash(hash), dequeue = false).takeRight(n)
+  /** The queued blocks the branch ends with, and below them the stored chain by its headers: a stored ancestor's body
+    * is read only where its header names ommers (B-302).
+    */
+  private def getNBlocksBackFromChainOrQueue(hash: ByteString, n: Int): List[OmmerAncestor] =
+    val queuedBlocks = blockQueue.getBranch(BlockHash(hash), dequeue = false).takeRight(n).map(OmmerAncestor.of)
     if queuedBlocks.length == n then queuedBlocks
     else
       val chainedBlockHash = queuedBlocks.headOption.map(_.header.parentHash).getOrElse(BlockHash(hash))
-      blockchainReader.getBlockByHash(chainedBlockHash) match
+      def stored(header: BlockHeader): OmmerAncestor =
+        OmmerAncestor.of(header, blockchainReader.getBlockBodyByHash(header.hash))
+      blockchainReader.getBlockHeaderByHash(chainedBlockHash) match
         case None =>
           // The in memory blocks aren't connected to the db ones, we don't have n blocks to return so we return none
           Nil
 
-        case Some(highestBlockInStorage) =>
+        case Some(highestInStorage) =>
           // We already have |block +: queuedBlocks|
           val remaining = n - queuedBlocks.length - 1
           val remainingBlocks = Iterator
-            .iterate(blockchainReader.getBlockByHash(highestBlockInStorage.header.parentHash))(
+            .iterate(blockchainReader.getBlockHeaderByHash(highestInStorage.parentHash))(
               _.filter(_.number != BlockNumber.Zero) // avoid trying to fetch parent of genesis
-                .flatMap(p => blockchainReader.getBlockByHash(p.header.parentHash))
+                .flatMap(p => blockchainReader.getBlockHeaderByHash(p.parentHash))
             )
             .take(remaining)
-            .collect { case Some(block) => block }
+            .collect { case Some(header) => stored(header) }
             .toList
-          (remainingBlocks :+ highestBlockInStorage) ::: queuedBlocks
+          (remainingBlocks :+ stored(highestInStorage)) ::: queuedBlocks
 
   def validateBlockAfterExecution(
       block: Block,
