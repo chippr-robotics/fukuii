@@ -3761,3 +3761,13 @@ items:
     refs: []
     links: {}
     notes: "#1876 passed rpc-compat at 23:08 UTC on the same code; from ~23:30 #1873, #1875 (11 failures) and #1878 (16) fail it with unrelated diffs. hive_ref is master in _hive-sim.yml, so the suite floats: upstream added or changed tests. Real compliance gaps to fix (conduit); also consider pinning hive_ref so PR CI does not drift."
+  - id: B-324
+    title: Confirm against ECIP-1121 that Olympia admits EIP-7702 (type 4) transactions, as TxTypeGate does, before Olympia is scheduled
+    priority: P2
+    status: open
+    area: consensus
+    size: S
+    opened: 2026-11-17
+    refs: []
+    links: {}
+    notes: "forge, review of B-323 (2026-11-17): TxTypeGate admits types 2 and 4 from olympiaBlockNumber; the ECIP-1121 list forge had did not include EIP-7702; the local ECIP clone was not on the host."
