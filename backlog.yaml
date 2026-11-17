@@ -1955,18 +1955,19 @@ items:
   - id: B-240
     title: "trace and simulate bodies run on the compute pool for seconds: IO.blocking in StateRead.reading"
     priority: P2
-    status: claimed
+    status: review
     area: rpc
     size: S
     opened: 2026-11-12
     refs: []
     links:
+      prs: [1893]
       spec: 018
     claim:
       by: cloud-dc960fdc
       agent: main
       since: 2026-11-17T19:02:04Z
-      heartbeat: 2026-11-17T19:02:04Z
+      heartbeat: 2026-11-17T19:02:08Z
     notes: |-
       StateRead.reading is IO(scoped(body)); debug_trace*, trace_* and eth_simulateV1 run for seconds on a compute thread (as before the scope). IO.blocking keeps the body on one thread, so the scope stays valid. Four slow traces can also hold every read behind the head. Found by conduit, C4a part 4b-2
       2026-11-17 priority P2: seconds-long traces on the compute pool stall reads behind the head
