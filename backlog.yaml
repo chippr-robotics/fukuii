@@ -1279,18 +1279,19 @@ items:
   - id: B-148
     title: "HTTPS misconfiguration is only logged: node runs with no RPC; faucet client falls back to default trust; SSL config read from the global config"
     priority: P1
-    status: in-progress
+    status: review
     area: rpc
     size: S
     opened: 2026-11-08
     refs: [B-145]
     links:
       issues: [1756]
+      prs: [1905]
     claim:
       by: cloud-dc960fdc
       agent: conduit-b148
       since: 2026-11-17T23:44:10Z
-      heartbeat: 2026-11-17T23:44:13Z
+      heartbeat: 2026-11-17T23:53:21Z
     notes: "2026-11-17 priority P1: a TLS misconfiguration silently leaves the node with no RPC"
   - id: B-149
     title: Container healthchecks use plaintext http on 8545 (base default 8546) and break under mode = https
