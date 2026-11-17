@@ -1058,13 +1058,16 @@ items:
   - id: B-136
     title: CallTracer never decodes revert reasons (looks for "execution reverted" in "RevertOccurs")
     priority: P2
-    status: open
+    status: dropped
     area: rpc
     size: S
     opened: 2026-11-08
+    closed: 2026-11-17
     refs: []
     links: {}
-    notes: "forge: CallTracer.scala:77,105."
+    notes: |-
+      forge: CallTracer.scala:77,105.
+      2026-11-17 dropped: merged into B-171: vmErrorMessage routing fixes CallTracer's revert detection
   - id: B-137
     title: "Text parity: static-context check before the stack check; address collision reports invalid opcode"
     priority: P3
