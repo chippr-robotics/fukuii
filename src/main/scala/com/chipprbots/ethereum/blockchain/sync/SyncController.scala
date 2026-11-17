@@ -159,6 +159,29 @@ object SyncController:
     /** Not yet, for `why`: the check is asked again in [[SnapStartRecheckDelay]], and nothing else runs meanwhile. */
     case Wait(why: String)
 
+  /** The storage scheme a SNAP sync writes. On the unified state layout it is the path scheme, on every network (spec
+    * 018 C5a part 10, step 6; B-308; the user's decision of 2026-11-17 narrows FR-020, "ETC keeps the hash scheme", to
+    * the hash layout): its hand-off commits the position families, and the hash-keyed store is never read there. On the
+    * hash layout it is the network's: path on Ethereum's networks, hash on ETC's.
+    *
+    * @return
+    *   why not, when the configured scheme is not the hash layout's for the network
+    */
+  def snapStorageScheme(
+      networkType: NetworkType,
+      configured: StorageScheme,
+      unifiedLayout: Boolean
+  ): Either[String, StorageScheme] =
+    if unifiedLayout then Right(StorageScheme.Path)
+    else
+      val expected = if networkType == NetworkType.ETH then StorageScheme.Path else StorageScheme.Hash
+      Either.cond(
+        configured == expected,
+        configured,
+        s"storageScheme=$configured does not match expected $expected for networkType=$networkType — check " +
+          "sync.snap-sync.storage-scheme in reference.conf"
+      )
+
   /** How long before a [[SnapStartOnGuard.Wait]] is asked again. */
   val SnapStartRecheckDelay: FiniteDuration = 5.seconds
 
@@ -702,19 +725,20 @@ object SyncController:
             "header download to reach the pivot"
         )
       }
-      val networkType = configBuilder.blockchainConfig.networkType
-      val expectedScheme = if networkType == NetworkType.ETH then StorageScheme.Path else StorageScheme.Hash
-      require(
-        config.storageScheme == expectedScheme,
-        s"storageScheme=${config.storageScheme} does not match expected $expectedScheme " +
-          s"for networkType=$networkType — check sync.snap-sync.storage-scheme in reference.conf"
-      )
+      val scheme = SyncController
+        .snapStorageScheme(configBuilder.blockchainConfig.networkType, config.storageScheme, pathLiveSync.isDefined)
+        .fold(why => throw new IllegalArgumentException(why), identity)
+      if scheme != config.storageScheme then
+        log.info(
+          s"[STATE-PATH-LIVE] SNAP writes the path scheme on the unified state layout (configured: " +
+            s"${config.storageScheme}): its hand-off commits the position families, and the hash-keyed store is never read"
+        )
       // Keep the SNAP storage-task file under the datadir so it survives a reboot (/tmp does not).
       val taskFileDir = scala.util
         .Try(Config.config.getString("datadir"))
         .toOption
         .map(d => StorageTaskFile.dirUnder(java.nio.file.Paths.get(d)))
-      config.copy(taskFileDir = taskFileDir)
+      config.copy(taskFileDir = taskFileDir, storageScheme = scheme)
 
     def idle(): Behavior[Command] = Behaviors.receive { (_, cmd) =>
       val msg = unwrap(cmd)

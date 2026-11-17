@@ -157,3 +157,27 @@ class PathLiveSyncSpec extends AnyFlatSpec with Matchers:
     )
     withClue("a sync done or begun, which goes on: ")(refusal(started = true) shouldBe None)
   }
+
+  // part 10 step 6 (B-308; the user's decision of 2026-11-17 narrows FR-020 to the hash layout)
+  "The storage scheme of a SNAP sync" should "be the path scheme on the unified layout, on every network" taggedAs UnitTest in {
+    import com.chipprbots.ethereum.blockchain.sync.snap.StorageScheme
+    import com.chipprbots.ethereum.utils.NetworkType
+    NetworkType.values.foreach { network =>
+      StorageScheme.values.foreach { configured =>
+        withClue(s"$network, configured $configured: ") {
+          SyncController.snapStorageScheme(network, configured, unifiedLayout = true) shouldBe Right(StorageScheme.Path)
+        }
+      }
+    }
+  }
+
+  it should "be the network's on the hash layout: path on Ethereum's, hash on ETC's, and nothing else" taggedAs UnitTest in {
+    import com.chipprbots.ethereum.blockchain.sync.snap.StorageScheme
+    import com.chipprbots.ethereum.utils.NetworkType
+    SyncController.snapStorageScheme(NetworkType.ETH, StorageScheme.Path, unifiedLayout = false) shouldBe
+      Right(StorageScheme.Path)
+    SyncController.snapStorageScheme(NetworkType.ETC, StorageScheme.Hash, unifiedLayout = false) shouldBe
+      Right(StorageScheme.Hash)
+    SyncController.snapStorageScheme(NetworkType.ETC, StorageScheme.Path, unifiedLayout = false) shouldBe a[Left[?, ?]]
+    SyncController.snapStorageScheme(NetworkType.ETH, StorageScheme.Hash, unifiedLayout = false) shouldBe a[Left[?, ?]]
+  }

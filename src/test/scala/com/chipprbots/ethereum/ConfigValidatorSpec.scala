@@ -175,7 +175,8 @@ class ConfigValidatorSpec extends AnyFlatSpec with Matchers:
   // ── The in-development guard of the unified state layout (spec 018 Track C) ──────────────────────────────────
 
   // Since C5a part 10 a SNAP sync hands its state off onto the unified layout, and SNAP is advertised on the guard.
-  it should "take state.path-live with SNAP sync on and the path scheme" taggedAs UnitTest in {
+  it should "take state.path-live with SNAP sync on" taggedAs UnitTest in {
+    ConfigValidator.validate(cfg("state.path-live = true\nsync.do-snap-sync = true")) shouldBe empty
     ConfigValidator.validate(
       cfg("state.path-live = true\nsync.do-snap-sync = true\nsync.snap-sync.storage-scheme = \"path\"")
     ) shouldBe empty
@@ -205,33 +206,29 @@ class ConfigValidatorSpec extends AnyFlatSpec with Matchers:
     ) shouldBe empty
   }
 
-  // vault, forge: the hash scheme writes the store this layout never reads, and every hand-off would stop. ETC and
-  // Mordor set no scheme and fall back to it: until part 10's step 6 the guard cannot SNAP there (forge)
-  it should "refuse state.path-live with SNAP sync on and any scheme but path, the fallback included" taggedAs UnitTest in {
-    Seq("", "\nsync.snap-sync.storage-scheme = \"HASH\"").foreach { scheme =>
-      val errors = ConfigValidator.stateGuardErrors(cfg(s"state.path-live = true\nsync.do-snap-sync = true$scheme"))
-      withClue(scheme)(errors should have size 1)
-      errors.head should include("storage-scheme = \"path\"")
-    }
+  // vault, forge: the hash scheme writes the store this layout never reads, and every hand-off would stop. The guard
+  // syncs with the path scheme on every network (part 10 step 6, B-308), so only a scheme asked for is refused
+  it should "refuse state.path-live with the hash storage scheme asked for, and take every shipped network" taggedAs UnitTest in {
+    val errors = ConfigValidator.stateGuardErrors(
+      cfg("state.path-live = true\nsync.do-snap-sync = true\nsync.snap-sync.storage-scheme = \"HASH\"")
+    )
+    errors should have size 1
+    errors.head should include("storage-scheme = hash")
     def guarded(network: String): com.typesafe.config.Config =
       ConfigFactory
         .load(s"conf/$network")
         .getConfig("fukuii")
         .withValue("state.path-live", com.typesafe.config.ConfigValueFactory.fromAnyRef(true))
         .withValue("sync.do-snap-sync", com.typesafe.config.ConfigValueFactory.fromAnyRef(true))
-    Seq("etc", "mordor").foreach(network =>
-      withClue(network)(ConfigValidator.stateGuardErrors(guarded(network)) should have size 1)
-    )
-    Seq("sepolia", "eth", "hoodi", "plataberget").foreach { network =>
+    Seq("etc", "mordor", "sepolia", "eth", "hoodi", "plataberget").foreach { network =>
       withClue(network)(ConfigValidator.stateGuardErrors(guarded(network)) shouldBe empty)
     }
-    // SNAP off asks no scheme; the guard off asks nothing
-    ConfigValidator.stateGuardErrors(cfg("state.path-live = true\nsync.do-snap-sync = false")) shouldBe empty
-    ConfigValidator.stateGuardErrors(cfg("state.path-live = false\nsync.do-snap-sync = true")) shouldBe empty
+    ConfigValidator.stateGuardErrors(cfg("state.path-live = false\nsync.snap-sync.storage-scheme = \"hash\"")) shouldBe
+      empty
     // each thing the guard refuses is said
     ConfigValidator.stateGuardErrors(
       cfg(
-        "state.path-live = true\nmining.mining-enabled = true\nsync.do-snap-sync = true\n" +
+        "state.path-live = true\nmining.mining-enabled = true\nsync.snap-sync.storage-scheme = \"hash\"\n" +
           "sync.checkpoint-sync-url = \"https://cp.example/cp\""
       )
     ) should have size 3
