@@ -40,6 +40,7 @@ import com.chipprbots.ethereum.ledger.BlockExecutionError.ValidationBeforeExecEr
 import com.chipprbots.ethereum.ledger.BlockExecutionSuccess
 import com.chipprbots.ethereum.ledger.BlockQueue
 import com.chipprbots.ethereum.ledger.BlockValidation
+import com.chipprbots.ethereum.mpt.MerklePatriciaTrie.MissingCodeException
 import com.chipprbots.ethereum.utils.BlockchainConfig
 import com.chipprbots.ethereum.utils.Hex
 import com.chipprbots.ethereum.utils.Logger
@@ -189,8 +190,10 @@ class ConsensusAdapter(
       .map {
         // On the unified layout a node missing from the held state is a fault of this node, not a hole to fetch: the
         // fetch writes the hash-keyed store, which this layout never reads, and the same block would fail again
-        // (spec 018 C5a part 10, forge). It is told as any state fault is, and counted towards the escalation.
-        case ConsensusErrorDueToMissingNode(blocksToEnqueue, reason, imported) if blockchainReader.holdsStateInPlace =>
+        // (spec 018 C5a part 10, forge). It is told as any state fault is, and counted towards the escalation. Missing
+        // contract code is not: it is fetched by its hash into the code store, which both layouts share (vault).
+        case ConsensusErrorDueToMissingNode(blocksToEnqueue, reason, imported)
+            if blockchainReader.holdsStateInPlace && !reason.isInstanceOf[MissingCodeException] =>
           ConsensusStateFault(new HeldStateIncomplete(reason), imported, blocksToEnqueue)
         case other => other
       }

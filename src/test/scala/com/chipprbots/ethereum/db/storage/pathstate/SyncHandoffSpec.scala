@@ -85,7 +85,7 @@ class SyncHandoffSpec extends AnyFlatSpec with Matchers:
   }
 
   // spec 018 C5a part 10 (forge): an earlier, higher pivot's bootstrap stored its header and its place in the index
-  it should "leave no entry of the index by number above the pivot, in the same write" taggedAs UnitTest in {
+  it should "leave no entry of the index by number above the pivot" taggedAs UnitTest in {
     val s = new Synced
     val other = ByteString(Array.fill[Byte](32)(0x42))
     s.numbers
@@ -98,7 +98,9 @@ class SyncHandoffSpec extends AnyFlatSpec with Matchers:
 
     s.commit()
 
-    withClue("one write, synced: ")((s.source.synced, s.source.plain) shouldBe (1, 0))
+    withClue("deleted before the one synced write, which makes them durable with it: ") {
+      (s.source.synced, s.source.plain) shouldBe (1, 1)
+    }
     (5001 to 5100).flatMap(n => s.numbers.get(BigInt(n))) shouldBe empty
     withClue("below the pivot the header download's entries stay: ")(s.numbers.get(BigInt(4999)) shouldBe Some(other))
     s.numbers.get(BigInt(5000)) shouldBe Some(s.pivot.hash.value)

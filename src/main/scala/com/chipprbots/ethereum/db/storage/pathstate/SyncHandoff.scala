@@ -84,13 +84,20 @@ final class SyncHandoff(
     val number = pivot.number.value
     // The entries of the index by number above the pivot, which an earlier, higher pivot's bootstrap left (forge, spec
     // 018 C5a part 10): read by number they name blocks of no chain this state is of. Regular sync writes those heights
-    // again as it imports. Below the pivot the header download overwrote each one it validated.
+    // again as it imports; below the pivot the header download overwrote each one it validated. Deleted a chunk at a
+    // time before the synced write, which makes them durable with it (vault): a range can be large, and a kill before
+    // it leaves entries that were of no state anyway.
     val highest = appState.highestIndexedHeight(h => headers.get(h).map(_.number.value))
-    val above = if highest > number then (number + 1 to highest) else Nil
+    Iterator
+      .iterate(number + 1)(_ + PathStateStorage.IndexTrimChunk)
+      .takeWhile(_ <= highest)
+      .foreach { from =>
+        val to = (from + PathStateStorage.IndexTrimChunk - 1).min(highest)
+        blockNumberMappingStorage.update(toRemove = from to to, toUpsert = Nil).commit()
+      }
     val records = headers
       .put(hash, pivot)
       .and(blockNumberMappingStorage.put(number, hash))
-      .and(blockNumberMappingStorage.update(toRemove = above, toUpsert = Nil))
       .and(weights.put(hash, weight))
       .and(appState.putBestBlockInfo(BlockInfo(hash, number)))
       .and(if storageRecoveryDone then appState.storageRecoveryDone() else appState.clearStorageRecoveryDone())

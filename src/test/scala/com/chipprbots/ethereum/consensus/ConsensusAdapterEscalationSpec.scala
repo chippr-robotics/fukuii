@@ -153,6 +153,21 @@ class ConsensusAdapterEscalationSpec extends AnyFlatSpec with Matchers:
     }
   }
 
+  // vault: contract code is fetched by its hash into the code store, which both layouts share
+  it should "leave missing contract code to be fetched, on the unified layout" taggedAs UnitTest in {
+    val onPositions = new com.chipprbots.ethereum.db.storage.pathstate.CanonicalChainOnPositions()
+    val missing = new com.chipprbots.ethereum.mpt.MerklePatriciaTrie.MissingCodeException(
+      ByteString(Array.fill[Byte](32)(9)),
+      ByteString(Array.fill[Byte](20)(1))
+    )
+    val rig = new Rig(_ => Consensus.ConsensusErrorDueToMissingNode(Nil, missing, Nil), onPositions.reader)
+    rig.imported(branch(5, 3)) match
+      case com.chipprbots.ethereum.blockchain.sync.regular.BlockImportFailedDueToMissingNode(reason, _) =>
+        (reason should be).theSameInstanceAs(missing)
+      case other => fail(s"not left to be fetched: $other")
+    rig.escalated shouldBe empty
+  }
+
   // forge: the feed is told inside the result of an import, and a head that has moved is not answered as an error
   it should "stand, whatever goes wrong in the feed" taggedAs UnitTest in {
     val corrupt = new ReorgTooDeep(ReorgRefusal.Corrupt, "a record is not what it should be")
