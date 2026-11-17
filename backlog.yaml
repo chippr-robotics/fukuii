@@ -3571,7 +3571,7 @@ items:
   - id: B-308
     title: "Before SNAP runs on the guard on ETC: it writes the position families, never the hash-keyed store the clear leaves"
     priority: P1
-    status: open
+    status: claimed
     area: snap
     size: M
     opened: 2026-11-16
@@ -3579,6 +3579,11 @@ items:
     links:
       spec: 018
     depends_on: [B-064]
+    claim:
+      by: cloud-lane3
+      agent: main
+      since: 2026-11-17T03:07:14Z
+      heartbeat: 2026-11-17T03:07:14Z
     notes: "forge, 2026-11-16 (while confirming T166 is not applicable). SyncController.scala ~646-650 still holds ETC's SNAP to StorageScheme.Hash, and no code under blockchain/sync refers to PathStateStorage: the hand-off (SyncHandoff) is not wired into the controller yet (C5a part 10). PathStateStorage.clearForResync range-deletes CF t, u, v, the SNAP progress, the healing queue and the flat copies; it does not clear CF n (hash-keyed nodes) nor HealingFrontierNamespace, which the unified layout holds empty. If a SNAP on the guard wrote CF n, a clear for an escalation would leave stale hash-keyed nodes that the sync after it takes for present. Part 10 must make SNAP on the guard write positions only on both chains, and assert CF n is empty at a clear (or clear it too). Gate on C5a part 10."
   - id: B-309
     title: SyncControllerSpec 'leave SNAP's resume alone once SNAP has taken over' fails on staging b9578b4b7 under testOnly (cloud container)
