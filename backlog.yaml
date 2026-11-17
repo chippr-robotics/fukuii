@@ -1761,20 +1761,16 @@ items:
   - id: B-211
     title: "RPC: GraphQL call and estimateGas reach EthInfoService without the controller, so without the stale-view retry (StateRead.request)"
     priority: P3
-    status: review
+    status: done
     area: rpc
     size: S
     opened: 2026-11-11
+    closed: 2026-11-17
     refs: []
     links:
       prs: [1895]
       spec: 018
     depends_on: [B-058]
-    claim:
-      by: cloud-dc960fdc
-      agent: main
-      since: 2026-11-17T19:02:21Z
-      heartbeat: 2026-11-17T19:02:25Z
     notes: "conduit and beacon, review of C2b PR B (2026-11-11). GraphQLSchema:813-814, :899-900 call callOutcome / estimateGas directly. With the guard on, a stale view there is an error of the field and not a retry. Matters only once C3b's in-place commit can make a view stale. Also: StxLedger.runSimulated and the estimate search still make a world from the header they are given when handed none; no production caller does, and the arms could be deleted with their test callers moved."
   - id: B-212
     title: "Spec 018 T052, the half that waits: SNAP responses served from the position store against the pinned jar's bytes for the same root"
