@@ -301,7 +301,7 @@ private[snap] trait SnapFinalization extends FinalizationApi with ChainDownloadS
           // Publish the completed trie to the hash-keyed store BEFORE anchoring/handing off, so the first imported
           // block can read the pivot state. The scan is long (the whole state), so it runs on a blocking-dispatcher
           // Future and this actor keeps serving status/progress queries (`syncing` serves them while `pathPublish` is set); it re-enters here with
-          // `pathPublished = true` once PathPublishDone arrives. Hash scheme (ETC) never enters this branch.
+          // `pathPublished = true` once PathPublishDone arrives. The Hash scheme (ETC off the unified layout) never enters this branch.
           // The unified state layout (spec 018 C5a part 5): nothing is published. The rows the sync wrote are the state a
           // block is executed on, so they are sampled from the pivot's root where they lie, off this thread; the
           // controller serves status and progress meanwhile, as during a publish, and `HandoffSampleDone` re-enters

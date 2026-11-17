@@ -553,6 +553,8 @@ object SyncController:
 
     // B-304: the hand-off's samples that stopped a sync since the last hand-off.
     private val handoffSampleFailures = new HandoffSampleFailures
+    // spec 018 C5a part 10: the scheme override is said once, not at every backfill resume (forge)
+    private var pathSchemeSaid = false
     // spec 018 C5a part 10: the hand-offs held back for accounts left out, since the last hand-off
     private val handoffsHeldForExcluded = new HandoffsHeldForExcluded
 
@@ -728,7 +730,8 @@ object SyncController:
       val scheme = SyncController
         .snapStorageScheme(configBuilder.blockchainConfig.networkType, config.storageScheme, pathLiveSync.isDefined)
         .fold(why => throw new IllegalArgumentException(why), identity)
-      if scheme != config.storageScheme then
+      if scheme != config.storageScheme && !pathSchemeSaid then
+        pathSchemeSaid = true
         log.info(
           s"[STATE-PATH-LIVE] SNAP writes the path scheme on the unified state layout (configured: " +
             s"${config.storageScheme}): its hand-off commits the position families, and the hash-keyed store is never read"
@@ -2919,7 +2922,7 @@ object SyncController:
 
           // D-T060-2 (spec 016 T060c): the recovery actors reach the stores through one `StateIngest`, built here
           // as SNAPSyncController builds its own: the same constructor stores, `pathNodeStorageOpt` derived as it
-          // derives it (`None` on the Hash scheme, i.e. ETC), `validatorFactory` as its `apply` default. Building it
+          // derives it (`None` on the Hash scheme: ETC off the unified layout), `validatorFactory` as its `apply` default. Building it
           // only stores the references; on the Path scheme it also wraps the flat-slot data source in a new
           // `PathNodeStorage`, which holds no state of its own and which the recovery actors do not read.
           val pathNodeStorageOpt: Option[PathNodeStorage] =

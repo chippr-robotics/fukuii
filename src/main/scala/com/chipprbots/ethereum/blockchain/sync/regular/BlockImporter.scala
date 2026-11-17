@@ -1211,8 +1211,10 @@ final private class BlockImporterLogic(
                   NonEmptyList(notImportedBlocks.head, notImportedBlocks.tail),
                   alreadyExhausted = paths.isEmpty
                 )
+              // not on the unified layout (spec 018 C5a part 10, forge): the controller ignores a bulk recovery there,
+              // and the import would wait with no fetch in flight; code is fetched one hash at a time below
               case e: MissingCodeException
-                  if SyncController.bulkCodeRecoveryAllowed(
+                  if !blockchainWriter.holdsStateInPlace && SyncController.bulkCodeRecoveryAllowed(
                     blockchainReader.isSnapSyncDone,
                     blockchainReader.bulkBytecodeRecoveryFailures
                   ) && BlockImporter.claimBulkCodeRecovery(e.hash) =>
