@@ -1805,13 +1805,16 @@ items:
   - id: B-225
     title: "fukuii ephemery: the not-configured error should name the custom-chains-dir it searched and the FUKUII_CONF_DIR launch"
     priority: P3
-    status: open
+    status: dropped
     area: ops
     size: S
     opened: 2026-11-12
+    closed: 2026-11-17
     refs: [user report 2026-11-12]
     links: {}
-    notes: "Config.scala:355 says 'run scripts/ephemery/fetch-genesis.sh first', which misleads when fetch-genesis ran with --out elsewhere: the CLI default is ~/.fukuii/ephemery-network/current/chains, and the generated conf must be passed with FUKUII_CONF_DIR=<out>/current/conf."
+    notes: |-
+      Config.scala:355 says 'run scripts/ephemery/fetch-genesis.sh first', which misleads when fetch-genesis ran with --out elsewhere: the CLI default is ~/.fukuii/ephemery-network/current/chains, and the generated conf must be passed with FUKUII_CONF_DIR=<out>/current/conf.
+      2026-11-17 dropped: superseded by #1821 (Ephemery bundled); the not-configured error names the resolved custom-chains-dir
   - id: B-227
     title: Ship Ephemery (bundled iteration + self-refresh at reset) and Hoodi as built-in networks
     priority: P2
