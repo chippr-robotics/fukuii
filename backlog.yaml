@@ -687,13 +687,16 @@ items:
   - id: B-089
     title: engine_getBlobsV2 returns an array of nulls
     priority: P3
-    status: open
+    status: dropped
     area: engine-api
     size: S
     opened: 2026-11-07
+    closed: 2026-11-17
     refs: [handoff §3]
     links: {}
-    notes: "Unverified dev-node item (handoff section 3): check it still applies before starting."
+    notes: |-
+      Unverified dev-node item (handoff section 3): check it still applies before starting.
+      2026-11-17 dropped: merged into B-198: same getBlobsV2 nulls defect
   - id: B-090
     title: engine_getPayloadBodiesByRange V1/V2 should return -38004 for count > 1024
     priority: P3
