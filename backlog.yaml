@@ -2481,13 +2481,18 @@ items:
   - id: B-320
     title: The healing serve-root and recent-root bootstraps drop PivotHeaderBootstrap.Failed.offBranch, and the healing one takes its target from unfiltered peer heights
     priority: P2
-    status: open
+    status: claimed
     area: snap
     size: S
     opened: 2026-11-16
     refs: []
     links:
       spec: 018
+    claim:
+      by: cloud-dc960fdc
+      agent: main
+      since: 2026-11-17T19:18:09Z
+      heartbeat: 2026-11-17T19:18:09Z
     notes: "forge, pre-code review of B-310 (2026-11-16): SyncController matches Failed(reason, _) for the healing serve-root (~911) and the recent-root (~3131) bootstraps, and maybeStartHealingServeRootBootstrap picks its target from every snap peer's height (~1021). After an escalation for a branch these ask peers on another chain again. The actor's OffBranchPeers lives in the SNAP child; the parent needs a way to pass the peers on or a filter of its own. Also: currentNetworkBestFromSnapPeers (PivotSelector) does not filter forkAccepted, unlike its two siblings."
   - id: B-324
     title: Confirm against ECIP-1121 that Olympia admits EIP-7702 (type 4) transactions, as TxTypeGate does, before Olympia is scheduled
