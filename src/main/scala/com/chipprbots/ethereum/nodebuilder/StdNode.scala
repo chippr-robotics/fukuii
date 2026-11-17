@@ -421,29 +421,24 @@ abstract class BaseNode extends Node:
     * Awaiting here makes 8545 genuinely the last port up, which is what hive/fukuii/Dockerfile's HIVE_CHECK_LIVE_PORT
     * now keys on: 8545 accepting connections implies 8551 already does.
     *
-    * A bind failure is logged, not thrown -- a node that cannot serve RPC should still sync.
+    * A bind failure, and an HTTPS server whose TLS context cannot be built, are fatal (B-148, spec 030 FR-011): a node
+    * that logged it and ran on would look healthy with no RPC, or with the operator believing the port is encrypted.
     */
   private def startJsonRpcHttpServer(): Unit =
+    val httpConfig = jsonRpcConfig.httpServerConfig
     maybeJsonRpcHttpServer match
-      case Right(jsonRpcServer) if jsonRpcConfig.httpServerConfig.enabled =>
-        try
-          val binding = scala.concurrent.Await.result(
-            jsonRpcServer.run(),
-            scala.concurrent.duration.Duration(10, "seconds")
-          )
-          log.info(s"JSON-RPC HTTP server bound to ${binding.localAddress}")
-        catch
-          case ex: Exception =>
-            log.error(
-              s"JSON-RPC HTTP server failed to start on ${jsonRpcConfig.httpServerConfig.interface}:" +
-                s"${jsonRpcConfig.httpServerConfig.port}",
-              ex
-            )
-      case Left(error) if jsonRpcConfig.httpServerConfig.enabled =>
-        log.error(error)
-        // No server was made: it will not listen, and the dashboard's RPC view says so (spec 029 FR-039).
+      case Right(jsonRpcServer) if httpConfig.enabled =>
+        StdNode.awaitJsonRpcHttpBind(jsonRpcServer.run(), httpConfig.interface, httpConfig.port, 10.seconds) match
+          case Right(binding) => log.info(s"JSON-RPC HTTP server bound to ${binding.localAddress}")
+          case Left(message)  =>
+            // No server is listening: the dashboard's RPC view says so (spec 029 FR-039), then the start is refused.
+            com.chipprbots.ethereum.jsonrpc.RpcCallStats.Node
+              .listening(com.chipprbots.ethereum.jsonrpc.RpcCallStats.Http, isListening = false)
+            throw StdNode.startupRefusal(message)
+      case Left(error) if httpConfig.enabled =>
         com.chipprbots.ethereum.jsonrpc.RpcCallStats.Node
           .listening(com.chipprbots.ethereum.jsonrpc.RpcCallStats.Http, isListening = false)
+        throw StdNode.startupRefusal(s"Refusing to start: $error (fukuii.network.rpc.http.mode must be http or https)")
       case _ => // Nothing
   /** The JSON-RPC transports as the dashboard's RPC view lists them (spec 029 FR-039): from the node's configuration,
     * with each one's exposure worked out once by the start-up warning's own rule. The Engine API is listed where it is
@@ -950,6 +945,24 @@ object StdNode:
           s"Refusing to start: the Engine API cannot bind $interface:$port (${e.getClass.getSimpleName}: ${e.getMessage}). " +
             "The consensus client could never reach this node, which would not sync. Free the port, or set " +
             "network.engine-api.port (each instance on one host needs its own)."
+        )
+
+  /** Waits for the JSON-RPC HTTP(S) bind. A failure, or no answer in `timeout`, is a message for the refusal: it names
+    * the address, the reason (for TLS, the key and file that cannot be used) and the keys to change.
+    */
+  def awaitJsonRpcHttpBind[A](
+      bind: => scala.concurrent.Future[A],
+      interface: String,
+      port: Int,
+      timeout: scala.concurrent.duration.FiniteDuration
+  ): Either[String, A] =
+    try Right(scala.concurrent.Await.result(bind, timeout))
+    catch
+      case scala.util.control.NonFatal(e) =>
+        Left(
+          s"Refusing to start: the JSON-RPC HTTP server cannot start on $interface:$port " +
+            s"(${e.getClass.getSimpleName}: ${e.getMessage}). Fix network.rpc.http (mode, interface, port, " +
+            "certificate), or set network.rpc.http.enabled = false."
         )
 
   /** Should the Engine API bind after the ETH JSON-RPC server rather than before it?
