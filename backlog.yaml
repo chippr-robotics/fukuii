@@ -51,7 +51,7 @@ items:
   - id: B-005
     title: "Engine API parity: SYNCING when the payload extends canonical, ACCEPTED otherwise; a typed local-fault error"
     priority: P1
-    status: claimed
+    status: in-progress
     area: engine-api
     size: M
     opened: 2026-11-07
@@ -62,7 +62,7 @@ items:
       by: cloud-dc960fdc
       agent: beacon-b005
       since: 2026-11-17T23:33:38Z
-      heartbeat: 2026-11-17T23:33:38Z
+      heartbeat: 2026-11-17T23:38:50Z
     notes: |-
       beacon. engine spec paris.md:178-185; Nethermind does the same.
       Includes B-271 (missing parent/state answered ACCEPTED; check geth delayPayloadImport) and issue #1694.
