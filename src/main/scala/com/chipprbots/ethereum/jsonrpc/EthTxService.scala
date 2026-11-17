@@ -317,16 +317,19 @@ class EthTxService(
 
   private def admitAtHead(stx: SignedTransaction, sidecar: Option[BlobSidecar]): Either[JsonRpcError, LocalAdmission] =
     blockchainReader.getBestBlockHeader match
-      case None => Left(JsonRpcError.LogicError("cannot validate transaction: no chain head"))
+      case None       => Left(JsonRpcError.LogicError("cannot validate transaction: no chain head"))
       case Some(head) =>
+        // In a scope of reads (spec 018, B-238): the head read above may be a block the disk has moved past since, whose
+        // state is handed out only inside one; and a view that moves under the read is read again.
+        def admitted = TxAdmission.validateLocal(
+          stx,
+          sidecar,
+          head,
+          address => blockchainReader.accountAt(head, address)
+        )
         try
-          TxAdmission
-            .validateLocal(
-              stx,
-              sidecar,
-              head,
-              address => blockchainReader.accountAt(head, address)
-            )
+          StateRead
+            .attemptingOrThrow(admitted)
             .left
             .map {
               case TxAdmission.Rejection.InitCodeTooLarge(size, max) =>
@@ -457,24 +460,25 @@ class EthTxService(
   def pendingTransactionsFrom(accounts: Set[Address]): ServiceResponse[OwnPendingTransactionsResponse] =
     getTransactionsFromPool.map { resp =>
       val own = resp.pendingTransactions.filter(pt => accounts.contains(pt.stx.senderAddress))
-      val head = blockchainReader.getBestBlockHeader
-      def stateNonce(sender: Address): BigInt =
-        head
-          .flatMap(header => blockchainReader.accountAt(header, sender))
-          .map(_.nonce.toBigInt)
-          .getOrElse(blockchainConfig.accountStartNonce.toBigInt)
-      val executable: Map[Address, Set[BigInt]] = own
-        .groupBy(_.stx.senderAddress)
-        .map { case (sender, txs) =>
-          sender -> TxAdmission.executableRun(txs.map(_.stx.tx.tx), stateNonce(sender)).map(_.nonce).toSet
-        }
-      Right(
+      // the head's state, read in a scope (spec 018, B-238): the disk may have moved past the head read here
+      StateRead.attempting {
+        val head = blockchainReader.getBestBlockHeader
+        def stateNonce(sender: Address): BigInt =
+          head
+            .flatMap(header => blockchainReader.accountAt(header, sender))
+            .map(_.nonce.toBigInt)
+            .getOrElse(blockchainConfig.accountStartNonce.toBigInt)
+        val executable: Map[Address, Set[BigInt]] = own
+          .groupBy(_.stx.senderAddress)
+          .map { case (sender, txs) =>
+            sender -> TxAdmission.executableRun(txs.map(_.stx.tx.tx), stateNonce(sender)).map(_.nonce).toSet
+          }
         OwnPendingTransactionsResponse(
           own
             .filter(pt => executable.get(pt.stx.senderAddress).exists(_.contains(pt.stx.tx.tx.nonce)))
             .map(pt => TransactionResponse(pt.stx.tx))
         )
-      )
+      }
     }
 
   /** The sender's next nonce with the pool's executable transactions applied: go-ethereum `TxPool.PoolNonce`
@@ -494,10 +498,13 @@ class EthTxService(
         PendingTransactionsManager.GetPendingTransactionsReq(_)
       )
       .map { resp =>
-        val stateNonce = blockchainReader
-          .accountAt(head, address)
-          .map(_.nonce.toBigInt)
-          .getOrElse(blockchainConfig.accountStartNonce.toBigInt)
+        // in a scope (spec 018, B-238): `head` may be a block the disk has moved past since the caller read it
+        val stateNonce = StateRead.attemptingOrThrow(
+          blockchainReader
+            .accountAt(head, address)
+            .map(_.nonce.toBigInt)
+            .getOrElse(blockchainConfig.accountStartNonce.toBigInt)
+        )
         EthTxService.nextPoolNonce(resp.pendingTransactions, address, stateNonce)
       }
 

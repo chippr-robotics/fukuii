@@ -331,8 +331,10 @@ class PersonalService(
       case Some(address) => keyStore.unlockAccount(address, passphrase).left.map(handleError)
       case None          => Left(AccountLocked)
 
+  /** In a scope (spec 018, B-238): `head` is the best block when the request began, which the disk may have moved past.
+    */
   private def getAccount(address: Address, head: BlockHeader): Option[Account] =
-    blockchainReader.accountAt(head, address)
+    StateRead.attemptingOrThrow(blockchainReader.accountAt(head, address))
 
   private def getMessageToSign(message: ByteString) =
     val prefixed: Array[Byte] =

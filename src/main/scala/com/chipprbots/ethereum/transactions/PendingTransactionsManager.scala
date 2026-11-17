@@ -16,6 +16,7 @@ import com.google.common.cache.CacheBuilder
 import com.google.common.cache.RemovalCause
 import com.google.common.cache.RemovalNotification
 
+import com.chipprbots.ethereum.db.storage.pathstate.ReadScope
 import com.chipprbots.ethereum.domain.Account
 import com.chipprbots.ethereum.domain.Address
 import com.chipprbots.ethereum.domain.BlockHeader
@@ -515,8 +516,10 @@ object PendingTransactionsManager:
           import com.chipprbots.ethereum.mpt.MerklePatriciaTrie
           import MerklePatriciaTrie.defaultByteArraySerializable
 
-          val bestBlockOpt = blockchainReader.getBestBlock
-          bestBlockOpt match
+          // One scope of reads for the whole check (spec 018, B-238): the best block read here may be one the disk has
+          // moved past by the time its state is taken, and a block behind the head is handed out only inside a scope.
+          // Without one its state is not held, and the fallback below drops every transaction of an unseen sender.
+          ReadScope.run(blockchainReader.getBestBlock match
             case Some(bestBlock) =>
               // The account trie of the best block, in that block's state (spec 018 Track C, C2b): any failure to read
               // it, a state that is not held included, is the fallback below.
@@ -557,6 +560,7 @@ object PendingTransactionsManager:
             case None =>
               // No best block — only accept txs from senders we've already seen
               StateChecked(afterTipAndTypeCheck.filter(stx => pendingNonces.contains(stx.senderAddress)))
+          )
         catch
           case _: Exception =>
             // MPT failed — only accept txs from senders with established pending nonces
