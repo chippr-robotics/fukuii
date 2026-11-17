@@ -14,6 +14,7 @@ import com.chipprbots.ethereum.consensus.pow.PoWMiningCoordinator.CoordinatorPro
 import com.chipprbots.ethereum.consensus.pow.miners.EthashDAGManager
 import com.chipprbots.ethereum.consensus.pow.miners.EthashMiner
 import com.chipprbots.ethereum.consensus.pow.miners.Miner
+import com.chipprbots.ethereum.consensus.pow.miners.SettledHeadBuild
 import com.chipprbots.ethereum.domain.Block
 import com.chipprbots.ethereum.domain.BlockchainReader
 import com.chipprbots.ethereum.jsonrpc.EthMiningService
@@ -21,6 +22,9 @@ import com.chipprbots.ethereum.nodebuilder.BlockchainConfigBuilder
 
 object PoWMiningCoordinator:
   trait CoordinatorProtocol
+
+  /** How long the miner waits for a move of the head to end before a turn is given up (spec 018 B-293). */
+  val HeadSettleWaitMillis: Long = 2000L
 
   final case class SetMiningMode(mode: MiningMode) extends CoordinatorProtocol
 
@@ -144,7 +148,13 @@ class PoWMiningCoordinator private (
   private def mineWithEthash(bestBlock: Block): Unit =
     log.debug("Mining with Ethash")
     val miner = minerOpt.getOrElse(
-      new EthashMiner(dagManager, blockCreator, syncController, ethMiningService)
+      new EthashMiner(
+        dagManager,
+        blockCreator,
+        syncController,
+        ethMiningService,
+        Some(new SettledHeadBuild(blockchainReader, PoWMiningCoordinator.HeadSettleWaitMillis, SettledHeadBuild.Builds))
+      )
     )
     mine(miner, bestBlock)
 

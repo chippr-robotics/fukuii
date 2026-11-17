@@ -600,7 +600,11 @@ final private class BlockImporterLogic(
           internally = true
         )(state)
 
-      case _: MinedBlock => Behaviors.same
+      case MinedBlock(block) =>
+        // forge (B-293): a block sealed while an import runs is dropped, as before; said, so that it is seen
+        log.warning("Mined block {} is dropped: an import is under way", block.idTag)
+        RegularSyncMetrics.incrementMinedBlocksDropped()
+        Behaviors.same
 
       // On the unified state layout a fork recovery moves nothing: the branch is fetched whole, from the common block,
       // and weighed against this node's own (spec 018 C4e part 6). An announced block imported meanwhile ended the

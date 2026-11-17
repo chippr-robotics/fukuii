@@ -57,7 +57,8 @@ object MockedMiner:
 
   // Internal self-messages.
   private[miners] case object MineBlock extends Command
-  private[miners] case class MockBlockMined(result: PendingBlockAndState) extends Command
+  // `generation`: the head's generation the build was begun under (spec 018 B-293); 0 with the guard off
+  private[miners] case class MockBlockMined(result: PendingBlockAndState, generation: Long = 0L) extends Command
   private[miners] case class MiningFailed(t: Throwable) extends Command
 
   // External protocol — unchanged, kept for the Mining `askMiner`/`sendMiner` API and QAService.
@@ -217,15 +218,21 @@ private class MockedMiner(
 
     case MineBlock =>
       def build(): Behavior[Command] =
-        context.pipeToSelf(
-          blockCreator
-            .getBlockForMining(parentBlock, withTransactions, initialWorldStateBeforeExecution)
-            .unsafeToFuture()
-        ) {
-          case Success(result) => MockBlockMined(result)
-          case Failure(t)      => MiningFailed(t)
-        }
-        Behaviors.same
+        // spec 018 B-293 (forge): the build is kept only if the head's generation is the one it began under; an odd one
+        // is a move or an adoption in place under way, which the build waits out as it waits for an import. Read, not
+        // waited on: this is the actor's thread.
+        val generation = if blockchainReader.holdsStateInPlace then blockchainReader.headGeneration else 0L
+        if generation % 2 != 0 then awaitImport(numBlocks, withTransactions, parentBlock, importWaits)
+        else
+          context.pipeToSelf(
+            blockCreator
+              .getBlockForMining(parentBlock, withTransactions, initialWorldStateBeforeExecution)
+              .unsafeToFuture()
+          ) {
+            case Success(result) => MockBlockMined(result, generation)
+            case Failure(t)      => MiningFailed(t)
+          }
+          Behaviors.same
       if numBlocks <= 0 then
         log.info(s"Mining all mocked blocks successful")
         waiting()
@@ -243,7 +250,14 @@ private class MockedMiner(
             )
             waiting()
 
-    case MockBlockMined(PendingBlockAndState(pendingBlock, state)) =>
+    case MockBlockMined(_, generation)
+        if blockchainReader.holdsStateInPlace && blockchainReader.headGeneration != generation =>
+      // the head was moved during the build: it is not sent, and the parent's state is looked at again (forge)
+      log.info("The mocked block built on {} is not used: the head was moved during the build", parentBlock.idTag)
+      context.self ! MineBlock
+      Behaviors.same
+
+    case MockBlockMined(PendingBlockAndState(pendingBlock, state), _) =>
       val minedBlock = pendingBlock.block
       log.info(
         s"Mining mocked block {} successful. Included transactions: {}",

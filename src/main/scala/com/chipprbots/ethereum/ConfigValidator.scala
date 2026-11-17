@@ -79,11 +79,8 @@ object ConfigValidator extends Logger:
     * Track C) cannot do yet. Fatal: the node would start and not do what it was asked.
     *
     * A SNAP sync runs on the guard since C5a part 10: it hands its state off onto the unified layout, and SNAP is
-    * advertised. What is still refused:
-    *
-    * Mining. A block mined here is built from the head the miner read, which the unified layout can move under it
-    * between the read and the seal: the miner's readers of the head generation are not built yet (B-293), so a block
-    * could be sealed over a state that is no longer the head's.
+    * advertised. Mining runs on it since B-293: the miners read the head under its generation, and build again on the
+    * head a move leaves (`SettledHeadBuild`). What is still refused:
     *
     * Checkpoint sync. Its import writes the hash-keyed store and says the sync is done, with no anchor on this layout:
     * the node would say it is synced and hold no state (until C5c).
@@ -111,11 +108,6 @@ object ConfigValidator extends Logger:
     if !on("state.path-live") then Nil
     else
       List(
-        Option.when(on("mining.mining-enabled"))(
-          guard + "fukuii.mining.mining-enabled = true: the unified layout can move its head between the miner's " +
-            "read of it and the seal, and the miner does not check for that yet (B-293), so a block could be sealed " +
-            "over a state that is no longer the head's. Set fukuii.mining.mining-enabled = false."
-        ),
         Option.when(set("sync.checkpoint-sync-file") || set("sync.checkpoint-sync-url"))(
           guard + "fukuii.sync.checkpoint-sync-file or fukuii.sync.checkpoint-sync-url: a checkpoint is imported " +
             "into the hash-keyed store, which this layout does not read, and the node would say it is synced with no " +

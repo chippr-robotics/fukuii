@@ -42,12 +42,13 @@ import com.chipprbots.ethereum.transactions.TransactionPicker
 
 object EthMiningService:
 
-  /** What `eth_getWork`, `eth_submitWork` and `miner_start` answer on the unified state layout until its miner checks
-    * the head it built on (B-293).
+  /** What `eth_getWork` answers while the head is moved and no block could be built on a settled one (spec 018 B-293):
+    * geth's and core-geth's words for work not there yet, which pool software takes as passing.
     */
-  val NoRouteForMinedBlocks: String =
-    "fukuii.state.path-live is on: the unified state layout can move its head between the read of it a block is " +
-      "built from and the seal, and mining does not check for that yet (B-293). No work is given and none is taken."
+  val NoWorkYet: String = "no mining work available yet"
+
+  /** How long `eth_getWork` waits for a move of the head to end: pools ask again within a second or so (forge). */
+  val WorkSettleWaitMillis: Long = 1000L
 
   case class GetMiningRequest()
   case class GetMiningResponse(isMining: Boolean)
@@ -116,57 +117,62 @@ class EthMiningService(
       GetMiningResponse(isMining)
     }
 
-  /** Why work is neither given nor taken on the unified state layout; `None` with the guard off.
-    *
-    * The unified layout moves its head in place, and the miner's readers of the head (the work given, the solution
-    * taken) do not yet check that the head they built on is still the head at the seal (B-293). Work is refused where
-    * it is asked for, and said so. `mining.mining-enabled` is refused at start for the same reason; these methods are
-    * served with the internal miner off, so they say it themselves.
-    */
-  private def noRouteForMinedBlocks: Option[JsonRpcError] =
-    Option.when(blockchainReader.holdsStateInPlace)(JsonRpcError.LogicError(EthMiningService.NoRouteForMinedBlocks))
+  // The work is built on the head read under its generation (spec 018 B-293): on the unified layout a move of the head
+  // in place steps it through blocks it may not stay on, and work built on one of them would be wasted.
+  private val settledHead =
+    new com.chipprbots.ethereum.consensus.pow.miners.SettledHeadBuild(
+      blockchainReader,
+      EthMiningService.WorkSettleWaitMillis,
+      com.chipprbots.ethereum.consensus.pow.miners.SettledHeadBuild.Builds
+    )
 
-  def getWork(req: GetWorkRequest): ServiceResponse[GetWorkResponse] =
-    noRouteForMinedBlocks.fold(workFor(req))(refusal => IO.pure(Left(refusal)))
+  def getWork(req: GetWorkRequest): ServiceResponse[GetWorkResponse] = workFor(req)
 
-  def submitWork(req: SubmitWorkRequest): ServiceResponse[SubmitWorkResponse] =
-    noRouteForMinedBlocks.fold(workSubmitted(req))(refusal => IO.pure(Left(refusal)))
+  def submitWork(req: SubmitWorkRequest): ServiceResponse[SubmitWorkResponse] = workSubmitted(req)
 
   private def workFor(@unused req: GetWorkRequest): ServiceResponse[GetWorkResponse] =
     mining.ifEthash { ethash =>
       PoWMiningMetrics.recordGetWork()
       reportActive()
-      blockchainReader.getBestBlock match
-        case Some(block) =>
-          (getOmmersFromPool(block.hash.value), getTransactionsFromPool).parMapN { case (ommers, pendingTxs) =>
-            val blockGenerator = ethash.blockGenerator
-            val PendingBlockAndState(pb, _) = blockGenerator.generateBlock(
-              block,
-              pendingTxs.pendingTransactions.map(_.stx.tx),
-              coinbaseProvider.get(),
-              ommers.headers,
-              None
+      // the ommers and the transactions are those of the parent the build is made on (forge)
+      settledHead { parent =>
+        (getOmmersFromPool(parent.hash.value), getTransactionsFromPool).parMapN { case (ommers, pendingTxs) =>
+          ethash.blockGenerator.generateBlock(
+            parent,
+            pendingTxs.pendingTransactions.map(_.stx.tx),
+            coinbaseProvider.get(),
+            ommers.headers,
+            None
+          )
+        }
+      }.map {
+        case Left(why) =>
+          log.info("No work is given: {}", why)
+          Left(JsonRpcError.LogicError(EthMiningService.NoWorkYet))
+        case Right((_, PendingBlockAndState(pb, _))) =>
+          val powHeaderHash = ByteString(kec256(BlockHeader.getEncodedWithoutNonce(pb.block.header)))
+          val dagSeed = EthashUtils
+            .seed(
+              pb.block.header.number.value.toLong,
+              blockchainConfig.forkBlockNumbers.ecip1099BlockNumber.toLong
             )
-            val powHeaderHash = ByteString(kec256(BlockHeader.getEncodedWithoutNonce(pb.block.header)))
-            val dagSeed = EthashUtils
-              .seed(
-                pb.block.header.number.value.toLong,
-                blockchainConfig.forkBlockNumbers.ecip1099BlockNumber.toLong
-              )
-            val target = ByteString((BigInt(2).pow(256) / pb.block.header.difficulty.value).toByteArray)
-            val blockNumber = pb.block.header.number.value
-            val workResponse = GetWorkResponse(powHeaderHash, dagSeed, target, blockNumber)
-            val notifyUrls = ethash.config.generic.notifyUrls
-            if notifyUrls.nonEmpty then
-              WorkNotifier.notify(
-                notifyUrls,
-                WorkNotifier.WorkPackage(powHeaderHash, dagSeed, target, blockNumber)
-              )(using system)
-            Right(workResponse)
-          }
-        case None =>
+          val target = ByteString((BigInt(2).pow(256) / pb.block.header.difficulty.value).toByteArray)
+          val blockNumber = pb.block.header.number.value
+          val workResponse = GetWorkResponse(powHeaderHash, dagSeed, target, blockNumber)
+          // only for work that is kept
+          val notifyUrls = ethash.config.generic.notifyUrls
+          if notifyUrls.nonEmpty then
+            WorkNotifier.notify(
+              notifyUrls,
+              WorkNotifier.WorkPackage(powHeaderHash, dagSeed, target, blockNumber)
+            )(using system)
+          Right(workResponse)
+      }.handleErrorWith {
+        case _: IllegalStateException =>
           log.error("Getting current best block failed")
           IO.pure(Left(JsonRpcError.InternalError))
+        case other => IO.raiseError(other)
+      }
     }(IO.pure(Left(JsonRpcError.MiningIsNotEthash)))
 
   private def workSubmitted(req: SubmitWorkRequest): ServiceResponse[SubmitWorkResponse] =
@@ -221,12 +227,7 @@ class EthMiningService(
       GetHashRateResponse(hashRate.map { case (_, (hr, _)) => hr }.sum)
     }
 
-  // Refused on the unified layout as work is (forge, spec 018 C5a part 10): otherwise it answers `true` and the miner,
-  // which `mining.mining-enabled` refused at start, does nothing.
-  def startMiner(req: StartMinerRequest): ServiceResponse[StartMinerResponse] =
-    noRouteForMinedBlocks.fold(minerStarted(req))(refusal => IO.pure(Left(refusal)))
-
-  private def minerStarted(@unused req: StartMinerRequest): ServiceResponse[StartMinerResponse] =
+  def startMiner(@unused req: StartMinerRequest): ServiceResponse[StartMinerResponse] =
     mining.ifEthash[ServiceResponse[StartMinerResponse]] { ethash =>
       IO {
         ethash.sendMiner(MinerProtocol.StartMining)
