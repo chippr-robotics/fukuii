@@ -47,9 +47,15 @@ Layout and the suite format: `.claude/evals/README.md`.
 2. Default caps, overridable by the user: ≤ 15 new tasks (≤ 3 `implement`),
    ≤ 10 regression tasks per agent from earlier suites, 2 reps per arm,
    ≤ 3 improvement rounds, `budget_usd` 3 per trial, grader `opus`.
-3. Estimate before Phase 3: `tasks × 2 arms × reps × (median trial cost ≈ $1–3)
+3. Estimate before Phase 3: `tasks × 2 arms × reps × (median trial ≈ $1–3)
    + grades (≈ $0.3 each)`, per round. State the figure and get the user's
-   go-ahead. Trials are headless `claude -p` runs: they spend real money.
+   go-ahead. Trials are headless `claude -p` runs under whatever auth the
+   session has (`claude auth status`). On a subscription (`oauth_token`),
+   `total_cost_usd` and `--max-budget-usd` are the CLI's API-price *estimate*
+   of the tokens used: nothing is billed, but the runs draw down the plan's
+   usage limits (the 5-hour window and the weekly cap), which a large round
+   can exhaust for the user's other sessions. On an API key they are real
+   charges. Either way the dollar figure is the unit the caps are set in.
 
 ## Phase 1 — review the sprint's PRs
 
