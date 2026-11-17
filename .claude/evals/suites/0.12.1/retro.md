@@ -134,3 +134,33 @@ Not proposed (no task tests them this round; recorded for the next retro): eye (
 missing aliases, repeated concurrency runs), loom (test count, SSC size, `ResourceHealthMonitor`),
 flow (never routed for WebSocket stream graphs), a thread-lifecycle protocol and testing-protocol.md
 rules (protocols are not loaded into a trial).
+
+## A/B round 1
+
+A = agent files at `HEAD`, B = the round-1 candidates; 18 tasks × 2 reps per arm, blind pairwise grades
+(opus). No leaks, edits or contract failures in 72 trials. Cost at API prices: A $13.56, B $12.37.
+
+Per agent: the agent's own tasks plus the route tasks its description can change (`score.py --only`).
+
+| Agent | Tasks | Wins A / B / tie | Verdict |
+|---|---|---|---|
+| forge | review-1853, review-1870, route-1733/1757/1806 | 0 / 5 / 0 | **ACCEPT B** |
+| prism | review-1783, review-1787, route-1744 | 0 / 2 / 1 | **ACCEPT B** |
+| herald | review-1745, review-1782, route-1757 | 0 / 3 / 0 | **ACCEPT B** |
+| vault | diagnose-1753, review-1769, route-1806/1757 | 0 / 3 / 1 | **ACCEPT B** (revised in round 2) |
+| beacon | review-1823, route-1765/1814/1733/1806 | 0 / 4 / 1 | **ACCEPT B** |
+| conduit | diagnose-1735, diagnose-1879, route-1765/1770 | 3 / 1 / 0 | **KEEP A** |
+
+Rubric totals, A → B (sum of both reps): review-1745 0 → 16 of 16; review-1782 0 → 10 of 20;
+review-1783 6 → 16 of 20; review-1787 6 → 15 of 24; review-1823 6 → 15 of 16; review-1853 8 → 21 of 24;
+review-1769 10 → 10 of 20 (no change); diagnose-1753 17 → 16; diagnose-1735 16 → 15; diagnose-1879 14 → 14.
+
+Why conduit lost: both diagnose tasks sit near ceiling and the margins are one rubric point. The
+UNVERIFIED rule fired (B labelled its geth claims) but the claims were as wrong as A's, so the grader
+still counted them; routes were identical. The behavioural rules bought nothing here.
+
+Why vault did not move on review-1769: the writer-enumeration rule never fired — no B run opened the
+other writer — while the severity rule did (the lock hold became must-fix in both B runs). Diagnosis:
+placement. vault has no review procedure; the new rules sat among coding iron rules.
+
+Full table: `runs/0.12.1/r1/score.md` (not tracked).

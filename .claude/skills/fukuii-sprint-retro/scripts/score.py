@@ -78,9 +78,13 @@ def main():
     ap.add_argument("--run", required=True)
     ap.add_argument("--tasks", nargs="+", required=True)
     ap.add_argument("--current-sprint", help="tasks of other sprints count as the regression suite")
+    ap.add_argument("--only", nargs="+", help="score only these task ids (one agent's verdict: its tasks plus "
+                    "the route tasks its description edit can change)")
     ap.add_argument("--json", action="store_true")
     a = ap.parse_args()
     tasks = load_tasks(a.tasks)
+    if a.only:
+        tasks = {k: v for k, v in tasks.items() if k in set(a.only)}
     trials = defaultdict(dict)
     for f in glob.glob(os.path.join(a.run, "trials", "*.json")):
         r = json.load(open(f))
