@@ -168,7 +168,8 @@ class EthMiningService(
             )(using system)
           Right(workResponse)
       }.handleErrorWith {
-        case _: IllegalStateException =>
+        // only the missing best block (forge): another fault of the build is raised as it was
+        case _: com.chipprbots.ethereum.consensus.pow.miners.SettledHeadBuild.NoBestBlock =>
           log.error("Getting current best block failed")
           IO.pure(Left(JsonRpcError.InternalError))
         case other => IO.raiseError(other)

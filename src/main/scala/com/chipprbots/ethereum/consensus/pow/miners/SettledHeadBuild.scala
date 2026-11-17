@@ -23,7 +23,8 @@ import com.chipprbots.ethereum.domain.BlockchainReader
   * @param waitMillis
   *   how long a build waits for a move of the head to end; blocking, so it is waited on a blocking thread
   */
-final class SettledHeadBuild(reader: BlockchainReader, waitMillis: Long, maxBuilds: Int):
+final class SettledHeadBuild(reader: BlockchainReader, waitMillis: Long, maxBuilds: Int)
+    extends com.chipprbots.ethereum.utils.Logger:
   require(maxBuilds >= 1, "at least one build")
 
   /** The head built on and what `build` made of it; or why nothing was built. */
@@ -36,21 +37,30 @@ final class SettledHeadBuild(reader: BlockchainReader, waitMillis: Long, maxBuil
         case None => IO.pure(Left(s"the head is still being moved after $waitMillis ms"))
         case Some(settled) =>
           IO.defer(reader.getBestBlock match
-            case None => IO.raiseError(new IllegalStateException("No best block found"))
+            case None => IO.raiseError(new SettledHeadBuild.NoBestBlock)
             case Some(parent) =>
               def moved: Boolean =
                 reader.headGeneration != settled || !reader.getBestBlock.exists(_.hash == parent.hash)
               build(parent).attempt.flatMap {
                 case Right(built) if reader.headGeneration == settled => IO.pure(Right((parent, built)))
-                case Right(_)                                         => again(left)
-                case Left(_: StateFault) if moved                     => again(left)
-                case Left(failed)                                     => IO.raiseError(failed)
+                case Right(_) =>
+                  log.debug(
+                    s"The block built on block ${parent.number} is not kept: the head was moved during the build"
+                  )
+                  again(left)
+                case Left(_: StateFault) if moved =>
+                  log.debug(s"The build on block ${parent.number} read a state the head has left: it is built again")
+                  again(left)
+                case Left(failed) => IO.raiseError(failed)
               }
           )
       }
     attempt(maxBuilds)
 
 object SettledHeadBuild:
+
+  /** The node has no best block to build on. */
+  final class NoBestBlock extends IllegalStateException("No best block found")
 
   /** How many builds a miner makes before it gives a turn up: the head moved during each of them. */
   val Builds: Int = 3
