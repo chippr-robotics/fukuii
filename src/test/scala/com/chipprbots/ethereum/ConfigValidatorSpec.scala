@@ -174,27 +174,64 @@ class ConfigValidatorSpec extends AnyFlatSpec with Matchers:
 
   // ── The in-development guard of the unified state layout (spec 018 Track C) ──────────────────────────────────
 
-  // With the guard on a SNAP sync has nowhere to hand its state off to before C5a, and SNAP is not advertised until
-  // the node follows the head: a capability is mutual, so a SNAP sync would wait for a snap-capable peer for ever. A
-  // node that would start and never sync does not start.
-  it should "refuse state.path-live with SNAP sync on, and name both keys" taggedAs UnitTest in {
-    val errors = ConfigValidator.validate(cfg("state.path-live = true\nsync.do-snap-sync = true"))
-    errors should have size 1
-    errors.head should (include("fukuii.state.path-live").and(include("fukuii.sync.do-snap-sync = false")))
-    errors.head should include("C5a")
+  // Since C5a part 10 a SNAP sync hands its state off onto the unified layout, and SNAP is advertised on the guard.
+  it should "take state.path-live with SNAP sync on" taggedAs UnitTest in {
+    ConfigValidator.validate(cfg("state.path-live = true\nsync.do-snap-sync = true")) shouldBe empty
+    ConfigValidator.validate(
+      cfg("state.path-live = true\nsync.do-snap-sync = true\nsync.snap-sync.storage-scheme = \"path\"")
+    ) shouldBe empty
   }
 
-  // A block is built over a view of its parent's state, which the builders do not take before the proposer view.
   it should "refuse state.path-live with mining on, and name both keys" taggedAs UnitTest in {
     val errors = ConfigValidator.validate(cfg("state.path-live = true\nmining.mining-enabled = true"))
     errors should have size 1
     errors.head should (include("fukuii.state.path-live").and(include("fukuii.mining.mining-enabled = false")))
-    // each thing the guard cannot do yet is said
-    ConfigValidator.stateGuardErrors(
-      cfg("state.path-live = true\nmining.mining-enabled = true\nsync.do-snap-sync = true")
-    ) should have size 2
+    errors.head should include("B-293")
     ConfigValidator.stateGuardErrors(cfg("state.path-live = false\nmining.mining-enabled = true")) shouldBe empty
     ConfigValidator.stateGuardErrors(cfg("state.path-live = true\nmining.mining-enabled = false")) shouldBe empty
+  }
+
+  // forge: a checkpoint is imported into the hash-keyed store, and says the sync is done with no anchor
+  it should "refuse state.path-live with a checkpoint to sync from, by file or by URL" taggedAs UnitTest in {
+    Seq("sync.checkpoint-sync-file = \"/data/cp.bin\"", "sync.checkpoint-sync-url = \"https://cp.example/cp\"")
+      .foreach { key =>
+        val errors = ConfigValidator.stateGuardErrors(cfg(s"state.path-live = true\n$key"))
+        withClue(key)(errors should have size 1)
+        errors.head should include("checkpoint")
+        ConfigValidator.stateGuardErrors(cfg(s"state.path-live = false\n$key")) shouldBe empty
+      }
+    // empty, as the shipped configuration has them, is no checkpoint
+    ConfigValidator.stateGuardErrors(
+      cfg("state.path-live = true\nsync.checkpoint-sync-file = \"\"\nsync.checkpoint-sync-url = \" \"")
+    ) shouldBe empty
+  }
+
+  // vault, forge: the hash scheme writes the store this layout never reads, and every hand-off would stop. The guard
+  // syncs with the path scheme on every network (part 10 step 6, B-308), so only a scheme asked for is refused
+  it should "refuse state.path-live with the hash storage scheme asked for, and take every shipped network" taggedAs UnitTest in {
+    val errors = ConfigValidator.stateGuardErrors(
+      cfg("state.path-live = true\nsync.do-snap-sync = true\nsync.snap-sync.storage-scheme = \"HASH\"")
+    )
+    errors should have size 1
+    errors.head should include("storage-scheme = hash")
+    def guarded(network: String): com.typesafe.config.Config =
+      ConfigFactory
+        .load(s"conf/$network")
+        .getConfig("fukuii")
+        .withValue("state.path-live", com.typesafe.config.ConfigValueFactory.fromAnyRef(true))
+        .withValue("sync.do-snap-sync", com.typesafe.config.ConfigValueFactory.fromAnyRef(true))
+    Seq("etc", "mordor", "sepolia", "eth", "hoodi", "plataberget").foreach { network =>
+      withClue(network)(ConfigValidator.stateGuardErrors(guarded(network)) shouldBe empty)
+    }
+    ConfigValidator.stateGuardErrors(cfg("state.path-live = false\nsync.snap-sync.storage-scheme = \"hash\"")) shouldBe
+      empty
+    // each thing the guard refuses is said
+    ConfigValidator.stateGuardErrors(
+      cfg(
+        "state.path-live = true\nmining.mining-enabled = true\nsync.snap-sync.storage-scheme = \"hash\"\n" +
+          "sync.checkpoint-sync-url = \"https://cp.example/cp\""
+      )
+    ) should have size 3
   }
 
   // Both are taken on the unified layout since C3c, in its linear subset: the chain file block by block onto the
@@ -217,6 +254,7 @@ class ConfigValidatorSpec extends AnyFlatSpec with Matchers:
   }
 
   it should "accept the guard with SNAP sync off, and SNAP sync with the guard off or not set" taggedAs UnitTest in {
+    // a fresh node with SNAP off is refused at its start, where its datadir is known (PathLiveSyncSpec)
     ConfigValidator.validate(cfg("state.path-live = true\nsync.do-snap-sync = false")) shouldBe empty
     ConfigValidator.validate(cfg("state.path-live = false\nsync.do-snap-sync = true")) shouldBe empty
     ConfigValidator.validate(cfg("sync.do-snap-sync = true")) shouldBe empty
@@ -225,7 +263,7 @@ class ConfigValidatorSpec extends AnyFlatSpec with Matchers:
   }
 
   it should "refuse it for an instance of a multi-instance run too" taggedAs UnitTest in {
-    val instance = cfg("state.path-live = true\nsync.do-snap-sync = true")
+    val instance = cfg("state.path-live = true\nmining.mining-enabled = true")
     val root = ConfigFactory.empty().withValue("fukuii-runtime.instances.guarded.fukuii", instance.root())
     val refused = the[IllegalArgumentException] thrownBy com.chipprbots.ethereum.runtime.FukuiiRuntime.fromConfig(root)
     refused.getMessage should (include("Instance guarded").and(include("fukuii.state.path-live")))

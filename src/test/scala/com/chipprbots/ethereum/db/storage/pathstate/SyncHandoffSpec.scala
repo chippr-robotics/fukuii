@@ -84,6 +84,57 @@ class SyncHandoffSpec extends AnyFlatSpec with Matchers:
     s.appState.isBytecodeRecoveryDone() shouldBe true
   }
 
+  // spec 018 C5a part 10 (forge): an earlier, higher pivot's bootstrap stored its header and its place in the index
+  it should "leave no entry of the index by number above the pivot" taggedAs UnitTest in {
+    val s = new Synced
+    val other = ByteString(Array.fill[Byte](32)(0x42))
+    s.numbers
+      .put(BigInt(5001), other)
+      .and(s.numbers.put(BigInt(5100), other))
+      .and(s.numbers.put(BigInt(4999), other))
+      .and(s.appState.putSnapSyncBootstrapTarget(5100))
+      .commit()
+    s.source.plain = 0
+
+    s.commit()
+
+    withClue("deleted before the one synced write, which makes them durable with it: ") {
+      (s.source.synced, s.source.plain) shouldBe (1, 1)
+    }
+    (5001 to 5100).flatMap(n => s.numbers.get(BigInt(n))) shouldBe empty
+    withClue("below the pivot the header download's entries stay: ")(s.numbers.get(BigInt(4999)) shouldBe Some(other))
+    s.numbers.get(BigInt(5000)) shouldBe Some(s.pivot.hash.value)
+  }
+
+  // forge: a pivot lowered after an escalation (B-307, B-310), with the download's target still at the higher one
+  it should "take the header download's cursors no higher than the pivot, and keep its target" taggedAs UnitTest in {
+    val s = new Synced
+    s.appState
+      .putBackfillTarget(5300)
+      .and(s.appState.putBackfillTargetHash(ByteString(Array.fill[Byte](32)(0x43))))
+      .and(s.appState.putBackfillBestHeader(5200))
+      .and(s.appState.putBackfillBestBody(5100))
+      .and(s.appState.putBackfillBestReceipt(4000))
+      .commit()
+
+    s.commit()
+
+    val hash = s.pivot.hash.value
+    s.appState.getBackfillTarget() shouldBe BigInt(5000)
+    s.appState.getBackfillTargetHash() shouldBe Some(hash)
+    (s.appState.getBackfillBestHeader(), s.appState.getBackfillBestHeaderHash()) shouldBe (BigInt(5000), Some(hash))
+    s.appState.getBackfillBestBody() shouldBe BigInt(5000)
+    withClue("a cursor below the pivot stays: ")(s.appState.getBackfillBestReceipt() shouldBe BigInt(4000))
+    (5001 to 5300).flatMap(n => s.numbers.get(BigInt(n))) shouldBe empty
+
+    // a download below the pivot is left as it is
+    val below = new Synced
+    below.appState.putBackfillTarget(5000).and(below.appState.putBackfillBestHeader(1200)).commit()
+    below.commit()
+    (below.appState.getBackfillTarget(), below.appState.getBackfillBestHeader()) shouldBe (BigInt(5000), BigInt(1200))
+    below.appState.getBackfillTargetHash() shouldBe None
+  }
+
   it should "write a recovery that is owed as owed, over what an earlier sync left" taggedAs UnitTest in {
     val s = new Synced
     s.appState.storageRecoveryDone().and(s.appState.bytecodeRecoveryDone()).commit()

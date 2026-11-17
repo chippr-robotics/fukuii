@@ -372,27 +372,30 @@ class EngineApiService(
       authority: com.chipprbots.ethereum.ledger.StateRecovery.Authority =
         com.chipprbots.ethereum.ledger.StateRecovery.Authority.Payload
   ): Unit =
-    stateRecovery.foreach { recovery =>
-      val ticket = recovery.requestFor(hash, recoverySink, why, authority)
-      // Only what a fork choice asked for is counted: the consensus client names a head with it, and a payload's
-      // recovery never moves the head. A recovery that is cooling down ends at once, with what it ended with last:
-      // each fork choice that names the head again counts once. Fork choices that find a recovery under way share its
-      // ticket, and count once for all of them: while it runs the node is at work on the head, not refusing it.
-      if authority == com.chipprbots.ethereum.ledger.StateRecovery.Authority.ForkChoice then
-        escalationWatch.foreach { watch =>
-          if watchedRecoveries.add(ticket) then
-            val askedIn = watch.currentRun
-            ticket.outcome.whenComplete { (outcome, failure) =>
-              watchedRecoveries.remove(ticket)
-              try
-                if failure == null then watch.ended(outcome, hexOf(hash), askedIn, Some(hash))
-                else log.error("[STATE-ESCALATION] a recovery ended with no outcome", failure)
-              catch
-                case scala.util.control.NonFatal(e) =>
-                  log.error("[STATE-ESCALATION] the end of a recovery could not be counted", e)
-            }
-        }
-    }
+    // With no state held, a sync from scratch runs (spec 018 C5a part 10, beacon C5): there is nothing to recover from,
+    // and a walk from no anchor would end as a fault, or as a chain that cannot be reached, and be counted.
+    if stateHeldInPlace.forall(_().isDefined) then
+      stateRecovery.foreach { recovery =>
+        val ticket = recovery.requestFor(hash, recoverySink, why, authority)
+        // Only what a fork choice asked for is counted: the consensus client names a head with it, and a payload's
+        // recovery never moves the head. A recovery that is cooling down ends at once, with what it ended with last:
+        // each fork choice that names the head again counts once. Fork choices that find a recovery under way share its
+        // ticket, and count once for all of them: while it runs the node is at work on the head, not refusing it.
+        if authority == com.chipprbots.ethereum.ledger.StateRecovery.Authority.ForkChoice then
+          escalationWatch.foreach { watch =>
+            if watchedRecoveries.add(ticket) then
+              val askedIn = watch.currentRun
+              ticket.outcome.whenComplete { (outcome, failure) =>
+                watchedRecoveries.remove(ticket)
+                try
+                  if failure == null then watch.ended(outcome, hexOf(hash), askedIn, Some(hash))
+                  else log.error("[STATE-ESCALATION] a recovery ended with no outcome", failure)
+                catch
+                  case scala.util.control.NonFatal(e) =>
+                    log.error("[STATE-ESCALATION] the end of a recovery could not be counted", e)
+              }
+          }
+      }
 
   /** The consensus layer's branch handed over by the p2p import path (spec 018 C5a, B-297): a branch longer than the
     * executed blocks kept beside the disk, or one that forks below what a view reaches, whose blocks are stored. Its
@@ -853,7 +856,8 @@ class EngineApiService(
                         com.chipprbots.ethereum.ledger.BlockExecutionError.MissingParentError =>
                       // Missing state, or a parent this node has not: it cannot be judged, so the block is stored by hash
                       // and answered ACCEPTED below. For missing state, regular sync's importer fetches it and runs the block
-                      // when it reaches it (#1694).
+                      // when it reaches it (#1694); on the unified layout it fetches missing code only, and a node missing
+                      // from the held state is a fault of this node (spec 018 C5a part 10, beacon).
                       error match
                         case com.chipprbots.ethereum.ledger.BlockExecutionError.MPTError(hole) =>
                           stateHoles.report(payload.blockNumber, hole, parentHeader.map(_.stateRoot.value))

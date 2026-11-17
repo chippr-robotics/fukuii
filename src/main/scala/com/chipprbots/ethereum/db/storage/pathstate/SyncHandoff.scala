@@ -53,10 +53,10 @@ final class SyncHandoff(
   def windowMissing(pivot: BlockHeader, proofOfWork: Boolean): AncestorWindow.Missing =
     AncestorWindow.check(pivot, proofOfWork, hash => headers.get(hash.value), hash => bodies.get(hash.value))
 
-  /** '''One synced batch''': the pivot's header and its place in the index of blocks by number, its weight, the best
-    * block, the flags of the recoveries (set or cleared, never left as an earlier sync wrote them), the scan that was
-    * owed no longer owed, the heal's marker removed when asked, and with them the state's anchor, the block the state
-    * began at and that the sync is done.
+  /** '''One synced batch''': the pivot's header and its place in the index of blocks by number (and no entry above it),
+    * its weight, the best block, the flags of the recoveries (set or cleared, never left as an earlier sync wrote
+    * them), the scan that was owed no longer owed, the heal's marker removed when asked, and with them the state's
+    * anchor, the block the state began at and that the sync is done.
     *
     * The best block and the index move here with the state, in its batch: the one way they may on this layout.
     *
@@ -82,9 +82,23 @@ final class SyncHandoff(
   ): Boolean =
     val hash = pivot.hash.value
     val number = pivot.number.value
+    // The entries of the index by number above the pivot, which an earlier, higher pivot's bootstrap left (forge, spec
+    // 018 C5a part 10): read by number they name blocks of no chain this state is of. Regular sync writes those heights
+    // again as it imports; below the pivot the header download overwrote each one it validated. Deleted a chunk at a
+    // time before the synced write, which makes them durable with it (vault): a range can be large, and a kill before
+    // it leaves entries that were of no state anyway.
+    val highest = appState.highestIndexedHeight(h => headers.get(h).map(_.number.value))
+    Iterator
+      .iterate(number + 1)(_ + PathStateStorage.IndexTrimChunk)
+      .takeWhile(_ <= highest)
+      .foreach { from =>
+        val to = (from + PathStateStorage.IndexTrimChunk - 1).min(highest)
+        blockNumberMappingStorage.update(toRemove = from to to, toUpsert = Nil).commit()
+      }
     val records = headers
       .put(hash, pivot)
       .and(blockNumberMappingStorage.put(number, hash))
+      .and(appState.backfillCursorsAtMost(number, hash))
       .and(weights.put(hash, weight))
       .and(appState.putBestBlockInfo(BlockInfo(hash, number)))
       .and(if storageRecoveryDone then appState.storageRecoveryDone() else appState.clearStorageRecoveryDone())

@@ -127,6 +127,64 @@ object SyncController:
       */
     def clearForBranchRetry(): Boolean
 
+  /** A sync on the unified state layout (spec 018 C5a part 10). None on the hash layout. */
+  trait PathLiveSyncPort:
+
+    /** The end of each SNAP sync: its sample and its one write onto the layout. */
+    def handoff: com.chipprbots.ethereum.db.storage.pathstate.SyncHandoff
+
+    /** Whether a SNAP sync may begin, which every route into SNAP asks first. Blocking: for a worker thread.
+      *
+      * A datadir whose state is its genesis has it cleared, so that the sync writes into families that hold none, and
+      * what the node keeps of it is dropped with it (the recoveries, the head the fork choice followed, the
+      * escalation's count). A datadir with no state begins, or resumes. A datadir with the state of any other block, or
+      * with the mark of a clear that has not ended, is refused: a SNAP sync never starts over a state the node followed
+      * the chain to. The escalation's clear, the one way to SNAP over a state, removes the anchor before it asks.
+      */
+    def beforeSnap(): SnapStartOnGuard
+
+    /** A SNAP sync handed its state off: the escalation's count begins with it, and a recovery asked for before it is
+      * not counted. What was counted while no state was held is of no state (beacon C5).
+      */
+    def handedOff(): Unit
+
+  /** What [[PathLiveSyncPort.beforeSnap]] answers. */
+  enum SnapStartOnGuard:
+    /** SNAP begins; `clearedGenesis` when the genesis state was cleared for it. */
+    case Begin(clearedGenesis: Boolean)
+
+    /** SNAP does not begin, for `why`; regular sync runs on the state that is held. */
+    case Refused(why: String)
+
+    /** Not yet, for `why`: the check is asked again in [[SnapStartRecheckDelay]], and nothing else runs meanwhile. */
+    case Wait(why: String)
+
+  /** The storage scheme a SNAP sync writes. On the unified state layout it is the path scheme, on every network (spec
+    * 018 C5a part 10, step 6; B-308; the user's decision of 2026-11-17 narrows FR-020, "ETC keeps the hash scheme", to
+    * the hash layout): its hand-off commits the position families, and the hash-keyed store is never read there. On the
+    * hash layout it is the network's: path on Ethereum's networks, hash on ETC's.
+    *
+    * @return
+    *   why not, when the configured scheme is not the hash layout's for the network
+    */
+  def snapStorageScheme(
+      networkType: NetworkType,
+      configured: StorageScheme,
+      unifiedLayout: Boolean
+  ): Either[String, StorageScheme] =
+    if unifiedLayout then Right(StorageScheme.Path)
+    else
+      val expected = if networkType == NetworkType.ETH then StorageScheme.Path else StorageScheme.Hash
+      Either.cond(
+        configured == expected,
+        configured,
+        s"storageScheme=$configured does not match expected $expected for networkType=$networkType — check " +
+          "sync.snap-sync.storage-scheme in reference.conf"
+      )
+
+  /** How long before a [[SnapStartOnGuard.Wait]] is asked again. */
+  val SnapStartRecheckDelay: FiniteDuration = 5.seconds
+
   /** Bulk bytecode recoveries (triggered by block import) allowed to finish with the triggering code still missing
     * before the node stops repeating the full trie scan on every restart.
     */
@@ -221,6 +279,10 @@ object SyncController:
   // the clear of a state that is given up ended: done, not begun (a recovery was still running), or failed
   private case object SnapStoppedForBranchRetry extends Command
   private case class BranchRetryCleared(ended: scala.util.Try[Boolean]) extends Command
+  // spec 018 C5a part 10: what the port answered before a SNAP sync on the unified layout
+  private case class SnapStartChecked(minPivotBlock: Option[BigInt], answer: scala.util.Try[SnapStartOnGuard])
+      extends Command
+  private case class SnapStartRecheck(minPivotBlock: Option[BigInt]) extends Command
 
   private case class StateClearEnded(
       record: com.chipprbots.ethereum.db.storage.pathstate.StateEscalation,
@@ -326,7 +388,10 @@ object SyncController:
       // tracker. Observation only; None where nothing scores (unit fixtures).
       peerScoringManager: Option[PeerScoringManager] = None,
       // Spec 018 C5a part 7b: what a state is given up with. None on the hash layout.
-      stateEscalation: Option[StateEscalationPort] = None
+      stateEscalation: Option[StateEscalationPort] = None,
+      // Spec 018 C5a part 10: a sync on the unified layout, its hand-off and the check before SNAP. None on the hash
+      // layout.
+      pathLiveSync: Option[PathLiveSyncPort] = None
   ): Behavior[Command] =
     Behaviors.setup { ctx =>
       Behaviors.withTimers { timers =>
@@ -359,7 +424,8 @@ object SyncController:
           backgroundAuditEnabled,
           chainWeightReconcileOn,
           peerScoringManager,
-          stateEscalation
+          stateEscalation,
+          pathLiveSync
         )
         impl.setup()
         impl.withPostStop(impl.idle())
@@ -404,7 +470,8 @@ object SyncController:
       backgroundAuditEnabled: Boolean,
       chainWeightReconcileOn: Boolean,
       peerScoringManager: Option[PeerScoringManager],
-      stateEscalation: Option[StateEscalationPort]
+      stateEscalation: Option[StateEscalationPort],
+      pathLiveSync: Option[PathLiveSyncPort]
   ):
     // scalastyle:on parameter.number
 
@@ -486,6 +553,10 @@ object SyncController:
 
     // B-304: the hand-off's samples that stopped a sync since the last hand-off.
     private val handoffSampleFailures = new HandoffSampleFailures
+    // spec 018 C5a part 10: the scheme override is said once, not at every backfill resume (forge)
+    private var pathSchemeSaid = false
+    // spec 018 C5a part 10: the hand-offs held back for accounts left out, since the last hand-off
+    private val handoffsHeldForExcluded = new HandoffsHeldForExcluded
 
     // Whether SNAP should consume CL-driven pivot selection. Captured once at construction
     // because both `syncConfig` and the chain config are stable for the actor's lifetime.
@@ -656,19 +727,21 @@ object SyncController:
             "header download to reach the pivot"
         )
       }
-      val networkType = configBuilder.blockchainConfig.networkType
-      val expectedScheme = if networkType == NetworkType.ETH then StorageScheme.Path else StorageScheme.Hash
-      require(
-        config.storageScheme == expectedScheme,
-        s"storageScheme=${config.storageScheme} does not match expected $expectedScheme " +
-          s"for networkType=$networkType — check sync.snap-sync.storage-scheme in reference.conf"
-      )
+      val scheme = SyncController
+        .snapStorageScheme(configBuilder.blockchainConfig.networkType, config.storageScheme, pathLiveSync.isDefined)
+        .fold(why => throw new IllegalArgumentException(why), identity)
+      if scheme != config.storageScheme && !pathSchemeSaid then
+        pathSchemeSaid = true
+        log.info(
+          s"[STATE-PATH-LIVE] SNAP writes the path scheme on the unified state layout (configured: " +
+            s"${config.storageScheme}): its hand-off commits the position families, and the hash-keyed store is never read"
+        )
       // Keep the SNAP storage-task file under the datadir so it survives a reboot (/tmp does not).
       val taskFileDir = scala.util
         .Try(Config.config.getString("datadir"))
         .toOption
         .map(d => StorageTaskFile.dirUnder(java.nio.file.Paths.get(d)))
-      config.copy(taskFileDir = taskFileDir)
+      config.copy(taskFileDir = taskFileDir, storageScheme = scheme)
 
     def idle(): Behavior[Command] = Behaviors.receive { (_, cmd) =>
       val msg = unwrap(cmd)
@@ -808,6 +881,7 @@ object SyncController:
             )
             clearSnapPivotFloor()
             markChainWeightsAfterSnap(pivot)
+            pathLiveSync.foreach(_.handedOff())
             // spec 004 MUST-FIX: clear the healing serve-root latch on every exit from runningSnapSync.
             abortHealingServeRootRequest("SNAP finalised — leaving snap sync")
             // SNAPSyncController already owns the live ChainDownloader child via its
@@ -829,6 +903,7 @@ object SyncController:
             log.info("SNAP sync completed (legacy Done path), transitioning to regular sync")
             // spec 004 MUST-FIX: clear the healing serve-root latch on every exit from runningSnapSync.
             abortHealingServeRootRequest("SNAP done (legacy) — leaving snap sync")
+            pathLiveSync.foreach(_.handedOff()) // beacon: as at SnapSyncFinalized
             startRegularSync()._2
 
           case SyncProtocol.PivotOffTheBranch if stateEscalation.isDefined =>
@@ -874,6 +949,21 @@ object SyncController:
                 Behaviors.stopped
 
           case SyncProtocol.HealingImpossible | SyncProtocol.PivotOffTheBranch =>
+            restartSnapAfterFailedFinalization(snapSync)
+
+          case SyncProtocol.HandoffHeldForExcluded(pivot, readFailed) =>
+            val n = handoffsHeldForExcluded.held()
+            val why =
+              if readFailed then "the excluded set could not be read, which is taken as accounts left out"
+              else "the sync left accounts out, whose storage nothing fetches on the unified layout after it"
+            val said =
+              s"[HANDOFF] not handing off at pivot $pivot: $why. $n in a row since the last hand-off: healing goes on"
+            if n >= HandoffsHeldForExcluded.ErrorFrom then
+              log.error(
+                s"$said. Each restart heals from the excluded set; an account whose storage no peer serves keeps the " +
+                  "node in SNAP (db.state.handoff.held.excluded.consecutive)."
+              )
+            else log.warn(said)
             restartSnapAfterFailedFinalization(snapSync)
 
           case SyncProtocol.Status.Progress(_, _) =>
@@ -1159,6 +1249,15 @@ object SyncController:
         case RegularSyncTerminated(actor) if actor == regularSync =>
           log.error("RegularSync actor terminated unexpectedly — restarting regular sync.")
           startRegularSync(resumeBackfill = false)._2
+        case SyncProtocol.MissingCodeNeedsBulkRecovery(blockNumber, _) if onTheGuard =>
+          // spec 018 C5a part 10: the bulk recovery walks the hash-keyed store, which this layout never reads; code is
+          // fetched one hash at a time by the importer (the code store is shared by both layouts).
+          log.warn(
+            "Ignoring a bulk bytecode recovery request for block {}: on the unified state layout code is fetched one " +
+              "hash at a time.",
+            blockNumber
+          )
+          Behaviors.same
         case SyncProtocol.MissingCodeNeedsBulkRecovery(blockNumber, _)
             if !SyncController.bulkCodeRecoveryAllowed(
               appStateStorage.isSnapSyncDone(),
@@ -1229,6 +1328,16 @@ object SyncController:
                 StateClearEnded(record, givenUpFor, _)
               )
               clearingState(regularSync, port)
+        case SyncProtocol.RegularSyncStuck(blockNumber, missingHash) if onTheGuard =>
+          // spec 018 C5a part 10 (forge): a re-SNAP would start over the state this node holds. A state it cannot
+          // follow the chain with is given up through the escalation, which clears it first.
+          log.error(
+            "[SYNC-STUCK] Regular sync stuck on block {} (missing {}). On the unified state layout no SNAP re-sync " +
+              "starts over the state that is held: the escalation gives it up if the chain cannot be followed with it.",
+            blockNumber,
+            missingHash
+          )
+          Behaviors.same
         case SyncProtocol.RegularSyncStuck(blockNumber, missingHash) if pendingResnap.isDefined =>
           // The importer keeps retrying while a re-SNAP waits, and reports each new run of exhausts: nothing new.
           log.info(
@@ -1528,11 +1637,11 @@ object SyncController:
       // H3: only a stuck that re-SNAPs now, or a re-SNAP whose wait ended with nothing imported; one that waits keeps
       // regular sync, and its backfill, running.
       case _: SyncProtocol.RegularSyncStuck =>
-        pendingResnap.isEmpty &&
+        !onTheGuard && pendingResnap.isEmpty &&
         SyncController.resnapBackoff(nextResnapCount(blockchainReader.getBestBlockNumber)) == Duration.Zero
       case ResnapDue(blockNumber) =>
         pendingResnap.contains(blockNumber) && !importedSinceBaseline(blockchainReader.getBestBlockNumber)
-      case _: SyncProtocol.MissingCodeNeedsBulkRecovery => true
+      case _: SyncProtocol.MissingCodeNeedsBulkRecovery => !onTheGuard
       case _: StateEscalationDue                        => true
       case _                                            => false
 
@@ -1696,6 +1805,7 @@ object SyncController:
           )
           clearSnapPivotFloor()
           markChainWeightsAfterSnap(pivot)
+          pathLiveSync.foreach(_.handedOff())
           ctx.stop(headerBootstrap)
           ctx.stop(peersClient)
           // SNAP finalised mid-bootstrap is an exceptional path; tear down the SNAP actor cleanly
@@ -1789,7 +1899,8 @@ object SyncController:
           Behaviors.same
 
         // SSC declared healing impossible during the pivot header bootstrap window — stale, drop.
-        case SyncProtocol.HealingImpossible | _: SyncProtocol.HandoffSampleStopped =>
+        case SyncProtocol.HealingImpossible | _: SyncProtocol.HandoffSampleStopped |
+            _: SyncProtocol.HandoffHeldForExcluded =>
           log.debug(
             "HealingImpossible or HandoffSampleStopped in runningPivotHeaderBootstrap — stale, dropping (bootstrap in " +
               "progress)."
@@ -1950,6 +2061,7 @@ object SyncController:
       appStateStorage.clearSnapSyncMinPivotBlock().commit()
       snapPivotFailedFinalization = None // #1555: a finalized SNAP has no failed pivot left to avoid
       handoffSampleFailures.handedOff() // B-304: the samples are counted since the last hand-off
+      handoffsHeldForExcluded.handedOff()
 
     /** Log-only: compare the stored SNAP state root with the SNAP pivot header and report whether the trie is there. */
     private def logSnapStateRootDiagnostic(): Unit =
@@ -2114,7 +2226,7 @@ object SyncController:
       // #1692: pruning on a store SNAP or a checkpoint filled could delete a trie node another position still used, and
       // a clean audit pass finished before this version says nothing of a hole that came after it. One more full pass
       // per datadir, once, before the audit's gate is read. Its repairs pin the count, so they are never pruned.
-      if appStateStorage.forceAuditPassOnce() then
+      if !onTheGuard && appStateStorage.forceAuditPassOnce() then
         log.info(
           "[HEAL-AUDIT] One more full audit pass is owed on this datadir (#1692): a trie node pruning deleted by a " +
             "count that was too low is fetched back and repaired. It runs off the critical path."
@@ -2137,6 +2249,11 @@ object SyncController:
           val floor = liveSnapPivotFloor()
           floor.foreach(f => log.info("SNAP starts with a pivot floor of {} (left by an interrupted fast sync)", f))
           startSnapSync(minPivotBlock = floor)
+        case (true, SyncMode.Snap) if onTheGuard =>
+          // spec 018 C5a part 10: the hand-off wrote the recovery flags with the state, and nothing on this layout
+          // scans or repairs the hash-keyed store they are about
+          log.info("SNAP sync completed on this node: regular sync follows the chain from the state that is held")
+          startRegularSync()._2
         case (true, SyncMode.Snap) =>
           log.warn("do-snap-sync is true but SNAP sync already completed")
           // Diagnostic only. Nothing here may write a block header: a header's hash covers its stateRoot, so rewriting
@@ -2187,7 +2304,66 @@ object SyncController:
           }
           startRegularSync()._2
 
+    /** Begins a SNAP sync. On the unified layout the port is asked first, off this thread ([[PathLiveSyncPort]]): every
+      * route into SNAP comes here, so none starts one over a state the node followed the chain to.
+      */
     def startSnapSync(minPivotBlock: Option[BigInt] = None): Behavior[Command] =
+      pathLiveSync match
+        case None => spawnSnapSync(minPivotBlock)
+        case Some(port) =>
+          askBeforeSnap(port, minPivotBlock)
+          checkingSnapStart(port)
+
+    private def askBeforeSnap(port: PathLiveSyncPort, minPivotBlock: Option[BigInt]): Unit =
+      val blocking = ctx.system.dispatchers.lookup(DispatcherSelector.blocking())
+      ctx.pipeToSelf(scala.concurrent.Future(port.beforeSnap())(using blocking))(SnapStartChecked(minPivotBlock, _))
+
+    /** While the port says whether a SNAP sync may begin (spec 018 C5a part 10). A head the consensus client names is
+      * kept for the pivot; everything else waits for the sync that follows, which is SNAP or regular sync.
+      */
+    private def checkingSnapStart(port: PathLiveSyncPort): Behavior[Command] =
+      Behaviors.withStash(SyncController.ClearingStashSize) { waiting =>
+        Behaviors.receive { (_, cmd) =>
+          unwrap(cmd) match
+            case SnapStartChecked(minPivot, scala.util.Success(SnapStartOnGuard.Begin(clearedGenesis))) =>
+              if clearedGenesis then
+                log.info("[STATE-CLEAR] The genesis state is cleared: the SNAP sync writes the state from scratch")
+              waiting.unstashAll(spawnSnapSync(minPivot))
+            case SnapStartChecked(minPivot, scala.util.Success(SnapStartOnGuard.Wait(why))) =>
+              log.info(
+                s"[STATE-PATH-LIVE] A SNAP sync does not begin yet: $why. Asked again in " +
+                  s"${SyncController.SnapStartRecheckDelay.toSeconds} s"
+              )
+              timers.startSingleTimer(SnapStartRecheck(minPivot), SyncController.SnapStartRecheckDelay)
+              Behaviors.same
+            case SnapStartRecheck(minPivot) =>
+              askBeforeSnap(port, minPivot)
+              Behaviors.same
+            case SnapStartChecked(_, scala.util.Success(SnapStartOnGuard.Refused(why))) =>
+              log.error(
+                s"[STATE-PATH-LIVE] A SNAP sync does not begin: $why. Regular sync runs on the state that is held; a " +
+                  "state this node cannot follow the chain with is given up through the escalation."
+              )
+              waiting.unstashAll(startRegularSync()._2)
+            case SnapStartChecked(_, scala.util.Failure(failed)) =>
+              // a clear that began and did not end leaves its mark, and the next start finishes it
+              log.error(
+                "[STATE-CLEAR] The check before a SNAP sync failed. The node stops syncing; restart it.",
+                failed
+              )
+              throw failed
+            case bh: ForkChoiceManager.BeaconHead =>
+              handleBeaconHead(bh, snapSyncOpt = None)
+              Behaviors.same
+            case _ =>
+              if waiting.isFull then
+                log.warn("A message was dropped while a SNAP sync's start is checked: {}", cmd.getClass.getSimpleName)
+              else waiting.stash(cmd)
+              Behaviors.same
+        }
+      }
+
+    private def spawnSnapSync(minPivotBlock: Option[BigInt]): Behavior[Command] =
       // MIGRATION: EC.global removed (C2). SNAPSyncController.apply requires an implicit EC;
       // provide the actor's dedicated dispatcher so Futures it creates stay off the global pool.
       given scala.concurrent.ExecutionContext = ctx.executionContext
@@ -2216,7 +2392,8 @@ object SyncController:
             syncController = snapAdapter,
             failedFinalizationPivot = snapPivotFailedFinalization,
             headerChainCheck = snapHeaderChainCheck,
-            peerScoringManager = peerScoringManager
+            peerScoringManager = peerScoringManager,
+            handoff = pathLiveSync.map(_.handoff)
           ),
           s"snap-sync-$syncGeneration",
           DispatcherSelector.fromConfig("sync-dispatcher")
@@ -2396,8 +2573,16 @@ object SyncController:
         else runningRegularSync(regularSync)
       (regularSync, nextBehavior)
 
+    // On the unified layout the audit would fetch the whole trie into the hash-keyed store, which the layout never
+    // reads and its clear never deletes (spec 018 C5a part 10).
     private def auditGate: BackgroundAudit.Gate =
-      BackgroundAudit.gate(backgroundAuditEnabled, stateStorage, appStateStorage)
+      if onTheGuard then BackgroundAudit.Gate.Disabled
+      else BackgroundAudit.gate(backgroundAuditEnabled, stateStorage, appStateStorage)
+
+    /** A node on the unified state layout (spec 018 C5a part 10): nothing of the hash-keyed store is repaired, scanned
+      * or audited, and no SNAP sync starts over the state that is held.
+      */
+    private def onTheGuard: Boolean = pathLiveSync.isDefined
 
     /** Every route into regular sync comes here, a restart of it included, so a previous incarnation's audit goes
       * first. A failed audit restarts from its saved place and gives up after a few tries with nothing else harmed: it
@@ -2737,7 +2922,7 @@ object SyncController:
 
           // D-T060-2 (spec 016 T060c): the recovery actors reach the stores through one `StateIngest`, built here
           // as SNAPSyncController builds its own: the same constructor stores, `pathNodeStorageOpt` derived as it
-          // derives it (`None` on the Hash scheme, i.e. ETC), `validatorFactory` as its `apply` default. Building it
+          // derives it (`None` on the Hash scheme: ETC off the unified layout), `validatorFactory` as its `apply` default. Building it
           // only stores the references; on the Path scheme it also wraps the flat-slot data source in a new
           // `PathNodeStorage`, which holds no state of its own and which the recovery actors do not read.
           val pathNodeStorageOpt: Option[PathNodeStorage] =

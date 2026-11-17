@@ -71,6 +71,13 @@ final class LayerInconsistent(val block: BlockRef, detail: String)
   */
 final class ReexecutionDiverged(detail: String) extends StateFault(s"A block executed before fails now: $detail")
 
+/** A node of the state this node holds is not stored, on the unified layout (spec 018 C5a part 10). Nothing fetches it:
+  * the fetch of a node by hash writes the hash-keyed store, which this layout never reads. It is a fault of this node,
+  * counted towards the escalation, which gives the state up for a sync from scratch if it does not pass.
+  */
+final class HeldStateIncomplete(val missing: com.chipprbots.ethereum.mpt.MerklePatriciaTrie.MissingNodeException)
+    extends StateFault(s"A node of the state this node holds is not stored: ${missing.getMessage}")
+
 /** Why a move of the head was refused. */
 enum ReorgRefusal:
 

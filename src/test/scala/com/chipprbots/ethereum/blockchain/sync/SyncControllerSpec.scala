@@ -1117,6 +1117,159 @@ class SyncControllerSpec
   // sync keeps running (on ETC a stopped node imports nothing while it waits) and the re-SNAP is scheduled an hour on,
   // doubling each time; an import meanwhile drops it.
 
+  // ── Spec 018 C5a part 10: a sync on the unified state layout ─────────────────────────────────────────────────────
+
+  /** What the port answers before SNAP, and what it was asked; the hand-off itself is never reached here. */
+  private class GuardPort(answers: SyncController.SnapStartOnGuard*) extends SyncController.PathLiveSyncPort:
+    val asked = new java.util.concurrent.atomic.AtomicInteger(0)
+    val askedOn = new java.util.concurrent.ConcurrentLinkedQueue[String]()
+    val handedOffs = new java.util.concurrent.atomic.AtomicInteger(0)
+    // no SNAP child here reaches its finalisation, the one reader of the hand-off
+    def handoff: com.chipprbots.ethereum.db.storage.pathstate.SyncHandoff = null
+    def beforeSnap(): SyncController.SnapStartOnGuard =
+      askedOn.add(Thread.currentThread.getName)
+      val n = asked.incrementAndGet()
+      answers(math.min(n, answers.size) - 1)
+    def handedOff(): Unit = handedOffs.incrementAndGet(): Unit
+
+  "On the unified state layout, SyncController" should "ask the port before SNAP, off its own thread, and begin SNAP when it says so" taggedAs (
+    UnitTest,
+    SyncTest
+  ) in withRecoveryTestSetup() { testSetup =>
+    import testSetup.*
+    val port = new GuardPort(SyncController.SnapStartOnGuard.Begin(clearedGenesis = true))
+    pathLiveSync = Some(port)
+    syncController ! SyncController.WrappedSyncProtocol(SyncProtocol.Start)
+    eventually {
+      someTimePasses()
+      assert(snapChildren(testSetup).nonEmpty)
+    }
+    port.asked.get() shouldBe 1
+    withClue("on the blocking dispatcher: ")((port.askedOn.peek() should not).include("sync-dispatcher"))
+  }
+
+  it should "run regular sync on the state that is held when the port refuses SNAP, and say so" taggedAs (
+    UnitTest,
+    SyncTest
+  ) in withRecoveryTestSetup() { testSetup =>
+    import testSetup.*
+    val port = new GuardPort(SyncController.SnapStartOnGuard.Refused("this node holds the state of block 9"))
+    pathLiveSync = Some(port)
+    val errors = syncControllerErrorsDuring {
+      syncController ! SyncController.WrappedSyncProtocol(SyncProtocol.Start)
+      regularSyncChild(testSetup)
+    }
+    snapChildren(testSetup) shouldBe empty
+    errors.exists(e => e.contains("[STATE-PATH-LIVE]") && e.contains("block 9")) shouldBe true
+  }
+
+  it should "not re-SNAP a regular sync that is stuck, and leave it running" taggedAs (UnitTest, SyncTest) in
+    withRecoveryTestSetup() { testSetup =>
+      import testSetup.*
+      val port = new GuardPort(SyncController.SnapStartOnGuard.Begin(clearedGenesis = false))
+      pathLiveSync = Some(port)
+      storagesInstance.storages.appStateStorage.fastSyncDone().commit()
+      syncController ! SyncController.WrappedSyncProtocol(SyncProtocol.Start)
+      val running = regularSyncChild(testSetup)
+      val errors = stuckReport(testSetup)
+      someTimePasses()
+      snapChildren(testSetup) shouldBe empty
+      port.asked.get() shouldBe 0
+      regularSyncChild(testSetup) shouldBe running
+      errors.exists(_.contains("no SNAP re-sync starts over the state that is held")) shouldBe true
+      storagesInstance.storages.appStateStorage.regularSyncStuckResnaps() shouldBe 0
+    }
+
+  it should "go to regular sync after a sync that is done, with no recovery scan, no audit and no bulk code recovery" taggedAs (
+    UnitTest,
+    SyncTest
+  ) in withRecoveryTestSetup() { testSetup =>
+    import testSetup.*
+    pathLiveSync = Some(new GuardPort(SyncController.SnapStartOnGuard.Begin(clearedGenesis = false)))
+    // a recovery flag down: on the hash layout the start runs the scan (the case above)
+    seedSnapDoneWithScannableRoot(testSetup)
+    syncController ! SyncController.WrappedSyncProtocol(SyncProtocol.Start)
+    val running = regularSyncChild(testSetup)
+    assert(!childNamed(testSetup, "combined-recovery-scan"))
+    assert(!childNamed(testSetup, "background-audit"))
+    syncController ! SyncController.WrappedSyncProtocol(
+      SyncProtocol.MissingCodeNeedsBulkRecovery(500, ByteString(Array.fill[Byte](32)(3)))
+    )
+    someTimePasses()
+    assert(!childNamed(testSetup, "bytecode-recovery"))
+    regularSyncChild(testSetup) shouldBe running
+  }
+
+  it should "tell the port of a hand-off, so that the escalation's count begins with it" taggedAs (
+    UnitTest,
+    SyncTest
+  ) in
+    withRecoveryTestSetup() { testSetup =>
+      import testSetup.*
+      val port = new GuardPort(SyncController.SnapStartOnGuard.Begin(clearedGenesis = false))
+      pathLiveSync = Some(port)
+      syncController ! SyncController.WrappedSyncProtocol(SyncProtocol.Start)
+      awaitSnapStarted(syncController)
+      syncController ! SyncController.WrappedExternal(SNAPSyncController.SnapSyncFinalized(BigInt(1)))
+      regularSyncChild(testSetup)
+      port.handedOffs.get() shouldBe 1
+    }
+
+  it should "ask again after a while when the port says not yet, keeping what arrived meanwhile" taggedAs (
+    UnitTest,
+    SyncTest
+  ) in withRecoveryTestSetup() { testSetup =>
+    import testSetup.*
+    val port = new GuardPort(
+      SyncController.SnapStartOnGuard.Wait("a recovery was executing a block"),
+      SyncController.SnapStartOnGuard.Begin(clearedGenesis = true)
+    )
+    pathLiveSync = Some(port)
+    syncController ! SyncController.WrappedSyncProtocol(SyncProtocol.Start)
+    eventually {
+      someTimePasses()
+      port.asked.get() shouldBe 1
+    }
+    snapChildren(testSetup) shouldBe empty
+    assert(!childNamed(testSetup, "regular-sync"))
+    timePasses(SyncController.SnapStartRecheckDelay)
+    eventually {
+      someTimePasses()
+      assert(snapChildren(testSetup).nonEmpty)
+    }
+    port.asked.get() shouldBe 2
+  }
+
+  // the user's decision 1 (2026-11-17): healing goes on, each time; from the third in a row it is an ERROR (beacon)
+  it should "restart SNAP for each hand-off held for accounts left out, and say so louder from the third" taggedAs (
+    UnitTest,
+    SyncTest
+  ) in withRecoveryTestSetup() { testSetup =>
+    import testSetup.*
+    pathLiveSync = Some(new GuardPort(SyncController.SnapStartOnGuard.Begin(clearedGenesis = false)))
+    syncController ! SyncController.WrappedSyncProtocol(SyncProtocol.Start)
+    awaitSnapStarted(syncController)
+    def held(): List[String] =
+      val before = snapChildren(testSetup)
+      syncControllerLogsDuring(ch.qos.logback.classic.Level.WARN) {
+        syncController ! SyncController.WrappedSyncProtocol(SyncProtocol.HandoffHeldForExcluded(BigInt(7), false))
+        eventually {
+          someTimePasses()
+          assert((snapChildren(testSetup) -- before).nonEmpty)
+        }
+      }.filter(_.contains("not handing off at pivot 7"))
+    held().exists(_.contains("1 in a row")) shouldBe true
+    held().exists(_.contains("2 in a row")) shouldBe true
+    syncControllerErrorsDuring(held(): Unit).exists(_.contains("3 in a row")) shouldBe true
+  }
+
+  "The hand-offs held for accounts left out" should "be counted since the last hand-off" taggedAs UnitTest in {
+    val held = new HandoffsHeldForExcluded
+    (held.held(), held.held()) shouldBe (1, 2)
+    held.handedOff()
+    held.held() shouldBe 1
+  }
+
   /** The regular-sync child running now: the latest generation (a stopped one can still be listed a moment). */
   private def regularSyncChild(testSetup: TestSetup): String =
     eventually {
@@ -2505,13 +2658,17 @@ class SyncControllerSpec
           backgroundAuditEnabled = auditEnabled,
           // #1654: these fixtures store weights that do not follow from genesis; the pass would repair them.
           chainWeightReconcileOn = false,
-          stateEscalation = stateEscalation
+          stateEscalation = stateEscalation,
+          pathLiveSync = pathLiveSync
         )
       )
     )
 
     /** What the controller gives the state up with (spec 018 C5a part 7b): set before the controller is first used. */
     var stateEscalation: Option[SyncController.StateEscalationPort] = None
+
+    /** A sync on the unified layout (spec 018 C5a part 10): set before the controller is first used. */
+    var pathLiveSync: Option[SyncController.PathLiveSyncPort] = None
 
     /** The node's tx gossip gate, as NodeBuilder shares it between SyncController, the Engine API and the pool. */
     lazy val txGossipGate: com.chipprbots.ethereum.transactions.TxGossipGate =

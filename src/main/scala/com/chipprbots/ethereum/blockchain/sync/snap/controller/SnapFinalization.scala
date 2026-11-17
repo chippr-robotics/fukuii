@@ -301,7 +301,7 @@ private[snap] trait SnapFinalization extends FinalizationApi with ChainDownloadS
           // Publish the completed trie to the hash-keyed store BEFORE anchoring/handing off, so the first imported
           // block can read the pivot state. The scan is long (the whole state), so it runs on a blocking-dispatcher
           // Future and this actor keeps serving status/progress queries (`syncing` serves them while `pathPublish` is set); it re-enters here with
-          // `pathPublished = true` once PathPublishDone arrives. Hash scheme (ETC) never enters this branch.
+          // `pathPublished = true` once PathPublishDone arrives. The Hash scheme (ETC off the unified layout) never enters this branch.
           // The unified state layout (spec 018 C5a part 5): nothing is published. The rows the sync wrote are the state a
           // block is executed on, so they are sampled from the pivot's root where they lie, off this thread; the
           // controller serves status and progress meanwhile, as during a publish, and `HandoffSampleDone` re-enters
@@ -485,21 +485,34 @@ private[snap] trait SnapFinalization extends FinalizationApi with ChainDownloadS
     */
   private def startHandoffSample(pivot: BigInt, pivotRoot: ByteString): Unit =
     val ending = handoff.getOrElse(throw new IllegalStateException("startHandoffSample on the hash layout"))
-    // Whether the sync left accounts out: a hole in their storage is then expected, and is fetched when a block asks.
-    val (accountsLeftOut, _) = excludedAtHandOff()
-    val blockingEc = ctx.system.dispatchers.lookup(org.apache.pekko.actor.typed.DispatcherSelector.blocking())
-    ctx.log.info(
-      s"[HANDOFF] sampling the state of pivot $pivot from its root where the sync wrote it: nothing is copied " +
-        s"(accounts left out: $accountsLeftOut)"
-    )
-    pathPublish = Some((pivot, pivotRoot))
-    val work = scala.concurrent.Future {
-      ending.sample(pivotRoot, accountsLeftOut)
-    }(using blockingEc)
-    ctx.pipeToSelf(work) {
-      case scala.util.Success(result) => HandoffSampleDone(result)
-      case scala.util.Failure(cause)  => HandoffSampleFailed(cause)
-    }
+    // a set that cannot be read is told as that, not only as accounts left out (beacon)
+    val (accountsLeftOut, readFailed) = excludedRead() match
+      case Right((accounts, _)) => (accounts, false)
+      case Left(e) =>
+        ctx.log.error("[HEAL-EXCLUDED] Could not read the excluded set at the hand-off: taken as accounts left out", e)
+        (true, true)
+    if accountsLeftOut then
+      // The user's decision of 2026-11-17 (spec 018 C5a part 10): on this layout nothing fetches the storage of an
+      // account the sync left out once it has handed off (the only fetch writes the hash-keyed store), so the first
+      // block that reads one would be a fault, and the escalation a whole sync again. Healing goes on instead: the
+      // sync restarts heal-only, and the excluded set it resumes from is durable (spec 022: complete means nothing
+      // excluded).
+      // the parent says it, and counts it since the last hand-off
+      leaveHeaderHold()
+      syncController ! SyncProtocol.HandoffHeldForExcluded(pivot, readFailed)
+    else
+      val blockingEc = ctx.system.dispatchers.lookup(org.apache.pekko.actor.typed.DispatcherSelector.blocking())
+      ctx.log.info(
+        s"[HANDOFF] sampling the state of pivot $pivot from its root where the sync wrote it: nothing is copied"
+      )
+      pathPublish = Some((pivot, pivotRoot))
+      val work = scala.concurrent.Future {
+        ending.sample(pivotRoot, accountsLeftOut = false)
+      }(using blockingEc)
+      ctx.pipeToSelf(work) {
+        case scala.util.Success(result) => HandoffSampleDone(result)
+        case scala.util.Failure(cause)  => HandoffSampleFailed(cause)
+      }
 
   /** The sample passed: finalisation again, past it (called from `syncing`). */
   private[snap] def onHandoffSampleDone(result: PathHandoffSample.Result): Behavior[Command] =
@@ -689,12 +702,17 @@ private[snap] trait SnapFinalization extends FinalizationApi with ChainDownloadS
     * set that cannot be read claims nothing: both.
     */
   private def excludedAtHandOff(): (Boolean, Boolean) =
-    val progress = stateIngest.snapProgress
-    try (progress.hasExcludedAccounts, progress.hasExcludedCode)
-    catch
-      case scala.util.control.NonFatal(e) =>
+    excludedRead() match
+      case Right(read) => read
+      case Left(e) =>
         ctx.log.error("[HEAL-EXCLUDED] Could not read the excluded set at finalisation: neither flag is set", e)
         (true, true)
+
+  /** Whether the excluded set has accounts, and code; or why it could not be read. */
+  private def excludedRead(): Either[Throwable, (Boolean, Boolean)] =
+    val progress = stateIngest.snapProgress
+    try Right((progress.hasExcludedAccounts, progress.hasExcludedCode))
+    catch case scala.util.control.NonFatal(e) => Left(e)
 
   /** Read just before the batch that clears the owed scan: see the note on `codeScanOwed` below. */
   private def recoveryFlags(accountsExcluded: Boolean, codeExcluded: Boolean): RecoveryFlags =

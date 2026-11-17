@@ -62,7 +62,10 @@ class ConsensusAdapterEscalationSpec extends AnyFlatSpec with Matchers:
         .reverse
     )
 
-  private class Rig(result: NonEmptyList[Block] => ConsensusResult):
+  private class Rig(
+      result: NonEmptyList[Block] => ConsensusResult,
+      reader: com.chipprbots.ethereum.domain.BlockchainReader = null
+  ):
     val escalated: mutable.ArrayBuffer[EscalationKind] = mutable.ArrayBuffer.empty
     val validated: mutable.ArrayBuffer[List[BigInt]] = mutable.ArrayBuffer.empty
     var head: ChainWeight = ChainWeight.totalDifficultyOnly(1050)
@@ -89,7 +92,7 @@ class ConsensusAdapterEscalationSpec extends AnyFlatSpec with Matchers:
       )(implicit blockchainConfig: BlockchainConfig): Option[(BlockHeader, String)] =
         validated += headers.map(_.number.value)
         None
-    val adapter = new ConsensusAdapter(consensus, null, null, validation, IORuntime.global, None, Some(feed))
+    val adapter = new ConsensusAdapter(consensus, reader, null, validation, IORuntime.global, None, Some(feed))
     def imported(blocks: NonEmptyList[Block]): Any = adapter.evaluateBranch(blocks).unsafeRunSync()
 
   private def data(block: Block): BlockData = BlockData(block, Nil, ChainWeight.totalDifficultyOnly(0))
@@ -124,6 +127,45 @@ class ConsensusAdapterEscalationSpec extends AnyFlatSpec with Matchers:
         rig.feed.refusedWeight shouldBe None
       }
     }
+  }
+
+  // spec 018 C5a part 10 (forge): on the unified layout a node missing from the held state is no hole to fetch, which
+  // would write the hash-keyed store; it is a fault of this node, told to the feed as one, and counted
+  it should "tell a node missing from the held state as a fault of this node, on the unified layout" taggedAs UnitTest in {
+    val onPositions = new com.chipprbots.ethereum.db.storage.pathstate.CanonicalChainOnPositions()
+    val missing =
+      new com.chipprbots.ethereum.mpt.MerklePatriciaTrie.MissingNodeException(ByteString(Array.fill[Byte](32)(9)))
+    val rig = new Rig(
+      blocks => Consensus.ConsensusErrorDueToMissingNode(Nil, missing, List(data(blocks.head))),
+      onPositions.reader
+    )
+    val blocks = branch(5, 3)
+    rig.weights += blocks.head.header.hash -> ChainWeight.totalDifficultyOnly(1100)
+    rig.head = ChainWeight.totalDifficultyOnly(1100)
+
+    rig.imported(blocks) match
+      case BlockImportStateFault(fault: com.chipprbots.ethereum.db.storage.pathstate.HeldStateIncomplete, imported) =>
+        (fault.missing should be).theSameInstanceAs(missing)
+        imported.map(_.block) shouldBe List(blocks.head)
+      case other => fail(s"not a fault of this node's state: $other")
+    withClue("the feed is told of the two blocks above the head, as a branch that was not judged: ") {
+      rig.validated.toList shouldBe List(List(BigInt(6), BigInt(7)))
+    }
+  }
+
+  // vault: contract code is fetched by its hash into the code store, which both layouts share
+  it should "leave missing contract code to be fetched, on the unified layout" taggedAs UnitTest in {
+    val onPositions = new com.chipprbots.ethereum.db.storage.pathstate.CanonicalChainOnPositions()
+    val missing = new com.chipprbots.ethereum.mpt.MerklePatriciaTrie.MissingCodeException(
+      ByteString(Array.fill[Byte](32)(9)),
+      ByteString(Array.fill[Byte](20)(1))
+    )
+    val rig = new Rig(_ => Consensus.ConsensusErrorDueToMissingNode(Nil, missing, Nil), onPositions.reader)
+    rig.imported(branch(5, 3)) match
+      case com.chipprbots.ethereum.blockchain.sync.regular.BlockImportFailedDueToMissingNode(reason, _) =>
+        (reason should be).theSameInstanceAs(missing)
+      case other => fail(s"not left to be fetched: $other")
+    rig.escalated shouldBe empty
   }
 
   // forge: the feed is told inside the result of an import, and a head that has moved is not answered as an error

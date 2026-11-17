@@ -16,11 +16,12 @@ import com.chipprbots.ethereum.utils.StateLayoutConfig
 
 /** Spec 018 Track C, C2b: what a node advertises follows what its storage can serve.
   *
-  * With the in-development guard `state.path-live` on, a node's storages hold the position store, and the node does not
-  * advertise SNAP. The two were read from two places: the storages from the process-wide configuration, the
-  * capabilities from the instance's. In a multi-instance run those differ, and a node could have held the position
-  * store while offering SNAP, or the reverse (herald). The production `StorageBuilder` now takes the guard from its
-  * instance's configuration, which this builds, on a real RocksDB in a temporary directory.
+  * With the in-development guard `state.path-live` on, a node's storages hold the position store. Until spec 018 C5a
+  * part 10 the node did not advertise SNAP with it; since then it does, the guard or not. The two were read from two
+  * places: the storages from the process-wide configuration, the capabilities from the instance's. In a multi-instance
+  * run those differ, and a node could have held the position store while offering SNAP, or the reverse (herald). The
+  * production `StorageBuilder` now takes the guard from its instance's configuration, which this builds, on a real
+  * RocksDB in a temporary directory.
   */
 class StorageBuilderStateGuardSpec extends AnyFlatSpec with Matchers:
 
@@ -100,12 +101,14 @@ class StorageBuilderStateGuardSpec extends AnyFlatSpec with Matchers:
     }
 
   "An instance with the guard on, in a process whose own configuration has it off" should
-    "hold the position store and not advertise SNAP" taggedAs (UnitTest, DatabaseTest) in {
+    "hold the position store and advertise SNAP" taggedAs (UnitTest, DatabaseTest) in {
       // the process-wide configuration, which the storages read before
       StateLayoutConfig.pathLive shouldBe false
       instance(guard = true) { node =>
         node.storagesInstance.storages.pathStateStorage shouldBe defined
-        node.instanceConfig.supportedCapabilities should contain noneOf (Capability.SNAP1, Capability.SNAP2)
+        // since C5a part 10 (the user's decision of 2026-11-17): it follows the head from its hand-off, and the
+        // capability is mutual, so a node that did not advertise it could not sync by SNAP
+        node.instanceConfig.supportedCapabilities should contain(Capability.SNAP1)
       }
     }
 

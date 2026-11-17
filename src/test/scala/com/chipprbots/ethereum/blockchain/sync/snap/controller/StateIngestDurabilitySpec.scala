@@ -504,6 +504,31 @@ class StateIngestDurabilitySpec extends AnyFlatSpec with Matchers:
     unifiedPrefixProperty(h)
   }
 
+  // the user's decision 1 (2026-11-17, spec 018 C5a part 10): nothing fetches a left-out account's storage on this
+  // layout after the hand-off, so the sync does not hand off; the parent restarts healing and counts it
+  it should "not sample or hand off when the sync left accounts out, and tell the parent" taggedAs UnitTest in {
+    val h = new Harness(pathScheme = true)
+    h.storeChainBelowThePivot(below = 256, bodiesOfTheLast = 6)
+    h.unifiedLayoutAtTheEndOfASync()
+    h.module.stateIngest.snapProgress.recordExcluded(
+      Seq(
+        com.chipprbots.ethereum.db.storage.ExcludedAccount(
+          ByteString(Array.fill[Byte](32)(0x51)),
+          com.chipprbots.ethereum.db.storage.ExcludedReason.StorageAbandoned
+        )
+      )
+    )
+    val before = h.recording.writes.size
+
+    h.call(_.finalizeSnapSync(pivot))
+
+    h.parent.receiveAll() shouldBe Seq(SyncProtocol.HandoffHeldForExcluded(pivot, readFailed = false))
+    h.module.pathPublish shouldBe None
+    h.module.currentPhase should not be SyncPhase.Completed
+    h.chain.storagesInstance.storages.appStateStorage.isSnapSyncDone() shouldBe false
+    withClue("nothing of the hand-off was written: ")(h.recording.writes.size shouldBe before)
+  }
+
   it should "refuse to hand off, and say nothing is synced, when the pivot's header is not stored" taggedAs UnitTest in {
     val h = new Harness(pathScheme = true)
     h.storeChainBelowThePivot(below = 256, bodiesOfTheLast = 6, indexThePivot = false)

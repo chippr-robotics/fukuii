@@ -76,14 +76,22 @@ object ConfigValidator extends Logger:
           List(s"fukuii.ephemery.refresh-timeout is not a duration: ${e.getMessage}")
 
   /** What `config` (a `fukuii` block) asks for that the in-development guard of the unified state layout (spec 018
-    * Track C) cannot do yet. Fatal: the node would start and never sync.
+    * Track C) cannot do yet. Fatal: the node would start and not do what it was asked.
     *
-    * With `state.path-live` on, a SNAP sync has nowhere to hand its state off to: the hand-off onto the unified layout
-    * is a later slice (C5a). And SNAP is not advertised while the node does not follow the network's head (C4d, C4e): a
-    * capability is mutual, so no peer offers SNAP to such a node, and a SNAP sync would wait for one for ever.
+    * A SNAP sync runs on the guard since C5a part 10: it hands its state off onto the unified layout, and SNAP is
+    * advertised. What is still refused:
     *
-    * A block that is mined reaches import through network sync, which a node on the guard does not run until the
-    * unified layout can follow a side branch and move its head (C4): the block would be mined and dropped.
+    * Mining. A block mined here is built from the head the miner read, which the unified layout can move under it
+    * between the read and the seal: the miner's readers of the head generation are not built yet (B-293), so a block
+    * could be sealed over a state that is no longer the head's.
+    *
+    * Checkpoint sync. Its import writes the hash-keyed store and says the sync is done, with no anchor on this layout:
+    * the node would say it is synced and hold no state (until C5c).
+    *
+    * `sync.snap-sync.storage-scheme = hash`, asked for. A SNAP sync on the guard writes the position families, which
+    * the hand-off samples and commits, with the path scheme on every network (ETC's and Mordor's fallback to hash
+    * included); the hash scheme writes the hash-keyed store, which this layout never reads, so every hand-off would
+    * stop.
     *
     * The chain file imported at start is taken since C3c: block by block onto the head, with a block that is not built
     * on the head refused until the overlay. So a file that ends on a side chain (the multi-chain and uncle-race vectors
@@ -98,20 +106,29 @@ object ConfigValidator extends Logger:
     */
   def stateGuardErrors(config: TypesafeConfig): List[String] =
     def on(key: String): Boolean = config.hasPath(key) && config.getBoolean(key)
+    def set(key: String): Boolean = config.hasPath(key) && config.getString(key).trim.nonEmpty
+    val guard = "fukuii.state.path-live = true (the in-development guard of the unified state layout) cannot run with "
     if !on("state.path-live") then Nil
     else
       List(
-        Option.when(on("sync.do-snap-sync"))(
-          "fukuii.state.path-live = true (the in-development guard of the unified state layout) cannot run with " +
-            "fukuii.sync.do-snap-sync = true: a SNAP sync cannot hand its state off onto the unified layout yet " +
-            "(spec 018 C5a), and SNAP is not advertised while the guard is on, so no peer would offer it and the " +
-            "sync would never start. Set fukuii.sync.do-snap-sync = false."
-        ),
         Option.when(on("mining.mining-enabled"))(
-          "fukuii.state.path-live = true (the in-development guard of the unified state layout) cannot run with " +
-            "fukuii.mining.mining-enabled = true: a block that is mined is imported by network sync, which this " +
-            "node does not run until the unified layout can follow a side branch and move its head (spec 018 C4), " +
-            "so the block would be mined and dropped. Set fukuii.mining.mining-enabled = false."
+          guard + "fukuii.mining.mining-enabled = true: the unified layout can move its head between the miner's " +
+            "read of it and the seal, and the miner does not check for that yet (B-293), so a block could be sealed " +
+            "over a state that is no longer the head's. Set fukuii.mining.mining-enabled = false."
+        ),
+        Option.when(set("sync.checkpoint-sync-file") || set("sync.checkpoint-sync-url"))(
+          guard + "fukuii.sync.checkpoint-sync-file or fukuii.sync.checkpoint-sync-url: a checkpoint is imported " +
+            "into the hash-keyed store, which this layout does not read, and the node would say it is synced with no " +
+            "state (spec 018 C5c). Leave both empty; a SNAP sync (fukuii.sync.do-snap-sync = true) syncs this node."
+        ),
+        Option.when(
+          config.hasPath("sync.snap-sync.storage-scheme") &&
+            config.getString("sync.snap-sync.storage-scheme").trim.equalsIgnoreCase("hash")
+        )(
+          guard + "fukuii.sync.snap-sync.storage-scheme = hash: a SNAP sync on this layout writes the position " +
+            "families its hand-off commits, and the hash scheme writes the hash-keyed store, which this layout never " +
+            "reads, so the sync would never hand off. Remove the key: the guard syncs with the path scheme on every " +
+            "network."
         )
       ).flatten
 

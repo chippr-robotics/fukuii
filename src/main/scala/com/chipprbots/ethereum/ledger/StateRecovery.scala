@@ -562,7 +562,10 @@ class StateRecovery(
       else
         val (chunk, rest) = left.splitAt(catchUpChunk)
         bodiesOf(chunk) match
-          case Left(missing) => missing
+          // the chunks before it moved the head (spec 018 C5a part 10, beacon C6): that is what is told, and the next
+          // fork choice to the head catches up from there once the body is stored. Told as missing, a catch-up that
+          // committed thousands of blocks would be counted as a refusal
+          case Left(missing) => if committed > 0 then Outcome.Adopted(committed) else missing
           case Right(blocks) =>
             commitEach(head, blocks, sink, Some(asked)) match
               case Outcome.Adopted(count)              => next(rest, committed + count)

@@ -722,8 +722,10 @@ final private class BlockImporterLogic(
         log.info("Saving late-arriving fetched state node {}", ByteStringUtils.hash2string(hash))
         // repairNode, not saveNode (#1692): a node already there and valid is left as it is. A blind upsert at one
         // reference could lower the count a block commit or the audit had set, and the node would be pruned while live.
-        val outcome = stateStorage.repairNode(hash, node.toArray, blockchainReader.getBestBlockNumber)
-        log.debug("Late-arriving state node {}: {}", ByteStringUtils.hash2string(hash), outcome)
+        // on the unified layout only code is fetched (spec 018 C5a part 10, forge): the trie store is not written
+        if !blockchainWriter.holdsStateInPlace then
+          val outcome = stateStorage.repairNode(hash, node.toArray, blockchainReader.getBestBlockNumber)
+          log.debug("Late-arriving state node {}: {}", ByteStringUtils.hash2string(hash), outcome)
         // Also save as contract code in case this was a bytecode fetch
         try evmCodeStorage.put(hash, node).commit()
         catch case _: Exception => ()
@@ -791,8 +793,9 @@ final private class BlockImporterLogic(
           blocksToRetry.head.number
         )
         // repairNode, not saveNode (#1692): see the late-arriving case above.
-        val outcome = stateStorage.repairNode(hash, node.toArray, blocksToRetry.head.number.value)
-        log.debug("Missing state node {}: {}", ByteStringUtils.hash2string(hash), outcome)
+        if !blockchainWriter.holdsStateInPlace then
+          val outcome = stateStorage.repairNode(hash, node.toArray, blocksToRetry.head.number.value)
+          log.debug("Missing state node {}: {}", ByteStringUtils.hash2string(hash), outcome)
         // Also save as contract code — if this was a code fetch, the hash is the codeHash
         // and the data is the bytecode. EvmCodeStorage is keyed by codeHash, same as the fetch.
         try evmCodeStorage.put(hash, node).commit()
@@ -1208,8 +1211,10 @@ final private class BlockImporterLogic(
                   NonEmptyList(notImportedBlocks.head, notImportedBlocks.tail),
                   alreadyExhausted = paths.isEmpty
                 )
+              // not on the unified layout (spec 018 C5a part 10, forge): the controller ignores a bulk recovery there,
+              // and the import would wait with no fetch in flight; code is fetched one hash at a time below
               case e: MissingCodeException
-                  if SyncController.bulkCodeRecoveryAllowed(
+                  if !blockchainWriter.holdsStateInPlace && SyncController.bulkCodeRecoveryAllowed(
                     blockchainReader.isSnapSyncDone,
                     blockchainReader.bulkBytecodeRecoveryFailures
                   ) && BlockImporter.claimBulkCodeRecovery(e.hash) =>
