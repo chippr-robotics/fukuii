@@ -16,17 +16,21 @@ items:
     refs: [backlog 10, H3 review]
     links: {}
     depends_on: [B-001]
-    notes: beacon. engine spec paris.md:178-185; Nethermind does the same.
+    notes: |-
+      beacon. engine spec paris.md:178-185; Nethermind does the same.
+      Includes B-271 (missing parent/state answered ACCEPTED; check geth delayPayloadImport) and issue #1694.
   - id: B-008
     title: "Size RocksDB `max-open-files` against the SST count (T063: 512 open against 4,713 SSTs)"
-    priority: P1
+    priority: P2
     status: open
     area: storage
     size: S
     opened: 2026-11-06
     refs: [backlog 8, vault T065 (6), CHASE B row 2]
     links: {}
-    notes: "vault. Relevant until Track C/E. First config to try: max-open-files=-1 (unmeasured)."
+    notes: |-
+      vault. Relevant until Track C/E. First config to try: max-open-files=-1 (unmeasured).
+      2026-11-17 priority P2: unmeasured tuning, blocks nothing
   - id: B-009
     title: "ReferenceCountNodeStorage: an upsert of a stored node keeps the old bytes, so heal never replaces a junk wrapper"
     priority: P1
@@ -39,7 +43,7 @@ items:
     notes: "vault, bucket C: replace when the stored bytes do not hash to the key. Live until Track C C8b."
   - id: B-010
     title: "Measure db.pruning.retained.bytes on Mordor over 24 h with a build that has #1739"
-    priority: P1
+    priority: P2
     status: open
     area: ops
     size: S
@@ -47,7 +51,9 @@ items:
     refs: ["#1692 follow-up"]
     links:
       issues: [1692]
-    notes: "Decides #1692's option (c2) against the fallback (c1). One heavy JVM at a time on fukuii-fc."
+    notes: |-
+      Decides #1692's option (c2) against the fallback (c1). One heavy JVM at a time on fukuii-fc.
+      2026-11-17 priority P2: measurement for #1692's option; not a gate
   - id: B-011
     title: promoteToCanonicalHead (forkchoiceUpdated) writes the best-block pointer with no lock
     priority: P2
@@ -70,24 +76,29 @@ items:
     notes: forge + vault. Both chains, pre-existing. Pair with B-011.
   - id: B-013
     title: MESS (ECBP-1100) is missing on the gossip import path; ChainImporter invents ChainWeight.zero for a missing parent
-    priority: P2
+    priority: P3
     status: open
     area: consensus
     size: M
     opened: 2026-11-07
     refs: [10f, "#1654 analysis"]
     links: {}
-    notes: forge. Must land before Olympia reactivates MESS (Olympia is delayed indefinitely).
+    notes: |-
+      forge. Must land before Olympia reactivates MESS (Olympia is delayed indefinitely).
+      2026-11-17 priority P3: MESS inactive until Olympia, delayed indefinitely
   - id: B-014
     title: Path recovery never republishes recovered nodes to the hash store, so post-sync readers miss them
-    priority: P2
+    priority: P3
     status: open
     area: storage
     size: M
     opened: 2026-11-07
     refs: [10g, "#1692 N3 review"]
     links: {}
-    notes: beacon + vault. Liveness, not loss. Check first whether Track C C8a makes it moot.
+    depends_on: [B-069]
+    notes: |-
+      beacon + vault. Liveness, not loss. Check first whether Track C C8a makes it moot.
+      2026-11-17 priority P3: liveness, not loss; C8a likely moots it
   - id: B-015
     title: "#1705 follow-up: SyncController leaks its peers client when the pipeline is replaced"
     priority: P2
@@ -132,7 +143,7 @@ items:
       (A) 13 E2EStateTestSpec inject state with no txs; (B) reorg tests mine before startRegularSync; (C) getMptForBlock starts from EmptyRootHash.
       Also correct docs/troubleshooting/ROOT_CAUSE_STATE_SYNC_TIMEOUTS.md.
   - id: B-020
-    title: "SNAP actor spec flakes: fixed wall-clock waits on CI and the HealRequestFixtures send/record race"
+    title: "SNAP actor spec flakes: Gone/ResetCharacterization/StaleVerificationWalk fixed waits; the HealRequestFixtures send/record race"
     priority: P2
     status: open
     area: tests
@@ -140,7 +151,9 @@ items:
     opened: 2026-11-05
     refs: [H11, CHASE E, "task #80"]
     links: {}
-    notes: SNAPCoordinatorGoneSpec, AccountRangeCoordinatorSpec cooldown, SNAPResetCharacterizationSpec, StaleVerificationWalkSpec; audit HealAliasSpec:119 and peers. Use ManualTime or probes.
+    notes: |-
+      SNAPCoordinatorGoneSpec, AccountRangeCoordinatorSpec cooldown, SNAPResetCharacterizationSpec, StaleVerificationWalkSpec; audit HealAliasSpec:119 and peers. Use ManualTime or probes.
+      Includes B-221: SNAPCoordinatorGoneSpec CI failure (PR #1805, run 43158234872).
   - id: B-021
     title: scalanet discovery tests hang (v4 DiscoveryNetworkSpec ping) and 6 fail; KBucketsWithSubnetLimitsSpec is vacuous
     priority: P2
@@ -163,7 +176,7 @@ items:
     links:
       issues: [1679]
   - id: B-023
-    title: "Close #1571, #1566, #1694 and #1660 (fixed or superseded)"
+    title: "Close #1571 (fixed key in AmsterdamFixtureVectors) and #1660 (superseded by #1727)"
     priority: P2
     status: blocked
     area: triage
@@ -175,6 +188,7 @@ items:
     notes: |-
       #1571 fixed by #1640, #1566 by #1706, #1694 per 0.11.0's notes (verify), #1660 superseded by #1727.
       2026-11-08 blocked: needs the user's OK.
+      #1566 already closed. #1694 is not fixed: it is B-005's ACCEPTED-on-missing-state; keep it open.
   - id: B-024
     title: "Spec 020 DC-4 deferrals: scala.App in EcKeyGen/SignatureValidator (#1715); E029 false positive (#1716)"
     priority: P3
@@ -311,7 +325,7 @@ items:
     notes: .claude/agent-protocols/handoffs/0.12.0-dev-node-to-fukuii-fc.md, CHASE C DNS row.
   - id: B-046
     title: "Spec 021 T004-T005 (P-6): ETC node follow, datadir copy at a planned stop, export H+1..H+5000"
-    priority: P2
+    priority: P3
     status: open
     area: ops
     size: M
@@ -319,10 +333,12 @@ items:
     refs: [021 T004, 021 T005]
     links:
       spec: specs/021-fixed-width-uint256
-    notes: T006 (gate row 10b once with jar A) needs this; it blocks S1.
+    notes: |-
+      T006 (gate row 10b once with jar A) needs this; it blocks S1.
+      2026-11-17 priority P3: spec 021 S1 not scheduled
   - id: B-047
     title: "Spec 021 T002 (P-2): export Mordor blocks 0-10,000,000 from the stopped Mordor node"
-    priority: P2
+    priority: P3
     status: open
     area: ops
     size: S
@@ -330,6 +346,7 @@ items:
     refs: [021 T002]
     links:
       spec: specs/021-fixed-width-uint256
+    notes: "2026-11-17 priority P3: spec 021 S1 not scheduled"
   - id: B-048
     title: Copy the ETC chain export to the NAS
     priority: P3
@@ -387,7 +404,7 @@ items:
     depends_on: [B-051]
   - id: B-053
     title: "Spec 018 Track C C0: S0 close-out, oracle pinning and measurements (docs and measurements only)"
-    priority: P2
+    priority: P1
     status: open
     area: storage
     size: M
@@ -395,7 +412,9 @@ items:
     refs: [018 C0]
     links:
       spec: specs/018-storage-engine-consolidation
-    notes: The spec header says fukuii-fc had it in flight on docs/spec-018-c0. T011 and T017 need the user.
+    notes: |-
+      The spec header says fukuii-fc had it in flight on docs/spec-018-c0. T011 and T017 need the user.
+      2026-11-17 priority P1: gates B-203, B-207, B-212 and C7's exit (Track C)
   - id: B-064
     title: "Spec 018 Track C C5a: hand-off without a copy, the layout guard and the ancestor window (item 10)"
     priority: P2
@@ -412,6 +431,7 @@ items:
       agent: main
       since: 2026-11-15T17:59:02Z
       heartbeat: 2026-11-16T17:06:43Z
+    notes: "cloud-dc960fdc: heartbeat or release by 11-17 17:06 UTC; C5a code merged (#1855-#1880), T209 + Sepolia fresh sync + 24 h remain."
   - id: B-065
     title: "Spec 018 Track C C5b: the audit, on-demand fetch and recovery scans by position (item 10)"
     priority: P2
@@ -498,8 +518,8 @@ items:
       heartbeat: 2026-11-09T18:55:42Z
     notes: Ask on the PR and dev-node runs its jar; SIM_DANGEROUS=1 gates two cases that wedge an unfixed node.
   - id: B-073
-    title: "Mordor testing and gates: checkpoint archive to the NAS, T062-style gate runs for 0.12.0 ETC changes"
-    priority: P2
+    title: "Mordor testing and gates: checkpoint archive to the NAS, T062-style gate runs for the unified layout (path-live, C6)"
+    priority: P1
     status: in-progress
     area: ops
     size: M
@@ -511,7 +531,9 @@ items:
       agent: main
       since: 2026-11-07T00:00:00Z
       heartbeat: 2026-11-09T18:55:42Z
-    notes: Spec 018 moving ETC onto the unified layout will need these runs.
+    notes: |-
+      Spec 018 moving ETC onto the unified layout will need these runs.
+      2026-11-17 priority P1: Mordor gates for the unified layout are next sprint's commitment
   - id: B-074
     title: SnapFinalization misses an excluded entry inserted between the set read and the flags commit
     priority: P2
@@ -542,6 +564,7 @@ items:
     opened: 2026-11-05
     refs: [CHASE A T063 OOM review]
     links: {}
+    depends_on: [B-070]
     notes: forge + beacon. Probably retired by Track C C8b (refcounts); check first.
   - id: B-077
     title: Task files at accounts-complete get flush(), not fsync, and the pointer commit is async
@@ -571,6 +594,7 @@ items:
     opened: 2026-11-03
     refs: [CHASE C]
     links: {}
+    depends_on: [B-069]
     notes: Moot once Track C C8a removes the publish.
   - id: B-080
     title: "T061a coverage gaps: task-file read-back at force-complete, partial storage tries on Path, S=C entry after repair"
@@ -691,7 +715,7 @@ items:
     links: {}
     notes: "Unverified dev-node item (handoff section 3): check it still applies before starting."
   - id: B-092
-    title: "SNAP: an off-thread ctx.log in SNAPSyncController; SyncController status asks time out"
+    title: "SNAP: SyncController status asks time out (the off-thread ctx.log half is fixed)"
     priority: P3
     status: open
     area: snap
@@ -724,7 +748,7 @@ items:
       Unverified dev-node item (handoff section 3): check it still applies before starting.
       Goes with spec 021.
   - id: B-095
-    title: ChainDownloader excludes a peer for good after one empty header reply
+    title: ChainDownloader excludes a peer for good after one empty header reply when emptyHeaderBackoff is unset (ETC)
     priority: P3
     status: open
     area: sync
@@ -838,13 +862,15 @@ items:
     notes: JsonRpcHttpServer.scala:90-91.
   - id: B-106
     title: "SNAP work-stealing: split the largest active account range when a worker goes idle"
-    priority: P2
+    priority: P3
     status: open
     area: snap
     opened: 2026-09-27
     refs: [P-004]
     links: {}
-    notes: "AccountRangeCoordinator: split at the active task's `next` midpoint."
+    notes: |-
+      AccountRangeCoordinator: split at the active task's `next` midpoint.
+      2026-11-17 priority P3: throughput optimisation only
   - id: B-107
     title: Make chain reorg discards (discardBlocksAfter, discardBlocks) atomic Blockchain operations
     priority: P2
@@ -910,13 +936,15 @@ items:
     notes: Needs network coordination before removal.
   - id: B-115
     title: Consistent rate limiting across JSON-RPC endpoint categories
-    priority: P2
+    priority: P3
     status: open
     area: rpc
     opened: 2026-09-27
     refs: [R-001]
     links: {}
-    notes: JsonRpcHttpServer.scala:82.
+    notes: |-
+      JsonRpcHttpServer.scala:82.
+      2026-11-17 priority P3: vague consistency polish
   - id: B-116
     title: "EthereumTestsSpec: execute blocks through BlockExecution, not only parse the fixtures"
     priority: P2
@@ -1125,7 +1153,7 @@ items:
       issues: [1756]
   - id: B-148
     title: "HTTPS misconfiguration is only logged: node runs with no RPC; faucet client falls back to default trust; SSL config read from the global config"
-    priority: P2
+    priority: P1
     status: open
     area: rpc
     size: S
@@ -1133,9 +1161,10 @@ items:
     refs: [B-145]
     links:
       issues: [1756]
+    notes: "2026-11-17 priority P1: a TLS misconfiguration silently leaves the node with no RPC"
   - id: B-149
     title: Container healthchecks use plaintext http on 8545 (base default 8546) and break under mode = https
-    priority: P3
+    priority: P2
     status: open
     area: ops
     size: S
@@ -1143,6 +1172,7 @@ items:
     refs: [B-145]
     links:
       issues: [1756]
+    notes: "2026-11-17 priority P2: barad-dur healthchecks probe 8545; base RPC port is 8546"
   - id: B-150
     title: Security hardening follow-ups from the B-145 audit (details held privately, Principle VI)
     priority: P1
@@ -1166,7 +1196,9 @@ items:
       agent: beacon
       since: 2026-11-08T21:11:50Z
       heartbeat: 2026-11-08T21:22:01Z
-    notes: "User 2026-11-08: refuse to start (B-135) AND find a Windows backend now. Candidates: supranational blst Java bindings (Windows builds), pure-Java fallback. Byte-identical with EIP-2537 vectors; beacon analysis first."
+    notes: |-
+      User 2026-11-08: refuse to start (B-135) AND find a Windows backend now. Candidates: supranational blst Java bindings (Windows builds), pure-Java fallback. Byte-identical with EIP-2537 vectors; beacon analysis first.
+      Needs a holder, or the user accepts an 'ETH not supported on Windows' release note.
   - id: B-155
     title: "B-135 follow-ups: gate KZG on config not header shape; FatalErrors doc wording; restore the TUI terminal before halt"
     priority: P2
@@ -1176,7 +1208,9 @@ items:
     opened: 2026-11-08
     refs: [B-135]
     links: {}
-    notes: "beacon re-review of 73e842637 (APPROVE WITH NITS): PrecompiledContracts.scala:183 enables 0x0a from blobGasUsed.isDefined, not config (unreachable today, sturdier on config); FatalErrors doc says one batch but persistState runs per system call and code commits immediately (safe like kill -9); halt under --tui skips TuiRestore."
+    notes: |-
+      beacon re-review of 73e842637 (APPROVE WITH NITS): PrecompiledContracts.scala:183 enables 0x0a from blobGasUsed.isDefined, not config (unreachable today, sturdier on config); FatalErrors doc says one batch but persistState runs per system call and code commits immediately (safe like kill -9); halt under --tui skips TuiRestore.
+      From B-159: the header-shape gate also drops 0x0a from an eth_call time override into Cancun (geth has it).
   - id: B-156
     title: "Flaky: HealNoWalkCompletionSpec:404 count-reseeds-per-root on Hash expects a root request, gets a child path"
     priority: P2
@@ -1289,14 +1323,17 @@ items:
     notes: "beacon nits on #1776: BlockRewards.increaseAccountBalance duplicates BlockPreparator:290-295; simulate gates on difficulty != 0 (geth IsPoSHeader), import on isPoS (base fee too); they differ only for a pre-London zero-difficulty header."
   - id: B-171
     title: "Tracer error text: route callTracer/prestate errors through CallErrors.vmErrorMessage (geth err.Error()); re-pin TraceGoldenSpec"
-    priority: P3
+    priority: P2
     status: open
     area: rpc
     size: S
     opened: 2026-11-09
     refs: [B-133]
     links: {}
-    notes: "beacon review of #1777: tracers print bare Scala names (VM.scala:141,291 -> CallTracer.scala:128). Also optional: a minStack member on ImmediateStackOp for geth stack-underflow text on DUPN/SWAPN/EXCHANGE (bucket C; text only, no consensus difference per execution-specs stack.py:229-237); do not raise delta."
+    notes: |-
+      beacon review of #1777: tracers print bare Scala names (VM.scala:141,291 -> CallTracer.scala:128). Also optional: a minStack member on ImmediateStackOp for geth stack-underflow text on DUPN/SWAPN/EXCHANGE (bucket C; text only, no consensus difference per execution-specs stack.py:229-237); do not raise delta.
+      Includes B-136: CallTracer:77,105 match 'execution reverted', so revert reasons are never decoded.
+      2026-11-17 priority P2: absorbs B-136 (P2)
   - id: B-172
     title: "eth_call/eth_estimateGas revert message lacks geth \": <reason>\" suffix; estimator lacks \"failed with %d gas:\" prefix; EIP-2681 nonce overflow text"
     priority: P2
@@ -1472,7 +1509,7 @@ items:
       spec: specs/027-tui-dashboard
     notes: "Slice 3 overlaps local reads with the asks, which absorbs a slow read but not a hung one: TuiStatusProbe.apply blocks, no snapshot is published, agedAt flips both sources to Unresponsive and Alerts raise peer manager / sync controller Unresponsive."
   - id: B-194
-    title: "Protocol: a metrics object initialiser on an IO path is fatal to every IORuntime in the JVM if it throws"
+    title: "Protocol: no metrics-object initialiser on an IO path (rule in agent-protocols); init EngineApiMetrics/PoWMiningMetrics off it"
     priority: P3
     status: open
     area: docs
@@ -1687,7 +1724,7 @@ items:
     notes: "Failed once in a full testEssential run in a cloud container (TimeoutException: Future timed out after [5 seconds], SubscriptionManagerSpec.scala:216); passes 3 of 3 run alone. A timed wait on an actor delivery: against the constitution's rule that tests are deterministic. Seen during spec 018 C2b; not touched by it."
   - id: B-216
     title: "Spec 018 C5a: what the SNAP controller does when a validation walk ends in a state fault (StateValidationModule reopens healing for any Left but a missing root)"
-    priority: P3
+    priority: P2
     status: open
     area: storage
     size: S
@@ -1695,7 +1732,9 @@ items:
     refs: []
     links:
       spec: specs/018-storage-engine-consolidation
-    notes: "C2b made StateValidator answer Left('State fault, not a hole: ...') when a view goes stale or a state is not held, so a node that is there is never queued for healing. StateValidationModule still treats that Left as it treats a corrupt node: back to the healing phase. Unreachable until the validator is handed a view (it reads SNAP's own store today); decide the reaction (retry the validation on a fresh view) with C5a's hand-off. beacon, C2b consult."
+    notes: |-
+      C2b made StateValidator answer Left('State fault, not a hole: ...') when a view goes stale or a state is not held, so a node that is there is never queued for healing. StateValidationModule still treats that Left as it treats a corrupt node: back to the healing phase. Unreachable until the validator is handed a view (it reads SNAP's own store today); decide the reaction (retry the validation on a fresh view) with C5a's hand-off. beacon, C2b consult.
+      2026-11-17 priority P2: C5a hand-off behaviour; Track C is next sprint's commitment
   - id: B-217
     title: "Legacy recovery scans stop at the first hole and settle the flag on a partial walk: align with the combined scan, or retire them"
     priority: P3
@@ -1717,7 +1756,7 @@ items:
     links: {}
     notes: "sbt 'testOnly *SyncControllerSpec': 149 pass, that one fails (isSnapSyncAccountsComplete was false, SyncControllerSpec.scala:1182), 3 of 3, at 80e1fef7c (#1797's head) and after. In the full testEssential run of the same tree it passed (767 suites, 2026-11-11 15:39Z), and CI's Test and Build was green on that head. Order- or environment-dependent: something another suite does, or leaves behind, decides it. Found during spec 018 C2b; not touched by it."
   - id: B-219
-    title: "Spec 018 C4b: mining on the unified layout (lift the mining and getWork refusals, MinedBlock dropped during an import, an Olympia block on positions)"
+    title: "MinedBlockOnPositionsSpec: an Olympia block (base fee to the Treasury) on Mordor's configuration (forge)"
     priority: P2
     status: open
     area: storage
@@ -1729,7 +1768,7 @@ items:
     depends_on: [B-061]
     notes: "Found by C3c part 2 (#1802, plan.md 'C3c proposer view record'). A mined block reaches import only through network sync, which the guard does not run before the head move. When C4b brings it back: lift ConfigValidator's mining refusal and EthMiningService.NoRouteForMinedBlocks together; fix BlockImporter's 'case _: MinedBlock => Behaviors.same' (a miner that waits for its last import meets it every time); add an Olympia block (base fee to the Treasury) to MinedBlockOnPositionsSpec on Mordor's configuration (forge)."
   - id: B-220
-    title: "Spec 018 C4: what C3c part 3 deferred (side blocks in the lenient import, test_rewindToBlock, the it/ethtest harnesses and the fork-choice harness)"
+    title: "Spec 018 C4 leftovers: side blocks in ChainImporter's lenient import; test_rewindToBlock to any block on the unified layout"
     priority: P2
     status: open
     area: storage
@@ -1826,7 +1865,9 @@ items:
       agent: main
       since: 2026-11-13T15:29:09Z
       heartbeat: 2026-11-13T15:35:56Z
-    notes: "2026-11-13 in-progress: S5 running on dev-node since 2026-11-13 09:34 CST: user units fukuii-ephemery-builtin + lighthouse-ephemery-builtin, root /chipprbots/blockchain/ephemery/builtin, jar 0.11.78 (staging 8b82e132c); 165 reset 2026-11-19 19:00 UTC"
+    notes: |-
+      2026-11-13 in-progress: S5 running on dev-node since 2026-11-13 09:34 CST: user units fukuii-ephemery-builtin + lighthouse-ephemery-builtin, root /chipprbots/blockchain/ephemery/builtin, jar 0.11.78 (staging 8b82e132c); 165 reset 2026-11-19 19:00 UTC
+      dev-node: please heartbeat (last 11-13); claim kept, S5 runs to the 11-19 19:00 UTC reset.
   - id: B-237
     title: PeerManagerActor dials bootstrap/discovered enodes with TCP port 0 (enode ...:0?discport=N form)
     priority: P3
@@ -1861,7 +1902,7 @@ items:
     notes: EngineApiService.executableAtParent reads accountAt(parent), which is the anchor-chain seam and refuses a forward-layer parent, while proposerStateOn serves one. No node flow makes a layer today. Route it through the proposer's door with C4d; also refuse layers before building an index in viewBehind. Found by beacon, C4a part 4b-2
   - id: B-240
     title: "trace and simulate bodies run on the compute pool for seconds: IO.blocking in StateRead.reading"
-    priority: P3
+    priority: P2
     status: open
     area: rpc
     size: S
@@ -1869,9 +1910,11 @@ items:
     refs: []
     links:
       spec: 018
-    notes: StateRead.reading is IO(scoped(body)); debug_trace*, trace_* and eth_simulateV1 run for seconds on a compute thread (as before the scope). IO.blocking keeps the body on one thread, so the scope stays valid. Four slow traces can also hold every read behind the head. Found by conduit, C4a part 4b-2
+    notes: |-
+      StateRead.reading is IO(scoped(body)); debug_trace*, trace_* and eth_simulateV1 run for seconds on a compute thread (as before the scope). IO.blocking keeps the body on one thread, so the scope stays valid. Four slow traces can also hold every read behind the head. Found by conduit, C4a part 4b-2
+      2026-11-17 priority P2: seconds-long traces on the compute pool stall reads behind the head
   - id: B-241
-    title: fukuii cli subcommands append to the default network's node log (logback resolves before the network config)
+    title: "fukuii cli subcommands other than ephemery-fetch append to the default network's node log: log to the console only"
     priority: P3
     status: open
     area: ops
@@ -1911,7 +1954,9 @@ items:
     opened: 2026-11-13
     refs: [spec 029 research §11]
     links: {}
-    notes: Found by reading the code while writing spec 029; not checked on a running node. NodeBuilder.scala:134 blockTopic; no publisher under consensus/engine/.
+    notes: |-
+      Found by reading the code while writing spec 029; not checked on a running node. NodeBuilder.scala:134 blockTopic; no publisher under consensus/engine/.
+      Raise to P1 if newHeads is silent on a post-merge node; first check whether engine imports reach BlockImporter.
   - id: B-247
     title: JdkHttpsTransportSpec 'refuse a proxy URL with credentials' fails where the JVM has https.proxyHost set
     priority: P3
@@ -1933,7 +1978,9 @@ items:
     refs: []
     links:
       spec: 018
-    notes: "Forge, C4b part 3 pre-code consult (verified in code): Blockchain.removeBlock via FastSyncBranchResolver.discardBlocksAfter removes the number->hash entries (Blockchain.scala:197-199) before BlockImporter.rewindCanonicalChain reads them (:198-200), so abandonBlockStates gets nothing on the resolver-success path and the #1471 reference-count undo never runs there. Hash layout; its own bucket-C commit, not part of spec 018 C4b."
+    notes: |-
+      Forge, C4b part 3 pre-code consult (verified in code): Blockchain.removeBlock via FastSyncBranchResolver.discardBlocksAfter removes the number->hash entries (Blockchain.scala:197-199) before BlockImporter.rewindCanonicalChain reads them (:198-200), so abandonBlockStates gets nothing on the resolver-success path and the #1471 reference-count undo never runs there. Hash layout; its own bucket-C commit, not part of spec 018 C4b.
+      Also make the discard one atomic batch (was B-107).
   - id: B-251
     title: "Spec 018 C4b follow-up: a spec for StdNode.start's dispatch of the reconciliation at start and the hash layout's repairs"
     priority: P3
@@ -2137,7 +2184,9 @@ items:
     refs: []
     links:
       spec: 029
-    notes: "vault, spec 029 slice 7: compactRange holds dbLock.readLock for the whole native call while writes take the write lock, so a whole-database compaction stops block import for hours and cannot be cancelled. Shape: a separate compactionGuard RW lock; dbLock only for assureNotClosed and the handle; CompactRangeOptions.setExclusiveManualCompaction(false) and setCanceled; largest family first, guard released between families; close() cancels, then takes the guard's write lock, then dbLock's. Also fixes the cause for SnapStorageDoneStorage.compact and HealingFrontierStorage. Until then the dashboard lists compaction under 'not offered, and why' (a departure from spec 029 FR-054)."
+    notes: |-
+      vault, spec 029 slice 7: compactRange holds dbLock.readLock for the whole native call while writes take the write lock, so a whole-database compaction stops block import for hours and cannot be cancelled. Shape: a separate compactionGuard RW lock; dbLock only for assureNotClosed and the handle; CompactRangeOptions.setExclusiveManualCompaction(false) and setCanceled; largest family first, guard released between families; close() cancels, then takes the guard's write lock, then dbLock's. Also fixes the cause for SnapStorageDoneStorage.compact and HealingFrontierStorage. Until then the dashboard lists compaction under 'not offered, and why' (a departure from spec 029 FR-054).
+      Closes #1689 (was B-029).
   - id: B-284
     title: "PoW tie rule: on equal total difficulty core-geth prefers the lower number then random; fukuii keeps its head (strict >)"
     priority: P3
@@ -2308,13 +2357,15 @@ items:
     notes: hive client has no switch for fukuii.state.path-live; needs one, and a host
   - id: B-315
     title: "Weight arm of reorganiseOnLayers: weigh again when the head moved between the comparison and the move"
-    priority: P2
+    priority: P3
     status: open
     area: consensus
     opened: 2026-11-16
     refs: [B-297]
     links: {}
-    notes: "forge, after B-297: unreachable today (importLock); B1's anchor check is on the CL arm only"
+    notes: |-
+      forge, after B-297: unreachable today (importLock); B1's anchor check is on the CL arm only
+      2026-11-17 priority P3: unreachable under importLock
   - id: B-316
     title: The consensus layer's branch that forks below what a view reaches is adopted by no one (archive)
     priority: P2
@@ -2395,7 +2446,7 @@ items:
       spec: 018
     notes: "forge W3 on #1880; the conversion is pinned in ConsensusAdapterEscalationSpec only"
   - id: B-328
-    title: "Export db.state.anchor.number as a metric (path-live): the Mordor gate could only read the anchor from the start's reconciliation line"
+    title: Seed db.state.anchor.number from the anchor at open (path-live)
     priority: P3
     status: open
     area: metrics
