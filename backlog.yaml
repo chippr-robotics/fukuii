@@ -1281,12 +1281,15 @@ items:
   - id: B-111
     title: Match SNAP bytecode responses against the requested code hashes
     priority: P2
-    status: open
+    status: done
     area: snap
     opened: 2026-09-27
+    closed: 2026-11-17
     refs: [N-002]
     links: {}
-    notes: SNAPRequestTracker.scala:225. Check whether bytecode handling verifies them already.
+    notes: |-
+      SNAPRequestTracker.scala:225. Check whether bytecode handling verifies them already.
+      2026-11-17 done: 0.12.1 retro: already in place, ByteCodeResponseHandling.validateReturnedCodes checks returned codes against the requested hashes
   - id: B-112
     title: "Message decoder: switch on the negotiated p2p protocol version"
     priority: P3
