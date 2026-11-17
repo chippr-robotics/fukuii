@@ -2542,16 +2542,18 @@ items:
   - id: B-223
     title: "Flaky: TuiUpdaterSpec 'run the quit hook off the updater thread on q' gives a key press one 20 ms frame to arrive"
     priority: P2
-    status: open
+    status: done
     area: tests
     size: S
     opened: 2026-11-12
+    closed: 2026-11-17
     refs: []
     links:
-      prs: [1809]
+      prs: [1809, 1810]
     notes: |-
       CI run 43247554050: 'true was not equal to false (TuiUpdaterSpec.scala:84)'. The key is written to a pipe and reaches the reader on JLine's pump thread; one tick waits one pace (20 ms in TuiTestTerminal.config) for it.
       Fix: tick until it answers false (eventually), here and at :102 and the 'd' case; passes 3/3 locally.
+      2026-11-17 done: 0.12.1 retro: fixed with its duplicate B-224 in #1810
   - id: B-224
     title: "TuiUpdaterSpec key tests race the 20 ms test pace on a loaded CI runner (failed PR #1809)"
     priority: P1
