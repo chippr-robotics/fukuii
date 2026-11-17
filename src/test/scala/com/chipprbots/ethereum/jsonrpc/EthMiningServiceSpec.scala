@@ -481,9 +481,9 @@ class EthMiningServiceSpec
 
     response shouldBe Symbol("right")
 
-  // Spec 018 Track C, C3c: a mined block is imported by network sync, which a node on the unified state layout does not
-  // run before its overlay. So no work is given, where a solution would be answered `true` and its block dropped.
-  it should "give no work and take none on the unified state layout, and say why" taggedAs (
+  // Spec 018 B-293: the miners read the head under its generation, so mining is taken on the unified layout. With no
+  // head to build on, as on this empty datadir, getWork answers as on the hash layout.
+  it should "start the miner, and give work as on the hash layout, on the unified state layout" taggedAs (
     UnitTest,
     RPCTest
   ) in new TestSetup:
@@ -495,22 +495,9 @@ class EthMiningServiceSpec
         override protected def statePathLive: Boolean = true
 
     blockchainReader.holdsStateInPlace shouldBe true
-    // no block is generated and no prepared block is looked for: the mocked generator expects neither
-    ethMiningService.getWork(GetWorkRequest()).unsafeRunSync().left.map(_.message) shouldBe
-      Left(EthMiningService.NoRouteForMinedBlocks)
-    ethMiningService
-      .submitWork(
-        SubmitWorkRequest(ByteString("nonce"), ByteString(Hex.decode("01" * 32)), ByteString(Hex.decode("01" * 32)))
-      )
-      .unsafeRunSync()
-      .left
-      .map(_.message) shouldBe Left(EthMiningService.NoRouteForMinedBlocks)
-    // forge, spec 018 C5a part 10: the internal miner is not started either, which answered true and did nothing
-    ethMiningService.startMiner(StartMinerRequest()).unsafeRunSync().left.map(_.message) shouldBe
-      Left(EthMiningService.NoRouteForMinedBlocks)
-    syncingController.expectNoMessage(100.millis)
-    // and the node is not counted as mining for having been asked
-    ethMiningService.getMining(GetMiningRequest()).unsafeRunSync() shouldEqual Right(GetMiningResponse(false))
+    ethMiningService.startMiner(StartMinerRequest()).unsafeRunSync() shouldEqual Right(StartMinerResponse(true))
+    // no best block on an empty datadir: no block is generated, and the answer is the hash layout's
+    ethMiningService.getWork(GetWorkRequest()).unsafeRunSync() shouldBe Left(JsonRpcError.InternalError)
 
   // NOTE TestSetup uses Ethash consensus; check `consensusConfig`.
   class TestSetup(implicit system: ActorSystem) extends EphemBlockchainTestSetup with ApisBuilder:

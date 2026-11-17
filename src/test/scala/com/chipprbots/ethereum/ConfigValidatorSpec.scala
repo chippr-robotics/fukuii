@@ -182,13 +182,9 @@ class ConfigValidatorSpec extends AnyFlatSpec with Matchers:
     ) shouldBe empty
   }
 
-  it should "refuse state.path-live with mining on, and name both keys" taggedAs UnitTest in {
-    val errors = ConfigValidator.validate(cfg("state.path-live = true\nmining.mining-enabled = true"))
-    errors should have size 1
-    errors.head should (include("fukuii.state.path-live").and(include("fukuii.mining.mining-enabled = false")))
-    errors.head should include("B-293")
-    ConfigValidator.stateGuardErrors(cfg("state.path-live = false\nmining.mining-enabled = true")) shouldBe empty
-    ConfigValidator.stateGuardErrors(cfg("state.path-live = true\nmining.mining-enabled = false")) shouldBe empty
+  // B-293: the miners read the head under its generation
+  it should "take state.path-live with mining on" taggedAs UnitTest in {
+    ConfigValidator.validate(cfg("state.path-live = true\nmining.mining-enabled = true")) shouldBe empty
   }
 
   // forge: a checkpoint is imported into the hash-keyed store, and says the sync is done with no anchor
@@ -228,10 +224,10 @@ class ConfigValidatorSpec extends AnyFlatSpec with Matchers:
     // each thing the guard refuses is said
     ConfigValidator.stateGuardErrors(
       cfg(
-        "state.path-live = true\nmining.mining-enabled = true\nsync.snap-sync.storage-scheme = \"hash\"\n" +
+        "state.path-live = true\nsync.snap-sync.storage-scheme = \"hash\"\n" +
           "sync.checkpoint-sync-url = \"https://cp.example/cp\""
       )
-    ) should have size 3
+    ) should have size 2
   }
 
   // Both are taken on the unified layout since C3c, in its linear subset: the chain file block by block onto the
@@ -249,7 +245,7 @@ class ConfigValidatorSpec extends AnyFlatSpec with Matchers:
     ConfigValidator.stateGuardErrors(cfg("state.path-live = false\ntestmode = true")) shouldBe empty
     // what the guard still refuses is refused in test mode too
     ConfigValidator.stateGuardErrors(
-      cfg("state.path-live = true\ntestmode = true\nmining.mining-enabled = true")
+      cfg("state.path-live = true\ntestmode = true\nsync.checkpoint-sync-file = \"/data/cp.bin\"")
     ) should have size 1
   }
 
@@ -263,7 +259,7 @@ class ConfigValidatorSpec extends AnyFlatSpec with Matchers:
   }
 
   it should "refuse it for an instance of a multi-instance run too" taggedAs UnitTest in {
-    val instance = cfg("state.path-live = true\nmining.mining-enabled = true")
+    val instance = cfg("state.path-live = true\nsync.checkpoint-sync-file = \"/data/cp.bin\"")
     val root = ConfigFactory.empty().withValue("fukuii-runtime.instances.guarded.fukuii", instance.root())
     val refused = the[IllegalArgumentException] thrownBy com.chipprbots.ethereum.runtime.FukuiiRuntime.fromConfig(root)
     refused.getMessage should (include("Instance guarded").and(include("fukuii.state.path-live")))

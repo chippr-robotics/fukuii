@@ -57,7 +57,8 @@ object MockedMiner:
 
   // Internal self-messages.
   private[miners] case object MineBlock extends Command
-  private[miners] case class MockBlockMined(result: PendingBlockAndState) extends Command
+  // `generation`: the head's generation the build was begun under (spec 018 B-293); 0 with the guard off
+  private[miners] case class MockBlockMined(result: PendingBlockAndState, generation: Long = 0L) extends Command
   private[miners] case class MiningFailed(t: Throwable) extends Command
 
   // External protocol — unchanged, kept for the Mining `askMiner`/`sendMiner` API and QAService.
@@ -189,12 +190,13 @@ private class MockedMiner(
       numBlocks: Int,
       withTransactions: Boolean,
       parentBlock: Block,
-      importWaits: Int
+      importWaits: Int,
+      forMove: Boolean = false
   ): Behavior[Command] =
     if importWaits >= MockedMiner.MaxImportWaits then
       log.error(
-        "Mocked mining stopped: block {} was not imported within {} s; {} block(s) were not mined",
-        parentBlock.idTag,
+        "Mocked mining stopped: {} within {} s; {} block(s) were not mined",
+        if forMove then "the head was still being moved" else s"block ${parentBlock.idTag} was not imported",
         MockedMiner.MaxImportWaits,
         numBlocks
       )
@@ -216,13 +218,17 @@ private class MockedMiner(
       Behaviors.same
 
     case MineBlock =>
+      // spec 018 B-293 (forge): the generation is read first, before the parent's state is looked at (a sequence lock);
+      // the build is kept only if it is still the one read. An odd one is a move or an adoption in place under way,
+      // waited out a tick at a time. Read, not waited on: this is the actor's thread.
+      val generation = if blockchainReader.holdsStateInPlace then blockchainReader.headGeneration else 0L
       def build(): Behavior[Command] =
         context.pipeToSelf(
           blockCreator
             .getBlockForMining(parentBlock, withTransactions, initialWorldStateBeforeExecution)
             .unsafeToFuture()
         ) {
-          case Success(result) => MockBlockMined(result)
+          case Success(result) => MockBlockMined(result, generation)
           case Failure(t)      => MiningFailed(t)
         }
         Behaviors.same
@@ -230,6 +236,9 @@ private class MockedMiner(
         log.info(s"Mining all mocked blocks successful")
         waiting()
       else if !blockchainReader.holdsStateInPlace then build()
+      else if generation % 2 != 0 then
+        log.debug("Mocked mining: the head is being moved; block {} is built on once it is settled", parentBlock.idTag)
+        awaitImport(numBlocks, withTransactions, parentBlock, importWaits, forMove = true)
       else
         stateOf(parentBlock) match
           case ParentState.Held    => build()
@@ -243,7 +252,14 @@ private class MockedMiner(
             )
             waiting()
 
-    case MockBlockMined(PendingBlockAndState(pendingBlock, state)) =>
+    case MockBlockMined(_, generation)
+        if blockchainReader.holdsStateInPlace && blockchainReader.headGeneration != generation =>
+      // the head was moved during the build: it is not sent, and the parent's state is looked at again (forge)
+      log.info("The mocked block built on {} is not used: the head was moved during the build", parentBlock.idTag)
+      context.self ! MineBlock
+      Behaviors.same
+
+    case MockBlockMined(PendingBlockAndState(pendingBlock, state), _) =>
       val minedBlock = pendingBlock.block
       log.info(
         s"Mining mocked block {} successful. Included transactions: {}",

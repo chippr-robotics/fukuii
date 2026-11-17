@@ -519,33 +519,14 @@ class TestService(
     * is then. With the guard off the head is never stepped through and the first build is the one kept.
     */
   private def builtOnTheSettledHead(buildsLeft: Int): IO[PendingBlock] =
-    IO.blocking(blockchainReader.awaitHeadSettled(headSettleWait.toMillis)).flatMap {
-      case None =>
-        IO.raiseError(
-          new com.chipprbots.ethereum.db.storage.pathstate.StateUnavailable(
-            s"no block is built: the head is still being moved after ${headSettleWait.toSeconds} s"
-          )
-        )
-      case Some(settled) =>
-        IO.defer(
-          getBlockForMining(
-            blockchainReader.getBestBlock.getOrElse(throw new IllegalStateException("No best block found"))
-          )
-        ).flatMap { built =>
-          if blockchainReader.headGeneration == settled then IO.pure(built)
-          else if buildsLeft <= 1 then
-            IO.raiseError(
-              new com.chipprbots.ethereum.db.storage.pathstate.StateUnavailable(
-                s"no block is built: the head was moved during each of ${TestService.BuildsOnAMovingHead} builds"
-              )
-            )
-          else
-            log.info(
-              "The block built on block {} is not used: the head was moved while it was built. It is built again",
-              built.block.header.number.value - 1
-            )
-            builtOnTheSettledHead(buildsLeft - 1)
-        }
+    new com.chipprbots.ethereum.consensus.pow.miners.SettledHeadBuild(
+      blockchainReader,
+      headSettleWait.toMillis,
+      buildsLeft
+    )(getBlockForMining).flatMap {
+      case Right((_, built)) => IO.pure(built)
+      case Left(why) =>
+        IO.raiseError(new com.chipprbots.ethereum.db.storage.pathstate.StateUnavailable(s"no block is built: $why"))
     }
 
   private def getBlockForMining(parentBlock: Block): IO[PendingBlock] =

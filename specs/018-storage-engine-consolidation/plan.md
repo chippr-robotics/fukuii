@@ -4473,7 +4473,7 @@ held peers are read from the store once a peer.
 broken one at a time, 13 caught; two only after tests were added (the bootstrap's freshness, the controller's height
 for `branchServed`). (The downloader's three were run on the split that was then withdrawn.)
 
-#### C5a part 10: the refusals lifted, and a hand-off run live, as it is to be built (B-325) (design, 2026-11-17)
+#### C5a part 10: the refusals lifted, and a hand-off run live (B-325, B-308) (built, #1880, 2026-11-17)
 
 **A design, not yet built.** Read before code by beacon (proof of stake), forge (ETC) and vault (the write order),
 each on staging at `47890a1`. Nothing below is code yet. It is for the main session, which owns the PR, and for the
@@ -4612,6 +4612,29 @@ from lane 2 on the user's word), on `fix/018-c5a-part10`; how each decision is b
    The alternative is that no anchor above the genesis and no sync done means SNAP on the guard, whatever the flag.
 4. **The weight arm's re-check when the head moved** (B-315) is not needed for part 10 (forge: the importer's lock
    serialises every move on ETC); no decision, recorded.
+
+#### Mining on the unified layout: the miners read the head under its generation (B-293) (2026-11-17)
+
+The last refusal on the guard after part 10. Forge read the design before code (no blockers; four changes taken):
+
+- `consensus/pow/miners/SettledHeadBuild`: the sequence lock of C4e part 4 as one helper. The generation is read settled
+  (waited for on a blocking thread), the head is read, the block built, and kept only if the generation is unchanged; a
+  build whose view went stale (`StateFault`) because the head was moved on is built again, any other fault is raised; at
+  most `Builds` (3) builds. With the guard off: one build, as before. `TestService.builtOnTheSettledHead` uses it.
+- `EthashMiner` builds through it (the coordinator passes it; the head is read by the helper on both layouts), and gives
+  a turn up before the nonce search when the head kept moving: `MiningUnsuccessful`, and the coordinator mines next.
+- `eth_getWork` builds through it, its ommers and transactions those of the parent built on, and answers geth's "no
+  mining work available yet" while the head moves (1 s wait); the work is notified only when kept. `eth_submitWork` is
+  as it was: the import judges a solution whose parent is no longer the head.
+- `MockedMiner` reads the generation on the guard (not waited on: the actor's thread), waits as for an import while it
+  is odd, and builds again rather than sends a block whose build a move overtook.
+- Forge's warnings: pending logs on the guard are the head's (`FilterManager`, as `ResolveBlock`); a mined block the
+  importer drops while an import runs is logged and counted (`regularsync.mined.dropped.total`).
+- The refusals are lifted: `ConfigValidator` (mining), `EthMiningService` (getWork, submitWork, miner_start).
+
+Not built: a `MockedMiner` run on real positions whose build overlaps an adoption (its spec mocks the reader with the
+guard off); logged as a follow-up. T184's Ethash and test-mode legs are pinned by `SettledHeadBuildSpec` and
+`TestServiceOnPositionsSpec`.
 
 ### Destructive change (C8a and C8b): the vault protocol blocks
 
