@@ -3268,20 +3268,18 @@ items:
   - id: B-282
     title: Publish releases to the Chocolatey community repository (fukuii package)
     priority: P2
-    status: review
+    status: done
     area: ci
     size: M
     opened: 2026-11-15
+    closed: 2026-11-17
     refs: []
     links:
       prs: [1845]
       branch: feat/chocolatey
-    claim:
-      by: dev-node
-      agent: claude-opus
-      since: 2026-11-15T00:50:56Z
-      heartbeat: 2026-11-15T00:51:08Z
-    notes: Package downloads the release zip (sha256 from SHA256SUMS), depends on temurin25jre, shims bin\fukuii.bat. Key in env CHOCOLATEY_NUPKG (main only). First version waits for Chocolatey moderation.
+    notes: |-
+      Package downloads the release zip (sha256 from SHA256SUMS), depends on temurin25jre, shims bin\fukuii.bat. Key in env CHOCOLATEY_NUPKG (main only). First version waits for Chocolatey moderation.
+      2026-11-17 done: 0.12.1 retro: #1845 merged (Backlog: B-282); dev-node's review claim had expired
   - id: B-283
     title: OmmersValidator.getNBlocksBack never terminates when an ancestor body is missing (Iterator.iterate collect take)
     priority: P2
