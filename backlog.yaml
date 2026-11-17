@@ -215,13 +215,17 @@ items:
   - id: B-019
     title: SyncControllerSpec:967 "leave SNAP's resume alone…" fails on every run (SyncTest-tagged, so CI never runs it)
     priority: P2
-    status: open
+    status: done
     area: tests
     size: S
     opened: 2026-11-07
+    closed: 2026-11-17
     refs: [SyncTest sweep 2026-11-07]
-    links: {}
-    notes: Seeds AccountsComplete with no task-file path, so taskFilesUnusable clears the flags. Also decide which tier runs SyncTest.
+    links:
+      prs: [1873]
+    notes: |-
+      Seeds AccountsComplete with no task-file path, so taskFilesUnusable clears the flags. Also decide which tier runs SyncTest.
+      2026-11-17 done: 0.12.1 retro: fixed by #1873 (B-309), the test seeds the task files
   - id: B-020
     title: "SNAP actor spec flakes: fixed wall-clock waits on CI and the HealRequestFixtures send/record race"
     priority: P2
