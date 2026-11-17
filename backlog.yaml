@@ -1841,20 +1841,18 @@ items:
   - id: B-227
     title: Ship Ephemery (bundled iteration + self-refresh at reset) and Hoodi as built-in networks
     priority: P2
-    status: in-progress
+    status: done
     area: ops
     size: M
     opened: 2026-11-12
+    closed: 2026-11-17
     refs: [user 2026-11-12]
-    links: {}
-    claim:
-      by: dev-node
-      agent: main
-      since: 2026-11-12T20:41:02Z
-      heartbeat: 2026-11-12T21:37:59Z
+    links:
+      prs: [1822]
     notes: |-
       User decision: Ephemery bundled like Mordor/Sepolia with a startup self-refresh after RESET_TIME (fetch the ephemery-genesis release, validate like fetch-genesis.sh, check the published genesis hash, per-iteration datadir); add Hoodi as a static built-in. Spec Kit; dev-node implements.
       2026-11-12 in-progress: spec 028 planned (47ca0f31a on spec/028-builtin-ephemery-hoodi): slices S1 Hoodi, S2 release lib, S3 bundle+selection+reset exit, S4a transport+tar, S4b refresh, S5 live; tasks next
+      2026-11-17 done: S1-S4b merged (#1814,#1817,#1819,#1821,#1822); live checks and closure are B-236.
   - id: B-228
     title: "GraphQL answers a missing trie node as an account that does not exist: balance 0, nonce 0, zero storage (GraphQLSchema.scala:484); answer an error"
     priority: P2
