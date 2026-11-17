@@ -6,7 +6,7 @@ kept beside the pinned jar, outside the tree, and its SHA-256 is recorded in the
 | File | Task | Produced by | Status |
 | --- | --- | --- | --- |
 | `blockdiff-golden-v1.hex`, `-v2.hex`, `-v3.hex` | T014 | `GoldenVectors.java` (run with `java GoldenVectors.java <outdir>`, JDK 25) | **Frozen 2026-11-07.** 153 B `8d0afd3e`, 219 B `707894bf`, 144 B `ae4e831f`; the CRC32C check value `e3069283` holds. Re-derived independently by vault, beacon, forge and this program. Any change reopens S0 (one-way door). |
-| `pinned-jar.md` | T002 | the last pre-track release, kept out of tree | open: the release (0.11.0 when cut) and the directory (the user's NFS share is the candidate) |
+| `pinned-jar.md` | T002 | the release jar, kept out of tree | **pinned 2026-11-17: v0.12.1** (the user's choice over the pre-track 0.11.0; the cost is recorded there), `fukuii-assembly-0.12.1.jar` SHA-256 `2100c4ce…08fec9`, staging `21cfa13d`; fallback 0.11.0 `22057022…68568f1`. Open: the keeper and the NFS path |
 | `ranges.md` | T003 | user, beacon, forge | open |
 | `roots-*.txt` | T004 | the pinned jar | open (needs T002, T003) |
 | `hive-<suite>-<date>.txt` | T005 | the pinned jar on the WSL hive | open |
