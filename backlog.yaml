@@ -3754,12 +3754,14 @@ items:
   - id: B-323
     title: "rpc-compat on hive master fails 16 tests since 2026-11-16 23:30: blob-fee-without-hashes, fork-inactive, eth_getProof key cases"
     priority: P1
-    status: open
+    status: done
     area: jsonrpc
     size: M
     opened: 2026-11-16
+    closed: 2026-11-17
     refs: []
-    links: {}
+    links:
+      prs: [1879]
     notes: "#1876 passed rpc-compat at 23:08 UTC on the same code; from ~23:30 #1873, #1875 (11 failures) and #1878 (16) fail it with unrelated diffs. hive_ref is master in _hive-sim.yml, so the suite floats: upstream added or changed tests. Real compliance gaps to fix (conduit); also consider pinning hive_ref so PR CI does not drift."
   - id: B-324
     title: Confirm against ECIP-1121 that Olympia admits EIP-7702 (type 4) transactions, as TxTypeGate does, before Olympia is scheduled
