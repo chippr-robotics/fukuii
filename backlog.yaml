@@ -3481,12 +3481,14 @@ items:
   - id: B-301
     title: Fetch the ancestor window's bodies at a hand-off and on an AncestorNotStored fault, on both layouts
     priority: P1
-    status: open
+    status: done
     area: sync
     size: M
     opened: 2026-11-15
+    closed: 2026-11-17
     refs: []
     links:
+      prs: [1878]
       spec: 018
     notes: "forge W2, C5a part 2 (B-283). Nothing fetches bodies P-5..P after SNAP: the backfill runs up from genesis. (1) the hand-off's ensure fetches them by hash on BOTH layouts (C5a part 5); (2) the importer's state-fault arm, on AncestorNotStored, asks for the bodies AncestorWindow.check(parent) names (a restart into regular sync skips the hand-off). No release between C5a part 2 and part 5"
   - id: B-302
