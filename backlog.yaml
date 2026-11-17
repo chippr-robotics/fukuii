@@ -2158,14 +2158,17 @@ items:
   - id: B-271
     title: "engine_newPayload never answers SYNCING: a payload with a missing parent or state is answered ACCEPTED (go-ethereum: SYNCING while it can extend a sync)"
     priority: P3
-    status: open
+    status: dropped
     area: engine-api
     size: M
     opened: 2026-11-14
+    closed: 2026-11-17
     refs: []
     links:
       spec: specs/029-tui-command-center
-    notes: "beacon, spec 029 slice 5 analysis. Consensus-visible: kept out of the B-193 counter fix. Check go-ethereum delayPayloadImport first."
+    notes: |-
+      beacon, spec 029 slice 5 analysis. Consensus-visible: kept out of the B-193 counter fix. Check go-ethereum delayPayloadImport first.
+      2026-11-17 dropped: merged into B-005: same newPayload SYNCING/ACCEPTED parity
   - id: B-273
     title: "Bundled gorgoroth.conf sets mining.protocol = \"ethash\", which MiningConfig rejects: fukuii gorgoroth cannot start"
     priority: P2
