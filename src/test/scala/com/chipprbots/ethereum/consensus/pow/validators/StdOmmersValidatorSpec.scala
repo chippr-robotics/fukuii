@@ -158,8 +158,8 @@ class StdOmmersValidatorSpec extends AnyFlatSpec with Matchers with ScalaCheckPr
     storagesInstance.storages.blockBodiesStorage.remove(block93.header.hash.value).commit()
     val missing: AncestorNotStored = the[AncestorNotStored] thrownBy
       ommersValidator.validate(ommersBlockParentHash, ommersBlockNumber, ommers, blockchainReader)
-    // the headers are all there, and block 93's body, which has ommers, is the one not stored (B-302)
-    (missing.wanted, missing.found) shouldBe (6, 5)
+    // the headers are all there; of the five bodies read, block 93's, which has ommers, is not stored (B-302)
+    (missing.wanted, missing.found) shouldBe (5, 4)
     missing.getMessage should include("the body of block 93")
     // a block with no ommers reads no ancestor, and is judged as it was
     ommersValidator.validate(ommersBlockParentHash, ommersBlockNumber, Nil, blockchainReader) shouldBe

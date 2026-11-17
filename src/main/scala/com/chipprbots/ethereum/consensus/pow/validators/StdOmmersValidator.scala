@@ -193,12 +193,14 @@ class StdOmmersValidator(blockHeaderValidator: BlockHeaderValidator) extends Omm
       blockNumber: BigInt,
       getNBlocksBack: GetNBlocksBack
   ): Seq[BlockHeader] =
-    val ancestors = ancestorsOf(parentHash, blockNumber, getNBlocksBack)
-    ancestors.filter(_.header.number.value >= blockNumber - usedBeforeDepth).flatMap { ancestor =>
+    val read = ancestorsOf(parentHash, blockNumber, getNBlocksBack).filter(
+      _.header.number.value >= blockNumber - usedBeforeDepth
+    )
+    read.flatMap { ancestor =>
       ancestor.ommers.getOrElse(
         throw new AncestorNotStored(
-          ancestors.size,
-          ancestors.count(_.ommers.isDefined),
+          read.size,
+          read.count(_.ommers.isDefined),
           s"block $blockNumber cannot be checked until the body of block ${ancestor.header.number}, which has " +
             "ommers, is stored"
         )
@@ -226,6 +228,6 @@ class StdOmmersValidator(blockHeaderValidator: BlockHeaderValidator) extends Omm
       throw new AncestorNotStored(
         wanted,
         ancestors.size,
-        s"block $blockNumber cannot be checked until the blocks below it are stored with their bodies"
+        s"block $blockNumber cannot be checked until the headers of the blocks below it are stored"
       )
     ancestors

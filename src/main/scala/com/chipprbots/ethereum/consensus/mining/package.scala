@@ -16,8 +16,8 @@ import com.chipprbots.ethereum.domain.BlockHeader
 package object mining:
   final type GetBlockHeaderByHash = ByteString => Option[BlockHeader]
 
-  /** The block with the given hash and the `n - 1` blocks below it, oldest first, as the ommers rules read them
-    * ([[OmmerAncestor]]); fewer where they are not stored.
+  /** The block with the given hash and the `n - 1` blocks below it, as the ommers rules read them ([[OmmerAncestor]]);
+    * fewer where they are not stored. In no promised order: the rules read them as a set.
     */
   final type GetNBlocksBack = (ByteString, Int) => Seq[OmmerAncestor]
 
