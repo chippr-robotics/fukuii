@@ -205,11 +205,12 @@ class EthInfoService(
                 pulledStates = stateNodesProgress.current
               )
             )
-          )
-        case Status.NotSyncing => SyncingResponse(None)
-        case Status.SyncDone   => SyncingResponse(None)
+          ).asRight
+        case Status.NotSyncing => SyncingResponse(None).asRight
+        case Status.SyncDone   => SyncingResponse(None).asRight
+        // B-319: neither syncing nor synced; `false` would say the node is at the head
+        case Status.Stopped(reason) => JsonRpcError.LogicError(s"the sync stopped: $reason").asLeft
       }
-      .map(_.asRight)
 
   /** eth_config (EIP-7910).
     *

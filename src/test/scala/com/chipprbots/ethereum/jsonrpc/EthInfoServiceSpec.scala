@@ -95,6 +95,14 @@ class EthServiceSpec
 
     response shouldEqual Right(SyncingResponse(None))
 
+  // B-319: a sync that stopped for good is neither syncing nor at the head: `false` would say it is synced
+  it should "answer with why when the sync stopped" taggedAs (UnitTest, RPCTest) in new TestSetup:
+    syncingController.setAutoPilot(syncStatusAutoPilot(SyncProtocol.Status.Stopped("the sample stopped it 3 times")))
+
+    val response: Either[JsonRpcError, SyncingResponse] = ethService.syncing(SyncingRequest()).unsafeRunSync()
+
+    response shouldEqual Left(JsonRpcError.LogicError("the sync stopped: the sample stopped it 3 times"))
+
   // spec 018 C4d part 4b: the adoption of a long branch on the unified layout moves the head block by block to the
   // branch's tip; meanwhile the node is syncing to it, whatever its sync controller says
   it should "return the adoption of a long branch as syncing, while it runs" taggedAs (

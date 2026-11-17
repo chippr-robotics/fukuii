@@ -551,8 +551,9 @@ class SyncControllerSpec
     }
   }
 
-  // B-304: a sample that keeps stopping the hand-off restarts SNAP twice, and the third time the controller stops.
-  it should "restart SNAP for the hand-off's first two samples that stop it, and stop on the third" taggedAs (
+  // B-304: a sample that keeps stopping the hand-off restarts SNAP twice, and the third time the sync stops; B-319:
+  // the controller then answers what asks after the sync with why.
+  it should "restart SNAP for the hand-off's first two samples that stop it, and stop the sync on the third, saying why" taggedAs (
     UnitTest,
     SyncTest
   ) in withRecoveryTestSetup() { testSetup =>
@@ -589,11 +590,23 @@ class SyncControllerSpec
       current = next
     }
 
-    val watcher = TestProbe()(using system)
-    watcher.watch(syncController)
     val errors = syncControllerErrorsDuring(sampleStopped())
     errors.exists(e => e.contains("3 times since the last hand-off") && e.contains(counts.describe)) shouldBe true
-    watcher.expectTerminated(syncController)
+    // B-319: the controller does not stop, so that what asks after the sync is answered, with why; and its SNAP
+    // child is stopped
+    eventually {
+      someTimePasses()
+      assert(!syncController.children.exists(_.path.name.startsWith("snap-sync")))
+    }
+    syncController.underlying.isTerminated shouldBe false
+    val status = TestProbe()(using system)
+    syncController ! SyncController.WrappedSyncProtocol(SyncProtocol.GetStatus(status.ref.toTyped))
+    status.expectMsgType[SyncProtocol.Status.Stopped].reason should (include("3 times").and(include(counts.describe)))
+    // and nothing restarts it
+    sampleStopped()
+    syncController ! SyncController.WrappedSyncProtocol(SyncProtocol.Start)
+    someTimePasses()
+    syncController.children.exists(_.path.name.startsWith("snap-sync")) shouldBe false
   }
 
   // B-304: the count is of samples since the last hand-off

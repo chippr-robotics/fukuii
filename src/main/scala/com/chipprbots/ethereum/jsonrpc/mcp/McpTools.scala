@@ -83,8 +83,9 @@ object NodeStatusTool:
           val pct =
             if blocks.target > 0 then f"${(blocks.current.toDouble / blocks.target.toDouble * 100)}%.1f%%" else "N/A"
           (s"Syncing (from block $start)", s"Block ${blocks.current}/${blocks.target} ($pct)")
-        case SyncProtocol.Status.SyncDone   => ("Synced", "Complete")
-        case SyncProtocol.Status.NotSyncing => ("Not syncing", "N/A")
+        case SyncProtocol.Status.SyncDone        => ("Synced", "Complete")
+        case SyncProtocol.Status.NotSyncing      => ("Not syncing", "N/A")
+        case SyncProtocol.Status.Stopped(reason) => ("Stopped", reason)
       s"""Node Status:
         |  Running: true
         |  Sync State: $syncState
@@ -167,6 +168,12 @@ object SyncStatusTool:
             |  Syncing: false
             |  Best Block: $bestBlock
             |  Status: Idle""".stripMargin
+          case SyncProtocol.Status.Stopped(reason) =>
+            s"""Sync Status:
+            |  Mode: Stopped
+            |  Syncing: false
+            |  Best Block: $bestBlock
+            |  Status: Stopped: $reason""".stripMargin
       }
 
 object PeerListTool:
