@@ -847,12 +847,15 @@ items:
   - id: B-104
     title: Cache parsed chain configuration files (skip re-parsing unchanged files)
     priority: P3
-    status: open
+    status: dropped
     area: config
     opened: 2026-09-27
+    closed: 2026-11-17
     refs: [P-002]
     links: {}
-    notes: utils/Config.scala:436.
+    notes: |-
+      utils/Config.scala:436.
+      2026-11-17 dropped: chain configs are parsed once per process at startup; no measured cost
   - id: B-105
     title: "JSON-RPC: route single and batch requests separately and parse each body once"
     priority: P3
