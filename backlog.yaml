@@ -1854,7 +1854,7 @@ items:
   - id: B-219
     title: "MinedBlockOnPositionsSpec: an Olympia block (base fee to the Treasury) on Mordor's configuration (forge)"
     priority: P2
-    status: open
+    status: claimed
     area: storage
     size: M
     opened: 2026-11-12
@@ -1862,6 +1862,11 @@ items:
     links:
       spec: 018
     depends_on: [B-061]
+    claim:
+      by: cloud-dc960fdc
+      agent: main
+      since: 2026-11-17T19:38:30Z
+      heartbeat: 2026-11-17T19:38:30Z
     notes: "Found by C3c part 2 (#1802, plan.md 'C3c proposer view record'). A mined block reaches import only through network sync, which the guard does not run before the head move. When C4b brings it back: lift ConfigValidator's mining refusal and EthMiningService.NoRouteForMinedBlocks together; fix BlockImporter's 'case _: MinedBlock => Behaviors.same' (a miner that waits for its last import meets it every time); add an Olympia block (base fee to the Treasury) to MinedBlockOnPositionsSpec on Mordor's configuration (forge)."
   - id: B-220
     title: "Spec 018 C4 leftovers: side blocks in ChainImporter's lenient import; test_rewindToBlock to any block on the unified layout"
