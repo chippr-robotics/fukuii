@@ -856,7 +856,8 @@ class EngineApiService(
                         com.chipprbots.ethereum.ledger.BlockExecutionError.MissingParentError =>
                       // Missing state, or a parent this node has not: it cannot be judged, so the block is stored by hash
                       // and answered ACCEPTED below. For missing state, regular sync's importer fetches it and runs the block
-                      // when it reaches it (#1694).
+                      // when it reaches it (#1694); on the unified layout it fetches missing code only, and a node missing
+                      // from the held state is a fault of this node (spec 018 C5a part 10, beacon).
                       error match
                         case com.chipprbots.ethereum.ledger.BlockExecutionError.MPTError(hole) =>
                           stateHoles.report(payload.blockNumber, hole, parentHeader.map(_.stateRoot.value))

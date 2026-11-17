@@ -485,18 +485,25 @@ private[snap] trait SnapFinalization extends FinalizationApi with ChainDownloadS
     */
   private def startHandoffSample(pivot: BigInt, pivotRoot: ByteString): Unit =
     val ending = handoff.getOrElse(throw new IllegalStateException("startHandoffSample on the hash layout"))
-    val (accountsLeftOut, _) = excludedAtHandOff()
+    // read here, not through `excludedAtHandOff`, so that a set that cannot be read is told as that (beacon)
+    val (accountsLeftOut, readFailed) =
+      try (stateIngest.snapProgress.hasExcludedAccounts, false)
+      catch
+        case scala.util.control.NonFatal(e) =>
+          ctx.log.error(
+            "[HEAL-EXCLUDED] Could not read the excluded set at the hand-off: taken as accounts left out",
+            e
+          )
+          (true, true)
     if accountsLeftOut then
       // The user's decision of 2026-11-17 (spec 018 C5a part 10): on this layout nothing fetches the storage of an
       // account the sync left out once it has handed off (the only fetch writes the hash-keyed store), so the first
       // block that reads one would be a fault, and the escalation a whole sync again. Healing goes on instead: the
       // sync restarts heal-only, and the excluded set it resumes from is durable (spec 022: complete means nothing
       // excluded).
-      ctx.log.warn(
-        s"[HANDOFF] Not handing off at pivot $pivot: this sync left accounts out, whose storage nothing fetches on the " +
-          "unified state layout after the hand-off. Healing goes on until none is left out."
-      )
-      syncController ! SyncProtocol.HealingImpossible
+      // the parent says it, and counts it since the last hand-off
+      leaveHeaderHold()
+      syncController ! SyncProtocol.HandoffHeldForExcluded(pivot, readFailed)
     else
       val blockingEc = ctx.system.dispatchers.lookup(org.apache.pekko.actor.typed.DispatcherSelector.blocking())
       ctx.log.info(

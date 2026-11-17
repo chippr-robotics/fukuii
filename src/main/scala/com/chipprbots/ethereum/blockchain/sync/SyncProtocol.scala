@@ -112,6 +112,15 @@ object SyncProtocol:
   ) extends SyncProtocolMsg
       with SyncControllerReply
 
+  /** On the unified state layout, a sync that left accounts out does not hand off (spec 018 C5a part 10, the user's
+    * decision 1): SyncController restarts SNAP as for [[HealingImpossible]], which heals from the durable excluded set,
+    * and counts these since the last hand-off ([[HandoffsHeldForExcluded]]). `readFailed` when the excluded set could
+    * not be read, which is taken as accounts left out.
+    */
+  final case class HandoffHeldForExcluded(pivot: BigInt, readFailed: Boolean)
+      extends SyncProtocolMsg
+      with SyncControllerReply
+
   /** SNAP's header download followed another chain than the branch the pivot is to be on (B-307): the sync is stopped,
     * what it wrote is cleared, and it is begun again.
     */

@@ -88,9 +88,10 @@ object ConfigValidator extends Logger:
     * Checkpoint sync. Its import writes the hash-keyed store and says the sync is done, with no anchor on this layout:
     * the node would say it is synced and hold no state (until C5c).
     *
-    * `sync.snap-sync.storage-scheme = hash`. A SNAP sync on the guard writes the position families, which the hand-off
-    * samples and commits; the hash scheme writes the hash-keyed store, which this layout never reads, so every hand-off
-    * would stop.
+    * A SNAP sync with any storage scheme but `path`. A SNAP sync on the guard writes the position families, which the
+    * hand-off samples and commits; the hash scheme writes the hash-keyed store, which this layout never reads, so every
+    * hand-off would stop. ETC and Mordor set no scheme and fall back to hash: until step 6 of part 10 forces the path
+    * scheme on the guard, they cannot SNAP on it.
     *
     * The chain file imported at start is taken since C3c: block by block onto the head, with a block that is not built
     * on the head refused until the overlay. So a file that ends on a side chain (the multi-chain and uncle-race vectors
@@ -120,13 +121,17 @@ object ConfigValidator extends Logger:
             "into the hash-keyed store, which this layout does not read, and the node would say it is synced with no " +
             "state (spec 018 C5c). Leave both empty; a SNAP sync (fukuii.sync.do-snap-sync = true) syncs this node."
         ),
+        // Until the guard forces the path scheme on every network (spec 018 C5a part 10, step 6, after B-308), it is
+        // asked for: ETC and Mordor set no scheme and fall back to hash (forge)
         Option.when(
-          config.hasPath("sync.snap-sync.storage-scheme") &&
-            config.getString("sync.snap-sync.storage-scheme").trim.equalsIgnoreCase("hash")
+          on("sync.do-snap-sync") && !(config.hasPath("sync.snap-sync.storage-scheme") &&
+            config.getString("sync.snap-sync.storage-scheme").trim.equalsIgnoreCase("path"))
         )(
-          guard + "fukuii.sync.snap-sync.storage-scheme = hash: a SNAP sync on this layout writes the position " +
-            "families its hand-off commits, and the hash scheme writes the hash-keyed store, which this layout never " +
-            "reads, so the sync would never hand off. Remove the key: the guard syncs with the path scheme."
+          guard + "fukuii.sync.do-snap-sync = true and a storage scheme other than path: a SNAP sync on this layout " +
+            "must write the position families its hand-off commits, and the hash scheme (the fallback where none is " +
+            "set, as on ETC and Mordor) writes the hash-keyed store, which this layout never reads, so the sync would " +
+            "never hand off. Set fukuii.sync.snap-sync.storage-scheme = \"path\"; on ETC and Mordor the guard cannot " +
+            "SNAP yet (spec 018 C5a part 10, step 6)."
         )
       ).flatten
 

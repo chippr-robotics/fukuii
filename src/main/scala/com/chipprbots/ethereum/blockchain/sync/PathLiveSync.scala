@@ -45,7 +45,8 @@ final class PathLiveSync(
             val _ = state.clearGenesisStateForSync(held, now())
             stateCleared()
           if resetRecoveries(() => clearNow()) then Begin(clearedGenesis = true)
-          else Refused("a recovery of the state was executing a block, so the genesis state was not cleared")
+          // asked again: regular sync from the genesis is what a guard node does not run (vault, beacon)
+          else Wait("a recovery of the state was executing a block, so the genesis state was not cleared")
         case Some(held) =>
           Refused(
             s"this node holds the state of block ${held.show}, which it followed the chain to, and a SNAP sync does " +
@@ -83,7 +84,8 @@ object PathLiveSync:
       syncStarted: Boolean
   ): Option[String] =
     Option.when(!testMode && !doSnapSync && anchor.forall(_.number == 0) && !syncStarted)(
-      "fukuii.state.path-live = true with fukuii.sync.do-snap-sync = false, on a node whose only state is its " +
-        "genesis: on the unified state layout a node syncs by SNAP, and regular sync from the genesis would be given " +
-        "up at its first fork choice. Set fukuii.sync.do-snap-sync = true, or import a chain file first."
+      "fukuii.state.path-live = true with fukuii.sync.do-snap-sync = false, on a node that holds no state above its " +
+        "genesis and has no sync done or begun: on the unified state layout a node syncs by SNAP, and regular sync " +
+        "from there would be given up at its first fork choice. Set fukuii.sync.do-snap-sync = true, or import a " +
+        "chain file first."
     )

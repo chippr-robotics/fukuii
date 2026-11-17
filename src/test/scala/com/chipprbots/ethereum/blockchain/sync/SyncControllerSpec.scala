@@ -1120,7 +1120,7 @@ class SyncControllerSpec
   // ── Spec 018 C5a part 10: a sync on the unified state layout ─────────────────────────────────────────────────────
 
   /** What the port answers before SNAP, and what it was asked; the hand-off itself is never reached here. */
-  private class GuardPort(answer: SyncController.SnapStartOnGuard) extends SyncController.PathLiveSyncPort:
+  private class GuardPort(answers: SyncController.SnapStartOnGuard*) extends SyncController.PathLiveSyncPort:
     val asked = new java.util.concurrent.atomic.AtomicInteger(0)
     val askedOn = new java.util.concurrent.ConcurrentLinkedQueue[String]()
     val handedOffs = new java.util.concurrent.atomic.AtomicInteger(0)
@@ -1128,8 +1128,8 @@ class SyncControllerSpec
     def handoff: com.chipprbots.ethereum.db.storage.pathstate.SyncHandoff = null
     def beforeSnap(): SyncController.SnapStartOnGuard =
       askedOn.add(Thread.currentThread.getName)
-      asked.incrementAndGet()
-      answer
+      val n = asked.incrementAndGet()
+      answers(math.min(n, answers.size) - 1)
     def handedOff(): Unit = handedOffs.incrementAndGet(): Unit
 
   "On the unified state layout, SyncController" should "ask the port before SNAP, off its own thread, and begin SNAP when it says so" taggedAs (
@@ -1214,6 +1214,61 @@ class SyncControllerSpec
       regularSyncChild(testSetup)
       port.handedOffs.get() shouldBe 1
     }
+
+  it should "ask again after a while when the port says not yet, keeping what arrived meanwhile" taggedAs (
+    UnitTest,
+    SyncTest
+  ) in withRecoveryTestSetup() { testSetup =>
+    import testSetup.*
+    val port = new GuardPort(
+      SyncController.SnapStartOnGuard.Wait("a recovery was executing a block"),
+      SyncController.SnapStartOnGuard.Begin(clearedGenesis = true)
+    )
+    pathLiveSync = Some(port)
+    syncController ! SyncController.WrappedSyncProtocol(SyncProtocol.Start)
+    eventually {
+      someTimePasses()
+      port.asked.get() shouldBe 1
+    }
+    snapChildren(testSetup) shouldBe empty
+    assert(!childNamed(testSetup, "regular-sync"))
+    timePasses(SyncController.SnapStartRecheckDelay)
+    eventually {
+      someTimePasses()
+      assert(snapChildren(testSetup).nonEmpty)
+    }
+    port.asked.get() shouldBe 2
+  }
+
+  // the user's decision 1 (2026-11-17): healing goes on, each time; from the third in a row it is an ERROR (beacon)
+  it should "restart SNAP for each hand-off held for accounts left out, and say so louder from the third" taggedAs (
+    UnitTest,
+    SyncTest
+  ) in withRecoveryTestSetup() { testSetup =>
+    import testSetup.*
+    pathLiveSync = Some(new GuardPort(SyncController.SnapStartOnGuard.Begin(clearedGenesis = false)))
+    syncController ! SyncController.WrappedSyncProtocol(SyncProtocol.Start)
+    awaitSnapStarted(syncController)
+    def held(): List[String] =
+      val before = snapChildren(testSetup)
+      syncControllerLogsDuring(ch.qos.logback.classic.Level.WARN) {
+        syncController ! SyncController.WrappedSyncProtocol(SyncProtocol.HandoffHeldForExcluded(BigInt(7), false))
+        eventually {
+          someTimePasses()
+          assert((snapChildren(testSetup) -- before).nonEmpty)
+        }
+      }.filter(_.contains("not handing off at pivot 7"))
+    held().exists(_.contains("1 in a row")) shouldBe true
+    held().exists(_.contains("2 in a row")) shouldBe true
+    syncControllerErrorsDuring(held(): Unit).exists(_.contains("3 in a row")) shouldBe true
+  }
+
+  "The hand-offs held for accounts left out" should "be counted since the last hand-off" taggedAs UnitTest in {
+    val held = new HandoffsHeldForExcluded
+    (held.held(), held.held()) shouldBe (1, 2)
+    held.handedOff()
+    held.held() shouldBe 1
+  }
 
   /** The regular-sync child running now: the latest generation (a stopped one can still be listed a moment). */
   private def regularSyncChild(testSetup: TestSetup): String =

@@ -1998,6 +1998,32 @@ class HeadMoveOnTheChainSpec extends ScalaTestWithActorTestKit with AnyFlatSpecL
     on.holds(blocks(43).header, blocks.take(44))
   }
 
+  // spec 018 C5a part 10 (beacon C5): while a sync from scratch runs no state is held, and a walk from no anchor would
+  // end as a fault or as a chain that cannot be reached, and be counted
+  it should "ask for no recovery, and count nothing, while no state is held" taggedAs (UnitTest, ConsensusTest) in {
+    val on = handedOff()
+    val recovery = new on.Recovery(maxBlocks = 1, maxAdopted = 4, catchUp = 30, chunk = 5)
+    val watch = new com.chipprbots.ethereum.blockchain.sync.EscalationWatch(
+      new com.chipprbots.ethereum.blockchain.sync.EscalationTrigger(1),
+      () => 0L,
+      _ => fail("escalated"),
+      (_, _) => ()
+    )
+    val run = watch.currentRun
+    val engine = on.engine(() => None, recovery = Some(recovery), escalation = Some(watch))
+    given cats.effect.unsafe.IORuntime = cats.effect.unsafe.IORuntime.global
+    val answer = engine
+      .forkchoiceUpdated(
+        ForkChoiceState(blocks(43).header.hash.value, ForkChoiceManager.ZeroHash, ForkChoiceManager.ZeroHash),
+        None
+      )
+      .unsafeRunSync()
+    statusOf(answer) shouldBe PayloadStatus.Syncing
+    recovery.tickets shouldBe empty
+    recovery.executedBlocks shouldBe empty
+    watch.currentRun shouldBe run
+  }
+
   // beacon, after code: the blocks of the chunks not read yet stand on the invalid block too
   it should "answer INVALID for the head when a block far below it is invalid, with the last valid block" taggedAs
     (UnitTest, ConsensusTest) in {

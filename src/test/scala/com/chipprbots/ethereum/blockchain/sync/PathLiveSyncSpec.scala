@@ -117,10 +117,10 @@ class PathLiveSyncSpec extends AnyFlatSpec with Matchers:
     node.port.beforeSnap() shouldBe a[SnapStartOnGuard.Refused]
   }
 
-  it should "refuse, and clear nothing, while a recovery of the state executes a block" taggedAs UnitTest in {
+  it should "wait, and clear nothing, while a recovery of the state executes a block" taggedAs UnitTest in {
     val node = new Node(recoveryExecuting = true)
 
-    node.port.beforeSnap() shouldBe a[SnapStartOnGuard.Refused]
+    node.port.beforeSnap() shouldBe a[SnapStartOnGuard.Wait]
 
     node.chain.state.anchor shouldBe Some(node.genesis)
     node.cleared shouldBe 0

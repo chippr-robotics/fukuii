@@ -156,6 +156,12 @@ object SyncController:
     /** SNAP does not begin, for `why`; regular sync runs on the state that is held. */
     case Refused(why: String)
 
+    /** Not yet, for `why`: the check is asked again in [[SnapStartRecheckDelay]], and nothing else runs meanwhile. */
+    case Wait(why: String)
+
+  /** How long before a [[SnapStartOnGuard.Wait]] is asked again. */
+  val SnapStartRecheckDelay: FiniteDuration = 5.seconds
+
   /** Bulk bytecode recoveries (triggered by block import) allowed to finish with the triggering code still missing
     * before the node stops repeating the full trie scan on every restart.
     */
@@ -253,6 +259,7 @@ object SyncController:
   // spec 018 C5a part 10: what the port answered before a SNAP sync on the unified layout
   private case class SnapStartChecked(minPivotBlock: Option[BigInt], answer: scala.util.Try[SnapStartOnGuard])
       extends Command
+  private case class SnapStartRecheck(minPivotBlock: Option[BigInt]) extends Command
 
   private case class StateClearEnded(
       record: com.chipprbots.ethereum.db.storage.pathstate.StateEscalation,
@@ -523,6 +530,8 @@ object SyncController:
 
     // B-304: the hand-off's samples that stopped a sync since the last hand-off.
     private val handoffSampleFailures = new HandoffSampleFailures
+    // spec 018 C5a part 10: the hand-offs held back for accounts left out, since the last hand-off
+    private val handoffsHeldForExcluded = new HandoffsHeldForExcluded
 
     // Whether SNAP should consume CL-driven pivot selection. Captured once at construction
     // because both `syncConfig` and the chain config are stable for the actor's lifetime.
@@ -867,6 +876,7 @@ object SyncController:
             log.info("SNAP sync completed (legacy Done path), transitioning to regular sync")
             // spec 004 MUST-FIX: clear the healing serve-root latch on every exit from runningSnapSync.
             abortHealingServeRootRequest("SNAP done (legacy) — leaving snap sync")
+            pathLiveSync.foreach(_.handedOff()) // beacon: as at SnapSyncFinalized
             startRegularSync()._2
 
           case SyncProtocol.PivotOffTheBranch if stateEscalation.isDefined =>
@@ -912,6 +922,21 @@ object SyncController:
                 Behaviors.stopped
 
           case SyncProtocol.HealingImpossible | SyncProtocol.PivotOffTheBranch =>
+            restartSnapAfterFailedFinalization(snapSync)
+
+          case SyncProtocol.HandoffHeldForExcluded(pivot, readFailed) =>
+            val n = handoffsHeldForExcluded.held()
+            val why =
+              if readFailed then "the excluded set could not be read, which is taken as accounts left out"
+              else "the sync left accounts out, whose storage nothing fetches on the unified layout after it"
+            val said =
+              s"[HANDOFF] not handing off at pivot $pivot: $why. $n in a row since the last hand-off: healing goes on"
+            if n >= HandoffsHeldForExcluded.ErrorFrom then
+              log.error(
+                s"$said. Each restart heals from the excluded set; an account whose storage no peer serves keeps the " +
+                  "node in SNAP (db.state.handoff.held.excluded.consecutive)."
+              )
+            else log.warn(said)
             restartSnapAfterFailedFinalization(snapSync)
 
           case SyncProtocol.Status.Progress(_, _) =>
@@ -1847,7 +1872,8 @@ object SyncController:
           Behaviors.same
 
         // SSC declared healing impossible during the pivot header bootstrap window — stale, drop.
-        case SyncProtocol.HealingImpossible | _: SyncProtocol.HandoffSampleStopped =>
+        case SyncProtocol.HealingImpossible | _: SyncProtocol.HandoffSampleStopped |
+            _: SyncProtocol.HandoffHeldForExcluded =>
           log.debug(
             "HealingImpossible or HandoffSampleStopped in runningPivotHeaderBootstrap — stale, dropping (bootstrap in " +
               "progress)."
@@ -2008,6 +2034,7 @@ object SyncController:
       appStateStorage.clearSnapSyncMinPivotBlock().commit()
       snapPivotFailedFinalization = None // #1555: a finalized SNAP has no failed pivot left to avoid
       handoffSampleFailures.handedOff() // B-304: the samples are counted since the last hand-off
+      handoffsHeldForExcluded.handedOff()
 
     /** Log-only: compare the stored SNAP state root with the SNAP pivot header and report whether the trie is there. */
     private def logSnapStateRootDiagnostic(): Unit =
@@ -2257,21 +2284,34 @@ object SyncController:
       pathLiveSync match
         case None => spawnSnapSync(minPivotBlock)
         case Some(port) =>
-          val blocking = ctx.system.dispatchers.lookup(DispatcherSelector.blocking())
-          ctx.pipeToSelf(scala.concurrent.Future(port.beforeSnap())(using blocking))(SnapStartChecked(minPivotBlock, _))
-          checkingSnapStart()
+          askBeforeSnap(port, minPivotBlock)
+          checkingSnapStart(port)
+
+    private def askBeforeSnap(port: PathLiveSyncPort, minPivotBlock: Option[BigInt]): Unit =
+      val blocking = ctx.system.dispatchers.lookup(DispatcherSelector.blocking())
+      ctx.pipeToSelf(scala.concurrent.Future(port.beforeSnap())(using blocking))(SnapStartChecked(minPivotBlock, _))
 
     /** While the port says whether a SNAP sync may begin (spec 018 C5a part 10). A head the consensus client names is
       * kept for the pivot; everything else waits for the sync that follows, which is SNAP or regular sync.
       */
-    private def checkingSnapStart(): Behavior[Command] = Behaviors.withStash(SyncController.ClearingStashSize) {
-      waiting =>
+    private def checkingSnapStart(port: PathLiveSyncPort): Behavior[Command] =
+      Behaviors.withStash(SyncController.ClearingStashSize) { waiting =>
         Behaviors.receive { (_, cmd) =>
           unwrap(cmd) match
             case SnapStartChecked(minPivot, scala.util.Success(SnapStartOnGuard.Begin(clearedGenesis))) =>
               if clearedGenesis then
                 log.info("[STATE-CLEAR] The genesis state is cleared: the SNAP sync writes the state from scratch")
               waiting.unstashAll(spawnSnapSync(minPivot))
+            case SnapStartChecked(minPivot, scala.util.Success(SnapStartOnGuard.Wait(why))) =>
+              log.info(
+                s"[STATE-PATH-LIVE] A SNAP sync does not begin yet: $why. Asked again in " +
+                  s"${SyncController.SnapStartRecheckDelay.toSeconds} s"
+              )
+              timers.startSingleTimer(SnapStartRecheck(minPivot), SyncController.SnapStartRecheckDelay)
+              Behaviors.same
+            case SnapStartRecheck(minPivot) =>
+              askBeforeSnap(port, minPivot)
+              Behaviors.same
             case SnapStartChecked(_, scala.util.Success(SnapStartOnGuard.Refused(why))) =>
               log.error(
                 s"[STATE-PATH-LIVE] A SNAP sync does not begin: $why. Regular sync runs on the state that is held; a " +
@@ -2294,7 +2334,7 @@ object SyncController:
               else waiting.stash(cmd)
               Behaviors.same
         }
-    }
+      }
 
     private def spawnSnapSync(minPivotBlock: Option[BigInt]): Behavior[Command] =
       // MIGRATION: EC.global removed (C2). SNAPSyncController.apply requires an implicit EC;

@@ -98,6 +98,7 @@ final class SyncHandoff(
     val records = headers
       .put(hash, pivot)
       .and(blockNumberMappingStorage.put(number, hash))
+      .and(appState.backfillCursorsAtMost(number, hash))
       .and(weights.put(hash, weight))
       .and(appState.putBestBlockInfo(BlockInfo(hash, number)))
       .and(if storageRecoveryDone then appState.storageRecoveryDone() else appState.clearStorageRecoveryDone())

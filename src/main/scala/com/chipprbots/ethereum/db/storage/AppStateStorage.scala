@@ -160,6 +160,25 @@ class AppStateStorage(val dataSource: DataSource) extends TransactionalKeyValueS
       .and(putBackfillBestReceipt(getBackfillBestReceipt().min(header)))
       .and(update(toRemove = Seq(Keys.BackfillTarget, Keys.BackfillTargetHash), toUpsert = Nil))
 
+  /** The update that takes the header download's cursors no higher than the pivot a sync hands off at (spec 018 C5a
+    * part 10, forge): an earlier, higher pivot's target left above it would be resumed from where the index no longer
+    * has an entry, and download every header again from the genesis, writing entries above the head as it goes. The
+    * target stays, at the pivot, so the bodies below it are still backfilled; nothing is written for a cursor at or
+    * below it.
+    */
+  def backfillCursorsAtMost(pivot: BigInt, pivotHash: ByteString): DataSourceBatchUpdate =
+    val target =
+      if getBackfillTarget() > pivot then putBackfillTarget(pivot).and(putBackfillTargetHash(pivotHash))
+      else update(toRemove = Nil, toUpsert = Nil)
+    val header =
+      if getBackfillBestHeader() > pivot then
+        putBackfillBestHeader(pivot)
+          .and(putBackfillBestHeaderHash(pivotHash))
+          .and(putBackfillBestBody(getBackfillBestBody().min(pivot)))
+          .and(putBackfillBestReceipt(getBackfillBestReceipt().min(pivot)))
+      else update(toRemove = Nil, toUpsert = Nil)
+    target.and(header)
+
   /** The update that says the entries of [[pathstate.StateResetTrim]] are deleted. Written synced, with
     * [[removeStateResetPending]].
     */
