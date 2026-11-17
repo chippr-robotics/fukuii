@@ -770,15 +770,17 @@ items:
   - id: B-097
     title: "SNAP follow-ups from the v18 soak: scoped re-verify, storage recovery, logging"
     priority: P3
-    status: open
+    status: dropped
     area: snap
     size: M
     opened: 2026-11-07
+    closed: 2026-11-17
     refs: [handoff §3]
     links: {}
     notes: |-
       Unverified dev-node item (handoff section 3): check it still applies before starting.
       Vague in the handoff: re-scope or drop.
+      2026-11-17 dropped: vague, never verified; concrete SNAP follow-ups are tracked separately
   - id: B-098
     title: "SNAP: stale-pivot empty ranges count as peer scarcity; a resume reuses a pivot beyond the serve window"
     priority: P3
