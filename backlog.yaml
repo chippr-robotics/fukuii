@@ -2648,3 +2648,13 @@ items:
     links:
       spec: 018
     notes: "forge F3 on B-291's review: after a partial insert core-geth's downloader drops the peer; fukuii answers BlockImportedToTop / ChainReorganised and the batch's rest is dropped silently, blamed only if an orphan rewind refetches the invalid block. E.g. ImportedPartially(base, failingHash, error), handled as BlockImportFailedAt for blame and as success for the pool."
+  - id: B-339
+    title: SecureRandomBuilder reads secure-random-algo from the global ConfigFactory.load(), not the instance config
+    priority: P3
+    status: open
+    area: rpc
+    opened: 2026-11-17
+    refs: []
+    links:
+      spec: 030-zero-trust-tls
+    notes: "Found in B-148: SecureRandomBuilder.rawFukuiiConfig is global; same multi-instance shape as the SSL config fix."
