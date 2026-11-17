@@ -14,6 +14,7 @@ import com.chipprbots.ethereum.blockchain.sync.SyncProtocol
 import com.chipprbots.ethereum.domain.Address
 import com.chipprbots.ethereum.jsonrpc.AkkaTaskOps
 import com.chipprbots.ethereum.jsonrpc.McpDependencies
+import com.chipprbots.ethereum.jsonrpc.StateRead
 import com.chipprbots.ethereum.mpt.MerklePatriciaTrie.MissingNodeException
 import com.chipprbots.ethereum.network.PeerManagerActor
 import com.chipprbots.ethereum.utils.BuildInfo
@@ -51,6 +52,7 @@ object NodeStatusResource:
           )
         case SyncProtocol.Status.SyncDone   => (false, """"synced"""")
         case SyncProtocol.Status.NotSyncing => (false, """"not_syncing"""")
+        case SyncProtocol.Status.Stopped(_) => (false, """"stopped"""")
       s"""{
         |  "running": true,
         |  "syncing": $syncing,
@@ -137,6 +139,16 @@ object SyncStatusResource:
             |  "mode": "idle",
             |  "bestBlock": $bestBlock,
             |  "status": "not_syncing"
+            |}""".stripMargin
+          case SyncProtocol.Status.Stopped(reason) =>
+            s"""{
+            |  "syncing": false,
+            |  "mode": "stopped",
+            |  "bestBlock": $bestBlock,
+            |  "status": "stopped",
+            |  "reason": ${org.json4s.native.JsonMethods.compact(
+                org.json4s.native.JsonMethods.render(org.json4s.JString(reason))
+              )}
             |}""".stripMargin
       }
 
@@ -295,9 +307,12 @@ object AccountByAddressResource:
     Try {
       val addrBytes = org.bouncycastle.util.encoders.Hex.decode(addrStr.stripPrefix("0x"))
       val address = Address(org.apache.pekko.util.ByteString(addrBytes))
-      val blockNum = deps.blockchainReader.getBestBlockNumber
-      val accountOpt = deps.blockchainReader.getBlockHeaderByNumber(blockNum).flatMap { head =>
-        deps.blockchainReader.accountAt(head, address)
+      // in a scope of reads (spec 018, B-238): the disk may have moved past the best block read here
+      val (blockNum, accountOpt) = StateRead.scoped {
+        val blockNum = deps.blockchainReader.getBestBlockNumber
+        blockNum -> deps.blockchainReader.getBlockHeaderByNumber(blockNum).flatMap { head =>
+          deps.blockchainReader.accountAt(head, address)
+        }
       }
       accountOpt match
         case Some(account) =>

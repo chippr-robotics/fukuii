@@ -559,8 +559,8 @@ private[snap] trait SnapFinalization extends FinalizationApi with ChainDownloadS
     * ([[SyncHandoff.commit]]). False when it holds for the window: the hold's tick comes back here.
     *
     * No block is executed above the pivot until the headers of the 256 blocks below it are stored, and on a
-    * proof-of-work chain the bodies of the pivot and the five below it ([[AncestorWindow]]): `BLOCKHASH` and the check
-    * of ommers read them, and a node that lacks them refuses a valid block.
+    * proof-of-work chain the bodies of the pivot and the four below it, where they have ommers ([[AncestorWindow]]):
+    * `BLOCKHASH` and the check of ommers read them, and a node that lacks them refuses a valid block.
     */
   private def handOffOnPositions(pivot: BigInt, pivotHeader: BlockHeader): Boolean =
     val ending = handoff.getOrElse(throw new IllegalStateException("handOffOnPositions on the hash layout"))

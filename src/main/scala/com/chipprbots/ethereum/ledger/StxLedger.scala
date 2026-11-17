@@ -57,7 +57,7 @@ class StxLedger(
   def simulateTransaction(
       stx: SignedTransactionWithSender,
       blockHeader: BlockHeader,
-      world: Option[InMemoryWorldStateProxy]
+      world: InMemoryWorldStateProxy
   ): TxResult = simulateTransactionWithTracer(stx, blockHeader, world, tracer = None)
 
   /** Re-executes a transaction that a stored block carries, for the trace and debug RPCs (debug_traceTransaction,
@@ -83,8 +83,8 @@ class StxLedger(
   ): TxResult =
     if !blockchainConfig.isAmsterdamTimestamp(blockHeader.unixTimestamp) then
       tracer match
-        case Some(t) => simulateTransactionWithTracer(stx, blockHeader, Some(world), t)
-        case None    => simulateTransaction(stx, blockHeader, Some(world))
+        case Some(t) => simulateTransactionWithTracer(stx, blockHeader, world, t)
+        case None    => simulateTransaction(stx, blockHeader, world)
     else
       val tx = stx.tx.tx
       val sender = stx.senderAddress
@@ -103,7 +103,7 @@ class StxLedger(
   def simulateTransactionWithTracer(
       stx: SignedTransactionWithSender,
       blockHeader: BlockHeader,
-      world: Option[InMemoryWorldStateProxy],
+      world: InMemoryWorldStateProxy,
       tracer: Option[ExecutionTracer]
   ): TxResult =
     val result = runSimulated(stx, blockHeader, world, tracer)
@@ -117,7 +117,7 @@ class StxLedger(
       result.error
     )
 
-  /** Runs `stx` against a throwaway world and hands back the raw [[PR]].
+  /** Runs `stx` against `world`, which the caller hands in, and hands back the raw [[PR]].
     *
     * [[simulateTransactionWithTracer]] narrows this to a [[TxResult]]; [[binarySearchGasEstimation]] needs the
     * un-narrowed result because it reads `codeDepositShortfall`, which deliberately does not exist on `TxResult` —
@@ -127,30 +127,18 @@ class StxLedger(
   private def runSimulated(
       stx: SignedTransactionWithSender,
       blockHeader: BlockHeader,
-      world: Option[InMemoryWorldStateProxy],
+      world: InMemoryWorldStateProxy,
       tracer: Option[ExecutionTracer]
   ): PR =
     val tx = stx.tx
 
-    // With no world given, the state is taken by `blockHeader`: right only when that is a block's own header. A
-    // message call's header is not (see [[callWorld]]), and every RPC path hands its world in.
-    val world1 = world.getOrElse(
-      InMemoryWorldStateProxy(
-        evmCodeStorage = evmCodeStorage,
-        mptStorage = blockchainReader.scratchStateAt(blockHeader),
-        getBlockHashByNumber = (number: BigInt) => blockchainReader.getBlockHeaderByNumber(number).map(_.hash.value),
-        accountStartNonce = blockchainConfig.accountStartNonce,
-        stateRootHash = blockHeader.stateRoot.value,
-        noEmptyAccounts = EvmConfig.forBlock(blockHeader.number.value, blockchainConfig).noEmptyAccounts,
-        ethCompatibleStorage = blockchainConfig.ethCompatibleStorage
-      )
-    )
-
+    // The world is the caller's, always (spec 018, B-211): a world taken here by `blockHeader` would be right only when
+    // that is a block's own header, and a message call's is not ([[callWorld]]).
     val senderAddress = stx.senderAddress
     val world2 =
-      if world1.getAccount(senderAddress).isEmpty then
-        world1.saveAccount(senderAddress, Account.empty(blockchainConfig.accountStartNonce))
-      else world1
+      if world.getAccount(senderAddress).isEmpty then
+        world.saveAccount(senderAddress, Account.empty(blockchainConfig.accountStartNonce))
+      else world
 
     val worldForTx = blockPreparator.updateSenderAccountBeforeExecution(tx, senderAddress, world2)
     blockPreparator.runVM(tx, senderAddress, blockHeader, worldForTx, tracer = tracer)
@@ -165,28 +153,16 @@ class StxLedger(
   def simulateTransactionWithTracer(
       stx: SignedTransactionWithSender,
       blockHeader: BlockHeader,
-      world: Option[InMemoryWorldStateProxy],
+      world: InMemoryWorldStateProxy,
       tracer: ExecutionTracer
   ): TxResult =
     val tx = stx.tx
 
-    val world1 = world.getOrElse(
-      InMemoryWorldStateProxy(
-        evmCodeStorage = evmCodeStorage,
-        mptStorage = blockchainReader.scratchStateAt(blockHeader),
-        getBlockHashByNumber = (number: BigInt) => blockchainReader.getBlockHeaderByNumber(number).map(_.hash.value),
-        accountStartNonce = blockchainConfig.accountStartNonce,
-        stateRootHash = blockHeader.stateRoot.value,
-        noEmptyAccounts = EvmConfig.forBlock(blockHeader.number.value, blockchainConfig).noEmptyAccounts,
-        ethCompatibleStorage = blockchainConfig.ethCompatibleStorage
-      )
-    )
-
     val senderAddress = stx.senderAddress
     val world2 =
-      if world1.getAccount(senderAddress).isEmpty then
-        world1.saveAccount(senderAddress, Account.empty(blockchainConfig.accountStartNonce))
-      else world1
+      if world.getAccount(senderAddress).isEmpty then
+        world.saveAccount(senderAddress, Account.empty(blockchainConfig.accountStartNonce))
+      else world
 
     val worldForTx = blockPreparator.updateSenderAccountBeforeExecution(tx, senderAddress, world2)
     tracer.onTxStart(senderAddress, tx.tx.receivingAddress, tx.tx.gasLimit.value, tx.tx.value, tx.tx.payload)
@@ -232,7 +208,7 @@ class StxLedger(
         ethCompatibleStorage = blockchainConfig.ethCompatibleStorage
       )
       (0 until txIndex).foldLeft(world0) { (world, i) =>
-        simulateTransaction(txs(i), blockHeader, Some(world)).worldState
+        simulateTransaction(txs(i), blockHeader, world).worldState
       }
     else
       // Amsterdam: the state block execution had before `txs(txIndex)`. The parent's state, then the block's EIP-4788 /
@@ -604,7 +580,7 @@ class StxLedger(
   def binarySearchGasEstimation(
       stx: SignedTransactionWithSender,
       blockHeader: BlockHeader,
-      world: Option[InMemoryWorldStateProxy]
+      world: InMemoryWorldStateProxy
   ): BigInt =
     val lowLimit = estimationLowerBound(stx, blockHeader)
     val tx = stx.tx

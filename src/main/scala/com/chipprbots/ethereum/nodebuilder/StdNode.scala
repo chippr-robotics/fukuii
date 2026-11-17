@@ -98,18 +98,19 @@ abstract class BaseNode extends Node:
     startMetricsClient()
     // On the unified state layout the best block and the index are the held block's, made so before anything reads
     // them (spec 018 C4b part 4): the hash layout's two repairs trust the best block or the index, and would undo it.
-    if blockchainReader.holdsStateInPlace then
-      // a clear of the state that a kill interrupted is finished first: its rows are deleted before the state is
-      // looked at (spec 018 C5a part 3). It refuses a datadir that has the mark of one and a state.
-      refuseSnapRepairOnTheGuard()
-      finishPendingStateClear()
-      forgetGivenUpBranchesIfAsked()
-      reconcileState()
-    // A datadir stamped for the unified layout, opened with the guard off, never gets here: the layout guard refused
-    // it where the storages were built (spec 018 data-model 5.3), so nothing is repaired in it.
-    else
-      fixDatabase()
-      repairBestBlockMapping() // before any server binds, so no newPayload/FCU races the read-then-write
+    StdNode.repairsAtStart(blockchainReader.holdsStateInPlace)(
+      onUnified = () =>
+        // a clear of the state that a kill interrupted is finished first: its rows are deleted before the state is
+        // looked at (spec 018 C5a part 3). It refuses a datadir that has the mark of one and a state.
+        refuseSnapRepairOnTheGuard()
+        finishPendingStateClear()
+        forgetGivenUpBranchesIfAsked()
+        reconcileState()
+      ,
+      onHash = () =>
+        fixDatabase()
+        repairBestBlockMapping() // before any server binds, so no newPayload/FCU races the read-then-write
+    )
     loadGenesisData()
     repairStoredBodies() // after genesis is loaded, before the sync controller reads the backfill cursors
     importChainData() // Must complete before APIs so queries return chain data
@@ -907,6 +908,15 @@ class StdNode(
   override lazy val instanceConfig: com.chipprbots.ethereum.utils.InstanceConfig = _instanceConfig
 
 object StdNode:
+
+  /** The repairs a start makes of the datadir before anything reads it (spec 018 C4b part 4; B-251): on the unified
+    * state layout, the reconciliation (and what comes before it); on the hash layout, its own two repairs, which trust
+    * the best block or the index and would undo the reconciliation. Never both. A datadir stamped for the unified
+    * layout, opened with the guard off, gets to neither: the layout guard refused it where the storages were built
+    * (data-model 5.3).
+    */
+  private[nodebuilder] def repairsAtStart(holdsStateInPlace: Boolean)(onUnified: () => Unit, onHash: () => Unit): Unit =
+    if holdsStateInPlace then onUnified() else onHash()
 
   /** The refusal to start, for the caller (`Fukuii.run`, or one instance of the multi-instance runtime) to report. */
   def startupRefusal(message: String): EngineApiStartupRefusal = new EngineApiStartupRefusal(message)

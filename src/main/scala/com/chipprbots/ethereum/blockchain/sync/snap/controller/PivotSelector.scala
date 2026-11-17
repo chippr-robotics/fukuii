@@ -438,7 +438,8 @@ private[snap] trait PivotSelector
     // a fresh-startup race returns Some(0) and the caller commits to a genesis pivot before
     // any real peer height is known.
     peersToDownloadFrom.values.toList
-      .filter(_.peerInfo.remoteStatus.supportsSnap)
+      // B-320 (forge): a peer on another fork is no measure of this chain's head, as its two siblings say
+      .filter(p => p.peerInfo.remoteStatus.supportsSnap && p.peerInfo.forkAccepted)
       .filter(_.peerInfo.maxBlockNumber > 0)
       .filter(p => bootstrapPivotBlock == 0 || p.peerInfo.maxBlockNumber >= bootstrapPivotBlock)
       // B-310 (forge): a peer on another chain than the branch the pivot is to be on is no measure of the branch's

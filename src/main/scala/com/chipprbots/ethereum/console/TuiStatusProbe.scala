@@ -888,8 +888,9 @@ object TuiStatusProbe:
         else if snapSampleFresh then "Syncing (SNAP)"
         else "Syncing (no target yet)"
       (current, target, description)
-    case SyncProtocol.Status.SyncDone   => (localBest, localBest, "Synced")
-    case SyncProtocol.Status.NotSyncing => (localBest, 0L, "Not syncing")
+    case SyncProtocol.Status.SyncDone        => (localBest, localBest, "Synced")
+    case SyncProtocol.Status.NotSyncing      => (localBest, 0L, "Not syncing")
+    case SyncProtocol.Status.Stopped(reason) => (localBest, 0L, s"Sync stopped: $reason")
 
   private[console] def toSnapSyncState(p: SyncProgress): SnapSyncState =
     SnapSyncState(

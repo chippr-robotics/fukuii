@@ -217,7 +217,7 @@ class TypedCallPathSpec
         val outcome = ledger.simulateCall(m.stx, m.header, ledger.callWorld(head, m.header), m.options, None).value
         outcome.codeDepositShortfall shouldBe false
         val viaCall = outcome.txResult
-        val viaTx = ledger.simulateTransaction(m.stx, m.header, None)
+        val viaTx = ledger.simulateTransaction(m.stx, m.header, ledger.callWorld(head, m.header))
         (viaCall.gasUsed, viaCall.vmReturnData, viaCall.vmError, viaCall.logs) shouldBe
           (viaTx.gasUsed, viaTx.vmReturnData, viaTx.vmError, viaTx.logs)
         viaCall.worldState.stateRootHash shouldBe viaTx.worldState.stateRootHash
@@ -225,7 +225,7 @@ class TypedCallPathSpec
         val t1 = new CallTracer()
         val t2 = new CallTracer()
         ledger.simulateCall(m.stx, m.header, ledger.callWorld(head, m.header), m.options, Some(t1))
-        ledger.simulateTransactionWithTracer(m.stx, m.header, None, t2)
+        ledger.simulateTransactionWithTracer(m.stx, m.header, ledger.callWorld(head, m.header), t2)
         t1.getResult shouldBe t2.getResult
     )
 
@@ -235,7 +235,7 @@ class TypedCallPathSpec
   ) in new Node:
     val m: CallMessage = message(args(SlotReader, _.copy(gas = Some(GasAmount(1_000_000)))))
     ledger.estimateCallGas(m.stx, m.header, ledger.callWorld(head, m.header), m.options).value shouldBe
-      ledger.binarySearchGasEstimation(m.stx, m.header, None)
+      ledger.binarySearchGasEstimation(m.stx, m.header, ledger.callWorld(head, m.header))
 
   // ── Fees (geth ToMessage) ──────────────────────────────────────────────────────────────────────────────────────
 

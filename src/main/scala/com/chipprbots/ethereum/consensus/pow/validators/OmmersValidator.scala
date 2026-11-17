@@ -4,10 +4,10 @@ import org.apache.pekko.util.ByteString
 
 import com.chipprbots.ethereum.consensus.mining.GetBlockHeaderByHash
 import com.chipprbots.ethereum.consensus.mining.GetNBlocksBack
+import com.chipprbots.ethereum.consensus.mining.OmmerAncestor
 import com.chipprbots.ethereum.consensus.pow.validators.OmmersValidator.OmmersError
 import com.chipprbots.ethereum.consensus.pow.validators.OmmersValidator.OmmersValid
 import com.chipprbots.ethereum.consensus.validators.BlockHeaderError
-import com.chipprbots.ethereum.domain.Block
 import com.chipprbots.ethereum.domain.BlockHash
 import com.chipprbots.ethereum.domain.BlockHeader
 import com.chipprbots.ethereum.domain.BlockNumber
@@ -33,18 +33,20 @@ trait OmmersValidator:
 
     val getBlockHeaderByHash: ByteString => Option[BlockHeader] =
       (h: ByteString) => blockchainReader.getBlockHeaderByHash(BlockHash(h))
-    val getNBlocksBack: (ByteString, Int) => List[Block] =
+    val getNBlocksBack: GetNBlocksBack =
       (tailBlockHash, n) =>
         Iterator
-          .iterate(blockchainReader.getBlockByHash(BlockHash(tailBlockHash)))(
+          .iterate(blockchainReader.getBlockHeaderByHash(BlockHash(tailBlockHash)))(
             _.filter(_.number != BlockNumber.Zero) // avoid trying to fetch parent of genesis
-              .flatMap(block => blockchainReader.getBlockByHash(block.header.parentHash))
+              .flatMap(header => blockchainReader.getBlockHeaderByHash(header.parentHash))
           )
-          // up to the first block that is not stored: a walk that skipped it would never end, since every block
+          // up to the first header that is not stored: a walk that skipped it would never end, since every block
           // after a missing one is missing too (B-283). Fewer than `n` is for the caller to judge.
           .takeWhile(_.isDefined)
           .take(n)
           .flatten
+          // a body is read only where the header names ommers (B-302)
+          .map(header => OmmerAncestor.of(header, blockchainReader.getBlockBodyByHash(header.hash)))
           .toList
           .reverse
 

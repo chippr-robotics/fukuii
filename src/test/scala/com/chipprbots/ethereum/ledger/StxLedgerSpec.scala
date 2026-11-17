@@ -37,11 +37,11 @@ class StxLedgerSpec extends AnyFlatSpec with Matchers with Logger:
     val stxFromAddress: SignedTransactionWithSender = SignedTransactionWithSender(stx, fromAddress)
 
     val simulationResult: TxResult =
-      stxLedger.simulateTransaction(stxFromAddress, genesisHeader, None)
+      stxLedger.simulateTransaction(stxFromAddress, genesisHeader, stxLedger.worldAt(genesisHeader))
     val executionResult: TxResult =
       mining.blockPreparator.executeTransaction(stx, fromAddress, genesisHeader, worldWithAccount)
     val estimationResult: BigInt =
-      stxLedger.binarySearchGasEstimation(stxFromAddress, genesisHeader, None)
+      stxLedger.binarySearchGasEstimation(stxFromAddress, genesisHeader, stxLedger.worldAt(genesisHeader))
 
     // Check that gasUsed from simulation and execution are equal
     simulationResult.gasUsed shouldEqual executionResult.gasUsed
@@ -100,7 +100,7 @@ class StxLedgerSpec extends AnyFlatSpec with Matchers with Logger:
     val stxFromAddress: SignedTransactionWithSender = SignedTransactionWithSender(stx, fromAddress)
 
     val estimationResult: BigInt =
-      stxLedger.binarySearchGasEstimation(stxFromAddress, block32Header, None)
+      stxLedger.binarySearchGasEstimation(stxFromAddress, block32Header, stxLedger.worldAt(block32Header))
 
     // THE pin: geth's measured answer for this exact fixture request.
     estimationResult shouldEqual BigInt(111953)
@@ -204,7 +204,7 @@ class StxLedgerSpec extends AnyFlatSpec with Matchers with Logger:
         .toOption
         .get
     outcome.codeDepositShortfall shouldBe true
-    val viaTx: TxResult = stxLedger.simulateTransaction(creation, block32Header, None)
+    val viaTx: TxResult = stxLedger.simulateTransaction(creation, block32Header, stxLedger.worldAt(block32Header))
     (outcome.txResult.vmError, outcome.txResult.gasUsed, outcome.txResult.vmReturnData, outcome.txResult.logs) shouldBe
       ((None, viaTx.gasUsed, viaTx.vmReturnData, viaTx.logs))
     outcome.txResult.gasUsed should be < BigInt(60000)
@@ -284,7 +284,11 @@ class StxLedgerSpec extends AnyFlatSpec with Matchers with Logger:
     val executionResult: TxResult =
       mining.blockPreparator.executeTransaction(stx, fromAddress, genesisHeader, worldWithAccount)
     val estimationResult: BigInt =
-      stxLedger.binarySearchGasEstimation(SignedTransactionWithSender(stx, fromAddress), genesisHeader, None)
+      stxLedger.binarySearchGasEstimation(
+        SignedTransactionWithSender(stx, fromAddress),
+        genesisHeader,
+        stxLedger.worldAt(genesisHeader)
+      )
 
     estimationResult shouldEqual executionResult.gasUsed
 
@@ -326,13 +330,13 @@ class StxLedgerSpec extends AnyFlatSpec with Matchers with Logger:
       * MPTexception.RootNotFound
       */
 
-    assertThrows[MPTException](stxLedger.simulateTransaction(stxFromAddress, header, None))
+    assertThrows[MPTException](stxLedger.simulateTransaction(stxFromAddress, header, stxLedger.worldAt(header)))
 
     /** Solution is to return this ReadOnlyWorldStateProxy from `ledger.prepareBlock` along side with preparedBlock and
       * perform simulateTransaction on this world.
       */
     val result: TxResult =
-      stxLedger.simulateTransaction(stxFromAddress, header, Some(preparedWorld))
+      stxLedger.simulateTransaction(stxFromAddress, header, preparedWorld)
 
     result.vmError shouldBe None
 

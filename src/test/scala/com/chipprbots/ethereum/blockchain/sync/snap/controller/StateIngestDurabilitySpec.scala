@@ -43,6 +43,7 @@ import com.chipprbots.ethereum.db.storage.pruning.InMemoryPruning
 import com.chipprbots.ethereum.db.storage.pruning.PruningMode
 import com.chipprbots.ethereum.domain.Block
 import com.chipprbots.ethereum.domain.BlockBody
+import com.chipprbots.ethereum.domain.BlockHash
 import com.chipprbots.ethereum.domain.BlockHeader
 import com.chipprbots.ethereum.domain.BlockNumber
 import com.chipprbots.ethereum.domain.ChainWeight
@@ -227,12 +228,18 @@ class StateIngestDurabilitySpec extends AnyFlatSpec with Matchers:
       * genesis is stored too. Nothing of it is the head. The pivot's header is in the index of blocks by number, as the
       * pivot's bootstrap leaves it (`indexThePivot`); the headers under it are stored by their hashes alone.
       */
+    /** The ommers hash of a body whose one ommer is the genesis header ([[storeChainBelowThePivot]]'s `withOmmers`). */
+    private val ommersHashOfTheOne: ByteString =
+      import com.chipprbots.ethereum.consensus.pow.blocks.OmmersSeqEnc
+      ByteString(com.chipprbots.ethereum.crypto.kec256(Seq(genesisHeader).toBytes))
+
     def storeChainBelowThePivot(
         below: Int,
         bodiesOfTheLast: Int,
         indexThePivot: Boolean = true,
         weighed: Boolean = true,
-        afterTheMerge: Boolean = false
+        afterTheMerge: Boolean = false,
+        withOmmers: Boolean = false
     ): BlockHeader =
       chain.blockchainWriter.save(
         Block(genesisHeader, BlockBody.empty),
@@ -245,7 +252,9 @@ class StateIngestDurabilitySpec extends AnyFlatSpec with Matchers:
         val parent = chained.lastOption.fold(genesisHeader.hash)(_.hash)
         val stateRoot = if number == pivot then TrieRoot(root) else genesisHeader.stateRoot
         val header = genesisHeader.copy(number = BlockNumber(number), parentHash = parent, stateRoot = stateRoot)
-        chained :+ (if afterTheMerge then header.copy(difficulty = Difficulty.Zero) else header)
+        // a block that names ommers: the check of ommers reads its body (B-302); one that names none it does not
+        val named = if withOmmers then header.copy(ommersHash = BlockHash(ommersHashOfTheOne)) else header
+        chained :+ (if afterTheMerge then named.copy(difficulty = Difficulty.Zero) else named)
       }
       headers.foreach(header => chain.blockchainWriter.storeBlockHeaderByHashOnly(header).commit())
       if indexThePivot then chain.blockchainWriter.storeBlockHeader(headers.last).commit()
@@ -260,7 +269,8 @@ class StateIngestDurabilitySpec extends AnyFlatSpec with Matchers:
           )
           .commit()
       headers.takeRight(bodiesOfTheLast).foreach { header =>
-        chain.blockchainWriter.storeCheckedBlockBody(header, BlockBody.empty).commit()
+        val body = if withOmmers then BlockBody(Nil, Seq(genesisHeader)) else BlockBody.empty
+        chain.blockchainWriter.storeCheckedBlockBody(header, body).commit()
       }
       headers.last
 
@@ -447,8 +457,8 @@ class StateIngestDurabilitySpec extends AnyFlatSpec with Matchers:
 
   "SNAP finalization on the unified state layout" should "hold while the window below the pivot is not stored, and hand off when it is" taggedAs UnitTest in {
     val h = new Harness(pathScheme = true)
-    // the headers, and the bodies of all but the lowest of the six a block's ommers are checked against
-    val pivotHeader = h.storeChainBelowThePivot(below = 256, bodiesOfTheLast = 5)
+    // the headers, and the bodies of all but the lowest of the five whose ommers a block's are checked against (B-302)
+    val pivotHeader = h.storeChainBelowThePivot(below = 256, bodiesOfTheLast = 4, withOmmers = true)
     h.unifiedLayoutAtTheEndOfASync()
     val before = h.recording.writes.size
     // the sample has passed for this pivot: the hold comes after it, and its tick does not sample again
@@ -462,16 +472,16 @@ class StateIngestDurabilitySpec extends AnyFlatSpec with Matchers:
     h.parent.hasMessages shouldBe false
 
     // the body arrives; the hold's tick is finalisation again
-    val lowest = h.chain.blockchainReader.getBlockHeaderByNumber(pivot - 5)
-    val sixth = h.chain.blockchainReader
+    val lowest = h.chain.blockchainReader.getBlockHeaderByNumber(pivot - 4)
+    val fifth = h.chain.blockchainReader
       .getBlockHeaderByHash(
-        (1 to 5)
+        (1 to 4)
           .foldLeft(pivotHeader)((header, _) => h.chain.blockchainReader.getBlockHeaderByHash(header.parentHash).get)
           .hash
       )
       .get
     lowest shouldBe None // the window is found by hash, not by the index of blocks by number
-    h.chain.blockchainWriter.storeCheckedBlockBody(sixth, BlockBody.empty).commit()
+    h.chain.blockchainWriter.storeCheckedBlockBody(fifth, BlockBody(Nil, Seq(Fixtures.Blocks.Genesis.header))).commit()
 
     h.call(_.onHeaderHoldTick(pivot))
 
@@ -618,7 +628,7 @@ class StateIngestDurabilitySpec extends AnyFlatSpec with Matchers:
   // A chain with a terminal total difficulty whose pivot is still before the merge: blocks above it have ommers.
   it should "hold for the bodies below a pivot that has a difficulty, on a chain with a terminal total difficulty" taggedAs UnitTest in {
     val h = new Harness(pathScheme = true, terminalTotalDifficulty = Some(BigInt("58750000000000000000000")))
-    val pivotHeader = h.storeChainBelowThePivot(below = 256, bodiesOfTheLast = 5)
+    val pivotHeader = h.storeChainBelowThePivot(below = 256, bodiesOfTheLast = 4, withOmmers = true)
     pivotHeader.difficulty.value should be > BigInt(0)
     h.unifiedLayoutAtTheEndOfASync()
 
@@ -683,11 +693,12 @@ class StateIngestDurabilitySpec extends AnyFlatSpec with Matchers:
     val config = SNAPSyncConfig(deferChainBackfillUntilStateComplete = true)
     SNAPSyncController.chainBackfillDeferredToFinalization(config) shouldBe true
     val h = new Harness(pathScheme = true, config = config)
-    val pivotHeader = h.storeChainBelowThePivot(below = 256, bodiesOfTheLast = 5)
+    val pivotHeader = h.storeChainBelowThePivot(below = 256, bodiesOfTheLast = 4, withOmmers = true)
     h.unifiedLayoutAtTheEndOfASync()
     h.chain.storagesInstance.storages.appStateStorage.putBackfillBestHeader(pivot).commit()
     h.module.pivotBlock = Some(pivot)
-    val sixth = (1 to 5).foldLeft(pivotHeader) { (header, _) =>
+    // the lowest of the five bodies the check of ommers reads (B-302)
+    val sixth = (1 to 4).foldLeft(pivotHeader) { (header, _) =>
       h.chain.blockchainReader.getBlockHeaderByHash(header.parentHash).get
     }
 
@@ -718,7 +729,7 @@ class StateIngestDurabilitySpec extends AnyFlatSpec with Matchers:
       pathScheme = true,
       config = SNAPSyncConfig(headerHoldStallTimeout = scala.concurrent.duration.Duration.Zero)
     )
-    val pivotHeader = h.storeChainBelowThePivot(below = 256, bodiesOfTheLast = 5)
+    val pivotHeader = h.storeChainBelowThePivot(below = 256, bodiesOfTheLast = 4, withOmmers = true)
     h.unifiedLayoutAtTheEndOfASync()
     h.module.pivotBlock = Some(pivot)
     h.handOffFromAPassedSample()

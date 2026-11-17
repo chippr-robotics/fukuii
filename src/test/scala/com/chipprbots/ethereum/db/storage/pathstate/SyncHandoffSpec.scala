@@ -16,6 +16,7 @@ import com.chipprbots.ethereum.db.storage.ChainWeightStorage
 import com.chipprbots.ethereum.db.storage.EvmCodeStorage
 import com.chipprbots.ethereum.db.storage.PathNodeStorage
 import com.chipprbots.ethereum.domain.BlockBody
+import com.chipprbots.ethereum.domain.BlockHash
 import com.chipprbots.ethereum.domain.BlockHeader
 import com.chipprbots.ethereum.domain.BlockNumber
 import com.chipprbots.ethereum.domain.ChainWeight
@@ -199,7 +200,8 @@ class SyncHandoffSpec extends AnyFlatSpec with Matchers:
   it should "say what is missing of the window below the pivot, by the stores it reads" taggedAs UnitTest in {
     val s = new Synced
     val parent = s.pivot.copy(number = BlockNumber(4999))
-    val child = s.pivot.copy(parentHash = parent.hash)
+    // a block that names ommers: the body of one that names none is not read (B-302)
+    val child = s.pivot.copy(parentHash = parent.hash, ommersHash = BlockHash(ByteString(Array.fill[Byte](32)(7))))
     s.headers.put(child.hash.value, child).commit()
 
     val noParent = s.handoff.windowMissing(child, proofOfWork = false)

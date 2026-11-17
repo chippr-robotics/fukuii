@@ -78,15 +78,25 @@ class MinedBlockOnPositionsSpec extends AnyFlatSpec with Matchers:
     @volatile var now: Long = 0L
     override def getEpochSecond: Long = now
 
-  final private class Node(val source: EphemDataSource, guard: Boolean) extends EphemBlockchainTestSetup:
+  /** The Treasury of the Olympia case (ECIP-1112): where the base fee goes. */
+  private val treasury = Address(0x7ea5)
+
+  /** @param olympiaAt
+    *   the first block of Olympia (ECIP-1111/1112: a base fee, credited to the Treasury), as Mordor sets it; none
+    *   before
+    */
+  final private class Node(val source: EphemDataSource, guard: Boolean, olympiaAt: Option[BigInt] = None)
+      extends EphemBlockchainTestSetup:
     implicit override lazy val blockchainConfig: BlockchainConfig = BlockchainConfig(
       forkBlockNumbers = ForkBlockNumbers.Empty.copy(
         homesteadBlockNumber = 1150000,
         eip155BlockNumber = 0,
         difficultyBombPauseBlockNumber = 3000000,
         difficultyBombContinueBlockNumber = 5000000,
-        difficultyBombRemovalBlockNumber = 5900000
+        difficultyBombRemovalBlockNumber = 5900000,
+        olympiaBlockNumber = olympiaAt.getOrElse(ForkBlockNumbers.Empty.olympiaBlockNumber)
       ),
+      treasuryAddress = treasury,
       chainId = ChainId(0x3d),
       networkId = 1,
       customGenesisFileOpt = Some("test-genesis.json"),
@@ -251,6 +261,42 @@ class MinedBlockOnPositionsSpec extends AnyFlatSpec with Matchers:
         onPositions.blockchainReader.accountAt(fourth.header, Address(ommerOf(second.header, 1).beneficiary))
       val eraOne = onPositions.blockchainReader.accountAt(fourth.header, Address(ommerOf(third.header, 2).beneficiary))
       eraOne.map(_.balance).exists(one => eraZero.map(_.balance).exists(_ > one)) shouldBe true
+    }
+
+  // B-219 (forge, C3c part 2): an Olympia block on the unified layout. The base fee of each transaction is credited to
+  // the Treasury (ECIP-1111/1112), not burned, and the miner is paid the tip: a write to an account the block's
+  // transactions do not name, which the prepared block and its import must make alike on both layouts.
+  "An Olympia block prepared on the unified layout" should "be the block the hash store prepares, and pay the Treasury its base fee" taggedAs
+    (UnitTest, ConsensusTest) in {
+      val onHashes = new Node(EphemDataSource(), guard = false, olympiaAt = Some(1))
+      val onPositions = new Node(EphemDataSource(), guard = true, olympiaAt = Some(1))
+      onPositions.head.header.hash shouldBe onHashes.head.header.hash
+      def treasuryAt(node: Node, header: BlockHeader): BigInt =
+        node.blockchainReader.accountAt(header, treasury).map(_.balance.toBigInt).getOrElse(BigInt(0))
+
+      // a price far above the first base fee, so the generator takes both transactions
+      val price = GasPrice(BigInt(100) * BigInt(1000000000))
+      def paying(nonce: Int, to: Address): SignedTransaction =
+        signed(LegacyTransaction(nonce, price, GasAmount(21000), to, 1, ByteString.empty))
+
+      (1 to 2).foreach { n =>
+        val transactions = Seq(paying(2 * (n - 1), Address(42)), paying(2 * (n - 1) + 1, Address(43)))
+        // read before the import: on the unified layout the state of a block the head has left is not held
+        val before = treasuryAt(onPositions, onPositions.head.header)
+        val reference = onHashes.prepare(transactions, Nil)
+        val prepared = onPositions.prepare(transactions, Nil)
+        withClue(s"block $n: ") {
+          prepared.header.hash shouldBe reference.header.hash
+          prepared.body.transactionList should have size 2
+          val baseFee = prepared.header.baseFee.getOrElse(fail("an Olympia block carries a base fee"))
+          baseFee should be > BigInt(0)
+          onHashes.importOne(reference) shouldBe None
+          onPositions.importOne(prepared) shouldBe None
+          treasuryAt(onPositions, prepared.header) - before shouldBe baseFee * prepared.header.gasUsed.value
+          treasuryAt(onPositions, prepared.header) shouldBe treasuryAt(onHashes, reference.header)
+          PathStateTestKit.hashStoreRows(onPositions.source) shouldBe empty
+        }
+      }
     }
 
   // The generator keeps the last blocks it prepared, each with the world its preparation left. On the unified layout
