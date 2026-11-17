@@ -138,7 +138,9 @@ class SNAPSyncingDispatchTableSpec
     "PathPublishFailed" -> PathPublishFailed(new RuntimeException("s0d table")),
     "HandoffSampleDone" -> HandoffSampleDone(PathHandoffSample.Result()),
     // the sample's own verdict: anything else it fails with is thrown, as a store that failed
-    "HandoffSampleFailed" -> HandoffSampleFailed(new PathHandoffSample.Stopped("s0d table")),
+    "HandoffSampleFailed" -> HandoffSampleFailed(
+      new PathHandoffSample.Stopped("s0d table", PathHandoffSample.StopReason.AccountHole, PathHandoffSample.Result())
+    ),
     "HealingServeRoot" -> HealingServeRoot(BigInt(5), None),
     "PivotStateUnservable" -> PivotStateUnservable(root, "s0d table", 1),
     "ProgressAccountsSynced" -> ProgressAccountsSynced(0L),

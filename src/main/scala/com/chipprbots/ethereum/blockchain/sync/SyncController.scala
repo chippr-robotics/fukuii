@@ -484,6 +484,9 @@ object SyncController:
     // after a process restart the recovery may resume on it once more, then the next failure records it again.
     private var snapPivotFailedFinalization: Option[BigInt] = None
 
+    // B-304: the hand-off's samples that stopped a sync since the last hand-off.
+    private val handoffSampleFailures = new HandoffSampleFailures
+
     // Whether SNAP should consume CL-driven pivot selection. Captured once at construction
     // because both `syncConfig` and the chain config are stable for the actor's lifetime.
     private val isPoSChain: Boolean = configBuilder.blockchainConfig.terminalTotalDifficulty.isDefined
@@ -837,44 +840,41 @@ object SyncController:
             abortHealingServeRootRequest("the sync is begun again for the branch its pivot is to be on")
             clearingForBranchRetry(stateEscalation.get)
 
+          case SyncProtocol.HandoffSampleStopped(reason, counts, pivot) =>
+            // B-304: a sample that keeps stopping the hand-off is not restarted for ever. Only the same pivot is refused
+            // a second time, so a failure that is systematic would repeat on every newer pivot.
+            handoffSampleFailures.stopped(reason, pivot) match
+              case HandoffSampleFailures.Verdict.Restart(n) =>
+                log.warn(
+                  s"[HANDOFF] the hand-off's sample stopped the sync at pivot $pivot (${reason.text}), $n of " +
+                    s"${HandoffSampleFailures.Bound} since the last hand-off: restarting SNAP"
+                )
+                restartSnapAfterFailedFinalization(snapSync)
+              case HandoffSampleFailures.Verdict.NotCounted(n) =>
+                log.warn(
+                  s"[HANDOFF] the hand-off's sample found no state root at pivot $pivot again, as at the last stop: " +
+                    "the head did not move to a root peers serve (#1555). Not counted " +
+                    s"($n of ${HandoffSampleFailures.Bound} since the last hand-off): restarting SNAP"
+                )
+                restartSnapAfterFailedFinalization(snapSync)
+              case HandoffSampleFailures.Verdict.GiveUp(n) =>
+                ctx.unwatch(snapSync) // §7c-D4: intentional stop — drop the critical death-watch first.
+                ctx.stop(snapSync)
+                abortHealingServeRootRequest("the hand-off's sample stopped the sync too many times")
+                val what =
+                  if reason == com.chipprbots.ethereum.db.storage.PathHandoffSample.StopReason.RootAbsent then
+                    "no counts: the root is absent"
+                  else counts.describe
+                log.error(
+                  s"[HANDOFF] the hand-off's sample stopped the sync $n times since the last hand-off, the last at " +
+                    s"pivot $pivot for ${reason.text} ($what): the rows the sync writes are not the state of its pivot, and syncing " +
+                    "again does not mend that. Not restarting: the sync controller stops. A restart of the node " +
+                    "begins the count again."
+                )
+                Behaviors.stopped
+
           case SyncProtocol.HealingImpossible | SyncProtocol.PivotOffTheBranch =>
-            ctx.unwatch(snapSync) // §7c-D4: intentional stop — drop the critical death-watch first.
-            ctx.stop(snapSync)
-            // #1555: the pivot finalizeSnapSync just failed on is the persisted SNAP pivot (the lazy hand-offs anchor
-            // it first), which is exactly what the accounts-complete recovery would resume on.
-            snapPivotFailedFinalization = appStateStorage.getSnapSyncPivotBlock()
-            log.warn(
-              s"SNAP finalization aborted at pivot ${snapPivotFailedFinalization.getOrElse("unknown")} (state root " +
-                "mismatch or Path publish failure). Clearing the SNAP done flags and restarting SNAP; on PoS chains a " +
-                "heal-only recovery takes a newer pivot than that one, otherwise recovery resumes on the saved pivot."
-            )
-            // spec 004 MUST-FIX: clear the healing serve-root latch on every exit from runningSnapSync. The new SNAP
-            // actor started below gets a fresh latch, so the stale requester here must not linger.
-            abortHealingServeRootRequest("SNAP healing impossible — restarting snap sync")
-            // Platåberget soak, 2026-09-27 (BUG-006/A5 stale-anchor investigation): intentionally NOT clearing
-            // SnapSyncPivotBlock/SnapSyncStateRoot here, only the two *Done flags. The fresh SNAPSyncController
-            // spawned by startSnapSync() below re-reads those two keys via its accounts-complete recovery path
-            // (SNAPSyncController.startSnapSync(), the `isSnapSyncAccountsComplete()` branch) and resumes
-            // bytecodes/storage/healing from them rather than re-downloading complete, content-addressed data.
-            // Clearing them would force that branch's `case _ => ... Clearing and restarting fresh` fallback —
-            // a full account/bytecode/storage re-download — which is the wrong trade for what was, before the
-            // anchorPivotBeforeLazyHandoff fix above, the actual root cause of every observed HealingImpossible:
-            // a self-inflicted stale anchor, not a genuinely bad one. That fix makes the anchor persisted here
-            // match the pivot finalizeSnapSync() just tried and failed to commit, so a *residual* HealingImpossible
-            // after this fix indicates a real anchor/header divergence — and the resumed instance already has an
-            // existing, independent safety net for that: the accounts-complete recovery branch's own
-            // networkBest/maxPivotStalenessBlocks drift check, and normal operation's all-peers-stateless
-            // escalation, both of which re-peg away from a stale/unservable root without discarding downloaded
-            // progress. Revisit only if a residual HealingImpossible is ever observed looping on the same pivot.
-            //
-            // #1555 (Platåberget, 2026-10-10): it was observed looping on the same pivot. A frozen CL kept the heal
-            // pivot on a root no peer served; the lazy hand-off's Path publish then failed (root node absent) and this
-            // restart resumed healing on that same pivot, every 17-24 minutes. The keys are still NOT cleared (the
-            // downloaded data stays usable); instead the failed pivot is recorded above and passed to the new SNAP
-            // controller, whose recovery takes a newer pivot on PoS chains (SNAPSyncController.recoverAccountsComplete).
-            appStateStorage.clearSnapSyncDone().commitSync() // spec 022 D7: with the invariant marker
-            appStateStorage.clearFastSyncDone().commit()
-            startSnapSync()
+            restartSnapAfterFailedFinalization(snapSync)
 
           case SyncProtocol.Status.Progress(_, _) =>
             log.debug("SNAP sync in progress")
@@ -972,6 +972,50 @@ object SyncController:
             log.warn("Unexpected message in runningSnapSync: {}", other.getClass.getSimpleName)
             Behaviors.same
     }
+
+    /** A finalisation that could not hand off: SNAP is stopped and started again (`HealingImpossible`, a branch the
+      * pivot is not on with no escalation under way, and a hand-off's sample below its bound).
+      */
+    private def restartSnapAfterFailedFinalization(
+        snapSync: TypedActorRef[SNAPSyncController.Command]
+    ): Behavior[Command] =
+      ctx.unwatch(snapSync) // §7c-D4: intentional stop — drop the critical death-watch first.
+      ctx.stop(snapSync)
+      // #1555: the pivot finalizeSnapSync just failed on is the persisted SNAP pivot (the lazy hand-offs anchor
+      // it first), which is exactly what the accounts-complete recovery would resume on.
+      snapPivotFailedFinalization = appStateStorage.getSnapSyncPivotBlock()
+      log.warn(
+        s"SNAP finalization aborted at pivot ${snapPivotFailedFinalization.getOrElse("unknown")} (state root " +
+          "mismatch or Path publish failure). Clearing the SNAP done flags and restarting SNAP; on PoS chains a " +
+          "heal-only recovery takes a newer pivot than that one, otherwise recovery resumes on the saved pivot."
+      )
+      // spec 004 MUST-FIX: clear the healing serve-root latch on every exit from runningSnapSync. The new SNAP
+      // actor started below gets a fresh latch, so the stale requester here must not linger.
+      abortHealingServeRootRequest("SNAP healing impossible — restarting snap sync")
+      // Platåberget soak, 2026-09-27 (BUG-006/A5 stale-anchor investigation): intentionally NOT clearing
+      // SnapSyncPivotBlock/SnapSyncStateRoot here, only the two *Done flags. The fresh SNAPSyncController
+      // spawned by startSnapSync() below re-reads those two keys via its accounts-complete recovery path
+      // (SNAPSyncController.startSnapSync(), the `isSnapSyncAccountsComplete()` branch) and resumes
+      // bytecodes/storage/healing from them rather than re-downloading complete, content-addressed data.
+      // Clearing them would force that branch's `case _ => ... Clearing and restarting fresh` fallback —
+      // a full account/bytecode/storage re-download — which is the wrong trade for what was, before the
+      // anchorPivotBeforeLazyHandoff fix above, the actual root cause of every observed HealingImpossible:
+      // a self-inflicted stale anchor, not a genuinely bad one. That fix makes the anchor persisted here
+      // match the pivot finalizeSnapSync() just tried and failed to commit, so a *residual* HealingImpossible
+      // after this fix indicates a real anchor/header divergence — and the resumed instance already has an
+      // existing, independent safety net for that: the accounts-complete recovery branch's own
+      // networkBest/maxPivotStalenessBlocks drift check, and normal operation's all-peers-stateless
+      // escalation, both of which re-peg away from a stale/unservable root without discarding downloaded
+      // progress. Revisit only if a residual HealingImpossible is ever observed looping on the same pivot.
+      //
+      // #1555 (Platåberget, 2026-10-10): it was observed looping on the same pivot. A frozen CL kept the heal
+      // pivot on a root no peer served; the lazy hand-off's Path publish then failed (root node absent) and this
+      // restart resumed healing on that same pivot, every 17-24 minutes. The keys are still NOT cleared (the
+      // downloaded data stays usable); instead the failed pivot is recorded above and passed to the new SNAP
+      // controller, whose recovery takes a newer pivot on PoS chains (SNAPSyncController.recoverAccountsComplete).
+      appStateStorage.clearSnapSyncDone().commitSync() // spec 022 D7: with the invariant marker
+      appStateStorage.clearFastSyncDone().commit()
+      startSnapSync()
 
     /** spec 004 T012: start a one-shot header bootstrap for a newest-servable block (margin back from the network head)
       * on the dedicated healing serve-root slot, and arm a timeout. On `Completed` we reply
@@ -1744,8 +1788,11 @@ object SyncController:
           Behaviors.same
 
         // SSC declared healing impossible during the pivot header bootstrap window — stale, drop.
-        case SyncProtocol.HealingImpossible =>
-          log.debug("HealingImpossible in runningPivotHeaderBootstrap — stale, dropping (bootstrap in progress).")
+        case SyncProtocol.HealingImpossible | _: SyncProtocol.HandoffSampleStopped =>
+          log.debug(
+            "HealingImpossible or HandoffSampleStopped in runningPivotHeaderBootstrap — stale, dropping (bootstrap in " +
+              "progress)."
+          )
           Behaviors.same
 
         // Stale HandshakedPeers reply from a GetHandshakedPeersCmd sent before this state transition.
@@ -1901,6 +1948,7 @@ object SyncController:
     private def clearSnapPivotFloor(): Unit =
       appStateStorage.clearSnapSyncMinPivotBlock().commit()
       snapPivotFailedFinalization = None // #1555: a finalized SNAP has no failed pivot left to avoid
+      handoffSampleFailures.handedOff() // B-304: the samples are counted since the last hand-off
 
     /** Log-only: compare the stored SNAP state root with the SNAP pivot header and report whether the trie is there. */
     private def logSnapStateRootDiagnostic(): Unit =

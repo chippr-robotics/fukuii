@@ -523,11 +523,19 @@ private[snap] trait SnapFinalization extends FinalizationApi with ChainDownloadS
     * Anything else is a store that failed under the sample: healing again does not mend it, and it is thrown.
     */
   private[snap] def onHandoffSampleFailed(cause: Throwable): Behavior[Command] =
+    val sampled = pathPublish
     pathPublish = None
     cause match
       case stopped: PathHandoffSample.Stopped =>
-        ctx.log.error("[HANDOFF] the sample of the state stopped the hand-off: escalating for a SNAP restart", stopped)
-        syncController ! SyncProtocol.HealingImpossible
+        ctx.log.error(
+          s"[HANDOFF] the sample of the state stopped the hand-off (${stopped.reason.text}; ${stopped.counts.describe})" +
+            ": escalating for a SNAP restart",
+          stopped
+        )
+        // its own message, so that the parent counts the samples and does not restart for ever (B-304); with the pivot,
+        // so that a root absent again at the same pivot (a frozen head, #1555) is not counted
+        val pivot = sampled.map(_._1).orElse(pivotBlock).getOrElse(BigInt(0))
+        syncController ! SyncProtocol.HandoffSampleStopped(stopped.reason, stopped.counts, pivot)
         Behaviors.same
       case other =>
         ctx.log.error("[HANDOFF] the sample of the state could not be made: the store failed under it", other)

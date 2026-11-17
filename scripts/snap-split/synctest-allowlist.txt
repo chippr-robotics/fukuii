@@ -1,1 +1,3 @@
-SyncControllerSpec :: SyncController should leave SNAP's resume alone once SNAP has taken over the best block of an upgraded node
+# SNAP SyncTest failures that are known and tolerated, one `<Suite> :: <full test name>` a line. A listed test that
+# passes fails the job (the list is stale). Empty since B-309: the one entry was a test whose seed lacked the task files
+# SNAP's resume needs.

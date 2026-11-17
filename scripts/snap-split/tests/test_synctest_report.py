@@ -153,9 +153,11 @@ class SyncTestReport(unittest.TestCase):
         rc, out = run(r, sbt_exit=1, log=self.EPILOGUE)
         self.assertEqual(rc, 1)
 
-    def test_committed_allowlist_is_the_one_entry(self):
+    def test_committed_allowlist_is_empty(self):
+        # B-309: task #68 passes since its seed carries the task files SNAP's resume needs; the entry was removed as
+        # spec 016 T007 says (a passing entry is a stale list)
         lines = [l for l in ALLOW_FILE.read_text(encoding="utf-8").splitlines() if l.strip() and not l.startswith("#")]
-        self.assertEqual(lines, [f"SyncControllerSpec :: {T68_NAME}"])
+        self.assertEqual(lines, [])
 
 
 if __name__ == "__main__":
