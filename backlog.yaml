@@ -470,6 +470,7 @@ items:
     opened: 2026-11-07
     refs: [018 C0]
     links:
+      prs: [1888]
       spec: specs/018-storage-engine-consolidation
     notes: |-
       T002 pinned 2026-11-17 (user): v0.12.1 jar, SHA-256 2100c4ce…, baselines/pinned-jar.md; fallback 0.11.0. Open: keeper + NFS path.
@@ -1297,7 +1298,8 @@ items:
     size: L
     opened: 2026-11-08
     refs: [B-135]
-    links: {}
+    links:
+      prs: [1888]
     notes: |-
       Needs a holder, or the user accepts an 'ETH not supported on Windows' release note.
       2026-11-17 released by cloud-retro (expired claim of fukuii-fc): claim expired (heartbeat 2026-11-08)
