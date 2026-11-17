@@ -2327,18 +2327,19 @@ items:
   - id: B-291
     title: "A reorg that keeps a heavier prefix then meets an invalid block: the chain it left is not queued again, the pool not told"
     priority: P2
-    status: claimed
+    status: review
     area: consensus
     size: M
     opened: 2026-11-15
     refs: []
     links:
+      prs: [1902]
       spec: 018
     claim:
       by: cloud-dc960fdc
       agent: main
       since: 2026-11-17T19:41:22Z
-      heartbeat: 2026-11-17T19:41:22Z
+      heartbeat: 2026-11-17T19:41:26Z
     notes: "forge, C4e part 3 review Q4: BranchExecutionFailure on every layout and arm; with B-253"
   - id: B-292
     title: Fault-injection tests for reverse-then-commit at the pinned cap (fault after commits, failed move back, partial first move)
