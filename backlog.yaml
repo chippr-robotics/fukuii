@@ -1,8 +1,7 @@
 # fukuii shared backlog (schema version 1). Rendered at https://docs.fukuii.com/development/tracker/
 # Change it with scripts/backlog/backlog.py on staging (claim, status, done, ...); README.md has the protocol.
 # Hand edits in the GitHub web UI are fine: keep the schema (backlog.py check), never delete or reuse an id
-# (drop the item instead; `backlog.py prune` moves closed items to archive.yaml). Comments other than this
-# header are not kept when the tool rewrites the file.
+# (drop the item instead). Comments other than this header are not kept when the tool rewrites the file.
 version: 1
 expiry_hours: 24
 items:
@@ -2574,19 +2573,15 @@ items:
   - id: B-334
     title: "Docs link check: stop github.com 503s and openjdk 403s failing PRs (auth, concurrency cap, retries, cache, exclude bugs.openjdk.org)"
     priority: P2
-    status: review
+    status: done
     area: ci
     size: S
     opened: 2026-11-17
+    closed: 2026-11-17
     refs: []
     links:
       prs: [1886]
       branch: ccr-9d49106a-kvpho1
-    claim:
-      by: cloud-ccr
-      agent: main
-      since: 2026-11-17T17:35:00Z
-      heartbeat: 2026-11-17T17:35:09Z
   - id: B-335
     title: "FastSyncBranchResolverActorSpec flakes under load: a 7 s expectMsg times out (about 1 run in 3 on staging with a second build running)"
     priority: P3
