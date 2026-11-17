@@ -523,20 +523,16 @@ items:
   - id: B-073
     title: "Mordor testing and gates: checkpoint archive to the NAS, T062-style gate runs for the unified layout (path-live, C6)"
     priority: P1
-    status: in-progress
+    status: open
     area: ops
     size: M
     opened: 2026-11-07
     refs: [handoff §4]
     links: {}
-    claim:
-      by: dev-node
-      agent: main
-      since: 2026-11-07T00:00:00Z
-      heartbeat: 2026-11-09T18:55:42Z
     notes: |-
       Spec 018 moving ETC onto the unified layout will need these runs.
       2026-11-17 priority P1: Mordor gates for the unified layout are next sprint's commitment
+      2026-11-17 released by cloud-retro (expired claim of dev-node): claim expired (heartbeat 2026-11-09); dev-node may re-claim
   - id: B-074
     title: SnapFinalization misses an excluded entry inserted between the set read and the flags commit
     priority: P2
