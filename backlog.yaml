@@ -2023,18 +2023,19 @@ items:
   - id: B-248
     title: "SYNC-FORK resolver: discardBlocksAfter deletes the index entries before rewindCanonicalChain reads them"
     priority: P2
-    status: claimed
+    status: review
     area: sync
     size: S
     opened: 2026-11-13
     refs: []
     links:
+      prs: [1890]
       spec: 018
     claim:
       by: cloud-dc960fdc
       agent: main
       since: 2026-11-17T18:29:29Z
-      heartbeat: 2026-11-17T18:29:29Z
+      heartbeat: 2026-11-17T18:42:13Z
       branch: fix/018-b248-resolver-discard
     notes: |-
       Forge, C4b part 3 pre-code consult (verified in code): Blockchain.removeBlock via FastSyncBranchResolver.discardBlocksAfter removes the number->hash entries (Blockchain.scala:197-199) before BlockImporter.rewindCanonicalChain reads them (:198-200), so abandonBlockStates gets nothing on the resolver-success path and the #1471 reference-count undo never runs there. Hash layout; its own bucket-C commit, not part of spec 018 C4b.
