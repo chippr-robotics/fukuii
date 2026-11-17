@@ -210,7 +210,9 @@ class PosRegularSyncImportSpec extends ScalaTestWithActorTestKit with AnyFlatSpe
     // The held import now raises StartForkRecovery from inside itself and then finishes, so its ImportDone reaches
     // resolvingFork. Only once that ImportDone has been sent does the resolver answer.
     awaitImportDoneSent(finished)
-    importer ! BlockImporter.BranchResolverMsg(FastSyncBranchResolverActor.BranchResolvedSuccessful(lca, resolverPeer))
+    importer ! BlockImporter.BranchResolverMsg(
+      FastSyncBranchResolverActor.BranchResolvedSuccessful(lca, resolverPeer)()
+    )
     fetcher.expectMessageType[BlockFetcher.InvalidateBlocksFrom](importTimeout).fromBlock shouldBe lca + 1
 
     requestPick()
@@ -312,7 +314,9 @@ class PosRegularSyncImportSpec extends ScalaTestWithActorTestKit with AnyFlatSpe
     val finished: Long = importsDone()
     first.replyTo ! BlockFetcher.PickedBlocks(fromWire(ahead.take(50)))
     awaitImportDoneSent(finished)
-    importer ! BlockImporter.BranchResolverMsg(FastSyncBranchResolverActor.BranchResolvedSuccessful(lca, resolverPeer))
+    importer ! BlockImporter.BranchResolverMsg(
+      FastSyncBranchResolverActor.BranchResolvedSuccessful(lca, resolverPeer)()
+    )
     fetcher.expectMessageType[BlockFetcher.InvalidateBlocksFrom](importTimeout).fromBlock shouldBe lca + 1
 
     requestPick()
