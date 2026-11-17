@@ -3776,9 +3776,15 @@ items:
   - id: B-325
     title: "C5a part 10: the refusals of SNAP and sync lifted on path-live, the sync controller started there, and a hand-off run live"
     priority: P1
-    status: open
+    status: claimed
     area: sync
     opened: 2026-11-17
     refs: [B-064]
     links: {}
+    claim:
+      by: cloud-lane2
+      agent: main
+      since: 2026-11-17T01:39:33Z
+      heartbeat: 2026-11-17T01:39:33Z
+      branch: design/018-c5a-part10
     notes: design first (beacon, forge, vault); gates B-304, B-308, B-310, B-311; mining stays refused (B-293); live runs Mordor + Sepolia after merge
