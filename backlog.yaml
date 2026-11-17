@@ -2674,3 +2674,13 @@ items:
     links:
       spec: none
     notes: beacon-b005. B-005 changes unexecuted newPayload answers (SYNCING on canonical parent or requested head). Unit-tested only; no hive run in the container. Check Invalid Missing Ancestor Syncing ReOrg, Invalid NewPayload Syncing=True, Re-Org Sync.
+  - id: B-341
+    title: MerklePatriciaTrie scaladoc (:44, :88) says the Engine API answers a missing node ACCEPTED; since B-005 it may be SYNCING
+    priority: P3
+    status: open
+    area: docs
+    opened: 2026-11-17
+    refs: []
+    links:
+      spec: none
+    notes: beacon-b005, flag-only (consensus file, inline-cleanup protocol). Comment only.
