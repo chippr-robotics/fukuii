@@ -42,10 +42,12 @@ import com.chipprbots.ethereum.transactions.TransactionPicker
 
 object EthMiningService:
 
-  /** What `eth_getWork` and `eth_submitWork` answer on the unified state layout before its overlay. */
+  /** What `eth_getWork`, `eth_submitWork` and `miner_start` answer on the unified state layout until its miner checks
+    * the head it built on (B-293).
+    */
   val NoRouteForMinedBlocks: String =
-    "fukuii.state.path-live is on: a mined block is imported by network sync, which this node does not run until " +
-      "the unified state layout can move its head (spec 018 C4). No work is given and none is taken."
+    "fukuii.state.path-live is on: the unified state layout can move its head between the read of it a block is " +
+      "built from and the seal, and mining does not check for that yet (B-293). No work is given and none is taken."
 
   case class GetMiningRequest()
   case class GetMiningResponse(isMining: Boolean)
@@ -114,13 +116,12 @@ class EthMiningService(
       GetMiningResponse(isMining)
     }
 
-  /** Why work is neither given nor taken on the unified state layout before its overlay; `None` with the guard off.
+  /** Why work is neither given nor taken on the unified state layout; `None` with the guard off.
     *
-    * A block that is mined reaches import through network sync, which a node on the in-development guard does not run
-    * (spec 018 C3b): it could not follow the side branches and reorganisations that come with it. So a solution
-    * submitted here would be answered `true` and the block dropped. Work is refused where it is asked for, and said so,
-    * until the head can move (C4b). `mining.mining-enabled` is refused at start for the same reason; these two methods
-    * are served with the internal miner off, so they say it themselves.
+    * The unified layout moves its head in place, and the miner's readers of the head (the work given, the solution
+    * taken) do not yet check that the head they built on is still the head at the seal (B-293). Work is refused where
+    * it is asked for, and said so. `mining.mining-enabled` is refused at start for the same reason; these methods are
+    * served with the internal miner off, so they say it themselves.
     */
   private def noRouteForMinedBlocks: Option[JsonRpcError] =
     Option.when(blockchainReader.holdsStateInPlace)(JsonRpcError.LogicError(EthMiningService.NoRouteForMinedBlocks))
@@ -220,7 +221,12 @@ class EthMiningService(
       GetHashRateResponse(hashRate.map { case (_, (hr, _)) => hr }.sum)
     }
 
-  def startMiner(@unused req: StartMinerRequest): ServiceResponse[StartMinerResponse] =
+  // Refused on the unified layout as work is (forge, spec 018 C5a part 10): otherwise it answers `true` and the miner,
+  // which `mining.mining-enabled` refused at start, does nothing.
+  def startMiner(req: StartMinerRequest): ServiceResponse[StartMinerResponse] =
+    noRouteForMinedBlocks.fold(minerStarted(req))(refusal => IO.pure(Left(refusal)))
+
+  private def minerStarted(@unused req: StartMinerRequest): ServiceResponse[StartMinerResponse] =
     mining.ifEthash[ServiceResponse[StartMinerResponse]] { ethash =>
       IO {
         ethash.sendMiner(MinerProtocol.StartMining)

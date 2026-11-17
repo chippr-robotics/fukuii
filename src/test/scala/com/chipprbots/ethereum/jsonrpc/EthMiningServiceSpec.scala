@@ -505,6 +505,9 @@ class EthMiningServiceSpec
       .unsafeRunSync()
       .left
       .map(_.message) shouldBe Left(EthMiningService.NoRouteForMinedBlocks)
+    // forge, spec 018 C5a part 10: the internal miner is not started either, which answered true and did nothing
+    ethMiningService.startMiner(StartMinerRequest()).unsafeRunSync().left.map(_.message) shouldBe
+      Left(EthMiningService.NoRouteForMinedBlocks)
     syncingController.expectNoMessage(100.millis)
     // and the node is not counted as mining for having been asked
     ethMiningService.getMining(GetMiningRequest()).unsafeRunSync() shouldEqual Right(GetMiningResponse(false))

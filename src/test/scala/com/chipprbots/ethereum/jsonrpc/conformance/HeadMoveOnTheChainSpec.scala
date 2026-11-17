@@ -1931,7 +1931,9 @@ class HeadMoveOnTheChainSpec extends ScalaTestWithActorTestKit with AnyFlatSpecL
       chosen.latestValidHash shouldBe Some(blocks(29).header.hash.value)
     }
 
-  it should "stop at a block whose body is not stored, and keep what it committed" taggedAs (
+  // spec 018 C5a part 10 (beacon C6): told as the move of the head it made, not as the body it stopped at, so that the
+  // escalation does not count a catch-up that committed blocks as a refusal
+  it should "stop at a block whose body is not stored, keep what it committed, and say it moved the head" taggedAs (
     UnitTest,
     ConsensusTest
   ) in {
@@ -1942,7 +1944,7 @@ class HeadMoveOnTheChainSpec extends ScalaTestWithActorTestKit with AnyFlatSpecL
     val recovery = new on.Recovery(maxBlocks = 1, maxAdopted = 4, catchUp = 30, chunk = 5)
     val (_, choose) = recoveringEngine(on, recovery)
     statusOf(choose(blocks(43))) shouldBe PayloadStatus.Syncing
-    recovery.outcomes.last shouldBe StateRecovery.Outcome.MissingBody(refOf(blocks(30).header))
+    recovery.outcomes.last shouldBe StateRecovery.Outcome.Adopted(10)
     // two chunks of five were committed; the third was not begun
     recovery.adoptedBlocks shouldBe (21 to 30).map(BigInt(_))
     on.holds(blocks(29).header, blocks.take(30))
@@ -1987,7 +1989,7 @@ class HeadMoveOnTheChainSpec extends ScalaTestWithActorTestKit with AnyFlatSpecL
     blocks.slice(31, 44).foreach(block => on.writer.storeBlockByHashOnly(block).commit())
     val first = new on.Recovery(maxBlocks = 1, maxAdopted = 4, catchUp = 30, chunk = 5)
     statusOf(recoveringEngine(on, first)._2(blocks(43))) shouldBe PayloadStatus.Syncing
-    first.outcomes.last shouldBe a[StateRecovery.Outcome.MissingBody]
+    first.outcomes.last shouldBe StateRecovery.Outcome.Adopted(10)
     // the body arrives; as after a restart, another recovery over the same datadir
     on.writer.storeBlockByHashOnly(blocks(30)).commit()
     val second = new on.Recovery(maxBlocks = 1, maxAdopted = 4, catchUp = 30, chunk = 5)

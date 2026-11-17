@@ -226,11 +226,13 @@ class NetworkProtocolConfigSpec extends AnyFlatSpec with Matchers with ParallelT
       NetworkProtocolConfig(snap1 = false).capabilities() shouldBe List(Capability.ETH68, Capability.ETH69)
     }
 
-  "InstanceConfig.supportedCapabilities" should "not advertise SNAP while state.path-live is on" taggedAs UnitTest in {
+  // spec 018 C5a part 10 (the user's decision of 2026-11-17): a node on the guard syncs by SNAP and follows the head
+  // from its hand-off, so it advertises SNAP as any node does
+  "InstanceConfig.supportedCapabilities" should "advertise SNAP whether state.path-live is on or off" taggedAs UnitTest in {
     val guardOn = instanceWithOverride("state.path-live", true)
-    guardOn.supportedCapabilities shouldBe List(Capability.ETH68, Capability.ETH69)
-    // and the guard ships off: SNAP is advertised
-    instanceWithOverride("state.path-live", false).supportedCapabilities should contain(Capability.SNAP1)
+    val guardOff = instanceWithOverride("state.path-live", false)
+    guardOn.supportedCapabilities should contain(Capability.SNAP1)
+    guardOn.supportedCapabilities shouldBe guardOff.supportedCapabilities
     Config.supportedCapabilities should contain(Capability.SNAP1)
   }
 

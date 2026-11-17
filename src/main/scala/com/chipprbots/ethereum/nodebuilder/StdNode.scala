@@ -101,6 +101,7 @@ abstract class BaseNode extends Node:
     if blockchainReader.holdsStateInPlace then
       // a clear of the state that a kill interrupted is finished first: its rows are deleted before the state is
       // looked at (spec 018 C5a part 3). It refuses a datadir that has the mark of one and a state.
+      refuseSnapRepairOnTheGuard()
       finishPendingStateClear()
       forgetGivenUpBranchesIfAsked()
       reconcileState()
@@ -112,6 +113,7 @@ abstract class BaseNode extends Node:
     loadGenesisData()
     repairStoredBodies() // after genesis is loaded, before the sync controller reads the backfill cursors
     importChainData() // Must complete before APIs so queries return chain data
+    refuseRegularSyncFromGenesisOnTheGuard() // after the genesis and a chain file: what they leave is what syncs
     tuiStarted(StartupPhase.Storage)
 
     // Phase 2: P2P networking — bind discovery + TCP server BEFORE the user-facing
@@ -388,18 +390,9 @@ abstract class BaseNode extends Node:
   private lazy val readinessPort: Option[Int] =
     Try(instanceConfig.config.getInt("network.readiness-port")).toOption
 
-  private def startSyncController(): Unit =
-    if instanceConfig.statePathLive then
-      // Spec 018 Track C, C3b: on the unified state layout a block is committed in place or not at all until the
-      // overlay (C4a). Network sync brings side branches and reorganisations, which need the state of blocks that
-      // are not the head. So a node on the in-development guard imports chain files and serves what it holds.
-      log.error(
-        "[STATE-PATH-LIVE] fukuii.state.path-live is on: this node does NOT sync from the network. The unified " +
-          "state layout holds the state of one block until its overlay lands (spec 018 C4), so it cannot follow a " +
-          "side branch or a reorganisation. It takes blocks from a chain file (the `import` command, " +
-          "admin_importChain) and answers from the state it holds."
-      )
-    else syncController ! SyncController.WrappedSyncProtocol(SyncProtocol.Start)
+  // On the unified state layout too since spec 018 C5a part 10: a SNAP sync hands its state off onto it, and the
+  // overlay follows side branches and reorganisations from there.
+  private def startSyncController(): Unit = syncController ! SyncController.WrappedSyncProtocol(SyncProtocol.Start)
 
   private def startMining(): Unit =
     // A node that produces blocks takes transactions from peers: core-geth's StartMining calls
@@ -764,6 +757,32 @@ abstract class BaseNode extends Node:
     if jsonRpcConfig.ipcServerConfig.enabled then tryAndLogFailure(() => jsonRpcIpcServer.close())
     tryAndLogFailure(() => Metrics.get().close())
     tryAndLogFailure(() => storagesInstance.dataSource.close())
+
+  /** `-Dfukuii.snap.clearDoneOnStart` on the unified state layout (spec 018 C5a part 10): refused, and the node does
+    * not start. It re-runs SNAP's healing over a state the node holds, on the hash-keyed store, which this layout never
+    * reads; a SNAP sync here never starts over a state. The validator does not see a system property, so it is here.
+    */
+  def refuseSnapRepairOnTheGuard(): Unit =
+    com.chipprbots.ethereum.blockchain.sync.PathLiveSync
+      .snapRepairRefusal(System.getProperty("fukuii.snap.clearDoneOnStart", "false").toBoolean)
+      .foreach(why => throw new IllegalStateException(why))
+
+  /** A node on the unified state layout that would run regular sync from its genesis (spec 018 C5a part 10, the user's
+    * decision of 2026-11-17): refused, and the node does not start
+    * ([[com.chipprbots.ethereum.blockchain.sync.PathLiveSync.regularSyncFromGenesisRefusal]]).
+    */
+  def refuseRegularSyncFromGenesisOnTheGuard(): Unit =
+    storagesInstance.storages.pathStateStorage.foreach { pathState =>
+      val appState = storagesInstance.storages.appStateStorage
+      com.chipprbots.ethereum.blockchain.sync.PathLiveSync
+        .regularSyncFromGenesisRefusal(
+          doSnapSync = syncConfig.doSnapSync,
+          testMode = Config.testmode,
+          anchor = pathState.anchor,
+          syncStarted = appState.isSnapSyncDone() || appState.getSnapSyncPivotBlock().isDefined
+        )
+        .foreach(why => throw new IllegalStateException(why))
+    }
 
   /** Finishes, at a start, a clear of the state for a sync from scratch that did not reach its end
     * ([[com.chipprbots.ethereum.db.storage.pathstate.PathStateStorage.finishPendingClear]]).

@@ -4589,7 +4589,17 @@ and after a clear. A kill is not a loss of power: the live runs, each with a `ki
   `ethereum/engine`, `ethereum/sync` and devp2p's snap become reachable. hive's imported chain is an anchor above the
   genesis, which exercises step 3's refusal.
 
-**Decisions for the user** (each the readers' recommendation first):
+**The user's decisions (2026-11-17)**: 1, 2 and 3 as recommended below. The 2026-11-11 decision not to advertise SNAP
+on the guard is ended by decision 2, as it said it would be. Built in this session (the main session took the work over
+from lane 2 on the user's word), on `fix/018-c5a-part10`; how each decision is built:
+- 1: `SnapFinalization.startHandoffSample` does not sample when the excluded set has accounts: it sends
+  `HealingImpossible`, and the sync restarts heal-only from the durable set. The sample on the guard is run with no
+  holes tolerated.
+- 2: `InstanceConfig.supportedCapabilities` advertises SNAP whatever the guard says; the start's warning is gone.
+- 3: `StdNode.refuseRegularSyncFromGenesisOnTheGuard`, after the genesis and a chain file are loaded: no anchor above
+  the genesis, no sync done or in progress, and `do-snap-sync` off is refused, naming the flag. Test mode is left alone.
+
+**Decisions for the user, as they were put** (each the readers' recommendation first):
 1. **A hand-off that left accounts out, on the guard**: refuse it and keep healing until nothing is left out
    (spec 022's "complete means nothing excluded"), until C5b gives this layout a fetch of its own (beacon, forge).
    The alternative lets it through and leans on the escalation, at the cost of a whole SNAP each time.

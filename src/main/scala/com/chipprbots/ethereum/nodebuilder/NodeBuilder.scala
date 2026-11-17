@@ -1408,6 +1408,42 @@ trait SyncControllerBuilder extends SyncControllerRefBuilder:
           stateRecoveryForSync.fold { clearNow(); true }(_.reset()(clearNow()))
     }
 
+  /** A sync on the unified layout (spec 018 C5a part 10): the hand-off each SNAP sync ends with, over the rows SNAP
+    * writes (the one data source), and the check before SNAP begins. None on the hash layout.
+    */
+  lazy val pathLiveSyncPort: Option[SyncController.PathLiveSyncPort] =
+    storagesInstance.storages.pathStateStorage.map { pathState =>
+      import com.chipprbots.ethereum.db.storage.PathNodeStorage
+      import com.chipprbots.ethereum.db.storage.pathstate.BlockRef
+      import com.chipprbots.ethereum.db.storage.pathstate.SyncHandoff
+      val storages = storagesInstance.storages
+      val built = new SyncHandoff(
+        pathState,
+        new PathNodeStorage(storages.flatSlotStorage.dataSource),
+        storages.appStateStorage,
+        storages.blockHeadersStorage,
+        storages.blockNumberMappingStorage,
+        storages.chainWeightStorage,
+        storages.blockBodiesStorage,
+        storages.evmCodeStorage
+      )
+      new com.chipprbots.ethereum.blockchain.sync.PathLiveSync(
+        pathState,
+        storages.appStateStorage,
+        built,
+        genesis = () =>
+          val header = blockchainReader.genesisHeader
+          BlockRef(header.hash.value, header.number.value, header.stateRoot.value)
+        ,
+        resetRecoveries = clear => stateRecoveryForSync.fold { clear(); true }(_.reset()(clear())),
+        stateCleared = () =>
+          forkChoiceManagerForSync.foreach(_.clear())
+          escalationWatch.foreach(_.stateCleared())
+        ,
+        handedOffNow = () => escalationWatch.foreach(_.stateCleared())
+      )
+    }
+
   lazy val syncController: org.apache.pekko.actor.typed.ActorRef[SyncController.Command] =
     val ref = classicSystem
       .spawn(
@@ -1435,7 +1471,8 @@ trait SyncControllerBuilder extends SyncControllerRefBuilder:
           reorgState = blockchain,
           txGossipGate = txGossipGate,
           peerScoringManager = Some(peerScoringManager),
-          stateEscalation = stateEscalationPort
+          stateEscalation = stateEscalationPort,
+          pathLiveSync = pathLiveSyncPort
         ),
         "sync-controller"
       )

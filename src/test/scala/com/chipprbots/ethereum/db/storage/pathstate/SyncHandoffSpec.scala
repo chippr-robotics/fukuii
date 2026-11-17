@@ -84,6 +84,26 @@ class SyncHandoffSpec extends AnyFlatSpec with Matchers:
     s.appState.isBytecodeRecoveryDone() shouldBe true
   }
 
+  // spec 018 C5a part 10 (forge): an earlier, higher pivot's bootstrap stored its header and its place in the index
+  it should "leave no entry of the index by number above the pivot, in the same write" taggedAs UnitTest in {
+    val s = new Synced
+    val other = ByteString(Array.fill[Byte](32)(0x42))
+    s.numbers
+      .put(BigInt(5001), other)
+      .and(s.numbers.put(BigInt(5100), other))
+      .and(s.numbers.put(BigInt(4999), other))
+      .and(s.appState.putSnapSyncBootstrapTarget(5100))
+      .commit()
+    s.source.plain = 0
+
+    s.commit()
+
+    withClue("one write, synced: ")((s.source.synced, s.source.plain) shouldBe (1, 0))
+    (5001 to 5100).flatMap(n => s.numbers.get(BigInt(n))) shouldBe empty
+    withClue("below the pivot the header download's entries stay: ")(s.numbers.get(BigInt(4999)) shouldBe Some(other))
+    s.numbers.get(BigInt(5000)) shouldBe Some(s.pivot.hash.value)
+  }
+
   it should "write a recovery that is owed as owed, over what an earlier sync left" taggedAs UnitTest in {
     val s = new Synced
     s.appState.storageRecoveryDone().and(s.appState.bytecodeRecoveryDone()).commit()

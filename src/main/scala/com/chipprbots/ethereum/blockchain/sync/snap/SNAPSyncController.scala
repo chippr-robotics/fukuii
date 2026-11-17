@@ -111,7 +111,10 @@ private class SNAPSyncControllerImpl(
     val headerChainCheck: HeaderChainCheck = HeaderChainCheck.LinkOnly,
     // Spec 027 slice 4a: the node's peer scorer, fed by the request tracker. Observation only; None where nothing
     // scores (unit suites).
-    peerScoringManager: Option[PeerScoringManager] = None
+    peerScoringManager: Option[PeerScoringManager] = None,
+    // Implements `SnapFinalizationState.handoff` (spec 018 C5a part 10): the end of a sync on the unified state layout,
+    // built from the node's path state storage when the guard is on. None on the hash layout.
+    val handoff: Option[SyncHandoff] = None
 )(implicit val ec: ExecutionContext)
     extends CoordinatorHandles
     with PhaseFlags
@@ -215,10 +218,6 @@ private class SNAPSyncControllerImpl(
 
   // Implements `SnapFinalizationState.sharedBlacklist`: the blacklist SyncController shares with the rest of sync.
   val sharedBlacklist: Blacklist = blacklist
-
-  // Implements `SnapFinalizationState.handoff`: none. A sync does not start on the unified state layout yet (spec 018
-  // C5a part 10 lifts that, and builds this from the node's path state storage).
-  val handoff: Option[SyncHandoff] = None
 
   // SNAP download progress storage (namespace 'p'). Shares the same RocksDB DataSource as
   // AppStateStorage but uses a dedicated namespace so progress survives crash-restart without
@@ -1540,7 +1539,9 @@ object SNAPSyncController:
       // The header download's check for this chain (HeaderChainCheck.forChain). Parent-link only by default, which is
       // what suites that drive SNAP with synthetic headers need; production passes the chain's check.
       headerChainCheck: HeaderChainCheck = HeaderChainCheck.LinkOnly,
-      peerScoringManager: Option[PeerScoringManager] = None
+      peerScoringManager: Option[PeerScoringManager] = None,
+      // Spec 018 C5a part 10: the hand-off onto the unified state layout. None on the hash layout.
+      handoff: Option[SyncHandoff] = None
   )(implicit ec: ExecutionContext): Behavior[Command] =
     Behaviors.setup[Command] { ctx =>
       Behaviors.withTimers[Command] { timers =>
@@ -1568,7 +1569,8 @@ object SNAPSyncController:
           failedFinalizationPivot,
           terminalTotalDifficultyOverride,
           headerChainCheck,
-          peerScoringManager
+          peerScoringManager,
+          handoff
         ).start() // #1378: start() arms the 5s PollHandshakedPeers timer that populates the
         //          controller's peerListHelper. Calling startSnapSync() directly bypasses it,
         //          leaving snapPeersForPivot permanently empty → pivot never selected.

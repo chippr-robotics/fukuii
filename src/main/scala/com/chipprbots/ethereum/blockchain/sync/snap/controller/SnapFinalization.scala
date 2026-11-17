@@ -485,21 +485,31 @@ private[snap] trait SnapFinalization extends FinalizationApi with ChainDownloadS
     */
   private def startHandoffSample(pivot: BigInt, pivotRoot: ByteString): Unit =
     val ending = handoff.getOrElse(throw new IllegalStateException("startHandoffSample on the hash layout"))
-    // Whether the sync left accounts out: a hole in their storage is then expected, and is fetched when a block asks.
     val (accountsLeftOut, _) = excludedAtHandOff()
-    val blockingEc = ctx.system.dispatchers.lookup(org.apache.pekko.actor.typed.DispatcherSelector.blocking())
-    ctx.log.info(
-      s"[HANDOFF] sampling the state of pivot $pivot from its root where the sync wrote it: nothing is copied " +
-        s"(accounts left out: $accountsLeftOut)"
-    )
-    pathPublish = Some((pivot, pivotRoot))
-    val work = scala.concurrent.Future {
-      ending.sample(pivotRoot, accountsLeftOut)
-    }(using blockingEc)
-    ctx.pipeToSelf(work) {
-      case scala.util.Success(result) => HandoffSampleDone(result)
-      case scala.util.Failure(cause)  => HandoffSampleFailed(cause)
-    }
+    if accountsLeftOut then
+      // The user's decision of 2026-11-17 (spec 018 C5a part 10): on this layout nothing fetches the storage of an
+      // account the sync left out once it has handed off (the only fetch writes the hash-keyed store), so the first
+      // block that reads one would be a fault, and the escalation a whole sync again. Healing goes on instead: the
+      // sync restarts heal-only, and the excluded set it resumes from is durable (spec 022: complete means nothing
+      // excluded).
+      ctx.log.warn(
+        s"[HANDOFF] Not handing off at pivot $pivot: this sync left accounts out, whose storage nothing fetches on the " +
+          "unified state layout after the hand-off. Healing goes on until none is left out."
+      )
+      syncController ! SyncProtocol.HealingImpossible
+    else
+      val blockingEc = ctx.system.dispatchers.lookup(org.apache.pekko.actor.typed.DispatcherSelector.blocking())
+      ctx.log.info(
+        s"[HANDOFF] sampling the state of pivot $pivot from its root where the sync wrote it: nothing is copied"
+      )
+      pathPublish = Some((pivot, pivotRoot))
+      val work = scala.concurrent.Future {
+        ending.sample(pivotRoot, accountsLeftOut = false)
+      }(using blockingEc)
+      ctx.pipeToSelf(work) {
+        case scala.util.Success(result) => HandoffSampleDone(result)
+        case scala.util.Failure(cause)  => HandoffSampleFailed(cause)
+      }
 
   /** The sample passed: finalisation again, past it (called from `syncing`). */
   private[snap] def onHandoffSampleDone(result: PathHandoffSample.Result): Behavior[Command] =
