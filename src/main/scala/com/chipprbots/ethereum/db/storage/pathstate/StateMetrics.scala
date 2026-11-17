@@ -149,6 +149,12 @@ object StateMetrics extends MetricsContainer with PathStateStorage.CommitObserve
 
   override def moveRefused(reason: ReorgRefusal): Unit = refusals(reason).increment()
 
+  // B-328: at open, at a genesis commit, at a hand-off; 0 when no state is held
+  override def anchorAt(anchor: Option[BlockRef]): Unit = anchorNumber.set(anchor.fold(0L)(_.number.toLong))
+
+  /** What the anchor gauge reads (tests). */
+  private[pathstate] def anchorGauge: Long = anchorNumber.get
+
   override def committed(commit: Commit): Unit =
     anchorNumber.set(commit.block.number.toLong)
     recordsKept.set((commit.block.number - commit.prunedTo + 1).toLong)

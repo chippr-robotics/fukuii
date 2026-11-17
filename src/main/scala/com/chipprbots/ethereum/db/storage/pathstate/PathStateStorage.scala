@@ -69,6 +69,9 @@ final class PathStateStorage(
   /** The lock of the in-place writers (data-model 7.0). */
   val lock: StateLock = new StateLock
 
+  // the anchor the datadir opens with is told, so that its gauge does not read 0 until the first commit (B-328)
+  told("the anchor at open")(settings.observer.anchorAt(clock.anchor))
+
   /** One move of the head at a time, from its plan to its last batch; and no commit of a block in between two batches
     * of it. A move of many blocks is a chain of batches, and the state lock is free between them: `moving` is what a
     * writer that adopts a block looks at under the state lock, and this lock is what it then waits on, with the state
@@ -735,6 +738,7 @@ final class PathStateStorage(
       clock.inFlight(StateMove(genesis, written.view.mapValues(_ => Option.empty[ByteString]).toMap))(
         dataSource.updateSync(updates)
       )
+      told("the anchor of the genesis")(settings.observer.anchorAt(Some(genesis)))
     }
 
   /** Commits the end of a sync from scratch (spec 018 C5a part 5; data-model 7.4): the rows the sync wrote are the
@@ -813,6 +817,7 @@ final class PathStateStorage(
             appState.putStateOrigin(pivot).updates ++
             appState.putStateAnchor(pivot).updates
         clock.inFlightBarrier(pivot)(dataSource.updateSync(updates))
+        told("the anchor of a hand-off")(settings.observer.anchorAt(Some(pivot)))
         // nothing was kept in memory of a datadir with no state; said again, so that it does not rest on that
         overlay.clear()
         window.set(None)
@@ -933,6 +938,7 @@ final class PathStateStorage(
         case Some(deletes) =>
           val updates: Seq[DataUpdate] = deletes ++ appState.removeStateMarks().updates
           clock.inFlightToNoState(dataSource.updateSync(updates))
+          told("no anchor")(settings.observer.anchorAt(None))
           // executed blocks kept beside a state that is gone are of no state, and neither is what was derived from
           // its records
           overlay.clear()
@@ -1042,6 +1048,7 @@ final class PathStateStorage(
           val begins: Seq[DataUpdate] =
             appState.stateClearBatch(genesisHash, atMillis, escalation, givenUpFor, trim, retry).updates
           clock.inFlightToNoState(dataSource.updateSync(begins))
+          told("no anchor")(settings.observer.anchorAt(None))
           // executed blocks kept beside a state that is gone are of no state, and neither is what was derived from its
           // records, the fault that was found in it, or the block that was finalized on it
           overlay.clear()
@@ -2342,6 +2349,11 @@ object PathStateStorage:
     /** A writer waited `nanos` for the state lock. */
     def lockWaited(nanos: Long): Unit = ()
     def committed(commit: Commit): Unit = ()
+
+    /** The block whose state the disk holds, where it is set otherwise than by a commit or a move (B-328): at open, at
+      * a genesis commit, at a sync's hand-off, and none at a clear.
+      */
+    def anchorAt(anchor: Option[BlockRef]): Unit = ()
 
     /** The head was moved, by a move of more than the commit of one block. */
     def moved(move: MoveOutcome.Moved): Unit = ()
