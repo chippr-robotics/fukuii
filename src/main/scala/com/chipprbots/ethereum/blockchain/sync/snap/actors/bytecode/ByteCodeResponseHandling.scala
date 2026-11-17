@@ -72,6 +72,12 @@ private[actors] trait ByteCodeResponseHandling:
             checkCompletion()
 
           case Right(validated) =>
+            // B-332: the peer answered. The controller sends SNAP.ByteCodes straight to this coordinator
+            // (CoordinatorHandles.forwardResponse), so the worker never sees the reply, and the release below completes
+            // the request with 0 items: no response credit for the peer, and 0 items for the rate tracker. Complete it
+            // here with the item count, as storage and heal processing do; the worker's release then finds it gone.
+            // An empty reply (the peer has none of the codes) is still an answer: 1, as there.
+            requestTracker.completeRequest(response.requestId, response.codes.size.max(1))
             // Store only the returned codes
             storeBytecodesWithHashes(validated.codesByHashInOrder) match
               case Left(error) =>
