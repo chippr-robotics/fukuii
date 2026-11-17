@@ -2528,14 +2528,15 @@ items:
     opened: 2026-11-17
     refs: []
     links:
-      prs: [1883, 1888]
+      prs: [1883, 1889]
       spec: "027"
+      branch: fix/snap-b332-bytecode-credit
     claim:
       by: cloud-retro
       agent: herald
       since: 2026-11-17T17:51:51Z
       heartbeat: 2026-11-17T18:09:02Z
-      branch: ccr-b2ff2f3b-cb6s76
+      branch: fix/snap-b332-bytecode-credit
     notes: "Copilot on #1883, verified: forwardResponse routes SNAP.ByteCodes to the coordinator, so ByteCodeWorker's ByteCodesResponseMsg arm is dead in production; since #1782 (spec 027 slice 4a). In v0.12.0; fix in 0.12.1"
   - id: B-333
     title: "Sprint retro skill (fukuii-sprint-retro) and the 0.12.1 retro: agent evals, A/B-tested agent edits, backlog prune"
