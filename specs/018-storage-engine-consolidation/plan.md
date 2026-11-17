@@ -4473,6 +4473,136 @@ held peers are read from the store once a peer.
 broken one at a time, 13 caught; two only after tests were added (the bootstrap's freshness, the controller's height
 for `branchServed`). (The downloader's three were run on the split that was then withdrawn.)
 
+#### C5a part 10: the refusals lifted, and a hand-off run live, as it is to be built (B-325) (design, 2026-11-17)
+
+**A design, not yet built.** Read before code by beacon (proof of stake), forge (ETC) and vault (the write order),
+each on staging at `47890a1`. Nothing below is code yet. It is for the main session, which owns the PR, and for the
+user's four decisions at the end.
+
+**What the guard refuses today**: `ConfigValidator.stateGuardErrors` refuses `sync.do-snap-sync` and mining;
+`StdNode.startSyncController` never starts the controller (`[STATE-PATH-LIVE]`); `InstanceConfig.supportedCapabilities`
+does not advertise SNAP; `SNAPSyncController.handoff` is `None`; ETC's SNAP is held to the hash scheme
+(`SyncController.loadSnapSyncConfig`, the `require` on `expectedScheme`).
+
+**What the three found that lifting those alone would break.** These are the substance of part 10; the lifting is
+a few lines.
+
+- **No genesis clear before SNAP** (all three, a blocker). `PathStateStorage.clearGenesisStateForSync` has no
+  caller. A fresh guard datadir holds the genesis anchor and its rows; SNAP writes beside them and
+  `SyncHandoff.commit` refuses a datadir with a state, so every sync fails at its end, hours later.
+- **SNAP can start over a live anchor** (all three, a blocker). Every route into SNAP clears `SnapSyncDone` first or
+  does not look: `resnapNow` (from `RegularSyncStuck`), the `clearDoneOnStart` arm, the dangling-best clear, the
+  `(false, Snap)` start arm, `HealingImpossible`, the branch retry. Only `PivotAnchor.reanchor` (mid-sync) and
+  `commitHandoff` (at the end) refuse.
+- **The hash store is still repaired and audited** (all three, a blocker). After a hand-off `isSnapAuditOwed` is set
+  and `BackgroundAudit.gate` answers `Run`: the audit would fetch the whole trie into CF `n`, which this layout never
+  reads and the clear never deletes. The `(true, Snap)` start arm runs `startRecovery` when a flag is down;
+  `MissingCodeNeedsBulkRecovery` runs the bulk code recovery; the importer's missing-node path
+  (`BlockImporter` `FetchStateNode`, then `stateStorage.repairNode`) writes the hash store, so the same block fails
+  again, `RegularSyncStuck` is raised and `resnapNow` runs over the anchor (forge).
+- **ETC's SNAP writes the hash store** (vault, forge, a blocker). With the Hash scheme there is no `PathNodeStorage`:
+  the sample reads position families only and stops every hand-off, which heals and stops again. **B-308 (lane 3)
+  is a hard prerequisite on ETC**, not hygiene. On ETH the Path scheme already writes positions only; one call,
+  `FrontierPersistence` (`storeRawNodes`), is unverified on Path (vault).
+- **A hand-off that left accounts out cannot fetch their storage on this layout** (beacon C4, forge): the sample
+  tolerates the holes, and the only fetch writes the hash store. The first block that reads one is a fault, then 64
+  of them, then an escalation and a whole SNAP again. See decision 1.
+- **The escalation's watch counts during SNAP and carries the count over the hand-off** (beacon C5). With no anchor,
+  a fork choice to a head stored by hash reaches `recoverStateOf`, whose walk ends `MissingHeader` (a fault) or
+  `TooLong` (unreachable, at once). The verdicts are dropped while SNAP runs, but the count grows, and the first
+  refusal after the hand-off gives a freshly synced state up.
+- **A catch-up that moved the head is counted as a refusal** (beacon C6, part 8's note): `catchUp` ends `MissingBody`
+  after committing thousands of blocks.
+- **Checkpoint import gives a node that says it is synced with no state** (forge): `CheckpointImporter` writes the
+  hash store and sets `snapSyncDone` and the best block with no anchor.
+- **The index above the pivot** (forge, a warning): entries an earlier, higher pivot bootstrap left above the final
+  pivot stay (B-307 c2 lowers the target; the healing bootstrap). Below the pivot the header download overwrites them
+  by construction (forge's note of 5b is met there, not pinned). Consensus is untouched (BLOCKHASH walks by hash); the
+  PoW feed's canonical test and RPC by number read the index.
+
+**The changes, in the order they land.** Before B-308 merges, everything but step 6 can be built and tested on
+staging; the PR opens after B-308 (the main session's call).
+
+1. **The lift.** `ConfigValidator.stateGuardErrors`: `do-snap-sync` is allowed; mining stays refused (B-293), its
+   message reworded (it says this node does not sync); new refusals on the guard: `checkpoint-sync-file`/`-url`
+   (until C5c) and an explicit `snap-sync.storage-scheme = hash`. `StdNode.startSyncController` loses its guard arm.
+   `-Dfukuii.snap.clearDoneOnStart` throws at start on the guard (`StdNode.start`, beside `reconcileState`: a system
+   property the validator does not see). `miner_start`, which answers `true` and does nothing, is refused as
+   `eth_getWork` is (forge).
+2. **The hand-off built.** `NodeBuilder.syncHandoff: Option[SyncHandoff]` from `pathStateStorage`, its
+   `PathNodeStorage` on the one `dataSource` SNAP writes to; passed through `SyncController.apply` to
+   `SNAPSyncController`, whose `val handoff = None` becomes the parameter (not under `snap/controller`, so
+   `verify.sh`'s branch rule does not apply).
+3. **A sync's start on the guard** (`SyncController.startSnapSync`, through a port beside `StateEscalationPort`, off
+   the controller's thread): a genesis anchor is cleared (`clearGenesisStateForSync`, inside
+   `stateRecoveryForSync.reset`, then the fork choice manager's memory and `watch.stateCleared()`, as the
+   escalation's clear does); no anchor resumes; **an anchor above the genesis, or the clear's mark set, is refused**
+   at ERROR, and the controller goes to regular sync. One check behind every route into SNAP; only the escalation's
+   clear, which removes the anchor first, reaches SNAP over a state.
+4. **Nothing of the hash store on the guard.** `RegularSyncStuck` is logged and does not re-SNAP (the escalation is
+   the way); the `(true, Snap)` start arm goes to regular sync; `auditGate` answers disabled;
+   `bulkCodeRecoveryAllowed` is false (code is fetched per hash, `evmCodeStorage` is shared);
+   `logSnapStateRootDiagnostic` and `forceAuditPassOnce` are skipped; the importer's missing-node path is a state
+   fault with no fetch and no `repairNode` (it reaches the feed as a fault of this node).
+5. **The watch quiet until the hand-off.** No `recoverStateOf` without an anchor; `watch.stateCleared()` in the
+   `SnapSyncFinalized` arm (which also drops recoveries asked for before it); a catch-up that committed blocks before
+   it stopped is told as a move of the head, not a refusal.
+6. **ETC's scheme** (after B-308): on the guard the scheme is Path on every network, by override
+   (`config.copy(storageScheme = Path)`: Mordor's and ETC's configs set none, and the fallback is Hash); off the
+   guard it is as it is.
+7. **The index above the pivot**: the hand-off's batch deletes the entries in (pivot, highest indexed], with B-303's
+   trim.
+8. **SNAP advertised on the guard**, if the user decides so (decision 2): `snapServed = true`, the warning removed.
+   Serving already reads the overlay, and answers empty for a root it does not hold (vault asks it be confirmed on
+   the guard before the switch).
+
+**Gates still open on staging**: B-304 (#1873), B-310 (#1875), B-311 (#1873) in review; B-308 open (lane 3).
+B-297, B-300, B-301, B-303, B-306 and B-307 are merged.
+
+**Tests** (each with the step it pins): `ConfigValidatorSpec` (SNAP allowed, mining, checkpoint sync and
+`storage-scheme = hash` refused; 1); `StdNode`/start (`clearDoneOnStart` throws; 1); `SyncControllerSpec` on the guard
+(the SNAP child gets the hand-off, 2; the genesis cleared, an anchor above it and the mark refused, 3; a stuck sync
+does not re-SNAP, no recovery, no audit, no bulk code, 4; ETC gets Path, 6); `RegularSyncSpec` (a missing node on the
+guard: no `FetchStateNode`, nothing written to the hash store; 4); `HeadMoveOnTheChainSpec` (no recovery and no count
+without an anchor, the count begun again at the hand-off, a partial catch-up a move; 5); `StateIngestDurabilitySpec`
+(the hand-off held while accounts are left out, if decision 1 is taken); `SyncHandoffSpec` (no index entry above the
+pivot after the commit; 7); `ChainDownloaderSpec` (a validated header replaces the bootstrap's entry; pins forge's
+5b note); `InstanceConfigSpec` (8). **Kill tests to add** (vault): a kill between the genesis clear and SNAP's first
+progress write, then a start with `do-snap-sync` off (it must fail loudly, not run regular sync on no state); a kill
+after the hand-off and before `SnapSyncFinalized` (regular sync, no audit, no scan). CF `n` empty after a whole SNAP
+and after a clear. A kill is not a loss of power: the live runs, each with a `kill -9`, are the proof of that.
+
+**The live runs, after the PR merges** (planned with the main session first; the dev-node host's rules):
+- **Mordor, fresh, on the guard**: no `[STATE-PATH-LIVE]`; snap/1 advertised; one genesis `[STATE-CLEAR]`; the Path
+  scheme logged, no `[PATH-PUBLISH]`, CF `n` stays empty; the hand-off with a sample of no holes and the window's
+  bodies fetched; `db.state.anchor.number` at the pivot. Then 24 h following the head (6 h at the least): the head's
+  hash matches a core-geth node every 1,000 blocks; a reorganisation followed (`db.state.move.blocks{side=reversed}`
+  above 0); `db.state.reorg.refused`, `recovery.escalation.triggers` and tombstones at 0; no `[LOCAL-STATE-FAULT]`,
+  `[STATE-CORRUPT]` or `RegularSyncStuck`; EG-12's window (an ommer block in pivot+1..+6, BLOCKHASH in the first 256).
+- **Sepolia, fresh, on the guard, with a consensus client**: as above for the start and the hand-off; then `Catching
+  up N block(s)` ending `Adopted`; "Node considered synced (forkchoiceUpdated set the head)"; 24 h of VALID each slot
+  with no `LOCAL FAULT`/`UNREACHABLE` and no escalation, and none counted while no anchor existed; `eth_getProof` at
+  the head and 64 below it equal to geth's.
+- **On each**: `kill -9` mid-SNAP, during the catch-up (Sepolia), and while following; each start resumes with no
+  audit and no recovery scan.
+- **hive** (B-314): `hive/fukuii/fukuii.sh` needs a switch for the guard first; then the re-org families of
+  `ethereum/engine`, `ethereum/sync` and devp2p's snap become reachable. hive's imported chain is an anchor above the
+  genesis, which exercises step 3's refusal.
+
+**Decisions for the user** (each the readers' recommendation first):
+1. **A hand-off that left accounts out, on the guard**: refuse it and keep healing until nothing is left out
+   (spec 022's "complete means nothing excluded"), until C5b gives this layout a fetch of its own (beacon, forge).
+   The alternative lets it through and leans on the escalation, at the cost of a whole SNAP each time.
+2. **SNAP advertised on the guard**: yes (beacon, forge, vault). It reverses the decision of 2026-11-11 ("advertised
+   again in the slice in which the node follows the head"), which is this slice: the capability is mutual, so a node
+   that does not advertise it cannot sync by SNAP at all.
+3. **A fresh node on the guard with `do-snap-sync = false`** (Sepolia's and Platåberget's shipped configs): refuse at
+   start, naming the flag (beacon). Otherwise it runs regular sync from the genesis, the first fork choice is
+   unreachable, and the escalation clears the genesis and starts SNAP anyway, a start that begins with an escalation.
+   The alternative is that no anchor above the genesis and no sync done means SNAP on the guard, whatever the flag.
+4. **The weight arm's re-check when the head moved** (B-315) is not needed for part 10 (forge: the importer's lock
+   serialises every move on ETC); no decision, recorded.
+
 ### Destructive change (C8a and C8b): the vault protocol blocks
 
 ```
