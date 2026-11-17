@@ -2690,3 +2690,13 @@ items:
     links:
       spec: none
     notes: beacon-b005, flag-only (consensus file, inline-cleanup protocol). Comment only.
+  - id: B-342
+    title: BaseNode.shutdown forces lazy vals (actor system, discovery, mining) a failed start never built, building them only to stop them
+    priority: P3
+    status: open
+    area: node
+    opened: 2026-11-17
+    refs: []
+    links:
+      spec: none
+    notes: "Seen in B-274: after a start that throws early, shutdown touches system, peerDiscoveryManagerTyped, mining, Engine API server. Each is Try-wrapped and the failed-start shutdown is bounded (60 s), so it is slow/noisy, not wrong. Track which components started and stop only those."
