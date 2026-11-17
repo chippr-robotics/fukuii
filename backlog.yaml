@@ -2523,12 +2523,17 @@ items:
   - id: B-327
     title: "RegularSyncSpec: pin a missing trie node on path-live (no FetchStateNode, nothing written to CF n) and missing code fetched by hash"
     priority: P3
-    status: open
+    status: claimed
     area: sync
     opened: 2026-11-17
     refs: []
     links:
       spec: 018
+    claim:
+      by: cloud-dc960fdc
+      agent: main
+      since: 2026-11-17T19:19:22Z
+      heartbeat: 2026-11-17T19:19:22Z
     notes: "forge W3 on #1880; the conversion is pinned in ConsensusAdapterEscalationSpec only"
   - id: B-328
     title: Seed db.state.anchor.number from the anchor at open (path-live)
