@@ -42,11 +42,6 @@ jobs:
       - name: Build documentation
         run: mkdocs build --site-dir _linkcheck/fukuii
 
-      # Two remaps check links that point at this repo against this checkout instead of the network:
-      #   - the site's own deployed URLs (each page's rel=canonical) -> the local build, since the
-      #     deployed site lags a PR that adds pages;
-      #   - github.com/.../fukuii/blob|tree/main/<path> -> <path> in the checkout, since main lags
-      #     staging until release. A link to a file that does not exist in the tree still fails.
       # Cache results so unchanged links are not re-fetched on every PR (fewer requests = fewer 5xx/429s).
       - name: Restore lychee cache
         uses: actions/cache@v4
@@ -55,6 +50,11 @@ jobs:
           key: lychee-${{ github.run_id }}
           restore-keys: lychee-
 
+      # Two remaps check links that point at this repo against this checkout instead of the network:
+      #   - the site's own deployed URLs (each page's rel=canonical) -> the local build, since the
+      #     deployed site lags a PR that adds pages;
+      #   - github.com/.../fukuii/blob|tree/main/<path> -> <path> in the checkout, since main lags
+      #     staging until release. A link to a file that does not exist in the tree still fails.
       # github.com throttles unauthenticated bursts with 503/429. The site has ~180 distinct github.com
       # links, so: authenticate (GITHUB_TOKEN raises the limit), cap concurrency, and retry with backoff.
       # bugs.openjdk.org answers every automated client with 403 (bot block, never a dead link), so it
