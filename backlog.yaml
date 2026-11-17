@@ -892,12 +892,15 @@ items:
   - id: B-109
     title: Skip re-downloading state at a sync restart when the target root is already present
     priority: P3
-    status: open
+    status: dropped
     area: sync
     opened: 2026-09-27
+    closed: 2026-11-17
     refs: [A-003]
     links: {}
-    notes: "SyncStateSchedulerActor.scala no longer exists: re-scope (SNAP) or drop."
+    notes: |-
+      SyncStateSchedulerActor.scala no longer exists: re-scope (SNAP) or drop.
+      2026-11-17 dropped: SyncStateSchedulerActor removed; SNAP resume is spec 022's
   - id: B-110
     title: On a malformed trie during sync, restart from a new target instead of continuing
     priority: P3
