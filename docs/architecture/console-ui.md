@@ -230,8 +230,9 @@ consensus layer waiting for ever, and the warning's text says how many (`no CL y
 JWT failures)`). The golden files `cl-{s,m,l}-{connected,waiting,disconnected}-{emoji,ascii}.txt` and
 `cl-m-100x32-disconnected-{emoji,ascii}.txt` have the states. The counts are the node's own, each status under its own count: until B-193 `engine_newpayload_invalid` counted an
 ACCEPTED payload (stored, not executed), and any status it did not know, with the INVALID ones; it now counts INVALID
-answers alone, and `engine_newpayload_accepted` the ACCEPTED ones. SYNCING is shown only when something counted it (no
-caller records one: this node answers a payload it cannot yet execute ACCEPTED).
+answers alone, and `engine_newpayload_accepted` the ACCEPTED ones. SYNCING is shown only when something counted it: since
+B-005 a payload the node cannot yet execute is SYNCING when it extends the chain being followed (a canonical parent, or
+the head the consensus client named) and ACCEPTED on a side branch.
 A payload the node already held is answered VALID without being recorded, so "last newPayload" does not move for it,
 which is why the newPayload alert needs a peer ahead of the node's head. With none recorded at all it counts from when
 the consensus layer was first seen, or from the node's start if that is later, so a consensus layer that attaches to a
