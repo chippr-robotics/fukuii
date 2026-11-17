@@ -34,10 +34,10 @@ class PathLiveSyncSpec extends AnyFlatSpec with Matchers:
   private class Node(recoveryExecuting: Boolean = false, val source: Failing = new Failing):
     val chain = new CanonicalChainOnPositions(source = source)
     // the block the chain began at stands for the genesis: what a node holds before it has synced
-    val genesis = chain.refOf(chain.head)
+    val genesis: BlockRef = chain.refOf(chain.head)
     var cleared = 0
     var handedOff = 0
-    var clearedBeforeTold = Option.empty[Boolean]
+    var clearedBeforeTold: Option[Boolean] = None
     val port = new PathLiveSync(
       chain.state,
       chain.appState,
