@@ -1,7 +1,8 @@
 # fukuii shared backlog (schema version 1). Rendered at https://docs.fukuii.com/development/tracker/
 # Change it with scripts/backlog/backlog.py on staging (claim, status, done, ...); README.md has the protocol.
 # Hand edits in the GitHub web UI are fine: keep the schema (backlog.py check), never delete or reuse an id
-# (drop the item instead). Comments other than this header are not kept when the tool rewrites the file.
+# (drop the item instead; `backlog.py prune` moves closed items to archive.yaml). Comments other than this
+# header are not kept when the tool rewrites the file.
 version: 1
 expiry_hours: 24
 items:
@@ -2523,19 +2524,14 @@ items:
   - id: B-333
     title: "Sprint retro skill (fukuii-sprint-retro) and the 0.12.1 retro: agent evals, A/B-tested agent edits, backlog prune"
     priority: P2
-    status: review
+    status: done
     area: tooling
     size: M
     opened: 2026-11-17
+    closed: 2026-11-17
     refs: []
     links:
       prs: [1884]
-      branch: ccr-b2ff2f3b-cb6s76
-    claim:
-      by: cloud-retro
-      agent: main
-      since: 2026-11-17T16:32:55Z
-      heartbeat: 2026-11-17T16:32:58Z
       branch: ccr-b2ff2f3b-cb6s76
     notes: "Retro: .claude/evals/suites/0.12.1/retro.md"
   - id: B-334
