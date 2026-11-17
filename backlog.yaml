@@ -3833,3 +3833,13 @@ items:
     links:
       spec: 018
     notes: forge's pre-code consult on B-293; MockedMinerSpec mocks the reader with the guard off
+  - id: B-331
+    title: TUI Ops pagination hint prints a Unicode ellipsis in ASCII mode (OpsPanels.scala:175; regenerate the ops-*-ascii goldens)
+    priority: P3
+    status: open
+    area: tui
+    opened: 2026-11-17
+    refs: []
+    links:
+      prs: [1883]
+    notes: "Copilot on #1883; cosmetic"
