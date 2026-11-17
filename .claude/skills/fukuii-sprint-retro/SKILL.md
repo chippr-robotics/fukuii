@@ -247,6 +247,23 @@ say why in the retro, add or fix tasks, and rerun.
    `retro(<ver>): agent updates from the sprint`, with the verdict table in the
    body. Agent-file edits are not consensus code; the user reviews them.
 
+## Phase 7 — the backlog, so the next sprint starts clean
+
+The shared backlog (`backlog.yaml` on the `tracker` branch, `.claude/agent-protocols/backlog-tracker.md`)
+is reviewed as part of the retro:
+
+1. **Review every item not done.** With > 60 items, split by area across ≤ 3 agents. For each item:
+   **DONE** (merged; cite the PR), **PARTIAL** (what remains), **DROP-CANDIDATE** (superseded, obsolete or
+   duplicate, with the reason), **KEEP** (and whether its priority fits the next sprint), **STALE CLAIM**
+   (heartbeat older than 24 h: finished, abandoned or live).
+2. **Apply what the evidence settles:** `backlog done <id> --pr N` for DONE with a merged PR; retitle
+   PARTIAL items with a note. Drops, priority changes and other holders' stale claims are the user's
+   call: list them, do not apply them unasked.
+3. **Prune:** `backlog prune --dry-run`, then `backlog prune`. Closed items move to `archive.yaml`;
+   ids stay taken and the page keeps counting them.
+4. **Carry-over view** in `retro.md` § Carry-over: counts by priority and area before/after, the P0/P1
+   list, blocked items and what they wait for, stale claims, themes, and the decisions left to the user.
+
 ## Output contract
 
 ```

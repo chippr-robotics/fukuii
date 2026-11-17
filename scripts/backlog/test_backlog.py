@@ -331,5 +331,74 @@ class RenderTests(GitCase):
         self.assertNotIn(b"\r", (outs[0] / "index.md").read_bytes())
 
 
+class PruneTests(GitCase):
+    def initial(self) -> dict:
+        return doc(
+            item(1, status="done", closed="2026-11-02", links={"prs": [10]}),
+            item(2, status="dropped", closed="2026-11-07", notes="2026-11-07 dropped: superseded"),
+            item(3, depends_on=["B-001"]),
+            item(4, status="done", closed="2026-11-07"),
+            item(5),
+        )
+
+    def archive(self) -> list:
+        return backlog.parse_archive(
+            self.git("--git-dir", str(self.origin), "cat-file", "blob", "tracker:archive.yaml"))
+
+    def test_prune_moves_closed_items_and_keeps_their_ids_taken(self):
+        a = self.clone("a")
+        r = self.cli(a, "prune", by="fc")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual([i["id"] for i in self.remote()["items"]], ["B-003", "B-005"])
+        self.assertEqual([i["id"] for i in self.archive()], ["B-001", "B-002", "B-004"])
+        self.assertIn("prune 3 closed items", self.last_message())
+        # the next id is not one of the archived ones, and an archived id cannot be claimed
+        self.assertEqual(self.cli(a, "add", "--title", "new", "--priority", "P3", "--area", "ci", by="fc").returncode, 0)
+        self.assertEqual(self.remote()["items"][-1]["id"], "B-006")
+        r = self.cli(a, "claim", "B-001", "--agent", "forge", by="fc")
+        self.assertEqual(r.returncode, 3, r.stderr)
+        self.assertIn("archived", r.stderr)
+        # show and list --all still find them; check counts both files
+        self.assertIn("B-001", self.cli(a, "show", "B-001").stdout)
+        self.assertIn("B-002", self.cli(a, "list", "--all").stdout)
+        r = self.cli(a, "check")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("3 archived", r.stdout)
+
+    def test_prune_before_a_date_and_dry_run(self):
+        a = self.clone("a")
+        r = self.cli(a, "prune", "--before", "2026-11-05", "--dry-run", by="fc")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("B-001", r.stdout)
+        self.assertNotIn("B-004", r.stdout)
+        self.assertEqual(len(self.remote()["items"]), 5)  # a dry run writes nothing
+        self.assertEqual(self.cli(a, "prune", "--before", "2026-11-05", by="fc").returncode, 0)
+        self.assertEqual([i["id"] for i in self.archive()], ["B-001"])
+        self.assertEqual(self.cli(a, "prune", by="fc").returncode, 0)  # a second prune appends, sorted
+        self.assertEqual([i["id"] for i in self.archive()], ["B-001", "B-002", "B-004"])
+        self.assertIn("nothing to prune", self.cli(a, "prune", by="fc").stdout)
+
+    def test_a_later_write_keeps_the_archive_and_the_counts_hold(self):
+        a = self.clone("a")
+        before = backlog.counts(self.remote())
+        self.assertEqual(self.cli(a, "prune", by="fc").returncode, 0)
+        self.assertEqual(self.cli(a, "claim", "B-005", "--agent", "forge", by="fc").returncode, 0)
+        self.assertEqual(len(self.archive()), 3)
+        merged = dict(self.remote(), archived=self.archive())
+        self.assertEqual(backlog.counts(merged), before)  # scope and done unchanged by a prune
+
+    def test_check_rejects_a_bad_archive(self):
+        d = self.tmp / "b.yaml"
+        d.write_text(backlog.dump(doc(item(1), item(2))))
+        arch = self.tmp / "a.yaml"
+        arch.write_text(backlog.dump_archive([item(2, status="done", closed="2026-11-02"),
+                                              item(3, status="open")]))
+        r = subprocess.run([sys.executable, "-I", str(BACKLOG), "check", "--file", str(d), "--archive-file", str(arch)],
+                           capture_output=True, text=True, env=self.env)
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("duplicate id", r.stderr)
+        self.assertIn("only done or dropped items are archived", r.stderr)
+
+
 if __name__ == "__main__":
     unittest.main()

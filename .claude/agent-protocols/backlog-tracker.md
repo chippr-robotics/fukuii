@@ -48,6 +48,9 @@ from WSL: Windows git opens a credential window and hangs.
 - **One item per logical unit,** roughly one PR. One-line title; notes at most 3 lines; details go in the PR, issue or
   spec. Use `refs` for old ids (H4, 10e, `#1654-B`, CHASE rows) and `depends_on` when an item cannot start earlier.
 - **Never delete or reuse an id.** Close it as `dropped` with a reason.
+- **Prune at each release retro:** `backlog prune [--before DATE] [--dry-run]` moves done and dropped items from
+  `backlog.yaml` to `archive.yaml` on the same branch. Their ids stay taken (`add` and `check` read both files),
+  `show` and `list --all` still find them, and the page still counts them (scope, done, recently done).
 
 Priorities: P0 blocks production or loses data; P1 production readiness or this sprint's commitment; P2 should be
 done; P3 polish or opportunistic.
