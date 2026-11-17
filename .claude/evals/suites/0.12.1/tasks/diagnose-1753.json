@@ -1,0 +1,48 @@
+{
+ "id": "diagnose-1753",
+ "type": "diagnose",
+ "agent": "vault",
+ "chain": "both",
+ "source_prs": [
+  1753
+ ],
+ "base_sha": "36149d9b4fd19e3d2d687c154e8f6fe6313622ae",
+ "read_only": true,
+ "prompt": "A Sepolia node after SNAP sync started rejecting valid payloads: engine_newPayload answers INVALID with 'Block has invalid state root hash' for blocks every other client accepts, and on an ETC node the importer blames peers for honest blocks, hits RegularSyncStuck and re-runs SNAP roughly every 20 minutes, landing on the same block again. We suspect a damaged entry in the local state DB, not a consensus bug. Find why a damaged local node turns into an invalid-block verdict instead of being treated as missing and refetched. Read-only.",
+ "expected": {
+  "files": [
+   "src/main/scala/com/chipprbots/ethereum/db/storage/MptStorage.scala",
+   "src/main/scala/com/chipprbots/ethereum/db/storage/StateStorage.scala",
+   "src/main/scala/com/chipprbots/ethereum/db/storage/EvmCodeStorage.scala",
+   "src/main/scala/com/chipprbots/ethereum/blockchain/sync/snap/actors/healing/HealResponseProcessing.scala",
+   "src/main/scala/com/chipprbots/ethereum/blockchain/sync/SyncController.scala"
+  ],
+  "gold_summary": "SerializingMptStorage.get checks a stored node against its key only when it decodes to a bare value (NullNode/HashNode); a list stored under the wrong hash decodes and is believed, so execution reads a wrong account/slot and an honest block fails its state root. multiGetNodes and StateStorage.getNode do not hash-check either. EvmCodeStorage.getForExecution caches and runs bytes without checking keccak against the code hash. HealResponseProcessing's child lookup via multiGetNodes throws for the whole batch on a bad wrapper, forever. RegularSyncStuck re-SNAPs with no count or cap. Fix: keccak first on every read, corrupt = missing so the delete-then-fetch path repairs it; a re-SNAP backoff.",
+  "must_not": []
+ },
+ "rubric": [
+  "Identifies that SerializingMptStorage.get hash-checks only bare-value decodes, so a list under the wrong hash is returned as valid",
+  "Explains the chain: wrong node -> wrong state read -> state-root mismatch -> block marked invalid (peer blamed / INVALID over Engine API)",
+  "Names the code path too: EvmCodeStorage reads and caches code without a keccak check",
+  "Proposes keccak-before-decode and reporting a mismatch as missing (so the existing delete-then-fetch repair runs), not as invalid",
+  "Notes the unbounded RegularSyncStuck -> re-SNAP loop as a second, separate issue"
+ ],
+ "protocol": [
+  "read-only: no edits",
+  "vault: locate before fixing; name the store/column family",
+  "CLAUDE.md consensus protocol: flag that block-validity outcome changes need forge/beacon review"
+ ],
+ "leak_markers": [
+  "#1753",
+  "b84c281d1",
+  "deleteCorruptEntryOnce",
+  "CorruptEntryApi",
+  "resnapBackoff",
+  "RegularSyncStuckResnaps",
+  "[CORRUPT-CODE]",
+  "[SYNC-STUCK]"
+ ],
+ "sprint": "0.12.1",
+ "budget_usd": 3,
+ "timeout_s": 2400
+}

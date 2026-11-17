@@ -1,0 +1,41 @@
+{
+ "id": "diagnose-1735",
+ "type": "diagnose",
+ "agent": "conduit",
+ "chain": "both",
+ "source_prs": [
+  1735
+ ],
+ "base_sha": "73679def3661d3005671ef01c898389f193a55b5",
+ "read_only": true,
+ "prompt": "On an Ephemery node an eth_simulateV1 request never returned, and block import stalled for about 11 minutes until we restarted. The request had a blockOverrides.number far beyond the head. Find why our 256-block limit did not stop it, and any similar unbounded inputs in that method. Read-only.",
+ "expected": {
+  "files": [
+   "src/main/scala/com/chipprbots/ethereum/jsonrpc/EthSimulateService.scala",
+   "src/main/scala/com/chipprbots/ethereum/jsonrpc/EthSimulateJsonMethodsImplicits.scala"
+  ],
+  "gold_summary": "The gap is narrowed with (targetNum - prevNum).toInt before the 256-block check; a gap of 2^32+1 wraps to 1, so the check passes and the gap loop builds ~2^32 blocks on the RPC thread. Fix: compare as BigInt (geth sanitizeChain), bound the loop itself, -38026 'too many blocks'; also the per-block 5000 and total 10000 call limits, 256/64-bit bounds on override quantities judged before BigInt parsing, and decodeErrorString's .toInt on the revert length.",
+  "must_not": []
+ },
+ "rubric": [
+  "Points at the Int narrowing of the block-number gap before the 256-block comparison in EthSimulateService",
+  "Explains the 2^32 wrap that lets a huge gap pass as small",
+  "Proposes a BigInt comparison and/or a loop-level bound matching geth sanitizeChain",
+  "Finds at least one other unbounded input: call counts, override quantity width, or the Error(string) length .toInt"
+ ],
+ "protocol": [
+  "read-only: no edits",
+  "conduit: deserialization is a trust boundary",
+  "conduit: compare go-ethereum"
+ ],
+ "leak_markers": [
+  "#1735",
+  "a8fe855cb",
+  "#1727",
+  "BigBits",
+  "Uint64Bits"
+ ],
+ "sprint": "0.12.1",
+ "budget_usd": 3,
+ "timeout_s": 2400
+}

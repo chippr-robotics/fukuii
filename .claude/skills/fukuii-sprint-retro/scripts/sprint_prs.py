@@ -76,25 +76,38 @@ def route(files, msg):
     return sorted(agents), chain
 
 
+COMMENT = re.compile(r"^\s*(//|/\*|\*|$)")
+
+
 def lineage(sha, parent, in_range):
-    """Sprint commits whose src/main lines this commit deletes or rewrites."""
+    """Sprint commits whose src/main code lines this commit deletes or rewrites.
+
+    Blame runs with -w -M -C, so a line an earlier commit only re-indented,
+    moved or copied is credited to the commit that wrote it; comment and blank
+    lines are skipped, so a TODO scaladoc a later PR fulfils does not count.
+    Even so, a pair is a candidate, not a defect: read both commits.
+    """
     origins = Counter()
     diff = git("diff", "-U0", parent, sha, "--", "src/main", "*/src/main")
-    cur = None
+    cur, old_ln = None, 0
+    targets = {}
     for line in diff.splitlines():
-        if line.startswith("--- a/"):
-            cur = line[6:]
-        elif line.startswith("--- /dev/null"):
-            cur = None
-        elif line.startswith("@@") and cur:
-            m = re.match(r"@@ -(\d+)(?:,(\d+))?", line)
-            start, n = int(m.group(1)), int(m.group(2) or 1)
-            if n == 0:
-                continue
-            out = git("blame", "--porcelain", "-L", f"{start},{start + n - 1}", parent, "--", cur, check=False)
-            for b in re.findall(r"^([0-9a-f]{40}) \d+ \d+", out, re.M):
-                if b in in_range:
-                    origins[in_range[b]] += 1
+        if line.startswith("--- "):
+            cur = line[6:] if line.startswith("--- a/") else None
+        elif line.startswith("+++ "):
+            continue
+        elif line.startswith("@@"):
+            old_ln = int(re.match(r"@@ -(\d+)", line).group(1))
+        elif line.startswith("-") and cur:
+            if not COMMENT.match(line[1:]):
+                targets.setdefault(cur, []).append(old_ln)
+            old_ln += 1
+    for f, lines in targets.items():
+        for ln in lines:
+            out = git("blame", "-w", "-M", "-C", "--porcelain", "-L", f"{ln},{ln}", parent, "--", f, check=False)
+            b = re.match(r"^([0-9a-f]{40}) ", out)
+            if b and b.group(1) in in_range:
+                origins[in_range[b.group(1)]] += 1
     return dict(origins)
 
 

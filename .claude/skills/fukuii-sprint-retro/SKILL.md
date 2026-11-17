@@ -68,9 +68,15 @@ python3 -I $S/agent_lint.py                                              # stale
 
 `sprint_prs.py` gives, per PR: kind, chain (ETC/ETH/both), the agents that own
 the paths it touched, size, tests added, and **`fixes_lines_of`** — for a fix
-PR, the earlier sprint PRs whose `src/main` lines it deleted or rewrote (git
-blame at its parent). Lineage pairs are the sprint's shipped defects; they are
-the most valuable signal in the retro.
+PR, the earlier sprint PRs whose `src/main` code lines it deleted or rewrote
+(`git blame -w -M -C` at its parent, comments and blank lines skipped). A pair
+is a **candidate**, not a defect. Triage each one before using it: **DEFECT**
+(the originator shipped a bug the fix repairs), **EXTENSION** (a planned next
+step — "PR 2 of N", a deferred item the originator's body names), or
+**PRE-EXISTING** (the fix repairs behaviour older than the sprint; the
+originator only moved or touched the code). In the 0.12.1 retro, every pair
+checked first was EXTENSION or PRE-EXISTING. Only DEFECT pairs seed `review`
+tasks; the fix PRs of the others still make good `diagnose` tasks.
 
 Read the work, don't skim titles:
 - The squash bodies are full PR descriptions: `git log -1 --format=%B <sha>`.

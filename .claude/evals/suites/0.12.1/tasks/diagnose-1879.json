@@ -1,0 +1,46 @@
+{
+ "id": "diagnose-1879",
+ "type": "diagnose",
+ "agent": "conduit",
+ "chain": "both",
+ "source_prs": [
+  1879
+ ],
+ "base_sha": "a3a8c44c86d1f8d74aef835cb1fd88df55a6313f",
+ "read_only": true,
+ "prompt": "Hive's rpc-compat suite at current master now fails a batch of new execution-apis fixtures. Two groups: eth_getProof for an address that has no account returns an error (\"No account found for Address ...\") where geth returns a proof, and the storageProof keys we echo back differ from geth's for some requested keys. Separately, eth_call/eth_createAccessList at fork boundaries accept a transaction type (and a maxFeePerBlobGas with no blobVersionedHashes) that geth refuses, and eth_createAccessList's 'failed to apply transaction: <hash>' names a different hash than geth. Find the root causes; don't change anything.",
+ "expected": {
+  "files": [
+   "src/main/scala/com/chipprbots/ethereum/jsonrpc/EthProofService.scala",
+   "src/main/scala/com/chipprbots/ethereum/jsonrpc/EthProofJsonMethodsImplicits.scala",
+   "src/main/scala/com/chipprbots/ethereum/jsonrpc/CallTxBuilder.scala",
+   "src/main/scala/com/chipprbots/ethereum/jsonrpc/EthInfoService.scala",
+   "src/main/scala/com/chipprbots/ethereum/ledger/StxLedger.scala"
+  ],
+  "gold_summary": "getProofAccount turns a missing account into a LogicError (Either.fromOption(accountIn, noAccount)); geth proves absence: it returns the account proof with zero balance, nonce, codeHash and storageHash, and each storage key as 0 with an empty proof. Storage keys are parsed loosely and echoed as the slot rather than the request's key form (geth decodeHash: 63-64 hex digits echoed as 32 bytes, otherwise a minimal quantity). CallTxBuilder/StxLedger do not refuse maxFeePerBlobGas without blob hashes, or a tx type the block's fork does not admit (needs the chain's TxTypeGate: forBlock on ETC, timestamp on ETH). EthInfoService createAccessList hashes the refused tx with its access list instead of geth's unsigned legacy-type hash, and does not fill the nonce from state.",
+  "must_not": []
+ },
+ "rubric": [
+  "Locates the missing-account error in EthProofService.getProofAccount (Either.fromOption over accountIn with noAccount)",
+  "States geth's behaviour: a proof of absence with zeroed fields and empty storage proofs, not an error",
+  "Identifies the storage-key parse/echo mismatch in the eth_getProof decoder",
+  "Identifies the missing tx-type-for-fork and blob-fee-without-hashes checks in the call path (CallTxBuilder or StxLedger)",
+  "Keeps ETC on block-number fork gating (does not propose a timestamp-only gate for ETC)"
+ ],
+ "protocol": [
+  "read-only: no edits",
+  "conduit: compare against go-ethereum's behaviour",
+  "CLAUDE.md: do not mix ETC forBlock and ETH forTimestamp paths"
+ ],
+ "leak_markers": [
+  "#1879",
+  "7e2a3d29a",
+  "B-323",
+  "withKey",
+  "fixed32",
+  "refusedTxHash"
+ ],
+ "sprint": "0.12.1",
+ "budget_usd": 3,
+ "timeout_s": 2400
+}

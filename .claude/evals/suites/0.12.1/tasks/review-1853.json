@@ -1,0 +1,49 @@
+{
+ "id": "review-1853",
+ "type": "review",
+ "agent": "forge",
+ "chain": "ETC",
+ "source_prs": [
+  1853,
+  1876
+ ],
+ "base_sha": "a2281a01648670cd6e032431a329a84ef119d0e6",
+ "read_only": true,
+ "prompt": "On the unified state layout, the regular-sync importer's fork recovery threw, because removing blocks and rewinding the index are both refused there. This uncommitted change makes it move nothing instead: the resolver only finds the common block, the fetcher is sent back to it, and the next pick spans the fork, so the peer's branch is weighed against this node's own chain. Review the change for correctness on ETC/Mordor before it is enabled on the importer. Report findings by severity.",
+ "expected": {
+  "files": [
+   "src/main/scala/com/chipprbots/ethereum/blockchain/sync/regular/BlockImporter.scala",
+   "src/main/scala/com/chipprbots/ethereum/ledger/BranchResolution.scala"
+  ],
+  "review_sha": "9ba1ddd1000ddce19c3fea58a5725321335c51c1",
+  "must_not": [],
+  "gold_summary": "W4: the pick that spans the fork is StrictPickBlocks(lca+1, bestKnownBlockNumber), which BlockFetcher answers only once blocks up to this node's head are available. Fork choice is by total difficulty, so a peer branch that is heavier but shorter never reaches that height: the pick is never answered and fork recovery stalls. The fix bounds the pick at the block whose import failed, or the head where that is lower. (f): a branch weighed and not taken is not stored, so the next batch hangs from an unknown parent, the fetcher goes 64 blocks back, and the same branch is fetched and rejected forever. The fix remembers branches not taken."
+ },
+ "rubric": [
+  "Identifies that the branch pick is bounded by this node's own head (bestKnownBlockNumber) via StrictPickBlocks",
+  "Explains, from BlockFetcher's StrictPickBlocks handling, that the pick is not answered until blocks up to that bound exist",
+  "States that a heavier (higher total difficulty) but shorter peer branch never reaches the bound, so recovery stalls (a liveness failure)",
+  "Proposes bounding the pick by what was seen of the peer's branch (e.g. the failed block) rather than the local head",
+  "Identifies that a lighter branch, weighed and not stored, is re-fetched repeatedly (unknown-parent walk-back loop)",
+  "Rates the stall as must-fix before the importer runs on the guard (not a cosmetic note)"
+ ],
+ "protocol": [
+  "forge: findings by severity with file:line",
+  "read-only: no edits",
+  "ETC paths use forBlock(), never forTimestamp()",
+  "Chesterton's Fence: explain why the old rewind existed before judging its removal"
+ ],
+ "leak_markers": [
+  "#1853",
+  "#1876",
+  "b2378866f",
+  "resolvingBranchTo",
+  "notTaken",
+  "BranchHeadersFetch",
+  "BeyondTheFetch",
+  "B-300"
+ ],
+ "sprint": "0.12.1",
+ "budget_usd": 3,
+ "timeout_s": 2400
+}
