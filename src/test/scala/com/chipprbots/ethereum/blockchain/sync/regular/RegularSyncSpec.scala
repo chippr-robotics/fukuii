@@ -1716,6 +1716,38 @@ class RegularSyncSpec
           fishForFailingBlockNodeRequest()
       )
 
+      // B-327 (forge W3 on #1880): on the unified layout the consensus adapter answers a node missing from the held
+      // state as a fault of this node (HeldStateIncomplete; ConsensusAdapterEscalationSpec pins the conversion). The
+      // importer must not fetch it: a fetched node is written to the hash-keyed store, which this layout never reads.
+      // Missing contract code is still fetched by its hash into the code store both layouts share (the two cases below).
+      "ask no peer for a node missing from the held state on the unified layout, and write nothing to the node store" taggedAs (
+        UnitTest,
+        SyncTest
+      ) in sync(
+        new Fixture:
+          val failingBlock: Block = testBlocksChunked.head.head
+          val missingHash: ByteString = kec256(ByteString("a node of the held state that is not stored"))
+          setImportResult(
+            failingBlock,
+            IO.pure(
+              BlockImportStateFault(
+                new com.chipprbots.ethereum.db.storage.pathstate.HeldStateIncomplete(
+                  new MissingNodeException(missingHash)
+                )
+              )
+            )
+          )
+          peersClient.setAutoPilot(new PeersClientAutoPilot)
+
+          regularSync ! SyncProtocol.Start
+
+          // the block is fetched again, as for any fault of this node's state, and no node is asked for
+          val requests: Seq[Any] = peersClient.receiveWhile(3.seconds) { case request => request }
+          withClue("the sync went on asking peers for blocks: ")(requests should not be empty)
+          requests.collect { case r @ PeersClient.Request(GetNodeData(_), _, _, _) => r } shouldBe empty
+          storagesInstance.storages.nodeStorage.get(missingHash) shouldBe None
+      )
+
       // Devnet-8 block 318074: an account the node held had a codeHash and no bytecode, execution ran the call as a
       // call to an EOA, and the block was reported INVALID. Missing code is now a missing-data condition: the importer
       // asks a snap peer for it (GetNodeData has no peers on ETH68+) and retries the block.
