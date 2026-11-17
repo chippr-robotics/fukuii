@@ -3617,19 +3617,15 @@ items:
   - id: B-311
     title: "SyncController escalation tests left from B-307 (f): the audit stopped at a clear, backfill states re-delivering, a clear that throws"
     priority: P2
-    status: review
+    status: done
     area: sync
     size: S
     opened: 2026-11-16
+    closed: 2026-11-17
     refs: []
     links:
       prs: [1873]
       spec: 018
-    claim:
-      by: cloud-lane3
-      agent: main
-      since: 2026-11-16T20:16:07Z
-      heartbeat: 2026-11-16T22:42:44Z
     notes: "Left of B-307 (f) after #1866 and #1870. The min pivot reaching the SNAP child is tested for the retry (SyncControllerSpec, MinPivotBlock(4001)); not for the first escalation."
   - id: B-312
     title: Cut v0.12.0 after C5a part 10, before the part 11 measurements (user, 2026-11-16)
