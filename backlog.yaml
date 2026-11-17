@@ -1,7 +1,8 @@
 # fukuii shared backlog (schema version 1). Rendered at https://docs.fukuii.com/development/tracker/
 # Change it with scripts/backlog/backlog.py on staging (claim, status, done, ...); README.md has the protocol.
 # Hand edits in the GitHub web UI are fine: keep the schema (backlog.py check), never delete or reuse an id
-# (drop the item instead). Comments other than this header are not kept when the tool rewrites the file.
+# (drop the item instead; `backlog.py prune` moves closed items to archive.yaml). Comments other than this
+# header are not kept when the tool rewrites the file.
 version: 1
 expiry_hours: 24
 items:
@@ -2022,13 +2023,19 @@ items:
   - id: B-248
     title: "SYNC-FORK resolver: discardBlocksAfter deletes the index entries before rewindCanonicalChain reads them"
     priority: P2
-    status: open
+    status: claimed
     area: sync
     size: S
     opened: 2026-11-13
     refs: []
     links:
       spec: 018
+    claim:
+      by: cloud-dc960fdc
+      agent: main
+      since: 2026-11-17T18:29:29Z
+      heartbeat: 2026-11-17T18:29:29Z
+      branch: fix/018-b248-resolver-discard
     notes: |-
       Forge, C4b part 3 pre-code consult (verified in code): Blockchain.removeBlock via FastSyncBranchResolver.discardBlocksAfter removes the number->hash entries (Blockchain.scala:197-199) before BlockImporter.rewindCanonicalChain reads them (:198-200), so abandonBlockStates gets nothing on the resolver-success path and the #1471 reference-count undo never runs there. Hash layout; its own bucket-C commit, not part of spec 018 C4b.
       Also make the discard one atomic batch (was B-107).
