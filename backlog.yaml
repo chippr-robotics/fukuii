@@ -3804,3 +3804,12 @@ items:
     refs: []
     links:
       spec: 018
+  - id: B-329
+    title: "Mutation pass over C5a part 10 (#1880): PathLiveSync, the guard arms in SyncController, the hand-off's index and cursor trim, HandoffsHeldForExcluded"
+    priority: P2
+    status: open
+    area: sync
+    opened: 2026-11-17
+    refs: []
+    links:
+      spec: 018
