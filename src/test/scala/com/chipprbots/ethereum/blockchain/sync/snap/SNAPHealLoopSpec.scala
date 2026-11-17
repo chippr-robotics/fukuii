@@ -299,11 +299,34 @@ class SNAPHealLoopSpec
     healingSpawns(f) shouldBe empty
   }
 
+  // B-326: proof of work has no CL head. Before it, ETC resumed healing on the failed pivot (no peer height is known
+  // right after the restart, and the drift check waits for maxPivotStalenessBlocks); now it waits for a newer one.
   "SNAPSyncController's recovery after a failed finalization (ETC / pre-merge)" should
-    "resume healing on the saved pivot, unchanged" taggedAs UnitTest in {
+    "wait (no heal, no bootstrap) while no snap peer height is known, not resume on the failed pivot" taggedAs UnitTest in {
       val f = new SnapControllerFixture(testKit)
-      startRecovery(f, isPoS = false, failed = Some(Pivot), clHead = None)
+      Using.resource(new SnapLogCapture) { log =>
+        startRecovery(f, isPoS = false, failed = Some(Pivot), clHead = None)
+        log.awaitLine("no newer pivot is available yet")
+      }
 
-      healingSpawns(f).map(_.stateRoot) shouldBe Seq(Root)
+      healingSpawns(f) shouldBe empty
       drainParent(f).collect { case m: SNAPSyncController.StartRegularSyncBootstrap => m } shouldBe empty
     }
+
+  it should "heal at the snap peers' best minus the pivot offset, not at the failed pivot (B-326)" taggedAs UnitTest in {
+    val f = new SnapControllerFixture(testKit)
+    // Inside maxPivotStalenessBlocks: the drift check alone resumed on the failed pivot.
+    f.peers.set(f.peersAt(height = (Pivot + 200).toInt))
+    startRecovery(f, isPoS = false, failed = Some(Pivot), clHead = None)
+
+    drainParent(f) should contain(SNAPSyncController.StartRegularSyncBootstrap(Pivot + 200 - PivotOffset))
+    healingSpawns(f) shouldBe empty
+  }
+
+  it should "resume healing on the saved pivot when it is not the failed one" taggedAs UnitTest in {
+    val f = new SnapControllerFixture(testKit)
+    startRecovery(f, isPoS = false, failed = Some(Pivot - 100), clHead = None)
+
+    healingSpawns(f).map(_.stateRoot) shouldBe Seq(Root)
+    drainParent(f).collect { case m: SNAPSyncController.StartRegularSyncBootstrap => m } shouldBe empty
+  }

@@ -72,6 +72,25 @@ private[snap] object PivotPolicy:
     if target > excludedPivot then Some(target)
     else unservablePivotTarget(clHead, excludedPivot, peerBest, margin, maxPeerTipLead)
 
+  /** Pivot for a proof-of-work heal-only recovery that must not resume on `excludedPivot` (B-326, the PoW counterpart
+    * of [[healPivotAfterExcluded]]): the snap peers' best minus `pivotBlockOffset`, as the normal pivot selection takes
+    * it, raised to the branch's first block while a sync is bound to one (`PivotAnchor.refreshFloor`), if strictly
+    * newer than `excludedPivot`. None when no peer height is known, when the best is under the branch's first block (no
+    * peer left can serve a pivot on it), or when the target is not newer: the caller waits for a snap peer to advance
+    * rather than resume on the excluded pivot.
+    */
+  private[snap] def powHealPivotAfterExcluded(
+      excludedPivot: BigInt,
+      peerBest: Option[BigInt],
+      pivotBlockOffset: Long,
+      branchFloor: Option[BigInt]
+  ): Option[BigInt] =
+    peerBest
+      .filter(_ > 0)
+      .filterNot(best => branchFloor.exists(best < _))
+      .map(best => branchFloor.fold(best - pivotBlockOffset)((best - pivotBlockOffset).max(_)))
+      .filter(_ > excludedPivot)
+
   /** The most a snap peer's advertised tip may lead the CL head when choosing a replacement pivot (CL lag seen on
     * Platåberget 2026-10-05: ~110 blocks).
     */
