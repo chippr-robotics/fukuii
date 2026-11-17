@@ -1735,15 +1735,18 @@ items:
   - id: B-209
     title: "Spec 018 C3b: PathMptStorage.decoded has no check for a stored value shaped like a bare 32-byte hash (the hash store treats it as corrupt, NodeFault)"
     priority: P2
-    status: open
+    status: dropped
     area: storage
     size: S
     opened: 2026-11-11
+    closed: 2026-11-17
     refs: []
     links:
       spec: 018
     depends_on: [B-058]
-    notes: beacon, review of C2b PR B (2026-11-11). SerializingMptStorage treats such a value as corrupt (mpt/MerklePatriciaTrie.scala:39-41); PathMptStorage.decoded does not look. A row like that which passed keccak would be re-resolved by the traversal and fail there, so it cannot reach a proof today. Align decoded with NodeFault when the staged commit lands.
+    notes: |-
+      beacon, review of C2b PR B (2026-11-11). SerializingMptStorage treats such a value as corrupt (mpt/MerklePatriciaTrie.scala:39-41); PathMptStorage.decoded does not look. A row like that which passed keccak would be re-resolved by the traversal and fail there, so it cannot reach a proof today. Align decoded with NodeFault when the staged commit lands.
+      2026-11-17 dropped: beacon 2026-11-17: not real on staging; both stores check keccak before decoding (PathMptStorage :72/:95; SerializingMptStorage since #1753)
   - id: B-210
     title: "RPC: a block imported by newPayload and not yet the head is above best, so account reads answer 'no account' though its state is held"
     priority: P3
