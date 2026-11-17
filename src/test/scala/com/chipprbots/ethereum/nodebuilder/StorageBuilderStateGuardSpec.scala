@@ -88,6 +88,28 @@ class StorageBuilderStateGuardSpec extends AnyFlatSpec with Matchers:
       finally deleteTree(dir)
     }
 
+  // B-251: a datadir stamped for the unified layout, opened with the guard off, is refused here, so a start makes
+  // neither the reconciliation nor the hash layout's repairs in it (StdNode.repairsAtStart)
+  it should "not be built over a data directory stamped for the unified layout with the guard off" taggedAs
+    (UnitTest, DatabaseTest) in {
+      import com.chipprbots.ethereum.db.storage.StateLayoutGuard
+      import com.chipprbots.ethereum.db.storage.pathstate.StateLayout
+      val dir = Files.createTempDirectory("storage-builder-stamped")
+      try
+        val unified = over(dir, guard = true)
+        unified.storagesInstance.storages.appStateStorage.put(StateLayout.Key, StateLayout.PathLive1).commit()
+        unified.storagesInstance.dataSource.close()
+
+        val refused = intercept[StateLayoutGuard.Refused](over(dir, guard = false).storagesInstance)
+        refused.why should not be empty
+
+        // and it is left as it was: opened with the guard on again, the stamp is there
+        val again = over(dir, guard = true)
+        again.storagesInstance.storages.appStateStorage.getStateLayout() shouldBe Some(StateLayout.PathLive1)
+        again.storagesInstance.dataSource.close()
+      finally deleteTree(dir)
+    }
+
   it should "be built over a new directory with the guard on, which is left with no marker until a genesis is committed" taggedAs
     (UnitTest, DatabaseTest) in {
       val dir = Files.createTempDirectory("storage-builder-fresh")
