@@ -472,8 +472,9 @@ items:
     links:
       spec: specs/018-storage-engine-consolidation
     notes: |-
-      The spec header says fukuii-fc had it in flight on docs/spec-018-c0. T011 and T017 need the user.
-      2026-11-17 priority P1: gates B-203, B-207, B-212 and C7's exit (Track C)
+      T002 pinned 2026-11-17 (user): v0.12.1 jar, SHA-256 2100c4ce…, baselines/pinned-jar.md; fallback 0.11.0. Open: keeper + NFS path.
+      Then T003 ranges (user, beacon, forge), T004-T007 runs on the jar (live host), T011, T017 (user).
+      Gates B-203, B-207, B-212 and C7's exit (Track C).
   - id: B-054
     title: "Spec 018 Track C C1: the trie reports positions (item 8a)"
     priority: P2
