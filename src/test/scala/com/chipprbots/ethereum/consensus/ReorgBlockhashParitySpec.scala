@@ -116,6 +116,7 @@ class ReorgBlockhashParitySpec extends AnyFlatSpec with Matchers with ScalaFutur
       val s9Invalid: Block = oracle.invalidChild(sidePrefix.last, difficulty = 5000)
 
       node.importAll(oldChain) shouldBe a[BlockImportedToTop]
+      // B-291: the heavier prefix became the head before s9 was refused; the failure is still answered, with s9 named
       node.importAll(sidePrefix :+ s9Invalid) shouldBe a[BlockImportFailed]
 
       // core-geth: writeBlockAndSetHead reorgs as soon as a side block outweighs the head, so the head is s8 and reorg()
