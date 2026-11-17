@@ -319,6 +319,10 @@ Fukuii uses an automated release process with full traceability:
    - Publishes GitHub release with all artifacts
    - Builds and signs Docker images
    - Closes matching milestone
+6. **Sprint retro:** Once the release is on `main`, run `/fukuii-sprint-retro <version>`
+   in a Claude Code session. It turns the sprint's PRs into an eval suite under
+   `.claude/evals/` and opens a PR to `staging` with the agent-file edits that won
+   a blind A/B test.
 
 ### Release Artifacts
 
