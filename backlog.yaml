@@ -2646,3 +2646,15 @@ items:
     links:
       spec: 018
     notes: "forge F1 on B-291's review: ConsensusImpl ~:341 and adapter ExtendedCurrentBestBranchPartially arm call removeSubtree and answer BlockImportedToTop for an MPTError too; the importer never sees the [LOCAL-STATE-FAULT] text (T062). Keep a local fault on the BranchExecutionFailure path, as B-291 does for reorgs."
+  - id: B-337
+    title: "Hash layout: a MissingNode (or state fault) after a reorganisation's adopted prefix re-queues the canonical prefix, loses the old branch, tells no head"
+    priority: P2
+    status: open
+    area: sync
+    size: S
+    opened: 2026-11-17
+    refs: []
+    links:
+      spec: 018
+    depends_on: [B-242]
+    notes: "forge F2 on B-291's review: ConsensusImpl reorganised's MissingNode arm (~:1190) answers ConsensusErrorDueToMissingNode(executed, reason) with imported = Nil after settleHead adopted; the hash-layout stateFault arm ignores adopted too (assert it). The B-291 hole for the missing-node answer."
