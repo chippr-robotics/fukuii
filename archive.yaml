@@ -111,6 +111,20 @@ items:
     notes: |-
       conduit + forge (needs ProgramError detail). Cosmetic for hive, which redacts messages.
       2026-11-17 done: 0.12.1 retro: #1777 (VM/call texts) and #1778 (precompile reasons); remaining texts are B-137, B-171, B-172
+  - id: B-029
+    title: "#1689 SnapStorageDoneStorage.compact() holds the DB lock across a native compaction"
+    priority: P2
+    status: dropped
+    area: storage
+    size: S
+    opened: 2026-11-07
+    closed: 2026-11-17
+    refs: [H7]
+    links:
+      issues: [1689]
+    notes: |-
+      vault.
+      2026-11-17 dropped: merged into B-281: compactionGuard fixes SnapStorageDoneStorage.compact
   - id: B-038
     title: "Spec 027 slice 1: worms, glyphs, tiers"
     priority: P2
@@ -399,6 +413,81 @@ items:
     notes: |-
       2026-11-10 review: Sweep matched geth (block 122552, 834.07 ETH). Runbook PR #1786; close #1655 when it merges.
       2026-11-11 done: Sweep matched geth (block 122552). Runbook section 5 merged (#1786); validator client stopped. #1655 to close.
+  - id: B-089
+    title: engine_getBlobsV2 returns an array of nulls
+    priority: P3
+    status: dropped
+    area: engine-api
+    size: S
+    opened: 2026-11-07
+    closed: 2026-11-17
+    refs: [handoff §3]
+    links: {}
+    notes: |-
+      Unverified dev-node item (handoff section 3): check it still applies before starting.
+      2026-11-17 dropped: merged into B-198: same getBlobsV2 nulls defect
+  - id: B-097
+    title: "SNAP follow-ups from the v18 soak: scoped re-verify, storage recovery, logging"
+    priority: P3
+    status: dropped
+    area: snap
+    size: M
+    opened: 2026-11-07
+    closed: 2026-11-17
+    refs: [handoff §3]
+    links: {}
+    notes: |-
+      Unverified dev-node item (handoff section 3): check it still applies before starting.
+      Vague in the handoff: re-scope or drop.
+      2026-11-17 dropped: vague, never verified; concrete SNAP follow-ups are tracked separately
+  - id: B-104
+    title: Cache parsed chain configuration files (skip re-parsing unchanged files)
+    priority: P3
+    status: dropped
+    area: config
+    opened: 2026-09-27
+    closed: 2026-11-17
+    refs: [P-002]
+    links: {}
+    notes: |-
+      utils/Config.scala:436.
+      2026-11-17 dropped: chain configs are parsed once per process at startup; no measured cost
+  - id: B-107
+    title: Make chain reorg discards (discardBlocksAfter, discardBlocks) atomic Blockchain operations
+    priority: P2
+    status: dropped
+    area: sync
+    opened: 2026-09-27
+    closed: 2026-11-17
+    refs: [A-001]
+    links: {}
+    notes: |-
+      FastSync.scala no longer exists; FastSyncBranchResolver does. Re-scope.
+      2026-11-17 dropped: merged into B-248: same FastSyncBranchResolver.discardBlocksAfter
+  - id: B-109
+    title: Skip re-downloading state at a sync restart when the target root is already present
+    priority: P3
+    status: dropped
+    area: sync
+    opened: 2026-09-27
+    closed: 2026-11-17
+    refs: [A-003]
+    links: {}
+    notes: |-
+      SyncStateSchedulerActor.scala no longer exists: re-scope (SNAP) or drop.
+      2026-11-17 dropped: SyncStateSchedulerActor removed; SNAP resume is spec 022's
+  - id: B-110
+    title: On a malformed trie during sync, restart from a new target instead of continuing
+    priority: P3
+    status: dropped
+    area: sync
+    opened: 2026-09-27
+    closed: 2026-11-17
+    refs: [A-004]
+    links: {}
+    notes: |-
+      SyncStateSchedulerActor.scala no longer exists: re-scope (SNAP) or drop.
+      2026-11-17 dropped: SyncStateSchedulerActor removed; malformed trie handled by SNAP heal (spec 022)
   - id: B-111
     title: Match SNAP bytecode responses against the requested code hashes
     priority: P2
@@ -411,6 +500,30 @@ items:
     notes: |-
       SNAPRequestTracker.scala:225. Check whether bytecode handling verifies them already.
       2026-11-17 done: 0.12.1 retro: already in place, ByteCodeResponseHandling.validateReturnedCodes checks returned codes against the requested hashes
+  - id: B-116
+    title: "EthereumTestsSpec: execute blocks through BlockExecution, not only parse the fixtures"
+    priority: P2
+    status: dropped
+    area: tests
+    opened: 2026-09-27
+    closed: 2026-11-17
+    refs: [T-001]
+    links: {}
+    notes: |-
+      src/it/.../ethtest/EthereumTestsSpec.scala:59.
+      2026-11-17 dropped: done already: EthereumTestsSpec executes via BlockExecution.executeAndValidateBlock
+  - id: B-117
+    title: Check the test coverage of pivot selection during sync state scheduling
+    priority: P3
+    status: dropped
+    area: tests
+    opened: 2026-09-27
+    closed: 2026-11-17
+    refs: [T-002]
+    links: {}
+    notes: |-
+      SyncStateSchedulerActor.scala no longer exists: re-scope (SNAP) or drop.
+      2026-11-17 dropped: SyncStateSchedulerActor removed
   - id: B-120
     title: "Constitution enforcement map: add Principle VIII rows (Gate Integrity C8 fails every PR until merged)"
     priority: P0
@@ -574,6 +687,19 @@ items:
     links:
       prs: [1763, 1767]
     notes: "forge (B-133 analysis): blsNativeOp PrecompiledContracts:656,674 and the KZG catch :782. Must fail loudly (refuse to start / crash), never return a result."
+  - id: B-136
+    title: CallTracer never decodes revert reasons (looks for "execution reverted" in "RevertOccurs")
+    priority: P2
+    status: dropped
+    area: rpc
+    size: S
+    opened: 2026-11-08
+    closed: 2026-11-17
+    refs: []
+    links: {}
+    notes: |-
+      forge: CallTracer.scala:77,105.
+      2026-11-17 dropped: merged into B-171: vmErrorMessage routing fixes CallTracer's revert detection
   - id: B-145
     title: Audit TLS and mTLS on every fukuii listener for zero-trust deployments (user requirement 2026-11-08)
     priority: P1
@@ -623,6 +749,19 @@ items:
     links:
       prs: [1768]
     notes: "User decision 2026-11-08: geth parity. conduit. Lands after #1760/#1761."
+  - id: B-159
+    title: "getContracts decides Cancun (0x0a) from header blob fields, not timestamp: an eth_call time override into Cancun lacks 0x0a (geth has it)"
+    priority: P2
+    status: dropped
+    area: evm
+    size: S
+    opened: 2026-11-09
+    closed: 2026-11-17
+    refs: [B-155]
+    links: {}
+    notes: |-
+      From #1727 PR 3 (conduit). Same root as B-155 (gate KZG on config not header shape). vm/ change: forge+beacon.
+      2026-11-17 dropped: merged into B-155: same KZG-on-header-shape gate (PrecompiledContracts:185)
   - id: B-160
     title: SNAP pivot header checks on ETC bootstrap/refresh paths (details in private notes)
     priority: P1
@@ -777,6 +916,20 @@ items:
     notes: |-
       Decisions: merge C3a; 512 blocks of changesets where there is no finalized block (ETC); every new column family of the track in the release that first ships v; snap1 not advertised with the guard on until the overlay serves the window.
       2026-11-11 done: Merged as #1795 (93c198cb6): state.retention.without-finality = 512; the four decisions of 2026-11-11 and the C2b pre-code record are in plan.md.
+  - id: B-221
+    title: "SNAPCoordinatorGoneSpec failed once on CI (PR #1805, run 43158234872): passes 3/3 locally; same family as B-020"
+    priority: P2
+    status: dropped
+    area: tests
+    size: S
+    opened: 2026-11-12
+    closed: 2026-11-17
+    refs: []
+    links: {}
+    depends_on: [B-020]
+    notes: |-
+      Test and Build, JDK 25, 2026-11-12. One test of the spec failed in a full testEssential on CI; the PR's diff has no SNAP or sync file. Name the failing case from the run's test-results artifact, then make its waits deterministic with the others of B-020.
+      2026-11-17 dropped: merged into B-020: SNAPCoordinatorGoneSpec is one of its flakes
   - id: B-222
     title: "Spec 018 C4a part 4: two decisions before the overlay is wired (a heavier branch above pinned-max-bytes; more than 32 payloads ahead of a forkchoiceUpdated)"
     priority: P1
@@ -823,6 +976,19 @@ items:
     notes: |-
       'should run the quit hook off the updater thread on q' failed at TuiUpdaterSpec.scala:84: tt.press then one tick whose key read waits only the 20 ms test pace; JLine's input pump can take longer on a loaded runner, so the read expires and tick returns true. Same pattern at :101 and :117.
       2026-11-12 review: Test-only fix: keyConfig 5 s pace for the 3 press-then-tick tests; 5x 19/0; prism OK.
+  - id: B-225
+    title: "fukuii ephemery: the not-configured error should name the custom-chains-dir it searched and the FUKUII_CONF_DIR launch"
+    priority: P3
+    status: dropped
+    area: ops
+    size: S
+    opened: 2026-11-12
+    closed: 2026-11-17
+    refs: [user report 2026-11-12]
+    links: {}
+    notes: |-
+      Config.scala:355 says 'run scripts/ephemery/fetch-genesis.sh first', which misleads when fetch-genesis ran with --out elsewhere: the CLI default is ~/.fukuii/ephemery-network/current/chains, and the generated conf must be passed with FUKUII_CONF_DIR=<out>/current/conf.
+      2026-11-17 dropped: superseded by #1821 (Ephemery bundled); the not-configured error names the resolved custom-chains-dir
   - id: B-226
     title: "TuiKeysSpec escape-sequence tests: the escape drain's fixed 50 ms tail budget can flake on a starved CI runner"
     priority: P3
@@ -838,6 +1004,21 @@ items:
     notes: |-
       TuiKeysSpec.scala:177-179, 185-187, 201-204: the first checkInput waits 1000 ms, but drainEscape (Tui.scala:477, 494) gives the tail 50 ms; a pump stall between introducer and final byte leaves a tail char for the follow-up checkInput(50). Lower odds than B-224 (one write per sequence). Fix with the drain's injectable clock in these tests.
       2026-11-14 done: The key decoder keeps an unfinished sequence across a quiet input for up to 1 s instead of dropping it after 50 ms, so a stalled tail is finished as part of its sequence, never read as keys.
+  - id: B-227
+    title: Ship Ephemery (bundled iteration + self-refresh at reset) and Hoodi as built-in networks
+    priority: P2
+    status: done
+    area: ops
+    size: M
+    opened: 2026-11-12
+    closed: 2026-11-17
+    refs: [user 2026-11-12]
+    links:
+      prs: [1822]
+    notes: |-
+      User decision: Ephemery bundled like Mordor/Sepolia with a startup self-refresh after RESET_TIME (fetch the ephemery-genesis release, validate like fetch-genesis.sh, check the published genesis hash, per-iteration datadir); add Hoodi as a static built-in. Spec Kit; dev-node implements.
+      2026-11-12 in-progress: spec 028 planned (47ca0f31a on spec/028-builtin-ephemery-hoodi): slices S1 Hoodi, S2 release lib, S3 bundle+selection+reset exit, S4a transport+tar, S4b refresh, S5 live; tasks next
+      2026-11-17 done: S1-S4b merged (#1814,#1817,#1819,#1821,#1822); live checks and closure are B-236.
   - id: B-231
     title: "028 S1: Hoodi as a built-in network (chain config, genesis, fork ids, DNS anchor)"
     priority: P2
@@ -1063,6 +1244,20 @@ items:
       branch: ccr-452bbde8-2hrv25
     depends_on: [B-266]
     notes: Tasks T073-T082. Fixes B-193 with it (Engine status counters). beacon and conduit analyse before code.
+  - id: B-271
+    title: "engine_newPayload never answers SYNCING: a payload with a missing parent or state is answered ACCEPTED (go-ethereum: SYNCING while it can extend a sync)"
+    priority: P3
+    status: dropped
+    area: engine-api
+    size: M
+    opened: 2026-11-14
+    closed: 2026-11-17
+    refs: []
+    links:
+      spec: specs/029-tui-command-center
+    notes: |-
+      beacon, spec 029 slice 5 analysis. Consensus-visible: kept out of the B-193 counter fix. Check go-ethereum delayPayloadImport first.
+      2026-11-17 dropped: merged into B-005: same newPayload SYNCING/ACCEPTED parity
   - id: B-272
     title: "Spec 029 slice 6: the Storage and System views, health bars and configurable alert thresholds"
     priority: P2

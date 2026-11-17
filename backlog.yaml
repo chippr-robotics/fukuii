@@ -231,20 +231,6 @@ items:
     links:
       issues: [1677]
     notes: herald.
-  - id: B-029
-    title: "#1689 SnapStorageDoneStorage.compact() holds the DB lock across a native compaction"
-    priority: P2
-    status: dropped
-    area: storage
-    size: S
-    opened: 2026-11-07
-    closed: 2026-11-17
-    refs: [H7]
-    links:
-      issues: [1689]
-    notes: |-
-      vault.
-      2026-11-17 dropped: merged into B-281: compactionGuard fixes SnapStorageDoneStorage.compact
   - id: B-030
     title: Failed UDP sends log ERROR with a stack trace (IPv6 unreachable spam); demote, rate-limit, or skip IPv6
     priority: P2
@@ -682,19 +668,6 @@ items:
     refs: [handoff §3]
     links: {}
     notes: "Unverified dev-node item (handoff section 3): check it still applies before starting."
-  - id: B-089
-    title: engine_getBlobsV2 returns an array of nulls
-    priority: P3
-    status: dropped
-    area: engine-api
-    size: S
-    opened: 2026-11-07
-    closed: 2026-11-17
-    refs: [handoff §3]
-    links: {}
-    notes: |-
-      Unverified dev-node item (handoff section 3): check it still applies before starting.
-      2026-11-17 dropped: merged into B-198: same getBlobsV2 nulls defect
   - id: B-090
     title: engine_getPayloadBodiesByRange V1/V2 should return -38004 for count > 1024
     priority: P3
@@ -768,20 +741,6 @@ items:
     refs: [handoff §3]
     links: {}
     notes: "Unverified dev-node item (handoff section 3): check it still applies before starting."
-  - id: B-097
-    title: "SNAP follow-ups from the v18 soak: scoped re-verify, storage recovery, logging"
-    priority: P3
-    status: dropped
-    area: snap
-    size: M
-    opened: 2026-11-07
-    closed: 2026-11-17
-    refs: [handoff §3]
-    links: {}
-    notes: |-
-      Unverified dev-node item (handoff section 3): check it still applies before starting.
-      Vague in the handoff: re-scope or drop.
-      2026-11-17 dropped: vague, never verified; concrete SNAP follow-ups are tracked separately
   - id: B-098
     title: "SNAP: stale-pivot empty ranges count as peer scarcity; a resume reuses a pivot beyond the serve window"
     priority: P3
@@ -845,18 +804,6 @@ items:
     refs: [P-001]
     links: {}
     notes: "Consensus-critical: forge and beacon. OpCode.scala ~:977, ~:1187."
-  - id: B-104
-    title: Cache parsed chain configuration files (skip re-parsing unchanged files)
-    priority: P3
-    status: dropped
-    area: config
-    opened: 2026-09-27
-    closed: 2026-11-17
-    refs: [P-002]
-    links: {}
-    notes: |-
-      utils/Config.scala:436.
-      2026-11-17 dropped: chain configs are parsed once per process at startup; no measured cost
   - id: B-105
     title: "JSON-RPC: route single and batch requests separately and parse each body once"
     priority: P3
@@ -877,18 +824,6 @@ items:
     notes: |-
       AccountRangeCoordinator: split at the active task's `next` midpoint.
       2026-11-17 priority P3: throughput optimisation only
-  - id: B-107
-    title: Make chain reorg discards (discardBlocksAfter, discardBlocks) atomic Blockchain operations
-    priority: P2
-    status: dropped
-    area: sync
-    opened: 2026-09-27
-    closed: 2026-11-17
-    refs: [A-001]
-    links: {}
-    notes: |-
-      FastSync.scala no longer exists; FastSyncBranchResolver does. Re-scope.
-      2026-11-17 dropped: merged into B-248: same FastSyncBranchResolver.discardBlocksAfter
   - id: B-108
     title: A structured fork registry for the EVM config instead of 16+ fork block numbers
     priority: P3
@@ -898,30 +833,6 @@ items:
     refs: [A-002]
     links: {}
     notes: EvmConfig.scala:33, BlockchainConfigForEvm.scala:23. Consensus-adjacent.
-  - id: B-109
-    title: Skip re-downloading state at a sync restart when the target root is already present
-    priority: P3
-    status: dropped
-    area: sync
-    opened: 2026-09-27
-    closed: 2026-11-17
-    refs: [A-003]
-    links: {}
-    notes: |-
-      SyncStateSchedulerActor.scala no longer exists: re-scope (SNAP) or drop.
-      2026-11-17 dropped: SyncStateSchedulerActor removed; SNAP resume is spec 022's
-  - id: B-110
-    title: On a malformed trie during sync, restart from a new target instead of continuing
-    priority: P3
-    status: dropped
-    area: sync
-    opened: 2026-09-27
-    closed: 2026-11-17
-    refs: [A-004]
-    links: {}
-    notes: |-
-      SyncStateSchedulerActor.scala no longer exists: re-scope (SNAP) or drop.
-      2026-11-17 dropped: SyncStateSchedulerActor removed; malformed trie handled by SNAP heal (spec 022)
   - id: B-112
     title: "Message decoder: switch on the negotiated p2p protocol version"
     priority: P3
@@ -960,30 +871,6 @@ items:
     notes: |-
       JsonRpcHttpServer.scala:82.
       2026-11-17 priority P3: vague consistency polish
-  - id: B-116
-    title: "EthereumTestsSpec: execute blocks through BlockExecution, not only parse the fixtures"
-    priority: P2
-    status: dropped
-    area: tests
-    opened: 2026-09-27
-    closed: 2026-11-17
-    refs: [T-001]
-    links: {}
-    notes: |-
-      src/it/.../ethtest/EthereumTestsSpec.scala:59.
-      2026-11-17 dropped: done already: EthereumTestsSpec executes via BlockExecution.executeAndValidateBlock
-  - id: B-117
-    title: Check the test coverage of pivot selection during sync state scheduling
-    priority: P3
-    status: dropped
-    area: tests
-    opened: 2026-09-27
-    closed: 2026-11-17
-    refs: [T-002]
-    links: {}
-    notes: |-
-      SyncStateSchedulerActor.scala no longer exists: re-scope (SNAP) or drop.
-      2026-11-17 dropped: SyncStateSchedulerActor removed
   - id: B-118
     title: Constitution and docs name .github/agents/{forge,beacon,herald}.md; the agent files live in .claude/agents/
     priority: P3
@@ -1059,19 +946,6 @@ items:
     links: {}
     depends_on: [B-002]
     notes: "forge, B-002 round 3 (beacon nit): a side payload stored by hash only while ChainWeightReconcile repairs keeps its stale-parent weight when an FCU reorg later makes it canonical. Advertised TD only on PoS; re-derive parent+difficulty at promotion (ForkChoiceManager)."
-  - id: B-136
-    title: CallTracer never decodes revert reasons (looks for "execution reverted" in "RevertOccurs")
-    priority: P2
-    status: dropped
-    area: rpc
-    size: S
-    opened: 2026-11-08
-    closed: 2026-11-17
-    refs: []
-    links: {}
-    notes: |-
-      forge: CallTracer.scala:77,105.
-      2026-11-17 dropped: merged into B-171: vmErrorMessage routing fixes CallTracer's revert detection
   - id: B-137
     title: "Text parity: static-context check before the stack check; address collision reports invalid opcode"
     priority: P3
@@ -1261,19 +1135,6 @@ items:
     refs: [B-128]
     links: {}
     notes: "From #1727 PR 2 (conduit): decodePayload matches blockStateCalls/validation/traceTransfers/returnFullTransactions exact-case (BlockStateCalls answers empty input); extractOpt[Boolean] turns a non-boolean validation into false where geth gives -32602; TxArgsJson/TxArgsSpec:118-119 name hexutil.Big/U256 where geth says *hexutil.Big / *uint256.Int."
-  - id: B-159
-    title: "getContracts decides Cancun (0x0a) from header blob fields, not timestamp: an eth_call time override into Cancun lacks 0x0a (geth has it)"
-    priority: P2
-    status: dropped
-    area: evm
-    size: S
-    opened: 2026-11-09
-    closed: 2026-11-17
-    refs: [B-155]
-    links: {}
-    notes: |-
-      From #1727 PR 3 (conduit). Same root as B-155 (gate KZG on config not header shape). vm/ change: forge+beacon.
-      2026-11-17 dropped: merged into B-155: same KZG-on-header-shape gate (PrecompiledContracts:185)
   - id: B-161
     title: eth_simulateV1 gas below the EIP-7623 calldata floor throws IllegalStateException; geth answers ErrFloorDataGas before execution
     priority: P2
@@ -1796,48 +1657,6 @@ items:
       spec: 018
     depends_on: [B-060]
     notes: "By the user's decision of 2026-11-12, C3c part 3 is its linear subset (plan.md 'C3c part 3'). Left for the overlay (C4a) and the head move (C4b): ChainImporter.importInPlace refuses a block that is not built on the head (the rest of T109: pre-merge side blocks through the fork choice, post-merge ones adopted; bcMultiChainTest, the uncle races, lotsOfLeafs end on another head with the guard on); test_rewindToBlock in test mode; it/ethtest EthereumTestHelper, EthereumTestExecutor and ForkChoiceBlockchainTestsSpec (the rest of T117, needed by EG-2 / T254); engine_newPayload adopting nothing on the guard."
-  - id: B-221
-    title: "SNAPCoordinatorGoneSpec failed once on CI (PR #1805, run 43158234872): passes 3/3 locally; same family as B-020"
-    priority: P2
-    status: dropped
-    area: tests
-    size: S
-    opened: 2026-11-12
-    closed: 2026-11-17
-    refs: []
-    links: {}
-    depends_on: [B-020]
-    notes: |-
-      Test and Build, JDK 25, 2026-11-12. One test of the spec failed in a full testEssential on CI; the PR's diff has no SNAP or sync file. Name the failing case from the run's test-results artifact, then make its waits deterministic with the others of B-020.
-      2026-11-17 dropped: merged into B-020: SNAPCoordinatorGoneSpec is one of its flakes
-  - id: B-225
-    title: "fukuii ephemery: the not-configured error should name the custom-chains-dir it searched and the FUKUII_CONF_DIR launch"
-    priority: P3
-    status: dropped
-    area: ops
-    size: S
-    opened: 2026-11-12
-    closed: 2026-11-17
-    refs: [user report 2026-11-12]
-    links: {}
-    notes: |-
-      Config.scala:355 says 'run scripts/ephemery/fetch-genesis.sh first', which misleads when fetch-genesis ran with --out elsewhere: the CLI default is ~/.fukuii/ephemery-network/current/chains, and the generated conf must be passed with FUKUII_CONF_DIR=<out>/current/conf.
-      2026-11-17 dropped: superseded by #1821 (Ephemery bundled); the not-configured error names the resolved custom-chains-dir
-  - id: B-227
-    title: Ship Ephemery (bundled iteration + self-refresh at reset) and Hoodi as built-in networks
-    priority: P2
-    status: done
-    area: ops
-    size: M
-    opened: 2026-11-12
-    closed: 2026-11-17
-    refs: [user 2026-11-12]
-    links:
-      prs: [1822]
-    notes: |-
-      User decision: Ephemery bundled like Mordor/Sepolia with a startup self-refresh after RESET_TIME (fetch the ephemery-genesis release, validate like fetch-genesis.sh, check the published genesis hash, per-iteration datadir); add Hoodi as a static built-in. Spec Kit; dev-node implements.
-      2026-11-12 in-progress: spec 028 planned (47ca0f31a on spec/028-builtin-ephemery-hoodi): slices S1 Hoodi, S2 release lib, S3 bundle+selection+reset exit, S4a transport+tar, S4b refresh, S5 live; tasks next
-      2026-11-17 done: S1-S4b merged (#1814,#1817,#1819,#1821,#1822); live checks and closure are B-236.
   - id: B-228
     title: "GraphQL answers a missing trie node as an account that does not exist: balance 0, nonce 0, zero storage (GraphQLSchema.scala:484); answer an error"
     priority: P2
@@ -2144,20 +1963,6 @@ items:
     refs: []
     links: {}
     notes: "Seen 2026-11-14 on an Ephemery side node with no CL: tx mined in 148073 stayed pending ~3 min, then left as 'expired unmined'. importBlock and announceAdopted call updateTxPool; the batch path does not (since Mantis). forge: check ETC/Mordor impact."
-  - id: B-271
-    title: "engine_newPayload never answers SYNCING: a payload with a missing parent or state is answered ACCEPTED (go-ethereum: SYNCING while it can extend a sync)"
-    priority: P3
-    status: dropped
-    area: engine-api
-    size: M
-    opened: 2026-11-14
-    closed: 2026-11-17
-    refs: []
-    links:
-      spec: specs/029-tui-command-center
-    notes: |-
-      beacon, spec 029 slice 5 analysis. Consensus-visible: kept out of the B-193 counter fix. Check go-ethereum delayPayloadImport first.
-      2026-11-17 dropped: merged into B-005: same newPayload SYNCING/ACCEPTED parity
   - id: B-273
     title: "Bundled gorgoroth.conf sets mining.protocol = \"ethash\", which MiningConfig rejects: fukuii gorgoroth cannot start"
     priority: P2
