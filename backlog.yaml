@@ -2227,7 +2227,7 @@ items:
   - id: B-274
     title: A startup exception in StdNode leaves the JVM running half-started (P2P up, no APIs); under --tui the error is never shown
     priority: P1
-    status: claimed
+    status: in-progress
     area: node
     size: M
     opened: 2026-11-14
@@ -2237,7 +2237,7 @@ items:
       by: cloud-dc960fdc
       agent: node-b274
       since: 2026-11-17T23:53:26Z
-      heartbeat: 2026-11-17T23:53:26Z
+      heartbeat: 2026-11-17T23:53:33Z
     notes: "gorgoroth's bad mining.protocol threw from the main thread ('Exception in thread main', stderr only); the process stayed up (plain run killed by timeout at 60s), TUI showed 'Starting...' forever, nothing in the log. Fail loudly: log at ERROR, restore the terminal, exit non-zero."
   - id: B-278
     title: "miner_start / miner_stop answer success when no miner exists (mining disabled, or an Engine API node): nothing starts or stops"
