@@ -1261,13 +1261,16 @@ items:
   - id: B-159
     title: "getContracts decides Cancun (0x0a) from header blob fields, not timestamp: an eth_call time override into Cancun lacks 0x0a (geth has it)"
     priority: P2
-    status: open
+    status: dropped
     area: evm
     size: S
     opened: 2026-11-09
+    closed: 2026-11-17
     refs: [B-155]
     links: {}
-    notes: "From #1727 PR 3 (conduit). Same root as B-155 (gate KZG on config not header shape). vm/ change: forge+beacon."
+    notes: |-
+      From #1727 PR 3 (conduit). Same root as B-155 (gate KZG on config not header shape). vm/ change: forge+beacon.
+      2026-11-17 dropped: merged into B-155: same KZG-on-header-shape gate (PrecompiledContracts:185)
   - id: B-161
     title: eth_simulateV1 gas below the EIP-7623 calldata floor throws IllegalStateException; geth answers ErrFloorDataGas before execution
     priority: P2
