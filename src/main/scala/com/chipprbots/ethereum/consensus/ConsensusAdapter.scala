@@ -206,16 +206,18 @@ class ConsensusAdapter(
         case SelectedNewBestBranchPartially(
               oldBranch,
               adopted,
-              weights,
+              _,
               BranchExecutionFailure(_, failingBlockHash, error)
             ) =>
-          // B-291: as a reorganisation that went through, and as a partial extension's failure: the invalid block's
-          // descendants leave the queue
+          // B-291: the prefix became the head, so the blocks it replaced are queued again and the head's followers
+          // are told, as for a reorganisation that went through; and the failure is answered as one, with the block
+          // that failed, as a partial extension's is not: the importer's invalid-chain report (the Engine API's
+          // latestValidHash for a gas-used mismatch, hive's invalid-ancestor tests) and its blame read it. The pool's
+          // update for the blocks moved off and onto is B-338's.
           oldBranch.foreach(blockQueue.enqueueBlock(_))
           blockQueue.removeSubtree(BlockHash(failingBlockHash))
-          log.warn("reorganised onto a branch partially because of error: {}", error)
           toldOfTheHead(adopted.lastOption)
-          ChainReorganised(oldBranch, adopted, weights)
+          new BlockImportFailedAt(error, failingBlockHash)
         case ExtendedCurrentBestBranch(blockImportData) =>
           toldOfTheHead(blockImportData.lastOption.map(_.block))
           BlockImportedToTop(blockImportData)
