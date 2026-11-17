@@ -2567,3 +2567,12 @@ items:
       agent: main
       since: 2026-11-17T17:35:00Z
       heartbeat: 2026-11-17T17:35:09Z
+  - id: B-335
+    title: "FastSyncBranchResolverActorSpec flakes under load: a 7 s expectMsg times out (about 1 run in 3 on staging with a second build running)"
+    priority: P3
+    status: open
+    area: tests
+    opened: 2026-11-17
+    refs: []
+    links: {}
+    notes: "Seen 2026-11-17 on staging 9b2fcf0fe: 'highest common block is in the first half' and 'No common block is found' each failed once. Find what the actor waits on; no sleeps"
