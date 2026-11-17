@@ -263,7 +263,31 @@ Applied on the `tracker` branch (evidence: a merged PR or code in place):
 - Blocked on data exports nobody holds: B-046, B-047 (fukuii-fc) gate spec 021's B-049 → B-052.
   B-053 (the C0 oracle jar, a user decision) gates B-203, B-207, B-212 and C7's exit.
 
-### Decisions left to the user (not applied)
+### Decisions (ruled by the advisor, applied)
+
+The user delegated the open decisions to an advisor: an independent Opus subagent that re-checked the
+evidence against `origin/staging` and the live tracker and ruled on each one. Its rulings are in
+`runs/0.12.1/backlog/advisor-rulings.json` (not tracked); all were applied to the `tracker` branch, then
+pruned. It overturned three proposals: B-064's claim had not expired (a note, not a release); #1694 is
+not fixed (it is B-005's bug), so B-023 no longer closes it; B-171 takes P2 when it absorbs B-136.
+
+- **Dropped (7):** B-097, B-104, B-109, B-110, B-116, B-117, B-225.
+- **Merged (7, dropped into the survivor with a note):** B-221 → B-020, B-159 → B-155, B-136 → B-171,
+  B-089 → B-198, B-271 → B-005, B-029 → B-281, B-107 → B-248.
+- **Done:** B-227 (S1–S4b merged; S5 is B-236).
+- **Released (claims older than 24 h):** B-072, B-073, B-151, B-203. B-203 and B-049 set blocked (on
+  B-053; on B-046/B-047). Notes asking for a heartbeat on B-064 and B-236 (claims kept).
+- **Raised:** B-053, B-073, B-148 → P1; B-149, B-171, B-216, B-240 → P2. B-245 stays P2 with a note
+  (raise if a node confirms newHeads is silent post-merge).
+- **Lowered:** B-008, B-010 → P2; B-013, B-014, B-046, B-047, B-106, B-115, B-315 → P3.
+- **Retitled (partial work merged):** B-020, B-023, B-073, B-092, B-095, B-194, B-219, B-220, B-241, B-328.
+- **depends_on:** B-014, B-079 → B-069; B-076 → B-070. (B-050–B-052 already chain through B-049.)
+
+**Final:** 215 items in `backlog.yaml` (208 open, 4 blocked, 3 held), 118 in `archive.yaml`;
+P1 14, P2 93, P3 108. P1s: B-005, B-009, B-053, B-073, B-146, B-148, B-150, B-151, B-274, B-295,
+B-296, B-298, B-314, B-332.
+
+### Decisions the reviewers proposed (for the record)
 
 | Kind | Items |
 |---|---|
@@ -276,5 +300,5 @@ Applied on the `tracker` branch (evidence: a merged PR or code in place):
 | Retitle (partial) | B-020, B-023, B-092, B-095, B-194, B-219, B-220, B-241, B-328 |
 | Set blocked / depends_on | B-049…B-052 on B-046/B-047; B-014, B-079 on B-069; B-076 on B-070 |
 
-The CLI has no retitle, priority or merge command (B-123 asks for `note`); these are hand edits in the
-web UI or a CLI addition.
+The CLI has no retitle, priority or note command (B-123); the rulings were applied through
+`backlog.Tracker.mutate`, the CLI's own validated compare-and-swap write.
