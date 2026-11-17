@@ -2474,19 +2474,15 @@ items:
   - id: B-319
     title: "A sync controller stopped by the hand-off's bound (B-304) does not answer eth_syncing: a final state that answers with the reason"
     priority: P3
-    status: review
+    status: done
     area: sync
     size: S
     opened: 2026-11-16
+    closed: 2026-11-17
     refs: []
     links:
       prs: [1873, 1896]
       spec: 018
-    claim:
-      by: cloud-dc960fdc
-      agent: main
-      since: 2026-11-17T19:02:30Z
-      heartbeat: 2026-11-17T19:11:46Z
     notes: "beacon, review of #1873 (W1): Behaviors.stopped is the stop-and-alert pattern; eth_syncing, the admin and MCP status calls time out, and on PoS the Engine API answers SYNCING indefinitely. A terminal state that answers GetStatus with the reason and the sample's counts serves operators better."
   - id: B-320
     title: The healing serve-root and recent-root bootstraps drop PivotHeaderBootstrap.Failed.offBranch, and the healing one takes its target from unfiltered peer heights
