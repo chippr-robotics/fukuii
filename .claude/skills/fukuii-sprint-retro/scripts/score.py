@@ -32,6 +32,9 @@ def load_tasks(paths):
     return tasks
 
 
+PROCESS_AGENTS = {"eye", "wraith"}
+
+
 def f1(got, gold):
     norm = lambda s: {x.strip().lstrip("./") for x in s}
     got, gold = norm(got), norm(gold)
@@ -58,8 +61,13 @@ def hard(rec, task):
     for s in exp.get("must_not", []):
         if s.lower() in (rec["result"] or "").lower():
             why.append(f"must_not '{s}'")
-    if task["type"] == "route" and exp.get("route") and set(rec["route"]) != set(exp["route"]):
-        why.append(f"route {rec['route']} != {exp['route']}")
+    if task["type"] == "route" and exp.get("route"):
+        # eye (validate after code) and wraith (compile fixes) follow every change per CLAUDE.md's
+        # protocol; naming them is right, not noise, so compare the owning specialists only.
+        gold = set(exp["route"])
+        got = {a.lower() for a in rec["route"]} - (PROCESS_AGENTS - gold)
+        if got != gold:
+            why.append(f"route {sorted(got)} != {sorted(gold)}")
     if rec.get("check") is not None and rec["check"]["rc"] != 0:
         why.append("implement check failed")
     return why

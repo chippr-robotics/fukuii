@@ -12,7 +12,9 @@
   "review_ref": "pull/1823/head",
   "files": [
    "src/main/scala/com/chipprbots/ethereum/consensus/engine/JwtSecretFile.scala",
-   "src/main/scala/com/chipprbots/ethereum/nodebuilder/NodeBuilder.scala"
+   "src/main/scala/com/chipprbots/ethereum/nodebuilder/NodeBuilder.scala",
+   "src/main/scala/com/chipprbots/ethereum/nodebuilder/StdNode.scala",
+   "src/main/scala/com/chipprbots/ethereum/consensus/engine/JwtAuthenticator.scala"
   ],
   "must_not": [],
   "gold_summary": "The JWT secret is validated after P2P has started, so a bad secret leaves a half-started node; an Engine API bind failure is not fatal; the rename-based creation can replace an existing secret or follow a symlink; explicit secret paths are under-validated (format, permissions)."
@@ -31,7 +33,8 @@
   "#1823",
   "6622c229d",
   "EngineApiStartupRefusal",
-  "createLink"
+  "isLinkUnsupported",
+  "awaitEngineApiBind"
  ],
  "sprint": "0.12.1",
  "type": "review",

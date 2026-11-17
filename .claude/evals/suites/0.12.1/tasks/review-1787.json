@@ -16,14 +16,14 @@
    "src/main/scala/com/chipprbots/ethereum/console/panels/PeersPanel.scala"
   ],
   "must_not": [],
-  "gold_summary": "Blocker: console/Sanitize is quadratic on unterminated ESC ] / 0x9d string introducers and converts the whole input to code points; its input includes a peer-chosen Hello clientId of up to 16 MiB, sanitized on every poll and every log line quoting it. Fix: bound the input read and scan linearly. Should-fix: the log ring loses writes (getAndIncrement then an unconditional set races); the Peers panel draws the Unresponsive reason raw (unsanitized peer text)."
+  "gold_summary": "Blocker: console/Sanitize is quadratic on unterminated ESC ] / 0x9d string introducers and converts the whole input to code points; its input includes a peer-chosen Hello clientId of up to 16 MiB, sanitized on every poll and every log line quoting it. Fix: bound the input read and scan linearly. Should-fix: the log ring loses writes (getAndIncrement then an unconditional set races); the Peers panel draws the Unresponsive reason (an exception message) raw, without the external-text sanitizer."
  },
  "rubric": [
   "Flags Sanitize as a blocker: super-linear on unterminated escape-string introducers",
   "Names the peer-controlled source (Hello clientId, large) that makes it exploitable",
   "Proposes a bounded input plus a linear scan",
   "Names the log ring's lost-write race (index increment then unconditional set)",
-  "Names the raw, unsanitized reason text in the Peers panel",
+  "Names the Unresponsive reason drawn raw (not passed through the sanitizer) in the Peers panel",
   "Raises no false blocker"
  ],
  "protocol": [
@@ -37,7 +37,8 @@
   "2d51c0dc",
   "3104b2ca",
   "InputFactor",
-  "accumulateAndGet"
+  "readBounded",
+  "noTerminator"
  ],
  "sprint": "0.12.1",
  "type": "review",
