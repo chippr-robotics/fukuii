@@ -215,3 +215,66 @@ subscription login, plan usage, not billing.
 - **Harness**: `.claude/repo-references/` is absent in a trial snapshot, so every "compare with geth"
   rule ran on memory; 018 Track C squash bodies record no reviews (only `plan.md`). The next retro should
   add `impact` and `implement` tasks (none this sprint).
+
+## Carry-over (Phase 7: the backlog)
+
+Three agents reviewed every item not done (237, by area) against `origin/staging` at 21cfa13df.
+Applied on the `tracker` branch (evidence: a merged PR or code in place):
+
+- **Closed done (8):** B-019 (#1873), B-027 (#1777, #1778), B-223 (#1810), B-276 (#1873), B-282 (#1845;
+  dev-node's review claim had expired), B-321 (#1874), B-330 (#1882), B-111 (the check was already in
+  `ByteCodeResponseHandling`).
+- **Pruned:** 103 closed items moved to `archive.yaml` (`backlog prune`); 230 remain in `backlog.yaml`.
+  Ids stay taken; the page keeps counting archived items once this PR's `backlog.py` is on `main`.
+- **Added:** B-333, this retro (review, #1884).
+
+**After:** 230 items — 220 open, 3 claimed, 3 in progress, 2 in review, 2 blocked; P1 13, P2 104, P3 113.
+
+### Fix first
+
+- **B-332 (P1, snap)** — 0.12.1 shipped with it: valid SNAP bytecode replies complete with 0 items, so
+  peers get no credit. A 0.12.2 hotfix.
+- **B-274 (P1, node)** — a startup exception leaves a half-started JVM (P2P up, no APIs). Small.
+
+### P1s and gates
+
+- **path-live gates** before `fukuii.state.path-live` defaults on: B-295 (kill during reverse-then-commit),
+  B-296 (bound a deep reorg's memory), B-314 (hive re-org suites with the guard on); with the P2 tests
+  B-292, B-329, B-255. Then the Track C chain: B-064 closes (record T209 and the Sepolia fresh sync + 24 h)
+  → B-065 (C5b) → B-066 (C5c, takes B-243's checkpoint half) → B-067 (C6, ETC; B-326 first) → B-068 →
+  B-069/B-070.
+- **Hash layout while it stays the default:** B-009 (heal never replaces a junk node); the SYNC-FORK
+  cluster B-298 + B-248 (+B-107) + B-012 + B-011, one consult with forge and vault; B-270.
+- **Engine API (beacon):** B-005 (+B-271), B-198 (+B-089), B-090; B-245 if newHeads is silent post-merge.
+- **Zero-trust TLS:** B-146/B-150 (P1, untouched since 11-08), with B-148, B-147, B-149 (#1756).
+- **B-151 (Windows BLS, P1)** — paused after B-153; needs a holder or an accepted "ETH not supported on
+  Windows" release note.
+
+### Clusters for the sprint
+
+- eth_simulateV1 / trace parity (conduit + beacon): B-163, B-166, B-180, B-181, B-158, B-161, B-172,
+  B-176, B-171 (+B-136); B-072 re-validates on Ephemery at the end.
+- RPC on the unified layout, now live: B-228, B-238, B-229, B-240, B-211 (unblocked).
+- Consensus divergences (forge, then beacon): B-169, B-177, B-164, B-175, B-324.
+- Mining RPC honesty: B-278 + B-279.
+- Test hygiene: B-020 (+B-221), B-156, B-187, B-305, B-174, B-205, B-206, B-215, B-218, B-018, B-021, B-022.
+- Docs/protocol batch: B-037, B-086, B-118, B-138, B-194, B-147, B-083. TUI polish: B-192, B-259, B-263,
+  B-265, B-267, B-287, B-331, B-125, B-264 (P3; spec 027 UAT B-189 waits on the user).
+- Blocked on data exports nobody holds: B-046, B-047 (fukuii-fc) gate spec 021's B-049 → B-052.
+  B-053 (the C0 oracle jar, a user decision) gates B-203, B-207, B-212 and C7's exit.
+
+### Decisions left to the user (not applied)
+
+| Kind | Items |
+|---|---|
+| Drop (obsolete) | B-109, B-110, B-116, B-117 (code gone or already done), B-225 (superseded by #1821), B-097 (vague), B-104 (fold into spec 024?) |
+| Merge (close the first into the second) | B-221 → B-020, B-159 → B-155, B-136 → B-171, B-089 → B-198, B-271 → B-005, B-029 → B-281, B-107 → B-248 |
+| Close over another holder | B-227 (dev-node; S1–S4b merged, S5 is B-236) |
+| Stale claims (> 24 h) | B-073 (dev-node, 11-09, likely abandoned; raise to P1 for the Mordor gates), B-072 (dev-node, 11-09), B-151 (fukuii-fc, 11-08), B-203 (dev-node, 11-11; set blocked on B-053), B-064 (cloud-dc960fdc; code done), B-236 (dev-node; likely live until the 11-19 reset) |
+| Raise | B-053 → P1, B-073 → P1, B-148 → P1, B-245 → P1 if confirmed, B-149 → P2, B-216 → P2, B-240 → P2 |
+| Lower | B-008 → P2, B-010 → P2, B-013/B-014/B-106/B-315 → P3, B-046/B-047 → P3 unless spec 021 S1 is scheduled, B-115 → P3 |
+| Retitle (partial) | B-020, B-023, B-092, B-095, B-194, B-219, B-220, B-241, B-328 |
+| Set blocked / depends_on | B-049…B-052 on B-046/B-047; B-014, B-079 on B-069; B-076 on B-070 |
+
+The CLI has no retitle, priority or merge command (B-123 asks for `note`); these are hand edits in the
+web UI or a CLI addition.
