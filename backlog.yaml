@@ -966,12 +966,15 @@ items:
   - id: B-117
     title: Check the test coverage of pivot selection during sync state scheduling
     priority: P3
-    status: open
+    status: dropped
     area: tests
     opened: 2026-09-27
+    closed: 2026-11-17
     refs: [T-002]
     links: {}
-    notes: "SyncStateSchedulerActor.scala no longer exists: re-scope (SNAP) or drop."
+    notes: |-
+      SyncStateSchedulerActor.scala no longer exists: re-scope (SNAP) or drop.
+      2026-11-17 dropped: SyncStateSchedulerActor removed
   - id: B-118
     title: Constitution and docs name .github/agents/{forge,beacon,herald}.md; the agent files live in .claude/agents/
     priority: P3
