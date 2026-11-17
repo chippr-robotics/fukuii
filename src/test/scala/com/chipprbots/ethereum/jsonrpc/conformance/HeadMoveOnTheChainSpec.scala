@@ -40,6 +40,7 @@ import com.chipprbots.ethereum.db.storage.pathstate.PathStateTestKit
 import com.chipprbots.ethereum.db.storage.pathstate.ReorgRefusal
 import com.chipprbots.ethereum.db.storage.pathstate.ReorgTooDeep
 import com.chipprbots.ethereum.db.storage.pathstate.StateConfig
+import com.chipprbots.ethereum.db.storage.pathstate.StateFaultMark
 import com.chipprbots.ethereum.db.storage.pathstate.StateUnavailable
 import com.chipprbots.ethereum.domain.Block
 import com.chipprbots.ethereum.domain.BlockHeader
@@ -711,7 +712,13 @@ class HeadMoveOnTheChainSpec extends ScalaTestWithActorTestKit with AnyFlatSpecL
       // part 6). The consensus client is answered SYNCING all the same
       val refused = on.node.forkChoiceManager.applyForkChoiceState(choiceOf(chain(2), chain))
       refused.left.toOption.exists(_.startsWith(ForkChoiceManager.LocalFault)) shouldBe true
-      on.everything shouldBe before
+      withClue("nothing is written but the record of the fault (B-252): ") {
+        on.everything.filter((key, _) => before.contains(key)) shouldBe before
+        (on.everything.keySet -- before.keySet).map(_.utf8String).toList match
+          case List(added) => added should endWith(StateFaultMark.Key)
+          case other       => fail(s"written beside the fault: $other")
+        new AppStateStorage(on.source).getStateFault().get should include("changeset records are corrupt")
+      }
       on.node.forkChoiceManager.getHeadBlockHash shouldBe None
       on.pathState.hasFailedClosed shouldBe true
       // and nothing more is written in place: not the next block, not a confirmation of the head
@@ -724,7 +731,7 @@ class HeadMoveOnTheChainSpec extends ScalaTestWithActorTestKit with AnyFlatSpecL
           .exists(_.startsWith(ForkChoiceManager.LocalFault)) shouldBe true
       }
       on.holds(chain.last.header, chain)
-      // closed until the node is started again (the fault is kept in memory only; B-252)
+      // closed until its state is cleared: the fault is recorded, and a restart opens the store closed (B-252)
       (the[StateUnavailable] thrownBy on.pathState.moveHead(
         refOf(chain.last.header),
         on.link,

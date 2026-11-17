@@ -78,7 +78,14 @@ class AppStateStorage(val dataSource: DataSource) extends TransactionalKeyValueS
     */
   private[storage] def removeStateMarks(): DataSourceBatchUpdate =
     update(
-      Seq(Keys.StateAnchor, Keys.StateOrigin, Keys.StateLayout, Keys.StateChangesetPrunedTo, Keys.StateFinalized),
+      Seq(
+        Keys.StateAnchor,
+        Keys.StateOrigin,
+        Keys.StateLayout,
+        Keys.StateChangesetPrunedTo,
+        Keys.StateFinalized,
+        Keys.StateFault
+      ),
       Nil
     )
 
@@ -190,6 +197,13 @@ class AppStateStorage(val dataSource: DataSource) extends TransactionalKeyValueS
   private[storage] def putStateResetTrim(trim: pathstate.StateResetTrim): DataSourceBatchUpdate =
     put(Keys.StateResetTrim, pathstate.StateResetTrim.encode(trim))
 
+  /** Why this datadir's state failed closed, and when, if it did ([[pathstate.StateFaultMark]], B-252). */
+  def getStateFault(): Option[String] = get(Keys.StateFault).map(pathstate.StateFaultMark.describe)
+
+  /** The update that records that this datadir's state failed closed. Written synced, as the fault is found. */
+  private[storage] def putStateFault(atMillis: Long, why: String): DataSourceBatchUpdate =
+    put(Keys.StateFault, pathstate.StateFaultMark.encode(atMillis, why))
+
   /** Whether a clear of the state was begun and not seen to its end: its rows may be there still, with no anchor over
     * them ([[pathstate.StateResetPending]]).
     */
@@ -283,6 +297,8 @@ class AppStateStorage(val dataSource: DataSource) extends TransactionalKeyValueS
         Keys.StateOrigin,
         Keys.StateFinalized,
         Keys.StateChangesetPrunedTo,
+        // the fault found in the state goes with it (B-252)
+        Keys.StateFault,
         Keys.FastSyncDone,
         Keys.SnapSyncPivotBlock,
         Keys.SnapSyncMinPivotBlock,
@@ -1214,6 +1230,7 @@ object AppStateStorage:
     val StateEscalationLast = com.chipprbots.ethereum.db.storage.pathstate.StateEscalation.Key
     val StateEscalationGivenUp = com.chipprbots.ethereum.db.storage.pathstate.GivenUpBranches.Key
     val StateResetPending = com.chipprbots.ethereum.db.storage.pathstate.StateResetPending.Key
+    val StateFault = com.chipprbots.ethereum.db.storage.pathstate.StateFaultMark.Key
     val StateResetTrim = com.chipprbots.ethereum.db.storage.pathstate.StateResetTrim.Key
     val PivotOnBranch = com.chipprbots.ethereum.db.storage.pathstate.PivotOnBranch.Key
     val StateChangesetPrunedTo = "state.changeset.pruned-to"

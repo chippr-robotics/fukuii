@@ -2812,7 +2812,9 @@ it with `moveInProgress`); `failClosed` takes no lock, so a write already past i
 starts after does; a genesis commit refuses a store that failed closed, and test mode's destruction of the state
 clears the fault with the state it was found in (a case); test mode's comment on `Corrupt` (it logs, and does not fail
 closed: a test datadir is the test's to mend). Recorded: the fault is kept in memory only, and nothing looks at the
-records again at the next start (B-252).
+records again at the next start (B-252; since done, the user's decision of 2026-11-17: the fault is written synced to
+AppState as `state.fault` where it is found, a store opens closed while it is there, and it goes only with the state,
+by a clear or by the destruction for a new genesis).
 
 #### C4d part 1: the finalized block (2026-11-14)
 

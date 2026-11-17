@@ -81,10 +81,19 @@ final class PathStateStorage(
 
   /** Set when a row read back after a write was not the row written (the store wrote other bytes than it was given), or
     * when a caller found this datadir's own records corrupt ([[failClosed]]). Nothing is written in place after that,
-    * by a commit or by a move, and no state is given out, until the node is started again and its state looked at
-    * (plan.md "C4b: the move core": it never rolls back onto such a store).
+    * by a commit or by a move, and no state is given out, until the state is cleared or destroyed (plan.md "C4b: the
+    * move core": it never rolls back onto such a store).
+    *
+    * It is recorded on disk as it is found ([[StateFaultMark]], B-252), and read here: a restart opens the store closed
+    * again, and the fork choice's refusals then escalate to a clear as they would have without the restart.
     */
-  @volatile private var faulted: Option[String] = None
+  @volatile private var faulted: Option[String] = appState.getStateFault()
+  faulted.foreach(why =>
+    log.error(
+      s"[STATE-MOVE] This node's state failed closed before this start: $why. It takes no write and is not read " +
+        "until it is cleared"
+    )
+  )
 
   /** The finalized block named with a fork choice this node followed ([[moveHead]]'s `finalized`), read from AppState
     * at start (spec 018 C4d part 1). Before one is named, what the settings name, which is none in the node.
@@ -1479,17 +1488,30 @@ final class PathStateStorage(
         moves.unlock()
         adopting(holder)(body)
 
-  /** '''This store takes no further write''', and gives out no state, until the node is started again: a caller found
-    * this datadir's own changeset records corrupt (a plan refused `Corrupt`), and nothing is built over that (plan.md
-    * "C4b part 1": `Corrupt` fails closed at the Engine API, C4d). It is logged at ERROR; the escalation is C4d's.
+  /** '''This store takes no further write''', and gives out no state, until its state is cleared: a caller found this
+    * datadir's own changeset records corrupt (a plan refused `Corrupt`), and nothing is built over that (plan.md "C4b
+    * part 1": `Corrupt` fails closed at the Engine API, C4d). It is logged at ERROR; the escalation is C4d's.
     *
     * It takes no lock: a write already past its check under the state lock completes, and no write that starts after
-    * this does. It is kept in memory only; nothing looks at the records again at the next start (B-252).
+    * this does. The fault is recorded on disk, synced, so that a restart opens the store closed again (B-252).
     */
   def failClosed(why: String): Unit =
     if faulted.isEmpty then
       faulted = Some(why)
-      log.error(s"[STATE-MOVE] This node's state takes no further write and is not read: $why. Start the node again")
+      log.error(s"[STATE-MOVE] This node's state takes no further write and is not read: $why")
+      recordFault(why)
+
+  /** The fault, written synced to AppState ([[StateFaultMark]]). A store that cannot record it is closed all the same,
+    * in memory, and says at ERROR that a restart would open it.
+    */
+  private def recordFault(why: String): Unit =
+    try appState.putStateFault(System.currentTimeMillis(), why).commitSync()
+    catch
+      case NonFatal(failed) =>
+        log.error(
+          s"[STATE-MOVE] The fault of this node's state could not be recorded ($failed): it is closed until it is " +
+            "cleared or the node is started again, and a restart would open it"
+        )
 
   /** Whether this store has failed closed ([[failClosed]], or a row read back that was not the row written). */
   def hasFailedClosed: Boolean = faulted.isDefined
@@ -1872,10 +1894,12 @@ final class PathStateStorage(
       .find((position, node) => rows.read(position).map(ByteString(_)) != node)
       .foreach { (position, _) =>
         val why = s"${position.show}, after the move to block ${chunk.head.show}"
-        faulted = Some(s"a row read back after a write was not the row written ($why)")
+        val fault = s"a row read back after a write was not the row written ($why)"
+        faulted = Some(fault)
         log.error(
           s"[STATE-MOVE] The row at $why is not the row that was written. This node's state takes no further write."
         )
+        recordFault(fault)
       }
 
     ChunkWritten(
