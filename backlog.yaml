@@ -2053,19 +2053,20 @@ items:
   - id: B-252
     title: "Spec 018 C4d follow-up: a state that failed closed is closed in memory only; persist the fault, or check the records at start"
     priority: P2
-    status: claimed
+    status: review
     area: storage
     size: S
     opened: 2026-11-14
     refs: []
     links:
+      prs: [1891]
       spec: 018
     depends_on: [B-062]
     claim:
       by: cloud-dc960fdc
       agent: main
       since: 2026-11-17T18:41:55Z
-      heartbeat: 2026-11-17T18:41:55Z
+      heartbeat: 2026-11-17T18:42:05Z
     notes: "beacon, C4d part 0's read: failClosed (Corrupt at the fork choice) is not durable; nothing re-checks the changeset records at start."
   - id: B-253
     title: A move of the head drops only the head block's transactions from the pool and puts back none of a reversed block's
