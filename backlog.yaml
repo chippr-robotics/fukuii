@@ -954,12 +954,15 @@ items:
   - id: B-116
     title: "EthereumTestsSpec: execute blocks through BlockExecution, not only parse the fixtures"
     priority: P2
-    status: open
+    status: dropped
     area: tests
     opened: 2026-09-27
+    closed: 2026-11-17
     refs: [T-001]
     links: {}
-    notes: src/it/.../ethtest/EthereumTestsSpec.scala:59.
+    notes: |-
+      src/it/.../ethtest/EthereumTestsSpec.scala:59.
+      2026-11-17 dropped: done already: EthereumTestsSpec executes via BlockExecution.executeAndValidateBlock
   - id: B-117
     title: Check the test coverage of pivot selection during sync state scheduling
     priority: P3
