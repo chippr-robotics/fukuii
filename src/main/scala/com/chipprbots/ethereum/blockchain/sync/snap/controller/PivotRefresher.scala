@@ -85,8 +85,8 @@ private[snap] trait PivotRefresher
     with PivotRefreshCommitApi
     with PivotProbeResponseApi:
   self: PivotRefresherState & SnapSharedState & SnapControllerEnv & CoordinatorHandles & PhaseFlags & LifecycleApi &
-    PeerPoolApi & PivotSelectionApi & PivotBestBlockApi & ProbeTargetApi & FinalizationApi & ChainDownloadStartApi &
-    LazyHandoffApi & StagnationResetApi =>
+    PeerPoolApi & PivotSelectionApi & OffBranchPeersApi & PivotBestBlockApi & ProbeTargetApi & FinalizationApi &
+    ChainDownloadStartApi & LazyHandoffApi & StagnationResetApi =>
 
   private lazy val MaxProbeAttempts: Int = 5 // 5 × 30s = 150s max deferral before forced roll
   private lazy val MaxConsecutivePivotRefreshes = 10
@@ -256,12 +256,29 @@ private[snap] trait PivotRefresher
   private[snap] lazy val pivotRefreshBootstrapFailedArms: PartialFunction[Command, Behavior[Command]] = {
     // Handle pivot header bootstrap failure. Instead of recalculating from network-best (which advances
     // the pivot to a block peers don't have yet), backtrack by pivotBlockOffset blocks (Besu pattern).
-    case PivotBootstrapFailed(reason, _) if pendingPivotRefresh.isDefined =>
+    case PivotBootstrapFailed(reason, offBranch) if pendingPivotRefresh.isDefined =>
       val (pendingPivot, originalReason) = pendingPivotRefresh.get
       pendingPivotRefresh = None
       timers.cancel(PivotBootstrapRetryKey)
       val backtrackedPivot = pendingPivot - snapSyncConfig.pivotBlockOffset
-      if reason == PivotHeaderBootstrap.ExhaustedAfterRejection then
+      // B-310: the peers this refresh found on another chain than the branch are left out of the next target, and the
+      // wait for one on the branch is counted, as for the bootstrap at the start (bounded: BranchWaitMillis)
+      offBranchPeers
+        .missed(offBranch, System.currentTimeMillis())
+        .foreach(why => ctx.log.error(PivotAnchor.requirementDroppedText(why)))
+      val floor = offBranchPeers.refreshFloor
+      if reason == PivotHeaderBootstrap.NoPeerOnTheBranch || floor.exists(backtrackedPivot < _) then
+        // B-310 (forge): a backtrack asks the same peers by number, and under the branch's first block asks with no
+        // check of the branch at all. Choose the target again, without the peers on another chain, in 5 s.
+        ctx.log.warn(
+          s"${PivotAnchor.PivotOnBranchTag} pivot header bootstrap for block $pendingPivot found no peer on the branch " +
+            s"(reason: $reason, original: $originalReason); not backtracking" +
+            floor.fold("")(f => s" (the branch begins at block $f)") + ": choosing the pivot again in 5s."
+        )
+        retryRefreshCounts = false
+        retryRefreshUnservable = false
+        timers.startSingleTimer(PivotBootstrapRetryKey, RetryPivotRefresh, 5.seconds)
+      else if reason == PivotHeaderBootstrap.ExhaustedAfterRejection then
         // The peers that claimed this height served headers that failed validation, and are blacklisted: choose the
         // target again from the peers that remain. A backtrack would ask for a height derived from their claim.
         ctx.log.warn(
@@ -513,10 +530,21 @@ private[snap] trait PivotRefresher
           // froze the ETC pivot on 2026-06-01 — peers emit "not indexed" for the tip root.
           // NOTE: the post-merge (CL-anchored) branch above has the same latent issue at
           // offset=0; deferred — it fires rarely and has its own freshness-floor handling.
+          // B-310 (forge): no peer left under the branch's first block can serve a pivot on it: no target, and the wait
+          // for one is begun
+          .filterNot(networkBest => offBranchPeers.belowTheBranch(networkBest, System.currentTimeMillis()))
           .map(networkBest => networkBest - BigInt(snapSyncConfig.pivotBlockOffset).max(SnapServeWindowMargin))
+          // B-310: and a target is never under the branch's first block while a sync is bound to it
+          .map(target => offBranchPeers.refreshFloor.fold(target)(target.max))
           .filter(_ > 0)
 
     if newPivotOpt.isEmpty then
+      // B-310 (forge): a refresh with no target asks no peer, so nothing else ends the wait for a peer on the branch.
+      // Only here: with a target, its bootstrap ends the wait itself (a peer on the branch, or the peers it missed).
+      if !isPoSChain then
+        offBranchPeers
+          .waitExpired(System.currentTimeMillis())
+          .foreach(why => ctx.log.error(PivotAnchor.requirementDroppedText(why)))
       // #1374 T014 (Moving-Root Delta Heal — bounded re-peg last-resort). Under `movingRootDeltaHeal`, a re-peg
       // during StateHealing that finds NO suitable served root counts against a budget; once exhausted, take the SAME
       // fail-SAFE lazy-heal handoff the (now-rare) HealingRootUnservable signal uses — completeSnapSync() → on-demand

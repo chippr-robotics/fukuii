@@ -144,7 +144,9 @@ class ChainDownloader private (
   private var receiptRequestPeers: Map[PeerId, (Peer, Seq[ByteString])] = Map.empty
 
   // go-ethereum behavioural backoff: peers that returned empty headers are excluded from
-  // header dispatch (capacity-to-zero equivalent). Bodies/receipts/SNAP unaffected.
+  // header dispatch (capacity-to-zero equivalent). They are left out of body and receipt requests too, as is a peer on
+  // another chain than the branch the pivot is to be on (B-307 c2): an empty bodies or receipts reply blacklists its
+  // peer, and a peer that has not the headers has not their bodies or receipts either (B-310, forge). SNAP unaffected.
   // With `emptyHeaderBackoff` set (deferred-backfill mode) an entry expires after that period: an excluded peer is never
   // asked again, so nothing else would clear it, and one transient empty reply would otherwise exclude the peer for
   // good (stalling the header download on a small peer set). Unset keeps the original permanent exclusion.

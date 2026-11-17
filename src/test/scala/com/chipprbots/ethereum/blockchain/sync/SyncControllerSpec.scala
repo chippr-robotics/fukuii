@@ -1664,6 +1664,34 @@ class SyncControllerSpec
     appState.getPivotOnBranch() shouldBe Some(bound)
   }
 
+  // B-310 (forge): under the branch's first block the bootstrap asks one header by number, with no check of the branch
+  it should "not end the wait for a peer on the branch when the pivot's bootstrap took a header under the branch" taggedAs (
+    UnitTest,
+    SyncTest
+  ) in withRecoveryTestSetup() { testSetup =>
+    import testSetup.*
+    import com.chipprbots.ethereum.db.storage.pathstate.PivotOnBranch
+    val appState = storagesInstance.storages.appStateStorage
+    seedStrandedFastSync(testSetup)
+    appState
+      .putBestBlockNumber(StrandedBest)
+      .and(appState.putSnapSyncMinPivotBlock(StrandedBest + 1))
+      .commit()
+    answerPeerPollsWith(snapPeerAt(StrandedBest + 10))
+    syncController ! SyncController.WrappedSyncProtocol(SyncProtocol.Start)
+    eventually {
+      someTimePasses()
+      assert(childNamed(testSetup, "pivot-header-bootstrap"))
+    }
+    // the branch begins one block above the header the bootstrap was asked for
+    val waiting = PivotOnBranch(StrandedBest + 2, ByteString(Array.fill[Byte](32)(0x21)), firstMissMillis = Some(7L))
+    appState.putPivotOnBranch(waiting).commit()
+    syncController ! SyncController.WrappedExternal(
+      PivotHeaderBootstrap.Completed(StrandedBest + 1, baseBlockHeader.copy(number = BlockNumber(StrandedBest + 1)))
+    )
+    appState.getPivotOnBranch() shouldBe Some(waiting)
+  }
+
   it should "clear the pivot floor when SNAP finalizes" taggedAs (UnitTest, SyncTest) in withRecoveryTestSetup() {
     testSetup =>
       import testSetup.*
