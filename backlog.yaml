@@ -474,6 +474,62 @@ items:
     notes: |-
       The spec header says fukuii-fc had it in flight on docs/spec-018-c0. T011 and T017 need the user.
       2026-11-17 priority P1: gates B-203, B-207, B-212 and C7's exit (Track C)
+  - id: B-054
+    title: "Spec 018 Track C C1: the trie reports positions (item 8a)"
+    priority: P2
+    status: done
+    area: storage
+    size: L
+    opened: 2026-11-07
+    closed: 2026-11-11
+    refs: [018 C1]
+    links:
+      prs: [1788]
+      spec: specs/018-storage-engine-consolidation
+    depends_on: [B-053]
+    notes: "2026-11-11 in-progress: C1 starts on the frozen golden vectors and oracle list (tasks.md: C1 needs only T014/T015); T025/T026/T033 need the pinned jar and stay open."
+  - id: B-055
+    title: "Spec 018 Track C C2a: the position store's read side (item 8b)"
+    priority: P2
+    status: done
+    area: storage
+    size: L
+    opened: 2026-11-07
+    closed: 2026-11-11
+    refs: [018 C2a]
+    links:
+      prs: [1791, 1792]
+      spec: specs/018-storage-engine-consolidation
+    depends_on: [B-054]
+    notes: "2026-11-11 done: C2a merged in two PRs: #1791 (owner threading, wrappers on the decorator, position mirror) and #1792 (the pathstate read side behind the guard). T045's call-site switch moved to T093; T049 and T050's figures wait for C0 (B-203); T026's ethereum/tests half is B-207."
+  - id: B-056
+    title: "Spec 018 Track C C2b: every reader can be handed the position store (item 8c)"
+    priority: P2
+    status: done
+    area: storage
+    size: L
+    opened: 2026-11-07
+    closed: 2026-11-11
+    refs: [018 C2b]
+    links:
+      prs: [1799]
+      spec: specs/018-storage-engine-consolidation
+    depends_on: [B-055]
+    notes: "2026-11-11 done: C2b complete: #1796 (ratchet), #1797 (RPC readers), #1798 (SNAP serving), #1799 (walkers). Pinned-jar halves wait for C0 (B-207, B-212)."
+  - id: B-057
+    title: "Spec 018 Track C C3a: the changeset record and CF v (item 6a)"
+    priority: P2
+    status: done
+    area: storage
+    size: M
+    opened: 2026-11-07
+    closed: 2026-11-11
+    refs: [018 C3a]
+    links:
+      prs: [1793]
+      spec: specs/018-storage-engine-consolidation
+    depends_on: [B-056]
+    notes: "2026-11-11 done: C3a merged as #1793. T074's DC-14 figures wait for C0 (B-203). The user's decisions of 2026-11-11 (512 blocks without finality, one downgrade barrier, snap1 off under the guard) are recorded in a follow-up."
   - id: B-058
     title: "Spec 018 Track C C3b: the staged commit, the state lock and the canonical in-place commit (item 6b)"
     priority: P2
@@ -488,6 +544,20 @@ items:
       spec: specs/018-storage-engine-consolidation
     depends_on: [B-057]
     notes: "2026-11-11 done: C3b complete in one PR: staged layer, canonical commit, retention, metrics, and the wiring into block execution. Guard serves linear import only until C4. T075 recorded values and T098-T100 wait for C0 (B-203)."
+  - id: B-059
+    title: "Spec 018 Track C C3c: proposer view, bypass writers, genesis commit and the ported harnesses (item 6b')"
+    priority: P2
+    status: done
+    area: storage
+    size: L
+    opened: 2026-11-07
+    closed: 2026-11-12
+    refs: [018 C3c]
+    links:
+      prs: [1805]
+      spec: specs/018-storage-engine-consolidation
+    depends_on: [B-058]
+    notes: "2026-11-12 done: C3c complete in its linear subset: genesis commit (#1801), proposer view (#1802), lenient import (#1803), fixture replays and canary (#1804), test mode (#1805). Deferred: B-219, B-220."
   - id: B-060
     title: "Spec 018 Track C C4a: the overlay (item 6c)"
     priority: P2
