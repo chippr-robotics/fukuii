@@ -304,13 +304,17 @@ items:
   - id: B-027
     title: VM error-text parity with geth/core-geth for eth_call and eth_estimateGas errors
     priority: P2
-    status: open
+    status: done
     area: rpc
     size: M
     opened: 2026-11-05
+    closed: 2026-11-17
     refs: [H10, CHASE D]
-    links: {}
-    notes: conduit + forge (needs ProgramError detail). Cosmetic for hive, which redacts messages.
+    links:
+      prs: [1777]
+    notes: |-
+      conduit + forge (needs ProgramError detail). Cosmetic for hive, which redacts messages.
+      2026-11-17 done: 0.12.1 retro: #1777 (VM/call texts) and #1778 (precompile reasons); remaining texts are B-137, B-171, B-172
   - id: B-028
     title: "#1677 tx fetcher parity: one GetPooledTransactions in flight per peer, 128 KB cap"
     priority: P2
