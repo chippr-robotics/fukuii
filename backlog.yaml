@@ -3795,3 +3795,12 @@ items:
     links:
       spec: 018
     notes: "forge W3 on #1880; the conversion is pinned in ConsensusAdapterEscalationSpec only"
+  - id: B-328
+    title: "Export db.state.anchor.number as a metric (path-live): the Mordor gate could only read the anchor from the start's reconciliation line"
+    priority: P3
+    status: open
+    area: metrics
+    opened: 2026-11-17
+    refs: []
+    links:
+      spec: 018
