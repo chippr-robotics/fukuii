@@ -530,6 +530,22 @@ object SyncController:
     // a recent header with a dedicated PivotHeaderBootstrap (inline in `runningSnapSync` — no transition into the
     // deadlock-prone bootstrap state) and reply HealingServeRoot to the child. Only one is serviced at a time.
     private var healingServeRootRequester: Option[TypedActorRef[SNAPSyncController.Command]] = None
+
+    /** The peers this controller's own bootstraps found on another chain than the branch a sync is bound to: the
+      * healing serve-root's and the recovery's recent-root's (B-320, forge). The SNAP child holds those its pivot
+      * bootstraps found; these are held here, and only held: a miss of a bootstrap that is not the pivot's counts
+      * nothing towards the wait for a peer on the branch.
+      */
+    private val bootstrapOffBranch = new snap.PivotAnchor.OffBranchPeers(() => appStateStorage)
+
+    private def snapTargetHeights(
+        peers: Map[
+          com.chipprbots.ethereum.network.Peer,
+          com.chipprbots.ethereum.network.NetworkPeerManagerActor.PeerInfo
+        ]
+    ): Iterable[BigInt] =
+      val now = System.currentTimeMillis()
+      SyncController.snapTargetHeights(peers, peer => bootstrapOffBranch.holds(peer, now))
     private var healingServeRootBootstrap
         : Option[(TypedActorRef[PeersClient.Command], TypedActorRef[PivotHeaderBootstrap.Command])] =
       None // (peersClient, headerBootstrap)
@@ -1008,8 +1024,9 @@ object SyncController:
             healingServeRootRequester = None
             Behaviors.same
 
-          case PivotHeaderBootstrap.Failed(reason, _) if healingServeRootRequester.isDefined =>
+          case PivotHeaderBootstrap.Failed(reason, offBranch) if healingServeRootRequester.isDefined =>
             log.warn(s"[HEAL-SERVE-ROOT] Serve-root bootstrap failed ($reason). Replying None (serve root kept).")
+            bootstrapOffBranch.hold(offBranch, System.currentTimeMillis())
             stopHealingServeRootBootstrap()
             healingServeRootRequester.foreach(_ ! SNAPSyncController.HealingServeRoot(0, None))
             healingServeRootRequester = None
@@ -1118,8 +1135,7 @@ object SyncController:
           com.chipprbots.ethereum.network.NetworkPeerManagerActor.PeerInfo
         ]
     ): Unit =
-      val snapHeights = peers.values.filter(_.remoteStatus.supportsSnap).map(_.maxBlockNumber)
-      SyncController.recentRootTarget(snapHeights, RecentRootMarginBlocks) match
+      SyncController.recentRootTarget(snapTargetHeights(peers), RecentRootMarginBlocks) match
         case Some(recentBlock) =>
           healingServeRootGeneration += 1
           val gen = healingServeRootGeneration
@@ -3327,8 +3343,9 @@ object SyncController:
           recentRootRequester = None
           Behaviors.same
 
-        case PivotHeaderBootstrap.Failed(reason, _) if recentRootRequester.isDefined =>
+        case PivotHeaderBootstrap.Failed(reason, offBranch) if recentRootRequester.isDefined =>
           log.warn(s"Recovery recent-root bootstrap failed ($reason). Declining the roll; abandon path will run.")
+          bootstrapOffBranch.hold(offBranch, System.currentTimeMillis())
           stopRecentRootBootstrap()
           recentRootRequester.foreach(_ ! StorageRecoveryActor.RecentRoot(0, None))
           recentRootRequester = None
@@ -3375,8 +3392,7 @@ object SyncController:
           com.chipprbots.ethereum.network.NetworkPeerManagerActor.PeerInfo
         ]
     ): Unit =
-      val snapHeights = peers.values.filter(_.remoteStatus.supportsSnap).map(_.maxBlockNumber)
-      SyncController.recentRootTarget(snapHeights, RecentRootMarginBlocks) match
+      SyncController.recentRootTarget(snapTargetHeights(peers), RecentRootMarginBlocks) match
         case Some(recentBlock) =>
           recentRootGeneration += 1
           val gen = recentRootGeneration
@@ -3667,6 +3683,20 @@ object SyncController:
     * SNAP-capable peer head (so the target is inside peers' snapshot serve window), clamped to >= 1. Returns None when
     * no peer height is known yet, so the caller declines the roll and lets the abandon path run. Pure for testability.
     */
+  /** The heights of the SNAP peers a bootstrap's target is taken from: on this node's fork, and not `held` for another
+    * chain than the branch a sync is bound to (B-320), as the SNAP child's pivot choice takes them.
+    */
+  private[sync] def snapTargetHeights(
+      peers: Map[
+        com.chipprbots.ethereum.network.Peer,
+        com.chipprbots.ethereum.network.NetworkPeerManagerActor.PeerInfo
+      ],
+      held: com.chipprbots.ethereum.network.PeerId => Boolean
+  ): Iterable[BigInt] =
+    peers.collect {
+      case (peer, info) if info.remoteStatus.supportsSnap && info.forkAccepted && !held(peer.id) => info.maxBlockNumber
+    }
+
   private[sync] def recentRootTarget(snapPeerHeights: Iterable[BigInt], margin: BigInt): Option[BigInt] =
     snapPeerHeights.filter(_ > 0).maxOption.map(best => (best - margin).max(1))
 
