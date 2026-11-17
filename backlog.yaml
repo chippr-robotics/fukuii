@@ -107,12 +107,17 @@ items:
   - id: B-009
     title: "ReferenceCountNodeStorage: an upsert of a stored node keeps the old bytes, so heal never replaces a junk wrapper"
     priority: P1
-    status: open
+    status: claimed
     area: storage
     size: M
     opened: 2026-11-04
     refs: [CHASE row 42/48, CHASE A ReferenceCountNodeStorage]
     links: {}
+    claim:
+      by: cloud-dc960fdc
+      agent: vault-b009
+      since: 2026-11-17T23:33:47Z
+      heartbeat: 2026-11-17T23:33:47Z
     notes: "vault, bucket C: replace when the stored bytes do not hash to the key. Live until Track C C8b."
   - id: B-010
     title: "Measure db.pruning.retained.bytes on Mordor over 24 h with a build that has #1739"
