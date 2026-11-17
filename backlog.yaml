@@ -3775,3 +3775,13 @@ items:
       design first (beacon, forge, vault); gates B-304, B-308, B-310, B-311; mining stays refused (B-293); live runs Mordor + Sepolia after merge
       2026-11-17 blocked: design pushed on design/018-c5a-part10 (8fe8845); waits for the main session and the user's 4 decisions; code after B-304/B-308/B-310/B-311
       2026-11-17 released by cloud-lane2: design pushed on design/018-c5a-part10 (8fe8845); the main session owns part 10's PR and the next step
+  - id: B-326
+    title: "ETC on path-live: after a hand-off held for accounts left out, healing resumes at the same stale pivot (no PoW route to a newer one)"
+    priority: P2
+    status: open
+    area: snap
+    opened: 2026-11-17
+    refs: []
+    links:
+      spec: 018
+    notes: "forge W1 on #1880: healAtNewerPivot takes its target from the CL head; PoW waits for the 4096-block drift check. Not seen in the Mordor gate."
