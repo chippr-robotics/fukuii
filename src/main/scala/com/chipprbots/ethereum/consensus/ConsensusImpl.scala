@@ -1201,22 +1201,20 @@ class ConsensusImpl(
         // Side-chain case. `failingBlock.header.parentHash` is a validated but (until this batch) non-canonical
         // block — precisely the latestValidHash hive's invalid-ancestor tests assert on.
         reportIfProvenInvalid(failingBlock, error, unexecuted.tail)
-        if adopted && executedBlocks.nonEmpty then
-          // B-291 (forge): the valid prefix outweighed the head and is the head now. The blocks it replaced left the
-          // canonical chain, and are queued again as a reorganisation's are; whoever follows the head is told of it.
-          val told = sideParents ++ executedBlocks
+        val told = sideParents ++ executedBlocks
+        val failure = s"$ReorganiseFailurePrefix$error"
+        // B-291 (forge): the valid prefix outweighed the head and is the head now. The blocks it replaced left the
+        // canonical chain, and are queued again as a reorganisation's are; whoever follows the head is told of it. Only
+        // for a block's own fault: this node's state fault keeps the answer the importer escalates it by (T062), and
+        // the failing block is not dropped as an invalid one would be.
+        if adopted && told.nonEmpty && !Consensus.isLocalStateFault(failure) then
           SelectedNewBestBranchPartially(
             oldBlocksData.map(_.block),
             told.map(_.block),
             told.map(_.weight),
-            BranchExecutionFailure(Nil, failingBlock.hash.value, s"$ReorganiseFailurePrefix$error")
+            BranchExecutionFailure(Nil, failingBlock.hash.value, failure)
           )
-        else
-          BranchExecutionFailure(
-            executedBlocks.map(_.block),
-            failingBlock.hash.value,
-            s"$ReorganiseFailurePrefix$error"
-          )
+        else BranchExecutionFailure(executedBlocks.map(_.block), failingBlock.hash.value, failure)
 
   /** Is the tip of this candidate branch on the path to the head the consensus layer designated?
     *

@@ -472,12 +472,13 @@ class ConsensusImplSpec extends AnyFlatSpec with Matchers with ScalaFutures with
 
     val reorg: List[Block] = heavier(initialChain(2))
     setFailingBlockWith(reorg(1), localStateFault)
-    // the prefix before the failing block outweighs the head and became it (B-291): the failure rides with it
+    // this node's own fault keeps the answer the importer escalates it by, even after a prefix became the head (B-291,
+    // forge F1): it is no partial reorganisation, whose failing block is dropped as an invalid one
     whenReady(consensus.evaluateBranch(NonEmptyList.fromListUnsafe(reorg)).unsafeToFuture()) {
-      case SelectedNewBestBranchPartially(_, _, _, BranchExecutionFailure(_, _, error)) =>
+      case BranchExecutionFailure(_, _, error) =>
         error should startWith(Consensus.ReorganiseFailurePrefix)
         Consensus.isLocalStateFault(error) shouldBe true
-      case other => fail(s"expected a partial reorganisation, got $other")
+      case other => fail(s"expected BranchExecutionFailure, got $other")
     }
 
     withClue("a block that fails validation is still the block's fault: ") {
