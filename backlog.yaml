@@ -3626,7 +3626,7 @@ items:
   - id: B-312
     title: Cut v0.12.0 after C5a part 10, before the part 11 measurements (user, 2026-11-16)
     priority: P1
-    status: open
+    status: claimed
     area: release
     size: S
     opened: 2026-11-16
@@ -3634,6 +3634,11 @@ items:
     links:
       spec: 018
     depends_on: [B-064]
+    claim:
+      by: cloud-dc960fdc
+      agent: main
+      since: 2026-11-17T11:36:01Z
+      heartbeat: 2026-11-17T11:36:01Z
     notes: "The measurements (T207-T209) run on the release. Release process: see docs/development and the release workflows."
   - id: B-313
     title: AccountRangeCoordinatorSpec 'not dispatch a task to a peer still in cooldown' races under CPU load
