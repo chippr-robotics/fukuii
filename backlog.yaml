@@ -2541,7 +2541,7 @@ items:
   - id: B-334
     title: "Docs link check: stop github.com 503s and openjdk 403s failing PRs (auth, concurrency cap, retries, cache, exclude bugs.openjdk.org)"
     priority: P2
-    status: open
+    status: claimed
     area: ci
     size: S
     opened: 2026-11-17
@@ -2549,3 +2549,8 @@ items:
     links:
       prs: [1886]
       branch: ccr-9d49106a-kvpho1
+    claim:
+      by: cloud-ccr
+      agent: main
+      since: 2026-11-17T17:35:00Z
+      heartbeat: 2026-11-17T17:35:00Z
