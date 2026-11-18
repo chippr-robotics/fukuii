@@ -2741,10 +2741,11 @@ items:
       by: cloud-dc960fdc
       agent: forge-b298
       since: 2026-11-18T01:27:45Z
-      heartbeat: 2026-11-18T01:27:55Z
+      heartbeat: 2026-11-18T01:53:12Z
     notes: |-
       B-298 follow-up (forge). Refusal+blacklist is what B-298 asked, but a node on a minority fork deeper than 128 never rejoins (each heaviest peer refused in turn). Options: weigh the branch from the true LCA and send RegularSyncStuck if heavier; or N distinct refusing peers -> escalate. core-geth's floor is 90000.
       2026-11-18 in-progress: branch fix/b298-sync-fork-hash-layout (folded into B-298)
+      2026-11-18 in-progress: Implemented on fix/b298-sync-fork-hash-layout (25ec7729d, rebased on staging 0.12.20): below the 128 floor the resolver searches on for the true common block (never rewinds below it), weighs the peer's branch with headers only (<= MaxBranchHeadersFetched 8192; stored weights vs exact head weight + MESS + import header validation incl. seal, DeepForkWeight), and a heavier one is answered BranchHeavierBeyondReach -> BlockImporter sends RegularSyncStuck (hash layout's existing re-SNAP route) once per fork (by common-block hash; a repeat is answered unweighed and not resent). Lighter/equal/invalid/unweighable: refused + blacklisted as before. Limits: a fork that needs > 8192 headers to outweigh the head, or whose common block has no stored header, is still refused. Orchestrator closes.
   - id: B-347
     title: "SYNC-FORK hash layout: resolver failures other than B-298 refusals (no common block, header missing, stop) still blind-rewind 128 blocks unweighed"
     priority: P2
