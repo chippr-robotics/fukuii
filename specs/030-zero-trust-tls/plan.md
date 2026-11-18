@@ -11,7 +11,7 @@ Every service listener (JSON-RPC HTTP with GraphQL and health, WebSocket, Engine
 over shared named profiles, validated in full before any port binds. HTTP, WS and metrics take `client-auth = none |
 want | need`; the Engine API takes server TLS only and keeps JWT as its client check (Q1). A verified client
 certificate on HTTP or WS selects the caller's namespaces through ordered identity rules that may grant more than the
-listener's `apis` (Q3), and gate GraphQL (pending confirmation). Profiles, identity rules and the P2P allowlist reload
+listener's `apis` (Q3), and gate GraphQL. Profiles, identity rules and the P2P allowlist reload
 without a restart. A listener that binds a non-loopback interface without TLS refuses the start unless
 `allow-insecure-bind` is set (Q2, a breaking change with a migration section). All outbound HTTPS goes through one
 factory, held by a CI ratchet. A consortium node accepts and dials only allowlisted node IDs, checked right after the

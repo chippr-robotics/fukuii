@@ -289,7 +289,7 @@ node (a single-thread `ScheduledExecutorService`, named, daemon). No `WatchServi
 
 ## 3. Open points for the user (not blocking the plan)
 
-1. FR-028 (rules gate GraphQL) is the recommended default, pending confirmation (D-4 says what changes if declined).
+1. FR-028 (rules gate GraphQL): confirmed by the user on 2026-11-18, with the other decisions here and D-4 to D-7.
 2. The release that carries slice 6 (the breaking default) is not named; the spec has no `**Release**` line yet.
 3. D-7's choice of a Pekko route for metrics over TLS replaces the Prometheus server only when TLS is on; if the user
    prefers one metrics server, the HttpsConfigurator fallback loses FR-017's `no_client_cert` count on that listener.

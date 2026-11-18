@@ -328,4 +328,4 @@ breaking change and waits for S2 and S5; S7–S8 close the outbound class of bug
 - Each slice is an item in the shared backlog, added and claimed before work (constitution Principle VIII); the PR
   body carries `Backlog: B-0xx` for the slice and `Refs: B-146`.
 - Consensus-adjacent slices name their reviewer in plan.md (beacon for S5/S6's Engine API, herald for S9/S10).
-- FR-028 (GraphQL gating) is pending the user's confirmation; T040 lists what drops if declined.
+- FR-028 (GraphQL gating) was confirmed by the user on 2026-11-18.

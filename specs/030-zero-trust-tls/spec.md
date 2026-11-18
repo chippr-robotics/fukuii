@@ -4,9 +4,7 @@
 
 **Created**: 2026-11-17
 
-**Status**: Planned (2026-11-18). Q1–Q5 were answered on 2026-11-18 (see Clarifications; Q3's GraphQL gating is a recommended default pending the user's confirmation), and plan.md and tasks.md slice the work into eleven PRs; no code has landed.
-
-**In flight**: `spec/b146-030-clarify` (cloud session `cloud-dc960fdc`, agent `spec-b146`): clarify, plan and tasks
+**Status**: Planned (2026-11-18). Q1–Q5 were answered on 2026-11-18 (see Clarifications), and the user accepted the plan's own decisions the same day, and plan.md and tasks.md slice the work into eleven PRs; no code has landed.
 
 **Input**: Backlog B-146 (P1, from the B-145 TLS audit, issue #1756): "Spec: zero-trust TLS and mTLS on every service
 listener (RPC, WS, Engine API, metrics) plus outbound TLS. Shared tls block, client-auth need/want, truststore,
@@ -54,8 +52,8 @@ not. The consortium control is therefore "only these keys may connect", enforced
   This is a breaking change and ships with a release note and a migration section (FR-018, FR-019).
 - Q: Is an identity rule's `apis` capped by the listener's `apis`, or a grant beyond it, and do rules gate GraphQL? →
   A: (b) A grant that may exceed the listener's set. The listener's `apis` is what an anonymous or unmatched caller
-  gets; a matched certificate gets the rule's set (FR-021–FR-023). Rules also gate GraphQL (FR-028): **recommended
-  default, pending user confirmation.**
+  gets; a matched certificate gets the rule's set (FR-021–FR-023). Rules also gate GraphQL (FR-028), confirmed by the
+  user.
 - Q: Is the P2P allowlist static or editable at runtime, and does discovery run in allowlist mode? → A: Both: a static
   file, reloaded like TLS material, and new `admin_` methods that edit it at runtime and write back to the file (the
   model of Besu's `perm_addNodesToAllowlist` / `perm_removeNodesFromAllowlist` / `perm_getNodesAllowlist`). In
@@ -63,6 +61,14 @@ not. The consortium control is therefore "only these keys may connect", enforced
   allowlist (FR-055–FR-059).
 - Q: Is client-certificate revocation in scope? → A: (a) Out of scope. Short-lived certificates plus truststore and
   identity-rule reload are the revocation path. A local CRL file per profile is a possible follow-up (Out of Scope).
+- Q: The decisions the plan made that Q1–Q5 left open (research.md section 3 and D-4 to D-7). → A: Accepted as
+  written: a matched certificate gets exactly its rule's set and the draft's `tls.anonymous-apis` and
+  `tls.unmatched` keys are dropped; GraphQL is gated as the pseudo-namespace `graphql`; the allowlist methods are
+  `admin_addNodesToAllowlist`, `admin_removeNodesFromAllowlist` and `admin_getNodesAllowlist`, returning `true`, with
+  no reload method; entries with an address are dial candidates, removal disconnects, config/static/boot entries are
+  not removable at runtime, edits need `file` and are atomic with at most 256 entries; forced-off discovery includes
+  the DNS tree walk and overrides `discovery-enabled = true` with a warning; metrics over TLS use a Pekko route. The
+  release that carries slice 6 is named when the slice lands.
 
 ---
 
@@ -293,7 +299,7 @@ resolves to one, the node exits non-zero before any bind with a message naming t
   (`EndpointProbe`) must use the outbound factory with a client profile; the docs must say so. No unauthenticated side
   port is added (see Out of Scope).
 - **GraphQL** on the RPC port is covered by the listener's TLS and client auth, and identity rules gate it as the
-  pseudo-namespace `graphql` (FR-028; recommended default, pending user confirmation). With no identity rules, or for
+  pseudo-namespace `graphql` (FR-028). With no identity rules, or for
   anonymous and unmatched callers, GraphQL is served exactly when `rpc.graphql.enabled` is true, as today.
 - **A rule narrower than the listener.** A rule's set replaces the listener's set for that certificate (FR-023), so a
   matched certificate can get less than an anonymous caller under `want`. That is the operator's rule, applied as
@@ -419,7 +425,7 @@ resolves to one, the node exits non-zero before any bind with a message naming t
 - **FR-027**: The existing loopback warning (`RpcExposureCheck`: opt-in namespaces on a non-loopback HTTP/WS bind)
   MUST evaluate the transport's `apis` only, the set an anonymous or unmatched caller gets; a namespace reachable only
   through an identity rule MUST NOT trigger it. The startup line (FR-060) lists each rule's grant instead.
-- **FR-028** *(recommended default, pending user confirmation)*: Identity rules MUST gate GraphQL (`POST /graphql`)
+- **FR-028**: Identity rules MUST gate GraphQL (`POST /graphql`)
   as the pseudo-namespace `graphql`. An anonymous or unmatched caller gets GraphQL when `rpc.graphql.enabled` is true
   (today's behaviour); a matched certificate gets it only when its rule's `apis` lists `graphql`. A refused GraphQL
   request MUST get the same answer as a node with GraphQL disabled and MUST be counted as a denial (FR-024). A rule
