@@ -16,8 +16,9 @@ import com.chipprbots.ethereum.console.TuiEnv
 import com.chipprbots.ethereum.ephemery.EphemeryResetWatchdog
 import com.chipprbots.ethereum.ephemery.EphemeryResolver
 import com.chipprbots.ethereum.ephemery.StartupDeps
+import com.chipprbots.ethereum.nodebuilder.BaseNode
 import com.chipprbots.ethereum.nodebuilder.ChainTool
-import com.chipprbots.ethereum.nodebuilder.EngineApiStartupRefusal
+import com.chipprbots.ethereum.nodebuilder.NodeStartup
 import com.chipprbots.ethereum.nodebuilder.StdNode
 import com.chipprbots.ethereum.nodebuilder.TestNode
 import com.chipprbots.ethereum.utils.Config
@@ -151,25 +152,36 @@ object Fukuii extends Logger:
         sys.exit(2)
       sys.exit(ChainTool.run(args.toIndexedSeq, Config))
 
-    val node =
-      if Config.testmode then
-        log.info("Starting Fukuii in test mode")
-        deleteRocksDBFiles()
-        new TestNode
-      else new StdNode
-
-    try node.start()
-    catch
-      case refusal: EngineApiStartupRefusal =>
-        // The terminal first, so the message is not lost in the alternate screen, then the message once, with no trace.
-        Tui.current.foreach(_.shutdown())
-        System.err.println(refusal.getMessage)
-        log.error(refusal.getMessage)
-        sys.exit(1)
+    // Any throw from building or starting the node ends the process (B-274): logged at ERROR, the terminal restored
+    // before the message is printed on stderr, what started shut down within a bound, exit 1. A refusal
+    // (EngineApiStartupRefusal) is printed and logged as its one line; anything else with its stack trace in the log.
+    var node: Option[BaseNode] = None
+    val started = NodeStartup.startOrExit(
+      () =>
+        val built =
+          if Config.testmode then
+            log.info("Starting Fukuii in test mode")
+            deleteRocksDBFiles()
+            new TestNode
+          else new StdNode
+        node = Some(built)
+        built.start()
+      ,
+      NodeStartup.OnFailure(
+        restoreTerminal = () => Tui.current.foreach(_.shutdown()),
+        printToUser = message =>
+          System.err.println(message)
+          System.err.flush()
+        ,
+        shutdown = () => node.foreach(_.shutdown()),
+        shutdownBound = NodeStartup.DefaultShutdownBound,
+        exit = deps.exit
+      )
+    )
 
     // An Ephemery iteration ends at its reset: exit 75 for a supervisor to restart (managed), or only warn (an
     // operator's prepared directory, or `exit-at-reset = false`). Nothing is armed on any other network.
-    EphemeryResetWatchdog.startFor(Config.config, deps)
+    if started then EphemeryResetWatchdog.startFor(Config.config, deps)
 
   private def truncateLogs(): Unit =
     import scala.util.Try

@@ -18,6 +18,7 @@ import com.chipprbots.ethereum.blockchain.data.GenesisAccount
 import com.chipprbots.ethereum.blockchain.data.GenesisData
 import com.chipprbots.ethereum.blockchain.data.GenesisDataLoader
 import com.chipprbots.ethereum.blockchain.sync.EphemBlockchainTestSetup
+import com.chipprbots.ethereum.blockchain.sync.regular.BlockEnqueued
 import com.chipprbots.ethereum.blockchain.sync.regular.BlockImportFailed
 import com.chipprbots.ethereum.blockchain.sync.regular.BlockImportResult
 import com.chipprbots.ethereum.blockchain.sync.regular.BlockImportedToTop
@@ -29,8 +30,16 @@ import com.chipprbots.ethereum.consensus.engine.InvalidChainReporter
 import com.chipprbots.ethereum.crypto.generateKeyPair
 import com.chipprbots.ethereum.db.components.EphemDataSourceComponent
 import com.chipprbots.ethereum.db.components.Storages
+import com.chipprbots.ethereum.db.dataSource.DataSourceUpdate
+import com.chipprbots.ethereum.db.dataSource.DataSourceUpdateOptimized
+import com.chipprbots.ethereum.db.dataSource.DataUpdate
+import com.chipprbots.ethereum.db.dataSource.EphemDataSource
+import com.chipprbots.ethereum.db.storage.AppStateStorage
+import com.chipprbots.ethereum.db.storage.Namespaces
+import com.chipprbots.ethereum.db.storage.PathNodeStorage
 import com.chipprbots.ethereum.db.storage.pathstate.FinalizedBlock
 import com.chipprbots.ethereum.db.storage.pathstate.HandedToRecovery
+import com.chipprbots.ethereum.db.storage.pathstate.PathStateTestKit
 import com.chipprbots.ethereum.db.storage.pathstate.RefusedForThisHead
 import com.chipprbots.ethereum.db.storage.pathstate.StateConfig
 import com.chipprbots.ethereum.domain.*
@@ -38,6 +47,7 @@ import com.chipprbots.ethereum.ledger.BlockExecutionError
 import com.chipprbots.ethereum.ledger.InMemoryWorldStateProxy
 import com.chipprbots.ethereum.ledger.StateRecovery
 import com.chipprbots.ethereum.ledger.StateRecovery.Sink
+import com.chipprbots.ethereum.mpt.PositionTestKit.RawTrieWalk
 import com.chipprbots.ethereum.security.SecureRandomBuilder
 import com.chipprbots.ethereum.testing.Tags.*
 import com.chipprbots.ethereum.utils.BlockchainConfig
@@ -275,6 +285,59 @@ class ReorgBlockhashParitySpec extends AnyFlatSpec with Matchers with ScalaFutur
             newBranch.map(_.hash) shouldBe back.map(_.hash)
           case other => fail(s"expected SelectedNewBestBranch, got $other")
     )
+
+  // B-295 (T183's remainder; forge W3 of C4e part 4). On the unified layout a heavier branch is adopted by moving the
+  // head in place: reverse batches from the old head down to the fork, then forward along the branch, each a synced
+  // write that moves the anchor, the best block and the index together. A kill can land between any two writes. Here
+  // it lands after every one of them in turn: the node is started again on what the dead one left, through the
+  // reconciliation at start, and must stand on a valid head; offered the two chains again, in either order, it must
+  // end on the heavier, with that block's state.
+  for (layout, cap) <- Seq[(String, StateConfig => StateConfig)](
+      ("executed on layers", movesOfThree),
+      ("at the cap, reverse-then-commit", pinnedCap(1L).andThen(movesOfThree)),
+      ("an archive with the fork below its view reach", archiveOfShortViews)
+    )
+  do
+    s"A heavier branch on the unified layout ($layout) whose adoption is killed after any of its writes" should
+      "leave a valid head at the restart, and end on the heavier chain when both are offered again" taggedAs (
+        UnitTest,
+        ConsensusTest
+      ) in (new KilledReorg(cap):
+        // the attempt not killed: how many writes it makes, and which of them move the anchor
+        val whole: Attempt = attempt(None)
+        whole.writes should be > 0
+        whole.anchorMoves.size should be >= 2
+        val restartedOn: scala.collection.mutable.Set[String] = scala.collection.mutable.Set.empty[String]
+        for
+          after <- 0 to whole.writes
+          oldChainFirst <- Seq(false, true)
+        do
+          val killed = attempt(Some(after))
+          withClue(
+            s"killed after write $after of ${whole.writes} (the anchor moved by ${whole.anchorMoves}), the old chain offered ${if oldChainFirst then "first" else "last"}: "
+          ) {
+            val node = new Node(guard = true, cap, Some(killed.datadir), restart = true)
+            node.reconciled.get should (be(a[StateReconciliation.Outcome.Consistent])
+              .or(be(a[StateReconciliation.Outcome.Reconciled])))
+            val head = validHead(node, killed.datadir)
+            restartedOn += where(head)
+            if oldChainFirst then
+              // a head that weighs no less than the old chain's tip stays: a tie keeps the head (by weight alone)
+              val stays = weightOf(node, head.hash) >= weightOf(node, oldChain.last.hash)
+              offer(node, oldChain)
+              validHead(node, killed.datadir).hash shouldBe (if stays then head.hash else oldChain.last.hash)
+            offer(node, branch)
+            validHead(node, killed.datadir).hash shouldBe branch.last.hash
+            // the old chain again: lighter, kept beside the head
+            node.importAll(oldChain.drop(3)) shouldBe BlockEnqueued
+            validHead(node, killed.datadir).hash shouldBe branch.last.hash
+            // and the head's state is executed on: the branch's next block is its head
+            node.importOne(next) shouldBe a[BlockImportedToTop]
+            node.bestHash shouldBe next.hash
+          }
+        // the kill met the move at each of its points: before it, on the way down, at the fork, on the way up, after
+        restartedOn shouldBe Set("the old head", "the old chain", "the fork", "the branch", "the branch's tip")
+      )
 
   "Chain-file import (hive consensus simulator path)" should
     "apply TD fork choice instead of making the last block in the file the head" taggedAs (
@@ -654,6 +717,84 @@ class ReorgBlockhashParitySpec extends AnyFlatSpec with Matchers with ScalaFutur
       import node.runtime
       consensus.evaluateBranch(NonEmptyList.fromListUnsafe(branch)).unsafeRunSync()
 
+  /** Canonical h1..h12 at difficulty 1000; the branch leaves it after h3, 9 blocks below the head, with 10 blocks at
+    * 1000 sealed for another miner: heavier, and of another state at every height.
+    */
+  class KilledReorg(cap: StateConfig => StateConfig):
+    val oracle = new Oracle
+    val oldChain: List[Block] = oracle.extendCanonical(oracle.genesis, 12, difficulty = 1000)
+    val fork: Block = oldChain(2)
+    val branch: List[Block] = oracle.extendSide(fork, 10, difficulty = 1000, tag = 0x81, miner = OtherMiner)
+    val next: Block = oracle.extendSide(branch.last, 1, difficulty = 1000, tag = 0x82, miner = OtherMiner).head
+
+    final case class Attempt(datadir: Killable, writes: Int, anchorMoves: Seq[Int])
+
+    /** A node with the old chain, offered the branch and killed after `after` writes of that (never, with `None`). */
+    def attempt(after: Option[Int]): Attempt =
+      val datadir = new Killable
+      val node = new Node(guard = true, cap, Some(datadir))
+      node.importAll(oldChain) shouldBe a[BlockImportedToTop]
+      datadir.arm(after.getOrElse(Int.MaxValue))
+      val result = scala.util.Try(node.importAll(branch))
+      if after.isEmpty then result.get shouldBe a[ChainReorganised]
+      datadir.disarm()
+      Attempt(datadir, datadir.writes, datadir.anchorMoves)
+
+    /** The blocks of `chain` a peer offers: those above where it leaves the node's index. */
+    def offer(node: Node, chain: List[Block]): Unit =
+      val offered = chain.dropWhile(block => node.indexed(block.number.value.toInt).contains(block.hash))
+      if offered.nonEmpty then
+        node.importAll(offered) should (be(a[ChainReorganised]).or(be(a[BlockImportedToTop])).or(be(BlockEnqueued)))
+
+    def weightOf(node: Node, hash: BlockHash): ChainWeight =
+      node.blockchainReader.getChainWeightByHash(hash).getOrElse(fail(s"no weight for ${hash.toHexString}"))
+
+    def where(head: BlockHeader): String =
+      if head.hash == oldChain.last.hash then "the old head"
+      else if head.hash == fork.hash then "the fork"
+      else if head.hash == branch.last.hash then "the branch's tip"
+      else if oldChain.exists(_.hash == head.hash) && head.number.value > fork.number.value then "the old chain"
+      else if branch.exists(_.hash == head.hash) then "the branch"
+      else s"block ${head.number.value}, of neither chain above the fork"
+
+    /** The state's block is the best block, the index is its ancestry and holds nothing above it, its header is the
+      * anchor's, and the disk holds its state row for row.
+      */
+    def validHead(node: Node, datadir: Killable): BlockHeader =
+      val appState = node.storagesInstance.storages.appStateStorage
+      val anchor = appState.getStateAnchor().getOrElse(fail("no anchor"))
+      node.storagesInstance.storages.pathStateStorage.get.anchor shouldBe Some(anchor)
+      val header = node.blockchainReader.getBlockHeaderByHash(BlockHash(anchor.hash)).getOrElse(fail("no header"))
+      (header.number.value, header.stateRoot.value) shouldBe (anchor.number, anchor.stateRoot)
+      (appState.getBestBlockInfo().hash, appState.getBestBlockInfo().number) shouldBe (anchor.hash, anchor.number)
+      node.blockchainReader.getChainWeightByHash(header.hash) should not be empty
+      val ancestry = Iterator
+        .iterate(Option(header))(_.flatMap(h => node.blockchainReader.getBlockHeaderByHash(h.parentHash)))
+        .takeWhile(_.exists(_.number.value > 0))
+        .flatten
+        .toVector
+        .reverse
+      ancestry.size shouldBe header.number.value.toInt
+      (1 to header.number.value.toInt).map(node.indexed) shouldBe ancestry.map(h => Some(h.hash))
+      (header.number.value.toInt + 1 to 14).foreach(n => node.indexed(n) shouldBe None)
+      PathStateTestKit.allRows(new PathNodeStorage(datadir)) shouldBe stateOf(header)
+      header
+
+    /** The state of `header` on the oracle's hash store, as rows of the position store. */
+    def stateOf(header: BlockHeader): (Map[ByteString, ByteString], Map[ByteString, ByteString]) =
+      val nodes = oracle.storagesInstance.storages.nodeStorage
+      val positions = RawTrieWalk.statePositions(
+        header.stateRoot.value.toArray,
+        hash => nodes.get(ByteString(hash)).getOrElse(throw new IllegalStateException("the oracle lacks a node"))
+      )
+      (
+        positions.getOrElse(None, Map.empty),
+        positions
+          .collect { case (Some(owner), trie) => trie.map((path, node) => (owner ++ path) -> node) }
+          .flatten
+          .toMap
+      )
+
   class Fixture(guard: Boolean = false, cap: StateConfig => StateConfig = identity):
     val oracle = new Oracle
     val node = new Node(guard, cap)
@@ -718,9 +859,9 @@ class ReorgBlockhashParitySpec extends AnyFlatSpec with Matchers with ScalaFutur
         acc :+ made
       }
 
-    def extendSide(parent: Block, count: Int, difficulty: BigInt, tag: Int): List[Block] =
+    def extendSide(parent: Block, count: Int, difficulty: BigInt, tag: Int, miner: Address = Miner): List[Block] =
       (1 to count).toList.foldLeft(List.empty[Block]) { (acc, _) =>
-        val made = seal(acc.lastOption.getOrElse(parent), Nil, difficulty, tag)
+        val made = seal(acc.lastOption.getOrElse(parent), Nil, difficulty, tag, miner)
         blockchainWriter.storeBlockByHashOnly(made).commit()
         acc :+ made
       }
@@ -742,14 +883,20 @@ class ReorgBlockhashParitySpec extends AnyFlatSpec with Matchers with ScalaFutur
       senderNonce += 1
       SignedTransaction.sign(tx, SenderKeyPair, None)
 
-    private def seal(parent: Block, txs: Seq[SignedTransaction], difficulty: BigInt, tag: Int): Block =
+    private def seal(
+        parent: Block,
+        txs: Seq[SignedTransaction],
+        difficulty: BigInt,
+        tag: Int,
+        miner: Address = Miner
+    ): Block =
       val template = parent.header.copy(
         parentHash = parent.hash,
         number = parent.number + 1,
         difficulty = Difficulty(difficulty),
         unixTimestamp = Timestamp(parent.header.unixTimestamp.toLong + 15),
         extraData = ByteString(Array[Byte](tag.toByte)),
-        beneficiary = Miner.bytes,
+        beneficiary = miner.bytes,
         gasLimit = GasAmount(1000000),
         gasUsed = GasAmount.Zero
       )
@@ -760,7 +907,12 @@ class ReorgBlockhashParitySpec extends AnyFlatSpec with Matchers with ScalaFutur
         case Left(error) => throw new IllegalStateException(s"oracle could not seal block ${template.number}: $error")
 
   /** The node under test. */
-  class Node(guard: Boolean = false, cap: StateConfig => StateConfig = identity) extends ChainHost(guard, cap):
+  class Node(
+      guard: Boolean = false,
+      cap: StateConfig => StateConfig = identity,
+      datadir: Option[EphemDataSource] = None,
+      restart: Boolean = false
+  ) extends ChainHost(guard, cap, datadir, restart):
     def importAll(blocks: List[Block]): BlockImportResult =
       consensusAdapter.evaluateBranch(NonEmptyList.fromListUnsafe(blocks)).unsafeRunSync()
 
@@ -791,20 +943,41 @@ class ReorgBlockhashParitySpec extends AnyFlatSpec with Matchers with ScalaFutur
       UInt256(world.getStorage(BlockhashRecorder).load(slot)).bytes
 
   /** One ephemeral database with the shared genesis state installed. Real VM, real BlockExecution, real ConsensusImpl.
+    * On `datadir` when given; with `restart`, it is a node started again on it, and the reconciliation at start runs
+    * before the genesis loader, as the node runs them (`StdNode`).
     */
-  abstract class ChainHost(guard: Boolean = false, cap: StateConfig => StateConfig = identity)
-      extends EphemBlockchainTestSetup:
+  abstract class ChainHost(
+      guard: Boolean = false,
+      cap: StateConfig => StateConfig = identity,
+      datadir: Option[EphemDataSource] = None,
+      restart: Boolean = false
+  ) extends EphemBlockchainTestSetup:
     implicit val runtime: IORuntime = IORuntime.global
+
+    // first in the linearisation: the storages read the source as they are built
+    private trait OnTheDatadir extends EphemDataSourceComponent:
+      override val dataSource: EphemDataSource = datadir.getOrElse(EphemDataSource())
 
     override lazy val storagesInstance
         : EphemDataSourceComponent & LocalPruningConfigBuilder & Storages.DefaultStorages =
-      new EphemDataSourceComponent
+      new OnTheDatadir
         with LocalPruningConfigBuilder
         with Storages.DefaultStorages
         with com.chipprbots.ethereum.TestInstanceConfigProvider:
         override protected def statePathLive: Boolean = guard
         override protected def stateConfig: StateConfig =
           cap(StateConfig(com.chipprbots.ethereum.utils.Config.config))
+
+    val reconciled: Option[StateReconciliation.Outcome] =
+      Option.when(restart)(
+        StateReconciliation.run(
+          storagesInstance.storages.appStateStorage,
+          storagesInstance.storages.pathStateStorage.get,
+          blockchainReader,
+          blockchainWriter,
+          testMode = false
+        )
+      )
 
     // one genesis for every host, loaded as the node loads one: as rows on the unified layout
     val genesis: Block =
@@ -864,6 +1037,45 @@ object ReorgBlockhashParitySpec extends SecureRandomBuilder:
 
   def pinnedCap(bytes: Long)(config: StateConfig): StateConfig =
     config.copy(overlay = config.overlay.copy(pinnedMaxBytes = bytes))
+
+  /** Moves of the head written three blocks to a batch. */
+  def movesOfThree(config: StateConfig): StateConfig = config.copy(maxBlocksPerMoveBatch = 3)
+
+  /** An in-memory datadir that a kill stops: once armed, the writes it allows are made, and every write after them
+    * fails, as none is made by a process that is gone. It counts the writes made since it was armed, and which of them
+    * moved the anchor.
+    */
+  final class Killable extends EphemDataSource(Map.empty):
+    @volatile private var allowed: Option[Int] = None
+    private var made = 0
+    private var moves = Vector.empty[Int]
+    def arm(after: Int): Unit = synchronized { made = 0; moves = Vector.empty; allowed = Some(after) }
+    def disarm(): Unit = synchronized { allowed = None }
+    def writes: Int = synchronized(made)
+    def anchorMoves: Seq[Int] = synchronized(moves)
+    private def alive(): Unit = if allowed.exists(made >= _) then throw new java.io.IOException("the node was killed")
+    override def update(updates: Seq[DataUpdate]): Unit = synchronized {
+      alive()
+      super.update(updates)
+      made += 1
+      if updates.exists(movesTheAnchor) then moves :+= made
+    }
+    override def deleteRange(namespace: IndexedSeq[Byte], fromKey: Array[Byte], toKeyExclusive: Array[Byte]): Unit =
+      synchronized {
+        alive()
+        super.deleteRange(namespace, fromKey, toKeyExclusive)
+        made += 1
+      }
+
+  private val AnchorKey: IndexedSeq[Byte] = AppStateStorage.Keys.StateAnchor.getBytes.toIndexedSeq
+
+  private def movesTheAnchor(update: DataUpdate): Boolean = update match
+    case DataSourceUpdate(namespace, _, upserts) =>
+      namespace == Namespaces.AppStateNamespace && upserts.exists(_._1 == AnchorKey)
+    case DataSourceUpdateOptimized(namespace, _, upserts) =>
+      namespace == Namespaces.AppStateNamespace && upserts.exists(_._1.toIndexedSeq == AnchorKey)
+
+  val OtherMiner: Address = Address(0x6f746872)
 
   /** An archive whose views reach two blocks behind the head, and whose moves are written three blocks to a batch. */
   def archiveOfShortViews(config: StateConfig): StateConfig =

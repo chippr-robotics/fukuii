@@ -6,6 +6,7 @@ import scala.util.Try
 import com.typesafe.config.Config as TypesafeConfig
 
 import com.chipprbots.ethereum.ConfigValidator
+import com.chipprbots.ethereum.nodebuilder.NodeStartup
 import com.chipprbots.ethereum.utils.InstanceConfig
 import com.chipprbots.ethereum.utils.Logger
 
@@ -24,24 +25,24 @@ import com.chipprbots.ethereum.utils.Logger
   */
 class FukuiiRuntime(val instances: Map[String, ChainInstance]) extends Logger:
 
-  def startAll(): Unit =
+  /** Starts every instance; the ids of those that started.
+    *
+    * One instance that fails to start does not end the JVM: the others serve their own chains. Whatever it threw (a
+    * refusal, or any other error, B-274) is logged at ERROR and the instance is shut down within a bound rather than
+    * left half-running, with P2P and discovery up and no API. If none started, the caller exits non-zero.
+    */
+  def startAll(): Set[String] =
     log.info(s"Starting Fukuii runtime with ${instances.size} chain instance(s): ${instances.keys.mkString(", ")}")
-    instances.foreach { case (id, instance) =>
+    val started = instances.toSeq.flatMap { case (id, instance) =>
       log.info(s"Starting chain instance: $id (network=${instance.instanceConfig.blockchains.network})")
-      Try(instance.start()).recover {
-        // one refused instance does not end the JVM; its message is all there is to say. A bind failure is refused
-        // after P2P and discovery have started, so the instance is shut down here rather than left half-running
-        // (up, but unable to follow its chain without a consensus client).
-        case e: com.chipprbots.ethereum.nodebuilder.EngineApiStartupRefusal =>
-          log.error(s"Failed to start chain instance $id: ${e.getMessage}")
-          Try(instance.shutdown.apply()).recover { case s =>
-            log.error(s"Error stopping refused chain instance $id: ${s.getMessage}", s)
-          }
-        case e =>
-          log.error(s"Failed to start chain instance $id: ${e.getMessage}", e)
-      }
-    }
-    log.info(s"All ${instances.size} chain instance(s) started")
+      NodeStartup.startOrShutDown(() => instance.start(), instance.shutdown, NodeStartup.DefaultShutdownBound) match
+        case None => Some(id)
+        case Some(_) =>
+          log.error(s"Chain instance $id failed to start and was shut down")
+          None
+    }.toSet
+    log.info(s"${started.size} of ${instances.size} chain instance(s) started")
+    started
 
   def stopAll(): Unit =
     log.info(s"Stopping all ${instances.size} chain instance(s)")
