@@ -64,7 +64,10 @@ object Consensus:
   case class ExtendedCurrentBestBranchPartially(blockImportData: List[BlockData], failureBranch: BranchExecutionFailure)
       extends ConsensusResult
 
-  /** The new branch was selected but was not an extension of the best branch. */
+  /** The new branch was selected but was not an extension of the best branch. `oldBranch` is the blocks it moved the
+    * head off, ascending: all of them, or the nearest the old head of a reorganisation deeper than the bound
+    * (`ConsensusImpl.OldBranchToldAtMost`; B-296).
+    */
   case class SelectedNewBestBranch(oldBranch: List[Block], newBranch: List[Block], weights: List[ChainWeight])
       extends ConsensusResult
 
