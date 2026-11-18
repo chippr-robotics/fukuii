@@ -91,8 +91,12 @@ object InMemoryWorldStateProxy:
     override protected def read(nodeId: Array[Byte], path: NibblePath | Null): MptNode =
       try super.read(nodeId, path)
       catch
-        case _: MissingNodeException =>
-          throw new MissingStorageNodeException(ByteString(nodeId), address.bytes)
+        case e: MissingNodeException =>
+          throw (e match
+            case _: MerklePatriciaTrie.Unplaced =>
+              new MissingStorageNodeException(ByteString(nodeId), address.bytes) with MerklePatriciaTrie.Unplaced
+            case _ => new MissingStorageNodeException(ByteString(nodeId), address.bytes)
+          )
 
     // A write that finds a node of this account's storage missing or corrupt (the wrapper of a node it replaces does
     // not unwrap) is said as a read is: the account's, so that the importer fetches it from the storage trie, not the
@@ -255,7 +259,11 @@ class InMemoryWorldStateProxy(
     try ImportProfile.account(accountsStateTrie.get(address))
     catch
       case e: MissingNodeException =>
-        throw new MissingAccountNodeException(e.hash, address.bytes, e.location)
+        throw (e match
+          case _: MerklePatriciaTrie.Unplaced =>
+            new MissingAccountNodeException(e.hash, address.bytes, e.location) with MerklePatriciaTrie.Unplaced
+          case _ => new MissingAccountNodeException(e.hash, address.bytes, e.location)
+        )
 
   override def getEmptyAccount: Account = Account.empty(accountStartNonce)
 

@@ -168,6 +168,70 @@ class ConsensusAdapterEscalationSpec extends AnyFlatSpec with Matchers:
     rig.escalated shouldBe empty
   }
 
+  // spec 018 C5b: a hole that names its position (a view of the rows alone says it) is fetched by it and written there
+  // by repairNodeAt, as on the hash layout; a hole of a layered view names none and stays a fault of this node
+  it should "leave a node missing at a known position to be fetched by it, on the unified layout" taggedAs UnitTest in {
+    val onPositions = new com.chipprbots.ethereum.db.storage.pathstate.CanonicalChainOnPositions()
+    val hash = ByteString(Array.fill[Byte](32)(9))
+    val located = List[com.chipprbots.ethereum.mpt.MerklePatriciaTrie.MissingNodeException](
+      new com.chipprbots.ethereum.mpt.MerklePatriciaTrie.MissingNodeException(hash).withLocation(ByteString(0x00)),
+      new com.chipprbots.ethereum.mpt.MerklePatriciaTrie.MissingAccountNodeException(
+        hash,
+        ByteString(Array.fill[Byte](20)(1)),
+        Some(ByteString(0x00))
+      ),
+      new com.chipprbots.ethereum.mpt.MerklePatriciaTrie.MissingStorageNodeException(
+        hash,
+        ByteString(Array.fill[Byte](20)(1)),
+        Some(ByteString(0x00))
+      )
+    )
+    located.foreach { missing =>
+      val rig = new Rig(_ => Consensus.ConsensusErrorDueToMissingNode(Nil, missing, Nil), onPositions.reader)
+      rig.imported(branch(5, 3)) match
+        case com.chipprbots.ethereum.blockchain.sync.regular.BlockImportFailedDueToMissingNode(reason, _) =>
+          (reason should be).theSameInstanceAs(missing)
+        case other => fail(s"not left to be fetched: $other")
+      rig.escalated shouldBe empty
+    }
+  }
+
+  // forge, B-291: a hole of a view with layers over the rows names no position, on purpose (`Unplaced`, which the trie's
+  // traversal leaves unlocated), so it stays a fault of this node however it is rewrapped
+  it should "tell a node missing from a view with layers as a fault of this node, whichever way it is rewrapped" taggedAs UnitTest in {
+    import com.chipprbots.ethereum.mpt.MerklePatriciaTrie.*
+    val onPositions = new com.chipprbots.ethereum.db.storage.pathstate.CanonicalChainOnPositions()
+    val hash = ByteString(Array.fill[Byte](32)(9))
+    val owner = ByteString(Array.fill[Byte](20)(1))
+    val unplaced = List[MissingNodeException](
+      new MissingNodeException(hash) with Unplaced,
+      new MissingAccountNodeException(hash, owner) with Unplaced,
+      new MissingStorageNodeException(hash, owner) with Unplaced
+    )
+    unplaced.foreach { missing =>
+      val rig = new Rig(_ => Consensus.ConsensusErrorDueToMissingNode(Nil, missing, Nil), onPositions.reader)
+      rig.imported(branch(5, 3)) match
+        case BlockImportStateFault(fault: com.chipprbots.ethereum.db.storage.pathstate.HeldStateIncomplete, _) =>
+          (fault.missing should be).theSameInstanceAs(missing)
+        case other => fail(s"not a fault of this node's state: $other")
+    }
+  }
+
+  // forge, B-291: a hole that was fetched by its position and not filled is told to the feed once the importer's exhausts
+  // reach their threshold, as a branch that was not judged and with the validation of an import
+  it should "tell the feed of a hole no repair fills, as a branch that was not judged" taggedAs UnitTest in {
+    val rig = new Rig(_ => throw new IllegalStateException("nothing is imported"))
+    val missing = new com.chipprbots.ethereum.mpt.MerklePatriciaTrie.MissingNodeException(
+      ByteString(Array.fill[Byte](32)(9))
+    ).withLocation(ByteString(0x00))
+    rig.adapter.holeNotRepaired(branch(5, 3).toList, missing)
+    rig.validated.toList shouldBe List(List(BigInt(5), BigInt(6), BigInt(7)))
+    // and whatever goes wrong in the feed is logged, not thrown
+    val broken = new Rig(_ => throw new IllegalStateException("nothing is imported"))
+    broken.broken = true
+    broken.adapter.holeNotRepaired(branch(5, 3).toList, missing)
+  }
+
   // forge: the feed is told inside the result of an import, and a head that has moved is not answered as an error
   it should "stand, whatever goes wrong in the feed" taggedAs UnitTest in {
     val corrupt = new ReorgTooDeep(ReorgRefusal.Corrupt, "a record is not what it should be")

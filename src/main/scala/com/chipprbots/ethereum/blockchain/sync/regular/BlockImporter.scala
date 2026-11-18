@@ -44,9 +44,11 @@ import com.chipprbots.ethereum.crypto.kec256
 import com.chipprbots.ethereum.db.storage.AncestorWindow
 import com.chipprbots.ethereum.db.storage.BadEntryDelete
 import com.chipprbots.ethereum.db.storage.EvmCodeStorage
+import com.chipprbots.ethereum.db.storage.RepairOutcome
 import com.chipprbots.ethereum.db.storage.StateStorage
 import com.chipprbots.ethereum.db.storage.pathstate.AncestorNotStored
 import com.chipprbots.ethereum.db.storage.pathstate.HandedToRecovery
+import com.chipprbots.ethereum.db.storage.pathstate.PositionKey
 import com.chipprbots.ethereum.db.storage.pathstate.RefusedForThisHead
 import com.chipprbots.ethereum.db.storage.pathstate.ReorgRefusal
 import com.chipprbots.ethereum.db.storage.pathstate.ReorgTooDeep
@@ -75,6 +77,18 @@ import com.chipprbots.ethereum.utils.Config.SyncConfig
 import com.chipprbots.ethereum.utils.FunctorOps.*
 
 object BlockImporter:
+
+  /** How many fetched nodes in a row the position store may decline before the fetch is taken as exhausted. A decline
+    * is the anchor moving under the fetch, or another node sitting at the position (spec 018 data-model 7.5); the
+    * import is tried again at once, and a state that keeps declining ends in the exhausted fetch's back-off and, past
+    * [[StuckEscapeThreshold]] of those, a re-SNAP.
+    */
+  val MaxRepairDeclines: Int = 3
+
+  /** An outcome that wrote nothing and left the node still missing from the state the import reads. */
+  def declined(outcome: RepairOutcome): Boolean = outcome match
+    case RepairOutcome.Written | RepairOutcome.AlreadyValid => false
+    case _                                                  => true
   // After this many consecutive state-node-fetch exhausts on the same block, regular sync
   // is deemed terminally stuck and we escalate to SNAP re-sync via SyncProtocol.RegularSyncStuck.
   // A fetch that runs exhausts after about 160 s (StateNodeFetcher's 30 tries, 5 s apart plus each request's own short
@@ -228,6 +242,9 @@ object BlockImporter:
 
   // What holds the import lock while a branch out of reach is told to the escalation's feed (B-300 g).
   private[regular] val BranchOutOfReachHolder: String = "the escalation of a branch out of reach"
+
+  // What holds the import lock while a hole no repair fills is told to the escalation's feed (spec 018 C5b, B-291).
+  private[regular] val UnrepairedHoleHolder: String = "the escalation of a hole no repair fills"
 
   /** The most headers of a branch out of reach fetched for the escalation (B-300 g; forge). The fetch stops as soon as
     * they outweigh the head, so this bounds only a branch that never does, or whose weight cannot be read: enough to
@@ -520,6 +537,15 @@ final private class BlockImporterLogic(
     ctx.messageAdapter[BlockFetcher.FetchResponse](FetcherResponse(_))
 
   private var pendingStateNodeHash: Option[ByteString] = None
+  // Where the missing node of `pendingStateNodeHash` sits, on the unified layout (spec 018 C5b): the position its fetch
+  // is written to. None for code, and for a hole whose position the exception could not say.
+  private var pendingFetchPosition: Option[PositionKey] = None
+  // Fetched nodes the position store declined in a row, bounded by BlockImporter.MaxRepairDeclines (data-model 7.5).
+  private var repairDeclines: Int = 0
+  // The hole the escalation's feed was last told of, on the unified layout, by the failing block and the tip of the
+  // batch: told again only when the tip is higher, since the feed counts how far a refused branch grows (B-291). Cleared
+  // with the exhausts, when a block is imported or a node is written.
+  private var holeToldFor: Option[(ByteString, BigInt)] = None
   // An exhausted fetch that arrived while an import ran, for that import's ImportDone to act on (#1694).
   private var exhaustedDuringImport: Boolean = false
   private var unknownParentStrikes: Map[ByteString, Int] = Map.empty
@@ -730,12 +756,10 @@ final private class BlockImporterLogic(
         val node = nodeData.values.head
         val hash = kec256(node)
         log.info("Saving late-arriving fetched state node {}", ByteStringUtils.hash2string(hash))
-        // repairNode, not saveNode (#1692): a node already there and valid is left as it is. A blind upsert at one
-        // reference could lower the count a block commit or the audit had set, and the node would be pruned while live.
-        // on the unified layout only code is fetched (spec 018 C5a part 10, forge): the trie store is not written
-        if !blockchainWriter.holdsStateInPlace then
-          val outcome = stateStorage.repairNode(hash, node.toArray, blockchainReader.getBestBlockNumber)
+        // repairFetched, not a blind upsert (#1692): a node already there and valid is left as it is.
+        repairFetched(hash, node, blockchainReader.getBestBlockNumber).foreach { outcome =>
           log.debug("Late-arriving state node {}: {}", ByteStringUtils.hash2string(hash), outcome)
+        }
         // Also save as contract code in case this was a bytecode fetch
         try evmCodeStorage.put(hash, node).commit()
         catch case _: Exception => ()
@@ -747,52 +771,95 @@ final private class BlockImporterLogic(
       case _ => Behaviors.same
     }
 
+  /** The fetch of the missing node ended with nothing: StateNodeFetcher exhausted its retries, or a node it brought was
+    * not written (see [[repairFetched]]) as many times as [[BlockImporter.MaxRepairDeclines]] allows.
+    */
+  private def fetchExhausted(blocksToRetry: NonEmptyList[Block], state: ImporterState): Behavior[Command] =
+    // StateNodeFetcher exhausted MaxStateNodeFetchRetries on this missing node — no current peer
+    // can serve it via SNAP GetTrieNodes (typical: pivot fell out of the 128-block serve window
+    // on every connected peer).
+    val blockNum = blocksToRetry.head.number.value
+    val consecutiveExhausts = exhausts.increment()
+    val missingHashStr = pendingStateNodeHash.map(ByteStringUtils.hash2string).getOrElse("<unknown>")
+
+    if consecutiveExhausts >= BlockImporter.StuckEscapeThreshold && !blockchainWriter.holdsStateInPlace then
+      // Multiple consecutive exhausts mean peers genuinely don't have our parent state and
+      // never will (we're far behind their snap-serve window). The only recovery is to re-pivot
+      // via SNAP (SyncController does so even with do-snap-sync off). Reset our local counter so
+      // we don't re-fire if SyncController bounces us back to regular sync. Nothing caps how often
+      // this cycle repeats (the SNAP↔fast escape hatch that used to was removed with fast sync);
+      // each SNAP re-sync starts from a pivot above the block we were stuck on.
+      log.error(
+        "Regular sync stuck on block {} after {} consecutive state-node exhausts (missing {}); requesting SNAP re-sync",
+        blockNum,
+        consecutiveExhausts,
+        missingHashStr
+      )
+      exhausts.reset()
+      pendingStateNodeHash = None
+      pendingFetchPosition = None
+      supervisor ! SyncProtocol.RegularSyncStuck(blockNum, missingHashStr)
+      // Don't transition further — SyncController will PoisonPill regular sync.
+      Behaviors.same
+    else
+      // On the unified layout RegularSyncStuck is ignored by the controller (the escalation gives the state up, and
+      // only when it is told): at the threshold the hole is told to its feed, once for each tip, and the import
+      // is tried again at the back-off's pace as after any exhaust, not in the resolving loop (forge, B-291).
+      if consecutiveExhausts >= BlockImporter.StuckEscapeThreshold then escalateUnrepairedHole(blocksToRetry)
+      log.error(
+        "State node recovery failed after max retries for block {} (consecutive exhausts: {}/{}) — backing off {}s before retry",
+        blockNum,
+        consecutiveExhausts,
+        BlockImporter.StuckEscapeThreshold,
+        BlockImporter.exhaustBackoff.toSeconds
+      )
+      fetcher ! BlockFetcher.InvalidateBlocksFrom(
+        blockNum,
+        "state node unrecoverable after max retries",
+        shouldBlacklist = false
+      )
+      // Don't self ! PickBlocks — that would immediately retry the same block.
+      timers.startTimerWithFixedDelay(RetryKey, SyncRetryTick, BlockImporter.exhaustBackoff)
+      running(state)
+
+  /** Tells the escalation's feed of a hole the importer could not fill (see [[ConsensusAdapter.holeNotRepaired]]).
+    * Under the import lock, off the actor: the feed reads the head's weight and is told one import at a time.
+    */
+  private def escalateUnrepairedHole(blocksToRetry: NonEmptyList[Block]): Unit =
+    val failing = blocksToRetry.head
+    val tip = blocksToRetry.last.number.value
+    val told = holeToldFor.exists { case (hash, at) => hash == failing.hash.value && at >= tip }
+    if told then
+      log.warning(
+        "[STATE-ESCALATION] The hole under block {} was told to the escalation already: not told again at this tip",
+        failing.number
+      )
+    else
+      holeToldFor = Some((failing.hash.value, tip))
+      val missing = pendingStateNodeHash.fold(new MissingNodeException(ByteString.empty))(hash =>
+        pendingFetchPosition.fold(new MissingNodeException(hash))(position =>
+          new MissingNodeException(hash).withLocation(position.hp)
+        )
+      )
+      log.error(
+        "[STATE-ESCALATION] Block {} cannot be imported: a node of the state this node holds is missing and no fetch " +
+          "fills it ({}). The escalation is told; no SNAP re-sync starts over this state",
+        failing.number,
+        missing.getMessage
+      )
+      importLock
+        .guardAs(UnrepairedHoleHolder)(IO.delay(consensus.holeNotRepaired(blocksToRetry.toList, missing)))
+        .handleError(ex =>
+          log.error(ex, "The escalation could not be told of a hole no repair fills: {}", ex.getMessage)
+        )
+        .unsafeRunAndForget()
+
   private def resolvingMissingNode(blocksToRetry: NonEmptyList[Block], blockImportType: BlockImportType)(
       state: ImporterState
   ): Behavior[Command] =
     Behaviors.receiveMessage {
       case FetcherResponse(BlockFetcher.FetchedStateNode(nodeData)) if nodeData.values.isEmpty =>
-        // StateNodeFetcher exhausted MaxStateNodeFetchRetries on this missing node — no current peer
-        // can serve it via SNAP GetTrieNodes (typical: pivot fell out of the 128-block serve window
-        // on every connected peer).
-        val blockNum = blocksToRetry.head.number.value
-        val consecutiveExhausts = exhausts.increment()
-        val missingHashStr = pendingStateNodeHash.map(ByteStringUtils.hash2string).getOrElse("<unknown>")
-
-        if consecutiveExhausts >= BlockImporter.StuckEscapeThreshold then
-          // Multiple consecutive exhausts mean peers genuinely don't have our parent state and
-          // never will (we're far behind their snap-serve window). The only recovery is to re-pivot
-          // via SNAP (SyncController does so even with do-snap-sync off). Reset our local counter so
-          // we don't re-fire if SyncController bounces us back to regular sync. Nothing caps how often
-          // this cycle repeats (the SNAP↔fast escape hatch that used to was removed with fast sync);
-          // each SNAP re-sync starts from a pivot above the block we were stuck on.
-          log.error(
-            "Regular sync stuck on block {} after {} consecutive state-node exhausts (missing {}); requesting SNAP re-sync",
-            blockNum,
-            consecutiveExhausts,
-            missingHashStr
-          )
-          exhausts.reset()
-          pendingStateNodeHash = None
-          supervisor ! SyncProtocol.RegularSyncStuck(blockNum, missingHashStr)
-          // Don't transition further — SyncController will PoisonPill regular sync.
-          Behaviors.same
-        else
-          log.error(
-            "State node recovery failed after max retries for block {} (consecutive exhausts: {}/{}) — backing off {}s before retry",
-            blockNum,
-            consecutiveExhausts,
-            BlockImporter.StuckEscapeThreshold,
-            BlockImporter.exhaustBackoff.toSeconds
-          )
-          fetcher ! BlockFetcher.InvalidateBlocksFrom(
-            blockNum,
-            "state node unrecoverable after max retries",
-            shouldBlacklist = false
-          )
-          // Don't self ! PickBlocks — that would immediately retry the same block.
-          timers.startTimerWithFixedDelay(RetryKey, SyncRetryTick, BlockImporter.exhaustBackoff)
-          running(state)
+        fetchExhausted(blocksToRetry, state)
 
       case FetcherResponse(BlockFetcher.FetchedStateNode(nodeData)) =>
         val node = nodeData.values.head
@@ -802,10 +869,10 @@ final private class BlockImporterLogic(
           ByteStringUtils.hash2string(hash),
           blocksToRetry.head.number
         )
-        // repairNode, not saveNode (#1692): see the late-arriving case above.
-        if !blockchainWriter.holdsStateInPlace then
-          val outcome = stateStorage.repairNode(hash, node.toArray, blocksToRetry.head.number.value)
-          log.debug("Missing state node {}: {}", ByteStringUtils.hash2string(hash), outcome)
+        // repairFetched, not a blind upsert (#1692): see the late-arriving case above.
+        val outcome = repairFetched(hash, node, blocksToRetry.head.number.value)
+        outcome.foreach(o => log.debug("Missing state node {}: {}", ByteStringUtils.hash2string(hash), o))
+        if outcome.exists(BlockImporter.declined) then repairDeclines += 1 else repairDeclines = 0
         // Also save as contract code — if this was a code fetch, the hash is the codeHash
         // and the data is the bytecode. EvmCodeStorage is keyed by codeHash, same as the fetch.
         try evmCodeStorage.put(hash, node).commit()
@@ -813,9 +880,23 @@ final private class BlockImporterLogic(
           case _: Exception => ()
           // Successful state-node delivery — reset stuck-counter so a later transient failure on a
           // different block doesn't escalate to SNAP re-sync prematurely.
-        exhausts.reset()
-        pendingStateNodeHash = None
-        importBlocks(blocksToRetry, blockImportType)(state)
+        if repairDeclines >= BlockImporter.MaxRepairDeclines then
+          // The position store declined the node that many times in a row (the anchor moved each time, or another
+          // node sits there): said as an exhausted fetch, which has its own back-off and its own escalation.
+          log.warning(
+            "The state store declined node {} {} times in a row: treated as an exhausted fetch",
+            ByteStringUtils.hash2string(hash),
+            repairDeclines
+          )
+          repairDeclines = 0
+          fetchExhausted(blocksToRetry, state)
+        else
+          if repairDeclines == 0 then
+            exhausts.reset()
+            holeToldFor = None
+          pendingStateNodeHash = None
+          pendingFetchPosition = None
+          importBlocks(blocksToRetry, blockImportType)(state)
 
       case SyncRetryTick =>
         log.warning(
@@ -1132,6 +1213,7 @@ final private class BlockImporterLogic(
         // no longer counts towards a re-SNAP (forge, #1694).
         if importedBlocks.nonEmpty then
           exhausts.reset()
+          holeToldFor = None
           floorGapRewinds.reset()
           stateFaultStreak = None
 
@@ -1172,8 +1254,10 @@ final private class BlockImporterLogic(
                   failedBlock.number,
                   e.location.isDefined
                 )
-                deleteIfCorrupt(e.hash, failedBlock.number.value)
+                val position = e.location.map(PositionKey(None, _))
+                deleteIfCorrupt(e.hash, failedBlock.number.value, position)
                 pendingStateNodeHash = Some(e.hash)
+                pendingFetchPosition = position
                 fetcher ! BlockFetcher.FetchStateNode(e.hash, fetcherResponseAdapter, parentStateRoot, paths)
                 ResolvingMissingNode(NonEmptyList(notImportedBlocks.head, notImportedBlocks.tail))
               case e: MissingStorageNodeException =>
@@ -1205,8 +1289,10 @@ final private class BlockImporterLogic(
                   else if paths.isDefined then "position found"
                   else "position not found"
                 )
-                deleteIfCorrupt(e.hash, failedBlock.number.value)
+                val position = paths.flatMap(_ => e.location).map(PositionKey(Some(accountHash), _))
+                deleteIfCorrupt(e.hash, failedBlock.number.value, position)
                 pendingStateNodeHash = Some(e.hash)
+                pendingFetchPosition = position
                 paths match
                   case Some(_) =>
                     fetcher ! BlockFetcher.FetchStateNode(e.hash, fetcherResponseAdapter, parentStateRoot, paths)
@@ -1263,6 +1349,7 @@ final private class BlockImporterLogic(
                   failedBlock.number
                 )
                 pendingStateNodeHash = Some(e.hash)
+                pendingFetchPosition = None
                 fetcher ! BlockFetcher.FetchStateNode(
                   e.hash,
                   fetcherResponseAdapter,
@@ -1287,8 +1374,12 @@ final private class BlockImporterLogic(
                   failedBlock.number,
                   e.location.isDefined
                 )
-                deleteIfCorrupt(e.hash, failedBlock.number.value)
+                // A location with no owner is the account trie's, as the fetch's pathset already takes it to be: were it
+                // a storage trie's, the anchor's root names nothing there and the repair declines.
+                val position = e.location.map(PositionKey(None, _))
+                deleteIfCorrupt(e.hash, failedBlock.number.value, position)
                 pendingStateNodeHash = Some(e.hash)
+                pendingFetchPosition = position
                 fetcher ! BlockFetcher.FetchStateNode(e.hash, fetcherResponseAdapter, parentStateRoot, paths)
                 ResolvingMissingNode(NonEmptyList(notImportedBlocks.head, notImportedBlocks.tail))
               case _ if err.toString.contains("Block has invalid gas used") =>
@@ -1309,6 +1400,7 @@ final private class BlockImporterLogic(
                           .map(_.stateRoot.value)
                       catch case _: Exception => None
                     pendingStateNodeHash = Some(codeHash)
+                    pendingFetchPosition = None
                     // isByteCode=true routes the fetch through SNAP GetByteCodes (works on ETH68+)
                     // instead of the legacy GetNodeData path (which has no peers on modern networks).
                     fetcher ! BlockFetcher.FetchStateNode(
@@ -1389,6 +1481,7 @@ final private class BlockImporterLogic(
                   error
                 )
                 pendingStateNodeHash = None
+                pendingFetchPosition = None
                 ResolvingMissingNode(NonEmptyList(failedBlock, notImportedBlocks.tail), alreadyExhausted = true)
               case BlockImportStateFault(setAside @ (_: RefusedForThisHead | _: HandedToRecovery), _) =>
                 // The consensus layer's branch, refused for what no attempt changes while the head is where it is, or
@@ -1574,19 +1667,18 @@ final private class BlockImporterLogic(
     * `NoLongerBad`. It runs before any escalation, so a re-SNAP after exhausted fetches never upserts over the junk,
     * which basic pruning's upsert would keep. A store that cannot delete, or a read that fails, leaves the fetch to go
     * ahead as before.
+    *
+    * On the unified layout it is `deleteBadNodeAt`, by the position the exception named (spec 018 C5b): judged under
+    * the state lock against the anchor's root, and a node that decodes is never deleted. With no position it deletes
+    * nothing there: the hash-keyed store is not the one that layout reads.
     */
-  private def deleteIfCorrupt(hash: ByteString, blockNumber: BigInt): Unit =
-    if stateStorage.canRepairNodes then
+  private def deleteIfCorrupt(hash: ByteString, blockNumber: BigInt, position: Option[PositionKey]): Unit =
+    val deletion: Option[BadEntryDelete] =
       try
-        stateStorage.deleteBadNode(hash, () => true) match
-          case BadEntryDelete.Deleted =>
-            log.error(
-              "[STATE-CORRUPT] deleted stored trie node {}: its bytes are not that node (met importing block {}); " +
-                "fetching it from peers",
-              ByteStringUtils.hash2string(hash),
-              blockNumber
-            )
-          case _ => ()
+        if blockchainWriter.holdsStateInPlace then
+          for repairs <- blockchainWriter.positionRepairs; at <- position yield repairs.deleteBadNodeAt(at, hash)
+        else if stateStorage.canRepairNodes then Some(stateStorage.deleteBadNode(hash, () => true))
+        else None
       catch
         case NonFatal(e) =>
           log.error(
@@ -1594,6 +1686,37 @@ final private class BlockImporterLogic(
             "[STATE-CORRUPT] could not check stored trie node {} for corruption; fetching it anyway",
             ByteStringUtils.hash2string(hash)
           )
+          None
+    deletion match
+      case Some(BadEntryDelete.Deleted) =>
+        log.error(
+          "[STATE-CORRUPT] deleted stored trie node {}: its bytes are not that node (met importing block {}); " +
+            "fetching it from peers",
+          ByteStringUtils.hash2string(hash),
+          blockNumber
+        )
+      case _ => ()
+
+  /** Writes a state node the fetcher brought, and says what the store made of it. None where nothing is written to the
+    * trie store: a code fetch, which is stored by the caller under its hash, or (on the unified layout) a node fetched
+    * for no position.
+    *
+    * On the unified layout it is `repairNodeAt` at the position the missing-node exception named (spec 018 C5b,
+    * data-model 7.5): under the state lock, with the anchor compare-and-set, one point write. It runs on the actor's
+    * thread, holds the lock for the walk from the root to the position (about two dozen point reads on mainnet) and one
+    * write, and waits for a move of the head under way. Elsewhere it is `repairNode`, as before: a node already there
+    * and valid is left as it is.
+    */
+  private def repairFetched(hash: ByteString, node: ByteString, blockNumber: BigInt): Option[RepairOutcome] =
+    if !blockchainWriter.holdsStateInPlace then Some(stateStorage.repairNode(hash, node.toArray, blockNumber))
+    else
+      for
+        repairs <- blockchainWriter.positionRepairs
+        position <- pendingFetchPosition
+        expected <- pendingStateNodeHash
+      yield
+      // Bytes that are not the node asked for are no repair of that position
+      if expected != hash then RepairOutcome.Rejected else repairs.repairNodeAt(position, expected, node.toArray)
 
   /** Accounting for the validated prefix of a batch whose later block hit a missing node: those blocks are adopted, so
     * they are imported like any other (strikes cleared, progress reported) and prepended to `importedBlocks` (newest

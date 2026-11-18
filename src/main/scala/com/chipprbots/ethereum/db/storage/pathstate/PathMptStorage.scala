@@ -10,6 +10,7 @@ import scala.util.control.NonFatal
 import com.chipprbots.ethereum.crypto.kec256
 import com.chipprbots.ethereum.db.storage.MptStorage
 import com.chipprbots.ethereum.db.storage.RawNodeRead
+import com.chipprbots.ethereum.mpt.MerklePatriciaTrie
 import com.chipprbots.ethereum.mpt.MerklePatriciaTrie.CorruptNodeException
 import com.chipprbots.ethereum.mpt.MerklePatriciaTrie.MissingNodeException
 import com.chipprbots.ethereum.mpt.MptNode
@@ -90,8 +91,10 @@ final class PathMptStorage private (
         // No row where neither a layer nor the records say anything: this state holds there what the base holds, and
         // the base's disk has a hole. It is a missing node. It is said with its position only on a view of the rows
         // alone: what is fetched for a position is written to that row, and the row is the anchor's (beacon).
-        val missing = new MissingNodeException(ByteString(hash))
-        throw (if view.layered then missing else missing.withLocation(position.hp))
+        throw (
+          if view.layered then new MissingNodeException(ByteString(hash)) with MerklePatriciaTrie.Unplaced
+          else new MissingNodeException(ByteString(hash)).withLocation(position.hp)
+        )
       case (Some(encoded), source) =>
         if Arrays.equals(kec256(encoded), hash) then decoded(position, encoded, hash)
         else if source != StateView.Source.Disk then

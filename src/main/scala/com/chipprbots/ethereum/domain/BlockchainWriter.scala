@@ -40,6 +40,11 @@ class BlockchainWriter(
   /** Whether this node holds its state on the unified layout, where the head moves with the state or not at all. */
   def holdsStateInPlace: Boolean = pathState.isDefined
 
+  /** The position store's repairs, where this node holds its state on the unified layout: what the importer's on-demand
+    * fetch writes through (spec 018 C5b, data-model 7.5).
+    */
+  def positionRepairs: Option[com.chipprbots.ethereum.db.storage.pathstate.PositionRepairs] = pathState
+
   /** Refuses, on the unified layout, a write of the best block or the index of blocks by number that does not move the
     * state with it: the state anchor and the best block are one block there (spec 018 data-model 5.1, I1), and only a
     * move of the head ([[com.chipprbots.ethereum.db.storage.pathstate.PathStateStorage.moveHead]], with
