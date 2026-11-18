@@ -80,10 +80,8 @@ object ConfigValidator extends Logger:
     *
     * A SNAP sync runs on the guard since C5a part 10: it hands its state off onto the unified layout, and SNAP is
     * advertised. Mining runs on it since B-293: the miners read the head under its generation, and build again on the
-    * head a move leaves (`SettledHeadBuild`). What is still refused:
-    *
-    * Checkpoint sync. Its import writes the hash-keyed store and says the sync is done, with no anchor on this layout:
-    * the node would say it is synced and hold no state (until C5c).
+    * head a move leaves (`SettledHeadBuild`). A checkpoint import runs on it since C5c PR3: it writes the position rows
+    * and ends with the one synced batch that anchors them (`CheckpointImporter`). What is still refused:
     *
     * `sync.snap-sync.storage-scheme = hash`, asked for. A SNAP sync on the guard writes the position families, which
     * the hand-off samples and commits, with the path scheme on every network (ETC's and Mordor's fallback to hash
@@ -103,16 +101,10 @@ object ConfigValidator extends Logger:
     */
   def stateGuardErrors(config: TypesafeConfig): List[String] =
     def on(key: String): Boolean = config.hasPath(key) && config.getBoolean(key)
-    def set(key: String): Boolean = config.hasPath(key) && config.getString(key).trim.nonEmpty
     val guard = "fukuii.state.path-live = true (the in-development guard of the unified state layout) cannot run with "
     if !on("state.path-live") then Nil
     else
       List(
-        Option.when(set("sync.checkpoint-sync-file") || set("sync.checkpoint-sync-url"))(
-          guard + "fukuii.sync.checkpoint-sync-file or fukuii.sync.checkpoint-sync-url: a checkpoint is imported " +
-            "into the hash-keyed store, which this layout does not read, and the node would say it is synced with no " +
-            "state (spec 018 C5c). Leave both empty; a SNAP sync (fukuii.sync.do-snap-sync = true) syncs this node."
-        ),
         Option.when(
           config.hasPath("sync.snap-sync.storage-scheme") &&
             config.getString("sync.snap-sync.storage-scheme").trim.equalsIgnoreCase("hash")

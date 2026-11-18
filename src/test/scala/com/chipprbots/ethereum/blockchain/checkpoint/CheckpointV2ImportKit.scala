@@ -13,6 +13,7 @@ import com.chipprbots.ethereum.blockchain.checkpoint.CheckpointImporter.ImportRe
 import com.chipprbots.ethereum.blockchain.checkpoint.CheckpointImporter.NodeSink
 import com.chipprbots.ethereum.blockchain.checkpoint.CheckpointImporter.Trust
 import com.chipprbots.ethereum.crypto
+import com.chipprbots.ethereum.db.storage.AppStateStorage
 import com.chipprbots.ethereum.domain.Account
 import com.chipprbots.ethereum.domain.BlockHeader
 import com.chipprbots.ethereum.domain.BlockHeaderImplicits.BlockHeaderEnc
@@ -36,8 +37,14 @@ object CheckpointV2ImportKit:
 
   type Snapshot = Map[ByteBuffer, Seq[Byte]]
 
-  /** Every key and value of a store, to show that a refused import wrote nothing. */
-  def snapshot(chain: Chain): Snapshot = chain.storages.dataSource.storage.map((k, v) => k -> v.toSeq)
+  /** Every key and value of a store, to show that a refused import wrote nothing: but for the record of the refused
+    * archive (data-model E.1, "no retry"), which is the one write a refusal makes, and which the specs of the record
+    * look at ([[CheckpointImportRetrySpec]]).
+    */
+  def snapshot(chain: Chain): Snapshot =
+    chain.storages.dataSource.storage
+      .filterNot((k, _) => new String(k.array(), "UTF-8").endsWith(AppStateStorage.Keys.CheckpointImportRefused))
+      .map((k, v) => k -> v.toSeq)
 
   def importInto(
       target: Chain,

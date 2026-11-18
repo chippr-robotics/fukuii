@@ -13,6 +13,7 @@ import org.apache.pekko.util.ByteString
 import scala.collection.mutable
 import scala.concurrent.duration.*
 
+import org.scalatest.EitherValues
 import org.scalatest.flatspec.AnyFlatSpecLike
 import org.scalatest.matchers.should.Matchers
 
@@ -48,7 +49,11 @@ import com.chipprbots.ethereum.testing.Tags.UnitTest
   * children, and nothing but the `checkpoint.import.inProgress` key says so. That key, and what SNAP does with it, is
   * what these cases are about.
   */
-class CheckpointImportInterruptSpec extends ScalaTestWithActorTestKit() with AnyFlatSpecLike with Matchers:
+class CheckpointImportInterruptSpec
+    extends ScalaTestWithActorTestKit()
+    with AnyFlatSpecLike
+    with Matchers
+    with EitherValues:
 
   implicit private val actorTestKit: org.apache.pekko.actor.testkit.typed.scaladsl.ActorTestKit = testKit
 
@@ -81,13 +86,15 @@ class CheckpointImportInterruptSpec extends ScalaTestWithActorTestKit() with Any
     appState.markDatadirCreatedUnderInvariant().commit()
     source.batches.clear()
 
-    def importerTrusting(t: CheckpointImporter.Trust): CheckpointImporter = new CheckpointImporter(
-      BlockchainWriter(store.storages),
-      stateTries,
-      store.storages.evmCodeStorage,
-      appState,
-      t
-    )
+    def importerTrusting(t: CheckpointImporter.Trust, retryRefused: Boolean = false): CheckpointImporter =
+      new CheckpointImporter(
+        BlockchainWriter(store.storages),
+        stateTries,
+        store.storages.evmCodeStorage,
+        appState,
+        t,
+        retryRefused = retryRefused
+      )
     val importer: CheckpointImporter = importerTrusting(trust)
 
     def holds(hash: ByteString): Boolean =
@@ -198,7 +205,12 @@ class CheckpointImportInterruptSpec extends ScalaTestWithActorTestKit() with Any
     appState.hasSnapHealInvariant() shouldBe false
 
     withClue("and it stays away when the retry succeeds: the done flags vouch for that root, not for this datadir: ") {
-      importFrom(this, archive).isRight shouldBe true
+      // the cut-off file has the same header block, so it is the same archive, and the refusal of it is recorded (spec 018
+      // E.1, no retry): the operator asks for the retry
+      importFrom(this, archive).left.value shouldBe a[CheckpointImporter.AlreadyRefused]
+      importerTrusting(trust, retryRefused = true)
+        .importFromStream(new ByteArrayInputStream(archive))
+        .isRight shouldBe true
       appState.hasSnapHealInvariant() shouldBe false
       appState.getCheckpointImportInProgress() shouldBe None
     }

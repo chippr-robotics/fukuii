@@ -17,7 +17,11 @@ import com.chipprbots.ethereum.crypto
 import com.chipprbots.ethereum.db.storage.AncestorWindow
 import com.chipprbots.ethereum.db.storage.AppStateStorage
 import com.chipprbots.ethereum.db.storage.EvmCodeStorage
+import com.chipprbots.ethereum.db.storage.PathNodeStorage
 import com.chipprbots.ethereum.db.storage.StateStorage
+import com.chipprbots.ethereum.db.storage.pathstate.BlockRef
+import com.chipprbots.ethereum.db.storage.pathstate.PathStateStorage
+import com.chipprbots.ethereum.db.storage.pathstate.SyncHandoff
 import com.chipprbots.ethereum.domain.Account
 import com.chipprbots.ethereum.domain.BlockBody
 import com.chipprbots.ethereum.domain.BlockHeader
@@ -56,12 +60,29 @@ import com.chipprbots.ethereum.utils.Hex
   * '''The codes''' must each be named by an account the walk met, and every non-empty code hash met must have its code;
   * the number of gaps tolerated is `codeGapThreshold`, 0 by default.
   *
-  * '''The write path is the hash layout''' (C5c PR2): [[CheckpointImporter.HashNodeSink]] stores each node under its
-  * hash, as format version 1 did, so a node at many positions is stored, and counted, once per position. The import key
-  * (`beginCheckpointImport`) is committed, synced, after the window is checked and before the first node; the CRC is
+  * '''Two write paths.''' On the hash layout ([[CheckpointImporter.HashNodeSink]]) each node is stored under its hash,
+  * as format version 1 did, so a node at many positions is stored, and counted, once per position; the import key
+  * (`beginCheckpointImport`) is committed, synced, after the window is checked and before the first node, the CRC is
   * checked at the end tag, and one synced batch then writes the checkpoint header, the window's headers and bodies, the
-  * trusted weight, the best block, the done flags and the end of the import key. Position writes, the atomic order on
-  * the unified layout and the no-retry record are PR3's.
+  * trusted weight, the best block, the done flags and the end of the import key.
+  *
+  * '''On the unified layout''' (`unified` given; C5c PR3, data-model E.1 "Atomicity and failure order") the order is:
+  *   1. every refusal that needs no write, above;
+  *   1. a genesis anchor is cleared ([[CheckpointImporter.UnifiedTarget.clearForImport]], `clearGenesisStateForSync`),
+  *      before the key is set, since that clear deletes the import key;
+  *   1. rows with no anchor, from an earlier failed import or a SNAP run, are cleared through the reset mark;
+  *   1. the import key, which names the archive, is committed synced;
+  *   1. the rows, at their positions, in batches of at most [[CheckpointImporter.NodeBatchSize]], with the log on;
+  *   1. one synced batch through `PathStateStorage.commitHandoff`: the anchor, `state.origin`, the done flag, and in
+  *      the same write the checkpoint's header, the window, the weight, the best block, and the end of the import key.
+  *
+  * A kill leaves the reset mark or the import key and no anchor, never an anchor over part of the rows.
+  *
+  * '''A refused archive is recorded''' by its id (keccak of its header block), on either layout, after any refusal that
+  * is the archive's ([[CheckpointImporter.BadFormat]], [[CheckpointImporter.HandoffRefused]]), and not retried on the
+  * next start unless the operator asks (`retryRefused`). On the unified layout a refusal after the first write also
+  * clears the rows through the reset mark, the record first: a kill between the two then still finds the key, which
+  * holds the id. [[CheckpointImporter.NoExpectedBlockHash]] is a configuration error and is not recorded.
   */
 final class CheckpointImporter(
     blockchainWriter: BlockchainWriter,
@@ -70,7 +91,9 @@ final class CheckpointImporter(
     appStateStorage: AppStateStorage,
     trust: CheckpointImporter.Trust,
     codeGapThreshold: Int = 0,
-    sinkFor: Option[BigInt => CheckpointImporter.NodeSink] = None
+    sinkFor: Option[BigInt => CheckpointImporter.NodeSink] = None,
+    unified: Option[CheckpointImporter.UnifiedTarget] = None,
+    retryRefused: Boolean = false
 ):
   import CheckpointImporter.*
   private val log = LoggerFactory.getLogger(getClass)
@@ -103,12 +126,48 @@ final class CheckpointImporter(
 
   def importFromStream(in: InputStream): Either[ImportError, ImportResult] =
     val reader = new CheckpointArchive.Reader(in)
-    for
-      header <- reader.readHeader().left.map(err => BadFormat(Decode(err)))
-      _ <- headerChecks(header, reader.archiveId)
-      window <- readWindow(reader, header)
-      result <- writeState(reader, header, window)
-    yield result
+    val result =
+      for
+        header <- reader.readHeader().left.map(err => BadFormat(Decode(err)))
+        _ <- notRefusedBefore(reader.archiveId)
+        _ <- headerChecks(header, reader.archiveId)
+        window <- readWindow(reader, header)
+        result <- writeState(reader, header, window)
+      yield result
+    result.left.foreach(err => if isTheArchivesFault(err) then reader.archiveId.foreach(recordRefused))
+    result
+
+  /** Data-model E.1, "no retry": an archive this node refused is not imported again unless the operator says so. The
+    * archive is named by the id of its header block, which is known before any write, so this runs after the header
+    * block is read.
+    */
+  private def notRefusedBefore(archiveId: Option[ByteString]): Either[ImportError, Unit] =
+    archiveId.filter(id => appStateStorage.isCheckpointArchiveRefused(id)) match
+      case Some(id) if retryRefused =>
+        log.warn(
+          "[CHECKPOINT IMPORT] archive {} was refused by an earlier run; it is tried again because " +
+            "{} is set.",
+          hex(id),
+          RetryRefusedKey
+        )
+        Right(())
+      case Some(id) => Left(AlreadyRefused(id))
+      case None     => Right(())
+
+  private def isTheArchivesFault(err: ImportError): Boolean = err match
+    case _: BadFormat | _: HandoffRefused                                  => true
+    case _: NoExpectedBlockHash | _: AlreadyRefused | _: DatadirHoldsState => false
+
+  /** Records the archive as refused, synced; once. */
+  private def recordRefused(id: ByteString): Unit =
+    if !appStateStorage.isCheckpointArchiveRefused(id) then
+      appStateStorage.recordRefusedCheckpoint(id).commitSync()
+      log.warn(
+        "[CHECKPOINT IMPORT] archive {} is recorded as refused. It is not imported again on a restart unless it is a " +
+          "new archive or {} is set; this node syncs by SNAP from a clean state.",
+        hex(id),
+        RetryRefusedKey
+      )
 
   // ---- before any write: the header block -------------------------------------------------------------------------
 
@@ -231,12 +290,27 @@ final class CheckpointImporter(
 
   // ---- the state ----------------------------------------------------------------------------------------------------
 
+  /** Steps 2 and 3 of data-model E.1 on the unified layout (the clear of a genesis anchor, then of rows with no
+    * anchor), before anything of the import is written; then the import.
+    */
   private def writeState(
       reader: CheckpointArchive.Reader,
       h: CheckpointArchive.Header,
       window: Window
   ): Either[ImportError, ImportResult] =
+    unified
+      .fold[Either[ImportError, Unit]](Right(()))(
+        _.clearForImport(force = false).left.map(held => DatadirHoldsState(held))
+      )
+      .flatMap(_ => writeRows(reader, h, window))
+
+  private def writeRows(
+      reader: CheckpointArchive.Reader,
+      h: CheckpointArchive.Header,
+      window: Window
+  ): Either[ImportError, ImportResult] =
     val c = h.blockHeader
+    val archiveId = CheckpointArchive.archiveIdOf(h)
     val blockNum = c.number
     val blockHash = c.hash
     val stateRoot = c.stateRoot.value
@@ -257,8 +331,10 @@ final class CheckpointImporter(
     // datadir. Synced, since the nodes are not: a node on disk must imply this key is. It takes the invariant marker with
     // it: that a marked datadir's nodes were complete says nothing of what is written from here on. A success does not
     // bring the marker back: the done flags vouch for this root, and no walk has looked at the rest.
-    appStateStorage.beginCheckpointImport(stateRoot, startMs).commitSync()
-    val sink = sinkFor.fold[NodeSink](new HashNodeSink(stateStorage, blockNum.value))(_(blockNum.value))
+    appStateStorage.beginCheckpointImport(stateRoot, startMs, Some(archiveId)).commitSync()
+    val sink = sinkFor.fold[NodeSink](
+      unified.fold[NodeSink](new HashNodeSink(stateStorage, blockNum.value))(u => new PathNodeSink(u.rows))
+    )(_(blockNum.value))
     val machine = new StackMachine(stateRoot, sink)
     val codeBuf = mutable.ArrayBuffer.empty[(ByteString, Array[Byte])]
     var totalBytecodes = 0L
@@ -312,35 +388,64 @@ final class CheckpointImporter(
         _ <- codeCompleteness(machine.codeHashes, blockNum.value)
       yield ()
 
-    outcome match
+    // The unified layout's final batch can refuse too (`commitHandoff` throws on a datadir that holds a state it did not
+    // expect), and nothing of it is written then: it is a failure of the same kind, and is handled as one below.
+    val finished: Either[ImportError, Unit] = outcome.flatMap { _ =>
+      val records = (c +: window.headers)
+        .map(header => blockchainWriter.storeBlockHeader(header))
+        .reduce(_.and(_))
+      val withBodies = window.bodies
+        .foldLeft(records)((batch, hb) => batch.and(blockchainWriter.storeBlockBody(hb._1.hash, hb._2)))
+        .and(blockchainWriter.storeChainWeight(blockHash, h.chainWeight))
+        .and(appStateStorage.putBestBlockInfo(BlockInfo(blockHash.value, blockNum.value)))
+        .and(appStateStorage.bytecodeRecoveryDone())
+        .and(appStateStorage.storageRecoveryDone())
+        .and(appStateStorage.endCheckpointImport())
+      // an operator-requested retry that works: the archive is no longer refused, in the same write
+      val finalRecords =
+        if appStateStorage.isCheckpointArchiveRefused(archiveId) then
+          withBodies.and(appStateStorage.forgetRefusedCheckpoint(archiveId))
+        else withBodies
+      unified match
+        case Some(u) =>
+          // Step 6: one synced batch through `commitHandoff`, which adds the done flag, `state.origin` and the anchor.
+          // The nodes are in the log already (no write of this import goes round it), so this write syncs them.
+          try Right(u.handoff.commitCheckpoint(c, finalRecords))
+          catch case e: IllegalStateException => Left(HandoffRefused(e.getMessage))
+        case None =>
+          // Durability barrier (#1581): under pruning.mode=inmemory the nodes written above sit only in the node cache,
+          // not the WAL. Flush them before the flags, whose synced commit then makes them durable with the flags.
+          stateStorage.forcePersist(StateStorage.SnapSyncFinalization)
+          // One synced batch: the checkpoint's header and the window's (so BLOCKHASH and the ommer check of C+1 find
+          // them), the window's bodies, the trusted weight, the best block and the done flags.
+          Right(finalRecords.and(appStateStorage.snapSyncDone()).commitSync())
+    }
+
+    finished match
       case Left(err) =>
         log.error(
-          "[CHECKPOINT IMPORT] refused block {} after nodes={} bytecodes={}: {}. Nothing marks the import done; the " +
-            "import key stays, so the next start treats this datadir as an interrupted import.",
+          "[CHECKPOINT IMPORT] refused block {} after nodes={} bytecodes={}: {}.",
           blockNum,
           machine.nodes,
           totalBytecodes,
           describeError(err)
         )
+        // The record first: a kill between it and the clear leaves the import key, which names the archive, so the next
+        // start records it again and clears. The other way round, the clear deletes the key and a kill loses the record.
+        recordRefused(archiveId)
+        unified match
+          case Some(u) =>
+            u.clearForImport(force = true)
+            log.warn(
+              "[CHECKPOINT IMPORT] the rows this import wrote are cleared; this node syncs by SNAP from a clean state."
+            )
+          case None =>
+            log.warn(
+              "[CHECKPOINT IMPORT] nothing marks the import done; the import key stays, so the next start treats this " +
+                "datadir as an interrupted import."
+            )
         Left(err)
       case Right(_) =>
-        // Durability barrier (#1581): under pruning.mode=inmemory the nodes written above sit only in the node cache,
-        // not the WAL. Flush them before the flags, whose synced commit then makes them durable with the flags.
-        stateStorage.forcePersist(StateStorage.SnapSyncFinalization)
-        // One synced batch: the checkpoint's header and the window's (so BLOCKHASH and the ommer check of C+1 find
-        // them), the window's bodies, the trusted weight, the best block and the done flags.
-        val withHeaders =
-          (c +: window.headers).map(header => blockchainWriter.storeBlockHeader(header)).reduce(_.and(_))
-        window.bodies
-          .foldLeft(withHeaders)((batch, hb) => batch.and(blockchainWriter.storeBlockBody(hb._1.hash, hb._2)))
-          .and(blockchainWriter.storeChainWeight(blockHash, h.chainWeight))
-          .and(appStateStorage.putBestBlockInfo(BlockInfo(blockHash.value, blockNum.value)))
-          .and(appStateStorage.snapSyncDone())
-          .and(appStateStorage.bytecodeRecoveryDone())
-          .and(appStateStorage.storageRecoveryDone())
-          .and(appStateStorage.endCheckpointImport())
-          .commitSync()
-
         val elapsed = System.currentTimeMillis() - startMs
         log.info(
           "[CHECKPOINT IMPORT] complete: block={} nodes={} ({} MiB) bytecodes={} ({} MiB) elapsed={}s. " +
@@ -481,6 +586,11 @@ final class CheckpointImporter(
   private def describeError(err: ImportError): String = err match
     case BadFormat(r)                      => r.describe
     case NoExpectedBlockHash(number, hash) => s"no expected block hash for block $number (${hex(hash)})"
+    case AlreadyRefused(id) =>
+      s"archive ${hex(id)} was refused by an earlier run and is not retried (set $RetryRefusedKey to retry it)"
+    case DatadirHoldsState(held) =>
+      s"the data directory holds the state of block ${held.show}, which is not the genesis"
+    case HandoffRefused(why) => s"the final batch was refused: $why"
 
 object CheckpointImporter:
   // 10k * ~500 B per node ≈ 5 MiB per write batch — comfortable for RocksDB's default write buffer.
@@ -488,6 +598,11 @@ object CheckpointImporter:
   val BytecodeBatchSize: Int = 1000
   val LogInterval: Long = 100000L
   private val MissingCodeSample: Int = 8
+
+  /** The operator's flag for the no-retry rule (`fukuii.sync.checkpoint-sync-retry-refused`): retry an archive this
+    * node refused before. Leave it set for one start only, since it makes every start re-run the import.
+    */
+  val RetryRefusedKey: String = "fukuii.sync.checkpoint-sync-retry-refused"
 
   private val HashSize: Int = 32
   private val AccountKeyNibbles: Int = 64
@@ -542,6 +657,105 @@ object CheckpointImporter:
         mpt.storeRawNodes(buf.toSeq)
         buf.clear()
 
+  /** The unified layout's position sink (C5c PR3): each node is a row at `(owner, path)`, through
+    * [[PathNodeStorage.accountNodeUpsert]] and [[PathNodeStorage.storageNodeUpsert]], in batches of at most
+    * [[NodeBatchSize]] written with the log on. No write goes round the log, so the one synced batch that ends the
+    * import makes them durable with it. The rows are written without the state lock: the datadir holds no anchor while
+    * they are, and every in-place writer refuses without one (data-model 7.0).
+    */
+  final class PathNodeSink(rows: PathNodeStorage) extends NodeSink:
+    private val buf = mutable.ArrayBuffer.empty[com.chipprbots.ethereum.db.dataSource.DataUpdate]
+    def node(owner: Option[ByteString], path: Array[Byte], hash: ByteString, rlp: Array[Byte]): Unit =
+      buf += owner.fold[com.chipprbots.ethereum.db.dataSource.DataUpdate](rows.accountNodeUpsert(path, rlp))(o =>
+        rows.storageNodeUpsert(o, path, rlp)
+      )
+      if buf.size >= NodeBatchSize then flush()
+    def flush(): Unit =
+      if buf.nonEmpty then
+        rows.dataSource.update(buf.toSeq)
+        buf.clear()
+
+  /** What the importer needs of a datadir on the unified layout: the rows, the hand-off that ends the import, and the
+    * clear that begins it.
+    *
+    * @param genesis
+    *   the block at height 0, as its state is anchored
+    */
+  final class UnifiedTarget(
+      state: PathStateStorage,
+      val rows: PathNodeStorage,
+      val handoff: SyncHandoff,
+      appState: AppStateStorage,
+      genesis: () => BlockRef,
+      now: () => Long = () => System.currentTimeMillis()
+  ):
+
+    /** Steps 2 and 3 of data-model E.1: leaves the datadir with no state and no row, through the reset mark.
+      *   - The anchor is the genesis: `clearGenesisStateForSync`. Before the import key is set, since this clear
+      *     deletes it.
+      *   - There is no anchor, and there are rows or the mark of a clear: `clearForResync`, the same way.
+      *   - There is no anchor and no row: nothing, unless `force`: a failed import clears its key through the same
+      *     batch, whether or not a row reached the disk.
+      *
+      * @return
+      *   the anchor, when it is a state this must not clear (a block above the genesis): nothing was changed
+      */
+    def clearForImport(force: Boolean): Either[BlockRef, Unit] =
+      state.anchor match
+        case Some(held) if held == genesis() =>
+          val _ = state.clearGenesisStateForSync(held, now())
+          Right(())
+        case Some(held) => Left(held)
+        case None =>
+          if force || !rows.isEmpty || appState.isStateResetPending() then
+            state.clearForResync(genesis().hash, now(), escalation = None)
+          Right(())
+
+  /** At a start (data-model E.1, "A failed or killed import"): a datadir whose import key is set had an import killed
+    * (or one that failed on the hash layout). The archive it names is recorded as refused, synced, and then, on the
+    * unified layout, the rows are cleared through the reset mark, which deletes the key. The key is not among what a
+    * clear removes for the record, so a record made here survives it. The hash layout keeps its key: SNAP counts such a
+    * datadir as pre-invariant (spec 022 T041).
+    *
+    * Call before the import is decided, with nothing reading or writing the state.
+    *
+    * @return
+    *   whether an import key was found
+    */
+  def recoverInterrupted(appState: AppStateStorage, unified: Option[UnifiedTarget]): Boolean =
+    val log = LoggerFactory.getLogger(classOf[CheckpointImporter])
+    appState.getCheckpointImportInProgress() match
+      case None => false
+      case Some(key) =>
+        appState.getCheckpointImportArchive() match
+          case Some(id) =>
+            if !appState.isCheckpointArchiveRefused(id) then appState.recordRefusedCheckpoint(id).commitSync()
+            log.warn(
+              "[CHECKPOINT IMPORT] the node started with an import key set ({}): that import was killed. Archive {} " +
+                "is recorded as refused and is not retried unless {} is set.",
+              key,
+              hex(id),
+              RetryRefusedKey
+            )
+          case None =>
+            log.warn(
+              "[CHECKPOINT IMPORT] the node started with an import key set ({}) that names no archive (an earlier " +
+                "release wrote it): nothing is recorded.",
+              key
+            )
+        unified.foreach { u =>
+          u.clearForImport(force = true) match
+            case Right(_) =>
+              log.warn("[CHECKPOINT IMPORT] the rows of the killed import are cleared; SNAP starts from a clean state.")
+            case Left(held) =>
+              log.error(
+                "[CHECKPOINT IMPORT] the import key is set on a data directory that holds the state of block {}: " +
+                  "nothing is cleared.",
+                held.show
+              )
+        }
+        true
+
   /** A node still owed: its trie (`None` for the account trie), the nibbles from that trie's root, and its hash. */
   final private case class Frame(owner: Option[ByteString], path: Array[Byte], hash: ByteString)
 
@@ -569,6 +783,19 @@ object CheckpointImporter:
     * [[BadFormat]]: a node given the hash may import the same archive.
     */
   final case class NoExpectedBlockHash(blockNumber: BigInt, blockHash: ByteString) extends ImportError
+
+  /** The archive was refused by an earlier run (data-model E.1, "no retry"): not imported, and nothing written. A new
+    * archive, or [[RetryRefusedKey]], lets it through.
+    */
+  final case class AlreadyRefused(archiveId: ByteString) extends ImportError
+
+  /** The datadir holds the state of a block above the genesis, which an import does not replace. Not the archive's
+    * fault.
+    */
+  final case class DatadirHoldsState(held: BlockRef) extends ImportError
+
+  /** `commitHandoff` refused the final batch (the datadir holds what a hand-off forbids). */
+  final case class HandoffRefused(reason: String) extends ImportError
 
   /** Why an archive is refused. */
   sealed trait Refusal extends Product with Serializable:

@@ -1727,7 +1727,18 @@ No BlockDiff is written for the checkpoint block (it has no prior), as for a SNA
   block is 0 (a SNAP run that has not handed off), and each run would wipe that SNAP progress.
 - **The archive's hash** is keccak of its header block (fields 1 to 9). It is known before the first write, so a killed import
   can be recorded from its begin marker. It names the chain, the block and the TD, so a new archive for another block is
-  not refused. The key name and the operator flag's name are T292's.
+  not refused.
+- **Names (T292, PR3).** The AppState key is `checkpoint.import.refused`: comma-separated hex archive ids, the last 32 kept,
+  oldest dropped first. It is **not** in `stateClearRemovals`, and a refusal writes it (synced) before the clear, so a kill
+  between the two still finds the import key, which carries the id as its third field
+  (`checkpoint.import.inProgress` = `<state root>:<start ms>:<archive id>`; a key an earlier release wrote has two fields and
+  names no archive, so nothing is recorded for it). The operator's flag is `fukuii.sync.checkpoint-sync-retry-refused`
+  (default false): the importer imports a refused archive when it is set, and a success removes the id in the same batch as
+  the anchor. **Both layouts record** a refusal and skip a refused archive (the hash layout has no clear: it keeps its key,
+  as before). Recorded as the archive's fault: every `BadFormat` after the header block is read (a CRC failure and a
+  truncated stream included, and so a `UnexpectedBlockHash` caused by a wrong operator hash) and a refused final batch. Not
+  recorded: `NoExpectedBlockHash` (a configuration error), a datadir that holds the state of a block above the genesis,
+  and an archive whose header block cannot be read (it has no id).
 
 **Golden streams** (S0 item 8a; contents, review, 2026-11-18). Before PR1 merges, these streams are pinned byte for byte.
 Together they carry everything the review listed. One stream cannot carry both a PoS header and a window body, because the

@@ -1499,9 +1499,10 @@ trait SyncControllerBuilder extends SyncControllerRefBuilder:
       import com.chipprbots.ethereum.db.storage.pathstate.BlockRef
       import com.chipprbots.ethereum.db.storage.pathstate.SyncHandoff
       val storages = storagesInstance.storages
+      val rowStorage = new PathNodeStorage(storages.flatSlotStorage.dataSource)
       val built = new SyncHandoff(
         pathState,
-        new PathNodeStorage(storages.flatSlotStorage.dataSource),
+        rowStorage,
         storages.appStateStorage,
         storages.blockHeadersStorage,
         storages.blockNumberMappingStorage,
@@ -1522,7 +1523,16 @@ trait SyncControllerBuilder extends SyncControllerRefBuilder:
           forkChoiceManagerForSync.foreach(_.clear())
           escalationWatch.foreach(_.stateCleared())
         ,
-        handedOffNow = () => escalationWatch.foreach(_.stateCleared())
+        handedOffNow = () => escalationWatch.foreach(_.stateCleared()),
+        checkpointTarget = new com.chipprbots.ethereum.blockchain.checkpoint.CheckpointImporter.UnifiedTarget(
+          pathState,
+          rowStorage,
+          built,
+          storages.appStateStorage,
+          () =>
+            val header = blockchainReader.genesisHeader
+            BlockRef(header.hash.value, header.number.value, header.stateRoot.value)
+        )
       )
     }
 

@@ -1139,6 +1139,8 @@ class SyncControllerSpec
     val handedOffs = new java.util.concurrent.atomic.AtomicInteger(0)
     // no SNAP child here reaches its finalisation, the one reader of the hand-off
     def handoff: com.chipprbots.ethereum.db.storage.pathstate.SyncHandoff = null
+    // nor does a checkpoint import
+    def checkpointTarget: com.chipprbots.ethereum.blockchain.checkpoint.CheckpointImporter.UnifiedTarget = null
     def beforeSnap(): SyncController.SnapStartOnGuard =
       askedOn.add(Thread.currentThread.getName)
       val n = asked.incrementAndGet()
