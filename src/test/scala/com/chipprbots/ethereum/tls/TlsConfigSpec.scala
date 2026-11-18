@@ -92,7 +92,7 @@ class TlsConfigSpec extends AnyFlatSpec with Matchers with BeforeAndAfterAll:
     resolved.profile.truststore shouldBe None
     resolved.profile.keystore.map(_.path) shouldBe Some(server.store)
     TlsStartupCheck.usesLegacy(cfg) shouldBe true
-    TlsConfig.LegacyDeprecation should (include("tls { enabled, profile, client-auth }").and(include("0.14.0")))
+    TlsConfig.LegacyDeprecation should (include("tls { enabled, profile, client-auth }").and(include("0.13.0")))
   }
 
   it should "refuse both forms on one listener" taggedAs (UnitTest) in {

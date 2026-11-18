@@ -134,7 +134,7 @@ object TlsConfig:
   val LegacyDeprecation: String =
     "fukuii.network.rpc.http.mode = \"https\" and .certificate are deprecated; use " +
       "fukuii.network.rpc.http.tls { enabled, profile, client-auth } and fukuii.tls.profiles.<name> " +
-      "(docs/runbooks/tls-operations.md). They will be removed in 0.14.0."
+      "(docs/runbooks/tls-operations.md). They will be removed in 0.13.0."
 
   private def quote(name: String): String = "\"" + name.replace("\"", "\\\"") + "\""
 

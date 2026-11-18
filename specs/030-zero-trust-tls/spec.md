@@ -357,8 +357,8 @@ resolves to one, the node exits non-zero before any bind with a message naming t
 - **FR-005**: TLS configuration MUST be read from the node's resolved configuration (the one the node was started
   with), never from `ConfigFactory.load()` (B-148).
 - **FR-006**: The minimum protocol MUST be TLS 1.2; a `protocols` list naming anything lower is a startup error.
-- **FR-007**: The existing `rpc.http.mode = "https"` with its `certificate` block MUST keep working for one minor
-  release, mapped to `tls { enabled = true, client-auth = none }` with an implicit profile, and MUST log a deprecation
+- **FR-007**: The existing `rpc.http.mode = "https"` with its `certificate` block MUST keep working through the
+  0.12 releases and is removed in 0.13.0 (the user's decision of 2026-11-18: the node is not in production yet), mapped to `tls { enabled = true, client-auth = none }` with an implicit profile, and MUST log a deprecation
   warning naming the new keys. Setting both forms for one listener is a startup error.
 - **FR-008**: The faucet's own RPC listener and its `rpc-client` MUST use the same profile mechanism.
 
