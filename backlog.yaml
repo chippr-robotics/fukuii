@@ -3259,7 +3259,7 @@ items:
       by: cloud-dc960fdc
       agent: forge
       since: 2026-11-18T23:16:34Z
-      heartbeat: 2026-11-18T23:47:52Z
+      heartbeat: 2026-11-18T23:48:01Z
     notes: Found in B-383 (forge). BranchResolution logs 'ChainWeight not found' and returns NoChainSwitch; PowEscalationFeed.weighed also skips it. Same for a missing fork header not named by the hash index. Name what ends the wait (escalate as a local fault, or repair the weight).
   - id: B-386
     title: Guard PoW node that fell back to regular sync logs an ERROR at every restart (beforeSnap Refused on held state)
