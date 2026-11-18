@@ -2885,7 +2885,7 @@ items:
   - id: B-356
     title: "Spec 030 S3: client-certificate identity rules grant namespaces; GraphQL gate"
     priority: P2
-    status: claimed
+    status: in-progress
     area: rpc
     size: M
     opened: 2026-11-18
@@ -2897,7 +2897,7 @@ items:
       by: cloud-0ceb384d
       agent: conduit
       since: 2026-11-18T20:04:31Z
-      heartbeat: 2026-11-18T20:04:31Z
+      heartbeat: 2026-11-18T20:04:35Z
       branch: ccr-0ceb384d-ufzahb
     notes: "US3; FR-020-028. ~450+700. Review: conduit, prism."
   - id: B-357
