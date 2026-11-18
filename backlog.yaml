@@ -2918,3 +2918,14 @@ items:
       spec: specs/030-zero-trust-tls
     depends_on: [B-360]
     notes: "US5; FR-040, 045, 046; SC-004. ~300+400. Review: conduit, prism."
+  - id: B-362
+    title: "Spec 030 S9: P2P node-ID allowlist at the RLPx handshake and every dial; discovery (incl. DNS) forced off"
+    priority: P2
+    status: open
+    area: p2p
+    size: M
+    opened: 2026-11-18
+    refs: [B-146]
+    links:
+      spec: specs/030-zero-trust-tls
+    notes: "US7 1-4; FR-050-055, 058. ~500+800 plus a 3-node IT. Can start now. Review: herald."
