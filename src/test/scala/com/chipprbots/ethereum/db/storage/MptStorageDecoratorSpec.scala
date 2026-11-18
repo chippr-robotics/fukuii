@@ -64,6 +64,8 @@ class MptStorageDecoratorSpec extends AnyFlatSpec with Matchers:
     override def rawNodesAt(requests: Seq[(NibblePath, ByteString)]): Seq[RawNodeRead] =
       calls += "rawNodesAt"
       requests.map(_ => RawNodeRead.Absent)
+    override def holdsNode(nodeHash: ByteString): Boolean =
+      calls += "holdsNode"; true
     override def storeRawNodes(nodes: Seq[(ByteString, Array[Byte])]): Unit = calls += "storeRawNodes"
     override def forOwner(forWhom: Option[ByteString]): MptStorage =
       calls += "forOwner"
@@ -127,6 +129,7 @@ class MptStorageDecoratorSpec extends AnyFlatSpec with Matchers:
     plain.multiGetNodes(Seq(hash)) shouldBe Seq(Some(node))
     plain.rawNodes(Seq(ByteString(hash))) shouldBe Seq(RawNodeRead.Absent)
     plain.rawNodesAt(Seq(path -> ByteString(hash))) shouldBe Seq(RawNodeRead.Absent)
+    plain.holdsNode(ByteString(hash)) shouldBe true
     plain.storeRawNodes(Seq(ByteString(hash) -> node.encode))
     plain.resetOwner(owner)
     plain.nodesSharedAcrossTries shouldBe false
@@ -140,6 +143,7 @@ class MptStorageDecoratorSpec extends AnyFlatSpec with Matchers:
       "multiGetNodes",
       "rawNodes",
       "rawNodesAt",
+      "holdsNode",
       "storeRawNodes",
       "resetOwner",
       "nodesSharedAcrossTries"
@@ -158,6 +162,7 @@ class MptStorageDecoratorSpec extends AnyFlatSpec with Matchers:
       "multiGetNodes",
       "rawNodes",
       "rawNodesAt",
+      "holdsNode",
       "storeRawNodes",
       "forOwner",
       "resetOwner",
