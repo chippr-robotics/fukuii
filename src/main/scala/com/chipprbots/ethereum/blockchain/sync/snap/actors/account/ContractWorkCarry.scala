@@ -69,10 +69,36 @@ private[actors] trait ContractWorkCarry extends ContractWorkCarryApi with Contra
     * files durable must not be persisted.
     */
   def syncTaskFiles(): Unit =
+    syncStorageTaskFile()
+    syncCodeHashesFile()
+
+  /** Flush and fsync the storage-task file. A `flush()` alone leaves the bytes in the OS page cache, which a power loss
+    * drops; the pointer to this file is committed synchronously after this (B-077), so the file is on disk first.
+    */
+  def syncStorageTaskFile(): Unit =
     contractStorageOut.flush()
-    uniqueCodeHashesOut.flush()
     contractStorageFos.getFD.sync()
+
+  /** Flush and fsync the codeHash file; see [[syncStorageTaskFile]]. */
+  def syncCodeHashesFile(): Unit =
+    uniqueCodeHashesOut.flush()
     uniqueCodeHashesFos.getFD.sync()
+
+  /** The storage-file info for the accounts-complete handoff, after the file is durable (B-077). A failure to flush or
+    * fsync is the `Failure` the controller reports, with no pointer written.
+    */
+  def durableStorageFileInfo(): scala.util.Try[AccountRangeCoordinator.StorageFileInfoResponse] =
+    scala.util.Try {
+      syncStorageTaskFile()
+      AccountRangeCoordinator.StorageFileInfoResponse(contractStorageFile, contractStorageCount)
+    }
+
+  /** The codeHash-file info for the accounts-complete handoff, after the file is durable (B-077). */
+  def durableCodeHashesFileInfo(): scala.util.Try[AccountRangeCoordinator.CodeHashesFileInfoResponse] =
+    scala.util.Try {
+      syncCodeHashesFile()
+      AccountRangeCoordinator.CodeHashesFileInfoResponse(uniqueCodeHashesFile, uniqueCodeHashesCount)
+    }
 
   /** Replay one chunk of the carried contract work (entries `[0, carried*Count)` of this coordinator's own task files)
     * to the storage/bytecode coordinators, exactly as `identifyContractAccounts` would have for freshly downloaded

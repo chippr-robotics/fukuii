@@ -819,19 +819,10 @@ private[actors] class AccountRangeCoordinatorImpl(
             // accounts-complete recovery. Same sender and receiver, so they arrive right after
             // AccountRangeSyncComplete; and they are sent before trie finalization, after which this coordinator
             // stops (an ask from the controller could time out against a stopped coordinator). Each file is flushed
-            // first, as the AccountGet*FileInfo handlers do; a flush failure reaches the controller as a Failure.
-            snapSyncController ! SNAPSyncController.StorageFileInfoReply(
-              scala.util.Try {
-                contractStorageOut.flush()
-                StorageFileInfoResponse(contractStorageFile, contractStorageCount)
-              }
-            )
-            snapSyncController ! SNAPSyncController.CodeHashesFileInfoReply(
-              scala.util.Try {
-                uniqueCodeHashesOut.flush()
-                CodeHashesFileInfoResponse(uniqueCodeHashesFile, uniqueCodeHashesCount)
-              }
-            )
+            // and fsynced first (B-077): the controller commits the pointer to it synchronously on receipt, so the
+            // file is on disk before the pointer is. A failure reaches the controller as a Failure.
+            snapSyncController ! SNAPSyncController.StorageFileInfoReply(durableStorageFileInfo())
+            snapSyncController ! SNAPSyncController.CodeHashesFileInfoReply(durableCodeHashesFileInfo())
 
             log.info(s"Starting async trie finalization for $accountsDownloaded accounts...")
             // Notify controller so progress monitor shows finalization status
