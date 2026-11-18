@@ -351,19 +351,15 @@ items:
   - id: B-034
     title: Presence-only readers should use rawNodes + provablyBad (cheaper than before H3)
     priority: P2
-    status: review
+    status: done
     area: storage
     size: M
     opened: 2026-11-08
+    closed: 2026-11-18
     refs: [H3 review (perf)]
     links:
       prs: [1924]
     depends_on: [B-001]
-    claim:
-      by: cloud-dc960fdc
-      agent: vault-small2
-      since: 2026-11-18T13:54:07Z
-      heartbeat: 2026-11-18T14:34:00Z
     notes: isNodeInStorage, SyncController :1445/:2056, StorageRecoveryActor, CombinedRecoveryScan, PathToHashExporter.
   - id: B-035
     title: Re-walk EIP-1459 DNS trees periodically (geth re-checks roots every 30 min)
