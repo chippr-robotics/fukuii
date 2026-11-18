@@ -4,9 +4,7 @@
 
 **Created**: 2026-11-17
 
-**Status**: Draft (2026-11-17). Written from backlog B-146 and a survey of the code at `origin/staging`; five product questions are open (Q1–Q5 below), so `/speckit-clarify` is next.
-
-**In flight**: `docs/b146-zero-trust-tls-spec` (cloud session `cloud-dc960fdc`, agent `spec-b146`): the draft
+**Status**: Planned (2026-11-18). Q1–Q5 were answered on 2026-11-18 (see Clarifications), and the user accepted the plan's own decisions the same day, and plan.md and tasks.md slice the work into eleven PRs; no code has landed.
 
 **Input**: Backlog B-146 (P1, from the B-145 TLS audit, issue #1756): "Spec: zero-trust TLS and mTLS on every service
 listener (RPC, WS, Engine API, metrics) plus outbound TLS. Shared tls block, client-auth need/want, truststore,
@@ -26,11 +24,11 @@ start with `src/` or `docs/`.
 | JSON-RPC HTTP (+ GraphQL `/graphql`, `/health`, `/readiness` on the same port) | `fukuii.network.rpc.http.mode = "http" \| "https"` and a `certificate { keystore-path, keystore-type, password-file }` block (`src/main/resources/conf/base/network.conf`). `JsonRpcHttpServer.apply` picks `InsecureJsonRpcHttpServer` or `SecureJsonRpcHttpServer`; the latter builds `ConnectionContext.httpsServer(sslContext)` with no client-auth setting. | No client authentication; no truststore of its own; restart to rotate. |
 | JSON-RPC WebSocket | `JsonRpcWsServer` binds `newServerAt(interface, port).bind(route)`; no TLS setting exists. | No TLS at all. |
 | Engine API (8551) | `EngineApiHttpServer` binds plain HTTP; `JwtAuthenticator` checks the HS256 token (60 s skew). | No TLS option; JWT is the only control. |
-| Metrics (Prometheus, 13798) | `metrics.Metrics` starts `io.prometheus…HTTPServer.builder().port(port)`; `metrics.conf` has `enabled` and `port` only. | No TLS, no client auth, no interface key. |
+| Metrics (Prometheus, 13798) | `metrics.Metrics` starts `io.prometheus…HTTPServer.builder().port(port)`; `metrics.conf` has `enabled` and `port` only. With no `hostname`, the 1.3.10 builder binds the **wildcard** address (checked 2026-11-18), although `metrics.conf` says "over localhost". | No TLS, no client auth, no interface key; exposed on every interface when enabled. |
 | IPC | Unix socket, owner read/write only. | None (out of scope: file permissions are the control). |
-| TLS material | `security/SSLConfig`, `SSLContextFactory`, `KeyStoreUtils`, `SSLContextBuilder`. `SSLContextBuilder.sslContext(key)` reads `ConfigFactory.load()` (the global config, not the node's resolved config); the `TrustManager` is built from the **server's own keystore**. | One trust source for everything; config read from the wrong place (B-148). |
-| Misconfiguration | A bad keystore becomes a failed bind future that the server lifecycle logs; the node keeps running with no RPC (B-148). | Fail closed at startup. |
-| Outbound HTTPS | Five independent clients: `jsonrpc/client/RpcClient` (faucet → node; on an SSL error it falls back to `Http().defaultClientHttpsContext`, B-148), `blockchain/checkpoint/CheckpointDownloader` (JDK `HttpClient`, default trust, redirects `NORMAL`), `ephemery/ReleaseTransport` (JDK `HttpClient`, endpoint identification on, redirects `NEVER`, `javax.net.ssl.trustStore` honoured), `consensus/pow/WorkNotifier` (Pekko `singleRequest`, default context), `BootstrapDownload` (`URL.openStream`). The TUI's `console/ops/EndpointProbe` probes the node's own listeners. | No shared policy: trust, hostname checks, client certificates and redirect rules differ per client. |
+| TLS material | `security/SSLConfig`, `SSLContextFactory`, `KeyStoreUtils`, `SSLContextBuilder`. Since B-148 (#1905, 2026-11-17) `SSLContextBuilder.build(config, key, …)` reads the instance's own config and names the key in every error. The `TrustManager` is still built from the **server's own keystore**. | One trust source for everything; one profile shape per call site. |
+| Misconfiguration | Since B-148 (#1905): an HTTPS server whose context cannot be built, or that cannot bind, refuses the node's start (`StdNode.awaitJsonRpcHttpBind`, `startupRefusal`); the faucet awaits its bind; `RpcClient` throws instead of falling back to default trust. Validation is still lazy (at bind) and covers only the HTTP listener's keystore. | Validate every listener and profile before any bind; expiry, alias and truststore checks. |
+| Outbound HTTPS | Five independent clients (six with `network/ExternalIPDetector`, which probes `https://checkip.amazonaws.com` and `https://api4.ipify.org` with `URL.openConnection`): `jsonrpc/client/RpcClient` (faucet → node; on an SSL error it falls back to `Http().defaultClientHttpsContext`, B-148), `blockchain/checkpoint/CheckpointDownloader` (JDK `HttpClient`, default trust, redirects `NORMAL`), `ephemery/ReleaseTransport` (JDK `HttpClient`, endpoint identification on, redirects `NEVER`, `javax.net.ssl.trustStore` honoured), `consensus/pow/WorkNotifier` (Pekko `singleRequest`, default context), `BootstrapDownload` (`URL.openStream`). The TUI's `console/ops/EndpointProbe` probes the node's own listeners. | No shared policy: trust, hostname checks, client certificates and redirect rules differ per client. |
 | P2P (RLPx, devp2p) | Not TLS. RLPx's ECIES handshake authenticates the remote node's secp256k1 key (`network/rlpx/RLPxConnectionHandler`, `AuthHandshakeSuccess(secrets, remotePubKey)`). `PeerManagerActor` keeps trusted node IDs (bypass max-peers) and static nodes (`static-nodes.json`). | No way to refuse every peer that is not on a list — the consortium requirement. |
 
 The enterprise runbook (`docs/runbooks/enterprise-deployment.md`) already promises "TLS/mTLS for inter-service
@@ -40,6 +38,37 @@ text; this spec makes the claim true).
 **Why P2P is an allowlist and not TLS.** A node ID *is* a public key, and RLPx already proves possession of it during
 the handshake. Wrapping RLPx in TLS would break every other client on the network and add nothing a node-ID check does
 not. The consortium control is therefore "only these keys may connect", enforced at the RLPx handshake.
+
+---
+
+## Clarifications
+
+### Session 2026-11-18
+
+- Q: Should the Engine API support client certificates (`client-auth = want | need`), or server TLS only? → A: (a)
+  Server-side TLS only. JWT stays the client check; the Engine API has no client-certificate mode (FR-015).
+- Q: When an HTTP, WS, Engine API or metrics listener binds a non-loopback interface, what is the default posture? → A:
+  (b) It refuses to start unless TLS is enabled on that listener; `allow-insecure-bind = true` is the explicit opt-out.
+  This is a breaking change and ships with a release note and a migration section (FR-018, FR-019).
+- Q: Is an identity rule's `apis` capped by the listener's `apis`, or a grant beyond it, and do rules gate GraphQL? →
+  A: (b) A grant that may exceed the listener's set. The listener's `apis` is what an anonymous or unmatched caller
+  gets; a matched certificate gets the rule's set (FR-021–FR-023). Rules also gate GraphQL (FR-028), confirmed by the
+  user.
+- Q: Is the P2P allowlist static or editable at runtime, and does discovery run in allowlist mode? → A: Both: a static
+  file, reloaded like TLS material, and new `admin_` methods that edit it at runtime and write back to the file (the
+  model of Besu's `perm_addNodesToAllowlist` / `perm_removeNodesFromAllowlist` / `perm_getNodesAllowlist`). In
+  allowlist mode discovery (discv4 and discv5) is forced off; peers come from static nodes, bootnodes and the
+  allowlist (FR-055–FR-059).
+- Q: Is client-certificate revocation in scope? → A: (a) Out of scope. Short-lived certificates plus truststore and
+  identity-rule reload are the revocation path. A local CRL file per profile is a possible follow-up (Out of Scope).
+- Q: The decisions the plan made that Q1–Q5 left open (research.md section 3 and D-4 to D-7). → A: Accepted as
+  written: a matched certificate gets exactly its rule's set and the draft's `tls.anonymous-apis` and
+  `tls.unmatched` keys are dropped; GraphQL is gated as the pseudo-namespace `graphql`; the allowlist methods are
+  `admin_addNodesToAllowlist`, `admin_removeNodesFromAllowlist` and `admin_getNodesAllowlist`, returning `true`, with
+  no reload method; entries with an address are dial candidates, removal disconnects, config/static/boot entries are
+  not removable at runtime, edits need `file` and are atomic with at most 256 entries; forced-off discovery includes
+  the DNS tree walk and overrides `discovery-enabled = true` with a warning; metrics over TLS use a Pekko route. The
+  release that carries slice 6 is named when the slice lands.
 
 ---
 
@@ -88,8 +117,8 @@ certificate from another CA fails the handshake; the server logs one line per re
 1. **Given** `client-auth = need`, **When** a client connects without a certificate, **Then** the TLS handshake fails
    and no HTTP request is read.
 2. **Given** `client-auth = want`, **When** a client connects without a certificate, **Then** the request is served
-   with the listener's anonymous namespace set (FR-021); **When** a client presents an untrusted certificate, **Then**
-   the handshake fails (a presented certificate is always verified).
+   with the listener's own `apis` (FR-021); **When** a client presents an untrusted certificate, **Then** the
+   handshake fails (a presented certificate is always verified).
 3. **Given** WS with `client-auth = need`, **When** an authenticated client subscribes with `eth_subscribe`, **Then**
    the subscription works and the identity established at the handshake applies to the whole session.
 4. **Given** `client-auth = none` (server-only TLS), **When** any client connects, **Then** behaviour equals today's
@@ -114,10 +143,16 @@ identity; `rpc_modules` returns the caller's own set.
 
 1. **Given** identity rule `{ san-dns = "monitor.internal", apis = "eth,net,web3" }`, **When** that client calls
    `admin_peers`, **Then** it gets `-32601` and the denial is logged with the identity and the method name.
-2. **Given** a trusted client certificate that matches no rule, **When** it calls a method, **Then** the listener's
-   `unmatched` policy applies (FR-022).
+2. **Given** a trusted client certificate that matches no rule, **When** it calls a method, **Then** it is served
+   with the listener's own `apis`, as an anonymous caller is (FR-022).
 3. **Given** a batch request mixing granted and refused methods, **When** it is served, **Then** each element is
    answered on its own, as for disabled namespaces today.
+4. **Given** a listener with `apis = "eth,net,web3"` and a rule `{ name = "ops", san-dns = "ops.internal", apis =
+   "eth,net,web3,admin,debug" }`, **When** the `ops` certificate calls `admin_peers`, **Then** it is served; **When**
+   an anonymous or unmatched caller calls it, **Then** it gets `-32601` (a rule is a grant, FR-023).
+5. **Given** GraphQL enabled and the `monitor` rule above (no `graphql` in its `apis`), **When** that client posts to
+   `/graphql`, **Then** it gets the same answer as a node with GraphQL disabled; a rule that lists `graphql` is served
+   (FR-028).
 
 ---
 
@@ -173,11 +208,13 @@ named. A static check (grep ratchet) shows no outbound HTTPS client built outsid
 
 ### User Story 6 — TLS on the Engine API and the metrics endpoint (Priority: P3)
 
-An operator runs the consensus client and a Prometheus server on other hosts. The Engine API and the metrics endpoint
-can be served over TLS (and mTLS where the client supports it) using the same `tls` block as RPC.
+An operator runs the consensus client and a Prometheus server on other hosts. The Engine API can be served over
+server-side TLS, with JWT still the client check; the metrics endpoint can be served over TLS with all three
+`client-auth` modes. Both use the same profiles as RPC.
 
-**Why this priority**: Both default to loopback, the Engine API already has JWT, and the reach of the consensus
-clients' TLS support bounds what is useful (Q1). It is still in B-146's title.
+**Why this priority**: Both default to loopback and the Engine API already has JWT; few consensus clients can present
+a client certificate to the execution endpoint, so the Engine API gets server TLS only (Clarifications, Q1). It is
+still in B-146's title, and Story 8 needs a TLS option on every listener it guards.
 
 **Independent Test**: Engine API over HTTPS with a test CA: a JWT-bearing client with the CA in its trust store calls
 `engine_exchangeCapabilities`; the same call without a JWT is refused as today. Metrics over HTTPS with `client-auth =
@@ -189,29 +226,69 @@ need`: a scraper with a client certificate gets `/metrics`; one without fails th
    it calls without a JWT, **Then** it is refused exactly as today. TLS never replaces the JWT.
 2. **Given** metrics TLS with `client-auth = need`, **When** a scraper presents a trusted certificate, **Then**
    `/metrics` is served.
+3. **Given** `network.engine-api.tls.client-auth` set to anything, **When** the node starts, **Then** it exits
+   non-zero saying the Engine API takes server TLS only and JWT authenticates the consensus client.
 
 ---
 
 ### User Story 7 — Consortium P2P: only allowlisted node IDs (Priority: P2)
 
 A consortium of five organisations runs a private chain. Each node must refuse every devp2p peer whose node ID is not
-on the consortium list, inbound and outbound, and must not leak its existence through discovery to others.
+on the consortium list, inbound and outbound, and must not leak its existence through discovery to others. When a
+member joins or leaves, an operator edits the list on a running node, and the edit survives a restart.
 
 **Why this priority**: It is the P2P half of B-146 and the control the runbook's consortium section needs; it is
 independent of all TLS stories.
 
 **Independent Test**: Three nodes A, B, C on a private network; A's allowlist holds B only. B connects to A and syncs;
 C's inbound connection to A is closed right after the RLPx authentication handshake, before the devp2p `Hello` is
-processed; A never dials C even when discovery offers it; a counter of rejections increments.
+processed; A never dials C; A runs no discovery; a counter of rejections increments. Then `admin_addNodesToAllowlist`
+on A adds C, C connects, and A's allowlist file lists C after a restart; `admin_removeNodesFromAllowlist` removes C,
+C is disconnected, and the file no longer lists it.
 
 **Acceptance Scenarios**:
 
 1. **Given** an allowlist with B, **When** C dials A, **Then** A closes the connection after the RLPx auth handshake
    reveals C's key, without processing C's `Hello`.
-2. **Given** an allowlist, **When** discovery returns nodes not on it, **Then** they are never dialled.
+2. **Given** an allowlist and `discovery-enabled = true` in config, **When** the node starts, **Then** discv4, discv5
+   and the DNS tree walk do not run, no discovery UDP port is bound, and one warning says discovery is off because
+   the allowlist is on (FR-055).
 3. **Given** a trusted or static peer that is not on the allowlist, **When** the node starts, **Then** it exits
    non-zero naming the peer (a contradiction in config fails closed).
 4. **Given** the allowlist is disabled (the default), **When** the node runs, **Then** peer behaviour is unchanged.
+5. **Given** an allowlist backed by a file, **When** a caller with `admin` calls `admin_addNodesToAllowlist` with C's
+   enode, **Then** C is on the in-memory list at once, the file is replaced atomically with a version that lists C,
+   and the next file reload sees no change (FR-056, FR-057).
+6. **Given** C connected, **When** C is removed (by `admin_removeNodesFromAllowlist` or by an edit of the file that a
+   reload picks up), **Then** A disconnects C and refuses its next connection (FR-058).
+7. **Given** a caller whose effective set does not include `admin`, **When** it calls any allowlist method, **Then** it
+   gets `-32601` (FR-059).
+
+---
+
+### User Story 8 — No plaintext listener on a non-loopback interface (Priority: P2)
+
+An operator sets `network.rpc.http.interface = "0.0.0.0"` to reach the node from another host and forgets TLS. The
+node refuses to start and says which listener, which interface, and the two ways out: enable TLS on it, or set
+`allow-insecure-bind = true` on it to accept plaintext deliberately.
+
+**Why this priority**: A plaintext RPC, Engine API or metrics port on a routable interface is the commonest exposure
+the B-145 audit found. Making it an explicit choice is the zero-trust default. It is a **breaking change** for every
+deployment that binds a non-loopback interface without TLS today (hive, the Docker compose file, the `ops/` fleet
+configs), so it lands after every listener has a TLS option (Stories 2 and 6) and ships with a migration section.
+
+**Independent Test**: For each of the four listeners and for `0.0.0.0`, `::`, a LAN address and a host name that
+resolves to one, the node exits non-zero before any bind with a message naming the key; with TLS on, it starts; with
+`allow-insecure-bind = true`, it starts and logs a warning; `localhost`, `127.0.0.1` and `::1` start as today.
+
+**Acceptance Scenarios**:
+
+1. **Given** `network.engine-api.interface = "0.0.0.0"` and Engine API TLS off, **When** the node starts, **Then** it
+   exits non-zero naming `fukuii.network.engine-api.tls.enabled` and `fukuii.network.engine-api.allow-insecure-bind`.
+2. **Given** the same with `allow-insecure-bind = true`, **When** the node starts, **Then** it binds and logs one
+   warning per insecure listener at every start.
+3. **Given** metrics enabled with no `interface` set, **When** the node starts, **Then** metrics bind loopback (not the
+   wildcard address they bound before this feature).
 
 ---
 
@@ -221,12 +298,19 @@ processed; A never dials C even when discovery offers it; a counter of rejection
   port, so under `client-auth = need` a probe must present a certificate. The bundled healthchecks and the TUI probe
   (`EndpointProbe`) must use the outbound factory with a client profile; the docs must say so. No unauthenticated side
   port is added (see Out of Scope).
-- **GraphQL** on the RPC port is covered by the listener's TLS and client auth; it is not governed by namespace
-  mapping today and stays so (the identity map covers JSON-RPC namespaces only; Q3 may extend it).
-- **CORS / browser clients** cannot present client certificates reliably; `want` with an anonymous namespace set is the
-  path for them.
+- **GraphQL** on the RPC port is covered by the listener's TLS and client auth, and identity rules gate it as the
+  pseudo-namespace `graphql` (FR-028). With no identity rules, or for
+  anonymous and unmatched callers, GraphQL is served exactly when `rpc.graphql.enabled` is true, as today.
+- **A rule narrower than the listener.** A rule's set replaces the listener's set for that certificate (FR-023), so a
+  matched certificate can get less than an anonymous caller under `want`. That is the operator's rule, applied as
+  written; the startup line (FR-060) prints each rule's effective set so it is visible.
+- **CORS / browser clients** cannot present client certificates reliably; `want` with the listener's `apis` as the
+  anonymous set is the path for them.
 - **Loopback binding with TLS** is allowed (some operators want TLS everywhere); **non-loopback binding without TLS**
-  is the posture question Q2.
+  refuses the start unless `allow-insecure-bind = true` (FR-018).
+- **What counts as loopback.** The `interface` value is resolved once at startup; it is loopback only when every
+  address it resolves to is a loopback address (`127.0.0.0/8`, `::1`). `0.0.0.0` and `::` (the wildcard) are not
+  loopback. A name that does not resolve is a startup error, as a bind to it would be.
 - **A certificate that expires while the node runs**: the listener keeps serving (a running node never stops itself
   for this), logs a warning from the warning threshold onward, and exposes seconds-to-expiry; renewal is Story 4.
 - **Rotation that swaps the key type** (RSA ↔ EC) is a valid rotation.
@@ -240,8 +324,16 @@ processed; A never dials C even when discovery offers it; a counter of rejection
 - **Engine API in the Hive harness** and the multi-instance confs keep working with TLS off (the default).
 - **Allowlist and node-ID format**: entries accept a 128-hex node ID or a full `enode://` URI; case-insensitive; an
   entry that does not parse is a startup error. The node's own ID on the list is ignored.
-- **Allowlist and discv5/discv4**: discovery packets from unlisted nodes are dropped (Q4 decides whether discovery
-  runs at all in allowlist mode).
+- **Allowlist and discovery**: with the allowlist on, discv4, discv5 and the EIP-1459 DNS tree walk do not run at all
+  (FR-055); persisted known nodes are still candidates, but only those on the allowlist are dialled (FR-052).
+- **Allowlist edits racing a file edit.** An `admin_` edit and an operator's edit of the file are serialised: the edit
+  first re-reads the file if it changed since the last load, applies the change to that, and writes atomically
+  (FR-057). An edit to a file that no longer parses is refused, and the node keeps its last good list.
+- **Removing a configured entry at runtime.** Entries from `node-allowlist.nodes` (HOCON) are not in the file and
+  cannot be removed by an `admin_` call; nor can a static node or a bootnode while it is configured (removing it would
+  recreate the startup contradiction of FR-053). The call answers an error naming the source of the entry.
+- **No file configured.** Without `node-allowlist.file` there is nothing to persist to, so the `admin_` edit methods
+  answer an error saying runtime edits need a file; `admin_getNodesAllowlist` still answers.
 - **IPv6 and dual-stack** listeners use the same TLS context.
 
 ## Requirements *(mandatory)*
@@ -254,8 +346,9 @@ processed; A never dials C even when discovery offers it; a counter of rejection
   a keystore (`path`, `type`, `password-file`, optional `key-alias`), an optional truststore (`path`, `type`,
   `password-file`), `protocols` and `cipher-suites` (optional, JDK defaults when empty), and reload settings (FR-030).
 - **FR-002**: Each listener — `fukuii.network.rpc.http`, `fukuii.network.rpc.ws`, `fukuii.network.engine-api`,
-  `metrics` — MUST have a `tls { enabled, profile, client-auth }` block. `enabled = false` is the default for every
-  listener (Q2 may change the default for non-loopback binds).
+  `metrics` — MUST have a `tls { enabled, profile, client-auth }` block (the Engine API's has no `client-auth`,
+  FR-015). `enabled = false` is the default for every listener; a non-loopback bind without TLS is governed by
+  FR-018.
 - **FR-003**: `client-auth` MUST accept exactly `none`, `want` or `need`, with the TLS meaning: `none` requests no
   client certificate; `want` requests one and serves clients without one; `need` refuses the handshake without one. A
   certificate that is presented MUST always be verified against the truststore under `want` and `need`.
@@ -286,33 +379,57 @@ processed; A never dials C even when discovery offers it; a counter of rejection
 
 - **FR-014**: JSON-RPC HTTP (with GraphQL and the health routes) and JSON-RPC WebSocket MUST support TLS with all three
   `client-auth` modes.
-- **FR-015**: The Engine API MUST support server TLS; JWT authentication MUST remain mandatory whether or not TLS is on.
-  Client-certificate support on the Engine API is decided by Q1.
+- **FR-015**: The Engine API MUST support server TLS only; JWT authentication MUST remain mandatory whether or not TLS
+  is on. The Engine API MUST NOT request a client certificate, and a `client-auth` key under
+  `network.engine-api.tls` MUST be a startup error that says so.
 - **FR-016**: The metrics endpoint MUST support TLS with all three `client-auth` modes and MUST gain an `interface`
-  key defaulting to loopback.
+  key defaulting to loopback (today it binds the wildcard address; see FR-019).
 - **FR-017**: Refused handshakes MUST be logged at most once per remote address per minute (rate-limited, with a
   suppressed count) and counted in `tls_handshake_failures_total{listener, reason}` where `reason` is one of
   `no_client_cert`, `untrusted_client_cert`, `expired_client_cert`, `protocol`, `other`.
+- **FR-018**: An HTTP, WS, Engine API or metrics listener whose `interface` is not loopback (Edge Cases: "What counts
+  as loopback") MUST refuse the node's start, before any listener binds, unless that listener has `tls.enabled = true`
+  (any `client-auth` mode) or `allow-insecure-bind = true`. The refusal MUST name the listener, the interface, and both
+  keys. `allow-insecure-bind` is per listener (`fukuii.network.rpc.http.allow-insecure-bind`, `…rpc.ws.…`,
+  `…engine-api.…`, `metrics.allow-insecure-bind`), defaults to `false`, and when it is used the node MUST log one
+  warning per insecure listener at every start. The faucet's own listener follows the same rule.
+- **FR-019**: FR-018 and FR-016's loopback default are a **breaking change**. The release that ships them MUST carry
+  (a) a CHANGELOG entry under "Breaking", (b) a "Read before upgrading" item in that release's notes
+  (`docs/releases/<version>.md`), and (c) a migration section in `docs/runbooks/tls-operations.md` listing every
+  affected setting and the two ways out. The repository's own non-loopback deployments (hive's `fukuii.sh`, the Docker
+  compose file and its Prometheus scrape, the `ops/` fleet configs) MUST be migrated in the same PR, each with an
+  explicit `allow-insecure-bind = true` or TLS.
 
 **Identity and namespaces**
 
 - **FR-020**: For JSON-RPC over HTTP and WS, the node MUST derive a client identity from a verified client certificate
-  and evaluate an ordered rule list `fukuii.network.rpc.client-identities = [ { match { … }, apis = "…" } ]`, first
-  match wins. A match MUST support at least: SAN DNS name, SAN URI, subject CN, and SHA-256 certificate fingerprint;
-  exact match only (no wildcards or regular expressions in the first version).
+  and evaluate an ordered rule list `fukuii.network.rpc.client-identities = [ { name, match { … }, apis = "…" } ]`,
+  first match wins. A match MUST support at least: SAN DNS name, SAN URI, subject CN, and SHA-256 certificate
+  fingerprint; exact match only (no wildcards or regular expressions in the first version). `name` is required and
+  unique.
 - **FR-021**: Requests from clients with no certificate (possible only under `want`) MUST be served with the
-  listener's anonymous set, `tls.anonymous-apis`, defaulting to the transport's existing `apis` setting.
-- **FR-022**: A verified certificate that matches no rule MUST be handled by `tls.unmatched`: `deny` (refuse every
-  method except `rpc_modules`) or `default` (the transport's `apis`). The default is `deny` under `need`.
-- **FR-023**: How a rule's `apis` relates to the transport's `apis` (a ceiling, or a grant beyond it) is decided by Q3.
+  transport's existing `apis` setting (`network.rpc.http.apis` / `ws.apis`, with their fallback); no separate
+  anonymous key is added.
+- **FR-022**: A verified certificate that matches no rule MUST be served with the transport's `apis`, exactly as an
+  anonymous caller is.
+- **FR-023**: A matched certificate MUST be served with exactly the rule's `apis` (plus `rpc`, which is always on). The
+  rule's set is a grant: it MAY name namespaces the transport's `apis` does not, including opt-in namespaces such as
+  `admin`, `debug` and `personal`, and MAY omit namespaces the transport's set has. Every name in it MUST be a known
+  namespace or `graphql`, or startup fails.
 - **FR-024**: A refused method MUST return `-32601`, the same error a disabled namespace returns, and MUST be counted in
   `rpc_namespace_denials_total{identity_rule, namespace}` (the rule's configured name, never the raw certificate
   subject, to keep label cardinality bounded).
 - **FR-025**: `rpc_modules` MUST return the caller's effective namespace set.
 - **FR-026**: For WebSocket the identity MUST be fixed at the handshake and apply to every message and subscription on
   that connection.
-- **FR-027**: The existing loopback warning (opt-in namespaces on a non-loopback HTTP/WS bind) MUST NOT fire for a
-  namespace that is reachable only through an identity rule on a `need` listener.
+- **FR-027**: The existing loopback warning (`RpcExposureCheck`: opt-in namespaces on a non-loopback HTTP/WS bind)
+  MUST evaluate the transport's `apis` only, the set an anonymous or unmatched caller gets; a namespace reachable only
+  through an identity rule MUST NOT trigger it. The startup line (FR-060) lists each rule's grant instead.
+- **FR-028**: Identity rules MUST gate GraphQL (`POST /graphql`)
+  as the pseudo-namespace `graphql`. An anonymous or unmatched caller gets GraphQL when `rpc.graphql.enabled` is true
+  (today's behaviour); a matched certificate gets it only when its rule's `apis` lists `graphql`. A refused GraphQL
+  request MUST get the same answer as a node with GraphQL disabled and MUST be counted as a denial (FR-024). A rule
+  that lists `graphql` while `rpc.graphql.enabled = false` MUST be a startup error.
 
 **Rotation**
 
@@ -323,8 +440,11 @@ processed; A never dials C even when discovery offers it; a counter of rejection
   increment `tls_reload_failures_total{profile}`. It MUST NOT stop the node.
 - **FR-032**: The node MUST expose `tls_certificate_expiry_seconds{profile, role}` (role `server` or `client`) and log
   a warning daily once a certificate is within `expiry-warning` (default 14 days) of expiry.
-- **FR-033**: The identity rules (FR-020) and the P2P allowlist (FR-050) MUST be reloadable by the same mechanism, or
-  explicitly restart-only — decided with Q4.
+- **FR-033**: The identity rules (FR-020) MUST be reloadable without a restart: they are read from
+  `fukuii.network.rpc.client-identities-file` when that key is set (else from the node config, restart-only), checked
+  on the profile reload interval, validated in full before use, and on failure handled as FR-031 handles a profile.
+  A reload applies to new connections; an open WebSocket keeps the identity fixed at its handshake (FR-026). The P2P
+  allowlist file reloads by the same mechanism (FR-057).
 
 **Outbound TLS factory**
 
@@ -346,7 +466,9 @@ processed; A never dials C even when discovery offers it; a counter of rejection
 **Consortium P2P node-ID allowlist**
 
 - **FR-050**: The node MUST support `fukuii.network.peer.node-allowlist { enabled, nodes = [ … ], file }` where
-  `nodes` and the optional file list node IDs (128 hex) or `enode://` URIs. `enabled = false` is the default.
+  `nodes` and the optional file list node IDs (128 hex) or `enode://` URIs; the file is a JSON array of such strings,
+  the format of `static-nodes.json`. `enabled = false` is the default. The effective list is the union of `nodes`,
+  the file, and the static nodes and bootnodes (which FR-053 requires to be on it).
 - **FR-051**: With the allowlist enabled, an inbound RLPx connection whose authenticated remote key is not on the list
   MUST be closed immediately after the auth handshake, before the devp2p `Hello` is processed, and counted in
   `p2p_allowlist_rejections_total{direction}`.
@@ -356,34 +478,71 @@ processed; A never dials C even when discovery offers it; a counter of rejection
 - **FR-053**: A trusted, static or bootstrap node that is not on the enabled allowlist MUST be a startup error.
 - **FR-054**: The allowlist MUST apply on both chain families (ETC and ETH) and MUST NOT change any consensus rule,
   block validation or sync logic; it filters connections only.
+- **FR-055**: With the allowlist enabled, discv4, discv5 and the EIP-1459 DNS tree walk MUST NOT run and the discovery
+  UDP port MUST NOT be bound, whatever `discovery.discovery-enabled` says; if it says `true`, the node MUST log one
+  warning that discovery is off because the allowlist is on. Peers come from static nodes, bootnodes, persisted known
+  nodes and the allowlist's own entries that carry an address (FR-058), each filtered by FR-052.
+- **FR-056**: The node MUST provide three JSON-RPC methods in the `admin` namespace, modelled on Besu's `perm_` node
+  methods: `admin_addNodesToAllowlist(enodes: [string])`, `admin_removeNodesFromAllowlist(enodes: [string])` and
+  `admin_getNodesAllowlist()`. Add and remove are all-or-nothing: an entry that does not parse, a duplicate, an entry
+  not present (remove), or an entry that cannot be removed (Edge Cases: "Removing a configured entry at runtime")
+  fails the whole call with an error naming it, and nothing changes. With the allowlist disabled, or with no `file`,
+  the edit methods answer an error that says so.
+- **FR-057**: A runtime edit MUST be persisted to the allowlist file before the call answers success: under one lock,
+  re-read the file if its content changed since the last load, apply the edit, write the result to a temporary file in
+  the same directory, flush it to disk, and rename it over the file atomically. The node MUST record what it wrote so
+  that the next reload of the file sees no change; an external edit is picked up by the reload (on the FR-030
+  interval) exactly as at startup, and a file that fails to parse keeps the last good list (FR-031's rule). A failed
+  write MUST leave both the file and the in-memory list unchanged and answer an error.
+- **FR-058**: A node removed from the allowlist, by an `admin_` call or by a reload, MUST be disconnected if connected
+  and refused afterwards. An entry with an address (`enode://<id>@<host>:<port>`) is a dial candidate, like a static
+  node, from the moment it is added; an entry that is a bare node ID admits that node inbound only.
+- **FR-059**: The allowlist methods MUST be reachable only where the caller's effective namespace set includes
+  `admin`: over IPC by default, over HTTP or WS only where the transport's `apis` grants `admin` or an identity rule
+  does (FR-023), which can be a single client certificate on a `need` listener. They MUST NOT be added to any default
+  `apis` set, and every successful edit MUST be logged at INFO with the entries changed and the caller's identity rule
+  name (or the transport, for IPC and anonymous callers).
 
 **Observability and docs**
 
 - **FR-060**: Startup MUST log one line per listener: scheme, interface, port, `client-auth`, profile, certificate
-  subject and `notAfter`, and the number of identity rules; never a password or key material.
+  subject and `notAfter`, whether `allow-insecure-bind` is in use, and the number of identity rules, followed by one
+  line per rule with its name and effective namespace set; never a password or key material. With the allowlist on,
+  one line gives its size, its file and that discovery is off.
 - **FR-061**: The TUI RPC view (spec 029) MUST show each listener's TLS state and client-auth mode.
 - **FR-062**: `docs/runbooks/tls-operations.md`, the `fukuii-tls-operations` skill and `enterprise-deployment.md` MUST
-  describe the new keys, mTLS, rotation and the allowlist (with B-147), and `tls/gen-cert.sh` MUST be able to issue a
-  test CA and client certificates.
+  describe the new keys, mTLS, rotation, the non-loopback rule and its migration (FR-019), and the allowlist with its
+  `admin_` methods (with B-147), and `tls/gen-cert.sh` MUST be able to issue a test CA and client certificates.
 
 ### Key Entities
 
 - **TLS profile**: named TLS material — keystore, optional truststore, protocols, ciphers, reload policy. Used by
   listeners (server role) and outbound clients (client role).
-- **Listener TLS setting**: per listener — enabled, profile name, client-auth mode, anonymous namespace set, unmatched
-  policy.
-- **Client identity rule**: an ordered rule — a name, a match on certificate fields, the namespaces it yields.
+- **Listener TLS setting**: per listener — enabled, profile name, client-auth mode (not on the Engine API), and the
+  listener's `allow-insecure-bind`. The anonymous and unmatched namespace set is the transport's existing `apis`.
+- **Client identity rule**: an ordered rule — a unique name, a match on certificate fields, the namespaces it grants
+  (which may include `graphql` and may exceed the transport's `apis`).
 - **Outbound use site**: a named HTTPS client in the node and the profile it uses.
-- **Node allowlist**: a set of node IDs, from config and an optional file, enforced at the RLPx handshake and on every
-  dial.
+- **Node allowlist**: a set of node IDs (some with an address), from config, an optional file, static nodes and
+  bootnodes; enforced at the RLPx handshake and on every dial; edited at runtime by `admin_` methods that persist to
+  the file.
 
 ## Security Considerations *(Principle VI)*
 
 - Network-exposed surface: every change in this spec is on a listener or a dialler; the plan MUST name the reviewer
   for each slice (`conduit` for RPC/WS/identity, `beacon` for the Engine API, `herald` for the allowlist, no storage change, so
   not `vault`).
-- The defaults do not widen exposure: every listener stays loopback with TLS off unless the operator turns it on;
-  JSON-RPC stays private by default (Principle VI).
+- The defaults narrow exposure: every listener stays loopback with TLS off unless the operator turns it on; metrics
+  move from the wildcard address to loopback (FR-016); a plaintext non-loopback bind needs an explicit
+  `allow-insecure-bind` (FR-018). JSON-RPC stays private by default (Principle VI).
+- Identity rules can grant `admin`, `debug` or `personal` beyond the transport's set (FR-023). That grant is only as
+  strong as the truststore: a rule matches only a certificate that chained to the listener's truststore, and the plan
+  MUST test that a self-signed certificate copying a rule's SAN or CN never matches.
+- The runtime allowlist methods (FR-056) change who may connect to the node. They live in `admin`, which is in no HTTP
+  or WS default set, are reachable only where `admin` is granted (FR-059), and every edit is logged with the caller's
+  rule name. The file is written atomically and never left half-written (FR-057).
+- The Engine API keeps JWT as its only client check; TLS on it protects the token and payloads in transit and never
+  replaces the JWT (FR-015).
 - Key material is never logged, never committed (the `.gitignore` rules for `*.p12` and `/tls/*` stay), and password files are
   read, used and dropped (char arrays zeroed where the JDK API allows).
 - Identity rules authorise by certificate fields only after chain verification; an unverified certificate never reaches
@@ -391,7 +550,10 @@ processed; A never dials C even when discovery offers it; a counter of rejection
 - Threat-model items the plan must cover: downgrade (FR-006), fallback to default trust (FR-012), cardinality attacks
   on metrics labels (FR-024), log flooding by failed handshakes (FR-017), and an attacker-controlled redirect
   (FR-043).
-- Revocation of client certificates is open (Q5).
+- Client-certificate revocation (CRL, OCSP) is out of scope. The revocation path is short-lived certificates plus a
+  truststore or identity-rule reload (FR-030, FR-033), which takes effect for new handshakes within one reload
+  interval. An open connection keeps its identity until it closes; the docs MUST say so and MUST recommend a bounded
+  idle timeout on clients that use long-lived WebSocket sessions.
 
 ## Success Criteria *(mandatory)*
 
@@ -410,8 +572,15 @@ processed; A never dials C even when discovery offers it; a counter of rejection
 - **SC-006**: Request latency on a TLS listener with `client-auth = need` and 20 identity rules is within 5 % of
   `client-auth = none` for a sustained `eth_blockNumber` load (identity evaluation happens once per connection, not per
   request).
-- **SC-007**: With every new setting at its default, the RPC, Engine API, metrics and P2P behaviour is unchanged:
-  `testEssential` and the Hive Engine API suites pass with no config edits.
+- **SC-007**: With every new setting at its default and every listener on loopback (the shipped confs), the RPC,
+  Engine API and P2P behaviour is unchanged: `testEssential` passes with no config edits, and the Hive Engine API
+  suites pass with the one opt-out hive's `fukuii.sh` adds (FR-019). Metrics change only in binding loopback.
+- **SC-008**: For each of the four listeners, each of `0.0.0.0`, `::` and a non-loopback address without TLS makes the
+  node exit non-zero before any port binds (12 cases); with TLS on, or with `allow-insecure-bind = true`, each starts;
+  `localhost`, `127.0.0.1` and `::1` start without either.
+- **SC-009**: In a test that kills the node at each step of an allowlist edit (before the temporary file is written,
+  after it is written, after the rename), the file afterwards always parses and holds either the old list or the new
+  one, never a mix; after 100 alternating `admin_` and file edits, the in-memory list equals the file's.
 
 ## Assumptions
 
@@ -424,8 +593,8 @@ processed; A never dials C even when discovery offers it; a counter of rejection
   the plan finds a cheap path.
 - Consortium networks run on a custom genesis (`fukuii-custom-networks`); the allowlist is meaningful on public chains
   too but is not recommended there.
-- B-148 (fail closed for today's `mode = "https"`) can land first as a small fix; this spec's FR-010–FR-012 generalise
-  it and must not contradict it.
+- B-148 (fail closed for today's `mode = "https"`) landed first, in #1905 on 2026-11-17; this spec's FR-010–FR-012
+  generalise it and must not contradict it.
 
 ## Out of Scope
 
@@ -434,28 +603,14 @@ processed; A never dials C even when discovery offers it; a counter of rejection
 - An unauthenticated side port for health checks.
 - On-chain permissioning (Besu-style permissioning contracts) and account allowlists.
 - Certificate issuance, ACME, OCSP stapling for the server certificate, HSM/PKCS#11 keys.
+- Client-certificate revocation: CRL files, OCSP, and CRL distribution points fetched online. A local CRL file per
+  profile, reloaded with the truststore, is a possible follow-up (a backlog item, not this spec).
+- Client certificates on the Engine API (JWT is its client check).
+- Discovery in allowlist mode, filtered or otherwise (it is off, FR-055).
 - Authorisation finer than a namespace (per-method or per-parameter rules).
 - Reverse-proxy deployment guidance beyond what `tls-operations.md` already has.
 
-## Open Questions [NEEDS CLARIFICATION]
+## Open Questions
 
-- **Q1 — Engine API client certificates.** [NEEDS CLARIFICATION: Should the Engine API support `client-auth = want |
-  need`, or server TLS only (JWT remains the client control)? Options: (a) server TLS only, since few consensus clients
-  can present a client certificate to the execution endpoint; (b) all three modes, documented as "only if your CL
-  supports it"; (c) no TLS on the Engine API at all — keep it loopback/private network with JWT, as go-ethereum does.]
-- **Q2 — Default posture on non-loopback binds.** [NEEDS CLARIFICATION: When an HTTP, WS, Engine API or metrics
-  listener binds a non-loopback interface, should the node (a) keep today's behaviour and warn, (b) refuse to start
-  unless TLS is enabled, or (c) refuse to start unless TLS with `client-auth = need` is enabled ("zero trust by
-  default", a breaking change for existing deployments, which would then need an explicit `allow-insecure-bind`
-  opt-out)?]
-- **Q3 — What an identity rule's `apis` means.** [NEEDS CLARIFICATION: Is a rule's namespace set (a) capped by the
-  transport's `apis` (identity can only narrow), or (b) a grant that may exceed it (so `admin` can be reachable only to
-  one certificate on a listener whose default set is `eth,net,web3`)? And should rules also gate GraphQL?]
-- **Q4 — Allowlist management and discovery.** [NEEDS CLARIFICATION: Is the P2P allowlist (a) static config/file only,
-  reloaded like TLS material, or (b) also editable at runtime through new `admin_` methods that persist to the file
-  (Besu's `perm_addNodesToAllowlist` model)? And in allowlist mode, should discovery (a) keep running with unlisted
-  nodes filtered, or (b) be forced off so the node is invisible to everyone outside the consortium?]
-- **Q5 — Client-certificate revocation.** [NEEDS CLARIFICATION: Is revocation in scope? Options: (a) out of scope —
-  short-lived certificates plus truststore/identity-rule reload (FR-030, FR-033) are the revocation path; (b) a local
-  CRL file per profile, reloaded with the truststore; (c) OCSP/CRL distribution points fetched online, which makes a
-  listener depend on an external service.]
+None. Q1–Q5 were answered on 2026-11-18 (Clarifications). FR-028 (rules gate GraphQL) is the recommended default and
+awaits the user's confirmation; plan.md records what changes if it is declined.
