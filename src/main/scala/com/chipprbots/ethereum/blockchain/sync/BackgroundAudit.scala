@@ -828,14 +828,10 @@ object BackgroundAudit:
           counters = counters.copy(moved = counters.moved + 1)
           log.info(s"[HEAL-AUDIT] ${hole.position.describe} is no longer what the anchor's root needs: not written")
           notReached.update(hole.position, notReached.getOrElse(hole.position, 0) + 1)
-        case RepairOutcome.DifferentNode =>
-          // Another node that decodes sits at the position: never overwritten, and this pass is not clean for it.
-          counters = counters.copy(unresolved = counters.unresolved + 1)
-          log.error(
-            s"[HEAL-AUDIT] ${hole.position.describe} holds a node that decodes and is not ${AuditWalk.hexOf(hole.hash)}, " +
-              "which the anchor's root needs there. It is another view's node and is never overwritten: this pass is " +
-              "not clean"
-          )
+        case RepairOutcome.Overwrote =>
+          // A node that decodes sat where the anchor's root names this one: the store logged it at ERROR and counted it.
+          counters = counters.copy(repaired = counters.repaired + 1)
+          log.info(s"[HEAL-AUDIT] Repaired ${hole.position.describe} (${AuditWalk.hexOf(hole.hash)}) over another node")
       if hole.fault.isBad then servedBad += hole.hash
       clearBadEntry(hole.hash)
       // Whatever was missing below it comes next.
@@ -843,10 +839,9 @@ object BackgroundAudit:
         if deps.positions.isEmpty then stack.append(AuditFrame(hole.position, Some(hole.hash)))
         else
           // By position, a position that was not repaired is resolved again from the anchor, up to MaxNotReached
-          // times: `AuditWalk.resolve` and `AnchorReach` could disagree for good. Not for another node that decodes
-          // (never overwritten, so a look again would fetch it for good), and not for bytes that were rejected.
+          // times: `AuditWalk.resolve` and `AnchorReach` could disagree for good. Not for bytes that were rejected.
           outcome match
-            case RepairOutcome.DifferentNode | RepairOutcome.Rejected => ()
+            case RepairOutcome.Rejected => ()
             case RepairOutcome.NotReached =>
               if notReached.getOrElse(hole.position, 0) >= MaxNotReached then
                 counters = counters.copy(unresolved = counters.unresolved + 1)
@@ -948,7 +943,8 @@ object BackgroundAudit:
         case BadEntryDelete.NotReached =>
           log.info(s"[HEAL-AUDIT] The current root no longer needs $where: nothing deleted")
         case BadEntryDelete.DifferentNode =>
-          // Never a node that decodes and is another than the one expected: it is another view's.
+          // Never deleted when it decodes and is another than the one expected. A fetched copy of the expected node
+          // overwrites it (`repairNodeAt`), which is how this hole is closed.
           counters = counters.copy(unfollowable = counters.unfollowable + 1)
           log.error(
             s"[HEAL-AUDIT] $where holds a node that decodes and is not the one expected, so it stays. What is below it " +

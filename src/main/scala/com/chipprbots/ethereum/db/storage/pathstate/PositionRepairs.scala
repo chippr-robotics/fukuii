@@ -25,9 +25,9 @@ trait PositionRepairs:
 
   /** Writes `bytes` at `position` if `keccak(bytes) == expectedHash`, the anchor's root names `expectedHash` there, and
     * the row is absent or an undecodable entry: one point write, under the state lock, with the anchor compare-and-set
-    * (data-model 7.0, 7.5). Never lowers anything, and never overwrites a node that decodes and is another than the one
-    * expected ([[RepairOutcome.DifferentNode]]). With no anchor, or one that does not reach `expectedHash` there, it
-    * declines ([[RepairOutcome.NotReached]]).
+    * (data-model 7.0, 7.5). Never lowers anything, and overwrites a node that decodes and is another than the one
+    * expected, since the anchor's root names the expected one there ([[RepairOutcome.Overwrote]]). With no anchor, or
+    * one that does not reach `expectedHash` there, it declines ([[RepairOutcome.NotReached]]).
     */
   def repairNodeAt(position: PositionKey, expectedHash: ByteString, bytes: Array[Byte]): RepairOutcome
 

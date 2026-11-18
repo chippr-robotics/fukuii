@@ -907,9 +907,29 @@ deferred-persistence cache; the one mode that did, `inmemory`, is retired (4.6),
 ### 7.5 Repair and on-demand writes
 
 `repairNodeAt(position, expectedHash, bytes)` is a state move (7.0, 6.3.1): it takes the state lock and writes only if
-`keccak(bytes) == expectedHash` **and** the row is absent or fails its hash **and** the anchor's current root still reaches
-`expectedHash` at that position, all judged under the lock. One point write. It never lowers anything (there are no counts) and
-never overwrites a valid different node: a node that is valid for another view is not this view's repair (Part 2, E). Both of
+`keccak(bytes) == expectedHash` **and** the anchor's current root still reaches `expectedHash` at that position (the anchor
+compare-and-set, `AnchorReach.stillReached`), all judged under the lock. One point write. It never lowers anything (there are no
+counts). The row at the position is judged from the rows as they are under the lock:
+
+| Row at the position | Outcome |
+|---------------------|---------|
+| hashes to `expectedHash` | `AlreadyValid`, nothing written |
+| absent, or does not decode | `Written` |
+| decodes, and is another node | `Overwrote` (below) |
+| the anchor's root does not name `expectedHash` there, or no anchor | `NotReached`, nothing written |
+
+**Decision (user, 2026-11-18, on `beacon`'s recommendation; B-370): a row that decodes and is not `expectedHash` is overwritten.**
+This replaces the earlier text of this section, which said both "writes when the row is absent or fails its hash" and "never
+overwrites a valid different node": the two could not both hold, because a row that decodes and is another node *fails its hash
+for this position*. The reasoning: the anchor's verified root names `expectedHash` at this position, so the row is wrong for the
+only state this store holds, and nothing else reads it (the store has one view, 6.3). Leaving it made the audit unable to converge:
+the position was a hole that no repair could close and no delete may remove. geth's path-scheme `hasNode` treats a hash mismatch
+as a missing node and refetches over it, which is the same rule. The conditions are unchanged and are what make it safe: under
+the state lock, with the anchor compare-and-set, only after the anchor's root is confirmed to name `expectedHash` at the
+position, and the old row is recorded in the `StateMove` (`clock.inFlight`) so a view made before sees the change as a move. An
+overwrite is logged at ERROR with the old row's hash and counted as `db.state.repair.overwrites` (Prometheus
+`app_db_state_repair_overwrites_total`); on a healthy datadir the counter is zero. `deleteBadNodeAt` is not changed: it still
+declines a row that decodes (`BadEntryDelete.DifferentNode`), since a delete has no node to put in its place. Both of
 the importer's on-demand writes (`BlockImporter.scala:485,552`, today `StateStorage.saveNode`, a blind upsert at
 `StateStorage.scala:362-363`) become `repairNodeAt` in C5b, before `FastSyncNodeStorage` is deleted.
 
@@ -1466,7 +1486,7 @@ is which storage it is handed and that it passes the owner and the position.
 | `StxLedger`, `eth_call`, `eth_estimateGas`, `eth_createAccessList`, simulate, trace | `blockchain.getReadOnlyMptStorage()` plus `blockHeader.stateRoot` (`StxLedger.scala:125-143,161-179,213-249,256-265`); `ReplayMptStorage` (`:703`); `EthSimulateService.RetainingMptStorage` (`:144`) | `readOnlyViewFor(header)`; the world's writes go to a throwaway layer above the view (what `ReadOnlyNodeStorage` does today); both wrappers derive from `MptStorageDecorator` |
 | SNAP serving by root | one `getReadOnlyStorage` handed to `NetworkPeerManagerActor` (`NodeBuilder.scala:484`); `isStateRootFresh` keeps a 128-block root set (`NetworkPeerManagerActor.scala:1112-1130`); `SnapServer` resolves by hash (`:68-77`) and says "content-addressed ... the same MptStorage serves both" (`:415-416`) | per request: `viewForRoot(root)`; the walkers already carry `prefix` (`SnapServer.scala:140-159`) and the storage ranges receive the account hash, so they call `getAt(owner, prefix, hash)`. The window is `min(128, history)` (B). A root with no view gets the existing empty answer |
 | Background audit | `StorageReader.nodes(hashes)` (`BackgroundAudit.scala:207-214`); the walk is by `AuditPosition(account, nibbles)` (`AuditWalk.scala:30-64`) but the reader is by hash (`:98-103`) | `AuditReader.nodes(requests: (AuditPosition, hash))` -> `rawNodesAt`; reads the anchor view; a position whose bytes are a different valid node is **moved**, not bad (the walk already re-resolves moved positions from the current root, `:105-122`) |
-| Repair and on-demand fetch (#1694) | `MissingNodeException.location` is the HP path, set on reads only (`MerklePatriciaTrie.scala:261,274`); the importer fetches by `location` (`BlockImporter.scala:660-733`) and writes with `saveNode(hash, bytes, bn)` (`:485,552`); audit repair and delete are by hash (`BackgroundAudit.scala:694,748`) | `getAt` attaches `(owner, path)` to every missing node, so the **write** paths report a position too (today `put`, `remove` and `fix` do not). Writes become `repairNodeAt` (7.5): conditional, never overwrites a valid different node. `StorageHolePosition.paths(...)` at `BlockImporter.scala:698-707` finds a position by hash walk and is replaced by the exception's position |
+| Repair and on-demand fetch (#1694) | `MissingNodeException.location` is the HP path, set on reads only (`MerklePatriciaTrie.scala:261,274`); the importer fetches by `location` (`BlockImporter.scala:660-733`) and writes with `saveNode(hash, bytes, bn)` (`:485,552`); audit repair and delete are by hash (`BackgroundAudit.scala:694,748`) | `getAt` attaches `(owner, path)` to every missing node, so the **write** paths report a position too (today `put`, `remove` and `fix` do not). Writes become `repairNodeAt` (7.5): conditional on the anchor's root naming the node there; it overwrites a row that decodes and is another node (B-370, 2026-11-18). `StorageHolePosition.paths(...)` at `BlockImporter.scala:698-707` finds a position by hash walk and is replaced by the exception's position |
 | Healing after hand-off | the heal coordinator ends at hand-off; the audit repairs (spec 022 D8) | unchanged in shape; the audit reads `t`/`u` by position instead of CF `n` by hash |
 
 | Reader (continued) | Today | Under Y |
@@ -1703,7 +1723,7 @@ vectors for CF `t`/`u` keys are reused unchanged.
 | V3, aliased storage tries | Gone by construction: each owner has its own positions. The Hash-scheme alias handling and the seed mechanism for excluded accounts (D5, Hash) are deleted with the scheme |
 | Excluded accounts, Path (D5: delete the account's trie positions at heal start) | Pre-hand-off only, unchanged. An excluded account left at a lazy hand-off is a hole: the first block that touches it meets a missing node, the importer fetches it **by position** (E), and `repairNodeAt` writes it |
 | Deepest-first heal, held-memory cap, atomic chain commit (D1, D3) | Pre-hand-off only, unchanged. They write `t`/`u` through `PathNodeStorage.writeNodesWithDeletes`, already position-keyed and atomic |
-| On-demand repair (decisions 1 and 15) | Becomes position-conditional (7.5). New rule: a node that is a different *valid* version at that position is not a hole and not corruption; it is another view's node (6.3) |
+| On-demand repair (decisions 1 and 15) | Becomes position-conditional (7.5). A node that is a different *valid* version at that position is, for this store, a wrong row: the anchor's root names another there, so `repairNodeAt` overwrites it (user decision 2026-11-18, B-370), logged at ERROR and counted. `deleteBadNodeAt` still declines it |
 | The full-trie walk as a background audit of the hash store (D8) | Walks the path store by position, from the anchor's root |
 | `HealInvariant.isEmpty` (D7) | Must treat `anchor == genesis` as empty (5.4), or genesis rows in `t`/`u` force the walk on every fresh datadir |
 | Stale rows in `t`/`u` from earlier pivots | Inert (reads verify) and not part of any BlockDiff (3.3). They make `PathNodeStorage.isEmpty` false, which 5.4 handles for genesis |

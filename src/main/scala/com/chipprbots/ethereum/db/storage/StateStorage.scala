@@ -123,10 +123,11 @@ enum RepairOutcome:
     */
   case NotReached
 
-  /** A position store only: the row at the position is a node that decodes, and it is not the one expected there. It is
-    * another view's node and is never overwritten (data-model 7.5). Nothing was written.
+  /** A position store only: the row at the position was a node that decodes and is not the one expected there, and the
+    * anchor's root names the expected node at that position, so the row was replaced (data-model 7.5, the user's
+    * decision of 2026-11-18). The old row is in the state move's log. Told at ERROR, and counted.
     */
-  case DifferentNode
+  case Overwrote
 
 /** What a delete of a provably bad entry did. */
 enum BadEntryDelete:

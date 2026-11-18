@@ -932,8 +932,9 @@ final class PathStateStorage(
     * one point write, in one batch. `bytes` go in only when they are the node `expectedHash` names, the anchor's root
     * still names `expectedHash` at `position`, and the row there is absent or does not decode. It is judged under the
     * lock, from the rows as they are then: a verdict the caller formed earlier, from a read that straddled a move,
-    * writes nothing. A decodable node that is not `expectedHash` is another view's and stays
-    * ([[RepairOutcome.DifferentNode]]).
+    * writes nothing. A row that decodes and is not `expectedHash` is overwritten ([[RepairOutcome.Overwrote]]): the
+    * anchor's root names `expectedHash` there, so the row is wrong for the state this store holds, and the old row is
+    * recorded in the move. It is logged at ERROR with the old row's hash, and counted.
     *
     * Held for the walk from the root to `position` and one write. The worst case is about 128 uncached point reads (a
     * path is at most 64 nibbles, in the account trie and again in a storage trie; a mainnet trie is typically far
@@ -950,10 +951,18 @@ final class PathStateStorage(
           case Right(held) =>
             rows.readNoFill(position) match
               case Some(row) if StateStorage.hashesTo(expectedHash, row) => RepairOutcome.AlreadyValid
-              case Some(row) if decodesAsNode(row)                       => RepairOutcome.DifferentNode
               case prior =>
                 writeRowInPlace(held, position, Some(ByteString(bytes)), prior)
-                RepairOutcome.Written
+                prior match
+                  case Some(row) if decodesAsNode(row) =>
+                    log.error(
+                      s"[STATE-REPAIR] ${position.show} held a node that decodes and is not ${hexOfBytes(expectedHash.toArray)}, " +
+                        s"which the anchor's root names there: overwritten. The old row hashed to " +
+                        s"${hexOfBytes(kec256(row))}"
+                    )
+                    told("an overwrite of a row that decodes")(settings.observer.repairOverwrote())
+                    RepairOutcome.Overwrote
+                  case _ => RepairOutcome.Written
       }
 
   /** The delete of a row that is provably bad (data-model 6.3, 7.5), position-scoped. Under the state lock, from a read
@@ -998,6 +1007,8 @@ final class PathStateStorage(
         AnchorReach.reach(held.stateRoot, position, rows.readNoFill) match
           case AnchorReach.Reach.Names(hash) if hash == expectedHash => Right(held)
           case _                                                     => Left(RepairOutcome.NotReached)
+
+  private def hexOfBytes(bytes: Array[Byte]): String = bytes.map("%02x".format(_)).mkString
 
   private def decodesAsNode(row: Array[Byte]): Boolean =
     try
@@ -2514,6 +2525,9 @@ object PathStateStorage:
 
     /** A view could not be made: the disk moved on each time. */
     def viewStale(): Unit = ()
+
+    /** A repair overwrote a row that decodes and is not the node the anchor's root names there (data-model 7.5). */
+    def repairOverwrote(): Unit = ()
 
   object CommitObserver:
     val Silent: CommitObserver = new CommitObserver {}

@@ -7,11 +7,15 @@ import com.chipprbots.ethereum.db.storage.RepairOutcome
 import com.chipprbots.ethereum.testing.Tags.*
 
 /** The repair of a row by position (spec 018 C5b, T216; data-model 7.0, 7.5): one point write under the state lock,
-  * made only when the bytes are the node expected, the anchor's root still names it at the position, and the row is
-  * absent or no node. Declined when the anchor moved, or there is none.
+  * made only when the bytes are the node expected and the anchor's root still names it at the position; a row that
+  * decodes and is another node is overwritten (B-370). Declined when the anchor moved, or there is none.
   */
 class RepairNodeAtSpec extends AnyFlatSpec with Matchers:
   import PathStateTestKit.*
+
+  final private class Overwrites extends PathStateStorage.CommitObserver:
+    val count = new java.util.concurrent.atomic.AtomicInteger(0)
+    override def repairOverwrote(): Unit = count.incrementAndGet()
 
   "repairNodeAt" should "write a node into an absent row, under the anchor, as a move that leaves the anchor where it is" taggedAs UnitTest in {
     val f = new PositionRepairFixture
@@ -44,16 +48,51 @@ class RepairNodeAtSpec extends AnyFlatSpec with Matchers:
     }
   }
 
-  it should "replace a row that is no node, and refuse one that decodes and is another" taggedAs UnitTest in {
+  it should "replace a row that is no node, without counting it as an overwrite" taggedAs UnitTest in {
     val f = new PositionRepairFixture
+    val told = new Overwrites
+    val state = new PathStateStorage(f.rows, f.appState, settings = PathStateStorage.CommitSettings(observer = told))
     val (position, node) = f.innerRow(None)
     f.put(position, f.garbage)
-    f.state.repairNodeAt(position, f.hashOf(node), node) shouldBe RepairOutcome.Written
+    state.repairNodeAt(position, f.hashOf(node), node) shouldBe RepairOutcome.Written
     f.rowAt(position).get shouldBe node
+    told.count.get shouldBe 0
+  }
 
+  it should "overwrite a row that decodes and is another node, under the anchor, and count it (B-370)" taggedAs UnitTest in {
+    val f = new PositionRepairFixture
+    val told = new Overwrites
+    val state = new PathStateStorage(f.rows, f.appState, settings = PathStateStorage.CommitSettings(observer = told))
+    val (position, node) = f.innerRow(None)
     val another = f.rowsOf().filter(_._1.owner.isEmpty).map(_._2).find(!java.util.Arrays.equals(_, node)).get
     f.put(position, another)
-    f.state.repairNodeAt(position, f.hashOf(node), node) shouldBe RepairOutcome.DifferentNode
+    val epoch = state.clock.epoch
+
+    state.repairNodeAt(position, f.hashOf(node), node) shouldBe RepairOutcome.Overwrote
+
+    f.rowAt(position).get shouldBe node
+    told.count.get shouldBe 1
+    withClue("a move of the clock, anchor unchanged, lock free: ") {
+      state.clock.epoch shouldBe epoch + 2
+      state.anchor shouldBe Some(f.anchor)
+      state.lock.holder shouldBe None
+    }
+    state.repairNodeAt(position, f.hashOf(node), node) shouldBe RepairOutcome.AlreadyValid
+    told.count.get shouldBe 1
+  }
+
+  it should "leave a row that decodes and is another node when the anchor's root does not name the expected one there" taggedAs UnitTest in {
+    val f = new PositionRepairFixture
+    val before = f.rowsOf().toMap
+    val next = f.commitNext()
+    val after = f.rowsOf(next.stateRoot).toMap
+    val (position, oldNode) = before.filter { case (p, node) =>
+      p.owner.isEmpty && after.get(p).exists(!java.util.Arrays.equals(_, node)) && p.hp != PositionKey.AccountRoot.hp
+    }.head
+    val another = after(position)
+    f.put(position, another)
+
+    f.state.repairNodeAt(position, f.hashOf(oldNode), oldNode) shouldBe RepairOutcome.NotReached
     f.rowAt(position).get shouldBe another
   }
 
