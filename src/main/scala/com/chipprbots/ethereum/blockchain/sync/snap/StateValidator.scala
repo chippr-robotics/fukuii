@@ -33,7 +33,7 @@ class StateValidator(mptStorage: MptStorage):
   private def corruptFailure(e: MerklePatriciaTrie.CorruptNodeException): String =
     s"Corrupt trie node, not a hole: ${e.getMessage}"
 
-  private def stateFault(fault: StateFault): String = s"State fault, not a hole: ${fault.getMessage}"
+  private def stateFault(fault: StateFault): String = s"${StateValidator.StateFaultPrefix}${fault.getMessage}"
 
   private val accountTrie: MptStorage = mptStorage.forOwner(None)
   private def at(nibbles: Array[Byte]): NibblePath = NibblePath.fromNibbles(nibbles)
@@ -409,3 +409,9 @@ class StateValidator(mptStorage: MptStorage):
               case _: MerklePatriciaTrie.MissingNodeException =>
                 val compactPath = ByteString(HexPrefix.encode(nibblePath, isLeaf = false))
                 result += ((Seq(accountHash, compactPath), ByteString(hash.hash)))
+
+object StateValidator:
+  /** What a walk's `Left` starts with when the state faulted under it (a stale view, a state not held). The node is not
+    * missing and not corrupt, so the controller must not queue healing for it (B-216): it retries on a fresh view.
+    */
+  val StateFaultPrefix: String = "State fault, not a hole: "

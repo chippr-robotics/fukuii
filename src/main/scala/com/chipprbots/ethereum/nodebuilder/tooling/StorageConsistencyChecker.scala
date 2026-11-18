@@ -78,9 +78,10 @@ object StorageConsistencyChecker:
     else if engineApi then Some(SkipReason.EngineApi)
     else None
 
-  /** Samples every `step`th block number from 0 up to, but not including, `best`: the number must map to a hash and the
-    * hash must have a header. Pure apart from the reads; never stops at a miss. `onMiss` is called at each miss as it
-    * is found. `cancelled` is asked before each point.
+  /** Samples every `step`th block number from 0 up to `best`, and `best` itself (B-285): the number must map to a hash
+    * and the hash must have a header. The points are counted in Long arithmetic, so a best block above Int.MaxValue
+    * neither wraps nor loses its tail. Pure apart from the reads; never stops at a miss. `onMiss` is called at each
+    * miss as it is found. `cancelled` is asked before each point.
     */
   def scan(
       best: BigInt,
@@ -91,22 +92,28 @@ object StorageConsistencyChecker:
       onMiss: Missing => Unit = _ => (),
       onProgress: (Long, Long) => Unit = (_, _) => ()
   ): ConsistencyResult.Checked =
-    val points = Range(0, best.intValue, step)
-    val total = points.size.toLong
+    require(step > 0, "the step of a scan is positive")
+    require(best.isValidLong && best >= 0, "the best block number of a scan fits a Long and is not negative")
+    val last = best.toLong
+    val stride = step.toLong
+    val total = last / stride + 1 + (if last % stride == 0 then 0 else 1)
+    // 0, step, 2*step, ... up to best, then best itself when it is not a multiple of the step
+    val points: Iterator[Long] =
+      Iterator.iterate(0L)(_ + stride).takeWhile(_ <= last) ++ Iterator.single(last).filter(_ % stride != 0)
     var checked = 0L
     var missingCount = 0L
     var reported = -1L
     val firstMissing = Vector.newBuilder[Missing]
     var wasCancelled = false
-    val it = points.iterator
+    val it = points
     while !wasCancelled && it.hasNext do
       if cancelled() then wasCancelled = true
       else
-        val idx = it.next()
+        val idx = BigInt(it.next())
         val miss: Option[Missing] = blockNumberMappingStorage.get(idx) match
-          case None => Some(Missing(BigInt(idx), MissingKind.NoHashForNumber))
+          case None => Some(Missing(idx, MissingKind.NoHashForNumber))
           case Some(hash) =>
-            if blockHeadersStorage.get(hash).isEmpty then Some(Missing(BigInt(idx), MissingKind.NoHeaderForHash))
+            if blockHeadersStorage.get(hash).isEmpty then Some(Missing(idx, MissingKind.NoHeaderForHash))
             else None
         miss.foreach { m =>
           missingCount += 1

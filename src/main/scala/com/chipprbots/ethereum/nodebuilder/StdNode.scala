@@ -56,6 +56,8 @@ import com.chipprbots.ethereum.network.StaticNodesLoader
 import com.chipprbots.ethereum.network.discovery.PeerDiscoveryManager
 import com.chipprbots.ethereum.nodebuilder.tooling.PeriodicConsistencyCheck
 import com.chipprbots.ethereum.nodebuilder.tooling.StorageConsistencyChecker
+import com.chipprbots.ethereum.tls.TlsConfig
+import com.chipprbots.ethereum.tls.TlsStartupCheck
 import com.chipprbots.ethereum.transactions.PendingTransactionsManager
 import com.chipprbots.ethereum.transactions.TxPoolMetrics
 import com.chipprbots.ethereum.utils.BuildInfo
@@ -89,6 +91,10 @@ abstract class BaseNode extends Node:
     // EngineApiStartupRefusal here, which the caller turns into one clear line and exit 1, not a stack trace from
     // phase 3 with P2P and discovery already up.
     StdNode.failIfRefused(engineApiJwtAuthenticator)
+
+    // Phase -1 (spec 030 FR-010): every TLS listener's material is validated before the first port binds. The first
+    // failure is the refusal, so a listener never comes up half-configured next to one that did.
+    checkTlsAtStart()
 
     // Phase 0: the TUI's frames, so its splash and "starting node" move while the node starts. The probe that feeds it
     // starts in phase 6, once the actors it asks exist.
@@ -406,6 +412,15 @@ abstract class BaseNode extends Node:
       val _ = PoWMiningMetrics
     mining.startProtocol(this)
 
+  /** The pre-bind TLS pass: refuses the start on the first misconfiguration, logs one line per TLS listener. */
+  private def checkTlsAtStart(): Unit =
+    val config = instanceConfig.config
+    TlsStartupCheck.run(config) match
+      case Left(message) => throw StdNode.startupRefusal(message)
+      case Right(lines) =>
+        if TlsStartupCheck.usesLegacy(config) then log.warn(TlsConfig.LegacyDeprecation)
+        lines.foreach(line => log.info(line.render))
+
   private def startDiscoveryManager(): Unit = peerDiscoveryManagerTyped ! PeerDiscoveryManager.Start
 
   /** Starts the JSON-RPC HTTP server and BLOCKS until the socket is listening.
@@ -472,7 +487,7 @@ abstract class BaseNode extends Node:
         jsonRpcConfig.httpApis,
         TransportAuth.None,
         exposed("HTTP", "http", http.enabled, http.interface, jsonRpcConfig.httpApis),
-        tls = http.mode == "https"
+        tls = http.tlsEnabled
       ),
       TransportStatus(
         TransportKind.Ws,
@@ -969,7 +984,7 @@ object StdNode:
         Left(
           s"Refusing to start: the JSON-RPC HTTP server cannot start on $interface:$port " +
             s"(${e.getClass.getSimpleName}: ${e.getMessage}). Fix network.rpc.http (mode, interface, port, " +
-            "certificate), or set network.rpc.http.enabled = false."
+            "tls, certificate), or set network.rpc.http.enabled = false."
         )
 
   /** Should the Engine API bind after the ETH JSON-RPC server rather than before it?

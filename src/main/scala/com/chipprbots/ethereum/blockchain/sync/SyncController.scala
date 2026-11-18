@@ -2100,10 +2100,7 @@ object SyncController:
       val snapStateRoot = appStateStorage.getSnapSyncStateRoot()
       val bestBlockNum = appStateStorage.getBestBlockNumber()
       val mptStorage = stateStorage.getReadOnlyStorage
-      def rootExists(root: ByteString): Boolean =
-        try
-          mptStorage.get(root.toArray); true
-        catch case _: Exception => false
+      def rootExists(root: ByteString): Boolean = mptStorage.holdsNode(root)
       blockchainReader.getSnapSyncPivotBlock.flatMap(blockchainReader.getBlockHeaderByNumber) match
         case None =>
           log.info(
@@ -2904,10 +2901,7 @@ object SyncController:
       */
     private def recoveryScanRoot(): Option[(ByteString, BigInt)] =
       def readable(root: ByteString, number: BigInt): Boolean =
-        try
-          stateStorage.getBackingStorage(number).get(root.toArray)
-          true
-        catch case _: Exception => false
+        stateStorage.getBackingStorage(number).holdsNode(root)
       val best = blockchainReader.getBestBlockHeader.map(h => (h.stateRoot.value, h.number.value))
       val pivot = for
         root <- appStateStorage.getSnapSyncStateRoot()

@@ -94,6 +94,15 @@ object InMemoryWorldStateProxy:
         case _: MissingNodeException =>
           throw new MissingStorageNodeException(ByteString(nodeId), address.bytes)
 
+    // A write that finds a node of this account's storage missing or corrupt (the wrapper of a node it replaces does
+    // not unwrap) is said as a read is: the account's, so that the importer fetches it from the storage trie, not the
+    // account trie (B-075). The trie adds the position.
+    override protected def update(newRoot: Option[MptNode], removals: MptStorageDecorator.Removals): Option[MptNode] =
+      try super.update(newRoot, removals)
+      catch
+        case e: MissingNodeException if !e.isInstanceOf[MissingStorageNodeException] =>
+          throw new MissingStorageNodeException(e.hash, address.bytes, e.location)
+
   /** Updates state trie with current changes but does not persist them into the storages. To do so it:
     *   - Commits code (to get account's code hashes)
     *   - Commits constract storages (to get account's contract storage root)

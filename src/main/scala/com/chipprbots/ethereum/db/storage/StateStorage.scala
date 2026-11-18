@@ -117,6 +117,18 @@ enum RepairOutcome:
   /** The bytes offered do not hash to the key: nothing was written. */
   case Rejected
 
+  /** A position store only (spec 018 data-model 7.5): the anchor's root no longer reaches the node at that position, or
+    * there is no anchor, or the anchor is not the block the caller judged the position under. Nothing was written: it
+    * is not this state's repair, and the caller looks the position up again.
+    */
+  case NotReached
+
+  /** A position store only: the row at the position was a node that decodes and is not the one expected there, and the
+    * anchor's root names the expected node at that position, so the row was replaced (data-model 7.5, the user's
+    * decision of 2026-11-18). The old row is in the state move's log. Told at ERROR, and counted.
+    */
+  case Overwrote
+
 /** What a delete of a provably bad entry did. */
 enum BadEntryDelete:
   case Deleted
@@ -129,8 +141,15 @@ enum BadEntryDelete:
     */
   case PassesKeccakElsewhere
 
-  /** Still bad, and the current root no longer needs it there: it stays. */
+  /** Still bad, and the current root no longer needs it there: it stays. A position store says the same when the anchor
+    * moved or there is none: nothing is judged under a root that is not the anchor's.
+    */
   case NotReached
+
+  /** A position store only (spec 018 data-model 6.5, 7.5): the row is a node that decodes and is not the one expected
+    * at the position. That is another view's node, and it is never deleted on this path.
+    */
+  case DifferentNode
 
 // scalastyle:off
 trait StateStorage:

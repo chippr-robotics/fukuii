@@ -224,13 +224,10 @@ object PathToHashExporter:
   /** A root that is absent is no stale leaf. Nothing under it can be read, so it throws whatever the rate would say. */
   private def requireRoot(root: ByteString, mptStorage: MptStorage): Unit =
     if !java.util.Arrays.equals(root.toArray, MerklePatriciaTrie.EmptyRootHash) then
-      try mptStorage.get(root.toArray)
-      catch
-        case e: Exception =>
-          throw new IllegalStateException(
-            s"Path-to-hash verification failed: state root ${hexOf(root.take(4).toArray)} absent after export",
-            e
-          )
+      if !mptStorage.holdsNode(root) then
+        throw new IllegalStateException(
+          s"Path-to-hash verification failed: state root ${hexOf(root.take(4).toArray)} absent after export"
+        )
 
   final private case class AccountLeaves(sampled: Int, misses: Int, codeHashes: Seq[ByteString])
 
@@ -280,7 +277,7 @@ object PathToHashExporter:
   private def requireStorageRoots(sample: Seq[(Array[Byte], Array[Byte])], mptStorage: MptStorage): Int =
     sample.foreach { case (_, rlp) =>
       val hash = kec256(rlp)
-      if scala.util.Try(mptStorage.get(hash)).isFailure then
+      if !mptStorage.holdsNode(ByteString(hash)) then
         throw new IllegalStateException(
           s"Path-to-hash verification failed: storage root ${hexOf(hash.take(4))} absent after export"
         )

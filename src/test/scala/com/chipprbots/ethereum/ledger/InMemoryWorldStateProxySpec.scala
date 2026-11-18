@@ -8,6 +8,8 @@ import org.scalatest.flatspec.AnyFlatSpec
 import org.scalatest.matchers.should.Matchers
 
 import com.chipprbots.ethereum.blockchain.sync.EphemBlockchainTestSetup
+import com.chipprbots.ethereum.db.storage.MptStorage
+import com.chipprbots.ethereum.db.storage.MptStorageDecorator
 import com.chipprbots.ethereum.domain.Account
 import com.chipprbots.ethereum.domain.Address
 import com.chipprbots.ethereum.domain.UInt256
@@ -15,6 +17,8 @@ import com.chipprbots.ethereum.mpt.LeafNode
 import com.chipprbots.ethereum.mpt.MerklePatriciaTrie
 import com.chipprbots.ethereum.mpt.MerklePatriciaTrie.MPTException
 import com.chipprbots.ethereum.mpt.MerklePatriciaTrie.MissingAccountNodeException
+import com.chipprbots.ethereum.mpt.MerklePatriciaTrie.MissingStorageNodeException
+import com.chipprbots.ethereum.mpt.MptNode
 import com.chipprbots.ethereum.testing.Tags.*
 import com.chipprbots.ethereum.vm.EvmConfig
 import com.chipprbots.ethereum.vm.Generators
@@ -334,6 +338,49 @@ class InMemoryWorldStateProxySpec extends AnyFlatSpec with Matchers:
         thrown.location shouldBe defined
       }
     }
+
+  // B-075: a write that meets a corrupt node of a storage trie said no account and no position, so the importer asked
+  // for the node by hash alone, which no peer serves.
+  it should "say a corrupt node met while persisting a storage trie as that account's, with its position" taggedAs (
+    UnitTest,
+    StateTest
+  ) in new TestSetup:
+    val first: InMemoryWorldStateProxy = InMemoryWorldStateProxy.persistState(
+      worldState
+        .saveAccount(address1, Account(0, 100))
+        .saveStorage(address1, worldState.getStorage(address1).store(BigInt(1), BigInt(10)))
+    )
+    // The storage is told to replace a node of the trie, and cannot: its wrapper does not unwrap.
+    var replacedAt: Option[ByteString] = None
+    class FailingReplace(val underlying: MptStorage) extends MptStorageDecorator:
+      protected def decorate(scoped: MptStorage): MptStorage = new FailingReplace(scoped)
+      override protected def update(newRoot: Option[MptNode], removals: MptStorageDecorator.Removals): Option[MptNode] =
+        removals match
+          case MptStorageDecorator.Removals.Positioned(replaced, _) if replaced.nonEmpty =>
+            val (path, node) = replaced.last
+            replacedAt = Some(ByteString(path.toHexPrefix))
+            throw new MerklePatriciaTrie.CorruptNodeException(ByteString(node.hash), "wrapper does not unwrap")
+          case _ => super.update(newRoot, removals)
+    val failing: MptStorage = new FailingReplace(blockchain.getBackingMptStorage(-1))
+    val again: InMemoryWorldStateProxy = InMemoryWorldStateProxy(
+      storagesInstance.storages.evmCodeStorage,
+      failing,
+      (number: BigInt) => blockchainReader.getBlockHeaderByNumber(number).map(_.hash.value),
+      UInt256.Zero,
+      first.stateRootHash,
+      noEmptyAccounts = false,
+      ethCompatibleStorage = true
+    )
+
+    val thrown: MissingStorageNodeException = intercept[MerklePatriciaTrie.MissingStorageNodeException](
+      InMemoryWorldStateProxy.persistState(
+        again.saveStorage(address1, again.getStorage(address1).store(BigInt(2), BigInt(20)))
+      )
+    )
+
+    thrown.accountAddress shouldBe address1.bytes
+    replacedAt shouldBe defined
+    thrown.location shouldBe replacedAt
 
   it should "properly handle address collision during initialisation" in new TestSetup:
     // This is a known test vector from Ethereum/ETC general state tests

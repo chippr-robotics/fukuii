@@ -18,6 +18,7 @@ import com.chipprbots.ethereum.db.dataSource.DataSourceBatchUpdate
 import com.chipprbots.ethereum.db.dataSource.DataSourceUpdateOptimized
 import com.chipprbots.ethereum.db.dataSource.DataUpdate
 import com.chipprbots.ethereum.db.storage.AppStateStorage
+import com.chipprbots.ethereum.db.storage.BadEntryDelete
 import com.chipprbots.ethereum.db.storage.BlockHeadersStorage
 import com.chipprbots.ethereum.db.storage.BlockNumberMappingStorage
 import com.chipprbots.ethereum.db.storage.ChainWeightStorage
@@ -26,8 +27,11 @@ import com.chipprbots.ethereum.db.storage.MptStorage
 import com.chipprbots.ethereum.db.storage.Namespaces
 import com.chipprbots.ethereum.db.storage.PathNodeStorage
 import com.chipprbots.ethereum.db.storage.PrefetchNodeReader
+import com.chipprbots.ethereum.db.storage.RawNodeRead
+import com.chipprbots.ethereum.db.storage.RepairOutcome
 import com.chipprbots.ethereum.db.storage.SnapStorageDoneStorage
 import com.chipprbots.ethereum.db.storage.SnapSyncProgressStorage
+import com.chipprbots.ethereum.db.storage.StateStorage
 import com.chipprbots.ethereum.utils.LazyLogger
 
 /** The state of the unified layout (spec 018 Track C): the position-keyed rows of CF `t` and CF `u`, the anchor that
@@ -55,7 +59,8 @@ final class PathStateStorage(
     appState: AppStateStorage,
     maxViewAgeMoves: Int = 8,
     settings: PathStateStorage.CommitSettings = PathStateStorage.CommitSettings()
-) extends LazyLogger:
+) extends LazyLogger
+    with PositionRepairs:
   import PathStateStorage.*
 
   private val dataSource: DataSource = rows.dataSource
@@ -291,7 +296,7 @@ final class PathStateStorage(
     }
 
   /** The block whose state the disk holds, or `None` when the datadir has no state yet (SNAP in progress). */
-  def anchor: Option[BlockRef] = clock.anchor
+  override def anchor: Option[BlockRef] = clock.anchor
 
   /** Whether a view of `block`'s state can be made, as [[viewOf]] makes one, and an execution staged on it: `block` is
     * the anchor, a block behind it that its changeset records lead back to, or a block that forward layers lead to from
@@ -915,6 +920,119 @@ final class PathStateStorage(
         overlayTold()
       case CommitOutcome.AlreadyApplied => ()
     outcome
+
+  // ---- repair and on-demand writes by position (data-model 7.5, C5b) ----
+
+  override def rawRowsAt(requests: Seq[(PositionKey, ByteString)]): Seq[RawNodeRead] =
+    rows
+      .readManyNoFill(requests.map(_._1))
+      .map(_.fold[RawNodeRead](RawNodeRead.Absent)(RawNodeRead.Bytes(_)))
+
+  /** A repair of one row (data-model 7.5): a state move, so under the state lock, with the anchor compare-and-set, and
+    * one point write, in one batch. `bytes` go in only when they are the node `expectedHash` names, the anchor's root
+    * still names `expectedHash` at `position`, and the row there is absent or does not decode. It is judged under the
+    * lock, from the rows as they are then: a verdict the caller formed earlier, from a read that straddled a move,
+    * writes nothing. A row that decodes and is not `expectedHash` is overwritten ([[RepairOutcome.Overwrote]]): the
+    * anchor's root names `expectedHash` there, so the row is wrong for the state this store holds, and the old row is
+    * recorded in the move. It is logged at ERROR with the old row's hash, and counted.
+    *
+    * Held for the walk from the root to `position` and one write. The worst case is about 128 uncached point reads (a
+    * path is at most 64 nibbles, in the account trie and again in a storage trie; a mainnet trie is typically far
+    * shallower, some tens of reads), each a RocksDB point lookup that bypasses the caches. It waits for a move of the
+    * head under way, as any adopter does, which can be a whole multi-batch head move, and for no other lock. So it is
+    * called off any actor thread, and it throws [[StateUnavailable]] on a store that has failed closed.
+    */
+  override def repairNodeAt(position: PositionKey, expectedHash: ByteString, bytes: Array[Byte]): RepairOutcome =
+    if !StateStorage.hashesTo(expectedHash, bytes) then RepairOutcome.Rejected
+    else
+      adopting(s"repair of ${position.show}") {
+        underAnchor(position, expectedHash) match
+          case Left(declined) => declined
+          case Right(held) =>
+            rows.readNoFill(position) match
+              case Some(row) if StateStorage.hashesTo(expectedHash, row) => RepairOutcome.AlreadyValid
+              case prior =>
+                writeRowInPlace(held, position, Some(ByteString(bytes)), prior)
+                prior match
+                  case Some(row) if decodesAsNode(row) =>
+                    log.error(
+                      s"[STATE-REPAIR] ${position.show} held a node that decodes and is not ${hexOfBytes(expectedHash.toArray)}, " +
+                        s"which the anchor's root names there: overwritten. The old row hashed to " +
+                        s"${hexOfBytes(kec256(row))}"
+                    )
+                    told("an overwrite of a row that decodes")(settings.observer.repairOverwrote())
+                    RepairOutcome.Overwrote
+                  case _ => RepairOutcome.Written
+      }
+
+  /** The delete of a row that is provably bad (data-model 6.3, 7.5), position-scoped. Under the state lock, from a read
+    * of its own, so a stale verdict of the caller's deletes nothing: the row is read, the anchor's root is asked
+    * whether it still reaches `expectedHash` at `position` (the real `stillReached`), and the row is read again before
+    * the delete, which is the same row or no delete. Only an entry that does not decode as a node is provably bad here:
+    * bytes that decode and are not `expectedHash` are another view's node, never deleted
+    * ([[BadEntryDelete.DifferentNode]]). No anchor, or one that does not reach `expectedHash` there:
+    * [[BadEntryDelete.NotReached]]. The same lock and the same worst-case hold as [[repairNodeAt]].
+    */
+  override def deleteBadNodeAt(position: PositionKey, expectedHash: ByteString): BadEntryDelete =
+    def kept(row: Option[Array[Byte]]): Option[BadEntryDelete] = row match
+      case None                                                      => Some(BadEntryDelete.NoLongerBad)
+      case Some(bytes) if StateStorage.hashesTo(expectedHash, bytes) => Some(BadEntryDelete.NoLongerBad)
+      case Some(bytes) if decodesAsNode(bytes)                       => Some(BadEntryDelete.DifferentNode)
+      case Some(_)                                                   => None
+    adopting(s"delete of a bad row at ${position.show}") {
+      val first = rows.readNoFill(position)
+      kept(first).getOrElse {
+        underAnchor(position, expectedHash) match
+          case Left(_) => BadEntryDelete.NotReached
+          case Right(held) =>
+            val again = rows.readNoFill(position)
+            kept(again).getOrElse {
+              if !sameRow(first, again) then BadEntryDelete.NoLongerBad
+              else
+                writeRowInPlace(held, position, None, again)
+                BadEntryDelete.Deleted
+            }
+      }
+    }
+
+  /** The anchor, if the anchor's root still names `expectedHash` at `position`; the outcome to decline with otherwise.
+    * Under the state lock: it is the compare-and-set of data-model 7.0 (an absent anchor is a failure of it).
+    */
+  private def underAnchor(position: PositionKey, expectedHash: ByteString)(using
+      StateLockHeld
+  ): Either[RepairOutcome, BlockRef] =
+    clock.anchor match
+      case None => Left(RepairOutcome.NotReached)
+      case Some(held) =>
+        AnchorReach.reach(held.stateRoot, position, rows.readNoFill) match
+          case AnchorReach.Reach.Names(hash) if hash == expectedHash => Right(held)
+          case _                                                     => Left(RepairOutcome.NotReached)
+
+  private def hexOfBytes(bytes: Array[Byte]): String = bytes.map("%02x".format(_)).mkString
+
+  private def decodesAsNode(row: Array[Byte]): Boolean =
+    try
+      com.chipprbots.ethereum.mpt.MptTraversals.decodeNode(row)
+      true
+    catch case NonFatal(_) => false
+
+  private def sameRow(a: Option[Array[Byte]], b: Option[Array[Byte]]): Boolean = (a, b) match
+    case (None, None)       => true
+    case (Some(x), Some(y)) => java.util.Arrays.equals(x, y)
+    case _                  => false
+
+  /** One row, written or deleted in place, in the batch of a move that leaves the anchor where it is: a view made
+    * before it sees the prior row through the log (data-model 6.3.1). Nothing else is in the batch: a repair is the
+    * node and nothing it describes.
+    */
+  private def writeRowInPlace(
+      held: BlockRef,
+      position: PositionKey,
+      next: Option[ByteString],
+      prior: Option[Array[Byte]]
+  )(using StateLockHeld): Unit =
+    val updates = rows.rowUpdates(Seq(position -> next))
+    clock.inFlight(StateMove(held, Map(position -> prior.map(ByteString(_)))))(dataSource.update(updates))
 
   /** '''Destroys the state this datadir holds''', so that a genesis can be committed to it again: every row of both
     * column families, every changeset record and index entry, the count of pruned records, the layout stamp and the
@@ -2407,6 +2525,9 @@ object PathStateStorage:
 
     /** A view could not be made: the disk moved on each time. */
     def viewStale(): Unit = ()
+
+    /** A repair overwrote a row that decodes and is not the node the anchor's root names there (data-model 7.5). */
+    def repairOverwrote(): Unit = ()
 
   object CommitObserver:
     val Silent: CommitObserver = new CommitObserver {}

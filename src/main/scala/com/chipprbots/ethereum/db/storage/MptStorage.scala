@@ -40,6 +40,20 @@ trait MptStorage:
   def rawNodes(hashes: Seq[ByteString]): Seq[RawNodeRead] =
     hashes.map(hash => RawNodeRead.decoding(RawNodeRead.Bytes(get(hash.toArray).encode)))
 
+  /** Whether this store holds the node `hash` names, for a caller that wants presence and nothing else (B-034): one raw
+    * read, nothing decoded and the block cache not filled, judged as `NodeFault.provablyBad` judges it. An entry that
+    * is not the node (a wrapper that does not unwrap, bytes that fail keccak) is not held, and neither is a node that
+    * cannot be read; bytes that pass keccak are held, decoded or not. Where the entry is to be repaired, read
+    * [[rawNodes]], which says which of the three it is.
+    */
+  def holdsNode(hash: ByteString): Boolean =
+    try
+      rawNodes(Seq(hash)) match
+        case Seq(RawNodeRead.Absent) => false
+        case Seq(raw)                => !NodeFault.provablyBad(hash, raw)
+        case _                       => false
+    catch case NonFatal(_) => false
+
   /** Store pre-encoded trie nodes directly by hash, bypassing trie collapse. Used by state healing to insert individual
     * nodes fetched from peers.
     *

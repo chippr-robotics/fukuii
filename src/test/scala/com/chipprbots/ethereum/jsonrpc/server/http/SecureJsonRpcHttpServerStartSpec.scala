@@ -32,6 +32,11 @@ import com.chipprbots.ethereum.nodebuilder.StdNode
 import com.chipprbots.ethereum.security.SSLContextBuilder
 import com.chipprbots.ethereum.security.SSLError
 import com.chipprbots.ethereum.testing.Tags.*
+import com.chipprbots.ethereum.tls.TestPki
+import com.chipprbots.ethereum.tls.TlsConfigError
+import com.chipprbots.ethereum.tls.TlsServerContext
+import com.chipprbots.ethereum.tls.TlsServerEngine
+import com.chipprbots.ethereum.tls.TlsTestSupport
 
 /** B-148: a TLS misconfiguration stops the start (spec 030 FR-010..FR-012). The HTTPS server whose SSL context cannot
   * be built, or the client that cannot build its own, never runs on without TLS or on the JDK's default trust; the
@@ -129,7 +134,7 @@ class SecureJsonRpcHttpServerStartSpec extends AnyFlatSpec with Matchers with Be
     override def healthCheck: IO[HealthcheckResponse] = IO.pure(HealthcheckResponse(Nil))
     override def readinessCheck(): IO[HealthcheckResponse] = IO.pure(HealthcheckResponse(Nil))
 
-  private def secureServer(ssl: () => Either[SSLError, SSLContext]): SecureJsonRpcHttpServer =
+  private def secureServer(ssl: () => Either[TlsConfigError, TlsServerContext]): SecureJsonRpcHttpServer =
     new SecureJsonRpcHttpServer(new MockableJsonRpcController, healthChecker, serverConfig("https"), ssl)(using system):
       override protected def callStats: RpcCallStats = new RpcCallStats
 
@@ -137,7 +142,7 @@ class SecureJsonRpcHttpServerStartSpec extends AnyFlatSpec with Matchers with Be
     UnitTest,
     RPCTest
   ) in {
-    val server = secureServer(() => Left(SSLError("fukuii.network.rpc.http.certificate: keystore is missing")))
+    val server = secureServer(() => Left(TlsConfigError("fukuii.network.rpc.http.certificate: keystore is missing")))
     val result = StdNode.awaitJsonRpcHttpBind(server.run(), "127.0.0.1", 8545, Wait)
     val message = result.left.getOrElse(fail("the server started without a TLS context"))
     message should include("fukuii.network.rpc.http.certificate")
@@ -149,7 +154,13 @@ class SecureJsonRpcHttpServerStartSpec extends AnyFlatSpec with Matchers with Be
   }
 
   it should "start when its SSL context is good" taggedAs (UnitTest, RPCTest) in {
-    val server = secureServer(() => Right(SSLContext.getDefault))
+    val pki = new TestPki(dir.toPath)
+    val keys = pki.keystore("start-spec", Seq("rpc" -> pki.leaf()))
+    val config = TlsTestSupport.config(
+      TlsTestSupport.profile("rpc", keys),
+      """tls { enabled = true, profile = "rpc" }"""
+    )
+    val server = secureServer(() => TlsServerEngine.rpcHttp(config, random))
     try StdNode.awaitJsonRpcHttpBind(server.run(), "127.0.0.1", 0, Wait).isRight shouldBe true
     finally Await.result(server.lifecycle.stop(), Wait)
   }
@@ -159,7 +170,7 @@ class SecureJsonRpcHttpServerStartSpec extends AnyFlatSpec with Matchers with Be
       new MockableJsonRpcController,
       healthChecker,
       serverConfig("http"),
-      () => fail("the http mode must not ask for an SSL context")
+      () => fail("the http mode must not ask for a TLS context")
     )(using system)
     server.exists(_.isInstanceOf[InsecureJsonRpcHttpServer]) shouldBe true
   }

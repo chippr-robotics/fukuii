@@ -82,7 +82,7 @@ trait FaucetJsonRpcHttpServerBuilder:
     faucetJsonRpcController,
     faucetJsonRpcHealthCheck,
     jsonRpcConfig.httpServerConfig,
-    () => sslContext(rawFukuiiConfig, "network.rpc.http", "fukuii")
+    () => com.chipprbots.ethereum.tls.TlsServerEngine.rpcHttp(rawFukuiiConfig, secureRandom)
   )
 
 trait ShutdownHookBuilder:
@@ -118,6 +118,10 @@ class FaucetServer
 
   def start(): Unit =
     log.info("About to start Faucet JSON-RPC server")
+    // spec 030 FR-008, FR-010: the faucet's listener is on the same profiles, validated before it binds
+    com.chipprbots.ethereum.tls.TlsStartupCheck.run(rawFukuiiConfig) match
+      case Left(message) => throw new IllegalStateException(message)
+      case Right(lines)  => lines.foreach(line => log.info(line.render))
     startJsonRpcHttpServer()
 
   private def startJsonRpcHttpServer() =
@@ -139,5 +143,5 @@ object FaucetServer:
       case scala.util.control.NonFatal(e) =>
         Left(
           s"Refusing to start: the faucet JSON-RPC server cannot start (${e.getClass.getSimpleName}: ${e.getMessage}). " +
-            "Check fukuii.network.rpc.http (mode, interface, port, certificate)."
+            "Check fukuii.network.rpc.http (mode, interface, port, tls, certificate)."
         )
