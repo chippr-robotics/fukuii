@@ -2970,3 +2970,13 @@ items:
     links:
       spec: "030"
     notes: S1 moved the faucet's listener onto profiles; rpc-client still uses SSLContextBuilder (B-148 fail-closed) until S7
+  - id: B-366
+    title: "Spec 030 S9 follow-up: AllowlistThreeNodeItSpec (T081): A, B, C on a dev chain, C refused, A never dials C"
+    priority: P2
+    status: open
+    area: network
+    opened: 2026-11-18
+    refs: []
+    links:
+      spec: 030-zero-trust-tls
+    notes: S9 covered at RLPx handshake + PeerManager level with TestKit; the three-node IntegrationTest of SC-005 was not written.
