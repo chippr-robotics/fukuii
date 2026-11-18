@@ -529,7 +529,7 @@ chunks, are interrupted and recover.
 ## Phase 12: C5a, hand-off without a copy, the layout guard and the ancestor window (item 10, hand-off)
 
 **Goal**: SNAP finishes on either chain by one synced finalization commit that carries the anchor, with no `PathToHashExporter`
-publish; the layout guard refuses every datadir that is not empty or marked; and the 256 headers and 6 bodies below the pivot are a
+publish; the layout guard refuses every datadir that is not empty or marked; and the 256 headers and the ancestor bodies (up to 5 on ETC, B-302) below the pivot are a
 hand-off precondition (BLOCKHASH and ommers work from the first block). Serves US3.
 
 **From C4b part 1:** the batch that gives the datadir its anchor writes `state.origin` with it (`AppStateStorage.putStateOrigin`),
@@ -560,7 +560,7 @@ finalization commit leaves the rows, the anchor and the pointer; the guard table
 - [ ] T204 Create `main/db/storage/AncestorWindow.scala` (`ensure`: 256 headers below the pivot and the bodies of the 6 below it, taken from the chain downloader's coverage or fetched) and make it a precondition of the finalization commit in `SnapFinalization.scala`. **[forge]** *(C5a part 2: `AncestorWindow.check` is built; `ensure` and the precondition in `SnapFinalization` come with the hand-off commit; the fetch is B-301.)*
 - [ ] T205 Change `main/blockchain/sync/snap/heal/HealInvariant.scala` (`atSnapStart`, `isEmpty` at `:76-95`): when `anchor == genesis`, clear `t` and `u` (two `deleteRange`), delete the anchor, then evaluate `isEmpty` (dm 5.4). *(C5a part 3: built as `PathStateStorage.clearGenesisStateForSync`, by the clear's own mark and not by two steps; the call from `HealInvariant.atSnapStart` comes with part 10.)*
 - [ ] T206 [P] Reject `pruning.mode = "inmemory"` at start on both chains in `main/nodebuilder/NodeBuilder.scala` (config check at the pruning mode read, `main/db/storage/pruning/package.scala`) with the dm 4.6 message. **Landed early by #1692** in `PruningConfig.apply` (`main/utils/Config.scala`), which `NodeBuilder` calls at the pruning mode read: nothing left but the dm 4.6 wording, if it differs.
-- [ ] T207 **M12**: measure the cost of the ancestor window (256 headers, 6 bodies) at hand-off, with and without the chain downloader's coverage, on Mordor and Sepolia (ETC mainnet joins in C7). Record in `spec/baselines/m12-ancestor-window.md`; it bounds the hold time of `AncestorWindow.ensure`.
+- [ ] T207 **M12**: measure the cost of the ancestor window (256 headers, up to 5 bodies after B-302) at hand-off, with and without the chain downloader's coverage, on Mordor and Sepolia (ETC mainnet joins in C7). Record in `spec/baselines/m12-ancestor-window.md`; it bounds the hold time of `AncestorWindow.ensure`.
 - [ ] T208 Run `sbt compile-all`, `sbt "testOnly *StateLayoutGuard* *PathHandoffSample* *GenesisClearAtSnapStart* *AncestorWindow* *StateIngestDurability* *PruningModeRejection*"`, `sbt "IntegrationTest / testOnly *FinalizationCrash*"`, `sbt scalafmtAll`, and `scripts/snap-split/verify.sh --branch <branch> origin/staging HEAD`.
 - [ ] T209 Record the DC-14 figures in `spec/baselines/dc14-C5a.md` (EG-8), then open the C5a PR; request `beacon`, `forge`, `eye`, `prism`.
 
@@ -605,40 +605,213 @@ mid-import is filled by a position fetch on both the ETH and the PoW importer; b
 
 ## Phase 14: C5c, checkpoint format version 2 and the position-assigning importer (item 10, checkpoint)
 
-**Goal**: ETC's resync path exists. A checkpoint archive of format v2 is exported with every occurrence of every node in pre-order,
-the ancestor window chained by hash, and a trusted-hash import that assigns positions with a stack machine and no hash lookup.
-Serves US6. **The format is a one-way door.**
+**Goal**: ETC's resync path exists. A checkpoint archive of format v2 is exported with every occurrence of every node in
+pre-order and the ancestor window chained by hash. A trusted-hash import assigns positions with a stack machine and no hash
+lookup. Serves US6. **The format is a one-way door.**
 
-**S0 prerequisites** (Satisfied, verified at this PR): forge item 8 (a) and (b): the window chained by hash and the genesis-anchor
-clear (dm E.1). **Both reviewers sign the format again at the C5c PR before merge.**
+**Amended 2026-11-18 (B-066).** The byte layout of format v2 is pinned in dm E.1 before any code. The table, the encoding
+rules, the user's decisions 1 to 4 and the forge and beacon corrections are all recorded there with their dates. The tasks
+below are rewritten to match. Three changes matter most:
+- T224's body set is now B-302's, `C..C-4` where the header names ommers, not "6 bodies below C".
+- T223 adds a fifth assertion.
+- T227 pins three golden streams.
 
-**Reviewers**: **[forge] [beacon]**, sign the format; eye.
+The slice is **three PRs, shipped in one release**: PR1 breaks Hash-layout import until PR2 lands.
 
-**Independent test / exit**: export then import gives an equal root on seeded tries, Mordor and Sepolia; a window that does not chain
-is refused; the golden stream is reproduced; version 1 archives are refused.
+**S0 prerequisites** (Satisfied, verified at this PR): forge item 8 (a) and (b): the window chained by hash and the
+genesis-anchor clear (dm E.1). The 2026-11-18 order (vault's mark-first clear) supersedes 8 (b)'s order. **Both reviewers sign
+the format at PR1, before it merges.**
 
-### Tests (write first; they must fail)
+**Reviewers**: **[forge] [beacon]** sign the format at PR1; vault reviews PR3; eye validates all three.
 
-- [ ] T222 [P] [US6] Test the round trip: export then import gives every root equal, on seeded tries, Mordor and Sepolia; a leaf holding slot 0 shared across many contracts' storage tries and **identical storage roots across owners** both get a row at **every** occurrence (v1's global `visited` skipped them). File: `test/blockchain/checkpoint/CheckpointV2RoundTripSpec.scala`. **[forge] [beacon]**
-- [ ] T223 [P] [US6] Test the refusals: a corrupt entry, a hash mismatch, a CRC32C failure, truncation, each of the **four importer assertions** (an account leaf is always stored; an inline node holds no hash; a storage root below 32 bytes is still a root entry; `EmptyStorageRootHash` pushes no frame), a wrong `genesisHash`, a wrong operator-supplied expected block hash, and **version 1 refused** with a message naming the format. File: `test/blockchain/checkpoint/CheckpointV2RefusalSpec.scala`. **[forge]**
-- [ ] T224 [P] [US6] Test the **ancestor window** (forge item 8 (a)): the `0x03` headers chain by `parentHash` from the checkpoint header and each `0x04` body matches its header (`transactionsRoot`, `ommersHash`), else `BadFormat`; `min(256, N)` headers and `min(6, N)` bodies are accepted when N is below 256. File: `test/blockchain/checkpoint/CheckpointV2AncestorWindowSpec.scala`. **[forge]**
-- [ ] T225 [P] [US6] Test that a **genesis anchor is cleared at import start** (forge item 8 (b)): after a genesis commit, `beginCheckpointImport` clears `t`/`u` and the anchor before the first node, idempotently, and a kill mid-import leaves partial rows and **no anchor** (it falls through to SNAP as today, spec 022 T042). File: `it/blockchain/checkpoint/CheckpointImportGenesisAnchorItSpec.scala`. **[vault]**
-- [ ] T226 [P] [US6] Test code completeness: every non-empty `codeHash` met has a bytecode entry; gaps are counted, logged for on-demand fetch, and fail the import above a threshold. File: `test/blockchain/checkpoint/CheckpointV2CodeCompletenessSpec.scala`.
-- [ ] T227 [P] [US6] Pin the **golden stream** byte for byte: two accounts sharing one storage root, one inline storage leaf, one code entry, one header and one body of the ancestor window; and a second stream whose window does not chain, which must be refused `BadFormat` (dm E.1). Files: `test/blockchain/checkpoint/CheckpointV2GoldenStreamSpec.scala`, `src/test/resources/checkpoint/v2-golden.bin`. **[forge] [beacon]**
+**Independent test / exit**:
+- export then import gives an equal root on seeded tries, Mordor and Sepolia;
+- a window that does not chain is refused;
+- the golden streams are reproduced byte for byte;
+- version 1 archives are refused;
+- a failed or killed import is cleared and is not retried.
 
-### Implementation
+### PR1: the v2 codec, the exporter and the golden streams (the format is signed here)
 
-- [ ] T228 [US6] Define the version 2 format in `main/blockchain/checkpoint/CheckpointArchive.scala` (`Version = 2`, CRC32C, header binding `chainId` and `genesisHash(32)`, entry tags `0x03` header and `0x04` body, bytecodes after nodes, window before the CRC; the reader rejects version 1 with a message naming the format) (dm E.1 items 1 to 5). **[forge] [beacon]**
-- [ ] T229 [US6] Rewrite the exporter walk in `main/blockchain/checkpoint/CheckpointExporter.scala` (replacing the global `visited` DFS of `:157` and `walkTrie` `:274-306`): pre-order DFS of the whole state with **every occurrence** emitted, branch children 0 to 15 ascending, the storage trie directly after the account leaf, only hashed children and roots as entries, then deduplicated bytecodes and the ancestor window. **[forge]**
-- [ ] T230 [US6] Implement the **stack-machine importer** in `main/blockchain/checkpoint/CheckpointImporter.scala`: frames `(owner, path, expectedHash)`, no hash lookup and no scratch store, the four assertions each failing `BadFormat`, the operator-supplied expected block hash (and a pinned list for public chains), code completeness, window chaining and body matching, `min(256, N)`. **[forge] [beacon]** **Added by C2b's walkers PR (beacon):** a v1 archive is nodes by hash, so a storage trie that two accounts share is in it once (the export reads it under the first account). An importer that places each node by owner and path with no lookup by hash cannot rebuild the second account's trie from v1: either v2 emits each owner's trie, or importing v1 keeps a lookup by hash.
-- [ ] T231 [US6] In `main/blockchain/checkpoint/CheckpointImporter.scala` make the import atomic and safe (dm E.1 "Atomicity and failure"): `beginCheckpointImport` clears a genesis anchor first (`t`, `u`, anchor, idempotent), is committed synced before the first node, rows go in batches of at most 10,000, and one synced batch under the state lock carries the header, the ancestor window, the chain weight, the best pointer, `state.anchor`, the done flags and `endCheckpointImport`; no `BlockDiff` for the checkpoint block. **[vault]**
-- [ ] T232 [P] Document the trust statement (total difficulty is trusted from the archive and not re-derived) and the operator-supplied expected block hash in the checkpoint section of `docs/` (find it with `grep -ril checkpoint docs/`); the full operator-doc rewrite is C8b.
-- [ ] T233 **M9**: report archive v1 versus v2 size and node counts, how many hashes occur at more than one position (the sharing the old dedup hid), per chain on Mordor and Sepolia, and archive-mode diff growth per day. Record in `spec/baselines/m9-archive-size.md`.
-- [ ] T234 **[user]** After M1 and M9, decide the archive view reach (`state.archive.view-reach`, default 1024; plan open item 6) and record it in `src/main/resources/conf/base/state.conf` and `spec/plan.md`.
-- [ ] T235 Run `sbt compile-all`, `sbt "testOnly *CheckpointV2*"`, `sbt "IntegrationTest / testOnly *CheckpointImportGenesisAnchor*"`, `sbt scalafmtAll`.
-- [ ] T236 Record the DC-14 figures in `spec/baselines/dc14-C5c.md` (EG-8), then open the C5c PR; request `forge` and `beacon` to **sign the format again** (one-way door) and `eye`. No v2 archive exists until a node on this layout exports one (Mordor and Sepolia in EG-9, ETC mainnet from EG-12).
+#### Tests (write first; they must fail)
 
-**Checkpoint**: a checkpoint archive of the new format round-trips on every chain that has a state.
+- [ ] T227 [P] [US6] Pin the **golden streams** byte for byte (dm E.1 "Golden streams"). File:
+  `test/blockchain/checkpoint/CheckpointV2GoldenStreamSpec.scala`. **[forge] [beacon]**
+  - **Stream A (ETC-shaped):** two accounts sharing one storage root; one inline storage leaf, from two slot keys whose
+    keccak shares an 8-nibble prefix (found by a birthday search over about 2^16 slots, with the slots pinned in the test);
+    one code entry; a window with one body.
+  - **Stream B (ETH-shaped):** a post-Cancun checkpoint header; chain id 7091047534, wider than 32 bits; a headers-only
+    window.
+  - **Stream C:** stream A with one window header whose `parentHash` is wrong. It must be refused `BadFormat`.
+  - Files: `src/test/resources/checkpoint/v2-golden-a.bin`, `v2-golden-b.bin` and `v2-golden-c.bin`.
+- [ ] T289 [P] [US6] Test the exporter's rules. File: `test/blockchain/checkpoint/CheckpointV2ExporterSpec.scala`.
+  **[forge] [beacon]**
+  - Two exports of one state are equal byte for byte, with the codes ascending by hash and no duplicate.
+  - A chain id wider than 64 bits is refused.
+  - On a PoS chain, a block above the finalized block is refused, and the window has no `0x04` entries.
+  - On ETC, the window bodies are exactly B-302's set: `C..C-4` whose `ommersHash` is not the empty ommers hash.
+  - The TD-exact flag follows the node's chain-weight invariant.
+
+#### Implementation
+
+- [ ] T228 [US6] Define the version 2 format in `main/blockchain/checkpoint/CheckpointArchive.scala`, field for field as the
+  dm E.1 byte-layout table. **[forge] [beacon]**
+  - `Version = 2`, fixed-width big-endian integers, a u64 `chainId` read unsigned, u32 lengths.
+  - The header block: magic, version, `chainId(8)`, `genesisHash(32)`, the TD-exact flag (1), the header length and RLP,
+    the TD length and TD (no leading zero; length 0 is TD 0).
+  - Tags `0x03` (header), `0x04` (block hash(32) and body), `0x01` (node, no hash), `0x02` (code, no hash) and `0x00`, in
+    that strict order.
+  - CRC32C over the uncompressed bytes from the magic through the end tag, big-endian, as `BlockDiffCodec`.
+  - The reader rejects version 1 with a message naming the format.
+- [ ] T229 [US6] Rewrite the exporter walk in `main/blockchain/checkpoint/CheckpointExporter.scala`, replacing the global
+  `visited` DFS (`:169`) and `walkTrie`. **[forge] [beacon]**
+  - Walk the whole state pre-order and emit **every occurrence**: branch children 0 to 15 ascending, the storage trie
+    directly after the account leaf, and only hashed children and roots as entries.
+  - Emit the window right after the header block: `min(256, N)` headers, then, on ETC only, B-302's bodies.
+  - Emit the codes after the nodes, sorted ascending by hash. This replaces the `HashSet` at `:170`.
+  - Set the TD-exact flag from `hasChainWeightInvariant`.
+  - Refuse a chain id wider than 64 bits, block 0, missing code, and on a PoS chain a block above the finalized block.
+  - This PR breaks Hash-layout import until PR2: ship PR1 and PR2 in one release.
+
+### PR2: the stack-machine importer, the assertions, the window, code completeness and the trust checks
+
+#### Tests (write first; they must fail)
+
+- [ ] T222 [P] [US6] Test the round trip: export then import gives every root equal, on seeded tries, Mordor and Sepolia. A
+  leaf holding slot 0 shared across many contracts' storage tries, and **identical storage roots across owners**, both get
+  one row per (owner, path) at **every** occurrence (v1's global `visited` skipped them). The owner of each storage row is
+  the account leaf's 64-nibble full key, not keccak of it. File:
+  `test/blockchain/checkpoint/CheckpointV2RoundTripSpec.scala`. **[forge] [beacon]**
+- [ ] T223 [P] [US6] Test the refusals. Each is `BadFormat` unless named otherwise. File:
+  `test/blockchain/checkpoint/CheckpointV2RefusalSpec.scala`. **[forge]**
+  - A corrupt entry, a node whose keccak is not the frame's expected hash, a CRC32C failure, truncation.
+  - Each tag out of section order.
+  - A TD with a leading zero; a TD-exact flag other than `0x00` or `0x01`.
+  - An account leaf whose full key is not 64 nibbles.
+  - Codes out of order or duplicated.
+  - Each of the **five importer assertions**: an account leaf is always stored; an inline node holds no hash; a storage
+    root below 32 bytes is still a root entry; `EmptyStorageRootHash` pushes no frame; **the node stack is empty exactly
+    when the first non-node tag arrives, and no node entry arrives while it is empty** (a truncated state is refused, not
+    imported as complete).
+  - An empty-trie `stateRoot` pushes no initial frame.
+  - A wrong `chainId`, a wrong `genesisHash`, a wrong expected block hash.
+  - **Version 1 refused** with a message naming the format.
+- [ ] T224 [P] [US6] Test the **ancestor window** (forge item 8 (a); body set corrected 2026-11-18). Any failure is
+  `BadFormat`. File: `test/blockchain/checkpoint/CheckpointV2AncestorWindowSpec.scala`. **[forge]**
+  - The `0x03` headers run from `C-1` down to `C-min(256, N)`, child first, chained by `parentHash`, with consecutive
+    numbers. At `N < 256` the last one hashes to `genesisHash`.
+  - On ETC, the `0x04` bodies are exactly **`C..C-4`, `C`'s own body included, where the header's `ommersHash` is not the
+    empty ommers hash** (B-302, `AncestorWindow.check`). Each pairs with its header by the 32-byte block hash and is matched
+    by `StdBlockValidator.validateHeaderAndBody`.
+  - A body that is missing, extra, unpaired or mismatched is refused.
+  - After import, block `C+1` with an ommer validates and does not throw `AncestorNotStored`.
+  - On a PoS chain, any `0x04` entry is refused.
+- [ ] T226 [P] [US6] Test code completeness: every non-empty `codeHash` met has a code entry. With the default threshold of
+  **0** one gap fails the import. A non-zero threshold logs the gaps for the on-demand fetch. File:
+  `test/blockchain/checkpoint/CheckpointV2CodeCompletenessSpec.scala`.
+- [ ] T290 [P] [US6] Test the trust checks (dm E.1 "Trust"). All refusals come before any write. File:
+  `test/blockchain/checkpoint/CheckpointV2TrustSpec.scala`. **[beacon] [forge]**
+  - An estimated TD (flag `0x00`) is **accepted with a WARN** naming the block and TD.
+  - On a PoS chain, a post-merge header (difficulty 0) with TD below TTD is refused, and so is a chain merged at genesis
+    whose TD is not the genesis difficulty.
+  - An ETH archive offered to an ETC node is refused by its chain id; one offered with ETC's chain id but an ETH block is
+    refused by the expected hash. The two chains share a genesis hash.
+  - Each public chain's pinned expected hash is read from its chain config.
+
+#### Implementation
+
+- [ ] T230 [US6] Implement the **stack-machine importer** in `main/blockchain/checkpoint/CheckpointImporter.scala` (dm E.1).
+  **[forge] [beacon]**
+  - Frames `(owner, path, expectedHash)`, no hash lookup, no scratch store, and no "already written" cache keyed by hash.
+    There is no initial frame for an empty-trie `stateRoot`.
+  - The owner is the account leaf's full key, packed, and is not hashed again.
+  - The five assertions, each failing `BadFormat`. Strict section order.
+  - The expected block hash, operator-supplied or pinned per public chain in the chain config.
+  - The TD-exact flag (estimated TD accepted with a WARN) and the PoS TD rules.
+  - The window: chained headers, then B-302's bodies matched with `validateHeaderAndBody`, then `AncestorWindow.check`.
+  - Code completeness with threshold 0. Codes strictly ascending.
+  - **Added by C2b's walkers PR (beacon):** a v1 archive is nodes by hash, so a storage trie that two accounts share is in
+    it once (the export reads it under the first account). An importer that places each node by owner and path with no
+    lookup by hash cannot rebuild the second account's trie from v1. *(Resolved 2026-11-18: v2 emits each owner's trie, and
+    v1 is refused.)*
+
+### PR3: atomicity on the unified layout, the failed-import clear and no retry, the config refusal lifted, docs
+
+#### Tests (write first; they must fail)
+
+- [ ] T225 [P] [US6] Test the **write order** (dm E.1 "Atomicity and failure order"; vault's mark-first order supersedes
+  forge item 8 (b)'s). File: `it/blockchain/checkpoint/CheckpointImportGenesisAnchorItSpec.scala`. **[vault]**
+  - Every header-level refusal leaves the datadir untouched.
+  - After a genesis commit, `clearGenesisStateForSync` runs through the reset mark **before** `beginCheckpointImport`.
+  - Rows with no anchor are cleared by `clearForResync` before begin.
+  - Begin is synced before the first row.
+  - The final batch goes through `commitHandoff` and carries the window, the weight, the best pointer and
+    `endCheckpointImport`.
+  - A kill at each step leaves either the reset mark or `CheckpointImportInProgress`, and **never an anchor over partial
+    rows**.
+- [ ] T291 [P] [US6] Test **failure and no retry** (user decision 4). File:
+  `it/blockchain/checkpoint/CheckpointImportRetryItSpec.scala`. **[vault]**
+  - A failed import clears `t`/`u` through the reset mark, records the archive's hash as refused, and falls back to SNAP
+    from clean state.
+  - A node that starts with `CheckpointImportInProgress` set (a killed import) does the same.
+  - A restart with the same archive does **not** import it, and a SNAP run in progress (best block 0) is not wiped.
+  - A new archive, or the explicit operator flag, does import.
+
+#### Implementation
+
+- [ ] T231 [US6] In `main/blockchain/checkpoint/CheckpointImporter.scala`, make the import atomic on the unified layout, in
+  the order of dm E.1. **[vault]**
+  1. Header-level refusals before any write.
+  2. `clearGenesisStateForSync` on a genesis anchor.
+  3. `clearForResync` on rows with no anchor.
+  4. `beginCheckpointImport` with `commitSync`; its value names the archive's hash.
+  5. Row batches of at most 10,000, WAL on, through `PathNodeStorage.accountNodeUpsert` and `storageNodeUpsert`.
+  6. One synced final batch through **`PathStateStorage.commitHandoff`**, with the header, window headers and bodies,
+     trusted weight, best pointer and `endCheckpointImport` as its `extra`. This closes the checkpoint half of B-243.
+
+  Add a **checkpoint variant of `SyncHandoff.commit`**, since today's hardcodes the SNAP keys. Write no `BlockDiff` for the
+  checkpoint block. Drop `forcePersist`, which is Hash-layout only.
+- [ ] T292 [US6] Implement **failure and no retry** (user decision 4) in `main/blockchain/sync/SyncController.scala`
+  (`:~2195`) and `main/db/storage/AppStateStorage.scala`. **[vault]**
+  - Record a refused archive by its hash: keccak of its header block. Keep the record out of `stateClearRemovals`.
+  - At start, a set `CheckpointImportInProgress` records its archive as refused, then clears through the reset mark.
+  - Attempt an import only when the refused record does not name the archive, or the operator's explicit retry flag is
+    set.
+  - Name the AppState key and the flag here.
+  - Lift the path-live refusal of `checkpoint-sync-file` and `checkpoint-sync-url` at `main/ConfigValidator.scala:~111`.
+- [ ] T232 [P] Document the checkpoint section of `docs/` (find it with `grep -ril checkpoint docs/`). The full
+  operator-doc rewrite is C8b. Cover:
+  - the trust statement: total difficulty is trusted from the archive and not re-derived, and an estimated one is accepted
+    with a WARN;
+  - the expected block hash, operator-supplied or pinned per public chain. On a PoS chain it is taken from a finalized beacon
+    block's `execution_payload.block_hash`;
+  - the finalized-only export on PoS;
+  - the no-retry rule and its operator flag;
+  - **stop sync before exporting** (an export takes hours and fails `StateNotHeld` if the anchor moves).
+
+### Every PR
+
+- [ ] T235 Run `sbt compile-all`, `sbt "testOnly *CheckpointV2*"`,
+  `sbt "IntegrationTest / testOnly *CheckpointImport*"` (PR3) and `sbt formatAll`.
+- [ ] T236 Record the DC-14 figures in `spec/baselines/dc14-C5c.md` (EG-8), then open each PR.
+  - PR1: request `forge` and `beacon` to **sign the format** (one-way door), including the open item in dm E.1 "Trust" (a
+    pre-merge checkpoint on a PoS chain), and `eye`.
+  - PR2: request `forge`, `beacon` and `eye`.
+  - PR3: request `vault` and `eye`.
+
+  No v2 archive exists until a node on this layout exports one (Mordor and Sepolia in EG-9, ETC mainnet from EG-12).
+
+### Outside a container (needs synced nodes or the user)
+
+- [ ] T233 **M9**: report the archive size and node counts of v1 versus v2, how many hashes occur at more than one position
+  (the sharing the old dedup hid), per chain on Mordor and Sepolia, and archive-mode diff growth per day. Record in
+  `spec/baselines/m9-archive-size.md`. It needs synced Mordor and Sepolia nodes on this layout, so it is not doable in a
+  container; neither are EG-9 and EG-12. The EG-12 harness stops sync before exporting.
+- [ ] T234 **[user]** After M1 and M9, decide the archive view reach (`state.archive.view-reach`, default 1024; plan open
+  item 6) and record it in `src/main/resources/conf/base/state.conf` and `spec/plan.md`.
+
+**Checkpoint**: a checkpoint archive of the new format round-trips on every chain that has a state. A failed import leaves
+a clean datadir that SNAP syncs, and is not retried.
 
 ---
 
@@ -666,7 +839,7 @@ ECIP-1017 rewards are unchanged across era boundaries; the EG-12 harness runs en
 ### Implementation
 
 - [ ] T242 [US6] Under the guard, route ETC SNAP onto the unified layout in `main/blockchain/sync/SyncController.scala` (the ETC guard at `:476-480` and the Hash wiring are bypassed), and add the **peer precondition and its logging**: count snap-capable ETC peers at start, log the count, and apply the rule the user fixed in T011. **[forge] [herald]**
-- [ ] T243 [US6] Add the PoW-specific hand-off checks named in S0 item 15 in `main/blockchain/sync/snap/controller/SnapFinalization.scala` and `main/db/storage/AncestorWindow.scala`: the 6 ancestor bodies present, the pivot's chain weight stored, no hand-off before them. Change `main/consensus/pow/*` only if C3c and C4e left a gap. **[forge]**
+- [ ] T243 [US6] Add the PoW-specific hand-off checks named in S0 item 15 in `main/blockchain/sync/snap/controller/SnapFinalization.scala` and `main/db/storage/AncestorWindow.scala`: the ancestor bodies (B-302: up to 5, on ETC) present, the pivot's chain weight stored, no hand-off before them. Change `main/consensus/pow/*` only if C3c and C4e left a gap. **[forge]**
 - [ ] T244 [P] [US6] Build the **private ETC-config PoW net**: `scripts/etc-private-net/` (two or three fukuii miners plus a core-geth, Olympia at a low block, the Ethash DAG on the miners) producing routine depth 1 to 3 forks; the hosts are the ones the user named in T011 (plan open item 4). **[forge] [eye]**
 - [ ] T245 [P] [US6] Build the **EG-12 run harness** `scripts/etc-mainnet-sync/run-eg12.sh`: records the snap-capable peer count at start; time, disk, heap, RSS and CPU; counts rejected canonical blocks, `REORG-EXEC-FAIL` lines and fork moves of depth 1 to 2; runs the ancestor-window check (BLOCKHASH in the first 256 blocks, an ommer whose parent is below the pivot) over RPC; then exports the first ETC v2 archive and re-imports it on a second datadir (EG-9). **[forge]**
 - [ ] T246 [P] [US6] Build the rewards and era-boundary comparison helper `scripts/etc-differential/compare-balances.sh` (every miner and ommer balance across the 5,000,000 era boundary and Mordor's two, against the pinned jar's recorded values).
@@ -894,9 +1067,9 @@ figures decide whether the sizes of the later slices stand.
 | 11 | C4e | 17 | 9 | 10 | US6 10 |
 | 12 | C5a | 16 | 7 | 9 | US3 6 |
 | 13 | C5b | 12 | 6 | 7 | US3 4 |
-| 14 | C5c | 15 | 6 | 7 | US6 10 |
+| 14 | C5c | 19 | 9 | 10 | US6 14 |
 | 15 | C6 | 13 | 5 | 8 | US6 10 |
 | 16 | C7 | 20 | 0 | 0 | US2 4, US6 4, US3 2 |
 | 17 | C8a | 8 | 0 | 0 | none |
 | 18 | C8b | 11 | 0 | 0 | none |
-| | **Total** | **288** | **108** | **136** | |
+| | **Total** | **292** | **111** | **139** | |

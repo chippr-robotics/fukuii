@@ -1531,70 +1531,239 @@ has the same remaining key and value, so the same hash, in many contracts' stora
 nor multiplicity, so an importer would need a hash-to-position index over every node, or a scratch hash-keyed copy, which is
 the copy this track removes.
 
-**Format version 2** (`CheckpointArchive.Version`, `CheckpointArchive.scala:43`; the reader rejects an unknown version at
-`:174`). A one-way door, signed by forge and beacon in S0 (item 8), so every field below is decided now:
-1. The version byte is 2. The checksum is **CRC32C**, as for BlockDiff (v1 uses CRC32, `CheckpointArchive.scala:8`; one
-   polynomial across the project's formats, hardware-accelerated).
-2. The header binds **`chainId` and `genesisHash(32)`** (v1 binds only `chainId`, `:26,54-58`), so an archive cannot be imported
-   into a chain with the same id and a different genesis.
-3. Node entries are the **pre-order DFS of the whole state with every occurrence emitted**: an account trie in child order
-   (branch children 0 to 15 ascending; an extension has one child), and the storage trie of an account **directly after the
-   account's leaf**, before the leaf's later siblings. Only hashed children (RLP at least 32 bytes) and the roots are entries;
-   inline children are inside their parent. Position is implicit.
-4. Bytecode entries stay after the nodes, deduplicated by hash (code has no position).
-5. **The ancestor window**, as new entry tags: `0x03` a header and `0x04` a body, for the **256 headers below the checkpoint
-   block** (so BLOCKHASH answers in the first 256 blocks after import: `AncestorBlockHashes.scala:29-34,56-62` falls back to an
-   index an import never writes) and the **bodies of the 6 blocks below it** (so ommer validation, which reads up to 6
-   ancestors, `StdOmmersValidator.scala:19,119-127` through `BlockValidation.scala:35-56`, does not reject a block whose ommer's
-   parent is below the checkpoint; on ETH the 6 bodies are inert, because ommers do not exist there). About 150 KB. They are
-   written after the bytecodes and before the CRC. **The window is bound by hash (forge S0 item 8a).** The expected-hash check of
-   item 6 binds only the checkpoint block, so an unchained window could carry wrong ancestors (a wrong BLOCKHASH, a state-root
-   mismatch on canonical blocks, possibly an invalid-chain report). The importer therefore verifies that the `0x03` headers chain
-   by `parentHash` from the checkpoint header (header N-1 hashes to N's `parentHash`, and so on down) and that each `0x04` body
-   matches its header (`transactionsRoot` and `ommersHash`); a break, a gap or a mismatch is `BadFormat`. When the checkpoint number
-   N is below 256 the window holds `min(256, N)` headers and `min(6, N)` bodies, down to genesis.
-6. **Total difficulty is trusted from the archive** (`CheckpointImporter.scala:162-170` imports `chainWeight` unverified, and
-   PoW fork choice compares it). So an import **requires an operator-supplied expected block hash** (or a pinned list for the
-   public chains) and refuses an archive whose header hash differs; the documentation says plainly that the total difficulty
-   inside is not re-derived.
+**Format version 2, pinned 2026-11-18 (B-066).** (`CheckpointArchive.Version`, `CheckpointArchive.scala:43`; the reader
+rejects an unknown version at `:174`.) A one-way door: **forge and beacon sign it at C5c's PR1** (the slicing is below), and
+nothing in the table or the rules after it changes once that PR merges. Each rule names its source. "User, 2026-11-18" is a
+user decision; "review, 2026-11-18" is a forge and beacon correction written in that day; "S0 item 8" is the earlier
+sign-off, which stands wherever this section does not replace it. This text replaces the six numbered items of the
+2026-11-06 draft.
+
+**Encoding rules** (review, 2026-11-18):
+- Every integer is **fixed-width, big-endian and unsigned**. There are no varints.
+- `chainId` is a u64. The exporter refuses a chain id wider than 64 bits. 32 bits are not enough: Platåberget's
+  7091047534 is wider. A Scala `Long` is signed, so the reader compares it unsigned.
+- Every length is a u32. The reader keeps v1's bounds: a header's RLP of at most 64 KiB and an entry of at most 64 MiB.
+  Anything larger is `BadFormat`.
+- Total difficulty is an unsigned big-endian integer with **no leading zero byte**, so it is at most 32 bytes. Length 0
+  means TD 0. A leading zero byte is `BadFormat`.
+- Every hash is **exactly 32 bytes** and has no length prefix (v1 wrote a one-byte hash length).
+- The checksum is **CRC32C** (v1 used CRC32, `CheckpointArchive.scala:8`). It covers the **uncompressed** bytes from the
+  first magic byte through the `0x00` end tag, and is written as a big-endian u32. This matches `BlockDiffCodec`
+  (`BlockDiffCodec.scala:23,76-79`). Gzip stays the operator's wrapper outside the codec, as in v1.
+
+**Byte layout.** One archive, in this order. `C` is the checkpoint block and `N` its number. Sources: U1 to U4 are the user's
+decisions 1 to 4 of 2026-11-18; R is the review of 2026-11-18.
+
+| # | Field | Width (bytes) | Value and rule | Source |
+| --- | --- | --- | --- | --- |
+| 1 | magic | 4 | `C4 C4 C4 C4`, as v1 | v1 |
+| 2 | version | 1 | `0x02`; a `0x01` archive is refused with a message naming the format | S0 item 8 |
+| 3 | `chainId` | 8 | u64; must equal the node's chain id | R |
+| 4 | `genesisHash` | 32 | must equal the node's genesis hash | S0 item 8 |
+| 5 | TD-exact flag | 1 | `0x01` the TD is exact, `0x00` it is an estimate; any other value is `BadFormat` | U2 |
+| 6 | header length | 4 | u32 | R |
+| 7 | header | (6) | `RLP(BlockHeader)` of `C`; `N >= 1` (`commitHandoff` refuses the genesis) | v1 |
+| 8 | TD length | 4 | u32, 0 to 32 | R |
+| 9 | TD | (8) | `C`'s total difficulty; unsigned, no leading zero | R |
+| 10 | window headers | per entry: tag `0x03` (1), length (4), `RLP(BlockHeader)` | exactly `min(256, N)` entries, `C-1` down to `C-min(256, N)` | U1, R |
+| 11 | window bodies | per entry: tag `0x04` (1), block hash (32), length (4), `RLP(BlockBody)` | ETC only; the set is fixed below; none on a PoS chain | U1, U3, R |
+| 12 | nodes | per entry: tag `0x01` (1), length (4), the node's RLP | pre-order, every occurrence; **no hash** | R |
+| 13 | codes | per entry: tag `0x02` (1), length (4), the code | ascending by `keccak(code)`, no duplicates; **no hash** | R |
+| 14 | end tag | 1 | `0x00` | v1 |
+| 15 | CRC32C | 4 | u32 over fields 1 to 14 | R |
+
+Fields 1 to 9 are the **header block**. Field 7 binds `C` and field 3 with field 4 bind the chain. The ancestor window goes
+directly after the header block (user, 2026-11-18, decision 1), so a reader has `C` and its ancestors before the first node.
+
+**Section order is strict** (review, 2026-11-18). The order is window headers, window bodies, nodes, codes, end. A tag out of
+that order is `BadFormat`: a header after a body, a body after a node, a node after a code, or an unknown tag. So is a
+section with the wrong number of entries.
+
+**Canonical header encoding** (PR1 sign-off, 2026-11-18; enforced by PR2's importer). For `C` (field 7) and for every
+window header, the importer decodes the RLP and requires **`rlp == header.toBytes`**, byte for byte, and a mismatch is
+`BadFormat`. Without it a non-canonical encoding of the same header (a long-form length, a leading zero in an integer)
+decodes to the same block but changes the header block's bytes, and so the archive's hash (below): one checkpoint could
+then carry two archive ids and slip past the refused-archive record.
+
+**Window headers** (review, 2026-11-18). There are `min(256, N)` `0x03` entries, child first. The first is `C-1` and must
+hash to `C.parentHash`. Each next one must hash to the `parentHash` of the one before it. Their numbers must be consecutive,
+one less each time. When `N < 256` the last one is block 0 and must hash to `genesisHash`. A break, a gap, a wrong number
+or a wrong count is `BadFormat` (S0 item 8a). The headers let BLOCKHASH answer in the first 256 blocks after import:
+`AncestorBlockHashes.scala:29-34,56-62` otherwise falls back to an index an import never writes. ETH needs them as much as
+ETC.
+
+**Window bodies, ETC only** (review, 2026-11-18). This **corrects** item 5 of the earlier draft and T224, which said "the 6
+bodies below C". Since B-302 the set is the bodies of **`C` down to `C-4`, `C`'s own body included, and only those whose
+header's `ommersHash` is not the empty ommers hash**. That is `AncestorWindow.check` with `proofOfWork = true`: the block and
+the four below it (`OmmerBodies = OmmerGenerations - 1`), filtered by `bodyRead` (`AncestorWindow.scala`; core-geth's
+`VerifyUncles`; `StdOmmersValidator`).
+- The entries go highest first. Each carries the 32-byte hash of its block, which pairs the body with `C` or with a window
+  header. A hash that names neither is `BadFormat`, and so is a body for a block whose header names no ommers.
+- Each body is matched with `StdBlockValidator.validateHeaderAndBody` (`transactionsRoot` and `ommersHash`). A mismatch is
+  `BadFormat`.
+- After the window is read, the importer runs `AncestorWindow.check(C, proofOfWork, ...)` over it and requires
+  `Missing.isEmpty`. A missing body is `BadFormat`.
+
+Without these bodies, block `C+1` with an ommer throws `AncestorNotStored`. **A PoS chain carries no bodies** (user,
+2026-11-18, decision 3). On a PoS chain a `0x04` entry is `BadFormat`.
+
+**Nodes** (S0 item 8; hashes, review, 2026-11-18). The nodes are the **pre-order DFS of the whole state with every occurrence
+emitted**. The account trie is walked in child order: branch children 0 to 15 ascending, and an extension has one child.
+The storage trie of an account comes **directly after the account's leaf**, before the leaf's later siblings. Only hashed
+children (RLP of at least 32 bytes) and the roots are entries. **An inline node (under 32 bytes) is never an entry**: it is
+inside its parent. Position is implicit, and so is the storage owner (below). An entry carries no hash. The importer checks
+`keccak(payload) == frame.expectedHash`, and a mismatch is `BadFormat`.
+
+**Codes** (review, 2026-11-18). The codes come after the nodes, one entry per distinct code. They are **sorted ascending by
+`keccak(code)`**, compared as unsigned bytes. A code whose hash is not greater than the one before it is a duplicate or out
+of order, and is `BadFormat`. This makes an archive **byte-reproducible**: two exports of one state are equal byte for byte. **The exporter refuses a
+code whose `keccak` is not the hash it was read under** (PR1 sign-off, 2026-11-18), as a node refuses such a code when it
+serves or executes it; an entry carries no hash, so a corrupt code would otherwise be exported under a hash it does not
+have.
+Today's exporter collects code hashes in a `java.util.HashSet` (`CheckpointExporter.scala:170`), which gives no fixed order.
+
+**Trust: total difficulty and the expected block hash** (S0 item 8; user, 2026-11-18, decisions 2 and 3; review, 2026-11-18).
+Total difficulty is **trusted from the archive, not re-derived**. `CheckpointImporter.scala:162-170` stores `chainWeight` as
+given, and PoW fork choice compares it.
+- **An expected block hash is required.** The operator supplies it, or the chain config pins one per public chain. The
+  importer refuses an archive whose `C` hashes to anything else. **ETH and ETC share a genesis hash**, so field 4 does not
+  tell them apart. Only the chain id and the expected block hash do. That is why every public chain (ETC, Mordor, ETH
+  mainnet, Sepolia, Hoodi) has its expected hash pinned in its chain config (review, 2026-11-18).
+- **The TD-exact flag** (amended at the PR1 sign-off, forge and beacon, 2026-11-18). The exporter writes `0x01` when the TD
+  was **summed exactly from the genesis** (every header from 0 to `C` read and its difficulty added) **or** its node holds
+  the chain-weight invariant (`AppStateStorage.hasChainWeightInvariant`), and `0x00` otherwise. Either source makes the TD
+  exact; the earlier text named the invariant only, which marked an exact sum as an estimate. The importer **accepts an estimated TD with a WARN** that
+  names the block and the TD. It does not refuse (user, 2026-11-18, decision 2). In both cases `beginCheckpointImport`
+  withdraws the invariant as it does today (#1654), and `ChainWeightReconcile` checks the weight once the headers below
+  are in.
+- **PoS chains** (Sepolia, ETH mainnet, Hoodi and any chain merged at genesis; user, 2026-11-18, decision 3):
+  - The window carries ancestor headers only, with no bodies.
+  - The exporter **refuses a block above the finalized block**. Its retention reaches the finalized block, because retention
+    is widened by the finality lag on ETH (4.5).
+  - On a post-merge header (difficulty 0), the importer requires **TD >= TTD**. On a chain merged at genesis it requires
+    **TD = the genesis difficulty**. Either failure is a refusal before any write. **The exporter runs the same check**
+    before it writes anything, and refuses with its own reason, so no flag (`--allow-estimated-td` included) produces an
+    archive that every importer refuses (PR1 sign-off, 2026-11-18).
+  - Operators take the expected block hash from a finalized beacon block's `execution_payload.block_hash`. With no block
+    given, the export CLI defaults to the **finalized** block on a PoS chain, not the best block. A block counts as
+    finalized only when both its number and the canonical hash at that number match the stored finalized hash.
+- **A pre-merge checkpoint on a PoS chain** (settled at the PR1 sign-off, forge and beacon, 2026-11-18; this was the open
+  item of the first draft):
+  - **"Merged at genesis" means TTD <= the genesis difficulty.** By that rule Hoodi and Platåberget are merged at genesis;
+    Sepolia and ETH mainnet are not.
+  - **The exporter refuses a `C` with non-zero difficulty on a chain that is not merged at genesis.** Such a `C` is a PoW
+    block whose `C+1` can carry ommers, and a PoS window has no bodies to validate them.
+  - **The importer picks PoS from the chain's TTD, not from `C`'s difficulty.** A chain with a TTD configured is PoS for
+    the archive rules (headers-only window, a `0x04` entry is `BadFormat`, the TD rule above), whatever `C`'s difficulty.
+    Note that the window of the first PoS block holds PoW headers, with ommers; they are headers only, and nothing after
+    the merge validates ommers, so no body is needed.
+
+**Storage owner** (review, 2026-11-18). The format has no owner field: the owner follows from the pre-order walk. It is
+**the account leaf's 64-nibble full key (`path ++ leaf key`), packed to 32 bytes, and not keccak of it**. That key already
+*is* `keccak(address)`, and hashing it again would place every storage row under the wrong owner. This replaces the earlier
+wording "owner = keccak(address)", which invited the double hash. A leaf whose full key is not 64 nibbles is `BadFormat`.
+Two accounts with identical storage roots, and a slot-0 leaf shared across tries, each get **one row per (owner, path)** by
+construction. **No "already written" cache keyed by hash is allowed**, on either side: it would recreate v1's dedup.
 
 **The importer is a stack machine, with no hash lookup and no scratch store.** The stack holds frames
-`(owner, path, expectedHash)`, starting with `(None, [], header.stateRoot)`. For each node entry it pops a frame, checks
-`frame.expectedHash == hash` and `keccak(rlp) == hash` (a failure is `BadFormat`), decodes the node, and writes the row
-`(owner, path)` (stored rule, section 2). For a branch it pushes its hashed children in reverse order, so child 0 is next;
-for an extension, its one child at `path ++ sharedKey`. For an account leaf it computes `owner = keccak(address)` from the
-leaf's full key and, if the storage root is not empty, pushes `(Some(owner), [], storageRoot)` on top. Memory is O(depth x 16)
-for the account trie plus O(depth x 16) for the trie being walked; there is no `visited` set on either side. Four assertions,
-each failing `BadFormat`, are what make the machine sound:
-- an account leaf is always a stored node (an account's RLP is at least 68 bytes), so deriving the owner from the leaf's full
-  key is safe;
-- an inline node holds no hash reference (a hash child makes a node at least 33 bytes), so no hashed grandchild hides inside an
-  inline child;
-- a storage root below 32 bytes is still a root entry (roots are always stored);
+`(owner, path, expectedHash)`. It starts with `(None, [], header.stateRoot)`, or **empty when `stateRoot` is the empty-trie
+root** (review, 2026-11-18).
+
+For each node entry, the importer:
+1. pops a frame and checks `keccak(payload) == frame.expectedHash` (a failure is `BadFormat`);
+2. decodes the node and writes the row `(owner, path)` (stored rule, section 2);
+3. for a branch, pushes its hashed children in reverse order, so child 0 is next;
+4. for an extension, pushes its one child at `path ++ sharedKey`;
+5. for an account leaf, takes the owner from the leaf's full key (above) and, if the storage root is not empty, pushes
+   `(Some(owner), [], storageRoot)` on top.
+
+Memory is O(depth x 16) for the account trie plus O(depth x 16) for the trie being walked. There is no `visited` set on
+either side. **Five assertions**, each failing `BadFormat`, make the machine sound:
+- An account leaf is always a stored node (an account's RLP is at least 68 bytes), so the owner can be taken from the
+  leaf's full key.
+- An inline node holds no hash reference (a hash child makes a node at least 33 bytes), so no hashed grandchild hides inside
+  an inline child.
+- A storage root below 32 bytes is still a root entry, because roots are always stored.
 - `EmptyStorageRootHash` pushes no frame.
+- **Fifth (review, 2026-11-18): the node stack must be empty exactly when the first non-node tag arrives** (a `0x02` or
+  the `0x00` end tag), **and no node entry may arrive while the stack is empty.** Without it, an archive cut after a whole
+  subtree, or one with nodes left over, imports a truncated state as complete.
 
-**Code completeness (S0 item 8b).** After the nodes, the importer checks that every non-empty `codeHash` it met has a bytecode
-entry, and counts the gaps; it fails the import above a threshold and logs the rest for the on-demand fetch, rather than
-finding them as `MissingCodeException` at execution.
+**Code completeness** (S0 item 8b; threshold, review, 2026-11-18). After the codes, the importer checks that every non-empty
+`codeHash` it met in an account leaf has a code entry, and counts the gaps. The gap threshold **defaults to 0**: the exporter
+already refuses missing code, so any gap means a bad archive. A non-zero threshold logs the gaps for the on-demand fetch
+rather than finding them as `MissingCodeException` at execution.
 
-**Atomicity and failure.** Unchanged in shape from today (`CheckpointImporter.scala:74-170`): `beginCheckpointImport` is
-committed synced before the first node (`:84`), rows go in batches of at most 10,000, the CRC is checked at the end, and one
-synced batch then carries the header, the ancestor window, the chain weight, the best pointer, `state.anchor = (hash, number,
-stateRoot)`, the done flags and `endCheckpointImport`. It is a state move (7.0). **A genesis anchor is cleared at import start (forge S0 item 8b).** The genesis commit (5.4) leaves `anchor = genesis` on a fresh
-datadir, so `beginCheckpointImport` does what SNAP start does there (5.4): when `anchor == genesis`, clear `t` and `u` (two
-`deleteRange` calls), delete the anchor, then write the begin marker, idempotently and before the first node. Without the clear, a
-crash mid-import would leave `anchor == best == genesis` over the checkpoint's root row; I1 rule 1 would pass and only T042's
-fall-through to SNAP would repair it. With it, an import that fails or crashes leaves partial
-rows and no anchor; as now it falls through to SNAP on the same datadir with the heal marker withdrawn and a repair pass owed
-(spec 022 T042). No BlockDiff is written for the checkpoint block (no prior), as for a SNAP pivot.
+**Atomicity and failure order** (review, 2026-11-18). This **supersedes** the earlier "clear `t`/`u`, then delete the anchor"
+order with vault's mark-first order. A kill between the two steps of the old order would leave a genesis anchor over rows
+that are gone. The import is a state move (7.0).
+1. **Run every header-level refusal before any write**: magic, version, chain id, genesis hash, TD-exact flag, the expected
+   block hash, the PoS TD rule and the reader bounds.
+2. **If the anchor is the genesis, call `clearGenesisStateForSync`** (`PathStateStorage.scala:1276`). It clears through the
+   reset mark (`state.reset-pending`). It must run before step 4, because `stateClearRemovals` deletes
+   `CheckpointImportInProgress` (`AppStateStorage.scala:293-321`).
+3. **If rows exist with no anchor, call `clearForResync`** (`PathStateStorage.scala:1127`), through the same mark.
+4. **Commit `beginCheckpointImport` with `commitSync`** (`CheckpointImporter.scala:84`). Its value names the archive (below).
+5. **Write the rows** in batches of at most 10,000, with the WAL on, through `PathNodeStorage.accountNodeUpsert` and
+   `storageNodeUpsert` (`PathNodeStorage.scala:62,98`). The CRC is checked at the end tag, before step 6.
+6. **Write one synced final batch through `PathStateStorage.commitHandoff`** (`:782`). It already checks for no anchor, no
+   done flag and no reset mark, checks the layout stamp and the root row, and writes `state.origin`, the done flag and the
+   anchor under the state lock. That closes the checkpoint half of B-243. The `extra` passed to it carries the header of
+   `C`, the window headers and bodies, the trusted weight, the best pointer and `endCheckpointImport`. It needs a
+   **checkpoint variant of `SyncHandoff.commit`** (`SyncHandoff.scala:76`), which today hardcodes the SNAP keys.
 
-**Golden stream (S0 item 8a).** Before C5c merges, a tiny version 2 stream is pinned byte for byte: two accounts sharing one
-storage root, one inline storage leaf, one code entry, one header and one body of the ancestor window; and a second pinned stream whose window does not chain (a header with a wrong
-`parentHash`) that must be refused `BadFormat`.
+No BlockDiff is written for the checkpoint block (it has no prior), as for a SNAP pivot. `forcePersist`
+(`CheckpointImporter.scala:161`) belongs to the Hash layout only and has no place on this path.
 
-**Size of the change.** Exporter walk about 220 lines (it replaces the `visited` DFS), writer and reader about 120 (header
-fields, tags 0x03 and 0x04, CRC32C), importer about 360 (the machine, the assertions, code completeness, the trust check):
-about 800 main and 600 test lines. Archives are larger than version 1 by the dedup factor, which M9 measures on Mordor.
+**A failed or killed import, and no retry** (user, 2026-11-18, decision 4; review, 2026-11-18).
+- **A failure after the first write** (a window, node or code refusal, an assertion, a CRC failure) clears the partial
+  `t`/`u` rows through the reset mark (`clearForResync`, or `clearGenesisStateForSync` on a genesis anchor). It **records
+  the refused archive by its hash** in AppState, and the node falls back to SNAP from clean state. A refusal at step 1 has
+  written nothing, and only records the archive.
+- **A kill**: a node that **starts with `CheckpointImportInProgress` set** does the same. It reads the archive's hash from the
+  marker, records it as refused, then clears through the mark. The refused record is not among `stateClearRemovals`.
+- **No retry.** The import is attempted on a start only when the refused record does not name the archive, or the operator
+  sets an explicit retry flag. Without this, `SyncController.scala:~2195` re-runs the import on every start while the best
+  block is 0 (a SNAP run that has not handed off), and each run would wipe that SNAP progress.
+- **The archive's hash** is keccak of its header block (fields 1 to 9). It is known before the first write, so a killed import
+  can be recorded from its begin marker. It names the chain, the block and the TD, so a new archive for another block is
+  not refused. The key name and the operator flag's name are T292's.
+
+**Golden streams** (S0 item 8a; contents, review, 2026-11-18). Before PR1 merges, these streams are pinned byte for byte.
+Together they carry everything the review listed. One stream cannot carry both a PoS header and a window body, because the
+importer refuses that mix, so the content is split between two valid streams:
+- **Stream A (ETC-shaped, PoW):**
+  - two accounts sharing one storage root;
+  - one inline storage leaf, from two slot keys whose keccak shares an 8-nibble prefix. The slots are found by a birthday
+    search over about 2^16 candidates and pinned in the test.
+  - one code entry;
+  - a window with one body: `C` or a block within `C-1..C-4` whose header names an ommer.
+- **Stream B (ETH-shaped, PoS):**
+  - a post-Cancun checkpoint header (`withdrawalsRoot`, the blob gas fields, `parentBeaconBlockRoot`);
+  - a chain id wider than 32 bits (7091047534);
+  - a headers-only window.
+- **Stream C:** stream A with one window header whose `parentHash` is wrong. It must be refused `BadFormat`.
+
+**Slicing: three PRs, one release** (review, 2026-11-18).
+- **PR1:** the v2 codec, the exporter and the golden streams (T227, T228, T229, T289). **The format is signed here.** PR1
+  breaks Hash-layout import until PR2, so PR1 and PR2 must ship in the same release.
+- **PR2:** the stack-machine importer, the five assertions, the window, code completeness and the trust checks (T222 to
+  T224, T226, T230, T290).
+- **PR3:** atomicity on the unified layout, the failed-import clear and no-retry, and lifting the refusal at
+  `ConfigValidator.scala:~111`, plus the docs (T225, T231, T232, T291, T292).
+- **Not doable in a container:** M9 (T233; it needs synced Mordor and Sepolia nodes on this layout), EG-9, EG-12, and T234
+  (a user decision).
+
+**Size of the change.** About 800 main and 600 test lines across the three PRs:
+- the exporter walk, about 220 lines (it replaces the `visited` DFS and sorts the codes);
+- the writer and reader, about 140 (the header block, the flag, tags `0x03` and `0x04`, CRC32C);
+- the importer, about 360 (the machine, the five assertions, code completeness, the trust checks);
+- the retry record, about 80.
+
+Archives are larger than version 1 by the dedup factor, which M9 measures on Mordor.
+
+**Operational notes** (review, 2026-11-18). The EG-12 harness **stops sync before it exports**. An export takes hours and fails
+with `StateNotHeld` (`CheckpointExporter.scala:87,390`) if the anchor moves under it.
 
 **Bootstrap and operators.** No version 2 archive exists until a node on this layout has synced and exported one, and version
 1 archives are refused with a message naming the format. Nothing external depends on the old archives (user standing rule), so
@@ -1635,7 +1804,7 @@ absent:
   (`BlockValidation.scala:35-56`): a canonical block in the first six after the pivot whose ommer's parent is below the pivot
   then fails `ommersParentsAreAllAncestors` (`StdOmmersValidator.scala:119-127`) and is rejected as invalid. PoW only.
 Mordor's low ommer rate and T063's `chain-download-enabled=false` hid both. So before hand-off (C5a) `AncestorWindow.ensure(pivot)`
-holds until the **256 headers below the pivot** (their parent-hash chain verified) and the **6 bodies below it** are stored,
+holds until the **256 headers below the pivot** (their parent-hash chain verified) and the **ancestor bodies** are stored (B-302: the bodies of the pivot and the 4 blocks below it that name ommers, on ETC only),
 fetched through the existing `PeersClient` or satisfied by the chain downloader's coverage. The same window is carried by a
 checkpoint archive (E.1, entries 0x03 and 0x04). BLOCKHASH needs the headers on ETH as well, so the code is shared; the
 6-body part is gated on PoW.
@@ -1744,7 +1913,7 @@ vectors for CF `t`/`u` keys are reused unchanged.
 | M9 | archive v1 versus v2 size and node counts, and how many hashes occur at more than one position (the sharing the dedup hid), per chain; archive-mode diff growth per day | Mordor, Sepolia | the version 2 size claim (E.1) and the `archive` disk figure (4.6) |
 | M10 | ETC: fork rate and depth distribution, `moveHead` cost at depth 1 and 2, proposer-view cost per generated block | Mordor with a local miner | the PoW reorg budget and the mining latency |
 | M11 | *(withdrawn: the `inmemory` mode is retired, 4.6)* | | |
-| M12 | cost of the ancestor window (256 headers, 6 bodies) at hand-off, with and without the chain downloader's coverage | Mordor, Sepolia, ETC mainnet | the hold time of `AncestorWindow.ensure` (G) |
+| M12 | cost of the ancestor window (256 headers, up to 5 bodies after B-302) at hand-off, with and without the chain downloader's coverage | Mordor, Sepolia, ETC mainnet | the hold time of `AncestorWindow.ensure` (G) |
 | M13 | PoW branch lengths adopted by `reorganise` (blocks per `settleHead`) and their layer bytes; the longest BlockQueue branch seen | Mordor with a local miner, ETC mainnet follow | `pinned-max-bytes` and whether the reverse-then-commit fallback is needed (6.4) |
 | M14 | cost of importing ETC blocks 0 to 1M, 1M to 2M, from genesis, on the unified layout, and the size of a `chain.rlp` export | the dev host | whether the EG-1 ETC import is feasible, and its source (plan open item) |
 | M15 | rows per deleted storage owner (p50, p99, max) and tombstones written, on the ETC 0 to 5.1M import and the Mordor imports; and the largest diff over every chain (forge S0 item 5, beacon S0 item 5) | ETC import, Mordor, Sepolia, Platåberget | `max-entries-per-owner-delete` (must sit well above the observed maximum) and `max-record-bytes`; the zero-tombstone gate of EG-4 and EG-15 |
