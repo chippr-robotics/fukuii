@@ -2844,7 +2844,7 @@ items:
   - id: B-355
     title: "Spec 030 S2: client auth want/need on RPC HTTP and WSS; handshake-failure metric; gen-cert CA and client certs"
     priority: P2
-    status: claimed
+    status: in-progress
     area: rpc
     size: M
     opened: 2026-11-18
@@ -2856,9 +2856,11 @@ items:
       by: cloud-0ceb384d
       agent: conduit
       since: 2026-11-18T13:27:28Z
-      heartbeat: 2026-11-18T13:27:28Z
+      heartbeat: 2026-11-18T13:27:31Z
       branch: ccr-0ceb384d-ufzahb
-    notes: "US2; FR-003, 014, 017, 062. ~500+800. Review: conduit."
+    notes: |-
+      US2; FR-003, 014, 017, 062. ~500+800. Review: conduit.
+      2026-11-18 in-progress: stacked on S1 #1914
   - id: B-356
     title: "Spec 030 S3: client-certificate identity rules grant namespaces; GraphQL gate"
     priority: P2
