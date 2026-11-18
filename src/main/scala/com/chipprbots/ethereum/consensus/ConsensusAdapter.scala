@@ -271,6 +271,15 @@ class ConsensusAdapter(
   ): Unit =
     toldTheFeed("a branch out of reach")(_.notJudgedHeaders(headers, fault, blockValidation.firstInvalidHeaderOf))
 
+  /** The first of `headers` that is not valid, with why: the header validation of an import, the seal with it
+    * ([[BlockValidation.firstInvalidHeaderOf]]). Reads only; for a branch weighed below the fork recovery's floor on
+    * the hash layout (B-346).
+    */
+  def firstInvalidHeaderOf(headers: List[BlockHeader])(implicit
+      blockchainConfig: BlockchainConfig
+  ): Option[(BlockHeader, String)] =
+    blockValidation.firstInvalidHeaderOf(headers)
+
   /** Whether the branch of `headers` outweighs the head, by the weights the escalation's feed counts a branch by
     * ([[PowEscalationFeed.outweighsTheHead]]). False with no feed, and where the weights cannot be read: a fetch of the
     * branch's headers then goes on to its other ends (B-300 g).

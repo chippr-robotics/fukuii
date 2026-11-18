@@ -923,6 +923,100 @@ class RegularSyncSpec
           testKit.stop(importer)
       )
 
+      // B-346 (the user's decision of 2026-11-18): a heavier chain leaves this one below the floor on the hash layout.
+      // Nothing is rewound: the state is given up for a SNAP re-sync through RegularSyncStuck, once for the fork; a
+      // second recovery that finds the same fork does not ask again
+      "escalate once to a SNAP re-sync, rewinding nothing, when the resolver finds a heavier chain below the floor" taggedAs (
+        UnitTest,
+        SyncTest
+      ) in sync(
+        new Fixture:
+          val capturedBest: BigInt = testBlocks.last.number.value // 20
+
+          override lazy val blockchainReader: BlockchainReader = stub[BlockchainReader]
+          (() => blockchainReader.getBestBlockNumber).when().returns(capturedBest)
+          (() => blockchainReader.getSnapSyncPivotBlock).when().returns(None)
+          override lazy val blockchainWriter: BlockchainWriter = stub[BlockchainWriter]
+
+          val importerFetcher: TestProbe = TestProbe("heavierForkImporterFetcher")
+          val importerSupervisor: TestProbe = TestProbe("heavierForkImporterSupervisor")
+
+          val forkBlockTopic: org.apache.pekko.actor.typed.ActorRef[
+            org.apache.pekko.actor.typed.pubsub.Topic.Command[com.chipprbots.ethereum.jsonrpc.NewBlockImported]
+          ] = testKit.spawn(
+            org.apache.pekko.actor.typed.pubsub.Topic[com.chipprbots.ethereum.jsonrpc.NewBlockImported](
+              "heavier-fork-block-imported-topic"
+            ),
+            "heavier-fork-block-imported-topic"
+          )
+
+          val importer: TypedActorRef[BlockImporter.Command] = testKit.spawn(
+            BlockImporter.apply(
+              importerFetcher.ref.toTyped[BlockFetcher.FetchCommand],
+              consensusAdapter,
+              blockchainReader,
+              blockchainWriter,
+              stateStorage,
+              evmCodeStorage,
+              branchResolution,
+              syncConfig,
+              ommersPool.ref.toTyped[com.chipprbots.ethereum.ommers.OmmersPool.Command],
+              TestProbe("heavierForkImporterBroadcaster").ref,
+              pendingTransactionsManager.ref
+                .toTyped[com.chipprbots.ethereum.transactions.PendingTransactionsManager.Command],
+              forkBlockTopic,
+              importerSupervisor.ref,
+              peerEventBus.ref,
+              networkPeerManager.ref,
+              blockchain,
+              blacklist,
+              this,
+              None,
+              exhausts = exhausts,
+              importLock = importLock
+            ),
+            "test-heavier-fork-recovery-importer"
+          )
+
+          importerFetcher.expectMsgClass(3.seconds, classOf[BlockFetcher.Start])
+          importerSupervisor.expectMsgClass(3.seconds, classOf[RegularSync.ProgressProtocol.StartingFrom])
+
+          val commonHash: ByteString = testBlocks.head.hash.value
+          def heavierFound(): Unit =
+            importer ! BlockImporter.StartForkRecovery(BigInt(15))
+            importer ! BlockImporter.BranchResolverMsg(
+              FastSyncBranchResolverActor.BranchHeavierBeyondReach(BigInt(1), commonHash, defaultPeer, weighed = 40)
+            )
+
+          heavierFound()
+          val stuck: SyncProtocol.RegularSyncStuck = importerSupervisor.fishForSpecificMessage(5.seconds) {
+            case m: SyncProtocol.RegularSyncStuck => m
+          }
+          stuck.blockNumber shouldBe BigInt(1)
+          val invalidate: InvalidateBlocksFrom = importerFetcher.fishForSpecificMessage(5.seconds) {
+            case m: BlockFetcher.InvalidateBlocksFrom => m
+          }
+          invalidate.fromBlock shouldBe capturedBest + 1
+          invalidate.toBlacklist shouldBe None
+
+          // the same fork again: the fetcher is told as before, and the escalation is not asked for a second time. The
+          // importer tells the supervisor before the fetcher, so once the fetcher has heard, a second request would be
+          // in the supervisor's queue already
+          heavierFound()
+          importerFetcher.fishForSpecificMessage(5.seconds) { case m: BlockFetcher.InvalidateBlocksFrom => m }
+          importerSupervisor.receiveWhile(100.millis) { case m => m }.collect { case m: SyncProtocol.RegularSyncStuck =>
+            m
+          } shouldBe empty
+
+          // nothing is rewound: neither to the common block nor to the blind rewind's floor
+          (blockchainWriter
+            .setCanonicalChainHead(_: BigInt, _: com.chipprbots.ethereum.domain.BlockHash, _: BigInt))
+            .verify(*, *, *)
+            .never()
+
+          testKit.stop(importer)
+      )
+
       // Spec 018 C4e part 6 (the user's decision of 2026-11-15): on the unified state layout fork recovery moves no
       // state. The head stays, the fetcher is sent back to the common block, and the peer's branch is judged by weight
       // when it arrives. As the case above, driven by the resolver's answer.

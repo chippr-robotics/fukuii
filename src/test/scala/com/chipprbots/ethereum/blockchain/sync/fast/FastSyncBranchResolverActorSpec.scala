@@ -27,13 +27,16 @@ import org.scalatest.freespec.AnyFreeSpecLike
 import com.chipprbots.ethereum.BlockHelpers
 import com.chipprbots.ethereum.NormalPatience
 import com.chipprbots.ethereum.blockchain.sync.*
+import com.chipprbots.ethereum.blockchain.sync.fast.FastSyncBranchResolverActor.BranchHeavierBeyondReach
 import com.chipprbots.ethereum.blockchain.sync.fast.FastSyncBranchResolverActor.BranchResolutionFailed
 import com.chipprbots.ethereum.blockchain.sync.fast.FastSyncBranchResolverActor.BranchResolutionFailed.BranchNotHeavier
 import com.chipprbots.ethereum.blockchain.sync.fast.FastSyncBranchResolverActor.BranchResolutionFailed.CommonBlockBeyondReach
 import com.chipprbots.ethereum.blockchain.sync.fast.FastSyncBranchResolverActor.BranchResolutionFailed.NoCommonBlockFound
 import com.chipprbots.ethereum.blockchain.sync.fast.FastSyncBranchResolverActor.BranchResolvedSuccessful
 import com.chipprbots.ethereum.blockchain.sync.fast.FastSyncBranchResolverActor.StartBranchResolver
+import com.chipprbots.ethereum.blockchain.sync.regular.DeepForkWeight
 import com.chipprbots.ethereum.domain.Block
+import com.chipprbots.ethereum.domain.BlockHeader
 import com.chipprbots.ethereum.domain.ChainWeight
 import com.chipprbots.ethereum.domain.Difficulty
 import com.chipprbots.ethereum.ledger.BranchResolution
@@ -360,6 +363,107 @@ class FastSyncBranchResolverActorSpec
         blockchainReader.getBlockHeaderByNumber(30).map(_.hash) shouldBe Some(ours.last.hash)
         blacklist.isBlacklisted(onePeer.id) shouldBe true
 
+      // B-346 (the user's decision of 2026-11-18): below the floor the common block is still searched for and the
+      // peer's branch weighed from it, with headers only. The heavier is handed on for an escalation, never rewound to
+      "below the floor, a heavier branch: answered for an escalation, nothing is discarded, the peer kept" taggedAs (
+        UnitTest,
+        SyncTest
+      ) in new HashLayoutSetup:
+        val common: List[Block] = BlockHelpers.generateChain(5, BlockHelpers.genesis)
+        val ours: List[Block] = common :++ BlockHelpers.generateChain(25, common.last)
+        // the same difficulty, five blocks more: heavier, and it leaves this chain at block 5, below the floor at 20
+        val theirs: List[Block] = common :++ BlockHelpers.generateChain(30, common.last)
+        saveWeighted(ours)
+
+        val resolver: TypedActorRef[FastSyncBranchResolverActor.Command] =
+          start(Map(onePeer -> theirs), deepGuard(deepestCommonBlock = 20))
+        val response: BranchHeavierBeyondReach = sender.expectMsgPF(branchResolutionTimeout) {
+          case r: BranchHeavierBeyondReach => r
+        }
+        stopController(resolver)
+
+        response.commonBlock shouldBe BigInt(5)
+        response.commonHash shouldBe common.last.hash.value
+        response.masterPeer shouldBe onePeer
+        // weighed until it outweighed ours: 26 of its blocks against our 25
+        response.weighed should be >= 26
+        blockchainReader.getBestBlockNumber shouldBe BigInt(30)
+        blockchainReader.getBlockHeaderByNumber(30).map(_.hash) shouldBe Some(ours.last.hash)
+        blockchainReader.getBlockHeaderByNumber(6).map(_.hash) shouldBe Some(ours(5).hash)
+        blacklist.isBlacklisted(onePeer.id) shouldBe false
+
+      "below the floor, a lighter branch: refused, nothing is discarded and the peer is blacklisted" taggedAs (
+        UnitTest,
+        SyncTest
+      ) in new HashLayoutSetup:
+        val common: List[Block] = BlockHelpers.generateChain(5, BlockHelpers.genesis)
+        val ours: List[Block] = common :++ BlockHelpers.generateChain(25, common.last)
+        // longer than ours, and lighter: a tenth of the difficulty
+        val theirs: List[Block] = common :++ BlockHelpers.generateChain(
+          30,
+          common.last,
+          block => BlockHelpers.updateHeader(block, _.copy(difficulty = Difficulty(100000)))
+        )
+        saveWeighted(ours)
+
+        val resolver: TypedActorRef[FastSyncBranchResolverActor.Command] =
+          start(Map(onePeer -> theirs), deepGuard(deepestCommonBlock = 20))
+        sender.expectMsg(branchResolutionTimeout, BranchResolutionFailed(CommonBlockBeyondReach(20)))
+        stopController(resolver)
+
+        blockchainReader.getBestBlockNumber shouldBe BigInt(30)
+        blockchainReader.getBlockHeaderByNumber(30).map(_.hash) shouldBe Some(ours.last.hash)
+        blacklist.isBlacklisted(onePeer.id) shouldBe true
+
+      "below the floor, a heavier branch with a header that is not valid: refused and the peer blacklisted" taggedAs (
+        UnitTest,
+        SyncTest
+      ) in new HashLayoutSetup:
+        val common: List[Block] = BlockHelpers.generateChain(5, BlockHelpers.genesis)
+        val ours: List[Block] = common :++ BlockHelpers.generateChain(25, common.last)
+        val theirs: List[Block] = common :++ BlockHelpers.generateChain(30, common.last)
+        saveWeighted(ours)
+
+        val resolver: TypedActorRef[FastSyncBranchResolverActor.Command] =
+          start(
+            Map(onePeer -> theirs),
+            deepGuard(deepestCommonBlock = 20, firstInvalid = headers => headers.lastOption.map(_ -> "a bad seal"))
+          )
+        sender.expectMsg(branchResolutionTimeout, BranchResolutionFailed(CommonBlockBeyondReach(20)))
+        stopController(resolver)
+
+        blockchainReader.getBestBlockNumber shouldBe BigInt(30)
+        blacklist.isBlacklisted(onePeer.id) shouldBe true
+
+      "below the floor, a fork escalated already: answered at once, not weighed again" taggedAs (
+        UnitTest,
+        SyncTest
+      ) in new HashLayoutSetup:
+        val common: List[Block] = BlockHelpers.generateChain(5, BlockHelpers.genesis)
+        val ours: List[Block] = common :++ BlockHelpers.generateChain(25, common.last)
+        val theirs: List[Block] = common :++ BlockHelpers.generateChain(30, common.last)
+        saveWeighted(ours)
+
+        val resolver: TypedActorRef[FastSyncBranchResolverActor.Command] =
+          start(
+            Map(onePeer -> theirs),
+            deepGuard(
+              deepestCommonBlock = 20,
+              // a weighing that would refuse it: it is not asked
+              firstInvalid = headers => headers.lastOption.map(_ -> "not to be asked"),
+              escalatedAt = Some(common.last.hash.value)
+            )
+          )
+        val response: BranchHeavierBeyondReach = sender.expectMsgPF(branchResolutionTimeout) {
+          case r: BranchHeavierBeyondReach => r
+        }
+        stopController(resolver)
+
+        response.commonBlock shouldBe BigInt(5)
+        response.weighed shouldBe 0
+        blockchainReader.getBestBlockNumber shouldBe BigInt(30)
+        blacklist.isBlacklisted(onePeer.id) shouldBe false
+
       "the master peer is the one with the heaviest chain, not the highest block" taggedAs (
         UnitTest,
         SyncTest
@@ -422,6 +526,37 @@ class FastSyncBranchResolverActorSpec
               case _                  => false
           )
         )
+      )
+
+    /** Saved as the best chain with each block's weight the sum of the difficulties up to it, as an import stores it.
+      */
+    def saveWeighted(blocks: List[Block]): Unit =
+      blocks.foldLeft(ChainWeight.totalDifficultyOnly(0)) { (weight, block) =>
+        val next = weight.increase(block.header)
+        blockchainWriter.save(block, Nil, next, saveAsBestBlock = true)
+        next
+      }: Unit
+
+    /** [[guard]], and below the floor the weighing of the hash layout (B-346): stored weights, no MESS here, and the
+      * header validation given.
+      */
+    def deepGuard(
+        deepestCommonBlock: BigInt,
+        firstInvalid: List[BlockHeader] => Option[(BlockHeader, String)] = _ => None,
+        escalatedAt: Option[ByteString] = None
+    ): Option[FastSyncBranchResolverActor.DiscardGuard] =
+      val weight = new DeepForkWeight(
+        weightOf = blockchainReader.getChainWeightByHash,
+        headerOf = blockchainReader.getBlockHeaderByHash,
+        onTheChain = header => blockchainReader.getCanonicalHashByNumber(header.number.value).contains(header.hash),
+        head = () =>
+          blockchainReader.getBestBlockHeader.flatMap(h => blockchainReader.getChainWeightByHash(h.hash).map(h -> _)),
+        messActiveAt = None,
+        messRefuses = (_, _, _) => false,
+        firstInvalidHeader = firstInvalid
+      )
+      guard(deepestCommonBlock).map(
+        _.copy(beyondReach = Some(FastSyncBranchResolverActor.BeyondReach(64, weight.verdict, escalatedAt)))
       )
 
     def start(
