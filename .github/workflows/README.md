@@ -203,6 +203,7 @@ git push origin v1.0.0
 **Target Ubuntu Series:**
 - Ubuntu 22.04 LTS (Jammy Jellyfish)
 - Ubuntu 24.04 LTS (Noble Numbat)
+- Ubuntu 26.04 LTS (Resolute Raccoon)
 
 **Required Secrets:**
 - `LAUNCHPAD_GPG_PRIVATE_KEY` - GPG private key for signing packages
