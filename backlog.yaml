@@ -779,7 +779,7 @@ items:
   - id: B-077
     title: Task files at accounts-complete get flush(), not fsync, and the pointer commit is async
     priority: P3
-    status: claimed
+    status: in-progress
     area: storage
     size: S
     opened: 2026-11-06
@@ -789,7 +789,7 @@ items:
       by: cloud-dc960fdc
       agent: vault-small
       since: 2026-11-18T13:34:34Z
-      heartbeat: 2026-11-18T13:34:34Z
+      heartbeat: 2026-11-18T13:37:22Z
     notes: Fails safe via isUsable and lostTrack.
   - id: B-078
     title: Set RocksDB wal_recovery_mode explicitly; the write-ordering argument relies on the default
