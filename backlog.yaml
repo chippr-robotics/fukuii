@@ -2762,3 +2762,13 @@ items:
     links:
       spec: "016"
     notes: "B-298 finding (forge), flag-only. FastSyncBranchResolver.scala getHighestCommonBlock: isParentOf needs number+1. Correctness unaffected (the binary search finds the block); costs ~log2(head) requests."
+  - id: B-349
+    title: "RegularSyncSpec: three ancestor-bodies tests time out on origin/staging (fishForSpecificMessage 5 s)"
+    priority: P2
+    status: open
+    area: test
+    opened: 2026-11-18
+    refs: []
+    links:
+      spec: "016"
+    notes: "Seen while verifying B-298, reproduced with staging sources only: 'fetch the bodies missing below a block whose ommers cannot be checked', 'free the slot of a fetch of ancestor bodies ... during a fork recovery', 'ask again for ancestor bodies ... deadline'."
