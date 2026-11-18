@@ -503,7 +503,9 @@ trait ConsensusBuilder:
         ),
         left => escalationLog.debug("[STATE-ESCALATION] {}", left),
         // a block whose header is not stored is the node's own when the hash index names it (B-383)
-        blockchainReader.getCanonicalHashByNumber
+        blockchainReader.getCanonicalHashByNumber,
+        // the head `headWeight` weighs: a block whose weight is not stored is weighed from it (B-385)
+        () => blockchainReader.getBestBlockHeader
       )
     }
 

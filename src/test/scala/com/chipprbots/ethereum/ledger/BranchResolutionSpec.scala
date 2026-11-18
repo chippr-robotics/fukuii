@@ -476,6 +476,39 @@ class BranchResolutionSpec
 
   // B-300 (f) (forge): on the unified layout the blocks of a branch that is not taken are not stored, so what follows it
   // hangs from a block this node does not know. The branch is remembered by its tip and weighed with what follows.
+  // B-385: compareBranch answers NoChainSwitch, with an error, where the weight of the block a branch stands on is not
+  // stored. The importer is to tell the escalation's feed of those headers, so they are named here; the verdict is the
+  // one it was
+  "A branch whose fork block's chain weight is not stored" should {
+
+    "be named by its headers above this node's, with the verdict unchanged" taggedAs (
+      UnitTest,
+      StateTest,
+      ConsensusTest
+    ) in new MessTestSetup:
+      blockchainReader.getChainWeightByHash.expects(BlockHash(commonParentHash)).anyNumberOfTimes().returning(None)
+      branchResolution.messConfig = Some(ETCMessConfig)
+      val side10: BlockHeader = getBlock(number = 10, difficulty = 500, parent = commonParentHash).header
+      (1 to 2).foreach { _ =>
+        setBestBlockNumber(10)
+        setBlockByNumber(10, Some(oldBlock))
+      }
+      branchResolution.compareBranch(NonEmptyList.one(side10)) shouldEqual NoChainSwitch
+      branchResolution.withoutForkWeight(NonEmptyList.one(side10)) shouldBe Some(NonEmptyList.one(side10))
+
+    "not be named where the weight is stored, nor for this node's own blocks" taggedAs (UnitTest, StateTest) in
+      (new MessTestSetup:
+        setChainWeightByHash(commonParentHash, ChainWeight.zero)
+        (1 to 2).foreach { _ =>
+          setBestBlockNumber(10)
+          setBlockByNumber(10, Some(oldBlock))
+        }
+        val side10: BlockHeader = getBlock(number = 10, difficulty = 500, parent = commonParentHash).header
+        branchResolution.withoutForkWeight(NonEmptyList.one(side10)) shouldBe None
+        branchResolution.withoutForkWeight(NonEmptyList.one(oldBlock.header)) shouldBe None
+      )
+  }
+
   "A branch that was weighed and not taken" should {
 
     "be remembered by its tip, its common block, its weight and its difficulty, and weighed again with what follows" taggedAs (

@@ -1980,6 +1980,11 @@ final private class BlockImporterLogic(
         // one guard of the memo: elsewhere nothing is remembered, so nothing is found.
         if blockchainWriter.holdsStateInPlace && !branchResolution.followsConsensusLayer then
           branchResolution.notTaken(blocks.map(_.header)).foreach(branchesNotTaken.remember)
+          // No fork choice was made where the weight of the block the branch stands on is not stored, and nothing else
+          // ends the wait for it: told to the escalation's feed as a fault of this node (B-385). Under the import lock
+          branchResolution
+            .withoutForkWeight(blocks.map(_.header))
+            .foreach(side => consensus.forkWeightNotStored(side.toList))
         Right(Nil)
       // a batch that hangs from the consensus layer's branch refused while the head is where it is: refused with it, and
       // not fetched from below (B-297)
