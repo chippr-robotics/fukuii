@@ -9,6 +9,7 @@ import scala.concurrent.duration.*
 import com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncController.*
 import com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncController.SyncPhase.*
 import com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncMetrics
+import com.chipprbots.ethereum.blockchain.sync.snap.StateValidator
 import com.chipprbots.ethereum.domain.TrieRoot
 import com.chipprbots.ethereum.utils.ByteStringUtils.toHex
 
@@ -33,6 +34,41 @@ private[snap] trait StateValidationModule extends ValidationApi:
   private var validationRetryCount: Int = 0
   private lazy val MaxValidationRetries = 3
   private lazy val ValidationRetryDelay = 500.millis
+
+  /** A walk ended on something that is no fault of a node (a missing root, a state fault): the retry budget decides
+    * between another walk, the restart and the dormant mode. Healing is not reopened: nothing here is a node to fetch.
+    * The budget is `MaxValidationRetries` walks, 500 ms apart.
+    */
+  private def retryValidationOrEscalate(what: String, logWhat: String): Behavior[Command] =
+    validationRetryCount += 1
+    // Clear the in-progress flag *before* scheduling the retry. If we left
+    // it set, ValidationRetry would refuse to spawn and the path
+    // deadlocks silently. The retry handler kicks `validateState()` which
+    // bumps the generation again and sets the flag fresh.
+    validationInProgress = false
+    if validationRetryCount > MaxValidationRetries then
+      val retryMsg = s"$what after $validationRetryCount validation retries"
+      if recordCriticalFailure(retryMsg) then
+        ctx.log.error("Too many critical SNAP failures — entering dormant mode")
+        // #1515: continue in the dormant behaviour (its DormantWakeUp handler), and give the round after the
+        // wake-up a fresh retry budget, as the restart branch below does.
+        validationRetryCount = 0
+        enterDormantMode(s"validation retry exhausted: $retryMsg")
+      else
+        ctx.log.warn(
+          s"${what.capitalize} after $validationRetryCount validation attempts. " +
+            "Restarting SNAP sync with a fresh pivot to rebuild the state trie."
+        )
+        validationRetryCount = 0
+        restartSnapSync(retryMsg)
+    else
+      ctx.log.error(s"$logWhat (retry attempt $validationRetryCount of $MaxValidationRetries)")
+      val gen = validationGeneration
+      // Schedule on context.dispatcher (the actor's own scheduler), not
+      // snapValidationEc — the retry message is cheap and shouldn't be
+      // tied to the long-running pool's lifecycle.
+      timers.startSingleTimer("validation-retry", ValidationRetry(gen), ValidationRetryDelay)
+      Behaviors.same
 
   /** The stale-generation drops for the validation results (#60-#62). They carry no phase guard, so they run in every
     * phase: first in `stateValidationArms`, and from their original place in `commonSyncingArms` for the other phases
@@ -81,42 +117,15 @@ private[snap] trait StateValidationModule extends ValidationApi:
     case ValidateAccountTrieResult(_, Left(error), _) =>
       SNAPSyncMetrics.incrementValidationFailure()
       ctx.log.error(s"Account trie validation failed: $error")
-      var earlyBehavior: Option[Behavior[Command]] = None
-      if error.contains("Missing root node") then
-        validationRetryCount += 1
-        // Clear the in-progress flag *before* scheduling the retry. If we left
-        // it set, ValidationRetry would refuse to spawn and the path
-        // deadlocks silently. The retry handler kicks `validateState()` which
-        // bumps the generation again and sets the flag fresh.
-        validationInProgress = false
-        if validationRetryCount > MaxValidationRetries then
-          val retryMsg = s"root node missing after $validationRetryCount validation retries"
-          if recordCriticalFailure(retryMsg) then
-            ctx.log.error("Too many critical SNAP failures — entering dormant mode")
-            // #1515: continue in the dormant behaviour (its DormantWakeUp handler), and give the round after the
-            // wake-up a fresh retry budget, as the restart branch below does.
-            validationRetryCount = 0
-            earlyBehavior = Some(enterDormantMode(s"validation retry exhausted: $retryMsg"))
-          else
-            ctx.log.warn(
-              s"Root node missing after $validationRetryCount validation attempts. " +
-                "Restarting SNAP sync with a fresh pivot to rebuild the state trie."
-            )
-            validationRetryCount = 0
-            earlyBehavior = Some(restartSnapSync(retryMsg))
-        else
-          ctx.log.error(s"Root node is missing (retry attempt $validationRetryCount of $MaxValidationRetries)")
-          val gen = validationGeneration
-          // Schedule on context.dispatcher (the actor's own scheduler), not
-          // snapValidationEc — the retry message is cheap and shouldn't be
-          // tied to the long-running pool's lifecycle.
-          timers.startSingleTimer("validation-retry", ValidationRetry(gen), ValidationRetryDelay)
+      if error.contains("Missing root node") then retryValidationOrEscalate("root node missing", "Root node is missing")
+      else if error.startsWith(StateValidator.StateFaultPrefix) then
+        retryValidationOrEscalate("state fault", "The state faulted under the walk")
       else
         ctx.log.error("Recovering through healing phase")
         validationInProgress = false
         currentPhase = StateHealing
         reopenHealing()
-      earlyBehavior.getOrElse(Behaviors.same)
+        Behaviors.same
 
     // Storage trie validation result handlers.
     case ValidateStorageTriesResult(_, Right(missing), elapsedMs) =>
@@ -135,11 +144,15 @@ private[snap] trait StateValidationModule extends ValidationApi:
 
     case ValidateStorageTriesResult(_, Left(error), _) =>
       SNAPSyncMetrics.incrementValidationFailure()
-      ctx.log.error(s"Storage trie validation failed: $error. Recovering through healing phase")
-      validationInProgress = false
-      currentPhase = StateHealing
-      reopenHealing()
-      Behaviors.same
+      ctx.log.error(s"Storage trie validation failed: $error")
+      if error.startsWith(StateValidator.StateFaultPrefix) then
+        retryValidationOrEscalate("state fault", "The state faulted under the walk")
+      else
+        ctx.log.error("Recovering through healing phase")
+        validationInProgress = false
+        currentPhase = StateHealing
+        reopenHealing()
+        Behaviors.same
 
     case ValidationRetry(_) =>
       // Generation was already verified above by the stale-drop handler.
