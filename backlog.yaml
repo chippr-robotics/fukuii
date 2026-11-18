@@ -3099,3 +3099,13 @@ items:
     links:
       spec: 018
     notes: C5b part 2 covers T212 at actor level (RegularSyncSpec, recording PositionRepairs); repairNodeAt's lock and anchor CAS are pinned on the real store by RepairNodeAtSpec. An it/ spec wiring BlockImporter to a real PathStateStorage with a hole is still to write.
+  - id: B-373
+    title: "B-065 follow-up: drop StateStorage.saveNode (no main caller; ~10 test and it seeding sites) with the Hash scheme in C8b"
+    priority: P3
+    status: open
+    area: storage
+    opened: 2026-11-18
+    refs: []
+    links:
+      spec: 018
+    notes: "C5b part 2 left saveNode in the trait: repairNode must stay for the hash layout, and saveNode is used to seed fixtures (StateStorageSpec, BackgroundAuditStorageSpec, FixtureProvider, EthSimulateRpcCompatAmsterdamSpec). BlockImporterRepairSitesSpec pins that main has no caller."
