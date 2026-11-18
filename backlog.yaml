@@ -2923,18 +2923,19 @@ items:
   - id: B-362
     title: "Spec 030 S9: P2P node-ID allowlist at the RLPx handshake and every dial; discovery (incl. DNS) forced off"
     priority: P2
-    status: in-progress
+    status: review
     area: p2p
     size: M
     opened: 2026-11-18
     refs: [B-146]
     links:
+      prs: [1915]
       spec: specs/030-zero-trust-tls
     claim:
       by: cloud-dc960fdc
       agent: herald-b362
       since: 2026-11-18T12:52:52Z
-      heartbeat: 2026-11-18T12:52:55Z
+      heartbeat: 2026-11-18T13:20:23Z
     notes: "US7 1-4; FR-050-055, 058. ~500+800 plus a 3-node IT. Can start now. Review: herald."
   - id: B-363
     title: "Spec 030 S10: admin_ allowlist methods (add/remove/get) with atomic file persistence"
