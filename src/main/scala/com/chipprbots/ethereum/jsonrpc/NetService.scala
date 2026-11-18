@@ -13,6 +13,7 @@ import scala.concurrent.duration.*
 import org.bouncycastle.util.encoders.Hex
 
 import com.chipprbots.ethereum.blockchain.sync.Blacklist
+import com.chipprbots.ethereum.network.NodeAllowlist
 import com.chipprbots.ethereum.network.PeerId
 import com.chipprbots.ethereum.network.PeerManagerActor
 import com.chipprbots.ethereum.utils.Config
@@ -105,7 +106,9 @@ class NetService(
     nodeStatusHolder: AtomicReference[NodeStatus],
     peerManager: typed.ActorRef[PeerManagerActor.Command],
     blacklist: Blacklist,
-    config: NetService.NetServiceConfig
+    config: NetService.NetServiceConfig,
+    // Spec 030 FR-052: net_connectToPeer refuses a node that is not on the allowlist.
+    allowlist: NodeAllowlist = NodeAllowlist.Disabled
 )(implicit scheduler: typed.Scheduler)
     extends NetServiceAPI:
   import NetService.*
@@ -171,16 +174,20 @@ class NetService(
       .map(response => Right(DisconnectPeerResponse(response.disconnected)))
 
   def connectToPeer(req: ConnectToPeerRequest): ServiceResponse[ConnectToPeerResponse] =
-    try
-      val uri = new URI(req.uri)
-      // Note: This sends the connect message and returns immediately.
-      // Success=true means the URI is valid and connection attempt was initiated,
-      // not that the connection succeeded. Check net_listPeers to verify connection.
-      peerManager ! PeerManagerActor.ConnectToPeerCmd(uri, explicit = true)
-      IO.pure(Right(ConnectToPeerResponse(success = true)))
-    catch
-      case e: Exception =>
+    scala.util.Try(new URI(req.uri)) match
+      case scala.util.Failure(e) =>
         IO.pure(Left(JsonRpcError.InvalidParams(s"Invalid peer URI: ${e.getMessage}")))
+      case scala.util.Success(uri) =>
+        allowlist.refusalFor(uri) match
+          case Some(why) =>
+            allowlist.recordRejection(inbound = false)
+            IO.pure(Left(JsonRpcError.LogicError(why)))
+          case None =>
+            // Note: This sends the connect message and returns immediately.
+            // Success=true means the URI is valid and connection attempt was initiated,
+            // not that the connection succeeded. Check net_listPeers to verify connection.
+            peerManager ! PeerManagerActor.ConnectToPeerCmd(uri, explicit = true)
+            IO.pure(Right(ConnectToPeerResponse(success = true)))
 
   def listBlacklistedPeers(req: ListBlacklistedPeersRequest): ServiceResponse[ListBlacklistedPeersResponse] =
     IO.pure {

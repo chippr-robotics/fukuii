@@ -236,20 +236,20 @@ certificate, no fallback, no https→http redirect; a CI ratchet.
 
 ### Tests first (S9)
 
-- [ ] T076 [P] [US7] `T/network/NodeAllowlistSpec.scala` (ScalaCheck): 128-hex and `enode://` parsing, case-insensitive ids, own id dropped, bad entry is an error, sources merged (FR-050)
-- [ ] T077 [P] [US7] `T/network/AllowlistHandshakeSpec.scala` with Pekko TestKit on `RLPxConnectionHandler`: an unlisted key is rejected after `AuthHandshakeSuccess` and **before** a `Hello` already present in `remainingData` is decoded; `ConnectionEstablished` is never sent; `p2p_allowlist_rejections_total{direction="inbound"}` +1 (FR-051)
-- [ ] T078 [P] [US7] `T/network/PeerManagerAllowlistSpec.scala`: `connectWith` never dials an unlisted node from any source; `admin_addPeer`, `admin_addTrustedPeer`, `net_connectToPeer` answer the FR-052 error; a generation change disconnects a removed peer and dials an added entry with an address (FR-052, FR-058)
-- [ ] T079 [P] [US7] `T/network/discovery/DiscoveryAllowlistSpec.scala`: with the allowlist on, `DiscoveryConfig` disables discovery and DNS trees; no UDP bind; the WARN line when the config said `true` (FR-055)
-- [ ] T080 [P] [US7] `T/nodebuilder/AllowlistStartupSpec.scala`: a static node, bootnode or trusted peer not listed refuses the start (FR-053); allowlist off = unchanged behaviour (US7 scenario 4)
+- [x] T076 [P] [US7] `T/network/NodeAllowlistSpec.scala` (ScalaCheck): 128-hex and `enode://` parsing, case-insensitive ids, own id dropped, bad entry is an error, sources merged (FR-050)
+- [x] T077 [P] [US7] `T/network/AllowlistHandshakeSpec.scala` with Pekko TestKit on `RLPxConnectionHandler`: an unlisted key is rejected after `AuthHandshakeSuccess` and **before** a `Hello` already present in `remainingData` is decoded; `ConnectionEstablished` is never sent; `p2p_allowlist_rejections_total{direction="inbound"}` +1 (FR-051)
+- [x] T078 [P] [US7] `T/network/PeerManagerAllowlistSpec.scala`: `connectWith` never dials an unlisted node from any source; `admin_addPeer`, `admin_addTrustedPeer`, `net_connectToPeer` answer the FR-052 error; a generation change disconnects a removed peer and dials an added entry with an address (FR-052, FR-058)
+- [x] T079 [P] [US7] `T/network/discovery/DiscoveryAllowlistSpec.scala`: with the allowlist on, `DiscoveryConfig` disables discovery and DNS trees; no UDP bind; the WARN line when the config said `true` (FR-055)
+- [x] T080 [P] [US7] `T/nodebuilder/AllowlistStartupSpec.scala`: a static node, bootnode or trusted peer not listed refuses the start (FR-053); allowlist off = unchanged behaviour (US7 scenario 4)
 - [ ] T081 [US7] `IT/network/AllowlistThreeNodeItSpec.scala`: A, B, C on a dev chain; B syncs with A, C is refused, A never dials C, 0 devp2p messages from C past auth over the run (SC-005)
 
 ### Implementation (S9)
 
-- [ ] T082 [US7] `M/network/NodeAllowlist.scala` (snapshot, generation) and `M/network/NodeAllowlistStore.scala` (load from config, file, static nodes, bootnodes; reload through the poller — or a minimal local poller if S4 has not merged, replaced when it does) (research D-11)
-- [ ] T083 [US7] `M/network/rlpx/RLPxConnectionHandler.scala:593`: the check before `ConnectionEstablished`; `ConnectionRejected(NotOnAllowlist)`; `M/network/PeerActor.scala` never retries it
-- [ ] T084 [US7] `M/network/PeerManagerActor.scala:723-770`: dial filter; subscribe to generation changes; disconnect removed peers (`UselessPeer`, herald to confirm); dial added entries with an address
-- [ ] T085 [US7] `M/network/discovery/DiscoveryConfig.scala`, `PeerDiscoveryManager.scala`: `allowlistEnabled` forces discovery and the DNS walk off (FR-055)
-- [ ] T086 [US7] `M/jsonrpc/AdminService.scala` and `M/jsonrpc/NetService.scala` (`connectToPeer`, dispatched at `JsonRpcController.scala:196`): FR-052 errors; startup checks and lines in `M/nodebuilder/StdNode.scala` (FR-053, FR-060); `peer.node-allowlist` in `network.conf`
+- [x] T082 [US7] `M/network/NodeAllowlist.scala` (snapshot, generation) and `M/network/NodeAllowlistStore.scala` (load from config, file, static nodes, bootnodes; reload through the poller — or a minimal local poller if S4 has not merged, replaced when it does) (research D-11)
+- [x] T083 [US7] `M/network/rlpx/RLPxConnectionHandler.scala:593`: the check before `ConnectionEstablished`; `ConnectionRejected(NotOnAllowlist)`; `M/network/PeerActor.scala` never retries it
+- [x] T084 [US7] `M/network/PeerManagerActor.scala:723-770`: dial filter; subscribe to generation changes; disconnect removed peers (`UselessPeer`, herald to confirm); dial added entries with an address
+- [x] T085 [US7] `M/network/discovery/DiscoveryConfig.scala`, `PeerDiscoveryManager.scala`: `allowlistEnabled` forces discovery and the DNS walk off (FR-055)
+- [ ] T086 [US7] (S9 landed: FR-052 errors in `AdminService.addPeer`/`addTrustedPeer` and `NetService.connectToPeer`, the FR-053 startup check, the FR-060 line and the `network.conf` block; the FR-060 line for the file path is still to do) `M/jsonrpc/AdminService.scala` and `M/jsonrpc/NetService.scala` (`connectToPeer`, dispatched at `JsonRpcController.scala:196`): FR-052 errors; startup checks and lines in `M/nodebuilder/StdNode.scala` (FR-053, FR-060); `peer.node-allowlist` in `network.conf`
 - [ ] T087 [US7] `sbt pp`, `formatCheck`, the three-node IT; S9's PR
 
 ### Tests first (S10)

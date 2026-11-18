@@ -91,6 +91,9 @@ abstract class BaseNode extends Node:
     // EngineApiStartupRefusal here, which the caller turns into one clear line and exit 1, not a stack trace from
     // phase 3 with P2P and discovery already up.
     StdNode.failIfRefused(engineApiJwtAuthenticator)
+    // A static node or bootnode that is not on the enabled node allowlist refuses the start too (spec 030 FR-053),
+    // before any listener or the P2P server starts.
+    StdNode.failIfRefused(nodeAllowlistStore)
 
     // Phase -1 (spec 030 FR-010): every TLS listener's material is validated before the first port binds. The first
     // failure is the refusal, so a listener never comes up half-configured next to one that did.
@@ -128,6 +131,7 @@ abstract class BaseNode extends Node:
     // bring up RPC first, hive starts probing UDP 30303 (discovery) before our
     // discovery service has bound. Race is small but real and shows up as
     // i/o-timeout failures in the discv4 hive suite.
+    startAllowlistReload()
     startServer()
     loadStaticNodes()
     startPortForwarding()
@@ -368,6 +372,18 @@ abstract class BaseNode extends Node:
         )(using log)
 
   private def startPeerManager(): Unit = peerManager ! PeerManagerActor.StartConnectingCmd
+
+  /** With the node allowlist on, announces it (FR-060) and reloads its file every `reload-interval` (FR-058). */
+  private def startAllowlistReload(): Unit =
+    nodeAllowlistStore.foreach { store =>
+      val interval = nodeAllowlistReloadInterval
+      log.info(
+        "P2P node allowlist on: {} node(s), reload every {}; discovery is off",
+        store.allowlist.snapshot.size,
+        interval
+      )
+      val _ = store.schedule(interval, classicSystem.scheduler)(using classicSystem.dispatcher)
+    }
 
   /** Load static peer nodes from ${datadir}/static-nodes.json and add each to the maintained-peers set.
     *

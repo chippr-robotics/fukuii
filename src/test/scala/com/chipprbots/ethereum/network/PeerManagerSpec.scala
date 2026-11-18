@@ -48,6 +48,7 @@ import com.chipprbots.ethereum.network.PeerEventBusActor.PublishCmd
 import com.chipprbots.ethereum.network.PeerEventBusActor.SubscribeCmd
 import com.chipprbots.ethereum.network.PeerEventBusActor.SubscriptionClassifier.PeerHandshaked
 import com.chipprbots.ethereum.network.PeerEventBusActor.SubscriptionClassifier.WrongNetworkPeersClassifier
+import com.chipprbots.ethereum.network.PeerManagerActor.AddTrustedPeerResponse
 import com.chipprbots.ethereum.network.PeerManagerActor.AdminState
 import com.chipprbots.ethereum.network.PeerManagerActor.PeerAddress
 import com.chipprbots.ethereum.network.PeerManagerActor.PeerConfiguration
@@ -1044,6 +1045,9 @@ class PeerManagerSpec
     val discoveryConfig: DiscoveryConfig =
       DiscoveryConfig(Config.config, Config.blockchains.blockchainConfig.bootstrapNodes)
 
+    /** Spec 030: the node allowlist the manager is given. Off unless a test mixes in [[AllowlistSetup]]. */
+    lazy val allowlist: NodeAllowlist = NodeAllowlist.Disabled
+
     val peerDiscoveryManager: TestProbe = TestProbe()
     val peerEventBus: TestProbe = TestProbe()
     val knownNodesManager: TestProbe = TestProbe()
@@ -1126,7 +1130,8 @@ class PeerManagerSpec
           managerBlacklist,
           Some(testScheduler),
           snapGoodPeersStore,
-          peerScoringManager
+          peerScoringManager,
+          allowlist
         ),
         s"pma-${java.util.UUID.randomUUID()}",
         typed.DispatcherSelector.fromConfig(org.apache.pekko.testkit.CallingThreadDispatcher.Id)
@@ -1145,6 +1150,110 @@ class PeerManagerSpec
       req.replyTo ! PeerDiscoveryManager.DiscoveredNodesInfo(bootstrapNodes)
       val knownReq = knownNodesManager.expectMsgType[KnownNodesManager.GetKnownNodesReq]
       knownReq.replyTo ! KnownNodesManager.KnownNodes(knownNodes)
+
+  // ── Node allowlist (spec 030 FR-052, FR-058) ───────────────────────────────
+
+  private def allowlistOf(entries: String*): NodeAllowlist =
+    val parsed = entries.map(e => NodeAllowlist.parseEntry(e).toOption.get)
+    NodeAllowlist.enabled(
+      AllowlistSnapshot(NodeAllowlist.merge(Seq(AllowlistSource.Config -> parsed), None), 1L)
+    )
+
+  /** A manager with the node allowlist on, listing node `aa`* by id only. */
+  trait AllowlistSetup extends TestSetup:
+    val listedHex: String = "aa" * 64
+    val unlistedHex: String = "bb" * 64
+    val listedUri = new URI(s"enode://$listedHex@10.0.0.50:30303")
+    val unlistedUri = new URI(s"enode://$unlistedHex@10.0.0.51:30303")
+    override lazy val allowlist: NodeAllowlist = allowlistOf("aa" * 64)
+
+  it should "never dial a node that is not on the allowlist, from any source (FR-052)" taggedAs (
+    UnitTest,
+    NetworkTest
+  ) in new AllowlistSetup:
+    start()
+    val before: Double = NodeAllowlistMetrics.OutboundRejections.count()
+    val trustedReply: org.apache.pekko.actor.typed.ActorRef[AddTrustedPeerResponse] =
+      testKit.createTestProbe[PeerManagerActor.AddTrustedPeerResponse]().ref
+
+    peerManager ! PeerManagerActor.ConnectToPeerCmd(unlistedUri) // known nodes, discovery
+    peerManager ! PeerManagerActor.ConnectToPeerCmd(unlistedUri, explicit = true) // net_connectToPeer
+    peerManager ! PeerManagerActor.AddMaintainedPeerCmd(unlistedUri, discardReplyRef) // admin_addPeer, static nodes
+    peerManager ! PeerManagerActor.AddTrustedPeerCmd(unlistedUri, trustedReply) // admin_addTrustedPeer
+    peerManager ! PeerManagerActor.ConnectToPeerCmd(listedUri)
+
+    val dialled: TestPeer = createdPeerQueue.poll(3, java.util.concurrent.TimeUnit.SECONDS)
+    dialled should not be null
+    dialled.probe.expectMsgType[ConnectTo](3.seconds).uri shouldBe listedUri
+    createdPeers.size shouldBe 1
+    NodeAllowlistMetrics.OutboundRejections.count() - before shouldBe 4.0
+
+  it should "not offer discovered nodes that are not on the allowlist as dial candidates (FR-052)" taggedAs (
+    UnitTest,
+    NetworkTest
+  ) in new AllowlistSetup:
+    override lazy val allowlist: NodeAllowlist = allowlistOf("cc" * 64)
+    start()
+    handleInitialNodesDiscovery()
+    bootstrapNodes should not be empty
+    createdPeers shouldBe empty
+
+  it should "dial a discovered node that is on the allowlist" taggedAs (UnitTest, NetworkTest) in new AllowlistSetup:
+    override lazy val allowlist: NodeAllowlist = allowlistOf(Hex.toHexString(bootstrapNodes.head.id.toArray))
+    start()
+    handleInitialNodesDiscovery()
+    createdPeers.size shouldBe 1
+
+  it should "dial an allowlist entry that carries an address when the node starts (FR-058)" taggedAs (
+    UnitTest,
+    NetworkTest
+  ) in new AllowlistSetup:
+    override lazy val allowlist: NodeAllowlist = allowlistOf(s"enode://${"aa" * 64}@10.0.0.50:30303")
+    start()
+    val dialled: TestPeer = createdPeerQueue.poll(3, java.util.concurrent.TimeUnit.SECONDS)
+    dialled should not be null
+    dialled.probe.expectMsgType[ConnectTo](3.seconds).uri.getUserInfo shouldBe listedHex
+
+  it should "dial an entry added by a reload, and disconnect a peer the reload removed (FR-058)" taggedAs (
+    UnitTest,
+    NetworkTest
+  ) in new AllowlistSetup:
+    start()
+    // an address-less entry is a dial candidate for no one
+    createdPeers shouldBe empty
+
+    peerManager ! PeerManagerActor.ConnectToPeerCmd(listedUri)
+    val TestPeer(peer, probe) = createdPeerQueue.poll(3, java.util.concurrent.TimeUnit.SECONDS)
+    probe.expectMsgType[ConnectTo](3.seconds)
+    val nodeId: ByteString = ByteString(Hex.decode(listedHex))
+    probe.reply(PeerEvent.PeerHandshakeSuccessful(peer.copy(nodeId = Some(nodeId)), initialPeerInfo))
+
+    // the reload swaps the list: A is gone, C (with an address) is new
+    val c: ParsedAllowlistEntry = NodeAllowlist.parseEntry(s"enode://${"cc" * 64}@10.0.0.52:30303").toOption.get
+    allowlist.replace(NodeAllowlist.merge(Seq(AllowlistSource.File -> Seq(c)), None)) shouldBe true
+
+    probe.fishForSpecificMessage(3.seconds) { case m @ PeerActor.DisconnectPeer(Disconnect.Reasons.UselessPeer) => m }
+    val added: TestPeer = createdPeerQueue.poll(3, java.util.concurrent.TimeUnit.SECONDS)
+    added should not be null
+    added.probe.expectMsgType[ConnectTo](3.seconds).uri.getUserInfo shouldBe "cc" * 64
+
+  it should "drop a peer whose handshake completes after the list stopped naming it" taggedAs (
+    UnitTest,
+    NetworkTest
+  ) in new AllowlistSetup:
+    start()
+    peerManager ! PeerManagerActor.HandlePeerConnectionCmd(incomingConnection1.ref, incomingPeerAddress1)
+    val TestPeer(_, probe) = createdPeerQueue.poll(3, java.util.concurrent.TimeUnit.SECONDS)
+    probe.expectMsgType[PeerActor.HandleConnection]
+    val unlisted: Peer = Peer(
+      PeerId("unlisted"),
+      incomingPeerAddress1,
+      probe.ref.toTyped[PeerActor.Command],
+      incomingConnection = true,
+      nodeId = Some(ByteString(Hex.decode(unlistedHex)))
+    )
+    probe.reply(PeerEvent.PeerHandshakeSuccessful(unlisted, initialPeerInfo))
+    probe.expectMsg(PeerActor.DisconnectPeer(Disconnect.Reasons.UselessPeer))
 
   // ── Wrong-network exclusion (#88) ──────────────────────────────────────────
 
