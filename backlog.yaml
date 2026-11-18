@@ -3024,3 +3024,12 @@ items:
     links:
       spec: 030-zero-trust-tls
     notes: S9 carries a minimal scheduleWithFixedDelay reload (NodeAllowlistStore.schedule); S4 owns the shared poller.
+  - id: B-368
+    title: "Remaining test temp-dir leaks: chain-io, fukuii-* task files, snap-recovery-test, snap-good-peers, testdb (use TempDirs)"
+    priority: P3
+    status: open
+    area: ci
+    opened: 2026-11-18
+    refs: []
+    links: {}
+    notes: "B-305 added testing/TempDirs and converted the two C4e RocksDB specs, RocksDbDataSourceSpec and AccountRangeCoordinatorSpec. Still leaking per run in /tmp: chain-io, fukuii-unique-codehashes-/fukuii-contract-storage- (coordinator specs that leave taskFileDir None), snap-recovery-test, snap-good-peers, hole-tool, pma-snap-goo, eph-cl, testdb."
