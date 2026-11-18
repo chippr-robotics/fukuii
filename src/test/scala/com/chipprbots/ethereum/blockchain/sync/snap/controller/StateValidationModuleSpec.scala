@@ -317,3 +317,49 @@ class StateValidationModuleSpec extends AnyFlatSpec with Matchers:
     module.currentPhase shouldBe SyncPhase.StateHealing
     module.healingReopens shouldBe 1
   }
+
+  private val stateFault = Left(s"${StateValidator.StateFaultPrefix}the view of the state is stale")
+
+  it should "retry a state fault of the account walk on a fresh view and not reopen healing (B-216)" taggedAs UnitTest in {
+    val (module, kit) = newModule()
+    module.validationGeneration = 2L
+    module.validationInProgress = true
+
+    kit.run(ValidateAccountTrieResult(2L, stateFault, 10L))
+
+    module.validationInProgress shouldBe false
+    module.healingReopens shouldBe 0
+    module.currentPhase should not be SyncPhase.StateHealing
+    timersStarted(kit) shouldBe Seq(("validation-retry", ValidationRetry(2L), 500.millis))
+  }
+
+  it should "retry a state fault of the storage walk on a fresh view and not reopen healing (B-216)" taggedAs UnitTest in {
+    val (module, kit) = newModule()
+    module.validationGeneration = 2L
+    module.validationInProgress = true
+
+    kit.run(ValidateStorageTriesResult(2L, stateFault, 10L))
+
+    module.validationInProgress shouldBe false
+    module.healingReopens shouldBe 0
+    module.currentPhase should not be SyncPhase.StateHealing
+    timersStarted(kit) shouldBe Seq(("validation-retry", ValidationRetry(2L), 500.millis))
+  }
+
+  it should "escalate a state fault that outlasts the retries, as a missing root does (B-216)" taggedAs UnitTest in {
+    val (module, kit) = newModule()
+    module.validationGeneration = 2L
+    for _ <- 1 to 3 do
+      module.validationInProgress = true
+      kit.run(ValidateAccountTrieResult(2L, stateFault, 10L))
+    timersStarted(kit) should have size 3
+
+    module.validationInProgress = true
+    kit.run(ValidateAccountTrieResult(2L, stateFault, 10L))
+
+    val reason = "state fault after 4 validation retries"
+    module.criticalFailures.toSeq shouldBe Seq(reason)
+    module.restartReasons.toSeq shouldBe Seq(reason)
+    module.healingReopens shouldBe 0
+    timersStarted(kit) shouldBe empty
+  }
