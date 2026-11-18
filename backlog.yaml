@@ -2870,3 +2870,15 @@ items:
       spec: specs/030-zero-trust-tls
     depends_on: [B-354, B-356]
     notes: "US4; FR-030-033. ~400+600 plus an IT. Review: conduit."
+  - id: B-358
+    title: "Spec 030 S5: Engine API server TLS; metrics interface and TLS"
+    priority: P2
+    status: open
+    area: engine-api
+    size: M
+    opened: 2026-11-18
+    refs: [B-146]
+    links:
+      spec: specs/030-zero-trust-tls
+    depends_on: [B-354]
+    notes: "US6; FR-015, 016. ~350+500; metrics need mode also needs S2. Review: beacon (Engine API), conduit."
