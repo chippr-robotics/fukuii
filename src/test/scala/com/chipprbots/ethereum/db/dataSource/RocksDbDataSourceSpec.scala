@@ -432,6 +432,59 @@ class RocksDbDataSourceSpec extends AnyFlatSpec with Matchers:
     lockIsFree()
   }
 
+  "RocksDbDataSource.compactRange" should "not hold the database lock while the native compaction runs (B-281)" taggedAs (
+    UnitTest,
+    DatabaseTest
+  ) in withTempDir { dbPath =>
+    val ds = filled(dbPath)
+    try
+      var writtenDuringCompaction = false
+      var readDuringCompaction: Option[Value] = None
+      // The hook runs where the native call would: the compaction holds its own guard and no database lock.
+      ds.beforeNativeCompaction = () =>
+        onAnotherThread {
+          ds.update(Seq(DataSourceUpdate(Ns, Nil, Seq(key(250) -> value(7)))))
+          readDuringCompaction = ds.get(Ns, key(250))
+        }
+        writtenDuringCompaction = true
+      ds.compactRange(Ns, key(0).toArray, key(255).toArray)
+      writtenDuringCompaction shouldBe true
+      readDuringCompaction shouldBe Some(value(7))
+    finally ds.close()
+    lockIsFree()
+  }
+
+  it should "make close() wait for a running compaction, cancel it, and never free the handle under it (B-281)" taggedAs (
+    UnitTest,
+    DatabaseTest
+  ) in withTempDir { dbPath =>
+    val ds = filled(dbPath)
+    val inCompaction = new java.util.concurrent.CountDownLatch(1)
+    val closeMayEnd = new java.util.concurrent.CountDownLatch(1)
+    ds.beforeNativeCompaction = () =>
+      inCompaction.countDown()
+      closeMayEnd.await(30, java.util.concurrent.TimeUnit.SECONDS) shouldBe true
+    val compacting = Future(ds.compactRange(Ns, key(0).toArray, key(255).toArray))(using ExecutionContext.global)
+    inCompaction.await(30, java.util.concurrent.TimeUnit.SECONDS) shouldBe true
+
+    val closing = Future(ds.close())(using ExecutionContext.global)
+    // close() has begun (new compactions are refused) but cannot finish: the compaction still holds the guard.
+    val deadline = System.nanoTime() + 30.seconds.toNanos
+    var refused = false
+    while !refused && System.nanoTime() < deadline do
+      try ds.compactRange(Ns, key(0).toArray, key(255).toArray)
+      catch case _: RocksDbDataSourceClosedException => refused = true
+    refused shouldBe true
+    closing.isCompleted shouldBe false
+
+    closeMayEnd.countDown()
+    // The compaction ends cancelled, as a closed data source, and only then does close() finish.
+    an[RocksDbDataSourceClosedException] should be thrownBy Await.result(compacting, 30.seconds)
+    Await.result(closing, 30.seconds)
+    an[RocksDbDataSourceClosedException] should be thrownBy ds.get(Ns, key(1))
+    lockIsFree()
+  }
+
   "RocksDbDataSource.whileFree" should "let a point read through while a writer waits behind a long read" taggedAs (
     UnitTest,
     DatabaseTest
