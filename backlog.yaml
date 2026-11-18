@@ -2770,17 +2770,18 @@ items:
   - id: B-349
     title: "RegularSyncSpec: three ancestor-bodies tests time out on origin/staging (fishForSpecificMessage 5 s)"
     priority: P2
-    status: claimed
+    status: review
     area: test
     opened: 2026-11-18
     refs: []
     links:
+      prs: [1912]
       spec: "016"
     claim:
       by: cloud-dc960fdc
       agent: main
       since: 2026-11-18T02:31:51Z
-      heartbeat: 2026-11-18T02:31:51Z
+      heartbeat: 2026-11-18T02:31:54Z
     notes: "Seen while verifying B-298, reproduced with staging sources only: 'fetch the bodies missing below a block whose ommers cannot be checked', 'free the slot of a fetch of ancestor bodies ... during a fork recovery', 'ask again for ancestor bodies ... deadline'."
   - id: B-350
     title: "FastSyncBranchResolverActorSpec: scripted binary-search tests flake ~1 in 3 (reply published before the request handler subscribes)"
