@@ -30,6 +30,8 @@ import com.chipprbots.ethereum.metrics.MetricsContainer
   *   - `db.state.view.retries`, `db.state.view.stale`: views that were made again because the disk moved meanwhile, and
   *     those that could not be made for it. (A read that goes stale after its view was made is counted by what catches
   *     it, which comes with the callers.)
+  *   - `db.state.repair.overwrites`: rows that decode, are not the node the anchor's root names at their position, and
+  *     were overwritten by a repair (data-model 7.5). Each is also logged at ERROR; on a healthy datadir this is zero;
   *   - `db.state.move.seconds`: a move of the head, from its plan to its last batch; `db.state.move.blocks`: the blocks
   *     it reversed and applied, by side; `db.state.move.batches`: how many batches it was written as;
   *   - `db.state.reorg.refused`: moves of the head that were refused, by reason. `Deep` is the one that is answered by
@@ -71,6 +73,7 @@ object StateMetrics extends MetricsContainer with PathStateStorage.CommitObserve
   private val indexRefusals = metrics.counter("db.state.overlay.reverse.refused")
   private val readRefusals = metrics.counter("db.state.view.behind.refused")
   private val viewRetries = metrics.counter("db.state.view.retries")
+  private val repairOverwrites = metrics.counter("db.state.repair.overwrites")
   private val viewsStale = metrics.counter("db.state.view.stale")
   private val moveTimer = metrics.timer("db.state.move.seconds")
   private val moveBlocks = s"${metrics.metricsPrefix}.db.state.move.blocks"
@@ -139,6 +142,8 @@ object StateMetrics extends MetricsContainer with PathStateStorage.CommitObserve
   override def viewRetried(): Unit = viewRetries.increment()
 
   override def viewStale(): Unit = viewsStale.increment()
+
+  override def repairOverwrote(): Unit = repairOverwrites.increment()
 
   override def moved(move: MoveOutcome.Moved): Unit =
     anchorNumber.set(move.to.number.toLong)
