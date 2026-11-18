@@ -1782,7 +1782,7 @@ absent:
   (`BlockValidation.scala:35-56`): a canonical block in the first six after the pivot whose ommer's parent is below the pivot
   then fails `ommersParentsAreAllAncestors` (`StdOmmersValidator.scala:119-127`) and is rejected as invalid. PoW only.
 Mordor's low ommer rate and T063's `chain-download-enabled=false` hid both. So before hand-off (C5a) `AncestorWindow.ensure(pivot)`
-holds until the **256 headers below the pivot** (their parent-hash chain verified) and the **6 bodies below it** are stored,
+holds until the **256 headers below the pivot** (their parent-hash chain verified) and the **ancestor bodies** are stored (B-302: the bodies of the pivot and the 4 blocks below it that name ommers, on ETC only),
 fetched through the existing `PeersClient` or satisfied by the chain downloader's coverage. The same window is carried by a
 checkpoint archive (E.1, entries 0x03 and 0x04). BLOCKHASH needs the headers on ETH as well, so the code is shared; the
 6-body part is gated on PoW.
@@ -1891,7 +1891,7 @@ vectors for CF `t`/`u` keys are reused unchanged.
 | M9 | archive v1 versus v2 size and node counts, and how many hashes occur at more than one position (the sharing the dedup hid), per chain; archive-mode diff growth per day | Mordor, Sepolia | the version 2 size claim (E.1) and the `archive` disk figure (4.6) |
 | M10 | ETC: fork rate and depth distribution, `moveHead` cost at depth 1 and 2, proposer-view cost per generated block | Mordor with a local miner | the PoW reorg budget and the mining latency |
 | M11 | *(withdrawn: the `inmemory` mode is retired, 4.6)* | | |
-| M12 | cost of the ancestor window (256 headers, 6 bodies) at hand-off, with and without the chain downloader's coverage | Mordor, Sepolia, ETC mainnet | the hold time of `AncestorWindow.ensure` (G) |
+| M12 | cost of the ancestor window (256 headers, up to 5 bodies after B-302) at hand-off, with and without the chain downloader's coverage | Mordor, Sepolia, ETC mainnet | the hold time of `AncestorWindow.ensure` (G) |
 | M13 | PoW branch lengths adopted by `reorganise` (blocks per `settleHead`) and their layer bytes; the longest BlockQueue branch seen | Mordor with a local miner, ETC mainnet follow | `pinned-max-bytes` and whether the reverse-then-commit fallback is needed (6.4) |
 | M14 | cost of importing ETC blocks 0 to 1M, 1M to 2M, from genesis, on the unified layout, and the size of a `chain.rlp` export | the dev host | whether the EG-1 ETC import is feasible, and its source (plan open item) |
 | M15 | rows per deleted storage owner (p50, p99, max) and tombstones written, on the ETC 0 to 5.1M import and the Mordor imports; and the largest diff over every chain (forge S0 item 5, beacon S0 item 5) | ETC import, Mordor, Sepolia, Platåberget | `max-entries-per-owner-delete` (must sit well above the observed maximum) and `max-record-bytes`; the zero-tombstone gate of EG-4 and EG-15 |
