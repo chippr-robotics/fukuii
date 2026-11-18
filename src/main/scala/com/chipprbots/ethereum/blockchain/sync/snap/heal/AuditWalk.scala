@@ -16,6 +16,7 @@ import com.chipprbots.ethereum.crypto.kec256
 import com.chipprbots.ethereum.db.storage.NodeFault
 import com.chipprbots.ethereum.db.storage.NodeFault.check
 import com.chipprbots.ethereum.db.storage.RawNodeRead
+import com.chipprbots.ethereum.db.storage.pathstate.PositionKey
 import com.chipprbots.ethereum.domain.Account
 import com.chipprbots.ethereum.mpt.BranchNode
 import com.chipprbots.ethereum.mpt.ExtensionNode
@@ -42,6 +43,12 @@ final case class AuditPosition(account: Option[ByteString], nibbles: ByteString)
     nibbles.copyToArray(extended)
     path.copyToArray(extended, nibbles.length)
     copy(nibbles = ByteString.fromArrayUnsafe(extended))
+
+  /** The row this position is, in the position store (spec 018 data-model 2): the trie's owner and the path hex-prefix
+    * encoded as a non-leaf.
+    */
+  def key: PositionKey =
+    PositionKey(account, ByteString(HexPrefix.encode(nibbles.toArray, isLeaf = false)))
 
   /** What `GetTrieNodes` asks for: `[path]`, or `[account hash, path]` in a storage trie, hex-prefix encoded. The same
     * arithmetic as `FrontierRebuildBfs`, which a test pins.
@@ -83,6 +90,13 @@ final case class AuditHole(
   */
 trait AuditReader:
   def nodes(hashes: Seq[ByteString]): Seq[RawNodeRead]
+
+  /** The entries at `requests`, a position and the hash the walk expects there, one result each. The hash store has one
+    * entry per hash and so ignores the position (this default, which is what every reader had before the position
+    * store). A position store reads the row at the position, directly and with no cache in between, and judges nothing:
+    * the walk does that, keccak first (spec 018 data-model 6.5, 9).
+    */
+  def nodesAt(requests: Seq[(AuditPosition, ByteString)]): Seq[RawNodeRead] = nodes(requests.map(_._2))
   def codes(hashes: Seq[ByteString]): Seq[Option[ByteString]]
   def head(): Option[AuditHead]
 
@@ -264,6 +278,9 @@ object AuditWalk:
 
   // ---- re-resolve ----------------------------------------------------------------------------------------------------
 
+  /** One entry as the store holds it, for the node that `hash` names at `position`. */
+  type AuditRead = (AuditPosition, ByteString) => RawNodeRead
+
   /** What a position holds in the trie at one root. */
   enum Resolved:
 
@@ -289,8 +306,8 @@ object AuditWalk:
     case RootAbsent
 
   /** `position` from `root`: account trie, then the account's leaf, then its storage root, then the storage trie. */
-  def resolve(position: AuditPosition, root: ByteString, read: ByteString => RawNodeRead): Resolved =
-    check(root, read(root)) match
+  def resolve(position: AuditPosition, root: ByteString, read: AuditRead): Resolved =
+    check(root, read(AuditPosition.AccountRoot, root)) match
       case Left(NodeFault.Absent) => Resolved.RootAbsent
       case Left(fault)            => Resolved.Hole(root, AuditPosition.AccountRoot, fault)
       case Right(rootNode) =>
@@ -307,7 +324,7 @@ object AuditWalk:
                   case Success(found) =>
                     val storageRoot = found.storageRoot.value
                     val rootPosition = AuditPosition.storageRootOf(account)
-                    check(storageRoot, read(storageRoot)) match
+                    check(storageRoot, read(rootPosition, storageRoot)) match
                       case Left(fault) => Resolved.Hole(storageRoot, rootPosition, fault)
                       case Right(node) => descend(storageRoot, node, rootPosition, position.nibbles, read)
 
@@ -317,7 +334,7 @@ object AuditWalk:
       node: MptNode,
       at: AuditPosition,
       remaining: ByteString,
-      read: ByteString => RawNodeRead
+      read: AuditRead
   ): Resolved =
     if remaining.isEmpty then Resolved.Present(hash)
     else
@@ -327,7 +344,7 @@ object AuditWalk:
             case _: LeafNode | _: ExtensionNode => Resolved.Moved(hash, at)
             case _                              => Resolved.Gone
         case Some((next, nextAt, nextRemaining)) =>
-          check(next, read(next)) match
+          check(next, read(nextAt, next)) match
             case Left(fault)     => Resolved.Hole(next, nextAt, fault)
             case Right(nextNode) => descend(next, nextNode, nextAt, nextRemaining, read)
 
@@ -337,7 +354,7 @@ object AuditWalk:
       node: MptNode,
       at: AuditPosition,
       remaining: ByteString,
-      read: ByteString => RawNodeRead
+      read: AuditRead
   ): Either[Resolved, LeafNode] =
     node match
       case leaf: LeafNode => if leaf.key == remaining then Right(leaf) else Left(Resolved.Gone)
@@ -345,7 +362,7 @@ object AuditWalk:
         step(node, at, remaining) match
           case None => Left(Resolved.Gone)
           case Some((next, nextAt, nextRemaining)) =>
-            check(next, read(next)) match
+            check(next, read(nextAt, next)) match
               case Left(fault)     => Left(Resolved.Hole(next, nextAt, fault))
               case Right(nextNode) => descendToLeaf(nextNode, nextAt, nextRemaining, read)
 
@@ -387,7 +404,7 @@ object AuditWalk:
   def settle(
       position: AuditPosition,
       from: AuditHead,
-      read: ByteString => RawNodeRead,
+      read: AuditRead,
       latestHead: () => Option[AuditHead]
   ): Settled =
     @tailrec def attempt(head: AuditHead, triesLeft: Int): Settled =
@@ -407,9 +424,9 @@ object AuditWalk:
     attempt(from, MaxResolveAttempts)
 
   /** Decision 15's (b): does the trie at `root` still need `hole.hash` where `hole` says, and is it still bad there? */
-  def stillNeeds(hole: AuditHole, root: ByteString, read: ByteString => RawNodeRead): Boolean =
+  def stillNeeds(hole: AuditHole, root: ByteString, read: AuditRead): Boolean =
     if hole.isCode then
-      check(root, read(root)).toOption
+      check(root, read(AuditPosition.AccountRoot, root)).toOption
         .flatMap(rootNode => descendToLeaf(rootNode, AuditPosition.AccountRoot, hole.position.nibbles, read).toOption)
         .flatMap(leaf => Account(leaf.value).toOption)
         .exists(_.codeHash.value == hole.hash)
@@ -444,16 +461,20 @@ object AuditWalk:
       reader: AuditReader,
       codeFilter: AuditCodeFilter
   ): Step =
-    val hashes = frames.flatMap(_.hash).distinct
-    val reads = if hashes.isEmpty then Map.empty[ByteString, RawNodeRead] else hashes.zip(reader.nodes(hashes)).toMap
+    val wanted = frames.flatMap(f => f.hash.map(h => (f.position, h))).distinct
+    val reads =
+      if wanted.isEmpty then Map.empty[(AuditPosition, ByteString), RawNodeRead]
+      else wanted.zip(reader.nodesAt(wanted)).toMap
     // A resolve walks from the root, and a batch's resolves share the top of the trie: good nodes are read once. Only
     // good ones: an absent verdict has to be read again from a new root.
-    val known = mutable.HashMap.empty[ByteString, RawNodeRead]
-    def readOnce(hash: ByteString): RawNodeRead =
+    // By position and hash: a position store holds one row per position, so a good row at one position says nothing of
+    // the same node's row at another.
+    val known = mutable.HashMap.empty[(AuditPosition, ByteString), RawNodeRead]
+    def readOnce(at: AuditPosition, hash: ByteString): RawNodeRead =
       known.getOrElse(
-        hash, {
-          val raw = reader.nodes(Seq(hash)).head
-          if check(hash, raw).isRight then known(hash) = raw
+        (at, hash), {
+          val raw = reader.nodesAt(Seq((at, hash))).head
+          if check(hash, raw).isRight then known((at, hash)) = raw
           raw
         }
       )
@@ -489,7 +510,7 @@ object AuditWalk:
       frame.hash match
         case None => settleFrame(frame)
         case Some(hash) =>
-          check(hash, reads(hash)) match
+          check(hash, reads((frame.position, hash))) match
             case Left(_) => settleFrame(frame)
             case Right(node) =>
               nodes += 1

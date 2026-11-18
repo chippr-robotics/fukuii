@@ -46,6 +46,7 @@ import com.chipprbots.ethereum.db.storage.RawNodeRead
 import com.chipprbots.ethereum.db.storage.RepairOutcome
 import com.chipprbots.ethereum.db.storage.SnapSyncProgressStorage
 import com.chipprbots.ethereum.db.storage.StateStorage
+import com.chipprbots.ethereum.db.storage.pathstate.PositionRepairs
 import com.chipprbots.ethereum.domain.BlockHash
 import com.chipprbots.ethereum.domain.BlockchainReader
 import com.chipprbots.ethereum.network.NetworkPeerManagerActor
@@ -156,7 +157,8 @@ object BackgroundAudit:
       nowMillis: () => Long = () => System.currentTimeMillis(),
       readEc: Option[ExecutionContext] = None,
       settings: Settings = Settings(),
-      nanoTime: () => Long = () => System.nanoTime()
+      nanoTime: () => Long = () => System.nanoTime(),
+      positions: Option[PositionRepairs] = None
   )
 
   sealed trait Command
@@ -208,7 +210,8 @@ object BackgroundAudit:
       code: EvmCodeStorage,
       networkPeerManager: ActorRef[NetworkPeerManagerActor.Command],
       peerEventBus: ActorRef[PeerEventBusActor.Command],
-      syncConfig: SyncConfig
+      syncConfig: SyncConfig,
+      positions: Option[PositionRepairs] = None
   ): Behavior[Command] =
     apply(
       Deps(
@@ -216,10 +219,40 @@ object BackgroundAudit:
         new SnapSyncProgressStorage(appState.dataSource),
         state,
         code,
-        new StorageReader(blockchainReader, appState, state, code),
-        privateFetcher(networkPeerManager, peerEventBus, syncConfig)
+        positions.fold[AuditReader](new StorageReader(blockchainReader, appState, state, code))(repairs =>
+          new PositionReader(
+            hash => blockchainReader.getBlockHeaderByHash(BlockHash(hash)).map(_.unixTimestamp.toLong),
+            repairs,
+            code
+          )
+        ),
+        privateFetcher(networkPeerManager, peerEventBus, syncConfig),
+        positions = positions
       )
     )
+
+  /** What the walk reads on the unified layout (spec 018 C5b): the rows of CF `t` and `u` by position, read directly
+    * with no cache in front, and the anchor's block as the head. The audit's root is the anchor's, not the best
+    * block's: the best block may be ahead of the state on disk by forward layers, and only the anchor's rows are there
+    * to read. A block commit that moves the anchor under the walk makes some positions "moved", which the walk counts
+    * and resolves again from the new anchor's root, as it does for a re-peg on the hash store.
+    */
+  final class PositionReader(
+      timestampOf: ByteString => Option[Long],
+      positions: PositionRepairs,
+      code: EvmCodeStorage
+  ) extends AuditReader:
+    override def nodes(hashes: Seq[ByteString]): Seq[RawNodeRead] =
+      throw new UnsupportedOperationException(
+        "A position store cannot find nodes by hash alone: the audit reads them by position"
+      )
+    override def nodesAt(requests: Seq[(AuditPosition, ByteString)]): Seq[RawNodeRead] =
+      positions.rawRowsAt(requests.map((at, hash) => (at.key, hash)))
+    override def codes(hashes: Seq[ByteString]): Seq[Option[ByteString]] = code.multiGetNoFill(hashes)
+    override def head(): Option[AuditHead] =
+      positions.anchor.flatMap(held =>
+        timestampOf(held.hash).map(seconds => AuditHead(held.number, held.stateRoot, seconds))
+      )
 
   /** What the walk reads: the hash store on both schemes (what import reads, and Path publishes into at finalisation),
     * a read-only view with nothing in its buffer, and the best block by its hash, as `getBestBlock` has it.
@@ -625,7 +658,7 @@ object BackgroundAudit:
           case None                                      => AuditWalk.Settled.Retry
           case Some(head) if head.stateRoot == hole.root => AuditWalk.Settled.Hole(hole)
           case Some(head) =>
-            AuditWalk.settle(hole.position, head, h => reader.nodes(Seq(h)).head, () => reader.head())
+            AuditWalk.settle(hole.position, head, (at, h) => reader.nodesAt(Seq((at, h))).head, () => reader.head())
       }(using readEc)
       ctx.pipeToSelf(work)(outcome => HoleRefreshed(gen, hole, outcome))
 
@@ -713,7 +746,10 @@ object BackgroundAudit:
     private def repair(hole: AuditHole, bytes: ByteString): Unit =
       val outcome =
         if hole.isCode then deps.code.repairCode(hole.hash, bytes)
-        else deps.state.repairNode(hole.hash, bytes.toArray, latestHead.fold(hole.rootNumber)(_.number))
+        else
+          deps.positions match
+            case Some(repairs) => repairs.repairNodeAt(hole.position.key, hole.hash, bytes.toArray)
+            case None => deps.state.repairNode(hole.hash, bytes.toArray, latestHead.fold(hole.rootNumber)(_.number))
       outcome match
         case RepairOutcome.Written =>
           counters = counters.copy(repaired = counters.repaired + 1)
@@ -722,10 +758,26 @@ object BackgroundAudit:
           log.info(s"[HEAL-AUDIT] ${hole.position.describe} was written while its fetch ran")
         case RepairOutcome.Rejected => // the fetcher and the check above have hashed these bytes: unreachable
           counters = counters.copy(unresolved = counters.unresolved + 1)
+        case RepairOutcome.NotReached =>
+          // The anchor moved, or the anchor's root no longer needs this node there: not a repair of this state. The
+          // position is looked at again from the current anchor.
+          counters = counters.copy(moved = counters.moved + 1)
+          log.info(s"[HEAL-AUDIT] ${hole.position.describe} is no longer what the anchor's root needs: not written")
+        case RepairOutcome.DifferentNode =>
+          // Another node that decodes sits at the position: never overwritten, and this pass is not clean for it.
+          counters = counters.copy(unresolved = counters.unresolved + 1)
+          log.error(
+            s"[HEAL-AUDIT] ${hole.position.describe} holds a node that decodes and is not ${AuditWalk.hexOf(hole.hash)}, " +
+              "which the anchor's root needs there. It is another view's node and is never overwritten: this pass is " +
+              "not clean"
+          )
       if hole.fault.isBad then servedBad += hole.hash
       clearBadEntry(hole.hash)
-      // Whatever was missing below it comes next.
-      if !hole.isCode then stack.append(AuditFrame(hole.position, Some(hole.hash)))
+      // Whatever was missing below it comes next. A position that was not repaired is resolved again from the anchor.
+      // Not for another node that decodes: that is never overwritten, so a look again would fetch it for good.
+      if !hole.isCode && outcome != RepairOutcome.DifferentNode && outcome != RepairOutcome.Rejected then
+        val moved = outcome == RepairOutcome.NotReached
+        stack.append(AuditFrame(hole.position, if moved then None else Some(hole.hash)))
 
     private def clearBadEntry(hash: ByteString): Unit =
       if badEntries.entries.contains(hash) then
@@ -763,11 +815,15 @@ object BackgroundAudit:
 
     private def deleteBadEntry(hole: AuditHole, where: String): Unit =
       val reader = deps.reader
-      val read: ByteString => RawNodeRead = hash => reader.nodes(Seq(hash)).head
+      val read: AuditWalk.AuditRead = (at, hash) => reader.nodesAt(Seq((at, hash))).head
       val reached = () => reader.head().exists(head => AuditWalk.stillNeeds(hole, head.stateRoot, read))
       val outcome =
         if hole.isCode then deps.code.deleteBadCode(hole.hash, reached)
-        else deps.state.deleteBadNode(hole.hash, reached)
+        else
+          deps.positions match
+            // The position store judges under its own lock, from the anchor's root: the walk's `reached` is not asked.
+            case Some(repairs) => repairs.deleteBadNodeAt(hole.position.key, hole.hash)
+            case None          => deps.state.deleteBadNode(hole.hash, reached)
       clearBadEntry(hole.hash)
       outcome match
         case BadEntryDelete.Deleted =>
@@ -790,6 +846,13 @@ object BackgroundAudit:
           )
         case BadEntryDelete.NotReached =>
           log.info(s"[HEAL-AUDIT] The current root no longer needs $where: nothing deleted")
+        case BadEntryDelete.DifferentNode =>
+          // Never a node that decodes and is another than the one expected: it is another view's.
+          counters = counters.copy(unfollowable = counters.unfollowable + 1)
+          log.error(
+            s"[HEAL-AUDIT] $where holds a node that decodes and is not the one expected, so it stays. What is below it " +
+              "goes unseen, and this pass is not clean"
+          )
 
     /** `BlockImporter` takes the two apart: one missing contract is rarely alone, so the first goes to a bulk scan. */
     private def whatFollowsADelete(hole: AuditHole): String =

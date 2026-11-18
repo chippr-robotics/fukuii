@@ -209,6 +209,31 @@ class PathNodeStorage(val dataSource: DataSource):
   def read(position: com.chipprbots.ethereum.db.storage.pathstate.PositionKey): Option[Array[Byte]] =
     dataSource.getOptimized(if position.owner.isEmpty then acctNs else storageNs, position.rowKey)
 
+  /** [[read]] that leaves the block cache as it is: for the audit, whose reads must not push out what execution reads
+    * (spec 018 data-model 6.5).
+    */
+  def readNoFill(position: com.chipprbots.ethereum.db.storage.pathstate.PositionKey): Option[Array[Byte]] =
+    dataSource.getOptimizedNoFill(if position.owner.isEmpty then acctNs else storageNs, position.rowKey)
+
+  /** The rows at `positions`, one entry each in the order asked, as two batched reads that fill no cache (one per
+    * column family). The audit's read: directly from the rows, never from a decoded-node cache.
+    */
+  def readManyNoFill(
+      positions: Seq[com.chipprbots.ethereum.db.storage.pathstate.PositionKey]
+  ): Seq[Option[Array[Byte]]] =
+    val indexed = positions.zipWithIndex
+    val (ofAccounts, ofStorage) = indexed.partition(_._1.owner.isEmpty)
+    val out = new Array[Option[Array[Byte]]](positions.size)
+    def fill(namespace: IndexedSeq[Byte], group: Seq[(com.chipprbots.ethereum.db.storage.pathstate.PositionKey, Int)]) =
+      if group.nonEmpty then
+        dataSource
+          .multiGetOptimizedNoFill(namespace, group.map(_._1.rowKey))
+          .zip(group)
+          .foreach { case (row, (_, at)) => out(at) = row }
+    fill(acctNs, ofAccounts)
+    fill(storageNs, ofStorage)
+    out.toSeq
+
   /** The rows of the storage trie of `owner`, in key order, or `None` when there are more than `maxRows` of them or
     * they hold more than `maxBytes`: a seek and a forward scan of CF `u` from the owner's first key (spec 018
     * data-model 3.6). It lists the rows that are there, whatever trie they once made up, so a trie with a hole in it is
