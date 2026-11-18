@@ -67,7 +67,9 @@ object PeerActor:
       case TooManyPeers => Some(baseDelay.max(TooManyPeersRetryFloor))
       case AlreadyConnected | ClientQuitting | DisconnectRequested | TcpSubsystemError | TimeoutOnReceivingAMessage =>
         Some(baseDelay)
-      case _ => None
+      // Not on the node allowlist (spec 030 FR-051): the verdict does not change until the list does, so never retry.
+      case RLPxConnectionHandler.NotOnAllowlist => None
+      case _                                    => None
 
   // =========================================================================
   // Command ADT — intentionally NOT sealed.
@@ -194,7 +196,8 @@ object PeerActor:
   def rlpxConnectionFactory(
       authHandshaker: AuthHandshaker,
       rlpxConfiguration: RLPxConfiguration,
-      capabilities: List[Capability]
+      capabilities: List[Capability],
+      allowlist: NodeAllowlist = NodeAllowlist.Disabled
   ): ActorContext[Command] => ActorRef[RLPxConnectionHandler.Command] = ctx =>
     // RLPxConnectionHandler: default stop intentional — connection-scoped leaf actor,
     // restart would re-handshake from scratch; the PeerActor wrapper handles reconnect.
@@ -205,7 +208,8 @@ object PeerActor:
         RLPxConnectionHandler.ethMessageCodecFactory,
         rlpxConfiguration,
         RLPxConnectionHandler.HelloCodec.apply,
-        ctx.self
+        ctx.self,
+        allowlist = allowlist
       ),
       "rlpx-connection"
     )
