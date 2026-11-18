@@ -3221,3 +3221,15 @@ items:
       since: 2026-11-18T22:51:10Z
       heartbeat: 2026-11-18T22:52:20Z
     notes: The feed's messWouldRefuse getOrElse(true) keeps that out of the escalation count, a wait with no end. Count it when the parent is this node's canonical hash (forge).
+  - id: B-384
+    title: "Checkpoint v2 no-retry: record only content faults as refused; truncation/CRC/I-O and expected-hash mismatch retry automatically"
+    priority: P2
+    status: open
+    area: storage
+    size: S
+    opened: 2026-11-18
+    refs: []
+    links:
+      spec: specs/018-storage-engine-consolidation
+    depends_on: [B-066]
+    notes: "User decision 2026-11-18 (content faults only). #1935 records every refusal after the header per E.1; narrow it: bad nodes, assertions, window/trust failures are recorded; truncation, CRC, I/O and expected-hash mismatch clear the rows but are not recorded. Amend E.1/T292 and the docs."
