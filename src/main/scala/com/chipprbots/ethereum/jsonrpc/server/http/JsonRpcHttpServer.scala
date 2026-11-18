@@ -1,7 +1,5 @@
 package com.chipprbots.ethereum.jsonrpc.server.http
 
-import javax.net.ssl.SSLContext
-
 import org.apache.pekko.actor.ActorSystem
 import org.apache.pekko.http.cors.javadsl.CorsRejection
 import org.apache.pekko.http.cors.scaladsl.CorsDirectives.*
@@ -34,7 +32,8 @@ import com.chipprbots.ethereum.jsonrpc.graphql.GraphQLService
 import com.chipprbots.ethereum.jsonrpc.serialization.JsonSerializers
 import com.chipprbots.ethereum.jsonrpc.server.controllers.JsonRpcBaseController
 import com.chipprbots.ethereum.jsonrpc.server.http.JsonRpcHttpServer.JsonRpcHttpServerConfig
-import com.chipprbots.ethereum.security.SSLError
+import com.chipprbots.ethereum.tls.TlsConfigError
+import com.chipprbots.ethereum.tls.TlsServerContext
 import com.chipprbots.ethereum.utils.BuildInfo
 import com.chipprbots.ethereum.utils.ConfigUtils
 import com.chipprbots.ethereum.utils.Logger
@@ -179,7 +178,7 @@ trait JsonRpcHttpServer extends Json4sSupport with Logger:
     new ServerLifecycle(RpcCallStats.Http, () => bind(), callStats, stopDeadline)(using actorSystem.dispatcher)
 
   /** Whether the server speaks TLS (`mode = https`), for the dashboard's previews. */
-  def isTls: Boolean = config.mode == "https"
+  def isTls: Boolean = config.tlsEnabled
 
   /** Starts the server and returns the binding future: `lifecycle.start()` in the servers that bind.
     *
@@ -272,20 +271,22 @@ object JsonRpcHttpServer extends Logger:
       jsonRpcController: JsonRpcBaseController,
       jsonRpcHealthchecker: JsonRpcHealthChecker,
       config: JsonRpcHttpServerConfig,
-      fSslContext: () => Either[SSLError, SSLContext],
+      fTlsContext: () => Either[TlsConfigError, TlsServerContext],
       graphQLService: Option[GraphQLService] = None
   )(implicit actorSystem: ActorSystem): Either[String, JsonRpcHttpServer] =
     config.mode match
+      // `tls { enabled = true }` makes the server secure under either mode value; `mode = "https"` is the deprecated
+      // form of the same (spec 030 FR-007), and the start-up check refuses the two together.
+      case "http" | "https" if config.tlsEnabled =>
+        Right(
+          new SecureJsonRpcHttpServer(jsonRpcController, jsonRpcHealthchecker, config, fTlsContext, graphQLService)(
+            using actorSystem
+          )
+        )
       case "http" =>
         Right(
           new InsecureJsonRpcHttpServer(jsonRpcController, jsonRpcHealthchecker, config, graphQLService)(using
             actorSystem
-          )
-        )
-      case "https" =>
-        Right(
-          new SecureJsonRpcHttpServer(jsonRpcController, jsonRpcHealthchecker, config, fSslContext, graphQLService)(
-            using actorSystem
           )
         )
       case _ => Left(s"Cannot start JSON RPC server: Invalid mode ${config.mode} selected")
@@ -308,6 +309,12 @@ object JsonRpcHttpServer extends Logger:
     val enabled: Boolean
     val interface: String
     val port: Int
+
+    /** `network.rpc.http.tls.enabled` (spec 030); false where a configuration does not carry the block. */
+    val tlsBlockEnabled: Boolean = false
+
+    /** The listener speaks TLS: from its `tls` block, or from the deprecated `mode = "https"`. */
+    def tlsEnabled: Boolean = tlsBlockEnabled || mode == "https"
     val corsAllowedOrigins: HttpOriginMatcher
     val rateLimit: RateLimitConfig
 
@@ -320,6 +327,8 @@ object JsonRpcHttpServer extends Logger:
         override val enabled: Boolean = rpcHttpConfig.getBoolean("enabled")
         override val interface: String = rpcHttpConfig.getString("interface")
         override val port: Int = rpcHttpConfig.getInt("port")
+        override val tlsBlockEnabled: Boolean =
+          rpcHttpConfig.hasPath("tls.enabled") && rpcHttpConfig.getBoolean("tls.enabled")
 
         override val corsAllowedOrigins: HttpOriginMatcher =
           ConfigUtils.parseCorsAllowedOrigins(rpcHttpConfig, "cors-allowed-origins")

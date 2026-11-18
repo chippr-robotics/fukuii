@@ -273,7 +273,7 @@ object TuiActions:
       val ipc = node.jsonRpcConfig.ipcServerConfig
       Seq(
         Option.when(http.enabled)(
-          EndpointProbe.Endpoint(if http.mode == "https" then Kind.Https else Kind.Http, http.interface, http.port)
+          EndpointProbe.Endpoint(if http.tlsEnabled then Kind.Https else Kind.Http, http.interface, http.port)
         ),
         Option.when(ws.enabled)(EndpointProbe.Endpoint(Kind.Ws, ws.interface, ws.port)),
         Option.when(ipc.enabled)(EndpointProbe.Endpoint(Kind.Ipc, "", 0, ipc.socketFile)),

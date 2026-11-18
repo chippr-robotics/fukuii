@@ -1268,7 +1268,7 @@ trait JSONRpcHttpServerBuilder:
       jsonRpcHttpController,
       jsonRpcHealthChecker,
       jsonRpcConfig.httpServerConfig,
-      () => sslContext(instanceConfig.config, "network.rpc.http", "fukuii"),
+      () => com.chipprbots.ethereum.tls.TlsServerEngine.rpcHttp(instanceConfig.config, secureRandom),
       maybeGraphQLService
     )
 
