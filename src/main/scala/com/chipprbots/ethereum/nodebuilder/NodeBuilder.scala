@@ -22,6 +22,7 @@ import scala.util.Try
 
 import com.typesafe.config.ConfigFactory
 import org.bouncycastle.crypto.AsymmetricCipherKeyPair
+import org.bouncycastle.crypto.params.ECPublicKeyParameters
 
 import com.chipprbots.ethereum.blockchain.data.ChainImporter
 import com.chipprbots.ethereum.blockchain.data.GenesisDataLoader
@@ -173,12 +174,47 @@ trait StorageBuilder:
           override protected def stateConfig: com.chipprbots.ethereum.db.storage.pathstate.StateConfig =
             com.chipprbots.ethereum.db.storage.pathstate.StateConfig(self.instanceConfig.config)
 
+/** The P2P node-ID allowlist (spec 030 FR-050): built from `network.peer.node-allowlist`, the static nodes and the
+  * bootnodes. A static node or bootnode that is not listed is a startup error (FR-053), thrown as an
+  * `IllegalStateException` when this is first forced; `BaseNode.start` forces it before anything binds.
+  */
+trait NodeAllowlistBuilder:
+  self: InstanceConfigProvider & NodeKeyBuilder & BlockchainConfigBuilder =>
+
+  lazy val nodeAllowlistStore: Option[NodeAllowlistStore] =
+    val path = "network.peer.node-allowlist"
+    val section = if instanceConfig.config.hasPath(path) then Some(instanceConfig.config.getConfig(path)) else None
+    val ownId = Some(ByteString(nodeKey.getPublic.asInstanceOf[ECPublicKeyParameters].toNodeId))
+    NodeAllowlistStore.fromConfig(
+      section,
+      StaticNodesLoader.load(instanceConfig.config.getString("datadir")),
+      blockchainConfig.bootstrapNodes.toSeq,
+      ownId
+    ) match
+      case Right(store) => store
+      case Left(why)    => throw new IllegalStateException(s"Refusing to start: $why")
+
+  /** Permits everything when the allowlist is off. */
+  lazy val nodeAllowlist: NodeAllowlist = nodeAllowlistStore.map(_.allowlist).getOrElse(NodeAllowlist.Disabled)
+
+  /** How often the allowlist file is checked for changes. */
+  lazy val nodeAllowlistReloadInterval: FiniteDuration =
+    val path = "network.peer.node-allowlist.reload-interval"
+    if instanceConfig.config.hasPath(path) then instanceConfig.config.getDuration(path).toMillis.millis
+    else NodeAllowlistStore.DefaultReloadInterval
+
 trait DiscoveryConfigBuilder extends BlockchainConfigBuilder with StorageBuilder:
   self: InstanceConfigProvider & ActorSystemBuilder =>
   // Config load does no DNS (H9): it keeps the EIP-1459 domain names, and PeerDiscoveryManager walks them in the
   // background once the node is up.
   lazy val discoveryConfig: DiscoveryConfig =
-    DiscoveryConfig(instanceConfig.config, blockchainConfig.bootstrapNodes, blockchainConfig.dnsDiscoveryDomains)
+    DiscoveryConfig(
+      instanceConfig.config,
+      blockchainConfig.bootstrapNodes,
+      blockchainConfig.dnsDiscoveryDomains,
+      // Read from config, not from the allowlist built at start, so this builder needs no more than it did.
+      allowlistEnabled = NodeAllowlistStore.isEnabled(instanceConfig.config)
+    )
 
   // Rejects ENRs with `eth` key fork IDs that don't match the local chain — stops cross-network peers (BSC, mainnet,
   // etc.) from burning outbound dial slots when shared DNS trees include mis-tagged entries. See PR #1249. Mirrors
@@ -543,7 +579,7 @@ trait PeerManagerActorBuilder:
 
   self: ActorSystemBuilder & HandshakerBuilder & PeerEventBusBuilder & AuthHandshakerBuilder &
     PeerDiscoveryManagerBuilder & DiscoveryConfigBuilder & StorageBuilder & KnownNodesManagerBuilder &
-    PeerStatisticsBuilder & BlacklistBuilder & InstanceConfigProvider =>
+    PeerStatisticsBuilder & BlacklistBuilder & InstanceConfigProvider & NodeAllowlistBuilder =>
 
   lazy val peerConfiguration: PeerConfiguration = instanceConfig.Network.peer
 
@@ -566,12 +602,14 @@ trait PeerManagerActorBuilder:
           handshaker,
           authHandshaker,
           instanceConfig.supportedCapabilities,
-          Some(peerScoringManager)
+          Some(peerScoringManager),
+          nodeAllowlist
         ),
         discoveryConfig,
         blacklist,
         snapGoodPeers = snapGoodPeersOpt,
-        peerScoringManager = Some(peerScoringManager)
+        peerScoringManager = Some(peerScoringManager),
+        allowlist = nodeAllowlist
       ),
       "peer-manager"
     )
@@ -652,11 +690,12 @@ trait Web3ServiceBuilder:
   lazy val web3Service = new Web3Service
 
 trait NetServiceBuilder:
-  this: PeerManagerActorBuilder & NodeStatusBuilder & BlacklistBuilder & InstanceConfigProvider & ActorSystemBuilder =>
+  this: PeerManagerActorBuilder & NodeStatusBuilder & BlacklistBuilder & InstanceConfigProvider & ActorSystemBuilder &
+    NodeAllowlistBuilder =>
 
   lazy val netServiceConfig: NetServiceConfig = NetServiceConfig(instanceConfig.config)
 
-  lazy val netService = new NetService(nodeStatusHolder, peerManager, blacklist, netServiceConfig)(using
+  lazy val netService = new NetService(nodeStatusHolder, peerManager, blacklist, netServiceConfig, nodeAllowlist)(using
     classicSystem.toTyped.scheduler
   )
 
@@ -949,7 +988,8 @@ trait ApisBuilder extends ApisBase:
 
 trait AdminServiceBuilder:
   this: PeerManagerActorBuilder & NodeStatusBuilder & BlockchainBuilder & BlockchainConfigBuilder &
-    InstanceConfigProvider & ActorSystemBuilder & ConsensusBuilder & SyncControllerRefBuilder & BlacklistBuilder =>
+    InstanceConfigProvider & ActorSystemBuilder & ConsensusBuilder & SyncControllerRefBuilder & BlacklistBuilder &
+    NodeAllowlistBuilder =>
 
   lazy val adminService: AdminService = new AdminService(
     nodeStatusHolder,
@@ -977,7 +1017,8 @@ trait AdminServiceBuilder:
         maxOutgoing = peerConfiguration.maxOutgoingPeers,
         maxIncoming = peerConfiguration.maxIncomingPeers
       )
-    )
+    ),
+    allowlist = nodeAllowlist
   )(using classicSystem.toTyped.scheduler)
 
 trait TxPoolServiceBuilder:
@@ -1596,6 +1637,7 @@ trait Node
     extends InstanceConfigProvider
     with SecureRandomBuilder
     with NodeKeyBuilder
+    with NodeAllowlistBuilder
     with ActorSystemBuilder
     with TypedActorSystemProvider
     with StorageBuilder

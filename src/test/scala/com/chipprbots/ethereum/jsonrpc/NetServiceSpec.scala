@@ -150,6 +150,28 @@ class NetServiceSpec extends AnyFlatSpec with Matchers with ScalaFutures with No
     result.toOption.get.success shouldBe true
     peerManager.expectMsgClass(classOf[PeerManagerActor.ConnectToPeerCmd])
 
+  it should "refuse a node that is not on the node allowlist, and send nothing (FR-052)" taggedAs (
+    UnitTest,
+    RPCTest
+  ) in new TestSetup:
+    override lazy val allowlist: com.chipprbots.ethereum.network.NodeAllowlist =
+      com.chipprbots.ethereum.network.NodeAllowlistStore
+        .fromConfig(
+          Some(com.typesafe.config.ConfigFactory.parseString(s"""enabled = true\nnodes = ["${"cd" * 64}"]""")),
+          Nil,
+          Nil,
+          None
+        )
+        .toOption
+        .get
+        .get
+        .allowlist
+
+    val result: Either[JsonRpcError, ConnectToPeerResponse] =
+      netService.connectToPeer(ConnectToPeerRequest(s"enode://${"ab" * 64}@192.168.1.100:30303")).unsafeRunSync()
+    result.left.toOption.get.message should include("not on the node allowlist")
+    peerManager.expectNoMessage(200.millis)
+
   it should "reject invalid peer URI" taggedAs (UnitTest, RPCTest) in new TestSetup:
     // Using a URI with invalid characters that will throw URISyntaxException
     val result: Either[JsonRpcError, ConnectToPeerResponse] =
@@ -224,10 +246,13 @@ class NetServiceSpec extends AnyFlatSpec with Matchers with ScalaFutures with No
         discoveryStatus = ServerStatus.NotListening
       )
     )
-    val netService =
+    lazy val allowlist: com.chipprbots.ethereum.network.NodeAllowlist =
+      com.chipprbots.ethereum.network.NodeAllowlist.Disabled
+    lazy val netService =
       new NetService(
         nodeStatusRef,
         peerManager.ref.toTyped[PeerManagerActor.Command],
         blacklist,
-        NetServiceConfig(5.seconds)
+        NetServiceConfig(5.seconds),
+        allowlist
       )

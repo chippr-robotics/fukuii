@@ -26,6 +26,7 @@ import scala.util.Try
 
 import org.bouncycastle.util.encoders.Hex
 
+import com.chipprbots.ethereum.network.NodeAllowlist
 import com.chipprbots.ethereum.network.P2pTraffic
 import com.chipprbots.ethereum.network.PeerActor
 import com.chipprbots.ethereum.network.handshaker.HelloExchangeState
@@ -117,6 +118,12 @@ object RLPxConnectionHandler:
     * tell a transient refusal (TooManyPeers, AlreadyConnected) from a permanent one.
     */
   final case class ConnectionRejected(reason: Long) extends PeerActor.Command
+
+  /** The `reason` of a [[ConnectionRejected]] this node raised itself: the authenticated remote key is not on the node
+    * allowlist (spec 030 FR-051). Outside the devp2p reason range (0x00-0xff), so it can never come from a peer, and it
+    * is never retried.
+    */
+  val NotOnAllowlist: Long = 0x100L
   final case class MessageReceived(message: Message) extends PeerActor.Command
   final case class InitialHelloReceived(message: Hello, capability: Capability) extends PeerActor.Command
 
@@ -328,7 +335,9 @@ object RLPxConnectionHandler:
       parent: ActorRef[PeerActor.Command],
       tcpManagerForTest: Option[ClassicActorRef] = None,
       // Where this connection's bytes and messages are counted for the dashboard (spec 029 FR-044): the node's own.
-      traffic: P2pTraffic = P2pTraffic.Node
+      traffic: P2pTraffic = P2pTraffic.Node,
+      // Spec 030 FR-051: the authenticated remote key is checked against it right after the auth handshake.
+      allowlist: NodeAllowlist = NodeAllowlist.Disabled
   ): Behavior[Command] = Behaviors.setup { context =>
     val peerId: String = parent.path.name
     val tcpManager: ClassicActorRef = tcpManagerForTest.getOrElse(IO(Tcp)(using context.system.classicSystem))
@@ -342,7 +351,8 @@ object RLPxConnectionHandler:
       peerId,
       tcpManager,
       context,
-      traffic
+      traffic,
+      allowlist
     ).waitingForCommand()
   }
 
@@ -367,7 +377,8 @@ object RLPxConnectionHandler:
       peerId: String,
       tcpManager: ClassicActorRef,
       context: ActorContext[Command],
-      traffic: P2pTraffic
+      traffic: P2pTraffic,
+      allowlist: NodeAllowlist
   ):
     import AuthHandshaker.{InitiatePacketLength, ResponsePacketLength}
 
@@ -588,8 +599,21 @@ object RLPxConnectionHandler:
     private def processHandshakeResult(
         result: AuthHandshakeResult,
         remainingData: ByteString,
-        bridge: ClassicActorRef
+        bridge: ClassicActorRef,
+        inbound: Boolean
     ): Behavior[Command] = result match
+      case AuthHandshakeSuccess(_, remotePubKey) if !allowlist.permits(remotePubKey) =>
+        // FR-051: refused before ConnectionEstablished and before any Hello, even one already in `remainingData`, is
+        // decoded. The remote key is authenticated by now (the handshake proved possession of it).
+        allowlist.recordRejection(inbound)
+        log.debug(
+          "[RLPx] Peer {} ({}) is not on the node allowlist, closing before Hello",
+          peerId,
+          if inbound then "inbound" else "outbound"
+        )
+        parent ! ConnectionRejected(NotOnAllowlist)
+        stopping()
+
       case AuthHandshakeSuccess(secrets, remotePubKey) =>
         log.debug("[RLPx] Auth handshake SUCCESS for peer {}, establishing secure connection", peerId)
         parent ! ConnectionEstablished(remotePubKey)
@@ -785,7 +809,7 @@ object RLPxConnectionHandler:
           case Success((responsePacket, result, remainingData)) =>
             log.debug("[RLPx] Auth handshake init processed for peer {}, sending response", peerId)
             bridgeWrite(bridge, responsePacket)
-            processHandshakeResult(result, remainingData, bridge)
+            processHandshakeResult(result, remainingData, bridge, inbound = true)
           case Failure(ex) =>
             log.debug(
               "[Stopping Connection] Auth decode failed for peer {} - both pre-EIP8 and EIP-8 failed: {}",
@@ -852,7 +876,7 @@ object RLPxConnectionHandler:
         maybePreEIP8.orElse(maybePostEIP8) match
           case Success((result, remainingData)) =>
             log.debug("[RLPx] Auth handshake response processed for peer {}", peerId)
-            processHandshakeResult(result, remainingData, bridge)
+            processHandshakeResult(result, remainingData, bridge, inbound = false)
           case Failure(ex) =>
             log.debug(
               "[Stopping Connection] Response AuthHandshaker message handling failed for peer {}",

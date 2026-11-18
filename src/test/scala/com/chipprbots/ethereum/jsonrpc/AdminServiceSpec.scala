@@ -22,6 +22,8 @@ import com.chipprbots.ethereum.Fixtures
 import com.chipprbots.ethereum.domain.BlockHash
 import com.chipprbots.ethereum.domain.BlockchainReader
 import com.chipprbots.ethereum.domain.branch.EmptyBranch
+import com.chipprbots.ethereum.jsonrpc.AdminService.AdminAddPeerResponse
+import com.chipprbots.ethereum.jsonrpc.AdminService.AdminAddTrustedPeerResponse
 import com.chipprbots.ethereum.jsonrpc.AdminService.AdminBlockIPResponse
 import com.chipprbots.ethereum.jsonrpc.AdminService.AdminChangeLogLevelResponse
 import com.chipprbots.ethereum.jsonrpc.AdminService.AdminDatadirResponse
@@ -318,7 +320,37 @@ class AdminServiceSpec extends AnyFlatSpec with Matchers with BeforeAndAfterAll:
       inbound
     )
 
-  class FakePeerSetup(peers: Seq[Peer] = Seq.empty) extends TestSetup:
+  /** A node allowlist (spec 030) that lists `hexIds` only. */
+  private def allowlistOf(hexIds: String*): com.chipprbots.ethereum.network.NodeAllowlist =
+    val cfg = com.typesafe.config.ConfigFactory
+      .parseString(s"enabled = true\nnodes = [${hexIds.map(h => "\"" + h + "\"").mkString(",")}]")
+    com.chipprbots.ethereum.network.NodeAllowlistStore.fromConfig(Some(cfg), Nil, Nil, None).toOption.get.get.allowlist
+
+  "AdminService with a node allowlist" should "refuse addPeer and addTrustedPeer for an unlisted node, naming the allowlist (FR-052)" taggedAs UnitTest in new FakePeerSetup(
+    allowlist = allowlistOf("cd" * 64)
+  ):
+    val enode: String = s"enode://$goodId@1.2.3.4:30303"
+    val peer: Either[JsonRpcError, AdminAddPeerResponse] =
+      service.addPeer(AdminService.AdminAddPeerRequest(enode)).unsafeRunSync()
+    val trusted: Either[JsonRpcError, AdminAddTrustedPeerResponse] =
+      service.addTrustedPeer(AdminService.AdminAddTrustedPeerRequest(enode)).unsafeRunSync()
+    peer.left.toOption.get.message should include("not on the node allowlist")
+    trusted.left.toOption.get.message should include("not on the node allowlist")
+    sentToPeerManager() shouldBe empty
+
+  it should "pass a listed node on to the peer manager" taggedAs UnitTest in new FakePeerSetup(
+    allowlist = allowlistOf(goodId)
+  ):
+    service.addPeer(AdminService.AdminAddPeerRequest(s"enode://$goodId@1.2.3.4:30303")).unsafeRunSync() shouldBe
+      Right(AdminService.AdminAddPeerResponse(true))
+    sentToPeerManager().collect { case PeerManagerActor.AddMaintainedPeerCmd(uri, _) => uri.getHost } shouldBe List(
+      "1.2.3.4"
+    )
+
+  class FakePeerSetup(
+      peers: Seq[Peer] = Seq.empty,
+      allowlist: com.chipprbots.ethereum.network.NodeAllowlist = com.chipprbots.ethereum.network.NodeAllowlist.Disabled
+  ) extends TestSetup:
     val fakeState: PeerManagerActor.AdminState =
       PeerManagerActor.AdminState(Some(7), 7, Set("aa" * 64), Set("bb" * 64))
     private val received = new java.util.concurrent.ConcurrentLinkedQueue[PeerManagerActor.Command]()
@@ -350,7 +382,8 @@ class AdminServiceSpec extends AnyFlatSpec with Matchers with BeforeAndAfterAll:
       registry,
       null,
       () => cats.effect.IO.pure(com.chipprbots.ethereum.blockchain.sync.SyncProtocol.Status.NotSyncing),
-      Some(AdminService.PeerLimits(minOutgoing = 10, maxOutgoing = 25, maxIncoming = 50))
+      Some(AdminService.PeerLimits(minOutgoing = 10, maxOutgoing = 25, maxIncoming = 50)),
+      allowlist
     )
 
     /** What the peer manager received, in order, once it has handled everything sent before (an ask is answered after

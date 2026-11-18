@@ -23,6 +23,7 @@ import com.chipprbots.ethereum.domain.BlockchainReader
 import com.chipprbots.ethereum.domain.branch.BestBranch
 import com.chipprbots.ethereum.jsonrpc.AkkaTaskOps.*
 import com.chipprbots.ethereum.network.BlockedIPRegistry
+import com.chipprbots.ethereum.network.NodeAllowlist
 import com.chipprbots.ethereum.network.PeerManagerActor
 import com.chipprbots.ethereum.utils.BlockchainConfig
 import com.chipprbots.ethereum.utils.ForkBlockNumbers
@@ -254,7 +255,9 @@ class AdminService(
     // The node's sync status, read before admin_importChain: SyncController's GetStatus.
     syncStatus: () => IO[SyncProtocol.Status],
     // The configured connection limits, for the dashboard's previews; None where they are not known (tests).
-    peerLimitsConfig: Option[AdminService.PeerLimits] = None
+    peerLimitsConfig: Option[AdminService.PeerLimits] = None,
+    // Spec 030 FR-052: admin_addPeer and admin_addTrustedPeer refuse a node that is not on the allowlist.
+    allowlist: NodeAllowlist = NodeAllowlist.Disabled
 )(implicit scheduler: typed.Scheduler)
     extends Logger:
   import AdminService.*
@@ -376,6 +379,9 @@ class AdminService(
     */
   def addPeer(req: AdminAddPeerRequest): ServiceResponse[AdminAddPeerResponse] =
     parseEnode(req.enodeUrl) match
+      case Right(uri) if allowlist.refusalFor(uri).isDefined =>
+        allowlist.recordRejection(inbound = false)
+        IO.pure(Left(JsonRpcError.LogicError(allowlist.refusalFor(uri).getOrElse(""))))
       case Right(uri) =>
         peerManager
           .askForTyped[PeerManagerActor.AddMaintainedPeerResponse](ref =>
@@ -565,6 +571,9 @@ class AdminService(
     */
   def addTrustedPeer(req: AdminAddTrustedPeerRequest): ServiceResponse[AdminAddTrustedPeerResponse] =
     parseEnode(req.enodeUrl) match
+      case Right(uri) if allowlist.refusalFor(uri).isDefined =>
+        allowlist.recordRejection(inbound = false)
+        IO.pure(Left(JsonRpcError.LogicError(allowlist.refusalFor(uri).getOrElse(""))))
       case Right(uri) =>
         peerManager
           .askForTyped[PeerManagerActor.AddTrustedPeerResponse](ref => PeerManagerActor.AddTrustedPeerCmd(uri, ref))
