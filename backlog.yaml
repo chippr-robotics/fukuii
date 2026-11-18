@@ -2846,3 +2846,15 @@ items:
       spec: specs/030-zero-trust-tls
     depends_on: [B-354]
     notes: "US2; FR-003, 014, 017, 062. ~500+800. Review: conduit."
+  - id: B-356
+    title: "Spec 030 S3: client-certificate identity rules grant namespaces; GraphQL gate"
+    priority: P2
+    status: open
+    area: rpc
+    size: M
+    opened: 2026-11-18
+    refs: [B-146]
+    links:
+      spec: specs/030-zero-trust-tls
+    depends_on: [B-355]
+    notes: "US3; FR-020-028. ~450+700. Review: conduit, prism."
