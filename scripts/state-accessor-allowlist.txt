@@ -122,7 +122,7 @@ readonly 1 src/main/scala/com/chipprbots/ethereum/blockchain/sync/SyncController
 readonly 1 src/main/scala/com/chipprbots/ethereum/blockchain/sync/BackgroundAudit.scala WRITER: the audit walks the hash store, and repairs it; the anchor's tries by position in C5b (T217)
 raw-nodes 1 src/main/scala/com/chipprbots/ethereum/blockchain/sync/BackgroundAudit.scala the audit's batch read by hash; rows by position in C5b (T217)
 raw-store 2 src/main/scala/com/chipprbots/ethereum/blockchain/sync/BackgroundAudit.scala WRITER: the audit repairs a node, and deletes a bad one, by hash; repairNodeAt and deleteBadNodeAt in C5b (T216, T217)
-raw-store 3 src/main/scala/com/chipprbots/ethereum/blockchain/sync/regular/BlockImporter.scala WRITER: the importer repairs a fetched node twice and deletes a corrupt one, by hash; repairNodeAt and deleteBadNodeAt in C5b (T218)
+raw-store 2 src/main/scala/com/chipprbots/ethereum/blockchain/sync/regular/BlockImporter.scala WRITER: the hash layout's repairNode (one site, repairFetched, for both fetched nodes) and deleteBadNode, by hash; the unified layout goes by position through repairNodeAt and deleteBadNodeAt (C5b), and these go with the Hash scheme (C8b)
 backing 1 src/main/scala/com/chipprbots/ethereum/blockchain/sync/regular/BlockImporter.scala looks a missing node up by hash, to place a storage hole; the fetch by position, C5b (T218)
 backing 1 src/main/scala/com/chipprbots/ethereum/blockchain/checkpoint/CheckpointImporter.scala WRITER: checkpoint import writes nodes by hash at the checkpoint's height; the importer that assigns positions, C5c (T230)
 raw-store 1 src/main/scala/com/chipprbots/ethereum/blockchain/checkpoint/CheckpointImporter.scala WRITER: that import's batch write by hash; C5c (T230)

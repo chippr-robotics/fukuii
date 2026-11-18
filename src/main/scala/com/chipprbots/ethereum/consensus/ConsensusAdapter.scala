@@ -189,12 +189,15 @@ class ConsensusAdapter(
     (if accessLists.isEmpty then consensus.evaluateBranch(newBranch)
      else consensus.evaluateBranchWithAccessLists(newBranch, accessLists))
       .map {
-        // On the unified layout a node missing from the held state is a fault of this node, not a hole to fetch: the
-        // fetch writes the hash-keyed store, which this layout never reads, and the same block would fail again
-        // (spec 018 C5a part 10, forge). It is told as any state fault is, and counted towards the escalation. Missing
-        // contract code is not: it is fetched by its hash into the code store, which both layouts share (vault).
+        // On the unified layout a node missing from the held state with no position to say is a fault of this node, not
+        // a hole to fetch: the fetch writes the hash-keyed store, which this layout never reads, and the same block
+        // would fail again (spec 018 C5a part 10, forge). It is told as any state fault is, and counted towards the
+        // escalation. One that names its position is fetched by it and written there by `repairNodeAt` (C5b): a view of
+        // the rows alone says it, a view with layers over them does not, and that stays a fault. Missing contract code
+        // is fetched by its hash into the code store, which both layouts share (vault).
         case ConsensusErrorDueToMissingNode(blocksToEnqueue, reason, imported)
-            if blockchainReader.holdsStateInPlace && !reason.isInstanceOf[MissingCodeException] =>
+            if blockchainReader.holdsStateInPlace && !reason.isInstanceOf[MissingCodeException] &&
+              reason.location.isEmpty =>
           ConsensusStateFault(new HeldStateIncomplete(reason), imported, blocksToEnqueue)
         case other => other
       }

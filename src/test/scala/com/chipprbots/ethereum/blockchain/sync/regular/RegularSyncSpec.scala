@@ -34,6 +34,7 @@ import com.chipprbots.ethereum.blockchain.sync.SyncProtocol
 import com.chipprbots.ethereum.blockchain.sync.SyncProtocol.Status
 import com.chipprbots.ethereum.blockchain.sync.SyncProtocol.Status.Progress
 import com.chipprbots.ethereum.blockchain.sync.fast.FastSyncBranchResolverActor
+import com.chipprbots.ethereum.blockchain.sync.regular.BlockFetcher.FetchStateNode
 import com.chipprbots.ethereum.blockchain.sync.regular.BlockFetcher.InvalidateBlocksFrom
 import com.chipprbots.ethereum.blockchain.sync.regular.RegularSync
 import com.chipprbots.ethereum.consensus.Consensus
@@ -310,6 +311,131 @@ class RegularSyncSpec
       val deadline = System.nanoTime() + java.util.concurrent.TimeUnit.SECONDS.toNanos(30)
       while imports.get() <= before && System.nanoTime() < deadline do Thread.onSpinWait()
       imports.get() shouldBe before + 1
+
+  /** What the importer's on-demand fetch writes through, on the unified layout (spec 018 C5b): it records every call
+    * and answers `outcome`. The rules that make a write safe (state lock, anchor compare-and-set, the reach of the
+    * anchor's root) are pinned on the real store by RepairNodeAtSpec and DeleteBadNodeAtSpec.
+    */
+  final class RecordingPositionRepairs(outcome: () => RepairOutcome)
+      extends com.chipprbots.ethereum.db.storage.pathstate.PositionRepairs:
+    import com.chipprbots.ethereum.db.storage.pathstate.PositionKey
+    val repaired = new java.util.concurrent.ConcurrentLinkedQueue[(PositionKey, ByteString, ByteString)]()
+    val deleted = new java.util.concurrent.ConcurrentLinkedQueue[(PositionKey, ByteString)]()
+    override def anchor: Option[com.chipprbots.ethereum.db.storage.pathstate.BlockRef] = None
+    override def rawRowsAt(
+        requests: Seq[(PositionKey, ByteString)]
+    ): Seq[com.chipprbots.ethereum.db.storage.RawNodeRead] = Nil
+    override def repairNodeAt(position: PositionKey, expectedHash: ByteString, bytes: Array[Byte]): RepairOutcome =
+      repaired.add((position, expectedHash, ByteString(bytes)))
+      outcome()
+    override def deleteBadNodeAt(
+        position: PositionKey,
+        expectedHash: ByteString
+    ): com.chipprbots.ethereum.db.storage.BadEntryDelete =
+      deleted.add((position, expectedHash))
+      com.chipprbots.ethereum.db.storage.BadEntryDelete.NoLongerBad
+
+  /** An importer whose import of block 15 meets a missing trie node, until the node is written: the importer on the
+    * unified layout (`unified`) or on the hash layout, and following a consensus layer (Ethereum,
+    * `followsConsensusLayer`) or not (the proof-of-work importer, Classic). The two differ in the branch resolution and
+    * in the adapter's refusal of a branch that hangs from a refused one; the missing-node machinery is the same code
+    * (spec 018 T212).
+    */
+  abstract class MissingNodeOnTheUnifiedLayout(
+      name: String,
+      unified: Boolean,
+      followsConsensusLayer: Boolean,
+      // what one repair of the position store answers
+      outcome: () => RepairOutcome = () => RepairOutcome.Written
+  ) extends ForkRecoveryOnTheUnifiedLayout(name, recoveryStarted = false, unified = unified):
+    // a block of another chain at height 15: this node's own is dropped from a batch before it is imported (PoW)
+    val failing: Block =
+      val own = testBlocks.find(_.number.value == 15).get
+      own.copy(header = own.header.copy(extraData = ByteString("of another chain")))
+    val node: ByteString = ByteString(s"a trie node of $name")
+    val hash: ByteString = ByteString(kec256(node.toArray))
+    val address: ByteString = ByteString(Array.fill[Byte](20)(7))
+    val locationOf: ByteString = ByteString(HexPrefix.encode(Array[Byte](1, 2, 3), isLeaf = false))
+    def missing: MissingNodeException
+
+    /** The hash-keyed store, which only the hash layout writes: it records what it is asked, and answers `Written`. */
+    final class RecordingStateStorage extends StateStorage:
+      val repaired = new java.util.concurrent.ConcurrentLinkedQueue[(ByteString, ByteString, BigInt)]()
+      val deleted = new java.util.concurrent.ConcurrentLinkedQueue[ByteString]()
+      override def getBackingStorage(bn: BigInt): com.chipprbots.ethereum.db.storage.MptStorage = ???
+      override def getReadOnlyStorage: com.chipprbots.ethereum.db.storage.MptStorage = ???
+      override def onBlockSave(bn: BigInt, currentBestSavedBlock: BigInt)(f: () => Unit): Unit = ()
+      override def onBlockRollback(bn: BigInt, currentBestSavedBlock: BigInt)(f: () => Unit): Unit = ()
+      override def saveNode(nodeHash: ByteString, nodeEncoded: Array[Byte], bn: BigInt): Unit = ???
+      override def canRepairNodes: Boolean = true
+      override def repairNode(nodeHash: ByteString, nodeEncoded: Array[Byte], bn: BigInt): RepairOutcome =
+        repaired.add((nodeHash, ByteString(nodeEncoded), bn))
+        nodeIsWritten = true
+        RepairOutcome.Written
+      override def deleteBadNode(
+          nodeHash: ByteString,
+          stillReached: () => Boolean
+      ): com.chipprbots.ethereum.db.storage.BadEntryDelete =
+        deleted.add(nodeHash)
+        com.chipprbots.ethereum.db.storage.BadEntryDelete.NoLongerBad
+      override def getNode(nodeHash: ByteString): Option[com.chipprbots.ethereum.mpt.MptNode] = None
+      override def forcePersist(reason: StateStorage.FlushSituation): Boolean = true
+
+    override lazy val stateStorage: StateStorage = new RecordingStateStorage
+    def hashStore: RecordingStateStorage = stateStorage.asInstanceOf[RecordingStateStorage]
+
+    val repairs = new RecordingPositionRepairs(() =>
+      val answered = outcome()
+      if answered == RepairOutcome.Written then nodeIsWritten = true
+      answered
+    )
+    (() => blockchainWriter.positionRepairs).when().returns(Some(repairs))
+
+    val evaluations = new java.util.concurrent.atomic.AtomicInteger(0)
+    @volatile var nodeIsWritten: Boolean = false
+    @volatile var importedOk: Boolean = false
+
+    override lazy val consensusAdapter: ConsensusAdapter = new ConsensusAdapter(null, null, null, null, null):
+      override def refusedWithTheirParent(blocks: NonEmptyList[Block]): Boolean = false
+      override def evaluateBranch(blocks: NonEmptyList[Block])(implicit
+          blockExecutionScheduler: IORuntime,
+          blockchainConfig: BlockchainConfig
+      ): IO[BlockImportResult] =
+        IO {
+          evaluations.incrementAndGet()
+          if nodeIsWritten then
+            importedOk = true
+            BlockImportedToTop(Nil)
+          else BlockImportFailedDueToMissingNode(missing)
+        }
+
+    override lazy val branchResolution: BranchResolution = new BranchResolution(
+      blockchainReader,
+      Option.when(followsConsensusLayer)(com.chipprbots.ethereum.consensus.engine.DesignatedHead(() => None))
+    ):
+      override def resolveBranch(headers: NonEmptyList[BlockHeader]): BranchResolutionResult = NewBetterBranch(Nil)
+
+    def importFailing(): Unit =
+      importer ! BlockImporter.FetcherResponse(BlockFetcher.PickedBlocks(NonEmptyList.one(failing)))
+
+    def fetchAsked(): BlockFetcher.FetchStateNode =
+      importerFetcher.fishForSpecificMessage(10.seconds) { case m: BlockFetcher.FetchStateNode => m }
+
+    def deliverNode(): Unit =
+      importer ! BlockImporter.FetcherResponse(BlockFetcher.FetchedStateNode(NodeData(List(node))))
+
+    def evaluated(count: Int): Unit = awaitCond(evaluations.get() >= count, 10.seconds)
+
+    /** The node, delivered until `done`. The importer sends its fetch from inside the import, before the import's end
+      * puts it in the wait for the node: a node that lands in that gap is the late-arriving one, which writes it and
+      * waits for the retry tick, so it is delivered again, which is what a fetcher that is asked again does.
+      */
+    def deliverUntil(done: => Boolean): Unit =
+      val deadline = System.nanoTime() + java.util.concurrent.TimeUnit.SECONDS.toNanos(10)
+      while !done && System.nanoTime() < deadline do
+        deliverNode()
+        scala.util.Try(awaitCond(done, 300.millis))
+      withClue("the importer did not take the node: ")(done shouldBe true)
 
   /** An importer whose branch resolution is scripted for a side branch from block 15: its first block is weighed and
     * not taken; the block after it leaves it not taken; the one after that makes it the heavier (B-300 f).
@@ -2129,7 +2255,7 @@ class RegularSyncSpec
 
         override lazy val blockchain: BlockchainImpl = BlockchainImpl(storagesInstance.storages, blockchainReader)
         // The importer walks the storage trie through this; the fixture's own is a stub that reads nothing.
-        override val stateStorage: StateStorage = storagesInstance.storages.stateStorage
+        override lazy val stateStorage: StateStorage = storagesInstance.storages.stateStorage
         // These tests are about a storage hole, not about branch resolution. The reader above answers the genesis hash
         // with the parent header below, which no real chain does, so real resolution reads the first batch as an unknown
         // branch; what imported it was the pivot floor's direct import, which now takes only a batch that continues the
@@ -2303,7 +2429,7 @@ class RegularSyncSpec
         new Fixture:
           val failingBlock: Block = testBlocksChunked.head.head
           // Archive pruning, which can delete a bad entry; the fixture's own state storage is a stub.
-          override val stateStorage: StateStorage = storagesInstance.storages.stateStorage
+          override lazy val stateStorage: StateStorage = storagesInstance.storages.stateStorage
           val corrupt: ByteString = kec256(ByteString("a trie node this node holds junk for"))
           storagesInstance.storages.nodeStorage.put(corrupt, Array(0x01.toByte))
           // What execution raises for it: the world state rewraps the corrupt node as a missing account node.
@@ -2333,7 +2459,7 @@ class RegularSyncSpec
       "leave a good stored node alone when a missing node is met under its hash" taggedAs (UnitTest, SyncTest) in sync(
         new Fixture:
           val failingBlock: Block = testBlocksChunked.head.head
-          override val stateStorage: StateStorage = storagesInstance.storages.stateStorage
+          override lazy val stateStorage: StateStorage = storagesInstance.storages.stateStorage
           val node: Array[Byte] = MerklePatriciaTrie.EmptyEncoded
           val hash: ByteString = ByteString(MerklePatriciaTrie.EmptyRootHash)
           storagesInstance.storages.nodeStorage.put(hash, node)
@@ -2670,7 +2796,7 @@ class RegularSyncSpec
         @volatile var saveNodeWasCalled: Boolean = false
         val nodeData: List[ByteString] = List(ByteString(failingBlock.header.toBytes: Array[Byte]))
 
-        override val stateStorage: StateStorage = new StateStorage:
+        override lazy val stateStorage: StateStorage = new StateStorage:
           override def getBackingStorage(bn: BigInt): com.chipprbots.ethereum.db.storage.MptStorage = ???
           override def getReadOnlyStorage: com.chipprbots.ethereum.db.storage.MptStorage = ???
           override def onBlockSave(bn: BigInt, currentBestSavedBlock: BigInt)(f: () => Unit): Unit = ()
@@ -2697,6 +2823,137 @@ class RegularSyncSpec
         // SyncRetryTick (which stays only as a fallback). The bound is far below that tick.
         awaitCond(reimportedAfterSave, 10.seconds)
       )
+    }
+
+    "fetch a missing node by its position and write it there, on the unified layout (spec 018 C5b, T212)" should {
+      for (chain, follows) <- List("Classic (proof-of-work importer)" -> false, "Ethereum (consensus layer)" -> true) do
+        s"fill a hole in the account trie by repairNodeAt, on $chain" taggedAs (UnitTest, SyncTest) in sync(
+          new MissingNodeOnTheUnifiedLayout(s"acct-$follows", unified = true, followsConsensusLayer = follows):
+            override def missing: MissingNodeException =
+              new MissingAccountNodeException(hash, address, Some(locationOf))
+            val at: com.chipprbots.ethereum.db.storage.pathstate.PositionKey =
+              com.chipprbots.ethereum.db.storage.pathstate.PositionKey(None, locationOf)
+
+            importFailing()
+            val asked: FetchStateNode = fetchAsked()
+            asked.hash shouldBe hash
+            asked.paths shouldBe Some(Seq(Seq(locationOf)))
+            repairs.deleted.peek() shouldBe ((at, hash))
+
+            deliverUntil(evaluations.get() >= 2)
+            repairs.repaired.peek() shouldBe ((at, hash, node))
+            repairs.repaired.size shouldBe 1
+            // never the hash-keyed store, which this layout does not read
+            hashStore.repaired shouldBe empty
+        )
+
+        s"fill a hole in a storage trie at the position of its own owner, on $chain" taggedAs (
+          UnitTest,
+          SyncTest
+        ) in sync(
+          new MissingNodeOnTheUnifiedLayout(s"stor-$follows", unified = true, followsConsensusLayer = follows):
+            override def missing: MissingNodeException =
+              new MissingStorageNodeException(hash, address, Some(locationOf))
+
+            importFailing()
+            fetchAsked().paths shouldBe Some(Seq(Seq(ByteString(kec256(address.toArray)), locationOf)))
+            deliverUntil(evaluations.get() >= 2)
+            repairs.repaired.peek() shouldBe (
+              (
+                com.chipprbots.ethereum.db.storage.pathstate
+                  .PositionKey(Some(ByteString(kec256(address.toArray))), locationOf),
+                hash,
+                node
+              )
+            )
+        )
+
+      "retry the import at once when the anchor moved, and take the fetch as exhausted after MaxRepairDeclines" taggedAs (
+        UnitTest,
+        SyncTest
+      ) in sync(
+        new MissingNodeOnTheUnifiedLayout(
+          "declines",
+          unified = true,
+          followsConsensusLayer = false,
+          outcome = () => RepairOutcome.NotReached
+        ):
+          override def missing: MissingNodeException = new MissingAccountNodeException(hash, address, Some(locationOf))
+
+          @volatile var back: Option[BlockFetcher.InvalidateBlocksFrom] = None
+          def exhaustedFetch: Boolean =
+            back = back.orElse(
+              importerFetcher
+                .receiveWhile(50.millis, 50.millis) { case m: BlockFetcher.InvalidateBlocksFrom => m }
+                .headOption
+            )
+            back.isDefined
+          importFailing()
+          (1 to BlockImporter.MaxRepairDeclines).foreach { round =>
+            fetchAsked()
+            // an import is tried again at once for each of the declines but the last, which ends in the exhausted fetch
+            if round < BlockImporter.MaxRepairDeclines then deliverUntil(evaluations.get() >= round + 1)
+            else deliverUntil(exhaustedFetch)
+          }
+          // the last decline is an exhausted fetch: the fetcher goes back for the block, no peer blamed
+          back.get.toBlacklist shouldBe None
+          // a node that lands in the gap before the wait is written too, and counts as no decline
+          repairs.repaired.size should be >= BlockImporter.MaxRepairDeclines
+          evaluations.get() shouldBe BlockImporter.MaxRepairDeclines
+      )
+
+      "go on once a repair that was declined is written" taggedAs (UnitTest, SyncTest) in sync {
+        val answers = new java.util.concurrent.atomic.AtomicInteger(0)
+        new MissingNodeOnTheUnifiedLayout(
+          "declined-once",
+          unified = true,
+          followsConsensusLayer = true,
+          outcome = () => if answers.getAndIncrement() == 0 then RepairOutcome.NotReached else RepairOutcome.Written
+        ):
+          override def missing: MissingNodeException = new MissingAccountNodeException(hash, address, Some(locationOf))
+
+          importFailing()
+          fetchAsked()
+          deliverUntil(importedOk)
+          repairs.repaired.size should be >= 2
+          // not an exhausted fetch: the fetcher is not sent back for the block
+          importerFetcher.receiveWhile(500.millis) { case m: BlockFetcher.InvalidateBlocksFrom => m } shouldBe empty
+      }
+
+      "write nothing for a hole that names no position" taggedAs (UnitTest, SyncTest) in sync(
+        new MissingNodeOnTheUnifiedLayout("no-position", unified = true, followsConsensusLayer = false):
+          override def missing: MissingNodeException = new MissingAccountNodeException(hash, address, None)
+
+          importFailing()
+          fetchAsked()
+          deliverUntil(evaluations.get() >= 2)
+          // nothing names where it goes: the importer asks again rather than write by hash
+          repairs.repaired shouldBe empty
+          repairs.deleted shouldBe empty
+          hashStore.repaired shouldBe empty
+      )
+    }
+
+    "keep to the hash store, as before, with the unified layout off (spec 018 C5b, T212)" should {
+      for (chain, follows) <- List("Classic" -> false, "Ethereum" -> true) do
+        s"repairNode and deleteBadNode by hash on $chain, and never touch the position store" taggedAs (
+          UnitTest,
+          SyncTest
+        ) in sync(
+          new MissingNodeOnTheUnifiedLayout(s"hash-$follows", unified = false, followsConsensusLayer = follows):
+            override def missing: MissingNodeException =
+              new MissingAccountNodeException(hash, address, Some(locationOf))
+            importFailing()
+            fetchAsked()
+            deliverUntil(evaluations.get() >= 2)
+            import scala.jdk.CollectionConverters.*
+            hashStore.deleted.asScala.toSet shouldBe Set(hash)
+            // by hash, as before; the late-arriving write, if the node landed in the gap before the wait, is at the best block
+            hashStore.repaired.asScala.map((h, bytes, _) => (h, bytes)).toSet shouldBe Set((hash, node))
+            hashStore.repaired.asScala.map(_._3).toSet.subsetOf(Set(BigInt(15), BigInt(20))) shouldBe true
+            repairs.repaired shouldBe empty
+            repairs.deleted shouldBe empty
+        )
     }
 
     "catching the top" should {

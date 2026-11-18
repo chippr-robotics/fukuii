@@ -97,7 +97,7 @@ trait RegularSyncFixtures:
     val blacklist: CacheBasedBlacklist = CacheBasedBlacklist.empty(100)
     lazy val branchResolution = new BranchResolution(blockchainReader)
 
-    val stateStorage: StateStorage = stub[StateStorage]
+    lazy val stateStorage: StateStorage = stub[StateStorage]
     val evmCodeStorage: EvmCodeStorage = stub[EvmCodeStorage]
     // The session's exhaust count, handed to `regularSync` and through it to every importer it spawns.
     val exhausts: BlockImporter.ExhaustCount = new BlockImporter.ExhaustCount
