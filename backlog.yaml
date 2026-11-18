@@ -3234,3 +3234,13 @@ items:
       spec: specs/018-storage-engine-consolidation
     depends_on: [B-066]
     notes: "User decision 2026-11-18 (content faults only). #1935 records every refusal after the header per E.1; narrow it: bad nodes, assertions, window/trust failures are recorded; truncation, CRC, I/O and expected-hash mismatch clear the rows but are not recorded. Amend E.1/T292 and the docs."
+  - id: B-385
+    title: "PoW import: a heavier branch whose fork block weight is not stored (BranchResolution NoChainSwitch, feed not counted) is never escalated"
+    priority: P2
+    status: open
+    area: sync
+    opened: 2026-11-18
+    refs: []
+    links:
+      spec: specs/018-storage-engine-consolidation
+    notes: Found in B-383 (forge). BranchResolution logs 'ChainWeight not found' and returns NoChainSwitch; PowEscalationFeed.weighed also skips it. Same for a missing fork header not named by the hash index. Name what ends the wait (escalate as a local fault, or repair the weight).
