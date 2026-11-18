@@ -2957,10 +2957,11 @@ items:
   - id: B-362
     title: "Spec 030 S9: P2P node-ID allowlist at the RLPx handshake and every dial; discovery (incl. DNS) forced off"
     priority: P2
-    status: open
+    status: done
     area: p2p
     size: M
     opened: 2026-11-18
+    closed: 2026-11-18
     refs: [B-146]
     links:
       prs: [1915]
