@@ -140,15 +140,21 @@ release. **Stop sync before exporting**: an export takes hours and fails with `S
 **Failure and no retry.** The import is atomic on the unified layout: the rows are written at their positions in
 batches, and one synced batch then writes the anchor, `state.origin`, the window and the weight together, so a kill
 leaves either no anchor or the whole state, never an anchor over part of the rows. An archive that is refused after its
-header is read (a bad window, node, code or checksum, a block hash that is not the expected one), and an import that was
-killed, is **recorded as refused by its id** (keccak of the archive's header block; AppState key
-`checkpoint.import.refused`, the last 32 ids). The rows it wrote are cleared and the node syncs by SNAP from a clean
-state. The same archive is **not imported again on a restart**, since each attempt would wipe the SNAP progress made
-since. A different archive (another block) is imported without any flag.
+header is read because of its **content** (a bad window, node or code, a node that is not the one its parent names, an
+archive of another chain or genesis, or a total difficulty the node does not accept), and an import that was killed, is
+**recorded as refused by its id** (keccak of the archive's header block; AppState key `checkpoint.import.refused`, the
+last 32 ids). The rows it wrote are cleared and the node syncs by SNAP from a clean state. The same archive is **not
+imported again on a restart**, since each attempt would wipe the SNAP progress made since. A different archive (another
+block) is imported without any flag.
 
-To import a refused archive again (after correcting `checkpoint-sync-expected-hash`, or after replacing a truncated file
-whose header is the same), set `fukuii.sync.checkpoint-sync-retry-refused = true` for **one start**: while it is set,
-every start re-runs the import. A successful import removes the archive from the record.
+A fault that a new download or a corrected configuration mends is **not recorded**: a truncated file, a failed checksum, a
+read error, or a checkpoint block that is not the `checkpoint-sync-expected-hash` (that value may be the wrong one). The
+rows are still cleared and the node still starts SNAP, but the next start imports the archive again, with no flag, and a
+fresh download or a corrected hash then works by itself.
+
+To import an archive that was recorded as refused again (a file you have checked and still want), set
+`fukuii.sync.checkpoint-sync-retry-refused = true` for **one start**: while it is set, every start re-runs the import. A
+successful import removes the archive from the record.
 
 ## Timing cheat-sheet (live-observed reference points, June 2026)
 
@@ -169,4 +175,4 @@ every start re-runs the import. A successful import removes the archive from the
 | Healing, walk incomplete | Full re-walk (partial frontiers are never trusted); already-healed nodes stay healed |
 | Healing, walk complete (marker set) | Frontier resumes — the multi-hour walk is skipped |
 | Regular sync | Resumes from the last imported block |
-| Checkpoint import | The import key marks it: the archive is recorded as refused, its rows are cleared (unified layout), SNAP starts clean; the archive is not retried unless `checkpoint-sync-retry-refused` is set |
+| Checkpoint import | The import key marks it: its rows are cleared (unified layout), SNAP starts clean; the archive is recorded as refused if it was killed or its content was at fault, and is then not retried unless `checkpoint-sync-retry-refused` is set |

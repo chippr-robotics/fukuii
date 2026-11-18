@@ -59,10 +59,10 @@ class CheckpointImportGenesisAnchorSpec extends AnyWordSpec with Matchers with E
             val after = snapshot(d.source)
             val changed =
               (after.keySet ++ before.keySet).filter(k => before.get(k).map(_.toSeq) != after.get(k).map(_.toSeq))
-            withClue("only the record of the refused archive is new: ") {
-              changed.map(k => new String(k.array(), "UTF-8")).toSeq.map(_.drop(1)) shouldBe Seq(
-                Keys.CheckpointImportRefused
-              )
+            // B-384: a wrong expected hash may be the operator's config, so it is the one refusal here not recorded
+            withClue("only the record of the refused archive is new, and none for the expected hash: ") {
+              changed.map(k => new String(k.array(), "UTF-8")).toSeq.map(_.drop(1)) shouldBe
+                (if what == "expected block" then Seq.empty else Seq(Keys.CheckpointImportRefused))
             }
             d.state.anchor shouldBe Some(d.genesisRef)
             d.rows.isEmpty shouldBe true

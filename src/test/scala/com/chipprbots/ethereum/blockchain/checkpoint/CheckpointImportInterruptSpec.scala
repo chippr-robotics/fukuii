@@ -163,11 +163,13 @@ class CheckpointImportInterruptSpec
     }
     appState.isSnapSyncDone() shouldBe false
 
-  it should "leave the key when the CRC does not check" taggedAs UnitTest in new Datadir:
+  it should "leave the key when the CRC does not check, nameless: a failed checksum is not recorded (B-384)" taggedAs UnitTest in new Datadir:
     val bad = archive
     bad(bad.length - 1) = (bad(bad.length - 1) ^ 0xff).toByte
     importFrom(this, bad).isLeft shouldBe true
     appState.getCheckpointImportInProgress() shouldBe defined
+    appState.getCheckpointImportArchive() shouldBe None
+    appState.getRefusedCheckpointArchives() shouldBe empty
     appState.isSnapSyncDone() shouldBe false
 
   it should "clear the key on CRC success, in the one synced batch that writes the done flags" taggedAs UnitTest in new Datadir:
@@ -205,12 +207,10 @@ class CheckpointImportInterruptSpec
     appState.hasSnapHealInvariant() shouldBe false
 
     withClue("and it stays away when the retry succeeds: the done flags vouch for that root, not for this datadir: ") {
-      // the cut-off file has the same header block, so it is the same archive, and the refusal of it is recorded (spec 018
-      // E.1, no retry): the operator asks for the retry
-      importFrom(this, archive).left.value shouldBe a[CheckpointImporter.AlreadyRefused]
-      importerTrusting(trust, retryRefused = true)
-        .importFromStream(new ByteArrayInputStream(archive))
-        .isRight shouldBe true
+      // the cut-off file has the same header block, so it is the same archive. A cut-off stream is not the archive's
+      // content (B-384): it is not recorded as refused, so the retry needs no flag
+      appState.getRefusedCheckpointArchives() shouldBe empty
+      importFrom(this, archive).isRight shouldBe true
       appState.hasSnapHealInvariant() shouldBe false
       appState.getCheckpointImportInProgress() shouldBe None
     }

@@ -1735,10 +1735,19 @@ No BlockDiff is written for the checkpoint block (it has no prior), as for a SNA
   names no archive, so nothing is recorded for it). The operator's flag is `fukuii.sync.checkpoint-sync-retry-refused`
   (default false): the importer imports a refused archive when it is set, and a success removes the id in the same batch as
   the anchor. **Both layouts record** a refusal and skip a refused archive (the hash layout has no clear: it keeps its key,
-  as before). Recorded as the archive's fault: every `BadFormat` after the header block is read (a CRC failure and a
-  truncated stream included, and so a `UnexpectedBlockHash` caused by a wrong operator hash) and a refused final batch. Not
-  recorded: `NoExpectedBlockHash` (a configuration error), a datadir that holds the state of a block above the genesis,
-  and an archive whose header block cannot be read (it has no id).
+  as before). **Only a content fault is recorded** (user decision, 2026-11-18, B-384; it narrows PR3, which recorded
+  every refusal after the header block).
+  - Recorded: a bad node or code entry, a hash mismatch against the frame, each of the five assertions, a code-completeness
+    gap, a window refusal (it does not chain, its bodies, a non-canonical RLP), the trust checks that are about the archive
+    itself (chain id or genesis, the TD and TTD rules), and a refused final batch.
+  - Not recorded: a truncated stream, a CRC failure, an I/O or read error, an `UnexpectedBlockHash` (the operator's config
+    may be the wrong one), `NoExpectedBlockHash` (a configuration error), a datadir that holds the state of a block above
+    the genesis, and an archive whose header block cannot be read (it has no id). The partial `t`/`u` rows are still cleared
+    through the reset mark, exactly as for a recorded refusal; the archive is only not recorded, so a new download or a
+    corrected config is imported at the next start with no flag. On the hash layout the key stays, and the importer
+    rewrites it without the archive's id, so that the next start does not record it as a killed import.
+  - The class is a property of the refusal (`Refusal.archivesFault`, `DecodeError.archivesFault`), not matched by text.
+  - A kill is still recorded: nothing says what the kill interrupted.
 
 **Golden streams** (S0 item 8a; contents, review, 2026-11-18). Before PR1 merges, these streams are pinned byte for byte.
 Together they carry everything the review listed. One stream cannot carry both a PoS header and a window body, because the

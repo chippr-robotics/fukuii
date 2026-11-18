@@ -31,11 +31,20 @@ class CheckpointImportRetrySpec extends AnyWordSpec with Matchers with EitherVal
   private val tipRef = BlockRef(tipA.hash.value, tipA.number.value, tipA.stateRoot.value)
   private val idA: ByteString = CheckpointArchive.archiveIdOf(decode(bytesA)._1)
 
-  /** The archive with its checksum spoiled: every node is written before the import finds out. */
+  /** The archive with a node spoiled: a content fault, found after the nodes above it were written. (A failed checksum
+    * is not one: B-384, [[CheckpointImportNoRetryContentSpec]].)
+    */
   private def badCrc: Array[Byte] =
-    val bytes = bytesA.clone()
-    bytes(bytes.length - 1) = (bytes(bytes.length - 1) ^ 0xff).toByte
-    bytes
+    val (header, entries) = decode(bytesA)
+    var nodes = 0
+    val changed = entries.map {
+      case CheckpointArchive.NodeEntry(b) =>
+        nodes += 1
+        if nodes == 2 then CheckpointArchive.NodeEntry(b.updated(b.length - 1, (b.last ^ 1).toByte))
+        else CheckpointArchive.NodeEntry(b)
+      case other => other
+    }
+    CheckpointV2ImportKit.Raw.rebuild(header, changed)
 
   private def fresh(batch: Int = CheckpointImporter.NodeBatchSize): Datadir =
     val d = new Datadir(new Faulty, genesisA, batch)
@@ -49,7 +58,7 @@ class CheckpointImportRetrySpec extends AnyWordSpec with Matchers with EitherVal
 
     "have its rows cleared through the reset mark, be recorded by its id, and leave the datadir clean for SNAP" taggedAs UnitTest in {
       val d = fresh()
-      // the archive's own id, which the exporter's header block names: the CRC refusal is the archive's
+      // the archive's own id, which the exporter's header block names: a spoiled node is the archive's fault
       d.importBytes(badCrc, trustA).left.value shouldBe a[BadFormat]
       d.appState.getRefusedCheckpointArchives() shouldBe Seq(idA)
       d.rows.isEmpty shouldBe true
