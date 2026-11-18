@@ -2929,3 +2929,15 @@ items:
     links:
       spec: specs/030-zero-trust-tls
     notes: "US7 1-4; FR-050-055, 058. ~500+800 plus a 3-node IT. Can start now. Review: herald."
+  - id: B-363
+    title: "Spec 030 S10: admin_ allowlist methods (add/remove/get) with atomic file persistence"
+    priority: P2
+    status: open
+    area: p2p
+    size: M
+    opened: 2026-11-18
+    refs: [B-146]
+    links:
+      spec: specs/030-zero-trust-tls
+    depends_on: [B-362]
+    notes: "US7 5-7; FR-056-059. ~350+600 plus a crash IT. Review: herald, conduit."
