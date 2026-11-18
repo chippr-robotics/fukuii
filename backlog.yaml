@@ -2451,12 +2451,17 @@ items:
   - id: B-305
     title: "Tests leave their RocksDB and work directories in the temp directory: 25 GB after a day of runs filled a session's disk"
     priority: P2
-    status: open
+    status: claimed
     area: ci
     size: S
     opened: 2026-11-15
     refs: []
     links: {}
+    claim:
+      by: cloud-dc960fdc
+      agent: vault-small
+      since: 2026-11-18T13:37:30Z
+      heartbeat: 2026-11-18T13:37:30Z
     notes: "Found 2026-11-15: a testEssential run died with 'No space left on device' after about 15 runs in one container. /tmp held 25 GB of directories no spec removed. The two largest per run are specs added in C4e (prefixes sync-fork-rewind-rocksdb and pow-prefix-reimport-rocksdb: a 75 MB RocksDB directory each, never deleted); then chain-io, fukuii-unique-codehashes-, fukuii-contract-storage-, snap-recovery-test, testdb, snap-good-peers and others. Each spec deletes what it creates (afterAll, or a kit that owns the directory); CI runners are fresh each run and do not see it."
   - id: B-314
     title: "C5 gate: hive engine re-org suites with the guard on, once part 10 starts the importer there (B-297 item 5)"
