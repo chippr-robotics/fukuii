@@ -666,24 +666,20 @@ items:
   - id: B-066
     title: "Spec 018 Track C C5c: checkpoint format version 2 and the position-assigning importer (item 10)"
     priority: P2
-    status: review
+    status: done
     area: storage
     size: M
     opened: 2026-11-07
+    closed: 2026-11-18
     refs: [018 C5c]
     links:
       prs: [1931, 1932, 1934, 1935]
       spec: specs/018-storage-engine-consolidation
     depends_on: [B-065]
-    claim:
-      by: cloud-dc960fdc
-      agent: spec-b066
-      since: 2026-11-18T19:02:12Z
-      heartbeat: 2026-11-18T21:19:20Z
     notes: |-
-      2026-11-18 in-progress: C5c: spec pinned #1931 (format signed by forge + beacon with changes, applied). PR1 codec/exporter/golden #1932 stacked on it. PR2 (importer) next; B-378 release blocker ties PR1 to PR2. PR3 atomicity after.
       2026-11-18 in-progress: C5c: spec merged #1931. PR1 #1932 (codec/exporter, signed). PR2 #1934 (importer) stacked on it; merge back to back (B-378). PR3 (position sink, atomic import, no-retry) next. B-379: pin per-chain expected hashes from EG-9/EG-12.
       2026-11-18 review: C5c PR1+PR2 merged (#1932). PR3 (unified-layout atomic import, no-retry) #1935. Open: user decision whether truncation/CRC and expected-hash mismatches are recorded as refused.
+      2026-11-18 done: C5c complete: spec #1931, PR1+PR2 #1932 (format signed by forge+beacon), PR3 #1935. Live-host M9/T233, T234 decision, EG-9/EG-12 pending; follow-ups B-377, B-379, B-380. Open user choice: record only content faults as refused (vs truncation/expected-hash too).
   - id: B-067
     title: "Spec 018 Track C C6: ETC enablement and ETC mainnet readiness"
     priority: P2
