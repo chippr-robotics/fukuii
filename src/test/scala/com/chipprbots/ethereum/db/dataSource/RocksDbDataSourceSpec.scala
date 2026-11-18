@@ -506,3 +506,19 @@ class RocksDbDataSourceSpec extends AnyFlatSpec with Matchers:
     ds.properties() shouldBe None
     lockIsFree()
   }
+
+  "RocksDbDataSource" should "set the WAL recovery mode explicitly to point-in-time (B-078)" taggedAs (
+    UnitTest,
+    DatabaseTest
+  ) in {
+    RocksDbDataSource.WalRecoveryMode shouldBe org.rocksdb.WALRecoveryMode.PointInTimeRecovery
+    val dbPath = Files.createTempDirectory("rocksdb-wal-mode-test").toAbsolutePath.toString
+    val ds = RocksDbDataSource(config(dbPath, statisticsEnabled = false), Namespaces.nsSeq)
+    try ds.walRecoveryMode() shouldBe org.rocksdb.WALRecoveryMode.PointInTimeRecovery
+    finally
+      ds.close()
+      def rm(f: File): Unit =
+        Option(f.listFiles()).foreach(_.foreach(rm))
+        val _ = f.delete()
+      rm(new File(dbPath))
+  }
