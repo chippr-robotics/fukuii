@@ -7,17 +7,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Added
-- **Mutual TLS on the JSON-RPC HTTP and WebSocket listeners (spec 030 S2, B-355).** `network.rpc.http.tls.client-auth`
-  and the new `network.rpc.ws.tls { enabled, profile, client-auth }` take `none`, `want` or `need`. Under `want` and
-  `need` the profile's `truststore` verifies every presented client certificate; `need` also refuses a client with
-  none, during the handshake, before any HTTP is read. A refused handshake counts in
-  `app_tls_handshake_failures_total{listener, reason}` (`no_client_cert`, `untrusted_client_cert`,
-  `expired_client_cert`, `protocol`, `other`) and is logged at WARN at most once per remote address per minute, with
-  the number suppressed. HTTP and WS on one port must take the same TLS setting, or the node refuses to start. A WSS
-  listener that cannot bind stops the node. `tls/gen-cert.sh ca`, `server --ca` and `client --ca` issue a test CA (with
-  a truststore) and the certificates it signs; the command-less form still writes a self-signed server certificate.
-
 ### Changed
 - **`app_engine_newpayload_invalid` counts INVALID answers alone (B-193).** It also counted every `engine_newPayload`
   answered ACCEPTED, and any status it did not know. ACCEPTED has its own series, `app_engine_newpayload_accepted`
@@ -435,6 +424,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `.env` files.
 
 ### Added
+- **Client-certificate identities select the JSON-RPC namespaces (spec 030 S3, B-356).** On an HTTP or WS listener
+  with `tls.client-auth = want` or `need`, `fukuii.network.rpc.client-identities = [ { name, match { san-dns,
+  san-uri, subject-cn, sha256 }, apis } ]` maps a verified client certificate to the namespaces it is served. The
+  first matching rule wins, and all of its match keys must hold (exact match). A rule's `apis` is a grant: it may name
+  namespaces the listener's own `apis` does not, such as `admin` or `debug`. A caller with no certificate, or one no
+  rule matches, is served the listener's own `apis`. `graphql` in a rule grants `POST /graphql`; a matched caller
+  whose rule does not list it is answered as if GraphQL were off. A refused call answers `-32601`, as a disabled
+  namespace does, and counts in `app_rpc_namespace_denials_total{identity_rule, namespace}` (a rule name, `anonymous`
+  or `unmatched`). `rpc_modules` lists the caller's own set. On WebSocket the identity is fixed at the upgrade. The
+  start-up line of each such listener lists every rule's grant. A rule that names `graphql` while GraphQL is off, or a
+  rule list with no `want` or `need` listener enabled, refuses the start. The non-loopback warning still reads the
+  listener's own `apis` only.
+- **Mutual TLS on the JSON-RPC HTTP and WebSocket listeners (spec 030 S2, B-355).** `network.rpc.http.tls.client-auth`
+  and the new `network.rpc.ws.tls { enabled, profile, client-auth }` take `none`, `want` or `need`. Under `want` and
+  `need` the profile's `truststore` verifies every presented client certificate; `need` also refuses a client with
+  none, during the handshake, before any HTTP is read. A refused handshake counts in
+  `app_tls_handshake_failures_total{listener, reason}` (`no_client_cert`, `untrusted_client_cert`,
+  `expired_client_cert`, `protocol`, `other`) and is logged at WARN at most once per remote address per minute, with
+  the number suppressed. HTTP and WS on one port must take the same TLS setting, or the node refuses to start. A WSS
+  listener that cannot bind stops the node. `tls/gen-cert.sh ca`, `server --ca` and `client --ca` issue a test CA (with
+  a truststore) and the certificates it signs; the command-less form still writes a self-signed server certificate.
 - **The `--tui` dashboard can act on the node (spec 029 slice 7, ADR OPS-004).** The Ops view (`9`) lists the
   actions; each can be typed at the `:` prompt from any view, and `a` acts on the selected peer, miner or action.
   - **What it can do.** Read: `config [filter]` (the effective configuration, secrets hidden), `tunables`, `deps`,

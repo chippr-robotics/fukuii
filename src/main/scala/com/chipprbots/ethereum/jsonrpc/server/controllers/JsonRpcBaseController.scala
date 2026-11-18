@@ -25,6 +25,7 @@ import com.chipprbots.ethereum.jsonrpc.JsonRpcRequest
 import com.chipprbots.ethereum.jsonrpc.JsonRpcResponse
 import com.chipprbots.ethereum.jsonrpc.NodeJsonRpcHealthChecker.JsonRpcHealthConfig
 import com.chipprbots.ethereum.jsonrpc.RpcCallStats
+import com.chipprbots.ethereum.jsonrpc.RpcNamespaceDenials
 import com.chipprbots.ethereum.jsonrpc.StateRead
 import com.chipprbots.ethereum.jsonrpc.serialization.JsonEncoder
 import com.chipprbots.ethereum.jsonrpc.serialization.JsonMethodDecoder
@@ -57,6 +58,12 @@ trait JsonRpcBaseController:
     */
   def transportName: String = RpcCallStats.OtherTransport
 
+  /** The identity this controller serves (spec 030 FR-024): a rule's name, `anonymous` or `unmatched`, on a listener
+    * that asks for client certificates. When set, a call to a namespace the caller is not granted is counted in
+    * `rpc_namespace_denials_total`. `None` on every other controller, which counts nothing new.
+    */
+  def identityRule: Option[String] = None
+
   /** Where this controller's calls are counted for the dashboard: the node's own. */
   protected def callStats: RpcCallStats = RpcCallStats.Node
 
@@ -78,6 +85,12 @@ trait JsonRpcBaseController:
     val notFoundFn: PartialFunction[JsonRpcRequest, IO[JsonRpcResponse]] = { case _ =>
       JsonRpcControllerMetrics.NotFoundMethodsCounter.increment()
       missing.set(true)
+      // A known namespace this caller is not granted is a denial; an unknown method is not (FR-024).
+      identityRule.foreach { rule =>
+        val namespace = RpcNamespaceDenials.namespaceOf(request.method)
+        if apisHandleFns.contains(namespace) && !enabledApis.contains(namespace) then
+          RpcNamespaceDenials.record(rule, namespace, request.method, transportName)
+      }
       IO.pure(errorResponse(request, MethodNotFound))
     }
 

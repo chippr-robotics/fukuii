@@ -111,20 +111,20 @@ that exercises it.
 
 ### Tests first
 
-- [ ] T029 [P] [US3] `T/tls/IdentityRulesSpec.scala`: parsing (unique names, label-safe, known namespaces or `graphql`, at least one match key), first match wins, AND of keys, case rules, fingerprint with or without colons; ScalaCheck: a rule never matches a certificate that does not carry its values
-- [ ] T030 [P] [US3] `T/jsonrpc/server/http/IdentityRulesRouteSpec.scala`: US3 scenarios 1–5 over HTTPS: denial = `-32601` and counted with the rule name; unmatched and anonymous get the transport set; a rule grants `admin` beyond `eth,net,web3`; batch mixes; `rpc_modules` returns the caller's set; GraphQL refused unless the rule lists `graphql` (FR-021–FR-025, FR-028)
-- [ ] T031 [P] [US3] `T/jsonrpc/server/http/IdentityRulesWsSpec.scala`: identity fixed at the upgrade (FR-026)
-- [ ] T032 [P] [US3] `T/tls/ForgedIdentitySpec.scala`: a self-signed certificate copying a rule's SAN and CN fails the handshake and never reaches the rules (Security Considerations)
-- [ ] T033 [P] [US3] Extend the `RpcExposureCheck` spec in `T/jsonrpc/server/`: a namespace granted only by a rule does not warn (FR-027)
-- [ ] T034 [P] [US3] `T/tls/IdentityStartupSpec.scala`: a rule naming `graphql` with `rpc.graphql.enabled = false` refuses the start; a non-empty rule list with no want/need listener refuses the start (contracts/config.md)
+- [x] T029 [P] [US3] `T/tls/IdentityRulesSpec.scala`: parsing (unique names, label-safe, known namespaces or `graphql`, at least one match key), first match wins, AND of keys, case rules, fingerprint with or without colons; ScalaCheck: a rule never matches a certificate that does not carry its values
+- [x] T030 [P] [US3] `T/jsonrpc/server/http/IdentityRulesRouteSpec.scala`: US3 scenarios 1–5 over HTTPS: denial = `-32601` and counted with the rule name; unmatched and anonymous get the transport set; a rule grants `admin` beyond `eth,net,web3`; batch mixes; `rpc_modules` returns the caller's set; GraphQL refused unless the rule lists `graphql` (FR-021–FR-025, FR-028)
+- [x] T031 [P] [US3] `T/jsonrpc/server/http/IdentityRulesWsSpec.scala`: identity fixed at the upgrade (FR-026)
+- [x] T032 [P] [US3] `T/tls/ForgedIdentitySpec.scala`: a self-signed certificate copying a rule's SAN and CN fails the handshake and never reaches the rules (Security Considerations)
+- [x] T033 [P] [US3] Extend the `RpcExposureCheck` spec in `T/jsonrpc/server/`: a namespace granted only by a rule does not warn (FR-027)
+- [x] T034 [P] [US3] `T/tls/IdentityStartupSpec.scala`: a rule naming `graphql` with `rpc.graphql.enabled = false` refuses the start; a non-empty rule list with no want/need listener refuses the start (contracts/config.md)
 
 ### Implementation
 
-- [ ] T035 [US3] `M/tls/IdentityRules.scala`: `CertMatch`, `IdentityRule`, `IdentityRules`, `Caller`, `effectiveApis`, `graphQlAllowed`, session cache with generation (data-model.md, research D-3, D-4)
-- [ ] T036 [US3] `M/jsonrpc/JsonRpcController.scala`: a `forApis` copy per rule, built when the rules load; `rpc_namespace_denials_total{identity_rule, namespace}` at the not-found path for a namespace outside the caller's set (FR-024)
-- [ ] T037 [US3] `M/jsonrpc/server/http/JsonRpcHttpServer.scala`: resolve the caller from `AttributeKeys.sslSession`, dispatch to its controller (batches included), gate `/graphql` (FR-028) (depends on T035, T036)
-- [ ] T038 [US3] `M/jsonrpc/server/http/JsonRpcWsServer.scala`: resolve at the upgrade, hand the controller to the connection (FR-026)
-- [ ] T039 [US3] `M/jsonrpc/server/RpcExposureCheck.scala`: evaluate the transport set only (FR-027); startup lines per rule (FR-060); `network.rpc.client-identities` in `network.conf`
+- [x] T035 [US3] `M/tls/IdentityRules.scala`: `CertMatch`, `IdentityRule`, `IdentityRules`, `Caller`, `effectiveApis`, `graphQlAllowed`, session cache with generation (data-model.md, research D-3, D-4)
+- [x] T036 [US3] `M/jsonrpc/JsonRpcController.scala`: a `forApis` copy per rule, built when the rules load; `rpc_namespace_denials_total{identity_rule, namespace}` at the not-found path for a namespace outside the caller's set (FR-024)
+- [x] T037 [US3] `M/jsonrpc/server/http/JsonRpcHttpServer.scala`: resolve the caller from `AttributeKeys.sslSession`, dispatch to its controller (batches included), gate `/graphql` (FR-028) (depends on T035, T036)
+- [x] T038 [US3] `M/jsonrpc/server/http/JsonRpcWsServer.scala`: resolve at the upgrade, hand the controller to the connection (FR-026)
+- [x] T039 [US3] `M/jsonrpc/server/RpcExposureCheck.scala`: evaluate the transport set only (FR-027); startup lines per rule (FR-060); `network.rpc.client-identities` in `network.conf`
 - [ ] T040 [US3] `sbt pp`, `formatCheck`; S3's PR (note in the PR body that FR-028 awaits the user's confirmation, and which tasks drop it if declined: T030's GraphQL cases, T034's first case, T037's gate)
 
 ---

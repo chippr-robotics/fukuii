@@ -19,10 +19,16 @@ class SecureJsonRpcHttpServer(
     val jsonRpcHealthChecker: JsonRpcHealthChecker,
     val config: JsonRpcHttpServerConfig,
     getTlsContext: () => Either[TlsConfigError, TlsServerContext],
-    override val graphQLService: Option[GraphQLService] = None
+    override val graphQLService: Option[GraphQLService] = None,
+    tlsCallers: Option[RpcCallers] = None
 )(implicit val actorSystem: ActorSystem)
     extends JsonRpcHttpServer
     with Logger:
+
+  /** The identities of a listener that asks for client certificates (spec 030 FR-020); else every request is served by
+    * [[jsonRpcController]].
+    */
+  override val callers: RpcCallers = tlsCallers.getOrElse(RpcCallers.none(jsonRpcController))
 
   def run(): scala.concurrent.Future[Http.ServerBinding] = lifecycle.start()
 

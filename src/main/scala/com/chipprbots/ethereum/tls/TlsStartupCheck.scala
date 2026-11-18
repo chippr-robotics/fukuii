@@ -21,18 +21,46 @@ object TlsStartupCheck:
       profile: String,
       subject: String,
       notAfter: String,
-      legacy: Boolean
+      legacy: Boolean,
+      rules: Seq[IdentityRule] = Nil
   ):
     def render: String =
       s"TLS listener ${listener.label} $scheme://$interface:$port client-auth=${clientAuth.toString.toLowerCase} " +
-        s"profile=$profile cert=\"$subject\" notAfter=$notAfter"
+        s"profile=$profile cert=\"$subject\" notAfter=$notAfter" + (if rules.nonEmpty then s" rules=${rules.size}"
+                                                                    else "")
+
+    /** The listener's line, then one per identity rule with the namespaces it grants (FR-060, FR-027). */
+    def renderAll: Seq[String] =
+      render +: rules.map(r =>
+        s"TLS listener ${listener.label} rule ${r.name}: ${(r.apis :+ "rpc").distinct.mkString(",")}"
+      )
+
+  /** The namespaces a rule may name when the caller gives none: those of `ApisBuilder.available`. */
+  val KnownApis: Seq[String] =
+    Seq(
+      "eth",
+      "miner",
+      "web3",
+      "net",
+      "personal",
+      "fukuii",
+      "mcp",
+      "debug",
+      "test",
+      "testing",
+      "qa",
+      "admin",
+      "txpool",
+      "trace",
+      "subscribe"
+    )
 
   /** @param config
     *   the `fukuii` section of the node's configuration
     * @return
     *   one line per enabled TLS listener, or the refusal message (it starts with [[RefusalPrefix]])
     */
-  def run(config: Config): Either[String, Seq[Line]] =
+  def run(config: Config, availableApis: Seq[String] = KnownApis): Either[String, Seq[Line]] =
     val httpEnabled = config.getBoolean("network.rpc.http.enabled")
     val wsEnabled = config.hasPath("network.rpc.ws.enabled") && config.getBoolean("network.rpc.ws.enabled")
     val result = for
@@ -44,15 +72,34 @@ object TlsStartupCheck:
       _ <-
         if httpEnabled && wsEnabled then samePort(config, http, ws)
         else Right(())
-      httpLine <- line(config, "network.rpc.http", http)
-      wsLine <- line(config, "network.rpc.ws", ws)
+      rules <- IdentityRules.parse(config, availableApis)
+      _ <- rulesCanMatch(rules, http.toList ++ ws.toList)
+      httpLine <- line(config, "network.rpc.http", http, rules)
+      wsLine <- line(config, "network.rpc.ws", ws, rules)
     yield httpLine.toList ++ wsLine.toList
     result.left.map(e => RefusalPrefix + e.message)
+
+  /** Whether a listener resolves client identities: one that asks for client certificates (`want` or `need`). */
+  def resolvesIdentities(listener: ResolvedListener): Boolean = listener.listener.clientAuth != ClientAuth.None
+
+  /** A non-empty rule list needs an enabled listener that asks for certificates, or no rule could ever match
+    * (contracts/config.md).
+    */
+  private def rulesCanMatch(rules: IdentityRules, listeners: Seq[ResolvedListener]): Either[TlsConfigError, Unit] =
+    Either.cond(
+      rules.isEmpty || listeners.exists(resolvesIdentities),
+      (),
+      TlsConfigError(
+        s"${TlsConfig.Prefix}.network.rpc.client-identities: ${rules.rules.size} rule(s), but no enabled HTTP or WS " +
+          "listener has tls.client-auth = want or need, so no rule could ever match"
+      )
+    )
 
   private def line(
       config: Config,
       key: String,
-      resolved: Option[ResolvedListener]
+      resolved: Option[ResolvedListener],
+      rules: IdentityRules
   ): Either[TlsConfigError, Option[Line]] =
     resolved match
       case None => Right(None)
@@ -68,7 +115,8 @@ object TlsStartupCheck:
               listener.profile.name,
               material.leaf.map(_.getSubjectX500Principal.getName).getOrElse(""),
               material.leaf.map(_.getNotAfter.toInstant.atZone(ZoneOffset.UTC).toLocalDate.toString).getOrElse(""),
-              listener.legacy
+              listener.legacy,
+              if resolvesIdentities(listener) then rules.rules else Nil
             )
           )
         }

@@ -1299,9 +1299,46 @@ trait GraphQLServiceBuilder:
         )
       )
 
+/** The client-certificate identities of the HTTP and WS listeners (spec 030 FR-020–FR-028). A listener resolves
+  * identities only where its `tls.client-auth` is `want` or `need`; each rule's controller is built once, here.
+  */
+trait RpcIdentityBuilder:
+  self: JSONRpcControllerBuilder & JSONRpcConfigBuilder & InstanceConfigProvider =>
+
+  import com.chipprbots.ethereum.jsonrpc.server.http.RpcCallers
+  import com.chipprbots.ethereum.tls.*
+
+  // The start-up check (StdNode.checkTlsAtStart) refuses the start on a rule that does not parse, before any server
+  // is built, so a Left here is never reached by a node that starts.
+  private lazy val identityRules: IdentityRules =
+    IdentityRules
+      .parse(instanceConfig.config, availableApis)
+      .fold(e => throw new IllegalStateException(e.message), identity)
+
+  private def callersFor(
+      listener: Either[TlsConfigError, Option[ResolvedListener]],
+      controller: JsonRpcController,
+      transportApis: Seq[String]
+  ): Option[RpcCallers] =
+    listener.toOption.flatten.filter(TlsStartupCheck.resolvesIdentities).map { _ =>
+      RpcCallers(
+        identityRules,
+        transportApis,
+        (apis, label) => controller.forApis(apis).forCaller(label),
+        IdentityRules.graphQlEnabled(instanceConfig.config)
+      )
+    }
+
+  lazy val rpcHttpCallers: Option[RpcCallers] =
+    callersFor(TlsConfig.rpcHttp(instanceConfig.config), jsonRpcHttpController, jsonRpcConfig.httpApis)
+
+  lazy val rpcWsCallers: Option[RpcCallers] =
+    callersFor(TlsConfig.rpcWs(instanceConfig.config), jsonRpcWsController, jsonRpcConfig.wsApis)
+
 trait JSONRpcHttpServerBuilder:
   self: ActorSystemBuilder & BlockchainBuilder & JSONRpcControllerBuilder & JSONRpcHealthcheckerBuilder &
-    SecureRandomBuilder & JSONRpcConfigBuilder & SSLContextBuilder & GraphQLServiceBuilder & InstanceConfigProvider =>
+    SecureRandomBuilder & JSONRpcConfigBuilder & SSLContextBuilder & GraphQLServiceBuilder & InstanceConfigProvider &
+    RpcIdentityBuilder =>
 
   lazy val maybeJsonRpcHttpServer: Either[String, JsonRpcHttpServer] =
     given org.apache.pekko.actor.ActorSystem = classicSystem
@@ -1310,7 +1347,8 @@ trait JSONRpcHttpServerBuilder:
       jsonRpcHealthChecker,
       jsonRpcConfig.httpServerConfig,
       () => com.chipprbots.ethereum.tls.TlsServerEngine.rpcHttp(instanceConfig.config, secureRandom),
-      maybeGraphQLService
+      maybeGraphQLService,
+      rpcHttpCallers
     )
 
 trait JSONRpcIpcServerBuilder:
@@ -1335,14 +1373,15 @@ trait SubscriptionManagerBuilder:
 
 trait JSONRpcWsServerBuilder:
   self: ActorSystemBuilder & JSONRpcControllerBuilder & JSONRpcConfigBuilder & SubscriptionManagerBuilder &
-    SecureRandomBuilder & InstanceConfigProvider =>
+    SecureRandomBuilder & InstanceConfigProvider & RpcIdentityBuilder =>
 
   lazy val jsonRpcWsServer: com.chipprbots.ethereum.jsonrpc.server.http.JsonRpcWsServer =
     new com.chipprbots.ethereum.jsonrpc.server.http.JsonRpcWsServer(
       jsonRpcWsController,
       subscriptionManager,
       jsonRpcConfig.wsServerConfig,
-      () => com.chipprbots.ethereum.tls.TlsServerEngine.rpcWs(instanceConfig.config, secureRandom)
+      () => com.chipprbots.ethereum.tls.TlsServerEngine.rpcWs(instanceConfig.config, secureRandom),
+      rpcWsCallers
     )(using classicSystem)
 
 trait OmmersPoolBuilder:
@@ -1681,6 +1720,7 @@ trait Node
     with JSONRpcControllerBuilder
     with SSLContextBuilder
     with GraphQLServiceBuilder
+    with RpcIdentityBuilder
     with JSONRpcHttpServerBuilder
     with JSONRpcIpcServerBuilder
     with EventTopicsBuilder

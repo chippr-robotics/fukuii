@@ -67,7 +67,9 @@ case class JsonRpcController(
     // share it, so the node logs the warning once, however many transports and calls there are.
     etherbaseAliasWarned: AtomicBoolean = new AtomicBoolean(false),
     // The transport this instance serves, for the dashboard's per-transport totals (see `onTransport`).
-    transport: String = RpcCallStats.OtherTransport
+    transport: String = RpcCallStats.OtherTransport,
+    // The client-certificate identity this instance serves (see `forCaller`); None: not an identity's controller.
+    callerIdentity: Option[String] = None
 ) extends ApisBuilder
     with Logger
     with JsonRpcBaseController:
@@ -127,6 +129,14 @@ case class JsonRpcController(
   def onTransport(name: String): JsonRpcController = copy(transport = name)
 
   override def transportName: String = transport
+
+  override def identityRule: Option[String] = callerIdentity
+
+  /** A copy of this controller that serves the client-certificate identity `label` (a rule's name, `anonymous` or
+    * `unmatched`, spec 030 FR-024): it answers exactly as this one does, and counts the calls it refuses for want of a
+    * namespace under that label.
+    */
+  def forCaller(label: String): JsonRpcController = copy(callerIdentity = Some(label))
 
   /** One controller per transport, each answering the namespaces of that transport's key (`network.rpc.http.apis`,
     * `ws.apis`, `ipc.apis`, each falling back to `network.rpc.apis`). The node gives each server its own.
