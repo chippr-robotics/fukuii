@@ -63,7 +63,7 @@ items:
       by: cloud-dc960fdc
       agent: beacon-b005
       since: 2026-11-17T23:33:38Z
-      heartbeat: 2026-11-18T03:02:21Z
+      heartbeat: 2026-11-18T03:02:45Z
     notes: |-
       beacon. engine spec paris.md:178-185; Nethermind does the same.
       Includes B-271 (missing parent/state answered ACCEPTED; check geth delayPayloadImport) and issue #1694.
@@ -640,7 +640,7 @@ items:
       by: cloud-dc960fdc
       agent: main
       since: 2026-11-15T17:59:02Z
-      heartbeat: 2026-11-18T03:02:31Z
+      heartbeat: 2026-11-18T03:02:45Z
     notes: |-
       cloud-dc960fdc: heartbeat or release by 11-17 17:06 UTC; C5a code merged (#1855-#1880), T209 + Sepolia fresh sync + 24 h remain.
       2026-11-18 blocked: C5a code merged (#1855-#1880 and follow-ups). Remaining gates need a live host: T209, a fresh Sepolia sync and 24 h following the head. Not doable in the cloud container.
@@ -1264,7 +1264,7 @@ items:
       by: cloud-dc960fdc
       agent: spec-b146
       since: 2026-11-17T23:33:57Z
-      heartbeat: 2026-11-18T03:02:25Z
+      heartbeat: 2026-11-18T03:02:45Z
     notes: |-
       Shared tls block, client-auth need/want, truststore, rotation, cert-identity to namespace map, outbound factory; node-ID allowlist for consortium P2P. Spec Kit first (Principle VI).
       2026-11-18 blocked: Spec 030 draft merged (#1903). /speckit-clarify questions Q1-Q5 await the user: Engine API mTLS, non-loopback policy, identity rules (narrow vs grant, GraphQL), P2P allowlist runtime edits/discovery, revocation. Plan/tasks after the answers.
@@ -2449,7 +2449,7 @@ items:
       by: cloud-dc960fdc
       agent: hive-b314
       since: 2026-11-18T00:57:40Z
-      heartbeat: 2026-11-18T03:02:28Z
+      heartbeat: 2026-11-18T03:02:45Z
     notes: |-
       hive client has no switch for fukuii.state.path-live; needs one, and a host
       2026-11-18 blocked: The hive client switch for path-live landed (#1910). Remaining: the gate run itself, which needs a hive host or a dispatch: gh workflow run hive-engine.yml --ref staging -f path_live=true -f sim_limit='/re-?org' (or scripts/hive/local.sh ethereum/engine --limit '/re-?org' --path-live).
@@ -2782,7 +2782,7 @@ items:
       by: cloud-dc960fdc
       agent: main
       since: 2026-11-18T02:31:51Z
-      heartbeat: 2026-11-18T02:31:54Z
+      heartbeat: 2026-11-18T03:02:45Z
     notes: "Seen while verifying B-298, reproduced with staging sources only: 'fetch the bodies missing below a block whose ommers cannot be checked', 'free the slot of a fetch of ancestor bodies ... during a fork recovery', 'ask again for ancestor bodies ... deadline'."
   - id: B-350
     title: "FastSyncBranchResolverActorSpec: scripted binary-search tests flake ~1 in 3 (reply published before the request handler subscribes)"
