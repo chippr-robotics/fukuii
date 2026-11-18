@@ -2858,3 +2858,15 @@ items:
       spec: specs/030-zero-trust-tls
     depends_on: [B-355]
     notes: "US3; FR-020-028. ~450+700. Review: conduit, prism."
+  - id: B-357
+    title: "Spec 030 S4: reload of TLS profiles and identity rules without a restart; expiry gauge"
+    priority: P2
+    status: open
+    area: rpc
+    size: M
+    opened: 2026-11-18
+    refs: [B-146]
+    links:
+      spec: specs/030-zero-trust-tls
+    depends_on: [B-354, B-356]
+    notes: "US4; FR-030-033. ~400+600 plus an IT. Review: conduit."
