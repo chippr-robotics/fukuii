@@ -676,14 +676,14 @@ items:
     opened: 2026-11-07
     refs: [018 C5c]
     links:
-      prs: [1931]
+      prs: [1931, 1932]
       spec: specs/018-storage-engine-consolidation
     depends_on: [B-065]
     claim:
       by: cloud-dc960fdc
       agent: spec-b066
       since: 2026-11-18T19:02:12Z
-      heartbeat: 2026-11-18T19:53:10Z
+      heartbeat: 2026-11-18T19:53:15Z
     notes: "2026-11-18 in-progress: C5c: spec pinned #1931 (format signed by forge + beacon with changes, applied). PR1 codec/exporter/golden #1932 stacked on it. PR2 (importer) next; B-378 release blocker ties PR1 to PR2. PR3 atomicity after."
   - id: B-067
     title: "Spec 018 Track C C6: ETC enablement and ETC mainnet readiness"
