@@ -2805,3 +2805,14 @@ items:
       spec: specs/016-snap-controller-split
       branch: fix/b298-sync-fork-hash-layout
     notes: B-346 escalates via RegularSyncStuck -> resnapNow. The branch anchoring after an escalation (B-307 PivotAnchor.branchCheck / PivotOffTheBranch) acts only with stateEscalation (unified layout). Check on Mordor that the hash-layout SNAP after B-346 adopts the heavier branch's headers between the common block and the pivot, and does not keep this node's old canonical entries. Found by forge-b298.
+  - id: B-352
+    title: "RegularSyncSpec timing flakes under load: 'save fetched node' and the ancestor-bodies deadline test each fail about 1 run in 5"
+    priority: P3
+    status: open
+    area: test
+    size: S
+    opened: 2026-11-18
+    refs: []
+    links:
+      spec: "016"
+    notes: "Seen on B-349 (#1912): 5 full runs, 2 with one failure each, a different test each time; 'save fetched node' also fails on plain staging. Fixed waits (fishForSpecificMessage 5 s, a 1 ms deadline) race a loaded machine. Find each wait and synchronise on the event instead; never skip."
