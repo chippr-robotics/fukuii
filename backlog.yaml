@@ -3233,21 +3233,19 @@ items:
   - id: B-384
     title: "Checkpoint v2 no-retry: record only content faults as refused; truncation/CRC/I-O and expected-hash mismatch retry automatically"
     priority: P2
-    status: review
+    status: done
     area: storage
     size: S
     opened: 2026-11-18
+    closed: 2026-11-18
     refs: []
     links:
       prs: [1939]
       spec: specs/018-storage-engine-consolidation
     depends_on: [B-066]
-    claim:
-      by: cloud-dc960fdc
-      agent: vault-b384
-      since: 2026-11-18T22:59:06Z
-      heartbeat: 2026-11-18T23:07:40Z
-    notes: "User decision 2026-11-18 (content faults only). #1935 records every refusal after the header per E.1; narrow it: bad nodes, assertions, window/trust failures are recorded; truncation, CRC, I/O and expected-hash mismatch clear the rows but are not recorded. Amend E.1/T292 and the docs."
+    notes: |-
+      User decision 2026-11-18 (content faults only). #1935 records every refusal after the header per E.1; narrow it: bad nodes, assertions, window/trust failures are recorded; truncation, CRC, I/O and expected-hash mismatch clear the rows but are not recorded. Amend E.1/T292 and the docs.
+      2026-11-18 done: Merged as 9a75e051a: only content faults are recorded as refused; download and config failures retry.
   - id: B-385
     title: "PoW import: a heavier branch whose fork block weight is not stored (BranchResolution NoChainSwitch, feed not counted) is never escalated"
     priority: P2
