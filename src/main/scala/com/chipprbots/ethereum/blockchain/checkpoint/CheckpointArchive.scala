@@ -83,7 +83,7 @@ object CheckpointArchive:
     *   the chain id as the 64 bits of a u64: a `Long` is signed, so compare it with `==` or `java.lang.Long`'s unsigned
     *   methods, never with `<`. [[chainIdUnsigned]] is its value.
     * @param tdExact
-    *   whether the exporter's node held the chain-weight invariant
+    *   whether the TD is exact: the exporter summed it from genesis, or its node held the chain-weight invariant
     */
   final case class Header(
       chainId: Long,

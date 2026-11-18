@@ -34,13 +34,17 @@ import com.chipprbots.ethereum.utils.Logger
   * refused unless `--allow-estimated-td` is given (see [[CheckpointExporter]]). On a proof-of-stake chain only a
   * finalized block is exported. Stop the node first: a state that moves under the export refuses it.
   *
-  * Without arguments or with `--block 0` the current best block is used. The chain is selected the same way the
-  * launcher selects it for the node (positional argument, e.g. `etc` / `sepolia`).
+  * Without `--block`, a proof-of-work chain exports its current best block and a proof-of-stake chain its finalized
+  * block, when that is canonical (its number and the canonical hash there match the stored finalized hash). The chain
+  * is selected the same way the launcher selects it for the node (positional argument, e.g. `etc` / `sepolia`).
   */
 object CheckpointCli extends Logger:
 
   private val blockOpt: Opts[Option[BigInt]] = Opts
-    .option[BigInt]("block", "Block number to export. Defaults to the current best block.")
+    .option[BigInt](
+      "block",
+      "Block number to export. Defaults to the current best block, or the finalized block on a proof-of-stake chain."
+    )
     .orNone
 
   private val outputOpt: Opts[Path] = Opts
@@ -94,20 +98,17 @@ object CheckpointCli extends Logger:
     val builder = new ExportBuilder
     val storages = builder.storagesInstance.storages
     val reader = BlockchainReader(storages)
-    val blockNumber = args.block.getOrElse {
-      val best = storages.appStateStorage.getBestBlockNumber()
-      log.info(s"--block not given; using current best block: $best")
-      best
-    }
+    val terminalTotalDifficulty = builder.blockchainConfig.terminalTotalDifficulty
+    // On a proof-of-stake chain, the finalized block the node last followed a fork choice to (the path layout keeps it
+    // across a restart); without one, nothing can be shown to be final and the export is refused.
+    val finalized = () => storages.appStateStorage.getStateFinalized()
     val chainId = builder.blockchainConfig.chainId.value
     val exporter = new CheckpointExporter(
       storages.evmCodeStorage,
       reader,
       chainId,
-      builder.blockchainConfig.terminalTotalDifficulty,
-      // On a proof-of-stake chain, the finalized block the node last followed a fork choice to (the path layout keeps
-      // it across a restart); without one, nothing can be shown to be final and the export is refused.
-      () => storages.appStateStorage.getStateFinalized().map(_.number)
+      terminalTotalDifficulty,
+      finalized
     )
     // Auto-append .gz when --gzip is set and the operator didn't already include it.
     // The CheckpointImporter also magic-byte-sniffs, but the conventional extension
@@ -117,7 +118,21 @@ object CheckpointCli extends Logger:
         args.output.resolveSibling(args.output.getFileName.toString + ".gz")
       else args.output
     if output != args.output then log.info(s"--gzip set, appending .gz: writing to $output")
-    exporter.exportArchive(blockNumber, output, gzip = args.gzip, allowEstimatedTd = args.allowEstimatedTd)
+    val blockNumber: Either[CheckpointExporter.ExportError, BigInt] = args.block match
+      case Some(named) => Right(named)
+      case None =>
+        val chosen = CheckpointExporter.defaultBlock(
+          reader,
+          terminalTotalDifficulty,
+          finalized(),
+          storages.appStateStorage.getBestBlockNumber()
+        )
+        val which = if terminalTotalDifficulty.isEmpty then "current best" else "finalized"
+        chosen.foreach(n => log.info(s"--block not given; using the $which block: $n"))
+        chosen
+    blockNumber.flatMap(n =>
+      exporter.exportArchive(n, output, gzip = args.gzip, allowEstimatedTd = args.allowEstimatedTd)
+    )
 
   /** Minimal cake mix for read-only state access. No actors, no validators, no sync — just storage and
     * BlockchainConfig.

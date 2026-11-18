@@ -14,6 +14,7 @@ import com.chipprbots.ethereum.Fixtures
 import com.chipprbots.ethereum.crypto
 import com.chipprbots.ethereum.db.components.EphemDataSourceComponent
 import com.chipprbots.ethereum.db.components.Storages
+import com.chipprbots.ethereum.db.storage.pathstate.FinalizedBlock
 import com.chipprbots.ethereum.db.storage.pruning.ArchivePruning
 import com.chipprbots.ethereum.db.storage.pruning.PruningMode
 import com.chipprbots.ethereum.domain.Account
@@ -76,15 +77,20 @@ object CheckpointV2Fixtures:
     def exporter(
         chainId: BigInt,
         terminalTotalDifficulty: Option[BigInt] = None,
-        finalized: Option[BigInt] = None
+        finalized: Option[BigInt] = None,
+        finalizedHash: Option[ByteString] = None
     ): CheckpointExporter =
       new CheckpointExporter(
         storages.storages.evmCodeStorage,
         reader,
         chainId,
         terminalTotalDifficulty,
-        () => finalized
+        () => finalized.map(n => FinalizedBlock(n, finalizedHash.getOrElse(canonicalHash(n))))
       )
+
+    /** The canonical hash at `number`, or 32 zero bytes where no block is stored there. */
+    def canonicalHash(number: BigInt): ByteString =
+      reader.getBlockHeaderByNumber(number).map(_.hash.value).getOrElse(ByteString(new Array[Byte](32)))
 
     /** A storage trie of `slots`, each holding the one-byte value `0x01`; its root. */
     def storageTrie(slots: Seq[BigInt]): ByteString =
@@ -122,9 +128,13 @@ object CheckpointV2Fixtures:
 
     def holdChainWeightInvariant(): Unit = storages.storages.appStateStorage.markChainWeightInvariant().commit()
 
-    def exportBytes(exporter: CheckpointExporter, number: BigInt): Either[CheckpointExporter.ExportError, Array[Byte]] =
+    def exportBytes(
+        exporter: CheckpointExporter,
+        number: BigInt,
+        allowEstimatedTd: Boolean = false
+    ): Either[CheckpointExporter.ExportError, Array[Byte]] =
       val file: Path = Files.createTempFile("checkpoint-v2", ".checkpoint")
-      try exporter.exportArchive(number, file).map(_ => Files.readAllBytes(file))
+      try exporter.exportArchive(number, file, allowEstimatedTd = allowEstimatedTd).map(_ => Files.readAllBytes(file))
       finally Files.deleteIfExists(file)
 
   /** A PoW header of block `number`: the ETC fixture's fields, no transactions, and ommers only where given. */

@@ -425,10 +425,11 @@ class CheckpointExporterSpec
     java.security.MessageDigest.getInstance("SHA-256").digest(bytes).map("%02x".format(_)).mkString
 
   /** The nodes exported and the SHA-256 of the archive, for `ChosenState` at block 100 of the spec's header chain:
-    * format version 2 (spec 018 C5c PR1, 2026-11-18).
+    * format version 2 (spec 018 C5c PR1, 2026-11-18). The TD-exact flag is set: the TD is summed from genesis (E.1,
+    * amended at the PR1 sign-off), though the node holds no chain-weight invariant.
     */
   private val FrozenChosenArchive: (Long, String) =
-    (47L, "23a137a7a829747b6c40f328d2a3d9886222ff2131ae45d02c4cc189e5a0a6a5")
+    (47L, "84258000eb5f6076fa1df4cc24413fd453aafea430d205f41dd0165b07453293")
 
   private trait Setup extends EphemBlockchainTestSetup:
     val sourceStorages = getNewStorages

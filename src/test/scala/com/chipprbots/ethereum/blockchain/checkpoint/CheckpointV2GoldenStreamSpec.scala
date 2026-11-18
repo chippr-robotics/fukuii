@@ -113,7 +113,9 @@ class CheckpointV2GoldenStreamSpec extends AnyWordSpec with Matchers with Either
       header.blockHeader.excessBlobGas shouldBe defined
       header.blockHeader.parentBeaconBlockRoot shouldBe defined
       header.totalDifficulty shouldBe 0
-      header.tdExact shouldBe false
+      withClue("summed from genesis, so exact, though the node holds no chain-weight invariant: ") {
+        header.tdExact shouldBe true
+      }
       entries.collect { case w: CheckpointArchive.WindowHeaderEntry => w.header.number.value } shouldBe Seq(1, 0)
       entries.collect { case b: CheckpointArchive.WindowBodyEntry => b } shouldBe empty
       entries.collect { case n: CheckpointArchive.NodeEntry => n }.size shouldBe 1
