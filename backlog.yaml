@@ -2822,7 +2822,7 @@ items:
   - id: B-354
     title: "Spec 030 S1: TLS profiles, pre-bind validation, RPC HTTP on profiles, legacy mode=https mapping"
     priority: P1
-    status: claimed
+    status: in-progress
     area: rpc
     size: M
     opened: 2026-11-18
@@ -2833,7 +2833,7 @@ items:
       by: cloud-dc960fdc
       agent: conduit-b354
       since: 2026-11-18T12:52:40Z
-      heartbeat: 2026-11-18T12:52:40Z
+      heartbeat: 2026-11-18T12:52:47Z
     notes: "US1; FR-001, 003-008, 010-012, 014, 060. ~700+900 lines. Review: conduit, prism."
   - id: B-355
     title: "Spec 030 S2: client auth want/need on RPC HTTP and WSS; handshake-failure metric; gen-cert CA and client certs"
