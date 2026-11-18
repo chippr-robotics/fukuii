@@ -103,6 +103,7 @@ class RecoveryScansVerdictSpec extends AnyFlatSpec with Matchers:
 
   /** What a scan found, or what it threw. */
   final private case class Found(code: Seq[ByteString], storage: Seq[(ByteString, ByteString)], holes: Long)
+  private def hex(b: ByteString): String = org.bouncycastle.util.encoders.Hex.toHexString(b.toArray)
 
   /** Every scan of the state at `root` over `store`, by name. */
   private def scans(root: ByteString, store: MptStorage, codes: EvmCodeStorage): Seq[(String, Either[String, Found])] =
@@ -175,8 +176,17 @@ class RecoveryScansVerdictSpec extends AnyFlatSpec with Matchers:
         onRows.map(_._1) shouldBe onHashes.map(_._1)
         onRows.zip(onHashes).foreach { case ((name, byRows), (_, byHashes)) =>
           withClue(s"$name: ") {
-            // one gap for each account on rows; on hashes the trie is one, found under the first account that names it
-            byRows.map(f => f.copy(storage = firstOfEachRoot(f.storage))) shouldBe byHashes
+            // One gap for each account on rows; on hashes the trie is one, found under whichever account names it
+            // first. A parallel scan's shards race to that, so the hash store's owner is checked to be one of the
+            // row scan's owners of the same root, not a particular one (B-065, seen on CI).
+            (byRows, byHashes) match
+              case (Right(rows), Right(hashes)) =>
+                hashes.code.sortBy(hex) shouldBe rows.code.sortBy(hex)
+                hashes.holes shouldBe rows.holes
+                hashes.storage.map(_._2).sortBy(hex) shouldBe firstOfEachRoot(rows.storage).map(_._2).sortBy(hex)
+                val ownersOnRows = rows.storage.groupMap(_._2)(_._1)
+                hashes.storage.foreach((owner, root) => ownersOnRows(root) should contain(owner))
+              case _ => byRows shouldBe byHashes
           }
         }
 
