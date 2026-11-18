@@ -2866,21 +2866,16 @@ items:
   - id: B-355
     title: "Spec 030 S2: client auth want/need on RPC HTTP and WSS; handshake-failure metric; gen-cert CA and client certs"
     priority: P2
-    status: review
+    status: done
     area: rpc
     size: M
     opened: 2026-11-18
+    closed: 2026-11-18
     refs: [B-146]
     links:
       prs: [1920]
       spec: specs/030-zero-trust-tls
     depends_on: [B-354]
-    claim:
-      by: cloud-0ceb384d
-      agent: conduit
-      since: 2026-11-18T13:27:28Z
-      heartbeat: 2026-11-18T13:49:53Z
-      branch: ccr-0ceb384d-ufzahb
     notes: |-
       US2; FR-003, 014, 017, 062. ~500+800. Review: conduit.
       2026-11-18 in-progress: stacked on S1 #1914
