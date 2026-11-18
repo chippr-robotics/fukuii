@@ -3250,10 +3250,15 @@ items:
   - id: B-385
     title: "PoW import: a heavier branch whose fork block weight is not stored (BranchResolution NoChainSwitch, feed not counted) is never escalated"
     priority: P2
-    status: open
+    status: claimed
     area: sync
     opened: 2026-11-18
     refs: []
     links:
       spec: specs/018-storage-engine-consolidation
+    claim:
+      by: cloud-dc960fdc
+      agent: forge-b385
+      since: 2026-11-18T23:16:34Z
+      heartbeat: 2026-11-18T23:16:34Z
     notes: Found in B-383 (forge). BranchResolution logs 'ChainWeight not found' and returns NoChainSwitch; PowEscalationFeed.weighed also skips it. Same for a missing fork header not named by the hash index. Name what ends the wait (escalate as a local fault, or repair the weight).
