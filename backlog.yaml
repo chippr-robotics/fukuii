@@ -794,17 +794,18 @@ items:
   - id: B-078
     title: Set RocksDB wal_recovery_mode explicitly; the write-ordering argument relies on the default
     priority: P3
-    status: in-progress
+    status: review
     area: storage
     size: S
     opened: 2026-11-06
     refs: [vault T065 (5)]
-    links: {}
+    links:
+      prs: [1917]
     claim:
       by: cloud-dc960fdc
       agent: vault-small
       since: 2026-11-18T13:30:33Z
-      heartbeat: 2026-11-18T13:34:27Z
+      heartbeat: 2026-11-18T13:43:39Z
   - id: B-079
     title: "[HEAL-CODE] \"Nothing else is missing\" WARN repeats every tick during the async Path publish"
     priority: P3
