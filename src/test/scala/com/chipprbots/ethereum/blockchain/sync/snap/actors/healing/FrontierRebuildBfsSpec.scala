@@ -587,13 +587,21 @@ class FrontierRebuildBfsSpec extends AnyFlatSpec with Matchers:
     s.selfInbox.receiveAll().collect { case m @ (_: FrontierCorruptFound | _: FrontierRebuilt) => m } shouldBe empty
   }
 
+  // B-009: healing's write replaces a stored entry whose bytes do not hash to its key, so the next walk is clean
+  it should "walk clean once healing writes the good node over a corrupt entry (B-009)" taggedAs UnitTest in {
+    val b = new BasicPruned
+    b.nodes.put(b.child, StoredNodeTestAccess.wrapped(foreignBranch, 1))
+    b.mpt.storeRawNodes(Seq(b.child -> b.childBytes))
+    val (s, completed) = b.walk()
+
+    completed shouldBe Some(0L)
+    s.selfInbox.receiveAll().collect { case m @ (_: FrontierCorruptFound | _: FrontierRebuilt) => m } shouldBe empty
+    s.walkSkips.get() shouldBe 0L
+  }
+
   it should "walk clean once a deleted corrupt entry is healed (S-1)" taggedAs UnitTest in {
     val b = new BasicPruned
     b.nodes.put(b.child, StoredNodeTestAccess.wrapped(foreignBranch, 1))
-    withClue("healing could not write over it: the upsert keeps the stored bytes: ") {
-      b.mpt.storeRawNodes(Seq(b.child -> b.childBytes))
-      b.walk()._2 shouldBe Some(1L)
-    }
     b.state.deleteBadNode(b.child, () => true) shouldBe BadEntryDelete.Deleted
     b.mpt.storeRawNodes(Seq(b.child -> b.childBytes)) // what healing writes once the node is fetched
     val (s, completed) = b.walk()

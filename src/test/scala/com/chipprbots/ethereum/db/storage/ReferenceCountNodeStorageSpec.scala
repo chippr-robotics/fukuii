@@ -16,6 +16,7 @@ import com.chipprbots.ethereum.db.dataSource.DataSourceUpdate
 import com.chipprbots.ethereum.db.dataSource.DataSourceUpdateOptimized
 import com.chipprbots.ethereum.db.dataSource.DataUpdate
 import com.chipprbots.ethereum.db.dataSource.EphemDataSource
+import com.chipprbots.ethereum.db.storage.ReferenceCountNodeStorage.StoredNode
 import com.chipprbots.ethereum.mpt.NodesKeyValueStorage
 import com.chipprbots.ethereum.testing.Tags.*
 import com.chipprbots.ethereum.utils.NodeCacheConfig
@@ -450,6 +451,75 @@ class ReferenceCountNodeStorageSpec extends AnyFlatSpec with Matchers:
     source.removedPerWrite.toSeq shouldBe Seq(102) // one write: 100 snapshot rows, the count key, the death row key
     snapshotRows(source) shouldBe 0
   }
+
+  it should "replace a junk wrapper under a key by an upsert of the node that hashes to it, keeping its count" taggedAs (
+    UnitTest,
+    DatabaseTest
+  ) in new TestSetup:
+    val node: Array[Byte] = Array.fill[Byte](40)(7)
+    val key: ByteString = kec256(ByteString(node))
+    nodeStorage.update(Nil, Seq(key -> encoding.storedNodeToBytes(StoredNode(ByteString("junk"), 3, 1))))
+
+    new ReferenceCountNodeStorage(nodeStorage, bn = 2).put(key, node)
+
+    val stored: StoredNode = encoding.storedNodeFromBytes(nodeStorage.get(key).get)
+    stored.nodeEncoded.toArray shouldEqual node
+    stored.references shouldBe 4
+
+  it should "replace a wrapper that does not unwrap by an upsert of the node that hashes to the key" taggedAs (
+    UnitTest,
+    DatabaseTest
+  ) in new TestSetup:
+    val node: Array[Byte] = Array.fill[Byte](40)(9)
+    val key: ByteString = kec256(ByteString(node))
+    nodeStorage.update(Nil, Seq(key -> Array[Byte](1, 2, 3)))
+
+    new ReferenceCountNodeStorage(nodeStorage, bn = 2).put(key, node)
+
+    val stored: StoredNode = encoding.storedNodeFromBytes(nodeStorage.get(key).get)
+    stored.nodeEncoded.toArray shouldEqual node
+    stored.references shouldBe 1
+
+  it should "leave a correct stored node as it is and count the reference as before" taggedAs (
+    UnitTest,
+    DatabaseTest
+  ) in new TestSetup:
+    val node: Array[Byte] = Array.fill[Byte](40)(5)
+    val key: ByteString = kec256(ByteString(node))
+    val storage = new ReferenceCountNodeStorage(nodeStorage, bn = 1)
+    storage.put(key, node)
+    storage.put(key, node)
+
+    val stored: StoredNode = encoding.storedNodeFromBytes(nodeStorage.get(key).get)
+    stored.nodeEncoded.toArray shouldEqual node
+    stored.references shouldBe 2
+
+  it should "not overwrite a correct stored node with incoming bytes that do not hash to the key" taggedAs (
+    UnitTest,
+    DatabaseTest
+  ) in new TestSetup:
+    val node: Array[Byte] = Array.fill[Byte](40)(5)
+    val key: ByteString = kec256(ByteString(node))
+    val storage = new ReferenceCountNodeStorage(nodeStorage, bn = 1)
+    storage.put(key, node)
+    storage.put(key, Array.fill[Byte](40)(6))
+
+    val stored: StoredNode = encoding.storedNodeFromBytes(nodeStorage.get(key).get)
+    stored.nodeEncoded.toArray shouldEqual node
+    stored.references shouldBe 2
+
+  it should "not replace a junk wrapper by incoming bytes that do not hash to the key either" taggedAs (
+    UnitTest,
+    DatabaseTest
+  ) in new TestSetup:
+    val key: ByteString = kec256(ByteString("some node"))
+    nodeStorage.update(Nil, Seq(key -> encoding.storedNodeToBytes(StoredNode(ByteString("junk"), 3, 1))))
+
+    new ReferenceCountNodeStorage(nodeStorage, bn = 2).put(key, Array.fill[Byte](40)(6))
+
+    val stored: StoredNode = encoding.storedNodeFromBytes(nodeStorage.get(key).get)
+    stored.nodeEncoded.toArray shouldEqual "junk".getBytes
+    stored.references shouldBe 4
 
   trait TestSetup:
     val dataSource: EphemDataSource = EphemDataSource()
