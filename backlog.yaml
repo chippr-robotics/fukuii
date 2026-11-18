@@ -670,7 +670,7 @@ items:
   - id: B-066
     title: "Spec 018 Track C C5c: checkpoint format version 2 and the position-assigning importer (item 10)"
     priority: P2
-    status: claimed
+    status: in-progress
     area: storage
     size: M
     opened: 2026-11-07
@@ -682,7 +682,7 @@ items:
       by: cloud-dc960fdc
       agent: spec-b066
       since: 2026-11-18T19:02:12Z
-      heartbeat: 2026-11-18T19:02:12Z
+      heartbeat: 2026-11-18T19:16:28Z
   - id: B-067
     title: "Spec 018 Track C C6: ETC enablement and ETC mainnet readiness"
     priority: P2
