@@ -3104,3 +3104,13 @@ items:
     links:
       spec: 018
     notes: "C5b part 2 left saveNode in the trait: repairNode must stay for the hash layout, and saveNode is used to seed fixtures (StateStorageSpec, BackgroundAuditStorageSpec, FixtureProvider, EthSimulateRpcCompatAmsterdamSpec). BlockImporterRepairSitesSpec pins that main has no caller."
+  - id: B-374
+    title: "CI flakes: console LookupsSpec and EngineApiHttpServerObservationSpec fail under CI load (5 s eventually), pass locally"
+    priority: P2
+    status: open
+    area: tests
+    size: S
+    opened: 2026-11-18
+    refs: []
+    links: {}
+    notes: "Seen 2026-11-18 on #1916 (LookupsSpec) and #1921 (both), unrelated diffs; both pass locally 2/2 on the same heads. LookupsSpec uses PatienceConfig(5 s) eventually throughout. Synchronise on the event instead of a timeout; never skip."
