@@ -18,8 +18,9 @@ import org.slf4j.LoggerFactory
 import com.chipprbots.ethereum.testing.Tags.*
 import com.chipprbots.ethereum.tls.*
 
-/** Spec 030 US1, SC-001: every TLS misconfiguration of the HTTP listener stops the node before any bind, through
-  * `startupRefusal`, naming the key and the cause; a valid configuration starts; no log line or refusal holds a secret.
+/** Spec 030 US1, SC-001: every TLS misconfiguration of the HTTP and WS listeners stops the node before any bind,
+  * through `startupRefusal`, naming the key and the cause; a valid configuration starts; no log line or refusal holds a
+  * secret.
   */
 class TlsStartupRefusalSpec extends AnyFlatSpec with Matchers with BeforeAndAfterAll:
 
@@ -120,12 +121,26 @@ class TlsStartupRefusalSpec extends AnyFlatSpec with Matchers with BeforeAndAfte
       Seq("fukuii.network.rpc.http.tls.client-auth")
     ),
     (
-      "client-auth need is not served by this build",
-      cfg(
-        TlsTestSupport.profile("rpc", good, Some(trust)),
-        """tls { enabled = true, profile = "rpc", client-auth = "need" }"""
+      "WS client-auth want without a truststore",
+      TlsTestSupport.config(
+        goodProfile,
+        ws = """enabled = true, tls { enabled = true, profile = "rpc", client-auth = "want" }"""
       ),
-      Seq("fukuii.network.rpc.http.tls.client-auth", "not served")
+      Seq("fukuii.network.rpc.ws.tls: client-auth = want, but profile rpc has no truststore")
+    ),
+    (
+      "WS profile does not exist",
+      TlsTestSupport.config(goodProfile, ws = """enabled = true, tls { enabled = true, profile = "nope" }"""),
+      Seq("fukuii.network.rpc.ws.tls.profile", "'nope'")
+    ),
+    (
+      "HTTP and WS on one port with differing TLS",
+      TlsTestSupport.config(
+        goodProfile,
+        """port = 8546, tls { enabled = true, profile = "rpc" }""",
+        "enabled = true, port = 8546"
+      ),
+      Seq("fukuii.network.rpc.ws.tls", "shares port 8546", "HTTP: tls on, profile rpc", "WS: tls off")
     ),
     (
       "legacy and new form together",
@@ -186,6 +201,33 @@ class TlsStartupRefusalSpec extends AnyFlatSpec with Matchers with BeforeAndAfte
       .and(include("profile=rpc"))
       .and(include("CN=localhost"))
       .and(include("notAfter=")))
+  }
+
+  it should "serve client-auth want and need with a truststore, and name the mode in each listener's line" taggedAs (
+    UnitTest,
+    RPCTest
+  ) in {
+    val mtls = TlsTestSupport.config(
+      TlsTestSupport.profile("rpc", good, Some(trust)),
+      """tls { enabled = true, profile = "rpc", client-auth = "need" }""",
+      """enabled = true, tls { enabled = true, profile = "rpc", client-auth = "want" }"""
+    )
+    val lines = TlsStartupCheck.run(mtls).toOption.getOrElse(fail("refused a valid mTLS configuration"))
+    lines.map(l => (l.listener, l.clientAuth)) shouldBe Seq(
+      ListenerId.RpcHttp -> ClientAuth.Need,
+      ListenerId.RpcWs -> ClientAuth.Want
+    )
+    lines(1).render should include("rpc-ws wss://127.0.0.1:")
+    lines.head.render should include("client-auth=need")
+  }
+
+  it should "accept HTTP and WS on one port when they take the same TLS setting" taggedAs (UnitTest, RPCTest) in {
+    val shared = TlsTestSupport.config(
+      goodProfile,
+      """port = 8546, tls { enabled = true, profile = "rpc" }""",
+      """enabled = true, port = 8546, tls { enabled = true, profile = "rpc" }"""
+    )
+    TlsStartupCheck.run(shared).map(_.size) shouldBe Right(2)
   }
 
   it should "say nothing for a plaintext listener and for a disabled one" taggedAs (UnitTest, RPCTest) in {

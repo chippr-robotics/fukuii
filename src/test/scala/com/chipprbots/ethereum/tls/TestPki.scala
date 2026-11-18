@@ -150,13 +150,62 @@ final class TestPki(val dir: Path):
     Files.write(file, (password + (if trailingNewline then "\n" else "")).getBytes(StandardCharsets.UTF_8))
     file
 
-  /** A client-side trust manager's SSL context: trusts `ca`, presents no certificate. */
-  def clientContext(trusted: Seq[X509Certificate] = Seq(ca.cert)): javax.net.ssl.SSLContext =
+  /** A client's SSL context: trusts `trusted` (the CA by default) and presents `presenting`'s certificate, or none. */
+  def clientContext(
+      trusted: Seq[X509Certificate] = Seq(ca.cert),
+      presenting: Option[PkiIdentity] = None
+  ): javax.net.ssl.SSLContext =
     val ks = KeyStore.getInstance("pkcs12")
     ks.load(null, null)
     trusted.zipWithIndex.foreach((c, i) => ks.setCertificateEntry(s"t$i", c))
     val tmf = javax.net.ssl.TrustManagerFactory.getInstance(javax.net.ssl.TrustManagerFactory.getDefaultAlgorithm)
     tmf.init(ks)
+    val keyManagers = presenting.map { id =>
+      val keys = KeyStore.getInstance("pkcs12")
+      keys.load(null, null)
+      keys.setKeyEntry(
+        "client",
+        id.key.getPrivate,
+        Array.emptyCharArray,
+        id.chain.toArray[java.security.cert.Certificate]
+      )
+      val kmf = javax.net.ssl.KeyManagerFactory.getInstance(javax.net.ssl.KeyManagerFactory.getDefaultAlgorithm)
+      kmf.init(keys, Array.emptyCharArray)
+      val km = kmf.getKeyManagers.collectFirst { case k: javax.net.ssl.X509ExtendedKeyManager => k }.get
+      Array[javax.net.ssl.KeyManager](new AlwaysPresents(km))
+    }
     val ctx = javax.net.ssl.SSLContext.getInstance("TLS")
-    ctx.init(null, tmf.getTrustManagers, new java.security.SecureRandom())
+    ctx.init(keyManagers.orNull, tmf.getTrustManagers, new java.security.SecureRandom())
     ctx
+
+  /** A self-signed leaf: a certificate no CA issued. */
+  def selfSignedLeaf(cn: String = "client"): PkiIdentity =
+    issue(s"CN=$cn", None, now.minus(Duration.ofDays(1)), now.plus(Duration.ofDays(30)), false, Nil, Nil)
+
+/** A client key manager that presents its one certificate whatever CAs the server names. The JDK's own sends a
+  * certificate only when its issuer is one the server accepts, so a self-signed or other-CA certificate would never be
+  * sent and a test of its refusal would test no certificate at all; curl, openssl and most libraries send it.
+  */
+final class AlwaysPresents(delegate: javax.net.ssl.X509ExtendedKeyManager) extends javax.net.ssl.X509ExtendedKeyManager:
+  private val Alias = "client"
+  override def chooseClientAlias(
+      keyType: Array[String],
+      issuers: Array[java.security.Principal],
+      socket: java.net.Socket
+  ): String =
+    Alias
+  override def chooseEngineClientAlias(
+      keyType: Array[String],
+      issuers: Array[java.security.Principal],
+      engine: javax.net.ssl.SSLEngine
+  ): String = Alias
+  override def getClientAliases(keyType: String, issuers: Array[java.security.Principal]): Array[String] = Array(Alias)
+  override def getServerAliases(keyType: String, issuers: Array[java.security.Principal]): Array[String] = null
+  override def chooseServerAlias(
+      keyType: String,
+      issuers: Array[java.security.Principal],
+      socket: java.net.Socket
+  ): String =
+    null
+  override def getCertificateChain(alias: String): Array[X509Certificate] = delegate.getCertificateChain(alias)
+  override def getPrivateKey(alias: String): java.security.PrivateKey = delegate.getPrivateKey(alias)

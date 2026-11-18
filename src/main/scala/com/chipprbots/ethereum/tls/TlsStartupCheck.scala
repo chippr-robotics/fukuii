@@ -27,17 +27,6 @@ object TlsStartupCheck:
       s"TLS listener ${listener.label} $scheme://$interface:$port client-auth=${clientAuth.toString.toLowerCase} " +
         s"profile=$profile cert=\"$subject\" notAfter=$notAfter"
 
-  /** Slice 1 serves `client-auth = none` only; `want` and `need` are refused rather than served as `none`. */
-  def supported(resolved: ResolvedListener): Either[TlsConfigError, Unit] =
-    Either.cond(
-      resolved.listener.clientAuth == ClientAuth.None,
-      (),
-      TlsConfigError(
-        s"${resolved.configPath}.client-auth: ${resolved.listener.clientAuth.toString.toLowerCase} is not served " +
-          "yet (this build serves client-auth = none)"
-      )
-    )
-
   /** @param config
     *   the `fukuii` section of the node's configuration
     * @return
@@ -45,32 +34,65 @@ object TlsStartupCheck:
     */
   def run(config: Config): Either[String, Seq[Line]] =
     val httpEnabled = config.getBoolean("network.rpc.http.enabled")
+    val wsEnabled = config.hasPath("network.rpc.ws.enabled") && config.getBoolean("network.rpc.ws.enabled")
     val result = for
       // every named profile must parse, used or not
       _ <- TlsConfig.profiles(config)
       // a disabled listener is not validated: it never binds
       http <- if httpEnabled then TlsConfig.rpcHttp(config) else Right(None)
-      lines <- http match
-        case None => Right(Nil)
-        case Some(resolved) =>
-          for
-            material <- TlsMaterialLoader.load(resolved.profile, resolved.listener.clientAuth, resolved.configPath)
-            _ <- supported(resolved)
-          yield List(
+      ws <- if wsEnabled then TlsConfig.rpcWs(config) else Right(None)
+      _ <-
+        if httpEnabled && wsEnabled then samePort(config, http, ws)
+        else Right(())
+      httpLine <- line(config, "network.rpc.http", http)
+      wsLine <- line(config, "network.rpc.ws", ws)
+    yield httpLine.toList ++ wsLine.toList
+    result.left.map(e => RefusalPrefix + e.message)
+
+  private def line(
+      config: Config,
+      key: String,
+      resolved: Option[ResolvedListener]
+  ): Either[TlsConfigError, Option[Line]] =
+    resolved match
+      case None => Right(None)
+      case Some(listener) =>
+        TlsMaterialLoader.load(listener.profile, listener.listener.clientAuth, listener.configPath).map { material =>
+          Some(
             Line(
-              resolved.listener.id,
-              "https",
-              config.getString("network.rpc.http.interface"),
-              config.getInt("network.rpc.http.port"),
-              resolved.listener.clientAuth,
-              resolved.profile.name,
+              listener.listener.id,
+              if listener.listener.id == ListenerId.RpcWs then "wss" else "https",
+              config.getString(s"$key.interface"),
+              config.getInt(s"$key.port"),
+              listener.listener.clientAuth,
+              listener.profile.name,
               material.leaf.map(_.getSubjectX500Principal.getName).getOrElse(""),
               material.leaf.map(_.getNotAfter.toInstant.atZone(ZoneOffset.UTC).toLocalDate.toString).getOrElse(""),
-              resolved.legacy
+              listener.legacy
             )
           )
-    yield lines
-    result.left.map(e => RefusalPrefix + e.message)
+        }
+
+  /** HTTP and WS on one port take one TLS setting (spec 030 Edge Cases): differing settings there are refused. */
+  private def samePort(
+      config: Config,
+      http: Option[ResolvedListener],
+      ws: Option[ResolvedListener]
+  ): Either[TlsConfigError, Unit] =
+    def setting(l: Option[ResolvedListener]) = l.map(r => (r.profile.name, r.listener.clientAuth))
+    def render(l: Option[ResolvedListener]) =
+      l.map(r => s"tls on, profile ${r.profile.name}, client-auth ${r.listener.clientAuth.toString.toLowerCase}")
+        .getOrElse("tls off")
+    val port = config.getInt("network.rpc.http.port")
+    Either.cond(
+      // port 0 is an ephemeral port each, never a shared one
+      port == 0 || port != config.getInt("network.rpc.ws.port") || setting(http) == setting(ws),
+      (),
+      TlsConfigError(
+        s"${TlsConfig.Prefix}.network.rpc.ws.tls: the WebSocket listener shares port $port with the HTTP listener, " +
+          s"so it must take the same TLS setting (HTTP: ${render(http)}; WS: ${render(ws)})"
+      )
+    )
 
   /** Whether the HTTP listener is on the deprecated form (the start-up check logs FR-007's warning once). */
   def usesLegacy(config: Config): Boolean = TlsConfig.rpcHttp(config).toOption.flatten.exists(_.legacy)

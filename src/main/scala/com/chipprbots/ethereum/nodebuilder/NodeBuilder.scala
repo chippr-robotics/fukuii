@@ -1334,13 +1334,15 @@ trait SubscriptionManagerBuilder:
     ref
 
 trait JSONRpcWsServerBuilder:
-  self: ActorSystemBuilder & JSONRpcControllerBuilder & JSONRpcConfigBuilder & SubscriptionManagerBuilder =>
+  self: ActorSystemBuilder & JSONRpcControllerBuilder & JSONRpcConfigBuilder & SubscriptionManagerBuilder &
+    SecureRandomBuilder & InstanceConfigProvider =>
 
   lazy val jsonRpcWsServer: com.chipprbots.ethereum.jsonrpc.server.http.JsonRpcWsServer =
     new com.chipprbots.ethereum.jsonrpc.server.http.JsonRpcWsServer(
       jsonRpcWsController,
       subscriptionManager,
-      jsonRpcConfig.wsServerConfig
+      jsonRpcConfig.wsServerConfig,
+      () => com.chipprbots.ethereum.tls.TlsServerEngine.rpcWs(instanceConfig.config, secureRandom)
     )(using classicSystem)
 
 trait OmmersPoolBuilder:

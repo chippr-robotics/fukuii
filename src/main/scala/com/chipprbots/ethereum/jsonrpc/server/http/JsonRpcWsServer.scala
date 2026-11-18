@@ -42,6 +42,10 @@ import com.chipprbots.ethereum.jsonrpc.SubscriptionManager
 import com.chipprbots.ethereum.jsonrpc.SubscriptionManager.*
 import com.chipprbots.ethereum.jsonrpc.serialization.JsonSerializers
 import com.chipprbots.ethereum.jsonrpc.server.controllers.JsonRpcBaseController
+import com.chipprbots.ethereum.tls.ListenerId
+import com.chipprbots.ethereum.tls.TlsConfigError
+import com.chipprbots.ethereum.tls.TlsServerContext
+import com.chipprbots.ethereum.tls.TlsServerEngine
 import com.chipprbots.ethereum.utils.Logger
 
 /** WebSocket JSON-RPC server.
@@ -66,7 +70,8 @@ import com.chipprbots.ethereum.utils.Logger
 class JsonRpcWsServer(
     jsonRpcController: JsonRpcBaseController,
     subscriptionManager: ActorRef[SubscriptionManager.Command],
-    config: JsonRpcWsServer.JsonRpcWsServerConfig
+    config: JsonRpcWsServer.JsonRpcWsServerConfig,
+    tlsContext: () => Either[TlsConfigError, Option[TlsServerContext]] = () => Right(None)
 )(implicit system: ActorSystem)
     extends Logger:
 
@@ -134,11 +139,32 @@ class JsonRpcWsServer(
     // The outcome is logged, and said to the RPC view, by the lifecycle.
     val _ = lifecycle.start()
 
+  /** Whether the listener speaks TLS (WSS), from its `tls` block (spec 030 FR-014). */
+  def isTls: Boolean = config.tlsEnabled
+
   private def bind(): Future[Http.ServerBinding] =
-    connections = KillSwitches.shared("json-rpc-ws-connections")
-    val bindingF = Http(system).newServerAt(config.interface, config.port).bind(route)
-    bindingF.foreach(b => log.info(s"JSON RPC WS server listening on ${b.localAddress}"))
-    bindingF
+    // Read on every bind, so `rpc start ws` from the dashboard takes the material as it is now. A TLS context that
+    // cannot be built is a failed bind, never a plaintext listener (FR-012).
+    tlsContext() match
+      case Left(error) => Future.failed(new IllegalStateException(error.message))
+      case Right(tls) =>
+        connections = KillSwitches.shared("json-rpc-ws-connections")
+        val server = Http(system).newServerAt(config.interface, config.port)
+        val bindingF = tls match
+          case None         => server.bind(route)
+          case Some(secure) =>
+            // As on the HTTP listener: the TLS session on the upgrade request, which the connection keeps for its
+            // life, and a refused handshake counted and logged with its address (FR-017, FR-026).
+            val settings = TlsServerEngine.serverSettings(system)
+            server
+              .enableHttps(TlsServerEngine.connectionContext(secure))
+              .withSettings(settings)
+              .bindFlow(
+                TlsServerEngine.observeHandshakes(ListenerId.RpcWs, TlsServerEngine.routeHandler(route, settings))
+              )
+        val scheme = if tls.isDefined then "WSS" else "WS"
+        bindingF.foreach(b => log.info(s"JSON RPC $scheme server listening on ${b.localAddress}"))
+        bindingF
 
   private def buildWsFlow(): Flow[Message, Message, Any] =
     val connId = UUID.randomUUID().toString
@@ -302,6 +328,9 @@ object JsonRpcWsServer:
       */
     val allowedOrigins: Seq[String] = Seq.empty
 
+    /** `network.rpc.ws.tls.enabled` (spec 030); false where a configuration does not carry the block. */
+    val tlsEnabled: Boolean = false
+
   object JsonRpcWsServerConfig:
     def apply(fukuiiConfig: com.typesafe.config.Config): JsonRpcWsServerConfig =
       val wsConfig = fukuiiConfig.getConfig("network.rpc.ws")
@@ -310,6 +339,7 @@ object JsonRpcWsServer:
         override val interface: String = wsConfig.getString("interface")
         override val port: Int = wsConfig.getInt("port")
         override val allowedOrigins: Seq[String] = parseAllowedOrigins(wsConfig)
+        override val tlsEnabled: Boolean = wsConfig.hasPath("tls.enabled") && wsConfig.getBoolean("tls.enabled")
 
     /** Reads the optional `allowed-origins` key of the `ws` block: a list of strings, or one comma-separated string.
       * Absent (or null) gives an empty list, which selects the default.
