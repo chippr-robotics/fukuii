@@ -392,11 +392,16 @@ class RegularSyncSpec
     (() => blockchainWriter.positionRepairs).when().returns(Some(repairs))
 
     val evaluations = new java.util.concurrent.atomic.AtomicInteger(0)
+    // what the escalation's feed was told of a hole no repair fills (B-291)
+    val holesTold = new java.util.concurrent.ConcurrentLinkedQueue[(List[Block], MissingNodeException)]()
     @volatile var nodeIsWritten: Boolean = false
     @volatile var importedOk: Boolean = false
 
     override lazy val consensusAdapter: ConsensusAdapter = new ConsensusAdapter(null, null, null, null, null):
       override def refusedWithTheirParent(blocks: NonEmptyList[Block]): Boolean = false
+      override def holeNotRepaired(blocks: List[Block], missing: MissingNodeException)(implicit
+          blockchainConfig: BlockchainConfig
+      ): Unit = holesTold.add((blocks, missing))
       override def evaluateBranch(blocks: NonEmptyList[Block])(implicit
           blockExecutionScheduler: IORuntime,
           blockchainConfig: BlockchainConfig
@@ -2900,6 +2905,59 @@ class RegularSyncSpec
           // a node that lands in the gap before the wait is written too, and counts as no decline
           repairs.repaired.size should be >= BlockImporter.MaxRepairDeclines
           evaluations.get() shouldBe BlockImporter.MaxRepairDeclines
+      )
+
+      // forge, B-291: the importer's exhausts reach their threshold on a repair that is declined for good. RegularSyncStuck
+      // is ignored on the unified layout, so the hole is told to the escalation's feed instead, once, and the
+      // import is then tried again only at the back-off's pace, not in the resolving loop.
+      "tell the escalation of a hole whose repair is always declined exactly once, and send no RegularSyncStuck" taggedAs (
+        UnitTest,
+        SyncTest
+      ) in sync(
+        new MissingNodeOnTheUnifiedLayout(
+          "declined-for-good",
+          unified = true,
+          followsConsensusLayer = false,
+          outcome = () => RepairOutcome.NotReached
+        ):
+          override def missing: MissingNodeException = new MissingAccountNodeException(hash, address, Some(locationOf))
+
+          val savedBackoff = BlockImporter.exhaustBackoff
+          BlockImporter.exhaustBackoff = 20.millis
+          try
+            // one run of the fetch is MaxRepairDeclines declines, the last of which is an exhausted fetch
+            def cycle(): Unit =
+              importFailing()
+              var back = false
+              (1 to BlockImporter.MaxRepairDeclines).foreach { round =>
+                fetchAsked()
+                val before = evaluations.get()
+                if round < BlockImporter.MaxRepairDeclines then deliverUntil(evaluations.get() > before)
+                else
+                  deliverUntil {
+                    back = back || importerFetcher
+                      .receiveWhile(50.millis, 50.millis) { case m: BlockFetcher.InvalidateBlocksFrom => m }
+                      .nonEmpty
+                    back
+                  }
+              }
+            (1 until BlockImporter.StuckEscapeThreshold).foreach { _ =>
+              cycle()
+              holesTold.size shouldBe 0
+            }
+            // the exhaust that reaches the threshold tells the feed
+            cycle()
+            awaitCond(holesTold.size == 1, 10.seconds)
+            holesTold.peek()._1.map(_.hash) shouldBe List(failing.hash)
+            holesTold.peek()._2.hash shouldBe hash
+            holesTold.peek()._2.location shouldBe Some(locationOf)
+            // and no more, however many times it is tried again at the same tip
+            (1 to 3).foreach(_ => cycle())
+            importerSupervisor
+              .receiveWhile(300.millis) { case m => m }
+              .collect { case m: SyncProtocol.RegularSyncStuck => m } shouldBe Nil
+            holesTold.size shouldBe 1
+          finally BlockImporter.exhaustBackoff = savedBackoff
       )
 
       "go on once a repair that was declined is written" taggedAs (UnitTest, SyncTest) in sync {

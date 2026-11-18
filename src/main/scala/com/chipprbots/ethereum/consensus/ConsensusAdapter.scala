@@ -42,6 +42,7 @@ import com.chipprbots.ethereum.ledger.BlockExecutionSuccess
 import com.chipprbots.ethereum.ledger.BlockQueue
 import com.chipprbots.ethereum.ledger.BlockValidation
 import com.chipprbots.ethereum.mpt.MerklePatriciaTrie.MissingCodeException
+import com.chipprbots.ethereum.mpt.MerklePatriciaTrie.MissingNodeException
 import com.chipprbots.ethereum.utils.BlockchainConfig
 import com.chipprbots.ethereum.utils.Hex
 import com.chipprbots.ethereum.utils.Logger
@@ -193,8 +194,11 @@ class ConsensusAdapter(
         // a hole to fetch: the fetch writes the hash-keyed store, which this layout never reads, and the same block
         // would fail again (spec 018 C5a part 10, forge). It is told as any state fault is, and counted towards the
         // escalation. One that names its position is fetched by it and written there by `repairNodeAt` (C5b): a view of
-        // the rows alone says it, a view with layers over them does not, and that stays a fault. Missing contract code
-        // is fetched by its hash into the code store, which both layouts share (vault).
+        // the rows alone says it. A view with layers over the rows names none, on purpose (`PathMptStorage` throws a
+        // `MerklePatriciaTrie.Unplaced` one, which the trie's traversal leaves unlocated), and that stays a fault.
+        // One that is fetched and cannot be repaired does not loop through here for ever: the importer tells the feed
+        // of it once its exhausts reach their threshold ([[holeNotRepaired]]). Missing contract code is fetched by its
+        // hash into the code store, which both layouts share (vault).
         case ConsensusErrorDueToMissingNode(blocksToEnqueue, reason, imported)
             if blockchainReader.holdsStateInPlace && !reason.isInstanceOf[MissingCodeException] &&
               reason.location.isEmpty =>
@@ -273,6 +277,19 @@ class ConsensusAdapter(
       blockchainConfig: BlockchainConfig
   ): Unit =
     toldTheFeed("a branch out of reach")(_.notJudgedHeaders(headers, fault, blockValidation.firstInvalidHeaderOf))
+
+  /** A hole in the held state that the importer fetched by its position and could not fill, as many times as its
+    * exhausts allow (spec 018 C5b, B-291, forge): the repair is declined for good, or no peer serves the node. On the
+    * unified layout nothing else moves it (the sync controller ignores `RegularSyncStuck` there), so it is told to the
+    * escalation's feed as every state fault of this node is: `blocks` were not judged, and the fault is
+    * [[HeldStateIncomplete]]. To be called under the import lock, as [[branchOutOfReach]] is.
+    */
+  def holeNotRepaired(blocks: List[Block], missing: MissingNodeException)(implicit
+      blockchainConfig: BlockchainConfig
+  ): Unit =
+    toldTheFeed("a hole no repair fills")(
+      _.notJudged(blocks, new HeldStateIncomplete(missing), blockValidation.firstInvalidHeader)
+    )
 
   /** The first of `headers` that is not valid, with why: the header validation of an import, the seal with it
     * ([[BlockValidation.firstInvalidHeaderOf]]). Reads only; for a branch weighed below the fork recovery's floor on

@@ -243,6 +243,9 @@ object BlockImporter:
   // What holds the import lock while a branch out of reach is told to the escalation's feed (B-300 g).
   private[regular] val BranchOutOfReachHolder: String = "the escalation of a branch out of reach"
 
+  // What holds the import lock while a hole no repair fills is told to the escalation's feed (spec 018 C5b, B-291).
+  private[regular] val UnrepairedHoleHolder: String = "the escalation of a hole no repair fills"
+
   /** The most headers of a branch out of reach fetched for the escalation (B-300 g; forge). The fetch stops as soon as
     * they outweigh the head, so this bounds only a branch that never does, or whose weight cannot be read: enough to
     * outweigh any head this node could have reached by following the chain since the block the branch leaves it at,
@@ -539,6 +542,10 @@ final private class BlockImporterLogic(
   private var pendingFetchPosition: Option[PositionKey] = None
   // Fetched nodes the position store declined in a row, bounded by BlockImporter.MaxRepairDeclines (data-model 7.5).
   private var repairDeclines: Int = 0
+  // The hole the escalation's feed was last told of, on the unified layout, by the failing block and the tip of the
+  // batch: told again only when the tip is higher, since the feed counts how far a refused branch grows (B-291). Cleared
+  // with the exhausts, when a block is imported or a node is written.
+  private var holeToldFor: Option[(ByteString, BigInt)] = None
   // An exhausted fetch that arrived while an import ran, for that import's ImportDone to act on (#1694).
   private var exhaustedDuringImport: Boolean = false
   private var unknownParentStrikes: Map[ByteString, Int] = Map.empty
@@ -775,7 +782,7 @@ final private class BlockImporterLogic(
     val consecutiveExhausts = exhausts.increment()
     val missingHashStr = pendingStateNodeHash.map(ByteStringUtils.hash2string).getOrElse("<unknown>")
 
-    if consecutiveExhausts >= BlockImporter.StuckEscapeThreshold then
+    if consecutiveExhausts >= BlockImporter.StuckEscapeThreshold && !blockchainWriter.holdsStateInPlace then
       // Multiple consecutive exhausts mean peers genuinely don't have our parent state and
       // never will (we're far behind their snap-serve window). The only recovery is to re-pivot
       // via SNAP (SyncController does so even with do-snap-sync off). Reset our local counter so
@@ -795,6 +802,10 @@ final private class BlockImporterLogic(
       // Don't transition further — SyncController will PoisonPill regular sync.
       Behaviors.same
     else
+      // On the unified layout RegularSyncStuck is ignored by the controller (the escalation gives the state up, and
+      // only when it is told): at the threshold the hole is told to its feed, once for each tip, and the import
+      // is tried again at the back-off's pace as after any exhaust, not in the resolving loop (forge, B-291).
+      if consecutiveExhausts >= BlockImporter.StuckEscapeThreshold then escalateUnrepairedHole(blocksToRetry)
       log.error(
         "State node recovery failed after max retries for block {} (consecutive exhausts: {}/{}) — backing off {}s before retry",
         blockNum,
@@ -810,6 +821,38 @@ final private class BlockImporterLogic(
       // Don't self ! PickBlocks — that would immediately retry the same block.
       timers.startTimerWithFixedDelay(RetryKey, SyncRetryTick, BlockImporter.exhaustBackoff)
       running(state)
+
+  /** Tells the escalation's feed of a hole the importer could not fill (see [[ConsensusAdapter.holeNotRepaired]]).
+    * Under the import lock, off the actor: the feed reads the head's weight and is told one import at a time.
+    */
+  private def escalateUnrepairedHole(blocksToRetry: NonEmptyList[Block]): Unit =
+    val failing = blocksToRetry.head
+    val tip = blocksToRetry.last.number.value
+    val told = holeToldFor.exists { case (hash, at) => hash == failing.hash.value && at >= tip }
+    if told then
+      log.warning(
+        "[STATE-ESCALATION] The hole under block {} was told to the escalation already: not told again at this tip",
+        failing.number
+      )
+    else
+      holeToldFor = Some((failing.hash.value, tip))
+      val missing = pendingStateNodeHash.fold(new MissingNodeException(ByteString.empty))(hash =>
+        pendingFetchPosition.fold(new MissingNodeException(hash))(position =>
+          new MissingNodeException(hash).withLocation(position.hp)
+        )
+      )
+      log.error(
+        "[STATE-ESCALATION] Block {} cannot be imported: a node of the state this node holds is missing and no fetch " +
+          "fills it ({}). The escalation is told; no SNAP re-sync starts over this state",
+        failing.number,
+        missing.getMessage
+      )
+      importLock
+        .guardAs(UnrepairedHoleHolder)(IO.delay(consensus.holeNotRepaired(blocksToRetry.toList, missing)))
+        .handleError(ex =>
+          log.error(ex, "The escalation could not be told of a hole no repair fills: {}", ex.getMessage)
+        )
+        .unsafeRunAndForget()
 
   private def resolvingMissingNode(blocksToRetry: NonEmptyList[Block], blockImportType: BlockImportType)(
       state: ImporterState
@@ -848,7 +891,9 @@ final private class BlockImporterLogic(
           repairDeclines = 0
           fetchExhausted(blocksToRetry, state)
         else
-          if repairDeclines == 0 then exhausts.reset()
+          if repairDeclines == 0 then
+            exhausts.reset()
+            holeToldFor = None
           pendingStateNodeHash = None
           pendingFetchPosition = None
           importBlocks(blocksToRetry, blockImportType)(state)
@@ -1168,6 +1213,7 @@ final private class BlockImporterLogic(
         // no longer counts towards a re-SNAP (forge, #1694).
         if importedBlocks.nonEmpty then
           exhausts.reset()
+          holeToldFor = None
           floorGapRewinds.reset()
           stateFaultStreak = None
 
