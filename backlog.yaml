@@ -3083,12 +3083,17 @@ items:
   - id: B-374
     title: "CI flakes: console LookupsSpec and EngineApiHttpServerObservationSpec fail under CI load (5 s eventually), pass locally"
     priority: P2
-    status: open
+    status: claimed
     area: tests
     size: S
     opened: 2026-11-18
     refs: []
     links: {}
+    claim:
+      by: cloud-dc960fdc
+      agent: main
+      since: 2026-11-18T16:08:42Z
+      heartbeat: 2026-11-18T16:08:42Z
     notes: "Seen 2026-11-18 on #1916 (LookupsSpec) and #1921 (both), unrelated diffs; both pass locally 2/2 on the same heads. LookupsSpec uses PatienceConfig(5 s) eventually throughout. Synchronise on the event instead of a timeout; never skip."
   - id: B-375
     title: "B-065 follow-up: compare the recovery scans' verdicts with the pinned 0.12.1 jar's (T214 oracle)"
