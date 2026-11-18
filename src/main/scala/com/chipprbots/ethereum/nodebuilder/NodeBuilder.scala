@@ -501,7 +501,9 @@ trait ConsensusBuilder:
             com.chipprbots.ethereum.consensus.mess.ArtificialFinality.shouldRejectReorg
           )
         ),
-        left => escalationLog.debug("[STATE-ESCALATION] {}", left)
+        left => escalationLog.debug("[STATE-ESCALATION] {}", left),
+        // a block whose header is not stored is the node's own when the hash index names it (B-383)
+        blockchainReader.getCanonicalHashByNumber
       )
     }
 

@@ -400,6 +400,102 @@ class PowEscalationFeedSpec extends AnyFlatSpec with Matchers:
     escalated should have size 2
   }
 
+  // B-383, after spec 018 C6 PR-B: where the header of this node's own block that a branch stands on is not stored,
+  // MESS does not refuse the branch (BranchResolution.messRejects abstains) and consensus refuses it as a fault of this
+  // node (StateUnavailable). The feed is to count it as that fault, by how far the branch grows, and not as a refusal
+  // by MESS: else it is never counted, and a node with a hole in its own headers waits with no end
+  it should "count a heavier branch whose fork header is missing as a fault of this node, not as a MESS refusal" taggedAs UnitTest in {
+    val escalated = mutable.ArrayBuffer.empty[EscalationKind]
+    val said = mutable.ArrayBuffer.empty[String]
+    val left = mutable.ArrayBuffer.empty[String]
+    val asked = mutable.ArrayBuffer.empty[(Long, BigInt, BigInt)]
+    var forkIsOurs = true
+    val head = Fixtures.Blocks.ValidBlock.header
+      .copy(number = BlockNumber(6), unixTimestamp = com.chipprbots.ethereum.domain.Timestamp(1026L))
+    val unavailable: StateFault =
+      new StateUnavailable("block 4, the block the branch leaves the chain at, is not stored")
+    val feed = new PowEscalationFeed(
+      new EscalationWatch(new EscalationTrigger(4), () => 0L, escalated += _, (_, why) => said += why),
+      hash => Option.when(hash == forkHash)(ChainWeight.totalDifficultyOnly(1000)),
+      () => Some(ChainWeight.totalDifficultyOnly(1050)),
+      // the fork's header is not stored
+      _ => None,
+      _ => true,
+      Some(
+        PowEscalationFeed.Mess(
+          _ => true,
+          () => Some(head),
+          (seconds, local, proposed) =>
+            asked += ((seconds, local, proposed)); true
+        )
+      ),
+      left += _,
+      // the hash index names the block the branch stands on as this node's, at its height
+      number => Option.when(forkIsOurs && number == 4)(forkHash)
+    )
+    // the branch grows while it is refused: tip 7, then tip 11, four blocks of growth
+    feed.notJudged(branch(5, 3), unavailable, _ => None)
+    escalated shouldBe empty
+    feed.refusedWeight.map(_.totalDifficulty.value) shouldBe Some(BigInt(1300))
+    feed.notJudged(branch(5, 7), unavailable, _ => None)
+    escalated.toList shouldBe List(EscalationKind.LocalFault)
+    // MESS was not asked: it has nothing to weigh, and refuses nothing for it
+    asked shouldBe empty
+    left.exists(_.contains("MESS refuses")) shouldBe false
+    left.last should (include("block 4").and(include("not stored")))
+    said.last should include("[5-11]")
+
+    // where the block under the branch is not this node's at its height, where it leaves the chain is not known
+    escalated.clear()
+    forkIsOurs = false
+    val other = new PowEscalationFeed(
+      new EscalationWatch(new EscalationTrigger(1), () => 0L, escalated += _, (_, _) => ()),
+      hash => Option.when(hash == forkHash)(ChainWeight.totalDifficultyOnly(1000)),
+      () => Some(ChainWeight.totalDifficultyOnly(1050)),
+      _ => None,
+      _ => true,
+      Some(PowEscalationFeed.Mess(_ => true, () => Some(head), (_, _, _) => false)),
+      left += _,
+      number => Option.when(forkIsOurs && number == 4)(forkHash)
+    )
+    other.notJudged(branch(5, 3), unavailable, _ => None)
+    other.notJudged(branch(5, 7), unavailable, _ => None)
+    escalated shouldBe empty
+    other.refusedWeight shouldBe None
+    left.last should include("not this node's")
+    (left.last should not).include("MESS refuses")
+  }
+
+  it should "still count nothing for a branch MESS refuses with the fork header stored, and count it once it passes" taggedAs UnitTest in {
+    val escalated = mutable.ArrayBuffer.empty[EscalationKind]
+    val left = mutable.ArrayBuffer.empty[String]
+    var refuses = true
+    val fork = Fixtures.Blocks.ValidBlock.header
+      .copy(number = BlockNumber(4), unixTimestamp = com.chipprbots.ethereum.domain.Timestamp(1000L))
+    val head = Fixtures.Blocks.ValidBlock.header
+      .copy(number = BlockNumber(6), unixTimestamp = com.chipprbots.ethereum.domain.Timestamp(1026L))
+    val unavailable: StateFault = new StateUnavailable("held back after a write that failed")
+    val feed = new PowEscalationFeed(
+      new EscalationWatch(new EscalationTrigger(4), () => 0L, escalated += _, (_, _) => ()),
+      hash => Option.when(hash == forkHash)(ChainWeight.totalDifficultyOnly(1000)),
+      () => Some(ChainWeight.totalDifficultyOnly(1050)),
+      hash => Option.when(hash == forkHash.value)(fork),
+      _ => true,
+      Some(PowEscalationFeed.Mess(_ => true, () => Some(head), (_, _, _) => refuses)),
+      left += _,
+      number => Option.when(number == 4)(forkHash)
+    )
+    feed.notJudged(branch(5, 3), unavailable, _ => None)
+    feed.notJudged(branch(5, 7), unavailable, _ => None)
+    escalated shouldBe empty
+    feed.refusedWeight shouldBe None
+    left.last should include("MESS refuses")
+    refuses = false
+    feed.notJudged(branch(5, 3), unavailable, _ => None)
+    feed.notJudged(branch(5, 7), unavailable, _ => None)
+    escalated.toList shouldBe List(EscalationKind.LocalFault)
+  }
+
   // forge, after code: where the walk down the branch ends on a side block (its reach), the block under what it found
   // is not the block the two chains share, and what would be weighed from it is not what the rule weighs
   it should "not count a branch whose shared block it cannot name on the chain" taggedAs UnitTest in {
