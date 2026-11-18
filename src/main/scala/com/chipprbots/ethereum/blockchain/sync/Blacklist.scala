@@ -162,6 +162,9 @@ object Blacklist:
       case object InvalidBlockAccessListType extends BlacklistReasonType with RegularSyncBlacklistGroup:
         val code: Int = 32
         val name: String = "InvalidBlockAccessList"
+      case object ForkNotFollowedType extends BlacklistReasonType with RegularSyncBlacklistGroup:
+        val code: Int = 33
+        val name: String = "ForkNotFollowed"
 
     case object WrongBlockHeaders extends BlacklistReason:
       val reasonType: BlacklistReasonType = WrongBlockHeadersType
@@ -276,6 +279,14 @@ object Blacklist:
     final case class InvalidBlockAccessList(details: String) extends BlacklistReason:
       val reasonType: BlacklistReasonType = InvalidBlockAccessListType
       val description: String = s"Invalid block access list: $details"
+
+    /** A peer whose chain a fork recovery found this node's could not follow (B-298): it leaves this chain deeper than
+      * a rewind may reach, or its branch is not the heavier. Not a fault of the peer's blocks; it is not asked again
+      * for the same branch while it is blacklisted.
+      */
+    final case class ForkNotFollowed(details: String) extends BlacklistReason:
+      val reasonType: BlacklistReasonType = ForkNotFollowedType
+      val description: String = s"Fork not followed: $details"
 
     private val allP2PReasons = List(
       DisconnectRequested,
