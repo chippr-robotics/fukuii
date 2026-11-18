@@ -2403,7 +2403,7 @@ items:
       by: cloud-dc960fdc
       agent: forge-b298
       since: 2026-11-18T00:05:56Z
-      heartbeat: 2026-11-18T01:09:31Z
+      heartbeat: 2026-11-18T01:16:33Z
     notes: forge, C4e part 6 pre-code. The LCA arm has no depth clamp and the resolver discards before any weight comparison; needs its own consult. With B-248
   - id: B-299
     title: NoChainSwitch offers the node's own canonical block as an ommer (BlockImporter resolveBranch)
