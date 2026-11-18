@@ -2910,7 +2910,7 @@ items:
   - id: B-357
     title: "Spec 030 S4: reload of TLS profiles and identity rules without a restart; expiry gauge"
     priority: P2
-    status: claimed
+    status: in-progress
     area: rpc
     size: M
     opened: 2026-11-18
@@ -2922,7 +2922,7 @@ items:
       by: cloud-0ceb384d
       agent: conduit
       since: 2026-11-18T23:14:47Z
-      heartbeat: 2026-11-18T23:14:47Z
+      heartbeat: 2026-11-18T23:14:52Z
       branch: ccr-0ceb384d-ufzahb
     notes: "US4; FR-030-033. ~400+600 plus an IT. Review: conduit."
   - id: B-358
