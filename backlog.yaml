@@ -2045,13 +2045,18 @@ items:
   - id: B-243
     title: "The batch that creates the state anchor writes state.origin: SNAP finalization and checkpoint import"
     priority: P2
-    status: open
+    status: claimed
     area: storage
     size: S
     opened: 2026-11-13
     refs: []
     links:
       spec: 018
+    claim:
+      by: cloud-dc960fdc
+      agent: main
+      since: 2026-11-18T21:19:23Z
+      heartbeat: 2026-11-18T21:19:23Z
     notes: |-
       C4b part 1 added AppState state.origin, written by the genesis commit only. C5a's finalization commit and E.1's checkpoint import must write it with their anchor (AppStateStorage.putStateOrigin), or a move below the pivot answers Deep instead of Pivot. plan.md 'C4b part 1'.
       2026-11-18 released by cloud-dc960fdc: SNAP half already on staging (PathStateStorage.commitHandoff writes putStateOrigin with putStateAnchor in one synced batch; HandoffCommitSpec:86, SyncHandoffSpec:82). Checkpoint half waits for C5c (B-066): CheckpointImporter has no anchor on the hash layout; the unified-layout import must write state.origin with its anchor.
