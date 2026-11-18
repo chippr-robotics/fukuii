@@ -705,7 +705,14 @@ abstract class BaseNode extends Node:
       enginePort = opt(c.getInt("network.engine-api.port")).getOrElse(0)
     )
 
-  override def shutdown: () => Unit = () =>
+  // Set by the first shutdown. A start that fails shuts the node down itself, within a bound, and then exits; the exit
+  // runs the JVM hook, which calls shutdown again. That second call returns at once, so a first one that overran its
+  // bound cannot hold the exit up (B-274). Lazy: the hook can run before this trait's constructor has.
+  private lazy val shutdownStarted = new java.util.concurrent.atomic.AtomicBoolean(false)
+
+  override def shutdown: () => Unit = () => if shutdownStarted.compareAndSet(false, true) then shutDownOnce()
+
+  private def shutDownOnce(): Unit =
     def tryAndLogFailure(f: () => Any): Unit = Try(f()) match // Any: accepts any thunk — return value discarded
       case Failure(e) => log.warn("Error while shutting down...", e)
       case Success(_) =>

@@ -310,9 +310,13 @@ object App extends Logger:
         JvmFlagGuard.check() // this path bypasses Fukuii.main, which runs the same check
         val rootConfig = com.typesafe.config.ConfigFactory.load()
         val runtime = com.chipprbots.ethereum.runtime.FukuiiRuntime.fromConfig(rootConfig)
-        runtime.startAll()
-        // Block until shutdown
+        // Registered first, so the instances that did start are stopped on any exit, the one below included.
         Runtime.getRuntime.addShutdownHook(new Thread(() => runtime.stopAll()))
+        // An instance that fails to start is shut down and the others run on; with none running, the process has
+        // nothing to do and exits non-zero rather than idle (B-274).
+        if runtime.startAll().isEmpty && runtime.instances.nonEmpty then
+          log.error("No chain instance started; exiting")
+          deps.exit(com.chipprbots.ethereum.nodebuilder.NodeStartup.FailedExitCode)
       case Some(`faucet`)       => Faucet.main(argsWithoutModifiers.tail)
       case Some(`sigValidator`) => SignatureValidator.main(argsWithoutModifiers.tail)
       case Some(`cli`)          => CliLauncher.main(argsWithoutModifiers.tail)
