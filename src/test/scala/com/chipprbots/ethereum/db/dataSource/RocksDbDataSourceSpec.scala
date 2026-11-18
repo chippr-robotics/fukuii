@@ -461,9 +461,13 @@ class RocksDbDataSourceSpec extends AnyFlatSpec with Matchers:
     val ds = filled(dbPath)
     val inCompaction = new java.util.concurrent.CountDownLatch(1)
     val closeMayEnd = new java.util.concurrent.CountDownLatch(1)
+    // Only the first compaction is held. The probes below may start before close() has (a loaded machine runs the
+    // closing future late): they must run as plain compactions, not wait on a latch only this thread can open.
+    val first = new java.util.concurrent.atomic.AtomicBoolean(true)
     ds.beforeNativeCompaction = () =>
-      inCompaction.countDown()
-      closeMayEnd.await(30, java.util.concurrent.TimeUnit.SECONDS) shouldBe true
+      if first.getAndSet(false) then
+        inCompaction.countDown()
+        closeMayEnd.await(30, java.util.concurrent.TimeUnit.SECONDS) shouldBe true
     val compacting = Future(ds.compactRange(Ns, key(0).toArray, key(255).toArray))(using ExecutionContext.global)
     inCompaction.await(30, java.util.concurrent.TimeUnit.SECONDS) shouldBe true
 
