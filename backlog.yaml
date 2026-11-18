@@ -696,7 +696,7 @@ items:
       by: cloud-dc960fdc
       agent: forge-b067
       since: 2026-11-18T21:58:46Z
-      heartbeat: 2026-11-18T22:27:41Z
+      heartbeat: 2026-11-18T22:50:08Z
     notes: "2026-11-18 in-progress: C6 PR-A (T239 deletion vectors, T238 ECIP-1017) #1936, tests only, no divergence. Next PR-B (T237 reorg matrix, T240 Olympia, MESS ancestor fault). PR-C (T241/T242 peer precondition + T243 pins) waits on user decisions: PoW no-snap fallback; EG-12 declared core-geth peer. PR-D scripts/live."
   - id: B-068
     title: "Spec 018 Track C C7: soak and exit gate (no code)"
