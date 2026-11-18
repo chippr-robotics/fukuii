@@ -2402,7 +2402,7 @@ items:
       by: cloud-dc960fdc
       agent: forge-b296
       since: 2026-11-18T00:00:18Z
-      heartbeat: 2026-11-18T00:00:25Z
+      heartbeat: 2026-11-18T00:16:08Z
     notes: "forge W2, C4e part 4: collectOldBranch loads every old block and receipt from the fork to the head before anything runs; GBs at tens of thousands of blocks. Gate before path-live is on for an archive node"
   - id: B-298
     title: "SYNC-FORK on the hash layout: clamp the resolver's LCA, choose the master peer by weight, judge the peer's branch by weight"
