@@ -1252,19 +1252,19 @@ items:
   - id: B-146
     title: "Spec: zero-trust TLS and mTLS on every service listener (RPC, WS, Engine API, metrics) plus outbound TLS"
     priority: P1
-    status: in-progress
+    status: review
     area: ops
     size: L
     opened: 2026-11-08
     refs: [B-145]
     links:
       issues: [1756]
-      prs: [1903]
+      prs: [1903, 1913]
     claim:
       by: cloud-dc960fdc
       agent: spec-b146
       since: 2026-11-17T23:33:57Z
-      heartbeat: 2026-11-18T03:09:17Z
+      heartbeat: 2026-11-18T03:24:57Z
     notes: |-
       Shared tls block, client-auth need/want, truststore, rotation, cert-identity to namespace map, outbound factory; node-ID allowlist for consortium P2P. Spec Kit first (Principle VI).
       2026-11-18 blocked: Spec 030 draft merged (#1903). /speckit-clarify questions Q1-Q5 await the user: Engine API mTLS, non-loopback policy, identity rules (narrow vs grant, GraphQL), P2P allowlist runtime edits/discovery, revocation. Plan/tasks after the answers.
