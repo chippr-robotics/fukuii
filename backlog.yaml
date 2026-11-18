@@ -2285,11 +2285,12 @@ items:
     closed: 2026-11-18
     refs: []
     links:
-      prs: [1923]
+      prs: [1923, 1928]
       spec: 029
     notes: |-
       vault, spec 029 slice 7: compactRange holds dbLock.readLock for the whole native call while writes take the write lock, so a whole-database compaction stops block import for hours and cannot be cancelled. Shape: a separate compactionGuard RW lock; dbLock only for assureNotClosed and the handle; CompactRangeOptions.setExclusiveManualCompaction(false) and setCanceled; largest family first, guard released between families; close() cancels, then takes the guard's write lock, then dbLock's. Also fixes the cause for SnapStorageDoneStorage.compact and HealingFrontierStorage. Until then the dashboard lists compaction under 'not offered, and why' (a departure from spec 029 FR-054).
       Closes #1689 (was B-029).
+      2026-11-18: #1928 fixed a race in #1923's close-during-compaction test (it waited 30 s when close() started late on CI); no production change.
   - id: B-284
     title: "PoW tie rule: on equal total difficulty core-geth prefers the lower number then random; fukuii keeps its head (strict >)"
     priority: P3
@@ -3054,7 +3055,9 @@ items:
       prs: [1921]
       spec: 018-storage-engine-consolidation
     depends_on: [B-065]
-    notes: dm 7.5 never overwrites a valid different node; under the lock with a stable anchor that row is corrupt for the anchor. Part 1 reports it unresolved/unclean; decide whether repairNodeAt may overwrite it under the lock
+    notes: |-
+      dm 7.5 never overwrites a valid different node; under the lock with a stable anchor that row is corrupt for the anchor. Part 1 reports it unresolved/unclean; decide whether repairNodeAt may overwrite it under the lock
+      Decided 2026-11-18 by the user on beacon's recommendation: overwrite, under the lock, after AnchorReach confirms the anchor names the expected hash; ERROR log and app_db_state_repair_overwrites_total; deleteBadNodeAt still declines. data-model 7.5 rewritten; merged in #1921.
   - id: B-371
     title: TUI compact action over the cancellable compactRange (largest family first, guard released between families)
     priority: P3
