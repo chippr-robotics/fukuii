@@ -15,6 +15,7 @@ import com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncConfig
 import com.chipprbots.ethereum.db.storage.AppStateStorage
 import com.chipprbots.ethereum.db.storage.EvmCodeStorage
 import com.chipprbots.ethereum.db.storage.StateStorage
+import com.chipprbots.ethereum.db.storage.pathstate.PositionRepairs
 
 /** Thin Typed wrapper around [[CombinedRecoveryScanner]]: runs ONE parallel, resumable single-pass scan of the state
   * trie (checking both bytecode and storage per account), then emits both gap sets to the parent `SyncController` via
@@ -60,7 +61,8 @@ object CombinedRecoveryScanActor:
       appStateStorage: AppStateStorage,
       syncController: ActorRef[CombinedScanComplete],
       pivotBlockNumber: BigInt,
-      snapSyncConfig: SNAPSyncConfig
+      snapSyncConfig: SNAPSyncConfig,
+      positions: Option[PositionRepairs] = None
   ): Behavior[Command] =
     Behaviors.setup { ctx =>
       val asyncLog = LoggerFactory.getLogger(getClass)
@@ -73,7 +75,7 @@ object CombinedRecoveryScanActor:
         Future {
           val scanner = new CombinedRecoveryScanner(
             scanRoot = stateRoot,
-            storageForShard = () => stateStorage.getBackingStorage(pivotBlockNumber),
+            storageForShard = () => RecoveryScanStores.forRoot(stateStorage, positions, stateRoot, pivotBlockNumber),
             evmCodeStorage = evmCodeStorage,
             appStateStorage = appStateStorage,
             concurrency = snapSyncConfig.recoveryScanConcurrency,

@@ -15,6 +15,7 @@ import com.chipprbots.ethereum.db.storage.EvmCodeStorage
 import com.chipprbots.ethereum.db.storage.MptStorage
 import com.chipprbots.ethereum.db.storage.Namespaces
 import com.chipprbots.ethereum.db.storage.PathNodeStorage
+import com.chipprbots.ethereum.db.storage.RawNodeRead
 import com.chipprbots.ethereum.domain.Account
 import com.chipprbots.ethereum.domain.Address
 import com.chipprbots.ethereum.domain.UInt256
@@ -189,6 +190,12 @@ object PathStateTestKit:
     override def get(nodeId: Array[Byte]): MptNode = read(under.get(nodeId))
     override def getAt(path: NibblePath, hash: Array[Byte]): MptNode = read(under.getAt(path, hash))
     override def forOwner(owner: Option[ByteString]): MptStorage = new StaleAfter(under.forOwner(owner), healthy, reads)
+    // a presence read (the recovery scans' read of a storage root) is a read of the state too, and a view the disk has
+    // moved away from says so there as well
+    override def rawNodesAt(requests: Seq[(NibblePath, ByteString)]): Seq[RawNodeRead] =
+      if reads.incrementAndGet() > healthy then
+        throw new StaleStateViewException(block(1, EmptyRoot), 0L, 2L, s"the disk moved after $healthy reads")
+      else under.rawNodesAt(requests)
     override def updateNodesInStorage(newRoot: Option[MptNode], toRemove: Seq[MptNode]): Option[MptNode] =
       throw new UnsupportedOperationException("a view that is only read")
     override def persist(): Unit = ()

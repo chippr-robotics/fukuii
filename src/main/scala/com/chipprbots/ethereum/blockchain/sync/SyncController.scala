@@ -2900,9 +2900,14 @@ object SyncController:
       * `None` when there is no root: `startRecovery` then has nothing to scan.
       */
     private def recoveryScanRoot(): Option[(ByteString, BigInt)] =
+      // On the unified layout the state to scan is the anchor's: its rows are the only ones there are (spec 018 T219).
+      val positions = blockchainWriter.positionRepairs
       def readable(root: ByteString, number: BigInt): Boolean =
-        stateStorage.getBackingStorage(number).holdsNode(root)
-      val best = blockchainReader.getBestBlockHeader.map(h => (h.stateRoot.value, h.number.value))
+        RecoveryScanStores.readable(stateStorage, positions, root, number)
+      val best = RecoveryScanStores
+        .anchorOf(positions)
+        .map(held => (held.stateRoot, held.number))
+        .orElse(blockchainReader.getBestBlockHeader.map(h => (h.stateRoot.value, h.number.value)))
       val pivot = for
         root <- appStateStorage.getSnapSyncStateRoot()
         number <- appStateStorage.getSnapSyncPivotBlock()
@@ -2997,7 +3002,8 @@ object SyncController:
                     appStateStorage,
                     combinedScanAdapter,
                     pivotBlock,
-                    snapSyncConfig
+                    snapSyncConfig,
+                    blockchainWriter.positionRepairs
                   )
                 )
                 // PR #1378: CombinedRecoveryScanActor owns a full recovery pass that must complete — no cap.
@@ -3021,7 +3027,8 @@ object SyncController:
                             networkPeerManager,
                             bytecodeRecoveryAdapter,
                             pivotBlock,
-                            snapSyncConfig
+                            snapSyncConfig,
+                            blockchainWriter.positionRepairs
                           )
                         )
                         .onFailure[Throwable](
@@ -3047,7 +3054,8 @@ object SyncController:
                             networkPeerManager,
                             storageRecoveryAdapter,
                             pivotBlock,
-                            snapSyncConfig
+                            snapSyncConfig,
+                            blockchainWriter.positionRepairs
                           )
                         )
                         .onFailure[Throwable](
@@ -3148,7 +3156,8 @@ object SyncController:
                           bytecodeRecoveryAdapter,
                           pivotBlock,
                           snapSyncConfig,
-                          effByte
+                          effByte,
+                          blockchainWriter.positionRepairs
                         )
                       )
                       .onFailure[Throwable](
@@ -3175,7 +3184,8 @@ object SyncController:
                           storageRecoveryAdapter,
                           pivotBlock,
                           snapSyncConfig,
-                          effStor
+                          effStor,
+                          blockchainWriter.positionRepairs
                         )
                       )
                       .onFailure[Throwable](

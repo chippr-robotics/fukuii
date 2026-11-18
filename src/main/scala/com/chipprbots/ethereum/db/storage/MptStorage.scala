@@ -110,6 +110,20 @@ trait MptStorage:
   /** [[rawNodes]] for nodes named by position and hash. */
   def rawNodesAt(requests: Seq[(NibblePath, ByteString)]): Seq[RawNodeRead] = rawNodes(requests.map(_._2))
 
+  /** [[holdsNode]] for the node `hash` names at `path` of the trie this storage is for (see [[forOwner]]): one raw read
+    * by [[rawNodesAt]], nothing decoded, judged as `NodeFault.provablyBad` judges it. What the recovery scans ask of a
+    * storage trie's root (spec 018 C5b, T219).
+    *
+    * Unlike [[holdsNode]] it does not turn a failing read into "not held": a scan that read an absent root as missing
+    * would fetch what is there, and one that could not read at all (a store that failed, a state that moved) is a scan
+    * that did not run. Only the row's own answer, absent or not the node, says "not held".
+    */
+  def holdsNodeAt(path: NibblePath, hash: ByteString): Boolean =
+    rawNodesAt(Seq((path, hash))) match
+      case Seq(RawNodeRead.Absent) => false
+      case Seq(raw)                => !NodeFault.provablyBad(hash, raw)
+      case _                       => false
+
 class SerializingMptStorage(storage: NodesKeyValueStorage, val executionCache: Option[DecodedNodeCache] = None)
     extends MptStorage:
 

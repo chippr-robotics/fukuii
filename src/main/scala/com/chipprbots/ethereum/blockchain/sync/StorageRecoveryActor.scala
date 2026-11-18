@@ -27,6 +27,7 @@ import com.chipprbots.ethereum.blockchain.sync.snap.controller.StateIngest
 import com.chipprbots.ethereum.db.storage.MptStorage
 import com.chipprbots.ethereum.db.storage.SnapSyncProgressStorage
 import com.chipprbots.ethereum.db.storage.StateStorage
+import com.chipprbots.ethereum.db.storage.pathstate.PositionRepairs
 import com.chipprbots.ethereum.domain.Account
 import com.chipprbots.ethereum.mpt.*
 import com.chipprbots.ethereum.mpt.MptVisitors.*
@@ -103,7 +104,8 @@ object StorageRecoveryActor:
       networkPeerManager: TypedActorRef[NetworkPeerManagerActor.Command],
       syncController: TypedActorRef[SyncControllerMsg],
       pivotBlockNumber: BigInt,
-      snapSyncConfig: SNAPSyncConfig
+      snapSyncConfig: SNAPSyncConfig,
+      positions: Option[PositionRepairs] = None
   ): Behavior[Command] = scanning(
     stateRoot,
     stateIngest,
@@ -112,7 +114,8 @@ object StorageRecoveryActor:
     pivotBlockNumber,
     snapSyncConfig,
     preloaded = None,
-    coordinatorForTesting = None
+    coordinatorForTesting = None,
+    positions = positions
   )
 
   /** Download-only variant: skip the scan and go straight to downloading the supplied missing storage tries (produced
@@ -125,7 +128,8 @@ object StorageRecoveryActor:
       syncController: TypedActorRef[SyncControllerMsg],
       pivotBlockNumber: BigInt,
       snapSyncConfig: SNAPSyncConfig,
-      missing: Seq[(ByteString, ByteString)]
+      missing: Seq[(ByteString, ByteString)],
+      positions: Option[PositionRepairs] = None
   ): Behavior[Command] = scanning(
     stateRoot,
     stateIngest,
@@ -134,7 +138,8 @@ object StorageRecoveryActor:
     pivotBlockNumber,
     snapSyncConfig,
     preloaded = Some(missing),
-    coordinatorForTesting = None
+    coordinatorForTesting = None,
+    positions = positions
   )
 
   /** What the recovery coordinator takes from the node's SNAP configuration, as the SNAP path's `DownloadSupervisor`
@@ -158,7 +163,8 @@ object StorageRecoveryActor:
       pivotBlockNumber: BigInt,
       snapSyncConfig: SNAPSyncConfig,
       preloaded: Option[Seq[(ByteString, ByteString)]] = None,
-      coordinatorForTesting: Option[ActorRef] = None
+      coordinatorForTesting: Option[ActorRef] = None,
+      positions: Option[PositionRepairs] = None
   ): Behavior[Command] = scanning(
     stateRoot,
     stateIngest,
@@ -167,7 +173,8 @@ object StorageRecoveryActor:
     pivotBlockNumber,
     snapSyncConfig,
     preloaded,
-    coordinatorForTesting
+    coordinatorForTesting,
+    positions
   )
 
   private def scanning(
@@ -178,7 +185,8 @@ object StorageRecoveryActor:
       pivotBlockNumber: BigInt,
       snapSyncConfig: SNAPSyncConfig,
       preloaded: Option[Seq[(ByteString, ByteString)]],
-      coordinatorForTesting: Option[ActorRef]
+      coordinatorForTesting: Option[ActorRef],
+      positions: Option[PositionRepairs]
   ): Behavior[Command] =
     Behaviors.setup { ctx =>
       val asyncLog = LoggerFactory.getLogger(getClass)
@@ -192,7 +200,12 @@ object StorageRecoveryActor:
           )
           ctx.pipeToSelf(
             Future(
-              scanForMissingStorage(stateRoot, stateIngest.stateTries.getBackingStorage(pivotBlockNumber), ctx.log)
+              scanForMissingStorage(
+                stateRoot,
+                RecoveryScanStores
+                  .forRoot(stateIngest.stateTries, positions, stateRoot, pivotBlockNumber),
+                ctx.log
+              )
             )(using ctx.executionContext)
           ) {
             case Success(result) => ScanResult(result)
@@ -290,7 +303,8 @@ object StorageRecoveryActor:
               stateIngest,
               pivotBlockNumber,
               syncController,
-              snapSyncConfig
+              snapSyncConfig,
+              positions
             )
 
         case _ => Behaviors.unhandled
@@ -305,7 +319,8 @@ object StorageRecoveryActor:
       stateIngest: StateIngest,
       pivotBlockNumber: BigInt,
       syncController: TypedActorRef[SyncControllerMsg],
-      snapSyncConfig: SNAPSyncConfig
+      snapSyncConfig: SNAPSyncConfig,
+      positions: Option[PositionRepairs]
   ): Behavior[Command] =
     val expectedCount = missing.size
     var progressSeq = 0L
@@ -339,7 +354,7 @@ object StorageRecoveryActor:
 
       def finishRecovery(reason: String): Behavior[Command] =
         timers.cancel("abandon")
-        logResidualGaps(missing, stateIngest.stateTries, pivotBlockNumber, ctx.log)
+        logResidualGaps(missing, stateIngest.stateTries, positions, stateRoot, pivotBlockNumber, ctx.log)
         RecoveryMetrics.setStoragePhase(RecoveryMetrics.PhaseComplete)
         stateIngest.appState.storageRecoveryDone().commit()
         ctx.log.info(s"Storage recovery finished ($reason).")
@@ -463,17 +478,16 @@ object StorageRecoveryActor:
   private def logResidualGaps(
       missing: Seq[(ByteString, ByteString)],
       stateStorage: StateStorage,
+      positions: Option[PositionRepairs],
+      stateRoot: ByteString,
       pivotBlockNumber: BigInt,
       log: Logger
   ): Unit =
-    val mptStorage = stateStorage.getBackingStorage(pivotBlockNumber)
+    val mptStorage = RecoveryScanStores.forRoot(stateStorage, positions, stateRoot, pivotBlockNumber)
     val residual =
       try
         missing.count { case (accountHash, storageRoot) =>
-          try
-            mptStorage.forOwner(Some(accountHash)).getAt(NibblePath.Empty, storageRoot.toArray)
-            false
-          catch case _: MerklePatriciaTrie.MPTException => true
+          !mptStorage.forOwner(Some(accountHash)).holdsNodeAt(NibblePath.Empty, storageRoot)
         }
       catch
         case fault: com.chipprbots.ethereum.db.storage.pathstate.StateFault =>
@@ -528,10 +542,8 @@ object StorageRecoveryActor:
             if !seenRoots.contains(trie) then
               seenRoots += trie
               checkedCount += 1
-              try mptStorage.forOwner(Some(accountHash)).getAt(NibblePath.Empty, account.storageRoot.toArray)
-              catch
-                case _: MerklePatriciaTrie.MPTException =>
-                  missing += ((accountHash, account.storageRoot.value))
+              if !mptStorage.forOwner(Some(accountHash)).holdsNodeAt(NibblePath.Empty, account.storageRoot.value) then
+                missing += ((accountHash, account.storageRoot.value))
         case Failure(_) => // Skip malformed account RLP
     try
       val visitor = new PathTrackingLeafWalkVisitor(accountTrie, ByteString.empty, onLeaf)

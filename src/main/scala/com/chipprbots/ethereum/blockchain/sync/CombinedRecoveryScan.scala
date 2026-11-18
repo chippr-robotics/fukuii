@@ -57,10 +57,9 @@ final class CombinedRecoveryScan(
             CombinedRecoveryScan.storageTrieKey(shared, accountHash, account.storageRoot.value)
           )
         then
-          try
-            // the root of THIS account's storage trie
-            val _ = mptStorage.forOwner(Some(accountHash)).getAt(NibblePath.Empty, account.storageRoot.toArray)
-          catch case _: MerklePatriciaTrie.MPTException => missingStorage += ((accountHash, account.storageRoot.value))
+          // the root of THIS account's storage trie: a presence read, one raw row and nothing decoded (B-034, T219)
+          if !mptStorage.forOwner(Some(accountHash)).holdsNodeAt(NibblePath.Empty, account.storageRoot.value) then
+            missingStorage += ((accountHash, account.storageRoot.value))
         onAccount(isContract)
       case _ => () // skip malformed account RLP, as both legacy scans do
 

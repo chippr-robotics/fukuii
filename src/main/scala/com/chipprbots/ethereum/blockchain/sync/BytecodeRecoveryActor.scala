@@ -22,6 +22,7 @@ import com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncConfig
 import com.chipprbots.ethereum.blockchain.sync.snap.controller.StateIngest
 import com.chipprbots.ethereum.db.storage.EvmCodeStorage
 import com.chipprbots.ethereum.db.storage.MptStorage
+import com.chipprbots.ethereum.db.storage.pathstate.PositionRepairs
 import com.chipprbots.ethereum.domain.Account
 import com.chipprbots.ethereum.domain.CodeHash
 import com.chipprbots.ethereum.mpt.*
@@ -80,7 +81,8 @@ object BytecodeRecoveryActor:
       networkPeerManager: TypedActorRef[NetworkPeerManagerActor.Command],
       syncController: TypedActorRef[SyncControllerMsg],
       pivotBlockNumber: BigInt,
-      snapSyncConfig: SNAPSyncConfig
+      snapSyncConfig: SNAPSyncConfig,
+      positions: Option[PositionRepairs] = None
   ): Behavior[Command] = scanning(
     stateRoot,
     stateIngest,
@@ -89,7 +91,8 @@ object BytecodeRecoveryActor:
     pivotBlockNumber,
     snapSyncConfig,
     preloaded = None,
-    coordinatorForTesting = None
+    coordinatorForTesting = None,
+    positions = positions
   )
 
   /** Download-only variant: skip the scan and go straight to downloading the supplied missing codeHashes (produced by
@@ -102,7 +105,8 @@ object BytecodeRecoveryActor:
       syncController: TypedActorRef[SyncControllerMsg],
       pivotBlockNumber: BigInt,
       snapSyncConfig: SNAPSyncConfig,
-      missing: Seq[ByteString]
+      missing: Seq[ByteString],
+      positions: Option[PositionRepairs] = None
   ): Behavior[Command] = scanning(
     stateRoot,
     stateIngest,
@@ -111,7 +115,8 @@ object BytecodeRecoveryActor:
     pivotBlockNumber,
     snapSyncConfig,
     preloaded = Some(missing),
-    coordinatorForTesting = None
+    coordinatorForTesting = None,
+    positions = positions
   )
 
   /** Test entry point: exposes the preloaded-missing and coordinator-injection hooks. */
@@ -123,7 +128,8 @@ object BytecodeRecoveryActor:
       pivotBlockNumber: BigInt,
       snapSyncConfig: SNAPSyncConfig,
       preloaded: Option[Seq[ByteString]] = None,
-      coordinatorForTesting: Option[ActorRef] = None
+      coordinatorForTesting: Option[ActorRef] = None,
+      positions: Option[PositionRepairs] = None
   ): Behavior[Command] = scanning(
     stateRoot,
     stateIngest,
@@ -132,7 +138,8 @@ object BytecodeRecoveryActor:
     pivotBlockNumber,
     snapSyncConfig,
     preloaded,
-    coordinatorForTesting
+    coordinatorForTesting,
+    positions
   )
 
   private def scanning(
@@ -143,7 +150,8 @@ object BytecodeRecoveryActor:
       pivotBlockNumber: BigInt,
       snapSyncConfig: SNAPSyncConfig,
       preloaded: Option[Seq[ByteString]],
-      coordinatorForTesting: Option[ActorRef]
+      coordinatorForTesting: Option[ActorRef],
+      positions: Option[PositionRepairs]
   ): Behavior[Command] =
     Behaviors.setup { ctx =>
       val asyncLog = LoggerFactory.getLogger(getClass)
@@ -159,7 +167,8 @@ object BytecodeRecoveryActor:
             Future(
               scanForMissingBytecodes(
                 stateRoot,
-                stateIngest.stateTries.getBackingStorage(pivotBlockNumber),
+                RecoveryScanStores
+                  .forRoot(stateIngest.stateTries, positions, stateRoot, pivotBlockNumber),
                 stateIngest.bytecode,
                 ctx.log
               )
