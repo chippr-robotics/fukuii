@@ -1260,7 +1260,7 @@ trait GraphQLServiceBuilder:
 
 trait JSONRpcHttpServerBuilder:
   self: ActorSystemBuilder & BlockchainBuilder & JSONRpcControllerBuilder & JSONRpcHealthcheckerBuilder &
-    SecureRandomBuilder & JSONRpcConfigBuilder & SSLContextBuilder & GraphQLServiceBuilder =>
+    SecureRandomBuilder & JSONRpcConfigBuilder & SSLContextBuilder & GraphQLServiceBuilder & InstanceConfigProvider =>
 
   lazy val maybeJsonRpcHttpServer: Either[String, JsonRpcHttpServer] =
     given org.apache.pekko.actor.ActorSystem = classicSystem
@@ -1268,7 +1268,7 @@ trait JSONRpcHttpServerBuilder:
       jsonRpcHttpController,
       jsonRpcHealthChecker,
       jsonRpcConfig.httpServerConfig,
-      () => sslContext("fukuii.network.rpc.http"),
+      () => sslContext(instanceConfig.config, "network.rpc.http", "fukuii"),
       maybeGraphQLService
     )
 

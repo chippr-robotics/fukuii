@@ -44,10 +44,22 @@ abstract class RpcClient(node: Uri, timeout: Duration, getSSLContext: () => Eith
     // We only need code and message for error handling
     yield JsonRpcError(code, message, None)
 
-  lazy val connectionContext: HttpsConnectionContext =
+  /** The client's own TLS context, built when the client is, for an `https` node. A TLS configuration that cannot be
+    * built fails the construction with its reason (which names the key): the client never falls back to the JDK's
+    * default trust, and the error is not turned into a failed request later (B-148, spec 030 FR-012).
+    */
+  private val configuredHttpsContext: Option[HttpsConnectionContext] =
     if node.scheme.startsWith("https") then
-      getSSLContext().toOption.fold(Http().defaultClientHttpsContext)(ConnectionContext.httpsClient)
-    else Http().defaultClientHttpsContext
+      getSSLContext() match
+        case Right(context) => Some(ConnectionContext.httpsClient(context))
+        case Left(error) =>
+          throw new IllegalStateException(
+            s"Refusing to start: the TLS client for $node cannot be set up: ${error.reason}"
+          )
+    else None
+
+  lazy val connectionContext: HttpsConnectionContext =
+    configuredHttpsContext.getOrElse(Http().defaultClientHttpsContext)
 
   lazy val connectionPoolSettings: ConnectionPoolSettings = ConnectionPoolSettings(system)
     .withConnectionSettings(
