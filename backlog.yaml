@@ -3262,3 +3262,13 @@ items:
       since: 2026-11-18T23:16:34Z
       heartbeat: 2026-11-18T23:16:34Z
     notes: Found in B-383 (forge). BranchResolution logs 'ChainWeight not found' and returns NoChainSwitch; PowEscalationFeed.weighed also skips it. Same for a missing fork header not named by the hash index. Name what ends the wait (escalate as a local fault, or repair the weight).
+  - id: B-386
+    title: Guard PoW node that fell back to regular sync logs an ERROR at every restart (beforeSnap Refused on held state)
+    priority: P3
+    status: open
+    area: sync
+    opened: 2026-11-18
+    refs: []
+    links:
+      spec: 018
+    notes: "After the C6 PR-C fallback, do-snap-sync=true restarts go precondition -> beforeSnap -> Refused (state above genesis) -> log.error. Correct, but noisy: say once at INFO that the node regular-syncs on the state it holds. Also: declared peers come from static-nodes.json and snap-server-peers at start only; admin_addPeer peers are not counted."
