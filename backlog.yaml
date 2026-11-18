@@ -3142,15 +3142,19 @@ items:
   - id: B-378
     title: "RELEASE BLOCKER: no release tag between C5c PR1 (checkpoint v2 codec/exporter) and PR2 (v2 importer); they ship together"
     priority: P1
-    status: open
+    status: done
     area: storage
     size: S
     opened: 2026-11-18
+    closed: 2026-11-18
     refs: []
     links:
+      prs: [1932]
       spec: specs/018-storage-engine-consolidation
     depends_on: [B-066]
-    notes: "forge + beacon sign-off of C5c PR1 (2026-11-18): until PR2 the importer reads v2 with no window, parent-hash, genesis or expected-hash checks, and on ETC block C+1 with an ommer throws AncestorNotStored. Close when PR2 merges, or hold tags until then."
+    notes: |-
+      forge + beacon sign-off of C5c PR1 (2026-11-18): until PR2 the importer reads v2 with no window, parent-hash, genesis or expected-hash checks, and on ETC block C+1 with an ommer throws AncestorNotStored. Close when PR2 merges, or hold tags until then.
+      2026-11-18 done: PR1 and PR2 landed in one squash commit (#1932), so no tag can carry the v2 exporter without the v2 importer.
   - id: B-379
     title: Pin checkpoint-expected-block-hash per public chain (ETC, Mordor, ETH, Sepolia, Hoodi) once each has a v2 archive
     priority: P2
