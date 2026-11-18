@@ -2817,3 +2817,13 @@ items:
     links:
       spec: "016"
     notes: "Seen on B-349 (#1912): 5 full runs, 2 with one failure each, a different test each time; 'save fetched node' also fails on plain staging. Fixed waits (fishForSpecificMessage 5 s, a 1 ms deadline) race a loaded machine. Find each wait and synchronise on the event instead; never skip."
+  - id: B-353
+    title: "CI: a commit pushed by the 'Apply scalafmt' workflow starts no CI, so the PR's head has no checks"
+    priority: P3
+    status: open
+    area: ci
+    size: S
+    opened: 2026-11-18
+    refs: []
+    links: {}
+    notes: "Seen on #1912: 5a8da9a1f (style: apply scalafmt, pushed with the workflow token) had 0 check runs; a later push was needed. GITHUB_TOKEN pushes do not trigger workflows. Options: push with a GitHub App token, or fail the check and let the author run formatAll instead of pushing."
