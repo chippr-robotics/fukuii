@@ -1579,6 +1579,12 @@ directly after the header block (user, 2026-11-18, decision 1), so a reader has 
 that order is `BadFormat`: a header after a body, a body after a node, a node after a code, or an unknown tag. So is a
 section with the wrong number of entries.
 
+**Canonical header encoding** (PR1 sign-off, 2026-11-18; enforced by PR2's importer). For `C` (field 7) and for every
+window header, the importer decodes the RLP and requires **`rlp == header.toBytes`**, byte for byte, and a mismatch is
+`BadFormat`. Without it a non-canonical encoding of the same header (a long-form length, a leading zero in an integer)
+decodes to the same block but changes the header block's bytes, and so the archive's hash (below): one checkpoint could
+then carry two archive ids and slip past the refused-archive record.
+
 **Window headers** (review, 2026-11-18). There are `min(256, N)` `0x03` entries, child first. The first is `C-1` and must
 hash to `C.parentHash`. Each next one must hash to the `parentHash` of the one before it. Their numbers must be consecutive,
 one less each time. When `N < 256` the last one is block 0 and must hash to `genesisHash`. A break, a gap, a wrong number
@@ -1610,7 +1616,10 @@ inside its parent. Position is implicit, and so is the storage owner (below). An
 
 **Codes** (review, 2026-11-18). The codes come after the nodes, one entry per distinct code. They are **sorted ascending by
 `keccak(code)`**, compared as unsigned bytes. A code whose hash is not greater than the one before it is a duplicate or out
-of order, and is `BadFormat`. This makes an archive **byte-reproducible**: two exports of one state are equal byte for byte.
+of order, and is `BadFormat`. This makes an archive **byte-reproducible**: two exports of one state are equal byte for byte. **The exporter refuses a
+code whose `keccak` is not the hash it was read under** (PR1 sign-off, 2026-11-18), as a node refuses such a code when it
+serves or executes it; an entry carries no hash, so a corrupt code would otherwise be exported under a hash it does not
+have.
 Today's exporter collects code hashes in a `java.util.HashSet` (`CheckpointExporter.scala:170`), which gives no fixed order.
 
 **Trust: total difficulty and the expected block hash** (S0 item 8; user, 2026-11-18, decisions 2 and 3; review, 2026-11-18).
@@ -1620,8 +1629,10 @@ given, and PoW fork choice compares it.
   importer refuses an archive whose `C` hashes to anything else. **ETH and ETC share a genesis hash**, so field 4 does not
   tell them apart. Only the chain id and the expected block hash do. That is why every public chain (ETC, Mordor, ETH
   mainnet, Sepolia, Hoodi) has its expected hash pinned in its chain config (review, 2026-11-18).
-- **The TD-exact flag.** The exporter writes `0x01` when its node holds the chain-weight invariant
-  (`AppStateStorage.hasChainWeightInvariant`) and `0x00` otherwise. The importer **accepts an estimated TD with a WARN** that
+- **The TD-exact flag** (amended at the PR1 sign-off, forge and beacon, 2026-11-18). The exporter writes `0x01` when the TD
+  was **summed exactly from the genesis** (every header from 0 to `C` read and its difficulty added) **or** its node holds
+  the chain-weight invariant (`AppStateStorage.hasChainWeightInvariant`), and `0x00` otherwise. Either source makes the TD
+  exact; the earlier text named the invariant only, which marked an exact sum as an estimate. The importer **accepts an estimated TD with a WARN** that
   names the block and the TD. It does not refuse (user, 2026-11-18, decision 2). In both cases `beginCheckpointImport`
   withdraws the invariant as it does today (#1654), and `ChainWeightReconcile` checks the weight once the headers below
   are in.
@@ -1630,11 +1641,22 @@ given, and PoW fork choice compares it.
   - The exporter **refuses a block above the finalized block**. Its retention reaches the finalized block, because retention
     is widened by the finality lag on ETH (4.5).
   - On a post-merge header (difficulty 0), the importer requires **TD >= TTD**. On a chain merged at genesis it requires
-    **TD = the genesis difficulty**. Either failure is a refusal before any write.
-  - Operators take the expected block hash from a finalized beacon block's `execution_payload.block_hash`.
-- **Open, for the PR1 sign-off:** a checkpoint below the merge block on a PoS chain. Its `C+1` can carry ommers, but the
-  window has no bodies. The proposal is that the exporter refuses a non-zero-difficulty `C` on a PoS chain that was not
-  merged at genesis. The 2026-11-18 decisions do not settle it.
+    **TD = the genesis difficulty**. Either failure is a refusal before any write. **The exporter runs the same check**
+    before it writes anything, and refuses with its own reason, so no flag (`--allow-estimated-td` included) produces an
+    archive that every importer refuses (PR1 sign-off, 2026-11-18).
+  - Operators take the expected block hash from a finalized beacon block's `execution_payload.block_hash`. With no block
+    given, the export CLI defaults to the **finalized** block on a PoS chain, not the best block. A block counts as
+    finalized only when both its number and the canonical hash at that number match the stored finalized hash.
+- **A pre-merge checkpoint on a PoS chain** (settled at the PR1 sign-off, forge and beacon, 2026-11-18; this was the open
+  item of the first draft):
+  - **"Merged at genesis" means TTD <= the genesis difficulty.** By that rule Hoodi and Platåberget are merged at genesis;
+    Sepolia and ETH mainnet are not.
+  - **The exporter refuses a `C` with non-zero difficulty on a chain that is not merged at genesis.** Such a `C` is a PoW
+    block whose `C+1` can carry ommers, and a PoS window has no bodies to validate them.
+  - **The importer picks PoS from the chain's TTD, not from `C`'s difficulty.** A chain with a TTD configured is PoS for
+    the archive rules (headers-only window, a `0x04` entry is `BadFormat`, the TD rule above), whatever `C`'s difficulty.
+    Note that the window of the first PoS block holds PoW headers, with ommers; they are headers only, and nothing after
+    the merge validates ommers, so no body is needed.
 
 **Storage owner** (review, 2026-11-18). The format has no owner field: the owner follows from the pre-order walk. It is
 **the account leaf's 64-nibble full key (`path ++ leaf key`), packed to 32 bytes, and not keccak of it**. That key already
