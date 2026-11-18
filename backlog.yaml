@@ -649,24 +649,24 @@ items:
   - id: B-065
     title: "Spec 018 Track C C5b: the audit, on-demand fetch and recovery scans by position (item 10)"
     priority: P2
-    status: in-progress
+    status: review
     area: storage
     size: L
     opened: 2026-11-07
     refs: [018 C5b]
     links:
-      prs: [1921, 1929]
+      prs: [1921, 1929, 1930]
       spec: specs/018-storage-engine-consolidation
     depends_on: [B-064]
     claim:
       by: cloud-dc960fdc
       agent: vault-b065fix
       since: 2026-11-18T13:27:08Z
-      heartbeat: 2026-11-18T18:33:00Z
+      heartbeat: 2026-11-18T18:56:12Z
     notes: |-
-      2026-11-18 in-progress: C5b part 1 (repair/delete/audit by position) #1921 under beacon review; part 2 (importer sites, fetch by position) in progress; part 3 (recovery scans, T214/T219, T221) next. Follow-ups B-369, B-370.
       2026-11-18 in-progress: C5b part 1 merged #1921 (with B-370). Part 2 (importer by position + escalation) #1929. Part 3 (recovery scans, branch fix/b065-c5b-recovery-scans) to be rebased after #1929 merges; T221 DC-14 test-level figures in it. Follow-ups B-369, B-372, B-373, B-375, B-376.
       2026-11-18 in-progress: Part 3 (recovery scans by position, T214/T219, T221 dc14-C5b.md) rebased onto part 2 and pushed: fix/b065-c5b-recovery-scans @ 6c8ee8592 (502 targeted tests pass); PR opens when #1929 merges. Then B-065 done; C5c (B-066) next.
+      2026-11-18 review: Parts 1 and 2 merged (#1921, #1929). Part 3 (recovery scans by position, T214/T219/T221) #1930 is the last C5b PR.
   - id: B-066
     title: "Spec 018 Track C C5c: checkpoint format version 2 and the position-assigning importer (item 10)"
     priority: P2
