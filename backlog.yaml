@@ -2437,17 +2437,20 @@ items:
   - id: B-314
     title: "C5 gate: hive engine re-org suites with the guard on, once part 10 starts the importer there (B-297 item 5)"
     priority: P1
-    status: in-progress
+    status: blocked
     area: consensus
     opened: 2026-11-16
     refs: [B-297]
-    links: {}
+    links:
+      prs: [1910]
     claim:
       by: cloud-dc960fdc
       agent: hive-b314
       since: 2026-11-18T00:57:40Z
-      heartbeat: 2026-11-18T01:53:15Z
-    notes: hive client has no switch for fukuii.state.path-live; needs one, and a host
+      heartbeat: 2026-11-18T03:02:28Z
+    notes: |-
+      hive client has no switch for fukuii.state.path-live; needs one, and a host
+      2026-11-18 blocked: The hive client switch for path-live landed (#1910). Remaining: the gate run itself, which needs a hive host or a dispatch: gh workflow run hive-engine.yml --ref staging -f path_live=true -f sim_limit='/re-?org' (or scripts/hive/local.sh ethereum/engine --limit '/re-?org' --path-live).
   - id: B-315
     title: "Weight arm of reorganiseOnLayers: weigh again when the head moved between the comparison and the move"
     priority: P3
