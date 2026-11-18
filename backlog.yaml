@@ -2283,7 +2283,7 @@ items:
   - id: B-281
     title: "RocksDbDataSource: a manual compaction that does not hold the database lock (compactionGuard, per family, cancellable), then the TUI's compact action"
     priority: P2
-    status: claimed
+    status: in-progress
     area: storage
     size: M
     opened: 2026-11-14
@@ -2294,7 +2294,7 @@ items:
       by: cloud-dc960fdc
       agent: vault-small2
       since: 2026-11-18T13:49:04Z
-      heartbeat: 2026-11-18T13:49:04Z
+      heartbeat: 2026-11-18T13:49:08Z
     notes: |-
       vault, spec 029 slice 7: compactRange holds dbLock.readLock for the whole native call while writes take the write lock, so a whole-database compaction stops block import for hours and cannot be cancelled. Shape: a separate compactionGuard RW lock; dbLock only for assureNotClosed and the handle; CompactRangeOptions.setExclusiveManualCompaction(false) and setCanceled; largest family first, guard released between families; close() cancels, then takes the guard's write lock, then dbLock's. Also fixes the cause for SnapStorageDoneStorage.compact and HealingFrontierStorage. Until then the dashboard lists compaction under 'not offered, and why' (a departure from spec 029 FR-054).
       Closes #1689 (was B-029).
