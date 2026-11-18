@@ -2776,3 +2776,13 @@ items:
     links:
       spec: "016"
     notes: "Seen while verifying B-298, reproduced with staging sources only: 'fetch the bodies missing below a block whose ommers cannot be checked', 'free the slot of a fetch of ancestor bodies ... during a fork recovery', 'ask again for ancestor bodies ... deadline'."
+  - id: B-350
+    title: "FastSyncBranchResolverActorSpec: scripted binary-search tests flake ~1 in 3 (reply published before the request handler subscribes)"
+    priority: P2
+    status: open
+    area: test
+    opened: 2026-11-18
+    refs: []
+    links:
+      spec: specs/016-snap-controller-split
+    notes: "Seen on origin/staging 18194e219 alone: 'No common block is found' failed 1 of 3 runs; on the B-298 branch 'highest common block is in the first half' failed once. NetworkPeerManagerAutoPilot answers by request count; a reply lost to the bus race times out, the resolver restarts, and the script is off by one. Found by forge-b298."
