@@ -1958,10 +1958,11 @@ untouched until 10b" (ETC moves in this track).
    (risk 2). M7 and EG-1 are the control.
 5. **"Receipts stored implies state present" breaks** for a block executed and not promoted (Part 2, D); repaired there with
    local re-execution.
-6. **A replaced storage trie** (3.6). Post-Cancun this is small on ETH. ETC has no EIP-6780 on any fork and deletes a destroyed
-   account outright on every fork; EIP-161 touch-deletion applies on ETC only from Atlantis, block 8,772,000 (`EvmConfig.scala:185-189`;
+6. **A replaced storage trie** (3.6). Post-Cancun this is small on ETH. ETC has full SELFDESTRUCT deletion before Olympia, and EIP-6780
+   from Olympia (ECIP-1112; `EvmConfig.scala` `OlympiaConfigBuilder`): before it a destroyed account is deleted outright on
+   every fork, from it only one created in the same transaction; EIP-161 touch-deletion applies on ETC only from Atlantis, block 8,772,000 (`EvmConfig.scala:185-189`;
    `eip161-block-number` is disabled at `etc-chain.conf:40`), including an "empty" account with non-empty storage. ETC's deletion
-   load is SELFDESTRUCT, always, plus touch-clearing after Atlantis. The bound skips the deletion and writes a tombstone rather
+   load is SELFDESTRUCT before Olympia, plus touch-clearing after Atlantis. The bound skips the deletion and writes a tombstone rather
    than failing a valid block, so the cost is a leaked dead trie and a refused deep reorg across it, never a stalled chain. A
    full sync from genesis is not a supported resync path. **A tombstone at or near the head is the expensive case** (a routine
    depth-1 reorg then escalates to a re-SNAP): EG-4 and EG-15 assert zero tombstones, M15 sets `max-entries-per-owner-delete`
