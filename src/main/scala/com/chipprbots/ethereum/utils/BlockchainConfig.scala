@@ -72,7 +72,11 @@ case class BlockchainConfig(
     // EIP-7840 / EIP-7892 blob parameters per fork (#1637). Read from the chain conf's `blob-schedule`; a conf without
     // one gets BlobSchedule.Empty and may declare no blob fork. The default here applies only to configs built in
     // code (tests, fixture replays): go-ethereum's default Cancun/Prague/BPO1/BPO2 values, the pre-#1637 constants.
-    blobSchedule: BlobSchedule = BlobSchedule.GethDefaults
+    blobSchedule: BlobSchedule = BlobSchedule.GethDefaults,
+    // The block hash a checkpoint archive must have to be imported on this chain, when the operator gives none (chain
+    // conf `checkpoint-expected-block-hash`; spec 018 data-model E.1 "Trust"). ETH and ETC share a genesis hash, so
+    // the chain id and this hash are what tell their archives apart. `None`: the operator must give one.
+    checkpointExpectedBlockHash: Option[ByteString] = None
 ):
   def isPoS(totalDifficulty: BigInt): Boolean =
     terminalTotalDifficulty.exists(ttd => totalDifficulty >= ttd)
@@ -359,6 +363,14 @@ object BlockchainConfig:
         BigInt(blockchainConfig.getString("gpo-default-price"))
       )
 
+    val checkpointExpectedBlockHash: Option[ByteString] =
+      Option
+        .when(blockchainConfig.hasPath("checkpoint-expected-block-hash"))(
+          blockchainConfig.getString("checkpoint-expected-block-hash").trim
+        )
+        .filter(_.nonEmpty)
+        .map(BlockchainConfig.parseBlockHash("checkpoint-expected-block-hash", _))
+
     val forkTimestamps: ForkTimestamps = ForkTimestamps(
       shanghaiTimestamp = Try(blockchainConfig.getLong("shanghai-timestamp")).toOption,
       cancunTimestamp = Try(blockchainConfig.getLong("cancun-timestamp")).toOption,
@@ -440,9 +452,20 @@ object BlockchainConfig:
       depositContractAddress = depositContractAddress,
       forkTimestamps = forkTimestamps,
       gasPriceOracleDefault = gasPriceOracleDefault,
-      blobSchedule = blobSchedule
+      blobSchedule = blobSchedule,
+      checkpointExpectedBlockHash = checkpointExpectedBlockHash
     )
   // scalastyle:on method.length
+
+  /** A 32-byte block hash written as hex, with or without `0x`; anything else is a configuration error. */
+  def parseBlockHash(key: String, raw: String): ByteString =
+    val digits = raw.stripPrefix("0x").stripPrefix("0X")
+    require(
+      digits.length == 64 && digits.forall(Character.digit(_, 16) >= 0),
+      s"$key must be a 32-byte block hash in hex, found '$raw'"
+    )
+    ByteString(Hex.decode(digits))
+
   private def readPubKeySet(blockchainConfig: TypesafeConfig, path: String): Set[ByteString] =
     val keys: Seq[String] = ConfigUtils
       .getOptionalValue(blockchainConfig, _.getStringList, path)

@@ -677,12 +677,12 @@ the format at PR1, before it merges.**
 
 #### Tests (write first; they must fail)
 
-- [ ] T222 [P] [US6] Test the round trip: export then import gives every root equal, on seeded tries, Mordor and Sepolia. A
+- [x] T222 [P] [US6] Test the round trip: export then import gives every root equal, on seeded tries, Mordor and Sepolia. A
   leaf holding slot 0 shared across many contracts' storage tries, and **identical storage roots across owners**, both get
   one row per (owner, path) at **every** occurrence (v1's global `visited` skipped them). The owner of each storage row is
   the account leaf's 64-nibble full key, not keccak of it. File:
   `test/blockchain/checkpoint/CheckpointV2RoundTripSpec.scala`. **[forge] [beacon]**
-- [ ] T223 [P] [US6] Test the refusals. Each is `BadFormat` unless named otherwise. File:
+- [x] T223 [P] [US6] Test the refusals. Each is `BadFormat` unless named otherwise. File:
   `test/blockchain/checkpoint/CheckpointV2RefusalSpec.scala`. **[forge]**
   - A corrupt entry, a node whose keccak is not the frame's expected hash, a CRC32C failure, truncation.
   - Each tag out of section order.
@@ -696,7 +696,7 @@ the format at PR1, before it merges.**
   - An empty-trie `stateRoot` pushes no initial frame.
   - A wrong `chainId`, a wrong `genesisHash`, a wrong expected block hash.
   - **Version 1 refused** with a message naming the format.
-- [ ] T224 [P] [US6] Test the **ancestor window** (forge item 8 (a); body set corrected 2026-11-18). Any failure is
+- [x] T224 [P] [US6] Test the **ancestor window** (forge item 8 (a); body set corrected 2026-11-18). Any failure is
   `BadFormat`. File: `test/blockchain/checkpoint/CheckpointV2AncestorWindowSpec.scala`. **[forge]**
   - The `0x03` headers run from `C-1` down to `C-min(256, N)`, child first, chained by `parentHash`, with consecutive
     numbers. At `N < 256` the last one hashes to `genesisHash`.
@@ -706,10 +706,10 @@ the format at PR1, before it merges.**
   - A body that is missing, extra, unpaired or mismatched is refused.
   - After import, block `C+1` with an ommer validates and does not throw `AncestorNotStored`.
   - On a PoS chain, any `0x04` entry is refused.
-- [ ] T226 [P] [US6] Test code completeness: every non-empty `codeHash` met has a code entry. With the default threshold of
+- [x] T226 [P] [US6] Test code completeness: every non-empty `codeHash` met has a code entry. With the default threshold of
   **0** one gap fails the import. A non-zero threshold logs the gaps for the on-demand fetch. File:
   `test/blockchain/checkpoint/CheckpointV2CodeCompletenessSpec.scala`.
-- [ ] T290 [P] [US6] Test the trust checks (dm E.1 "Trust"). All refusals come before any write. File:
+- [x] T290 [P] [US6] Test the trust checks (dm E.1 "Trust"). All refusals come before any write. File:
   `test/blockchain/checkpoint/CheckpointV2TrustSpec.scala`. **[beacon] [forge]**
   - An estimated TD (flag `0x00`) is **accepted with a WARN** naming the block and TD.
   - On a PoS chain, a post-merge header (difficulty 0) with TD below TTD is refused, and so is a chain merged at genesis
@@ -720,7 +720,7 @@ the format at PR1, before it merges.**
 
 #### Implementation
 
-- [ ] T230 [US6] Implement the **stack-machine importer** in `main/blockchain/checkpoint/CheckpointImporter.scala` (dm E.1).
+- [x] T230 [US6] Implement the **stack-machine importer** in `main/blockchain/checkpoint/CheckpointImporter.scala` (dm E.1).
   **[forge] [beacon]**
   - Frames `(owner, path, expectedHash)`, no hash lookup, no scratch store, and no "already written" cache keyed by hash.
     There is no initial frame for an empty-trie `stateRoot`.

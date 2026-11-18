@@ -2219,13 +2219,21 @@ object SyncController:
         fileOpt.foreach { path =>
           val chainIdBig = configBuilder.blockchainConfig.chainId.value
           log.info("[CHECKPOINT IMPORT] starting from {} (chainId={})", path, chainIdBig)
+          // spec 018 E.1 "Trust": the archive must name this chain's id and genesis, and its checkpoint block the
+          // expected hash (the operator's, else the chain config's pinned one).
+          val trust = com.chipprbots.ethereum.blockchain.checkpoint.CheckpointImporter.Trust(
+            configBuilder.blockchainConfig,
+            blockchainReader.genesisHeader,
+            syncConfig.checkpointSyncExpectedHash
+          )
           val importer = new com.chipprbots.ethereum.blockchain.checkpoint.CheckpointImporter(
             blockchainWriter,
             stateStorage,
             evmCodeStorage,
-            appStateStorage
+            appStateStorage,
+            trust
           )
-          importer.importFromFile(path, Some(chainIdBig.toLong)) match
+          importer.importFromFile(path) match
             case Right(result) =>
               log.info(
                 "[CHECKPOINT IMPORT] success: block={} nodes={} bytecodes={} elapsed={}s",
