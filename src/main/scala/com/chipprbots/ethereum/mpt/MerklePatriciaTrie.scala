@@ -316,14 +316,15 @@ class MerklePatriciaTrie[K, V] private (private[mpt] val rootNode: Option[MptNod
   /** `write`, a storage update that names the nodes it replaces, with a missing or corrupt node it throws given where
     * that node sits in this trie (B-075). The storage knows only the hash it was reading, and the importer's fetch of a
     * replacement needs the position, as a failed read has it ([[pathTraverse]]). A node the update does not replace
-    * (one it upserts) is left as it was thrown.
+    * (one it upserts) is left as it was thrown, and so is an [[Unplaced]] one.
     */
-  private def located[A](replaced: Seq[(NibblePath, MptNode)])(write: => A): A =
+  private def locateWriteFault[A](replaced: Seq[(NibblePath, MptNode)])(write: => A): A =
     try write
     catch
       case e: MissingNodeException if e.location.isEmpty =>
         replaced.find { case (_, node) => java.util.Arrays.equals(node.hash, e.hash.toArray) } match
-          case Some((path, _)) => throw e.withLocation(ByteString(path.toHexPrefix))
+          // Through the companion's `located`, so a fault from a layered view keeps its Unplaced mark (C5b part 2).
+          case Some((path, _)) => throw MerklePatriciaTrie.located(e, ByteString(path.toHexPrefix))
           case None            => throw e
 
   private def mkKeyNibbles(key: K): Array[Byte] = HexPrefix.bytesToNibbles(kSerializer.toBytes(key))
@@ -345,7 +346,7 @@ class MerklePatriciaTrie[K, V] private (private[mpt] val rootNode: Option[MptNod
         val NodeInsertResult(newRoot, nodesToRemoveFromStorage) =
           put(root, keyNibbles, vSerializer.toBytes(value), NibblePath.Empty)
         val newRootNode =
-          located(nodesToRemoveFromStorage) {
+          locateWriteFault(nodesToRemoveFromStorage) {
             nodeStorage.updateNodesAt(newRoot = Some(newRoot), replaced = nodesToRemoveFromStorage, absorbed = Nil)
           }
         new MerklePatriciaTrie(newRootNode, nodeStorage)(using kSerializer, vSerializer)
@@ -372,12 +373,12 @@ class MerklePatriciaTrie[K, V] private (private[mpt] val rootNode: Option[MptNod
         remove(root, keyNibbles, NibblePath.Empty) match
           case NodeRemoveResult(true, Some(newRoot), nodesToRemoveFromStorage, absorbed) =>
             val newRootNode =
-              located(nodesToRemoveFromStorage) {
+              locateWriteFault(nodesToRemoveFromStorage) {
                 nodeStorage.updateNodesAt(newRoot = Some(newRoot), replaced = nodesToRemoveFromStorage, absorbed)
               }
             new MerklePatriciaTrie(newRootNode, nodeStorage)(using kSerializer, vSerializer)
           case NodeRemoveResult(true, None, nodesToRemoveFromStorage, absorbed) =>
-            located(nodesToRemoveFromStorage) {
+            locateWriteFault(nodesToRemoveFromStorage) {
               nodeStorage.updateNodesAt(newRoot = None, replaced = nodesToRemoveFromStorage, absorbed)
             }
             new MerklePatriciaTrie(None, nodeStorage)(using kSerializer, vSerializer)
