@@ -666,7 +666,7 @@ items:
       by: cloud-dc960fdc
       agent: vault-b065fix
       since: 2026-11-18T13:27:08Z
-      heartbeat: 2026-11-18T14:16:56Z
+      heartbeat: 2026-11-18T14:34:53Z
     notes: "2026-11-18 in-progress: C5b part 1 (repair/delete/audit by position) #1921 under beacon review; part 2 (importer sites, fetch by position) in progress; part 3 (recovery scans, T214/T219, T221) next. Follow-ups B-369, B-370."
   - id: B-066
     title: "Spec 018 Track C C5c: checkpoint format version 2 and the position-assigning importer (item 10)"
