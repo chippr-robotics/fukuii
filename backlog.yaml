@@ -3166,3 +3166,13 @@ items:
     links:
       spec: 018
     notes: "C5c PR2 (B-066) added the chain-conf key, empty on every public chain: no v2 archive exists yet. Pin from the EG-9 (Sepolia, Mordor) and EG-12 (ETC) exports; until then the operator must set sync.checkpoint-sync-expected-hash."
+  - id: B-380
+    title: "C5c: SyncController-level test that a refused checkpoint archive is skipped at start (T292 wiring)"
+    priority: P2
+    status: open
+    area: storage
+    opened: 2026-11-18
+    refs: []
+    links:
+      spec: 018
+    notes: PR3 tests the importer and recoverInterrupted; the two SyncController call sites (~2187) have no spec
