@@ -2906,3 +2906,15 @@ items:
       spec: specs/030-zero-trust-tls
     depends_on: [B-354]
     notes: "US5; FR-040-045, 008. ~500+600. Review: conduit."
+  - id: B-361
+    title: "Spec 030 S8: remaining outbound clients (incl. ExternalIPDetector) on the factory; ratchet clean; retire security/ TLS code"
+    priority: P2
+    status: open
+    area: rpc
+    size: S
+    opened: 2026-11-18
+    refs: [B-146]
+    links:
+      spec: specs/030-zero-trust-tls
+    depends_on: [B-360]
+    notes: "US5; FR-040, 045, 046; SC-004. ~300+400. Review: conduit, prism."
