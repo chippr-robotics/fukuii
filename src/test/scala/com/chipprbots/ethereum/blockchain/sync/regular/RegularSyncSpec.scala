@@ -844,6 +844,85 @@ class RegularSyncSpec
           testKit.stop(importer)
       )
 
+      // B-298: the resolver refused the master peer's chain on the hash layout (too deep, or not the heavier). Nothing
+      // is rewound: no blind rewind, no head moved, and the fetcher goes on from the head
+      "rewind nothing and fetch on from the head when the resolver refuses the peer's chain, on the hash layout" taggedAs (
+        UnitTest,
+        SyncTest
+      ) in sync(
+        new Fixture:
+          val capturedBest: BigInt = testBlocks.last.number.value // 20
+
+          override lazy val blockchainReader: BlockchainReader = stub[BlockchainReader]
+          (() => blockchainReader.getBestBlockNumber).when().returns(capturedBest)
+          (() => blockchainReader.getSnapSyncPivotBlock).when().returns(None)
+          override lazy val blockchainWriter: BlockchainWriter = stub[BlockchainWriter]
+
+          val importerFetcher: TestProbe = TestProbe("refusedForkImporterFetcher")
+          val importerSupervisor: TestProbe = TestProbe("refusedForkImporterSupervisor")
+
+          val forkBlockTopic: org.apache.pekko.actor.typed.ActorRef[
+            org.apache.pekko.actor.typed.pubsub.Topic.Command[com.chipprbots.ethereum.jsonrpc.NewBlockImported]
+          ] = testKit.spawn(
+            org.apache.pekko.actor.typed.pubsub.Topic[com.chipprbots.ethereum.jsonrpc.NewBlockImported](
+              "refused-fork-block-imported-topic"
+            ),
+            "refused-fork-block-imported-topic"
+          )
+
+          val importer: TypedActorRef[BlockImporter.Command] = testKit.spawn(
+            BlockImporter.apply(
+              importerFetcher.ref.toTyped[BlockFetcher.FetchCommand],
+              consensusAdapter,
+              blockchainReader,
+              blockchainWriter,
+              stateStorage,
+              evmCodeStorage,
+              branchResolution,
+              syncConfig,
+              ommersPool.ref.toTyped[com.chipprbots.ethereum.ommers.OmmersPool.Command],
+              TestProbe("refusedForkImporterBroadcaster").ref,
+              pendingTransactionsManager.ref
+                .toTyped[com.chipprbots.ethereum.transactions.PendingTransactionsManager.Command],
+              forkBlockTopic,
+              importerSupervisor.ref,
+              peerEventBus.ref,
+              networkPeerManager.ref,
+              blockchain,
+              blacklist,
+              this,
+              None,
+              exhausts = exhausts,
+              importLock = importLock
+            ),
+            "test-refused-fork-recovery-importer"
+          )
+
+          importerFetcher.expectMsgClass(3.seconds, classOf[BlockFetcher.Start])
+          importerSupervisor.expectMsgClass(3.seconds, classOf[RegularSync.ProgressProtocol.StartingFrom])
+
+          importer ! BlockImporter.StartForkRecovery(BigInt(15))
+          importer ! BlockImporter.BranchResolverMsg(
+            FastSyncBranchResolverActor.BranchResolutionFailed(
+              FastSyncBranchResolverActor.BranchResolutionFailed.BranchNotHeavier(BigInt(10))
+            )
+          )
+
+          val invalidate: InvalidateBlocksFrom = importerFetcher.fishForSpecificMessage(5.seconds) {
+            case m: BlockFetcher.InvalidateBlocksFrom => m
+          }
+          invalidate.fromBlock shouldBe capturedBest + 1
+          invalidate.toBlacklist shouldBe None
+
+          // neither the resolver's common block nor the blind rewind's floor: the head is not moved
+          (blockchainWriter
+            .setCanonicalChainHead(_: BigInt, _: com.chipprbots.ethereum.domain.BlockHash, _: BigInt))
+            .verify(*, *, *)
+            .never()
+
+          testKit.stop(importer)
+      )
+
       // Spec 018 C4e part 6 (the user's decision of 2026-11-15): on the unified state layout fork recovery moves no
       // state. The head stays, the fetcher is sent back to the common block, and the peer's branch is judged by weight
       // when it arrives. As the case above, driven by the resolver's answer.

@@ -7,6 +7,8 @@ import org.apache.pekko.actor.typed.scaladsl.ActorContext
 import org.apache.pekko.actor.typed.scaladsl.Behaviors
 import org.apache.pekko.actor.typed.scaladsl.TimerScheduler
 
+import cats.data.NonEmptyList
+
 import scala.concurrent.duration.*
 
 import com.chipprbots.ethereum.blockchain.sync.Blacklist
@@ -31,9 +33,15 @@ import com.chipprbots.ethereum.network.p2p.messages.ETHPackets.BlockHeaders as E
 import com.chipprbots.ethereum.network.p2p.messages.ETHPackets.GetBlockHeaders as ETH68GetBlockHeaders
 import com.chipprbots.ethereum.utils.Config.SyncConfig
 
-/** Finds the first common block between our chain and the chain of the master peer (the peer with the highest block),
-  * so regular sync (`BlockImporter`) can discard our diverged tip and re-download from the common ancestor. The name is
-  * left over from fast sync, its first caller, which was removed.
+/** Finds the first common block between our chain and the chain of the master peer (the peer with the highest block; on
+  * the hash layout the peer with the heaviest chain), so regular sync (`BlockImporter`) can discard our diverged tip
+  * and re-download from the common ancestor. The name is left over from fast sync, its first caller, which was removed.
+  *
+  * On the hash layout ([[DiscardGuard]], B-298) nothing is discarded unless the common block lies no deeper than the
+  * guard allows and the master peer's branch above it, fetched as headers, is the heavier by the import's fork choice;
+  * otherwise the peer is blacklisted and the answer is a [[BranchResolutionFailed.BranchNotFollowed]]. core-geth's
+  * downloader likewise refuses an ancestor below its fork-ancestry floor, and never sets its head back for a branch it
+  * has not weighed.
   *
   * Pekko Typed migration (Group S2 — narrowed): `Behavior[Command]` with a sealed Command ADT. Three named behavior
   * states: `waitingForPeerWithHighestBlock` / `waitingForRecentBlockHeaders` / `waitingForBinarySearchBlock`. Peer-list
@@ -96,6 +104,36 @@ object FastSyncBranchResolverActor:
     case object NoCommonBlockFound extends BranchResolutionFailure
     final case class BlockHeaderNotFound(blockHeaderNum: BigInt) extends BranchResolutionFailure
 
+    /** The hash layout's refusals (B-298): the master peer's chain is one this node does not follow, and nothing was
+      * taken off this node's chain. The caller does not rewind; the peer is blacklisted.
+      */
+    sealed trait BranchNotFollowed extends BranchResolutionFailure
+
+    /** The master peer's chain leaves this node's below `deepestCommonBlock`, deeper than a rewind may reach. */
+    final case class CommonBlockBeyondReach(deepestCommonBlock: BigInt) extends BranchNotFollowed
+
+    /** The master peer's branch above `commonBlock` was weighed against this node's own blocks above it and is not the
+      * heavier (or its weight could not be shown with the headers it served).
+      */
+    final case class BranchNotHeavier(commonBlock: BigInt) extends BranchNotFollowed
+
+  /** What the hash layout checks before it takes this node's blocks above the common block off the chain (B-298).
+    * Without it the resolver only reports the common block (the unified layout, spec 018 C4e part 6).
+    *
+    * @param deepestCommonBlock
+    *   the lowest common block a discard may go down to: a chain that leaves this node's below it is refused, never
+    *   rewound to
+    * @param heavier
+    *   whether a branch, given by its headers from the child of the common block up, is to be taken over this node's
+    *   blocks above the common block: the fork choice the import applies (`BranchResolution.resolveBranch`, weight and
+    *   MESS). `None` where the import does not choose by weight (a chain that follows a consensus layer): the branch is
+    *   then not weighed here, as before
+    */
+  final case class DiscardGuard(
+      deepestCommonBlock: BigInt,
+      heavier: Option[NonEmptyList[BlockHeader] => Boolean]
+  )
+
   // ----- Timer / log constants -----
 
   private val ScanKey: String = "ScanPeers"
@@ -126,10 +164,10 @@ object FastSyncBranchResolverActor:
       blockchainReader: BlockchainReader,
       blacklist: Blacklist,
       syncConfig: SyncConfig,
-      // Whether this node's own blocks above the common block are removed once it is found. Not on the unified state
-      // layout, where a block is not taken off the chain apart from its state: the caller only learns the block
-      // (spec 018 C4e part 6).
-      discardDiverged: Boolean
+      // Given: this node's own blocks above the common block are removed once it is found, and only within the guard's
+      // depth and for a heavier branch (the hash layout, B-298). None on the unified state layout, where a block is not
+      // taken off the chain apart from its state: the caller only learns the block (spec 018 C4e part 6).
+      discardGuard: Option[DiscardGuard]
   ): Behavior[Command] =
     Behaviors.setup { context =>
       Behaviors.withTimers { timers =>
@@ -164,7 +202,7 @@ object FastSyncBranchResolverActor:
           new RecentBlocksSearch(blockchainReader),
           syncConfig.blockHeadersPerRequest,
           handshakedPeersAdapter,
-          discardDiverged
+          discardGuard
         )
 
         // Immediate poll, then periodic poll for handshaked peers (replaces PeerListSupportNg's scheduleWithFixedDelay).
@@ -206,7 +244,7 @@ object FastSyncBranchResolverActor:
       recentBlocksSearch: RecentBlocksSearch,
       recentHeadersSize: Int,
       handshakedPeersAdapter: TypedActorRef[NetworkPeerManagerActor.HandshakedPeers],
-      discardDiverged: Boolean
+      discardGuard: Option[DiscardGuard]
   ):
     import BinarySearchSupport.*
 
@@ -237,7 +275,12 @@ object FastSyncBranchResolverActor:
         handleCommon(message).getOrElse {
           message match
             case StartBranchResolver =>
-              peerListHelper.getPeerWithHighestBlock match
+              // the hash layout resolves against the heaviest chain, as fork choice is by weight (B-298); the unified
+              // layout keeps the highest block, as it was
+              val master =
+                if discardGuard.isDefined then peerListHelper.getPeerWithHighestWeight
+                else peerListHelper.getPeerWithHighestBlock
+              master match
                 case Some(peerWithInfo @ PeerWithInfo(peer, _)) =>
                   log.debug(
                     "Starting branch resolution now with peer {} and block number {}",
@@ -321,9 +364,54 @@ object FastSyncBranchResolverActor:
           finalizeBranchResolver(highestCommonBlockNumber, masterPeer)
         case None =>
           log.info(SwitchToBinarySearchLog, recentHeadersSize)
-          requestBlockHeaderForBinarySearch(
-            SearchState(minBlockNumber = 1, maxBlockNumber = bestBlockNumber, masterPeer)
-          )
+          discardGuard.map(_.deepestCommonBlock).filter(_ > 1) match
+            case Some(deepest) =>
+              // the hash layout: the search is held above the deepest common block a discard may reach, which is shown
+              // to be common first (B-298); the search assumes its lower bound is
+              blockchainReader.getBlockHeaderByNumber(deepest) match
+                case Some(deepestHeader) =>
+                  val handler = sendGetBlockHeadersRequest(masterPeer, childOf(deepest), 1)
+                  waitingForDeepestCommonBlock(masterPeer, bestBlockNumber, deepestHeader, handler)
+                case None => stopWithFailure(BranchResolutionFailed.blockHeaderNotFound(deepest))
+            case None =>
+              requestBlockHeaderForBinarySearch(
+                SearchState(minBlockNumber = 1, maxBlockNumber = bestBlockNumber, masterPeer)
+              )
+
+    /** The answer for the child of the deepest common block a discard may reach (B-298): it is common, and the search
+      * goes on above it, or the master peer's chain leaves this node's deeper than that and is refused.
+      */
+    private def waitingForDeepestCommonBlock(
+        masterPeer: Peer,
+        bestBlockNumber: BigInt,
+        deepestHeader: BlockHeader,
+        requestHandler: TypedActorRef[PeerRequestHandler.Command]
+    ): Behavior[Command] =
+      val deepest = deepestHeader.number.value
+      Behaviors.receiveMessage { message =>
+        handleCommon(message).getOrElse {
+          message match
+            case PeerRequestResult(ResponseReceived(_, peer, ETH68BlockHeaders(_, headers), _)) if peer == masterPeer =>
+              context.unwatch(requestHandler)
+              headers.toList match
+                case child :: Nil if child.number.value == childOf(deepest) =>
+                  // the peer's child of the floor does not hang off this node's block there: the chains part below it
+                  if !deepestHeader.isParentOf(child) then refuseBeyondReach(masterPeer, deepest)
+                  else if deepest >= bestBlockNumber then finalizeBranchResolver(deepest, masterPeer)
+                  else
+                    requestBlockHeaderForBinarySearch(
+                      SearchState(minBlockNumber = deepest, maxBlockNumber = bestBlockNumber, masterPeer)
+                    )
+                case _ =>
+                  log.warn(ReceivedWrongHeaders, childOf(deepest), headers.map(_.number.value))
+                  handleInvalidResponse(peer, requestHandler)
+            case PeerRequestResult(RequestFailed(_, peer, reason)) =>
+              handleRequestFailure(peer, requestHandler, reason)
+            case HandlerTerminated(ref) if ref == requestHandler =>
+              handlePeerTermination(masterPeer, ref)
+            case _ => Behaviors.same
+        }
+      }
 
     private def requestBlockHeaderForBinarySearch(searchState: SearchState): Behavior[Command] =
       val headerNumberToRequest = blockHeaderNumberToRequest(searchState.minBlockNumber, searchState.maxBlockNumber)
@@ -347,12 +435,133 @@ object FastSyncBranchResolverActor:
         case None => stopWithFailure(BranchResolutionFailed.blockHeaderNotFound(childHeader.number.value))
 
     private def finalizeBranchResolver(firstCommonBlockNumber: BigInt, masterPeer: Peer): Behavior[Command] =
-      val discarded = if discardDiverged then branchLogic.discardBlocksAfter(firstCommonBlockNumber) else Nil
+      discardGuard match
+        case None => reply(firstCommonBlockNumber, masterPeer, Nil)
+        // every way here (the recent window, the search, a peer's answers that contradict each other) is held to the
+        // floor: a common block below it is refused, never discarded down to
+        case Some(guard) if firstCommonBlockNumber < guard.deepestCommonBlock =>
+          refuseBeyondReach(masterPeer, guard.deepestCommonBlock)
+        case Some(guard) =>
+          val best = blockchainReader.getBestBlockNumber
+          guard.heavier match
+            // nothing of this node's chain lies above the common block, or the branch is not weighed here: as before
+            case Some(heavier) if firstCommonBlockNumber < best =>
+              blockchainReader.getBlockHeaderByNumber(firstCommonBlockNumber) match
+                case Some(commonHeader) =>
+                  val wanted = (best - firstCommonBlockNumber) + 2 * recentHeadersSize
+                  requestBranchHeaders(masterPeer, commonHeader, Vector.empty, wanted, heavier)
+                case None => stopWithFailure(BranchResolutionFailed.blockHeaderNotFound(firstCommonBlockNumber))
+            case _ => discardAndReply(firstCommonBlockNumber, masterPeer)
+
+    private def discardAndReply(firstCommonBlockNumber: BigInt, masterPeer: Peer): Behavior[Command] =
+      reply(firstCommonBlockNumber, masterPeer, branchLogic.discardBlocksAfter(firstCommonBlockNumber))
+
+    private def reply(
+        firstCommonBlockNumber: BigInt,
+        masterPeer: Peer,
+        discarded: Seq[(BigInt, org.apache.pekko.util.ByteString)]
+    ): Behavior[Command] =
       log.info(s"Branch resolution completed with first common block number [$firstCommonBlockNumber]")
       replyTo ! BranchResolvedSuccessful(highestCommonBlockNumber = firstCommonBlockNumber, masterPeer = masterPeer)(
         discarded
       )
       Behaviors.stopped
+
+    /** The master peer's headers of its branch above `commonHeader`, one request after another, until they outweigh
+      * this node's blocks above it, `wanted` are fetched, or the peer serves none (B-298). A prefix of a branch that is
+      * already the heavier stays so with the rest of it, MESS included, so the first verdict for it is final.
+      */
+    private def requestBranchHeaders(
+        masterPeer: Peer,
+        commonHeader: BlockHeader,
+        fetched: Vector[BlockHeader],
+        wanted: BigInt,
+        heavier: NonEmptyList[BlockHeader] => Boolean
+    ): Behavior[Command] =
+      val from = fetched.lastOption.getOrElse(commonHeader).number.value + 1
+      val handler = sendGetBlockHeadersRequest(masterPeer, from, (wanted - fetched.size).min(BigInt(recentHeadersSize)))
+      waitingForBranchHeaders(masterPeer, commonHeader, fetched, wanted, heavier, handler)
+
+    private def waitingForBranchHeaders(
+        masterPeer: Peer,
+        commonHeader: BlockHeader,
+        fetched: Vector[BlockHeader],
+        wanted: BigInt,
+        heavier: NonEmptyList[BlockHeader] => Boolean,
+        requestHandler: TypedActorRef[PeerRequestHandler.Command]
+    ): Behavior[Command] =
+      val common = commonHeader.number.value
+      Behaviors.receiveMessage { message =>
+        handleCommon(message).getOrElse {
+          message match
+            case PeerRequestResult(ResponseReceived(_, peer, ETH68BlockHeaders(_, headers), _)) if peer == masterPeer =>
+              context.unwatch(requestHandler)
+              if !continuesBranch(fetched.lastOption.getOrElse(commonHeader), headers) then
+                log.warn(
+                  ReceivedWrongHeaders,
+                  fetched.lastOption.getOrElse(commonHeader).number.value + 1,
+                  headers.map(_.number.value)
+                )
+                handleInvalidResponse(peer, requestHandler)
+              else
+                val all = fetched ++ headers
+                NonEmptyList.fromList(all.toList) match
+                  case Some(branch) if heavier(branch) =>
+                    log.info(
+                      "[SYNC-FORK] Peer {}'s branch above block {} is the heavier with {} header(s): this node's " +
+                        "blocks above it are discarded",
+                      masterPeer.id,
+                      common,
+                      all.size
+                    )
+                    discardAndReply(common, masterPeer)
+                  // only an answer with none ends the branch: one with fewer than were asked for is a peer's limit
+                  case _ if headers.isEmpty || all.size >= wanted =>
+                    refuseNotHeavier(masterPeer, common, all.size)
+                  case _ => requestBranchHeaders(masterPeer, commonHeader, all, wanted, heavier)
+            case PeerRequestResult(RequestFailed(_, peer, reason)) =>
+              handleRequestFailure(peer, requestHandler, reason)
+            case HandlerTerminated(ref) if ref == requestHandler =>
+              handlePeerTermination(masterPeer, ref)
+            case _ => Behaviors.same
+        }
+      }
+
+    private def continuesBranch(below: BlockHeader, headers: Seq[BlockHeader]): Boolean =
+      headers
+        .foldLeft(Option(below))((parent, header) => parent.filter(_.isParentOf(header)).map(_ => header))
+        .isDefined
+
+    private def refuseBeyondReach(masterPeer: Peer, deepest: BigInt): Behavior[Command] =
+      log.error(
+        "[SYNC-FORK] Peer {}'s chain leaves this node's below block {}, deeper than a fork recovery may rewind to " +
+          "(best {}): refused, nothing is discarded and the peer is blacklisted",
+        masterPeer.id,
+        deepest,
+        blockchainReader.getBestBlockNumber
+      )
+      peerListHelper.blacklistIfHandshaked(
+        masterPeer.id,
+        syncConfig.blacklistDuration,
+        BlacklistReason.ForkNotFollowed(s"its chain leaves ours below block $deepest")
+      )
+      stopWithFailure(BranchResolutionFailed(CommonBlockBeyondReach(deepest)))
+
+    private def refuseNotHeavier(masterPeer: Peer, common: BigInt, weighed: Int): Behavior[Command] =
+      log.warn(
+        "[SYNC-FORK] Peer {}'s branch above block {} is not the heavier ({} header(s) weighed against this node's " +
+          "blocks up to {}): nothing is discarded and the peer is blacklisted",
+        masterPeer.id,
+        common,
+        weighed,
+        blockchainReader.getBestBlockNumber
+      )
+      peerListHelper.blacklistIfHandshaked(
+        masterPeer.id,
+        syncConfig.blacklistDuration,
+        BlacklistReason.ForkNotFollowed(s"its branch above block $common is not the heavier")
+      )
+      stopWithFailure(BranchResolutionFailed(BranchNotHeavier(common)))
 
     /** On fatal errors (and to prevent trying forever) signal the caller and let it decide whether to retry. */
     private def stopWithFailure(response: BranchResolutionFailed): Behavior[Command] =

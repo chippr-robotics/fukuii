@@ -2068,7 +2068,8 @@ final private class BlockImporterLogic(
         blacklist = blacklist,
         syncConfig = syncConfig,
         // on the unified state layout no block is taken off the chain here: the resolver only finds the common block
-        discardDiverged = !blockchainWriter.holdsStateInPlace
+        discardGuard =
+          Option.unless(blockchainWriter.holdsStateInPlace)(hashLayoutDiscardGuard(capturedBest, snapPivot))
       )
     )
     // Watched: one that stopped without an answer left this importer in `resolvingFork` for good, where nothing else
@@ -2076,6 +2077,27 @@ final private class BlockImporterLogic(
     ctx.watchWith(resolverRef, BranchResolverStopped(resolverRef))
     resolverRef ! FastSyncBranchResolverActor.StartBranchResolver
     resolvingFork(failedBlockNumber, beyondTheFetch, capturedBest, snapPivot, state, resolverRef)
+
+  /** What the resolver checks on the hash layout before it takes this node's blocks off the chain (B-298):
+    *   - the common block lies no deeper than the floor the blind rewind goes to, `MaxForkAncestryDepth` below the head
+    *     and never below the SNAP pivot, where this node has no state to execute a branch on. One bound for both ways a
+    *     fork recovery rewinds on this layout; core-geth refuses an ancestor below its own floor in the same way;
+    *   - the peer's branch is the one the import would take: `BranchResolution.resolveBranch`, weight and MESS. Not on
+    *     a chain that follows a consensus layer, whose branches all weigh the same: there the branch is not weighed
+    *     here, as before.
+    */
+  private def hashLayoutDiscardGuard(
+      capturedBest: BigInt,
+      snapPivot: BigInt
+  ): FastSyncBranchResolverActor.DiscardGuard =
+    FastSyncBranchResolverActor.DiscardGuard(
+      deepestCommonBlock = (capturedBest - MaxForkAncestryDepth).max(snapPivot),
+      heavier = Option.unless(branchResolution.followsConsensusLayer) { (headers: NonEmptyList[BlockHeader]) =>
+        branchResolution.resolveBranch(headers) match
+          case NewBetterBranch(_) => true
+          case _                  => false
+      }
+    )
 
   private def resolvingFork(
       failedBlockNumber: BigInt,
@@ -2143,6 +2165,29 @@ final private class BlockImporterLogic(
             log.warning("SYNC-FORK: no header at resolver LCA {} — falling back to blind rewind", lca)
             blindRewind(capturedBest, snapPivot)
         // Every exit rewinds the fetcher (or escalates to SNAP), so a batch deferred before recovery is stale.
+        running(state.withoutDeferredBatches())
+
+      // the hash layout's refusals (B-298): the master peer's chain leaves this one too deep, or its branch is not the
+      // heavier. Nothing was taken off this chain and nothing is rewound now: the fetcher goes on from the head, and
+      // the peer, blacklisted by the resolver, is not asked again for the same branch
+      case BranchResolverMsg(
+            FastSyncBranchResolverActor.BranchResolutionFailed(
+              notFollowed: FastSyncBranchResolverActor.BranchResolutionFailed.BranchNotFollowed
+            )
+          ) if !holds =>
+        val best = bestKnownBlockNumber
+        log.warning(
+          "[SYNC-FORK] The master peer's chain is not followed ({}): nothing is rewound, the fetcher goes on from the " +
+            "head {}",
+          notFollowed,
+          best
+        )
+        unknownParentStrikes = Map.empty
+        fetcher ! BlockFetcher.InvalidateBlocksFrom(
+          best + 1,
+          "SYNC-FORK: the master peer's chain is not followed",
+          shouldBlacklist = false
+        )
         running(state.withoutDeferredBatches())
 
       case BranchResolverMsg(FastSyncBranchResolverActor.BranchResolutionFailed(_)) =>
