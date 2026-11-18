@@ -3114,3 +3114,14 @@ items:
     refs: []
     links: {}
     notes: "Seen 2026-11-18 on #1916 (LookupsSpec) and #1921 (both), unrelated diffs; both pass locally 2/2 on the same heads. LookupsSpec uses PatienceConfig(5 s) eventually throughout. Synchronise on the event instead of a timeout; never skip."
+  - id: B-375
+    title: "B-065 follow-up: compare the recovery scans' verdicts with the pinned 0.12.1 jar's (T214 oracle)"
+    priority: P2
+    status: open
+    area: storage
+    opened: 2026-11-18
+    refs: []
+    links:
+      spec: specs/018-storage-engine-consolidation
+    depends_on: [B-053]
+    notes: RecoveryScansVerdictSpec pins verdicts against today's hash-layout scan, not the jar (not runnable in cloud). Run the jar's scans on the same seeded store with injected gaps and diff.
