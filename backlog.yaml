@@ -3137,3 +3137,15 @@ items:
     links:
       spec: 018
     notes: "C5c PR1 (B-066): CheckpointSharedNodePruneSpec case 2 now shows no loss with the stamp put back. beginCheckpointImport still drops RefCountsExact; moot if PR2 retires the hash importer."
+  - id: B-378
+    title: "RELEASE BLOCKER: no release tag between C5c PR1 (checkpoint v2 codec/exporter) and PR2 (v2 importer); they ship together"
+    priority: P1
+    status: open
+    area: storage
+    size: S
+    opened: 2026-11-18
+    refs: []
+    links:
+      spec: specs/018-storage-engine-consolidation
+    depends_on: [B-066]
+    notes: "forge + beacon sign-off of C5c PR1 (2026-11-18): until PR2 the importer reads v2 with no window, parent-hash, genesis or expected-hash checks, and on ETC block C+1 with an ommer throws AncestorNotStored. Close when PR2 merges, or hold tags until then."
