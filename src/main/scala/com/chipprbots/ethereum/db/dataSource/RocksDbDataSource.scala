@@ -194,6 +194,14 @@ class RocksDbDataSource(
   /** The properties whose read has failed: each is logged once. */
   private val propertyFailures: java.util.Set[String] = java.util.concurrent.ConcurrentHashMap.newKeySet[String]()
 
+  /** The WAL recovery mode this open database was given (B-078). Test support. */
+  private[dataSource] def walRecoveryMode(): org.rocksdb.WALRecoveryMode =
+    dbLock.readLock().lock()
+    try
+      assureNotClosed()
+      dbOptions.walRecoveryMode()
+    finally dbLock.readLock().unlock()
+
   /** Flush every column family's memtables to SST files and wait for it. Test support: `close()` does not flush
     * WAL-backed memtables, so a test that needs data in SST files (in a given table format) must call this first.
     */
@@ -817,6 +825,23 @@ final class MemoryResources(
     cache.close()
 
 object RocksDbDataSource extends Logger:
+  /** How the write-ahead log is replayed at open (`wal_recovery_mode`), set explicitly since B-078.
+    *
+    * '''Point-in-time recovery''' replays the log up to the first record that does not read back (a torn tail after a
+    * power loss) and stops there: what is recovered is a '''prefix''' of the writes, in the order they were made, and
+    * never a later write without an earlier one. Every ordering argument of the storage layer rests on that:
+    *   - a batch is one log record, so it is recovered whole or not at all (also across column families);
+    *   - children before parents (spec 022): a parent written after its children is never recovered without them;
+    *   - state that must survive a restart is in the batch of what it describes (iron rule 9).
+    *
+    * The other modes would break it: `kTolerateCorruptedTailRecords` and `kSkipAnyCorruptedRecords` keep records past a
+    * bad one, so a later write could be seen without an earlier one; `kAbsoluteConsistency` refuses to open after a
+    * torn tail that is normal after a power loss. A synced write (`updateSync`) makes the log up to it durable.
+    * RocksDB's own default is this mode; it is named here so that a change of the default, or of the library, cannot
+    * change what the argument assumes.
+    */
+  val WalRecoveryMode: org.rocksdb.WALRecoveryMode = org.rocksdb.WALRecoveryMode.PointInTimeRecovery
+
   case object IterationFinished extends RuntimeException
   case class IterationError(ex: Throwable)
 
@@ -973,6 +998,8 @@ object RocksDbDataSource extends Logger:
         // Cap total live WAL across CFs; also forces a flush of the laggard CF so the
         // memtable pinning the oldest WAL is released rather than accumulating.
         .setMaxTotalWalSize(maxTotalWalSize)
+        // B-078: named, not left to the default. See [[RocksDbDataSource.WalRecoveryMode]] for what relies on it.
+        .setWalRecoveryMode(WalRecoveryMode)
       acquired += options
 
       // spec 002 US2 (FR-005): optionally attach a Statistics object so block-cache hit/miss tickers
