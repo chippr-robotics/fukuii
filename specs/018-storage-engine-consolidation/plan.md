@@ -3302,8 +3302,14 @@ the guard is on for an archive node**).
 **T183 as it stands**: a reorganisation of **4,000 blocks** in the archive mode, with views that reach 2 blocks and
 moves of 3 blocks to a batch, is adopted through `ConsensusImpl` with the index and the state the branch's
 (`ReorgBlockhashParitySpec`, 4 s), and the three core-geth scenarios run on that configuration too. A move killed
-after a batch is pinned at the store (C4b part 2c). **Not built: a node killed during reverse-then-commit and started
-again** (B-295, a gate before the guard is on for a Mordor archive node). The task's "recovers by I1 rules 2 and 3" is
+after a batch is pinned at the store (C4b part 2c). **A node killed during reverse-then-commit and started again**
+(B-295, 2026-11-18): in `ReorgBlockhashParitySpec`, the adoption of a branch forking 9 blocks below the head (on
+layers, at the cap and in the archive mode below the view reach, moves of 3 blocks to a batch) is killed after each of
+its writes in turn, from the first to the last; started again on that datadir through the reconciliation at start, the
+node is on the old head, the old chain, the fork, the branch or its tip, each time with the anchor, the best block and
+the index of one block and that block's state on disk row for row. Offered the two chains again, in either order, it
+ends on the branch's tip and executes its next block. No main-code change was needed. The mutations: an anchor written
+apart from its rows is caught; head rows written apart are repaired by the reconciliation, and caught without it. The task's "recovers by I1 rules 2 and 3" is
 out of date: every batch writes the anchor, the best block and the index together, so what a kill leaves is a
 consistent head on a block of the way, which is rule 4; the heavier chain is judged again when its blocks arrive.
 
