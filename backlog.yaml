@@ -2882,3 +2882,15 @@ items:
       spec: specs/030-zero-trust-tls
     depends_on: [B-354]
     notes: "US6; FR-015, 016. ~350+500; metrics need mode also needs S2. Review: beacon (Engine API), conduit."
+  - id: B-359
+    title: "Spec 030 S6 (BREAKING): refuse plaintext non-loopback binds; allow-insecure-bind; migration, ADR OPS-005"
+    priority: P2
+    status: open
+    area: ops
+    size: M
+    opened: 2026-11-18
+    refs: [B-146]
+    links:
+      spec: specs/030-zero-trust-tls
+    depends_on: [B-355, B-358]
+    notes: "US8; FR-018, 019, 027. Lands in a minor release with a Read-before-upgrading note; release named when it lands. Review: conduit, beacon, prism."
