@@ -78,6 +78,9 @@ object Config extends InstanceConfig(ConfigFactory.load().getConfig("fukuii"), "
       // - `checkpointSyncExpectedHash`: the hash the archive's checkpoint block must have (spec 018 E.1 "Trust"). It
       //   wins over the chain config's pinned `checkpoint-expected-block-hash`; with neither, every archive is refused.
       checkpointSyncExpectedHash: Option[ByteString] = None,
+      // - `checkpointSyncRetryRefused`: retry an archive this node refused before (spec 018 E.1, "no retry"). Off by
+      //   default: a refused archive is recorded by its id and not run again on a restart.
+      checkpointSyncRetryRefused: Boolean = false,
       blockFetcherTickInterval: FiniteDuration = 500.millis
   )
 
@@ -153,7 +156,9 @@ object Config extends InstanceConfig(ConfigFactory.load().getConfig("fukuii"), "
             syncConfig.getString("checkpoint-sync-expected-hash").trim
           )
           .filter(_.nonEmpty)
-          .map(BlockchainConfig.parseBlockHash("checkpoint-sync-expected-hash", _))
+          .map(BlockchainConfig.parseBlockHash("checkpoint-sync-expected-hash", _)),
+        checkpointSyncRetryRefused =
+          syncConfig.hasPath("checkpoint-sync-retry-refused") && syncConfig.getBoolean("checkpoint-sync-retry-refused")
       )
 
   // SyncConfig remains here as it's a case class used as a type throughout the codebase.

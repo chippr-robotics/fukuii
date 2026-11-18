@@ -739,7 +739,7 @@ the format at PR1, before it merges.**
 
 #### Tests (write first; they must fail)
 
-- [ ] T225 [P] [US6] Test the **write order** (dm E.1 "Atomicity and failure order"; vault's mark-first order supersedes
+- [x] T225 [P] [US6] Test the **write order** (dm E.1 "Atomicity and failure order"; vault's mark-first order supersedes
   forge item 8 (b)'s). File: `it/blockchain/checkpoint/CheckpointImportGenesisAnchorItSpec.scala`. **[vault]**
   - Every header-level refusal leaves the datadir untouched.
   - After a genesis commit, `clearGenesisStateForSync` runs through the reset mark **before** `beginCheckpointImport`.
@@ -749,7 +749,7 @@ the format at PR1, before it merges.**
     `endCheckpointImport`.
   - A kill at each step leaves either the reset mark or `CheckpointImportInProgress`, and **never an anchor over partial
     rows**.
-- [ ] T291 [P] [US6] Test **failure and no retry** (user decision 4). File:
+- [x] T291 [P] [US6] Test **failure and no retry** (user decision 4). File:
   `it/blockchain/checkpoint/CheckpointImportRetryItSpec.scala`. **[vault]**
   - A failed import clears `t`/`u` through the reset mark, records the archive's hash as refused, and falls back to SNAP
     from clean state.
@@ -759,7 +759,7 @@ the format at PR1, before it merges.**
 
 #### Implementation
 
-- [ ] T231 [US6] In `main/blockchain/checkpoint/CheckpointImporter.scala`, make the import atomic on the unified layout, in
+- [x] T231 [US6] In `main/blockchain/checkpoint/CheckpointImporter.scala`, make the import atomic on the unified layout, in
   the order of dm E.1. **[vault]**
   1. Header-level refusals before any write.
   2. `clearGenesisStateForSync` on a genesis anchor.
@@ -771,7 +771,7 @@ the format at PR1, before it merges.**
 
   Add a **checkpoint variant of `SyncHandoff.commit`**, since today's hardcodes the SNAP keys. Write no `BlockDiff` for the
   checkpoint block. Drop `forcePersist`, which is Hash-layout only.
-- [ ] T292 [US6] Implement **failure and no retry** (user decision 4) in `main/blockchain/sync/SyncController.scala`
+- [x] T292 [US6] Implement **failure and no retry** (user decision 4) in `main/blockchain/sync/SyncController.scala`
   (`:~2195`) and `main/db/storage/AppStateStorage.scala`. **[vault]**
   - Record a refused archive by its hash: keccak of its header block. Keep the record out of `stateClearRemovals`.
   - At start, a set `CheckpointImportInProgress` records its archive as refused, then clears through the reset mark.
@@ -779,7 +779,7 @@ the format at PR1, before it merges.**
     set.
   - Name the AppState key and the flag here.
   - Lift the path-live refusal of `checkpoint-sync-file` and `checkpoint-sync-url` at `main/ConfigValidator.scala:~111`.
-- [ ] T232 [P] Document the checkpoint section of `docs/` (find it with `grep -ril checkpoint docs/`). The full
+- [x] T232 [P] Document the checkpoint section of `docs/` (find it with `grep -ril checkpoint docs/`). The full
   operator-doc rewrite is C8b. Cover:
   - the trust statement: total difficulty is trusted from the archive and not re-derived, and an estimated one is accepted
     with a WARN;

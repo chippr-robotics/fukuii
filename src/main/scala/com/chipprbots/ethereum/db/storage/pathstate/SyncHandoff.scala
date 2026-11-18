@@ -2,6 +2,7 @@ package com.chipprbots.ethereum.db.storage.pathstate
 
 import org.apache.pekko.util.ByteString
 
+import com.chipprbots.ethereum.db.dataSource.DataSourceBatchUpdate
 import com.chipprbots.ethereum.db.storage.AncestorWindow
 import com.chipprbots.ethereum.db.storage.AppStateStorage
 import com.chipprbots.ethereum.db.storage.BlockBodiesStorage
@@ -53,6 +54,21 @@ final class SyncHandoff(
   def windowMissing(pivot: BlockHeader, proofOfWork: Boolean): AncestorWindow.Missing =
     AncestorWindow.check(pivot, proofOfWork, hash => headers.get(hash.value), hash => bodies.get(hash.value))
 
+  private def trimIndexAbove(number: BigInt): Unit =
+    // The entries of the index by number above the pivot, which an earlier, higher pivot's bootstrap left (forge, spec
+    // 018 C5a part 10): read by number they name blocks of no chain this state is of. Regular sync writes those heights
+    // again as it imports; below the pivot the header download overwrote each one it validated. Deleted a chunk at a
+    // time before the synced write, which makes them durable with it (vault): a range can be large, and a kill before
+    // it leaves entries that were of no state anyway.
+    val highest = appState.highestIndexedHeight(h => headers.get(h).map(_.number.value))
+    Iterator
+      .iterate(number + 1)(_ + PathStateStorage.IndexTrimChunk)
+      .takeWhile(_ <= highest)
+      .foreach { from =>
+        val to = (from + PathStateStorage.IndexTrimChunk - 1).min(highest)
+        blockNumberMappingStorage.update(toRemove = from to to, toUpsert = Nil).commit()
+      }
+
   /** '''One synced batch''': the pivot's header and its place in the index of blocks by number (and no entry above it),
     * its weight, the best block, the flags of the recoveries (set or cleared, never left as an earlier sync wrote
     * them), the scan that was owed no longer owed, the heal's marker removed when asked, and with them the state's
@@ -82,19 +98,7 @@ final class SyncHandoff(
   ): Boolean =
     val hash = pivot.hash.value
     val number = pivot.number.value
-    // The entries of the index by number above the pivot, which an earlier, higher pivot's bootstrap left (forge, spec
-    // 018 C5a part 10): read by number they name blocks of no chain this state is of. Regular sync writes those heights
-    // again as it imports; below the pivot the header download overwrote each one it validated. Deleted a chunk at a
-    // time before the synced write, which makes them durable with it (vault): a range can be large, and a kill before
-    // it leaves entries that were of no state anyway.
-    val highest = appState.highestIndexedHeight(h => headers.get(h).map(_.number.value))
-    Iterator
-      .iterate(number + 1)(_ + PathStateStorage.IndexTrimChunk)
-      .takeWhile(_ <= highest)
-      .foreach { from =>
-        val to = (from + PathStateStorage.IndexTrimChunk - 1).min(highest)
-        blockNumberMappingStorage.update(toRemove = from to to, toUpsert = Nil).commit()
-      }
+    trimIndexAbove(number)
     val records = headers
       .put(hash, pivot)
       .and(blockNumberMappingStorage.put(number, hash))
@@ -110,3 +114,24 @@ final class SyncHandoff(
     val batch = if unmarked then records.and(appState.clearSnapHealInvariant()) else records
     state.commitHandoff(BlockRef(hash, number, pivot.stateRoot.value), Some(batch))
     unmarked
+
+  /** The end of a checkpoint import (spec 018 C5c PR3; data-model E.1, step 6): the checkpoint block `c` is the pivot,
+    * and the rows the import wrote are the state of it from here on. '''One synced batch''' through
+    * [[PathStateStorage.commitHandoff]]: `records` (the importer's own: `c`'s header and its ancestor window's, the
+    * window's bodies, the trusted weight, the best block, the flags of the recoveries and the end of the import key),
+    * with the anchor, the block the state began at (`state.origin`, which closes B-243's checkpoint half) and that the
+    * sync is done. `snapSyncDone` is what an import sets: regular sync routes by it, and the importer's hash path set
+    * it as well.
+    *
+    * Where [[commit]] writes the pivot's header, weight and flags itself, an import's are the archive's, so they come
+    * in `records`. What is shared is the index above the block: a SNAP run that this import replaced may have left
+    * entries there, deleted before the synced write.
+    *
+    * @throws IllegalStateException
+    *   as [[PathStateStorage.commitHandoff]]
+    */
+  def commitCheckpoint(c: BlockHeader, records: DataSourceBatchUpdate): Unit =
+    trimIndexAbove(c.number.value)
+    // the header download's cursors of a SNAP run this import replaced go no higher than the checkpoint, as for a pivot
+    val withCursors = records.and(appState.backfillCursorsAtMost(c.number.value, c.hash.value))
+    state.commitHandoff(BlockRef(c.hash.value, c.number.value, c.stateRoot.value), Some(withCursors))

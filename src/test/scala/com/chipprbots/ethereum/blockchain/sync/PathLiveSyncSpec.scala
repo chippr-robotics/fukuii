@@ -3,6 +3,7 @@ package com.chipprbots.ethereum.blockchain.sync
 import org.scalatest.flatspec.AnyFlatSpec
 import org.scalatest.matchers.should.Matchers
 
+import com.chipprbots.ethereum.blockchain.checkpoint.CheckpointImporter
 import com.chipprbots.ethereum.blockchain.sync.SyncController.SnapStartOnGuard
 import com.chipprbots.ethereum.db.dataSource.DataSource.Namespace
 import com.chipprbots.ethereum.db.dataSource.EphemDataSource
@@ -38,19 +39,20 @@ class PathLiveSyncSpec extends AnyFlatSpec with Matchers:
     var cleared = 0
     var handedOff = 0
     var clearedBeforeTold: Option[Boolean] = None
+    private val handoff = new SyncHandoff(
+      chain.state,
+      new PathNodeStorage(chain.source),
+      chain.appState,
+      chain.headersByHash,
+      chain.hashesByNumber,
+      new ChainWeightStorage(chain.source),
+      new BlockBodiesStorage(chain.source),
+      new EvmCodeStorage(chain.source)
+    )
     val port = new PathLiveSync(
       chain.state,
       chain.appState,
-      new SyncHandoff(
-        chain.state,
-        new PathNodeStorage(chain.source),
-        chain.appState,
-        chain.headersByHash,
-        chain.hashesByNumber,
-        new ChainWeightStorage(chain.source),
-        new BlockBodiesStorage(chain.source),
-        new EvmCodeStorage(chain.source)
-      ),
+      handoff,
       genesis = () => genesis,
       resetRecoveries = clear =>
         if recoveryExecuting then false
@@ -64,6 +66,14 @@ class PathLiveSyncSpec extends AnyFlatSpec with Matchers:
         cleared += 1
       ,
       handedOffNow = () => handedOff += 1,
+      checkpointTarget = new CheckpointImporter.UnifiedTarget(
+        chain.state,
+        new PathNodeStorage(chain.source),
+        handoff,
+        chain.appState,
+        () => genesis,
+        () => 7L
+      ),
       now = () => 7L
     )
 

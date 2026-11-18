@@ -115,6 +115,41 @@ arrive on the ETC ~13 s cadence. If block execution ever hits a state node SNAP 
 is fetched on demand from SNAP peers and import continues — occasional
 `FetchStateNode` activity right after handoff is normal and self-quenching.
 
+## Checkpoint import (archive format version 2)
+
+Instead of SNAP, a fresh node can import a `.checkpoint` archive: `fukuii.sync.checkpoint-sync-file` (a path, `.gz`
+accepted) or `fukuii.sync.checkpoint-sync-url`. It runs only while the best block is 0 and no sync is done. It works on
+both state layouts, including `fukuii.state.path-live = true`. Version 1 archives are refused: export again with this
+release. **Stop sync before exporting**: an export takes hours and fails with `StateNotHeld` if the state moves.
+
+**What the node trusts.**
+
+- **Total difficulty is trusted from the archive**, not re-derived, and proof-of-work fork choice compares it. An archive
+  whose exporter could neither sum it from genesis nor held the chain-weight invariant carries an *estimated* TD: the
+  import accepts it and logs a WARN naming the block and the TD. `ChainWeightReconcile` checks it once the headers below
+  the checkpoint are in.
+- **The expected block hash is required.** Set `fukuii.sync.checkpoint-sync-expected-hash` (32 bytes, hex), or rely on the
+  hash the chain config pins for a public chain (`checkpoint-expected-block-hash`); the operator's wins. An archive
+  whose checkpoint block hashes to anything else is refused before anything is written. ETH and ETC share a genesis
+  hash, so this and the chain id are what tie an archive to its chain. With neither, no archive is imported (a
+  configuration error, not recorded as a refusal).
+- **Proof of stake: finalized blocks only.** On Sepolia, ETH mainnet and Hoodi the exporter refuses a block above the
+  finalized block, and defaults to the finalized one. Take the expected hash from a finalized beacon block's
+  `execution_payload.block_hash`. The importer requires TD >= TTD on a post-merge header.
+
+**Failure and no retry.** The import is atomic on the unified layout: the rows are written at their positions in
+batches, and one synced batch then writes the anchor, `state.origin`, the window and the weight together, so a kill
+leaves either no anchor or the whole state, never an anchor over part of the rows. An archive that is refused after its
+header is read (a bad window, node, code or checksum, a block hash that is not the expected one), and an import that was
+killed, is **recorded as refused by its id** (keccak of the archive's header block; AppState key
+`checkpoint.import.refused`, the last 32 ids). The rows it wrote are cleared and the node syncs by SNAP from a clean
+state. The same archive is **not imported again on a restart**, since each attempt would wipe the SNAP progress made
+since. A different archive (another block) is imported without any flag.
+
+To import a refused archive again (after correcting `checkpoint-sync-expected-hash`, or after replacing a truncated file
+whose header is the same), set `fukuii.sync.checkpoint-sync-retry-refused = true` for **one start**: while it is set,
+every start re-runs the import. A successful import removes the archive from the record.
+
 ## Timing cheat-sheet (live-observed reference points, June 2026)
 
 | Network | Phase | Observed |
@@ -134,3 +169,4 @@ is fetched on demand from SNAP peers and import continues — occasional
 | Healing, walk incomplete | Full re-walk (partial frontiers are never trusted); already-healed nodes stay healed |
 | Healing, walk complete (marker set) | Frontier resumes — the multi-hour walk is skipped |
 | Regular sync | Resumes from the last imported block |
+| Checkpoint import | The import key marks it: the archive is recorded as refused, its rows are cleared (unified layout), SNAP starts clean; the archive is not retried unless `checkpoint-sync-retry-refused` is set |

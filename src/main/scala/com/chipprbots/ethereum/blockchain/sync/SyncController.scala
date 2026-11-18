@@ -148,6 +148,11 @@ object SyncController:
       */
     def handedOff(): Unit
 
+    /** What a checkpoint import needs of the unified layout: the position rows, the hand-off that ends it and the clear
+      * that begins it (spec 018 C5c PR3).
+      */
+    def checkpointTarget: com.chipprbots.ethereum.blockchain.checkpoint.CheckpointImporter.UnifiedTarget
+
   /** What [[PathLiveSyncPort.beforeSnap]] answers. */
   enum SnapStartOnGuard:
     /** SNAP begins; `clearedGenesis` when the genesis state was cleared for it. */
@@ -2184,6 +2189,13 @@ object SyncController:
             )
           else log.info(s"Bootstrap checkpoint already loaded (block $existingPivot), skipping")
 
+      // A start that finds the checkpoint import key set had an import killed (spec 018 E.1, "A failed or killed
+      // import"): its archive is recorded as refused, and on the unified layout its rows are cleared through the reset
+      // mark, so that SNAP starts from a clean state. Before the import below is decided, so that a refused archive is
+      // not run again.
+      com.chipprbots.ethereum.blockchain.checkpoint.CheckpointImporter
+        .recoverInterrupted(appStateStorage, pathLiveSync.map(_.checkpointTarget))
+
       // Checkpoint sync: bootstrap a fresh datadir by importing a `.checkpoint` archive instead
       // of running SNAP. Only fires when DB is fresh (best-block == 0 and SNAP not already done).
       // Resolution order:
@@ -2231,7 +2243,9 @@ object SyncController:
             stateStorage,
             evmCodeStorage,
             appStateStorage,
-            trust
+            trust,
+            unified = pathLiveSync.map(_.checkpointTarget),
+            retryRefused = syncConfig.checkpointSyncRetryRefused
           )
           importer.importFromFile(path) match
             case Right(result) =>
@@ -2241,6 +2255,12 @@ object SyncController:
                 result.nodesImported,
                 result.bytecodesImported,
                 result.elapsedMs / 1000
+              )
+            case Left(err: com.chipprbots.ethereum.blockchain.checkpoint.CheckpointImporter.AlreadyRefused) =>
+              log.warn(
+                "[CHECKPOINT IMPORT] skipped: {} — SNAP/Regular sync runs instead. Set {} = true for one start to retry it.",
+                err,
+                com.chipprbots.ethereum.blockchain.checkpoint.CheckpointImporter.RetryRefusedKey
               )
             case Left(err) =>
               log.error("[CHECKPOINT IMPORT] failed: {} — falling through to SNAP/Regular", err)

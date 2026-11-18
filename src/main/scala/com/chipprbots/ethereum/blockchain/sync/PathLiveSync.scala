@@ -27,6 +27,7 @@ final class PathLiveSync(
     resetRecoveries: (() => Unit) => Boolean,
     stateCleared: () => Unit,
     handedOffNow: () => Unit,
+    val checkpointTarget: com.chipprbots.ethereum.blockchain.checkpoint.CheckpointImporter.UnifiedTarget,
     now: () => Long = () => System.currentTimeMillis()
 ) extends SyncController.PathLiveSyncPort:
   import SyncController.SnapStartOnGuard
