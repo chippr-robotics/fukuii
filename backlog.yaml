@@ -3209,18 +3209,19 @@ items:
   - id: B-383
     title: PowEscalationFeed counts a missing fork header as a MESS refusal; align it with BranchResolution's unjudged rule for this node's own block
     priority: P2
-    status: in-progress
+    status: review
     area: sync
     opened: 2026-11-18
     refs: [T237]
     links:
+      prs: [1938]
       spec: specs/018-storage-engine-consolidation
       branch: test/b067-c6-reorg-olympia
     claim:
       by: cloud-dc960fdc
       agent: forge-b383
       since: 2026-11-18T22:51:10Z
-      heartbeat: 2026-11-18T22:52:20Z
+      heartbeat: 2026-11-18T22:59:02Z
     notes: The feed's messWouldRefuse getOrElse(true) keeps that out of the escalation count, a wait with no end. Count it when the parent is this node's canonical hash (forge).
   - id: B-384
     title: "Checkpoint v2 no-retry: record only content faults as refused; truncation/CRC/I-O and expected-hash mismatch retry automatically"
