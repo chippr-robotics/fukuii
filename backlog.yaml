@@ -2941,3 +2941,15 @@ items:
       spec: specs/030-zero-trust-tls
     depends_on: [B-362]
     notes: "US7 5-7; FR-056-059. ~350+600 plus a crash IT. Review: herald, conduit."
+  - id: B-364
+    title: "Spec 030 S11: TUI TLS view, TLS and consortium docs and skills, container healthchecks (closes B-147, B-149)"
+    priority: P3
+    status: open
+    area: docs
+    size: S
+    opened: 2026-11-18
+    refs: [B-146]
+    links:
+      spec: specs/030-zero-trust-tls
+    depends_on: [B-354, B-355, B-356, B-357, B-358, B-359, B-360, B-361, B-362, B-363]
+    notes: "FR-061, 062. ~150+150 plus docs. Review: prism."
