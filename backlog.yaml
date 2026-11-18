@@ -683,7 +683,7 @@ items:
   - id: B-067
     title: "Spec 018 Track C C6: ETC enablement and ETC mainnet readiness"
     priority: P2
-    status: claimed
+    status: in-progress
     area: storage
     size: M
     opened: 2026-11-07
@@ -695,7 +695,7 @@ items:
       by: cloud-dc960fdc
       agent: forge-b067
       since: 2026-11-18T21:58:46Z
-      heartbeat: 2026-11-18T21:58:46Z
+      heartbeat: 2026-11-18T22:04:17Z
   - id: B-068
     title: "Spec 018 Track C C7: soak and exit gate (no code)"
     priority: P2
