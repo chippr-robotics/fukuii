@@ -324,21 +324,58 @@ class RocksDbDataSource(
         throw RocksDbDataSourceException(s"DataSource error while deleting range", error)
     finally dbLock.writeLock().unlock()
 
-  // Read lock, held for the whole native call. Inside RocksDB a compaction runs beside reads and writes, but this lock does
-  // not let them: a writer waiting for the write lock queues behind this call, and every later read queues behind that
-  // writer (`dbLock` is not fair, but a queued writer still blocks new readers), and close() waits too. So once anything
-  // writes, this stops the data source for as long as the compaction takes: keep the range small.
+  /** Held for reading by every running manual compaction, for writing by `close()`: the native handles outlive any
+    * compaction that holds it. It is not `dbLock`: a compaction holds this for its whole length and `dbLock` only to
+    * check the database is open and to read the handle, so a writer never queues behind a compaction (B-281). A
+    * compaction runs beside reads and writes inside RocksDB (`exclusiveManualCompaction` is off), and two of them may
+    * run at once.
+    */
+  private val compactionGuard = new ReentrantReadWriteLock()
+
+  /** Set at the start of `close()`: from then no compaction starts, and the running ones are cancelled. */
+  @volatile private var closing = false
+
+  /** The options of the compactions now running: `close()` sets each one cancelled, which the native compaction polls.
+    */
+  private val runningCompactions = java.util.concurrent.ConcurrentHashMap.newKeySet[CompactRangeOptions]()
+
+  /** Test seam: runs after the compaction has registered and before the native call, holding the guard only. */
+  @volatile private[dataSource] var beforeNativeCompaction: () => Unit = () => ()
+
   override def compactRange(namespace: Namespace, fromKey: Array[Byte], toKeyExclusive: Array[Byte]): Unit =
-    dbLock.readLock().lock()
+    // Before the lock too: with close() queued for the guard's write lock, a new reader would wait for it.
+    if closing then throw RocksDbDataSourceClosedException(s"This ${getClass.getSimpleName} is closing")
+    compactionGuard.readLock().lock()
     try
-      assureNotClosed()
-      db.compactRange(handles(namespace), fromKey, toKeyExclusive)
+      if closing then throw RocksDbDataSourceClosedException(s"This ${getClass.getSimpleName} is closing")
+      // dbLock only for the open check and the handles; released before the native call. close() frees them only after
+      // it has the guard's write lock, which this thread's read lock holds off.
+      val (database, handle) =
+        dbLock.readLock().lock()
+        try
+          assureNotClosed()
+          (db, handles(namespace))
+        finally dbLock.readLock().unlock()
+      val options = new CompactRangeOptions().setExclusiveManualCompaction(false)
+      try
+        runningCompactions.add(options)
+        // close() may have set `closing` and swept the set just before this add: look again, now that it is in.
+        if closing then options.setCanceled(true)
+        beforeNativeCompaction()
+        try database.compactRange(handle, fromKey, toKeyExclusive, options)
+        catch
+          // A compaction cancelled by close() ends with an Incomplete status: the data source is closing, not faulty.
+          case _: RocksDBException if options.canceled() =>
+            throw RocksDbDataSourceClosedException(s"This ${getClass.getSimpleName} closed during a compaction")
+      finally
+        runningCompactions.remove(options)
+        options.close()
     catch
       case error: RocksDbDataSourceClosedException =>
         throw error
       case NonFatal(error) =>
         throw RocksDbDataSourceException(s"DataSource error while compacting range", error)
-    finally dbLock.readLock().unlock()
+    finally compactionGuard.readLock().unlock()
 
   /** Forward range scan via a single seek+next over a bounded `[fromKey, toKeyExclusive)` window. Uses
     * `scanReadOptions` (fillCache=false) so a large queue scan does not evict the hot block cache. Drains the window
@@ -592,6 +629,12 @@ class RocksDbDataSource(
     */
   override def close(): Unit =
     log.info(s"About to close DataSource in path: ${rocksDbConfig.path}")
+    // Cancel the running compactions and wait for them to leave the native call (B-281): the guard's write lock comes
+    // first, then dbLock's, as in compactRange, which never takes them the other way round. A compaction runs to its
+    // next cancellation check, which RocksDB makes between its input blocks.
+    closing = true
+    runningCompactions.forEach(_.setCanceled(true))
+    compactionGuard.writeLock().lock()
     dbLock.writeLock().lock()
     try
       assureNotClosed()
@@ -621,7 +664,9 @@ class RocksDbDataSource(
         throw error
       case NonFatal(error) =>
         throw RocksDbDataSourceException(s"Not closed the DataSource properly", error)
-    finally dbLock.writeLock().unlock()
+    finally
+      dbLock.writeLock().unlock()
+      compactionGuard.writeLock().unlock()
 
   /** This function is used only for tests. This function closes the DataSource, if it is not yet closed, and deletes
     * all the files used by it.
