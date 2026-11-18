@@ -935,9 +935,11 @@ final class PathStateStorage(
     * writes nothing. A decodable node that is not `expectedHash` is another view's and stays
     * ([[RepairOutcome.DifferentNode]]).
     *
-    * Held for the walk from the root to `position` (at most the depth of an account trie and of a storage trie in point
-    * reads, about two dozen on mainnet) and one write. It waits for a move of the head under way, as any adopter does,
-    * and for no other lock.
+    * Held for the walk from the root to `position` and one write. The worst case is about 128 uncached point reads (a
+    * path is at most 64 nibbles, in the account trie and again in a storage trie; a mainnet trie is typically far
+    * shallower, some tens of reads), each a RocksDB point lookup that bypasses the caches. It waits for a move of the
+    * head under way, as any adopter does, which can be a whole multi-batch head move, and for no other lock. So it is
+    * called off any actor thread, and it throws [[StateUnavailable]] on a store that has failed closed.
     */
   override def repairNodeAt(position: PositionKey, expectedHash: ByteString, bytes: Array[Byte]): RepairOutcome =
     if !StateStorage.hashesTo(expectedHash, bytes) then RepairOutcome.Rejected
