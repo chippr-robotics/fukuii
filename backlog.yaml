@@ -1252,7 +1252,7 @@ items:
   - id: B-146
     title: "Spec: zero-trust TLS and mTLS on every service listener (RPC, WS, Engine API, metrics) plus outbound TLS"
     priority: P1
-    status: blocked
+    status: in-progress
     area: ops
     size: L
     opened: 2026-11-08
@@ -1264,10 +1264,11 @@ items:
       by: cloud-dc960fdc
       agent: spec-b146
       since: 2026-11-17T23:33:57Z
-      heartbeat: 2026-11-18T03:02:45Z
+      heartbeat: 2026-11-18T03:09:17Z
     notes: |-
       Shared tls block, client-auth need/want, truststore, rotation, cert-identity to namespace map, outbound factory; node-ID allowlist for consortium P2P. Spec Kit first (Principle VI).
       2026-11-18 blocked: Spec 030 draft merged (#1903). /speckit-clarify questions Q1-Q5 await the user: Engine API mTLS, non-loopback policy, identity rules (narrow vs grant, GraphQL), P2P allowlist runtime edits/discovery, revocation. Plan/tasks after the answers.
+      2026-11-18 in-progress: User answered Q1-Q5 (2026-11-18): Q1 a (Engine API server TLS only, JWT stays the client control); Q2 b (non-loopback bind refuses to start without TLS, allow-insecure-bind opt-out); Q3 b (identity rule is a grant beyond the listener's apis) + GraphQL gated (recommended default, user to confirm); Q4 static file AND runtime admin_ methods persisting to the file (Besu perm_addNodesToAllowlist model), discovery forced off in allowlist mode; Q5 a (revocation out of scope: short-lived certs + reload). Next: encode, plan, tasks.
   - id: B-147
     title: "TLS docs: fix the TLS skill and runbook errors, docs/MCP.md, and enterprise-deployment's mTLS claim"
     priority: P2
