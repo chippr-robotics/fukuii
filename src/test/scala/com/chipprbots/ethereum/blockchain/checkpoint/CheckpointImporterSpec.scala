@@ -1,7 +1,6 @@
 package com.chipprbots.ethereum.blockchain.checkpoint
 
 import java.io.ByteArrayInputStream
-import java.io.ByteArrayOutputStream
 import java.nio.file.Path
 
 import org.apache.pekko.util.ByteString
@@ -17,6 +16,7 @@ import com.chipprbots.ethereum.blockchain.checkpoint.CheckpointImporter.ImportRe
 import com.chipprbots.ethereum.blockchain.checkpoint.CheckpointImporterSpec.FixedDataSource
 import com.chipprbots.ethereum.blockchain.checkpoint.CheckpointImporterSpec.FixedPruningMode
 import com.chipprbots.ethereum.blockchain.sync.EphemBlockchainTestSetup
+import com.chipprbots.ethereum.crypto
 import com.chipprbots.ethereum.db.components.EphemDataSourceComponent
 import com.chipprbots.ethereum.db.components.Storages
 import com.chipprbots.ethereum.db.components.Storages.DefaultStorages
@@ -27,7 +27,6 @@ import com.chipprbots.ethereum.db.storage.pruning.InMemoryPruning
 import com.chipprbots.ethereum.db.storage.pruning.PruningMode
 import com.chipprbots.ethereum.domain.BlockchainReader
 import com.chipprbots.ethereum.domain.BlockchainWriter
-import com.chipprbots.ethereum.domain.ChainWeight
 import com.chipprbots.ethereum.domain.appstate.BlockInfo
 import com.chipprbots.ethereum.testing.Tags.UnitTest
 
@@ -36,16 +35,16 @@ class CheckpointImporterSpec extends AnyWordSpec with Matchers with EitherValues
   "CheckpointImporter" should {
 
     "import a single-account archive end-to-end" taggedAs UnitTest in new Setup:
-      val header = checkpointHeader
+      // Format version 2 carries no hashes: each entry is stored under keccak of its bytes.
       val nodes: Seq[(ByteString, Array[Byte])] = Seq(
-        (hash("rootNode"), Array.fill[Byte](48)(0xab.toByte)),
-        (hash("storageRoot"), Array.fill[Byte](64)(0xcd.toByte))
-      )
+        Array.fill[Byte](48)(0xab.toByte),
+        Array.fill[Byte](64)(0xcd.toByte)
+      ).map(keyed)
       val bytecodes: Seq[(ByteString, Array[Byte])] = Seq(
-        (hash("code1"), "bytecode1".getBytes("UTF-8")),
-        (hash("code2"), "bytecode2".getBytes("UTF-8"))
-      )
-      val bytes: Array[Byte] = encodeArchive(header, nodes, bytecodes)
+        "bytecode1".getBytes("UTF-8"),
+        "bytecode2".getBytes("UTF-8")
+      ).map(keyed)
+      val (header, bytes) = encodeArchive(nodes, bytecodes)
 
       val importer = new CheckpointImporter(
         writer,
@@ -85,10 +84,9 @@ class CheckpointImporterSpec extends AnyWordSpec with Matchers with EitherValues
       }
 
     "write the imported nodes to the data source before the completion flags under inmemory pruning (#1581)" taggedAs UnitTest in new Setup:
-      val header = checkpointHeader
-      val rootHash: ByteString = hash("rootNode")
-      val nodes: Seq[(ByteString, Array[Byte])] = Seq((rootHash, Array.fill[Byte](48)(0xab.toByte)))
-      val bytes: Array[Byte] = encodeArchive(header, nodes, Nil)
+      val nodes: Seq[(ByteString, Array[Byte])] = Seq(keyed(Array.fill[Byte](48)(0xab.toByte)))
+      val rootHash: ByteString = nodes.head._1
+      val (_, bytes) = encodeArchive(nodes, Nil)
 
       // Records, at the synced (flags) write, whether the node had already reached the data source.
       val ds = new FlagsProbeDataSource(rootHash)
@@ -111,8 +109,7 @@ class CheckpointImporterSpec extends AnyWordSpec with Matchers with EitherValues
       ds.nodeDurableAtFlags shouldBe Some(true)
 
     "reject an archive with a mismatched chainId" taggedAs UnitTest in new Setup:
-      val header = checkpointHeader
-      val bytes: Array[Byte] = encodeArchive(header, Nil, Nil)
+      val (_, bytes) = encodeArchive(Nil, Nil)
 
       val importer = new CheckpointImporter(
         writer,
@@ -130,9 +127,8 @@ class CheckpointImporterSpec extends AnyWordSpec with Matchers with EitherValues
       freshStorage.storages.appStateStorage.isSnapSyncDone() shouldBe false
 
     "reject a corrupted archive without committing state" taggedAs UnitTest in new Setup:
-      val header = checkpointHeader
-      val nodes: Seq[(ByteString, Array[Byte])] = Seq((hash("n1"), Array.fill[Byte](32)(0x11)))
-      val bytes: Array[Byte] = encodeArchive(header, nodes, Nil)
+      val nodes: Seq[(ByteString, Array[Byte])] = Seq(keyed(Array.fill[Byte](32)(0x11)))
+      val (_, bytes) = encodeArchive(nodes, Nil)
       // Flip the CRC trailer to ensure a CRC error
       bytes(bytes.length - 1) = (bytes(bytes.length - 1) ^ 0xff).toByte
 
@@ -155,9 +151,8 @@ class CheckpointImporterSpec extends AnyWordSpec with Matchers with EitherValues
       import java.nio.file.Files
       import java.util.zip.GZIPOutputStream
 
-      val header = checkpointHeader
-      val nodes: Seq[(ByteString, Array[Byte])] = Seq((hash("rootNode"), Array.fill[Byte](32)(0xaa.toByte)))
-      val bytes: Array[Byte] = encodeArchive(header, nodes, Nil)
+      val nodes: Seq[(ByteString, Array[Byte])] = Seq(keyed(Array.fill[Byte](32)(0xaa.toByte)))
+      val (header, bytes) = encodeArchive(nodes, Nil)
 
       // Write the archive to a temp file WITH gzip compression but WITHOUT .gz suffix
       val tmp: Path = Files.createTempFile("checkpoint-bug35", ".checkpoint")
@@ -185,27 +180,21 @@ class CheckpointImporterSpec extends AnyWordSpec with Matchers with EitherValues
     val blockReader: BlockchainReader =
       com.chipprbots.ethereum.domain.BlockchainReader(freshStorage.storages)
 
-    val checkpointHeader: CheckpointArchive.Header =
-      CheckpointArchive.Header(
-        chainId = checkpointChainId,
-        blockHeader = Fixtures.Blocks.Block3125369.header,
-        chainWeight = ChainWeight.totalDifficultyOnly(BigInt("987654321"))
-      )
+    /** An entry, with the key it is stored under: keccak of its bytes. */
+    def keyed(bytes: Array[Byte]): (ByteString, Array[Byte]) = (ByteString(crypto.kec256(bytes)), bytes)
 
-    def hash(s: String): ByteString = ByteString(s.padTo(32, '_').getBytes("UTF-8"))
-
+    /** An archive of block 3125369 (its window of 256 headers built to chain to it) with these nodes and codes. */
     def encodeArchive(
-        header: CheckpointArchive.Header,
         nodes: Seq[(ByteString, Array[Byte])],
         bytecodes: Seq[(ByteString, Array[Byte])]
-    ): Array[Byte] =
-      val baos = new ByteArrayOutputStream()
-      val w = new CheckpointArchive.Writer(baos)
-      w.writeHeader(header)
-      nodes.foreach { case (h, n) => w.writeNode(h, n) }
-      bytecodes.foreach { case (h, b) => w.writeBytecode(h, b) }
-      w.finish()
-      baos.toByteArray
+    ): (CheckpointArchive.Header, Array[Byte]) =
+      CheckpointV2TestKit.archive(
+        checkpointChainId,
+        Fixtures.Blocks.Block3125369.header,
+        BigInt("987654321"),
+        nodes.map(_._2),
+        bytecodes.map(_._2)
+      )
 
 object CheckpointImporterSpec:
   /** Puts `ds` under every store; must come before `Storages.DefaultStorages` in the mix-in order. */

@@ -9,6 +9,7 @@ import org.apache.pekko.util.ByteString
 
 import org.slf4j.LoggerFactory
 
+import com.chipprbots.ethereum.crypto
 import com.chipprbots.ethereum.db.storage.AppStateStorage
 import com.chipprbots.ethereum.db.storage.EvmCodeStorage
 import com.chipprbots.ethereum.db.storage.StateStorage
@@ -16,6 +17,13 @@ import com.chipprbots.ethereum.domain.BlockchainWriter
 import com.chipprbots.ethereum.domain.appstate.BlockInfo
 
 /** Bootstrap a fresh datadir from a `.checkpoint` archive (see [[CheckpointArchive]] for the on-disk format).
+  *
+  * '''Format version 2, on the hash layout, until spec 018 C5c PR2.''' This is the version 1 importer reading the
+  * version 2 stream: each node and code is stored under keccak of its bytes, which on a hash-keyed store is where
+  * version 1 put it, and the ancestor window is read and not stored. It checks the format and the chain id only:
+  * whether the window chains, whether each node is the one its parent names, the genesis hash and the trust rules are
+  * PR2's stack-machine importer (data-model E.1), which replaces this one in the same release. A version 1 archive is
+  * refused.
   *
   * After a successful import the database holds:
   *   - the checkpoint block's header (no body — the archive intentionally omits transactions/receipts)
@@ -66,7 +74,8 @@ final class CheckpointImporter(
     val reader = new CheckpointArchive.Reader(in)
     reader.readHeader() match
       case Left(err) => Left(BadFormat(err))
-      case Right(h) =>
+      case Right(h)  =>
+        // Both are the 64 bits of a u64, so equality is the unsigned comparison.
         expectedChainId match
           case Some(want) if want != h.chainId => Left(ChainIdMismatch(want, h.chainId))
           case _                               => streamEntries(reader, h)
@@ -92,13 +101,14 @@ final class CheckpointImporter(
     val codeBuf = scala.collection.mutable.ArrayBuffer.empty[(ByteString, Array[Byte])]
     var totalNodes = 0L
     var totalBytecodes = 0L
+    var windowEntries = 0L
     var nodeBytes = 0L
     var codeBytes = 0L
 
     log.info(
       "[CHECKPOINT IMPORT] starting block={} chainId={} stateRoot={}",
       blockNum,
-      header.chainId,
+      header.chainIdUnsigned,
       hex8(header.blockHeader.stateRoot.value)
     )
 
@@ -126,8 +136,10 @@ final class CheckpointImporter(
           flushNodes(); flushCodes()
           loopError = Some(BadFormat(err))
           done = true
-        case Right(CheckpointArchive.NodeEntry(hash, rlpBytes)) =>
-          nodeBuf += ((hash, rlpBytes))
+        case Right(_: CheckpointArchive.WindowHeaderEntry | _: CheckpointArchive.WindowBodyEntry) =>
+          windowEntries += 1
+        case Right(CheckpointArchive.NodeEntry(rlpBytes)) =>
+          nodeBuf += ((ByteString(crypto.kec256(rlpBytes)), rlpBytes))
           totalNodes += 1
           nodeBytes += rlpBytes.length
           if nodeBuf.size >= NodeBatchSize then
@@ -139,8 +151,8 @@ final class CheckpointImporter(
                 nodeBytes / (1024 * 1024),
                 totalBytecodes
               )
-        case Right(CheckpointArchive.BytecodeEntry(hash, code)) =>
-          codeBuf += ((hash, code))
+        case Right(CheckpointArchive.CodeEntry(code)) =>
+          codeBuf += ((ByteString(crypto.kec256(code)), code))
           totalBytecodes += 1
           codeBytes += code.length
           if codeBuf.size >= BytecodeBatchSize then flushCodes()
@@ -170,6 +182,10 @@ final class CheckpointImporter(
               .commitSync()
 
             val elapsed = System.currentTimeMillis() - startMs
+            log.info(
+              "[CHECKPOINT IMPORT] window of {} entries read and not stored (spec 018 C5c PR2 stores it)",
+              windowEntries
+            )
             log.info(
               "[CHECKPOINT IMPORT] complete: block={} nodes={} ({} MiB) bytecodes={} ({} MiB) elapsed={}s. " +
                 "RegularSync will resume from {}.",

@@ -1,7 +1,6 @@
 package com.chipprbots.ethereum.blockchain.checkpoint
 
 import java.io.ByteArrayInputStream
-import java.io.ByteArrayOutputStream
 import java.util.concurrent.atomic.AtomicReference
 
 import org.apache.pekko.actor.testkit.typed.scaladsl.FishingOutcomes
@@ -40,7 +39,6 @@ import com.chipprbots.ethereum.db.storage.Namespaces
 import com.chipprbots.ethereum.db.storage.StateStorage
 import com.chipprbots.ethereum.db.storage.pruning.ArchivePruning
 import com.chipprbots.ethereum.domain.BlockchainWriter
-import com.chipprbots.ethereum.domain.ChainWeight
 import com.chipprbots.ethereum.domain.TrieRoot
 import com.chipprbots.ethereum.testing.PeerTestHelpers
 import com.chipprbots.ethereum.testing.Tags.UnitTest
@@ -98,27 +96,26 @@ class CheckpointImportInterruptSpec extends ScalaTestWithActorTestKit() with Any
 
   private val trie = PathHealPresenceFixtures.accountTrieOld()
   private val chainId = 61L
-  private val header = CheckpointArchive.Header(
-    chainId = chainId,
-    blockHeader = Fixtures.Blocks.Block3125369.header.copy(stateRoot = TrieRoot(trie.root.hash)),
-    chainWeight = ChainWeight.totalDifficultyOnly(BigInt(1))
-  )
-
   // Parent-first, as the exporter writes it: each node before anything below it.
   private val parentFirst = Seq("root", "ext", "brY", "brX", "leafY0", "leafY1", "leafX1", "leafX2")
 
-  private def archive: Array[Byte] =
-    val out = new ByteArrayOutputStream()
-    val w = new CheckpointArchive.Writer(out)
-    w.writeHeader(header)
-    parentFirst.foreach(l => w.writeNode(trie(l).hash, trie(l).encoded.toArray))
-    w.finish()
-    out.toByteArray
+  private val (header, archiveBytes) = CheckpointV2TestKit.archive(
+    chainId,
+    Fixtures.Blocks.Block3125369.header.copy(stateRoot = TrieRoot(trie.root.hash)),
+    BigInt(1),
+    parentFirst.map(l => trie(l).encoded.toArray),
+    Nil
+  )
 
-  /** The archive cut off part of the way through its entries, as a connection or a process dies. */
+  private def archive: Array[Byte] = archiveBytes.clone()
+
+  /** The archive cut off part of the way through its entries, as a connection or a process dies: the last five node
+    * entries (a tag and a length, 5 bytes, and the node) are as long as what is cut, with the end tag and the CRC, so
+    * the cut falls inside the fourth node.
+    */
   private def truncated: Array[Byte] =
     val whole = archive
-    val tail = parentFirst.drop(3).map(l => trie(l).encoded.length + 32).sum
+    val tail = parentFirst.drop(3).map(l => trie(l).encoded.length + 5).sum
     whole.take(whole.length - tail)
 
   private def importFrom(d: Datadir, bytes: Array[Byte]) =

@@ -29,13 +29,17 @@ import com.chipprbots.ethereum.domain.Difficulty
 import com.chipprbots.ethereum.domain.TrieRoot
 import com.chipprbots.ethereum.domain.UInt256
 import com.chipprbots.ethereum.mpt.MerklePatriciaTrie
-import com.chipprbots.ethereum.mpt.MerklePatriciaTrie.MPTException
 import com.chipprbots.ethereum.nodebuilder.PruningConfigBuilder
 import com.chipprbots.ethereum.testing.Tags.UnitTest
 
-/** #1692, the checkpoint path. The exporter writes each node once however many positions use it, so the importer counts
-  * a storage trie shared by two contracts once. The first block to rewrite a slot of one of them sends the nodes on its
-  * path to zero, and pruning, `history` blocks later, deleted what the other contract still read.
+/** #1692, the checkpoint path. The format version 1 exporter wrote each node once however many positions used it, so
+  * the importer counted a storage trie shared by two contracts once. The first block to rewrite a slot of one of them
+  * sent the nodes on its path to zero, and pruning, `history` blocks later, deleted what the other contract still read.
+  * The importer takes the count stamp away, so pruning stops deleting by count.
+  *
+  * Format version 2 (spec 018 C5c) writes every occurrence: the shared trie is in the archive under each contract, and
+  * the hash-layout importer counts it twice. The second case pins that: the counts of a shared trie are no longer too
+  * low, even with the stamp put back.
   *
   * Contract A and contract B have the same storage root. The archive is exported from a source store and imported into
   * a target that prunes, then block `tip + 1` rewrites a slot of A.
@@ -64,11 +68,12 @@ class CheckpointSharedNodePruneSpec extends AnyWordSpec with Matchers with Eithe
 
       noException should be thrownBy readSharedStorage()
 
-    "lose it when the stamp is put back, which is the failure this guards against" taggedAs UnitTest in new Setup:
+    "keep it even when the stamp is put back: a version 2 archive holds the shared trie under each contract" taggedAs UnitTest in new Setup:
       val app = targetStorages.storages.appStateStorage
       app.markDatadirCreated(countsExact = true).commitSync()
       importArchive()
-      // What a store with no such rule did: the importer counted the shared nodes once, and pruning believed it.
+      // What a store with no such rule did, and what lost the other contract's trie under format version 1: pruning
+      // believed the importer's counts. Under version 2 each occurrence is an entry, so the shared nodes count twice.
       app.markRefCountsExact().commit()
       RefCountTrust.nodesMayBeDeleted(app) shouldBe true
 
@@ -76,7 +81,7 @@ class CheckpointSharedNodePruneSpec extends AnyWordSpec with Matchers with Eithe
       rewriteSlotOfA()
       pruneThrough(tip + 1 + history + 1)
 
-      an[MPTException] should be thrownBy readSharedStorage()
+      noException should be thrownBy readSharedStorage()
   }
 
   private def difficultyAt(i: Int): BigInt = BigInt(131072) + BigInt(i) * 1000
@@ -148,7 +153,8 @@ class CheckpointSharedNodePruneSpec extends AnyWordSpec with Matchers with Eithe
         val exporter = new CheckpointExporter(
           sourceStorages.storages.evmCodeStorage,
           sourceReader,
-          chainId = chainId
+          chainId = chainId,
+          terminalTotalDifficulty = None
         )
         val _ = exporter.exportArchive(header.number.value, archive).value
         val importer = new CheckpointImporter(

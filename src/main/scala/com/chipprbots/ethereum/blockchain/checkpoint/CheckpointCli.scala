@@ -29,8 +29,10 @@ import com.chipprbots.ethereum.utils.Logger
   *   fukuii etc checkpoint export --block 21000000 --output /tmp/etc.checkpoint --gzip
   * }}}
   *
-  * The archive's total difficulty is summed from genesis over the stored headers; the export is refused when a header
-  * is missing unless `--allow-estimated-td` is given (see [[CheckpointExporter]]).
+  * The archive is format version 2. Its total difficulty is summed from genesis over the stored headers; when a header
+  * is missing the stored weight is used if the node holds the chain-weight invariant, and otherwise the export is
+  * refused unless `--allow-estimated-td` is given (see [[CheckpointExporter]]). On a proof-of-stake chain only a
+  * finalized block is exported. Stop the node first: a state that moves under the export refuses it.
   *
   * Without arguments or with `--block 0` the current best block is used. The chain is selected the same way the
   * launcher selects it for the node (positional argument, e.g. `etc` / `sepolia`).
@@ -101,7 +103,11 @@ object CheckpointCli extends Logger:
     val exporter = new CheckpointExporter(
       storages.evmCodeStorage,
       reader,
-      chainId
+      chainId,
+      builder.blockchainConfig.terminalTotalDifficulty,
+      // On a proof-of-stake chain, the finalized block the node last followed a fork choice to (the path layout keeps
+      // it across a restart); without one, nothing can be shown to be final and the export is refused.
+      () => storages.appStateStorage.getStateFinalized().map(_.number)
     )
     // Auto-append .gz when --gzip is set and the operator didn't already include it.
     // The CheckpointImporter also magic-byte-sniffs, but the conventional extension
