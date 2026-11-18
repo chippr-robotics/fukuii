@@ -3179,3 +3179,15 @@ items:
     links:
       spec: 018
     notes: PR3 tests the importer and recoverInterrupted; the two SyncController call sites (~2187) have no spec
+  - id: B-381
+    title: "B-067 follow-up (T238): compare ETC miner and ommer balances across the ECIP-1017 era boundaries with the pinned 0.12.1 jar"
+    priority: P2
+    status: open
+    area: storage
+    size: M
+    opened: 2026-11-18
+    refs: [T238]
+    links:
+      spec: specs/018-storage-engine-consolidation
+    depends_on: [B-053]
+    notes: "PR-A (test/b067-c6-etc-vectors) pins rewards to the formula and ports ECIP1017Test to the unified layout. Left: a range spanning 5,000,000 and Mordor's 2,000,000/4,000,000 boundaries, balances compared with the pinned jar's recorded values (C0 oracle, B-053)."
