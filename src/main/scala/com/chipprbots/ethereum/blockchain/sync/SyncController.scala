@@ -2397,13 +2397,27 @@ object SyncController:
 
     /** The snap-peer precondition under way (spec 018 C6): for the SNAP start of `minPivotBlock`, its last count, and
       * whether the line that it waits was said.
+      *
+      * The count is asked again every [[SyncController.SnapStartRecheckDelay]] (`ticks` of them so far). A node at its
+      * genesis whose peer manager does not answer is therefore re-asked each time, and said so at WARN: after
+      * [[SnapPeersNoCountWarnTicks]] ticks and then once a minute. The wait is bounded all the same: when `powWait` is
+      * over (`waitOver`) the count is asked once more and decides; if that last count does not come within
+      * [[SnapPeersFinalCountTicks]] ticks either, the last count made decides, and with none ever made SNAP begins
+      * (what its own wait for peers does is what is left), said at WARN.
       */
     final private case class SnapPeersPending(
         minPivotBlock: Option[BigInt],
         holdsOnlyGenesis: Boolean,
         count: Option[PathLiveSync.SnapPeerCount] = None,
-        saidWaiting: Boolean = false
+        saidWaiting: Boolean = false,
+        ticks: Int = 0,
+        waitOver: Boolean = false,
+        ticksSinceWaitOver: Int = 0
     )
+
+    private val SnapPeersNoCountWarnTicks = 2
+    private val SnapPeersFinalCountTicks = 2
+    private def snapPeersTicksPerMinute: Int = (1.minute / SyncController.SnapStartRecheckDelay).toInt.max(1)
 
     private def countSnapPeers(): Unit =
       networkPeerManager ! com.chipprbots.ethereum.network.NetworkPeerManagerActor.GetHandshakedPeersCmd(
@@ -2437,10 +2451,17 @@ object SyncController:
               snapPeers = None
               timers.cancel(SnapPeersRecountKey)
               timers.cancel(SnapPeersWaitOverKey)
-              log.info(
-                s"[SNAP-PEERS] SNAP starts with ${pending.count.fold("an unknown number of peers (no count came)")(_.describe)}" +
-                  s"; min-snap-peers = ${port.snapPeers.minSnapPeers}"
-              )
+              val min = port.snapPeers.minSnapPeers
+              pending.count match
+                case None =>
+                  log.warn(
+                    s"[SNAP-PEERS] SNAP starts with an unknown number of peers (no count came from the peer manager); " +
+                      s"min-snap-peers = $min"
+                  )
+                case Some(c) =>
+                  // under the minimum the line says so (EG-12): SNAP begins with the peers there are
+                  val against = if c.snapCapable < min then s"${c.snapCapable} < min $min" else s"min-snap-peers = $min"
+                  log.info(s"[SNAP-PEERS] SNAP starts with ${c.describe}; $against")
               askBeforeSnap(port, pending.minPivotBlock)
               Behaviors.same
             case RegularSyncFromGenesis =>
@@ -2471,30 +2492,60 @@ object SyncController:
                   proofOfWork = true,
                   counted.holdsOnlyGenesis,
                   port.snapPeers.minSnapPeers,
-                  waitOver = false
+                  waitOver = counted.waitOver
                 )
               )
             case SnapPeersRecount if snapPeers.isDefined =>
               val pending = snapPeers.get
+              val ticked = pending.copy(
+                ticks = pending.ticks + 1,
+                ticksSinceWaitOver = if pending.waitOver then pending.ticksSinceWaitOver + 1 else 0
+              )
+              snapPeers = Some(ticked)
+              if ticked.waitOver && ticked.ticksSinceWaitOver >= SnapPeersFinalCountTicks then
+                // the count asked for at the end of the wait did not come: the last one made decides (bounded)
+                log.warn(
+                  s"[SNAP-PEERS] The peer manager did not answer the final count at the end of the wait; deciding on " +
+                    s"${ticked.count.fold("no count")(_.describe)}"
+                )
+                concluded(
+                  ticked,
+                  PathLiveSync.snapPeerVerdict(
+                    ticked.count,
+                    proofOfWork = true,
+                    ticked.holdsOnlyGenesis,
+                    port.snapPeers.minSnapPeers,
+                    waitOver = true
+                  )
+                )
               // a node whose genesis state is not what it holds waits for nothing: a count that did not come in this
               // time is given up on, and the start goes on
-              if pending.count.isEmpty && !pending.holdsOnlyGenesis then
-                concluded(pending, PathLiveSync.SnapPeerVerdict.Begin)
+              else if ticked.count.isEmpty && !ticked.holdsOnlyGenesis then
+                concluded(ticked, PathLiveSync.SnapPeerVerdict.Begin)
               else
+                if ticked.holdsOnlyGenesis && !ticked.waitOver then
+                  val minute = ticked.ticks % snapPeersTicksPerMinute == 0
+                  ticked.count match
+                    case None if ticked.ticks == SnapPeersNoCountWarnTicks || minute =>
+                      log.warn(
+                        s"[SNAP-PEERS] The peer manager has not answered ${ticked.ticks} counts of the snap peers " +
+                          s"(asked every ${SyncController.SnapStartRecheckDelay.toSeconds} s); still asking. The wait of " +
+                          s"${port.snapPeers.powWait.toMinutes} min ends with SNAP beginning on an unknown number of " +
+                          "peers if no count ever comes"
+                      )
+                    case Some(c) if minute =>
+                      log.info(
+                        s"[SNAP-PEERS] Still waiting for ${port.snapPeers.minSnapPeers} snap-capable peers: " +
+                          c.describe
+                      )
+                    case _ => ()
                 countSnapPeers()
                 Behaviors.same
             case SnapPeersWaitOver if snapPeers.isDefined =>
-              val pending = snapPeers.get
-              concluded(
-                pending,
-                PathLiveSync.snapPeerVerdict(
-                  pending.count,
-                  proofOfWork = true,
-                  pending.holdsOnlyGenesis,
-                  port.snapPeers.minSnapPeers,
-                  waitOver = true
-                )
-              )
+              // the count may be up to a tick old: it is made again, and the answer decides (HandshakedPeers, above)
+              snapPeers = Some(snapPeers.get.copy(waitOver = true, ticksSinceWaitOver = 0))
+              countSnapPeers()
+              Behaviors.same
             case SnapPeersRecount | SnapPeersWaitOver               => Behaviors.same
             case msg: SyncProtocol.GetStatus if snapPeers.isDefined =>
               // the wait for peers can be long: eth_syncing is answered, not held

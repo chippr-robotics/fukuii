@@ -1344,6 +1344,8 @@ class SyncControllerSpec
     said should have size 1
     said.head should include("2 snap-capable peer(s) on this chain (1 of them declared by the operator")
     said.head should include("of 4 connected")
+    said.head should include("min-snap-peers = 2")
+    (said.head should not).include("<")
   }
 
   it should "begin SNAP at the end of the wait with the one snap peer there is, a declared one" taggedAs (
@@ -1371,6 +1373,8 @@ class SyncControllerSpec
     val said = lines.filter(_.contains("[SNAP-PEERS] SNAP starts"))
     said should have size 1
     said.head should include("1 snap-capable peer(s) on this chain (1 of them declared by the operator")
+    // under the minimum, the line says so (EG-12)
+    said.head should include("1 < min 2")
   }
 
   it should "not wait for peers, nor regular-sync from the genesis, when the node holds more than its genesis" taggedAs (
@@ -1405,6 +1409,122 @@ class SyncControllerSpec
     port.asked.get() shouldBe 0
     snapChildren(testSetup) shouldBe empty
   }
+
+  // The peer manager that does not answer, the final count, and the log of the wait (spec 018 C6, review of #1940)
+
+  it should "re-ask a count that does not come, say so at WARN, and begin SNAP on an unknown count when the wait is over" taggedAs (
+    UnitTest,
+    SyncTest
+  ) in withRecoveryTestSetup() { testSetup =>
+    import testSetup.*
+    val port = new GuardPort(SyncController.SnapStartOnGuard.Begin(clearedGenesis = true))
+    port.onlyGenesis = true
+    port.snapPeers = port.snapPeers.copy(powWait = 5.minutes)
+    pathLiveSync = Some(port)
+    val asked = new java.util.concurrent.atomic.AtomicInteger(0)
+    answerPeerPollsFrom { () =>
+      asked.incrementAndGet()
+      None
+    }
+    val lines = syncControllerLogsAtLeast(ch.qos.logback.classic.Level.INFO) {
+      syncController ! SyncController.WrappedSyncProtocol(SyncProtocol.Start)
+      (1 to 12).foreach(_ => timePasses(SyncController.SnapStartRecheckDelay))
+      withClue("the count is asked again, not only once: ") {
+        asked.get() should be >= 12
+      }
+      withClue("inside the wait the node neither starts SNAP nor regular sync: ") {
+        port.asked.get() shouldBe 0
+        snapChildren(testSetup) shouldBe empty
+      }
+      // bounded: at the end of the wait (and the final count, which does not come either) SNAP begins
+      timePasses(4.minutes)
+      (1 to 4).foreach(_ => timePasses(SyncController.SnapStartRecheckDelay))
+      eventually {
+        someTimePasses()
+        assert(snapChildren(testSetup).nonEmpty)
+      }
+    }
+    port.asked.get() shouldBe 1
+    val warnings = lines.filter(_.contains("[SNAP-PEERS]"))
+    withClue(warnings.mkString("\n")) {
+      warnings.count(_.contains("has not answered")) should be >= 2 // after 2 ticks, and once a minute
+      warnings.exists(_.contains("did not answer the final count")) shouldBe true
+      warnings.exists(_.contains("unknown number of peers")) shouldBe true
+    }
+  }
+
+  it should "decide on a recount at the end of the wait: a snap peer that dropped meanwhile is not counted" taggedAs (
+    UnitTest,
+    SyncTest
+  ) in withRecoveryTestSetup() { testSetup =>
+    import testSetup.*
+    val port = new GuardPort(SyncController.SnapStartOnGuard.Begin(clearedGenesis = true))
+    port.onlyGenesis = true
+    // the wait ends 2 s after a tick, so that the last count before it is stale
+    port.snapPeers = port.snapPeers.copy(powWait = 62.seconds)
+    pathLiveSync = Some(port)
+    @volatile var dropped = false
+    answerPeerPollsFrom { () =>
+      Some(peersOnTheChain(testSetup, n = 2, snap = if dropped then 0 else 1))
+    }
+    val warnings = syncControllerLines(ch.qos.logback.classic.Level.WARN) {
+      syncController ! SyncController.WrappedSyncProtocol(SyncProtocol.Start)
+      (1 to 12).foreach(_ => timePasses(SyncController.SnapStartRecheckDelay))
+      dropped = true
+      timePasses(2.seconds)
+      regularSyncChild(testSetup)
+    }
+    port.asked.get() shouldBe 0
+    snapChildren(testSetup) shouldBe empty
+    warnings.exists(_.contains("regular sync from its genesis")) shouldBe true
+  }
+
+  it should "decide on a recount at the end of the wait: a snap peer that arrived meanwhile is counted" taggedAs (
+    UnitTest,
+    SyncTest
+  ) in withRecoveryTestSetup() { testSetup =>
+    import testSetup.*
+    val port = new GuardPort(SyncController.SnapStartOnGuard.Begin(clearedGenesis = true))
+    port.onlyGenesis = true
+    port.snapPeers = port.snapPeers.copy(powWait = 62.seconds)
+    pathLiveSync = Some(port)
+    @volatile var arrived = false
+    answerPeerPollsFrom { () =>
+      Some(peersOnTheChain(testSetup, n = 2, snap = if arrived then 1 else 0))
+    }
+    val lines = syncControllerLines(ch.qos.logback.classic.Level.INFO) {
+      syncController ! SyncController.WrappedSyncProtocol(SyncProtocol.Start)
+      (1 to 12).foreach(_ => timePasses(SyncController.SnapStartRecheckDelay))
+      arrived = true
+      timePasses(2.seconds)
+      eventually {
+        someTimePasses()
+        assert(snapChildren(testSetup).nonEmpty)
+      }
+    }
+    port.asked.get() shouldBe 1
+    assert(!childNamed(testSetup, "regular-sync"))
+    lines.filter(_.contains("[SNAP-PEERS] SNAP starts")).head should include("1 < min 2")
+  }
+
+  it should "say once a minute at INFO how many snap peers it has while it waits" taggedAs (UnitTest, SyncTest) in
+    withRecoveryTestSetup() { testSetup =>
+      import testSetup.*
+      val port = new GuardPort(SyncController.SnapStartOnGuard.Begin(clearedGenesis = true))
+      port.onlyGenesis = true
+      port.snapPeers = port.snapPeers.copy(powWait = 5.minutes)
+      pathLiveSync = Some(port)
+      answerPeerPollsWith(peersOnTheChain(testSetup, n = 3, snap = 1))
+      val lines = syncControllerLines(ch.qos.logback.classic.Level.INFO) {
+        syncController ! SyncController.WrappedSyncProtocol(SyncProtocol.Start)
+        // 2 min and 1 s: the lines come at the first and the second minute, not at every count
+        (1 to 24).foreach(_ => timePasses(SyncController.SnapStartRecheckDelay))
+        timePasses(1.second)
+      }
+      val minutely = lines.filter(_.contains("[SNAP-PEERS] Still waiting"))
+      minutely should have size 2
+      minutely.foreach(_ should include("1 snap-capable peer(s) on this chain"))
+    }
 
   "On a chain with a terminal total difficulty, on the unified layout, SyncController" should "ask the port at once and begin SNAP with no snap peer, however long, never regular sync from the genesis" taggedAs (
     UnitTest,
@@ -1700,6 +1820,13 @@ class SyncControllerSpec
     syncControllerLogsDuring(ch.qos.logback.classic.Level.ERROR)(f)
 
   private def syncControllerLogsDuring(level: ch.qos.logback.classic.Level)(f: => Unit): List[String] =
+    syncControllerLogsFrom(level, exact = true)(f)
+
+  /** Every line at `level` or above. */
+  private def syncControllerLogsAtLeast(level: ch.qos.logback.classic.Level)(f: => Unit): List[String] =
+    syncControllerLogsFrom(level, exact = false)(f)
+
+  private def syncControllerLogsFrom(level: ch.qos.logback.classic.Level, exact: Boolean)(f: => Unit): List[String] =
     val logger = org.slf4j.LoggerFactory
       .getLogger("com.chipprbots.ethereum.blockchain.sync.SyncController$Impl")
       .asInstanceOf[ch.qos.logback.classic.Logger]
@@ -1714,7 +1841,7 @@ class SyncControllerSpec
       logger.setLevel(levelBefore)
       logger.detachAppender(appender)
     appender.list.asScala.toList
-      .filter(_.getLevel == level)
+      .filter(e => if exact then e.getLevel == level else e.getLevel.isGreaterOrEqual(level))
       .map(_.getFormattedMessage)
 
   /** SNAP part-way through healing: pivot saved, every data phase done, best moved on by a healing pivot roll. */
@@ -2940,6 +3067,18 @@ class SyncControllerSpec
             msg.asMatchable match
               case NetworkPeerManagerActor.GetHandshakedPeersCmd(replyTo) => replyTo ! HandshakedPeers(peers)
               case _                                                      => ()
+            this
+      )
+
+    /** Answer every peer poll with what `peers` gives at that moment; `None` leaves the poll unanswered. */
+    def answerPeerPollsFrom(peers: () => Option[Map[Peer, PeerInfo]]): Unit =
+      networkPeerManager.setAutoPilot(
+        new AutoPilot:
+          override def run(sender: ActorRef, msg: Any): AutoPilot =
+            msg.asMatchable match
+              case NetworkPeerManagerActor.GetHandshakedPeersCmd(replyTo) =>
+                peers().foreach(p => replyTo ! HandshakedPeers(p))
+              case _ => ()
             this
       )
 
