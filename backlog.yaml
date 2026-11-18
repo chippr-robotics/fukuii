@@ -2980,3 +2980,13 @@ items:
     links:
       spec: 030-zero-trust-tls
     notes: S9 covered at RLPx handshake + PeerManager level with TestKit; the three-node IntegrationTest of SC-005 was not written.
+  - id: B-367
+    title: "Spec 030 S9 follow-up: swap NodeAllowlistStore.schedule for tls/FilePoller when S4 merges (T082)"
+    priority: P3
+    status: open
+    area: network
+    opened: 2026-11-18
+    refs: []
+    links:
+      spec: 030-zero-trust-tls
+    notes: S9 carries a minimal scheduleWithFixedDelay reload (NodeAllowlistStore.schedule); S4 owns the shared poller.
