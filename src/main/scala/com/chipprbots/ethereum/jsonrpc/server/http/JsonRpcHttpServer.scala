@@ -32,6 +32,7 @@ import com.chipprbots.ethereum.jsonrpc.graphql.GraphQLService
 import com.chipprbots.ethereum.jsonrpc.serialization.JsonSerializers
 import com.chipprbots.ethereum.jsonrpc.server.controllers.JsonRpcBaseController
 import com.chipprbots.ethereum.jsonrpc.server.http.JsonRpcHttpServer.JsonRpcHttpServerConfig
+import com.chipprbots.ethereum.tls.IdentityRules
 import com.chipprbots.ethereum.tls.TlsConfigError
 import com.chipprbots.ethereum.tls.TlsServerContext
 import com.chipprbots.ethereum.utils.BuildInfo
@@ -45,6 +46,21 @@ trait JsonRpcHttpServer extends Json4sSupport with Logger:
 
   /** Optional GraphQL endpoint, mounted at `POST /graphql` when defined. */
   val graphQLService: Option[GraphQLService] = None
+
+  /** Who is served by which controller (spec 030 FR-020–FR-028). By default every request is served by
+    * [[jsonRpcController]]; a listener that asks for client certificates resolves each caller from its TLS session.
+    */
+  def callers: RpcCallers = RpcCallers.none(jsonRpcController)
+
+  /** The caller of this request, from the TLS session Pekko puts on it (`ssl-session-attribute`, research D-2). */
+  private def caller: Directive1[RpcCaller] =
+    optionalAttribute(AttributeKeys.sslSession).map(info => callers.forSession(info.map(_.session)))
+
+  private val graphQlDisabled: HttpResponse =
+    HttpResponse(
+      status = StatusCodes.NotFound,
+      entity = HttpEntity(ContentTypes.`application/json`, """{"errors":[{"message":"graphql disabled"}]}""")
+    )
 
   given runtime: IORuntime = IORuntime.global
   given serialization: Serialization.type = native.Serialization
@@ -84,23 +100,22 @@ trait JsonRpcHttpServer extends Json4sSupport with Logger:
       } ~ (path("buildinfo") & pathEndOrSingleSlash & get) {
         handleBuildInfo()
       } ~ path("graphql") {
-        post {
+        (post & caller) { who =>
           graphQLService match
-            case Some(svc) =>
+            case Some(svc) if who.graphQl =>
               extractStrictEntity(5.seconds) { entity =>
                 val body = entity.data.utf8String
                 handleGraphQL(svc, body)
               }
+            case Some(_) =>
+              // A caller whose rule does not list graphql gets what a node without GraphQL answers (FR-028).
+              who.label.foreach(l => RpcNamespaceDenials.record(l, IdentityRules.GraphQl, "POST /graphql", "http"))
+              complete(graphQlDisabled)
             case None =>
-              complete(
-                HttpResponse(
-                  status = StatusCodes.NotFound,
-                  entity =
-                    HttpEntity(ContentTypes.`application/json`, """{"errors":[{"message":"graphql disabled"}]}""")
-                )
-              )
+              complete(graphQlDisabled)
         }
-      } ~ (pathEndOrSingleSlash & post) {
+      } ~ (pathEndOrSingleSlash & post & caller) { who =>
+        val controller = who.controller
         // Materialize the request entity BEFORE the two `entity(as[...])` alternatives below.
         //
         // Those alternatives are tried in order, and for a BATCH request (a JSON array) the
@@ -122,18 +137,19 @@ trait JsonRpcHttpServer extends Json4sSupport with Logger:
         toStrictEntity(5.seconds) {
           entity(as[JsonRpcRequest]) {
             case statusReq if statusReq.method == FaucetJsonRpcController.Status =>
-              handleRequest(statusReq)
+              handleRequest(controller, statusReq)
             case jsonReq =>
               rateLimit {
-                handleRequest(jsonReq)
+                handleRequest(controller, jsonReq)
               }
           } ~ entity(as[Seq[JsonRpcRequest]]) {
             case _ if config.rateLimit.enabled =>
               complete(StatusCodes.MethodNotAllowed, JsonRpcError.MethodNotFound)
             case reqSeq =>
+              // each element is answered on its own, by the caller's controller (US3 scenario 3)
               complete {
                 reqSeq.toList
-                  .traverse(request => jsonRpcController.handleRequest(request))
+                  .traverse(request => controller.handleRequest(request))
                   .unsafeToFuture()
               }
           }
@@ -142,8 +158,10 @@ trait JsonRpcHttpServer extends Json4sSupport with Logger:
     }
   }
 
-  def handleRequest(request: JsonRpcRequest): StandardRoute =
-    complete(handleResponse(jsonRpcController.handleRequest(request)).unsafeToFuture())
+  def handleRequest(request: JsonRpcRequest): StandardRoute = handleRequest(jsonRpcController, request)
+
+  private def handleRequest(controller: JsonRpcBaseController, request: JsonRpcRequest): StandardRoute =
+    complete(handleResponse(controller.handleRequest(request)).unsafeToFuture())
 
   private def handleResponse(f: IO[JsonRpcResponse]): IO[(StatusCode, JsonRpcResponse)] = f.map { jsonRpcResponse =>
     jsonRpcResponse.error match
@@ -272,16 +290,22 @@ object JsonRpcHttpServer extends Logger:
       jsonRpcHealthchecker: JsonRpcHealthChecker,
       config: JsonRpcHttpServerConfig,
       fTlsContext: () => Either[TlsConfigError, TlsServerContext],
-      graphQLService: Option[GraphQLService] = None
+      graphQLService: Option[GraphQLService] = None,
+      tlsCallers: Option[RpcCallers] = None
   )(implicit actorSystem: ActorSystem): Either[String, JsonRpcHttpServer] =
     config.mode match
       // `tls { enabled = true }` makes the server secure under either mode value; `mode = "https"` is the deprecated
       // form of the same (spec 030 FR-007), and the start-up check refuses the two together.
       case "http" | "https" if config.tlsEnabled =>
         Right(
-          new SecureJsonRpcHttpServer(jsonRpcController, jsonRpcHealthchecker, config, fTlsContext, graphQLService)(
-            using actorSystem
-          )
+          new SecureJsonRpcHttpServer(
+            jsonRpcController,
+            jsonRpcHealthchecker,
+            config,
+            fTlsContext,
+            graphQLService,
+            tlsCallers
+          )(using actorSystem)
         )
       case "http" =>
         Right(

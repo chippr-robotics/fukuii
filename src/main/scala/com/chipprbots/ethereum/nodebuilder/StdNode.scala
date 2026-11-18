@@ -431,11 +431,11 @@ abstract class BaseNode extends Node:
   /** The pre-bind TLS pass: refuses the start on the first misconfiguration, logs one line per TLS listener. */
   private def checkTlsAtStart(): Unit =
     val config = instanceConfig.config
-    TlsStartupCheck.run(config) match
+    TlsStartupCheck.run(config, availableApis) match
       case Left(message) => throw StdNode.startupRefusal(message)
       case Right(lines) =>
         if TlsStartupCheck.usesLegacy(config) then log.warn(TlsConfig.LegacyDeprecation)
-        lines.foreach(line => log.info(line.render))
+        lines.flatMap(_.renderAll).foreach(line => log.info(line))
 
   private def startDiscoveryManager(): Unit = peerDiscoveryManagerTyped ! PeerDiscoveryManager.Start
 

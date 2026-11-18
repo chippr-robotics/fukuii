@@ -9,6 +9,7 @@ import org.apache.pekko.actor.typed.Scheduler
 import org.apache.pekko.actor.typed.scaladsl.AskPattern.*
 import org.apache.pekko.actor.typed.scaladsl.adapter.*
 import org.apache.pekko.http.scaladsl.Http
+import org.apache.pekko.http.scaladsl.model.AttributeKeys
 import org.apache.pekko.http.scaladsl.model.StatusCodes
 import org.apache.pekko.http.scaladsl.model.ws.Message
 import org.apache.pekko.http.scaladsl.model.ws.TextMessage
@@ -38,6 +39,7 @@ import org.json4s.native.Serialization
 import com.chipprbots.ethereum.jsonrpc.JsonRpcError
 import com.chipprbots.ethereum.jsonrpc.JsonRpcRequest
 import com.chipprbots.ethereum.jsonrpc.RpcCallStats
+import com.chipprbots.ethereum.jsonrpc.RpcNamespaceDenials
 import com.chipprbots.ethereum.jsonrpc.SubscriptionManager
 import com.chipprbots.ethereum.jsonrpc.SubscriptionManager.*
 import com.chipprbots.ethereum.jsonrpc.serialization.JsonSerializers
@@ -71,7 +73,8 @@ class JsonRpcWsServer(
     jsonRpcController: JsonRpcBaseController,
     subscriptionManager: ActorRef[SubscriptionManager.Command],
     config: JsonRpcWsServer.JsonRpcWsServerConfig,
-    tlsContext: () => Either[TlsConfigError, Option[TlsServerContext]] = () => Right(None)
+    tlsContext: () => Either[TlsConfigError, Option[TlsServerContext]] = () => Right(None),
+    tlsCallers: Option[RpcCallers] = None
 )(implicit system: ActorSystem)
     extends Logger:
 
@@ -85,6 +88,11 @@ class JsonRpcWsServer(
 
   private val originPolicy: WsOriginPolicy = WsOriginPolicy(config.allowedOrigins)
 
+  /** Who is served by which controller (spec 030 FR-020, FR-026): resolved once, at the upgrade, and kept for every
+    * message and subscription of the connection.
+    */
+  private val callers: RpcCallers = tlsCallers.getOrElse(RpcCallers.none(jsonRpcController))
+
   /** The upgrade is refused with 403 when the request carries an `Origin` header that is not on the allow-list; the
     * connection is not registered with the SubscriptionManager. A request with no `Origin` header is not from a browser
     * and goes through. See [[WsOriginPolicy]]. A request that is not a WebSocket upgrade is answered with 400 and
@@ -95,8 +103,9 @@ class JsonRpcWsServer(
       extractRequest { request =>
         val origins = request.headers.filter(_.is("origin")).map(_.value)
         if originPolicy.permits(origins) then
-          extractWebSocketUpgrade { upgrade =>
-            complete(upgrade.handleMessages(buildWsFlow()))
+          (extractWebSocketUpgrade & optionalAttribute(AttributeKeys.sslSession)) { (upgrade, session) =>
+            val controller = callers.forSession(session.map(_.session)).controller
+            complete(upgrade.handleMessages(buildWsFlow(controller)))
           }
         else
           log.warn(
@@ -166,7 +175,7 @@ class JsonRpcWsServer(
         bindingF.foreach(b => log.info(s"JSON RPC $scheme server listening on ${b.localAddress}"))
         bindingF
 
-  private def buildWsFlow(): Flow[Message, Message, Any] =
+  private def buildWsFlow(controller: JsonRpcBaseController): Flow[Message, Message, Any] =
     val connId = UUID.randomUUID().toString
 
     // Outbound queue: SubscriptionManager pushes JSON strings here
@@ -182,9 +191,9 @@ class JsonRpcWsServer(
     // Inbound sink: parse JSON-RPC, route, push response to queue
     val inboundSink: Sink[Message, Any] = Sink.foreach[Message] {
       case TextMessage.Strict(text) =>
-        handleWsMessage(text, connId, queue)
+        handleWsMessage(text, connId, queue, controller)
       case TextMessage.Streamed(stream) =>
-        stream.runFold("")(_ + _).foreach(text => handleWsMessage(text, connId, queue))
+        stream.runFold("")(_ + _).foreach(text => handleWsMessage(text, connId, queue, controller))
       case _ => ()
     }
 
@@ -208,7 +217,8 @@ class JsonRpcWsServer(
   private def handleWsMessage(
       text: String,
       connId: String,
-      queue: org.apache.pekko.stream.scaladsl.SourceQueueWithComplete[String]
+      queue: org.apache.pekko.stream.scaladsl.SourceQueueWithComplete[String],
+      controller: JsonRpcBaseController
   ): Unit =
     def sendResponse(json: String): Unit = queue.offer(json)
 
@@ -237,7 +247,9 @@ class JsonRpcWsServer(
         method match
           // eth_subscribe and eth_unsubscribe are in the `eth` namespace, as in go-ethereum: a WebSocket endpoint that
           // does not serve `eth` answers them like any other method it does not serve.
-          case "eth_subscribe" | "eth_unsubscribe" if !jsonRpcController.enabledApis.contains("eth") =>
+          case "eth_subscribe" | "eth_unsubscribe" if !controller.enabledApis.contains("eth") =>
+            // answered here, before the controller, so the denial is counted here too (spec 030 FR-024)
+            controller.identityRule.foreach(rule => RpcNamespaceDenials.record(rule, "eth", method, "ws"))
             sendResponse(errorResponse(id, JsonRpcError.MethodNotFound.code, JsonRpcError.MethodNotFound.message))
 
           case "eth_subscribe" =>
@@ -312,7 +324,7 @@ class JsonRpcWsServer(
               case None =>
                 sendResponse(errorResponse(id, -32600, "Invalid request"))
               case Some(req) =>
-                jsonRpcController.handleRequest(req).unsafeToFuture().foreach { resp =>
+                controller.handleRequest(req).unsafeToFuture().foreach { resp =>
                   sendResponse(Serialization.write(resp))
                 }
 
