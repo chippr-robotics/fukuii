@@ -2732,3 +2732,13 @@ items:
     links:
       spec: 018
     notes: "B-296 follow-up (forge): sideParentsTold returns every block of fork.parentSideChain into SelectedNewBestBranch.newBranch; BlockImporter broadcasts each, publishes NewBlockImported for each and RemoveTransactions for each. Decide a bound with the subscription semantics in view"
+  - id: B-345
+    title: Decide whether the old-branch bound of a reorg (ConsensusImpl.OldBranchToldAtMost, 1000) follows sync max-queued-block-number-behind
+    priority: P3
+    status: open
+    area: consensus
+    opened: 2026-11-18
+    refs: []
+    links:
+      spec: 018
+    notes: "B-296: the default equals the queue's behind window; it is a constant with a constructor override, not wired to config"
