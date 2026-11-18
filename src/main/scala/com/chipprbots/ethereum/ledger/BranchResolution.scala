@@ -163,58 +163,87 @@ class BranchResolution(
   /** The same check for a proposed branch given by the difficulty of its blocks above the common block and by its tip:
     * all the check reads of it. So that a branch this node holds only the tip's record of ([[BranchNotTaken]]) is
     * judged by the one rule.
+    *
+    * '''The common block's header not stored is a fault of this node, and MESS does not refuse on it''' (spec 018 C6,
+    * forge). The rule weighs the seconds from the common block to the head; without the common block's header there is
+    * nothing to weigh. Reading its time as zero (as this did) took the age as decades, gave the maximum antigravity (31
+    * times the weight) and refused a heavier branch for a hole in this node's own datadir, and a refused branch is
+    * remembered as not taken: the node stopped following the chain. MESS is a node's own rule over its fork choice, not
+    * a rule of block validity (ECIP-1100). core-geth does not refuse on it either: `ForkChoice.CommonAncestor` fails,
+    * and `ReorgNeeded`'s error fails the import, a fault and not a verdict. Here the branch is judged by weight, as
+    * with MESS off, and handed to consensus, whose reorganisation meets the same hole as a state fault (on the unified
+    * layout `StateUnavailable`: the block the branch leaves the chain at is not stored): not judged, never INVALID, and
+    * told to the escalation watch. Said at ERROR and counted (`chain.mess.unjudged.total`). With the header stored,
+    * nothing here changes.
     */
   private def messRejects(oldBlocks: List[Block], proposedSubchainTD: BigInt, proposedTip: BlockHeader): Boolean =
     messConfig match
       case Some(config) if oldBlocks.nonEmpty && config.isActiveAtBlock(oldBlocks.last.header.number.value) =>
-        val commonAncestorTimestamp = blockchainReader
-          .getBlockHeaderByHash(oldBlocks.head.header.parentHash)
-          .map(_.unixTimestamp)
-          .getOrElse(Timestamp.Zero)
-
-        val currentHeadTimestamp = oldBlocks.last.header.unixTimestamp
-        val timeDeltaSeconds = math.max(0L, currentHeadTimestamp - commonAncestorTimestamp)
-
-        val localSubchainTD = oldBlocks.map(_.header.difficulty.value).foldLeft(BigInt(0))(_ + _)
-
-        val shouldReject = ArtificialFinality.shouldRejectReorg(timeDeltaSeconds, localSubchainTD, proposedSubchainTD)
-
-        // Compute tdr/gravity ratio for logging: got/want where got=proposedTD*128, want=polyVal*localTD
-        val polyVal = ArtificialFinality.polynomialV(BigInt(timeDeltaSeconds))
-        val want = polyVal * localSubchainTD
-        val got = proposedSubchainTD * BigInt(128)
-        val tdrRatio = if want > 0 then got.toDouble / want.toDouble else 0.0
-
-        val commonAncestorNumber = oldBlocks.head.header.number - 1
-        val commonAncestorHash = oldBlocks.head.header.parentHash
-        val currentHead = oldBlocks.last.header
-        val proposedSpanSeconds = math.max(0L, proposedTip.unixTimestamp - commonAncestorTimestamp)
-
-        BlockMetrics.setMessGravity(tdrRatio)
-        if shouldReject then
-          BlockMetrics.incrementMessRejected()
-          log.warn(
-            s"ECBP1100-MESS status=rejected age=${timeDeltaSeconds}s span.proposed=${proposedSpanSeconds}s " +
-              s"tdr/gravity=${f"$tdrRatio%.4f"} " +
-              s"common.bno=$commonAncestorNumber common.hash=${hash2string(commonAncestorHash.value).take(8)} " +
-              s"current.bno=${currentHead.number} current.hash=${hash2string(currentHead.hash.value).take(8)} " +
-              s"proposed.bno=${proposedTip.number} proposed.hash=${hash2string(proposedTip.hash.value).take(8)}"
-          )
-        else if (currentHead.number - commonAncestorNumber).value > 2 then
-          // Log MESS acceptance only for non-trivial reorgs (> 2 blocks), matching core-geth forkchoice.go:177
-          BlockMetrics.incrementMessAccepted()
-          log.info(
-            s"ECBP1100-MESS status=accepted age=${timeDeltaSeconds}s span.proposed=${proposedSpanSeconds}s " +
-              s"tdr/gravity=${f"$tdrRatio%.4f"} " +
-              s"common.bno=$commonAncestorNumber common.hash=${hash2string(commonAncestorHash.value).take(8)} " +
-              s"current.bno=${currentHead.number} current.hash=${hash2string(currentHead.hash.value).take(8)} " +
-              s"proposed.bno=${proposedTip.number} proposed.hash=${hash2string(proposedTip.hash.value).take(8)}"
-          )
-        else BlockMetrics.incrementMessAccepted()
-
-        shouldReject
+        blockchainReader.getBlockHeaderByHash(oldBlocks.head.header.parentHash) match
+          case Some(commonAncestor) =>
+            messWeighs(oldBlocks, commonAncestor.unixTimestamp, proposedSubchainTD, proposedTip)
+          case None =>
+            BlockMetrics.incrementMessUnjudged()
+            log.error(
+              "ECBP1100-MESS status=unjudged: the header of the common block is not stored, so MESS cannot weigh " +
+                "this reorganisation and does not refuse it; the branch is judged by weight alone " +
+                s"common.bno=${oldBlocks.head.header.number - 1} " +
+                s"common.hash=${hash2string(oldBlocks.head.header.parentHash.value).take(8)} " +
+                s"current.bno=${oldBlocks.last.header.number} " +
+                s"proposed.bno=${proposedTip.number} proposed.hash=${hash2string(proposedTip.hash.value).take(8)}"
+            )
+            false
 
       case _ => false
+
+  // ECBP-1100 itself, over a common block whose time is known
+  private def messWeighs(
+      oldBlocks: List[Block],
+      commonAncestorTimestamp: Timestamp,
+      proposedSubchainTD: BigInt,
+      proposedTip: BlockHeader
+  ): Boolean =
+    val currentHeadTimestamp = oldBlocks.last.header.unixTimestamp
+    val timeDeltaSeconds = math.max(0L, currentHeadTimestamp - commonAncestorTimestamp)
+
+    val localSubchainTD = oldBlocks.map(_.header.difficulty.value).foldLeft(BigInt(0))(_ + _)
+
+    val shouldReject = ArtificialFinality.shouldRejectReorg(timeDeltaSeconds, localSubchainTD, proposedSubchainTD)
+
+    // Compute tdr/gravity ratio for logging: got/want where got=proposedTD*128, want=polyVal*localTD
+    val polyVal = ArtificialFinality.polynomialV(BigInt(timeDeltaSeconds))
+    val want = polyVal * localSubchainTD
+    val got = proposedSubchainTD * BigInt(128)
+    val tdrRatio = if want > 0 then got.toDouble / want.toDouble else 0.0
+
+    val commonAncestorNumber = oldBlocks.head.header.number - 1
+    val commonAncestorHash = oldBlocks.head.header.parentHash
+    val currentHead = oldBlocks.last.header
+    val proposedSpanSeconds = math.max(0L, proposedTip.unixTimestamp - commonAncestorTimestamp)
+
+    BlockMetrics.setMessGravity(tdrRatio)
+    if shouldReject then
+      BlockMetrics.incrementMessRejected()
+      log.warn(
+        s"ECBP1100-MESS status=rejected age=${timeDeltaSeconds}s span.proposed=${proposedSpanSeconds}s " +
+          s"tdr/gravity=${f"$tdrRatio%.4f"} " +
+          s"common.bno=$commonAncestorNumber common.hash=${hash2string(commonAncestorHash.value).take(8)} " +
+          s"current.bno=${currentHead.number} current.hash=${hash2string(currentHead.hash.value).take(8)} " +
+          s"proposed.bno=${proposedTip.number} proposed.hash=${hash2string(proposedTip.hash.value).take(8)}"
+      )
+    else if (currentHead.number - commonAncestorNumber).value > 2 then
+      // Log MESS acceptance only for non-trivial reorgs (> 2 blocks), matching core-geth forkchoice.go:177
+      BlockMetrics.incrementMessAccepted()
+      log.info(
+        s"ECBP1100-MESS status=accepted age=${timeDeltaSeconds}s span.proposed=${proposedSpanSeconds}s " +
+          s"tdr/gravity=${f"$tdrRatio%.4f"} " +
+          s"common.bno=$commonAncestorNumber common.hash=${hash2string(commonAncestorHash.value).take(8)} " +
+          s"current.bno=${currentHead.number} current.hash=${hash2string(currentHead.hash.value).take(8)} " +
+          s"proposed.bno=${proposedTip.number} proposed.hash=${hash2string(proposedTip.hash.value).take(8)}"
+      )
+    else BlockMetrics.incrementMessAccepted()
+
+    shouldReject
 
   /** The record of a side branch that was weighed against this node's chain and not taken (B-300 f; forge): what is
     * needed to weigh it again when more of it arrives, without fetching it again. None when the headers hold no block

@@ -28,6 +28,9 @@ case object BlockMetrics extends MetricsContainer:
     metrics.registry.counter("chain.mess.rejected.total")
   final private val MessAcceptedCounter =
     metrics.registry.counter("chain.mess.accepted.total")
+  // a reorganisation MESS could not weigh, the common block's header not being stored: it does not refuse it
+  final private val MessUnjudgedCounter =
+    metrics.registry.counter("chain.mess.unjudged.total")
   // Last tdr/gravity ratio at decision time (< 1.0 = rejected, >= 1.0 = accepted)
   final private val MessGravityGauge =
     metrics.registry.gauge("chain.mess.gravity.gauge", new AtomicDouble(0d))
@@ -49,4 +52,5 @@ case object BlockMetrics extends MetricsContainer:
 
   def incrementMessRejected(): Unit = MessRejectedCounter.increment()
   def incrementMessAccepted(): Unit = MessAcceptedCounter.increment()
+  def incrementMessUnjudged(): Unit = MessUnjudgedCounter.increment()
   def setMessGravity(ratio: Double): Unit = MessGravityGauge.set(ratio)

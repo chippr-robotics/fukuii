@@ -312,6 +312,103 @@ class BranchResolutionSpec
       branchResolution.compareBranch(NonEmptyList.one(newHeader)) shouldEqual NewBetterBranch(List(oldBlock))
   }
 
+  // Spec 018 C6 (forge): the header of the common block not stored. MESS weighs the seconds from it to the head; read
+  // as time zero it took the age as decades, refused a heavier branch at the maximum antigravity (31 times its weight),
+  // and the branch was remembered as not taken: the node stopped following the chain for a hole in its own datadir. The
+  // hole is a fault, not a verdict: MESS does not refuse, the branch is judged by weight and handed to consensus, whose
+  // reorganisation meets the hole as a state fault (StateUnavailable).
+  "BranchResolution with MESS enabled, where the common block's header is not stored" should {
+
+    "not refuse a heavier branch, even one MESS refuses when the header is there" taggedAs (
+      UnitTest,
+      StateTest,
+      ConsensusTest
+    ) in new MessTestSetup:
+      setChainWeightByHash(commonParentHash, ChainWeight.zero)
+      branchResolution.messConfig = Some(ETCMessConfig)
+      Seq(200, 300, 500).foreach { difficulty =>
+        setBestBlockNumber(10)
+        setBlockByNumber(10, Some(oldBlock))
+        expectAncestorHeaderMissing()
+        withClue(s"proposed difficulty $difficulty: ") {
+          val newHeader: BlockHeader =
+            getBlock(number = 10, difficulty = difficulty, parent = commonParentHash).header
+          branchResolution.compareBranch(NonEmptyList.one(newHeader)) shouldEqual NewBetterBranch(List(oldBlock))
+        }
+      }
+
+    "leave a lighter branch refused by weight: MESS is not asked" taggedAs (UnitTest, StateTest) in new MessTestSetup:
+      setBestBlockNumber(10)
+      setChainWeightByHash(commonParentHash, ChainWeight.zero)
+      setBlockByNumber(10, Some(oldBlock))
+      // no header is read: the weight refuses it first
+      blockchainReader.getBlockHeaderByHash.expects(*).never()
+      branchResolution.messConfig = Some(ETCMessConfig)
+      val newHeader: BlockHeader = getBlock(number = 10, difficulty = 99, parent = commonParentHash).header
+      branchResolution.compareBranch(NonEmptyList.one(newHeader)) shouldEqual NoChainSwitch
+
+    "take a branch not taken once it is the heavier, the header not being there to weigh" taggedAs (
+      UnitTest,
+      StateTest,
+      ConsensusTest
+    ) in new MessTestSetup:
+      (1 to 2).foreach { _ =>
+        setBestBlockNumber(10)
+        setBlockByNumber(10, Some(oldBlock))
+      }
+      setChainWeightByHash(commonParentHash, ChainWeight.zero)
+      setChainWeightByHash(oldBlock.header.hash.value, ChainWeight.zero.increase(oldBlock.header))
+      branchResolution.messConfig = Some(ETCMessConfig)
+      val side10: BlockHeader = getBlock(number = 10, difficulty = 50, parent = commonParentHash).header
+      val branch: BranchNotTaken = branchResolution.notTaken(NonEmptyList.one(side10)).get
+      blockchainReader.getCanonicalHashByNumber
+        .expects(BigInt(9))
+        .anyNumberOfTimes()
+        .returning(Some(BlockHash(commonParentHash)))
+      // 200 against 100: MESS refuses it with the header there (25600 < 34100); without it the weight decides
+      expectAncestorHeaderMissing()
+      val side11: BlockHeader = getBlock(number = 11, difficulty = 150, parent = side10.hash.value).header
+      branchResolution.extended(branch, NonEmptyList.one(side11)).map(_._2) shouldBe Some(true)
+
+    "not read the header, nor refuse, where MESS is not active" taggedAs (UnitTest, StateTest) in new MessTestSetup:
+      setBestBlockNumber(10)
+      setChainWeightByHash(commonParentHash, ChainWeight.zero)
+      setBlockByNumber(10, Some(oldBlock))
+      blockchainReader.getBlockHeaderByHash.expects(*).never()
+      branchResolution.messConfig = Some(ETCMessConfig.copy(activationBlock = Some(BigInt(11))))
+      val newHeader: BlockHeader = getBlock(number = 10, difficulty = 200, parent = commonParentHash).header
+      branchResolution.compareBranch(NonEmptyList.one(newHeader)) shouldEqual NewBetterBranch(List(oldBlock))
+  }
+
+  // With the header stored the verdicts are those MESS gave before the fault was split off: the threshold at an age of
+  // 3600 s and a local weight of 100 is want = 341 * 100 = 34100, so 266 (34048) is refused and 267 (34176) taken.
+  "BranchResolution with MESS enabled, the common block's header stored" should {
+    "give the verdicts it gave before, either side of the threshold" taggedAs (
+      UnitTest,
+      StateTest,
+      ConsensusTest
+    ) in new MessTestSetup:
+      setChainWeightByHash(commonParentHash, ChainWeight.zero)
+      branchResolution.messConfig = Some(ETCMessConfig)
+      val verdicts: Seq[(Int, NoChainSwitch.type | NewBetterBranch)] = Seq(
+        200 -> NoChainSwitch,
+        266 -> NoChainSwitch,
+        267 -> NewBetterBranch(List(oldBlock)),
+        300 -> NewBetterBranch(List(oldBlock)),
+        500 -> NewBetterBranch(List(oldBlock))
+      )
+      verdicts.foreach { case (difficulty, verdict) =>
+        setBestBlockNumber(10)
+        setBlockByNumber(10, Some(oldBlock))
+        expectAncestorHeader()
+        withClue(s"proposed difficulty $difficulty: ") {
+          val newHeader: BlockHeader =
+            getBlock(number = 10, difficulty = difficulty, parent = commonParentHash).header
+          branchResolution.compareBranch(NonEmptyList.one(newHeader)) shouldEqual verdict
+        }
+      }
+  }
+
   // ─────────────────────────────────────────────────────────────────────────
   // PoS / zero-difficulty tests (ETH post-merge — Sepolia, Holesky, mainnet)
   //
@@ -691,6 +788,11 @@ class BranchResolutionSpec
       deactivationBlock = None,
       reactivationBlock = None
     )
+
+    /** Expect blockchainReader.getBlockHeaderByHash(commonParentHash) once, returning nothing: the header not stored.
+      */
+    def expectAncestorHeaderMissing(): Unit =
+      blockchainReader.getBlockHeaderByHash.expects(BlockHash(commonParentHash)).returning(None)
 
     /** Expect blockchainReader.getBlockHeaderByHash(commonParentHash) once, returning a header with `ts`. */
     def expectAncestorHeader(ts: Long = ancestorTs): Unit =

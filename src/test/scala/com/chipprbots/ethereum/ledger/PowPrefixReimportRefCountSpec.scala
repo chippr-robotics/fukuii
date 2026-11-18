@@ -214,7 +214,13 @@ class PowPrefixReimportRefCountSpec extends AnyFlatSpec with Matchers with Befor
       // The executed 7..10 only match the head's weight, so the old head is kept and the index restored. Unfixed, that
       // arm abandoned every executed block as a side block, the canonical 7..10 among them.
       failing = Set(extension.hash.value)
-      importBatch(prefix :+ extension) shouldBe a[BranchExecutionFailure]
+      importBatch(prefix :+ extension) match
+        case BranchExecutionFailure(toEnqueue, failingHash, _) =>
+          // spec 018 C6, T237 (forge): what is queued again is what executed, and never the block that failed, which
+          // ConsensusAdapter drops from the queue with its descendants
+          failingHash shouldBe extension.hash.value
+          toEnqueue.map(_.hash) shouldBe prefix.map(_.hash)
+        case other => fail(s"expected BranchExecutionFailure, got $other")
       reader.getBestBlockNumber shouldBe BigInt(10)
       reader.getBestBlock.map(_.hash) shouldBe Some(head.hash)
       prefix.foreach(b => withClue(s"block ${b.number}: ")(applied(b) shouldBe true))
