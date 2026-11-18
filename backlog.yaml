@@ -2834,3 +2834,15 @@ items:
     links:
       spec: specs/030-zero-trust-tls
     notes: "US1; FR-001, 003-008, 010-012, 014, 060. ~700+900 lines. Review: conduit, prism."
+  - id: B-355
+    title: "Spec 030 S2: client auth want/need on RPC HTTP and WSS; handshake-failure metric; gen-cert CA and client certs"
+    priority: P2
+    status: open
+    area: rpc
+    size: M
+    opened: 2026-11-18
+    refs: [B-146]
+    links:
+      spec: specs/030-zero-trust-tls
+    depends_on: [B-354]
+    notes: "US2; FR-003, 014, 017, 062. ~500+800. Review: conduit."
