@@ -3154,3 +3154,13 @@ items:
       spec: specs/018-storage-engine-consolidation
     depends_on: [B-066]
     notes: "forge + beacon sign-off of C5c PR1 (2026-11-18): until PR2 the importer reads v2 with no window, parent-hash, genesis or expected-hash checks, and on ETC block C+1 with an ommer throws AncestorNotStored. Close when PR2 merges, or hold tags until then."
+  - id: B-379
+    title: Pin checkpoint-expected-block-hash per public chain (ETC, Mordor, ETH, Sepolia, Hoodi) once each has a v2 archive
+    priority: P2
+    status: open
+    area: consensus
+    opened: 2026-11-18
+    refs: []
+    links:
+      spec: 018
+    notes: "C5c PR2 (B-066) added the chain-conf key, empty on every public chain: no v2 archive exists yet. Pin from the EG-9 (Sepolia, Mordor) and EG-12 (ETC) exports; until then the operator must set sync.checkpoint-sync-expected-hash."
