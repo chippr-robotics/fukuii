@@ -2823,3 +2823,14 @@ items:
     refs: []
     links: {}
     notes: "Seen on #1912: 5a8da9a1f (style: apply scalafmt, pushed with the workflow token) had 0 check runs; a later push was needed. GITHUB_TOKEN pushes do not trigger workflows. Options: push with a GitHub App token, or fail the check and let the author run formatAll instead of pushing."
+  - id: B-354
+    title: "Spec 030 S1: TLS profiles, pre-bind validation, RPC HTTP on profiles, legacy mode=https mapping"
+    priority: P1
+    status: open
+    area: rpc
+    size: M
+    opened: 2026-11-18
+    refs: [B-146]
+    links:
+      spec: specs/030-zero-trust-tls
+    notes: "US1; FR-001, 003-008, 010-012, 014, 060. ~700+900 lines. Review: conduit, prism."
