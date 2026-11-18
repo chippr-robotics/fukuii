@@ -46,6 +46,15 @@ on:
         required: false
         type: string
         default: ''
+      path_live:
+        description: |
+          Run fukuii with the unified state layout guard on (fukuii.state.path-live = true, spec 018
+          Track C, B-314). hive is then given a client file from scripts/hive/path-live-clients.sh in
+          place of --client: fukuii is built with FUKUII_PATH_LIVE=1 and named fukuii_pathlive.
+          Off by default; only workflow_dispatch callers set it.
+        required: false
+        type: boolean
+        default: false
       sim_timelimit:
         description: 'Value for --sim.timelimit (e.g. 40m, 1h)'
         required: false
@@ -293,6 +302,7 @@ jobs:
           PARALLELISM: ${{ inputs.parallelism }}
           CHECKTIMELIMIT: ${{ inputs.checktimelimit }}
           CLIENTS: ${{ inputs.clients }}
+          PATH_LIVE: ${{ inputs.path_live }}
         # Do not inherit GitHub's default `-e -o pipefail` — hive returns
         # non-zero for a wide range of per-sim outcomes (test failures,
         # client timeouts, flaky docker pulls) and the tabulate step below
@@ -301,9 +311,18 @@ jobs:
         # failure is surfaced in the step summary and the uploaded logs.
         shell: bash --noprofile --norc {0}
         run: |
+          if [ "$PATH_LIVE" = "true" ]; then
+            # hive passes client build args only through a client file, and filters that file
+            # by --client, so the file replaces --client (B-314).
+            "$GITHUB_WORKSPACE/scripts/hive/path-live-clients.sh" "$CLIENTS" > clients-pathlive.yaml || exit 1
+            cat clients-pathlive.yaml
+            client_args=(--client-file clients-pathlive.yaml)
+          else
+            client_args=(--client "$CLIENTS")
+          fi
           args=(
             --sim "$SIM"
-            --client "$CLIENTS"
+            "${client_args[@]}"
             --sim.parallelism "$PARALLELISM"
             --sim.timelimit "$SIM_TIMELIMIT"
             # 120s (was 60s): fukuii is a JVM client whose cold class-load + JIT

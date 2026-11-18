@@ -62,6 +62,7 @@ Options:
 | `--timelimit` | 40m | hive `--sim.timelimit` |
 | `--checktimelimit` | 120s | hive `--client.checktimelimit` |
 | `--clients LIST` | fukuii | hive `--client`, e.g. `fukuii,go-ethereum` to compare with a reference client or to run the cross-client sync tests |
+| `--path-live` | off | run fukuii with the unified state layout guard on; see below |
 | `--skip-build` | off | reuse the last assembly |
 | `-- …` | | extra arguments passed straight to hive |
 
@@ -115,3 +116,63 @@ For an exact comparison with CI, use `--parallelism 4` if the machine can take i
 failures depend on how many clients run at once: a heavy vector that passes with
 `--parallelism 1` or `2` can still time out at 4. A resource-bound result from a local run
 at lower parallelism therefore needs its CI counterpart before anyone relies on it.
+
+## Runs with the unified state layout guard (`path-live`)
+
+`fukuii.state.path-live` is the in-development guard of spec 018 Track C (`base/state.conf`). It
+is off in every shipped configuration, and the hive adapter leaves it off by default. One switch
+turns it on:
+
+- `hive/fukuii/Dockerfile` declares the build arg `FUKUII_PATH_LIVE` (empty by default) and
+  exports it as an environment variable.
+- `hive/fukuii/fukuii.sh` adds `-Dfukuii.state.path-live=true` when the variable is `1` or `true`.
+  Unset, empty, `0` or `false` leave the java command line exactly as before. Any other value
+  stops the container, so a typo cannot run a gate without the guard.
+- hive passes build args to a client only through a client file (`--client-file`).
+  `scripts/hive/path-live-clients.sh [CLIENTS]` prints one. In it fukuii has the build arg and the
+  nametag `pathlive`, so results and logs name it `fukuii_pathlive`. The file replaces `--client`,
+  because hive uses `--client` to filter the file's entries.
+
+The client log shows the guard was on. `fukuii.sh` prints
+`fukuii.sh: FUKUII_PATH_LIVE set: -Dfukuii.state.path-live=true` to stderr at start.
+
+### The engine re-org suites with the guard on (B-314)
+
+On a host with a hive checkout (see above), from the fukuii checkout under test:
+
+```bash
+# ethereum/engine: every re-org test of every suite (engine-api, engine-withdrawals,
+# engine-cancun): Transaction Re-Org, Re-Org Back into Canonical Chain, Re-Org Back to
+# Canonical Chain From Syncing Chain, Re-org to Previously Validated Sidechain Payload,
+# Safe Re-Org to Side Chain, Sidechain Reorg, Invalid Missing Ancestor (Syncing) ReOrg,
+# Withdrawals Fork on Block N - M Block Re-Org (NewPayload / Sync)
+HIVE_DIR=~/hive-master scripts/hive/local.sh ethereum/engine \
+  --limit '/re-?org' --path-live --parallelism 2
+
+# The same tests without the guard, for comparison (reuses the assembly)
+HIVE_DIR=~/hive-master scripts/hive/local.sh ethereum/engine \
+  --limit '/re-?org' --parallelism 2 --skip-build
+
+# ethereum/eels/consume-engine: fixtures whose name contains "reorg". How many the published
+# fixtures carry varies by release, and the count may be zero. Check the TOTAL line.
+HIVE_DIR=~/hive-master scripts/hive/local.sh ethereum/eels/consume-engine \
+  --limit '.*reorg.*' --path-live --parallelism 2 --skip-build
+```
+
+hive matches `--sim.limit` without regard to case, as `suite/test`. An empty suite part matches
+every suite.
+
+On GitHub Actions, dispatch `Hive · engine` or `Hive · consume-engine` with `path_live` set,
+and for the engine suite `sim_limit` = `/re-?org`:
+
+```bash
+gh workflow run hive-engine.yml --ref staging -f path_live=true -f sim_limit='/re-?org'
+```
+
+A dispatched run with the guard on is labelled `engine-pathlive` (or `consume-engine-pathlive`)
+in its job name, artifacts and summary. Pull requests never set it. Neither gate's default
+run changes.
+
+`scripts/hive/check-path-live-switch.sh` checks the switch without Docker or hive. It runs
+`fukuii.sh` with a stub `java` and asserts the flag appears only when the variable is set. It
+also checks the Dockerfile and the client file. It is not part of any required check.

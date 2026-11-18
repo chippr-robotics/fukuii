@@ -25,6 +25,15 @@ on:
         description: 'Per-sim timelimit (e.g. 40m)'
         required: false
         default: '60m'
+      sim_limit:
+        description: "Optional --sim.limit regex (e.g. /re-?org for the re-org tests of every suite)"
+        required: false
+        default: ''
+      path_live:
+        description: 'Run fukuii with fukuii.state.path-live = true (spec 018 Track C guard, B-314; named fukuii_pathlive)'
+        required: false
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -38,9 +47,12 @@ jobs:
     uses: ./.github/workflows/_hive-sim.yml
     with:
       sim: ethereum/engine
-      label: engine
+      # A path-live run gets its own label, so its artifacts and summary are not mistaken for the gate's.
+      label: ${{ github.event.inputs.path_live == 'true' && 'engine-pathlive' || 'engine' }}
       # Declared in .github/gates.yml (gate `hive-engine`). A run emitting fewer
       # than this many results is a truncated run, not a pass.
       min_tests: 20
       sim_timelimit: ${{ github.event.inputs.sim_timelimit || '60m' }}
       hive_ref: ${{ github.event.inputs.hive_ref || 'master' }}
+      sim_limit: ${{ github.event.inputs.sim_limit || '' }}
+      path_live: ${{ github.event.inputs.path_live == 'true' }}

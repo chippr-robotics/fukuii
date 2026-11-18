@@ -36,6 +36,14 @@ RUN chmod +x /fukuii.sh /hive-bin/enode.sh
 COPY aot-train.sh aot-train-genesis.json /
 RUN chmod +x /aot-train.sh && /aot-train.sh && rm /aot-train.sh
 
+# Unified state layout guard (spec 018 Track C, B-314): off by default. A hive --client-file
+# entry with `build_args: {FUKUII_PATH_LIVE: "1"}` turns it on; fukuii.sh then passes
+# -Dfukuii.state.path-live=true. Declared AFTER the AOT training step so the default image,
+# and its trained cache, are unchanged (and -D properties are not part of the cache's flag
+# check either way). See scripts/hive/path-live-clients.sh and docs/testing/hive-local.md.
+ARG FUKUII_PATH_LIVE=
+ENV FUKUII_PATH_LIVE=${FUKUII_PATH_LIVE}
+
 # /version.txt is created by the base image (chipprbots/fukuii:latest) from
 # the actual JAR filename, so a version bump propagates automatically.
 

@@ -35,6 +35,11 @@ on:
         description: 'Optional --sim.limit regex (e.g. .*fork_Cancun.*)'
         required: false
         default: ''
+      path_live:
+        description: 'Run fukuii with fukuii.state.path-live = true (spec 018 Track C guard, B-314; named fukuii_pathlive)'
+        required: false
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -92,7 +97,7 @@ jobs:
     uses: ./.github/workflows/_hive-sim.yml
     with:
       sim: ethereum/eels/consume-engine
-      label: consume-engine
+      label: ${{ github.event.inputs.path_live == 'true' && 'consume-engine-pathlive' || 'consume-engine' }}
       # The shard's exact test count (the plan is an exact partition of the pinned fixtures):
       # any shortfall means the run was truncated, not that it passed.
       min_tests: ${{ fromJSON(needs.plan.outputs.min_tests) }}
@@ -102,3 +107,4 @@ jobs:
       sim_limit: ${{ needs.plan.outputs.sim_limit }}
       sim_buildarg: ${{ needs.plan.outputs.buildarg }}
       hive_ref: ${{ github.event.inputs.hive_ref || 'master' }}
+      path_live: ${{ github.event.inputs.path_live == 'true' }}

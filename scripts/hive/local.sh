@@ -9,24 +9,27 @@
 # Usage:
 #   scripts/hive/local.sh <sim> [--limit REGEX] [--skip 'NameA|NameB'] [--parallelism N]
 #                                   [--timelimit 40m] [--checktimelimit 120s]
-#                                   [--clients fukuii,go-ethereum] [--skip-build] [-- extra hive args]
+#                                   [--clients fukuii,go-ethereum] [--path-live] [--skip-build]
+#                                   [-- extra hive args]
 # --skip names tests NOT to run, exactly as _hive-sim.yml's sim_skip does; --limit must then name
-# suites only.
+# suites only. --path-live runs fukuii with fukuii.state.path-live = true (hive name
+# fukuii_pathlive), through a hive client file from scripts/hive/path-live-clients.sh.
 # Examples:
 #   scripts/hive/local.sh ethereum/consensus --limit 'legacy-cancun/.*CALLBlake2f_MaxRounds'
 #   scripts/hive/local.sh ethereum/eels/consume-engine --limit '.*static_Call50000.*' --skip-build
 #   scripts/hive/local.sh ethereum/graphql --clients fukuii,go-ethereum --limit '/07_eth_gasPrice'
 #   scripts/hive/local.sh devp2p --limit eth --skip 'GetCells|BlobTxWithInvalidCells' --parallelism 1
+#   scripts/hive/local.sh ethereum/engine --limit '/re-?org' --path-live --parallelism 2
 #
 # Env: HIVE_DIR (default ~/hive) — an ethereum/hive checkout with a built ./hive binary
 #      (build it with `go build .` in that directory).
 set -euo pipefail
 
-usage() { sed -n '2,22p' "$0"; exit 2; }
+usage() { sed -n '2,25p' "$0"; exit 2; }
 [ $# -ge 1 ] || usage
 
 SIM=$1; shift
-LIMIT=""; SKIP=""; PAR=4; TIMELIMIT=40m; CHECK=120s; BUILD=1; CLIENTS=fukuii; EXTRA=()
+LIMIT=""; SKIP=""; PAR=4; TIMELIMIT=40m; CHECK=120s; BUILD=1; CLIENTS=fukuii; PATH_LIVE=0; EXTRA=()
 while [ $# -gt 0 ]; do
   case "$1" in
     --limit)          LIMIT=$2; shift 2 ;;
@@ -36,6 +39,7 @@ while [ $# -gt 0 ]; do
     --checktimelimit) CHECK=$2; shift 2 ;;
     --clients)        CLIENTS=$2; shift 2 ;;
     --skip-build)     BUILD=0; shift ;;
+    --path-live)      PATH_LIVE=1; shift ;;
     --)               shift; EXTRA=("$@"); break ;;
     -h|--help)        usage ;;
     *) echo "unknown option: $1" >&2; usage ;;
@@ -92,7 +96,16 @@ cp "$JAR" "$HIVE_DIR/clients/fukuii/"
 
 cd "$HIVE_DIR"
 STAMP=$(mktemp); touch "$STAMP"   # result files newer than this belong to this run
-args=(--sim "$SIM" --client "$CLIENTS" --sim.parallelism "$PAR" --sim.timelimit "$TIMELIMIT"
+if [ "$PATH_LIVE" = 1 ]; then
+  # hive passes build args only through a client file, and filters that file by --client,
+  # so the file replaces --client. fukuii is named fukuii_pathlive in the results.
+  CLIENT_FILE="$HIVE_DIR/clients-pathlive.yaml"
+  "$REPO/scripts/hive/path-live-clients.sh" "$CLIENTS" > "$CLIENT_FILE"
+  client_args=(--client-file "$CLIENT_FILE")
+else
+  client_args=(--client "$CLIENTS")
+fi
+args=(--sim "$SIM" "${client_args[@]}" --sim.parallelism "$PAR" --sim.timelimit "$TIMELIMIT"
       --client.checktimelimit="$CHECK" --loglevel 3)
 [ -n "$LIMIT" ] && args+=(--sim.limit "$LIMIT")
 echo "+ ./hive ${args[*]} ${EXTRA[*]}"
