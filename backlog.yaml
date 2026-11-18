@@ -694,9 +694,9 @@ items:
     depends_on: [B-066]
     claim:
       by: cloud-dc960fdc
-      agent: forge-b067
+      agent: forge
       since: 2026-11-18T21:58:46Z
-      heartbeat: 2026-11-18T23:19:21Z
+      heartbeat: 2026-11-18T23:24:36Z
     notes: |-
       2026-11-18 in-progress: PR-A #1936 (tests), PR-B #1937 (MESS missing-ancestor fix, reorg matrix, Olympia). B-383 fix stacked on PR-B in progress. PR-C waits on user decisions (PoW no-snap fallback, EG-12 declared peer).
       2026-11-18 in-progress: User decisions 2026-11-18: (1) PoW exemption: PoW guard nodes regular-sync from genesis when SNAP is off or after the snap-peer wait times out; PoS keeps the refusal. (2) EG-12: a declared local core-geth peer counts toward the snap-peer precondition, logged. PR-C in progress.
