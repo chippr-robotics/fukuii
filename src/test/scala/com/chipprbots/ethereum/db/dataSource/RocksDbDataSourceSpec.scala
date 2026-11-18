@@ -61,9 +61,7 @@ class RocksDbDataSourceSpec extends AnyFlatSpec with Matchers:
   private def withTempDir(test: String => Unit): Unit =
     val dbPath = Files.createTempDirectory("rocksdb-stats-test").toAbsolutePath.toString
     try test(dbPath)
-    finally
-      val dir = new File(dbPath)
-      !dir.exists() || dir.delete()
+    finally com.chipprbots.ethereum.testing.TempDirs.deleteRecursively(new File(dbPath).toPath) // B-305
 
   "RocksDbDataSource with statistics enabled" should "advance the block-cache tickers on SST-served reads" taggedAs (
     UnitTest,

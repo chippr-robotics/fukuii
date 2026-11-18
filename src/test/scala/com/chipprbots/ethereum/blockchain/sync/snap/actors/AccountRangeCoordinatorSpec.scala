@@ -46,7 +46,17 @@ import com.chipprbots.ethereum.testing.TestMptStorage
   * dropped: a Typed `Behavior` exposes no `underlyingActor`. The behavioral coverage that survives is asserted through
   * observable effects on the `networkPeerManager` and `snapSyncController` probes — the same approach used in BCC/SRC.
   */
-class AccountRangeCoordinatorSpec extends ScalaTestWithActorTestKit() with AnyFlatSpecLike with Matchers:
+class AccountRangeCoordinatorSpec
+    extends ScalaTestWithActorTestKit()
+    with AnyFlatSpecLike
+    with Matchers
+    with org.scalatest.BeforeAndAfterAll:
+
+  // B-305: the task-file directories of the restart and resume cases go once the suite is done
+  private val tempDirs = new com.chipprbots.ethereum.testing.TempDirs
+  override protected def afterAll(): Unit =
+    try tempDirs.deleteAll()
+    finally super.afterAll()
 
   implicit private val classicSystem: org.apache.pekko.actor.ActorSystem = system.classicSystem
   private val statusProbe = testKit.createTestProbe[AccountRangeStats]()
@@ -161,7 +171,7 @@ class AccountRangeCoordinatorSpec extends ScalaTestWithActorTestKit() with AnyFl
 
   // The user's decision, 2026-11-01: with the task files it is a resume, and a resume keeps it.
   it should "keep the marker when the launch resumed its ranges" taggedAs UnitTest in {
-    val dir = java.nio.file.Files.createTempDirectory("arc-restart-resume")
+    val dir = tempDirs.create("arc-restart-resume")
     val storage = java.nio.file.Files.write(dir.resolve("fukuii-contract-storage-r"), Array.emptyByteArray)
     val codes = java.nio.file.Files.write(dir.resolve("fukuii-unique-codehashes-r"), Array.emptyByteArray)
     val task = AccountTask.createInitialTasks(ByteString.empty, 1).head
@@ -1010,7 +1020,7 @@ class AccountRangeCoordinatorSpec extends ScalaTestWithActorTestKit() with AnyFl
   private val midCursor: ByteString = ByteString(Array.fill(32)(0x40.toByte))
 
   "A resumed AccountRangeCoordinator" should "resume a partial range from its cursor and replay the carried contract work (pivot change / in-process restart)" taggedAs UnitTest in {
-    val dir = java.nio.file.Files.createTempDirectory("arc-resume-")
+    val dir = tempDirs.create("arc-resume-")
     val carried = previousTaskFiles(dir, counted = 3, codeCounted = 2)
     val nm = testKit.createTestProbe[NetworkPeerManagerActor.Command]()
     val controller = testKit.createTestProbe[SNAPSyncController.Command]()
@@ -1047,7 +1057,7 @@ class AccountRangeCoordinatorSpec extends ScalaTestWithActorTestKit() with AnyFl
   }
 
   it should "resume the same way after a simulated process restart through the persisted checkpoint" taggedAs UnitTest in {
-    val dir = java.nio.file.Files.createTempDirectory("arc-restart-")
+    val dir = tempDirs.create("arc-restart-")
     val carried = previousTaskFiles(dir, counted = 3, codeCounted = 2)
     val root = kec256(ByteString("restart-root"))
 
@@ -1103,7 +1113,7 @@ class AccountRangeCoordinatorSpec extends ScalaTestWithActorTestKit() with AnyFl
     (ByteString(e.take(32)), ByteString(e.drop(32)))
 
   it should "replay only the carried storage tasks that have no completion marker (restart after finished work)" taggedAs UnitTest in {
-    val dir = java.nio.file.Files.createTempDirectory("arc-done-")
+    val dir = tempDirs.create("arc-done-")
     val carried = previousTaskFiles(dir, counted = 4, codeCounted = 2)
     val done = new SnapStorageDoneStorage(EphemDataSource())
     // Tasks 0 and 2 finished before the restart. Task 1's account finished too, but under a DIFFERENT storage root
@@ -1130,7 +1140,7 @@ class AccountRangeCoordinatorSpec extends ScalaTestWithActorTestKit() with AnyFl
   }
 
   it should "not skip a task because of a marker a superseded coordinator wrote after the clear" taggedAs UnitTest in {
-    val dir = java.nio.file.Files.createTempDirectory("arc-done-race-")
+    val dir = tempDirs.create("arc-done-race-")
     val account = kec256(ByteString("race-account"))
     val oldRoot = kec256(ByteString("race-root-old"))
     val newRoot = kec256(ByteString("race-root-new"))
@@ -1166,7 +1176,7 @@ class AccountRangeCoordinatorSpec extends ScalaTestWithActorTestKit() with AnyFl
   }
 
   it should "replay every carried storage task when no completion markers exist (old checkpoint, first restart)" taggedAs UnitTest in {
-    val dir = java.nio.file.Files.createTempDirectory("arc-done-none-")
+    val dir = tempDirs.create("arc-done-none-")
     val carried = previousTaskFiles(dir, counted = 3, codeCounted = 2)
     val controller = testKit.createTestProbe[SNAPSyncController.Command]()
     val coord = spawnResumed(
@@ -1185,7 +1195,7 @@ class AccountRangeCoordinatorSpec extends ScalaTestWithActorTestKit() with AnyFl
   }
 
   it should "re-download a partial range from its start when no task files are carried (legacy record)" taggedAs UnitTest in {
-    val dir = java.nio.file.Files.createTempDirectory("arc-legacy-")
+    val dir = tempDirs.create("arc-legacy-")
     val nm = testKit.createTestProbe[NetworkPeerManagerActor.Command]()
     val controller = testKit.createTestProbe[SNAPSyncController.Command]()
     val coord = spawnResumed(
@@ -1205,7 +1215,7 @@ class AccountRangeCoordinatorSpec extends ScalaTestWithActorTestKit() with AnyFl
   }
 
   "AccountResumeCheckpoint / checkResumable" should "reject other versions, a mismatched range layout and short task files" taggedAs UnitTest in {
-    val dir = java.nio.file.Files.createTempDirectory("arc-gate-")
+    val dir = tempDirs.create("arc-gate-")
     val files = previousTaskFiles(dir, counted = 3, codeCounted = 2)
     val cp = AccountResumeCheckpoint(
       ByteString(Array.fill(32)(1.toByte)),
@@ -1230,7 +1240,7 @@ class AccountRangeCoordinatorSpec extends ScalaTestWithActorTestKit() with AnyFl
   // ── #1597: a range completed before a restart must stay in every later checkpoint ──
 
   "A resumed AccountRangeCoordinator (#1597)" should "keep a range that was complete before a restart in every later checkpoint, across two restarts" taggedAs UnitTest in {
-    val dir = java.nio.file.Files.createTempDirectory("arc-1597-")
+    val dir = tempDirs.create("arc-1597-")
     val carried = previousTaskFiles(dir, counted = 3, codeCounted = 2)
     val layout2 = AccountTask.createInitialTasks(ByteString.empty, 2).map(_.last)
     val doneLast = layout2(0)
@@ -1273,7 +1283,7 @@ class AccountRangeCoordinatorSpec extends ScalaTestWithActorTestKit() with AnyFl
   }
 
   "SNAPSyncController.fillResumeLayout (#1597)" should "fill the missing ranges of a strict subset of the layout as complete" taggedAs UnitTest in {
-    val dir = java.nio.file.Files.createTempDirectory("arc-1597-fill-")
+    val dir = tempDirs.create("arc-1597-fill-")
     val files = previousTaskFiles(dir, counted = 3, codeCounted = 2)
     val layout16 = AccountTask.createInitialTasks(ByteString.empty, 16)
     val full = layout16.map(t => t.last -> t.next).toMap
@@ -1371,7 +1381,7 @@ class AccountRangeCoordinatorSpec extends ScalaTestWithActorTestKit() with AnyFl
   }
 
   "Superseded task files (N4)" should "be deleted only after a newer checkpoint exists, and a crash before that still resumes" taggedAs UnitTest in {
-    val dir = java.nio.file.Files.createTempDirectory("arc-sweep-")
+    val dir = tempDirs.create("arc-sweep-")
     // Source files named like real coordinator files, so the sweep recognises them.
     val srcStorage = StorageTaskFile.createFile(Some(dir), "fukuii-contract-storage-", ".bin")
     val srcCode = StorageTaskFile.createFile(Some(dir), "fukuii-unique-codehashes-", ".bin")
