@@ -3193,3 +3193,13 @@ items:
       spec: specs/018-storage-engine-consolidation
     depends_on: [B-053]
     notes: "PR-A (test/b067-c6-etc-vectors) pins rewards to the formula and ports ECIP1017Test to the unified layout. Left: a range spanning 5,000,000 and Mordor's 2,000,000/4,000,000 boundaries, balances compared with the pinned jar's recorded values (C0 oracle, B-053)."
+  - id: B-382
+    title: Reconcile Olympia's EIP-6780 and EIP-7702 (EvmConfig.OlympiaConfigBuilder) with ECIP-1121 and with spec 018's 'no EIP-6780 on any ETC fork'
+    priority: P2
+    status: open
+    area: evm
+    opened: 2026-11-18
+    refs: [T239, T240]
+    links:
+      spec: specs/018-storage-engine-consolidation
+    notes: OlympiaConfigBuilder sets eip6780Enabled and eip7702Enabled; plan.md and tasks.md T239 say no ETC fork has EIP-6780. Check the local ECIP-1121 text and fix whichever is wrong (forge).
