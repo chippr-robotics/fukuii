@@ -658,13 +658,15 @@ items:
     opened: 2026-11-07
     refs: [018 C5b]
     links:
+      prs: [1921]
       spec: specs/018-storage-engine-consolidation
     depends_on: [B-064]
     claim:
       by: cloud-dc960fdc
       agent: vault-b065
       since: 2026-11-18T13:27:08Z
-      heartbeat: 2026-11-18T13:27:15Z
+      heartbeat: 2026-11-18T13:56:13Z
+    notes: "2026-11-18 in-progress: C5b part 1 (repair/delete/audit by position) #1921 under beacon review; part 2 (importer sites, fetch by position) in progress; part 3 (recovery scans, T214/T219, T221) next. Follow-ups B-369, B-370."
   - id: B-066
     title: "Spec 018 Track C C5c: checkpoint format version 2 and the position-assigning importer (item 10)"
     priority: P2
