@@ -3,6 +3,7 @@ package com.chipprbots.ethereum.tls
 import java.nio.file.Path
 import java.nio.file.Paths
 
+import scala.concurrent.duration.*
 import scala.jdk.CollectionConverters.*
 import scala.util.Try
 
@@ -57,7 +58,41 @@ object TlsConfig:
       alias <- guard(path)(optString(body, "key-alias"))
       protocols <- guard(path)(stringList(body, "protocols"))
       suites <- guard(path)(stringList(body, "cipher-suites"))
-    yield TlsProfile(name, path, keystore, alias, truststore, protocols, suites)
+      reload <- reloadPolicy(body, s"$path.reload")
+      warning <- duration(body, "expiry-warning", s"$path.expiry-warning", TlsProfile.DefaultExpiryWarning)
+    yield TlsProfile(
+      name,
+      path,
+      keystore,
+      alias,
+      truststore,
+      protocols,
+      suites,
+      reload = reload,
+      expiryWarning = warning
+    )
+
+  /** `reload { enabled, interval }` (FR-030): on and every minute by default; an interval of at least one second. */
+  private def reloadPolicy(body: Config, path: String): Either[TlsConfigError, ReloadPolicy] =
+    for
+      enabled <- guard(s"$path.enabled")(
+        if body.hasPath("reload.enabled") then body.getBoolean("reload.enabled") else ReloadPolicy.Default.enabled
+      )
+      interval <- duration(body, "reload.interval", s"$path.interval", ReloadPolicy.Default.interval)
+      _ <- Either.cond(interval >= 1.second, (), TlsConfigError(s"$path.interval: $interval is below one second"))
+    yield ReloadPolicy(enabled, interval)
+
+  private def duration(
+      body: Config,
+      key: String,
+      path: String,
+      default: FiniteDuration
+  ): Either[TlsConfigError, FiniteDuration] =
+    if !body.hasPath(key) || body.getIsNull(key) then Right(default)
+    else
+      guard(path)(body.getDuration(key).toMillis.millis).flatMap(d =>
+        Either.cond(d > Duration.Zero, d, TlsConfigError(s"$path: must be positive"))
+      )
 
   private def store(body: Config, key: String, path: String): Either[TlsConfigError, Option[StoreRef]] =
     if !body.hasPath(key) || body.getIsNull(key) then Right(None)

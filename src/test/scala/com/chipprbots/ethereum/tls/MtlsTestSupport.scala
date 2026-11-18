@@ -31,6 +31,14 @@ object MtlsTestSupport:
   )(body: Int => A)(using system: ActorSystem): A =
     val server =
       TlsServerEngine.rpcHttp(config, new SecureRandom()).fold(e => throw new AssertionError(e.message), x => x)
+    withServerContext(server, listener, failureLog)(body)
+
+  /** As [[withServer]], on a context the test holds, so it can reload it while the server runs. */
+  def withServerContext[A](
+      server: TlsServerContext,
+      listener: ListenerId = ListenerId.RpcHttp,
+      failureLog: HandshakeFailureLog = new HandshakeFailureLog()
+  )(body: Int => A)(using system: ActorSystem): A =
     val settings = TlsServerEngine.serverSettings(system)
     val route = complete("ok")
     val binding = Await.result(
@@ -70,5 +78,17 @@ object MtlsTestSupport:
         Option(in.readLine()).toRight(new java.io.EOFException("the server closed the connection without an answer"))
       finally socket.close()
     catch case e: java.io.IOException => Left(e)
+
+  /** The subject of the certificate the server presents to a new handshake (a client trusting `ctx`). */
+  def serverSubject(ctx: SSLContext, port: Int): String =
+    val socket = ctx.getSocketFactory.createSocket("localhost", port).asInstanceOf[SSLSocket]
+    try
+      socket.setSoTimeout(Wait.toMillis.toInt)
+      socket.startHandshake()
+      socket.getSession.getPeerCertificates.head
+        .asInstanceOf[java.security.cert.X509Certificate]
+        .getSubjectX500Principal
+        .getName
+    finally socket.close()
 
   def answered(result: Either[Throwable, String]): Boolean = result.exists(_.startsWith("HTTP/1.1 200"))

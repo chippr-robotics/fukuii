@@ -137,3 +137,47 @@ class IdentityRulesSpec extends AnyFlatSpec with Matchers with ScalaCheckPropert
       }
     }
   }
+
+  "client-identities-file" should "be read in place of the inline list (FR-033)" taggedAs (UnitTest, RPCTest) in {
+    val file = dir.resolve("identities.conf")
+    java.nio.file.Files.writeString(
+      file,
+      """client-identities = [ { name = "ops", match { san-dns = "ops.internal" }, apis = "eth,admin" } ]"""
+    )
+    val config = ConfigFactory.parseString(s"""network.rpc.client-identities-file = "$file"""")
+    IdentityRules.file(config) shouldBe Right(Some(file))
+    IdentityRules.parse(config, Apis).map(_.rules.map(_.name)) shouldBe Right(Vector("ops"))
+  }
+
+  it should "refuse a missing or unparsable file, a bad rule in it, and both forms together" taggedAs (
+    UnitTest,
+    RPCTest
+  ) in {
+    val missing = ConfigFactory.parseString(s"""network.rpc.client-identities-file = "${dir.resolve("none.conf")}"""")
+    IdentityRules.parse(missing, Apis).left.toOption.get.message should include("none.conf not found")
+
+    val broken = dir.resolve("broken.conf")
+    java.nio.file.Files.writeString(broken, "client-identities = [ {")
+    IdentityRules
+      .parse(ConfigFactory.parseString(s"""network.rpc.client-identities-file = "$broken""""), Apis)
+      .left
+      .toOption
+      .get
+      .message should include("does not parse")
+
+    val bad = dir.resolve("bad.conf")
+    java.nio.file.Files
+      .writeString(bad, """client-identities = [ { name = "x", match { san-dns = "a" }, apis = "nope" } ]""")
+    IdentityRules
+      .parse(ConfigFactory.parseString(s"""network.rpc.client-identities-file = "$bad""""), Apis)
+      .left
+      .toOption
+      .get
+      .message should (include("bad.conf: client-identities[0]").and(include("unknown namespaces: nope")))
+
+    val both = ConfigFactory.parseString(
+      s"""network.rpc { client-identities-file = "$bad",
+         |  client-identities = [ { name = "y", match { san-dns = "a" }, apis = "eth" } ] }""".stripMargin
+    )
+    IdentityRules.parse(both, Apis).left.toOption.get.message should include("not both")
+  }

@@ -424,6 +424,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `.env` files.
 
 ### Added
+- **TLS material and identity rules reload without a restart (spec 030 S4, B-357).** Each TLS profile re-reads its
+  keystore, truststore and password files when their content changes (`reload { enabled = true, interval =
+  1.minute }`; a SHA-256 of the content, so a same-second edit and a Kubernetes `..data` symlink swap are both seen).
+  A replacement that validates serves every new handshake, open connections keep theirs, and no session from before
+  it is resumed, so a client whose CA was removed is refused at once. One that does not validate keeps the material in
+  service, logs an ERROR and counts in `app_tls_reload_failures_total{profile}`; successes count in
+  `app_tls_reloads_total{profile}`. `app_tls_certificate_expiry_seconds{profile, role}` follows the certificate in
+  service, and a WARN is logged once a day within the profile's `expiry-warning` (14 days). Identity rules may live in
+  `network.rpc.client-identities-file`, re-read on the listeners' reload interval: a change applies to new HTTP
+  requests and new WebSockets, an open WebSocket keeps its identity, and setting the file and an inline list together
+  refuses the start.
 - **Client-certificate identities select the JSON-RPC namespaces (spec 030 S3, B-356).** On an HTTP or WS listener
   with `tls.client-auth = want` or `need`, `fukuii.network.rpc.client-identities = [ { name, match { san-dns,
   san-uri, subject-cn, sha256 }, apis } ]` maps a verified client certificate to the namespaces it is served. The
