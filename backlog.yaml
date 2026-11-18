@@ -3203,3 +3203,14 @@ items:
     links:
       spec: specs/018-storage-engine-consolidation
     notes: OlympiaConfigBuilder sets eip6780Enabled and eip7702Enabled; plan.md and tasks.md T239 say no ETC fork has EIP-6780. Check the local ECIP-1121 text and fix whichever is wrong (forge).
+  - id: B-383
+    title: PowEscalationFeed counts a missing fork header as a MESS refusal; align it with BranchResolution's unjudged rule for this node's own block
+    priority: P2
+    status: open
+    area: sync
+    opened: 2026-11-18
+    refs: [T237]
+    links:
+      spec: specs/018-storage-engine-consolidation
+      branch: test/b067-c6-reorg-olympia
+    notes: The feed's messWouldRefuse getOrElse(true) keeps that out of the escalation count, a wait with no end. Count it when the parent is this node's canonical hash (forge).
