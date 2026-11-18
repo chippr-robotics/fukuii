@@ -2374,7 +2374,7 @@ items:
   - id: B-295
     title: "T183 remainder: a node killed during reverse-then-commit restarts on a valid head and adopts the heavier chain when offered again"
     priority: P1
-    status: claimed
+    status: in-progress
     area: consensus
     size: M
     opened: 2026-11-15
@@ -2385,7 +2385,7 @@ items:
       by: cloud-dc960fdc
       agent: forge-b295
       since: 2026-11-17T23:54:37Z
-      heartbeat: 2026-11-17T23:54:37Z
+      heartbeat: 2026-11-18T00:02:55Z
     notes: forge W3, C4e part 4. The 4,000-block archive reorg is pinned (ReorgBlockhashParitySpec); the kill mid-attempt and the re-adoption after restart are not. Gate before path-live is on for a Mordor archive node
   - id: B-296
     title: "Bound what a deep reorganisation holds in memory: the old chain's blocks and receipts, the side parents, the executed list"
