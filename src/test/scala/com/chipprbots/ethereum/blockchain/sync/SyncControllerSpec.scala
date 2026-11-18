@@ -1146,6 +1146,11 @@ class SyncControllerSpec
       val n = asked.incrementAndGet()
       answers(math.min(n, answers.size) - 1)
     def handedOff(): Unit = handedOffs.incrementAndGet(): Unit
+    // spec 018 C6: what the precondition counts against, and whether the node holds its genesis state alone
+    @volatile var snapPeers: PathLiveSync.SnapPeerPrecondition =
+      PathLiveSync.SnapPeerPrecondition(minSnapPeers = 2, powWait = 1.minute, declared = Set.empty)
+    @volatile var onlyGenesis: Boolean = false
+    def holdsOnlyGenesis(): Boolean = onlyGenesis
 
   "On the unified state layout, SyncController" should "ask the port before SNAP, off its own thread, and begin SNAP when it says so" taggedAs (
     UnitTest,
@@ -1224,6 +1229,11 @@ class SyncControllerSpec
       val port = new GuardPort(SyncController.SnapStartOnGuard.Begin(clearedGenesis = false))
       pathLiveSync = Some(port)
       syncController ! SyncController.WrappedSyncProtocol(SyncProtocol.Start)
+      // on proof of work the snap peers are counted first (spec 018 C6): the count that does not come is given up on
+      eventually {
+        someTimePasses()
+        assert(snapChildren(testSetup).nonEmpty)
+      }
       awaitSnapStarted(syncController)
       syncController ! SyncController.WrappedExternal(SNAPSyncController.SnapSyncFinalized(BigInt(1)))
       regularSyncChild(testSetup)
@@ -1255,6 +1265,184 @@ class SyncControllerSpec
     port.asked.get() shouldBe 2
   }
 
+  // ── Spec 018 C6 (T241/T242): the snap-peer precondition, and regular sync from the genesis on proof of work ───────
+  // The user's decisions of 2026-11-18: on proof of work a guard node at its genesis waits for snap peers and, with none,
+  // regular-syncs from its genesis; a declared peer counts, and the line says how many of the count were declared.
+
+  /** `n` handshaked peers on this chain, the first `snap` of them advertising snap, each with a node id of its own. */
+  private def peersOnTheChain(testSetup: TestSetup, n: Int, snap: Int): Map[Peer, PeerInfo] =
+    import testSetup.*
+    (1 to n).map { i =>
+      val status = peer1Status.copy(capability = Capability.ETH68, supportsSnap = i <= snap)
+      val peer = peer1.copy(id = com.chipprbots.ethereum.network.PeerId(s"p$i"), nodeId = Some(nodeIdOf(i)))
+      peer -> PeerInfo(status, status.chainWeight, forkAccepted = true, BigInt(100), status.bestHash)
+    }.toMap
+
+  private def nodeIdOf(i: Int): ByteString = ByteString(Array.fill[Byte](64)(i.toByte))
+
+  private def syncControllerLines(level: ch.qos.logback.classic.Level)(f: => Unit): List[String] =
+    syncControllerLogsDuring(level)(f)
+
+  "On proof of work, on the unified layout, SyncController" should "regular-sync from the genesis when no snap peer comes in the wait, and say so once at WARN with the count" taggedAs (
+    UnitTest,
+    SyncTest
+  ) in withRecoveryTestSetup() { testSetup =>
+    import testSetup.*
+    com.chipprbots.ethereum.blockchain.sync.snap.HeaderChainCheck.isProofOfWork(blockchainConfig) shouldBe true
+    val port = new GuardPort(SyncController.SnapStartOnGuard.Begin(clearedGenesis = true))
+    port.onlyGenesis = true
+    pathLiveSync = Some(port)
+    answerPeerPollsWith(peersOnTheChain(testSetup, n = 3, snap = 0))
+    val warnings = syncControllerLines(ch.qos.logback.classic.Level.WARN) {
+      syncController ! SyncController.WrappedSyncProtocol(SyncProtocol.Start)
+      (1 to 5).foreach(_ => someTimePasses())
+      withClue("inside the wait: ") {
+        port.asked.get() shouldBe 0
+        snapChildren(testSetup) shouldBe empty
+        assert(!childNamed(testSetup, "regular-sync"))
+      }
+      withClue("eth_syncing is answered inside the wait, not held: ") {
+        val asker = TestProbe()
+        syncController ! SyncController.WrappedSyncProtocol(
+          SyncProtocol.GetStatus(asker.ref.toTyped[SyncProtocol.Status])
+        )
+        asker.expectMsgType[SyncProtocol.Status.Syncing]
+      }
+      timePasses(1.minute)
+      regularSyncChild(testSetup)
+    }
+    // the genesis state is left as it is: the check that clears it is never asked
+    port.asked.get() shouldBe 0
+    snapChildren(testSetup) shouldBe empty
+    val fallBack = warnings.filter(_.contains("[SNAP-PEERS]"))
+    fallBack should have size 1
+    fallBack.head should include("0 snap-capable peer(s) on this chain")
+    fallBack.head should include("of 3 connected")
+    fallBack.head should include("regular sync from its genesis")
+  }
+
+  it should "begin SNAP once enough snap peers are there, saying how many and how many of them are declared" taggedAs (
+    UnitTest,
+    SyncTest
+  ) in withRecoveryTestSetup() { testSetup =>
+    import testSetup.*
+    val port = new GuardPort(SyncController.SnapStartOnGuard.Begin(clearedGenesis = true))
+    port.onlyGenesis = true
+    // the operator declared peer 2 (a local core-geth, say) and peer 9, which is not connected
+    port.snapPeers = port.snapPeers.copy(declared = Set(nodeIdOf(2), nodeIdOf(9)))
+    pathLiveSync = Some(port)
+    answerPeerPollsWith(peersOnTheChain(testSetup, n = 4, snap = 2))
+    val lines = syncControllerLines(ch.qos.logback.classic.Level.INFO) {
+      syncController ! SyncController.WrappedSyncProtocol(SyncProtocol.Start)
+      eventually {
+        someTimePasses()
+        assert(snapChildren(testSetup).nonEmpty)
+      }
+    }
+    port.asked.get() shouldBe 1
+    val said = lines.filter(_.contains("[SNAP-PEERS] SNAP starts"))
+    said should have size 1
+    said.head should include("2 snap-capable peer(s) on this chain (1 of them declared by the operator")
+    said.head should include("of 4 connected")
+  }
+
+  it should "begin SNAP at the end of the wait with the one snap peer there is, a declared one" taggedAs (
+    UnitTest,
+    SyncTest
+  ) in withRecoveryTestSetup() { testSetup =>
+    import testSetup.*
+    val port = new GuardPort(SyncController.SnapStartOnGuard.Begin(clearedGenesis = true))
+    port.onlyGenesis = true
+    port.snapPeers = port.snapPeers.copy(declared = Set(nodeIdOf(1)))
+    pathLiveSync = Some(port)
+    answerPeerPollsWith(peersOnTheChain(testSetup, n = 2, snap = 1))
+    val lines = syncControllerLines(ch.qos.logback.classic.Level.INFO) {
+      syncController ! SyncController.WrappedSyncProtocol(SyncProtocol.Start)
+      (1 to 3).foreach(_ => someTimePasses())
+      port.asked.get() shouldBe 0
+      timePasses(1.minute)
+      eventually {
+        someTimePasses()
+        assert(snapChildren(testSetup).nonEmpty)
+      }
+    }
+    port.asked.get() shouldBe 1
+    assert(!childNamed(testSetup, "regular-sync"))
+    val said = lines.filter(_.contains("[SNAP-PEERS] SNAP starts"))
+    said should have size 1
+    said.head should include("1 snap-capable peer(s) on this chain (1 of them declared by the operator")
+  }
+
+  it should "not wait for peers, nor regular-sync from the genesis, when the node holds more than its genesis" taggedAs (
+    UnitTest,
+    SyncTest
+  ) in withRecoveryTestSetup() { testSetup =>
+    import testSetup.*
+    // a SNAP sync to resume, or an escalation's clear: the genesis state is gone, and SNAP's own wait is what follows
+    val port = new GuardPort(SyncController.SnapStartOnGuard.Begin(clearedGenesis = false))
+    pathLiveSync = Some(port)
+    answerPeerPollsWith(peersOnTheChain(testSetup, n = 1, snap = 0))
+    syncController ! SyncController.WrappedSyncProtocol(SyncProtocol.Start)
+    eventually {
+      someTimePasses()
+      assert(snapChildren(testSetup).nonEmpty)
+    }
+    port.asked.get() shouldBe 1
+    assert(!childNamed(testSetup, "regular-sync"))
+  }
+
+  it should "run regular sync from the genesis with do-snap-sync off, without asking the port" taggedAs (
+    UnitTest,
+    SyncTest
+  ) in withTestSetup() { testSetup =>
+    import testSetup.*
+    syncConfig.doSnapSync shouldBe false
+    val port = new GuardPort(SyncController.SnapStartOnGuard.Begin(clearedGenesis = true))
+    port.onlyGenesis = true
+    pathLiveSync = Some(port)
+    syncController ! SyncController.WrappedSyncProtocol(SyncProtocol.Start)
+    regularSyncChild(testSetup)
+    port.asked.get() shouldBe 0
+    snapChildren(testSetup) shouldBe empty
+  }
+
+  "On a chain with a terminal total difficulty, on the unified layout, SyncController" should "ask the port at once and begin SNAP with no snap peer, however long, never regular sync from the genesis" taggedAs (
+    UnitTest,
+    SyncTest
+  ) in withGuardPosSetup() { testSetup =>
+    import testSetup.*
+    val port = new GuardPort(SyncController.SnapStartOnGuard.Begin(clearedGenesis = true))
+    port.onlyGenesis = true
+    pathLiveSync = Some(port)
+    answerPeerPollsWith(peersOnTheChain(testSetup, n = 3, snap = 0))
+    val lines = syncControllerLines(ch.qos.logback.classic.Level.INFO) {
+      syncController ! SyncController.WrappedSyncProtocol(SyncProtocol.Start)
+      eventually {
+        port.asked.get() shouldBe 1
+      }
+      timePasses(2.minutes)
+      someTimePasses()
+    }
+    port.asked.get() shouldBe 1
+    assert(snapChildren(testSetup).nonEmpty)
+    assert(!childNamed(testSetup, "regular-sync"))
+    lines.filter(_.contains("[SNAP-PEERS]")) shouldBe empty
+  }
+
+  "On the hash layout, SyncController" should "spawn SNAP at once, with no count of the peers first (guard off, unchanged)" taggedAs (
+    UnitTest,
+    SyncTest
+  ) in withRecoveryTestSetup() { testSetup =>
+    import testSetup.*
+    pathLiveSync shouldBe None
+    val lines = syncControllerLines(ch.qos.logback.classic.Level.INFO) {
+      syncController ! SyncController.WrappedSyncProtocol(SyncProtocol.Start)
+    }
+    // no time has passed and no peer was answered: the SNAP child is spawned within the Start itself
+    snapChildren(testSetup) should not be empty
+    lines.filter(_.contains("[SNAP-PEERS]")) shouldBe empty
+  }
+
   // the user's decision 1 (2026-11-17): healing goes on, each time; from the third in a row it is an ERROR (beacon)
   it should "restart SNAP for each hand-off held for accounts left out, and say so louder from the third" taggedAs (
     UnitTest,
@@ -1263,6 +1451,11 @@ class SyncControllerSpec
     import testSetup.*
     pathLiveSync = Some(new GuardPort(SyncController.SnapStartOnGuard.Begin(clearedGenesis = false)))
     syncController ! SyncController.WrappedSyncProtocol(SyncProtocol.Start)
+    // on proof of work the snap peers are counted first (spec 018 C6): the count that does not come is given up on
+    eventually {
+      someTimePasses()
+      assert(snapChildren(testSetup).nonEmpty)
+    }
     awaitSnapStarted(syncController)
     def held(): List[String] =
       val before = snapChildren(testSetup)
@@ -2836,6 +3029,54 @@ class SyncControllerSpec
     val testSetup = new TestSetup():
       override def auditEnabled: Boolean = true
       override def defaultSyncConfig: SyncConfig = super.defaultSyncConfig.copy(doSnapSync = doSnapSync)
+    try test(testSetup)
+    finally testSetup.cleanup()
+
+  /** A SyncController on the unified layout, SNAP on, on a chain with a terminal total difficulty (the ETH/Sepolia
+    * shape): `pathLiveSync` is set before it is first used.
+    */
+  class GuardPosSetup extends TestSetup():
+    override def defaultSyncConfig: SyncConfig = super.defaultSyncConfig.copy(doSnapSync = true)
+
+    private val baseChainConfig: BlockchainConfig = blockchainConfig
+    private lazy val chainConfigBuilder: com.chipprbots.ethereum.nodebuilder.BlockchainConfigBuilder =
+      new com.chipprbots.ethereum.nodebuilder.BlockchainConfigBuilder
+        with com.chipprbots.ethereum.TestInstanceConfigProvider:
+        implicit override def blockchainConfig: BlockchainConfig =
+          baseChainConfig.copy(terminalTotalDifficulty = Some(BigInt(0)))
+
+    override lazy val syncController: TestActorRef[Nothing] = TestActorRef(
+      org.apache.pekko.actor.typed.scaladsl.adapter.PropsAdapter(
+        SyncController(
+          blockchain,
+          blockchainReader,
+          blockchainWriter,
+          storagesInstance.storages.appStateStorage,
+          storagesInstance.storages.evmCodeStorage,
+          storagesInstance.storages.stateStorage,
+          storagesInstance.storages.flatSlotStorage,
+          storagesInstance.storages.fastSyncStateStorage,
+          consensusAdapter,
+          validators,
+          peerMessageBus,
+          pendingTransactionsManager.ref
+            .toTyped[com.chipprbots.ethereum.transactions.PendingTransactionsManager.Command],
+          blockTopic,
+          ommersPool.ref,
+          networkPeerManager.ref,
+          blacklist,
+          syncConfig,
+          chainConfigBuilder,
+          externalSchedulerOpt = Some(system.scheduler),
+          backgroundAuditEnabled = auditEnabled,
+          chainWeightReconcileOn = false,
+          pathLiveSync = pathLiveSync
+        )
+      )
+    )
+
+  def withGuardPosSetup()(test: GuardPosSetup => Any): Unit =
+    val testSetup = new GuardPosSetup
     try test(testSetup)
     finally testSetup.cleanup()
 

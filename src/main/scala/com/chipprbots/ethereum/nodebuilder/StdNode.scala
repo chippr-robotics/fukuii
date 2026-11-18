@@ -811,8 +811,8 @@ abstract class BaseNode extends Node:
       .foreach(why => throw new IllegalStateException(why))
 
   /** A node on the unified state layout that would run regular sync from its genesis (spec 018 C5a part 10, the user's
-    * decision of 2026-11-17): refused, and the node does not start
-    * ([[com.chipprbots.ethereum.blockchain.sync.PathLiveSync.regularSyncFromGenesisRefusal]]).
+    * decision of 2026-11-17; on proof of work only with no state at all, the decision of 2026-11-18): refused, and the
+    * node does not start ([[com.chipprbots.ethereum.blockchain.sync.PathLiveSync.regularSyncFromGenesisRefusal]]).
     */
   def refuseRegularSyncFromGenesisOnTheGuard(): Unit =
     storagesInstance.storages.pathStateStorage.foreach { pathState =>
@@ -822,7 +822,8 @@ abstract class BaseNode extends Node:
           doSnapSync = syncConfig.doSnapSync,
           testMode = Config.testmode,
           anchor = pathState.anchor,
-          syncStarted = appState.isSnapSyncDone() || appState.getSnapSyncPivotBlock().isDefined
+          syncStarted = appState.isSnapSyncDone() || appState.getSnapSyncPivotBlock().isDefined,
+          proofOfWork = com.chipprbots.ethereum.blockchain.sync.snap.HeaderChainCheck.isProofOfWork(blockchainConfig)
         )
         .foreach(why => throw new IllegalStateException(why))
     }

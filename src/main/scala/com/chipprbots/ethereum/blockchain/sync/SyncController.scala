@@ -148,6 +148,15 @@ object SyncController:
       */
     def handedOff(): Unit
 
+    /** What the snap-peer precondition at SNAP's start counts against (spec 018 C6, T241/T242). */
+    def snapPeers: PathLiveSync.SnapPeerPrecondition
+
+    /** Whether the node holds its genesis state and nothing else: no SNAP sync done or begun, and no clear of the state
+      * pending. On proof of work such a node may regular-sync from its genesis instead of SNAP
+      * ([[PathLiveSync.snapPeerVerdict]]). Reads the store, briefly.
+      */
+    def holdsOnlyGenesis(): Boolean
+
     /** What a checkpoint import needs of the unified layout: the position rows, the hand-off that ends it and the clear
       * that begins it (spec 018 C5c PR3).
       */
@@ -288,6 +297,10 @@ object SyncController:
   private case class SnapStartChecked(minPivotBlock: Option[BigInt], answer: scala.util.Try[SnapStartOnGuard])
       extends Command
   private case class SnapStartRecheck(minPivotBlock: Option[BigInt]) extends Command
+  // spec 018 C6 (T241/T242): the snap peers are counted again (and a count that did not come is given up on), and the
+  // proof-of-work wait for them is over
+  private case object SnapPeersRecount extends Command
+  private case object SnapPeersWaitOver extends Command
 
   private case class StateClearEnded(
       record: com.chipprbots.ethereum.db.storage.pathstate.StateEscalation,
@@ -2366,9 +2379,36 @@ object SyncController:
     def startSnapSync(minPivotBlock: Option[BigInt] = None): Behavior[Command] =
       pathLiveSync match
         case None => spawnSnapSync(minPivotBlock)
+        case Some(port) if HeaderChainCheck.isProofOfWork(configBuilder.blockchainConfig) =>
+          // spec 018 C6 (T241/T242): the snap peers are counted first, before the check, which clears a genesis state
+          // that regular sync from the genesis would still need
+          val holdsOnlyGenesis = port.holdsOnlyGenesis()
+          countSnapPeers()
+          timers.startTimerWithFixedDelay(SnapPeersRecountKey, SnapPeersRecount, SyncController.SnapStartRecheckDelay)
+          if holdsOnlyGenesis then
+            timers.startSingleTimer(SnapPeersWaitOverKey, SnapPeersWaitOver, port.snapPeers.powWait)
+          checkingSnapStart(port, Some(SnapPeersPending(minPivotBlock, holdsOnlyGenesis)))
         case Some(port) =>
           askBeforeSnap(port, minPivotBlock)
-          checkingSnapStart(port)
+          checkingSnapStart(port, None)
+
+    private val SnapPeersRecountKey = "snap-peers-recount"
+    private val SnapPeersWaitOverKey = "snap-peers-wait-over"
+
+    /** The snap-peer precondition under way (spec 018 C6): for the SNAP start of `minPivotBlock`, its last count, and
+      * whether the line that it waits was said.
+      */
+    final private case class SnapPeersPending(
+        minPivotBlock: Option[BigInt],
+        holdsOnlyGenesis: Boolean,
+        count: Option[PathLiveSync.SnapPeerCount] = None,
+        saidWaiting: Boolean = false
+    )
+
+    private def countSnapPeers(): Unit =
+      networkPeerManager ! com.chipprbots.ethereum.network.NetworkPeerManagerActor.GetHandshakedPeersCmd(
+        handshakedPeersAdapter
+      )
 
     private def askBeforeSnap(port: PathLiveSyncPort, minPivotBlock: Option[BigInt]): Unit =
       val blocking = ctx.system.dispatchers.lookup(DispatcherSelector.blocking())
@@ -2377,10 +2417,93 @@ object SyncController:
     /** While the port says whether a SNAP sync may begin (spec 018 C5a part 10). A head the consensus client names is
       * kept for the pivot; everything else waits for the sync that follows, which is SNAP or regular sync.
       */
-    private def checkingSnapStart(port: PathLiveSyncPort): Behavior[Command] =
+    private def checkingSnapStart(port: PathLiveSyncPort, peersFirst: Option[SnapPeersPending]): Behavior[Command] =
       Behaviors.withStash(SyncController.ClearingStashSize) { waiting =>
+        var snapPeers = peersFirst
+        // the precondition has said: SNAP's check is asked, or regular sync runs from the genesis
+        def concluded(pending: SnapPeersPending, verdict: PathLiveSync.SnapPeerVerdict): Behavior[Command] =
+          import PathLiveSync.SnapPeerVerdict.*
+          verdict match
+            case Wait =>
+              if !pending.saidWaiting then
+                log.info(
+                  s"[SNAP-PEERS] ${pending.count.fold("No count of the peers yet")(_.describe)}: a proof-of-work " +
+                    s"node at its genesis waits up to ${port.snapPeers.powWait.toMinutes} min for " +
+                    s"${port.snapPeers.minSnapPeers} snap-capable peers before SNAP begins"
+                )
+              snapPeers = Some(pending.copy(saidWaiting = true))
+              Behaviors.same
+            case Begin =>
+              snapPeers = None
+              timers.cancel(SnapPeersRecountKey)
+              timers.cancel(SnapPeersWaitOverKey)
+              log.info(
+                s"[SNAP-PEERS] SNAP starts with ${pending.count.fold("an unknown number of peers (no count came)")(_.describe)}" +
+                  s"; min-snap-peers = ${port.snapPeers.minSnapPeers}"
+              )
+              askBeforeSnap(port, pending.minPivotBlock)
+              Behaviors.same
+            case RegularSyncFromGenesis =>
+              snapPeers = None
+              timers.cancel(SnapPeersRecountKey)
+              timers.cancel(SnapPeersWaitOverKey)
+              log.warn(
+                s"[SNAP-PEERS] No snap-capable peer came in ${port.snapPeers.powWait.toMinutes} min " +
+                  s"(${pending.count.fold("no count")(_.describe)}). On a proof-of-work chain this node syncs by " +
+                  "regular sync from its genesis instead, on the unified state layout. A SNAP sync never starts over the " +
+                  "state it then holds: to sync by SNAP, start again on a fresh datadir with a snap-serving peer " +
+                  "(static-nodes.json or sync.snap-sync.snap-server-peers)."
+              )
+              waiting.unstashAll(startRegularSync()._2)
         Behaviors.receive { (_, cmd) =>
           unwrap(cmd) match
+            case com.chipprbots.ethereum.network.NetworkPeerManagerActor.HandshakedPeers(peers)
+                if snapPeers.isDefined =>
+              val pending = snapPeers.get
+              val count =
+                PathLiveSync.countSnapPeers(peers.map((peer, info) => (peer.nodeId, info)), port.snapPeers.declared)
+              val counted = pending.copy(count = Some(count))
+              snapPeers = Some(counted)
+              concluded(
+                counted,
+                PathLiveSync.snapPeerVerdict(
+                  counted.count,
+                  proofOfWork = true,
+                  counted.holdsOnlyGenesis,
+                  port.snapPeers.minSnapPeers,
+                  waitOver = false
+                )
+              )
+            case SnapPeersRecount if snapPeers.isDefined =>
+              val pending = snapPeers.get
+              // a node whose genesis state is not what it holds waits for nothing: a count that did not come in this
+              // time is given up on, and the start goes on
+              if pending.count.isEmpty && !pending.holdsOnlyGenesis then
+                concluded(pending, PathLiveSync.SnapPeerVerdict.Begin)
+              else
+                countSnapPeers()
+                Behaviors.same
+            case SnapPeersWaitOver if snapPeers.isDefined =>
+              val pending = snapPeers.get
+              concluded(
+                pending,
+                PathLiveSync.snapPeerVerdict(
+                  pending.count,
+                  proofOfWork = true,
+                  pending.holdsOnlyGenesis,
+                  port.snapPeers.minSnapPeers,
+                  waitOver = true
+                )
+              )
+            case SnapPeersRecount | SnapPeersWaitOver               => Behaviors.same
+            case msg: SyncProtocol.GetStatus if snapPeers.isDefined =>
+              // the wait for peers can be long: eth_syncing is answered, not held
+              msg.replyTo ! SyncProtocol.Status.Syncing(
+                startingBlockNumber = appStateStorage.getSyncStartingBlock(),
+                blocksProgress = SyncProtocol.Status.Progress(appStateStorage.getBestBlockNumber(), BigInt(0)),
+                stateNodesProgress = None
+              )
+              Behaviors.same
             case SnapStartChecked(minPivot, scala.util.Success(SnapStartOnGuard.Begin(clearedGenesis))) =>
               if clearedGenesis then
                 log.info("[STATE-CLEAR] The genesis state is cleared: the SNAP sync writes the state from scratch")

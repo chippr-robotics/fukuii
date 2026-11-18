@@ -1532,9 +1532,35 @@ trait SyncControllerBuilder extends SyncControllerRefBuilder:
           () =>
             val header = blockchainReader.genesisHeader
             BlockRef(header.hash.value, header.number.value, header.stateRoot.value)
-        )
+        ),
+        snapPeers = snapPeerPrecondition
       )
     }
+
+  /** What the snap-peer precondition at SNAP's start counts against on the unified layout (spec 018 C6): the shipped
+    * `min-snap-peers` and `pow-snap-peer-wait`, and the node ids of the peers the operator declared, in
+    * `static-nodes.json` and `sync.snap-sync.snap-server-peers`. A peer added later over admin RPC is not among them.
+    */
+  private def snapPeerPrecondition: com.chipprbots.ethereum.blockchain.sync.PathLiveSync.SnapPeerPrecondition =
+    import com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncConfig
+    val snapConfig = scala.util
+      .Try(SNAPSyncConfig.fromConfig(com.chipprbots.ethereum.utils.Config.config.getConfig("sync")))
+      .getOrElse(SNAPSyncConfig())
+    val staticNodes = scala.util
+      .Try(com.chipprbots.ethereum.utils.Config.config.getString("datadir"))
+      .toOption
+      .toSeq
+      .flatMap(com.chipprbots.ethereum.network.StaticNodesLoader.load(_))
+    val declared = (staticNodes ++ snapConfig.snapServerPeers).flatMap { uri =>
+      scala.util
+        .Try(org.apache.pekko.util.ByteString(org.bouncycastle.util.encoders.Hex.decode(uri.getUserInfo)))
+        .toOption
+    }
+    com.chipprbots.ethereum.blockchain.sync.PathLiveSync.SnapPeerPrecondition(
+      snapConfig.minSnapPeers,
+      snapConfig.powSnapPeerWait,
+      declared.filter(_.nonEmpty).toSet
+    )
 
   lazy val syncController: org.apache.pekko.actor.typed.ActorRef[SyncController.Command] =
     val ref = classicSystem

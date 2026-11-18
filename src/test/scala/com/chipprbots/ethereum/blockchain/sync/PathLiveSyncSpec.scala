@@ -150,13 +150,14 @@ class PathLiveSyncSpec extends AnyFlatSpec with Matchers:
   it should "refuse regular sync from the genesis, naming the flag, and nothing else" taggedAs UnitTest in {
     val node = new Node
     val genesis = Some(node.genesis.copy(number = 0))
+    // a chain with a terminal total difficulty: unchanged by the decision of 2026-11-18
     def refusal(
         doSnap: Boolean = false,
         test: Boolean = false,
         anchor: Option[BlockRef] = genesis,
         started: Boolean = false
     ) =
-      PathLiveSync.regularSyncFromGenesisRefusal(doSnap, test, anchor, started)
+      PathLiveSync.regularSyncFromGenesisRefusal(doSnap, test, anchor, started, proofOfWork = false)
 
     refusal().get should include("fukuii.sync.do-snap-sync = false")
     withClue("no state at all: ")(refusal(anchor = None) should not be empty)
@@ -166,6 +167,110 @@ class PathLiveSyncSpec extends AnyFlatSpec with Matchers:
       refusal(anchor = Some(node.genesis.copy(number = 3))) shouldBe None
     )
     withClue("a sync done or begun, which goes on: ")(refusal(started = true) shouldBe None)
+  }
+
+  // spec 018 C6, the user's decision of 2026-11-18 (a): on proof of work a node regular-syncs from its genesis
+  it should "take regular sync from the genesis on proof of work, and refuse only a node that holds no state" taggedAs UnitTest in {
+    val node = new Node
+    val genesis = Some(node.genesis.copy(number = 0))
+    def refusal(
+        doSnap: Boolean = false,
+        test: Boolean = false,
+        anchor: Option[BlockRef] = genesis,
+        started: Boolean = false
+    ) =
+      PathLiveSync.regularSyncFromGenesisRefusal(doSnap, test, anchor, started, proofOfWork = true)
+
+    withClue("the genesis state, do-snap-sync off: ")(refusal() shouldBe None)
+    withClue("no state at all: regular sync has nothing to execute the first block on: ") {
+      refusal(anchor = None).get should include("holds no state")
+    }
+    withClue("no state, but a sync begun, which goes on: ")(refusal(anchor = None, started = true) shouldBe None)
+    withClue("SNAP on: ")(refusal(doSnap = true, anchor = None) shouldBe None)
+    withClue("test mode: ")(refusal(test = true, anchor = None) shouldBe None)
+    withClue("above the genesis: ")(refusal(anchor = Some(node.genesis.copy(number = 3))) shouldBe None)
+  }
+
+  "A node that holds only its genesis" should "be one with the genesis state, no SNAP sync done or begun, and no clear pending" taggedAs UnitTest in {
+    val fresh = new Node
+    fresh.port.holdsOnlyGenesis() shouldBe true
+
+    val begun = new Node
+    begun.chain.appState.putSnapSyncPivotBlock(BigInt(5)).commit()
+    withClue("a SNAP sync with a pivot: ")(begun.port.holdsOnlyGenesis() shouldBe false)
+
+    val done = new Node
+    done.chain.appState.snapSyncDone().commit()
+    withClue("a SNAP sync done: ")(done.port.holdsOnlyGenesis() shouldBe false)
+
+    val cleared = new Node
+    cleared.port.beforeSnap(): Unit
+    withClue("the genesis state cleared for SNAP: ")(cleared.port.holdsOnlyGenesis() shouldBe false)
+
+    val followed = new Node
+    followed.followed()
+    withClue("a block above the genesis: ")(followed.port.holdsOnlyGenesis() shouldBe false)
+  }
+
+  // spec 018 C6 (T241/T242), the user's decisions of 2026-11-18
+  "The snap-peer precondition" should "count the peers on this chain that advertise snap, and the declared ones among them" taggedAs UnitTest in {
+    import com.chipprbots.ethereum.network.NetworkPeerManagerActor.PeerInfo
+    import com.chipprbots.ethereum.network.NetworkPeerManagerActor.RemoteStatus
+    def id(i: Int) = org.apache.pekko.util.ByteString(Array.fill[Byte](64)(i.toByte))
+    val status = RemoteStatus(
+      com.chipprbots.ethereum.network.p2p.messages.Capability.ETH68,
+      networkId = 1,
+      chainWeight = com.chipprbots.ethereum.domain.ChainWeight.totalDifficultyOnly(1),
+      bestHash = org.apache.pekko.util.ByteString("best"),
+      genesisHash = org.apache.pekko.util.ByteString("genesis"),
+      supportsSnap = true
+    )
+    def info(snap: Boolean, onChain: Boolean = true) =
+      PeerInfo(status.copy(supportsSnap = snap), status.chainWeight, onChain, BigInt(1), status.bestHash)
+    val peers = Seq(
+      Some(id(1)) -> info(snap = true),
+      Some(id(2)) -> info(snap = true),
+      None -> info(snap = true),
+      Some(id(4)) -> info(snap = false),
+      // of another chain: its fork was not accepted
+      Some(id(5)) -> info(snap = true, onChain = false)
+    )
+    PathLiveSync.countSnapPeers(peers, declared = Set(id(2), id(4), id(5), id(9))) shouldBe
+      PathLiveSync.SnapPeerCount(connected = 5, snapCapable = 3, declaredSnapCapable = 1)
+  }
+
+  it should "on proof of work, at the genesis, wait for min-snap-peers, then begin with some or regular-sync with none" taggedAs UnitTest in {
+    import PathLiveSync.SnapPeerVerdict.*
+    def count(snap: Int) = Some(PathLiveSync.SnapPeerCount(connected = 4, snapCapable = snap, declaredSnapCapable = 0))
+    def verdict(c: Option[PathLiveSync.SnapPeerCount], over: Boolean) =
+      PathLiveSync.snapPeerVerdict(c, proofOfWork = true, holdsOnlyGenesis = true, minSnapPeers = 2, waitOver = over)
+
+    verdict(count(2), over = false) shouldBe Begin
+    verdict(count(1), over = false) shouldBe Wait
+    verdict(count(0), over = false) shouldBe Wait
+    verdict(None, over = false) shouldBe Wait
+    verdict(count(1), over = true) shouldBe Begin
+    verdict(count(0), over = true) shouldBe RegularSyncFromGenesis
+    withClue("no count ever came: SNAP's own wait is what is left: ")(verdict(None, over = true) shouldBe Begin)
+  }
+
+  it should "never wait nor regular-sync from the genesis on a chain with a terminal total difficulty" taggedAs UnitTest in {
+    val none = Some(PathLiveSync.SnapPeerCount(connected = 4, snapCapable = 0, declaredSnapCapable = 0))
+    for
+      over <- Seq(false, true)
+      genesisOnly <- Seq(false, true)
+      c <- Seq(none, None)
+    do
+      withClue(s"waitOver=$over holdsOnlyGenesis=$genesisOnly count=$c: ") {
+        PathLiveSync.snapPeerVerdict(c, proofOfWork = false, genesisOnly, minSnapPeers = 2, waitOver = over) shouldBe
+          PathLiveSync.SnapPeerVerdict.Begin
+      }
+  }
+
+  it should "never regular-sync from the genesis on a node that holds more than it" taggedAs UnitTest in {
+    val none = Some(PathLiveSync.SnapPeerCount(connected = 4, snapCapable = 0, declaredSnapCapable = 0))
+    PathLiveSync.snapPeerVerdict(none, proofOfWork = true, holdsOnlyGenesis = false, 2, waitOver = true) shouldBe
+      PathLiveSync.SnapPeerVerdict.Begin
   }
 
   // part 10 step 6 (B-308; the user's decision of 2026-11-17 narrows FR-020 to the hash layout)

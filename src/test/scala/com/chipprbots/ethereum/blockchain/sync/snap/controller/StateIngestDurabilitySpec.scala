@@ -625,6 +625,109 @@ class StateIngestDurabilitySpec extends AnyFlatSpec with Matchers:
     h.module.currentPhase shouldBe SyncPhase.Completed
   }
 
+  // ---- spec 018 C6 (T243): the proof-of-work hand-off checks on the shipped ETC and Mordor configs ----
+  // The checks are SnapFinalization's (the window, AncestorWindow's P..P-4 bodies where the header names ommers, and
+  // the exact weight); these pin that the shipped ETC chains take the proof-of-work branch of each, with the era and
+  // fork config the pins name, so a config that grew a terminal total difficulty, or lost its eras, fails here.
+
+  /** A shipped chain config as the node parses it. */
+  private def shipped(name: String): com.chipprbots.ethereum.utils.BlockchainConfig =
+    com.chipprbots.ethereum.utils.BlockchainConfig.fromRawConfig(
+      com.typesafe.config.ConfigFactory.load().getConfig(s"fukuii.blockchains.$name")
+    )
+
+  /** chain id, network id, ECIP-1017 era length, and Atlantis, Agharta, Phoenix, ECIP-1099, Magneto, Mystique. */
+  private val etcChains: Seq[(String, BigInt, Long, Int, Seq[BigInt])] = Seq(
+    (
+      "etc",
+      61,
+      1L,
+      5_000_000,
+      Seq(8_772_000, 9_573_000, 10_500_839, 11_700_000, 13_189_133, 14_525_000).map(BigInt(_))
+    ),
+    ("mordor", 63, 7L, 2_000_000, Seq(0, 301_243, 999_983, 2_520_000, 3_985_893, 5_520_000).map(BigInt(_)))
+  )
+
+  etcChains.foreach { case (name, chainId, networkId, era, forks) =>
+    s"The proof-of-work hand-off on the shipped $name config" should "pin the chain, its eras and its forks" taggedAs UnitTest in {
+      val config = shipped(name)
+      config.chainId.value shouldBe chainId
+      config.networkId shouldBe networkId
+      withClue("no terminal total difficulty: fork choice is by weight, and blocks have ommers: ") {
+        config.terminalTotalDifficulty shouldBe None
+        com.chipprbots.ethereum.blockchain.sync.snap.HeaderChainCheck.isProofOfWork(config) shouldBe true
+      }
+      config.monetaryPolicyConfig.eraDuration shouldBe era
+      config.monetaryPolicyConfig.rewardReductionRate shouldBe 0.2
+      config.monetaryPolicyConfig.firstEraBlockReward shouldBe BigInt("5000000000000000000")
+      val f = config.forkBlockNumbers
+      Seq(
+        f.atlantisBlockNumber,
+        f.aghartaBlockNumber,
+        f.phoenixBlockNumber,
+        f.ecip1099BlockNumber,
+        f.magnetoBlockNumber,
+        f.mystiqueBlockNumber
+      ) shouldBe forks
+    }
+
+    it should "hold, writing nothing, while the bodies of the pivot and the four below it that name ommers are not stored" taggedAs UnitTest in {
+      val h = new Harness(pathScheme = true, terminalTotalDifficulty = shipped(name).terminalTotalDifficulty)
+      // every header of the 256, and the bodies of all but the lowest of the five
+      val pivotHeader = h.storeChainBelowThePivot(below = 256, bodiesOfTheLast = 4, withOmmers = true)
+      h.unifiedLayoutAtTheEndOfASync()
+      val before = h.recording.writes.size
+
+      h.handOffFromAPassedSample()
+
+      h.module.headerHold shouldBe Some(pivotHeader.hash.value)
+      h.module.currentPhase should not be SyncPhase.Completed
+      h.syncedSince(before) shouldBe empty
+      h.anchorAfter(h.recording.writes.size) shouldBe None
+      h.flagSetAfter(h.recording.writes.size) shouldBe false
+    }
+
+    it should "hold, writing nothing, while a header of the 256 below the pivot is not stored" taggedAs UnitTest in {
+      val h = new Harness(pathScheme = true, terminalTotalDifficulty = shipped(name).terminalTotalDifficulty)
+      h.storeChainBelowThePivot(below = 255, bodiesOfTheLast = 6, withOmmers = true)
+      h.unifiedLayoutAtTheEndOfASync()
+      val before = h.recording.writes.size
+
+      h.handOffFromAPassedSample()
+
+      h.module.headerHold shouldBe defined
+      h.syncedSince(before) shouldBe empty
+      h.anchorAfter(h.recording.writes.size) shouldBe None
+    }
+
+    it should "refuse an estimated weight of the pivot, write nothing, and ask for a SNAP restart" taggedAs UnitTest in {
+      val h = new Harness(pathScheme = true, terminalTotalDifficulty = shipped(name).terminalTotalDifficulty)
+      // the window is whole; the weight of the pivot's parent is not stored, so the pivot's is an estimate
+      h.storeChainBelowThePivot(below = 256, bodiesOfTheLast = 6, weighed = false, withOmmers = true)
+      h.unifiedLayoutAtTheEndOfASync()
+      val before = h.recording.writes.size
+
+      h.handOffFromAPassedSample()
+
+      h.module.currentPhase should not be SyncPhase.Completed
+      h.syncedSince(before) shouldBe empty
+      h.anchorAfter(h.recording.writes.size) shouldBe None
+      h.parent.receiveAll() shouldBe Seq(SyncProtocol.HealingImpossible)
+    }
+
+    it should "hand off once the window is whole and the weight exact" taggedAs UnitTest in {
+      val h = new Harness(pathScheme = true, terminalTotalDifficulty = shipped(name).terminalTotalDifficulty)
+      h.storeChainBelowThePivot(below = 256, bodiesOfTheLast = 6, withOmmers = true)
+      h.unifiedLayoutAtTheEndOfASync()
+
+      h.handOffFromAPassedSample()
+
+      h.module.currentPhase shouldBe SyncPhase.Completed
+      h.flagSetAfter(h.recording.writes.size) shouldBe true
+      unifiedPrefixProperty(h)
+    }
+  }
+
   // A chain with a terminal total difficulty whose pivot is still before the merge: blocks above it have ommers.
   it should "hold for the bodies below a pivot that has a difficulty, on a chain with a terminal total difficulty" taggedAs UnitTest in {
     val h = new Harness(pathScheme = true, terminalTotalDifficulty = Some(BigInt("58750000000000000000000")))
