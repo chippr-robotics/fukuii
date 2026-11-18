@@ -2407,13 +2407,18 @@ items:
   - id: B-298
     title: "SYNC-FORK on the hash layout: clamp the resolver's LCA, choose the master peer by weight, judge the peer's branch by weight"
     priority: P1
-    status: open
+    status: claimed
     area: sync
     size: M
     opened: 2026-11-15
     refs: []
     links:
       spec: 018
+    claim:
+      by: cloud-dc960fdc
+      agent: forge-b298
+      since: 2026-11-18T00:05:56Z
+      heartbeat: 2026-11-18T00:05:56Z
     notes: forge, C4e part 6 pre-code. The LCA arm has no depth clamp and the resolver discards before any weight comparison; needs its own consult. With B-248
   - id: B-299
     title: NoChainSwitch offers the node's own canonical block as an ommer (BlockImporter resolveBranch)
