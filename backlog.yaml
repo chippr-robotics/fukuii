@@ -63,7 +63,7 @@ items:
       by: cloud-dc960fdc
       agent: beacon-b005
       since: 2026-11-17T23:33:38Z
-      heartbeat: 2026-11-17T23:56:18Z
+      heartbeat: 2026-11-18T01:53:15Z
     notes: |-
       beacon. engine spec paris.md:178-185; Nethermind does the same.
       Includes B-271 (missing parent/state answered ACCEPTED; check geth delayPayloadImport) and issue #1694.
@@ -639,7 +639,7 @@ items:
       by: cloud-dc960fdc
       agent: main
       since: 2026-11-15T17:59:02Z
-      heartbeat: 2026-11-16T17:06:43Z
+      heartbeat: 2026-11-18T01:53:15Z
     notes: "cloud-dc960fdc: heartbeat or release by 11-17 17:06 UTC; C5a code merged (#1855-#1880), T209 + Sepolia fresh sync + 24 h remain."
   - id: B-065
     title: "Spec 018 Track C C5b: the audit, on-demand fetch and recovery scans by position (item 10)"
@@ -1261,7 +1261,7 @@ items:
       by: cloud-dc960fdc
       agent: spec-b146
       since: 2026-11-17T23:33:57Z
-      heartbeat: 2026-11-17T23:39:34Z
+      heartbeat: 2026-11-18T01:53:15Z
     notes: Shared tls block, client-auth need/want, truststore, rotation, cert-identity to namespace map, outbound factory; node-ID allowlist for consortium P2P. Spec Kit first (Principle VI).
   - id: B-147
     title: "TLS docs: fix the TLS skill and runbook errors, docs/MCP.md, and enterprise-deployment's mTLS claim"
@@ -2399,7 +2399,7 @@ items:
       by: cloud-dc960fdc
       agent: forge-b298
       since: 2026-11-18T00:05:56Z
-      heartbeat: 2026-11-18T01:27:52Z
+      heartbeat: 2026-11-18T01:53:15Z
     notes: forge, C4e part 6 pre-code. The LCA arm has no depth clamp and the resolver discards before any weight comparison; needs its own consult. With B-248
   - id: B-299
     title: NoChainSwitch offers the node's own canonical block as an ommer (BlockImporter resolveBranch)
@@ -2446,7 +2446,7 @@ items:
       by: cloud-dc960fdc
       agent: hive-b314
       since: 2026-11-18T00:57:40Z
-      heartbeat: 2026-11-18T01:34:24Z
+      heartbeat: 2026-11-18T01:53:15Z
     notes: hive client has no switch for fukuii.state.path-live; needs one, and a host
   - id: B-315
     title: "Weight arm of reorganiseOnLayers: weigh again when the head moved between the comparison and the move"
@@ -2741,7 +2741,7 @@ items:
       by: cloud-dc960fdc
       agent: forge-b298
       since: 2026-11-18T01:27:45Z
-      heartbeat: 2026-11-18T01:53:12Z
+      heartbeat: 2026-11-18T01:53:15Z
     notes: |-
       B-298 follow-up (forge). Refusal+blacklist is what B-298 asked, but a node on a minority fork deeper than 128 never rejoins (each heaviest peer refused in turn). Options: weigh the branch from the true LCA and send RegularSyncStuck if heavier; or N distinct refusing peers -> escalate. core-geth's floor is 90000.
       2026-11-18 in-progress: branch fix/b298-sync-fork-hash-layout (folded into B-298)
