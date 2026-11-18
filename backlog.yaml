@@ -1585,17 +1585,14 @@ items:
   - id: B-187
     title: Tests leave temp RocksDB dirs and .bin files behind; they filled WSL /tmp and broke a testEssential run
     priority: P2
-    status: in-progress
+    status: done
     area: tests
     size: S
     opened: 2026-11-09
+    closed: 2026-11-18
     refs: []
-    links: {}
-    claim:
-      by: cloud-dc960fdc
-      agent: vault-small
-      since: 2026-11-18T13:37:33Z
-      heartbeat: 2026-11-18T13:42:36Z
+    links:
+      prs: [1919]
     notes: "Find the test fixtures that create temp dirs without cleanup and delete them in afterAll. Workaround meanwhile: run tests with -Djava.io.tmpdir pointing at a disk-backed dir."
   - id: B-188
     title: E2EHandshakeSpec 'peers at genesis' fails whenever regular sync works; FastSyncBranchResolverActorSpec flakes under sbt pp
