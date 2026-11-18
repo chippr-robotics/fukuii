@@ -24,6 +24,7 @@ import scala.util.control.NonFatal
 
 import com.chipprbots.ethereum.blockchain.sync.Blacklist
 import com.chipprbots.ethereum.blockchain.sync.Blacklist.BlacklistReason
+import com.chipprbots.ethereum.blockchain.sync.HeadChainWeight
 import com.chipprbots.ethereum.blockchain.sync.PeersClient
 import com.chipprbots.ethereum.blockchain.sync.StoredBodyCheck
 import com.chipprbots.ethereum.blockchain.sync.SyncController
@@ -38,6 +39,7 @@ import com.chipprbots.ethereum.consensus.Consensus
 import com.chipprbots.ethereum.consensus.ConsensusAdapter
 import com.chipprbots.ethereum.consensus.ReorgStateHandler
 import com.chipprbots.ethereum.consensus.engine.InvalidChainReporter
+import com.chipprbots.ethereum.consensus.mess.ArtificialFinality
 import com.chipprbots.ethereum.crypto.kec256
 import com.chipprbots.ethereum.db.storage.AncestorWindow
 import com.chipprbots.ethereum.db.storage.BadEntryDelete
@@ -2068,7 +2070,8 @@ final private class BlockImporterLogic(
         blacklist = blacklist,
         syncConfig = syncConfig,
         // on the unified state layout no block is taken off the chain here: the resolver only finds the common block
-        discardDiverged = !blockchainWriter.holdsStateInPlace
+        discardGuard =
+          Option.unless(blockchainWriter.holdsStateInPlace)(hashLayoutDiscardGuard(capturedBest, snapPivot))
       )
     )
     // Watched: one that stopped without an answer left this importer in `resolvingFork` for good, where nothing else
@@ -2076,6 +2079,96 @@ final private class BlockImporterLogic(
     ctx.watchWith(resolverRef, BranchResolverStopped(resolverRef))
     resolverRef ! FastSyncBranchResolverActor.StartBranchResolver
     resolvingFork(failedBlockNumber, beyondTheFetch, capturedBest, snapPivot, state, resolverRef)
+
+  /** What the resolver checks on the hash layout before it takes this node's blocks off the chain (B-298):
+    *   - the common block lies no deeper than the floor the blind rewind goes to, `MaxForkAncestryDepth` below the head
+    *     and never below the SNAP pivot, where this node has no state to execute a branch on. One bound for both ways a
+    *     fork recovery rewinds on this layout; core-geth refuses an ancestor below its own floor in the same way;
+    *   - the peer's branch is the one the import would take: `BranchResolution.resolveBranch`, weight and MESS. Not on
+    *     a chain that follows a consensus layer, whose branches all weigh the same: there the branch is not weighed
+    *     here, as before.
+    */
+  private def hashLayoutDiscardGuard(
+      capturedBest: BigInt,
+      snapPivot: BigInt
+  ): FastSyncBranchResolverActor.DiscardGuard =
+    val weighsByWork = !branchResolution.followsConsensusLayer
+    FastSyncBranchResolverActor.DiscardGuard(
+      deepestCommonBlock = (capturedBest - MaxForkAncestryDepth).max(snapPivot),
+      heavier = Option.when(weighsByWork) { (headers: NonEmptyList[BlockHeader]) =>
+        branchResolution.resolveBranch(headers) match
+          case NewBetterBranch(_) => true
+          case _                  => false
+      },
+      // below the floor (B-346; the user's decision of 2026-11-18): weighed from the common block, and escalated to a
+      // SNAP re-sync if it is the heavier. Proof of work only, as the weighing above
+      beyondReach = Option.when(weighsByWork)(
+        FastSyncBranchResolverActor.BeyondReach(
+          maxHeaders = MaxBranchHeadersFetched,
+          verdict = deepForkWeight.verdict,
+          escalatedAt = escalatedBeyondReachAt
+        )
+      )
+    )
+
+  /** The weighing of a branch below the floor (B-346): the fork choice's rules over stored weights, MESS where the
+    * chain has it, and the header validation of an import.
+    */
+  private lazy val deepForkWeight: DeepForkWeight =
+    val mess = blockchainConfig.messConfig
+    new DeepForkWeight(
+      weightOf = blockchainReader.getChainWeightByHash,
+      headerOf = blockchainReader.getBlockHeaderByHash,
+      onTheChain = header => blockchainReader.getCanonicalHashByNumber(header.number.value).contains(header.hash),
+      // exact only: a head weighed from an estimate is outweighed by any block below it (forge)
+      head = () =>
+        blockchainReader.getBestBlockHeader.flatMap { header =>
+          HeadChainWeight.classify(blockchainReader, header) match
+            case HeadChainWeight.Status.Exact(weight) => Some(header -> weight)
+            case _                                    => None
+        },
+      messActiveAt = Option.when(mess.enabled)(mess.isActiveAtBlock),
+      messRefuses = ArtificialFinality.shouldRejectReorg,
+      firstInvalidHeader = headers => consensus.firstInvalidHeaderOf(headers)
+    )
+
+  /** The common block a heavier branch below the floor was escalated for (B-346), by hash: the escalation is asked for
+    * once per fork, and the sync controller owns it after that (it re-SNAPs, or schedules one under its back-off). Read
+    * and written on the actor's thread only.
+    */
+  private var escalatedBeyondReachAt: Option[ByteString] = None
+
+  /** A heavier branch leaves this chain below the floor (B-346): nothing is rewound, and this node's state is given up
+    * for a SNAP re-sync through the hash layout's escape, `RegularSyncStuck` (the route a fork recovery with no header
+    * at its floor takes). Once per fork; the fetcher goes on from the head until the controller stops regular sync.
+    */
+  private def escalateHeavierBeyondReach(heavier: FastSyncBranchResolverActor.BranchHeavierBeyondReach): Unit =
+    val best = bestKnownBlockNumber
+    unknownParentStrikes = Map.empty
+    if escalatedBeyondReachAt.contains(heavier.commonHash) then
+      log.warning(
+        "[SYNC-FORK] The heavier chain that leaves this node's at block {} was handed to the sync controller for a " +
+          "SNAP re-sync already: not asked again. Nothing is rewound; the fetcher goes on from the head {}",
+        heavier.commonBlock,
+        best
+      )
+    else
+      escalatedBeyondReachAt = Some(heavier.commonHash)
+      log.error(
+        s"[SYNC-FORK] Peer ${heavier.masterPeer.id}'s chain leaves this node's at block ${heavier.commonBlock} " +
+          s"(${ByteStringUtils.hash2string(heavier.commonHash)}), ${best - heavier.commonBlock} block(s) below the " +
+          s"head $best, deeper than a fork recovery rewinds ($MaxForkAncestryDepth), and it is the heavier " +
+          s"(${heavier.weighed} header(s) weighed). Nothing is rewound: this node's state is given up for a SNAP re-sync"
+      )
+      supervisor ! SyncProtocol.RegularSyncStuck(
+        heavier.commonBlock,
+        s"a heavier chain leaves this one at block ${heavier.commonBlock}, below the fork recovery floor"
+      )
+    fetcher ! BlockFetcher.InvalidateBlocksFrom(
+      best + 1,
+      "SYNC-FORK: a heavier chain below the floor is escalated",
+      shouldBlacklist = false
+    )
 
   private def resolvingFork(
       failedBlockNumber: BigInt,
@@ -2143,6 +2236,35 @@ final private class BlockImporterLogic(
             log.warning("SYNC-FORK: no header at resolver LCA {} — falling back to blind rewind", lca)
             blindRewind(capturedBest, snapPivot)
         // Every exit rewinds the fetcher (or escalates to SNAP), so a batch deferred before recovery is stale.
+        running(state.withoutDeferredBatches())
+
+      // the hash layout (B-346): a heavier chain leaves this one below the floor. Nothing was taken off this chain and
+      // nothing is rewound: the state is given up for a SNAP re-sync, once per fork
+      case BranchResolverMsg(heavier: FastSyncBranchResolverActor.BranchHeavierBeyondReach) =>
+        escalateHeavierBeyondReach(heavier)
+        running(state.withoutDeferredBatches())
+
+      // the hash layout's refusals (B-298): the master peer's chain leaves this one too deep, or its branch is not the
+      // heavier. Nothing was taken off this chain and nothing is rewound now: the fetcher goes on from the head, and
+      // the peer, blacklisted by the resolver, is not asked again for the same branch
+      case BranchResolverMsg(
+            FastSyncBranchResolverActor.BranchResolutionFailed(
+              notFollowed: FastSyncBranchResolverActor.BranchResolutionFailed.BranchNotFollowed
+            )
+          ) if !holds =>
+        val best = bestKnownBlockNumber
+        log.warning(
+          "[SYNC-FORK] The master peer's chain is not followed ({}): nothing is rewound, the fetcher goes on from the " +
+            "head {}",
+          notFollowed,
+          best
+        )
+        unknownParentStrikes = Map.empty
+        fetcher ! BlockFetcher.InvalidateBlocksFrom(
+          best + 1,
+          "SYNC-FORK: the master peer's chain is not followed",
+          shouldBlacklist = false
+        )
         running(state.withoutDeferredBatches())
 
       case BranchResolverMsg(FastSyncBranchResolverActor.BranchResolutionFailed(_)) =>

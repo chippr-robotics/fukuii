@@ -84,6 +84,13 @@ class PeerListHelper(
   def getPeerWithHighestBlock: Option[PeerWithInfo] =
     peersToDownloadFrom.values.toList.sortBy(_.peerInfo.maxBlockNumber)(using bigIntReverseOrdering).headOption
 
+  /** The peer whose chain is the heaviest by what it advertised (total difficulty on proof of work), the higher block
+    * breaking a tie (B-298): fork choice is by weight, not height, so the peer a fork is resolved against is chosen so
+    * too, as core-geth's sync picks the peer with the highest total difficulty.
+    */
+  def getPeerWithHighestWeight: Option[PeerWithInfo] =
+    peersToDownloadFrom.values.toList.maxByOption(p => (p.peerInfo.chainWeight, p.peerInfo.maxBlockNumber))
+
   def getSnapPeerWithHighestBlock: Option[PeerWithInfo] =
     peersToDownloadFrom.values.toList
       .filter(_.peerInfo.remoteStatus.supportsSnap)
