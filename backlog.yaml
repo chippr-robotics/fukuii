@@ -2444,11 +2444,16 @@ items:
   - id: B-314
     title: "C5 gate: hive engine re-org suites with the guard on, once part 10 starts the importer there (B-297 item 5)"
     priority: P1
-    status: open
+    status: claimed
     area: consensus
     opened: 2026-11-16
     refs: [B-297]
     links: {}
+    claim:
+      by: cloud-dc960fdc
+      agent: hive-b314
+      since: 2026-11-18T00:57:40Z
+      heartbeat: 2026-11-18T00:57:40Z
     notes: hive client has no switch for fukuii.state.path-live; needs one, and a host
   - id: B-315
     title: "Weight arm of reorganiseOnLayers: weigh again when the head moved between the comparison and the move"
