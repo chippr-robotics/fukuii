@@ -398,12 +398,11 @@ class RegularSyncSpec
       extends ForkRecoveryOnTheUnifiedLayout(name, recoveryStarted = false):
     /** The body every window block commits to: one ommer, so the check of ommers reads it (B-302). */
     val windowBody: BlockBody = BlockBody(Nil, Seq(testBlocks.head.header))
-    private val windowOmmersHash = {
+    private val windowOmmersHash =
       import com.chipprbots.ethereum.consensus.pow.blocks.OmmersSeqEnc
       com.chipprbots.ethereum.domain.BlockHash(
         org.apache.pekko.util.ByteString(com.chipprbots.ethereum.crypto.kec256(windowBody.uncleNodesList.toBytes))
       )
-    }
     val window: List[Block] =
       testBlocks.filter(b => b.number.value >= 9 && b.number.value <= 14).foldLeft(List.empty[Block]) { (built, own) =>
         val parent = built.lastOption.map(_.hash).getOrElse(own.header.parentHash)
