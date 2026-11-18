@@ -647,7 +647,7 @@ items:
   - id: B-065
     title: "Spec 018 Track C C5b: the audit, on-demand fetch and recovery scans by position (item 10)"
     priority: P2
-    status: claimed
+    status: in-progress
     area: storage
     size: L
     opened: 2026-11-07
@@ -659,7 +659,7 @@ items:
       by: cloud-dc960fdc
       agent: vault-b065
       since: 2026-11-18T13:27:08Z
-      heartbeat: 2026-11-18T13:27:08Z
+      heartbeat: 2026-11-18T13:27:15Z
   - id: B-066
     title: "Spec 018 Track C C5c: checkpoint format version 2 and the position-assigning importer (item 10)"
     priority: P2
