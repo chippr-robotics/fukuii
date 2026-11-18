@@ -2851,10 +2851,11 @@ items:
   - id: B-354
     title: "Spec 030 S1: TLS profiles, pre-bind validation, RPC HTTP on profiles, legacy mode=https mapping"
     priority: P1
-    status: open
+    status: done
     area: rpc
     size: M
     opened: 2026-11-18
+    closed: 2026-11-18
     refs: [B-146]
     links:
       prs: [1914]
