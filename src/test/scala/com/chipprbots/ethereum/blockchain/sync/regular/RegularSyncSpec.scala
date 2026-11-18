@@ -389,22 +389,30 @@ class RegularSyncSpec
       resolved.get() shouldBe before + 1
 
   /** An importer whose every import of block 15 is refused because the window its ommers are checked against is not
-    * stored whole (B-301): the headers of blocks 9 to 14 are stored, each committing to an empty body, and of their
-    * bodies only those of blocks 13 and 14. With `windowHeaderMissing`, the header of block 11 is not stored either.
-    * Nothing below block 9 is stored, which the ommers' check does not read.
+    * stored whole (B-301): the headers of blocks 9 to 14 are stored, each committing to a body of one ommer, and of
+    * their bodies only those of blocks 13 and 14. The check reads the bodies of blocks 10 to 14, the five nearest that
+    * name ommers (B-302), so those of 10, 11 and 12 are missing. With `windowHeaderMissing`, the header of block 11 is
+    * not stored either. Nothing below block 9 is stored, which the ommers' check does not read.
     */
   abstract class AncestorBodiesMissing(name: String, windowHeaderMissing: Boolean = false)
       extends ForkRecoveryOnTheUnifiedLayout(name, recoveryStarted = false):
-    val emptyBody: BlockBody = BlockBody(Nil, Nil)
+    /** The body every window block commits to: one ommer, so the check of ommers reads it (B-302). */
+    val windowBody: BlockBody = BlockBody(Nil, Seq(testBlocks.head.header))
+    private val windowOmmersHash = {
+      import com.chipprbots.ethereum.consensus.pow.blocks.OmmersSeqEnc
+      com.chipprbots.ethereum.domain.BlockHash(
+        org.apache.pekko.util.ByteString(com.chipprbots.ethereum.crypto.kec256(windowBody.uncleNodesList.toBytes))
+      )
+    }
     val window: List[Block] =
       testBlocks.filter(b => b.number.value >= 9 && b.number.value <= 14).foldLeft(List.empty[Block]) { (built, own) =>
         val parent = built.lastOption.map(_.hash).getOrElse(own.header.parentHash)
         val header = own.header.copy(
           parentHash = parent,
           transactionsRoot = TrieRoot(BlockHeader.EmptyMpt),
-          ommersHash = com.chipprbots.ethereum.domain.BlockHash(BlockHeader.EmptyOmmers)
+          ommersHash = windowOmmersHash
         )
-        built :+ Block(header, emptyBody)
+        built :+ Block(header, windowBody)
       }
     def windowBlock(number: Int): Block = window.find(_.number.value == number).get
     val failing: Block =
@@ -2309,8 +2317,8 @@ class RegularSyncSpec
               case m: BlockFetcher.FetchAncestorBodies => m
             }
             withClue("exactly the bodies missing of the parent's window, highest first: ") {
-              fetch.headers.map(_.number.value) shouldBe Seq(12, 11, 10, 9).map(BigInt(_))
-              fetch.headers shouldBe Seq(12, 11, 10, 9).map(windowBlock(_).header)
+              fetch.headers.map(_.number.value) shouldBe Seq(12, 11, 10).map(BigInt(_))
+              fetch.headers shouldBe Seq(12, 11, 10).map(windowBlock(_).header)
             }
             // Twice more while the fetch is in flight, the second into the back-off: no second request.
             failOnce()
@@ -2321,15 +2329,14 @@ class RegularSyncSpec
             }
             noPeerBlamed(meanwhile)
 
-            // Three bodies that are the ones their headers commit to, and one that is not.
+            // Two bodies that are the ones their headers commit to, and one that is not.
             val wrong = BlockBody(testBlocks.head.body.transactionList, Nil)
             fetch.replyTo ! BlockFetcher.FetchedAncestorBodies(
               fetch.headers,
               Seq(
-                windowBlock(12).header -> emptyBody,
+                windowBlock(12).header -> windowBody,
                 windowBlock(11).header -> wrong,
-                windowBlock(10).header -> emptyBody,
-                windowBlock(9).header -> emptyBody
+                windowBlock(10).header -> windowBody
               )
             )
             withClue("tried again at once, not at the end of the back-off: ") {
@@ -2345,10 +2352,10 @@ class RegularSyncSpec
             }
             noPeerBlamed(after)
             // Verified last: ScalaMock refuses a call to a stub after a verify.
-            Seq(12, 10, 9).foreach { number =>
+            Seq(12, 10).foreach { number =>
               (blockchainWriter
                 .storeBlockBody(_: com.chipprbots.ethereum.domain.BlockHash, _: BlockBody))
-                .verify(windowBlock(number).hash, emptyBody)
+                .verify(windowBlock(number).hash, windowBody)
                 .once()
             }
             withClue("a body that is not the one its header commits to is not stored: ") {
@@ -2390,7 +2397,7 @@ class RegularSyncSpec
             case m: BlockFetcher.FetchAncestorBodies => m
           }
           importer ! BlockImporter.StartForkRecovery(failing.number.value)
-          fetch.replyTo ! BlockFetcher.FetchedAncestorBodies(fetch.headers, Seq(windowBlock(12).header -> emptyBody))
+          fetch.replyTo ! BlockFetcher.FetchedAncestorBodies(fetch.headers, Seq(windowBlock(12).header -> windowBody))
           importer ! BlockImporter.BranchResolverMsg(FastSyncBranchResolverActor.BranchResolutionFailed.noCommonBlock)
           importerFetcher.fishForSpecificMessage(5.seconds) { case _: BlockFetcher.InvalidateBlocksFrom => true }
           toTheFetcher()
@@ -2401,7 +2408,7 @@ class RegularSyncSpec
           }
           (blockchainWriter
             .storeBlockBody(_: com.chipprbots.ethereum.domain.BlockHash, _: BlockBody))
-            .verify(windowBlock(12).hash, emptyBody)
+            .verify(windowBlock(12).hash, windowBody)
             .once()
           testKit.stop(importer)
       )
