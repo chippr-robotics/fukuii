@@ -28,7 +28,7 @@ node-by-hash 1 src/main/scala/com/chipprbots/ethereum/db/storage/StateStorage.sc
 get-by-hash 1 src/main/scala/com/chipprbots/ethereum/db/storage/StateStorage.scala getNode's read of the buffer over the store; it goes with getNode (C3c, T116)
 store-built 14 src/main/scala/com/chipprbots/ethereum/db/storage/StateStorage.scala the hash stores themselves, in each pruning mode; deleted with the Hash scheme (C8b). The ephemeral form for list tries is kept (T280)
 multi-get 2 src/main/scala/com/chipprbots/ethereum/db/storage/MptStorage.scala the definition and the hash store's batch; the member goes with the Hash scheme (C8b)
-raw-nodes 5 src/main/scala/com/chipprbots/ethereum/db/storage/MptStorage.scala the definitions of rawNodes and rawNodesAt, the hash store's batch, and holdsNode, the presence read of the by-hash callers (B-034; goes with the Hash scheme, C8b)
+raw-nodes 6 src/main/scala/com/chipprbots/ethereum/db/storage/MptStorage.scala the definitions of rawNodes and rawNodesAt, the hash store's batch, and holdsNode and holdsNodeAt, the presence reads of the by-hash callers and of the recovery scans (B-034; goes with the Hash scheme, C8b)
 get-by-hash 1 src/main/scala/com/chipprbots/ethereum/db/storage/MptStorage.scala not a trie read: the hash store reading its own key-value store, named `storage`
 store-built 1 src/main/scala/com/chipprbots/ethereum/db/storage/MptStorage.scala the definition of SerializingMptStorage
 multi-get 2 src/main/scala/com/chipprbots/ethereum/db/storage/MptStorageDecorator.scala the decorator forwards the batch to what it wraps (kept while the member is)
@@ -47,6 +47,11 @@ store-handed 3 src/main/scala/com/chipprbots/ethereum/db/storage/MptStorageDecor
 store-handed 1 src/main/scala/com/chipprbots/ethereum/db/storage/DecodedNodeCache.scala a decorator's rewrap of an owner's view (kept)
 store-handed 1 src/main/scala/com/chipprbots/ethereum/db/storage/PrefetchNodeReader.scala a decorator's rewrap of an owner's view (kept)
 store-handed 4 src/main/scala/com/chipprbots/ethereum/db/storage/pathstate/PathMptStorage.scala the position store's forOwner and its three factories: readOnly, throwaway, and staged for a block that commits (C3b) (kept)
+multi-get 1 src/main/scala/com/chipprbots/ethereum/db/storage/pathstate/DirectRowMptStorage.scala the recovery scans' rows by position refuse a batch by hash alone: it throws (kept while the member is)
+raw-nodes 2 src/main/scala/com/chipprbots/ethereum/db/storage/pathstate/DirectRowMptStorage.scala rawNodesAt reads the rows at each position, and rawNodes by hash alone throws (kept)
+raw-store 1 src/main/scala/com/chipprbots/ethereum/db/storage/pathstate/DirectRowMptStorage.scala the rows the scans read refuse a write by hash alone: it throws (kept while the member is)
+store-handed 2 src/main/scala/com/chipprbots/ethereum/db/storage/pathstate/DirectRowMptStorage.scala the scan's rows: forOwner and the factory, over the anchor's position store (C5b, T219) (kept)
+backing 2 src/main/scala/com/chipprbots/ethereum/blockchain/sync/RecoveryScanStores.scala the hash store a recovery scan reads off the unified layout (Hash scheme, guard off), and its readability check; the guard-off arm goes with the Hash scheme (C8b)
 store-handed 6 src/main/scala/com/chipprbots/ethereum/db/storage/pathstate/PathStateStorage.scala the position store's doors, each over the view of a block: the two over the anchor and its layers (a proposer's build, the served root of the block the disk holds); the state of a block behind the anchor for a peer, and the package's own form of it; and the two the reader seam hands out, which count the reads behind the head in a scope (C4a part 4) (kept)
 store-handed 1 src/main/scala/com/chipprbots/ethereum/db/storage/pathstate/PathStagedBlock.scala the staged block's storage: the layer of one execution over its parent's view, made when first asked for (kept)
 store-handed 1 src/main/scala/com/chipprbots/ethereum/db/storage/PathHandoffSample.scala the hand-off's sample: its own storage over the rows, by position and checked by hash, handed to the tries it looks up through; it reads only (C5a part 4, kept)
@@ -98,9 +103,7 @@ trie-of 1 src/main/scala/com/chipprbots/ethereum/transactions/PendingTransaction
 # state, the store a walk is handed (SNAP's own until C5a), and one check that C3c replaces.
 get-by-hash 1 src/main/scala/com/chipprbots/ethereum/network/snapserver/SnapServer.scala not the state: serveByteCodes reads the code store, named `storage` (kept)
 node-by-hash 3 src/main/scala/com/chipprbots/ethereum/domain/BlockchainReader.scala the definition of getMptNodeByHash, its call of getNode, and holdsStateOf, which asks it on the hash store only (the unified layout asks the anchor, C3b); deleted with the Hash scheme (C8b)
-backing 1 src/main/scala/com/chipprbots/ethereum/blockchain/sync/BytecodeRecoveryActor.scala the store the bytecode recovery scan walks, by position since C2b: the store SNAP builds, before there is an anchor to take a view of; C5a
-backing 1 src/main/scala/com/chipprbots/ethereum/blockchain/sync/CombinedRecoveryScanActor.scala the store the combined recovery scan hands to each shard's walk, by position since C2b: the store SNAP builds, before there is an anchor; C5a
-backing 3 src/main/scala/com/chipprbots/ethereum/blockchain/sync/StorageRecoveryActor.scala two are the store the storage recovery scan and its closing check read, by position since C2b; the third is where recovered storage is written; all three are the store SNAP builds, C5a
+backing 1 src/main/scala/com/chipprbots/ethereum/blockchain/sync/StorageRecoveryActor.scala WRITER: where recovered storage is written, the store SNAP builds; the scans and the closing check read through RecoveryScanStores since C5b (T219); C5a
 snap-store 2 src/main/scala/com/chipprbots/ethereum/blockchain/sync/snap/controller/StateValidationModule.scala the pivot's store, handed to the two validation walks, which read it by position since C2b: the store SNAP builds, before there is an anchor to take a view of; C5a
 visit-hash 1 src/main/scala/com/chipprbots/ethereum/mpt/MptVisitors/PathTrackingLeafWalkVisitor.scala the visitor interface hands visitHash no position; this visitor carries its own and reads each node at it (kept)
 
@@ -117,7 +120,6 @@ readonly 2 src/main/scala/com/chipprbots/ethereum/blockchain/data/GenesisDataLoa
 
 # SNAP hand-off, the audit, repair and import: C5a, C5b and C5c.
 backing 1 src/main/scala/com/chipprbots/ethereum/blockchain/sync/snap/controller/StateIngest.scala WRITER: the store SNAP ingest and healing write the pivot's state to; the hand-off without a copy, C5a
-backing 1 src/main/scala/com/chipprbots/ethereum/blockchain/sync/SyncController.scala asks whether a root is readable, to choose what a recovery scans; C5a
 readonly 1 src/main/scala/com/chipprbots/ethereum/blockchain/sync/SyncController.scala a log-only check that the SNAP root is in the store; C5a
 readonly 1 src/main/scala/com/chipprbots/ethereum/blockchain/sync/BackgroundAudit.scala WRITER: the audit walks the hash store, and repairs it; the anchor's tries by position in C5b (T217)
 raw-nodes 1 src/main/scala/com/chipprbots/ethereum/blockchain/sync/BackgroundAudit.scala the audit's batch read by hash; rows by position in C5b (T217)
