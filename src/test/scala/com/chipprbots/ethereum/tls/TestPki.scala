@@ -163,10 +163,16 @@ final class TestPki(val dir: Path):
     val keyManagers = presenting.map { id =>
       val keys = KeyStore.getInstance("pkcs12")
       keys.load(null, null)
-      keys.setKeyEntry("client", id.key.getPrivate, Array.emptyCharArray, id.chain.toArray[java.security.cert.Certificate])
+      keys.setKeyEntry(
+        "client",
+        id.key.getPrivate,
+        Array.emptyCharArray,
+        id.chain.toArray[java.security.cert.Certificate]
+      )
       val kmf = javax.net.ssl.KeyManagerFactory.getInstance(javax.net.ssl.KeyManagerFactory.getDefaultAlgorithm)
       kmf.init(keys, Array.emptyCharArray)
-      kmf.getKeyManagers
+      val km = kmf.getKeyManagers.collectFirst { case k: javax.net.ssl.X509ExtendedKeyManager => k }.get
+      Array[javax.net.ssl.KeyManager](new AlwaysPresents(km))
     }
     val ctx = javax.net.ssl.SSLContext.getInstance("TLS")
     ctx.init(keyManagers.orNull, tmf.getTrustManagers, new java.security.SecureRandom())
@@ -175,3 +181,31 @@ final class TestPki(val dir: Path):
   /** A self-signed leaf: a certificate no CA issued. */
   def selfSignedLeaf(cn: String = "client"): PkiIdentity =
     issue(s"CN=$cn", None, now.minus(Duration.ofDays(1)), now.plus(Duration.ofDays(30)), false, Nil, Nil)
+
+/** A client key manager that presents its one certificate whatever CAs the server names. The JDK's own sends a
+  * certificate only when its issuer is one the server accepts, so a self-signed or other-CA certificate would never be
+  * sent and a test of its refusal would test no certificate at all; curl, openssl and most libraries send it.
+  */
+final class AlwaysPresents(delegate: javax.net.ssl.X509ExtendedKeyManager) extends javax.net.ssl.X509ExtendedKeyManager:
+  private val Alias = "client"
+  override def chooseClientAlias(
+      keyType: Array[String],
+      issuers: Array[java.security.Principal],
+      socket: java.net.Socket
+  ): String =
+    Alias
+  override def chooseEngineClientAlias(
+      keyType: Array[String],
+      issuers: Array[java.security.Principal],
+      engine: javax.net.ssl.SSLEngine
+  ): String = Alias
+  override def getClientAliases(keyType: String, issuers: Array[java.security.Principal]): Array[String] = Array(Alias)
+  override def getServerAliases(keyType: String, issuers: Array[java.security.Principal]): Array[String] = null
+  override def chooseServerAlias(
+      keyType: String,
+      issuers: Array[java.security.Principal],
+      socket: java.net.Socket
+  ): String =
+    null
+  override def getCertificateChain(alias: String): Array[X509Certificate] = delegate.getCertificateChain(alias)
+  override def getPrivateKey(alias: String): java.security.PrivateKey = delegate.getPrivateKey(alias)

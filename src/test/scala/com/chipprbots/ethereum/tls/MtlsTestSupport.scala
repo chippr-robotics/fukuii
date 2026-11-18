@@ -29,7 +29,8 @@ object MtlsTestSupport:
       listener: ListenerId = ListenerId.RpcHttp,
       failureLog: HandshakeFailureLog = new HandshakeFailureLog()
   )(body: Int => A)(using system: ActorSystem): A =
-    val server = TlsServerEngine.rpcHttp(config, new SecureRandom()).fold(e => throw new AssertionError(e.message), x => x)
+    val server =
+      TlsServerEngine.rpcHttp(config, new SecureRandom()).fold(e => throw new AssertionError(e.message), x => x)
     val settings = TlsServerEngine.serverSettings(system)
     val route = complete("ok")
     val binding = Await.result(
@@ -37,7 +38,9 @@ object MtlsTestSupport:
         .newServerAt("127.0.0.1", 0)
         .enableHttps(TlsServerEngine.connectionContext(server))
         .withSettings(settings)
-        .bindFlow(TlsServerEngine.observeHandshakes(listener, TlsServerEngine.routeHandler(route, settings), failureLog)),
+        .bindFlow(
+          TlsServerEngine.observeHandshakes(listener, TlsServerEngine.routeHandler(route, settings), failureLog)
+        ),
       Wait
     )
     try body(binding.localAddress.getPort)
@@ -59,7 +62,9 @@ object MtlsTestSupport:
         // Under TLS 1.3 the client's side of the handshake ends before the server has checked its certificate: the
         // server's refusal arrives on the first read.
         val out = socket.getOutputStream
-        out.write(s"GET $path HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n".getBytes(StandardCharsets.US_ASCII))
+        out.write(
+          s"GET $path HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n".getBytes(StandardCharsets.US_ASCII)
+        )
         out.flush()
         val in = new BufferedReader(new InputStreamReader(socket.getInputStream, StandardCharsets.US_ASCII))
         Option(in.readLine()).toRight(new java.io.EOFException("the server closed the connection without an answer"))

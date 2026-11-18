@@ -18,8 +18,9 @@ import org.slf4j.LoggerFactory
 import com.chipprbots.ethereum.testing.Tags.*
 import com.chipprbots.ethereum.tls.*
 
-/** Spec 030 US1, SC-001: every TLS misconfiguration of the HTTP and WS listeners stops the node before any bind, through
-  * `startupRefusal`, naming the key and the cause; a valid configuration starts; no log line or refusal holds a secret.
+/** Spec 030 US1, SC-001: every TLS misconfiguration of the HTTP and WS listeners stops the node before any bind,
+  * through `startupRefusal`, naming the key and the cause; a valid configuration starts; no log line or refusal holds a
+  * secret.
   */
 class TlsStartupRefusalSpec extends AnyFlatSpec with Matchers with BeforeAndAfterAll:
 

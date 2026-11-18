@@ -27,7 +27,7 @@ import com.chipprbots.ethereum.testing.Tags.*
 class HandshakeFailureClassifierSpec extends AnyFlatSpec with Matchers with BeforeAndAfterAll with Eventually:
 
   given system: ActorSystem = ActorSystem("handshake-failure-classifier-spec")
-  override implicit val patienceConfig: PatienceConfig = PatienceConfig(timeout = Span(10, Seconds))
+  implicit override val patienceConfig: PatienceConfig = PatienceConfig(timeout = Span(10, Seconds))
 
   private val dir = TlsTestSupport.tempDir()
   private val pki = new TestPki(dir)
@@ -135,6 +135,9 @@ class HandshakeFailureClassifierSpec extends AnyFlatSpec with Matchers with Befo
     val appender = new ListAppender[ILoggingEvent]()
     appender.start()
     val logger = LoggerFactory.getLogger("com.chipprbots.ethereum.tls.TlsHandshake").asInstanceOf[LogbackLogger]
+    // the tests' root logger is at ERROR
+    val level = logger.getLevel
+    logger.setLevel(ch.qos.logback.classic.Level.WARN)
     logger.addAppender(appender)
     try
       val failureLog = new HandshakeFailureLog()
@@ -146,7 +149,9 @@ class HandshakeFailureClassifierSpec extends AnyFlatSpec with Matchers with Befo
       val lines = appender.list.asScala.toList.map(_.getFormattedMessage)
       lines should have size 1
       lines.head should startWith("TLS handshake refused on rpc-http from 127.0.0.1: no_client_cert")
-    finally logger.detachAppender(appender)
+    finally
+      logger.detachAppender(appender)
+      logger.setLevel(level)
   }
 
   "The classifier" should "read the trust manager's verdict through the handshake exception's causes" taggedAs (
@@ -187,7 +192,9 @@ class HandshakeFailureClassifierSpec extends AnyFlatSpec with Matchers with Befo
   ) in {
     var now = 0L
     val failureLog = new HandshakeFailureLog(60000L, () => now)
-    (1 to 1000).foreach(i => failureLog.record("rpc-http", s"10.0.${i / 256}.${i % 256}", HandshakeFailureReason.Other, ""))
+    (1 to 1000).foreach(i =>
+      failureLog.record("rpc-http", s"10.0.${i / 256}.${i % 256}", HandshakeFailureReason.Other, "")
+    )
     failureLog.tracked shouldBe 1000
     now += 3 * 60000L
     failureLog.record("rpc-http", "10.9.9.9", HandshakeFailureReason.Other, "")

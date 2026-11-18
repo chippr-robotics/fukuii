@@ -147,7 +147,7 @@ class JsonRpcWsServer(
     // cannot be built is a failed bind, never a plaintext listener (FR-012).
     tlsContext() match
       case Left(error) => Future.failed(new IllegalStateException(error.message))
-      case Right(tls)  =>
+      case Right(tls) =>
         connections = KillSwitches.shared("json-rpc-ws-connections")
         val server = Http(system).newServerAt(config.interface, config.port)
         val bindingF = tls match

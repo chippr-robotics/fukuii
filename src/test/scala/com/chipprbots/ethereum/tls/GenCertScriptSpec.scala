@@ -20,8 +20,8 @@ import org.scalatest.matchers.should.Matchers
 
 import com.chipprbots.ethereum.testing.Tags.*
 
-/** Spec 030 FR-062: `tls/gen-cert.sh ca|server|client` writes stores the node loads, and a client certificate it
-  * issues passes a listener with `client-auth = need`. Cancelled where openssl or keytool is not installed.
+/** Spec 030 FR-062: `tls/gen-cert.sh ca|server|client` writes stores the node loads, and a client certificate it issues
+  * passes a listener with `client-auth = need`. Cancelled where openssl or keytool is not installed.
   */
 class GenCertScriptSpec extends AnyFlatSpec with Matchers with BeforeAndAfterAll:
 
@@ -38,7 +38,8 @@ class GenCertScriptSpec extends AnyFlatSpec with Matchers with BeforeAndAfterAll
 
   private def run(args: String*): (Int, String) =
     val out = new StringBuilder
-    val code = (Seq("bash", script.toString) ++ args).!(ProcessLogger(l => out.append(l).append('\n'), l => out.append(l).append('\n')))
+    val code = (Seq("bash", script.toString) ++ args)
+      .!(ProcessLogger(l => out.append(l).append('\n'), l => out.append(l).append('\n')))
     (code, out.toString)
 
   private def password(file: Path): String = Files.readString(file, StandardCharsets.UTF_8).trim
@@ -60,7 +61,11 @@ class GenCertScriptSpec extends AnyFlatSpec with Matchers with BeforeAndAfterAll
     val trust = KeyStore.getInstance("pkcs12")
     trust.load(null, null)
     val certIn = Files.newInputStream(caCert)
-    try trust.setCertificateEntry("ca", java.security.cert.CertificateFactory.getInstance("X.509").generateCertificate(certIn))
+    try
+      trust.setCertificateEntry(
+        "ca",
+        java.security.cert.CertificateFactory.getInstance("X.509").generateCertificate(certIn)
+      )
     finally certIn.close()
     val tmf = TrustManagerFactory.getInstance(TrustManagerFactory.getDefaultAlgorithm)
     tmf.init(trust)

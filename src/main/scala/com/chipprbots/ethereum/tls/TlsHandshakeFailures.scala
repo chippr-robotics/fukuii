@@ -25,18 +25,18 @@ enum HandshakeFailureReason(val label: String):
   case Protocol extends HandshakeFailureReason("protocol")
   case Other extends HandshakeFailureReason("other")
 
-/** A client certificate the listener's trust manager refused, with the verdict already made: the handshake exception the
-  * JDK builds carries it as its cause, so the classifier reads the verdict rather than guessing from a message.
+/** A client certificate the listener's trust manager refused, with the verdict already made: the handshake exception
+  * the JDK builds carries it as its cause, so the classifier reads the verdict rather than guessing from a message.
   */
 final class ClientCertRefused(val reason: HandshakeFailureReason, cause: Throwable)
     extends CertificateException(s"client certificate refused (${reason.label}): ${cause.getMessage}", cause)
 
-/** The trust manager of a listener that asks for client certificates (`want`, `need`): the profile's own, verifying as it
-  * does, with each refusal tagged expired or untrusted (spec 030 FR-003, FR-017). A presented certificate is always
+/** The trust manager of a listener that asks for client certificates (`want`, `need`): the profile's own, verifying as
+  * it does, with each refusal tagged expired or untrusted (spec 030 FR-003, FR-017). A presented certificate is always
   * verified, under `want` as under `need`; this class only names the verdict.
   *
-  * A certificate that is out of its validity period is `expired_client_cert` whether or not its issuer is trusted:
-  * the operator's fix (issue a new one) is the same either way.
+  * A certificate that is out of its validity period is `expired_client_cert` whether or not its issuer is trusted: the
+  * operator's fix (issue a new one) is the same either way.
   */
 final class VerdictTrustManager(delegate: X509ExtendedTrustManager) extends X509ExtendedTrustManager:
 
@@ -47,8 +47,7 @@ final class VerdictTrustManager(delegate: X509ExtendedTrustManager) extends X509
         val outOfPeriod = chain != null && chain.nonEmpty && {
           try
             chain(0).checkValidity(); false
-          catch
-            case _: CertificateExpiredException | _: CertificateNotYetValidException => true
+          catch case _: CertificateExpiredException | _: CertificateNotYetValidException => true
         }
         throw new ClientCertRefused(
           if outOfPeriod then HandshakeFailureReason.ExpiredClientCert else HandshakeFailureReason.UntrustedClientCert,
@@ -86,13 +85,14 @@ object HandshakeFailureClassifier:
     "Received fatal alert: protocol_version",
     "Received fatal alert: handshake_failure",
     "Client requested protocol",
+    "not accepted by server preferences",
     "Unsupported protocol"
   )
 
   def classify(failure: Throwable): HandshakeFailureReason =
     refusal(failure) match
       case Some(reason) => reason
-      case None         =>
+      case None =>
         val messages = chain(failure).flatMap(t => Option(t.getMessage))
         if messages.exists(m => NoCertificate.exists(m.contains)) then HandshakeFailureReason.NoClientCert
         else if messages.exists(m => ProtocolTexts.exists(m.contains)) then HandshakeFailureReason.Protocol
@@ -105,10 +105,10 @@ object HandshakeFailureClassifier:
   private def chain(t: Throwable): List[Throwable] =
     @tailrec
     def go(todo: List[Throwable], seen: List[Throwable]): List[Throwable] = todo match
-      case Nil                                                  => seen.reverse
-      case _ if seen.size >= 16                                 => seen.reverse
+      case Nil                                                    => seen.reverse
+      case _ if seen.size >= 16                                   => seen.reverse
       case head :: rest if head == null || seen.exists(_ eq head) => go(rest, seen)
-      case head :: rest                                         =>
+      case head :: rest =>
         go(rest ++ Option(head.getCause).toList ++ head.getSuppressed.toList, head :: seen)
     go(List(t), Nil)
 
@@ -122,7 +122,7 @@ object HandshakeFailureClassifier:
   */
 final class HandshakeFailureLog(windowMillis: Long = 60000L, clock: () => Long = () => System.currentTimeMillis()):
 
-  private final case class Slot(loggedAt: Long, suppressed: Int)
+  final private case class Slot(loggedAt: Long, suppressed: Int)
   private val slots = new ConcurrentHashMap[String, Slot]()
   @volatile private var lastSweep = 0L
 

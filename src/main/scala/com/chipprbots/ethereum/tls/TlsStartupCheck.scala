@@ -55,7 +55,7 @@ object TlsStartupCheck:
       resolved: Option[ResolvedListener]
   ): Either[TlsConfigError, Option[Line]] =
     resolved match
-      case None           => Right(None)
+      case None => Right(None)
       case Some(listener) =>
         TlsMaterialLoader.load(listener.profile, listener.listener.clientAuth, listener.configPath).map { material =>
           Some(

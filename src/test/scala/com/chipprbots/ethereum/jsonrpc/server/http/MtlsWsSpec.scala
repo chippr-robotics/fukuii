@@ -108,7 +108,9 @@ class MtlsWsSpec extends AnyFlatSpec with Matchers with BeforeAndAfterAll:
 
       // notifications for the life of the connection, on the session the handshake established
       (1 to 3).foreach { n =>
-        registered.queue.offer(s"""{"jsonrpc":"2.0","method":"eth_subscription","params":{"subscription":"0x7","result":$n}}""")
+        registered.queue.offer(
+          s"""{"jsonrpc":"2.0","method":"eth_subscription","params":{"subscription":"0x7","result":$n}}"""
+        )
         next(received) \ "params" \ "result" shouldBe JInt(n)
       }
       outbound.complete()
