@@ -61,9 +61,7 @@ class RocksDbDataSourceSpec extends AnyFlatSpec with Matchers:
   private def withTempDir(test: String => Unit): Unit =
     val dbPath = Files.createTempDirectory("rocksdb-stats-test").toAbsolutePath.toString
     try test(dbPath)
-    finally
-      val dir = new File(dbPath)
-      !dir.exists() || dir.delete()
+    finally com.chipprbots.ethereum.testing.TempDirs.deleteRecursively(new File(dbPath).toPath) // B-305
 
   "RocksDbDataSource with statistics enabled" should "advance the block-cache tickers on SST-served reads" taggedAs (
     UnitTest,
@@ -505,4 +503,20 @@ class RocksDbDataSourceSpec extends AnyFlatSpec with Matchers:
     noException should be thrownBy Await.result(reading, 30.seconds)
     ds.properties() shouldBe None
     lockIsFree()
+  }
+
+  "RocksDbDataSource" should "set the WAL recovery mode explicitly to point-in-time (B-078)" taggedAs (
+    UnitTest,
+    DatabaseTest
+  ) in {
+    RocksDbDataSource.WalRecoveryMode shouldBe org.rocksdb.WALRecoveryMode.PointInTimeRecovery
+    val dbPath = Files.createTempDirectory("rocksdb-wal-mode-test").toAbsolutePath.toString
+    val ds = RocksDbDataSource(config(dbPath, statisticsEnabled = false), Namespaces.nsSeq)
+    try ds.walRecoveryMode() shouldBe org.rocksdb.WALRecoveryMode.PointInTimeRecovery
+    finally
+      ds.close()
+      def rm(f: File): Unit =
+        Option(f.listFiles()).foreach(_.foreach(rm))
+        val _ = f.delete()
+      rm(new File(dbPath))
   }
