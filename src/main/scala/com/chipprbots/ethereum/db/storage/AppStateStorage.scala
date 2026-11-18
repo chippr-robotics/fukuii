@@ -605,6 +605,14 @@ class AppStateStorage(val dataSource: DataSource) extends TransactionalKeyValueS
     if kept.isEmpty then remove(Keys.CheckpointImportRefused)
     else put(Keys.CheckpointImportRefused, kept.map(k => Hex.toHexString(k.toArray)).mkString(","))
 
+  /** The import that failed for a reason that is not its archive's content is not to be recorded as refused by the next
+    * start (B-384): the key keeps its root and its start, and loses the archive's id. Commit with `commitSync`.
+    */
+  def forgetCheckpointImportArchive(): DataSourceBatchUpdate =
+    getCheckpointImportInProgress() match
+      case Some(key) => put(Keys.CheckpointImportInProgress, key.split(':').take(2).mkString(":"))
+      case None      => update(Seq.empty, Seq.empty)
+
   /** The import's CRC checked: it goes in the batch that writes the import's done flags. */
   def endCheckpointImport(): DataSourceBatchUpdate =
     remove(Keys.CheckpointImportInProgress)

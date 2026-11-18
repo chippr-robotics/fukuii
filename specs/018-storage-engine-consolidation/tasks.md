@@ -778,6 +778,9 @@ the format at PR1, before it merges.**
   - Attempt an import only when the refused record does not name the archive, or the operator's explicit retry flag is
     set.
   - Name the AppState key and the flag here.
+  - **Amended (user decision, 2026-11-18, B-384):** record only content faults of the archive (data-model E.1 lists them).
+    Truncation, a CRC failure, an I/O or read error and an expected-hash mismatch clear the rows as before but are not
+    recorded, so a new download or a corrected config retries with no flag.
   - Lift the path-live refusal of `checkpoint-sync-file` and `checkpoint-sync-url` at `main/ConfigValidator.scala:~111`.
 - [x] T232 [P] Document the checkpoint section of `docs/` (find it with `grep -ril checkpoint docs/`). The full
   operator-doc rewrite is C8b. Cover:

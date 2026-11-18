@@ -4,6 +4,7 @@ import java.io.BufferedInputStream
 import java.io.BufferedOutputStream
 import java.io.ByteArrayOutputStream
 import java.io.EOFException
+import java.io.IOException
 import java.io.InputStream
 import java.io.OutputStream
 import java.util.zip.CRC32C
@@ -116,9 +117,15 @@ object CheckpointArchive:
 
   case object EndOfStream extends Entry
 
-  /** Why an archive is not of this format. Every one of them is the importer's `BadFormat`. */
+  /** Why an archive is not of this format. Every one of them is the importer's `BadFormat`.
+    *
+    * [[archivesFault]] tells a fault of the archive's content from one of the transport that brought it: only the first
+    * is recorded as a refused archive (spec 018 E.1, user decision of 2026-11-18, B-384). A cut-off file, a failed
+    * checksum or a failed read can be mended by downloading again, so they are retried on the next start.
+    */
   sealed trait DecodeError extends Product with Serializable:
     def describe: String = toString
+    def archivesFault: Boolean = true
   case object BadMagic extends DecodeError
   final case class UnsupportedVersion(found: Byte) extends DecodeError:
     override def describe: String =
@@ -127,8 +134,14 @@ object CheckpointArchive:
           "version 1 archives cannot be imported and must be exported again"
       else s"checkpoint archive format version ${found.toInt & 0xff} is not supported: this node reads format version 2"
     override def toString: String = s"UnsupportedVersion(${found.toInt & 0xff}): $describe"
-  case object BadCrc extends DecodeError
-  final case class Truncated(where: String) extends DecodeError
+  case object BadCrc extends DecodeError:
+    override def archivesFault: Boolean = false
+  final case class Truncated(where: String) extends DecodeError:
+    override def archivesFault: Boolean = false
+
+  /** The stream could not be read (an I/O error that is not its end, such as a corrupt gzip wrapper). */
+  final case class ReadFailed(reason: String) extends DecodeError:
+    override def archivesFault: Boolean = false
   final case class Malformed(reason: String) extends DecodeError
 
   /** Where a stream stands: each section may be followed only by itself (where it allows more) or a later one. */
@@ -343,7 +356,9 @@ object CheckpointArchive:
           bodiesLeft = BigInt(MaxWindowBodies).min(h.blockHeader.number.value + 1).toInt
         }
         result
-      catch case _: EOFException => Left(Truncated("header block"))
+      catch
+        case _: EOFException => Left(Truncated("header block"))
+        case e: IOException  => Left(ReadFailed(s"header block: ${e.getMessage}"))
       finally capture = None
 
     def nextEntry(): Either[DecodeError, Entry] =
@@ -388,7 +403,9 @@ object CheckpointArchive:
                     Right(CodeEntry(code))
                 }
               case _ => Right(EndOfStream)
-      catch case _: EOFException => Left(Truncated(s"$section section"))
+      catch
+        case _: EOFException => Left(Truncated(s"$section section"))
+        case e: IOException  => Left(ReadFailed(s"$section section: ${e.getMessage}"))
 
     private def payload(what: String, max: Int): Either[DecodeError, Array[Byte]] =
       val length = rInt()
@@ -400,10 +417,14 @@ object CheckpointArchive:
     def verifyCrc(): Either[DecodeError, Unit] =
       require(section == Section.Ended && windowLeft == 0, "must reach the end tag first")
       val expected = crc.getValue.toInt
-      val b0 = in.read(); val b1 = in.read(); val b2 = in.read(); val b3 = in.read()
-      if (b0 | b1 | b2 | b3) < 0 then Left(Truncated("crc trailer"))
-      else
-        val found = ((b0 & 0xff) << 24) | ((b1 & 0xff) << 16) | ((b2 & 0xff) << 8) | (b3 & 0xff)
-        if found != expected then Left(BadCrc)
-        else if in.read() >= 0 then Left(Malformed("bytes after the CRC trailer"))
-        else Right(())
+      try
+        val b0 = in.read(); val b1 = in.read(); val b2 = in.read(); val b3 = in.read()
+        if (b0 | b1 | b2 | b3) < 0 then Left(Truncated("crc trailer"))
+        else
+          val found = ((b0 & 0xff) << 24) | ((b1 & 0xff) << 16) | ((b2 & 0xff) << 8) | (b3 & 0xff)
+          if found != expected then Left(BadCrc)
+          else if in.read() >= 0 then Left(Malformed("bytes after the CRC trailer"))
+          else Right(())
+      catch
+        case _: EOFException => Left(Truncated("crc trailer"))
+        case e: IOException  => Left(ReadFailed(s"crc trailer: ${e.getMessage}"))

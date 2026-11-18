@@ -155,7 +155,8 @@ final class CheckpointImporter(
       case None     => Right(())
 
   private def isTheArchivesFault(err: ImportError): Boolean = err match
-    case _: BadFormat | _: HandoffRefused                                  => true
+    case BadFormat(r)                                                      => r.archivesFault
+    case _: HandoffRefused                                                 => true
     case _: NoExpectedBlockHash | _: AlreadyRefused | _: DatadirHoldsState => false
 
   /** Records the archive as refused, synced; once. */
@@ -432,7 +433,17 @@ final class CheckpointImporter(
         )
         // The record first: a kill between it and the clear leaves the import key, which names the archive, so the next
         // start records it again and clears. The other way round, the clear deletes the key and a kill loses the record.
-        recordRefused(archiveId)
+        // Only a content fault is recorded (B-384). A cut-off or unreadable stream, a failed checksum or an expected hash
+        // that is not the archive's can be mended by a new download or a corrected config, so they are retried: the key
+        // that names the archive is made nameless, or the next start would record it as a killed import.
+        if isTheArchivesFault(err) then recordRefused(archiveId)
+        else
+          appStateStorage.forgetCheckpointImportArchive().commitSync()
+          log.warn(
+            "[CHECKPOINT IMPORT] archive {} is not recorded as refused: the fault is not in its content, so the next " +
+              "start imports it again.",
+            hex(archiveId)
+          )
         unified match
           case Some(u) =>
             u.clearForImport(force = true)
@@ -801,15 +812,25 @@ object CheckpointImporter:
   sealed trait Refusal extends Product with Serializable:
     def describe: String = toString
 
+    /** Whether the refusal is a fault of the archive's content, and so recorded (spec 018 E.1, B-384): a bad node or
+      * code, a hash mismatch against a frame, an assertion, a code gap, a window, or the archive's own chain or
+      * difficulty. False for what a new download or a corrected config mends. Every refusal says so; none is matched by
+      * its text.
+      */
+    def archivesFault: Boolean = true
+
   /** The codec's refusal: the bytes are not format version 2. */
   final case class Decode(err: CheckpointArchive.DecodeError) extends Refusal:
     override def describe: String = err.describe
+    override def archivesFault: Boolean = err.archivesFault
   final case class WrongChainId(expected: BigInt, found: BigInt) extends Refusal
   final case class WrongGenesis(expected: ByteString, found: ByteString) extends Refusal:
     override def describe: String = s"WrongGenesis(expected ${hex(expected)}, found ${hex(found)})"
 
   /** The checkpoint block is not the one the operator or the chain config names. */
   final case class UnexpectedBlockHash(expected: ByteString, found: ByteString) extends Refusal:
+    // the operator's config may be the wrong one, not the archive
+    override def archivesFault: Boolean = false
     override def describe: String = s"UnexpectedBlockHash(expected ${hex(expected)}, found ${hex(found)})"
 
   /** A header (the checkpoint's or the window's) whose RLP is not `header.toBytes` byte for byte. */
