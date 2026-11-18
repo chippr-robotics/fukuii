@@ -2752,3 +2752,13 @@ items:
     links:
       spec: "016"
     notes: B-298 follow-up (forge). BlockImporter.resolvingFork falls back to blindRewindOnTheHashLayout, which rewinds without weighing any branch; goal 3 of B-298 covers only the resolver's discard.
+  - id: B-348
+    title: "RecentBlocksSearch zips our block n with the peer's header n (not n+1): the recent window never matches, every resolution binary-searches"
+    priority: P3
+    status: open
+    area: sync
+    opened: 2026-11-18
+    refs: []
+    links:
+      spec: "016"
+    notes: "B-298 finding (forge), flag-only. FastSyncBranchResolver.scala getHighestCommonBlock: isParentOf needs number+1. Correctness unaffected (the binary search finds the block); costs ~log2(head) requests."
