@@ -3208,11 +3208,16 @@ items:
   - id: B-383
     title: PowEscalationFeed counts a missing fork header as a MESS refusal; align it with BranchResolution's unjudged rule for this node's own block
     priority: P2
-    status: open
+    status: claimed
     area: sync
     opened: 2026-11-18
     refs: [T237]
     links:
       spec: specs/018-storage-engine-consolidation
       branch: test/b067-c6-reorg-olympia
+    claim:
+      by: cloud-dc960fdc
+      agent: forge-b383
+      since: 2026-11-18T22:51:10Z
+      heartbeat: 2026-11-18T22:51:10Z
     notes: The feed's messWouldRefuse getOrElse(true) keeps that out of the escalation count, a wait with no end. Count it when the parent is this node's canonical hash (forge).
