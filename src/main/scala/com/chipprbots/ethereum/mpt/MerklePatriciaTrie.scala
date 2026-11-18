@@ -301,6 +301,19 @@ class MerklePatriciaTrie[K, V] private (private[mpt] val rootNode: Option[MptNod
       .withCachedHash(nodeId)
       .withCachedRlpEncoded(nodeEncoded)
 
+  /** `write`, a storage update that names the nodes it replaces, with a missing or corrupt node it throws given where
+    * that node sits in this trie (B-075). The storage knows only the hash it was reading, and the importer's fetch of a
+    * replacement needs the position, as a failed read has it ([[pathTraverse]]). A node the update does not replace
+    * (one it upserts) is left as it was thrown.
+    */
+  private def located[A](replaced: Seq[(NibblePath, MptNode)])(write: => A): A =
+    try write
+    catch
+      case e: MissingNodeException if e.location.isEmpty =>
+        replaced.find { case (_, node) => java.util.Arrays.equals(node.hash, e.hash.toArray) } match
+          case Some((path, _)) => throw e.withLocation(ByteString(path.toHexPrefix))
+          case None            => throw e
+
   private def mkKeyNibbles(key: K): Array[Byte] = HexPrefix.bytesToNibbles(kSerializer.toBytes(key))
 
   /** This function inserts a (key-value) pair into the trie. If the key is already asociated with another value it is
@@ -320,7 +333,9 @@ class MerklePatriciaTrie[K, V] private (private[mpt] val rootNode: Option[MptNod
         val NodeInsertResult(newRoot, nodesToRemoveFromStorage) =
           put(root, keyNibbles, vSerializer.toBytes(value), NibblePath.Empty)
         val newRootNode =
-          nodeStorage.updateNodesAt(newRoot = Some(newRoot), replaced = nodesToRemoveFromStorage, absorbed = Nil)
+          located(nodesToRemoveFromStorage) {
+            nodeStorage.updateNodesAt(newRoot = Some(newRoot), replaced = nodesToRemoveFromStorage, absorbed = Nil)
+          }
         new MerklePatriciaTrie(newRootNode, nodeStorage)(using kSerializer, vSerializer)
       }
       .getOrElse {
@@ -345,10 +360,14 @@ class MerklePatriciaTrie[K, V] private (private[mpt] val rootNode: Option[MptNod
         remove(root, keyNibbles, NibblePath.Empty) match
           case NodeRemoveResult(true, Some(newRoot), nodesToRemoveFromStorage, absorbed) =>
             val newRootNode =
-              nodeStorage.updateNodesAt(newRoot = Some(newRoot), replaced = nodesToRemoveFromStorage, absorbed)
+              located(nodesToRemoveFromStorage) {
+                nodeStorage.updateNodesAt(newRoot = Some(newRoot), replaced = nodesToRemoveFromStorage, absorbed)
+              }
             new MerklePatriciaTrie(newRootNode, nodeStorage)(using kSerializer, vSerializer)
           case NodeRemoveResult(true, None, nodesToRemoveFromStorage, absorbed) =>
-            nodeStorage.updateNodesAt(newRoot = None, replaced = nodesToRemoveFromStorage, absorbed)
+            located(nodesToRemoveFromStorage) {
+              nodeStorage.updateNodesAt(newRoot = None, replaced = nodesToRemoveFromStorage, absorbed)
+            }
             new MerklePatriciaTrie(None, nodeStorage)(using kSerializer, vSerializer)
           case NodeRemoveResult(false, _, _, _) => this
       }

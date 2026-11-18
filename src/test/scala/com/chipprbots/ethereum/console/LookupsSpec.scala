@@ -196,7 +196,12 @@ class LookupsSpec extends AnyFlatSpec with Matchers with OptionValues with Event
       lookups.submit(LookupQuery.Tx("0x0b"))
       eventually(reads.get shouldBe 3)
       (1 to 5).foreach(n => lookups.submit(LookupQuery.BlockByNumber(n.toLong)))
-      eventually(lookups.results.count(_._2.isInstanceOf[LookupState.Done]) shouldBe 3)
-      lookups.results.map(_._1) shouldBe (3 to 5).map(n => LookupQuery.BlockByNumber(n.toLong))
+      // Waited for as one state: "three are done" is also true part-way (blocks 2 to 4 done, 5 still queued), and
+      // a loaded machine shows that state to the check (B-374).
+      eventually {
+        val now = lookups.results
+        now.map(_._1) shouldBe (3 to 5).map(n => LookupQuery.BlockByNumber(n.toLong))
+        all(now.map(_._2)) shouldBe a[LookupState.Done]
+      }
     finally lookups.shutdown()
   }

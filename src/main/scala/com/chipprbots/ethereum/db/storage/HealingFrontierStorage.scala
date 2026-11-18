@@ -42,8 +42,9 @@ class HealingFrontierStorage(val dataSource: DataSource)
   /** Empty the column family with one range tombstone (spec 022 D6): frontier entries, the completeness sentinel and
     * the spec 005 subtree-complete records all sort inside the range, and writing it is O(1) whatever the family holds.
     * The space comes back only when something later compacts `g`, and with no more writes nothing is going to soon. It
-    * is not compacted here on purpose: `compactRange` holds the data source's read lock for the whole native call, so
-    * the first writer to queue behind it would stop every read too (spec 022 review vault F1).
+    * is not compacted here on purpose: it rewrites the family's files, and nothing needs the space soon.
+    * (`compactRange` no longer holds the database lock for its native call, B-281, so a writer would not queue behind
+    * it now; whether to call it is a question of I/O, not of locking.)
     */
   def clearAll(): Unit =
     dataSource.deleteRange(namespace, HealingFrontierStorage.LowestKey, HealingFrontierStorage.AboveHighestKey)

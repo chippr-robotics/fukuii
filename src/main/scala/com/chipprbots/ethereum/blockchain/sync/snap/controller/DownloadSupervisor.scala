@@ -704,7 +704,7 @@ private[snap] trait DownloadSupervisor extends AccountRangeStartApi with ByteCod
         .putSnapSyncStorageFilePath(info.filePath.toString)
         .and(stateIngest.appState.putSnapSyncStorageFileCount(Some(info.count)))
         .and(stateIngest.appState.removeSnapAccountResumeCheckpoint())
-        .commit()
+        .commitSync() // B-077: the coordinator fsynced the file before sending this; the pointer is durable too
       ctx.log.info(s"Persisted storage file path for recovery: ${info.filePath} (${info.count} entries)")
       Behaviors.same
 
@@ -720,7 +720,7 @@ private[snap] trait DownloadSupervisor extends AccountRangeStartApi with ByteCod
       stateIngest.appState
         .putSnapSyncCodeHashesPath(info.filePath.toString)
         .and(stateIngest.appState.putSnapSyncCodeHashesCount(Some(info.count)))
-        .commit()
+        .commitSync() // B-077: after the file's fsync, see above
       ctx.log.info(s"Persisted codeHashes file path for recovery: ${info.filePath} (${info.count} entries)")
       Behaviors.same
 

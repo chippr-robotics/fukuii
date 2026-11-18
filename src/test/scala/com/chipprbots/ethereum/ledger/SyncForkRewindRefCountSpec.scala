@@ -1,13 +1,12 @@
 package com.chipprbots.ethereum.ledger
 
-import java.nio.file.Files
-
 import org.apache.pekko.util.ByteString
 
 import cats.data.NonEmptyList
 
 import scala.collection.mutable
 
+import org.scalatest.BeforeAndAfterAll
 import org.scalatest.flatspec.AnyFlatSpec
 import org.scalatest.matchers.should.Matchers
 
@@ -32,6 +31,7 @@ import com.chipprbots.ethereum.mpt.*
 import com.chipprbots.ethereum.mpt.MerklePatriciaTrie.MissingNodeException
 import com.chipprbots.ethereum.nodebuilder.PruningConfigBuilder
 import com.chipprbots.ethereum.testing.Tags.*
+import com.chipprbots.ethereum.testing.TempDirs
 import com.chipprbots.ethereum.utils.BlockchainConfig
 
 /** The SYNC-FORK rewind (`BlockImporter.handleForkRecovery` -> `setCanonicalChainHead`) against a REAL RocksDB with
@@ -42,7 +42,14 @@ import com.chipprbots.ethereum.utils.BlockchainConfig
   * pruned `history` blocks later, and the replacement branch (which still uses it) reads a MissingNode. The rewind now
   * undoes those blocks through the `ReorgStateHandler`; the NoOp control pins that the bug is real in this setup.
   */
-class SyncForkRewindRefCountSpec extends AnyFlatSpec with Matchers:
+class SyncForkRewindRefCountSpec extends AnyFlatSpec with Matchers with BeforeAndAfterAll:
+
+  // B-305: each test's RocksDB directory is closed and deleted once the suite is done (75 MB each)
+  private val tempDirs = new TempDirs
+  override protected def afterAll(): Unit = tempDirs.deleteAll()
+  private def tracked(ds: RocksDbDataSource): RocksDbDataSource =
+    tempDirs.closeBeforeDelete(() => ds.close())
+    ds
 
   private val history = 2
   private val keyCount = 40
@@ -51,20 +58,22 @@ class SyncForkRewindRefCountSpec extends AnyFlatSpec with Matchers:
   private def value(tag: String): ByteString = ByteString(s"$tag-padding-to-force-a-hashed-leaf-node-xxxxxxxx")
 
   trait RocksDataSourceComponent extends DataSourceComponent:
-    private val dbPath: String = Files.createTempDirectory("sync-fork-rewind-rocksdb").toAbsolutePath.toString
-    override lazy val dataSource: RocksDbDataSource = RocksDbDataSource(
-      new RocksDbConfig:
-        override val createIfMissing: Boolean = true
-        override val paranoidChecks: Boolean = true
-        override val path: String = dbPath
-        override val maxThreads: Int = 1
-        override val maxOpenFiles: Int = 32
-        override val verifyChecksums: Boolean = true
-        override val levelCompaction: Boolean = true
-        override val blockSize: Long = 16384
-        override val blockCacheSize: Long = 33554432
-      ,
-      Namespaces.nsSeq
+    private val dbPath: String = tempDirs.create("sync-fork-rewind-rocksdb").toAbsolutePath.toString
+    override lazy val dataSource: RocksDbDataSource = tracked(
+      RocksDbDataSource(
+        new RocksDbConfig:
+          override val createIfMissing: Boolean = true
+          override val paranoidChecks: Boolean = true
+          override val path: String = dbPath
+          override val maxThreads: Int = 1
+          override val maxOpenFiles: Int = 32
+          override val verifyChecksums: Boolean = true
+          override val levelCompaction: Boolean = true
+          override val blockSize: Long = 16384
+          override val blockCacheSize: Long = 33554432
+        ,
+        Namespaces.nsSeq
+      )
     )
 
   class Setup extends EphemBlockchainTestSetup:

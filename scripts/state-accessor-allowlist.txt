@@ -28,7 +28,7 @@ node-by-hash 1 src/main/scala/com/chipprbots/ethereum/db/storage/StateStorage.sc
 get-by-hash 1 src/main/scala/com/chipprbots/ethereum/db/storage/StateStorage.scala getNode's read of the buffer over the store; it goes with getNode (C3c, T116)
 store-built 14 src/main/scala/com/chipprbots/ethereum/db/storage/StateStorage.scala the hash stores themselves, in each pruning mode; deleted with the Hash scheme (C8b). The ephemeral form for list tries is kept (T280)
 multi-get 2 src/main/scala/com/chipprbots/ethereum/db/storage/MptStorage.scala the definition and the hash store's batch; the member goes with the Hash scheme (C8b)
-raw-nodes 4 src/main/scala/com/chipprbots/ethereum/db/storage/MptStorage.scala the definitions of rawNodes and rawNodesAt, and the hash store's batch
+raw-nodes 5 src/main/scala/com/chipprbots/ethereum/db/storage/MptStorage.scala the definitions of rawNodes and rawNodesAt, the hash store's batch, and holdsNode, the presence read of the by-hash callers (B-034; goes with the Hash scheme, C8b)
 get-by-hash 1 src/main/scala/com/chipprbots/ethereum/db/storage/MptStorage.scala not a trie read: the hash store reading its own key-value store, named `storage`
 store-built 1 src/main/scala/com/chipprbots/ethereum/db/storage/MptStorage.scala the definition of SerializingMptStorage
 multi-get 2 src/main/scala/com/chipprbots/ethereum/db/storage/MptStorageDecorator.scala the decorator forwards the batch to what it wraps (kept while the member is)
@@ -119,7 +119,6 @@ readonly 2 src/main/scala/com/chipprbots/ethereum/blockchain/data/GenesisDataLoa
 backing 1 src/main/scala/com/chipprbots/ethereum/blockchain/sync/snap/controller/StateIngest.scala WRITER: the store SNAP ingest and healing write the pivot's state to; the hand-off without a copy, C5a
 backing 1 src/main/scala/com/chipprbots/ethereum/blockchain/sync/SyncController.scala asks whether a root is readable, to choose what a recovery scans; C5a
 readonly 1 src/main/scala/com/chipprbots/ethereum/blockchain/sync/SyncController.scala a log-only check that the SNAP root is in the store; C5a
-get-by-hash 1 src/main/scala/com/chipprbots/ethereum/blockchain/sync/SyncController.scala that check's read of the root by hash; C5a
 readonly 1 src/main/scala/com/chipprbots/ethereum/blockchain/sync/BackgroundAudit.scala WRITER: the audit walks the hash store, and repairs it; the anchor's tries by position in C5b (T217)
 raw-nodes 1 src/main/scala/com/chipprbots/ethereum/blockchain/sync/BackgroundAudit.scala the audit's batch read by hash; rows by position in C5b (T217)
 raw-store 2 src/main/scala/com/chipprbots/ethereum/blockchain/sync/BackgroundAudit.scala WRITER: the audit repairs a node, and deletes a bad one, by hash; repairNodeAt and deleteBadNodeAt in C5b (T216, T217)
@@ -131,7 +130,6 @@ raw-store 1 src/main/scala/com/chipprbots/ethereum/blockchain/checkpoint/Checkpo
 # The copy from the position store to the hash store, and SNAP's Hash arm: deleted in C8a.
 bulk-load 1 src/main/scala/com/chipprbots/ethereum/blockchain/sync/snap/controller/SnapFinalization.scala WRITER: the target of the publish from the position store to the hash store; deleted in C8a (T273)
 trie-of 3 src/main/scala/com/chipprbots/ethereum/blockchain/sync/snap/PathToHashExporter.scala the publish samples the hash store it wrote; deleted in C8a (T273)
-get-by-hash 2 src/main/scala/com/chipprbots/ethereum/blockchain/sync/snap/PathToHashExporter.scala the publish checks the roots it wrote, by hash; deleted in C8a (T273)
 get-by-hash 1 src/main/scala/com/chipprbots/ethereum/blockchain/sync/snap/controller/FinalizationPolicy.scala whether the hash store holds the pivot's root, asked for the publish; deleted in C8a (T273)
 raw-store 2 src/main/scala/com/chipprbots/ethereum/blockchain/sync/snap/PathToHashExporter.scala WRITER: the publish writes the hash store in batches; deleted in C8a (T273)
 snap-store 2 src/main/scala/com/chipprbots/ethereum/blockchain/sync/snap/controller/SnapFinalization.scala asks the pivot's hash store for the root, before the publish and after it; deleted in C8a (T273)
@@ -149,7 +147,6 @@ raw-store 1 src/main/scala/com/chipprbots/ethereum/blockchain/sync/snap/actors/s
 raw-store 2 src/main/scala/com/chipprbots/ethereum/blockchain/sync/snap/actors/healing/FrontierPersistence.scala WRITER: healing flushes its buffer of healed nodes to the pivot's store by hash; SNAP's writes by hash end with the hand-off (C5a) and the Hash arm (C8a, T275)
 raw-store 1 src/main/scala/com/chipprbots/ethereum/blockchain/sync/snap/actors/TrieNodeHealingCoordinator.scala WRITER: healing deletes a bad node from the hash store, by hash; C8a (T275)
 get-by-hash 1 src/main/scala/com/chipprbots/ethereum/blockchain/sync/snap/actors/TrieNodeHealingCoordinator.scala SNAP's read of the hash store under StorageScheme.Hash; that arm is deleted in C8a (T275)
-get-by-hash 1 src/main/scala/com/chipprbots/ethereum/blockchain/sync/snap/actors/healing/HealResponseProcessing.scala SNAP's read of the hash store under StorageScheme.Hash; that arm is deleted in C8a (T275)
 raw-nodes 1 src/main/scala/com/chipprbots/ethereum/blockchain/sync/snap/actors/healing/HealResponseProcessing.scala SNAP's read of the hash store under StorageScheme.Hash; that arm is deleted in C8a (T275)
 raw-nodes 1 src/main/scala/com/chipprbots/ethereum/blockchain/sync/snap/actors/healing/FrontierRebuildBfs.scala SNAP's read of the hash store under StorageScheme.Hash; that arm is deleted in C8a (T275)
 raw-nodes 1 src/main/scala/com/chipprbots/ethereum/blockchain/sync/snap/actors/account/ContractWorkCarry.scala SNAP's read of the hash store under StorageScheme.Hash; that arm is deleted in C8a (T275)
