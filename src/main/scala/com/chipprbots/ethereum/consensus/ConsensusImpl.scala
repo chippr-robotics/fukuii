@@ -64,7 +64,10 @@ class ConsensusImpl(
     // The fork choice's recovery, for the consensus layer's branch that is not adopted here (spec 018 C5a, B-297). In
     // production a LateBound holder, bound only on a post-merge chain with the Engine API on and the unified layout:
     // unbound (every ETC network, the hash layout, and the `None` of tests) such a branch is answered as before.
-    branchHandOff: Option[BranchHandOff] = None
+    branchHandOff: Option[BranchHandOff] = None,
+    // How many of the blocks a reorganisation moved the head off are told, the nearest the old head (B-296): queued
+    // again and handed to the pool. A shallower reorganisation tells them all.
+    oldBranchToldAtMost: Int = ConsensusImpl.OldBranchToldAtMost
 ) extends Consensus
     with Logger:
 
@@ -507,11 +510,12 @@ class ConsensusImpl(
             refusedForThisHead(newBranch.toList, permanent, bestBlockHash)
           case _ => notJudged(refused)
       case None =>
+        // the old chain above the fork by number and hash only: its blocks are read when the head has left it, and
+        // only those that are told (B-296)
         val oldCanonical: List[(BigInt, BlockHash)] =
           ((fork.number + 1) to bestBlockNumber).toList.flatMap(n =>
             blockchainReader.getCanonicalHashByNumber(n).map(n -> _)
           )
-        val oldBlocksData = collectOldBranch(oldCanonical)
         // A block the branch stands on that failed when it was executed again: refused at once, and not queued again
         // (below).
         val diverged = fork.parentSideChain.collectFirst {
@@ -543,19 +547,38 @@ class ConsensusImpl(
                 // under its pin, as core-geth executes a side chain's ancestors again when their state is gone (T180,
                 // T187). From the lowest one whose state is not held up: what stands on it is not held either. Looked for
                 // under the pin, so that nothing found held is evicted before it is used (forge).
-                val sideParents: Either[StateFault, List[Block]] =
-                  fork.parentSideChain.foldRight[Either[StateFault, List[Block]]](Right(Nil)) {
+                // Each is checked stored whole, as before, and only its header is kept: the bodies of those whose state
+                // is held are not needed, and a side chain can be thousands of blocks long (B-296).
+                val sideParents: Either[StateFault, List[BlockHeader]] =
+                  fork.parentSideChain.foldRight[Either[StateFault, List[BlockHeader]]](Right(Nil)) {
                     case ((number, hash), above) =>
-                      above.flatMap(blocks =>
+                      above.flatMap(headers =>
                         blockchainReader
                           .getBlockByHash(hash)
+                          .map(_.header)
                           .toRight(
                             new StateUnavailable(s"block $number, which the branch stands on, is not stored whole")
                           )
-                          .map(_ :: blocks)
+                          .map(_ :: headers)
                       )
                   }
-                val lost = sideParents.map(_.dropWhile(parent => blockchainWriter.stateHeldInPlaceOf(parent.header)))
+                val lost: Either[StateFault, List[Block]] =
+                  sideParents.flatMap(headers =>
+                    headers
+                      .dropWhile(blockchainWriter.stateHeldInPlaceOf)
+                      .foldRight[Either[StateFault, List[Block]]](Right(Nil)) { (header, above) =>
+                        above.flatMap(blocks =>
+                          blockchainReader
+                            .getBlockByHash(header.hash)
+                            .toRight(
+                              new StateUnavailable(
+                                s"block ${header.number}, which the branch stands on, is not stored whole"
+                              )
+                            )
+                            .map(_ :: blocks)
+                        )
+                      }
+                  )
                 // what the cap is met with: the blocks already kept under the pin, and those still to run (C4e part 3)
                 def atTheCap(why: StateFault, pinned: List[BlockData], remaining: List[Block]): ConsensusResult =
                   forkHeader match
@@ -569,7 +592,7 @@ class ConsensusImpl(
                         forkBlock,
                         bestBlockNumber,
                         bestBlockWeight,
-                        oldBlocksData,
+                        oldCanonical,
                         accessLists,
                         notJudged
                       )
@@ -650,7 +673,7 @@ class ConsensusImpl(
                             Left(
                               atTheCap(
                                 tooLarge,
-                                parents.executed,
+                                parents.executed.map(_.copy(receipts = Nil)),
                                 lostParents.drop(parents.executed.size) ++ newBranch.toList
                               )
                             )
@@ -666,7 +689,9 @@ class ConsensusImpl(
                                 refusedForThisHead(newBranch.toList, divergence, bestBlockHash)
                               case other => other
                             )
-                          case (None, None) => Right(parents.executed)
+                          // their receipts are not held while the branch runs: what is told of them is their blocks and
+                          // weights (`sideParentsTold`, `commitInPlaceAtTheCap`; B-296)
+                          case (None, None) => Right(parents.executed.map(_.copy(receipts = Nil)))
                 val parentsRun: Either[ConsensusResult, List[BlockData]] = notHeldUnder match
                   case Some((on, why)) if forkHeader.exists(_.hash == on.hash) =>
                     Left(atTheCap(why, Nil, lost.toOption.toList.flatten ++ newBranch.toList))
@@ -693,7 +718,7 @@ class ConsensusImpl(
                           bestBlockWeight,
                           bestBlockHash,
                           fork,
-                          oldBlocksData,
+                          oldCanonical,
                           sideParentsTold(fork, parentsKept),
                           selectedByWeight,
                           notJudged
@@ -760,7 +785,7 @@ class ConsensusImpl(
       forkBlock: BlockHeader,
       bestBlockNumber: BigInt,
       bestBlockWeight: ChainWeight,
-      oldBlocksData: List[BlockData],
+      oldCanonical: List[(BigInt, BlockHash)],
       accessLists: Map[ByteString, BlockAccessList],
       notJudged: StateFault => ConsensusResult
   )(implicit blockchainConfig: BlockchainConfig): ConsensusResult =
@@ -814,7 +839,7 @@ class ConsensusImpl(
                 s"${blockchainReader.getBestBlockNumber}, on the branch [${newBranch.head.number}-${newBranch.last.number}]"
             ),
             committedOfTheBranch,
-            oldBlocksData.map(_.block) ++ newBranch.toList.filterNot(block => run(block.header.hash))
+            oldBranchTold(oldCanonical) ++ newBranch.toList.filterNot(block => run(block.header.hash))
           )
         try
           blockchainWriter.withRecordsHeldAbove(forkBlock) {
@@ -851,7 +876,7 @@ class ConsensusImpl(
                   )
                   reorganised(
                     newBranch,
-                    oldBlocksData,
+                    oldCanonical,
                     ofTheBranch,
                     committed.error,
                     sideParentsTold(fork, all),
@@ -920,7 +945,8 @@ class ConsensusImpl(
           for
             block <- blockchainReader.getBlockByHash(hash)
             weight <- blockchainReader.getChainWeightByHash(hash)
-          yield BlockData(block, blockchainReader.getReceiptsByHash(hash).getOrElse(Nil), weight)
+          // no receipts: what is told of the new branch is its blocks and weights (B-296)
+          yield BlockData(block, Nil, weight)
         )
       // not met after a move that went through it: what is told then has a gap, said here (forge)
       if told.isEmpty then
@@ -989,7 +1015,7 @@ class ConsensusImpl(
       bestBlockWeight: ChainWeight,
       bestBlockHash: BlockHash,
       fork: ForkPoint,
-      oldBlocksData: List[BlockData],
+      oldCanonical: List[(BigInt, BlockHash)],
       sideParents: List[BlockData],
       selectedByWeight: Boolean,
       notJudged: StateFault => ConsensusResult
@@ -1087,7 +1113,7 @@ class ConsensusImpl(
                   executed.size,
                   moved
                 )
-                reorganised(newBranch, oldBlocksData, executed, outcome.error, sideParents, adopted = true)
+                reorganised(newBranch, oldCanonical, executed, outcome.error, sideParents, adopted = true)
           case Some(tip) =>
             log.warn(
               "REORG-PARTIAL: executed blocks {}-{} {} the current head {}: it is kept, and their state stays beside it",
@@ -1124,7 +1150,6 @@ class ConsensusImpl(
       ((fork.number + 1) to bestBlockNumber).toList.flatMap(n =>
         blockchainReader.getCanonicalHashByNumber(n).map(n -> _)
       )
-    val oldBlocksData = collectOldBranch(oldCanonical)
 
     // Execute new branch against the unchanged parent canonical state
     val outcome = executeBranch(newBranch.toList, parentWeight, adoptEachBlock = false, accessLists)
@@ -1155,9 +1180,12 @@ class ConsensusImpl(
             executedBlocks.length
           )
         ConsensusStateFault(fault, Nil, newBranch.toList.drop(executedBlocks.length))
-      case None => reorganised(newBranch, oldBlocksData, executedBlocks, maybeError, adopted = adopted)
+      case None => reorganised(newBranch, oldCanonical, executedBlocks, maybeError, adopted = adopted)
 
-  /** @param sideParents
+  /** @param oldCanonical
+    *   the old chain above the fork, by number and hash, as the index held it before the branch was executed: its
+    *   blocks are read here, and only when the head has left it ([[oldBranchTold]])
+    * @param sideParents
     *   the blocks the branch stands on that became canonical with it (on the unified layout; B-297), oldest first: told
     *   as of the new branch, ahead of it, when the whole branch was adopted
     * @param adopted
@@ -1166,7 +1194,7 @@ class ConsensusImpl(
     */
   private def reorganised(
       newBranch: NonEmptyList[Block],
-      oldBlocksData: List[BlockData],
+      oldCanonical: List[(BigInt, BlockHash)],
       executedBlocks: List[BlockData],
       maybeError: Option[BlockExecutionError],
       sideParents: List[BlockData] = Nil,
@@ -1175,7 +1203,7 @@ class ConsensusImpl(
     maybeError match
       case None =>
         val told = sideParents ++ executedBlocks
-        SelectedNewBestBranch(oldBlocksData.map(_.block), told.map(_.block), told.map(_.weight))
+        SelectedNewBestBranch(oldBranchTold(oldCanonical), told.map(_.block), told.map(_.weight))
 
       case Some(MPTError(reason: MissingNodeException)) =>
         log.error(
@@ -1209,7 +1237,7 @@ class ConsensusImpl(
         // the failing block is not dropped as an invalid one would be.
         if adopted && told.nonEmpty && !Consensus.isLocalStateFault(failure) then
           SelectedNewBestBranchPartially(
-            oldBlocksData.map(_.block),
+            oldBranchTold(oldCanonical),
             told.map(_.block),
             told.map(_.weight),
             BranchExecutionFailure(Nil, failingBlock.hash.value, failure)
@@ -1387,19 +1415,42 @@ class ConsensusImpl(
             ForkPoint(number, sideChain)
     go(parentHash, parentNumber, Nil)
 
-  /** The blocks leaving the canonical chain, in ascending order, from the index entries captured above the fork point.
-    * Bounded by the reorganisation depth. Read-only; used solely to populate SelectedNewBestBranch.
+  /** The blocks that left the canonical chain and are told (queued again, and their transactions handed back to the
+    * pool), in ascending order, from the index entries captured above the fork point. Read-only; read only once the
+    * head has left them, and used solely to populate the old branch of [[Consensus.SelectedNewBestBranch]] and its
+    * partial form, and the blocks queued again when the head is left on the branch.
+    *
+    * '''Bounded''' (B-296): at most the `oldBranchToldAtMost` nearest the old head, so that a reorganisation thousands
+    * of blocks deep reads and holds that many, not the whole old chain. Of a deeper old chain, the blocks below are not
+    * queued again (the block queue drops blocks further than `max-queued-block-number-behind` from the head anyway) and
+    * their transactions are not handed back to the pool (go-ethereum's pool skips its re-injection altogether when the
+    * old and the new head are more than 64 blocks apart: `reset`, "Skipping deep transaction reorg"). They stay stored
+    * by hash. Which head is chosen, and what is executed, is not touched by this.
+    *
+    * A block is told when its body, its receipts and its weight are stored, as it always was; the receipts are not read
+    * (nothing reads an old block's receipts), only their presence is checked.
     *
     * It used to walk the index down from the best block until it met the branch parent, and stopped only at genesis
     * when it never did — i.e. whenever the parent was not the canonical block at its height.
     */
-  private def collectOldBranch(oldCanonical: List[(BigInt, BlockHash)]): List[BlockData] =
-    oldCanonical.flatMap { case (_, hash) =>
+  private def oldBranchTold(oldCanonical: List[(BigInt, BlockHash)]): List[Block] =
+    val told = oldCanonical.takeRight(oldBranchToldAtMost)
+    if told.size < oldCanonical.size then
+      log.warn(
+        "REORG: {} block(s) left the canonical chain, {} to {}; the {} nearest the old head are queued again and " +
+          "their transactions handed back to the pool, the {} below are not",
+        oldCanonical.size,
+        oldCanonical.head._1,
+        oldCanonical.last._1,
+        told.size,
+        oldCanonical.size - told.size
+      )
+    told.flatMap { case (_, hash) =>
       for
         block <- blockchainReader.getBlockByHash(hash)
-        receipts <- blockchainReader.getReceiptsByHash(hash)
-        weight <- blockchainReader.getChainWeightByHash(hash)
-      yield BlockData(block, receipts, weight)
+        if blockchainReader.hasReceipts(hash)
+        _ <- blockchainReader.getChainWeightByHash(hash)
+      yield block
     }
 
 object ConsensusImpl:
@@ -1421,3 +1472,9 @@ object ConsensusImpl:
 
   /** How many refused blocks are remembered, at most. */
   private val RefusedRemembered: Int = 8192
+
+  /** How many of the blocks a reorganisation moved the head off are told, at most (B-296): the default of
+    * `max-queued-block-number-behind`, past which the block queue would not keep them when the new head is at the old
+    * one's height.
+    */
+  val OldBranchToldAtMost: Int = 1000

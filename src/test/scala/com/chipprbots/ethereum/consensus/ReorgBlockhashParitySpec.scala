@@ -5,6 +5,8 @@ import org.apache.pekko.util.ByteString
 import cats.data.NonEmptyList
 import cats.effect.unsafe.IORuntime
 
+import scala.jdk.CollectionConverters.*
+
 import org.bouncycastle.crypto.AsymmetricCipherKeyPair
 import org.bouncycastle.util.encoders.Hex
 import org.scalatest.concurrent.ScalaFutures
@@ -183,7 +185,8 @@ class ReorgBlockhashParitySpec extends AnyFlatSpec with Matchers with ScalaFutur
       node.importAll(oldChain) shouldBe a[BlockImportedToTop]
       node.importAll(side) match
         case ChainReorganised(oldBranch, newBranch, _) =>
-          oldBranch.map(_.hash) shouldBe oldChain.drop(20).map(_.hash)
+          // the 4,000 blocks the head left, of which the 1,000 nearest the old head are told (B-296)
+          oldBranch.map(_.hash) shouldBe oldChain.drop(20).takeRight(ConsensusImpl.OldBranchToldAtMost).map(_.hash)
           newBranch.map(_.hash) shouldBe side.map(_.hash)
         case other => fail(s"expected ChainReorganised, got $other")
       node.bestHash shouldBe side.last.hash
@@ -194,6 +197,83 @@ class ReorgBlockhashParitySpec extends AnyFlatSpec with Matchers with ScalaFutur
       val next: Block = oracle.extendSide(side.last, 1, difficulty = 1000, tag = 0x72).head
       node.importOne(next) shouldBe a[BlockImportedToTop]
       node.bestHash shouldBe next.hash
+    )
+
+  // B-296: what a reorganisation reads and holds of the chain it moves the head off. Counted on the reader the
+  // consensus reads through (not on the heap): the blocks of the old chain read whole, and their receipts.
+  // On the unified layout the deep one is an archive's, whose records reach the fork (as above).
+  for (layout, guard, deep) <- Seq[(String, Boolean, StateConfig => StateConfig)](
+      ("the hash layout", false, identity),
+      ("the unified layout", true, archiveOfShortViews)
+    )
+  do
+    (s"A reorganisation thousands of blocks deep ($layout)" should
+      "read only the blocks of the old chain it tells, the nearest the old head, and none of their receipts").taggedAs(
+      UnitTest,
+      ConsensusTest
+    ) in (new CountingFixture(guard, cap = deep):
+      // Canonical h1..h1520; the side chain leaves it after h20 with 1,501 blocks of the same difficulty: heavier.
+      val oldChain: List[Block] = oracle.extendCanonical(oracle.genesis, 1520, difficulty = 1000)
+      val side: List[Block] = oracle.extendSide(oldChain(19), 1501, difficulty = 1000, tag = 0x81)
+      node.importAll(oldChain) shouldBe a[BlockImportedToTop]
+      val left: List[Block] = oldChain.drop(20)
+      left.size shouldBe 1500
+      val leftHashes: Set[BlockHash] = left.map(_.hash).toSet
+
+      counting.reset()
+      evaluate(consensus, side) match
+        case SelectedNewBestBranch(oldBranch, newBranch, weights) =>
+          oldBranch.map(_.hash) shouldBe left.takeRight(ConsensusImpl.OldBranchToldAtMost).map(_.hash)
+          newBranch.map(_.hash) shouldBe side.map(_.hash)
+          weights shouldBe side.map(block => node.blockchainReader.getChainWeightByHash(block.hash).get)
+        case other => fail(s"expected SelectedNewBestBranch, got $other")
+      node.bestHash shouldBe side.last.hash
+
+      // What was read whole of the old chain: the blocks told, each once, and the old head once more, when the branch
+      // was weighed against it. Before B-296 it was all 1,500 of them, with their receipts.
+      val bodiesOfTheOldChain: List[BlockHash] = counting.blocksRead.filter(leftHashes)
+      bodiesOfTheOldChain.toSet shouldBe left.takeRight(ConsensusImpl.OldBranchToldAtMost).map(_.hash).toSet
+      bodiesOfTheOldChain.size should be <= ConsensusImpl.OldBranchToldAtMost + 1
+      counting.receiptsRead.filter(leftHashes) shouldBe empty
+    )
+
+    (s"A shallow reorganisation ($layout)" should
+      "tell every block the head left, the new branch and its weights, as it always did").taggedAs(
+      UnitTest,
+      ConsensusTest
+    ) in (new CountingFixture(guard):
+      val oldChain: List[Block] = oracle.extendCanonical(oracle.genesis, 15, difficulty = 1000)
+      val side: List[Block] = oracle.extendSide(oldChain(4), 11, difficulty = 1000, tag = 0x82)
+      node.importAll(oldChain) shouldBe a[BlockImportedToTop]
+      // what the reorganisation is answered with through the importer's adapter, queue included
+      node.importAll(side) match
+        case ChainReorganised(oldBranch, newBranch, weights) =>
+          oldBranch shouldBe oldChain.drop(5)
+          newBranch shouldBe side
+          weights shouldBe side.map(block => node.blockchainReader.getChainWeightByHash(block.hash).get)
+        case other => fail(s"expected ChainReorganised, got $other")
+      node.bestHash shouldBe side.last.hash
+      // the blocks the head left are queued again, all ten of them
+      oldChain.drop(5).foreach(block => node.blockQueue.isQueued(block.hash) shouldBe true)
+    )
+
+    (s"A reorganisation just past the bound ($layout)" should
+      "tell the blocks within it, and all of them at the bound").taggedAs(UnitTest, ConsensusTest) in (
+      new CountingFixture(guard, bound = 5):
+        val oldChain: List[Block] = oracle.extendCanonical(oracle.genesis, 12, difficulty = 1000)
+        // h6..h10 left: five, the bound
+        val atTheBound: List[Block] = oracle.extendSide(oldChain(4), 6, difficulty = 1000, tag = 0x83)
+        node.importAll(oldChain.take(10)) shouldBe a[BlockImportedToTop]
+        evaluate(consensus, atTheBound) match
+          case SelectedNewBestBranch(oldBranch, _, _) => oldBranch shouldBe oldChain.slice(5, 10)
+          case other                                  => fail(s"expected SelectedNewBestBranch, got $other")
+        // and back: the side chain's h6'..h11' (six) left for a heavier branch of the canonical chain
+        val back: List[Block] = oldChain.drop(5) ++ oracle.extendCanonical(oldChain.last, 1, difficulty = 1000)
+        evaluate(consensus, back) match
+          case SelectedNewBestBranch(oldBranch, newBranch, _) =>
+            oldBranch shouldBe atTheBound.drop(1)
+            newBranch.map(_.hash) shouldBe back.map(_.hash)
+          case other => fail(s"expected SelectedNewBestBranch, got $other")
     )
 
   "Chain-file import (hive consensus simulator path)" should
@@ -588,6 +668,27 @@ class ReorgBlockhashParitySpec extends AnyFlatSpec with Matchers with ScalaFutur
         node.blockchainReader.accountAt(block.header, BlockhashRecorder).map(_.storageRoot) shouldBe
           oracle.blockchainReader.accountAt(block.header, BlockhashRecorder).map(_.storageRoot)
 
+  /** A [[Fixture]] with a second `ConsensusImpl` over the node's stores that reads through a [[CountingReader]], and
+    * tells at most `bound` blocks of an old chain (B-296).
+    */
+  class CountingFixture(
+      guard: Boolean,
+      bound: Int = ConsensusImpl.OldBranchToldAtMost,
+      cap: StateConfig => StateConfig = identity
+  ) extends Fixture(guard, cap):
+    val counting = new CountingReader(node.storagesInstance.storages)
+    val consensus = new ConsensusImpl(
+      counting,
+      node.blockchainWriter,
+      node.blockExecution,
+      reorgState = node.blockchain,
+      oldBranchToldAtMost = bound
+    )
+    def evaluate(consensus: ConsensusImpl, branch: List[Block]): ConsensusResult =
+      import node.blockchainConfig
+      import node.runtime
+      consensus.evaluateBranch(NonEmptyList.fromListUnsafe(branch)).unsafeRunSync()
+
   /** Both hosts on a chain whose terminal total difficulty is 0, as hive configures post-merge fixtures. */
   class PostMergeFixture:
     val oracle: Oracle = new Oracle:
@@ -730,6 +831,34 @@ class ReorgBlockhashParitySpec extends AnyFlatSpec with Matchers with ScalaFutur
       blockchainReader.getBlockByNumber(blockchainReader.getBestBranch, 0).get
 
 object ReorgBlockhashParitySpec extends SecureRandomBuilder:
+
+  /** A reader over the same stores that records which blocks were read whole, and whose receipts were read. */
+  class CountingReader(s: BlockchainStorages)
+      extends BlockchainReader(
+        s.blockHeadersStorage,
+        s.blockBodiesStorage,
+        s.blockNumberMappingStorage,
+        s.stateStorage,
+        s.receiptStorage,
+        s.appStateStorage,
+        s.chainWeightStorage,
+        s.blockAccessListStorage,
+        s.pathStateStorage
+      ):
+    private val blocks = new java.util.concurrent.ConcurrentLinkedQueue[BlockHash]
+    private val receipts = new java.util.concurrent.ConcurrentLinkedQueue[BlockHash]
+    def reset(): Unit =
+      blocks.clear()
+      receipts.clear()
+    def blocksRead: List[BlockHash] = blocks.asScala.toList
+    def receiptsRead: List[BlockHash] = receipts.asScala.toList
+    override def getBlockByHash(hash: BlockHash): Option[Block] =
+      blocks.add(hash)
+      super.getBlockByHash(hash)
+    override def getReceiptsByHash(blockhash: BlockHash): Option[Seq[Receipt]] =
+      receipts.add(blockhash)
+      super.getReceiptsByHash(blockhash)
+
   /** A cap on the pinned layers that a branch of these blocks meets after its first blocks. */
   val MidCap: Long = 3500L
 
