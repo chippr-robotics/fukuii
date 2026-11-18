@@ -3064,18 +3064,15 @@ items:
   - id: B-370
     title: "Spec 018 C5b: decodable-but-different row at an anchor position is never repaired or deleted: audit cannot converge (decision)"
     priority: P2
-    status: claimed
+    status: done
     area: storage
     opened: 2026-11-18
+    closed: 2026-11-18
     refs: []
     links:
+      prs: [1921]
       spec: 018-storage-engine-consolidation
     depends_on: [B-065]
-    claim:
-      by: cloud-dc960fdc
-      agent: vault-b370
-      since: 2026-11-18T14:39:43Z
-      heartbeat: 2026-11-18T14:39:43Z
     notes: dm 7.5 never overwrites a valid different node; under the lock with a stable anchor that row is corrupt for the anchor. Part 1 reports it unresolved/unclean; decide whether repairNodeAt may overwrite it under the lock
   - id: B-371
     title: TUI compact action over the cancellable compactRange (largest family first, guard released between families)
