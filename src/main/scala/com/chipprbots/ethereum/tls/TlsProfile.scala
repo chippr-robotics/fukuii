@@ -2,7 +2,7 @@ package com.chipprbots.ethereum.tls
 
 import java.nio.file.Path
 
-/** What a listener asks of a client certificate (spec 030 FR-003). Only `None` is served until slice 2. */
+/** What a listener asks of a client certificate (spec 030 FR-003). */
 enum ClientAuth:
   case None, Want, Need
 
@@ -15,7 +15,7 @@ object ClientAuth:
     case "need" => Right(ClientAuth.Need)
     case other  => Left(s"'$other' is not a client-auth mode (none, want or need)")
 
-/** The listeners a TLS block can sit on (data-model.md). Only `RpcHttp` is wired in slice 1. */
+/** The listeners a TLS block can sit on (data-model.md). `RpcHttp` and `RpcWs` are wired (slices 1, 2). */
 enum ListenerId(val label: String):
   case RpcHttp extends ListenerId("rpc-http")
   case RpcWs extends ListenerId("rpc-ws")

@@ -27,6 +27,7 @@ object TlsConfig:
   val LegacyProfileName = "legacy-rpc-http"
 
   private val HttpKey = "network.rpc.http"
+  private val WsKey = "network.rpc.ws"
 
   /** `fukuii.tls.profiles`, every profile parsed (not yet loaded from disk). */
   def profiles(config: Config): Either[TlsConfigError, Map[String, TlsProfile]] =
@@ -82,24 +83,7 @@ object TlsConfig:
             "keep tls { profile } and fukuii.tls.profiles, and remove mode and certificate"
         )
       )
-    else if tlsEnabled then
-      for
-        auth <- clientAuth(http, s"$key.tls")
-        name <- Try(http.getString("tls.profile")).toOption
-          .filter(_ => !http.getIsNull("tls.profile"))
-          .toRight(TlsConfigError(s"$key.tls.profile: required when tls.enabled = true"))
-        all <- profiles(config)
-        profile <- all
-          .get(name)
-          .toRight(TlsConfigError(s"$key.tls.profile: there is no profile '$name' under $Prefix.tls.profiles"))
-      yield Some(
-        ResolvedListener(
-          ListenerTls(ListenerId.RpcHttp, enabled = true, Some(name), auth),
-          profile,
-          legacy = false,
-          s"$key.tls"
-        )
-      )
+    else if tlsEnabled then tlsBlock(config, http, key, ListenerId.RpcHttp).map(Some(_))
     else if legacyMode then
       for
         _ <- Either.cond(legacyBlock, (), TlsConfigError(s"$key.certificate is not set"))
@@ -122,6 +106,34 @@ object TlsConfig:
     else
       // a client-auth key on a listener that is not TLS is read, so a misspelling is still refused
       clientAuth(http, s"$key.tls").map(_ => None)
+
+  /** The WebSocket listener's TLS, from its `tls` block (spec 030 FR-014); it has no deprecated form. `Right(None)` is
+    * a plaintext listener.
+    */
+  def rpcWs(config: Config): Either[TlsConfigError, Option[ResolvedListener]] =
+    val ws = config.getConfig(WsKey)
+    val key = s"$Prefix.$WsKey"
+    val tlsEnabled = Try(ws.getBoolean("tls.enabled")).getOrElse(false)
+    if tlsEnabled then tlsBlock(config, ws, key, ListenerId.RpcWs).map(Some(_))
+    else clientAuth(ws, s"$key.tls").map(_ => None)
+
+  /** A listener's `tls { enabled = true, profile, client-auth }`, with the profile it names. */
+  private def tlsBlock(
+      config: Config,
+      listener: Config,
+      key: String,
+      id: ListenerId
+  ): Either[TlsConfigError, ResolvedListener] =
+    for
+      auth <- clientAuth(listener, s"$key.tls")
+      name <- Try(listener.getString("tls.profile")).toOption
+        .filter(_ => !listener.getIsNull("tls.profile"))
+        .toRight(TlsConfigError(s"$key.tls.profile: required when tls.enabled = true"))
+      all <- profiles(config)
+      profile <- all
+        .get(name)
+        .toRight(TlsConfigError(s"$key.tls.profile: there is no profile '$name' under $Prefix.tls.profiles"))
+    yield ResolvedListener(ListenerTls(id, enabled = true, Some(name), auth), profile, legacy = false, s"$key.tls")
 
   private def clientAuth(http: Config, path: String): Either[TlsConfigError, ClientAuth] =
     if !http.hasPath("tls.client-auth") then Right(ClientAuth.None)

@@ -12,7 +12,7 @@ final case class TlsServerContext(
     material: TlsMaterial
 )
 
-/** One `SSLContext` per (profile, role); slice 1 builds the server role, from loaded material that does not change
+/** One `SSLContext` per (profile, role); the server role is built here, from loaded material that does not change
   * (slice 4 swaps the managers behind the same context).
   */
 object TlsContexts:
@@ -29,6 +29,9 @@ object TlsContexts:
       secureRandom: SecureRandom
   ): TlsServerContext =
     val context = SSLContext.getInstance("TLS")
-    // the key manager is the profile's keystore; the trust manager is its truststore and never the keystore (FR-004)
-    context.init(material.keyManager.toArray, Array(material.trustManager), secureRandom)
+    // The key manager is the profile's keystore; the trust manager is its truststore and never the keystore (FR-004).
+    // A listener that asks for client certificates names each refusal, for tls_handshake_failures_total (FR-017).
+    val trust =
+      if clientAuth == ClientAuth.None then material.trustManager else new VerdictTrustManager(material.trustManager)
+    context.init(material.keyManager.toArray, Array(trust), secureRandom)
     TlsServerContext(context, clientAuth, effectiveProtocols(context, profile), profile.cipherSuites, material)

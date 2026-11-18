@@ -26,9 +26,10 @@ object TlsTestSupport:
     s"""{ path = ${q(f.store)}, type = "$storeType", password-file = ${q(f.passwordFile)} }"""
 
   /** The `fukuii` section with an HTTP listener (plain unless `http` says otherwise) and the given profiles. */
-  def config(profiles: String = "", http: String = ""): Config =
+  def config(profiles: String = "", http: String = "", ws: String = ""): Config =
     ConfigFactory.parseString(s"""
       network.rpc.http { mode = "http", enabled = true, interface = "127.0.0.1", port = 0, $http }
+      network.rpc.ws { enabled = false, interface = "127.0.0.1", port = 0, $ws }
       tls.profiles { $profiles }
     """)
 

@@ -528,8 +528,17 @@ abstract class BaseNode extends Node:
       )
       .foreach(warning => log.warn(warning))
 
+  /** Starts the WebSocket server. Over TLS it waits for the bind, and a bind that fails stops the node (spec 030
+    * FR-011): a node that ran on would leave the operator believing WSS is served. Plaintext keeps its asynchronous
+    * start.
+    */
   private def startJsonRpcWsServer(): Unit =
-    if jsonRpcConfig.wsServerConfig.enabled then jsonRpcWsServer.run()
+    val wsConfig = jsonRpcConfig.wsServerConfig
+    if wsConfig.enabled && wsConfig.tlsEnabled then
+      StdNode.awaitJsonRpcWsBind(jsonRpcWsServer.lifecycle.start(), wsConfig.interface, wsConfig.port, 10.seconds) match
+        case Right(binding) => log.info(s"JSON-RPC WSS server bound to ${binding.localAddress}")
+        case Left(message)  => throw StdNode.startupRefusal(message)
+    else if wsConfig.enabled then jsonRpcWsServer.run()
 
   private def startJsonRpcIpcServer(): Unit =
     if jsonRpcConfig.ipcServerConfig.enabled then jsonRpcIpcServer.run()
@@ -972,6 +981,22 @@ object StdNode:
   /** Waits for the JSON-RPC HTTP(S) bind. A failure, or no answer in `timeout`, is a message for the refusal: it names
     * the address, the reason (for TLS, the key and file that cannot be used) and the keys to change.
     */
+  /** As [[awaitJsonRpcHttpBind]], for the WebSocket listener over TLS (spec 030 FR-011). */
+  def awaitJsonRpcWsBind[A](
+      bind: => scala.concurrent.Future[A],
+      interface: String,
+      port: Int,
+      timeout: scala.concurrent.duration.FiniteDuration
+  ): Either[String, A] =
+    try Right(scala.concurrent.Await.result(bind, timeout))
+    catch
+      case scala.util.control.NonFatal(e) =>
+        Left(
+          s"Refusing to start: the JSON-RPC WebSocket server cannot start on $interface:$port " +
+            s"(${e.getClass.getSimpleName}: ${e.getMessage}). Fix network.rpc.ws (interface, port, tls), or set " +
+            "network.rpc.ws.enabled = false."
+        )
+
   def awaitJsonRpcHttpBind[A](
       bind: => scala.concurrent.Future[A],
       interface: String,

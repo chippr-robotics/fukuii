@@ -86,17 +86,17 @@ that exercises it.
 
 ### Tests first
 
-- [ ] T020 [P] [US2] `T/jsonrpc/server/http/MtlsHttpSpec.scala`: under `need`, no certificate / self-signed / other-CA certificate fail the handshake and no HTTP request is read; a trusted one is answered; under `want`, no certificate is served with the transport's `apis`; under `none`, behaviour equals the legacy `https` (US2 scenarios 1, 2, 4; SC-002)
-- [ ] T021 [P] [US2] `T/jsonrpc/server/http/MtlsWsSpec.scala`: WSS with `need`; `eth_subscribe` works for a trusted client for the life of the connection (US2 scenario 3)
-- [ ] T022 [P] [US2] `T/tls/HandshakeFailureClassifierSpec.scala`: each FR-017 `reason` from a real failed handshake; the per-address limiter logs once a minute with a suppressed count
-- [ ] T023 [P] [US2] `T/tls/GenCertScriptSpec.scala` (or a shell test under `scripts/`): `tls/gen-cert.sh ca|server|client` produce stores `TestPki`-equivalent tests accept
+- [x] T020 [P] [US2] `T/jsonrpc/server/http/MtlsHttpSpec.scala`: under `need`, no certificate / self-signed / other-CA certificate fail the handshake and no HTTP request is read; a trusted one is answered; under `want`, no certificate is served with the transport's `apis`; under `none`, behaviour equals the legacy `https` (US2 scenarios 1, 2, 4; SC-002)
+- [x] T021 [P] [US2] `T/jsonrpc/server/http/MtlsWsSpec.scala`: WSS with `need`; `eth_subscribe` works for a trusted client for the life of the connection (US2 scenario 3)
+- [x] T022 [P] [US2] `T/tls/HandshakeFailureClassifierSpec.scala`: each FR-017 `reason` from a real failed handshake; the per-address limiter logs once a minute with a suppressed count
+- [x] T023 [P] [US2] `T/tls/GenCertScriptSpec.scala` (or a shell test under `scripts/`): `tls/gen-cert.sh ca|server|client` produce stores `TestPki`-equivalent tests accept
 
 ### Implementation
 
-- [ ] T024 [US2] `M/tls/TlsServerEngine.scala`: need/want on the engine; record the trust manager's verdict per engine; classify failures; `tls_handshake_failures_total{listener, reason}` (FR-003, FR-017)
-- [ ] T025 [US2] `M/jsonrpc/server/http/JsonRpcWsServer.scala:137-141`: bind with `TlsServerEngine` when `rpc.ws.tls.enabled`; per-server `ServerSettings` with `parsing.ssl-session-attribute = on` for HTTP and WS (research D-2); add `rpc.ws.tls` to `network.conf`
-- [ ] T026 [US2] Same-port HTTP/WS with differing TLS settings is a startup error (spec Edge Cases) in `M/tls/TlsStartupCheck.scala`
-- [ ] T027 [P] [US2] `tls/gen-cert.sh`: `ca`, `server`, `client` subcommands (FR-062, first part)
+- [x] T024 [US2] `M/tls/TlsServerEngine.scala`: need/want on the engine; record the trust manager's verdict per engine; classify failures; `tls_handshake_failures_total{listener, reason}` (FR-003, FR-017)
+- [x] T025 [US2] `M/jsonrpc/server/http/JsonRpcWsServer.scala:137-141`: bind with `TlsServerEngine` when `rpc.ws.tls.enabled`; per-server `ServerSettings` with `parsing.ssl-session-attribute = on` for HTTP and WS (research D-2); add `rpc.ws.tls` to `network.conf`
+- [x] T026 [US2] Same-port HTTP/WS with differing TLS settings is a startup error (spec Edge Cases) in `M/tls/TlsStartupCheck.scala`
+- [x] T027 [P] [US2] `tls/gen-cert.sh`: `ca`, `server`, `client` subcommands (FR-062, first part)
 - [ ] T028 [US2] `sbt pp`, `formatCheck`; S2's PR
 
 **Checkpoint**: mTLS on HTTP and WS; the identity of the peer is available on every request.

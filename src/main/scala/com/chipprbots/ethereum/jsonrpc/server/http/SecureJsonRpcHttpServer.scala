@@ -8,6 +8,7 @@ import com.chipprbots.ethereum.jsonrpc.JsonRpcHealthChecker
 import com.chipprbots.ethereum.jsonrpc.graphql.GraphQLService
 import com.chipprbots.ethereum.jsonrpc.server.controllers.JsonRpcBaseController
 import com.chipprbots.ethereum.jsonrpc.server.http.JsonRpcHttpServer.JsonRpcHttpServerConfig
+import com.chipprbots.ethereum.tls.ListenerId
 import com.chipprbots.ethereum.tls.TlsConfigError
 import com.chipprbots.ethereum.tls.TlsServerContext
 import com.chipprbots.ethereum.tls.TlsServerEngine
@@ -32,8 +33,17 @@ class SecureJsonRpcHttpServer(
 
     maybeHttpsContext match
       case Right(httpsContext) =>
+        // The TLS session and the peer's address ride on the connection, so a refused handshake is counted and logged
+        // with its address (spec 030 FR-017) and the identity rules can read the client certificate.
+        val settings = TlsServerEngine.serverSettings(actorSystem)
+        val handler =
+          TlsServerEngine.observeHandshakes(ListenerId.RpcHttp, TlsServerEngine.routeHandler(route, settings))
         val bindingResultF =
-          Http(actorSystem).newServerAt(config.interface, config.port).enableHttps(httpsContext).bind(route)
+          Http(actorSystem)
+            .newServerAt(config.interface, config.port)
+            .enableHttps(httpsContext)
+            .withSettings(settings)
+            .bindFlow(handler)
 
         // The failure is logged by the lifecycle, and whether it bound is said to the RPC view there (spec 029 FR-039).
         bindingResultF.foreach(serverBinding =>

@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **Mutual TLS on the JSON-RPC HTTP and WebSocket listeners (spec 030 S2, B-355).** `network.rpc.http.tls.client-auth`
+  and the new `network.rpc.ws.tls { enabled, profile, client-auth }` take `none`, `want` or `need`. Under `want` and
+  `need` the profile's `truststore` verifies every presented client certificate; `need` also refuses a client with
+  none, during the handshake, before any HTTP is read. A refused handshake counts in
+  `app_tls_handshake_failures_total{listener, reason}` (`no_client_cert`, `untrusted_client_cert`,
+  `expired_client_cert`, `protocol`, `other`) and is logged at WARN at most once per remote address per minute, with
+  the number suppressed. HTTP and WS on one port must take the same TLS setting, or the node refuses to start. A WSS
+  listener that cannot bind stops the node. `tls/gen-cert.sh ca`, `server --ca` and `client --ca` issue a test CA (with
+  a truststore) and the certificates it signs; the command-less form still writes a self-signed server certificate.
+
 ### Changed
 - **`app_engine_newpayload_invalid` counts INVALID answers alone (B-193).** It also counted every `engine_newPayload`
   answered ACCEPTED, and any status it did not know. ACCEPTED has its own series, `app_engine_newpayload_accepted`

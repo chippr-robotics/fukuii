@@ -150,13 +150,28 @@ final class TestPki(val dir: Path):
     Files.write(file, (password + (if trailingNewline then "\n" else "")).getBytes(StandardCharsets.UTF_8))
     file
 
-  /** A client-side trust manager's SSL context: trusts `ca`, presents no certificate. */
-  def clientContext(trusted: Seq[X509Certificate] = Seq(ca.cert)): javax.net.ssl.SSLContext =
+  /** A client's SSL context: trusts `trusted` (the CA by default) and presents `presenting`'s certificate, or none. */
+  def clientContext(
+      trusted: Seq[X509Certificate] = Seq(ca.cert),
+      presenting: Option[PkiIdentity] = None
+  ): javax.net.ssl.SSLContext =
     val ks = KeyStore.getInstance("pkcs12")
     ks.load(null, null)
     trusted.zipWithIndex.foreach((c, i) => ks.setCertificateEntry(s"t$i", c))
     val tmf = javax.net.ssl.TrustManagerFactory.getInstance(javax.net.ssl.TrustManagerFactory.getDefaultAlgorithm)
     tmf.init(ks)
+    val keyManagers = presenting.map { id =>
+      val keys = KeyStore.getInstance("pkcs12")
+      keys.load(null, null)
+      keys.setKeyEntry("client", id.key.getPrivate, Array.emptyCharArray, id.chain.toArray[java.security.cert.Certificate])
+      val kmf = javax.net.ssl.KeyManagerFactory.getInstance(javax.net.ssl.KeyManagerFactory.getDefaultAlgorithm)
+      kmf.init(keys, Array.emptyCharArray)
+      kmf.getKeyManagers
+    }
     val ctx = javax.net.ssl.SSLContext.getInstance("TLS")
-    ctx.init(null, tmf.getTrustManagers, new java.security.SecureRandom())
+    ctx.init(keyManagers.orNull, tmf.getTrustManagers, new java.security.SecureRandom())
     ctx
+
+  /** A self-signed leaf: a certificate no CA issued. */
+  def selfSignedLeaf(cn: String = "client"): PkiIdentity =
+    issue(s"CN=$cn", None, now.minus(Duration.ofDays(1)), now.plus(Duration.ofDays(30)), false, Nil, Nil)

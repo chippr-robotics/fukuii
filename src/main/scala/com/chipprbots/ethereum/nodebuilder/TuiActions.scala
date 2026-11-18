@@ -184,7 +184,7 @@ object TuiActions:
           address = s"${ws.interface}:${ws.port}",
           namespaces = node.jsonRpcConfig.wsApis,
           exposed = exposed("WebSocket", "ws", ws.interface, node.jsonRpcConfig.wsApis),
-          tls = false,
+          tls = server.isTls,
           extras = Nil,
           openConnections = () => Some(server.openConnections),
           listening = () => server.lifecycle.isBound,
