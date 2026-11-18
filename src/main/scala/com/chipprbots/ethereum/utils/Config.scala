@@ -75,6 +75,9 @@ object Config extends InstanceConfig(ConfigFactory.load().getConfig("fukuii"), "
       // - `checkpointSyncDownloadDir`: where to place the downloaded archive. Defaults to datadir.
       checkpointSyncFile: Option[java.nio.file.Path],
       checkpointSyncUrl: Option[String],
+      // - `checkpointSyncExpectedHash`: the hash the archive's checkpoint block must have (spec 018 E.1 "Trust"). It
+      //   wins over the chain config's pinned `checkpoint-expected-block-hash`; with neither, every archive is refused.
+      checkpointSyncExpectedHash: Option[ByteString] = None,
       blockFetcherTickInterval: FiniteDuration = 500.millis
   )
 
@@ -144,7 +147,13 @@ object Config extends InstanceConfig(ConfigFactory.load().getConfig("fukuii"), "
         checkpointSyncUrl = if syncConfig.hasPath("checkpoint-sync-url") then
           val raw = syncConfig.getString("checkpoint-sync-url").trim
           if raw.isEmpty then None else Some(raw)
-        else None
+        else None,
+        checkpointSyncExpectedHash = Option
+          .when(syncConfig.hasPath("checkpoint-sync-expected-hash"))(
+            syncConfig.getString("checkpoint-sync-expected-hash").trim
+          )
+          .filter(_.nonEmpty)
+          .map(BlockchainConfig.parseBlockHash("checkpoint-sync-expected-hash", _))
       )
 
   // SyncConfig remains here as it's a case class used as a type throughout the codebase.

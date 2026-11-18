@@ -161,9 +161,16 @@ class CheckpointSharedNodePruneSpec extends AnyWordSpec with Matchers with Eithe
           targetWriter,
           targetStorages.storages.stateStorage,
           targetStorages.storages.evmCodeStorage,
-          targetStorages.storages.appStateStorage
+          targetStorages.storages.appStateStorage,
+          CheckpointImporter.Trust(
+            BigInt(chainId),
+            sourceReader.genesisHeader.hash.value,
+            sourceReader.genesisHeader.difficulty.value,
+            None,
+            Some(header.hash.value)
+          )
         )
-        val _ = importer.importFromFile(archive, Some(chainId)).value
+        val _ = importer.importFromFile(archive).value
       finally Files.deleteIfExists(archive)
 
     /** Block `tip + 1`: contract A rewrites one slot. B is not touched, and still has the old storage root. */
