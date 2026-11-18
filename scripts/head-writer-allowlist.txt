@@ -55,7 +55,7 @@ block-store 1 src/main/scala/com/chipprbots/ethereum/blockchain/sync/snap/contro
 block-store 3 src/main/scala/com/chipprbots/ethereum/blockchain/sync/snap/ChainDownloader.scala PRE the headers SNAP downloads below the pivot, before the anchor; after it heights at or below state.origin, which no move reaches (C5a)
 block-store 2 src/main/scala/com/chipprbots/ethereum/blockchain/sync/PivotHeaderBootstrap.scala PRE the pivot's header, before the state has an anchor
 best-pointer 1 src/main/scala/com/chipprbots/ethereum/blockchain/checkpoint/CheckpointImporter.scala PRE the checkpoint's best block, in the batch that gives the datadir its anchor (C5c)
-block-store 1 src/main/scala/com/chipprbots/ethereum/blockchain/checkpoint/CheckpointImporter.scala PRE the checkpoint's block, as above
+block-store 1 src/main/scala/com/chipprbots/ethereum/blockchain/checkpoint/CheckpointImporter.scala PRE the checkpoint's block and the headers of its ancestor window (C5c PR2), as above
 
 # Start, and test mode.
 best-pointer 1 src/main/scala/com/chipprbots/ethereum/nodebuilder/StdNode.scala START fixDatabase, before any writer, on the hash layout only: the unified layout reconciles instead (C4b part 4)

@@ -219,9 +219,16 @@ class CheckpointExporterSpec
         targetWriter,
         targetStorages.storages.stateStorage,
         targetStorages.storages.evmCodeStorage,
-        targetStorages.storages.appStateStorage
+        targetStorages.storages.appStateStorage,
+        CheckpointImporter.Trust(
+          BigInt(1337),
+          sourceReader.genesisHeader.hash.value,
+          sourceReader.genesisHeader.difficulty.value,
+          None,
+          Some(header.hash.value)
+        )
       )
-      val importResult: ImportResult = importer.importFromFile(outputPath, Some(1337L)).value
+      val importResult: ImportResult = importer.importFromFile(outputPath).value
       importResult.blockNumber shouldBe header.number.value
       importResult.nodesImported shouldBe exportResult.nodesExported
       importResult.bytecodesImported shouldBe exportResult.bytecodesExported
@@ -309,9 +316,16 @@ class CheckpointExporterSpec
         targetWriter,
         targetStorages.storages.stateStorage,
         targetStorages.storages.evmCodeStorage,
-        targetStorages.storages.appStateStorage
+        targetStorages.storages.appStateStorage,
+        CheckpointImporter.Trust(
+          BigInt(1),
+          sourceReader.genesisHeader.hash.value,
+          sourceReader.genesisHeader.difficulty.value,
+          None,
+          Some(header.hash.value)
+        )
       )
-      val importResult: ImportResult = importer.importFromFile(outputPath, Some(1L)).value
+      val importResult: ImportResult = importer.importFromFile(outputPath).value
       importResult.blockNumber shouldBe header.number.value
 
       val importedTrie: MerklePatriciaTrie[Array[Byte], Account] = MerklePatriciaTrie[Array[Byte], Account](

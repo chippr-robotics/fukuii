@@ -81,12 +81,14 @@ class CheckpointImportInterruptSpec extends ScalaTestWithActorTestKit() with Any
     appState.markDatadirCreatedUnderInvariant().commit()
     source.batches.clear()
 
-    val importer = new CheckpointImporter(
+    def importerTrusting(t: CheckpointImporter.Trust): CheckpointImporter = new CheckpointImporter(
       BlockchainWriter(store.storages),
       stateTries,
       store.storages.evmCodeStorage,
-      appState
+      appState,
+      t
     )
+    val importer: CheckpointImporter = importerTrusting(trust)
 
     def holds(hash: ByteString): Boolean =
       try
@@ -94,10 +96,11 @@ class CheckpointImportInterruptSpec extends ScalaTestWithActorTestKit() with Any
         true
       catch case _: Exception => false
 
-  private val trie = PathHealPresenceFixtures.accountTrieOld()
+  // One account (its leaf is the account trie's root) and its storage trie: a branch over two leaves.
+  private val trie = PathHealPresenceFixtures.storageTrieOld()
   private val chainId = 61L
-  // Parent-first, as the exporter writes it: each node before anything below it.
-  private val parentFirst = Seq("root", "ext", "brY", "brX", "leafY0", "leafY1", "leafX1", "leafX2")
+  // Pre-order, as the exporter writes it: each node before anything below it, the storage trie after its account.
+  private val parentFirst = Seq("root", "sRoot", "sLeaf0", "sLeaf1")
 
   private val (header, archiveBytes) = CheckpointV2TestKit.archive(
     chainId,
@@ -107,11 +110,20 @@ class CheckpointImportInterruptSpec extends ScalaTestWithActorTestKit() with Any
     Nil
   )
 
+  /** What the node trusts the archive by: its chain id, the genesis its window names, and its block. */
+  private val trust = CheckpointImporter.Trust(
+    chainId,
+    header.genesisHash,
+    BigInt(131072),
+    None,
+    Some(header.blockHeader.hash.value)
+  )
+
   private def archive: Array[Byte] = archiveBytes.clone()
 
-  /** The archive cut off part of the way through its entries, as a connection or a process dies: the last five node
-    * entries (a tag and a length, 5 bytes, and the node) are as long as what is cut, with the end tag and the CRC, so
-    * the cut falls inside the fourth node.
+  /** The archive cut off part of the way through its entries, as a connection or a process dies: the last node entry (a
+    * tag and a length, 5 bytes, and the node) is as long as what is cut, with the end tag and the CRC, so the cut falls
+    * inside the fourth node, after its tag and length.
     */
   private def truncated: Array[Byte] =
     val whole = archive
@@ -119,7 +131,7 @@ class CheckpointImportInterruptSpec extends ScalaTestWithActorTestKit() with Any
     whole.take(whole.length - tail)
 
   private def importFrom(d: Datadir, bytes: Array[Byte]) =
-    d.importer.importFromStream(new ByteArrayInputStream(bytes), Some(chainId))
+    d.importer.importFromStream(new ByteArrayInputStream(bytes))
 
   "CheckpointImporter" should "set the import key, synced, before it writes the first node" taggedAs UnitTest in new Datadir:
     importFrom(this, truncated).isLeft shouldBe true
@@ -140,7 +152,7 @@ class CheckpointImportInterruptSpec extends ScalaTestWithActorTestKit() with Any
       Some(trie.root.hash.toArray.map("%02x".format(_)).mkString)
     withClue("what it wrote stays, a present root over absent children: ") {
       holds(trie.root.hash) shouldBe true
-      holds(trie("leafX2").hash) shouldBe false
+      holds(trie("sLeaf1").hash) shouldBe false
     }
     appState.isSnapSyncDone() shouldBe false
 
@@ -194,7 +206,10 @@ class CheckpointImportInterruptSpec extends ScalaTestWithActorTestKit() with Any
   it should "keep a marker when nothing was going to be written: a bad header, or another chain's archive" taggedAs UnitTest in new Datadir:
     appState.stampSnapHealInvariant().commit()
     importFrom(this, Array[Byte](1, 2, 3)).isLeft shouldBe true
-    importer.importFromStream(new ByteArrayInputStream(archive), Some(chainId + 1)).isLeft shouldBe true
+    importerTrusting(trust.copy(chainId = chainId + 1))
+      .importFromStream(new ByteArrayInputStream(archive))
+      .isLeft shouldBe
+      true
     appState.hasSnapHealInvariant() shouldBe true
     appState.getCheckpointImportInProgress() shouldBe None
 
