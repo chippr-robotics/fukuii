@@ -3089,3 +3089,13 @@ items:
     links:
       spec: 029
     notes: "Follow-up of B-281 (compactRange no longer holds dbLock, close() cancels). Not done there: a whole-database compact needs a compactAll over the families, largest first, calling compactRange per family so close() can cancel between them, plus the dashboard action and removing the 'not offered, and why' line."
+  - id: B-372
+    title: "B-065 follow-up: IntegrationTest OnDemandFetchByPosition, importer over a real PathStateStorage (T212 IT)"
+    priority: P2
+    status: open
+    area: sync
+    opened: 2026-11-18
+    refs: []
+    links:
+      spec: 018
+    notes: C5b part 2 covers T212 at actor level (RegularSyncSpec, recording PositionRepairs); repairNodeAt's lock and anchor CAS are pinned on the real store by RepairNodeAtSpec. An it/ spec wiring BlockImporter to a real PathStateStorage with a hole is still to write.
