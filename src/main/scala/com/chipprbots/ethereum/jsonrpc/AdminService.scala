@@ -111,6 +111,13 @@ object AdminService:
   case class AdminMaxPeersRequest(maxPeers: Int)
   case class AdminMaxPeersResponse(success: Boolean)
 
+  // Spec 030 FR-056 (contracts/admin-allowlist.md): the node allowlist's runtime edits.
+  case class AdminAllowlistEditRequest(entries: Seq[String])
+  case class AdminAllowlistEditResponse(success: Boolean)
+  case class AdminGetNodesAllowlistRequest()
+  case class AllowlistNode(id: String, enode: Option[String], sources: Seq[String])
+  case class AdminGetNodesAllowlistResponse(enabled: Boolean, file: Option[String], nodes: Seq[AllowlistNode])
+
   private val ValidLogLevels = Set("OFF", "ERROR", "WARN", "INFO", "DEBUG", "TRACE", "ALL")
 
   /** The connection limits of the node as configured (`network.peer`): `maxOutgoing` is what `admin_maxPeers` changes
@@ -257,7 +264,9 @@ class AdminService(
     // The configured connection limits, for the dashboard's previews; None where they are not known (tests).
     peerLimitsConfig: Option[AdminService.PeerLimits] = None,
     // Spec 030 FR-052: admin_addPeer and admin_addTrustedPeer refuse a node that is not on the allowlist.
-    allowlist: NodeAllowlist = NodeAllowlist.Disabled
+    allowlist: NodeAllowlist = NodeAllowlist.Disabled,
+    // Spec 030 FR-056: the store the admin_ allowlist edits persist through; None where the allowlist is off.
+    allowlistStore: Option[com.chipprbots.ethereum.network.NodeAllowlistStore] = None
 )(implicit scheduler: typed.Scheduler)
     extends Logger:
   import AdminService.*
@@ -609,6 +618,56 @@ class AdminService(
   /** core-geth admin_maxPeers: sets max connected peers at runtime. core-geth reference: eth/api_admin.go MaxPeers —
     * sets handler.maxPeers + p2pServer.MaxPeers.
     */
+  /** `admin_addNodesToAllowlist` and `admin_removeNodesFromAllowlist` (spec 030 FR-056, FR-057): all-or-nothing, the
+    * file written before the answer. Every successful edit is logged at INFO with the caller (FR-059): its identity
+    * rule's name, or the transport for an IPC or anonymous caller.
+    */
+  def editAllowlist(
+      op: com.chipprbots.ethereum.network.AllowlistEdit,
+      req: AdminAllowlistEditRequest,
+      caller: String
+  ): ServiceResponse[AdminAllowlistEditResponse] = IO {
+    import com.chipprbots.ethereum.network.EditError
+    import com.chipprbots.ethereum.network.NodeAllowlistStore
+    allowlistStore match
+      case None => Left(JsonRpcError.LogicError(NodeAllowlistStore.DisabledMessage))
+      case Some(store) =>
+        store.edit(op, req.entries) match
+          case Right(n) =>
+            val ids = req.entries.flatMap(e =>
+              com.chipprbots.ethereum.network.NodeAllowlist
+                .parseEntry(e)
+                .toOption
+                .map(p => NodeAllowlistStore.prefix(p.id))
+            )
+            val verb = if op == com.chipprbots.ethereum.network.AllowlistEdit.Add then "added" else "removed"
+            log.info(s"Allowlist: $verb $n node(s) [${ids.mkString(", ")}] by $caller")
+            Right(AdminAllowlistEditResponse(true))
+          case Left(EditError.InvalidParams(message)) => Left(JsonRpcError.InvalidParams(message))
+          case Left(EditError.Refused(message))       => Left(JsonRpcError.LogicError(message))
+  }
+
+  /** `admin_getNodesAllowlist` (FR-056): whether the allowlist is on, its file, and every listed node, by id. */
+  def getNodesAllowlist(@unused req: AdminGetNodesAllowlistRequest): ServiceResponse[AdminGetNodesAllowlistResponse] =
+    IO.pure {
+      import com.chipprbots.ethereum.network.NodeAllowlistStore
+      Right(
+        AdminGetNodesAllowlistResponse(
+          enabled = allowlist.enabled,
+          file = allowlistStore.flatMap(_.filePath).map(_.toString),
+          nodes = allowlist.snapshot.entries.values.toSeq
+            .map(e =>
+              AllowlistNode(
+                com.chipprbots.ethereum.utils.Hex.toHexString(e.id.toArray),
+                e.enode.map(_.toString),
+                e.sources.toSeq.sortBy(_.ordinal).map(NodeAllowlistStore.sourceName)
+              )
+            )
+            .sortBy(_.id)
+        )
+      )
+    }
+
   def maxPeers(req: AdminMaxPeersRequest): ServiceResponse[AdminMaxPeersResponse] =
     // A negative limit means nothing. 0 is accepted, as it always was: the node then dials no one.
     if req.maxPeers < 0 then

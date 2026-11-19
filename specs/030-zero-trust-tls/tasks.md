@@ -254,15 +254,15 @@ certificate, no fallback, no https→http redirect; a CI ratchet.
 
 ### Tests first (S10)
 
-- [ ] T088 [P] [US7] `T/network/NodeAllowlistStoreSpec.scala`: edit = re-read-if-changed → apply → tmp → fsync → rename → record SHA-256; the next poll sees no change; a hand edit is picked up; an unparseable file refuses the edit and keeps the list; a failed write leaves file and list unchanged (FR-057)
-- [ ] T089 [P] [US7] `T/jsonrpc/AdminAllowlistMethodsSpec.scala`: every row of contracts/admin-allowlist.md's error table; all-or-nothing; `admin_getNodesAllowlist` shape; INFO line with the caller's rule name (FR-056, FR-059)
-- [ ] T090 [P] [US7] `T/jsonrpc/server/http/AllowlistAuthSpec.scala`: without `admin` in the caller's set the three methods answer `-32601` over HTTP; with an identity rule granting `admin` to one certificate on a `need` listener, only that certificate can call them (US7 scenario 7; FR-059)
-- [ ] T091 [US7] `IT/network/AllowlistCrashSafetyItSpec.scala`: a child JVM killed before the tmp write, after it, and after the rename; the file always parses and is the old or the new list; 100 alternating `admin_` and file edits leave the in-memory list equal to the file (SC-009)
+- [x] T088 [P] [US7] `T/network/NodeAllowlistStoreSpec.scala`: edit = re-read-if-changed → apply → tmp → fsync → rename → record SHA-256; the next poll sees no change; a hand edit is picked up; an unparseable file refuses the edit and keeps the list; a failed write leaves file and list unchanged (FR-057)
+- [x] T089 [P] [US7] `T/jsonrpc/AdminAllowlistMethodsSpec.scala`: every row of contracts/admin-allowlist.md's error table; all-or-nothing; `admin_getNodesAllowlist` shape; INFO line with the caller's rule name (FR-056, FR-059)
+- [x] T090 [P] [US7] `T/jsonrpc/server/http/AllowlistAuthSpec.scala`: without `admin` in the caller's set the three methods answer `-32601` over HTTP; with an identity rule granting `admin` to one certificate on a `need` listener, only that certificate can call them (US7 scenario 7; FR-059)
+- [x] T091 [US7] `IT/network/AllowlistCrashSafetyItSpec.scala`: a child JVM killed before the tmp write, after it, and after the rename; the file always parses and is the old or the new list; 100 alternating `admin_` and file edits leave the in-memory list equal to the file (SC-009)
 
 ### Implementation (S10)
 
-- [ ] T092 [US7] `M/network/NodeAllowlistStore.scala`: `edit` under one lock with the atomic write sequence (research D-11); removal rules by source (data-model.md)
-- [ ] T093 [US7] `M/jsonrpc/AdminService.scala`, `M/jsonrpc/AdminJsonMethodsImplicits.scala`, `M/jsonrpc/JsonRpcController.scala:639-670`: `admin_addNodesToAllowlist`, `admin_removeNodesFromAllowlist`, `admin_getNodesAllowlist`; `p2p_allowlist_edits_total`; not added to any default `apis` (FR-056, FR-059)
+- [x] T092 [US7] `M/network/NodeAllowlistStore.scala`: `edit` under one lock with the atomic write sequence (research D-11); removal rules by source (data-model.md)
+- [x] T093 [US7] `M/jsonrpc/AdminService.scala`, `M/jsonrpc/AdminJsonMethodsImplicits.scala`, `M/jsonrpc/JsonRpcController.scala:639-670`: `admin_addNodesToAllowlist`, `admin_removeNodesFromAllowlist`, `admin_getNodesAllowlist`; `p2p_allowlist_edits_total`; not added to any default `apis` (FR-056, FR-059)
 - [ ] T094 [US7] `sbt pp`, `formatCheck`, the crash IT; S10's PR
 
 ---

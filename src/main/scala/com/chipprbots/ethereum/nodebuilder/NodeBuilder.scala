@@ -1022,7 +1022,8 @@ trait AdminServiceBuilder:
         maxIncoming = peerConfiguration.maxIncomingPeers
       )
     ),
-    allowlist = nodeAllowlist
+    allowlist = nodeAllowlist,
+    allowlistStore = nodeAllowlistStore
   )(using classicSystem.toTyped.scheduler)
 
 trait TxPoolServiceBuilder:

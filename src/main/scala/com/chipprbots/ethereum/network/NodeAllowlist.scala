@@ -136,3 +136,13 @@ object NodeAllowlistMetrics extends MetricsContainer:
   val OutboundRejections: Counter = metrics.registry.counter("p2p.allowlist.rejections", "direction", "outbound")
   val ReloadFailures: Counter = metrics.registry.counter("p2p.allowlist.reload.failures")
   val Size: AtomicLong = metrics.registry.gauge("p2p.allowlist.size", new AtomicLong(0))
+
+  /** `p2p_allowlist_edits_total{op, result}` (spec 030 data-model): `ok`, `refused` (the request or the allowlist
+    * refused it) or `failed` (the file could not be written).
+    */
+  def edit(op: AllowlistEdit, result: Either[EditError, Int]): Unit =
+    val outcome = result match
+      case Right(_)                                           => "ok"
+      case Left(e) if e.message.startsWith("could not write") => "failed"
+      case Left(_)                                            => "refused"
+    metrics.registry.counter("p2p.allowlist.edits", "op", op.label, "result", outcome).increment()

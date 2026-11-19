@@ -148,6 +148,34 @@ class JsonRpcControllerSpec
       case Some(JObject(fields)) => fields.map(_._1).toSet
       case other                 => fail(s"unexpected rpc_modules result: $other")
 
+  it should "serve the allowlist methods where admin is granted, and only there (spec 030 FR-059)" taggedAs (
+    UnitTest,
+    RPCTest
+  ) in new JsonRpcControllerFixture:
+    val admin = new AdminService(
+      new java.util.concurrent.atomic.AtomicReference(null),
+      null,
+      null,
+      com.chipprbots.ethereum.utils.Config.blockchains.blockchainConfig,
+      5.seconds,
+      "/tmp",
+      new com.chipprbots.ethereum.network.BlockedIPRegistry(Set.empty),
+      null,
+      () => cats.effect.IO.pure(com.chipprbots.ethereum.blockchain.sync.SyncProtocol.Status.NotSyncing)
+    )(using system.scheduler)
+    val controller: JsonRpcController = jsonRpcController.copy(adminService = admin)
+    controller
+      .forApis(Seq("admin"))
+      .handleRequest(newJsonRpcRequest("admin_getNodesAllowlist"))
+      .unsafeRunSync()
+      .error shouldBe
+      None
+    controller
+      .forApis(Seq("eth", "net", "web3"))
+      .handleRequest(newJsonRpcRequest("admin_getNodesAllowlist"))
+      .unsafeRunSync() should
+      haveError(JsonRpcError.MethodNotFound)
+
   it should "answer MethodNotFound for personal, debug, admin, qa, txpool and trace over HTTP and WebSocket under the shipped defaults" taggedAs (
     UnitTest,
     RPCTest
@@ -163,6 +191,10 @@ class JsonRpcControllerSpec
       "debug_listPeersInfo",
       "admin_nodeInfo",
       "admin_peers",
+      // spec 030 FR-059: the allowlist's runtime edits are in no HTTP or WS default
+      "admin_addNodesToAllowlist",
+      "admin_removeNodesFromAllowlist",
+      "admin_getNodesAllowlist",
       "qa_mineBlocks",
       "txpool_status",
       "trace_block",

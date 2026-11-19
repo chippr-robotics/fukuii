@@ -97,24 +97,16 @@ class JsonRpcIpcServer(jsonRpcController: JsonRpcBaseController, config: JsonRpc
     private var running = true
 
     override def run(): Unit =
-      while running do handleNextRequest()
-      clientSocket.close()
+      try while running do handleNextRequest()
+      finally clientSocket.close()
 
-    @tailrec
-    private def readNextMessage(accum: String = ""): Option[JValue] =
-      val buff = new Array[Char](32)
-      if in.read(buff) == -1 then None
-      else
-        val newData = new String(buff.takeWhile(c => c != '\n' && c.toByte != 0x0))
-        val dataSoFar = accum ++ newData
-        parseOpt(dataSoFar) match
-          case Some(json) => Some(json)
-          case None       => readNextMessage(dataSoFar)
+    private def readNextMessage(): Option[JValue] =
+      JsonRpcIpcServer.readJsonValue(in).flatMap(text => parseOpt(text))
 
     private def handleNextRequest(): Unit =
       readNextMessage() match
         case Some(nextMsgJson) =>
-          val request = nextMsgJson.extract[JsonRpcRequest]
+          val request = JsonRpcIpcServer.toRequest(nextMsgJson)
           val responseF = jsonRpcController.handleRequest(request)
           try
             val response = responseF.timeout(awaitTimeout).unsafeRunSync()
@@ -135,6 +127,60 @@ class JsonRpcIpcServer(jsonRpcController: JsonRpcBaseController, config: JsonRpc
           running = false
 
 object JsonRpcIpcServer extends Logger:
+
+  /** Reads one whole top-level JSON value (an object or an array) from `in`, whitespace and newlines between values
+    * skipped, and returns its text; `None` at the end of the stream, a message cut off included. The end is found by
+    * counting brackets outside strings, so a request with no newline after it, one longer than any buffer, and two sent
+    * back to back are each read whole.
+    *
+    * It replaced a reader that took 32 characters at a time and stopped at the first prefix json4s would parse, so a
+    * long request (an `admin_addNodesToAllowlist` with an enode, spec 030 S11's quickstart run) was cut and answered
+    * from a fragment with `id: null`.
+    */
+  def readJsonValue(in: java.io.Reader, maxChars: Int = MaxMessageChars): Option[String] =
+    val text = new java.lang.StringBuilder
+    @tailrec def loop(depth: Int, inString: Boolean, escaped: Boolean): Option[String] =
+      val c = in.read()
+      if c == -1 then None
+      else
+        val ch = c.toChar
+        if depth == 0 && Character.isWhitespace(ch) then loop(0, false, false)
+        else if text.length >= maxChars then throw new IOException(s"IPC request longer than $maxChars characters")
+        else
+          text.append(ch)
+          if inString then
+            if escaped then loop(depth, true, false)
+            else if ch == '\\' then loop(depth, true, true)
+            else loop(depth, ch != '"', false)
+          else
+            ch match
+              case '"'       => loop(depth, true, false)
+              case '{' | '[' => loop(depth + 1, false, false)
+              case '}' | ']' =>
+                if depth == 1 then Some(text.toString) else loop(depth - 1, false, false)
+              case _ if depth == 0 => Some(text.toString) // not an object or array: json4s answers it as invalid
+              case _               => loop(depth, false, false)
+    loop(0, false, false)
+
+  /** The request a JSON value holds, read field by field. json4s's reflective `extract[JsonRpcRequest]` left `params`
+    * and `id` as `None` for every request on Scala 3, so over IPC a method with parameters answered -32602 and every
+    * answer carried `id: null` (found by spec 030 S11's quickstart run); HTTP decodes by another path. A missing or
+    * mistyped `jsonrpc` or `method` is kept as an empty string, which the controller answers as an unknown method.
+    */
+  def toRequest(json: JValue): JsonRpcRequest =
+    def string(field: String): String = json \ field match
+      case JString(s) => s
+      case _          => ""
+    val params = json \ "params" match
+      case a: JArray => Some(a)
+      case _         => None
+    val id = json \ "id" match
+      case JNothing => None
+      case v        => Some(v)
+    JsonRpcRequest(string("jsonrpc"), string("method"), params, id)
+
+  /** The longest IPC request read (64 MiB of characters): a longer one closes the connection. */
+  val MaxMessageChars: Int = 64 * 1024 * 1024
 
   /** Sets `path` to read and write for its owner only (0600), as go-ethereum does for its IPC socket, whatever the
     * umask the process runs under. A file system without POSIX permissions (Windows) is skipped with a log line. On a
