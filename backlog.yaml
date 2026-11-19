@@ -3290,3 +3290,13 @@ items:
     links:
       spec: 018
     notes: Found in C6 PR-D (B-067). Olympia is NEVER on every shipped chain, so no live effect today; must be settled before an Olympia block is set. The ECIPs clone was not in the container to check.
+  - id: B-389
+    title: state.conf path-live comment says the guard refuses do-snap-sync=true; ConfigValidator allows SNAP on the guard since C5a part 10
+    priority: P3
+    status: open
+    area: storage
+    opened: 2026-11-19
+    refs: []
+    links:
+      spec: 018
+    notes: Stale doc comment (src/main/resources/conf/base/state.conf:7-8). Found in C6 PR-D (B-067).
