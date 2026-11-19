@@ -3008,19 +3008,20 @@ items:
   - id: B-364
     title: "Spec 030 S11: TUI TLS view, TLS and consortium docs and skills, container healthchecks (closes B-147, B-149)"
     priority: P3
-    status: claimed
+    status: review
     area: docs
     size: S
     opened: 2026-11-18
     refs: [B-146]
     links:
+      prs: [1956]
       spec: specs/030-zero-trust-tls
     depends_on: [B-354, B-355, B-356, B-357, B-358, B-359, B-360, B-361, B-362, B-363]
     claim:
       by: cloud-0ceb384d
       agent: main
       since: 2026-11-19T14:44:12Z
-      heartbeat: 2026-11-19T14:44:12Z
+      heartbeat: 2026-11-19T17:42:21Z
     notes: "FR-061, 062. ~150+150 plus docs. Review: prism."
   - id: B-365
     title: "Spec 030 S1 follow-up: faucet rpc-client TLS onto profiles (FR-008 client half), moved to S7"
