@@ -137,17 +137,17 @@ that exercises it.
 
 ### Tests first
 
-- [ ] T041 [P] [US4] `T/tls/FilePollerSpec.scala` with a manual clock: SHA-256 change detection, a same-second edit detected, a symlinked `..data` swap detected (Kubernetes shape)
-- [ ] T042 [P] [US4] `T/tls/TlsReloaderSpec.scala`: a valid replacement swaps managers and bumps `tls_reloads_total`; an unreadable one keeps the old material, logs, bumps `tls_reload_failures_total{profile}`, and the node stays up (FR-030, FR-031)
-- [ ] T043 [P] [US4] `T/tls/SessionInvalidationSpec.scala`: after a CA is removed from a truststore, a client resuming an earlier session gets a full handshake that fails (US4 scenario 3; research D-1)
-- [ ] T044 [P] [US4] `T/tls/ExpiryGaugeSpec.scala`: `tls_certificate_expiry_seconds{profile, role}` and the daily warning within `expiry-warning` (FR-032)
-- [ ] T045 [US4] `IT/tls/TlsRotationItSpec.scala`: certificate A → B on disk while a keep-alive loop runs; new handshakes see B within one interval; 0 failed requests on the open connection; identity-rules file reload applies to new HTTP requests and not to an open WS (SC-003, FR-033)
+- [x] T041 [P] [US4] `T/tls/FilePollerSpec.scala` with a manual clock: SHA-256 change detection, a same-second edit detected, a symlinked `..data` swap detected (Kubernetes shape)
+- [x] T042 [P] [US4] `T/tls/TlsReloaderSpec.scala`: a valid replacement swaps managers and bumps `tls_reloads_total`; an unreadable one keeps the old material, logs, bumps `tls_reload_failures_total{profile}`, and the node stays up (FR-030, FR-031)
+- [x] T043 [P] [US4] `T/tls/SessionInvalidationSpec.scala`: after a CA is removed from a truststore, a client resuming an earlier session gets a full handshake that fails (US4 scenario 3; research D-1)
+- [x] T044 [P] [US4] `T/tls/ExpiryGaugeSpec.scala`: `tls_certificate_expiry_seconds{profile, role}` and the daily warning within `expiry-warning` (FR-032)
+- [x] T045 [US4] `IT/tls/TlsRotationItSpec.scala`: certificate A → B on disk while a keep-alive loop runs; new handshakes see B within one interval; 0 failed requests on the open connection; identity-rules file reload applies to new HTTP requests and not to an open WS (SC-003, FR-033)
 
 ### Implementation
 
-- [ ] T046 [US4] `M/tls/TlsContexts.scala`: `ReloadingKeyManager`, `ReloadingTrustManager`, swap + session invalidation (research D-1)
-- [ ] T047 [US4] `M/tls/FilePoller.scala` and `M/tls/TlsReloader.scala`: one named daemon scheduler per node; reload settings per profile; metrics (research D-13)
-- [ ] T048 [US4] `network.rpc.client-identities-file` in `M/tls/IdentityRules.scala` and `network.conf`; both inline and file set is a startup error (research D-5)
+- [x] T046 [US4] `M/tls/TlsContexts.scala`: `ReloadingKeyManager`, `ReloadingTrustManager`, swap + session invalidation (research D-1)
+- [x] T047 [US4] `M/tls/FilePoller.scala` and `M/tls/TlsReloader.scala`: one named daemon scheduler per node; reload settings per profile; metrics (research D-13)
+- [x] T048 [US4] `network.rpc.client-identities-file` in `M/tls/IdentityRules.scala` and `network.conf`; both inline and file set is a startup error (research D-5)
 - [ ] T049 [US4] `sbt pp`, `formatCheck`; S4's PR
 
 ---

@@ -200,9 +200,11 @@ class JwtAuthenticatorSpec extends AnyFlatSpec with Matchers with ScalatestRoute
       }
       escaped.asScala.toList shouldBe empty
 
-    expired(s"""{"iat":${now - 61}}""")
+    // 120 s, not 61: the test reads the clock before the authenticator does, so a second that ticks in between
+    // would bring a future iat of now + 61 back to a skew of 60, inside the window (a race on a loaded runner)
+    expired(s"""{"iat":${now - 120}}""")
     expired(s"""{"iat":${now - 3600}}""")
-    expired(s"""{"iat":${now + 61}}""")
+    expired(s"""{"iat":${now + 120}}""")
     expired("""{"iat":0}""")
     expired("""{"iat":-5}""")
     expired("""{"iat":99999999999999999999999999}""")

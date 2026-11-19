@@ -1,5 +1,8 @@
 package com.chipprbots.ethereum.tls
 
+import java.nio.file.Files
+import java.nio.file.Path
+import java.nio.file.Paths
 import java.security.MessageDigest
 import java.security.cert.X509Certificate
 import javax.naming.ldap.LdapName
@@ -11,6 +14,7 @@ import scala.util.Try
 
 import com.typesafe.config.Config
 import com.typesafe.config.ConfigException
+import com.typesafe.config.ConfigFactory
 import com.typesafe.config.ConfigValueType
 
 /** What a rule matches on a verified client certificate (spec 030 FR-020). Every key given must match (AND); at least
@@ -125,6 +129,7 @@ object IdentityRules:
   val UnmatchedLabel = "unmatched"
 
   private val Key = "network.rpc.client-identities"
+  private val FileKey = "network.rpc.client-identities-file"
   private val ConfigPath = s"${TlsConfig.Prefix}.$Key"
   private val SessionKey = "fukuii.rpc.identity"
   private val NamePattern = "[a-z0-9_-]{1,32}".r
@@ -163,13 +168,57 @@ object IdentityRules:
     *     `network.rpc.graphql.enabled` is on (FR-028).
     */
   def parse(config: Config, availableApis: Seq[String]): Either[TlsConfigError, IdentityRules] =
-    if !config.hasPath(Key) then Right(Empty)
+    file(config).flatMap {
+      case None => parseList(config, Key, ConfigPath, availableApis, graphQlEnabled(config))
+      case Some(path) =>
+        for
+          _ <- Either.cond(
+            !config.hasPath(Key) || guard(ConfigPath)(config.getList(Key).isEmpty).getOrElse(false),
+            (),
+            TlsConfigError(
+              s"$ConfigPath: set either client-identities or client-identities-file ($path), not both; the file is " +
+                "the one that reloads"
+            )
+          )
+          contents <- readFile(path)
+          rules <- parseList(
+            contents,
+            "client-identities",
+            s"$path: client-identities",
+            availableApis,
+            graphQlEnabled(config)
+          )
+        yield rules
+    }
+
+  /** `network.rpc.client-identities-file` (FR-033, research D-5): a HOCON file holding `client-identities = [ … ]`,
+    * which the node re-reads on a change. `None` where the rules are inline (restart-only).
+    */
+  def file(config: Config): Either[TlsConfigError, Option[Path]] =
+    if !config.hasPath(FileKey) || config.getIsNull(FileKey) then Right(None)
+    else guard(s"${TlsConfig.Prefix}.$FileKey")(Some(Paths.get(config.getString(FileKey))))
+
+  private def readFile(path: Path): Either[TlsConfigError, Config] =
+    val key = s"${TlsConfig.Prefix}.$FileKey"
+    if !Files.isRegularFile(path) then Left(TlsConfigError(s"$key: $path not found"))
+    else if !Files.isReadable(path) then Left(TlsConfigError(s"$key: $path is not readable"))
+    else
+      try Right(ConfigFactory.parseFile(path.toFile).resolve())
+      catch case e: ConfigException => Left(TlsConfigError(s"$key: $path does not parse (${e.getMessage})"))
+
+  private def parseList(
+      source: Config,
+      key: String,
+      path: String,
+      availableApis: Seq[String],
+      graphQlOn: Boolean
+  ): Either[TlsConfigError, IdentityRules] =
+    if !source.hasPath(key) then Right(Empty)
     else
       for
-        entries <- guard(ConfigPath)(config.getConfigList(Key).asScala.toVector)
+        entries <- guard(path)(source.getConfigList(key).asScala.toVector)
         parsed <- entries.zipWithIndex.foldLeft[Either[TlsConfigError, Vector[IdentityRule]]](Right(Vector.empty)) {
-          case (acc, (entry, i)) =>
-            acc.flatMap(done => rule(entry, s"$ConfigPath[$i]", availableApis, graphQlEnabled(config), done))
+          case (acc, (entry, i)) => acc.flatMap(done => rule(entry, s"$path[$i]", availableApis, graphQlOn, done))
         }
       yield IdentityRules(parsed)
 

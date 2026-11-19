@@ -98,6 +98,8 @@ abstract class BaseNode extends Node:
     // Phase -1 (spec 030 FR-010): every TLS listener's material is validated before the first port binds. The first
     // failure is the refusal, so a listener never comes up half-configured next to one that did.
     checkTlsAtStart()
+    // the identity-rules file reloads from here on (spec 030 FR-033); each TLS listener registers itself as it binds
+    startIdentityReload()
 
     // Phase 0: the TUI's frames, so its splash and "starting node" move while the node starts. The probe that feeds it
     // starts in phase 6, once the actors it asks exist.
@@ -757,6 +759,7 @@ abstract class BaseNode extends Node:
       case Failure(e) => log.warn("Error while shutting down...", e)
       case Success(_) =>
 
+    tryAndLogFailure(() => tlsReloader.shutdown())
     tryAndLogFailure(() => tuiProbe.foreach(_.stop()))
     tryAndLogFailure(() => tuiUpdater.foreach(_.stop()))
     tryAndLogFailure(() => Tui.current.foreach(_.shutdown()))

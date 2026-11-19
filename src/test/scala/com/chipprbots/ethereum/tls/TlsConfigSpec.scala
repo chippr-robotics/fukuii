@@ -104,3 +104,25 @@ class TlsConfigSpec extends AnyFlatSpec with Matchers with BeforeAndAfterAll:
     TlsConfig.rpcHttp(cfg).left.toOption.get.message should (include("tls.enabled").and(include("mode")))
     Files.exists(server.store) shouldBe true
   }
+
+  "A profile's reload settings" should "default to on, every minute, warning 14 days before expiry (FR-030, FR-032)" taggedAs (
+    UnitTest
+  ) in {
+    val p = TlsConfig.profiles(TlsTestSupport.config(TlsTestSupport.profile("rpc", server))).toOption.get("rpc")
+    p.reload shouldBe ReloadPolicy(enabled = true, scala.concurrent.duration.Duration(1, "minute"))
+    p.expiryWarning shouldBe scala.concurrent.duration.Duration(14, "days")
+    p.files shouldBe Seq(server.store, server.passwordFile)
+  }
+
+  it should "read reload and expiry-warning, and refuse an interval below one second" taggedAs (UnitTest) in {
+    def parse(extra: String) =
+      TlsConfig.profiles(TlsTestSupport.config(TlsTestSupport.profile("rpc", server, extra = extra)))
+    val p = parse("""reload { enabled = false, interval = 30.seconds }, expiry-warning = 3.days""").toOption.get("rpc")
+    p.reload.enabled shouldBe false
+    p.reload.interval.toSeconds shouldBe 30
+    p.expiryWarning.toDays shouldBe 3
+    parse("reload.interval = 100.millis").left.toOption.get.message should include(
+      "fukuii.tls.profiles.rpc.reload.interval"
+    )
+    parse("expiry-warning = 0.days").left.toOption.get.message should include("expiry-warning: must be positive")
+  }

@@ -1319,7 +1319,7 @@ trait RpcIdentityBuilder:
       listener: Either[TlsConfigError, Option[ResolvedListener]],
       controller: JsonRpcController,
       transportApis: Seq[String]
-  ): Option[RpcCallers] =
+  ): Option[RpcCallers.Reloadable] =
     listener.toOption.flatten.filter(TlsStartupCheck.resolvesIdentities).map { _ =>
       RpcCallers(
         identityRules,
@@ -1329,11 +1329,46 @@ trait RpcIdentityBuilder:
       )
     }
 
-  lazy val rpcHttpCallers: Option[RpcCallers] =
+  lazy val rpcHttpCallers: Option[RpcCallers.Reloadable] =
     callersFor(TlsConfig.rpcHttp(instanceConfig.config), jsonRpcHttpController, jsonRpcConfig.httpApis)
 
-  lazy val rpcWsCallers: Option[RpcCallers] =
+  lazy val rpcWsCallers: Option[RpcCallers.Reloadable] =
     callersFor(TlsConfig.rpcWs(instanceConfig.config), jsonRpcWsController, jsonRpcConfig.wsApis)
+
+  /** The node's one TLS reload loop (spec 030 FR-030–FR-033): each TLS listener registers its context when it binds,
+    * and the identity-rules file, when one is set, is registered by [[startIdentityReload]].
+    */
+  lazy val tlsReloader: TlsReloader = new TlsReloader()
+
+  /** A listener's TLS context for one bind, registered with the reload loop under the listener's label. */
+  protected def reloading(
+      listener: ListenerId,
+      context: Either[TlsConfigError, TlsServerContext]
+  ): Either[TlsConfigError, TlsServerContext] =
+    context.foreach(c => tlsReloader.register(listener.label, c))
+    context
+
+  /** Re-reads `network.rpc.client-identities-file` on the shortest reload interval of the listeners that resolve
+    * identities (one minute by default), and hands a valid change to both listeners' callers (FR-033). Nothing where
+    * the rules are inline, or no listener resolves identities.
+    */
+  def startIdentityReload(): Unit =
+    val callers = rpcHttpCallers.toList ++ rpcWsCallers.toList
+    IdentityRules.file(instanceConfig.config).toOption.flatten.filter(_ => callers.nonEmpty).foreach { file =>
+      val config = instanceConfig.config
+      val intervals = (TlsConfig.rpcHttp(config).toOption.flatten.toList ++ TlsConfig.rpcWs(config).toOption.flatten)
+        .filter(TlsStartupCheck.resolvesIdentities)
+        .map(_.profile.reload)
+        .filter(_.enabled)
+        .map(_.interval)
+      if intervals.nonEmpty then
+        tlsReloader.registerRules(
+          file,
+          intervals.minBy(_.toMillis),
+          () => IdentityRules.parse(config, availableApis),
+          rules => callers.foreach(_.update(rules))
+        )
+    }
 
 trait JSONRpcHttpServerBuilder:
   self: ActorSystemBuilder & BlockchainBuilder & JSONRpcControllerBuilder & JSONRpcHealthcheckerBuilder &
@@ -1346,7 +1381,11 @@ trait JSONRpcHttpServerBuilder:
       jsonRpcHttpController,
       jsonRpcHealthChecker,
       jsonRpcConfig.httpServerConfig,
-      () => com.chipprbots.ethereum.tls.TlsServerEngine.rpcHttp(instanceConfig.config, secureRandom),
+      () =>
+        reloading(
+          com.chipprbots.ethereum.tls.ListenerId.RpcHttp,
+          com.chipprbots.ethereum.tls.TlsServerEngine.rpcHttp(instanceConfig.config, secureRandom)
+        ),
       maybeGraphQLService,
       rpcHttpCallers
     )
@@ -1380,7 +1419,13 @@ trait JSONRpcWsServerBuilder:
       jsonRpcWsController,
       subscriptionManager,
       jsonRpcConfig.wsServerConfig,
-      () => com.chipprbots.ethereum.tls.TlsServerEngine.rpcWs(instanceConfig.config, secureRandom),
+      () =>
+        com.chipprbots.ethereum.tls.TlsServerEngine
+          .rpcWs(instanceConfig.config, secureRandom)
+          .map(_.map { ctx =>
+            tlsReloader.register(com.chipprbots.ethereum.tls.ListenerId.RpcWs.label, ctx)
+            ctx
+          }),
       rpcWsCallers
     )(using classicSystem)
 

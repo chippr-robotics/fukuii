@@ -81,7 +81,9 @@ object TlsServerEngine:
   private def loadResolved(resolved: ResolvedListener, secureRandom: SecureRandom) =
     TlsMaterialLoader
       .load(resolved.profile, resolved.listener.clientAuth, resolved.configPath)
-      .map(material => TlsContexts.server(resolved.profile, material, resolved.listener.clientAuth, secureRandom))
+      .map(material =>
+        TlsContexts.server(resolved.profile, material, resolved.listener.clientAuth, secureRandom, resolved.configPath)
+      )
 
   /** The node's one limiter: a scan that tries every listener is still logged once per address per minute. */
   private val nodeFailureLog = new HandshakeFailureLog()

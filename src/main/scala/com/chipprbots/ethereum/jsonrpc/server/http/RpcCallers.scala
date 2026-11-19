@@ -1,5 +1,6 @@
 package com.chipprbots.ethereum.jsonrpc.server.http
 
+import java.util.concurrent.atomic.AtomicReference
 import javax.net.ssl.SSLSession
 
 import com.chipprbots.ethereum.jsonrpc.server.controllers.JsonRpcBaseController
@@ -42,7 +43,22 @@ object RpcCallers:
       transportApis: Seq[String],
       controllerFor: (Seq[String], String) => JsonRpcBaseController,
       graphQlEnabled: Boolean
-  ): RpcCallers = new RpcCallers:
+  ): Reloadable = new Reloadable(identityRules, transportApis, controllerFor, graphQlEnabled)
+
+  /** The callers of a listener that resolves identities, whose rules a reload of the identity-rules file replaces
+    * (FR-033). A replacement applies to the next request of every HTTP caller (the generation is bumped, so a caller
+    * cached on a TLS session is resolved again) and to every new WebSocket; an open WebSocket keeps the controller it
+    * was given at its upgrade (FR-026).
+    */
+  final class Reloadable(
+      initial: IdentityRules,
+      transportApis: Seq[String],
+      controllerFor: (Seq[String], String) => JsonRpcBaseController,
+      graphQlEnabled: Boolean
+  ) extends RpcCallers:
+
+    final private case class Built(rules: IdentityRules, matched: Map[String, RpcCaller])
+
     private val anonymous = RpcCaller(
       controllerFor(transportApis, IdentityRules.AnonymousLabel),
       IdentityRules.graphQlAllowed(Caller.Anonymous, graphQlEnabled),
@@ -53,19 +69,34 @@ object RpcCallers:
       IdentityRules.graphQlAllowed(Caller.Unmatched(""), graphQlEnabled),
       Some(IdentityRules.UnmatchedLabel)
     )
-    private val matched: Map[String, RpcCaller] = identityRules.rules.map { rule =>
-      val caller = Caller.Matched(rule)
-      rule.name -> RpcCaller(
-        controllerFor(IdentityRules.effectiveApis(caller, transportApis), rule.name),
-        IdentityRules.graphQlAllowed(caller, graphQlEnabled),
-        Some(rule.name)
-      )
-    }.toMap
 
-    override def rules: IdentityRules = identityRules
+    private def build(rules: IdentityRules): Built =
+      Built(
+        rules,
+        rules.rules.map { rule =>
+          val caller = Caller.Matched(rule)
+          rule.name -> RpcCaller(
+            controllerFor(IdentityRules.effectiveApis(caller, transportApis), rule.name),
+            IdentityRules.graphQlAllowed(caller, graphQlEnabled),
+            Some(rule.name)
+          )
+        }.toMap
+      )
+
+    private val current = new AtomicReference[Built](build(initial))
+
+    override def rules: IdentityRules = current.get.rules
+
+    /** Serves `next` from the next resolution on, under a generation above the one in service. Every controller is
+      * built before the swap, so a request never sees half a rule set.
+      */
+    def update(next: IdentityRules): Unit =
+      val generation = current.get.rules.generation + 1
+      current.set(build(next.copy(generation = generation)))
 
     override def forSession(session: Option[SSLSession]): RpcCaller =
-      session.map(identityRules.resolve) match
-        case Some(Caller.Matched(rule))    => matched(rule.name)
+      val built = current.get
+      session.map(built.rules.resolve) match
+        case Some(Caller.Matched(rule))    => built.matched(rule.name)
         case Some(Caller.Unmatched(_))     => unmatched
         case Some(Caller.Anonymous) | None => anonymous
