@@ -4,7 +4,7 @@
 
 **Created**: 2026-11-17
 
-**Status**: Planned (2026-11-18). Q1–Q5 were answered on 2026-11-18 (see Clarifications), and the user accepted the plan's own decisions the same day, and plan.md and tasks.md slice the work into eleven PRs; no code has landed.
+**Status**: Active (2026-11-19). All eleven slices have landed (S1 #1914, S9 #1915, S2 #1920, S3 #1933, S4 #1941, S5 #1951, S7 #1952, S10 #1953, S6 #1954, S8 #1955, S11 #1956); open before `Done`: T081, the three-node allowlist IT (SC-005), and FR-051's per-minute rejection summary (B-400).
 
 **Input**: Backlog B-146 (P1, from the B-145 TLS audit, issue #1756): "Spec: zero-trust TLS and mTLS on every service
 listener (RPC, WS, Engine API, metrics) plus outbound TLS. Shared tls block, client-auth need/want, truststore,
