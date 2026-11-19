@@ -1669,7 +1669,9 @@ case class SNAPSyncConfig(
     // downloader have no header cursor to wait for, and SNAPDeferredBackfillSpec covers the hold.
     deferChainBackfillUntilStateComplete: Boolean = false,
     chainDownloadTimeout: FiniteDuration = 10.seconds,
-    minSnapPeers: Int = 3,
+    // The shipped `sync.snap-sync.min-snap-peers` (base/sync.conf), here and when the key is absent: the config value is
+    // the one that runs, and a default that differed from it ran only in tests and in SyncController's fallback.
+    minSnapPeers: Int = 2,
     snapPeerEvictionInterval: FiniteDuration = 15.seconds,
     maxEvictionsPerCycle: Int = 3,
     deferredMerkleization: Boolean = true,
@@ -1744,7 +1746,13 @@ case class SNAPSyncConfig(
       * threshold by non-SNAP memory cannot stall SNAP forever. 0 = never. Key:
       * `sync.snap-sync.heap-watchdog-max-pause`.
       */
-    heapWatchdogMaxPause: FiniteDuration = 5.minutes
+    heapWatchdogMaxPause: FiniteDuration = 5.minutes,
+    /** On the unified state layout, on proof of work, how long a node that holds only its genesis state waits at SNAP's
+      * start for `minSnapPeers` snap-capable peers (spec 018 C6; the user's decision of 2026-11-18). With some at the
+      * end it begins SNAP with them; with none it regular-syncs from its genesis. Read on the guard alone. Key:
+      * `sync.snap-sync.pow-snap-peer-wait`.
+      */
+    powSnapPeerWait: FiniteDuration = 10.minutes
 )
 
 object SNAPSyncConfig:
@@ -1864,7 +1872,7 @@ object SNAPSyncConfig:
         else 10.seconds,
       minSnapPeers =
         if snapConfig.hasPath("min-snap-peers") then snapConfig.getInt("min-snap-peers")
-        else 3,
+        else 2,
       snapPeerEvictionInterval =
         if snapConfig.hasPath("snap-peer-eviction-interval") then
           snapConfig.getDuration("snap-peer-eviction-interval").toMillis.millis
@@ -1937,7 +1945,10 @@ object SNAPSyncConfig:
       heapWatchdogMaxPause =
         if snapConfig.hasPath("heap-watchdog-max-pause") then
           snapConfig.getDuration("heap-watchdog-max-pause").toMillis.millis
-        else 5.minutes
+        else 5.minutes,
+      powSnapPeerWait =
+        if snapConfig.hasPath("pow-snap-peer-wait") then snapConfig.getDuration("pow-snap-peer-wait").toMillis.millis
+        else 10.minutes
     )
 
 // StateValidator has been extracted to StateValidator.scala

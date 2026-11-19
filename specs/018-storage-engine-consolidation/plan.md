@@ -4830,7 +4830,14 @@ DELETED in C8a/C8b: snap/PathToHashExporter.scala, StorageScheme, SnapHashTrie a
 2. **Pinned oracle jar, recorded roots, hive and EEST baselines:** who keeps them, and for how long after the gate (the plan says
    until EG-12 passes, a second import of the first ETC archive, and one release past C8b).
 3. **The snap-peer precondition for EG-12:** if fewer than 2 snap-capable ETC peers are visible, may a declared local core-geth
-   peer be used? (The user decides, per forge.)
+   peer be used? (The user decides, per forge.) **Resolved (user, 2026-11-18): yes.** An operator-declared static peer
+   (`static-nodes.json`, `sync.snap-sync.snap-server-peers`) counts toward the precondition like any other snap-capable
+   peer. At SNAP's start on the guard the node logs one `[SNAP-PEERS]` line with the count of snap-capable peers on the
+   chain and how many of them were declared, and EG-12's run records that line, so a run that relied on a declared peer
+   says so. With the same decision, a proof-of-work guard node may regular-sync from its genesis on the unified layout:
+   with `do-snap-sync = false`, or when no snap-capable peer comes within `sync.snap-sync.pow-snap-peer-wait` (10 min) of
+   SNAP's start (one WARN with the count). Chains with a terminal total difficulty keep the refusal of regular sync from
+   the genesis, and never fall back (C6 PR-C, B-067).
 4. **Hosts for EG-6 (the private ETC-config PoW net), EG-14 (the consensus-client devnet) and EG-15 (Platåberget, 6 h):** which
    machines, and the Ethash DAG on the miners.
 5. **The EIP-8246 text** has not been read by anyone against the EIP itself (beacon 5f and round 2): neither reviewer had an EIPs clone. C0 reads it and records the pass count of the 658 `eip8246_selfdestruct_no_burn` EEST fixtures (baseline 1 passing before #1422, `specs/009-amsterdam-fork-support/baselines/eest-v21-amsterdam-2026-09-26.txt:24`). Track C's storage design does not depend on the text: rule 6 triggers on the parent's storage root, and the one shape it needs (storage cleared, account kept) is what the code and `AmsterdamSelfDestructSpec` already produce.
