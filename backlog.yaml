@@ -3144,7 +3144,7 @@ items:
   - id: B-376
     title: "B-065 follow-up: recovery download phases (storage/bytecode coordinators) still write by hash on the unified layout"
     priority: P2
-    status: claimed
+    status: in-progress
     area: storage
     opened: 2026-11-18
     refs: []
@@ -3154,7 +3154,7 @@ items:
       by: cloud-dc960fdc
       agent: forge
       since: 2026-11-19T02:18:30Z
-      heartbeat: 2026-11-19T02:18:30Z
+      heartbeat: 2026-11-19T02:35:01Z
     notes: C5b part 3 moved the scans' reads to rows; the download coordinators and logResidualGaps' fill path still use getBackingStorage. Decide with C5c/C6 how a recovery fills a hole by position (repairNodeAt).
   - id: B-377
     title: "Checkpoint v2 hash-layout import counts every occurrence: decide whether RefCountsExact may stay (vault)"
