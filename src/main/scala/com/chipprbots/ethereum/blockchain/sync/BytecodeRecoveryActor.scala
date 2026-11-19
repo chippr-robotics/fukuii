@@ -142,7 +142,51 @@ object BytecodeRecoveryActor:
     positions
   )
 
+  // B-376 (the user's decision of 2026-11-19): the one entry of this actor, `apply`, `applyPreloaded` and `testApply`
+  // alike. Its download writes code into the code store, which both layouts share, and its scan reads rows where it is
+  // given them; it is refused on the unified layout all the same, as every route into recovery is today (SyncController:
+  // the bulk request and the start after a SNAP sync that is done, both refused on the guard, spec 018 C5a part 10),
+  // so that whether recovery runs on that layout is decided in one place, with the storage leg's refusal, when the
+  // deferred by-position rewrite of B-376 lands. The refusal is loud, and ends recovery for this run as a scan that
+  // could not run does: nothing is written and no flag is set, and regular sync fetches code one hash at a time.
   private def scanning(
+      stateRoot: ByteString,
+      stateIngest: StateIngest,
+      networkPeerManager: TypedActorRef[NetworkPeerManagerActor.Command],
+      syncController: TypedActorRef[SyncControllerMsg],
+      pivotBlockNumber: BigInt,
+      snapSyncConfig: SNAPSyncConfig,
+      preloaded: Option[Seq[ByteString]],
+      coordinatorForTesting: Option[ActorRef],
+      positions: Option[PositionRepairs]
+  ): Behavior[Command] =
+    if positions.isDefined then refusedOnPositions(syncController)
+    else
+      scanningOnTheHashLayout(
+        stateRoot,
+        stateIngest,
+        networkPeerManager,
+        syncController,
+        pivotBlockNumber,
+        snapSyncConfig,
+        preloaded,
+        coordinatorForTesting,
+        positions
+      )
+
+  /** What is logged, at ERROR, when this actor is started on the unified layout (B-376). */
+  private[sync] val RefusedOnPositions: String =
+    "[SNAP-RECOVERY] Bytecode recovery refused: this node holds its state on the unified (position) layout, and recovery " +
+      "is not run there (B-376). Nothing is scanned or written, and no recovery flag is set."
+
+  private def refusedOnPositions(syncController: TypedActorRef[SyncControllerMsg]): Behavior[Command] =
+    Behaviors.setup { ctx =>
+      ctx.log.error(RefusedOnPositions)
+      syncController ! RecoveryNotRun
+      Behaviors.stopped
+    }
+
+  private def scanningOnTheHashLayout(
       stateRoot: ByteString,
       stateIngest: StateIngest,
       networkPeerManager: TypedActorRef[NetworkPeerManagerActor.Command],
