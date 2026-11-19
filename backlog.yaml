@@ -2938,7 +2938,7 @@ items:
       by: cloud-0ceb384d
       agent: beacon
       since: 2026-11-19T13:46:54Z
-      heartbeat: 2026-11-19T14:00:01Z
+      heartbeat: 2026-11-19T14:44:06Z
       branch: ccr-0ceb384d-ufzahb
     notes: "US6; FR-015, 016. ~350+500; metrics need mode also needs S2. Review: beacon (Engine API), conduit."
   - id: B-359
@@ -2956,7 +2956,7 @@ items:
       by: cloud-0ceb384d
       agent: conduit
       since: 2026-11-19T14:20:36Z
-      heartbeat: 2026-11-19T14:20:36Z
+      heartbeat: 2026-11-19T14:44:06Z
       branch: ccr-0ceb384d-ufzahb
     notes: "US8; FR-018, 019, 027. Lands in a minor release with a Read-before-upgrading note; release named when it lands. Review: conduit, beacon, prism."
   - id: B-360
@@ -2974,7 +2974,7 @@ items:
       by: cloud-0ceb384d
       agent: conduit
       since: 2026-11-19T14:00:13Z
-      heartbeat: 2026-11-19T14:00:13Z
+      heartbeat: 2026-11-19T14:44:06Z
       branch: ccr-0ceb384d-ufzahb
     notes: "US5; FR-040-045, 008. ~500+600. Review: conduit."
   - id: B-361
@@ -2992,7 +2992,7 @@ items:
       by: cloud-0ceb384d
       agent: conduit
       since: 2026-11-19T14:27:53Z
-      heartbeat: 2026-11-19T14:27:53Z
+      heartbeat: 2026-11-19T14:44:06Z
       branch: ccr-0ceb384d-ufzahb
     notes: "US5; FR-040, 045, 046; SC-004. ~300+400. Review: conduit, prism."
   - id: B-362
@@ -3023,7 +3023,7 @@ items:
       by: cloud-0ceb384d
       agent: herald
       since: 2026-11-19T14:10:03Z
-      heartbeat: 2026-11-19T14:10:03Z
+      heartbeat: 2026-11-19T14:44:06Z
       branch: ccr-0ceb384d-ufzahb
     notes: "US7 5-7; FR-056-059. ~350+600 plus a crash IT. Review: herald, conduit."
   - id: B-364
@@ -3051,7 +3051,7 @@ items:
       by: cloud-0ceb384d
       agent: conduit
       since: 2026-11-19T14:00:17Z
-      heartbeat: 2026-11-19T14:00:17Z
+      heartbeat: 2026-11-19T14:44:06Z
       branch: ccr-0ceb384d-ufzahb
     notes: S1 moved the faucet's listener onto profiles; rpc-client still uses SSLContextBuilder (B-148 fail-closed) until S7
   - id: B-366
