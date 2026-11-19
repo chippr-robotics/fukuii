@@ -106,7 +106,7 @@ class JsonRpcIpcServer(jsonRpcController: JsonRpcBaseController, config: JsonRpc
     private def handleNextRequest(): Unit =
       readNextMessage() match
         case Some(nextMsgJson) =>
-          val request = nextMsgJson.extract[JsonRpcRequest]
+          val request = JsonRpcIpcServer.toRequest(nextMsgJson)
           val responseF = jsonRpcController.handleRequest(request)
           try
             val response = responseF.timeout(awaitTimeout).unsafeRunSync()
@@ -161,6 +161,23 @@ object JsonRpcIpcServer extends Logger:
               case _ if depth == 0 => Some(text.toString) // not an object or array: json4s answers it as invalid
               case _               => loop(depth, false, false)
     loop(0, false, false)
+
+  /** The request a JSON value holds, read field by field. json4s's reflective `extract[JsonRpcRequest]` left `params`
+    * and `id` as `None` for every request on Scala 3, so over IPC a method with parameters answered -32602 and every
+    * answer carried `id: null` (found by spec 030 S11's quickstart run); HTTP decodes by another path. A missing or
+    * mistyped `jsonrpc` or `method` is kept as an empty string, which the controller answers as an unknown method.
+    */
+  def toRequest(json: JValue): JsonRpcRequest =
+    def string(field: String): String = json \ field match
+      case JString(s) => s
+      case _          => ""
+    val params = json \ "params" match
+      case a: JArray => Some(a)
+      case _         => None
+    val id = json \ "id" match
+      case JNothing => None
+      case v        => Some(v)
+    JsonRpcRequest(string("jsonrpc"), string("method"), params, id)
 
   /** The longest IPC request read (64 MiB of characters): a longer one closes the connection. */
   val MaxMessageChars: Int = 64 * 1024 * 1024

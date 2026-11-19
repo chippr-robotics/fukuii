@@ -121,3 +121,21 @@ class JsonRpcIpcServerSpec extends AnyFlatSpec with Matchers:
   it should "refuse a request longer than the limit" taggedAs (UnitTest, RPCTest) in {
     intercept[java.io.IOException](JsonRpcIpcServer.readJsonValue(new java.io.StringReader("[" + "1," * 50), 20))
   }
+
+  "JsonRpcIpcServer.toRequest" should "keep the params and the id of a request (spec 030 S11)" taggedAs (
+    UnitTest,
+    RPCTest
+  ) in {
+    import org.json4s.*
+    import org.json4s.native.JsonMethods.parse
+    val nested = JsonRpcIpcServer.toRequest(parse("""{"jsonrpc":"2.0","id":7,"method":"m","params":[["a","b"]]}"""))
+    nested shouldBe com.chipprbots.ethereum.jsonrpc.JsonRpcRequest(
+      "2.0",
+      "m",
+      Some(JArray(List(JArray(List(JString("a"), JString("b")))))),
+      Some(JInt(7))
+    )
+    JsonRpcIpcServer.toRequest(parse("""{"jsonrpc":"2.0","id":"x","method":"m"}""")).id shouldBe Some(JString("x"))
+    JsonRpcIpcServer.toRequest(parse("""{"jsonrpc":"2.0","method":"m","params":[]}""")).id shouldBe None
+    JsonRpcIpcServer.toRequest(parse("""{"id":1}""")).method shouldBe ""
+  }
