@@ -549,6 +549,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   changes, so a client that does not select them sees the same output.
 
 ### Fixed
+- **JSON-RPC over IPC answered methods with parameters `-32602` and every call `id: null`.** json4s's reflective
+  extract of the request left `params` and `id` empty on Scala 3; the IPC server now reads the fields itself. It also
+  read requests 32 characters at a time and stopped at the first prefix that parsed, cutting long requests; it now
+  reads each whole value, with or without a newline after it. Found running spec 030's quickstart
+  (`admin_addNodesToAllowlist` over IPC).
 - **`admin_blockIP` blocks the address (B-277).** It only added the address to a list that nothing read, so it blocked
   nothing. The node now refuses inbound connections from the address, never dials it (any path: discovery, snap
   redials, `admin_addPeer` and trusted peers, `net_connectToPeer`), and disconnects the peers connected from it when
