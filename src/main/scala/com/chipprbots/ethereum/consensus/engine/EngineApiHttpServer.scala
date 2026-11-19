@@ -21,6 +21,10 @@ import org.json4s.native.JsonMethods.*
 import com.chipprbots.ethereum.jsonrpc.JsonRpcError
 import com.chipprbots.ethereum.jsonrpc.JsonRpcRequest
 import com.chipprbots.ethereum.jsonrpc.JsonRpcResponse
+import com.chipprbots.ethereum.tls.ListenerId
+import com.chipprbots.ethereum.tls.TlsConfigError
+import com.chipprbots.ethereum.tls.TlsServerContext
+import com.chipprbots.ethereum.tls.TlsServerEngine
 import com.chipprbots.ethereum.utils.Logger
 
 /** Separate HTTP server for the Engine API on the authrpc port (default 8551). JWT-authenticated, accepts only engine_*
@@ -41,7 +45,10 @@ class EngineApiHttpServer(
     jwtAuth: JwtAuthenticator,
     config: EngineApiHttpServer.Config,
     // Where each call is noted once it has ended, for the dashboard (spec 029 FR-040): the node's own.
-    calls: EngineCallLog = EngineCallLog.Node
+    calls: EngineCallLog = EngineCallLog.Node,
+    // Server TLS for the authrpc port (spec 030 FR-015): the transport only. JWT stays mandatory either way, and no
+    // client certificate is ever asked for. Read at each start; a context that cannot be built fails the bind.
+    tls: () => Either[TlsConfigError, Option[TlsServerContext]] = () => Right(None)
 ) extends Logger:
 
   // Dedicated ActorSystem isolated from the main node's peer-management dispatchers.
@@ -188,7 +195,19 @@ class EngineApiHttpServer(
     JObject(fields)
 
   def start(): Future[Http.ServerBinding] =
-    val bindFuture = Http().newServerAt(config.interface, config.port).bind(route)
+    val server = Http().newServerAt(config.interface, config.port)
+    val bindFuture = tls() match
+      case Left(error)         => Future.failed(new IllegalStateException(error.message))
+      case Right(None)         => server.bind(route)
+      case Right(Some(secure)) =>
+        // As on the RPC listeners: a refused handshake is counted and logged with its address (FR-017).
+        val settings = TlsServerEngine.serverSettings(system)
+        server
+          .enableHttps(TlsServerEngine.connectionContext(secure))
+          .withSettings(settings)
+          .bindFlow(
+            TlsServerEngine.observeHandshakes(ListenerId.EngineApi, TlsServerEngine.routeHandler(route, settings))
+          )
     // Whether it bound, for the dashboard's RPC view (spec 029 FR-039).
     bindFuture.onComplete(bound =>
       com.chipprbots.ethereum.jsonrpc.RpcCallStats.Node

@@ -424,6 +424,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `.env` files.
 
 ### Added
+- **TLS on the Engine API and the metrics endpoint; metrics binds loopback by default (spec 030 S5, B-358).**
+  `network.engine-api.tls { enabled, profile }` serves the authrpc port over server TLS; JWT stays mandatory, the
+  listener never asks for a client certificate, and a `client-auth` key there refuses the start. `metrics.tls { enabled,
+  profile, client-auth }` serves `/metrics` over TLS with `none`, `want` or `need`, refused handshakes counted in
+  `app_tls_handshake_failures_total{listener="metrics", …}`, and both reload with their profile. **`metrics.interface`
+  is new and defaults to `localhost`: the endpoint bound every interface before.** A Prometheus server on another host
+  needs `metrics.interface` set (to an address or `0.0.0.0`), preferably with TLS.
 - **TLS material and identity rules reload without a restart (spec 030 S4, B-357).** Each TLS profile re-reads its
   keystore, truststore and password files when their content changes (`reload { enabled = true, interval =
   1.minute }`; a SHA-256 of the content, so a same-second edit and a Kubernetes `..data` symlink swap are both seen).
