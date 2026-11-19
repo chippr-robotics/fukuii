@@ -2939,19 +2939,20 @@ items:
   - id: B-359
     title: "Spec 030 S6 (BREAKING): refuse plaintext non-loopback binds; allow-insecure-bind; migration, ADR OPS-005"
     priority: P2
-    status: claimed
+    status: review
     area: ops
     size: M
     opened: 2026-11-18
     refs: [B-146]
     links:
+      prs: [1954]
       spec: specs/030-zero-trust-tls
     depends_on: [B-355, B-358]
     claim:
       by: cloud-0ceb384d
       agent: conduit
       since: 2026-11-19T14:20:36Z
-      heartbeat: 2026-11-19T14:44:06Z
+      heartbeat: 2026-11-19T16:38:21Z
       branch: ccr-0ceb384d-ufzahb
     notes: "US8; FR-018, 019, 027. Lands in a minor release with a Read-before-upgrading note; release named when it lands. Review: conduit, beacon, prism."
   - id: B-360
