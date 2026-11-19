@@ -153,8 +153,11 @@ final class PowEscalationFeed(
   // its height, is a hole in this node's datadir, and MESS does not refuse on it (B-383, spec 018 C6 PR-B,
   // BranchResolution.messRejects): the branch is judged by weight and consensus refuses it as a fault of this node
   // (`StateUnavailable`). It is counted as that fault, by how far it grows; read as a refusal by MESS it was never
-  // counted, and the node waited with no end. Where the block is not known to be the node's, or the walk down the branch
-  // ended on a side block (its reach), what would be weighed is not what the rule weighs: not counted (forge).
+  // counted, and the node waited with no end. Its first header reaches here by its seal alone: the validation the feed
+  // is given checks it without its parent rules there, and only there (B-391,
+  // BlockValidation.firstInvalidHeaderOfNotJudged). Where the block is not known to be the node's, or the walk down
+  // the branch ended on a side block (its reach), what would be weighed is not what the rule weighs: not counted
+  // (forge).
   private def messLeavesOut(first: BlockHeader, of: ChainWeight): Option[String] =
     for
       rule <- mess

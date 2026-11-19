@@ -261,7 +261,7 @@ class ConsensusAdapter(
           // the blocks of the batch that became the head before the fault moved it, and are no part of what is refused
           toldOfTheHead(imported.lastOption.map(_.block))
           toldTheFeed("a branch that was not judged")(
-            _.notJudged(newBranch.toList.drop(imported.size), fault, blockValidation.firstInvalidHeader)
+            _.notJudged(newBranch.toList.drop(imported.size), fault, blockValidation.firstInvalidHeaderNotJudged)
           )
           BlockImportStateFault(fault, imported)
       }
@@ -269,14 +269,18 @@ class ConsensusAdapter(
   /** A proof-of-work branch, known by its `headers` from the block above the one it leaves the chain at, that regular
     * sync refused before any of its blocks was fetched (B-300 g): it reaches further above that block than the fetcher
     * holds, or the head cannot be moved back there. Told to the escalation's feed, as a branch this node's state could
-    * not take is ([[PowEscalationFeed.notJudgedHeaders]]), and with the header validation of an import.
+    * not take is ([[PowEscalationFeed.notJudgedHeaders]]), and with the header validation of an import, less the parent
+    * rules of a first header that stands on this node's own block whose header is not stored
+    * ([[BlockValidation.firstInvalidHeaderOfNotJudged]], B-391).
     *
     * To be called under the import lock: the feed reads the head's weight, and is told one import at a time.
     */
   def branchOutOfReach(headers: List[BlockHeader], fault: StateFault)(implicit
       blockchainConfig: BlockchainConfig
   ): Unit =
-    toldTheFeed("a branch out of reach")(_.notJudgedHeaders(headers, fault, blockValidation.firstInvalidHeaderOf))
+    toldTheFeed("a branch out of reach")(
+      _.notJudgedHeaders(headers, fault, blockValidation.firstInvalidHeaderOfNotJudged)
+    )
 
   /** A hole in the held state that the importer fetched by its position and could not fill, as many times as its
     * exhausts allow (spec 018 C5b, B-291, forge): the repair is declined for good, or no peer serves the node. On the
@@ -288,7 +292,7 @@ class ConsensusAdapter(
       blockchainConfig: BlockchainConfig
   ): Unit =
     toldTheFeed("a hole no repair fills")(
-      _.notJudged(blocks, new HeldStateIncomplete(missing), blockValidation.firstInvalidHeader)
+      _.notJudged(blocks, new HeldStateIncomplete(missing), blockValidation.firstInvalidHeaderNotJudged)
     )
 
   /** The first of `headers` that is not valid, with why: the header validation of an import, the seal with it

@@ -82,12 +82,12 @@ class ConsensusAdapterEscalationSpec extends AnyFlatSpec with Matchers:
       )(implicit blockExecutionScheduler: IORuntime, blockchainConfig: BlockchainConfig): IO[ConsensusResult] =
         IO.pure(result(block))
     private val validation = new BlockValidation(null, null, null):
-      override def firstInvalidHeader(
+      override def firstInvalidHeaderNotJudged(
           branch: List[Block]
       )(implicit blockchainConfig: BlockchainConfig): Option[(BlockHeader, String)] =
         validated += branch.map(_.number.value)
         None
-      override def firstInvalidHeaderOf(
+      override def firstInvalidHeaderOfNotJudged(
           headers: List[BlockHeader]
       )(implicit blockchainConfig: BlockchainConfig): Option[(BlockHeader, String)] =
         validated += headers.map(_.number.value)
