@@ -269,11 +269,11 @@ certificate, no fallback, no https→http redirect; a CI ratchet.
 
 ## Phase 11: Polish and cross-cutting — S11
 
-- [ ] T095 [P] `T/console/panels/RpcPanelsTlsSpec.scala` then `M/console/panels/RpcPanels.scala`: TLS state, client-auth mode and `allow-insecure-bind` per listener (FR-061)
-- [ ] T096 [P] `docs/runbooks/tls-operations.md`, `docs/runbooks/enterprise-deployment.md` (make the mTLS claim true; B-147), `docs/runbooks/security.md`, `docs/runbooks/peering.md` (allowlist, discovery off, `admin_` methods), `docs/MCP.md` per B-147 (FR-062); revocation guidance: short-lived certificates, reload, bounded WS idle timeout (Security Considerations)
-- [ ] T097 [P] Skills: `.claude/skills/fukuii-tls-operations/`, `fukuii-security-hardening/`, `fukuii-peer-management/`, `fukuii-custom-networks/` updated to the new keys and methods
-- [ ] T098 [P] B-149: `docker/Dockerfile`, `docker/Dockerfile.mordor` healthcheck scripts use the configured port and scheme and, under `need`, a client profile (spec Edge Cases)
-- [ ] T099 Run quickstart.md Q1–Q8 by hand and record the results in S11's PR
+- [x] T095 [P] `T/console/panels/RpcPanelsTlsSpec.scala` then `M/console/panels/RpcPanels.scala`: TLS state, client-auth mode and `allow-insecure-bind` per listener (FR-061)
+- [x] T096 [P] `docs/runbooks/tls-operations.md`, `docs/runbooks/enterprise-deployment.md` (make the mTLS claim true; B-147), `docs/runbooks/security.md`, `docs/runbooks/peering.md` (allowlist, discovery off, `admin_` methods), `docs/MCP.md` per B-147 (FR-062); revocation guidance: short-lived certificates, reload, bounded WS idle timeout (Security Considerations)
+- [x] T097 [P] Skills: `.claude/skills/fukuii-tls-operations/`, `fukuii-security-hardening/`, `fukuii-peer-management/`, `fukuii-custom-networks/` updated to the new keys and methods
+- [x] T098 [P] B-149: `docker/Dockerfile`, `docker/Dockerfile.mordor` healthcheck scripts use the configured port and scheme and, under `need`, a client profile (spec Edge Cases)
+- [x] T099 Run quickstart.md Q1–Q8 by hand and record the results in S11's PR
 - [ ] T100 `./scripts/fukuii-test essential` once; `sbt formatCheck`; S11's PR closes B-147 and B-149; then close spec 030 per `docs/development/spec-lifecycle.md` (Status `Done`, Closed block, index regenerated)
 
 ---

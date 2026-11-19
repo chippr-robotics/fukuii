@@ -35,7 +35,7 @@ single source of truth.
 | `fukuii-log-triage`          | Set log level at runtime; pattern-triage logs | runbooks/log-triage, operations/LOGGING |
 | `fukuii-mining-operations`   | Validate & control ETC mining via `miner_*`/`eth_*` | runbooks/mining-operations |
 | `fukuii-key-management`      | Generate/encrypt keys & genesis allocs via `fukuii cli` | cli/CliCommands, runbooks/first-start |
-| `fukuii-tls-operations`      | TLS for JSON-RPC; cert rotation | runbooks/tls-operations, security |
+| `fukuii-tls-operations`      | TLS and mTLS on every listener; identity rules; reload; outbound profiles | runbooks/tls-operations, security |
 | `fukuii-checkpoint-service`  | Operate the checkpointing service | runbooks/checkpoint-service |
 | `fukuii-node-configuration`  | Edit `fukuii.conf`, pick operating mode safely | runbooks/node-configuration, operating-modes |
 | `fukuii-first-start`         | Bootstrap a brand-new node end to end | runbooks/first-start |

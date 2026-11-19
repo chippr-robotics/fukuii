@@ -407,8 +407,9 @@ abstract class BaseNode extends Node:
     nodeAllowlistStore.foreach { store =>
       val interval = nodeAllowlistReloadInterval
       log.info(
-        "P2P node allowlist on: {} node(s), reload every {}; discovery is off",
+        "P2P node allowlist on: {} node(s), {}, reload every {}; discovery is off",
         store.allowlist.snapshot.size,
+        store.filePath.fold("no file (runtime edits refused)")(f => s"file $f"),
         interval
       )
       val _ = store.schedule(interval, classicSystem.scheduler)(using classicSystem.dispatcher)

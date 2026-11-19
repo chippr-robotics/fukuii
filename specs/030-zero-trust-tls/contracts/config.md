@@ -93,4 +93,4 @@ network.peer.node-allowlist {
 ```
 
 With `enabled = true`: `network.discovery.discovery-enabled` is treated as `false` (FR-055) and a static node,
-bootnode or configured trusted peer not on the list is a startup error (FR-053).
+bootnode not on the list is a startup error (FR-053); fukuii has no configured trusted peers, and `admin_addTrustedPeer` is refused for an unlisted node (FR-052).
