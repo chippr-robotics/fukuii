@@ -3321,21 +3321,18 @@ items:
   - id: B-390
     title: "run-eg12.sh: read T242's snap-capable peer-count log line once it lands, beside debug_listPeersInfo"
     priority: P3
-    status: review
+    status: done
     area: storage
     opened: 2026-11-19
+    closed: 2026-11-19
     refs: []
     links:
       prs: [1946]
       spec: 018
-    claim:
-      by: cloud-dc960fdc
-      agent: main
-      since: 2026-11-19T01:28:47Z
-      heartbeat: 2026-11-19T01:54:36Z
     notes: |-
       C6 PR-D (B-067) counts snap peers from debug_listPeersInfo strings (supportsSnap/forkAccepted); T242 adds the node's own count at start.
       2026-11-19 review: PR #1946 open
+      2026-11-19 done: Merged; first live run is T264 (B-393).
   - id: B-391
     title: "PoW escalation: a heavier branch whose fork header is missing is never counted; firstInvalidHeaderOf answers HeaderParentNotFoundError"
     priority: P2
