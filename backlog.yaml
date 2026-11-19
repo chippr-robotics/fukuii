@@ -3052,22 +3052,19 @@ items:
   - id: B-369
     title: "Spec 018 C5b: enable the converted audit on the path-live guard (SyncController gate, owed flags, hand-off anchor)"
     priority: P2
-    status: review
+    status: done
     area: sync
     opened: 2026-11-18
+    closed: 2026-11-19
     refs: []
     links:
       prs: [1947]
       spec: 018-storage-engine-consolidation
     depends_on: [B-065]
-    claim:
-      by: cloud-dc960fdc
-      agent: vault
-      since: 2026-11-19T02:18:14Z
-      heartbeat: 2026-11-19T02:38:37Z
     notes: |-
       Part 1 converts BackgroundAudit to positions but SyncController.auditGate still returns Disabled on the guard; wiring forNode(positions = pathState) needs a decision on snapAuditAnchor / recovery flags at hand-off
       2026-11-19 review: PR #1947
+      2026-11-19 done: Merged: audit runs on the guard over positions, one pass per pivot; pays the withheld recovery flags. Live run in B-393/C7.
   - id: B-370
     title: "Spec 018 C5b: decodable-but-different row at an anchor position is never repaired or deleted: audit cannot converge (decision)"
     priority: P2
