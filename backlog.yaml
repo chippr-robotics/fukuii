@@ -3249,18 +3249,21 @@ items:
   - id: B-385
     title: "PoW import: a heavier branch whose fork block weight is not stored (BranchResolution NoChainSwitch, feed not counted) is never escalated"
     priority: P2
-    status: in-progress
+    status: review
     area: sync
     opened: 2026-11-18
     refs: []
     links:
+      prs: [1943]
       spec: specs/018-storage-engine-consolidation
     claim:
       by: cloud-dc960fdc
       agent: forge
       since: 2026-11-18T23:16:34Z
-      heartbeat: 2026-11-18T23:48:01Z
-    notes: Found in B-383 (forge). BranchResolution logs 'ChainWeight not found' and returns NoChainSwitch; PowEscalationFeed.weighed also skips it. Same for a missing fork header not named by the hash index. Name what ends the wait (escalate as a local fault, or repair the weight).
+      heartbeat: 2026-11-19T00:22:37Z
+    notes: |-
+      Found in B-383 (forge). BranchResolution logs 'ChainWeight not found' and returns NoChainSwitch; PowEscalationFeed.weighed also skips it. Same for a missing fork header not named by the hash index. Name what ends the wait (escalate as a local fault, or repair the weight).
+      2026-11-19 review: Stacked on #1938; head b7178f8c7, targeted tests 247/0.
   - id: B-386
     title: Guard PoW node that fell back to regular sync logs an ERROR at every restart (beforeSnap Refused on held state)
     priority: P3
