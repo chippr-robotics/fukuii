@@ -3332,7 +3332,7 @@ items:
       by: cloud-dc960fdc
       agent: forge
       since: 2026-11-19T00:28:02Z
-      heartbeat: 2026-11-19T00:28:40Z
+      heartbeat: 2026-11-19T00:28:49Z
     notes: |-
       Found on B-385 (forge). B-383 (#1938) counts the missing-header arm in PowEscalationFeed, but before that arm the feed asks BlockValidation.firstInvalidHeaderOf, which cannot check the first header's parent rules without the parent header and answers HeaderParentNotFoundError: the branch is left out as invalid, so in production the wait still has no end. Decide (forge): validate the first header without its parent rules (seal, difficulty bounds unchecked) only where the hash index names the parent as this node's, or escalate on another path. Unvalidated headers must never be counted.
       2026-11-19 in-progress: User 2026-11-19: seal-only first header when the index names the missing parent as ours at n-1; folded into #1938.
