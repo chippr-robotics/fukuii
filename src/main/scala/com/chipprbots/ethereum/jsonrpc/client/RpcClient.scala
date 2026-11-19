@@ -4,7 +4,6 @@ import java.util.UUID
 import javax.net.ssl.SSLContext
 
 import org.apache.pekko.actor.ActorSystem
-import org.apache.pekko.http.scaladsl.ConnectionContext
 import org.apache.pekko.http.scaladsl.Http
 import org.apache.pekko.http.scaladsl.HttpsConnectionContext
 import org.apache.pekko.http.scaladsl.model.*
@@ -51,7 +50,8 @@ abstract class RpcClient(node: Uri, timeout: Duration, getSSLContext: () => Eith
   private val configuredHttpsContext: Option[HttpsConnectionContext] =
     if node.scheme.startsWith("https") then
       getSSLContext() match
-        case Right(context) => Some(ConnectionContext.httpsClient(context))
+        // from the outbound factory: its engines check the node's host name against its certificate (FR-041)
+        case Right(context) => Some(com.chipprbots.ethereum.tls.OutboundTls.pekkoHttpsContext(context))
         case Left(error) =>
           throw new IllegalStateException(
             s"Refusing to start: the TLS client for $node cannot be set up: ${error.reason}"

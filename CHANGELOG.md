@@ -456,6 +456,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   start-up line of each such listener lists every rule's grant. A rule that names `graphql` while GraphQL is off, or a
   rule list with no `want` or `need` listener enabled, refuses the start. The non-loopback warning still reads the
   listener's own `apis` only.
+- **One outbound TLS factory (spec 030 S7, B-360).** `tls/OutboundTls` makes the TLS of the node's outbound HTTPS
+  clients from a profile named in config, or `system` (the JDK's default trust, no client certificate): host names are
+  always checked, a profile's truststore is its only trust, its keystore is presented when the server asks for a
+  client certificate, and no redirect from https to http is followed. The faucet's `rpc-client` takes
+  `faucet.rpc-client.tls-profile` (the deprecated `certificate` block still maps, removed in 0.13.0; both together
+  refuse the start); the checkpoint download takes `sync.checkpoint-sync-tls-profile`; the Ephemery release fetch,
+  which runs before the node's configuration is read, uses `system`. `scripts/check-outbound-tls.sh`, run in CI, fails
+  on TLS made outside the factory where `scripts/outbound-tls-allowlist.txt` does not allow it.
 - **Mutual TLS on the JSON-RPC HTTP and WebSocket listeners (spec 030 S2, B-355).** `network.rpc.http.tls.client-auth`
   and the new `network.rpc.ws.tls { enabled, profile, client-auth }` take `none`, `want` or `need`. Under `want` and
   `need` the profile's `truststore` verifies every presented client certificate; `need` also refuses a client with

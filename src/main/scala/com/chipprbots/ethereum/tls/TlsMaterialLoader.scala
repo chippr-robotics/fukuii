@@ -88,6 +88,48 @@ object TlsMaterialLoader:
           yield tm
     yield TlsMaterial(Some(keyManager), trust, Some(leaf), now)
 
+  /** A profile's material for the client role (spec 030 FR-040–FR-042): its keystore, when it has one, is the
+    * certificate presented to a server that asks for one; its truststore, when it has one, is the only trust, and
+    * without one the JDK's default trust is used (a public server, with a client certificate of the profile's own).
+    * Validated as a listener's is: the first failure, as `<config path>: <cause>`.
+    */
+  def loadClient(profile: TlsProfile, now: Instant = Instant.now()): Either[TlsConfigError, TlsMaterial] =
+    val keys = Keys(profile)
+    for
+      _ <- checkProtocols(profile)
+      keyed <- profile.keystore match
+        case None => Right(None)
+        case Some(ref) =>
+          openStore(ref, keys.keystorePath, keys.keystorePassword, keys.keystoreType).flatMap { keystore =>
+            try
+              for
+                selected <- selectKey(profile, keystore.store, keys.keystore)
+                (alias, leaf) = selected
+                _ <- checkValidity(leaf, now, profile.configPath)
+                keyManager <- buildKeyManager(keystore, alias, keys.keystore)
+              yield Some((keyManager, leaf))
+            finally java.util.Arrays.fill(keystore.password, '\u0000')
+          }
+      trust <- profile.truststore match
+        case None => jdkDefaultTrust(profile.configPath)
+        case Some(ref) =>
+          for
+            ts <- openStore(ref, keys.truststorePath, keys.truststorePassword, keys.truststoreType)
+            tm <- buildTrustManager(ts, keys.truststore)
+          yield tm
+    yield TlsMaterial(keyed.map(_._1), trust, keyed.map(_._2), now)
+
+  private def jdkDefaultTrust(path: String): Either[TlsConfigError, X509ExtendedTrustManager] =
+    try
+      val factory = TrustManagerFactory.getInstance(TrustManagerFactory.getDefaultAlgorithm)
+      factory.init(null.asInstanceOf[KeyStore])
+      factory.getTrustManagers
+        .collectFirst { case tm: X509ExtendedTrustManager => tm }
+        .toRight(TlsConfigError(s"$path: the JDK built no default X.509 trust manager"))
+    catch
+      case NonFatal(e) =>
+        Left(TlsConfigError(s"$path: the JDK's default trust cannot be used (${e.getClass.getSimpleName})"))
+
   /** The key names of one profile, in the form the operator wrote them. */
   final private class Keys(profile: TlsProfile):
     private val base = profile.configPath

@@ -204,15 +204,15 @@ certificate, no fallback, no https→http redirect; a CI ratchet.
 
 ### Tests first (S7)
 
-- [ ] T064 [P] [US5] `T/tls/OutboundTlsSpec.scala` against a local HTTPS server from `TestPki`: per client kind (Pekko, JDK `HttpClient`, `HttpsURLConnection`): the test CA's profile connects, `system` fails, a SAN mismatch fails, a `need` server succeeds only with a keyed profile, an https→http redirect is refused (FR-041–FR-043; US5 scenarios 1–3)
-- [ ] T065 [P] [US5] `T/scripts/OutboundTlsRatchetSpec.scala`, modelled on `T/scripts/HeadWriterRatchetSpec.scala`: a planted `SSLContext.getInstance` outside `tls/` fails; an allow-listed one passes; a stale line fails (FR-045)
+- [x] T064 [P] [US5] `T/tls/OutboundTlsSpec.scala` against a local HTTPS server from `TestPki`: per client kind (Pekko, JDK `HttpClient`, `HttpsURLConnection`): the test CA's profile connects, `system` fails, a SAN mismatch fails, a `need` server succeeds only with a keyed profile, an https→http redirect is refused (FR-041–FR-043; US5 scenarios 1–3)
+- [x] T065 [P] [US5] `T/scripts/OutboundTlsRatchetSpec.scala`, modelled on `T/scripts/HeadWriterRatchetSpec.scala`: a planted `SSLContext.getInstance` outside `tls/` fails; an allow-listed one passes; a stale line fails (FR-045)
 
 ### Implementation (S7)
 
-- [ ] T066 [US5] `M/tls/OutboundTls.scala`: `sslContext`, `jdkHttpClient`, `pekkoHttpsContext`, `openHttpsStream`; `system` profile; endpoint identification on every client engine (research D-9)
-- [ ] T067 [US5] Move `M/jsonrpc/client/RpcClient.scala` and `M/faucet/jsonrpc/WalletRpcClient.scala` / `FaucetBuilder.scala` onto the factory with `faucet.rpc-client.tls-profile`, mapping the legacy `certificate` block (FR-007, FR-008)
-- [ ] T068 [P] [US5] Move `M/blockchain/checkpoint/CheckpointDownloader.scala:194-198` (redirect `HttpsOnly`) and `M/ephemery/ReleaseTransport.scala:389-392` (keeps `NEVER`) onto the factory with their `tls-profile` keys (FR-044); extend `T/ephemery/JdkHttpsTransportSpec.scala`
-- [ ] T069 [US5] `scripts/check-outbound-tls.sh` + `scripts/outbound-tls-allowlist.txt` (sites of S8 listed "migrated in S8"); run it in `.github/workflows/ci.yml` beside `check-head-writers.sh`
+- [x] T066 [US5] `M/tls/OutboundTls.scala`: `sslContext`, `jdkHttpClient`, `pekkoHttpsContext`, `openHttpsStream`; `system` profile; endpoint identification on every client engine (research D-9)
+- [x] T067 [US5] Move `M/jsonrpc/client/RpcClient.scala` and `M/faucet/jsonrpc/WalletRpcClient.scala` / `FaucetBuilder.scala` onto the factory with `faucet.rpc-client.tls-profile`, mapping the legacy `certificate` block (FR-007, FR-008)
+- [x] T068 [P] [US5] Move `M/blockchain/checkpoint/CheckpointDownloader.scala:194-198` (redirect `HttpsOnly`) and `M/ephemery/ReleaseTransport.scala:389-392` (keeps `NEVER`) onto the factory with their `tls-profile` keys (FR-044); extend `T/ephemery/JdkHttpsTransportSpec.scala`
+- [x] T069 [US5] `scripts/check-outbound-tls.sh` + `scripts/outbound-tls-allowlist.txt` (sites of S8 listed "migrated in S8"); run it in `.github/workflows/ci.yml` beside `check-head-writers.sh`
 - [ ] T070 [US5] `sbt pp`, `formatCheck`; S7's PR
 
 ### Tests first (S8)

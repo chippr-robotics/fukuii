@@ -409,7 +409,12 @@ object SyncController:
       stateEscalation: Option[StateEscalationPort] = None,
       // Spec 018 C5a part 10: a sync on the unified layout, its hand-off and the check before SNAP. None on the hash
       // layout.
-      pathLiveSync: Option[PathLiveSyncPort] = None
+      pathLiveSync: Option[PathLiveSyncPort] = None,
+      // Spec 030 FR-040: the client of `checkpoint-sync-url`, from the outbound TLS factory on the profile
+      // `checkpoint-sync-tls-profile` names; built only when a download is due, and a profile that does not load is
+      // the download's failure.
+      checkpointHttpClient: () => Either[String, java.net.http.HttpClient] = () =>
+        Right(com.chipprbots.ethereum.blockchain.checkpoint.CheckpointDownloader.defaultHttpClient)
   ): Behavior[Command] =
     Behaviors.setup { ctx =>
       Behaviors.withTimers { timers =>
@@ -443,7 +448,8 @@ object SyncController:
           chainWeightReconcileOn,
           peerScoringManager,
           stateEscalation,
-          pathLiveSync
+          pathLiveSync,
+          checkpointHttpClient
         )
         impl.setup()
         impl.withPostStop(impl.idle())
@@ -489,7 +495,8 @@ object SyncController:
       chainWeightReconcileOn: Boolean,
       peerScoringManager: Option[PeerScoringManager],
       stateEscalation: Option[StateEscalationPort],
-      pathLiveSync: Option[PathLiveSyncPort]
+      pathLiveSync: Option[PathLiveSyncPort],
+      checkpointHttpClient: () => Either[String, java.net.http.HttpClient]
   ):
     // scalastyle:on parameter.number
 
@@ -2233,12 +2240,17 @@ object SyncController:
               None
             else
               log.info("[CHECKPOINT DOWNLOAD] {} -> {}", url, target)
-              val downloader = new com.chipprbots.ethereum.blockchain.checkpoint.CheckpointDownloader()
-              downloader.download(url, target) match
-                case Right(_) => Some(target)
+              checkpointHttpClient() match
                 case Left(err) =>
-                  log.error("[CHECKPOINT DOWNLOAD] failed: {} — falling through to SNAP/Regular", err)
+                  log.error("[CHECKPOINT DOWNLOAD] no client: {} — falling through to SNAP/Regular", err)
                   None
+                case Right(client) =>
+                  val downloader = new com.chipprbots.ethereum.blockchain.checkpoint.CheckpointDownloader(client)
+                  downloader.download(url, target) match
+                    case Right(_) => Some(target)
+                    case Left(err) =>
+                      log.error("[CHECKPOINT DOWNLOAD] failed: {} — falling through to SNAP/Regular", err)
+                      None
           }
         }
         fileOpt.foreach { path =>

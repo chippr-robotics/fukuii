@@ -191,12 +191,15 @@ final class CheckpointDownloader(
 object CheckpointDownloader:
   val DefaultProgressLogInterval: Long = 100L * 1024 * 1024 // log every 100 MiB
 
-  lazy val defaultHttpClient: HttpClient =
-    HttpClient
-      .newBuilder()
-      .connectTimeout(Duration.ofSeconds(30))
-      .followRedirects(HttpClient.Redirect.NORMAL)
-      .build()
+  /** The client of the `system` profile (spec 030 FR-040): the JDK's default trust, host names checked, redirects
+    * followed except from https to http (FR-043).
+    */
+  lazy val defaultHttpClient: HttpClient = client(javax.net.ssl.SSLContext.getDefault)
+
+  /** A client on a profile's context, from the outbound factory. */
+  def client(ctx: javax.net.ssl.SSLContext): HttpClient =
+    com.chipprbots.ethereum.tls.OutboundTls
+      .jdkHttpClient(ctx, com.chipprbots.ethereum.tls.RedirectPolicy.HttpsOnly, Duration.ofSeconds(30))
 
   sealed trait DownloadError extends Product with Serializable
   final case class HttpError(status: Int, message: String) extends DownloadError

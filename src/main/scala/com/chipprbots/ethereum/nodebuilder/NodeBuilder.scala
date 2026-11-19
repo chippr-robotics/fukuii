@@ -1480,7 +1480,8 @@ trait SyncControllerBuilder extends SyncControllerRefBuilder:
   self: ActorSystemBuilder & ServerActorBuilder & BlockchainBuilder & BlockchainConfigBuilder & ConsensusBuilder &
     NodeStatusBuilder & StorageBuilder & StxLedgerBuilder & PeerEventBusBuilder & PendingTransactionsManagerBuilder &
     OmmersPoolBuilder & NetworkPeerManagerActorBuilder & SyncConfigBuilder & ShutdownHookBuilder & MiningBuilder &
-    BlacklistBuilder & MESSBuilder & EventTopicsBuilder & TxGossipGateBuilder =>
+    BlacklistBuilder & MESSBuilder & EventTopicsBuilder & TxGossipGateBuilder & SecureRandomBuilder &
+    InstanceConfigProvider =>
 
   /** Override in concrete builders that also mix in [[EngineApiBuilder]] to enable CL-driven SNAP pivot selection.
     * Defaults to `None` for setups without an Engine API (e.g. ETC mainnet pre-merge wiring). Closes #1207.
@@ -1652,7 +1653,13 @@ trait SyncControllerBuilder extends SyncControllerRefBuilder:
           txGossipGate = txGossipGate,
           peerScoringManager = Some(peerScoringManager),
           stateEscalation = stateEscalationPort,
-          pathLiveSync = pathLiveSyncPort
+          pathLiveSync = pathLiveSyncPort,
+          checkpointHttpClient = () =>
+            com.chipprbots.ethereum.tls.OutboundTls
+              .forSite(instanceConfig.config, "sync.checkpoint-sync-tls-profile", secureRandom)
+              .map(com.chipprbots.ethereum.blockchain.checkpoint.CheckpointDownloader.client)
+              .left
+              .map(_.message)
         ),
         "sync-controller"
       )
