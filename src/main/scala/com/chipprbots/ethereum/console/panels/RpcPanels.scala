@@ -62,8 +62,8 @@ private[console] object RpcPanels:
         case Some(false) => "NOT LISTENING: it could not start, or was closed"
         case None        => "enabled; its server has not said it is bound"
 
-  /** How a caller is authenticated, in the one place that words it: with TLS, whether a client certificate is asked
-    * for or required (spec 030 FR-061), and a plaintext transport kept by `allow-insecure-bind` says so.
+  /** How a caller is authenticated, in the one place that words it: with TLS, whether a client certificate is asked for
+    * or required (spec 030 FR-061), and a plaintext transport kept by `allow-insecure-bind` says so.
     */
   def authentication(t: TransportStatus): String =
     val plaintextOptOut = if !t.tls && t.insecureBind then ", plaintext by allow-insecure-bind" else ""
@@ -73,8 +73,8 @@ private[console] object RpcPanels:
           case TransportClientAuth.Need => "client certificate required (mTLS)"
           case TransportClientAuth.Want => "client certificate asked, not required (TLS)"
           case TransportClientAuth.None => "no authentication (TLS)"
-      case TransportAuth.None       => s"no authentication$plaintextOptOut"
-      case TransportAuth.Jwt        => if t.tls then "authenticated by JWT (TLS)" else s"authenticated by JWT$plaintextOptOut"
+      case TransportAuth.None => s"no authentication$plaintextOptOut"
+      case TransportAuth.Jwt  => if t.tls then "authenticated by JWT (TLS)" else s"authenticated by JWT$plaintextOptOut"
       case TransportAuth.SocketFile => "restricted to the socket file's owner"
 
   /** The longest address shown whole. A longer one (a socket's path) keeps both its ends. */

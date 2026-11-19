@@ -531,16 +531,18 @@ abstract class BaseNode extends Node:
         t.copy(tls = l.tls, clientAuth = auth, insecureBind = l.allowInsecure)
       }
     import com.chipprbots.ethereum.tls.ListenerId
-    val engine = Option.when(engineApiConfig.enabled || blockchainConfig.networkType == NetworkType.ETH)(
-      TransportStatus(
-        TransportKind.Engine,
-        engineApiConfig.enabled,
-        None,
-        s"${engineApiConfig.interface}:${engineApiConfig.port}",
-        Seq("engine", "eth", "net", "web3"),
-        TransportAuth.Jwt
+    val engine = Option
+      .when(engineApiConfig.enabled || blockchainConfig.networkType == NetworkType.ETH)(
+        TransportStatus(
+          TransportKind.Engine,
+          engineApiConfig.enabled,
+          None,
+          s"${engineApiConfig.interface}:${engineApiConfig.port}",
+          Seq("engine", "eth", "net", "web3"),
+          TransportAuth.Jwt
+        )
       )
-    ).map(tlsOf(ListenerId.EngineApi))
+      .map(tlsOf(ListenerId.EngineApi))
     Seq(
       TransportStatus(
         TransportKind.Http,
