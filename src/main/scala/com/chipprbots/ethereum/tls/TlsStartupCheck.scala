@@ -74,13 +74,21 @@ object TlsStartupCheck:
         else Right(())
       rules <- IdentityRules.parse(config, availableApis)
       _ <- rulesCanMatch(rules, http.toList ++ ws.toList)
+      engine <- if enabled(config, "network.engine-api.enabled") then TlsConfig.engineApi(config) else Right(None)
+      metrics <- if enabled(config, "metrics.enabled") then TlsConfig.metrics(config) else Right(None)
       httpLine <- line(config, "network.rpc.http", http, rules)
       wsLine <- line(config, "network.rpc.ws", ws, rules)
-    yield httpLine.toList ++ wsLine.toList
+      engineLine <- line(config, "network.engine-api", engine, rules)
+      metricsLine <- line(config, "metrics", metrics, rules)
+    yield httpLine.toList ++ wsLine.toList ++ engineLine.toList ++ metricsLine.toList
     result.left.map(e => RefusalPrefix + e.message)
 
+  private def enabled(config: Config, key: String): Boolean = config.hasPath(key) && config.getBoolean(key)
+
   /** Whether a listener resolves client identities: one that asks for client certificates (`want` or `need`). */
-  def resolvesIdentities(listener: ResolvedListener): Boolean = listener.listener.clientAuth != ClientAuth.None
+  def resolvesIdentities(listener: ResolvedListener): Boolean =
+    listener.listener.clientAuth != ClientAuth.None &&
+      (listener.listener.id == ListenerId.RpcHttp || listener.listener.id == ListenerId.RpcWs)
 
   /** A non-empty rule list needs an enabled listener that asks for certificates, or no rule could ever match
     * (contracts/config.md).
@@ -109,7 +117,7 @@ object TlsStartupCheck:
             Line(
               listener.listener.id,
               if listener.listener.id == ListenerId.RpcWs then "wss" else "https",
-              config.getString(s"$key.interface"),
+              if config.hasPath(s"$key.interface") then config.getString(s"$key.interface") else "localhost",
               config.getInt(s"$key.port"),
               listener.listener.clientAuth,
               listener.profile.name,

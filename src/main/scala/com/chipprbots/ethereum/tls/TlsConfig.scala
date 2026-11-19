@@ -29,6 +29,8 @@ object TlsConfig:
 
   private val HttpKey = "network.rpc.http"
   private val WsKey = "network.rpc.ws"
+  private val EngineKey = "network.engine-api"
+  private val MetricsKey = "metrics"
 
   /** `fukuii.tls.profiles`, every profile parsed (not yet loaded from disk). */
   def profiles(config: Config): Either[TlsConfigError, Map[String, TlsProfile]] =
@@ -151,6 +153,35 @@ object TlsConfig:
     val tlsEnabled = Try(ws.getBoolean("tls.enabled")).getOrElse(false)
     if tlsEnabled then tlsBlock(config, ws, key, ListenerId.RpcWs).map(Some(_))
     else clientAuth(ws, s"$key.tls").map(_ => None)
+
+  /** The Engine API's TLS (spec 030 FR-015): server TLS only. JWT authenticates the consensus client, so the listener
+    * never asks for a client certificate, and a `client-auth` key under its `tls` block is refused.
+    */
+  def engineApi(config: Config): Either[TlsConfigError, Option[ResolvedListener]] =
+    val key = s"$Prefix.$EngineKey"
+    if !config.hasPath(EngineKey) then Right(None)
+    else
+      val engine = config.getConfig(EngineKey)
+      if engine.hasPath("tls.client-auth") then
+        Left(
+          TlsConfigError(
+            s"$key.tls.client-auth is not supported: the Engine API takes server TLS only; JWT authenticates the " +
+              "consensus client"
+          )
+        )
+      else if Try(engine.getBoolean("tls.enabled")).getOrElse(false) then
+        tlsBlock(config, engine, key, ListenerId.EngineApi).map(Some(_))
+      else Right(None)
+
+  /** The metrics endpoint's TLS (FR-016), with all three client-auth modes; `Right(None)` is a plaintext endpoint. */
+  def metrics(config: Config): Either[TlsConfigError, Option[ResolvedListener]] =
+    val key = s"$Prefix.$MetricsKey"
+    if !config.hasPath(MetricsKey) then Right(None)
+    else
+      val metrics = config.getConfig(MetricsKey)
+      if Try(metrics.getBoolean("tls.enabled")).getOrElse(false) then
+        tlsBlock(config, metrics, key, ListenerId.Metrics).map(Some(_))
+      else clientAuth(metrics, s"$key.tls").map(_ => None)
 
   /** A listener's `tls { enabled = true, profile, client-auth }`, with the profile it names. */
   private def tlsBlock(

@@ -322,6 +322,7 @@ abstract class BaseNode extends Node:
     Metrics.configure(metricsConfig, instanceConfig.instanceId) match
       case Success(_) =>
         log.info("Metrics started")
+        if metricsConfig.enabled && metricsConfig.tlsEnabled then startMetricsTlsServer(metricsConfig)
 
         if metricsConfig.enabled then
           val snapSyncEnabled =
@@ -336,6 +337,32 @@ abstract class BaseNode extends Node:
           // read 0.0 until db.rocksdb.enable-statistics = true.
           RocksDbCacheMetrics.register(storagesInstance.dataSource)
       case Failure(exception) => throw exception
+
+  /** The metrics endpoint over TLS (spec 030 FR-016): bound through the node's TLS stack and awaited; a bind that fails
+    * stops the node, as for every TLS listener (FR-011).
+    */
+  private def startMetricsTlsServer(config: MetricsConfig): Unit =
+    val bind = com.chipprbots.ethereum.tls.TlsServerEngine
+      .metrics(instanceConfig.config, secureRandom)
+      .left
+      .map(e => new IllegalStateException(e.message))
+      .flatMap(_.toRight(new IllegalStateException("fukuii.metrics.tls: TLS is not configured on this listener")))
+      .fold(
+        scala.concurrent.Future.failed,
+        ctx =>
+          tlsReloader.register(com.chipprbots.ethereum.tls.ListenerId.Metrics.label, ctx)
+          com.chipprbots.ethereum.metrics.MetricsTlsServer.bind(config.interface, config.port, ctx)(using classicSystem)
+      )
+    try
+      val binding = scala.concurrent.Await.result(bind, 10.seconds)
+      log.info(s"Metrics server (TLS) bound to ${binding.localAddress}")
+    catch
+      case scala.util.control.NonFatal(e) =>
+        throw StdNode.startupRefusal(
+          s"Refusing to start: the metrics endpoint cannot start on ${config.interface}:${config.port} " +
+            s"(${e.getClass.getSimpleName}: ${e.getMessage}). Fix fukuii.metrics (interface, port, tls), or set " +
+            "fukuii.metrics.enabled = false."
+        )
 
   private def loadGenesisData(): Unit =
     if !Config.testmode then genesisDataLoader.loadGenesisData()

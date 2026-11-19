@@ -160,15 +160,15 @@ that exercises it.
 
 ### Tests first
 
-- [ ] T050 [P] [US6] `T/consensus/engine/EngineApiTlsSpec.scala`: over TLS, a JWT-bearing call to `engine_exchangeCapabilities` is served and a JWT-less one gets 401 exactly as today; a `client-auth` key under `engine-api.tls` refuses the start with the contracts/observability.md text (FR-015; US6 scenarios 1, 3)
-- [ ] T051 [P] [US6] `T/metrics/MetricsTlsServerSpec.scala`: `need` serves `/metrics` to a trusted client and fails the handshake otherwise, with FR-017 reasons; the body equals the plaintext scrape of the same registry (US6 scenario 2)
-- [ ] T052 [P] [US6] `T/metrics/MetricsBindSpec.scala`: with no `interface`, the plaintext server binds loopback, not the wildcard (FR-016; US8 scenario 3)
+- [x] T050 [P] [US6] `T/consensus/engine/EngineApiTlsSpec.scala`: over TLS, a JWT-bearing call to `engine_exchangeCapabilities` is served and a JWT-less one gets 401 exactly as today; a `client-auth` key under `engine-api.tls` refuses the start with the contracts/observability.md text (FR-015; US6 scenarios 1, 3)
+- [x] T051 [P] [US6] `T/metrics/MetricsTlsServerSpec.scala`: `need` serves `/metrics` to a trusted client and fails the handshake otherwise, with FR-017 reasons; the body equals the plaintext scrape of the same registry (US6 scenario 2)
+- [x] T052 [P] [US6] `T/metrics/MetricsBindSpec.scala`: with no `interface`, the plaintext server binds loopback, not the wildcard (FR-016; US8 scenario 3)
 
 ### Implementation
 
-- [ ] T053 [US6] `M/consensus/engine/EngineApiHttpServer.scala:190-204, 232` and `M/nodebuilder/NodeBuilder.scala:1095`: `tls { enabled, profile }` in the config; bind with `TlsServerEngine` and `ClientAuth.None`; `engine-api.tls` in `network.conf` (beacon reviews: transport only)
-- [ ] T054 [US6] `M/metrics/MetricsConfig.scala`, `M/metrics/Metrics.scala:21-22`: `interface` (default `localhost`) passed as `.hostname`; `tls` block; `src/main/resources/conf/base/metrics.conf` (fix its "over localhost" comment)
-- [ ] T055 [US6] `M/metrics/MetricsTlsServer.scala`: Pekko route `GET /metrics` via `PrometheusScrapeHandler` and a `PrometheusHttpExchange` adapter, bound with `TlsServerEngine` (research D-7)
+- [x] T053 [US6] `M/consensus/engine/EngineApiHttpServer.scala:190-204, 232` and `M/nodebuilder/NodeBuilder.scala:1095`: `tls { enabled, profile }` in the config; bind with `TlsServerEngine` and `ClientAuth.None`; `engine-api.tls` in `network.conf` (beacon reviews: transport only)
+- [x] T054 [US6] `M/metrics/MetricsConfig.scala`, `M/metrics/Metrics.scala:21-22`: `interface` (default `localhost`) passed as `.hostname`; `tls` block; `src/main/resources/conf/base/metrics.conf` (fix its "over localhost" comment)
+- [x] T055 [US6] `M/metrics/MetricsTlsServer.scala`: Pekko route `GET /metrics` via `PrometheusScrapeHandler` and a `PrometheusHttpExchange` adapter, bound with `TlsServerEngine` (research D-7)
 - [ ] T056 [US6] `sbt pp`, `formatCheck`; S5's PR
 
 ---

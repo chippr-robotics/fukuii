@@ -119,6 +119,8 @@ services:
       - "-Dfukuii.network.rpc.http.port=8545"
       - "-Dfukuii.metrics.enabled=true"
       - "-Dfukuii.metrics.port=9095"
+      # published to the host: bind every interface (spec 030; the default is localhost)
+      - "-Dfukuii.metrics.interface=0.0.0.0"
       - "-Dlogback.configurationFile=/app/conf/logback.xml"
       - "-Dfukuii.trace.block=${FUKUII_TRACE_BLOCK:-}"
       - "-Dfukuii.trace.tx=${FUKUII_TRACE_TX:-}"

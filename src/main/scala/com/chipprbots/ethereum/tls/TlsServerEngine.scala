@@ -68,6 +68,23 @@ object TlsServerEngine:
       case Some(resolved) => loadResolved(resolved, secureRandom).map(Some(_))
     }
 
+  /** The Engine API's server context (server TLS only, FR-015); `Right(None)` where its TLS is off. */
+  def engineApi(config: Config, secureRandom: SecureRandom): Either[TlsConfigError, Option[TlsServerContext]] =
+    optional(TlsConfig.engineApi(config), secureRandom)
+
+  /** The metrics endpoint's server context (FR-016); `Right(None)` where its TLS is off. */
+  def metrics(config: Config, secureRandom: SecureRandom): Either[TlsConfigError, Option[TlsServerContext]] =
+    optional(TlsConfig.metrics(config), secureRandom)
+
+  private def optional(
+      resolved: Either[TlsConfigError, Option[ResolvedListener]],
+      secureRandom: SecureRandom
+  ): Either[TlsConfigError, Option[TlsServerContext]] =
+    resolved.flatMap {
+      case None           => Right(None)
+      case Some(listener) => loadResolved(listener, secureRandom).map(Some(_))
+    }
+
   private def load(
       resolved: Either[TlsConfigError, Option[ResolvedListener]],
       key: String,

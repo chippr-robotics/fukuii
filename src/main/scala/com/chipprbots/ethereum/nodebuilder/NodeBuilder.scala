@@ -1133,7 +1133,7 @@ trait JSONRpcHealthcheckerBuilder:
 trait EngineApiBuilder extends Logger:
   self: ActorSystemBuilder & BlockchainBuilder & BlockchainConfigBuilder & ConsensusBuilder & StorageBuilder &
     MiningBuilder & PendingTransactionsManagerBuilder & InstanceConfigProvider & JSONRpcControllerBuilder &
-    TxGossipGateBuilder =>
+    TxGossipGateBuilder & SecureRandomBuilder & RpcIdentityBuilder =>
 
   import com.chipprbots.ethereum.consensus.engine.*
 
@@ -1268,7 +1268,20 @@ trait EngineApiBuilder extends Logger:
     else None
 
   lazy val maybeEngineApiServer: Option[EngineApiHttpServer] =
-    engineApiJwtAuthenticator.map(jwtAuth => new EngineApiHttpServer(engineApiController, jwtAuth, engineApiConfig))
+    engineApiJwtAuthenticator.map(jwtAuth =>
+      new EngineApiHttpServer(
+        engineApiController,
+        jwtAuth,
+        engineApiConfig,
+        tls = () =>
+          com.chipprbots.ethereum.tls.TlsServerEngine
+            .engineApi(instanceConfig.config, secureRandom)
+            .map(_.map { ctx =>
+              tlsReloader.register(com.chipprbots.ethereum.tls.ListenerId.EngineApi.label, ctx)
+              ctx
+            })
+      )
+    )
 
 trait GraphQLServiceBuilder:
   self: BlockchainBuilder & BlockchainConfigBuilder & MiningBuilder & StorageBuilder & EthBlocksServiceBuilder &

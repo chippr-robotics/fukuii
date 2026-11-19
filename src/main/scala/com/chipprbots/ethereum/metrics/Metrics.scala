@@ -14,17 +14,30 @@ import io.prometheus.metrics.instrumentation.jvm.JvmMetrics
 import kamon.Kamon
 import org.slf4j.LoggerFactory
 
-case class Metrics(metricsPrefix: String, registry: MeterRegistry, serverPort: Int = 0):
+/** @param serverInterface
+  *   the address the plaintext Prometheus server binds: loopback unless configured (spec 030 FR-016)
+  * @param plaintextServer
+  *   false where the endpoint is served over TLS by [[MetricsTlsServer]] instead
+  */
+case class Metrics(
+    metricsPrefix: String,
+    registry: MeterRegistry,
+    serverPort: Int = 0,
+    serverInterface: String = MetricsConfig.DefaultInterface,
+    plaintextServer: Boolean = true
+):
 
   private def mkName: String => String = MetricsUtils.mkNameWithPrefix(metricsPrefix)
 
-  private lazy val server: PrometheusHTTPServer =
-    PrometheusHTTPServer.builder().port(serverPort).buildAndStart()
+  private lazy val server: Option[PrometheusHTTPServer] =
+    Option.when(plaintextServer)(
+      PrometheusHTTPServer.builder().hostname(serverInterface).port(serverPort).buildAndStart()
+    )
 
   private var logbackMetricsBinder: Option[LogbackMetrics] = None
 
   def start(): Unit =
-    server // We need this to evaluate the lazy val!
+    val _ = server // We need this to evaluate the lazy val!
     JvmMetrics.builder().register()
     val lm = new LogbackMetrics()
     lm.bindTo(registry)
@@ -34,7 +47,7 @@ case class Metrics(metricsPrefix: String, registry: MeterRegistry, serverPort: I
   def close(): Unit =
     logbackMetricsBinder.foreach(_.close())
     registry.close()
-    server.close()
+    server.foreach(_.close())
 
   /** Returns a [[io.micrometer.core.instrument.Gauge Gauge]].
     * @param computeValue
@@ -108,7 +121,7 @@ object Metrics:
     Try {
       if config.enabled then
         val registry = MeterRegistryBuilder.build(MetricsPrefix)
-        val metrics = new Metrics(MetricsPrefix, registry, config.port)
+        val metrics = new Metrics(MetricsPrefix, registry, config.port, config.interface, !config.tlsEnabled)
         val existing = instances.putIfAbsent(instanceId, metrics)
         if existing == null then
           metrics.start()
