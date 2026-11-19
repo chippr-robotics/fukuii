@@ -2320,7 +2320,9 @@ object SyncController:
           startSnapSync(minPivotBlock = floor)
         case (true, SyncMode.Snap) if onTheGuard =>
           // spec 018 C5a part 10: the hand-off wrote the recovery flags with the state, and nothing on this layout
-          // scans or repairs the hash-keyed store they are about
+          // scans or repairs the hash-keyed store they are about. B-369: a flag the hand-off withheld, or a pivot no
+          // clean pass has covered, is paid by the background audit on the position store (one pass per pivot), which
+          // `startRegularSync` starts: no scan, and no block, at this start.
           log.info("SNAP sync completed on this node: regular sync follows the chain from the state that is held")
           startRegularSync()._2
         case (true, SyncMode.Snap) =>
@@ -2803,10 +2805,12 @@ object SyncController:
         else runningRegularSync(regularSync)
       (regularSync, nextBehavior)
 
-    // On the unified layout the audit would fetch the whole trie into the hash-keyed store, which the layout never
-    // reads and its clear never deletes (spec 018 C5a part 10).
+    // On the unified layout the audit walks the position store from the anchor's root and repairs a hole by position
+    // (`repairNodeAt`), never the hash-keyed store, which the layout does not read and its clear never deletes (spec
+    // 018 C5a part 10, C5b, B-369). A guard with no position store has nothing to walk: the hash-store audit would
+    // fetch the whole trie into the store the layout never reads, so the gate is Disabled there, as it was before.
     private def auditGate: BackgroundAudit.Gate =
-      if onTheGuard then BackgroundAudit.Gate.Disabled
+      if onTheGuard && blockchainWriter.positionRepairs.isEmpty then BackgroundAudit.Gate.Disabled
       else BackgroundAudit.gate(backgroundAuditEnabled, stateStorage, appStateStorage)
 
     /** A node on the unified state layout (spec 018 C5a part 10): nothing of the hash-keyed store is repaired, scanned
@@ -2833,7 +2837,8 @@ object SyncController:
                     evmCodeStorage,
                     networkPeerManager,
                     peerEventBus,
-                    syncConfig
+                    syncConfig,
+                    positions = if onTheGuard then blockchainWriter.positionRepairs else None
                   )
                 )
                 .onFailure[Exception](
