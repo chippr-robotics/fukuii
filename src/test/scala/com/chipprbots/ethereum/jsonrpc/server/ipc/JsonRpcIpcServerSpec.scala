@@ -82,3 +82,42 @@ class JsonRpcIpcServerSpec extends AnyFlatSpec with Matchers:
       ipcListening shouldBe Some(false)
     }
   }
+
+  // ---- reading requests -----------------------------------------------------------------------------------------
+
+  private def values(input: String): List[String] =
+    val in = new java.io.StringReader(input)
+    Iterator.continually(JsonRpcIpcServer.readJsonValue(in)).takeWhile(_.isDefined).flatten.toList
+
+  "JsonRpcIpcServer.readJsonValue" should "read a request longer than any buffer whole (spec 030 S11)" taggedAs (
+    UnitTest,
+    RPCTest
+  ) in {
+    val enode = "enode://" + "cd" * 64 + "@127.0.0.1:30305"
+    val request = s"""{"jsonrpc":"2.0","id":1,"method":"admin_addNodesToAllowlist","params":[["$enode"]]}"""
+    values(request + "\n") shouldBe List(request)
+    values(request) shouldBe List(request) // no newline after it, as web3 IPC providers send
+  }
+
+  it should "read two requests sent back to back, with or without whitespace between them" taggedAs (
+    UnitTest,
+    RPCTest
+  ) in {
+    val a = """{"jsonrpc":"2.0","id":1,"method":"eth_blockNumber","params":[]}"""
+    val b = """[{"jsonrpc":"2.0","id":2,"method":"net_version","params":[]}]"""
+    values(a + b) shouldBe List(a, b)
+    values(s"$a\n\n  $b\r\n") shouldBe List(a, b)
+  }
+
+  it should "not end a value at a bracket or quote inside a string" taggedAs (UnitTest, RPCTest) in {
+    val tricky = """{"id":1,"method":"x","params":["}]{[", "a \"quoted\" }", "back\\slash\\"]}"""
+    values(tricky + "{}") shouldBe List(tricky, "{}")
+  }
+
+  it should "answer nothing for a request cut off by the end of the stream" taggedAs (UnitTest, RPCTest) in {
+    values("""{"jsonrpc":"2.0","id":1,"method":"eth_""") shouldBe Nil
+  }
+
+  it should "refuse a request longer than the limit" taggedAs (UnitTest, RPCTest) in {
+    intercept[java.io.IOException](JsonRpcIpcServer.readJsonValue(new java.io.StringReader("[" + "1," * 50), 20))
+  }
