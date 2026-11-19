@@ -3300,3 +3300,13 @@ items:
     links:
       spec: 018
     notes: Stale doc comment (src/main/resources/conf/base/state.conf:7-8). Found in C6 PR-D (B-067).
+  - id: B-390
+    title: "run-eg12.sh: read T242's snap-capable peer-count log line once it lands, beside debug_listPeersInfo"
+    priority: P3
+    status: open
+    area: storage
+    opened: 2026-11-19
+    refs: []
+    links:
+      spec: 018
+    notes: C6 PR-D (B-067) counts snap peers from debug_listPeersInfo strings (supportsSnap/forkAccepted); T242 adds the node's own count at start.
