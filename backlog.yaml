@@ -3080,7 +3080,7 @@ items:
   - id: B-372
     title: "B-065 follow-up: IntegrationTest OnDemandFetchByPosition, importer over a real PathStateStorage (T212 IT)"
     priority: P2
-    status: claimed
+    status: in-progress
     area: sync
     opened: 2026-11-18
     refs: []
@@ -3090,7 +3090,7 @@ items:
       by: cloud-dc960fdc
       agent: eye
       since: 2026-11-19T01:36:34Z
-      heartbeat: 2026-11-19T01:36:34Z
+      heartbeat: 2026-11-19T01:36:37Z
     notes: C5b part 2 covers T212 at actor level (RegularSyncSpec, recording PositionRepairs); repairNodeAt's lock and anchor CAS are pinned on the real store by RepairNodeAtSpec. An it/ spec wiring BlockImporter to a real PathStateStorage with a hole is still to write.
   - id: B-373
     title: "B-065 follow-up: drop StateStorage.saveNode (no main caller; ~10 test and it seeding sites) with the Hash scheme in C8b"
