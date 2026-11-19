@@ -16,7 +16,6 @@ import com.chipprbots.ethereum.jsonrpc.server.controllers.ApisBase
 import com.chipprbots.ethereum.jsonrpc.server.controllers.JsonRpcBaseController.JsonRpcConfig
 import com.chipprbots.ethereum.jsonrpc.server.http.JsonRpcHttpServer
 import com.chipprbots.ethereum.keystore.KeyStoreImpl
-import com.chipprbots.ethereum.security.SSLContextBuilder
 import com.chipprbots.ethereum.security.SecureRandomBuilder
 import com.chipprbots.ethereum.utils.KeyStoreConfig
 import com.chipprbots.ethereum.utils.Logger
@@ -32,8 +31,8 @@ trait FaucetControllerBuilder:
   given runtime: IORuntime = IORuntime.global
 
 trait FaucetRpcServiceBuilder:
-  self: FaucetConfigBuilder & FaucetControllerBuilder & ActorSystemBuilder & SecureRandomBuilder & ShutdownHookBuilder &
-    SSLContextBuilder =>
+  self: FaucetConfigBuilder & FaucetControllerBuilder & ActorSystemBuilder & SecureRandomBuilder &
+    ShutdownHookBuilder =>
 
   val keyStore =
     new KeyStoreImpl(
@@ -76,7 +75,7 @@ trait FaucetJsonRpcControllerBuilder:
 
 trait FaucetJsonRpcHttpServerBuilder:
   self: ActorSystemBuilder & FaucetConfigBuilder & JsonRpcConfigBuilder & SecureRandomBuilder &
-    FaucetJsonRpcHealthCheckBuilder & FaucetJsonRpcControllerBuilder & SSLContextBuilder =>
+    FaucetJsonRpcHealthCheckBuilder & FaucetJsonRpcControllerBuilder =>
 
   val faucetJsonRpcHttpServer: Either[String, JsonRpcHttpServer] = JsonRpcHttpServer(
     faucetJsonRpcController,
@@ -105,7 +104,6 @@ class FaucetServer
     with ApisBuilder
     with JsonRpcConfigBuilder
     with SecureRandomBuilder
-    with SSLContextBuilder
     with FaucetControllerBuilder
     with FaucetRpcServiceBuilder
     with FaucetJsonRpcHealthCheckBuilder

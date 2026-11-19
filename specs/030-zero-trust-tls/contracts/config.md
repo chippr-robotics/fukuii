@@ -72,15 +72,14 @@ startup error (it could never match). `apis` accepts the namespace names of `net
 | Key | Default | Site |
 | --- | --- | --- |
 | `faucet.rpc-client.tls-profile` | `system` | faucet → node |
-| `sync.checkpoint.tls-profile` | `system` | `CheckpointDownloader` |
-| `ephemery.release.tls-profile` | `system` | `ReleaseTransport` |
-| `mining.work-notify.tls-profile` | `system` | `WorkNotifier` |
-| `bootstrap-download.tls-profile` | `system` | `BootstrapDownload` |
-| `network.external-ip.tls-profile` | `system` | `ExternalIPDetector` |
-| `tui.probe.tls-profile` | `null` | `EndpointProbe`: unset = the probed listener's own profile when it is `need`, else the unverified probe it does today (research D-9) |
+| `sync.checkpoint-sync-tls-profile` | `system` | `CheckpointDownloader` |
+| `ephemery.release.tls-profile` | `system` | `ReleaseTransport` (B-397: not yet a key; `system` today) |
+| `mining.notify-tls-profile` | `system` | `WorkNotifier` |
+| `bootstrap-download.tls-profile` | `system` | `BootstrapDownload` (https URLs only) |
+| `network.server-address.external-ip-tls-profile` | `system` | `ExternalIPDetector` |
+| `tui.probe.tls-profile` | `null` | `EndpointProbe`: unset = the unverified probe it did before, presenting the listener's own keystore when the listener is `need`; set = verified on that profile (research D-9) |
 
-The exact parent paths follow each site's existing config block; slice 7 confirms each against `conf/base/*.conf`
-before adding it.
+Each key sits beside the setting it qualifies in `conf/base/*.conf` (slices 7 and 8 confirmed each path).
 
 ## P2P allowlist (slice 9; edits slice 10)
 

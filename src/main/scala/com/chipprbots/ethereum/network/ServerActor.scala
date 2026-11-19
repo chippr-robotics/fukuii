@@ -76,17 +76,19 @@ object ServerActor:
       nodeStatusHolder: AtomicReference[NodeStatus],
       peerManager: TypedActorRef[PeerManagerActor.Command],
       blacklist: Blacklist,
-      addressInfo: NetworkAddressInfo = new NetworkAddressInfo
+      addressInfo: NetworkAddressInfo = new NetworkAddressInfo,
+      externalIpTls: javax.net.ssl.SSLContext = javax.net.ssl.SSLContext.getDefault
   ): Behavior[Command] =
     // Every real detection (the first one, and the periodic refresh) is recorded in `addressInfo`: which step found the
-    // address, and when. The detector is the production one; tests use `testApply` with their own stub.
+    // address, and when. The detector is the production one; tests use `testApply` with their own stub. Its HTTPS step
+    // runs on `externalIpTls`, the client context of `external-ip-tls-profile` (spec 030 FR-044).
     behavior(
       nodeStatusHolder,
       peerManager,
       blacklist,
       tcpManagerRef = None,
       detect = mode =>
-        val found = ExternalIPDetector.detectWithSource(mode)
+        val found = ExternalIPDetector.detectWithSource(mode, httpProbe = ExternalIPDetector.httpProbeOn(externalIpTls))
         addressInfo.recordDetection(mode, found, System.currentTimeMillis())
         found.map(_.address)
     )

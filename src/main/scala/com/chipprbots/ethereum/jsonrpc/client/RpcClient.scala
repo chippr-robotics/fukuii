@@ -24,10 +24,10 @@ import io.circe.parser.parse
 import io.circe.syntax.*
 
 import com.chipprbots.ethereum.jsonrpc.JsonRpcError
-import com.chipprbots.ethereum.security.SSLError
+import com.chipprbots.ethereum.tls.TlsConfigError
 import com.chipprbots.ethereum.utils.Logger
 
-abstract class RpcClient(node: Uri, timeout: Duration, getSSLContext: () => Either[SSLError, SSLContext])(implicit
+abstract class RpcClient(node: Uri, timeout: Duration, getSSLContext: () => Either[TlsConfigError, SSLContext])(implicit
     system: ActorSystem,
     ec: ExecutionContext
 ) extends Logger:
@@ -54,7 +54,7 @@ abstract class RpcClient(node: Uri, timeout: Duration, getSSLContext: () => Eith
         case Right(context) => Some(com.chipprbots.ethereum.tls.OutboundTls.pekkoHttpsContext(context))
         case Left(error) =>
           throw new IllegalStateException(
-            s"Refusing to start: the TLS client for $node cannot be set up: ${error.reason}"
+            s"Refusing to start: the TLS client for $node cannot be set up: ${error.message}"
           )
     else None
 

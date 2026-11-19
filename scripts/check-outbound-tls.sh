@@ -108,7 +108,7 @@ awk -v names="$NAMES" -v problems="$work/problems" '
     if ($2 !~ /^[1-9][0-9]*$/) { print "UNREADABLE: `" $2 "` is not a count above zero (" where ")" > problems; next }
     if (NF < 3) { print "UNREADABLE: no file (" where ")" > problems; next }
     if (NF < 4) { print "NO REASON: every line says why the use is there (" where ")" > problems; next }
-    if ($4 !~ /^(FACTORY|USES|PLAIN|PROBE|S8)$/) { print "NO VERDICT: a reason starts with FACTORY, USES, PLAIN, PROBE or S8 (" where ")" > problems; next }
+    if ($4 !~ /^(FACTORY|USES|PLAIN|PROBE)$/) { print "NO VERDICT: a reason starts with FACTORY, USES, PLAIN or PROBE (" where ")" > problems; next }
     if (($1, $3) in seen) { print "LISTED TWICE: " $1 " in " $3 " (" where ")" > problems; next }
     seen[$1, $3] = 1
     print $1, $2, $3
@@ -143,7 +143,7 @@ while read -r kind name file found allowed; do
     unlisted)
       echo "outbound-tls: NOT LISTED: $name in $file ($found)"
       sites "$(regex_of "$name")" "$root/$file" | sed "s|^|  $file:|"
-      echo "  if it has to stay, the line to add:  $name $found $file <FACTORY, USES, PLAIN, PROBE or S8, then why>"
+      echo "  if it has to stay, the line to add:  $name $found $file <FACTORY, USES, PLAIN or PROBE, then why>"
       ;;
     over)
       echo "outbound-tls: MORE THAN LISTED: $name in $file: $found found, $allowed allowed"

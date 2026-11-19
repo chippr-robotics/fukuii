@@ -273,7 +273,14 @@ object TuiActions:
       val ipc = node.jsonRpcConfig.ipcServerConfig
       Seq(
         Option.when(http.enabled)(
-          EndpointProbe.Endpoint(if http.tlsEnabled then Kind.Https else Kind.Http, http.interface, http.port)
+          if http.tlsEnabled then
+            EndpointProbe.Endpoint(
+              Kind.Https,
+              http.interface,
+              http.port,
+              tls = EndpointProbe.tlsFor(node.instanceConfig.config, new java.security.SecureRandom())
+            )
+          else EndpointProbe.Endpoint(Kind.Http, http.interface, http.port)
         ),
         Option.when(ws.enabled)(EndpointProbe.Endpoint(Kind.Ws, ws.interface, ws.port)),
         Option.when(ipc.enabled)(EndpointProbe.Endpoint(Kind.Ipc, "", 0, ipc.socketFile)),
@@ -377,7 +384,7 @@ object TuiActions:
           // The operator asks for it: the whole detection runs, whatever the node's own is set to, and the preview
           // says so where the node's own is off.
           Actions.DetectIp.name -> ReportActions.detectIp(
-            () => ExternalIPDetector.detect(),
+            () => ExternalIPDetector.detect(httpProbe = ExternalIPDetector.httpProbeOn(node.externalIpTls)),
             () => detection,
             () => advertised,
             () => server.advertisedAddress.isEmpty && server.externalIpDetectionMode == DetectionMode.None

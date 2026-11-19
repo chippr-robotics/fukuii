@@ -2,6 +2,7 @@ package com.chipprbots.ethereum.consensus.pow
 
 import org.apache.pekko.actor.ActorSystem
 import org.apache.pekko.http.scaladsl.Http
+import org.apache.pekko.http.scaladsl.HttpsConnectionContext
 import org.apache.pekko.http.scaladsl.model.ContentTypes
 import org.apache.pekko.http.scaladsl.model.HttpEntity
 import org.apache.pekko.http.scaladsl.model.HttpMethods
@@ -9,6 +10,7 @@ import org.apache.pekko.http.scaladsl.model.HttpRequest
 import org.apache.pekko.util.ByteString
 
 import scala.concurrent.ExecutionContext
+import scala.concurrent.Future
 import scala.util.Failure
 import scala.util.Success
 
@@ -34,26 +36,33 @@ object WorkNotifier extends Logger:
       blockNumber: BigInt
   )
 
-  /** Posts the work package to every configured URL. Each POST is independent; one failure does not affect others.
+  /** Posts the work package to every configured URL. Each POST is independent; one failure does not affect others. An
+    * `https` URL is reached on `https`, the client context of `fukuii.mining.notify-tls-profile` (spec 030 FR-044).
     */
-  def notify(urls: Seq[String], work: WorkPackage)(implicit system: ActorSystem): Unit =
+  def notify(urls: Seq[String], work: WorkPackage, https: HttpsConnectionContext)(implicit system: ActorSystem): Unit =
     if urls.nonEmpty then
       implicit val ec: ExecutionContext = system.dispatcher
-      val body = buildJsonBody(work)
       urls.foreach { url =>
-        val request = HttpRequest(
-          method = HttpMethods.POST,
-          uri = url,
-          entity = HttpEntity(ContentTypes.`application/json`, body)
-        )
-        Http().singleRequest(request).onComplete {
-          case Success(response) =>
-            response.discardEntityBytes()
-            log.debug("Work notification sent to {} (HTTP {})", url, response.status.intValue())
-          case Failure(ex) =>
-            log.warn("Work notification to {} failed: {}", url, ex.getMessage)
+        send(url, work, https).onComplete {
+          case Success(status) => log.debug("Work notification sent to {} (HTTP {})", url, status)
+          case Failure(ex)     => log.warn("Work notification to {} failed: {}", url, ex.getMessage)
         }
       }
+
+  /** One POST of `work` to `url`: the HTTP status it was answered with, or the failure. */
+  def send(url: String, work: WorkPackage, https: HttpsConnectionContext)(implicit
+      system: ActorSystem
+  ): Future[Int] =
+    implicit val ec: ExecutionContext = system.dispatcher
+    val request = HttpRequest(
+      method = HttpMethods.POST,
+      uri = url,
+      entity = HttpEntity(ContentTypes.`application/json`, buildJsonBody(work))
+    )
+    Http().singleRequest(request, https).map { response =>
+      response.discardEntityBytes()
+      response.status.intValue()
+    }
 
   /** Builds the JSON array body matching core-geth's GetWork wire format. All values are 0x-prefixed hex strings.
     */
