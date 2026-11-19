@@ -3427,3 +3427,12 @@ items:
     links:
       spec: 018
     notes: "forge: BytecodeRecoveryActor writes only EvmCodeStorage, shared by both layouts, and its scan reads rows via RecoveryScanStores. Refused since B-376 to keep the routes' decision (SyncController guards) in one place."
+  - id: B-397
+    title: "Spec 030 S7 follow-up: ephemery.release-tls-profile (FR-044) for the release fetch, once its config is read before the fetch"
+    priority: P3
+    status: open
+    area: ops
+    opened: 2026-11-19
+    refs: []
+    links: {}
+    notes: "S7 routes JdkHttpsTransport through OutboundTls with the system profile: StartupDeps.production builds it before the node config and its tls.profiles are loaded."
