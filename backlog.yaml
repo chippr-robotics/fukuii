@@ -3314,3 +3314,14 @@ items:
     links:
       spec: 018
     notes: C6 PR-D (B-067) counts snap peers from debug_listPeersInfo strings (supportsSnap/forkAccepted); T242 adds the node's own count at start.
+  - id: B-391
+    title: "PoW escalation: a heavier branch whose fork header is missing is never counted; firstInvalidHeaderOf answers HeaderParentNotFoundError"
+    priority: P2
+    status: open
+    area: sync
+    opened: 2026-11-19
+    refs: []
+    links:
+      spec: 018
+    depends_on: [B-383]
+    notes: "Found on B-385 (forge). B-383 (#1938) counts the missing-header arm in PowEscalationFeed, but before that arm the feed asks BlockValidation.firstInvalidHeaderOf, which cannot check the first header's parent rules without the parent header and answers HeaderParentNotFoundError: the branch is left out as invalid, so in production the wait still has no end. Decide (forge): validate the first header without its parent rules (seal, difficulty bounds unchecked) only where the hash index names the parent as this node's, or escalate on another path. Unvalidated headers must never be counted."
