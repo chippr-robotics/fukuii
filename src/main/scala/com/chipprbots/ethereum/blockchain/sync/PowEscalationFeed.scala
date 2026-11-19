@@ -55,6 +55,10 @@ import com.chipprbots.ethereum.domain.ChainWeight
   * @param chainHashAt
   *   the hash of the chain's block at a height, by the hash index: whether a block whose header is not stored is the
   *   node's own (B-383)
+  * @param head
+  *   the head's header, of the head `headWeight` weighs: where the weight of the block a branch stands on is not
+  *   stored, it is that weight less the difficulty of the head's blocks above that block, found by their parent hashes
+  *   (B-385)
   */
 final class PowEscalationFeed(
     watch: EscalationWatch,
@@ -64,7 +68,8 @@ final class PowEscalationFeed(
     onTheChain: BlockHeader => Boolean = _ => true,
     mess: Option[PowEscalationFeed.Mess] = None,
     note: String => Unit = _ => (),
-    chainHashAt: BigInt => Option[BlockHash] = _ => None
+    chainHashAt: BigInt => Option[BlockHash] = _ => None,
+    head: () => Option[BlockHeader] = () => None
 ):
   import PowEscalationFeed.*
 
@@ -99,7 +104,7 @@ final class PowEscalationFeed(
     // refusals (`RefusedForThisHead`, `HandedToRecovery`, B-297) out of the proof-of-work count
     if headers.nonEmpty && headers.last.difficulty.value > 0 then
       val name = s"[${headers.head.number}-${headers.last.number}]"
-      (weighed(headers), headWeight()) match
+      (weighed(headers, forkWeightOf), headWeight()) match
         case (None, _) | (_, None) => note(s"branch $name is not counted: its weight, or the head's, is not stored")
         case (Some(of), Some(head)) if of <= head =>
           note(s"branch $name is not counted: it does not outweigh the head")
@@ -123,9 +128,35 @@ final class PowEscalationFeed(
       head <- headWeight()
     yield of > head).contains(true)
 
-  // the chain weight at the last of `headers`, from the stored weight of the block the first stands on
-  private def weighed(headers: List[BlockHeader]): Option[ChainWeight] =
-    headers.headOption.flatMap(first => weightOf(first.parentHash)).map(headers.foldLeft(_)(_.increase(_)))
+  // the chain weight at the last of `headers`, from the weight `of` gives the block the first stands on
+  private def weighed(
+      headers: List[BlockHeader],
+      of: BlockHash => Option[ChainWeight] = weightOf
+  ): Option[ChainWeight] =
+    headers.headOption.flatMap(first => of(first.parentHash)).map(headers.foldLeft(_)(_.increase(_)))
+
+  // The weight of the block of `hash`: as stored, or, where it is not stored and the block is of the head's ancestry,
+  // the head's weight less the difficulty of the head's blocks above it (B-385). The branch is then weighed against the
+  // head by the difficulty of each above the block they share, as `BranchResolution.compareBranch` weighs it: whatever
+  // the two weights rest on cancels. The blocks above it are found by their parent hashes from the head, not by the
+  // hash index (ancestry-not-index), up to `ForkWeightReach` of them; a header not stored on the way, or the head's
+  // weight not exact, and nothing is weighed.
+  private def forkWeightOf(hash: BlockHash): Option[ChainWeight] =
+    weightOf(hash).orElse {
+      val derived = for
+        top <- head()
+        weight <- headWeight()
+        above <- difficultyAbove(top, hash, headerOf)
+        if above <= weight.totalDifficulty.value
+      yield ChainWeight.totalDifficultyOnly(weight.totalDifficulty.value - above)
+      derived.foreach(of =>
+        note(
+          s"the weight of block ${hash.toHexString.take(10)} is not stored: it is " +
+            s"weighed from the head, ${of.totalDifficulty.value} (B-385)"
+        )
+      )
+      derived
+    }
 
   private def counted(
       headers: List[BlockHeader],
@@ -170,7 +201,7 @@ final class PowEscalationFeed(
     headerOf(first.parentHash.value) match
       case Some(fork) if onTheChain(fork) =>
         val weighed = for
-          forkWeight <- weightOf(first.parentHash)
+          forkWeight <- forkWeightOf(first.parentHash)
           headWeight <- headWeight()
         yield rule.refuses(
           math.max(0L, head.unixTimestamp - fork.unixTimestamp),
@@ -207,6 +238,31 @@ final class PowEscalationFeed(
         watch.headMoved()
 
 object PowEscalationFeed:
+
+  /** How many of the head's blocks are walked to weigh a block whose weight is not stored (B-385): as far as the walk
+    * down a branch reaches ([[firstAboveFork]]).
+    */
+  val ForkWeightReach: Int = 1024
+
+  /** The difficulty of the blocks of `top`'s ancestry above the block of `hash`, `top` with them, found by their parent
+    * hashes. None where the block is not met within `reach` blocks, or a header on the way is not stored. The header of
+    * the block of `hash` itself is not read.
+    */
+  def difficultyAbove(
+      top: BlockHeader,
+      hash: BlockHash,
+      headerOf: ByteString => Option[BlockHeader],
+      reach: Int = ForkWeightReach
+  ): Option[BigInt] =
+    @scala.annotation.tailrec
+    def down(at: BlockHeader, sum: BigInt, left: Int): Option[BigInt] =
+      if at.parentHash == hash then Some(sum + at.difficulty.value)
+      else if left <= 1 then None
+      else
+        headerOf(at.parentHash.value) match
+          case Some(parent) => down(parent, sum + at.difficulty.value, left - 1)
+          case None         => None
+    if top.hash == hash then Some(BigInt(0)) else down(top, BigInt(0), reach)
 
   /** The rule that refuses a reorganisation whose branch has not the weight its depth asks for (MESS, ECBP-1100).
     *

@@ -451,10 +451,15 @@ class RegularSyncSpec
       takenAt: Int = 17,
       // a chain that follows a consensus layer: the consensus client names the head, and no branch is weighed here
       followsConsensusLayer: Boolean = false,
-      readyBlocks: Option[Int] = None
+      readyBlocks: Option[Int] = None,
+      // false: the chain weight of block 14, the block the branch stands on, is not stored (B-385)
+      forkWeightStored: Boolean = true
   ) extends ForkRecoveryOnTheUnifiedLayout(name, recoveryStarted = false, unified = unified, readyBlocks = readyBlocks):
     val imports = new java.util.concurrent.atomic.AtomicInteger(0)
     val resolved = new java.util.concurrent.atomic.AtomicInteger(0)
+    // the branches told to the escalation as ones whose fork weight is not stored (B-385)
+    val unweighed: java.util.concurrent.ConcurrentLinkedQueue[List[BlockHeader]] =
+      new java.util.concurrent.ConcurrentLinkedQueue()
 
     private val sideBlocks: Map[Int, Block] =
       (15 to 22).foldLeft(Map.empty[Int, Block]) { (built, number) =>
@@ -492,6 +497,9 @@ class RegularSyncSpec
           fault: StateFault
       )(implicit blockchainConfig: BlockchainConfig): Unit =
         outOfReach.add((headers, fault, importLock.heldBy)): Unit
+      override def forkWeightNotStored(headers: List[BlockHeader])(implicit
+          blockchainConfig: BlockchainConfig
+      ): Unit = unweighed.add(headers): Unit
 
     override lazy val branchResolution: BranchResolution = new BranchResolution(
       blockchainReader,
@@ -501,7 +509,9 @@ class RegularSyncSpec
         resolved.incrementAndGet()
         if headers.head.hash == side(15).header.hash then NoChainSwitch else UnknownBranch
       override def notTaken(headers: NonEmptyList[BlockHeader]): Option[BranchNotTaken] =
-        Option.when(headers.head.hash == side(15).header.hash)(record(15))
+        Option.when(forkWeightStored && headers.head.hash == side(15).header.hash)(record(15))
+      override def withoutForkWeight(headers: NonEmptyList[BlockHeader]): Option[NonEmptyList[BlockHeader]] =
+        Option.when(!forkWeightStored && headers.head.hash == side(15).header.hash)(headers)
       override def extended(
           branch: BranchNotTaken,
           headers: NonEmptyList[BlockHeader]
@@ -1305,6 +1315,50 @@ class RegularSyncSpec
           (pick.from, pick.atLEastWith) shouldBe (BigInt(15), BigInt(17))
           imports.get() shouldBe 0
           nothingMoved()
+          // weighed, with the weight of the block it stands on stored: nothing is told to the escalation
+          unweighed.isEmpty shouldBe true
+          testKit.stop(importer)
+      )
+
+      // B-385: where the chain weight of the block a branch stands on is not stored, the fork choice answers
+      // NoChainSwitch with an error and nothing else ends the wait for it: told to the escalation's feed
+      "tell the escalation of a branch whose fork weight is not stored, on the unified state layout" taggedAs (
+        UnitTest,
+        SyncTest
+      ) in sync(
+        new BranchNotTakenFixture("unweighed", unified = true, forkWeightStored = false):
+          deliver(side(15))
+          awaitCond(!unweighed.isEmpty, 5.seconds)
+          unweighed.peek() shouldBe List(side(15).header)
+          imports.get() shouldBe 0
+          nothingMoved()
+          testKit.stop(importer)
+      )
+
+      "tell the escalation nothing of a branch whose fork weight is not stored on a chain that follows a consensus layer" taggedAs (
+        UnitTest,
+        SyncTest
+      ) in sync(
+        new BranchNotTakenFixture(
+          "unweighed-pos",
+          unified = true,
+          followsConsensusLayer = true,
+          forkWeightStored = false
+        ):
+          deliver(side(15))
+          toTheFetcher()
+          unweighed.isEmpty shouldBe true
+          testKit.stop(importer)
+      )
+
+      "tell the escalation nothing of a branch whose fork weight is not stored on the hash layout" taggedAs (
+        UnitTest,
+        SyncTest
+      ) in sync(
+        new BranchNotTakenFixture("unweighed-hash", unified = false, forkWeightStored = false):
+          deliver(side(15))
+          toTheFetcher()
+          unweighed.isEmpty shouldBe true
           testKit.stop(importer)
       )
 

@@ -575,3 +575,118 @@ class PowEscalationFeedSpec extends AnyFlatSpec with Matchers:
     ArtificialFinality.shouldRejectReorg(30000L, BigInt(1000), BigInt(1020)) shouldBe true
     ArtificialFinality.shouldRejectReorg(10L, BigInt(1000), BigInt(1020)) shouldBe false
   }
+
+  /** B-385: this node's chain above block 4, the block a branch stands on, whose chain weight is not stored. Blocks 5
+    * and 6 of difficulty 25 each, 6 the head, weighing 1050: block 4 weighs 1000 by the head. The header of block 4 is
+    * stored (the branch's headers are validated against it); its weight is not.
+    */
+  private class WeightNotStored(mess: Boolean, refuses: Boolean = false, stored: Option[ChainWeight] = None):
+    val escalated: mutable.ArrayBuffer[EscalationKind] = mutable.ArrayBuffer.empty
+    val said: mutable.ArrayBuffer[String] = mutable.ArrayBuffer.empty
+    val left: mutable.ArrayBuffer[String] = mutable.ArrayBuffer.empty
+    val asked: mutable.ArrayBuffer[(Long, BigInt, BigInt)] = mutable.ArrayBuffer.empty
+    val fork: BlockHeader = Fixtures.Blocks.ValidBlock.header
+      .copy(number = BlockNumber(4), unixTimestamp = com.chipprbots.ethereum.domain.Timestamp(1000L))
+    private def own(number: Int, parent: ByteString): BlockHeader =
+      Fixtures.Blocks.ValidBlock.header.copy(
+        parentHash = BlockHash(parent),
+        number = BlockNumber(number),
+        difficulty = Difficulty(25),
+        unixTimestamp = com.chipprbots.ethereum.domain.Timestamp(1000L + 13 * (number - 4)),
+        extraData = ByteString("of this node's chain")
+      )
+    val own5: BlockHeader = own(5, forkHash.value)
+    val own6: BlockHeader = own(6, own5.hash.value)
+    var ownStored: Set[ByteString] = Set(own5.hash.value, own6.hash.value)
+    val feed = new PowEscalationFeed(
+      new EscalationWatch(new EscalationTrigger(4), () => 0L, escalated += _, (_, why) => said += why),
+      hash => if hash == forkHash then stored else None,
+      () => Some(ChainWeight.totalDifficultyOnly(1050)),
+      hash =>
+        if hash == forkHash.value then Some(fork)
+        else Seq(own5, own6).find(h => h.hash.value == hash && ownStored.contains(hash)),
+      _ => true,
+      Option.when(mess)(
+        PowEscalationFeed.Mess(
+          _ => true,
+          () => Some(own6),
+          (seconds, local, proposed) =>
+            asked += ((seconds, local, proposed)); refuses
+        )
+      ),
+      left += _,
+      number => Option.when(number == 4)(forkHash),
+      () => Some(own6)
+    )
+
+  private val noWeight: StateFault =
+    new StateUnavailable("the chain weight of block 4, the block the branch stands on, is not stored")
+
+  "The proof-of-work feed, where the weight of the block a branch stands on is not stored" should "count a heavier branch as a fault of this node, weighed from the head, and not as a MESS refusal" taggedAs UnitTest in {
+    for mess <- Seq(true, false) do
+      withClue(s"MESS ${if mess then "on" else "off"}: ") {
+        val rig = new WeightNotStored(mess)
+        // tip 7, then tip 11: four blocks of growth
+        rig.feed.notJudgedHeaders(branch(5, 3).map(_.header), noWeight, _ => None)
+        rig.escalated shouldBe empty
+        // 1000 from the head, and the branch's 300 above it
+        rig.feed.refusedWeight.map(_.totalDifficulty.value) shouldBe Some(BigInt(1300))
+        rig.feed.notJudgedHeaders(branch(5, 7).map(_.header), noWeight, _ => None)
+        rig.escalated.toList shouldBe List(EscalationKind.LocalFault)
+        rig.said.last should (include("[5-11]").and(include("is not stored")))
+        rig.left.exists(_.contains("is not counted")) shouldBe false
+        // where MESS is on, it weighs what the rule weighs: this chain's 50 above block 4 and the branch's
+        if mess then
+          rig.asked.map(a => (a._2, a._3)).toList shouldBe List((BigInt(50), BigInt(300)), (BigInt(50), BigInt(700)))
+        else rig.asked shouldBe empty
+      }
+  }
+
+  it should "count nothing for a branch that does not outweigh the head, nor where the head's ancestry is not stored down to it" taggedAs UnitTest in {
+    val lighter = new WeightNotStored(mess = true)
+    // 1000 + 40 against the head's 1050
+    lighter.feed.notJudgedHeaders(branch(5, 4, difficulty = 10).map(_.header), noWeight, _ => None)
+    // and 1000 + 50, as heavy as the head: not heavier
+    lighter.feed.notJudgedHeaders(branch(5, 5, difficulty = 10).map(_.header), noWeight, _ => None)
+    lighter.escalated shouldBe empty
+    lighter.feed.refusedWeight shouldBe None
+    lighter.left.last should include("does not outweigh the head")
+    lighter.asked shouldBe empty
+
+    val holed = new WeightNotStored(mess = true)
+    // the header of block 5 of this node's chain is not stored: nothing says what block 4 weighs
+    holed.ownStored = Set(holed.own6.hash.value)
+    holed.feed.notJudgedHeaders(branch(5, 3).map(_.header), noWeight, _ => None)
+    holed.feed.notJudgedHeaders(branch(5, 7).map(_.header), noWeight, _ => None)
+    holed.escalated shouldBe empty
+    holed.left.last should include("is not stored")
+    (holed.left.last should not).include("MESS refuses")
+  }
+
+  it should "count nothing for a branch MESS refuses, weighed from the head, as with the weight stored" taggedAs UnitTest in {
+    val rig = new WeightNotStored(mess = true, refuses = true)
+    rig.feed.notJudgedHeaders(branch(5, 3).map(_.header), noWeight, _ => None)
+    rig.feed.notJudgedHeaders(branch(5, 7).map(_.header), noWeight, _ => None)
+    rig.escalated shouldBe empty
+    rig.left.last should include("MESS refuses")
+  }
+
+  it should "weigh from the stored weight wherever it is stored, as before" taggedAs UnitTest in {
+    // stored at 1040: the branch of 3 x 100 is counted at 1340, not at the 1300 the head would give
+    val rig = new WeightNotStored(mess = true, stored = Some(ChainWeight.totalDifficultyOnly(1040)))
+    rig.feed.notJudgedHeaders(branch(5, 3).map(_.header), noWeight, _ => None)
+    rig.feed.refusedWeight.map(_.totalDifficulty.value) shouldBe Some(BigInt(1340))
+    rig.asked.map(a => (a._2, a._3)).toList shouldBe List((BigInt(10), BigInt(300)))
+    rig.left.exists(_.contains("weighed from the head")) shouldBe false
+  }
+
+  "The difficulty of the head's blocks above a block" should "be summed by their parent hashes, and be none where the walk does not meet it" taggedAs UnitTest in {
+    val rig = new WeightNotStored(mess = false)
+    val headerOf: ByteString => Option[BlockHeader] = hash => Seq(rig.own5, rig.own6).find(_.hash.value == hash)
+    PowEscalationFeed.difficultyAbove(rig.own6, forkHash, headerOf) shouldBe Some(BigInt(50))
+    PowEscalationFeed.difficultyAbove(rig.own6, BlockHash(rig.own5.hash.value), headerOf) shouldBe Some(BigInt(25))
+    PowEscalationFeed.difficultyAbove(rig.own6, BlockHash(rig.own6.hash.value), headerOf) shouldBe Some(BigInt(0))
+    // beyond its reach, or a block that is not of the head's ancestry
+    PowEscalationFeed.difficultyAbove(rig.own6, forkHash, headerOf, reach = 1) shouldBe None
+    PowEscalationFeed.difficultyAbove(rig.own6, BlockHash(ByteString(Array.fill[Byte](32)(3))), headerOf) shouldBe None
+  }

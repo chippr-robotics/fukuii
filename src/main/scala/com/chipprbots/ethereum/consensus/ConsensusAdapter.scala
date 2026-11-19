@@ -32,6 +32,7 @@ import com.chipprbots.ethereum.consensus.engine.InvalidChainReporter
 import com.chipprbots.ethereum.consensus.validators.BlockHeaderError.HeaderParentNotFoundError
 import com.chipprbots.ethereum.db.storage.pathstate.HeldStateIncomplete
 import com.chipprbots.ethereum.db.storage.pathstate.StateFault
+import com.chipprbots.ethereum.db.storage.pathstate.StateUnavailable
 import com.chipprbots.ethereum.domain.Block
 import com.chipprbots.ethereum.domain.BlockAccessList
 import com.chipprbots.ethereum.domain.BlockHash
@@ -281,6 +282,25 @@ class ConsensusAdapter(
     toldTheFeed("a branch out of reach")(
       _.notJudgedHeaders(headers, fault, blockValidation.firstInvalidHeaderOfNotJudged)
     )
+
+  /** A proof-of-work branch, known by its `headers` from the block above the one it stands on, whose fork choice could
+    * not be made: the chain weight of that block is not stored (`BranchResolution.withoutForkWeight`, B-385). No
+    * verdict was given on it, and it is a fault of this node's datadir: told to the escalation's feed as a branch this
+    * node's state could not take is, with the header validation of an import, and counted by how far it grows. The feed
+    * weighs it from the head; a branch it cannot weigh, or that is not the heavier, is not counted.
+    *
+    * To be called under the import lock, as [[branchOutOfReach]] is.
+    */
+  def forkWeightNotStored(headers: List[BlockHeader])(implicit blockchainConfig: BlockchainConfig): Unit =
+    headers.headOption.foreach { first =>
+      val fault = new StateUnavailable(
+        s"the chain weight of block ${first.number.value - 1} (${first.parentHash.toHexString.take(10)}), the block " +
+          s"the branch from block ${first.number} stands on, is not stored: no fork choice can be made"
+      )
+      toldTheFeed("a branch whose fork weight is not stored")(
+        _.notJudgedHeaders(headers, fault, blockValidation.firstInvalidHeaderOf)
+      )
+    }
 
   /** A hole in the held state that the importer fetched by its position and could not fill, as many times as its
     * exhausts allow (spec 018 C5b, B-291, forge): the repair is declined for good, or no peer serves the node. On the

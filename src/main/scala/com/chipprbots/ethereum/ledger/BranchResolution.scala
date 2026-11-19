@@ -266,6 +266,24 @@ class BranchResolution(
         difficultyAboveTheCommonBlock = side.map(_.difficulty.value).foldLeft(BigInt(0))(_ + _)
       )
 
+  /** The headers of `headers` above those this node holds, where the chain weight of the block they stand on is not
+    * stored: the branch [[compareBranch]] cannot weigh, and answers `NoChainSwitch` for, with an error (B-385). None
+    * where that weight is stored, and where no header is above those this node holds. It reads only, as
+    * [[compareBranch]] does, and says nothing of whether the branch is the heavier: the escalation's feed weighs it
+    * from the head (`PowEscalationFeed`).
+    */
+  def withoutForkWeight(headers: NonEmptyList[BlockHeader]): Option[NonEmptyList[BlockHeader]] =
+    val headersList = headers.toList
+    val own = getTopBlocksFromNumber(headers.head.number.value)
+    val shared = own.zip(headersList).takeWhile { case (block, header) => block.header == header }.length
+    for
+      side <- NonEmptyList.fromList(headersList.drop(shared))
+      // the block compareBranch weighs from: the one under this node's first block above the shared ones, else under
+      // the branch's first
+      under = own.drop(shared).headOption.map(_.header).getOrElse(side.head).parentHash
+      if blockchainReader.getChainWeightByHash(under).isEmpty
+    yield side
+
   /** `headers` stand on the tip of a branch that was not taken: the branch with them, and whether it would be taken
     * now. By the rules of [[compareBranch]]: heavier than this node's chain, and not refused by MESS. None when the
     * headers do not stand on that tip or do not form a chain, and when the block the branch leaves this chain at is no
