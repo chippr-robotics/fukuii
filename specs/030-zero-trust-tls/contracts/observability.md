@@ -26,7 +26,7 @@ TLS listener rpc-http https://0.0.0.0:8546 client-auth=need profile=rpc cert="CN
 TLS listener rpc-http rule monitor: eth,net,web3,rpc
 TLS listener rpc-http rule ops: eth,net,web3,admin,debug,graphql,rpc
 Plaintext listener metrics http://0.0.0.0:13798 allow-insecure-bind=true            (WARN, every start; FR-018)
-P2P node allowlist on: 5 nodes, file /etc/fukuii/allowlist.json; discovery is off   (FR-060)
+P2P node allowlist on: 5 node(s), file /etc/fukuii/allowlist.json, reload every 1 minute; discovery is off   (FR-060)
 Discovery is off because the node allowlist is on (network.discovery.discovery-enabled = true is ignored)  (WARN; FR-055)
 ```
 

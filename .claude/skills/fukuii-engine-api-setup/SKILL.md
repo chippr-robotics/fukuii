@@ -33,7 +33,7 @@ Config keys in `network.engine-api` (see `src/main/resources/conf/base/network.c
 | Key | Default | Notes |
 | :-- | :-- | :-- |
 | `network.engine-api.enabled` | `false` | Must be `true` for ETH/Sepolia |
-| `network.engine-api.interface` | `"localhost"` | `"0.0.0.0"` only inside a container whose 8551 stays on the compose network (not published); a CL on another host needs a private network, firewall or TLS proxy |
+| `network.engine-api.interface` | `"localhost"` | `"0.0.0.0"` only inside a container whose 8551 stays on the compose network (not published), with `allow-insecure-bind = true` or `tls { enabled = true, profile = ... }` (a plaintext non-loopback bind refuses the start); a CL on another host needs a private network, firewall or `engine-api.tls` |
 | `network.engine-api.port` | `8551` | Standard authrpc port |
 | `network.engine-api.jwt-secret-path` | (none — dev mode) | MUST be set in production |
 
@@ -61,7 +61,7 @@ If `jwt-secret-path` is omitted, Fukuii generates a random in-memory secret
    ```
    Do not hand-edit `base/network.conf` — override in your operator config only.
 
-   In Docker Compose, set `interface = "0.0.0.0"` inside the container and do not
+   In Docker Compose, set `interface = "0.0.0.0"` inside the container (0.13.0 and later refuse a plaintext non-loopback bind: set `allow-insecure-bind = true` beside it, or `tls { enabled = true, profile = ... }`; the JWT still authenticates each call) and do not
    publish 8551; the CL dials the service name on the compose network
    (`ops/barad-dur/sepolia/` is the worked example). For a CL on another host,
    keep 8551 on a private network or VPN, firewalled to the CL's address, or put a

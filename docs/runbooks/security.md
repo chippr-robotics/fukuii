@@ -65,7 +65,11 @@ fukuii.network.rpc {
   transport only trusted programs can reach; the node logs a warning at startup when one is enabled on an HTTP or
   WebSocket endpoint that is not bound to a loopback address.
 - Keep `interface = "localhost"` (the default) on HTTP and WebSocket unless a reverse proxy or firewall controls who
-  can connect, and list only the namespaces the remote clients need.
+  can connect, and list only the namespaces the remote clients need. Any other interface needs TLS, or an explicit
+  `allow-insecure-bind = true`, or the node refuses to start ([the bind rule](#the-bind-rule)).
+- On a listener with client certificates (`client-auth = want` or `need`), identity rules can grant one certificate
+  more namespaces than the listener's `apis` (for example `admin` to an operator) without opening them to everyone
+  ([TLS and mTLS on the node](#tls-and-mtls-on-the-node)).
 - Run `rpc_modules` against each transport to see what it serves.
 
 ## Network Security
@@ -287,7 +291,9 @@ docker run -d \
 docker network create fukuii-internal
 docker run -d --network fukuii-internal --name fukuii ...
 docker run -d --network fukuii-internal --name app ...
-# App can access Fukuii RPC via http://fukuii:8546
+# App can access Fukuii RPC via http://fukuii:8546, once the node binds an interface the
+# network reaches (rpc.http.interface = "0.0.0.0") with TLS, or with
+# rpc.http.allow-insecure-bind = true to accept plaintext on that private network (see "The Bind Rule")
 ```
 
 **Docker with host firewall integration:**
@@ -499,8 +505,7 @@ ufw allow 8546/tcp  # Firewall
 ```hocon
 # Fukuii config
 fukuii.network.rpc.http {
-  mode = "http"
-  interface = "127.0.0.1"  # Localhost only
+  interface = "127.0.0.1"  # Localhost only (the default is "localhost")
   port = 8546
 }
 ```
@@ -514,16 +519,19 @@ ssh -L 8546:localhost:8546 user@fukuii-server
 curl http://localhost:8546
 ```
 
-**Pattern 2: Internal network with IP whitelist**
+**Pattern 2: Internal network with IP whitelist, and mutual TLS**
 
 ```hocon
 fukuii.network.rpc.http {
-  interface = "0.0.0.0"  # Listen on all interfaces
+  interface = "10.0.0.5"  # An internal address, not loopback
   port = 8546
+  # Required on a non-loopback interface (see "The bind rule"); need = every client presents a certificate
+  tls { enabled = true, profile = "rpc", client-auth = "need" }
 }
 ```
 
-Restrict with firewall (see above) to specific IPs only.
+Restrict with firewall (see above) to specific IPs as well. If the network is one you fully control (a Docker
+network, a host-only bridge) and you accept plaintext on it, `allow-insecure-bind = true` replaces the `tls` block.
 
 **Pattern 3: Reverse proxy with authentication** (for external access)
 
@@ -533,7 +541,9 @@ Use nginx or Caddy as reverse proxy:
 
 **Nginx example:**
 ```nginx
-# /etc/nginx/sites-available/fukuii-rpc
+# /etc/nginx/sites-available/fukuii-rpc (included in the http {} context)
+limit_req_zone $binary_remote_addr zone=rpc_limit:10m rate=10r/s;
+
 upstream fukuii_rpc {
     server 127.0.0.1:8546;
 }
@@ -550,8 +560,7 @@ server {
     auth_basic "Restricted Access";
     auth_basic_user_file /etc/nginx/.htpasswd;
 
-    # Rate limiting
-    limit_req_zone $binary_remote_addr zone=rpc_limit:10m rate=10r/s;
+    # Rate limiting (zone declared above, outside server {})
     limit_req zone=rpc_limit burst=20 nodelay;
 
     # API key validation (alternative to basic auth)
@@ -572,10 +581,8 @@ server {
         add_header X-XSS-Protection "1; mode=block";
     }
 
-    # Disable admin methods
-    location ~ /(admin_|personal_|debug_) {
-        return 403;
-    }
+    # JSON-RPC methods travel in the POST body to "/", so a URL location cannot block admin_, personal_ or
+    # debug_. Keep those namespaces out of the listener's apis instead (see RPC Method Filtering).
 }
 ```
 
@@ -599,57 +606,77 @@ rpc.example.com {
 }
 ```
 
-**Alternative: Direct HTTPS on Fukuii**
+**Alternative: Direct TLS on Fukuii**
 
-Instead of using a reverse proxy, you can enable TLS/HTTPS directly on Fukuii:
+Instead of using a reverse proxy, the node can serve TLS itself, and authenticate its clients; see
+[TLS and mTLS on the node](#tls-and-mtls-on-the-node) below.
+
+### TLS and mTLS on the Node
+
+Every network listener can serve TLS from a shared profile (spec 030): JSON-RPC HTTP (with GraphQL and the health
+endpoints), JSON-RPC WebSocket, the Engine API (server TLS only; JWT stays mandatory) and the metrics endpoint.
 
 ```hocon
-fukuii.network.rpc.http {
-  mode = "https"
-  interface = "0.0.0.0"
-  port = 8546
-  
-  certificate {
-    keystore-path = "tls/fukuii-rpc.p12"
-    keystore-type = "pkcs12"
-    password-file = "tls/fukuii-rpc.password"
+fukuii {
+  tls.profiles.rpc {
+    keystore   { path = "/etc/fukuii/tls/node.p12", type = "pkcs12", password-file = "/etc/fukuii/tls/node.password" }
+    truststore { path = "/etc/fukuii/tls/fukuii-ca-truststore.p12", type = "pkcs12", password-file = "/etc/fukuii/tls/fukuii-ca-truststore.password" }
   }
+  network.rpc.http.tls { enabled = true, profile = "rpc", client-auth = "need" }
 }
 ```
 
-Fukuii ships no certificate. Generate the keystore and its password per deployment with
-`tls/gen-cert.sh --san DNS:<host>,IP:<address>`, which writes the files named above, or use a
-CA-issued certificate.
+- `client-auth = "need"` refuses every client without a certificate from the truststore's CA: a rogue workload on
+  the same network cannot connect at all. `want` serves anonymous callers the listener's `apis`.
+- `fukuii.network.rpc.client-identities` grants a verified certificate its own namespaces, so `admin` or `debug` can
+  go to one operator certificate instead of to everyone who reaches the port.
+- A misconfigured profile refuses the start before any port binds; certificates and rules reload without a restart;
+  revocation is by short-lived client certificates and reload (no CRL or OCSP).
+- Fukuii ships no certificate. `tls/gen-cert.sh` (in the source repository) issues a test CA, server and client
+  certificates; use your own PKI in production.
+- The deprecated `mode = "https"` with a `certificate { keystore-path, ... }` block still works, server TLS only,
+  until it is removed in 0.13.0.
 
-For complete TLS setup instructions including certificate generation, testing, and production considerations, see the **[TLS Operations Runbook](tls-operations.md)**.
+Keys, rotation, revocation, metrics and troubleshooting: **[TLS Operations Runbook](tls-operations.md)**.
+
+### The Bind Rule
+
+A listener whose `interface` is not loopback (`0.0.0.0`, `::`, a LAN address, or a name resolving to one) refuses to
+start without TLS:
+
+```
+Refusing to start: fukuii.network.rpc.http binds 0.0.0.0 (not loopback) without TLS. Set fukuii.network.rpc.http.tls.enabled = true with a profile, or fukuii.network.rpc.http.allow-insecure-bind = true to accept plaintext on that interface (docs/runbooks/tls-operations.md#migration)
+```
+
+The same holds for `network.rpc.ws`, `network.engine-api` and `metrics`, each with its own `allow-insecure-bind`.
+The opt-out is logged as a WARN line at every start. The metrics endpoint binds `localhost` by default
+(`metrics.interface`). See [the migration section](tls-operations.md#migration).
+
+### P2P: the Node Allowlist
+
+P2P is not TLS. On a consortium network, `fukuii.network.peer.node-allowlist` admits only listed node IDs, checked
+right after the RLPx handshake and before every dial, with discovery off. See
+[Peering → Consortium Node Allowlist](peering.md#consortium-node-allowlist).
 
 ### RPC Method Filtering
 
-**Disable dangerous methods:**
-
-If Fukuii supports method filtering, restrict to read-only methods:
+The node filters by **namespace**, not by method. Restrict each transport to the namespaces its callers need:
 
 ```hocon
-# Hypothetical configuration
 fukuii.network.rpc {
-  allowed-methods = [
-    "eth_*",
-    "net_*",
-    "web3_*"
-  ]
-  
-  blocked-methods = [
-    "personal_*",  # Account management
-    "admin_*",     # Node administration
-    "debug_*",     # Debugging
-    "miner_*"      # Mining control
-  ]
+  http.apis = "eth,net,web3"     # no personal, admin, debug or miner on the network listener
+  ws.apis   = "eth,net,web3"
+  ipc.apis  = "eth,net,web3,fukuii,admin,debug"   # local administration over the socket
 }
 ```
 
-Implement at reverse proxy level:
+A call outside the caller's set answers `-32601 Method not found`. On a listener with client certificates, an
+identity rule gives one certificate a different set (above). There is no per-method allow or block list.
+
+A reverse proxy can add a coarse body filter, though a batch request or unusual JSON spacing can slip past a regex;
+treat it as defence in depth, not as the control:
 ```nginx
-# Block dangerous RPC methods in nginx
+# Block dangerous RPC methods in nginx (best effort)
 location / {
     if ($request_body ~* "personal_|admin_|debug_|miner_") {
         return 403;
@@ -979,6 +1006,10 @@ Schedule with cron:
 - [ ] Operating system hardened and updated
 - [ ] Firewall configured (allow only 30303/UDP and 30303/TCP)
 - [ ] RPC not exposed to public internet
+- [ ] Every non-loopback listener (RPC HTTP/WS, Engine API, metrics) has TLS, or a deliberate `allow-insecure-bind`
+- [ ] Listeners reachable from other hosts use `client-auth = "need"`; `admin`/`personal`/`debug` only via IPC or an
+      identity rule
+- [ ] Consortium nodes: the P2P node allowlist is on
 - [ ] SSH hardened (key-based auth, no root login)
 - [ ] Dedicated user account created for Fukuii
 - [ ] Fail2Ban configured
@@ -1061,7 +1092,9 @@ Document emergency contacts:
 ## Related Runbooks
 
 - [First Start](first-start.md) - Initial secure setup
-- [Peering](peering.md) - Network security considerations
+- [Peering](peering.md) - Network security considerations, and the consortium node allowlist
+- [TLS Operations](tls-operations.md) - TLS profiles, mutual TLS, identity rules, rotation and the bind rule
+- [Enterprise Deployment](enterprise-deployment.md) - Private and consortium networks
 - [Backup & Restore](backup-restore.md) - Secure backup procedures
 - [Known Issues](known-issues.md) - Security-related issues
 

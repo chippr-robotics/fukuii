@@ -769,8 +769,16 @@ final case class TransportStatus(
     calls: Long = 0L,
     errors: Long = 0L,
     tls: Boolean = false,
-    stoppedHere: Boolean = false
+    stoppedHere: Boolean = false,
+    clientAuth: TransportClientAuth = TransportClientAuth.None,
+    insecureBind: Boolean = false
 )
+
+/** Whether a TLS transport asks its callers for a certificate (spec 030 FR-061): not at all, asks (`want`), or requires
+  * one (`need`).
+  */
+enum TransportClientAuth:
+  case None, Want, Need
 
 /** How a transport tells one caller from another: not at all, by the Engine API's JWT secret, or by who may open the
   * IPC socket's file. A type, so that the words for each are written once and no comparison of texts decides them.

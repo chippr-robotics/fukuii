@@ -12,21 +12,26 @@ expected text: [contracts/observability.md](./contracts/observability.md).
 
 ```bash
 D=$(mktemp -d)
-tls/gen-cert.sh ca     --out "$D" --name test-ca
-tls/gen-cert.sh server --out "$D" --ca "$D/test-ca" --name node --san DNS:localhost,IP:127.0.0.1
-tls/gen-cert.sh client --out "$D" --ca "$D/test-ca" --name monitor --san DNS:monitor.internal
-tls/gen-cert.sh client --out "$D" --ca "$D/test-ca" --name ops --san DNS:ops.internal
-tls/gen-cert.sh ca     --out "$D" --name other-ca          # for the "untrusted" cases
-tls/gen-cert.sh client --out "$D" --ca "$D/other-ca" --name stranger
+tls/gen-cert.sh ca     -o "$D" -n test-ca
+tls/gen-cert.sh server -o "$D" --ca "$D/test-ca" -n node --san DNS:localhost,IP:127.0.0.1
+tls/gen-cert.sh client -o "$D" --ca "$D/test-ca" -n monitor --cn monitor --san DNS:monitor.internal
+tls/gen-cert.sh client -o "$D" --ca "$D/test-ca" -n ops --cn ops --san DNS:ops.internal
+tls/gen-cert.sh ca     -o "$D" -n other-ca                     # for the "untrusted" cases
+tls/gen-cert.sh client -o "$D" --ca "$D/other-ca" -n stranger --cn stranger
+# curl takes PEM: the key of each client keystore
+for c in monitor ops stranger; do
+  openssl pkcs12 -in "$D/$c.p12" -nocerts -nodes -passin "file:$D/$c.password" -out "$D/$c.key"
+done
 ```
 
-A scratch conf `$D/node.conf` includes the chain conf (Mordor or a Gorgoroth dev chain) and the blocks below.
+A scratch conf `$D/node.conf` includes the chain conf (Mordor; `gorgoroth.conf` does not start, B-398) and the blocks below.
+The profile `rpc` is `keystore = node.p12`, `truststore = test-ca-truststore.p12`, each with its `.password` file.
 
 ## Q1. Fail closed (Story 1, SC-001)
 
 Set `network.rpc.http.tls { enabled = true, profile = rpc }` and break one thing per run: the keystore path, the
 password file, `key-alias`, `client-auth = need` without a truststore, `protocols = ["TLSv1.1"]`, an expired server
-certificate (`gen-cert.sh server --days -1`). **Expect** exit code ≠ 0 within seconds, no port open
+certificate (`gen-cert.sh server -d -1`). **Expect** exit code ≠ 0 within seconds, no port open
 (`ss -ltn | grep 8546` empty), and the matching `Refusing to start:` line.
 
 ## Q2. mTLS on HTTP and WS (Story 2, SC-002)
@@ -53,7 +58,7 @@ Listener `apis = "eth,net,web3"`; rules `monitor` (`eth,net,web3`) and `ops` (`e
 ## Q4. Rotation (Story 4, SC-003)
 
 Start with `node` certificate A. Run a loop of `eth_blockNumber` on one keep-alive connection. Replace the keystore
-with certificate B (`gen-cert.sh server … --name node-b` then `mv` over the file). **Expect** within 60 s a new
+with certificate B (`gen-cert.sh server … -n node-b`, then `mv` its password file and keystore over the profile's, in that order). **Expect** within 60 s a new
 `openssl s_client -connect localhost:8546 -showcerts` shows B; the loop saw no error; `tls_reloads_total` +1. Replace
 it with a truncated file: **expect** an ERROR line, B still served, `tls_reload_failures_total` +1.
 

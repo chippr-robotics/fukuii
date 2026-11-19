@@ -407,8 +407,9 @@ abstract class BaseNode extends Node:
     nodeAllowlistStore.foreach { store =>
       val interval = nodeAllowlistReloadInterval
       log.info(
-        "P2P node allowlist on: {} node(s), reload every {}; discovery is off",
+        "P2P node allowlist on: {} node(s), {}, reload every {}; discovery is off",
         store.allowlist.snapshot.size,
+        store.filePath.fold("no file (runtime edits refused)")(f => s"file $f"),
         interval
       )
       val _ = store.schedule(interval, classicSystem.scheduler)(using classicSystem.dispatcher)
@@ -507,6 +508,8 @@ abstract class BaseNode extends Node:
     */
   private def tuiRpcTransports: Seq[com.chipprbots.ethereum.console.TransportStatus] =
     import com.chipprbots.ethereum.console.TransportAuth
+    import com.chipprbots.ethereum.console.TransportClientAuth
+    import scala.util.chaining.scalaUtilChainingOps
     import com.chipprbots.ethereum.console.TransportKind
     import com.chipprbots.ethereum.console.TransportStatus
     val http = jsonRpcConfig.httpServerConfig
@@ -514,16 +517,33 @@ abstract class BaseNode extends Node:
     val ipc = jsonRpcConfig.ipcServerConfig
     def exposed(name: String, key: String, enabled: Boolean, interface: String, apis: Seq[String]): Seq[String] =
       RpcExposureCheck.exposedNamespaces(RpcExposureCheck.Transport(name, key, enabled, interface, apis))
-    val engine = Option.when(engineApiConfig.enabled || blockchainConfig.networkType == NetworkType.ETH)(
-      TransportStatus(
-        TransportKind.Engine,
-        engineApiConfig.enabled,
-        None,
-        s"${engineApiConfig.interface}:${engineApiConfig.port}",
-        Seq("engine", "eth", "net", "web3"),
-        TransportAuth.Jwt
+    // each listener's TLS, client-auth and plaintext opt-out, as the bind policy reads them (spec 030 FR-061)
+    val listeners = com.chipprbots.ethereum.tls.BindPolicy.listeners(instanceConfig.config).map(l => l.id -> l).toMap
+    def tlsOf(id: com.chipprbots.ethereum.tls.ListenerId): TransportStatus => TransportStatus = t =>
+      listeners.get(id).fold(t) { l =>
+        val key = s"${l.key}.tls.client-auth"
+        val auth =
+          if !l.tls || !instanceConfig.config.hasPath(key) then TransportClientAuth.None
+          else
+            instanceConfig.config.getString(key).trim.toLowerCase(java.util.Locale.ROOT) match
+              case "need" => TransportClientAuth.Need
+              case "want" => TransportClientAuth.Want
+              case _      => TransportClientAuth.None
+        t.copy(tls = l.tls, clientAuth = auth, insecureBind = l.allowInsecure)
+      }
+    import com.chipprbots.ethereum.tls.ListenerId
+    val engine = Option
+      .when(engineApiConfig.enabled || blockchainConfig.networkType == NetworkType.ETH)(
+        TransportStatus(
+          TransportKind.Engine,
+          engineApiConfig.enabled,
+          None,
+          s"${engineApiConfig.interface}:${engineApiConfig.port}",
+          Seq("engine", "eth", "net", "web3"),
+          TransportAuth.Jwt
+        )
       )
-    )
+      .map(tlsOf(ListenerId.EngineApi))
     Seq(
       TransportStatus(
         TransportKind.Http,
@@ -532,9 +552,8 @@ abstract class BaseNode extends Node:
         s"${http.interface}:${http.port}",
         jsonRpcConfig.httpApis,
         TransportAuth.None,
-        exposed("HTTP", "http", http.enabled, http.interface, jsonRpcConfig.httpApis),
-        tls = http.tlsEnabled
-      ),
+        exposed("HTTP", "http", http.enabled, http.interface, jsonRpcConfig.httpApis)
+      ).pipe(tlsOf(ListenerId.RpcHttp)),
       TransportStatus(
         TransportKind.Ws,
         ws.enabled,
@@ -543,7 +562,7 @@ abstract class BaseNode extends Node:
         jsonRpcConfig.wsApis,
         TransportAuth.None,
         exposed("WebSocket", "ws", ws.enabled, ws.interface, jsonRpcConfig.wsApis)
-      ),
+      ).pipe(tlsOf(ListenerId.RpcWs)),
       TransportStatus(
         TransportKind.Ipc,
         ipc.enabled,

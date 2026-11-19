@@ -55,11 +55,12 @@ drifted from the code. The skills use the **code's** truth and flag the drift:
    `admin`, `personal`, `debug`, `qa` and `mcp` are opt-in over HTTP, so the
    skills that call `admin_*` or the MCP tools check `rpc_modules` first.
    Documented in CONVENTIONS.
-4. **RPC TLS keys** — the node uses a **nested** `network.rpc.http.certificate {
-   keystore-path, keystore-type, password-file }` block (default
-   `certificate = null`), **not** the flat `certificate-keystore-path` form
-   (that's the separate *faucet* config). Corrected in `fukuii-tls-operations`
-   and `fukuii-node-configuration`.
+4. **RPC TLS keys** — since spec 030 TLS is a profile under `fukuii.tls.profiles`
+   named by a listener's `tls { enabled, profile, client-auth }` block. The nested
+   `network.rpc.http.certificate { keystore-path, keystore-type, password-file }`
+   with `mode = "https"` is deprecated (mapped to a profile until 0.13.0), and the
+   flat `certificate-keystore-path` form never existed on the node. Corrected in
+   `fukuii-tls-operations` and `fukuii-node-configuration`.
 5. **`compact-database` CLI** — does **not** exist (only a commented example in
    `known-issues.md`). `fukuii-disk-management` explicitly says so instead of
    recommending it.
