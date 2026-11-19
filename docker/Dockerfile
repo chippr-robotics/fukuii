@@ -94,33 +94,9 @@ RUN cd /app/fukuii/lib && \
     basename "$(readlink -f fukuii-assembly.jar)" \
       | sed -E 's/^fukuii-assembly-(.*)\.jar$/fukuii-\1/' > /version.txt
 
-# Create healthcheck script
-RUN echo '#!/bin/bash\n\
-# Health check script for Fukuii\n\
-# Checks if the process is running and optionally tests RPC endpoint\n\
-\n\
-# Check if process is running\n\
-if ! pgrep -f "com.chipprbots.ethereum.App" > /dev/null; then\n\
-  echo "Fukuii process is not running"\n\
-  exit 1\n\
-fi\n\
-\n\
-# If curl is available and RPC is enabled, check RPC endpoint\n\
-if command -v curl &> /dev/null; then\n\
-  # Try to connect to default RPC port\n\
-  if curl -sf -X POST -H "Content-Type: application/json" \\\n\
-    --data '\''{"jsonrpc":"2.0","method":"web3_clientVersion","params":[],"id":1}'\'' \\\n\
-    http://localhost:8545 > /dev/null 2>&1; then\n\
-    echo "Fukuii is healthy - RPC responding"\n\
-    exit 0\n\
-  fi\n\
-fi\n\
-\n\
-# If we reach here, process is running but RPC may not be enabled or curl not available\n\
-echo "Fukuii process is running"\n\
-exit 0\n\
-' > /usr/local/bin/healthcheck.sh && \
-    chmod +x /usr/local/bin/healthcheck.sh
+# Healthcheck: the process, then JSON-RPC at FUKUII_HEALTH_URL, https and a client certificate included
+# (docker/scripts/healthcheck.sh; spec 030 S11, B-149)
+COPY --chmod=755 docker/scripts/healthcheck.sh /usr/local/bin/healthcheck.sh
 
 # Install curl for healthcheck (minimal overhead)
 RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
