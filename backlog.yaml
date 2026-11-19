@@ -3484,3 +3484,14 @@ items:
     links:
       spec: "030"
     notes: Needs an environment where P2P binds; S11's manual Q8 ran single-node only.
+  - id: B-403
+    title: "Ephemery runbook: right after a reset, Lighthouse must genesis-sync; the public checkpoint server still serves the old iteration"
+    priority: P3
+    status: open
+    area: ops
+    size: S
+    opened: 2026-11-19
+    refs: []
+    links:
+      spec: specs/028-builtin-ephemery-hoodi
+    notes: "Seen at the 166 reset 2026-11-19: 'Snapshot state appears to be from the wrong network'. dev-node's companion script now checkpoint-syncs only when the server's genesis_time = MIN_GENESIS_TIME+GENESIS_DELAY. Document in docs/runbooks/ephemery.md."
