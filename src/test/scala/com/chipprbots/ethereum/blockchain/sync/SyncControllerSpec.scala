@@ -2756,6 +2756,131 @@ class SyncControllerSpec
     blockchainWriter.storeBlock(Block(header, BlockBody.empty)).commit()
     appState.putBestBlockInfo(com.chipprbots.ethereum.domain.appstate.BlockInfo(header.hash.value, 100)).commit()
 
+  // ---- B-369 (spec 018 C5b): the audit on the unified state layout ---------------------------------------------------
+
+  /** The anchor and the rows the guard's audit walks, with a count of each kind of read, so that a spec says which
+    * reader the audit used.
+    */
+  final private class GuardPositions extends com.chipprbots.ethereum.db.storage.pathstate.PositionRepairs:
+    import com.chipprbots.ethereum.db.storage.pathstate.BlockRef
+    import com.chipprbots.ethereum.db.storage.pathstate.PositionKey
+    @volatile var held: Option[BlockRef] = None
+    @volatile var rows: Seq[(PositionKey, ByteString)] => Seq[com.chipprbots.ethereum.db.storage.RawNodeRead] =
+      _.map(_ => com.chipprbots.ethereum.db.storage.RawNodeRead.Absent)
+    val rowReads = new java.util.concurrent.atomic.AtomicInteger(0)
+    override def anchor: Option[BlockRef] = held
+    override def rawRowsAt(
+        requests: Seq[(PositionKey, ByteString)]
+    ): Seq[com.chipprbots.ethereum.db.storage.RawNodeRead] =
+      rowReads.incrementAndGet()
+      rows(requests)
+    override def repairNodeAt(
+        position: PositionKey,
+        expectedHash: ByteString,
+        bytes: Array[Byte]
+    ): com.chipprbots.ethereum.db.storage.RepairOutcome = com.chipprbots.ethereum.db.storage.RepairOutcome.Written
+    override def deleteBadNodeAt(
+        position: PositionKey,
+        expectedHash: ByteString
+    ): com.chipprbots.ethereum.db.storage.BadEntryDelete = com.chipprbots.ethereum.db.storage.BadEntryDelete.NoLongerBad
+
+  /** A guard (`pathLiveSync` set) with the audit on, whose writer holds `positions` or none. */
+  private class GuardAuditSetup(val positions: Option[GuardPositions]) extends TestSetup():
+    override def auditEnabled: Boolean = true
+    override def defaultSyncConfig: SyncConfig = super.defaultSyncConfig.copy(doSnapSync = true)
+    pathLiveSync = Some(new GuardPort(SyncController.SnapStartOnGuard.Begin(clearedGenesis = false)))
+    override lazy val blockchainWriter: BlockchainWriter =
+      val s = storagesInstance.storages
+      new BlockchainWriter(
+        s.blockHeadersStorage,
+        s.blockBodiesStorage,
+        s.blockNumberMappingStorage,
+        s.transactionMappingStorage,
+        s.receiptStorage,
+        s.chainWeightStorage,
+        s.appStateStorage,
+        s.blockAccessListStorage
+      ):
+        override def positionRepairs = positions
+
+    /** The anchor is block 100 on the pivot's root, which the rows then give from the hash store the seed wrote. */
+    def anchorOnThePivotRoot(): Unit =
+      positions.foreach { p =>
+        val appState = storagesInstance.storages.appStateStorage
+        freshBestOnPivotRoot(this)
+        p.held = Some(
+          com.chipprbots.ethereum.db.storage.pathstate
+            .BlockRef(appState.getBestBlockInfo().hash, 100, appState.getSnapSyncStateRoot().get)
+        )
+        val store = storagesInstance.storages.stateStorage.getReadOnlyStorage
+        p.rows = requests => store.rawNodes(requests.map(_._2))
+      }
+
+  private def withGuardAudit(positions: Option[GuardPositions])(test: GuardAuditSetup => Any): Unit =
+    val testSetup = new GuardAuditSetup(positions)
+    try test(testSetup)
+    finally testSetup.cleanup()
+
+  "On the unified state layout, the audit" should "run, walk the position store and pay the withheld flags, with no scan" taggedAs (
+    UnitTest,
+    SyncTest
+  ) in withGuardAudit(Some(new GuardPositions)) { testSetup =>
+    import testSetup.*
+    seedSnapDoneWithScannableRoot(testSetup)
+    anchorOnThePivotRoot()
+    val appState = storagesInstance.storages.appStateStorage
+    appState.isBytecodeRecoveryDone() shouldBe false
+    appState.isStorageRecoveryDone() shouldBe false
+
+    syncController ! SyncController.WrappedSyncProtocol(SyncProtocol.Start)
+
+    assert(childNamed(testSetup, "regular-sync"))
+    assert(!childNamed(testSetup, "combined-recovery-scan"))
+    eventually {
+      someTimePasses()
+      appState.isBytecodeRecoveryDone() shouldBe true
+      appState.isStorageRecoveryDone() shouldBe true
+    }
+    withClue("the pass is of the pivot, and it read the position store: ") {
+      appState.getSnapAuditCleanAnchor() shouldBe Some("100")
+      positions.get.rowReads.get() should be > 0
+    }
+    withClue("nothing is owed after that, and the audit stopped: ") {
+      eventually {
+        someTimePasses()
+        auditName(testSetup) shouldBe None
+      }
+    }
+  }
+
+  it should "not run again for a pivot a clean pass covered, with both flags up" taggedAs (UnitTest, SyncTest) in
+    withGuardAudit(Some(new GuardPositions)) { testSetup =>
+      import testSetup.*
+      seedSnapDoneWithScannableRoot(testSetup, needBytecode = false, needStorage = false)
+      anchorOnThePivotRoot()
+      storagesInstance.storages.appStateStorage.putSnapAuditCleanAnchor("100").commit()
+
+      syncController ! SyncController.WrappedSyncProtocol(SyncProtocol.Start)
+
+      assert(childNamed(testSetup, "regular-sync"))
+      someTimePasses()
+      auditName(testSetup) shouldBe None
+      positions.get.rowReads.get() shouldBe 0
+    }
+
+  it should "run no audit where the writer holds no position store, and leave the flags down" taggedAs (
+    UnitTest,
+    SyncTest
+  ) in withGuardAudit(None) { testSetup =>
+    import testSetup.*
+    seedSnapDoneWithScannableRoot(testSetup)
+    syncController ! SyncController.WrappedSyncProtocol(SyncProtocol.Start)
+    assert(childNamed(testSetup, "regular-sync"))
+    someTimePasses()
+    auditName(testSetup) shouldBe None
+    storagesInstance.storages.appStateStorage.isStorageRecoveryDone() shouldBe false
+  }
+
   "With the audit on, a start with a recovery flag down" should "go to regular sync at once, with no scan, and say who pays" taggedAs (
     UnitTest,
     SyncTest
