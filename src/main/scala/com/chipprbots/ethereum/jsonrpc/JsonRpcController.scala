@@ -678,7 +678,23 @@ case class JsonRpcController(
       )
     case req @ JsonRpcRequest(_, "admin_maxPeers", _, _) =>
       handle[AdminMaxPeersRequest, AdminMaxPeersResponse](adminService.maxPeers, req)
+    // ── Spec 030 FR-056: the node allowlist's runtime edits (contracts/admin-allowlist.md) ─────────
+    case req @ JsonRpcRequest(_, "admin_addNodesToAllowlist", _, _) =>
+      handle[AdminAllowlistEditRequest, AdminAllowlistEditResponse](
+        r => adminService.editAllowlist(com.chipprbots.ethereum.network.AllowlistEdit.Add, r, caller),
+        req
+      )
+    case req @ JsonRpcRequest(_, "admin_removeNodesFromAllowlist", _, _) =>
+      handle[AdminAllowlistEditRequest, AdminAllowlistEditResponse](
+        r => adminService.editAllowlist(com.chipprbots.ethereum.network.AllowlistEdit.Remove, r, caller),
+        req
+      )
+    case req @ JsonRpcRequest(_, "admin_getNodesAllowlist", _, _) =>
+      handle[AdminGetNodesAllowlistRequest, AdminGetNodesAllowlistResponse](adminService.getNodesAllowlist, req)
   }
+
+  /** Who is calling, for the allowlist's INFO lines (FR-059): the identity rule's name, else the transport. */
+  private def caller: String = callerIdentity.getOrElse(transport)
 
   private def handleTxPoolRequest: PartialFunction[JsonRpcRequest, IO[JsonRpcResponse]] = {
     case req @ JsonRpcRequest(_, "txpool_besuTransactions", _, _) =>

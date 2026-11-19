@@ -185,3 +185,102 @@ class NodeAllowlistStoreSpec
     store.allowlist.permits(id(hb)) shouldBe true // still listed through the static node
     store.allowlist.snapshot.entries(id(hb)).sources shouldBe Set(AllowlistSource.Static)
   }
+
+  // ---- spec 030 FR-056, FR-057: runtime edits (slice 10) --------------------------------------------------------
+
+  private val hd = "dd" * 64
+
+  private def editable(file: Path, config: Seq[String] = Seq(ha), static: Seq[java.net.URI] = Nil) =
+    NodeAllowlistStore.fromConfig(section(enabled = true, config, Some(file)), static, Nil, Some(id(own))).value.value
+
+  private def onDisk(file: Path): Seq[String] =
+    NodeAllowlistStore
+      .readFile(file, mustExist = true)
+      .value
+      ._1
+      .map(e => e.enode.map(_.toString).getOrElse(Hex.toHexString(e.id.toArray)))
+
+  it should "add and remove entries, writing the file before the list, so the next reload sees no change" taggedAs (
+    UnitTest,
+    NetworkTest
+  ) in {
+    val f = tmp()
+    write(f, s"""["$hb"]""")
+    val store = editable(f)
+    store.edit(AllowlistEdit.Add, Seq(s"enode://$hc@10.0.0.3:30303", hd)).value shouldBe 2
+    onDisk(f) shouldBe Seq(hb, s"enode://$hc@10.0.0.3:30303", hd)
+    store.allowlist.permits(id(hc)) shouldBe true
+    store.allowlist.snapshot.dialable.map(_.toString) should contain(s"enode://$hc@10.0.0.3:30303")
+    store.reload() shouldBe ReloadResult.Unchanged
+    store.edit(AllowlistEdit.Remove, Seq(hb)).value shouldBe 1
+    onDisk(f) shouldBe Seq(s"enode://$hc@10.0.0.3:30303", hd)
+    store.allowlist.permits(id(hb)) shouldBe false
+    store.reload() shouldBe ReloadResult.Unchanged
+  }
+
+  it should "take a hand edit made since the last load before applying its own" taggedAs (UnitTest, NetworkTest) in {
+    val f = tmp()
+    write(f, s"""["$hb"]""")
+    val store = editable(f)
+    write(f, s"""["$hb", "$hc"]""")
+    store.edit(AllowlistEdit.Add, Seq(hd)).value shouldBe 1
+    onDisk(f) shouldBe Seq(hb, hc, hd)
+    store.allowlist.permits(id(hc)) shouldBe true
+  }
+
+  it should "refuse, changing nothing, every request the contract names" taggedAs (UnitTest, NetworkTest) in {
+    val f = tmp()
+    write(f, s"""["$hb"]""")
+    val store = editable(f, static = Seq(uri(hc, "10.0.0.3")), config = Seq(ha, hc))
+    def refused(op: AllowlistEdit, raws: Seq[String]) = store.edit(op, raws).left.value
+    refused(AllowlistEdit.Add, Nil) shouldBe EditError.InvalidParams("expected 1 to 256 entries")
+    refused(AllowlistEdit.Add, Seq.fill(257)(hd)) shouldBe EditError.InvalidParams("expected 1 to 256 entries")
+    refused(AllowlistEdit.Add, Seq(hd, "nope")) shouldBe EditError.InvalidParams("invalid enode or node id: nope")
+    refused(AllowlistEdit.Add, Seq(hd, hd.toUpperCase)) shouldBe EditError.InvalidParams(
+      "duplicate entry: dddddddddddddddd"
+    )
+    refused(AllowlistEdit.Add, Seq(hd, hb)) shouldBe EditError.Refused("already on the allowlist: bbbbbbbbbbbbbbbb")
+    refused(AllowlistEdit.Remove, Seq(hd)) shouldBe EditError.Refused("not on the allowlist: dddddddddddddddd")
+    refused(AllowlistEdit.Remove, Seq(ha)) shouldBe
+      EditError.Refused("aaaaaaaaaaaaaaaa comes from config and cannot be removed at runtime")
+    // all-or-nothing: the good entry of a refused request is not added
+    store.allowlist.permits(id(hd)) shouldBe false
+    onDisk(f) shouldBe Seq(hb)
+  }
+
+  it should "refuse an edit while the file does not parse, and keep the list" taggedAs (UnitTest, NetworkTest) in {
+    val f = tmp()
+    write(f, s"""["$hb"]""")
+    val store = editable(f)
+    write(f, "[ not json")
+    store.edit(AllowlistEdit.Add, Seq(hd)).left.value.message should (include("does not parse").and(
+      include(
+        "fix it before editing"
+      )
+    ))
+    store.allowlist.permits(id(hb)) shouldBe true
+    store.allowlist.permits(id(hd)) shouldBe false
+  }
+
+  it should "leave the file and the list unchanged when the write fails" taggedAs (UnitTest, NetworkTest) in {
+    val f = tmp()
+    write(f, s"""["$hb"]""")
+    val store = editable(f)
+    val failing = store.edit(AllowlistEdit.Add, Seq(hd), (_, _) => throw new java.io.IOException("disk full"))
+    failing.left.value.message shouldBe s"could not write $f: disk full; nothing changed"
+    onDisk(f) shouldBe Seq(hb)
+    store.allowlist.permits(id(hd)) shouldBe false
+  }
+
+  it should "refuse every edit without a file" taggedAs (UnitTest, NetworkTest) in {
+    val store = NodeAllowlistStore.fromConfig(section(enabled = true, Seq(ha)), Nil, Nil, None).value.value
+    store.edit(AllowlistEdit.Add, Seq(hd)).left.value shouldBe EditError.Refused(NodeAllowlistStore.NoFileMessage)
+  }
+
+  "atomicWrite" should "replace the file whole and leave no temporary file" taggedAs (UnitTest, NetworkTest) in {
+    val f = tmp()
+    write(f, "old")
+    NodeAllowlistStore.atomicWrite(f, "new content".getBytes(StandardCharsets.UTF_8))
+    new String(Files.readAllBytes(f), StandardCharsets.UTF_8) shouldBe "new content"
+    Files.list(f.getParent).filter(_.getFileName.toString.startsWith(s".${f.getFileName}.")).count() shouldBe 0
+  }

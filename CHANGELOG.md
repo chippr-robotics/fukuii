@@ -433,6 +433,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   needs `metrics.interface` set (to an address or `0.0.0.0`), preferably with TLS. The repository's container
   deployments (`ops/barad-dur`, `ops/cirith-ungol`) set `interface = "0.0.0.0"`; scripts that scrape `127.0.0.1` need
   nothing.
+- **Runtime edits of the P2P node allowlist (spec 030 S10, B-363).** `admin_addNodesToAllowlist([enodes])`,
+  `admin_removeNodesFromAllowlist([enodes])` and `admin_getNodesAllowlist()`, modelled on Besu's `perm_` node methods.
+  Add and remove are all-or-nothing and need `node-allowlist.file`: the file is re-read if edited by hand, the edit
+  written to a temporary file in the same directory, flushed and renamed over the file before the call answers, so a
+  crash leaves the old list or the new one; the next reload sees no change. An entry listed only by config, a static
+  node or a bootnode cannot be removed at runtime. The methods are in `admin`, which no HTTP or WS default serves:
+  reach them over IPC, or where an `apis` key or an identity rule grants `admin`. Every edit is logged at INFO with
+  the caller's identity rule (or transport) and counted in `app_p2p_allowlist_edits_total{op, result}`.
 - **TLS material and identity rules reload without a restart (spec 030 S4, B-357).** Each TLS profile re-reads its
   keystore, truststore and password files when their content changes (`reload { enabled = true, interval =
   1.minute }`; a SHA-256 of the content, so a same-second edit and a Kubernetes `..data` symlink swap are both seen).

@@ -72,6 +72,101 @@ final class NodeAllowlistStore private (
             ReloadResult.Reloaded(changed)
   }
 
+  /** The file runtime edits persist to, if one is configured. */
+  def filePath: Option[Path] = file
+
+  /** A runtime edit (spec 030 FR-056, FR-057; contracts/admin-allowlist.md), all-or-nothing, under the store's lock:
+    *   1. the request is checked whole (1 to 256 entries, each parsing, none twice); 2. the file is re-read if its
+    *      content changed since the last load, and a file that no longer parses refuses the edit; 3. the edit is
+    *      applied to the file's entries, refusing an add of an entry the file already holds, and a remove of one it
+    *      does not (an entry listed only by config, a static node or a bootnode cannot be removed at runtime); 4. the
+    *      new file is written to a temporary file in the same directory, flushed to disk, and renamed over the file
+    *      atomically, and the directory flushed; 5. only then is the SHA-256 of what was written recorded (so the next
+    *      reload sees no change) and the in-memory list replaced, which disconnects a peer no longer listed (FR-058).
+    *
+    * Any failure leaves the file and the list as they were, and is the answer.
+    *
+    * @return
+    *   the number of entries the edit changed
+    */
+  def edit(
+      op: AllowlistEdit,
+      raws: Seq[String],
+      write: (Path, Array[Byte]) => Unit = atomicWrite
+  ): Either[EditError, Int] =
+    lock.synchronized {
+      val result = for
+        path <- file.toRight(EditError.Refused(NoFileMessage))
+        _ <- Either.cond(
+          raws.nonEmpty && raws.size <= MaxEdit,
+          (),
+          EditError.InvalidParams("expected 1 to 256 entries")
+        )
+        parsed <- raws.foldLeft[Either[EditError, Vector[ParsedAllowlistEntry]]](Right(Vector.empty)) { (acc, raw) =>
+          acc.flatMap(v =>
+            NodeAllowlist
+              .parseEntry(raw)
+              .left
+              .map(_ => EditError.InvalidParams(s"invalid enode or node id: ${raw.trim.take(160)}"))
+              .map(v :+ _)
+          )
+        }
+        _ <- parsed.groupBy(_.id).collectFirst { case (id, es) if es.size > 1 => id } match
+          case Some(id) => Left(EditError.InvalidParams(s"duplicate entry: ${prefix(id)}"))
+          case None     => Right(())
+        current <- readFile(path, mustExist = false).left.map(reason =>
+          EditError.Refused(s"allowlist file $path does not parse ($reason); fix it before editing")
+        )
+        (onDisk, diskSha) = current
+        _ = if !lastLoadedSha.contains(diskSha) then
+          // an edit by hand since the last load: taken first, as a reload would
+          lastLoadedSha = Some(diskSha)
+          allowlist.replace(merged(onDisk))
+        next <- apply(op, onDisk, parsed)
+        bytes = render(next)
+        _ <-
+          try Right(write(path, bytes))
+          catch
+            case scala.util.control.NonFatal(e) =>
+              Left(
+                EditError.Refused(
+                  s"could not write $path: ${Option(e.getMessage).getOrElse(e.toString)}; nothing changed"
+                )
+              )
+      yield
+        lastLoadedSha = Some(sha256(bytes))
+        lastFailedSha = None
+        allowlist.replace(merged(next))
+        parsed.size
+      NodeAllowlistMetrics.edit(op, result)
+      result
+    }
+
+  private def apply(
+      op: AllowlistEdit,
+      onDisk: Seq[ParsedAllowlistEntry],
+      request: Seq[ParsedAllowlistEntry]
+  ): Either[EditError, Seq[ParsedAllowlistEntry]] =
+    val inFile = onDisk.map(_.id).toSet
+    op match
+      case AllowlistEdit.Add =>
+        request.find(e => inFile.contains(e.id)) match
+          case Some(e) => Left(EditError.Refused(s"already on the allowlist: ${prefix(e.id)}"))
+          case None    => Right(onDisk ++ request)
+      case AllowlistEdit.Remove =>
+        request.collectFirst {
+          case e if !inFile.contains(e.id) =>
+            allowlist.snapshot.entries.get(e.id) match
+              case None => EditError.Refused(s"not on the allowlist: ${prefix(e.id)}")
+              case Some(entry) =>
+                val source = entry.sources.toSeq.sortBy(_.ordinal).headOption.map(sourceName).getOrElse("config")
+                EditError.Refused(s"${prefix(e.id)} comes from $source and cannot be removed at runtime")
+        } match
+          case Some(error) => Left(error)
+          case None =>
+            val removing = request.map(_.id).toSet
+            Right(onDisk.filterNot(e => removing.contains(e.id)))
+
   private def merged(fileEntries: Seq[ParsedAllowlistEntry]): Map[ByteString, AllowlistEntry] =
     NodeAllowlist.merge(
       Seq(
@@ -89,7 +184,78 @@ final class NodeAllowlistStore private (
       val _ = reload()
     }
 
+/** What a runtime edit of the allowlist does. */
+enum AllowlistEdit(val label: String):
+  case Add extends AllowlistEdit("add")
+  case Remove extends AllowlistEdit("remove")
+
+/** Why a runtime edit was refused: a request that is malformed (JSON-RPC -32602), or one the allowlist refuses
+  * (-32000).
+  */
+enum EditError(val message: String):
+  case InvalidParams(override val message: String) extends EditError(message)
+  case Refused(override val message: String) extends EditError(message)
+
 object NodeAllowlistStore extends Logger:
+
+  val MaxEdit = 256
+  val DisabledMessage = "node allowlist is disabled (fukuii.network.peer.node-allowlist.enabled = false)"
+  val NoFileMessage = "node allowlist has no file; runtime edits need fukuii.network.peer.node-allowlist.file"
+
+  /** The first 8 bytes of a node id, in hex: how messages and log lines name a node. */
+  def prefix(id: ByteString): String = Hex.toHexString(id.take(8).toArray)
+
+  def sourceName(s: AllowlistSource): String = s match
+    case AllowlistSource.Config   => "config"
+    case AllowlistSource.File     => "file"
+    case AllowlistSource.Static   => "static"
+    case AllowlistSource.Bootnode => "bootnode"
+
+  /** The file's text: a JSON array of strings, an entry's enode URI where it has one, else its node id. */
+  def render(entries: Seq[ParsedAllowlistEntry]): Array[Byte] =
+    val lines = entries.map(e => "  \"" + e.enode.map(_.toString).getOrElse(Hex.toHexString(e.id.toArray)) + "\"")
+    (if lines.isEmpty then "[]\n" else lines.mkString("[\n", ",\n", "\n]\n")).getBytes("UTF-8")
+
+  /** Writes `bytes` to `path` so that `path` always holds the old content or the new, whole: a temporary file in the
+    * same directory, flushed to disk, renamed over `path` atomically, then the directory flushed so the rename is
+    * durable. The temporary file is removed on any failure, and one a killed process left is removed by the next write.
+    */
+  def atomicWrite(path: Path, bytes: Array[Byte]): Unit =
+    val absolute = path.toAbsolutePath
+    val dir = absolute.getParent
+    val stem = s".${absolute.getFileName}."
+    // a temporary file of a write that was killed before its rename: never the file, so dropped
+    Try {
+      val stale = Files.list(dir)
+      try
+        stale.iterator.asScala
+          .filter(p => p.getFileName.toString.startsWith(stem) && p.getFileName.toString.endsWith(".tmp"))
+          .foreach(Files.deleteIfExists)
+      finally stale.close()
+    }
+    val tmp = Files.createTempFile(dir, stem, ".tmp")
+    try
+      val channel = java.nio.channels.FileChannel.open(tmp, java.nio.file.StandardOpenOption.WRITE)
+      try
+        val buffer = java.nio.ByteBuffer.wrap(bytes)
+        while buffer.hasRemaining do channel.write(buffer)
+        channel.force(true)
+      finally channel.close()
+      Files.move(
+        tmp,
+        absolute,
+        java.nio.file.StandardCopyOption.ATOMIC_MOVE,
+        java.nio.file.StandardCopyOption.REPLACE_EXISTING
+      )
+      // the rename is durable once the directory is: best effort where the platform cannot open a directory
+      Try {
+        val d = java.nio.channels.FileChannel.open(dir, java.nio.file.StandardOpenOption.READ)
+        try d.force(true)
+        finally d.close()
+      }
+      ()
+    finally
+      val _ = Files.deleteIfExists(tmp)
 
   enum ReloadResult:
     case Unchanged
