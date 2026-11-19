@@ -3175,7 +3175,7 @@ items:
   - id: B-380
     title: "C5c: SyncController-level test that a refused checkpoint archive is skipped at start (T292 wiring)"
     priority: P2
-    status: claimed
+    status: in-progress
     area: storage
     opened: 2026-11-18
     refs: []
@@ -3185,7 +3185,7 @@ items:
       by: cloud-dc960fdc
       agent: eye
       since: 2026-11-19T01:25:34Z
-      heartbeat: 2026-11-19T01:25:34Z
+      heartbeat: 2026-11-19T01:25:41Z
     notes: PR3 tests the importer and recoverInterrupted; the two SyncController call sites (~2187) have no spec
   - id: B-381
     title: "B-067 follow-up (T238): compare ETC miner and ommer balances across the ECIP-1017 era boundaries with the pinned 0.12.1 jar"
