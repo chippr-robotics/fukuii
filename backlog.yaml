@@ -3491,3 +3491,13 @@ items:
     links:
       spec: "030"
     notes: Found by the S11 docs pass.
+  - id: B-401
+    title: enterprise launch modifier forces use-bootstrap-nodes=false and rpc.http.interface=localhost, overriding config, contrary to its comment and template
+    priority: P2
+    status: open
+    area: ops
+    size: S
+    opened: 2026-11-19
+    refs: []
+    links: {}
+    notes: Found by spec 030 S11's docs pass (App.scala); the runbook now says to launch without the modifier to expose RPC.
