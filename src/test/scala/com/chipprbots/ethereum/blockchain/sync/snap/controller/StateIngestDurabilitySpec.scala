@@ -539,6 +539,47 @@ class StateIngestDurabilitySpec extends AnyFlatSpec with Matchers:
     withClue("nothing of the hand-off was written: ")(h.recording.writes.size shouldBe before)
   }
 
+  // B-074: the set is read again at the commit, and an entry that came in after the sample holds the hand-off
+  it should "hold the hand-off when the re-read of the excluded set finds an account that came in after the sample" taggedAs UnitTest in {
+    val h = new Harness(pathScheme = true)
+    h.storeChainBelowThePivot(below = 256, bodiesOfTheLast = 6)
+    h.unifiedLayoutAtTheEndOfASync()
+    h.module.stateIngest.snapProgress.hasExcludedAccounts shouldBe false // what the sample's read saw
+    h.module.stateIngest.snapProgress.recordExcluded(
+      Seq(
+        com.chipprbots.ethereum.db.storage.ExcludedAccount(
+          ByteString(Array.fill[Byte](32)(0x52)),
+          com.chipprbots.ethereum.db.storage.ExcludedReason.StorageAbandoned
+        )
+      )
+    )
+    val before = h.recording.writes.size
+
+    h.handOffFromAPassedSample()
+
+    h.parent.receiveAll() shouldBe Seq(SyncProtocol.HandoffHeldForExcluded(pivot, readFailed = false))
+    h.module.currentPhase should not be SyncPhase.Completed
+    h.chain.storagesInstance.storages.appStateStorage.isSnapSyncDone() shouldBe false
+    h.syncedSince(before) shouldBe empty
+    withClue("nothing of the hand-off was written, the flags withheld included: ")(
+      h.recording.writes.size shouldBe before
+    )
+    h.anchorAfter(h.recording.writes.size) shouldBe None
+  }
+
+  it should "still commit when the re-read of the excluded set is empty" taggedAs UnitTest in {
+    val h = new Harness(pathScheme = true)
+    h.storeChainBelowThePivot(below = 256, bodiesOfTheLast = 6)
+    h.unifiedLayoutAtTheEndOfASync()
+
+    h.handOffFromAPassedSample()
+
+    h.parent.receiveAll() should not contain a[SyncProtocol.HandoffHeldForExcluded]
+    h.module.currentPhase shouldBe SyncPhase.Completed
+    h.flagSetAfter(h.recording.writes.size) shouldBe true
+    unifiedPrefixProperty(h)
+  }
+
   it should "refuse to hand off, and say nothing is synced, when the pivot's header is not stored" taggedAs UnitTest in {
     val h = new Harness(pathScheme = true)
     h.storeChainBelowThePivot(below = 256, bodiesOfTheLast = 6, indexThePivot = false)
