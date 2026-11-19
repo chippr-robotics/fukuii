@@ -762,21 +762,18 @@ items:
   - id: B-074
     title: SnapFinalization misses an excluded entry inserted between the set read and the flags commit
     priority: P2
-    status: review
+    status: done
     area: snap
     size: M
     opened: 2026-11-04
+    closed: 2026-11-19
     refs: [H5, CHASE A]
     links:
       prs: [1948]
-    claim:
-      by: cloud-dc960fdc
-      agent: vault
-      since: 2026-11-19T02:18:18Z
-      heartbeat: 2026-11-19T02:38:41Z
     notes: |-
       Narrow window (seconds). The fix, a finalisation handshake, changes behaviour: the user's call.
       2026-11-19 review: PR #1948
+      2026-11-19 done: Merged: guard hand-off holds when the re-read finds excluded accounts; Hash window remains (audit catches it). Also fixed a HealNoWalkCompletionSpec driveUntil race.
   - id: B-075
     title: A write-path CorruptNodeException carries no trie location, so the importer's fetch has no snap path
     priority: P3
