@@ -2999,7 +2999,7 @@ items:
   - id: B-363
     title: "Spec 030 S10: admin_ allowlist methods (add/remove/get) with atomic file persistence"
     priority: P2
-    status: open
+    status: claimed
     area: p2p
     size: M
     opened: 2026-11-18
@@ -3007,6 +3007,12 @@ items:
     links:
       spec: specs/030-zero-trust-tls
     depends_on: [B-362]
+    claim:
+      by: cloud-0ceb384d
+      agent: herald
+      since: 2026-11-19T14:10:03Z
+      heartbeat: 2026-11-19T14:10:03Z
+      branch: ccr-0ceb384d-ufzahb
     notes: "US7 5-7; FR-056-059. ~350+600 plus a crash IT. Review: herald, conduit."
   - id: B-364
     title: "Spec 030 S11: TUI TLS view, TLS and consortium docs and skills, container healthchecks (closes B-147, B-149)"
