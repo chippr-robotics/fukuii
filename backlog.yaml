@@ -2957,19 +2957,20 @@ items:
   - id: B-360
     title: "Spec 030 S7: one outbound TLS client factory; faucet, checkpoint and Ephemery clients; CI ratchet"
     priority: P2
-    status: claimed
+    status: review
     area: rpc
     size: M
     opened: 2026-11-18
     refs: [B-146]
     links:
+      prs: [1952]
       spec: specs/030-zero-trust-tls
     depends_on: [B-354]
     claim:
       by: cloud-0ceb384d
       agent: conduit
       since: 2026-11-19T14:00:13Z
-      heartbeat: 2026-11-19T14:44:06Z
+      heartbeat: 2026-11-19T15:12:48Z
       branch: ccr-0ceb384d-ufzahb
     notes: "US5; FR-040-045, 008. ~500+600. Review: conduit."
   - id: B-361
