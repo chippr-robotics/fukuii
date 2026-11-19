@@ -3280,3 +3280,13 @@ items:
     refs: []
     links: {}
     notes: "Seen on #1941: iat = now + 61 accepted when a second ticked between the test's clock read and the authenticator's. Fixed there with 120 s; other time-window specs not yet audited."
+  - id: B-388
+    title: "Olympia treasury: blockchains.conf d6165F3a... differs from ECIP-1112 0x60d0A739... in forge.md; verify against local ECIP-1112"
+    priority: P2
+    status: open
+    area: consensus
+    opened: 2026-11-19
+    refs: []
+    links:
+      spec: 018
+    notes: Found in C6 PR-D (B-067). Olympia is NEVER on every shipped chain, so no live effect today; must be settled before an Olympia block is set. The ECIPs clone was not in the container to check.
