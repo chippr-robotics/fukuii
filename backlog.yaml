@@ -3404,3 +3404,13 @@ items:
     links:
       spec: 018
     notes: "forge, B-392 review: compareBranch and withoutForkWeight zip own blocks with the batch; a missing own block shifts the zip, and 'under' becomes the hash of the missing block, not the fork. Walk by parent hash (ancestry-not-index) or stop at the gap."
+  - id: B-396
+    title: "B-376 follow-up: bulk bytecode recovery could run on the unified layout (scan reads rows, code store shared); decide whether to lift its refusal"
+    priority: P3
+    status: open
+    area: storage
+    opened: 2026-11-19
+    refs: []
+    links:
+      spec: 018
+    notes: "forge: BytecodeRecoveryActor writes only EvmCodeStorage, shared by both layouts, and its scan reads rows via RecoveryScanStores. Refused since B-376 to keep the routes' decision (SyncController guards) in one place."
