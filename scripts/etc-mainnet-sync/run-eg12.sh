@@ -3,8 +3,9 @@
 #
 # Runs, records and judges the first ETC mainnet sync on the unified state layout:
 #   start     launch fukuii (path-live on, SNAP on, public peers) on a fresh datadir; record the jar, the host, and
-#             the number of snap-capable ETC peers once the node has had --peer-wait-min to find them; apply the
-#             operator's rule for fewer than 2 (T011 item 3, a user decision: --few-snap-peers).
+#             the number of snap-capable ETC peers once the node has had --peer-wait-min to find them, both from
+#             debug_listPeersInfo and from the node's own [SNAP-PEERS] start line (T242), and whether the two agree;
+#             apply the operator's rule for fewer than 2 (T011 item 3, a user decision: --few-snap-peers).
 #   sync      wait for the SNAP hand-off and for the head to reach the reference node's; check that nothing was copied
 #             ([PATH-PUBLISH] absent) and that the head's hash and stateRoot equal the reference's; run the
 #             ancestor-window check over RPC while the head is within 256 blocks of the pivot.
@@ -52,6 +53,9 @@ Options:
   --sync-timeout-hours H   Bound on the sync (default 336). A bound, not an expectation: raise it if needed.
   --import-timeout-hours H Bound on the archive import (default 24).
   --peer-wait-min M        Minutes after launch before the snap-capable peers are counted (default 10).
+  --snap-line-wait-min M   Further minutes, after that count, for the node's [SNAP-PEERS] line saying how SNAP
+                           starts (default 5). The node's proof-of-work wait (sync.snap-sync.pow-snap-peer-wait,
+                           10 min shipped) ends about when the count is made.
   --head-lag N             Blocks behind the reference head still counted as at the head (default 3).
   --confirmations N        Blocks below the head left out of the canonical comparison (default 12).
   --compare-stride N       Compare every Nth block with the reference (default 1: every block).
@@ -94,7 +98,7 @@ usage_error() {
 
 # --- Arguments -----------------------------------------------------------------------------------------------------
 NETWORK="" JAR="" HEAP="" DATADIR="" DATADIR2="" OUT="" REF_RPC="" FEW_RULE="" LOCAL_PEER="" FROM=start
-FOLLOW_H=24 REFOLLOW_H=1 SYNC_TIMEOUT_H=336 IMPORT_TIMEOUT_H=24 PEER_WAIT_MIN=10 HEAD_LAG=3 CONFIRMATIONS=12
+FOLLOW_H=24 REFOLLOW_H=1 SYNC_TIMEOUT_H=336 IMPORT_TIMEOUT_H=24 PEER_WAIT_MIN=10 SNAP_LINE_WAIT_MIN=5 HEAD_LAG=3 CONFIRMATIONS=12
 STRIDE=1 SAMPLE_S=60 STOP_TIMEOUT=600 PIVOT_ARG="" PIVOT_WAIT_MIN=60 EXPORT_ALLOW_EST="" RPC_PORT=8546 METRICS_PORT=13798 P2P_PORT=30303 JAVA_BIN=java
 EXTRA_JAVA="" DRY_RUN=false
 while [ $# -gt 0 ]; do
@@ -114,6 +118,7 @@ while [ $# -gt 0 ]; do
     --sync-timeout-hours) SYNC_TIMEOUT_H=$2; shift 2 ;;
     --import-timeout-hours) IMPORT_TIMEOUT_H=$2; shift 2 ;;
     --peer-wait-min) PEER_WAIT_MIN=$2; shift 2 ;;
+    --snap-line-wait-min) SNAP_LINE_WAIT_MIN=$2; shift 2 ;;
     --head-lag) HEAD_LAG=$2; shift 2 ;;
     --confirmations) CONFIRMATIONS=$2; shift 2 ;;
     --compare-stride) STRIDE=$2; shift 2 ;;
@@ -151,7 +156,7 @@ case "$FEW_RULE" in
   *) usage_error "--few-snap-peers must be stop, continue or local-peer" ;;
 esac
 case "$FROM" in start | sync | follow | export | reimport) ;; *) usage_error "--from: unknown phase '$FROM'" ;; esac
-for v in "$FOLLOW_H" "$REFOLLOW_H" "$SYNC_TIMEOUT_H" "$IMPORT_TIMEOUT_H" "$PEER_WAIT_MIN" "$HEAD_LAG" \
+for v in "$FOLLOW_H" "$REFOLLOW_H" "$SYNC_TIMEOUT_H" "$IMPORT_TIMEOUT_H" "$PEER_WAIT_MIN" "$SNAP_LINE_WAIT_MIN" "$HEAD_LAG" \
   "$CONFIRMATIONS" "$STRIDE" "$SAMPLE_S" "$STOP_TIMEOUT" "$PIVOT_WAIT_MIN" "$RPC_PORT" "$METRICS_PORT" "$P2P_PORT"; do
   [[ $v =~ ^[0-9]+$ ]] || usage_error "numeric options take non-negative integers, got '$v'"
 done
@@ -236,6 +241,44 @@ block_of() { rpc "$1" eth_getBlockByNumber "[\"$(hex "$2")\",false]"; } # -> JSO
 hash_at() { local b; b=$(block_of "$1" "$2") || return 1; jq -r '.hash // empty' <<<"$b"; }
 
 alive() { [ -n "${1:-}" ] && kill -0 "$1" 2>/dev/null; }
+
+# --- The node's [SNAP-PEERS] start lines (T242) ---------------------------------------------------------------------
+# Matched exactly as the code writes them (staging, T242 #1940). PathLiveSync.SnapPeerCount.describe:
+#   s"$snapCapable snap-capable peer(s) on this chain ($declaredSnapCapable of them declared by the operator, " +
+#     s"static-nodes.json or sync.snap-sync.snap-server-peers), of $connected connected"
+# SyncController.checkingSnapStart, where SNAP begins (INFO, or WARN with no count):
+#   val against = if c.snapCapable < min then s"${c.snapCapable} < min $min" else s"min-snap-peers = $min"
+#   log.info(s"[SNAP-PEERS] SNAP starts with ${c.describe}; $against")
+#   s"[SNAP-PEERS] SNAP starts with an unknown number of peers (no count came from the peer manager); " +
+#     s"min-snap-peers = $min"
+# the fallback to regular sync from the genesis (WARN):
+#   s"[SNAP-PEERS] No snap-capable peer came in ${port.snapPeers.powWait.toMinutes} min " +
+#     s"(${pending.count.fold("no count")(_.describe)}). On a proof-of-work chain this node syncs by " +
+#     "regular sync from its genesis instead, ...
+# and while it waits (INFO):
+#   s"[SNAP-PEERS] ${pending.count.fold("No count of the peers yet")(_.describe)}: a proof-of-work " +
+#     s"node at its genesis waits up to ${port.snapPeers.powWait.toMinutes} min for " +
+#     s"${port.snapPeers.minSnapPeers} snap-capable peers before SNAP begins"
+#   s"[SNAP-PEERS] Still waiting for ${port.snapPeers.minSnapPeers} snap-capable peers: " + c.describe
+# SnapPeerPool's own "[SNAP-PEERS] snapCapable={} excluded={} ..." line, later in SNAP, matches none of these.
+# snap_peers_fields: log lines on stdin -> one "KIND SNAP DECLARED CONNECTED MIN" line per start line ("-" where the
+# line has no figure). KIND: begin (at or over min), begin-under-min, begin-unknown (no count), regular-sync (the
+# fallback), waiting (the wait's first line and each "Still waiting" line).
+SNAP_DESC='([0-9]+) snap-capable peer\(s\) on this chain \(([0-9]+) of them declared by the operator, static-nodes\.json or sync\.snap-sync\.snap-server-peers\), of ([0-9]+) connected'
+snap_peers_fields() {
+  local d=$SNAP_DESC
+  sed -nE \
+    -e "s/.*\[SNAP-PEERS\] SNAP starts with $d; ([0-9]+) < min ([0-9]+)\$/begin-under-min \1 \2 \3 \5/p" \
+    -e "s/.*\[SNAP-PEERS\] SNAP starts with $d; min-snap-peers = ([0-9]+)\$/begin \1 \2 \3 \4/p" \
+    -e "s/.*\[SNAP-PEERS\] SNAP starts with an unknown number of peers \(no count came from the peer manager\); min-snap-peers = ([0-9]+)\$/begin-unknown - - - \1/p" \
+    -e "s/.*\[SNAP-PEERS\] No snap-capable peer came in [0-9]+ min \($d\)\. On a proof-of-work chain this node syncs by regular sync from its genesis instead.*/regular-sync \1 \2 \3 -/p" \
+    -e "s/.*\[SNAP-PEERS\] No snap-capable peer came in [0-9]+ min \(no count\)\. On a proof-of-work chain this node syncs by regular sync from its genesis instead.*/regular-sync - - - -/p" \
+    -e "s/.*\[SNAP-PEERS\] $d: a proof-of-work node at its genesis waits up to [0-9]+ min for ([0-9]+) snap-capable peers before SNAP begins\$/waiting \1 \2 \3 \4/p" \
+    -e "s/.*\[SNAP-PEERS\] No count of the peers yet: a proof-of-work node at its genesis waits up to [0-9]+ min for ([0-9]+) snap-capable peers before SNAP begins\$/waiting - - - \1/p" \
+    -e "s/.*\[SNAP-PEERS\] Still waiting for ([0-9]+) snap-capable peers: $d\$/waiting \2 \3 \4 \1/p"
+}
+# snap_start_of LOGFILE -> the last line saying how SNAP started (begin*, regular-sync), or nothing
+snap_start_of() { grep -F '[SNAP-PEERS]' "$1" 2>/dev/null | snap_peers_fields | grep -E '^(begin|regular-sync)' | tail -1 || true; }
 
 stop_node() { # stop_node PID NAME
   local pid=$1 name=$2 deadline
@@ -487,6 +530,48 @@ if [ "$FROM" = start ]; then
   snap=$(jq '[.[] | select(test("supportsSnap: true")) | select(test("forkAccepted: true"))] | length' <<<"$peers_json")
   setstate SNAP_PEERS_AT_START "$snap"
   result "snap-capable ETC peers at start" RECORDED "$snap of $total handshaked peer(s), ${PEER_WAIT_MIN} min after launch"
+
+  # The node's own count at SNAP's start (T242), beside the RPC count. It is made at another moment (the end of the
+  # node's wait, or at once when it reaches min-snap-peers), so a disagreement is recorded, not failed.
+  log "waiting up to ${SNAP_LINE_WAIT_MIN} min for the node's [SNAP-PEERS] start line"
+  deadline=$((SECONDS + SNAP_LINE_WAIT_MIN * 60))
+  sp=$(snap_start_of "$OUT/node-a.log")
+  while [ -z "$sp" ] && ((SECONDS < deadline)); do
+    alive "$PID_A" || die "node A exited (see $OUT/node-a.log)"
+    sleep 15
+    sp=$(snap_start_of "$OUT/node-a.log")
+  done
+  waits=$(grep -F '[SNAP-PEERS]' "$OUT/node-a.log" 2>/dev/null | snap_peers_fields | grep -c '^waiting ' || true)
+  if [ -z "$sp" ]; then
+    result "snap-capable ETC peers at start (node log)" FAIL \
+      "no [SNAP-PEERS] start line in $OUT/node-a.log $((PEER_WAIT_MIN + SNAP_LINE_WAIT_MIN)) min after launch ($waits waiting line(s)); raise --snap-line-wait-min, or the jar predates T242"
+  else
+    read -r sp_kind sp_snap sp_decl sp_conn sp_min <<<"$sp"
+    setstate SNAP_LOG_KIND "$sp_kind"
+    setstate SNAP_LOG_PEERS "$sp_snap"
+    setstate SNAP_LOG_DECLARED "$sp_decl"
+    setstate SNAP_LOG_CONNECTED "$sp_conn"
+    setstate SNAP_LOG_MIN "$sp_min"
+    case "$sp_kind" in
+      begin) how="SNAP began at or over min-snap-peers = $sp_min" ;;
+      begin-under-min) how="SNAP began under the minimum ($sp_snap < min $sp_min)" ;;
+      begin-unknown) how="SNAP began with no count from the peer manager (min-snap-peers = $sp_min)" ;;
+      regular-sync) how="no snap-capable peer: the node fell back to regular sync from its genesis" ;;
+    esac
+    counted="$sp_snap snap-capable ($sp_decl declared by the operator) of $sp_conn connected"
+    [ "$sp_snap" != - ] || counted="no count"
+    result "snap-capable ETC peers at start (node log)" RECORDED "$counted; $how; $waits waiting line(s)"
+    if [ "$sp_kind" = regular-sync ]; then
+      result "SNAP begins" FAIL "the node fell back to regular sync from its genesis; EG-12 needs a SNAP sync"
+    elif [ "$sp_snap" = - ]; then
+      result "snap-peer count: node log vs RPC" NOT-EXERCISED "the node logged no count; RPC: $snap of $total"
+    elif [ "$sp_snap" = "$snap" ]; then
+      result "snap-peer count: node log vs RPC" PASS "both $snap snap-capable (connected: log $sp_conn, RPC $total)"
+    else
+      result "snap-peer count: node log vs RPC" RECORDED \
+        "DISAGREE: node log $sp_snap snap-capable of $sp_conn, RPC $snap of $total (counted at different moments)"
+    fi
+  fi
   if [ "$snap" -lt 2 ]; then
     case "$FEW_RULE" in
       stop)

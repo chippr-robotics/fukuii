@@ -12,7 +12,7 @@ Nothing here runs in CI. It has been built and checked offline only (below).
 
 | Phase | What it does and records |
 |---|---|
-| `start` | Checks the reference node's chain id, records the jar, its SHA-256, the JVM, the host and the filesystem, and launches node A (SNAP on, path-live on). After `--peer-wait-min` it counts the snap-capable peers (`debug_listPeersInfo`: `supportsSnap` and `forkAccepted`) and applies `--few-snap-peers` when there are fewer than 2. |
+| `start` | Checks the reference node's chain id, records the jar, its SHA-256, the JVM, the host and the filesystem, and launches node A (SNAP on, path-live on). After `--peer-wait-min` it counts the snap-capable peers (`debug_listPeersInfo`: `supportsSnap` and `forkAccepted`), reads the node's own `[SNAP-PEERS]` start line beside it (below), and applies `--few-snap-peers` when the RPC count is fewer than 2. |
 | `sync` | Follows the last `[HANDOFF] sampling the state of pivot N` line for the pivot. While the head is in the ancestor window (pivot+1 .. pivot+255) it probes `BLOCKHASH` of the pivot, the block below it and the deepest reachable ancestor, in the head's context, with `eth_call` and a state override, and compares each with the reference. Once the head is past the window and at the reference's head: no `[PATH-PUBLISH]` line (no copy at the hand-off); the hash and `stateRoot` equal the reference's; blocks pivot+1 .. pivot+256 canonical; any ommer in pivot+1..+6 whose parent is below the pivot. |
 | `follow` | `--follow-hours` (24). Then: still at the head; every block from the pivot up equal to the reference's; `REORG-EXEC-FAIL` lines; refused blocks (`batch import failed` at ERROR) whose hash is the reference's canonical block; fork moves by depth from `REORG-SETTLE` (depth 1-2 and others); `[LOCAL-STATE-FAULT]` lines. |
 | `export` | Records the head, **stops node A** (an export needs a still state: it fails with `StateNotHeld` if the anchor moves, `CheckpointExporter.scala`), and runs `fukuii <network> checkpoint export --block <head> --output ...` (`CheckpointCli`). |
@@ -23,6 +23,27 @@ used (`jvm_memory_used_bytes{area="heap"}`), datadir bytes and `app_snapsync_pee
 spec 007's finding. Every criterion is a row of `OUT/results.tsv`: `PASS`, `FAIL`, `RECORDED` (a figure the gate reads)
 or `NOT-EXERCISED` (the chain gave no case; the gate decides). `OUT/summary.txt` closes the run. Exit 0 only with no
 `FAIL`; 3 when `--few-snap-peers stop` ended the run.
+
+### The node's own snap-peer count
+
+Since T242 (#1940) the node logs how SNAP starts, with the same count (`supportsSnap` and `forkAccepted` among the
+handshaked peers) made at that moment. After the RPC count the harness waits up to `--snap-line-wait-min` (5) more
+minutes for the last such line in `OUT/node-a.log` and records it:
+
+| Line (`SyncController.checkingSnapStart`, `PathLiveSync.SnapPeerCount.describe`) | Recorded as |
+|---|---|
+| `SNAP starts with N snap-capable peer(s) on this chain (D of them declared by the operator, ...), of C connected; min-snap-peers = M` | began at or over the minimum |
+| `SNAP starts with ...; N < min M` | began under the minimum |
+| `SNAP starts with an unknown number of peers (no count came from the peer manager); min-snap-peers = M` (WARN) | began with no count |
+| `No snap-capable peer came in W min (...). On a proof-of-work chain this node syncs by regular sync from its genesis instead, ...` (WARN) | fell back to regular sync: a `SNAP begins` `FAIL` row |
+
+Rows: `snap-capable ETC peers at start (node log)` (snap-capable, declared, connected, how SNAP began, and the number
+of waiting / `Still waiting` lines), `RECORDED`, or `FAIL` when no start line came in time; and
+`snap-peer count: node log vs RPC`, `PASS` when the two snap-capable counts are equal and `RECORDED` with `DISAGREE`
+when not. A disagreement is not a failure: the two counts are made at different moments. `NOT-EXERCISED` when the
+node had no count. The fields are kept in `OUT/state.env` (`SNAP_LOG_KIND`, `SNAP_LOG_PEERS`, `SNAP_LOG_DECLARED`,
+`SNAP_LOG_CONNECTED`, `SNAP_LOG_MIN`). SNAP's later `[SNAP-PEERS] snapCapable=...` exclusion line (`SnapPeerPool`) is
+not read.
 
 `--from sync|follow|export|reimport` resumes a run from `OUT/state.env`; `sync` and `follow` need node A still running.
 
@@ -54,4 +75,6 @@ total-difficulty question and the import's timing are only known on the first ru
 `shellcheck`; `--help`; a missing required option is a usage error (exit 2); `--dry-run` prints the three command
 lines. Each JSON-RPC method, config key, metric name and log line the harness reads was matched against the code on
 `staging` when it was written (`SnapFinalization`, `SyncController`, `ConsensusImpl`, `BlockImporter`, `CheckpointCli`,
-`DebugService`, `EthInfoService.call`, `SNAPSyncMetrics`). A change to any of those lines must change this script.
+`DebugService`, `EthInfoService.call`, `SNAPSyncMetrics`, and `PathLiveSync` for the `[SNAP-PEERS]` lines). The
+`[SNAP-PEERS]` parser was checked against lines rendered from those format strings: each start kind, the waiting
+lines, and the `SnapPeerPool` and final-count lines it must not read. A change to any of those lines must change this script.
