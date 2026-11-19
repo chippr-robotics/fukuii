@@ -3356,12 +3356,17 @@ items:
   - id: B-392
     title: "B-385 forkWeightNotStored validates with the strict firstInvalidHeaderOf: a branch whose fork header and weight are both missing is never counted"
     priority: P2
-    status: open
+    status: claimed
     area: sync
     opened: 2026-11-19
     refs: []
     links:
       spec: 018
+    claim:
+      by: cloud-dc960fdc
+      agent: forge
+      since: 2026-11-19T02:18:26Z
+      heartbeat: 2026-11-19T02:18:26Z
     notes: "ConsensusAdapter.forkWeightNotStored (PR #1943) passes blockValidation.firstInvalidHeaderOf; switch to firstInvalidHeaderOfNotJudged (B-391) if the user agrees the seal-only first header applies there too"
   - id: B-393
     title: "Spec 018 C6 live gates: EG-6 (Mordor + private PoW net), EG-12 (ETC mainnet SNAP), EG-9 (v2 archive), M10/M13 baselines"
