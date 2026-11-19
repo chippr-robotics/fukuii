@@ -1324,13 +1324,15 @@ items:
   - id: B-149
     title: Container healthchecks use plaintext http on 8545 (base default 8546) and break under mode = https
     priority: P2
-    status: open
+    status: done
     area: ops
     size: S
     opened: 2026-11-08
+    closed: 2026-11-19
     refs: [B-145]
     links:
       issues: [1756]
+      prs: [1956]
     notes: "2026-11-17 priority P2: barad-dur healthchecks probe 8545; base RPC port is 8546"
   - id: B-150
     title: Security hardening follow-ups from the B-145 audit (details held privately, Principle VI)
