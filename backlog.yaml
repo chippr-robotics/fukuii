@@ -3037,19 +3037,14 @@ items:
   - id: B-365
     title: "Spec 030 S1 follow-up: faucet rpc-client TLS onto profiles (FR-008 client half), moved to S7"
     priority: P2
-    status: review
+    status: done
     area: jsonrpc
     opened: 2026-11-18
+    closed: 2026-11-19
     refs: []
     links:
       prs: [1952]
       spec: "030"
-    claim:
-      by: cloud-0ceb384d
-      agent: conduit
-      since: 2026-11-19T14:00:17Z
-      heartbeat: 2026-11-19T15:12:51Z
-      branch: ccr-0ceb384d-ufzahb
     notes: S1 moved the faucet's listener onto profiles; rpc-client still uses SSLContextBuilder (B-148 fail-closed) until S7
   - id: B-366
     title: "Spec 030 S9 follow-up: AllowlistThreeNodeItSpec (T081): A, B, C on a dev chain, C refused, A never dials C"
