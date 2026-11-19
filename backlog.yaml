@@ -689,18 +689,18 @@ items:
     opened: 2026-11-07
     refs: [018 C6]
     links:
-      prs: [1936, 1937, 1940]
+      prs: [1936, 1937, 1940, 1942]
       spec: specs/018-storage-engine-consolidation
     depends_on: [B-066]
     claim:
       by: cloud-dc960fdc
       agent: forge
       since: 2026-11-18T21:58:46Z
-      heartbeat: 2026-11-19T00:15:36Z
+      heartbeat: 2026-11-19T00:15:40Z
     notes: |-
-      2026-11-18 in-progress: PR-A #1936 (tests), PR-B #1937 (MESS missing-ancestor fix, reorg matrix, Olympia). B-383 fix stacked on PR-B in progress. PR-C waits on user decisions (PoW no-snap fallback, EG-12 declared peer).
       2026-11-18 in-progress: User decisions 2026-11-18: (1) PoW exemption: PoW guard nodes regular-sync from genesis when SNAP is off or after the snap-peer wait times out; PoS keeps the refusal. (2) EG-12: a declared local core-geth peer counts toward the snap-peer precondition, logged. PR-C in progress.
       2026-11-18 in-progress: PR-A #1936 merged. PR-B #1937 (+B-383 #1938 stacked), PR-C #1940 (PoW fallback, snap-peer precondition, pins; herald review running). PR-D (T244-T246 scripts) and live gates (EG-6, EG-12, M10/M13) remain.
+      2026-11-19 in-progress: C6 code: PR-A #1936, PR-B #1937, PR-C #1940 merged; PR-D #1942 harness scripts in CI. Live gates EG-6, EG-12, M10/M13 remain.
   - id: B-068
     title: "Spec 018 Track C C7: soak and exit gate (no code)"
     priority: P2
