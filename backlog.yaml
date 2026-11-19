@@ -3470,3 +3470,13 @@ items:
     links:
       spec: "030"
     notes: Found running spec 030 quickstart (S11 T099) from the dist; quickstart now uses Mordor.
+  - id: B-399
+    title: A start refused before tuiProbe is set logs an NPE (this.tuiProbe is null) from BaseNode.shutDownOnce
+    priority: P3
+    status: open
+    area: tui
+    size: S
+    opened: 2026-11-19
+    refs: []
+    links: {}
+    notes: Seen on every 'Refusing to start' during spec 030 S11 T099; shutdown should skip unset parts.
