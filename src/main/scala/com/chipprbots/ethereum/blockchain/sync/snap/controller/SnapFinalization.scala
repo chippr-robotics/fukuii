@@ -590,25 +590,49 @@ private[snap] trait SnapFinalization extends FinalizationApi with ChainDownloadS
         false
       else
         dropHealedCodeNowPresent()
-        val (accountsExcluded, codeExcluded) = excludedAtHandOff()
-        val completion = recoveryFlags(accountsExcluded, codeExcluded)
-        // One synced write. What the sync wrote before it is in the same log, and is on the disk with it. A hand-off
-        // with no clean decision on this root takes the heal's marker away in it (spec 022 T043).
-        val unmarked = ending.commit(
-          pivotHeader,
-          ChainWeight.totalDifficultyOnly(finalTD),
-          storageRecoveryDone = completion.storageComplete,
-          bytecodeRecoveryDone = completion.bytecodeComplete,
-          cleanDecision =
-            stateRoot.exists(r => r.value == healingCleanWalkRoot.get() || r.value == healingDecidedRoot.get())
-        )
-        if unmarked then ctx.log.warn("[HEAL-INVARIANT] Handed off with no clean decision on this root: marker removed")
-        warnOfWhatIsWithheld(completion)
-        ctx.log.info(
-          s"SNAP sync completed at block $pivot (hash=${pivotHash.value.take(8).toHex}) on the unified state layout: " +
-            "the rows the sync wrote are the state, and nothing was copied"
-        )
-        true
+        // B-074: the set was read before the sample and the window hold, and an entry may have come in since (a
+        // healing task that gave up an account's storage). The hand-off is one synced commit with the flags, and
+        // withholding them here would leave the node on a layout where nothing fetches that account's storage after the
+        // hand-off. So the re-read holds as `startHandoffSample` does: the parent restarts healing, and nothing is
+        // written. A set that cannot be read is held too, and told as that.
+        val (excludedNow, readFailed) = excludedRead() match
+          case Right((accounts, _)) => (accounts, false)
+          case Left(e) =>
+            ctx.log.error(
+              "[HEAL-EXCLUDED] Could not read the excluded set at the hand-off: taken as accounts left out",
+              e
+            )
+            (true, true)
+        if excludedNow then
+          ctx.log.warn(
+            s"[HEAL-EXCLUDED] the excluded set has accounts at the commit of the hand-off at pivot $pivot (one came in " +
+              "after the sample): holding the hand-off, healing restarts"
+          )
+          leaveHeaderHold()
+          sampledFor = None
+          syncController ! SyncProtocol.HandoffHeldForExcluded(pivot, readFailed)
+          false
+        else
+          val (accountsExcluded, codeExcluded) = excludedAtHandOff()
+          val completion = recoveryFlags(accountsExcluded, codeExcluded)
+          // One synced write. What the sync wrote before it is in the same log, and is on the disk with it. A hand-off
+          // with no clean decision on this root takes the heal's marker away in it (spec 022 T043).
+          val unmarked = ending.commit(
+            pivotHeader,
+            ChainWeight.totalDifficultyOnly(finalTD),
+            storageRecoveryDone = completion.storageComplete,
+            bytecodeRecoveryDone = completion.bytecodeComplete,
+            cleanDecision =
+              stateRoot.exists(r => r.value == healingCleanWalkRoot.get() || r.value == healingDecidedRoot.get())
+          )
+          if unmarked then
+            ctx.log.warn("[HEAL-INVARIANT] Handed off with no clean decision on this root: marker removed")
+          warnOfWhatIsWithheld(completion)
+          ctx.log.info(
+            s"SNAP sync completed at block $pivot (hash=${pivotHash.value.take(8).toHex}) on the unified state layout: " +
+              "the rows the sync wrote are the state, and nothing was copied"
+          )
+          true
 
   /** Holds the hand-off until the window below the pivot is stored: the header hold's tick runs finalisation again.
     *
