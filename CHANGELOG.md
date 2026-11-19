@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Breaking
+- **A plaintext listener on a non-loopback interface refuses the start (spec 030 S6, B-359).** JSON-RPC HTTP and WS,
+  the Engine API and metrics, when their `interface` is not loopback (`0.0.0.0`, `::`, a LAN address, or a name that
+  resolves to one), need `tls.enabled = true`, or the new per-listener `allow-insecure-bind = true` to accept plaintext
+  there deliberately; the refusal names both keys, and the opt-out logs a WARN line at every start. A name that does
+  not resolve refuses the start too. With S5's loopback default for metrics, this is the 0.13.0 "Read before
+  upgrading" item (`docs/releases/0.13.0.md`, `docs/runbooks/tls-operations.md#migration`). The repository's own
+  deployments (hive's `fukuii.sh`, the `ops/` confs and compose files, `custom-config-example.conf`) set the opt-out
+  explicitly. ADR OPS-005 records the posture.
+
 ### Changed
 - **`app_engine_newpayload_invalid` counts INVALID answers alone (B-193).** It also counted every `engine_newPayload`
   answered ACCEPTED, and any status it did not know. ACCEPTED has its own series, `app_engine_newpayload_accepted`

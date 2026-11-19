@@ -464,6 +464,7 @@ abstract class BaseNode extends Node:
       case Left(message) => throw StdNode.startupRefusal(message)
       case Right(lines) =>
         if TlsStartupCheck.usesLegacy(config) then log.warn(TlsConfig.LegacyDeprecation)
+        com.chipprbots.ethereum.tls.BindPolicy.insecureWarnings(config).foreach(line => log.warn(line))
         lines.flatMap(_.renderAll).foreach(line => log.info(line))
 
   private def startDiscoveryManager(): Unit = peerDiscoveryManagerTyped ! PeerDiscoveryManager.Start
