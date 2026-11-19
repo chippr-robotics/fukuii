@@ -229,6 +229,7 @@ nav:
         - Console UI: adr/operations/OPS-001-console-ui.md
         - Logging Levels: adr/operations/OPS-002-logging-level-categorization.md
         - TUI Operator Actions: adr/operations/OPS-004-tui-operator-actions.md
+        - Zero-Trust Listeners: adr/operations/OPS-005-zero-trust-listeners.md
       - Protocols:
         - SNAP Protocol Infra: adr/protocols/ADR-SNAP-001-protocol-infrastructure.md
         - SNAP Integration: adr/protocols/ADR-SNAP-002-integration-architecture.md

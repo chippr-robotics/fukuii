@@ -66,6 +66,8 @@ object TlsStartupCheck:
     val result = for
       // every named profile must parse, used or not
       _ <- TlsConfig.profiles(config)
+      // no plaintext listener on a non-loopback interface without the opt-out (FR-018)
+      _ <- BindPolicy.check(config).left.map(m => TlsConfigError(m.stripPrefix(RefusalPrefix)))
       // a disabled listener is not validated: it never binds
       http <- if httpEnabled then TlsConfig.rpcHttp(config) else Right(None)
       ws <- if wsEnabled then TlsConfig.rpcWs(config) else Right(None)

@@ -1,9 +1,5 @@
 package com.chipprbots.ethereum.jsonrpc.server
 
-import java.net.InetAddress
-
-import scala.util.Try
-
 /** The startup check behind the "namespace on a non-loopback endpoint" warning.
   *
   * `personal` (key management), `debug`, `admin` (peers, addresses, the blacklist, chain import and export, log level),
@@ -48,6 +44,5 @@ object RpcExposureCheck:
     * treated as not loopback.
     */
   def isLoopback(interface: String): Boolean =
-    val host = interface.trim.stripPrefix("[").stripSuffix("]")
-    host.nonEmpty &&
-    (host.equalsIgnoreCase("localhost") || Try(InetAddress.getByName(host).isLoopbackAddress).getOrElse(false))
+    // the bind policy's own rule (spec 030 FR-018): every address the interface resolves to is loopback
+    com.chipprbots.ethereum.tls.BindPolicy.isLoopback(interface).getOrElse(false)

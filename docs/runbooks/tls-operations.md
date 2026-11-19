@@ -21,6 +21,7 @@ Fukuii supports both HTTP and HTTPS modes for the JSON-RPC endpoint. The TLS imp
 7. [Production Considerations](#production-considerations)
 8. [Troubleshooting](#troubleshooting)
 9. [Security Best Practices](#security-best-practices)
+10. [Migration: plaintext listeners on a non-loopback interface](#migration)
 
 ## When to Use TLS
 
@@ -1057,3 +1058,44 @@ For issues or questions:
 
 **Last Updated**: 2026-11-08  
 **Verified**: TLS implementation tested and confirmed functional after repository migration
+
+<a id="migration"></a>
+
+## Migration: plaintext listeners on a non-loopback interface
+
+Since spec 030 slice 6, a node refuses to start when a listener binds an interface that is not loopback without TLS,
+and says which key to set:
+
+```
+Refusing to start: fukuii.network.rpc.http binds 0.0.0.0 (not loopback) without TLS. Set fukuii.network.rpc.http.tls.enabled = true with a profile, or fukuii.network.rpc.http.allow-insecure-bind = true to accept plaintext on that interface (docs/runbooks/tls-operations.md#migration)
+```
+
+An interface is loopback only when every address it resolves to is (`localhost`, `127.0.0.1`, `::1`); `0.0.0.0` and
+`::` are not, and a name that does not resolve refuses the start too. A disabled listener is not checked.
+
+| Listener | Interface key | TLS key | Opt-out key |
+| --- | --- | --- | --- |
+| JSON-RPC HTTP | `fukuii.network.rpc.http.interface` | `…rpc.http.tls.enabled` (or the deprecated `mode = "https"`) | `…rpc.http.allow-insecure-bind` |
+| JSON-RPC WebSocket | `fukuii.network.rpc.ws.interface` | `…rpc.ws.tls.enabled` | `…rpc.ws.allow-insecure-bind` |
+| Engine API | `fukuii.network.engine-api.interface` | `…engine-api.tls.enabled` | `…engine-api.allow-insecure-bind` |
+| Metrics | `fukuii.metrics.interface` (new; default `localhost`) | `…metrics.tls.enabled` | `…metrics.allow-insecure-bind` |
+
+The faucet's listener follows the same rule through its `fukuii.network.rpc.http` keys.
+
+**Two ways out, per listener:**
+
+1. **Turn on TLS** (the recommendation): a profile under `fukuii.tls.profiles` and `tls { enabled = true, profile }`
+   on the listener (see [Configuration](#configuration); `tls/gen-cert.sh` issues test material). For RPC and
+   metrics, `client-auth = need` with a truststore also authenticates the clients.
+2. **Accept plaintext on that interface deliberately**: `allow-insecure-bind = true` on the listener. The node starts
+   and logs one WARN line per such listener at every start:
+   `Plaintext listener rpc-http http://0.0.0.0:8546 allow-insecure-bind=true (...)`. Use it on a private network you
+   control (a Docker network, a host-only bridge); the Engine API's JWT then crosses that network in the clear.
+
+**Metrics now binds loopback by default.** Before, the Prometheus endpoint bound every interface. A Prometheus server on
+another host or container needs `fukuii.metrics.interface` set, and then TLS or `metrics.allow-insecure-bind = true`.
+
+The repository's own deployments were migrated in the same change: hive's `fukuii.sh` (RPC and the Engine API, on
+hive's private network), the `ops/` fleet configurations and compose files (each listener on `0.0.0.0` names
+`allow-insecure-bind = true`), and `src/universal/custom-config-example.conf`.
+

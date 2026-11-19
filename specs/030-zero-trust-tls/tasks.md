@@ -182,15 +182,15 @@ release-note and runbook requirements of FR-019.
 
 ### Tests first
 
-- [ ] T057 [P] [US8] `T/tls/BindPolicySpec.scala`: loopback = every resolved address is loopback; `0.0.0.0`, `::`, a LAN address and a name resolving to one are not; an unresolvable name is an error (spec Edge Cases)
-- [ ] T058 [P] [US8] `T/nodebuilder/BindPolicyStartupSpec.scala`: the 12 cases of SC-008 refuse before any bind with the contracts/observability.md text; TLS on or `allow-insecure-bind = true` starts (with the WARN line); loopback values start (US8 scenarios 1, 2)
+- [x] T057 [P] [US8] `T/tls/BindPolicySpec.scala`: loopback = every resolved address is loopback; `0.0.0.0`, `::`, a LAN address and a name resolving to one are not; an unresolvable name is an error (spec Edge Cases)
+- [x] T058 [P] [US8] `T/nodebuilder/BindPolicyStartupSpec.scala`: the 12 cases of SC-008 refuse before any bind with the contracts/observability.md text; TLS on or `allow-insecure-bind = true` starts (with the WARN line); loopback values start (US8 scenarios 1, 2)
 
 ### Implementation
 
-- [ ] T059 [US8] `M/tls/BindPolicy.scala`; call it from `M/tls/TlsStartupCheck.scala` for HTTP, WS, Engine API, metrics and the faucet listener; `RpcExposureCheck` and `M/console/panels/RpcPanels.scala`'s exposure use `BindPolicy.isLoopback`; `allow-insecure-bind` keys in `network.conf` and `metrics.conf`
-- [ ] T060 [US8] Migrate the repository's own deployments (research 1.7): `hive/fukuii/fukuii.sh` (`allow-insecure-bind` for rpc.http and engine-api), `docker/fukuii/docker-compose.yml` and `prometheus.yml` (rpc.http and metrics, comment pointing to TLS), `ops/barad-dur/**/fukuii-conf*/*.conf`, `ops/cirith-ungol/conf/etc.conf`
-- [ ] T061 [US8] FR-019 docs in the same PR: `CHANGELOG.md` Unreleased entry marked **Breaking**; the "Read before upgrading" item in the next `docs/releases/<version>.md`; the migration section of `docs/runbooks/tls-operations.md` (`#migration`, the anchor the refusal text names)
-- [ ] T062 [US8] ADR `docs/adr/operations/OPS-005-zero-trust-listeners.md` (listener posture, identity as grant, allowlist instead of P2P TLS) and its row in `docs/adr/operations/README.md`
+- [x] T059 [US8] `M/tls/BindPolicy.scala`; call it from `M/tls/TlsStartupCheck.scala` for HTTP, WS, Engine API, metrics and the faucet listener; `RpcExposureCheck` and `M/console/panels/RpcPanels.scala`'s exposure use `BindPolicy.isLoopback`; `allow-insecure-bind` keys in `network.conf` and `metrics.conf`
+- [x] T060 [US8] Migrate the repository's own deployments (research 1.7): `hive/fukuii/fukuii.sh` (`allow-insecure-bind` for rpc.http and engine-api), `docker/fukuii/docker-compose.yml` and `prometheus.yml` (rpc.http and metrics, comment pointing to TLS), `ops/barad-dur/**/fukuii-conf*/*.conf`, `ops/cirith-ungol/conf/etc.conf`
+- [x] T061 [US8] FR-019 docs in the same PR: `CHANGELOG.md` Unreleased entry marked **Breaking**; the "Read before upgrading" item in the next `docs/releases/<version>.md`; the migration section of `docs/runbooks/tls-operations.md` (`#migration`, the anchor the refusal text names)
+- [x] T062 [US8] ADR `docs/adr/operations/OPS-005-zero-trust-listeners.md` (listener posture, identity as grant, allowlist instead of P2P TLS) and its row in `docs/adr/operations/README.md`
 - [ ] T063 [US8] Hive Engine API smoke run with the migrated `fukuii.sh`; `sbt pp`, `formatCheck`; S6's PR, flagged breaking in title and body
 
 ---
