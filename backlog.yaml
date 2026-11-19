@@ -3459,3 +3459,14 @@ items:
     refs: []
     links: {}
     notes: "S7 routes JdkHttpsTransport through OutboundTls with the system profile: StartupDeps.production builds it before the node config and its tls.profiles are loaded."
+  - id: B-398
+    title: "conf/gorgoroth.conf sets mining.protocol = ethash, which the node refuses ('pow','mocked','restricted-pow','engine-api'): a Gorgoroth node does not start"
+    priority: P2
+    status: open
+    area: ops
+    size: S
+    opened: 2026-11-19
+    refs: []
+    links:
+      spec: "030"
+    notes: Found running spec 030 quickstart (S11 T099) from the dist; quickstart now uses Mordor.
