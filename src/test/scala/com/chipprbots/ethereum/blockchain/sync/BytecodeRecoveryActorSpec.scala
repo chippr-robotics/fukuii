@@ -18,6 +18,7 @@ import com.chipprbots.ethereum.blockchain.sync.snap.controller.StateIngest
 import com.chipprbots.ethereum.db.cache.LruCache
 import com.chipprbots.ethereum.db.dataSource.EphemDataSource
 import com.chipprbots.ethereum.db.storage.AppStateStorage
+import com.chipprbots.ethereum.db.storage.BadEntryDelete
 import com.chipprbots.ethereum.db.storage.BfsQueueStorage
 import com.chipprbots.ethereum.db.storage.CachedReferenceCountedStorage
 import com.chipprbots.ethereum.db.storage.EvmCodeStorage
@@ -27,9 +28,14 @@ import com.chipprbots.ethereum.db.storage.MptStorage
 import com.chipprbots.ethereum.db.storage.NodeStorage
 import com.chipprbots.ethereum.db.storage.NodeStorage.NodeHash
 import com.chipprbots.ethereum.db.storage.PathNodeStorage
+import com.chipprbots.ethereum.db.storage.RawNodeRead
+import com.chipprbots.ethereum.db.storage.RepairOutcome
 import com.chipprbots.ethereum.db.storage.SnapStorageDoneStorage
 import com.chipprbots.ethereum.db.storage.SnapSyncProgressStorage
 import com.chipprbots.ethereum.db.storage.StateStorage
+import com.chipprbots.ethereum.db.storage.pathstate.BlockRef
+import com.chipprbots.ethereum.db.storage.pathstate.PositionKey
+import com.chipprbots.ethereum.db.storage.pathstate.PositionRepairs
 import com.chipprbots.ethereum.db.storage.pruning.ArchivePruning
 import com.chipprbots.ethereum.domain.BlockchainReader
 import com.chipprbots.ethereum.domain.BlockchainWriter
@@ -93,6 +99,19 @@ class BytecodeRecoveryActorSpec extends ScalaTestWithActorTestKit() with AnyFlat
 
   private def notReached(member: String): Nothing =
     throw new UnsupportedOperationException(s"recovery actor read StateIngest.$member")
+
+  // The unified layout, as the recovery actors are told of it (`BlockchainWriter.positionRepairs`). A refused recovery
+  // reads nothing of it: every member fails loudly.
+  private object OnThePositionLayout extends PositionRepairs:
+    def anchor: Option[BlockRef] = positionsRead("anchor")
+    def rawRowsAt(requests: Seq[(PositionKey, ByteString)]): Seq[RawNodeRead] = positionsRead("rawRowsAt")
+    def repairNodeAt(position: PositionKey, expectedHash: ByteString, bytes: Array[Byte]): RepairOutcome =
+      positionsRead("repairNodeAt")
+    def deleteBadNodeAt(position: PositionKey, expectedHash: ByteString): BadEntryDelete =
+      positionsRead("deleteBadNodeAt")
+
+  private def positionsRead(member: String): Nothing =
+    throw new UnsupportedOperationException(s"a refused recovery read PositionRepairs.$member")
 
   "BytecodeRecoveryActor" should
     "emit RecoveryComplete immediately and commit flag when no bytecodes are missing" taggedAs (
@@ -265,3 +284,61 @@ class BytecodeRecoveryActorSpec extends ScalaTestWithActorTestKit() with AnyFlat
 
       testKit.stop(actor)
     }
+
+  // B-376 (the user's decision of 2026-11-19): on the unified layout the actor refuses to start, loudly, by its one
+  // entry; with gaps handed to it (the combined scan's form) and with a scan of its own
+  "BytecodeRecoveryActor on the unified layout" should "refuse to start, log why at ERROR, write nothing and set no flag" taggedAs (
+    UnitTest,
+    SyncTest
+  ) in {
+    for (preloaded, label) <- Seq((Some(missingOne), "preloaded"), (None, "scan")) do
+      val syncController = TestProbe(s"syncController_refused_$label")
+      val coordinator = TestProbe(s"coordinator_refused_$label")
+      val networkPeerManager = TestProbe(s"npm_refused_$label")
+      val (stateStorage, appStateStorage, evmCodeStorage) = newStorages()
+      val actor = org.apache.pekko.actor.testkit.typed.scaladsl.LoggingTestKit
+        .error(BytecodeRecoveryActor.RefusedOnPositions)
+        .expect {
+          testKit.spawn(
+            BytecodeRecoveryActor.testApply(
+              stateRoot = fakeStateRoot,
+              stateIngest = recoveryIngest(stateStorage, appStateStorage, evmCodeStorage),
+              networkPeerManager = networkPeerManager.ref,
+              syncController = syncController.ref.toTyped[Any],
+              pivotBlockNumber = BigInt(100),
+              snapSyncConfig = newConfig(),
+              preloaded = preloaded,
+              coordinatorForTesting = Some(coordinator.ref),
+              positions = Some(OnThePositionLayout)
+            ),
+            s"bytecode-recovery-spec-refused-$label"
+          )
+        }
+      syncController.expectMsg(3.seconds, BytecodeRecoveryActor.RecoveryNotRun)
+      createTestProbe[Any]().expectTerminated(actor, 3.seconds)
+      coordinator.expectNoMessage(200.millis)
+      appStateStorage.isBytecodeRecoveryDone() shouldBe false
+  }
+
+  it should "start as before on the hash layout" taggedAs (UnitTest, SyncTest) in {
+    val syncController = TestProbe("syncController_hash_layout")
+    val coordinator = TestProbe("coordinator_hash_layout")
+    val networkPeerManager = TestProbe("npm_hash_layout")
+    val (stateStorage, appStateStorage, evmCodeStorage) = newStorages()
+    val actor = testKit.spawn(
+      BytecodeRecoveryActor.testApply(
+        stateRoot = fakeStateRoot,
+        stateIngest = recoveryIngest(stateStorage, appStateStorage, evmCodeStorage),
+        networkPeerManager = networkPeerManager.ref,
+        syncController = syncController.ref.toTyped[Any],
+        pivotBlockNumber = BigInt(100),
+        snapSyncConfig = newConfig(),
+        preloaded = Some(missingOne),
+        coordinatorForTesting = Some(coordinator.ref)
+      ),
+      "bytecode-recovery-spec-hash-layout"
+    )
+    coordinator.expectMsgType[snap.actors.ByteCodeCoordinator.StartByteCodeSync](3.seconds)
+    syncController.expectNoMessage(200.millis)
+    testKit.stop(actor)
+  }

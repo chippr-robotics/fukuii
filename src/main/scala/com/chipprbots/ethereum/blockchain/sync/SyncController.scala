@@ -3134,6 +3134,8 @@ object SyncController:
               )
               pivot
 
+    // Never on the guard: every caller refuses there first, and the recovery actors refuse a start on the unified layout
+    // themselves, loudly (B-376; filling holes by position is the deferred rewrite).
     def startRecovery(
         needBytecode: Boolean,
         needStorage: Boolean,
