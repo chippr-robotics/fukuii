@@ -43,3 +43,14 @@ See `specs/008-ci-gate-integrity/` for the design and issues
 | `fukuii-test` | Wrapper for targeted or full `sbt` test runs. See `CLAUDE.md` for the test cadence. |
 | `inject_version.py` | Inject the version from `version.sbt` into build artifacts. |
 | `validate_openapi.py` | Validate the JSON-RPC OpenAPI specification. |
+
+## ETC gate harnesses (spec 018 C6)
+
+Built for the Track C exit gate; none runs in CI, and each needs hosts the user names (T011). See each directory's
+README.
+
+| Script | Purpose |
+|---|---|
+| `etc-private-net/` | A private ETC-config PoW net (two or three fukuii miners plus a core-geth, Olympia at a chosen block): init, start, connect, stop, load, forks of depth 1 to 3, and the EG-6 checks (T244). |
+| `etc-mainnet-sync/run-eg12.sh` | The EG-12 run: ETC mainnet SNAP on the unified layout, 24 h of following, the ancestor-window check, the first v2 archive exported and re-imported (EG-9) (T245). |
+| `etc-differential/compare-balances.sh` | Miner and ommer balances across ECIP-1017 era boundaries, recorded from the pinned jar and compared (T246). |

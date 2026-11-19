@@ -121,4 +121,5 @@ etc-node.key
 run-*.conf
 run-*.sh
 !.claude/looping/bin/run-loop.sh
+!scripts/etc-mainnet-sync/run-eg12.sh
 
