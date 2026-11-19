@@ -2910,21 +2910,16 @@ items:
   - id: B-357
     title: "Spec 030 S4: reload of TLS profiles and identity rules without a restart; expiry gauge"
     priority: P2
-    status: review
+    status: done
     area: rpc
     size: M
     opened: 2026-11-18
+    closed: 2026-11-19
     refs: [B-146]
     links:
       prs: [1941]
       spec: specs/030-zero-trust-tls
     depends_on: [B-354, B-356]
-    claim:
-      by: cloud-0ceb384d
-      agent: conduit
-      since: 2026-11-18T23:14:47Z
-      heartbeat: 2026-11-18T23:31:42Z
-      branch: ccr-0ceb384d-ufzahb
     notes: "US4; FR-030-033. ~400+600 plus an IT. Review: conduit."
   - id: B-358
     title: "Spec 030 S5: Engine API server TLS; metrics interface and TLS"
