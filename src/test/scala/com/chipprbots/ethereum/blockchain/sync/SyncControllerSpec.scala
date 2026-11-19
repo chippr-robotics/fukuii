@@ -2910,6 +2910,129 @@ class SyncControllerSpec
     auditName(testSetup) shouldBe None
   }
 
+  // ---- a refused checkpoint archive at the start (spec 018 C5c, T292 wiring; B-380) ----------------------------------
+  //
+  // CheckpointImportRetrySpec pins the importer's no-retry rule and recoverInterrupted. These pin the two call sites in
+  // start(): the record is read before the import is decided, the operator's flag reaches the importer, and a skipped
+  // archive leaves the node to SNAP. The archive is stream A, which is not this test chain's: an import that is
+  // attempted is refused by its header checks, so "attempted" reads as a `failed` line, and "skipped" as a `skipped` one.
+
+  private val checkpointArchiveBytes: Array[Byte] =
+    com.chipprbots.ethereum.blockchain.checkpoint.CheckpointV2GoldenStreamSpec.golden("a")
+
+  private val checkpointArchiveId: ByteString =
+    com.chipprbots.ethereum.blockchain.checkpoint.CheckpointArchive.archiveIdOf(
+      com.chipprbots.ethereum.blockchain.checkpoint.CheckpointV2Fixtures.decode(checkpointArchiveBytes)._1
+    )
+
+  private val RetryRefusedKey: String =
+    com.chipprbots.ethereum.blockchain.checkpoint.CheckpointImporter.RetryRefusedKey
+
+  /** A SNAP-on controller whose `checkpoint-sync-file` is stream A, written to a temp file. */
+  private def withCheckpointArchive(retryRefused: Boolean)(test: TestSetup => Any): Unit =
+    val archive = java.nio.file.Files.createTempFile("sync-controller-checkpoint", ".bin")
+    java.nio.file.Files.write(archive, checkpointArchiveBytes)
+    val testSetup = new TestSetup():
+      override def defaultSyncConfig: SyncConfig = super.defaultSyncConfig.copy(
+        doSnapSync = true,
+        checkpointSyncFile = Some(archive),
+        checkpointSyncRetryRefused = retryRefused
+      )
+    // the importer's trust is built from the genesis header, which a node always holds
+    testSetup.blockchainWriter.storeBlockHeader(testSetup.baseBlockHeader).commit()
+    try test(testSetup)
+    finally
+      testSetup.cleanup()
+      java.nio.file.Files.deleteIfExists(archive)
+
+  /** The `[CHECKPOINT IMPORT]` lines SyncController logs at WARN or above while it starts, once SNAP has started. */
+  private def checkpointLinesAtStart(testSetup: TestSetup): List[String] =
+    import testSetup.*
+    val lines = syncControllerLogsAtLeast(ch.qos.logback.classic.Level.WARN) {
+      syncController ! SyncController.WrappedSyncProtocol(SyncProtocol.Start)
+    }
+    awaitSnapStarted(syncController)
+    lines.filter(_.contains("[CHECKPOINT IMPORT]"))
+
+  it should "skip a checkpoint archive this node refused before, say so, and start SNAP (T292)" taggedAs (
+    UnitTest,
+    SyncTest
+  ) in withCheckpointArchive(retryRefused = false) { testSetup =>
+    import testSetup.*
+    val appState = storagesInstance.storages.appStateStorage
+    appState.recordRefusedCheckpoint(checkpointArchiveId).commitSync()
+
+    val lines = checkpointLinesAtStart(testSetup)
+    withClue(lines.mkString("\n")) {
+      lines.count(l => l.contains("[CHECKPOINT IMPORT] skipped:") && l.contains(RetryRefusedKey)) shouldBe 1
+      lines.exists(_.contains("[CHECKPOINT IMPORT] failed:")) shouldBe false
+    }
+    appState.getRefusedCheckpointArchives() shouldBe Seq(checkpointArchiveId)
+    appState.getCheckpointImportInProgress() shouldBe None
+    appState.isSnapSyncDone() shouldBe false
+    appState.getBestBlockNumber() shouldBe 0
+  }
+
+  it should "attempt a refused checkpoint archive when the retry flag is set (T292)" taggedAs (
+    UnitTest,
+    SyncTest
+  ) in withCheckpointArchive(retryRefused = true) { testSetup =>
+    import testSetup.*
+    val appState = storagesInstance.storages.appStateStorage
+    appState.recordRefusedCheckpoint(checkpointArchiveId).commitSync()
+
+    val lines = checkpointLinesAtStart(testSetup)
+    withClue(lines.mkString("\n")) {
+      lines.exists(_.contains("[CHECKPOINT IMPORT] skipped:")) shouldBe false
+      // past the no-retry check: the header checks refuse it, as this is not the archive's chain
+      val failed = lines.filter(_.contains("[CHECKPOINT IMPORT] failed:"))
+      failed should have size 1
+      failed.head should include("BadFormat")
+      failed.head shouldNot include("AlreadyRefused")
+    }
+    appState.getRefusedCheckpointArchives() shouldBe Seq(checkpointArchiveId)
+    appState.isSnapSyncDone() shouldBe false
+  }
+
+  it should "attempt a checkpoint archive when only a different archive is recorded as refused (T292)" taggedAs (
+    UnitTest,
+    SyncTest
+  ) in withCheckpointArchive(retryRefused = false) { testSetup =>
+    import testSetup.*
+    val appState = storagesInstance.storages.appStateStorage
+    val otherId = ByteString(Array.fill[Byte](32)(0x3c))
+    appState.recordRefusedCheckpoint(otherId).commitSync()
+
+    val lines = checkpointLinesAtStart(testSetup)
+    withClue(lines.mkString("\n")) {
+      lines.exists(_.contains("[CHECKPOINT IMPORT] skipped:")) shouldBe false
+      lines.count(_.contains("[CHECKPOINT IMPORT] failed:")) shouldBe 1
+    }
+    // the attempt's header refusal is the archive's own fault, so it is recorded beside the other one
+    appState.getRefusedCheckpointArchives() shouldBe Seq(otherId, checkpointArchiveId)
+    appState.isSnapSyncDone() shouldBe false
+  }
+
+  it should "record a killed import's archive before the import is decided, and skip it in that same start (T292)" taggedAs (
+    UnitTest,
+    SyncTest
+  ) in withCheckpointArchive(retryRefused = false) { testSetup =>
+    import testSetup.*
+    val appState = storagesInstance.storages.appStateStorage
+    appState
+      .beginCheckpointImport(ByteString(Array.fill[Byte](32)(1)), 5L, Some(checkpointArchiveId))
+      .commitSync()
+    appState.getRefusedCheckpointArchives() shouldBe empty
+
+    val lines = checkpointLinesAtStart(testSetup)
+    withClue(lines.mkString("\n")) {
+      lines.count(_.contains("[CHECKPOINT IMPORT] skipped:")) shouldBe 1
+      lines.exists(_.contains("[CHECKPOINT IMPORT] failed:")) shouldBe false
+    }
+    appState.getRefusedCheckpointArchives() shouldBe Seq(checkpointArchiveId)
+    appState.isSnapSyncDone() shouldBe false
+  }
+
   class TestSetup(
       _validators: Validators = new Mocks.MockValidatorsAlwaysSucceed
   ) extends EphemBlockchainTestSetup
