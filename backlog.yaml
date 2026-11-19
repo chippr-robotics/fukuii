@@ -3359,3 +3359,15 @@ items:
       spec: 018
     depends_on: [B-067]
     notes: "Tasks T247, T248, T258, T264. Code and harnesses are merged (#1936, #1937, #1940, #1942). They need live hosts and the user's T011 host decisions. Harnesses: scripts/etc-private-net, scripts/etc-mainnet-sync/run-eg12.sh, scripts/etc-differential/compare-balances.sh. Open choices: --few-snap-peers, --export-allow-estimated-td. B-388 (treasury address) must be settled before any Olympia block is set."
+  - id: B-394
+    title: "T212 IT, ETH leg: OnDemandFetchByPositionSpec on a PoS chain config (designated head, post-merge blocks)"
+    priority: P3
+    status: open
+    area: sync
+    size: S
+    opened: 2026-11-19
+    refs: []
+    links:
+      spec: 018
+    depends_on: [B-372]
+    notes: B-372 covers the PoW importer path over a real PathStateStorage on RocksDB. The ETH importer path (TTD config, DesignatedHead branch resolution, post-merge block) is pinned only at actor level in RegularSyncSpec; this extends the IT with that leg.
