@@ -2967,19 +2967,20 @@ items:
   - id: B-361
     title: "Spec 030 S8: remaining outbound clients (incl. ExternalIPDetector) on the factory; ratchet clean; retire security/ TLS code"
     priority: P2
-    status: claimed
+    status: review
     area: rpc
     size: S
     opened: 2026-11-18
     refs: [B-146]
     links:
+      prs: [1955]
       spec: specs/030-zero-trust-tls
     depends_on: [B-360]
     claim:
       by: cloud-0ceb384d
       agent: conduit
       since: 2026-11-19T14:27:53Z
-      heartbeat: 2026-11-19T14:44:06Z
+      heartbeat: 2026-11-19T17:08:36Z
       branch: ccr-0ceb384d-ufzahb
     notes: "US5; FR-040, 045, 046; SC-004. ~300+400. Review: conduit, prism."
   - id: B-362
