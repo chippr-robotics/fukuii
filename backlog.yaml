@@ -2925,19 +2925,20 @@ items:
   - id: B-358
     title: "Spec 030 S5: Engine API server TLS; metrics interface and TLS"
     priority: P2
-    status: in-progress
+    status: review
     area: engine-api
     size: M
     opened: 2026-11-18
     refs: [B-146]
     links:
+      prs: [1951]
       spec: specs/030-zero-trust-tls
     depends_on: [B-354]
     claim:
       by: cloud-0ceb384d
       agent: beacon
       since: 2026-11-19T13:46:54Z
-      heartbeat: 2026-11-19T13:59:53Z
+      heartbeat: 2026-11-19T14:00:01Z
       branch: ccr-0ceb384d-ufzahb
     notes: "US6; FR-015, 016. ~350+500; metrics need mode also needs S2. Review: beacon (Engine API), conduit."
   - id: B-359
