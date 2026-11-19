@@ -545,3 +545,26 @@ class RpcViewSpec extends AnyFlatSpec with Matchers with OptionValues with Befor
     narrow.exists(l => l.trim.startsWith("Rate") && l.contains("…")) shouldBe false
     narrow.find(_.trim.startsWith("Rate")).value should include("now ")
   }
+
+  // spec 030 FR-061: each listener's TLS, its client-auth, and a plaintext listener kept by the opt-out
+  "A transport's TLS" should "say whether a client certificate is asked for or required" taggedAs (UnitTest) in {
+    val t = TuiFixtures.rpcSepolia().snapshot.value.local.rpc.value.transports.head
+    RpcPanels.authentication(t.copy(tls = true, clientAuth = TransportClientAuth.Need)) shouldBe
+      "client certificate required (mTLS)"
+    RpcPanels.authentication(t.copy(tls = true, clientAuth = TransportClientAuth.Want)) shouldBe
+      "client certificate asked, not required (TLS)"
+    RpcPanels.authentication(t.copy(tls = true)) shouldBe "no authentication (TLS)"
+    RpcPanels.authentication(t.copy(insecureBind = true)) shouldBe "no authentication, plaintext by allow-insecure-bind"
+    // the opt-out says nothing on a TLS transport, where it changes nothing
+    RpcPanels.authentication(t.copy(tls = true, insecureBind = true)) shouldBe "no authentication (TLS)"
+    RpcPanels.authentication(t.copy(auth = TransportAuth.Jwt, tls = true)) shouldBe "authenticated by JWT (TLS)"
+  }
+
+  it should "be on the HTTP row of a need listener" taggedAs (UnitTest) in {
+    val s = TuiFixtures.rpcSepolia()
+    val sample = s.snapshot.value.local.rpc.value
+    val mtls = sample.transports.map(t =>
+      if t.kind == TransportKind.Http then t.copy(tls = true, clientAuth = TransportClientAuth.Need) else t
+    )
+    row(TuiFixtures.withRpc(s, sample.copy(transports = mtls)), "HTTP") should include("client certificate required")
+  }
