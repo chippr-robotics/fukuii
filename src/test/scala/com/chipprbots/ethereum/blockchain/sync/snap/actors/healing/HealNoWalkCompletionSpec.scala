@@ -178,6 +178,10 @@ class HealNoWalkCompletionSpec extends ScalaTestWithActorTestKit() with AnyFlatS
         withClue(s"$what within the deadline: ")(deadline.hasTimeLeft() shouldBe true)
         drive()
         pause.expectNoMessage(5.millis)
+      // `done` reads what the coordinator records, and it records a decision before it sends the signal that decision
+      // backs (`declareComplete`). Seen from this thread mid-handler, the record can be there before the signal is sent:
+      // a barrier through the coordinator's mailbox waits out that handler, so what `seen()` reads next includes it.
+      settle()
 
     /** The peer's round trips only, with what is on the executor left there: a walk that starts stays at its start. */
     def awaitWalkLaunched(): Unit =
