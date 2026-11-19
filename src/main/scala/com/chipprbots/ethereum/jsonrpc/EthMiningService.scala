@@ -97,7 +97,9 @@ class EthMiningService(
     val getTransactionFromPoolTimeout: FiniteDuration,
     configBuilder: BlockchainConfigBuilder,
     coinbaseProvider: CoinbaseProvider,
-    system: ActorSystem
+    system: ActorSystem,
+    workNotifyTls: org.apache.pekko.http.scaladsl.HttpsConnectionContext =
+      com.chipprbots.ethereum.tls.OutboundTls.pekkoHttpsContext(javax.net.ssl.SSLContext.getDefault)
 ) extends TransactionPicker:
   override lazy val scheduler: Scheduler = system.toTyped.scheduler
   import configBuilder.*
@@ -164,7 +166,8 @@ class EthMiningService(
           if notifyUrls.nonEmpty then
             WorkNotifier.notify(
               notifyUrls,
-              WorkNotifier.WorkPackage(powHeaderHash, dagSeed, target, blockNumber)
+              WorkNotifier.WorkPackage(powHeaderHash, dagSeed, target, blockNumber),
+              workNotifyTls
             )(using system)
           Right(workResponse)
       }.handleErrorWith {

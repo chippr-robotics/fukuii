@@ -482,6 +482,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   refuse the start); the checkpoint download takes `sync.checkpoint-sync-tls-profile`; the Ephemery release fetch,
   which runs before the node's configuration is read, uses `system`. `scripts/check-outbound-tls.sh`, run in CI, fails
   on TLS made outside the factory where `scripts/outbound-tls-allowlist.txt` does not allow it.
+- **Every outbound client on the factory (spec 030 S8, B-361).** The PoW work notifier takes
+  `mining.notify-tls-profile`, the external-IP lookup's HTTPS step `network.server-address.external-ip-tls-profile`,
+  and `download-bootstrap` `bootstrap-download.tls-profile` (default `system` for all three). `download-bootstrap` now
+  fetches `https` URLs only. The dashboard's endpoint test presents the listener's own keystore to an HTTPS listener
+  with `client-auth = "need"`, and verifies the listener's certificate on `tui.probe.tls-profile` when that is set.
+  The legacy `security/` TLS code (`SSLContextBuilder`, `SSLContextFactory`, `SSLConfig`, `KeyStoreUtils`), which
+  served the single HTTPS listener and the faucet client, is removed; the outbound-TLS allowlist holds no S8 line.
 - **Mutual TLS on the JSON-RPC HTTP and WebSocket listeners (spec 030 S2, B-355).** `network.rpc.http.tls.client-auth`
   and the new `network.rpc.ws.tls { enabled, profile, client-auth }` take `none`, `want` or `need`. Under `want` and
   `need` the profile's `truststore` verifies every presented client certificate; `need` also refuses a client with

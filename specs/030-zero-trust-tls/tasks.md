@@ -217,13 +217,13 @@ certificate, no fallback, no https→http redirect; a CI ratchet.
 
 ### Tests first (S8)
 
-- [ ] T071 [P] [US5] Extend or add specs for `WorkNotifier`, `BootstrapDownload`, `ExternalIPDetector` and `EndpointProbe`: each uses its profile; `EndpointProbe` uses the probed listener's profile for a `need` listener and still reports "not verified" otherwise (FR-046)
+- [x] T071 [P] [US5] Extend or add specs for `WorkNotifier`, `BootstrapDownload`, `ExternalIPDetector` and `EndpointProbe`: each uses its profile; `EndpointProbe` uses the probed listener's profile for a `need` listener and still reports "not verified" otherwise (FR-046)
 
 ### Implementation (S8)
 
-- [ ] T072 [P] [US5] `M/consensus/pow/WorkNotifier.scala:49`, `M/BootstrapDownload.scala:44`, `M/network/ExternalIPDetector.scala:342` onto the factory with their `tls-profile` keys
-- [ ] T073 [US5] `M/console/ops/EndpointProbe.scala:84-104`: profile selection per FR-046; its recording trust manager stays as the one allow-listed exception, with that reason
-- [ ] T074 [US5] Remove the S8 lines from `scripts/outbound-tls-allowlist.txt` (SC-004); delete `M/security/SSLContextFactory.scala`, `SSLContextBuilder.scala`, `SSLConfig.scala` and `KeyStoreUtils.getTrustManager` once unreferenced (record the Chesterton note in the PR: they served the single HTTPS listener and the faucet client)
+- [x] T072 [P] [US5] `M/consensus/pow/WorkNotifier.scala:49`, `M/BootstrapDownload.scala:44`, `M/network/ExternalIPDetector.scala:342` onto the factory with their `tls-profile` keys
+- [x] T073 [US5] `M/console/ops/EndpointProbe.scala:84-104`: profile selection per FR-046; its recording trust manager stays as the one allow-listed exception, with that reason
+- [x] T074 [US5] Remove the S8 lines from `scripts/outbound-tls-allowlist.txt` (SC-004); delete `M/security/SSLContextFactory.scala`, `SSLContextBuilder.scala`, `SSLConfig.scala` and `KeyStoreUtils.getTrustManager` once unreferenced (record the Chesterton note in the PR: they served the single HTTPS listener and the faucet client)
 - [ ] T075 [US5] `sbt pp`, `formatCheck`; S8's PR
 
 ---

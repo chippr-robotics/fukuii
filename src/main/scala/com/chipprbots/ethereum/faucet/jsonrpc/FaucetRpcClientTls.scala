@@ -5,7 +5,6 @@ import javax.net.ssl.SSLContext
 
 import com.typesafe.config.Config
 
-import com.chipprbots.ethereum.security.SSLError
 import com.chipprbots.ethereum.tls.OutboundTls
 import com.chipprbots.ethereum.tls.TlsConfigError
 import com.chipprbots.ethereum.tls.TlsMaterialLoader
@@ -24,7 +23,7 @@ object FaucetRpcClientTls:
     * @param fukuiiConfig
     *   its `fukuii` section, which holds `tls.profiles`
     */
-  def context(rawConfig: Config, fukuiiConfig: Config, secureRandom: SecureRandom): Either[SSLError, SSLContext] =
+  def context(rawConfig: Config, fukuiiConfig: Config, secureRandom: SecureRandom): Either[TlsConfigError, SSLContext] =
     val section = rawConfig.getConfig(Section)
     val named = section.hasPath("tls-profile") && !section.getIsNull("tls-profile")
     val result: Either[TlsConfigError, SSLContext] =
@@ -45,4 +44,4 @@ object FaucetRpcClientTls:
             .left
             .map(e => TlsConfigError(s"$Section.tls-profile = $profile: ${e.message}"))
       }
-    result.left.map(e => SSLError(e.message))
+    result

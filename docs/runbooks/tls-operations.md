@@ -45,38 +45,29 @@ Fukuii supports both HTTP and HTTPS modes for the JSON-RPC endpoint. The TLS imp
 
 ### Components
 
-Fukuii's TLS implementation consists of several key components:
+All TLS, inbound and outbound, is built in `src/main/scala/com/chipprbots/ethereum/tls/` (spec 030):
 
-1. **SSLConfig** (`src/main/scala/com/chipprbots/ethereum/security/SSLConfig.scala`)
-   - Configuration data class for TLS settings
-   - Reads certificate configuration from HOCON files
-
-2. **SSLContextFactory** (`src/main/scala/com/chipprbots/ethereum/security/SSLContextFactory.scala`)
-   - Creates and initializes SSL contexts
-   - Validates certificate files and passwords
-   - Loads PKCS12 keystores
-
-3. **SecureJsonRpcHttpServer** (`src/main/scala/com/chipprbots/ethereum/jsonrpc/server/http/SecureJsonRpcHttpServer.scala`)
-   - HTTPS-enabled JSON-RPC server
-   - Uses Apache Pekko HTTP with SSL/TLS support
+1. **TlsConfig / TlsProfile** — read `fukuii.tls.profiles` and each listener's `tls { enabled, profile, client-auth }`
+   (and the deprecated `mode = "https"` + `certificate` block, mapped to a profile until 0.13.0).
+2. **TlsMaterialLoader** — loads and validates a profile's keystore and truststore; a bad profile refuses the start.
+3. **TlsContexts / TlsServerEngine** — the listeners' server contexts (JSON-RPC HTTP and WebSocket, Engine API,
+   metrics), with key and trust managers that reload when the files change.
+4. **OutboundTls** — the one factory for outbound HTTPS clients (faucet, checkpoint download, work notifier,
+   external-IP lookup, bootstrap download): host names always checked, no redirect from https to http.
+   `scripts/check-outbound-tls.sh` fails CI on TLS made anywhere else.
 
 ### How It Works
 
 ```
 Client Request (HTTPS)
     │
-    ├──> TLS Handshake (SecureJsonRpcHttpServer)
+    ├──> TLS Handshake (TlsServerEngine, on the listener's profile)
     │       │
-    │       ├──> Load SSL Context (SSLContextFactory)
-    │       │       │
-    │       │       ├──> Read Certificate (PKCS12 keystore)
-    │       │       └──> Validate Password
-    │       │
-    │       └──> Establish Encrypted Connection
+    │       ├──> Server certificate (profile keystore, reloaded on change)
+    │       ├──> Client certificate, under want/need (profile truststore)
+    │       └──> Handshake failures counted by reason
     │
-    └──> Process JSON-RPC Request
-            │
-            └──> Return Encrypted Response
+    └──> Process JSON-RPC Request (namespaces granted by client-identities)
 ```
 
 ## Certificate Generation

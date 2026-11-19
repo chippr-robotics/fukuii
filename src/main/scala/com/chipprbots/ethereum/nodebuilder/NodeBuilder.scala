@@ -65,7 +65,6 @@ import com.chipprbots.ethereum.network.handshaker.NetworkHandshakerConfiguration
 import com.chipprbots.ethereum.network.p2p.messages.Capability
 import com.chipprbots.ethereum.network.rlpx.AuthHandshaker
 import com.chipprbots.ethereum.ommers.OmmersPool
-import com.chipprbots.ethereum.security.SSLContextBuilder
 import com.chipprbots.ethereum.security.SecureRandomBuilder
 import com.chipprbots.ethereum.transactions.PendingTransactionsManager
 import com.chipprbots.ethereum.transactions.TransactionHistoryService
@@ -673,9 +672,17 @@ trait BlockchainHostBuilder:
 trait ServerActorBuilder:
 
   self: ActorSystemBuilder & NodeStatusBuilder & BlockchainBuilder & PeerManagerActorBuilder & BlacklistBuilder &
-    InstanceConfigProvider =>
+    InstanceConfigProvider & SecureRandomBuilder =>
 
   lazy val networkConfig = instanceConfig.Network
+
+  /** The client context of the external-IP lookup's HTTPS step (spec 030 FR-044); a profile that does not load stops
+    * the start.
+    */
+  lazy val externalIpTls: javax.net.ssl.SSLContext =
+    com.chipprbots.ethereum.tls.OutboundTls
+      .forSite(instanceConfig.config, "network.server-address.external-ip-tls-profile", secureRandom)
+      .fold(e => throw new IllegalStateException(e.message), identity)
 
   /** What the server actor found out about the node's address (how, when): written by its detection, read by the
     * dashboard (spec 029).
@@ -685,7 +692,7 @@ trait ServerActorBuilder:
   lazy val server: org.apache.pekko.actor.typed.ActorRef[ServerActor.Command] =
     classicSystem.spawn(
       Behaviors
-        .supervise(ServerActor(nodeStatusHolder, peerManager, blacklist, networkAddressInfo))
+        .supervise(ServerActor(nodeStatusHolder, peerManager, blacklist, networkAddressInfo, externalIpTls))
         .onFailure[Throwable](SupervisorStrategy.restartWithBackoff(2.seconds, 60.seconds, 0.1)),
       "server"
     )
@@ -831,7 +838,8 @@ trait EthSimulateServiceBuilder:
 
 trait EthMiningServiceBuilder:
   self: BlockchainBuilder & BlockchainConfigBuilder & MiningBuilder & JSONRpcConfigBuilder & OmmersPoolBuilder &
-    SyncControllerBuilder & PendingTransactionsManagerBuilder & TxPoolConfigBuilder & ActorSystemBuilder =>
+    SyncControllerBuilder & PendingTransactionsManagerBuilder & TxPoolConfigBuilder & ActorSystemBuilder &
+    SecureRandomBuilder & InstanceConfigProvider =>
 
   lazy val ethMiningService = new EthMiningService(
     blockchainReader,
@@ -843,7 +851,11 @@ trait EthMiningServiceBuilder:
     txPoolConfig.getTransactionFromPoolTimeout,
     this,
     coinbaseProvider,
-    classicSystem
+    classicSystem,
+    // the work notifier's client context (spec 030 FR-044); a profile that does not load stops the start
+    com.chipprbots.ethereum.tls.OutboundTls
+      .forSite(instanceConfig.config, "mining.notify-tls-profile", secureRandom)
+      .fold(e => throw new IllegalStateException(e.message), com.chipprbots.ethereum.tls.OutboundTls.pekkoHttpsContext)
   )
 
 /** The node's one gas price oracle (go-ethereum `eth/gasprice`), shared by eth_gasPrice, eth_maxPriorityFeePerGas,
@@ -1390,8 +1402,7 @@ trait RpcIdentityBuilder:
 
 trait JSONRpcHttpServerBuilder:
   self: ActorSystemBuilder & BlockchainBuilder & JSONRpcControllerBuilder & JSONRpcHealthcheckerBuilder &
-    SecureRandomBuilder & JSONRpcConfigBuilder & SSLContextBuilder & GraphQLServiceBuilder & InstanceConfigProvider &
-    RpcIdentityBuilder =>
+    SecureRandomBuilder & JSONRpcConfigBuilder & GraphQLServiceBuilder & InstanceConfigProvider & RpcIdentityBuilder =>
 
   lazy val maybeJsonRpcHttpServer: Either[String, JsonRpcHttpServer] =
     given org.apache.pekko.actor.ActorSystem = classicSystem
@@ -1824,7 +1835,6 @@ trait Node
     with JSONRpcConfigBuilder
     with JSONRpcHealthcheckerBuilder
     with JSONRpcControllerBuilder
-    with SSLContextBuilder
     with GraphQLServiceBuilder
     with RpcIdentityBuilder
     with JSONRpcHttpServerBuilder

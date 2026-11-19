@@ -50,9 +50,9 @@ class OutboundTlsRatchetSpec extends AnyFlatSpec with Matchers:
       |""".stripMargin
 
   private val listed =
-    """ssl-context 1 src/main/scala/a/Client.scala S8 moved later
-      |https-context 1 src/main/scala/a/Client.scala S8 moved later
-      |jdk-client 1 src/main/scala/a/Client.scala S8 moved later
+    """ssl-context 1 src/main/scala/a/Client.scala USES moved later
+      |https-context 1 src/main/scala/a/Client.scala USES moved later
+      |jdk-client 1 src/main/scala/a/Client.scala USES moved later
       |url-open 1 src/main/scala/a/Client.scala PLAIN an http URL
       |pekko-request 1 src/main/scala/a/Client.scala USES the factory's context
       |""".stripMargin
@@ -71,7 +71,7 @@ class OutboundTlsRatchetSpec extends AnyFlatSpec with Matchers:
   }
 
   it should "fail a stale line, and a line with no verdict or no reason" taggedAs UnitTest in {
-    val stale = listed + "url-open 1 src/main/scala/a/Gone.scala S8 removed\n"
+    val stale = listed + "url-open 1 src/main/scala/a/Gone.scala PLAIN removed\n"
     check(Map(client), stale).output should include("NO LONGER USED: url-open in src/main/scala/a/Gone.scala")
     check(Map(client), listed.replace("PLAIN an http URL", "because")).output should include("NO VERDICT")
     check(Map(client), listed.replace(" PLAIN an http URL", "")).output should include("NO REASON")

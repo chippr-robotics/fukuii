@@ -1,10 +1,6 @@
 package com.chipprbots.ethereum.jsonrpc.server.http
 
-import java.io.File
-import java.io.FileOutputStream
-import java.nio.charset.StandardCharsets
 import java.nio.file.Files
-import java.security.KeyStore
 import java.security.SecureRandom
 import javax.net.ssl.SSLContext
 
@@ -16,7 +12,6 @@ import cats.effect.IO
 import scala.concurrent.Await
 import scala.concurrent.duration.*
 
-import com.typesafe.config.ConfigFactory
 import org.scalatest.BeforeAndAfterAll
 import org.scalatest.flatspec.AnyFlatSpec
 import org.scalatest.matchers.should.Matchers
@@ -29,8 +24,6 @@ import com.chipprbots.ethereum.jsonrpc.server.http.JsonRpcHttpServer.JsonRpcHttp
 import com.chipprbots.ethereum.jsonrpc.server.http.JsonRpcHttpServer.RateLimitConfig
 import com.chipprbots.ethereum.nodebuilder.EngineApiStartupRefusal
 import com.chipprbots.ethereum.nodebuilder.StdNode
-import com.chipprbots.ethereum.security.SSLContextBuilder
-import com.chipprbots.ethereum.security.SSLError
 import com.chipprbots.ethereum.testing.Tags.*
 import com.chipprbots.ethereum.tls.TestPki
 import com.chipprbots.ethereum.tls.TlsConfigError
@@ -54,70 +47,7 @@ class SecureJsonRpcHttpServerStartSpec extends AnyFlatSpec with Matchers with Be
     dir.delete()
     ()
 
-  /** An (empty) PKCS12 keystore protected by `password`, and a password file holding `filePassword`. */
-  private def keystore(password: String, filePassword: String): (File, File) =
-    val ks = KeyStore.getInstance("pkcs12")
-    ks.load(null, password.toCharArray)
-    val keystoreFile = File.createTempFile("keystore", ".p12", dir)
-    val out = new FileOutputStream(keystoreFile)
-    try ks.store(out, password.toCharArray)
-    finally out.close()
-    val passwordFile = File.createTempFile("password", ".txt", dir)
-    Files.write(passwordFile.toPath, filePassword.getBytes(StandardCharsets.UTF_8))
-    (keystoreFile, passwordFile)
-
-  private def hocon(keystorePath: String, passwordFile: String) =
-    ConfigFactory.parseString(s"""
-      network.rpc.http.certificate {
-        keystore-path = "${keystorePath.replace("\\", "/")}"
-        keystore-type = "pkcs12"
-        password-file = "${passwordFile.replace("\\", "/")}"
-      }""")
-
   private val random = new SecureRandom()
-
-  "SSLContextBuilder.build" should "build the context of a good configuration" taggedAs (UnitTest, RPCTest) in {
-    val (ks, pw) = keystore("secret", "secret")
-    SSLContextBuilder.build(hocon(ks.getPath, pw.getPath), "network.rpc.http", random, "fukuii").isRight shouldBe true
-  }
-
-  it should "name the key when the keystore path is bad" taggedAs (UnitTest, RPCTest) in {
-    val (_, pw) = keystore("secret", "secret")
-    val result =
-      SSLContextBuilder.build(hocon("/no/such/keystore.p12", pw.getPath), "network.rpc.http", random, "fukuii")
-    val reason = result.left.getOrElse(fail("a missing keystore was accepted")).reason
-    reason should include("fukuii.network.rpc.http.certificate")
-    reason should include("/no/such/keystore.p12")
-  }
-
-  it should "name the key when the password is wrong" taggedAs (UnitTest, RPCTest) in {
-    val (ks, pw) = keystore("secret", "not-the-password")
-    val result = SSLContextBuilder.build(hocon(ks.getPath, pw.getPath), "network.rpc.http", random, "fukuii")
-    result.left.getOrElse(fail("a wrong password was accepted")).reason should include(
-      "fukuii.network.rpc.http.certificate"
-    )
-  }
-
-  it should "name the key when the section is missing or null" taggedAs (UnitTest, RPCTest) in {
-    val missing = SSLContextBuilder.build(ConfigFactory.empty(), "network.rpc.http", random, "fukuii")
-    missing.left.getOrElse(fail("no section was accepted")).reason should include("fukuii.network.rpc.http.certificate")
-    val nulled =
-      SSLContextBuilder.build(
-        ConfigFactory.parseString("network.rpc.http.certificate = null"),
-        "network.rpc.http",
-        random
-      )
-    nulled.left.getOrElse(fail("a null section was accepted")).reason should include("network.rpc.http.certificate")
-  }
-
-  it should "read the configuration it is given, not the global one" taggedAs (UnitTest, RPCTest) in {
-    val (ks, pw) = keystore("secret", "secret")
-    val instanceA = hocon(ks.getPath, pw.getPath)
-    val instanceB = hocon("/no/such/keystore.p12", pw.getPath)
-    // same key, two instances, two answers: the global ConfigFactory.load() has neither keystore
-    SSLContextBuilder.build(instanceA, "network.rpc.http", random).isRight shouldBe true
-    SSLContextBuilder.build(instanceB, "network.rpc.http", random).isLeft shouldBe true
-  }
 
   private def serverConfig(modeValue: String): JsonRpcHttpServerConfig = new JsonRpcHttpServerConfig:
     override val mode: String = modeValue
@@ -180,7 +110,10 @@ class SecureJsonRpcHttpServerStartSpec extends AnyFlatSpec with Matchers with Be
     RPCTest
   ) in {
     val e = intercept[IllegalStateException](
-      new TestClient("https://localhost:1", () => Left(SSLError("faucet.rpc-client.certificate: keystore is missing")))
+      new TestClient(
+        "https://localhost:1",
+        () => Left(TlsConfigError("faucet.rpc-client.certificate: keystore is missing"))
+      )
     )
     e.getMessage should include("faucet.rpc-client.certificate")
   }
@@ -202,8 +135,8 @@ class SecureJsonRpcHttpServerStartSpec extends AnyFlatSpec with Matchers with Be
   }
 
   "An RpcClient for an http node" should "not look at the TLS configuration" taggedAs (UnitTest, RPCTest) in {
-    noException should be thrownBy new TestClient("http://localhost:1", () => Left(SSLError("ignored")))
+    noException should be thrownBy new TestClient("http://localhost:1", () => Left(TlsConfigError("ignored")))
   }
 
-  private class TestClient(uri: String, ssl: () => Either[SSLError, SSLContext])
+  private class TestClient(uri: String, ssl: () => Either[TlsConfigError, SSLContext])
       extends RpcClient(org.apache.pekko.http.scaladsl.model.Uri(uri), 1.second, ssl)(using system, system.dispatcher)
