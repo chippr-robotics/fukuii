@@ -1,0 +1,27 @@
+# Spec 030 FR-045 (slice 7): where TLS for an outbound client, or an outbound connection, is made outside the outbound
+# factory (tls/OutboundTls), and why each is allowed.
+#
+# Checked by scripts/check-outbound-tls.sh, which says what each construct is. Run it with --inventory to see what the
+# tree holds.
+#
+#   construct  count  file  reason
+#
+# The count is exact: more uses fail the check, and so do fewer. A reason starts with one of:
+#   FACTORY   the factory itself, or the listeners' server side (tls/)
+#   USES      a client that takes its TLS from the factory and passes it in
+#   PLAIN     a connection that makes no TLS (http, or a socket)
+#   PROBE     the dashboard's endpoint probe, which reports the certificate it sees without verifying it
+#   S8        a client slice 8 moves onto the factory; its line goes then (SC-004)
+
+ssl-context 1 src/main/scala/com/chipprbots/ethereum/tls/OutboundTls.scala FACTORY the client context of a profile, from its loaded material
+ssl-context 1 src/main/scala/com/chipprbots/ethereum/tls/TlsContexts.scala FACTORY the listeners' server contexts, with the reloading managers
+https-context 1 src/main/scala/com/chipprbots/ethereum/tls/OutboundTls.scala FACTORY the Pekko client context, host names checked on every engine
+https-context 1 src/main/scala/com/chipprbots/ethereum/tls/TlsServerEngine.scala FACTORY the listeners' server connection context
+url-open 1 src/main/scala/com/chipprbots/ethereum/tls/OutboundTls.scala FACTORY openHttpsStream: https only, the profile's socket factory, https-only redirects
+pekko-request 1 src/main/scala/com/chipprbots/ethereum/jsonrpc/client/RpcClient.scala USES the faucet's client of the node, on FaucetRpcClientTls's context
+ssl-context 1 src/main/scala/com/chipprbots/ethereum/security/SSLContextFactory.scala S8 the legacy SSLContextBuilder; slice 8 retires security/ TLS
+ssl-context 1 src/main/scala/com/chipprbots/ethereum/console/ops/EndpointProbe.scala S8 the probe's recording trust manager; slice 8 uses the listener's profile for a need listener (FR-046)
+jdk-client 1 src/main/scala/com/chipprbots/ethereum/console/ops/EndpointProbe.scala S8 the probe's client; slice 8 moves it onto the factory
+url-open 1 src/main/scala/com/chipprbots/ethereum/BootstrapDownload.scala S8 the bootstrap download; slice 8 moves it onto openHttpsStream
+url-open 1 src/main/scala/com/chipprbots/ethereum/network/ExternalIPDetector.scala S8 the external-IP lookup; slice 8 moves it onto the factory
+pekko-request 1 src/main/scala/com/chipprbots/ethereum/consensus/pow/WorkNotifier.scala S8 the work notifier; slice 8 gives it the factory's context

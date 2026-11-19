@@ -82,6 +82,11 @@ jobs:
       - name: Check the head writer allow-list (spec 018)
         run: scripts/check-head-writers.sh
 
+      # Spec 030 FR-045: TLS for an outbound client is made by tls/OutboundTls, or where
+      # scripts/outbound-tls-allowlist.txt says. OutboundTlsRatchetSpec runs the same script in the test step.
+      - name: Check the outbound TLS allow-list (spec 030)
+        run: scripts/check-outbound-tls.sh
+
       - name: Compile all modules
         run: sbt compile-all
         env:

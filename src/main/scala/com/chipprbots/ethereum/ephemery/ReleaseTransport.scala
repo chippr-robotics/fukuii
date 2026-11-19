@@ -383,16 +383,14 @@ object JdkHttpsTransport extends Logger:
           else "none"
         val trust = if props("javax.net.ssl.trustStore").exists(_.nonEmpty) then "yes" else "no"
         log.info(s"release transport: proxy: $source; custom trust store: $trust")
+        // From the outbound factory (spec 030 FR-040): the `system` profile, as this fetch runs before the node's own
+        // configuration, and its profiles, are read; host names checked; no redirect followed (each hop is checked
+        // against the allow-list by this transport itself).
         val ctx = sslContext.getOrElse(SSLContext.getDefault)
-        val params = ctx.getDefaultSSLParameters
-        params.setEndpointIdentificationAlgorithm("HTTPS")
-        val b = HttpClient
-          .newBuilder()
+        val b = com.chipprbots.ethereum.tls.OutboundTls
+          .jdkHttpClientBuilder(ctx, com.chipprbots.ethereum.tls.RedirectPolicy.Never)
           .version(HttpClient.Version.HTTP_1_1)
-          .followRedirects(HttpClient.Redirect.NEVER)
           .connectTimeout(ConnectTimeout)
-          .sslContext(ctx)
-          .sslParameters(params)
         sel.foreach(b.proxy)
         new JdkHttpsTransport(b.build(), policy, clock, s"fukuii/$version")
       }

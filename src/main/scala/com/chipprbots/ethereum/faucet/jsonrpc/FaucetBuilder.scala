@@ -45,7 +45,7 @@ trait FaucetRpcServiceBuilder:
     new WalletRpcClient(
       faucetConfig.rpcClient.address,
       faucetConfig.rpcClient.timeout,
-      () => sslContext(rawConfig, "faucet.rpc-client")
+      () => FaucetRpcClientTls.context(rawConfig, rawFukuiiConfig, secureRandom)
     )
   val walletService = new WalletService(walletRpcClient, keyStore, faucetConfig)
   val faucetSupervisor: FaucetSupervisor = new FaucetSupervisor(walletService, faucetConfig, shutdown)
