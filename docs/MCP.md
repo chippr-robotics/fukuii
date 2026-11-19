@@ -2,7 +2,7 @@
 
 ## Overview
 
-Fukuii includes Model Context Protocol (MCP) support integrated into its existing JSON-RPC infrastructure. The MCP methods are available via the standard JSON-RPC endpoint on port 8545, alongside traditional Ethereum JSON-RPC methods.
+Fukuii includes Model Context Protocol (MCP) support integrated into its existing JSON-RPC infrastructure. The MCP methods are available via the standard JSON-RPC endpoints (HTTP on port 8546 and WebSocket on port 8552 by default, and the IPC socket), alongside traditional Ethereum JSON-RPC methods.
 
 This integration enables AI assistants and other intelligent agents to interact with, monitor, and manage the Fukuii node through a standardized protocol using the same robust, production-tested infrastructure that powers the Ethereum JSON-RPC API.
 
@@ -47,9 +47,9 @@ The MCP tools are read-only and answer from the node's own state; they do not ne
 
 MCP methods follow the same JSON-RPC 2.0 protocol as standard Ethereum methods. You can call them via:
 
-**HTTP/HTTPS:**
+**HTTP/HTTPS** (`network.rpc.http.port`, default 8546):
 ```bash
-curl -X POST http://localhost:8545 \
+curl -X POST http://localhost:8546 \
   -H "Content-Type: application/json" \
   -d '{
     "jsonrpc": "2.0",
@@ -59,9 +59,9 @@ curl -X POST http://localhost:8545 \
   }'
 ```
 
-**WebSocket:**
+**WebSocket** (`network.rpc.ws.port`, default 8552; the WebSocket listener is off until `network.rpc.ws.enabled = true`):
 ```javascript
-const ws = new WebSocket('ws://localhost:8545');
+const ws = new WebSocket('ws://localhost:8552');
 ws.send(JSON.stringify({
   jsonrpc: "2.0",
   id: 1,
@@ -78,7 +78,7 @@ For AI assistants like Claude Desktop, you can create a simple proxy script that
 #!/bin/bash
 # mcp-proxy.sh
 while IFS= read -r line; do
-  curl -s -X POST http://localhost:8545 \
+  curl -s -X POST http://localhost:8546 \
     -H "Content-Type: application/json" \
     -d "$line"
 done
@@ -247,25 +247,32 @@ Available prompts:
 
 Since MCP methods are integrated into the JSON-RPC API, they benefit from all existing security features:
 
-- **Authentication**: Use the existing JSON-RPC authentication mechanisms
-- **CORS**: Configure CORS settings in `fukuii.network.rpc.cors-allowed-origins`
-- **Rate Limiting**: Automatic rate limiting via `fukuii.network.rpc.rate-limit`
-- **HTTPS**: Enable via `fukuii.network.rpc.certificate-keystore-path`
-- **API Control**: Explicitly enable/disable via configuration
+- **Authentication**: client certificates (mutual TLS). With `fukuii.network.rpc.http.tls.client-auth = "need"` (or
+  `ws.tls`), only clients holding a certificate from the profile's truststore connect; an identity rule in
+  `fukuii.network.rpc.client-identities` can grant `mcp` to one certificate only. There is no password or API-key
+  authentication
+- **CORS**: Configure CORS settings in `fukuii.network.rpc.http.cors-allowed-origins`
+- **Rate Limiting**: Per-IP rate limiting via `fukuii.network.rpc.http.rate-limit` (off by default: `enabled = false`)
+- **HTTPS**: `fukuii.network.rpc.http.tls { enabled = true, profile = "<name>" }` with a profile under
+  `fukuii.tls.profiles` (the deprecated `mode = "https"` with a `certificate` block is removed in 0.13.0)
+- **API Control**: `mcp` is opt-in per transport (`fukuii.network.rpc.http.apis`, `ws.apis`, `ipc.apis`)
 
 **Production Recommendations:**
-1. Enable HTTPS for all external access
-2. Use authentication for sensitive operations
+1. Keep the listener on `localhost` (the default), or enable TLS for all external access: a non-loopback listener
+   without TLS refuses to start unless its `allow-insecure-bind = true` is set
+2. Use client certificates (`client-auth = "need"`) for callers on other hosts
 3. Configure appropriate CORS restrictions
 4. Enable only required APIs
 5. Monitor rate limits and adjust as needed
+
+See the [TLS Operations runbook](runbooks/tls-operations.md) for profiles, mutual TLS and identity rules.
 
 ## Example Interactions
 
 ### Check Node Health
 
 ```bash
-curl -X POST http://localhost:8545 \
+curl -X POST http://localhost:8546 \
   -H "Content-Type: application/json" \
   -d '{
     "jsonrpc": "2.0",
@@ -281,7 +288,7 @@ curl -X POST http://localhost:8545 \
 ### Read Node Configuration
 
 ```bash
-curl -X POST http://localhost:8545 \
+curl -X POST http://localhost:8546 \
   -H "Content-Type: application/json" \
   -d '{
     "jsonrpc": "2.0",
@@ -296,7 +303,7 @@ curl -X POST http://localhost:8545 \
 ### Get Troubleshooting Prompt
 
 ```bash
-curl -X POST http://localhost:8545 \
+curl -X POST http://localhost:8546 \
   -H "Content-Type: application/json" \
   -d '{
     "jsonrpc": "2.0",

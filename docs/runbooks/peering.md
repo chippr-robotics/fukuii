@@ -14,7 +14,7 @@ This runbook covers peer discovery, network connectivity troubleshooting, and op
 2. [Peer Discovery Process](#peer-discovery-process)
 3. [Monitoring Peer Health](#monitoring-peer-health)
 4. [Troubleshooting Connectivity](#troubleshooting-connectivity)
-5. [Advanced Configuration](#advanced-configuration)
+5. [Advanced Configuration](#advanced-configuration), including the [Consortium Node Allowlist](#consortium-node-allowlist)
 6. [Best Practices](#best-practices)
 
 ## Understanding Peering
@@ -153,7 +153,8 @@ curl -X POST --data '{"jsonrpc":"2.0","method":"admin_peers","params":[],"id":1}
 
 Note: the `admin` namespace is off by default over HTTP and WebSocket (and on over IPC), so `admin_peers` answers
 `-32601 Method not found` until you opt in: `fukuii.network.rpc.http.apis = "eth,net,web3,fukuii,admin"`. Enable it
-only on a loopback endpoint. `net_peerCount` needs only `net`; the other `net_*` peer methods (`net_listPeers`,
+only on a loopback endpoint, or grant it to one operator's client certificate with an identity rule on an mTLS
+listener ([TLS Operations](tls-operations.md#identity-rules-grant-namespaces)). `net_peerCount` needs only `net`; the other `net_*` peer methods (`net_listPeers`,
 `net_connectToPeer`, `net_nodeInfo`, ...) are served with `admin` too.
 
 ### Monitor Logs for Peer Activity
@@ -296,14 +297,17 @@ fukuii.network.server-address.advertised-address = "203.0.113.10"
 
 **E. Manually add peers**
 
-If discovery fails, you can manually specify peers in your config:
+If discovery fails, list peers in `<datadir>/static-nodes.json` (dialled at every start and kept connected):
 
-```hocon
-fukuii.network.bootstrap-nodes = [
+```json
+[
   "enode://pubkey@ip:port",
   "enode://pubkey@ip:port"
 ]
 ```
+
+or add one at runtime with `admin_addPeer` (needs the `admin` namespace). `bootstrap-nodes` is a key of the chain
+configuration (`conf/base/chains/<network>-chain.conf`), not of `fukuii.network`.
 
 Find bootstrap nodes from:
 - Official ETC documentation
@@ -476,15 +480,116 @@ For private networks or when you have a fixed set of peers:
 fukuii.network {
   discovery.discovery-enabled = false
   discovery.reuse-known-nodes = false
-  
-  bootstrap-nodes = [
-    "enode://pubkey1@ip1:port1",
-    "enode://pubkey2@ip2:port2"
-  ]
 }
 ```
 
+and list the peers in `<datadir>/static-nodes.json`:
+
+```json
+[
+  "enode://pubkey1@ip1:port1",
+  "enode://pubkey2@ip2:port2"
+]
+```
+
+(`bootstrap-nodes` is a key of the chain configuration, `conf/base/chains/<network>-chain.conf`, not of
+`fukuii.network`.)
+
 **Warning**: Only use this if you have reliable static peers. Otherwise, your node may become isolated.
+
+Disabling discovery only stops the node looking for peers: any node that knows the address can still connect. To
+refuse every node that is not a member, use the allowlist below.
+
+### Consortium Node Allowlist
+
+On a private or consortium network, `fukuii.network.peer.node-allowlist` admits only listed node IDs (spec 030). It
+is the P2P counterpart of mutual TLS: RLPx is not TLS, but its handshake already proves that the remote side holds the
+private key of its node ID, so the node checks that ID against the list.
+
+```hocon
+fukuii.network.peer.node-allowlist {
+  enabled = true                       # default false
+  nodes = [                            # "enode://<128 hex>@host:port" (also dialled) or a bare 128-hex id (inbound only)
+    "enode://<128 hex>@192.168.1.101:30303"
+  ]
+  file = "/etc/fukuii/allowlist.json"  # optional; JSON array in the static-nodes.json format; needed for admin_ edits
+  reload-interval = 1 minute           # how often the file is checked for changes (SHA-256 of its content)
+}
+```
+
+What it does when `enabled = true`:
+
+- **Inbound**: right after the RLPx auth handshake, before the devp2p Hello, a node whose ID is not listed is
+  disconnected. **Outbound**: every dial (static nodes, known nodes, `admin_addPeer`, `admin_addTrustedPeer`,
+  `net_connectToPeer`) is checked first; those methods answer an error `node <id prefix>... is not on the node
+  allowlist` for an unlisted node, and the peer manager logs `Not dialling <enode>: ...` at INFO.
+- **Discovery is off**: discv4, discv5 and the EIP-1459 DNS tree walk do not run and no UDP port is bound, whatever
+  `network.discovery.discovery-enabled` says (the node logs a WARN saying so). Persisted known nodes are still dialled
+  if they are listed. Entries with an address (`enode://...@host:port`) are dial candidates.
+- **Startup check**: every node in `<datadir>/static-nodes.json` and every `bootstrap-nodes` entry of the chain
+  configuration must be on the list (in `nodes` or the file), or the node refuses to start:
+  `Refusing to start: static node <id prefix> is not on fukuii.network.peer.node-allowlist`. This applies under the
+  `enterprise` modifier too, although that modifier otherwise ignores bootstrap nodes. An entry that does not parse
+  also refuses the start. The node's own ID on the list is ignored. IDs are case-insensitive.
+- At start the node logs `P2P node allowlist on: <n> node(s), reload every <interval>; discovery is off` (INFO).
+  A change to the list logs `Node allowlist changed (generation <g>): <n> node(s)`, and each peer dropped by a removal
+  `ALLOWLIST_REMOVED: disconnecting <id>: it is no longer on the node allowlist`.
+
+**Editing the list without a restart.** Two ways, both needing `file`:
+
+1. Edit the file. It is re-read every `reload-interval` when its content changes; a version that does not parse is
+   refused (counted in `app_p2p_allowlist_reload_failures_total`) and the last good list stays.
+2. Call the `admin_` methods below. Each call is all-or-nothing: under one lock the node re-reads the file if it changed
+   on disk, applies the change, writes the file atomically (temporary file, fsync, rename), then swaps the in-memory
+   list. The file is never left half-written, and a failed write changes nothing.
+
+| Method | Params | Result |
+| --- | --- | --- |
+| `admin_addNodesToAllowlist` | `[["enode://<128 hex>@<host>:<port>" or "<128 hex>", ...]]`, 1 to 256 entries | `true`; listed nodes with an address become dial candidates |
+| `admin_removeNodesFromAllowlist` | the same | `true`; connected peers no longer listed are disconnected |
+| `admin_getNodesAllowlist` | `[]` | `{ "enabled", "file", "nodes": [ { "id", "enode", "sources" } ] }`, sorted by id; `sources` among `config`, `file`, `static`, `bootnode` |
+
+They are in the `admin` namespace, which no HTTP or WebSocket default includes. Call them over the IPC socket (its
+default serves `admin`), or over HTTP/WS for a client certificate whose identity rule grants `admin`
+([TLS Operations](tls-operations.md#identity-rules-grant-namespaces)). Without `admin` the caller gets `-32601`. Each
+edit is logged at INFO with the caller's rule name or transport:
+`Allowlist: added <n> node(s) [<id prefix>...] by <rule name | transport>`.
+
+```bash
+IPC=$HOME/.fukuii/<network>/fukuii.ipc      # network.rpc.ipc.enabled = true
+echo '{"jsonrpc":"2.0","id":1,"method":"admin_addNodesToAllowlist","params":[["enode://<128 hex>@192.168.1.102:30303"]]}' \
+  | socat - UNIX-CONNECT:$IPC
+echo '{"jsonrpc":"2.0","id":2,"method":"admin_getNodesAllowlist","params":[]}' | socat - UNIX-CONNECT:$IPC | jq .
+echo '{"jsonrpc":"2.0","id":3,"method":"admin_removeNodesFromAllowlist","params":[["<128 hex>"]]}' \
+  | socat - UNIX-CONNECT:$IPC
+```
+
+Errors (`-32000` unless noted; the message names the first offending entry):
+
+| Case | Message |
+| --- | --- |
+| Allowlist off | `node allowlist is disabled (fukuii.network.peer.node-allowlist.enabled = false)` |
+| No `file` configured | `node allowlist has no file; runtime edits need fukuii.network.peer.node-allowlist.file` |
+| Bad entry | `-32602` `invalid enode or node id: <entry>` |
+| Empty, or more than 256 entries | `-32602` `expected 1 to 256 entries` |
+| Duplicate in the request | `-32602` `duplicate entry: <id prefix>` |
+| Add: already in the file | `already on the allowlist: <id prefix>` |
+| Remove: not listed | `not on the allowlist: <id prefix>` |
+| Remove: from `nodes`, static nodes or bootnodes | `<id prefix> comes from <source> and cannot be removed at runtime` (change that source and restart) |
+| File edited by hand and no longer parses | `allowlist file <path> does not parse (<reason>); fix it before editing` |
+| Write or rename failed | `could not write <path>: <reason>; nothing changed` |
+
+**Metrics** (`fukuii.metrics.enabled = true`):
+
+| Metric | Labels | Meaning |
+| --- | --- | --- |
+| `app_p2p_allowlist_rejections_total` | `direction` (`inbound`, `outbound`) | Connections and dials refused |
+| `app_p2p_allowlist_size` | none | Listed node IDs |
+| `app_p2p_allowlist_reload_failures_total` | none | File versions that did not parse |
+| `app_p2p_allowlist_edits_total` | `op` (`add`, `remove`), `result` (`ok`, `refused`, `failed`) | `admin_` edits |
+
+An inbound rejection is logged at DEBUG per connection; watch `app_p2p_allowlist_rejections_total` rather than the
+log. A sustained inbound rate means a node outside the consortium keeps trying to connect.
 
 ### Custom Discovery Settings
 
@@ -542,9 +647,11 @@ fukuii.network {
 ### For Private/Test Networks
 
 1. **Disable public discovery** - Use static peers only
-2. **Configure bootstrap nodes** - Point to your network's nodes
-3. **Adjust timeout values** - May need tuning for test environments
-4. **Document peer topology** - Maintain list of all network nodes
+2. **Configure bootstrap or static nodes** - Point to your network's nodes
+3. **Consortium networks: turn on the [node allowlist](#consortium-node-allowlist)** - Refuse every node that is not a
+   member
+4. **Adjust timeout values** - May need tuning for test environments
+5. **Document peer topology** - Maintain list of all network nodes
 
 ### General Recommendations
 
@@ -576,7 +683,8 @@ peer_disconnect_rate > 10 per minute
 If metrics are enabled, query peer metrics:
 
 ```bash
-curl http://localhost:9095/metrics | grep peer
+# Default port 13798 (fukuii.metrics.port), bound to localhost (fukuii.metrics.interface)
+curl http://localhost:13798/metrics | grep -E "peer|p2p_allowlist"
 ```
 
 Example Prometheus alert:
