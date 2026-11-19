@@ -3336,3 +3336,15 @@ items:
     links:
       spec: 018
     notes: "ConsensusAdapter.forkWeightNotStored (PR #1943) passes blockValidation.firstInvalidHeaderOf; switch to firstInvalidHeaderOfNotJudged (B-391) if the user agrees the seal-only first header applies there too"
+  - id: B-393
+    title: "Spec 018 C6 live gates: EG-6 (Mordor + private PoW net), EG-12 (ETC mainnet SNAP), EG-9 (v2 archive), M10/M13 baselines"
+    priority: P1
+    status: open
+    area: storage
+    size: L
+    opened: 2026-11-19
+    refs: []
+    links:
+      spec: 018
+    depends_on: [B-067]
+    notes: "Tasks T247, T248, T258, T264. Code and harnesses are merged (#1936, #1937, #1940, #1942). They need live hosts and the user's T011 host decisions. Harnesses: scripts/etc-private-net, scripts/etc-mainnet-sync/run-eg12.sh, scripts/etc-differential/compare-balances.sh. Open choices: --few-snap-peers, --export-allow-estimated-td. B-388 (treasury address) must be settled before any Olympia block is set."
