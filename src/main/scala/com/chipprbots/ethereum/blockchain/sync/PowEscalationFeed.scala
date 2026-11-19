@@ -52,6 +52,9 @@ import com.chipprbots.ethereum.domain.ChainWeight
   *   chain has it
   * @param note
   *   told what was left out of the count, and why
+  * @param chainHashAt
+  *   the hash of the chain's block at a height, by the hash index: whether a block whose header is not stored is the
+  *   node's own (B-383)
   */
 final class PowEscalationFeed(
     watch: EscalationWatch,
@@ -60,7 +63,8 @@ final class PowEscalationFeed(
     headerOf: ByteString => Option[BlockHeader] = _ => None,
     onTheChain: BlockHeader => Boolean = _ => true,
     mess: Option[PowEscalationFeed.Mess] = None,
-    note: String => Unit = _ => ()
+    note: String => Unit = _ => (),
+    chainHashAt: BigInt => Option[BlockHash] = _ => None
 ):
   import PowEscalationFeed.*
 
@@ -105,9 +109,9 @@ final class PowEscalationFeed(
               note(s"branch $name is not counted: the header of its block ${header.number} is not valid ($why)")
             case None =>
               val first = firstAboveFork(headers.head, headerOf, onTheChain)
-              if messWouldRefuse(first, of) then
-                note(s"branch $name is not counted: the reorganisation to it is one MESS refuses (ECBP-1100)")
-              else counted(headers, name, of, first, fault)
+              messLeavesOut(first, of) match
+                case Some(why) => note(s"branch $name is not counted: $why")
+                case None      => counted(headers, name, of, first, fault)
 
   /** Whether the branch of `headers`, from the stored weight of the block it stands on, outweighs the head, by the
     * weights a branch is counted by. False where either weight is not stored. It reads and says only: nothing is
@@ -139,31 +143,57 @@ final class PowEscalationFeed(
       case Refusal.Unreachable => watch.branchUnreachable(refusedBranch, name, fault.getMessage)
       case Refusal.Fault       => watch.branchRefused(refusedBranch, headers.last.number.value, name, fault.getMessage)
 
-  // Whether the reorganisation to a branch of weight `of`, whose first block above the chain is `first`, is one MESS
-  // refuses (forge, B-306). The head's header and the head's weight are read apart: they are of the same head because
-  // the feed is told of one import at a time, after it is done (ConsensusAdapter). A batch that the fetcher resolves is never handed to consensus when it is; a block a peer
-  // announces is, and without this a deep branch spread that way would be counted as the chain to follow. Where the
-  // rule is in force and what it weighs is not stored, the branch is not counted either: nothing says it would pass.
-  private def messWouldRefuse(first: BlockHeader, of: ChainWeight): Boolean =
-    mess.exists { rule =>
-      rule.head().exists { head =>
-        rule.activeAt(head.number.value) && {
-          val weighed = for
-            fork <- headerOf(first.parentHash.value)
-            // the block the two chains share is of the node's chain. Where the walk down the branch ended on a side
-            // block (its reach), what would be weighed is not what the rule weighs: the branch is not counted (forge)
-            if onTheChain(fork)
-            forkWeight <- weightOf(first.parentHash)
-            headWeight <- headWeight()
-          yield rule.refuses(
-            math.max(0L, head.unixTimestamp - fork.unixTimestamp),
-            headWeight.totalDifficulty.value - forkWeight.totalDifficulty.value,
-            of.totalDifficulty.value - forkWeight.totalDifficulty.value
-          )
-          weighed.getOrElse(true)
-        }
-      }
-    }
+  // Why the reorganisation to a branch of weight `of`, whose first block above the chain is `first`, keeps it out of the
+  // count where MESS is in force (forge, B-306), if it does. The head's header and the head's weight are read apart:
+  // they are of the same head because the feed is told of one import at a time, after it is done (ConsensusAdapter). A
+  // batch that the fetcher resolves is never handed to consensus when MESS refuses it; a block a peer announces is, and
+  // without this a deep branch spread that way would be counted as the chain to follow.
+  //
+  // The header of the block the branch stands on not stored, where the hash index names that block as this node's at
+  // its height, is a hole in this node's datadir, and MESS does not refuse on it (B-383, spec 018 C6 PR-B,
+  // BranchResolution.messRejects): the branch is judged by weight and consensus refuses it as a fault of this node
+  // (`StateUnavailable`). It is counted as that fault, by how far it grows; read as a refusal by MESS it was never
+  // counted, and the node waited with no end. Its first header reaches here by its seal alone: the validation the feed
+  // is given checks it without its parent rules there, and only there (B-391,
+  // BlockValidation.firstInvalidHeaderOfNotJudged). Where the block is not known to be the node's, or the walk down
+  // the branch ended on a side block (its reach), what would be weighed is not what the rule weighs: not counted
+  // (forge).
+  private def messLeavesOut(first: BlockHeader, of: ChainWeight): Option[String] =
+    for
+      rule <- mess
+      head <- rule.head()
+      if rule.activeAt(head.number.value)
+      why <- messWeighs(rule, head, first, of)
+    yield why
+
+  private def messWeighs(rule: Mess, head: BlockHeader, first: BlockHeader, of: ChainWeight): Option[String] =
+    headerOf(first.parentHash.value) match
+      case Some(fork) if onTheChain(fork) =>
+        val weighed = for
+          forkWeight <- weightOf(first.parentHash)
+          headWeight <- headWeight()
+        yield rule.refuses(
+          math.max(0L, head.unixTimestamp - fork.unixTimestamp),
+          headWeight.totalDifficulty.value - forkWeight.totalDifficulty.value,
+          of.totalDifficulty.value - forkWeight.totalDifficulty.value
+        )
+        weighed match
+          case Some(false) => None
+          case Some(true)  => Some("the reorganisation to it is one MESS refuses (ECBP-1100)")
+          case None        => Some("MESS is in force and the weight it weighs from the shared block is not stored")
+      case Some(_) =>
+        Some("MESS is in force and the walk down the branch ended on a side block: the shared block is not known")
+      case None if first.number.value > 0 && chainHashAt(first.number.value - 1).contains(first.parentHash) =>
+        note(
+          s"MESS cannot weigh the branch from block ${first.number}: the header of this node's block " +
+            s"${first.number.value - 1} is not stored; it is counted as a fault of this node (B-383)"
+        )
+        None
+      case None =>
+        Some(
+          s"MESS is in force and the header of the block under block ${first.number} is not stored, and it is " +
+            "not this node's block at its height: the shared block is not known"
+        )
 
   /** Proof-of-work blocks became the head: by extension, or by a reorganisation. */
   def headMoved(newHead: Block): Unit =
