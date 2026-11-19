@@ -3313,23 +3313,19 @@ items:
   - id: B-391
     title: "PoW escalation: a heavier branch whose fork header is missing is never counted; firstInvalidHeaderOf answers HeaderParentNotFoundError"
     priority: P2
-    status: review
+    status: done
     area: sync
     opened: 2026-11-19
+    closed: 2026-11-19
     refs: []
     links:
       prs: [1938]
       spec: 018
     depends_on: [B-383]
-    claim:
-      by: cloud-dc960fdc
-      agent: forge
-      since: 2026-11-19T00:28:02Z
-      heartbeat: 2026-11-19T00:46:01Z
     notes: |-
-      Found on B-385 (forge). B-383 (#1938) counts the missing-header arm in PowEscalationFeed, but before that arm the feed asks BlockValidation.firstInvalidHeaderOf, which cannot check the first header's parent rules without the parent header and answers HeaderParentNotFoundError: the branch is left out as invalid, so in production the wait still has no end. Decide (forge): validate the first header without its parent rules (seal, difficulty bounds unchecked) only where the hash index names the parent as this node's, or escalate on another path. Unvalidated headers must never be counted.
       2026-11-19 in-progress: User 2026-11-19: seal-only first header when the index names the missing parent as ours at n-1; folded into #1938.
       2026-11-19 review: Commit 2edbe246a on #1938: feed-only seal-only first header; 284/0 targeted; import unchanged.
+      2026-11-19 done: Merged as d18d6e8bb: feed-only seal-only first header when the index names the missing parent as ours.
   - id: B-392
     title: "B-385 forkWeightNotStored validates with the strict firstInvalidHeaderOf: a branch whose fork header and weight are both missing is never counted"
     priority: P2
