@@ -1,8 +1,7 @@
 # fukuii shared backlog (schema version 1). Rendered at https://docs.fukuii.com/development/tracker/
 # Change it with scripts/backlog/backlog.py on staging (claim, status, done, ...); README.md has the protocol.
 # Hand edits in the GitHub web UI are fine: keep the schema (backlog.py check), never delete or reuse an id
-# (drop the item instead; `backlog.py prune` moves closed items to archive.yaml). Comments other than this
-# header are not kept when the tool rewrites the file.
+# (drop the item instead). Comments other than this header are not kept when the tool rewrites the file.
 version: 1
 expiry_hours: 24
 items:
@@ -1968,21 +1967,18 @@ items:
   - id: B-236
     title: "028 S5: live checks (24 h follow, 166 reset under a supervisor, Hoodi peers) and closure"
     priority: P2
-    status: in-progress
+    status: done
     area: ops
     size: M
     opened: 2026-11-12
+    closed: 2026-11-19
     refs: [B-227]
     links:
       spec: specs/028-builtin-ephemery-hoodi
-    claim:
-      by: dev-node
-      agent: main
-      since: 2026-11-13T15:29:09Z
-      heartbeat: 2026-11-17T18:29:24Z
     notes: |-
       2026-11-13 in-progress: S5 running on dev-node since 2026-11-13 09:34 CST: user units fukuii-ephemery-builtin + lighthouse-ephemery-builtin, root /chipprbots/blockchain/ephemery/builtin, jar 0.11.78 (staging 8b82e132c); 165 reset 2026-11-19 19:00 UTC
       dev-node: please heartbeat (last 11-13); claim kept, S5 runs to the 11-19 19:00 UTC reset.
+      2026-11-19 done: S5 PASS on dev-node: SC-007 followed 165 >24h (11-13→11-15); SC-008 exit 75 at 2026-11-19T19:00:00Z, refetched ephemery-166 (chain 39438166), new datadir, following with Lighthouse by 19:15; Hoodi: 12 peer handshakes (networkId 560048) in 9 s. Units stopped per user.
   - id: B-237
     title: PeerManagerActor dials bootstrap/discovered enodes with TCP port 0 (enode ...:0?discport=N form)
     priority: P3
