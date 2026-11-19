@@ -286,8 +286,11 @@ class ConsensusAdapter(
   /** A proof-of-work branch, known by its `headers` from the block above the one it stands on, whose fork choice could
     * not be made: the chain weight of that block is not stored (`BranchResolution.withoutForkWeight`, B-385). No
     * verdict was given on it, and it is a fault of this node's datadir: told to the escalation's feed as a branch this
-    * node's state could not take is, with the header validation of an import, and counted by how far it grows. The feed
-    * weighs it from the head; a branch it cannot weigh, or that is not the heavier, is not counted.
+    * node's state could not take is, with the header validation of an import less the parent rules of a first header
+    * that stands on this node's own block whose header is not stored, as [[branchOutOfReach]] is
+    * ([[BlockValidation.firstInvalidHeaderOfNotJudged]], B-392), and counted by how far it grows. The feed weighs it
+    * from the head, by the head's ancestry down to the hash the first header names, without the header of that block; a
+    * branch it cannot weigh, or that is not the heavier, is not counted.
     *
     * To be called under the import lock, as [[branchOutOfReach]] is.
     */
@@ -298,7 +301,8 @@ class ConsensusAdapter(
           s"the branch from block ${first.number} stands on, is not stored: no fork choice can be made"
       )
       toldTheFeed("a branch whose fork weight is not stored")(
-        _.notJudgedHeaders(headers, fault, blockValidation.firstInvalidHeaderOf)
+        // B-392 (the user's decision of 2026-11-19): the seal-only first header of B-391, as for a branch out of reach
+        _.notJudgedHeaders(headers, fault, blockValidation.firstInvalidHeaderOfNotJudged)
       )
     }
 
