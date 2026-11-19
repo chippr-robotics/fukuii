@@ -3480,3 +3480,14 @@ items:
     refs: []
     links: {}
     notes: Seen on every 'Refusing to start' during spec 030 S11 T099; shutdown should skip unset parts.
+  - id: B-400
+    title: "Spec 030 FR-051: INFO summary of P2P allowlist rejections each minute (contracts/observability.md); today DEBUG per connection only"
+    priority: P3
+    status: open
+    area: p2p
+    size: S
+    opened: 2026-11-19
+    refs: []
+    links:
+      spec: "030"
+    notes: Found by the S11 docs pass.
