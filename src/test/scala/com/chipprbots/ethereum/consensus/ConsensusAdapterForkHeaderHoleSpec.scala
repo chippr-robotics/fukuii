@@ -100,14 +100,20 @@ class ConsensusAdapterForkHeaderHoleSpec extends AnyFlatSpec with Matchers:
     terminalTotalDifficulty = None
   )
 
-  private class Rig(indexNamesTheFork: Boolean = true) extends EphemBlockchainTestSetup:
+  // this node's own block 19, the head, on block 18: the feed weighs block 18 from it where that weight is not stored,
+  // the head's weight (1001) less this block's difficulty (1), the weight block 18 is stored with where it is
+  private val ownHead: BlockHeader =
+    header19.copy(difficulty = Difficulty(BigInt(1)), extraData = ByteString(Hex.decode("0a11")))
+
+  private class Rig(indexNamesTheFork: Boolean = true, forkWeightStored: Boolean = true)
+      extends EphemBlockchainTestSetup:
     override lazy val validators: Mocks.MockValidatorsAlwaysSucceed = new Mocks.MockValidatorsAlwaysSucceed:
       override val blockHeaderValidator: BlockHeaderValidator = PoWBlockHeaderValidator
     val validation = new BlockValidation(mining, blockchainReader, blockQueue)
 
     // this node's block 18 is in the hash index and has its weight stored; its header is not stored
     if indexNamesTheFork then storagesInstance.storages.blockNumberMappingStorage.put(18, forkHash.value).commit()
-    blockchainWriter.storeChainWeight(forkHash, ChainWeight.totalDifficultyOnly(1000)).commit()
+    if forkWeightStored then blockchainWriter.storeChainWeight(forkHash, ChainWeight.totalDifficultyOnly(1000)).commit()
 
     val escalated: mutable.ArrayBuffer[EscalationKind] = mutable.ArrayBuffer.empty
     val left: mutable.ArrayBuffer[String] = mutable.ArrayBuffer.empty
@@ -131,7 +137,8 @@ class ConsensusAdapterForkHeaderHoleSpec extends AnyFlatSpec with Matchers:
         )
       ),
       left += _,
-      blockchainReader.getCanonicalHashByNumber
+      blockchainReader.getCanonicalHashByNumber,
+      () => Some(ownHead)
     )
     val adapter =
       new ConsensusAdapter(null, blockchainReader, blockQueue, validation, IORuntime.global, None, Some(feed))
@@ -201,4 +208,43 @@ class ConsensusAdapterForkHeaderHoleSpec extends AnyFlatSpec with Matchers:
       case Right(_)  => fail("an import took a header whose parent it has not")
     // the second header, with its parent in the branch, passes as an import validates it
     rig.validation.firstInvalidHeaderOfNotJudged(List(header19, header20)) shouldBe None
+  }
+
+  // B-392 (the user's decision of 2026-11-19): the fork weight not stored either (B-385). The branch reaches the feed
+  // through `forkWeightNotStored`, which validates it as `branchOutOfReach` does; the feed weighs block 18 from the head
+  // by the head's ancestry, down to the hash the first header names, without reading the header of block 18.
+  "A heavier branch whose fork header and fork weight are both missing" should "be validated by its seal and escalate as LocalFault" taggedAs UnitTest in {
+    val rig = new Rig(forkWeightStored = false)
+    rig.blockchainReader.getChainWeightByHash(forkHash) shouldBe None
+    rig.blockchainReader.getBlockHeaderByHash(forkHash) shouldBe None
+    rig.adapter.forkWeightNotStored(List(header19))
+    rig.escalated shouldBe empty
+    // block 18 weighed from the head: 1001 less the head's own block 19 (difficulty 1)
+    rig.feed.refusedWeight.map(_.totalDifficulty.value) shouldBe Some(BigInt(1000) + 989289)
+    rig.left.exists(_.contains("weighed from the head")) shouldBe true
+    rig.adapter.forkWeightNotStored(List(header19, header20))
+    rig.escalated.toList shouldBe List(EscalationKind.LocalFault)
+    rig.messAsked shouldBe empty
+    rig.left.exists(_.contains("is not valid")) shouldBe false
+    // the validation of an import, and of a fork choice, is not relaxed
+    rig.adapter.firstInvalidHeaderOf(List(header19, header20)) shouldBe
+      Some(header19 -> HeaderParentNotFoundError.toString)
+  }
+
+  it should "not be counted where the hash index does not name the missing fork as this node's" taggedAs UnitTest in {
+    val rig = new Rig(indexNamesTheFork = false, forkWeightStored = false)
+    rig.adapter.forkWeightNotStored(List(header19))
+    rig.adapter.forkWeightNotStored(List(header19, header20))
+    rig.escalated shouldBe empty
+    rig.feed.refusedWeight shouldBe None
+    rig.left.last should include(HeaderParentNotFoundError.toString)
+  }
+
+  it should "not be counted where the first header's seal is not valid" taggedAs UnitTest in {
+    val rig = new Rig(forkWeightStored = false)
+    val unsealed = header19.copy(nonce = ByteString(Hex.decode("0b80f001ae0c017f")))
+    rig.adapter.forkWeightNotStored(List(unsealed))
+    rig.escalated shouldBe empty
+    rig.feed.refusedWeight shouldBe None
+    rig.left.last should include(HeaderPoWError.toString)
   }
