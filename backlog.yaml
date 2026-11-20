@@ -1037,12 +1037,18 @@ items:
   - id: B-102
     title: hive sampled gates count tests cut off by "simulation timed out" as failures
     priority: P3
-    status: open
+    status: claimed
     area: ci
     size: S
     opened: 2026-11-07
     refs: [handoff §3]
     links: {}
+    claim:
+      by: cloud-c0114ec2
+      agent: main
+      since: 2026-11-20T00:45:30Z
+      heartbeat: 2026-11-20T00:45:30Z
+      branch: ccr-c0114ec2-7ueey8
     notes: |-
       Unverified dev-node item (handoff section 3): check it still applies before starting.
       Seen on the 0.10.0 and 0.11.0 promotions (consensus 5, consume-rlp 4).
