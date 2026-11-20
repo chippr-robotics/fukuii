@@ -3574,21 +3574,18 @@ items:
   - id: B-406
     title: StorageRecoveryActor legacy scan passes ctx.log into a Future (throws off the actor thread), as BytecodeRecoveryActor did
     priority: P3
-    status: review
+    status: done
     area: sync
     opened: 2026-11-20
+    closed: 2026-11-20
     refs: []
     links:
       prs: [1964]
       spec: "022"
-    claim:
-      by: cloud-dc960fdc
-      agent: main
-      since: 2026-11-20T16:55:09Z
-      heartbeat: 2026-11-20T16:55:46Z
     notes: |-
       Same pattern at StorageRecoveryActor scanning: ctx.log read inside Future(...). Capture val before the Future, as B-396 did for bytecode; add a test running the real scan.
       2026-11-20 review: PR #1964
+      2026-11-20 done: Merged: scan takes ctx.log on the actor thread; reproduced RecoveryNotRun before the fix.
   - id: B-407
     title: A heavier PoW branch left undecided by a gap in this node's chain (B-395 NoChainSwitch) is not told to the escalation feed
     priority: P3
