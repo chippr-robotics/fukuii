@@ -3415,7 +3415,7 @@ items:
   - id: B-395
     title: "BranchResolution.getTopBlocksFromNumber skips missing blocks (flatMap): shared-prefix and fork-weight block misalign over a gap in this node's chain"
     priority: P3
-    status: claimed
+    status: in-progress
     area: sync
     opened: 2026-11-19
     refs: []
@@ -3425,7 +3425,7 @@ items:
       by: cloud-dc960fdc
       agent: forge
       since: 2026-11-20T16:29:00Z
-      heartbeat: 2026-11-20T16:29:00Z
+      heartbeat: 2026-11-20T16:31:52Z
     notes: "forge, B-392 review: compareBranch and withoutForkWeight zip own blocks with the batch; a missing own block shifts the zip, and 'under' becomes the hash of the missing block, not the fork. Walk by parent hash (ancestry-not-index) or stop at the gap."
   - id: B-396
     title: "B-376 follow-up: bulk bytecode recovery could run on the unified layout (scan reads rows, code store shared); decide whether to lift its refusal"
