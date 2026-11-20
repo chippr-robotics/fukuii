@@ -60,12 +60,25 @@ final class SnapLogCapture extends AutoCloseable:
     @annotation.tailrec
     def loop(): String =
       val remaining = deadline - System.nanoTime()
-      if remaining <= 0 then throw new AssertionError(s"no log line containing '$substring' within $max")
+      if remaining <= 0 then throw missing(substring, s"within $max")
       val line = arrivals.poll(remaining, TimeUnit.NANOSECONDS)
-      if line == null then throw new AssertionError(s"no log line containing '$substring' within $max")
+      if line == null then throw missing(substring, s"within $max")
       else if line.contains(substring) then line
       else loop()
     loop()
+
+  /** Fail unless a line containing `substring` has been captured: for a line the caller has already synchronised on (a
+    * mailbox barrier), where waiting on the clock would only hide what the actor did instead.
+    */
+  def assertLogged(substring: String): Unit =
+    if !contains(substring) then throw missing(substring, "after the barrier")
+
+  // The failure says what was logged instead (a CI failure otherwise leaves nothing: this capture prints nothing).
+  private def missing(substring: String, when: String): AssertionError =
+    val recent = lines.takeRight(25)
+    new AssertionError(
+      s"no log line containing '$substring' $when; the last ${recent.size} captured:\n  " + recent.mkString("\n  ")
+    )
 
   override def close(): Unit =
     logger.detachAppender(appender)
