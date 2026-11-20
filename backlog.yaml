@@ -229,9 +229,9 @@ items:
     refs: [H11, CHASE E, "task #80"]
     links: {}
     notes: |-
-      Includes B-221: SNAPCoordinatorGoneSpec CI failure (PR #1805, run 43158234872).
       2026-11-20 P2->P1 (user): blocking CI at bad times. #1957 fixes SNAPCoordinatorGoneSpec's null child ref (stub registers in its own setup; new fixture childSelf waits). AccountRangeCoordinatorSpec cooldown, StaleVerificationWalk, HealRequestFixtures still open.
       2026-11-20 #1957 merged to main (6ea4ffd): GoneSpec childSelf fix landed. Not on staging yet (cherry-pick 3cb05e4). Cooldown/StaleVerificationWalk/HealRequestFixtures still open.
+      2026-11-20 #1958 merged: the #1957 fixture changes are on staging too, so a promotion keeps them.
   - id: B-021
     title: scalanet discovery tests hang (v4 DiscoveryNetworkSpec ping) and 6 fail; KBucketsWithSubnetLimitsSpec is vacuous
     priority: P2
@@ -2169,9 +2169,9 @@ items:
     links:
       spec: specs/016-snap-controller-split
     notes: |-
-      parkInStateValidation (SnapControllerFixture:406) waits 10 s for the A5 guard's log line; on #1833's run it never came (suites run one at a time in the fork, so no rival capture). Find why the controller did not reach the guard: a starved dispatcher, or the decision not delivered.
       2026-11-20 P2->P1 (user). Recurred on #1957 (run 44597611732). #1957 swaps the 10 s wait for 2 mailbox barriers and makes SnapLogCapture failures print the last 25 lines; root cause still unknown (15/15 local under load, 5/5 in CI suite order).
       2026-11-20 #1957 merged to main (6ea4ffd): barriers + 25-line diagnostics landed; root cause still open. Not on staging yet (cherry-pick 3cb05e4); next failure's message will show what the controller logged.
+      2026-11-20 #1958 merged: the #1957 fixture changes are on staging too, so a promotion keeps them.
   - id: B-259
     title: "TUI pixel mode: free the least recently shown images instead of holding every sprite frame until a clear"
     priority: P3
