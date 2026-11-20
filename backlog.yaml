@@ -3583,21 +3583,18 @@ items:
   - id: B-407
     title: A heavier PoW branch left undecided by a gap in this node's chain (B-395 NoChainSwitch) is not told to the escalation feed
     priority: P3
-    status: review
+    status: done
     area: sync
     opened: 2026-11-20
+    closed: 2026-11-20
     refs: []
     links:
       prs: [1971]
       spec: 018
-    claim:
-      by: cloud-dc960fdc
-      agent: forge
-      since: 2026-11-20T18:29:42Z
-      heartbeat: 2026-11-20T18:47:57Z
     notes: |-
       After B-395 compareBranch answers NoChainSwitch with an error where a block of this node's chain from the batch's first height to the head is not stored. Unlike the missing-fork-weight case (B-385, withoutForkWeight -> ConsensusAdapter.forkWeightNotStored) nothing ends the wait. Decide (forge) whether to route it through notJudgedHeaders with its own StateUnavailable message (forkWeightNotStored's text names the weight, not the gap) and check BlockImporter NoChainSwitch arm.
       2026-11-20 review: PR #1971; gaps at/below the SNAP pivot left to B-410
+      2026-11-20 done: Merged: gap NoChainSwitch reported to the PoW escalation feed (unified layout); at/below-pivot gaps left to B-410.
   - id: B-408
     title: "Flaky: RegularSyncSpec 'fill a hole in the account trie by repairNodeAt' repairs.repaired.size 2 vs 1 under the targeted suite"
     priority: P3
