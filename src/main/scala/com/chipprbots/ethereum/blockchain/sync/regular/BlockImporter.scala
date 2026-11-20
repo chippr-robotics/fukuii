@@ -383,6 +383,10 @@ object BlockImporter:
   // far longer than any import takes.
   private[regular] val StartStashCapacity: Int = 16
 
+  // State nodes an importer holds while an import runs, for that import's ImportDone (B-408). One in practice: the
+  // fetcher answers one request at a time.
+  private[regular] val HeldNodesCapacity: Int = 4
+
   sealed trait Command
   case class MinedBlock(block: Block) extends Command
   case class ImportNewBlock(block: Block, peerId: PeerId) extends Command
@@ -768,6 +772,11 @@ final private class BlockImporterLogic(
       // A state node, landing while an import runs: most likely the answer to the fetch that import has just sent, which
       // its ImportDone then waits for. Held for that ImportDone (B-408), as an exhausted fetch is (#1694).
       case FetcherResponse(BlockFetcher.FetchedStateNode(nodeData)) if nodeData.values.nonEmpty && state.importing =>
+        // The fetcher answers one request at a time, so one node is held in practice. A fetcher that answers more
+        // cannot grow the list without bound: past the cap the oldest is saved as a late arrival, as before B-408.
+        if nodesDuringImport.size >= HeldNodesCapacity then
+          saveLateNode(nodesDuringImport.head)
+          nodesDuringImport = nodesDuringImport.tail
         nodesDuringImport = nodesDuringImport :+ nodeData
         Behaviors.same
 

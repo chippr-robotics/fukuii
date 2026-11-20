@@ -2941,6 +2941,37 @@ class RegularSyncSpec
             hashStore.repaired shouldBe empty
         )
 
+        // The held nodes are capped (forge, B-408 review): a fetcher that answers more than the one request it was given
+        // cannot grow them without bound. Past the cap the oldest goes to storage as a late arrival; the newest, here
+        // the one the import asked for, is still the answer its wait takes.
+        s"hold at most ${BlockImporter.HeldNodesCapacity} nodes during an import and still take the newest as the answer, on $chain" taggedAs (
+          UnitTest,
+          SyncTest
+        ) in sync(
+          new MissingNodeOnTheUnifiedLayout(s"cap-$follows", unified = true, followsConsensusLayer = follows):
+            override def missing: MissingNodeException =
+              new MissingAccountNodeException(hash, address, Some(locationOf))
+            val held = new java.util.concurrent.CountDownLatch(1)
+            holdTheImport = Some(held)
+
+            importFailing()
+            evaluated(1)
+            (1 to BlockImporter.HeldNodesCapacity).foreach { i =>
+              importer ! BlockImporter.FetcherResponse(
+                BlockFetcher.FetchedStateNode(NodeData(List(ByteString(Array.fill[Byte](40)(i.toByte)))))
+              )
+            }
+            deliverNode()
+            held.countDown()
+            fetchAsked()
+            evaluated(2)
+            importedOk shouldBe true
+            repairs.repaired.size shouldBe 1
+            repairs.repaired.peek() shouldBe (
+              (com.chipprbots.ethereum.db.storage.pathstate.PositionKey(None, locationOf), hash, node)
+            )
+        )
+
         s"fill a hole in a storage trie at the position of its own owner, on $chain" taggedAs (
           UnitTest,
           SyncTest
