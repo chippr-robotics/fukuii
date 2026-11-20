@@ -306,6 +306,47 @@ class BranchResolution(
       if blockchainReader.getChainWeightByHash(under).isEmpty
     yield side
 
+  /** Where [[compareBranch]] answers `NoChainSwitch` for a gap in this node's chain above the SNAP pivot (B-395): the
+    * block it found missing, and the headers of `headers` that are not this node's, which the gap leaves unweighed
+    * (B-407). None where there is no gap, where the gap is at or below the SNAP pivot, and where every header is this
+    * node's own.
+    *
+    * The gap is found as [[compareBranch]] finds it, by the same reads: the first height whose header or index entry is
+    * not stored, else the first block the branch would displace whose body is not stored. Above the pivot every block
+    * is to be stored whole, so nothing ends the wait for it, and the importer tells the escalation's feed. At or below
+    * it the backfill brings the block; told, a heavier branch over a gap the backfill is to fill would grow past the
+    * escalation's threshold and cost the node its state.
+    *
+    * The headers above those matched by header are dropped while the hash index names each as this node's block at its
+    * height, up to the head: past a gap where only the header is missing, a branch that stands on that block is named
+    * from the block above it, and its first header then stands on this node's block whose header is not stored (the
+    * feed checks that header by its seal alone, B-391). Where the index entry is missing too, nothing more is dropped.
+    *
+    * It reads only, and says nothing of whether the branch is the heavier: the escalation's feed weighs it from the
+    * head and asks MESS of it (`PowEscalationFeed`). Every verdict is that of [[compareBranch]], unchanged.
+    */
+  def acrossAGap(headers: NonEmptyList[BlockHeader]): Option[ChainGap] =
+    val headersList = headers.toList
+    val own = getTopBlocksFromNumber(headers.head.number.value)
+    val shared = own.sharedPrefix(headersList)
+    // compareBranch's order: a header (or its index entry) missing first, then a body of a block that would be displaced
+    val gap: Option[(BigInt, Boolean)] =
+      own.firstMissing.map(_ -> false).orElse(own.whole(shared).left.toOption.map(_ -> true))
+    for
+      (firstMissing, bodyOnly) <- gap
+      if !blockchainReader.getSnapSyncPivotBlock.exists(firstMissing <= _)
+      side <- NonEmptyList.fromList(notOwnByIndex(headersList.drop(shared)))
+    yield ChainGap(firstMissing, bodyOnly, side)
+
+  // `headers` less those, from the first, that the hash index names as this node's block at their height, up to the head
+  private def notOwnByIndex(headers: List[BlockHeader]): List[BlockHeader] =
+    val bestBranch = blockchainReader.getBestBranch
+    val best = blockchainReader.getBestBlockNumber
+    headers.dropWhile { header =>
+      header.number.value <= best &&
+      blockchainReader.getHashByBlockNumber(bestBranch, header.number.value).contains(header.hash)
+    }
+
   /** `headers` stand on the tip of a branch that was not taken: the branch with them, and whether it would be taken
     * now. By the rules of [[compareBranch]]: heavier than this node's chain, and not refused by MESS. None when the
     * headers do not stand on that tip or do not form a chain, and when the block the branch leaves this chain at is no
@@ -426,6 +467,18 @@ final private[ledger] case class OwnBlocks(blocks: List[OwnBlock], firstMissing:
     displaced.collectFirst { case OwnBlock(header, None) => header.number.value } match
       case Some(withoutBody) => Left(withoutBody)
       case None              => Right(displaced.collect { case OwnBlock(header, Some(body)) => Block(header, body) })
+
+/** A gap in this node's chain above the SNAP pivot that left a branch unweighed, as [[BranchResolution.acrossAGap]]
+  * names it (B-407).
+  *
+  * @param firstMissing
+  *   the number of the first block of this node's chain found missing
+  * @param bodyOnly
+  *   its header and index entry are stored, and its body, needed because the branch would displace it, is not
+  * @param side
+  *   the headers of the branch that are not this node's, in their order
+  */
+final case class ChainGap(firstMissing: BigInt, bodyOnly: Boolean, side: NonEmptyList[BlockHeader])
 
 /** A side branch that was weighed and not taken, as [[BranchResolution.notTaken]] records it.
   *

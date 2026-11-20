@@ -456,12 +456,17 @@ class RegularSyncSpec
       followsConsensusLayer: Boolean = false,
       readyBlocks: Option[Int] = None,
       // false: the chain weight of block 14, the block the branch stands on, is not stored (B-385)
-      forkWeightStored: Boolean = true
+      forkWeightStored: Boolean = true,
+      // true: a block of this node's chain above the SNAP pivot is not stored, and leaves the branch unweighed (B-407)
+      gapInOwnChain: Boolean = false
   ) extends ForkRecoveryOnTheUnifiedLayout(name, recoveryStarted = false, unified = unified, readyBlocks = readyBlocks):
     val imports = new java.util.concurrent.atomic.AtomicInteger(0)
     val resolved = new java.util.concurrent.atomic.AtomicInteger(0)
     // the branches told to the escalation as ones whose fork weight is not stored (B-385)
     val unweighed: java.util.concurrent.ConcurrentLinkedQueue[List[BlockHeader]] =
+      new java.util.concurrent.ConcurrentLinkedQueue()
+    // the branches told to the escalation as ones a gap in this node's chain leaves unweighed (B-407)
+    val overAGap: java.util.concurrent.ConcurrentLinkedQueue[ChainGap] =
       new java.util.concurrent.ConcurrentLinkedQueue()
 
     private val sideBlocks: Map[Int, Block] =
@@ -503,6 +508,8 @@ class RegularSyncSpec
       override def forkWeightNotStored(headers: List[BlockHeader])(implicit
           blockchainConfig: BlockchainConfig
       ): Unit = unweighed.add(headers): Unit
+      override def chainGapNotStored(gap: ChainGap)(implicit blockchainConfig: BlockchainConfig): Unit =
+        overAGap.add(gap): Unit
 
     override lazy val branchResolution: BranchResolution = new BranchResolution(
       blockchainReader,
@@ -515,6 +522,10 @@ class RegularSyncSpec
         Option.when(forkWeightStored && headers.head.hash == side(15).header.hash)(record(15))
       override def withoutForkWeight(headers: NonEmptyList[BlockHeader]): Option[NonEmptyList[BlockHeader]] =
         Option.when(!forkWeightStored && headers.head.hash == side(15).header.hash)(headers)
+      override def acrossAGap(headers: NonEmptyList[BlockHeader]): Option[ChainGap] =
+        Option.when(gapInOwnChain && headers.head.hash == side(15).header.hash)(
+          ChainGap(BigInt(16), bodyOnly = false, headers)
+        )
       override def extended(
           branch: BranchNotTaken,
           headers: NonEmptyList[BlockHeader]
@@ -1362,6 +1373,50 @@ class RegularSyncSpec
           deliver(side(15))
           toTheFetcher()
           unweighed.isEmpty shouldBe true
+          testKit.stop(importer)
+      )
+
+      // B-407: where a gap in this node's chain above the SNAP pivot leaves the branch unweighed (B-395 NoChainSwitch),
+      // nothing else ends the wait for it: told to the escalation's feed, in its own words, and not as a branch whose
+      // fork weight is not stored, though that weight is not stored either
+      "tell the escalation of a branch a gap in this node's chain leaves unweighed, on the unified state layout" taggedAs (
+        UnitTest,
+        SyncTest
+      ) in sync(
+        new BranchNotTakenFixture("over-a-gap", unified = true, forkWeightStored = false, gapInOwnChain = true):
+          deliver(side(15))
+          awaitCond(!overAGap.isEmpty, 5.seconds)
+          overAGap.peek() shouldBe ChainGap(BigInt(16), bodyOnly = false, NonEmptyList.one(side(15).header))
+          unweighed.isEmpty shouldBe true
+          imports.get() shouldBe 0
+          nothingMoved()
+          testKit.stop(importer)
+      )
+
+      "tell the escalation nothing of a branch a gap leaves unweighed on a chain that follows a consensus layer" taggedAs (
+        UnitTest,
+        SyncTest
+      ) in sync(
+        new BranchNotTakenFixture(
+          "over-a-gap-pos",
+          unified = true,
+          followsConsensusLayer = true,
+          gapInOwnChain = true
+        ):
+          deliver(side(15))
+          toTheFetcher()
+          overAGap.isEmpty shouldBe true
+          testKit.stop(importer)
+      )
+
+      "tell the escalation nothing of a branch a gap leaves unweighed on the hash layout" taggedAs (
+        UnitTest,
+        SyncTest
+      ) in sync(
+        new BranchNotTakenFixture("over-a-gap-hash", unified = false, gapInOwnChain = true):
+          deliver(side(15))
+          toTheFetcher()
+          overAGap.isEmpty shouldBe true
           testKit.stop(importer)
       )
 

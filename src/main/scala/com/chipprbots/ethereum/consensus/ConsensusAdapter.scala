@@ -42,6 +42,7 @@ import com.chipprbots.ethereum.ledger.BlockExecutionError.ValidationBeforeExecEr
 import com.chipprbots.ethereum.ledger.BlockExecutionSuccess
 import com.chipprbots.ethereum.ledger.BlockQueue
 import com.chipprbots.ethereum.ledger.BlockValidation
+import com.chipprbots.ethereum.ledger.ChainGap
 import com.chipprbots.ethereum.mpt.MerklePatriciaTrie.MissingCodeException
 import com.chipprbots.ethereum.mpt.MerklePatriciaTrie.MissingNodeException
 import com.chipprbots.ethereum.utils.BlockchainConfig
@@ -305,6 +306,30 @@ class ConsensusAdapter(
         _.notJudgedHeaders(headers, fault, blockValidation.firstInvalidHeaderOfNotJudged)
       )
     }
+
+  /** A proof-of-work branch, known by its headers above those of this node's chain, whose fork choice could not be
+    * made: a block of this node's chain above the SNAP pivot is not stored, its header, its index entry, or the body of
+    * a block the branch would displace (`BranchResolution.acrossAGap`, B-395, B-407). No verdict was given on it, and
+    * it is a fault of this node's datadir: told to the escalation's feed as a branch whose fork weight is not stored is
+    * ([[forkWeightNotStored]]), with the same header validation, the first header by its seal alone where it stands on
+    * this node's block whose header is not stored (B-391), and counted by how far it grows. The feed weighs it from the
+    * head and asks MESS of it; a branch it cannot weigh, that is not the heavier, or that MESS refuses, is not counted.
+    *
+    * To be called under the import lock, as [[branchOutOfReach]] is.
+    */
+  def chainGapNotStored(gap: ChainGap)(implicit blockchainConfig: BlockchainConfig): Unit =
+    val first = gap.side.head
+    val missing =
+      if gap.bodyOnly then
+        s"the body of block ${gap.firstMissing} of this node's chain, a block the branch would displace, is not stored"
+      else s"block ${gap.firstMissing} of this node's chain is not stored (its header or its hash index entry)"
+    val fault = new StateUnavailable(
+      s"$missing: the branch from block ${first.number} cannot be set against this node's chain, and no fork choice " +
+        "can be made"
+    )
+    toldTheFeed("a branch over a gap in this node's chain")(
+      _.notJudgedHeaders(gap.side.toList, fault, blockValidation.firstInvalidHeaderOfNotJudged)
+    )
 
   /** A hole in the held state that the importer fetched by its position and could not fill, as many times as its
     * exhausts allow (spec 018 C5b, B-291, forge): the repair is declined for good, or no peer serves the node. On the
