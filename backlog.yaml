@@ -3504,11 +3504,17 @@ items:
   - id: B-404
     title: "Chocolatey 0.12.1 resubmission: moderator asked for a CDN iconUrl (and a copyright element)"
     priority: P1
-    status: open
+    status: claimed
     area: ops
     size: S
     opened: 2026-11-20
     refs: []
     links:
       prs: [1957]
+    claim:
+      by: cloud-c0114ec2
+      agent: main
+      since: 2026-11-20T02:31:31Z
+      heartbeat: 2026-11-20T02:31:31Z
+      branch: ccr-c0114ec2-7ueey8
     notes: "Moderator sent 0.12.1 back: iconUrl on raw.githubusercontent.com. #1957: jsDelivr URL pinned to 0e8862eb, <copyright>, and chocolatey.yml resubmit input. Resubmit run 44661276503 (2026-11-20)."
