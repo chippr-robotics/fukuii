@@ -3617,7 +3617,7 @@ items:
   - id: B-409
     title: "Flaky under load: SyncControllerSpec 'count the hand-off's samples again from one after a hand-off was made' (3 s expectMsgClass SyncProgress)"
     priority: P3
-    status: claimed
+    status: in-progress
     area: sync
     size: S
     opened: 2026-11-20
@@ -3628,5 +3628,5 @@ items:
       by: cloud-dc960fdc
       agent: eye
       since: 2026-11-20T17:46:44Z
-      heartbeat: 2026-11-20T17:46:44Z
+      heartbeat: 2026-11-20T17:58:04Z
     notes: Seen by dev-node (T248, 2026-11-20, host loaded by a core-geth sync) and by the C6 PR-C herald-fix agent (2026-11-18). Passes alone. Find the race; don't widen the timeout blindly.
