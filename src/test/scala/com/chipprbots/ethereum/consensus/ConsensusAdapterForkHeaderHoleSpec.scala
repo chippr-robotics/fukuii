@@ -2,6 +2,7 @@ package com.chipprbots.ethereum.consensus
 
 import org.apache.pekko.util.ByteString
 
+import cats.data.NonEmptyList
 import cats.effect.unsafe.IORuntime
 
 import scala.collection.mutable
@@ -25,6 +26,7 @@ import com.chipprbots.ethereum.db.storage.pathstate.StateFault
 import com.chipprbots.ethereum.db.storage.pathstate.StateUnavailable
 import com.chipprbots.ethereum.domain.*
 import com.chipprbots.ethereum.ledger.BlockValidation
+import com.chipprbots.ethereum.ledger.ChainGap
 import com.chipprbots.ethereum.mpt.MerklePatriciaTrie.MissingNodeException
 import com.chipprbots.ethereum.testing.Tags.*
 import com.chipprbots.ethereum.utils.BlockchainConfig
@@ -105,7 +107,7 @@ class ConsensusAdapterForkHeaderHoleSpec extends AnyFlatSpec with Matchers:
   private val ownHead: BlockHeader =
     header19.copy(difficulty = Difficulty(BigInt(1)), extraData = ByteString(Hex.decode("0a11")))
 
-  private class Rig(indexNamesTheFork: Boolean = true, forkWeightStored: Boolean = true)
+  private class Rig(indexNamesTheFork: Boolean = true, forkWeightStored: Boolean = true, headWeight: BigInt = 1001)
       extends EphemBlockchainTestSetup:
     override lazy val validators: Mocks.MockValidatorsAlwaysSucceed = new Mocks.MockValidatorsAlwaysSucceed:
       override val blockHeaderValidator: BlockHeaderValidator = PoWBlockHeaderValidator
@@ -119,12 +121,14 @@ class ConsensusAdapterForkHeaderHoleSpec extends AnyFlatSpec with Matchers:
     val left: mutable.ArrayBuffer[String] = mutable.ArrayBuffer.empty
     val messAsked: mutable.ArrayBuffer[(Long, BigInt, BigInt)] = mutable.ArrayBuffer.empty
     val messHead: BlockHeader = header20.copy(number = BlockNumber(30), unixTimestamp = Timestamp(1486752500))
+    // why the watch escalated, as it says it
+    val said: mutable.ArrayBuffer[String] = mutable.ArrayBuffer.empty
     val feed = new PowEscalationFeed(
       // one block of growth escalates: the branch is told at tip 19, then at tip 20
-      new EscalationWatch(new EscalationTrigger(1), () => 0L, escalated += _, (_, _) => ()),
+      new EscalationWatch(new EscalationTrigger(1), () => 0L, escalated += _, (_, why) => said += why),
       blockchainReader.getChainWeightByHash,
-      // the head is lighter than either branch
-      () => Some(ChainWeight.totalDifficultyOnly(1001)),
+      // the head is lighter than either branch, unless `headWeight` says otherwise
+      () => Some(ChainWeight.totalDifficultyOnly(headWeight)),
       hash => blockchainReader.getBlockHeaderByHash(BlockHash(hash)),
       header => blockchainReader.getCanonicalHashByNumber(header.number.value).contains(header.hash),
       // MESS is in force and would refuse anything it were asked of
@@ -248,3 +252,116 @@ class ConsensusAdapterForkHeaderHoleSpec extends AnyFlatSpec with Matchers:
     rig.feed.refusedWeight shouldBe None
     rig.left.last should include(HeaderPoWError.toString)
   }
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // B-407: a branch left unweighed by a gap in this node's chain above the SNAP pivot (B-395 NoChainSwitch). Told to the
+  // feed by `chainGapNotStored`, as a fault of this node (StateUnavailable), with the validation `forkWeightNotStored`
+  // gives a branch: the first header by its seal alone where it stands on this node's block whose header is the one
+  // missing. The feed counts it only where it is the heavier and MESS lets it.
+  // ─────────────────────────────────────────────────────────────────────────
+
+  private def gap(bodyOnly: Boolean, headers: BlockHeader*): ChainGap =
+    ChainGap(BigInt(18), bodyOnly, NonEmptyList.fromListUnsafe(headers.toList))
+
+  "A heavier branch over a gap in this node's chain" should "be validated by its seal where it stands on the missing header, and escalate as LocalFault" taggedAs UnitTest in {
+    val rig = new Rig()
+    rig.adapter.chainGapNotStored(gap(bodyOnly = false, header19))
+    rig.escalated shouldBe empty
+    rig.feed.refusedWeight.map(_.totalDifficulty.value) shouldBe Some(BigInt(1000) + 989289)
+    rig.adapter.chainGapNotStored(gap(bodyOnly = false, header19, header20))
+    rig.escalated.toList shouldBe List(EscalationKind.LocalFault)
+    // in its own words: a block of this node's chain missing, not a weight
+    rig.said.toList match
+      case List(why) =>
+        why should include("block 18 of this node's chain is not stored (its header or its hash index entry)")
+        why should include("the branch from block 19 cannot be set against this node's chain")
+      case other => fail(s"the watch said $other")
+    // MESS has nothing to weigh from a block whose header is not stored, and does not refuse on it (B-383)
+    rig.messAsked shouldBe empty
+    rig.left.exists(_.contains("is not valid")) shouldBe false
+  }
+
+  it should "not be counted where the first header's seal is not valid" taggedAs UnitTest in {
+    val rig = new Rig()
+    val unsealed = header19.copy(nonce = ByteString(Hex.decode("0b80f001ae0c017f")))
+    rig.adapter.chainGapNotStored(gap(bodyOnly = false, unsealed))
+    rig.escalated shouldBe empty
+    rig.feed.refusedWeight shouldBe None
+    rig.left.last should include(HeaderPoWError.toString)
+  }
+
+  it should "not be counted where it does not outweigh the head" taggedAs UnitTest in {
+    // 1000 + 989289 + 989772 = 1980061 at block 20, against a head of 2000000
+    val rig = new Rig(headWeight = BigInt(2000000))
+    rig.adapter.chainGapNotStored(gap(bodyOnly = false, header19))
+    rig.adapter.chainGapNotStored(gap(bodyOnly = false, header19, header20))
+    rig.escalated shouldBe empty
+    rig.feed.refusedWeight shouldBe None
+    rig.left.last should include("does not outweigh the head")
+  }
+
+  it should "not be counted where MESS refuses the reorganisation to it" taggedAs UnitTest in {
+    val rig = new StoredForkRig(messRefuses = true)
+    rig.adapter.chainGapNotStored(gap(bodyOnly = true, rig.side19))
+    rig.adapter.chainGapNotStored(gap(bodyOnly = true, rig.side19, rig.side20))
+    rig.escalated shouldBe empty
+    rig.feed.refusedWeight shouldBe None
+    rig.left.last should include("MESS refuses")
+    // asked from the shared block: 100 s to the head, this node's 1 above it against the branch's 5000, then 10000
+    rig.messAsked.toList shouldBe List((100L, BigInt(1), BigInt(5000)), (100L, BigInt(1), BigInt(10000)))
+  }
+
+  it should "be counted where MESS lets it, and say the body that is missing (the control)" taggedAs UnitTest in {
+    val rig = new StoredForkRig(messRefuses = false)
+    rig.adapter.chainGapNotStored(gap(bodyOnly = true, rig.side19))
+    rig.adapter.chainGapNotStored(gap(bodyOnly = true, rig.side19, rig.side20))
+    rig.escalated.toList shouldBe List(EscalationKind.LocalFault)
+    rig.feed.refusedWeight.map(_.totalDifficulty.value) shouldBe Some(BigInt(11000))
+    rig.said.toList.map(_.contains("the body of block 18 of this node's chain")) shouldBe List(true)
+  }
+
+  /** This node's block 18 stored whole (header, index entry, weight 1000) and its head 19 on it (difficulty 1, 100 s
+    * later); a side branch 19..20 on block 18 of 5000 each. Every header is valid (the validators pass all): what is
+    * asked here is the weight and MESS.
+    */
+  private class StoredForkRig(messRefuses: Boolean) extends EphemBlockchainTestSetup:
+    val validation = new BlockValidation(mining, blockchainReader, blockQueue)
+    val fork: BlockHeader = header19.copy(number = BlockNumber(18), extraData = ByteString("this node's 18"))
+    val head: BlockHeader = header19.copy(
+      parentHash = fork.hash,
+      difficulty = Difficulty(BigInt(1)),
+      unixTimestamp = Timestamp(1486752440L + 100L),
+      extraData = ByteString("this node's 19")
+    )
+    val side19: BlockHeader =
+      header19.copy(parentHash = fork.hash, difficulty = Difficulty(BigInt(5000)), extraData = ByteString("side 19"))
+    val side20: BlockHeader =
+      header20.copy(parentHash = side19.hash, difficulty = Difficulty(BigInt(5000)), extraData = ByteString("side 20"))
+    blockchainWriter.storeBlockHeader(fork).commit()
+    blockchainWriter.storeChainWeight(fork.hash, ChainWeight.totalDifficultyOnly(1000)).commit()
+    blockchainWriter.storeBlockHeader(head).commit()
+
+    val escalated: mutable.ArrayBuffer[EscalationKind] = mutable.ArrayBuffer.empty
+    val said: mutable.ArrayBuffer[String] = mutable.ArrayBuffer.empty
+    val left: mutable.ArrayBuffer[String] = mutable.ArrayBuffer.empty
+    val messAsked: mutable.ArrayBuffer[(Long, BigInt, BigInt)] = mutable.ArrayBuffer.empty
+    val feed = new PowEscalationFeed(
+      new EscalationWatch(new EscalationTrigger(1), () => 0L, escalated += _, (_, why) => said += why),
+      blockchainReader.getChainWeightByHash,
+      () => Some(ChainWeight.totalDifficultyOnly(1001)),
+      hash => blockchainReader.getBlockHeaderByHash(BlockHash(hash)),
+      header => blockchainReader.getCanonicalHashByNumber(header.number.value).contains(header.hash),
+      Some(
+        PowEscalationFeed.Mess(
+          _ => true,
+          () => Some(head),
+          (s, l, p) =>
+            messAsked += ((s, l, p)); messRefuses
+        )
+      ),
+      left += _,
+      blockchainReader.getCanonicalHashByNumber,
+      () => Some(head)
+    )
+    val adapter =
+      new ConsensusAdapter(null, blockchainReader, blockQueue, validation, IORuntime.global, None, Some(feed))

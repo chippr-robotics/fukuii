@@ -826,6 +826,97 @@ class BranchResolutionSpec
       abovePivot.map(_._1) shouldBe List(Level.ERROR)
   }
 
+  // ─────────────────────────────────────────────────────────────────────────
+  // B-407: where compareBranch answers NoChainSwitch for a gap in this node's chain above the SNAP pivot, the headers
+  // that are not this node's are named, so the importer can tell the escalation's feed of them. Every verdict is
+  // compareBranch's, unchanged.
+  // ─────────────────────────────────────────────────────────────────────────
+
+  "BranchResolution naming a branch a gap in this node's chain leaves unweighed" should {
+
+    "name nothing where there is no gap, the verdict unchanged (the control)" taggedAs (
+      UnitTest,
+      StateTest,
+      ConsensusTest
+    ) in new GapSetup:
+      ownChain(missing = None)
+      weightsStored()
+      branchResolution.compareBranch(extendsFromSix) shouldEqual NewBetterBranch(own.drop(6))
+      branchResolution.acrossAGap(extendsFromSix) shouldBe None
+      branchResolution.compareBranch(lighterFromTwo) shouldEqual NoChainSwitch
+      branchResolution.acrossAGap(lighterFromTwo) shouldBe None
+
+    "name the headers from the gap where its index entry is missing too" taggedAs (
+      UnitTest,
+      StateTest,
+      ConsensusTest
+    ) in new GapSetup:
+      ownChain(missing = Some(5))
+      weightsStored()
+      branchResolution.compareBranch(extendsFromSix) shouldEqual NoChainSwitch
+      // whether header 5 is this node's is not known: named from it, on own 4
+      branchResolution.acrossAGap(extendsFromSix) shouldBe
+        Some(ChainGap(BigInt(5), bodyOnly = false, NonEmptyList.fromListUnsafe(extendsFromSix.toList.drop(4))))
+
+    "name the headers the index does not name as this node's, past a gap where only the header is missing" taggedAs (
+      UnitTest,
+      StateTest,
+      ConsensusTest
+    ) in new GapSetup:
+      ownChain(missing = None, headerMissing = Set(6))
+      weightsStored()
+      branchResolution.compareBranch(extendsFromSix) shouldEqual NoChainSwitch
+      // 6 is this node's by the index: the branch is named from 7, on this node's block 6 whose header is missing
+      branchResolution.acrossAGap(extendsFromSix) shouldBe
+        Some(ChainGap(BigInt(6), bodyOnly = false, NonEmptyList.fromListUnsafe(extendsFromSix.toList.drop(6))))
+
+    "name a branch that leaves this chain below the gap from where it leaves it" taggedAs (
+      UnitTest,
+      StateTest,
+      ConsensusTest
+    ) in new GapSetup:
+      ownChain(missing = Some(8))
+      weightsStored()
+      branchResolution.compareBranch(lighterFromTwo) shouldEqual NoChainSwitch
+      branchResolution.acrossAGap(lighterFromTwo) shouldBe
+        Some(ChainGap(BigInt(8), bodyOnly = false, NonEmptyList.fromListUnsafe(lighterFromTwo.toList.drop(2))))
+
+    "name the branch where a block it would displace has no body" taggedAs (
+      UnitTest,
+      StateTest,
+      ConsensusTest
+    ) in new GapSetup:
+      ownChain(missing = None, withoutBody = Set(8))
+      weightsStored()
+      branchResolution.compareBranch(extendsFromSix) shouldEqual NoChainSwitch
+      branchResolution.acrossAGap(extendsFromSix) shouldBe
+        Some(ChainGap(BigInt(8), bodyOnly = true, NonEmptyList.fromListUnsafe(extendsFromSix.toList.drop(6))))
+
+    "name nothing where the batch is this node's own chain across a gap of a header alone" taggedAs (
+      UnitTest,
+      StateTest
+    ) in new GapSetup:
+      ownChain(missing = None, headerMissing = Set(5))
+      weightsStored()
+      val ownBatch: NonEmptyList[BlockHeader] = NonEmptyList.fromListUnsafe(own.map(_.header))
+      branchResolution.compareBranch(ownBatch) shouldEqual NoChainSwitch
+      branchResolution.acrossAGap(ownBatch) shouldBe None
+
+    "name nothing where the gap is at or below the SNAP pivot: the backfill brings it" taggedAs (
+      UnitTest,
+      StateTest
+    ) in new GapSetup:
+      ownChain(missing = Some(5), pivot = Some(5))
+      weightsStored()
+      branchResolution.compareBranch(extendsFromSix) shouldEqual NoChainSwitch
+      branchResolution.acrossAGap(extendsFromSix) shouldBe None
+      // the same gap above the pivot is named
+      val abovePivot: GapSetup = new GapSetup:
+        ownChain(missing = Some(5), pivot = Some(4))
+        weightsStored()
+      abovePivot.branchResolution.acrossAGap(abovePivot.extendsFromSix).map(_.firstMissing) shouldBe Some(BigInt(5))
+  }
+
   /** The events BranchResolution logs at WARN and above while `body` runs: the level and the message. */
   private def capturingLogs[A](body: => A): (A, List[(Level, String)]) =
     val logger = LoggerFactory.getLogger(classOf[BranchResolution]).asInstanceOf[LogbackLogger]
@@ -880,11 +971,12 @@ class BranchResolutionSpec
           .expects(*, number)
           .anyNumberOfTimes()
           .returning(Some(block).filter(_ => whole))
+        // read by compareBranch where the block is not whole, and by acrossAGap above the headers matched (B-407)
+        blockchainReader.getHashByBlockNumber
+          .expects(*, number)
+          .anyNumberOfTimes()
+          .returning(Some(block.hash).filterNot(_ => missing.contains(number)))
         if !whole then
-          blockchainReader.getHashByBlockNumber
-            .expects(*, number)
-            .anyNumberOfTimes()
-            .returning(Some(block.hash).filterNot(_ => missing.contains(number)))
           blockchainReader.getBlockHeaderByHash
             .expects(block.hash)
             .anyNumberOfTimes()
