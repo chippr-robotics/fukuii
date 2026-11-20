@@ -413,6 +413,12 @@ abstract class BaseNode extends Node:
         interval
       )
       val _ = store.schedule(interval, classicSystem.scheduler)(using classicSystem.dispatcher)
+      // metrics are configured by now: the meters go on the exported registry (see NodeAllowlistMetrics)
+      com.chipprbots.ethereum.network.NodeAllowlistMetrics.register()
+      // FR-051: the refusals, logged at DEBUG one by one, are summed at INFO each minute (contracts/observability.md)
+      val _ = classicSystem.scheduler.scheduleWithFixedDelay(1.minute, 1.minute)(() =>
+        com.chipprbots.ethereum.network.NodeAllowlistMetrics.summary().foreach(line => log.info(line))
+      )(using classicSystem.dispatcher)
     }
 
   /** Load static peer nodes from ${datadir}/static-nodes.json and add each to the maintained-peers set.

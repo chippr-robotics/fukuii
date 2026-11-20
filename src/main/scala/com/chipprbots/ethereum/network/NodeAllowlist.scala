@@ -10,7 +10,7 @@ import scala.util.Try
 
 import io.micrometer.core.instrument.Counter
 
-import com.chipprbots.ethereum.metrics.MetricsContainer
+import com.chipprbots.ethereum.metrics.Metrics
 import com.chipprbots.ethereum.utils.Hex
 
 /** Where an allowlist entry came from. An entry that is listed through more than one source stays listed until all of
@@ -46,7 +46,7 @@ final case class ParsedAllowlistEntry(id: ByteString, enode: Option[URI])
 final class NodeAllowlist private (val enabled: Boolean, initial: AllowlistSnapshot):
   private val ref = new AtomicReference[AllowlistSnapshot](initial)
   private val listeners = new java.util.concurrent.CopyOnWriteArrayList[AllowlistSnapshot => Unit]()
-  NodeAllowlistMetrics.Size.set(if enabled then initial.size.toLong else 0L)
+  NodeAllowlistMetrics.setSize(if enabled then initial.size.toLong else 0L)
 
   def snapshot: AllowlistSnapshot = ref.get()
   def generation: Long = snapshot.generation
@@ -73,14 +73,14 @@ final class NodeAllowlist private (val enabled: Boolean, initial: AllowlistSnaps
     else
       val next = AllowlistSnapshot(entries, cur.generation + 1)
       ref.set(next)
-      NodeAllowlistMetrics.Size.set(next.size.toLong)
+      NodeAllowlistMetrics.setSize(next.size.toLong)
       listeners.forEach(l => l(next))
       true
   }
 
   /** Counts a refused connection, for `p2p_allowlist_rejections_total{direction}`. */
   def recordRejection(inbound: Boolean): Unit =
-    (if inbound then NodeAllowlistMetrics.InboundRejections else NodeAllowlistMetrics.OutboundRejections).increment()
+    NodeAllowlistMetrics.rejected(inbound)
 
 object NodeAllowlist:
   /** Permits everything; the default, and what a test of an unrelated actor passes. */
@@ -131,11 +131,51 @@ object NodeAllowlist:
       }
     }
 
-object NodeAllowlistMetrics extends MetricsContainer:
-  val InboundRejections: Counter = metrics.registry.counter("p2p.allowlist.rejections", "direction", "inbound")
-  val OutboundRejections: Counter = metrics.registry.counter("p2p.allowlist.rejections", "direction", "outbound")
-  val ReloadFailures: Counter = metrics.registry.counter("p2p.allowlist.reload.failures")
-  val Size: AtomicLong = metrics.registry.gauge("p2p.allowlist.size", new AtomicLong(0))
+/** The allowlist's meters (spec 030 data-model). Each is looked up in the registry at its use, not held: the allowlist
+  * is built and checked before the node configures its metrics (StdNode's start-up check), and a meter created then
+  * would sit in the default throwaway registry and never be exported, which a three-node run on dev-node found. Looking
+  * a meter up again returns the one already registered.
+  */
+object NodeAllowlistMetrics:
+  private def registry = Metrics.get().registry
+
+  def InboundRejections: Counter = registry.counter("p2p.allowlist.rejections", "direction", "inbound")
+  def OutboundRejections: Counter = registry.counter("p2p.allowlist.rejections", "direction", "outbound")
+  def ReloadFailures: Counter = registry.counter("p2p.allowlist.reload.failures")
+
+  private val size = new AtomicLong(0)
+  private val inboundWindow = new AtomicLong(0)
+  private val outboundWindow = new AtomicLong(0)
+
+  /** The number of listed nodes, for `p2p_allowlist_size`. */
+  def setSize(n: Long): Unit =
+    size.set(n)
+    register()
+
+  /** Registers every meter on the registry now in use, so each series is exported from the start (at 0). The node calls
+    * it once metrics are configured; it is idempotent.
+    */
+  def register(): Unit =
+    val _ = (registry.gauge("p2p.allowlist.size", size), InboundRejections, OutboundRejections, ReloadFailures)
+
+  /** Counts a refused connection: `p2p_allowlist_rejections_total{direction}`, and the next [[summary]]. */
+  def rejected(inbound: Boolean): Unit =
+    if inbound then
+      InboundRejections.increment()
+      val _ = inboundWindow.incrementAndGet()
+    else
+      OutboundRejections.increment()
+      val _ = outboundWindow.incrementAndGet()
+
+  /** The refusals since the last call, as the INFO line of contracts/observability.md (FR-051); None when there were
+    * none. Each rejection itself is logged at DEBUG only.
+    */
+  def summary(): Option[String] =
+    val in = inboundWindow.getAndSet(0)
+    val out = outboundWindow.getAndSet(0)
+    Option.when(in + out > 0)(
+      s"P2P node allowlist refused $in inbound and $out outbound connection(s) since the last summary"
+    )
 
   /** `p2p_allowlist_edits_total{op, result}` (spec 030 data-model): `ok`, `refused` (the request or the allowlist
     * refused it) or `failed` (the file could not be written).
@@ -145,4 +185,4 @@ object NodeAllowlistMetrics extends MetricsContainer:
       case Right(_)                                           => "ok"
       case Left(e) if e.message.startsWith("could not write") => "failed"
       case Left(_)                                            => "refused"
-    metrics.registry.counter("p2p.allowlist.edits", "op", op.label, "result", outcome).increment()
+    registry.counter("p2p.allowlist.edits", "op", op.label, "result", outcome).increment()
