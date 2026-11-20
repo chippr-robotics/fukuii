@@ -1306,8 +1306,10 @@ object SyncController:
           log.error("RegularSync actor terminated unexpectedly — restarting regular sync.")
           startRegularSync(resumeBackfill = false)._2
         case SyncProtocol.MissingCodeNeedsBulkRecovery(blockNumber, _) if onTheGuard =>
-          // spec 018 C5a part 10: the bulk recovery walks the hash-keyed store, which this layout never reads; code is
-          // fetched one hash at a time by the importer (the code store is shared by both layouts).
+          // spec 018 C5a part 10: the bulk recovery was a walk of the hash-keyed store, which this layout never reads;
+          // code is fetched one hash at a time by the importer (the code store is shared by both layouts). B-396: the
+          // bytecode actor now scans the anchor's rows and could run here, but this route (and BlockImporter's gate) stay
+          // closed until a follow-up wires and tests them together.
           log.warn(
             "Ignoring a bulk bytecode recovery request for block {}: on the unified state layout code is fetched one " +
               "hash at a time.",
@@ -3151,8 +3153,11 @@ object SyncController:
               )
               pivot
 
-    // Never on the guard: every caller refuses there first, and the recovery actors refuse a start on the unified layout
-    // themselves, loudly (B-376; filling holes by position is the deferred rewrite).
+    // Never on the guard: every caller refuses there first, and the storage recovery actor refuses a start on the
+    // unified layout itself, loudly (B-376; filling holes by position is the deferred rewrite). The bytecode actor no
+    // longer refuses (B-396: it writes only the shared code store), but no route starts it there yet: the bulk request,
+    // BlockImporter's gate (`holdsStateInPlace`) and the start's audit arm are still the guard's, until B-396's
+    // follow-up wires the route.
     def startRecovery(
         needBytecode: Boolean,
         needStorage: Boolean,
