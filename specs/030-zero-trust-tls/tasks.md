@@ -3,6 +3,8 @@
 description: "Task list for spec 030, zero-trust TLS"
 ---
 
+> Closed 2026-11-20 as Done; boxes below are as they were at closure. T081 was met by dev-node's manual three-node run (user decision, 2026-11-20).
+
 # Tasks: Zero-Trust TLS — mTLS on Every Listener, One Outbound TLS Factory, Node-ID Allowlist
 
 **Input**: Design documents from `specs/030-zero-trust-tls/` — [plan.md](./plan.md), [spec.md](./spec.md),
