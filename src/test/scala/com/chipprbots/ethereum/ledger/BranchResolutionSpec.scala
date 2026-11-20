@@ -4,6 +4,12 @@ import org.apache.pekko.util.ByteString
 
 import cats.data.NonEmptyList
 
+import scala.jdk.CollectionConverters.*
+
+import ch.qos.logback.classic.Level
+import ch.qos.logback.classic.Logger as LogbackLogger
+import ch.qos.logback.classic.spi.ILoggingEvent
+import ch.qos.logback.core.read.ListAppender
 import org.scalamock.handlers.CallHandler0
 import org.scalamock.handlers.CallHandler1
 import org.scalamock.handlers.CallHandler2
@@ -12,6 +18,7 @@ import org.scalatest.concurrent.ScalaFutures
 import org.scalatest.matchers.should.Matchers
 import org.scalatest.wordspec.AnyWordSpec
 import org.scalatestplus.scalacheck.ScalaCheckPropertyChecks
+import org.slf4j.LoggerFactory
 
 import com.chipprbots.ethereum.BlockHelpers
 import com.chipprbots.ethereum.ObjectGenerators
@@ -699,6 +706,8 @@ class BranchResolutionSpec
       (() => blockchainReader.getBestBlockNumber).expects().anyNumberOfTimes().returning(BigInt(11))
       blockchainReader.getBlockByNumber.expects(*, BigInt(10)).anyNumberOfTimes().returning(Some(oldBlock))
       blockchainReader.getBlockByNumber.expects(*, BigInt(11)).anyNumberOfTimes().returning(None)
+      blockchainReader.getHashByBlockNumber.expects(*, BigInt(11)).anyNumberOfTimes().returning(None)
+      (() => blockchainReader.getSnapSyncPivotBlock).expects().anyNumberOfTimes().returning(None)
       blockchainReader.getCanonicalHashByNumber
         .expects(BigInt(9))
         .anyNumberOfTimes()
@@ -714,10 +723,128 @@ class BranchResolutionSpec
       } shouldBe Some((side11, BigInt(150), false))
   }
 
-  /** This node's chain 1..10 (difficulty 100 each) over `base`, the head at 10, and two batches against it. */
-  class GapSetup extends BranchResolutionTestSetupImpl:
+  // ─────────────────────────────────────────────────────────────────────────
+  // B-395 (beacon): the shared prefix is matched by header, and a body is needed only of a block the branch would
+  // displace. After a SNAP hand-off the pivot's header, index entry and weight are written and its body is left to the
+  // backfill, which on PoS fetches it last. The UnknownBranch rewind goes back to the pivot, so the batch re-served
+  // starts there: with the body required, every such batch was a gap, NoChainSwitch and an ERROR, on a healthy node.
+  // ─────────────────────────────────────────────────────────────────────────
+
+  "BranchResolution where a body of this node's chain is not stored" should {
+
+    "extend the head from a batch re-served from the SNAP pivot, its body not yet stored (PoS)" taggedAs (
+      UnitTest,
+      StateTest,
+      ConsensusTest
+    ) in new GapSetup(difficulty = 0):
+      ownChain(missing = None, withoutBody = Set(4), pivot = Some(4))
+      weightsStored()
+      setHeaderInChain(own(3).header.parentHash.value)
+      val pos = new BranchResolution(blockchainReader, Some(DesignatedHead(() => None)))
+      // own 4..10, then 11..12 on the head: the pivot 4 and 5..10 are this node's, nothing is displaced
+      val (verdict, logged) = capturingLogs(pos.resolveBranch(fromPivotExtendingHead))
+      verdict shouldEqual ExtendsCanonicalHead(7)
+      logged shouldBe empty
+
+    "extend the head from a batch re-served from the SNAP pivot, its body not yet stored (PoW)" taggedAs (
+      UnitTest,
+      StateTest,
+      ConsensusTest
+    ) in new GapSetup:
+      ownChain(missing = None, withoutBody = Set(4), pivot = Some(4))
+      weightsStored()
+      setHeaderInChain(own(3).header.parentHash.value)
+      // the PoW verdict for an extension that re-presents canonical blocks, as with the body there: the importer drops
+      // the canonical prefix (#1592) and imports 11..12 on the head
+      val (verdict, logged) = capturingLogs(branchResolution.resolveBranch(fromPivotExtendingHead))
+      verdict shouldEqual NewBetterBranch(Nil)
+      logged shouldBe empty
+
+    "give the verdict it gives with the body there, where the block without one is shared with the batch" taggedAs (
+      UnitTest,
+      StateTest,
+      ConsensusTest
+    ) in new GapSetup:
+      // block 5 is below the block the branch leaves this chain at (6): matched by its header, not displaced
+      ownChain(missing = None, withoutBody = Set(5))
+      weightsStored()
+      branchResolution.compareBranch(extendsFromSix) shouldEqual NewBetterBranch(own.drop(6))
+      branchResolution.notTaken(extendsFromSix).map(b => (b.commonBlock, b.commonHash)) shouldBe
+        Some((BigInt(6), own(5).hash.value))
+
+    "make no fork choice where a block the branch would displace has no body" taggedAs (
+      UnitTest,
+      StateTest,
+      ConsensusTest
+    ) in new GapSetup:
+      ownChain(missing = None, withoutBody = Set(8))
+      weightsStored()
+      // heavier, and own 7..10 would be handed back to the pool: block 8 cannot be
+      val (verdict, logged) = capturingLogs(branchResolution.compareBranch(extendsFromSix))
+      verdict shouldEqual NoChainSwitch
+      logged.map(_._1) shouldBe List(Level.ERROR)
+
+    "make no fork choice where a block the branch would displace has no body (PoS, the designated head)" taggedAs (
+      UnitTest,
+      StateTest,
+      ConsensusTest
+    ) in new GapSetup(difficulty = 0):
+      ownChain(missing = None, withoutBody = Set(8))
+      weightsStored()
+      val side: List[BlockHeader] = getChain(7, 12, own(5).hash.value, difficulty = 0).map(_.header)
+      val batch: NonEmptyList[BlockHeader] = NonEmptyList.fromListUnsafe(own.take(6).map(_.header) ++ side)
+      // the consensus layer names the side's tip: with block 8 whole, this is NewBetterBranch(own 7..10)
+      val pos = new BranchResolution(blockchainReader, Some(DesignatedHead(() => Some(side.last.hash.value))))
+      pos.compareBranch(batch) shouldEqual NoChainSwitch
+
+    "still find a gap where the index entry is stored and the header is not" taggedAs (
+      UnitTest,
+      StateTest,
+      ConsensusTest
+    ) in new GapSetup:
+      ownChain(missing = None, headerMissing = Set(5))
+      weightsStored()
+      branchResolution.compareBranch(extendsFromSix) shouldEqual NoChainSwitch
+      branchResolution.notTaken(extendsFromSix) shouldBe None
+
+    "say a gap at or below the SNAP pivot at WARN, once a minute at most, and above it at ERROR" taggedAs (
+      UnitTest,
+      StateTest
+    ) in new GapSetup:
+      ownChain(missing = Some(5), pivot = Some(6))
+      weightsStored()
+      val (_, atThePivot) = capturingLogs {
+        branchResolution.compareBranch(extendsFromSix)
+        branchResolution.compareBranch(extendsFromSix)
+      }
+      atThePivot.map(_._1) shouldBe List(Level.WARN)
+      // the same gap with no pivot at or above it
+      val noPivot: GapSetup = new GapSetup:
+        ownChain(missing = Some(5), pivot = Some(4))
+        weightsStored()
+      val (_, abovePivot) = capturingLogs(noPivot.branchResolution.compareBranch(noPivot.extendsFromSix))
+      abovePivot.map(_._1) shouldBe List(Level.ERROR)
+  }
+
+  /** The events BranchResolution logs at WARN and above while `body` runs: the level and the message. */
+  private def capturingLogs[A](body: => A): (A, List[(Level, String)]) =
+    val logger = LoggerFactory.getLogger(classOf[BranchResolution]).asInstanceOf[LogbackLogger]
+    val appender = new ListAppender[ILoggingEvent]()
+    appender.start()
+    val level = logger.getLevel
+    logger.setLevel(Level.WARN)
+    logger.addAppender(appender)
+    try
+      val result = body
+      (result, appender.list.asScala.toList.map(e => (e.getLevel, e.getFormattedMessage)))
+    finally
+      logger.detachAppender(appender)
+      logger.setLevel(level)
+
+  /** This node's chain 1..10 (`difficulty` each) over `base`, the head at 10, and batches against it. */
+  class GapSetup(difficulty: BigInt = 100) extends BranchResolutionTestSetupImpl:
     val base: ByteString = randomHash()
-    val own: List[Block] = getChain(1, 10, base, difficulty = 100)
+    val own: List[Block] = getChain(1, 10, base, difficulty = difficulty)
 
     /** Own 1..6, then a branch 7..12 from own 6 (difficulty 100 each): heavier than own 7..10. */
     val extendsFromSix: NonEmptyList[BlockHeader] =
@@ -729,11 +856,39 @@ class BranchResolutionSpec
         own.take(2).map(_.header) ++ getChain(3, 10, own(1).hash.value, difficulty = 90).map(_.header)
       )
 
-    def ownChain(missing: Option[BigInt]): Unit =
+    /** Own 4..10, then 11..12 on the head (`difficulty` each): a batch re-served from block 4. */
+    val fromPivotExtendingHead: NonEmptyList[BlockHeader] =
+      NonEmptyList.fromListUnsafe(
+        own.drop(3).map(_.header) ++ getChain(11, 12, own.last.hash.value, difficulty = difficulty).map(_.header)
+      )
+
+    /** `missing`: no index entry and no header; `headerMissing`: the index entry and no header; `withoutBody`: the
+      * header and its index entry, and no body. The SNAP pivot is `pivot`.
+      */
+    def ownChain(
+        missing: Option[BigInt],
+        withoutBody: Set[BigInt] = Set.empty,
+        headerMissing: Set[BigInt] = Set.empty,
+        pivot: Option[BigInt] = None
+    ): Unit =
       (() => blockchainReader.getBestBlockNumber).expects().anyNumberOfTimes().returning(BigInt(10))
+      (() => blockchainReader.getSnapSyncPivotBlock).expects().anyNumberOfTimes().returning(pivot)
       own.foreach { block =>
-        val stored = Some(block).filterNot(b => missing.contains(b.number.value))
-        blockchainReader.getBlockByNumber.expects(*, block.number.value).anyNumberOfTimes().returning(stored)
+        val number = block.number.value
+        val whole = !missing.contains(number) && !withoutBody(number) && !headerMissing(number)
+        blockchainReader.getBlockByNumber
+          .expects(*, number)
+          .anyNumberOfTimes()
+          .returning(Some(block).filter(_ => whole))
+        if !whole then
+          blockchainReader.getHashByBlockNumber
+            .expects(*, number)
+            .anyNumberOfTimes()
+            .returning(Some(block.hash).filterNot(_ => missing.contains(number)))
+          blockchainReader.getBlockHeaderByHash
+            .expects(block.hash)
+            .anyNumberOfTimes()
+            .returning(Some(block.header).filter(_ => withoutBody(number)))
       }
 
     def weightsStored(): Unit =
