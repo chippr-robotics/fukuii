@@ -1,7 +1,8 @@
 # fukuii shared backlog (schema version 1). Rendered at https://docs.fukuii.com/development/tracker/
 # Change it with scripts/backlog/backlog.py on staging (claim, status, done, ...); README.md has the protocol.
 # Hand edits in the GitHub web UI are fine: keep the schema (backlog.py check), never delete or reuse an id
-# (drop the item instead). Comments other than this header are not kept when the tool rewrites the file.
+# (drop the item instead; `backlog.py prune` moves closed items to archive.yaml). Comments other than this
+# header are not kept when the tool rewrites the file.
 version: 1
 expiry_hours: 24
 items:
@@ -3608,7 +3609,7 @@ items:
   - id: B-408
     title: "Flaky: RegularSyncSpec 'fill a hole in the account trie by repairNodeAt' repairs.repaired.size 2 vs 1 under the targeted suite"
     priority: P3
-    status: claimed
+    status: in-progress
     area: tests
     opened: 2026-11-20
     refs: []
@@ -3618,5 +3619,5 @@ items:
       by: cloud-dc960fdc
       agent: eye
       since: 2026-11-20T16:56:26Z
-      heartbeat: 2026-11-20T16:56:26Z
+      heartbeat: 2026-11-20T17:15:03Z
     notes: RegularSyncSpec.scala:2904 (spec 018 C5b T212 block). Failed once on Classic and once on Ethereum during a 13-suite testOnly run on fix/b395 (2026-11-20); 8/8 passed twice when run alone. Looks like deliverUntil delivering the node a second time before the assertion; related to B-352 timing flakes.
