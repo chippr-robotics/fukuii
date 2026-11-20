@@ -1,8 +1,7 @@
 # fukuii shared backlog (schema version 1). Rendered at https://docs.fukuii.com/development/tracker/
 # Change it with scripts/backlog/backlog.py on staging (claim, status, done, ...); README.md has the protocol.
 # Hand edits in the GitHub web UI are fine: keep the schema (backlog.py check), never delete or reuse an id
-# (drop the item instead; `backlog.py prune` moves closed items to archive.yaml). Comments other than this
-# header are not kept when the tool rewrites the file.
+# (drop the item instead). Comments other than this header are not kept when the tool rewrites the file.
 version: 1
 expiry_hours: 24
 items:
@@ -3440,18 +3439,21 @@ items:
   - id: B-396
     title: "B-376 follow-up: bulk bytecode recovery could run on the unified layout (scan reads rows, code store shared); decide whether to lift its refusal"
     priority: P3
-    status: in-progress
+    status: review
     area: storage
     opened: 2026-11-19
     refs: []
     links:
+      prs: [1962]
       spec: 018
     claim:
       by: cloud-dc960fdc
       agent: vault
       since: 2026-11-20T16:29:27Z
-      heartbeat: 2026-11-20T16:29:34Z
-    notes: "forge: BytecodeRecoveryActor writes only EvmCodeStorage, shared by both layouts, and its scan reads rows via RecoveryScanStores. Refused since B-376 to keep the routes' decision (SyncController guards) in one place."
+      heartbeat: 2026-11-20T16:49:12Z
+    notes: |-
+      forge: BytecodeRecoveryActor writes only EvmCodeStorage, shared by both layouts, and its scan reads rows via RecoveryScanStores. Refused since B-376 to keep the routes' decision (SyncController guards) in one place.
+      2026-11-20 review: PR #1962; route stays gated; B-406 follow-up
   - id: B-397
     title: "Spec 030 S7 follow-up: ephemery.release-tls-profile (FR-044) for the release fetch, once its config is read before the fetch"
     priority: P3
