@@ -48,5 +48,8 @@ jobs:
       # A targeted run (sim_limit set) legitimately emits a handful of results.
       min_tests: ${{ github.event.inputs.sim_limit != '' && 1 || 50 }}
       sim_timelimit: ${{ github.event.inputs.sim_timelimit || '60m' }}
+      # The simulator's root test reads the whole corpus for the whole run, so the
+      # time limit always ends it: no verdict, not a failure (_hive-sim.yml tabulate).
+      timelimit_umbrella: test file loader
       sim_limit: ${{ github.event.inputs.sim_limit || '' }}
       hive_ref: ${{ github.event.inputs.hive_ref || 'master' }}

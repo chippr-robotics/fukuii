@@ -13,7 +13,9 @@
     <packageSourceUrl>https://github.com/chippr-robotics/fukuii/tree/main/packaging/chocolatey</packageSourceUrl>
     <docsUrl>https://docs.fukuii.com/</docsUrl>
     <bugTrackerUrl>https://github.com/chippr-robotics/fukuii/issues</bugTrackerUrl>
-    <iconUrl>https://raw.githubusercontent.com/chippr-robotics/fukuii/main/docs/images/fukuii-hex-logo.png</iconUrl>
+    <!-- Chocolatey wants icons on a CDN, not raw.githubusercontent.com: jsDelivr, pinned to the commit that added it. -->
+    <iconUrl>https://cdn.jsdelivr.net/gh/chippr-robotics/fukuii@0e8862ebe94ab9a5218c6d27400c7076a4767c51/docs/images/fukuii-hex-logo.png</iconUrl>
+    <copyright>Copyright 2025-present Chippr Robotics, LLC; portions Copyright 2019 Input Output (Hong Kong) Ltd.</copyright>
     <licenseUrl>https://github.com/chippr-robotics/fukuii/blob/main/LICENSE</licenseUrl>
     <requireLicenseAcceptance>false</requireLicenseAcceptance>
     <releaseNotes>https://github.com/chippr-robotics/fukuii/releases/tag/v__VERSION__</releaseNotes>

@@ -212,6 +212,18 @@ class SnapControllerFixture(val testKit: ActorTestKit) extends EphemBlockchainTe
     snap ! SNAPSyncController.PollHandshakedPeers
     awaitPoll()
 
+  private val childProbe = testKit.createTestProbe[Any]()
+
+  /** The running stub child of `kind` (a `ChildStopped` kind). A stub records itself in its own `setup`, on its own
+    * thread, after the controller has reported the spawn, so a test that has only seen the spawn (or a barrier) may
+    * still find nothing in `factories.selves`: this waits for it.
+    */
+  def childSelf(kind: String): ActorRef[Nothing] =
+    childProbe.awaitAssert(
+      Option(factories.selves.get(kind)).getOrElse(throw new AssertionError(s"no $kind stub has started")),
+      10.seconds
+    )
+
   // ── Fences: what a stub child received, in order ─────────────────────────────────────────────
   // A stub child forwards to its inbox probe asynchronously, so a controller barrier alone does not prove a child has
   // (or has not) received something. A fence does: `sendFence` makes the controller send `*PeerUnavailable(id)` to every
@@ -403,9 +415,13 @@ class SnapControllerFixture(val testKit: ActorTestKit) extends EphemBlockchainTe
     scala.util.Using.resource(new SnapLogCapture) { log =>
       decideHealing(Root)
       snap ! SNAPSyncController.StateHealingComplete
-      log.awaitLine("SNAP finalization aborted")
+      // Two mailbox barriers, not a wait on the clock. Handling the completion short-circuits validation on the clean
+      // signal, so the controller sends itself `StateValidationComplete`, behind the first barrier; the second barrier
+      // is answered once that is handled, and the A5 guard logs synchronously inside it.
+      awaitProcessed(snap)
+      awaitProcessed(snap)
+      log.assertLogged("SNAP finalization aborted")
     }
-    awaitProcessed(snap)
 
   /** `ByteCodeAndStorageSync`: accounts-complete recovery with storage still to download (storage child only). */
   def enterStorageResume(
