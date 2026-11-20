@@ -79,7 +79,7 @@ jobs:
           fi
           [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "not a release version: '$VERSION'"; exit 1; }
           [[ "$REVISION" =~ ^[0-9]+$ ]] || { echo "revision must be a number: '$REVISION'"; exit 1; }
-          for s in $SERIES; do [[ "$s" =~ ^(jammy|noble|questing)$ ]] || { echo "unsupported series: $s"; exit 1; }; done
+          for s in $SERIES; do [[ "$s" =~ ^(jammy|noble|questing|resolute)$ ]] || { echo "unsupported series: $s"; exit 1; }; done
           # A release made before the PPA existed may lack the assets. Followed automatically, that is not an
           # error (or every later Release run would fail on it); dispatched by hand, it is.
           ASSETS=$(gh release view "v$VERSION" --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets[].name')
