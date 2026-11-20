@@ -26,6 +26,7 @@ import com.chipprbots.ethereum.blockchain.sync.CacheBasedBlacklist
 import com.chipprbots.ethereum.blockchain.sync.EphemBlockchainTestSetup
 import com.chipprbots.ethereum.blockchain.sync.ScenarioSetup
 import com.chipprbots.ethereum.blockchain.sync.TestSyncConfig
+import com.chipprbots.ethereum.consensus.engine.DesignatedHead
 import com.chipprbots.ethereum.crypto.*
 import com.chipprbots.ethereum.db.components.RocksDbDataSourceComponent
 import com.chipprbots.ethereum.db.components.Storages
@@ -47,6 +48,7 @@ import com.chipprbots.ethereum.mpt.PositionTestKit.RawTrieWalk
 import com.chipprbots.ethereum.network.p2p.messages.ETHPackets.NodeData
 import com.chipprbots.ethereum.nodebuilder.PruningConfigBuilder
 import com.chipprbots.ethereum.testing.Tags.*
+import com.chipprbots.ethereum.utils.BlockchainConfig
 
 /** Spec 018 C5b, T212 (B-372): the importer's on-demand fetch by position, over a real [[PathStateStorage]] on RocksDB.
   *
@@ -69,10 +71,29 @@ class OnDemandFetchByPositionSpec extends AnyFlatSpec with Matchers:
     IntegrationTest,
     DatabaseTest,
     SyncTest
-  ) in withDatadir { dir =>
-    val oracle = new Oracle
+  ) in withDatadir(dir => fetchesTheHoleByPosition(dir, posChain = false))
+
+  // B-394, the ETH/PoS leg. The chain has a terminal total difficulty, so the importer follows a consensus layer
+  // (`BranchResolution.followsConsensusLayer`), and the head the consensus layer designated is block 1. The block is
+  // post-merge (difficulty 0, so no branch is heavier than another) and extends the head: `compareBranch` takes it by
+  // its equal-weight rule, and the designated-head arm would take it as well (mutation: with both off the import never
+  // happens). The route is the one that serves the on-demand fetch on ETH: the p2p importer (`BlockImporter`, fed by
+  // `BlockFetcher`). Engine API `newPayload` does not fetch: a hole it meets is answered SYNCING (`EngineStateHoles`).
+  // A competing branch that only the designated head would take is not this test's: it is `BranchResolutionSpec`'s.
+  it should "fetch the hole by its position, repair it with repairNodeAt, and complete the import of a post-merge block following the consensus layer (B-394)" taggedAs (
+    IntegrationTest,
+    DatabaseTest,
+    SyncTest
+  ) in withDatadir(dir => fetchesTheHoleByPosition(dir, posChain = true))
+
+  private def fetchesTheHoleByPosition(dir: File, posChain: Boolean): Unit =
+    val ttd = Option.when(posChain)(BigInt(0))
+    val oracle = new Oracle(ttd)
     val block1 = oracle.seal(oracle.genesis)
-    val node = new Node(dir)
+    if posChain then
+      withClue("the block is post-merge: ")(block1.header.difficulty shouldBe Difficulty.Zero)
+      oracle.blockchainConfig.terminalTotalDifficulty shouldBe Some(BigInt(0))
+    val node = new Node(dir, ttd)
     try
       node.genesis.header shouldBe oracle.genesis.header
       val pathState = node.pathState
@@ -85,7 +106,9 @@ class OnDemandFetchByPositionSpec extends AnyFlatSpec with Matchers:
       node.storagesInstance.dataSource.update(rows.rowUpdates(Seq(hole -> None)))
       rows.read(hole) shouldBe None
 
-      val importer = node.spawnImporter()
+      val designated = Option.when(posChain)(DesignatedHead(() => Some(block1.hash.value)))
+      val importer = node.spawnImporter(designated)
+      node.followsConsensusLayer(designated) shouldBe posChain
       importer ! BlockImporter.FetcherResponse(BlockFetcher.PickedBlocks(NonEmptyList.one(block1)))
 
       val asked = node.fetcher.fishForSpecificMessage(30.seconds) { case m: BlockFetcher.FetchStateNode => m }
@@ -118,7 +141,6 @@ class OnDemandFetchByPositionSpec extends AnyFlatSpec with Matchers:
       // and the hash-keyed store, which this layout does not read, was not written
       node.storagesInstance.storages.nodeStorage.get(ByteString(kec256(holeNode.toArray))) shouldBe None
     finally node.close()
-  }
 
   private def withDatadir(test: File => Any): Unit =
     val dir = Files.createTempDirectory("on-demand-fetch-by-position").toFile
@@ -171,7 +193,12 @@ object OnDemandFetchByPositionSpec:
     override val pruningMode: PruningMode = ArchivePruning
 
   /** Seals block 1 by executing it on its hash store: what block 1's state is. */
-  final class Oracle extends EphemBlockchainTestSetup:
+  final class Oracle(terminalTotalDifficulty: Option[BigInt] = None) extends EphemBlockchainTestSetup:
+    implicit override lazy val blockchainConfig: BlockchainConfig =
+      terminalTotalDifficulty.fold(super.blockchainConfig)(ttd =>
+        super.blockchainConfig.copy(terminalTotalDifficulty = Some(ttd))
+      )
+
     val genesis: Block =
       GenesisDataLoader
         .over(blockchainReader, blockchainWriter, storagesInstance.storages)
@@ -196,7 +223,7 @@ object OnDemandFetchByPositionSpec:
       val template = parent.header.copy(
         parentHash = parent.hash,
         number = parent.number + 1,
-        difficulty = Difficulty(1000),
+        difficulty = if terminalTotalDifficulty.isDefined then Difficulty.Zero else Difficulty(1000),
         unixTimestamp = Timestamp(parent.header.unixTimestamp.toLong + 15),
         beneficiary = Miner.bytes,
         gasLimit = GasAmount(1000000),
@@ -261,7 +288,12 @@ object OnDemandFetchByPositionSpec:
   /** The node under test: the unified layout on a RocksDB datadir at `dir`, with the oracle's genesis, a real VM, real
     * execution and the node's own `ConsensusAdapter`.
     */
-  final class Node(dir: File) extends ScenarioSetup with TestSyncConfig:
+  final class Node(dir: File, terminalTotalDifficulty: Option[BigInt] = None) extends ScenarioSetup with TestSyncConfig:
+    implicit override lazy val blockchainConfig: BlockchainConfig =
+      terminalTotalDifficulty.fold(super.blockchainConfig)(ttd =>
+        super.blockchainConfig.copy(terminalTotalDifficulty = Some(ttd))
+      )
+
     override lazy val vm: VMImpl = new VMImpl
 
     override lazy val storagesInstance: RocksDbDataSourceComponent & ArchivePruningBuilder & Storages.DefaultStorages =
@@ -293,8 +325,10 @@ object OnDemandFetchByPositionSpec:
     private val peerEventBus = TestProbe()
     private val networkPeerManager = TestProbe()
 
-    /** The proof-of-work importer: branch resolution by chain weight, no consensus layer naming the head. */
-    def spawnImporter(): TypedActorRef[BlockImporter.Command] =
+    /** The importer: on proof of work, branch resolution by chain weight and no consensus layer naming the head; given
+      * a `designatedHead`, the post-merge one that follows a consensus layer.
+      */
+    def spawnImporter(designatedHead: Option[DesignatedHead] = None): TypedActorRef[BlockImporter.Command] =
       val importer = testKit.spawn(
         BlockImporter(
           fetcher.ref.toTyped[BlockFetcher.FetchCommand],
@@ -303,7 +337,7 @@ object OnDemandFetchByPositionSpec:
           blockchainWriter,
           storagesInstance.storages.stateStorage,
           storagesInstance.storages.evmCodeStorage,
-          new BranchResolution(blockchainReader),
+          new BranchResolution(blockchainReader, designatedHead),
           syncConfig,
           ommersPool.ref.toTyped[com.chipprbots.ethereum.ommers.OmmersPool.Command],
           broadcaster.ref.toTyped,
@@ -325,6 +359,10 @@ object OnDemandFetchByPositionSpec:
       )
       fetcher.expectMsgClass(10.seconds, classOf[BlockFetcher.Start])
       importer
+
+    /** What the importer's branch resolution says of following a consensus layer, for `designatedHead`. */
+    def followsConsensusLayer(designatedHead: Option[DesignatedHead]): Boolean =
+      new BranchResolution(blockchainReader, designatedHead).followsConsensusLayer
 
     /** Waits up to `max` for the best block to reach `number`. */
     def awaitBest(number: BigInt, max: FiniteDuration): Unit =
