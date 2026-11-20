@@ -56,14 +56,32 @@ class BranchResolution(
 
   private[ledger] def compareBranch(headers: NonEmptyList[BlockHeader]): BranchResolutionResult =
     val headersList = headers.toList
-    val oldBlocksWithCommonPrefix = getTopBlocksFromNumber(headers.head.number.value)
+    val own = getTopBlocksFromNumber(headers.head.number.value)
+    own.firstMissing match
+      // A header of this node's chain at or above the batch's first height not stored (or its index entry): the
+      // blocks this branch would replace, and their weight, are not all known, so no fork choice is made (B-395). Not a
+      // verdict on the branch: as where the weight of the block it stands on is not stored (below), NoChainSwitch.
+      case Some(missing) =>
+        logGap("Branch not weighed", missing, headersList)
+        NoChainSwitch
+      case None =>
+        // the blocks shared with the batch are matched by header: their bodies are not read from here on, and one not
+        // yet stored (the SNAP pivot's, until the backfill brings it) is no gap. Those the branch would displace are
+        // handed back whole (the pool takes their transactions), so each of their bodies is needed
+        val commonPrefixLength = own.sharedPrefix(headersList)
+        own.whole(commonPrefixLength) match
+          case Left(withoutBody) =>
+            logGap("Branch not weighed: a block it would displace has no body", withoutBody, headersList)
+            NoChainSwitch
+          case Right(oldBlocks) => compareWithOwn(headersList, commonPrefixLength, oldBlocks)
 
-    val commonPrefixLength = oldBlocksWithCommonPrefix
-      .zip(headersList)
-      .takeWhile { case (oldBlock, newHeader) => oldBlock.header == newHeader }
-      .length
-
-    val oldBlocks = oldBlocksWithCommonPrefix.drop(commonPrefixLength)
+  // compareBranch over this node's chain from the batch's first height to the head: no header missing, the first
+  // `commonPrefixLength` the batch's own, and `oldBlocks` those above them, whole
+  private def compareWithOwn(
+      headersList: List[BlockHeader],
+      commonPrefixLength: Int,
+      oldBlocks: List[Block]
+  ): BranchResolutionResult =
     val newHeaders = headersList.drop(commonPrefixLength)
 
     val maybeParentWeight: Option[Either[String, ChainWeight]] =
@@ -247,13 +265,14 @@ class BranchResolution(
 
   /** The record of a side branch that was weighed against this node's chain and not taken (B-300 f; forge): what is
     * needed to weigh it again when more of it arrives, without fetching it again. None when the headers hold no block
-    * that is not this node's, or the weight of the block they stand on is not stored.
+    * that is not this node's, or the weight of the block they stand on is not stored, or a block of this node's chain
+    * is not stored where the headers might still be its own (B-395).
     */
   def notTaken(headers: NonEmptyList[BlockHeader]): Option[BranchNotTaken] =
     val headersList = headers.toList
-    val own = getTopBlocksFromNumber(headers.head.number.value)
-    val shared = own.zip(headersList).takeWhile { case (block, header) => block.header == header }.length
     for
+      // a gap in this node's chain where the headers might still be its own: the block they leave it at is not known
+      shared <- getTopBlocksFromNumber(headers.head.number.value).sharedWith(headersList)
       first <- headersList.drop(shared).headOption
       parentWeight <- blockchainReader.getChainWeightByHash(first.parentHash)
     yield
@@ -268,26 +287,30 @@ class BranchResolution(
 
   /** The headers of `headers` above those this node holds, where the chain weight of the block they stand on is not
     * stored: the branch [[compareBranch]] cannot weigh, and answers `NoChainSwitch` for, with an error (B-385). None
-    * where that weight is stored, and where no header is above those this node holds. It reads only, as
-    * [[compareBranch]] does, and says nothing of whether the branch is the heavier: the escalation's feed weighs it
-    * from the head (`PowEscalationFeed`).
+    * where that weight is stored, where no header is above those this node holds, and where a block of this node's
+    * chain is not stored where the headers might still be its own (B-395: the block weighed from is then not known). It
+    * reads only, as [[compareBranch]] does, and says nothing of whether the branch is the heavier: the escalation's
+    * feed weighs it from the head (`PowEscalationFeed`).
     */
   def withoutForkWeight(headers: NonEmptyList[BlockHeader]): Option[NonEmptyList[BlockHeader]] =
     val headersList = headers.toList
     val own = getTopBlocksFromNumber(headers.head.number.value)
-    val shared = own.zip(headersList).takeWhile { case (block, header) => block.header == header }.length
     for
+      // where a gap in this node's chain leaves the shared blocks unknown, the block weighed from is not known either
+      // (B-395): not named here, compareBranch having answered for the gap
+      shared <- own.sharedWith(headersList)
       side <- NonEmptyList.fromList(headersList.drop(shared))
       // the block compareBranch weighs from: the one under this node's first block above the shared ones, else under
       // the branch's first
-      under = own.drop(shared).headOption.map(_.header).getOrElse(side.head).parentHash
+      under = own.blocks.drop(shared).headOption.map(_.header).getOrElse(side.head).parentHash
       if blockchainReader.getChainWeightByHash(under).isEmpty
     yield side
 
   /** `headers` stand on the tip of a branch that was not taken: the branch with them, and whether it would be taken
     * now. By the rules of [[compareBranch]]: heavier than this node's chain, and not refused by MESS. None when the
     * headers do not stand on that tip or do not form a chain, and when the block the branch leaves this chain at is no
-    * longer on it (this chain has moved since): MESS would then be asked of another pair of branches (forge).
+    * longer on it (this chain has moved since): MESS would then be asked of another pair of branches (forge). Where a
+    * block of this node's chain above the common block is not stored, not taken (B-395).
     *
     * Proof of work only: it is not asked on a chain that follows a consensus layer.
     */
@@ -302,20 +325,107 @@ class BranchResolution(
         difficultyAboveTheCommonBlock =
           branch.difficultyAboveTheCommonBlock + headers.toList.map(_.difficulty.value).foldLeft(BigInt(0))(_ + _)
       )
-      val own = getTopBlocksFromNumber(branch.commonBlock + 1)
-      // this node's head, or the common block where the head has come down to it
-      val ownWeight = blockchainReader.getChainWeightByHash(
-        own.lastOption.map(_.header.hash).getOrElse(com.chipprbots.ethereum.domain.BlockHash(branch.commonHash))
-      )
-      val taken = ownWeight.exists(longer.weight > _) &&
-        !messRejects(own, longer.difficultyAboveTheCommonBlock, longer.tip)
-      Some((longer, taken))
+      val above = getTopBlocksFromNumber(branch.commonBlock + 1)
+      // every block of this node's chain above the common block would be displaced, so each is needed whole, as in
+      // compareBranch
+      above.firstMissing.toLeft(()).flatMap(_ => above.whole(0)) match
+        // a block of this node's chain above the common block not stored: neither the head's weight is read from the
+        // last block found nor MESS asked of a chain with a block left out (B-395). Not taken, as compareBranch would
+        // answer, and remembered as it is
+        case Left(missing) =>
+          logGap("Branch not taken weighed again", missing, headers.toList)
+          Some((longer, false))
+        case Right(own) =>
+          // this node's head, or the common block where the head has come down to it
+          val ownWeight = blockchainReader.getChainWeightByHash(
+            own.lastOption.map(_.header.hash).getOrElse(com.chipprbots.ethereum.domain.BlockHash(branch.commonHash))
+          )
+          val taken = ownWeight.exists(longer.weight > _) &&
+            !messRejects(own, longer.difficultyAboveTheCommonBlock, longer.tip)
+          Some((longer, taken))
 
-  private def getTopBlocksFromNumber(from: BigInt): List[Block] =
+  /** This node's chain from `from` up to the head, by the hash index, as far as the first height whose header is not
+    * stored (B-395). A height not stored is not skipped: skipped, the blocks above it moved down one place, so that
+    * each was set against the header one height below its own, and the shared prefix, the block a branch was weighed
+    * from and the blocks it would replace were all one block out.
+    *
+    * Each block is read whole first, as before, so where all are stored the reads and the blocks are those of before.
+    * Where a block is not, its header is read by the same index entry, and the block is kept without its body: the
+    * shared prefix is matched by header, and a body is needed only of a block that would be displaced ([[OwnBlocks]]).
+    * After a SNAP hand-off the pivot's body is the backfill's last (on PoS), and a batch re-served from the pivot was
+    * not weighed until it came (beacon, B-395).
+    */
+  private def getTopBlocksFromNumber(from: BigInt): OwnBlocks =
     val bestBranch = blockchainReader.getBestBranch
-    (from to blockchainReader.getBestBlockNumber)
-      .flatMap(nb => blockchainReader.getBlockByNumber(bestBranch, nb))
-      .toList
+    val best = blockchainReader.getBestBlockNumber
+    @scala.annotation.tailrec
+    def up(number: BigInt, found: List[OwnBlock]): OwnBlocks =
+      if number > best then OwnBlocks(found.reverse, None)
+      else
+        blockchainReader.getBlockByNumber(bestBranch, number) match
+          case Some(block) => up(number + 1, OwnBlock(block.header, Some(block.body)) :: found)
+          case None =>
+            blockchainReader
+              .getHashByBlockNumber(bestBranch, number)
+              .flatMap(blockchainReader.getBlockHeaderByHash) match
+              case Some(header) => up(number + 1, OwnBlock(header, None) :: found)
+              case None         => OwnBlocks(found.reverse, Some(number))
+    up(from, Nil)
+
+  /** What a gap in this node's chain leaves undecided: a hole in this node's datadir, not a verdict. Said at ERROR
+    * above the SNAP pivot, where every block is to be stored whole. At or below it the backfill may not have brought
+    * the block yet, and a peer re-serves the same batch until it does: said at WARN, once a minute at most (beacon).
+    */
+  private def logGap(what: String, firstMissing: BigInt, headers: List[BlockHeader]): Unit =
+    val message =
+      s"$what: block $firstMissing of this node's chain is not stored, so its blocks above it cannot be set against " +
+        s"the headers ${headers.headOption.fold("-")(_.number.toString)}-${headers.lastOption.fold("-")(_.number.toString)}; " +
+        "no chain switch (B-395)"
+    if blockchainReader.getSnapSyncPivotBlock.exists(firstMissing <= _) then
+      val now = System.nanoTime()
+      val last = lastGapWarnNanos.get()
+      val due = last == Long.MinValue || now - last >= BranchResolution.GapWarnEveryNanos
+      if due && lastGapWarnNanos.compareAndSet(last, now) then log.warn(message)
+    else log.error(message)
+
+  // when a gap at or below the SNAP pivot was last said; Long.MinValue: never
+  private val lastGapWarnNanos = new java.util.concurrent.atomic.AtomicLong(Long.MinValue)
+
+object BranchResolution:
+  private val GapWarnEveryNanos: Long = 60L * 1000L * 1000L * 1000L
+
+/** A block of this node's chain as [[BranchResolution]] reads it: its body None where the header is stored and the body
+  * is not.
+  */
+final private[ledger] case class OwnBlock(header: BlockHeader, body: Option[com.chipprbots.ethereum.domain.BlockBody])
+
+/** This node's chain from a height up to the head ([[BranchResolution]]): every height where `firstMissing` is None,
+  * else those below the first whose header is not stored.
+  */
+final private[ledger] case class OwnBlocks(blocks: List[OwnBlock], firstMissing: Option[BigInt]):
+
+  /** How many of `headers` are this node's own, from the first, by header: the rule compareBranch has always applied.
+    */
+  def sharedPrefix(headers: List[BlockHeader]): Int =
+    blocks.zip(headers).takeWhile { case (block, header) => block.header == header }.length
+
+  /** How many of `headers` are this node's own blocks, from the first: None where they all are as far as the headers
+    * read go, a header is missing there, and `headers` go on past it. Whether the header at the missing height is this
+    * node's is then not known, and a prefix counted on regardless would be one block out (B-395). A body not stored
+    * plays no part: only headers are compared.
+    */
+  def sharedWith(headers: List[BlockHeader]): Option[Int] =
+    val shared = sharedPrefix(headers)
+    if firstMissing.isDefined && shared == blocks.length && headers.length > shared then None else Some(shared)
+
+  /** The blocks above the first `shared`, whole: Left with the number of the first whose body is not stored. These are
+    * the blocks a branch would displace, handed back whole and weighed by MESS.
+    */
+  def whole(shared: Int): Either[BigInt, List[Block]] =
+    val displaced = blocks.drop(shared)
+    displaced.collectFirst { case OwnBlock(header, None) => header.number.value } match
+      case Some(withoutBody) => Left(withoutBody)
+      case None              => Right(displaced.collect { case OwnBlock(header, Some(body)) => Block(header, body) })
 
 /** A side branch that was weighed and not taken, as [[BranchResolution.notTaken]] records it.
   *
