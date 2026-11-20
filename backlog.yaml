@@ -3501,3 +3501,14 @@ items:
     links:
       spec: specs/028-builtin-ephemery-hoodi
     notes: "Seen at the 166 reset 2026-11-19: 'Snapshot state appears to be from the wrong network'. dev-node's companion script now checkpoint-syncs only when the server's genesis_time = MIN_GENESIS_TIME+GENESIS_DELAY. Document in docs/runbooks/ephemery.md."
+  - id: B-404
+    title: "Chocolatey 0.12.1 resubmission: moderator asked for a CDN iconUrl (and a copyright element)"
+    priority: P1
+    status: open
+    area: ops
+    size: S
+    opened: 2026-11-20
+    refs: []
+    links:
+      prs: [1957]
+    notes: "Moderator sent 0.12.1 back: iconUrl on raw.githubusercontent.com. #1957: jsDelivr URL pinned to 0e8862eb, <copyright>, and chocolatey.yml resubmit input. Resubmit run 44661276503 (2026-11-20)."
