@@ -106,7 +106,8 @@ copy is authoritative.
   - ETC fork schedule: ECIP-1066
   - Olympia fork (planned — four ECIPs, all required):
     ECIP-1111 (EIP-1559 + basefee→Treasury),
-    ECIP-1112 (Treasury contract `0x60d0A7394f9Cd5C469f9F5Ec4F9C803F5294d79b`),
+    ECIP-1112 (Treasury contract `0xd6165F3aF4281037bce810621F62B43077Fb0e37`, as in `blockchains.conf`
+    `treasury-address`; user-confirmed 2026-11-20, B-388. ECIP-1112 itself names no fixed address),
     ECIP-1121 (remaining EIPs: EIP-3198, EIP-3529, EIP-3541, EIP-3554, EIP-7594, EIP-7939 CLZ),
     ECIP-1122 (MIN_MINER_TIP 1 gwei floor, gas target schedule, MESS reactivation)
   - Fallback (may lag local): https://ecips.ethereumclassic.org
