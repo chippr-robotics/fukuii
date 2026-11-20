@@ -129,6 +129,15 @@ on:
         required: false
         type: string
         default: ''
+      timelimit_umbrella:
+        description: |
+          Exact name of a test that spans the whole run (the consensus simulator's
+          "test file loader"), so a --sim.timelimit cut always ends it. Discounted like
+          the other tests the time limit cut off (see the tabulate step). Defaults to
+          empty: no test is exempt from the 15-minute rule.
+        required: false
+        type: string
+        default: ''
     outputs:
       passed:
         description: 'Number of simulator tests that passed'
@@ -145,6 +154,9 @@ on:
       gate_failed:
         description: 'Tests matching gate_pattern that failed (0 if no gate)'
         value: ${{ jobs.hive.outputs.gate_failed }}
+      cut_off:
+        description: 'Tests the --sim.timelimit cut off before a verdict (in neither passed nor failed)'
+        value: ${{ jobs.hive.outputs.cut_off }}
 
 permissions:
   contents: read
@@ -165,6 +177,7 @@ jobs:
       json_count: ${{ steps.tab.outputs.json_count }}
       gate_passed: ${{ steps.tab.outputs.gate_passed }}
       gate_failed: ${{ steps.tab.outputs.gate_failed }}
+      cut_off: ${{ steps.tab.outputs.cut_off }}
 
     steps:
       - name: Checkout fukuii
@@ -398,6 +411,7 @@ jobs:
           GATE_PATTERN: ${{ inputs.gate_pattern }}
           GATE_EXCLUDE: ${{ inputs.gate_exclude }}
           SIM_SKIP: ${{ inputs.sim_skip }}
+          TIMELIMIT_UMBRELLA: ${{ inputs.timelimit_umbrella }}
         run: |
           set -uo pipefail
           shopt -s nullglob
@@ -414,6 +428,28 @@ jobs:
           gate_failed=0
           gate_failed_names=""
           json_count=0
+          cut_off=0
+          gate_cut_off=0
+
+          # Tests the --sim.timelimit cut off are not failures: they never reached a verdict.
+          #
+          # Every consume-rlp and consensus run on main PRs since 0.10.0 went red on exactly
+          # these and nothing else (2026-11-19 audit of four runs, 5,110 results: 18 failures,
+          # all of them this). When the time limit fires, hive logs "simulation timed out" and
+          # TestManager.Terminate ends every running test with pass=false, timeout=true and
+          # "Test was terminated by host"; Terminate is the only place hive sets timeout=true.
+          # Which ~4 tests that hits depends on scheduling, so it read as a flaky failure.
+          #
+          # They are counted as cut_off, in neither passed nor failed, only when
+          #   - this run logged "simulation timed out" (Terminate also runs when the simulator
+          #     crashes or hive is interrupted, and those stay failures), and
+          #   - the test started within the last 15 minutes before the cut, or is the
+          #     caller's declared timelimit_umbrella. A test that hung for longer is a hang,
+          #     and stays a failure.
+          # min_tests counts only tests that reached a verdict.
+          sim_timed_out=false
+          grep -q 'simulation timed out' hive-run.log 2>/dev/null && sim_timed_out=true
+          cut_window_s=900
 
           # Extract pass=true and pass=false counts in a single jq pass per
           # file, with `?` operators and `// 0` defaults so unexpected schema
@@ -436,19 +472,29 @@ jobs:
               if $e == "" then false
               else (.name // "") | test($e; "i")
               end;
-            (cases | map(.summaryResult.pass)) as $all |
-            (cases
+            def ts: try (sub("\\.[0-9]+"; "") | fromdateiso8601) catch null;
+            ([cases[] | .end // "" | ts | select(. != null)] | max) as $last |
+            def cut:
+              $timedout and (.summaryResult.timeout == true) and $last != null
+              and (((.name // "") == $umbrella and $umbrella != "")
+                   or ((.start // "" | ts) as $s | $s != null and ($last - $s) <= $window));
+            (cases | map(select(cut | not))) as $judged |
+            ($judged | map(.summaryResult.pass)) as $all |
+            ($judged
+              | map(select(matches($p)))
+              | map(select(excluded($x) | not))) as $subcases |
+            ($subcases | map(.summaryResult.pass)) as $sub |
+            ($subcases | map(select(.summaryResult.pass == false) | .name // "?")) as $failed_names |
+            (cases | map(select(cut))) as $cutcases |
+            ($cutcases
               | map(select(matches($p)))
               | map(select(excluded($x) | not))
-              | map(.summaryResult.pass)) as $sub |
-            (cases
-              | map(select(matches($p)))
-              | map(select(excluded($x) | not))
-              | map(select(.summaryResult.pass == false) | .name // "?")) as $failed_names |
+              | length) as $subcut |
             "\($all | map(select(. == true))  | length) " +
             "\($all | map(select(. == false)) | length) " +
             "\($sub | map(select(. == true))  | length) " +
-            "\($sub | map(select(. == false)) | length)\n" +
+            "\($sub | map(select(. == false)) | length) " +
+            "\($cutcases | length) \($subcut)\n" +
             ($failed_names | join("\n"))
           '
 
@@ -456,11 +502,14 @@ jobs:
             # Only count files that look like hive suite results.
             jq -e 'has("testCases")' "$jf" >/dev/null 2>&1 || continue
 
-            out=$(jq -r --arg p "$GATE_PATTERN" --arg x "$GATE_EXCLUDE" "$jq_query" "$jf" 2>/dev/null || echo "0 0 0 0")
+            out=$(jq -r --arg p "$GATE_PATTERN" --arg x "$GATE_EXCLUDE" \
+              --argjson timedout "$sim_timed_out" --argjson window "$cut_window_s" \
+              --arg umbrella "${TIMELIMIT_UMBRELLA:-}" \
+              "$jq_query" "$jf" 2>/dev/null || echo "0 0 0 0 0 0")
             counts_line=$(printf '%s\n' "$out" | head -n1)
             names_block=$(printf '%s\n' "$out" | tail -n +2)
-            read -r p f gp gf <<< "${counts_line:-0 0 0 0}"
-            for v in p f gp gf; do
+            read -r p f gp gf c gc <<< "${counts_line:-0 0 0 0 0 0}"
+            for v in p f gp gf c gc; do
               eval "val=\$$v"
               [[ "$val" =~ ^[0-9]+$ ]] || eval "$v=0"
             done
@@ -470,6 +519,8 @@ jobs:
             failed=$((failed + f))
             gate_passed=$((gate_passed + gp))
             gate_failed=$((gate_failed + gf))
+            cut_off=$((cut_off + c))
+            gate_cut_off=$((gate_cut_off + gc))
             if [ -n "$names_block" ]; then
               gate_failed_names="${gate_failed_names}${names_block}"$'\n'
             fi
@@ -529,7 +580,12 @@ jobs:
             echo "gate_passed=$gate_passed"
             echo "gate_failed=$gate_failed"
             echo "json_count=$json_count"
+            echo "cut_off=$cut_off"
           } >> "$GITHUB_OUTPUT"
+
+          if [ "$cut_off" -gt 0 ]; then
+            echo "--- ${cut_off} test(s) cut off by --sim.timelimit (no verdict; not counted as passed or failed; ${gate_cut_off} in the gated subset) ---"
+          fi
 
 
           # Echo the failing test names to STDOUT, not only to the job summary.
@@ -709,6 +765,7 @@ jobs:
           MIN_TESTS: ${{ inputs.min_tests }}
           GATE_PATTERN: ${{ inputs.gate_pattern }}
           GATE_FAILED: ${{ steps.tab.outputs.gate_failed }}
+          CUT_OFF: ${{ steps.tab.outputs.cut_off }}
           HIVE_EXIT: ${{ steps.sim.outputs.hive_exit }}
           LABEL: ${{ inputs.label }}
           SIM: ${{ inputs.sim }}
@@ -792,6 +849,10 @@ jobs:
             echo
             echo "\`${SIM}\` — ${passed} passed, ${failed} failed, ${total} total "
             echo "(min_tests=${min_tests}, threshold=${threshold}, hive exit ${HIVE_EXIT:-?})"
+            if [ "${CUT_OFF:-0}" != "0" ]; then
+              echo
+              echo "${CUT_OFF} test(s) were still running when \`--sim.timelimit\` ended the run: no verdict, counted in neither column."
+            fi
             echo
           } >> "$GITHUB_STEP_SUMMARY"
 
