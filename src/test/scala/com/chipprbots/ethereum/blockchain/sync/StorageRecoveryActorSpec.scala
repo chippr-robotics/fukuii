@@ -16,6 +16,7 @@ import com.chipprbots.ethereum.blockchain.sync.snap.StateValidator
 import com.chipprbots.ethereum.blockchain.sync.snap.StorageScheme
 import com.chipprbots.ethereum.blockchain.sync.snap.actors
 import com.chipprbots.ethereum.blockchain.sync.snap.controller.StateIngest
+import com.chipprbots.ethereum.crypto.kec256
 import com.chipprbots.ethereum.db.cache.LruCache
 import com.chipprbots.ethereum.db.dataSource.EphemDataSource
 import com.chipprbots.ethereum.db.storage.AppStateStorage
@@ -38,8 +39,12 @@ import com.chipprbots.ethereum.db.storage.pathstate.BlockRef
 import com.chipprbots.ethereum.db.storage.pathstate.PositionKey
 import com.chipprbots.ethereum.db.storage.pathstate.PositionRepairs
 import com.chipprbots.ethereum.db.storage.pruning.ArchivePruning
+import com.chipprbots.ethereum.domain.Account
 import com.chipprbots.ethereum.domain.BlockchainReader
 import com.chipprbots.ethereum.domain.BlockchainWriter
+import com.chipprbots.ethereum.domain.UInt256
+import com.chipprbots.ethereum.mpt.MerklePatriciaTrie
+import com.chipprbots.ethereum.mpt.MerklePatriciaTrie.defaultByteArraySerializable
 import com.chipprbots.ethereum.testing.Tags.*
 import com.chipprbots.ethereum.utils.Config
 
@@ -174,6 +179,38 @@ class StorageRecoveryActorSpec extends ScalaTestWithActorTestKit() with AnyFlatS
     )
     syncController.expectMsg(8.seconds, StorageRecoveryActor.RecoveryNotRun)
     appStateStorage.isStorageRecoveryDone() shouldBe false
+    testKit.stop(actor)
+  }
+
+  // The actor's own scan runs in a Future. It read `ctx.log` there, which throws off the actor's thread, so every such
+  // scan ended as `ScanFailed`, whatever the state (B-406). A state with no storage missing must say so.
+  it should "run its own scan over a present state and mark recovery done when no storage is missing (B-406)" taggedAs (
+    UnitTest,
+    SyncTest
+  ) in {
+    val syncController = TestProbe("syncController_scan_ok")
+    val networkPeerManager = TestProbe("npm_scan_ok")
+    val (stateStorage, appStateStorage, flatSlots) = newStorages()
+    val build = stateStorage.getBackingStorage(0)
+    val root = ByteString(
+      MerklePatriciaTrie[Array[Byte], Array[Byte]](build)
+        .put(kec256(Array[Byte](1)), Account.empty().toBytes)
+        .put(kec256(Array[Byte](2)), Account(nonce = UInt256.One).toBytes)
+        .getRootHash
+    )
+    val actor = testKit.spawn(
+      StorageRecoveryActor.testApply(
+        stateRoot = root,
+        stateIngest = recoveryIngest(stateStorage, appStateStorage, flatSlots),
+        networkPeerManager = networkPeerManager.ref,
+        syncController = syncController.ref.toTyped[Any],
+        pivotBlockNumber = BigInt(0),
+        snapSyncConfig = newConfig(1.minute, 8)
+      ),
+      "storage-recovery-spec-scan-ok"
+    )
+    syncController.expectMsg(8.seconds, StorageRecoveryActor.RecoveryComplete)
+    appStateStorage.isStorageRecoveryDone() shouldBe true
     testKit.stop(actor)
   }
 
