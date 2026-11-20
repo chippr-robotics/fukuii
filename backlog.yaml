@@ -3609,15 +3609,18 @@ items:
   - id: B-408
     title: "Flaky: RegularSyncSpec 'fill a hole in the account trie by repairNodeAt' repairs.repaired.size 2 vs 1 under the targeted suite"
     priority: P3
-    status: in-progress
+    status: review
     area: tests
     opened: 2026-11-20
     refs: []
     links:
+      prs: [1968]
       spec: "-"
     claim:
       by: cloud-dc960fdc
       agent: eye
       since: 2026-11-20T16:56:26Z
-      heartbeat: 2026-11-20T17:15:03Z
-    notes: RegularSyncSpec.scala:2904 (spec 018 C5b T212 block). Failed once on Classic and once on Ethereum during a 13-suite testOnly run on fix/b395 (2026-11-20); 8/8 passed twice when run alone. Looks like deliverUntil delivering the node a second time before the assertion; related to B-352 timing flakes.
+      heartbeat: 2026-11-20T17:22:48Z
+    notes: |-
+      RegularSyncSpec.scala:2904 (spec 018 C5b T212 block). Failed once on Classic and once on Ethereum during a 13-suite testOnly run on fix/b395 (2026-11-20); 8/8 passed twice when run alone. Looks like deliverUntil delivering the node a second time before the assertion; related to B-352 timing flakes.
+      2026-11-20 review: Real 30 s importer stall, not just a flake; forge review pending.
