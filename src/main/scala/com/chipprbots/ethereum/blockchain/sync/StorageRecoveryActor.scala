@@ -243,13 +243,16 @@ object StorageRecoveryActor:
             s"StorageRecoveryActor starting: scanning state trie for missing contract storage " +
               s"(stateRoot=${stateRoot.take(4).toArray.map("%02x".format(_)).mkString}...)"
           )
+          // `ctx.log` may only be read on the actor's thread: read inside the Future it threw, and every scan ended as
+          // `ScanFailed` whatever the state (B-406). The logger is taken here and handed in.
+          val scanLog = ctx.log
           ctx.pipeToSelf(
             Future(
               scanForMissingStorage(
                 stateRoot,
                 RecoveryScanStores
                   .forRoot(stateIngest.stateTries, positions, stateRoot, pivotBlockNumber),
-                ctx.log
+                scanLog
               )
             )(using ctx.executionContext)
           ) {
