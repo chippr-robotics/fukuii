@@ -3150,7 +3150,7 @@ items:
       by: cloud-dc960fdc
       agent: main
       since: 2026-11-18T16:08:42Z
-      heartbeat: 2026-11-18T18:33:00Z
+      heartbeat: 2026-11-20T18:19:03Z
     notes: |-
       Seen 2026-11-18 on #1916 (LookupsSpec) and #1921 (both), unrelated diffs; both pass locally 2/2 on the same heads. LookupsSpec uses PatienceConfig(5 s) eventually throughout. Synchronise on the event instead of a timeout; never skip.
       2026-11-18 in-progress: LookupsSpec race fixed in #1927 (waited on a count true part-way). Left: EngineApiHttpServerObservationSpec and JsonRpcHttpServerLifecycleSpec each failed once on CI 2026-11-18 (#1921); capture their failure text from the full job log (logs_url, not the 5000-line tail) when they recur.
