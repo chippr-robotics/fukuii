@@ -3580,3 +3580,13 @@ items:
     links:
       spec: 018
     notes: After B-395 compareBranch answers NoChainSwitch with an error where a block of this node's chain from the batch's first height to the head is not stored. Unlike the missing-fork-weight case (B-385, withoutForkWeight -> ConsensusAdapter.forkWeightNotStored) nothing ends the wait. Decide (forge) whether to route it through notJudgedHeaders with its own StateUnavailable message (forkWeightNotStored's text names the weight, not the gap) and check BlockImporter NoChainSwitch arm.
+  - id: B-408
+    title: "Flaky: RegularSyncSpec 'fill a hole in the account trie by repairNodeAt' repairs.repaired.size 2 vs 1 under the targeted suite"
+    priority: P3
+    status: open
+    area: tests
+    opened: 2026-11-20
+    refs: []
+    links:
+      spec: "-"
+    notes: RegularSyncSpec.scala:2904 (spec 018 C5b T212 block). Failed once on Classic and once on Ethereum during a 13-suite testOnly run on fix/b395 (2026-11-20); 8/8 passed twice when run alone. Looks like deliverUntil delivering the node a second time before the assertion; related to B-352 timing flakes.
