@@ -3445,21 +3445,18 @@ items:
   - id: B-396
     title: "B-376 follow-up: bulk bytecode recovery could run on the unified layout (scan reads rows, code store shared); decide whether to lift its refusal"
     priority: P3
-    status: review
+    status: done
     area: storage
     opened: 2026-11-19
+    closed: 2026-11-20
     refs: []
     links:
       prs: [1962]
       spec: 018
-    claim:
-      by: cloud-dc960fdc
-      agent: vault
-      since: 2026-11-20T16:29:27Z
-      heartbeat: 2026-11-20T16:49:12Z
     notes: |-
       forge: BytecodeRecoveryActor writes only EvmCodeStorage, shared by both layouts, and its scan reads rows via RecoveryScanStores. Refused since B-376 to keep the routes' decision (SyncController guards) in one place.
       2026-11-20 review: PR #1962; route stays gated; B-406 follow-up
+      2026-11-20 done: Merged: bytecode recovery's actor refusal lifted on the position layout (routes stay gated); off-thread ctx.log fixed.
   - id: B-397
     title: "Spec 030 S7 follow-up: ephemery.release-tls-profile (FR-044) for the release fetch, once its config is read before the fetch"
     priority: P3
