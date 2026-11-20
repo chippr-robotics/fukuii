@@ -657,6 +657,14 @@ if [ "$FROM" = sync ]; then
   else
     result "root equals the head's stateRoot" FAIL "block $n: ours $(jq -c '{hash,stateRoot}' <<<"$ours"), reference $(jq -c '{hash,stateRoot}' <<<"$theirs")"
   fi
+  # The live probes above only run while the head is inside the window, and a node catching up after the hand-off
+  # crosses pivot+1..pivot+255 in seconds (T248 on Mordor: 302 blocks in 5 s, no live probe in the window). So the
+  # window is probed again now, in the context of past blocks inside it: pivot+1, its middle and pivot+255, as far as
+  # the head reaches. Those calls need the node to serve state at those blocks; a call it does not serve is "missed".
+  for at in $((PIVOT + 1)) $((PIVOT + 128)) $((PIVOT + 255)); do
+    if [ "$at" -le "$head" ]; then probe_window "$at"; fi
+  done
+  log "ancestor window: $BH_OK BLOCKHASH probe(s) right, $BH_BAD wrong, $BH_MISSED not served (live and historical)"
   if [ "$BH_BAD" -gt 0 ]; then
     result "ancestor window: BLOCKHASH below the pivot" FAIL "$BH_BAD probe(s) wrong, $BH_OK right, $BH_MISSED not served"
   elif [ "$BH_OK" -gt 0 ]; then
