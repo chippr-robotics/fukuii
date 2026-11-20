@@ -1037,21 +1037,23 @@ items:
   - id: B-102
     title: hive sampled gates count tests cut off by "simulation timed out" as failures
     priority: P3
-    status: claimed
+    status: review
     area: ci
     size: S
     opened: 2026-11-07
     refs: [handoff §3]
-    links: {}
+    links:
+      prs: [1957]
     claim:
       by: cloud-c0114ec2
       agent: main
       since: 2026-11-20T00:45:30Z
-      heartbeat: 2026-11-20T00:45:30Z
+      heartbeat: 2026-11-20T00:45:33Z
       branch: ccr-c0114ec2-7ueey8
     notes: |-
       Unverified dev-node item (handoff section 3): check it still applies before starting.
       Seen on the 0.10.0 and 0.11.0 promotions (consensus 5, consume-rlp 4).
+      2026-11-20 review: Verified 2026-11-19: 4 runs, 5,110 results, all 18 failures were Terminate() cut-offs (timeout=true). #1957 counts them as cut_off when the run logged 'simulation timed out' and the test started <=15 min before the cut (or is the declared umbrella).
   - id: B-103
     title: Deduplicate the gas calculations of the CREATE and CALL opcodes
     priority: P3
