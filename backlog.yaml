@@ -3417,23 +3417,20 @@ items:
   - id: B-394
     title: "T212 IT, ETH leg: OnDemandFetchByPositionSpec on a PoS chain config (designated head, post-merge blocks)"
     priority: P3
-    status: review
+    status: done
     area: sync
     size: S
     opened: 2026-11-19
+    closed: 2026-11-20
     refs: []
     links:
       prs: [1963]
       spec: 018
     depends_on: [B-372]
-    claim:
-      by: cloud-dc960fdc
-      agent: vault
-      since: 2026-11-20T16:42:49Z
-      heartbeat: 2026-11-20T16:49:15Z
     notes: |-
       B-372 covers the PoW importer path over a real PathStateStorage on RocksDB. The ETH importer path (TTD config, DesignatedHead branch resolution, post-merge block) is pinned only at actor level in RegularSyncSpec; this extends the IT with that leg.
       2026-11-20 review: PR #1963
+      2026-11-20 done: Merged: ETH/PoS leg of OnDemandFetchByPositionSpec.
   - id: B-395
     title: "BranchResolution.getTopBlocksFromNumber skips missing blocks (flatMap): shared-prefix and fork-weight block misalign over a gap in this node's chain"
     priority: P3
