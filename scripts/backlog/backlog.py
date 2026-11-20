@@ -25,6 +25,7 @@ Usage, from anywhere inside a fukuii clone (set FUKUII_NODE once per host, e.g. 
     backlog.py release B-012 [--reason "..."]
     backlog.py done B-012 [--pr 1750]
     backlog.py drop B-012 --reason "..."
+    backlog.py priority B-012 P1 --reason "..."   (anyone: triage, not ownership)
     backlog.py render --out DIR
     backlog.py check [--file backlog.yaml]
 
@@ -726,6 +727,28 @@ def cmd_drop(tr: Tracker, a) -> None:
     _close(tr, a, "dropped", a.reason)
 
 
+def cmd_priority(tr: Tracker, a) -> None:
+    """Re-triage an item. Priority is triage, not ownership: anyone may change it, claimed or not, and the claim and
+    its heartbeat stay as they are. The reason is required, since a change moves the item between the burn-down's
+    P0-P1 and P2-P3 lines and changes what others pick up; it goes into the item's notes and the commit message."""
+    by, iid, new = need_by(a), norm_id(a.id), a.priority
+    if not a.reason or not a.reason.strip():
+        raise Refused("a priority change needs the reason: --reason TEXT")
+
+    def fn(doc):
+        it, now = find(doc, iid), now_utc()
+        if it["status"] in TERMINAL:
+            raise Refused(f"{iid} is {it['status']}")
+        old = it["priority"]
+        if old == new:
+            return None
+        it["priority"] = new
+        add_note(it, f"{stamp(now)[:10]} priority {old}->{new} by {by}: {a.reason}")
+        return f"tracker: {iid} priority {old} -> {new} by {by}\n\n{a.reason}", f"{iid} is now {new} (was {old})"
+
+    print(tr.mutate(fn, by) or f"{iid} is already {new}")
+
+
 def cmd_add(tr: Tracker, a) -> None:
     by = need_by(a)
     if a.opened and not _date_ok(a.opened):
@@ -1230,6 +1253,12 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--reason", required=True)
     s.add_argument("--force", action="store_true", help="drop over someone else's EXPIRED claim")
     s.set_defaults(fn=cmd_drop)
+
+    s = sub.add_parser("priority", parents=[common], help="change an item's priority (anyone; --reason required)")
+    s.add_argument("id")
+    s.add_argument("priority", choices=PRIORITIES)
+    s.add_argument("--reason", required=True, help="why; recorded in the item's notes and the commit")
+    s.set_defaults(fn=cmd_priority)
 
     s = sub.add_parser("render", parents=[common, reader], help="write the Tracker page (index.md, burndown.svg)")
     s.add_argument("--out", required=True)

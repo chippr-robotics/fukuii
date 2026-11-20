@@ -122,7 +122,7 @@ class SNAPCoordinatorGoneSpec
   "A coordinator stopped by a restart" should "cost nothing: the report lands where it is dropped" taggedAs UnitTest in {
     val f = fixture()
     val snap = f.enterStorageResume()
-    val child = f.factories.selves.get(ChildStopped.Storage)
+    val child = f.childSelf(ChildStopped.Storage)
     snap ! DelayedRestart("spec 022 test")
     testKit.createTestProbe[Any]().expectTerminated(child, 10.seconds)
     // Two barriers, not one. CoordinatorGone only exists once the controller has handled the death-watch notification,
@@ -142,7 +142,7 @@ class SNAPCoordinatorGoneSpec
   "An account coordinator that stopped itself" should "cost nothing once accounts are complete: it finalised the trie" taggedAs UnitTest in {
     val f = fixture()
     val snap = f.enterGenesisAccountSync(NoDeferral)
-    val account = f.factories.selves.get(ChildStopped.Account)
+    val account = f.childSelf(ChildStopped.Account)
     snap ! AccountRangeSyncComplete
     snap ! CoordinatorGone(account)
     f.awaitProcessed(snap)
@@ -172,7 +172,7 @@ class SNAPCoordinatorGoneSpec
   "A capability check that outlives a fast account phase" should "not start a second one" taggedAs UnitTest in {
     val f = fixture()
     val snap = f.enterGenesisAccountSync(NoDeferral)
-    val account = f.factories.selves.get(ChildStopped.Account)
+    val account = f.childSelf(ChildStopped.Account)
     snap ! AccountRangeSyncComplete
     snap ! CoordinatorGone(account)
     snap ! CheckSnapCapability

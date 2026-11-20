@@ -30,6 +30,10 @@ on:
         description: "Push to the community repository (false: pack and test only)"
         type: boolean
         default: true
+      resubmit:
+        description: "Re-push a version Chocolatey already holds; only for one still in moderation that a moderator sent back"
+        type: boolean
+        default: false
 
 concurrency:
   group: chocolatey
@@ -56,6 +60,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           INPUT_VERSION: ${{ github.event.inputs.version }}
+          INPUT_RESUBMIT: ${{ github.event.inputs.resubmit }}
         run: |
           set -euo pipefail
           if [ "${GITHUB_EVENT_NAME}" = "workflow_dispatch" ]; then
@@ -87,6 +92,12 @@ jobs:
           echo "sha256=$(cut -d' ' -f1 zip.sha256)" >> "$GITHUB_OUTPUT"
 
           if [ "${GITHUB_EVENT_NAME}" = "pull_request" ]; then echo "todo=true" >> "$GITHUB_OUTPUT"; exit 0; fi
+          # A version a moderator sent back ("Waiting for Maintainer") is fixed by re-pushing the same version, which
+          # Chocolatey accepts until the version is approved. Only a hand-dispatched run may do that.
+          if [ "${GITHUB_EVENT_NAME}" = "workflow_dispatch" ] && [ "${INPUT_RESUBMIT:-false}" = "true" ]; then
+            echo "resubmitting fukuii $VERSION"
+            echo "todo=true" >> "$GITHUB_OUTPUT"; exit 0
+          fi
           # Chocolatey refuses a version it already holds (listed, unlisted or in moderation): skip it rather than fail
           # on every pre-release run of the Release workflow.
           code=$(curl -s -o /dev/null -w '%{http_code}' --retry 3 "$FEED/Packages(Id='fukuii',Version='$VERSION')")
