@@ -1,7 +1,8 @@
 # fukuii shared backlog (schema version 1). Rendered at https://docs.fukuii.com/development/tracker/
 # Change it with scripts/backlog/backlog.py on staging (claim, status, done, ...); README.md has the protocol.
 # Hand edits in the GitHub web UI are fine: keep the schema (backlog.py check), never delete or reuse an id
-# (drop the item instead). Comments other than this header are not kept when the tool rewrites the file.
+# (drop the item instead; `backlog.py prune` moves closed items to archive.yaml). Comments other than this
+# header are not kept when the tool rewrites the file.
 version: 1
 expiry_hours: 24
 items:
@@ -3429,7 +3430,7 @@ items:
   - id: B-395
     title: "BranchResolution.getTopBlocksFromNumber skips missing blocks (flatMap): shared-prefix and fork-weight block misalign over a gap in this node's chain"
     priority: P3
-    status: review
+    status: in-progress
     area: sync
     opened: 2026-11-19
     refs: []
@@ -3440,7 +3441,7 @@ items:
       by: cloud-dc960fdc
       agent: forge
       since: 2026-11-20T16:29:00Z
-      heartbeat: 2026-11-20T16:55:50Z
+      heartbeat: 2026-11-20T16:59:03Z
     notes: |-
       forge, B-392 review: compareBranch and withoutForkWeight zip own blocks with the batch; a missing own block shifts the zip, and 'under' becomes the hash of the missing block, not the fork. Walk by parent hash (ancestry-not-index) or stop at the gap.
       2026-11-20 review: PR #1965; beacon review of the ETH path pending
