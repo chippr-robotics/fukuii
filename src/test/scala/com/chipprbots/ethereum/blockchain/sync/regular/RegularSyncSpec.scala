@@ -396,6 +396,8 @@ class RegularSyncSpec
     val holesTold = new java.util.concurrent.ConcurrentLinkedQueue[(List[Block], MissingNodeException)]()
     @volatile var nodeIsWritten: Boolean = false
     @volatile var importedOk: Boolean = false
+    // held after an evaluation is counted, while a test delivers into the running import (B-408)
+    @volatile var holdTheImport: Option[java.util.concurrent.CountDownLatch] = None
 
     override lazy val consensusAdapter: ConsensusAdapter = new ConsensusAdapter(null, null, null, null, null):
       override def refusedWithTheirParent(blocks: NonEmptyList[Block]): Boolean = false
@@ -406,8 +408,9 @@ class RegularSyncSpec
           blockExecutionScheduler: IORuntime,
           blockchainConfig: BlockchainConfig
       ): IO[BlockImportResult] =
-        IO {
+        IO.blocking {
           evaluations.incrementAndGet()
+          holdTheImport.foreach(_.await(30, java.util.concurrent.TimeUnit.SECONDS))
           if nodeIsWritten then
             importedOk = true
             BlockImportedToTop(Nil)
@@ -431,9 +434,9 @@ class RegularSyncSpec
 
     def evaluated(count: Int): Unit = awaitCond(evaluations.get() >= count, 10.seconds)
 
-    /** The node, delivered until `done`. The importer sends its fetch from inside the import, before the import's end
-      * puts it in the wait for the node: a node that lands in that gap is the late-arriving one, which writes it and
-      * waits for the retry tick, so it is delivered again, which is what a fetcher that is asked again does.
+    /** The node, delivered until `done`, as a fetcher asked again answers again: for the tests whose import asks for it
+      * more than once. A node that lands while the import that asked for it runs is handed to that import's wait
+      * (B-408), so one delivery is enough for one fetch.
       */
     def deliverUntil(done: => Boolean): Unit =
       val deadline = System.nanoTime() + java.util.concurrent.TimeUnit.SECONDS.toNanos(10)
@@ -2899,11 +2902,74 @@ class RegularSyncSpec
             asked.paths shouldBe Some(Seq(Seq(locationOf)))
             repairs.deleted.peek() shouldBe ((at, hash))
 
-            deliverUntil(evaluations.get() >= 2)
+            // One answer, as the fetcher gives: wherever it lands, before or after the import's end, it is written once
+            // and the import is tried again at once, not after the wait's 30 s (B-408).
+            deliverNode()
+            evaluated(2)
             repairs.repaired.peek() shouldBe ((at, hash, node))
             repairs.repaired.size shouldBe 1
             // never the hash-keyed store, which this layout does not read
             hashStore.repaired shouldBe empty
+        )
+
+        // B-408: the import sends its fetch from inside its own IO, before its ImportDone moves the importer into the
+        // wait. A node answered in that gap was written as a late arrival, the wait then ran out its 30 s for it, and
+        // the spec's answer-until-done loop wrote it a second time. Here the node lands while the import is held, so
+        // it reaches the importer, by its mailbox's order, before that import's ImportDone.
+        s"take a node that lands while the import runs as the answer to that import's fetch, on $chain" taggedAs (
+          UnitTest,
+          SyncTest
+        ) in sync(
+          new MissingNodeOnTheUnifiedLayout(s"gap-$follows", unified = true, followsConsensusLayer = follows):
+            override def missing: MissingNodeException =
+              new MissingAccountNodeException(hash, address, Some(locationOf))
+            val held = new java.util.concurrent.CountDownLatch(1)
+            holdTheImport = Some(held)
+
+            importFailing()
+            evaluated(1)
+            deliverNode()
+            held.countDown()
+            fetchAsked()
+            evaluated(2)
+            importedOk shouldBe true
+            repairs.repaired.size shouldBe 1
+            repairs.repaired.peek() shouldBe (
+              (com.chipprbots.ethereum.db.storage.pathstate.PositionKey(None, locationOf), hash, node)
+            )
+            // not saved as a late arrival at the head and then again by the wait
+            hashStore.repaired shouldBe empty
+        )
+
+        // The held nodes are capped (forge, B-408 review): a fetcher that answers more than the one request it was given
+        // cannot grow them without bound. Past the cap the oldest goes to storage as a late arrival; the newest, here
+        // the one the import asked for, is still the answer its wait takes.
+        s"hold at most ${BlockImporter.HeldNodesCapacity} nodes during an import and still take the newest as the answer, on $chain" taggedAs (
+          UnitTest,
+          SyncTest
+        ) in sync(
+          new MissingNodeOnTheUnifiedLayout(s"cap-$follows", unified = true, followsConsensusLayer = follows):
+            override def missing: MissingNodeException =
+              new MissingAccountNodeException(hash, address, Some(locationOf))
+            val held = new java.util.concurrent.CountDownLatch(1)
+            holdTheImport = Some(held)
+
+            importFailing()
+            evaluated(1)
+            (1 to BlockImporter.HeldNodesCapacity).foreach { i =>
+              importer ! BlockImporter.FetcherResponse(
+                BlockFetcher.FetchedStateNode(NodeData(List(ByteString(Array.fill[Byte](40)(i.toByte)))))
+              )
+            }
+            deliverNode()
+            held.countDown()
+            fetchAsked()
+            evaluated(2)
+            importedOk shouldBe true
+            repairs.repaired.size shouldBe 1
+            repairs.repaired.peek() shouldBe (
+              (com.chipprbots.ethereum.db.storage.pathstate.PositionKey(None, locationOf), hash, node)
+            )
         )
 
         s"fill a hole in a storage trie at the position of its own owner, on $chain" taggedAs (
@@ -3060,7 +3126,7 @@ class RegularSyncSpec
             deliverUntil(evaluations.get() >= 2)
             import scala.jdk.CollectionConverters.*
             hashStore.deleted.asScala.toSet shouldBe Set(hash)
-            // by hash, as before; the late-arriving write, if the node landed in the gap before the wait, is at the best block
+            // by hash, as before; a node delivered again after the import is a late arrival, written at the best block
             hashStore.repaired.asScala.map((h, bytes, _) => (h, bytes)).toSet shouldBe Set((hash, node))
             hashStore.repaired.asScala.map(_._3).toSet.subsetOf(Set(BigInt(15), BigInt(20))) shouldBe true
             repairs.repaired shouldBe empty
