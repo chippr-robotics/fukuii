@@ -3550,3 +3550,13 @@ items:
     links:
       spec: "030"
     notes: "dev-node 2026-11-20: ALLOWLIST_REMOVED at 08:00:32.104, PEER_DISCONNECTED at 08:00:47.124. Likely the graceful Disconnect timeout."
+  - id: B-406
+    title: StorageRecoveryActor legacy scan passes ctx.log into a Future (throws off the actor thread), as BytecodeRecoveryActor did
+    priority: P3
+    status: open
+    area: sync
+    opened: 2026-11-20
+    refs: []
+    links:
+      spec: "022"
+    notes: "Same pattern at StorageRecoveryActor scanning: ctx.log read inside Future(...). Capture val before the Future, as B-396 did for bytecode; add a test running the real scan."
