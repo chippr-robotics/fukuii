@@ -3465,19 +3465,15 @@ items:
   - id: B-400
     title: "Spec 030 FR-051: INFO summary of P2P allowlist rejections each minute (contracts/observability.md); today DEBUG per connection only"
     priority: P3
-    status: review
+    status: done
     area: p2p
     size: S
     opened: 2026-11-19
+    closed: 2026-11-20
     refs: []
     links:
       prs: [1959]
       spec: "030"
-    claim:
-      by: cloud-0ceb384d
-      agent: main
-      since: 2026-11-20T14:20:14Z
-      heartbeat: 2026-11-20T14:21:29Z
     notes: Found by the S11 docs pass.
   - id: B-401
     title: enterprise launch modifier forces use-bootstrap-nodes=false and rpc.http.interface=localhost, overriding config, contrary to its comment and template
