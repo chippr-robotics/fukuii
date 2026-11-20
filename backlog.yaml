@@ -3488,12 +3488,14 @@ items:
   - id: B-402
     title: "Spec 030 T081: three-node P2P allowlist IT (A,B,C on a dev chain; C refused, never dialled) — SC-005, last gate before Done"
     priority: P2
-    status: open
+    status: done
     area: p2p
     size: M
     opened: 2026-11-19
+    closed: 2026-11-20
     refs: []
     links:
+      prs: [1961]
       spec: "030"
     notes: Needs an environment where P2P binds; S11's manual Q8 ran single-node only.
   - id: B-403
