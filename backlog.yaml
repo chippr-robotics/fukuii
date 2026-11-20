@@ -1,8 +1,7 @@
 # fukuii shared backlog (schema version 1). Rendered at https://docs.fukuii.com/development/tracker/
 # Change it with scripts/backlog/backlog.py on staging (claim, status, done, ...); README.md has the protocol.
 # Hand edits in the GitHub web UI are fine: keep the schema (backlog.py check), never delete or reuse an id
-# (drop the item instead; `backlog.py prune` moves closed items to archive.yaml). Comments other than this
-# header are not kept when the tool rewrites the file.
+# (drop the item instead). Comments other than this header are not kept when the tool rewrites the file.
 version: 1
 expiry_hours: 24
 items:
@@ -3321,20 +3320,22 @@ items:
   - id: B-388
     title: "Olympia treasury: blockchains.conf d6165F3a... differs from ECIP-1112 0x60d0A739... in forge.md; verify against local ECIP-1112"
     priority: P2
-    status: claimed
+    status: review
     area: consensus
     opened: 2026-11-19
     refs: []
     links:
+      prs: [1966]
       spec: 018
     claim:
       by: cloud-dc960fdc
       agent: main
       since: 2026-11-20T17:00:06Z
-      heartbeat: 2026-11-20T17:00:06Z
+      heartbeat: 2026-11-20T17:00:30Z
     notes: |-
       Found in C6 PR-D (B-067). Olympia is NEVER on every shipped chain, so no live effect today; must be settled before an Olympia block is set. The ECIPs clone was not in the container to check.
       2026-11-20 in-progress: User decision 2026-11-20: the treasury address is d6165F3aF4281037bce810621F62B43077Fb0e37 (blockchains.conf). forge.md's 0x60d0A739... is wrong; the published ECIP-1112 names no fixed address. Remaining: correct forge.md.
+      2026-11-20 review: User confirmed d6165F3a...0e37 (2026-11-20, via dev-node); forge.md corrected in #1966.
   - id: B-389
     title: state.conf path-live comment says the guard refuses do-snap-sync=true; ConfigValidator allows SNAP on the guard since C5a part 10
     priority: P3
