@@ -1860,9 +1860,18 @@ class SyncControllerSpec
 
   /** Wait until the SNAP child of `controller` has handled the MinPivotBlock / Start its parent sent at spawn: SNAP
     * answers GetProgress only after them.
+    *
+    * B-409: the child asked is the latest generation, the one the controller spawned last. A SNAP the controller has
+    * just stopped (a restart) stays listed in `children` until its stop completes on the sync dispatcher, and children
+    * are listed in name order, so the first `snap-sync-` child can be the stopped one: its GetProgress went to dead
+    * letters and the wait timed out whenever that stop was late, as it is under load.
     */
   private def awaitSnapStarted(controller: TestActorRef[Nothing]): Unit =
-    val snapSync = eventually(controller.children.find(_.path.name.startsWith("snap-sync")).get)
+    val snapSync = eventually(
+      controller.children
+        .filter(_.path.name.startsWith("snap-sync-"))
+        .maxBy(_.path.name.stripPrefix("snap-sync-").toLong)
+    )
     val progress = TestProbe()(using controller.underlying.system)
     snapSync.toTyped[SNAPSyncController.Command] ! SNAPSyncController.GetProgress(progress.ref.toTyped)
     progress.expectMsgType[com.chipprbots.ethereum.blockchain.sync.snap.SyncProgress]
