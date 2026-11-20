@@ -95,14 +95,12 @@ class OnDemandFetchByPositionSpec extends AnyFlatSpec with Matchers:
         asked.stateRoot shouldBe Some(oracle.genesis.header.stateRoot.value)
       }
 
-      // The importer sends its fetch from inside the import, before the import's end puts it in the wait for the
-      // node: a node that lands in that gap is the late-arriving one, written all the same, and the retry is the
-      // fetcher's next answer. So it is answered until the import is done, as a fetcher asked again does.
-      val deadline = System.nanoTime() + 30.seconds.toNanos
-      while node.blockchainReader.getBestBlockNumber < 1 && System.nanoTime() < deadline do
-        asked.replyTo ! BlockFetcher.FetchedStateNode(NodeData(List(holeNode)))
-        Thread.onSpinWait()
-        scala.util.Try(node.awaitBest(1, 300.millis))
+      // One answer, as the fetcher gives. It may land before the import's end puts the importer in the wait for the
+      // node; it is then handed to that wait (B-408), so the import completes well inside the wait's 30 s retry.
+      asked.replyTo ! BlockFetcher.FetchedStateNode(NodeData(List(holeNode)))
+      withClue("one answer completes the import, without the wait's retry: ")(
+        noException should be thrownBy node.awaitBest(1, 15.seconds)
+      )
 
       withClue("the import completed: block 1 is the head and the anchor: ") {
         node.blockchainReader.getBestBlockNumber shouldBe 1

@@ -548,6 +548,10 @@ final private class BlockImporterLogic(
   private var holeToldFor: Option[(ByteString, BigInt)] = None
   // An exhausted fetch that arrived while an import ran, for that import's ImportDone to act on (#1694).
   private var exhaustedDuringImport: Boolean = false
+  // State nodes that arrived while an import ran, oldest first, for that import's ImportDone to act on (B-408). The
+  // import sends its fetch from inside its own IO, before its ImportDone moves the importer into the wait: a node
+  // answered in that gap was written as a late arrival, and the wait then ran out its 30 s for a node already there.
+  private var nodesDuringImport: Vector[NodeData] = Vector.empty
   private var unknownParentStrikes: Map[ByteString, Int] = Map.empty
 
   // The blocks a fork recovery was already started for, on the unified state layout (spec 018 C4e part 6). Nothing is
@@ -670,11 +674,23 @@ final private class BlockImporterLogic(
         val bodiesArrived = ancestorBodiesStoredFor.filter(hash => stateFaultStreak.exists(_._1 == hash))
         ancestorBodiesStoredFor = None
         bodiesArrived.foreach(clearStateFaultStreak)
+        // A node that arrived during the import and is the one it now waits for is handed to that wait, once, after
+        // the move into it (B-408), and an exhausted fetch that also arrived is then moot; any other node is saved as
+        // a late arrival, as it was before.
+        val waitedFor = reported match
+          case _: ResolvingMissingNode => pendingStateNodeHash
+          case _                       => None
+        val arrived = nodesDuringImport
+        nodesDuringImport = Vector.empty
+        val answer = arrived.find(data => waitedFor.contains(kec256(data.values.head)))
+        arrived.filterNot(answer.contains).foreach(saveLateNode)
         val newBehavior = reported match
+          case r: ResolvingMissingNode if answer.isDefined          => r.copy(alreadyExhausted = false)
           case r: ResolvingMissingNode if exhaustedDuringImport     => r.copy(alreadyExhausted = true)
           case BackingOffAfterStateFault if bodiesArrived.isDefined => RunningAfterFetcherRewind
           case other                                                => other
         exhaustedDuringImport = false
+        answer.foreach(data => selfRef ! FetcherResponse(BlockFetcher.FetchedStateNode(data)))
         // Always Nil on a PoW chain (nothing is ever deferred there), which leaves every arm below as it was.
         val deferred = state.deferredBatches
         // On the unified layout only a batch's import ends the resolution of a branch: a block imported on its own
@@ -749,20 +765,17 @@ final private class BlockImporterLogic(
         exhaustedDuringImport = true
         Behaviors.same
 
+      // A state node, landing while an import runs: most likely the answer to the fetch that import has just sent, which
+      // its ImportDone then waits for. Held for that ImportDone (B-408), as an exhausted fetch is (#1694).
+      case FetcherResponse(BlockFetcher.FetchedStateNode(nodeData)) if nodeData.values.nonEmpty && state.importing =>
+        nodesDuringImport = nodesDuringImport :+ nodeData
+        Behaviors.same
+
       // Late-arriving state node from a previous resolvingMissingNode phase.
       // ReceiveTimeout may have moved us back to running before the fetch completed.
       // Save the node so the next import attempt finds it in storage.
       case FetcherResponse(BlockFetcher.FetchedStateNode(nodeData)) if nodeData.values.nonEmpty =>
-        val node = nodeData.values.head
-        val hash = kec256(node)
-        log.info("Saving late-arriving fetched state node {}", ByteStringUtils.hash2string(hash))
-        // repairFetched, not a blind upsert (#1692): a node already there and valid is left as it is.
-        repairFetched(hash, node, blockchainReader.getBestBlockNumber).foreach { outcome =>
-          log.debug("Late-arriving state node {}: {}", ByteStringUtils.hash2string(hash), outcome)
-        }
-        // Also save as contract code in case this was a bytecode fetch
-        try evmCodeStorage.put(hash, node).commit()
-        catch case _: Exception => ()
+        saveLateNode(nodeData)
         Behaviors.same
 
       case StartForkRecovery(failedBlockNumber, beyondTheFetch) =>
@@ -1707,6 +1720,19 @@ final private class BlockImporterLogic(
     * write, and waits for a move of the head under way. Elsewhere it is `repairNode`, as before: a node already there
     * and valid is left as it is.
     */
+  /** Saves a state node no wait is taken by, so the next import finds it in storage. */
+  private def saveLateNode(nodeData: NodeData): Unit =
+    val node = nodeData.values.head
+    val hash = kec256(node)
+    log.info("Saving late-arriving fetched state node {}", ByteStringUtils.hash2string(hash))
+    // repairFetched, not a blind upsert (#1692): a node already there and valid is left as it is.
+    repairFetched(hash, node, blockchainReader.getBestBlockNumber).foreach { outcome =>
+      log.debug("Late-arriving state node {}: {}", ByteStringUtils.hash2string(hash), outcome)
+    }
+    // Also save as contract code in case this was a bytecode fetch
+    try evmCodeStorage.put(hash, node).commit()
+    catch case _: Exception => ()
+
   private def repairFetched(hash: ByteString, node: ByteString, blockNumber: BigInt): Option[RepairOutcome] =
     if !blockchainWriter.holdsStateInPlace then Some(stateStorage.repairNode(hash, node.toArray, blockNumber))
     else
@@ -2417,6 +2443,9 @@ final private class BlockImporterLogic(
         // while this one still runs. If it does answer first, this ImportDone arrives in `running` and is handled
         // there as usual.
         exhaustedDuringImport = false
+        // Recovery supersedes the import's wait too: a node that arrived during it is saved as a late arrival (B-408).
+        nodesDuringImport.foreach(saveLateNode)
+        nodesDuringImport = Vector.empty
         val ended = state.notImportingBlocks().branchResolved().withoutDeferredBatches()
         held match
           case Some(answer) => actOn(answer, ended)
