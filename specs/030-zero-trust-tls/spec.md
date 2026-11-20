@@ -4,13 +4,18 @@
 
 **Created**: 2026-11-17
 
-**Status**: Active (2026-11-20). All eleven slices have landed (S1 #1914, S9 #1915, S2 #1920, S3 #1933, S4 #1941, S5 #1951, S7 #1952, S10 #1953, S6 #1954, S8 #1955, S11 #1956), and the allowlist metrics fix with FR-051's summary as #1959; dev-node ran quickstart Q8 (three nodes) and Q2-WS by hand on 2026-11-20 and re-checked Q8.4 on #1959, all passing, so `Done` waits only on T081, the automated three-node IT (B-402).
+**Status**: Done (2026-11-20). All eleven slices merged (#1914, #1915, #1920, #1933, #1941, #1951–#1956) with the allowlist metrics fix (#1959); dev-node's manual three-node and WSS runs passed, which the user accepted as T081's gate.
 
 **Input**: Backlog B-146 (P1, from the B-145 TLS audit, issue #1756): "Spec: zero-trust TLS and mTLS on every service
 listener (RPC, WS, Engine API, metrics) plus outbound TLS. Shared tls block, client-auth need/want, truststore,
 rotation, cert-identity to namespace map, outbound factory; node-ID allowlist for consortium P2P. Spec Kit first
 (Principle VI)." Related: B-147 (TLS docs and the enterprise runbook's mTLS claim), B-148 (HTTPS misconfiguration is
 only logged), B-149 (container healthchecks under `mode = https`).
+
+**Closed** (2026-11-20):
+- Reason: shipped. TLS profiles, listener TLS and mTLS, identity rules and reload live in `src/main/scala/com/chipprbots/ethereum/tls/`; the outbound factory is `tls/OutboundTls`, enforced in CI by `scripts/check-outbound-tls.sh`; the P2P node allowlist is `network/NodeAllowlist*.scala`; the bind rule is ADR `docs/adr/operations/OPS-005-zero-trust-listeners.md`.
+- Verification: unit and integration tests per slice, `testEssential` on S11, and dev-node's manual quickstart Q8 (three nodes) and Q2-WS on 2026-11-20, re-checked after #1959. The user accepted those manual runs in place of T081's automated three-node IT (B-402).
+- Follow-ups outside this spec: B-397, B-398, B-399, B-401, B-405.
 
 ---
 
