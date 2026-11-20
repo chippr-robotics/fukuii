@@ -3614,3 +3614,14 @@ items:
     notes: |-
       RegularSyncSpec.scala:2904 (spec 018 C5b T212 block). Failed once on Classic and once on Ethereum during a 13-suite testOnly run on fix/b395 (2026-11-20); 8/8 passed twice when run alone. Looks like deliverUntil delivering the node a second time before the assertion; related to B-352 timing flakes.
       2026-11-20 review: Real 30 s importer stall, not just a flake; forge review pending.
+  - id: B-409
+    title: "Flaky under load: SyncControllerSpec 'count the hand-off's samples again from one after a hand-off was made' (3 s expectMsgClass SyncProgress)"
+    priority: P3
+    status: open
+    area: sync
+    size: S
+    opened: 2026-11-20
+    refs: []
+    links:
+      spec: 018
+    notes: Seen by dev-node (T248, 2026-11-20, host loaded by a core-geth sync) and by the C6 PR-C herald-fix agent (2026-11-18). Passes alone. Find the race; don't widen the timeout blindly.
