@@ -3632,3 +3632,13 @@ items:
     notes: |-
       Seen by dev-node (T248, 2026-11-20, host loaded by a core-geth sync) and by the C6 PR-C herald-fix agent (2026-11-18). Passes alone. Find the race; don't widen the timeout blindly.
       2026-11-20 review: PR #1970: helper asked a stopping SNAP child; test-only fix, 25/25 under load.
+  - id: B-410
+    title: A heavier PoW branch over a gap at or below the SNAP pivot is not escalated if the backfill never fills the gap (B-407 scope)
+    priority: P3
+    status: open
+    area: sync
+    opened: 2026-11-20
+    refs: []
+    links:
+      spec: 018
+    notes: B-407 tells the feed only above the pivot, since a backfill gap there would trip the 64-block threshold. If the backfill stalls, nothing ends the wait. Needs a backfill-done signal or a pivot-clear check.
