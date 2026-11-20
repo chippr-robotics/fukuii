@@ -622,6 +622,126 @@ class BranchResolutionSpec
       branchResolution.extended(branch, NonEmptyList.one(side11)) shouldBe None
   }
 
+  // ─────────────────────────────────────────────────────────────────────────
+  // B-395: a block of this node's chain not stored inside the compared range. Skipped, it moved every block above it
+  // down one place against the headers: the shared prefix, the block weighed from and the blocks replaced were one
+  // block out. Now the comparison stops at it: no verdict is given that it would make misaligned.
+  // ─────────────────────────────────────────────────────────────────────────
+
+  "BranchResolution over a gap in this node's chain" should {
+
+    "give the verdict on the batch where no block is missing (the control)" taggedAs (
+      UnitTest,
+      StateTest,
+      ConsensusTest
+    ) in new GapSetup:
+      ownChain(missing = None)
+      weightsStored()
+      // own 1..10; the batch is own 1..6 and a heavier branch 7..12 from own 6
+      branchResolution.compareBranch(extendsFromSix) shouldEqual NewBetterBranch(own.drop(6))
+      branchResolution.notTaken(extendsFromSix).map(b => (b.commonBlock, b.commonHash)) shouldBe
+        Some((BigInt(6), own(5).hash.value))
+
+    "make no fork choice where the gap is below the block the branch leaves this chain at" taggedAs (
+      UnitTest,
+      StateTest,
+      ConsensusTest
+    ) in new GapSetup:
+      ownChain(missing = Some(5))
+      weightsStored()
+      // skipped, block 5 set own 6 against header 5: shared 4, and own 6..10 'replaced' by the batch from 5
+      branchResolution.compareBranch(extendsFromSix) shouldEqual NoChainSwitch
+      // nor is a branch remembered as leaving this chain at block 4
+      branchResolution.notTaken(extendsFromSix) shouldBe None
+
+    "name no branch whose fork weight is missing where the gap leaves the block weighed from unknown" taggedAs (
+      UnitTest,
+      StateTest
+    ) in new GapSetup:
+      ownChain(missing = Some(5))
+      weightsNotStored()
+      // skipped, the block weighed from was block 5 itself (the parent of own 6), and headers 5..12 were named
+      branchResolution.withoutForkWeight(extendsFromSix) shouldBe None
+
+    "make no fork choice where the gap is above the block the branch leaves this chain at" taggedAs (
+      UnitTest,
+      StateTest,
+      ConsensusTest
+    ) in new GapSetup:
+      ownChain(missing = Some(8))
+      weightsStored()
+      // own 3..10 weigh 800 and the branch 720; skipped, block 8 left this node's 700 and the lighter branch was taken
+      branchResolution.compareBranch(lighterFromTwo) shouldEqual NoChainSwitch
+      // the block it leaves this chain at is below the gap, so it is known: remembered as it was
+      branchResolution.notTaken(lighterFromTwo) shouldBe Some(
+        BranchNotTaken(
+          lighterFromTwo.last,
+          BigInt(2),
+          own(1).hash.value,
+          lighterFromTwo.tail.tail.foldLeft(ChainWeight.zero)(_.increase(_)),
+          BigInt(720)
+        )
+      )
+
+    "still name the branch whose fork weight is missing where the block weighed from is below the gap" taggedAs (
+      UnitTest,
+      StateTest
+    ) in new GapSetup:
+      ownChain(missing = Some(8))
+      weightsNotStored()
+      branchResolution.withoutForkWeight(lighterFromTwo) shouldBe NonEmptyList.fromList(lighterFromTwo.toList.drop(2))
+
+    "not take a branch not taken, weighed again, past a gap above the block it leaves this chain at" taggedAs (
+      UnitTest,
+      StateTest,
+      ConsensusTest
+    ) in new MessTestSetup:
+      (() => blockchainReader.getBestBlockNumber).expects().anyNumberOfTimes().returning(BigInt(11))
+      blockchainReader.getBlockByNumber.expects(*, BigInt(10)).anyNumberOfTimes().returning(Some(oldBlock))
+      blockchainReader.getBlockByNumber.expects(*, BigInt(11)).anyNumberOfTimes().returning(None)
+      blockchainReader.getCanonicalHashByNumber
+        .expects(BigInt(9))
+        .anyNumberOfTimes()
+        .returning(Some(BlockHash(commonParentHash)))
+      setChainWeightByHash(oldBlock.header.hash.value, ChainWeight.zero.increase(oldBlock.header))
+      val side10: BlockHeader = getBlock(number = 10, difficulty = 50, parent = commonParentHash).header
+      val branch: BranchNotTaken =
+        BranchNotTaken(side10, BigInt(9), commonParentHash, ChainWeight.zero.increase(side10), BigInt(50))
+      // 150 against block 10's 100; skipped, block 11 left block 10 read as the head, and the branch was taken
+      val side11: BlockHeader = getBlock(number = 11, difficulty = 100, parent = side10.hash.value).header
+      branchResolution.extended(branch, NonEmptyList.one(side11)).map { case (longer, taken) =>
+        (longer.tip, longer.difficultyAboveTheCommonBlock, taken)
+      } shouldBe Some((side11, BigInt(150), false))
+  }
+
+  /** This node's chain 1..10 (difficulty 100 each) over `base`, the head at 10, and two batches against it. */
+  class GapSetup extends BranchResolutionTestSetupImpl:
+    val base: ByteString = randomHash()
+    val own: List[Block] = getChain(1, 10, base, difficulty = 100)
+
+    /** Own 1..6, then a branch 7..12 from own 6 (difficulty 100 each): heavier than own 7..10. */
+    val extendsFromSix: NonEmptyList[BlockHeader] =
+      NonEmptyList.fromListUnsafe(own.take(6).map(_.header) ++ getChain(7, 12, own(5).hash.value).map(_.header))
+
+    /** Own 1..2, then a branch 3..10 from own 2 of difficulty 90 each: 720 against own 3..10's 800. */
+    val lighterFromTwo: NonEmptyList[BlockHeader] =
+      NonEmptyList.fromListUnsafe(
+        own.take(2).map(_.header) ++ getChain(3, 10, own(1).hash.value, difficulty = 90).map(_.header)
+      )
+
+    def ownChain(missing: Option[BigInt]): Unit =
+      (() => blockchainReader.getBestBlockNumber).expects().anyNumberOfTimes().returning(BigInt(10))
+      own.foreach { block =>
+        val stored = Some(block).filterNot(b => missing.contains(b.number.value))
+        blockchainReader.getBlockByNumber.expects(*, block.number.value).anyNumberOfTimes().returning(stored)
+      }
+
+    def weightsStored(): Unit =
+      blockchainReader.getChainWeightByHash.expects(*).anyNumberOfTimes().returning(Some(ChainWeight.zero))
+
+    def weightsNotStored(): Unit =
+      blockchainReader.getChainWeightByHash.expects(*).anyNumberOfTimes().returning(None)
+
   "BranchResolution with MESS enabled AND a designated head (misconfigured PoW chain)" should {
 
     "ACCEPT a LOWER-TD branch the designated head points at — the PoS arm overrides the TD rule" taggedAs (
