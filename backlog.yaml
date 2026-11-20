@@ -1,7 +1,8 @@
 # fukuii shared backlog (schema version 1). Rendered at https://docs.fukuii.com/development/tracker/
 # Change it with scripts/backlog/backlog.py on staging (claim, status, done, ...); README.md has the protocol.
 # Hand edits in the GitHub web UI are fine: keep the schema (backlog.py check), never delete or reuse an id
-# (drop the item instead). Comments other than this header are not kept when the tool rewrites the file.
+# (drop the item instead; `backlog.py prune` moves closed items to archive.yaml). Comments other than this
+# header are not kept when the tool rewrites the file.
 version: 1
 expiry_hours: 24
 items:
@@ -1514,7 +1515,9 @@ items:
     opened: 2026-11-09
     refs: []
     links: {}
-    notes: "#1777 run 42570595438, 2026-11-09: curl sbt-1.13.0.tgz from github releases got 504 on all 6 tries within 25 s (retry-delay 5), so hive never ran. Use actions/cache for /tmp/sbt.tgz or setup-sbt, and exponential backoff."
+    notes: |-
+      #1777 run 42570595438, 2026-11-09: curl sbt-1.13.0.tgz from github releases got 504 on all 6 tries within 25 s (retry-delay 5), so hive never ran. Use actions/cache for /tmp/sbt.tgz or setup-sbt, and exponential backoff.
+      2026-11-20 again, a second door: #1958 smoke-genesis and smoke-network (run 44663693684) failed in 'Build fukuii assembly': sbt launcher CantDownloadModule org.scala-sbt:sbt:1.13.0 from Maven Central on a cold sbt cache. Retry the boot, or warm ~/.sbt/boot from the cache.
   - id: B-175
     title: "MODEXP length cap: getLength caps base/exp/mod lengths at 2^31-1 where geth uses uint64; gas differs for lengths >= 2^31"
     priority: P3
