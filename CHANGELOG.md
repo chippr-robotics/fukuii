@@ -566,6 +566,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   changes, so a client that does not select them sees the same output.
 
 ### Fixed
+- **The P2P node allowlist's metrics were never exported (spec 030, B-400).** Its meters were created when the start-up
+  check first read the allowlist, before the node configured its metrics, so `p2p_allowlist_rejections_total`,
+  `p2p_allowlist_size`, `p2p_allowlist_reload_failures_total` and `p2p_allowlist_edits_total` went to a throwaway
+  registry (found by a three-node run on dev-node). They are now looked up in the registry in use and registered once
+  metrics are up. The refusals, logged at DEBUG one by one, are also summed at INFO each minute (FR-051):
+  `P2P node allowlist refused <n> inbound and <m> outbound connection(s) since the last summary`.
 - **JSON-RPC over IPC answered methods with parameters `-32602` and every call `id: null`.** json4s's reflective
   extract of the request left `params` and `id` empty on Scala 3; the IPC server now reads the fields itself. It also
   read requests 32 characters at a time and stopped at the first prefix that parsed, cutting long requests; it now
