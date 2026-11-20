@@ -250,6 +250,30 @@ class ClaimTests(GitCase):
         self.assertEqual((it["title"], it["links"], it["refs"], it["opened"]),
                          ("new: thing", {"issues": [12]}, ["#1654-B"], "2026-11-08"))
 
+    def test_priority_changes_with_a_reason_and_leaves_the_claim(self):
+        a = self.clone("a")
+        before = self.remote_item("B-004")["claim"]
+        r = self.cli(a, "priority", "B-004", "P1", "--reason", "blocks every release PR", by="fc")
+        self.assertEqual(r.returncode, 0, r.stderr)  # anyone: B-004 is held by `busy`
+        self.assertEqual(r.stdout.strip(), "B-004 is now P1 (was P2)")
+        it = self.remote_item("B-004")
+        self.assertEqual((it["priority"], it["status"], it["claim"]), ("P1", "in-progress", before))
+        self.assertIn("2026-11-08 priority P2->P1 by fc: blocks every release PR", it["notes"])
+        self.assertIn("tracker: B-004 priority P2 -> P1 by fc", self.last_message())
+
+    def test_priority_refusals_and_no_op(self):
+        a = self.clone("a")
+        self.assertEqual(self.cli(a, "priority", "B-001", "P1", "--reason", " ", by="fc").returncode, 3)
+        self.assertEqual(self.cli(a, "priority", "B-001", "P9", "--reason", "x", by="fc").returncode, 2)
+        self.assertEqual(self.cli(a, "drop", "B-002", "--reason", "dup", by="fc").returncode, 0)
+        r = self.cli(a, "priority", "B-002", "P1", "--reason", "x", by="fc")
+        self.assertEqual(r.returncode, 3)
+        self.assertIn("B-002 is dropped", r.stderr)
+        tip = self.git("--git-dir", str(self.origin), "rev-parse", "tracker")
+        r = self.cli(a, "priority", "B-001", "P2", "--reason", "x", by="fc")
+        self.assertEqual((r.returncode, r.stdout.strip()), (0, "B-001 is already P2"))
+        self.assertEqual(self.git("--git-dir", str(self.origin), "rev-parse", "tracker"), tip)  # nothing written
+
 
 class CheckTests(unittest.TestCase):
     def check(self, d: dict) -> subprocess.CompletedProcess:

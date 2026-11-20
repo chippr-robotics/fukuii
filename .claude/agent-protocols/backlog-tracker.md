@@ -35,6 +35,7 @@ from WSL: Windows git opens a credential window and hangs.
 | Cannot proceed | `backlog status B-012 blocked --note "waits for #1747"` | blocked |
 | Not worth doing | `backlog drop B-012 --reason "..."` | dropped |
 | Found more work | `backlog add --title "..." --priority P2 --area sync [--ref H4] [--issue N] [--note ...]` | open |
+| Re-triage | `backlog priority B-012 P1 --reason "blocks every release PR"` | unchanged |
 
 - **Claim first.** `claim` exits 3 when someone else holds a live claim and prints who and since when. Pick another
   item or ask the holder. Never work on an item another holder has claimed.
@@ -47,6 +48,8 @@ from WSL: Windows git opens a credential window and hangs.
   or close what you hold. A continuation file names its B-ids; it does not replace them.
 - **One item per logical unit,** roughly one PR. One-line title; notes at most 3 lines; details go in the PR, issue or
   spec. Use `refs` for old ids (H4, 10e, `#1654-B`, CHASE rows) and `depends_on` when an item cannot start earlier.
+- **Priority is triage, not ownership.** Anyone may change it with `priority`, claimed or not; the claim stays as it
+  is. The reason is required and lands in the item's notes, since a change moves the item on the burn-down.
 - **Never delete or reuse an id.** Close it as `dropped` with a reason.
 
 Priorities: P0 blocks production or loses data; P1 production readiness or this sprint's commitment; P2 should be
