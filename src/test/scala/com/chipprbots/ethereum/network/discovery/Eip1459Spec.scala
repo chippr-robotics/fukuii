@@ -144,6 +144,20 @@ class Eip1459Spec extends AnyFlatSpec with Matchers:
     Eip1459.verifyRoot(root, key) shouldBe true
   }
 
+  it should "refuse a root signature that is not exactly 87 characters before decoding it" taggedAs (
+    UnitTest,
+    NetworkTest
+  ) in {
+    val prefix = snapshotRoot.take(snapshotRoot.indexOf(" sig=") + 5)
+    Eip1459.parseRoot(prefix + ("A" * 88)).isLeft shouldBe true
+    Eip1459.parseRoot(prefix + ("A" * 86)).isLeft shouldBe true
+    Eip1459.parseRoot(prefix + ("A" * 100000)).isLeft shouldBe true
+  }
+
+  it should "refuse an ENR longer than EIP-778's 300 bytes before decoding it" taggedAs (UnitTest, NetworkTest) in {
+    Eip1459.verifyEnr("enr:" + ("A" * 401)).isLeft shouldBe true
+  }
+
   it should "not verify a real root under another tree's key" taggedAs (UnitTest, NetworkTest) in {
     val root = Eip1459.parseRoot(snapshotRoot).toOption.get
     val efKey = DnsTrustAnchors.resolve("all.sepolia.ethdisco.net").toOption.get.publicKey
