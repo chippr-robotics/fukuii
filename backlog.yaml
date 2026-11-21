@@ -3724,10 +3724,15 @@ items:
   - id: B-418
     title: "CVE-2026-114938 (Java4Shell): pin Temurin 25.0.5.1, disable Base64 decode intrinsic, no pre-auth Base64 decode in Engine API JWT / DNS discovery"
     priority: P0
-    status: open
+    status: claimed
     area: ops
     size: S
     opened: 2026-11-21
     refs: []
     links:
       branch: ccr-5b6106a7-stx0ft
+    claim:
+      by: cloud-ccr
+      agent: main
+      since: 2026-11-21T16:50:23Z
+      heartbeat: 2026-11-21T16:50:23Z
