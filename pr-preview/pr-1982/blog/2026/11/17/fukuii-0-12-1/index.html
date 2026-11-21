@@ -5967,8 +5967,9 @@ it under a supervisor such as systemd with <code>Restart=on-failure</code> (see 
 Hoodi, Ephemery, Platåberget) the Engine API now listens on <code>localhost:8551</code> by default. At first start fukuii
 creates a persistent secret at <code>&lt;datadir&gt;/jwt.hex</code>, so you can point your consensus client's <code>--execution-jwt</code> at it.
 ETC and Mordor are unchanged.</p>
-<p><strong>New ways to install.</strong> Releases are published to <code>ppa:chipprbots/fukuii</code> for Ubuntu noble and jammy, and to the
-Chocolatey community repository for Windows.</p>
+<p><strong>New ways to install.</strong> Releases are published to <code>ppa:chipprbots/fukuii</code> for Ubuntu noble and jammy. For Windows,
+the <code>fukuii</code> package has been submitted to the Chocolatey community repository. It has passed the automated checks and
+is waiting for a community moderator, so it is not listed yet.</p>
 <h2 id="correctness-and-hardening">Correctness and hardening<a class="headerlink" href="#correctness-and-hardening" title="Permanent link">&para;</a></h2>
 <ul>
 <li><code>eth_simulateV1</code>, VM error messages, precompile failures and the execution-apis fork-boundary and <code>eth_getProof</code>
