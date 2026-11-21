@@ -3675,7 +3675,7 @@ items:
       by: cloud-dc960fdc
       agent: forge
       since: 2026-11-21T13:28:02Z
-      heartbeat: 2026-11-21T13:28:17Z
+      heartbeat: 2026-11-21T13:28:55Z
     notes: |-
       dev-node EG-6 run, 2026-11-21: Mordor epoch 290 (ECIP-1099) DAG 3.27 GiB -> ~4.1 GiB heap; -Xmx4g node exited OOM at 53% of the build (EthashDAGManager). Options: DAG off-heap (mmap'd file / direct ByteBuffer, as core-geth), one flat array instead of 16-int arrays, and document -Xmx sizing for miners in the fukuii-mining-operations skill and docs. ETC mainnet DAG is larger and grows each epoch.
       2026-11-21 in-progress: User 2026-11-21: move the DAG off-heap into a memory-mapped file as core-geth does; most miners use ASIC/GPU (getWork), so the full DAG is only for the internal CPU miner.
