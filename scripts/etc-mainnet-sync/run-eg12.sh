@@ -766,11 +766,35 @@ if [ "$FROM" = reimport ]; then
   imported=$(date +%s)
   # The block's hash covers its stateRoot. That the imported state is the right one is shown by what follows: node B
   # executes every later block on it, and its canonical chain is compared with the reference below.
-  got=$(block_of "$LOCAL_RPC" "$EXPORT_N" || echo null)
-  if [ "$(jq -r '.hash // empty' <<<"$got")" = "$EXPORT_HASH" ] && [ "$(jq -r '.stateRoot // empty' <<<"$got")" = "$EXPORT_ROOT" ]; then
-    result "archive import: root equal" PASS "block $EXPORT_N, stateRoot $EXPORT_ROOT; ${ok_line##*\] }; ETC resync time (SC-013): $((imported - REIMPORT_STARTED)) s from launch"
+  # The archive carries the window's headers but not the block's own body, and the block RPCs answer only a block whose
+  # body is stored, so the imported block itself may not be served over RPC (T248 on Mordor, dev-node 2026-11-20). The
+  # root is judged at the header level instead: the import's own line names the hash and the root it wrote, and the
+  # first block node B executes on that state (N+1) must name the exported block as its parent and equal the
+  # reference's block N+1, which a wrong root could not produce. Whether block N itself is served is recorded apart.
+  hdr_line=$(grep -E "\[CHECKPOINT IMPORT\] header and window checked: block=$EXPORT_N " "$OUT/node-b.log" | tail -1 || true)
+  line_hash=$(sed -nE 's/.* hash=(0x)?([0-9a-fA-F]+).*/\2/p' <<<"$hdr_line" | tr 'A-F' 'a-f')
+  line_root=$(sed -nE 's/.*state of root (0x)?([0-9a-fA-F]+).*/\2/p' <<<"$hdr_line" | tr 'A-F' 'a-f')
+  want_hash=$(tr 'A-F' 'a-f' <<<"${EXPORT_HASH#0x}") want_root=$(tr 'A-F' 'a-f' <<<"${EXPORT_ROOT#0x}")
+  next=""
+  next_deadline=$((SECONDS + 600))
+  while ((SECONDS < next_deadline)); do
+    next=$(block_of "$LOCAL_RPC" $((EXPORT_N + 1)) || echo null)
+    [ "$(jq -r '.hash // empty' <<<"$next")" = "" ] || break
+    sleep 10
+  done
+  ref_next=$(hash_at "$REF_RPC" $((EXPORT_N + 1)) || true)
+  if [ -n "$line_hash" ] && [ "$line_hash" = "$want_hash" ] && [ "$line_root" = "$want_root" ] &&
+    [ "$(jq -r '.parentHash // empty' <<<"$next")" = "$EXPORT_HASH" ] &&
+    [ -n "$ref_next" ] && [ "$(jq -r '.hash // empty' <<<"$next")" = "$ref_next" ]; then
+    result "archive import: root equal" PASS "block $EXPORT_N, stateRoot $EXPORT_ROOT (import line); block $((EXPORT_N + 1)) executed on it equals the reference's and names it as parent; ${ok_line##*\] }; ETC resync time (SC-013): $((imported - REIMPORT_STARTED)) s from launch"
   else
-    result "archive import: root equal" FAIL "block $EXPORT_N on node B: $(jq -c '{hash,stateRoot}' <<<"$got" 2>/dev/null), exported $EXPORT_HASH / $EXPORT_ROOT"
+    result "archive import: root equal" FAIL "import line hash=${line_hash:-none} root=${line_root:-none}; block $((EXPORT_N + 1)) on node B $(jq -c '{hash,parentHash}' <<<"$next" 2>/dev/null), reference ${ref_next:-unreadable}; exported $EXPORT_HASH / $EXPORT_ROOT"
+  fi
+  got=$(block_of "$LOCAL_RPC" "$EXPORT_N" || echo null)
+  if [ "$(jq -r '.hash // empty' <<<"$got")" = "$EXPORT_HASH" ]; then
+    result "archive block served over RPC" RECORDED "eth_getBlockByNumber($EXPORT_N) answers the exported block"
+  else
+    result "archive block served over RPC" RECORDED "eth_getBlockByNumber($EXPORT_N) answers $(jq -c . <<<"$got" 2>/dev/null | cut -c1-80): the block's body is not stored (the archive carries none)"
   fi
   end=$((SECONDS + REFOLLOW_H * 3600))
   while ((SECONDS < end)); do
