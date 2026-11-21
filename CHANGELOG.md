@@ -39,6 +39,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `connected=N closed=N[reason=n,...] forkid-rejected=N blacklisted=N`, and warns when no peer connected and every
   handshake was rejected. A refusal by a maintained peer is a WARN. A grep for `PEER_HANDSHAKE_SUCCESS` needs
   `logging.logs-level = DEBUG` for `com.chipprbots.ethereum.network`; the `Network [60s]` line carries the counts.
+- **`engine_newPayload` answers SYNCING, not ACCEPTED, for a payload it cannot execute that extends the chain being
+  followed (B-005, B-271). ETH chains only.** A payload stored and not executed (its parent unknown or never executed,
+  or its parent's state missing) was always ACCEPTED. It is now SYNCING when its parent is canonical, or is the head the
+  consensus client last named in `engine_forkchoiceUpdated`, and ACCEPTED otherwise, a side branch's (execution-apis
+  paris.md `engine_newPayloadV1` point 6; go-ethereum's `delayPayloadImport` answers SYNCING when the payload extends
+  the sync under way). A hole in the state under a canonical parent (#1694) is now SYNCING. Consensus clients import on
+  either answer as before; `app_engine_newpayload_syncing` now counts. Inside the node, why a fork choice was not
+  followed is a typed value, not the start of a message (`LOCAL FAULT: ` and the others); nothing a client sees changes.
 - **`app_engine_newpayload_invalid` counts INVALID answers alone (B-193).** It also counted every `engine_newPayload`
   answered ACCEPTED, and any status it did not know. ACCEPTED has its own series, `app_engine_newpayload_accepted`
   (since 0.10.0). A dashboard panel on the invalid series drops by the number of ACCEPTED answers, and its history

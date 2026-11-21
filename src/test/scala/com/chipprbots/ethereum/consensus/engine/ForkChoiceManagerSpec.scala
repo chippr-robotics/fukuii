@@ -22,8 +22,8 @@ import com.chipprbots.ethereum.domain.TrieRoot
 import com.chipprbots.ethereum.testing.Tags.*
 
 /** Verifies the publisher pattern added in #1207: every `applyForkChoiceState` call must notify the registered listener
-  * with a `BeaconHead` message — including the unknown-head (Left("SYNCING")) branch, which is the trigger SNAP needs
-  * on post-merge chains.
+  * with a `BeaconHead` message — including the unknown-head (Left(Refusal.Syncing)) branch, which is the trigger SNAP
+  * needs on post-merge chains.
   */
 class ForkChoiceManagerSpec extends ScalaTestWithActorTestKit with AnyFlatSpecLike with Matchers:
 
@@ -60,7 +60,7 @@ class ForkChoiceManagerSpec extends ScalaTestWithActorTestKit with AnyFlatSpecLi
     fcm.setListener(probe.ref)
 
     val state: ForkChoiceState = ForkChoiceState(unknownHeadHash, ByteString.empty, ByteString.empty)
-    fcm.applyForkChoiceState(state) shouldBe Left("SYNCING")
+    fcm.applyForkChoiceState(state) shouldBe Left(ForkChoiceManager.Refusal.Syncing)
 
     val received: BeaconHead = probe.expectMsgType[ForkChoiceManager.BeaconHead]
     received.headHash shouldBe unknownHeadHash
@@ -80,7 +80,7 @@ class ForkChoiceManagerSpec extends ScalaTestWithActorTestKit with AnyFlatSpecLi
   it should "not throw when no listener is registered" taggedAs UnitTest in new Fixture:
     // No listener — must still succeed
     val state: ForkChoiceState = ForkChoiceState(unknownHeadHash, ByteString.empty, ByteString.empty)
-    fcm.applyForkChoiceState(state) shouldBe Left("SYNCING")
+    fcm.applyForkChoiceState(state) shouldBe Left(ForkChoiceManager.Refusal.Syncing)
 
   it should "stop publishing after clearListener" taggedAs UnitTest in new Fixture:
     val probe: TestProbe = TestProbe()
@@ -123,7 +123,7 @@ class ForkChoiceManagerSpec extends ScalaTestWithActorTestKit with AnyFlatSpecLi
 
   it should "record the requested head on applyForkChoiceState, head known or not" taggedAs UnitTest in new Fixture:
     fcm.applyForkChoiceState(ForkChoiceState(unknownHeadHash, ByteString.empty, ByteString.empty)) shouldBe Left(
-      "SYNCING"
+      ForkChoiceManager.Refusal.Syncing
     )
     fcm.getRequestedHeadBlockHash shouldBe Some(unknownHeadHash)
     fcm.getHeadBlockHash shouldBe None
@@ -142,7 +142,7 @@ class ForkChoiceManagerSpec extends ScalaTestWithActorTestKit with AnyFlatSpecLi
   // spec 018 C5a, B-297: a head refused -38002 is not left as the head the p2p import path follows
   it should "put the requested head back to the head last followed when a refused head is forgotten" taggedAs UnitTest in new Fixture:
     fcm.applyForkChoiceState(ForkChoiceState(unknownHeadHash, unknownHeadHash, unknownHeadHash)) shouldBe Left(
-      "SYNCING"
+      ForkChoiceManager.Refusal.Syncing
     )
     fcm.getRequestedHeadBlockHash shouldBe Some(unknownHeadHash)
     fcm.forgetRefused(unknownHeadHash)

@@ -100,9 +100,9 @@ class ForkChoiceManager(
     * @param newState
     *   the fork choice state from CL
     * @return
-    *   Right(()) if valid, Left(error) if head block is unknown
+    *   Right(()) when the head was followed; Left with a [[ForkChoiceManager.Refusal]] saying why it was not
     */
-  def applyForkChoiceState(newState: ForkChoiceState): Either[String, Unit] =
+  def applyForkChoiceState(newState: ForkChoiceState): Either[ForkChoiceManager.Refusal, Unit] =
     requestedHead.set(Some(newState.headBlockHash))
     val maybeHeader = blockchainReader.getBlockHeaderByHash(BlockHash(newState.headBlockHash))
 
@@ -113,9 +113,11 @@ class ForkChoiceManager(
 
     if maybeHeader.isEmpty then
       log.info(s"Fork choice head ${newState.headBlockHash} not known yet (SYNCING)")
-      Left("SYNCING")
+      Left(ForkChoiceManager.Refusal.Syncing)
     else if blockchainWriter.holdsStateInPlace then
-      maybeHeader.fold[Either[String, Unit]](Left("SYNCING"))(confirmHeldHead(newState, _))
+      maybeHeader.fold[Either[ForkChoiceManager.Refusal, Unit]](Left(ForkChoiceManager.Refusal.Syncing))(
+        confirmHeldHead(newState, _)
+      )
     else
       log.info(
         s"Fork choice updated: head=${newState.headBlockHash}, " +
@@ -152,15 +154,17 @@ class ForkChoiceManager(
     * `currentState` is set only when the head was confirmed: it is read as the head that was executed and applied.
     *
     * @return
-    *   `Left("SYNCING")` when the head was not followed, and nothing was written (its state is not held: a block whose
-    *   executed state was not kept, or a fork beyond the records; or an ancestor of the head); when the plan found the
-    *   records corrupt, the state has failed closed too. `Left` starting [[ForkChoiceManager.FinalizedReversed]] when
-    *   the move would reverse the finalized block
+    *   `Left(Refusal.Syncing)` when the head was not followed, and nothing was written (its state is not held: a block
+    *   whose executed state was not kept, or a fork beyond the records; or an ancestor of the head); when the plan
+    *   found the records corrupt, the state has failed closed too, and the refusal is a
+    *   [[ForkChoiceManager.Refusal.LocalFault]]. `Left(Refusal.FinalizedReversed)` when the move would reverse the
+    *   finalized block
     */
-  private def confirmHeldHead(newState: ForkChoiceState, header: BlockHeader): Either[String, Unit] =
-    def notMoved(why: String): Either[String, Unit] =
+  private def confirmHeldHead(newState: ForkChoiceState, header: BlockHeader): Either[ForkChoiceManager.Refusal, Unit] =
+    import ForkChoiceManager.Refusal
+    def notMoved(why: String): Either[Refusal, Unit] =
       log.warn(s"Fork choice head ${header.number.value} ${header.hashAsHexString} not applied (SYNCING): $why")
-      Left("SYNCING")
+      Left(Refusal.Syncing)
     // the finalized block it names, by its header (the Engine API has found it on the head's chain); the zero hash
     // names none, and leaves the one named before (C4d part 1)
     val finalized =
@@ -208,7 +212,7 @@ class ForkChoiceManager(
       // above it executed again (C4d part 3), and answers SYNCING meanwhile
       case unavailable: StateUnavailable if unavailable.heldTo.isDefined =>
         notMoved(unavailable.reason)
-        Left(ForkChoiceManager.NotHeldHead + unavailable.reason)
+        Left(Refusal.NotHeld(unavailable.reason))
       // The head was not moved to, and no block of its chain is said to be held. That is many things: a move the fork
       // choice does not make (down to an ancestor of the head), a node with no state yet, a state that has failed
       // closed. Only the last is said for what it is, this node's fault: every fork choice refused while the state is
@@ -216,28 +220,28 @@ class ForkChoiceManager(
       // followed.
       case unavailable: StateUnavailable =>
         notMoved(unavailable.reason)
-        if blockchainWriter.stateFailedClosed then Left(ForkChoiceManager.LocalFault + unavailable.reason)
-        else Left("SYNCING")
+        if blockchainWriter.stateFailedClosed then Left(Refusal.LocalFault(unavailable.reason))
+        else Left(Refusal.Syncing)
       // A record that is not what it should be is this datadir's fault, not the fork choice's: the state fails closed
       // (no further in-place write, no state given out, ERROR) and the head is answered as one not followed (plan.md
       // "C4b part 1": `Corrupt` fails closed at the Engine API; the escalation is C4d's)
       case refused: ReorgTooDeep if refused.reason == ReorgRefusal.Corrupt =>
         blockchainWriter.failStateClosed(s"the changeset records are corrupt (${refused.getMessage})")
         notMoved(refused.getMessage)
-        Left(ForkChoiceManager.LocalFault + refused.getMessage)
+        Left(Refusal.LocalFault(refused.getMessage))
       // a move that would reverse the finalized block: the fork choice is not consistent with what it finalized
       // (go-ethereum: "final block not in canonical chain"), answered -38002 and not SYNCING (the user's decision of
       // 2026-11-14)
       case refused: ReorgTooDeep if refused.reason == ReorgRefusal.Finalized =>
         log.warn(s"Fork choice head ${header.number.value} ${header.hashAsHexString} refused: ${refused.getMessage}")
-        Left(ForkChoiceManager.FinalizedReversed + refused.getMessage)
+        Left(Refusal.FinalizedReversed(refused.getMessage))
       // deeper than the records reach, past a record that is not whole, or below the block the state began at: the
       // records that would take the state there are gone, and no wait brings them back
       case refused: ReorgTooDeep
           if refused.reason == ReorgRefusal.Deep || refused.reason == ReorgRefusal.Incomplete ||
             refused.reason == ReorgRefusal.Pivot =>
         notMoved(refused.getMessage)
-        Left(ForkChoiceManager.Unreachable + refused.getMessage)
+        Left(Refusal.Unreachable(refused.getMessage))
       // `BeyondTheFetch` is said by proof-of-work regular sync only, never by a move of the head: not met here
       case refused: ReorgTooDeep => notMoved(refused.getMessage)
 
@@ -296,27 +300,46 @@ class ForkChoiceManager(
 
 object ForkChoiceManager:
 
-  /** The start of what [[ForkChoiceManager.applyForkChoiceState]] answers for a fork choice whose head would reverse
-    * the finalized block: an inconsistent fork choice state, not one this node has yet to sync.
+  /** Why [[ForkChoiceManager.applyForkChoiceState]] did not follow a head (B-005). Typed, so the Engine API matches on
+    * the case and not on the start of a message: these were string prefixes ("LOCAL FAULT: ", "NOT HELD: ", ...) until
+    * B-005, and a reason that happened to start with another prefix would have been read as that refusal.
+    *
+    * Only [[Refusal.FinalizedReversed]] is answered -38002; every other refusal is answered SYNCING to the consensus
+    * client, and differs in what the node does about it.
     */
-  val FinalizedReversed: String = "FINALIZED: "
+  enum Refusal:
+    /** The head is not known, or is not followed for a reason that says nothing of whether the chain can be followed (a
+      * move down to an ancestor of the head, a node with no state yet).
+      */
+    case Syncing
 
-  /** The start of what [[ForkChoiceManager.applyForkChoiceState]] answers for a fork choice whose head's chain is held
-    * up to a block below it, and whose blocks above that have no state held: they are executed again, and the head is
-    * not moved meanwhile (spec 018 C4d part 3).
-    */
-  val NotHeldHead: String = "NOT HELD: "
+    /** The head's chain is held up to a block below it, and the blocks above that have no state held: they are executed
+      * again, and the head is not moved meanwhile (spec 018 C4d part 3).
+      */
+    case NotHeld(reason: String)
 
-  /** The start of what [[ForkChoiceManager.applyForkChoiceState]] answers for a head on a chain this node's state does
-    * not reach: deeper than its records, or below the block its state began at (spec 018 C5a part 6). Answered SYNCING
-    * to the consensus client, as any head not followed.
-    */
-  val Unreachable: String = "UNREACHABLE: "
+    /** The head is on a chain this node's state does not reach: deeper than its records, or below the block its state
+      * began at (spec 018 C5a part 6).
+      */
+    case Unreachable(reason: String)
 
-  /** The start of what [[ForkChoiceManager.applyForkChoiceState]] answers for a head not followed for a fault of this
-    * node: records that are corrupt, a state that has failed closed (spec 018 C5a part 6). Answered SYNCING.
-    */
-  val LocalFault: String = "LOCAL FAULT: "
+    /** The head was not followed for a fault of this node: records that are corrupt, a state that has failed closed
+      * (spec 018 C5a part 6). Counts towards giving the state up.
+      */
+    case LocalFault(reason: String)
+
+    /** The head's chain would reverse the finalized block: an inconsistent fork choice state, not one this node has yet
+      * to sync. Answered -38002 (the user's decision of 2026-11-14).
+      */
+    case FinalizedReversed(reason: String)
+
+    /** For a log line. */
+    def describe: String = this match
+      case Syncing                   => "SYNCING"
+      case NotHeld(reason)           => s"NOT HELD: $reason"
+      case Unreachable(reason)       => s"UNREACHABLE: $reason"
+      case LocalFault(reason)        => s"LOCAL FAULT: $reason"
+      case FinalizedReversed(reason) => s"FINALIZED: $reason"
 
   /** The hash a fork choice names when it names no block (a safe or finalized block before there is one). */
   val ZeroHash: ByteString = ByteString(new Array[Byte](32))

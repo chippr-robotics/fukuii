@@ -181,7 +181,8 @@ class TestingService(
                 finalizedBlockHash = ForkChoiceManager.ZeroHash
               )
             ) match
-              case Left(err) => log.error("testing_commitBlockV1: fork choice rejected freshly stored head: {}", err)
+              case Left(err) =>
+                log.error("testing_commitBlockV1: fork choice rejected freshly stored head: {}", err.describe)
               case Right(()) => ()
 
             // Drop the committed transactions from the pool so the next build does not re-queue
