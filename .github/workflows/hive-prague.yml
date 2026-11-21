@@ -1,22 +1,17 @@
 name: Hive Prague Suite
 
-# (Touched in #1973 only so this path-filtered required check reports on a workflow-only PR.)
 # Runs the ethereum/eels/consume-engine simulator against fukuii for all fork_Prague tests.
 # Gate for PRs to main/develop and for nightly regressions. Fails the build if the pass
 # count drops below a threshold, preventing regressions in Pectra EL compliance.
 
 on:
+  # Starts on every PR into main, so this required check always reports; the `changes` job decides
+  # whether the suite has anything to test (.github/workflows/_hive-changes.yml). A path filter here
+  # left the check "Expected" on docs-only PRs and blocked their merge.
   pull_request:
     branches:
       - main
       - master
-    paths:
-      - 'src/**'
-      - 'build.sbt'
-      - 'version.sbt'
-      - 'project/**'
-      - 'hive/**'
-      - '.github/workflows/hive-prague.yml'
   workflow_dispatch:
     inputs:
       threshold:
@@ -36,8 +31,25 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
+  changes:
+    permissions:
+      contents: read
+      pull-requests: read
+    uses: ./.github/workflows/_hive-changes.yml
+    with:
+      paths: |
+        src/
+        build.sbt
+        version.sbt
+        project/
+        hive/
+        .github/workflows/hive-prague.yml
+
   hive:
     name: Consume-engine Prague sweep
+    # Skipped (not absent) when nothing it depends on changed: the required check still reports.
+    needs: changes
+    if: needs.changes.outputs.run == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 90
 

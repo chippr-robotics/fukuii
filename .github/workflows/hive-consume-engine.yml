@@ -10,17 +10,11 @@ on:
   # push and the org has a small shared runner pool; running them on every staging push
   # blocked production CI. They gate the staging -> main release PR instead. Targeted runs
   # belong on a local hive checkout (see docs/testing/hive-local.md).
+  # Starts on every PR into main, so this required check always reports; the `changes` job decides
+  # whether the suite has anything to test (.github/workflows/_hive-changes.yml). A path filter here
+  # left the check "Expected" on docs-only PRs and blocked their merge.
   pull_request:
     branches: [main, master]
-    paths:
-      - 'src/**'
-      - 'build.sbt'
-      - 'version.sbt'
-      - 'project/**'
-      - 'hive/**'
-      - '.github/workflows/_hive-sim.yml'
-      - '.github/workflows/hive-consume-engine.yml'
-      - '.github/hive-shards.json'
   workflow_dispatch:
     inputs:
       hive_ref:
@@ -44,6 +38,22 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
+  changes:
+    permissions:
+      contents: read
+      pull-requests: read
+    uses: ./.github/workflows/_hive-changes.yml
+    with:
+      paths: |
+        src/
+        build.sbt
+        version.sbt
+        project/
+        hive/
+        .github/workflows/_hive-sim.yml
+        .github/workflows/hive-consume-engine.yml
+        .github/hive-shards.json
+
   # The gate runs ONE fixed shard of the release shard plan (.github/hive-shards.json,
   # generated and proven an exact partition by scripts/hive/gen-shards.py), so every run
   # executes the same tests to completion against the fixtures that plan was built from.
@@ -88,9 +98,12 @@ jobs:
           PY
 
   run:
-    needs: plan
+    # `plan` always runs (seconds, no runner hold), so `run` always starts and the required check
+    # `run / consume-engine` reports; the skip happens inside _hive-sim.yml.
+    needs: [changes, plan]
     uses: ./.github/workflows/_hive-sim.yml
     with:
+      skip: ${{ needs.changes.outputs.run != 'true' }}
       sim: ethereum/eels/consume-engine
       label: consume-engine
       # The shard's exact test count (the plan is an exact partition of the pinned fixtures):
