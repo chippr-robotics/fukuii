@@ -1,0 +1,25 @@
+utc	criterion	status	detail
+2026-11-20T18:26:35Z	snap-capable ETC peers at start	RECORDED	14 of 14 handshaked peer(s), 10 min after launch
+2026-11-20T18:26:35Z	snap-capable ETC peers at start (node log)	RECORDED	13 snap-capable (0 declared by the operator) of 13 connected; SNAP began at or over min-snap-peers = 2; 1 waiting line(s)
+2026-11-20T18:26:35Z	snap-peer count: node log vs RPC	RECORDED	DISAGREE: node log 13 snap-capable of 13, RPC 14 of 14 (counted at different moments)
+2026-11-20T18:26:35Z	snap-peer precondition	PASS	14 snap-capable peers
+2026-11-20T19:08:30Z	sync reaches the head	PASS	pivot 17434792, head 17435094, 51 min after launch
+2026-11-20T19:08:30Z	no copy at the hand-off	PASS	no [PATH-PUBLISH] line
+2026-11-20T19:08:30Z	root equals the head's stateRoot	PASS	block 17435082: hash and stateRoot equal the reference's; state read at 17435094
+2026-11-20T19:08:30Z	ancestor window: BLOCKHASH below the pivot	FAIL	no probe was served (0 missed): the check did not run, so it cannot pass
+2026-11-20T19:08:41Z	ancestor window: blocks pivot+1..+256 canonical	PASS	256 compared
+2026-11-20T19:08:42Z	ancestor window: ommer with parent below the pivot	NOT-EXERCISED	no block in pivot+1..+6 carries an ommer at or below the pivot 17434792
+2026-11-20T23:08:44Z	follows the head for 4 h	PASS	head 17436213, reference 17436213
+2026-11-20T23:09:48Z	node A: canonical chain equals the reference	PASS	1409 block(s) from the pivot up (stride 1)
+2026-11-20T23:09:48Z	node A: REORG-EXEC-FAIL	PASS	0 lines
+2026-11-20T23:09:48Z	node A: rejected canonical blocks	PASS	0 (blocks refused in all: 0; none canonical)
+2026-11-20T23:09:48Z	node A: fork moves followed	RECORDED	depth 1-2: 1; other depths: 0; by depth (depth:count): 1:1 
+2026-11-20T23:09:48Z	node A: local state faults	RECORDED	0 [LOCAL-STATE-FAULT] line(s)
+2026-11-20T23:19:09Z	v2 archive export	PASS	block 17436221 in 555 s; 861021134 bytes; sha256 3ab16fe2de0cdc41e221eea9221751606d838ce09e458883b3f0a29b99fff6d0
+2026-11-20T23:21:05Z	archive import: root equal	FAIL	block 17436221 on node B: {"hash":null,"stateRoot":null}, exported 0x68f084f6f082ad75e2a43ae52afb8475b9b9df0327e51a7c3003af2e8d7e7921 / 0xe5c6c03ce034c63beac4f32eea6421e8cb171907c93145dd580cb7f99b0e1171
+2026-11-21T00:21:05Z	re-imported node follows 1 h	PASS	head 17436578 (archive at 17436221), reference 17436578
+2026-11-21T00:21:21Z	node B: canonical chain equals the reference	PASS	345 block(s) above the archive
+2026-11-21T00:21:21Z	node B: REORG-EXEC-FAIL	PASS	0 lines
+2026-11-21T00:21:21Z	node B: rejected canonical blocks	PASS	0 (blocks refused in all: 0; none canonical)
+2026-11-21T00:21:21Z	node B: fork moves followed	RECORDED	depth 1-2: 3; other depths: 0; by depth (depth:count): 1:3 
+2026-11-21T00:21:21Z	node B: local state faults	RECORDED	0 [LOCAL-STATE-FAULT] line(s)
