@@ -14,16 +14,21 @@ import com.chipprbots.ethereum.db.storage.AppStateStorage
 import com.chipprbots.ethereum.domain.*
 import com.chipprbots.ethereum.forkid.ForkId
 import com.chipprbots.ethereum.network.ForkResolver
+import com.chipprbots.ethereum.network.PeerChurnStats
 import com.chipprbots.ethereum.network.PeerManagerActor.PeerConfiguration
 import com.chipprbots.ethereum.network.p2p.messages.Capability
 import com.chipprbots.ethereum.network.p2p.messages.ETHPackets
 import com.chipprbots.ethereum.network.p2p.messages.WireProtocol.Disconnect
 import com.chipprbots.ethereum.security.SecureRandomBuilder
+import com.chipprbots.ethereum.testing.LogCapture
 import com.chipprbots.ethereum.testing.Tags.*
 import com.chipprbots.ethereum.utils.BlockchainConfig
 import com.chipprbots.ethereum.utils.Config
 import com.chipprbots.ethereum.utils.NodeStatus
 import com.chipprbots.ethereum.utils.ServerStatus
+import com.chipprbots.ethereum.network.p2p.messages.ETHPackets.Status68.Status68
+import com.chipprbots.ethereum.network.p2p.messages.ETHPackets.Status69.Status69
+import com.chipprbots.ethereum.network.p2p.messages.ETHPackets.Status70.Status70
 
 /** WI-13 / issue #1429: eth/68, eth/69 and eth/70+ STATUS handshakes must validate a peer's ForkId against the LOCAL
   * head's TIMESTAMP, not just its block number, on timestamp-fork chains.
@@ -206,3 +211,63 @@ class EthNodeStatusTimestampForkSpec extends AnyFlatSpec with Matchers:
     state.applyResponseMessage(remoteStatus) match
       case ConnectedState(_) => succeed
       case other             => fail(s"expected Connected, got: $other")
+
+  // B-415: a fork-id rejection is one of the most frequent events on a public node. It is counted for the one-a-minute
+  // `Network [60s]` summary and logged at DEBUG only; an accepted peer is not an INFO line either.
+  behavior of "the log volume of the STATUS exchange"
+
+  it should "count a fork-id rejection and log neither it nor an accepted peer at INFO or above (eth/68, 69, 70)" taggedAs (
+    UnitTest,
+    NetworkTest
+  ) in new TestSetup:
+    def status68(forkId: ForkId): Status68 = ETHPackets.Status68.Status68(
+      Capability.ETH68.version,
+      Config.Network.peer.networkId,
+      0,
+      bestHeader.hash.value,
+      genesisHeader.hash.value,
+      forkId
+    )
+    def status69(forkId: ForkId): Status69 = ETHPackets.Status69.Status69(
+      Capability.ETH69.version,
+      Config.Network.peer.networkId,
+      genesisHeader.hash.value,
+      forkId,
+      BigInt(0),
+      tinyBlockNumber.value,
+      bestHeader.hash.value
+    )
+    def status70(forkId: ForkId): Status70 = ETHPackets.Status70.Status70(
+      Capability.ETH70.version,
+      Config.Network.peer.networkId,
+      genesisHeader.hash.value,
+      forkId,
+      BigInt(0),
+      tinyBlockNumber.value,
+      bestHeader.hash.value
+    )
+    val exchanges: Seq[(String, ForkId => Any)] = Seq(
+      "eth68" -> (f =>
+        EthNodeStatus68ExchangeState(handshakerConfig, Capability.ETH68).applyResponseMessage(status68(f))
+      ),
+      "eth69" -> (f =>
+        EthNodeStatus69ExchangeState(handshakerConfig, Capability.ETH69).applyResponseMessage(status69(f))
+      ),
+      "eth70" -> (f =>
+        EthNodeStatus70ExchangeState(handshakerConfig, Capability.ETH70).applyResponseMessage(status70(f))
+      )
+    )
+    exchanges.foreach { case (name, exchange) =>
+      val before = PeerChurnStats.global.current.forkIdRejected
+      val (rejected, rejectedEvents) = LogCapture.capture("com.chipprbots.ethereum")(exchange(staleForkId))
+      withClue(s"$name rejection: ") {
+        rejected.toString should include("DisconnectedState")
+        LogCapture.atInfoOrAbove(rejectedEvents) shouldBe empty
+        PeerChurnStats.global.current.forkIdRejected should be >= (before + 1)
+      }
+      val (accepted, acceptedEvents) = LogCapture.capture("com.chipprbots.ethereum")(exchange(upgradedForkId))
+      withClue(s"$name acceptance: ") {
+        accepted.toString should include("ConnectedState")
+        LogCapture.atInfoOrAbove(acceptedEvents) shouldBe empty
+      }
+    }

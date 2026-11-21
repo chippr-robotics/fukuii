@@ -18,6 +18,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   explicitly. ADR OPS-005 records the posture.
 
 ### Changed
+- **Per-peer routine events are DEBUG; one INFO line a minute sums them (B-415).** A mining node on Mordor wrote 12.5 GB
+  of log in about ten hours, almost all of it INFO lines per peer or per discovered record: `FORKID_VALIDATION: Validation
+  result` (once per handshake and per ENR or DNS record), `PEER_HANDSHAKE_SUCCESS`, `PEER_DISCONNECTED`,
+  `HANDSHAKE_FAILURE`, `DISCONNECT_SENT`, `DISCONNECT_DEBUG`, `TCP_CLOSED`, `COMPRESSION_POLICY`, the
+  `[Stopping Connection]` lines, `ETH69_BRU_RECEIVED`, `Blacklisting peer`, `WRONG_NETWORK`, `GENESIS_HEAD_EVICT`,
+  `STALE_HANDSHAKE` and discv4's `Storing the ENR`. They are DEBUG now. The existing `Network [60s]` line gains
+  `connected=N closed=N[reason=n,...] forkid-rejected=N blacklisted=N`, and warns when no peer connected and every
+  handshake was rejected. A refusal by a maintained peer is a WARN. A grep for `PEER_HANDSHAKE_SUCCESS` needs
+  `logging.logs-level = DEBUG` for `com.chipprbots.ethereum.network`; the `Network [60s]` line carries the counts.
 - **`app_engine_newpayload_invalid` counts INVALID answers alone (B-193).** It also counted every `engine_newPayload`
   answered ACCEPTED, and any status it did not know. ACCEPTED has its own series, `app_engine_newpayload_accepted`
   (since 0.10.0). A dashboard panel on the invalid series drops by the number of ACCEPTED answers, and its history

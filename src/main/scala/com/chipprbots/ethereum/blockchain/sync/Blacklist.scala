@@ -12,6 +12,7 @@ import com.chipprbots.ethereum.blockchain.sync.Blacklist.BlacklistReason.Blackli
 import com.chipprbots.ethereum.consensus.validators.std.StdBlockValidator.BlockError
 import com.chipprbots.ethereum.network.BlockedIPRegistry
 import com.chipprbots.ethereum.network.NetworkMetrics
+import com.chipprbots.ethereum.network.PeerChurnStats
 import com.chipprbots.ethereum.network.PeerId
 import com.chipprbots.ethereum.network.PeerManagerActor
 import com.chipprbots.ethereum.network.PeerScoringManager
@@ -313,7 +314,10 @@ final case class CacheBasedBlacklist(cache: Cache[BlacklistId, BlacklistReasonTy
   override def isBlacklisted(id: BlacklistId): Boolean = cache.getIfPresent(id).isDefined
 
   override def add(id: BlacklistId, duration: FiniteDuration, reason: BlacklistReason): Unit =
-    log.info("Blacklisting peer [{}] for {}. Reason: {}", id, duration, reason.description)
+    // DEBUG: one per blacklisted peer, which on a public network is many a minute; the window's count is
+    // `blacklisted=N` in the `Network [60s]` line, and the blacklist size is a gauge.
+    log.debug("Blacklisting peer [{}] for {}. Reason: {}", id, duration, reason.description)
+    PeerChurnStats.global.recordBlacklisted()
     reason.reasonType.group match
       case "FastSyncBlacklistGroup"    => NetworkMetrics.BlacklistedReasonsFastSyncGroup.increment()
       case "RegularSyncBlacklistGroup" => NetworkMetrics.BlacklistedReasonsRegularSyncGroup.increment()

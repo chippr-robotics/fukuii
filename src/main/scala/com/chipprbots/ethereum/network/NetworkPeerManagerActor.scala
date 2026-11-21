@@ -118,7 +118,8 @@ object NetworkPeerManagerActor:
       stateForRoot: ByteString => Option[com.chipprbots.ethereum.db.storage.MptStorage] = _ => None,
       blockchainReader: Option[com.chipprbots.ethereum.domain.BlockchainReader] = None,
       isPoWChain: Boolean = false,
-      genesisHeadEvictionGrace: FiniteDuration = 60.seconds
+      genesisHeadEvictionGrace: FiniteDuration = 60.seconds,
+      churnStats: PeerChurnStats = PeerChurnStats.global
   ): Behavior[Command] =
     Behaviors.setup { ctx =>
       Behaviors.withTimers { timers =>
@@ -151,7 +152,7 @@ object NetworkPeerManagerActor:
         )
 
         // Replace the 3 Classic scheduleWithFixedDelay calls with Behaviors.withTimers.
-        timers.startTimerWithFixedDelay(LogNetworkSummaryTick, LogNetworkSummaryTick, 60.seconds)
+        timers.startTimerWithFixedDelay(LogNetworkSummaryTick, LogNetworkSummaryTick, NetworkSummaryInterval)
         timers.startTimerWithFixedDelay(FlushSnapServedTick, FlushSnapServedTick, SnapServedFlushInterval)
         timers.startTimerWithFixedDelay(
           RefreshPeerBestBlocksTick,
@@ -183,7 +184,8 @@ object NetworkPeerManagerActor:
           stateForRoot,
           blockchainReader,
           isPoWChain,
-          genesisHeadEvictionGrace
+          genesisHeadEvictionGrace,
+          churnStats
         ).handleMessages(Map.empty)
       }
     }
@@ -204,7 +206,8 @@ object NetworkPeerManagerActor:
       stateForRoot: ByteString => Option[com.chipprbots.ethereum.db.storage.MptStorage],
       blockchainReader: Option[com.chipprbots.ethereum.domain.BlockchainReader],
       isPoWChain: Boolean,
-      genesisHeadEvictionGrace: FiniteDuration
+      genesisHeadEvictionGrace: FiniteDuration,
+      churnStats: PeerChurnStats
   ):
 
     private val log = ctx.log
@@ -405,12 +408,15 @@ object NetworkPeerManagerActor:
           val authFailed = RLPxConnectionHandler.authFailedCount.getAndSet(0)
           val authTimeout = RLPxConnectionHandler.authTimeoutCount.getAndSet(0)
           val emptyHeaders = emptyHeaderResponses; emptyHeaderResponses = 0
+          val churn = churnStats.drain()
           val active = peersWithInfo.size
           val snapPeers = peersWithInfo.values.count(_.peerInfo.remoteStatus.supportsSnap)
           val inbound = peersWithInfo.values.count(_.peer.incomingConnection)
           val outbound = active - inbound
+          // The one INFO line the per-peer events (connect, close, fork-id rejection, blacklisting; DEBUG at their
+          // source) are summed into: once a minute whatever the peer churn, so INFO stays readable and bounded.
           log.info(
-            "Network [60s]: active={} ({} snap) in={} out={} | +{} tcp-fail +{} auth-fail +{} auth-timeout +{} empty-hdrs",
+            "Network [60s]: active={} ({} snap) in={} out={} | +{} tcp-fail +{} auth-fail +{} auth-timeout +{} empty-hdrs | {}",
             active,
             snapPeers,
             inbound,
@@ -418,8 +424,16 @@ object NetworkPeerManagerActor:
             tcpFailed,
             authFailed,
             authTimeout,
-            emptyHeaders
+            emptyHeaders,
+            churn.describe
           )
+          if churn.allRejecting(active) then
+            log.warn(
+              "Network [60s]: no peer connected and every handshake was rejected (forkid-rejected={} useless-peer closes={}): " +
+                "this node's fork id or genesis may be incompatible with the network it is dialling",
+              churn.forkIdRejected,
+              churn.closedByReason.getOrElse(PeerChurnStats.reasonKey(Disconnect.Reasons.UselessPeer), 0L)
+            )
           Behaviors.same
 
         case RefreshPeerBestBlocksTick =>
@@ -477,7 +491,7 @@ object NetworkPeerManagerActor:
                       isPoWChain
                     )
                     if source != "COLD_START" then
-                      log.info(
+                      log.debug(
                         "ETH69_COLD_START_RESOLVED: peer={} newTD={} source={}",
                         peerId,
                         cw.totalDifficulty,
@@ -490,7 +504,7 @@ object NetworkPeerManagerActor:
                       refreshCount += 1
                 }
                 if refreshCount > 0 then
-                  log.info("ETH69_COLD_START_RESOLVED: chain weights refreshed for {} ETH69 peers", refreshCount)
+                  log.debug("ETH69_COLD_START_RESOLVED: chain weights refreshed for {} ETH69 peers", refreshCount)
             }
           if updatedPeers ne peersWithInfo then handleMessages(updatedPeers)
           else Behaviors.same
@@ -642,7 +656,7 @@ object NetworkPeerManagerActor:
           // that are actively pushing BlockRangeUpdate.
           message match
             case bru: ETHPackets.BlockRangeUpdate =>
-              log.info(
+              log.debug(
                 "ETH69_BRU_RECEIVED: peer={} earliest={} latest={} latestHash={}",
                 peerId,
                 bru.earliestBlock,
@@ -673,7 +687,7 @@ object NetworkPeerManagerActor:
             // The outbound PeerActor that PMA closed after inbound-wins is dying. peersWithInfo already
             // holds the live inbound entry — do not evict.
             pendingInboundWinsDisconnects -= peerId
-            log.info(
+            log.debug(
               "INBOUND_WINS_DISCONNECT_SUPPRESSED: {} — outbound closed by PMA, inbound retained in peersWithInfo",
               peerId
             )
@@ -694,7 +708,7 @@ object NetworkPeerManagerActor:
               case Some(standby) =>
                 // The current connection died; the standby connection to the same node is still alive.
                 pendingInboundWinsDisconnects -= peerId
-                log.info(
+                log.debug(
                   "STANDBY_CONNECTION_PROMOTED: {} {} terminated; continuing on {}",
                   peerId,
                   acc(peerId).peer.remoteAddress,
@@ -715,7 +729,7 @@ object NetworkPeerManagerActor:
     /** Drops a handshaked peer and its per-peer subscriptions and bookkeeping. */
     private def removePeer(peerId: PeerId, peersWithInfo: PeersWithInfo, via: String): PeersWithInfo =
       val pw = peersWithInfo(peerId)
-      log.info(
+      log.debug(
         s"PEER_DISCONNECTED: ${peerId.value} " +
           s"addr=${pw.peer.remoteAddress} cap=${pw.peerInfo.remoteStatus.capability} " +
           s"inbound=${pw.peer.incomingConnection} via=$via"
@@ -747,7 +761,8 @@ object NetworkPeerManagerActor:
           s"latestBlock=${peerInfo.remoteStatus.latestBlock.getOrElse("?")} TD=${peerInfo.remoteStatus.chainWeight.totalDifficulty} (ETH/69, TD from local DB or block-number proxy)"
         else s"TD=${peerInfo.remoteStatus.chainWeight.totalDifficulty}"
       val clientType = NodeClientType.recognize(peerInfo.remoteStatus.remoteClientId)
-      log.info(
+      churnStats.recordConnected()
+      log.debug(
         s"PEER_HANDSHAKE_SUCCESS: Peer ${peer.id} cap=${peerInfo.remoteStatus.capability} " +
           s"client=${clientType.name} " +
           s"networkId=${peerInfo.remoteStatus.networkId} " +
@@ -774,7 +789,7 @@ object NetworkPeerManagerActor:
         peerInfo.remoteStatus.latestBlock.foreach { peerBlockNum =>
           reader.getBlockHeaderByNumber(peerBlockNum).foreach { ourHeader =>
             if ourHeader.hash.value != peerInfo.remoteStatus.bestHash then
-              log.warn(
+              log.debug(
                 "PEER-CHAIN-DIVERGE: Peer {} reports hash={} at block {}; our hash={}. " +
                   "One of us may be on a fork.",
                 peer.id,
@@ -854,7 +869,7 @@ object NetworkPeerManagerActor:
                     LaggingPeerBlacklistOverrideDelay
                   )
                 else
-                  log.warn(
+                  log.debug(
                     "TD-DIVERGE: Peer {} TD={} > our TD={} at block {}. We may be on a lighter fork or behind.",
                     peer.id,
                     peerTD,
@@ -875,7 +890,7 @@ object NetworkPeerManagerActor:
           pendingInboundWinsDisconnects += peer.id
           setStandby(peer.id, old, peer.ref)
           ctx.watchWith(peer.ref, PeerActorTerminated(peer.ref))
-          log.info(
+          log.debug(
             "DUPLICATE_HANDSHAKE_INBOUND_WINS: {} swapping {} → {} (outbound eviction suppressed)",
             peer.id,
             old.peer.remoteAddress,
@@ -884,7 +899,7 @@ object NetworkPeerManagerActor:
           handleMessages(peersWithInfo + (peer.id -> PeerWithInfo(peer, peerInfo)))
         else
           // Keep the EXISTING entry — don't overwrite with the duplicate.
-          log.warn(
+          log.debug(
             s"DUPLICATE_HANDSHAKE_DROPPED: ${peer.id} already in peersWithInfo " +
               s"(existing=${old.peer.remoteAddress} inbound=${old.peer.incomingConnection}, " +
               s"duplicate=${peer.remoteAddress} inbound=${peer.incomingConnection}) — " +
@@ -1054,7 +1069,7 @@ object NetworkPeerManagerActor:
                 consecutiveUnchangedProbes.getOrElse(peerId, 0) >= StaticPeerProbeThreshold
               val shouldUpdate = (isImprovement || isPeerStatic) && source != "COLD_START"
               if shouldUpdate then
-                log.info(
+                log.debug(
                   "ETH69_CHAINWEIGHT_REFRESH: blockNum={} newTD={} prevTD={} source={} static={}",
                   maxBlockNumber,
                   cw.totalDifficulty,
@@ -1491,6 +1506,9 @@ object NetworkPeerManagerActor:
   private[network] val GenesisHeadCheckInterval: FiniteDuration = 10.seconds
 
   /** How often SNAP-served counters are reported for the good-peer list (spec 012). */
+  /** How often the `Network [60s]` summary is logged: the one INFO line the per-peer events are aggregated into. */
+  private[network] val NetworkSummaryInterval: FiniteDuration = 60.seconds
+
   private[network] val SnapServedFlushInterval: FiniteDuration = 60.seconds
 
   /** Lagging-peer eviction parameters. */

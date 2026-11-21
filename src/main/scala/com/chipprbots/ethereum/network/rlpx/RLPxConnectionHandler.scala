@@ -29,6 +29,7 @@ import org.bouncycastle.util.encoders.Hex
 import com.chipprbots.ethereum.network.NodeAllowlist
 import com.chipprbots.ethereum.network.P2pTraffic
 import com.chipprbots.ethereum.network.PeerActor
+import com.chipprbots.ethereum.network.PeerChurnStats
 import com.chipprbots.ethereum.network.handshaker.HelloExchangeState
 import com.chipprbots.ethereum.network.p2p.EthereumMessageDecoder
 import com.chipprbots.ethereum.network.p2p.Message
@@ -627,7 +628,7 @@ object RLPxConnectionHandler:
 
       case AuthHandshakeError =>
         authFailedCount.incrementAndGet()
-        log.warn("[Stopping Connection] Auth handshake FAILED for peer {}", peerId)
+        log.debug("[Stopping Connection] Auth handshake FAILED for peer {}", peerId)
         parent ! ConnectionFailed
         stopping()
 
@@ -648,7 +649,8 @@ object RLPxConnectionHandler:
         case Failure(PreHelloDisconnect(reason)) =>
           // The peer's Disconnect was a message decoded like any other.
           traffic.messageReceived()
-          log.info(
+          PeerChurnStats.global.recordClosedByDisconnect(reason)
+          log.debug(
             "[RLPx] Peer {} refused the connection before Hello: reason 0x{} ({})",
             peerId,
             reason.toHexString,
@@ -658,7 +660,7 @@ object RLPxConnectionHandler:
           stopping()
 
         case Failure(err) =>
-          log.warn("[RLPx] Malformed Hello from peer {}: {} — disconnecting", peerId, err.getMessage)
+          log.debug("[RLPx] Malformed Hello from peer {}: {} — disconnecting", peerId, err.getMessage)
           parent ! ConnectionFailed
           stopping()
 
@@ -753,14 +755,13 @@ object RLPxConnectionHandler:
 
         case TcpConnectFailed =>
           tcpFailedCount.incrementAndGet()
-          // TODO: drop the pre-auth TCP-connect/close INFO logs below back to DEBUG for non-maintained peers once the
-          // re-dial failures of the plataberget soak (2026-10-05) are diagnosed.
-          log.info("[Stopping Connection] TCP connect failed for peer {}", peerId)
+          // DEBUG: one per failed dial; the window's count is `+N tcp-fail` in the `Network [60s]` line.
+          log.debug("[Stopping Connection] TCP connect failed for peer {}", peerId)
           parent ! ConnectionFailed
           stopping()
 
         case TcpConnectionTerminated =>
-          log.info("[Stopping Connection] TCP connection terminated while connecting to peer {}", peerId)
+          log.debug("[Stopping Connection] TCP connection terminated while connecting to peer {}", peerId)
           parent ! ConnectionFailed
           stopping()
 
@@ -828,7 +829,7 @@ object RLPxConnectionHandler:
 
       case AuthHandshakeTimedOut() =>
         authTimeoutCount.incrementAndGet()
-        log.warn(
+        log.debug(
           "[Stopping Connection] Auth handshake timeout for peer {} after {}ms",
           peerId,
           rlpxConfiguration.waitForHandshakeTimeout.toMillis
@@ -892,7 +893,7 @@ object RLPxConnectionHandler:
 
       case AuthHandshakeTimedOut() =>
         authTimeoutCount.incrementAndGet()
-        log.warn(
+        log.debug(
           "[Stopping Connection] Auth handshake timeout for peer {} after {}ms",
           peerId,
           rlpxConfiguration.waitForHandshakeTimeout.toMillis
@@ -901,7 +902,7 @@ object RLPxConnectionHandler:
         stopping()
 
       case TcpClosed(_) | TcpConnectionTerminated =>
-        log.info("[Stopping Connection] TCP connection closed by peer {} before its auth response arrived", peerId)
+        log.debug("[Stopping Connection] TCP connection closed by peer {} before its auth response arrived", peerId)
         parent ! ConnectionFailed
         stopping()
 
@@ -956,7 +957,7 @@ object RLPxConnectionHandler:
 
       case AckTimeout(n) if cancellableAckTimeout.exists(_.seqNumber == n) =>
         cancellableAckTimeout.foreach(_.cancellable.cancel())
-        log.warn("[Stopping Connection] Sending 'Hello' to {} failed", peerId)
+        log.debug("[Stopping Connection] Sending 'Hello' to {} failed", peerId)
         stopping()
 
       case TcpReceived(data) =>
@@ -975,7 +976,7 @@ object RLPxConnectionHandler:
         stopping()
 
       case TcpClosed(_) | TcpConnectionTerminated =>
-        log.info("[Stopping Connection] TCP connection closed by peer {} while awaiting Hello", peerId)
+        log.debug("[Stopping Connection] TCP connection closed by peer {} while awaiting Hello", peerId)
         stopping()
 
       case _ => Behaviors.unhandled
@@ -1043,7 +1044,7 @@ object RLPxConnectionHandler:
                 msg.code.toHexString
               )
               if msg.code >= CanonicalSnapBase && msg.code < CanonicalSnapBase + CanonicalSnapSize then
-                log.info("RECV_SNAP_MSG: peer={}, msg[{}] {}", peerId, idx, msg.toShortString)
+                log.debug("RECV_SNAP_MSG: peer={}, msg[{}] {}", peerId, idx, msg.toShortString)
             case Left(err) =>
               log.debug("RECV_MSG: peer={}, msg[{}] DECODE_ERROR: {}", peerId, idx, err.getMessage)
         }
@@ -1059,7 +1060,8 @@ object RLPxConnectionHandler:
 
       case AckTimeout(n) if cancellableAckTimeout.exists(_.seqNumber == n) =>
         cancellableAckTimeout.foreach(_.cancellable.cancel())
-        log.warn("[Stopping Connection] SEND_MSG_TIMEOUT: peer={}, seqNum={}", peerId, n)
+        PeerChurnStats.global.recordClosed("send-timeout")
+        log.debug("[Stopping Connection] SEND_MSG_TIMEOUT: peer={}, seqNum={}", peerId, n)
         stopping()
 
       case TcpWriteFailed =>

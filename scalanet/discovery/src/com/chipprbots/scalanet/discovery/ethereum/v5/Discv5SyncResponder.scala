@@ -216,7 +216,7 @@ object Discv5SyncResponder extends LazyLogging:
           )
         catch
           case NonFatal(ex) =>
-            logger.warn(
+            logger.debug(
               s"discv5 sync-fastpath: error handling packet from $sender: ${ex.getClass.getSimpleName}: ${ex.getMessage}"
             )
             None

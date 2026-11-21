@@ -41,8 +41,12 @@ for Mordor). Within seconds you should see:
 
 ```
 DNS_DISCOVERY: Resolved 8 enode(s) from all.mordor.etcdisco.net
-PEER_HANDSHAKE_SUCCESS: Peer … cap=ETH68 client=core-geth … forkAccepted=true supportsSnap=true
+Network [60s]: active=8 (3 snap) in=0 out=8 | … | connected=8 closed=2[too-many-peers=2] forkid-rejected=1 blacklisted=1
 ```
+
+The per-peer `PEER_HANDSHAKE_SUCCESS: Peer … cap=ETH68 client=core-geth … supportsSnap=true` line is DEBUG
+(B-415): on a public network a peer connects or closes every few seconds, so INFO carries the once-a-minute
+`Network [60s]` summary instead. Set `com.chipprbots.ethereum.network` to DEBUG to see each peer.
 
 fukuii advertises **eth/68, eth/69, snap/1**. eth/69 peers send no total difficulty in their
 STATUS; the node derives their chain weight via a calibration cascade (and you may see
