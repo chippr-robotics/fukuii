@@ -46,14 +46,14 @@ class EthUserService(
 
   def getCode(req: GetCodeRequest): ServiceResponse[GetCodeResponse] =
     IO {
-      resolveBlock(req.block).flatMap { case ResolvedBlock(block, _) =>
-        StateRead.at(blockchainReader, block.header) { state =>
+      resolveHeader(req.block).flatMap { case ResolvedHeader(header, _) =>
+        StateRead.at(blockchainReader, header) { state =>
           val world = InMemoryWorldStateProxy(
             evmCodeStorage,
             state,
             (number: BigInt) => blockchainReader.getBlockHeaderByNumber(number).map(_.hash.value),
             blockchainConfig.accountStartNonce,
-            block.header.stateRoot.value,
+            header.stateRoot.value,
             noEmptyAccounts = false,
             ethCompatibleStorage = blockchainConfig.ethCompatibleStorage
           )
@@ -97,12 +97,12 @@ class EthUserService(
     */
   def getStorageValues(req: GetStorageValuesRequest): ServiceResponse[GetStorageValuesResponse] =
     IO {
-      resolveBlock(req.block).flatMap { case ResolvedBlock(block, _) =>
+      resolveHeader(req.block).flatMap { case ResolvedHeader(header, _) =>
         // one state for every account and slot of the request
-        StateRead.at(blockchainReader, block.header) { state =>
+        StateRead.at(blockchainReader, header) { state =>
           val values = req.entries.map { entry =>
             val account = blockchainReader
-              .accountIn(state, block.header, entry.address)
+              .accountIn(state, header, entry.address)
               .getOrElse(Account.empty(blockchainConfig.accountStartNonce))
             val slotValues = entry.slots.map { position =>
               blockchain.getAccountStorageAt(
@@ -132,10 +132,10 @@ class EthUserService(
       makeResponse: (MptStorage, Account) => T
   ): ServiceResponse[T] =
     IO {
-      resolveBlock(blockParam).flatMap { case ResolvedBlock(block, _) =>
-        StateRead.at(blockchainReader, block.header) { state =>
+      resolveHeader(blockParam).flatMap { case ResolvedHeader(header, _) =>
+        StateRead.at(blockchainReader, header) { state =>
           val account = blockchainReader
-            .accountIn(state, block.header, address)
+            .accountIn(state, header, address)
             .getOrElse(Account.empty(blockchainConfig.accountStartNonce))
           makeResponse(state, account)
         }

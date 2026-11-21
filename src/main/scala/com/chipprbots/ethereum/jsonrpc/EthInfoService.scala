@@ -463,8 +463,8 @@ class EthInfoService(
     StateRead
       .reading {
         for
-          resolved <- resolveBlock(req.block)
-          hi = CallTxBuilder.estimateGasCeiling(req.tx, resolved.block.header, gasCap)(using blockchainConfig)
+          resolved <- resolveHeader(req.block)
+          hi = CallTxBuilder.estimateGasCeiling(req.tx, resolved.header, gasCap)(using blockchainConfig)
           // the estimator does not skip the execution gas cap (gasestimator)
           prepared <- prepareCall(req, resolved, hi, skipExecutionGasCap = false)
           (msg, world) = prepared
@@ -505,8 +505,8 @@ class EthInfoService(
       .reading {
         for
           _ <- req.tx.validateForCall.left.map(_.toJsonRpcError)
-          resolved <- resolveBlock(req.block)
-          header = resolved.block.header
+          resolved <- resolveHeader(req.block)
+          header = resolved.header
           base = resolved.pendingState.getOrElse(stxLedger.worldAt(header))
           // geth applies the overrides straight after loading the state, before reading the sender's nonce, and with no
           // precompiles (`Apply(db, nil)`, api.go:1366): no move is possible and no precompile is deleted, so the
@@ -610,15 +610,15 @@ class EthInfoService(
       gas: BigInt,
       skipExecutionGasCap: Boolean
   ): Either[JsonRpcError, (CallTxBuilder.CallMessage, InMemoryWorldStateProxy)] =
-    resolveBlock(req.block).flatMap(prepareCall(req, _, gas, skipExecutionGasCap))
+    resolveHeader(req.block).flatMap(prepareCall(req, _, gas, skipExecutionGasCap))
 
   private def prepareCall(
       req: CallRequest,
-      resolved: ResolvedBlock,
+      resolved: ResolvedHeader,
       gas: BigInt,
       skipExecutionGasCap: Boolean
   ): Either[JsonRpcError, (CallTxBuilder.CallMessage, InMemoryWorldStateProxy)] =
-    val header = resolved.block.header
+    val header = resolved.header
     for
       // GraphQL builds TxArgs itself; the JSON-RPC decoder has already run this (decodeForCall)
       _ <- req.tx.validateForCall.left.map(_.toJsonRpcError)
