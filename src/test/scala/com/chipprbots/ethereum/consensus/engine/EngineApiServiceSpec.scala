@@ -275,6 +275,25 @@ class EngineApiServiceSpec extends AnyWordSpec with Matchers:
           withdrawals = block.body.withdrawals
         )
 
+      val ZeroHash32: ByteString = ForkChoiceManager.ZeroHash
+
+      /** A block on `parent` that passes newPayload's pre-execution header checks (number, timestamp, gas limit, base
+        * fee), with `body`'s transactions and withdrawals; never executed, so its state root is the parent's.
+        */
+      def childOf(parent: BlockHeader, body: BlockBody, extraData: ByteString = ByteString.empty): Block =
+        val header = parent.copy(
+          parentHash = parent.hash,
+          number = parent.number + 1,
+          unixTimestamp = Timestamp(parent.unixTimestamp.toLong + 1),
+          extraData = extraData,
+          extraFields = HefPostShanghai(
+            baseFee = com.chipprbots.ethereum.consensus.eip1559.BaseFeeCalculator.calcBaseFee(parent, blockchainConfig),
+            withdrawalsRoot = com.chipprbots.ethereum.consensus.validators.std.StdBlockValidator
+              .computeWithdrawalsRoot(body.withdrawals.getOrElse(Nil))
+          )
+        )
+        Block(header, body)
+
       /** Create modified payload with random stateRoot, recomputing blockHash */
       def withModifiedStateRoot(payload: ExecutionPayload): ExecutionPayload =
         val randomStateRoot = ByteString(kec256(Array[Byte](1, 2, 3, 4)))
@@ -454,6 +473,61 @@ class EngineApiServiceSpec extends AnyWordSpec with Matchers:
       // Parent unknown → ACCEPTED (not INVALID, not VALID)
       result.status shouldBe Accepted
       result.latestValidHash shouldBe None
+
+    // B-005 (execution-apis paris.md engine_newPayloadV1 point 6; go-ethereum delayPayloadImport): a payload that is
+    // not executed is SYNCING when it extends the chain being followed, ACCEPTED on a side branch.
+    "return SYNCING for a payload whose unknown parent is the head the consensus layer asked for" taggedAs UnitTest in
+      (new EngineApiTestSetup:
+        val (validBlock, _) = buildValidBlock1()
+        val unknownParent: ByteString = ByteString(kec256(Array[Byte](9, 8, 7, 6)))
+        val header: BlockHeader = validBlock.header.copy(parentHash = BlockHash(unknownParent))
+        val payload: ExecutionPayload = blockToPayload(Block(header, validBlock.body))
+        // the head being synced to: a fork choice named it, and it is not known
+        forkChoiceManager.notifyBeaconHead(ForkChoiceState(unknownParent, ZeroHash32, ZeroHash32))
+
+        val result: PayloadStatusV1 = engineApi.newPayload(payload).unsafeRunSync()
+
+        result shouldBe PayloadStatusV1(Syncing)
+        blockchainReader.getBlockHeaderByHash(BlockHash(payload.blockHash)) shouldBe defined
+        blockchainReader.getBlockHeaderByNumber(1).map(_.hash.value) should not be Some(payload.blockHash)
+      )
+
+    "return SYNCING for a payload on a canonical parent whose state is missing" taggedAs UnitTest in
+      (new EngineApiTestSetup:
+        val (validBlock, _) = buildValidBlock1()
+        // block 1 is canonical, and its state root is not in the store: a hole under the payload (#1694)
+        val holed: BlockHeader =
+          validBlock.header.copy(stateRoot = TrieRoot(ByteString(kec256(Array[Byte](4, 0, 4)))))
+        blockchainWriter.storeBlock(Block(holed, validBlock.body)).commit()
+        blockchainReader.getBlockHeaderByNumber(1).map(_.hash) shouldBe Some(holed.hash)
+        // a withdrawal credits an account, so execution reads the parent's state (an empty block reads none of it)
+        val credited: Withdrawal =
+          Withdrawal(BigInt(0), BigInt(1), Address(ByteString(Array.fill(20)(0x01.toByte))), BigInt(1))
+        val payload: ExecutionPayload =
+          blockToPayload(childOf(holed, BlockBody(Nil, Nil, withdrawals = Some(Seq(credited)))))
+
+        val result: PayloadStatusV1 = engineApi.newPayload(payload).unsafeRunSync()
+
+        result shouldBe PayloadStatusV1(Syncing)
+        blockchainReader.getBlockHeaderByHash(BlockHash(payload.blockHash)) shouldBe defined
+        blockchainReader.getBlockHeaderByNumber(2) shouldBe None
+      )
+
+    "return ACCEPTED on a side parent never executed, SYNCING once that parent is the requested head" taggedAs UnitTest in
+      (new EngineApiTestSetup:
+        val (validBlock, _) = buildValidBlock1()
+        // block 1 known by hash only, never executed (no receipts), not canonical: a side branch's
+        val side: BlockHeader = validBlock.header.copy(extraData = ByteString("side".getBytes))
+        blockchainWriter.storeBlockByHashOnly(Block(side, validBlock.body)).commit()
+        val first: Block = childOf(side, validBlock.body)
+        val second: Block = childOf(side, validBlock.body, extraData = ByteString("second".getBytes))
+
+        engineApi.newPayload(blockToPayload(first)).unsafeRunSync() shouldBe PayloadStatusV1(Accepted)
+
+        // the consensus layer names the side block as its head: the chain being synced to, which the payload extends
+        forkChoiceManager.notifyBeaconHead(ForkChoiceState(side.hash.value, ZeroHash32, ZeroHash32))
+        engineApi.newPayload(blockToPayload(second)).unsafeRunSync() shouldBe PayloadStatusV1(Syncing)
+      )
 
     "store ACCEPTED blocks by hash only (not by number)" taggedAs UnitTest in new EngineApiTestSetup:
       val (validBlock, _) = buildValidBlock1()

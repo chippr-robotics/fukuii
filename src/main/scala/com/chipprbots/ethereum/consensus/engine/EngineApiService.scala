@@ -855,9 +855,10 @@ class EngineApiService(
                     case com.chipprbots.ethereum.ledger.BlockExecutionError.MPTError(_) |
                         com.chipprbots.ethereum.ledger.BlockExecutionError.MissingParentError =>
                       // Missing state, or a parent this node has not: it cannot be judged, so the block is stored by hash
-                      // and answered ACCEPTED below. For missing state, regular sync's importer fetches it and runs the block
-                      // when it reaches it (#1694); on the unified layout it fetches missing code only, and a node missing
-                      // from the held state is a fault of this node (spec 018 C5a part 10, beacon).
+                      // and answered SYNCING or ACCEPTED below (B-005). For missing state, regular sync's importer
+                      // fetches it and runs the block when it reaches it (#1694); on the unified layout it fetches
+                      // missing code only, and a node missing from the held state is a fault of this node (spec 018
+                      // C5a part 10, beacon).
                       error match
                         case com.chipprbots.ethereum.ledger.BlockExecutionError.MPTError(hole) =>
                           stateHoles.report(payload.blockNumber, hole, parentHeader.map(_.stateRoot.value))
@@ -879,8 +880,8 @@ class EngineApiService(
                 log.warn("[ENGINE-API] newPayload #{}: MPT error, not executed", payload.blockNumber)
                 None
               case unavailable: com.chipprbots.ethereum.db.storage.pathstate.StateFault =>
-                // A condition of this node's own state, said as that: the payload is kept and answered ACCEPTED
-                // below, never INVALID (spec 018 data-model 6.3.2).
+                // A condition of this node's own state, said as that: the payload is kept and answered SYNCING or
+                // ACCEPTED below (B-005), never INVALID (spec 018 data-model 6.3.2).
                 log.info("[ENGINE-API] newPayload #{}: not executed: {}", payload.blockNumber, unavailable.getMessage)
                 None
               case e: Exception =>
@@ -905,7 +906,7 @@ class EngineApiService(
             )
 
           case None =>
-            // Parent unknown OR parent known but unvalidated (optimistic chain). Store by
+            // Parent unknown, parent known but unvalidated (optimistic chain), or the parent's state missing. Store by
             // hash only so the block doesn't appear in eth_getBlockByNumber / eth_getBlock-
             // ByHash, but can be deduped and retroactively invalidated later.
             blockchainWriter.storeBlockByHashOnly(block).commit()
@@ -918,14 +919,41 @@ class EngineApiService(
                 _ => java.util.concurrent.ConcurrentHashMap.newKeySet[ByteString]()
               )
               .add(payload.blockHash)
-            log.info("[ENGINE-API] newPayload #{}: ACCEPTED (not executed)", payload.blockNumber)
+            val notExecuted = notExecutedStatus(payload.parentHash, parentHeader)
+            log.info("[ENGINE-API] newPayload #{}: {} (not executed)", payload.blockNumber, notExecuted.value)
             // on the unified layout a parent that is stored and whose state is not held has it again by the execution
             // of its chain: then this payload's (C4d part 3). The payload is stored first, as the recovery reads it.
             if parentKnown then recoverStateOf(payload.blockHash, s"newPayload #${payload.blockNumber}")
-            EngineApiMetrics.recordNewPayload("ACCEPTED", payload.blockNumber.toLong, payload.timestamp)
-            PayloadStatusV1(Accepted)
+            EngineApiMetrics.recordNewPayload(notExecuted.value, payload.blockNumber.toLong, payload.timestamp)
+            PayloadStatusV1(notExecuted)
       // end headerInvalid else
   }
+
+  /** What `newPayload` answers for a payload it stored and did not execute: its parent is not known, is known and was
+    * never executed, or its parent's state is missing (B-005).
+    *
+    * SYNCING when the payload extends the chain this node is following, ACCEPTED when it is on a side branch.
+    * execution-apis paris.md engine_newPayloadV1 point 6 answers SYNCING "if requisite data for the payload's
+    * acceptance or validation is missing", and ACCEPTED only for a payload that "doesn't extend the canonical chain"
+    * whose ancestors are known; Nethermind answers the same split. The payload extends the followed chain when its
+    * parent:
+    *   - is canonical at its height: the state below a canonical block is what this node is syncing or repairing (a
+    *     hole met under the payload, #1694; a parent stored with its state yet to come);
+    *   - or is the head the consensus layer last asked for ([[ForkChoiceManager.getRequestedHeadBlockHash]]), executed
+    *     or not: the payload extends the head being synced to. This is go-ethereum's `delayPayloadImport`, which
+    *     answers SYNCING when `Downloader.BeaconExtend` takes the payload onto the sync under way (its parent is the
+    *     sync's head) and ACCEPTED otherwise.
+    *
+    * Every other payload, a parent unknown or a side branch's, is ACCEPTED, as before B-005. Both answers make the
+    * consensus client import the block optimistically; neither claims it valid. ETH only: no ETC path reaches the
+    * Engine API.
+    */
+  private def notExecutedStatus(parentHash: ByteString, parentHeader: Option[BlockHeader]): PayloadStatus =
+    val parentCanonical = parentHeader.exists { p =>
+      blockchainReader.getBlockHeaderByNumber(p.number.value).exists(_.hash == p.hash)
+    }
+    val parentIsRequestedHead = forkChoiceManager.getRequestedHeadBlockHash.contains(parentHash)
+    if parentCanonical || parentIsRequestedHead then Syncing else Accepted
 
   /** EIP-7934 (Osaka): a block whose RLP encoding exceeds MAX_RLP_BLOCK_SIZE is invalid.
     *
@@ -1112,7 +1140,7 @@ class EngineApiService(
         // On the unified state layout the fork choice confirms the head under the state lock, through a move of the
         // head, and may wait there behind a move under way: on a thread that may block (beacon, spec 018 C4b part 3b).
         // The hash store's runs where it always ran.
-        val applied: IO[Either[String, Unit]] =
+        val applied: IO[Either[ForkChoiceManager.Refusal, Unit]] =
           if stateHeldInPlace.isDefined then IO.blocking(forkChoiceManager.applyForkChoiceState(forkChoiceState))
           else IO.pure(forkChoiceManager.applyForkChoiceState(forkChoiceState))
 
@@ -1139,39 +1167,38 @@ class EngineApiService(
                 )
               )
             )
-          case Left(refused) if refused.startsWith(ForkChoiceManager.FinalizedReversed) =>
+          case Left(ForkChoiceManager.Refusal.FinalizedReversed(reason)) =>
             // the head's chain does not hold the block this node was told is finalized: -38002, nothing moved (after
             // the arm above: an ancestor of the head is VALID, whatever its walk back met; beacon)
             // and it is not the head the import path follows (B-297)
             forkChoiceManager.forgetRefused(forkChoiceState.headBlockHash)
             EngineApiMetrics.recordForkchoiceUpdated("INVALID")
-            IO.pure(Left(s"invalid forkchoice state: ${refused.stripPrefix(ForkChoiceManager.FinalizedReversed)}"))
+            IO.pure(Left(s"invalid forkchoice state: $reason"))
           case Left(refused) =>
             // Head not known — return SYNCING so CL knows we need newPayload. On the unified layout a head whose chain is
             // held only up to a block below it has the blocks above that executed again meanwhile (C4d part 3).
-            if refused.startsWith(ForkChoiceManager.NotHeldHead) then
-              recoverStateOf(
-                forkChoiceState.headBlockHash,
-                "forkchoiceUpdated to a head whose state is not held",
-                com.chipprbots.ethereum.ledger.StateRecovery.Authority.ForkChoice
-              )
-            // a head that no recovery is asked for: the fork choice itself says why it was not followed (C5a part 6)
-            else if refused.startsWith(ForkChoiceManager.Unreachable) then
-              escalationWatch.foreach(
-                _.refusedUnreachable(
-                  hexOf(forkChoiceState.headBlockHash),
-                  refused.stripPrefix(ForkChoiceManager.Unreachable),
-                  Some(forkChoiceState.headBlockHash)
+            refused match
+              case ForkChoiceManager.Refusal.NotHeld(_) =>
+                recoverStateOf(
+                  forkChoiceState.headBlockHash,
+                  "forkchoiceUpdated to a head whose state is not held",
+                  com.chipprbots.ethereum.ledger.StateRecovery.Authority.ForkChoice
                 )
-              )
-            else if refused.startsWith(ForkChoiceManager.LocalFault) then
-              escalationWatch.foreach(
-                _.refusedForAFault(
-                  hexOf(forkChoiceState.headBlockHash),
-                  refused.stripPrefix(ForkChoiceManager.LocalFault),
-                  Some(forkChoiceState.headBlockHash)
+              // a head that no recovery is asked for: the fork choice itself says why it was not followed (C5a part 6)
+              case ForkChoiceManager.Refusal.Unreachable(reason) =>
+                escalationWatch.foreach(
+                  _.refusedUnreachable(
+                    hexOf(forkChoiceState.headBlockHash),
+                    reason,
+                    Some(forkChoiceState.headBlockHash)
+                  )
                 )
-              )
+              case ForkChoiceManager.Refusal.LocalFault(reason) =>
+                escalationWatch.foreach(
+                  _.refusedForAFault(hexOf(forkChoiceState.headBlockHash), reason, Some(forkChoiceState.headBlockHash))
+                )
+              // FinalizedReversed is answered by the arm above
+              case ForkChoiceManager.Refusal.Syncing | ForkChoiceManager.Refusal.FinalizedReversed(_) => ()
             EngineApiMetrics.recordForkchoiceUpdated("SYNCING")
             IO.pure(Right(ForkchoiceUpdatedResponse(payloadStatus = PayloadStatusV1(Syncing))))
 

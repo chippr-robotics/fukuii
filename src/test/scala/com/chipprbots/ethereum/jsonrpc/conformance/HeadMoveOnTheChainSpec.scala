@@ -597,7 +597,7 @@ class HeadMoveOnTheChainSpec extends ScalaTestWithActorTestKit with AnyFlatSpecL
       // the next block, committed in place between the look and the write
       on.imports(chain(3))
       val before = on.everything
-      choices.applyForkChoiceState(looked) shouldBe Left("SYNCING")
+      choices.applyForkChoiceState(looked) shouldBe Left(ForkChoiceManager.Refusal.Syncing)
       on.everything shouldBe before
       on.holds(chain(3).header, chain)
       // not taken as a head that was applied
@@ -621,7 +621,7 @@ class HeadMoveOnTheChainSpec extends ScalaTestWithActorTestKit with AnyFlatSpecL
           // the next block committed in place after every look the Engine API takes at the head, the gate's and its
           // own answer for an ancestor's, and before the fork choice is written
           val committing = new com.chipprbots.ethereum.consensus.engine.ForkChoiceManager(on.reader, on.writer):
-            override def applyForkChoiceState(newState: ForkChoiceState): Either[String, Unit] =
+            override def applyForkChoiceState(newState: ForkChoiceState): Either[ForkChoiceManager.Refusal, Unit] =
               on.imports(chain(3))
               super.applyForkChoiceState(newState)
           val engine = on.engine(() => on.pathState.anchor.map(_.hash), committing)
@@ -677,7 +677,7 @@ class HeadMoveOnTheChainSpec extends ScalaTestWithActorTestKit with AnyFlatSpecL
       val before = on.everything
       val started = on.pathState.movesStarted
       // down to the first block, an ancestor of the head: not followed, nothing written, no move counted
-      choices.applyForkChoiceState(choiceOf(chain.head, chain)) shouldBe Left("SYNCING")
+      choices.applyForkChoiceState(choiceOf(chain.head, chain)) shouldBe Left(ForkChoiceManager.Refusal.Syncing)
       on.everything shouldBe before
       on.pathState.movesStarted shouldBe started
       choices.getHeadBlockHash shouldBe None
@@ -711,7 +711,7 @@ class HeadMoveOnTheChainSpec extends ScalaTestWithActorTestKit with AnyFlatSpecL
       // not followed, and said for what it is: a fault of this node, which counts towards giving the state up (C5a
       // part 6). The consensus client is answered SYNCING all the same
       val refused = on.node.forkChoiceManager.applyForkChoiceState(choiceOf(chain(2), chain))
-      refused.left.toOption.exists(_.startsWith(ForkChoiceManager.LocalFault)) shouldBe true
+      refused.left.toOption.exists(_.isInstanceOf[ForkChoiceManager.Refusal.LocalFault]) shouldBe true
       withClue("nothing is written but the record of the fault (B-252): ") {
         on.everything.filter((key, _) => before.contains(key)) shouldBe before
         (on.everything.keySet -- before.keySet).map(_.utf8String).toList match
@@ -728,7 +728,7 @@ class HeadMoveOnTheChainSpec extends ScalaTestWithActorTestKit with AnyFlatSpecL
           .applyForkChoiceState(choiceOf(chain.last, chain))
           .left
           .toOption
-          .exists(_.startsWith(ForkChoiceManager.LocalFault)) shouldBe true
+          .exists(_.isInstanceOf[ForkChoiceManager.Refusal.LocalFault]) shouldBe true
       }
       on.holds(chain.last.header, chain)
       // closed until its state is cleared: the fault is recorded, and a restart opens the store closed (B-252)
@@ -748,7 +748,9 @@ class HeadMoveOnTheChainSpec extends ScalaTestWithActorTestKit with AnyFlatSpecL
     on.node.forkChoiceManager.applyForkChoiceState(choiceOf(chain.last, chain)) shouldBe Right(())
     on.pathState.movesStarted shouldBe before
     // nor one that is refused before anything is written
-    on.node.forkChoiceManager.applyForkChoiceState(choiceOf(chain(1), chain)) shouldBe Left("SYNCING")
+    on.node.forkChoiceManager.applyForkChoiceState(choiceOf(chain(1), chain)) shouldBe Left(
+      ForkChoiceManager.Refusal.Syncing
+    )
     on.pathState.movesStarted shouldBe before
     on.move(chain(1).header)
     on.pathState.movesStarted shouldBe before + 1
@@ -2287,7 +2289,7 @@ class HeadMoveOnTheChainSpec extends ScalaTestWithActorTestKit with AnyFlatSpecL
       on.imports(blocks(4))
       val withFinality =
         ForkChoiceState(chain.last.header.hash.value, chain(1).header.hash.value, chain(1).header.hash.value)
-      on.node.forkChoiceManager.applyForkChoiceState(withFinality) shouldBe Left("SYNCING")
+      on.node.forkChoiceManager.applyForkChoiceState(withFinality) shouldBe Left(ForkChoiceManager.Refusal.Syncing)
       on.pathState.finalizedBlock shouldBe None
       on.storages.appStateStorage.getStateFinalized() shouldBe None
       // one followed names it, in the batch that confirmed the head
