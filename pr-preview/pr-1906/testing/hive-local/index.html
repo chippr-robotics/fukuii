@@ -21,7 +21,7 @@
       
       
       <link rel="icon" href="../../assets/images/favicon.png">
-      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.8.1">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.8.2">
     
     
       
@@ -3752,6 +3752,8 @@
       
         
       
+        
+      
     
     
     
@@ -3879,6 +3881,34 @@
     
   
     TUI Operator Actions
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../adr/operations/OPS-005-zero-trust-listeners/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Zero-Trust Listeners
   
 
     
@@ -5505,6 +5535,34 @@
   
 </li>
       
+        <li class="md-nav__item">
+  <a href="#runs-with-the-unified-state-layout-guard-path-live" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Runs with the unified state layout guard (path-live)
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Runs with the unified state layout guard (path-live)">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#the-engine-re-org-suites-with-the-guard-on-b-314" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The engine re-org suites with the guard on (B-314)
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
     </ul>
   
 </nav>
@@ -5655,6 +5713,11 @@ checkouts, queue up instead of testing each other's jar.</p>
 <td>hive <code>--client</code>, e.g. <code>fukuii,go-ethereum</code> to compare with a reference client or to run the cross-client sync tests</td>
 </tr>
 <tr>
+<td><code>--path-live</code></td>
+<td>off</td>
+<td>run fukuii with the unified state layout guard on; see below</td>
+</tr>
+<tr>
 <td><code>--skip-build</code></td>
 <td>off</td>
 <td>reuse the last assembly</td>
@@ -5704,6 +5767,54 @@ about 16 min inside the consensus simulator, which loads its whole fixture corpu
 failures depend on how many clients run at once: a heavy vector that passes with
 <code>--parallelism 1</code> or <code>2</code> can still time out at 4. A resource-bound result from a local run
 at lower parallelism therefore needs its CI counterpart before anyone relies on it.</p>
+<h2 id="runs-with-the-unified-state-layout-guard-path-live">Runs with the unified state layout guard (<code>path-live</code>)<a class="headerlink" href="#runs-with-the-unified-state-layout-guard-path-live" title="Permanent link">&para;</a></h2>
+<p><code>fukuii.state.path-live</code> is the in-development guard of spec 018 Track C (<code>base/state.conf</code>). It
+is off in every shipped configuration, and the hive adapter leaves it off by default. One switch
+turns it on:</p>
+<ul>
+<li><code>hive/fukuii/Dockerfile</code> declares the build arg <code>FUKUII_PATH_LIVE</code> (empty by default) and
+  exports it as an environment variable.</li>
+<li><code>hive/fukuii/fukuii.sh</code> adds <code>-Dfukuii.state.path-live=true</code> when the variable is <code>1</code> or <code>true</code>.
+  Unset, empty, <code>0</code> or <code>false</code> leave the java command line exactly as before. Any other value
+  stops the container, so a typo cannot run a gate without the guard.</li>
+<li>hive passes build args to a client only through a client file (<code>--client-file</code>).
+  <code>scripts/hive/path-live-clients.sh [CLIENTS]</code> prints one. In it fukuii has the build arg and the
+  nametag <code>pathlive</code>, so results and logs name it <code>fukuii_pathlive</code>. The file replaces <code>--client</code>,
+  because hive uses <code>--client</code> to filter the file's entries.</li>
+</ul>
+<p>The client log shows the guard was on. <code>fukuii.sh</code> prints
+<code>fukuii.sh: FUKUII_PATH_LIVE set: -Dfukuii.state.path-live=true</code> to stderr at start.</p>
+<h3 id="the-engine-re-org-suites-with-the-guard-on-b-314">The engine re-org suites with the guard on (B-314)<a class="headerlink" href="#the-engine-re-org-suites-with-the-guard-on-b-314" title="Permanent link">&para;</a></h3>
+<p>On a host with a hive checkout (see above), from the fukuii checkout under test:</p>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-3-1"><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a><span class="c1"># ethereum/engine: every re-org test of every suite (engine-api, engine-withdrawals,</span>
+</span><span id="__span-3-2"><a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a><span class="c1"># engine-cancun): Transaction Re-Org, Re-Org Back into Canonical Chain, Re-Org Back to</span>
+</span><span id="__span-3-3"><a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a><span class="c1"># Canonical Chain From Syncing Chain, Re-org to Previously Validated Sidechain Payload,</span>
+</span><span id="__span-3-4"><a id="__codelineno-3-4" name="__codelineno-3-4" href="#__codelineno-3-4"></a><span class="c1"># Safe Re-Org to Side Chain, Sidechain Reorg, Invalid Missing Ancestor (Syncing) ReOrg,</span>
+</span><span id="__span-3-5"><a id="__codelineno-3-5" name="__codelineno-3-5" href="#__codelineno-3-5"></a><span class="c1"># Withdrawals Fork on Block N - M Block Re-Org (NewPayload / Sync)</span>
+</span><span id="__span-3-6"><a id="__codelineno-3-6" name="__codelineno-3-6" href="#__codelineno-3-6"></a><span class="nv">HIVE_DIR</span><span class="o">=</span>~/hive-master<span class="w"> </span>scripts/hive/local.sh<span class="w"> </span>ethereum/engine<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-3-7"><a id="__codelineno-3-7" name="__codelineno-3-7" href="#__codelineno-3-7"></a><span class="w">  </span>--limit<span class="w"> </span><span class="s1">'/re-?org'</span><span class="w"> </span>--path-live<span class="w"> </span>--parallelism<span class="w"> </span><span class="m">2</span>
+</span><span id="__span-3-8"><a id="__codelineno-3-8" name="__codelineno-3-8" href="#__codelineno-3-8"></a>
+</span><span id="__span-3-9"><a id="__codelineno-3-9" name="__codelineno-3-9" href="#__codelineno-3-9"></a><span class="c1"># The same tests without the guard, for comparison (reuses the assembly)</span>
+</span><span id="__span-3-10"><a id="__codelineno-3-10" name="__codelineno-3-10" href="#__codelineno-3-10"></a><span class="nv">HIVE_DIR</span><span class="o">=</span>~/hive-master<span class="w"> </span>scripts/hive/local.sh<span class="w"> </span>ethereum/engine<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-3-11"><a id="__codelineno-3-11" name="__codelineno-3-11" href="#__codelineno-3-11"></a><span class="w">  </span>--limit<span class="w"> </span><span class="s1">'/re-?org'</span><span class="w"> </span>--parallelism<span class="w"> </span><span class="m">2</span><span class="w"> </span>--skip-build
+</span><span id="__span-3-12"><a id="__codelineno-3-12" name="__codelineno-3-12" href="#__codelineno-3-12"></a>
+</span><span id="__span-3-13"><a id="__codelineno-3-13" name="__codelineno-3-13" href="#__codelineno-3-13"></a><span class="c1"># ethereum/eels/consume-engine: fixtures whose name contains "reorg". How many the published</span>
+</span><span id="__span-3-14"><a id="__codelineno-3-14" name="__codelineno-3-14" href="#__codelineno-3-14"></a><span class="c1"># fixtures carry varies by release, and the count may be zero. Check the TOTAL line.</span>
+</span><span id="__span-3-15"><a id="__codelineno-3-15" name="__codelineno-3-15" href="#__codelineno-3-15"></a><span class="nv">HIVE_DIR</span><span class="o">=</span>~/hive-master<span class="w"> </span>scripts/hive/local.sh<span class="w"> </span>ethereum/eels/consume-engine<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-3-16"><a id="__codelineno-3-16" name="__codelineno-3-16" href="#__codelineno-3-16"></a><span class="w">  </span>--limit<span class="w"> </span><span class="s1">'.*reorg.*'</span><span class="w"> </span>--path-live<span class="w"> </span>--parallelism<span class="w"> </span><span class="m">2</span><span class="w"> </span>--skip-build
+</span></code></pre></div>
+<p>hive matches <code>--sim.limit</code> without regard to case, as <code>suite/test</code>. An empty suite part matches
+every suite.</p>
+<p>On GitHub Actions, dispatch <code>Hive · engine</code> or <code>Hive · consume-engine</code> with <code>path_live</code> set,
+and for the engine suite <code>sim_limit</code> = <code>/re-?org</code>:</p>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-4-1"><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a>gh<span class="w"> </span>workflow<span class="w"> </span>run<span class="w"> </span>hive-engine.yml<span class="w"> </span>--ref<span class="w"> </span>staging<span class="w"> </span>-f<span class="w"> </span><span class="nv">path_live</span><span class="o">=</span><span class="nb">true</span><span class="w"> </span>-f<span class="w"> </span><span class="nv">sim_limit</span><span class="o">=</span><span class="s1">'/re-?org'</span>
+</span></code></pre></div>
+<p>A dispatched run with the guard on is labelled <code>engine-pathlive</code> (or <code>consume-engine-pathlive</code>)
+in its job name, artifacts and summary. Pull requests never set it. Neither gate's default
+run changes.</p>
+<p><code>scripts/hive/check-path-live-switch.sh</code> checks the switch without Docker or hive. It runs
+<code>fukuii.sh</code> with a stub <code>java</code> and asserts the flag appears only when the variable is set. It
+also checks the Dockerfile and the client file. It is not part of any required check.</p>
 
 
 

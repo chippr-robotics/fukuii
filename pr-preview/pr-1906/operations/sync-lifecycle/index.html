@@ -21,7 +21,7 @@
       
       
       <link rel="icon" href="../../assets/images/favicon.png">
-      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.8.1">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.8.2">
     
     
       
@@ -3752,6 +3752,8 @@
       
         
       
+        
+      
     
     
     
@@ -3879,6 +3881,34 @@
     
   
     TUI Operator Actions
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../adr/operations/OPS-005-zero-trust-listeners/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Zero-Trust Listeners
   
 
     
@@ -5561,6 +5591,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#checkpoint-import-archive-format-version-2" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Checkpoint import (archive format version 2)
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#timing-cheat-sheet-live-observed-reference-points-june-2026" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -5684,8 +5725,11 @@ and seeds discovery from the config bootnodes plus <strong>EIP-1459 DNS trees</s
 (<code>all.classic.blockd.info</code> for ETC; <code>all.mordor.etcdisco.net</code> and <code>all.mordor.blockd.info</code>
 for Mordor). Within seconds you should see:</p>
 <div class="language-text highlight"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>DNS_DISCOVERY: Resolved 8 enode(s) from all.mordor.etcdisco.net
-</span><span id="__span-1-2"><a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a>PEER_HANDSHAKE_SUCCESS: Peer … cap=ETH68 client=core-geth … forkAccepted=true supportsSnap=true
+</span><span id="__span-1-2"><a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a>Network [60s]: active=8 (3 snap) in=0 out=8 | … | connected=8 closed=2[too-many-peers=2] forkid-rejected=1 blacklisted=1
 </span></code></pre></div>
+<p>The per-peer <code>PEER_HANDSHAKE_SUCCESS: Peer … cap=ETH68 client=core-geth … supportsSnap=true</code> line is DEBUG
+(B-415): on a public network a peer connects or closes every few seconds, so INFO carries the once-a-minute
+<code>Network [60s]</code> summary instead. Set <code>com.chipprbots.ethereum.network</code> to DEBUG to see each peer.</p>
 <p>fukuii advertises <strong>eth/68, eth/69, snap/1</strong>. eth/69 peers send no total difficulty in their
 STATUS; the node derives their chain weight via a calibration cascade (and you may see
 <code>SNAP_CALIBRATION_PEER</code> / <code>ETH69_BRU_POST_HANDSHAKE</code> lines — informational). Off-network
@@ -5739,6 +5783,42 @@ healthy peer set (single-digit blocks/s means peer starvation, not CPU). At the 
 arrive on the ETC ~13 s cadence. If block execution ever hits a state node SNAP missed, it
 is fetched on demand from SNAP peers and import continues — occasional
 <code>FetchStateNode</code> activity right after handoff is normal and self-quenching.</p>
+<h2 id="checkpoint-import-archive-format-version-2">Checkpoint import (archive format version 2)<a class="headerlink" href="#checkpoint-import-archive-format-version-2" title="Permanent link">&para;</a></h2>
+<p>Instead of SNAP, a fresh node can import a <code>.checkpoint</code> archive: <code>fukuii.sync.checkpoint-sync-file</code> (a path, <code>.gz</code>
+accepted) or <code>fukuii.sync.checkpoint-sync-url</code>. It runs only while the best block is 0 and no sync is done. It works on
+both state layouts, including <code>fukuii.state.path-live = true</code>. Version 1 archives are refused: export again with this
+release. <strong>Stop sync before exporting</strong>: an export takes hours and fails with <code>StateNotHeld</code> if the state moves.</p>
+<p><strong>What the node trusts.</strong></p>
+<ul>
+<li><strong>Total difficulty is trusted from the archive</strong>, not re-derived, and proof-of-work fork choice compares it. An archive
+  whose exporter could neither sum it from genesis nor held the chain-weight invariant carries an <em>estimated</em> TD: the
+  import accepts it and logs a WARN naming the block and the TD. <code>ChainWeightReconcile</code> checks it once the headers below
+  the checkpoint are in.</li>
+<li><strong>The expected block hash is required.</strong> Set <code>fukuii.sync.checkpoint-sync-expected-hash</code> (32 bytes, hex), or rely on the
+  hash the chain config pins for a public chain (<code>checkpoint-expected-block-hash</code>); the operator's wins. An archive
+  whose checkpoint block hashes to anything else is refused before anything is written. ETH and ETC share a genesis
+  hash, so this and the chain id are what tie an archive to its chain. With neither, no archive is imported (a
+  configuration error, not recorded as a refusal).</li>
+<li><strong>Proof of stake: finalized blocks only.</strong> On Sepolia, ETH mainnet and Hoodi the exporter refuses a block above the
+  finalized block, and defaults to the finalized one. Take the expected hash from a finalized beacon block's
+  <code>execution_payload.block_hash</code>. The importer requires TD &gt;= TTD on a post-merge header.</li>
+</ul>
+<p><strong>Failure and no retry.</strong> The import is atomic on the unified layout: the rows are written at their positions in
+batches, and one synced batch then writes the anchor, <code>state.origin</code>, the window and the weight together, so a kill
+leaves either no anchor or the whole state, never an anchor over part of the rows. An archive that is refused after its
+header is read because of its <strong>content</strong> (a bad window, node or code, a node that is not the one its parent names, an
+archive of another chain or genesis, or a total difficulty the node does not accept), and an import that was killed, is
+<strong>recorded as refused by its id</strong> (keccak of the archive's header block; AppState key <code>checkpoint.import.refused</code>, the
+last 32 ids). The rows it wrote are cleared and the node syncs by SNAP from a clean state. The same archive is <strong>not
+imported again on a restart</strong>, since each attempt would wipe the SNAP progress made since. A different archive (another
+block) is imported without any flag.</p>
+<p>A fault that a new download or a corrected configuration mends is <strong>not recorded</strong>: a truncated file, a failed checksum, a
+read error, or a checkpoint block that is not the <code>checkpoint-sync-expected-hash</code> (that value may be the wrong one). The
+rows are still cleared and the node still starts SNAP, but the next start imports the archive again, with no flag, and a
+fresh download or a corrected hash then works by itself.</p>
+<p>To import an archive that was recorded as refused again (a file you have checked and still want), set
+<code>fukuii.sync.checkpoint-sync-retry-refused = true</code> for <strong>one start</strong>: while it is set, every start re-runs the import. A
+successful import removes the archive from the record.</p>
 <h2 id="timing-cheat-sheet-live-observed-reference-points-june-2026">Timing cheat-sheet (live-observed reference points, June 2026)<a class="headerlink" href="#timing-cheat-sheet-live-observed-reference-points-june-2026" title="Permanent link">&para;</a></h2>
 <table>
 <thead>
@@ -5805,6 +5885,10 @@ is fetched on demand from SNAP peers and import continues — occasional
 <tr>
 <td>Regular sync</td>
 <td>Resumes from the last imported block</td>
+</tr>
+<tr>
+<td>Checkpoint import</td>
+<td>The import key marks it: its rows are cleared (unified layout), SNAP starts clean; the archive is recorded as refused if it was killed or its content was at fault, and is then not retried unless <code>checkpoint-sync-retry-refused</code> is set</td>
 </tr>
 </tbody>
 </table>

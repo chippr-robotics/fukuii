@@ -21,7 +21,7 @@
       
       
       <link rel="icon" href="../../assets/images/favicon.png">
-      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.8.1">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.8.2">
     
     
       
@@ -3752,6 +3752,8 @@
       
         
       
+        
+      
     
     
     
@@ -3879,6 +3881,34 @@
     
   
     TUI Operator Actions
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../adr/operations/OPS-005-zero-trust-listeners/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Zero-Trust Listeners
   
 
     
@@ -5589,6 +5619,17 @@
   
 </li>
         
+          <li class="md-nav__item">
+  <a href="#the-dag-and-memory-built-in-cpu-miner-only" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The DAG and memory (built-in CPU miner only)
+      
+    </span>
+  </a>
+  
+</li>
+        
       </ul>
     </nav>
   
@@ -6081,8 +6122,46 @@
 <td>Timeout for ommer pool queries</td>
 <td><code>60s</code></td>
 </tr>
+<tr>
+<td><code>pow.ethash-dir</code></td>
+<td>Directory of the built-in miner's DAG file</td>
+<td><code>~/.ethash</code></td>
+</tr>
 </tbody>
 </table>
+<h3 id="the-dag-and-memory-built-in-cpu-miner-only">The DAG and memory (built-in CPU miner only)<a class="headerlink" href="#the-dag-and-memory-built-in-cpu-miner-only" title="Permanent link">&para;</a></h3>
+<p>Only the built-in CPU miner (<code>mining.mining-enabled = true</code>) builds the full Ethash dataset, the DAG. Header
+validation and external miners (<code>eth_getWork</code> / <code>eth_submitWork</code>, for ASIC and GPU rigs) use the light cache, tens of
+MB, so a node with mining off never builds a DAG.</p>
+<p>The DAG is a memory-mapped file in <code>pow.ethash-dir</code>, named <code>full-R23-&lt;seed&gt;</code> in the same layout as geth's and
+core-geth's DAG files. It is not on the Java heap: the heap holds the light cache and a 1 MiB write buffer while the
+DAG is generated, and nothing of it afterwards. Its size is <code>EthashUtils.dagSize(epoch)</code>, 1 GiB plus 8 MiB per epoch:</p>
+<table>
+<thead>
+<tr>
+<th>Network</th>
+<th>Epoch (ECIP-1099, 60,000 blocks)</th>
+<th>DAG file</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Mordor</td>
+<td>290</td>
+<td>3.27 GiB</td>
+</tr>
+<tr>
+<td>ETC mainnet</td>
+<td>364 (block 21.9M)</td>
+<td>3.84 GiB</td>
+</tr>
+</tbody>
+</table>
+<p>For a good hashrate the OS page cache needs roughly the DAG's size in free RAM, beside the heap: with less, the miner
+reads the DAG from disk. Do not raise <code>-Xmx</code> for the DAG. A DAG file of the current epoch is reused across restarts
+once its size, header and a sample of its items check out; a truncated or corrupt file is regenerated. Generation
+writes a temporary file and renames it, so a crash never leaves a file that looks complete. On an epoch change the
+last epoch's file is deleted. Generation is single-threaded: about 5 minutes per GiB on one core.</p>
 <h2 id="starting-mining">Starting Mining<a class="headerlink" href="#starting-mining" title="Permanent link">&para;</a></h2>
 <h3 id="via-rpc-recommended">Via RPC (Recommended)<a class="headerlink" href="#via-rpc-recommended" title="Permanent link">&para;</a></h3>
 <p>The <code>miner_*</code> methods are in the <code>miner</code> namespace, which HTTP and WebSocket do not serve by default (IPC does). Enable
@@ -6285,7 +6364,8 @@ and work with the defaults.</p>
 <p><strong>Possible Causes:</strong>
 1. Limited CPU resources
 2. External miners not reporting hashrate
-3. Hashrate submissions timing out</p>
+3. Hashrate submissions timing out
+4. Built-in miner: too little free RAM for the DAG file in the page cache (see <a href="#the-dag-and-memory-built-in-cpu-miner-only">The DAG and memory</a>)</p>
 <p><strong>Solutions:</strong>
 - Ensure external miners call <code>eth_submitHashrate</code> regularly
 - Check system resource usage

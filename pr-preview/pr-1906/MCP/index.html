@@ -21,7 +21,7 @@
       
       
       <link rel="icon" href="../assets/images/favicon.png">
-      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.8.1">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.8.2">
     
     
       
@@ -3752,6 +3752,8 @@
       
         
       
+        
+      
     
     
     
@@ -3879,6 +3881,34 @@
     
   
     TUI Operator Actions
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../adr/operations/OPS-005-zero-trust-listeners/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Zero-Trust Listeners
   
 
     
@@ -5773,7 +5803,7 @@
 
 <h1 id="fukuii-mcp-server">Fukuii MCP Server<a class="headerlink" href="#fukuii-mcp-server" title="Permanent link">&para;</a></h1>
 <h2 id="overview">Overview<a class="headerlink" href="#overview" title="Permanent link">&para;</a></h2>
-<p>Fukuii includes Model Context Protocol (MCP) support integrated into its existing JSON-RPC infrastructure. The MCP methods are available via the standard JSON-RPC endpoint on port 8545, alongside traditional Ethereum JSON-RPC methods.</p>
+<p>Fukuii includes Model Context Protocol (MCP) support integrated into its existing JSON-RPC infrastructure. The MCP methods are available via the standard JSON-RPC endpoints (HTTP on port 8546 and WebSocket on port 8552 by default, and the IPC socket), alongside traditional Ethereum JSON-RPC methods.</p>
 <p>This integration enables AI assistants and other intelligent agents to interact with, monitor, and manage the Fukuii node through a standardized protocol using the same robust, production-tested infrastructure that powers the Ethereum JSON-RPC API.</p>
 <h2 id="what-is-mcp">What is MCP?<a class="headerlink" href="#what-is-mcp" title="Permanent link">&para;</a></h2>
 <p>The Model Context Protocol (MCP) is an open standard that enables AI assistants to securely connect to external data sources and tools. It provides a unified way for AI systems to:</p>
@@ -5801,8 +5831,8 @@ is a comma-separated string.)</p>
 <h2 id="using-the-mcp-api">Using the MCP API<a class="headerlink" href="#using-the-mcp-api" title="Permanent link">&para;</a></h2>
 <h3 id="json-rpc-integration">JSON-RPC Integration<a class="headerlink" href="#json-rpc-integration" title="Permanent link">&para;</a></h3>
 <p>MCP methods follow the same JSON-RPC 2.0 protocol as standard Ethereum methods. You can call them via:</p>
-<p><strong>HTTP/HTTPS:</strong>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>curl<span class="w"> </span>-X<span class="w"> </span>POST<span class="w"> </span>http://localhost:8545<span class="w"> </span><span class="se">\</span>
+<p><strong>HTTP/HTTPS</strong> (<code>network.rpc.http.port</code>, default 8546):
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>curl<span class="w"> </span>-X<span class="w"> </span>POST<span class="w"> </span>http://localhost:8546<span class="w"> </span><span class="se">\</span>
 </span><span id="__span-2-2"><a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a><span class="w">  </span>-H<span class="w"> </span><span class="s2">"Content-Type: application/json"</span><span class="w"> </span><span class="se">\</span>
 </span><span id="__span-2-3"><a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a><span class="w">  </span>-d<span class="w"> </span><span class="s1">'{</span>
 </span><span id="__span-2-4"><a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a><span class="s1">    "jsonrpc": "2.0",</span>
@@ -5811,8 +5841,8 @@ is a comma-separated string.)</p>
 </span><span id="__span-2-7"><a id="__codelineno-2-7" name="__codelineno-2-7" href="#__codelineno-2-7"></a><span class="s1">    "params": [{}]</span>
 </span><span id="__span-2-8"><a id="__codelineno-2-8" name="__codelineno-2-8" href="#__codelineno-2-8"></a><span class="s1">  }'</span>
 </span></code></pre></div></p>
-<p><strong>WebSocket:</strong>
-<div class="language-javascript highlight"><pre><span></span><code><span id="__span-3-1"><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a><span class="kd">const</span><span class="w"> </span><span class="nx">ws</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="ow">new</span><span class="w"> </span><span class="nx">WebSocket</span><span class="p">(</span><span class="s1">'ws://localhost:8545'</span><span class="p">);</span>
+<p><strong>WebSocket</strong> (<code>network.rpc.ws.port</code>, default 8552; the WebSocket listener is off until <code>network.rpc.ws.enabled = true</code>):
+<div class="language-javascript highlight"><pre><span></span><code><span id="__span-3-1"><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a><span class="kd">const</span><span class="w"> </span><span class="nx">ws</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="ow">new</span><span class="w"> </span><span class="nx">WebSocket</span><span class="p">(</span><span class="s1">'ws://localhost:8552'</span><span class="p">);</span>
 </span><span id="__span-3-2"><a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a><span class="nx">ws</span><span class="p">.</span><span class="nx">send</span><span class="p">(</span><span class="nb">JSON</span><span class="p">.</span><span class="nx">stringify</span><span class="p">({</span>
 </span><span id="__span-3-3"><a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a><span class="w">  </span><span class="nx">jsonrpc</span><span class="o">:</span><span class="w"> </span><span class="s2">"2.0"</span><span class="p">,</span>
 </span><span id="__span-3-4"><a id="__codelineno-3-4" name="__codelineno-3-4" href="#__codelineno-3-4"></a><span class="w">  </span><span class="nx">id</span><span class="o">:</span><span class="w"> </span><span class="mf">1</span><span class="p">,</span>
@@ -5825,7 +5855,7 @@ is a comma-separated string.)</p>
 <div class="language-bash highlight"><pre><span></span><code><span id="__span-4-1"><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a><span class="ch">#!/bin/bash</span>
 </span><span id="__span-4-2"><a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a><span class="c1"># mcp-proxy.sh</span>
 </span><span id="__span-4-3"><a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a><span class="k">while</span><span class="w"> </span><span class="nv">IFS</span><span class="o">=</span><span class="w"> </span><span class="nb">read</span><span class="w"> </span>-r<span class="w"> </span>line<span class="p">;</span><span class="w"> </span><span class="k">do</span>
-</span><span id="__span-4-4"><a id="__codelineno-4-4" name="__codelineno-4-4" href="#__codelineno-4-4"></a><span class="w">  </span>curl<span class="w"> </span>-s<span class="w"> </span>-X<span class="w"> </span>POST<span class="w"> </span>http://localhost:8545<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-4-4"><a id="__codelineno-4-4" name="__codelineno-4-4" href="#__codelineno-4-4"></a><span class="w">  </span>curl<span class="w"> </span>-s<span class="w"> </span>-X<span class="w"> </span>POST<span class="w"> </span>http://localhost:8546<span class="w"> </span><span class="se">\</span>
 </span><span id="__span-4-5"><a id="__codelineno-4-5" name="__codelineno-4-5" href="#__codelineno-4-5"></a><span class="w">    </span>-H<span class="w"> </span><span class="s2">"Content-Type: application/json"</span><span class="w"> </span><span class="se">\</span>
 </span><span id="__span-4-6"><a id="__codelineno-4-6" name="__codelineno-4-6" href="#__codelineno-4-6"></a><span class="w">    </span>-d<span class="w"> </span><span class="s2">"</span><span class="nv">$line</span><span class="s2">"</span>
 </span><span id="__span-4-7"><a id="__codelineno-4-7" name="__codelineno-4-7" href="#__codelineno-4-7"></a><span class="k">done</span>
@@ -5952,21 +5982,27 @@ is a comma-separated string.)</p>
 <h2 id="security-considerations">Security Considerations<a class="headerlink" href="#security-considerations" title="Permanent link">&para;</a></h2>
 <p>Since MCP methods are integrated into the JSON-RPC API, they benefit from all existing security features:</p>
 <ul>
-<li><strong>Authentication</strong>: Use the existing JSON-RPC authentication mechanisms</li>
-<li><strong>CORS</strong>: Configure CORS settings in <code>fukuii.network.rpc.cors-allowed-origins</code></li>
-<li><strong>Rate Limiting</strong>: Automatic rate limiting via <code>fukuii.network.rpc.rate-limit</code></li>
-<li><strong>HTTPS</strong>: Enable via <code>fukuii.network.rpc.certificate-keystore-path</code></li>
-<li><strong>API Control</strong>: Explicitly enable/disable via configuration</li>
+<li><strong>Authentication</strong>: client certificates (mutual TLS). With <code>fukuii.network.rpc.http.tls.client-auth = "need"</code> (or
+  <code>ws.tls</code>), only clients holding a certificate from the profile's truststore connect; an identity rule in
+  <code>fukuii.network.rpc.client-identities</code> can grant <code>mcp</code> to one certificate only. There is no password or API-key
+  authentication</li>
+<li><strong>CORS</strong>: Configure CORS settings in <code>fukuii.network.rpc.http.cors-allowed-origins</code></li>
+<li><strong>Rate Limiting</strong>: Per-IP rate limiting via <code>fukuii.network.rpc.http.rate-limit</code> (off by default: <code>enabled = false</code>)</li>
+<li><strong>HTTPS</strong>: <code>fukuii.network.rpc.http.tls { enabled = true, profile = "&lt;name&gt;" }</code> with a profile under
+  <code>fukuii.tls.profiles</code> (the deprecated <code>mode = "https"</code> with a <code>certificate</code> block is removed in 0.13.0)</li>
+<li><strong>API Control</strong>: <code>mcp</code> is opt-in per transport (<code>fukuii.network.rpc.http.apis</code>, <code>ws.apis</code>, <code>ipc.apis</code>)</li>
 </ul>
 <p><strong>Production Recommendations:</strong>
-1. Enable HTTPS for all external access
-2. Use authentication for sensitive operations
+1. Keep the listener on <code>localhost</code> (the default), or enable TLS for all external access: a non-loopback listener
+   without TLS refuses to start unless its <code>allow-insecure-bind = true</code> is set
+2. Use client certificates (<code>client-auth = "need"</code>) for callers on other hosts
 3. Configure appropriate CORS restrictions
 4. Enable only required APIs
 5. Monitor rate limits and adjust as needed</p>
+<p>See the <a href="../runbooks/tls-operations/">TLS Operations runbook</a> for profiles, mutual TLS and identity rules.</p>
 <h2 id="example-interactions">Example Interactions<a class="headerlink" href="#example-interactions" title="Permanent link">&para;</a></h2>
 <h3 id="check-node-health">Check Node Health<a class="headerlink" href="#check-node-health" title="Permanent link">&para;</a></h3>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-14-1"><a id="__codelineno-14-1" name="__codelineno-14-1" href="#__codelineno-14-1"></a>curl<span class="w"> </span>-X<span class="w"> </span>POST<span class="w"> </span>http://localhost:8545<span class="w"> </span><span class="se">\</span>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-14-1"><a id="__codelineno-14-1" name="__codelineno-14-1" href="#__codelineno-14-1"></a>curl<span class="w"> </span>-X<span class="w"> </span>POST<span class="w"> </span>http://localhost:8546<span class="w"> </span><span class="se">\</span>
 </span><span id="__span-14-2"><a id="__codelineno-14-2" name="__codelineno-14-2" href="#__codelineno-14-2"></a><span class="w">  </span>-H<span class="w"> </span><span class="s2">"Content-Type: application/json"</span><span class="w"> </span><span class="se">\</span>
 </span><span id="__span-14-3"><a id="__codelineno-14-3" name="__codelineno-14-3" href="#__codelineno-14-3"></a><span class="w">  </span>-d<span class="w"> </span><span class="s1">'{</span>
 </span><span id="__span-14-4"><a id="__codelineno-14-4" name="__codelineno-14-4" href="#__codelineno-14-4"></a><span class="s1">    "jsonrpc": "2.0",</span>
@@ -5979,7 +6015,7 @@ is a comma-separated string.)</p>
 </span><span id="__span-14-11"><a id="__codelineno-14-11" name="__codelineno-14-11" href="#__codelineno-14-11"></a><span class="s1">  }'</span>
 </span></code></pre></div>
 <h3 id="read-node-configuration">Read Node Configuration<a class="headerlink" href="#read-node-configuration" title="Permanent link">&para;</a></h3>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-15-1"><a id="__codelineno-15-1" name="__codelineno-15-1" href="#__codelineno-15-1"></a>curl<span class="w"> </span>-X<span class="w"> </span>POST<span class="w"> </span>http://localhost:8545<span class="w"> </span><span class="se">\</span>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-15-1"><a id="__codelineno-15-1" name="__codelineno-15-1" href="#__codelineno-15-1"></a>curl<span class="w"> </span>-X<span class="w"> </span>POST<span class="w"> </span>http://localhost:8546<span class="w"> </span><span class="se">\</span>
 </span><span id="__span-15-2"><a id="__codelineno-15-2" name="__codelineno-15-2" href="#__codelineno-15-2"></a><span class="w">  </span>-H<span class="w"> </span><span class="s2">"Content-Type: application/json"</span><span class="w"> </span><span class="se">\</span>
 </span><span id="__span-15-3"><a id="__codelineno-15-3" name="__codelineno-15-3" href="#__codelineno-15-3"></a><span class="w">  </span>-d<span class="w"> </span><span class="s1">'{</span>
 </span><span id="__span-15-4"><a id="__codelineno-15-4" name="__codelineno-15-4" href="#__codelineno-15-4"></a><span class="s1">    "jsonrpc": "2.0",</span>
@@ -5991,7 +6027,7 @@ is a comma-separated string.)</p>
 </span><span id="__span-15-10"><a id="__codelineno-15-10" name="__codelineno-15-10" href="#__codelineno-15-10"></a><span class="s1">  }'</span>
 </span></code></pre></div>
 <h3 id="get-troubleshooting-prompt">Get Troubleshooting Prompt<a class="headerlink" href="#get-troubleshooting-prompt" title="Permanent link">&para;</a></h3>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-16-1"><a id="__codelineno-16-1" name="__codelineno-16-1" href="#__codelineno-16-1"></a>curl<span class="w"> </span>-X<span class="w"> </span>POST<span class="w"> </span>http://localhost:8545<span class="w"> </span><span class="se">\</span>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-16-1"><a id="__codelineno-16-1" name="__codelineno-16-1" href="#__codelineno-16-1"></a>curl<span class="w"> </span>-X<span class="w"> </span>POST<span class="w"> </span>http://localhost:8546<span class="w"> </span><span class="se">\</span>
 </span><span id="__span-16-2"><a id="__codelineno-16-2" name="__codelineno-16-2" href="#__codelineno-16-2"></a><span class="w">  </span>-H<span class="w"> </span><span class="s2">"Content-Type: application/json"</span><span class="w"> </span><span class="se">\</span>
 </span><span id="__span-16-3"><a id="__codelineno-16-3" name="__codelineno-16-3" href="#__codelineno-16-3"></a><span class="w">  </span>-d<span class="w"> </span><span class="s1">'{</span>
 </span><span id="__span-16-4"><a id="__codelineno-16-4" name="__codelineno-16-4" href="#__codelineno-16-4"></a><span class="s1">    "jsonrpc": "2.0",</span>
