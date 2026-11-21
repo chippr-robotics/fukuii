@@ -1,8 +1,7 @@
 # fukuii shared backlog (schema version 1). Rendered at https://docs.fukuii.com/development/tracker/
 # Change it with scripts/backlog/backlog.py on staging (claim, status, done, ...); README.md has the protocol.
 # Hand edits in the GitHub web UI are fine: keep the schema (backlog.py check), never delete or reuse an id
-# (drop the item instead; `backlog.py prune` moves closed items to archive.yaml). Comments other than this
-# header are not kept when the tool rewrites the file.
+# (drop the item instead). Comments other than this header are not kept when the tool rewrites the file.
 version: 1
 expiry_hours: 24
 items:
@@ -3722,3 +3721,13 @@ items:
     refs: []
     links: {}
     notes: "Seen on #1948 (2026-11-19) and #1978 (2026-11-21): the artifact exists on Maven Central; the coursier cache miss plus a transient fetch error fail formatCheck before tests. Options: include the scalafix-cli artifacts in the actions/cache key/path, prefetch with a retry step, or set coursier retry env (COURSIER_RETRY / sbt csrConfiguration)."
+  - id: B-418
+    title: "CVE-2026-114938 (Java4Shell): pin Temurin 25.0.5.1, disable Base64 decode intrinsic, no pre-auth Base64 decode in Engine API JWT / DNS discovery"
+    priority: P0
+    status: open
+    area: ops
+    size: S
+    opened: 2026-11-21
+    refs: []
+    links:
+      branch: ccr-5b6106a7-stx0ft
