@@ -63,6 +63,16 @@ pairing; they do **not** apply to ETC/Mordor (PoW, no CL).
 | `fukuii-dependency-audit`    | Audit all library versions; flag stale, CVE-affected, or non-LTS deps | `build.sbt`, endoflife.date, CVE feeds |
 | `fukuii-tech-debt-inventory` | Inventory technical debt: deprecated APIs, suppressed warnings, TODO/FIXME, scalafmt violations | Source scan + scapegoat report |
 
+## Communications
+
+Run by the `crier` agent (`.claude/agents/crier.md`). Drafts are local files; posting to Discord is outward-facing and
+needs the maintainer's explicit approval of the exact text and image.
+
+| Skill | Workflow | Tools |
+| :--- | :--- | :--- |
+| `fukuii-release-announcement` | After a release: Discord post, release card (SVG + PNG), release blog post, then post on approval | `scripts/marketing/render_card.py`, `scripts/marketing/post_discord.py` |
+| `fukuii-spec-blog-post`       | A spec closed or a track landed: blog post on the docs site, then a Discord note linking to it | same; posts under `docs/blog/posts/` |
+
 ## Spec Kit — Bug triage
 
 Three-step structured bug triage. Artifacts land in `.specify/bugs/<slug>/`
