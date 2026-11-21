@@ -76,9 +76,10 @@ object Eip1459:
         if !isValidLabel(eroot) || !isValidLabel(lroot) then Left("invalid child hash")
         else
           // The signature is decoded before it is verified, so its exact length is checked first (CVE-2026-114938)
-          val sigBytes = if sig.length == RootSignatureChars then base64UrlDecode(sig) else None
-          (seq.toLongOption, sigBytes) match
+          (seq.toLongOption, if sig.length == RootSignatureChars then base64UrlDecode(sig) else None) match
             case (None, _) => Left("invalid seq")
+            case _ if sig.length != RootSignatureChars =>
+              Left(s"invalid signature, want $RootSignatureChars characters of unpadded base64url")
             case (Some(n), Some(bytes)) if bytes.length == RootSignatureBytes =>
               Right(Root(eroot, lroot, n, ByteString(bytes)))
             case _ => Left(s"invalid signature, want $RootSignatureBytes bytes of unpadded base64url")
