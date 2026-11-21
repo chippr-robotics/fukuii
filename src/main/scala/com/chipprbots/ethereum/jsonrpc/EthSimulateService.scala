@@ -378,14 +378,14 @@ class EthSimulateService(
         )
 
     // Resolve base block
-    val baseBlock = resolveBlock(req.blockTag) match
-      case Right(resolved) => resolved.block
+    val baseHeader = resolveHeader(req.blockTag) match
+      case Right(resolved) => resolved.header
       case Left(_)         =>
         // Return -32000 for block not found (not -32602)
         break(Left(JsonRpcError.LogicError(s"header not found")))
 
     // Pre-validate block number/timestamp ordering
-    val validationResult = validateBlockOrdering(req.blockStateCalls, baseBlock.header)
+    val validationResult = validateBlockOrdering(req.blockStateCalls, baseHeader)
     validationResult match
       case Left(err) => break(Left(err))
       case _         =>
@@ -394,21 +394,21 @@ class EthSimulateService(
     val simulatedBlockHashes = mutable.Map[BigInt, ByteString]()
 
     // Create initial world state from base block
-    val evmConfig = EvmConfig.forBlock(baseBlock.header.number.value, baseBlock.header.unixTimestamp, blockchainConfig)
+    val evmConfig = EvmConfig.forBlock(baseHeader.number.value, baseHeader.unixTimestamp, blockchainConfig)
     var world = InMemoryWorldStateProxy(
       evmCodeStorage = evmCodeStorage,
       // One scratch state of the base block for the whole request: each simulated block reads the root the one
       // before it persisted, which is no header's root, so the blocks have to share the storage that holds it.
-      mptStorage = new RetainingMptStorage(blockchainReader.scratchStateAt(baseBlock.header)),
+      mptStorage = new RetainingMptStorage(blockchainReader.scratchStateAt(baseHeader)),
       getBlockHashByNumber =
         (n: BigInt) => simulatedBlockHashes.get(n).orElse(blockchainReader.getBlockHeaderByNumber(n).map(_.hash.value)),
       accountStartNonce = blockchainConfig.accountStartNonce,
-      stateRootHash = baseBlock.header.stateRoot.value,
+      stateRootHash = baseHeader.stateRoot.value,
       noEmptyAccounts = evmConfig.noEmptyAccounts,
       ethCompatibleStorage = blockchainConfig.ethCompatibleStorage
     )
 
-    var parentHeader = baseBlock.header
+    var parentHeader = baseHeader
     val blockResults = mutable.ArrayBuffer[SimulateBlockResult]()
     val nonceMap = mutable.Map[Address, BigInt]() // Track nonces across blocks
     var globalAccumGas = BigInt(0) // Global gas accumulator across all blocks (geth shares the 50M pool)

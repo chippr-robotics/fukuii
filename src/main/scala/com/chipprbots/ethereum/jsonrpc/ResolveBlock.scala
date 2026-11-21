@@ -3,6 +3,7 @@ package com.chipprbots.ethereum.jsonrpc
 import com.chipprbots.ethereum.consensus.engine.ForkChoiceManager
 import com.chipprbots.ethereum.consensus.mining.Mining
 import com.chipprbots.ethereum.domain.*
+import com.chipprbots.ethereum.domain.branch.BestBranch
 import com.chipprbots.ethereum.ledger.InMemoryWorldStateProxy
 
 sealed trait BlockParam
@@ -17,6 +18,9 @@ object BlockParam:
   case object Finalized extends BlockParam
 
 case class ResolvedBlock(block: Block, pendingState: Option[InMemoryWorldStateProxy])
+
+/** A block named by its header alone: what a state read needs (geth `HeaderByNumber` / `StateAndHeaderByNumber`). */
+case class ResolvedHeader(header: BlockHeader, pendingState: Option[InMemoryWorldStateProxy])
 
 trait ResolveBlock:
   def blockchain: Blockchain
@@ -67,6 +71,57 @@ trait ResolveBlock:
           .map(Right.apply)
           .getOrElse(resolveBlock(BlockParam.Latest)) // Default behavior in other clients
 
+  /** The header of the block `blockParam` names, for the methods that read state: geth's `HeaderByNumber` /
+    * `StateAndHeaderByNumber`. It needs the header and the number index, not the body: after a checkpoint import, or a
+    * SNAP hand-off whose pivot body is not backfilled, a block has its header, index and state but no body, and
+    * `eth_getBalance` at it must still answer. The tags mean what they do in [[resolveBlock]], "pending" included.
+    * Methods that return block or transaction content keep [[resolveBlock]].
+    */
+  def resolveHeader(blockParam: BlockParam): Either[JsonRpcError, ResolvedHeader] =
+    def plain(header: BlockHeader) = ResolvedHeader(header, pendingState = None)
+    blockParam match
+      case BlockParam.WithNumber(blockNumber) =>
+        getHeader(blockNumber) match
+          case Right(header)                                      => Right(plain(header))
+          case Left(_) if blockNumber > BigInt(Long.MaxValue) / 2 =>
+            // Large number that doesn't match a block — try interpreting as a block hash
+            val hashBytes = org.apache.pekko.util.ByteString(
+              com.chipprbots.ethereum.utils.ByteUtils
+                .bigIntToUnsignedByteArray(blockNumber)
+                .reverse
+                .padTo(32, 0.toByte)
+                .reverse
+            )
+            getHeaderByHash(hashBytes).map(plain)
+          case left => left.map(plain)
+      case BlockParam.WithHash(hash) => getHeaderByHash(hash).map(plain)
+      case BlockParam.Earliest       => getHeader(0).map(plain)
+      case BlockParam.Latest =>
+        blockchainReader.getBestBlockHeader
+          .toRight(JsonRpcError.InvalidParams("Latest block not found"))
+          .map(plain)
+      case BlockParam.Safe =>
+        forkChoiceManagerOpt
+          .flatMap(_.getSafeBlockHash)
+          .flatMap(h => blockchainReader.getBlockHeaderByHash(BlockHash(h)))
+          .flatMap(onTheHeadsChainHeader)
+          .map(h => Right(plain(h)))
+          .getOrElse(Left(JsonRpcError.InvalidParams("safe block not available")))
+      case BlockParam.Finalized =>
+        forkChoiceManagerOpt
+          .flatMap(_.getFinalizedBlockHash)
+          .flatMap(h => blockchainReader.getBlockHeaderByHash(BlockHash(h)))
+          .map(h => Right(plain(h)))
+          .getOrElse(Left(JsonRpcError.InvalidParams("finalized block not available")))
+      case BlockParam.Pending =>
+        // as resolveBlock: the head on the unified layout, else the block the generator last built, with its state
+        Option
+          .unless(blockchainReader.holdsStateInPlace)(mining.blockGenerator.getPendingBlockAndState)
+          .flatten
+          .map(pb => ResolvedHeader(pb.pendingBlock.block.header, pendingState = Some(pb.worldState)))
+          .map(Right.apply)
+          .getOrElse(resolveHeader(BlockParam.Latest))
+
   /** On the unified state layout the head moves with the state, and the adoption of a long branch walks it down to the
     * fork before the consensus client names a new safe block (spec 018 C4d part 4b): a safe block the head has left is
     * not named. Its highest ancestor on the head's chain is, where the two chains meet. Elsewhere the block itself.
@@ -74,7 +129,14 @@ trait ResolveBlock:
   private def onTheHeadsChain(block: Block): Option[Block] =
     if !blockchainReader.holdsStateInPlace then Some(block)
     else
-      // by headers, and the one block read at the end: any reader may ask (beacon)
+      onTheHeadsChainHeader(block.header).flatMap { header =>
+        if header.hash == block.header.hash then Some(block) else blockchainReader.getBlockByHash(header.hash)
+      }
+
+  /** [[onTheHeadsChain]] by headers: the header itself, or its highest ancestor on the head's chain. */
+  private def onTheHeadsChainHeader(start: BlockHeader): Option[BlockHeader] =
+    if !blockchainReader.holdsStateInPlace then Some(start)
+    else
       @annotation.tailrec
       def down(at: BlockHeader, left: Int): Option[BlockHeader] =
         if blockchainReader.getCanonicalHashByNumber(at.number.value).contains(at.hash) then Some(at)
@@ -83,9 +145,7 @@ trait ResolveBlock:
           blockchainReader.getBlockHeaderByHash(at.parentHash) match
             case Some(parent) => down(parent, left - 1)
             case None         => None
-      down(block.header, ResolveBlock.SafeAncestorSearch).flatMap { header =>
-        if header.hash == block.header.hash then Some(block) else blockchainReader.getBlockByHash(header.hash)
-      }
+      down(start, ResolveBlock.SafeAncestorSearch)
 
   private def getBlockByHash(hash: org.apache.pekko.util.ByteString): Either[JsonRpcError, Block] =
     blockchainReader
@@ -96,6 +156,18 @@ trait ResolveBlock:
     blockchainReader
       .getBlockByNumber(blockchainReader.getBestBranch, number)
       .toRight(JsonRpcError.InvalidParams(s"Block $number not found"))
+
+  /** The header at `number` on the best branch (the number index, as [[getBlock]], but no body). */
+  private def getHeader(number: BigInt): Either[JsonRpcError, BlockHeader] =
+    val header = blockchainReader.getBestBranch match
+      case BestBranch(_, tip) if tip >= number && number >= 0 => blockchainReader.getBlockHeaderByNumber(number)
+      case _                                                  => None
+    header.toRight(JsonRpcError.InvalidParams(s"Block $number not found"))
+
+  private def getHeaderByHash(hash: org.apache.pekko.util.ByteString): Either[JsonRpcError, BlockHeader] =
+    blockchainReader
+      .getBlockHeaderByHash(BlockHash(hash))
+      .toRight(JsonRpcError.InvalidParams(s"Block not found for hash"))
 
   private def getLatestBlock(): Either[JsonRpcError, Block] =
     blockchainReader.getBestBlock
