@@ -5958,8 +5958,10 @@ things this one cannot.</p>
 chain (with an explorer and a peer radar), the mempool, RPC, the Engine API, mining, storage and the host system. It
 shows health bars, raises alerts at thresholds you can configure, and lets you act on the node from the same screen
 (<a href="https://github.com/chippr-robotics/fukuii/blob/main/specs/029-tui-command-center/spec.md">spec 029</a>).</p>
-<p><strong>Hoodi and Ephemery are built in.</strong> Run <code>fukuii hoodi</code> or <code>fukuii ephemery</code>. Ephemery resets every 28 days, and a
-restarted node now fetches the next iteration by itself
+<p><strong>Hoodi and Ephemery are built in.</strong> Run <code>fukuii hoodi</code> or <code>fukuii ephemery</code>. Ephemery resets every 28 days. At a
+reset the node exits with code 75, and when it is restarted it fetches and selects the next iteration by itself, so run
+it under a supervisor such as systemd with <code>Restart=on-failure</code> (see the
+<a href="../../../../../runbooks/ephemery/">Ephemery runbook</a>)
 (<a href="https://github.com/chippr-robotics/fukuii/blob/main/specs/028-builtin-ephemery-hoodi/spec.md">spec 028</a>).</p>
 <p><strong>The Engine API works out of the box.</strong> On the chains that need a consensus client (Ethereum mainnet, Sepolia,
 Hoodi, Ephemery, Platåberget) the Engine API now listens on <code>localhost:8551</code> by default. At first start fukuii
