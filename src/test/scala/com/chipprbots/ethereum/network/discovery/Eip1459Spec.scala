@@ -144,6 +144,25 @@ class Eip1459Spec extends AnyFlatSpec with Matchers:
     Eip1459.verifyRoot(root, key) shouldBe true
   }
 
+  it should "refuse a root signature that is not exactly 87 characters before decoding it" taggedAs (
+    UnitTest,
+    NetworkTest
+  ) in {
+    // the length guard has its own reason, so these prove the decoder was not reached
+    val prefix = snapshotRoot.take(snapshotRoot.indexOf(" sig=") + 5)
+    val lengthReason = Left("invalid signature, want 87 characters of unpadded base64url")
+    Eip1459.parseRoot(prefix + ("A" * 88)) shouldBe lengthReason
+    Eip1459.parseRoot(prefix + ("A" * 86)) shouldBe lengthReason
+    Eip1459.parseRoot(prefix + ("A" * 100000)) shouldBe lengthReason
+    // 87 characters still reach the decoder: a valid root parses (see the recorded vectors above)
+  }
+
+  it should "refuse an ENR longer than EIP-778's 300 bytes before decoding it" taggedAs (UnitTest, NetworkTest) in {
+    // 404 characters decode cleanly to 303 bytes, so without the cap this fails later with another reason
+    java.util.Base64.getUrlDecoder.decode("A" * 404).length shouldBe 303
+    Eip1459.verifyEnr("enr:" + ("A" * 404)) shouldBe Left("not unpadded base64url")
+  }
+
   it should "not verify a real root under another tree's key" taggedAs (UnitTest, NetworkTest) in {
     val root = Eip1459.parseRoot(snapshotRoot).toOption.get
     val efKey = DnsTrustAnchors.resolve("all.sepolia.ethdisco.net").toOption.get.publicKey

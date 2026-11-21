@@ -125,6 +125,26 @@ class JwtAuthenticatorSpec extends AnyFlatSpec with Matchers with ScalatestRoute
     expectUnauthorized(s"$h.${b64(s"""{"iat":${now + 1}}""")}.$sig", "Invalid JWT signature")
   }
 
+  it should "accept the signature padded with '=', as the decoder it replaced did" taggedAs (UnitTest, RPCTest) in {
+    expectOk(s"$valid=")
+  }
+
+  // CVE-2026-114938: the signature is compared as text, never decoded before it is authenticated
+  it should "answer 401 to a non-canonical encoding of the right signature bytes" taggedAs (UnitTest, RPCTest) in {
+    val parts = valid.split('.')
+    val alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_"
+    // 32 bytes in 43 characters leave the last character's two low bits unused: setting one keeps the decoded bytes
+    val last = parts(2).last
+    val nonCanonical = parts(2).init + alphabet(alphabet.indexOf(last) ^ 1)
+    Base64.getUrlDecoder.decode(nonCanonical).toSeq shouldEqual Base64.getUrlDecoder.decode(parts(2)).toSeq
+    expectUnauthorized(s"${parts(0)}.${parts(1)}.$nonCanonical", "Invalid JWT signature")
+  }
+
+  it should "answer 401 to a token over 4096 characters without looking inside it" taggedAs (UnitTest, RPCTest) in {
+    val parts = valid.split('.')
+    expectUnauthorized(s"${parts(0)}.${parts(1)}.${"A" * 4096}", "Invalid JWT format")
+  }
+
   it should "answer 401 to a token with the wrong number of segments" taggedAs (UnitTest, RPCTest) in {
     expectUnauthorized("", "Invalid JWT format")
     expectUnauthorized("abc", "Invalid JWT format")

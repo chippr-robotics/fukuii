@@ -577,16 +577,18 @@ object DnsDiscovery extends Logger:
 
   /** URL-safe Base64 decode (RFC 4648 §5, no padding). */
   private def decodeBase64Url(input: String): Array[Byte] =
-    try
-      // Add padding if needed
-      val padded = input.length % 4 match
-        case 2 => input + "=="
-        case 3 => input + "="
-        case _ => input
-      // Convert URL-safe to standard Base64
-      val standard = padded.replace('-', '+').replace('_', '/')
-      java.util.Base64.getDecoder.decode(standard)
-    catch case _: Exception => Array.empty
+    if input.length > Eip1459.MaxEnrTextLength then Array.empty
+    else
+      try
+        // Add padding if needed
+        val padded = input.length % 4 match
+          case 2 => input + "=="
+          case 3 => input + "="
+          case _ => input
+        // Convert URL-safe to standard Base64
+        val standard = padded.replace('-', '+').replace('_', '/')
+        java.util.Base64.getDecoder.decode(standard)
+      catch case _: Exception => Array.empty
 
   /** ENR fork-ID filter used during DNS discovery to skip nodes on incompatible chains. Mirrors the logic in
     * [[ForkIdTag]] used by discv4 routing-table filtering, but applies at DNS-resolution time so the rejected ENRs

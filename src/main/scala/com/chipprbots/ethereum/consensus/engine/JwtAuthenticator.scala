@@ -35,6 +35,14 @@ class JwtAuthenticator(secretHex: String, calls: EngineCallLog = EngineCallLog.N
   private val secretBytes: Array[Byte] = hexToBytes(secretHex.trim)
   private val MaxClockSkewSeconds = 60L
 
+  /** An HS256 token with an `iat` claim is under 200 characters; this bound only keeps a hostile header from being
+    * split, hashed and parsed at full size.
+    */
+  private val MaxTokenLength = 4096
+
+  private val UnpaddedUrlEncoder = java.util.Base64.getUrlEncoder.withoutPadding
+  private val PaddedUrlEncoder = java.util.Base64.getUrlEncoder
+
   /** Pekko HTTP directive that validates the JWT bearer token. */
   def authenticate: Directive1[Unit] =
     optionalHeaderValueByType(ClassTag(classOf[Authorization])).flatMap {
@@ -58,24 +66,47 @@ class JwtAuthenticator(secretHex: String, calls: EngineCallLog = EngineCallLog.N
   /** Validates a token the way go-ethereum's `node/jwt_handler.go` does: three base64url segments, a valid HMAC-SHA256
     * signature, a header that names HS256, and an `iat` within [[MaxClockSkewSeconds]] of now. A malformed token is a
     * `Left` with a short reason, never an exception: the caller answers it with 401.
+    *
+    * Nothing the caller sent is Base64-decoded before the signature checks out (CVE-2026-114938: the JDK's Base64
+    * decoder could be driven to memory corruption by crafted input). The signature is compared as text against the
+    * encoding of the HMAC this node computes, unpadded or padded; header and payload are decoded only after that.
     */
   private def validateToken(token: String): Either[String, Unit] =
-    // limit -1 keeps a trailing empty segment, so `a.b.c.` is four segments, not three
-    token.split("\\.", -1) match
-      case Array(header, payload, signature) =>
-        for
-          actualSig <- decodeSegment(signature, "Invalid JWT signature encoding")
-          _ <- Either.cond(
-            MessageDigest.isEqual(hmacSha256(s"$header.$payload"), actualSig),
-            (),
-            "Invalid JWT signature"
-          )
-          headerJson <- decodeJson(header, "header")
-          _ <- checkAlgorithm(headerJson)
-          payloadJson <- decodeJson(payload, "payload")
-          _ <- checkIssuedAt(payloadJson)
-        yield ()
-      case _ => Left("Invalid JWT format")
+    if token.length > MaxTokenLength then Left("Invalid JWT format")
+    else
+      // limit -1 keeps a trailing empty segment, so `a.b.c.` is four segments, not three
+      token.split("\\.", -1) match
+        case Array(header, payload, signature) =>
+          for
+            _ <- Either.cond(isBase64UrlSyntax(signature), (), "Invalid JWT signature encoding")
+            _ <- Either.cond(signatureMatches(s"$header.$payload", signature), (), "Invalid JWT signature")
+            headerJson <- decodeJson(header, "header")
+            _ <- checkAlgorithm(headerJson)
+            payloadJson <- decodeJson(payload, "payload")
+            _ <- checkIssuedAt(payloadJson)
+          yield ()
+        case _ => Left("Invalid JWT format")
+
+  /** Constant-time comparison of the presented signature with the base64url text of the expected HMAC, in its canonical
+    * unpadded form or padded with `=`, the two forms the decoder used to accept. A non-canonical encoding of the right
+    * bytes (non-zero trailing bits) no longer passes; clients encode canonically.
+    */
+  private def signatureMatches(signingInput: String, signature: String): Boolean =
+    val mac = hmacSha256(signingInput)
+    val presented = signature.getBytes(StandardCharsets.US_ASCII)
+    def matches(encoder: java.util.Base64.Encoder): Boolean =
+      MessageDigest.isEqual(encoder.encode(mac), presented)
+    // `|`, not `||`: both comparisons run whichever form was sent
+    matches(UnpaddedUrlEncoder) | matches(PaddedUrlEncoder)
+
+  /** Base64url syntax alone, without decoding: the URL-safe alphabet, then at most two `=` that pad to a multiple of 4.
+    * This keeps the "signature encoding" failure apart from a wrong signature for the auth-failure dashboard.
+    */
+  private def isBase64UrlSyntax(segment: String): Boolean =
+    val body = segment.reverse.dropWhile(_ == '=').reverse
+    val padding = segment.length - body.length
+    val alphabetOk = body.forall(c => c.isLetterOrDigit && c < 128 || c == '-' || c == '_')
+    alphabetOk && body.length % 4 != 1 && (padding == 0 || (padding <= 2 && segment.length % 4 == 0))
 
   private def checkAlgorithm(header: JObject): Either[String, Unit] =
     field(header, "alg") match

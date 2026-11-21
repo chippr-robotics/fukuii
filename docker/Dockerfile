@@ -1,7 +1,7 @@
 # syntax=docker/dockerfile:1.4
 # Multi-stage Dockerfile for Fukuii Ethereum Client
 # Stage 1: Build stage using full JDK
-FROM eclipse-temurin:25-jdk-noble AS builder
+FROM eclipse-temurin:25.0.5.1_2-jdk-noble AS builder
 
 # Install required build tools including SBT
 RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
@@ -62,7 +62,7 @@ RUN cd target/universal && \
     cp /build/target/scala-*/fukuii-assembly-*.jar /fukuii-dist/lib/
 
 # Stage 2: Runtime stage using slim JRE
-FROM eclipse-temurin:25-jre-noble
+FROM eclipse-temurin:25.0.5.1_2-jre-noble
 
 # OCI labels for container metadata
 LABEL org.opencontainers.image.title="Fukuii Ethereum Client"
@@ -116,7 +116,11 @@ ENV FUKUII_CONF_DIR=/app/conf
 # this container, including composes that override the entrypoint, and leaves
 # JAVA_TOOL_OPTIONS free for operators. Side effect: java prints
 # "NOTE: Picked up JDK_JAVA_OPTIONS: ..." on stderr at startup.
-ENV JDK_JAVA_OPTIONS="-XX:+UnlockDiagnosticVMOptions -XX:-ReduceAllocationMerges"
+# CVE-2026-114938: the x86-64 Base64 decode intrinsic can be driven to memory
+# corruption by crafted input. The pinned base image carries the fix; disabling
+# the intrinsic also covers a host or image still on an affected JDK. Remove once
+# no supported JDK predates 25.0.5.1 / 21.0.13.1.
+ENV JDK_JAVA_OPTIONS="-XX:+UnlockDiagnosticVMOptions -XX:-ReduceAllocationMerges -XX:DisableIntrinsic=_base64_decodeBlock"
 
 # Expose default ports
 # 8545: HTTP RPC
