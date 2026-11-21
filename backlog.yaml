@@ -3650,7 +3650,7 @@ items:
       by: cloud-dc960fdc
       agent: conduit
       since: 2026-11-21T01:48:38Z
-      heartbeat: 2026-11-21T01:48:42Z
+      heartbeat: 2026-11-21T01:49:13Z
     notes: |-
       Found by dev-node in T248 (Mordor, 2026-11-20): import ok, state right (N+1 executed = reference), but eth_getBlockByNumber/eth_getBalance at N answer null / not found, even after a restart. Decide: archive carries N's body (format), the backfill fetches the pivot window's bodies first after an import, or RPC answers header-level. Investigation in progress.
       2026-11-21 in-progress: User 2026-11-21: option (c) to match geth: state-read RPCs resolve by header (no body); block RPCs keep null without a body.
