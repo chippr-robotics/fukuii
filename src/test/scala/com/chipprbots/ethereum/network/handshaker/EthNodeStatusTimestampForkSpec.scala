@@ -18,6 +18,9 @@ import com.chipprbots.ethereum.network.PeerChurnStats
 import com.chipprbots.ethereum.network.PeerManagerActor.PeerConfiguration
 import com.chipprbots.ethereum.network.p2p.messages.Capability
 import com.chipprbots.ethereum.network.p2p.messages.ETHPackets
+import com.chipprbots.ethereum.network.p2p.messages.ETHPackets.Status68.Status68
+import com.chipprbots.ethereum.network.p2p.messages.ETHPackets.Status69.Status69
+import com.chipprbots.ethereum.network.p2p.messages.ETHPackets.Status70.Status70
 import com.chipprbots.ethereum.network.p2p.messages.WireProtocol.Disconnect
 import com.chipprbots.ethereum.security.SecureRandomBuilder
 import com.chipprbots.ethereum.testing.LogCapture
@@ -26,9 +29,6 @@ import com.chipprbots.ethereum.utils.BlockchainConfig
 import com.chipprbots.ethereum.utils.Config
 import com.chipprbots.ethereum.utils.NodeStatus
 import com.chipprbots.ethereum.utils.ServerStatus
-import com.chipprbots.ethereum.network.p2p.messages.ETHPackets.Status68.Status68
-import com.chipprbots.ethereum.network.p2p.messages.ETHPackets.Status69.Status69
-import com.chipprbots.ethereum.network.p2p.messages.ETHPackets.Status70.Status70
 
 /** WI-13 / issue #1429: eth/68, eth/69 and eth/70+ STATUS handshakes must validate a peer's ForkId against the LOCAL
   * head's TIMESTAMP, not just its block number, on timestamp-fork chains.

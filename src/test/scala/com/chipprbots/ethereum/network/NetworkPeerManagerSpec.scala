@@ -10,6 +10,7 @@ import org.apache.pekko.util.ByteString
 
 import scala.concurrent.duration.*
 
+import ch.qos.logback.classic.spi.ILoggingEvent
 import org.bouncycastle.util.encoders.Hex
 import org.scalatest.flatspec.AnyFlatSpec
 import org.scalatest.matchers.should.Matchers
@@ -45,7 +46,6 @@ import com.chipprbots.ethereum.network.p2p.messages.WireProtocol.Disconnect
 import com.chipprbots.ethereum.testing.LogCapture
 import com.chipprbots.ethereum.testing.Tags.*
 import com.chipprbots.ethereum.utils.Config
-import ch.qos.logback.classic.spi.ILoggingEvent
 
 class NetworkPeerManagerSpec extends AnyFlatSpec with Matchers:
 
