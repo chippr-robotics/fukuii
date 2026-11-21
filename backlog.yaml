@@ -3746,7 +3746,7 @@ items:
   - id: B-420
     title: "Marketing agent (herald-of-releases) and release-announcement skill: Discord post, release card, spec blog posts"
     priority: P3
-    status: claimed
+    status: in-progress
     area: docs
     opened: 2026-11-21
     refs: []
@@ -3755,5 +3755,5 @@ items:
       by: cloud-fd82ceaa
       agent: main
       since: 2026-11-21T19:14:12Z
-      heartbeat: 2026-11-21T19:14:12Z
+      heartbeat: 2026-11-21T19:14:15Z
       branch: ccr-fd82ceaa-vet0je
