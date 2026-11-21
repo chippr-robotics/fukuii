@@ -29,6 +29,13 @@ external-miner methods stay in `eth`. `eth_setEtherbase` is a deprecated alias o
 - ETC (or other PoW) network, node **fully synced**, Ethash consensus.
 - `mining { mining-enabled, coinbase }` configured (`base/mining.conf`). A miner
   with no/zero coinbase earns nothing — check first.
+- Built-in CPU miner only: the full Ethash DAG is a memory-mapped file in
+  `pow.ethash-dir` (`full-R23-<seed>`, geth's layout), not on the Java heap. It
+  is 1 GiB + 8 MiB per epoch: 3.27 GiB on Mordor at epoch 290, 3.84 GiB on ETC
+  mainnet at epoch 364. The page cache needs roughly that much free RAM beside
+  the heap for a good hashrate; do not raise `-Xmx` for it. External miners
+  (getWork) and header validation use the light cache only, so a node with
+  mining off never builds a DAG. Generation is single-threaded (~5 min/GiB).
 
 ## Procedure
 1. **Status** (🟢) — `eth_mining` (bool), `miner_getStatus`, `eth_hashrate`,
@@ -51,7 +58,8 @@ external-miner methods stay in `eth`. `eth_setEtherbase` is a deprecated alias o
 | :-- | :-- |
 | `eth_mining` false after `miner_start` | consensus is Ethash? node synced? errors in log |
 | Mining but no rewards | coinbase correct? blocks actually sealed (check tip author) |
-| Zero/low hashrate | CPU/external miner; `mine-rounds`; resource starvation |
+| Zero/low hashrate | CPU/external miner; `mine-rounds`; resource starvation; built-in miner: free RAM below the DAG size (page cache) |
+| DAG regenerated at every start | file in `pow.ethash-dir` truncated/corrupt or deleted; log `DAG file ... unusable` / `disagrees with the light cache` |
 
 ## Deep reference
 - `docs/runbooks/mining-operations.md` (config, external-miner integration)

@@ -1,111 +1,100 @@
 package com.chipprbots.ethereum.consensus.pow.miners
 
-import java.io.File
-import java.io.FileInputStream
-import java.io.FileOutputStream
+import java.nio.file.Files
+import java.nio.file.Path
+import java.nio.file.Paths
 
 import org.apache.pekko.util.ByteString
 
 import scala.util.Failure
 import scala.util.Success
-import scala.util.Try
-import scala.util.Using
-
-import org.bouncycastle.util.encoders.Hex
 
 import com.chipprbots.ethereum.consensus.pow.EthashUtils
 import com.chipprbots.ethereum.consensus.pow.PoWBlockCreator
 import com.chipprbots.ethereum.consensus.pow.PoWMiningMetrics
-import com.chipprbots.ethereum.consensus.pow.miners.EthashMiner.DagFilePrefix
 import com.chipprbots.ethereum.utils.BlockchainConfig
-import com.chipprbots.ethereum.utils.ByteUtils
 import com.chipprbots.ethereum.utils.Logger
 
-class EthashDAGManager(blockCreator: PoWBlockCreator) extends Logger:
-  var currentEpoch: Option[Long] = None
-  var currentEpochDagSize: Option[Long] = None
-  var currentEpochDag: Option[Array[Array[Int]]] = None
+/** The full DAG of the internal CPU miner's current epoch (B-413).
+  *
+  * Only `EthashMiner` asks for it, and only while the built-in miner runs (`mining-enabled`). Header validation and
+  * `eth_getWork` for external miners use the light cache (`EthashUtils.hashimotoLight`) and never build a DAG.
+  *
+  * The DAG is a memory-mapped file in `ethashDir` (`EthashDagFile`): it is generated item by item straight to the file,
+  * so the heap holds only the light cache and a 1 MiB write buffer while it is built, and nothing of it afterwards. An
+  * existing file for the epoch is reused once its size, magic and sampled items check out; otherwise it is regenerated.
+  * On an epoch change the last epoch's mapping is dropped and its file deleted, so at most one DAG file is kept.
+  *
+  * Used from one thread at a time: the coordinator runs one mining round after another.
+  */
+class EthashDAGManager(ethashDir: Path, segmentShift: Int = EthashDagFile.DefaultSegmentShift) extends Logger:
 
+  def this(blockCreator: PoWBlockCreator) = this(Paths.get(blockCreator.miningConfig.ethashDir))
+
+  private var current: Option[(Long, MappedDag)] = None
+
+  /** The DAG of `epoch` (of the block `blockNumber`), with its size in bytes. */
   def calculateDagSize(blockNumber: Long, epoch: Long)(implicit
       blockchainConfig: BlockchainConfig
-  ): (Array[Array[Int]], Long) =
-    (currentEpoch, currentEpochDag, currentEpochDagSize) match
-      case (Some(`epoch`), Some(dag), Some(dagSize)) => (dag, dagSize)
+  ): (MappedDag, Long) =
+    val dagSize = EthashUtils.dagSize(epoch)
+    current match
+      case Some((`epoch`, dag)) => (dag, dagSize)
       case _ =>
-        PoWMiningMetrics.recordDagStarted(epoch)
-        val seed =
-          EthashUtils.seed(blockNumber, blockchainConfig.forkBlockNumbers.ecip1099BlockNumber.toLong)
-        val dagSize = EthashUtils.dagSize(epoch)
-        val dagNumHashes = (dagSize / EthashUtils.HASH_BYTES).toInt
-        val dag =
-          if !dagFile(seed).exists() then generateDagAndSaveToFile(epoch, dagNumHashes, seed)
-          else
-            val res = loadDagFromFile(seed, dagNumHashes)
-            res.failed.foreach { ex =>
-              log.error("Cannot read DAG from file", ex)
-            }
-            res.getOrElse(generateDagAndSaveToFile(epoch, dagNumHashes, seed))
-        currentEpoch = Some(epoch)
-        currentEpochDag = Some(dag)
-        currentEpochDagSize = Some(dagSize)
-        PoWMiningMetrics.recordDagLoaded()
+        val seed = EthashUtils.seed(blockNumber, blockchainConfig.forkBlockNumbers.ecip1099BlockNumber.toLong)
+        val dag = dagFor(epoch, seed, (dagSize / EthashUtils.HASH_BYTES).toInt, EthashUtils.makeCache(epoch, seed))
         (dag, dagSize)
 
-  private def dagFile(seed: ByteString): File =
-    new File(
-      s"${blockCreator.miningConfig.ethashDir}/full-R${EthashUtils.Revision}-${Hex
-          .toHexString(seed.take(8).toArray[Byte])}"
-    )
+  /** Makes `epoch`'s DAG of `numItems` items current: the existing file if it checks out against `cache`, a new one
+    * otherwise. `cache` is the epoch's light cache, made at most once.
+    */
+  private[miners] def dagFor(epoch: Long, seed: ByteString, numItems: Int, cache: => Array[Int]): MappedDag =
+    PoWMiningMetrics.recordDagStarted(epoch)
+    val path = ethashDir.resolve(EthashDagFile.fileName(seed))
+    lazy val lightCache = cache
 
-  private def generateDagAndSaveToFile(epoch: Long, dagNumHashes: Int, seed: ByteString): Array[Array[Int]] =
-    val file = dagFile(seed)
-    if file.exists() then file.delete()
-    file.getParentFile.mkdirs()
-    file.createNewFile()
+    val reused =
+      if !Files.exists(path) then None
+      else
+        PoWMiningMetrics.recordDagLoading(0)
+        EthashDagFile.open(path, numItems, segmentShift) match
+          case Failure(ex) =>
+            log.warn("DAG file {} is unusable, regenerating it: {}", path, ex.getMessage)
+            None
+          case Success(dag) =>
+            EthashDagFile.sampleMismatch(dag, lightCache, segmentShift) match
+              case None =>
+                log.info("Reusing DAG file {} for epoch {} ({} bytes)", path, epoch, dag.sizeBytes)
+                Some(dag)
+              case Some(index) =>
+                log.warn("DAG file {} disagrees with the light cache at item {}, regenerating it", path, index)
+                None
 
-    val res = new Array[Array[Int]](dagNumHashes)
-
-    val written = Using(new FileOutputStream(dagFile(seed).getAbsolutePath)) { outputStream =>
-      outputStream.write(DagFilePrefix.toArray[Byte])
-
-      val cache = EthashUtils.makeCache(epoch, seed)
-
-      (0 until dagNumHashes).foreach { i =>
-        val item = EthashUtils.calcDatasetItem(cache, i)
-        outputStream.write(ByteUtils.intsToBytes(item, bigEndian = false))
-        res(i) = item
-
-        if i % 100000 == 0 then
-          log.info(s"Generating DAG ${((i / dagNumHashes.toDouble) * 100).toInt}%")
-          PoWMiningMetrics.recordDagGenerating(((i / dagNumHashes.toDouble) * 100).toInt)
-      }
+    val dag = reused.getOrElse {
+      log.info("Generating DAG for epoch {} into {} ({} items)", epoch, path, numItems)
+      val started = System.nanoTime()
+      var loggedDecile = -1
+      EthashDagFile.generate(
+        path,
+        lightCache,
+        numItems,
+        percent =>
+          if percent / 10 > loggedDecile then
+            loggedDecile = percent / 10
+            log.info("Generating DAG {}%", percent)
+          PoWMiningMetrics.recordDagGenerating(percent)
+      )
+      log.info("Generated DAG for epoch {} in {} s", epoch, (System.nanoTime() - started) / 1_000_000_000L)
+      EthashDagFile.open(path, numItems, segmentShift).get
     }
 
-    written match
-      case Success(_)  => res
-      case Failure(ex) =>
-        // Delete the partial/corrupt DAG file so the next run regenerates from scratch.
-        log.error("Failed to generate DAG file, removing partial output", ex)
-        if file.exists() then file.delete()
-        throw ex
-
-  private def loadDagFromFile(seed: ByteString, dagNumHashes: Int): Try[Array[Array[Int]]] =
-    Using(new FileInputStream(dagFile(seed).getAbsolutePath)) { inputStream =>
-      val prefix = new Array[Byte](8)
-      if inputStream.read(prefix) != 8 || ByteString(prefix) != DagFilePrefix then
-        Failure(new RuntimeException("Invalid DAG file prefix"))
-      else
-        val buffer = new Array[Byte](64) // scalastyle:ignore magic.number
-        val res = new Array[Array[Int]](dagNumHashes)
-        var index = 0
-
-        while inputStream.read(buffer) > 0 do
-          if index % 100000 == 0 then
-            log.info(s"Loading DAG from file ${((index / res.length.toDouble) * 100).toInt}%")
-            PoWMiningMetrics.recordDagLoading(((index / res.length.toDouble) * 100).toInt)
-          res(index) = ByteUtils.bytesToInts(buffer, bigEndian = false)
-          index += 1
-
-        if index == dagNumHashes then Success(res)
-        else Failure(new RuntimeException("DAG file ended unexpectedly"))
-    }.flatten
+    val previous = current
+    current = Some((epoch, dag))
+    previous.foreach { case (oldEpoch, oldDag) =>
+      if oldDag.path != dag.path then
+        // The mapping goes with the last reference to `oldDag`; on Linux the file's blocks are freed when it does.
+        if Files.deleteIfExists(oldDag.path) then
+          log.info("Deleted the DAG file of epoch {}: {}", oldEpoch, oldDag.path)
+    }
+    PoWMiningMetrics.recordDagLoaded()
+    dag
