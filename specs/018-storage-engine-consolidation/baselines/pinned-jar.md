@@ -29,7 +29,8 @@ changes:
   A regression introduced there **before 0.12.1** cannot show as a difference against this jar. It is covered instead
   by what those slices already merged: the in-process differentials (T019, T025's half without a jar, T026's EEST half,
   T075's substitute, T035, T052, T055 against the pre-change code) and their mutation runs.
-- Everything after 0.12.1 (C5b onward, path-live on by default, C6–C8b) is measured against it as the plan intends.
+- Everything after 0.12.1 (C5b onward, C6–C8b) is measured against it as the plan intends, run with `path-live = true`
+  set for the run: the default stays `false` until C8b deletes the key (plan.md, "Status", "The guard").
 
 **Fallback, verified the same day:** `fukuii-assembly-0.11.0.jar` (v0.11.0, immutable release), 226,783,736 bytes,
 SHA-256 `22057022d32e7f3d9a4f3704c83f101329be15ad0c7cb219f7c662f8868568f1`, built from staging `a9896f48`. If a
