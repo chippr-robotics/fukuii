@@ -3679,3 +3679,13 @@ items:
     notes: |-
       dev-node EG-6 run, 2026-11-21: Mordor epoch 290 (ECIP-1099) DAG 3.27 GiB -> ~4.1 GiB heap; -Xmx4g node exited OOM at 53% of the build (EthashDAGManager). Options: DAG off-heap (mmap'd file / direct ByteBuffer, as core-geth), one flat array instead of 16-int arrays, and document -Xmx sizing for miners in the fukuii-mining-operations skill and docs. ETC mainnet DAG is larger and grows each epoch.
       2026-11-21 in-progress: User 2026-11-21: move the DAG off-heap into a memory-mapped file as core-geth does; most miners use ASIC/GPU (getWork), so the full DAG is only for the internal CPU miner.
+  - id: B-414
+    title: Parallelise Ethash DAG generation (single-threaded ~5 min/GiB; ~17 min for Mordor epoch 290)
+    priority: P3
+    status: open
+    area: consensus
+    opened: 2026-11-21
+    refs: []
+    links:
+      spec: none
+    notes: "B-413 follow-up: EthashDagFile.generate is single-threaded; items are independent, so split the index range across cores writing disjoint file regions (FileChannel positional writes). Measured 313-325 s for the 1 GiB epoch-1 DAG."
