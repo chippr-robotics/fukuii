@@ -3737,3 +3737,13 @@ items:
       agent: main
       since: 2026-11-21T16:50:23Z
       heartbeat: 2026-11-21T16:53:44Z
+  - id: B-419
+    title: "Engine API JWT: reject a token whose optional exp claim has passed (geth VerifyExpiresAt parity)"
+    priority: P2
+    status: open
+    area: rpc
+    size: S
+    opened: 2026-11-21
+    refs: [B-418]
+    links: {}
+    notes: "Found in beacon review of PR #1980. fukuii ignores exp; geth rejects expired exp. JwtAuthenticatorSpec covers only a future exp."
