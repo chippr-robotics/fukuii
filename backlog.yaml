@@ -3639,11 +3639,16 @@ items:
   - id: B-411
     title: "After a checkpoint import the archive's own block N is not served over RPC: the archive carries no body for N and nothing fetches it"
     priority: P2
-    status: open
+    status: claimed
     area: storage
     size: M
     opened: 2026-11-21
     refs: []
     links:
       spec: 018
+    claim:
+      by: cloud-dc960fdc
+      agent: conduit
+      since: 2026-11-21T01:48:38Z
+      heartbeat: 2026-11-21T01:48:38Z
     notes: "Found by dev-node in T248 (Mordor, 2026-11-20): import ok, state right (N+1 executed = reference), but eth_getBlockByNumber/eth_getBalance at N answer null / not found, even after a restart. Decide: archive carries N's body (format), the backfill fetches the pivot window's bodies first after an import, or RPC answers header-level. Investigation in progress."
