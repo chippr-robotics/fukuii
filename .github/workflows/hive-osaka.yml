@@ -1,5 +1,6 @@
 name: Hive Osaka Suite
 
+# (Touched in #1973 only so this path-filtered required check reports on a workflow-only PR.)
 # Runs the ethereum/eels/consume-engine simulator against fukuii for all fork_Osaka tests.
 # Gate for PRs into main and for manual dispatch. Fails the build if the pass count
 # drops below a threshold, preventing regressions in Fusaka EL compliance.

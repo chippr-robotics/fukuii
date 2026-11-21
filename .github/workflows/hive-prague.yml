@@ -1,5 +1,6 @@
 name: Hive Prague Suite
 
+# (Touched in #1973 only so this path-filtered required check reports on a workflow-only PR.)
 # Runs the ethereum/eels/consume-engine simulator against fukuii for all fork_Prague tests.
 # Gate for PRs to main/develop and for nightly regressions. Fails the build if the pass
 # count drops below a threshold, preventing regressions in Pectra EL compliance.

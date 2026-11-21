@@ -1,5 +1,6 @@
 name: _hive-sim (reusable)
 
+# (Touched in #1973 only so the path-filtered required Hive checks report on a workflow-only PR.)
 # Reusable workflow for running a single ethereum/hive simulator against the
 # fukuii client. Per-simulator caller workflows (hive-smoke-genesis.yml,
 # hive-rpc.yml, …) invoke this with `uses: ./.github/workflows/_hive-sim.yml`
