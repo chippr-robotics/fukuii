@@ -1,12 +1,12 @@
 ## 🦗 fukuii v0.12.1 is out
 
-Everything since 0.11.0, over 130 merged changes: some you can use today, some laying the foundation for what's next.
+Everything since 0.11.0, over 130 merged changes: some usable today, some laying the foundation for what's next.
 
 **What's new for operators**
-🖥️ **TUI Command Center**: run with `--tui` for a full terminal dashboard covering chain, mempool, RPC, Engine API, mining and storage, with alerts and operator actions.
+🖥️ **TUI Command Center**: `--tui` opens a terminal dashboard for chain, mempool, RPC, Engine API, mining and storage, with alerts and operator actions.
 🌐 **Hoodi and Ephemery are built in**: `fukuii hoodi` / `fukuii ephemery`. Ephemery exits at each 28-day reset; under a supervisor, the restart picks up the next iteration.
 🔌 **Engine API on by default** for chains that need a consensus client, on `localhost:8551`. A persistent JWT secret is created at `<datadir>/jwt.hex`. Point your CL's `--execution-jwt` at it.
-📦 **New install paths**: `ppa:chipprbots/fukuii` (Ubuntu noble/jammy) and the Chocolatey community repo.
+📦 **New install paths**: `ppa:chipprbots/fukuii` (Ubuntu noble/jammy). The Chocolatey package passed automated checks and awaits community moderation.
 
 **Correctness and hardening**
 • `eth_simulateV1`, VM error strings, precompile failures and the execution-apis fixtures now match geth
@@ -25,4 +25,4 @@ Most of this cycle went into spec 018 Track C, a **unified, position-keyed state
 It ships behind a dev guard (off by default) while the last slices land. When it flips, the Hash/Path duality goes away.
 
 ⬇️ https://github.com/chippr-robotics/fukuii/releases/tag/v0.12.1
-JAR, zip and tgz are available (JDK 25+). Verify with `SHA256SUMS.txt`.
+JAR, zip and tgz (JDK 25+). Verify with `SHA256SUMS.txt`.

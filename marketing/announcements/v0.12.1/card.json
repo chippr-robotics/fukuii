@@ -7,7 +7,7 @@
     {"heading": "TUI COMMAND CENTER", "lines": ["Chain, mempool, RPC, Engine, mining", "and storage views; operator actions"], "color": "green"},
     {"heading": "HOODI + EPHEMERY", "lines": ["Built-in networks. Ephemery moves to", "the next iteration on restart"], "color": "blue"},
     {"heading": "ENGINE API BY DEFAULT", "lines": ["ETH-family chains: localhost:8551,", "persistent jwt.hex in the datadir"], "color": "orange"},
-    {"heading": "PPA + CHOCOLATEY", "lines": ["ppa:chipprbots/fukuii (noble, jammy)", "and the Chocolatey community repo"], "color": "purple"}
+    {"heading": "PPA + CHOCOLATEY", "lines": ["ppa:chipprbots/fukuii (noble, jammy)", "Chocolatey: in community moderation"], "color": "purple"}
   ],
   "groundwork": {"heading": "GROUNDWORK", "lines": ["Unified state layout", "(spec 018): no-copy", "hand-off, in-place reorgs"]},
   "footer_left": "github.com/chippr-robotics/fukuii/releases/tag/v0.12.1",

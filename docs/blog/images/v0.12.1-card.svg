@@ -49,7 +49,7 @@
   <rect x="0" y="0" width="6" height="148" rx="3" fill="#d2a8ff"/>
   <text x="26" y="46" class="h" fill="#d2a8ff">PPA + CHOCOLATEY</text>
   <text x="26" y="86" class="b">ppa:chipprbots/fukuii (noble, jammy)</text>
-  <text x="26" y="114" class="b">and the Chocolatey community repo</text>
+  <text x="26" y="114" class="b">Chocolatey: in community moderation</text>
 </g>
 
 <g transform="translate(862,200)">
