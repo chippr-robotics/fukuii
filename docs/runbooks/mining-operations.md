@@ -63,6 +63,28 @@ mining {
 | `mining.coinbase` | Address to receive mining rewards | Required |
 | `mining.ethash.mine-rounds` | Number of mining rounds per iteration | `100000` |
 | `mining.ethash.ommerPoolQueryTimeout` | Timeout for ommer pool queries | `60s` |
+| `pow.ethash-dir` | Directory of the built-in miner's DAG file | `~/.ethash` |
+
+### The DAG and memory (built-in CPU miner only)
+
+Only the built-in CPU miner (`mining.mining-enabled = true`) builds the full Ethash dataset, the DAG. Header
+validation and external miners (`eth_getWork` / `eth_submitWork`, for ASIC and GPU rigs) use the light cache, tens of
+MB, so a node with mining off never builds a DAG.
+
+The DAG is a memory-mapped file in `pow.ethash-dir`, named `full-R23-<seed>` in the same layout as geth's and
+core-geth's DAG files. It is not on the Java heap: the heap holds the light cache and a 1 MiB write buffer while the
+DAG is generated, and nothing of it afterwards. Its size is `EthashUtils.dagSize(epoch)`, 1 GiB plus 8 MiB per epoch:
+
+| Network | Epoch (ECIP-1099, 60,000 blocks) | DAG file |
+|---------|----------------------------------|----------|
+| Mordor | 290 | 3.27 GiB |
+| ETC mainnet | 364 (block 21.9M) | 3.84 GiB |
+
+For a good hashrate the OS page cache needs roughly the DAG's size in free RAM, beside the heap: with less, the miner
+reads the DAG from disk. Do not raise `-Xmx` for the DAG. A DAG file of the current epoch is reused across restarts
+once its size, header and a sample of its items check out; a truncated or corrupt file is regenerated. Generation
+writes a temporary file and renames it, so a crash never leaves a file that looks complete. On an epoch change the
+last epoch's file is deleted. Generation is single-threaded: about 5 minutes per GiB on one core.
 
 ## Starting Mining
 
@@ -338,6 +360,7 @@ consensus {
 1. Limited CPU resources
 2. External miners not reporting hashrate
 3. Hashrate submissions timing out
+4. Built-in miner: too little free RAM for the DAG file in the page cache (see [The DAG and memory](#the-dag-and-memory-built-in-cpu-miner-only))
 
 **Solutions:**
 - Ensure external miners call `eth_submitHashrate` regularly
