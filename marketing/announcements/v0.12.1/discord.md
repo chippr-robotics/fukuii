@@ -4,7 +4,7 @@ Everything since 0.11.0, over 130 merged changes: some you can use today, some l
 
 **What's new for operators**
 🖥️ **TUI Command Center**: run with `--tui` for a full terminal dashboard covering chain, mempool, RPC, Engine API, mining and storage, with alerts and operator actions.
-🌐 **Hoodi and Ephemery are built in**: `fukuii hoodi` / `fukuii ephemery`. Ephemery picks up each 28-day reset on its own.
+🌐 **Hoodi and Ephemery are built in**: `fukuii hoodi` / `fukuii ephemery`. Ephemery exits at each 28-day reset; under a supervisor, the restart picks up the next iteration.
 🔌 **Engine API on by default** for chains that need a consensus client, on `localhost:8551`. A persistent JWT secret is created at `<datadir>/jwt.hex`. Point your CL's `--execution-jwt` at it.
 📦 **New install paths**: `ppa:chipprbots/fukuii` (Ubuntu noble/jammy) and the Chocolatey community repo.
 

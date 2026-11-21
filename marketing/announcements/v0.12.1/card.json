@@ -5,7 +5,7 @@
   "subtitle": "Multi-network EVM client · ETC · Mordor · Sepolia · Hoodi · Ephemery",
   "tiles": [
     {"heading": "TUI COMMAND CENTER", "lines": ["Chain, mempool, RPC, Engine, mining", "and storage views; operator actions"], "color": "green"},
-    {"heading": "HOODI + EPHEMERY", "lines": ["Built-in networks. Ephemery", "follows its 28-day resets on its own"], "color": "blue"},
+    {"heading": "HOODI + EPHEMERY", "lines": ["Built-in networks. Ephemery moves to", "the next iteration on restart"], "color": "blue"},
     {"heading": "ENGINE API BY DEFAULT", "lines": ["ETH-family chains: localhost:8551,", "persistent jwt.hex in the datadir"], "color": "orange"},
     {"heading": "PPA + CHOCOLATEY", "lines": ["ppa:chipprbots/fukuii (noble, jammy)", "and the Chocolatey community repo"], "color": "purple"}
   ],

@@ -41,6 +41,9 @@ Also read:
 - `specs/README.md`, to see which specs closed in the range and what is still in flight;
 - for every candidate headline, the config or code **at the tag**: `git show TAG:<path>`. An `enabled = false`, an
   "IN-DEVELOPMENT GUARD" comment, or a missing default makes it groundwork, not a feature.
+- for every headline, its runbook under `docs/runbooks/` at the tag, for how it behaves *operationally*. A commit
+  title says what was built, not what the operator must do. For example, at v0.12.1 Ephemery exits with code 75 at each
+  reset and moves to the next iteration only when a supervisor restarts it. "Follows its resets on its own" was wrong.
 
 Sort the commits into three buckets, and drop `test`, `docs`, `chore(tracker)` and `build` items unless an operator
 would notice them (new install paths do count):
