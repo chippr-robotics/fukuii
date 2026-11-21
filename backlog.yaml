@@ -3665,10 +3665,15 @@ items:
   - id: B-413
     title: "Ethash miner holds the full DAG on the Java heap (Array[Array[Int]], ~1.25x DAG): a miner at the shipped heap OOMs at its first DAG build"
     priority: P2
-    status: open
+    status: claimed
     area: mining
     size: M
     opened: 2026-11-21
     refs: []
     links: {}
+    claim:
+      by: cloud-dc960fdc
+      agent: forge
+      since: 2026-11-21T13:28:02Z
+      heartbeat: 2026-11-21T13:28:02Z
     notes: "dev-node EG-6 run, 2026-11-21: Mordor epoch 290 (ECIP-1099) DAG 3.27 GiB -> ~4.1 GiB heap; -Xmx4g node exited OOM at 53% of the build (EthashDAGManager). Options: DAG off-heap (mmap'd file / direct ByteBuffer, as core-geth), one flat array instead of 16-int arrays, and document -Xmx sizing for miners in the fukuii-mining-operations skill and docs. ETC mainnet DAG is larger and grows each epoch."
