@@ -131,18 +131,29 @@ Commit `discord.md`, `card.json`, `card.svg`, the blog post and its image on a b
 
 ## 6. Post (🔴 outward-facing, needs explicit approval)
 
-Only after the maintainer approves **this** text and image in the conversation:
+Post only after the maintainer approves **this** text and image in the conversation, and only once the PR that carries
+them has merged to `main`.
 
-```bash
-# DISCORD_WEBHOOK_URL is set in the maintainer's shell or the environment's secrets; never in a file or the chat.
-python3 -I scripts/marketing/post_discord.py marketing/announcements/TAG/discord.md \
-  --image marketing/announcements/TAG/card.png --send
-```
+**The normal route is the `Discord Announce` workflow** (`.github/workflows/discord-announce.yml`). The webhook URLs are
+secrets of the `DISCORD` GitHub environment (`DISCORD_WEBHOOK_URL`; `DISCORD_WEBHOOK_URL_BLOG` for a separate blog
+channel). The environment's required reviewer approves the `post` job in GitHub, so the post is approved a second
+time, against the exact text and PNG the run shows.
 
-If `DISCORD_WEBHOOK_URL` is not set, stop and say so. The maintainer creates the webhook (Discord: Server Settings →
-Integrations → Webhooks → New Webhook, pick the channel, Copy Webhook URL) and exports it. Do not ask for the URL in
-the chat. A cloud session cannot use the network-secret form for it, because a Discord webhook's token is in the URL
-path, not a header. The maintainer can also post the text and PNG by hand.
+1. Dispatch it on `main` with `send: false` (`mcp__github__actions_run_trigger`, or Actions → Discord Announce → Run
+   workflow): `post = marketing/announcements/TAG/discord.md`, `channel = announcements`, `image = true`. Check the
+   run summary and the `discord-post` artifact (the PNG as rendered on the runner).
+2. Dispatch it again with `send: true`. The `post` job waits for the `DISCORD` environment's reviewer. Tell the
+   maintainer the run's URL; they approve it in GitHub. Never approve it yourself.
+3. The job summary prints the message id. Note it in the PR and mark the backlog item done.
 
-The maintainer may post by hand instead. Either way, record it: mark the backlog item done, and note the message id
-that the script printed in the PR.
+**Fallback, from a maintainer's shell:** export `DISCORD_WEBHOOK_URL` there, then run
+`python3 -I scripts/marketing/post_discord.py marketing/announcements/TAG/discord.md --image
+marketing/announcements/TAG/card.png --send`. Never ask for the URL in the chat: a cloud session cannot use the
+network-secret form for it, because a Discord webhook's token is in the URL path, not a header. Posting the text and
+PNG by hand works too. Either way, record it as in step 3.
+
+**One-time setup** (the maintainer, in GitHub): Settings → Environments → New environment `DISCORD`.
+- Required reviewers: the maintainer.
+- Deployment branches: `main` only.
+- Secrets: `DISCORD_WEBHOOK_URL`. Get it from Discord: Server Settings → Integrations → Webhooks → New Webhook, pick
+  the channel, then Copy Webhook URL. Add `DISCORD_WEBHOOK_URL_BLOG` only if blog notes go to another channel.

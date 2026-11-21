@@ -30,8 +30,9 @@ status current.
 | A release was cut: Discord post, release card, release blog post | `.claude/skills/fukuii-release-announcement/SKILL.md` |
 | A spec closed or hit a milestone: blog post, then its Discord note | `.claude/skills/fukuii-spec-blog-post/SKILL.md` |
 
-Tools: `scripts/marketing/render_card.py` (card.json to SVG and PNG) and `scripts/marketing/post_discord.py` (a dry
-run by default; `--send` posts through a webhook).
+Tools: `scripts/marketing/render_card.py` (card.json to SVG and PNG), `scripts/marketing/post_discord.py` (a dry
+run by default; `--send` posts through a webhook), and the `Discord Announce` workflow
+(`.github/workflows/discord-announce.yml`), which runs both on `main` with the webhook from the `DISCORD` environment.
 
 ## Where things live
 
@@ -64,9 +65,11 @@ run by default; `--send` posts through a webhook).
    channel. Run `post_discord.py` without `--send` first. Send only after a clear go-ahead in this conversation. An
    approval for one post does not cover the next. The same applies to merging a blog post to `main`: open a PR and
    let the maintainer merge it.
-6. **The webhook URL is a secret.** It comes from an environment variable (`DISCORD_WEBHOOK_URL`, or
-   `DISCORD_WEBHOOK_URL_BLOG` for a separate channel). Never write it in a file, a commit, a PR, a log or the chat.
-   Never ask the maintainer to paste it into the chat. If it is not set, say so and stop.
+6. **The webhook URL is a secret.** It lives in the `DISCORD` GitHub environment (`DISCORD_WEBHOOK_URL`, and
+   `DISCORD_WEBHOOK_URL_BLOG` for a separate channel), and posts go through the `Discord Announce` workflow. Its
+   `post` job waits for the environment's reviewer: the maintainer approves it, never you. In a maintainer's own
+   shell the script reads the same names from the environment. Never write the URL in a file, a commit, a PR, a log
+   or the chat, and never ask the maintainer to paste it into the chat.
 7. **No mass pings.** Posts go out with mentions disabled. Ping a role only when the maintainer asks, with
    `--ping-role`.
 8. **People.** Credit contributors by their public GitHub handle only if the maintainer agrees. Never include an

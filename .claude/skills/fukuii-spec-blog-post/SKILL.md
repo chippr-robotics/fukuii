@@ -88,10 +88,9 @@ An image is optional. A card with four "what you get" tiles can reuse `render_ca
 1. Show the maintainer the post, the note, and a **check before posting** list.
 2. Commit on a branch and open a PR (`Backlog: B-xxx`). The maintainer merges it, and the docs site deploys from
    `main`.
-3. Dry run, then, only on explicit approval of this note:
-
-```bash
-python3 -I scripts/marketing/post_discord.py marketing/blog/<slug>/discord.md                   # dry run
-DISCORD_WEBHOOK_URL_BLOG=... python3 -I scripts/marketing/post_discord.py marketing/blog/<slug>/discord.md \
-  --webhook-env DISCORD_WEBHOOK_URL_BLOG --send      # or DISCORD_WEBHOOK_URL when blog posts share the channel
-```
+3. Check the note with a dry run: `python3 -I scripts/marketing/post_discord.py marketing/blog/<slug>/discord.md`.
+4. Only on explicit approval of this note, once it is on `main`, dispatch the `Discord Announce` workflow:
+   `post = marketing/blog/<slug>/discord.md`, `channel = blog`, and `image = true` only if the note has a
+   `card.json`. Run it with `send: false` first, then `send: true`. The `post` job waits for the `DISCORD`
+   environment's reviewer, who is the maintainer. The setup and the shell fallback are in
+   `fukuii-release-announcement`, step 6.
