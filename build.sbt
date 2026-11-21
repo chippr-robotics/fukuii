@@ -382,11 +382,18 @@ lazy val node = {
       (Universal / mappings) += (Compile / resourceDirectory).value / "logback.xml" -> "conf/logback.xml",
       bashScriptExtraDefines += """addJava "-Dconfig.file=${app_home}/../conf/app.conf"""",
       bashScriptExtraDefines += """addJava "-Dlogback.configurationFile=${app_home}/../conf/logback.xml"""",
+      // CVE-2026-114938: the launcher may run on a host JDK older than 25.0.5.1, whose x86-64 Base64 decode intrinsic
+      // can be driven to memory corruption by crafted input. Disabling it costs a slower decoder on a cold path.
+      // Remove once no supported JDK predates the fix.
+      bashScriptExtraDefines += """addJava "-XX:+UnlockDiagnosticVMOptions"""",
+      bashScriptExtraDefines += """addJava "-XX:DisableIntrinsic=_base64_decodeBlock"""",
       batScriptExtraDefines += """call :add_java "-Dconfig.file=%APP_HOME%\conf\app.conf"""",
       batScriptExtraDefines += """call :add_java "-Dlogback.configurationFile=%APP_HOME%\conf\logback.xml"""",
+      batScriptExtraDefines += """call :add_java "-XX:+UnlockDiagnosticVMOptions"""",
+      batScriptExtraDefines += """call :add_java "-XX:DisableIntrinsic=_base64_decodeBlock"""",
       // Keep sbt-native-packager Docker builds on the same supported runtime as the hand-written Dockerfiles.
       // Without this, the plugin default generated `FROM openjdk:8`, which Docker Hub no longer serves.
-      dockerBaseImage := "eclipse-temurin:25-jre-noble",
+      dockerBaseImage := "eclipse-temurin:25.0.5.1_2-jre-noble", // CVE-2026-114938 fix
       // Use a wildcard classpath ("lib/*") instead of enumerating every
       // jar by name. The default sbt-native-packager behaviour wrote
       // ~12KB of `-cp lib/jar1;lib/jar2;...` into bin/fukuii.bat (147

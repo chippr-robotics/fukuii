@@ -61,6 +61,10 @@ object Eip1459:
 
   private val CompressedKeyBytes = 33
   private val RootSignatureBytes = 65
+  private val RootSignatureChars = 87 // 65 bytes, unpadded base64url
+
+  /** EIP-778 caps a record at 300 bytes: 400 characters of unpadded base64url. */
+  private[discovery] val MaxEnrTextLength = 400
   private val MinHashBytes = 12 // tree.go:151
   private val MaxHashBytes = 32
   private val RootFormat = raw"enrtree-root:v1 e=(\S+) l=(\S+) seq=(\d+) sig=(\S+)".r
@@ -71,7 +75,9 @@ object Eip1459:
       case RootFormat(eroot, lroot, seq, sig) =>
         if !isValidLabel(eroot) || !isValidLabel(lroot) then Left("invalid child hash")
         else
-          (seq.toLongOption, base64UrlDecode(sig)) match
+          // The signature is decoded before it is verified, so its exact length is checked first (CVE-2026-114938)
+          val sigBytes = if sig.length == RootSignatureChars then base64UrlDecode(sig) else None
+          (seq.toLongOption, sigBytes) match
             case (None, _) => Left("invalid seq")
             case (Some(n), Some(bytes)) if bytes.length == RootSignatureBytes =>
               Right(Root(eroot, lroot, n, ByteString(bytes)))
@@ -207,7 +213,7 @@ object Eip1459:
 
   /** Unpadded base64url (`tree.go:257`, `base64.RawURLEncoding`): padding or the standard alphabet is an error. */
   private def base64UrlDecode(text: String): Option[Array[Byte]] =
-    if text.contains('=') then None
+    if text.contains('=') || text.length > MaxEnrTextLength then None
     else
       try Some(Base64.getUrlDecoder.decode(text))
       catch case _: IllegalArgumentException => None

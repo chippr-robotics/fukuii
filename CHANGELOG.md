@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Security
+- **CVE-2026-114938 ("Java4Shell"): mitigated (B-418).** Crafted input to the x86-64 HotSpot Base64 decoder can corrupt
+  memory (CVSS 8.1, unauthenticated, network). Affected: Java SE 21.0.13.0.3, 25.0.5.0.3 and the other October 2026
+  updates; fixed in Temurin 25.0.5.1 / 21.0.13.1.
+  - The Docker images and the sbt-native-packager image are pinned to `eclipse-temurin:25.0.5.1_2`.
+  - The images' `JDK_JAVA_OPTIONS` and the `bin/fukuii` / `fukuii.bat` launchers add
+    `-XX:DisableIntrinsic=_base64_decodeBlock`, which covers a deb, tarball or Chocolatey install still on an
+    affected host JDK. Upgrade that JDK anyway; the flag goes once no supported JDK predates the fix.
+  - The Engine API no longer decodes any part of a JWT before its HMAC checks out: the signature is compared as text
+    with the encoding of the expected HMAC, and a token over 4096 characters is refused. A signature with non-zero
+    unused trailing bits, which no consensus client sends, is now refused.
+  - DNS discovery checks a tree root's `sig=` is exactly 87 characters, and an ENR at most 400, before decoding them.
 ### Breaking
 - **A plaintext listener on a non-loopback interface refuses the start (spec 030 S6, B-359).** JSON-RPC HTTP and WS,
   the Engine API and metrics, when their `interface` is not loopback (`0.0.0.0`, `::`, a LAN address, or a name that
