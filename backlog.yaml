@@ -3654,3 +3654,13 @@ items:
     notes: |-
       Found by dev-node in T248 (Mordor, 2026-11-20): import ok, state right (N+1 executed = reference), but eth_getBlockByNumber/eth_getBalance at N answer null / not found, even after a restart. Decide: archive carries N's body (format), the backfill fetches the pivot window's bodies first after an import, or RPC answers header-level. Investigation in progress.
       2026-11-21 in-progress: User 2026-11-21: option (c) to match geth: state-read RPCs resolve by header (no body); block RPCs keep null without a body.
+  - id: B-412
+    title: "RPC: eth_getHeaderByNumber, eth_getRawHeader, eth_feeHistory resolve by block (body); geth serves them from the header"
+    priority: P3
+    status: open
+    area: jsonrpc
+    opened: 2026-11-21
+    refs: []
+    links:
+      spec: 018
+    notes: "Found in B-411: EthBlocksService getHeaderByNumber/getRawHeader/feeHistory use resolveBlock; resolveHeader (ResolveBlock.scala) now exists. Not state readers, so left out of B-411."
