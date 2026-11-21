@@ -1540,6 +1540,8 @@ doubling to a 20-minute cap). It does not fall back to another sync mode.
 
 1. **Check that peers offer snap/1:**
 ```bash
+# The `Network [60s]` line at INFO shows the snap count: active=N (M snap). The per-peer
+# PEER_HANDSHAKE_SUCCESS line is DEBUG (B-415); with the network logger at DEBUG:
 grep "PEER_HANDSHAKE_SUCCESS" ~/.fukuii/etc/logs/fukuii.log | grep -c "supportsSnap=true"
 ```
 

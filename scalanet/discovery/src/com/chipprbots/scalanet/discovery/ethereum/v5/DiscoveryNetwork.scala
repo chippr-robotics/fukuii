@@ -225,7 +225,7 @@ object DiscoveryNetwork:
             case Some((sender, bytes)) =>
               processInbound(sender, bytes, handler).attempt.flatMap {
                 case Left(ex) =>
-                  IO(logger.warn(s"discv5 inbound handler failed: ${ex.getClass.getSimpleName}: ${ex.getMessage}"))
+                  IO(logger.debug(s"discv5 inbound handler failed: ${ex.getClass.getSimpleName}: ${ex.getMessage}"))
                 case Right(_) => IO.unit
               }
             case None => IO.unit

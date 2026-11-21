@@ -121,7 +121,7 @@ object Discv4SyncResponder extends LazyLogging:
         try respond(sender, incomingBits, privateKey, expirationSeconds, maxClockDriftSeconds, localEnrSeqRef, dedup)
         catch
           case NonFatal(ex) =>
-            logger.warn(
+            logger.debug(
               s"discv4 sync-fastpath: unexpected error producing Pong for $sender: ${ex.getClass.getSimpleName}: ${ex.getMessage}"
             )
             None

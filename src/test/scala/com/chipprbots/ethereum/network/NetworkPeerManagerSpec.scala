@@ -10,6 +10,7 @@ import org.apache.pekko.util.ByteString
 
 import scala.concurrent.duration.*
 
+import ch.qos.logback.classic.spi.ILoggingEvent
 import org.bouncycastle.util.encoders.Hex
 import org.scalatest.flatspec.AnyFlatSpec
 import org.scalatest.matchers.should.Matchers
@@ -42,6 +43,7 @@ import com.chipprbots.ethereum.network.p2p.messages.ETHPackets.NewBlock
 import com.chipprbots.ethereum.network.p2p.messages.ETHPackets.NewBlockHashes.BlockHash
 import com.chipprbots.ethereum.network.p2p.messages.ETHPackets.NewBlockHashes.NewBlockHashes
 import com.chipprbots.ethereum.network.p2p.messages.WireProtocol.Disconnect
+import com.chipprbots.ethereum.testing.LogCapture
 import com.chipprbots.ethereum.testing.Tags.*
 import com.chipprbots.ethereum.utils.Config
 
@@ -571,6 +573,67 @@ class NetworkPeerManagerSpec extends AnyFlatSpec with Matchers:
     peersInfoHolder ! PeerInfoRequestCmd(peer1.id, requestSender.ref)
     requestSender.expectMsg(PeerInfoResponse(Some(peer1Info)))
 
+  // ── B-415: per-peer events are DEBUG; one INFO summary a minute ────────────────────────────────────────────────────
+
+  it should "log a handshaked peer at DEBUG, count it, and sum it into the one-a-minute INFO summary" taggedAs (
+    UnitTest,
+    NetworkTest
+  ) in new TestSetup:
+    expectInitialSubscriptions()
+    val (_, events) = LogCapture.capture("com.chipprbots.ethereum.network") {
+      setupNewPeer(peer1, peer1Probe, peer1Info)
+      // Handled in mailbox order, so once this is answered the handshake has been logged.
+      peersInfoHolder ! PeerInfoRequestCmd(peer1.id, requestSender.ref)
+      requestSender.expectMsgType[PeerInfoResponse]
+    }
+    events.exists(e =>
+      e.getLevel == ch.qos.logback.classic.Level.DEBUG && e.getFormattedMessage.startsWith("PEER_HANDSHAKE_SUCCESS")
+    ) shouldBe true
+    LogCapture.atInfoOrAbove(events).filter(_.contains("PEER_")) shouldBe empty
+    churnStats.current.connected shouldBe 1
+
+    churnStats.recordClosedByDisconnect(Disconnect.Reasons.TooManyPeers)
+    churnStats.recordClosedByDisconnect(Disconnect.Reasons.TooManyPeers)
+    churnStats.recordClosed(PeerChurnStats.TcpClosed)
+    (1 to 3).foreach(_ => churnStats.recordForkIdRejected())
+    churnStats.recordBlacklisted()
+
+    val (_, tickEvents) = LogCapture.capture("com.chipprbots.ethereum.network") {
+      peersInfoHolder ! LogNetworkSummaryTick
+      peersInfoHolder ! PeerInfoRequestCmd(peer1.id, requestSender.ref)
+      requestSender.expectMsgType[PeerInfoResponse]
+    }
+    val summaries: List[ILoggingEvent] = tickEvents.filter(_.getFormattedMessage.startsWith("Network [60s]"))
+    summaries should have size 1
+    summaries.head.getLevel shouldBe ch.qos.logback.classic.Level.INFO
+    summaries.head.getFormattedMessage should include(
+      "connected=1 closed=3[too-many-peers=2,tcp-closed=1] forkid-rejected=3 blacklisted=1"
+    )
+    // Three fork-id rejections are no "every handshake rejected": a peer is connected.
+    tickEvents.filter(_.getLevel == ch.qos.logback.classic.Level.WARN) shouldBe empty
+    // The window is drained: the next summary starts from zero.
+    churnStats.current shouldBe PeerChurnStats.Snapshot(0, Map.empty, 0, 0)
+
+  it should "summarise at most once a minute and warn when no peer connected and every handshake was rejected" taggedAs (
+    UnitTest,
+    NetworkTest
+  ) in new TestSetup:
+    NetworkSummaryInterval should be <= 60.seconds
+    expectInitialSubscriptions()
+    (1 to PeerChurnStats.AllRejectingThreshold).foreach(_ => churnStats.recordForkIdRejected())
+    val (_, events) = LogCapture.capture("com.chipprbots.ethereum.network") {
+      peersInfoHolder ! LogNetworkSummaryTick
+      peersInfoHolder ! PeerInfoRequestCmd(peer1.id, requestSender.ref)
+      requestSender.expectMsgType[PeerInfoResponse]
+    }
+    events
+      .filter(_.getLevel == ch.qos.logback.classic.Level.INFO)
+      .count(_.getFormattedMessage.startsWith("Network [60s]")) shouldBe 1
+    val warnings: List[String] =
+      events.filter(_.getLevel == ch.qos.logback.classic.Level.WARN).map(_.getFormattedMessage)
+    warnings should have size 1
+    warnings.head should include("every handshake was rejected")
+
   trait TestSetup extends EphemBlockchainTestSetup:
     implicit override lazy val classicSystem: ActorSystem = ActorSystem("PeersInfoHolderSpec_System")
 
@@ -633,6 +696,9 @@ class NetworkPeerManagerSpec extends AnyFlatSpec with Matchers:
     val peerManager: TestProbe = TestProbe()
     val peerEventBus: TestProbe = TestProbe()
 
+    // Each test's own counters, so a summary asserts exact counts whatever else runs in the JVM.
+    val churnStats: PeerChurnStats = new PeerChurnStats
+
     val peersInfoHolder: ActorRef = classicSystem
       .spawn(
         NetworkPeerManagerActor.behavior(
@@ -640,7 +706,8 @@ class NetworkPeerManagerSpec extends AnyFlatSpec with Matchers:
           peerEventBus.ref.toTyped[PeerEventBusActor.Command],
           storagesInstance.storages.appStateStorage,
           Some(forkResolver),
-          isPoWChain = true
+          isPoWChain = true,
+          churnStats = churnStats
         ),
         s"npma-spec-${java.util.UUID.randomUUID()}"
       )

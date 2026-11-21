@@ -37,6 +37,7 @@ import com.chipprbots.ethereum.network.rlpx.RLPxConnectionHandler.HelloCodec
 import com.chipprbots.ethereum.network.rlpx.RLPxConnectionHandler.InitialHelloReceived
 import com.chipprbots.ethereum.network.rlpx.RLPxConnectionHandler.RLPxConfiguration
 import com.chipprbots.ethereum.security.SecureRandomBuilder
+import com.chipprbots.ethereum.testing.LogCapture
 import com.chipprbots.ethereum.testing.Tags.*
 
 // Wave 3 gate: TCP tests require TestActorRef + lastSender — blocked on Typed TCP bridge migration
@@ -162,6 +163,32 @@ class RLPxConnectionHandlerSpec
     bridge ! Tcp.Received(data)
     rlpxConnectionParent.expectMsg(RLPxConnectionHandler.ConnectionFailed)
     rlpxConnectionParent.expectTerminated(rlpxConnection)
+
+  // B-415: a failed handshake with a stranger is routine on a public network; it is counted (`+N auth-fail` in the
+  // `Network [60s]` line) and logged at DEBUG, not as a WARN a node writes dozens of times a minute.
+  it should "log a failed AuthHandshake at DEBUG, not at INFO or WARN, and count it" taggedAs (
+    UnitTest,
+    NetworkTest
+  ) in new TestSetup:
+    val failuresBefore: Int = RLPxConnectionHandler.authFailedCount.get()
+    val (_, events) = LogCapture.capture("com.chipprbots.ethereum.network.rlpx") {
+      rlpxConnection ! RLPxConnectionHandler.ConnectTo(uri)
+      tcpActorProbe.expectMsg(Tcp.Connect(inetAddress))
+      val initPacket: ByteString = ByteString("Init packet")
+      mockHandshaker.initiateHandler = Some(_ => initPacket -> mockHandshaker)
+      tcpActorProbe.reply(Tcp.Connected(inetAddress, inetAddress))
+      tcpActorProbe.expectMsgClass(classOf[Tcp.Register])
+      val outboundBridge = tcpActorProbe.lastSender
+      tcpActorProbe.expectMsg(Tcp.Write(initPacket, RLPxConnectionHandler.Ack))
+      mockHandshaker.handleResponseMessageHandler = Some(_ => AuthHandshakeError)
+      mockHandshaker.handleResponseMessageV4Handler = Some(_ => AuthHandshakeError)
+      outboundBridge ! Tcp.Received(ByteString((0 until AuthHandshaker.ResponsePacketLength).map(_.toByte).toArray))
+      rlpxConnectionParent.expectMsg(RLPxConnectionHandler.ConnectionFailed)
+      rlpxConnectionParent.expectTerminated(rlpxConnection)
+    }
+    LogCapture.atInfoOrAbove(events) shouldBe empty
+    events.exists(_.getFormattedMessage.contains("[Stopping Connection] Auth handshake FAILED")) shouldBe true
+    RLPxConnectionHandler.authFailedCount.get() should be > failuresBefore
 
   it should "close the connection if the AuthHandshake response message's MAC is invalid" taggedAs (
     UnitTest,

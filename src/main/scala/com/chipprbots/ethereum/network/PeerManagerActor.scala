@@ -620,6 +620,13 @@ object PeerManagerActor:
       msg match
         case PeerClosedConnectionCmd(peerAddress, reason) =>
           val isMaintainedPeer = maintainedPeersByNodeId.values.exists(_.getHost == peerAddress)
+          // A peer the operator configured is not a stranger: its refusal (fork id, network, protocol) is worth a line.
+          if isMaintainedPeer then
+            log.warn(
+              "Maintained peer {} closed the connection: reason={}",
+              peerAddress,
+              Disconnect.reasonToString(reason)
+            )
           if !isMaintainedPeer then
             blacklist.add(
               PeerAddress(peerAddress),
@@ -818,11 +825,11 @@ object PeerManagerActor:
           // FR-052: no dial reaches a node that is not listed, whatever its source (discovery, bootnode, known nodes,
           // admin_addPeer, admin_addTrustedPeer, net_connectToPeer).
           allowlist.recordRejection(inbound = false)
-          log.info("Not dialling {}: {}", uri, allowlist.refusalFor(uri).getOrElse(""))
+          log.debug("Not dialling {}: {}", uri, allowlist.refusalFor(uri).getOrElse(""))
           Behaviors.same
 
         case _ if operatorBlocked =>
-          log.info("Not dialling {}: its address is blocked by the operator (admin_blockIP)", uri)
+          log.debug("Not dialling {}: its address is blocked by the operator (admin_blockIP)", uri)
           Behaviors.same
 
         case Right(_) if excludedWrongNetwork && !operatorRequested =>
@@ -892,7 +899,7 @@ object PeerManagerActor:
             else
               val duration = peerConfiguration.genesisHeadExclusionDuration
               nodeIdOpt.foreach(n => wrongNetworkNodes.add(n, System.currentTimeMillis() + duration.toMillis))
-              log.info(
+              log.debug(
                 "GENESIS_HEAD_EVICT: disconnecting node={} host={} client={}; head still genesis after {}; " +
                   "excluded from dialling for {}",
                 nodeIdHex.take(16),
@@ -971,9 +978,10 @@ object PeerManagerActor:
           else
             val duration = peerConfiguration.wrongNetworkExclusionDuration
             val isNew = wrongNetworkNodes.add(nodeId, System.currentTimeMillis() + duration.toMillis)
-            // INFO once per newly excluded node; a still-excluded node can only reappear by dialling us, so DEBUG.
+            // DEBUG: a public node meets many wrong-network crawlers; each is a useless-peer close in the
+            // `Network [60s]` summary. (A maintained/trusted peer on another network is a WARN above.)
             if isNew then
-              log.info(
+              log.debug(
                 "WRONG_NETWORK: excluding node={} host={} from dialling for {} (excluded={})",
                 nodeIdHex.take(16),
                 remoteHost,
@@ -1024,7 +1032,7 @@ object PeerManagerActor:
             val backoff: FiniteDuration =
               if snapCapableHosts.contains(ip) then PeerManagerActor.SnapPeerSoftBlacklistDuration
               else math.min(30, 5 * (1 << (count - 5))).minutes
-            log.info("TCP failure #{} for {} — blacklisting for {}", count, ip, backoff)
+            log.debug("TCP failure #{} for {} — blacklisting for {}", count, ip, backoff)
             blacklist.add(PeerAddress(ip), backoff, Blacklist.BlacklistReason.TcpSubsystemError)
             consecutiveTcpFailures.remove(ip)
       }
@@ -1051,7 +1059,7 @@ object PeerManagerActor:
           .map(newConnectedPeers.hasHandshakedWith)
           .getOrElse(false)
         if stillConnected then
-          log.info(
+          log.debug(
             "DUPLICATE_TERMINATED: suppressing PeerDisconnected for {} — winner still connected, loser ref={} dropped",
             peerId,
             ref
@@ -1099,7 +1107,7 @@ object PeerManagerActor:
         // handshaked entry whose actor is gone and whose termination will never arrive again: it held a slot, blocked
         // re-dials of the node ID, and was "evicted" every ~70 s by the genesis-head check with DisconnectPeer going to
         // dead letters (Sepolia v0.9.6).
-        log.info(
+        log.debug(
           "STALE_HANDSHAKE: ignoring handshake of {} from {}: its peer actor has already terminated",
           handshakedPeer.id.value.take(16),
           handshakedPeer.remoteAddress
@@ -1135,7 +1143,7 @@ object PeerManagerActor:
         // evicted under spec 011) must not take an inbound slot back for the rest of its exclusion either: reject it
         // as soon as the handshake names it, with no new grace period. Outbound handshakes are already gated in
         // connectWith, where an explicit operator dial may bypass the exclusion.
-        log.info(
+        log.debug(
           "EXCLUDED_PEER_REJECTED: inbound node={} host={} is excluded; disconnecting",
           handshakedPeer.id.value.take(16),
           host

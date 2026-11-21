@@ -8,6 +8,7 @@ import com.chipprbots.ethereum.forkid.ForkIdValidationResult.Connect
 import com.chipprbots.ethereum.forkid.ForkIdValidator
 import com.chipprbots.ethereum.network.NetworkPeerManagerActor.PeerInfo
 import com.chipprbots.ethereum.network.NetworkPeerManagerActor.RemoteStatus
+import com.chipprbots.ethereum.network.PeerChurnStats
 import com.chipprbots.ethereum.network.p2p.Message
 import com.chipprbots.ethereum.network.p2p.MessageSerializable
 import com.chipprbots.ethereum.network.p2p.messages.Capability
@@ -128,7 +129,7 @@ case class EthNodeStatus69ExchangeState(
         log.debug("ETH69_STATUS: ForkId validation result: {}", validationResult)
         validationResult match
           case Connect =>
-            log.info("ETH69_STATUS: ForkId validation passed - accepting peer")
+            log.debug("ETH69_STATUS: ForkId validation passed - accepting peer")
             val (resolvedChainWeight, resolvedSource) = blockchainReader.resolveETH69ChainWeight(
               latestBlockHash,
               latestBlock,
@@ -156,6 +157,7 @@ case class EthNodeStatus69ExchangeState(
               )
             )
           case other =>
+            PeerChurnStats.global.recordForkIdRejected()
             log.debug("ETH69_STATUS: ForkId validation failed: {} - disconnecting", other)
             DisconnectedState[PeerInfo](Disconnect.Reasons.UselessPeer)
       ).unsafeRunSync()
