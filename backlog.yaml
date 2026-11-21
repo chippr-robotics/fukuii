@@ -3702,3 +3702,13 @@ items:
       since: 2026-11-21T14:37:24Z
       heartbeat: 2026-11-21T14:37:56Z
     notes: dev-node EG-6 run (2026-11-21). Move per-peer connect/close and fork-id rejection lines to DEBUG, or rate-limit/aggregate them (e.g. a periodic summary), so INFO stays readable and disk-bounded. herald to decide which lines operators need at INFO.
+  - id: B-416
+    title: "scalanetDiscovery tests fail on staging: V5DemuxResponderSpec ClaimedReply x2, codec 'cannot acquire 64 bits' x3"
+    priority: P2
+    status: open
+    area: network
+    opened: 2026-11-21
+    refs: []
+    links:
+      spec: none
+    notes: "Found by B-415: 5 failures in scalanetDiscovery / test on origin/staging a164090a9 with and without the log-volume change."
