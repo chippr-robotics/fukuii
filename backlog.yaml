@@ -3639,21 +3639,23 @@ items:
   - id: B-411
     title: "After a checkpoint import the archive's own block N is not served over RPC: the archive carries no body for N and nothing fetches it"
     priority: P2
-    status: in-progress
+    status: review
     area: storage
     size: M
     opened: 2026-11-21
     refs: []
     links:
+      prs: [1976]
       spec: 018
     claim:
       by: cloud-dc960fdc
       agent: conduit
       since: 2026-11-21T01:48:38Z
-      heartbeat: 2026-11-21T01:49:13Z
+      heartbeat: 2026-11-21T02:00:06Z
     notes: |-
       Found by dev-node in T248 (Mordor, 2026-11-20): import ok, state right (N+1 executed = reference), but eth_getBlockByNumber/eth_getBalance at N answer null / not found, even after a restart. Decide: archive carries N's body (format), the backfill fetches the pivot window's bodies first after an import, or RPC answers header-level. Investigation in progress.
       2026-11-21 in-progress: User 2026-11-21: option (c) to match geth: state-read RPCs resolve by header (no body); block RPCs keep null without a body.
+      2026-11-21 review: PR #1976: state readers resolve by header (geth parity); block-content methods unchanged; B-412 follow-up.
   - id: B-412
     title: "RPC: eth_getHeaderByNumber, eth_getRawHeader, eth_feeHistory resolve by block (body); geth serves them from the header"
     priority: P3
