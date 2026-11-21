@@ -2,19 +2,25 @@
 
 *Phase 1 artifact of [plan.md](./plan.md). This file holds Track C's formats and design record; Track E's engine sub-stores, segment format and `StorageMetrics` gauge list are added when Track E's design starts.*
 
-**Status**: design draft, **revised after S0 review rounds 1 and 2** (2026-11-06 and 2026-11-07: `beacon` for ETH, `forge` for ETC;
-the three round-1 REJECTs resolved, round 2 had no REJECT, and every SIGN WITH CHANGES of both rounds is applied; the records are
-plan.md Phase 1b "S0 record (round 1)" and "S0 record (round 2)"). There is no round 3: each reviewer verifies the applied
-changes at the owning slice's PR (plan.md, "S0 prerequisites per slice"). Author: `vault`. Evidence base: the `wt/plan-018-021` tree at staging
-`49dd46d1b` (v0.10.47); file:line references are to that tree. Nothing here is implemented or prototyped.
+**Status** (2026-11-21): the design Track C is built to. Slices C1 to C6 are merged (plan.md, "Status"), so most of
+what follows exists in code; C7 is running its live gates, and C8a and C8b (the deletions, and the guard flag's removal)
+have not started. The design passed S0 review rounds 1 and 2 before code (2026-11-06 and 2026-11-07: `beacon` for ETH,
+`forge` for ETC; the three round-1 REJECTs resolved, round 2 had no REJECT, and every SIGN WITH CHANGES of both rounds is
+applied; the records are in [implementation-log.md](./implementation-log.md), "S0 record (round 1)" and "S0 record
+(round 2)"), and each reviewer verified the applied changes at the owning slice's PR (plan.md, "S0 prerequisites per
+slice"). Author: `vault`. Evidence base: the `wt/plan-018-021` tree at staging `49dd46d1b` (v0.10.47); file:line
+references are to that tree unless a section names a later one, and "today" in the design record means that tree,
+before Track C. Notes of the form *"(C2a part 2 as built, date)"* say
+how a slice built that piece; the built code is the authority where the two differ. Section numbers are cited from
+code comments ("dm 6.4", "data-model 7.0") and are never renumbered.
 
-**Revised 2026-11-06 (second pass) to the user's decisions and standing rule.** Decisions in force: the track is item 8,
+**Decisions in force** (the user's, 2026-11-06; plan.md, "Decision log"): the track is item 8,
 then 6, then item 10 as ONE gate for both chains, on RocksDB with today's `DataSource`; Option Y (path nodes in place,
 per-block changesets in the same batch, an in-memory overlay of recent blocks, reference counts retired) reconfirmed after
 the size estimate; **write-through confirmed** (the disk layer is the canonical head; state, BlockDiff, anchor and best
 pointer in one batch; no journal); changeset keyed by block hash with prior and new values, a version byte and a record
 kind, local part only; spec 017 parked but a decorator must see every node read; checkpoint import onto the unified layout is
-funded and required; **two pruning modes (`basic`, `archive`) on both chains, and `inmemory` is retired** (user decision, later the same day, reversing "keep all three"), which closes its durability gap by removal.
+funded and required; **two pruning modes (`basic`, `archive`) on both chains, and `inmemory` is retired**, which closes its durability gap by removal.
 
 **Standing rule (user, 2026-11-06):** ETH and ETC share one infrastructure; ETH is the build target and ETC comes along; the
 end state is one configurable, efficient EVM execution layer; no multi-stage transitions; the client is not in production
@@ -23,8 +29,8 @@ track and the Hash scheme is retired in it** (no 10a/10b split); **there is no l
 the layout marker is refused at start with a resync message; no adoption, no migration, no legacy reader); **no flag ships
 default-off for a release**: the only flag is a short-lived in-development guard that keeps staging green between PRs and is
 removed, with the Hash-scheme code, in the track's last slice. Consensus rules still differ per chain by config
-(`forBlock` versus `forTimestamp`); only the storage infrastructure is shared. This reverses the user's earlier
-adopt-in-place choice for mid-copy datadirs.
+(`forBlock` versus `forTimestamp`); only the storage infrastructure is shared. Mid-copy datadirs are refused like any
+other unmarked datadir.
 
 **Write-through** (the reading of "in place in the same batch" the user confirmed): the disk layer is always the state of the
 canonical head, and the overlay holds only what is not the head. A disk layer that lags the head by N blocks (geth's pathdb)
@@ -408,7 +414,7 @@ batch of a head move write the rows, the anchor, the best block and the index in
 after a check that the best block is the anchor, so the pointer is never committed apart from the state and rules 2 and
 3 have no crash to serve. A best block that is not the anchor comes from a defect, a datadir written before that check,
 or test mode's two-write reset; the anchor's state is what execution proved, and the blocks above it stay stored by hash
-(vault, forge; plan.md "C4b part 4").
+(vault, forge; implementation-log.md, "C4b part 4").
 
 **Rule 4 is a startup rule only.** At runtime a refused move never rewinds the pointer to the anchor: on a PoW chain that
 would leave the node on the forked chain (forge, S0 item 3b). A runtime refusal returns a typed result and escalates (Part 2,
@@ -741,7 +747,7 @@ refused, because refusing a shallow fork on length would escalate to a re-SNAP (
   outweigh the head) leaves the old head untouched. It uses pinned layers. If M10 and M13 show real ETC branches above the
   pinned cap, the fallback is **reverse-then-commit with rollback from records** (the old branch's records make the move back
   cheap), recorded here and not the default. **Decided 2026-11-12 (user): it is the rule when the pinned cap is hit**,
-  with the disk moved back by the records if the branch then fails; it lands with the head move (`plan.md`, "C4a part 3").
+  with the disk moved back by the records if the branch then fails; it lands with the head move (`implementation-log.md`, "C4a part 3").
 - *PoS designated-head arm* (`!selectedByWeight`, `ConsensusImpl.scala:453-460`): this arm already moves best to the last
   executed block whatever happens, so it does **no overlay stack at all**: one reverse move to the fork point, then a
   canonical commit block by block. No N-layer pin, no N-block batch (beacon, S0 item 3g).
@@ -919,8 +925,8 @@ counts). The row at the position is judged from the rows as they are under the l
 | the anchor's root does not name `expectedHash` there, or no anchor | `NotReached`, nothing written |
 
 **Decision (user, 2026-11-18, on `beacon`'s recommendation; B-370): a row that decodes and is not `expectedHash` is overwritten.**
-This replaces the earlier text of this section, which said both "writes when the row is absent or fails its hash" and "never
-overwrites a valid different node": the two could not both hold, because a row that decodes and is another node *fails its hash
+It resolves a contradiction in this section's first text ("writes when the row is absent or fails its hash" and "never
+overwrites a valid different node" could not both hold), because a row that decodes and is another node *fails its hash
 for this position*. The reasoning: the anchor's verified root names `expectedHash` at this position, so the row is wrong for the
 only state this store holds, and nothing else reads it (the store has one view, 6.3). Leaving it made the audit unable to converge:
 the position was a hole that no repair could close and no delete may remove. geth's path-scheme `hasNode` treats a hash mismatch
@@ -1112,7 +1118,7 @@ trait MptStorage:
 
 ---
 
-## 10. Configuration (HOCON; proposed keys and defaults)
+## 10. Configuration (HOCON keys and defaults, as shipped in `conf/base/state.conf`)
 
 ```
 fukuii.state {
@@ -1143,8 +1149,10 @@ fukuii.state {
   archive  { view-reach = 1024 }             # blocks a VIEW reaches under pruning.mode = archive; moves are unbounded
   recovery {
     max-blocks = ${pruning.history}          # blocks a local re-execution may cover (Part 2, D)
+    max-catch-up = 8192                      # blocks above the head a PoS node catches up over in place after a hand-off; never less than max-blocks (C5a)
     escalation-refusals = 64                 # consecutive forkchoiceUpdated refusals (about 2 epochs at one per 12 s slot) before a PoS escalation (D)
     escalation-cooldown = 6h                 # at most one escalation per cooldown; counted in a metric (D)
+    forget-given-up-branches = false         # PoW: forget the branches the node gave its state up for, at every start while set (C5a loop guard)
   }
   # Reverse depth (best - fork.number), NOT branch length, above which a move is refused up front (ReorgTooDeep(Deep), 6.4).
   # Defaults to the retention floor of 4.5 (history, finalized lag + margin, bounded by retention.max-blocks): the floor is what
@@ -1153,6 +1161,9 @@ fukuii.state {
   reorg { max-depth = floor }
 }
 ```
+
+**`path-live` is `false` by default** in every release so far (v0.12.0 onward included): nodes and harnesses that run
+the unified layout set it (the C7 gate runs, hive's switch). It never becomes `true` by default; C8b deletes the key.
 
 `pruning.mode` is `basic` or `archive` on both chains (4.6). **`pruning.mode = "inmemory"` is rejected at start**, on both chains,
 with a message that names the retired mode and the two that remain. The keys `sync.snap-sync.storage-scheme` and the whole
@@ -1194,6 +1205,14 @@ them fails at start with a message naming the deleted key. `pruning.history` kee
 | `app.db.state.checkpoint.import.nodes` | counter | nodes written by the position-assigning importer (C5c), by trie (account, storage) |
 
 Log tags: `[STATE-ANCHOR]`, `[STATE-MOVE]`, `[STATE-REORG-TOO-DEEP]`, `[STATE-STALE-VIEW]`, `[STATE-LAYOUT]`.
+
+**In code (2026-11-21, `pathstate/StateMetrics.scala` and its neighbours, under the `app` prefix).** Registered by these
+names: the anchor number, `commit.*`, `changeset.records`, `overlay.*` (forward, reverse, pinned, evictions),
+`view.stale`, `.retries`, `.behind.refused`, `move.seconds`, `prune.records`, `lock.wait.seconds`,
+`record.tombstones`, `dead-trie.skipped`, `recovery.reexecuted.blocks` and `recovery.escalations.suppressed`; also,
+not in the table, `move.batches`, `handoff.held.excluded.consecutive`, `handoff.sample.stopped.consecutive`,
+`recovery.pivot-requirement.*` and `repair.overwrites`. Not found by name, so not confirmed (verify): `anchor.lag.blocks`,
+`reorg.refused`, `verify.mismatch`, `commit.degraded`, `recovery.escalations` and `checkpoint.import.nodes`.
 
 ---
 
@@ -1456,8 +1475,8 @@ peer is not blacklisted. Four parts, all required:
 4. **While the re-SNAP runs** there is no anchor, so every in-place writer refuses (7.0), `newPayload` answers ACCEPTED and
    `forkchoiceUpdated` SYNCING (6.3.2), and block generation is off. Healing after an escalation meets no row of the
    state that was given up: part 3 deletes every row of CF `t` and `u` first, the dead tries that a tombstone left with
-   them (as built, C5a part 3; an earlier text here had healing meet such a row, forge R2.3 note 3, and T166 was to pin
-   it: it cannot arise). Tests: induce each trigger (EG-14); a flip-flop of 63 refusals does not escalate; a second trigger inside the
+   them (as built, C5a part 3), so the case of healing meeting such a row (forge R2.3 note 3, which T166 was to pin)
+   cannot arise. Tests: induce each trigger (EG-14); a flip-flop of 63 refusals does not escalate; a second trigger inside the
    cool-down does not; the loop guard drops a re-offered branch; a kill at every step of part 3 recovers to a clean SNAP.
 
 **Invariants between the disk layer, the changesets and the best pointer.**
@@ -1531,12 +1550,12 @@ has the same remaining key and value, so the same hash, in many contracts' stora
 nor multiplicity, so an importer would need a hash-to-position index over every node, or a scratch hash-keyed copy, which is
 the copy this track removes.
 
-**Format version 2, pinned 2026-11-18 (B-066).** (`CheckpointArchive.Version`, `CheckpointArchive.scala:43`; the reader
-rejects an unknown version at `:174`.) A one-way door: **forge and beacon sign it at C5c's PR1** (the slicing is below), and
+**Format version 2, pinned 2026-11-18 (B-066).** (`CheckpointArchive.Version`, `CheckpointArchive.scala:58`; the reader
+rejects an unknown version at `:337`, in `Reader.readHeader`.) A one-way door: **forge and beacon sign it at C5c's PR1** (the slicing is below), and
 nothing in the table or the rules after it changes once that PR merges. Each rule names its source. "User, 2026-11-18" is a
 user decision; "review, 2026-11-18" is a forge and beacon correction written in that day; "S0 item 8" is the earlier
-sign-off, which stands wherever this section does not replace it. This text replaces the six numbered items of the
-2026-11-06 draft.
+sign-off, which stands wherever this section does not replace it. This section is the whole format: the six numbered
+items of the 2026-11-06 draft no longer apply.
 
 **Encoding rules** (review, 2026-11-18):
 - Every integer is **fixed-width, big-endian and unsigned**. There are no varints.
@@ -1547,7 +1566,7 @@ sign-off, which stands wherever this section does not replace it. This text repl
 - Total difficulty is an unsigned big-endian integer with **no leading zero byte**, so it is at most 32 bytes. Length 0
   means TD 0. A leading zero byte is `BadFormat`.
 - Every hash is **exactly 32 bytes** and has no length prefix (v1 wrote a one-byte hash length).
-- The checksum is **CRC32C** (v1 used CRC32, `CheckpointArchive.scala:8`). It covers the **uncompressed** bytes from the
+- The checksum is **CRC32C** (v1 used CRC32). It covers the **uncompressed** bytes from the
   first magic byte through the `0x00` end tag, and is written as a big-endian u32. This matches `BlockDiffCodec`
   (`BlockDiffCodec.scala:23,76-79`). Gzip stays the operator's wrapper outside the codec, as in v1.
 
@@ -1592,8 +1611,8 @@ or a wrong count is `BadFormat` (S0 item 8a). The headers let BLOCKHASH answer i
 `AncestorBlockHashes.scala:29-34,56-62` otherwise falls back to an index an import never writes. ETH needs them as much as
 ETC.
 
-**Window bodies, ETC only** (review, 2026-11-18). This **corrects** item 5 of the earlier draft and T224, which said "the 6
-bodies below C". Since B-302 the set is the bodies of **`C` down to `C-4`, `C`'s own body included, and only those whose
+**Window bodies, ETC only** (review, 2026-11-18). Since B-302 (and not "the 6 bodies below C" of the first draft's item 5
+and T224's wording) the set is the bodies of **`C` down to `C-4`, `C`'s own body included, and only those whose
 header's `ommersHash` is not the empty ommers hash**. That is `AncestorWindow.check` with `proofOfWork = true`: the block and
 the four below it (`OmmerBodies = OmmerGenerations - 1`), filtered by `bodyRead` (`AncestorWindow.scala`; core-geth's
 `VerifyUncles`; `StdOmmersValidator`).
@@ -1620,19 +1639,19 @@ of order, and is `BadFormat`. This makes an archive **byte-reproducible**: two e
 code whose `keccak` is not the hash it was read under** (PR1 sign-off, 2026-11-18), as a node refuses such a code when it
 serves or executes it; an entry carries no hash, so a corrupt code would otherwise be exported under a hash it does not
 have.
-Today's exporter collects code hashes in a `java.util.HashSet` (`CheckpointExporter.scala:170`), which gives no fixed order.
+The v1 exporter collected code hashes in a `java.util.HashSet`, which gives no fixed order.
 
 **Trust: total difficulty and the expected block hash** (S0 item 8; user, 2026-11-18, decisions 2 and 3; review, 2026-11-18).
-Total difficulty is **trusted from the archive, not re-derived**. `CheckpointImporter.scala:162-170` stores `chainWeight` as
+Total difficulty is **trusted from the archive, not re-derived**. `CheckpointImporter.scala:400` stores `chainWeight` as
 given, and PoW fork choice compares it.
 - **An expected block hash is required.** The operator supplies it, or the chain config pins one per public chain. The
   importer refuses an archive whose `C` hashes to anything else. **ETH and ETC share a genesis hash**, so field 4 does not
   tell them apart. Only the chain id and the expected block hash do. That is why every public chain (ETC, Mordor, ETH
   mainnet, Sepolia, Hoodi) has its expected hash pinned in its chain config (review, 2026-11-18).
-- **The TD-exact flag** (amended at the PR1 sign-off, forge and beacon, 2026-11-18). The exporter writes `0x01` when the TD
+- **The TD-exact flag** (PR1 sign-off, forge and beacon, 2026-11-18). The exporter writes `0x01` when the TD
   was **summed exactly from the genesis** (every header from 0 to `C` read and its difficulty added) **or** its node holds
   the chain-weight invariant (`AppStateStorage.hasChainWeightInvariant`), and `0x00` otherwise. Either source makes the TD
-  exact; the earlier text named the invariant only, which marked an exact sum as an estimate. The importer **accepts an estimated TD with a WARN** that
+  exact; naming the invariant alone would mark an exact sum as an estimate. The importer **accepts an estimated TD with a WARN** that
   names the block and the TD. It does not refuse (user, 2026-11-18, decision 2). In both cases `beginCheckpointImport`
   withdraws the invariant as it does today (#1654), and `ChainWeightReconcile` checks the weight once the headers below
   are in.
@@ -1647,8 +1666,7 @@ given, and PoW fork choice compares it.
   - Operators take the expected block hash from a finalized beacon block's `execution_payload.block_hash`. With no block
     given, the export CLI defaults to the **finalized** block on a PoS chain, not the best block. A block counts as
     finalized only when both its number and the canonical hash at that number match the stored finalized hash.
-- **A pre-merge checkpoint on a PoS chain** (settled at the PR1 sign-off, forge and beacon, 2026-11-18; this was the open
-  item of the first draft):
+- **A pre-merge checkpoint on a PoS chain** (settled at the PR1 sign-off, forge and beacon, 2026-11-18):
   - **"Merged at genesis" means TTD <= the genesis difficulty.** By that rule Hoodi and Platåberget are merged at genesis;
     Sepolia and ETH mainnet are not.
   - **The exporter refuses a `C` with non-zero difficulty on a chain that is not merged at genesis.** Such a `C` is a PoW
@@ -1660,8 +1678,8 @@ given, and PoW fork choice compares it.
 
 **Storage owner** (review, 2026-11-18). The format has no owner field: the owner follows from the pre-order walk. It is
 **the account leaf's 64-nibble full key (`path ++ leaf key`), packed to 32 bytes, and not keccak of it**. That key already
-*is* `keccak(address)`, and hashing it again would place every storage row under the wrong owner. This replaces the earlier
-wording "owner = keccak(address)", which invited the double hash. A leaf whose full key is not 64 nibbles is `BadFormat`.
+*is* `keccak(address)`, and hashing it again would place every storage row under the wrong owner (the wording "owner =
+keccak(address)" invites that double hash). A leaf whose full key is not 64 nibbles is `BadFormat`.
 Two accounts with identical storage roots, and a slot-0 leaf shared across tries, each get **one row per (owner, path)** by
 construction. **No "already written" cache keyed by hash is allowed**, on either side: it would recreate v1's dedup.
 
@@ -1694,26 +1712,26 @@ either side. **Five assertions**, each failing `BadFormat`, make the machine sou
 already refuses missing code, so any gap means a bad archive. A non-zero threshold logs the gaps for the on-demand fetch
 rather than finding them as `MissingCodeException` at execution.
 
-**Atomicity and failure order** (review, 2026-11-18). This **supersedes** the earlier "clear `t`/`u`, then delete the anchor"
-order with vault's mark-first order. A kill between the two steps of the old order would leave a genesis anchor over rows
-that are gone. The import is a state move (7.0).
+**Atomicity and failure order** (review, 2026-11-18). The order is vault's mark-first order, not "clear `t`/`u`, then
+delete the anchor": a kill between those two steps would leave a genesis anchor over rows that are gone. The import is a state move (7.0).
 1. **Run every header-level refusal before any write**: magic, version, chain id, genesis hash, TD-exact flag, the expected
    block hash, the PoS TD rule and the reader bounds.
 2. **If the anchor is the genesis, call `clearGenesisStateForSync`** (`PathStateStorage.scala:1276`). It clears through the
    reset mark (`state.reset-pending`). It must run before step 4, because `stateClearRemovals` deletes
    `CheckpointImportInProgress` (`AppStateStorage.scala:293-321`).
 3. **If rows exist with no anchor, call `clearForResync`** (`PathStateStorage.scala:1127`), through the same mark.
-4. **Commit `beginCheckpointImport` with `commitSync`** (`CheckpointImporter.scala:84`). Its value names the archive (below).
+4. **Commit `beginCheckpointImport` with `commitSync`** (`CheckpointImporter.scala:335`). Its value names the archive (below).
 5. **Write the rows** in batches of at most 10,000, with the WAL on, through `PathNodeStorage.accountNodeUpsert` and
    `storageNodeUpsert` (`PathNodeStorage.scala:62,98`). The CRC is checked at the end tag, before step 6.
 6. **Write one synced final batch through `PathStateStorage.commitHandoff`** (`:782`). It already checks for no anchor, no
    done flag and no reset mark, checks the layout stamp and the root row, and writes `state.origin`, the done flag and the
    anchor under the state lock. That closes the checkpoint half of B-243. The `extra` passed to it carries the header of
-   `C`, the window headers and bodies, the trusted weight, the best pointer and `endCheckpointImport`. It needs a
-   **checkpoint variant of `SyncHandoff.commit`** (`SyncHandoff.scala:76`), which today hardcodes the SNAP keys.
+   `C`, the window headers and bodies, the trusted weight, the best pointer and `endCheckpointImport`. It goes through the
+   **checkpoint variant of `SyncHandoff.commit`**, `SyncHandoff.commitCheckpoint` (`SyncHandoff.scala:133`), since
+   `commit` writes the SNAP keys.
 
 No BlockDiff is written for the checkpoint block (it has no prior), as for a SNAP pivot. `forcePersist`
-(`CheckpointImporter.scala:161`) belongs to the Hash layout only and has no place on this path.
+(`CheckpointImporter.scala:419`) belongs to the Hash layout only and has no place on this path.
 
 **A failed or killed import, and no retry** (user, 2026-11-18, decision 4; review, 2026-11-18).
 - **A failure after the first write** (a window, node or code refusal, an assertion, a CRC failure) clears the partial
@@ -1920,6 +1938,10 @@ vectors for CF `t`/`u` keys are reused unchanged.
 
 ## 13. Measurements required before the numbers above are frozen (DC-14: no claim without one)
 
+As of 2026-11-21 none is measured as specified. M3 and M7 have stand-ins (`baselines/m3-layer-heap.md`;
+`baselines/m7-c1.md`, a live Mordor check of C1 that lacks the jar comparison and JFR), and `baselines/dc14-C5b.md` holds
+partial DC-14 figures. The rest wait on the pinned jar and live hosts (B-203, B-393).
+
 | ID | Measure | On | Decides |
 | --- | --- | --- | --- |
 | M1 | changed positions, diff bytes (prior plus next) and vanished positions per block; p50, p99, max | Sepolia, Mordor, Platåberget | overlay budget, `max-layer-bytes`, section 12 |
@@ -1935,7 +1957,7 @@ vectors for CF `t`/`u` keys are reused unchanged.
 | M11 | *(withdrawn: the `inmemory` mode is retired, 4.6)* | | |
 | M12 | cost of the ancestor window (256 headers, up to 5 bodies after B-302) at hand-off, with and without the chain downloader's coverage | Mordor, Sepolia, ETC mainnet | the hold time of `AncestorWindow.ensure` (G) |
 | M13 | PoW branch lengths adopted by `reorganise` (blocks per `settleHead`) and their layer bytes; the longest BlockQueue branch seen | Mordor with a local miner, ETC mainnet follow | `pinned-max-bytes` and whether the reverse-then-commit fallback is needed (6.4) |
-| M14 | cost of importing ETC blocks 0 to 1M, 1M to 2M, from genesis, on the unified layout, and the size of a `chain.rlp` export | the dev host | whether the EG-1 ETC import is feasible, and its source (plan open item) |
+| M14 | cost of importing ETC blocks 0 to 1M, 1M to 2M, from genesis, on the unified layout, and the size of a `chain.rlp` export | the dev host | whether the EG-1 ETC import is feasible (its source was named on 2026-11-07, plan open item 1) |
 | M15 | rows per deleted storage owner (p50, p99, max) and tombstones written, on the ETC 0 to 5.1M import and the Mordor imports; and the largest diff over every chain (forge S0 item 5, beacon S0 item 5) | ETC import, Mordor, Sepolia, Platåberget | `max-entries-per-owner-delete` (must sit well above the observed maximum) and `max-record-bytes`; the zero-tombstone gate of EG-4 and EG-15 |
 
 ---
@@ -1945,23 +1967,25 @@ vectors for CF `t`/`u` keys are reused unchanged.
 **Decided by the user, 2026-11-06 (treated as fixed):** Option Y, write-through, the changeset record, spec 017 parked with the
 decorator rule, checkpoint import funded, T064's intent run on a fresh datadir, two pruning modes (`basic`, `archive`) on both chains with `inmemory` retired, the
 overlay budget left to M1 and M2, the first successful ETC mainnet sync as a gate (EG-12), and the standing rule (one track for
-both chains, no legacy-datadir machinery, no release-level transition). Two earlier answers are **superseded by the standing
-rule**: adopt-in-place for mid-copy datadirs (reversed: a datadir without the marker is refused, whatever its state) and "ETC
-untouched until 10b" (ETC moves in this track).
+both chains, no legacy-datadir machinery, no release-level transition). Under the standing rule a datadir without the
+marker is refused whatever its state (mid-copy datadirs included), and ETC moves in this track (there is no 10b).
+The decisions made since, slice by slice, are in plan.md's "Decision log".
 
 **Risks that remain, none a blocker:**
 1. **ETC mainnet has never been synced by fukuii, so there is no pre-state and no oracle for it.** Every Hash-scheme attempt
    failed, none reached hand-off, and the ETC-only post-hand-off hazards (the ancestor window, ommers) were never met (G). EG-12
    is the first ETC mainnet sync, on the unified layout; ETC's state is about 90M nodes (not hundreds of millions). Until it
    passes, ETC mainnet consensus rests on ethereum/tests, Mordor and an offline import from genesis (plan EG-1), and nothing
-   re-executes ETC mainnet from 5.1M to the head. **The source of the ETC blocks 0 to 5.1M for that import is an open item
-   (plan, open item 1), decided later**; until it is named, the ETC half of EG-1 cannot run (M14 measures what it would cost).
+   re-executes ETC mainnet from 5.1M to the head. The source of the ETC blocks 0 to 5.1M for that import was decided on
+   2026-11-07 (plan, open item 1; T010): this project's own ETC mainnet sync, exported the same day with
+   `fukuii etc export` (`baselines/README.md`). M14 measures what the import costs.
 2. **No in-tree oracle after the last slice.** The Hash scheme is deleted in the same track, so the differential oracle is a
    pinned pre-track jar kept outside the tree, with its recorded roots and the ETH hive and EEST baselines (pass lists per
    suite), until EG-12 passes and the first ETC v2 archive has been re-imported on a second datadir, and at least one release
    past C8b.
 3. **Breadth.** One track carries both chains, the readers, the overlay, the hand-off, the checkpoint format and the deletion of
-   the Hash scheme: about 21,200 lines added (about 11,050 main, 10,140 tests) and about 6,800 removed. PRs stay one slice each, with the in-development guard
+   the Hash scheme: estimated at about 21,200 lines added (about 11,050 main, 10,140 tests) and about 6,800 removed (an
+   estimate from the S0 reviews, not re-measured against what merged; T016). PRs stay one slice each, with the in-development guard
    keeping staging green, but `forge` and `beacon` carry a larger review load than a staged plan would give them.
 4. **The shared trie change is on the path of both chains' consensus** with no Hash-scheme fallback to compare against in tree
    (risk 2). M7 and EG-1 are the control.
