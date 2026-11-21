@@ -3691,3 +3691,13 @@ items:
     links:
       spec: none
     notes: "B-413 follow-up: EthashDagFile.generate is single-threaded; items are independent, so split the index range across cores writing disjoint file regions (FileChannel positional writes). Measured 313-325 s for the 1 GiB epoch-1 DAG."
+  - id: B-415
+    title: "Log volume: INFO peer chatter (RLPx closes, FORKID_VALIDATION) wrote 12.5 GB in ~10 h on a Mordor miner node"
+    priority: P3
+    status: open
+    area: p2p
+    size: S
+    opened: 2026-11-21
+    refs: []
+    links: {}
+    notes: dev-node EG-6 run (2026-11-21). Move per-peer connect/close and fork-id rejection lines to DEBUG, or rate-limit/aggregate them (e.g. a periodic summary), so INFO stays readable and disk-bounded. herald to decide which lines operators need at INFO.
