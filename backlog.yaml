@@ -3175,8 +3175,10 @@ items:
       by: cloud-dc960fdc
       agent: vault-b375
       since: 2026-11-22T20:49:19Z
-      heartbeat: 2026-11-22T21:04:31Z
-    notes: RecoveryScansVerdictSpec pins verdicts against today's hash-layout scan, not the jar (not runnable in cloud). Run the jar's scans on the same seeded store with injected gaps and diff.
+      heartbeat: 2026-11-22T21:04:41Z
+    notes: |-
+      RecoveryScansVerdictSpec pins verdicts against today's hash-layout scan, not the jar (not runnable in cloud). Run the jar's scans on the same seeded store with injected gaps and diff.
+      2026-11-22 in-progress: harness built (scripts/oracle/b375/run.sh); v0.12.1 (built from tag, 21cfa13) vs staging: 66/66 scan verdicts identical on 11 seeded cases; mutation check surfaces a planted gap; see baselines/b375-recovery-scan-oracle.md. Branch test/b375-recovery-scan-oracle
   - id: B-376
     title: "B-065 follow-up: recovery download phases (storage/bytecode coordinators) still write by hash on the unified layout"
     priority: P2
