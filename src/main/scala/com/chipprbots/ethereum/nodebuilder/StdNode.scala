@@ -336,6 +336,10 @@ abstract class BaseNode extends Node:
           // (spec 002 US2 / FR-005). No-op unless the DataSource is a RocksDbDataSource; the gauges
           // read 0.0 until db.rocksdb.enable-statistics = true.
           RocksDbCacheMetrics.register(storagesInstance.dataSource)
+
+          // The state layout's meters (B-425): made when the storages were built, before this registry was installed;
+          // they are on it from here, so db.state.* is exported from the start.
+          com.chipprbots.ethereum.db.storage.pathstate.StateMetrics.register()
       case Failure(exception) => throw exception
 
   /** The metrics endpoint over TLS (spec 030 FR-016): bound through the node's TLS stack and awaited; a bind that fails
