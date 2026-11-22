@@ -1124,10 +1124,10 @@ class ChainDownloader private (
     if n - 1 > current then appStateStorage.putBackfillBestBody(n - 1).commit()
 
   /** Store received bodies whose transactions/ommers hash to their header (and pass validateHeaderAndBody's other
-    * consensus checks — RLP size, withdrawals presence/root, blob gas), then advance the body cursor over the
-    * contiguous run now on disk (#18, #33). Reuses the SAME check block import makes
-    * (StdBlockValidator.validateHeaderAndBody) rather than re-implementing it — the same call regular sync's
-    * BlockFetcherState.validateBodies makes via blockValidator.validateHeaderAndBody (BlockFetcherState.scala:226).
+    * consensus checks — withdrawals presence/root, blob gas), then advance the body cursor over the contiguous run now
+    * on disk (#18, #33). Reuses the SAME check block import makes (StdBlockValidator.validateHeaderAndBody) rather than
+    * re-implementing it — the same call regular sync's BlockFetcherState.validateBodies makes via
+    * blockValidator.validateHeaderAndBody (BlockFetcherState.scala:226).
     *
     * Matches `bodies` against `requestedHashes` as an ordered subsequence (matchOrderedSubsequence) rather than a
     * strict positional zip, so a peer that honestly skips a block it doesn't have shifts nothing — every match is

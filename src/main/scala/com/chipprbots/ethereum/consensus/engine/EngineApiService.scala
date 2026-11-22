@@ -957,30 +957,29 @@ class EngineApiService(
 
   /** EIP-7934 (Osaka): a block whose RLP encoding exceeds MAX_RLP_BLOCK_SIZE is invalid.
     *
-    * `newPayload` executes with `alreadyValidated = true`, so `StdBlockValidator.validateHeaderAndBody` — the one place
-    * the cap was checked — never runs on this path, and an oversized payload was executed and answered VALID (EEST
+    * `newPayload` executes with `alreadyValidated = true`, so `validateBlockBeforeExecution` — where block import
+    * checks the cap — never runs on this path, and an oversized payload was once executed and answered VALID (EEST
     * `test_block_at_rlp_size_limit_boundary[max_rlp_size_plus_1_byte]`). This adds that one rule, not the rest of the
     * body validation, which a payload already satisfies: `payloadToBlock` derives the transactions, ommers and
-    * withdrawals roots from the body itself, so the block-hash check covers them, and blob gas is checked above.
+    * withdrawals roots from the body itself, so the block-hash check covers them, and blob gas is checked above. The
+    * rule itself, fork gate included, is [[StdBlockValidator.validateBlockRLPSize]], the same one import applies.
     *
     * Placed where go-ethereum checks it. `BlockValidator.ValidateBody` opens with `IsOsaka(number, time) &&
     * block.Size() > params.MaxBlockSize` (8,388,608) → `ErrBlockOversized`, and `newPayload` reaches it only through
     * `InsertBlockWithoutSetHead`, i.e. for a block whose parent it has with state; the failure is answered INVALID with
     * the parent as latest valid hash (`api.invalid(err, parent.Header())`). `block.Size()` is the RLP of [header,
     * transactions, uncles, withdrawals], exactly [[Block.size]] (execution-specs osaka `state_transition`:
-    * `len(rlp.encode(block)) > MAX_RLP_BLOCK_SIZE`). The cap is the same constant as the import path's
-    * [[StdBlockValidator.BlockRLPSizeCap]].
+    * `len(rlp.encode(block)) > MAX_RLP_BLOCK_SIZE`).
     *
     * Gated on the block's own timestamp: before Osaka go-ethereum and execution-specs apply no such cap, and neither
     * does this path. Only ETH chains reach the Engine API.
     */
   private def blockRlpSizeError(block: Block): Option[String] =
-    if !blockchainConfig.isOsakaTimestamp(block.header.unixTimestamp) then None
-    else
-      val size = Block.size(block)
-      Option.when(size > StdBlockValidator.BlockRLPSizeCap)(
-        s"RLP_BLOCK_LIMIT_EXCEEDED: block RLP size $size exceeds MAX_RLP_BLOCK_SIZE ${StdBlockValidator.BlockRLPSizeCap}"
-      )
+    StdBlockValidator.validateBlockRLPSize(block)(using blockchainConfig).left.toOption.map {
+      case StdBlockValidator.BlockRLPSizeError(size, cap) =>
+        s"RLP_BLOCK_LIMIT_EXCEEDED: block RLP size $size exceeds MAX_RLP_BLOCK_SIZE $cap"
+      case other => other.toString
+    }
 
   /** engine_forkchoiceUpdatedV1..V4 — Update fork choice state, optionally start payload building. Returns
     * Left(errorMessage) for JSON-RPC error responses (e.g. invalid forkchoice state), Right(response) for normal
