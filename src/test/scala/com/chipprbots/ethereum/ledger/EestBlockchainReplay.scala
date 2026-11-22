@@ -14,6 +14,7 @@ import com.chipprbots.ethereum.blockchain.sync.EphemBlockchainTestSetup
 import com.chipprbots.ethereum.consensus.mining.Protocol
 import com.chipprbots.ethereum.consensus.pow.validators.ValidatorsExecutor
 import com.chipprbots.ethereum.consensus.validators.Validators
+import com.chipprbots.ethereum.db.storage.EvmCodeStorage
 import com.chipprbots.ethereum.db.storage.MptStorage
 import com.chipprbots.ethereum.db.storage.NodeStorage.NodeEncoded
 import com.chipprbots.ethereum.db.storage.NodeStorage.NodeHash
@@ -513,6 +514,39 @@ object EestBlockchainReplay:
             tombstones
           )
 
+  /** A [[BlockExecution]] whose every world is built over the storage the production method picks, decoded-node cache
+    * included, with `observer`'s in front of it. The world itself is built by the production method. Shared by every
+    * harness that runs a mirror: this replay and `it/ethtest/EthereumTestHelper`.
+    */
+  def observedBlockExecution(
+      observer: StorageObserver,
+      blockchain: BlockchainImpl,
+      blockchainReader: BlockchainReader,
+      blockchainWriter: BlockchainWriter,
+      evmCodeStorage: EvmCodeStorage,
+      blockPreparator: BlockPreparator,
+      blockValidation: BlockValidation
+  ): BlockExecution =
+    new BlockExecution(
+      blockchain,
+      blockchainReader,
+      blockchainWriter,
+      evmCodeStorage,
+      blockPreparator,
+      blockValidation
+    ):
+      override protected def buildInitialWorld(
+          block: Block,
+          parentHeader: BlockHeader,
+          isProposer: Boolean,
+          staged: Option[StagedBlockState]
+      )(implicit blockchainConfig: BlockchainConfig): InMemoryWorldStateProxy =
+        val storage =
+          staged.fold(blockchain.getBackingMptStorage(block.header.number.value))(_.storage) match
+            case serializing: SerializingMptStorage => serializing.cachedForExecution
+            case other                              => other
+        super.buildInitialWorld(block, parentHeader, isProposer, Some(StagedBlockState.direct(observer.wrap(storage))))
+
   /** [[replay]] with `observer` on the storage of the genesis load and of every block's execution. Each world is still
     * built by the production code, over the storage it would have used with the observer's in front.
     */
@@ -557,32 +591,15 @@ object EestBlockchainReplay:
                 blockValidation
               )
             else
-              new BlockExecution(
+              observedBlockExecution(
+                observer,
                 blockchain,
                 blockchainReader,
                 blockchainWriter,
                 storagesInstance.storages.evmCodeStorage,
                 mining.blockPreparator,
                 blockValidation
-              ):
-                // The storage is the one the production method picks, decoded-node cache included, with the
-                // observer's in front of it. The world itself is built by the production method.
-                override protected def buildInitialWorld(
-                    block: Block,
-                    parentHeader: BlockHeader,
-                    isProposer: Boolean,
-                    staged: Option[StagedBlockState]
-                )(implicit blockchainConfig: BlockchainConfig): InMemoryWorldStateProxy =
-                  val storage =
-                    staged.fold(blockchain.getBackingMptStorage(block.header.number.value))(_.storage) match
-                      case serializing: SerializingMptStorage => serializing.cachedForExecution
-                      case other                              => other
-                  super.buildInitialWorld(
-                    block,
-                    parentHeader,
-                    isProposer,
-                    Some(StagedBlockState.direct(observer.wrap(storage)))
-                  )
+              )
           val JArray(blocks) = t \ "blocks": @unchecked
           val blockDivergences = blocks.zipWithIndex.flatMap { case (b, i) =>
             val expectException = (b \ "expectException").toOption.map(str)

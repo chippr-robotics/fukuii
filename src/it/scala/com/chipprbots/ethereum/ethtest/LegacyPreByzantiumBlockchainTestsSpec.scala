@@ -126,6 +126,8 @@ class LegacyPreByzantiumBlockchainTestsSpec extends EthereumTestsSpec:
     val counts = scala.collection.mutable.Map.empty[String, (Int, Int)].withDefaultValue((0, 0))
     val failures = scala.collection.mutable.ArrayBuffer.empty[String]
     val ran = scala.collection.mutable.Set.empty[String]
+    var mirroredFixtures, mirroredUnits = 0
+    var mirroredReads = 0L
 
     for
       root <- roots
@@ -148,10 +150,15 @@ class LegacyPreByzantiumBlockchainTestsSpec extends EthereumTestsSpec:
               val expectedHead = raw.hcursor.downField("lastblockhash").as[String].toOption.map(_.stripPrefix("0x"))
               // A Throwable escaping execution (e.g. OutOfMemoryError on a memory-expansion fixture) is recorded as
               // this test's failure — it still fails the ratchet — instead of aborting the remaining fixtures.
-              onLargeStack(
-                new ReceiptValidatingHelper(using configFor(network, fixtureChainId(raw)))
-                  .setupAndExecuteTest(test.pre, test.blocks, test.genesisBlockHeader)
-              ).left.map(t => s"uncaught ${t.getClass.getName}: ${t.getMessage}").flatten.flatMap { _ =>
+              val helper = new ReceiptValidatingHelper(using configFor(network, fixtureChainId(raw)))
+              val executed = onLargeStack(helper.setupAndExecuteTest(test.pre, test.blocks, test.genesisBlockHeader))
+              // Spec 018 T026: the fixtures the position mirror ran on, and what it saw.
+              helper.mirrorFigures.foreach { (units, reads) =>
+                mirroredFixtures += 1
+                mirroredUnits += units
+                mirroredReads += reads
+              }
+              executed.left.map(t => s"uncaught ${t.getClass.getName}: ${t.getMessage}").flatten.flatMap { _ =>
                 val headers = (test.genesisBlockHeader.toSeq ++ test.blocks.map(_.blockHeader))
                   .map(TestConverter.toBlockHeader)
                 // Fork-choice fixtures (side chains, reorgs) import non-canonical blocks too; their head is decided
@@ -179,6 +186,10 @@ class LegacyPreByzantiumBlockchainTestsSpec extends EthereumTestsSpec:
     }
     val (tp, tf) = counts.values.foldLeft((0, 0)) { case ((a, b), (p, f)) => (a + p, b + f) }
     info(s"TOTAL: ${tp + tf} run, $tp passed, $tf failed")
+    info(
+      s"POSITION MIRROR: $mirroredFixtures fixtures mirrored (the rest are not one chain), $mirroredUnits units kept, " +
+        s"$mirroredReads reads checked"
+    )
     report.foreach { out =>
       try
         sliceNetworks.toSeq.sorted.foreach { n =>

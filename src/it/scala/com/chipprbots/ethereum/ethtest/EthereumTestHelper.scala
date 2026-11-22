@@ -13,6 +13,8 @@ import com.chipprbots.ethereum.domain.*
 import com.chipprbots.ethereum.ledger.BlockExecution
 import com.chipprbots.ethereum.ledger.BlockQueue
 import com.chipprbots.ethereum.ledger.BlockValidation
+import com.chipprbots.ethereum.ledger.EestBlockchainReplay
+import com.chipprbots.ethereum.ledger.EestPositionMirror
 import com.chipprbots.ethereum.ledger.InMemoryWorldStateProxy
 import com.chipprbots.ethereum.txExecTest.ScenarioSetup
 import com.chipprbots.ethereum.utils.BlockchainConfig
@@ -22,6 +24,30 @@ import com.chipprbots.ethereum.utils.Config
 class EthereumTestHelper(using bc: BlockchainConfig) extends ScenarioSetup:
 
   implicit override lazy val blockchainConfig: BlockchainConfig = bc
+
+  /** The position mirror of spec 018 T026, the same one `EestBlockchainReplay` runs: in front of the storage of the
+    * pre-state build and of every block's execution, and it must find the rows of a position store equal to the state.
+    * On by default; `FUKUII_ETHTEST_POSITIONS=0` turns it off. A finding fails the test, after it has run.
+    */
+  protected def positionMirror: Option[EestPositionMirror] = mirror
+  private var mirror: Option[EestPositionMirror] =
+    Option.when(!sys.env.get("FUKUII_ETHTEST_POSITIONS").contains("0"))(
+      new EestPositionMirror(accessListBuilder = bc.forkTimestamps.amsterdamTimestamp.isDefined)
+    )
+
+  /** The mirror takes each block to build on the last accepted one (a replay of one chain), so a fixture with blocks on
+    * a side branch is not mirrored: it would be reported as a finding it is not. True when every block's parent is the
+    * block before it, the first's being the fixture's genesis.
+    */
+  private def linear(blocks: Seq[TestBlock], genesis: Option[TestBlockHeader]): Boolean =
+    val headers = (genesis.toSeq ++ blocks.map(_.blockHeader)).map(TestConverter.toBlockHeader)
+    headers.zip(headers.drop(1)).forall((parent, child) => parent.isParentOf(child))
+
+  /** Whether the last run was mirrored: false for a fixture whose blocks are not one chain. */
+  def mirrored: Boolean = positionMirror.isDefined
+
+  /** Reads of the mirror, for a harness that reports them: units it kept and reads it checked. */
+  def mirrorFigures: Option[(Int, Long)] = positionMirror.map(m => (m.unitsKept, m.readsChecked))
 
   // Create storages with initial state
   override protected val testBlockchainStorages: BlockchainStorages =
@@ -75,11 +101,14 @@ class EthereumTestHelper(using bc: BlockchainConfig) extends ScenarioSetup:
           )
         )
       else
+        if !linear(blocks, genesisBlockHeader) then mirror = None
         // Get the first block's number to determine which storage to use
         val _ = parseBigInt(blocks.head.blockHeader.number)
 
-        // Step 1: Setup initial state using the backing storage for block 0
-        val mptStorage = blockchain.getBackingMptStorage(0)
+        // Step 1: Setup initial state using the backing storage for block 0, the mirror's in front of it
+        positionMirror.foreach(_.genesisStarting())
+        val mptStorage =
+          positionMirror.fold(blockchain.getBackingMptStorage(0))(m => m.wrap(blockchain.getBackingMptStorage(0)))
         var world = InMemoryWorldStateProxy(
           evmCodeStorage = testBlockchainStorages.evmCodeStorage,
           mptStorage = mptStorage,
@@ -123,6 +152,7 @@ class EthereumTestHelper(using bc: BlockchainConfig) extends ScenarioSetup:
 
         // Persist the initial state into the blockchain's storage
         val persistedWorld = InMemoryWorldStateProxy.persistState(world)
+        positionMirror.foreach(_.ended(Some(persistedWorld.stateRootHash), loadNode))
 
         // Step 2: Execute blocks using the same storage
         executeBlocksWithInitialState(blocks, persistedWorld, genesisBlockHeader)
@@ -170,13 +200,25 @@ class EthereumTestHelper(using bc: BlockchainConfig) extends ScenarioSetup:
         val syncConfig = Config.SyncConfig(Config.config)
         val blockQueue = BlockQueue(blockchainReader, syncConfig)
         val blockValidation = new BlockValidation(mining, blockchainReader, blockQueue)
-        val blockExecution = new BlockExecution(
-          blockchain,
-          blockchainReader,
-          blockchainWriter,
-          testBlockchainStorages.evmCodeStorage,
-          mining.blockPreparator,
-          blockValidation
+        val blockExecution = positionMirror.fold(
+          new BlockExecution(
+            blockchain,
+            blockchainReader,
+            blockchainWriter,
+            testBlockchainStorages.evmCodeStorage,
+            mining.blockPreparator,
+            blockValidation
+          )
+        )(m =>
+          EestBlockchainReplay.observedBlockExecution(
+            m,
+            blockchain,
+            blockchainReader,
+            blockchainWriter,
+            testBlockchainStorages.evmCodeStorage,
+            mining.blockPreparator,
+            blockValidation
+          )
         )
 
         // Execute each test block sequentially
@@ -184,7 +226,9 @@ class EthereumTestHelper(using bc: BlockchainConfig) extends ScenarioSetup:
           val block = convertTestBlockToBlock(testBlock)
 
           // Execute the block (use given instance explicitly)
+          positionMirror.foreach(_.blockStarting())
           val result = blockExecution.executeAndValidateBlock(block)(using bc)
+          positionMirror.foreach(_.ended(result.toOption.map(_ => block.header.stateRoot.value), loadNode))
 
           result match
             case Right(receiptList) =>
@@ -225,10 +269,17 @@ class EthereumTestHelper(using bc: BlockchainConfig) extends ScenarioSetup:
           ethCompatibleStorage = blockchainConfig.ethCompatibleStorage
         )
 
-        Right(finalWorld)
+        val findings = positionMirror.toSeq.flatMap(_.findings)
+        if findings.nonEmpty then
+          Left(s"position mirror: ${findings.size} finding(s): ${findings.take(5).mkString(" | ")}")
+        else Right(finalWorld)
     catch
       case e: Exception =>
         Left(s"Failed to execute blocks: ${e.getMessage}\n${e.getStackTrace.take(10).mkString("\n")}")
+
+  /** A trie node of the test's store by hash, for the mirror's walk of the state. */
+  private def loadNode(hash: Array[Byte]): Array[Byte] =
+    testBlockchainStorages.stateStorage.getReadOnlyStorage.get(hash).encode
 
   private def createParentBlockHeader(
       blockNumber: BigInt,
