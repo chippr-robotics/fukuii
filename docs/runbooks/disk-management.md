@@ -307,7 +307,7 @@ Create/edit `.jvmopts` in your installation directory:
 # For actual RocksDB tuning options, consult:
 # - Configuration files: ~/.fukuii/etc/*.conf or src/main/resources/conf/base.conf
 # - Fukuii source: src/main/scala/com/chipprbots/ethereum/db/dataSource/RocksDbDataSource.scala
-# - RocksDB documentation: https://github.com/facebook/rocksdb/wiki/RocksDB-Tuning-Guide
+# - RocksDB documentation: https://github.com/meta/rocksdb/wiki/RocksDB-Tuning-Guide
 
 # Example (may not be supported):
 # -Drocksdb.write_buffer_size=67108864  # 64 MB
@@ -556,8 +556,8 @@ See [known-issues.md](known-issues.md) for RocksDB-specific issues.
 
 ## Further Reading
 
-- [RocksDB Tuning Guide](https://github.com/facebook/rocksdb/wiki/RocksDB-Tuning-Guide)
-- [RocksDB FAQ](https://github.com/facebook/rocksdb/wiki/RocksDB-FAQ)
+- [RocksDB Tuning Guide](https://github.com/meta/rocksdb/wiki/RocksDB-Tuning-Guide)
+- [RocksDB FAQ](https://github.com/meta/rocksdb/wiki/RocksDB-FAQ)
 - [Linux I/O Monitoring](https://www.brendangregg.com/linuxperf.html)
 
 ---

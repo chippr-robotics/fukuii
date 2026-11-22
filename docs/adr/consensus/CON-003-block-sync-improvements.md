@@ -421,7 +421,7 @@ grep "Peer .* score" logs/fukuii.log | awk '{print $NF}' | sort -n | uniq -c
 
 ### External References
 - [Core-Geth Implementation](https://github.com/etclabscore/core-geth)
-- [Hyperledger Besu Documentation](https://besu.hyperledger.org/)
+- [Hyperledger Besu Documentation](https://docs.besu-eth.org/)
 - [EIP-2124: Fork identifier for chain compatibility checks](https://eips.ethereum.org/EIPS/eip-2124)
 
 ### Repository Documentation

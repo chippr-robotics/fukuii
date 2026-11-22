@@ -1002,7 +1002,7 @@ After completing compatibility testing:
 - Verification Complete Report - see `ops/gorgoroth/VERIFICATION_COMPLETE.md` (internal)
 - [Fukuii Documentation](../index.md)
 - [Core-Geth Documentation](https://etclabscore.github.io/core-geth/)
-- [Hyperledger Besu Documentation](https://besu.hyperledger.org/)
+- [Hyperledger Besu Documentation](https://docs.besu-eth.org/)
 
 ## Support
 

@@ -289,7 +289,7 @@ docker run chipprbots/fukuii-mordor:latest -Dfukuii.mining.mining-enabled=true -
 ## References
 
 - [Docker BuildKit Documentation](https://docs.docker.com/build/buildkit/)
-- [Compose Specification](https://docs.docker.com/compose/compose-file/)
+- [Compose Specification](https://docs.docker.com/reference/compose-file/)
 - [OCI Image Spec](https://github.com/opencontainers/image-spec)
 - [Debian GPG Key Best Practices](https://wiki.debian.org/DebianRepository/UseThirdParty)
 - ADR-011: RLPx Protocol Deviations and Peer Bootstrap Challenge

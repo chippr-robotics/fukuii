@@ -1081,7 +1081,7 @@ case class SNAPSyncConfig(
 - **SNAP Protocol Spec:** https://github.com/ethereum/devp2p/blob/master/caps/snap.md
 - **Core-geth Syncer:** https://github.com/etclabscore/core-geth/blob/master/eth/sync.go
 - **Geth SNAP Sync:** https://github.com/ethereum/go-ethereum/tree/master/eth/protocols/snap
-- **MPT Specification:** https://ethereum.org/en/developers/docs/data-structures-and-encoding/patricia-merkle-trie/
+- **MPT Specification:** https://ethereum.org/developers/docs/data-structures-and-encoding/patricia-merkle-trie/
 
 ## Changelog
 

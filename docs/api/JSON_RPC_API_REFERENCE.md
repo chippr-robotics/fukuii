@@ -2416,7 +2416,7 @@ curl -X POST http://localhost:8546 \
 
 ## Additional Resources
 
-- [Ethereum JSON-RPC Specification](https://ethereum.org/en/developers/docs/apis/json-rpc/)
+- [Ethereum JSON-RPC Specification](https://ethereum.org/developers/docs/apis/json-rpc/)
 - [Model Context Protocol Specification](https://modelcontextprotocol.io/specification/2025-03-26)
 - [Fukuii GitHub Repository](https://github.com/chippr-robotics/fukuii)
 - [Insomnia Workspace Guide](INSOMNIA_WORKSPACE_GUIDE.md) - How to use the API collection

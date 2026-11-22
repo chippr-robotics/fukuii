@@ -390,9 +390,9 @@ mkdocs serve
 ## 📚 Additional Resources
 
 ### Official Documentation
-- [Ethereum JSON-RPC Specification](https://ethereum.org/en/developers/docs/apis/json-rpc/)
-- [Ethereum Classic Documentation](https://ethereumclassic.org/development)
-- [Model Context Protocol](https://modelcontextprotocol.io/)
+- [Ethereum JSON-RPC Specification](https://ethereum.org/developers/docs/apis/json-rpc/)
+- [Ethereum Classic Documentation](https://ethereumclassic.org/development/)
+- [Model Context Protocol](https://modelcontextprotocol.io/docs/2026-07-28/getting-started/intro)
 
 ### Tools & Libraries
 - **JavaScript/TypeScript**: ethers.js, web3.js
