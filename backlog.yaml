@@ -3912,10 +3912,11 @@ items:
       by: cloud-dc960fdc
       agent: beacon-b431
       since: 2026-11-22T21:10:51Z
-      heartbeat: 2026-11-22T21:25:21Z
+      heartbeat: 2026-11-22T21:31:28Z
     notes: |-
       EEST tests@v21.0.0 fork_transition_block_rlp_limit, both at_fork cases: block 0 (ts 14999, 8388609 bytes, no expectException) rejected with BlockRLPSizeError on v0.12.1. StdBlockValidator.scala:117/157 is the same on staging 8d2dcea7b (read, not run); :35 says the ungated cap is deliberate. Shared ETC/ETH path: beacon and forge decide before any change.
       2026-11-22 review: ETH: Osaka-gated; ETC: no cap (forge). Merge waits on user OK for the ETC rule removal.
+      2026-11-22 review: User 2026-11-22: OK to remove the cap on ETC-style networks (low gas limits make it moot).
   - id: B-432
     title: "Spec 018 C0 test gaps: ForkChoice spec runs archive not basic, EEST replayers lack BPO3/BPO4 transitions, 85 stale legacy known failures"
     priority: P3
