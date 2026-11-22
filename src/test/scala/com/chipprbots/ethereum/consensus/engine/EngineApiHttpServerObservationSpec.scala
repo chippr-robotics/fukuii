@@ -254,8 +254,10 @@ class EngineApiHttpServerObservationSpec
       // The consensus client's identity and capability count come from its own calls.
       told(by("getClientVersionV1"))
       told(by("exchangeCapabilities"))
-      log.snapshot.identity shouldBe Some(ClIdentity("LH", "Lighthouse", "v7.1.0", "cfb1f733"))
-      log.snapshot.capabilities shouldBe Some(2)
+      // EngineCallLog.observe counts the call before it records the identity and the capability count, so a reader can
+      // see the new total a moment before them: wait for the values themselves, not only for the total (B-423).
+      eventually(log.snapshot.identity shouldBe Some(ClIdentity("LH", "Lighthouse", "v7.1.0", "cfb1f733")))
+      eventually(log.snapshot.capabilities shouldBe Some(2))
       // A pass-through call is not an Engine call.
       val before = log.snapshot.total
       reply(observed, by("a pass-through method"))
@@ -301,8 +303,9 @@ class EngineApiHttpServerObservationSpec
       // The node's own answer names itself; the log holds who asked.
       (parse(reply(observed, version)._3) \ "result")(0) \ "code" shouldBe JString("FK")
       eventually(log.snapshot.total shouldBe 3) // the two compared above, and the one just read
-      log.snapshot.identity shouldBe Some(ClIdentity("LH", "Lighthouse", "v7.1.0", "cfb1f733"))
-      log.snapshot.capabilities shouldBe Some(3)
+      // Recorded after the call is counted (see the call-log test above): wait for the values themselves.
+      eventually(log.snapshot.identity shouldBe Some(ClIdentity("LH", "Lighthouse", "v7.1.0", "cfb1f733")))
+      eventually(log.snapshot.capabilities shouldBe Some(3))
       all(log.snapshot.calls.map(_.status)) shouldBe None // both were answered, and neither answer is a status
     finally
       observed.stopSync()
