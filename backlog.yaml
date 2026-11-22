@@ -472,7 +472,7 @@ items:
   - id: B-053
     title: "Spec 018 Track C C0: S0 close-out, oracle pinning and measurements (docs and measurements only)"
     priority: P1
-    status: claimed
+    status: in-progress
     area: storage
     size: M
     opened: 2026-11-07
@@ -484,11 +484,11 @@ items:
       by: cloud-dc960fdc
       agent: dev-node
       since: 2026-11-22T19:33:05Z
-      heartbeat: 2026-11-22T19:33:05Z
+      heartbeat: 2026-11-22T19:33:09Z
     notes: |-
-      T002 pinned 2026-11-17 (user): v0.12.1 jar, SHA-256 2100c4ce…, baselines/pinned-jar.md; fallback 0.11.0. Open: keeper + NFS path.
       Then T003 ranges (user, beacon, forge), T004-T007 runs on the jar (live host), T011, T017 (user).
       Gates B-203, B-207, B-212 and C7's exit (Track C).
+      2026-11-22 in-progress: dev-node running T007 (ethtests) + T006 (EEST v21.0.0) on a v0.12.1 clone (21cfa13); T004/T005/T003 wait for the NVMe.
   - id: B-054
     title: "Spec 018 Track C C1: the trie reports positions (item 8a)"
     priority: P2
