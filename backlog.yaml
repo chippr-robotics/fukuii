@@ -1845,22 +1845,24 @@ items:
   - id: B-212
     title: "Spec 018 T052, the half that waits: SNAP responses served from the position store against the pinned jar's bytes for the same root"
     priority: P2
-    status: in-progress
+    status: review
     area: storage
     size: S
     opened: 2026-11-11
     refs: []
     links:
+      prs: [1990]
       spec: specs/018-storage-engine-consolidation
     depends_on: [B-053]
     claim:
       by: cloud-dc960fdc
       agent: vault-b212
       since: 2026-11-22T21:05:48Z
-      heartbeat: 2026-11-22T21:19:48Z
+      heartbeat: 2026-11-22T21:22:43Z
     notes: |-
       C2b's serving PR compares the position store with the hash store through the same server (SnapServePositionStoreSpec). Against the pre-track jar it would also show a change of the server itself. Needs C0's pinned jar (T002).
       2026-11-22 in-progress: Oracle run: 342 SNAP requests, v0.12.1 hash store vs staging position store (and hash control): byte-identical. scripts/oracle/b212/run.sh; baselines/b212-snap-serve-oracle.md. T052 closed.
+      2026-11-22 review: Offline oracle: 342/342 responses byte-identical (v0.12.1 hash store vs staging position store). No live nodes needed.
   - id: B-213
     title: "SNAP serving: a trie node that cannot be read (missing, or corrupt) is served as a hole in the range; go-ethereum answers the whole request with nothing"
     priority: P3
