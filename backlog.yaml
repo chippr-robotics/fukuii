@@ -3784,3 +3784,14 @@ items:
     refs: []
     links: {}
     notes: "Made EngineApiHttpServerObservationSpec flaky (PR #1982 CI, line 258); the spec now waits for the values. Reordering is under consensus/engine: route via beacon."
+  - id: B-424
+    title: "PoWMiningCoordinator hot-loops when getBestBlock is None (SNAP/checkpoint import): ~19k ERROR lines/s, 90.7M lines (11.8 GB) in an 80-min Mordor SNAP"
+    priority: P2
+    status: open
+    area: sync
+    size: S
+    opened: 2026-11-22
+    refs: []
+    links:
+      spec: specs/018-storage-engine-consolidation
+    notes: "PoWMiningCoordinator.scala:117-120 logs at ERROR and sends itself MineNext with no delay. EG-6 run 2026-11-21: 90,681,933 lines 03:55-05:15Z; sync CPU 9145 s vs 4828 s unmined. Node B (checkpoint import) logged 280k in 5 s, then mined block #1 on genesis (orphan 0xb810d49c). Fix: back off or wait for sync done; log once."
