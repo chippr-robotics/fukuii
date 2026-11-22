@@ -1,0 +1,7 @@
+jar: /home/dontpanic/work/s018-gates/target/scala-3.9.0/fukuii-assembly-0.12.73.jar
+jar sha256: 2c86abc29975196ce52f6a816a7962725fab3b6720300673f039180b4c161cbd
+java: openjdk version "25.0.5.1" 2026-11-17
+jvm: java -Xmx8g -XX:+IgnoreUnrecognizedVMOptions -XX:+UnlockDiagnosticVMOptions -XX:-ReduceAllocationMerges -XX:+ExitOnOutOfMemoryError -Dfukuii.mining.mining-enabled=true -Dfukuii.mining.coinbase=7be516f414bc7f8570e08eb2dfa750d98576e683 -Dfukuii.mining.gas-limit-target=8000000 -Dfukuii.pow.ethash-dir=/home/dontpanic/work/s018-eg6-mordor/ethash
+host: Linux 7.0.0-42-generic x86_64; cpus 4; memory 16293676 kB
+datadir filesystem: /dev/mapper/ubuntu--vg-ubuntu--lv  913G  755G  112G  88% /
+reference: http://127.0.0.1:8599 (CoreGeth/v1.12.23-stable-96b2afc2/linux-amd64/go1.21.13)
