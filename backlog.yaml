@@ -472,7 +472,7 @@ items:
   - id: B-053
     title: "Spec 018 Track C C0: S0 close-out, oracle pinning and measurements (docs and measurements only)"
     priority: P1
-    status: open
+    status: claimed
     area: storage
     size: M
     opened: 2026-11-07
@@ -480,6 +480,11 @@ items:
     links:
       prs: [1888]
       spec: specs/018-storage-engine-consolidation
+    claim:
+      by: cloud-dc960fdc
+      agent: dev-node
+      since: 2026-11-22T19:33:05Z
+      heartbeat: 2026-11-22T19:33:05Z
     notes: |-
       T002 pinned 2026-11-17 (user): v0.12.1 jar, SHA-256 2100c4ce…, baselines/pinned-jar.md; fallback 0.11.0. Open: keeper + NFS path.
       Then T003 ranges (user, beacon, forge), T004-T007 runs on the jar (live host), T011, T017 (user).
