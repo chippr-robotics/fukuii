@@ -3403,7 +3403,7 @@ items:
       by: dev-node
       agent: claude-opus
       since: 2026-11-20T16:47:54Z
-      heartbeat: 2026-11-21T00:22:41Z
+      heartbeat: 2026-11-22T19:08:54Z
     notes: "Tasks T247, T248, T258, T264. Code and harnesses are merged (#1936, #1937, #1940, #1942). They need live hosts and the user's T011 host decisions. Harnesses: scripts/etc-private-net, scripts/etc-mainnet-sync/run-eg12.sh, scripts/etc-differential/compare-balances.sh. Open choices: --few-snap-peers, --export-allow-estimated-td. B-388 (treasury address) must be settled before any Olympia block is set."
   - id: B-394
     title: "T212 IT, ETH leg: OnDemandFetchByPositionSpec on a PoS chain config (designated head, post-merge blocks)"
