@@ -3900,19 +3900,22 @@ items:
   - id: B-431
     title: "EIP-7934 8 MiB block cap has no Osaka gate: rejects valid pre-Osaka blocks in EEST PragueToOsakaAtTime15k (go-ethereum gates it)"
     priority: P2
-    status: in-progress
+    status: review
     area: consensus
     size: S
     opened: 2026-11-22
     refs: []
     links:
+      prs: [1991]
       spec: specs/018-storage-engine-consolidation
     claim:
       by: cloud-dc960fdc
       agent: beacon-b431
       since: 2026-11-22T21:10:51Z
-      heartbeat: 2026-11-22T21:11:11Z
-    notes: "EEST tests@v21.0.0 fork_transition_block_rlp_limit, both at_fork cases: block 0 (ts 14999, 8388609 bytes, no expectException) rejected with BlockRLPSizeError on v0.12.1. StdBlockValidator.scala:117/157 is the same on staging 8d2dcea7b (read, not run); :35 says the ungated cap is deliberate. Shared ETC/ETH path: beacon and forge decide before any change."
+      heartbeat: 2026-11-22T21:25:21Z
+    notes: |-
+      EEST tests@v21.0.0 fork_transition_block_rlp_limit, both at_fork cases: block 0 (ts 14999, 8388609 bytes, no expectException) rejected with BlockRLPSizeError on v0.12.1. StdBlockValidator.scala:117/157 is the same on staging 8d2dcea7b (read, not run); :35 says the ungated cap is deliberate. Shared ETC/ETH path: beacon and forge decide before any change.
+      2026-11-22 review: ETH: Osaka-gated; ETC: no cap (forge). Merge waits on user OK for the ETC rule removal.
   - id: B-432
     title: "Spec 018 C0 test gaps: ForkChoice spec runs archive not basic, EEST replayers lack BPO3/BPO4 transitions, 85 stale legacy known failures"
     priority: P3
