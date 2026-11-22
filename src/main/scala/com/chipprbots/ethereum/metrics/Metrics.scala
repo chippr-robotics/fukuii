@@ -99,6 +99,14 @@ object Metrics:
   /** Get the default metrics instance (backward compatible with single-instance mode). */
   def get(): Metrics = defaultRef.get()
 
+  /** Runs `body` with `metrics` as the default, then puts the previous default back. For tests of a holder that must
+    * follow `configure`, which would otherwise leave its registry installed for the rest of the JVM.
+    */
+  private[ethereum] def usingDefault[T](metrics: Metrics)(body: => T): T =
+    val previous = defaultRef.getAndSet(metrics)
+    try body
+    finally defaultRef.set(previous)
+
   /** Get metrics for a specific instance. Falls back to default if not registered. */
   def forInstance(instanceId: String): Metrics =
     Option(instances.get(instanceId)).getOrElse(get())
