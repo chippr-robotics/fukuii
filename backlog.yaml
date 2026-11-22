@@ -3797,9 +3797,9 @@ items:
       spec: specs/018-storage-engine-consolidation
     claim:
       by: cloud-dc960fdc
-      agent: main
+      agent: forge-b424
       since: 2026-11-22T19:11:36Z
-      heartbeat: 2026-11-22T19:11:36Z
+      heartbeat: 2026-11-22T19:12:34Z
     notes: "PoWMiningCoordinator.scala:117-120 logs at ERROR and sends itself MineNext with no delay. EG-6 run 2026-11-21: 90,681,933 lines 03:55-05:15Z; sync CPU 9145 s vs 4828 s unmined. Node B (checkpoint import) logged 280k in 5 s, then mined block #1 on genesis (orphan 0xb810d49c). Fix: back off or wait for sync done; log once."
   - id: B-425
     title: "StateMetrics (db.state.*) never exported on path-live nodes: meters bind to the throwaway registry before Metrics.configure (same pattern as #1959)"
