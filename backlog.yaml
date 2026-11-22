@@ -1784,7 +1784,7 @@ items:
   - id: B-207
     title: "Spec 018 T026, the half that waits: the position mirror on the ethereum/tests pre-Atlantis networks, and the comparison with C0's ethtests baseline"
     priority: P2
-    status: open
+    status: claimed
     area: storage
     size: S
     opened: 2026-11-11
@@ -1792,6 +1792,11 @@ items:
     links:
       spec: specs/018-storage-engine-consolidation
     depends_on: [B-053]
+    claim:
+      by: cloud-dc960fdc
+      agent: vault-b207
+      since: 2026-11-22T20:35:18Z
+      heartbeat: 2026-11-22T20:35:18Z
     notes: |-
       Give it/ethtest/EthereumTestHelper.scala the StorageObserver of EestBlockchainReplay (pre-state world :82-125, BlockExecution :173,187) and run LegacyPreByzantiumBlockchainTestsSpec where ets/tests is checked out.
       The EEST half ran in C2a part 1: 26,503 Amsterdam and 8,835 Paris/Shanghai fixtures, no finding (baselines/t026-position-mirror.md).
