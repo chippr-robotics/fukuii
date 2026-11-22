@@ -271,7 +271,7 @@ For MCP integration, we need:
 
 ## References
 
-- [Ethereum JSON-RPC Specification](https://ethereum.org/en/developers/docs/apis/json-rpc/)
+- [Ethereum JSON-RPC Specification](https://ethereum.org/developers/docs/apis/json-rpc/)
 - [EIP-1186: eth_getProof](https://eips.ethereum.org/EIPS/eip-1186)
 - [EIP-1559: Fee Market](https://eips.ethereum.org/EIPS/eip-1559)
 - [EIP-2930: Access Lists](https://eips.ethereum.org/EIPS/eip-2930)

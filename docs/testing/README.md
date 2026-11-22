@@ -309,7 +309,7 @@ See [KPI_MONITORING_GUIDE.md](KPI_MONITORING_GUIDE.md) for detailed troubleshoot
 ### Ethereum Test Specifications
 - [ethereum/tests Repository](https://github.com/ethereum/tests)
 - [Ethereum Execution Specs](https://github.com/ethereum/execution-specs)
-- [Test Format Documentation](https://ethereum-tests.readthedocs.io/)
+- [Test Format Documentation](https://ethereum-tests.readthedocs.io/en/latest/)
 
 ### Testing Tools
 - [ScalaTest Documentation](https://www.scalatest.org/)

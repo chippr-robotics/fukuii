@@ -237,7 +237,7 @@ See "Why Not Alternative Solutions?" section above.
 - [Issue #308: URLSTREAMHANDLERFACTORY failure](https://github.com/chippr-robotics/fukuii/issues/308)
 - [PR #309: Fix JupnP URLStreamHandlerFactory conflict](https://github.com/chippr-robotics/fukuii/pull/309)
 - [JupnP Documentation](https://github.com/jupnp/jupnp)
-- [Apache HttpComponents Client](https://hc.apache.org/httpcomponents-client-5.3.x/)
+- [Apache HttpComponents Client](https://hc.apache.org/httpcomponents-client-5.6.x/)
 - [UPnP Device Architecture](https://openconnectivity.org/developer/specifications/upnp-resources/upnp/)
 
 ## Related ADRs

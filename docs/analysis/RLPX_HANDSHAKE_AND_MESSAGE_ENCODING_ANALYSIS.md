@@ -678,7 +678,7 @@ Based on this analysis, peer connection issues are **NOT** caused by fundamental
 - **Snappy Compression**: https://google.github.io/snappy/
 - **Fukuii Implementation**: `src/main/scala/com/chipprbots/ethereum/network/rlpx/`
 - **Core-Geth Implementation**: https://github.com/etclabscore/core-geth/tree/master/p2p/rlpx
-- **Besu Implementation**: https://github.com/hyperledger/besu/tree/main/ethereum/p2p
+- **Besu Implementation**: https://github.com/besu-eth/besu/tree/main/ethereum/p2p
 
 ## Appendix: Message Flow Diagram
 

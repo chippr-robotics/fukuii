@@ -195,7 +195,7 @@ val decoderWithSnap =
 - **devp2p RLPx Spec**: https://github.com/ethereum/devp2p/blob/master/rlpx.md#capability-messaging
 - **SNAP Protocol Spec**: https://github.com/ethereum/devp2p/blob/master/caps/snap.md
 - **Core-Geth SNAP Handler**: https://github.com/etclabscore/core-geth/blob/master/eth/protocols/snap/handler.go
-- **Besu SNAP Protocol**: https://github.com/hyperledger/besu/tree/main/ethereum/eth/src/main/java/org/hyperledger/besu/ethereum/eth/sync/snapsync
+- **Besu SNAP Protocol**: https://github.com/besu-eth/besu/tree/main/ethereum/eth/src/main/java/org/hyperledger/besu/ethereum/eth/sync/snapsync
 
 ## Conclusion
 
