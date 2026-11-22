@@ -3828,3 +3828,13 @@ items:
     links:
       spec: 018
     notes: Seen by dev-node in EG-6 (2026-11-22). Find which shutdown step exceeds 15 s; exit 143 is not a clean stop.
+  - id: B-427
+    title: Audit MetricsContainer holders touched before Metrics.configure (same lazy-val-binds-default-registry bug as B-400/B-425)
+    priority: P2
+    status: open
+    area: observability
+    opened: 2026-11-22
+    refs: []
+    links:
+      spec: 018
+    notes: "StateMetrics (B-425) and NodeAllowlistMetrics (B-400) fixed. Others extend MetricsContainer whose lazy val metrics = Metrics.get() binds on first touch: check EngineApiMetrics, BlockMetrics, RegularSyncMetrics, RecoveryMetrics, ChainWeightReconcile, PeerTelemetry, NetworkMetrics, TLS holders for first touch before StdNode.startMetricsClient; or fix MetricsContainer generically. PruningMetrics and RocksDbCacheMetrics (db/) are first touched after configure."
