@@ -1,0 +1,125 @@
+# Spec 018 C0, T007: the pinned jar's ethereum/tests results (2026-11-22)
+# These specs are test code: they were run by sbt on the jar's source tag, not against the jar file.
+# NOT RECORDED, so T007 is only partly met:
+#   - ForkChoiceBlockchainTestsSpec under `basic` pruning: the spec is fixed to archive at this tag (B-432).
+#   - The legacy slices under FUKUII_LEGACY_TESTS_NETWORK_TYPE=ETC (report-only): they ran with the ETH type only.
+
+Source: tag v0.12.1 (21cfa13, = pinned-jar.md "Built from"), submodule ets/tests 5490db3, run on dev-node
+(OpenJDK 25.0.5.1, Linux 7.0.0-42, 4 CPUs) from a PLAIN CLONE of the tag.
+NOTE for re-runs: a `git worktree` of the tag cannot load the build. sbt-git's JGit fails with "Bare Repository
+has neither a working tree, nor an index" (GitPlugin.scala:135), so use a plain clone.
+
+## 1. IntegrationTest / testOnly com.chipprbots.ethereum.ethtest.*   (the ethereum-tests-nightly job)
+VERIFY: ran `sbt "IntegrationTest / testOnly com.chipprbots.ethereum.ethtest.*"` — result: PASS (74 succeeded, 0 failed, 2 canceled), 19:31-19:41Z
+Suites (11): VMTestsSpec BlockchainTestsSpec ForkChoiceBlockchainTestsSpec SimpleEthereumTest
+  ComprehensiveBlockchainTestsSpec GeneralStateTestsSpec GasCalculationIssuesSpec TransactionTestsSpec
+  LegacyPreByzantiumBlockchainTestsSpec ExecutionSpecsStateTestsSpec EthSmokeSpec
+The 2 canceled are LegacyPreByzantiumBlockchainTestsSpec's two slices: FUKUII_LEGACY_TESTS_DIRS was not set there.
+They are run in section 2. ForkChoiceBlockchainTestsSpec ran under ARCHIVE pruning (LocalPruningConfigBuilder sets
+ArchivePruning), not the `basic` that T007 asks for.
+
+## 2. LegacyPreByzantiumBlockchainTestsSpec with the legacy fixtures   (B-207's baseline)
+Fixtures: ethereum/legacytests @ 1f581b8, Constantinople/BlockchainTests + Cancun/BlockchainTests (14,193 files).
+FUKUII_LEGACY_TESTS_DIRS=<legacytests>/Constantinople/BlockchainTests:<legacytests>/Cancun/BlockchainTests
+VERIFY: ran `sbt "IntegrationTest / testOnly *LegacyPreByzantiumBlockchainTestsSpec"` — result: every vector PASS,
+  both test cases FAIL on the known-failure ratchet only, 19:54-20:21Z
+Frontier/Homestead/EIP150/EIP158 slice: 6,817 run, 6,817 passed, 0 failed
+  EIP150: 1475 run, 1475 passed, 0 failed 
+  EIP158: 1476 run, 1476 passed, 0 failed 
+  Frontier: 1449 run, 1449 passed, 0 failed 
+  Homestead: 2417 run, 2417 passed, 0 failed 
+Byzantium..Berlin slice: 54,497 run, 54,497 passed, 0 failed
+  Berlin: 14026 run, 14026 passed, 0 failed 
+  Byzantium: 5286 run, 5286 passed, 0 failed 
+  Constantinople: 11111 run, 11111 passed, 0 failed 
+  ConstantinopleFix: 11106 run, 11106 passed, 0 failed 
+  Istanbul: 12968 run, 12968 passed, 0 failed 
+Both test cases fail with "known failures that now pass (remove them from the known list)". The spec's knownFailures
+list holds 85 vectors that pass on the tag with this legacytests checkout: 72 CREATE2_HighNonceDelegatecall_*,
+4 CREATE2_HighNonce_*, 9 CREATE_HighNonce_*. The list is stale, or was made against another legacytests revision (not
+determined). See B-432. The 85 names:
+  CREATE2_HighNonce_d0g0v0_Berlin
+  CREATE2_HighNonce_d0g0v0_Constantinople
+  CREATE2_HighNonce_d0g0v0_ConstantinopleFix
+  CREATE2_HighNonce_d0g0v0_Istanbul
+  CREATE2_HighNonceDelegatecall_d11g0v0_Berlin
+  CREATE2_HighNonceDelegatecall_d11g0v0_Byzantium
+  CREATE2_HighNonceDelegatecall_d11g0v0_Constantinople
+  CREATE2_HighNonceDelegatecall_d11g0v0_ConstantinopleFix
+  CREATE2_HighNonceDelegatecall_d11g0v0_EIP150
+  CREATE2_HighNonceDelegatecall_d11g0v0_EIP158
+  CREATE2_HighNonceDelegatecall_d11g0v0_Homestead
+  CREATE2_HighNonceDelegatecall_d11g0v0_Istanbul
+  CREATE2_HighNonceDelegatecall_d17g0v0_Berlin
+  CREATE2_HighNonceDelegatecall_d17g0v0_Constantinople
+  CREATE2_HighNonceDelegatecall_d17g0v0_ConstantinopleFix
+  CREATE2_HighNonceDelegatecall_d17g0v0_Istanbul
+  CREATE2_HighNonceDelegatecall_d18g0v0_Berlin
+  CREATE2_HighNonceDelegatecall_d18g0v0_Constantinople
+  CREATE2_HighNonceDelegatecall_d18g0v0_ConstantinopleFix
+  CREATE2_HighNonceDelegatecall_d18g0v0_Istanbul
+  CREATE2_HighNonceDelegatecall_d19g0v0_Berlin
+  CREATE2_HighNonceDelegatecall_d19g0v0_Constantinople
+  CREATE2_HighNonceDelegatecall_d19g0v0_ConstantinopleFix
+  CREATE2_HighNonceDelegatecall_d19g0v0_Istanbul
+  CREATE2_HighNonceDelegatecall_d20g0v0_Berlin
+  CREATE2_HighNonceDelegatecall_d20g0v0_Constantinople
+  CREATE2_HighNonceDelegatecall_d20g0v0_ConstantinopleFix
+  CREATE2_HighNonceDelegatecall_d20g0v0_Istanbul
+  CREATE2_HighNonceDelegatecall_d21g0v0_Berlin
+  CREATE2_HighNonceDelegatecall_d21g0v0_Constantinople
+  CREATE2_HighNonceDelegatecall_d21g0v0_ConstantinopleFix
+  CREATE2_HighNonceDelegatecall_d21g0v0_Istanbul
+  CREATE2_HighNonceDelegatecall_d23g0v0_Berlin
+  CREATE2_HighNonceDelegatecall_d23g0v0_Constantinople
+  CREATE2_HighNonceDelegatecall_d23g0v0_ConstantinopleFix
+  CREATE2_HighNonceDelegatecall_d23g0v0_Istanbul
+  CREATE2_HighNonceDelegatecall_d5g0v0_Berlin
+  CREATE2_HighNonceDelegatecall_d5g0v0_Byzantium
+  CREATE2_HighNonceDelegatecall_d5g0v0_Constantinople
+  CREATE2_HighNonceDelegatecall_d5g0v0_ConstantinopleFix
+  CREATE2_HighNonceDelegatecall_d5g0v0_EIP150
+  CREATE2_HighNonceDelegatecall_d5g0v0_EIP158
+  CREATE2_HighNonceDelegatecall_d5g0v0_Homestead
+  CREATE2_HighNonceDelegatecall_d5g0v0_Istanbul
+  CREATE2_HighNonceDelegatecall_d6g0v0_Berlin
+  CREATE2_HighNonceDelegatecall_d6g0v0_Byzantium
+  CREATE2_HighNonceDelegatecall_d6g0v0_Constantinople
+  CREATE2_HighNonceDelegatecall_d6g0v0_ConstantinopleFix
+  CREATE2_HighNonceDelegatecall_d6g0v0_EIP150
+  CREATE2_HighNonceDelegatecall_d6g0v0_EIP158
+  CREATE2_HighNonceDelegatecall_d6g0v0_Homestead
+  CREATE2_HighNonceDelegatecall_d6g0v0_Istanbul
+  CREATE2_HighNonceDelegatecall_d7g0v0_Berlin
+  CREATE2_HighNonceDelegatecall_d7g0v0_Byzantium
+  CREATE2_HighNonceDelegatecall_d7g0v0_Constantinople
+  CREATE2_HighNonceDelegatecall_d7g0v0_ConstantinopleFix
+  CREATE2_HighNonceDelegatecall_d7g0v0_EIP150
+  CREATE2_HighNonceDelegatecall_d7g0v0_EIP158
+  CREATE2_HighNonceDelegatecall_d7g0v0_Homestead
+  CREATE2_HighNonceDelegatecall_d7g0v0_Istanbul
+  CREATE2_HighNonceDelegatecall_d8g0v0_Berlin
+  CREATE2_HighNonceDelegatecall_d8g0v0_Byzantium
+  CREATE2_HighNonceDelegatecall_d8g0v0_Constantinople
+  CREATE2_HighNonceDelegatecall_d8g0v0_ConstantinopleFix
+  CREATE2_HighNonceDelegatecall_d8g0v0_EIP150
+  CREATE2_HighNonceDelegatecall_d8g0v0_EIP158
+  CREATE2_HighNonceDelegatecall_d8g0v0_Homestead
+  CREATE2_HighNonceDelegatecall_d8g0v0_Istanbul
+  CREATE2_HighNonceDelegatecall_d9g0v0_Berlin
+  CREATE2_HighNonceDelegatecall_d9g0v0_Byzantium
+  CREATE2_HighNonceDelegatecall_d9g0v0_Constantinople
+  CREATE2_HighNonceDelegatecall_d9g0v0_ConstantinopleFix
+  CREATE2_HighNonceDelegatecall_d9g0v0_EIP150
+  CREATE2_HighNonceDelegatecall_d9g0v0_EIP158
+  CREATE2_HighNonceDelegatecall_d9g0v0_Homestead
+  CREATE2_HighNonceDelegatecall_d9g0v0_Istanbul
+  CREATE_HighNonce_d0g0v0_Berlin
+  CREATE_HighNonce_d0g0v0_Byzantium
+  CREATE_HighNonce_d0g0v0_Constantinople
+  CREATE_HighNonce_d0g0v0_ConstantinopleFix
+  CREATE_HighNonce_d0g0v0_EIP150
+  CREATE_HighNonce_d0g0v0_EIP158
+  CREATE_HighNonce_d0g0v0_Frontier
+  CREATE_HighNonce_d0g0v0_Homestead)wasnotempty(LegacyPreByzantiumBlockchainTestsSpec.scala:200
+  CREATE_HighNonce_d0g0v0_Istanbul)wasnotempty(LegacyPreByzantiumBlockchainTestsSpec.scala:200
