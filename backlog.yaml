@@ -3768,3 +3768,13 @@ items:
       since: 2026-11-21T23:50:29Z
       heartbeat: 2026-11-21T23:50:32Z
       branch: ccr-fd82ceaa-vet0je
+  - id: B-422
+    title: "Docs link check: rewrite redirected links, stop JBS 403 / timeout failures"
+    priority: P3
+    status: open
+    area: docs
+    size: S
+    opened: 2026-11-22
+    refs: []
+    links:
+      branch: ccr-9cfab95d-0xzt9x
