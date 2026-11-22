@@ -3877,3 +3877,14 @@ items:
     links:
       spec: 018
     notes: Found in B-207 (#1987). Add a sparse legacytests checkout to the nightly ethtest job, or document the gap.
+  - id: B-430
+    title: Recovery scans don't detect a lost node below a storage-trie root (only the root's presence is checked); same in v0.12.1
+    priority: P3
+    status: open
+    area: storage
+    size: M
+    opened: 2026-11-22
+    refs: []
+    links:
+      spec: 018
+    notes: "Seen by the B-375 oracle (#1988). Decide: walk storage tries in the full scan, or leave to the background audit (spec 022 slice 5)."
