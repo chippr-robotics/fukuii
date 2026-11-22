@@ -8,7 +8,9 @@ EG-1 to EG-16. Until then, a gate with no row here has not been reported. Rows a
 | Gate | Task | Host, date | Build | Result |
 | --- | --- | --- | --- | --- |
 | T248, the Mordor rehearsal of the EG-12 harness | T248 | dev-node, 2026-11-20 | staging `44413fd95` (0.12.65), jar SHA-256 `63ed3d6a…f5873bb87` | **Every node-side criterion passed.** Two rows read FAIL. Both were harness checks, now fixed, and the node was right in both. See [T248](#t248-the-mordor-rehearsal) |
-| EG-6, the Mordor half: a fresh SNAP sync, then 24 h with a local miner | T258 | dev-node, from 2026-11-21 | staging `abb4bce57` (0.12.73), jar SHA-256 `2c86abc2…4c161cbd` | **running** |
+| EG-6, the Mordor half: a fresh SNAP sync, then 24 h with a local miner | T258 | dev-node, 2026-11-21 to 22 | staging `abb4bce57` (0.12.73), jar SHA-256 `2c86abc2…4c161cbd` | **PASS.** Every node-side criterion passed. 1,200 mined blocks: 1,072 (89 %) are canonical or ommers on core-geth, 128 orphans, and none invalid. One row reads FAIL: the old re-import check. The header-level check passes (#1974; gap B-411). See [EG-6](#eg-6-the-mordor-half) |
+| Kill -9 recovery: SIGKILL after the hand-off | spec 018 kill-safety | dev-node, 2026-11-22 | the same build | **PASS.** Reopened cleanly at the head held at the kill, audit resumed with no faults, followed to the live head with the root equal to core-geth's. See [Unclean-stop reopens](#unclean-stop-reopens) |
+| Unclean stop: OOM exit during the follow | spec 018 kill-safety | dev-node, 2026-11-22 | the same build | **PASS.** As above |
 | EG-6, the private ETC-config PoW net with Olympia | T258 | — | — | **NOT-RUN.** dev-node has no core-geth with Olympia (white-b0x/core-geth `main`), no Olympia genesis JSON and no Go toolchain to build one. The user skipped this step on 2026-11-20 |
 | EG-12, the first ETC mainnet sync | T264 | — | — | **NOT-RUN.** User decision, 2026-11-20 (decision 1, the machines): deferred until the NVMe the user is procuring arrives. dev-node's root SSD has 162 GB free, and its raidz1 HDD is too slow for a sync plus a reference core-geth. C8a still waits for this gate |
 
@@ -107,3 +109,125 @@ bodies`). The archive's own block is therefore not served over RPC:
 The import was right. Node B's block 17,436,222 is `0x5f310fb136e3101bf6b5c8dba96410ebfa5cf865a1ccf4a0182f40678cb457f1`, with
 parentHash `0x68f084f6…7921`, the exported block. It is equal to core-geth's 17,436,222 and was executed on the imported
 root `0xe5c6c03c…1171`. The gap (block N not served after an import) is B-411.
+
+## EG-6: the Mordor half
+
+`scripts/etc-mainnet-sync/run-eg12.sh --network mordor` from staging `abb4bce57`, which includes the fixed ancestor
+probes (#1972). The run did a fresh SNAP sync on path-live, then 24 h of head following **with a local CPU miner**, then the
+v2 export and a re-import followed for 1 h. The raw `results.tsv`, `summary.txt` and `run-info.txt`, every mined block
+(`mined-blocks.tsv`) and every fork move (`reorg-settle.tsv`) are in [`c7/eg6-mordor/`](c7/eg6-mordor/).
+
+| | |
+| --- | --- |
+| Jar | `fukuii-assembly-0.12.73.jar`, staging `abb4bce57`, SHA-256 `2c86abc29975196ce52f6a816a7962725fab3b6720300673f039180b4c161cbd` |
+| JVM | OpenJDK 25.0.5.1, `-Xmx8g`. A miner needs the Ethash DAG on the heap; see [Aborted attempts](#aborted-attempts) |
+| Mining | `mining-enabled = true`, `gas-limit-target = 8000000` (Mordor's current limit, so our blocks do not vote it toward fukuii's 60 M default), coinbase `0x7be516f414bc7f8570e08eb2dfa750d98576e683`. That is a keyed chipprbots Mordor test account, so the rewards are retrievable |
+| Reference | the local core-geth v1.12.23 (`96b2afc2`) |
+| Wall time | 26.8 h. Max RSS 13.1 GiB, max heap used 7.6 GiB, datadir 0.9 GiB. Host: 4 CPUs, 16 GB, with the 4 GB swap full for most of the follow |
+
+Results:
+
+- **Snap-capable peers.** PASS: 13. The `[SNAP-PEERS]` line: 12 snap-capable, 0 declared.
+- **Sync reaches the head.** PASS: pivot 17,437,483, 81 min after launch.
+- **No copy at the hand-off.** PASS.
+- **Root equals the head's stateRoot.** PASS, at block 17,437,929.
+- **Ancestor window: BLOCKHASH below the pivot.** PASS: 8 probes, live and at past blocks, all equal to the reference.
+- **Ancestor window: blocks pivot+1 to +256 canonical.** PASS: 256 compared.
+- **Ancestor window: an ommer whose parent is below the pivot.** NOT-EXERCISED.
+- **Follows the head for 24 h.** PASS: head 17,444,954, equal to the reference.
+- **Node A canonical chain equals the reference.** PASS: 7,459 blocks from the pivot up, every one compared.
+- **Node A REORG-EXEC-FAIL.** PASS: 0.
+- **Node A rejected canonical blocks.** PASS: 0.
+- **Node A local state faults.** RECORDED: 0.
+- **Node A fork moves.** RECORDED: 62, of which 61 at depth 1 and 1 at depth 2.
+- **v2 archive export.** PASS: block 17,445,001 in 745 s, 861,052,322 bytes, SHA-256 `f34439c0…2148da51`.
+- **Archive import: root equal.** FAIL by the old check. This run's harness predates #1974, and the archive's own block
+  is not served (B-411). It passes the header-level check: core-geth's 17,445,002 has parentHash `0x4de0d739…5748`, the
+  exported block, and node B's chain equals the reference for the 349 blocks above it. The import took 93 s.
+- **Re-imported node follows for 1 h.** PASS: head 17,445,362, equal to the reference.
+- **Node B canonical chain equals the reference.** PASS: 349 blocks.
+- **Node B REORG-EXEC-FAIL, rejected canonical blocks and local state faults.** 0, 0 and 0.
+- **Node B mining.** Node B ran with the miner on and loaded the DAG from the file (05:41:28 to about 05:43:58Z), not
+  generating it again. It mined 47 blocks in its hour.
+
+### Mined blocks valid on another client
+
+Every `Block mined [number, hash]` line of node A and node B was classified against core-geth:
+- **canonical:** the reference's block at that number has that hash;
+- **ommer:** the hash is in the `uncles` of one of the next seven reference blocks;
+- **orphan:** anything else.
+
+| Node | Canonical | Ommer | Orphan | Total |
+| --- | ---: | ---: | ---: | ---: |
+| A | 990 | 42 | 121 | 1,153 |
+| B | 38 | 2 | 7 | 47 |
+| **All** | **1,028** | **44** | **128** | **1,200** |
+
+1,072 of 1,200 (89 %) are canonical or ommers on core-geth, so core-geth accepted them as valid blocks.
+- 126 of the orphans are unknown to the reference: they lost the race before propagating.
+- 2 are known to it as side blocks.
+- One orphan is node B's block #1, mined on genesis while its checkpoint import ran (B-424).
+
+The coinbase held 884.85 Mordor ETC at the end. Mordor is in ECIP-1017 era 8, where the block reward is 5 × 0.8⁸ ≈ 0.839.
+
+### B-141, M10 and M13
+
+- **B-141.** PASS. `regularsync.orphan.blocks.total{outcome="blacklisted"}` was **0** in every one of 25,036 samples over
+  the run; the only outcome seen was `branch-fetch` (49 on node A). So no peer was blacklisted for a missing parent in 24 h.
+- **M10, forks.** 62 fork moves in 24 h, about 2.6 an hour, from `REORG-SETTLE` (`reorg-settle.tsv`).
+  - Depth (old head − fork): 61 at depth 1 and 1 at depth 2.
+  - `regularsync.reorg.total` = 61 and `regularsync.branch.resolution.rounds.total` = 10.
+  - The proposer view: `PoWBlockGenerator` built 31,818 blocks in 30.16 s, a mean of 0.95 ms per block.
+  - The **`moveHead` cost could not be read**: no `db.state.*` meter was exported (B-425). Record it again once that is
+    fixed.
+- **M13, branch lengths.** Blocks executed per `settleHead`: 1 block ×6, 2 ×50, 3 ×5, 4 ×1. The longest branch adopted
+  was 4 blocks, far below any cap.
+  - Layer bytes (`db.state.overlay.*`) are not readable, for the same reason (B-425).
+  - Whether real branches exceed the pinned cap: they do not. The longest was 4.
+
+### Aborted attempts
+
+These were stopped or failed before the counted run, and their datadirs are kept on dev-node.
+
+| Attempt | What ended it |
+| --- | --- |
+| 00:24Z, 11-21 | Restarted after 3 min to hold the gas-limit target at 8 M (storage session's request) |
+| 00:26Z | Restarted to change the coinbase from a keyless placeholder to the keyed test account (user's request) |
+| 00:31Z | SIGKILLed with the Claude CLI's terminal scope at 01:43:37Z, after the hand-off (pivot 17,436,552), mid-DAG. Its datadir is the kill -9 reopen below. The runs since then are `systemd-run --user` units |
+| 02:13Z | `OutOfMemoryError: Java heap space` at 03:50Z during the follow, at `-Xmx4g`. Mordor's epoch is 290 (ECIP-1099), so its DAG is 3.27 GiB of data, about 4.1 GiB as `Array[Array[Int]]` on the heap. At 53 % of the DAG `heap_used` was 4.23 GB. A heap-sizing fault in the run, not storage. #1977 moves the DAG off the heap |
+| 03:54Z | Stopped after 1 min to raise `-Xmx7g` to `8g` |
+
+### Findings from the run
+
+- **B-424.** The PoW mining coordinator hot-loops when there is no best block, during SNAP or a checkpoint import. In
+  `PoWMiningCoordinator.scala:117-120` it logs at ERROR and sends itself `MineNext` with no delay.
+  - Node A wrote 90,681,933 such lines, 11.8 GB of its 12.5 GB log, in the 80-min sync (03:55 to 05:15Z).
+  - Its sync took 9,145 CPU seconds, against 4,828 in the unmined T248 run.
+  - Node B wrote 280,475 lines in 5 s, then 12,207 `StateUnavailable: the state of block 0 … no state anchor` errors
+    from the block generator, and mined block #1 on genesis. That block was harmless: B's chain equals the reference.
+- **B-425.** The `db.state.*` meters are never exported on a path-live node: 189 `app_*` series and 0 `app_db_state_*`.
+  - The theory: `StateMetrics` is a `MetricsContainer` first touched as the commit observer when the storage opens. In
+    node B's log RocksDB opened at 05:41:23 and "Metrics started" came at 05:41:25. Its meters therefore bind to
+    `Metrics.get()`'s default registry, the pattern fixed for the node allowlist in #1959.
+- **Heap for a miner.** An ETC or Mordor miner needs about DAG × 1.25 + 3 GB of heap, which the operations docs do not
+  say. #1977 (the DAG in an mmap'd file) removes the need. Re-measure RSS on a run with it.
+
+## Unclean-stop reopens
+
+Both datadirs were reopened with the same jar and **mining off**, after EG-6 ended and one at a time. Each ran as a user unit
+on its own ports (RPC 8643), against the same core-geth.
+
+| | SIGKILL after the hand-off (`node-a-killed-cli`) | OOM exit during the follow (`node-a-oom-4g`) |
+| --- | --- | --- |
+| How it stopped | 2026-11-21 01:43:37Z, SIGKILL, mid-DAG, head 17,436,959 | 2026-11-21 03:50Z, `-XX:+ExitOnOutOfMemoryError`, head 17,437,513 |
+| Opens cleanly | yes: `State reconciled at start: the best block is the block whose state is held (17436959 (fdf12018d636ab24))` | yes: `State reconciled at start: … (17437522 (6de17505b6ea8836))` |
+| Anchor | the audit resumed for anchor **17,436,552** (the pivot) at 1 saved position | the audit resumed for anchor **17,437,022** (the pivot) at 2,719 saved positions |
+| Resumes following | about 11,700 blocks to the live head (17,448,699) in under 2 min | about 11,200 blocks to the live head (17,448,708) in under 90 s |
+| Root against the reference | head−5: hash `0x86b0032b…9402` and stateRoot `0x0670287a…f040` equal core-geth's | head−5: hash `0x33662fe5…6e0c` and stateRoot `0xae726958…f9d4` equal core-geth's |
+| Repair or audit errors | none. `[HEAL-AUDIT]` holes=0 repaired=0 unresolved=0 badNodes=0 | none. `[HEAL-AUDIT]` nodes=4,300,556 accounts=2,101,561 holes=0 repaired=0 badNodes=0 |
+| `[LOCAL-STATE-FAULT]`, `REORG-EXEC-FAIL`, ERROR lines | 0, 0, 0 | 0, 0, 0 |
+
+The anchor is read from the `[HEAL-AUDIT]` line, because the `db.state.anchor.number` gauge is not exported (B-425).
+Stopping the first reopen with SIGTERM logged `Error while shutting down… TimeoutException: Future timed out after
+[15000 milliseconds]` (`StdNode.scala:852`). The JVM then exited 143. A shutdown step's 15 s bound, noted for the
+storage session.
