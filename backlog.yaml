@@ -3839,3 +3839,13 @@ items:
     links:
       spec: 018
     notes: "StateMetrics (B-425) and NodeAllowlistMetrics (B-400) fixed. Others extend MetricsContainer whose lazy val metrics = Metrics.get() binds on first touch: check EngineApiMetrics, BlockMetrics, RegularSyncMetrics, RecoveryMetrics, ChainWeightReconcile, PeerTelemetry, NetworkMetrics, TLS holders for first touch before StdNode.startMetricsClient; or fix MetricsContainer generically. PruningMetrics and RocksDbCacheMetrics (db/) are first touched after configure."
+  - id: B-428
+    title: "PoW miner: a failed build (EthashMiner handleError -> MiningUnsuccessful) is retried at once; back off on errors as B-424 does for not-ready"
+    priority: P3
+    status: open
+    area: mining
+    opened: 2026-11-22
+    refs: []
+    links:
+      spec: none
+    notes: PoWMiningCoordinator.mine sends MineNext as soon as processMining completes, whatever the result. A build that fails each time (e.g. a StateFault not from a head move) spins and logs ERROR per turn. Needs a result the coordinator can tell apart from a normal unsuccessful nonce search. Found in B-424.
