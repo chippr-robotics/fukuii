@@ -3804,11 +3804,16 @@ items:
   - id: B-425
     title: "StateMetrics (db.state.*) never exported on path-live nodes: meters bind to the throwaway registry before Metrics.configure (same pattern as #1959)"
     priority: P2
-    status: open
+    status: claimed
     area: storage
     size: S
     opened: 2026-11-22
     refs: []
     links:
       spec: specs/018-storage-engine-consolidation
+    claim:
+      by: cloud-dc960fdc
+      agent: main
+      since: 2026-11-22T19:11:53Z
+      heartbeat: 2026-11-22T19:11:53Z
     notes: "EG-6 dev-node 2026-11-22: a path-live Mordor node on 0.12.73 exported 189 app_* series and 0 app_db_state_* (anchor, overlay, move/commit timers, recovery). RocksDB opens 05:41:23 before 'Metrics started' 05:41:25. Theory: StateMetrics (a MetricsContainer) is first touched as the commit observer at storage open, so it gets Metrics.get()'s default SimpleMeterRegistry. Blinds M10 moveHead cost, M13 layer bytes, DC-14/EG-8."
