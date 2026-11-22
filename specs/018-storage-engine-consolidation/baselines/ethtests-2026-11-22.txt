@@ -34,6 +34,12 @@ Byzantium..Berlin slice: 54,497 run, 54,497 passed, 0 failed
   Constantinople: 11111 run, 11111 passed, 0 failed 
   ConstantinopleFix: 11106 run, 11106 passed, 0 failed 
   Istanbul: 12968 run, 12968 passed, 0 failed 
+The per-vector list: c0/ethtests-2026-11-22-legacy-vectors.tsv.gz, columns network, name, file relative to the
+legacytests root (SHA-256 of the uncompressed TSV 2652b18537c49a060da9e4a2e213f09b2ad020082cb05e3558a05738cf32dad7).
+The spec reports failures only, so the list was rebuilt afterwards from the same fixtures with the spec's selection
+(every key whose network is in either slice). Its count equals the run's on all nine networks, and with 0 failed
+every row is a pass. Names repeat (60,470 distinct in 61,314 rows: Constantinople tree 32,615, Cancun tree 28,699),
+so key a diff on (file, name).
 Both test cases fail with "known failures that now pass (remove them from the known list)". The spec's knownFailures
 list holds 85 vectors that pass on the tag with this legacytests checkout: 72 CREATE2_HighNonceDelegatecall_*,
 4 CREATE2_HighNonce_*, 9 CREATE_HighNonce_*. The list is stale, or was made against another legacytests revision (not
