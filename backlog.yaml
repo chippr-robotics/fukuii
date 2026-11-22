@@ -3763,19 +3763,15 @@ items:
   - id: B-422
     title: "Docs link check: rewrite redirected links, stop JBS 403 / timeout failures"
     priority: P3
-    status: review
+    status: done
     area: docs
     size: S
     opened: 2026-11-22
+    closed: 2026-11-22
     refs: []
     links:
       prs: [1983]
       branch: ccr-9cfab95d-0xzt9x
-    claim:
-      by: cloud-ccr
-      agent: main
-      since: 2026-11-22T00:03:16Z
-      heartbeat: 2026-11-22T00:03:35Z
   - id: B-423
     title: "EngineCallLog.observe counts a call before it records the CL identity and capability count: a snapshot can show the call without them (record first, then add)"
     priority: P3
