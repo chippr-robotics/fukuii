@@ -3795,3 +3795,14 @@ items:
     links:
       spec: specs/018-storage-engine-consolidation
     notes: "PoWMiningCoordinator.scala:117-120 logs at ERROR and sends itself MineNext with no delay. EG-6 run 2026-11-21: 90,681,933 lines 03:55-05:15Z; sync CPU 9145 s vs 4828 s unmined. Node B (checkpoint import) logged 280k in 5 s, then mined block #1 on genesis (orphan 0xb810d49c). Fix: back off or wait for sync done; log once."
+  - id: B-425
+    title: "StateMetrics (db.state.*) never exported on path-live nodes: meters bind to the throwaway registry before Metrics.configure (same pattern as #1959)"
+    priority: P2
+    status: open
+    area: storage
+    size: S
+    opened: 2026-11-22
+    refs: []
+    links:
+      spec: specs/018-storage-engine-consolidation
+    notes: "EG-6 dev-node 2026-11-22: a path-live Mordor node on 0.12.73 exported 189 app_* series and 0 app_db_state_* (anchor, overlay, move/commit timers, recovery). RocksDB opens 05:41:23 before 'Metrics started' 05:41:25. Theory: StateMetrics (a MetricsContainer) is first touched as the commit observer at storage open, so it gets Metrics.get()'s default SimpleMeterRegistry. Blinds M10 moveHead cost, M13 layer bytes, DC-14/EG-8."
