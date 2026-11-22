@@ -3903,3 +3903,14 @@ items:
     links:
       spec: specs/018-storage-engine-consolidation
     notes: "EEST tests@v21.0.0 fork_transition_block_rlp_limit, both at_fork cases: block 0 (ts 14999, 8388609 bytes, no expectException) rejected with BlockRLPSizeError on v0.12.1. StdBlockValidator.scala:117/157 is the same on staging 8d2dcea7b (read, not run); :35 says the ungated cap is deliberate. Shared ETC/ETH path: beacon and forge decide before any change."
+  - id: B-432
+    title: "Spec 018 C0 test gaps: ForkChoice spec runs archive not basic, EEST replayers lack BPO3/BPO4 transitions, 85 stale legacy known failures"
+    priority: P3
+    status: open
+    area: tests
+    size: S
+    opened: 2026-11-22
+    refs: []
+    links:
+      spec: specs/018-storage-engine-consolidation
+    notes: "Found recording T006/T007 on v0.12.1 source: ForkChoiceBlockchainTestsSpec takes ArchivePruning from LocalPruningConfigBuilder, so T007's basic half is not recorded; EestBlockchainReplay.scala:46 has no BPO3/BPO4 (96 fixtures unreplayed); LegacyPreByzantium ratchet lists 85 vectors that pass with legacytests@1f581b8."
