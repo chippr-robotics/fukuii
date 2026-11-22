@@ -3807,22 +3807,19 @@ items:
   - id: B-425
     title: "StateMetrics (db.state.*) never exported on path-live nodes: meters bind to the throwaway registry before Metrics.configure (same pattern as #1959)"
     priority: P2
-    status: review
+    status: done
     area: storage
     size: S
     opened: 2026-11-22
+    closed: 2026-11-22
     refs: []
     links:
       prs: [1985]
       spec: specs/018-storage-engine-consolidation
-    claim:
-      by: cloud-dc960fdc
-      agent: vault-b425
-      since: 2026-11-22T19:11:53Z
-      heartbeat: 2026-11-22T19:28:51Z
     notes: |-
       EG-6 dev-node 2026-11-22: a path-live Mordor node on 0.12.73 exported 189 app_* series and 0 app_db_state_* (anchor, overlay, move/commit timers, recovery). RocksDB opens 05:41:23 before 'Metrics started' 05:41:25. Theory: StateMetrics (a MetricsContainer) is first touched as the commit observer at storage open, so it gets Metrics.get()'s default SimpleMeterRegistry. Blinds M10 moveHead cost, M13 layer bytes, DC-14/EG-8.
       2026-11-22 in-progress: vault-b425 fixing on fix/b425-state-metrics-registry
+      2026-11-22 done: Merged 4210ec75d
   - id: B-426
     title: Graceful SIGTERM shutdown times out at StdNode.scala:852 (TimeoutException 15000 ms, exit 143) on a Mordor node
     priority: P3
