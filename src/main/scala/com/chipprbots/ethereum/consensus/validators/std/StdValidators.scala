@@ -68,8 +68,11 @@ object StdValidators:
     val header = block.header
     val body = block.body
 
+    // EIP-7934's size cap (ETH, Osaka on) sits where go-ethereum checks it: after the header, at the head of the body
+    // checks (`ValidateBody`).
     val result = for
       _ <- self.blockHeaderValidator.validate(header, getBlockHeaderByHash)
+      _ <- StdBlockValidator.validateBlockRLPSize(block)
       _ <- self.blockValidator.validateHeaderAndBody(header, body)
     yield BlockExecutionSuccess
 
