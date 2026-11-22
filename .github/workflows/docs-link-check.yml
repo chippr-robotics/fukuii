@@ -34,13 +34,12 @@ jobs:
       - name: Install MkDocs
         run: pip install -r requirements-docs.txt
 
-      # Build under _linkcheck/fukuii/ so the site sits at the same /fukuii/ path GitHub Pages serves it
-      # from (site_url in mkdocs.yml). Two things depend on that layout:
-      #   - the 404 page's nav links are root-relative (/fukuii/...), and --root-dir resolves them here;
-      #   - a relative link that escapes the site (../../ops/...) no longer lands inside the repo
-      #     checkout, where it used to resolve by accident while 404ing on the deployed site.
+      # Build under _linkcheck/site/, the site root as docs.fukuii.com serves it (site_url in mkdocs.yml). The
+      # 404 page's nav links are root-relative (/...), and --root-dir resolves them here. A relative link that
+      # escapes the site (../../ops/...) resolves under _linkcheck/, not inside the repo checkout, so it fails here
+      # as it 404s on the deployed site.
       - name: Build documentation
-        run: mkdocs build --site-dir _linkcheck/fukuii
+        run: mkdocs build --site-dir _linkcheck/site
 
       # Cache results so unchanged links are not re-fetched on every PR (fewer requests = fewer 5xx/429s).
       - name: Restore lychee cache
@@ -50,9 +49,9 @@ jobs:
           key: lychee-${{ github.run_id }}
           restore-keys: lychee-
 
-      # Two remaps check links that point at this repo against this checkout instead of the network:
-      #   - the site's own deployed URLs (each page's rel=canonical) -> the local build, since the
-      #     deployed site lags a PR that adds pages;
+      # Three remaps check links that point at this repo against this checkout instead of the network:
+      #   - the site's own deployed URLs (each page's rel=canonical, and old chippr-robotics.github.io/fukuii/
+      #     links) -> the local build, since the deployed site lags a PR that adds pages;
       #   - github.com/.../fukuii/blob|tree/main/<path> -> <path> in the checkout, since main lags
       #     staging until release. A link to a file that does not exist in the tree still fails.
       # github.com throttles unauthenticated bursts with 503/429. The site has ~180 distinct github.com
@@ -76,14 +75,15 @@ jobs:
             --retry-wait-time 10
             --timeout 30
             --exclude 'bugs\.openjdk\.org'
-            --root-dir '${{ github.workspace }}/_linkcheck'
-            --remap '^https://chippr-robotics\.github\.io/fukuii/ file://${{ github.workspace }}/_linkcheck/fukuii/'
+            --root-dir '${{ github.workspace }}/_linkcheck/site'
+            --remap '^https://docs\.fukuii\.com/ file://${{ github.workspace }}/_linkcheck/site/'
+            --remap '^https://chippr-robotics\.github\.io/fukuii/ file://${{ github.workspace }}/_linkcheck/site/'
             --remap '^https://github\.com/chippr-robotics/fukuii/(?:blob|tree)/main/ file://${{ github.workspace }}/'
             --exclude 'localhost'
             --exclude '127.0.0.1'
             --exclude 'github.com/.*/edit/'
             --exclude 'github.com/.*/issues/new'
-            './_linkcheck/fukuii/**/*.html'
+            './_linkcheck/site/**/*.html'
           fail: true
         continue-on-error: true
 
