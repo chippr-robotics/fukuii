@@ -3752,18 +3752,13 @@ items:
   - id: B-421
     title: "Required Hive checks (engine, consume-engine, Prague, Osaka) report on every PR: skip inside the job when no relevant path changed"
     priority: P1
-    status: review
+    status: done
     area: ci
     opened: 2026-11-21
+    closed: 2026-11-22
     refs: []
     links:
       prs: [1982]
-    claim:
-      by: cloud-fd82ceaa
-      agent: main
-      since: 2026-11-21T23:50:29Z
-      heartbeat: 2026-11-22T02:22:09Z
-      branch: ccr-fd82ceaa-vet0je
   - id: B-422
     title: "Docs link check: rewrite redirected links, stop JBS 403 / timeout failures"
     priority: P3
