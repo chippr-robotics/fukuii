@@ -3896,7 +3896,7 @@ items:
   - id: B-431
     title: "EIP-7934 8 MiB block cap has no Osaka gate: rejects valid pre-Osaka blocks in EEST PragueToOsakaAtTime15k (go-ethereum gates it)"
     priority: P2
-    status: claimed
+    status: in-progress
     area: consensus
     size: S
     opened: 2026-11-22
@@ -3907,7 +3907,7 @@ items:
       by: cloud-dc960fdc
       agent: beacon-b431
       since: 2026-11-22T21:10:51Z
-      heartbeat: 2026-11-22T21:11:08Z
+      heartbeat: 2026-11-22T21:11:11Z
     notes: "EEST tests@v21.0.0 fork_transition_block_rlp_limit, both at_fork cases: block 0 (ts 14999, 8388609 bytes, no expectException) rejected with BlockRLPSizeError on v0.12.1. StdBlockValidator.scala:117/157 is the same on staging 8d2dcea7b (read, not run); :35 says the ungated cap is deliberate. Shared ETC/ETH path: beacon and forge decide before any change."
   - id: B-432
     title: "Spec 018 C0 test gaps: ForkChoice spec runs archive not basic, EEST replayers lack BPO3/BPO4 transitions, 85 stale legacy known failures"
