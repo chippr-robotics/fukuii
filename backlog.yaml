@@ -3771,10 +3771,15 @@ items:
   - id: B-422
     title: "Docs link check: rewrite redirected links, stop JBS 403 / timeout failures"
     priority: P3
-    status: open
+    status: claimed
     area: docs
     size: S
     opened: 2026-11-22
     refs: []
     links:
       branch: ccr-9cfab95d-0xzt9x
+    claim:
+      by: cloud-ccr
+      agent: main
+      since: 2026-11-22T00:03:16Z
+      heartbeat: 2026-11-22T00:03:16Z
