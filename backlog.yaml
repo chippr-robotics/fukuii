@@ -3742,18 +3742,13 @@ items:
   - id: B-420
     title: "Marketing agent (herald-of-releases) and release-announcement skill: Discord post, release card, spec blog posts"
     priority: P3
-    status: review
+    status: done
     area: docs
     opened: 2026-11-21
+    closed: 2026-11-22
     refs: []
     links:
       prs: [1982]
-    claim:
-      by: cloud-fd82ceaa
-      agent: main
-      since: 2026-11-21T19:14:12Z
-      heartbeat: 2026-11-21T19:20:12Z
-      branch: ccr-fd82ceaa-vet0je
   - id: B-421
     title: "Required Hive checks (engine, consume-engine, Prague, Osaka) report on every PR: skip inside the job when no relevant path changed"
     priority: P1
