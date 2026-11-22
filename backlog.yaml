@@ -1797,11 +1797,11 @@ items:
       by: cloud-dc960fdc
       agent: vault-b207
       since: 2026-11-22T20:35:18Z
-      heartbeat: 2026-11-22T20:48:52Z
+      heartbeat: 2026-11-22T21:13:29Z
     notes: |-
-      The EEST half ran in C2a part 1: 26,503 Amsterdam and 8,835 Paris/Shanghai fixtures, no finding (baselines/t026-position-mirror.md).
       The baseline file ethtests-<date>.txt is T007, a C0 deliverable.
       2026-11-22 review: ethtests half run: 32,087 fixtures, 0 findings. Left: diff vs T007 baseline (dev-node).
+      2026-11-22 review: T007 diff still to do: run staging over legacytests@1f581b8 Constantinople+Cancun trees (spec's own selection) and diff (file,name) against #1989's ethtests-2026-11-22-legacy-vectors.tsv.gz (61,314 rows, all pass). #1987's 32,087 is a different corpus (ets Frontier-EIP158 + Constantinople tree only).
   - id: B-209
     title: "Spec 018 C3b: PathMptStorage.decoded has no check for a stored value shaped like a bare 32-byte hash (the hash store treats it as corrupt, NodeFault)"
     priority: P2
