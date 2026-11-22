@@ -3175,7 +3175,7 @@ items:
       by: cloud-dc960fdc
       agent: vault-b375
       since: 2026-11-22T20:49:19Z
-      heartbeat: 2026-11-22T20:49:19Z
+      heartbeat: 2026-11-22T20:49:23Z
     notes: RecoveryScansVerdictSpec pins verdicts against today's hash-layout scan, not the jar (not runnable in cloud). Run the jar's scans on the same seeded store with injected gaps and diff.
   - id: B-376
     title: "B-065 follow-up: recovery download phases (storage/bytecode coordinators) still write by hash on the unified layout"
