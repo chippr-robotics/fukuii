@@ -3857,3 +3857,14 @@ items:
     links:
       spec: none
     notes: PoWMiningCoordinator.mine sends MineNext as soon as processMining completes, whatever the result. A build that fails each time (e.g. a StateFault not from a head move) spins and logs ERROR per turn. Needs a result the coordinator can tell apart from a normal unsuccessful nonce search. Found in B-424.
+  - id: B-429
+    title: "CI never runs LegacyPreByzantiumBlockchainTestsSpec: no ethereum/legacytests checkout, FUKUII_LEGACY_TESTS_DIRS unset"
+    priority: P3
+    status: open
+    area: ci
+    size: S
+    opened: 2026-11-22
+    refs: []
+    links:
+      spec: 018
+    notes: Found in B-207 (#1987). Add a sparse legacytests checkout to the nightly ethtest job, or document the gap.
