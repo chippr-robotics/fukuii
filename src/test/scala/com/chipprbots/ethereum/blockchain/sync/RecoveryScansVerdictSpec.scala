@@ -36,9 +36,9 @@ import com.chipprbots.ethereum.testing.Tags.*
   * '''The oracle.''' The plan compares the verdicts with those of the pinned 0.12.1 jar. That jar cannot be run where
   * this was written, so the verdicts are pinned instead against the hash-layout scan on today's staging, which is the
   * oracle the jar embodies (the scans are the code 0.12.1 shipped, changed only to read by position, and
-  * `RecoveryScannersPositionSpec` holds them to the verdicts frozen from before that). The comparison with the jar
-  * itself is the follow-up that depends on B-053. Every expectation here is written out by hand from the fixture, not
-  * recorded from a run.
+  * `RecoveryScannersPositionSpec` holds them to the verdicts frozen from before that). The comparison with the pinned
+  * v0.12.1 is `scripts/oracle/b375/run.sh` (B-375; `baselines/b375-recovery-scan-oracle.md`): 66 of 66 verdicts equal.
+  * Every expectation here is written out by hand from the fixture, not recorded from a run.
   *
   * What is held:
   *   - each scan (`CombinedRecoveryScan` whole and by shard, the legacy storage and bytecode scans, the sharded and
