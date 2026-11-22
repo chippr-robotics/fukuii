@@ -1,5 +1,7 @@
 package com.chipprbots.ethereum.consensus.pow
 
+import java.util.concurrent.atomic.AtomicInteger
+
 import org.apache.pekko.actor.ActorRef
 import org.apache.pekko.actor.ActorSystem as ClassicSystem
 import org.apache.pekko.actor.testkit.typed.scaladsl.LoggingTestKit
@@ -25,6 +27,7 @@ import org.scalatest.matchers.should.Matchers
 import com.chipprbots.ethereum.Fixtures
 import com.chipprbots.ethereum.Timeouts
 import com.chipprbots.ethereum.blockchain.sync.SyncController
+import com.chipprbots.ethereum.blockchain.sync.SyncProtocol
 import com.chipprbots.ethereum.blockchain.sync.SyncProtocol.MinedBlock
 import com.chipprbots.ethereum.consensus.blocks.PendingBlock
 import com.chipprbots.ethereum.consensus.blocks.PendingBlockAndState
@@ -230,7 +233,8 @@ class PoWMiningCoordinatorSpec
             blockCreator,
             blockchainReader,
             this,
-            minerOpt = Some(testMiner)
+            minerOpt = Some(testMiner),
+            notReadyRetryDelay = 100.millis
           ),
           coordinatorName
         )
@@ -245,6 +249,129 @@ class PoWMiningCoordinatorSpec
         sync.expectMsgType[SyncController.WrappedSyncProtocol](Timeouts.veryLongTimeout).msg shouldBe a[MinedBlock]
         sync.expectMsgType[SyncController.WrappedSyncProtocol](Timeouts.veryLongTimeout).msg shouldBe a[MinedBlock]
         sync.expectMsgType[SyncController.WrappedSyncProtocol](Timeouts.veryLongTimeout).msg shouldBe a[MinedBlock]
+
+        coordinator ! StopMining
+        probe.expectTerminated(coordinator.ref.toClassic)
+
+      // B-424: a node that cannot mine asked again at once, and logged an ERROR each time: 19 k a second, 90 M lines over
+      // an 80-minute SNAP sync on Mordor.
+      "waits without spinning while there is no best block, and mines once there is one" taggedAs (
+        UnitTest,
+        ConsensusTest
+      ) in new TestSetup:
+        override def coordinatorName: String = s"NoBestBlockWaits-${System.nanoTime()}"
+        val probe: TestProbe = TestProbe()
+        val testMiner = new InstantMiner(blockCreator, sync.ref, ethMiningService)
+        override val coordinator: org.apache.pekko.actor.typed.ActorRef[CoordinatorProtocol] =
+          spawnWaiting(coordinatorName, testMiner)
+        probe.watch(coordinator.ref.toClassic)
+
+        @volatile var best: Option[Block] = None
+        val bestBlockReads = new AtomicInteger(0)
+        (() => blockchainReader.getBestBlock)
+          .expects()
+          .onCall { () =>
+            bestBlockReads.incrementAndGet()
+            best
+          }
+          .anyNumberOfTimes()
+        setBlockForMining(parentBlock)
+        coordinator ! SetMiningMode(RecurrentMining)
+
+        sync.expectNoMessage(1.second)
+        testMiner.turns.get() shouldBe 0
+        // One read every 100 ms: about ten in the second. Asked again at once, it was read hundreds of thousands of times.
+        bestBlockReads.get() should ((be >= 2).and(be <= 15))
+
+        best = Some(parentBlock)
+        sync.expectMsgType[SyncController.WrappedSyncProtocol](Timeouts.veryLongTimeout).msg shouldBe a[MinedBlock]
+
+        coordinator ! StopMining
+        probe.expectTerminated(coordinator.ref.toClassic)
+
+      // B-424: node B mined block 1 on genesis while it imported a checkpoint. The sync controller imports one inside
+      // its start, and answers nothing until it is done.
+      "does not mine while the sync controller does not answer, nor while the node syncs" taggedAs (
+        UnitTest,
+        ConsensusTest
+      ) in new TestSetup:
+        override def coordinatorName: String = s"SyncingWaits-${System.nanoTime()}"
+        val probe: TestProbe = TestProbe()
+        val testMiner = new InstantMiner(blockCreator, sync.ref, ethMiningService)
+        override val coordinator: org.apache.pekko.actor.typed.ActorRef[CoordinatorProtocol] =
+          spawnWaiting(coordinatorName, testMiner)
+        probe.watch(coordinator.ref.toClassic)
+
+        (() => blockchainReader.getBestBlock).expects().returns(Some(origin)).anyNumberOfTimes()
+        setBlockForMining(origin)
+        syncStatus = None
+        coordinator ! SetMiningMode(RecurrentMining)
+
+        sync.expectNoMessage(600.millis)
+        // node B's block 1 on genesis: no turn is given while the controller is silent
+        testMiner.turns.get() shouldBe 0
+        statusAsks.get() should be >= 2
+
+        syncStatus = Some(SyncProtocol.Status.Syncing(0, SyncProtocol.Status.Progress(0, 1000), None))
+        val asksBefore: Int = statusAsks.get()
+        sync.expectNoMessage(600.millis)
+        statusAsks.get() should be > asksBefore
+        testMiner.turns.get() shouldBe 0
+
+        // no peer is higher than this node: a lone miner mines, as go-ethereum's does
+        syncStatus = Some(SyncProtocol.Status.NotSyncing)
+        sync.expectMsgType[SyncController.WrappedSyncProtocol](Timeouts.veryLongTimeout).msg shouldBe a[MinedBlock]
+
+        coordinator ! StopMining
+        probe.expectTerminated(coordinator.ref.toClassic)
+
+      "does not mine on a best block whose state the node does not hold" taggedAs (
+        UnitTest,
+        ConsensusTest
+      ) in new TestSetup:
+        override def coordinatorName: String = s"NoStateWaits-${System.nanoTime()}"
+        val probe: TestProbe = TestProbe()
+        val testMiner = new InstantMiner(blockCreator, sync.ref, ethMiningService)
+        override val coordinator: org.apache.pekko.actor.typed.ActorRef[CoordinatorProtocol] =
+          spawnWaiting(coordinatorName, testMiner)
+        probe.watch(coordinator.ref.toClassic)
+
+        (() => blockchainReader.getBestBlock).expects().returns(Some(parentBlock)).anyNumberOfTimes()
+        setBlockForMining(parentBlock)
+        stateHeld = false
+        coordinator ! SetMiningMode(RecurrentMining)
+
+        sync.expectNoMessage(600.millis)
+        testMiner.turns.get() shouldBe 0
+
+        stateHeld = true
+        sync.expectMsgType[SyncController.WrappedSyncProtocol](Timeouts.veryLongTimeout).msg shouldBe a[MinedBlock]
+
+        coordinator ! StopMining
+        probe.expectTerminated(coordinator.ref.toClassic)
+
+      // go-ethereum's miner stops listening to the downloader after its first DoneEvent: a peer that announces a block
+      // it never sends must not stop this node's mining.
+      "asks whether the node syncs only until the sync has once reached the head" taggedAs (
+        UnitTest,
+        ConsensusTest
+      ) in new TestSetup:
+        override def coordinatorName: String = s"SyncedOnce-${System.nanoTime()}"
+        val probe: TestProbe = TestProbe()
+        val testMiner = new InstantMiner(blockCreator, sync.ref, ethMiningService)
+        override val coordinator: org.apache.pekko.actor.typed.ActorRef[CoordinatorProtocol] =
+          spawnWaiting(coordinatorName, testMiner)
+        probe.watch(coordinator.ref.toClassic)
+
+        (() => blockchainReader.getBestBlock).expects().returns(Some(parentBlock)).anyNumberOfTimes()
+        setBlockForMining(parentBlock)
+        coordinator ! SetMiningMode(RecurrentMining)
+
+        sync.expectMsgType[SyncController.WrappedSyncProtocol](Timeouts.veryLongTimeout).msg shouldBe a[MinedBlock]
+        syncStatus = Some(SyncProtocol.Status.Syncing(0, SyncProtocol.Status.Progress(0, 1000), None))
+        sync.expectMsgType[SyncController.WrappedSyncProtocol](Timeouts.veryLongTimeout).msg shouldBe a[MinedBlock]
+        sync.expectMsgType[SyncController.WrappedSyncProtocol](Timeouts.veryLongTimeout).msg shouldBe a[MinedBlock]
+        statusAsks.get() shouldBe 1
 
         coordinator ! StopMining
         probe.expectTerminated(coordinator.ref.toClassic)
@@ -282,9 +409,13 @@ class PoWMiningCoordinatorSpec
       ethMiningService: EthMiningService
   )(implicit runtime: IORuntime)
       extends Miner:
+    // How many turns the coordinator gave this miner: a turn is given before the block is built, which takes seconds.
+    val turns = new AtomicInteger(0)
+
     def processMining(
         bestBlock: Block
     )(implicit blockchainConfig: BlockchainConfig): Future[CoordinatorProtocol] =
+      turns.incrementAndGet()
       blockCreator
         .getBlockForMining(bestBlock)
         .map { case PendingBlockAndState(PendingBlock(block, _), _) =>
@@ -425,3 +556,38 @@ class PoWMiningCoordinatorSpec
       sender ! PendingTransactionsManager.PendingTransactionsResponse(Nil)
       TestActor.KeepRunning
     }
+
+    // B-424: before it mines, the coordinator asks the sync controller whether the node syncs. The probe answers with
+    // `syncStatus` (None: no answer, as while a checkpoint is imported) and counts the asks. The asks are kept out of the
+    // probe's queue, so that the tests' expectations on it see the mined blocks only.
+    @volatile var syncStatus: Option[SyncProtocol.Status] = Some(SyncProtocol.Status.SyncDone)
+    val statusAsks = new AtomicInteger(0)
+    sync.setAutoPilot { (_: ActorRef, msg: Any) =>
+      msg match
+        case SyncController.WrappedSyncProtocol(SyncProtocol.GetStatus(replyTo)) =>
+          statusAsks.incrementAndGet()
+          syncStatus.foreach(replyTo ! _)
+        case _ => ()
+      TestActor.KeepRunning
+    }
+    sync.ignoreMsg { case SyncController.WrappedSyncProtocol(_: SyncProtocol.GetStatus) => true }
+
+    // Whether the node holds the state of its best block.
+    @volatile var stateHeld: Boolean = true
+    blockchainReader.holdsStateOf.expects(*).onCall((_: BlockHeader) => stateHeld).anyNumberOfTimes()
+
+    /** A coordinator that waits 100 ms for a turn it cannot take, and as long for the sync controller's answer. */
+    def spawnWaiting(name: String, miner: Miner): typed.ActorRef[CoordinatorProtocol] =
+      testKit.spawn(
+        PoWMiningCoordinator(
+          sync.ref,
+          ethMiningService,
+          blockCreator,
+          blockchainReader,
+          this,
+          minerOpt = Some(miner),
+          notReadyRetryDelay = 100.millis,
+          syncStatusTimeout = 100.millis
+        ),
+        name
+      )
