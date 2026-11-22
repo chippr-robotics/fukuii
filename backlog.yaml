@@ -1,8 +1,7 @@
 # fukuii shared backlog (schema version 1). Rendered at https://docs.fukuii.com/development/tracker/
 # Change it with scripts/backlog/backlog.py on staging (claim, status, done, ...); README.md has the protocol.
 # Hand edits in the GitHub web UI are fine: keep the schema (backlog.py check), never delete or reuse an id
-# (drop the item instead; `backlog.py prune` moves closed items to archive.yaml). Comments other than this
-# header are not kept when the tool rewrites the file.
+# (drop the item instead). Comments other than this header are not kept when the tool rewrites the file.
 version: 1
 expiry_hours: 24
 items:
@@ -3893,3 +3892,14 @@ items:
     links:
       spec: 018
     notes: "Seen by the B-375 oracle (#1988). Decide: walk storage tries in the full scan, or leave to the background audit (spec 022 slice 5)."
+  - id: B-431
+    title: "EIP-7934 8 MiB block cap has no Osaka gate: rejects valid pre-Osaka blocks in EEST PragueToOsakaAtTime15k (go-ethereum gates it)"
+    priority: P2
+    status: open
+    area: consensus
+    size: S
+    opened: 2026-11-22
+    refs: []
+    links:
+      spec: specs/018-storage-engine-consolidation
+    notes: "EEST tests@v21.0.0 fork_transition_block_rlp_limit, both at_fork cases: block 0 (ts 14999, 8388609 bytes, no expectException) rejected with BlockRLPSizeError on v0.12.1. StdBlockValidator.scala:117/157 is the same on staging 8d2dcea7b (read, not run); :35 says the ungated cap is deliberate. Shared ETC/ETH path: beacon and forge decide before any change."
