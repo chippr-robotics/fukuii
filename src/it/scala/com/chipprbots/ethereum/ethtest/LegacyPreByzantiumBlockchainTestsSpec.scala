@@ -32,7 +32,9 @@ import com.chipprbots.ethereum.utils.NetworkType
   * https://github.com/ethereum/legacytests; the spec cancels when none is present.
   *
   * Optional: `FUKUII_LEGACY_TESTS_FILTER` (regex on the test name), `FUKUII_LEGACY_TESTS_REPORT` (file receiving one
-  * line per failing test) and `FUKUII_LEGACY_TESTS_NETWORK_TYPE=ETC`.
+  * line per failing test), `FUKUII_LEGACY_TESTS_VECTORS` (file appended with one `network, name, file, PASS|FAIL` line
+  * per vector run, by both slices, the file relative to the legacytests root; spec 018 T007's per-vector diff) and
+  * `FUKUII_LEGACY_TESTS_NETWORK_TYPE=ETC`.
   *
   * Blocks that the fixture marks invalid (`expectException*`, or carrying only raw `rlp`) are not imported: they are
   * never part of the canonical chain, so the valid blocks around them still determine the expected state. This runner
@@ -123,6 +125,8 @@ class LegacyPreByzantiumBlockchainTestsSpec extends EthereumTestsSpec:
 
     // Failures stream to the report as they happen, so a crashed fork still leaves evidence.
     val report = sys.env.get("FUKUII_LEGACY_TESTS_REPORT").map(path => new PrintWriter(path))
+    val vectors =
+      sys.env.get("FUKUII_LEGACY_TESTS_VECTORS").map(path => new PrintWriter(new java.io.FileWriter(path, true)))
     val counts = scala.collection.mutable.Map.empty[String, (Int, Int)].withDefaultValue((0, 0))
     val failures = scala.collection.mutable.ArrayBuffer.empty[String]
     val ran = scala.collection.mutable.Set.empty[String]
@@ -169,6 +173,11 @@ class LegacyPreByzantiumBlockchainTestsSpec extends EthereumTestsSpec:
                 else Left(s"head ${head.getOrElse("none")} != lastblockhash ${expectedHead.get}")
               }
           ran += name
+          vectors.foreach { out =>
+            val relative = root.getParentFile.getParentFile.toPath.relativize(file.toPath).toString
+            out.println(s"$network\t$name\t$relative\t${if result.isRight then "PASS" else "FAIL"}")
+            out.flush()
+          }
           val (p, f) = counts(network)
           result match
             case Right(_) => counts(network) = (p + 1, f)
@@ -197,6 +206,7 @@ class LegacyPreByzantiumBlockchainTestsSpec extends EthereumTestsSpec:
         }
       finally out.close()
     }
+    vectors.foreach(_.close())
     failures.take(50).foreach(f => info(s"FAIL $f"))
 
     // Ratchet: no failure outside the known list, and a known failure that starts passing must be removed from it.

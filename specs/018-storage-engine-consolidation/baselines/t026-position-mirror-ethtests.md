@@ -35,8 +35,49 @@ fix; no check was relaxed.
 trie` (for example `NonZeroValue_SUICIDE_ToOneStorageKey_d0g0v0_{Frontier,Homestead,EIP150,EIP158}`); with the mutation
 reverted all 4,905 pass.
 
-**Not done.** The comparison with `spec/baselines/ethtests-<date>.txt` (T007): that file is a C0 deliverable and is not in
-the tree, so the comparison waits on B-053/B-203. The pass counts above are what this spec reports on its own ratchet.
+**The comparison with the C0 baseline (T007, 2026-11-23): done, section below.**
 
 VERIFY: ran `IntegrationTest / testOnly *LegacyPreByzantiumBlockchainTestsSpec` (the four runs above) — result: PASS
 VERIFY: ran the mutation run — result: FAIL as intended (24 fixtures), then PASS reverted
+
+## Per-vector comparison with C0's baseline (B-207, 2026-11-23)
+
+Baseline: `c0/ethtests-2026-11-22-legacy-vectors.tsv.gz` (v0.12.1, 21cfa13; 61,314 rows; the uncompressed TSV's SHA-256
+starts `2652b185` and ends `dad7`, checked). Staging: `4ab12f037` plus the report switch below, position mirror on, the same
+corpus (ethereum/legacytests `1f581b8`, `Constantinople/BlockchainTests` and `Cancun/BlockchainTests`), run as
+`FUKUII_LEGACY_TESTS_DIRS=<legacytests>/Constantinople/BlockchainTests:<legacytests>/Cancun/BlockchainTests`
+`FUKUII_LEGACY_TESTS_VECTORS=<file> sbt "IntegrationTest / testOnly *LegacyPreByzantiumBlockchainTestsSpec"`
+(cloud container, JDK 21; 1 min 14 s and 19 min for the two slices).
+
+`FUKUII_LEGACY_TESTS_VECTORS` is new: the spec appends one `network, name, file, PASS|FAIL` line per vector run (file
+relative to the legacytests root, as in the baseline), for both slices. It changes no verdict. The baseline had to be rebuilt
+after its run because the spec reported failures only.
+
+| Network | Baseline | Staging | Staging failed |
+| --- | --- | --- | --- |
+| Frontier | 1,449 | 1,449 | 0 |
+| Homestead | 2,417 | 2,417 | 0 |
+| EIP150 | 1,475 | 1,475 | 0 |
+| EIP158 | 1,476 | 1,476 | 0 |
+| Byzantium | 5,286 | 5,286 | 0 |
+| Constantinople | 11,111 | 11,111 | 0 |
+| ConstantinopleFix | 11,106 | 11,106 | 0 |
+| Istanbul | 12,968 | 12,968 | 0 |
+| Berlin | 14,026 | 14,026 | 0 |
+| **Total** | **61,314** | **61,314** | **0** |
+
+Diff on (file, name) (61,314 distinct on each side; in the baseline 60,470 are distinct by name alone): in the baseline and
+not run on staging 0, run on staging and not in the baseline 0, a (file, name) whose network differs 0, FAIL 0. The two row sets
+are equal as multisets of (network, name, file); only the order differs (staging runs the pre-Byzantium slice first).
+Staging's list is 61,314 rows, all PASS. The position mirror kept 13,391 + 109,214 units over 6,772 + 54,411 mirrored
+fixtures (the other 45 + 86 are side-branch fixtures run unmirrored), 4,244,801 reads checked, no finding.
+
+The ratchet reports exactly what it reported on v0.12.1: both cases fail on "known failures that now pass", the same 85 names
+(22 in the pre-Byzantium slice, 63 in the other; the CREATE and CREATE2 high-nonce vectors listed in
+`ethtests-2026-11-22.txt`). The known list is still stale (B-432); nothing was changed there.
+
+Still open (T007, B-432): ForkChoiceBlockchainTestsSpec under `basic`, and the report-only run under
+`FUKUII_LEGACY_TESTS_NETWORK_TYPE=ETC`.
+
+VERIFY: ran `IntegrationTest / testOnly *LegacyPreByzantiumBlockchainTestsSpec` with the corpus above — result: 61,314 run, 61,314 PASS; both test cases FAIL on the stale known-failure ratchet only, as on v0.12.1
+VERIFY: ran the (file, name, network) multiset diff of staging's list against the baseline — result: 0 missing, 0 extra, 0 FAIL, nine per-network counts equal
