@@ -4199,3 +4199,13 @@ items:
     links:
       spec: 018
     notes: "forge-b344: failed 3 of 5 full-spec runs on a loaded host (5 s fishForSpecificMessage at RegularSyncSpec:2844), passed alone every time and in the full spec once load dropped; seen with and without B-344's change."
+  - id: B-447
+    title: "Decide newHeads semantics on a reorg: core-geth posts ChainEvent only for blocks inserted in that call, not for stored side blocks a reorg makes canonical"
+    priority: P3
+    status: open
+    area: rpc
+    opened: 2026-11-23
+    refs: []
+    links:
+      spec: 018
+    notes: "forge-b344: core-geth core/blockchain.go reorg() writes newChain[1:] with writeHeadBlock and sends no ChainEvent for them; newHeads (eth/filters BlocksSubscription) follows ChainEvent. fukuii (B-344) publishes NewBlockImported for each told block (side parents included, bounded by max-queued-block-number-behind) per the user's decision of 2026-11-23. Confirm or narrow to the executed blocks."
