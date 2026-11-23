@@ -4222,15 +4222,18 @@ items:
   - id: B-449
     title: RegularSyncSpec 'ask again for ancestor bodies ... within the deadline' fails in testOnly *RegularSync* once a test is added before it (timing)
     priority: P2
-    status: open
+    status: dropped
     area: ci
     size: S
     opened: 2026-11-23
+    closed: 2026-11-23
     refs: []
     links:
       spec: 018
       branch: fix/b336-partial-extension-fault
-    notes: "forge-b336: with B-336's new RegularSyncSpec test, 'testOnly *RegularSync*' (Pos+Pipeline+RegularSync) failed 4/4 at RegularSyncSpec:2895 (second fish for FetchAncestorBodies times out, 5 s). Passes alone, pairwise (Pipeline+RS, Pos+RS), RegularSyncSpec alone, and with BlockImporterImpl logging at WARN or DEBUG (heisenbug). Staging passes the same command. Not on the touched code path (BlockImportStateFault/AncestorNotStored). Find the race before #B-336 merges or CI may go red."
+    notes: |-
+      forge-b336: with B-336's new RegularSyncSpec test, 'testOnly *RegularSync*' (Pos+Pipeline+RegularSync) failed 4/4 at RegularSyncSpec:2895 (second fish for FetchAncestorBodies times out, 5 s). Passes alone, pairwise (Pipeline+RS, Pos+RS), RegularSyncSpec alone, and with BlockImporterImpl logging at WARN or DEBUG (heisenbug). Staging passes the same command. Not on the touched code path (BlockImportStateFault/AncestorNotStored). Find the race before #B-336 merges or CI may go red.
+      2026-11-23 dropped: Duplicate of B-446 (same RegularSyncSpec ancestor-bodies deadline test; flakes on plain staging too).
   - id: B-450
     title: On the unified layout a T062 local fault (MPTError) at import is not told to the escalation feed as notJudged, unlike ConsensusStateFault
     priority: P3
