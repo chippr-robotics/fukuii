@@ -4073,7 +4073,7 @@ items:
       by: cloud-dc960fdc
       agent: forge-b439
       since: 2026-11-23T21:20:03Z
-      heartbeat: 2026-11-23T21:20:03Z
+      heartbeat: 2026-11-23T21:20:27Z
     notes: |-
       Found by B-292 fault tests. Move back stops on the old chain: leftOnTheBranch reports b4..b6 as imported (announced, pool updated) while head is h6; not requeued.
       Partial first move + failed move back: rethrown first fault, head (h9) not named, old chain above it not queued. Disk state consistent; re-offer adopts.
