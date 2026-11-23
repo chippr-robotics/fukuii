@@ -2021,13 +2021,18 @@ items:
   - id: B-239
     title: executableAtParent reads the parent through the proposer's door once forward layers return (C4d)
     priority: P2
-    status: open
+    status: claimed
     area: consensus
     size: S
     opened: 2026-11-12
     refs: []
     links:
       spec: 018
+    claim:
+      by: cloud-dc960fdc
+      agent: main
+      since: 2026-11-23T21:03:01Z
+      heartbeat: 2026-11-23T21:03:01Z
     notes: EngineApiService.executableAtParent reads accountAt(parent), which is the anchor-chain seam and refuses a forward-layer parent, while proposerStateOn serves one. No node flow makes a layer today. Route it through the proposer's door with C4d; also refuse layers before building an index in viewBehind. Found by beacon, C4a part 4b-2
   - id: B-240
     title: "trace and simulate bodies run on the compute pool for seconds: IO.blocking in StateRead.reading"
