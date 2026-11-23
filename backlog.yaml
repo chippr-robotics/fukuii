@@ -3768,7 +3768,7 @@ items:
       by: cloud-dc960fdc
       agent: conduit-b412
       since: 2026-11-23T22:14:28Z
-      heartbeat: 2026-11-23T22:14:28Z
+      heartbeat: 2026-11-23T22:14:45Z
     notes: "Found in B-411: EthBlocksService getHeaderByNumber/getRawHeader/feeHistory use resolveBlock; resolveHeader (ResolveBlock.scala) now exists. Not state readers, so left out of B-411."
   - id: B-413
     title: "Ethash miner holds the full DAG on the Java heap (Array[Array[Int]], ~1.25x DAG): a miner at the shipped heap OOMs at its first DAG build"
