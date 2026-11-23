@@ -4132,3 +4132,13 @@ items:
     links:
       spec: 018
     notes: "B-435 follow-up: idle() has no GetStatus arm (unhandled), so an ask before Start times out. Rare (Start is sent at boot) but the same class."
+  - id: B-442
+    title: GraphQL sendRawTransaction answers a missing trie node as the start nonce (GraphQLSchema.scala currentNonce)
+    priority: P3
+    status: open
+    area: rpc
+    opened: 2026-11-23
+    refs: []
+    links:
+      spec: specs/018-storage-engine-consolidation
+    notes: "Same shape as B-228: catch MissingNodeException => accountStartNonce at the nonce-too-low check; a state fault should be an error, as JSON-RPC does."
