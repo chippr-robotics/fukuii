@@ -12,7 +12,7 @@
    "forge",
    "beacon"
   ],
-  "gold_summary": "Storage write order/atomicity -> vault; state semantics on both chains -> forge (ETC SELFDESTRUCT without EIP-6780) and beacon.",
+  "gold_summary": "Storage write order/atomicity -> vault; state semantics on both chains -> forge (ETC SELFDESTRUCT: full deletion before Olympia, EIP-6780 from Olympia) and beacon.",
   "files": [],
   "must_not": []
  },

@@ -49,9 +49,9 @@ once at block end against the parent root and the final world.**
 4. **Deleted accounts with storage.** `deleteAccount` drops the storage proxy without enumerating slots, so the key
    collection in step 2 does not see them. When `prev` has a non-empty `storageRoot` and `new` is absent, the recorder
    walks the previous storage trie and records every slot as `prev → absent`. This is what go-ethereum's
-   `handleDestruction` does for its destruct set. It is reachable on every ETC fork (ETC has no EIP-6780;
-   `vm/EvmConfig.scala:275` defaults `eip6780Enabled = false`, and only ETH forks set it at lines 49 and 242) and on
-   ETH only for same-transaction creation-and-destruction, whose storage is tiny. Cost is one storage-trie walk per
+   `handleDestruction` does for its destruct set. It is reachable on every ETC fork before Olympia (`vm/EvmConfig.scala` defaults
+   `eip6780Enabled = false`; ETC turns EIP-6780 on only at Olympia, per ECIP-1121, in `OlympiaConfigBuilder`), and on
+   ETH and on ETC from Olympia only for same-transaction creation-and-destruction, whose storage is tiny. Cost is one storage-trie walk per
    destroyed contract; it is bounded by SC-002 and measured in slice 1.
 5. Entries whose `prev` equals `new` (written and restored within the block; empty account created then removed under
    EIP-161) are dropped, exactly as `BlockAccessListBuilder.addAccountChanges` nets them (`ledger/
