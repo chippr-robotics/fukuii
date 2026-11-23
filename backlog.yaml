@@ -2838,7 +2838,7 @@ items:
   - id: B-344
     title: "Bound the side parents a reorg tells as of its new branch: a deep side chain is broadcast, published and sent to the pool block by block"
     priority: P2
-    status: claimed
+    status: in-progress
     area: consensus
     opened: 2026-11-18
     refs: []
@@ -2848,7 +2848,7 @@ items:
       by: cloud-dc960fdc
       agent: forge-b344
       since: 2026-11-23T21:03:18Z
-      heartbeat: 2026-11-23T22:29:56Z
+      heartbeat: 2026-11-23T23:23:16Z
     notes: |-
       B-296 follow-up (forge): sideParentsTold returns every block of fork.parentSideChain into SelectedNewBestBranch.newBranch; BlockImporter broadcasts each, publishes NewBlockImported for each and RemoveTransactions for each. Decide a bound with the subscription semantics in view
       2026-11-23 claimed: forge triage: sideParentsTold unbounded (ConsensusImpl:939); needs user decision on newHeads/broadcast semantics (geth announces only the new head). Fold B-345 in.
