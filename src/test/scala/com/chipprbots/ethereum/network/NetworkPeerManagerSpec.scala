@@ -34,6 +34,7 @@ import com.chipprbots.ethereum.network.PeerEventBusActor.PeerSelector
 import com.chipprbots.ethereum.network.PeerEventBusActor.SubscribeCmd
 import com.chipprbots.ethereum.network.PeerEventBusActor.SubscriptionClassifier.*
 import com.chipprbots.ethereum.network.PeerEventBusActor.UnsubscribeCmd
+import com.chipprbots.ethereum.network.p2p.MessageSerializable
 import com.chipprbots.ethereum.network.p2p.messages.Capability
 import com.chipprbots.ethereum.network.p2p.messages.Codes
 import com.chipprbots.ethereum.network.p2p.messages.ETHPackets.BlockHeaders
@@ -279,6 +280,60 @@ class NetworkPeerManagerSpec extends AnyFlatSpec with Matchers:
     requestSender.expectMsg(
       HandshakedPeers(Map(freshPeer -> freshPeerInfo.withBestBlockData(newMaxBlock, firstHeader.hash.value)))
     )
+
+  "B-436 best-block re-probe" should "ask by number above the known head and advance maxBlockNumber when the peer's head moved without an announcement" taggedAs (
+    UnitTest,
+    NetworkTest
+  ) in new TestSetup:
+    expectInitialSubscriptions()
+    setupNewPeer(peer1, peer1Probe, peer1Info)
+
+    peersInfoHolder ! RefreshPeerBestBlocksTick
+    val sent: PeerManagerActor.SendMessageCmd = peerManager.expectMsgClass(classOf[PeerManagerActor.SendMessageCmd])
+    val probe: GetBlockHeaders = sent.message.underlyingMsg.asInstanceOf[GetBlockHeaders]
+    probe.block shouldBe Left(peer1Info.maxBlockNumber + 1)
+    probe.maxHeaders shouldBe BigInt(NetworkPeerManagerActor.BestBlockProbeHeaders)
+    probe.skip shouldBe BigInt(NetworkPeerManagerActor.BestBlockProbeSkip)
+
+    // The peer replies with a header above its handshake-time head, never announced.
+    val advanced: BlockHeader = baseBlockHeader.copy(number = BlockNumber(peer1Info.maxBlockNumber + 16))
+    peersInfoHolder ! PeerEventCmd(MessageFromPeer(BlockHeaders(probe.requestId, Seq(advanced)), peer1.id))
+    peersInfoHolder ! PeerInfoRequestCmd(peer1.id, requestSender.ref)
+    val info: PeerInfo = requestSender.expectMsgType[PeerInfoResponse].peerInfo.get
+    info.maxBlockNumber shouldBe peer1Info.maxBlockNumber + 16
+    info.bestBlockHash shouldBe advanced.hash.value
+
+  it should "leave the peer unchanged on an empty reply" taggedAs (UnitTest, NetworkTest) in new TestSetup:
+    expectInitialSubscriptions()
+    setupNewPeer(peer1, peer1Probe, peer1Info)
+    peersInfoHolder ! RefreshPeerBestBlocksTick
+    val probe: MessageSerializable = peerManager.expectMsgClass(classOf[PeerManagerActor.SendMessageCmd]).message
+    peersInfoHolder ! PeerEventCmd(
+      MessageFromPeer(BlockHeaders(probe.underlyingMsg.asInstanceOf[GetBlockHeaders].requestId, Seq.empty), peer1.id)
+    )
+    peersInfoHolder ! PeerInfoRequestCmd(peer1.id, requestSender.ref)
+    requestSender.expectMsgType[PeerInfoResponse].peerInfo.get shouldBe peer1Info
+
+  it should "never lower maxBlockNumber on a reply with a lower number" taggedAs (
+    UnitTest,
+    NetworkTest
+  ) in new TestSetup:
+    expectInitialSubscriptions()
+    setupNewPeer(peer1, peer1Probe, peer1Info)
+    peersInfoHolder ! RefreshPeerBestBlocksTick
+    peerManager.expectMsgClass(classOf[PeerManagerActor.SendMessageCmd])
+    val lower: BlockHeader = baseBlockHeader.copy(number = BlockNumber(peer1Info.maxBlockNumber - 5))
+    peersInfoHolder ! PeerEventCmd(MessageFromPeer(BlockHeaders(BigInt(0), Seq(lower)), peer1.id))
+    peersInfoHolder ! PeerInfoRequestCmd(peer1.id, requestSender.ref)
+    requestSender.expectMsgType[PeerInfoResponse].peerInfo.get.maxBlockNumber shouldBe peer1Info.maxBlockNumber
+
+  it should "fall back to the hash probe while the peer's block number is unknown" taggedAs (
+    UnitTest,
+    NetworkTest
+  ) in new TestSetup:
+    NetworkPeerManagerActor
+      .bestBlockProbe(BigInt(1), peer1Info.copy(maxBlockNumber = 0))
+      .block shouldBe Right(peer1Info.remoteStatus.bestHash)
 
   it should "provide handshaked peers only with best block number determined even if peers best block is its genesis" taggedAs (
     UnitTest,

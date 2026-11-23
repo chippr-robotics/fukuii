@@ -460,9 +460,7 @@ object NetworkPeerManagerActor:
                       consecutiveUnchangedProbes.remove(peerId)
                     case None => ()
                   lastProbeMaxBlock(peerId) = peerInfo.maxBlockNumber
-                val bestHash = peerInfo.remoteStatus.bestHash
-                val probe: MessageSerializable =
-                  ETHPackets.GetBlockHeaders(ETHPackets.nextRequestId, Right(bestHash), 1, 0, reverse = false)
+                val probe: MessageSerializable = bestBlockProbe(ETHPackets.nextRequestId, peerInfo)
                 log.debug(
                   "BEST_BLOCK_REPROBE: peer={} cap={} maxBlock={} — periodic refresh",
                   peer.id,
@@ -1494,7 +1492,33 @@ object NetworkPeerManagerActor:
   /** Sent by `SNAPSyncController` whenever it ingests a new CL forkchoice head. */
   case class UpdateClHead(blockNumber: BigInt)
 
-  /** How often to send each handshaked peer a one-shot `GetBlockHeaders(bestHash, 1)` to refresh
+  /** Headers requested per periodic best-block probe. */
+  private[network] val BestBlockProbeHeaders: Int = 64
+
+  /** Gap between probed headers (`skip`): the probe spans `BestBlockProbeHeaders * (skip + 1)` = 1024 blocks above the
+    * peer's last known head, at 16-block resolution.
+    */
+  private[network] val BestBlockProbeSkip: Int = 15
+
+  /** The periodic best-block probe for a peer. The handshake-time `bestHash` always resolves to the same header, so
+    * re-asking it can never show the peer's head advancing; ask by number from `maxBlockNumber + 1` instead (geth's
+    * downloader likewise learns heads from the peer's own header replies). The peer answers with the headers it has and
+    * stops at its head, so an empty reply means "no newer block" and changes nothing; `updateMaxBlock` keeps the
+    * highest header returned and never lowers `maxBlockNumber`. One request per peer per tick. Falls back to the hash
+    * probe while the peer's number is still unknown (0).
+    */
+  private[network] def bestBlockProbe(requestId: BigInt, peerInfo: PeerInfo): ETHPackets.GetBlockHeaders =
+    if peerInfo.maxBlockNumber > 0 then
+      ETHPackets.GetBlockHeaders(
+        requestId,
+        Left(peerInfo.maxBlockNumber + 1),
+        BestBlockProbeHeaders,
+        BestBlockProbeSkip,
+        reverse = false
+      )
+    else ETHPackets.GetBlockHeaders(requestId, Right(peerInfo.remoteStatus.bestHash), 1, 0, reverse = false)
+
+  /** How often to send each handshaked peer a one-shot `GetBlockHeaders` probe (see `bestBlockProbe`) to refresh
     * `PeerInfo.maxBlockNumber`.
     */
   private[network] val BestBlockRefreshInterval: FiniteDuration = 5.minutes
