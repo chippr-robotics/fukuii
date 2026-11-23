@@ -799,14 +799,16 @@ items:
   - id: B-076
     title: "T063 OOM-fix follow-ups: sk snapshot rows, rollbackReporting bound, WARN on a batched prune, mptStorage cached at the first pivot"
     priority: P3
-    status: open
+    status: blocked
     area: storage
     size: M
     opened: 2026-11-05
     refs: [CHASE A T063 OOM review]
     links: {}
     depends_on: [B-070]
-    notes: forge + beacon. Probably retired by Track C C8b (refcounts); check first.
+    notes: |-
+      forge + beacon. Probably retired by Track C C8b (refcounts); check first.
+      2026-11-23 blocked: Deferred to C8b (refcounts retired); check then.
   - id: B-077
     title: Task files at accounts-complete get flush(), not fsync, and the pointer commit is async
     priority: P3
