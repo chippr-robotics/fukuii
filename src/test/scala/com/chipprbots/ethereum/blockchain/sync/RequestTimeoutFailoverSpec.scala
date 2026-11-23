@@ -14,8 +14,10 @@ import org.scalatest.BeforeAndAfterAll
 import org.scalatest.flatspec.AnyFlatSpec
 import org.scalatest.matchers.should.Matchers
 
-import com.chipprbots.ethereum.blockchain.sync.Blacklist.BlacklistReason
+import com.chipprbots.ethereum.blockchain.sync.regular.BlockFetcher
+import com.chipprbots.ethereum.blockchain.sync.regular.HeadersFetcher
 import com.chipprbots.ethereum.domain.ChainWeight
+import com.chipprbots.ethereum.network.BlockedIPRegistry
 import com.chipprbots.ethereum.network.NetworkPeerManagerActor
 import com.chipprbots.ethereum.network.NetworkPeerManagerActor.PeerInfo
 import com.chipprbots.ethereum.network.NetworkPeerManagerActor.RemoteStatus
@@ -23,13 +25,19 @@ import com.chipprbots.ethereum.network.Peer
 import com.chipprbots.ethereum.network.PeerActor
 import com.chipprbots.ethereum.network.PeerEventBusActor
 import com.chipprbots.ethereum.network.PeerId
+import com.chipprbots.ethereum.network.PeerScoringManager
 import com.chipprbots.ethereum.network.p2p.messages.Capability
 import com.chipprbots.ethereum.network.p2p.messages.ETHPackets
 import com.chipprbots.ethereum.testing.Tags.UnitTest
+import com.chipprbots.ethereum.utils.Config.SyncConfig
 
 /** B-434: a regular-sync header request to a peer that never answers must not be retried against that peer. Peer A is
   * the best by total difficulty and never answers; peer B has the headers. The timeout comes from a real
-  * PeerRequestHandler on a short `peer-response-timeout`, so no test waits on the production 90 s.
+  * PeerRequestHandler on a short `peer-response-timeout`, so no test waits on the production 90 s. The blacklist is the
+  * node's production stack (operator block list over scoring over the cache), the scorer is wired as in the node, and
+  * the second test drives the real HeadersFetcher. A blacklisting starts when the request fails, not when it was sent,
+  * so the retry that follows the timeout by one retry interval finds the peer excluded whatever the 90 s timeout and
+  * the 60 s default duration are.
   */
 class RequestTimeoutFailoverSpec extends AnyFlatSpec with Matchers with BeforeAndAfterAll:
 
@@ -60,9 +68,14 @@ class RequestTimeoutFailoverSpec extends AnyFlatSpec with Matchers with BeforeAn
     val replies: TestProbe[PeersClient.ResponseMessage] = testKit.createTestProbe()
     val bus: ActorRef[PeerEventBusActor.Command] =
       testKit.spawn(PeerEventBusActor.behavior(), s"failover-bus-${java.util.UUID.randomUUID()}")
-    private val syncConfig = new TestSyncConfig {}.defaultSyncConfig.copy(peerResponseTimeout = responseTimeout)
+    val syncConfig: SyncConfig = new TestSyncConfig {}.defaultSyncConfig.copy(peerResponseTimeout = responseTimeout)
+    private val productionBlacklist: Blacklist =
+      new OperatorBlockingBlacklist(
+        new ScoringBlacklist(CacheBasedBlacklist.empty(1000), new PeerScoringManager()),
+        new BlockedIPRegistry(Set.empty)
+      )
     val client: ActorRef[PeersClient.Command] = testKit.spawn(
-      PeersClient.behavior(peerManager.ref, bus, CacheBasedBlacklist.empty(10), syncConfig),
+      PeersClient.behavior(peerManager.ref, bus, productionBlacklist, syncConfig, Some(new PeerScoringManager())),
       s"failover-client-${java.util.UUID.randomUUID()}"
     )
     peerManager.expectMessageType[NetworkPeerManagerActor.GetHandshakedPeersCmd].replyTo !
@@ -78,6 +91,8 @@ class RequestTimeoutFailoverSpec extends AnyFlatSpec with Matchers with BeforeAn
         ETHPackets.GetBlockHeaders.GetBlockHeadersEnc(_)
       )(replies.ref)
       awaitSend()
+
+    def awaitSendTo(): PeerId = awaitSend()
 
     // The scan tick may re-ask for the handshaked peers before the request goes out; the reply is idempotent.
     @scala.annotation.tailrec
@@ -101,21 +116,17 @@ class RequestTimeoutFailoverSpec extends AnyFlatSpec with Matchers with BeforeAn
     f.requestHeaders() shouldBe peerB.id
   }
 
-  it should "blacklist the peer for longer than one request timeout cycle" taggedAs UnitTest in {
-    // The production timeout is 90 s and the configured blacklist 60 s: the peer must outlast both, or it is picked
-    // again as soon as it expires and every pick costs another full timeout.
-    val timeoutReason = BlacklistReason.RegularSyncRequestFailed(PeerRequestHandler.RequestTimeoutReason)
-    timeoutReason.duration(60.seconds) should be > 90.seconds
-    timeoutReason.duration(60.seconds) shouldBe Blacklist.RequestTimeoutBlacklistDuration
-    timeoutReason.duration(10.minutes) shouldBe 10.minutes
-  }
+  "The headers fetcher" should "send its retry after a timeout to another peer" taggedAs UnitTest in {
+    val f = new Fixture(responseTimeout = 200.millis)
+    val supervisor = testKit.createTestProbe[BlockFetcher.FetchCommand]()
+    val fetcher = testKit.spawn(
+      HeadersFetcher(f.client, f.syncConfig.copy(syncRetryInterval = 10.millis), supervisor.ref),
+      s"failover-headers-${java.util.UUID.randomUUID()}"
+    )
 
-  it should "leave blacklisting disabled when the configured duration is zero" taggedAs UnitTest in {
-    BlacklistReason.RegularSyncRequestFailed(PeerRequestHandler.RequestTimeoutReason).duration(Duration.Zero) shouldBe
-      Duration.Zero
-  }
-
-  "Any other failed regular-sync request" should "keep the configured blacklist duration" taggedAs UnitTest in {
-    BlacklistReason.RegularSyncRequestFailed(PeerRequestHandler.ConnectionClosedReason).duration(60.seconds) shouldBe
-      60.seconds
+    fetcher ! HeadersFetcher.FetchHeadersByNumber(1, 1)
+    f.awaitSendTo() shouldBe peerA.id
+    supervisor.expectMessage(10.seconds, BlockFetcher.RetryHeadersRequest)
+    fetcher ! HeadersFetcher.FetchHeadersByNumber(1, 1)
+    f.awaitSendTo() shouldBe peerB.id
   }

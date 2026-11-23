@@ -44,13 +44,6 @@ object Blacklist:
     */
   val HeaderValidationFailureDuration: FiniteDuration = 15.minutes
 
-  /** How long, at least, a peer that let a regular-sync request time out stays blacklisted (B-434). The request waits
-    * `sync.peer-response-timeout` (90 s) before it fails, so the default 60 s blacklist ended before the next request
-    * after the timeout and the unresponsive peer, usually the best by total difficulty, was picked again every ~150 s,
-    * each time costing a full timeout. A configured `sync.blacklist-duration` of 0 still disables blacklisting.
-    */
-  val RequestTimeoutBlacklistDuration: FiniteDuration = 5.minutes
-
   sealed trait BlacklistReason:
     def reasonType: BlacklistReasonType
     def description: String
@@ -277,10 +270,6 @@ object Blacklist:
     final case class RegularSyncRequestFailed(error: String) extends BlacklistReason:
       val reasonType: BlacklistReasonType = RegularSyncRequestFailedType
       val description: String = s"Request failed with error: $error"
-      override def duration(default: FiniteDuration): FiniteDuration =
-        if error == PeerRequestHandler.RequestTimeoutReason && default > Duration.Zero then
-          default.max(RequestTimeoutBlacklistDuration)
-        else default
     final case class BlockImportError(error: String) extends BlacklistReason:
       val reasonType: BlacklistReasonType = BlockImportErrorType
       val description: String = s"Block import error: $error"
