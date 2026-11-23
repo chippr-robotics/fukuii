@@ -2032,8 +2032,10 @@ items:
       by: cloud-dc960fdc
       agent: main
       since: 2026-11-23T21:03:01Z
-      heartbeat: 2026-11-23T21:03:01Z
-    notes: EngineApiService.executableAtParent reads accountAt(parent), which is the anchor-chain seam and refuses a forward-layer parent, while proposerStateOn serves one. No node flow makes a layer today. Route it through the proposer's door with C4d; also refuse layers before building an index in viewBehind. Found by beacon, C4a part 4b-2
+      heartbeat: 2026-11-23T21:03:31Z
+    notes: |-
+      EngineApiService.executableAtParent reads accountAt(parent), which is the anchor-chain seam and refuses a forward-layer parent, while proposerStateOn serves one. No node flow makes a layer today. Route it through the proposer's door with C4d; also refuse layers before building an index in viewBehind. Found by beacon, C4a part 4b-2
+      2026-11-23 claimed: forge triage: premise outdated (newPayload already keeps forward layers); catch only MPTException at EngineApiService:1548 so StateUnavailable fails the build; fix: proposerStateOn(parent) + catch StateFault. Path-live+ETH only.
   - id: B-240
     title: "trace and simulate bodies run on the compute pool for seconds: IO.blocking in StateRead.reading"
     priority: P2
