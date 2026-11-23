@@ -3757,17 +3757,18 @@ items:
   - id: B-412
     title: "RPC: eth_getHeaderByNumber, eth_getRawHeader, eth_feeHistory resolve by block (body); geth serves them from the header"
     priority: P3
-    status: in-progress
+    status: review
     area: jsonrpc
     opened: 2026-11-21
     refs: []
     links:
+      prs: [2010]
       spec: 018
     claim:
       by: cloud-dc960fdc
       agent: conduit-b412
       since: 2026-11-23T22:14:28Z
-      heartbeat: 2026-11-23T22:14:49Z
+      heartbeat: 2026-11-23T22:22:25Z
     notes: "Found in B-411: EthBlocksService getHeaderByNumber/getRawHeader/feeHistory use resolveBlock; resolveHeader (ResolveBlock.scala) now exists. Not state readers, so left out of B-411."
   - id: B-413
     title: "Ethash miner holds the full DAG on the Java heap (Array[Array[Int]], ~1.25x DAG): a miner at the shipped heap OOMs at its first DAG build"
