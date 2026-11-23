@@ -2057,14 +2057,17 @@ items:
   - id: B-242
     title: a reorganisation that meets a state fault after an executed prefix tells the importer the prefix it settled (C4e)
     priority: P2
-    status: open
+    status: dropped
     area: consensus
     size: S
     opened: 2026-11-13
+    closed: 2026-11-23
     refs: []
     links:
       spec: 018
-    notes: "ConsensusImpl.reorganise answers ConsensusStateFault(fault, Nil, rest) after settleHead. When a branch is executed on layers (C4e) and a prefix was settled as the head before the fault, the answer must carry imported = the executed prefix and the old branch's blocks to queue, as SelectedNewBestBranch does; settleHead has to say whether it adopted. Unreachable today: the unified layout refuses the first block of a branch that is not adopted as it is executed, and the hash layout throws no such fault. Found by forge, C4b part 0."
+    notes: |-
+      ConsensusImpl.reorganise answers ConsensusStateFault(fault, Nil, rest) after settleHead. When a branch is executed on layers (C4e) and a prefix was settled as the head before the fault, the answer must carry imported = the executed prefix and the old branch's blocks to queue, as SelectedNewBestBranch does; settleHead has to say whether it adopted. Unreachable today: the unified layout refuses the first block of a branch that is not adopted as it is executed, and the hash layout throws no such fault. Found by forge, C4b part 0.
+      2026-11-23 dropped: Superseded (forge triage 2026-11-23): on path-live settleOnLayers moves nothing on a fault (notJudged hands the whole branch back); on Hash the fault is never thrown; ConsensusImpl keeps a log.error tripwire.
   - id: B-243
     title: "The batch that creates the state anchor writes state.origin: SNAP finalization and checkpoint import"
     priority: P2
