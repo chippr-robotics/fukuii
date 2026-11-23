@@ -2815,8 +2815,10 @@ items:
       by: cloud-dc960fdc
       agent: main
       since: 2026-11-23T21:03:18Z
-      heartbeat: 2026-11-23T21:03:18Z
-    notes: "B-296 follow-up (forge): sideParentsTold returns every block of fork.parentSideChain into SelectedNewBestBranch.newBranch; BlockImporter broadcasts each, publishes NewBlockImported for each and RemoveTransactions for each. Decide a bound with the subscription semantics in view"
+      heartbeat: 2026-11-23T21:03:35Z
+    notes: |-
+      B-296 follow-up (forge): sideParentsTold returns every block of fork.parentSideChain into SelectedNewBestBranch.newBranch; BlockImporter broadcasts each, publishes NewBlockImported for each and RemoveTransactions for each. Decide a bound with the subscription semantics in view
+      2026-11-23 claimed: forge triage: sideParentsTold unbounded (ConsensusImpl:939); needs user decision on newHeads/broadcast semantics (geth announces only the new head). Fold B-345 in.
   - id: B-345
     title: Decide whether the old-branch bound of a reorg (ConsensusImpl.OldBranchToldAtMost, 1000) follows sync max-queued-block-number-behind
     priority: P3
