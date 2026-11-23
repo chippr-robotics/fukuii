@@ -332,6 +332,10 @@ final class CheckpointImporter(
     // datadir. Synced, since the nodes are not: a node on disk must imply this key is. It takes the invariant marker with
     // it: that a marked datadir's nodes were complete says nothing of what is written from here on. A success does not
     // bring the marker back: the done flags vouch for this root, and no walk has looked at the rest.
+    // B-377: read before `beginCheckpointImport` takes it away. A stamp standing now says the datadir's counts are exact
+    // (a fresh genesis, or nothing since has counted short), so none of an earlier interrupted import's nodes is in the
+    // store; the hash-layout success may then put it back, in its final batch (below). An absent stamp stays absent.
+    val countsExactBefore = appStateStorage.hasRefCountsExact()
     appStateStorage.beginCheckpointImport(stateRoot, startMs, Some(archiveId)).commitSync()
     val sink = sinkFor.fold[NodeSink](
       unified.fold[NodeSink](new HashNodeSink(stateStorage, blockNum.value))(u => new PathNodeSink(u.rows))
@@ -419,7 +423,13 @@ final class CheckpointImporter(
           stateStorage.forcePersist(StateStorage.SnapSyncFinalization)
           // One synced batch: the checkpoint's header and the window's (so BLOCKHASH and the ommer check of C+1 find
           // them), the window's bodies, the trusted weight, the best block and the done flags.
-          Right(finalRecords.and(appStateStorage.snapSyncDone()).commitSync())
+          // B-377: the stamp comes back in this same synced write when it stood before the import. The hash layout
+          // counts every occurrence of every node (archive format version 2 holds a shared subtree under each
+          // position, and `HashNodeSink` stores each one), exactly as block import does, so the counts are exact. A
+          // kill or a refusal never reaches this write, so the stamp is never present over a partial import.
+          val withStamp =
+            if countsExactBefore then finalRecords.and(appStateStorage.markRefCountsExact()) else finalRecords
+          Right(withStamp.and(appStateStorage.snapSyncDone()).commitSync())
     }
 
     finished match

@@ -52,14 +52,14 @@ class CheckpointSharedNodePruneSpec extends AnyWordSpec with Matchers with Eithe
 
   "A checkpoint import with a storage trie shared by two contracts" should {
 
-    "keep the other contract readable after a block rewrites a slot of one, with pruning past the block" taggedAs UnitTest in new Setup:
+    "keep the other contract readable after a block rewrites a slot of one, with pruning by count past the block" taggedAs UnitTest in new Setup:
       val app = targetStorages.storages.appStateStorage
       app.markDatadirCreated(countsExact = true).commitSync() // a fresh datadir: its genesis counted every position
       RefCountTrust.nodesMayBeDeleted(app) shouldBe true
       importArchive()
-      withClue("the importer took the stamp away, before its first node: ") {
-        app.hasRefCountsExact() shouldBe false
-        RefCountTrust.nodesMayBeDeleted(app) shouldBe false
+      withClue("the importer took the stamp away before its first node and put it back with the done flags (B-377): ") {
+        app.hasRefCountsExact() shouldBe true
+        RefCountTrust.nodesMayBeDeleted(app) shouldBe true
       }
 
       readSharedStorage() // before the block
@@ -70,8 +70,8 @@ class CheckpointSharedNodePruneSpec extends AnyWordSpec with Matchers with Eithe
 
     "keep it even when the stamp is put back: a version 2 archive holds the shared trie under each contract" taggedAs UnitTest in new Setup:
       val app = targetStorages.storages.appStateStorage
-      app.markDatadirCreated(countsExact = true).commitSync()
-      importArchive()
+      importArchive() // no stamp before, so none after (B-377)
+      app.hasRefCountsExact() shouldBe false
       // What a store with no such rule did, and what lost the other contract's trie under format version 1: pruning
       // believed the importer's counts. Under version 2 each occurrence is an entry, so the shared nodes count twice.
       app.markRefCountsExact().commit()
