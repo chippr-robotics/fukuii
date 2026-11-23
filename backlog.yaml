@@ -1763,21 +1763,18 @@ items:
   - id: B-204
     title: "MerklePatriciaTrie.getFromHash decodes every node twice: about 50 KB allocated per get on a 50k-key trie"
     priority: P3
-    status: review
+    status: done
     area: storage
     size: S
     opened: 2026-11-11
+    closed: 2026-11-23
     refs: [018 C1]
     links:
       prs: [2002]
-    claim:
-      by: cloud-dc960fdc
-      agent: forge-b204
-      since: 2026-11-23T21:14:14Z
-      heartbeat: 2026-11-23T21:23:56Z
     notes: |-
       Found by TrieAllocationBenchmark (#1788). The storage returns a decoded node; getFromHash encodes and decodes it again. Shared trie code: forge and beacon before any change.
       2026-11-23 review: Merge after beacon review (shared trie code).
+      2026-11-23 done: Merged 282ca8962 (beacon approved)
   - id: B-205
     title: KeyStoreImplSpec 'keystore dir cannot be initialized' fails when the tests run as root
     priority: P3
