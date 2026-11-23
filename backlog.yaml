@@ -4015,7 +4015,7 @@ items:
   - id: B-436
     title: Peer best-block re-probe asks for the peer's handshake bestHash, so maxBlockNumber never advances without announcements
     priority: P2
-    status: claimed
+    status: in-progress
     area: sync
     opened: 2026-11-23
     refs: []
@@ -4025,7 +4025,7 @@ items:
       by: cloud-dc960fdc
       agent: herald-b436
       since: 2026-11-23T20:56:55Z
-      heartbeat: 2026-11-23T20:57:33Z
+      heartbeat: 2026-11-23T21:06:20Z
     notes: "NetworkPeerManagerActor RefreshPeerBestBlocksTick (~line 463) sends GetBlockHeaders(Right(remoteStatus.bestHash),1): the reply is the handshake-time head, so updateMaxBlock never advances; a peer that stops announcing stays frozen (seen in B-434: peers best frozen at 17450195). Probe by number (maxBlockNumber+1) or hash of current bestBlockHash plus skip."
   - id: B-437
     title: "B-434 follow-up: live mechanism of same-peer re-pick 0.6 s after each 90 s timeout not found; needs node-b DEBUG lines"
