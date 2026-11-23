@@ -2856,7 +2856,7 @@ items:
   - id: B-345
     title: Decide whether the old-branch bound of a reorg (ConsensusImpl.OldBranchToldAtMost, 1000) follows sync max-queued-block-number-behind
     priority: P3
-    status: claimed
+    status: in-progress
     area: consensus
     opened: 2026-11-18
     refs: []
@@ -2866,7 +2866,7 @@ items:
       by: cloud-dc960fdc
       agent: forge-b344
       since: 2026-11-23T21:03:22Z
-      heartbeat: 2026-11-23T22:30:00Z
+      heartbeat: 2026-11-23T23:23:20Z
     notes: "B-296: the default equals the queue's behind window; it is a constant with a constructor override, not wired to config"
   - id: B-346
     title: "SYNC-FORK hash layout: a heavier chain leaving ours below the 128-block floor is refused forever; weigh it and escalate to re-SNAP"
