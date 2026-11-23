@@ -4209,3 +4209,13 @@ items:
     links:
       spec: 018
     notes: "forge-b344: core-geth core/blockchain.go reorg() writes newChain[1:] with writeHeadBlock and sends no ChainEvent for them; newHeads (eth/filters BlocksSubscription) follows ChainEvent. fukuii (B-344) publishes NewBlockImported for each told block (side parents included, bounded by max-queued-block-number-behind) per the user's decision of 2026-11-23. Confirm or narrow to the executed blocks."
+  - id: B-448
+    title: "Batch imports (tryImportBlocks) tell no one: no newHeads event, pool removal or announce for BlockImportedToTop or ChainReorganised"
+    priority: P2
+    status: open
+    area: sync
+    opened: 2026-11-23
+    refs: []
+    links:
+      spec: 018
+    notes: "forge-b344: BlockImporter.tryImportBlocks handles ChainReorganised/BlockImportedToTop with progress and strikes only; only importBlock (NewBlock/mined path) and announceAdopted publish NewBlockImported, update the pool and broadcast. Check against B-245 (Engine API newHeads); core-geth insertChain posts ChainEvent per canonical block."
