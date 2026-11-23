@@ -4094,3 +4094,13 @@ items:
       Found by B-292 fault tests. Move back stops on the old chain: leftOnTheBranch reports b4..b6 as imported (announced, pool updated) while head is h6; not requeued.
       Partial first move + failed move back: rethrown first fault, head (h9) not named, old chain above it not queued. Disk state consistent; re-offer adopts.
       Red tests: scratchpad b292-failing-tests.diff (assert toldWhereTheHeadIs). Gate before path-live default.
+  - id: B-440
+    title: "BlockImporter: a throw from evaluateBranch (IOException at the cap, head back) drops the batch unqueued; only re-offered by new announcements"
+    priority: P3
+    status: open
+    area: consensus
+    opened: 2026-11-23
+    refs: []
+    links:
+      spec: 018
+    notes: Found in B-439. importWith handleError (BlockImporter.scala:1927) logs and goes Running, so no crash; but ConsensusAdapter's re-queue is skipped and no LocalFault is told the feed. ReorgBlockhashParitySpec pins the rethrow as intended (#2001); decide whether the adapter should map a thrown write failure to a StateFault.
