@@ -162,7 +162,7 @@ items:
   - id: B-014
     title: Path recovery never republishes recovered nodes to the hash store, so post-sync readers miss them
     priority: P3
-    status: claimed
+    status: blocked
     area: storage
     size: M
     opened: 2026-11-07
@@ -173,10 +173,11 @@ items:
       by: cloud-dc960fdc
       agent: vault-b014
       since: 2026-11-23T21:24:00Z
-      heartbeat: 2026-11-23T21:24:00Z
+      heartbeat: 2026-11-23T21:24:17Z
     notes: |-
       beacon + vault. Liveness, not loss. Check first whether Track C C8a makes it moot.
       2026-11-17 priority P3: liveness, not loss; C8a likely moots it
+      2026-11-23 blocked: Deferred to after C8a: the hash-store copy is retired there; re-check then whether path recovery still needs to republish.
   - id: B-015
     title: "#1705 follow-up: SyncController leaks its peers client when the pipeline is replaced"
     priority: P2
