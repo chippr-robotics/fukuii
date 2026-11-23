@@ -195,6 +195,27 @@ class EngineApiBlockRlpSizeSpec extends AnyWordSpec with Matchers:
           )
         case Left(error) => fail(s"block 1 does not execute: ${error.describe}")
 
+    /** The engine payload build on genesis at `timestamp` from a pool holding `pool`: the pool selection
+      * (`selectFromPool`) and the lenient build forkchoiceUpdated runs, under the genesis's 100M gas limit.
+      */
+    def buildPayload(timestamp: Long, pool: Seq[SignedTransaction]): Block =
+      import com.chipprbots.ethereum.transactions.PendingTransactionsManager.*
+      val response = PendingTransactionsResponse(pool.zipWithIndex.map { (stx, i) =>
+        PendingTransaction(SignedTransactionWithSender(stx, sender), i.toLong)
+      })
+      val (selected, _) = service.selectFromPool(response, genesis, Timestamp(timestamp), Some(Nil))
+      val attrs = PayloadAttributes(
+        timestamp = timestamp,
+        prevRandao = zero32,
+        suggestedFeeRecipient = Address(0),
+        withdrawals = Some(Nil),
+        parentBeaconBlockRoot = Some(zero32)
+      )
+      val genesisBlock = blockchainReader.getBlockByHash(genesis.hash).get
+      service
+        .buildBlockOnParent(genesisBlock, attrs, selected, ByteString.empty, genesis.gasLimit, strict = false)
+        .fold(err => fail(s"build failed: $err"), _.block)
+
     def newPayload(block: Block): PayloadStatusV1 =
       service
         .newPayload(
@@ -251,6 +272,35 @@ class EngineApiBlockRlpSizeSpec extends AnyWordSpec with Matchers:
       withClue(s"validationError=${status.validationError}: ") {
         status.status shouldBe Valid
       }
+    }
+  }
+
+  "the engine payload build (B-433)" should {
+
+    "stop adding transactions before an Osaka payload reaches MAX_RLP_BLOCK_SIZE, and build one that validates" taggedAs (
+      UnitTest,
+      ConsensusTest
+    ) in {
+      val chain = new Chain
+      import chain.config
+      // Six fit the gas limit (84M of 100M) but make an 8.4 MB block. go-ethereum's txFitsSize admits a transaction
+      // only below MaxBlockSize - 1,000,000 = 7,388,608 bytes: five (7.0 MB) go in, the sixth ends the selection.
+      val pool = fatTransactions(6)
+      val built = chain.buildPayload(OsakaTs, pool)
+
+      built.body.transactionList.map(_.hash) shouldBe pool.take(5).map(_.hash)
+      Block.size(built) should be < Cap - ProposerTxSelection.BlockSizeBufferZone
+      StdBlockValidator.validateBlockRLPSize(built) shouldBe Right(StdBlockValidator.BlockValid)
+      chain.newPayload(built).status shouldBe Valid
+    }
+
+    "leave a Prague payload's selection as it was: no cap before Osaka" taggedAs (UnitTest, ConsensusTest) in {
+      val chain = new Chain
+      val pool = fatTransactions(6)
+      val built = chain.buildPayload(PragueTs, pool)
+
+      built.body.transactionList.map(_.hash) shouldBe pool.map(_.hash)
+      Block.size(built) should be > Cap
     }
   }
 

@@ -33,8 +33,20 @@ class ProposerTxSelectionSpec extends AnyWordSpec with Matchers:
     val key: AsymmetricCipherKeyPair = crypto.generateKeyPair(random)
     private def sign(tx: Transaction): SignedTransaction = SignedTransaction.sign(tx, key, Some(chainId))
 
-    def dynamic(nonce: Int, tip: BigInt, feeCap: BigInt = 1000): SignedTransaction =
-      sign(TransactionWithDynamicFee(chainId, nonce, tip, feeCap, GasAmount(21000), Some(to), 1, ByteString.empty, Nil))
+    def dynamic(nonce: Int, tip: BigInt, feeCap: BigInt = 1000, data: Int = 0): SignedTransaction =
+      sign(
+        TransactionWithDynamicFee(
+          chainId,
+          nonce,
+          tip,
+          feeCap,
+          GasAmount(21000),
+          Some(to),
+          1,
+          ByteString(new Array[Byte](data)),
+          Nil
+        )
+      )
 
     def legacy(nonce: Int, gasPrice: BigInt): SignedTransaction =
       sign(LegacyTransaction(nonce, GasPrice(gasPrice), GasAmount(21000), Some(to), 1, ByteString.empty))
@@ -158,5 +170,70 @@ class ProposerTxSelectionSpec extends AnyWordSpec with Matchers:
       val chosen = select(pool)
       chosen.map(stx => ProposerTxSelection.blobCount(stx.tx)).sum shouldBe 6
       chosen shouldBe pool.take(6).map(_.stx) // first come, first served at equal tips
+    }
+  }
+
+  "ProposerTxSelection.select with an EIP-7934 size budget" should {
+
+    val Initial = 600L
+    def budgetFor(sizes: Long*): ProposerTxSelection.SizeBudget =
+      ProposerTxSelection.SizeBudget(Initial, Initial + sizes.sum)
+    def size(stx: SignedTransaction): Long = ProposerTxSelection.blockItemSize(stx)
+
+    "take a transaction only while the running size stays strictly below the limit (go-ethereum txFitsSize)" taggedAs (
+      UnitTest,
+      ConsensusTest
+    ) in {
+      val a = new Account
+      val tx = a.dynamic(0, tip = 1, data = 1000)
+      ProposerTxSelection.select(Seq(candidate(tx, 1)), BaseFee, None, 0, Some(budgetFor(size(tx), 1))) shouldBe
+        Seq(tx)
+      ProposerTxSelection.select(Seq(candidate(tx, 1)), BaseFee, None, 0, Some(budgetFor(size(tx)))) shouldBe empty
+    }
+
+    "end the selection at the first transaction that does not fit: a smaller one after it stays out (break)" taggedAs (
+      UnitTest,
+      ConsensusTest
+    ) in {
+      val a = new Account
+      val b = new Account
+      val c = new Account
+      val first = a.dynamic(0, tip = 9)
+      val big = b.dynamic(0, tip = 5, data = 5000)
+      val small = c.dynamic(0, tip = 1)
+      // Room for `first` and `small`, not for `big`: go-ethereum's commitTransactions breaks at `big`.
+      val budget = budgetFor(size(first), size(small), 1)
+      ProposerTxSelection.select(
+        Seq(candidate(small, 1), candidate(big, 2), candidate(first, 3)),
+        BaseFee,
+        None,
+        0,
+        Some(budget)
+      ) shouldBe Seq(first)
+      // With no budget (before Osaka) all three go in, by tip.
+      ProposerTxSelection.select(
+        Seq(candidate(small, 1), candidate(big, 2), candidate(first, 3)),
+        BaseFee,
+        None,
+        0,
+        None
+      ) shouldBe Seq(first, big, small)
+    }
+
+    "count a transaction as exactly the bytes it adds to the block's RLP, legacy and typed alike" taggedAs (
+      UnitTest,
+      ConsensusTest
+    ) in {
+      val a = new Account
+      val b = new Account
+      val header = com.chipprbots.ethereum.Fixtures.Blocks.ValidBlock.header
+      // Both bodies' transaction lists and outer lists stay in one RLP length-prefix class, so the difference is the
+      // item itself.
+      val base = a.legacy(0, gasPrice = 10)
+      def blockWith(txs: SignedTransaction*) = Block.size(Block(header, BlockBody(txs, Nil, Some(Nil))))
+      val legacy = b.legacy(0, gasPrice = 10)
+      val typed = b.dynamic(0, tip = 1)
+      blockWith(base, legacy) - blockWith(base) shouldBe size(legacy)
+      blockWith(base, typed) - blockWith(base) shouldBe size(typed)
     }
   }

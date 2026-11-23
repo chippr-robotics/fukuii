@@ -267,7 +267,7 @@ class TestingService(
   ): IO[Either[JsonRpcError, (Seq[SignedTransaction], Map[ByteString, ByteString])]] =
     rawTransactions match
       case None =>
-        engineApiService.selectMempoolTransactions(parent, Timestamp(attrs.timestamp)).map(Right(_))
+        engineApiService.selectMempoolTransactions(parent, Timestamp(attrs.timestamp), attrs.withdrawals).map(Right(_))
       case Some(raws) =>
         IO.pure(decodeTransactions(raws))
 

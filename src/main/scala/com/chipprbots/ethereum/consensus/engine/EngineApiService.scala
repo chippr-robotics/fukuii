@@ -162,7 +162,8 @@ class EngineApiService(
       attrs: PayloadAttributes,
       pool: PendingTransactionsResponse
   ): EnginePayload =
-    val (pendingTxsForBlock, blobTxRawBytesFromPool) = selectFromPool(pool, parent.header, Timestamp(attrs.timestamp))
+    val (pendingTxsForBlock, blobTxRawBytesFromPool) =
+      selectFromPool(pool, parent.header, Timestamp(attrs.timestamp), attrs.withdrawals)
     val built = buildBlockOnParent(
       parent,
       attrs,
@@ -1394,10 +1395,13 @@ class EngineApiService(
     *   1. per sender, the nonce-contiguous run executable on `parent`'s state ([[executableAtParent]]);
     *   1. [[ProposerTxSelection.select]]: each run cut at the first transaction the child block cannot pay for (base
     *      fee; blob base fee; any blob transaction before Cancun), the runs merged by effective tip, and blob
-    *      transactions capped at the fork's MAX_BLOB_GAS_PER_BLOCK.
+    *      transactions capped at the fork's MAX_BLOB_GAS_PER_BLOCK; from Osaka on, the selection ends at the first
+    *      transaction the EIP-7934 size budget cannot take ([[proposerSizeBudget]]).
     *
     * The child's base fee and excess blob gas are derived exactly as [[buildBlockOnParent]] derives them, so a
     * transaction kept here passes the fee checks the proposer's own execution applies.
+    *
+    * `withdrawals` are the payload attributes' (they are the block body's, so they count towards its size).
     *
     * Returns the transactions to include and the network-wrapped raw bytes the pool captured for each blob tx. The
     * latter is not recoverable from the canonical transaction encoding, so it has to be carried out of here for
@@ -1405,9 +1409,35 @@ class EngineApiService(
     */
   def selectMempoolTransactions(
       parent: BlockHeader,
-      timestamp: Timestamp
+      timestamp: Timestamp,
+      withdrawals: Option[Seq[Withdrawal]]
   ): IO[(Seq[SignedTransaction], Map[ByteString, ByteString])] =
-    pendingPoolTransactions.map(selectFromPool(_, parent, timestamp))
+    pendingPoolTransactions.map(selectFromPool(_, parent, timestamp, withdrawals))
+
+  /** EIP-7934 (Osaka on): the size budget a proposer's transaction selection on `parent` at `timestamp` must stay
+    * within, None before Osaka (no cap, selection unchanged).
+    *
+    * Without it the builder picked transactions by price alone, so under a high gas limit its own payload could exceed
+    * MAX_RLP_BLOCK_SIZE ([[StdBlockValidator.BlockRLPSizeCap]]), be refused by every validating client, this one
+    * included ([[blockRlpSizeError]]), and miss the slot.
+    *
+    * go-ethereum's miner (quoted from memory, miner/worker.go): the environment's size starts at the header plus the
+    * withdrawals, grows by each committed transaction's `tx.Size()`, and a transaction goes in only while
+    * `env.size+tx.Size() < params.MaxBlockSize-maxBlockSizeBufferZone`. The child header does not exist before the
+    * build, so its parent's stands in for it: the two differ by a few fields at most (a fork's new header fields, a
+    * longer extra-data), far inside the buffer zone.
+    */
+  private[engine] def proposerSizeBudget(
+      parent: BlockHeader,
+      timestamp: Timestamp,
+      withdrawals: Option[Seq[Withdrawal]]
+  ): Option[ProposerTxSelection.SizeBudget] =
+    Option.when(blockchainConfig.isOsakaTimestamp(timestamp)) {
+      ProposerTxSelection.SizeBudget(
+        initialSize = Block.size(Block(parent, BlockBody(Nil, Nil, withdrawals))),
+        limit = StdBlockValidator.BlockRLPSizeCap - ProposerTxSelection.BlockSizeBufferZone
+      )
+    }
 
   /** The pool's pending transactions, as the proposer build reads them. A pool that cannot be asked reads as empty. */
   private def pendingPoolTransactions: IO[PendingTransactionsResponse] =
@@ -1429,10 +1459,11 @@ class EngineApiService(
       .getOrElse(IO.pure(PendingTransactionsResponse(Seq.empty)))
 
   /** [[selectMempoolTransactions]]' selection, from pool contents already read. */
-  private def selectFromPool(
+  private[engine] def selectFromPool(
       response: PendingTransactionsResponse,
       parent: BlockHeader,
-      timestamp: Timestamp
+      timestamp: Timestamp,
+      withdrawals: Option[Seq[Withdrawal]]
   ): (Seq[SignedTransaction], Map[ByteString, ByteString]) =
     val expectedChainId = blockchainConfig.chainId.value
     val onChain = response.pendingTransactions.filter { ptx =>
@@ -1469,7 +1500,13 @@ class EngineApiService(
       BlobGasUtils.getBlobGasPrice(childExcessBlobGas, timestamp, blockchainConfig)
     }
     val maxBlobGas = if isCancun then BlobGasUtils.maxBlobGasPerBlock(timestamp, blockchainConfig) else BigInt(0)
-    val selected = ProposerTxSelection.select(candidates, baseFee, blobBaseFee, maxBlobGas)
+    val selected = ProposerTxSelection.select(
+      candidates,
+      baseFee,
+      blobBaseFee,
+      maxBlobGas,
+      proposerSizeBudget(parent, timestamp, withdrawals)
+    )
 
     if onChain.nonEmpty then
       log.info(
