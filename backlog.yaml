@@ -4176,3 +4176,13 @@ items:
     refs: []
     links: {}
     notes: "B-426: bounded stop steps total up to ~119 s worst case, then the unbounded RocksDB close; docker's default 10 s SIGKILLs mid-close. Set >=180 s in docker/*/docker-compose.yml, ops compose files and runbook units."
+  - id: B-445
+    title: Read the [SHUTDOWN] actor-system overrun log on the next live Mordor stop and fix the actor that holds termination past 15 s
+    priority: P3
+    status: open
+    area: node
+    size: S
+    opened: 2026-11-23
+    refs: []
+    links: {}
+    notes: B-426 added the actor tree and busy dispatcher stacks to the WARN when the actor system passes shutdown-timeout. EG-6's cause could not be told from code.
