@@ -644,10 +644,11 @@ items:
       by: cloud-dc960fdc
       agent: main
       since: 2026-11-15T17:59:02Z
-      heartbeat: 2026-11-23T04:04:02Z
+      heartbeat: 2026-11-23T04:04:06Z
     notes: |-
       cloud-dc960fdc: heartbeat or release by 11-17 17:06 UTC; C5a code merged (#1855-#1880), T209 + Sepolia fresh sync + 24 h remain.
       2026-11-18 blocked: C5a code merged (#1855-#1880 and follow-ups). Remaining gates need a live host: T209, a fresh Sepolia sync and 24 h following the head. Not doable in the cloud container.
+      2026-11-23 blocked: 2026-11-23: still blocked on live gates only (T209, fresh Sepolia sync + 24 h). Code complete. Sepolia needs the NVMe on dev-node.
   - id: B-065
     title: "Spec 018 Track C C5b: the audit, on-demand fetch and recovery scans by position (item 10)"
     priority: P2
