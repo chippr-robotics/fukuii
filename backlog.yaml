@@ -4155,3 +4155,13 @@ items:
     links:
       spec: specs/018-storage-engine-consolidation
     notes: "Same shape as B-228: catch MissingNodeException => accountStartNonce at the nonce-too-low check; a state fault should be an error, as JSON-RPC does."
+  - id: B-443
+    title: "BPO3/BPO4 blob-parameter forks: fukuii refuses them, so 96 EEST v21 BPO2ToBPO3/BPO3ToBPO4 fixtures cannot replay (decide: support or record as not modelled)"
+    priority: P3
+    status: open
+    area: consensus
+    opened: 2026-11-23
+    refs: []
+    links:
+      spec: specs/018-storage-engine-consolidation
+    notes: "From B-432. BlobSchedule.fromConfig refuses bpo3+ by design (BlobSchedule.scala:60,119); ForkTimestamps, BlockchainConfigForEvm.paramsAt, ForkId, SignedTransaction, EngineApiController carry BPO1/BPO2 only. Harness-only option: remap BPO2ToBPO3 to BPO1@0/BPO2@15k with the fixture's params (blob-only forks), test-only. Real support is a consensus change (beacon). 25+23 cases x 2 formats (+engine_x)."
