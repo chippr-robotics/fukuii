@@ -1798,7 +1798,7 @@ items:
       by: cloud-dc960fdc
       agent: vault-b207b
       since: 2026-11-22T20:35:18Z
-      heartbeat: 2026-11-23T04:04:59Z
+      heartbeat: 2026-11-23T04:05:04Z
     notes: |-
       2026-11-22 review: ethtests half run: 32,087 fixtures, 0 findings. Left: diff vs T007 baseline (dev-node).
       2026-11-22 review: T007 diff still to do: run staging over legacytests@1f581b8 Constantinople+Cancun trees (spec's own selection) and diff (file,name) against #1989's ethtests-2026-11-22-legacy-vectors.tsv.gz (61,314 rows, all pass). #1987's 32,087 is a different corpus (ets Frontier-EIP158 + Constantinople tree only).
