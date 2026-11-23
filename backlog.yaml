@@ -1,7 +1,8 @@
 # fukuii shared backlog (schema version 1). Rendered at https://docs.fukuii.com/development/tracker/
 # Change it with scripts/backlog/backlog.py on staging (claim, status, done, ...); README.md has the protocol.
 # Hand edits in the GitHub web UI are fine: keep the schema (backlog.py check), never delete or reuse an id
-# (drop the item instead). Comments other than this header are not kept when the tool rewrites the file.
+# (drop the item instead; `backlog.py prune` moves closed items to archive.yaml). Comments other than this
+# header are not kept when the tool rewrites the file.
 version: 1
 expiry_hours: 24
 items:
@@ -3928,11 +3929,16 @@ items:
   - id: B-434
     title: "Miner extends its own tip while regular sync is stalled on one timing-out peer: 9-block private fork in the B-424 re-check (node B)"
     priority: P2
-    status: open
+    status: claimed
     area: sync
     size: M
     opened: 2026-11-23
     refs: []
     links:
       spec: specs/018-storage-engine-consolidation
+    claim:
+      by: cloud-dc960fdc
+      agent: herald-b434
+      since: 2026-11-23T00:30:45Z
+      heartbeat: 2026-11-23T00:30:45Z
     notes: "Staging 8d2dcea7b, Mordor, re-imported node B with mining: after 00:13:29Z no network block imported; GetBlockHeaders to peer e514276e timed out 7x at 90 s, no other peer tried, peers' best frozen at 17450195. Miner mined 17450196-17450204, none known to core-geth; head ended 46 behind. Theory: fetcher pinned to one dead peer + mining gate has no 'behind the network' check. Logs: ~/work/s018-recheck-b424/OUT/node-b.log"
