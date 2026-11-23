@@ -149,6 +149,43 @@ class StateReadByHeaderSpec
       .unsafeRunSync()
       .isLeft shouldBe true
 
+  it should "answer eth_getHeaderByNumber and eth_getRawHeader from the header (B-412)" taggedAs (
+    UnitTest,
+    RPCTest
+  ) in new TestSetup:
+    for param <- Seq(
+        BlockParam.Latest,
+        BlockParam.WithNumber(header.number.value),
+        BlockParam.WithHash(header.hash.value)
+      )
+    do
+      ethBlocksService
+        .getHeaderByNumber(HeaderByNumberRequest(param))
+        .unsafeRunSync()
+        .map(_.headerResponse.map(_.number)) shouldEqual Right(Some(header.number.value))
+      ethBlocksService.getRawHeader(GetRawHeaderRequest(param)).unsafeRunSync().map(_.rawHeader.isDefined) shouldEqual
+        Right(true)
+    ethBlocksService
+      .getHeaderByNumber(HeaderByNumberRequest(BlockParam.WithNumber(header.number.value + 1)))
+      .unsafeRunSync()
+      .map(_.headerResponse) shouldEqual Right(None)
+
+  it should "answer eth_feeHistory without percentiles, and fail with them while the body is missing (B-412)" taggedAs (
+    UnitTest,
+    RPCTest
+  ) in new TestSetup:
+    val noRewards: FeeHistoryRequest = FeeHistoryRequest(1, BlockParam.Latest, None)
+    val response: FeeHistoryResponse = ethBlocksService.feeHistory(noRewards).unsafeRunSync().toOption.value
+    response.oldestBlock shouldEqual header.number.value
+    response.gasUsedRatio shouldEqual Seq(header.gasUsed.value.toDouble / header.gasLimit.value.toDouble)
+    response.reward shouldEqual None
+
+    val withRewards: FeeHistoryRequest = FeeHistoryRequest(1, BlockParam.Latest, Some(Seq(50.0)))
+    ethBlocksService.feeHistory(withRewards).unsafeRunSync().isLeft shouldBe true
+    // with the body stored the same request answers
+    blockchainWriter.storeBlockBody(header.hash, body).commit()
+    ethBlocksService.feeHistory(withRewards).unsafeRunSync().map(_.reward.map(_.size)) shouldEqual Right(Some(1))
+
   it should "resolve by header what resolveBlock cannot, and agree with it when the body is there" taggedAs (
     UnitTest,
     RPCTest

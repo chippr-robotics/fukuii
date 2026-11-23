@@ -254,9 +254,10 @@ class EthBlocksService(
 
   /** Implements eth_getHeaderByNumber (number or latest/safe/finalized/earliest/pending tag). */
   def getHeaderByNumber(request: HeaderByNumberRequest): ServiceResponse[HeaderByNumberResponse] = IO {
-    val response = resolveBlock(request.block).toOption.map { case ResolvedBlock(block, pending) =>
+    // by header, as geth's HeaderByNumber: a block whose body is not on disk (below a SNAP pivot) still has its header
+    val response = resolveHeader(request.block).toOption.map { case ResolvedHeader(header, pending) =>
       BlockResponse(
-        Block(block.header, BlockBody(Nil, Nil)),
+        Block(header, BlockBody(Nil, Nil)),
         pendingBlock = pending.isDefined,
         emitTotalDifficulty = false
       )
@@ -383,7 +384,7 @@ class EthBlocksService(
 
   def feeHistory(req: FeeHistoryRequest): ServiceResponse[FeeHistoryResponse] = IO {
     val bestBlock = blockchainReader.getBestBlockNumber
-    val newestBlockNum = resolveBlock(req.newestBlock).toOption.map(_.block.header.number.value).getOrElse(bestBlock)
+    val newestBlockNum = resolveHeader(req.newestBlock).toOption.map(_.header.number.value).getOrElse(bestBlock)
     // go-ethereum `Oracle.FeeHistory`: at most MaxHeaderHistory blocks, MaxBlockHistory when rewards are requested
     val maxHistory =
       if req.rewardPercentiles.exists(_.nonEmpty) then gasPriceOracle.config.maxBlockHistory
@@ -433,29 +434,37 @@ class EthBlocksService(
         .getOrElse(0.0)
     }.toSeq
 
-    val rewards = req.rewardPercentiles.map { percentiles =>
-      (oldestBlock.toLong to newestBlockNum.toLong).map { num =>
-        val txTipsAndGas: Seq[(BigInt, BigInt)] = blockchainReader
-          .getBlockHeaderByNumber(num)
-          .flatMap(header => blockchainReader.getBlockByHash(header.hash).map(block => (header, block)))
-          .flatMap { case (header, block) =>
-            blockchainReader.getReceiptsByHash(header.hash).map { receipts =>
-              val cumulative = receipts.map(_.cumulativeGasUsed)
-              val perTxGas = cumulative.zip(BigInt(0) +: cumulative).map((cum, prev) => cum - prev)
-              val baseFee = header.baseFee.getOrElse(BigInt(0))
-              block.body.transactionList.zip(perTxGas).map { case (stx, gas) =>
-                val tip = (Transaction.effectiveGasPrice(stx.tx, header.baseFee) - baseFee).max(0)
-                (tip, gas)
-              }
-            }
-          }
-          .getOrElse(Seq.empty)
-        val blockGasUsed = blockchainReader.getBlockHeaderByNumber(num).map(_.gasUsed.value).getOrElse(BigInt(0))
-        percentileRewards(txTipsAndGas, blockGasUsed, percentiles)
-      }.toSeq
-    }
+    // Rewards need the body and the receipts. geth fetches the block when percentiles are asked for and fails the call
+    // when it is not there, so a header-only block (below a SNAP pivot) is an error here, not zero rewards.
+    val rewardsOrError: Either[JsonRpcError, Option[Seq[Seq[BigInt]]]] = req.rewardPercentiles match
+      case None => Right(None)
+      case Some(percentiles) =>
+        val perBlock = (oldestBlock.toLong to newestBlockNum.toLong).toList.map { num =>
+          blockchainReader.getBlockHeaderByNumber(num) match
+            case None => Right(percentileRewards(Seq.empty, BigInt(0), percentiles))
+            case Some(header) =>
+              blockchainReader.getBlockByHash(header.hash) match
+                case None => Left(JsonRpcError.InvalidParams(s"block $num not found"))
+                case Some(block) =>
+                  val txTipsAndGas: Seq[(BigInt, BigInt)] = blockchainReader
+                    .getReceiptsByHash(header.hash)
+                    .map { receipts =>
+                      val cumulative = receipts.map(_.cumulativeGasUsed)
+                      val perTxGas = cumulative.zip(BigInt(0) +: cumulative).map((cum, prev) => cum - prev)
+                      val baseFee = header.baseFee.getOrElse(BigInt(0))
+                      block.body.transactionList.zip(perTxGas).map { case (stx, gas) =>
+                        val tip = (Transaction.effectiveGasPrice(stx.tx, header.baseFee) - baseFee).max(0)
+                        (tip, gas)
+                      }
+                    }
+                    .getOrElse(Seq.empty)
+                  Right(percentileRewards(txTipsAndGas, header.gasUsed.value, percentiles))
+        }
+        perBlock.collectFirst { case Left(e) => e } match
+          case Some(e) => Left(e)
+          case None    => Right(Some(perBlock.collect { case Right(r) => r }))
 
-    Right(
+    rewardsOrError.map { rewards =>
       FeeHistoryResponse(
         oldestBlock = oldestBlock,
         baseFeePerGas = baseFees,
@@ -464,7 +473,7 @@ class EthBlocksService(
         baseFeePerBlobGas = blobBaseFees,
         blobGasUsedRatio = blobGasUsedRatios
       )
-    )
+    }
   }
 
   def maxPriorityFeePerGas(@unused req: MaxPriorityFeePerGasRequest): ServiceResponse[MaxPriorityFeePerGasResponse] =
@@ -561,8 +570,8 @@ class EthBlocksService(
   }
 
   def getRawHeader(req: GetRawHeaderRequest): ServiceResponse[GetRawHeaderResponse] = IO {
-    val raw = resolveBlock(req.block).toOption.map { case ResolvedBlock(block, _) =>
-      ByteString(rlp.encode(block.header.toRLPEncodable))
+    val raw = resolveHeader(req.block).toOption.map { case ResolvedHeader(header, _) =>
+      ByteString(rlp.encode(header.toRLPEncodable))
     }
     Right(GetRawHeaderResponse(raw))
   }
