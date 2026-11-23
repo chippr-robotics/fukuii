@@ -4035,18 +4035,19 @@ items:
   - id: B-435
     title: Miner's sync-status ask times out during SNAP every 2-5 min (SyncController slow to answer GetStatus); flaps the 'Mining waits' reason
     priority: P3
-    status: in-progress
+    status: review
     area: sync
     size: S
     opened: 2026-11-23
     refs: []
     links:
+      prs: [2007]
       spec: 018
     claim:
       by: cloud-dc960fdc
       agent: herald-b435
       since: 2026-11-23T21:32:05Z
-      heartbeat: 2026-11-23T22:09:21Z
+      heartbeat: 2026-11-23T22:09:53Z
     notes: "dev-node B-424 re-check 2026-11-23: 73 'Mining waits' lines on node A, alternating 'syncing' / 'did not say' (5 s ask timeout). Harmless (miner waits either way) but suggests the SyncController blocks its mailbox during SNAP. Find what it does while not answering."
   - id: B-436
     title: Peer best-block re-probe asks for the peer's handshake bestHash, so maxBlockNumber never advances without announcements
