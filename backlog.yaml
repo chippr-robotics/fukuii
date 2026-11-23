@@ -1785,24 +1785,20 @@ items:
   - id: B-207
     title: "Spec 018 T026, the half that waits: the position mirror on the ethereum/tests pre-Atlantis networks, and the comparison with C0's ethtests baseline"
     priority: P2
-    status: review
+    status: done
     area: storage
     size: S
     opened: 2026-11-11
+    closed: 2026-11-23
     refs: []
     links:
       prs: [1987, 1995]
       spec: specs/018-storage-engine-consolidation
     depends_on: [B-053]
-    claim:
-      by: cloud-dc960fdc
-      agent: vault-b207b
-      since: 2026-11-22T20:35:18Z
-      heartbeat: 2026-11-23T04:50:55Z
     notes: |-
-      2026-11-22 review: T007 diff still to do: run staging over legacytests@1f581b8 Constantinople+Cancun trees (spec's own selection) and diff (file,name) against #1989's ethtests-2026-11-22-legacy-vectors.tsv.gz (61,314 rows, all pass). #1987's 32,087 is a different corpus (ets Frontier-EIP158 + Constantinople tree only).
       2026-11-22 in-progress: #1987 merged (b44923f9d): legacy-fixture mirror. Remaining: the T007 vector diff after #1989 merges.
       2026-11-23 review: Per-vector diff vs C0: 61,314/61,314 identical, all PASS, mirror 0 findings.
+      2026-11-23 done: Merged 7eccd5df3
   - id: B-209
     title: "Spec 018 C3b: PathMptStorage.decoded has no check for a stored value shaped like a bare 32-byte hash (the hash store treats it as corrupt, NodeFault)"
     priority: P2
