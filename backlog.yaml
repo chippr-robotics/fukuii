@@ -3963,3 +3963,13 @@ items:
     links:
       spec: specs/018-storage-engine-consolidation
     notes: "NetworkPeerManagerActor RefreshPeerBestBlocksTick (~line 463) sends GetBlockHeaders(Right(remoteStatus.bestHash),1): the reply is the handshake-time head, so updateMaxBlock never advances; a peer that stops announcing stays frozen (seen in B-434: peers best frozen at 17450195). Probe by number (maxBlockNumber+1) or hash of current bestBlockHash plus skip."
+  - id: B-437
+    title: "B-434 follow-up: live mechanism of same-peer re-pick 0.6 s after each 90 s timeout not found; needs node-b DEBUG lines"
+    priority: P2
+    status: open
+    area: sync
+    opened: 2026-11-23
+    refs: []
+    links:
+      spec: 018
+    notes: "Read and tested (HeadersFetcher+PeersClient+production blacklist stack): retry after timeout goes to the other peer. Unruled-out: PeerDisconnected(nodeId) for the live peer clearing its blacklist (PeerListHelper.removePeerById, blacklist.remove) while it stays connected; ask timeout (92 s) path that skips BlacklistPeer. Grep node-b.log for 'Blacklisting peer', 'Blacklisting of peer .* dropped' (now WARN), 'Removed peer .* from blacklist', 'is blacklisted and excluded', PEER_REQUEST_DISCONNECTED around e514276e."
