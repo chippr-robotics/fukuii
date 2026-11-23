@@ -41,7 +41,9 @@ import com.chipprbots.ethereum.db.storage.pathstate.FinalizedBlock
 import com.chipprbots.ethereum.db.storage.pathstate.HandedToRecovery
 import com.chipprbots.ethereum.db.storage.pathstate.PathStateTestKit
 import com.chipprbots.ethereum.db.storage.pathstate.RefusedForThisHead
+import com.chipprbots.ethereum.db.storage.pathstate.StateAnchor
 import com.chipprbots.ethereum.db.storage.pathstate.StateConfig
+import com.chipprbots.ethereum.db.storage.pathstate.StateUnavailable
 import com.chipprbots.ethereum.domain.*
 import com.chipprbots.ethereum.ledger.BlockExecutionError
 import com.chipprbots.ethereum.ledger.InMemoryWorldStateProxy
@@ -338,6 +340,96 @@ class ReorgBlockhashParitySpec extends AnyFlatSpec with Matchers with ScalaFutur
         // the kill met the move at each of its points: before it, on the way down, at the fork, on the way up, after
         restartedOn shouldBe Set("the old head", "the old chain", "the fork", "the branch", "the branch's tip")
       )
+
+  // B-292 (forge N2 of C4e part 3): reverse-then-commit at the cap meets a fault, in a node that runs on. Each write
+  // that fails writes nothing, as a synced batch that did not land; the node must stand on a valid head after it, say
+  // where that head is, and adopt the branch when it is offered again with nothing failing.
+  "A heavier branch committed in place at the cap (reverse-then-commit)" should
+    "be moved back from to the old head when a fault of the state meets it after some of its blocks were committed" taggedAs (
+      UnitTest,
+      ConsensusTest
+    ) in (new FaultedReorg:
+      datadir.failAt(branch(3), injected("the commit of block 7"))
+      evaluate(branch) match
+        case Right(ConsensusStateFault(fault, imported, queued)) =>
+          fault.getMessage should include("the commit of block 7")
+          imported shouldBe Nil
+          queued.map(_.hash) shouldBe branch.map(_.hash)
+        case other => fail(s"not a fault of this node: $other")
+      // the head went to the fork, and b4..b6 were committed on it, before the fault
+      anchoredSince.take(6) shouldBe Vector(oldChain(8), oldChain(5), fork, branch(0), branch(1), branch(2))
+        .map(_.hash.value)
+      settledOn(oldChain.last)
+      adoptedAgain()
+    )
+
+  it should "be moved back from to the old head when a write of a commit fails, and the failure be thrown" taggedAs (
+    UnitTest,
+    ConsensusTest
+  ) in (new FaultedReorg:
+    datadir.failAt(branch(3), new java.io.IOException("injected: the disk refused the commit of block 7"))
+    evaluate(branch) match
+      case Left(thrown: java.io.IOException) => thrown.getMessage should include("the commit of block 7")
+      case other                             => fail(s"the failure of the write is not thrown: $other")
+    anchoredSince should contain(branch(2).hash.value)
+    settledOn(oldChain.last)
+    adoptedAgain()
+  )
+
+  it should "say where the head is when the move back fails before it wrote, with the committed blocks as imported" taggedAs (
+    UnitTest,
+    ConsensusTest
+  ) in (new FaultedReorg:
+    datadir.failAt(branch(3), injected("the commit of block 7"))
+    // the move back's first batch, to the fork: the fork's second anchoring since the attempt began
+    datadir.failAt(fork, injected("the move back"), after = 1)
+    val result: Either[Throwable, ConsensusResult] = evaluate(branch)
+    settledOn(branch(2))
+    toldWhereTheHeadIs(result, branch(2))
+    adoptedAgain()
+  )
+
+  it should "leave a valid head on the old chain when the move back stops part of the way, and adopt the branch again" taggedAs (
+    UnitTest,
+    ConsensusTest
+  ) in (new FaultedReorg:
+    datadir.failAt(branch(3), injected("the commit of block 7"))
+    // the move back's third batch, to h9: h9's second anchoring since the attempt began. The head is left at h6
+    datadir.failAt(oldChain(8), injected("the move back"), after = 1)
+    evaluate(branch) should matchPattern { case Right(ConsensusStateFault(_, _, _)) => }
+    settledOn(oldChain(5))
+    // what the answer tells of where the head is, here, is not yet what the design says (B-439)
+    adoptedAgain()
+  )
+
+  it should "go back to the old head when the move to the fork stops part of the way" taggedAs (
+    UnitTest,
+    ConsensusTest
+  ) in (new FaultedReorg:
+    // the move's second batch, to h6: the head is at h9 when it fails
+    datadir.failAt(oldChain(5), injected("the second batch of the move to the fork"))
+    evaluate(branch) match
+      case Right(ConsensusStateFault(fault, imported, queued)) =>
+        fault.getMessage should include("the second batch of the move to the fork")
+        imported shouldBe Nil
+        queued.map(_.hash) shouldBe branch.map(_.hash)
+      case other => fail(s"not a fault of this node: $other")
+    anchoredSince.take(2) shouldBe Vector(oldChain(8), oldChain.last).map(_.hash.value)
+    settledOn(oldChain.last)
+    adoptedAgain()
+  )
+
+  it should "leave a valid head on the old chain when the move to the fork stops part of the way and the move back fails, and adopt the branch again" taggedAs (
+    UnitTest,
+    ConsensusTest
+  ) in (new FaultedReorg:
+    datadir.failAt(oldChain(5), injected("the second batch of the move to the fork"))
+    datadir.failAt(oldChain.last, injected("the move back"))
+    evaluate(branch) should matchPattern { case Right(ConsensusStateFault(_, Nil, _)) => }
+    settledOn(oldChain(8))
+    // what the answer tells of where the head is, here, is not yet what the design says (B-439)
+    adoptedAgain()
+  )
 
   "Chain-file import (hive consensus simulator path)" should
     "apply TD fork choice instead of making the last block in the file the head" taggedAs (
@@ -760,7 +852,7 @@ class ReorgBlockhashParitySpec extends AnyFlatSpec with Matchers with ScalaFutur
     /** The state's block is the best block, the index is its ancestry and holds nothing above it, its header is the
       * anchor's, and the disk holds its state row for row.
       */
-    def validHead(node: Node, datadir: Killable): BlockHeader =
+    def validHead(node: Node, datadir: EphemDataSource): BlockHeader =
       val appState = node.storagesInstance.storages.appStateStorage
       val anchor = appState.getStateAnchor().getOrElse(fail("no anchor"))
       node.storagesInstance.storages.pathStateStorage.get.anchor shouldBe Some(anchor)
@@ -794,6 +886,62 @@ class ReorgBlockhashParitySpec extends AnyFlatSpec with Matchers with ScalaFutur
           .flatten
           .toMap
       )
+
+  /** [[KilledReorg]]'s two chains on a node that runs on, over a [[Faulty]] datadir (B-292): the old chain h1..h12 is
+    * imported, and the branch b4..b13 is evaluated at the cap with nothing kept under the pin, so that the whole of it
+    * is committed in place (C4e part 3). The move to the fork is three batches, to h9, h6 and h3; each block of the
+    * branch is one commit; a move back from b6 is four batches, to h3, h6, h9 and h12.
+    */
+  class FaultedReorg extends KilledReorg(pinnedCap(1L).andThen(movesOfThree)):
+    val datadir = new Faulty
+    val node = new Node(guard = true, pinnedCap(1L).andThen(movesOfThree), Some(datadir))
+    node.importAll(oldChain) shouldBe a[BlockImportedToTop]
+    private val anchoredBefore = datadir.anchored.size
+
+    /** The blocks the anchor was moved to since the old chain was imported, in order. */
+    def anchoredSince: Vector[ByteString] = datadir.anchored.drop(anchoredBefore)
+    val consensus = new ConsensusImpl(
+      node.blockchainReader,
+      node.blockchainWriter,
+      node.blockExecution,
+      reorgState = node.blockchain
+    )
+
+    def evaluate(blocks: List[Block]): Either[Throwable, ConsensusResult] =
+      import node.blockchainConfig
+      import node.runtime
+      scala.util.Try(consensus.evaluateBranch(NonEmptyList.fromListUnsafe(blocks)).unsafeRunSync()).toEither
+
+    def injected(what: String): StateUnavailable = new StateUnavailable(s"injected: $what")
+
+    def onTheHeadsChain(block: Block): Boolean = node.indexed(block.number.value.toInt).contains(block.hash)
+
+    /** Every fault asked for was met, the attempt is over (the head's generation is even again), and the head is
+      * `block`: the anchor, the best block, the index and the rows on disk all of it.
+      */
+    def settledOn(block: Block): Unit =
+      datadir.unmet shouldBe 0
+      node.storagesInstance.storages.pathStateStorage.get.headGeneration % 2 shouldBe 0
+      validHead(node, datadir).hash shouldBe block.hash
+
+    /** What a move back that failed is answered with (C4e part 3, the design's "a move back that fails is said"): a
+      * fault of this node that names the block the head is at, with the blocks of the branch the head stands on as
+      * imported, and every block of either chain above the fork that the head is not on queued again.
+      */
+    def toldWhereTheHeadIs(result: Either[Throwable, ConsensusResult], head: Block): Unit = result match
+      case Right(ConsensusStateFault(fault, imported, queued)) =>
+        fault.getMessage should include(s"at block ${head.number.value}")
+        imported.map(_.block.hash) shouldBe branch.filter(onTheHeadsChain).map(_.hash)
+        queued.map(_.hash) should contain allElementsOf
+          (oldChain.drop(3) ++ branch).filterNot(onTheHeadsChain).map(_.hash)
+      case other => fail(s"not a fault of this node: $other")
+
+    /** Offered the branch again with nothing failing, the node adopts it, and executes its next block on its state. */
+    def adoptedAgain(): Unit =
+      offer(node, branch)
+      validHead(node, datadir).hash shouldBe branch.last.hash
+      node.importOne(next) shouldBe a[BlockImportedToTop]
+      node.bestHash shouldBe next.hash
 
   class Fixture(guard: Boolean = false, cap: StateConfig => StateConfig = identity):
     val oracle = new Oracle
@@ -1067,13 +1215,56 @@ object ReorgBlockhashParitySpec extends SecureRandomBuilder:
         made += 1
       }
 
+  /** An in-memory datadir that fails a write on demand, in a node that runs on (B-292): the write that would move the
+    * anchor to a block, the how-many-th time it is asked for, fails with the fault given and writes nothing, as a
+    * synced batch that did not land; every other write is made. It records, in order, every block a write it made moved
+    * the anchor to.
+    */
+  final class Faulty extends EphemDataSource(Map.empty):
+    final private case class Fault(at: ByteString, var skip: Int, fault: () => Throwable)
+    private var faults = Vector.empty[Fault]
+    private var moved = Vector.empty[ByteString]
+
+    /** The `after + 1`-th write from now that moves the anchor to `block` fails with `fault`. */
+    def failAt(block: Block, fault: => Throwable, after: Int = 0): Unit = synchronized {
+      faults :+= Fault(block.hash.value, after, () => fault)
+    }
+
+    /** The faults asked for that no write has met yet. */
+    def unmet: Int = synchronized(faults.size)
+
+    /** The blocks the writes made moved the anchor to, in order. */
+    def anchored: Vector[ByteString] = synchronized(moved)
+
+    override def update(updates: Seq[DataUpdate]): Unit = synchronized {
+      val to = updates.flatMap(anchorOf).lastOption
+      to.foreach { hash =>
+        faults.indexWhere(_.at == hash) match
+          case -1 => ()
+          case i if faults(i).skip > 0 =>
+            faults(i).skip -= 1
+          case i =>
+            val failing = faults(i)
+            faults = faults.patch(i, Nil, 1)
+            throw failing.fault()
+      }
+      super.update(updates)
+      to.foreach(hash => moved :+= hash)
+    }
+
   private val AnchorKey: IndexedSeq[Byte] = AppStateStorage.Keys.StateAnchor.getBytes.toIndexedSeq
 
-  private def movesTheAnchor(update: DataUpdate): Boolean = update match
-    case DataSourceUpdate(namespace, _, upserts) =>
-      namespace == Namespaces.AppStateNamespace && upserts.exists(_._1 == AnchorKey)
-    case DataSourceUpdateOptimized(namespace, _, upserts) =>
-      namespace == Namespaces.AppStateNamespace && upserts.exists(_._1.toIndexedSeq == AnchorKey)
+  private def movesTheAnchor(update: DataUpdate): Boolean = anchorOf(update).isDefined
+
+  /** The block a write moves the anchor to, by its hash. */
+  private def anchorOf(update: DataUpdate): Option[ByteString] =
+    val value: Option[Array[Byte]] = update match
+      case DataSourceUpdate(namespace, _, upserts) if namespace == Namespaces.AppStateNamespace =>
+        upserts.collectFirst { case (key, value) if key == AnchorKey => value.toArray }
+      case DataSourceUpdateOptimized(namespace, _, upserts) if namespace == Namespaces.AppStateNamespace =>
+        upserts.collectFirst { case (key, value) if key.toIndexedSeq == AnchorKey => value }
+      case _ => None
+    value.map(bytes => StateAnchor.decode(new String(bytes, java.nio.charset.StandardCharsets.UTF_8)).hash)
 
   val OtherMiner: Address = Address(0x6f746872)
 
