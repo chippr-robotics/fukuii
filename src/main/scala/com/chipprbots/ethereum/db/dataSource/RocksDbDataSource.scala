@@ -421,8 +421,9 @@ class RocksDbDataSource(
         val order = RocksDbDataSource.largestFirst(nameSpaces.map(ns => ns -> sstBytesOf(ns)))
         val done = Vector.newBuilder[CompactedFamily]
         var cancelled = false
+        var failure: Option[CompactFailure] = None
         var remaining = order
-        while remaining.nonEmpty && !cancelled do
+        while remaining.nonEmpty && !cancelled && failure.isEmpty do
           val (namespace, before) = remaining.head
           onFamily(namespace, order.size - remaining.size + 1, order.size)
           try
@@ -433,7 +434,10 @@ class RocksDbDataSource(
           catch
             case _: RocksDbDataSourceClosedException =>
               cancelled = true
-        CompactAllOutcome.Finished(done.result(), remaining.map(_._1), cancelled)
+            // Any other failure ends the run too, but keeps what was done: the caller is told the family and why.
+            case error: RocksDbDataSourceException =>
+              failure = Some(CompactFailure(namespace, Option(error.getMessage).getOrElse(error.toString)))
+        CompactAllOutcome.Finished(done.result(), remaining.map(_._1), cancelled, failure)
       finally compactingAll.set(false)
 
   /** Forward range scan via a single seek+next over a bounded `[fromKey, toKeyExclusive)` window. Uses
@@ -927,15 +931,25 @@ object RocksDbDataSource extends Logger:
     */
   final case class CompactedFamily(namespace: Namespace, sstBytesBefore: Option[Long], sstBytesAfter: Option[Long])
 
+  /** The family whose compaction failed, and the message of the exception. */
+  final case class CompactFailure(namespace: Namespace, message: String)
+
   /** The end of a [[RocksDbDataSource.compactAll]]. */
   sealed trait CompactAllOutcome
   object CompactAllOutcome:
     /** Another compactAll was running; this one did nothing. */
     case object AlreadyRunning extends CompactAllOutcome
 
-    /** `compacted` in the order done; `notReached` are the families a cancellation (the database closing) left out. */
-    final case class Finished(compacted: Vector[CompactedFamily], notReached: Vector[Namespace], cancelled: Boolean)
-        extends CompactAllOutcome
+    /** `compacted` in the order done; `notReached` are the families a cancellation (the database closing) or a failure
+      * left out, the failed one first. `failure` is set when a family's compaction threw something other than the
+      * close.
+      */
+    final case class Finished(
+        compacted: Vector[CompactedFamily],
+        notReached: Vector[Namespace],
+        cancelled: Boolean,
+        failure: Option[CompactFailure] = None
+    ) extends CompactAllOutcome
 
   /** The families by SST bytes, the largest first; one whose size is unknown counts as empty. Ties keep their order. */
   private[dataSource] def largestFirst(sizes: Seq[(Namespace, Option[Long])]): Vector[(Namespace, Option[Long])] =

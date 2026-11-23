@@ -97,7 +97,9 @@ The Ops view lists what an operator may look for and not find (restarting the no
   stopped (B-278, B-279).
 - Compaction is offered as `compact`, a Disrupt that asks for confirmation (B-281, B-371). The data source no longer
   holds its lock across a compaction, and `compactAll` takes the column families one at a time, the largest first, so
-  closing the node cancels it between or inside families. Only one runs at a time.
+  closing the node cancels it between or inside families. A family that fails (any other data-source error) ends the
+  run at once and is reported with its error, the families done and those not reached, as a failure. Only one runs at a
+  time, and quitting the console does not stop it (the native call cannot be interrupted).
 - The preview reads the node when the dialog opens, on a worker thread. An action on a node that is slow to answer
   shows "reading" until it does, and cannot be confirmed before then.
 

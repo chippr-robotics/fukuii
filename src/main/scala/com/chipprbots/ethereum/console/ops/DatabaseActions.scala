@@ -33,14 +33,24 @@ object DatabaseActions:
   /** One store compacted: its SST bytes before and after, where they could be read. */
   final case class Compacted(store: String, before: Option[Long], after: Option[Long])
 
+  /** The store whose compaction failed, and why. */
+  final case class CompactFailure(store: String, message: String)
+
   /** How a whole-database compaction ended.
     *
     * @param notReached
-    *   the stores a cancellation (the node stopping) left uncompacted
+    *   the stores a cancellation (the node stopping) or a failure left uncompacted
+    * @param failure
+    *   set when a store's compaction failed: the run stopped there
     */
   enum CompactResult:
     case AlreadyRunning
-    case Finished(compacted: Vector[Compacted], notReached: Vector[String], cancelled: Boolean)
+    case Finished(
+        compacted: Vector[Compacted],
+        notReached: Vector[String],
+        cancelled: Boolean,
+        failure: Option[CompactFailure] = None
+    )
 
   /** What `compact` needs of the node.
     *
@@ -67,9 +77,12 @@ object DatabaseActions:
             s"Rewrites the files of all ${node.stores} stores, the largest first, one store at a time.",
             "It reads and writes a great deal: block import, sync and RPC slow while it runs, and on a large database " +
               "it takes hours.",
-            "It needs free disk for the files it writes before the old ones go: up to the size of the store it is on.",
+            "It needs free disk for the files it writes before the old ones go: about the size of the largest store, " +
+              "and in the worst case the whole database.",
             "Block import and sync go on beside it; no lock is held across it.",
-            "It stops by itself, between stores or inside one, when the node stops. Only one runs at a time."
+            "It stops by itself, between stores or inside one, when the node stops. Only one runs at a time.",
+            "Quitting this console does not stop it: the compaction cannot be interrupted, and ends by itself or when " +
+              "the node stops."
           ),
           figures = Vector(
             node
@@ -80,12 +93,17 @@ object DatabaseActions:
       (_, progress) =>
         node.compact((store, at, of) => progress(s"compacting store $store ($at of $of)")) match
           case CompactResult.AlreadyRunning => Left("already running: a compaction started earlier has not ended")
-          case CompactResult.Finished(compacted, notReached, cancelled) =>
+          case CompactResult.Finished(compacted, notReached, cancelled, failure) =>
             val (before, after) = (compacted.flatMap(_.before).sum, compacted.flatMap(_.after).sum)
             val said =
               s"compacted ${compacted.size} of ${node.stores} stores (${bytes(before)} of files before, " +
                 s"${bytes(after)} after)"
-            if cancelled then
+            if failure.isDefined then
+              val f = failure.get
+              Left(
+                s"failed on store ${f.store}: ${f.message}; $said; not reached: ${notReached.mkString(", ")}"
+              )
+            else if cancelled then
               Left(s"cancelled because the node is stopping: $said; not reached: ${notReached.mkString(", ")}")
             else Right(said)
     )

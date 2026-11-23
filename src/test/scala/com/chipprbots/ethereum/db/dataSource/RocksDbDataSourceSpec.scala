@@ -508,7 +508,7 @@ class RocksDbDataSourceSpec extends AnyFlatSpec with Matchers:
       ds.flushAll()
       val told = scala.collection.mutable.Buffer.empty[(DataSource.Namespace, Int, Int)]
       ds.compactAll((ns, at, of) => told += ((ns, at, of))) match
-        case RocksDbDataSource.CompactAllOutcome.Finished(compacted, notReached, cancelled) =>
+        case RocksDbDataSource.CompactAllOutcome.Finished(compacted, notReached, cancelled, _) =>
           cancelled shouldBe false
           notReached shouldBe empty
           compacted.map(_.namespace).take(3) shouldBe Seq(
@@ -548,7 +548,7 @@ class RocksDbDataSourceSpec extends AnyFlatSpec with Matchers:
     // The callback runs between families, with no guard and no lock held: close() here cancels the rest.
     val outcome = ds.compactAll((_, at, _) => if at == 2 then ds.close())
     outcome match
-      case RocksDbDataSource.CompactAllOutcome.Finished(compacted, notReached, cancelled) =>
+      case RocksDbDataSource.CompactAllOutcome.Finished(compacted, notReached, cancelled, _) =>
         cancelled shouldBe true
         compacted.map(_.namespace) shouldBe Seq(Namespaces.NodeNamespace)
         notReached.size shouldBe ds.familyCount - 1
@@ -557,6 +557,31 @@ class RocksDbDataSourceSpec extends AnyFlatSpec with Matchers:
     an[RocksDbDataSourceClosedException] should be thrownBy ds.get(Ns, key(1))
     // The guard is let go: a later request is not "already running" (it finds the database closed instead).
     ds.compactAll() should not be RocksDbDataSource.CompactAllOutcome.AlreadyRunning
+    lockIsFree()
+  }
+
+  it should "stop on a failure other than the close, keeping the families done and naming the one that failed (B-371)" taggedAs (
+    UnitTest,
+    DatabaseTest
+  ) in withTempDir { dbPath =>
+    val ds = filled(dbPath)
+    try
+      var calls = 0
+      ds.beforeNativeCompaction = () =>
+        calls += 1
+        if calls == 2 then throw new IllegalStateException("disk full")
+      ds.compactAll() match
+        case RocksDbDataSource.CompactAllOutcome.Finished(compacted, notReached, cancelled, failure) =>
+          cancelled shouldBe false
+          compacted.size shouldBe 1
+          failure.map(_.namespace) shouldBe notReached.headOption
+          failure.exists(_.message.contains("compacting")) shouldBe true
+          notReached.size shouldBe ds.familyCount - 1
+        case other => fail(s"expected a finished compaction, got $other")
+      // The guard is let go: the next request runs.
+      ds.beforeNativeCompaction = () => ()
+      ds.compactAll() shouldBe a[RocksDbDataSource.CompactAllOutcome.Finished]
+    finally ds.close()
     lockIsFree()
   }
 

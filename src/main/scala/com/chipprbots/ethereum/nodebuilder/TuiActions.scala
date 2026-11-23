@@ -246,8 +246,13 @@ object TuiActions:
                 DatabaseActions.Compacted(named(c.namespace), c.sstBytesBefore, c.sstBytesAfter)
               rocks.compactAll((ns, at, of) => onStore(named(ns), at, of)) match
                 case RocksDbDataSource.CompactAllOutcome.AlreadyRunning => DatabaseActions.CompactResult.AlreadyRunning
-                case RocksDbDataSource.CompactAllOutcome.Finished(done, left, cancelled) =>
-                  DatabaseActions.CompactResult.Finished(done.map(store), left.map(named), cancelled)
+                case RocksDbDataSource.CompactAllOutcome.Finished(done, left, cancelled, failure) =>
+                  DatabaseActions.CompactResult.Finished(
+                    done.map(store),
+                    left.map(named),
+                    cancelled,
+                    failure.map(f => DatabaseActions.CompactFailure(named(f.namespace), f.message))
+                  )
           )
         )
       case _ => None

@@ -163,6 +163,28 @@ class DatabaseActionsSpec extends AnyFlatSpec with Matchers with OptionValues:
     fake.run() shouldBe Left("already running: a compaction started earlier has not ended")
   }
 
+  it should "report a failed store as a failure with the error, the stores done and those not reached" taggedAs (
+    UnitTest
+  ) in {
+    val failed = DatabaseActions.CompactResult.Finished(
+      Done.compacted.take(1),
+      Vector("bodies", "receipts"),
+      cancelled = false,
+      Some(DatabaseActions.CompactFailure("bodies", "disk full"))
+    )
+    val answer = new FakeCompact(failed).run()
+    answer.isLeft shouldBe true
+    answer.merge should include("failed on store bodies: disk full")
+    answer.merge should include("compacted 1 of 3 stores")
+    answer.merge should include("not reached: bodies, receipts")
+  }
+
+  it should "say the console's quitting does not stop it, and the free disk is the largest store's" taggedAs (UnitTest) in {
+    val text = new FakeCompact(Done).preview.lines.mkString(" ")
+    text should include("Quitting this console does not stop it")
+    text should include("size of the largest store")
+  }
+
   it should "report a cancellation as a failure naming the stores not reached" taggedAs (UnitTest) in {
     val cancelled = DatabaseActions.CompactResult.Finished(
       Done.compacted.take(1),
