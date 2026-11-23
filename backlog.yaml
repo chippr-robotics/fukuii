@@ -3969,17 +3969,18 @@ items:
   - id: B-433
     title: "Engine API payload builder: stop adding transactions at the EIP-7934 8 MiB RLP cap post-Osaka (geth miner does)"
     priority: P3
-    status: in-progress
+    status: review
     area: consensus
     opened: 2026-11-22
     refs: []
     links:
+      prs: [2000]
       spec: none
     claim:
       by: cloud-dc960fdc
       agent: beacon-b433
       since: 2026-11-23T21:04:52Z
-      heartbeat: 2026-11-23T21:07:13Z
+      heartbeat: 2026-11-23T21:13:47Z
     notes: Follow-up of B-431. Post-Osaka a built payload can exceed MAX_RLP_BLOCK_SIZE and be invalid under our own validateBlockRLPSize; go-ethereum's miner stops filling at the cap (StdBlockValidator.BlockRLPSizeCap). Use the shared helper / Block.size, ETH Osaka only.
   - id: B-434
     title: "Miner extends its own tip while regular sync is stalled on one timing-out peer: 9-block private fork in the B-424 re-check (node B)"
