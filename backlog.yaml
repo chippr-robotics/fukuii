@@ -4166,3 +4166,13 @@ items:
     links:
       spec: specs/018-storage-engine-consolidation
     notes: "From B-432. BlobSchedule.fromConfig refuses bpo3+ by design (BlobSchedule.scala:60,119); ForkTimestamps, BlockchainConfigForEvm.paramsAt, ForkId, SignedTransaction, EngineApiController carry BPO1/BPO2 only. Harness-only option: remap BPO2ToBPO3 to BPO1@0/BPO2@15k with the fixture's params (blob-only forks), test-only. Real support is a consensus change (beacon). 25+23 cases x 2 formats (+engine_x)."
+  - id: B-444
+    title: Shipped supervisor stop timeouts (docker stop_grace_period, systemd TimeoutStopSec) leave room for the bounded stop steps and the DB close
+    priority: P3
+    status: open
+    area: ops
+    size: S
+    opened: 2026-11-23
+    refs: []
+    links: {}
+    notes: "B-426: bounded stop steps total up to ~119 s worst case, then the unbounded RocksDB close; docker's default 10 s SIGKILLs mid-close. Set >=180 s in docker/*/docker-compose.yml, ops compose files and runbook units."
