@@ -10,9 +10,9 @@ package com.chipprbots.ethereum.metrics
   * per chain for per-chain observability until the registry-per-instance refactor lands. See `Metrics.configure` for
   * the WARN that fires when a second instance is registered.
   *
-  * **First touch before `configure` (B-427)**: an object touched before the node configures its metrics holds meters
-  * of the default registry, a composite that `Metrics.configure` adds the exported registry to; Micrometer registers
-  * the meters it already holds on a registry added to it, so they are exported. Counts made before that are not.
+  * **First touch before `configure` (B-427)**: an object touched before the node configures its metrics holds meters of
+  * the default registry, a composite that `Metrics.configure` adds the exported registry to; Micrometer registers the
+  * meters it already holds on a registry added to it, so they are exported. Counts made before that are not.
   */
 trait MetricsContainer:
   final lazy val metrics: Metrics = Metrics.get()
