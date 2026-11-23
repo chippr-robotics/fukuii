@@ -3953,3 +3953,13 @@ items:
     links:
       spec: 018
     notes: "dev-node B-424 re-check 2026-11-23: 73 'Mining waits' lines on node A, alternating 'syncing' / 'did not say' (5 s ask timeout). Harmless (miner waits either way) but suggests the SyncController blocks its mailbox during SNAP. Find what it does while not answering."
+  - id: B-436
+    title: Peer best-block re-probe asks for the peer's handshake bestHash, so maxBlockNumber never advances without announcements
+    priority: P2
+    status: open
+    area: sync
+    opened: 2026-11-23
+    refs: []
+    links:
+      spec: specs/018-storage-engine-consolidation
+    notes: "NetworkPeerManagerActor RefreshPeerBestBlocksTick (~line 463) sends GetBlockHeaders(Right(remoteStatus.bestHash),1): the reply is the handshake-time head, so updateMaxBlock never advances; a peer that stops announcing stays frozen (seen in B-434: peers best frozen at 17450195). Probe by number (maxBlockNumber+1) or hash of current bestBlockHash plus skip."
