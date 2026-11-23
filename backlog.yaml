@@ -3929,13 +3929,18 @@ items:
   - id: B-426
     title: Graceful SIGTERM shutdown times out at StdNode.scala:852 (TimeoutException 15000 ms, exit 143) on a Mordor node
     priority: P3
-    status: open
+    status: claimed
     area: node
     size: S
     opened: 2026-11-22
     refs: []
     links:
       spec: 018
+    claim:
+      by: cloud-dc960fdc
+      agent: general-b426
+      since: 2026-11-23T22:18:01Z
+      heartbeat: 2026-11-23T22:18:01Z
     notes: Seen by dev-node in EG-6 (2026-11-22). Find which shutdown step exceeds 15 s; exit 143 is not a clean stop.
   - id: B-427
     title: Audit MetricsContainer holders touched before Metrics.configure (same lazy-val-binds-default-registry bug as B-400/B-425)
