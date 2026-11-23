@@ -10,8 +10,8 @@ kept beside the pinned jar, outside the tree, and its SHA-256 is recorded in the
 | `ranges.md` | T003 | user, beacon, forge | open |
 | `roots-*.txt` | T004 | the pinned jar | open (needs T002, T003) |
 | `hive-<suite>-<date>.txt` | T005 | the pinned jar on the WSL hive | open |
-| `eest-<date>.txt` | T006 | the pinned jar | open |
-| `ethtests-<date>.txt` | T007 | the pinned jar | open |
+| `eest-<date>.txt` | T006 | the pinned jar | **recorded 2026-11-22** in `eest-2026-11-22.txt` (dev-node, tests@v21.0.0 Cancun→Amsterdam): blockchain_tests 74,149/74,199, engine 74,234/74,282. 96 failures are BPO3/BPO4 transitions the test replayer does not model; 2 are a client divergence, EIP-7934's cap without an Osaka gate (B-431). Full reports in `c0/` |
+| `ethtests-<date>.txt` | T007 | the pinned jar | **partly recorded 2026-11-22** in `ethtests-2026-11-22.txt` (dev-node): the nightly ethtest job 74/0/2 canceled. LegacyPreByzantium with legacytests@1f581b8: 61,314 vectors, all passed; the ratchet fails on 85 stale known failures. **Open:** fork choice under `basic` (the spec is fixed to archive, B-432) and the report-only ETC-type legacy run |
 | `eip-8246-check.md` | T008 | main session from eips.ethereum.org (2026-11-07); beacon to sign | **drafted; matches dm 3.6 rule 6** |
 | `eip8246-fixtures.txt` | T009 | the pinned jar's EEST harness | open |
 | ETC 0–5,100,000 chain file | T010 | **decided 2026-11-07:** fukuii-fc's ETC mainnet sync (v0.10.48, SNAP with chain download, started 2026-11-07 15:30Z), then `fukuii etc export <file> 0 5100000` with the node stopped. Kept on the user's NFS share; its SHA-256 is recorded here | **exported 2026-11-07 19:38Z**: `etc-0-5100000.rlp.gz`, 3,126,739,512 bytes, SHA-256 `8c52ee9dcb20e733065fad51a2cf289cc300546f61f13371748cc442ce1f89e8` (gzip verified). Source datadir: SNAP pivot 25,688,690, root `ab7ff7a7…` verified. On fukuii-fc at `~/etc-sync/export/`; copied to the NFS share once it mounts |
