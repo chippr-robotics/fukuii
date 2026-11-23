@@ -40,7 +40,6 @@ import com.chipprbots.ethereum.ledger.EphemBlockchain
 import com.chipprbots.ethereum.ledger.MockBlockchain
 import com.chipprbots.ethereum.ledger.OmmersTestSetup
 import com.chipprbots.ethereum.ledger.TestSetupWithVmAndValidators
-import com.chipprbots.ethereum.mpt.LeafNode
 import com.chipprbots.ethereum.mpt.MerklePatriciaTrie
 import com.chipprbots.ethereum.testing.Tags.*
 import com.chipprbots.ethereum.utils.BlockchainConfig
@@ -130,19 +129,15 @@ class ConsensusAdapterSpec extends AnyFlatSpec with Matchers with ScalaFutures w
     blockQueue.getBranch.expects(BlockHash(hash), true).returning(List(block))
 
     val mptStorage: MptStorage = mock[MptStorage]
-    val mptNode: LeafNode = LeafNode(
-      ByteString(MerklePatriciaTrie.EmptyRootHash),
-      ByteString(MerklePatriciaTrie.EmptyRootHash),
-      Some(MerklePatriciaTrie.EmptyRootHash),
-      Some(MerklePatriciaTrie.EmptyRootHash)
-    )
 
     blockchainReader.getBlockHeaderByHash.expects(*).anyNumberOfTimes().returning(Some(block.header))
     blockchainReader.getBlockHeaderByNumber.expects(*).anyNumberOfTimes().returning(Some(block.header))
     blockchain.stageBlockState.expects(*).returning(StagedBlockState.direct(mptStorage))
     // The world asks for the account trie's view of the storage, which for a hash-keyed store is the store itself.
     mptStorage.forOwner.expects(None).returning(mptStorage)
-    mptStorage.getAt.expects(*, *).returning(mptNode)
+    // The state read fails with a trie error. (This used to be a leaf whose cached encoding was not a node, which only
+    // failed because the trie re-decoded every node it read; it no longer does, B-204.)
+    mptStorage.getAt.expects(*, *).throwing(new MerklePatriciaTrie.MPTException("Invalid Node"))
 
     blockQueue.removeSubtree.expects(*)
 

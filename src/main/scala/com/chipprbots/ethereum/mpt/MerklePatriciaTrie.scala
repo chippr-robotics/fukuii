@@ -304,14 +304,28 @@ class MerklePatriciaTrie[K, V] private (private[mpt] val rootNode: Option[MptNod
 
   /** The node `nodeId` names, which sits at `path` in this trie. */
   private def getFromHash(nodeId: Array[Byte], path: NibblePath, source: MptStorage): MptNode =
-    decodedAgain(nodeId, source.getAt(path, nodeId))
+    knownBy(nodeId, source.getAt(path, nodeId))
 
-  private def decodedAgain(nodeId: Array[Byte], node: MptNode): MptNode =
-    val nodeEncoded = node.encode
-    MptTraversals
-      .decodeNode(nodeEncoded)
-      .withCachedHash(nodeId)
-      .withCachedRlpEncoded(nodeEncoded)
+  /** `node`, as the storage gave it, known by `nodeId`.
+    *
+    * The storage has already decoded the node and checked it: every storage that reads bytes checks they hash to the
+    * key they were read under before it decodes them (`SerializingMptStorage.get`, the position-keyed storages'
+    * `getAt`), and returns the node with that hash and those bytes cached. This read used to encode that node and
+    * decode it again (B-204), a second decode of every node a read met (about 19 KB of the 50 KB a get allocated on a
+    * 50k-key trie), which also made every hit of the decoded-node cache a fresh decode. It detected nothing: the bytes
+    * it decoded were the node's own encoding. The write paths (`put`, `remove`) have always used the storage's node as
+    * it is.
+    *
+    * What is kept is the hash the node is known by: `nodeId`, as before, without a copy when the node already carries
+    * it. A hash reference is never a stored node; one returned would be resolved to itself forever, so it is refused as
+    * a corrupt entry.
+    */
+  private def knownBy(nodeId: Array[Byte], node: MptNode): MptNode =
+    node match
+      case _: HashNode =>
+        throw new CorruptNodeException(ByteString(nodeId), "the store answered with a hash reference, not a node")
+      case _ if node.cachedHash.exists(java.util.Arrays.equals(_, nodeId)) => node
+      case _                                                               => node.withCachedHash(nodeId)
 
   /** `write`, a storage update that names the nodes it replaces, with a missing or corrupt node it throws given where
     * that node sits in this trie (B-075). The storage knows only the hash it was reading, and the importer's fetch of a
