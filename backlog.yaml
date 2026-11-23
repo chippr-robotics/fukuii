@@ -3940,7 +3940,7 @@ items:
       by: cloud-dc960fdc
       agent: herald-b434b
       since: 2026-11-23T00:30:45Z
-      heartbeat: 2026-11-23T01:26:11Z
+      heartbeat: 2026-11-23T01:26:20Z
     notes: "Staging 8d2dcea7b, Mordor, re-imported node B with mining: after 00:13:29Z no network block imported; GetBlockHeaders to peer e514276e timed out 7x at 90 s, no other peer tried, peers' best frozen at 17450195. Miner mined 17450196-17450204, none known to core-geth; head ended 46 behind. Theory: fetcher pinned to one dead peer + mining gate has no 'behind the network' check. Logs: ~/work/s018-recheck-b424/OUT/node-b.log"
   - id: B-435
     title: Miner's sync-status ask times out during SNAP every 2-5 min (SyncController slow to answer GetStatus); flaps the 'Mining waits' reason
