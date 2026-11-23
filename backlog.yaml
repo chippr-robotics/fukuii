@@ -3275,7 +3275,7 @@ items:
       by: cloud-dc960fdc
       agent: vault-b377
       since: 2026-11-23T21:47:30Z
-      heartbeat: 2026-11-23T21:47:30Z
+      heartbeat: 2026-11-23T21:47:43Z
     notes: "C5c PR1 (B-066): CheckpointSharedNodePruneSpec case 2 now shows no loss with the stamp put back. beginCheckpointImport still drops RefCountsExact; moot if PR2 retires the hash importer."
   - id: B-378
     title: "RELEASE BLOCKER: no release tag between C5c PR1 (checkpoint v2 codec/exporter) and PR2 (v2 importer); they ship together"
