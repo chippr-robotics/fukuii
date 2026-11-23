@@ -38,8 +38,23 @@ case class BlockImportFailed(error: String) extends BlockImportResult
   * tests; ETC/Mordor/ Gorgoroth run through all of it. A subclass inherits the extractor, `equals`, `hashCode` and
   * `toString` unchanged, so every existing consumer sees exactly the `BlockImportFailed(error)` it saw before. Only the
   * invalid-chain report in `BlockImporter` type-tests for this class and reads `failingBlockHash`.
+  *
+  * `imported` is the prefix of the batch that became the head before the failing block, set only when the failure is a
+  * fault of this node's own state (`Consensus.isLocalStateFault`, B-336): those blocks are imported, and are accounted
+  * for and announced as any imported blocks are, so that the escalation starts at the failing block. Empty otherwise: a
+  * block's own error after a prefix is answered as that prefix imported (`BlockImportedToTop`).
   */
-final class BlockImportFailedAt(message: String, val failingBlockHash: ByteString) extends BlockImportFailed(message)
+final class BlockImportFailedAt(
+    message: String,
+    val failingBlockHash: ByteString,
+    val imported: List[BlockData] = Nil
+) extends BlockImportFailed(message)
+
+object BlockImportFailedAt:
+  /** The prefix a failed import adopted before its failing block: [[BlockImportFailedAt.imported]], or nothing. */
+  def importedBefore(result: BlockImportResult): List[BlockData] = result match
+    case at: BlockImportFailedAt => at.imported
+    case _                       => Nil
 
 /** `imported` is the validated prefix of the batch that was adopted before the missing node was hit; it is announced
   * like any imported blocks, and the retry starts at the first block after it.

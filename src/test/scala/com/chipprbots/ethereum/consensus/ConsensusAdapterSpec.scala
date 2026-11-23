@@ -144,7 +144,10 @@ class ConsensusAdapterSpec extends AnyFlatSpec with Matchers with ScalaFutures w
     mptStorage.forOwner.expects(None).returning(mptStorage)
     mptStorage.getAt.expects(*, *).returning(mptNode)
 
-    blockQueue.removeSubtree.expects(*)
+    // A trie error that is not a missing node is this node's own state fault (spec 022 T062): the block was not
+    // judged, so it is queued again and not dropped as an invalid block's subtree is (B-336)
+    blockQueue.enqueueBlock.expects(block, bestNum).returning(None)
+    blockQueue.removeSubtree.expects(*).never()
 
     whenReady(consensusAdapter.evaluateBranchBlock(block).unsafeToFuture())(
       _ shouldBe BlockImportFailed(
