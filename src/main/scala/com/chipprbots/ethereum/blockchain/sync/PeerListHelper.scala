@@ -123,7 +123,13 @@ class PeerListHelper(
             )
           blacklist.add(peerId, duration, reason)
       case None =>
-        log.debug("Attempted to blacklist non-handshaked peer {}", peerId)
+        // A blacklisting that is dropped leaves the peer selectable: WARN, not DEBUG, so a retry that finds a peer that
+        // just failed can be traced to it (B-434).
+        log.warn(
+          "Blacklisting of peer {} dropped, not in the handshaked peer list. Reason: {}",
+          peerId,
+          reason.description
+        )
 
   private def updatePeers(handshaked: Map[Peer, PeerInfo]): Unit =
     val updated = handshaked.map { case (peer, peerInfo) =>
