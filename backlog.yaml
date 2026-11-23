@@ -4084,19 +4084,20 @@ items:
   - id: B-439
     title: "commitInPlaceAtTheCap: a failed move back that leaves the head off the branch is told wrongly (imported/queued/where the head is)"
     priority: P2
-    status: in-progress
+    status: review
     area: consensus
     size: S
     opened: 2026-11-23
     refs: [B-292]
     links:
+      prs: [2005]
       spec: 018
       branch: test/b292-reverse-commit-faults
     claim:
       by: cloud-dc960fdc
       agent: forge-b439
       since: 2026-11-23T21:20:03Z
-      heartbeat: 2026-11-23T21:32:01Z
+      heartbeat: 2026-11-23T21:53:15Z
     notes: |-
       Partial first move + failed move back: rethrown first fault, head (h9) not named, old chain above it not queued. Disk state consistent; re-offer adopts.
       Red tests: scratchpad b292-failing-tests.diff (assert toldWhereTheHeadIs). Gate before path-live default.
