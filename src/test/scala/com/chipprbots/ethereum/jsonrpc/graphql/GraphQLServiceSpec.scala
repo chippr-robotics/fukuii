@@ -264,6 +264,49 @@ class GraphQLServiceSpec
       .toOption
       .get shouldBe "Mutation"
 
+  private val AccountFields: String =
+    s"""{ block { account(address: "0x${"11" * 20}") { balance transactionCount code storage(slot: "0x${"00" * 32}") } } }"""
+
+  it should "answer the zero values of an account that is not in the state of the block (B-228)" in new GraphQLTestSetup:
+    val emptyState: Block = block.copy(header =
+      block.header.copy(stateRoot = TrieRoot(ByteString(com.chipprbots.ethereum.mpt.MerklePatriciaTrie.EmptyRootHash)))
+    )
+    blockchainWriter
+      .storeBlock(emptyState)
+      .and(blockchainWriter.storeChainWeight(emptyState.header.hash, weight))
+      .commit()
+    blockchainWriter.saveBestKnownBlocks(emptyState.hash, emptyState.number.value)
+
+    val (_, body) = service.execute(AccountFields, None, None).unsafeRunSync()
+    body.hcursor.downField("errors").focus shouldBe None
+    val account: ACursor = body.hcursor.downField("data").downField("block").downField("account")
+    account.downField("balance").as[String].toOption.get shouldBe "0x0"
+    account.downField("transactionCount").as[String].toOption.get shouldBe "0x0"
+    account.downField("code").as[String].toOption.get shouldBe "0x"
+    account.downField("storage").as[String].toOption.get shouldBe "0x" + "00" * 32
+
+  it should "answer an error, and no zero values, when the state of the block has a missing trie node (B-228)" in new GraphQLTestSetup:
+    // the fixture's state root is not in the store
+    blockchainWriter.storeBlock(block).and(blockchainWriter.storeChainWeight(block.header.hash, weight)).commit()
+    blockchainWriter.saveBestKnownBlocks(block.hash, block.number.value)
+
+    for field <- List("balance", "transactionCount", "code", s"""storage(slot: "0x${"00" * 32}")""") do
+      val query = s"""{ block { account(address: "0x${"11" * 20}") { $field } } }"""
+      val (_, body) = service.execute(query, None, None).unsafeRunSync()
+      withClue(s"$field: $body") {
+        val errors = body.hcursor.downField("errors").as[List[Json]].toOption.get
+        errors should not be empty
+        errors.head.hcursor.downField("message").as[String].toOption.get should include("missing trie node")
+        // no value of the field in the data: never a zero of an account that was not read
+        val value = body.hcursor
+          .downField("data")
+          .downField("block")
+          .downField("account")
+          .downField(field.takeWhile(_ != '('))
+          .focus
+        (value.isEmpty || value.contains(Json.Null)) shouldBe true
+      }
+
   // -------------------------------------------------------------------------
   abstract class GraphQLTestSetup(val maxDepth: Int = GraphQLSchema.MaxQueryDepth) extends EphemBlockchainTestSetup:
 

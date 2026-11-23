@@ -7,6 +7,7 @@ import cats.effect.unsafe.IORuntime
 
 import scala.concurrent.Future
 
+import org.bouncycastle.util.encoders.Hex
 import sangria.schema.Argument
 import sangria.schema.Field
 import sangria.schema.InputField
@@ -485,26 +486,29 @@ object GraphQLSchema:
     }
 
   private def stateRead[A](read: => A): A =
-    StateRead.attempting(read).fold(error => throw GraphQLUserError(error.message), identity)
+    try StateRead.attempting(read).fold(error => throw GraphQLUserError(error.message), identity)
+    catch
+      // A node of the trie that is not in the store (JSON-RPC answers it as `NodeNotFound`): an error of the field, never
+      // "no account", which would report a zero balance, a zero nonce and an empty storage for an account that has them.
+      case missing: MissingNodeException =>
+        throw GraphQLUserError(s"missing trie node ${Hex.toHexString(missing.hash.toArray)}")
 
   /** The account at `address` in the state of the canonical block `blockNumber`, with that state: its storage is read
-    * from the state the account was read from. `None` when there is no such block, no such account, or the state cannot
-    * be read.
+    * from the state the account was read from. `None` when there is no such block or no such account.
     */
   private def resolveAccountIn(
       ctx: GraphQLContext,
       address: ByteString,
       blockNumber: BigInt
   ): Option[(MptStorage, com.chipprbots.ethereum.domain.Account)] =
-    try
-      for
-        header <- ctx.blockchainReader.getBlockHeaderByNumber(blockNumber)
-        state = ctx.blockchainReader.stateAt(header)
-        account <- ctx.blockchainReader.accountIn(state, header, Address(address))
-      yield (state, account)
-    // A state that is not held, or that moved under the read, is NOT caught here: answering it with no account would
-    // report a zero balance for an account that has one. It surfaces as an error of the field, as it does for `code`.
-    catch case _: MissingNodeException => None
+    // A state that is not held, a node that is missing, or a state that moved under the read is NOT caught here:
+    // answering it with no account would report a zero balance for an account that has one. It surfaces, through
+    // [[stateRead]], as an error of the field, as it does for `code`.
+    for
+      header <- ctx.blockchainReader.getBlockHeaderByNumber(blockNumber)
+      state = ctx.blockchainReader.stateAt(header)
+      account <- ctx.blockchainReader.accountIn(state, header, Address(address))
+    yield (state, account)
 
   // ---------------------------------------------------------------------------
   // Log
