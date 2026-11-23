@@ -434,46 +434,46 @@ class EthBlocksService(
         .getOrElse(0.0)
     }.toSeq
 
-    // Rewards need the body and the receipts. geth fetches the block when percentiles are asked for and fails the call
-    // when it is not there, so a header-only block (below a SNAP pivot) is an error here, not zero rewards.
-    val rewardsOrError: Either[JsonRpcError, Option[Seq[Seq[BigInt]]]] = req.rewardPercentiles match
-      case None => Right(None)
-      case Some(percentiles) =>
-        val perBlock = (oldestBlock.toLong to newestBlockNum.toLong).toList.map { num =>
-          blockchainReader.getBlockHeaderByNumber(num) match
-            case None => Right(percentileRewards(Seq.empty, BigInt(0), percentiles))
-            case Some(header) =>
-              blockchainReader.getBlockByHash(header.hash) match
-                case None => Left(JsonRpcError.InvalidParams(s"block $num not found"))
-                case Some(block) =>
-                  val txTipsAndGas: Seq[(BigInt, BigInt)] = blockchainReader
-                    .getReceiptsByHash(header.hash)
-                    .map { receipts =>
-                      val cumulative = receipts.map(_.cumulativeGasUsed)
-                      val perTxGas = cumulative.zip(BigInt(0) +: cumulative).map((cum, prev) => cum - prev)
-                      val baseFee = header.baseFee.getOrElse(BigInt(0))
-                      block.body.transactionList.zip(perTxGas).map { case (stx, gas) =>
-                        val tip = (Transaction.effectiveGasPrice(stx.tx, header.baseFee) - baseFee).max(0)
-                        (tip, gas)
-                      }
-                    }
-                    .getOrElse(Seq.empty)
-                  Right(percentileRewards(txTipsAndGas, header.gasUsed.value, percentiles))
+    // Rewards need the body and the receipts. As in geth's `Oracle.FeeHistory`, the history is cut short at the first
+    // block that cannot be fetched (a header-only block below a SNAP pivot, or one past the head): the blocks before
+    // it are answered, the rest dropped from every field, and no error is raised.
+    val rewardsPrefix: Option[List[Seq[BigInt]]] = req.rewardPercentiles.map { percentiles =>
+      (oldestBlock.toLong to newestBlockNum.toLong).iterator
+        .map { num =>
+          for
+            header <- blockchainReader.getBlockHeaderByNumber(num)
+            block <- blockchainReader.getBlockByHash(header.hash)
+          yield
+            val txTipsAndGas: Seq[(BigInt, BigInt)] = blockchainReader
+              .getReceiptsByHash(header.hash)
+              .map { receipts =>
+                val cumulative = receipts.map(_.cumulativeGasUsed)
+                val perTxGas = cumulative.zip(BigInt(0) +: cumulative).map((cum, prev) => cum - prev)
+                val baseFee = header.baseFee.getOrElse(BigInt(0))
+                block.body.transactionList.zip(perTxGas).map { case (stx, gas) =>
+                  val tip = (Transaction.effectiveGasPrice(stx.tx, header.baseFee) - baseFee).max(0)
+                  (tip, gas)
+                }
+              }
+              .getOrElse(Seq.empty)
+            percentileRewards(txTipsAndGas, header.gasUsed.value, percentiles)
         }
-        perBlock.collectFirst { case Left(e) => e } match
-          case Some(e) => Left(e)
-          case None    => Right(Some(perBlock.collect { case Right(r) => r }))
+        .takeWhile(_.isDefined)
+        .flatten
+        .toList
+    }
+    val returned: Int = rewardsPrefix.fold(gasUsedRatios.size)(_.size)
 
-    rewardsOrError.map { rewards =>
+    Right(
       FeeHistoryResponse(
         oldestBlock = oldestBlock,
-        baseFeePerGas = baseFees,
-        gasUsedRatio = gasUsedRatios,
-        reward = rewards,
-        baseFeePerBlobGas = blobBaseFees,
-        blobGasUsedRatio = blobGasUsedRatios
+        baseFeePerGas = if returned == 0 then Seq.empty else baseFees.take(returned + 1),
+        gasUsedRatio = gasUsedRatios.take(returned),
+        reward = rewardsPrefix,
+        baseFeePerBlobGas = if returned == 0 then Seq.empty else blobBaseFees.take(returned + 1),
+        blobGasUsedRatio = blobGasUsedRatios.take(returned)
       )
-    }
+    )
   }
 
   def maxPriorityFeePerGas(@unused req: MaxPriorityFeePerGasRequest): ServiceResponse[MaxPriorityFeePerGasResponse] =
