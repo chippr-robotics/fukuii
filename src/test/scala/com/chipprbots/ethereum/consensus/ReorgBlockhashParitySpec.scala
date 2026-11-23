@@ -376,6 +376,34 @@ class ReorgBlockhashParitySpec extends AnyFlatSpec with Matchers with ScalaFutur
     adoptedAgain()
   )
 
+  // B-439: what was thrown is not the answer when the move back after it fails: the answer says where the head is
+  it should "say where the head is when a write of a commit fails and the move back fails before it wrote" taggedAs (
+    UnitTest,
+    ConsensusTest
+  ) in (new FaultedReorg:
+    datadir.failAt(branch(3), new java.io.IOException("injected: the disk refused the commit of block 7"))
+    datadir.failAt(fork, injected("the move back"), after = 1)
+    val result: Either[Throwable, ConsensusResult] = evaluate(branch)
+    settledOn(branch(2))
+    // the blocks committed before the throw are read from the store: the attempt kept no account of them
+    toldWhereTheHeadIs(result, branch(2))
+    result.map { case ConsensusStateFault(fault, _, _) => fault.getMessage; case _ => "" }.getOrElse("") should
+      include("the disk refused the commit of block 7")
+    adoptedAgain()
+  )
+
+  it should "say where the head is when a write of a commit fails and the move back stops on the old chain" taggedAs (
+    UnitTest,
+    ConsensusTest
+  ) in (new FaultedReorg:
+    datadir.failAt(branch(3), new java.io.IOException("injected: the disk refused the commit of block 7"))
+    datadir.failAt(oldChain(8), injected("the move back"), after = 1)
+    val result: Either[Throwable, ConsensusResult] = evaluate(branch)
+    settledOn(oldChain(5))
+    toldWhereTheHeadIs(result, oldChain(5))
+    adoptedAgain()
+  )
+
   it should "say where the head is when the move back fails before it wrote, with the committed blocks as imported" taggedAs (
     UnitTest,
     ConsensusTest
@@ -396,9 +424,9 @@ class ReorgBlockhashParitySpec extends AnyFlatSpec with Matchers with ScalaFutur
     datadir.failAt(branch(3), injected("the commit of block 7"))
     // the move back's third batch, to h9: h9's second anchoring since the attempt began. The head is left at h6
     datadir.failAt(oldChain(8), injected("the move back"), after = 1)
-    evaluate(branch) should matchPattern { case Right(ConsensusStateFault(_, _, _)) => }
+    val result: Either[Throwable, ConsensusResult] = evaluate(branch)
     settledOn(oldChain(5))
-    // what the answer tells of where the head is, here, is not yet what the design says (B-439)
+    toldWhereTheHeadIs(result, oldChain(5))
     adoptedAgain()
   )
 
@@ -425,9 +453,9 @@ class ReorgBlockhashParitySpec extends AnyFlatSpec with Matchers with ScalaFutur
   ) in (new FaultedReorg:
     datadir.failAt(oldChain(5), injected("the second batch of the move to the fork"))
     datadir.failAt(oldChain.last, injected("the move back"))
-    evaluate(branch) should matchPattern { case Right(ConsensusStateFault(_, Nil, _)) => }
+    val result: Either[Throwable, ConsensusResult] = evaluate(branch)
     settledOn(oldChain(8))
-    // what the answer tells of where the head is, here, is not yet what the design says (B-439)
+    toldWhereTheHeadIs(result, oldChain(8))
     adoptedAgain()
   )
 

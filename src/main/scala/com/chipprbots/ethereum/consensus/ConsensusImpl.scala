@@ -829,17 +829,56 @@ class ConsensusImpl(
                 failed.getMessage
               )
               false
-        // What is answered when the head could not be moved back: where it is, said as a fault of this node. The
-        // blocks of the branch that were committed are its head; the chain it left and what was not run are queued.
-        def leftOnTheBranch(committedOfTheBranch: List[BlockData]): ConsensusResult =
-          val run = committedOfTheBranch.map(_.block.header.hash).toSet
+        // What is answered when the head could not be moved back (the design's "a move back that fails is said",
+        // B-439): where the head is, as a fault of this node, read from the head itself and not from where the move
+        // was going. A move back can stop on the branch, at the fork, or on the old chain part of the way up. The blocks
+        // of the branch the head stands on are imported (announced, the pool told, the escalation's feed told of the
+        // head); every other block of either chain above the fork is queued again, so that the next offer adopts the
+        // heavier one. `committed` is what this attempt kept or committed: a block of the head's chain it does not
+        // carry (a commit that threw) is read from the store.
+        def whereTheHeadIsLeft(committed: List[BlockData], after: String): ConsensusResult =
+          val head = blockchainReader.getBestBlockHeader
+          // the head's chain above the fork, by ancestry (`ancestry-not-index.md`): the index is not read
+          val onTheHeadsChain: Set[BlockHash] =
+            Iterator
+              .iterate(head)(_.flatMap(header => blockchainReader.getBlockHeaderByHash(header.parentHash)))
+              .takeWhile(_.exists(_.number.value > fork.number))
+              .flatten
+              .map(_.hash)
+              .toSet
+          val kept = committed.iterator.map(data => data.block.header.hash -> data).toMap
+          val imported = newBranch.toList.filter(block => onTheHeadsChain(block.header.hash)).flatMap { block =>
+            kept
+              .get(block.header.hash)
+              .orElse(
+                for
+                  receipts <- blockchainReader.getReceiptsByHash(block.header.hash)
+                  weight <- blockchainReader.getChainWeightByHash(block.header.hash)
+                yield BlockData(block, receipts, weight)
+              )
+          }
+          val where = head.fold("is not known")(header =>
+            if onTheHeadsChain.exists(branchHashes) then
+              s"is at block ${header.number}, on the branch [${newBranch.head.number}-${newBranch.last.number}]"
+            else if header.number.value > fork.number then s"is at block ${header.number}, on the chain it left"
+            else s"is at block ${header.number}, the block the branch leaves the chain at"
+          )
+          log.error(
+            "[STATE-FAULT] REORG-AT-THE-CAP: after {}, the head could not be moved back to block {} and {}: {} " +
+              "block(s) of the branch are its head, the other blocks of both chains above block {} are queued again",
+            after,
+            oldHead.number,
+            where,
+            imported.size,
+            fork.number
+          )
           ConsensusStateFault(
             new StateUnavailable(
-              s"the head could not be moved back to block ${oldHead.number} and is at block " +
-                s"${blockchainReader.getBestBlockNumber}, on the branch [${newBranch.head.number}-${newBranch.last.number}]"
+              s"after $after, the head could not be moved back to block ${oldHead.number} and $where"
             ),
-            committedOfTheBranch,
-            oldBranchTold(oldCanonical) ++ newBranch.toList.filterNot(block => run(block.header.hash))
+            imported,
+            oldBranchTold(oldCanonical.filterNot((_, hash) => onTheHeadsChain(hash))) ++
+              newBranch.toList.filterNot(block => onTheHeadsChain(block.header.hash))
           )
         try
           blockchainWriter.withRecordsHeldAbove(forkBlock) {
@@ -862,10 +901,11 @@ class ConsensusImpl(
                 yield (failing, error)
               (fault, failedParent) match
                 case (Some(fault), _) =>
-                  if backToTheOldHead() then notJudged(fault) else leftOnTheBranch(ofTheBranch)
+                  if backToTheOldHead() then notJudged(fault) else whereTheHeadIsLeft(all, fault.getMessage)
                 case (None, Some((failing, error))) =>
                   val diverged = divergedParent(failing, error)
-                  if backToTheOldHead() then diverged else leftOnTheBranch(ofTheBranch)
+                  if backToTheOldHead() then diverged
+                  else whereTheHeadIsLeft(all, s"block ${failing.number}, which the branch stands on, failed")
                 case _ if weight > bestBlockWeight =>
                   log.info(
                     "REORG-SETTLE: fork={} oldHead={} tip={} committedInPlace={}",
@@ -892,9 +932,9 @@ class ConsensusImpl(
                     newBranch.last.number,
                     bestBlockNumber
                   )
-                  if backToTheOldHead() then
-                    notJudged(new StateUnavailable("the weight of the branch, executed, disagrees with its selection"))
-                  else leftOnTheBranch(ofTheBranch)
+                  val disagrees = "the weight of the branch, executed, disagrees with its selection"
+                  if backToTheOldHead() then notJudged(new StateUnavailable(disagrees))
+                  else whereTheHeadIsLeft(all, disagrees)
                 case _ =>
                   log.warn(
                     "REORG-PARTIAL: what of the branch [{}-{}] is valid does not outweigh the old head {}: the head is " +
@@ -904,14 +944,23 @@ class ConsensusImpl(
                     bestBlockNumber
                   )
                   if backToTheOldHead() then reorganised(newBranch, Nil, ofTheBranch, committed.error)
-                  else leftOnTheBranch(ofTheBranch)
+                  else whereTheHeadIsLeft(all, "a block of the branch failed")
             catch
               // anything thrown here, a first move that stopped part of the way among it, would leave the head off
               // the old chain with the way back released: it goes back while the records are still held (forge)
               case NonFatal(thrown) =>
-                // not when the first move was refused before it wrote: the head is the old head still
-                if !blockchainReader.getBestBlockHeader.exists(_.hash == oldHead.hash) then backToTheOldHead()
-                throw thrown
+                // not when the first move was refused before it wrote: the head is the old head still. Back there,
+                // what was thrown is the answer; a move back that fails is said, with where the head is (B-439), and
+                // what was thrown is logged with it
+                if blockchainReader.getBestBlockHeader.exists(_.hash == oldHead.hash) || backToTheOldHead() then
+                  throw thrown
+                log.error(
+                  "[STATE-FAULT] REORG-AT-THE-CAP: the branch [{}-{}] was not adopted, and the head is not back",
+                  newBranch.head.number,
+                  newBranch.last.number,
+                  thrown
+                )
+                whereTheHeadIsLeft(Nil, thrown.getMessage)
           }
         catch
           // the records above the fork left retention between the refusal up front and the hold
