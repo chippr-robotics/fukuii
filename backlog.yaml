@@ -2184,7 +2184,7 @@ items:
   - id: B-255
     title: "Spec 018 T156: child-JVM kill -9 between newPayload and forkchoiceUpdated on RocksDB, restart with no peers, real consensus client reaches VALID"
     priority: P2
-    status: open
+    status: claimed
     area: storage
     size: M
     opened: 2026-11-14
@@ -2192,6 +2192,11 @@ items:
     links:
       spec: specs/018-storage-engine-consolidation
     depends_on: [B-062]
+    claim:
+      by: cloud-dc960fdc
+      agent: vault-b255
+      since: 2026-11-23T21:24:26Z
+      heartbeat: 2026-11-23T21:24:26Z
     notes: C4d part 3 pins T156 in process (a node reopened on the same in-memory source). The crash test proper (it/consensus/engine/CrashBetweenNewPayloadAndFcuItSpec.scala) and a real CL (EG-14) remain.
   - id: B-256
     title: "SNAPResetCharacterizationSpec dormant-mode case: the 10 s wait for 'SNAP finalization aborted' timed out once in CI (#1833), passes locally"
