@@ -110,13 +110,14 @@ object ShutdownSequence extends Logger:
   private def runStep(step: Step, report: Report): Result =
     val started = System.nanoTime()
     val finished = new CompletableFuture[Unit]()
-    val thread = new Thread(
-      () =>
-        try
-          step.run()
-          finished.complete(()): Unit
-        catch case e: Throwable => finished.completeExceptionally(e): Unit, s"shutdown-${step.name.replace(' ', '-')}"
-    )
+    // A named body, not a lambda argument: scalafmt folds a lambda's trailing `catch` onto one line with the next
+    // argument, which scalafix's parser then rejects.
+    val body: Runnable = () =>
+      try
+        step.run()
+        finished.complete(()): Unit
+      catch case e: Throwable => finished.completeExceptionally(e): Unit
+    val thread = new Thread(body, s"shutdown-${step.name.replace(' ', '-')}")
     // A step left running past its budget must not keep the JVM alive.
     thread.setDaemon(true)
     thread.start()

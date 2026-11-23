@@ -803,20 +803,21 @@ abstract class BaseNode extends Node:
       enginePort = opt(c.getInt("network.engine-api.port")).getOrElse(0)
     )
 
-  // Set by the first shutdown. A start that fails shuts the node down itself, within a bound, and then exits; the exit
-  // runs the JVM hook, which calls shutdown again. That second call returns at once, so a first one that overran its
-  // bound cannot hold the exit up (B-274). Lazy: the hook can run before this trait's constructor has.
-  private lazy val shutdownStarted = new java.util.concurrent.atomic.AtomicBoolean(false)
+  // The stop, run by the first call (B-274, B-426). A later call waits for it to end, so the SIGTERM handler that comes
+  // after a stop began elsewhere (a failed start, `shutdownOnError`) exits with that stop's outcome, not while the
+  // database still closes; one re-entered on the stop's own thread returns at once. The JVM hook does not wait: a start
+  // that fails shuts the node down within a bound and then exits, and a first stop that overran its bound must not
+  // hold that exit up (B-274). Lazy: the hook can run before this trait's constructor has.
+  private lazy val stopOnce = new StopOnce[ShutdownSequence.Outcome](() => shutDownOnce())
 
-  override def shutdown: () => Unit = () => if shutdownStarted.compareAndSet(false, true) then shutDownOnce()
+  override def shutdown: () => Unit = () => stopOnce.run(): Unit
 
-  // The first stop's outcome, read by the SIGTERM handler for the exit status (B-426).
-  @volatile private var shutdownOutcome: Option[ShutdownSequence.Outcome] = None
+  override def shutdownOnExit(): Unit = stopOnce.runOrLeave()
 
   /** Whether this node's stop has run and closed the database: the exit status of a SIGTERM stop is 0 only then. */
-  def stoppedCleanly: Boolean = shutdownOutcome.exists(_.completed(StdNode.CloseDatabase))
+  def stoppedCleanly: Boolean = stopOnce.outcome.exists(_.toOption.exists(_.completed(StdNode.CloseDatabase)))
 
-  private def shutDownOnce(): Unit =
+  private def shutDownOnce(): ShutdownSequence.Outcome =
     import ShutdownSequence.Budget
     import ShutdownSequence.Step
     val quick = Budget.Bounded(StdNode.QuickStepBudget)
@@ -901,7 +902,7 @@ abstract class BaseNode extends Node:
           )
       )
     )
-    shutdownOutcome = Some(ShutdownSequence.run(steps))
+    ShutdownSequence.run(steps)
 
   /** `-Dfukuii.snap.clearDoneOnStart` on the unified state layout (spec 018 C5a part 10): refused, and the node does
     * not start. It re-runs SNAP's healing over a state the node holds, on the hash-keyed store, which this layout never

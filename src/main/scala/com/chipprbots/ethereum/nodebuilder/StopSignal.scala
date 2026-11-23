@@ -9,9 +9,10 @@ import com.chipprbots.ethereum.utils.Logger
 /** SIGTERM stops the node and exits 0 when the stop was clean (B-426).
   *
   * The JVM's own SIGTERM handler exits with 143 (128 + 15) whatever the shutdown hooks did, so a supervisor could not
-  * tell a clean stop from a failed one, and every stop read as killed. This handler runs the node's stop itself, then
-  * exits 0 if the database closed, 1 otherwise; the shutdown hooks run as the exit's, and the node's own hook returns
-  * at once, its stop already done. go-ethereum exits 0 after a clean stop on SIGTERM the same way.
+  * tell a clean stop from a failed one, and every stop read as killed. This handler runs the node's stop itself (or,
+  * when another path began it, waits for that stop to end: [[StopOnce]]), then exits 0 if the database closed, 1
+  * otherwise; the shutdown hooks run as the exit's, and the node's own hook returns at once, its stop already done.
+  * go-ethereum exits 0 after a clean stop on SIGTERM the same way.
   *
   * A second SIGTERM while the stop runs is logged and ignored: exiting then would cut the database's close half-way. A
   * supervisor that cannot wait sends SIGKILL.
