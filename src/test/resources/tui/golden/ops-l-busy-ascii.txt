@@ -7,7 +7,7 @@
                   | Mode    actions allowed . each is confirmed in its dialog . every attempt is logged by fukuii.tui.ops                                       
        ETC        | Running dbcheck . 42s . checked 12,000 of 21,480 sample points                                                                              
                   |---------------------------------------------------------------------------------------------------------------------------------------------
-                  | Actions 25, by what they can break . Up and Down select . Enter or a types one at the prompt                                                
+                  | Actions 26, by what they can break . Up and Down select . Enter or a types one at the prompt                                                
                   |   Observe  config        the effective configuration, secrets hidden                                                                        
  etc              |   Observe  tunables      what changes without a restart, as it is now                                                                       
  PoW . id 61      |   Observe  deps          each subsystem, what it needs, its health                                                                          
@@ -29,6 +29,7 @@
                   |   Disrupt  rpc stop      a JSON-RPC server stops; its connections drop                                                                      
                   |   Disrupt  rpc start     a server that was stopped here listens again                                                                       
                   |   Disrupt  dbcheck       the start's database check, run now; it reports                                                                    
+                  |   Disrupt  compact       rewrites the database's files: heavy disk I/O                                                                      
                   |   Disrupt  detect-ip     asks outside services for this node's address                                                                      
                   |   Disrupt  bundle        writes a support bundle under the datadir                                                                          
                   |   Halt     mining stop   the node's own miner stops until restart (ETC)                                                                     
@@ -44,5 +45,4 @@
                   | Start the node, restart the node: the dashboard runs inside the node's process                                                              
                   | Restart the Engine API server, peer discovery or sync: none can be stopped and started again without ending the process                     
                   | Reload configuration from file: no key is read again after the start; `tunables` lists what changes while it runs                           
-                  | Create a snapshot: this client has no snapshots (spec 013 has no code)                                                                      
  1-9 view  [ ] next view  Up Down select  Enter open  Esc back  : prompt  / filter  ? help  v graphics  p pause  r redraw  d detach  q quit                     
