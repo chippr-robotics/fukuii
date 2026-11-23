@@ -3351,33 +3351,45 @@ class RegularSyncSpec
       )
     }
 
-    // B-297 (forge): a reorganisation on the unified layout tells the side blocks it stands on too. Each block is
-    // broadcast with its own total difficulty, never another block's: two lists combined by `mapN` were every pairing.
+    // B-297 (forge): a reorganisation on the unified layout tells the side blocks it stands on too. B-344 (the user's
+    // decision of 2026-11-23, core-geth): peers are told of the new head only, with its own total difficulty, never
+    // another block's (two lists combined by `mapN` were every pairing); the pool is told of every block told.
     "broadcasting blocks told together" should {
-      "send each with its own total difficulty" in sync(new OnTopFixture:
-        val sideParent: Block = BlockHelpers.generateBlock(testBlocks.init.last)
-        val told: Block = BlockHelpers.generateBlock(sideParent)
-        override def newBlockResult: BlockImportResult =
-          ChainReorganised(
-            Nil,
-            List(sideParent, told),
-            List(ChainWeight.totalDifficultyOnly(1111), ChainWeight.totalDifficultyOnly(2222))
-          )
-        goToTop()
+      "send the new head only, with its own total difficulty, and tell the pool of every block" in sync(
+        new OnTopFixture:
+          val sideParent: Block = BlockHelpers.generateBlock(testBlocks.init.last)
+          val told: Block = BlockHelpers.generateBlock(sideParent)
+          override def newBlockResult: BlockImportResult =
+            ChainReorganised(
+              Nil,
+              List(sideParent, told),
+              List(ChainWeight.totalDifficultyOnly(1111), ChainWeight.totalDifficultyOnly(2222))
+            )
+          goToTop()
 
-        val peers: GetHandshakedPeersCmd = networkPeerManager.expectMsgType[GetHandshakedPeersCmd]
-        peers.replyTo ! HandshakedPeers(handshakedPeers)
+          val peers: GetHandshakedPeersCmd = networkPeerManager.expectMsgType[GetHandshakedPeersCmd]
+          peers.replyTo ! HandshakedPeers(handshakedPeers)
 
-        regularSync ! SyncProtocol.MinedBlock(newBlock)
+          regularSync ! SyncProtocol.MinedBlock(newBlock)
 
-        val sent: Set[(Block, BigInt)] = networkPeerManager
-          .receiveWhile(max = 5.seconds, idle = 1.second) {
-            case NetworkPeerManagerActor.SendMessageCmd(message, _) => message.underlyingMsg
-            case other                                              => other
+          val sent: List[Any] = networkPeerManager
+            .receiveWhile(max = 5.seconds, idle = 1.second) {
+              case NetworkPeerManagerActor.SendMessageCmd(message, _) => message.underlyingMsg
+              case other                                              => other
+            }
+            .toList
+          sent.collect { case NewBlock(block, totalDifficulty) => (block, totalDifficulty) }.toSet shouldBe
+            Set(told -> BigInt(2222))
+          // the side parent is announced by no message: neither in full nor by its hash
+          sent.collect { case NewBlockHashes(hashes) => hashes.map(_.hash) }.flatten should
+            not contain sideParent.hash.value
+          // both blocks are canonical now: the pool drops its copies of the transactions of each
+          val toThePool: Seq[Any] = pendingTransactionsManager.receiveWhile(max = 5.seconds, idle = 1.second) {
+            case message => message
           }
-          .collect { case NewBlock(block, totalDifficulty) => (block, totalDifficulty) }
-          .toSet
-        sent shouldBe Set(sideParent -> BigInt(1111), told -> BigInt(2222))
+          toThePool.count(
+            _.isInstanceOf[com.chipprbots.ethereum.transactions.PendingTransactionsManager.RemoveTransactions]
+          ) shouldBe 2
       )
     }
 

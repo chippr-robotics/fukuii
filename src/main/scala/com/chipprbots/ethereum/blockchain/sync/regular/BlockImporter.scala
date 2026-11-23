@@ -1802,7 +1802,10 @@ final private class BlockImporterLogic(
             supervisor ! ProgressProtocol.ImportedBlock(block.number.value, internally)
           case ChainReorganised(oldBranch, newBranch, weights) =>
             updateTxPool(newBranch, oldBranch)
-            broadcastBlocks(newBranch, weights)
+            // Peers are told of the new head only, as core-geth announces only the block it imported (NewBlock to a
+            // square root of the peers, its hash to the rest), not the side blocks it stands on (B-344). Subscribers
+            // and the pool are told of every block the consensus told, which it bounds.
+            broadcastBlocks(newBranch.lastOption.toList, weights.lastOption.toList)
             newBranch.foreach(b => blockTopic ! Topic.Publish(NewBlockImported(b)))
             newBranch.lastOption.foreach(block =>
               supervisor ! ProgressProtocol.ImportedBlock(block.number.value, internally)

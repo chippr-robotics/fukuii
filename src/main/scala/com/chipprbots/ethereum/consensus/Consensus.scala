@@ -66,7 +66,8 @@ object Consensus:
 
   /** The new branch was selected but was not an extension of the best branch. `oldBranch` is the blocks it moved the
     * head off, ascending: all of them, or the nearest the old head of a reorganisation deeper than the bound
-    * (`ConsensusImpl.OldBranchToldAtMost`; B-296).
+    * (`ConsensusImpl.OldBranchToldAtMost`; B-296). `newBranch` is the blocks it moved the head onto, ascending, the new
+    * head last: all of them, or the nearest the new head under the same bound (B-344), one to one with `weights`.
     */
   case class SelectedNewBestBranch(oldBranch: List[Block], newBranch: List[Block], weights: List[ChainWeight])
       extends ConsensusResult

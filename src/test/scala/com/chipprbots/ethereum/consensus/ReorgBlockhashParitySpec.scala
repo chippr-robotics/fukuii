@@ -197,9 +197,10 @@ class ReorgBlockhashParitySpec extends AnyFlatSpec with Matchers with ScalaFutur
       node.importAll(oldChain) shouldBe a[BlockImportedToTop]
       node.importAll(side) match
         case ChainReorganised(oldBranch, newBranch, _) =>
-          // the 4,000 blocks the head left, of which the 1,000 nearest the old head are told (B-296)
+          // the 4,000 blocks the head left, of which the 1,000 nearest the old head are told (B-296); of the 4,001 it
+          // moved onto, the 1,000 nearest the new head (B-344)
           oldBranch.map(_.hash) shouldBe oldChain.drop(20).takeRight(ConsensusImpl.OldBranchToldAtMost).map(_.hash)
-          newBranch.map(_.hash) shouldBe side.map(_.hash)
+          newBranch.map(_.hash) shouldBe side.takeRight(ConsensusImpl.OldBranchToldAtMost).map(_.hash)
         case other => fail(s"expected ChainReorganised, got $other")
       node.bestHash shouldBe side.last.hash
       (1 to 20).foreach(n => node.indexed(n) shouldBe Some(oldChain(n - 1).hash))
@@ -236,8 +237,8 @@ class ReorgBlockhashParitySpec extends AnyFlatSpec with Matchers with ScalaFutur
       evaluate(consensus, side) match
         case SelectedNewBestBranch(oldBranch, newBranch, weights) =>
           oldBranch.map(_.hash) shouldBe left.takeRight(ConsensusImpl.OldBranchToldAtMost).map(_.hash)
-          newBranch.map(_.hash) shouldBe side.map(_.hash)
-          weights shouldBe side.map(block => node.blockchainReader.getChainWeightByHash(block.hash).get)
+          newBranch.map(_.hash) shouldBe side.takeRight(ConsensusImpl.OldBranchToldAtMost).map(_.hash)
+          weights shouldBe newBranch.map(block => node.blockchainReader.getChainWeightByHash(block.hash).get)
         case other => fail(s"expected SelectedNewBestBranch, got $other")
       node.bestHash shouldBe side.last.hash
 
@@ -284,7 +285,8 @@ class ReorgBlockhashParitySpec extends AnyFlatSpec with Matchers with ScalaFutur
         evaluate(consensus, back) match
           case SelectedNewBestBranch(oldBranch, newBranch, _) =>
             oldBranch shouldBe atTheBound.drop(1)
-            newBranch.map(_.hash) shouldBe back.map(_.hash)
+            // seven blocks became canonical: the five nearest the new head are told (B-344)
+            newBranch.map(_.hash) shouldBe back.takeRight(5).map(_.hash)
           case other => fail(s"expected SelectedNewBestBranch, got $other")
     )
 
@@ -782,6 +784,46 @@ class ReorgBlockhashParitySpec extends AnyFlatSpec with Matchers with ScalaFutur
           case other => fail(s"not reorganised: $other")
         node.bestHash shouldBe aMore.last.hash
       )
+
+    // B-344: what a reorganisation tells of the blocks it moved the head onto is bounded as the old branch is, the
+    // nearest the new head (the side blocks below it are still checked stored whole before the move, as before).
+    s"A heavier branch on the unified layout that stands on more side blocks than the bound ($layout)" should
+      "tell the blocks nearest the new head only, with their weights" taggedAs (
+        UnitTest,
+        ConsensusTest
+      ) in (new CountingFixture(guard = true, bound = 3, cap = cap):
+        // a1..a10; then b3..b10, heavier, which leaves a3..a10 beside the head; then a11, a12 on a10, heavier again:
+        // ten blocks become canonical, eight of them side blocks the branch stands on
+        val aChain: List[Block] = oracle.extendCanonical(oracle.genesis, 10, difficulty = 1000)
+        val bChain: List[Block] = oracle.extendSide(aChain(1), 8, difficulty = 2000, tag = 0x79)
+        val aMore: List[Block] = oracle.extendSide(aChain.last, 2, difficulty = 50000, tag = 0x7a)
+        node.importAll(aChain) shouldBe a[BlockImportedToTop]
+        node.importAll(bChain) shouldBe a[ChainReorganised]
+        node.bestHash shouldBe bChain.last.hash
+        evaluate(consensus, aMore) match
+          case SelectedNewBestBranch(oldBranch, newBranch, weights) =>
+            oldBranch.map(_.hash) shouldBe bChain.takeRight(3).map(_.hash)
+            newBranch.map(_.hash) shouldBe List(aChain.last, aMore.head, aMore.last).map(_.hash)
+            weights shouldBe newBranch.map(block => node.blockchainReader.getChainWeightByHash(block.hash).get)
+          case other => fail(s"not reorganised: $other")
+        node.bestHash shouldBe aMore.last.hash
+        (3 to 10).foreach(n => node.indexed(n) shouldBe Some(aChain(n - 1).hash))
+      )
+
+  "A reorganisation told with a bound of 0 (the hash layout)" should
+    "still tell its new head, and none of the old branch" taggedAs (UnitTest, ConsensusTest) in (
+      new CountingFixture(guard = false, bound = 0):
+        val aChain: List[Block] = oracle.extendCanonical(oracle.genesis, 5, difficulty = 1000)
+        val side: List[Block] = oracle.extendSide(aChain(1), 4, difficulty = 1000, tag = 0x7b)
+        node.importAll(aChain) shouldBe a[BlockImportedToTop]
+        evaluate(consensus, side) match
+          case SelectedNewBestBranch(oldBranch, newBranch, weights) =>
+            oldBranch shouldBe Nil
+            newBranch.map(_.hash) shouldBe List(side.last.hash)
+            weights shouldBe List(node.blockchainReader.getChainWeightByHash(side.last.hash).get)
+          case other => fail(s"not reorganised: $other")
+        node.bestHash shouldBe side.last.hash
+    )
 
   "A branch of the head's own weight on a proof-of-work chain (the unified layout)" should
     "be kept beside the head: no consensus layer names a head there" taggedAs (UnitTest, ConsensusTest) in (
