@@ -49,11 +49,17 @@ class SubscriptionManagerSpec
 
   // ── helpers ────────────────────────────────────────────────────────────────
 
+  // Each test gets topics of its own name. Topics of one name find each other through the receptionist, and a topic
+  // that knows of other instances publishes only to those it knows: a new topic that has the earlier tests' instances
+  // in its listing but not yet itself sends the block to them alone, and this test's manager never sees it (CI, main
+  // 6ea4ffd). A name no other topic has leaves the topic publishing to its own subscribers.
+  private def uniqueName(topic: String): String = s"$topic-${java.util.UUID.randomUUID()}"
+
   def makePendingTxTopic(): ActorRef[org.apache.pekko.actor.typed.pubsub.Topic.Command[NewPendingTransaction]] =
-    testKit.spawn(org.apache.pekko.actor.typed.pubsub.Topic[NewPendingTransaction]("pending-tx-topic"))
+    testKit.spawn(org.apache.pekko.actor.typed.pubsub.Topic[NewPendingTransaction](uniqueName("pending-tx-topic")))
 
   def makeBlockTopic(): ActorRef[org.apache.pekko.actor.typed.pubsub.Topic.Command[NewBlockImported]] =
-    testKit.spawn(org.apache.pekko.actor.typed.pubsub.Topic[NewBlockImported]("block-imported-topic"))
+    testKit.spawn(org.apache.pekko.actor.typed.pubsub.Topic[NewBlockImported](uniqueName("block-imported-topic")))
 
   def makeManager(): ActorRef[SubscriptionManager.Command] =
     testKit.spawn(
